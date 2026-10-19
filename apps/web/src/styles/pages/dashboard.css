@@ -80,59 +80,485 @@
   inline-size: 112px;
 }
 
-/* --- KPI rows -------------------------------------------------------------- */
+/* --- Header controls (the demo's `.ctrls`) ------------------------------------ */
 
-/*
- * The owner's six KPIs, then the operational row. Columns are set by how many
- * cards a viewer actually has (`n1`…`n6`), so a row a permission shortened never
- * leaves an empty slot, and each steps down at the content widths the shell's
- * own grids use.
- */
-.dash-kpis {
+.dash-ctrls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.dash-seg button {
+  height: 30px;
+  font-size: var(--fs-ui);
+}
+/* «مقایسه با دورهٔ قبل»: a capsule holding a real switch and its label. */
+.dash-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--glass);
+  color: var(--fg-2);
+  font: inherit;
+  font-size: var(--fs-ui);
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--spec) 70%, transparent),
+    inset 0 0 0 1px var(--edge-2);
+  -webkit-backdrop-filter: var(--glass-blur-ctl);
+  backdrop-filter: var(--glass-blur-ctl);
+}
+.dash-toggle.on {
+  color: var(--fg);
+}
+.dash-toggle-track {
+  position: relative;
+  flex: none;
+  width: 26px;
+  height: 15px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-4);
+  transition: background 0.15s;
+}
+.dash-toggle-track > span {
+  position: absolute;
+  top: 2px;
+  inset-inline-start: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--fg-3);
+  transition:
+    inset-inline-start 0.15s,
+    background 0.15s;
+}
+.dash-toggle.on .dash-toggle-track {
+  background: var(--fg);
+}
+.dash-toggle.on .dash-toggle-track > span {
+  inset-inline-start: 13px;
+  background: var(--bg-0);
+}
+.dash-refresh {
+  border-radius: var(--radius-pill);
+}
+
+/* --- The attention queue (the demo's `.attn`) ------------------------------------ */
+
+.dash-attention {
   display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: 150px minmax(0, 1fr);
+  overflow: hidden;
 }
-.dash-kpis.n4 {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+.dash-attn-head {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 12px 14px;
+  border-inline-end: 1px solid var(--line);
 }
-.dash-kpis.n3 {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.dash-attn-head h2 {
+  color: var(--warn);
+  font-size: var(--fs-ui);
+  font-weight: 700;
 }
-.dash-kpis.n2 {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.dash-attn-head .hint {
+  color: var(--fg-3);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
 }
-.dash-kpis.n1 {
-  grid-template-columns: minmax(0, 1fr);
+.dash-attn-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  min-width: 0;
 }
-.dash-kpis > .stat {
+/*
+ * One list on a 12-column grid: a severe tile spans 3 (four abreast), a compact row spans 4
+ * (three abreast), and the first compact row starts its own line.
+ */
+.dash-attn-list {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 8px;
   margin: 0;
-  container-type: inline-size;
+  padding: 0;
+  list-style: none;
 }
-.dash-kpis .stat .val {
-  overflow-wrap: break-word;
+.dash-attn-list > li.dash-attn-tile {
+  grid-column: span 3;
 }
-.dash-kpis .stat .val small {
+.dash-attn-list > li.dash-attn-row {
+  grid-column: span 4;
+}
+.dash-attn-list > li.first-normal {
+  grid-column: 1 / span 4;
+}
+.dash-attn-list a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  height: 100%;
+  color: var(--fg);
+  text-decoration: none;
+}
+.dash-attn-list > li.dash-attn-tile > a {
+  min-height: 82px;
+  padding: 12px 14px;
+  border-radius: calc(var(--radius-card) - 6px);
+  background: color-mix(in srgb, var(--danger) 16%, var(--glass));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 30%, transparent);
+}
+.dash-attn-list > li.dash-attn-row > a {
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: var(--radius-ctl);
+  background: var(--glass);
+  box-shadow: inset 0 0 0 1px var(--edge-2);
+}
+.dash-attn-list a:hover,
+.dash-attn-list a:focus-visible {
+  background: var(--glass-2);
+}
+.dash-attn-list > li.dash-attn-tile > a:hover,
+.dash-attn-list > li.dash-attn-tile > a:focus-visible {
+  background: color-mix(in srgb, var(--danger) 22%, var(--glass));
+}
+.dash-attn-count {
+  flex: none;
+  color: var(--danger);
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.3;
+}
+.dash-attn-lbl {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  line-height: 1.5;
+}
+.dash-attn-go {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  color: var(--fg-3);
+  font-size: var(--fs-xs);
+}
+li.dash-attn-tile .dash-attn-go {
+  color: var(--danger);
+  font-weight: 700;
+}
+.dash-chip {
+  flex: none;
+  min-width: 26px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-2xs);
+  font-weight: 800;
+  line-height: 18px;
+  text-align: center;
+}
+.dash-chip.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.dash-chip.info {
+  background: var(--info-soft);
+  color: var(--info);
+}
+/* Nothing waits: the check and the sentence, at the strip's own height. */
+.dash-attn-clear {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 82px;
+  color: var(--fg-3);
+  font-size: var(--fs-xs);
+  text-align: center;
+}
+.dash-attn-clear svg {
+  color: var(--ok);
+}
+.dash-attn-clear b {
+  color: var(--fg);
+  font-size: var(--fs-body);
+}
+
+/* --- Dots and tones shared by the queue and the fleet ---------------------------- */
+
+.dash-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--info);
+}
+.dash-dot.tone-ok {
+  background: var(--ok);
+}
+.dash-dot.tone-warn {
+  background: var(--warn);
+}
+.dash-dot.tone-danger {
+  background: var(--danger);
+}
+.dash-dot.tone-neutral {
+  background: var(--fg-3);
+}
+.dash-stack rect.tone-ok {
+  fill: var(--ok);
+}
+.dash-stack rect.tone-warn {
+  fill: var(--warn);
+}
+.dash-stack rect.tone-danger {
+  fill: var(--danger);
+}
+.dash-stack rect.tone-neutral {
+  fill: var(--fg-3);
+}
+.dash-stack rect.tone-info {
+  fill: var(--chart-1);
+}
+
+/* --- KPI block: a 12-column grid two rows tall --------------------------------- */
+
+.dash-kgrid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-template-rows: minmax(150px, auto) minmax(150px, auto);
+  gap: var(--gap);
+}
+.dash-kgrid > .kpi-hero {
+  grid-column: span 5;
+  grid-row: span 2;
+}
+.dash-kgrid > .card.dash-kpi:not(.kpi-hero) {
+  grid-column: span 3;
+  grid-row: span 2;
+}
+.dash-mini {
+  grid-column: span 4;
+  grid-row: span 2;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: var(--gap);
+}
+
+.dash-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px 14px;
+  min-width: 0;
+}
+.dash-kpi-lbl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.dash-kpi.kpi-hero .dash-kpi-lbl,
+.dash-kgrid > .card .dash-kpi-lbl {
+  color: var(--fg);
+  font-size: var(--fs-body);
+  font-weight: 700;
+}
+.dash-kpi .dash-kpi-lbl svg {
+  color: var(--fg-3);
+}
+.dash-kpi-val {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 6px;
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.dash-kpi.kpi-hero .dash-kpi-val {
+  font-size: 38px;
+  line-height: 1.25;
+  letter-spacing: -0.5px;
+}
+.dash-kpi-val small {
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  letter-spacing: 0;
+}
+.dash-kpi-sub,
+.dash-kpi > .dash-amounts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  color: var(--fg-3);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
+.dash-kpi-meta + .dash-delta::before {
+  content: '·';
+  margin-inline-end: 6px;
+  color: var(--fg-3);
+}
+.dash-kpi-chart {
+  margin-top: auto;
+  padding-top: 8px;
+}
+.dash-kpi.kpi-hero .dash-kpi-chart {
+  display: flex;
+  flex: 1;
+  min-height: 84px;
+}
+.dash-kpi.alert {
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    inset 0 0 0 1px color-mix(in srgb, var(--danger) 60%, transparent),
+    var(--gshadow);
+}
+.dash-kpi.warnish {
+  box-shadow:
+    inset 0 1px 0 var(--spec),
+    inset 0 0 0 1px color-mix(in srgb, var(--warn) 55%, transparent),
+    var(--gshadow);
+}
+/* The hero: lit from its top corner. */
+.dash-kpi.kpi-hero {
+  background: linear-gradient(
+    160deg,
+    color-mix(in srgb, var(--fg) 7%, var(--glass)),
+    var(--glass) 65%
+  );
+}
+
+/* The movement pill: an arrow and the percentage. */
+.dash-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-4);
+  color: var(--fg-2);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  line-height: 19px;
   white-space: nowrap;
 }
-/*
- * Six abreast at 1440 leaves a card about 150px of text: a nine-digit toman
- * figure and its unit no longer fit on one line, the unit dropped to its own,
- * and the whole row grew to the height of that one card. A narrow card sets
- * its figure a step smaller instead.
- */
-@container (max-width: 200px) {
-  .dash-kpis .stat .val {
-    font-size: var(--fs-kpi-narrow);
-  }
+.dash-delta.good {
+  background: var(--ok-soft);
+  color: var(--ok);
 }
-.dash-kpis .stat .spark {
-  margin-top: auto;
+.dash-delta.bad {
+  background: var(--danger-soft);
+  color: var(--danger);
 }
-.dash-kpis + .dash-kpis,
-.dash-kpis + .card,
-.card + .dash-kpis {
-  margin-top: var(--gap);
+.dash-kpi-val .dash-delta {
+  font-size: var(--fs-xs);
+  letter-spacing: 0;
+}
+
+/* The second row: four equal cards. */
+.dash-ops {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.dash-ops.n3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.dash-ops.n2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.dash-ops.n1 {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* --- Area sparks (ui/charts.tsx `AreaSpark`) ------------------------------------- */
+
+.area-spark {
+  display: block;
+  width: 100%;
+  height: 40px;
+  direction: ltr;
+  overflow: visible;
+}
+.area-spark.as-card {
+  height: 56px;
+}
+.area-spark.as-hero {
+  height: auto;
+  min-height: 84px;
+  flex: 1;
+}
+.area-spark .area {
+  stroke: none;
+}
+.area-spark .line,
+.area-spark .baseline {
+  fill: none;
+  stroke-width: 1.75;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.area-spark .baseline {
+  stroke: var(--line-2);
+  stroke-dasharray: 3 4;
+}
+.area-spark .last {
+  fill: none;
+  stroke-width: 7;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.area-spark.s1 .line,
+.area-spark.s1 .last {
+  stroke: var(--chart-1);
+}
+.area-spark.s1 stop {
+  stop-color: var(--chart-1);
+}
+.area-spark.s2 .line,
+.area-spark.s2 .last {
+  stroke: var(--chart-2);
+}
+.area-spark.s2 stop {
+  stop-color: var(--chart-2);
+}
+/* A line chart's gradient area (`LineChart gradient`): the stops take the series colour. */
+.chart .area.graded {
+  opacity: 1;
+}
+.chart .grad.s1 stop {
+  stop-color: var(--chart-1);
+}
+.chart .grad.s2 stop {
+  stop-color: var(--chart-2);
+}
+.chart .grad.s3 stop {
+  stop-color: var(--chart-3);
+}
+.chart .grad.s4 stop {
+  stop-color: var(--chart-4);
 }
 
 /* --- Charts and card rows -------------------------------------------------- */
@@ -140,9 +566,8 @@
 .dash-charts {
   display: grid;
   gap: var(--gap);
-  grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
   align-items: stretch;
-  margin-top: var(--gap);
 }
 .dash-charts > .card,
 .dash-row > .card {
@@ -152,22 +577,7 @@
   display: grid;
   gap: var(--gap);
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  align-items: start;
-  margin-top: var(--gap);
-}
-.dash-row + .card,
-.dash-charts + .dash-row,
-.card + .dash-row {
-  margin-top: var(--gap);
-}
-
-/*
- * The orders chart is drawn tall for the narrow column it has beside the revenue
- * chart; once it has a row of its own it would grow with the width, so its height
- * is capped and the plot (viewBox, aspect kept) centres in it.
- */
-.dash-orders .chart {
-  max-block-size: 260px;
+  align-items: stretch;
 }
 
 .dash-sub {
@@ -175,6 +585,23 @@
   font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--fg-2);
+}
+
+/* «وضعیت عملیاتی»: a quiet label with a hairline to the far edge. */
+.dash-sec {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-inline: 2px;
+  color: var(--fg-3);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+}
+.dash-sec::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
 }
 
 /* Several exact amounts side by side — one per currency, never summed. */
@@ -195,17 +622,134 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+/* The errors summary: five bordered mini-cards, two abreast (2×2 + 1). */
+.dash-tiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+.dash-tile {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 74px;
+  padding: 10px 12px;
+  border-radius: calc(var(--radius-card) - 6px);
+  background: var(--glass);
+  box-shadow: inset 0 0 0 1px var(--edge-2);
+}
+.dash-tile dt {
+  color: var(--fg-3);
+  font-size: var(--fs-xs);
+}
+.dash-tile dd {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+/* «وضعیت سامانه»: a grid of small service cards, a pill and the timing in each. */
+.dash-services {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dash-services > li {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: calc(var(--radius-card) - 6px);
+  background: var(--glass);
+  box-shadow: inset 0 0 0 1px var(--edge-2);
+}
+.dash-services > li .badge {
+  align-self: flex-end;
+}
+.dash-service-name {
+  font-size: var(--fs-ui);
+  font-weight: 600;
+}
+.dash-service-foot {
+  align-self: flex-end;
+  color: var(--fg-3);
+  font-size: var(--fs-2xs);
+  direction: ltr;
+}
+
+/* «توزیع پنل‌ها»: one segmented bar per group, then a row per slice. */
+.dash-stack {
+  display: block;
+  width: 100%;
+  height: 10px;
+  margin: 4px 0 8px;
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+.dash-share-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dash-share-rows > li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  font-size: var(--fs-ui);
+}
+.dash-share-rows > li:first-child {
+  border-top: 0;
+}
+
+/* A chart's measured box (`useBoxWidth`): the plot is drawn at the width it is shown. */
+.dash-chart-box {
+  min-width: 0;
+}
+
+/* Top products: three columns that fit a third of the row without a sideways scroll. */
+.dash-top .tbl th,
+.dash-top .tbl td {
+  padding-inline: 8px;
+}
+.dash-top .tbl td.wrap,
+.dash-top .tbl th.wrap {
+  min-width: 0;
+}
+.dash-top .tbl th:first-child,
+.dash-top .tbl td:first-child {
+  padding-inline-start: 14px;
+}
+.dash-top .tbl th:last-child,
+.dash-top .tbl td:last-child {
+  padding-inline-end: 14px;
+}
+
+/* The orders chart beside the revenue chart, in its own narrower geometry. */
+.dash-orders .chart-figure,
+.dash-revenue .chart-figure {
+  margin: 0;
+}
+
 /* --- Liquid Glass: the dashboard's cards are glass ---------------------------- */
 
 /*
  * The approved theme's «style 2»: on the dashboard every card is the glass material over
  * the mesh, while work pages keep the kit's solid `--panel` card. Scoped to the page's own
- * containers — the KPI rows, the chart and card rows, and the cards the page draws at its
- * top level (`.content-inner` holds the dashboard only when a `.dash-row` is in it) — so no
- * other page's card turns translucent.
+ * containers so no other page's card turns translucent.
  */
 .dash-attention,
-.dash-kpis > .card,
+.dash-kgrid .card,
+.dash-ops > .card,
 .dash-charts > .card,
 .dash-row > .card,
 .content-inner:has(> .dash-row) > .card {
@@ -222,7 +766,8 @@
 }
 /* The 1px rim: bright at the top corner, fading, and catching again at the bottom. */
 .dash-attention::after,
-.dash-kpis > .card::after,
+.dash-kgrid .card::after,
+.dash-ops > .card::after,
 .dash-charts > .card::after,
 .dash-row > .card::after,
 .content-inner:has(> .dash-row) > .card::after {
@@ -243,86 +788,73 @@
     linear-gradient(var(--fg) 0 0);
   mask-composite: exclude;
 }
-/* A table inside a glass card lets the glass through its header. */
-.dash-row > .card .tbl th,
-.dash-charts > .card .tbl th,
-.content-inner:has(> .dash-row) > .card .tbl th {
-  background: transparent;
-}
-/* An alerting KPI keeps its tone: the rim line takes the danger or warn colour. */
-.dash-kpis > .card.alert {
+/* An alerting KPI keeps its tone over the glass: the rim takes the danger or warn colour. */
+.dash-kgrid .card.alert,
+.dash-ops > .card.alert {
   box-shadow:
     inset 0 1px 0 var(--spec),
-    inset 0 0 0 1px color-mix(in srgb, var(--danger) 55%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--danger) 60%, transparent),
     var(--gshadow);
 }
-.dash-kpis > .card.warnish {
+.dash-kgrid .card.warnish,
+.dash-ops > .card.warnish {
   box-shadow:
     inset 0 1px 0 var(--spec),
     inset 0 0 0 1px color-mix(in srgb, var(--warn) 55%, transparent),
     var(--gshadow);
 }
-/* The hero: the first business figure (today's sales), lit from its top corner. */
-.dash-kpis:not(.n1, .n2, .n3, .n4, .n5, .n6) > .card:first-child {
+.dash-kgrid > .card.kpi-hero {
   background: linear-gradient(
     160deg,
     color-mix(in srgb, var(--fg) 7%, var(--glass)),
     var(--glass) 65%
   );
 }
-/*
- * The attention queue as glass tiles (the demo's `.attn-i`): one 14px tile per waiting
- * kind, as many abreast as fit, each still ONE link. Customer 360's list keeps its rows.
- */
-.dash-attention .attn-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
-  gap: 8px;
-}
-.dash-attention .attn-list > li {
-  border-bottom: 0;
-  border-radius: calc(var(--radius-card) - 6px);
-  background: var(--glass);
-  box-shadow: inset 0 0 0 1px var(--edge-2);
-}
-.dash-attention .attn-list > .attn-danger {
-  background: color-mix(in srgb, var(--danger) 9%, var(--glass));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 35%, transparent);
-}
-.dash-attention .attn-link {
-  padding: 8px 12px;
-  border-radius: inherit;
-}
-.dash-attention .attn-link:hover,
-.dash-attention .attn-link:focus-visible {
-  background: var(--glass-2);
+/* A table inside a glass card lets the glass through its header. */
+.dash-row > .card .tbl th,
+.dash-charts > .card .tbl th,
+.content-inner:has(> .dash-row) > .card .tbl th {
+  background: transparent;
 }
 
 /* Reduced transparency: the same cards and tiles, solid and legible, with no blur. */
 @media (prefers-reduced-transparency: reduce) {
   .dash-attention,
-  .dash-kpis > .card,
+  .dash-kgrid .card,
+  .dash-ops > .card,
   .dash-charts > .card,
   .dash-row > .card,
   .content-inner:has(> .dash-row) > .card,
-  .dash-kpis:not(.n1, .n2, .n3, .n4, .n5, .n6) > .card:first-child {
+  .dash-kgrid > .card.kpi-hero {
     background: var(--panel);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
-  .dash-attention .attn-list > li {
+  .dash-attn-list > li.dash-attn-row > a,
+  .dash-tile,
+  .dash-services > li {
     background: var(--panel-row);
   }
 }
 
 /* --- Responsive ------------------------------------------------------------- */
 
-@media (max-width: 1200px) {
-  .dash-kpis,
-  .dash-kpis.n4 {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+/* The demo's 1180px step: the KPI block and the rows go two abreast. */
+@media (max-width: 1180px) {
+  .dash-kgrid {
+    grid-template-rows: none;
   }
-  .dash-kpis.n4 {
+  .dash-kgrid > .kpi-hero {
+    grid-column: span 12;
+    grid-row: auto;
+  }
+  .dash-kgrid > .card.dash-kpi:not(.kpi-hero),
+  .dash-mini {
+    grid-column: span 6;
+    grid-row: auto;
+  }
+  .dash-ops,
+  .dash-ops.n3 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .dash-charts {
@@ -331,13 +863,47 @@
   .dash-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .dash-attn-list > li.dash-attn-tile {
+    grid-column: span 6;
+  }
+  .dash-attn-list > li.dash-attn-row,
+  .dash-attn-list > li.first-normal {
+    grid-column: span 6;
+  }
 }
 
-@media (max-width: 760px) {
-  .dash-kpis,
-  .dash-kpis.n3,
-  .dash-kpis.n4 {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+/* A phone: one column, the queue's title above its items, the mini tiles two abreast. */
+@media (max-width: 820px) {
+  .dash-attention {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .dash-attn-head {
+    border-inline-end: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .dash-attn-list > li.dash-attn-tile,
+  .dash-attn-list > li.dash-attn-row,
+  .dash-attn-list > li.first-normal {
+    grid-column: 1 / -1;
+  }
+  .dash-attn-list > li.dash-attn-tile > a {
+    min-height: 56px;
+  }
+  .dash-kgrid > .card.dash-kpi:not(.kpi-hero),
+  .dash-mini {
+    grid-column: span 12;
+  }
+  .dash-kpi.kpi-hero .dash-kpi-val {
+    font-size: 30px;
+  }
+  .dash-kpi.kpi-hero .dash-kpi-chart,
+  .area-spark.as-hero {
+    min-height: 180px;
+  }
+  .dash-ops,
+  .dash-ops.n2,
+  .dash-ops.n3 {
+    grid-template-columns: minmax(0, 1fr);
   }
   .dash-row,
   .dash-figures {

@@ -86,7 +86,7 @@ export function kpiDelta(
   previous: bigint,
   sense: DeltaSense,
   caption?: string,
-): StatDelta {
+): KpiDelta {
   const change = describeChange(current, previous);
   const withCaption = caption === undefined ? {} : { caption };
   if (change.kind === 'none') return { text: '—', direction: 'neutral', ...withCaption };
@@ -104,8 +104,17 @@ export function kpiDelta(
     text,
     direction: directionOf(trend, sense),
     ...(trend === undefined ? {} : { trend }),
+    ...(change.kind === 'new' ? { fresh: true } : {}),
     ...withCaption,
   };
+}
+
+/**
+ * A KPI movement as the dashboard draws it. `fresh` marks «جدید» — something now against
+ * nothing before — which has no percentage, so its pill is neutral and carries no arrow.
+ */
+export interface KpiDelta extends StatDelta {
+  readonly fresh?: true;
 }
 
 function directionOf(trend: 'up' | 'down' | undefined, sense: DeltaSense): StatDelta['direction'] {

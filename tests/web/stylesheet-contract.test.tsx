@@ -311,14 +311,22 @@ describe('what the consistency pass found at 390 and 1440', () => {
   });
 
   /*
-   * Six KPI cards abreast at 1440 leave a nine-digit toman figure no room for
-   * its unit; the unit fell to its own line and the whole row grew with it.
+   * Six KPI cards abreast at 1440 left a nine-digit toman figure no room for its unit. The
+   * approved demo's block replaces that row: a 12-column grid two rows tall, today's sales
+   * the hero (5×2), this month 3×2 and the four period tiles a 2×2 grid (4×2) — and one
+   * column on a phone.
    */
-  it("sets a narrow dashboard KPI card's figure a step smaller", () => {
-    expect(block('.dash-kpis > .stat')).toMatch(/container-type:\s*inline-size/);
-    const narrow = atRules('@container (max-width: 200px)').join('\n');
-    expect(narrow).toMatch(/\.dash-kpis \.stat \.val\s*\{[^}]*font-size:\s*var\(--fs-kpi-narrow\)/);
-    expect(block(':root')).toMatch(/--fs-kpi-narrow:\s*17px/);
+  it('lays the dashboard KPIs out as the demo’s two-row 12-column block', () => {
+    expect(block('.dash-kgrid')).toMatch(/grid-template-columns:\s*repeat\(12,/);
+    expect(block('.dash-kgrid > .kpi-hero')).toMatch(
+      /grid-column:\s*span 5[\s\S]*grid-row:\s*span 2/,
+    );
+    expect(block('.dash-kgrid > .card.dash-kpi:not(.kpi-hero)')).toMatch(
+      /grid-column:\s*span 3[\s\S]*grid-row:\s*span 2/,
+    );
+    expect(block('.dash-mini')).toMatch(/grid-column:\s*span 4[\s\S]*grid-row:\s*span 2/);
+    const phone = atRules('@media (max-width: 820px)').join('\n');
+    expect(phone).toMatch(/\.dash-mini\s*\{[^}]*grid-column:\s*span 12/);
   });
 });
 

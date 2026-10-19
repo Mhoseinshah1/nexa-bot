@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   DASHBOARD_OPERATIONS_REFRESH_MS,
@@ -43,13 +43,11 @@ import { pollUnlessFinal } from '../polling';
 import { BUSINESS_REFRESH_MS, rangeIsComplete } from '../report-view';
 import { setQueries, useLinkHandler, type Route } from '../router';
 import {
-  AlertStatCard,
   BarChart,
   Badge,
   Card,
   ChartCard,
   DataTable,
-  Distribution,
   Donut,
   Empty,
   IconButton,
@@ -60,12 +58,8 @@ import {
   Money,
   Num,
   PageHead,
-  PeriodControl,
   Pills,
-  Sparkline,
   StateSwitch,
-  Stat,
-  StatCard,
   type Column,
   type DistributionSlice,
   type PeriodPreset,
@@ -73,11 +67,12 @@ import {
   Quantity,
   Ltr,
 } from '../ui/kit';
-import type { SeriesTone } from '../ui/charts';
+import { AreaSpark, type SeriesTone } from '../ui/charts';
 import type { QueryView } from '../view-state';
 import { mayRequest, queryState, shownData } from '../view-state';
 import { formatInstantIn } from './business';
 import { AttentionQueueCard } from './dashboard-attention';
+import { DashboardControls, KpiCard, SectionLabel, ShareBar } from './dashboard-parts';
 import { opsCodeLabel } from '../ops-code-labels';
 import { dependencyLabel } from '../readiness-labels';
 import { TechnicalDetails } from '../ui/technical-details';
@@ -194,6 +189,15 @@ export function DashboardPage({
     ]);
   };
 
+  // The shell keeps one scroller for every page, so a page left half-way down used to open
+  // the dashboard at that offset: its title and the header's controls sat above the fold,
+  // under the top bar, and the live page looked as if it had none (v0.7.2). The dashboard
+  // opens at its top.
+  useLayoutEffect(() => {
+    const scroller = document.getElementById('main');
+    if (scroller !== null) scroller.scrollTop = 0;
+  }, []);
+
   return (
     <>
       <PageHead
@@ -210,39 +214,40 @@ export function DashboardPage({
         {...(superAdmin
           ? {
               actions: (
-                <>
-                  <PeriodControl
-                    value={presetOf(selection.range)}
-                    onChange={choosePreset}
-                    compare={compare}
-                    onCompareChange={(next) => setQueries(route, [['compare', next ? null : '0']])}
-                    custom={
-                      <CustomRange
-                        key={`${selection.from ?? ''}|${selection.to ?? ''}`}
-                        route={route}
-                        from={selection.from ?? ''}
-                        to={selection.to ?? ''}
-                      />
-                    }
-                  />
-                  {/*
-                   * Re-asks every business figure now, as `main`'s business section
-                   * did. Withheld after a final answer: pressing it would only be
-                   * refused again (`mayRequest`).
-                   */}
-                  {mayRequest(summary, !complete) && (
-                    <IconButton
-                      icon="refresh"
-                      label={t('web.report_refresh')}
-                      variant="default"
-                      size="sm"
-                      onClick={() => {
-                        void client.invalidateQueries({ queryKey: ['dashboard'] });
-                        void client.invalidateQueries({ queryKey: ['reports'] });
-                      }}
+                <DashboardControls
+                  value={presetOf(selection.range)}
+                  onChange={choosePreset}
+                  compare={compare}
+                  onCompareChange={(next) => setQueries(route, [['compare', next ? null : '0']])}
+                  custom={
+                    <CustomRange
+                      key={`${selection.from ?? ''}|${selection.to ?? ''}`}
+                      route={route}
+                      from={selection.from ?? ''}
+                      to={selection.to ?? ''}
                     />
-                  )}
-                </>
+                  }
+                  refresh={
+                    /*
+                     * Re-asks every business figure now, as `main`'s business section did.
+                     * Withheld after a final answer: pressing it would only be refused again
+                     * (`mayRequest`).
+                     */
+                    mayRequest(summary, !complete) ? (
+                      <IconButton
+                        icon="refresh"
+                        label={t('web.report_refresh')}
+                        variant="default"
+                        size="sm"
+                        className="dash-refresh"
+                        onClick={() => {
+                          void client.invalidateQueries({ queryKey: ['dashboard'] });
+                          void client.invalidateQueries({ queryKey: ['reports'] });
+                        }}
+                      />
+                    ) : undefined
+                  }
+                />
               ),
             }
           : {})}
@@ -288,34 +293,66 @@ export function DashboardPage({
 
       {superAdmin && complete && <OtherFigures selection={selection} />}
 
+      <SectionLabel>{t('web.dashboard_operations')}</SectionLabel>
       <div className="dash-row">
         {mayViewPanels && <FleetCard query={operations} data={shownOperations} />}
-        <Card title={t('web.system_status')}>
-          <StateSwitch query={readiness}>
-            <div className="head-stats">
-              {(readiness.data?.dependencies ?? []).map((dependency) => (
-                <Stat
-                  key={dependency.name}
-                  // C1: the Persian name; the raw name stays, muted, in the foot line.
-                  label={dependencyLabel(dependency.name)}
-                  value={dependency.status === 'up' ? t('web.up') : t('web.down')}
-                  tone={dependency.status === 'up' ? 'ok' : 'danger'}
-                  // `latencyMs` is OPTIONAL on the wire, not nullable: a dependency
-                  // that reports no timing omits it, and guarding on `null` once
-                  // rendered the literal text "undefined ms".
-                  hint={
-                    dependency.latencyMs === undefined
-                      ? dependency.name
-                      : `${dependency.name} · ${formatNumber(dependency.latencyMs)} ms`
-                  }
-                />
-              ))}
-            </div>
-          </StateSwitch>
-        </Card>
+        <SystemStatusCard query={readiness} />
         {mayViewOps && <AttentionCard query={alerts} />}
       </div>
     </>
+  );
+}
+
+/**
+ * The system's dependencies as a grid of small service cards: the dependency's name, its
+ * state as a pill, and its timing when it reported one (`latencyMs` is optional on the wire).
+ */
+function SystemStatusCard({
+  query,
+}: {
+  query: QueryView & {
+    data?:
+      | {
+          dependencies: readonly {
+            name: string;
+            status: string;
+            latencyMs?: number | undefined;
+          }[];
+        }
+      | undefined;
+  };
+}) {
+  const dependencies = query.data?.dependencies ?? [];
+  return (
+    <Card title={t('web.system_status')} className="dash-system">
+      <StateSwitch
+        query={query}
+        isEmpty={dependencies.length === 0}
+        empty={<Empty title={t('web.chart_empty')} icon="system" variant="compact" />}
+      >
+        <ul className="dash-services">
+          {dependencies.map((dependency) => {
+            const up = dependency.status === 'up';
+            return (
+              <li key={dependency.name} className={up ? 'up' : 'down'}>
+                {/* C1: the Persian name; the raw name stays, muted, in the foot line. */}
+                <span className="dash-service-name">{dependencyLabel(dependency.name)}</span>
+                <Badge tone={up ? 'ok' : 'danger'}>{up ? t('web.up') : t('web.down')}</Badge>
+                {/*
+                 * `latencyMs` is OPTIONAL on the wire, not nullable: a dependency that reports
+                 * no timing omits it, and guarding on `null` once rendered "undefined ms".
+                 */}
+                <span className="dash-service-foot foot">
+                  {dependency.latencyMs === undefined
+                    ? dependency.name
+                    : `${dependency.name} · ${formatNumber(dependency.latencyMs)} ms`}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      </StateSwitch>
+    </Card>
   );
 }
 
@@ -407,7 +444,9 @@ function deltaIf(
   sense: DeltaSense,
   caption?: string,
 ) {
-  return compare ? { delta: kpiDelta(current, previous, sense, caption) } : {};
+  if (!compare) return {};
+  const delta = kpiDelta(current, previous, sense);
+  return caption === undefined ? { delta } : { delta, caption };
 }
 
 /** The headline amount in the tenant's currency, exact, with its unit apart. */
@@ -452,11 +491,15 @@ function BusinessKpis({
   const month = moneyHeadline(data.month.revenue, currency);
   const s = data.selected;
   const failed = s.failedPayments;
-  const FailedCard = failed.current > 0 ? AlertStatCard : StatCard;
   return (
     <StateSwitch query={query}>
-      <div className="dash-kpis">
-        <StatCard
+      {/*
+       * The demo's KPI block: a 12-column grid two rows tall. Today's sales is the hero
+       * (5×2), this month 3×2, and the four period figures a 2×2 grid of tiles (4×2).
+       */}
+      <div className="dash-kgrid">
+        <KpiCard
+          size="hero"
           label={t('web.dashboard_today_sales')}
           icon="zap"
           value={today.amount}
@@ -468,21 +511,22 @@ function BusinessKpis({
             'up-good',
             t('web.dashboard_vs_yesterday'),
           )}
-          hint={
+          meta={
             <>
-              <span>
-                <Num value={data.today.sales.current} /> {t('web.dashboard_sales_unit')}
-              </span>
-              <OtherCurrencies rows={data.today.revenue} currency={currency} />
+              <Num value={data.today.sales.current} /> {t('web.dashboard_sales_unit')}
             </>
           }
-        >
-          <Sparkline
-            values={data.today.series.map((b) => chartMoneyValue(b.value, currency))}
-            label={t('web.dashboard_today_sales')}
-          />
-        </StatCard>
-        <StatCard
+          lines={<OtherCurrencies rows={data.today.revenue} currency={currency} />}
+          chart={
+            <AreaSpark
+              size="hero"
+              values={data.today.series.map((b) => chartMoneyValue(b.value, currency))}
+              label={t('web.dashboard_today_sales')}
+            />
+          }
+        />
+        <KpiCard
+          size="card"
           label={t('web.dashboard_month_sales')}
           icon="wallet"
           value={month.amount}
@@ -494,64 +538,78 @@ function BusinessKpis({
             'up-good',
             t('web.dashboard_vs_last_month'),
           )}
-          hint={
+          meta={
             <>
-              <span>
-                <Num value={data.month.sales.current} /> {t('web.dashboard_sales_unit')}
-              </span>
-              <OtherCurrencies rows={data.month.revenue} currency={currency} />
+              <Num value={data.month.sales.current} /> {t('web.dashboard_sales_unit')}
             </>
           }
-        >
-          <Sparkline
-            values={data.month.series.map((b) => chartMoneyValue(b.value, currency))}
-            label={t('web.dashboard_month_sales')}
-          />
-        </StatCard>
-        {/* A gauge: there is no stored history of a state, so no delta and no trend. */}
-        <StatCard
-          label={t('web.dashboard_active_services')}
-          icon="services"
-          value={formatNumber(data.activeServices)}
-          hint={t('web.dashboard_now')}
+          lines={<OtherCurrencies rows={data.month.revenue} currency={currency} />}
+          chart={
+            <AreaSpark
+              size="card"
+              tone={2}
+              values={data.month.series.map((b) => chartMoneyValue(b.value, currency))}
+              label={t('web.dashboard_month_sales')}
+            />
+          }
         />
-        <StatCard
-          label={t('web.dashboard_new_customers')}
-          icon="users"
-          value={formatNumber(s.newCustomers.current)}
-          {...deltaIf(
-            compare,
-            BigInt(s.newCustomers.current),
-            BigInt(s.newCustomers.previous),
-            'up-good',
-          )}
-        >
-          <Sparkline
-            values={countValues(s.newCustomerSeries.map((b) => b.value))}
+        <div className="dash-mini">
+          {/* A gauge: there is no stored history of a state, so no delta and no trend. */}
+          <KpiCard
+            size="tile"
+            label={t('web.dashboard_active_services')}
+            icon="services"
+            value={formatNumber(data.activeServices)}
+            meta={t('web.dashboard_now')}
+          />
+          <KpiCard
+            size="tile"
             label={t('web.dashboard_new_customers')}
-            tone={2}
+            icon="users"
+            value={formatNumber(s.newCustomers.current)}
+            {...deltaIf(
+              compare,
+              BigInt(s.newCustomers.current),
+              BigInt(s.newCustomers.previous),
+              'up-good',
+            )}
+            chart={
+              <AreaSpark
+                values={countValues(s.newCustomerSeries.map((b) => b.value))}
+                label={t('web.dashboard_new_customers')}
+                tone={2}
+              />
+            }
           />
-        </StatCard>
-        <StatCard
-          label={t('web.dashboard_renewals')}
-          icon="refresh"
-          value={formatNumber(s.renewals.current)}
-          {...deltaIf(compare, BigInt(s.renewals.current), BigInt(s.renewals.previous), 'up-good')}
-        >
-          <Sparkline
-            values={s.salesByKind.map((b) => (b.counts === null ? null : b.counts.RENEWAL))}
+          <KpiCard
+            size="tile"
             label={t('web.dashboard_renewals')}
-            tone={2}
+            icon="refresh"
+            value={formatNumber(s.renewals.current)}
+            {...deltaIf(
+              compare,
+              BigInt(s.renewals.current),
+              BigInt(s.renewals.previous),
+              'up-good',
+            )}
+            chart={
+              <AreaSpark
+                values={s.salesByKind.map((b) => (b.counts === null ? null : b.counts.RENEWAL))}
+                label={t('web.dashboard_renewals')}
+                tone={2}
+              />
+            }
           />
-        </StatCard>
-        {/* Up is BAD here; the card is outlined only while there is something to look at. */}
-        <FailedCard
-          label={t('web.dashboard_failed_payments')}
-          icon="alert"
-          value={formatNumber(failed.current)}
-          {...(failed.current > 0 ? { tone: 'warn' as const } : {})}
-          {...deltaIf(compare, BigInt(failed.current), BigInt(failed.previous), 'up-bad')}
-        />
+          {/* Up is BAD here; the card is outlined only while there is something to look at. */}
+          <KpiCard
+            size="tile"
+            label={t('web.dashboard_failed_payments')}
+            icon="alert"
+            value={formatNumber(failed.current)}
+            {...(failed.current > 0 ? { tone: 'alert' as const } : {})}
+            {...deltaIf(compare, BigInt(failed.current), BigInt(failed.previous), 'up-bad')}
+          />
+        </div>
       </div>
     </StateSwitch>
   );
@@ -617,31 +675,29 @@ function OperationsKpis({
     provisioning === null ? 0 : provisioning.unknown + provisioning.unreconciledServices;
   const cards = [expiring, fleet, provisioning, summary ?? null].filter((x) => x !== null).length;
   return (
-    <div className={`dash-kpis n${cards}`}>
+    <div className={`dash-ops n${cards}`}>
       {expiring !== null && (
-        <StatCard
+        <KpiCard
+          size="card"
           label={`${t('web.dashboard_expiring')} (${formatNumber(expiring.withinDays)} ${t('web.dashboard_days')})`}
           icon="clock"
           value={formatNumber(expiring.count)}
-          hint={t('web.dashboard_expiring_hint')}
+          meta={t('web.dashboard_expiring_hint')}
         />
       )}
       {fleet !== null && (
-        <StatCard
+        <KpiCard
+          size="card"
           label={t('web.dashboard_active_panels')}
           icon="panels"
-          value={
-            <>
-              {formatNumber(fleet.active)}
-              <small>/ {formatNumber(fleet.total)}</small>
-            </>
-          }
+          value={formatNumber(fleet.active)}
+          unit={`/ ${formatNumber(fleet.total)}`}
           {...(down
             ? { tone: 'alert' as const }
             : troubled.length > 0
               ? { tone: 'warn' as const }
               : {})}
-          hint={
+          meta={
             troubled.length === 0 ? (
               t('web.dashboard_panels_ok')
             ) : (
@@ -659,13 +715,14 @@ function OperationsKpis({
         />
       )}
       {provisioning !== null && (
-        <StatCard
+        <KpiCard
+          size="card"
           label={t('web.dashboard_queue')}
           icon="layers"
           value={formatNumber(provisioning.queued)}
           unit={t('web.dashboard_queue_waiting')}
           {...(needsReview > 0 ? { tone: 'warn' as const } : {})}
-          hint={
+          meta={
             needsReview === 0 ? (
               t('web.dashboard_queue_clear')
             ) : (
@@ -688,18 +745,17 @@ function PeriodSalesCard({ data, compare }: { data: DashboardSummaryResponse; co
   const sales = data.selected.sales;
   const revenue = moneyRow(data.selected.revenue, data.currency);
   return (
-    <StatCard
+    <KpiCard
+      size="tile"
+      className="ops"
       label={t('web.dashboard_period_sales')}
       icon="orders"
       value={formatNumber(sales.current)}
       unit={t('web.dashboard_sales_unit')}
       {...deltaIf(compare, BigInt(sales.current), BigInt(sales.previous), 'up-good')}
-      hint={
-        <>
-          <Money value={{ amountMinor: revenue.current, currency: data.currency }} />
-          <OtherCurrencies rows={data.selected.revenue} currency={data.currency} />
-        </>
-      }
+      caption={false}
+      meta={<Money value={{ amountMinor: revenue.current, currency: data.currency }} />}
+      lines={<OtherCurrencies rows={data.selected.revenue} currency={data.currency} />}
     />
   );
 }
@@ -708,6 +764,46 @@ function PeriodSalesCard({ data, compare }: { data: DashboardSummaryResponse; co
 // Charts (owner)
 // ---------------------------------------------------------------------------
 
+/**
+ * The rendered width of a chart's box, so the chart draws its geometry at the size it is
+ * shown: its axis text stays at its true size on a phone and on a wide card alike. Before
+ * the first measurement (and where there is no `ResizeObserver`) it is `fallback`.
+ */
+function useBoxWidth(fallback: number) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(fallback);
+  useLayoutEffect(() => {
+    const box = ref.current;
+    if (box === null || typeof ResizeObserver === 'undefined') return undefined;
+    const measure = () => {
+      const next = Math.round(box.getBoundingClientRect().width);
+      if (next > 0) setWidth((current) => (Math.abs(current - next) > 2 ? next : current));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, []);
+  return { ref, width };
+}
+
+/** Whether a series holds nothing but zeros and gaps: no figure was recorded in the period. */
+function nothingRecorded(values: readonly (string | number | null)[]): boolean {
+  return values.every((value) => value === null || Number(value) === 0);
+}
+
+/** The demo's chart empty state (`web.chart_empty`), with what was not recorded as its hint. */
+function ChartNothing({ hint }: { hint?: string }) {
+  return (
+    <Empty
+      title={t('web.chart_empty')}
+      {...(hint === undefined ? {} : { hint })}
+      icon="reports"
+      variant="compact"
+    />
+  );
+}
+
 function RevenueChart({ data, compare }: { data: DashboardSummaryResponse; compare: boolean }) {
   const currency = data.currency;
   const series = data.selected.revenueSeries;
@@ -715,6 +811,10 @@ function RevenueChart({ data, compare }: { data: DashboardSummaryResponse; compa
   const current = t('web.dashboard_this_period');
   const previous = t('web.dashboard_previous_period');
   const total = moneyRow(data.selected.revenue, currency);
+  const box = useBoxWidth(760);
+  const empty =
+    nothingRecorded(series.current.map((b) => b.value)) &&
+    nothingRecorded(series.previous.map((b) => b.value));
   return (
     <ChartCard
       className="dash-revenue"
@@ -734,35 +834,44 @@ function RevenueChart({ data, compare }: { data: DashboardSummaryResponse; compa
         />
       }
     >
-      <LineChart
-        labels={series.current.map((bucket) => axisLabel(bucket.label))}
-        caption={`${title} — ${currencyLabel(currency)}`}
-        format={(value) => chartMoneyText(value, currency)}
-        series={[
-          {
-            name: current,
-            tone: 1,
-            values: series.current.map((b) => chartMoneyValue(b.value, currency)),
-            texts: chartMoneyTexts(
-              series.current.map((b) => b.value),
-              currency,
-            ),
-          },
-          ...(compare
-            ? [
-                {
-                  name: previous,
-                  dashed: true,
-                  values: series.previous.map((b) => chartMoneyValue(b.value, currency)),
-                  texts: chartMoneyTexts(
-                    series.previous.map((b) => b.value),
-                    currency,
-                  ),
-                },
-              ]
-            : []),
-        ]}
-      />
+      <div ref={box.ref} className="dash-chart-box">
+        {empty ? (
+          <ChartNothing />
+        ) : (
+          <LineChart
+            gradient
+            width={box.width}
+            height={box.width < 560 ? 220 : 250}
+            labels={series.current.map((bucket) => axisLabel(bucket.label))}
+            caption={`${title} — ${currencyLabel(currency)}`}
+            format={(value) => chartMoneyText(value, currency)}
+            series={[
+              {
+                name: current,
+                tone: 1,
+                values: series.current.map((b) => chartMoneyValue(b.value, currency)),
+                texts: chartMoneyTexts(
+                  series.current.map((b) => b.value),
+                  currency,
+                ),
+              },
+              ...(compare
+                ? [
+                    {
+                      name: previous,
+                      dashed: true,
+                      values: series.previous.map((b) => chartMoneyValue(b.value, currency)),
+                      texts: chartMoneyTexts(
+                        series.previous.map((b) => b.value),
+                        currency,
+                      ),
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        )}
+      </div>
       <p className="faint small">
         {t('web.dashboard_amounts_in')} {currencyLabel(currency)}
         {data.currencies.some((code) => code !== currency) && (
@@ -789,6 +898,10 @@ const KIND_TONES: Readonly<Record<(typeof SALE_KINDS)[number], SeriesTone>> = {
 
 function SalesByKindChart({ data }: { data: DashboardSummaryResponse }) {
   const buckets = data.selected.salesByKind;
+  const box = useBoxWidth(360);
+  const empty = buckets.every(
+    (bucket) => bucket.counts === null || SALE_KINDS.every((kind) => bucket.counts?.[kind] === 0),
+  );
   return (
     <ChartCard
       className="dash-orders"
@@ -803,17 +916,27 @@ function SalesByKindChart({ data }: { data: DashboardSummaryResponse }) {
         />
       }
     >
-      <BarChart
-        stacked
-        height={360}
-        labels={buckets.map((bucket) => axisLabel(bucket.label))}
-        caption={t('web.dashboard_orders_chart')}
-        series={SALE_KINDS.map((kind) => ({
-          name: t(KIND_LABELS[kind]),
-          tone: KIND_TONES[kind],
-          values: buckets.map((bucket) => (bucket.counts === null ? null : bucket.counts[kind])),
-        }))}
-      />
+      <div ref={box.ref} className="dash-chart-box">
+        {empty ? (
+          <ChartNothing />
+        ) : (
+          <BarChart
+            stacked
+            width={box.width}
+            height={250}
+            ticks={[0, 0.25, 0.5, 0.75, 1]}
+            labels={buckets.map((bucket) => axisLabel(bucket.label))}
+            caption={t('web.dashboard_orders_chart')}
+            series={SALE_KINDS.map((kind) => ({
+              name: t(KIND_LABELS[kind]),
+              tone: KIND_TONES[kind],
+              values: buckets.map((bucket) =>
+                bucket.counts === null ? null : bucket.counts[kind],
+              ),
+            }))}
+          />
+        )}
+      </div>
     </ChartCard>
   );
 }
@@ -847,7 +970,7 @@ function PaymentMethods({
       <StateSwitch
         query={query}
         isEmpty={confirmed.length === 0}
-        empty={<Empty title={t('web.dashboard_methods_empty')} icon="payments" variant="compact" />}
+        empty={<ChartNothing hint={t('web.dashboard_methods_empty')} />}
       >
         <Donut
           caption={t('web.dashboard_methods')}
@@ -917,6 +1040,7 @@ function TopProducts({ selection }: { selection: ReportRangeSelection }) {
   ];
   return (
     <Card
+      className="dash-top"
       title={t('web.dashboard_top_products')}
       actions={
         <a className="btn sm" href="/reports?tab=products" onClick={onLink}>
@@ -932,7 +1056,7 @@ function TopProducts({ selection }: { selection: ReportRangeSelection }) {
       <StateSwitch
         query={products}
         isEmpty={rows.length === 0}
-        empty={<Empty title={t('web.report_products_empty')} icon="reports" variant="compact" />}
+        empty={<ChartNothing hint={t('web.report_products_empty')} />}
       >
         <DataTable
           dense
@@ -943,6 +1067,16 @@ function TopProducts({ selection }: { selection: ReportRangeSelection }) {
         />
       </StateSwitch>
     </Card>
+  );
+}
+
+/** One bordered figure in a card's grid of small tiles: its label, then the number. */
+function MiniTile({ label, value }: { label: ReactNode; value: ReactNode }) {
+  return (
+    <div className="dash-tile">
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+    </div>
   );
 }
 
@@ -957,16 +1091,16 @@ function FailureSummary({ selection }: { selection: ReportRangeSelection }) {
     <Card title={t('web.report_failures_title')} hint={t('web.report_failures_hint')}>
       <StateSwitch query={failures}>
         {data !== undefined && (
-          <div className="head-stats">
-            <Stat
+          <dl className="dash-tiles">
+            <MiniTile
               label={t('web.report_failed_payments')}
               value={<Num value={data.payments.failed} />}
             />
-            <Stat
+            <MiniTile
               label={t('web.report_failed_provisioning')}
               value={<Num value={data.provisioning.failed + data.provisioning.abandoned} />}
             />
-            <Stat
+            <MiniTile
               label={t('web.report_failed_commercial')}
               value={
                 <Num
@@ -974,15 +1108,15 @@ function FailureSummary({ selection }: { selection: ReportRangeSelection }) {
                 />
               }
             />
-            <Stat
+            <MiniTile
               label={t('web.report_orders_refunded')}
               value={<Num value={data.ordersRefunded} />}
             />
-            <Stat
+            <MiniTile
               label={t('web.report_unknown_now')}
               value={<Num value={data.payments.unknownNow + data.operationsUnknownNow} />}
             />
-          </div>
+          </dl>
         )}
       </StateSwitch>
     </Card>
@@ -1095,9 +1229,9 @@ function FleetCard({
       >
         {fleet !== null && (
           <>
-            <Distribution slices={healthSlices(fleet.health)} />
+            <ShareBar slices={healthSlices(fleet.health)} />
             <h3 className="dash-sub">{t('web.dashboard_by_provider')}</h3>
-            <Distribution slices={providerSlices(fleet.providers)} />
+            <ShareBar slices={providerSlices(fleet.providers)} />
           </>
         )}
       </StateSwitch>
