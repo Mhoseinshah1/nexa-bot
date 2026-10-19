@@ -1,6 +1,6 @@
 {
-  "id": "09a5f243-a82c-4d33-80fb-9248ff5fa211",
-  "prevId": "00eabd41-958b-4e46-a8bc-4f4ffb1babe5",
+  "id": "be032233-aa83-4111-83ea-1917dd4814b3",
+  "prevId": "847b5239-6f40-4a4a-b698-2a9c506f3266",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -8286,13 +8286,6 @@
           "notNull": true,
           "default": false
         },
-        "raised_seen": {
-          "name": "raised_seen",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "0"
-        },
         "updated_at": {
           "name": "updated_at",
           "type": "timestamp with time zone",
@@ -8322,7 +8315,7 @@
       "checkConstraints": {
         "customer_notification_rate_windows_counts_check": {
           "name": "customer_notification_rate_windows_counts_check",
-          "value": "minute_claimed >= 0 AND hour_fresh >= 0 AND raised_seen >= 0"
+          "value": "minute_claimed >= 0 AND hour_fresh >= 0"
         }
       },
       "isRLSEnabled": false
@@ -8487,56 +8480,6 @@
         "customer_notifications_resolved_check": {
           "name": "customer_notifications_resolved_check",
           "value": "(state <> 'PENDING') = (resolved_at IS NOT NULL)"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.customer_reminder_raise_counters": {
-      "name": "customer_reminder_raise_counters",
-      "schema": "",
-      "columns": {
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "raised_total": {
-          "name": "raised_total",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "customer_reminder_raise_counters_tenant_id_tenants_id_fk": {
-          "name": "customer_reminder_raise_counters_tenant_id_tenants_id_fk",
-          "tableFrom": "customer_reminder_raise_counters",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "customer_reminder_raise_counters_total_check": {
-          "name": "customer_reminder_raise_counters_total_check",
-          "value": "raised_total >= 0"
         }
       },
       "isRLSEnabled": false
@@ -20461,6 +20404,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "fixed_price": {
+          "name": "fixed_price",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -20571,7 +20521,11 @@
         },
         "order_reseller_terms_percent_check": {
           "name": "order_reseller_terms_percent_check",
-          "value": "(percent IS NULL OR (percent >= 1 AND percent <= 100))\n          AND (layer <> 'TIER' OR percent IS NOT NULL)\n          AND (layer <> 'LIST' OR (percent IS NULL AND cost_amount = list_amount))"
+          "value": "(percent IS NULL OR (percent >= 1 AND percent <= 100))\n          AND (layer <> 'TIER' OR percent IS NOT NULL OR fixed_price)\n          AND (layer <> 'LIST' OR (percent IS NULL AND cost_amount = list_amount))"
+        },
+        "order_reseller_terms_fixed_price_check": {
+          "name": "order_reseller_terms_fixed_price_check",
+          "value": "NOT fixed_price OR (layer = 'TIER' AND percent IS NULL AND cost_amount < list_amount AND cost_amount > 0)"
         }
       },
       "isRLSEnabled": false
@@ -27902,6 +27856,147 @@
       },
       "isRLSEnabled": false
     },
+    "public.reseller_tier_product_prices": {
+      "name": "reseller_tier_product_prices",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tier_id": {
+          "name": "tier_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "product_id": {
+          "name": "product_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "price_amount": {
+          "name": "price_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "price_currency": {
+          "name": "price_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "reseller_tier_product_prices_product_idx": {
+          "name": "reseller_tier_product_prices_product_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "product_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "reseller_tier_product_prices_tenant_id_tenants_id_fk": {
+          "name": "reseller_tier_product_prices_tenant_id_tenants_id_fk",
+          "tableFrom": "reseller_tier_product_prices",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "reseller_tier_product_prices_tier_fk": {
+          "name": "reseller_tier_product_prices_tier_fk",
+          "tableFrom": "reseller_tier_product_prices",
+          "tableTo": "reseller_tiers",
+          "columnsFrom": [
+            "tenant_id",
+            "tier_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "reseller_tier_product_prices_product_fk": {
+          "name": "reseller_tier_product_prices_product_fk",
+          "tableFrom": "reseller_tier_product_prices",
+          "tableTo": "products",
+          "columnsFrom": [
+            "tenant_id",
+            "product_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "reseller_tier_product_prices_pkey": {
+          "name": "reseller_tier_product_prices_pkey",
+          "columns": [
+            "tenant_id",
+            "tier_id",
+            "product_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "reseller_tier_product_prices_currency_check": {
+          "name": "reseller_tier_product_prices_currency_check",
+          "value": "price_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
+        "reseller_tier_product_prices_amount_check": {
+          "name": "reseller_tier_product_prices_amount_check",
+          "value": "price_amount > 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.reseller_tiers": {
       "name": "reseller_tiers",
       "schema": "",
@@ -27960,6 +28055,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "unpriced_list_fallback": {
+          "name": "unpriced_list_fallback",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "created_at": {
           "name": "created_at",
@@ -28080,7 +28182,7 @@
         },
         "reseller_tiers_pricing_mode_check": {
           "name": "reseller_tiers_pricing_mode_check",
-          "value": "pricing_mode IN ('LIST_PRICE', 'PERCENTAGE_DISCOUNT')"
+          "value": "pricing_mode IN ('LIST_PRICE', 'PERCENTAGE_DISCOUNT', 'FIXED_PRICE_TABLE')"
         },
         "reseller_tiers_credit_currency_check": {
           "name": "reseller_tiers_credit_currency_check",
