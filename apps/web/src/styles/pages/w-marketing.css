@@ -209,6 +209,13 @@
   color: var(--accent);
   text-decoration: underline;
 }
+/* Touch: a row's name is its way into the editor, so it is a 44px target (tokens.css). */
+@media (pointer: coarse) and (hover: none) {
+  .bx-rowlink {
+    min-height: var(--ctl-h);
+    min-width: var(--ctl-h);
+  }
+}
 .bx-badges {
   display: inline-flex;
   flex-wrap: wrap;

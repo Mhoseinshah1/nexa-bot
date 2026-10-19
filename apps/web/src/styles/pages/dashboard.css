@@ -969,4 +969,11 @@ li.dash-attn-tile .dash-attn-go {
   .attn-link {
     min-height: var(--ctl-h);
   }
+  /* The compare switch and the queue's compact rows (40px on a desk) are 44px targets. */
+  .dash-toggle {
+    min-height: var(--ctl-h);
+  }
+  .dash-attn-list > li.dash-attn-row > a {
+    min-height: var(--ctl-h);
+  }
 }
