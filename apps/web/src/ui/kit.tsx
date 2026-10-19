@@ -2305,8 +2305,24 @@ export interface DistributionSlice {
  * breakdown does not. This component takes slices and knows nothing about
  * either — the caller decides, and the dashboard's caller passes panels.
  */
-export function Distribution({ slices }: { slices: readonly DistributionSlice[] }) {
+export function Distribution({
+  slices,
+  scale = 'total',
+}: {
+  slices: readonly DistributionSlice[];
+  /**
+   * What a full bar means: the slices' `total` (each bar its share, the default), or the
+   * largest slice (`max`: the longest bar is full and the rest compare to it, as the approved
+   * demo's bar cards draw them). The numbers beside the bars are the counts either way.
+   */
+  scale?: 'total' | 'max';
+}) {
   const total = useMemo(() => slices.reduce((sum, slice) => sum + slice.count, 0), [slices]);
+  const largest = useMemo(
+    () => slices.reduce((top, slice) => Math.max(top, slice.count), 0),
+    [slices],
+  );
+  const full = scale === 'max' ? largest : total;
 
   if (total === 0) return <Empty title={t('web.empty')} />;
 
@@ -2336,7 +2352,7 @@ export function Distribution({ slices }: { slices: readonly DistributionSlice[] 
               x="0"
               y="0"
               height="8"
-              width={(slice.count / total) * 100}
+              width={(slice.count / full) * 100}
             />
           </svg>
         </div>
