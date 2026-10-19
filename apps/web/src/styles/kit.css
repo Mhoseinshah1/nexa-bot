@@ -1025,7 +1025,9 @@
   .tbl.phone-cards tr:last-child {
     border-bottom: 0;
   }
-  .tbl.phone-cards td {
+  .tbl.phone-cards td,
+  .tbl.phone-cards td.al-start,
+  .tbl.phone-cards td.al-end {
     padding: 3px 0;
     border: 0;
     white-space: normal;
@@ -1033,13 +1035,18 @@
     text-align: end;
     overflow: hidden;
   }
+  /* The label and its value never touch: a gap after the label. */
+  .tbl.phone-cards td::before {
+    margin-inline-end: 12px;
+  }
   .tbl.phone-cards td::before {
     content: attr(data-label);
     float: inline-start;
     color: var(--fg-3);
     font-size: var(--fs-xs);
   }
-  .tbl.phone-cards td:first-child {
+  .tbl.phone-cards td:first-child,
+  .tbl.phone-cards td.al-start:first-child {
     font-size: var(--fs-body);
     padding-bottom: 6px;
     text-align: start;
