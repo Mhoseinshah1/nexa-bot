@@ -642,7 +642,6 @@ export function AuditLogPage({
           }
         >
           <DataTable
-            stack
             caption={t('web.audit_title')}
             columns={columns}
             rows={rows}

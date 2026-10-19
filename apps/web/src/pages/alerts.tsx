@@ -382,7 +382,6 @@ export function AlertsPage({ denied }: { denied: boolean }) {
           }
         >
           <DataTable
-            stack
             caption={t('web.alerts_title')}
             columns={columns}
             rows={rows}

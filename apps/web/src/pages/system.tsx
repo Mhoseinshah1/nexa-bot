@@ -240,7 +240,6 @@ function StatusSection() {
         <Card title={t('web.system_status')} hint={t('web.system_status_hint')}>
           <StateSwitch query={readiness}>
             <DataTable
-              stack
               caption={t('web.system_status')}
               rows={dependencies}
               rowKey={(row) => row.name}
@@ -502,7 +501,6 @@ function AdminsSection({ denied, mayEdit }: { denied: boolean; mayEdit: boolean 
     >
       <StateSwitch query={admins} denied={denied} isEmpty={rows.length === 0}>
         <DataTable
-          stack
           caption={t('web.administrators')}
           rows={rows}
           rowKey={(row) => row.id}
