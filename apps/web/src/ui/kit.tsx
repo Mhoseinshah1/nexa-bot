@@ -1872,6 +1872,7 @@ export function DataTable<T>({
   toolbar,
   filters,
   rowClassName,
+  stack = false,
 }: {
   columns: readonly Column<T>[];
   rows: readonly T[];
@@ -1882,12 +1883,28 @@ export function DataTable<T>({
   toolbar?: ReactNode;
   filters?: ReactNode;
   rowClassName?: (row: T) => string | undefined;
+  /**
+   * Demo parity (390): at phone and tablet width the table is drawn as the approved demo
+   * draws every list there — one card per row, its first column as the card's title and
+   * every other cell as a «header … value» line (each cell carries its header in
+   * `data-label`). The same rows, cells and order; only the CSS layout changes.
+   * `'labelled'` draws the first cell as a labelled line too, where the demo does (its
+   * generic lists), instead of as the card's title.
+   */
+  stack?: boolean | 'labelled';
 }) {
   return (
     <>
       {toolbar !== undefined && <div className="toolbar">{toolbar}</div>}
       {filters !== undefined && <div className="filter-row">{filters}</div>}
-      <div className={cx('tbl-wrap', sticky && 'sticky')}>
+      <div
+        className={cx(
+          'tbl-wrap',
+          sticky && 'sticky',
+          stack !== false && 'stack',
+          stack === 'labelled' && 'labelled',
+        )}
+      >
         <table className={cx('tbl', dense && 'dense')}>
           <caption className="visually-hidden">{caption}</caption>
           <thead>
@@ -1918,6 +1935,7 @@ export function DataTable<T>({
                 {columns.map((column) => (
                   <td
                     key={column.key}
+                    data-label={stack === false ? undefined : column.header}
                     className={cx(
                       `al-${column.align === 'end' ? 'end' : 'start'}`,
                       column.wrap !== undefined && column.wrap !== false && 'wrap',

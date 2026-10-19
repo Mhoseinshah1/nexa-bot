@@ -22,6 +22,17 @@
   gap: 6px;
   margin-top: 6px;
 }
+/* Demo parity (390): in a stacked row the two decisions are full-width capsules, one a line. */
+@media (max-width: 820px) {
+  .tbl-wrap.stack .wb-row-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .tbl-wrap.stack .wb-row-actions > .btn {
+    justify-content: center;
+    width: 100%;
+  }
+}
 
 /* W2: a card a jump landed on is flashed once, never scrolled to. */
 .wb-flash {

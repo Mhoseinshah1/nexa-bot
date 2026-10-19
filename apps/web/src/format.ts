@@ -47,6 +47,33 @@ export function formatTimestamp(iso: string): string {
   return DATE_TIME.format(at);
 }
 
+const DATE_TIME_NUMERIC = new Intl.DateTimeFormat('fa-IR', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+/**
+ * An ISO timestamp as the approved demo's list cells draw one — `۱۴۰۵/۰۷/۱۴ ۱۹:۳۰`: the Jalali
+ * date in numbers, then the 24-hour time, in Persian digits (the demo's Latin digits are not
+ * part of the spec). The same zone and unparseable-string rule as `formatTimestamp`; only the
+ * shape differs, for the dense table columns where a month name widens every row.
+ */
+export function formatTimestampNumeric(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return iso;
+  const parts = new Map(
+    DATE_TIME_NUMERIC.formatToParts(at).map((one) => [one.type, one.value] as const),
+  );
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.get(type) ?? '';
+  // Isolated left to right (U+2066 … U+2069), so the date reads before the time as the demo
+  // draws it, whatever the direction of the cell around it.
+  return `\u2066${part('year')}/${part('month')}/${part('day')} ${part('hour')}:${part('minute')}\u2069`;
+}
+
 const DATE_ONLY = new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium' });
 
 /**

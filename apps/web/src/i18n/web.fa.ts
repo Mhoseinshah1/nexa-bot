@@ -10860,7 +10860,7 @@ export const WEB_FA = {
   'web.pc_matrix_permission': 'دسترسی',
   'web.pc_has': 'دارد',
   'web.pc_lacks': 'ندارد',
-  'web.aq_count_title': 'مخاطبان',
+  'web.aq_count_title': 'مخاطبان این عملیات',
   'web.aq_customers': 'مشتری',
   'web.aq_reachable': '{n} نفر قابل دسترس در ربات',
   'web.aq_counting': 'در حال شمارش…',
