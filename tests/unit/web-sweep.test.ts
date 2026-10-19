@@ -87,7 +87,8 @@ describe('what fails a view of the sweep', () => {
     const kit = readFileSync(join(__dirname, '../../apps/web/src/ui/kit.tsx'), 'utf8');
     expect(kit).toMatch(/className=\{cx\('empty', variant\)\}/);
     expect(kit).toMatch(/variant="error"/);
-    expect(kit).toMatch(/className=\{`banner \$\{tone\}`\}/);
+    // The slim strip (support-knowledge) only appends ` slim`; `banner <tone>` stays first.
+    expect(kit).toMatch(/className=\{`banner \$\{tone\}(\$\{slim \? ' slim' : ''\})?`\}/);
     expect(STATES).toContain("'.empty.error'");
     expect(STATES).toContain("'.banner.danger'");
     expect(STATES).toContain("'.skel'");
