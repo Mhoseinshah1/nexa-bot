@@ -1,4 +1,5 @@
 import type { TemplateKey } from '@nexa/contracts';
+import { OPS_LOG_BODIES_FA } from './ops-log.fa.js';
 
 /**
  * The Persian catalogue.
@@ -26,6 +27,8 @@ import type { TemplateKey } from '@nexa/contracts';
  * language is a new catalogue file rather than a refactor.
  */
 export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
+  // Round 4 PR-D: every operations log type's body, in `ops-log.fa.ts`.
+  ...OPS_LOG_BODIES_FA,
   'bot.ping.reply': 'سلام. ربات فعال است. شناسه پیگیری: {correlationId}',
   'bot.unknown_command': 'این دستور شناخته نشد. برای دیدن فهرست دستورها /help را بفرستید.',
   'bot.callback.stale': '{icon:info} این دکمه دیگر فعال نیست. برای ادامه، دکمهٔ زیر را بزنید.',
@@ -35,12 +38,6 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // Operations. Persian like everything else: the people running this
   // installation read Persian too, and a mixed-language operations channel is
   // how a message stops being read at all.
-  'ops.notification.operational_event':
-    '{severity} — <code>{code}</code>\n{message}\n\n{details}\n🏢 مستأجر: <code>{tenantId}</code>\n🤖 ربات: <code>{botInstanceId}</code>\n🔗 شناسه پیگیری: <code>{correlationId}</code>\n🔁 تعداد رخداد: {occurrences}\n🕒 نخستین بار: {firstSeenAt}\n🕒 این بار: {lastSeenAt}',
-  // FIX-04 — a payment link could not be created. One `علت` line survives: the renderer
-  // drops every line whose placeholders are all absent.
-  'ops.notification.payment_link_failed':
-    '🚨 خطای ساخت لینک پرداخت\nدرگاه: {gateway}\nروش پرداخت: {method}\nکاربر: <code>{telegramUserId}</code>\nکد پیگیری پرداخت: <code>{trackingCode}</code>\nشناسه پرداخت: <code>{paymentId}</code>\nسفارش: <code>{orderId}</code>\nشناسه سفارش نزد درگاه: <code>{providerOrderId}</code>\nشناسه پیش‌فاکتور درگاه: <code>{providerInvoiceId}</code>\nمرحله: ایجاد پیش‌فاکتور ({phase})\nعلت: درگاه پیش‌فاکتور را ساخت اما لینک پرداخت برنگرداند (<code>{causeNoLink}</code>)\nعلت: لینک پرداختی که درگاه برگرداند نامعتبر یا ناامن بود (<code>{causeMalformedLink}</code>)\nعلت: درگاه پیش‌فاکتور را ساخت اما کارت مقصد را برنگرداند (<code>{causeNoCard}</code>)\nعلت: درگاه درخواست را نپذیرفت (<code>{causeBadRequest}</code>)\nعلت: درگاه احراز هویت را رد کرد؛ کلید API درگاه را بررسی کنید (<code>{causeUnauthorized}</code>)\nعلت: درگاه دسترسی را رد کرد (<code>{causeForbidden}</code>)\nعلت: تنظیمات درگاه کامل نیست یا درگاه آن را نپذیرفت (<code>{causeConfiguration}</code>)\nعلت: محدودیت تعداد درخواست درگاه (<code>{causeRateLimited}</code>)\nعلت: پاسخ نامعتبر درگاه؛ خطای سمت درگاه (<code>{causeProviderError}</code>)\nعلت: پاسخ درگاه قابل خواندن نبود (<code>{causeBadResponse}</code>)\nعلت: پاسخی از درگاه در مهلت مقرر نرسید (<code>{causeTimeout}</code>)\nعلت: اتصال به درگاه برقرار نشد (<code>{causeUnreachable}</code>)\nعلت: نتیجهٔ درخواست نامشخص است (<code>{causeUnknown}</code>)\nوضعیت HTTP درگاه: {httpStatus}\nتکرار: ممکن است تلاش بعدی بدون تغییر موفق شود{retryable}\nتکرار: تا رفع مشکل، تلاش دوباره موفق نمی‌شود{notRetryable}\nوضعیت: نهایی؛ این تلاش پرداخت قابل استفاده نیست ({finalState})\nوضعیت: نیازمند بررسی؛ نتیجه نامشخص است و ممکن است پیش‌فاکتور نزد درگاه ساخته شده باشد ({unknownState})\nاین پیام نخستین رخداد است؛ تکرارهای بعدی همین خطا پیام تازه نمی‌سازند و شمار به‌روز آن‌ها در پنل مدیریت ← «مرکز اعلان‌ها» دیده می‌شود.\nشناسه رخداد: <code>{eventId}</code>\nشناسه همبستگی: <code>{correlationId}</code>\n🏢 مستأجر: <code>{tenantId}</code>\n🤖 ربات: <code>{botInstanceId}</code>\n🕒 زمان: {at}',
   // WP-A4 — the operations log group Nexa manages.
   'ops.group.topic_name.system': '⚙️ سیستم',
   'ops.group.topic_name.payments': '💳 پرداخت‌ها',
@@ -58,20 +55,6 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'این گروه هنوز تاپیک‌دار نیست. در تنظیمات گروه گزینهٔ «Topics» را روشن کنید و سپس همین دستور را دوباره بفرستید؛ کد اتصال هنوز معتبر است.',
   'ops.group.test':
     '🧪 پیام آزمایشی گروه گزارش‌های مدیریتی\nتاپیک: {topic}\nدرخواست‌کننده: {requestedBy}\nزمان: {at}',
-  'ops.financial.order_paid':
-    '✅ پرداخت سفارش تأیید شد\n\n💠 روش: {method} ({route})\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🔎 منبع تأیید: {evidence}\n🕒 زمان: {at}',
-  'ops.financial.topup_credited':
-    '✅ شارژ کیف پول تأیید و واریز شد\n\n💠 روش: {method} ({route})\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n💰 مبلغ واریز به کیف پول: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مجموع پرداختی: {payable}\n🎁 هدیهٔ شارژ: {gift}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🔎 منبع تأیید: {evidence}\n🕒 زمان: {at}',
-  'ops.financial.payment_failed':
-    '❌ پرداخت ناموفق/رد شد\n\n⚠️ علت: {cause}\n💠 روش: {method} ({route})\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🕒 زمان: {at}',
-  'ops.financial.late_completion':
-    '⚠️ تأیید دیرهنگام درگاه پس از بسته‌شدن پرداخت\n\nاین پرداخت در Nexa بسته شده بود و هیچ مبلغی ثبت نشد؛ نیاز به بررسی دستی دارد.\n\n💠 درگاه: {route}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🕒 زمان: {at}',
-  'ops.financial.outcome_unknown':
-    '❓ نتیجهٔ پرداخت درگاه نامعلوم ماند\n\nمهلت بررسی درگاه بدون پاسخ قطعی تمام شد. هیچ مبلغی ثبت یا رد نشده است؛ نیاز به تطبیق دستی دارد.\n\n💠 درگاه: {route}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🕒 زمان: {at}',
-  'ops.financial.refund_completed':
-    '↩️ بازگشت وجه انجام شد\n\n🆔 شناسه بازگشت وجه: {refundId}\n📤 مقصد: {channel}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ بازگشتی: {amount}\n🕒 زمان: {at}',
-  'ops.financial.refund_failed':
-    '⛔️ بازگشت وجه ناموفق/لغو شد\n\n🆔 شناسه بازگشت وجه: {refundId}\n📤 مقصد: {channel}\n⚠️ علت: {cause}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ: {amount}\n🕒 زمان: {at}',
   'bot.service.refund_request_button': 'درخواست بازگشت وجه',
   'bot.service.refund_request_ask':
     'درخواست بازگشت وجه برای سرویس {service} ({product})\n\nپس از ثبت درخواست، مدیریت آن را بررسی می‌کند و مبلغ قابل بازگشت را تعیین می‌کند. در صورت تأیید، این سرویس حذف می‌شود و مبلغ تعیین‌شده به کیف پول شما در ربات واریز می‌شود. کارمزد درگاه پرداخت قابل بازگشت نیست.\n\nآیا درخواست بازگشت وجه را تأیید می‌کنید؟',
@@ -141,8 +124,6 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'این درخواست در وضعیت فعلی قابل اجرا نیست (سرویس قابل حذف نیست یا پرداخت مبدأ قابل بازگشت نیست). چیزی تغییر نکرد؛ می‌توانید درخواست را رد کنید.',
   'bot.admin.refund_request_expired':
     'مهلت پاسخ تمام شد و چیزی ثبت نشد. برای ادامه، دوباره از کارت درخواست اقدام کنید.',
-  'ops.financial.service_refund_request':
-    '🧾 درخواست بازگشت وجه سرویس — {outcome}\n\n🆔 شناسه درخواست: {requestId}\n📦 سرویس: {serviceId}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🆔 پرداخت مبدأ: {paymentId}\n💰 مبلغ تأییدشده: {amount}\n👮 تصمیم‌گیرنده: {adminId}\n🕒 زمان: {at}',
   'ops.notification.test':
     'این یک پیام آزمایشی است. مقصد اعلان‌های عملیاتی به درستی پیکربندی شده است.\nدرخواست‌کننده: {requestedBy}\nزمان: {at}',
 
@@ -1457,8 +1438,6 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.ticket.category_default_3': 'سرویس',
   'bot.ticket.category_default_4': 'حساب کاربری',
   'bot.ticket.category_default_5': 'سایر',
-  'ops.support.ticket_opened':
-    '🎫 تیکت جدید #{number}\n\n📂 موضوع: {category}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🕒 زمان: {at}\n\nبرای دیدن گفتگو و پاسخ، بخش «تیکت‌های پشتیبانی» پنل مدیریت را باز کنید.',
   // Round N: broadcast and safe mass actions.
   'bot.broadcast.message': '{message}',
   'bot.wallet.mass_credited': '{icon:referral} مبلغ {amount} به کیف پول شما اضافه شد.',
@@ -1472,6 +1451,4 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'پیام آزمایشی ظاهر ربات\n\n' +
     'در خط زیر، هر جایگاهی که ایموجی سفارشی برایش تنظیم شده با همان ایموجی فرستاده شده و بقیه با ایموجی پیش‌فرض. ' +
     'اگر آیکون‌های سفارشی را می‌بینید، این ربات می‌تواند از ایموجی سفارشی استفاده کند.',
-  'ops.support.customer_replied':
-    '💬 پیام تازهٔ کاربر در تیکت #{number}\n\n📂 موضوع: {category}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🕒 زمان: {at}\n\nبرای دیدن گفتگو و پاسخ، بخش «تیکت‌های پشتیبانی» پنل مدیریت را باز کنید.',
 };

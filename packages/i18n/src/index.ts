@@ -17,6 +17,8 @@ import {
   type TemplateValues,
   type Translator,
   TELEGRAM_CAPTION_MAX_LENGTH,
+  formatPersianInteger,
+  toPersianDigits,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from './catalogue.fa.js';
 export {
@@ -248,7 +250,58 @@ function isWholeNumber(value: TemplateValue): value is number | bigint {
   return typeof value === 'bigint' || (typeof value === 'number' && Number.isSafeInteger(value));
 }
 
+/**
+ * A byte quantity as the operations log group reads it (Round 4 PR-D): zero is «0 بایت»,
+ * never «0 گیگابایت» and never «NaN»; below a gibibyte the unit steps down so a 200 MB
+ * trial is «200 مگابایت» and not «0.19 گیگابایت». Latin digits here; the caller converts.
+ */
+export function formatBytesForLog(bytes: bigint): string {
+  if (bytes <= 0n) return '0 بایت';
+  const KIB = 1024n;
+  const MIB = KIB * 1024n;
+  const GIB = MIB * 1024n;
+  if (bytes < KIB) return `${bytes.toString()} بایت`;
+  if (bytes < MIB) return `${((bytes * 10n + KIB / 2n) / KIB / 10n).toString()} کیلوبایت`;
+  if (bytes < GIB) {
+    const tenths = (bytes * 10n + MIB / 2n) / MIB;
+    const whole = tenths / 10n;
+    const fraction = tenths % 10n;
+    return `${fraction === 0n ? whole.toString() : `${whole.toString()}.${fraction.toString()}`} مگابایت`;
+  }
+  return formatBytes(bytes);
+}
+
 function renderValue(
+  value: TemplateValue,
+  locale: Locale,
+  type: PlaceholderType,
+  presentation: TemplatePresentation | undefined,
+  persian = false,
+): string {
+  if (!persian) return renderValuePlain(value, locale, type, presentation);
+  /*
+   * The operations log group's numerals (Round 4 PR-D). A STRING is never converted: it may
+   * be an id, a username, a service name or a tracking code, and an operator copies those.
+   * Everything the renderer itself formats — money, instants, quantities, counts — is.
+   */
+  if (typeof value === 'string') return value;
+  if (isMoneyValue(value) || value instanceof Date) {
+    return toPersianDigits(renderValuePlain(value, locale, type, presentation));
+  }
+  if (isWholeNumber(value)) {
+    if (type === 'BYTES') return toPersianDigits(formatBytesForLog(BigInt(value)));
+    if (type === 'TRAFFIC_LIMIT') {
+      return BigInt(value) === UNLIMITED_TRAFFIC_BYTES
+        ? UNLIMITED_WORD[locale]
+        : toPersianDigits(formatBytesForLog(BigInt(value)));
+    }
+    if (type === 'DURATION_DAYS') return toPersianDigits(formatDurationDays(value, locale));
+    return formatPersianInteger(value);
+  }
+  return toPersianDigits(String(value));
+}
+
+function renderValuePlain(
   value: TemplateValue,
   locale: Locale,
   type: PlaceholderType,
@@ -322,6 +375,7 @@ export function renderTemplateBody(
     definition.placeholders.map((p) => [p.token, p]),
   );
   const escape = definition.format === 'TELEGRAM_HTML' ? escapeTelegramHtml : (s: string) => s;
+  const persian = definition.digits === 'PERSIAN';
 
   const absentOptional = (token: string): boolean => {
     const placeholder = declared.get(token);
@@ -343,7 +397,7 @@ export function renderTemplateBody(
         if (placeholder === undefined) return match;
         const value = values[token];
         if (value === undefined) return placeholder.required ? match : '';
-        const shown = escape(renderValue(value, locale, placeholder.type, presentation));
+        const shown = escape(renderValue(value, locale, placeholder.type, presentation, persian));
         return mark &&
           value instanceof Date &&
           (placeholder.type === 'DATETIME' || placeholder.type === 'DATE')
@@ -499,3 +553,4 @@ export {
 } from './reports.fa.js';
 export { AUDIT_EXPORT_HEADERS_FA, type AuditExportHeaderKey } from './audit-log.fa.js';
 export { PAYMENT_METHOD_NAMES_FA } from './payment-methods.fa.js';
+export { OPS_LOG_BODIES_FA, OPS_LOG_BUTTON_LABELS_FA, OPS_LOG_WORDS_FA } from './ops-log.fa.js';
