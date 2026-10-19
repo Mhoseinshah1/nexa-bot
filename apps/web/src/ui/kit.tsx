@@ -646,6 +646,7 @@ export function DetailHead({
   initial,
   stats,
   level = 2,
+  back,
 }: {
   title: ReactNode;
   badge?: ReactNode;
@@ -655,13 +656,24 @@ export function DetailHead({
   initial?: string;
   stats?: readonly { readonly label: ReactNode; readonly value: ReactNode }[];
   level?: 1 | 2;
+  /**
+   * A small «→ فهرست» link to the list the record belongs to, drawn under the breadcrumb and
+   * above the head (the demo's `backl`). Additive: a head without it is unchanged.
+   */
+  back?: { readonly href: string; readonly label: ReactNode };
 }) {
   const Heading = level === 1 ? 'h1' : 'h2';
   const trail = useContext(PageTrailContext);
+  const onLink = useLinkHandler();
   return (
     <>
       {/* A detail page whose head IS this card still says where it is (X1). */}
       {level === 1 && trail.length > 1 && <Breadcrumbs items={trail} />}
+      {back !== undefined && (
+        <a className="back-link" href={back.href} onClick={onLink}>
+          <span aria-hidden="true">→</span> {back.label}
+        </a>
+      )}
       <section className="card detail-head">
         <div className="head-card">
           {initial !== undefined && (
