@@ -2,6 +2,11 @@ import {
   fxStatusResponseSchema,
   paymentGatewayListResponseSchema,
   paymentListResponseSchema,
+  referralCommissionListResponseSchema,
+  referralListResponseSchema,
+  reportReferralsResponseSchema,
+  reportSummaryResponseSchema,
+  reportTrendResponseSchema,
   paymentSituationOf,
   type PaymentSituationFacts,
 } from '@nexa/contracts';
@@ -355,4 +360,277 @@ const GATEWAYS: readonly ShotFixture[] = [
   }),
 ];
 
-export const DEMO_FINANCE: readonly ShotFixture[] = [...PAYMENTS, ...GATEWAYS];
+// --- referrals (`#/referrals`) -------------------------------------------------
+
+/** The demo's people: a display name and a Telegram id, as its tables show them. */
+const PEOPLE: readonly (readonly [string | null, string])[] = [
+  ['علی رضایی', '606935783'],
+  ['رضا نوری', '872170802'],
+  ['زهرا جعفری', '982530490'],
+  ['فاطمه کاظمی', '403962768'],
+  ['مهدی کریمی', '584271451'],
+  ['پویا شریفی', '999546491'],
+  ['مریم صادقی', '584332434'],
+  [null, '673267723'],
+  ['حسین موسوی', '319675910'],
+  ['کیان فرهادی', '484648889'],
+  ['سارا محمدی', '959498386'],
+  ['ندا رستمی', '291406883'],
+  ['امیر حسینی', '767614693'],
+  ['بهنام طاهری', '719319299'],
+  ['نگار احمدی', '495954583'],
+  ['شیما عباسی', '172128502'],
+  ['فرهاد یزدانی', '676309375'],
+  ['لیلا اکبری', '542733367'],
+  ['سینا مرادی', '488820628'],
+  ['میلاد زارعی', '851500034'],
+  ['پریسا حیدری', '513033985'],
+];
+
+function person(index: number): Json {
+  const [name, telegram] = PEOPLE[index % PEOPLE.length] ?? [null, '0'];
+  return { customerId: uid('0199a0ab', index), telegramUserId: telegram, displayName: name };
+}
+
+/** Referrer, referee and scope of the demo's attribution rows, newest first. */
+const ATTRIBUTIONS: readonly (readonly [
+  number,
+  number,
+  'ON_FIRST_PAID_ORDER' | 'ON_EVERY_PAID_ORDER',
+])[] = [
+  [0, 1, 'ON_EVERY_PAID_ORDER'],
+  [2, 3, 'ON_FIRST_PAID_ORDER'],
+  [4, 5, 'ON_FIRST_PAID_ORDER'],
+  [6, 7, 'ON_FIRST_PAID_ORDER'],
+  [8, 9, 'ON_EVERY_PAID_ORDER'],
+  [10, 11, 'ON_FIRST_PAID_ORDER'],
+  [12, 13, 'ON_FIRST_PAID_ORDER'],
+  [14, 15, 'ON_FIRST_PAID_ORDER'],
+  [0, 16, 'ON_EVERY_PAID_ORDER'],
+  [2, 17, 'ON_FIRST_PAID_ORDER'],
+];
+
+const REFERRAL_ROWS: readonly Json[] = ATTRIBUTIONS.map(([referrer, referee, trigger], index) => ({
+  id: uid('0199b0ab', index),
+  referrer: person(referrer),
+  referee: person(referee),
+  trigger,
+  createdAt: ago(60 * 24 * index + 60 * (index * 3)),
+}));
+
+/** The demo's ledger: state, percent, basis, scope, reversal — in its order. */
+const LEDGER: readonly (readonly [
+  string,
+  number,
+  number,
+  'FIRST_PAID_ORDER' | 'EVERY_PAID_ORDER',
+  number,
+])[] = [
+  ['EARNED', 10, 310000, 'EVERY_PAID_ORDER', 0],
+  ['PENDING', 15, 490000, 'FIRST_PAID_ORDER', 0],
+  ['VOID', 15, 250000, 'FIRST_PAID_ORDER', 0],
+  ['EARNED', 10, 1450000, 'EVERY_PAID_ORDER', 145000],
+  ['PENDING', 15, 490000, 'FIRST_PAID_ORDER', 0],
+  ['EARNED', 15, 780000, 'FIRST_PAID_ORDER', 0],
+  ['EARNED', 15, 1450000, 'FIRST_PAID_ORDER', 108750],
+  ['VOID', 15, 310000, 'FIRST_PAID_ORDER', 0],
+  ['EARNED', 10, 780000, 'EVERY_PAID_ORDER', 0],
+  ['EARNED', 15, 250000, 'FIRST_PAID_ORDER', 0],
+];
+
+const COMMISSION_ROWS: readonly Json[] = LEDGER.map(
+  ([state, percent, basis, scope, reversed], index) => {
+    const promised = Math.round((basis * percent) / 100);
+    return {
+      id: uid('0199c0ab', index),
+      referralId: uid('0199b0ab', index),
+      orderId: uid(`0${String(5216 - index * 3)}abc`, index),
+      referrer: person((index * 2) % 20),
+      referee: person((index * 2 + 1) % 20),
+      scope,
+      percent,
+      basisAmount: String(basis),
+      promisedAmount: String(promised),
+      currency: 'IRT',
+      state,
+      earnedAmount: state === 'EARNED' ? String(promised) : null,
+      reversedAmount: String(reversed),
+      unrecoveredAmount: index === 6 ? '20000' : '0',
+      createdAt: ago(60 * 24 * index + 60 * 5),
+      earnedAt: state === 'EARNED' ? ago(60 * 24 * index) : null,
+      voidedAt: state === 'VOID' ? ago(60 * 24 * index) : null,
+    };
+  },
+);
+
+/** The demo's «۳۰ روز اخیر» window, 1405/06/17 – 1405/07/15, beside the one before it. */
+const LAST_30_DAYS = {
+  range: 'LAST_30_DAYS',
+  timezone: 'Asia/Tehran',
+  calendar: 'jalali',
+  granularity: 'DAY',
+  current: {
+    start: '2026-08-07T20:30:00.000Z',
+    end: '2026-09-06T20:30:00.000Z',
+    effectiveEnd: '2026-09-06T08:00:00.000Z',
+    startLocal: '1405/05/17',
+    endLocalInclusive: '1405/06/15',
+  },
+  previous: {
+    start: '2026-07-08T20:30:00.000Z',
+    end: '2026-08-07T20:30:00.000Z',
+    effectiveEnd: '2026-08-07T08:00:00.000Z',
+    startLocal: '1405/04/16',
+    endLocalInclusive: '1405/05/16',
+  },
+  lengthsDiffer: false,
+  generatedAt: ago(0),
+};
+
+/** The demo's top referrers: signups, buyers, revenue and commission, eight of them. */
+const TOP: readonly (readonly [number, number, number, number])[] = [
+  [21, 8, 2864400, 343728],
+  [19, 8, 2591600, 310992],
+  [13, 5, 1773200, 212784],
+  [10, 4, 1364000, 163680],
+  [10, 4, 1364000, 163680],
+  [8, 3, 1091200, 130944],
+  [5, 2, 682000, 81840],
+  [3, 1, 409200, 49104],
+];
+
+const REFERRALS: readonly ShotFixture[] = [
+  fixture('/referrals', referralListResponseSchema, {
+    referrals: REFERRAL_ROWS,
+    nextCursor: 'ref-2',
+  }),
+  fixture('/referral-commissions', referralCommissionListResponseSchema, {
+    commissions: COMMISSION_ROWS,
+    nextCursor: 'com-2',
+  }),
+  fixture('/reports/referrals', reportReferralsResponseSchema, {
+    period: LAST_30_DAYS,
+    signups: { current: 93, previous: 84 },
+    convertedBuyers: 35,
+    conversionBasisPoints: 3_763,
+    signupGifts: [{ currency: 'IRT', amount: '1860000', entries: 93 }],
+    commissions: [{ currency: 'IRT', amount: '1432200', entries: 35 }],
+    commissionReversals: [],
+    referredSales: 46,
+    referredRevenue: [{ currency: 'IRT', amount: '11935000' }],
+    topReferrers: {
+      by: 'SIGNUPS',
+      rankingCurrency: 'IRT',
+      page: 1,
+      limit: 10,
+      totalRows: TOP.length,
+      rows: TOP.map(([signups, buyers, revenue, commission], index) => ({
+        rank: index + 1,
+        referrerId: uid('0199a0ab', index * 2),
+        signups,
+        convertedBuyers: buyers,
+        revenue: [{ currency: 'IRT', amount: String(revenue) }],
+        commission: [{ currency: 'IRT', amount: String(commission) }],
+      })),
+    },
+  }),
+];
+
+// --- reports (`#/reports`, «این ماه») --------------------------------------------
+
+const DAY_MS = 24 * 3_600_000;
+/** Tehran's midnight on the first of Mehr 1405 (the demo's «این ماه» starts 1405/07/01). */
+const MONTH_START = Date.parse('2026-09-22T20:30:00.000Z') - 30 * DAY_MS;
+const THIS_MONTH = {
+  range: 'THIS_MONTH',
+  timezone: 'Asia/Tehran',
+  calendar: 'jalali',
+  granularity: 'DAY',
+  current: {
+    start: new Date(MONTH_START).toISOString(),
+    end: new Date(MONTH_START + 30 * DAY_MS).toISOString(),
+    effectiveEnd: ago(0),
+    startLocal: '1405/07/01',
+    endLocalInclusive: '1405/07/30',
+  },
+  previous: {
+    start: new Date(MONTH_START - 31 * DAY_MS).toISOString(),
+    end: new Date(MONTH_START).toISOString(),
+    effectiveEnd: new Date(MONTH_START - 16 * DAY_MS).toISOString(),
+    startLocal: '1405/06/01',
+    endLocalInclusive: '1405/06/31',
+  },
+  lengthsDiffer: true,
+  generatedAt: ago(0),
+};
+
+/** The demo's daily revenue this month (fifteen days so far) and the month before. */
+const TREND_CURRENT = [
+  17200000, 12100000, 13400000, 16100000, 11600000, 13300000, 17400000, 11300000, 14700000,
+  12800000, 12700000, 11100000, 15100000, 15200000, 11800000,
+];
+const TREND_PREVIOUS = [
+  13900000, 13600000, 13900000, 13000000, 14300000, 14100000, 13600000, 12600000, 13400000,
+  12200000, 9900000, 12900000, 15200000, 13100000, 12400000, 9600000, 11300000, 12200000, 11400000,
+  11700000, 12300000, 12300000, 13600000, 11300000, 12200000, 12400000, 13900000, 16200000,
+  15700000, 13500000,
+];
+
+function monthBuckets(values: readonly (number | null)[], start: number, month: string) {
+  return Array.from({ length: 30 }, (_, index) => ({
+    index,
+    start: new Date(start + index * DAY_MS).toISOString(),
+    end: new Date(start + (index + 1) * DAY_MS).toISOString(),
+    label: `1405/${month}/${String(index + 1).padStart(2, '0')}`,
+    value: values[index] === undefined || values[index] === null ? null : String(values[index]),
+  }));
+}
+
+const irtCmp = (current: number, previous: number) => [
+  { currency: 'IRT', current: String(current), previous: String(previous) },
+];
+
+const REPORTS: readonly ShotFixture[] = [
+  fixture(
+    '/reports/summary',
+    reportSummaryResponseSchema,
+    {
+      period: THIS_MONTH,
+      sales: { current: 670, previous: 1291 },
+      revenue: irtCmp(204_489_678, 400_175_495),
+      grossValue: irtCmp(216_963_548, 412_000_000),
+      discount: irtCmp(12_473_870, 11_825_000),
+      successfulOrders: { current: 1202, previous: 2243 },
+      newUsers: { current: 1717, previous: 3283 },
+      newBuyers: { current: 309, previous: 598 },
+      newServices: { current: 288, previous: 528 },
+      newTrialServices: { current: 532, previous: 1015 },
+      renewals: { current: 266, previous: 547 },
+      walletTopupCount: { current: 435, previous: 401 },
+      walletTopup: irtCmp(89_700_589, 84_068_000),
+      activeServices: 1873,
+      activeCustomers: 1544,
+    },
+    { query: { range: 'THIS_MONTH' } },
+  ),
+  fixture(
+    '/reports/trend',
+    reportTrendResponseSchema,
+    {
+      period: THIS_MONTH,
+      metric: 'REVENUE',
+      currency: 'IRT',
+      currencies: ['IRT'],
+      current: monthBuckets(TREND_CURRENT, MONTH_START, '07'),
+      previous: monthBuckets(TREND_PREVIOUS, MONTH_START - 31 * DAY_MS, '06'),
+    },
+    { query: { range: 'THIS_MONTH', metric: 'REVENUE' } },
+  ),
+];
+
+export const DEMO_FINANCE: readonly ShotFixture[] = [
+  ...PAYMENTS,
+  ...GATEWAYS,
+  ...REFERRALS,
+  ...REPORTS,
+];
