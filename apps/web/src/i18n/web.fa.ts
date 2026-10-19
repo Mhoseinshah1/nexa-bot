@@ -6407,6 +6407,7 @@ export const WEB_FA = {
   'web.bchat_wait_just_now': 'همین حالا',
   'web.bchat_ticket': 'تیکت',
   'web.bchat_ticket_badge': 'تیکت دارد',
+  'web.bchat_show_more': 'نمایش بیشتر',
   'web.bchat_ticket_open': 'باز کردن تیکت',
   'web.bchat_last_human': 'آخرین دخالت انسان',
   'web.bchat_takeover': 'در اختیار گرفتن گفتگو',

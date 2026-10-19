@@ -382,6 +382,11 @@ form.set-row > * + * {
   text-align: start;
 }
 /* TB10: the ticket a conversation escalated to, as a badge that is also a link. */
+.bchat-state-sub {
+  /* Demo parity: «تیکت دارد» sits on its own line under the status badge. */
+  flex-basis: 100%;
+  display: flex;
+}
 .bchat-ticket {
   text-decoration: none;
   gap: 4px;
