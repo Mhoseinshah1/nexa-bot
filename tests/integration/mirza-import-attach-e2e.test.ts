@@ -365,6 +365,92 @@ describe('the one-time Mirza import attaches every on-panel service (owner rule 
     ).rejects.toMatchObject({ code: COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE });
   });
 
+  it('Codex #292: every renewal predicate is in the query before its limit — eleven incompatible plans ahead of the compatible one hide nothing', async () => {
+    const service = await serviceOf(keyOf('svc_0'));
+    if (service === null) throw new Error('svc_0 not attached');
+    const products = new DrizzleProductRepository(db());
+    const now = ctx.container.clock.now();
+    // Sorted AHEAD of «پلن ۳۰» (sort order 0), all on rp1 and all unlimited in time: a
+    // time-limited service never renews from one. Before the fix the first ten were fetched and
+    // then filtered, so the compatible plan behind them was never offered — nor accepted.
+    for (let i = 0; i < 11; i += 1) {
+      const p = await products.create(tenantA, {
+        id: ctx.container.ids.uuid() as ProductId,
+        draft: {
+          title: `نامحدود ${String(i)}`,
+          description: null,
+          audience: 'EVERYONE',
+          sortOrder: 0,
+          panelId: rig.panels.rp1.id as PanelId,
+          categoryId: SEED_IDS.categoryA as ProductCategoryId,
+          specification: { durationDays: 0, trafficBytes: 10n * 1024n ** 3n, deviceLimit: null },
+          price: money(90_000n, 'IRT'),
+          display: EMPTY_PRODUCT_DISPLAY,
+        },
+        now,
+      });
+      await products.setStatus(tenantA, p.id, 'INACTIVE', 'ACTIVE', now);
+    }
+    const offer = await ctx.container.commercialActions.offer(
+      tenantA,
+      botActor('renew-limit'),
+      service.customer_id as UserId,
+      service.id,
+      'RENEW',
+    );
+    expect(offer.plans?.map((p) => p.title)).toEqual(['پلن ۳۰']);
+    const plan = offer.plans?.[0];
+    if (plan === undefined) throw new Error('no plan');
+    const { order } = await ctx.container.commercialActions.draft(
+      tenantA,
+      botActor('renew-limit-draft'),
+      service.customer_id as UserId,
+      { serviceId: service.id, kind: 'RENEW', productId: plan.id, idempotencyKey: 'renew-limit' },
+    );
+    expect(order.line.productId).toBe(plan.id);
+    await db().execute(
+      sql`UPDATE products SET status = 'INACTIVE' WHERE title LIKE 'نامحدود %' AND tenant_id = ${TENANT}`,
+    );
+  });
+
+  it('Codex #292: confirmation re-decides the SAME predicate the offer listed with — a plan no longer the service’s shape is refused', async () => {
+    const service = await serviceOf(keyOf('svc_0'));
+    if (service === null) throw new Error('svc_0 not attached');
+    const [plan] = await rows<{ id: string }>(sql`
+      SELECT id FROM products WHERE tenant_id = ${TENANT} AND title = 'پلن ۳۰'`);
+    const { order } = await ctx.container.commercialActions.draft(
+      tenantA,
+      botActor('renew-confirm-draft'),
+      service.customer_id as UserId,
+      {
+        serviceId: service.id,
+        kind: 'RENEW',
+        productId: plan?.id ?? '',
+        idempotencyKey: 'rc-draft',
+      },
+    );
+    // Still ACTIVE, priced and on rp1 — but now unlimited in time, which this time-limited
+    // service never renews from: the offer would not list it, so the confirmation refuses it.
+    await db().execute(sql`UPDATE products SET duration_days = 0 WHERE id = ${plan?.id ?? ''}`);
+    await expect(
+      ctx.container.commercialActions.confirm(
+        tenantA,
+        botActor('renew-confirm'),
+        service.customer_id as UserId,
+        { orderId: order.id, idempotencyKey: 'rc-confirm' },
+      ),
+    ).rejects.toMatchObject({ code: COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE });
+    await db().execute(sql`UPDATE products SET duration_days = 30 WHERE id = ${plan?.id ?? ''}`);
+    // Restored, the same order confirms.
+    const confirmed = await ctx.container.commercialActions.confirm(
+      tenantA,
+      botActor('renew-confirm-2'),
+      service.customer_id as UserId,
+      { orderId: order.id, idempotencyKey: 'rc-confirm-2' },
+    );
+    expect(confirmed.state).toBe('AWAITING_PAYMENT');
+  });
+
   it('a panel with no plan is a clear sentence, never an error; a plan added later is offered', async () => {
     const service = await serviceOf(keyOf('svc_1'));
     if (service === null) throw new Error('svc_1 not attached');

@@ -690,6 +690,38 @@ describe('Migration P6: legacy service adoption', () => {
         }),
       ),
     ).toMatchObject({ kind: 'ADOPTED' });
+    // Codex on #292: a NAMED product mapped to a product of another size and length (here
+    // unlimited, 100 GB) is the order's navigation only; its permanent line is the invoice's
+    // OWN shape (50 GB / 30 d), never the mapped product's specification.
+    const unlimited = await publicProduct(250_000n, { trafficGb: 100n, days: 0 });
+    const named = await viaCandidate(
+      candidate(invoiceKey(), {
+        product: {
+          kind: 'NAMED_PRODUCT',
+          codeProduct: 'p12',
+          productId: unlimited,
+          fallbackShapeId: ensured.shape.id,
+        },
+      }),
+    );
+    expect(named).toMatchObject({ kind: 'ADOPTED' });
+    const [line] = await rows<{
+      product_id: string;
+      days: number;
+      traffic: string;
+      title: string;
+    }>(sql`
+      SELECT o.product_id, o.line_duration_days AS days, o.line_traffic_bytes::text AS traffic,
+             o.line_title AS title
+        FROM orders o JOIN services s ON s.order_id = o.id
+       WHERE s.id = ${(named as { serviceId: string }).serviceId}`);
+    const shapeProduct = await products.findById(tenantA, ensured.shape.productId as ProductId);
+    expect(line).toEqual({
+      product_id: unlimited,
+      days: 30,
+      traffic: String(50n * GB),
+      title: shapeProduct?.title,
+    });
     // The importer's customer must be the one the adoption finds for the Telegram id.
     const other = await fx.customer({ telegramUserId: tg() });
     expect(await viaCandidate(candidate(invoiceKey(), { customerId: other }))).toMatchObject({

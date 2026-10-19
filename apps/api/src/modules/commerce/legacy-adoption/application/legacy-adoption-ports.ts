@@ -93,6 +93,13 @@ export interface LegacyAdoptionCommand {
    * exists at all (manual review: the order cannot name nothing, and none is invented).
    */
   readonly productId: string | null;
+  /**
+   * The product whose specification and title the order LINE snapshots: the hidden product of
+   * the invoice's OWN shape, so the permanent history says what the customer bought even when
+   * `productId` names a mapped product of another size or length (Codex on #292). Absent or
+   * null: the line is `productId`'s, which is the shape's product itself on the hidden path.
+   */
+  readonly lineProductId?: string | null;
   /** The legacy purchase time, for the order's `settled_at`; null = adoption time. */
   readonly legacyPurchasedAt: Date | null;
   readonly idempotencyKey: string;

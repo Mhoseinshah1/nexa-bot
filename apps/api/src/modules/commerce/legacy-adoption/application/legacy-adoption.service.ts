@@ -174,6 +174,13 @@ export function adoptionRequestHash(command: LegacyAdoptionCommand): string {
     command.productId,
     command.legacyPurchasedAt?.toISOString() ?? null,
     command.expectedCustomerId ?? null,
+    // Only when it differs from the order's product, so every request whose line IS that
+    // product hashes exactly as before (a resumed run replays its own key).
+    ...(command.lineProductId === undefined ||
+    command.lineProductId === null ||
+    command.lineProductId === command.productId
+      ? []
+      : [command.lineProductId]),
   ]);
   return createHash('sha256').update(canonical).digest('hex');
 }
@@ -219,14 +226,19 @@ export class LegacyAdoptionService {
       return (await this.deps.shapes.findById(scope, shapeId))?.productId ?? null;
     };
     let productId: string | null;
+    // The order LINE is always the invoice's own shape (its hidden product), whatever product
+    // the order names for navigation (Codex on #292).
+    let lineProductId: string | null;
     if (candidate.product.kind === 'HIDDEN_SHAPE') {
       productId = await shapeProduct(candidate.product.shapeId);
+      lineProductId = productId;
     } else {
       const mapped = candidate.product.productId ?? null;
+      lineProductId = await shapeProduct(candidate.product.fallbackShapeId);
       productId =
         mapped !== null && (await this.deps.products.findById(scope, mapped as ProductId)) !== null
           ? mapped
-          : await shapeProduct(candidate.product.fallbackShapeId);
+          : lineProductId;
     }
     const command: Omit<LegacyAdoptionCommand, 'idempotencyKey'> = {
       runId: candidate.runId,
@@ -241,6 +253,7 @@ export class LegacyAdoptionService {
       },
       runtime: candidate.runtime,
       productId,
+      lineProductId,
       legacyPurchasedAt: candidate.legacyPurchasedAt ?? null,
       expectedCustomerId: candidate.customerId,
     };
@@ -497,6 +510,15 @@ export class LegacyAdoptionService {
     if (command.productId === null) return review('PRODUCT_MAPPING_UNRESOLVED');
     const product = await this.deps.products.findById(scope, command.productId as ProductId, tx);
     if (product === null) return review('PRODUCT_MAPPING_UNRESOLVED');
+    // The line's own product: the invoice's shape. A mapped product of another traffic or
+    // length is navigation only and never what the history says was bought (Codex on #292).
+    const lineProduct =
+      command.lineProductId === undefined ||
+      command.lineProductId === null ||
+      command.lineProductId === product.id
+        ? product
+        : ((await this.deps.products.findById(scope, command.lineProductId as ProductId, tx)) ??
+          product);
     const currency = await this.deps.settings.valueOf<SalesCurrencyCode>(
       scope,
       'sales.currency',
@@ -524,10 +546,10 @@ export class LegacyAdoptionService {
       productId: product.id,
       currency,
       line: {
-        title: product.title,
-        durationDays: product.specification.durationDays,
-        trafficBytes: product.specification.trafficBytes,
-        deviceLimit: product.specification.deviceLimit,
+        title: lineProduct.title,
+        durationDays: lineProduct.specification.durationDays,
+        trafficBytes: lineProduct.specification.trafficBytes,
+        deviceLimit: lineProduct.specification.deviceLimit,
       },
       state,
       reviewFlag,
