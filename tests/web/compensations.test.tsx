@@ -66,9 +66,10 @@ describe('the compensation list', () => {
       .map((b) => b.textContent?.trim())
       .filter((label) => label !== '');
     for (const label of labels) {
-      expect(['بعدی', 'قبلی'], `a control on the compensation list: ${label ?? ''}`).toContain(
-        label,
-      );
+      expect(
+        ['تازه‌تر', 'قدیمی‌تر'],
+        `a control on the compensation list: ${label ?? ''}`,
+      ).toContain(label);
     }
   });
 
@@ -131,7 +132,7 @@ describe('the compensation list', () => {
     ]);
     renderPage(<CompensationsPage route={ROUTE} denied={false} />);
     await screen.findByRole('table');
-    const next = screen.getByRole('button', { name: 'بعدی' });
+    const next = screen.getByRole('button', { name: 'تازه‌تر' });
     expect(next).toBeEnabled();
     fireEvent.click(next);
     await waitFor(() => {
