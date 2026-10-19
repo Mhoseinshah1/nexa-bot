@@ -483,6 +483,11 @@
   .page-head .actions {
     width: 100%;
   }
+  /* The demo's \`.head .ctrls .btn{flex:1}\`: a header action shares the full line on a phone. */
+  .page-head .actions > .btn:not(.icon) {
+    flex: 1;
+    justify-content: center;
+  }
 }
 
 /* --- Cards ------------------------------------------------------------------- */

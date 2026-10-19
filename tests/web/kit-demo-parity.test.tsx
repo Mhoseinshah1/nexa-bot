@@ -337,3 +337,13 @@ describe('card heads — no rule under the title, as the demo’s .ch', () => {
     expect(rule(KIT_CSS, '.card-head + .card-body')).toContain('padding-top: 0');
   });
 });
+
+describe('page head — the action takes the full line on a phone, as the demo', () => {
+  it('stretches a header button across the line below 820px, not an icon button', () => {
+    const at = KIT_CSS.indexOf('@media (max-width: 820px) {\n  .page-head h1');
+    expect(at).toBeGreaterThan(-1);
+    const block = KIT_CSS.slice(at, KIT_CSS.indexOf('\n}\n', at));
+    expect(block).toMatch(/\.page-head \.actions > \.btn:not\(\.icon\) \{\s*flex: 1;/);
+    expect(block).toMatch(/\.page-head \.actions \{\s*width: 100%;/);
+  });
+});
