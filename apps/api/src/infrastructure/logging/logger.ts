@@ -99,6 +99,15 @@ export function redactLogArguments(args: readonly unknown[]): unknown[] {
   );
 }
 
+/**
+ * The log stream of a CLI whose stdout is its output: file descriptor 2, written
+ * synchronously so a line logged just before the process exits is not lost and never
+ * interleaves into stdout.
+ */
+export function stderrLogDestination(): pino.DestinationStream {
+  return pino.destination({ fd: 2, sync: true });
+}
+
 /** `destination` is for the test that captures what actually reaches the stream. */
 function createPinoLogger(
   level: LogLevel,

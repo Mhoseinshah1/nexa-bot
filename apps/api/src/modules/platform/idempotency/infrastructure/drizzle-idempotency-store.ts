@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import {
   errors,
   PLATFORM_ERROR_CODES,
@@ -39,6 +39,11 @@ function stableStringify(value: unknown): string {
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(',')}}`;
 }
+
+/** Records per INSERT: 6 parameters a row. */
+const IDEMPOTENCY_INSERT_CHUNK = 5000;
+/** Keys per `IN (…)` read. */
+const IDEMPOTENCY_READ_CHUNK = 10_000;
 
 export class DrizzleIdempotencyStore implements IdempotencyStore {
   constructor(
@@ -80,6 +85,86 @@ export class DrizzleIdempotencyStore implements IdempotencyStore {
       result: row.result as TResult,
       createdAt: row.createdAt,
     };
+  }
+
+  /**
+   * `find` for many keys of one namespace in one read. A key used with a DIFFERENT request
+   * payload is answered `'PAYLOAD_MISMATCH'` instead of thrown — the bulk caller decides per
+   * key what `find`'s CONFLICT would have meant; a key never used is not in the map.
+   */
+  async findMany<TResult>(
+    scope: ScopeContext,
+    namespace: IdempotencyNamespace,
+    requests: readonly { readonly key: string; readonly requestHash: string }[],
+  ): Promise<ReadonlyMap<string, IdempotencyRecord<TResult> | 'PAYLOAD_MISMATCH'>> {
+    const ref = scopeRef(scope, namespace);
+    const wanted = new Map(requests.map((r) => [r.key, r.requestHash]));
+    const out = new Map<string, IdempotencyRecord<TResult> | 'PAYLOAD_MISMATCH'>();
+    const keys = [...wanted.keys()];
+    for (let i = 0; i < keys.length; i += IDEMPOTENCY_READ_CHUNK) {
+      const rows = await this.db
+        .select()
+        .from(requestIdempotency)
+        .where(
+          and(
+            eq(requestIdempotency.scopeRef, ref),
+            inArray(requestIdempotency.key, keys.slice(i, i + IDEMPOTENCY_READ_CHUNK)),
+          ),
+        );
+      for (const row of rows) {
+        out.set(
+          row.key,
+          row.requestHash !== wanted.get(row.key)
+            ? 'PAYLOAD_MISMATCH'
+            : {
+                key: row.key,
+                requestHash: row.requestHash,
+                result: row.result as TResult,
+                createdAt: row.createdAt,
+              },
+        );
+      }
+    }
+    return out;
+  }
+
+  /**
+   * `remember` for many keys of one namespace (each named once), in multi-row inserts. The
+   * answer is the set of keys THIS call stored; a key missing from it already had a record
+   * (`remember`'s FALSE).
+   */
+  async rememberMany<TResult>(
+    scope: ScopeContext,
+    namespace: IdempotencyNamespace,
+    entries: readonly {
+      readonly key: string;
+      readonly requestHash: string;
+      readonly result: TResult;
+    }[],
+    tx?: unknown,
+  ): Promise<ReadonlySet<string>> {
+    const executor = (tx as TransactionScope | undefined)?.tx ?? this.db;
+    const ref = scopeRef(scope, namespace);
+    const tenantId = scopeTenantId(scope);
+    const stored = new Set<string>();
+    for (let i = 0; i < entries.length; i += IDEMPOTENCY_INSERT_CHUNK) {
+      const rows = await executor
+        .insert(requestIdempotency)
+        .values(
+          entries.slice(i, i + IDEMPOTENCY_INSERT_CHUNK).map((entry) => ({
+            id: this.ids.uuid(),
+            scopeRef: ref,
+            tenantId,
+            key: entry.key,
+            requestHash: entry.requestHash,
+            result: entry.result as Record<string, unknown>,
+          })),
+        )
+        .onConflictDoNothing()
+        .returning({ key: requestIdempotency.key });
+      for (const row of rows) stored.add(row.key);
+    }
+    return stored;
   }
 
   async remember<TResult>(

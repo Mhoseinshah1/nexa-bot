@@ -176,6 +176,18 @@ export type ProductStatus = (typeof PRODUCT_STATUSES)[number];
 export const productStatusSchema = z.enum(PRODUCT_STATUSES);
 
 /**
+ * Which part of the operator's product list a page asks for (the «آرشیو» tab).
+ *
+ * `ARCHIVE` is the historical products an import created to stand behind old orders and
+ * services — INACTIVE, HIDDEN and bound to no panel — which can never be sold as they are and
+ * can never be deleted, because history references them. `CURRENT` is every other product.
+ * The predicate is decided by the server, in the keyset query, so a page never filters or
+ * counts on the client. Absent means both: a picker or a panel's product list keeps every row.
+ */
+export const PRODUCT_LIST_VIEWS = ['CURRENT', 'ARCHIVE'] as const;
+export type ProductListView = (typeof PRODUCT_LIST_VIEWS)[number];
+
+/**
  * The technical specification a purchase entitles the customer to.
  *
  * Two dimensions, because those are the two every observed provider expresses:

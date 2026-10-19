@@ -8,7 +8,7 @@ import {
   type CorrelationId,
   type TenantContext,
 } from '@nexa/contracts';
-import { createContainer } from './container.js';
+import { createContainer, type ContainerOptions } from './container.js';
 import {
   DSN_PASSWORD_REFUSAL,
   PACKAGE_SECRET_VALUE_REFUSAL,
@@ -137,6 +137,13 @@ import {
 } from './legacy-import-cutover.js';
 import { LegacyCutoverRefused } from './modules/platform/legacy-cutover/domain/cutover-rules.js';
 import { takeLegacyInventory } from './modules/platform/legacy-importer/application/legacy-inventory.js';
+
+/**
+ * Every container this CLI builds logs to STDERR: stdout is the CLI's output, and under
+ * `--format json` it is ONE document — a log line in it (the importer's per-section timing,
+ * any warning) makes it unreadable to the rehearsal and to every script that captures it.
+ */
+export const CLI_CONTAINER: ContainerOptions = { logTo: 'stderr' };
 
 /**
  * `legacy-import` — the P7 legacy importer (`docs/legacy-migration/importer.md`).
@@ -1118,7 +1125,11 @@ async function reviewMain(argv: readonly string[]): Promise<void> {
   const env = process.env;
   const targetUrl = resolveTarget(args.target, env);
   guardTarget(args, targetUrl, env);
-  const container = createContainer(loadConfig({ ...env, DATABASE_URL: targetUrl }), 'worker');
+  const container = createContainer(
+    loadConfig({ ...env, DATABASE_URL: targetUrl }),
+    'worker',
+    CLI_CONTAINER,
+  );
   try {
     const tenantId = await container.legacyImporter().resolveTenant(args.tenant);
     if (tenantId === null) throw new UsageError(`No tenant ${args.tenant} in the target.`);
@@ -1145,7 +1156,11 @@ async function inventoryMain(argv: readonly string[]): Promise<number> {
   const targetUrl = resolveTarget(args.target, env);
   const target = guardTarget(args, targetUrl, env);
   const connector = await sourceConnector(args, env);
-  const container = createContainer(loadConfig({ ...env, DATABASE_URL: targetUrl }), 'worker');
+  const container = createContainer(
+    loadConfig({ ...env, DATABASE_URL: targetUrl }),
+    'worker',
+    CLI_CONTAINER,
+  );
   try {
     const importer = container.legacyImporter();
     const tenantId = await importer.resolveTenant(args.tenant);
@@ -1182,7 +1197,11 @@ async function productsReadMain(argv: readonly string[]): Promise<number> {
   const targetUrl = resolveTarget(args.target, env);
   const target = guardTarget(args, targetUrl, env);
   const connector = await sourceConnector(args, env);
-  const container = createContainer(loadConfig({ ...env, DATABASE_URL: targetUrl }), 'worker');
+  const container = createContainer(
+    loadConfig({ ...env, DATABASE_URL: targetUrl }),
+    'worker',
+    CLI_CONTAINER,
+  );
   try {
     const importer = container.legacyImporter();
     const tenantId = await importer.resolveTenant(args.tenant);
@@ -1210,7 +1229,11 @@ async function invoicesReadMain(argv: readonly string[]): Promise<number> {
   const targetUrl = resolveTarget(args.target, env);
   const target = guardTarget(args, targetUrl, env);
   const connector = await sourceConnector(args, env);
-  const container = createContainer(loadConfig({ ...env, DATABASE_URL: targetUrl }), 'worker');
+  const container = createContainer(
+    loadConfig({ ...env, DATABASE_URL: targetUrl }),
+    'worker',
+    CLI_CONTAINER,
+  );
   try {
     const importer = container.legacyImporter();
     const tenantId = await importer.resolveTenant(args.tenant);
@@ -1242,7 +1265,11 @@ async function productsExportMain(argv: readonly string[]): Promise<number> {
       : await readFile(args.panelMap, 'utf8').catch(() => {
           throw new UsageError(`The panel mapping file ${args.panelMap ?? ''} cannot be read.`);
         });
-  const container = createContainer(loadConfig({ ...env, DATABASE_URL: targetUrl }), 'worker');
+  const container = createContainer(
+    loadConfig({ ...env, DATABASE_URL: targetUrl }),
+    'worker',
+    CLI_CONTAINER,
+  );
   try {
     const tenantId = await container.legacyImporter().resolveTenant(args.tenant);
     if (tenantId === null) throw new UsageError(`No tenant ${args.tenant} in the target.`);
@@ -1289,7 +1316,11 @@ async function cutoverGateMain(argv: readonly string[]): Promise<number> {
     throw new CutoverUsageError(`The panel mapping file ${args.panelMap} cannot be read.`);
   });
   const connector = await sourceConnector(args, env);
-  const container = createContainer(loadConfig({ ...env, DATABASE_URL: targetUrl }), 'worker');
+  const container = createContainer(
+    loadConfig({ ...env, DATABASE_URL: targetUrl }),
+    'worker',
+    CLI_CONTAINER,
+  );
   try {
     const importer = container.legacyImporter();
     const tenantId = await importer.resolveTenant(args.tenant);
@@ -1491,7 +1522,11 @@ async function runMain(
     ownershipDecisionsDigest = evidence.decisionsDigest;
   }
 
-  const container = createContainer(loadConfig({ ...env, DATABASE_URL: targetUrl }), 'worker');
+  const container = createContainer(
+    loadConfig({ ...env, DATABASE_URL: targetUrl }),
+    'worker',
+    CLI_CONTAINER,
+  );
   try {
     const importer = container.legacyImporter(importerOptions(args));
     const tenantId = await importer.resolveTenant(args.tenant);

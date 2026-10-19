@@ -35,9 +35,10 @@ interface Candidate {
  * Mirza agents → NEXA `resellers` (ACTIVE), `source = 'MIRZA'`, `source_ref = 'agent:<id>'`.
  *
  * MONEY. This step writes no wallet entry and no ledger row, ever; a reseller's wallet is
- * exactly what the customers phase posted from Mirza's `Balance`. `maxbuyagent` is a LIMIT:
- * it is stored as `imported_purchase_cap_minor`, shown to the owner and read by NOTHING that
- * decides a purchase, a balance or a price. There is no credit line and no debt — the row is
+ * exactly what the customers phase posted from Mirza's `Balance`. `maxbuyagent` is a
+ * credit/limit concept, and reseller credit is removed (owner decision 2026-10-01): it becomes
+ * NO NEXA field — no limit, no credit, no money, nothing an operator reads as one. It stays in
+ * the import's history only (the package rows, and `source_detail.purchaseCap` raw). The row is
  * written with no own credit limit, under a tier whose limit is zero.
  *
  * PRICES. Mirza's `pricediscount` (a per-user percent off) is applied as the reseller's own
@@ -160,7 +161,6 @@ export class ResellersMaterializeStep implements MaterializeStep {
           customerId: c.customerId,
           tierId: tierIds.get(c.facts.tier) as string,
           percent: c.facts.appliedPercent,
-          capMinor: c.facts.capMinor,
           detail: resellerSourceDetail(c.facts),
         })),
         ctx.now,
@@ -172,7 +172,7 @@ export class ResellersMaterializeStep implements MaterializeStep {
           continue;
         }
         if (c.facts.appliedPercent !== null) bump(notes, 'PERCENT_OVERRIDE_APPLIED');
-        if (c.facts.capMinor !== null) bump(notes, 'PURCHASE_CAP_STORED_NOT_APPLIED');
+        if (c.facts.capRaw !== null) bump(notes, 'PURCHASE_CAP_KEPT_IN_HISTORY_ONLY');
         if (c.facts.priceLevels.length > 0) bump(notes, 'TIER_PRICES_KEPT_NOT_APPLIED');
       }
       return outcome(
@@ -193,21 +193,15 @@ export class ResellersMaterializeStep implements MaterializeStep {
       candidates.flatMap((c) => (c.customerId === null ? [] : [c.customerId])),
     );
 
-    const gaps = new Map<string, { rows: number; sum: bigint }>();
-    const add = (reason: string, cap: bigint) => {
-      const g = gaps.get(reason) ?? { rows: 0, sum: 0n };
-      gaps.set(reason, { rows: g.rows + 1, sum: g.sum + cap });
-    };
-    let mirzaCap = 0n;
+    const gaps = new Map<string, number>();
+    const add = (reason: string) => gaps.set(reason, (gaps.get(reason) ?? 0) + 1);
     const carried = new Set<string>();
     for (const c of candidates) {
-      const cap = c.facts?.capMinor ?? 0n;
-      mirzaCap += cap;
       const gap = gapOf(c);
-      if (gap !== null) add(gap, cap);
+      if (gap !== null) add(gap);
       else if (c.facts !== null && refs.has(c.facts.sourceRef)) carried.add(c.facts.agentId);
       else if (c.customerId !== null && resellerCustomers.has(c.customerId)) {
-        add('CUSTOMER_ALREADY_RESELLER', cap);
+        add('CUSTOMER_ALREADY_RESELLER');
       }
       // anything else is carried by nobody and explained by nothing: the row will not hold
     }
@@ -224,10 +218,10 @@ export class ResellersMaterializeStep implements MaterializeStep {
     const ownerless = levels.length - [...levelsOf.values()].reduce((a, l) => a + l.length, 0);
     if (ownerless > 0) levelGaps.set('NO_OWNER', ownerless);
 
-    const explained: ExplainedGap[] = [...gaps].map(([reason, g]) => ({
+    const explained: ExplainedGap[] = [...gaps].map(([reason, rows]) => ({
       reason,
-      rows: g.rows,
-      sumMinor: g.sum,
+      rows,
+      sumMinor: null,
     }));
     return [
       {
@@ -235,9 +229,10 @@ export class ResellersMaterializeStep implements MaterializeStep {
         nexaTable: 'resellers',
         mirzaRows: candidates.length,
         nexaRows: totals.rows,
-        // The sum is the purchase CAP: shown beside the rows so it is visibly not a balance.
-        mirzaSumMinor: mirzaCap,
-        nexaSumMinor: totals.sumMinor,
+        // No amount: an agent row carries no money. Its balance is the customer's wallet,
+        // matched by the customers phase; `maxbuyagent` is a limit, carried by nothing.
+        mirzaSumMinor: null,
+        nexaSumMinor: null,
         explained,
       },
       {

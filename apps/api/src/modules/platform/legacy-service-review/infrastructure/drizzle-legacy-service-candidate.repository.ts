@@ -155,43 +155,62 @@ export class DrizzleLegacyServiceCandidateRepository implements LegacyServiceCan
     return out;
   }
 
+  async latestArchiveSoldAt(
+    scope: TenantContext,
+    keys: readonly string[],
+    tx?: TransactionScope,
+  ): Promise<ReadonlyMap<string, Date>> {
+    const tenantId = requireTenantId(scope);
+    const a = legacyInvoiceArchive;
+    const r = legacyInvoiceArchiveRuns;
+    const out = new Map<string, Date>();
+    const unique = [...new Set(keys)];
+    for (let i = 0; i < unique.length; i += KEY_CHUNK) {
+      const chunk = unique.slice(i, i + KEY_CHUNK);
+      const rows = await this.exec(tx)
+        .selectDistinctOn([a.invoiceKey], { invoiceKey: a.invoiceKey, soldAt: a.soldAt })
+        .from(a)
+        .innerJoin(r, and(eq(r.tenantId, a.tenantId), eq(r.id, a.runId)))
+        .where(
+          and(eq(a.tenantId, tenantId), inArray(a.invoiceKey, chunk), eq(r.state, 'COMPLETED')),
+        )
+        .orderBy(a.invoiceKey, desc(a.revision));
+      for (const row of rows) if (row.soldAt !== null) out.set(row.invoiceKey, row.soldAt);
+    }
+    return out;
+  }
+
   async insert(
     scope: TenantContext,
-    row: LegacyServiceOutcomeWrite & {
-      readonly archiveId: string | null;
-      readonly reviewState: LegacyServiceReviewState;
-    },
+    row: CandidateInsert,
     tx: TransactionScope,
   ): Promise<LegacyServiceCandidateRecord> {
     const tenantId = requireTenantId(scope);
     const inserted = await this.exec(tx)
       .insert(t)
-      .values({
-        id: row.id,
-        tenantId,
-        invoiceKey: row.invoiceKey,
-        runId: row.runId,
-        sourceFingerprint: row.sourceFingerprint,
-        synthetic: row.synthetic,
-        invoiceChecksum: row.invoiceChecksum,
-        outcome: row.outcome,
-        blocker: row.blocker,
-        evidence: row.evidence,
-        evidenceHash: row.evidenceHash,
-        panelCode: row.panelCode,
-        productCode: row.productCode,
-        archiveId: row.archiveId,
-        serviceId: row.serviceId,
-        reviewState: row.reviewState,
-        observedAt: row.observedAt,
-        version: 1,
-        firstDecidedAt: row.now,
-        updatedAt: row.now,
-      })
+      .values(candidateValues(tenantId, row))
       .returning();
     if (inserted[0] === undefined)
       throw new Error('legacy service candidate insert returned nothing');
     return toRecord(inserted[0]);
+  }
+
+  async insertMany(
+    scope: TenantContext,
+    rows: readonly CandidateInsert[],
+    tx: TransactionScope,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    for (let i = 0; i < rows.length; i += CANDIDATE_INSERT_CHUNK) {
+      const chunk = rows.slice(i, i + CANDIDATE_INSERT_CHUNK);
+      const inserted = await this.exec(tx)
+        .insert(t)
+        .values(chunk.map((row) => candidateValues(tenantId, row)))
+        .returning({ id: t.id });
+      if (inserted.length !== chunk.length) {
+        throw new Error('legacy service candidate insert returned fewer rows than it was given');
+      }
+    }
   }
 
   async updateOutcome(
@@ -363,4 +382,38 @@ export class DrizzleLegacyServiceCandidateRepository implements LegacyServiceCan
       .limit(1);
     return rows[0] ?? null;
   }
+}
+
+type CandidateInsert = LegacyServiceOutcomeWrite & {
+  readonly archiveId: string | null;
+  readonly reviewState: LegacyServiceReviewState;
+};
+
+/** Candidates per INSERT: 20 parameters a row, so 3 000 rows stay under PostgreSQL's 65 535. */
+const CANDIDATE_INSERT_CHUNK = 3000;
+
+/** A new candidate row, version 1 (`insert` and `insertMany` alike). */
+function candidateValues(tenantId: string, row: CandidateInsert) {
+  return {
+    id: row.id,
+    tenantId,
+    invoiceKey: row.invoiceKey,
+    runId: row.runId,
+    sourceFingerprint: row.sourceFingerprint,
+    synthetic: row.synthetic,
+    invoiceChecksum: row.invoiceChecksum,
+    outcome: row.outcome,
+    blocker: row.blocker,
+    evidence: row.evidence,
+    evidenceHash: row.evidenceHash,
+    panelCode: row.panelCode,
+    productCode: row.productCode,
+    archiveId: row.archiveId,
+    serviceId: row.serviceId,
+    reviewState: row.reviewState,
+    observedAt: row.observedAt,
+    version: 1,
+    firstDecidedAt: row.now,
+    updatedAt: row.now,
+  };
 }

@@ -40,8 +40,8 @@ import type {
   NewLegacyHistoryRecord,
 } from '../application/ports.js';
 
-/** Rows per INSERT: 10 columns × 1000 stays far under PostgreSQL's 65 535 binds. */
-const INSERT_CHUNK = 1000;
+/** Rows per INSERT: 11 parameters a row, so 5 000 rows stay under PostgreSQL's 65 535 binds. */
+const INSERT_CHUNK = 5000;
 
 /**
  * `legacy_history_records` in PostgreSQL. Append-only: INSERT … ON CONFLICT DO NOTHING and

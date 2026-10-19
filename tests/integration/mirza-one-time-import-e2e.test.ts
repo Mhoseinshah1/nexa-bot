@@ -41,6 +41,76 @@ import {
 const USERS = 60;
 const INVOICES = 40;
 
+/**
+ * The agents: Mirza user index -> tier, cap (`maxbuyagent`) and `pricediscount`. Index 3 has a
+ * NEGATIVE Balance and index 7 a zero one (see `generateDataset`); the last row is the fork's
+ * `NOT_AGENT_IN_USER_TABLE`, rightly skipped.
+ */
+const AGENTS: readonly { i: number; tier: string; cap: string | null; percent: string | null }[] = [
+  { i: 1, tier: 'n', cap: '5000000', percent: '20' },
+  { i: 2, tier: 'n2', cap: null, percent: null },
+  { i: 3, tier: 'n', cap: '900000', percent: '10' },
+  { i: 7, tier: 'n2', cap: '1', percent: '100' },
+  { i: 5, tier: 'NOT_AGENT_IN_USER_TABLE', cap: '777', percent: null },
+];
+const agentFlagsOff = {
+  affects_wallet: false,
+  applies_to_live_state: false,
+  grants_credit: false,
+  activates_role: false,
+  redeemable: false,
+  auto_create: false,
+};
+const agentCustomer = (tg: string) => ({
+  raw_id: tg,
+  telegram_user_id: tg,
+  decision: 'IMPORT',
+  valid: true,
+});
+function agentRecords(users: readonly Record<string, unknown>[]) {
+  const profiles = AGENTS.map((a) => {
+    const tg = String(users[a.i]!['id']);
+    return {
+      record_type: 'legacy_agent_profile',
+      schema: 'm2n.agents.profile.v1',
+      idempotency_key: `legacy:agents:profile:${tg}`,
+      customer: agentCustomer(tg),
+      tier: a.tier,
+      status: 'ARCHIVED_NOT_ACTIVATED',
+      limits_and_credit: 'RAW_ONLY_NOT_APPLIED',
+      ...agentFlagsOff,
+    };
+  });
+  const states = AGENTS.map((a) => {
+    const tg = String(users[a.i]!['id']);
+    return {
+      record_type: 'legacy_agent_state',
+      schema: 'm2n.agents.state.v1',
+      idempotency_key: `legacy:agents:state:${tg}`,
+      customer: agentCustomer(tg),
+      credit_debt: {
+        overdraft_limit_raw: a.cap,
+        overdraft_limit_staged: true,
+        credit_granted: false,
+        values: 'RAW_ONLY_NOT_APPLIED',
+      },
+      pricing: {
+        percent_discount_raw: a.percent,
+        percent_discount_staged: a.percent !== null,
+        applies_price: false,
+      },
+      current_status: {
+        agent_expiry: null,
+        agent_expiry_raw: null,
+        agent_expiry_note: 'NO_EXPIRY',
+      },
+      role_active: false,
+      ...agentFlagsOff,
+    };
+  });
+  return { profiles, states };
+}
+
 describe('the one-time Mirza import, end to end', () => {
   let ctx: TestContext;
   let work: string;
@@ -99,6 +169,7 @@ describe('the one-time Mirza import, end to end', () => {
     });
     rig = new MigrationRig(ctx, migrationRoot);
     generated = generateDataset({ users: USERS, invoices: INVOICES });
+    const agents = agentRecords(generated.users);
     pkg = await writeMigrationPackage(join(work, 'mirza.nxpkg'), {
       dataset: generated.dataset,
       invoices: generated.invoices,
@@ -107,6 +178,8 @@ describe('the one-time Mirza import, end to end', () => {
           payments.n += 1;
           return r;
         }),
+        'records/agents/profiles.jsonl': agents.profiles,
+        'records/agents/state.jsonl': agents.states,
       },
     });
     await rig.freshTenant(generated.liveAccounts);
@@ -185,6 +258,61 @@ describe('the one-time Mirza import, end to end', () => {
     expect(await rig.count('orders', "origin = 'STANDARD'")).toBe(0);
     expect(await rig.count('provisioning_operations')).toBe(0);
     expect(await rig.count('customer_notifications')).toBe(0);
+  });
+
+  it('imports the agents as resellers with no credit at all, and their wallet is exactly the Mirza Balance', async () => {
+    const imported = await rows<{
+      tg: string;
+      status: string;
+      credit: string | null;
+      tier_credit: string;
+      cap: string | null;
+      pricing_mode: string;
+      percent: number | null;
+    }>(sql`
+      SELECT c.telegram_user_id::text AS tg, r.status, r.credit_limit_amount::text AS credit,
+             t.credit_limit_amount::text AS tier_credit, r.imported_purchase_cap_minor::text AS cap,
+             r.pricing_mode, r.discount_percentage AS percent
+        FROM resellers r
+        JOIN customers c ON c.tenant_id = r.tenant_id AND c.id = r.customer_id
+        JOIN reseller_tiers t ON t.tenant_id = r.tenant_id AND t.id = r.tier_id
+       WHERE r.tenant_id = ${TENANT} AND r.source = 'MIRZA'
+       ORDER BY c.telegram_user_id`);
+    const agents = AGENTS.filter((a) => a.tier === 'n' || a.tier === 'n2');
+    // Every agent tier is carried; NOT_AGENT_IN_USER_TABLE is not.
+    expect(imported).toHaveLength(agents.length);
+    const skipped = String(generated.users[5]!['id']);
+    expect(imported.map((r) => r.tg)).not.toContain(skipped);
+
+    const got = await balances();
+    const ids = await rows<{ tg: string; id: string }>(sql`
+      SELECT telegram_user_id::text AS tg, id FROM customers WHERE tenant_id = ${TENANT}`);
+    const idOf = new Map(ids.map((r) => [r.tg, r.id]));
+    for (const a of agents) {
+      const user = generated.users[a.i]!;
+      const tg = String(user['id']);
+      const r = imported.find((x) => x.tg === tg);
+      expect(r, tg).toBeDefined();
+      expect(r!.status).toBe('ACTIVE');
+      // No credit limit of any kind: none of its own, a zero tier limit, a zero allowance ...
+      expect(r!.credit, tg).toBeNull();
+      expect(BigInt(r!.tier_credit), tg).toBe(0n);
+      expect(
+        await ctx.container.resellers.creditAllowance(tenantA, idOf.get(tg)!, 'IRT', null),
+        tg,
+      ).toBe(0n);
+      // ... maxbuyagent became no NEXA field ...
+      expect(r!.cap, tg).toBeNull();
+      // ... the discount percentage is the reseller's own override when it is 1..99 ...
+      const percent = a.percent === null ? null : Number(a.percent);
+      if (percent !== null && percent >= 1 && percent <= 99) {
+        expect(r).toMatchObject({ pricing_mode: 'PERCENTAGE_DISCOUNT', percent });
+      } else {
+        expect(r).toMatchObject({ pricing_mode: 'TIER', percent: null });
+      }
+      // ... and the wallet is exactly the Mirza Balance: the cap added nothing.
+      expect(got.get(tg), tg).toBe(BigInt(String(user['Balance'])));
+    }
   });
 
   it('wrote nothing to any panel', () => {

@@ -3,6 +3,7 @@ import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
   COMMERCE_ERROR_CODES,
+  currencyCodeSchema,
   errors,
   SERVICE_ROUTES,
   SERVICE_TERMINATE_CONFIRMATION,
@@ -36,6 +37,7 @@ import type {
   ServiceCustomerIdentity,
   ServiceRecord,
 } from '../../modules/commerce/provisioning/application/ports.js';
+import type { ServiceOriginalPurchase } from '../../modules/commerce/provisioning/application/service-admin.service.js';
 import type { OperatorServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
 
 /**
@@ -160,7 +162,7 @@ export class ServicesController {
   async detail(@Req() request: FastifyRequest, @Param('id') id: string): Promise<ServiceResponse> {
     const { scope, actor } = await this.authenticate(request);
     const found = await this.container.serviceAdmin.detail(scope, actor, id);
-    return { service: toDetail(found.service, found.actions) };
+    return { service: toDetail(found.service, found.actions, found.original) };
   }
 
   /**
@@ -532,6 +534,7 @@ function toSummary(
 function toDetail(
   record: ServiceRecord,
   actions: readonly ServiceActionAvailability[],
+  original: ServiceOriginalPurchase | null = null,
 ): ServiceDetailResponse {
   return {
     ...toSummary(record, undefined),
@@ -539,6 +542,21 @@ function toDetail(
     deliveryNextAttemptAt:
       record.deliveryNextAttemptAt === null ? null : record.deliveryNextAttemptAt.toISOString(),
     actions: actions.map((entry) => ({ ...entry })),
+    // Owner rule 2026-10-18: display only, from the archived invoice the service names.
+    original:
+      original === null
+        ? null
+        : {
+            productName: original.productName,
+            price:
+              original.price === null ||
+              !currencyCodeSchema.safeParse(original.price.currency).success
+                ? null
+                : {
+                    amount: original.price.amountMinor.toString(),
+                    currency: currencyCodeSchema.parse(original.price.currency),
+                  },
+          },
   };
 }
 

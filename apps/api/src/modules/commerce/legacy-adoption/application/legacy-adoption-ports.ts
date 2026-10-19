@@ -87,8 +87,19 @@ export interface LegacyAdoptionCommand {
   readonly match: AdoptionInventoryMatch;
   /** Required when `match.kind === 'ELIGIBLE'`; ignored otherwise. */
   readonly runtime: AdoptionRuntimeFacts | null;
-  /** The resolved hidden/current product; null = unresolved (manual review). */
+  /**
+   * The product the adoption order names, for navigation only (owner rule 2026-10-18): the
+   * mapped product, or the hidden product of the invoice's shape. Null only when no such row
+   * exists at all (manual review: the order cannot name nothing, and none is invented).
+   */
   readonly productId: string | null;
+  /**
+   * The product whose specification and title the order LINE snapshots: the hidden product of
+   * the invoice's OWN shape, so the permanent history says what the customer bought even when
+   * `productId` names a mapped product of another size or length (Codex on #292). Absent or
+   * null: the line is `productId`'s, which is the shape's product itself on the hidden path.
+   */
+  readonly lineProductId?: string | null;
   /** The legacy purchase time, for the order's `settled_at`; null = adoption time. */
   readonly legacyPurchasedAt: Date | null;
   readonly idempotencyKey: string;
@@ -120,6 +131,12 @@ export interface LegacyAdoptionCandidate {
         readonly kind: 'NAMED_PRODUCT';
         readonly codeProduct: string;
         readonly productId?: string | null;
+        /**
+         * The hidden shape of the invoice's own shape, named instead when the mapped product
+         * no longer exists: a deleted product never holds an attachment back (owner rule
+         * 2026-10-18). Empty or absent when the importer has none.
+         */
+        readonly fallbackShapeId?: string;
       }
     | {
         readonly kind: 'HIDDEN_SHAPE';

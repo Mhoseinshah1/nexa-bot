@@ -12,7 +12,7 @@ import type { ExactMatchRow, MaterializeContext, MaterializeStep } from './ports
 export const DISCOUNTS_STEP_NAME = 'catalog-discount-codes';
 
 /** The label an imported code carries on the discounts page and in a quote trace. */
-const LABEL_PREFIX = 'Mirza ';
+const LABEL_PREFIX = 'ربات قبلی ';
 
 /**
  * Mirza discount codes (`Discount`, `DiscountSell` and the fork's `discount_sell`) → NEXA

@@ -6,6 +6,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   BYTES_PER_GB,
+  COMMERCE_ERROR_CODES,
   EMPTY_PRODUCT_DISPLAY,
   isNexaError,
   money,
@@ -605,23 +606,19 @@ describe('Migration P6: legacy service adoption', () => {
     return ensured.shape.productId;
   }
 
-  it('adopts onto a RESOLVED hidden legacy product, and refuses an unresolved one', async () => {
+  it('owner rule 2026-10-18: adopts onto a hidden legacy product whether its tariff is RESOLVED or not', async () => {
     const telegramUserId = tg();
     await fx.customer({ telegramUserId });
+    // An UNRESOLVED shape (no current tariff, an inactive unpriced product): the account on
+    // the panel is attached all the same — the product names the order, nothing more.
     const unresolved = await hiddenShape(false, 1);
-    expect(await adopt(command({ telegramUserId, productId: unresolved }))).toMatchObject({
-      kind: 'MANUAL_REVIEW',
-      reason: 'PRODUCT_MAPPING_UNRESOLVED',
-    });
-    // An UNRESOLVED shape whose hidden product somebody priced and activated by hand is
-    // still not adoptable: the shape's own tariff state is the gate, not the product row.
-    await db().execute(sql`
-      UPDATE products SET price_amount = 250000, price_currency = 'IRT', status = 'ACTIVE'
-       WHERE id = ${unresolved}`);
-    expect(await adopt(command({ telegramUserId, productId: unresolved }))).toMatchObject({
-      kind: 'MANUAL_REVIEW',
-      reason: 'PRODUCT_MAPPING_UNRESOLVED',
-    });
+    const attached = await adopted(command({ telegramUserId, productId: unresolved }));
+    const [row] = await rows<{ product_id: string; total: string; title: string }>(sql`
+      SELECT s.product_id, o.total_amount::text AS total, o.line_title AS title
+        FROM services s JOIN orders o ON o.id = s.order_id
+       WHERE s.id = ${attached.serviceId}`);
+    expect(row?.product_id).toBe(unresolved);
+    expect(row?.total).toBe('0');
     const hidden = await hiddenShape(true);
     const outcome = await adopted(command({ telegramUserId, productId: hidden }));
     const [svc] = await rows<{ product_id: string }>(
@@ -693,6 +690,38 @@ describe('Migration P6: legacy service adoption', () => {
         }),
       ),
     ).toMatchObject({ kind: 'ADOPTED' });
+    // Codex on #292: a NAMED product mapped to a product of another size and length (here
+    // unlimited, 100 GB) is the order's navigation only; its permanent line is the invoice's
+    // OWN shape (50 GB / 30 d), never the mapped product's specification.
+    const unlimited = await publicProduct(250_000n, { trafficGb: 100n, days: 0 });
+    const named = await viaCandidate(
+      candidate(invoiceKey(), {
+        product: {
+          kind: 'NAMED_PRODUCT',
+          codeProduct: 'p12',
+          productId: unlimited,
+          fallbackShapeId: ensured.shape.id,
+        },
+      }),
+    );
+    expect(named).toMatchObject({ kind: 'ADOPTED' });
+    const [line] = await rows<{
+      product_id: string;
+      days: number;
+      traffic: string;
+      title: string;
+    }>(sql`
+      SELECT o.product_id, o.line_duration_days AS days, o.line_traffic_bytes::text AS traffic,
+             o.line_title AS title
+        FROM orders o JOIN services s ON s.order_id = o.id
+       WHERE s.id = ${(named as { serviceId: string }).serviceId}`);
+    const shapeProduct = await products.findById(tenantA, ensured.shape.productId as ProductId);
+    expect(line).toEqual({
+      product_id: unlimited,
+      days: 30,
+      traffic: String(50n * GB),
+      title: shapeProduct?.title,
+    });
     // The importer's customer must be the one the adoption finds for the Telegram id.
     const other = await fx.customer({ telegramUserId: tg() });
     expect(await viaCandidate(candidate(invoiceKey(), { customerId: other }))).toMatchObject({
@@ -702,21 +731,28 @@ describe('Migration P6: legacy service adoption', () => {
     expect(providerCalls).toEqual([]);
   });
 
-  it('refuses no product, another tenant’s product, an inactive one, and a window mismatch', async () => {
+  it('refuses only a product that names no row of this tenant; an inactive one or a window mismatch is adopted', async () => {
     const telegramUserId = tg();
     await fx.customer({ telegramUserId });
     const panelB = await rickpanel('rpb', tenantB, 'https://rpb.example.test');
     const productB = await publicProduct(250_000n, undefined, tenantB, panelB);
-    const inactive = await publicProduct(250_000n);
-    await products.setStatus(tenantA, inactive, 'ACTIVE', 'INACTIVE', ctx.container.clock.now());
-    const unlimitedTime = await publicProduct(250_000n, { trafficGb: 50n, days: 0 });
-    for (const productId of [null, productB, inactive, unlimitedTime]) {
+    // No product at all, and another tenant's: the order cannot name nothing, and the import
+    // never invents a product — review.
+    for (const productId of [null, productB]) {
       expect(await adopt(command({ telegramUserId, productId }))).toMatchObject({
         kind: 'MANUAL_REVIEW',
         reason: 'PRODUCT_MAPPING_UNRESOLVED',
       });
     }
     expect(await businessRows()).toMatchObject({ orders: 0, services: 0 });
+    // Owner rule 2026-10-18: whether the named product is live or shape-compatible is no
+    // longer asked — the renewal offers the panel's current plans, never this product.
+    const inactive = await publicProduct(250_000n);
+    await products.setStatus(tenantA, inactive, 'ACTIVE', 'INACTIVE', ctx.container.clock.now());
+    const unlimitedTime = await publicProduct(250_000n, { trafficGb: 50n, days: 0 });
+    for (const productId of [inactive, unlimitedTime]) {
+      expect((await adopt(command({ telegramUserId, productId }))).kind).toBe('ADOPTED');
+    }
   });
 
   // ---------------------------------------------------------------------------
@@ -942,7 +978,7 @@ describe('Migration P6: legacy service adoption', () => {
     ).toBe(1);
   });
 
-  it('an on_hold account with no expiry is adopted (flagged) whatever its plan says; an active one is not', async () => {
+  it('an account with no expiry is adopted whatever its plan says; an on_hold one is flagged', async () => {
     const telegramUserId = tg();
     await fx.customer({ telegramUserId });
     const noExpiry = (state: AdoptionRuntimeFacts['state']) =>
@@ -950,10 +986,11 @@ describe('Migration P6: legacy service adoption', () => {
         state,
         usage: { usedBytes: 0n, totalBytes: 50n * GB, expiresAt: null },
       });
-    // The plan is 30 days; an active account with NO expiry does not fit it and is refused…
-    expect(await adopt(command({ telegramUserId, runtime: noExpiry('active') }))).toMatchObject({
-      kind: 'MANUAL_REVIEW',
-      reason: 'PRODUCT_MAPPING_UNRESOLVED',
+    // The plan is 30 days and the account has NO expiry: attached all the same (owner rule
+    // 2026-10-18 — the plan is navigation; a renewal offers the panel's current plans)…
+    expect(await adopted(command({ telegramUserId, runtime: noExpiry('active') }))).toMatchObject({
+      state: 'ACTIVE',
+      reviewFlag: null,
     });
     // …an on-hold one has no clock started yet, and is adopted for a person to look at.
     const held = await adopted(command({ telegramUserId, runtime: noExpiry('on_hold') }));
@@ -1078,7 +1115,7 @@ describe('Migration P6: legacy service adoption', () => {
     expect(providerCalls).toEqual([]);
   });
 
-  it('renewal of an adopted service quotes the CURRENT tariff of its product, never a legacy price', async () => {
+  it('renewal of an adopted service offers its panel’s CURRENT plans at their current price, never a legacy price', async () => {
     const telegramUserId = tg();
     const customerId = (await fx.customer({ telegramUserId })) as UserId;
     // An operable panel (credentials and activation), as a renewal needs; nothing dials it.
@@ -1092,25 +1129,52 @@ describe('Migration P6: legacy service adoption', () => {
     });
     const renewPanel = created.view.panel.id;
     const o = await adopted(command({ telegramUserId, match: eligible('renewme1', renewPanel) }));
-    const quote = async (): Promise<bigint> => {
+    const actor = (k: string) => ({
+      type: 'SYSTEM_JOB' as const,
+      id: null,
+      label: 'telegram-update:test',
+      surface: 'TELEGRAM' as const,
+      correlationId: k as CorrelationId,
+    });
+    // Owner rule 2026-10-18: the adopted service's own product (on another panel) is never
+    // what it renews from; its panel sells nothing yet, so there is nothing to offer.
+    const empty = await ctx.container.commercialActions.offer(
+      tenantA,
+      actor('offer-empty'),
+      customerId,
+      o.serviceId,
+      'RENEW',
+    );
+    expect(empty).toMatchObject({ product: null, plans: [] });
+    const plan = await publicProduct(250_000n, undefined, tenantA, renewPanel);
+    const offered = await ctx.container.commercialActions.offer(
+      tenantA,
+      actor('offer-plan'),
+      customerId,
+      o.serviceId,
+      'RENEW',
+    );
+    expect(offered.plans?.map((p) => p.id)).toEqual([plan]);
+    const quote = async (productId?: string): Promise<bigint> => {
       const k = `renew-${String(T())}`;
-      const { order } = await ctx.container.commercialActions.draft(
-        tenantA,
-        {
-          type: 'SYSTEM_JOB',
-          id: null,
-          label: 'telegram-update:test',
-          surface: 'TELEGRAM',
-          correlationId: k as CorrelationId,
-        },
-        customerId,
-        { serviceId: o.serviceId, kind: 'RENEW', idempotencyKey: k },
-      );
+      const { order } = await ctx.container.commercialActions.draft(tenantA, actor(k), customerId, {
+        serviceId: o.serviceId,
+        kind: 'RENEW',
+        ...(productId === undefined ? {} : { productId }),
+        idempotencyKey: k,
+      });
       return order.totals.total.amountMinor;
     };
-    expect(await quote()).toBe(250_000n);
-    await db().execute(sql`UPDATE products SET price_amount = 310000 WHERE id = ${product}`);
-    expect(await quote()).toBe(310_000n);
+    expect(await quote(plan)).toBe(250_000n);
+    await db().execute(sql`UPDATE products SET price_amount = 310000 WHERE id = ${plan}`);
+    expect(await quote(plan)).toBe(310_000n);
+    // Without a chosen plan, or with the service's own (navigation) product: refused.
+    await expect(quote()).rejects.toMatchObject({
+      code: COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+    });
+    await expect(quote(product)).rejects.toMatchObject({
+      code: COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+    });
   });
 
   // ---------------------------------------------------------------------------

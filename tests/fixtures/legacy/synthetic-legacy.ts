@@ -460,20 +460,28 @@ export const SYNTHETIC_EXPECTED = {
       INVALID_USERNAME: 1,
       INVENTORY_INCOMPLETE: 0,
       /**
-       * Mirza PR5 (owner decision 8): the three empty/NULL `code_panel` invoices. Before PR5
-       * they were searched across every production panel — one ELIGIBLE, one
-       * AMBIGUOUS_PANEL, one PROVIDER_MISSING. Changed deliberately; the dataset is not.
+       * Owner rule 2026-10-18 (replacing owner decision 8): the three empty/NULL `code_panel`
+       * invoices are searched across every connected panel — `svc_nullmatch` (one holder) is
+       * ELIGIBLE, `svc_shared` (two) AMBIGUOUS_PANEL, `svc_nowhere` (none) NO_PANEL — ended
+       * and archived exactly as an unmapped code is.
        */
-      NO_PANEL: 3,
+      NO_PANEL: 1,
       /** `svc_missing` (live) and the removed `svc_old`, whose account is not on the panel. */
       PROVIDER_MISSING: 2,
-      AMBIGUOUS_PANEL: 0,
+      /** The panel-less `svc_shared`, on both connected panels. */
+      AMBIGUOUS_PANEL: 1,
       PANEL_UNMAPPED: 1,
       USERNAME_CASE_COLLISION: 1,
       AMBIGUOUS_OWNERSHIP: 0,
       UNSUPPORTED_SHAPE: 2,
-      PRODUCT_UNRESOLVED: 1,
-      ADOPTION_ELIGIBLE: 3,
+      /** Owner rule 2026-10-18: a product never holds an account on the panel back. */
+      PRODUCT_UNRESOLVED: 0,
+      /**
+       * `svc_a1`, `svc_a2` (named p1), `svc_a3` (declared missing, one holder), the panel-less
+       * `svc_nullmatch` (one holder: B), and the custom `svc_b1` whose shape has no current
+       * tariff — attached all the same.
+       */
+      ADOPTION_ELIGIBLE: 5,
     },
   },
 } as const;
@@ -526,17 +534,17 @@ export function buildSyntheticLegacyDataset(
     invoice({ idUser: '100000001', username: 'svc_a1', codePanel: C.mappedA }),
     // PROVIDER_MISSING on a mapped panel (a 4-hex key, the older MirzaBot shape)
     invoice({ id: '7c1f', idUser: '100000001', username: 'svc_missing', codePanel: C.mappedA }),
-    // NULL code_panel, exactly one holder (B). Before Mirza PR5 this was searched and ELIGIBLE;
-    // owner decision 8: NO_PANEL, never adopted automatically (a key with the 7-digit prefix)
+    // NULL code_panel, exactly one holder (B): searched across the connected panels and
+    // ELIGIBLE on B (owner rule 2026-10-18; a key with the 7-digit prefix)
     invoice({
       id: '1700001b2c3d4e5',
       idUser: '100000002',
       username: 'svc_nullmatch',
       codePanel: null,
     }),
-    // NULL code_panel, two holders: was AMBIGUOUS_PANEL; NO_PANEL since owner decision 8
+    // NULL code_panel, two holders: AMBIGUOUS_PANEL (stays in review)
     invoice({ idUser: '100000003', username: 'svc_shared', codePanel: null }),
-    // empty code_panel, no holder: was PROVIDER_MISSING; NO_PANEL since owner decision 8
+    // empty code_panel, no holder on any connected panel: NO_PANEL (ended, archived)
     invoice({ idUser: '100000003', username: 'svc_nowhere', codePanel: '' }),
     // a test panel: skipped whatever else holds
     invoice({ idUser: SYNTHETIC_EXISTING_CUSTOMER, username: 'whatever', codePanel: C.test }),
@@ -544,7 +552,7 @@ export function buildSyntheticLegacyDataset(
     invoice({ idUser: SYNTHETIC_EXISTING_CUSTOMER, username: 'svc_a1', codePanel: C.unmapped }),
     // two spellings on panel A fold to the same name
     invoice({ idUser: '100000007', username: 'case_x', codePanel: C.mappedA }),
-    // custom shape with no current tariff
+    // custom shape with no current tariff: attached all the same (a product never blocks)
     invoice({
       idUser: '100000009',
       username: 'svc_b1',

@@ -90,6 +90,24 @@ export interface ServiceAdminServiceDeps {
   readonly locationTargets?: {
     hasOperatorTarget(scope: TenantContext, service: ServiceRecord): Promise<boolean>;
   };
+  /**
+   * Owner rule 2026-10-18: what an imported service's customer originally bought — the
+   * archived invoice's product name and price, for display only. Absent: none is shown.
+   */
+  readonly origins?: ServiceOriginReader;
+}
+
+/** The original purchase of an imported service, for display; null when there is none. */
+export interface ServiceOriginalPurchase {
+  readonly productName: string | null;
+  readonly price: { readonly amountMinor: bigint; readonly currency: string } | null;
+}
+
+export interface ServiceOriginReader {
+  originalPurchase(
+    scope: TenantContext,
+    service: ServiceRecord,
+  ): Promise<ServiceOriginalPurchase | null>;
 }
 
 /**
@@ -191,18 +209,26 @@ export class ServiceAdminService {
     scope: TenantContext,
     actor: ActorContext,
     id: string,
-  ): Promise<{ service: ServiceRecord; actions: readonly ServiceActionAvailability[] }> {
+  ): Promise<{
+    service: ServiceRecord;
+    actions: readonly ServiceActionAvailability[];
+    original: ServiceOriginalPurchase | null;
+  }> {
     const service = await this.get(scope, actor, id);
-    const [openOperations, operability, contact, hasLocationTarget, openCommercial] =
+    const [openOperations, operability, contact, hasLocationTarget, openCommercial, original] =
       await Promise.all([
         this.openOperationsFor(scope, service.id),
         this.operabilityFor(scope, service),
         this.contactPresenceFor(scope, service),
         this.deps.locationTargets?.hasOperatorTarget(scope, service) ?? Promise.resolve(false),
         this.deps.operations.findOpenCommercial(scope, service.id),
+        service.source === 'NEXA' || this.deps.origins === undefined
+          ? Promise.resolve(null)
+          : this.deps.origins.originalPurchase(scope, service),
       ]);
     return {
       service,
+      original,
       actions: evaluateServiceActions({
         state: service.state,
         hasConfiguration: service.subscriptionUrl !== null,

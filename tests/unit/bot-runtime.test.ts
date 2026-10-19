@@ -96,6 +96,7 @@ import {
   REFERRAL_GIFT_CALLBACK_DATA,
   SERVICE_NOTE_CALLBACK_PREFIX,
   SERVICE_RENEW_QUOTE_CALLBACK_PREFIX,
+  SERVICE_RENEW_PLAN_CALLBACK_PREFIX,
   TOPUP_CLOSE_CALLBACK_PREFIX,
   encodeIdPair,
   WALLET_PAY_CALLBACK_PREFIX,
@@ -1013,6 +1014,11 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.refund_request_unavailable',
       'bot.service.renew_button',
       'bot.service.renew_choose',
+      /*
+       * Owner rule 2026-10-18: an imported service's renewal lists its panel's current plans,
+       * and says in this sentence when the panel sells none — never an error.
+       */
+      'bot.service.renew_no_plan',
       'bot.service.renew_option_button',
       /*
        * R2 (item 11): a wallet-paid renewal's payment message is CLOSED into this sentence
@@ -1800,6 +1806,9 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
   const PAIR_PREFIXES: Readonly<Record<string, string>> = {
     SERVICE_BUY_TRAFFIC: SERVICE_BUY_TRAFFIC_CALLBACK_PREFIX,
     SERVICE_BUY_TIME: SERVICE_BUY_TIME_CALLBACK_PREFIX,
+    // Owner rule 2026-10-18: `rq:` begins with `r` like `rs:` and `rg:`; the shadowing case
+    // proves it safe. A service and the panel plan the customer chose.
+    SERVICE_RENEW_PLAN: SERVICE_RENEW_PLAN_CALLBACK_PREFIX,
   };
 
   /*

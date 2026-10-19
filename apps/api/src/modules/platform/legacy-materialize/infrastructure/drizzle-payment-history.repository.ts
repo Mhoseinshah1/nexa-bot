@@ -10,7 +10,8 @@ import { paymentFingerprint, type PaymentWrite } from '../application/payment-hi
 import { MIRZA_SOURCE, type PlannedRepository } from '../application/materialize-support.js';
 import type { MaterializeContext } from '../application/ports.js';
 
-const CHUNK = 500;
+/** Payments per INSERT: 18 parameters a row, so 3 000 rows stay under PostgreSQL's 65 535. */
+const CHUNK = 3000;
 
 /**
  * `payments` rows of source MIRZA. Direct inserts: this is the one place the import writes a

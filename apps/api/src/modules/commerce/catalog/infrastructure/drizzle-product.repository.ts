@@ -8,6 +8,7 @@ import type {
   ProductCategoryStatus,
   ProductCategoryVisibility,
   ProductId,
+  ProductListView,
   ProductStatus,
   RecordSource,
   TenantContext,
@@ -18,6 +19,7 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
+  legacyProductShapes,
   panels,
   productCategories,
   products,
@@ -66,6 +68,29 @@ function audienceClause(audience: CatalogueAudience): SQL {
   if (audience.productIds === 'ALL' || audience.categoryIds === 'ALL') return listed;
   return sql`(${listed} AND (${products.id} = ANY(${sql.param([...audience.productIds])}::uuid[])
     OR ${products.categoryId} = ANY(${sql.param([...audience.categoryIds])}::uuid[])))`;
+}
+
+/**
+ * The import's historical products: what an import created to stand behind old orders and
+ * services, and that can be neither sold as it is nor deleted. INACTIVE, HIDDEN and bound to
+ * no panel, AND made by an import — a MIRZA row, or the hidden product a legacy shape stands
+ * for (those are written through the ordinary product create, so their `source` is NEXA).
+ *
+ * An operator's own product that happens to be inactive and hidden stays in the current list:
+ * hiding it in an archive would be a product nobody can find. And a historical product an
+ * operator binds to a panel, publishes or makes visible leaves the archive by itself.
+ */
+function archivedClause(): SQL {
+  return sql`(${products.status} = 'INACTIVE' AND ${products.audience} = 'HIDDEN'
+    AND ${products.panelId} IS NULL
+    AND (${products.source} = 'MIRZA' OR EXISTS (
+      SELECT 1 FROM ${legacyProductShapes}
+       WHERE ${legacyProductShapes.tenantId} = ${products.tenantId}
+         AND ${legacyProductShapes.productId} = ${products.id})))`;
+}
+
+function viewClause(view: ProductListView): SQL {
+  return view === 'ARCHIVE' ? archivedClause() : sql`NOT ${archivedClause()}`;
 }
 
 export class DrizzleProductRepository implements ProductRepository {
@@ -159,6 +184,7 @@ export class DrizzleProductRepository implements ProductRepository {
     const tenantId = requireTenantId(scope);
     const conditions: SQL[] = [eq(products.tenantId, tenantId)];
 
+    if (search.view !== undefined) conditions.push(viewClause(search.view));
     if (search.status !== undefined) conditions.push(eq(products.status, search.status));
     if (search.audience !== undefined) conditions.push(eq(products.audience, search.audience));
     if (search.source !== undefined) conditions.push(eq(products.source, search.source));
@@ -441,6 +467,48 @@ export class DrizzleProductRepository implements ProductRepository {
       )
       .limit(limit + 1);
     return { items: rows.slice(0, limit).map(toRecord), hasMore: rows.length > limit };
+  }
+
+  /** See the port: the catalogue's predicate, the currency and the shape, then the limit. */
+  async listRenewalPlans(
+    scope: TenantContext,
+    query: {
+      readonly panelId: string;
+      readonly currency: string;
+      readonly timeLimited: boolean;
+      readonly audience: CatalogueAudience;
+      readonly productId?: string;
+      readonly limit: number;
+    },
+    tx?: unknown,
+  ): Promise<readonly ProductRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select(getTableColumns(products))
+      .from(products)
+      .innerJoin(
+        productCategories,
+        and(
+          eq(productCategories.id, products.categoryId),
+          eq(productCategories.tenantId, products.tenantId),
+        ),
+      )
+      .where(
+        and(
+          this.customerVisibleProduct(tenantId, [query.panelId], query.audience),
+          eq(products.priceCurrency, query.currency),
+          query.timeLimited ? sql`${products.durationDays} > 0` : eq(products.durationDays, 0),
+          query.productId === undefined ? undefined : eq(products.id, query.productId),
+        ),
+      )
+      .orderBy(
+        asc(productCategories.sortOrder),
+        asc(productCategories.id),
+        asc(products.sortOrder),
+        asc(products.id),
+      )
+      .limit(Math.max(query.limit, 1));
+    return rows.map(toRecord);
   }
 
   async listCatalog(

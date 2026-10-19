@@ -150,6 +150,8 @@ describe('Mirza restore through the restore page, at scale', () => {
         (dataset.tables['user'] ?? []) as readonly Record<string, unknown>[],
       );
       const converterLines = Object.values(converter).reduce((n, r) => n + r.length, 0);
+      // One payment history record per two users (`paymentRecords`' default), all SUCCEEDED.
+      const paymentLines = [...paymentRecords(generated.users)].length;
       const pkg = await timed('writePackage', () =>
         writeMigrationPackage(join(work, 'nexa-restore-mirza-scale.nxpkg'), {
           dataset: dataset as typeof generated.dataset,
@@ -295,9 +297,23 @@ describe('Mirza restore through the restore page, at scale', () => {
         peakHeapMiB: Math.round(memory.heap / 2 ** 20),
         counts: {
           customers: await rig.count('customers'),
-          openings: await rig.count('wallet_entries', "reason = 'MIGRATION_OPENING_BALANCE'"),
-          openingSum: await rig.scalar(
-            `SELECT coalesce(sum(amount), 0)::text AS v FROM wallet_entries WHERE tenant_id = '${TENANT}'`,
+          openingCredits: await rig.count(
+            'wallet_entries',
+            "reason = 'MIGRATION_OPENING_BALANCE' AND direction = 'CREDIT'",
+          ),
+          openingCreditSum: await rig.scalar(
+            `SELECT coalesce(sum(amount), 0)::text AS v FROM wallet_entries WHERE tenant_id = '${TENANT}' AND direction = 'CREDIT'`,
+          ),
+          openingDebits: await rig.count(
+            'wallet_entries',
+            "reason = 'MIGRATION_OPENING_BALANCE' AND direction = 'DEBIT'",
+          ),
+          openingDebitSum: await rig.scalar(
+            `SELECT coalesce(sum(amount), 0)::text AS v FROM wallet_entries WHERE tenant_id = '${TENANT}' AND direction = 'DEBIT'`,
+          ),
+          walletEntries: await rig.count('wallet_entries'),
+          ledgerSum: await rig.scalar(
+            `SELECT coalesce(sum(CASE direction WHEN 'CREDIT' THEN amount ELSE -amount END), 0)::text AS v FROM wallet_entries WHERE tenant_id = '${TENANT}'`,
           ),
           debts: await rig.count('legacy_wallet_debts'),
           debtSum: await rig.scalar(
@@ -305,18 +321,40 @@ describe('Mirza restore through the restore page, at scale', () => {
           ),
           history: await rig.count('legacy_history_records'),
           services: await rig.count('services'),
+          servicesActive: await rig.count('services', "state = 'ACTIVE'"),
+          servicesTerminated: await rig.count('services', "state = 'TERMINATED'"),
           payments: await rig.count('payments'),
+          paymentsConfirmed: await rig.count(
+            'payments',
+            "source = 'MIRZA' AND state = 'CONFIRMED' AND evidence_kind = 'LEGACY_IMPORT'",
+          ),
           customerNotifications: await count('customer_notifications'),
         },
+        // What the rules of `docs/migration/mirza-import-plan-fa.md` require of this package,
+        // derived from the generator's own inputs (owner decisions 2026-10-17):
+        // - balances (§4): ONE opening per non-zero `Balance` — a CREDIT of a positive one, a
+        //   DEBIT of a negative one's magnitude — so the wallet IS the Mirza balance, and no
+        //   `legacy_wallet_debts` row is written any more;
+        // - invoices (§6): every invoice is a service — a live one whose account is on the
+        //   panel adopted ACTIVE, every other one an ended (TERMINATED) service with its order;
+        // - `Payment_report` / `payments.jsonl`: every packaged payment (all SUCCEEDED) is a
+        //   CONFIRMED `LEGACY_IMPORT` payment, never a ledger entry.
         expected: {
           customers: money.users,
-          openings: money.positive.count,
-          openingSum: money.positive.sum.toString(),
-          debts: money.negative.count,
-          debtSum: money.negative.sum.toString(),
+          openingCredits: money.positive.count,
+          openingCreditSum: money.positive.sum.toString(),
+          openingDebits: money.negative.count,
+          openingDebitSum: money.negative.sum.toString(),
+          walletEntries: money.positive.count + money.negative.count,
+          ledgerSum: (money.positive.sum - money.negative.sum).toString(),
+          debts: 0,
+          debtSum: '0',
           history: historyLines,
-          services: live,
-          payments: 0,
+          services: INVOICES,
+          servicesActive: live,
+          servicesTerminated: INVOICES - live,
+          payments: paymentLines,
+          paymentsConfirmed: paymentLines,
           customerNotifications: 0,
         },
         backups: (

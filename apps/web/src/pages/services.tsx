@@ -51,6 +51,7 @@ import {
   KV,
   LIST_PAGE_SIZE,
   Ltr,
+  Money,
   Num,
   PageHead,
   Progress,
@@ -1113,6 +1114,8 @@ export function ServiceDetailPage({
               onActed={refresh}
             />
 
+            {row.original != null && <OriginalPurchase original={row.original} />}
+
             {row.state === 'UNRECONCILED' && (
               <Banner tone="warn">{t('web.service_unreconciled_banner')}</Banner>
             )}
@@ -1181,6 +1184,32 @@ function OperationsTable({ operations }: { operations: readonly ServiceOperation
 }
 
 type ServiceDetail = NonNullable<Awaited<ReturnType<typeof fetchService>>['service']>;
+
+/**
+ * An imported service's original purchase — the product name and price the customer first
+ * bought it as (owner rule 2026-10-18), from the archived invoice: one muted line, display
+ * only. Each part shows only when the server sent it.
+ */
+function OriginalPurchase({ original }: { original: NonNullable<ServiceDetail['original']> }) {
+  return (
+    <p className="ca-stat-line faint" data-testid="service-original-purchase">
+      {original.productName !== null && (
+        <span>
+          {t('web.service_original_product')}: {original.productName}
+        </span>
+      )}
+      {original.productName !== null && original.price !== null && <span> · </span>}
+      {original.price !== null && (
+        <span>
+          {t('web.service_original_price')}:{' '}
+          <Money
+            value={{ amountMinor: original.price.amount, currency: original.price.currency }}
+          />
+        </span>
+      )}
+    </p>
+  );
+}
 
 /**
  * The summary strip: traffic, expiry, delivery attempts and devices — each a field

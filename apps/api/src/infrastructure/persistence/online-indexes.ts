@@ -220,6 +220,26 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
   },
   {
     /*
+     * "Is this name taken on THIS panel", case-insensitively: the legacy adoption's
+     * `usernameTaken` asks `panel_id = $1 AND state <> 'TERMINATED' AND
+     * lower(provider_username) = $2` once per adopted service, under the panel's row lock.
+     * `services_panel_provider_username_key` carries the exact spelling, not its fold, so
+     * the only index that could serve the question walked every live service of the panel —
+     * per adoption, which made the one-time import's adoption phase quadratic in the size of
+     * a panel (measured: ~1 ms per check at 2 600 services a panel, growing with every
+     * service adopted before it). The SAME partial predicate as the unique key, so the
+     * question is an index probe. Read-only for every result: it changes which rows are
+     * found by nothing.
+     *
+     * CONCURRENTLY for the reason `services_tenant_provider_username_idx` gives: `services`
+     * is populated and every provisioning write touches it.
+     */
+    name: 'services_panel_lower_username_idx',
+    definition:
+      'ON "services" USING btree ("panel_id",lower("provider_username")) WHERE state <> \'TERMINATED\'',
+  },
+  {
+    /*
      * One payment's wallet movements, in time order: the payment timeline's read (WP17,
      * Codex review of #81). Every other index on `wallet_entries` leads with the customer
      * or the tenant's time, so an old payment's few rows were found by walking the

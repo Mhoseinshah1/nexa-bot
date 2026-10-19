@@ -410,6 +410,11 @@ export const BOT_INTENTS = [
   'SERVICE_CARD',
   'SERVICE_NOTE',
   'SERVICE_RENEW_QUOTE',
+  /*
+   * Owner rule 2026-10-18: an imported service renews from a plan of its panel the customer
+   * CHOSE (`rq:`, a service-and-plan pair) — the quote it opens re-decides the plan.
+   */
+  'SERVICE_RENEW_PLAN',
   'REFERRAL_GIFT',
   'HELP',
   /*
@@ -1179,6 +1184,11 @@ export const SERVICE_FILES_CALLBACK_PREFIX = 'sf:';
 export { SERVICE_CARD_CALLBACK_PREFIX };
 export const SERVICE_NOTE_CALLBACK_PREFIX = 'nt:';
 export const SERVICE_RENEW_QUOTE_CALLBACK_PREFIX = 'nr:';
+/**
+ * `rq:<service id, plan id>` (an id pair, `encodeIdPair`) — owner rule 2026-10-18: an imported
+ * service renewed from one of its panel's current plans, the one the customer tapped.
+ */
+export const SERVICE_RENEW_PLAN_CALLBACK_PREFIX = 'rq:';
 export const REFERRAL_GIFT_CALLBACK_DATA = 'rg:';
 /**
  * Owner spec §2.2: open the wallet screen, or the catalogue, as a NEW message — the two
@@ -2761,6 +2771,23 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
         data.slice(SERVICE_RENEW_QUOTE_CALLBACK_PREFIX.length),
         id,
       );
+    }
+    if (data.startsWith(SERVICE_RENEW_PLAN_CALLBACK_PREFIX)) {
+      // Two ids, through the same validation the add-on pair takes: a malformed pair is
+      // UNSUPPORTED, never a half-read that renews from a plan nobody named.
+      const pair = decodeIdPair(data.slice(SERVICE_RENEW_PLAN_CALLBACK_PREFIX.length));
+      if (pair === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      const service = uuidV7Schema.safeParse(pair.first);
+      const plan = uuidV7Schema.safeParse(pair.second);
+      if (!service.success || !plan.success) {
+        return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      }
+      return {
+        intent: 'SERVICE_RENEW_PLAN',
+        targetId: service.data,
+        secondaryId: plan.data,
+        callbackQueryId: id,
+      };
     }
     if (data === REFERRAL_GIFT_CALLBACK_DATA) {
       return { intent: 'REFERRAL_GIFT', targetId: null, callbackQueryId: id };
@@ -10358,6 +10385,25 @@ export class BotRuntime {
       // The quote opens the payment wizard, which is its own message (R2).
       return this.commercialQuote(scope, actor, customer, command.targetId, 'RENEW', null, input);
     }
+    if (
+      command.intent === 'SERVICE_RENEW_PLAN' &&
+      command.targetId !== null &&
+      command.secondaryId != null
+    ) {
+      // An imported service's chosen plan; the draft re-decides it against the panel's plans.
+      return this.commercialQuote(
+        scope,
+        actor,
+        customer,
+        command.targetId,
+        'RENEW',
+        null,
+        input,
+        undefined,
+        undefined,
+        command.secondaryId,
+      );
+    }
     if (command.intent === 'REFERRAL_GIFT') {
       return this.referralGift(scope, actor, customer, input.idempotencyKey);
     }
@@ -11409,6 +11455,8 @@ export class BotRuntime {
     quantity?: number,
     /** WP-A6: the configured location an `lt:` tap chose; absent for every other kind. */
     locationId?: string,
+    /** Owner rule 2026-10-18: the panel plan an `rq:` tap chose; absent for every other kind. */
+    planId?: string,
   ): Promise<PendingReply> {
     try {
       const service = await this.ownedService(scope, customer, serviceId);
@@ -11421,6 +11469,7 @@ export class BotRuntime {
         ...(addonId === null ? {} : { addonId }),
         ...(quantity === undefined ? {} : { quantity }),
         ...(locationId === undefined ? {} : { locationId }),
+        ...(planId === undefined ? {} : { productId: planId }),
         idempotencyKey: `${input.idempotencyKey}:${kind.toLowerCase()}`,
       });
       // The same pre-invoice and the same payment buttons as a new purchase (§H5, §H6):
@@ -12751,6 +12800,8 @@ export class BotRuntime {
     }
     const offered = await this.deps.commercial.availableFor(scope, actor, service);
     const buttons: CustomerButton[] = [];
+    // Owner rule 2026-10-18: an imported service renews from its panel's current plans.
+    let panelPlans: number | null = null;
     if (offered.includes('RENEW')) {
       const renewal = await this.offerOrNull(scope, actor, customer, service.id, 'RENEW');
       const product = renewal?.product ?? null;
@@ -12759,6 +12810,17 @@ export class BotRuntime {
           ...inlineLabel('service.renew_option', { title: product.title, price: product.price }),
           data: `${SERVICE_RENEW_QUOTE_CALLBACK_PREFIX}${service.id}`,
         });
+      }
+      if (renewal?.plans !== undefined) {
+        panelPlans = 0;
+        for (const plan of renewal.plans) {
+          if (plan.price === null) continue;
+          panelPlans += 1;
+          buttons.push({
+            ...inlineLabel('service.renew_option', { title: plan.title, price: plan.price }),
+            data: `${SERVICE_RENEW_PLAN_CALLBACK_PREFIX}${encodeIdPair(service.id, plan.id)}`,
+          });
+        }
       }
     }
     if (offered.includes('ADD_TIME')) {
@@ -12773,7 +12835,9 @@ export class BotRuntime {
     }
     if (buttons.length === 0) {
       return {
-        key: 'bot.service.renew_unavailable',
+        // An imported service whose panel sells no plan right now is told exactly that, in
+        // a sentence — never an error (owner rule 2026-10-18).
+        key: panelPlans === 0 ? 'bot.service.renew_no_plan' : 'bot.service.renew_unavailable',
         values: {},
         buttons: [backToServiceButton(service.id)],
         orderId: null,

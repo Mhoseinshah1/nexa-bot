@@ -55,7 +55,18 @@ export const ANSWER_REF_SUFFIX = ':answer';
 export const FORK_TICKET_REF_PREFIX = 'ticket';
 export const FORK_MESSAGE_REF_PREFIX = 'ticket-msg';
 export const MIRZA_IMPORT_ADMIN_USERNAME = 'mirza-import';
-export const MIRZA_TICKET_CATEGORY_TITLE = 'Mirza (imported)';
+/**
+ * The imported tickets' category, as the ticket pages show it. Neutral wording (owner rule
+ * 2026-10-18: no previous-bot name outside the one-time import page).
+ */
+export const MIRZA_TICKET_CATEGORY_TITLE = 'منتقل‌شده از ربات قبلی';
+/**
+ * The title an earlier release wrote. A resumed or re-run import on a database that already
+ * holds it reuses that row, never a second category beside it.
+ */
+export const LEGACY_MIRZA_TICKET_CATEGORY_TITLE = 'Mirza (imported)';
+/** The import's disabled system identity, as an author name in ticket history. */
+export const MIRZA_IMPORT_ADMIN_DISPLAY_NAME = 'انتقال از ربات قبلی (سیستم)';
 
 const THREAD_REF_PREFIX = 'legacy:support:thread:';
 
@@ -321,6 +332,12 @@ export interface TicketHistoryRepository {
     now: Date,
     tx: TransactionScope,
   ): Promise<{ readonly id: string; readonly title: string }>;
+  /**
+   * Renames the category an earlier release wrote under the old title to the neutral one (or,
+   * when a neutral one exists, moves its tickets there): every run, so an upgraded
+   * installation whose tickets are all already imported is corrected too.
+   */
+  retitleLegacyCategory(scope: TenantContext, now: Date, tx: TransactionScope): Promise<void>;
   /** The system admin that signs imported answers; created once, never able to sign in. */
   ensureImportAdmin(scope: TenantContext, now: Date, tx: TransactionScope): Promise<string>;
   existingTickets(
@@ -512,6 +529,10 @@ export class TicketHistoryStep implements MaterializeStep {
     let alreadyPresent = 0;
     let diverged = 0;
     const bot = await this.repository.resolveBot(ctx.scope);
+    await this.deps.uow.run(ctx.scope, async (tx) => {
+      await assertScopeActive(this.deps, ctx, tx);
+      await this.repository.retitleLegacyCategory(ctx.scope, ctx.now, tx);
+    });
     for await (const batch of this.threads(ctx)) {
       await this.deps.uow.run(ctx.scope, async (tx) => {
         await assertScopeActive(this.deps, ctx, tx);

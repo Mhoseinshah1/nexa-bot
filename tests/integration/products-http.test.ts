@@ -20,6 +20,7 @@ import { money, type PanelId, type ProductId } from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
+import { AudienceFixtures } from './audience-fixtures';
 import {
   createAdmin,
   migrateOnce,
@@ -420,6 +421,134 @@ describe('product HTTP surface', () => {
     // in the query schema.
     const response = await get(`${PRODUCT_ROUTES.list}?panelId=not-a-uuid`, editorCookie);
     expect(response.statusCode).toBe(400);
+  });
+
+  // -------------------------------------------------------------------------
+  // The archive: the import's historical products, split off on the server
+  // -------------------------------------------------------------------------
+
+  /**
+   * The four shapes the split must tell apart: an operator's live product, an operator's
+   * own inactive hidden one (NOT history: it stays in the working list), an imported
+   * historical product (MIRZA, inactive, hidden, no panel), and the hidden product a legacy
+   * shape stands for (written by the ordinary create, so its source is NEXA).
+   */
+  async function archiveFixtures() {
+    const db = api.container.database.db;
+    const live = await createProduct({ title: 'live' });
+    const ownHidden = await createProduct({
+      title: 'own hidden',
+      audience: 'HIDDEN',
+      panelId: null,
+      categoryId: null,
+    });
+    const imported = await createProduct({
+      title: 'imported history',
+      audience: 'HIDDEN',
+      panelId: null,
+      categoryId: null,
+    });
+    await db.execute(sql`
+      UPDATE products SET source = 'MIRZA', source_ref = 'product:hist-1' WHERE id = ${imported.id}`);
+    const shaped = await createProduct({
+      title: 'shape history',
+      audience: 'HIDDEN',
+      panelId: null,
+      categoryId: null,
+    });
+    await db.execute(sql`
+      INSERT INTO legacy_product_shapes
+        (id, tenant_id, shape_key, traffic_bytes, duration_days, is_custom, product_id)
+      VALUES (${api.container.ids.uuid()}, ${tenantA.tenantId}, 'v1:test-shape', 53687091200,
+              30, false, ${shaped.id})`);
+    return { live, ownHidden, imported, shaped };
+  }
+
+  const listIds = async (query: string) => {
+    const response = await get(`${PRODUCT_ROUTES.list}?${query}`, editorCookie);
+    expect(response.statusCode, response.body).toBe(200);
+    return productListResponseSchema.parse(response.json());
+  };
+
+  it('splits the list into CURRENT and ARCHIVE on the server, and absent is both', async () => {
+    const f = await archiveFixtures();
+    const current = await listIds('view=CURRENT');
+    expect(current.products.map((p) => p.id).sort()).toEqual([f.live.id, f.ownHidden.id].sort());
+    const archive = await listIds('view=ARCHIVE');
+    expect(archive.products.map((p) => p.id).sort()).toEqual([f.imported.id, f.shaped.id].sort());
+    expect((await listIds('limit=50')).products).toHaveLength(4);
+  });
+
+  it('pages the archive on the keyset, inside the view', async () => {
+    const f = await archiveFixtures();
+    const first = await listIds('view=ARCHIVE&limit=1');
+    expect(first.products).toHaveLength(1);
+    expect(first.nextCursor).not.toBeNull();
+    const second = await listIds(
+      `view=ARCHIVE&limit=1&cursor=${encodeURIComponent(first.nextCursor as string)}`,
+    );
+    expect(second.products).toHaveLength(1);
+    expect([first.products[0]!.id, second.products[0]!.id].sort()).toEqual(
+      [f.imported.id, f.shaped.id].sort(),
+    );
+    expect(second.nextCursor).toBeNull();
+  });
+
+  it('a historical product an operator binds to a panel leaves the archive by itself', async () => {
+    const f = await archiveFixtures();
+    await api.container.database.db.execute(
+      sql`UPDATE products SET panel_id = ${panelA} WHERE id = ${f.imported.id}`,
+    );
+    expect((await listIds('view=ARCHIVE')).products.map((p) => p.id)).toEqual([f.shaped.id]);
+    expect((await listIds('view=CURRENT')).products.map((p) => p.id)).toContain(f.imported.id);
+  });
+
+  it('refuses a view that is not one, rather than ignoring it', async () => {
+    const response = await get(`${PRODUCT_ROUTES.list}?view=archived`, editorCookie);
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('can never delete a product an order or a service references', async () => {
+    const db = api.container.database.db;
+    const fixtures = new AudienceFixtures(
+      { container: api.container } as never,
+      tenantA.tenantId as string,
+    );
+    const customer = await fixtures.customer({ telegramUserId: '7700001' });
+    // Named by an order (and its service).
+    const ordered = await fixtures.product(panelA, 'ordered');
+    await fixtures.service({ customerId: customer, panelId: panelA, productId: ordered });
+    // Named by a service ONLY: `services.product_id` has no foreign key of its own.
+    const serviced = await fixtures.product(panelA, 'serviced');
+    const other = await fixtures.product(panelA, 'other');
+    const service = await fixtures.service({
+      customerId: customer,
+      panelId: panelA,
+      productId: other,
+    });
+    await db.execute(sql`UPDATE services SET product_id = ${serviced} WHERE id = ${service}`);
+    // Named by nothing.
+    const free = await fixtures.product(panelA, 'free');
+
+    // The order's foreign key already refused this one; the guard refuses it first, by name.
+    await expect(db.execute(sql`DELETE FROM products WHERE id = ${ordered}`)).rejects.toThrow();
+    // Only the guard stands behind a product a service alone still names.
+    await expect(
+      db.execute(sql`DELETE FROM products WHERE id = ${serviced}`),
+    ).rejects.toMatchObject({ cause: expect.objectContaining({ code: '23001' }) });
+    await db.execute(sql`DELETE FROM products WHERE id = ${free}`);
+    const left = await db.execute(
+      sql`SELECT id FROM products WHERE id IN (${ordered}, ${serviced}, ${free})`,
+    );
+    expect(left.rows).toHaveLength(2);
+
+    // And no surface offers a delete at all: the route does not exist.
+    const response = await inject({
+      method: 'DELETE',
+      url: `${API_PREFIX}${PRODUCT_ROUTES.detail(ordered)}`,
+      headers: asAdmin(editorCookie),
+    });
+    expect(response.statusCode).toBe(404);
   });
 
   it('sees nothing of another tenant through the panel filter', async () => {

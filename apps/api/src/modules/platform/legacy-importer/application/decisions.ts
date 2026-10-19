@@ -7,7 +7,6 @@ import {
   type LegacyUserStatusClass,
 } from '@nexa/contracts';
 import {
-  legacyCustomFlag,
   legacyShapeKey,
   type LegacyShapeUnmappableReason,
 } from '../../../commerce/catalog/application/legacy-shape.js';
@@ -194,8 +193,9 @@ export const SERVICE_CANDIDATE_CATEGORIES = [
   /** A panel the decision depends on has no complete inventory. */
   'INVENTORY_INCOMPLETE',
   /**
-   * Owner decision 8 (Mirza PR5): `code_panel` empty or NULL. Never searched for, never
-   * adopted automatically; only an operator's explicit approval naming a mapped panel may.
+   * `code_panel` empty or NULL, searched across every connected panel (owner rule 2026-10-18),
+   * and on none of them: ended and archived exactly as `PANEL_UNMAPPED` is (one holder adopts;
+   * several are `AMBIGUOUS_PANEL`).
    */
   'NO_PANEL',
   'PROVIDER_MISSING',
@@ -210,18 +210,38 @@ export const SERVICE_CANDIDATE_CATEGORIES = [
   'AMBIGUOUS_OWNERSHIP',
   /** Productless/custom, and the shape key refuses it (Q1b's non-MAPPABLE rows). */
   'UNSUPPORTED_SHAPE',
-  /** Productless/custom, the shape is mappable, and it has no current tariff. */
+  /**
+   * No longer decided (owner rule 2026-10-18: a product never blocks an attachment). Kept so a
+   * row recorded by an earlier release still falls in the report's closed set.
+   */
   'PRODUCT_UNRESOLVED',
   /** Everything holds; P6 adoption decides from here. */
   'ADOPTION_ELIGIBLE',
 ] as const;
 export type ServiceCandidateCategory = (typeof SERVICE_CANDIDATE_CATEGORIES)[number];
 
-/** How a candidate's product would be resolved. */
+/**
+ * Which NEXA product an attached service's order names — for NAVIGATION only (owner rule
+ * 2026-10-18). The service's own facts come from the panel, its line from the invoice's shape,
+ * and a renewal offers the CURRENT sellable plans of its panel; nothing about this product
+ * decides whether the account is attached.
+ */
 export type ServiceProductPath =
-  /** `code_product` names a product the legacy `product` table has: P6 resolves it. */
-  | { readonly kind: 'NAMED_PRODUCT'; readonly codeProduct: string; readonly productId: string }
-  /** No product, a missing product, or a custom service: the hidden legacy product. */
+  /**
+   * `code_product` names a product the legacy `product` table has AND the owner's optional
+   * mapping file maps it. `shapeKey` is the invoice's own shape, the fallback when the mapped
+   * product no longer exists.
+   */
+  | {
+      readonly kind: 'NAMED_PRODUCT';
+      readonly codeProduct: string;
+      readonly productId: string;
+      readonly shapeKey: string;
+    }
+  /**
+   * Everything else — no product, a product nobody mapped, a deleted product, a custom
+   * service, a shape with no current tariff: the hidden legacy product of the invoice's shape.
+   */
   | { readonly kind: 'HIDDEN_SHAPE'; readonly shapeKey: string; readonly custom: boolean };
 
 export type ServiceCandidateDecision =
@@ -254,8 +274,12 @@ export interface ServiceDecisionContext {
   readonly policy: LegacyPanelPolicy;
   readonly inventories: ReadonlyMap<string, PanelInventoryIndex>;
   readonly productCodes: ReadonlySet<string>;
-  /** The owner's explicit `code_product` → NEXA product map (the mapping file). */
+  /** The owner's optional `code_product` → NEXA product map (the mapping file). */
   readonly productMap: ReadonlyMap<string, string>;
+  /**
+   * What the run knows of each shape's current tariff. Reported (evidence, the products
+   * tallies), never a reason to hold an attachment back (owner rule 2026-10-18).
+   */
   readonly tariffOf: (shapeKey: string) => ShapeTariffKnowledge;
 }
 
@@ -325,43 +349,40 @@ export function decideServiceCandidate(
     return { category, map };
   }
 
-  // The flag first, read exactly as the shape key reads it: a value outside 0/1 is the
-  // shape path's IS_CUSTOM_INVALID, never a named product decided on a flag nobody read.
-  const customFlag = legacyCustomFlag(invoice.isCustom);
-  if (customFlag === null) {
+  /*
+   * Owner rule 2026-10-18: the account is on a connected panel, so it is ATTACHED — a product
+   * (missing, unknown, deleted, unmapped, or a shape with no current tariff) never holds it
+   * back. The order still has to name a product row for navigation, and the import never
+   * invents one: it is the hidden legacy product of the invoice's own shape, which the products
+   * phase ensures for every candidate whose shape can be keyed. Only a shape that cannot be
+   * keyed at all (a volume or duration the import cannot read, an `is_custom` outside 0/1) has
+   * no such row, and stays UNSUPPORTED_SHAPE for a person.
+   */
+  const keyed = legacyShapeKey({
+    codePanel: invoice.codePanel,
+    volume: invoice.volume,
+    serviceTime: invoice.serviceTime,
+    timeUnit: invoice.timeUnit,
+    isCustom: invoice.isCustom,
+  });
+  if (!keyed.ok) {
     return {
       category: 'UNSUPPORTED_SHAPE',
       map: INVOICE_MAP_DECISIONS.UNSUPPORTED_SHAPE,
-      shapeReason: 'IS_CUSTOM_INVALID',
+      shapeReason: keyed.reason,
     };
   }
   const codeProduct = invoice.codeProduct?.trim() ?? '';
-  const custom = customFlag;
-  let product: ServiceProductPath;
-  if (codeProduct !== '' && !custom && ctx.productCodes.has(codeProduct)) {
-    // A named legacy product renews as the NEXA product the owner mapped it to, and only
-    // that: no mapping is PRODUCT_MAPPING_UNRESOLVED, never a product picked by shape.
-    const productId = ctx.productMap.get(codeProduct);
-    if (productId === undefined) return held('PRODUCT_UNRESOLVED');
-    product = { kind: 'NAMED_PRODUCT', codeProduct, productId };
-  } else {
-    const keyed = legacyShapeKey({
-      codePanel: invoice.codePanel,
-      volume: invoice.volume,
-      serviceTime: invoice.serviceTime,
-      timeUnit: invoice.timeUnit,
-      isCustom: invoice.isCustom,
-    });
-    if (!keyed.ok) {
-      return {
-        category: 'UNSUPPORTED_SHAPE',
-        map: INVOICE_MAP_DECISIONS.UNSUPPORTED_SHAPE,
-        shapeReason: keyed.reason,
-      };
-    }
-    if (ctx.tariffOf(keyed.key) !== 'RESOLVED') return held('PRODUCT_UNRESOLVED');
-    product = { kind: 'HIDDEN_SHAPE', shapeKey: keyed.key, custom: keyed.shape.isCustom };
-  }
+  // A named legacy product the owner's optional mapping file maps is named on the order; any
+  // other is the shape's hidden product. Neither is a condition of the attachment.
+  const mappedProductId =
+    codeProduct !== '' && !keyed.shape.isCustom && ctx.productCodes.has(codeProduct)
+      ? ctx.productMap.get(codeProduct)
+      : undefined;
+  const product: ServiceProductPath =
+    mappedProductId === undefined
+      ? { kind: 'HIDDEN_SHAPE', shapeKey: keyed.key, custom: keyed.shape.isCustom }
+      : { kind: 'NAMED_PRODUCT', codeProduct, productId: mappedProductId, shapeKey: keyed.key };
   return {
     category: 'ADOPTION_ELIGIBLE',
     panelId: match.panelId,
@@ -433,6 +454,8 @@ function held(category: HeldCategory): ServiceCandidateDecision {
 export const INVENTORY_DERIVED_CATEGORIES: ReadonlySet<ServiceCandidateCategory> = new Set([
   'INVENTORY_INCOMPLETE',
   'PROVIDER_MISSING',
+  // Owner rule 2026-10-18: a panel-less row is decided by the connected panels' inventories.
+  'NO_PANEL',
   'AMBIGUOUS_PANEL',
   'USERNAME_CASE_COLLISION',
   'UNSUPPORTED_SHAPE',

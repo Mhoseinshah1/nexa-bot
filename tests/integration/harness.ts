@@ -14,7 +14,11 @@ import { connectionIdentityOf } from '../../apps/api/src/modules/platform/panels
 import { DrizzlePanelRepository } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel.repository';
 import { providerAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
 import { Redis } from 'ioredis';
-import { createContainer, type Container } from '../../apps/api/src/container';
+import {
+  createContainer,
+  type Container,
+  type ContainerOptions,
+} from '../../apps/api/src/container';
 import { loadConfig } from '../../apps/api/src/infrastructure/config/load-config';
 import type { AppConfig } from '../../apps/api/src/infrastructure/config/config.schema';
 import { runMigrations } from '../../apps/api/src/infrastructure/persistence/migrate';
@@ -230,11 +234,12 @@ export interface TestContext {
 
 export async function createTestContext(
   overrides: Partial<NodeJS.ProcessEnv> = {},
+  containerOptions: ContainerOptions = {},
 ): Promise<TestContext> {
   const config = testConfig(overrides);
   await migrateOnce(config.DATABASE_URL);
 
-  const container = createContainer(config, 'worker');
+  const container = createContainer(config, 'worker', containerOptions);
 
   return {
     container,

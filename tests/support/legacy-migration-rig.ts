@@ -742,7 +742,7 @@ export function rigExecutor(
     // A development database name: not production-like (the guard's own classification).
     target: { host: '127.0.0.1', port: '5432', database: 'nexa_test' },
     guardEnv: () => ({ NODE_ENV: 'development' }),
-    logger: { warn: keep('warn'), error: keep('error') },
+    logger: { info: keep('info'), warn: keep('warn'), error: keep('error') },
   });
   const runner = options.runner === undefined ? adapters : options.runner(adapters);
   const history = options.history === undefined ? adapters : options.history(adapters);

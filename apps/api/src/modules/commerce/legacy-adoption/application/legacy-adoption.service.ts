@@ -38,7 +38,6 @@ import {
 import type { PanelCapacityRepository } from '../../../platform/panels/application/capacity-ports.js';
 import type { ProductRepository } from '../../catalog/application/ports.js';
 import type { LegacyProductShapeRepository } from '../../catalog/application/legacy-product-ports.js';
-import { legacyShapeAdoptable } from '../../catalog/application/legacy-product.service.js';
 import type { ServiceSecretSource } from '../../provisioning/application/ports.js';
 import type { ServiceReminderService } from '../../provisioning/application/service-reminder.service.js';
 import { namespaceKeyFor } from '../../provisioning/application/username-allocator.js';
@@ -175,6 +174,13 @@ export function adoptionRequestHash(command: LegacyAdoptionCommand): string {
     command.productId,
     command.legacyPurchasedAt?.toISOString() ?? null,
     command.expectedCustomerId ?? null,
+    // Only when it differs from the order's product, so every request whose line IS that
+    // product hashes exactly as before (a resumed run replays its own key).
+    ...(command.lineProductId === undefined ||
+    command.lineProductId === null ||
+    command.lineProductId === command.productId
+      ? []
+      : [command.lineProductId]),
   ]);
   return createHash('sha256').update(canonical).digest('hex');
 }
@@ -205,8 +211,9 @@ export class LegacyAdoptionService {
    *
    * Nothing is guessed in the translation. The match is the importer's ELIGIBLE decision
    * restated (its exact spelling, its lowercase fold); a hidden shape names its product
-   * through the shape row; a NAMED legacy product without an explicit NEXA product id is
-   * `PRODUCT_MAPPING_UNRESOLVED`. The idempotency key is derived from the run and the
+   * through the shape row; a NAMED legacy product names the product the owner mapped it to,
+   * or — that product gone — its shape's hidden product (owner rule 2026-10-18: a product
+   * never holds an attachment back). The idempotency key is derived from the run and the
    * invoice, so a resumed run replays and a later run decides again.
    */
   async adoptCandidate(
@@ -214,15 +221,24 @@ export class LegacyAdoptionService {
     actor: ActorContext,
     candidate: LegacyAdoptionCandidate,
   ): Promise<LegacyAdoptionOutcome> {
+    const shapeProduct = async (shapeId: string | undefined): Promise<string | null> => {
+      if (shapeId === undefined || shapeId === '') return null;
+      return (await this.deps.shapes.findById(scope, shapeId))?.productId ?? null;
+    };
     let productId: string | null;
+    // The order LINE is always the invoice's own shape (its hidden product), whatever product
+    // the order names for navigation (Codex on #292).
+    let lineProductId: string | null;
     if (candidate.product.kind === 'HIDDEN_SHAPE') {
-      const shape =
-        candidate.product.shapeId === ''
-          ? null
-          : await this.deps.shapes.findById(scope, candidate.product.shapeId);
-      productId = shape?.productId ?? null;
+      productId = await shapeProduct(candidate.product.shapeId);
+      lineProductId = productId;
     } else {
-      productId = candidate.product.productId ?? null;
+      const mapped = candidate.product.productId ?? null;
+      lineProductId = await shapeProduct(candidate.product.fallbackShapeId);
+      productId =
+        mapped !== null && (await this.deps.products.findById(scope, mapped as ProductId)) !== null
+          ? mapped
+          : lineProductId;
     }
     const command: Omit<LegacyAdoptionCommand, 'idempotencyKey'> = {
       runId: candidate.runId,
@@ -237,6 +253,7 @@ export class LegacyAdoptionService {
       },
       runtime: candidate.runtime,
       productId,
+      lineProductId,
       legacyPurchasedAt: candidate.legacyPurchasedAt ?? null,
       expectedCustomerId: candidate.customerId,
     };
@@ -481,33 +498,32 @@ export class LegacyAdoptionService {
       return review('CONFLICTING_EXISTING_ENTITY');
     }
 
+    /*
+     * Owner rule 2026-10-18: a product NEVER holds an account on the panel back. The order
+     * names a product row because every NEW_SERVICE order must (`orders_product_purpose_check`)
+     * — navigation only, free (`orders_legacy_adoption_shape_check`), its line the shape the
+     * customer bought. Whether that product is live, priced, resolved or shape-compatible is no
+     * longer asked: the service's facts are the panel's, and its renewal offers the CURRENT
+     * sellable plans of its panel (`CommercialActionService`), never this product. Only an id
+     * that names no row at all is review — the import never invents a product.
+     */
     if (command.productId === null) return review('PRODUCT_MAPPING_UNRESOLVED');
     const product = await this.deps.products.findById(scope, command.productId as ProductId, tx);
     if (product === null) return review('PRODUCT_MAPPING_UNRESOLVED');
-    const shapeId = await this.deps.store.shapeIdForProduct(scope, product.id, tx);
+    // The line's own product: the invoice's shape. A mapped product of another traffic or
+    // length is navigation only and never what the history says was bought (Codex on #292).
+    const lineProduct =
+      command.lineProductId === undefined ||
+      command.lineProductId === null ||
+      command.lineProductId === product.id
+        ? product
+        : ((await this.deps.products.findById(scope, command.lineProductId as ProductId, tx)) ??
+          product);
     const currency = await this.deps.settings.valueOf<SalesCurrencyCode>(
       scope,
       'sales.currency',
       tx,
     );
-    if (shapeId !== null) {
-      const shape = await this.deps.shapes.findById(scope, shapeId, tx);
-      if (!legacyShapeAdoptable(shape, product)) return review('PRODUCT_MAPPING_UNRESOLVED');
-    } else if (product.status !== 'ACTIVE' || product.price === null) {
-      return review('PRODUCT_MAPPING_UNRESOLVED');
-    }
-    if (product.price === null || product.price.currency !== currency) {
-      return review('PRODUCT_MAPPING_UNRESOLVED');
-    }
-    // A renewal must be shape-compatible (quoteRenewal): otherwise it is adopted unrenewable.
-    // A FLAGGED account is exempt: an on-hold account has no expiry yet whatever its plan, and
-    // it is adopted for a person to look at rather than lost.
-    if (
-      reviewFlag === null &&
-      (usage.expiresAt !== null) !== product.specification.durationDays > 0
-    ) {
-      return review('PRODUCT_MAPPING_UNRESOLVED');
-    }
 
     // The panel's row lock, the one capacity `reserve` takes first (§3).
     const panel = await this.deps.store.lockPanel(scope, match.panelId, tx);
@@ -530,10 +546,10 @@ export class LegacyAdoptionService {
       productId: product.id,
       currency,
       line: {
-        title: product.title,
-        durationDays: product.specification.durationDays,
-        trafficBytes: product.specification.trafficBytes,
-        deviceLimit: product.specification.deviceLimit,
+        title: lineProduct.title,
+        durationDays: lineProduct.specification.durationDays,
+        trafficBytes: lineProduct.specification.trafficBytes,
+        deviceLimit: lineProduct.specification.deviceLimit,
       },
       state,
       reviewFlag,

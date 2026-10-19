@@ -122,6 +122,17 @@ export interface LegacyServiceCandidateStore {
     keys: readonly string[],
     tx: TransactionScope,
   ): Promise<ReadonlyMap<string, string>>;
+  /**
+   * The ORIGINAL purchase time (`time_sell`, as the archive read it) of each key's latest
+   * VISIBLE archive revision; a key with no archive row, or whose time did not read, is absent.
+   * The invoice archive is read and recorded before the import writes anything, so an
+   * attached service's order can carry the date the customer actually bought it.
+   */
+  latestArchiveSoldAt(
+    scope: TenantContext,
+    keys: readonly string[],
+    tx?: TransactionScope,
+  ): Promise<ReadonlyMap<string, Date>>;
   insert(
     scope: TenantContext,
     row: LegacyServiceOutcomeWrite & {
@@ -130,6 +141,15 @@ export interface LegacyServiceCandidateStore {
     },
     tx: TransactionScope,
   ): Promise<LegacyServiceCandidateRecord>;
+  /** `insert` for many new candidates (each key once): multi-row inserts, the same rows. */
+  insertMany(
+    scope: TenantContext,
+    rows: readonly (LegacyServiceOutcomeWrite & {
+      readonly archiveId: string | null;
+      readonly reviewState: LegacyServiceReviewState;
+    })[],
+    tx: TransactionScope,
+  ): Promise<void>;
   /** The importer's re-decision: a conditional UPDATE at `version` (null when it moved). */
   updateOutcome(
     scope: TenantContext,

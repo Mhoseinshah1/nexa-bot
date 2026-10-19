@@ -48,6 +48,54 @@ import {
 type RunRow = typeof legacyImportRuns.$inferSelect;
 type MapRow = typeof legacyImportMap.$inferSelect;
 
+/** Map rows per INSERT: 13 parameters a row, so 4 000 rows stay under PostgreSQL's 65 535. */
+const MAP_INSERT_CHUNK = 4000;
+
+/** A write's own checks, before any SQL (`recordDecision` and `recordDecisions` alike). */
+function assertMapWrite(write: LegacyImportMapWrite): void {
+  assertLegacyKey(write.legacyTable, write.legacyId);
+  assertSha256(write.checksum, 'checksum');
+  // Item 9: a review row carries a review reason (the CHECK says so too; this makes the
+  // refusal a typed error before SQL).
+  if (
+    write.decision.status === 'MANUAL_REVIEW' &&
+    !isLegacyReviewReasonCode(write.decision.reasonCode)
+  ) {
+    throw errors.validation(
+      LEGACY_IMPORT_ERROR_CODES.INVALID,
+      'a manual-review decision carries a closed review reason',
+    );
+  }
+}
+
+/** The columns a decision sets, on insert and on update. */
+function mapValues(write: LegacyImportMapWrite) {
+  const d = write.decision;
+  return {
+    runId: write.runId,
+    checksum: write.checksum,
+    status: d.status,
+    reasonCode: d.reasonCode,
+    entityType: d.status === 'IMPORTED' ? d.entityType : null,
+    entityId: d.status === 'IMPORTED' ? d.entityId : null,
+  };
+}
+
+/** A new map row for `write`. */
+function mapInsertValues(tenantId: string, write: LegacyImportMapWrite) {
+  return {
+    tenantId,
+    legacyTable: write.legacyTable,
+    legacyId: write.legacyId,
+    ...mapValues(write),
+    // Item 9: every row enters review OPEN.
+    reviewState: write.decision.status === 'MANUAL_REVIEW' ? ('OPEN' as const) : null,
+    attempts: 1,
+    createdAt: write.now,
+    updatedAt: write.now,
+  };
+}
+
 /**
  * `legacy_import_runs` / `legacy_import_map` in PostgreSQL. Every statement names the tenant
  * in its WHERE clause, including the primary-key lookups, so another tenant's run or row
@@ -322,42 +370,142 @@ export class DrizzleLegacyImportRepository implements LegacyImportRepository {
     return toRun(row);
   }
 
+  async recordDryRunDecisions(
+    scope: TenantContext,
+    runId: string,
+    counts: Readonly<Partial<Record<LegacyImportMapStatus, number>>>,
+    now: Date,
+    tx: unknown,
+  ): Promise<LegacyImportRunRecord> {
+    const tenantId = requireTenantId(scope);
+    const by = (status: LegacyImportMapStatus): number => {
+      const n = counts[status] ?? 0;
+      if (!Number.isSafeInteger(n) || n < 0) {
+        throw errors.validation(LEGACY_IMPORT_ERROR_CODES.INVALID, 'a decision count is a count');
+      }
+      return n;
+    };
+    // One conditional UPDATE, as `recordDryRunDecision`: the same predicate, the same lock.
+    const rows = await this.exec(tx)
+      .update(legacyImportRuns)
+      .set({
+        rowsImported: sql`${legacyImportRuns.rowsImported} + ${by('IMPORTED')}`,
+        rowsSkipped: sql`${legacyImportRuns.rowsSkipped} + ${by('SKIPPED')}`,
+        rowsManualReview: sql`${legacyImportRuns.rowsManualReview} + ${by('MANUAL_REVIEW')}`,
+        rowsFailed: sql`${legacyImportRuns.rowsFailed} + ${by('FAILED')}`,
+        lastProgressAt: sql`GREATEST(${legacyImportRuns.lastProgressAt}, ${now})`,
+      })
+      .where(
+        and(
+          eq(legacyImportRuns.tenantId, tenantId),
+          eq(legacyImportRuns.id, runId),
+          eq(legacyImportRuns.status, 'RUNNING'),
+          eq(legacyImportRuns.mode, 'DRY_RUN'),
+        ),
+      )
+      .returning();
+    const row = rows[0];
+    if (row === undefined) return this.refuseRun(scope, runId, tx);
+    return toRun(row);
+  }
+
   async recordDecision(
     scope: TenantContext,
     write: LegacyImportMapWrite,
     tx: unknown,
   ): Promise<LegacyImportMapWriteOutcome> {
     const tenantId = requireTenantId(scope);
-    assertLegacyKey(write.legacyTable, write.legacyId);
-    assertSha256(write.checksum, 'checksum');
-    // Item 9: a review row carries a review reason (the CHECK says so too; this makes the
-    // refusal a typed error before SQL).
-    if (
-      write.decision.status === 'MANUAL_REVIEW' &&
-      !isLegacyReviewReasonCode(write.decision.reasonCode)
-    ) {
+    assertMapWrite(write);
+    const db = this.exec(tx);
+    await this.assertRunWritable(db, tenantId, write.runId, [write.legacyTable]);
+
+    const inserted = await db
+      .insert(legacyImportMap)
+      .values(mapInsertValues(tenantId, write))
+      .onConflictDoNothing({
+        target: [legacyImportMap.tenantId, legacyImportMap.legacyTable, legacyImportMap.legacyId],
+      })
+      .returning();
+    const fresh = inserted[0];
+    if (fresh !== undefined) return { kind: 'INSERTED', record: toMap(fresh) };
+    return this.writeOverExisting(db, tenantId, write);
+  }
+
+  async recordDecisions(
+    scope: TenantContext,
+    writes: readonly LegacyImportMapWrite[],
+    tx: unknown,
+  ): Promise<LegacyImportMapWriteOutcome[]> {
+    if (writes.length === 0) return [];
+    const tenantId = requireTenantId(scope);
+    for (const write of writes) assertMapWrite(write);
+    const runId = writes[0]?.runId as string;
+    const keyOf = (w: { legacyTable: string; legacyId: string }) =>
+      `${w.legacyTable}\u0000${w.legacyId}`;
+    if (writes.some((w) => w.runId !== runId)) {
       throw errors.validation(
         LEGACY_IMPORT_ERROR_CODES.INVALID,
-        'a manual-review decision carries a closed review reason',
+        'one batch of map writes names one run',
       );
     }
     const db = this.exec(tx);
+    await this.assertRunWritable(db, tenantId, runId, [
+      ...new Set(writes.map((w) => w.legacyTable)),
+    ]);
+    // A key's FIRST write goes in the multi-row insert; a later write of the same key in the
+    // batch (a source with duplicate ids) meets that row exactly as a second `recordDecision`
+    // call would, after it, in order.
+    const firsts = new Map<string, LegacyImportMapWrite>();
+    for (const write of writes) if (!firsts.has(keyOf(write))) firsts.set(keyOf(write), write);
+    const toInsert = [...firsts.values()];
+    const fresh = new Map<string, LegacyImportMapRecord>();
+    for (let i = 0; i < toInsert.length; i += MAP_INSERT_CHUNK) {
+      const chunk = toInsert.slice(i, i + MAP_INSERT_CHUNK);
+      const rows = await db
+        .insert(legacyImportMap)
+        .values(chunk.map((write) => mapInsertValues(tenantId, write)))
+        .onConflictDoNothing({
+          target: [legacyImportMap.tenantId, legacyImportMap.legacyTable, legacyImportMap.legacyId],
+        })
+        .returning();
+      for (const row of rows) fresh.set(keyOf(row), toMap(row));
+    }
+    const outcomes: LegacyImportMapWriteOutcome[] = [];
+    for (const write of writes) {
+      const record = firsts.get(keyOf(write)) === write ? fresh.get(keyOf(write)) : undefined;
+      outcomes.push(
+        record !== undefined
+          ? { kind: 'INSERTED', record }
+          : await this.writeOverExisting(db, tenantId, write),
+      );
+    }
+    return outcomes;
+  }
 
-    // The run must be RUNNING, APPLY and THIS tenant's — read under FOR SHARE so a
-    // concurrent finish waits for this write before it snapshots its counters. The "adopt
-    // approved" lane is a run too, and writes INVOICE rows only (P6's adoption of an
-    // approved invoice): never a customer's row, whatever its caller asks.
+  /**
+   * The run must be RUNNING, APPLY and THIS tenant's — read under FOR SHARE so a concurrent
+   * finish waits for this write before it snapshots its counters. The "adopt approved" lane
+   * is a run too, and writes INVOICE rows only (P6's adoption of an approved invoice): never
+   * a customer's row, whatever its caller asks.
+   */
+  private async assertRunWritable(
+    db: Executor,
+    tenantId: string,
+    runId: string,
+    legacyTables: readonly string[],
+  ): Promise<void> {
     const runs = await db
       .select({ status: legacyImportRuns.status, mode: legacyImportRuns.mode })
       .from(legacyImportRuns)
-      .where(and(eq(legacyImportRuns.tenantId, tenantId), eq(legacyImportRuns.id, write.runId)))
+      .where(and(eq(legacyImportRuns.tenantId, tenantId), eq(legacyImportRuns.id, runId)))
       .for('share');
     const run = runs[0];
     if (run === undefined) {
       throw errors.notFound(LEGACY_IMPORT_ERROR_CODES.RUN_NOT_FOUND, 'No such legacy import run.');
     }
     const writable =
-      run.mode === 'APPLY' || (run.mode === 'ADOPT_APPROVED' && write.legacyTable === 'invoice');
+      run.mode === 'APPLY' ||
+      (run.mode === 'ADOPT_APPROVED' && legacyTables.every((t) => t === 'invoice'));
     if (run.status !== 'RUNNING' || !writable) {
       throw errors.conflict(
         LEGACY_IMPORT_ERROR_CODES.RUN_NOT_WRITABLE,
@@ -365,37 +513,16 @@ export class DrizzleLegacyImportRepository implements LegacyImportRepository {
         { status: run.status, mode: run.mode },
       );
     }
+  }
 
+  /** A key that already has a row: locked, decided by `decideMapWrite`, updated or refused. */
+  private async writeOverExisting(
+    db: Executor,
+    tenantId: string,
+    write: LegacyImportMapWrite,
+  ): Promise<LegacyImportMapWriteOutcome> {
     const d = write.decision;
-    const values = {
-      runId: write.runId,
-      checksum: write.checksum,
-      status: d.status,
-      reasonCode: d.reasonCode,
-      entityType: d.status === 'IMPORTED' ? d.entityType : null,
-      entityId: d.status === 'IMPORTED' ? d.entityId : null,
-    };
-
-    const inserted = await db
-      .insert(legacyImportMap)
-      .values({
-        tenantId,
-        legacyTable: write.legacyTable,
-        legacyId: write.legacyId,
-        ...values,
-        // Item 9: every row enters review OPEN.
-        reviewState: d.status === 'MANUAL_REVIEW' ? 'OPEN' : null,
-        attempts: 1,
-        createdAt: write.now,
-        updatedAt: write.now,
-      })
-      .onConflictDoNothing({
-        target: [legacyImportMap.tenantId, legacyImportMap.legacyTable, legacyImportMap.legacyId],
-      })
-      .returning();
-    const fresh = inserted[0];
-    if (fresh !== undefined) return { kind: 'INSERTED', record: toMap(fresh) };
-
+    const values = mapValues(write);
     const key = and(
       eq(legacyImportMap.tenantId, tenantId),
       eq(legacyImportMap.legacyTable, write.legacyTable),

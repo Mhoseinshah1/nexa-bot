@@ -1676,12 +1676,13 @@ export const WEB_FA = {
   'web.users_search_denied':
     'برای جست‌وجو به دسترسی users.search نیاز است. فهرست بدون جست‌وجو در دسترس شماست.',
   'web.users_filter_all': 'همه',
-  // The Mirza import's provenance (owner decision 2026-10-17): the row badge and the «منبع» filter.
-  'web.source_badge_mirza': 'از میرزا',
+  // The import's provenance (owner decision 2026-10-17): the row badge and the «منبع» filter.
+  // Neutral wording (owner decision 2026-10-18): no «میرزا» outside the one-time import page.
+  'web.source_badge_mirza': 'منتقل‌شده',
   'web.source_filter': 'منبع',
   'web.source_filter_all': 'همه',
   'web.source_nexa': 'NEXA',
-  'web.source_mirza': 'میرزا',
+  'web.source_mirza': 'ربات قبلی',
   'web.user_telegram_id': 'شناسهٔ تلگرام',
   'web.user_username': 'نام کاربری',
   'web.user_name': 'نام',
@@ -1987,9 +1988,9 @@ export const WEB_FA = {
     'تراکنش‌های کیف پول قابل ویرایش یا حذف نیستند. اصلاح یک اشتباه، یک تراکنش جدید در جهت مخالف است.',
   'web.wallet_denied': 'برای دیدن کیف پول دسترسی users.view لازم است.',
   'web.wallet_balance_negative': 'بدهکار',
-  'web.wallet_imported_title': 'تاریخچهٔ کیف پول در میرزا',
+  'web.wallet_imported_title': 'تاریخچهٔ کیف پول در ربات قبلی',
   'web.wallet_imported_hint':
-    'این ردیف‌ها تاریخچهٔ میرزا هستند و در موجودی NEXA جمع نمی‌شوند؛ موجودی میرزا یک‌بار به‌صورت موجودی اولیه وارد شده است.',
+    'این ردیف‌ها تاریخچهٔ ربات قبلی هستند و در موجودی NEXA جمع نمی‌شوند؛ موجودی ربات قبلی یک‌بار به‌صورت موجودی اولیه وارد شده است.',
   'web.wallet_imported_wheel': 'گردونهٔ شانس',
   'web.wallet_balance_negative_hint':
     'موجودی منفی بدهی پیشین یک نماینده است: خریدی که پیش از حذف خرید اعتباری از اعتبار او برداشته شد. هیچ خریدی دیگر موجودی را زیر صفر نمی‌برد. این عدد همان مجموع تراکنش‌هاست؛ بدهی سر جای خود می‌ماند، وصول یا جریمه نمی‌شود و فقط با شارژ یا اعتبار دستی جبران می‌شود.',
@@ -3211,6 +3212,12 @@ export const WEB_FA = {
   'web.products_search_title_hint': 'ابتدای عنوان کافی است.',
   'web.products_search_empty': 'محصولی با این عنوان پیدا نشد.',
   'web.products_search_empty_hint': 'عبارت را کوتاه‌تر کنید یا جست‌وجو را پاک کنید.',
+  // The products list's two tabs: the working list and the import's historical archive.
+  'web.products_view_current': 'محصولات جاری',
+  'web.products_view_archive': 'آرشیو',
+  'web.products_archive_intro':
+    'محصولات تاریخچه‌ای که هنگام انتقال اطلاعات برای سفارش‌ها و سرویس‌های قدیمی ساخته شده‌اند: غیرفعال، پنهان و بدون پنل. فروخته نمی‌شوند و چون سابقه به آن‌ها ارجاع می‌دهد، هرگز حذف نمی‌شوند.',
+  'web.products_archive_empty': 'آرشیو خالی است.',
   'web.product_title': 'عنوان',
   'web.product_description': 'توضیح',
   'web.product_description_hint':
@@ -3961,6 +3968,8 @@ export const WEB_FA = {
   // R1: the free trial per panel — its tab on the panel page and the Trials page overview.
   'web.panel_tab_trial': 'سرویس تست',
   'web.service_trial_badge': 'سرویس تست',
+  'web.service_original_product': 'محصول اصلی',
+  'web.service_original_price': 'مبلغ اصلی',
   'web.panel_trial_title': 'سرویس تست این پنل',
   'web.panel_trial_hint':
     'سرویس تست مستقل از محصولات فروشی است و فقط از همین‌جا روشن، خاموش و تنظیم می‌شود. وقتی به مشتری پیشنهاد می‌شود که اینجا روشن باشد، این پنل بتواند سرویس جدید بپذیرد و ساخت نام کاربری خودکار در آن مجاز باشد. تعداد دفعات مجاز برای هر مشتری در صفحهٔ تنظیمات است. تغییر این مقادیر روی سرویس‌های تستی که قبلاً داده شده‌اند اثری ندارد.',
@@ -5250,9 +5259,6 @@ export const WEB_FA = {
   'web.reseller_status_all': 'همه',
   'web.reseller_status_active': 'فعال',
   'web.reseller_status_suspended': 'معلق',
-  'web.reseller_imported_cap': 'سقف خرید در میرزا (اعمال نمی‌شود)',
-  'web.reseller_imported_cap_hint':
-    'این عدد فقط سقفی است که میرزا برای این نماینده گذاشته بود. نه موجودی کیف پول است و نه اعتبار: هیچ‌جا اعمال نمی‌شود و خرید را محدود یا آزاد نمی‌کند.',
   'web.reseller_status_hint': 'نمایندهٔ معلق با قیمت فهرست خرید می‌کند، درست مانند مشتری عادی.',
   'web.reseller_pricing': 'قیمت‌گذاری',
   'web.reseller_pricing_hint':
@@ -5489,7 +5495,7 @@ export const WEB_FA = {
   'web.reseller_minimum_rule_notices':
     'یادآوری چند روز پیش از پایان ماه (پیش‌فرض سه روز) و پیام رسیدن به حداقل، هر کدام حداکثر یک بار در ماه برای هر نماینده فرستاده می‌شوند؛ هر دو را از صفحهٔ قابلیت‌ها روشن یا خاموش کنید و تعداد روزها را از تنظیمات تغییر دهید.',
   'web.reseller_minimum_rule_mirza':
-    'در میرزا گفته شده نماینده‌ای که به حداقل نرسد نمایندگی‌اش را از دست می‌دهد، اما این رفتار هرگز مشاهده نشده و معیار آن نامعلوم است؛ برای همین در نکسا پیاده نشده است.',
+    'در ربات قبلی گفته شده نماینده‌ای که به حداقل نرسد نمایندگی‌اش را از دست می‌دهد، اما این رفتار هرگز مشاهده نشده و معیار آن نامعلوم است؛ برای همین در نکسا پیاده نشده است.',
   'web.reseller_minimum_features_link': 'قابلیت‌ها',
   'web.reseller_minimum_settings_link': 'تنظیمات',
   'web.reseller_policy_open': 'سیاست مؤثر',
@@ -8514,12 +8520,12 @@ export const WEB_FA = {
   // --- end Roadmap B5/B6 (Agent 2b) ---
   // Mirza migration PR2: the legacy product review.
   'web.nav_legacy_products': 'بازبینی محصولات قدیمی',
-  'web.perm_legacy_products_view': 'دیدن بازبینی محصولات ربات قدیمی (میرزا)',
+  'web.perm_legacy_products_view': 'دیدن بازبینی محصولات ربات قبلی',
   'web.perm_legacy_products_decide': 'تأیید، رد یا بازگشایی محصولات قدیمی برای نگاشت مهاجرت',
   'web.perm_domain_legacy': 'مهاجرت از ربات قدیمی',
   'web.lpr_title': 'بازبینی محصولات قدیمی',
   'web.lpr_subtitle':
-    'محصولات ربات قدیمی (میرزا) که برای مهاجرت خوانده شده‌اند؛ هر کد را یک‌به‌یک بررسی و تصمیم‌گیری کنید.',
+    'محصولات ربات قبلی که برای مهاجرت خوانده شده‌اند؛ هر کد را یک‌به‌یک بررسی و تصمیم‌گیری کنید.',
   'web.lpr_banner':
     'هیچ چیزی در این صفحه فروخته، قیمت‌گذاری یا فعال نمی‌شود. تأیید فقط کد قدیمی را برای فایل نگاشت درون‌ریزی مشخص می‌کند. قیمت قدیمی صرفاً سابقه است و هرگز قیمت فروش نمی‌شود.',
   'web.lpr_state_pending': 'در انتظار بازبینی',
@@ -8622,7 +8628,7 @@ export const WEB_FA = {
     'بررسی سرویس قدیمی (تأیید دیدن، نگه‌داشتن به‌عنوان سابقه، بازگشایی، تأیید انتقال)',
   'web.lsr_title': 'سرویس‌های ربات قدیمی',
   'web.lsr_subtitle':
-    'هر فاکتور فعال ربات قدیمی (میرزا) یک نتیجه دارد؛ آن‌هایی که منتقل نشده‌اند به‌عنوان سابقه بایگانی می‌مانند.',
+    'هر فاکتور فعال ربات قبلی یک نتیجه دارد؛ آن‌هایی که منتقل نشده‌اند به‌عنوان سابقه بایگانی می‌مانند.',
   'web.lsr_banner':
     'فاکتوری که کد پنل ندارد هرگز خودکار منتقل نمی‌شود. «تأیید انتقال» چیزی را منتقل نمی‌کند: اجرای بعدی واردکردن همه بررسی‌ها را دوباره روی فهرست زنده حساب‌های پنل انجام می‌دهد و فقط اگر همه درست باشد سرویس را منتقل می‌کند؛ هیچ تغییری در پنل داده نمی‌شود.',
   'web.lsr_summary_title': 'نتیجه‌ها',
@@ -8691,7 +8697,7 @@ export const WEB_FA = {
   'web.lsr_approved_waiting':
     'انتقال تأیید شده و منتظر اجراست: اجرای بعدی واردکردن، یا پس از بازیابی کامل‌شده «اجرای انتقال‌های تأییدشده» در صفحهٔ بکاپ و بازیابی.',
   'web.lsr_approvals_waiting':
-    'انتقال‌های تأییدشده‌ای منتظر اجرا هستند. اگر بازیابی از میرزا کامل شده است، همان بستهٔ میرزا را در «بکاپ و بازیابی ← عملیات بازیابی» دوباره بارگذاری کنید و «اجرای انتقال‌های تأییدشده» را بزنید. فقط همین موردها دوباره بررسی می‌شوند و هیچ تغییری در پنل داده نمی‌شود.',
+    'انتقال‌های تأییدشده‌ای منتظر اجرا هستند. اگر بازیابی از ربات قبلی کامل شده است، همان بستهٔ ربات قبلی (‎.nxpkg‎) را در «بکاپ و بازیابی ← عملیات بازیابی» دوباره بارگذاری کنید و «اجرای انتقال‌های تأییدشده» را بزنید. فقط همین موردها دوباره بررسی می‌شوند و هیچ تغییری در پنل داده نمی‌شود.',
   'web.lsr_approvals_waiting_count': 'تأییدشده و منتظر اجرا',
   'web.lsr_approvals_waiting_link': 'رفتن به بکاپ و بازیابی',
   'web.lsr_reason': 'دلیل',
@@ -8793,12 +8799,12 @@ export const WEB_FA = {
   'web.perm_legacy_cutover_approve':
     'ثبت یا لغو تأیید مالک برای واردکردن یک نسخه از پایگاه ربات قدیمی (انتقال نهایی)',
   // Mirza `.nxpkg` importer (Fresh Migration): the four permissions.
-  'web.perm_legacy_migration_view': 'دیدن بسته‌های مهاجرت از میرزا و گزارش‌های آن‌ها',
+  'web.perm_legacy_migration_view': 'دیدن بسته‌های مهاجرت از ربات قبلی و گزارش‌های آن‌ها',
   'web.perm_legacy_migration_manage':
-    'بارگذاری بستهٔ مهاجرت میرزا، واردکردن کلید، انتخاب پنل و درخواست اجرای آزمایشی',
+    'بارگذاری بستهٔ مهاجرت ربات قبلی، واردکردن کلید، انتخاب پنل و درخواست اجرای آزمایشی',
   'web.perm_legacy_migration_apply':
-    'تأیید نتیجهٔ اجرای آزمایشی و شروع واردکردن بستهٔ میرزا (کاربران و موجودی‌ها را می‌نویسد)',
-  'web.perm_legacy_history_view': 'دیدن سوابق بایگانی‌شدهٔ میرزا برای یک مشتری (فقط خواندنی)',
+    'تأیید نتیجهٔ اجرای آزمایشی و شروع واردکردن بستهٔ ربات قبلی (کاربران و موجودی‌ها را می‌نویسد)',
+  'web.perm_legacy_history_view': 'دیدن سوابق بایگانی‌شدهٔ ربات قبلی برای یک مشتری (فقط خواندنی)',
   // Mirza `.nxpkg` importer: the restore-from-Mirza flow of the recovery page (Phase 7).
   'web.lmg_banner':
     'فقط روی نصب تازه: نکسا باید خالی باشد (بدون مشتری، سفارش، سرویس، پرداخت یا دفتر کیف پول). هیچ چیزی برای جا باز کردن حذف نمی‌شود و هیچ سرویسی روی پنل ساخته، تمدید یا حذف نمی‌شود. کار اصلی را نقش بازیابی (recovery) سرور انجام می‌دهد؛ این صفحه فقط وضعیت را نشان می‌دهد.',
@@ -9018,7 +9024,7 @@ export const WEB_FA = {
   'web.mrz_error_approval_expired':
     'تأیید شما بیش از یک روز منتظر ماند و شروع نشد؛ هیچ داده‌ای وارد نشد. فایل را دوباره بارگذاری و تأیید کنید.',
   'web.recovery_fault_legacy_migration_active':
-    'یک بازیابی از میرزا روی این نصب تأیید شده یا در جریان است؛ پس از پایان آن دوباره تأیید کنید. چیزی تأیید نشد.',
+    'یک بازیابی از ربات قبلی روی این نصب تأیید شده یا در جریان است؛ پس از پایان آن دوباره تأیید کنید. چیزی تأیید نشد.',
   'web.mrz_error_pre_import_backup':
     'بکاپ محافظ پیش از واردکردن گرفته یا راستی‌آزمایی نشد؛ هیچ داده‌ای وارد نشد. وضعیت بکاپ را در بالای همین صفحه بررسی کنید و دوباره بارگذاری کنید.',
   'web.mrz_run_frozen':
@@ -9101,7 +9107,7 @@ export const WEB_FA = {
     'برای برگرداندن این بازیابی، بکاپ محافظ بالا را از تاریخچهٔ بکاپ‌ها دریافت و در همین بخش بازیابی کنید.',
   'web.lco_title': 'تأیید انتقال نهایی',
   'web.lco_subtitle':
-    'تأیید مالک برای واردکردن یک نسخهٔ منجمد از پایگاه ربات قدیمی (میرزا)، بسته به هفت مقدار دقیق.',
+    'تأیید مالک برای واردکردن یک نسخهٔ منجمد از پایگاه ربات قبلی، بسته به هفت مقدار دقیق.',
   'web.lco_banner':
     'این صفحه چیزی وارد نمی‌کند. واردکردن روی سرور اصلی فقط وقتی انجام می‌شود که یک تأیید لغونشده دقیقاً با هر هفت مقدار بخواند؛ تغییر هر مقدار تأیید را باطل می‌کند. تأییدها هرگز ویرایش یا حذف نمی‌شوند؛ فقط لغو می‌شوند.',
   'web.lco_empty': 'هنوز تأییدی ثبت نشده است',
@@ -9205,9 +9211,9 @@ export const WEB_FA = {
   'web.mrz_status_unsuccessful': 'ناموفق (ساخت در پنل شکست خورد)',
   // Customer 360: the customer's Mirza invoices beside the import's outcome.
   // Customer 360: the services card, and the legacy debt beside the wallet.
-  'web.c360_service_from_mirza': 'منتقل‌شده از میرزا',
+  'web.c360_service_from_mirza': 'منتقل‌شده از ربات قبلی',
   'web.c360_service_from_mirza_title':
-    'این حساب پیش از نکسا در میرزا فروخته شده و بدون ساخت دوباره در پنل، به این سامانه منتقل شده است.',
+    'این حساب پیش از نکسا در ربات قبلی فروخته شده و بدون ساخت دوباره در پنل، به این سامانه منتقل شده است.',
   // Every ledger reason, for the wallet history.
   'web.ledger_reason_topup_gateway': 'شارژ با درگاه',
   'web.ledger_reason_topup_receipt': 'شارژ با رسید کارت‌به‌کارت',
@@ -9236,7 +9242,7 @@ export const WEB_FA = {
   'web.ledger_reason_account_transfer_in': 'انتقال موجودی از حساب دیگر',
   'web.ledger_reason_reseller_settlement': 'تسویهٔ نمایندگی',
   'web.ledger_reason_reseller_membership_fee': 'حق عضویت نمایندگی',
-  'web.ledger_reason_migration_opening_balance': 'موجودی منتقل‌شده از میرزا',
+  'web.ledger_reason_migration_opening_balance': 'موجودی منتقل‌شده از ربات قبلی',
   'web.ledger_reason_chargeback': 'برگشت تراکنش بانکی',
   'web.ledger_reason_correction': 'اصلاح',
   'web.ledger_reason_other': 'سایر',
@@ -10246,7 +10252,7 @@ export const WEB_FA = {
   'web.pay_evidence_gateway_callback': 'پیام تأییدشدهٔ درگاه',
   'web.pay_evidence_reconciliation': 'تطبیق با پاسخ درگاه',
   'web.pay_evidence_gateway_inquiry': 'استعلام از درگاه',
-  'web.pay_evidence_legacy_import': 'واردشده از میرزا',
+  'web.pay_evidence_legacy_import': 'واردشده از ربات قبلی',
   'web.pay_receipt_kind_photo': 'عکس',
   'web.pay_receipt_kind_document': 'فایل',
   'web.pay_ledger_credit': 'واریز',

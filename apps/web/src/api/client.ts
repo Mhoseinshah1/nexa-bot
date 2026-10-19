@@ -414,6 +414,7 @@ import {
   type ProductAudience,
   type ProductListResponse,
   type ProductResponse,
+  type ProductListView,
   type ProductStatus,
   type CurrencyCode,
   customerResponseSchema,
@@ -1510,6 +1511,8 @@ export function fetchProducts(
     categoryId?: string;
     /** Only rows from this source (the source filter). */
     source?: RecordSource;
+    /** The current products or the import's historical archive; absent is both. */
+    view?: ProductListView;
   } = {},
 ): Promise<ProductListResponse> {
   const params = new URLSearchParams();
@@ -1518,6 +1521,7 @@ export function fetchProducts(
   if (query.status !== undefined) params.set('status', query.status);
   if (query.audience !== undefined) params.set('audience', query.audience);
   if (query.source !== undefined) params.set('source', query.source);
+  if (query.view !== undefined) params.set('view', query.view);
   // Omitted when empty, so clearing the box is the unfiltered list rather than a
   // search for the empty string.
   if (query.title !== undefined && query.title !== '') params.set('title', query.title);

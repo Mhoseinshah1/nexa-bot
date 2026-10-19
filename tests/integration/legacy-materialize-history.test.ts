@@ -708,9 +708,16 @@ describe('Mirza import: history into the normal tables', () => {
       expect(await ctx.container.hasher.verify('locked', importAdmin[0]?.hash ?? '')).toBe(false);
 
       // The category customers are never offered, and no event left the building.
+      // Neutral wording (owner rule 2026-10-18): no previous-bot name on the ticket pages.
       const [category] = await q<{ is_active: boolean }>(sql`
-        SELECT is_active FROM ticket_categories WHERE title = 'Mirza (imported)'`);
+        SELECT is_active FROM ticket_categories WHERE title = 'منتقل‌شده از ربات قبلی'`);
       expect(category?.is_active).toBe(false);
+      expect(await q(sql`SELECT id FROM ticket_categories WHERE title ILIKE '%mirza%'`)).toEqual(
+        [],
+      );
+      const [author] = await q<{ display_name: string }>(sql`
+        SELECT display_name FROM admins WHERE username = 'mirza-import'`);
+      expect(author?.display_name).toBe('انتقال از ربات قبلی (سیستم)');
       expect(await triggered()).toEqual(before);
       expect(
         await n(
@@ -731,6 +738,79 @@ describe('Mirza import: history into the normal tables', () => {
       expect(
         await q(sql`SELECT id, seq, body, created_at FROM ticket_messages ORDER BY seq`),
       ).toEqual(snapshot);
+    });
+
+    // An upgraded installation: an earlier release filed imported tickets under
+    // 'Mirza (imported)' and snapshotted that title on each ticket. The neutral title must
+    // reach the ticket pages without losing or copying a ticket (Codex on #292).
+    const OLD_TITLE = 'Mirza (imported)';
+    const NEUTRAL = 'منتقل‌شده از ربات قبلی';
+    /** Imports, then puts the category and its tickets back the way the earlier release left them. */
+    async function importUnderOldTitle(): Promise<{ categoryId: string; ticketIds: string[] }> {
+      await seed();
+      await steps().tickets.apply(materializeCtx());
+      const [cat] = await q<{ id: string }>(sql`
+        SELECT id FROM ticket_categories WHERE title = ${NEUTRAL}`);
+      await q(sql`UPDATE ticket_categories SET title = ${OLD_TITLE} WHERE id = ${cat!.id}`);
+      await q(sql`UPDATE tickets SET category_title = ${OLD_TITLE} WHERE category_id = ${cat!.id}`);
+      const ids = await q<{ id: string }>(sql`SELECT id FROM tickets ORDER BY id`);
+      return { categoryId: cat!.id, ticketIds: ids.map((r) => r.id) };
+    }
+    const ticketRows = () =>
+      q<{ id: string; category_id: string; category_title: string }>(sql`
+        SELECT id, category_id, category_title FROM tickets ORDER BY id`);
+
+    it('renames the old category in place on a rerun with nothing left to import', async () => {
+      // MUTATION: not calling retitleLegacyCategory at the start of apply (only from
+      // ensureCategory, which runs only when a ticket is fresh) leaves the old title and fails this.
+      const { categoryId, ticketIds } = await importUnderOldTitle();
+      const again = await steps().tickets.apply(materializeCtx());
+      expect(again).toMatchObject({ written: 0, diverged: 0 });
+      expect(await q(sql`SELECT id, title FROM ticket_categories ORDER BY title`)).toEqual([
+        { id: categoryId, title: NEUTRAL },
+      ]);
+      expect(await ticketRows()).toEqual(
+        ticketIds.map((id) => ({ id, category_id: categoryId, category_title: NEUTRAL })),
+      );
+      // Idempotent: a third run changes nothing.
+      await steps().tickets.apply(materializeCtx());
+      expect(await q(sql`SELECT id, title FROM ticket_categories`)).toEqual([
+        { id: categoryId, title: NEUTRAL },
+      ]);
+    });
+
+    it('when a neutral category already exists, moves the old one’s tickets there and removes it', async () => {
+      // MUTATION: dropping the re-point (or renaming into the neutral title) fails this: the
+      // tickets would keep the old category, or the rename would violate the unique title.
+      const { categoryId: oldId, ticketIds } = await importUnderOldTitle();
+      const neutralId = randomUUID();
+      await q(sql`
+        INSERT INTO ticket_categories (id, tenant_id, title, sort_order, is_active, created_at, updated_at)
+        VALUES (${neutralId}, ${tenantA.tenantId}, ${NEUTRAL}, 0, false, now(), now())`);
+      await steps().tickets.apply(materializeCtx());
+      expect(await q(sql`SELECT id, title FROM ticket_categories`)).toEqual([
+        { id: neutralId, title: NEUTRAL },
+      ]);
+      expect(oldId).not.toBe(neutralId);
+      expect(await ticketRows()).toEqual(
+        ticketIds.map((id) => ({ id, category_id: neutralId, category_title: NEUTRAL })),
+      );
+      expect(await n(sql`SELECT count(*)::text AS n FROM ticket_messages`)).toBe(5);
+    });
+
+    it('a fresh import into a database holding only the old category files new tickets under it, renamed', async () => {
+      await seed();
+      const oldId = randomUUID();
+      await q(sql`
+        INSERT INTO ticket_categories (id, tenant_id, title, sort_order, is_active, created_at, updated_at)
+        VALUES (${oldId}, ${tenantA.tenantId}, ${OLD_TITLE}, 0, false, now(), now())`);
+      await steps().tickets.apply(materializeCtx());
+      expect(await q(sql`SELECT id, title FROM ticket_categories`)).toEqual([
+        { id: oldId, title: NEUTRAL },
+      ]);
+      const used = await q<{ category_id: string; category_title: string }>(sql`
+        SELECT DISTINCT category_id, category_title FROM tickets WHERE source = 'MIRZA'`);
+      expect(used).toEqual([{ category_id: oldId, category_title: NEUTRAL }]);
     });
 
     it('never makes a real administrator named mirza-import the author of Mirza answers', async () => {

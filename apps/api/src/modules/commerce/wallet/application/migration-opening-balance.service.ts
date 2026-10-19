@@ -31,7 +31,13 @@ import type { SettingsResolver } from '../../../control/settings/application/set
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
-import type { WalletEntryRecord, WalletRepository } from './ports.js';
+import { recordAuditMany } from '../../../platform/audit/application/record-audit-many.js';
+import type {
+  WalletAppendResult,
+  WalletEntryDraft,
+  WalletEntryRecord,
+  WalletRepository,
+} from './ports.js';
 
 /**
  * What the migration posts under. `SYSTEM_JOB` holds `SYSTEM_JOB_PERMISSIONS`, which is
@@ -44,8 +50,32 @@ export const MIGRATION_OPENING_BALANCE_PERMISSION: PermissionKey = 'maintenance.
 
 const AUDIT_ACTION = 'wallet.migration_opening_balance';
 
+/**
+ * What `postMany` needs of the ledger beyond `WalletRepository`: the same three operations
+ * for many customers at once (`DrizzleWalletRepository` has them).
+ */
+export interface MigrationOpeningBulkRepository {
+  /** Customer id → its Telegram id, the rows taken `FOR UPDATE` in id order. */
+  lockCustomers(
+    scope: TenantContext,
+    customerIds: readonly UserId[],
+    tx: unknown,
+  ): Promise<ReadonlyMap<string, string | null>>;
+  findByReferences(
+    scope: TenantContext,
+    references: readonly string[],
+    tx?: unknown,
+  ): Promise<ReadonlyMap<string, WalletEntryRecord>>;
+  appendMany(
+    scope: TenantContext,
+    drafts: readonly WalletEntryDraft[],
+    tx: unknown,
+  ): Promise<WalletAppendResult[]>;
+}
+
 export interface MigrationOpeningBalanceDeps {
-  readonly repository: Pick<WalletRepository, 'append' | 'lockCustomer' | 'findByReference'>;
+  readonly repository: Pick<WalletRepository, 'append' | 'lockCustomer' | 'findByReference'> &
+    MigrationOpeningBulkRepository;
   readonly customers: Pick<CustomerRepository, 'findById'>;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
@@ -103,6 +133,14 @@ export type MigrationOpeningBalanceOutcome =
     }
   | { readonly kind: 'ALREADY_POSTED'; readonly entry: WalletEntryRecord }
   | { readonly kind: 'ZERO_NO_ENTRY' };
+
+/**
+ * One command's answer from `postMany`: `post`'s outcome, or `CONFLICT` where `post` would
+ * have thrown `IDEMPOTENCY_PAYLOAD_MISMATCH` (an opening already posted with another figure:
+ * nothing written for it, as `post`'s refusal wrote nothing).
+ */
+export type MigrationOpeningBatchOutcome =
+  MigrationOpeningBalanceOutcome | { readonly kind: 'CONFLICT' };
 
 /**
  * Migration P2 — carries a legacy wallet balance into the ledger, once.
@@ -283,6 +321,228 @@ export class MigrationOpeningBalanceService {
   }
 
   /**
+   * `post` for many customers in ONE transaction and a handful of statements — the one-time
+   * import's opening balances, which `post` would write in a transaction each.
+   *
+   * The same decisions, made the same way, in the same order of checks: every command is
+   * validated before anything is read (a bad id or an amount over the ceiling throws, as
+   * `post` does); the permission is charged once, before the transaction, and again inside it;
+   * the scope must still accept work; every customer must exist and carry the command's
+   * Telegram id and the currency must be the installation's (otherwise it throws and NOTHING
+   * of the batch is written — `post` would have written the commands before it, and the
+   * importer's resume writes them again by reference); every wallet is locked `FOR UPDATE`, in
+   * id order; then per command: an opening already under its reference is `ALREADY_POSTED`
+   * when it is the same and `CONFLICT` when it is not, a zero is `ZERO_NO_ENTRY`, and the rest
+   * are appended in one multi-row insert (idempotent at the database by reference). Every
+   * entry written gets the audit row and the `WalletEntryRecorded` event `post` writes — the
+   * same rows, inserted many at a time.
+   */
+  async postMany(
+    scope: TenantContext,
+    actor: ActorContext,
+    commands: readonly MigrationOpeningBalanceCommand[],
+  ): Promise<MigrationOpeningBatchOutcome[]> {
+    if (commands.length === 0) return [];
+    const parsed = commands.map((command) => {
+      const customerId = this.customerId(command.customerId);
+      const telegramUserId = this.telegramUserId(command.telegramUserId);
+      const magnitude =
+        command.legacyBalanceMinor < 0n ? -command.legacyBalanceMinor : command.legacyBalanceMinor;
+      if (magnitude > PAYMENT_AMOUNT_MAX_MINOR) {
+        throw errors.validation(
+          COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+          'A legacy opening balance is within the amount ceiling.',
+        );
+      }
+      const direction: LedgerDirection = command.legacyBalanceMinor < 0n ? 'DEBIT' : 'CREDIT';
+      return {
+        customerId,
+        telegramUserId,
+        reference: migrationOpeningReference(telegramUserId),
+        magnitude,
+        direction,
+        currency: command.currency,
+      };
+    });
+    if (new Set(parsed.map((p) => p.reference)).size !== parsed.length) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'One batch names each legacy identity once.',
+      );
+    }
+    const denial = { action: AUDIT_ACTION, entityType: 'Wallet', entityId: null };
+    try {
+      await this.deps.guard.check(scope, actor, MIGRATION_OPENING_BALANCE_PERMISSION);
+    } catch (error) {
+      await recordMutationDenial(
+        this.mutationDeps(),
+        scope,
+        actor,
+        MIGRATION_OPENING_BALANCE_PERMISSION,
+        denial,
+        error,
+      );
+      throw error;
+    }
+
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      MIGRATION_OPENING_BALANCE_PERMISSION,
+      denial,
+      async (tx) => {
+        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+            'This installation has stopped accepting work.',
+          );
+        }
+        // `post` reads the customer, then locks the wallet: here one read does both, in id
+        // order, and the checks follow in `post`'s order for each command.
+        const locked = await this.deps.repository.lockCustomers(
+          scope,
+          parsed.map((p) => p.customerId),
+          tx,
+        );
+        const selling = await this.deps.settings.valueOf<SalesCurrencyCode>(
+          scope,
+          'sales.currency',
+          tx,
+        );
+        for (const p of parsed) {
+          if (!locked.has(p.customerId)) {
+            throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+          }
+          if (locked.get(p.customerId) !== p.telegramUserId) {
+            throw errors.validation(
+              COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+              'The legacy identity is not this customer’s Telegram id.',
+            );
+          }
+          if (p.currency !== selling) {
+            throw errors.conflict(
+              COMMERCE_ERROR_CODES.WALLET_CURRENCY_UNSUPPORTED,
+              `This installation sells in ${selling}.`,
+            );
+          }
+        }
+
+        const existing = await this.deps.repository.findByReferences(
+          scope,
+          parsed.map((p) => p.reference),
+          tx,
+        );
+        const outcomes: (MigrationOpeningBatchOutcome | null)[] = parsed.map(() => null);
+        const drafts: WalletEntryDraft[] = [];
+        const draftAt: number[] = [];
+        const now = this.deps.clock.now();
+        parsed.forEach((p, index) => {
+          const prior = existing.get(p.reference);
+          if (prior !== undefined) {
+            outcomes[index] = this.isSameOpening(
+              prior,
+              p.customerId,
+              p.direction,
+              p.magnitude,
+              p.currency,
+            )
+              ? { kind: 'ALREADY_POSTED', entry: prior }
+              : { kind: 'CONFLICT' };
+            return;
+          }
+          if (p.magnitude === 0n) {
+            outcomes[index] = { kind: 'ZERO_NO_ENTRY' };
+            return;
+          }
+          drafts.push({
+            id: this.deps.ids.uuid(),
+            customerId: p.customerId,
+            direction: p.direction,
+            reason: 'MIGRATION_OPENING_BALANCE',
+            amount: money(p.magnitude, p.currency),
+            reference: p.reference,
+            actorAdminId: null,
+            note: null,
+            now,
+          });
+          draftAt.push(index);
+        });
+
+        const appended = await this.deps.repository.appendMany(scope, drafts, tx);
+        const posted: WalletEntryRecord[] = [];
+        appended.forEach(({ entry, inserted }, i) => {
+          const index = draftAt[i] as number;
+          const p = parsed[index] as (typeof parsed)[number];
+          if (!inserted) {
+            outcomes[index] = this.isSameOpening(
+              entry,
+              p.customerId,
+              p.direction,
+              p.magnitude,
+              p.currency,
+            )
+              ? { kind: 'ALREADY_POSTED', entry }
+              : { kind: 'CONFLICT' };
+            return;
+          }
+          const signedAmountMinor = p.direction === 'CREDIT' ? p.magnitude : -p.magnitude;
+          outcomes[index] = { kind: 'POSTED', entry, signedAmountMinor };
+          posted.push(entry);
+        });
+
+        await recordAuditMany(
+          this.deps.audit,
+          scope,
+          actor,
+          posted.map((entry) => {
+            const signed =
+              entry.direction === 'CREDIT' ? entry.amount.amountMinor : -entry.amount.amountMinor;
+            return {
+              action: AUDIT_ACTION,
+              entityType: 'Wallet',
+              entityId: entry.customerId,
+              // No balance, before or after: see `MigrationOpeningBalanceOutcome`.
+              before: null,
+              after: {
+                entryId: entry.id,
+                direction: entry.direction,
+                reason: entry.reason,
+                amountMinor: entry.amount.amountMinor.toString(),
+                currency: entry.amount.currency,
+                signedAmountMinor: signed.toString(),
+              },
+              result: 'SUCCESS' as const,
+            };
+          }),
+          tx,
+        );
+        await this.deps.outbox.writeMany(
+          tx,
+          actor,
+          posted.map((entry) => ({
+            eventType: 'WalletEntryRecorded' as const,
+            aggregateType: 'Wallet' as const,
+            aggregateId: entry.customerId,
+            payload: {
+              customerId: entry.customerId,
+              entryId: entry.id,
+              direction: entry.direction,
+              reason: entry.reason,
+              amountMinor: entry.amount.amountMinor.toString(),
+              currency: entry.amount.currency,
+            },
+          })),
+        );
+        return outcomes.map((outcome) => {
+          if (outcome === null) throw new Error('an opening in the batch was not decided');
+          return outcome;
+        });
+      },
+    );
+  }
+
+  /**
    * The entry already under this reference, if it is the SAME opening; otherwise a
    * refusal. A different figure on a rerun means the source changed or the importer is
    * wrong, and answering with the first figure would hide it.
@@ -294,14 +554,27 @@ export class MigrationOpeningBalanceService {
     magnitude: bigint,
     currency: CurrencyCode,
   ): WalletEntryRecord {
-    const same =
+    if (!this.isSameOpening(existing, customerId, direction, magnitude, currency)) {
+      throw payloadMismatch();
+    }
+    return existing;
+  }
+
+  /** `sameOpening`'s rule, as a verdict (one rule for both paths). */
+  private isSameOpening(
+    existing: WalletEntryRecord,
+    customerId: UserId,
+    direction: LedgerDirection,
+    magnitude: bigint,
+    currency: CurrencyCode,
+  ): boolean {
+    return (
       existing.reason === 'MIGRATION_OPENING_BALANCE' &&
       existing.customerId === customerId &&
       existing.direction === direction &&
       existing.amount.amountMinor === magnitude &&
-      existing.amount.currency === currency;
-    if (!same) throw payloadMismatch();
-    return existing;
+      existing.amount.currency === currency
+    );
   }
 
   private mutationDeps() {

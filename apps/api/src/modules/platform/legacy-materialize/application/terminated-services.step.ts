@@ -81,7 +81,8 @@ export const ENDED_SERVICES_STEP_NAME = 'ended-services';
 export const ENDED_SERVICES_PERMISSION: PermissionKey = 'maintenance.run';
 
 const PAGE_SIZE = 500;
-const WRITE_BATCH = 100;
+/** Invoices per transaction; the ended ones go in multi-row inserts. */
+const WRITE_BATCH = 2000;
 const AUDIT_ACTION = 'legacy.materialize.ended_services';
 
 export interface TerminatedServicesStepDeps {
@@ -356,13 +357,14 @@ export class TerminatedServicesStep implements MaterializeStep {
       let written = 0;
       let alreadyPresent = 0;
       let diverged = 0;
+      const ended: EndedInvoiceInsert[] = [];
       for (const item of batch) {
         const sourceRef = refOf(item);
         const existing = carried.get(sourceRef);
         if (item.kind === 'WRITE') {
           const insert = this.insertFor(ctx, item, sourceRef);
           if (existing === undefined) {
-            await repo.insertEnded(ctx.scope, insert, tx);
+            ended.push(insert);
             written += 1;
           } else if (sameAsCarried(existing, insert)) {
             alreadyPresent += 1;
@@ -381,6 +383,7 @@ export class TerminatedServicesStep implements MaterializeStep {
           }
         }
       }
+      await repo.insertEndedMany(ctx.scope, ended, tx);
       return { written, alreadyPresent, diverged };
     });
   }

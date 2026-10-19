@@ -472,6 +472,27 @@ describe('the service detail', () => {
     expect(screen.getByText(/کاربر تکراری روی پنل/)).toBeInTheDocument();
   });
 
+  it('shows an imported service’s original product and price on one muted line', async () => {
+    stubApi(
+      detail({
+        source: 'MIRZA',
+        original: { productName: 'پلن طلایی', price: { amount: '150000', currency: 'IRT' } },
+      }),
+    );
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
+    const line = await screen.findByTestId('service-original-purchase');
+    expect(line.textContent).toContain('محصول اصلی: پلن طلایی');
+    expect(line.textContent).toContain('مبلغ اصلی:');
+    expect(line.textContent).toContain('150,000');
+  });
+
+  it('draws no original-purchase line for a service that has none', async () => {
+    stubApi(detail({ original: null }));
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
+    await screen.findAllByText(/./u);
+    expect(screen.queryByTestId('service-original-purchase')).toBeNull();
+  });
+
   it('warns that an UNCONFIRMED delivery is not retried automatically', async () => {
     stubApi(detail({ deliveryState: 'UNCONFIRMED', deliveredAt: null }));
     renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);

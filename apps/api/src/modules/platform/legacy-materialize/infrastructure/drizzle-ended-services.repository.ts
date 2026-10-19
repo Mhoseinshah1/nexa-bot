@@ -251,53 +251,77 @@ export class DrizzleEndedServicesRepository implements EndedServicesRepository {
     input: EndedInvoiceInsert,
     tx: TransactionScope,
   ): Promise<void> {
+    await this.insertEndedMany(scope, [input], tx);
+  }
+
+  /**
+   * Each invoice as history: its order and its TERMINATED service, exactly the two rows
+   * `insertEnded` always wrote, many invoices a statement (orders first: a service names its
+   * order).
+   */
+  async insertEndedMany(
+    scope: TenantContext,
+    inputs: readonly EndedInvoiceInsert[],
+    tx: TransactionScope,
+  ): Promise<void> {
     const tenantId = requireTenantId(scope);
-    const quote = historyQuote(
-      input.product.productId,
-      input.purchasedAt,
-      input.amountMinor,
-      input.currency,
-    );
-    /*
-     * The order: a Mirza invoice as history. NEW_SERVICE + LEGACY_HISTORY, PAID at birth at
-     * the invoice's own amount and date, no code, no deadline. `orders_legacy_history_shape_check`
-     * pins MIRZA, no code and a settled state; origin is not a sale (`SALE_ORDER_ORIGINS`), so
-     * no report counts the amount as revenue.
-     */
-    await tx.tx.execute(sql`
-      INSERT INTO orders
-        (id, tenant_id, customer_id, state, purpose, origin, product_id, panel_id, line_title,
-         line_duration_days, line_traffic_bytes, line_device_limit, line_unit_price_amount,
-         line_quantity, subtotal_amount, discount_amount, total_amount, currency, quote,
-         confirmed_at, settled_at, created_at, updated_at, source, source_ref)
-      VALUES
-        (${input.orderId}, ${tenantId}, ${input.customerId}, 'PAID', 'NEW_SERVICE',
-         'LEGACY_HISTORY', ${input.product.productId}, ${input.panelId}, ${input.lineTitle},
-         ${input.product.durationDays}, ${input.product.trafficBytes}, NULL,
-         ${input.amountMinor}, 1, ${input.amountMinor}, 0, ${input.amountMinor},
-         ${input.currency}, ${quote}::jsonb,
-         ${input.purchasedAt}, ${input.purchasedAt}, ${input.purchasedAt}, ${input.now},
-         'MIRZA', ${input.sourceRef})`);
-    /*
-     * The service: TERMINATED at birth. No provisioning operation, no username reservation,
-     * no provider id; `provisioned_at` stays NULL ("this one never reached a panel", the
-     * words `services_provisioned_at_check` uses). `delivery_state` is PENDING by default and
-     * the delivery sweep reads ACTIVE services only. The recorded expiry is the purchase plus
-     * the plan's days, history and nothing else: `services_expiry_idx` is partial on live
-     * states.
-     */
-    await tx.tx.execute(sql`
-      INSERT INTO services
-        (id, tenant_id, customer_id, order_id, panel_id, product_id, state, provider_username,
-         subscription_ref, expires_at, traffic_limit_bytes, traffic_used_bytes,
-         terminated_at, created_at, updated_at, source, source_ref, is_test)
-      VALUES
-        (${input.serviceId}, ${tenantId}, ${input.customerId}, ${input.orderId},
-         ${input.panelId}, ${input.product.productId}, 'TERMINATED', ${input.providerUsername},
-         ${input.subscriptionRef},
-         ${input.product.durationDays > 0 ? sql`${input.purchasedAt}::timestamptz + make_interval(days => ${input.product.durationDays})` : sql`NULL`},
-         ${input.product.trafficBytes}, 0, ${input.now}, ${input.purchasedAt}, ${input.now},
-         'MIRZA', ${input.sourceRef}, ${input.isTest})`);
+    for (let i = 0; i < inputs.length; i += ENDED_INSERT_CHUNK) {
+      const chunk = inputs.slice(i, i + ENDED_INSERT_CHUNK);
+      /*
+       * The orders: a Mirza invoice as history. NEW_SERVICE + LEGACY_HISTORY, PAID at birth at
+       * the invoice's own amount and date, no code, no deadline. `orders_legacy_history_shape_check`
+       * pins MIRZA, no code and a settled state; origin is not a sale (`SALE_ORDER_ORIGINS`), so
+       * no report counts the amount as revenue.
+       */
+      await tx.tx.execute(sql`
+        INSERT INTO orders
+          (id, tenant_id, customer_id, state, purpose, origin, product_id, panel_id, line_title,
+           line_duration_days, line_traffic_bytes, line_device_limit, line_unit_price_amount,
+           line_quantity, subtotal_amount, discount_amount, total_amount, currency, quote,
+           confirmed_at, settled_at, created_at, updated_at, source, source_ref)
+        VALUES ${sql.join(
+          chunk.map((input) => {
+            const quote = historyQuote(
+              input.product.productId,
+              input.purchasedAt,
+              input.amountMinor,
+              input.currency,
+            );
+            return sql`(${input.orderId}, ${tenantId}, ${input.customerId}, 'PAID', 'NEW_SERVICE',
+             'LEGACY_HISTORY', ${input.product.productId}, ${input.panelId}, ${input.lineTitle},
+             ${input.product.durationDays}, ${input.product.trafficBytes}, NULL,
+             ${input.amountMinor}, 1, ${input.amountMinor}, 0, ${input.amountMinor},
+             ${input.currency}, ${quote}::jsonb,
+             ${input.purchasedAt}, ${input.purchasedAt}, ${input.purchasedAt}, ${input.now},
+             'MIRZA', ${input.sourceRef})`;
+          }),
+          sql`, `,
+        )}`);
+      /*
+       * The services: TERMINATED at birth. No provisioning operation, no username reservation,
+       * no provider id; `provisioned_at` stays NULL ("this one never reached a panel", the
+       * words `services_provisioned_at_check` uses). `delivery_state` is PENDING by default and
+       * the delivery sweep reads ACTIVE services only. The recorded expiry is the purchase plus
+       * the plan's days, history and nothing else: `services_expiry_idx` is partial on live
+       * states.
+       */
+      await tx.tx.execute(sql`
+        INSERT INTO services
+          (id, tenant_id, customer_id, order_id, panel_id, product_id, state, provider_username,
+           subscription_ref, expires_at, traffic_limit_bytes, traffic_used_bytes,
+           terminated_at, created_at, updated_at, source, source_ref, is_test)
+        VALUES ${sql.join(
+          chunk.map(
+            (input) => sql`(${input.serviceId}, ${tenantId}, ${input.customerId}, ${input.orderId},
+             ${input.panelId}, ${input.product.productId}, 'TERMINATED', ${input.providerUsername},
+             ${input.subscriptionRef},
+             ${input.product.durationDays > 0 ? sql`${input.purchasedAt}::timestamptz + make_interval(days => ${input.product.durationDays})` : sql`NULL`},
+             ${input.product.trafficBytes}, 0, ${input.now}, ${input.purchasedAt}, ${input.now},
+             'MIRZA', ${input.sourceRef}, ${input.isTest})`,
+          ),
+          sql`, `,
+        )}`);
+    }
   }
 
   async insertNeverPaid(
@@ -405,3 +429,6 @@ function historyQuote(productId: string, at: Date, amountMinor: bigint, currency
     ],
   });
 }
+
+/** Invoices per statement: 20 parameters a row at most, so 2 000 stay under PostgreSQL's 65 535. */
+const ENDED_INSERT_CHUNK = 2000;

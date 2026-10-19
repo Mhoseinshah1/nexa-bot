@@ -13,7 +13,8 @@ import {
 import { MIRZA_SOURCE, type PlannedRepository } from '../application/materialize-support.js';
 import type { MaterializeContext } from '../application/ports.js';
 
-const CHUNK = 500;
+/** Rows per INSERT: 14 parameters a row, so 4 000 rows stay under PostgreSQL's 65 535. */
+const CHUNK = 4000;
 
 /** `wallet_history_imports`: Mirza's wallet log beside the ledger, never part of it. */
 export class DrizzleWalletHistoryRepository implements PlannedRepository<WalletHistoryWrite> {
