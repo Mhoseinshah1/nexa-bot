@@ -596,8 +596,9 @@ export function ResellersPage({
             rowClassName={(row) => (row.customerId === viewing ? 'selected' : undefined)}
             dense
           />
-          {/* Default labels: `GET /resellers` pages newest to oldest. */}
+          {/* `GET /resellers` pages newest to oldest. */}
           <CursorPager
+            order="newest-first"
             shown={rows.length}
             hasPrevious={trail.depth > 0}
             hasNext={nextCursor !== null}

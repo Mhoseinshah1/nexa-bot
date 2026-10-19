@@ -355,8 +355,9 @@ function Attributions({ denied, referrerId }: { denied: boolean; referrerId: str
           rowKey={(row) => row.id}
           dense
         />
-        {/* Default labels: `GET /referrals` pages newest to oldest. */}
+        {/* `GET /referrals` pages newest to oldest. */}
         <CursorPager
+          order="newest-first"
           shown={rows.length}
           hasPrevious={trail.depth > 0}
           hasNext={nextCursor !== null}
@@ -423,7 +424,8 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
     {
       key: 'scope',
       header: t('web.referral_trigger'),
-      render: (row) => <span className="nowrap">{t(COMMISSION_SCOPE_LABELS[row.scope])}</span>,
+      wrap: 'tight',
+      render: (row) => t(COMMISSION_SCOPE_LABELS[row.scope]),
     },
     {
       key: 'percent',
@@ -477,7 +479,8 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
     {
       key: 'created',
       header: t('web.referral_created_at'),
-      render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
+      wrap: 'tight',
+      render: (row) => formatTimestamp(row.createdAt),
     },
     {
       /*
@@ -486,9 +489,10 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
        */
       key: 'settled',
       header: t('web.referral_settled_at'),
+      wrap: 'tight',
       render: (row) => {
         const at = row.earnedAt ?? row.voidedAt;
-        return at === null ? <Dash /> : <span className="nowrap">{formatTimestamp(at)}</span>;
+        return at === null ? <Dash /> : formatTimestamp(at);
       },
     },
   ];
@@ -554,8 +558,9 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
           rowKey={(row) => row.id}
           dense
         />
-        {/* Default labels: `GET /referral-commissions` pages newest to oldest. */}
+        {/* `GET /referral-commissions` pages newest to oldest. */}
         <CursorPager
+          order="newest-first"
           shown={rows.length}
           hasPrevious={trail.depth > 0}
           hasNext={nextCursor !== null}

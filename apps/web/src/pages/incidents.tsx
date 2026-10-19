@@ -357,6 +357,7 @@ export function IncidentsPage({ denied, mayManage }: { denied: boolean; mayManag
             ]}
           />
           <CursorPager
+            order="newest-first"
             hasPrevious={cursors.length > 0}
             hasNext={nextCursor !== null}
             onPrevious={() => setCursors((stack) => stack.slice(0, -1))}

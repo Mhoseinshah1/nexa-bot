@@ -761,19 +761,6 @@
   gap: 10px;
   background: var(--panel-row);
 }
-.fx-strip {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  border: 1px solid var(--line);
-  border-radius: var(--radius-ctl);
-  background: var(--panel-row);
-}
-.fx-strip > .stat + .stat {
-  border-inline-start: 1px solid var(--line);
-}
-.fx-strip .val {
-  font-size: 16px;
-}
 .fx-subhead {
   margin: 0 0 8px;
   font-size: var(--fs-ui);

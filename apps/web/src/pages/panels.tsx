@@ -405,6 +405,7 @@ export function PanelsPage({
     {
       key: 'failure',
       header: t('web.panel_failure'),
+      wrap: true,
       render: (row) => <FailureBadge failure={row.health.failure} />,
     },
     {
@@ -537,13 +538,14 @@ export function PanelsPage({
         */}
         {!denied && queryState(panels) === 'ready' && (
           <CursorPager
+            order="oldest-first"
             shown={rows.length}
             hasPrevious={cursors.length > 0}
             hasNext={nextCursor !== null}
             onPrevious={popCursor}
             onNext={() => nextCursor !== null && pushCursor(nextCursor)}
-            // `GET /panels` pages an ASCENDING keyset; the neutral previous/next
-            // labels read correctly in either direction.
+            // `GET /panels` pages an ASCENDING keyset (created_at, id): the next
+            // page is the newer one.
           />
         )}
       </Card>

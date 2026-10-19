@@ -383,6 +383,7 @@ export function AlertsPage({ denied }: { denied: boolean }) {
         */}
         {!denied && queryState(events) === 'ready' && (
           <CursorPager
+            order="newest-first"
             shown={rows.length}
             hasPrevious={trail.length > 0}
             // The SERVER's cursor. A full page is not the same question as
@@ -699,6 +700,7 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
         */}
           {!denied && queryState(notifications) === 'ready' && (
             <CursorPager
+              order="newest-first"
               shown={rows.length}
               hasPrevious={trail.length > 0}
               // The SERVER's cursor, not a guess from the page length. `null`

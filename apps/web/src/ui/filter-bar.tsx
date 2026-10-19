@@ -11,9 +11,10 @@ import { batchQueryChanges } from '../router';
 /**
  * One compact filter line per list (W1.3).
  *
- * The line: the slim search, a «فیلترها» button with a count badge, the active filters as
- * removable chips («وضعیت: فعال ×»), «پاک کردن همه» when two or more are active, «بدون فیلتر —
- * همه نمایش داده می‌شوند» when none are, and the saved-filters slot at the end.
+ * The first row: a «فیلترها» button with a count badge, the active filters as removable chips
+ * («وضعیت: فعال ×»), «پاک کردن همه» when two or more are active, «بدون فیلتر — همه نمایش داده
+ * می‌شوند» when none are, and the saved-filters slot at the end. The slim search is the row
+ * under it (demo parity X8).
  *
  * «فیلترها» opens a panel with one row per filter (label on the side, the page's existing chip
  * group or select inside). Every change applies immediately — the page's own controls still
@@ -91,7 +92,8 @@ export function ListFilterBar({
       role="search"
       {...(label === undefined ? {} : { 'aria-label': label })}
     >
-      {hasSearch && <div className="lfb-search">{search}</div>}
+      {/* Demo parity X8: the filters button and the saved filters on the first row, the search
+          under them — in the DOM as on screen, so the keyboard meets them in the same order. */}
       <div className="lfb-line">
         <button
           ref={toggle}
@@ -133,6 +135,7 @@ export function ListFilterBar({
         </div>
       </div>
       {hasSaved && <div className="lfb-saved">{savedViews}</div>}
+      {hasSearch && <div className="lfb-search">{search}</div>}
       {open &&
         createPortal(
           <LayerContext.Provider value={layer.registry}>

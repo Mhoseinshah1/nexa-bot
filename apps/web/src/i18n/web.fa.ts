@@ -550,6 +550,13 @@ export const WEB_FA = {
   'web.page_previous': 'قبلی',
   'web.page_next': 'بعدی',
   'web.page_of': 'صفحهٔ',
+  /* Keyset pagers over a time-ordered list name the direction in time (demo parity X2). */
+  'web.page_newer': 'تازه‌تر',
+  'web.page_older': 'قدیمی‌تر',
+  /* The counted pager: «۱–۱۰ از ۲۱ · صفحهٔ ۱ از ۳». Only over a total the server sent. */
+  'web.page_range_of': 'از',
+  'web.page_previous_aria': 'صفحهٔ قبل',
+  'web.page_next_aria': 'صفحهٔ بعد',
   'web.error_hint': 'ارتباط با سرور برقرار نشد. دوباره تلاش کنید.',
   /*
    * A final answer that is NOT a refusal.
@@ -5781,7 +5788,6 @@ export const WEB_FA = {
   'web.report_tab_services': 'سرویس‌ها',
   'web.report_tab_wallet': 'کیف پول',
   'web.report_top_referrers': 'معرف‌های برتر',
-  'web.report_total_rows': 'تعداد کل:',
   'web.report_traffic_sold': 'ترافیک فروخته‌شده',
   'web.report_trend_empty': 'در این دو دوره رقمی ثبت نشده است.',
   'web.report_trend_hint': 'دورهٔ جاری و دورهٔ قبل روی یک نمودار؛ بازه‌های آینده خالی می‌مانند.',

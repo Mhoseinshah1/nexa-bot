@@ -551,6 +551,7 @@ export function LegacyServicesPage({
             dense
           />
           <CursorPager
+            order="sequence"
             shown={rows.length}
             hasPrevious={trail.length > 0}
             hasNext={nextCursor !== null}

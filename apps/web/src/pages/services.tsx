@@ -626,15 +626,15 @@ export function ServicesPage({
                   sticky
                 />
                 {/*
-                `CursorPager`'s DEFAULT labels, and that is the difference from
-                `/users`, `/orders` and `/products`: `GET /services` pages a
-                DESCENDING keyset, newest ORIGINAL purchase first (owner revision 13,
-                Track 3 §3), so "next" here really is the older page. The three ascending lists
-                pass the opposite pair explicitly for the opposite reason.
+                `newest-first`, and that is the difference from `/users`, `/orders` and
+                `/products`: `GET /services` pages a DESCENDING keyset, newest ORIGINAL
+                purchase first (owner revision 13, Track 3 §3), so "next" here really is the
+                older page. The three ascending lists say `oldest-first` for the opposite reason.
 
                 The cursor lives in the URL, so Previous returns to the first page.
               */}
                 <CursorPager
+                  order="newest-first"
                   shown={services.data.services.length}
                   hasPrevious={cursor !== null}
                   hasNext={services.data.nextCursor !== null}

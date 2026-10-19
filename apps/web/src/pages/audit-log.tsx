@@ -691,6 +691,7 @@ export function AuditLogPage({
             rowClassName={(row) => (row.result === 'SUCCESS' ? undefined : 'audit-row-refused')}
           />
           <CursorPager
+            order="newest-first"
             shown={rows.length}
             hasPrevious={cursors.length > 0}
             hasNext={nextCursor !== null}

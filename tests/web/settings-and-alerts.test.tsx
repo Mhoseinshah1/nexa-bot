@@ -391,7 +391,7 @@ describe('management alerts', () => {
     ]);
     renderPage(<AlertsPage denied={false} />);
     await screen.findByText('Roles changed.');
-    fireEvent.click(screen.getByRole('button', { name: 'بعدی' }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_older') }));
     await waitFor(() => {
       expect(api.calls.filter((call) => call.url.includes('before=')).length).toBeGreaterThan(0);
     });
@@ -509,7 +509,7 @@ describe('management alerts', () => {
     expect(screen.queryByRole('button', { name: 'تازه‌سازی' })).toBeNull();
     expect(screen.queryByRole('combobox')).toBeNull();
     expect(screen.queryByRole('button', { name: 'حل‌نشده' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'بعدی' })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_older') })).toBeNull();
     // Nothing on the page can have asked the server anything.
     expect(api.calls).toHaveLength(0);
   });
@@ -647,8 +647,8 @@ describe('management alerts', () => {
     renderPage(<AlertsPage denied={false} />);
     await screen.findByText(t('web.no_permission'));
 
-    expect(screen.queryByRole('button', { name: 'بعدی' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'قبلی' })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_older') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_newer') })).toBeNull();
     expect(screen.queryByText('نمایش')).toBeNull();
   });
 
@@ -669,7 +669,7 @@ describe('management alerts', () => {
     rerender(<AlertsPage denied />);
 
     expect(screen.queryByText('نمایش')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'بعدی' })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.page_older') })).toBeNull();
   });
 
   it('draws no pager before the first page of alerts has arrived', () => {
@@ -687,7 +687,7 @@ describe('management alerts', () => {
     // The page defaults to HISTORY, so this is the filtered emptiness.
     await screen.findByText(t('web.alerts_empty_filter'));
     expect(screen.getByText('نمایش')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'قبلی' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: t('web.page_newer') })).toBeInTheDocument();
   });
 
   it('asks the server for the management scope', async () => {
@@ -728,7 +728,7 @@ describe('management alerts', () => {
     renderPage(<AlertsPage denied={false} />);
     await screen.findByText('first page');
 
-    fireEvent.click(screen.getByRole('button', { name: 'بعدی' }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_older') }));
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.includes('beforeId='))).toBe(true);
     });
@@ -760,7 +760,7 @@ describe('management alerts', () => {
     renderPage(<AlertsPage denied={false} />);
     await screen.findAllByText('Roles changed.');
 
-    fireEvent.click(screen.getByRole('button', { name: 'بعدی' }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_older') }));
     await waitFor(() => {
       const paged = api.calls.find((call) => call.url.includes('beforeId'));
       expect(paged?.url).toContain('beforeId=e9');
@@ -792,7 +792,7 @@ describe('management alerts', () => {
     await screen.findAllByText('Roles changed.');
 
     // A page-length comparison would have enabled this: 10 rows, limit 10.
-    expect(screen.getByRole('button', { name: 'بعدی' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t('web.page_older') })).toBeDisabled();
     // And it asked for a bounded page, which is what makes the case reachable.
     expect(api.calls[0]?.url).toContain('limit=10');
   });
@@ -802,7 +802,7 @@ describe('management alerts', () => {
     renderPage(<AlertsPage denied={false} />);
     await screen.findByText('Roles changed.');
 
-    expect(screen.getByRole('button', { name: 'بعدی' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t('web.page_older') })).toBeDisabled();
     expect(api.calls[0]?.url).toContain('limit=10');
   });
 
@@ -1023,7 +1023,7 @@ describe('management alerts', () => {
 
     // Page two, and by then the condition has been resolved elsewhere.
     stubApi([{ url: '/ops-log', body: { events: [], nextCursor: null } }]);
-    fireEvent.click(screen.getByRole('button', { name: 'بعدی' }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_older') }));
 
     expect(await screen.findByText(t('web.alerts_empty_filter'))).toBeInTheDocument();
     expect(screen.queryByText('هشدار بازی وجود ندارد.')).toBeNull();

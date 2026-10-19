@@ -283,6 +283,7 @@ export function BulkOperationsPage({
                 dense
               />
               <CursorPager
+                order="newest-first"
                 shown={list.data.operations.length}
                 hasPrevious={cursor !== null}
                 hasNext={list.data.nextCursor !== null}
@@ -537,7 +538,6 @@ export function BulkOperationNewPage({
                 <StatCard
                   label={t('web.bulk_liability')}
                   value={<Money value={preview.totalLiability} />}
-                  tone="warn"
                 />
               )}
               <StatCard
@@ -961,6 +961,7 @@ export function BulkOperationDetailPage({
                     dense
                   />
                   <CursorPager
+                    order="sequence"
                     shown={items.data.items.length}
                     hasPrevious={trail.length > 0}
                     hasNext={items.data.nextCursor !== null}

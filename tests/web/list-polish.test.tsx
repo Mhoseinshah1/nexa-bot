@@ -152,7 +152,7 @@ describe('the cursor trail after a filter change', () => {
     navigate('/orders', { replace: true, force: true });
     const api = stubApi([{ url: '/orders', body: { orders: [order()], nextCursor: 'C2' } }]);
     renderPage(<LiveOrders />);
-    fireEvent.click(await screen.findByRole('button', { name: t('web.page_next') }));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.page_newer') }));
     await waitFor(() => expect(lastRead(api.calls, '/orders').url).toContain('cursor=C2'));
     fireEvent.click(
       within(openFilterPanel()).getByRole('button', { name: t('web.order_state_paid') }),
@@ -173,7 +173,7 @@ describe('the cursor trail after a filter change', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const api = stubApi([{ url: '/orders', body: { orders: [order()], nextCursor: 'C2' } }]);
     renderPage(<LiveOrders />);
-    fireEvent.click(await screen.findByRole('button', { name: t('web.page_next') }));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.page_newer') }));
     await waitFor(() => expect(lastRead(api.calls, '/orders').url).toContain('cursor=C2'));
     const box = screen.getByLabelText(t('web.list_search_label'));
     fireEvent.change(box, { target: { value: 'alir' } });
@@ -193,7 +193,7 @@ describe('the cursor trail after a filter change', () => {
       { url: '/customer-tags', body: { tags: [] } },
     ]);
     renderPage(<LiveUsers />);
-    fireEvent.click(await screen.findByRole('button', { name: t('web.page_next') }));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.page_newer') }));
     await waitFor(() => expect(lastRead(api.calls, '/users').url).toContain('cursor=C2'));
     fireEvent.click(
       within(openFilterPanel()).getByRole('button', { name: t('web.user_status_blocked') }),
@@ -208,7 +208,7 @@ describe('the cursor trail after a filter change', () => {
     // The first page of the unfiltered list (served from cache here, so asked of the pager):
     // no trail behind it, so nothing to go back to.
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: t('web.page_previous') })).toBeDisabled(),
+      expect(screen.getByRole('button', { name: t('web.page_older') })).toBeDisabled(),
     );
     expect(lastRead(api.calls, '/users').url).not.toContain('cursor=');
   });

@@ -23,6 +23,13 @@ export function needsTypeStripping(features) {
 }
 
 /**
+ * From this viewport width up a table must fit its card (demo parity X9): the owner's
+ * reference draws every list at 1440 without a sideways scroll. Below it a wide table may
+ * scroll inside its card, which is the phone layout's deliberate answer.
+ */
+export const TABLE_OVERFLOW_MIN_WIDTH = 1280;
+
+/**
  * Everything about one capture that stops it certifying the page, as lines.
  *
  * An empty list prints `ok`. `settled: false` is on it: a capture whose network
@@ -35,6 +42,7 @@ export function needsTypeStripping(features) {
  *   stillLoading: boolean;
  *   errorStates: number;
  *   horizontalOverflow: number;
+ *   tableOverflow?: readonly string[];
  *   errors: readonly string[];
  *   timeoutMs?: number;
  * }} entry
@@ -48,6 +56,8 @@ export function shotProblems(entry) {
     entry.stillLoading && 'still loading (a skeleton was on screen)',
     entry.errorStates > 0 && `${entry.errorStates} error state(s) drawn`,
     entry.horizontalOverflow > 0 && `page overflows sideways by ${entry.horizontalOverflow}px`,
+    (entry.tableOverflow?.length ?? 0) > 0 &&
+      `table scrolls sideways: ${(entry.tableOverflow ?? []).join(', ')}`,
     entry.errors.length > 0 && `console: ${entry.errors.join(' | ')}`,
   ].filter((line) => typeof line === 'string');
 }

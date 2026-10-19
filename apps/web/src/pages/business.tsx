@@ -70,7 +70,9 @@ import {
   BarChart,
   ButtonGroup,
   ChartCard,
+  CountedPager,
   CursorPager,
+  serverTotal,
   LIST_PAGE_SIZE,
   Donut,
   FilterChip,
@@ -733,16 +735,12 @@ function TopProducts({ selection }: { selection: ReportRangeSelection }) {
               caption={t('web.report_products_title')}
               dense
             />
-            <CursorPager
-              summary={
-                <>
-                  {t('web.report_total_rows')} <Num value={data.totalRows} />
-                </>
-              }
-              hasPrevious={page > 1}
-              hasNext={page * limit < data.totalRows}
-              onPrevious={() => setPage(page - 1)}
-              onNext={() => setPage(page + 1)}
+            {/* `totalRows` is the server's: the one list here that may be counted (X2). */}
+            <CountedPager
+              page={data.page}
+              pageSize={data.limit}
+              total={serverTotal(data.totalRows)}
+              onPage={setPage}
             />
           </>
         )}
@@ -1022,6 +1020,7 @@ function OrdersDrilldown({ selection }: { selection: ReportRangeSelection }) {
               dense
             />
             <CursorPager
+              order="newest-first"
               summary={null}
               hasPrevious={cursors.length > 0}
               hasNext={data.nextCursor !== null}
@@ -1672,16 +1671,12 @@ export function ReferralAnalytics({
                 caption={t('web.report_top_referrers')}
               />
             )}
-            <CursorPager
-              summary={
-                <>
-                  {t('web.report_total_rows')} <Num value={data.topReferrers.totalRows} />
-                </>
-              }
-              hasPrevious={page > 1}
-              hasNext={page * limit < data.topReferrers.totalRows}
-              onPrevious={() => setPage(page - 1)}
-              onNext={() => setPage(page + 1)}
+            {/* `topReferrers.totalRows` is the server's total (X2). */}
+            <CountedPager
+              page={data.topReferrers.page}
+              pageSize={data.topReferrers.limit}
+              total={serverTotal(data.topReferrers.totalRows)}
+              onPage={setPage}
             />
             <PeriodNote period={data.period} />
           </>

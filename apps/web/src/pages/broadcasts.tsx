@@ -348,6 +348,7 @@ export function BroadcastsPage({
                 dense
               />
               <CursorPager
+                order="newest-first"
                 shown={list.data.broadcasts.length}
                 hasPrevious={cursor !== null}
                 hasNext={list.data.nextCursor !== null}
@@ -1673,6 +1674,7 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
               dense
             />
             <CursorPager
+              order="sequence"
               shown={rows.data.recipients.length}
               hasPrevious={trail.length > 0}
               hasNext={rows.data.nextCursor !== null}

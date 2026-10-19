@@ -202,6 +202,23 @@
   z-index: 1;
 }
 
+/*
+ * Linkable identifiers (demo parity X7): a name, a code or an id that opens its record is
+ * an underlined link, as the demo draws every one — in a table cell, a definition list and
+ * the kit's `RefLink`. A button styled as a link keeps its own look.
+ */
+.lk,
+.tbl td a:not(.btn),
+.kv dd a:not(.btn),
+.ident-cell a.name {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.id-text {
+  white-space: nowrap;
+}
+
 /* Inline link-buttons: a button that reads as a link inside its sentence. */
 .link {
   background: none;
@@ -283,9 +300,17 @@
   background: var(--teal-soft);
   color: var(--teal);
 }
+/*
+ * Filled vs outlined (demo parity X10): a STATE is a filled pill; a type, a kind or a rule
+ * (حجم / زمان, تخفیف / کش‌بک, a protocol) is outlined — no fill, a hairline in its own
+ * colour, as the demo draws it. A neutral outline reads in the body colour.
+ */
 .badge.outline {
   background: transparent;
-  border: 1px solid var(--line-2);
+  border: 1px solid currentColor;
+}
+.badge.neutral.outline {
+  color: var(--fg);
 }
 .badge.pulse .dot {
   animation: pulse 1.8s infinite;
@@ -699,19 +724,30 @@
 .stat.alert {
   border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
 }
-.stat.warnish {
-  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
-}
 .stat.alert .lbl svg {
   color: var(--danger);
 }
-.stat.warnish .lbl svg {
-  color: var(--warn);
-}
+/*
+ * A stat strip (demo parity X6): separate bordered cards sharing the row equally — four
+ * figures are four full-width quarters, never four small cards and a hole — each with a
+ * large, neutral number. A bare `Stat` in a strip is drawn as the same card as a `StatCard`.
+ */
 .stat-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+.stat-grid > .stat:not(.card) {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--gshadow);
+  padding: 11px 14px;
+}
+.stat-grid > .stat .val {
+  font-size: 24px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
 }
 
 /* --- Progress ------------------------------------------------------------------ */
@@ -892,6 +928,12 @@
   white-space: nowrap;
 }
 .tbl th {
+  /*
+   * Demo parity X9: a header is a label, not data, so it breaks between its words rather
+   * than widening its column («مبلغ وعده‌داده‌شده» on two lines); a cell stays on one line
+   * unless its column wraps.
+   */
+  white-space: normal;
   background: var(--panel);
   color: var(--fg-3);
   font-weight: 600;
@@ -907,10 +949,23 @@
 .tbl td {
   font-variant-numeric: tabular-nums;
 }
+/* Demo parity X9: no table scrolls sideways inside its card at 1440 (see `.tbl th`). */
 .tbl td.wrap,
 .tbl th.wrap {
   white-space: normal;
-  min-width: 14rem;
+  min-width: var(--tbl-wrap-min);
+}
+.tbl td.wrap.tight,
+.tbl th.wrap.tight {
+  min-width: 0;
+}
+/* A long pill (a failure sentence, a scope) wraps inside a column that wraps. */
+.tbl td.wrap .badge {
+  height: auto;
+  min-height: 20px;
+  white-space: normal;
+  line-height: 1.4;
+  padding-block: 2px;
 }
 .tbl tbody tr {
   transition: background 0.1s;
@@ -984,7 +1039,7 @@
   text-align: end;
 }
 
-/* Keyset paging: «showing N» and the two directions, nothing numbered. */
+/* Keyset paging: «showing N» and the two directions («تازه‌تر / قدیمی‌تر»), nothing numbered. */
 .pager {
   display: flex;
   align-items: center;
@@ -997,6 +1052,23 @@
 }
 .pager .spacer {
   flex: 1;
+}
+/* The counted pager (X2): «‹ قبلی  ۱–۱۰ از ۲۱ · صفحهٔ ۱ از ۳  بعدی ›», centred, over a server total. */
+.pager.counted {
+  justify-content: center;
+  gap: 10px;
+}
+.pager-info {
+  font-size: var(--fs-xs);
+  color: var(--fg-2);
+}
+.pager-info b {
+  color: var(--fg);
+  font-weight: 600;
+}
+.pager-range {
+  /* Read right to left like the sentence around it: «۱–۱۰» is «from 1 to 10». */
+  unicode-bidi: isolate;
 }
 
 /* The identity cell: a name, then the technical handles beside it. */
@@ -1771,13 +1843,18 @@ textarea.input,
 .banner.danger strong {
   color: var(--danger);
 }
+/*
+ * The information callout (demo parity X5): an outlined card a step brighter than the page —
+ * the accent's hairline over its soft fill, its words in the body colour, and no icon.
+ */
 .banner.info {
-  background: var(--info-soft);
-  border-color: color-mix(in srgb, var(--info) 40%, transparent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  border-radius: var(--radius-ctl);
+  color: var(--fg);
 }
-.banner.info > svg,
 .banner.info strong {
-  color: var(--info);
+  color: var(--fg);
 }
 .banner.ok {
   background: var(--ok-soft);

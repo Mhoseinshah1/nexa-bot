@@ -96,8 +96,11 @@ interface Spec {
   /** Two valid terms, the second typed after the first; and a paste, with its whitespace. */
   readonly terms: readonly [string, string];
   readonly paste: string;
-  /** The pager's "next" button, and the request parameter its cursor travels in. */
-  readonly next: 'web.page_next';
+  /**
+   * The pager's "next" button — «تازه‌تر» on an ascending list, «قدیمی‌تر» on a descending
+   * one (X2) — and the request parameter its cursor travels in.
+   */
+  readonly next: 'web.page_newer' | 'web.page_older';
   readonly cursorParam: string;
 }
 
@@ -213,7 +216,7 @@ const SPECS: readonly Spec[] = [
     body: (rows, next) => ({ payments: rowsOf(PAYMENT, rows), nextCursor: next ? 'C2' : null }),
     terms: ['ali', 'alireza'],
     paste: '  5551234567 \n',
-    next: 'web.page_next',
+    next: 'web.page_newer',
     cursorParam: 'cursor',
   },
   {
@@ -233,7 +236,7 @@ const SPECS: readonly Spec[] = [
       url.pathname.endsWith('/product-categories') ? { categories: [] } : undefined,
     terms: ['پلن', 'پلن یک'],
     paste: '  پلن یک‌ماهه \n',
-    next: 'web.page_next',
+    next: 'web.page_newer',
     cursorParam: 'cursor',
   },
   {
@@ -266,7 +269,7 @@ const SPECS: readonly Spec[] = [
     extras: (url) => (url.pathname.endsWith('/reseller-tiers') ? { tiers: [] } : undefined),
     terms: ['رضا', 'رضا رس'],
     paste: '  5551234567 \n',
-    next: 'web.page_next',
+    next: 'web.page_older',
     cursorParam: 'cursor',
   },
   {
@@ -289,7 +292,7 @@ const SPECS: readonly Spec[] = [
     extras: (url) => (url.pathname.endsWith('/ticket-categories') ? { categories: [] } : undefined),
     terms: ['mar', 'mary'],
     paste: '  951001 \n',
-    next: 'web.page_next',
+    next: 'web.page_older',
     cursorParam: 'before',
   },
   {
@@ -304,7 +307,7 @@ const SPECS: readonly Spec[] = [
     body: (rows, next) => ({ entries: rowsOf(AUDIT_ENTRY, rows), nextCursor: next ? 'C2' : null }),
     terms: ['own', 'owner'],
     paste: '  owner \n',
-    next: 'web.page_next',
+    next: 'web.page_older',
     cursorParam: 'cursor',
   },
   {
@@ -328,7 +331,7 @@ const SPECS: readonly Spec[] = [
     // Only a complete id is a referrer filter: both terms are ids.
     terms: [UUID_A, UUID_B],
     paste: `  ${UUID_A} \n`,
-    next: 'web.page_next',
+    next: 'web.page_older',
     cursorParam: 'cursor',
   },
 ];

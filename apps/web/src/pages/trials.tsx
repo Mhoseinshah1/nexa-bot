@@ -28,7 +28,7 @@ import {
   Banner,
   Button,
   Card,
-  Copyable,
+  IdText,
   CursorPager,
   DataTable,
   Empty,
@@ -222,6 +222,7 @@ function OverridesCard({ mayView }: { mayView: boolean }) {
               dense
             />
             <CursorPager
+              order="newest-first"
               shown={overrides.data.overrides.length}
               hasPrevious={trail.length > 0}
               hasNext={overrides.data.nextCursor !== null}
@@ -458,7 +459,7 @@ function HistoryCard({ mayView }: { mayView: boolean }) {
     {
       key: 'actor',
       header: t('web.trials_history_actor'),
-      render: (row) => <Copyable value={row.actorAdminId} display={row.actorAdminId.slice(0, 8)} />,
+      render: (row) => <IdText value={row.actorAdminId} display={row.actorAdminId.slice(0, 8)} />,
     },
   ];
 
@@ -477,6 +478,7 @@ function HistoryCard({ mayView }: { mayView: boolean }) {
               dense
             />
             <CursorPager
+              order="newest-first"
               shown={resets.data.resets.length}
               hasPrevious={trail.length > 0}
               hasNext={resets.data.nextCursor !== null}

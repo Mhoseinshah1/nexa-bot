@@ -300,6 +300,50 @@ export function CodeValue({
   );
 }
 
+/**
+ * A technical identifier shown as itself: left to right, monospace, its full value in the
+ * tooltip — and no copy button. The demo draws list identifiers this way (X7); `Copyable`
+ * stays for a detail view, where copying the whole value is the point. `display` shortens
+ * what is drawn (a uuid's first eight characters); the full value is still the title.
+ */
+export function IdText({ value, display }: { value: string; display?: string }) {
+  return (
+    <span className="ltr mono id-text" title={value}>
+      {display ?? value}
+    </span>
+  );
+}
+
+/**
+ * A linkable identifier — a name, a code, an order or payment id, a tracking code, a
+ * campaign title — drawn as the demo's underlined link (X7). `mono` isolates it left to
+ * right in the code face, for an id; a name keeps the body font. Navigation goes through the
+ * router (`useLinkHandler`), so a plain click never reloads the admin.
+ */
+export function RefLink({
+  href,
+  children,
+  mono = false,
+  title,
+}: {
+  href: string;
+  children: ReactNode;
+  mono?: boolean;
+  title?: string;
+}) {
+  const onLink = useLinkHandler();
+  return (
+    <a
+      className={cx('lk', mono && 'ltr mono')}
+      href={href}
+      onClick={onLink}
+      {...(title === undefined ? {} : { title })}
+    >
+      {children}
+    </a>
+  );
+}
+
 /* --------------------------------------------------------------- badges --- */
 
 export function Badge({
@@ -678,8 +722,10 @@ export interface StatDelta {
 
 /**
  * A KPI card: icon and label, the value with its unit, an optional delta and
- * an optional sparkline or footnote. `tone` outlines the card for a figure
- * that needs attention (`alert` red, `warn` amber) — never as decoration.
+ * an optional sparkline or footnote. `tone: 'alert'` outlines the card red for
+ * a figure that is a failure — never as decoration. `warn` marks the card
+ * (`warnish`) but the kit draws it neutral: the demo's stat strips have no amber
+ * borders (X6). Only the dashboard's own KPI grid styles it (dashboard.css).
  */
 export function StatCard({
   label,
@@ -910,9 +956,15 @@ export function Banner({
   /** A control that resolves what the banner says — at the end of the line. */
   action?: ReactNode;
 }) {
+  // An information callout is an outlined card with no ⓘ (demo parity X5): the outline is
+  // what sets it apart, and an icon on every explanatory paragraph was noise. A warning or
+  // an error keeps its sign, because there the icon carries the urgency.
+  const iconless = tone === 'info' || tone === 'neutral';
   return (
     <div className={`banner ${tone}`} role={role ?? (tone === 'danger' ? 'alert' : undefined)}>
-      <Icon name={icon ?? (tone === 'danger' || tone === 'warn' ? 'alert' : 'info')} size={16} />
+      {!iconless && (
+        <Icon name={icon ?? (tone === 'danger' || tone === 'warn' ? 'alert' : 'info')} size={16} />
+      )}
       <div>
         {title !== undefined && <strong>{title}</strong>}
         {children}
@@ -1762,8 +1814,12 @@ export interface Column<T> {
   readonly render: (row: T) => ReactNode;
   /** Right-aligned numeric column in a logical-property world: `end`. */
   readonly align?: 'start' | 'end';
-  /** Lets the cell wrap instead of holding one line — for free text. */
-  readonly wrap?: boolean;
+  /**
+   * Lets the cell wrap instead of holding one line — for free text (`true`, at least
+   * `--tbl-wrap-min` wide). `'tight'` wraps with no floor: a short value of a few words (a
+   * timestamp, a scope name) breaks between them, so a wide ledger fits its card (X9).
+   */
+  readonly wrap?: boolean | 'tight';
 }
 
 /**
@@ -1821,7 +1877,8 @@ export function DataTable<T>({
                   scope="col"
                   className={cx(
                     `al-${column.align === 'end' ? 'end' : 'start'}`,
-                    column.wrap && 'wrap',
+                    column.wrap !== undefined && column.wrap !== false && 'wrap',
+                    column.wrap === 'tight' && 'tight',
                   )}
                 >
                   {column.header}
@@ -1837,7 +1894,8 @@ export function DataTable<T>({
                     key={column.key}
                     className={cx(
                       `al-${column.align === 'end' ? 'end' : 'start'}`,
-                      column.wrap && 'wrap',
+                      column.wrap !== undefined && column.wrap !== false && 'wrap',
+                      column.wrap === 'tight' && 'tight',
                     )}
                   >
                     {column.render(row)}
@@ -1872,44 +1930,58 @@ export function RowActions({ children, wrap = false }: { children: ReactNode; wr
 }
 
 /**
+ * The order a keyset list walks, which decides what its two buttons are called.
+ *
+ * - `newest-first`: a `DESC` keyset on a time — the next page is OLDER. «تازه‌تر» goes back,
+ *   «قدیمی‌تر» goes on.
+ * - `oldest-first`: an `ASC` keyset on a time — the next page is NEWER. The same two labels,
+ *   bound the other way round: «قدیمی‌تر» goes back, «تازه‌تر» goes on.
+ * - `sequence`: any order that is not time (a name, a code, a sort position, an id that is
+ *   not time-ordered). «قبلی / بعدی», because «تازه‌تر» over an alphabetical list would be a
+ *   claim the list does not make.
+ *
+ * Required, so every list states its own order where the query is written; a default would
+ * quietly label an ascending list backwards (the demo-parity review found three lists whose
+ * comments said they passed reversed labels and did not).
+ */
+export type KeysetOrder = 'newest-first' | 'oldest-first' | 'sequence';
+
+/**
  * Keyset paging: forward through opaque cursors, and back through the ones
  * already seen.
  *
  * There is no page number, because the API does not offer one: `nextCursor` is
  * opaque and the response says nothing about how many pages exist. Rendering
  * "page 3 of 12" would require counting the collection on every request, which
- * is the thing keyset paging exists to avoid.
+ * is the thing keyset paging exists to avoid. A list whose response DOES carry a
+ * total uses `CountedPager`.
  *
- * The labels FOLLOW the traversal, and the caller is the one that knows it.
- * The ops-log and notification lists walk `before` cursors down a `DESC`
- * keyset, so their next page is older and the way back is newer — the
- * defaults. The panel lists walk an `ASC` keyset, so their next page is NEWER
- * and they pass the labels the other way round.
+ * Over a time order the buttons always read «تازه‌تر» (first, on the start side) and
+ * «قدیمی‌تر» (after it), as the approved demo draws them; `order` decides which of
+ * `onPrevious` / `onNext` each one is. A direction that is not available is disabled, so
+ * only the one the operator can take is active.
  *
  * The cursor is opaque to this component and it stays that way.
  */
 export function CursorPager({
+  order,
   onPrevious,
   onNext,
   hasPrevious,
   hasNext,
   shown,
-  nextLabel = 'web.page_next',
-  previousLabel = 'web.page_previous',
   summary,
 }: {
+  order: KeysetOrder;
   onPrevious: () => void;
   onNext: () => void;
   hasPrevious: boolean;
   hasNext: boolean;
   /** Rows on this page, drawn as `web.showing` N unless `summary` says something else. */
   shown?: number;
-  nextLabel?: WebKey;
-  previousLabel?: WebKey;
   /**
-   * What the pager says about the rows, in place of «نمایش N»: a report that
-   * pages by offset knows its total («تعداد کل: N»), and one that pages by an
-   * opaque cursor may say nothing at all (`null`).
+   * What the pager says about the rows, in place of «نمایش N», or nothing at all
+   * (`null`) for a list that pages by an opaque cursor and has nothing to add.
    */
   summary?: ReactNode;
 }) {
@@ -1921,16 +1993,33 @@ export function CursorPager({
         {t('web.showing')} <Num value={shown} />
       </>
     );
+  const back = { enabled: hasPrevious, go: onPrevious };
+  const on = { enabled: hasNext, go: onNext };
+  const [first, second] =
+    order === 'sequence'
+      ? [
+          { ...back, label: t('web.page_previous') },
+          { ...on, label: t('web.page_next') },
+        ]
+      : order === 'newest-first'
+        ? [
+            { ...back, label: t('web.page_newer') },
+            { ...on, label: t('web.page_older') },
+          ]
+        : [
+            { ...on, label: t('web.page_newer') },
+            { ...back, label: t('web.page_older') },
+          ];
   return (
-    <div className="pager">
+    <div className="pager" data-order={order}>
       {said !== null && <span className="muted small">{said}</span>}
       <span className="spacer" />
-      <button type="button" className="btn sm" disabled={!hasPrevious} onClick={onPrevious}>
+      <button type="button" className="btn sm" disabled={!first.enabled} onClick={first.go}>
         <Icon name="chevronRight" />
-        {t(previousLabel)}
+        {first.label}
       </button>
-      <button type="button" className="btn sm" disabled={!hasNext} onClick={onNext}>
-        {t(nextLabel)}
+      <button type="button" className="btn sm" disabled={!second.enabled} onClick={second.go}>
+        {second.label}
         <Icon name="chevronLeft" />
       </button>
     </div>
@@ -1938,6 +2027,79 @@ export function CursorPager({
 }
 /** `CursorPager` by the name the kit inventory uses. The semantics are keyset. */
 export const Pagination = CursorPager;
+
+/**
+ * A total the SERVER sent with the list (`totalRows` on the report endpoints): the only
+ * number a counted pager may print. A distinct type so a client-side count — the length of
+ * the rows a page happens to hold — cannot be handed to `CountedPager` by accident; the one
+ * way to make one is `serverTotal`, which a reviewer can grep.
+ */
+export type ServerTotal = number & { readonly __serverTotal: unique symbol };
+
+/** Marks a figure read from a response field that the API defines as the list's total. */
+export function serverTotal(value: number): ServerTotal {
+  return value as ServerTotal;
+}
+
+/**
+ * The counted pager the demo draws where a list knows its size:
+ * «‹ قبلی  ۱–۱۰ از ۲۱ · صفحهٔ ۱ از ۳  بعدی ›».
+ *
+ * ONLY over a server total (`ServerTotal`), so an endpoint that pages by an opaque cursor
+ * keeps `CursorPager` (nexa-web-design: no client counts, no offset paging). `page` is
+ * 1-based, as the report endpoints return it. Draws nothing without a total or over an
+ * empty list — the list's own empty state says that.
+ */
+export function CountedPager({
+  page,
+  pageSize,
+  total,
+  onPage,
+}: {
+  page: number;
+  pageSize: number;
+  total: ServerTotal;
+  onPage: (page: number) => void;
+}) {
+  if (typeof total !== 'number' || !Number.isFinite(total) || total <= 0 || pageSize <= 0) {
+    return null;
+  }
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const current = Math.min(Math.max(1, page), pages);
+  const from = (current - 1) * pageSize + 1;
+  const to = Math.min(current * pageSize, total);
+  return (
+    <div className="pager counted">
+      <button
+        type="button"
+        className="btn sm"
+        disabled={current <= 1}
+        aria-label={t('web.page_previous_aria')}
+        onClick={() => onPage(current - 1)}
+      >
+        <Icon name="chevronRight" />
+        {t('web.page_previous')}
+      </button>
+      <span className="pager-info" data-testid="counted-pager-info">
+        <b className="pager-range">
+          <Num value={from} />–<Num value={to} />
+        </b>{' '}
+        {t('web.page_range_of')} <b>{<Num value={total} />}</b> · {t('web.page_of')}{' '}
+        <Num value={current} /> {t('web.page_range_of')} <Num value={pages} />
+      </span>
+      <button
+        type="button"
+        className="btn sm"
+        disabled={current >= pages}
+        aria-label={t('web.page_next_aria')}
+        onClick={() => onPage(current + 1)}
+      >
+        {t('web.page_next')}
+        <Icon name="chevronLeft" />
+      </button>
+    </div>
+  );
+}
 
 /**
  * Rows per page on EVERY list the admin draws (W1.8). A keyset list asks the
@@ -1965,6 +2127,7 @@ export function usePagedRows<T>(
   const pager =
     rows.length > LIST_PAGE_SIZE ? (
       <CursorPager
+        order="sequence"
         hasPrevious={page > 0}
         hasNext={page < pages - 1}
         onPrevious={() => setState({ key: resetKey, page: page - 1 })}

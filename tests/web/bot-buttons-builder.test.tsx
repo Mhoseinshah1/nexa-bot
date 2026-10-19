@@ -1347,8 +1347,8 @@ describe('the revision history pager', () => {
     await waitFor(() => expect(shown()).toEqual(span(25, 16).map((one) => one.revision)));
     expect(history).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'نسخه‌های قدیمی‌تر' })).toBeNull();
-    const next = screen.getByRole('button', { name: t('web.page_next') });
-    const previous = screen.getByRole('button', { name: t('web.page_previous') });
+    const next = screen.getByRole('button', { name: t('web.page_older') });
+    const previous = screen.getByRole('button', { name: t('web.page_newer') });
     expect(previous).toBeDisabled();
 
     fireEvent.click(next);
@@ -1360,7 +1360,7 @@ describe('the revision history pager', () => {
     ]);
     expect(reads.some((call) => /offset|page=/.test(call.url))).toBe(false);
 
-    fireEvent.click(screen.getByRole('button', { name: t('web.page_previous') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.page_newer') }));
     await waitFor(() => expect(shown()).toEqual(span(25, 16).map((one) => one.revision)));
   });
 });

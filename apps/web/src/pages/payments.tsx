@@ -75,6 +75,7 @@ import {
   Card,
   CopyButton,
   Copyable,
+  IdText,
   CursorPager,
   DataTable,
   Empty,
@@ -897,12 +898,13 @@ export function PaymentsPage({
   const columns: readonly Column<PaymentSummaryResponse>[] = [
     {
       /*
-       * The payment's own id (§21), shortened on the list and copyable whole, because it
-       * is what the audit log, the ledger and a support conversation name.
+       * The payment's own id (§21), shortened on the list with the whole value as its
+       * title (the detail page copies it), because it is what the audit log, the ledger
+       * and a support conversation name. No copy icon on the list, as in the demo (X7).
        */
       key: 'id',
       header: t('web.payment_id'),
-      render: (row) => <Copyable value={row.id} display={row.id.slice(0, 8)} />,
+      render: (row) => <IdText value={row.id} display={row.id.slice(0, 8)} />,
     },
     {
       key: 'reference',
@@ -1154,9 +1156,10 @@ export function PaymentsPage({
                 dense
                 sticky
               />
-              {/* An ascending keyset (created_at, id) with the cursor in the URL: default
-                  labels, and Previous returns to the first page. */}
+              {/* An ascending keyset (created_at, id) with the cursor in the URL: "newer" is
+                  the next page, and "older" returns to the first. */}
               <CursorPager
+                order="oldest-first"
                 shown={payments.data.payments.length}
                 hasPrevious={cursor !== null}
                 hasNext={payments.data.nextCursor !== null}
@@ -1574,7 +1577,11 @@ function RefundsCard({
       key: 'requested',
       header: t('web.refund_requested_by'),
       render: (row) =>
-        row.requestedByAdminId === null ? <Dash /> : <Copyable value={row.requestedByAdminId} />,
+        row.requestedByAdminId === null ? (
+          <Dash />
+        ) : (
+          <IdText value={row.requestedByAdminId} display={row.requestedByAdminId.slice(0, 8)} />
+        ),
     },
     {
       key: 'completed',
@@ -1587,7 +1594,7 @@ function RefundsCard({
         ) : row.completedByAdminId === null ? (
           <Dash />
         ) : (
-          <Copyable value={row.completedByAdminId} />
+          <IdText value={row.completedByAdminId} display={row.completedByAdminId.slice(0, 8)} />
         ),
     },
     {

@@ -942,8 +942,11 @@ describe('the refund card', () => {
     expect(view.container.textContent).toContain('در انتظار واریز بیرونی');
     expect(view.container.textContent).toContain('واریز دستی بیرون از سامانه');
     expect(view.container.textContent).toContain('مشتری منصرف شد');
-    // Who asked for it. `/admin/logs` could not answer this, which is the point.
-    expect(view.container.textContent).toContain(ADMIN_ID);
+    // Who asked for it. `/admin/logs` could not answer this, which is the point. The table
+    // draws the id short (X7/X9: no copy icon, no sideways scroll) with the whole id as its
+    // title.
+    expect(view.container.textContent).toContain(ADMIN_ID.slice(0, 8));
+    expect(view.container.querySelector(`[title="${ADMIN_ID}"]`)).not.toBeNull();
     // And the sentence for the completion nobody has performed — not a dash.
     expect(view.container.textContent).toContain('هنوز کسی واریز را تأیید نکرده است');
   });

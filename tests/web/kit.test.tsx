@@ -832,15 +832,30 @@ describe('CursorPager', () => {
   it("says «نمایش N» by default, the caller's summary when given one, and nothing for null", () => {
     const { container } = renderPage(
       <>
-        <CursorPager shown={3} hasPrevious={false} hasNext onPrevious={noop} onNext={noop} />
         <CursorPager
+          order="newest-first"
+          shown={3}
+          hasPrevious={false}
+          hasNext
+          onPrevious={noop}
+          onNext={noop}
+        />
+        <CursorPager
+          order="sequence"
           summary={<>کل: ۹</>}
           hasPrevious
           hasNext={false}
           onPrevious={noop}
           onNext={noop}
         />
-        <CursorPager summary={null} hasPrevious hasNext onPrevious={noop} onNext={noop} />
+        <CursorPager
+          order="oldest-first"
+          summary={null}
+          hasPrevious
+          hasNext
+          onPrevious={noop}
+          onNext={noop}
+        />
       </>,
     );
     const [counted, totalled, silent] = [...container.querySelectorAll('.pager')];

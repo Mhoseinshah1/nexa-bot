@@ -358,6 +358,7 @@ export function NotificationCenterPage({ permissions }: { permissions: readonly 
               </ul>
               {(next !== null || cursors.length > 0) && (
                 <CursorPager
+                  order="newest-first"
                   hasPrevious={cursors.length > 0}
                   hasNext={next !== null}
                   onPrevious={() => setTrail({ signature, cursors: cursors.slice(0, -1) })}

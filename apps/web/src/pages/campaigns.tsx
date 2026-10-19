@@ -371,6 +371,7 @@ export function CampaignsPage({
             dense
           />
           <CursorPager
+            order="newest-first"
             onPrevious={() => setCursors({ filter, trail: trail.slice(0, -1) })}
             onNext={() => {
               const next = list.data?.nextCursor;
@@ -2100,7 +2101,6 @@ function ConfirmCard({
                         <Money value={p.walletGift.totalLiability} />
                       )
                     }
-                    tone="warn"
                   />
                 </>
               )}

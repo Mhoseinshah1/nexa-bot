@@ -314,6 +314,7 @@ function Pager({
 }) {
   return (
     <CursorPager
+      order="sequence"
       shown={shown}
       hasPrevious={paged.trail.length > 0}
       hasNext={next !== null}
