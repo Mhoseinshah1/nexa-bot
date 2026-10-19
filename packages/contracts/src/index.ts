@@ -116,6 +116,8 @@ export * from './settings.js';
 export * from './features.js';
 export * from './notifications.js';
 export * from './ops-log-group.js';
+export * from './ops-log-types.js';
+export * from './persian-digits.js';
 export * from './backup.js';
 export * from './recovery.js';
 export * from './recovery-kit.js';

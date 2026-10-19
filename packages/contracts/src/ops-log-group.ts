@@ -36,6 +36,11 @@ export const OPS_LOG_TOPIC_CATEGORIES = [
   'BOT',
   'SECURITY',
   'BACKUPS',
+  // Round 4 PR-D: the customers' log (new customers, blocks, reseller changes) and the
+  // nightly reports. Appended, so every stored category keeps its meaning and an older
+  // replica reads the two as SYSTEM (`opsLogTopicCategoryOf`).
+  'USERS',
+  'REPORTS',
 ] as const;
 export type OpsLogTopicCategory = (typeof OPS_LOG_TOPIC_CATEGORIES)[number];
 
@@ -78,6 +83,8 @@ export const OPS_LOG_TOPIC_NAME_TEMPLATES = {
   BOT: 'ops.group.topic_name.bot',
   SECURITY: 'ops.group.topic_name.security',
   BACKUPS: 'ops.group.topic_name.backups',
+  USERS: 'ops.group.topic_name.users',
+  REPORTS: 'ops.group.topic_name.reports',
 } as const satisfies Record<OpsLogTopicCategory, string>;
 
 // ---------------------------------------------------------------------------

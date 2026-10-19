@@ -199,6 +199,10 @@ export const EVENT_TYPES = [
   // with a LEGACY_ADOPTION order — no provider call, no money. Ids and the state only: never
   // the username, the subscription link or the legacy key.
   'ServiceAdopted',
+  // Round 4 PR-D (log L20): a customer's reseller standing changed — promoted, moved between
+  // tiers, suspended or reactivated. Aggregate is the CUSTOMER. Tier NAMES and closed status
+  // words only: no price, no limit, no free text.
+  'ResellerStandingChanged',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -663,6 +667,19 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     orderId: z.string(),
     panelId: z.string(),
     state: z.string(),
+  }),
+  /*
+   * Round 4 PR-D (log L20). Aggregate is the CUSTOMER. `change` is the closed reading of the
+   * two rows: `PROMOTED` (registered), `TIER_CHANGED`, `SUSPENDED` (an ordinary customer
+   * again) and `REACTIVATED`. The tiers are named, never priced.
+   */
+  ResellerStandingChanged: z.object({
+    customerId: z.string(),
+    change: z.enum(['PROMOTED', 'TIER_CHANGED', 'SUSPENDED', 'REACTIVATED']),
+    fromStatus: z.string().nullable(),
+    toStatus: z.string(),
+    fromTierName: z.string().nullable(),
+    toTierName: z.string(),
   }),
 } as const satisfies Record<EventType, z.ZodType>;
 
