@@ -22,7 +22,9 @@ function compensation(overrides: Record<string, unknown> = {}): Record<string, u
   return {
     refundId: REFUND_ID,
     paymentId: PAYMENT_ID,
+    paymentCode: 'HX4N8RTW',
     orderId: ORDER_ID,
+    orderCode: 'K7M2P9QA',
     customerId: CUSTOMER_ID,
     customerTelegramUserId: '5550004321',
     customerUsername: 'reza_buyer',
@@ -48,8 +50,15 @@ describe('the compensation list', () => {
 
     const table = await screen.findByRole('table');
     // PR-C: links and «کپی شناسه», never a uuid prefix.
-    expect(table.querySelector(`a[href="/payments/${PAYMENT_ID}"]`)).not.toBeNull();
-    expect(table.querySelector(`a[href="/orders/${ORDER_ID}"]`)).not.toBeNull();
+    // The payment by its tracking code and the order by its code (Codex review of #299).
+    expect(within(table).getByRole('link', { name: 'HX4N8RTW' })).toHaveAttribute(
+      'href',
+      `/payments/${PAYMENT_ID}`,
+    );
+    expect(within(table).getByRole('link', { name: 'K7M2P9QA' })).toHaveAttribute(
+      'href',
+      `/orders/${ORDER_ID}`,
+    );
     expect(table.textContent).not.toContain(PAYMENT_ID.slice(0, 8));
     expect(table.textContent).not.toContain(ORDER_ID.slice(0, 8));
     expect(within(table).getByText('5550004321')).toBeInTheDocument();

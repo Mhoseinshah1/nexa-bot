@@ -371,6 +371,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   operation: 'نوع عملیات',
   order: 'سفارش',
   orderId: 'شناسهٔ سفارش',
+  orderCode: 'کد سفارش',
   outcome: 'نتیجه',
   page: 'شمارهٔ صفحه',
   pages: 'تعداد صفحه‌ها',
@@ -1296,6 +1297,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.payment.cancel_confirm': [
     'پرسش تأیید انصراف از پرداخت',
     'پیش از انصراف می‌گوید کد پیگیری باطل می‌شود و این کار برگشت‌پذیر نیست.',
+  ],
+  'bot.order.order_code_line': [
+    'سطر کد سفارش',
+    'سطر «کد سفارش» که هنگام ارسال به ابتدای متن سفارشی‌شدهٔ قدیمی پیش‌فاکتور افزوده می‌شود، اگر آن متن کد سفارش را نداشته باشد.',
   ],
   'bot.payment.tracking_code_line': [
     'سطر کد پیگیری پرداخت',

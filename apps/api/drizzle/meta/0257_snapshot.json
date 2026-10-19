@@ -1,5 +1,5 @@
 {
-  "id": "d3eb73ef-65ef-4db9-9af4-3dfc339ce4a7",
+  "id": "329439e1-50c2-435c-85b4-a738681994ad",
   "prevId": "4042387b-16ec-4223-9168-7e285af2fc9e",
   "version": "7",
   "dialect": "postgresql",
@@ -20684,27 +20684,6 @@
           "method": "btree",
           "with": {}
         },
-        "orders_tenant_code_key": {
-          "name": "orders_tenant_code_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "code",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "orders_tenant_created_idx": {
           "name": "orders_tenant_created_idx",
           "columns": [
@@ -23877,27 +23856,6 @@
           "method": "btree",
           "with": {}
         },
-        "payments_tenant_code_key": {
-          "name": "payments_tenant_code_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "code",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "payments_tenant_reference_key": {
           "name": "payments_tenant_reference_key",
           "columns": [
@@ -24659,27 +24617,6 @@
           ],
           "isUnique": true,
           "where": "source_ref IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "products_tenant_code_number_key": {
-          "name": "products_tenant_code_number_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "code_number",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -31289,27 +31226,6 @@
           "method": "btree",
           "with": {}
         },
-        "services_tenant_code_key": {
-          "name": "services_tenant_code_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "code",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "services_panel_provider_username_key": {
           "name": "services_panel_provider_username_key",
           "columns": [
@@ -37544,27 +37460,6 @@
           ],
           "isUnique": true,
           "where": "source_ref IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "tickets_tenant_code_key": {
-          "name": "tickets_tenant_code_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "code",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
           "concurrently": false,
           "method": "btree",
           "with": {}

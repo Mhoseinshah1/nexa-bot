@@ -297,7 +297,8 @@ describe('the resellers report', () => {
         denied={false}
       />,
     );
-    const link = await screen.findByRole('link', { name: id.slice(-8) });
+    // PR-C: no uuid fragment is drawn; the link reads «مشاهده» and the id sits behind «کپی شناسه».
+    const link = await screen.findByRole('link', { name: t('web.record_open') });
     expect(link.getAttribute('href')).toBe(`/users/${id}`);
   });
 });

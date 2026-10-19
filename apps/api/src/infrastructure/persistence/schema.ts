@@ -425,14 +425,12 @@ function publicCodeColumns() {
   return { code: text('code') };
 }
 
-function publicCodeChecks(
-  name: string,
-  table: { readonly tenantId: AnyPgColumn; readonly code: AnyPgColumn },
-) {
-  return [
-    check(`${name}_code_check`, sql`code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'`),
-    uniqueIndex(`${name}_tenant_code_key`).on(table.tenantId, table.code),
-  ];
+/*
+ * The per-tenant unique key, `<table>_tenant_code_key`, is built ONLINE (`online-indexes.ts`)
+ * and so deliberately not declared here (Codex review of #299).
+ */
+function publicCodeChecks(name: string) {
+  return [check(`${name}_code_check`, sql`code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'`)];
 }
 
 export function enumCheck(column: string, values: readonly string[]): SQL {
@@ -3781,7 +3779,7 @@ export const products = pgTable(
   (table) => [
     ...recordSourceChecks('products', table),
     check('products_code_number_check', sql`code_number IS NULL OR code_number > 0`),
-    uniqueIndex('products_tenant_code_number_key').on(table.tenantId, table.codeNumber),
+    // `products_tenant_code_number_key` is built online (`online-indexes.ts`).
     index('products_tenant_status_idx').on(table.tenantId, table.status),
     /** The catalogue's order, and the list's keyset: sort, then created, then id. */
     index('products_tenant_sort_idx').on(
@@ -4125,7 +4123,7 @@ export const orders = pgTable(
   },
   (table) => [
     ...recordSourceChecks('orders', table),
-    ...publicCodeChecks('orders', table),
+    ...publicCodeChecks('orders'),
     /** A child row may not name a customer of another tenant. */
     foreignKey({
       columns: [table.tenantId, table.customerId],
@@ -4448,7 +4446,7 @@ export const payments = pgTable(
   },
   (table) => [
     ...recordSourceChecks('payments', table),
-    ...publicCodeChecks('payments', table),
+    ...publicCodeChecks('payments'),
     foreignKey({
       columns: [table.tenantId, table.customerId],
       foreignColumns: [customers.tenantId, customers.id],
@@ -6969,7 +6967,7 @@ export const services = pgTable(
   },
   (table) => [
     ...recordSourceChecks('services', table),
-    ...publicCodeChecks('services', table),
+    ...publicCodeChecks('services'),
     check('services_is_test_source_check', sql`NOT is_test OR source = 'MIRZA'`),
     foreignKey({
       columns: [table.tenantId, table.customerId],
@@ -11298,7 +11296,7 @@ export const tickets = pgTable(
   },
   (table) => [
     ...recordSourceChecks('tickets', table),
-    ...publicCodeChecks('tickets', table),
+    ...publicCodeChecks('tickets'),
     unique('tickets_tenant_id_key').on(table.tenantId, table.id),
     unique('tickets_opening_key').on(table.tenantId, table.openingKey),
     /** The inbox: newest first, under a keyset on the immutable `(created_at, id)`. */

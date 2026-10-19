@@ -43,6 +43,7 @@ import {
   type GatewayInvoiceView,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
+import type { PublicLabels } from '../../modules/commerce/public-codes/application/public-labels.js';
 import { adminActor, requireSessionToken } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
@@ -327,8 +328,13 @@ export class PaymentsController {
       ...(page.limit === undefined ? {} : { limit: page.limit }),
       ...(page.cursor === undefined ? {} : { cursor: compensationCursorFrom(page.cursor) }),
     });
+    // PR-C: the payments' tracking codes and the orders' codes, never their uuids.
+    const labels = await this.container.publicLabels.read(scope, actor, 'payments.view', {
+      paymentIds: result.items.map((record) => record.paymentId),
+      orderIds: result.items.map((record) => record.orderId),
+    });
     return {
-      compensations: result.items.map(toCompensationView),
+      compensations: result.items.map((record) => toCompensationView(record, labels)),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
     };
   }
@@ -734,11 +740,13 @@ function toReceiptCreditView(credit: ReceiptCreditRecord): ReceiptCreditView {
 }
 
 /** One compensation, amounts as decimal strings with their currency (D7). */
-function toCompensationView(record: CompensationRecord): CompensationView {
+function toCompensationView(record: CompensationRecord, labels: PublicLabels): CompensationView {
   return {
     refundId: record.refundId,
     paymentId: record.paymentId,
+    paymentCode: labels.payments.get(record.paymentId) ?? null,
     orderId: record.orderId,
+    orderCode: record.orderId === null ? null : (labels.orders.get(record.orderId) ?? null),
     customerId: record.customerId,
     customerTelegramUserId: record.customerTelegramUserId,
     customerUsername: record.customerUsername,

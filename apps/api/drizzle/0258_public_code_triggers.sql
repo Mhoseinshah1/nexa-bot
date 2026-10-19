@@ -1,6 +1,11 @@
 -- Round 4, PR-C: short public codes. 0257 added the nullable columns, their format CHECKs and
 -- the per-tenant unique keys; this file adds what drizzle-kit does not model.
 --
+-- The per-tenant unique keys are built ONLINE after the migrator (`online-indexes.ts`, Codex
+-- review of #299). Nothing below depends on them: the trigger LOOKS a candidate up before
+-- using it, and a race between two inserts drawing one code before the keys exist is
+-- 1 in ~10^11 per pair; once built, the keys are the arbiter.
+--
 -- 1. `nexa_public_code()` draws one 8-character code: Crockford base32 without 0/O/1/I/L
 --    (30 symbols, the alphabet `PUBLIC_CODE_ALPHABET` in @nexa/contracts). `random()` is the
 --    source on purpose: a code is a presentation identity, never a secret and never something
@@ -15,7 +20,8 @@
 --    duplicate. A code a writer supplies (a restore) is kept as written.
 -- 3. `nexa_assign_product_code()` gives a product the next per-tenant number (`P-101` first)
 --    under a per-tenant transaction advisory lock, so two concurrent creates cannot take one
---    number. The backfill takes the same lock.
+--    number, after numbering any of the tenant's older products still without one. The
+--    backfill takes the same lock.
 -- 4. A code, once written, never changes (`nexa_public_code_frozen`): a code a customer was
 --    shown must keep naming the same record. NULL → code is the backfill and is allowed.
 --
@@ -73,6 +79,17 @@ BEGIN
     RETURN NEW;
   END IF;
   PERFORM pg_advisory_xact_lock(hashtext('nexa.product-code'), hashtext(NEW.tenant_id::text));
+  -- Codex review of #299: the tenant's products from before 0257 are numbered FIRST, oldest
+  -- first, so a product created between this migration and the backfill never takes P-101
+  -- ahead of the catalogue the operator already had. A catalogue is tens of rows, and only
+  -- the first insert after the migration finds any.
+  UPDATE products AS p
+     SET code_number = base.n + ranked.position
+    FROM (SELECT coalesce(max(code_number), 100) AS n
+            FROM products WHERE tenant_id = NEW.tenant_id) AS base,
+         (SELECT id, row_number() OVER (ORDER BY created_at, id) AS position
+            FROM products WHERE tenant_id = NEW.tenant_id AND code_number IS NULL) AS ranked
+   WHERE p.id = ranked.id AND p.code_number IS NULL;
   SELECT coalesce(max(code_number), 100) + 1 INTO NEW.code_number
     FROM products WHERE tenant_id = NEW.tenant_id;
   RETURN NEW;

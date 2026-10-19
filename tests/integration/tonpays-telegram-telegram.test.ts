@@ -303,8 +303,8 @@ describe('TonPays Telegram in the bot', () => {
 
   it('FIX-02: a photo after the receipt window’s deadline is answered closed WITH the payment’s code', async () => {
     const { paymentId, message } = await cardOnScreen();
-    const [stored] = await rows<{ code: string }>(
-      sql`SELECT code FROM payments WHERE id = ${paymentId}`,
+    const [stored] = await rows<{ code: string; reference: string }>(
+      sql`SELECT code, reference FROM payments WHERE id = ${paymentId}`,
     );
     // PR-C: the 8-character public code is the tracking code.
     const code = stored!.code;

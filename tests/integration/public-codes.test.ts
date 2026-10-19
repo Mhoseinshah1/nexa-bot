@@ -188,6 +188,31 @@ describe('short public codes', () => {
     return row!.code;
   }
 
+  it('a product created before the backfill never takes a number ahead of the older catalogue', async () => {
+    const panelA = await a.panel();
+    // Two products from before 0257: written with no number.
+    await q(`ALTER TABLE products DISABLE TRIGGER nexa_products_code_number`);
+    let older: string[];
+    try {
+      older = [await a.product(panelA, 'old one'), await a.product(panelA, 'old two')];
+    } finally {
+      await q(`ALTER TABLE products ENABLE TRIGGER nexa_products_code_number`);
+    }
+    // A product created between the migration and the backfill (Codex review of #299).
+    const fresh = await a.product(panelA, 'new');
+    const numbers = await q<{ id: string; code_number: number }>(
+      `SELECT id, code_number FROM products WHERE id = ANY($1::uuid[])`,
+      [[...older, fresh]],
+    );
+    const byId = new Map(numbers.map((row) => [row.id, row.code_number]));
+    expect(byId.get(older[0]!)).toBe(101);
+    expect(byId.get(older[1]!)).toBe(102);
+    expect(byId.get(fresh)).toBe(103);
+    // And the backfill, arriving afterwards, has nothing left to number.
+    const reports = await backfillPublicCodes(ctx.container.database);
+    expect(reports.find((report) => report.table === 'products')?.filled).toBe(0);
+  });
+
   it('a code is unique per tenant and table, and only that', async () => {
     const w = await world();
     const code = (await codeOf('orders', w.orderId))!;
