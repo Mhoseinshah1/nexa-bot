@@ -303,6 +303,8 @@ export function ExtraDevicesPage({
     {
       key: 'scope',
       header: t('web.extra_devices_scope'),
+      // X9: the scope breaks between its words before the table scrolls sideways at 1440.
+      wrap: 'tight',
       render: (row) => (
         <span className="muted">{`${panelName(row.panelId)} / ${productName(row.productId)}`}</span>
       ),
@@ -319,6 +321,7 @@ export function ExtraDevicesPage({
     {
       key: 'updated',
       header: t('web.extra_devices_updated'),
+      wrap: 'tight',
       render: (row) => <span className="nowrap">{formatTimestampNumeric(row.updatedAt)}</span>,
     },
     {
@@ -397,13 +400,6 @@ export function ExtraDevicesPage({
           )}
         </Banner>
       )}
-      {toggle.error !== null && (
-        <Banner tone="danger">
-          {messageFor(toggle.error)}
-          <ErrorRef error={toggle.error} />
-        </Banner>
-      )}
-
       <div className="stack">
         <StateSwitch
           query={rates}
@@ -427,6 +423,16 @@ export function ExtraDevicesPage({
               rowKey={(row) => row.id}
               caption={t('web.extra_devices_rates')}
             />
+            {/*
+              A refused toggle is said under the rows it concerns, never above them: a banner
+              inserted above the list moved the row the operator just clicked (no-scroll, 390).
+            */}
+            {toggle.error !== null && (
+              <Banner tone="danger">
+                {messageFor(toggle.error)}
+                <ErrorRef error={toggle.error} />
+              </Banner>
+            )}
             <CursorPager
               order="oldest-first"
               shown={rows.length}

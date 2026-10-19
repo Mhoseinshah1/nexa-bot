@@ -155,6 +155,8 @@ function columns(
     {
       key: 'customer',
       header: t('web.service_refund_customer'),
+      // X9: the Telegram id over the username when the queue is tight at 1440.
+      wrap: 'tight',
       render: (row) => (
         <Ltr>
           {row.customerTelegramUserId ?? '—'}

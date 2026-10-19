@@ -1,12 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { DataTable, type Column } from '../../apps/web/src/ui/kit';
 import { formatTimestampNumeric } from '../../apps/web/src/format';
 import { renderPage, stubApi } from './harness';
 import { ServiceDetailPage, ServicesPage } from '../../apps/web/src/pages/services';
 import { CustomServicePage } from '../../apps/web/src/pages/custom-service';
+import { ExtraDevicesPage } from '../../apps/web/src/pages/extra-devices';
 import { AudienceBuilder, EMPTY_AUDIENCE } from '../../apps/web/src/pages/audience-builder';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { fixturesFor } from './shots/index.ts';
@@ -240,5 +241,19 @@ describe('a new mass operation’s audience', () => {
     const ui = readFileSync(join(import.meta.dirname, '../../apps/web/src/styles/ui.css'), 'utf8');
     expect(ui).toMatch(/\.aq-count-title \{\s*flex-basis: auto;/);
     expect(ui).toMatch(/\.aq-count b \{\s*font-size: 26px;/);
+  });
+});
+
+describe('extra devices — no scroll jump', () => {
+  it('says a refused toggle under the rows, never above the row just clicked', async () => {
+    // Only GETs are routed: the toggle's POST is refused by the stub.
+    stubApi(routesOf(fixturesFor('demo-parity')).filter((one) => one.method === 'GET'));
+    const { container } = renderPage(<ExtraDevicesPage denied={false} mayEdit mayViewPanels />);
+    const off = (await screen.findAllByRole('button', { name: 'غیرفعال کردن' }))[0]!;
+    fireEvent.click(off);
+    await waitFor(() => expect(container.querySelector('.banner.danger')).not.toBeNull());
+    const banner = container.querySelector('.banner.danger')!;
+    const table = container.querySelector('.tbl-wrap')!;
+    expect(table.compareDocumentPosition(banner) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
