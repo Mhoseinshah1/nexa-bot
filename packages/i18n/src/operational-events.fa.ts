@@ -32,6 +32,8 @@ export const OPERATIONAL_EVENT_LABELS_FA: Readonly<Record<string, string>> = {
   'backup.cleanup_ok': 'پاک‌سازی پشتیبان‌ها دوباره انجام شد',
   'backup.delivery_failed': 'ارسال پشتیبان انجام نشد',
   'backup.delivery_ok': 'ارسال پشتیبان دوباره انجام شد',
+  'backup.delivery_partial': 'بکاپ فقط بخشی از بخش‌هایش را به تلگرام رساند',
+  'backup.delivery_partial_ok': 'بکاپ دوباره کامل به تلگرام رسید',
   'backup.disk_threshold_exceeded': 'فضای دیسک پشتیبان‌ها از آستانه گذشت',
   'backup.disk_threshold_ok': 'فضای دیسک پشتیبان‌ها به حالت عادی برگشت',
   'backup.interval_exceeded': 'پشتیبان‌گیری از موعدش عقب افتاد',

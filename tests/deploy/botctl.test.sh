@@ -1348,6 +1348,30 @@ assert_contains 'the refusal did not name the real problem' "$BOTCTL_OUTPUT" 'no
 assert_equals 'an empty dump was kept' '' "$(find "$NEXA_BACKUP_DIR" -name '*.sql.gz*' -print -quit)"
 fake_set empty_dump 0
 
+# Round 4 PR-E (E4): a backup delivered in parts, restored with botctl.
+test_case 'restore refuses without an explicit target, and without the archive'
+: >"$DOCKER_LOG"
+run_botctl restore part.7z.001
+assert_fails 'a restore with no target exited zero' test "$BOTCTL_STATUS" -eq 0
+assert_contains 'the refusal did not ask for an empty target' "$BOTCTL_OUTPUT" 'EMPTY database'
+run_botctl restore --target nexa_restore_test
+assert_fails 'a restore with no archive exited zero' test "$BOTCTL_STATUS" -eq 0
+assert_equals 'a refused restore still called docker' '' "$(docker_log)"
+
+test_case 'restore joins the parts in name order and restores through the backup CLI'
+parts_dir="$(mktemp -d)"
+printf 'NEXABAK1-first-' >"${parts_dir}/b.nxb.001"
+printf 'second' >"${parts_dir}/b.nxb.002"
+: >"$DOCKER_LOG"
+run_botctl restore --target nexa_restore_test "${parts_dir}/b.nxb.002" "${parts_dir}/b.nxb.001"
+assert_equals 'the restore failed' 0 "$BOTCTL_STATUS"
+assert_contains 'the restore did not go through the backup CLI' "$(docker_log)" \
+  'backup.cli.js restore'
+assert_contains 'the restore did not name its target' "$(docker_log)" '--target nexa_restore_test'
+assert_not_contains 'an NXB archive was given a password' "$(docker_log)" '--password-stdin'
+assert_contains 'the parts were not streamed into a scratch file' "$(docker_log)" 'umask 077'
+rm -rf "$parts_dir"
+
 test_case 'a failed dump is loud and leaves no file behind'
 fake_set exec_exit 1
 rm -f "$NEXA_BACKUP_DIR"/*.sql.gz

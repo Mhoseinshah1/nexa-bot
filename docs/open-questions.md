@@ -103,15 +103,20 @@ mistaken for oversights:
   safety net only. The DR pipeline's archive FILES under `BACKUP_WORK_DIR` do have
   a retention policy since Program E5 — `backup.archive_keep_count` /
   `backup.archive_keep_days`, `docs/backup.md` § Archive retention.)
-- **OQ-E5-OFFHOST: DECISION, OPEN — an off-host copy above 50 MiB.** The DR archive
-  leaves the host only through Telegram, and a bot may send at most 50 MiB; above
-  that the group gets a notice and the only copy is on the server it protects. An
-  S3-compatible (or other object-storage) destination behind `RoutedBackupDelivery`
-  is the likely answer and is NOT built: it needs an ADR (ADR-0011 control 2 says
-  "not in V1"), a decision on who owns the bucket and how its credentials are
-  sealed and rotated, and real credentials to accept it against. Until decided,
-  copying the archive off the host is manual (`docs/backup.md` § What this does
-  NOT do).
+- **OQ-E5-OFFHOST: RESOLVED (Round 4 PR-E, E4/E5) — the off-host copy is Telegram, in
+  parts.** The 50 MiB bot ceiling no longer stops it: an archive above 45 MiB is
+  delivered as ≤ 45 MiB parts (`.7z.001`, `.002` …, 7-Zip's own volume layout — byte
+  ranges of the one verified archive), each its own document with its own recorded
+  outcome and Telegram message id, followed by one summary message with every part's
+  SHA-256 and the restore instruction. Delivery of ALL parts to the BACKUPS topic IS the
+  off-host copy; a partial delivery opens `backup.delivery_partial` (ERRORS topic) and
+  the local copy is kept. The local copy is removed only once every part has a message
+  id, outside the newest `backup.local_copies_keep` (default 1, 0 allowed). Residual,
+  owner-only: the operations group's membership is who can read the parts (a 7-Zip
+  archive opens with the backup password alone, so keep the password out of that
+  group), and Telegram's own retention of old documents is not controlled from here.
+  An object-storage destination remains possible later behind the same router; nothing
+  requires it now.
 - **No secret rotation tooling.** Rotating the database password or the KEK on
   a live installation has no supported procedure yet; the KEK half of that
   belongs to `BLOCKER-SECRETS-V2` below.

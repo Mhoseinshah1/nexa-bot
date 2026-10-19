@@ -20,6 +20,101 @@ delivering it.
 The dump is the whole database. Nothing is excluded — not by table name, not by
 prefix, not because a table looks transient.
 
+## The archive: 7-Zip with the owner's password, in ≤ 45 MiB parts (Round 4 PR-E)
+
+**Two containers, one open.** Once the owner sets a **backup password** («بکاپ و بازیابی» →
+«رمز فایل بکاپ»: typed twice, behind the account password, never shown again, stored with
+`SecretCipher` as purpose `backup.archive_password`), every backup is a **7z archive**:
+`pg_dump -Fc --compress=0` (so LZMA2, not gzip, compresses), then 7-Zip with **LZMA2
+`-mx=9`**, **AES-256** and **encrypted headers** (`-mhe=on`), non-solid, holding two
+entries: `manifest.json` (identity, versions, the dump's SHA-256) and the dump. It opens
+in **7-Zip on Windows with the password alone** — no keyring, no Recovery Kit. Without a
+password the archive stays the keyring `.nxb` it always was. Both are opened by the same
+`DualFormatBackupArchiver.open`, chosen by the file's magic bytes, for the pipeline's
+VERIFY_RESTORE, the Web Admin recovery, the recovery executor and the CLI.
+
+The password reaches 7-Zip on **stdin**, never as `-p<secret>` in argv (which any user on
+the host could read in `/proc`). A replaced password is superseded, not deleted, so older
+archives on this server still open. Keep it somewhere other than the operations group: the
+group holds the parts, and the parts plus the password are the whole database.
+
+**Parts.** An archive above **45 MiB** (`BACKUP_PART_MAX_BYTES`, under Telegram's 50 MiB bot
+ceiling) is delivered in parts `….7z.001`, `….7z.002` … — **byte ranges of the one verified
+archive**, which is exactly 7-Zip's multi-volume layout. Nothing is copied to make them: each
+part is a range of the file VERIFY_RESTORE opened, so what is delivered is what was verified,
+and `cat` of every part in order is the archive. Each part has its own SHA-256 and is sent as
+its own document with its **own recorded outcome and Telegram `message_id`**
+(`backup_run_parts`). The plan is on the row before the first send.
+
+- The first part that is not `SUCCEEDED` **stops** the delivery. Nothing is resent; the
+  parts after it stay `NOT_ATTEMPTED`. ADR-0025's three outcomes hold per part.
+- When every part arrived, **one summary message** follows: date, total size, part count,
+  every part's SHA-256, «همهٔ بخش‌ها را در یک پوشه بگذارید و فایل ‎.001 را با 7-Zip باز کنید»,
+  and the `botctl restore` command. (Above Telegram's message limit the per-part digests are
+  left to each part's caption, where they always are.) A single part's caption is the summary.
+- Some parts delivered and not all is **`backup.delivery_partial`**, routed to the **ERRORS**
+  topic; none delivered is `backup.delivery_failed` as before.
+
+**Local copies.** A run's local directory is removed by the worker's housekeeping only once
+**every part has a recorded Telegram message id**, outside the newest
+`backup.local_copies_keep` such runs (default **1**, **0** allowed). A run delivered in part,
+not at all, or whose answer was lost is never removed by this rule; the older
+`backup.archive_keep_count` / `backup.archive_keep_days` retention still applies to it.
+
+**Disk.** The plaintext dump is removed right after the seal, before verification decrypts a
+second copy, so an uncompressed dump and its verification copy are never on disk together.
+
+### Compression: LZMA2 inside the 7z (measured)
+
+Measured on a 1 GiB synthetic stream shaped like the imported tables (`legacy_history_records`
+JSON payloads with the constant flags and Persian text, audit rows, outbox rows), pinned to two
+cores of a 4-CPU box shared with other jobs (load 5–18 during the run, so the times are
+pessimistic and noisy; sizes are exact):
+
+| Method                         | Output   | Wall time | Peak RSS |
+| ------------------------------ | -------- | --------- | -------- |
+| gzip -6 (pg_dump's default)    | 244.0 MB | ~27 s     | —        |
+| zstd -19 --long=27 -T2         | 192.7 MB | 746 s     | 531 MB   |
+| 7z LZMA2 -mx=9 -mmt=2 (chosen) | 182.1 MB | 1464 s    | 704 MB   |
+| 7z LZMA2 -mx=5 -mmt=2          | 189.1 MB | 1465 s    | 204 MB   |
+
+LZMA2 `-mx=9` is the smallest (5.5 % below zstd), is 7-Zip's native method (a zstd stream
+inside a 7z would need a 7-Zip fork on Windows), and fits a 2 vCPU / 4 GB host at ~0.7 GB.
+`BACKUP_SEVEN_ZIP_LEVEL` (default 9) and `BACKUP_SEVEN_ZIP_THREADS` (default 2) tune it;
+`BACKUP_SEVEN_ZIP_BIN` (default `7z`) names the binary — the image installs Debian's `7zip`
+and links its `7zz` to `7z`.
+
+### Restoring a backup that came in parts
+
+- **On Windows:** put every part in one folder and open the `.001` with 7-Zip; it asks for the
+  backup password and yields `manifest.json` and the dump (`pg_restore` reads the dump).
+- **`botctl restore --target <empty-db> <part.001> <part.002> …`** on the server: joins the
+  parts in name order inside the api container, asks for the password (no echo) when the
+  archive is a 7z, and restores into the EMPTY database you created (`createdb` first); the
+  live database is refused.
+- **`backup verify|restore`** (the CLI): repeat `--archive` for every part, or name the `.001`
+  alone; add `--password-stdin` for a 7z. A missing part is refused by name.
+- **The Web Admin** («عملیات بازیابی»): choose every part at once; the browser joins them in
+  order without reading them and refuses a set with a gap; for a 7z, type its password before
+  «بررسی» (used for that verification only, never stored — a verified 7z is re-sealed under
+  the keyring in place, so the executor never needs it). Then the ordinary restore.
+- **«آرشیو ربات قبلی» and a later daily backup:** the archive the legacy compaction takes
+  (`docs/legacy-migration/compaction.md`) is an ordinary full backup with its own title;
+  restoring it gives back the legacy rows the compaction removed. A daily backup taken after
+  the compaction is restored the same way and holds the compacted state.
+
+## Data retention (Round 4 PR-E, E3)
+
+Two worker sweepers, hourly, in batches of 5000, skipped while a recovery holds the
+installation:
+
+| Setting                                  | Default | Removes                                                     | Never removes                                                            |
+| ---------------------------------------- | ------- | ----------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `retention.outbox_published_days`        | 7       | outbox messages PUBLISHED before the cutoff                 | an unpublished, failing or exhausted message; `processed_messages`       |
+| `retention.idempotency_interactive_days` | 30      | `WEB` and `TELEGRAM` idempotency keys older than the cutoff | `WORKER`/`SCHEDULER`/`API` keys (importer and money jobs' re-run safety) |
+
+Audit logs are never deleted by any job.
+
 ## Configuration
 
 Most of it is environment configuration in `/etc/nexa/nexa.env`: a dump is of the
@@ -87,10 +182,8 @@ that is unusable, a channel that throws — each is recorded on the run's delive
 columns, and the run stays `SUCCEEDED` with its verified archive retained on the
 server.
 
-**Above Telegram's 50 MiB bot ceiling** the topic receives a notice instead — Persian
-first, naming the backup, its checksum and where on the server it is retained — and
-the run's delivery detail says the archive was retained. Nothing pretends a document
-was delivered.
+**Above 45 MiB** the archive is delivered in parts (§ The archive, above). The old
+"retained on the server" notice is gone: nothing above the ceiling stays home any more.
 
 ## The automatic schedule
 
@@ -246,15 +339,11 @@ Stated because ADR-0011 required these and V1 does not have them.
 protects, plus whatever Telegram holds. A host that is lost loses both. Getting
 the artifact somewhere else is manual, today.
 
-**No off-host copy above Telegram's 50 MiB bot ceiling — an OPEN DECISION.**
-Once the archive outgrows what a bot may send, the group gets a notice and the
-archive stays on this server only. An S3-compatible (or other off-host) object
-storage destination behind the same `RoutedBackupDelivery` is the obvious fix and
-is deliberately NOT built: it needs an ADR (ADR-0011's control 2 says "not in
-V1"), a decision about who holds the bucket credentials and how they are sealed,
-and real credentials to accept it against. Until then, copying the archive off
-the host is manual (`$C cp api:/var/lib/nexa/backups/<id>/archive.nxb .`, or the
-Web Admin's «دریافت آرشیو رمزشده»).
+**The off-host copy is Telegram, in parts (OQ-E5-OFFHOST, resolved).** Delivery of every
+part to the BACKUPS topic is the off-host copy, whatever the archive's size. A partial
+delivery is an alert, never a copy. An object-storage destination remains possible later
+behind the same router; nothing needs it now. A part can also be downloaded from the run
+(`/backups/<id>/archive?part=N`), byte for byte as delivered.
 
 **No retention of the Telegram copies.** The Bot API can delete only messages
 younger than 48 hours, so pruning the group's old documents is manual. Archive
@@ -373,11 +462,10 @@ code for it would make that condition mean two things, so this batch adds none: 
 check is `botctl status` and the Web Admin page. A dedicated condition is a contracts
 change for a later batch.
 
-**Off-host is Telegram, up to 50 MiB.** A verified archive is delivered to the
-operations group's BACKUPS topic (or the fallback chat). Above Telegram's 50 MiB bot
-ceiling the topic gets a notice and the archive stays on this server only — see
-§ What this does NOT do. With no destination configured, the archive is on this
-server only. In both cases copying it off the host is a manual step.
+**Off-host is Telegram, in ≤ 45 MiB parts.** A verified archive is delivered to the
+operations group's BACKUPS topic (or the fallback chat), split when it is larger. With no
+destination configured, the archive is on this server only and copying it off the host is
+a manual step.
 
 **Integrity is checked on every run.** SHA-256 checksum, encryption, and a
 VERIFY_RESTORE of the encrypted archive into a scratch database before delivery
