@@ -1,9 +1,15 @@
 import type {
   DeliveryOutcome,
   NotificationDestination,
+  OperationalEventInput,
+  OpsLogTypeId,
+  RecordedOperationalEvent,
+  TemplateValues,
+  TenantContext,
   NotificationKind,
   NotificationStatus,
   NotificationTransportKind,
+  OpsLogButton,
   OpsLogGroupProblem,
   OpsLogTopicCategory,
   ScopeContext,
@@ -87,9 +93,39 @@ export interface NotificationRepository {
       readonly maxAttempts: number;
       readonly correlationId: string | null;
       readonly now: Date;
+      /**
+       * Round 4 PR-D: hold the intent until this instant. Absent is "now". Only the storm
+       * roll-up uses it — a roll-up waits for the end of its window so that it can say how
+       * many errors it stands for.
+       */
+      readonly notBefore?: Date;
     },
     tx?: unknown,
   ): Promise<{ readonly intent: NotificationIntent; readonly created: boolean }>;
+
+  /**
+   * Round 4 PR-D: how many intents of `templateKey` carrying this storm key were queued since
+   * `since`. The count the optional storm roll-up compares with its threshold.
+   */
+  countByStormKey(
+    scope: ScopeContext,
+    templateKey: TemplateKey,
+    stormKey: string,
+    since: Date,
+    tx?: unknown,
+  ): Promise<number>;
+
+  /**
+   * Round 4 PR-D: adds one error to a roll-up that has not been sent yet — its count, and its
+   * customer when that customer is not already counted. False when the roll-up was already
+   * sent (or does not exist), which the caller answers by starting the next window's.
+   */
+  bumpStormRollup(
+    scope: ScopeContext,
+    dedupeKey: string,
+    customerKey: string | null,
+    tx?: unknown,
+  ): Promise<boolean>;
 
   findById(scope: ScopeContext, id: string, tx?: unknown): Promise<NotificationIntent | null>;
 
@@ -327,6 +363,27 @@ export interface OutboundMessage {
    * to the operations log group. Absent means any of the tenant's active bots.
    */
   readonly botInstanceId?: string;
+  /**
+   * Round 4 PR-D: inline URL buttons under the message, each already labelled and addressed.
+   * Absent when the message carries none or the Web Admin address is unknown.
+   */
+  readonly buttons?: readonly {
+    readonly text: string;
+    readonly url: string;
+    readonly row: number;
+  }[];
+}
+
+/**
+ * Round 4 PR-D: turns the buttons a log message names (what to open, and which record) into
+ * labelled https links to the Web Admin, at SEND time. Empty when no https address is known,
+ * so a message is never refused by Telegram for a link it cannot open.
+ */
+export interface OpsButtonResolver {
+  resolve(
+    scope: ScopeContext,
+    buttons: readonly OpsLogButton[],
+  ): Promise<readonly { readonly text: string; readonly url: string; readonly row: number }[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -442,4 +499,51 @@ export interface TransportFailureSignals {
 export interface NotificationTransport {
   readonly kind: NotificationTransportKind;
   send(message: OutboundMessage): Promise<TransportResult>;
+}
+
+// ---------------------------------------------------------------------------
+// Round 4 PR-D: how an operational event is laid out in the operations log group
+// ---------------------------------------------------------------------------
+
+/** A group message built for an operational event, ready for the lane. */
+export interface PresentedOpsEvent {
+  readonly templateKey: TemplateKey;
+  readonly values: TemplateValues;
+  readonly logType: OpsLogTypeId;
+  readonly buttons?: readonly OpsLogButton[];
+  /** The optional storm roll-up's identity for this error; see `NotificationService.queue`. */
+  readonly storm?: {
+    readonly key: string;
+    readonly customer: string | null;
+    readonly rollup: {
+      readonly heading: string;
+      readonly cause: string;
+      readonly technical?: string;
+      readonly panelName?: string;
+    };
+  };
+}
+
+/**
+ * Lays out the operational events that have a message of their own (a payment link that could
+ * not be made — L22; a panel that went down or came back — L25) and names every other event in
+ * Persian. The projector asks it first and falls back to the generic layout, so a code's
+ * presentation can never make an event unrenderable.
+ */
+export interface OpsEventPresenter {
+  present(
+    scope: TenantContext,
+    input: OperationalEventInput,
+    recorded: RecordedOperationalEvent,
+    tx: unknown,
+  ): Promise<PresentedOpsEvent | null>;
+  /**
+   * Whether every occurrence of this code is a message of its own, rather than only the one
+   * that opens or reopens its condition (Round 4 PR-D: «every error is its own message»).
+   */
+  projectsEveryOccurrence(code: string): boolean;
+  /** The Persian title of an event code; never the raw code. */
+  title(code: string): string;
+  /** The Persian name of a severity class. */
+  severity(klass: string): string;
 }

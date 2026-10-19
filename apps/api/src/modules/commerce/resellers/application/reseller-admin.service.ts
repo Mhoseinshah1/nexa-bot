@@ -48,6 +48,7 @@ import { rememberOnce } from '../../../platform/idempotency/application/remember
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
+import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { BotInstanceRepository } from '../../../platform/tenancy/application/ports.js';
 import type { PanelRepository } from '../../../platform/panels/application/ports.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -117,6 +118,11 @@ export interface ResellerAdminServiceDeps {
   readonly settings: Pick<SettingsResolver, 'valueOf'>;
   /** WP14 D3: this entity's own audit rows. */
   readonly auditHistory: AuditHistoryReader;
+  /**
+   * Round 4 PR-D (log L20): a reseller's change of standing is a domain event, written in
+   * the transaction that changed it — the operations log group is told by a consumer.
+   */
+  readonly outbox: OutboxWriter;
 }
 
 /**
@@ -465,7 +471,8 @@ export class ResellerAdminService {
         if ((await this.deps.customers.findById(scope, customerId as UserId, tx)) === null) {
           throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
         }
-        if ((await this.deps.resellers.findTier(scope, write.tierId, tx)) === null) {
+        const registerTier = await this.deps.resellers.findTier(scope, write.tierId, tx);
+        if (registerTier === null) {
           throw tierNotFound();
         }
         const registered = await this.deps.resellers.register(
@@ -492,6 +499,19 @@ export class ResellerAdminService {
           },
           tx,
         );
+        await this.deps.outbox.write(tx, actor, {
+          eventType: 'ResellerStandingChanged',
+          aggregateType: 'Customer',
+          aggregateId: customerId,
+          payload: {
+            customerId,
+            change: 'PROMOTED',
+            fromStatus: null,
+            toStatus: 'ACTIVE',
+            fromTierName: null,
+            toTierName: registerTier.name,
+          },
+        });
         await this.remember(scope, input.idempotencyKey, requestHash, { customerId }, tx);
       },
     );
@@ -546,9 +566,14 @@ export class ResellerAdminService {
          */
         const before = await this.deps.resellers.lockByCustomer(scope, customerId, tx);
         if (before === null) throw resellerNotFound();
-        if ((await this.deps.resellers.findTier(scope, input.write.tierId, tx)) === null) {
+        const nextTier = await this.deps.resellers.findTier(scope, input.write.tierId, tx);
+        if (nextTier === null) {
           throw tierNotFound();
         }
+        const previousTier =
+          before.tierId === input.write.tierId
+            ? nextTier
+            : await this.deps.resellers.findTier(scope, before.tierId, tx);
         const after = await this.deps.resellers.update(
           scope,
           customerId,
@@ -569,6 +594,32 @@ export class ResellerAdminService {
           },
           tx,
         );
+        // Only a change the operations log has something to say about: a different tier, or
+        // standing in or out of the reseller programme. A write that changed neither (a
+        // pricing override, a limit) is not a change of standing.
+        const change =
+          before.status === 'ACTIVE' && after.status !== 'ACTIVE'
+            ? 'SUSPENDED'
+            : before.status !== 'ACTIVE' && after.status === 'ACTIVE'
+              ? 'REACTIVATED'
+              : before.tierId !== after.tierId
+                ? 'TIER_CHANGED'
+                : null;
+        if (change !== null) {
+          await this.deps.outbox.write(tx, actor, {
+            eventType: 'ResellerStandingChanged',
+            aggregateType: 'Customer',
+            aggregateId: customerId,
+            payload: {
+              customerId,
+              change,
+              fromStatus: before.status,
+              toStatus: after.status,
+              fromTierName: previousTier?.name ?? null,
+              toTierName: nextTier.name,
+            },
+          });
+        }
         await this.remember(scope, input.idempotencyKey, requestHash, { customerId }, tx);
       },
     );

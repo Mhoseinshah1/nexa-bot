@@ -3496,6 +3496,11 @@ export class GatewayPaymentService {
         // `<code>:<role>` reference — an operator matches the two by eye.
         trackingCode: payment === null ? null : paymentTrackingCode(payment),
         telegramUserId,
+        customerId: claimed.customerId,
+        amount:
+          payment === null
+            ? null
+            : { amountMinor: payment.amount.amountMinor, currency: payment.amount.currency },
         botInstanceId: invoice.botInstanceId,
         elapsedMs: known.elapsedMs ?? null,
         at: this.deps.clock.now(),

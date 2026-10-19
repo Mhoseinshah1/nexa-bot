@@ -5,6 +5,8 @@ import {
   type EventType,
   type NotificationDestination,
   type NotificationKind,
+  type OpsLogButton,
+  type OpsLogTypeId,
   type PermissionKey,
   type TemplateKey,
   type TemplateValues,
@@ -13,8 +15,9 @@ import {
 } from '@nexa/contracts';
 import type { EventConsumer } from '../../../platform/eventing/application/event-consumer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { CustomerRecord, CustomerRepository } from '../../customers/application/ports.js';
 import type { TicketRepository } from './ports.js';
+import { ticket as ticketMessage } from '../../ops-log/application/presenters.js';
+import type { OpsLogFacts, OpsLogWords } from '../../ops-log/application/ports.js';
 
 /** The operator notification lane, as support notifications need it. `NotificationService` is it. */
 export interface SupportNotificationLane {
@@ -27,6 +30,8 @@ export interface SupportNotificationLane {
       readonly values: TemplateValues;
       readonly correlationId?: string;
       readonly destination?: NotificationDestination;
+      readonly logType?: OpsLogTypeId;
+      readonly buttons?: readonly OpsLogButton[];
     },
     tx?: unknown,
   ): Promise<unknown>;
@@ -45,9 +50,6 @@ export interface SupportReviewers {
     }[]
   >;
 }
-
-/** A value the notification has no answer for. Punctuation, not language. */
-const NONE = '—';
 
 /**
  * New customer ticket or customer reply → a durable support notification (WP-A7).
@@ -71,7 +73,9 @@ const NONE = '—';
  * The intent's kind is `OPERATIONAL_EVENT` and the `ops.support.*` template key is what
  * makes it a support row — the financial log's reasoning: a new `NOTIFICATION_KINDS` member
  * would be one the previous release's Web Admin refuses after a rollback. It names the ticket
- * and the customer and never the customer's words, which are read in the Web Admin.
+ * and the customer and carries the first two lines of the customer's message (Round 4
+ * PR-D, L26), bounded — enough to know the subject without opening the panel; the rest is
+ * read in the Web Admin, where the inline button goes.
  *
  * Idempotent twice over: the relay's `processed_messages` claim, and a dedupe key per event
  * (and per administrator) on `(tenant, dedupe_key)`.
@@ -85,8 +89,10 @@ export class TicketSupportNotifyConsumer implements EventConsumer {
     private readonly deps: {
       readonly lane: SupportNotificationLane;
       readonly tickets: Pick<TicketRepository, 'findById' | 'findMessageById'>;
-      readonly customers: Pick<CustomerRepository, 'findById'>;
       readonly reviewers: SupportReviewers;
+      /** Round 4 PR-D (L26): the ticket's number, topic and first lines, and the Persian words. */
+      readonly facts: OpsLogFacts;
+      readonly words: OpsLogWords;
     },
   ) {}
 
@@ -96,40 +102,50 @@ export class TicketSupportNotifyConsumer implements EventConsumer {
 
     let ticketId: string;
     let messageId: string;
-    let templateKey: TemplateKey;
+    let reply = false;
     if (event.eventType === 'TicketOpened') {
       const payload = EVENT_PAYLOAD_SCHEMAS.TicketOpened.parse(event.payload);
       ticketId = payload.ticketId;
       messageId = payload.messageId;
-      templateKey = 'ops.support.ticket_opened';
     } else {
       const payload = EVENT_PAYLOAD_SCHEMAS.TicketMessagePosted.parse(event.payload);
       // Support's own replies are told to the CUSTOMER, through their lane, not back to support.
       if (payload.senderType !== 'CUSTOMER') return;
       ticketId = payload.ticketId;
       messageId = payload.messageId;
-      templateKey = 'ops.support.customer_replied';
+      reply = true;
     }
 
     const ticket = await this.deps.tickets.findById(scope, ticketId, tx);
     if (ticket === null) return;
     const message = await this.deps.tickets.findMessageById(scope, messageId, tx);
-    const customer = await this.deps.customers.findById(scope, ticket.customerId as UserId, tx);
-    const values: TemplateValues = {
-      number: ticket.number,
-      category: ticket.categoryTitle,
-      ...who(customer),
+    const fact = await this.deps.facts.ticket(scope, ticketId, messageId, tx);
+    if (fact === null) return;
+    const customerFact = await this.deps.facts.customer(scope, ticket.customerId, tx);
+    // A ticket an import wrote is history: nobody is told about it.
+    if (customerFact?.source !== 'NEXA') return;
+    const built = ticketMessage({
+      ticket: fact,
+      customer: customerFact,
+      reply,
       at: message?.createdAt ?? new Date(event.occurredAt),
-    };
+      words: this.deps.words,
+    });
     const common = {
       kind: 'OPERATIONAL_EVENT' as const,
-      templateKey,
-      values,
+      templateKey: built.templateKey,
+      values: built.values,
       correlationId: event.correlationId,
+      buttons: built.buttons,
     };
 
-    // The shared operations destination: gated by the lane's own switch and setting.
-    await this.deps.lane.queue(scope, { ...common, dedupeKey: `ticket:${event.eventId}` }, tx);
+    // The shared operations destination: gated by the lane's own switch and setting, and by
+    // the ticket log type's switch.
+    await this.deps.lane.queue(
+      scope,
+      { ...common, dedupeKey: `ticket:${event.eventId}`, logType: built.logType },
+      tx,
+    );
 
     const reviewers = (
       await this.deps.reviewers.reviewers(
@@ -156,17 +172,4 @@ export class TicketSupportNotifyConsumer implements EventConsumer {
       );
     }
   }
-}
-
-/** Who wrote, as Telegram knows them. A dash, never a guess, for what is not known. */
-function who(customer: CustomerRecord | null): TemplateValues {
-  if (customer === null) return { telegramId: NONE, username: NONE, displayName: NONE };
-  const name = [customer.firstName, customer.lastName]
-    .filter((part): part is string => part !== null && part.trim() !== '')
-    .join(' ');
-  return {
-    telegramId: customer.telegramUserId,
-    username: customer.username === null ? NONE : `@${customer.username}`,
-    displayName: name === '' ? NONE : name,
-  };
 }

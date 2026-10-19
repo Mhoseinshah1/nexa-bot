@@ -2591,6 +2591,9 @@ export class ProvisionerService {
             state: from,
             expiresAt: service.expiresAt?.toISOString() ?? null,
             trafficLimitBytes: service.trafficLimitBytes.toString(),
+            // Round 4 PR-D: what the operations log group reports as "used before the
+            // renewal" (L12) — the usage last synced, read before this change.
+            trafficUsedBytes: service.trafficUsedBytes.toString(),
             deviceLimit: service.deviceLimit,
           },
           after: {

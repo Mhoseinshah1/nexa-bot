@@ -165,6 +165,7 @@ export class DrizzleNotificationRepository implements NotificationRepository {
       readonly maxAttempts: number;
       readonly correlationId: string | null;
       readonly now: Date;
+      readonly notBefore?: Date;
     },
     tx?: unknown,
   ): Promise<{ intent: NotificationIntent; created: boolean }> {
@@ -186,7 +187,7 @@ export class DrizzleNotificationRepository implements NotificationRepository {
         maxAttempts: input.maxAttempts,
         correlationId: input.correlationId,
         createdAt: input.now,
-        nextAttemptAt: input.now,
+        nextAttemptAt: input.notBefore ?? input.now,
       })
       // The dedupe key is the intent's identity. A second report of the same
       // condition is not an error and must not become a second message.
@@ -206,6 +207,62 @@ export class DrizzleNotificationRepository implements NotificationRepository {
       throw new Error('notifications insert conflicted but the conflicting row is not visible.');
     }
     return { intent: toIntent(existing), created: false };
+  }
+
+  async countByStormKey(
+    scope: ScopeContext,
+    templateKey: TemplateKey,
+    stormKey: string,
+    since: Date,
+    tx?: unknown,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const result = await executorOf(this.db, tx).execute(sql`
+      SELECT count(*)::int AS n FROM notifications
+       WHERE tenant_id = ${tenantId}
+         AND template_key = ${templateKey}
+         AND payload ->> '__storm' = ${stormKey}
+         AND created_at >= ${since}
+    `);
+    const row = result.rows[0] as { n?: number } | undefined;
+    return row?.n ?? 0;
+  }
+
+  async bumpStormRollup(
+    scope: ScopeContext,
+    dedupeKey: string,
+    customerKey: string | null,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const executor = executorOf(this.db, tx);
+    /*
+     * Only a roll-up that has not been claimed yet: PENDING, no attempt made. Once the
+     * dispatcher has taken it, its count is what was sent and the next error starts the next
+     * window's roll-up.
+     */
+    const bumped = await executor.execute(sql`
+      UPDATE notifications
+         SET payload = payload || jsonb_build_object(
+               'count', COALESCE((payload ->> 'count')::int, 0) + 1,
+               '__users', CASE
+                 WHEN ${customerKey}::text IS NULL
+                   OR COALESCE(payload -> '__users', '[]'::jsonb) @> to_jsonb(${customerKey}::text)
+                   THEN COALESCE(payload -> '__users', '[]'::jsonb)
+                 ELSE COALESCE(payload -> '__users', '[]'::jsonb) || to_jsonb(${customerKey}::text)
+               END)
+       WHERE tenant_id = ${tenantId} AND dedupe_key = ${dedupeKey}
+         AND status = 'PENDING' AND attempt_count = 0
+      RETURNING id
+    `);
+    if (bumped.rows.length === 0) return false;
+    await executor.execute(sql`
+      UPDATE notifications
+         SET payload = payload || jsonb_build_object(
+               'users', GREATEST(jsonb_array_length(COALESCE(payload -> '__users', '[]'::jsonb)), 1))
+       WHERE tenant_id = ${tenantId} AND dedupe_key = ${dedupeKey}
+    `);
+    return true;
   }
 
   async findById(

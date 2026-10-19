@@ -52,7 +52,7 @@ import type {
   SecretCipher,
   TenantId,
 } from '@nexa/contracts';
-import { CATALOGUE_FA, createTranslator } from '@nexa/i18n';
+import { CATALOGUE_FA, OPS_LOG_BUTTON_LABELS_FA, createTranslator } from '@nexa/i18n';
 import type {
   OperationType,
   BotInstanceId,
@@ -463,6 +463,18 @@ import {
 import { customerBlockCaptures } from './modules/commerce/customers/application/customer-block-capture.js';
 import { ReceiptReviewCaption } from './modules/commerce/payments/application/receipt-review-caption.js';
 import { FinancialLogConsumer } from './modules/commerce/payments/application/financial-log.consumer.js';
+import { DrizzleOpsLogFacts } from './modules/commerce/ops-log/infrastructure/drizzle-ops-log-facts.js';
+import { i18nOpsLogWords } from './modules/commerce/ops-log/infrastructure/i18n-ops-log-words.js';
+import { LedgerLogConsumer } from './modules/commerce/ops-log/application/ledger-log.consumer.js';
+import { CustomerLogConsumer } from './modules/commerce/ops-log/application/customer-log.consumer.js';
+import { ServiceLogConsumer } from './modules/commerce/ops-log/application/service-log.consumer.js';
+import { AdminLogConsumer } from './modules/commerce/ops-log/application/admin-log.consumer.js';
+import { FailureLogConsumer } from './modules/commerce/ops-log/application/failure-log.consumer.js';
+import { OperationalEventPresenter } from './modules/commerce/ops-log/application/event-presenter.js';
+import { OperationLog } from './modules/commerce/ops-log/application/operation-log.js';
+import { ServiceAlertLog } from './modules/commerce/ops-log/application/service-alert-log.js';
+import type { OpsLogLane } from './modules/commerce/ops-log/application/ports.js';
+import { WebAdminButtonResolver } from './modules/control/notifications/application/ops-button-resolver.js';
 import { ReceiptReviewPushConsumer } from './modules/commerce/payments/application/receipt-review-push.consumer.js';
 import { ReceiptReviewPushService } from './modules/commerce/payments/application/receipt-review-push.service.js';
 import {
@@ -1937,6 +1949,16 @@ export function createContainer(
 
   let installationTenantId: TenantId | null = null;
 
+  /*
+   * Round 4 PR-D: the operations log group's facts and its lane. The lane is a closure over
+   * `notifications`, which is built further down: it is called only once the relay (or a
+   * sweep) runs, never during construction.
+   */
+  const opsLogFacts = new DrizzleOpsLogFacts(database.db);
+  const opsLogLane: OpsLogLane = {
+    queue: (scope, input, tx) => notifications.queue(scope, input, tx),
+  };
+
   const relay = new OutboxRelay(
     database.db,
     [
@@ -1984,7 +2006,8 @@ export function createContainer(
         payments: new DrizzlePaymentRepository(database.db),
         customers: new DrizzleCustomerRepository(database.db),
         invoices: new DrizzleGatewayInvoiceRepository(database.db),
-        wallet: new DrizzleWalletRepository(database.db),
+        facts: opsLogFacts,
+        words: i18nOpsLogWords,
         refundRequests: new DrizzleServiceRefundRequestRepository(database.db),
       }),
       /*
@@ -1993,11 +2016,23 @@ export function createContainer(
        * who may reply. A consumer, so nothing about it can reach the customer's message. The
        * lane is resolved lazily, as the financial log's is.
        */
+      /*
+       * Round 4 PR-D: the rest of the operations log group's messages, each a consumer of
+       * the domain event that is its fact, so none can reach the transaction that did the
+       * work. Imports are excluded twice: by the events they do not emit, and by the
+       * provenance each consumer checks.
+       */
+      new LedgerLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
+      new CustomerLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
+      new ServiceLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
+      new AdminLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
+      new FailureLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
       new TicketSupportNotifyConsumer({
         lane: { queue: (scope, input, tx) => notifications.queue(scope, input, tx) },
         tickets: new DrizzleTicketRepository(database.db),
-        customers: new DrizzleCustomerRepository(database.db),
         reviewers: telegramAdmins,
+        facts: opsLogFacts,
+        words: i18nOpsLogWords,
       }),
     ],
     clock,
@@ -2640,6 +2675,7 @@ export function createContainer(
     wallet: walletRepository,
     settings: settingsResolver,
     auditHistory: new DrizzleAuditHistoryReader(database.db),
+    outbox,
   });
   const discountRepository = new DrizzleDiscountRepository(database.db);
   const cashbackRuleRepository = new DrizzleCashbackRuleRepository(database.db);
@@ -4225,6 +4261,18 @@ export function createContainer(
     uow,
     clock,
     ids,
+    // Round 4 PR-D (L21): one operations-log message per service the customer was told about.
+    opsLog: new ServiceAlertLog({
+      lane: opsLogLane,
+      facts: opsLogFacts,
+      words: i18nOpsLogWords,
+      clock,
+    }),
+    opsLogFailed: (error, serviceId) =>
+      logger.warn(
+        { err: error instanceof Error ? error.message : String(error), serviceId },
+        'Could not write the operations log message for a service reminder',
+      ),
   });
   /*
    * Migration P6. After the reminder sweep, whose burst seed it runs inside its own
@@ -6040,6 +6088,18 @@ export function createContainer(
     notifier: customerNotifier,
     uow,
     clock,
+    // Round 4 PR-D (L12-L14): a renewal or an addition is told to the operations log group.
+    opsLog: new OperationLog({
+      lane: opsLogLane,
+      facts: opsLogFacts,
+      words: i18nOpsLogWords,
+      clock,
+    }),
+    opsLogFailed: (error, operationId) =>
+      logger.warn(
+        { err: error instanceof Error ? error.message : String(error), operationId },
+        'Could not write the operations log message for an operation',
+      ),
   });
 
   /*
@@ -6510,6 +6570,8 @@ export function createContainer(
     notifications,
     uow,
     logger,
+    // Round 4 PR-D: the events with a message of their own, and every title in Persian.
+    new OperationalEventPresenter({ facts: opsLogFacts, words: i18nOpsLogWords }),
   );
 
   const notificationTransport: NotificationTransport =
@@ -6543,6 +6605,12 @@ export function createContainer(
     },
     // WP-A4: an intent routed to the group goes where the group is NOW.
     opsGroupRouter,
+    // Round 4 PR-D: the inline URL buttons, addressed to the Web Admin at send time.
+    new WebAdminButtonResolver({
+      settings: settingsResolver,
+      defaultOrigin: config.WEB_ADMIN_ORIGINS[0] ?? null,
+      labelOf: (kind) => OPS_LOG_BUTTON_LABELS_FA[kind],
+    }),
   );
 
   const opsLogService = new OpsLogService(guard, new DrizzleOperationalEventReader(database.db));

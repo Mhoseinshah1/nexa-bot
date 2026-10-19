@@ -86,8 +86,7 @@ export const OPS_LOG_BODIES_FA = {
   // --- Panels and support -----------------------------------------------------------------
   'ops.log.panel_down':
     '🟥 پنل «{panelName}» از دسترس خارج شد\n\n❗ علت: {cause}\n🔧 کد: {technical}\n⛔ {salesNote}\n🕒 از {since}',
-  'ops.log.panel_up':
-    '🟩 پنل «{panelName}» برگشت — {at}\n⏱ مدت قطعی: {downtime}',
+  'ops.log.panel_up': '🟩 پنل «{panelName}» برگشت — {at}\n⏱ مدت قطعی: {downtime}',
   'ops.support.ticket_opened':
     '🎫 تیکت جدید #{ticketNumber} · {category}\n\n👤 {displayName} · {username} · {telegramId}\n💬 «{snippet}»\n🕒 {at}',
   'ops.support.customer_replied':
@@ -117,6 +116,8 @@ export const OPS_LOG_WORDS_FA = {
   noUsername: 'بدون یوزرنیم',
   noTelegram: 'بدون تلگرام',
   none: '—',
+  /** The title of an operational event whose code the Persian label map does not know. */
+  unknownEvent: 'رویداد سامانه',
 
   paymentMethods: {
     WALLET: 'کیف پول',
@@ -187,6 +188,32 @@ export const OPS_LOG_WORDS_FA = {
     PROVIDER_REFUSED: 'پنل درخواست را نپذیرفت',
     UNSUPPORTED_CAPABILITY: 'این پنل از این عملیات پشتیبانی نمی‌کند',
     UNKNOWN: 'علت مشخص نیست',
+  },
+  /** Why an order that was paid could not be delivered and was refunded (a closed vocabulary). */
+  refundReasons: {
+    ARCHIVED: 'پنل بایگانی شده است',
+    DISABLED: 'پنل غیرفعال است',
+    DRAINING: 'فروش روی پنل در حال بسته شدن است',
+    PROVISION_UNSUPPORTED: 'پنل ساخت سرویس را پشتیبانی نمی‌کند',
+    CREDENTIALS_MISSING: 'مشخصات ورود پنل ثبت نشده است',
+    ACTIVATION_INCOMPLETE: 'فعال‌سازی پنل کامل نیست',
+    UNHEALTHY: 'پنل ناسالم است و در دسترس نیست',
+    UNVALIDATED: 'اتصال پنل هنوز آزمایش نشده است',
+    AT_CAPACITY: 'ظرفیت پنل پر است',
+    ACTION_IN_PROGRESS: 'عملیات دیگری روی همین سرویس در جریان بود',
+    SERVICE_NOT_ELIGIBLE: 'سرویس برای این عملیات مجاز نبود',
+    SERVICE_NOT_OWNED: 'سرویس متعلق به این مشتری نبود',
+    UNLIMITED: 'سرویس نامحدود است و این عملیات روی آن معنا ندارد',
+    LIMIT_EXCEEDED: 'مقدار درخواستی از سقف مجاز بیشتر است',
+    CALL_STRANDED: 'پنل جواب نداد و ساخت سرویس نیمه‌کاره ماند',
+    ATTEMPTS_SPENT: 'تلاش‌های ساخت سرویس تمام شد و پنل خطا داد',
+    PROVISION_CYCLE_EXHAUSTED: 'تلاش‌های ساخت سرویس تمام شد',
+    FOUND_WITHOUT_PROVENANCE: 'سرویس روی پنل پیدا شد اما مال این سفارش نبود',
+    ALLOWANCE_UNVERIFIED: 'اعمال تغییر روی پنل تأیید نشد',
+    TERMINATED_BEFORE_PROVISION: 'سرویس پیش از ساخته شدن حذف شد',
+    RECONCILE_FIRST: 'سرویس نیازمند بررسی دستی بود',
+    FEATURE_DISABLED: 'این قابلیت خاموش بود',
+    DEFAULT: 'ساخت روی پنل ممکن نشد',
   },
   paymentLinkCauses: {
     NO_LINK: 'درگاه پیش‌فاکتور را ساخت اما لینک پرداخت برنگرداند',
@@ -273,7 +300,13 @@ export const OPS_LOG_WORDS_FA = {
     resellerLine: 'نماینده‌ها',
     gb: 'گیگ',
     orders: 'سفارش',
-    health: { HEALTHY: 'سالم', DEGRADED: 'ناپایدار', UNHEALTHY: 'ناسالم', UNCHECKED: 'بررسی‌نشده', DISABLED: 'غیرفعال' },
+    health: {
+      HEALTHY: 'سالم',
+      DEGRADED: 'ناپایدار',
+      UNHEALTHY: 'ناسالم',
+      UNCHECKED: 'بررسی‌نشده',
+      DISABLED: 'غیرفعال',
+    },
     methods: {
       MANUAL_TRANSFER: 'کارت',
       TONPAYS: 'تون‌پی',

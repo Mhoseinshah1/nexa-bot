@@ -1,7 +1,6 @@
 import {
   isSystemContext,
   opsErrorClassOf,
-  opsErrorPresentationOf,
   opsLogTopicForCode,
   type Logger,
   type UnitOfWork,
@@ -13,14 +12,8 @@ import {
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { NotificationService } from './notification.service.js';
-import {
-  OPERATIONAL_ID_MAX,
-  OPERATIONAL_MESSAGE_BUDGET,
-  boundedForTelegram,
-  contextBotInstanceId,
-  operationalEventDetails,
-} from './event-details.js';
-import { paymentLinkFailureValues } from './payment-link-presentation.js';
+import { operationalEventDetails, technicalOf } from './event-details.js';
+import type { OpsEventPresenter } from './ports.js';
 
 /**
  * Projects operational events into notifications.
@@ -78,6 +71,13 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
     private readonly notifications: NotificationService,
     private readonly uow: UnitOfWork<TransactionScope>,
     private readonly logger: Logger,
+    /**
+     * Round 4 PR-D: lays out the events that have a message of their own (L22, L25) and
+     * names every other one in Persian. Null names nothing and lays nothing out: the generic
+     * layout then prints the code as its title, which only a unit test without the
+     * catalogue still sees.
+     */
+    private readonly presenter: OpsEventPresenter | null = null,
   ) {}
 
   async record(
@@ -153,7 +153,15 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
     tx: TransactionScope,
   ): Promise<RecordedOperationalEvent> {
     const recorded = await this.inner.record(scope, event, tx);
-    if (!recorded.isNew && !recorded.reopened) return recorded;
+    // Round 4 PR-D: an error that is a customer's own (a payment link that was not made) is a
+    // message for EVERY occurrence, not only the one that opens its condition.
+    if (
+      !recorded.isNew &&
+      !recorded.reopened &&
+      this.presenter?.projectsEveryOccurrence(recorded.code) !== true
+    ) {
+      return recorded;
+    }
 
     // HF-A4 (Codex review of PR #106): the projection gets a second attempt of its OWN. A
     // failure inside the savepoint is caught below and never reaches `record`'s retry of
@@ -207,39 +215,23 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
     // hard, written into its own error handling.
     await this.uow.runNested(scope, tx, async (nested) => {
       // No severity threshold (WP-A4): routing decides WHERE, never whether.
-      const details = operationalEventDetails(event.context);
-      const botInstanceId = scope.botInstanceId ?? contextBotInstanceId(event.context);
-      /*
-       * FIX-04: a payment-link failure built by its one mapping is laid out as the
-       * operator-facing report the owner asked for. Anything else — including an event of
-       * the same code recorded in an older shape — keeps the generic layout, so a code's
-       * presentation can never make an event unrenderable.
-       */
-      const paymentLink =
-        opsErrorPresentationOf(recorded.code) === 'PAYMENT_LINK'
-          ? paymentLinkFailureValues(event.context, {
-              eventId: recorded.id,
-              at: recorded.lastSeenAt,
-              tenantId: String(scope.tenantId),
-              ...(botInstanceId ? { botInstanceId: String(botInstanceId) } : {}),
-              ...(event.correlationId
-                ? {
-                    correlationId: boundedForTelegram(
-                      String(event.correlationId),
-                      OPERATIONAL_ID_MAX,
-                    ),
-                  }
-                : {}),
-            })
-          : null;
-      if (paymentLink !== null) {
+      const presented =
+        this.presenter === null
+          ? null
+          : await this.presenter.present(scope, event, recorded, nested);
+      if (presented !== null) {
         await this.notifications.queue(
           scope,
           {
             kind: 'OPERATIONAL_EVENT',
+            // The occurrence count is part of the identity: a repeat of the same condition
+            // is a new message where the code says so, and the same one where it does not.
             dedupeKey: `opslog:${recorded.id}:${recorded.occurrenceCount}`,
-            templateKey: 'ops.notification.payment_link_failed',
-            values: paymentLink,
+            templateKey: presented.templateKey,
+            values: presented.values,
+            logType: presented.logType,
+            ...(presented.buttons === undefined ? {} : { buttons: presented.buttons }),
+            ...(presented.storm === undefined ? {} : { storm: presented.storm }),
             ...(event.correlationId ? { correlationId: event.correlationId } : {}),
             opsTopic: opsLogTopicForCode(recorded.code),
           },
@@ -247,6 +239,7 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
         );
         return;
       }
+      const details = operationalEventDetails(event.context);
       await this.notifications.queue(
         scope,
         {
@@ -258,24 +251,17 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
           templateKey: 'ops.notification.operational_event',
           values: {
             // FIX-05: the CLASS (`SECURITY` for an access or abuse event), not the raw column.
-            severity: opsErrorClassOf(recorded.code, recorded.severity),
-            code: recorded.code,
-            // Bounded, like the detail, so the whole message fits Telegram's 4096.
-            message: boundedForTelegram(recorded.message, OPERATIONAL_MESSAGE_BUDGET),
+            severity:
+              this.presenter?.severity(opsErrorClassOf(recorded.code, recorded.severity)) ??
+              opsErrorClassOf(recorded.code, recorded.severity),
+            // Round 4 PR-D: titled in Persian from the code; the code itself and the server's
+            // own English message are the one short technical line beneath.
+            heading: this.presenter?.title(recorded.code) ?? recorded.code,
+            technical: technicalOf(recorded.code, recorded.message),
             occurrences: recorded.occurrenceCount,
             firstSeenAt: recorded.firstSeenAt,
             lastSeenAt: recorded.lastSeenAt,
-            tenantId: String(scope.tenantId),
-            ...(botInstanceId ? { botInstanceId: String(botInstanceId) } : {}),
             ...(details ? { details } : {}),
-            ...(event.correlationId
-              ? {
-                  correlationId: boundedForTelegram(
-                    String(event.correlationId),
-                    OPERATIONAL_ID_MAX,
-                  ),
-                }
-              : {}),
           },
           ...(event.correlationId ? { correlationId: event.correlationId } : {}),
           opsTopic: opsLogTopicForCode(recorded.code),

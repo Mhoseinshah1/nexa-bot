@@ -20,7 +20,14 @@ import {
   type TemplateValues,
   type UnitOfWork,
   type OpsLogTopicCategory,
+  type OpsLogTypeId,
+  type OpsLogButton,
   NOTIFICATION_PAGE_DEFAULT,
+  OPS_LOG_BUTTONS_PAYLOAD_KEY,
+  OPS_LOG_STORM_PAYLOAD_KEY,
+  OPS_LOG_STORM_USERS_PAYLOAD_KEY,
+  opsLogTypeIsStorm,
+  opsLogTypeTopic,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
@@ -121,6 +128,32 @@ export class NotificationService {
        * operations lane's. Defaults to the system topic.
        */
       readonly opsTopic?: OpsLogTopicCategory;
+      /**
+       * Round 4 PR-D: the LOG TYPE this message is (Appendix L). A type switched off in
+       * «گروه گزارش‌های مدیریتی» (`ops.log.disabled_types`) queues nothing, and the type's
+       * topic is the default `opsTopic`. Read here, where the message is written, so a switch
+       * applies to the next message and never reaches back into one already waiting.
+       */
+      readonly logType?: OpsLogTypeId;
+      /** Inline URL buttons under the message; resolved to Web Admin links at send time. */
+      readonly buttons?: readonly OpsLogButton[];
+      /**
+       * The optional storm roll-up (default OFF, `ops.log.storm_rollup_enabled`): identical
+       * errors share a `key`. Over the configured threshold in the window they are merged
+       * into ONE roll-up per window instead of one message each; with the roll-up off this
+       * is only recorded and every error is its own message, always.
+       */
+      readonly storm?: {
+        readonly key: string;
+        /** The customer, counted once in the roll-up's «N کاربر». */
+        readonly customer: string | null;
+        readonly rollup: {
+          readonly heading: string;
+          readonly cause: string;
+          readonly technical?: string;
+          readonly panelName?: string;
+        };
+      };
     },
     tx?: unknown,
   ): Promise<{ readonly intent: NotificationIntent | null; readonly created: boolean }> {
@@ -144,9 +177,23 @@ export class NotificationService {
       return { intent: null, created: false };
     }
 
+    /*
+     * The type's switch (Round 4 PR-D). After the lane's own flag, before anything is written:
+     * a type that is off leaves no row at all, which is what "off" means.
+     */
+    if (input.logType !== undefined) {
+      const off = await this.settings.valueOf<readonly string[]>(
+        scope,
+        'ops.log.disabled_types' as SettingKey,
+        tx,
+      );
+      if (off.includes(input.logType)) return { intent: null, created: false };
+    }
+
     // No group connected and no manual chat is NOT a reason to drop an operations-log
     // message (HF-A4): it is queued, routed to its topic, and sent once a group exists.
-    const category = input.opsTopic ?? 'SYSTEM';
+    const category =
+      input.opsTopic ?? (input.logType !== undefined ? opsLogTypeTopic(input.logType) : 'SYSTEM');
     const destination =
       input.destination ??
       (await this.destination(scope, category, tx)) ??
@@ -163,6 +210,16 @@ export class NotificationService {
     // that fails silently at three in the morning.
     templateDefinition(input.templateKey);
 
+    const now = this.clock.now();
+    if (
+      input.storm !== undefined &&
+      input.logType !== undefined &&
+      opsLogTypeIsStorm(input.logType) &&
+      (await this.stormSuppresses(scope, input, destination, maxAttempts, now, tx))
+    ) {
+      return { intent: null, created: false };
+    }
+
     return this.notifications.create(
       scope,
       {
@@ -172,14 +229,120 @@ export class NotificationService {
         // A snapshot. An attempt from March must still say which chat it was
         // addressed to after somebody repoints the destination in April.
         destination,
-        payload: serialiseValues(input.values),
+        payload: {
+          ...serialiseValues(input.values),
+          // Reserved keys, never a template token (`OPS_LOG_*_PAYLOAD_KEY`).
+          ...(input.buttons === undefined || input.buttons.length === 0
+            ? {}
+            : { [OPS_LOG_BUTTONS_PAYLOAD_KEY]: input.buttons }),
+          ...(input.storm === undefined ? {} : { [OPS_LOG_STORM_PAYLOAD_KEY]: input.storm.key }),
+        },
         templateKey: input.templateKey,
         maxAttempts,
         correlationId: input.correlationId ?? null,
-        now: this.clock.now(),
+        now,
       },
       tx,
     );
+  }
+
+  /**
+   * The optional storm roll-up (Round 4 PR-D, L25). True when this error is NOT to be queued
+   * on its own because the window already holds more identical ones than the threshold; it
+   * is counted into the window's one roll-up instead.
+   *
+   * OFF unless `ops.log.storm_rollup_enabled`: with it off nothing here runs a query and
+   * every error is its own message. The count is of intents actually queued, so it falls as
+   * the window slides past them, and the roll-up never swallows the first `threshold`
+   * messages of a storm. The roll-up waits for the end of its fixed window to be sent, so it
+   * can say how many it stands for; the events themselves stay in the notification centre.
+   */
+  private async stormSuppresses(
+    scope: ScopeContext,
+    input: {
+      readonly templateKey: TemplateKey;
+      readonly correlationId?: string;
+      readonly storm?: {
+        readonly key: string;
+        readonly customer: string | null;
+        readonly rollup: {
+          readonly heading: string;
+          readonly cause: string;
+          readonly technical?: string;
+          readonly panelName?: string;
+        };
+      };
+    },
+    destination: NotificationDestination,
+    maxAttempts: number,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const storm = input.storm;
+    if (storm === undefined) return false;
+    if (
+      !(await this.settings.valueOf<boolean>(
+        scope,
+        'ops.log.storm_rollup_enabled' as SettingKey,
+        tx,
+      ))
+    ) {
+      return false;
+    }
+    const threshold = await this.settings.valueOf<number>(
+      scope,
+      'ops.log.storm_threshold' as SettingKey,
+      tx,
+    );
+    const windowMinutes = await this.settings.valueOf<number>(
+      scope,
+      'ops.log.storm_window_minutes' as SettingKey,
+      tx,
+    );
+    const windowMs = windowMinutes * 60_000;
+    const queued = await this.notifications.countByStormKey(
+      scope,
+      input.templateKey,
+      storm.key,
+      new Date(now.getTime() - windowMs),
+      tx,
+    );
+    if (queued < threshold) return false;
+
+    const bucket = Math.floor(now.getTime() / windowMs);
+    const dedupeKey = `storm:${storm.key}:${String(bucket)}`;
+    if (await this.notifications.bumpStormRollup(scope, dedupeKey, storm.customer, tx)) return true;
+    const endsAt = new Date((bucket + 1) * windowMs);
+    await this.notifications.create(
+      scope,
+      {
+        id: this.ids.uuid(),
+        kind: 'OPERATIONAL_EVENT',
+        dedupeKey,
+        destination,
+        payload: {
+          ...serialiseValues({
+            heading: storm.rollup.heading,
+            cause: storm.rollup.cause,
+            ...(storm.rollup.technical === undefined ? {} : { technical: storm.rollup.technical }),
+            ...(storm.rollup.panelName === undefined ? {} : { panelName: storm.rollup.panelName }),
+            at: endsAt,
+          }),
+          count: 1,
+          users: 1,
+          [OPS_LOG_STORM_USERS_PAYLOAD_KEY]: storm.customer === null ? [] : [storm.customer],
+        },
+        templateKey: 'ops.log.storm_rollup' as TemplateKey,
+        maxAttempts,
+        correlationId: input.correlationId ?? null,
+        now,
+        notBefore: endsAt,
+      },
+      tx,
+    );
+    // Created, or already sent in this bucket by a replica a moment ago: either way this
+    // error is accounted for by the roll-up and is not a message of its own.
+    return true;
   }
 
   async list(

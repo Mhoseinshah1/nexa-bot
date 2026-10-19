@@ -8,6 +8,7 @@ import type {
 import type { UnitOfWork, Clock } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { CustomerNotifier } from './customer-notifier.js';
+import type { OperationLogHook } from '../../ops-log/application/operation-log.js';
 
 /**
  * Which operations a CUSTOMER asked for, and therefore is owed an answer about.
@@ -248,6 +249,15 @@ export class OperationOutcomeAnnouncer {
       readonly notifier: CustomerNotifier;
       readonly uow: UnitOfWork<TransactionScope>;
       readonly clock: Clock;
+      /**
+       * Round 4 PR-D (log L12-L14): told once an operation has terminally SUCCEEDED, so the
+       * operations log group hears of a renewal or an addition. It only queues a group
+       * message — the bound this class keeps — and runs in a savepoint: a log that cannot be
+       * written never costs a customer their answer.
+       */
+      readonly opsLog?: OperationLogHook;
+      /** Where a log that could not be written is reported; it is never rethrown. */
+      readonly opsLogFailed?: (error: unknown, operationId: string) => void;
     },
   ) {}
 
@@ -344,6 +354,20 @@ export class OperationOutcomeAnnouncer {
       }
       const { serviceId } = subject;
       const outcome = subject.state;
+
+      if (outcome === 'SUCCEEDED' && this.deps.opsLog !== undefined) {
+        const hook = this.deps.opsLog;
+        try {
+          await this.deps.uow.runNested(scope, tx, (nested) =>
+            hook.operationSucceeded(scope, operationId, nested),
+          );
+        } catch (error) {
+          // The savepoint rolled the log back and the transaction is intact. Reported, and
+          // never rethrown: the operations log is a projection of an outcome that already
+          // happened, and the customer's own answer below must not depend on it.
+          this.deps.opsLogFailed?.(error, operationId);
+        }
+      }
 
       /*
        * The one thing a customer is told about an operation they did NOT start.

@@ -1,7 +1,9 @@
 import {
   money,
   notificationDestinationSchema,
+  opsLogButtonSchema,
   opsLogTopicCategoryOf,
+  OPS_LOG_BUTTONS_PAYLOAD_KEY,
   OPS_GROUP_ERROR_CODES,
   templateDefinition,
   type Clock,
@@ -26,8 +28,10 @@ import type {
   NotificationIntent,
   NotificationRepository,
   NotificationTransport,
+  OpsButtonResolver,
   OpsTopicRoute,
   OpsTopicRouter,
+  OutboundMessage,
   TransportResult,
 } from './ports.js';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
@@ -240,6 +244,11 @@ export class NotificationDispatcher {
      * snapshot, which is what a dispatcher built before the group existed did.
      */
     private readonly opsRouter: OpsTopicRouter | null = null,
+    /**
+     * Round 4 PR-D: turns a log message's buttons into Web Admin links at send time. Null
+     * sends every message without buttons, as before.
+     */
+    private readonly opsButtons: OpsButtonResolver | null = null,
   ) {
     this.progress = new LoopProgress(options.pollIntervalMs);
   }
@@ -848,7 +857,8 @@ export class NotificationDispatcher {
     }
 
     const html = definition.format === 'TELEGRAM_HTML';
-    let result = await this.sendOnce(intent, destination, text, html, botInstanceId);
+    const buttons = await this.buttonsOf(scope, intent);
+    let result = await this.sendOnce(intent, destination, text, html, botInstanceId, buttons);
 
     if (category !== null && this.opsRouter !== null && result.outcome !== 'SUCCEEDED') {
       const router = this.opsRouter;
@@ -883,7 +893,14 @@ export class NotificationDispatcher {
           destination = { ...destination, chatId: recovered.chatId, topicId: recovered.topicId };
           // The first send reached Telegram as well; the ceiling is a courtesy to it.
           this.sentInWindow += 1;
-          result = await this.sendOnce(intent, destination, text, html, recovered.botInstanceId);
+          result = await this.sendOnce(
+            intent,
+            destination,
+            text,
+            html,
+            recovered.botInstanceId,
+            buttons,
+          );
         } else {
           result = {
             outcome: 'FAILED_RETRYABLE',
@@ -980,6 +997,7 @@ export class NotificationDispatcher {
     text: string,
     html: boolean,
     botInstanceId: string | undefined,
+    buttons: OutboundMessage['buttons'],
   ): Promise<TransportResult> {
     try {
       const result = await this.transport.send({
@@ -988,6 +1006,7 @@ export class NotificationDispatcher {
         html,
         tenantId: intent.tenantId,
         ...(botInstanceId !== undefined ? { botInstanceId } : {}),
+        ...(buttons !== undefined && buttons.length > 0 ? { buttons } : {}),
       });
       if (result.outcome === 'FAILED_RETRYABLE' && result.rateLimited === true) {
         // Nothing more leaves this process until Telegram's wait is over — or, when it named
@@ -1003,6 +1022,31 @@ export class NotificationDispatcher {
         errorCode: 'notification.transport_threw',
         errorMessage: error instanceof Error ? error.message : String(error),
       };
+    }
+  }
+
+  /**
+   * The buttons a log message names, as labelled Web Admin links (Round 4 PR-D). Best effort
+   * and never a reason to fail a send: a payload that carries none, a resolver that is not
+   * wired, a Web Admin address nobody configured, or a resolver that throws all answer
+   * "no buttons", and the message goes out without them.
+   */
+  private async buttonsOf(
+    scope: ScopeContext,
+    intent: NotificationIntent,
+  ): Promise<OutboundMessage['buttons']> {
+    const stored = intent.payload[OPS_LOG_BUTTONS_PAYLOAD_KEY];
+    if (this.opsButtons === null || !Array.isArray(stored) || stored.length === 0) return undefined;
+    const parsed = opsLogButtonSchema.array().safeParse(stored);
+    if (!parsed.success) return undefined;
+    try {
+      return await this.opsButtons.resolve(scope, parsed.data);
+    } catch (error) {
+      this.logger.warn(
+        { err: error instanceof Error ? error.message : String(error), notificationId: intent.id },
+        'Could not resolve the buttons of an operations log message; sending it without them',
+      );
+      return undefined;
     }
   }
 
