@@ -189,6 +189,9 @@ export function DashboardPage({
     ]);
   };
 
+  const periodEmpty =
+    superAdmin && complete && shownSummary !== undefined && periodHasNothing(shownSummary);
+
   // The shell keeps one scroller for every page, so a page left half-way down used to open
   // the dashboard at that offset: its title and the header's controls sat above the fold,
   // under the top bar, and the live page looked as if it had none (v0.7.2). The dashboard
@@ -259,39 +262,51 @@ export function DashboardPage({
        */}
       <AttentionQueueCard permissions={permissions} />
 
-      {superAdmin &&
-        (complete ? (
-          <BusinessKpis query={summary} data={shownSummary} compare={compare} />
-        ) : (
-          <Card title={t('web.dashboard_business')}>
-            <Empty title={t('web.dashboard_custom_needed')} icon="calendar" variant="compact" />
-          </Card>
-        ))}
+      {periodEmpty ? (
+        /*
+         * The demo's empty dashboard: the server's own period figures are all zero, so the
+         * period's blocks — the KPI block, the second row, the charts and the period cards —
+         * give way to ONE card saying so. The queue above and the operational section below
+         * are not period data and stay.
+         */
+        <EmptyPeriodCard />
+      ) : (
+        <>
+          {superAdmin &&
+            (complete ? (
+              <BusinessKpis query={summary} data={shownSummary} compare={compare} />
+            ) : (
+              <Card title={t('web.dashboard_business')}>
+                <Empty title={t('web.dashboard_custom_needed')} icon="calendar" variant="compact" />
+              </Card>
+            ))}
 
-      <OperationsKpis
-        query={operations}
-        data={shownOperations}
-        asked={mayViewPanels || mayViewServices}
-        summary={superAdmin ? shownSummary : undefined}
-        compare={compare}
-      />
+          <OperationsKpis
+            query={operations}
+            data={shownOperations}
+            asked={mayViewPanels || mayViewServices}
+            summary={superAdmin ? shownSummary : undefined}
+            compare={compare}
+          />
 
-      {superAdmin && shownSummary !== undefined && (
-        <div className="dash-charts">
-          <RevenueChart data={shownSummary} compare={compare} />
-          <SalesByKindChart data={shownSummary} />
-        </div>
+          {superAdmin && shownSummary !== undefined && (
+            <div className="dash-charts">
+              <RevenueChart data={shownSummary} compare={compare} />
+              <SalesByKindChart data={shownSummary} />
+            </div>
+          )}
+
+          {superAdmin && complete && (
+            <div className="dash-row">
+              <PaymentMethods query={summary} data={shownSummary} />
+              <TopProducts selection={selection} />
+              <FailureSummary selection={selection} />
+            </div>
+          )}
+
+          {superAdmin && complete && <OtherFigures selection={selection} />}
+        </>
       )}
-
-      {superAdmin && complete && (
-        <div className="dash-row">
-          <PaymentMethods query={summary} data={shownSummary} />
-          <TopProducts selection={selection} />
-          <FailureSummary selection={selection} />
-        </div>
-      )}
-
-      {superAdmin && complete && <OtherFigures selection={selection} />}
 
       <SectionLabel>{t('web.dashboard_operations')}</SectionLabel>
       <div className="dash-row">
@@ -300,6 +315,33 @@ export function DashboardPage({
         {mayViewOps && <AttentionCard query={alerts} />}
       </div>
     </>
+  );
+}
+
+/**
+ * Whether the SERVER says the selected period recorded nothing: no sale, no revenue in any
+ * currency, no confirmed payment, no failed payment, no new customer and no renewal. Only
+ * the summary's own figures decide it — never a value this page computed — and a single
+ * non-zero figure keeps the full layout, so nothing the server counted is ever hidden.
+ */
+export function periodHasNothing(summary: DashboardSummaryResponse): boolean {
+  const s = summary.selected;
+  return (
+    s.sales.current === 0 &&
+    s.revenue.every((row) => BigInt(row.current) === 0n) &&
+    s.paymentMethods.every((row) => row.confirmed === 0) &&
+    s.failedPayments.current === 0 &&
+    s.newCustomers.current === 0 &&
+    s.renewals.current === 0
+  );
+}
+
+/** The demo's empty dashboard card: the chart icon, the sentence and why. */
+function EmptyPeriodCard() {
+  return (
+    <section className="card dash-empty-period">
+      <Empty title={t('web.chart_empty')} hint={t('web.dashboard_methods_empty')} icon="reports" />
+    </section>
   );
 }
 

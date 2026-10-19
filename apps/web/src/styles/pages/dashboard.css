@@ -711,6 +711,27 @@ li.dash-attn-tile .dash-attn-go {
   border-top: 0;
 }
 
+/* The empty period (the demo's empty dashboard): one large card, the chart icon, two lines. */
+.dash-empty-period {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 268px;
+}
+.dash-empty-period .empty {
+  gap: 10px;
+  padding: 32px 16px;
+}
+.dash-empty-period .empty svg {
+  width: 64px;
+  height: 64px;
+  color: var(--fg-2);
+  stroke-width: 1.2;
+}
+.dash-empty-period .empty strong {
+  font-size: var(--fs-body);
+}
+
 /* A chart's measured box (`useBoxWidth`): the plot is drawn at the width it is shown. */
 .dash-chart-box {
   min-width: 0;
@@ -748,6 +769,7 @@ li.dash-attn-tile .dash-attn-go {
  * containers so no other page's card turns translucent.
  */
 .dash-attention,
+.dash-empty-period,
 .dash-kgrid .card,
 .dash-ops > .card,
 .dash-charts > .card,
@@ -766,6 +788,7 @@ li.dash-attn-tile .dash-attn-go {
 }
 /* The 1px rim: bright at the top corner, fading, and catching again at the bottom. */
 .dash-attention::after,
+.dash-empty-period::after,
 .dash-kgrid .card::after,
 .dash-ops > .card::after,
 .dash-charts > .card::after,
@@ -820,6 +843,7 @@ li.dash-attn-tile .dash-attn-go {
 /* Reduced transparency: the same cards and tiles, solid and legible, with no blur. */
 @media (prefers-reduced-transparency: reduce) {
   .dash-attention,
+  .dash-empty-period,
   .dash-kgrid .card,
   .dash-ops > .card,
   .dash-charts > .card,

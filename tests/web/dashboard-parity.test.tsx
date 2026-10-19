@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import type { PermissionKey } from '@nexa/contracts';
-import { DashboardPage } from '../../apps/web/src/pages/dashboard';
+import { DashboardPage, periodHasNothing } from '../../apps/web/src/pages/dashboard';
 import { DeltaPill } from '../../apps/web/src/pages/dashboard-parts';
 import { AttentionQueueCard } from '../../apps/web/src/pages/dashboard-attention';
 import { AreaSpark } from '../../apps/web/src/ui/charts';
@@ -57,7 +57,7 @@ describe('the dashboard header controls', () => {
     stubApi(routesOf(DEMO_PARITY_EMPTY));
     window.history.replaceState(null, '', '/');
     renderPage(<DashboardPage permissions={OWNER} superAdmin />);
-    await screen.findByText(t('web.dashboard_today_sales'));
+    await screen.findByText(t('web.dashboard_methods_empty'));
 
     const period = screen.getByRole('group', { name: t('web.period_label') });
     for (const key of [
@@ -136,18 +136,65 @@ describe('the dashboard composition', () => {
     expect(row.querySelectorAll('.dash-services .badge')).toHaveLength(4);
   });
 
-  it('says «برای این بازه داده‌ای ثبت نشده است.» on every chart of an empty period', async () => {
+  /*
+   * The demo's empty dashboard: when the SERVER's period figures are all zero, the period
+   * blocks give way to one large card; the queue above and the operational section below
+   * stay, because they are not period data.
+   */
+  it('replaces the period blocks with ONE empty card when the server recorded nothing', async () => {
     stubApi(routesOf(DEMO_PARITY_EMPTY));
     const { container } = renderPage(<DashboardPage permissions={OWNER} superAdmin />);
+    const card = await waitFor(() => {
+      const found = container.querySelector('.dash-empty-period');
+      expect(found).not.toBeNull();
+      return found as HTMLElement;
+    });
+    expect(card.textContent).toContain(t('web.chart_empty'));
+    expect(card.textContent).toContain(t('web.dashboard_methods_empty'));
+    expect(container.querySelectorAll('.dash-empty-period')).toHaveLength(1);
+    // No KPI tile (no dash or zero tiles), no second row, no charts, no period cards.
+    for (const selector of ['.dash-kgrid', '.dash-kpi', '.dash-ops', '.dash-charts', '.dash-top']) {
+      expect(container.querySelector(selector), selector).toBeNull();
+    }
+    expect(screen.queryByText(t('web.dashboard_today_sales'))).toBeNull();
+    // What stays: the queue first, the operational section below the card.
+    expect(container.querySelector('#dash-attention')).not.toBeNull();
+    const label = container.querySelector('.dash-sec') as HTMLElement;
+    expect(label.textContent).toBe(t('web.dashboard_operations'));
+    expect(card.compareDocumentPosition(label) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText(t('web.system_status'))).toBeInTheDocument();
+    // And the header controls, so the empty period can be left.
+    expect(screen.getByRole('switch', { name: t('web.period_compare') })).toBeInTheDocument();
+  });
+
+  it('keeps the full layout for a period with data', async () => {
+    stubApi(routesOf(DEMO_PARITY));
+    const { container } = renderPage(<DashboardPage permissions={OWNER} superAdmin />);
     await screen.findByText(t('web.dashboard_today_sales'));
-    await waitFor(() =>
-      expect(screen.getAllByText(t('web.chart_empty')).length).toBeGreaterThanOrEqual(4),
-    );
-    // Revenue, orders, payment methods and top products: none draws an empty plot.
-    expect(container.querySelector('.dash-revenue svg.chart')).toBeNull();
-    expect(container.querySelector('.dash-orders svg.chart')).toBeNull();
-    // A real zero from the server is a zero, never a dash: the sparks are flat baselines.
-    expect(container.querySelectorAll('svg.area-spark.flat').length).toBeGreaterThan(0);
+    expect(container.querySelector('.dash-empty-period')).toBeNull();
+    expect(container.querySelector('.dash-kgrid')).not.toBeNull();
+    expect(container.querySelector('.dash-ops')).not.toBeNull();
+    expect(container.querySelector('.dash-charts')).not.toBeNull();
+  });
+
+  it('decides emptiness from the server’s figures, and any one of them keeps the layout', () => {
+    const empty = DEMO_PARITY_EMPTY.find((f) => f.path === '/dashboard/summary')!
+      .body as Parameters<typeof periodHasNothing>[0];
+    expect(periodHasNothing(empty)).toBe(true);
+    const one = (patch: Partial<Parameters<typeof periodHasNothing>[0]['selected']>) =>
+      periodHasNothing({ ...empty, selected: { ...empty.selected, ...patch } });
+    expect(one({ sales: { current: 1, previous: 0 } })).toBe(false);
+    expect(one({ failedPayments: { current: 2, previous: 0 } })).toBe(false);
+    expect(one({ newCustomers: { current: 3, previous: 0 } })).toBe(false);
+    expect(one({ renewals: { current: 1, previous: 0 } })).toBe(false);
+    expect(one({ revenue: [{ currency: 'USDT', current: '1', previous: '0' }] })).toBe(false);
+    expect(
+      one({
+        paymentMethods: [
+          { method: 'WALLET', confirmed: 1, confirmedAmount: [{ currency: 'IRT', amount: '0' }] },
+        ],
+      }),
+    ).toBe(false);
   });
 });
 
