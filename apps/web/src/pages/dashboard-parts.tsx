@@ -47,8 +47,8 @@ export type KpiSize = 'hero' | 'card' | 'tile';
  *   - `card` (this month, and the second row): the figure, the meta lines, a small chart;
  *   - `tile` (the 2×2 grid): the figure with its pill beside it, the caption, a sparkline.
  *
- * `tone` outlines a figure that needs attention (`alert` red, `warn` amber), never as
- * decoration.
+ * `tone` marks a figure that needs attention (`alert` red, `warn` amber) by tinting its label
+ * icon, never by outlining the card (the demo's cards are neutral).
  */
 export function KpiCard({
   label,

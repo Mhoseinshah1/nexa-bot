@@ -428,17 +428,14 @@ li.dash-attn-tile .dash-attn-go {
   flex: 1;
   min-height: 84px;
 }
-.dash-kpi.alert {
-  box-shadow:
-    inset 0 1px 0 var(--spec),
-    inset 0 0 0 1px color-mix(in srgb, var(--danger) 60%, transparent),
-    var(--gshadow);
+/* Demo parity (R2): an attention KPI is NOT outlined — the demo's cards are all neutral. Its
+   meaning stays inside: the label icon takes the danger or warn colour, and the pill and
+   the meta line say the rest. The `alert` / `warnish` classes remain the semantic hook. */
+.dash-kpi.alert .dash-kpi-lbl svg {
+  color: var(--danger);
 }
-.dash-kpi.warnish {
-  box-shadow:
-    inset 0 1px 0 var(--spec),
-    inset 0 0 0 1px color-mix(in srgb, var(--warn) 55%, transparent),
-    var(--gshadow);
+.dash-kpi.warnish .dash-kpi-lbl svg {
+  color: var(--warn);
 }
 /* The hero: lit from its top corner. */
 .dash-kpi.kpi-hero {
@@ -810,21 +807,6 @@ li.dash-attn-tile .dash-attn-go {
     linear-gradient(var(--fg) 0 0) content-box,
     linear-gradient(var(--fg) 0 0);
   mask-composite: exclude;
-}
-/* An alerting KPI keeps its tone over the glass: the rim takes the danger or warn colour. */
-.dash-kgrid .card.alert,
-.dash-ops > .card.alert {
-  box-shadow:
-    inset 0 1px 0 var(--spec),
-    inset 0 0 0 1px color-mix(in srgb, var(--danger) 60%, transparent),
-    var(--gshadow);
-}
-.dash-kgrid .card.warnish,
-.dash-ops > .card.warnish {
-  box-shadow:
-    inset 0 1px 0 var(--spec),
-    inset 0 0 0 1px color-mix(in srgb, var(--warn) 55%, transparent),
-    var(--gshadow);
 }
 .dash-kgrid > .card.kpi-hero {
   background: linear-gradient(

@@ -1986,6 +1986,21 @@ textarea.input,
 .banner.info strong {
   color: var(--fg);
 }
+/* A slim strip (R2): the demo's one-line hint — neutral hairline, the page's own row fill, a
+   leading ⓘ — instead of the accent-outlined callout. */
+.banner.info.slim {
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-color: var(--line-2);
+  background: var(--panel-row);
+  color: var(--fg-2);
+  font-size: var(--fs-xs);
+}
+.banner.slim > svg {
+  flex: none;
+  color: var(--fg-3);
+}
 .banner.ok {
   background: var(--ok-soft);
   border-color: color-mix(in srgb, var(--ok) 40%, transparent);

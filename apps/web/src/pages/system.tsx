@@ -188,7 +188,10 @@ function StatusSection() {
     refetchInterval: pollUnlessFinal(15_000),
   });
   const info = useQuery({ queryKey: ['info'], queryFn: fetchInfo });
-  const dependencies = readiness.data?.dependencies ?? [];
+  // Demo parity: the database leads the list; the rest keep the order the server gave them.
+  const dependencies = [...(readiness.data?.dependencies ?? [])].sort(
+    (a, b) => Number(b.name === 'postgres') - Number(a.name === 'postgres'),
+  );
   const down = dependencies.filter((row) => row.status !== 'up').length;
   // The overall verdict is the SERVER's, not a count of red rows. A dependency the
   // service reports as `required: false` (Redis, today) can be down while the process

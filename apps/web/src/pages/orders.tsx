@@ -335,6 +335,7 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
       <Card className="ca-list">
         <div hidden={toolbarHidden}>
           <ListFilterBar
+            first="search"
             label={t('web.orders_title')}
             search={
               <ListSearchBox

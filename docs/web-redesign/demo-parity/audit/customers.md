@@ -21,13 +21,13 @@ lead rather than changed here (they are kit-wide, not this family's):
 
 ## /users
 
-| #        | difference                                                                     | status                                                 |
-| -------- | ------------------------------------------------------------------------------ | ------------------------------------------------------ |
-| users #1 | Refresh is a circular icon button next to «مدیریت برچسب‌ها»                    | ✅ A (ListFreshness), verified                         |
-| users #2 | Pager labels «تازه‌تر / قدیمی‌تر»; breadcrumb                                  | ✅ A (CursorPager, PageTrail), verified                |
-| own      | Names bold, usernames monospaced, avatars tinted as the demo's `avc`           | ✅ d17855c9                                            |
-| own      | Rows at the demo's height (not dense)                                          | ✅ d17855c9                                            |
-| own      | Demo puts the search row above «فیلترها» on this one page, with a narrow input | ⛔ X8 (one toolbar order on every list: filters first) |
+| #        | difference                                                                     | status                                                                                                                                  |
+| -------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| users #1 | Refresh is a circular icon button next to «مدیریت برچسب‌ها»                    | ✅ A (ListFreshness), verified                                                                                                          |
+| users #2 | Pager labels «تازه‌تر / قدیمی‌تر»; breadcrumb                                  | ✅ A (CursorPager, PageTrail), verified                                                                                                 |
+| own      | Names bold, usernames monospaced, avatars tinted as the demo's `avc`           | ✅ d17855c9                                                                                                                             |
+| own      | Rows at the demo's height (not dense)                                          | ✅ d17855c9                                                                                                                             |
+| own      | Demo puts the search row above «فیلترها» on this one page, with a narrow input | ✅ 3c55279d (search row first, as the demo — owner decision 2026-10-19: follow the demo per page; X8 overridden where the demo differs) |
 
 ## /users/:id — Customer 360
 
