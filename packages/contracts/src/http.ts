@@ -4365,6 +4365,13 @@ export const walletAdjustRequestSchema = z.object({
   }),
   currency: z.enum(CURRENCY_CODES),
   note: z.string().trim().min(1).max(500),
+  /**
+   * R4 A5: «نمایش دلیل به مشتری». When true, the customer's adjustment message quotes `note`
+   * as the reason; otherwise the note stays the operator's and the message has no reason
+   * line. Stored on the ledger entry with it. Defaulted, so a client from before this field
+   * keeps the note private, which is what it promised.
+   */
+  showNoteToCustomer: z.boolean().default(false),
 });
 export type WalletAdjustRequest = z.infer<typeof walletAdjustRequestSchema>;
 
@@ -4731,6 +4738,8 @@ export const PAYMENT_TIMELINE_KINDS = [
   'GATEWAY_INVOICE_REQUESTED',
   'GATEWAY_INVOICE_CREATED',
   'CUSTOMER_SIGNALLED',
+  /** R4 A1: the customer pressed «🔄 تغییر شماره کارت» and was shown another card. */
+  'DESTINATION_SWITCHED',
   'RECEIPT_SUBMITTED',
   'GATEWAY_WEBHOOK_HINT',
   'GATEWAY_INQUIRY',
@@ -4772,6 +4781,20 @@ export const paymentTimelineEntrySchema = z.discriminatedUnion('kind', [
     ...timelineMoney,
   }),
   z.object({ kind: z.literal('CUSTOMER_SIGNALLED'), ...timelineAt }),
+  /*
+   * R4 A1: one press of «🔄 تغییر شماره کارت». The accounts by id and the new card's last four
+   * digits — never the account's label, which is an operator's free text, and never the
+   * whole card number, which `paymentDestinationViewSchema` keeps out of this bundle.
+   */
+  z.object({
+    kind: z.literal('DESTINATION_SWITCHED'),
+    ...timelineAt,
+    /** 1 for the first press, 2 for the second, … */
+    sequence: z.number().int().positive(),
+    fromAccountId: z.string(),
+    toAccountId: z.string(),
+    cardLast4: z.string().regex(/^\d{4}$/u),
+  }),
   z.object({
     kind: z.literal('RECEIPT_SUBMITTED'),
     ...timelineAt,
@@ -5879,6 +5902,14 @@ export const serviceSummarySchema = z.object({
    * Defaulted on parse, like the identity pair above.
    */
   locationLabel: z.string().nullable().default(null),
+  /**
+   * R4 A2: when a live panel check last found this service's account MISSING on its panel
+   * (the panel answered twice that it does not exist); null while it is there or was never
+   * found missing. A FLAG, not a state: nothing about the money, the order or the service's
+   * state machine moves. The customer's «سرویس‌های من» hides it; the operator sees it as
+   * «روی پنل نیست». Cleared by the next read that finds the account. Defaulted on parse.
+   */
+  missingOnPanelAt: z.iso.datetime().nullable().default(null),
 });
 export type ServiceSummaryResponse = z.infer<typeof serviceSummarySchema>;
 

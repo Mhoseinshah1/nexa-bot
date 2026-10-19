@@ -259,7 +259,12 @@ export const BROADCAST_TEXT_MAX_LENGTH = 3800;
 /** A media caption's raw body; Telegram's bound is 1024 and placeholders expand. */
 export const BROADCAST_CAPTION_MAX_LENGTH = 900;
 export const BROADCAST_TITLE_MAX_LENGTH = 120;
-export const BROADCAST_BUTTONS_MAX = 6;
+/**
+ * R4 A6: ten, so the owner's nine in-bot actions fit beside a link. Each button is drawn on a
+ * row of its own; Telegram's own bound is 100 buttons in one inline keyboard, and a callback
+ * button's `callback_data` (at most 64 bytes) is a short fixed code (`BROADCAST_ACTION_CALLBACK`).
+ */
+export const BROADCAST_BUTTONS_MAX = 10;
 export const BROADCAST_BUTTON_LABEL_MAX_LENGTH = 40;
 export const BROADCAST_BUTTON_URL_MAX_LENGTH = 512;
 
@@ -342,9 +347,62 @@ export const BROADCAST_BODY_DEFINITION: TemplateDefinition = {
       required: false,
       repeatable: true,
     },
+    /*
+     * R4 A6. Still facts about the RECIPIENT and nobody else, read at send time: their own
+     * numeric Telegram id, the phone number on their own row (empty when there is none),
+     * how many of their own services there are and how many serve now, and today's date.
+     * No link, no token, no credential and nothing of another customer.
+     */
+    {
+      token: 'telegramId',
+      type: 'STRING',
+      description: 'The recipient’s own numeric Telegram id.',
+      required: false,
+      repeatable: true,
+    },
+    {
+      token: 'phone',
+      type: 'STRING',
+      description: 'The phone number on the recipient’s row, when there is one; empty otherwise.',
+      required: false,
+      repeatable: true,
+    },
+    {
+      token: 'servicesTotal',
+      type: 'NUMBER',
+      description:
+        'How many services the recipient sees in «سرویس‌های من» (not ended, not refunded away, ' +
+        'not missing on the panel).',
+      required: false,
+      repeatable: true,
+    },
+    {
+      token: 'servicesActive',
+      type: 'NUMBER',
+      description: 'How many of those serve now: ACTIVE, inside their window, allowance left.',
+      required: false,
+      repeatable: true,
+    },
+    {
+      token: 'today',
+      type: 'DATE',
+      description: 'The date at send time, in the tenant’s zone and calendar (Jalali).',
+      required: false,
+      repeatable: true,
+    },
   ],
 };
-export type BroadcastPlaceholderToken = 'firstName' | 'username' | 'walletBalance';
+export const BROADCAST_PLACEHOLDER_TOKENS = [
+  'firstName',
+  'username',
+  'walletBalance',
+  'telegramId',
+  'phone',
+  'servicesTotal',
+  'servicesActive',
+  'today',
+] as const;
+export type BroadcastPlaceholderToken = (typeof BROADCAST_PLACEHOLDER_TOKENS)[number];
 
 // --- HTTP -------------------------------------------------------------------------------
 
@@ -362,20 +420,88 @@ const httpsUrl = z
   .max(BROADCAST_BUTTON_URL_MAX_LENGTH)
   .regex(BROADCAST_BUTTON_URL_PATTERN, 'a button opens an https:// or tg:// link');
 
+/** A LINK button: an `https://` or `tg://` URL. The only kind a campaign carries. */
 export const broadcastButtonSchema = z
   .object({
     label: z.string().trim().min(1).max(BROADCAST_BUTTON_LABEL_MAX_LENGTH),
     url: httpsUrl,
   })
   .strict();
-export type BroadcastButton = z.infer<typeof broadcastButtonSchema>;
+export type BroadcastUrlButton = z.infer<typeof broadcastButtonSchema>;
+
+/**
+ * R4 A6: the in-bot actions a broadcast button may open — each one EXACTLY a main-menu entry
+ * (or `/start`), never a payload. The tap carries `bc:<code>` (`BROADCAST_ACTION_CALLBACK`)
+ * and the Telegram surface turns it into the SAME command the main-menu button or the slash
+ * command is turned into, so there is no second handler for any of them:
+ *
+ * - START → `/start`; CATALOG «خرید سرویس» → `/catalog`; TRIAL «اکانت تست» → `/trial`;
+ * - WALLET_TOPUP «شارژ کیف پول» → `/wallet` (the wallet screen carries the top-up button);
+ * - REFERRAL «زیرمجموعه‌گیری» → `/referral`; SERVICES «سرویس‌های من» → `/services`;
+ * - RENEW «تمدید» → `/services`: a renewal is chosen on a service's own card, so the list is
+ *   the menu entry that leads there — there is no renewal without naming a service;
+ * - SUPPORT «پشتیبانی» → `/help` (the main menu's support entry); TUTORIAL «آموزش» → `/apps`.
+ */
+export const BROADCAST_ACTIONS = [
+  'START',
+  'CATALOG',
+  'TRIAL',
+  'WALLET_TOPUP',
+  'REFERRAL',
+  'SERVICES',
+  'RENEW',
+  'SUPPORT',
+  'TUTORIAL',
+] as const;
+export type BroadcastAction = (typeof BROADCAST_ACTIONS)[number];
+
+/** The command each action stands for: the SAME one its main-menu button is routed to. */
+export const BROADCAST_ACTION_COMMANDS: Readonly<Record<BroadcastAction, string>> = {
+  START: '/start',
+  CATALOG: '/catalog',
+  TRIAL: '/trial',
+  WALLET_TOPUP: '/wallet',
+  REFERRAL: '/referral',
+  SERVICES: '/services',
+  RENEW: '/services',
+  SUPPORT: '/help',
+  TUTORIAL: '/apps',
+};
+
+/** The `callback_data` prefix of an action button: `bc:` and the action's code. */
+export const BROADCAST_ACTION_CALLBACK = 'bc:' as const;
+
+/** The `callback_data` of one action button. At most 15 bytes, far below Telegram's 64. */
+export function broadcastActionCallbackData(action: BroadcastAction): string {
+  return `${BROADCAST_ACTION_CALLBACK}${action}`;
+}
+
+/** An IN-BOT button: a label and one of `BROADCAST_ACTIONS`. A callback, never a URL. */
+export const broadcastActionButtonSchema = z
+  .object({
+    label: z.string().trim().min(1).max(BROADCAST_BUTTON_LABEL_MAX_LENGTH),
+    action: z.enum(BROADCAST_ACTIONS),
+  })
+  .strict();
+export type BroadcastActionButton = z.infer<typeof broadcastActionButtonSchema>;
+
+/** One broadcast button: a link or an in-bot action, mixed freely in one keyboard. */
+export const broadcastMessageButtonSchema = z.union([
+  broadcastButtonSchema,
+  broadcastActionButtonSchema,
+]);
+export type BroadcastButton = z.infer<typeof broadcastMessageButtonSchema>;
+
+export function isBroadcastActionButton(button: BroadcastButton): button is BroadcastActionButton {
+  return 'action' in button;
+}
 
 /** The composer's fields, shared by create and update. The body is checked per kind. */
 const broadcastContentFields = {
   title: z.string().trim().min(1).max(BROADCAST_TITLE_MAX_LENGTH),
   contentKind: z.enum(BROADCAST_CONTENT_KINDS),
   body: z.string().max(BROADCAST_TEXT_MAX_LENGTH),
-  buttons: z.array(broadcastButtonSchema).max(BROADCAST_BUTTONS_MAX).default([]),
+  buttons: z.array(broadcastMessageButtonSchema).max(BROADCAST_BUTTONS_MAX).default([]),
   audience: z.unknown(),
   /** Round N close (§D). Promotional unless the operator says otherwise. */
   purpose: z.enum(BROADCAST_PURPOSES).default('MARKETING'),
@@ -486,7 +612,7 @@ export const broadcastSchema = z.object({
   contentKind: z.enum(BROADCAST_CONTENT_KINDS),
   /** RAW, as typed, placeholders included. */
   body: z.string(),
-  buttons: z.array(broadcastButtonSchema),
+  buttons: z.array(broadcastMessageButtonSchema),
   media: broadcastMediaSchema.nullable(),
   purpose: z.enum(BROADCAST_PURPOSES),
   source: broadcastSourceSchema.nullable(),
