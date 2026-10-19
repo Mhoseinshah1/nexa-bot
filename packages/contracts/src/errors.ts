@@ -332,6 +332,12 @@ export const PLATFORM_ERROR_CODES = {
   /** E4: a backup password that 7-Zip could not be handed on one line (a control character). */
   BACKUP_ARCHIVE_PASSWORD_INVALID: 'backup.archive_password_invalid',
   /** E4: the account-password step-up for setting the backup password was not accepted. */
+  /** E1: compaction needs a completed import and none in flight. */
+  LEGACY_COMPACTION_UNAVAILABLE: 'legacy_compaction.unavailable',
+  /** E1: the typed confirmation was not the phrase. */
+  LEGACY_COMPACTION_PHRASE_INVALID: 'legacy_compaction.phrase_invalid',
+  /** E1: a compaction is already running, or has completed (it is one-time). */
+  LEGACY_COMPACTION_ACTIVE: 'legacy_compaction.active',
   BACKUP_ARCHIVE_PASSWORD_REAUTHENTICATION_FAILED:
     'backup.archive_password_reauthentication_failed',
 

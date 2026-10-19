@@ -97,6 +97,9 @@ export const AUDIT_CRITICAL_ACTIONS: Readonly<Record<string, readonly Permission
   // The "adopt approved" lane: the request that starts it is charged on the same CRITICAL key
   // (`LEGACY_NXPKG_AUDIT_ACTIONS.requestAdopt`) — it starts writes that adopt services.
   'legacy.migration.adopt_request': ['legacy.migration.apply'],
+  // Round 4 PR-E (E1): the irreversible compaction of the imported legacy data, charged on
+  // the same CRITICAL key that started the import.
+  'legacy.compaction.request': ['legacy.migration.apply'],
 };
 
 export const AUDIT_CRITICAL_ACTION_CODES: readonly string[] = Object.keys(AUDIT_CRITICAL_ACTIONS);
