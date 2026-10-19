@@ -8,11 +8,11 @@ Fixtures: `tests/web/shots/fixtures/demo-parity/finance.ts`. "Phase A" means the
 
 Shared changes this family needed (kit, additive, opt-in):
 
-| change                                                                                                                     | commits            |
-| -------------------------------------------------------------------------------------------------------------------------- | ------------------ |
-| `DataTable` `detail`: a row's full-width detail line under a toggle (the facts a wide list cannot hold as columns at 1440) | 2c889b1d, cfe70653 |
-| `DataTable` `phoneCards`: each row a card on a phone (≤ 820px), cells named by `data-label`, as the demo's lists at 390    | a83c3186           |
-| `shots-fixtures` test parses the named fixture sets (`demo-parity`) with their schemas too                                 | 5a7ad23e           |
+| change                                                                                                                                                                                 | commits             |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| `DataTable` `detail`: a row's full-width detail line under a toggle (the facts a wide list cannot hold as columns at 1440)                                                             | 2c889b1d, cfe70653  |
+| Phone cards at 390: first `phoneCards` (a83c3186), folded into the track's one mechanism `DataTable` `stack` / `stack="labelled"` with the row-detail toggle ported onto it (b02c5f41) | a83c3186 → b02c5f41 |
+| `shots-fixtures` test parses the named fixture sets (`demo-parity`) with their schemas too                                                                                             | 5a7ad23e            |
 
 ## /payments
 
@@ -24,7 +24,7 @@ Shared changes this family needed (kit, additive, opt-in):
 | 4   | Breadcrumb «مالی و پرداخت / پرداخت‌ها و کیف پول»                                                                | ✅ 9b1bb5de (the trail named the page title «مرکز عملیات پرداخت»)                                                                                                                                                                                                                                                 |
 | —   | Quick receipt review banner                                                                                     | ⛔ excluded by the owner (on hold)                                                                                                                                                                                                                                                                                |
 | own | Horizontal overflow at 1440 (the demo itself scrolls its 16 columns)                                            | ✅ 61572a4f — no overflow (web:shots `tableOverflow: []`)                                                                                                                                                                                                                                                         |
-| own | 390: the demo's rows are cards                                                                                  | ✅ a83c3186, f1946c6e (the detail stays behind its toggle in the card's corner)                                                                                                                                                                                                                                   |
+| own | 390: the demo's rows are cards                                                                                  | ✅ f1946c6e, b02c5f41 (the detail stays behind its toggle in the card's corner)                                                                                                                                                                                                                                   |
 | own | Toolbar: demo draws search above filters                                                                        | ⛔ X8 (Phase A rule: filters row first)                                                                                                                                                                                                                                                                           |
 
 ## /payment-gateways
