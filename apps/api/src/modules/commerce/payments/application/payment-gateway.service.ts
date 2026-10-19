@@ -1338,11 +1338,13 @@ export class PaymentGatewayService {
     const unpriceable = new Set<PaymentGatewayProvider>();
     for (const gateway of gateways) {
       const spec = PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].conversion;
-      if (
-        gateway.status === 'ACTIVE' &&
-        pricedOnlyByCentralFx(spec) &&
-        (await this.centralUnitRatio(scope, spec, tx)) === null
-      ) {
+      /*
+       * Decided whatever the route's status (Codex review of #291): an inactive route is
+       * already refused by INACTIVE, so the bot's answer is unchanged, but the operator's
+       * warning must name every blocker at once — otherwise the missing ratio is found
+       * only after switching the route on.
+       */
+      if (pricedOnlyByCentralFx(spec) && (await this.centralUnitRatio(scope, spec, tx)) === null) {
         unpriceable.add(gateway.provider);
       }
     }
