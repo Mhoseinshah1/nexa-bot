@@ -387,6 +387,8 @@ import {
   recoveryDetailResponseSchema,
   recoveryListResponseSchema,
   runBackupResponseSchema,
+  setBackupArchivePasswordResponseSchema,
+  type SetBackupArchivePasswordResponse,
   type BackupHistoryResponse,
   type BackupStatusResponse,
   type RecoveryCapabilitiesResponse,
@@ -2835,6 +2837,37 @@ export function backupArchiveUrl(id: string): string {
   return `${API_PREFIX}${BACKUP_ROUTES.download(id)}`;
 }
 
+/** One part of a split archive (E4), exactly as it was delivered to Telegram. */
+export function backupArchivePartUrl(id: string, part: number): string {
+  return `${API_PREFIX}${BACKUP_ROUTES.downloadPart(id, part)}`;
+}
+
+/**
+ * Sets the owner's backup password (E4). The password and the account password travel in
+ * the BODY of one POST and are never kept by this page after it answers.
+ */
+export function setBackupArchivePassword(input: {
+  idempotencyKey: string;
+  password: string;
+  confirmation: string;
+  accountPassword: string;
+  code?: string;
+}): Promise<SetBackupArchivePasswordResponse> {
+  return post(
+    BACKUP_ROUTES.archivePassword,
+    {
+      idempotencyKey: input.idempotencyKey,
+      password: input.password,
+      confirmation: input.confirmation,
+      stepUp: {
+        password: input.accountPassword,
+        ...(input.code === undefined || input.code === '' ? {} : { code: input.code }),
+      },
+    },
+    setBackupArchivePasswordResponseSchema,
+  );
+}
+
 export function fetchRecoveryCapabilities(): Promise<RecoveryCapabilitiesResponse> {
   return authedGet(RECOVERY_ROUTES.capabilities, recoveryCapabilitiesResponseSchema);
 }
@@ -2887,8 +2920,16 @@ export async function uploadRecoveryArchive(file: File): Promise<RecoveryDetailR
   return recoveryDetailResponseSchema.parse(payload);
 }
 
-export function verifyRecovery(id: string): Promise<RecoveryDetailResponse> {
-  return post(`${RECOVERY_ROUTES.detail(id)}/verify`, {}, recoveryDetailResponseSchema);
+/** `archivePassword`: an uploaded 7-Zip archive's password (E4); used once, never kept. */
+export function verifyRecovery(
+  id: string,
+  archivePassword?: string,
+): Promise<RecoveryDetailResponse> {
+  return post(
+    `${RECOVERY_ROUTES.detail(id)}/verify`,
+    archivePassword === undefined || archivePassword === '' ? {} : { archivePassword },
+    recoveryDetailResponseSchema,
+  );
 }
 
 // --- The Recovery Kit (ADR-0032) ---------------------------------------------

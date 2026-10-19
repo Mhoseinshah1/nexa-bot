@@ -64,6 +64,11 @@ function run(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     cleanupOk: true,
     cleanupLeftovers: 0,
     archiveAvailable: true,
+    archiveFormat: 'NXB',
+    partCount: 1,
+    partsDelivered: 0,
+    parts: [],
+    summaryDeliveryState: null,
     ...overrides,
   };
 }
@@ -121,6 +126,7 @@ const status = (overrides: Record<string, unknown> = {}) => ({
   running: null,
   unknownDeliveries: 0,
   quiesced: false,
+  archivePassword: { configured: false, setAt: null },
   ...overrides,
 });
 
@@ -380,7 +386,7 @@ describe('the recovery page', () => {
       const dialog = await screen.findByRole('dialog');
       const button = within(dialog).getByRole('button', { name: 'ساخت و دریافت کیت' });
       expect(button).toBeDisabled();
-      fireEvent.change(screen.getAllByLabelText('رمز ورود حساب شما')[0]!, {
+      fireEvent.change(within(dialog).getByLabelText('رمز ورود حساب شما'), {
         target: { value: 'my-account-password' },
       });
       fireEvent.change(screen.getByLabelText('رمز کیت (دست‌کم ۱۲ نویسه)'), {

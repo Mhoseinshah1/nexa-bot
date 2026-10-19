@@ -1,5 +1,6 @@
-import { and, desc, eq, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, lt, sql } from 'drizzle-orm';
 import type {
+  BackupArchiveFormat,
   BackupDeliveryState,
   BackupRunState,
   BackupStage,
@@ -7,11 +8,14 @@ import type {
 } from '@nexa/contracts';
 import { NexaError, PLATFORM_ERROR_CODES } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
-import { backupRuns } from '../../../../infrastructure/persistence/schema.js';
+import { backupRunParts, backupRuns } from '../../../../infrastructure/persistence/schema.js';
 import { isUniqueViolation } from '../../../../infrastructure/persistence/sqlstate.js';
 import { redactStoredText } from '../../../../infrastructure/redaction.js';
 import type {
+  BackupArchivePart,
   BackupArchiveRetentionStore,
+  BackupRunPartRow,
+  BackupRunPartStore,
   BackupRunRepository,
   BackupRunRow,
   StartOutcome,
@@ -57,13 +61,146 @@ function toRow(row: Row): BackupRunRow {
     cleanupOk: row.cleanupOk,
     cleanupDetail: row.cleanupDetail,
     archivePrunedAt: row.archivePrunedAt,
+    archiveFormat: row.archiveFormat as BackupArchiveFormat | null,
+    partCount: row.partCount,
+    archivePasswordId: row.archivePasswordId,
+    summaryDeliveryState: row.summaryDeliveryState as BackupDeliveryState | null,
   };
 }
 
 export class DrizzleBackupRunRepository
-  implements BackupRunRepository, BackupArchiveRetentionStore
+  implements BackupRunRepository, BackupArchiveRetentionStore, BackupRunPartStore
 {
   constructor(private readonly db: Database) {}
+
+  // --- Parts (E4) ----------------------------------------------------------
+
+  /**
+   * Inserts the plan, every part NOT_ATTEMPTED, in one statement — and only while this
+   * process still holds the run's lease (an INSERT … SELECT over the RUNNING row), so a
+   * reclaimed run cannot grow parts afterwards.
+   */
+  async recordParts(input: {
+    id: string;
+    leaseOwner: string;
+    parts: readonly BackupArchivePart[];
+  }): Promise<void> {
+    if (input.parts.length === 0) return;
+    const values = sql.join(
+      input.parts.map(
+        (part) =>
+          sql`(${part.partNumber}::integer, ${part.filename}::text, ${String(part.start)}::bigint, ${String(part.bytes)}::bigint, ${part.sha256}::text)`,
+      ),
+      sql`, `,
+    );
+    await this.db.execute(sql`
+      INSERT INTO ${backupRunParts}
+        (backup_id, part_number, filename, range_start, bytes, sha256, delivery_state)
+      SELECT run.id, plan.part_number, plan.filename, plan.range_start, plan.bytes, plan.sha256,
+             'NOT_ATTEMPTED'
+        FROM ${backupRuns} AS run
+       CROSS JOIN (VALUES ${values}) AS plan(part_number, filename, range_start, bytes, sha256)
+       WHERE run.id = ${input.id}::uuid
+         AND run.state = 'RUNNING'
+         AND run.lease_owner = ${input.leaseOwner}
+      ON CONFLICT (backup_id, part_number) DO NOTHING
+    `);
+  }
+
+  /** One part's answer, lease-guarded through its RUNNING run. */
+  async recordPartOutcome(input: {
+    id: string;
+    leaseOwner: string;
+    partNumber: number;
+    state: BackupDeliveryState;
+    attemptedAt: Date;
+    messageId: number | null;
+    detail: string | null;
+  }): Promise<void> {
+    await this.db.execute(sql`
+      UPDATE ${backupRunParts} AS part
+         SET delivery_state = ${input.state},
+             delivery_attempted_at = ${input.attemptedAt},
+             telegram_message_id = ${input.state === 'SUCCEEDED' && input.messageId !== null ? String(input.messageId) : null}::bigint,
+             delivery_detail = ${redactStoredText(input.detail)}
+        FROM ${backupRuns} AS run
+       WHERE part.backup_id = ${input.id}::uuid
+         AND part.part_number = ${input.partNumber}
+         AND run.id = part.backup_id
+         AND run.state = 'RUNNING'
+         AND run.lease_owner = ${input.leaseOwner}
+    `);
+  }
+
+  async parts(id: string): Promise<readonly BackupRunPartRow[]> {
+    const rows = await this.db
+      .select()
+      .from(backupRunParts)
+      .where(eq(backupRunParts.backupId, id))
+      .orderBy(asc(backupRunParts.partNumber));
+    return rows.map((row) => ({
+      backupId: row.backupId,
+      partNumber: row.partNumber,
+      filename: row.filename,
+      bytes: row.bytes,
+      sha256: row.sha256,
+      deliveryState: row.deliveryState as BackupDeliveryState,
+      deliveryAttemptedAt: row.deliveryAttemptedAt,
+      telegramMessageId: row.telegramMessageId,
+      deliveryDetail: row.deliveryDetail,
+    }));
+  }
+
+  /**
+   * E4: runs whose LOCAL copy may go, because Telegram holds every part.
+   *
+   * THE RULE, in the query and nowhere else: a SUCCEEDED run whose recorded part count
+   * equals its part rows and NONE of whose parts lacks a Telegram message id. A run that
+   * was delivered in part, not at all, or whose answer was lost is never a candidate —
+   * its local copy is the only complete one. The newest `keepDelivered` such runs stay.
+   */
+  async deliveredCopyPruneCandidates(input: {
+    keepDelivered: number;
+    protectedIds: readonly string[];
+    limit: number;
+  }): Promise<readonly { id: string }[]> {
+    const unprotected =
+      input.protectedIds.length === 0
+        ? sql``
+        : sql`AND run.id NOT IN (${sql.join(
+            input.protectedIds.map((id) => sql`${id}::uuid`),
+            sql`, `,
+          )})`;
+    const rows = await this.db.execute<{ id: string }>(sql`
+      WITH delivered AS (
+        SELECT run.id, run.started_at
+          FROM ${backupRuns} AS run
+         WHERE run.state = 'SUCCEEDED'
+           AND run.finished_at IS NOT NULL
+           AND run.archive_pruned_at IS NULL
+           AND run.delivery_state = 'SUCCEEDED'
+           AND run.part_count IS NOT NULL
+           AND run.part_count = (
+             SELECT count(*) FROM ${backupRunParts} AS part WHERE part.backup_id = run.id
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM ${backupRunParts} AS part
+              WHERE part.backup_id = run.id
+                AND (part.telegram_message_id IS NULL OR part.delivery_state <> 'SUCCEEDED')
+           )
+           ${unprotected}
+      )
+      SELECT delivered.id FROM delivered
+       WHERE delivered.id NOT IN (
+         SELECT newest.id FROM delivered AS newest
+          ORDER BY newest.started_at DESC, newest.id DESC
+          LIMIT ${input.keepDelivered}
+       )
+       ORDER BY delivered.started_at ASC, delivered.id ASC
+       LIMIT ${input.limit}
+    `);
+    return rows.rows.map((row) => ({ id: row.id }));
+  }
 
   async start(input: {
     id: string;
@@ -182,10 +319,18 @@ export class DrizzleBackupRunRepository
     failureMessage?: string | null;
     cleanupOk: boolean;
     cleanupDetail?: string | null;
+    archiveFormat?: BackupArchiveFormat | null;
+    partCount?: number | null;
+    archivePasswordId?: string | null;
+    summaryDeliveryState?: BackupDeliveryState | null;
   }): Promise<void> {
     await this.db
       .update(backupRuns)
       .set({
+        archiveFormat: input.archiveFormat ?? null,
+        partCount: input.partCount ?? null,
+        archivePasswordId: input.archivePasswordId ?? null,
+        summaryDeliveryState: input.summaryDeliveryState ?? null,
         state: input.state,
         stage: input.stage,
         finishedAt: input.now,

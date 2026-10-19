@@ -67,6 +67,11 @@ export interface BackupHousekeepingDeps {
   /** The archive retention settings in force now. */
   readonly retention: () => Promise<{ readonly keepCount: number; readonly keepDays: number }>;
   /**
+   * E4: how many runs delivered IN FULL keep their local copy (`backup.local_copies_keep`,
+   * default 1, 0 allowed). Absent is "keep them all" — the pre-E4 behaviour.
+   */
+  readonly localCopies?: () => Promise<number>;
+  /**
    * Backup run ids an in-progress recovery refers to — its pre-restore backup,
    * and a local run whose archive it is restoring. Never pruned.
    */
@@ -202,7 +207,9 @@ export class BackupHousekeeping {
         return fallback;
       }
     };
-    const pruned = await guard('archive-retention', () => this.pruneArchives(), 0);
+    const pruned =
+      (await guard('archive-retention', () => this.pruneArchives(), 0)) +
+      (await guard('delivered-copies', () => this.pruneDeliveredCopies(), 0));
     const debrisRemoved = await guard('plaintext-debris', () => this.sweepDebris(), 0);
     await guard('disk-space', () => this.checkDisk(), undefined);
     await guard('overdue', () => this.checkOverdue(), undefined);
@@ -259,6 +266,46 @@ export class BackupHousekeeping {
   }
 
   /** Job 2. Plaintext nothing has written for the grace window, and CLI scratch. */
+  /**
+   * E4: removes the LOCAL copy of runs Telegram holds in full.
+   *
+   * The rule lives in the query (`deliveredCopyPruneCandidates`): a run is a candidate only
+   * when EVERY part has a recorded Telegram message id, and the newest `localCopies` such
+   * runs stay. A run delivered in part, not at all, or with an unknown outcome is never a
+   * candidate — its local copy is the only complete one, and its alert is already open.
+   * A run an unfinished recovery names is protected as in `pruneArchives`.
+   */
+  async pruneDeliveredCopies(): Promise<number> {
+    if (this.deps.localCopies === undefined) return 0;
+    const keepDelivered = await this.deps.localCopies();
+    const now = this.deps.clock.now();
+    const candidates = await this.deps.runs.deliveredCopyPruneCandidates({
+      keepDelivered,
+      protectedIds: await this.deps.protectedByRecovery(),
+      limit: PRUNE_BATCH,
+    });
+    let pruned = 0;
+    for (const candidate of candidates) {
+      const survived = await this.deps.debris.removeRunDirectory(candidate.id);
+      if (survived.length > 0) {
+        this.deps.logger.error(
+          { backupId: candidate.id, survived },
+          'could not remove the local copy of a delivered backup',
+        );
+        this.retentionSurvivors += 1;
+        continue;
+      }
+      if (await this.deps.runs.markArchivePruned({ id: candidate.id, now })) pruned += 1;
+    }
+    if (pruned > 0) {
+      this.deps.logger.info(
+        { pruned, keepDelivered },
+        'local copies of backups delivered in full were removed',
+      );
+    }
+    return pruned;
+  }
+
   async sweepDebris(): Promise<number> {
     const now = this.deps.clock.now();
     const running = new Set(await this.deps.runs.runningIds());

@@ -17,6 +17,12 @@ import {
   BACKUP_ARCHIVE_KEEP_COUNT_DEFAULT,
   BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT,
   BACKUP_ARCHIVE_RETENTION_SETTING_KEYS,
+  BACKUP_PART_MAX_BYTES,
+  DATA_RETENTION_SETTING_KEYS,
+  IDEMPOTENCY_INTERACTIVE_RETENTION_DAYS_DEFAULT,
+  OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT,
+  BACKUP_LOCAL_COPIES_DEFAULT,
+  BACKUP_LOCAL_COPIES_SETTING_KEY,
   BACKUP_SCHEDULE_SETTING_KEYS,
   PAYMENT_GATEWAY_DESCRIPTORS,
   CAMPAIGN_SCHEDULE_INTERVAL_MS,
@@ -66,7 +72,7 @@ import type {
 
 import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema.js';
 import { readFileSync } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { rename, stat } from 'node:fs/promises';
 import { panelUrlPolicy } from './infrastructure/net/installation-policy.js';
 import { SafeHttpClient } from './infrastructure/net/safe-http.js';
 import {
@@ -223,7 +229,15 @@ import {
   runAsLegacyMigration,
   type InstallationWriteGate,
 } from './infrastructure/persistence/write-gate.js';
-import { KeyringBackupArchiver } from './modules/platform/backup/infrastructure/archiver.js';
+import { DualFormatBackupArchiver } from './modules/platform/backup/infrastructure/archiver.js';
+import {
+  backupArchivePasswordSource,
+  DrizzleBackupPasswordStore,
+} from './modules/platform/backup/infrastructure/drizzle-backup-password.store.js';
+import { planArchiveParts } from './modules/platform/backup/infrastructure/archive-parts.js';
+import { purgePublishedOutboxBefore } from './modules/platform/eventing/infrastructure/outbox-retention.js';
+import { purgeExpiredIdempotencyBefore } from './modules/platform/idempotency/infrastructure/idempotency-retention.js';
+import { BackupPasswordService } from './modules/platform/backup/application/backup-password.service.js';
 import { PostgresDatabaseTools } from './modules/platform/backup/infrastructure/pg-tools.js';
 import { TelegramBackupDelivery } from './modules/platform/backup/infrastructure/telegram-backup-delivery.js';
 import { RoutedBackupDelivery } from './modules/platform/backup/application/routed-backup-delivery.js';
@@ -907,6 +921,9 @@ export interface Container {
    */
   readonly backupHousekeeping: BackupHousekeeping;
   readonly recoveryRequestSweeper: RetentionSweeper;
+  /** E3: published outbox history and interactive idempotency keys. */
+  readonly outboxRetentionSweeper: RetentionSweeper;
+  readonly idempotencyRetentionSweeper: RetentionSweeper;
   /** HF-A7: clears support's reply files Telegram never took, after their retention. */
   readonly ticketReplyFileSweeper: RetentionSweeper;
   /** Phase A2: clears direct-message files Telegram never took, after their retention. */
@@ -1470,7 +1487,9 @@ export interface Container {
    * restore goes through the decryption path the verification proved, not a
    * second one written for the CLI.
    */
-  readonly backupArchiver: KeyringBackupArchiver;
+  readonly backupArchiver: DualFormatBackupArchiver;
+  /** The owner-set backup password (E4): set and status. Never returns the password. */
+  readonly backupPasswords: BackupPasswordService;
   readonly backupTools: PostgresDatabaseTools;
   /**
    * The Recovery Kit (ADR-0032): the keyring every cipher in this process reads
@@ -6683,6 +6702,62 @@ export function createContainer(
     },
   );
 
+  /*
+   * E3 (Round 4 PR-E): retention for the outbox's PUBLISHED history and for the
+   * INTERACTIVE idempotency keys. Every exclusion is in the statement
+   * (`outbox-retention.ts`, `idempotency-retention.ts`): an unpublished message and a
+   * job's or the importer's key are never removed. The days are registry settings on the
+   * installation tenant (defaults with no tenant). Nothing is removed while a recovery
+   * holds the installation: the restore decides what the database holds.
+   */
+  const retentionDays = async (key: string, fallback: number): Promise<number> =>
+    installationTenantId === null
+      ? fallback
+      : settingsResolver.valueOf<number>(
+          { tenantId: installationTenantId, botInstanceId: null },
+          key as never,
+        );
+  const outboxRetentionSweeper = new RetentionSweeper(
+    {
+      name: 'outbox-published',
+      purge: async (now, limit) => {
+        if (await recoveryQuiesced()) return 0;
+        const days = await retentionDays(
+          DATA_RETENTION_SETTING_KEYS.outboxPublishedDays,
+          OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT,
+        );
+        return purgePublishedOutboxBefore(
+          database.db,
+          new Date(now.getTime() - days * 24 * 3_600_000),
+          limit,
+        );
+      },
+    },
+    clock,
+    logger,
+    { intervalMs: 3_600_000, initialDelayMs: 180_000, batchSize: 5_000, maxBatchesPerTick: 200 },
+  );
+  const idempotencyRetentionSweeper = new RetentionSweeper(
+    {
+      name: 'idempotency-interactive',
+      purge: async (now, limit) => {
+        if (await recoveryQuiesced()) return 0;
+        const days = await retentionDays(
+          DATA_RETENTION_SETTING_KEYS.idempotencyInteractiveDays,
+          IDEMPOTENCY_INTERACTIVE_RETENTION_DAYS_DEFAULT,
+        );
+        return purgeExpiredIdempotencyBefore(
+          database.db,
+          new Date(now.getTime() - days * 24 * 3_600_000),
+          limit,
+        );
+      },
+    },
+    clock,
+    logger,
+    { intervalMs: 3_600_000, initialDelayMs: 240_000, batchSize: 5_000, maxBatchesPerTick: 200 },
+  );
+
   const backupTools = new PostgresDatabaseTools({
     databaseUrl: config.DATABASE_URL,
     dumpTimeoutMs: config.BACKUP_DUMP_TIMEOUT_MS,
@@ -6706,7 +6781,24 @@ export function createContainer(
       new URL('./infrastructure/persistence/migrate.js', import.meta.url),
     ),
   });
-  const backupArchiver = new KeyringBackupArchiver(keyring);
+  /*
+   * E4: the password that seals 7-Zip archives, read on the INSTALLATION tenant (a backup
+   * is the whole database). With none stored, archives stay the keyring `NXB` they were.
+   */
+  const backupPasswordStore = new DrizzleBackupPasswordStore(database.db, cipher, () =>
+    installationTenantId === null ? null : { tenantId: installationTenantId, botInstanceId: null },
+  );
+  const backupArchiver = new DualFormatBackupArchiver(
+    keyring,
+    backupArchivePasswordSource(backupPasswordStore),
+    {
+      binary: config.BACKUP_SEVEN_ZIP_BIN,
+      level: config.BACKUP_SEVEN_ZIP_LEVEL,
+      threads: config.BACKUP_SEVEN_ZIP_THREADS,
+      sealTimeoutMs: config.BACKUP_DUMP_TIMEOUT_MS,
+      openTimeoutMs: config.BACKUP_RESTORE_TIMEOUT_MS,
+    },
+  );
   /**
    * Whether the installation's backup condition of this code is open — read from
    * the rows, never from process memory, so a worker that restarts can still
@@ -6801,7 +6893,11 @@ export function createContainer(
         : { tenantId: installationTenantId, botInstanceId: null },
     logger,
     leaseOwner,
-    retainedArchiveHint: config.BACKUP_WORK_DIR,
+    // E4: ≤ 45 MiB parts, byte ranges of the one verified archive.
+    parts: {
+      plan: (input) => planArchiveParts({ ...input, partBytes: BACKUP_PART_MAX_BYTES }),
+    },
+    restoreCommand: 'botctl restore --target <empty-db> <part.001> [<part.002> …]',
     conditionOpen: backupConditionOpen,
   });
   /*
@@ -6860,6 +6956,13 @@ export function createContainer(
     // `openArchive`. A recovery that decrypted through its own route would be
     // proving a path nobody restores through.
     archiver: backupArchiver,
+    // E4: a verified 7-Zip upload is re-sealed under the keyring in place (a temporary
+    // file renamed over it), so the executor never needs the operator's password.
+    resealToKeyring: async (input) => {
+      const staging = `${input.archivePath}.reseal`;
+      await backupArchiver.sealKeyring({ ...input, archivePath: staging });
+      await rename(staging, input.archivePath);
+    },
     engine: backupTools,
     keys: recoveryKeyCoverage,
     guard,
@@ -6892,8 +6995,24 @@ export function createContainer(
    * archive is still on disk, because the repository must not touch the
    * filesystem and the surface must not build a path.
    */
+  const backupPasswords = new BackupPasswordService({
+    uow,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    clock,
+    ids,
+    cipher,
+    store: backupPasswordStore,
+    idempotency,
+    scopeActivity: tenants,
+    verifyStepUp: (scope, actor, stepUp, context, action) =>
+      adminManagement.verifyStepUp(scope, actor, stepUp, context, action),
+  });
   const backupAdmin = new BackupAdminService({
     runs: backupRuns,
+    archivePassword: (scope) => backupPasswords.status(scope),
     recoveries: recoveryRequests,
     backup,
     guard,
@@ -7154,6 +7273,14 @@ export function createContainer(
         ),
       };
     },
+    // E4: how many fully delivered local copies stay (default 1; 0 allowed).
+    localCopies: async () =>
+      installationTenantId === null
+        ? BACKUP_LOCAL_COPIES_DEFAULT
+        : settingsResolver.valueOf<number>(
+            { tenantId: installationTenantId, botInstanceId: null },
+            BACKUP_LOCAL_COPIES_SETTING_KEY,
+          ),
     protectedByRecovery: () => recoveryRequests.backupIdsInUse(),
     // Longer than any dump plus any restore can take, plus the lease window: a
     // file untouched for that long has no live writer.
@@ -7322,6 +7449,8 @@ export function createContainer(
     sessionSweeper,
     backupRunSweeper,
     recoveryRequestSweeper,
+    outboxRetentionSweeper,
+    idempotencyRetentionSweeper,
     ticketReplyFileSweeper,
     directMessageFileSweeper,
     paymentExpiryLoop,
@@ -7795,6 +7924,7 @@ export function createContainer(
     recoveryQuiesced,
     backupRuns,
     backupArchiver,
+    backupPasswords,
     backupTools,
     recoveryService,
     backupAdmin,
@@ -7865,6 +7995,8 @@ export function createContainer(
       await sessionSweeper.stop();
       await backupRunSweeper.stop();
       await recoveryRequestSweeper.stop();
+      await outboxRetentionSweeper.stop();
+      await idempotencyRetentionSweeper.stop();
       await ticketReplyFileSweeper.stop();
       await directMessageFileSweeper.stop();
       await paymentExpiryLoop.stop();

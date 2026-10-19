@@ -19,8 +19,11 @@ import type {
  */
 export const CLI_SCRATCH_PREFIX = '.cli-';
 
-/** The two plaintext files a run directory can hold. Never the archive. */
-const PLAINTEXT_FILES = ['dump.pgcustom', 'verify.pgcustom'] as const;
+/**
+ * The plaintext files a run directory can hold. Never the archive. `manifest.json` is the
+ * 7-Zip seal's staging copy of the manifest (E4) — metadata, but plaintext of the dump's kind.
+ */
+const PLAINTEXT_FILES = ['dump.pgcustom', 'verify.pgcustom', 'manifest.json'] as const;
 
 /** A run directory is named by its UUID backup id; anything else is not a run's. */
 const RUN_DIRECTORY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -179,11 +182,14 @@ export class FilesystemBackupWorkspaces implements BackupWorkspaceFactory {
 class DirectoryWorkspace implements BackupWorkspace {
   readonly dumpPath: string;
   readonly archivePath: string;
+  readonly sevenZipPath: string;
   readonly verifyDumpPath: string;
 
   constructor(private readonly directory: string) {
     this.dumpPath = join(directory, 'dump.pgcustom');
     this.archivePath = join(directory, 'archive.nxb');
+    // E4: the 7-Zip archive, when a backup password is set. One or the other exists.
+    this.sevenZipPath = join(directory, 'archive.7z');
     // A second path, so a failed decrypt does not truncate the dump that is
     // still being held. Hygiene rather than a correctness rule — see the port.
     this.verifyDumpPath = join(directory, 'verify.pgcustom');
@@ -198,7 +204,7 @@ class DirectoryWorkspace implements BackupWorkspace {
    * database to still be on disk while it happens.
    */
   async discardPlaintext(): Promise<readonly string[]> {
-    return removeAll([this.dumpPath, this.verifyDumpPath]);
+    return removeAll([this.dumpPath, this.verifyDumpPath, join(this.directory, 'manifest.json')]);
   }
 
   /** Removes the whole directory, archive included. */

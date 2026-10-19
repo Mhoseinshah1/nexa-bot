@@ -1,3 +1,4 @@
+import { SEVEN_ZIP_MAGIC } from '../backup-parts';
 import { useId, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -114,8 +115,19 @@ export async function sniffRestoreFile(file: Blob): Promise<RestoreFileKind> {
     head.length >= magic.length && magic.every((byte, index) => head[index] === byte);
   const nexa = Array.from(BACKUP_ARCHIVE_MAGIC, (char) => char.charCodeAt(0));
   if (starts(nexa)) return 'NEXA';
+  // E4: a password-protected backup is a 7-Zip archive (or its first part).
+  if (starts(SEVEN_ZIP_MAGIC)) return 'NEXA';
   if (starts(NXPKG_MAGIC)) return 'MIRZA';
   return 'UNKNOWN';
+}
+
+/** Whether a chosen backup is a 7-Zip archive, which needs its password to verify (E4). */
+export async function isSevenZipBackup(file: Blob): Promise<boolean> {
+  const head = await headOf(file.slice(0, SEVEN_ZIP_MAGIC.length));
+  return (
+    head.length >= SEVEN_ZIP_MAGIC.length &&
+    SEVEN_ZIP_MAGIC.every((byte, index) => head[index] === byte)
+  );
 }
 
 /** A small blob's bytes: `arrayBuffer()` where the platform has it, `FileReader` otherwise. */

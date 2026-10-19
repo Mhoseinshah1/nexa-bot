@@ -1,10 +1,13 @@
-import { readFile, rm } from 'node:fs/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { isNexaError } from '@nexa/contracts';
 import { createContainer, type Container } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { resolveKeyring } from './infrastructure/crypto/resolve-keyring.js';
-import { KeyringBackupArchiver } from './modules/platform/backup/infrastructure/archiver.js';
+import { DualFormatBackupArchiver } from './modules/platform/backup/infrastructure/archiver.js';
+import { isSevenZipFile } from './modules/platform/backup/infrastructure/seven-zip.js';
 import { readArchiveHeader } from './modules/platform/backup/infrastructure/archive.js';
 import {
   keepScratchAlive,
@@ -47,6 +50,15 @@ const USAGE = [
   '  backup restore --archive PATH --target DB',
   '                                          restore into an explicit, empty, non-live database',
   '',
+  '  A backup delivered in parts (E4): repeat --archive for every part, in any order, or',
+  '  name only the .001 and the .002, .003 … beside it are found. The parts are joined',
+  '  in order, byte for byte, before anything is opened.',
+  '',
+  '  A 7-Zip archive (.7z) opens with the backup password, read from standard input',
+  '  with --password-stdin, never from an argument:',
+  '      read -rs P; printf %s "$P" | pnpm backup verify --archive A.7z.001 --password-stdin',
+  '  restore without --password-stdin tries the passwords this installation stored.',
+  '',
   '  verify and restore also take --kit PATH: a Recovery Kit (ADR-0032) whose keys',
   '  open an archive another installation sealed. They are used for this command',
   "  only and never become this installation's encryption key. The passphrase is",
@@ -57,6 +69,10 @@ const USAGE = [
 interface Args {
   readonly command: 'run' | 'list' | 'verify' | 'restore';
   readonly archive: string | null;
+  /** Every `--archive` given, in the order given (E4: the parts of one archive). */
+  readonly archives: readonly string[];
+  /** E4: the 7-Zip backup password comes on standard input. */
+  readonly passwordStdin: boolean;
   readonly target: string | null;
   readonly limit: number;
   readonly kit: string | null;
@@ -81,8 +97,25 @@ function parseArgs(argv: readonly string[]): Args {
   }
 
   const archive = value('--archive');
+  const archives: string[] = [];
+  argv.forEach((arg, index) => {
+    if (arg !== '--archive') return;
+    const next = argv[index + 1];
+    if (next !== undefined && !next.startsWith('--')) archives.push(next);
+  });
+  const passwordStdin = argv.includes('--password-stdin');
+  if (argv.some((arg) => arg === '--password' || arg.startsWith('--password='))) {
+    throw new UsageError(
+      'The backup password is read from standard input, never from an argument.',
+    );
+  }
   const target = value('--target');
   const kit = value('--kit');
+  if (kit !== null && passwordStdin) {
+    throw new UsageError(
+      '--kit and --password-stdin both read standard input. A 7-Zip archive needs no kit to open.',
+    );
+  }
   if (kit !== null && command !== 'verify' && command !== 'restore') {
     throw new UsageError('--kit applies to verify and restore only.');
   }
@@ -114,7 +147,83 @@ function parseArgs(argv: readonly string[]): Args {
     );
   }
 
-  return { command, archive, target, limit, kit };
+  return { command, archive, archives, passwordStdin, target, limit, kit };
+}
+
+/** `name.7z.001` → its siblings `.002`, `.003` … that exist, in order. */
+async function siblingParts(first: string): Promise<string[]> {
+  const match = /^(.*)\.(\d{3,})$/.exec(first);
+  if (match === null || Number(match[2]) !== 1) return [first];
+  const base = match[1] ?? '';
+  const width = (match[2] ?? '').length;
+  const found = [first];
+  for (let n = 2; n < 100_000; n += 1) {
+    const candidate = `${base}.${String(n).padStart(width, '0')}`;
+    const exists = await stat(candidate).then(
+      (info) => info.isFile(),
+      () => false,
+    );
+    if (!exists) break;
+    found.push(candidate);
+  }
+  return found;
+}
+
+/**
+ * The parts of one archive, in order (E4). Repeated `--archive`s are ordered by their
+ * numeric suffix and must be exactly `.001` … `.N` with none missing; a lone `.001`
+ * brings its siblings. A gap is refused here, by name, rather than left to fail as an
+ * unreadable archive.
+ */
+async function orderedParts(archives: readonly string[]): Promise<string[]> {
+  if (archives.length === 1) return siblingParts(archives[0] ?? '');
+  const numbered = archives.map((path) => {
+    const match = /\.(\d{3,})$/.exec(path);
+    if (match === null) {
+      throw new UsageError(`${path} is not a numbered part (.001, .002 …).`);
+    }
+    return { path, n: Number(match[1]) };
+  });
+  numbered.sort((a, b) => a.n - b.n);
+  numbered.forEach((part, index) => {
+    if (part.n !== index + 1) {
+      throw new UsageError(`Part ${String(index + 1).padStart(3, '0')} is missing.`);
+    }
+  });
+  return numbered.map((part) => part.path);
+}
+
+/** Joins the parts into one file in `directory`, streamed; one part is used where it is. */
+async function joinedArchive(parts: readonly string[], directory: string): Promise<string> {
+  if (parts.length === 1) return parts[0] ?? '';
+  const joined = join(directory, 'joined.archive');
+  const out = createWriteStream(joined, { mode: 0o600 });
+  for (const part of parts) await pipeline(createReadStream(part), out, { end: false });
+  await new Promise<void>((resolve, reject) => {
+    out.once('error', reject);
+    out.end(resolve);
+  });
+  process.stdout.write(`parts    ${String(parts.length)} joined in order\n`);
+  return joined;
+}
+
+/** The 7-Zip password from standard input, when asked for; else none. */
+async function passwordsFrom(args: {
+  readonly passwordStdin: boolean;
+}): Promise<string[] | undefined> {
+  if (!args.passwordStdin) return undefined;
+  if (process.stdin.isTTY) {
+    throw new UsageError(
+      'Pipe the backup password on standard input; it is not read from a prompt.',
+    );
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  const password = Buffer.concat(chunks)
+    .toString('utf8')
+    .replace(/\r?\n$/, '');
+  if (password === '') throw new UsageError('--password-stdin read an empty password.');
+  return [password];
 }
 
 /** Reads the kit passphrase from standard input: everything up to EOF, one trailing newline dropped. */
@@ -287,6 +396,21 @@ async function cmdList(container: Container, limit: number): Promise<number> {
  * 0700 volume the pipeline writes to, never `/tmp`: there a SIGKILL left a
  * plaintext database outside the volume, in a directory nothing ever cleaned.
  */
+/** The 7-Zip settings from the environment alone — `verify` loads no configuration. */
+function sevenZipOptionsFromEnvironment() {
+  const number = (name: string, fallback: number): number => {
+    const parsed = Number.parseInt(process.env[name] ?? '', 10);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  };
+  return {
+    binary: process.env.BACKUP_SEVEN_ZIP_BIN?.trim() || '7z',
+    level: number('BACKUP_SEVEN_ZIP_LEVEL', 9),
+    threads: number('BACKUP_SEVEN_ZIP_THREADS', 2),
+    sealTimeoutMs: number('BACKUP_DUMP_TIMEOUT_MS', 2 * 3_600_000),
+    openTimeoutMs: number('BACKUP_RESTORE_TIMEOUT_MS', 2 * 3_600_000),
+  };
+}
+
 function backupWorkDirFromEnvironment(): string {
   const configured = process.env.BACKUP_WORK_DIR?.trim() ?? '';
   return configured === '' ? '/var/lib/nexa/backups' : configured;
@@ -304,7 +428,12 @@ function backupWorkDirFromEnvironment(): string {
  * file it holds is a plaintext database, and leaving one behind because a
  * verification failed would be the worst possible time to leave one behind.
  */
-async function cmdVerify(archivePath: string, kitPath: string | null = null): Promise<number> {
+async function cmdVerify(
+  archivePaths: string | readonly string[],
+  kitPath: string | null = null,
+  passwordStdin = false,
+): Promise<number> {
+  const paths = typeof archivePaths === 'string' ? [archivePaths] : archivePaths;
   // The KEYRING ONLY, straight from the environment — not `loadConfig()`.
   //
   // This command's whole purpose is the case where the database is what is
@@ -330,21 +459,37 @@ async function cmdVerify(archivePath: string, kitPath: string | null = null): Pr
       `kit      ${String(await withKit(keyring, kitPath))} key(s), decrypt-only\n`,
     );
   }
-  const archiver = new KeyringBackupArchiver(keyring);
-
-  const header = await readArchiveHeader(archivePath);
-  process.stdout.write(
-    `archive  format ${String(header.header.format)}, ${String(header.archiveBytes)} bytes\n` +
-      `backup   ${header.header.backupId}\n` +
-      `key      ${header.header.keyId}\n`,
+  // No database here, so no stored password: a 7-Zip archive opens with the one given on
+  // standard input, or not at all.
+  const passwords = await passwordsFrom({ passwordStdin });
+  const archiver = new DualFormatBackupArchiver(
+    keyring,
+    { current: async () => null, all: async () => [] },
+    sevenZipOptionsFromEnvironment(),
   );
 
   const directory = await privateScratchDirectory(backupWorkDirFromEnvironment(), 'verify');
   const alive = keepScratchAlive(directory);
   try {
+    const archivePath = await joinedArchive(await orderedParts(paths), directory);
+    if (await isSevenZipFile(archivePath)) {
+      const { size } = await stat(archivePath);
+      process.stdout.write(`archive  7-Zip (AES-256, encrypted headers), ${String(size)} bytes\n`);
+      if (passwords === undefined) {
+        throw new UsageError('A 7-Zip backup needs its password: add --password-stdin.');
+      }
+    } else {
+      const header = await readArchiveHeader(archivePath);
+      process.stdout.write(
+        `archive  format ${String(header.header.format)}, ${String(header.archiveBytes)} bytes\n` +
+          `backup   ${header.header.backupId}\n` +
+          `key      ${header.header.keyId}\n`,
+      );
+    }
     const opened = await archiver.open({
       archivePath,
       dumpPath: join(directory, 'dump.pgcustom'),
+      ...(passwords === undefined ? {} : { passwords }),
     });
     const matches = opened.dumpChecksum === opened.manifest.checksum;
     process.stdout.write(
@@ -377,10 +522,13 @@ async function cmdVerify(archivePath: string, kitPath: string | null = null): Pr
  */
 async function cmdRestore(
   container: Container,
-  archivePath: string,
+  archivePaths: string | readonly string[],
   target: string,
   kitPath: string | null = null,
+  passwordStdin = false,
 ): Promise<number> {
+  const paths = typeof archivePaths === 'string' ? [archivePaths] : archivePaths;
+  const passwords = await passwordsFrom({ passwordStdin });
   // The installation's imported keys, then the kit's, if one was given. Both
   // only ever DECRYPT: the container's keyring encrypts with the configured key.
   await container.installationKeyLoader.refreshQuietly();
@@ -393,7 +541,14 @@ async function cmdRestore(
   const alive = keepScratchAlive(directory);
   try {
     const dumpPath = join(directory, 'dump.pgcustom');
-    const opened = await container.backupArchiver.open({ archivePath, dumpPath });
+    const archivePath = await joinedArchive(await orderedParts(paths), directory);
+    // The container's archiver: a 7-Zip archive tries the given password, else this
+    // installation's stored ones (an archive it sealed itself).
+    const opened = await container.backupArchiver.open({
+      archivePath,
+      dumpPath,
+      ...(passwords === undefined ? {} : { passwords }),
+    });
     if (opened.dumpChecksum !== opened.manifest.checksum) {
       process.stderr.write(
         'The archive decrypted and its contents do not match its manifest. Refusing to restore ' +
@@ -426,7 +581,7 @@ async function main(): Promise<void> {
   // an archive in.
   if (args.command === 'verify') {
     // `parseArgs` has already refused a missing `--archive`.
-    process.exit(await cmdVerify(args.archive ?? '', args.kit));
+    process.exit(await cmdVerify(args.archives, args.kit, args.passwordStdin));
   }
 
   const config = loadConfig();
@@ -435,7 +590,9 @@ async function main(): Promise<void> {
     if (args.command === 'run') process.exit(await cmdRun(container));
     if (args.command === 'list') process.exit(await cmdList(container, args.limit));
     // Both refused by `parseArgs`, before this container was built.
-    process.exit(await cmdRestore(container, args.archive ?? '', args.target ?? '', args.kit));
+    process.exit(
+      await cmdRestore(container, args.archives, args.target ?? '', args.kit, args.passwordStdin),
+    );
   } finally {
     await container.shutdown();
   }
@@ -462,6 +619,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
 
 export {
   backupWorkDirFromEnvironment,
+  orderedParts,
   parseArgs,
   cmdVerify,
   cmdRun,

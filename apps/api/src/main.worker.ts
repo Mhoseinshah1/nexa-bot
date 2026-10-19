@@ -83,6 +83,12 @@ async function main(): Promise<void> {
         // the line above: it bounds a table that gains rows whenever an operator
         // uploads an archive, which has nothing to do with any schedule.
         ['recovery-request-sweeper', true, () => container.recoveryRequestSweeper.isFresh(now)],
+        ['outbox-retention-sweeper', true, () => container.outboxRetentionSweeper.isFresh(now)],
+        [
+          'idempotency-retention-sweeper',
+          true,
+          () => container.idempotencyRetentionSweeper.isFresh(now),
+        ],
         // HF-A7: support's staged reply files. No flag: the bytes it clears count against the
         // tenant's staging bound, and a stalled sweep would refuse support's next file.
         ['ticket-reply-file-sweeper', true, () => container.ticketReplyFileSweeper.isFresh(now)],
@@ -226,6 +232,9 @@ async function main(): Promise<void> {
   // installation with the schedule switched off too.
   container.backupRunSweeper.start();
   container.recoveryRequestSweeper.start();
+  // E3: the outbox's published history and the interactive idempotency keys.
+  container.outboxRetentionSweeper.start();
+  container.idempotencyRetentionSweeper.start();
   // HF-A7: and support's reply files Telegram never took, once they are past retention.
   container.ticketReplyFileSweeper.start();
   // Phase A2: and the direct-message files Telegram never took.

@@ -681,6 +681,18 @@ export const configSchema = z
       .default(10 * 60_000),
     /** Where the PostgreSQL client tools live, when they are not on PATH. */
     BACKUP_PG_BIN_DIR: z.string().trim().default(''),
+    /**
+     * E4: the 7-Zip console binary that seals and opens a password-protected backup
+     * (`7z`; the image links Debian's `7zz` to it). Only used once a backup password is set.
+     */
+    BACKUP_SEVEN_ZIP_BIN: z.string().trim().min(1).default('7z'),
+    /**
+     * E4: LZMA2 level and threads. The defaults are the measured choice for a 2 vCPU /
+     * 4 GB host (`docs/backup.md` § Compression): level 9 is the smallest archive, and two
+     * threads keep its memory near 1.3 GB.
+     */
+    BACKUP_SEVEN_ZIP_LEVEL: z.coerce.number().int().min(1).max(9).default(9),
+    BACKUP_SEVEN_ZIP_THREADS: z.coerce.number().int().min(1).max(16).default(2),
 
     /**
      * Disaster recovery.

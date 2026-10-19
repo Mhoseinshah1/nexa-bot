@@ -57,6 +57,11 @@ function run(n: number, minutes: number, over: Json = {}): Json {
     cleanupOk: true,
     cleanupLeftovers: 0,
     archiveAvailable: false,
+    archiveFormat: 'NXB',
+    partCount: 1,
+    partsDelivered: 0,
+    parts: [],
+    summaryDeliveryState: null,
     ...over,
   };
 }
@@ -479,6 +484,7 @@ export const DEMO_RECOVERY: readonly ShotFixture[] = [
     running: null,
     unknownDeliveries: 1,
     quiesced: false,
+    archivePassword: { configured: false, setAt: null },
   }),
   fixture('/backups', backupHistoryResponseSchema, {
     runs: RUNS,

@@ -58,6 +58,10 @@ function row(overrides: Partial<BackupRunRow> = {}): BackupRunRow {
     deliveryState: 'SUCCEEDED',
     deliveryAttemptedAt: NOW,
     deliveryDetail: null,
+    archiveFormat: null,
+    partCount: null,
+    archivePasswordId: null,
+    summaryDeliveryState: null,
     failureCode: null,
     failureMessage: null,
     cleanupOk: true,
@@ -126,6 +130,9 @@ function housekeeping(w: World, scoped = true): BackupHousekeeping {
         w.candidateQueries.push(input);
         return w.candidates;
       },
+      // E4's delivered-copy rule is a query; it is tested against PostgreSQL
+      // (`tests/integration/backup-parts.test.ts`), and this world wires no `localCopies`.
+      deliveredCopyPruneCandidates: async () => [],
       markArchivePruned: async ({ id }) => {
         w.stamped.push(id);
         w.stampedAfterRemoval.push(w.removed.includes(id));

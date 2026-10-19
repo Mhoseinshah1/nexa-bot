@@ -47,6 +47,8 @@ import {
 import { FilePicker } from '../ui/file-picker';
 import { Icon } from '../ui/icons';
 import { BackupScheduleCard } from './backup-schedule';
+import { BackupPasswordCard } from './backup-password';
+import { assembleParts } from '../backup-parts';
 import { CodeName } from './code-name';
 import { RecoveryKitSection } from './recovery-kit';
 import {
@@ -65,6 +67,7 @@ import {
   legacyMigrationFault,
   mirzaAccess,
   sniffRestoreFile,
+  isSevenZipBackup,
   useMirzaImports,
   type MirzaAccess,
   type RestoreFileKind,
@@ -200,6 +203,15 @@ export function RecoveryPage({
         <StateSwitch query={status} denied={!mayView}>
           {status.data !== undefined && (
             <BackupScheduleCard status={status.data} permissions={permissions} />
+          )}
+        </StateSwitch>
+      </Card>
+
+      {/* E4: the password every 7-Zip backup is sealed with. Owner only to set. */}
+      <Card title={t('web.backup_password_title')} hint={t('web.backup_password_card_hint')}>
+        <StateSwitch query={status} denied={!mayView}>
+          {status.data !== undefined && (
+            <BackupPasswordCard status={status.data} mayEdit={mayDownload} />
           )}
         </StateSwitch>
       </Card>
@@ -531,6 +543,12 @@ function RecoveryOperations({
   const [shown, setShown] = useState<'NEXA' | 'MIRZA' | null>(null);
   const [mirzaId, setMirzaId] = useState<string | null>(null);
   const [phrase, setPhrase] = useState('');
+  /** E4: how many parts the chosen file was joined from, or a refused set. */
+  const [parts, setParts] = useState<number | 'INVALID'>(1);
+  /** E4: whether the chosen (or uploaded) backup is a 7-Zip archive needing a password. */
+  const [sevenZip, setSevenZip] = useState(false);
+  const [uploadedSevenZip, setUploadedSevenZip] = useState(false);
+  const [archivePassword, setArchivePassword] = useState('');
 
   const imports = useMirzaImports(mirza.mayView);
   const mirzaReady = mirza.mayView && imports.enabled && imports.capabilities !== null;
@@ -540,6 +558,7 @@ function RecoveryOperations({
     onSuccess: (result) => {
       setCurrent(result.recovery);
       setShown('NEXA');
+      setUploadedSevenZip(sevenZip);
       onChanged();
     },
     // A refusal may have left a FAILED row (oversized, empty) or none at all (uploads
@@ -555,11 +574,14 @@ function RecoveryOperations({
     },
   });
   const verify = useMutation({
-    mutationFn: (id: string) => verifyRecovery(id),
+    mutationFn: (input: { id: string; password: string }) =>
+      verifyRecovery(input.id, input.password === '' ? undefined : input.password),
     onSuccess: (result) => {
       setCurrent(result.recovery);
       onChanged();
     },
+    // The password is for this one verification: cleared whatever the answer.
+    onSettled: () => setArchivePassword(''),
   });
   const confirmKey = useSubmissionKey();
   const confirm = useMutation({
@@ -597,16 +619,34 @@ function RecoveryOperations({
     return <Banner tone="neutral">{t('web.recovery_upload_disabled')}</Banner>;
   }
 
+  const onChooseFiles = (files: readonly File[]): void => {
+    // E4: several files are the parts of ONE backup, joined in order without being read.
+    const assembled = assembleParts(files);
+    if (assembled.kind === 'INVALID') {
+      setParts('INVALID');
+      onChoose(null);
+      return;
+    }
+    setParts(assembled.kind === 'OK' ? assembled.parts : 1);
+    onChoose(assembled.kind === 'OK' ? assembled.file : null);
+  };
+
   const onChoose = (chosen: File | null): void => {
     chosenRef.current = chosen;
     setFile(chosen);
     setKind(null);
+    setSevenZip(false);
     if (chosen === null) return;
     // The answer for a file the operator has since replaced is dropped.
     void sniffRestoreFile(chosen)
       .catch((): RestoreFileKind => 'UNKNOWN')
       .then((found) => {
         if (chosenRef.current === chosen) setKind(found);
+      });
+    void isSevenZipBackup(chosen)
+      .catch(() => false)
+      .then((found) => {
+        if (chosenRef.current === chosen) setSevenZip(found);
       });
   };
 
@@ -653,11 +693,20 @@ function RecoveryOperations({
             label={t('web.recovery_upload_choose')}
             describedBy="recovery-file-kind"
             kind="backup"
-            accept={!nexaAllowed ? '.nxpkg' : mirza.mayView ? '.nxb,.nxpkg' : '.nxb'}
-            extensions={!nexaAllowed ? ['.nxpkg'] : mirza.mayView ? ['.nxb', '.nxpkg'] : ['.nxb']}
+            // E4: a backup's parts are `.7z.001`, `.7z.002` …, which no accept list can
+            // enumerate, so a Nexa backup takes any file and the first bytes decide.
+            {...(nexaAllowed ? {} : { accept: '.nxpkg' })}
+            multiple={nexaAllowed}
+            extensions={
+              !nexaAllowed
+                ? ['.nxpkg']
+                : mirza.mayView
+                  ? ['.nxb', '.7z', '.7z.001', '.nxpkg']
+                  : ['.nxb', '.7z', '.7z.001']
+            }
             selected={file}
-            onFiles={(files) => onChoose(files[0] ?? null)}
-            onClear={() => onChoose(null)}
+            onFiles={(files) => onChooseFiles(files)}
+            onClear={() => onChooseFiles([])}
           />
         </div>
         <p className="muted small" id="recovery-file-kind" aria-live="polite">
@@ -671,6 +720,13 @@ function RecoveryOperations({
                   ? t('web.recovery_file_mirza')
                   : ''}
         </p>
+        {nexaAllowed && <p className="muted small">{t('web.recovery_parts_hint')}</p>}
+        {parts === 'INVALID' && <Banner tone="danger">{t('web.recovery_parts_invalid')}</Banner>}
+        {typeof parts === 'number' && parts > 1 && file !== null && (
+          <p className="muted small">
+            {t('web.recovery_parts_joined').replace('{n}', String(parts))}
+          </p>
+        )}
         {refusal !== null && <Banner tone="danger">{refusal}</Banner>}
         {kind === 'MIRZA' && refusal === null && <Banner tone="warn">{t('web.lmg_banner')}</Banner>}
         {tooLarge && (
@@ -779,11 +835,24 @@ function RecoveryOperations({
           {current.state === 'UPLOADED' && (
             <>
               <p className="muted small">{t('web.recovery_verify_hint')}</p>
+              {uploadedSevenZip && (
+                <label className="field">
+                  <span className="field-label">{t('web.recovery_archive_password')}</span>
+                  <input
+                    type="password"
+                    className="input"
+                    autoComplete="off"
+                    value={archivePassword}
+                    onChange={(event) => setArchivePassword(event.currentTarget.value)}
+                  />
+                  <span className="muted small">{t('web.recovery_archive_password_hint')}</span>
+                </label>
+              )}
               <div className="btn-group">
                 <button
                   type="button"
                   className="btn primary"
-                  onClick={() => verify.mutate(current.id)}
+                  onClick={() => verify.mutate({ id: current.id, password: archivePassword })}
                   disabled={verify.isPending}
                 >
                   {verify.isPending ? t('web.recovery_verifying') : t('web.recovery_verify')}

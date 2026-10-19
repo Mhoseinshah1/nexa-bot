@@ -232,6 +232,7 @@ function page(
         running: null,
         unknownDeliveries: 0,
         quiesced: false,
+        archivePassword: { configured: false, setAt: null },
       },
     },
     {

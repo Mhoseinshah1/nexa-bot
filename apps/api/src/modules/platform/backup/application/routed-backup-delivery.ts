@@ -201,6 +201,8 @@ export class RoutedBackupDelivery implements BackupDeliveryRouter {
         return {
           state: 'SUCCEEDED',
           detail: attempt.detail ?? 'Delivered to the operations log group’s backups topic.',
+          // Carried through: the part's message id is what lets its local copy go (E4).
+          messageId: attempt.messageId ?? null,
         };
       }
       return attempt;
