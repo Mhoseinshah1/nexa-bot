@@ -1559,7 +1559,7 @@ export function SearchInput({
         type="search"
         value={value}
         placeholder={placeholder}
-        {...(dir === undefined ? {} : { dir })}
+        dir={dir ?? 'rtl'}
         onChange={(event) => onChange(event.target.value)}
       />
     </div>

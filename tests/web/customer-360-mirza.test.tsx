@@ -1,11 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, waitFor } from '@testing-library/react';
+import { act } from '@testing-library/react';
 import { LEDGER_REASONS } from '@nexa/contracts';
-import {
-  LegacyServicesPage,
-  LEGACY_SERVICE_OUTCOME_LABELS,
-  legacyServiceFiltersOf,
-} from '../../apps/web/src/pages/legacy-services';
+import { LEGACY_SERVICE_OUTCOME_LABELS } from '../../apps/web/src/pages/legacy-service-labels';
 import {
   LEDGER_REASON_LABELS,
   MIRZA_INVOICE_STATUS_LABELS,
@@ -15,12 +11,10 @@ import {
 } from '../../apps/web/src/pages/mirza-labels';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { navigate } from '../../apps/web/src/router';
-import { renderPage, stubApi } from './harness';
 
 /**
  * After a Mirza import: Mirza's verbatim status labelled only where its writer is documented,
- * every ledger reason named, and the migration report's links presetting the legacy services
- * page. SYNTHETIC values only.
+ * every ledger reason named, and the migration report's labels. SYNTHETIC values only.
  */
 
 afterEach(() => {
@@ -81,11 +75,10 @@ describe('the migration report names', () => {
     expect(migrationSectionView('something_else')).toEqual({ label: null, href: null });
     expect(migrationCodeView('AMBIGUOUS_OWNERSHIP', LEGACY_SERVICE_OUTCOME_LABELS)).toEqual({
       label: t('web.lsr_outcome_ambiguous_ownership'),
-      href: '/legacy-services?outcome=AMBIGUOUS_OWNERSHIP&reviewState=ALL',
+      href: null,
     });
-    expect(migrationCodeView('PRODUCT_NO_TARIFF', LEGACY_SERVICE_OUTCOME_LABELS).href).toBe(
-      '/legacy-products',
-    );
+    // Round 4 B4: the review pages are retired, so nothing in the report links to them.
+    expect(migrationCodeView('PRODUCT_NO_TARIFF', LEGACY_SERVICE_OUTCOME_LABELS).href).toBeNull();
     expect(
       migrationCodeView('PROVIDER_INVENTORY_INCOMPLETE:TIMEOUT', LEGACY_SERVICE_OUTCOME_LABELS)
         .label,
@@ -94,41 +87,5 @@ describe('the migration report names', () => {
       label: null,
       href: null,
     });
-  });
-});
-
-describe('the global legacy pages read their filters from the link', () => {
-  it('parses each page’s query, ignoring a value outside its closed set', () => {
-    expect(
-      legacyServiceFiltersOf(new URLSearchParams('outcome=NO_PANEL&reviewState=ALL&invoiceId=k1')),
-    ).toMatchObject({ outcome: 'NO_PANEL', reviewState: 'ALL', invoiceId: 'k1' });
-    expect(
-      legacyServiceFiltersOf(new URLSearchParams('outcome=BOGUS&reviewState=BOGUS')),
-    ).toMatchObject({ outcome: 'ALL', reviewState: 'OPEN' });
-  });
-
-  it('/legacy-services opens on the outcome the report linked', async () => {
-    act(() =>
-      navigate('/legacy-services?outcome=NO_PANEL&reviewState=ALL', { replace: true, force: true }),
-    );
-    const api = stubApi([]);
-    renderPage(
-      <LegacyServicesPage
-        denied={false}
-        mayDecide={false}
-        mayViewPanels={false}
-        mayViewArchive={false}
-      />,
-    );
-    await waitFor(() =>
-      expect(
-        api.calls.some(
-          (call) =>
-            call.url.includes('/legacy-services?') &&
-            call.url.includes('outcome=NO_PANEL') &&
-            !call.url.includes('reviewState='),
-        ),
-      ).toBe(true),
-    );
   });
 });

@@ -25,7 +25,6 @@ import { NotificationsPage } from '../../apps/web/src/pages/alerts';
 import { FeaturesPage } from '../../apps/web/src/pages/features';
 import { DashboardPage } from '../../apps/web/src/pages/dashboard';
 import { BulkOperationDetailPage } from '../../apps/web/src/pages/bulk-operations';
-import { LegacyServicesPage } from '../../apps/web/src/pages/legacy-services';
 import { PaymentsPage } from '../../apps/web/src/pages/payments';
 import { RecoveryPage } from '../../apps/web/src/pages/recovery';
 import { navigate } from '../../apps/web/src/router';
@@ -425,14 +424,6 @@ const SITES: readonly Site[] = [
     render: () => (
       <BulkOperationDetailPage id={BULK_ID} denied={false} mayWallet={false} mayGrant />
     ),
-    act: nothing,
-    reference: false,
-  },
-  {
-    name: 'legacy services: the list',
-    refused: { url: '/legacy-services', method: 'GET' },
-    routes: () => [],
-    render: () => <LegacyServicesPage denied={false} mayDecide mayViewPanels mayViewArchive />,
     act: nothing,
     reference: false,
   },

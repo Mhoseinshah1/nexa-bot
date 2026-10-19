@@ -19,7 +19,7 @@ import { PLANNED_SURFACES } from '../../apps/web/src/pages/planned';
 import { renderPage, stubApi } from './harness';
 import { openFilterPanel } from './ui-helpers';
 import { t, type WebKey } from '../../apps/web/src/i18n/web.fa';
-import { pickMirzaSource, requestsWithSource, rowHasBadge, sourceInUrl } from './source-helpers';
+import { sourceFilterAbsent, rowHasBadge } from './source-helpers';
 
 /**
  * Services, rendered against the shapes the server actually returns.
@@ -1042,7 +1042,7 @@ describe('rows imported from Mirza', () => {
     expect(rowHasBadge('nx-native1')).toBe(false);
   });
 
-  it('says on the service page that it was carried over, with the ORIGINAL purchase date', async () => {
+  it('shows the ORIGINAL purchase date on the service page, naming no source (Round 4 B2)', async () => {
     stubApi(
       detail({
         source: 'MIRZA',
@@ -1053,13 +1053,14 @@ describe('rows imported from Mirza', () => {
     renderPage(
       <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit={false} mayTerminate={false} />,
     );
-    const line = await screen.findByText(/^منتقل‌شده از ربات قبلی · تاریخ خرید اصلی: /);
+    const line = await screen.findByText(/^تاریخ خرید اصلی: /);
     // The previous bot's date, as a Jalali day — never the day of the import.
     expect(line.textContent).toContain(formatDate('2025-10-01T08:00:00.000Z'));
     expect(line.textContent).not.toContain(formatDate('2026-10-18T09:00:00.000Z'));
     expect(line.className).toContain('muted');
-    // No «میرزا» wording on the operator's page.
+    // Neither the old bot's name nor the «منتقل‌شده» mark: only tickets and payments carry it.
     expect(document.body.textContent).not.toContain('میرزا');
+    expect(document.body.textContent).not.toContain('منتقل‌شده از ربات قبلی');
   });
 
   it('draws no carried-over line for a service this installation made', async () => {
@@ -1071,22 +1072,11 @@ describe('rows imported from Mirza', () => {
     expect(screen.queryByText(/منتقل‌شده از ربات قبلی/)).toBeNull();
   });
 
-  it('puts the «منبع» filter in the URL and asks the API for it', async () => {
-    window.history.replaceState(null, '', '/services');
+  it('has no «منبع» filter (Round 4 B2)', async () => {
     stubApi(list([native, imported]));
     renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
     await screen.findByText('nx-native1');
-    pickMirzaSource();
-    expect(await sourceInUrl()).toBe('MIRZA');
-
-    const again = stubApi(list([imported]));
-    renderPage(
-      <ServicesPage
-        route={{ path: '/services', query: new URLSearchParams({ source: 'MIRZA' }) }}
-        denied={false}
-      />,
-    );
-    await waitFor(() => expect(requestsWithSource(again.calls, '/services', 'MIRZA')).toBe(1));
+    expect(sourceFilterAbsent()).toBe(true);
   });
 });
 

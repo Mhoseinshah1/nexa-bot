@@ -18,7 +18,6 @@ import {
   fetchCustomer,
   fetchOrders,
   fetchServices,
-  fetchCustomerLegacyAdoptedServices,
   fetchWallet,
   fetchWalletEntries,
   fetchCustomerTrial,
@@ -51,7 +50,6 @@ import {
 import { PartyCell, TriggerBadge } from './referrals';
 import { OVERRIDE_LABELS, PricingText, ResellerStatusBadge } from './resellers';
 import { Dash, StatusBadge, avatarTint, displayName, initialOf } from './customer-parts';
-import { SourceBadge } from '../ui/source-badge';
 import {
   CustomerControlsCard,
   FinancialSummaryCard,
@@ -200,7 +198,6 @@ export function UserDetailPage({
   mayViewPayments = false,
   mayViewTickets = false,
   mayViewBusinessChats = false,
-  mayViewLegacyServices = false,
   denied,
 }: {
   id: string;
@@ -273,7 +270,6 @@ export function UserDetailPage({
   /** `business_chats.view` — the handoff inbox shortcut. */
   mayViewBusinessChats?: boolean;
   /** `legacy.services.view` — the «migrated from Mirza» mark on the services card. */
-  mayViewLegacyServices?: boolean;
   denied: boolean;
 }) {
   const notify = useToast();
@@ -738,11 +734,7 @@ export function UserDetailPage({
               {tab === 'services' && (
                 <div id="c360-services" className="stack">
                   <ServiceCountsStrip customerId={id} />
-                  <CustomerServicesCard
-                    customerId={id}
-                    mayView={mayViewServices}
-                    mayViewLegacy={mayViewLegacyServices}
-                  />
+                  <CustomerServicesCard customerId={id} mayView={mayViewServices} />
                   <CustomerOrdersCard customerId={id} mayView={mayViewOrders} />
                 </div>
               )}
@@ -855,7 +847,6 @@ function UserHead({
       badge={
         <>
           <StatusBadge status={row.status} />
-          <SourceBadge source={row.source} />
           {isReseller && <Badge tone="teal">{t('web.c360_badge_reseller')}</Badge>}
           {exempt && <Badge tone="violet">{t('web.c360_channel_exempt')}</Badge>}
         </>
@@ -1134,16 +1125,7 @@ function CustomerOrdersCard({ customerId, mayView }: { customerId: string; mayVi
  * carry `subscriptionUrl`, `subscriptionRef` or `providerClientId`, so there is
  * nothing here to leak and no edit to this file that could start leaking one.
  */
-function CustomerServicesCard({
-  customerId,
-  mayView,
-  mayViewLegacy = false,
-}: {
-  customerId: string;
-  mayView: boolean;
-  /** `legacy.services.view`: mark the services adopted from a Mirza invoice. */
-  mayViewLegacy?: boolean;
-}) {
+function CustomerServicesCard({ customerId, mayView }: { customerId: string; mayView: boolean }) {
   const onLink = useLinkHandler();
   /*
    * Track 3 §3: the live services first; the ended ones under a folded «پایان‌یافته», read only
@@ -1175,7 +1157,6 @@ function CustomerServicesCard({
         customerId={customerId}
         lifecycle="LIVE"
         enabled
-        mayViewLegacy={mayViewLegacy}
         empty={t('web.user_services_live_empty')}
       />
       <Disclosure
@@ -1190,7 +1171,6 @@ function CustomerServicesCard({
           customerId={customerId}
           lifecycle="ENDED"
           enabled={endedOpen}
-          mayViewLegacy={mayViewLegacy}
           empty={t('web.user_services_ended_empty')}
         />
       </Disclosure>
@@ -1203,14 +1183,12 @@ function CustomerServiceRows({
   customerId,
   lifecycle,
   enabled,
-  mayViewLegacy,
   empty,
 }: {
   customerId: string;
   lifecycle: 'LIVE' | 'ENDED';
   /** False until the section is shown: a folded section issues no request. */
   enabled: boolean;
-  mayViewLegacy: boolean;
   /** The sentence an empty list says. */
   empty: string;
 }) {
@@ -1230,17 +1208,6 @@ function CustomerServiceRows({
       enabled,
     }),
   );
-  // Which services on THIS page were adopted from Mirza — asked of the server for exactly
-  // the ids shown, never inferred from a name or a date.
-  const shownIds = (services.data?.services ?? []).map((row) => row.id);
-  const adoptions = useQuery({
-    queryKey: ['customer-legacy-adopted-services', customerId, shownIds],
-    queryFn: () => fetchCustomerLegacyAdoptedServices(customerId, shownIds),
-    enabled: enabled && mayViewLegacy && shownIds.length > 0,
-  });
-  const adoptedFrom = new Map(
-    (adoptions.data?.adoptions ?? []).map((row) => [row.serviceId, row.invoiceKey]),
-  );
 
   if (!enabled) return null;
 
@@ -1249,19 +1216,9 @@ function CustomerServiceRows({
       key: 'username',
       header: t('web.service_username'),
       render: (row) => (
-        <span>
-          <a href={`/services/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-            <Ltr>{row.providerUsername}</Ltr>
-          </a>
-          {adoptedFrom.has(row.id) && (
-            <>
-              {' '}
-              <Badge tone="info" outline title={t('web.c360_service_from_mirza_title')}>
-                {t('web.c360_service_from_mirza')}
-              </Badge>
-            </>
-          )}
-        </span>
+        <a href={`/services/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
+          <Ltr>{row.providerUsername}</Ltr>
+        </a>
       ),
     },
     {
@@ -1558,9 +1515,7 @@ function WalletCard({
       {entries.data !== undefined &&
         ((entries.data.importedEntries ?? []).length > 0 || importedCursor !== null) && (
           <>
-            <h3 className="ca-subhead">
-              {t('web.wallet_imported_title')} <SourceBadge source="MIRZA" />
-            </h3>
+            <h3 className="ca-subhead">{t('web.wallet_imported_title')}</h3>
             <p className="muted small">{t('web.wallet_imported_hint')}</p>
             <DataTable
               caption={t('web.wallet_imported_title')}

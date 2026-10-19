@@ -84,33 +84,6 @@ const BEFORE: readonly [
     'support_knowledge.view',
     false,
   ],
-  // Mirza PR6: the owner's cutover approval (its own MEDIUM view permission).
-  [
-    'legacy-cutover',
-    '/legacy-cutover',
-    'web.nav_legacy_cutover',
-    'shield',
-    'legacy.cutover.view',
-    false,
-  ],
-  // Mirza PR2: the legacy product review (its own MEDIUM permission).
-  [
-    'legacy-products',
-    '/legacy-products',
-    'web.nav_legacy_products',
-    'archive',
-    'legacy.products.view',
-    false,
-  ],
-  // Mirza PR5: legacy service candidates and their review (its own MEDIUM permission).
-  [
-    'legacy-services',
-    '/legacy-services',
-    'web.nav_legacy_services',
-    'services',
-    'legacy.services.view',
-    false,
-  ],
   [
     'notifications',
     '/notifications',
@@ -246,9 +219,6 @@ const GROUPS: readonly [string, readonly string[]][] = [
       'orders',
       'products',
       'product-categories',
-      'legacy-products',
-      'legacy-services',
-      'legacy-cutover',
       'custom-service',
       'extra-devices',
       'service-locations',

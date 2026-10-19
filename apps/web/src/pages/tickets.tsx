@@ -55,7 +55,6 @@ import { messageFor } from './settings';
 // The FAQ's sort-order reader: the same bounds (0..100 000) and the same digit rules.
 import { sortOrderOf } from './support';
 import { SourceBadge } from '../ui/source-badge';
-import { sourceFromQuery, sourceRouteFilter } from './record-source';
 import {
   Badge,
   Banner,
@@ -320,7 +319,6 @@ const TICKET_VIEW_KEYS = [
   'assigned',
   'from',
   'to',
-  'source',
 ] as const;
 
 /**
@@ -354,7 +352,6 @@ export function TicketsPage({
   const categoryId = route.query.get('categoryId') ?? '';
   const customer = route.query.get('customer') ?? '';
   const assigned = route.query.get('assigned') ?? '';
-  const source = sourceFromQuery(route.query.get('source'));
   const fromDay = route.query.get('from') ?? '';
   const toDay = route.query.get('to') ?? '';
 
@@ -377,7 +374,6 @@ export function TicketsPage({
   const filters: TicketFilters = {
     ...(status === null ? {} : { status }),
     ...(awaiting === null ? {} : { awaiting }),
-    ...(source === null ? {} : { source }),
     ...(categoryId === '' ? {} : { categoryId }),
     ...(customer === '' ? {} : { customer }),
     ...(assigned === '' ? {} : { assigned }),
@@ -570,7 +566,7 @@ export function TicketsPage({
                     <input
                       id="tickets-customer"
                       className="input sm"
-                      dir="ltr"
+                      dir="rtl"
                       aria-label={t('web.ticket_customer')}
                       placeholder={t('web.ticket_filter_customer_hint')}
                       title={t('web.ticket_filter_customer_hint')}
@@ -702,7 +698,6 @@ export function TicketsPage({
                   </select>
                 ),
               },
-              sourceRouteFilter(route, source),
               {
                 key: 'dates',
                 label: t('web.ops_filter_dates'),

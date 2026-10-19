@@ -1,7 +1,5 @@
 import {
   LEGACY_MIGRATION_APPROVAL_PHRASE,
-  LEGACY_SERVICE_OUTCOMES,
-  LEGACY_SERVICE_REVIEW_STATES,
   SUPPORT_AI_DEFAULT_CONFIG,
   audiencePreviewResponseSchema,
   businessChatDetailResponseSchema,
@@ -12,13 +10,7 @@ import {
   deliveryQrPreviewSchema,
   incidentDetailResponseSchema,
   incidentListResponseSchema,
-  legacyCutoverApplyRunListResponseSchema,
-  legacyCutoverApprovalListResponseSchema,
-  legacyCutoverReadSetListResponseSchema,
   legacyMigrationCapabilitiesResponseSchema,
-  legacyProductReviewListResponseSchema,
-  legacyServiceCandidateListResponseSchema,
-  legacyServiceCandidateSummaryResponseSchema,
   supportAiConfigResponseSchema,
   supportAiDraftViewSchema,
   supportAiUsageResponseSchema,
@@ -62,7 +54,6 @@ const buildEnvelope: Parser = {
 };
 
 const H = (c: string): string => c.repeat(64);
-const RUN_ID = '019600ab-cdef-7012-8345-6789abcd0099';
 const SWEEP_ID = '01a05e35-c9ad-7e93-bef3-1ed9b55292c8';
 const CUSTOMER = CUSTOMERS[0] as Json;
 const CUSTOMER_ID = CUSTOMER['id'] as string;
@@ -159,89 +150,6 @@ const FINANCIAL_SUMMARY = {
     denied: [],
   },
 };
-
-// --- the legacy (Mirza) review pages ---------------------------------------------------------
-
-const legacyProduct = (n: number, name: string, gb: number, days: number, price: string): Json => ({
-  id: `019600ab-cdef-7012-8345-6789abcdef0${n}`,
-  codeProduct: `p${n}`,
-  legacyProductId: String(n),
-  state: 'PENDING_REVIEW',
-  facts: [
-    {
-      id: String(n),
-      code_product: `p${n}`,
-      name_product: name,
-      price_product: price,
-      Volume_constraint: String(gb),
-      Service_time: String(days),
-      hide_panel: '{}',
-    },
-  ],
-  factsChecksum: H(String(n)),
-  sourceConflict: null,
-  title: name,
-  trafficBytes: String(BigInt(gb) * 1024n ** 3n),
-  durationDays: days,
-  historicalPriceRaw: price,
-  historicalPriceMinor: price,
-  historicalPriceCurrency: 'IRT',
-  parseNotes: {},
-  liveInvoiceCount: 12 - n * 3,
-  approvedProductId: null,
-  approvedProductTitle: null,
-  approvedFactsChecksum: null,
-  priorState: null,
-  decisionReason: null,
-  decidedByAdminId: null,
-  decidedAt: null,
-  readFingerprint: H('a'),
-  sourceFingerprint: H('b'),
-  missingSinceReadFingerprint: null,
-  exportable: false,
-  version: 1,
-  createdAt: ago(60 * 24 * 2),
-  updatedAt: ago(60 * 24 * 2),
-});
-
-const legacyCandidate = (n: number, outcome: string, blocker: string | null): Json => ({
-  id: `019600ab-cdef-7012-8345-6789abcd020${n}`,
-  invoiceKey: `17000${n}1b2c3d4e5`,
-  outcome,
-  blocker,
-  reviewState: 'OPEN',
-  panelCode: null,
-  productCode: `p${n}`,
-  evidence: {
-    panelCodeClass: 'EMPTY',
-    mappedPanelId: null,
-    customer: 'IMPORTED',
-    holders: [{ panelId: PANEL_B['id'], mapped: true, spellings: 1, state: 'active' }],
-    incompletePanels: [],
-    product: { path: 'HIDDEN_SHAPE', productId: null, resolved: true },
-    claims: 1,
-  },
-  archiveId: null,
-  serviceId: null,
-  approvedPanelId: null,
-  lastApprovalRefusal: null,
-  decisionReason: null,
-  decidedByAdminId: null,
-  decidedAt: null,
-  runId: RUN_ID,
-  sourceFingerprint: H('b'),
-  invoiceChecksum: H(String(n)),
-  synthetic: false,
-  observedAt: ago(60 * 24 * 2),
-  version: 1,
-  firstDecidedAt: ago(60 * 24 * 2),
-  updatedAt: ago(60 * 24 * 2),
-});
-
-const CANDIDATES = [
-  legacyCandidate(1, 'NO_PANEL', 'PANEL_UNMAPPED'),
-  legacyCandidate(2, 'NO_PANEL', 'PANEL_UNMAPPED'),
-];
 
 // --- the support AI, knowledge and analytics -------------------------------------------------
 
@@ -560,49 +468,6 @@ export const COVERAGE_B: readonly ShotFixture[] = [
     FINANCIAL_SUMMARY,
   ),
 
-  // The legacy (Mirza) review pages, after one completed read of the old bot's database.
-  fixture('/legacy-products', legacyProductReviewListResponseSchema, {
-    reviews: [
-      legacyProduct(1, 'یک‌ماهه ۳۰ گیگ', 30, 30, '150000'),
-      legacyProduct(2, 'سه‌ماهه ۱۰۰ گیگ', 100, 90, '390000'),
-    ],
-    nextCursor: null,
-  }),
-  fixture('/legacy-services', legacyServiceCandidateListResponseSchema, {
-    candidates: CANDIDATES,
-    nextCursor: null,
-  }),
-  fixture('/legacy-services/summary', legacyServiceCandidateSummaryResponseSchema, {
-    candidateCount: CANDIDATES.length,
-    byOutcome: Object.fromEntries(
-      LEGACY_SERVICE_OUTCOMES.map((o) => [o, o === 'NO_PANEL' ? CANDIDATES.length : 0]),
-    ),
-    byReviewState: Object.fromEntries(
-      LEGACY_SERVICE_REVIEW_STATES.map((s) => [s, s === 'OPEN' ? CANDIDATES.length : 0]),
-    ),
-  }),
-  fixture('/legacy-cutover/approvals', legacyCutoverApprovalListResponseSchema, {
-    approvals: [],
-    nextCursor: null,
-  }),
-  fixture('/legacy-cutover/read-sets', legacyCutoverReadSetListResponseSchema, {
-    readSets: ['inventory', 'products', 'invoices'].map((readSet, n) => ({
-      id: `019600ab-cdef-7012-8345-6789abcd030${n}`,
-      readSet,
-      fingerprintVersion: `legacy-read-set:${readSet}:v1`,
-      readSetFingerprint: H(String(n + 1)),
-      sourceFingerprint: H('b'),
-      synthetic: false,
-      tableCount: 3,
-      rowCount: String(120 + n * 40),
-      recordedAt: ago(60 * 24 * 2),
-    })),
-    nextCursor: null,
-  }),
-  fixture('/legacy-cutover/apply-runs', legacyCutoverApplyRunListResponseSchema, {
-    runs: [],
-    nextCursor: null,
-  }),
   // /legacy-migration and /recovery: the import is available on this installation.
   fixture('/legacy-migration/capabilities', legacyMigrationCapabilitiesResponseSchema, {
     enabled: true,

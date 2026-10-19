@@ -11,7 +11,7 @@ import { PAYMENT_ROUTES, type PermissionKey } from '@nexa/contracts';
 import * as client from '../../apps/web/src/api/client';
 import { leaveGuarded } from '../../apps/web/src/router';
 import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
-import { pickMirzaSource, requestsWithSource, rowHasBadge, sourceInUrl } from './source-helpers';
+import { sourceFilterAbsent, rowHasBadge } from './source-helpers';
 
 /** The button of that name inside the open dialog (a row button of the same name opens it). */
 const inDialog = (name: string): HTMLElement =>
@@ -1819,21 +1819,10 @@ describe('rows imported from Mirza', () => {
     expect(rowHasBadge('1111111111111111')).toBe(false);
   });
 
-  it('puts the «منبع» filter in the URL and asks the API for it', async () => {
-    window.history.replaceState(null, '', '/payments');
+  it('has no «منبع» filter (Round 4 B2)', async () => {
     stubApi(list([native, imported]));
     renderPage(<PaymentsPage route={LIST_ROUTE} denied={false} />);
     await screen.findByText('1111111111111111');
-    pickMirzaSource();
-    expect(await sourceInUrl()).toBe('MIRZA');
-
-    const again = stubApi(list([imported]));
-    renderPage(
-      <PaymentsPage
-        route={{ path: '/payments', query: new URLSearchParams({ source: 'MIRZA' }) }}
-        denied={false}
-      />,
-    );
-    await waitFor(() => expect(requestsWithSource(again.calls, '/payments', 'MIRZA')).toBe(1));
+    expect(sourceFilterAbsent()).toBe(true);
   });
 });

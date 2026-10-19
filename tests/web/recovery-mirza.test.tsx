@@ -1205,10 +1205,8 @@ describe('the "adopt approved" lane (service-review.md §4b)', () => {
     expect(screen.getByText('AMBIGUOUS_OWNERSHIP')).toBeInTheDocument();
     expect(screen.getByText('INVENTORY_INCOMPLETE')).toBeInTheDocument();
     expect(screen.getAllByText(t('web.lsr_outcome_ambiguous_ownership')).length).toBeGreaterThan(0);
-    expect(screen.getByRole('link', { name: t('web.mrz_adopt_services_link') })).toHaveAttribute(
-      'href',
-      '/legacy-services',
-    );
+    // The retired review pages are not linked (Round 4 B4).
+    expect(screen.queryByRole('link', { name: /legacy|قدیمی/ })).toBeNull();
     // No confirmation, no import run stages: a lane is never an import.
     expect(screen.queryByRole('button', { name: t('web.mrz_confirm_button') })).toBeNull();
     expect(screen.queryByText(t('web.mrz_run_frozen'))).toBeNull();
