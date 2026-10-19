@@ -179,9 +179,7 @@ export function KnowledgeBuildPage({ denied, mayReview }: { denied: boolean; may
           ) : undefined
         }
       />
-      <Banner tone="info" icon="info">
-        {t('web.kb_nothing_until_apply')}
-      </Banner>
+      <Banner tone="info">{t('web.kb_nothing_until_apply')}</Banner>
       {error != null && (
         <Banner tone="danger" role="alert">
           {buildFault(error)}

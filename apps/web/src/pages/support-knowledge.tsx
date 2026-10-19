@@ -512,9 +512,7 @@ export function SupportKnowledgePage({
         subtitle={t('web.sk_subtitle')}
         actions={mayReview ? newButton : undefined}
       />
-      <Banner tone="info" icon="info">
-        {t('web.sk_only_approved')}
-      </Banner>
+      <Banner tone="info">{t('web.sk_only_approved')}</Banner>
       {/* Demo parity (DIFFS support-knowledge #1): the filter line in a bordered card of its own. */}
       <Card tight className="sk-filters">
         <ListFilterBar
@@ -849,9 +847,7 @@ export function LearningCandidatesPage({
   return (
     <>
       <PageHead title={t('web.sk_cand_title')} subtitle={t('web.sk_cand_subtitle')} />
-      <Banner tone="info" icon="info">
-        {t('web.sk_cand_nothing_active')}
-      </Banner>
+      <Banner tone="info">{t('web.sk_cand_nothing_active')}</Banner>
       {/* The shared toolbar pattern (no demo page here): the state pills in a bordered card
           of their own, as the knowledge list's filter line beside it. */}
       <Card tight className="sk-filters">

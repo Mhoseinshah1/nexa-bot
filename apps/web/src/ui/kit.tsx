@@ -991,14 +991,6 @@ export function Banner({
   tone?: Tone;
   title?: string;
   children?: ReactNode;
-  /**
-   * Accepted and not drawn. The approved demo draws no sign on ANY callout — information,
-   * warning or error alike (every `.note` in `approved-demo.html`, checked on 25 routes) — so
-   * the tone's colour and outline are the whole signal, and `role` carries the urgency for
-   * assistive technology. Kept on the type only so the pages that still pass one need no edit
-   * in this change; removing those props is a page-file follow-up.
-   */
-  icon?: IconName;
   /** Overrides the tone's default. See `StaleNotice` for why one needs to. */
   role?: 'status' | 'alert' | undefined;
   /** A control that resolves what the banner says — at the end of the line. */
@@ -1795,7 +1787,7 @@ function StaleNotice({ onRetry }: { onRetry?: (() => void) | undefined }) {
      * see it. `status` rather than `alert`: it is worth knowing, not worth
      * interrupting what they are reading.
      */
-    <Banner tone="warn" icon="alert" role="status">
+    <Banner tone="warn" role="status">
       {t('web.refresh_failed')}{' '}
       {onRetry !== undefined && (
         <button type="button" className="link" onClick={onRetry}>

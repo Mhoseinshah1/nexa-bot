@@ -197,9 +197,7 @@ export function AssistCard({
         </button>
       }
     >
-      <Banner tone="info" icon="info">
-        {t('web.assist_nothing_sent')}
-      </Banner>
+      <Banner tone="info">{t('web.assist_nothing_sent')}</Banner>
       {request.error !== null && (
         <Banner tone="danger" role="alert">
           {assistFault(request.error)}
@@ -464,9 +462,7 @@ function DraftEditor({
         />
       </Field>
       {mayReply ? (
-        <Banner tone="warn" icon="info">
-          {t('web.assist_send_takes_over')}
-        </Banner>
+        <Banner tone="warn">{t('web.assist_send_takes_over')}</Banner>
       ) : (
         <p className="muted small">{t('web.assist_send_needs_reply')}</p>
       )}
