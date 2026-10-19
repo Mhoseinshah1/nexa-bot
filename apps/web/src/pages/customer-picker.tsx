@@ -95,7 +95,7 @@ export function CustomerPicker({
         <input
           id={inputId}
           type="search"
-          dir="auto"
+          dir="rtl"
           maxLength={64}
           autoComplete="off"
           value={draft}

@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -35,26 +35,11 @@ import {
 
 const PREVIOUS_BOT_NAME = /میرزا|ميرزا|mirza/iu;
 
-/** Rendered only by the one-time import page and its flow. */
-const IMPORT_PAGE_KEYS: ReadonlySet<string> = new Set([
-  'web.recovery_file_hint',
-  'web.recovery_file_mirza',
-  'web.recovery_file_unknown',
-  'web.recovery_no_permission_nexa',
-  'web.lmg_disabled',
-  'web.lmg_approval_owner_only',
-  'web.lmg_history_title',
-  'web.mrz_steps_label',
-  'web.mrz_no_permission',
-  'web.mrz_confirm_button',
-  'web.mrz_exact_col_table',
-  'web.mrz_exact_col_mirza_rows',
-  'web.mrz_exact_col_mirza_sum',
-  'web.mrz_result_ok',
-  'web.mrz_result_failed',
-]);
-
-const IMPORT_PAGE_FILE = /^pages\/recovery(-mirza[\w-]*)?\.tsx$/u;
+/**
+ * Round 4 B4 (owner, 2026-10-19): the allowlist is EMPTY. The one-click import page speaks of
+ * «ربات قبلی» like every other screen, so the catalogue never spells the old bot's name.
+ */
+const IMPORT_PAGE_KEYS: ReadonlySet<string> = new Set([]);
 
 const ROOT = join(__dirname, '..', '..');
 const WEB_SRC = join(ROOT, 'apps', 'web', 'src');
@@ -99,16 +84,35 @@ describe('no previous-bot name outside the one-time import page', () => {
       expect(key in WEB_FA, `${key} is no longer in the catalogue; drop it here`).toBe(true);
       const files = users.get(key) ?? [];
       expect(files.length, `${key} is drawn by no page`).toBeGreaterThan(0);
-      expect(
-        files.filter((f) => !IMPORT_PAGE_FILE.test(f)),
-        key,
-      ).toEqual([]);
     }
   });
 
-  it('the source badge and the «منبع» filter are neutral', () => {
-    expect(WEB_FA['web.source_badge_mirza']).toBe('منتقل‌شده');
-    expect(WEB_FA['web.source_mirza']).toBe('ربات قبلی');
+  it('the source badge reads «منتقل‌شده از ربات قبلی» and the «منبع» filter is gone (R4 B2)', () => {
+    expect(WEB_FA['web.source_badge_mirza']).toBe('منتقل‌شده از ربات قبلی');
+    for (const key of [
+      'web.source_mirza',
+      'web.source_nexa',
+      'web.source_filter',
+      'web.source_filter_all',
+    ]) {
+      expect(key in WEB_FA, key).toBe(false);
+    }
+    expect(existsSync(join(WEB_SRC, 'pages', 'record-source.tsx'))).toBe(false);
+  });
+
+  it('the imported-from mark is drawn only on tickets and payments (R4 B2)', () => {
+    const users = sourceFiles(WEB_SRC)
+      .map((file) => relative(WEB_SRC, file).split('\\').join('/'))
+      .filter((rel) => !rel.startsWith('i18n/'))
+      .filter((rel) =>
+        /SourceBadge|source_badge_mirza/u.test(readFileSync(join(WEB_SRC, rel), 'utf8')),
+      )
+      .sort();
+    expect(users).toEqual(['pages/payments.tsx', 'pages/tickets.tsx', 'ui/source-badge.tsx']);
+  });
+
+  it('the opening-balance ledger reason reads «موجودی اولیه» (R4 B2)', () => {
+    expect(WEB_FA['web.ledger_reason_migration_opening_balance']).toBe('موجودی اولیه');
   });
 
   it('the customer bot catalogue and the shared export labels never name it', () => {
@@ -143,11 +147,11 @@ describe('no previous-bot name outside the one-time import page', () => {
     expect(MIRZA_IMPORT_ADMIN_DISPLAY_NAME).not.toMatch(PREVIOUS_BOT_NAME);
   });
 
-  it('no web source outside the catalogue and the import page spells «میرزا» in code', () => {
+  it('no web source spells «میرزا» in code', () => {
     const offending: string[] = [];
     for (const file of sourceFiles(WEB_SRC)) {
       const rel = relative(WEB_SRC, file).split('\\').join('/');
-      if (rel.startsWith('i18n/') || IMPORT_PAGE_FILE.test(rel)) continue;
+      if (rel.startsWith('i18n/')) continue;
       readFileSync(file, 'utf8')
         .split('\n')
         .forEach((line, i) => {

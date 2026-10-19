@@ -6,7 +6,7 @@ import { resolve } from '../../apps/web/src/app';
 import { customer, order, renderPage, stubApi } from './harness';
 import { openC360Tab, openWalletDialog, submitWalletDialog } from './c360-helpers';
 import { openFilterPanel } from './ui-helpers';
-import { pickMirzaSource, requestsWithSource, rowHasBadge, sourceInUrl } from './source-helpers';
+import { sourceFilterAbsent, rowHasBadge } from './source-helpers';
 import { t } from '../../apps/web/src/i18n/web.fa';
 
 /**
@@ -1014,7 +1014,7 @@ describe('the wallet card', () => {
       />,
     );
     await openC360Tab('financial');
-    expect(await screen.findByText('موجودی منتقل‌شده از ربات قبلی')).toBeTruthy();
+    expect(await screen.findByText('موجودی اولیه')).toBeTruthy();
     expect(screen.queryByText('MIGRATION_OPENING_BALANCE')).toBeNull();
   });
 
@@ -1372,8 +1372,8 @@ describe('the Mirza wallet history (one-time import)', () => {
       />,
     );
     await openC360Tab('financial');
-    expect((await screen.findAllByText('تاریخچهٔ کیف پول در ربات قبلی')).length).toBeGreaterThan(0);
-    expect(screen.getAllByText('منتقل‌شده').length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('تاریخچهٔ پیشین کیف پول')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('منتقل‌شده')).toBeNull();
     expect(screen.getByText('buy_service')).toBeTruthy();
     // Its own pager, its own cursor: the ledger's is untouched.
     const nexts = await screen.findAllByText(t('web.page_older'));
@@ -1400,7 +1400,7 @@ describe('the Mirza wallet history (one-time import)', () => {
     );
     await openC360Tab('financial');
     await screen.findByText('تاریخچه تراکنش‌ها');
-    expect(screen.queryByText('تاریخچهٔ کیف پول در ربات قبلی')).toBeNull();
+    expect(screen.queryByText('تاریخچهٔ پیشین کیف پول')).toBeNull();
   });
 });
 
@@ -1502,7 +1502,7 @@ describe("a customer's orders and services", () => {
    * as unprovisioned — for which the obvious remedy is to provision it again,
    * on somebody's panel, a second time.
    */
-  it('marks a service adopted from Mirza, asking the server about exactly the ids shown', async () => {
+  it('marks no service as carried over and asks nothing about legacy adoptions (Round 4 B2)', async () => {
     const other = '019240ab-cdef-7012-8345-6789abcdef02';
     const api = withCards([
       { url: '/orders', body: { orders: [], nextCursor: null } },
@@ -1513,36 +1513,6 @@ describe("a customer's orders and services", () => {
           nextCursor: null,
         },
       },
-      {
-        url: `/users/${ROW_ID}/legacy-adopted-services`,
-        body: { adoptions: [{ serviceId: SERVICE_ID, invoiceKey: 'inv-1' }] },
-      },
-    ]);
-    renderPage(
-      <UserDetailPage
-        mayEditTrial={false}
-        id={ROW_ID}
-        mayBlock
-        {...NO_WALLET}
-        {...ALL_COMMERCE}
-        mayViewLegacyServices
-        denied={false}
-      />,
-    );
-    await openC360Tab('services');
-    await screen.findByText('nx-7f3a91');
-    const adopted = screen.getByText('nx-7f3a91').closest('tr') as HTMLElement;
-    expect(await within(adopted).findByText('منتقل‌شده از ربات قبلی')).toBeTruthy();
-    const plain = screen.getByText('nx-0000aa').closest('tr') as HTMLElement;
-    expect(within(plain).queryByText('منتقل‌شده از ربات قبلی')).toBeNull();
-    const asked = api.calls.find((call) => call.url.includes('/legacy-adopted-services'));
-    expect(decodeURIComponent(asked?.url ?? '')).toContain(`serviceIds=${SERVICE_ID},${other}`);
-  });
-
-  it('asks nothing about Mirza without legacy.services.view', async () => {
-    const api = withCards([
-      { url: '/orders', body: { orders: [], nextCursor: null } },
-      { url: '/services', body: { services: [service()], nextCursor: null } },
     ]);
     renderPage(
       <UserDetailPage
@@ -1920,39 +1890,27 @@ describe('rows imported from Mirza', () => {
     source: 'MIRZA',
   });
 
-  it('marks only the imported customer «منتقل‌شده»', async () => {
+  it('marks no customer as imported (Round 4 B2)', async () => {
     stubApi(list([native, imported]));
     renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
     await screen.findByText('5550000003');
-    expect(rowHasBadge('5550000003')).toBe(true);
+    expect(rowHasBadge('5550000003')).toBe(false);
     expect(rowHasBadge('5550000002')).toBe(false);
   });
 
-  it('puts the «منبع» filter in the URL and asks the API for it', async () => {
-    window.history.replaceState(null, '', '/users');
+  it('has no «منبع» filter (Round 4 B2)', async () => {
     stubApi(list([native, imported]));
     renderPage(<UsersPage route={LIST_ROUTE} maySearch denied={false} />);
     await screen.findByText('5550000002');
-    pickMirzaSource();
-    expect(await sourceInUrl()).toBe('MIRZA');
-
-    const again = stubApi(list([imported]));
-    renderPage(
-      <UsersPage
-        route={{ path: '/users', query: new URLSearchParams({ source: 'MIRZA' }) }}
-        maySearch
-        denied={false}
-      />,
-    );
-    await waitFor(() => expect(requestsWithSource(again.calls, '/users', 'MIRZA')).toBe(1));
+    expect(sourceFilterAbsent()).toBe(true);
   });
 
-  it("marks the imported customer's own page, and not a native one", async () => {
+  it("draws no import mark on a customer's own page, imported or not (Round 4 B2)", async () => {
     stubApi([
       { url: `/users/${ROW_ID}`, body: { customer: customer({ source: 'MIRZA' }) } },
       ...walletRoutes(),
     ]);
-    const page = (
+    renderPage(
       <UserDetailPage
         mayEditTrial={false}
         id={ROW_ID}
@@ -1960,15 +1918,10 @@ describe('rows imported from Mirza', () => {
         {...NO_WALLET}
         {...NO_COMMERCE}
         denied={false}
-      />
+      />,
     );
-    const first = renderPage(page);
-    expect(await screen.findByText('منتقل‌شده')).toBeInTheDocument();
-    first.unmount();
-
-    stubApi([{ url: `/users/${ROW_ID}`, body: { customer: customer() } }, ...walletRoutes()]);
-    renderPage(page);
     await screen.findAllByText('5551234567');
     expect(screen.queryByText('منتقل‌شده')).toBeNull();
+    expect(screen.queryByText('منتقل‌شده از ربات قبلی')).toBeNull();
   });
 });
