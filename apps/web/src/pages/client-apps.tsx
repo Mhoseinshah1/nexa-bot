@@ -829,6 +829,7 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
           actions={mayEdit && editor.kind === 'closed' ? newButton : undefined}
         >
           <DataTable
+            stackOnPhone
             columns={columns}
             rows={pageRows}
             rowKey={(row) => row.id}

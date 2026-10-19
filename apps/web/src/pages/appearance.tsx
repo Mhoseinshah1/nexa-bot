@@ -222,7 +222,7 @@ export function AppearancePage({
                   }
                 >
                   <div className="tbl-wrap">
-                    <table className="tbl bx-rows">
+                    <table className="tbl bx-rows stack-phone">
                       <caption className="visually-hidden">
                         {t('web.appearance_slots_title')}
                       </caption>
@@ -318,12 +318,12 @@ function SlotRow({
      * button (keyboard and screen readers), the row's click and chevron are the pointer's.
      */
     <tr data-slot={slot.slot} className="bx-tr" onClick={onOpen}>
-      <td>
+      <td data-label={t('web.appearance_col_fallback')}>
         <span className="appearance-glyph sm" aria-label={t('web.appearance_col_fallback')}>
           {slot.fallback}
         </span>
       </td>
-      <td>
+      <td data-label={t('web.appearance_col_slot')}>
         <button
           type="button"
           className="bx-rowlink"
@@ -339,8 +339,10 @@ function SlotRow({
           <Ltr>{appearanceMarker(slot.slot)}</Ltr>
         </p>
       </td>
-      <td>{slot.customEmojiId === null ? '—' : <Ltr>{slot.customEmojiId}</Ltr>}</td>
-      <td>
+      <td data-label={t('web.appearance_col_custom')}>
+        {slot.customEmojiId === null ? '—' : <Ltr>{slot.customEmojiId}</Ltr>}
+      </td>
+      <td data-label={t('web.appearance_col_preview')}>
         <span className="bx-badges">
           <Badge tone={showsCustom ? 'ok' : 'neutral'} dot>
             {showsCustom
@@ -357,7 +359,7 @@ function SlotRow({
           )}
         </span>
       </td>
-      <td className="end">
+      <td className="end" data-label="">
         <span className="bx-chev" aria-hidden="true">
           ‹
         </span>

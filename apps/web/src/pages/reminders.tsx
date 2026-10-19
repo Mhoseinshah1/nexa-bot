@@ -231,7 +231,8 @@ export function RemindersPage({
       templates: USAGE_TEMPLATES,
       summary: (
         <>
-          <bdi dir="rtl">{USAGE_SETTINGS.map(remaining).join(' · ')}</bdi> {t('web.reminders_unit_percent')}
+          <bdi dir="rtl">{USAGE_SETTINGS.map(remaining).join(' · ')}</bdi>{' '}
+          {t('web.reminders_unit_percent')}
         </>
       ),
       body: (

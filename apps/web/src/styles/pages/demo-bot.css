@@ -317,3 +317,30 @@
   padding: 6px 14px;
   border-radius: 999px;
 }
+/* At phone width the demo's free buttons wrap as chips rather than full-width rows. */
+@media (max-width: 640px) {
+  .bb-card .bb-pool-list {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .bb-card .bb-pool-list .bb-chip {
+    flex: 0 1 auto;
+    inline-size: auto;
+  }
+}
+/*
+ * At narrower widths the demo keeps the content page whole: the category chips wrap onto
+ * as many rows as they need (no strip to scroll), and the list pane — ten texts a page now —
+ * takes its own height rather than a 420px scroll box.
+ */
+@media (max-width: 1100px) {
+  .content-nav {
+    max-height: none;
+  }
+}
+@media (max-width: 720px) {
+  .tcat-chips {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+}

@@ -692,6 +692,7 @@ export function ProductsPage({
             }
           >
             <DataTable
+              stackOnPhone
               caption={t('web.products_title')}
               columns={columns}
               rows={rows}
