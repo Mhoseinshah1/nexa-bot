@@ -526,6 +526,9 @@
 }
 .ca-search.slim .field input {
   width: 100%;
+  /* The demo's list search is a full 32px control (`#users-search`, `#payments-search`), not
+     a 28px small input; on touch `--ctl-h` is 44px as before. */
+  height: var(--ctl-h);
 }
 .ca-search.slim .ca-search-actions {
   padding-top: 0;

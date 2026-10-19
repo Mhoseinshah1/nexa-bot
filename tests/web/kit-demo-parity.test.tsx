@@ -371,3 +371,7 @@ describe('timestamps — the demo’s numeric shape everywhere, decided in one p
     expect(formatTimestamp('not a date')).toBe('not a date');
   });
 });
+
+it('draws the list search at the full control height, as the demo’s 32px search', () => {
+  expect(rule(UI_CSS, '.ca-search.slim .field input')).toContain('height: var(--ctl-h)');
+});
