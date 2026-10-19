@@ -3178,4 +3178,8 @@ textarea.input,
     padding: 0;
     text-align: start;
   }
+  /* A title's two lines each sit on the start side, a Latin code included. */
+  .tbl.phone-cards td:first-child .cell-main {
+    align-items: flex-start;
+  }
 }

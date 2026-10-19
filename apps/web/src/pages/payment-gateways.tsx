@@ -913,7 +913,6 @@ export function PaymentGatewaysPage({
                 rows={rows}
                 rowKey={(row) => row.provider}
                 caption={t('web.payment_gateways_title')}
-                dense
               />
             </Card>
           ) : only === undefined ? null : (
