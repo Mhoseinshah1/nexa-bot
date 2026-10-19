@@ -273,7 +273,7 @@ export type MenuItem =
       readonly disabled?: boolean;
     }
   | { readonly key: string; readonly separator: true }
-  | { readonly key: string; readonly heading: string };
+  | { readonly key: string; readonly heading: ReactNode };
 
 /**
  * A menu button: a trigger with `aria-haspopup`, and a list of items that the

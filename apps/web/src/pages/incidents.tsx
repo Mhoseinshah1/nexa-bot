@@ -220,39 +220,43 @@ export function IncidentBanner({ mayView }: { mayView: boolean }) {
   });
   const rows = banner.data?.incidents ?? [];
   if (rows.length === 0) return null;
+  /*
+   * The reference's incident card (demo parity A4): a red-tinted, full-width glass card under
+   * the top bar — the kind in bold, the title and its scheduled end beneath — with a «جزئیات»
+   * capsule at the far end. Drawn only for a real ACTIVE incident the server returned.
+   */
   return (
     <div className="incident-banners" aria-label={t('web.inc_banner_label')}>
       {rows.map((row) => (
-        <Banner
+        <div
           key={row.id}
-          tone={row.severity === 'MINOR' ? 'warn' : 'danger'}
+          className={`incident-banner ${row.severity === 'MINOR' ? 'is-warn' : 'is-danger'}`}
           role="status"
-          title={t(INCIDENT_KIND_LABELS[row.kind])}
-          // The detail page charges `incidents.view`: without it there is nothing to open,
-          // so no link is drawn — the banner itself is every administrator's (Codex, #162).
-          {...(mayView
-            ? {
-                action: (
-                  <a
-                    className="btn sm"
-                    href={`/incidents/${encodeURIComponent(row.id)}`}
-                    onClick={onLink}
-                  >
-                    {t('web.inc_banner_open')}
-                  </a>
-                ),
-              }
-            : {})}
         >
-          {' '}
-          {row.title}
-          {row.scheduledEndAt !== null && (
-            <span className="faint small">
-              {' · '}
-              {t('web.inc_banner_until')} {formatTimestamp(row.scheduledEndAt)}
+          <div className="incident-banner-text">
+            <strong>{t(INCIDENT_KIND_LABELS[row.kind])}</strong>
+            <span>
+              {row.title}
+              {row.scheduledEndAt !== null && (
+                <span className="faint">
+                  {' · '}
+                  {t('web.inc_banner_until')} {formatTimestamp(row.scheduledEndAt)}
+                </span>
+              )}
             </span>
+          </div>
+          {/* The detail page charges `incidents.view`: without it there is nothing to open,
+              so no link is drawn — the banner itself is every administrator's (Codex, #162). */}
+          {mayView && (
+            <a
+              className="btn sm incident-banner-open"
+              href={`/incidents/${encodeURIComponent(row.id)}`}
+              onClick={onLink}
+            >
+              {t('web.inc_banner_open')}
+            </a>
           )}
-        </Banner>
+        </div>
       ))}
     </div>
   );
