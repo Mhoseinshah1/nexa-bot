@@ -69,7 +69,9 @@ export function formatTimestampNumeric(iso: string): string {
     DATE_TIME_NUMERIC.formatToParts(at).map((one) => [one.type, one.value] as const),
   );
   const part = (type: Intl.DateTimeFormatPartTypes) => parts.get(type) ?? '';
-  return `${part('year')}/${part('month')}/${part('day')} ${part('hour')}:${part('minute')}`;
+  // Isolated left to right (U+2066 … U+2069), so the date reads before the time as the demo
+  // draws it, whatever the direction of the cell around it.
+  return `\u2066${part('year')}/${part('month')}/${part('day')} ${part('hour')}:${part('minute')}\u2069`;
 }
 
 const DATE_ONLY = new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium' });
