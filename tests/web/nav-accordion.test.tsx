@@ -507,16 +507,17 @@ describe('the single-open accordion', () => {
       counters: { tickets: { count: 3, tone: 'warn' }, services: { count: 2, atLeast: true } },
     });
     const customers = head('web.navgroup_customers');
-    expect(customers.querySelector('.cnt [aria-hidden="true"]')?.textContent).toBe(
-      t('web.nav_counter_at_least').replace('{count}', '5'),
-    );
-    expect(customers.querySelector('.cnt')?.classList.contains('warn')).toBe(true);
-    // Heard as well as seen: the header's name carries the sum, a capped one as a floor.
+    // Seen as the reference's amber dot (demo parity A3), never a number on the header.
+    expect(customers.querySelector('.gdot')).not.toBeNull();
+    expect(customers.querySelector('.cnt')).toBeNull();
+    // Heard: the header's name carries the sum, a capped one as a floor.
     expect(customers).toHaveAccessibleName(
       `${LABELS['web.navgroup_customers']}${t('web.nav_counter_at_least_spoken').replace('{count}', '5')}`,
     );
+    // A group with nothing waiting has no dot.
+    expect(head('web.navgroup_resellers').querySelector('.gdot')).toBeNull();
     fireEvent.click(customers);
-    expect(customers.querySelector('.cnt')).toBeNull();
+    expect(customers.querySelector('.gdot')).toBeNull();
     expect(
       within(nav())
         .getByRole('link', { name: new RegExp(t('web.nav_tickets')) })
