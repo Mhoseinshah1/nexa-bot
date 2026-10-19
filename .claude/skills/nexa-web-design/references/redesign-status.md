@@ -58,3 +58,22 @@ The owner will supply it. Record here, in the same commit that adds it:
   "not carried over", never drawn with sample values.
 
 Do not add unapproved design files here.
+
+## Demo parity: layout and composition — APPROVED (2026-10-18)
+
+| Field              | Value                                                                                                    |
+| ------------------ | -------------------------------------------------------------------------------------------------------- |
+| State              | **APPROVED** — the owner's master prompt (2026-10-18): the approved demo is the specification for layout |
+| Since              | 2026-10-18 (owner instruction)                                                                           |
+| Approved reference | `docs/web-redesign/demo-parity/reference/` (the demo HTML and its screenshots) and `DIFFS.md`            |
+| Allowed now        | the composition changes `DIFFS.md` lists (95 MAJOR, 116 MINOR, X1–X11), on `feat/web-admin-demo-parity`  |
+
+- **It decides (presentation only):** composition, order, sizes and placement on every route — the shell (top
+  bar, page header with breadcrumb, sidebar), the dashboard's blocks, and each page's layout, not only colours.
+- **`main` keeps deciding:** function, data, wire formats, permissions and security. Where `DIFFS.md`
+  conflicts with a tested rule of `SKILL.md` (counted pagers without a server total, client-side paging or
+  counts, sample data, `style=` attributes), the rule wins and `AUDIT.md` records the item as ⛔ with the rule.
+- **Not carried over:** the quick receipt review banner (on hold), the demo-only state bar and «داده نمونه»
+  badge, the incident banner's sample content, the demo's Latin digits, and any figure the API has no field for.
+- Every item's outcome is in `docs/web-redesign/demo-parity/AUDIT.md`. Do not merge without the owner's
+  visual review.

@@ -4,3 +4,6 @@ coverage
 pnpm-lock.yaml
 docs/research
 apps/api/drizzle
+# The owner's demo-parity reference pack, kept verbatim (Track 2, 2026-10-18)
+docs/web-redesign/demo-parity/reference
+docs/web-redesign/demo-parity/DIFFS.md
