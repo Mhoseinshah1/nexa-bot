@@ -2,11 +2,15 @@ import {
   APPEARANCE_SLOTS,
   APPEARANCE_SLOT_FALLBACKS,
   DEFAULT_EXPLICIT_MAIN_MENU,
+  FEATURE_FLAGS,
   MAIN_MENU_BUTTONS,
+  SETTINGS,
   TEMPLATE_KEYS,
   appearanceResponseSchema,
   botListResponseSchema,
   broadcastListResponseSchema,
+  clientAppListSchema,
+  featureFlagListResponseSchema,
   templateDefinition,
   templateListResponseSchema,
   botMenuBuilderResponseSchema,
@@ -262,7 +266,109 @@ const templates = fixture('/templates', templateListResponseSchema, {
   }),
 });
 
+/* `#/client-apps`: the demo's four apps, the mac one switched off. */
+const clientApp = (
+  index: number,
+  platform: string,
+  name: string,
+  icon: string,
+  over: Record<string, unknown>,
+) => ({
+  id: `01a0f1c2-0000-7000-8000-0000000dc0${String(index).padStart(2, '0')}`,
+  platform,
+  name,
+  icon,
+  description: 'سازگار با لینک اشتراک',
+  officialUrl: `https://downloads.example.com/${name.toLowerCase()}`,
+  alternativeUrl: null,
+  helpUrl: 'https://help.example.com/connect',
+  guide: '۱. برنامه را نصب کنید.\n۲. لینک اشتراک را کپی و در برنامه وارد کنید.',
+  deliveryKinds: [],
+  protocols: [],
+  providerTypes: [],
+  status: 'ENABLED',
+  sortOrder: index * 10,
+  version: 2,
+  createdAt: ago(60 * 24 * 60),
+  updatedAt: ago(60 * 24 * 3),
+  image: null,
+  ...over,
+});
+const clientApps = fixture('/client-apps', clientAppListSchema, {
+  items: [
+    clientApp(1, 'ANDROID', 'v2rayNG', '🤖', {
+      deliveryKinds: ['SUBSCRIPTION_LINK'],
+      protocols: ['vless', 'vmess'],
+    }),
+    clientApp(2, 'IOS', 'Streisand', '🍏', {
+      protocols: ['vless', 'trojan'],
+      updatedAt: ago(60 * 24 * 13),
+    }),
+    clientApp(3, 'WINDOWS', 'Hiddify', '🪟', {
+      deliveryKinds: ['SUBSCRIPTION_LINK', 'CONNECTION_FILES'],
+      providerTypes: ['marzban', 'sanaei'],
+      updatedAt: ago(60 * 24 * 17),
+    }),
+    clientApp(4, 'MACOS', 'V2Box', '💻', { status: 'DISABLED', updatedAt: ago(60 * 24 * 32) }),
+  ],
+});
+
+/*
+ * `#/features`: every flag, most on (the demo: «۱۵ از ۲۱»), each with the settings it
+ * governs at the demo's values — and the pending-payment reminder's stored minutes no
+ * longer valid, so its row draws the red sentence beside the value.
+ */
+const DEMO_SETTING_VALUES: Readonly<Record<string, unknown>> = {
+  'ops.notifications.max_per_minute': 20,
+  'wallet.low_balance.threshold': { amountMinor: '20000', currency: 'IRT' },
+  'reminders.quiet_hours_start': '23:00',
+  'reminders.quiet_hours_end': '08:00',
+};
+const OFF_FLAGS = new Set([
+  'reseller_minimum_achieved_notices',
+  'customer_link_rotation',
+  'referral_signup_gift',
+  'customer_marketing_opt_out',
+  'custom_service',
+]);
+const features = fixture('/features', featureFlagListResponseSchema, {
+  flags: FEATURE_FLAGS.map((definition, index) => {
+    const enabled = !OFF_FLAGS.has(definition.key);
+    return {
+      key: definition.key,
+      enabled,
+      source: 'TENANT',
+      version: 2,
+      updatedAt: ago(60 * 24 * (index + 2) + 37 * index),
+      updatedByAdminId: null,
+      reason: null,
+      description: definition.description,
+      blastRadius: definition.blastRadius,
+      configuration: SETTINGS.filter((setting) =>
+        (definition.configuredBy as readonly string[]).includes(setting.key),
+      ).map((setting) => ({
+        key: setting.key,
+        value: DEMO_SETTING_VALUES[setting.key] ?? setting.defaultValue,
+        source: 'DEFAULT',
+        version: null,
+        updatedAt: null,
+        updatedByAdminId: null,
+        description: setting.description,
+        zeroMeaning: setting.zeroMeaning,
+        mutability: setting.mutability,
+        classification: setting.classification,
+        configures: setting.configures,
+        consumer: setting.consumer,
+        storedValueInvalid: setting.key === 'reminders.payment_pending_minutes',
+        inert: !enabled,
+      })),
+    };
+  }),
+});
+
 export const DEMO_BOT: readonly ShotFixture[] = [
+  features,
+  clientApps,
   appearance,
   botButtons,
   bots,

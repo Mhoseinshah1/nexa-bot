@@ -171,3 +171,33 @@
     grid-template-columns: 330px minmax(0, 1fr);
   }
 }
+
+/* --- Features (`#/features`) ------------------------------------------------------------ */
+
+.feature-pager {
+  border-top: 1px solid var(--line);
+  padding: 10px 16px;
+}
+/* A related setting: its name on the start side, its value at the far end, as the demo. */
+.feature-settings dl > div {
+  flex-wrap: nowrap;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.feature-settings dt {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.feature-settings dd {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  max-width: 70%;
+}
+
+/* --- Client apps (`#/client-apps`) ------------------------------------------------------ */
+
+/* An app's name keeps its typed digits: the body's stylistic set would draw «v۲rayNG». */
+.ca-name {
+  font-feature-settings: normal;
+}

@@ -723,7 +723,10 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
       key: 'name',
       header: t('web.client_apps_name'),
       render: (row) => (
-        <span className="strong">{row.icon === null ? row.name : `${row.icon} ${row.name}`}</span>
+        // A product name keeps the digits it was typed with («v2rayNG», not «v۲rayNG»).
+        <span className="strong ca-name">
+          {row.icon === null ? row.name : `${row.icon} ${row.name}`}
+        </span>
       ),
     },
     { key: 'order', header: t('web.client_apps_order'), render: (row) => String(row.sortOrder) },
@@ -772,7 +775,7 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
             </button>
             <button
               type="button"
-              className="btn ghost danger sm"
+              className="btn sm danger"
               disabled={busy}
               // Asked through the kit's dialog, which names its buttons; the answer
               // deletes the version the operator was looking at when they pressed.
@@ -830,7 +833,6 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
             rows={pageRows}
             rowKey={(row) => row.id}
             caption={t('web.client_apps_title')}
-            dense
           />
           {pager}
         </Card>

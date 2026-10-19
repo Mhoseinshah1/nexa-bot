@@ -460,14 +460,23 @@ describe('the feature presentation catalogue', () => {
       },
     ]);
     renderPage(<FeaturesPage mayEdit denied={false} />);
-    const switches = await screen.findAllByRole('switch');
-    expect(switches).toHaveLength(FEATURE_FLAGS.length);
-    for (const one of switches) {
-      expect(one.getAttribute('aria-label') ?? one.textContent ?? '').not.toMatch(
-        /آزمایشی|سرویس تست/u,
-      );
+    await screen.findAllByRole('switch');
+    // Ten a page (demo parity): walking the pager draws every flag's switch, once.
+    let seen = 0;
+    for (;;) {
+      const switches = screen.getAllByRole('switch');
+      seen += switches.length;
+      for (const one of switches) {
+        expect(one.getAttribute('aria-label') ?? one.textContent ?? '').not.toMatch(
+          /آزمایشی|سرویس تست/u,
+        );
+      }
+      expect(document.body.textContent).not.toMatch(/سرویس آزمایشی|سرویس تست/u);
+      const next = screen.queryByRole('button', { name: t('web.page_next_aria') });
+      if (next === null || (next as HTMLButtonElement).disabled) break;
+      fireEvent.click(next);
     }
-    expect(document.body.textContent).not.toMatch(/سرویس آزمایشی|سرویس تست/u);
+    expect(seen).toBe(FEATURE_FLAGS.length);
   });
 
   it('gives every registered feature its own Persian name and summary', () => {
