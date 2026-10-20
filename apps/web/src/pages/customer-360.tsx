@@ -81,6 +81,7 @@ import {
   Button,
   Card,
   IdText,
+  Checkbox,
   CursorPager,
   DataTable,
   DetailHead,
@@ -1606,6 +1607,8 @@ function WalletAdjustDialog({
   // W6: said in Persian before anything is sent — whole minor units, digits only, above zero.
   const amountInvalid = amount.trim() !== '' && !POSITIVE_WHOLE.test(amount.trim());
   const [note, setNote] = useState('');
+  // R4 A5: «نمایش دلیل به مشتری». Off by default: a note is the operator's unless shown.
+  const [showNote, setShowNote] = useState(false);
   const wallet = useQuery({
     queryKey: ['wallet', customerId],
     queryFn: () => fetchWallet(customerId),
@@ -1615,6 +1618,7 @@ function WalletAdjustDialog({
   const close = () => {
     setAmount('');
     setNote('');
+    setShowNote(false);
     adjust.reset();
     onClose();
   };
@@ -1669,6 +1673,7 @@ function WalletAdjustDialog({
         amount: amount.trim(),
         currency,
         note: note.trim(),
+        showNoteToCustomer: showNote,
       } as const;
       return adjustWallet({ ...body, idempotencyKey: submission.current(body) });
     },
@@ -1738,6 +1743,17 @@ function WalletAdjustDialog({
           />
         </Field>
       </div>
+      {/*
+        R4 A5: the customer is told of the adjustment (the owner's per-direction toggle, on by
+        default); the note is quoted to them only when this is ticked.
+      */}
+      <Checkbox
+        label={t('web.wallet_adjust_show_note')}
+        checked={showNote}
+        onChange={setShowNote}
+        name="wallet-show-note"
+      />
+      <p className="muted small">{t('web.wallet_adjust_show_note_hint')}</p>
       {adjust.error !== null && <ApiErrorReport error={adjust.error} />}
     </FormDialog>
   );

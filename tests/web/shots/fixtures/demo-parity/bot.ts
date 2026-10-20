@@ -232,6 +232,7 @@ const broadcasts = fixture('/broadcasts', broadcastListResponseSchema, {
     ),
   ],
   nextCursor: 'demo-older-page',
+  presentation: { timezone: 'Asia/Tehran', calendar: 'jalali' },
 });
 
 /*

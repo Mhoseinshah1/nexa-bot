@@ -1825,22 +1825,36 @@
     {
       "idx": 260,
       "version": "7",
-      "when": 1792454561138,
-      "tag": "0260_backup_parts_and_password",
+      "when": 1792454611728,
+      "tag": "0260_r4_bot_ux",
       "breakpoints": true
     },
     {
       "idx": 261,
       "version": "7",
-      "when": 1792454567876,
-      "tag": "0261_legacy_compaction_runs",
+      "when": 1792454621971,
+      "tag": "0261_payment_destination_switches_append_only",
       "breakpoints": true
     },
     {
       "idx": 262,
       "version": "7",
-      "when": 1792454567978,
-      "tag": "0262_legacy_history_compaction_guard",
+      "when": 1792460989979,
+      "tag": "0262_backup_parts_and_password",
+      "breakpoints": true
+    },
+    {
+      "idx": 263,
+      "version": "7",
+      "when": 1792461005064,
+      "tag": "0263_legacy_compaction_runs",
+      "breakpoints": true
+    },
+    {
+      "idx": 264,
+      "version": "7",
+      "when": 1792461014825,
+      "tag": "0264_legacy_history_compaction_guard",
       "breakpoints": true
     }
   ]

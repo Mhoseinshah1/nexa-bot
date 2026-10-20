@@ -218,6 +218,20 @@ function StateBadge({ value }: { value: ServiceState }) {
   );
 }
 
+/**
+ * R4 A2: «روی پنل نیست» — a live panel check found the account missing on its panel. A flag
+ * beside the state, not a state: the service's own state badge stays as it is, and the
+ * customer's «سرویس‌های من» leaves the service out until a read finds the account again.
+ */
+function MissingOnPanelBadge({ at }: { at: string | null }) {
+  if (at === null) return null;
+  return (
+    <Badge tone="warn" outline>
+      {t('web.service_missing_on_panel')}
+    </Badge>
+  );
+}
+
 function DeliveryBadge({ value }: { value: ServiceDeliveryState }) {
   return (
     <Badge tone={DELIVERY_TONES[value]} outline>
@@ -394,7 +408,11 @@ export function ServicesPage({
     {
       key: 'state',
       header: t('web.service_state'),
-      render: (row) => <StateBadge value={row.state} />,
+      render: (row) => (
+        <>
+          <StateBadge value={row.state} /> <MissingOnPanelBadge at={row.missingOnPanelAt} />
+        </>
+      ),
     },
     {
       key: 'delivery',
@@ -1084,6 +1102,7 @@ export function ServiceDetailPage({
               badge={
                 <span className="ca-badges">
                   <StateBadge value={row.state} />
+                  <MissingOnPanelBadge at={row.missingOnPanelAt} />
                   <DeliveryBadge value={row.deliveryState} />
                   {row.isTrial && <Badge tone="info">{t('web.service_trial_badge')}</Badge>}
                 </span>

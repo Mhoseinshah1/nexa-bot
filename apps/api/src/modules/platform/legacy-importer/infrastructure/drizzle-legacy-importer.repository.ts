@@ -761,7 +761,43 @@ export class DrizzleLegacyImporterRepository
       return { customerId: id, created: false };
     });
   }
+
+  async markLegacyTermsAccepted(
+    scope: TenantContext,
+    legacyUserIds: readonly string[],
+    at: Date,
+    tx: TransactionScope,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    let marked = 0;
+    for (let i = 0; i < legacyUserIds.length; i += TERMS_MARK_CHUNK) {
+      const chunk = legacyUserIds.slice(i, i + TERMS_MARK_CHUNK);
+      if (chunk.length === 0) continue;
+      const result = await this.exec(tx).execute<{ id: string }>(sql`
+        UPDATE customers c
+           SET legacy_terms_accepted_at = ${at.toISOString()}::timestamptz
+          FROM legacy_import_map m
+         WHERE m.tenant_id = ${tenantId}
+           AND m.legacy_table = 'user'
+           AND m.legacy_id = ANY(${sql`ARRAY[${sql.join(
+             chunk.map((id) => sql`${id}`),
+             sql`, `,
+           )}]::text[]`})
+           AND m.status = 'IMPORTED'
+           AND m.entity_type = 'CUSTOMER'
+           AND c.tenant_id = m.tenant_id
+           AND c.id = m.entity_id
+           AND c.legacy_terms_accepted_at IS NULL
+        RETURNING c.id
+      `);
+      marked += result.rows.length;
+    }
+    return marked;
+  }
 }
+
+/** Legacy ids per `markLegacyTermsAccepted` UPDATE: one bound array, a bounded statement. */
+const TERMS_MARK_CHUNK = 5000;
 
 /** Customers per INSERT: 10 parameters a row, so 5 000 rows stay under PostgreSQL's 65 535. */
 const CUSTOMER_INSERT_CHUNK = 5000;

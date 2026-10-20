@@ -195,6 +195,10 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // File 01 §9, word for word: the account is blocked, why, and who to talk to.
   'bot.blocked_with_reason':
     'حساب شما مسدود شده است.\n\nدلیل:\n{reason}\n\nبرای بررسی یا رفع مسدودی با پشتیبانی در ارتباط باشید.',
+  // R4 A5: the support link under every blocked reply, and the sentence an unblock sends.
+  'bot.blocked.support_button': '📞 ارتباط با پشتیبانی',
+  'bot.account.unblocked':
+    '{icon:success} حساب شما از مسدودی خارج شد و می‌توانید دوباره از ربات استفاده کنید.',
 
   // What this bot can do, and the descriptions Telegram shows in its own command menu.
   // One list in `BOT_COMMANDS` feeds both, so a command cannot be registered and
@@ -778,6 +782,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.destination.card': 'شماره کارت: {value}',
   'bot.payment.destination.sheba': 'شبا: {value}',
   'bot.payment.copy_card_button': '📋 کپی شماره کارت',
+  // R4 A1: rotate the receiving card on the same invoice.
+  'bot.payment.switch_card_button': '🔄 تغییر شماره کارت',
   'bot.payment.copy_amount_button': '💵 کپی مبلغ',
   'bot.payment.wallet_button': '💰 پرداخت از کیف پول',
   'bot.payment.manual_button': '🧾 ثبت پرداخت',
@@ -1290,10 +1296,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_receipt_too_large':
     'حجم این تصویر بیش از ۱۰ مگابایت است. لطفاً تصویر کوچک‌تری از رسید واریز بفرستید.',
   'bot.wallet.summary':
-    '{icon:account} اطلاعات حساب کاربری شما:\n\n{icon:identity} شناسه کاربری: {telegramId}\n{icon:user} نام: {displayName}\n{icon:phone} شماره تماس: {phoneState}\n{icon:time} زمان ثبت‌نام: {registeredAt}\n{icon:wallet} موجودی: {balance}\n{icon:purchase} تعداد سرویس‌های خریداری‌شده: {serviceCount} عدد\n{icon:invoice} تعداد فاکتورهای پرداخت‌شده: {paidInvoiceCount} عدد\n{icon:referral} تعداد زیرمجموعه‌های شما: {referralCount} نفر\n{icon:group} گروه کاربری: {customerGroup}\n\n{icon:date} تاریخ: {nowDate}\n{icon:clock} ساعت: {nowTime}',
+    '{icon:account} اطلاعات حساب کاربری شما:\n\n{icon:identity} شناسه کاربری: <code>{telegramId}</code>\n{icon:user} نام: {displayName}\n{icon:phone} شماره تماس: {phoneState}\n{icon:time} زمان ثبت‌نام: {registeredAt}\n{icon:wallet} موجودی: {balance}\n{icon:purchase} تعداد سرویس‌های خریداری‌شده: {serviceCount} عدد\n{icon:invoice} تعداد فاکتورهای پرداخت‌شده: {paidInvoiceCount} عدد\n{icon:referral} تعداد زیرمجموعه‌های شما: {referralCount} نفر\n{icon:group} گروه کاربری: {customerGroup}\n\n{icon:date} تاریخ: {nowDate}\n{icon:clock} ساعت: {nowTime}',
   'bot.wallet.phone_missing': '🔴 ارسال نشده است',
   'bot.wallet.group_customer': 'کاربر عادی',
   'bot.wallet.group_reseller': 'نماینده',
+  // R4 A3: copies the numeric Telegram id.
+  'bot.wallet.copy_id_button': '📋 کپی شناسه',
   'bot.wallet.topup_amount_prompt':
     '{icon:wallet} مبلغ مورد نظر برای افزایش موجودی را وارد کنید (فقط عدد):\nحداقل: {minimum}\nحداکثر: {maximum}',
   'bot.wallet.topup_amount_invalid':
@@ -1462,6 +1470,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // Round N: broadcast and safe mass actions.
   'bot.broadcast.message': '{message}',
   'bot.wallet.mass_credited': '{icon:referral} مبلغ {amount} به کیف پول شما اضافه شد.',
+  // R4 A5: an administrator's own credit or debit. The reason line only when it was ticked.
+  'bot.wallet.admin_credited':
+    '{icon:wallet} مبلغ {amount} به کیف پول شما اضافه شد.\n\n{icon:amount} موجودی جدید: {balance}\n📝 دلیل: {reason}',
+  'bot.wallet.admin_debited':
+    '{icon:wallet} مبلغ {amount} از کیف پول شما کسر شد.\n\n{icon:amount} موجودی جدید: {balance}\n📝 دلیل: {reason}',
   'bot.service.gift_applied':
     '{icon:referral} هدیه برای سرویس {service} اعمال شد.\n📦 حجم اضافه: {traffic}\n{icon:time} زمان اضافه: {days}',
   /*

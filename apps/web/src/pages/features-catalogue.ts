@@ -219,6 +219,31 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: null,
     confirmEnable: null,
   },
+  // R4 A4: off by default — accept once, never asked again. Turning it ON stops every
+  // customer who has not accepted the newest version, so it asks first.
+  terms_reprompt_on_new_version: {
+    title: 'web.feature_terms_reprompt_title',
+    summary: 'web.feature_terms_reprompt_summary',
+    disableEffect: null,
+    confirmEnable: {
+      question: 'web.feature_terms_reprompt_confirm_question',
+      detail: 'web.feature_terms_reprompt_confirm_detail',
+      confirmLabel: 'web.terms_enforce_confirm',
+    },
+  },
+  // R4 A5: switching either off silently stops telling customers about a manual adjustment.
+  wallet_admin_credit_notice: {
+    title: 'web.feature_wallet_admin_credit_notice_title',
+    summary: 'web.feature_wallet_admin_credit_notice_summary',
+    disableEffect: 'web.feature_wallet_admin_notice_off_effect',
+    confirmEnable: null,
+  },
+  wallet_admin_debit_notice: {
+    title: 'web.feature_wallet_admin_debit_notice_title',
+    summary: 'web.feature_wallet_admin_debit_notice_summary',
+    disableEffect: 'web.feature_wallet_admin_notice_off_effect',
+    confirmEnable: null,
+  },
 };
 
 /**

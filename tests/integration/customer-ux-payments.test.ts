@@ -485,7 +485,8 @@ describe('a customer pays through the approved screens', () => {
       expect(result.replyKey).toBe('bot.wallet.summary');
       const body = lastText();
       expect(body.startsWith('🎡 اطلاعات حساب کاربری شما:\n\n')).toBe(true);
-      expect(body).toContain('🪪 شناسه کاربری: 910910');
+      // R4 A3: the id is tap-to-copy, so it is sent inside `<code>`.
+      expect(body).toContain('🪪 شناسه کاربری: <code>910910</code>');
       expect(body).toContain('👤 نام: مریم احمدی');
       // Owner spec §4: every icon is an Appearance slot (phone 📱, balance `wallet`, referrals
       // `referral`), and §3 closes the screen with the date and time it was drawn.
@@ -499,7 +500,14 @@ describe('a customer pays through the approved screens', () => {
       expect(body).toMatch(
         /🔖 گروه کاربری: کاربر عادی\n\n📅 تاریخ: 14\d\d\/\d\d\/\d\d\n🕒 ساعت: \d\d:\d\d$/u,
       );
-      expect(labelsOf(lastMarkup())).toEqual(['💰 افزایش موجودی', '🏠 بازگشت به منوی اصلی']);
+      // R4 A3: first the copy button, whose `copy_text` is the customer's own Telegram id.
+      expect(labelsOf(lastMarkup())).toEqual([
+        '📋 کپی شناسه',
+        MARYAM,
+        '💰 افزایش موجودی',
+        '🏠 بازگشت به منوی اصلی',
+      ]);
+      expect(lastMarkup()).toContain(`"copy_text":{"text":"${MARYAM}"}`);
     });
 
     it('counts services and paid invoices from the rows', async () => {

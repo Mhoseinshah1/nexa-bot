@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { sql } from 'drizzle-orm';
 import {
   API_PREFIX,
   AUTH_ROUTES,
@@ -97,6 +98,19 @@ describe('broadcast and mass-operation HTTP surface', () => {
   const get = (path: string, cookie: string) =>
     inject({ method: 'GET', url: `${API_PREFIX}${path}`, headers: { cookie, origin: ORIGIN } });
   const idem = () => `bc-http-${(key += 1)}-${Date.now()}`;
+
+  // First in the file, before anything has asked (and cached) this tenant's presentation.
+  it('R4 A6: the list answers the TENANT zone and calendar the composer previews `{today}` with', async () => {
+    await api.container.database.db.execute(
+      sql`UPDATE tenants SET display_timezone = 'UTC', calendar = 'gregorian' WHERE id = ${tenantA.tenantId}`,
+    );
+    const listed = await get(BROADCAST_ROUTES.list, owner);
+    expect(listed.statusCode).toBe(200);
+    expect(broadcastListResponseSchema.parse(listed.json()).presentation).toEqual({
+      timezone: 'UTC',
+      calendar: 'gregorian',
+    });
+  });
 
   it('composes, stages media, previews, launches and reports a broadcast', async () => {
     const created = await post(BROADCAST_ROUTES.create, owner, {

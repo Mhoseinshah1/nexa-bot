@@ -15,7 +15,7 @@ import {
   broadcastMediaType,
   errors,
   isSourcedBroadcastKind,
-  placeholderTokensIn,
+  isBroadcastActionButton,
   validateTemplateBody,
   type ActorContext,
   type AudiencePreview,
@@ -52,12 +52,17 @@ import {
   type MarketingOptOutPolicy,
 } from './marketing-opt-out-policy.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { recipientFactsOptions } from './broadcast-dispatcher.js';
 import {
   freezeAudience,
   toPreview,
   type AudienceService,
 } from '../../audience/application/audience.service.js';
 import type { FrozenAudienceRecord } from '../../audience/application/ports.js';
+import type {
+  TemplatePresentation,
+  TenantPresentationReader,
+} from '../../../control/templates/application/ports.js';
 import {
   AUDIT_VIEW_PERMISSION,
   type AuditHistoryReader,
@@ -95,6 +100,11 @@ export interface BroadcastServiceDeps {
   readonly outbox: OutboxWriter;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /**
+   * The tenant's zone and calendar — the reader the sender renders `{today}` with — handed
+   * to the composer so its live preview shows the date a recipient will be sent.
+   */
+  readonly presentation: TenantPresentationReader;
   /**
    * Broadcast V2: the same switch the dispatcher's stamp reads, used here ONLY for the
    * preview's opted-out estimate. It never narrows what is counted or materialised.
@@ -215,6 +225,15 @@ export class BroadcastService {
   ): Promise<readonly BroadcastRecord[]> {
     await this.deps.guard.check(scope, actor, BROADCAST_VIEW);
     return this.deps.repository.list(scope, input.limit, input.cursor);
+  }
+
+  /**
+   * The tenant's zone and calendar, for the composer's preview of `{today}`. `broadcasts.view`,
+   * like the list it is answered with.
+   */
+  async presentation(scope: TenantContext, actor: ActorContext): Promise<TemplatePresentation> {
+    await this.deps.guard.check(scope, actor, BROADCAST_VIEW);
+    return this.deps.presentation.presentationFor(scope);
   }
 
   /** Per-state recipient counts for the given broadcasts, for a list or a detail view. */
@@ -707,9 +726,11 @@ export class BroadcastService {
         'Link your Telegram account and start the bot once to receive a test.',
       );
     }
-    const facts = await this.deps.facts.factsFor(scope, target.customerId, {
-      withBalance: placeholderTokensIn(record.body).includes('walletBalance'),
-    });
+    const facts = await this.deps.facts.factsFor(
+      scope,
+      target.customerId,
+      recipientFactsOptions(record.body, this.deps.clock.now()),
+    );
     const rendered = await this.deps.transport.render(scope, {
       contentKind: record.contentKind,
       body: record.body,
@@ -1215,10 +1236,12 @@ export class BroadcastService {
       title: input.title.trim(),
       contentKind: input.contentKind,
       body: input.body,
-      buttons: input.buttons.map((button) => ({
-        label: button.label.trim(),
-        url: button.url.trim(),
-      })),
+      // R4 A6: a link, or an in-bot action — the action is a closed code, never a payload.
+      buttons: input.buttons.map((button) =>
+        isBroadcastActionButton(button)
+          ? { label: button.label.trim(), action: button.action }
+          : { label: button.label.trim(), url: button.url.trim() },
+      ),
       audience: freezeAudience(input.audience),
       purpose: input.purpose ?? 'MARKETING',
       source,

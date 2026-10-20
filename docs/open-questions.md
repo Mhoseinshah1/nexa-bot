@@ -4141,6 +4141,29 @@ limit on an inquiry backs the row off at least 60 s (unchanged). **Decide** with
 provider (`OQ-WP10-01`): record each limit and whether it is per key, per account or per IP,
 and set the budgets from it in the same commit.
 
+## OQ-R4-A4 — the previous bot's per-user rules acceptance (`user.roll_Status`)
+
+Round 4 A4 carries the previous bot's rules acceptance onto imported customers
+(`customers.legacy_terms_accepted_at`). The research corpus records the per-user field
+«وضعیت تایید قانون» but not its column; the column name is taken from the public source the
+importer already cites (`mahdiMGF2/botmirzapanel` @ 92c0ed06: `table.php` creates
+`user.roll_Status bool NOT NULL`; `index.php` gates on `$user['roll_Status'] == 0` and writes
+`true` on acceptance). Read through its own OPTIONAL read set (`user-terms` v1, outside the
+frozen v1 fingerprint): a source without the column carries nobody as accepted, and those
+customers are asked once. **Open:** confirm against the real `.nxpkg` (`source/catalog.json`
+lists `user.roll_Status`, and the `terms-backfill` digest prints `rollStatusColumn: yes`)
+before running the backfill on the imported installation. Values treated as accepted: `1`
+and `true` (a MySQL `bool` and a dump of one); anything else is not.
+
+## OQ-R4-A5 — a temporary anti-spam block
+
+Round 4 A5 asks for the unblock message "when a temporary spam block expires". This codebase
+has no temporary block: anti-spam blocks are permanent until an operator unblocks
+(`CustomerService.blockForSpam`, no expiry column). The unblock message is therefore sent on
+every operator unblock — a spam block's included. If the owner wants spam blocks to expire,
+that is a new rule (a column, a sweep) and the sweep's unblock would emit the same
+`CustomerUnblocked` event and be told the same way.
+
 ## OQ-R4F — Telegram rich messages (R4 PR-F, 2026-10-19)
 
 Status: OPEN. `docs/r4-telegram-rich-audit.md` §1 verified the Bot API 10.3 reference from

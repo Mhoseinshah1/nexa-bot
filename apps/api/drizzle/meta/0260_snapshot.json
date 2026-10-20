@@ -1,5 +1,5 @@
 {
-  "id": "3795a160-2b79-42c7-b04a-9a2a2e76f4b4",
+  "id": "3bc35ab5-6943-4478-b134-e7d55be5a00a",
   "prevId": "04669ef9-033b-499f-9859-a3a219f8ae62",
   "version": "7",
   "dialect": "postgresql",
@@ -1899,238 +1899,6 @@
       },
       "isRLSEnabled": false
     },
-    "public.backup_archive_passwords": {
-      "name": "backup_archive_passwords",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "password_ciphertext": {
-          "name": "password_ciphertext",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "password_key_id": {
-          "name": "password_key_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_by_admin_id": {
-          "name": "created_by_admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "superseded_at": {
-          "name": "superseded_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "backup_archive_passwords_current_idx": {
-          "name": "backup_archive_passwords_current_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "superseded_at IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "backup_archive_passwords_tenant_created_idx": {
-          "name": "backup_archive_passwords_tenant_created_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "backup_archive_passwords_tenant_id_tenants_id_fk": {
-          "name": "backup_archive_passwords_tenant_id_tenants_id_fk",
-          "tableFrom": "backup_archive_passwords",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "backup_archive_passwords_created_by_admin_id_admins_id_fk": {
-          "name": "backup_archive_passwords_created_by_admin_id_admins_id_fk",
-          "tableFrom": "backup_archive_passwords",
-          "tableTo": "admins",
-          "columnsFrom": [
-            "created_by_admin_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.backup_run_parts": {
-      "name": "backup_run_parts",
-      "schema": "",
-      "columns": {
-        "backup_id": {
-          "name": "backup_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "part_number": {
-          "name": "part_number",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "filename": {
-          "name": "filename",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "range_start": {
-          "name": "range_start",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "bytes": {
-          "name": "bytes",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "sha256": {
-          "name": "sha256",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "delivery_state": {
-          "name": "delivery_state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "delivery_attempted_at": {
-          "name": "delivery_attempted_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "telegram_message_id": {
-          "name": "telegram_message_id",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "delivery_detail": {
-          "name": "delivery_detail",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "backup_run_parts_backup_id_backup_runs_id_fk": {
-          "name": "backup_run_parts_backup_id_backup_runs_id_fk",
-          "tableFrom": "backup_run_parts",
-          "tableTo": "backup_runs",
-          "columnsFrom": [
-            "backup_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "backup_run_parts_backup_id_part_number_pk": {
-          "name": "backup_run_parts_backup_id_part_number_pk",
-          "columns": [
-            "backup_id",
-            "part_number"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "backup_run_parts_delivery_state_check": {
-          "name": "backup_run_parts_delivery_state_check",
-          "value": "delivery_state IN ('NOT_ATTEMPTED', 'SUCCEEDED', 'FAILED_DEFINITIVE', 'OUTCOME_UNKNOWN')"
-        },
-        "backup_run_parts_part_number_check": {
-          "name": "backup_run_parts_part_number_check",
-          "value": "part_number > 0"
-        },
-        "backup_run_parts_bytes_check": {
-          "name": "backup_run_parts_bytes_check",
-          "value": "bytes >= 0 AND range_start >= 0"
-        },
-        "backup_run_parts_message_id_check": {
-          "name": "backup_run_parts_message_id_check",
-          "value": "telegram_message_id IS NULL OR delivery_state = 'SUCCEEDED'"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.backup_runs": {
       "name": "backup_runs",
       "schema": "",
@@ -2254,30 +2022,6 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
-        },
-        "archive_format": {
-          "name": "archive_format",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "part_count": {
-          "name": "part_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "archive_seal_id": {
-          "name": "archive_seal_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "summary_delivery_state": {
-          "name": "summary_delivery_state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -2321,18 +2065,6 @@
         "backup_runs_trigger_check": {
           "name": "backup_runs_trigger_check",
           "value": "trigger IN ('MANUAL', 'SCHEDULED', 'PRE_RESTORE')"
-        },
-        "backup_runs_archive_format_check": {
-          "name": "backup_runs_archive_format_check",
-          "value": "archive_format IN ('NXB', 'SEVEN_ZIP')"
-        },
-        "backup_runs_summary_delivery_state_check": {
-          "name": "backup_runs_summary_delivery_state_check",
-          "value": "summary_delivery_state IN ('NOT_ATTEMPTED', 'SUCCEEDED', 'FAILED_DEFINITIVE', 'OUTCOME_UNKNOWN')"
-        },
-        "backup_runs_part_count_check": {
-          "name": "backup_runs_part_count_check",
-          "value": "part_count IS NULL OR part_count > 0"
         },
         "backup_runs_state_check": {
           "name": "backup_runs_state_check",
@@ -8746,7 +8478,7 @@
       "checkConstraints": {
         "customer_notifications_kind_check": {
           "name": "customer_notifications_kind_check",
-          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'TICKET_REPLY', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER', 'TICKET_REPLY_ATTACHMENT', 'SERVICE_RENEWED', 'RESELLER_MINIMUM_REMINDER', 'RESELLER_MINIMUM_ACHIEVED', 'WALLET_MASS_CREDITED', 'SERVICE_GIFT_APPLIED', 'DIRECT_MESSAGE', 'DIRECT_MESSAGE_MEDIA', 'INCIDENT_NOTICE')"
+          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'TICKET_REPLY', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER', 'TICKET_REPLY_ATTACHMENT', 'SERVICE_RENEWED', 'RESELLER_MINIMUM_REMINDER', 'RESELLER_MINIMUM_ACHIEVED', 'WALLET_MASS_CREDITED', 'SERVICE_GIFT_APPLIED', 'DIRECT_MESSAGE', 'DIRECT_MESSAGE_MEDIA', 'INCIDENT_NOTICE', 'WALLET_ADMIN_CREDITED', 'WALLET_ADMIN_DEBITED', 'ACCOUNT_UNBLOCKED')"
         },
         "customer_notifications_state_check": {
           "name": "customer_notifications_state_check",
@@ -9410,6 +9142,12 @@
         },
         "phone_verified_at": {
           "name": "phone_verified_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "legacy_terms_accepted_at": {
+          "name": "legacy_terms_accepted_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
@@ -23165,6 +22903,173 @@
       },
       "isRLSEnabled": false
     },
+    "public.payment_destination_switches": {
+      "name": "payment_destination_switches",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payment_id": {
+          "name": "payment_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sequence": {
+          "name": "sequence",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "from_account_id": {
+          "name": "from_account_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bank_name": {
+          "name": "bank_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "holder_name": {
+          "name": "holder_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "card_number": {
+          "name": "card_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "iban": {
+          "name": "iban",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "payment_destination_switches_tenant_id_tenants_id_fk": {
+          "name": "payment_destination_switches_tenant_id_tenants_id_fk",
+          "tableFrom": "payment_destination_switches",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "payment_destination_switches_payment_fk": {
+          "name": "payment_destination_switches_payment_fk",
+          "tableFrom": "payment_destination_switches",
+          "tableTo": "payments",
+          "columnsFrom": [
+            "tenant_id",
+            "payment_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "payment_destination_switches_account_fk": {
+          "name": "payment_destination_switches_account_fk",
+          "tableFrom": "payment_destination_switches",
+          "tableTo": "payment_accounts",
+          "columnsFrom": [
+            "tenant_id",
+            "account_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "payment_destination_switches_from_account_fk": {
+          "name": "payment_destination_switches_from_account_fk",
+          "tableFrom": "payment_destination_switches",
+          "tableTo": "payment_accounts",
+          "columnsFrom": [
+            "tenant_id",
+            "from_account_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "payment_destination_switches_sequence_key": {
+          "name": "payment_destination_switches_sequence_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "payment_id",
+            "sequence"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "payment_destination_switches_sequence_check": {
+          "name": "payment_destination_switches_sequence_check",
+          "value": "sequence >= 1"
+        },
+        "payment_destination_switches_card_number_check": {
+          "name": "payment_destination_switches_card_number_check",
+          "value": "card_number ~ '^[0-9]{16}$'"
+        },
+        "payment_destination_switches_iban_check": {
+          "name": "payment_destination_switches_iban_check",
+          "value": "iban IS NULL OR iban ~ '^IR[0-9]{24}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.payment_destinations": {
       "name": "payment_destinations",
       "schema": "",
@@ -31715,6 +31620,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "missing_on_panel_at": {
+          "name": "missing_on_panel_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "usage_refresh_started_at": {
           "name": "usage_refresh_started_at",
           "type": "timestamp with time zone",
@@ -39109,6 +39020,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "note_shown_to_customer": {
+          "name": "note_shown_to_customer",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "created_at": {
           "name": "created_at",

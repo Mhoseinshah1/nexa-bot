@@ -3616,6 +3616,16 @@ export const customers = pgTable(
      */
     phoneNumber: text('phone_number'),
     phoneVerifiedAt: timestamptz('phone_verified_at'),
+    /**
+     * R4 A4: when the import recorded that this customer had ACCEPTED the previous bot's
+     * rules (`user.roll_Status`), or NULL. Written only by the legacy import — at customer
+     * creation, or by its idempotent `terms-backfill` mode for an installation imported
+     * before the column existed — through a conditional UPDATE `WHERE … IS NULL`, and never
+     * cleared. The terms gate counts it as an acceptance unless the owner's
+     * `terms_reprompt_on_new_version` flag is on. Not a `terms_acceptances` row: that table
+     * records a tap on a version of THIS bot's rules, and this is no such tap.
+     */
+    legacyTermsAcceptedAt: timestamptz('legacy_terms_accepted_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     ...recordSourceColumns(),
@@ -6427,6 +6437,67 @@ export const paymentDestinations = pgTable(
 );
 
 /**
+ * R4 A1: every press of «🔄 تغییر شماره کارت» on a card-to-card invoice — the card the
+ * customer was shown NEXT, frozen exactly as `payment_destinations` freezes the first one.
+ *
+ * Append-only by trigger, like `payment_destinations`: what a customer was told about where
+ * to send money never changes afterwards, and a switch is a second thing they were told.
+ * The card a payment's customer saw LAST — the one a receipt reviewer must compare against
+ * — is the row with the greatest `sequence`, or `payment_destinations` when there is none.
+ *
+ * `sequence` is 1, 2, 3… per payment, and the unique key is what makes a switch a
+ * compare-and-set: a tap carries the sequence it was drawn at, the service inserts
+ * `sequence + 1` under the payment's row lock, and a second tap of the same keyboard (a
+ * double tap, a redelivered update) finds the sequence moved and switches nothing.
+ */
+export const paymentDestinationSwitches = pgTable(
+  'payment_destination_switches',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    paymentId: uuid('payment_id').notNull(),
+    sequence: integer('sequence').notNull(),
+    /** The account the customer was shown before this press. */
+    fromAccountId: uuid('from_account_id').notNull(),
+    /** The account shown by this press, and every field of it the customer needs. */
+    accountId: uuid('account_id').notNull(),
+    label: text('label').notNull(),
+    bankName: text('bank_name').notNull(),
+    holderName: text('holder_name').notNull(),
+    cardNumber: text('card_number').notNull(),
+    iban: text('iban'),
+    createdAt: timestamptz('created_at').notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+      name: 'payment_destination_switches_payment_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.accountId],
+      foreignColumns: [paymentAccounts.tenantId, paymentAccounts.id],
+      name: 'payment_destination_switches_account_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.fromAccountId],
+      foreignColumns: [paymentAccounts.tenantId, paymentAccounts.id],
+      name: 'payment_destination_switches_from_account_fk',
+    }),
+    unique('payment_destination_switches_sequence_key').on(
+      table.tenantId,
+      table.paymentId,
+      table.sequence,
+    ),
+    check('payment_destination_switches_sequence_check', sql`sequence >= 1`),
+    check('payment_destination_switches_card_number_check', sql`card_number ~ '^[0-9]{16}$'`),
+    check('payment_destination_switches_iban_check', sql`iban IS NULL OR iban ~ '^IR[0-9]{24}$'`),
+  ],
+);
+
+/**
  * The wallet ledger — append-only, and the only authority on a balance.
  *
  * There is no balance column anywhere in this schema. A balance is
@@ -6469,6 +6540,14 @@ export const walletEntries = pgTable(
     actorAdminId: uuid('actor_admin_id').references(() => admins.id),
     /** Bounded operator note. Never customer text. */
     note: text('note'),
+    /**
+     * R4 A5: «نمایش دلیل به مشتری» — the administrator chose, when writing an ADMIN_CREDIT or
+     * ADMIN_DEBIT, that the customer's adjustment message quotes `note` as its reason.
+     * FALSE for every other entry and for every entry written before the column existed,
+     * so no note ever reaches a customer that was not written to be shown. Written with the
+     * entry and never changed (the table is append-only).
+     */
+    noteShownToCustomer: boolean('note_shown_to_customer').notNull().default(false),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
   },
   (table) => [
@@ -6958,6 +7037,24 @@ export const services = pgTable(
     locationKey: text('location_key'),
     locationLabel: text('location_label'),
     usageSyncedAt: timestamptz('usage_synced_at'),
+    /**
+     * R4 A2: when a live panel check found this service's account MISSING on its panel —
+     * the panel answered, twice and authenticated, that it does not exist — or NULL.
+     *
+     * A FLAG beside the state machine, deliberately not a `SERVICE_STATES` member. A state
+     * would be read by every money rule that names states — the refund lanes, the expiry
+     * and usage sweeps, renewal, suspend, the reminders — and "the panel no longer lists
+     * it" decides none of those: no refund, no suspension, no customer message follows from
+     * it, and an operator decides what happens to the service. The flag changes exactly two
+     * things: the customer's own list («سرویس‌های من», its count and its pages) leaves the
+     * service out, and the operator's list shows «روی پنل نیست».
+     *
+     * Set by a conditional UPDATE (`IS NULL`, so the first finding is kept) in the live
+     * check's own transaction; cleared by EVERY successful usage read (`recordUsage`), the
+     * same writer that closes the operational condition, so a service found again comes
+     * back by itself. Never set by a migration.
+     */
+    missingOnPanelAt: timestamptz('missing_on_panel_at'),
     /**
      * R3 item 7: a customer's on-tap usage read is in flight, since when — or NULL.
      *

@@ -12,7 +12,7 @@ import type {
   RefundChannel,
 } from '@nexa/contracts';
 import { fetchPaymentReceipts, fetchPaymentTimeline } from '../api/client';
-import { formatTimestamp } from '../format';
+import { formatNumber, formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import {
   Banner,
@@ -85,6 +85,7 @@ export function timelineStillMoving(data: PaymentTimelineResponse): boolean {
 const KIND_LABELS: Readonly<Record<PaymentTimelineKind, WebKey>> = {
   PAYMENT_CREATED: 'web.payment_timeline_created',
   CUSTOMER_SIGNALLED: 'web.payment_timeline_signalled',
+  DESTINATION_SWITCHED: 'web.payment_timeline_destination_switched',
   RECEIPT_SUBMITTED: 'web.payment_timeline_receipt',
   PAYMENT_CONFIRMED: 'web.payment_timeline_confirmed',
   PAYMENT_RESOLVED: 'web.payment_timeline_resolved',
@@ -117,6 +118,7 @@ const KIND_LABELS: Readonly<Record<PaymentTimelineKind, WebKey>> = {
 const KIND_TONES: Readonly<Record<PaymentTimelineKind, Tone>> = {
   PAYMENT_CREATED: 'info',
   CUSTOMER_SIGNALLED: 'info',
+  DESTINATION_SWITCHED: 'info',
   RECEIPT_SUBMITTED: 'info',
   PAYMENT_CONFIRMED: 'ok',
   PAYMENT_RESOLVED: 'warn',
@@ -214,6 +216,15 @@ function detail(entry: PaymentTimelineEntry): ReactNode {
       );
     case 'CUSTOMER_SIGNALLED':
       return null;
+    // R4 A1: which card the press showed — four digits, never sixteen — and its number.
+    case 'DESTINATION_SWITCHED':
+      return (
+        <>
+          <Ltr>{`\u2022\u2022\u2022\u2022 ${entry.cardLast4}`}</Ltr> ·{' '}
+          {t('web.payment_timeline_switch_sequence').replace('{n}', formatNumber(entry.sequence))} ·{' '}
+          <span className="muted small">{t('web.payment_timeline_by_customer')}</span>
+        </>
+      );
     case 'RECEIPT_SUBMITTED':
       return <CodeName value={entry.receiptKind} labels={PAYMENT_RECEIPT_KIND_LABELS} />;
     case 'PAYMENT_CONFIRMED':

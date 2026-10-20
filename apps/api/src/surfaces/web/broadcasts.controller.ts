@@ -77,6 +77,7 @@ export class BroadcastsController {
         records.length > limit && last !== undefined
           ? encodeKeysetCursor({ createdAt: last.createdAt.toISOString(), id: last.id })
           : null,
+      presentation: await this.container.broadcasts.presentation(scope, actor),
     };
   }
 

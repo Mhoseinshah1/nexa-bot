@@ -519,6 +519,9 @@ describe('the feature presentation catalogue', () => {
       'service_expiry_reminders',
       'service_usage_reminders',
       'template_overrides',
+      // R4 A5: off stops telling customers of a manual adjustment, and nothing makes up for it.
+      'wallet_admin_credit_notice',
+      'wallet_admin_debit_notice',
       'wallet_low_balance_reminders',
     ]);
   });
@@ -530,7 +533,8 @@ describe('the enable-confirmation policy', () => {
     const asking = FEATURE_FLAGS.filter((f) => FEATURE_PRESENTATION[f.key].confirmEnable !== null)
       .map((f) => f.key)
       .sort();
-    expect(asking).toEqual(['terms_enforcement']);
+    // R4 A4: turning the re-prompt ON also stops every customer who accepted an older version.
+    expect(asking).toEqual(['terms_enforcement', 'terms_reprompt_on_new_version']);
     expect(FEATURE_PRESENTATION.terms_enforcement.confirmEnable).toEqual({
       question: 'web.terms_enforce_confirm_question',
       detail: 'web.terms_enforce_confirm_detail',

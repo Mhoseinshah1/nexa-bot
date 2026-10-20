@@ -398,6 +398,10 @@ function toTermsStanding(
           },
     acceptedCurrent: standing.acceptedCurrent,
     reacceptanceRequired: standing.reacceptanceRequired,
+    acceptedInPreviousBotAt:
+      standing.acceptedInPreviousBotAt === null
+        ? null
+        : standing.acceptedInPreviousBotAt.toISOString(),
   };
 }
 

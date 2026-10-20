@@ -28,6 +28,7 @@ import {
   auditLogs,
   customerNotifications,
   gatewayInvoices,
+  paymentDestinationSwitches,
   orders,
   paymentReceipts,
   payments,
@@ -136,6 +137,26 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
         ),
       )
       .orderBy(asc(customerNotifications.createdAt), asc(customerNotifications.id))
+      .limit(limit);
+
+    // R4 A1: every «🔄 تغییر شماره کارت», oldest first. Ids and the last four digits only.
+    const switchRows = await q
+      .select({
+        id: paymentDestinationSwitches.id,
+        sequence: paymentDestinationSwitches.sequence,
+        fromAccountId: paymentDestinationSwitches.fromAccountId,
+        accountId: paymentDestinationSwitches.accountId,
+        cardNumber: paymentDestinationSwitches.cardNumber,
+        createdAt: paymentDestinationSwitches.createdAt,
+      })
+      .from(paymentDestinationSwitches)
+      .where(
+        and(
+          eq(paymentDestinationSwitches.tenantId, tenantId),
+          eq(paymentDestinationSwitches.paymentId, paymentId),
+        ),
+      )
+      .orderBy(asc(paymentDestinationSwitches.sequence))
       .limit(limit);
 
     const receiptRows = include.receipts
@@ -264,6 +285,14 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
               decidedByAdminId: credit.decidedByAdminId,
             },
       notifications,
+      destinationSwitches: switchRows.map((r) => ({
+        id: r.id,
+        sequence: r.sequence,
+        fromAccountId: r.fromAccountId,
+        toAccountId: r.accountId,
+        cardLast4: r.cardNumber.slice(-4),
+        at: r.createdAt,
+      })),
       receipts: receiptRows.map((r) => ({
         id: r.id,
         kind: r.kind as PaymentReceiptKind,

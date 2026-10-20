@@ -429,13 +429,28 @@ export interface RecipientFacts {
   readonly username: string | null;
   /** Only read when the body uses `{walletBalance}`. */
   readonly walletBalance: Money | null;
+  /** R4 A6: the recipient's own numeric Telegram id. Absent from an older reader. */
+  readonly telegramId?: string | null;
+  /** R4 A6: the phone number on the recipient's row; null when there is none. */
+  readonly phone?: string | null;
+  /** R4 A6: only read when the body uses `{servicesTotal}` or `{servicesActive}`. */
+  readonly servicesTotal?: number;
+  readonly servicesActive?: number;
+  /** R4 A6: the instant of the send, rendered as the tenant's date by `{today}`. */
+  readonly today?: Date;
 }
 
 export interface RecipientFactsReader {
   factsFor(
     scope: TenantContext,
     customerId: string,
-    options: { readonly withBalance: boolean },
+    options: {
+      readonly withBalance: boolean;
+      /** R4 A6: count the recipient's services (only when the body asks for them). */
+      readonly withServices?: boolean;
+      /** R4 A6: the send's instant, for `{today}` and for "serving now". */
+      readonly now?: Date;
+    },
   ): Promise<RecipientFacts>;
 }
 
