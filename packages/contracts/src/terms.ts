@@ -116,7 +116,9 @@ export type TermsVersionWriteResponse = z.infer<typeof termsVersionWriteResponse
 
 /**
  * One customer's standing, for Customer 360. `reacceptanceRequired` is exactly what the
- * Telegram gate decides: enforcement on, a current version, and no acceptance of it.
+ * Telegram gate decides: enforcement on, a current version, and — since R4 A4 — no
+ * acceptance at all (any version, or the previous bot's), or, only while the owner's
+ * `terms_reprompt_on_new_version` is on, no acceptance of the current version.
  */
 export const customerTermsStandingSchema = z.object({
   available: z.literal(true),
@@ -138,6 +140,12 @@ export const customerTermsStandingSchema = z.object({
     .nullable(),
   acceptedCurrent: z.boolean(),
   reacceptanceRequired: z.boolean(),
+  /**
+   * R4 A4: when the import carried this customer's acceptance of the PREVIOUS bot's rules
+   * (`user.roll_Status`), null otherwise. It counts as an acceptance for the gate unless the
+   * owner turned `terms_reprompt_on_new_version` on. Defaulted on parse for an older API.
+   */
+  acceptedInPreviousBotAt: z.iso.datetime().nullable().default(null),
 });
 export type CustomerTermsStandingResponse = z.infer<typeof customerTermsStandingSchema>;
 

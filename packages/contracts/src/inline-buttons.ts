@@ -154,6 +154,8 @@ export const INLINE_BUTTONS = [
   button('wallet.open', 'WALLET', 'bot.wallet.open_button'),
   button('wallet.topup', 'WALLET', 'bot.wallet.topup_button'),
   button('wallet.topup_amount', 'WALLET', null),
+  // R4 A3: «📋 کپی شناسه» on the account summary — a CopyTextButton with the Telegram id.
+  button('account.copy_id', 'WALLET', 'bot.wallet.copy_id_button', 'COPY'),
 
   // Purchase
   button('catalog.open', 'PURCHASE', 'bot.catalog.open_button'),
@@ -192,6 +194,10 @@ export const INLINE_BUTTONS = [
   button('payment.gateway_card_check', 'PAYMENT', 'bot.payment.gateway_card_check_button'),
   button('payment.gateway_receipt', 'PAYMENT', 'bot.payment.gateway_receipt_button'),
   button('payment.gateway_change_card', 'PAYMENT', 'bot.payment.gateway_change_card_button'),
+  // R4 A1: «🔄 تغییر شماره کارت» on the card-to-card invoice — the NEXT enabled receiving
+  // card, edited into the same message. Not the TonPays card change above, which asks a
+  // provider: this one rotates through the tenant's own accounts.
+  button('payment.switch_card', 'PAYMENT', 'bot.payment.switch_card_button'),
 
   // My services: the list
   button('services.item', 'SERVICES', 'bot.service.list_item_button'),
@@ -246,6 +252,9 @@ export const INLINE_BUTTONS = [
   // Support and tickets
   button('support.tickets', 'SUPPORT', 'bot.support.tickets_button'),
   button('support.contact', 'SUPPORT', 'bot.support.contact_button', 'URL'),
+  // R4 A5: on the blocked reply. A URL, never a callback: a blocked customer's taps are
+  // refused, and a link to the support account still opens.
+  button('blocked.support', 'SUPPORT', 'bot.blocked.support_button', 'URL'),
   button('tickets.item', 'SUPPORT', 'bot.ticket.list_item_button'),
   button('tickets.new', 'SUPPORT', 'bot.ticket.new_button'),
   button('tickets.category', 'SUPPORT', 'bot.ticket.category_button'),

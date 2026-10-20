@@ -14,7 +14,7 @@ import {
 
 /**
  * Round 4, PR-C: the short public code's format, and the three places it is spelled — the
- * contract, the database's generator (0261) and the database's CHECK (0260) — agreeing.
+ * contract, the database's generator (0263) and the database's CHECK (0262) — agreeing.
  */
 const DRIZZLE = join(__dirname, '..', '..', 'apps', 'api', 'drizzle');
 
@@ -49,11 +49,11 @@ describe('the public code format', () => {
   });
 
   it('the database generates from the same alphabet and checks the same pattern', () => {
-    const triggers = readFileSync(join(DRIZZLE, '0261_public_code_triggers.sql'), 'utf8');
+    const triggers = readFileSync(join(DRIZZLE, '0263_public_code_triggers.sql'), 'utf8');
     expect(triggers).toContain(`alphabet constant text := '${PUBLIC_CODE_ALPHABET}';`);
     expect(triggers).toContain(`floor(random() * ${PUBLIC_CODE_ALPHABET.length})`);
     expect(triggers).toContain(`FOR i IN 1..${PUBLIC_CODE_LENGTH} LOOP`);
-    const columns = readFileSync(join(DRIZZLE, '0260_public_codes.sql'), 'utf8');
+    const columns = readFileSync(join(DRIZZLE, '0262_public_codes.sql'), 'utf8');
     for (const table of ['orders', 'payments', 'services', 'tickets']) {
       expect(columns).toContain(
         `ALTER TABLE "${table}" ADD CONSTRAINT "${table}_code_check" CHECK (code IS NULL OR code ~ '${PUBLIC_CODE_PATTERN.source}')`,

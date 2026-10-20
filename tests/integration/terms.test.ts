@@ -232,6 +232,18 @@ describe('terms and rules (program §6)', () => {
     });
   }
 
+  /** R4 A4: the owner's switch that restores "every new version is asked for again". */
+  async function reprompt(enabled: boolean) {
+    const flags = await api.container.featureFlags.list(tenantA, owner);
+    const current = flags.find((flag) => flag.key === 'terms_reprompt_on_new_version');
+    await api.container.featureFlags.set(tenantA, owner, {
+      key: 'terms_reprompt_on_new_version',
+      enabled,
+      expectedVersion: current?.version ?? null,
+      idempotencyKey: key(),
+    });
+  }
+
   const webhook = (bot: BotInstanceId, update: Record<string, unknown>) =>
     inject({
       method: 'POST',
@@ -546,9 +558,25 @@ describe('terms and rules (program §6)', () => {
     expect(await orderCount()).toBe(1);
   });
 
-  it('asks again after a new publication, and never counts an older acceptance for it', async () => {
+  it('R4 A4: accepted once is accepted — a new publication does not ask again by default', async () => {
     const v1 = await publish('قوانین', 'نسخهٔ یک');
     await enforce(true);
+    const customer = user();
+    await say(customer, '/start');
+    await tap(customer, `ac:${v1.id}`);
+    const v2 = await publish('قوانین جدید', 'نسخهٔ دو');
+    // `terms_reprompt_on_new_version` is OFF: the v1 acceptance stands, nothing is recorded.
+    expect(textOf(await say(customer, '/start'))).toEqual([WELCOME_BACK]);
+    expect((await acceptances()).map((row) => row.terms_version_id)).toEqual([v1.id]);
+    // A customer who never accepted anything is still asked for the current version.
+    const newcomer = user();
+    expect(isTermsScreen(await say(newcomer, '/start'), v2)).toBe(true);
+  });
+
+  it('with re-prompting on, asks again after a new publication, and never counts an older acceptance for it', async () => {
+    const v1 = await publish('قوانین', 'نسخهٔ یک');
+    await enforce(true);
+    await reprompt(true);
     const customer = user();
     await say(customer, '/start');
     await tap(customer, `ac:${v1.id}`);

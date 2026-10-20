@@ -110,6 +110,11 @@ export interface TermsRepository {
     tx?: unknown,
   ): Promise<TermsAcceptanceRecord | null>;
   /**
+   * R4 A4: when the import recorded this customer's acceptance of the PREVIOUS bot's rules
+   * (`customers.legacy_terms_accepted_at`), or null.
+   */
+  legacyAcceptedAt(scope: ScopeContext, customerId: string, tx?: unknown): Promise<Date | null>;
+  /**
    * Records an acceptance once. TRUE when this call wrote the row; FALSE when the customer
    * had already accepted that version (`ON CONFLICT DO NOTHING` on the once-key), which is
    * what makes a duplicate or concurrent tap write nothing the second time.

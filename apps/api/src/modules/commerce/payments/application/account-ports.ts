@@ -185,10 +185,46 @@ export interface PaymentDestinationRepository {
     tx: unknown,
   ): Promise<PaymentDestinationRecord>;
 
-  /** What this payment's customer was told, or null for one issued before 5A. */
+  /**
+   * What this payment's customer was told LAST, or null for one issued before 5A: the newest
+   * «🔄 تغییر شماره کارت» switch (R4 A1) when there is one, else the destination it was issued
+   * against. Every reader — the invoice, the receipt reviewer, the operator's payment detail —
+   * therefore sees the card the customer was shown last, from one definition.
+   */
   findByPayment(
     scope: TenantContext,
     paymentId: PaymentId,
     tx?: unknown,
   ): Promise<PaymentDestinationRecord | null>;
+
+  /** How many switches this payment has had: 0 for none. The next one is `count + 1`. */
+  switchCount(scope: TenantContext, paymentId: PaymentId, tx?: unknown): Promise<number>;
+
+  /**
+   * Records one switch, as `sequence`, frozen from `account`. Null when that sequence is
+   * already taken (`payment_destination_switches_sequence_key`): another tap won, and this
+   * one switched nothing. Called under the payment's row lock.
+   */
+  recordSwitch(
+    scope: TenantContext,
+    input: {
+      readonly id: string;
+      readonly paymentId: PaymentId;
+      readonly sequence: number;
+      readonly fromAccountId: PaymentAccountId;
+      readonly account: PaymentAccountRecord;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<PaymentDestinationRecord | null>;
+}
+
+/** One recorded switch, as the payment's history reads it (R4 A1). */
+export interface PaymentDestinationSwitchRecord {
+  readonly id: string;
+  readonly sequence: number;
+  readonly fromAccountId: PaymentAccountId;
+  readonly accountId: PaymentAccountId;
+  readonly cardLast4: string;
+  readonly createdAt: Date;
 }

@@ -568,6 +568,9 @@ function toSummary(
     // The ORIGINAL purchase (Track 3 §3): the import's own date for an imported service.
     originalStartedAt: record.originalStartedAt.toISOString(),
     locationLabel: record.locationLabel,
+    // R4 A2: «روی پنل نیست» — the flag, never a state.
+    missingOnPanelAt:
+      record.missingOnPanelAt === null ? null : record.missingOnPanelAt.toISOString(),
   };
 }
 

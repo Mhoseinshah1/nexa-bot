@@ -148,6 +148,9 @@ export const CUSTOMER_NOTIFICATION_KIND_NAMES: Readonly<Record<CustomerNotificat
     DIRECT_MESSAGE: 'web.pay_notice_direct_message',
     DIRECT_MESSAGE_MEDIA: 'web.pay_notice_direct_message_media',
     INCIDENT_NOTICE: 'web.pay_notice_incident_notice',
+    WALLET_ADMIN_CREDITED: 'web.pay_notice_wallet_admin_credited',
+    WALLET_ADMIN_DEBITED: 'web.pay_notice_wallet_admin_debited',
+    ACCOUNT_UNBLOCKED: 'web.pay_notice_account_unblocked',
   };
 
 /**

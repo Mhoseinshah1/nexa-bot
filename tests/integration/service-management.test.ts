@@ -593,6 +593,61 @@ describe('a customer manages the service they bought', () => {
     expect(third.items).toEqual([]);
   });
 
+  /*
+   * R4 A2: a service the live check found MISSING on its panel leaves «سرویس‌های من», its
+   * count «کل: N سرویس» and its pages — and comes back once a read finds the account again.
+   * A flag, not a state: the service's state and money are untouched.
+   */
+  it('excludes a service missing on its panel from the list, count and pages; a found read brings it back (R4 A2)', async () => {
+    const kept = await activeService('missing-kept');
+    const gone = await activeService('missing-gone');
+    const at = ctx.container.clock.now();
+    const marked = await ctx.container.database.db.transaction((tx) =>
+      services.markMissingOnPanel(tenantA, gone.id, at, { tx } as never),
+    );
+    expect(marked).toBe(true);
+    // The first finding is kept: a second mark changes nothing.
+    expect(
+      await ctx.container.database.db.transaction((tx) =>
+        services.markMissingOnPanel(tenantA, gone.id, new Date(at.getTime() + 1000), {
+          tx,
+        } as never),
+      ),
+    ).toBe(false);
+
+    const page = await ctx.container.provisioning.pageForCustomer(tenantA, customerA, 1);
+    expect(
+      page.items.map((item) => item.id),
+      'not listed',
+    ).toEqual([kept.id]);
+    expect(page.count, 'not counted').toBe(1);
+    // R4 A6: a broadcast's {servicesTotal}/{servicesActive} read the SAME list predicate.
+    expect(
+      await services.listedCountsForCustomer(tenantA, customerA, ctx.container.clock.now()),
+    ).toEqual({ listed: 1, serving: 1 });
+    const paged = await services.pageForCustomer(tenantA, customerA, { number: 2, size: 1 });
+    expect(paged.items, 'no page holds it').toEqual([]);
+    expect((await services.findById(tenantA, gone.id))?.state, 'its state is untouched').toBe(
+      'ACTIVE',
+    );
+    // The operator still sees it, flagged.
+    expect((await services.findById(tenantA, gone.id))?.missingOnPanelAt).not.toBeNull();
+
+    // A successful usage read (any writer of one) clears it, and it is listed again.
+    const recorded = await ctx.container.database.db.transaction((tx) =>
+      services.recordUsage(
+        tenantA,
+        gone.id,
+        { usedBytes: 1n, syncedAt: ctx.container.clock.now() },
+        { tx } as never,
+      ),
+    );
+    expect(recorded).toBe(true);
+    const back = await ctx.container.provisioning.pageForCustomer(tenantA, customerA, 1);
+    expect(back.items.map((item) => item.id).sort()).toEqual([kept.id, gone.id].sort());
+    expect(back.count).toBe(2);
+  });
+
   // =========================================================================
   // Who may act
   // =========================================================================

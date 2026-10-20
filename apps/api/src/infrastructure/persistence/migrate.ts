@@ -37,7 +37,7 @@ export async function runMigrations(databaseUrl: string): Promise<void> {
     // transaction, where PostgreSQL refuses a concurrent build.
     const built = await ensureOnlineIndexes(handle);
     for (const name of built) console.warn(`Built index ${name} concurrently`);
-    // Then the short public codes (PR-C) onto every row from before 0260, in keyset batches
+    // Then the short public codes (PR-C) onto every row from before 0262, in keyset batches
     // of their own short transactions — never inside the migrator's one transaction, for the
     // same reason as the indexes above. Idempotent: a run with nothing to do writes nothing.
     for (const report of await backfillPublicCodes(handle)) {

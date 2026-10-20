@@ -83,6 +83,12 @@ export interface ServiceRecord {
   readonly locationKey: string | null;
   readonly locationLabel: string | null;
   readonly usageSyncedAt: Date | null;
+  /**
+   * R4 A2: when a live panel check found the account missing on its panel, or null. A flag
+   * beside the state machine (see the column): it hides the service from the customer's own
+   * list and changes nothing else.
+   */
+  readonly missingOnPanelAt: Date | null;
   readonly deliveryState: ServiceDeliveryState;
   readonly deliveryAttempts: number;
   readonly deliveredAt: Date | null;
@@ -595,6 +601,25 @@ export interface ServiceRepository {
     },
     tx: TransactionScope,
   ): Promise<boolean>;
+
+  /**
+   * R4 A2: marks the service MISSING on its panel, at `at`, only when it is not marked
+   * already — the first finding is the one kept. Touches no other column: not the state, not
+   * the usage, not the delivery. Reports whether this call set it.
+   */
+  markMissingOnPanel(
+    scope: TenantContext,
+    id: string,
+    at: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
+
+  /**
+   * R4 A2: clears the mark, whatever the service's state, because a read just found the
+   * account on its panel. Reports whether there was one to clear. `recordUsage` clears it
+   * too, for every writer of a successful usage read.
+   */
+  clearMissingOnPanel(scope: TenantContext, id: string, tx: TransactionScope): Promise<boolean>;
 
   /**
    * One page of the customer's services by page NUMBER, newest first, with the total —

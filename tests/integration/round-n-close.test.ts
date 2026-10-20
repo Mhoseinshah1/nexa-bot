@@ -217,6 +217,7 @@ describe('round N close', () => {
       outbox: c.outbox,
       clock,
       ids: c.ids,
+      presentation: new CachedTenantPresentationReader(c.tenants, clock),
     });
     calendar = new IntlCampaignCalendar(new CachedTenantPresentationReader(c.tenants, clock));
     campaigns = new CampaignService(campaignDeps());

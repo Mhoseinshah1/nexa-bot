@@ -1942,6 +1942,25 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.blocked.support_button',
+    description:
+      'R4 A5: the URL button under every blocked reply (spam or manual) that opens the ' +
+      'support account or link from the support settings. A link, never a callback: a ' +
+      'blocked customer\u2019s taps are refused, and a link still opens. Not drawn when no ' +
+      'support link is configured.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.account.unblocked',
+    description:
+      'R4 A5: told to a customer when their block is lifted \u2014 an administrator\u2019s ' +
+      'unblock from the Web Admin or the Telegram panel, of a manual or an anti-spam block. ' +
+      'Sent through the customer notification lane after the unblock committed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.catalog.empty',
     description:
       'Shown when a tenant has no listed, priced, fulfillable product. The honest ' +
@@ -6060,6 +6079,15 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.payment.switch_card_button',
+    description:
+      'R4 A1: on the card-to-card invoice, while more than one receiving card is enabled. ' +
+      'The tap edits the same invoice to show the NEXT enabled card; the payment, its amount ' +
+      'and its tracking code stay the same, and the card shown is recorded on the payment.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.payment.wallet_button',
     description:
       'The label on the button a customer presses to pay for an order from their ' +
@@ -10165,8 +10193,9 @@ export const TEMPLATES = [
       'from rows: the Telegram id and names from the customer row, the balance from the ' +
       'ledger, the counts from services, payments and referrals, the group from the ' +
       'reseller standing. The phone line is `bot.wallet.phone_missing` because this ' +
-      'installation stores no phone number and asks for none.',
-    format: 'PLAIN_TEXT',
+      'installation stores no phone number and asks for none. TELEGRAM_HTML since R4 A3, so ' +
+      'the Telegram id is in <code> and copies on tap; every value is HTML-escaped.',
+    format: 'TELEGRAM_HTML',
     placeholders: [
       {
         token: 'telegramId',
@@ -10267,6 +10296,14 @@ export const TEMPLATES = [
   {
     key: 'bot.wallet.group_reseller',
     description: 'The group label for an ACTIVE reseller.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.copy_id_button',
+    description:
+      'R4 A3: the CopyTextButton on the account summary that copies the customer\u2019s ' +
+      'numeric Telegram id. No callback data; nothing reaches the server.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -12613,6 +12650,74 @@ export const TEMPLATES = [
         type: 'MONEY',
         description: 'What the mass credit put on this customer\u2019s wallet.',
         required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.wallet.admin_credited',
+    description:
+      'R4 A5: told to a customer when an administrator credits their wallet by hand (Web Admin ' +
+      'or the Telegram panel). Every value is read at send time from the ADMIN_CREDIT ledger ' +
+      'entry the notification names \u2014 a reader, not a payload (ADR 0030 \u00a71). Never ' +
+      'sent for an imported opening balance or any other ledger reason.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'The amount of the adjustment.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'balance',
+        type: 'MONEY',
+        description: 'The wallet balance right after this entry, from the ledger.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reason',
+        type: 'STRING',
+        description:
+          'The administrator\u2019s note, only when they ticked «نمایش دلیل به مشتری»; absent ' +
+          'otherwise, and its line is dropped.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.wallet.admin_debited',
+    description:
+      'R4 A5: told to a customer when an administrator debits their wallet by hand (Web Admin ' +
+      'or the Telegram panel). Every value is read at send time from the ADMIN_DEBIT ledger ' +
+      'entry the notification names \u2014 a reader, not a payload (ADR 0030 \u00a71). Never ' +
+      'sent for an imported opening balance or any other ledger reason.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'The amount of the adjustment.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'balance',
+        type: 'MONEY',
+        description: 'The wallet balance right after this entry, from the ledger.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reason',
+        type: 'STRING',
+        description:
+          'The administrator\u2019s note, only when they ticked «نمایش دلیل به مشتری»; absent ' +
+          'otherwise, and its line is dropped.',
+        required: false,
         repeatable: false,
       },
     ],

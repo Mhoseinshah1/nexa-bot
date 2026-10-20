@@ -87,6 +87,8 @@ export const TEMPLATE_CATEGORY_PREFIXES: Readonly<Record<TemplateCategory, reado
     'bot.callback.',
     'bot.request_unavailable',
     'bot.blocked',
+    // R4 A5: the sentence an unblock sends, beside the blocked replies it ends.
+    'bot.account.unblocked',
   ],
   support: ['bot.support.', 'bot.faq.', 'bot.ticket.'],
   notifications: [

@@ -188,6 +188,13 @@ function TermsStanding({ overview }: { overview: CustomerOverviewResponse | unde
         {terms.lastAccepted === null
           ? t('web.c360_terms_never')
           : `${t('web.c360_terms_last')} ${String(terms.lastAccepted.versionNumber)} · ${formatTimestamp(terms.lastAccepted.acceptedAt)}`}
+        {/* R4 A4: the import carried the previous bot's rules acceptance. */}
+        {terms.acceptedInPreviousBotAt !== null && (
+          <>
+            {' · '}
+            {t('web.c360_terms_previous_bot')}
+          </>
+        )}
       </span>
     </span>
   );

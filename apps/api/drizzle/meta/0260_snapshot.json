@@ -1,5 +1,5 @@
 {
-  "id": "a3930ce6-749c-4a80-8782-0d37edc98e0c",
+  "id": "3bc35ab5-6943-4478-b134-e7d55be5a00a",
   "prevId": "04669ef9-033b-499f-9859-a3a219f8ae62",
   "version": "7",
   "dialect": "postgresql",
@@ -8478,7 +8478,7 @@
       "checkConstraints": {
         "customer_notifications_kind_check": {
           "name": "customer_notifications_kind_check",
-          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'TICKET_REPLY', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER', 'TICKET_REPLY_ATTACHMENT', 'SERVICE_RENEWED', 'RESELLER_MINIMUM_REMINDER', 'RESELLER_MINIMUM_ACHIEVED', 'WALLET_MASS_CREDITED', 'SERVICE_GIFT_APPLIED', 'DIRECT_MESSAGE', 'DIRECT_MESSAGE_MEDIA', 'INCIDENT_NOTICE')"
+          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'TICKET_REPLY', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER', 'TICKET_REPLY_ATTACHMENT', 'SERVICE_RENEWED', 'RESELLER_MINIMUM_REMINDER', 'RESELLER_MINIMUM_ACHIEVED', 'WALLET_MASS_CREDITED', 'SERVICE_GIFT_APPLIED', 'DIRECT_MESSAGE', 'DIRECT_MESSAGE_MEDIA', 'INCIDENT_NOTICE', 'WALLET_ADMIN_CREDITED', 'WALLET_ADMIN_DEBITED', 'ACCOUNT_UNBLOCKED')"
         },
         "customer_notifications_state_check": {
           "name": "customer_notifications_state_check",
@@ -9142,6 +9142,12 @@
         },
         "phone_verified_at": {
           "name": "phone_verified_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "legacy_terms_accepted_at": {
+          "name": "legacy_terms_accepted_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
@@ -20796,12 +20802,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "code": {
-          "name": "code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -20993,10 +20993,6 @@
         "orders_source_ref_check": {
           "name": "orders_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
-        },
-        "orders_code_check": {
-          "name": "orders_code_check",
-          "value": "code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'"
         },
         "orders_state_check": {
           "name": "orders_state_check",
@@ -22907,6 +22903,173 @@
       },
       "isRLSEnabled": false
     },
+    "public.payment_destination_switches": {
+      "name": "payment_destination_switches",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payment_id": {
+          "name": "payment_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sequence": {
+          "name": "sequence",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "from_account_id": {
+          "name": "from_account_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bank_name": {
+          "name": "bank_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "holder_name": {
+          "name": "holder_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "card_number": {
+          "name": "card_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "iban": {
+          "name": "iban",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "payment_destination_switches_tenant_id_tenants_id_fk": {
+          "name": "payment_destination_switches_tenant_id_tenants_id_fk",
+          "tableFrom": "payment_destination_switches",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "payment_destination_switches_payment_fk": {
+          "name": "payment_destination_switches_payment_fk",
+          "tableFrom": "payment_destination_switches",
+          "tableTo": "payments",
+          "columnsFrom": [
+            "tenant_id",
+            "payment_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "payment_destination_switches_account_fk": {
+          "name": "payment_destination_switches_account_fk",
+          "tableFrom": "payment_destination_switches",
+          "tableTo": "payment_accounts",
+          "columnsFrom": [
+            "tenant_id",
+            "account_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "payment_destination_switches_from_account_fk": {
+          "name": "payment_destination_switches_from_account_fk",
+          "tableFrom": "payment_destination_switches",
+          "tableTo": "payment_accounts",
+          "columnsFrom": [
+            "tenant_id",
+            "from_account_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "payment_destination_switches_sequence_key": {
+          "name": "payment_destination_switches_sequence_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "payment_id",
+            "sequence"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "payment_destination_switches_sequence_check": {
+          "name": "payment_destination_switches_sequence_check",
+          "value": "sequence >= 1"
+        },
+        "payment_destination_switches_card_number_check": {
+          "name": "payment_destination_switches_card_number_check",
+          "value": "card_number ~ '^[0-9]{16}$'"
+        },
+        "payment_destination_switches_iban_check": {
+          "name": "payment_destination_switches_iban_check",
+          "value": "iban IS NULL OR iban ~ '^IR[0-9]{24}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.payment_destinations": {
       "name": "payment_destinations",
       "schema": "",
@@ -23968,12 +24131,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "code": {
-          "name": "code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -24293,10 +24450,6 @@
         "payments_source_ref_check": {
           "name": "payments_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
-        },
-        "payments_code_check": {
-          "name": "payments_code_check",
-          "value": "code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'"
         },
         "payments_state_check": {
           "name": "payments_state_check",
@@ -24733,12 +24886,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "code_number": {
-          "name": "code_number",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -24930,10 +25077,6 @@
         "products_source_ref_check": {
           "name": "products_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
-        },
-        "products_code_number_check": {
-          "name": "products_code_number_check",
-          "value": "code_number IS NULL OR code_number > 0"
         },
         "products_status_check": {
           "name": "products_status_check",
@@ -31477,6 +31620,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "missing_on_panel_at": {
+          "name": "missing_on_panel_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "usage_refresh_started_at": {
           "name": "usage_refresh_started_at",
           "type": "timestamp with time zone",
@@ -31581,12 +31730,6 @@
         },
         "source_ref": {
           "name": "source_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "code": {
-          "name": "code",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -31898,10 +32041,6 @@
         "services_source_ref_check": {
           "name": "services_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
-        },
-        "services_code_check": {
-          "name": "services_code_check",
-          "value": "code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'"
         },
         "services_is_test_source_check": {
           "name": "services_is_test_source_check",
@@ -37822,12 +37961,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "code": {
-          "name": "code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -38102,10 +38235,6 @@
         "tickets_source_ref_check": {
           "name": "tickets_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
-        },
-        "tickets_code_check": {
-          "name": "tickets_code_check",
-          "value": "code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'"
         },
         "tickets_status_check": {
           "name": "tickets_status_check",
@@ -38891,6 +39020,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "note_shown_to_customer": {
+          "name": "note_shown_to_customer",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "created_at": {
           "name": "created_at",

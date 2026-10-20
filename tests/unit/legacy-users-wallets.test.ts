@@ -40,6 +40,7 @@ function planned(
       username: null,
       phone: 'ABSENT',
       status,
+      termsAccepted: false,
       checksum,
     },
     decision,
