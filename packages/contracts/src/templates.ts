@@ -8763,7 +8763,8 @@ export const TEMPLATES = [
       {
         token: 'reference',
         type: 'STRING',
-        description: 'The payment\u2019s public tracking code, `paymentTrackingCode` of the payment.',
+        description:
+          'The payment\u2019s public tracking code, `paymentTrackingCode` of the payment.',
         required: false,
         repeatable: false,
       },
