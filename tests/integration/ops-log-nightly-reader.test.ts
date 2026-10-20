@@ -190,7 +190,7 @@ describe('the nightly report reader', () => {
     expect(data.giftSum).toBe(2_000n);
     await order({ customerId: customerA, purpose: 'NEW_SERVICE', total: 100_000, settledAt: at(60) });
     const withSales = await read();
-    expect(netOf(withSales)).toBe(100_000n - 12_000n - 3_000n - 2_000n);
+    expect(netOf({ ...withSales, day: START })).toBe(100_000n - 12_000n - 3_000n - 2_000n);
   });
 
   it('finds the best Tehran hour, the new customers, and the panel’s sold orders and gigabytes', async () => {
