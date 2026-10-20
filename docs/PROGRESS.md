@@ -654,8 +654,11 @@ is to add that installation's KEK to `SECRETS_KEYS` out of band. There is no for
 that accepts a pasted key and there will not be one; `docs/open-questions.md`
 records why, and what a real key-import feature would have to carry.
 
-**Nothing restarts the worker or the monitor after a cutover.** Their pools
-recover, and a `botctl` restart is still the tidier operational choice.
+**Nothing restarts the worker or the monitor after a cutover on its own.** Their
+pools recover; the tidier operational step is now a named one, `botctl restart
+background` (Round 4 PR-H), which restarts the worker, the monitor and the
+provisioner and waits for readiness. The import completion screen tells the owner to
+run it.
 
 **Nothing cleans up a displaced database, a candidate a refusal left, or a
 successful upload's workspace.** Debris is reported on the row and in the

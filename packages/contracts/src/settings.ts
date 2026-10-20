@@ -18,6 +18,12 @@ import {
 import {
   PENDING_PAYMENT_REMINDER_MINUTES_MAX,
   PENDING_PAYMENT_REMINDER_MINUTES_MIN,
+  REMINDER_BURST_ALARM_PER_HOUR_DEFAULT,
+  REMINDER_BURST_ALARM_PER_HOUR_MAX,
+  REMINDER_RATE_PER_MINUTE_DEFAULT,
+  REMINDER_RATE_PER_MINUTE_MAX,
+  REMINDER_RATE_PER_MINUTE_MIN,
+  REMINDER_RATE_SETTING_KEYS,
   quietHoursTimeSchema,
 } from './customer-reminders.js';
 import { moneySchema, salesCurrencyCodeSchema } from './money.js';
@@ -1022,6 +1028,43 @@ export const SETTINGS = [
     defaultValue: '08:00',
     configures: 'reminder_quiet_hours',
     zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * Round 4 PR-H (post-import safety): the ceiling on automatic reminders and the burst
+   * alarm beside it. A ceiling, not a switch — it applies whatever the reminder flags say,
+   * so neither key configures a flag. Replies and payment or order outcomes never wait on
+   * it: only the kinds quiet hours hold (`CUSTOMER_NOTIFICATION_QUIET_HOURS`) are counted.
+   */
+  {
+    key: REMINDER_RATE_SETTING_KEYS.maxPerMinute,
+    description:
+      'The most automatic reminders (expiry, usage, wallet, pending payment and order, ' +
+      'reseller minimum) the customer notification lane hands to Telegram in one minute. ' +
+      'A backlog above it waits for the next minute instead of leaving at once; replies and ' +
+      'payment or order outcomes are never held by it. Counted per installation in the ' +
+      'database, so two worker replicas share one ceiling.',
+    schema: z.number().int().min(REMINDER_RATE_PER_MINUTE_MIN).max(REMINDER_RATE_PER_MINUTE_MAX),
+    defaultValue: REMINDER_RATE_PER_MINUTE_DEFAULT,
+    configures: null,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: REMINDER_RATE_SETTING_KEYS.burstAlarmPerHour,
+    description:
+      'How many freshly raised automatic reminders in one hour count as a burst. Above ' +
+      'it the operations log group\u2019s errors topic is told once, and told again when an ' +
+      'hour ends below it. A reminder held overnight by quiet hours is not fresh and is not ' +
+      'counted. Zero turns the alarm off; the ceiling above still applies.',
+    schema: z.number().int().min(0).max(REMINDER_BURST_ALARM_PER_HOUR_MAX),
+    defaultValue: REMINDER_BURST_ALARM_PER_HOUR_DEFAULT,
+    configures: null,
+    zeroMeaning: 'DISABLES',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     consumer: 'ACTIVE',

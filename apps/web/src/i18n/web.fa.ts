@@ -3833,6 +3833,12 @@ export const WEB_FA = {
   'web.setting_reminders_reseller_minimum_days_desc':
     'چند روز مانده به پایان ماه تقویمی، نماینده‌ای که هنوز به حداقل فروش ماهانه نرسیده یک بار یادآوری بگیرد؛ از ۱ تا ۱۰ روز.',
   'web.setting_reminders_payment_pending_minutes': 'زمان یادآور پرداخت در انتظار',
+  'web.setting_reminders_max_per_minute': 'سقف ارسال یادآورها در هر دقیقه',
+  'web.setting_reminders_max_per_minute_desc':
+    'بیشترین تعداد یادآور خودکار (انقضا، حجم، کیف پول، پرداخت و سفارش در انتظار، حداقل فروش نماینده) که در یک دقیقه برای مشتریان فرستاده می‌شود. بقیه برای دقیقهٔ بعد می‌مانند؛ پاسخ‌ها و نتیجهٔ پرداخت و سفارش هیچ‌وقت منتظر این سقف نمی‌مانند.',
+  'web.setting_reminders_burst_alarm_per_hour': 'هشدار هجوم یادآور (در هر ساعت)',
+  'web.setting_reminders_burst_alarm_per_hour_desc':
+    'اگر در یک ساعت بیش از این تعداد یادآور تازه ساخته و فرستاده شود، یک بار در تاپیک خطاهای گروه گزارش خبر داده می‌شود و وقتی یک ساعت زیر این عدد بگذرد، رفع آن هم اعلام می‌شود. یادآورهایی که ساعت سکوت نگه داشته بود حساب نمی‌شوند. صفر یعنی هشدار خاموش است؛ سقف دقیقه‌ای همچنان اعمال می‌شود.',
   'web.setting_wallet_low_balance_threshold': 'آستانهٔ هشدار کمبود موجودی کیف پول',
   'web.flag_service_expiry_day_reminder': 'یادآور روز انقضای سرویس',
   'web.flag_wallet_low_balance_reminders': 'هشدار کمبود موجودی کیف پول',
@@ -9003,6 +9009,9 @@ export const WEB_FA = {
   'web.mrz_run_in_progress': 'در جریان',
   'web.mrz_protective_run': 'شناسهٔ بکاپ محافظ',
   'web.mrz_result_title': 'نتیجه',
+  'web.mrz_restart_after_import_title': 'یک قدم پایانی روی سرور',
+  'web.mrz_restart_after_import_body':
+    'انتقال از ربات قبلی تمام شد. برای اینکه بخش‌های پس‌زمینه (یادآورها، پایش پنل‌ها و ساخت سرویس) با داده‌های تازه از نو شروع کنند، این فرمان را یک بار روی سرور اجرا کنید:',
   'web.mrz_result_ok': 'بازیابی از ربات قبلی کامل شد و تطبیق برقرار است.',
   'web.mrz_result_failed': 'بازیابی از ربات قبلی ناموفق بود.',
   'web.mrz_status_adopt_requested': 'اجرای انتقال‌های تأییدشده در صف',

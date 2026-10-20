@@ -7340,6 +7340,57 @@ export const serviceReminders = pgTable(
   ],
 );
 
+/**
+ * Round 4 PR-H (post-import safety): what an imported service already WAS when the import
+ * created it — one row per service, written by the reminder seed inside the adoption's own
+ * transaction, never updated.
+ *
+ * The seed (`ServiceReminderService.seedPassedThresholds`) records every reminder already
+ * behind the service as raised, under the thresholds in force at that moment. That is not
+ * enough on its own: an operator who moves a threshold after the import (seven days to ten,
+ * eighty percent to seventy) makes a crossing the seed never recorded, and the next sweep
+ * would announce it — to every imported service at once, about a period the previous bot
+ * already handled. So the sweep also asks THIS row: a kind that was already behind the
+ * service at `baseline_at`, under the thresholds in force NOW, is history, recorded and
+ * never sent. Customers are told only of a state change observed after their import.
+ *
+ * The basis is the period the baseline describes, compared the way `service_reminders`
+ * compares it: a renewal (a new deadline) or added traffic (a new allowance) starts a new
+ * period this row says nothing about, and every reminder of that period is sent as usual.
+ * `used_bytes` is the figure the import read from the panel; NULL means nothing was
+ * measured and the usage half has no baseline. A native service has no row and the rule
+ * never applies to it.
+ */
+export const serviceReminderBaselines = pgTable(
+  'service_reminder_baselines',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    serviceId: uuid('service_id').notNull(),
+    baselineAt: timestamptz('baseline_at').notNull(),
+    basisExpiresAt: timestamptz('basis_expires_at'),
+    basisTrafficLimitBytes: bigint('basis_traffic_limit_bytes', { mode: 'bigint' }).notNull(),
+    usedBytes: bigint('used_bytes', { mode: 'bigint' }),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'service_reminder_baselines_pk',
+      columns: [table.tenantId, table.serviceId],
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+      name: 'service_reminder_baselines_service_fk',
+    }),
+    check(
+      'service_reminder_baselines_figures_check',
+      sql`${table.basisTrafficLimitBytes} >= 0 AND (${table.usedBytes} IS NULL OR ${table.usedBytes} >= 0)`,
+    ),
+  ],
+);
+
 // --- WP-A6: the configured locations a service may be moved to -------------------------
 
 /**
@@ -10035,6 +10086,75 @@ export const customerNotifications = pgTable(
       .on(table.nextAttemptAt)
       .where(sql`state = 'PENDING'`),
   ],
+);
+
+/**
+ * Round 4 PR-H (post-import safety): how many automatic reminders the customer notification
+ * lane has claimed in the current minute and the current hour, per tenant — latest state
+ * only, one row.
+ *
+ * A ROW taken under its lock, never a counter in a process, for the reason the gateway call
+ * budget gives: two worker replicas are the normal case on every rolling update, and a
+ * ceiling each replica counted for itself would be twice the ceiling. The dispatcher locks
+ * this row, claims at most what `reminders.max_per_minute` leaves, and writes the new counts
+ * in the same transaction, so two replicas are serialised by the row.
+ *
+ * `hour_fresh` counts the reminders claimed this hour that were raised within the hour — a
+ * reminder quiet hours held overnight is not fresh — and is what the burst alarm
+ * (`notification.reminder_burst`) compares with `reminders.burst_alarm_per_hour`.
+ * `burst_open` says the alarm's condition is open, so its recovery is recorded once, when
+ * an hour ends below the threshold, and never on every quiet pass.
+ */
+export const customerNotificationRateWindows = pgTable(
+  'customer_notification_rate_windows',
+  {
+    tenantId: uuid('tenant_id')
+      .primaryKey()
+      .references(() => tenants.id),
+    minuteStartedAt: timestamptz('minute_started_at').notNull(),
+    minuteClaimed: integer('minute_claimed').notNull(),
+    hourStartedAt: timestamptz('hour_started_at').notNull(),
+    hourFresh: integer('hour_fresh').notNull(),
+    burstOpen: boolean('burst_open').notNull().default(false),
+    /**
+     * Codex review of PR #296: the last `customer_reminder_raise_counters.raised_total` this
+     * row has counted. `hour_fresh` grows by the difference on each pass, so the burst alarm
+     * counts reminders as they are RAISED, whatever the ceiling lets the claim take.
+     */
+    raisedSeen: bigint('raised_seen', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  () => [
+    check(
+      'customer_notification_rate_windows_counts_check',
+      sql`minute_claimed >= 0 AND hour_fresh >= 0 AND raised_seen >= 0`,
+    ),
+  ],
+);
+
+/**
+ * Codex review of PR #296: how many automatic reminders (the kinds quiet hours hold) have
+ * ever been QUEUED for a tenant — a monotonic counter, bumped by `CustomerNotifier` in the
+ * producer's own transaction, so it commits with the rows it counts.
+ *
+ * Its own row, apart from `customer_notification_rate_windows`, on purpose: the dispatcher
+ * locks that row for its claim, and a sweep that also had to lock it would sit in a lock
+ * cycle with a dispatcher holding the notification row the sweep's insert waits on. The
+ * dispatcher only READS this one, without a lock, and counts the difference since its last
+ * pass.
+ */
+export const customerReminderRaiseCounters = pgTable(
+  'customer_reminder_raise_counters',
+  {
+    tenantId: uuid('tenant_id')
+      .primaryKey()
+      .references(() => tenants.id),
+    raisedTotal: bigint('raised_total', { mode: 'bigint' }).notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  () => [check('customer_reminder_raise_counters_total_check', sql`raised_total >= 0`)],
 );
 
 // --- Customer UX completion (docs/customer-ux-completion-audit.md) -------------
