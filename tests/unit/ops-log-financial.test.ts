@@ -69,11 +69,18 @@ function harness(options: { method: string; orderId: string | null; provider?: s
   };
   const ledger: Row[] = [];
   const entryOf = (row: Row): LedgerEntryFact =>
-    ({ id: row.id, amount: irt(Number(row.signed < 0n ? -row.signed : row.signed)), reason: row.reason }) as LedgerEntryFact;
+    ({
+      id: row.id,
+      amount: irt(Number(row.signed < 0n ? -row.signed : row.signed)),
+      reason: row.reason,
+    }) as LedgerEntryFact;
   const facts = {
-    order: async () => (options.orderId === null ? null : { id: options.orderId, code: 'KQ7M2X9T' }),
+    order: async () =>
+      options.orderId === null ? null : { id: options.orderId, code: 'KQ7M2X9T' },
     entriesOfPayment: async (_s: unknown, paymentId: string, reasons: readonly string[]) =>
-      ledger.filter((row) => row.paymentId === paymentId && reasons.includes(row.reason)).map(entryOf),
+      ledger
+        .filter((row) => row.paymentId === paymentId && reasons.includes(row.reason))
+        .map(entryOf),
     entriesOfOrder: async (_s: unknown, orderId: string, reason: string) =>
       ledger.filter((row) => row.orderId === orderId && row.reason === reason).map(entryOf),
     balanceAround: async (
@@ -84,14 +91,20 @@ function harness(options: { method: string; orderId: string | null; provider?: s
     ): Promise<BalanceAround | null> => {
       if (ids.length === 0) return null;
       const last = Math.max(...ledger.filter((row) => ids.includes(row.id)).map((row) => row.at));
-      const after = ledger.filter((row) => row.at <= last).reduce((sum, row) => sum + row.signed, 0n);
-      const own = ledger.filter((row) => ids.includes(row.id)).reduce((sum, row) => sum + row.signed, 0n);
+      const after = ledger
+        .filter((row) => row.at <= last)
+        .reduce((sum, row) => sum + row.signed, 0n);
+      const own = ledger
+        .filter((row) => ids.includes(row.id))
+        .reduce((sum, row) => sum + row.signed, 0n);
       return { before: money(after - own, currency), after: money(after, currency) };
     },
     service: async () => null,
     admin: async () => null,
   } as unknown as OpsLogFacts;
-  const queued: Parameters<ConstructorParameters<typeof FinancialLogConsumer>[0]['lane']['queue']>[1][] = [];
+  const queued: Parameters<
+    ConstructorParameters<typeof FinancialLogConsumer>[0]['lane']['queue']
+  >[1][] = [];
   let destination: object | null = { transport: 'TELEGRAM' };
   const consumer = new FinancialLogConsumer({
     lane: {
@@ -155,7 +168,14 @@ describe('L1 — a wallet top-up', () => {
     const h = harness({ method: 'MANUAL_TRANSFER', orderId: null });
     h.ledger.push(
       { id: 'e0', paymentId: null, orderId: null, signed: 40_000n, reason: 'ADMIN_CREDIT', at: 1 },
-      { id: 'e1', paymentId: 'pay-1', orderId: null, signed: 250_000n, reason: 'TOPUP_RECEIPT', at: 2 },
+      {
+        id: 'e1',
+        paymentId: 'pay-1',
+        orderId: null,
+        signed: 250_000n,
+        reason: 'TOPUP_RECEIPT',
+        at: 2,
+      },
       // After the credit: not part of the figure.
       { id: 'e2', paymentId: null, orderId: null, signed: 777_000n, reason: 'ADMIN_CREDIT', at: 3 },
     );
@@ -201,10 +221,27 @@ describe('L2 — an order paid', () => {
     const h = harness({ method: 'WALLET', orderId: 'ord-1' });
     h.ledger.push(
       { id: 'e0', paymentId: null, orderId: null, signed: 600_000n, reason: 'ADMIN_CREDIT', at: 1 },
-      { id: 'e1', paymentId: 'pay-1', orderId: 'ord-1', signed: -250_000n, reason: 'PURCHASE', at: 2 },
-      { id: 'e2', paymentId: null, orderId: null, signed: 5_000_000n, reason: 'ADMIN_CREDIT', at: 3 },
+      {
+        id: 'e1',
+        paymentId: 'pay-1',
+        orderId: 'ord-1',
+        signed: -250_000n,
+        reason: 'PURCHASE',
+        at: 2,
+      },
+      {
+        id: 'e2',
+        paymentId: null,
+        orderId: null,
+        signed: 5_000_000n,
+        reason: 'ADMIN_CREDIT',
+        at: 3,
+      },
     );
-    await h.consumer.handle(h.event('PaymentConfirmed', confirmed('WALLET', 'ord-1', 'WALLET_DEBIT')), TX);
+    await h.consumer.handle(
+      h.event('PaymentConfirmed', confirmed('WALLET', 'ord-1', 'WALLET_DEBIT')),
+      TX,
+    );
     const message = h.queued[0]!;
     expect(message.logType).toBe('PAYMENT_ORDER');
     expect(message.values).toMatchObject({
@@ -230,8 +267,18 @@ describe('L2 — an order paid', () => {
 describe('L3 — a crypto payment', () => {
   it('is its own type, titled by what it paid for, and carries no fee or evidence line', async () => {
     const h = harness({ method: 'GATEWAY', orderId: null, provider: 'NOWPAYMENTS' });
-    h.ledger.push({ id: 'e1', paymentId: 'pay-1', orderId: null, signed: 250_000n, reason: 'TOPUP_CRYPTO', at: 1 });
-    await h.consumer.handle(h.event('PaymentConfirmed', confirmed('GATEWAY', null, 'GATEWAY_INQUIRY')), TX);
+    h.ledger.push({
+      id: 'e1',
+      paymentId: 'pay-1',
+      orderId: null,
+      signed: 250_000n,
+      reason: 'TOPUP_CRYPTO',
+      at: 1,
+    });
+    await h.consumer.handle(
+      h.event('PaymentConfirmed', confirmed('GATEWAY', null, 'GATEWAY_INQUIRY')),
+      TX,
+    );
     const message = h.queued[0]!;
     expect(message.logType).toBe('PAYMENT_CRYPTO');
     expect(message.templateKey).toBe('ops.log.payment_crypto');
@@ -248,7 +295,12 @@ describe('L4 / L5 — a failed payment, a late approval', () => {
   it('names the Persian cause and the method once; the late approval offers the manual credit button', async () => {
     const h = harness({ method: 'MANUAL_TRANSFER', orderId: 'ord-1' });
     await h.consumer.handle(
-      h.event('PaymentFailed', { customerId: 'cust-1', orderId: 'ord-1', method: 'MANUAL_TRANSFER', cause: 'REJECTED' }),
+      h.event('PaymentFailed', {
+        customerId: 'cust-1',
+        orderId: 'ord-1',
+        method: 'MANUAL_TRANSFER',
+        cause: 'REJECTED',
+      }),
       TX,
     );
     const failed = h.queued[0]!;
@@ -257,7 +309,11 @@ describe('L4 / L5 — a failed payment, a late approval', () => {
     expect(render(failed).match(/کارت به کارت/gu)).toHaveLength(1);
 
     await h.consumer.handle(
-      h.event('PaymentLateCompletionObserved', { customerId: 'cust-1', orderId: 'ord-1', provider: 'TONPAYS' }),
+      h.event('PaymentLateCompletionObserved', {
+        customerId: 'cust-1',
+        orderId: 'ord-1',
+        provider: 'TONPAYS',
+      }),
       TX,
     );
     const late = h.queued[1]!;
@@ -290,7 +346,10 @@ describe('L6 — a refund', () => {
     await h.consumer.handle(h.event('RefundCompleted', refundPayload('WALLET_CREDIT')), TX);
     const message = h.queued[0]!;
     expect(message.logType).toBe('REFUND');
-    expect(message.values).toMatchObject({ balanceBefore: irt(10_000), balanceAfter: irt(260_000) });
+    expect(message.values).toMatchObject({
+      balanceBefore: irt(10_000),
+      balanceAfter: irt(260_000),
+    });
     expect(render(message)).toContain('۱۰٬۰۰۰ تومان ← ۲۶۰٬۰۰۰ تومان');
   });
 

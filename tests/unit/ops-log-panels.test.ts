@@ -18,7 +18,10 @@ import type { OpsLogFacts } from '../../apps/api/src/modules/commerce/ops-log/ap
  * MUTATION: rendering the title from the English code instead of the map -> the generic test.
  */
 
-const tenant = { tenantId: '01900000-0000-7000-8000-000000000001' as never, botInstanceId: null } as TenantContext;
+const tenant = {
+  tenantId: '01900000-0000-7000-8000-000000000001' as never,
+  botInstanceId: null,
+} as TenantContext;
 const FIRST = new Date('2026-10-12T08:00:00Z');
 const LAST = new Date('2026-10-12T08:42:00Z');
 
@@ -55,7 +58,12 @@ describe('L25 — panel down and up', () => {
   it('a panel out of reach is a Persian message with the cause, one technical code, the sales note and a panel button', async () => {
     const presented = await presenter.present(
       tenant,
-      { code: 'panel.health.tls_failed', severity: 'ERROR', message: 'x', context: { panelId: 'pan-1' } },
+      {
+        code: 'panel.health.tls_failed',
+        severity: 'ERROR',
+        message: 'x',
+        context: { panelId: 'pan-1' },
+      },
       recorded('panel.health.tls_failed'),
       {} as never,
     );
@@ -94,7 +102,12 @@ describe('L25 — panel down and up', () => {
     expect(
       await none.present(
         tenant,
-        { code: 'panel.health.recovered', severity: 'INFO', message: 'x', dedupeKey: 'panel.health.recovered:pan-1' },
+        {
+          code: 'panel.health.recovered',
+          severity: 'INFO',
+          message: 'x',
+          dedupeKey: 'panel.health.recovered:pan-1',
+        },
         recorded('panel.health.recovered'),
         {} as never,
       ),
@@ -102,7 +115,12 @@ describe('L25 — panel down and up', () => {
     expect(
       await presenter.present(
         tenant,
-        { code: 'panel.health.unreachable', severity: 'ERROR', message: 'x', context: { panelId: 'pan-gone' } },
+        {
+          code: 'panel.health.unreachable',
+          severity: 'ERROR',
+          message: 'x',
+          context: { panelId: 'pan-gone' },
+        },
         recorded('panel.health.unreachable'),
         {} as never,
       ),
@@ -123,7 +141,9 @@ describe('the generic operational event, in Persian from its code', () => {
   });
 
   it('a code with no label falls back to a Persian word, never the raw code as a title', () => {
-    expect(presenter.title('some.unknown.code')).toBe(i18nOpsLogWords.eventTitle('some.unknown.code'));
+    expect(presenter.title('some.unknown.code')).toBe(
+      i18nOpsLogWords.eventTitle('some.unknown.code'),
+    );
     expect(presenter.title('some.unknown.code')).toMatch(/[؀-ۿ]/u);
   });
 });

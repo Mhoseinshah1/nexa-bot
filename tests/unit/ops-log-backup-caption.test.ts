@@ -21,7 +21,10 @@ const facts = {
 
 function renderer(options: { off?: string[]; scheduled?: boolean }) {
   return backupCaptionRenderer({
-    scope: () => ({ tenantId: '01900000-0000-7000-8000-000000000001' as never, botInstanceId: null }),
+    scope: () => ({
+      tenantId: '01900000-0000-7000-8000-000000000001' as never,
+      botInstanceId: null,
+    }),
     settings: { valueOf: async () => (options.off ?? []) as never },
     schedule: async () => ({ enabled: options.scheduled ?? true, intervalMs: 2 * 3_600_000 }),
     render: async (_scope, key, values) =>

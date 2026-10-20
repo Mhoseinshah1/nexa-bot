@@ -20,7 +20,11 @@ export interface BackupCaptionDeps {
   readonly scope: () => TenantContext | null;
   readonly settings: { valueOf<T>(scope: TenantContext, key: SettingKey): Promise<T> };
   readonly schedule: () => Promise<{ readonly enabled: boolean; readonly intervalMs: number }>;
-  readonly render: (scope: TenantContext, key: TemplateKey, values: TemplateValues) => Promise<string>;
+  readonly render: (
+    scope: TenantContext,
+    key: TemplateKey,
+    values: TemplateValues,
+  ) => Promise<string>;
 }
 
 /**

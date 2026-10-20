@@ -67,10 +67,14 @@ describe('the per-type switches of the operations log group', () => {
     renderPage(<OpsLogTypeSwitches mayManage />);
     await screen.findByTestId('ops-log-types');
     expect(
-      screen.getByRole('switch', { name: t(OPS_LOG_TYPE_LABEL.USER_NEW) }).getAttribute('aria-checked'),
+      screen
+        .getByRole('switch', { name: t(OPS_LOG_TYPE_LABEL.USER_NEW) })
+        .getAttribute('aria-checked'),
     ).toBe('false');
     expect(
-      screen.getByRole('switch', { name: t(OPS_LOG_TYPE_LABEL.PAYMENT_TOPUP) }).getAttribute('aria-checked'),
+      screen
+        .getByRole('switch', { name: t(OPS_LOG_TYPE_LABEL.PAYMENT_TOPUP) })
+        .getAttribute('aria-checked'),
     ).toBe('true');
   });
 

@@ -11,7 +11,6 @@ import {
   type TemplateKey,
   type TemplateValues,
   type TenantContext,
-  type UserId,
 } from '@nexa/contracts';
 import type { EventConsumer } from '../../../platform/eventing/application/event-consumer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';

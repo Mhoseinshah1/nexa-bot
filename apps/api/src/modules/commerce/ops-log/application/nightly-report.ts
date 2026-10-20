@@ -78,7 +78,11 @@ export interface NightlyReportData {
   readonly resellers: {
     readonly active: number;
     readonly salesSum: bigint;
-    readonly top: { readonly username: string | null; readonly name: string; readonly sum: bigint } | null;
+    readonly top: {
+      readonly username: string | null;
+      readonly name: string;
+      readonly sum: bigint;
+    } | null;
   };
 }
 

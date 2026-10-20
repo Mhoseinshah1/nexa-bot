@@ -59,7 +59,7 @@ function render(name: string, built: Built): string {
     DEFAULT_TEMPLATE_PRESENTATION,
   );
   RENDERED.push({ name, text });
-  if (process.env["DUMP"]) appendFileSync(process.env["DUMP"], `--- ${name}\n${text}\n`);
+  if (process.env['DUMP']) appendFileSync(process.env['DUMP'], `--- ${name}\n${text}\n`);
   return text;
 }
 
@@ -233,7 +233,12 @@ describe('L8 — a referral commission', () => {
         paymentId: 'pay-a',
       }),
       balance: { before: irt(5_000), after: irt(17_500) },
-      referrer: customer({ id: 'cust-r', firstName: 'رضا', username: 'reza_r', telegramUserId: '700300400' }),
+      referrer: customer({
+        id: 'cust-r',
+        firstName: 'رضا',
+        username: 'reza_r',
+        telegramUserId: '700300400',
+      }),
       buyer: customer({ phone: '+989120000000' }),
       order: order(),
       payment: payment(),
@@ -259,7 +264,12 @@ describe('L9 — the signup gift', () => {
     const built = signupGift({
       referee: { customer: customer(), balance: { before: irt(0), after: irt(20_000) } },
       referrer: {
-        customer: customer({ id: 'cust-r', firstName: 'رضا', username: 'reza_r', telegramUserId: '700300400' }),
+        customer: customer({
+          id: 'cust-r',
+          firstName: 'رضا',
+          username: 'reza_r',
+          telegramUserId: '700300400',
+        }),
         balance: { before: irt(7_000), after: irt(27_000) },
       },
       at: AT,
@@ -289,7 +299,12 @@ describe('L9 — the signup gift', () => {
 
 describe('L10 / L11 — a service was created', () => {
   const base = {
-    order: order({ isFirstPurchase: true, reseller: true, subtotal: irt(300_000), total: irt(250_000) }),
+    order: order({
+      isFirstPurchase: true,
+      reseller: true,
+      subtotal: irt(300_000),
+      total: irt(250_000),
+    }),
     service: service(),
     customer: customer({ phone: '+989120000001' }),
     at: AT,
@@ -471,7 +486,12 @@ describe('L17 / L18 / L20 — customers', () => {
   it('L17 carries the referrer when there is one and a user button', () => {
     const withReferrer = userNew({
       customer: customer({ phone: '+989120000002' }),
-      referrer: customer({ id: 'cust-r', firstName: 'رضا', username: 'reza_r', telegramUserId: '700300400' }),
+      referrer: customer({
+        id: 'cust-r',
+        firstName: 'رضا',
+        username: 'reza_r',
+        telegramUserId: '700300400',
+      }),
       at: AT,
       words,
     });
@@ -479,7 +499,10 @@ describe('L17 / L18 / L20 — customers', () => {
     expect(text).toContain('@reza_r');
     expect(text).toContain('989120000002');
     expect(withReferrer.logType).toBe('USER_NEW');
-    const plain = render('L17 plain', userNew({ customer: customer(), referrer: null, at: AT, words }));
+    const plain = render(
+      'L17 plain',
+      userNew({ customer: customer(), referrer: null, at: AT, words }),
+    );
     expect(plain).not.toContain('@reza_r');
   });
 
@@ -610,7 +633,12 @@ describe('L23 / L24 — each error is its own message with customer, cause, tech
     const refunded = provisionFailure({
       order: order(),
       customer: customer(),
-      operation: operation({ type: 'CREATE_USER', state: 'FAILED', failureKind: 'REJECTED', failureMessage: 'HTTP 422 invalid' }),
+      operation: operation({
+        type: 'CREATE_USER',
+        state: 'FAILED',
+        failureKind: 'REJECTED',
+        failureMessage: 'HTTP 422 invalid',
+      }),
       reason: 'PANEL_REJECTED',
       payment: payment({ method: 'MANUAL_TRANSFER' }),
       refunded: true,

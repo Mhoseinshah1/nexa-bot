@@ -287,7 +287,10 @@ const TOKENS = {
   gift: ['MONEY', 'The top-up gift actually credited, read from the ledger.'],
   amount: ['MONEY', 'The amount of the movement, from the ledger or the order.'],
   price: ['MONEY', 'The final price the order cost.'],
-  listPrice: ['MONEY', 'The product price before a discount or a reseller price; absent otherwise.'],
+  listPrice: [
+    'MONEY',
+    'The product price before a discount or a reseller price; absent otherwise.',
+  ],
   balanceBefore: ['MONEY', 'The wallet balance before the movement, derived from the ledger.'],
   balanceAfter: ['MONEY', 'The wallet balance after the movement, derived from the ledger.'],
   // Identity of the fact.
@@ -547,20 +550,12 @@ export const OPS_LOG_TEMPLATES = [
   logTemplate(
     'ops.financial.refund_failed',
     'Log L6: a refund failed or was cancelled — where it was to go, why and the amount.',
-    [
-      ...req('channel', 'cause', 'reference', 'amount', 'at'),
-      ...WHO(),
-      ...opt('orderCode'),
-    ],
+    [...req('channel', 'cause', 'reference', 'amount', 'at'), ...WHO(), ...opt('orderCode')],
   ),
   logTemplate(
     'ops.financial.service_refund_request',
     'Log L6 (WP19): a customer’s service refund request reached a final outcome — completed (deleted and credited), rejected, or failed. Never the customer’s or the administrator’s free text.',
-    [
-      ...req('outcome', 'at'),
-      ...WHO(),
-      ...opt('serviceCode', 'reference', 'amount', 'adminName'),
-    ],
+    [...req('outcome', 'at'), ...WHO(), ...opt('serviceCode', 'reference', 'amount', 'adminName')],
   ),
   logTemplate(
     'ops.support.ticket_opened',
@@ -765,15 +760,11 @@ export const OPS_LOG_TEMPLATES = [
       ...opt('panelName', 'serviceUsername', 'serviceCode', 'rotations'),
     ],
   ),
-  logTemplate(
-    'ops.log.trial_created',
-    'Log L16: a trial account was created.',
-    [
-      ...req('at'),
-      ...WHO(),
-      ...opt('phone', 'panelName', 'serviceUsername', 'traffic', 'duration', 'serviceCode'),
-    ],
-  ),
+  logTemplate('ops.log.trial_created', 'Log L16: a trial account was created.', [
+    ...req('at'),
+    ...WHO(),
+    ...opt('phone', 'panelName', 'serviceUsername', 'traffic', 'duration', 'serviceCode'),
+  ]),
   logTemplate('ops.log.user_new', 'Log L17: a new customer started the bot.', [
     ...req('at'),
     ...WHO(),
@@ -807,11 +798,7 @@ export const OPS_LOG_TEMPLATES = [
   logTemplate(
     'ops.log.reseller_changed',
     'Log L20: a customer was promoted to reseller, moved between tiers, suspended or demoted.',
-    [
-      ...req('heading', 'tierBefore', 'tierAfter', 'at'),
-      ...WHO(),
-      ...opt('reason', 'actorName'),
-    ],
+    [...req('heading', 'tierBefore', 'tierAfter', 'at'), ...WHO(), ...opt('reason', 'actorName')],
   ),
   logTemplate(
     'ops.log.service_alert',
@@ -859,7 +846,15 @@ export const OPS_LOG_TEMPLATES = [
     'ops.log.report_summary',
     'Log L27: the nightly summary — sales, purchases, renewals, customers, trials, the change against yesterday and the best hour; with the cleanup line (L30).',
     [
-      ...req('day', 'sales', 'newPurchases', 'firstPurchases', 'renewals', 'newCustomers', 'trials'),
+      ...req(
+        'day',
+        'sales',
+        'newPurchases',
+        'firstPurchases',
+        'renewals',
+        'newCustomers',
+        'trials',
+      ),
       ...opt(
         'salesChange',
         'activeCustomers',

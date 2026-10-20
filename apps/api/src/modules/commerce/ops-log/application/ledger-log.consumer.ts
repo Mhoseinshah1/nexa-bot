@@ -57,7 +57,7 @@ export class LedgerLogConsumer implements EventConsumer {
     if (entry === null) return;
     const at = new Date(event.occurredAt);
 
-    let built: Built | null = null;
+    let built: Built | null;
     if (entry.reason === 'ADMIN_CREDIT' || entry.reason === 'ADMIN_DEBIT') {
       built = await this.adjusted(scope, event, entry, at, tx);
     } else if (entry.reason === 'REFERRAL_COMMISSION') {

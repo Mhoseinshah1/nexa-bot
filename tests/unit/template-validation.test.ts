@@ -230,9 +230,7 @@ describe('renderTemplateBody', () => {
       '<code>{subscriptionUrl}</code>',
       { subscriptionUrl: 'https://x.example/sub?a=<b>down</b>&c=d' },
     );
-    expect(rendered).toBe(
-      '<code>https://x.example/sub?a=&lt;b&gt;down&lt;/b&gt;&amp;c=d</code>',
-    );
+    expect(rendered).toBe('<code>https://x.example/sub?a=&lt;b&gt;down&lt;/b&gt;&amp;c=d</code>');
   });
 
   it('does not escape in a plain-text template', () => {

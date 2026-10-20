@@ -1,10 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import {
-  CATALOGUE_FA,
-  DEFAULT_TEMPLATE_PRESENTATION,
-  renderTemplateBody,
-} from '@nexa/i18n';
+import { CATALOGUE_FA, DEFAULT_TEMPLATE_PRESENTATION, renderTemplateBody } from '@nexa/i18n';
 import {
   money,
   systemJobActor,
@@ -171,30 +167,100 @@ describe('the ops log: wallet figures, imports, switches and the storm roll-up',
   it('derives the wallet before and after from the ledger: one entry, several entries, never another wallet', async () => {
     const a = await customer('940001', 'الف');
     const b = await customer('940002', 'ب');
-    const first = await entry({ customerId: a, direction: 'CREDIT', reason: 'ADMIN_CREDIT', amount: 100_000n, at: '2026-10-12T08:00:00Z' });
-    const second = await entry({ customerId: a, direction: 'CREDIT', reason: 'ADMIN_CREDIT', amount: 50_000n, at: '2026-10-12T08:10:00Z' });
+    const first = await entry({
+      customerId: a,
+      direction: 'CREDIT',
+      reason: 'ADMIN_CREDIT',
+      amount: 100_000n,
+      at: '2026-10-12T08:00:00Z',
+    });
+    const second = await entry({
+      customerId: a,
+      direction: 'CREDIT',
+      reason: 'ADMIN_CREDIT',
+      amount: 50_000n,
+      at: '2026-10-12T08:10:00Z',
+    });
     // Another customer's money and another currency never enter the sum.
-    await entry({ customerId: b, direction: 'CREDIT', reason: 'ADMIN_CREDIT', amount: 999_999n, at: '2026-10-12T08:15:00Z' });
-    await entry({ customerId: a, direction: 'CREDIT', reason: 'ADMIN_CREDIT', amount: 7n, at: '2026-10-12T08:16:00Z', currency: 'USD' });
-    const third = await entry({ customerId: a, direction: 'DEBIT', reason: 'ADMIN_DEBIT', amount: 30_000n, at: '2026-10-12T08:20:00Z' });
+    await entry({
+      customerId: b,
+      direction: 'CREDIT',
+      reason: 'ADMIN_CREDIT',
+      amount: 999_999n,
+      at: '2026-10-12T08:15:00Z',
+    });
+    await entry({
+      customerId: a,
+      direction: 'CREDIT',
+      reason: 'ADMIN_CREDIT',
+      amount: 7n,
+      at: '2026-10-12T08:16:00Z',
+      currency: 'USD',
+    });
+    const third = await entry({
+      customerId: a,
+      direction: 'DEBIT',
+      reason: 'ADMIN_DEBIT',
+      amount: 30_000n,
+      at: '2026-10-12T08:20:00Z',
+    });
     // A later movement is after the figure being asked for.
-    await entry({ customerId: a, direction: 'CREDIT', reason: 'ADMIN_CREDIT', amount: 1_000_000n, at: '2026-10-12T09:00:00Z' });
+    await entry({
+      customerId: a,
+      direction: 'CREDIT',
+      reason: 'ADMIN_CREDIT',
+      amount: 1_000_000n,
+      at: '2026-10-12T09:00:00Z',
+    });
 
-    const around = (ids: string[]) =>
-      run((tx) => facts.balanceAround(tenantA, a, 'IRT', ids, tx));
-    expect(await around([first])).toEqual({ before: money(0n, 'IRT'), after: money(100_000n, 'IRT') });
-    expect(await around([second])).toEqual({ before: money(100_000n, 'IRT'), after: money(150_000n, 'IRT') });
-    expect(await around([third])).toEqual({ before: money(150_000n, 'IRT'), after: money(120_000n, 'IRT') });
+    const around = (ids: string[]) => run((tx) => facts.balanceAround(tenantA, a, 'IRT', ids, tx));
+    expect(await around([first])).toEqual({
+      before: money(0n, 'IRT'),
+      after: money(100_000n, 'IRT'),
+    });
+    expect(await around([second])).toEqual({
+      before: money(100_000n, 'IRT'),
+      after: money(150_000n, 'IRT'),
+    });
+    expect(await around([third])).toEqual({
+      before: money(150_000n, 'IRT'),
+      after: money(120_000n, 'IRT'),
+    });
     // Several entries of one operation: the wallet on either side of ALL of them.
-    expect(await around([second, third])).toEqual({ before: money(100_000n, 'IRT'), after: money(120_000n, 'IRT') });
+    expect(await around([second, third])).toEqual({
+      before: money(100_000n, 'IRT'),
+      after: money(120_000n, 'IRT'),
+    });
     expect(await around([])).toBeNull();
   });
 
   it('L7: an administrator’s credit and debit show the real balance before and after, the admin, and a user button', async () => {
     const c = await customer('940010', 'سارا');
-    await entry({ customerId: c, direction: 'CREDIT', reason: 'ADMIN_CREDIT', amount: 40_000n, at: '2026-10-12T07:00:00Z' });
-    const credit = await entry({ customerId: c, direction: 'CREDIT', reason: 'ADMIN_CREDIT', amount: 100_000n, at: '2026-10-12T08:00:00Z', note: 'جبران', adminId: ownerId });
-    const debit = await entry({ customerId: c, direction: 'DEBIT', reason: 'ADMIN_DEBIT', amount: 30_000n, at: '2026-10-12T09:00:00Z', note: 'اصلاح', adminId: ownerId });
+    await entry({
+      customerId: c,
+      direction: 'CREDIT',
+      reason: 'ADMIN_CREDIT',
+      amount: 40_000n,
+      at: '2026-10-12T07:00:00Z',
+    });
+    const credit = await entry({
+      customerId: c,
+      direction: 'CREDIT',
+      reason: 'ADMIN_CREDIT',
+      amount: 100_000n,
+      at: '2026-10-12T08:00:00Z',
+      note: 'جبران',
+      adminId: ownerId,
+    });
+    const debit = await entry({
+      customerId: c,
+      direction: 'DEBIT',
+      reason: 'ADMIN_DEBIT',
+      amount: 30_000n,
+      at: '2026-10-12T09:00:00Z',
+      note: 'اصلاح',
+      adminId: ownerId,
+    });
     const consumer = new LedgerLogConsumer({ lane, facts, words: i18nOpsLogWords });
 
     await run((tx) => consumer.handle(recorded(c, credit, 'ADMIN_CREDIT', 'CREDIT'), tx));
@@ -220,13 +286,33 @@ describe('the ops log: wallet figures, imports, switches and the storm roll-up',
   it('L8: the commission is the REFERRER’s wallet, before and after, with the buyer apart', async () => {
     const referrer = await customer('940020', 'رضا');
     const buyer = await customer('940021', 'نیما');
-    await entry({ customerId: referrer, direction: 'CREDIT', reason: 'ADMIN_CREDIT', amount: 5_000n, at: '2026-10-12T07:00:00Z' });
+    await entry({
+      customerId: referrer,
+      direction: 'CREDIT',
+      reason: 'ADMIN_CREDIT',
+      amount: 5_000n,
+      at: '2026-10-12T07:00:00Z',
+    });
     // The buyer's own wallet is unrelated and larger: reading it would show the wrong figure.
-    await entry({ customerId: buyer, direction: 'CREDIT', reason: 'ADMIN_CREDIT', amount: 900_000n, at: '2026-10-12T07:00:00Z' });
-    const commission = await entry({ customerId: referrer, direction: 'CREDIT', reason: 'REFERRAL_COMMISSION', amount: 12_500n, at: '2026-10-12T08:00:00Z' });
+    await entry({
+      customerId: buyer,
+      direction: 'CREDIT',
+      reason: 'ADMIN_CREDIT',
+      amount: 900_000n,
+      at: '2026-10-12T07:00:00Z',
+    });
+    const commission = await entry({
+      customerId: referrer,
+      direction: 'CREDIT',
+      reason: 'REFERRAL_COMMISSION',
+      amount: 12_500n,
+      at: '2026-10-12T08:00:00Z',
+    });
     const consumer = new LedgerLogConsumer({ lane, facts, words: i18nOpsLogWords });
 
-    await run((tx) => consumer.handle(recorded(referrer, commission, 'REFERRAL_COMMISSION', 'CREDIT'), tx));
+    await run((tx) =>
+      consumer.handle(recorded(referrer, commission, 'REFERRAL_COMMISSION', 'CREDIT'), tx),
+    );
     expect(queued).toHaveLength(1);
     const message = queued[0]!.input;
     expect(message.logType).toBe('REFERRAL_COMMISSION');
@@ -235,7 +321,9 @@ describe('the ops log: wallet figures, imports, switches and the storm roll-up',
       balanceAfter: money(17_500n, 'IRT'),
       amount: money(12_500n, 'IRT'),
     });
-    expect(render(message.templateKey, message.values as never)).toContain('۵٬۰۰۰ تومان ← ۱۷٬۵۰۰ تومان');
+    expect(render(message.templateKey, message.values as never)).toContain(
+      '۵٬۰۰۰ تومان ← ۱۷٬۵۰۰ تومان',
+    );
     void buyer;
   });
 
@@ -246,21 +334,48 @@ describe('the ops log: wallet figures, imports, switches and the storm roll-up',
     await ctx.container.database.db.execute(sql`
       INSERT INTO referrals (id, tenant_id, referrer_id, referee_id, trigger)
       VALUES (${referralId}, ${tenantA.tenantId}, ${referrer}, ${referee}, 'ON_FIRST_PAID_ORDER')`);
-    await entry({ customerId: referrer, direction: 'CREDIT', reason: 'ADMIN_CREDIT', amount: 7_000n, at: '2026-10-12T07:00:00Z' });
-    const refereeGift = await entry({ customerId: referee, direction: 'CREDIT', reason: 'REFERRAL_SIGNUP_GIFT', amount: 20_000n, at: '2026-10-12T08:00:00Z', reference: `${referralId}:signup-gift:REFEREE` });
-    const referrerGift = await entry({ customerId: referrer, direction: 'CREDIT', reason: 'REFERRAL_SIGNUP_GIFT', amount: 20_000n, at: '2026-10-12T08:00:01Z', reference: `${referralId}:signup-gift:REFERRER` });
+    await entry({
+      customerId: referrer,
+      direction: 'CREDIT',
+      reason: 'ADMIN_CREDIT',
+      amount: 7_000n,
+      at: '2026-10-12T07:00:00Z',
+    });
+    const refereeGift = await entry({
+      customerId: referee,
+      direction: 'CREDIT',
+      reason: 'REFERRAL_SIGNUP_GIFT',
+      amount: 20_000n,
+      at: '2026-10-12T08:00:00Z',
+      reference: `${referralId}:signup-gift:REFEREE`,
+    });
+    const referrerGift = await entry({
+      customerId: referrer,
+      direction: 'CREDIT',
+      reason: 'REFERRAL_SIGNUP_GIFT',
+      amount: 20_000n,
+      at: '2026-10-12T08:00:01Z',
+      reference: `${referralId}:signup-gift:REFERRER`,
+    });
     const consumer = new LedgerLogConsumer({ lane, facts, words: i18nOpsLogWords });
 
     // The referee's gift lands first: the referrer's side has nothing to show yet.
-    await run((tx) => consumer.handle(recorded(referee, refereeGift, 'REFERRAL_SIGNUP_GIFT', 'CREDIT'), tx));
+    await run((tx) =>
+      consumer.handle(recorded(referee, refereeGift, 'REFERRAL_SIGNUP_GIFT', 'CREDIT'), tx),
+    );
     const first = queued[0]!.input.values;
     expect(first).toMatchObject({
       refereeBefore: money(0n, 'IRT'),
       refereeAfter: money(20_000n, 'IRT'),
     });
-    expect(first).toMatchObject({ referrerBefore: money(7_000n, 'IRT'), referrerAfter: money(27_000n, 'IRT') });
+    expect(first).toMatchObject({
+      referrerBefore: money(7_000n, 'IRT'),
+      referrerAfter: money(27_000n, 'IRT'),
+    });
 
-    await run((tx) => consumer.handle(recorded(referrer, referrerGift, 'REFERRAL_SIGNUP_GIFT', 'CREDIT'), tx));
+    await run((tx) =>
+      consumer.handle(recorded(referrer, referrerGift, 'REFERRAL_SIGNUP_GIFT', 'CREDIT'), tx),
+    );
     const second = queued[1]!.input.values as Record<string, unknown>;
     expect(second['refereeBefore']).not.toEqual(second['refereeAfter']);
     expect(second['referrerBefore']).not.toEqual(second['referrerAfter']);
@@ -279,7 +394,12 @@ describe('the ops log: wallet figures, imports, switches and the storm roll-up',
     await ctx.container.migrationOpeningBalance.post(
       tenantA,
       systemJobActor('legacy-import:test', 'corr-oplog-import' as CorrelationId),
-      { customerId: imported, telegramUserId: '940040', legacyBalanceMinor: 500_000n, currency: 'IRT' },
+      {
+        customerId: imported,
+        telegramUserId: '940040',
+        legacyBalanceMinor: 500_000n,
+        currency: 'IRT',
+      },
     );
     const opening = (
       (await ctx.container.database.db.execute(
@@ -287,11 +407,20 @@ describe('the ops log: wallet figures, imports, switches and the storm roll-up',
               AND reason = 'MIGRATION_OPENING_BALANCE'` as never,
       )) as unknown as { rows: { id: string }[] }
     ).rows[0]!.id;
-    const credit = await entry({ customerId: imported, direction: 'CREDIT', reason: 'ADMIN_CREDIT', amount: 1_000n, at: '2026-10-12T08:00:00Z', adminId: ownerId });
+    const credit = await entry({
+      customerId: imported,
+      direction: 'CREDIT',
+      reason: 'ADMIN_CREDIT',
+      amount: 1_000n,
+      at: '2026-10-12T08:00:00Z',
+      adminId: ownerId,
+    });
     const ledger = new LedgerLogConsumer({ lane, facts, words: i18nOpsLogWords });
     const customers = new CustomerLogConsumer({ lane, facts, words: i18nOpsLogWords });
 
-    await run((tx) => ledger.handle(recorded(imported, opening, 'MIGRATION_OPENING_BALANCE', 'CREDIT'), tx));
+    await run((tx) =>
+      ledger.handle(recorded(imported, opening, 'MIGRATION_OPENING_BALANCE', 'CREDIT'), tx),
+    );
     await run((tx) => ledger.handle(recorded(imported, credit, 'ADMIN_CREDIT', 'CREDIT'), tx));
     await run((tx) => customers.handle(event('CustomerRegistered', imported, {}), tx));
     await run((tx) => customers.handle(event('CustomerBlocked', imported, {}), tx));
@@ -319,7 +448,12 @@ describe('the ops log: wallet figures, imports, switches and the storm roll-up',
     );
     expect(logging.length).toBeGreaterThanOrEqual(7);
     for (const one of logging) {
-      for (const imported of ['CustomerImported', 'ServiceAdopted', 'LegacyImportMapRow', 'LegacyImportReviewStateChanged']) {
+      for (const imported of [
+        'CustomerImported',
+        'ServiceAdopted',
+        'LegacyImportMapRow',
+        'LegacyImportReviewStateChanged',
+      ]) {
         expect(one.subscribesTo, `${one.name} must not hear ${imported}`).not.toContain(imported);
       }
     }
@@ -385,7 +519,9 @@ describe('the ops log: wallet figures, imports, switches and the storm roll-up',
       (await ctx.container.database.db.execute(
         sql`SELECT payload, destination FROM notifications
              WHERE tenant_id = ${tenantA.tenantId} AND template_key = ${templateKey}` as never,
-      )) as unknown as { rows: { payload: Record<string, unknown>; destination: Record<string, unknown> }[] }
+      )) as unknown as {
+        rows: { payload: Record<string, unknown>; destination: Record<string, unknown> }[];
+      }
     ).rows;
 
   it('a type switched off queues nothing; the others, and the type once switched back on, do', async () => {
@@ -398,7 +534,11 @@ describe('the ops log: wallet figures, imports, switches and the storm roll-up',
     expect(await notificationRows('ops.financial.topup_credited')).toHaveLength(1);
 
     // Switching it back on (the next version of the same setting) applies to the next message.
-    const current = await ctx.container.settingsService.get(tenantA, owner, 'ops.log.disabled_types');
+    const current = await ctx.container.settingsService.get(
+      tenantA,
+      owner,
+      'ops.log.disabled_types',
+    );
     await ctx.container.settingsService.set(tenantA, owner, {
       key: 'ops.log.disabled_types',
       value: [],
@@ -437,7 +577,10 @@ describe('the ops log: wallet figures, imports, switches and the storm roll-up',
   it('the storm roll-up is OFF by default: every identical error is its own message, however many', async () => {
     await enableLane();
     for (let i = 0; i < 30; i += 1) {
-      const result = await ctx.container.notifications.queue(tenantA, stormInput(`c${String(i)}`, `st-${String(i)}`));
+      const result = await ctx.container.notifications.queue(
+        tenantA,
+        stormInput(`c${String(i)}`, `st-${String(i)}`),
+      );
       expect(result.created).toBe(true);
     }
     expect(await notificationRows('ops.log.error_provision')).toHaveLength(30);
@@ -450,7 +593,10 @@ describe('the ops log: wallet figures, imports, switches and the storm roll-up',
     await setting('ops.log.storm_threshold', 3);
     const results: boolean[] = [];
     for (let i = 0; i < 8; i += 1) {
-      const result = await ctx.container.notifications.queue(tenantA, stormInput(`c${String(i % 4)}`, `st-${String(i)}`));
+      const result = await ctx.container.notifications.queue(
+        tenantA,
+        stormInput(`c${String(i % 4)}`, `st-${String(i)}`),
+      );
       results.push(result.created);
     }
     // The first three are their own messages; none of the rest is.

@@ -9,7 +9,8 @@ import type { NightlyReportData, PanelDayFact, Tally } from '../application/nigh
 import type { NightlyReportReader, NightlyReportWindow } from '../application/ports.js';
 
 type Row = Record<string, unknown>;
-const big = (value: unknown): bigint => BigInt(typeof value === 'string' ? value : String(value ?? 0));
+const big = (value: unknown): bigint =>
+  BigInt(typeof value === 'string' ? value : String(value ?? 0));
 const num = (value: unknown): number => Number(value ?? 0);
 const NONE: Tally = { count: 0, sum: 0n };
 

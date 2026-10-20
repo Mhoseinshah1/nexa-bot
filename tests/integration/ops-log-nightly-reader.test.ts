@@ -103,7 +103,13 @@ describe('the nightly report reader', () => {
     return id;
   }
 
-  async function ledger(customerId: string, direction: 'CREDIT' | 'DEBIT', reason: string, amount: number, when: string) {
+  async function ledger(
+    customerId: string,
+    direction: 'CREDIT' | 'DEBIT',
+    reason: string,
+    amount: number,
+    when: string,
+  ) {
     n += 1;
     // A top-up gift names the payment it belongs to (a CHECK says so).
     let paymentId: string | null = null;
@@ -122,11 +128,31 @@ describe('the nightly report reader', () => {
   const read = () => reader.read(tenantA, WINDOW, { tx: undefined } as never);
 
   it('counts an order on the half-open Tehran day: the first instant is in, the last millisecond is in, the end is out', async () => {
-    await order({ customerId: customerA, purpose: 'NEW_SERVICE', total: 100_000, settledAt: START.toISOString() });
-    await order({ customerId: customerB, purpose: 'NEW_SERVICE', total: 70_000, settledAt: new Date(END.getTime() - 1).toISOString() });
+    await order({
+      customerId: customerA,
+      purpose: 'NEW_SERVICE',
+      total: 100_000,
+      settledAt: START.toISOString(),
+    });
+    await order({
+      customerId: customerB,
+      purpose: 'NEW_SERVICE',
+      total: 70_000,
+      settledAt: new Date(END.getTime() - 1).toISOString(),
+    });
     // The next day's, and the day before's last millisecond (which is the PREVIOUS day's).
-    await order({ customerId: customerA, purpose: 'NEW_SERVICE', total: 5_000_000, settledAt: END.toISOString() });
-    await order({ customerId: customerB, purpose: 'NEW_SERVICE', total: 30_000, settledAt: new Date(START.getTime() - 1).toISOString() });
+    await order({
+      customerId: customerA,
+      purpose: 'NEW_SERVICE',
+      total: 5_000_000,
+      settledAt: END.toISOString(),
+    });
+    await order({
+      customerId: customerB,
+      purpose: 'NEW_SERVICE',
+      total: 30_000,
+      settledAt: new Date(START.getTime() - 1).toISOString(),
+    });
 
     const data = await read();
     expect(data.newPurchases).toEqual({ count: 2, sum: 170_000n });
@@ -134,12 +160,32 @@ describe('the nightly report reader', () => {
   });
 
   it('splits the day by what was bought, counts first purchases once per customer, and keeps a trial out of the sales', async () => {
-    await order({ customerId: customerA, purpose: 'NEW_SERVICE', total: 100_000, settledAt: at(60) });
+    await order({
+      customerId: customerA,
+      purpose: 'NEW_SERVICE',
+      total: 100_000,
+      settledAt: at(60),
+    });
     // customerA's second purchase of a service is NOT a first purchase; customerB's is.
-    await order({ customerId: customerA, purpose: 'NEW_SERVICE', total: 90_000, settledAt: at(120) });
-    await order({ customerId: customerB, purpose: 'NEW_SERVICE', total: 80_000, settledAt: at(130) });
+    await order({
+      customerId: customerA,
+      purpose: 'NEW_SERVICE',
+      total: 90_000,
+      settledAt: at(120),
+    });
+    await order({
+      customerId: customerB,
+      purpose: 'NEW_SERVICE',
+      total: 80_000,
+      settledAt: at(130),
+    });
     await order({ customerId: customerA, purpose: 'RENEW', total: 60_000, settledAt: at(200) });
-    await order({ customerId: customerA, purpose: 'ADD_TRAFFIC', total: 20_000, settledAt: at(210) });
+    await order({
+      customerId: customerA,
+      purpose: 'ADD_TRAFFIC',
+      total: 20_000,
+      settledAt: at(210),
+    });
     await order({ customerId: customerA, purpose: 'ADD_TIME', total: 10_000, settledAt: at(220) });
     await order({ customerId: customerB, purpose: 'TRIAL', total: 0, settledAt: at(230) });
 
@@ -155,9 +201,26 @@ describe('the nightly report reader', () => {
   });
 
   it('never counts what the import wrote, another currency or another tenant', async () => {
-    await order({ customerId: customerA, purpose: 'NEW_SERVICE', total: 100_000, settledAt: at(60) });
-    await order({ customerId: customerB, purpose: 'NEW_SERVICE', total: 9_000_000, settledAt: at(61), imported: true });
-    await order({ customerId: customerB, purpose: 'NEW_SERVICE', total: 8_000_000, settledAt: at(62), currency: 'IRR' });
+    await order({
+      customerId: customerA,
+      purpose: 'NEW_SERVICE',
+      total: 100_000,
+      settledAt: at(60),
+    });
+    await order({
+      customerId: customerB,
+      purpose: 'NEW_SERVICE',
+      total: 9_000_000,
+      settledAt: at(61),
+      imported: true,
+    });
+    await order({
+      customerId: customerB,
+      purpose: 'NEW_SERVICE',
+      total: 8_000_000,
+      settledAt: at(62),
+      currency: 'IRR',
+    });
     // Another tenant's own panel, product, customer and order.
     const panelB = uuid();
     const productB = uuid();
@@ -166,7 +229,15 @@ describe('the nightly report reader', () => {
     await run(sql`INSERT INTO products (id, tenant_id, title, status, duration_days, traffic_bytes, panel_id, price_amount, price_currency)
       VALUES (${productB}, ${tenantB.tenantId}, 'Plan', 'ACTIVE', 30, 1073741824, ${panelB}, 100000, 'IRT')`);
     const outsider = await customer(String(tenantB.tenantId), at(-600));
-    await order({ tenantId: String(tenantB.tenantId), customerId: outsider, purpose: 'NEW_SERVICE', total: 7_000_000, settledAt: at(63), panelId: panelB, productId: productB });
+    await order({
+      tenantId: String(tenantB.tenantId),
+      customerId: outsider,
+      purpose: 'NEW_SERVICE',
+      total: 7_000_000,
+      settledAt: at(63),
+      panelId: panelB,
+      productId: productB,
+    });
 
     const data = await read();
     expect(data.newPurchases).toEqual({ count: 1, sum: 100_000n });
@@ -181,22 +252,43 @@ describe('the nightly report reader', () => {
     await ledger(customerB, 'CREDIT', 'CASHBACK_TOPUP', 2_000, at(40));
     // A debit with the same reason, a credit before the day and one on its end: none count.
     await ledger(customerA, 'DEBIT', 'REFUND', 99_000, at(50));
-    await ledger(customerA, 'CREDIT', 'REFUND', 88_000, new Date(START.getTime() - 1).toISOString());
+    await ledger(
+      customerA,
+      'CREDIT',
+      'REFUND',
+      88_000,
+      new Date(START.getTime() - 1).toISOString(),
+    );
     await ledger(customerA, 'CREDIT', 'REFUND', 77_000, END.toISOString());
 
     const data = await read();
     expect(data.refunds).toEqual({ count: 2, sum: 12_000n });
     expect(data.commissions).toEqual({ count: 1, sum: 3_000n });
     expect(data.giftSum).toBe(2_000n);
-    await order({ customerId: customerA, purpose: 'NEW_SERVICE', total: 100_000, settledAt: at(60) });
+    await order({
+      customerId: customerA,
+      purpose: 'NEW_SERVICE',
+      total: 100_000,
+      settledAt: at(60),
+    });
     const withSales = await read();
     expect(netOf({ ...withSales, day: START })).toBe(100_000n - 12_000n - 3_000n - 2_000n);
   });
 
   it('finds the best Tehran hour, the new customers, and the panel’s sold orders and gigabytes', async () => {
     // 00:30 Tehran (the first hour) sells less than 13:00 Tehran.
-    await order({ customerId: customerA, purpose: 'NEW_SERVICE', total: 40_000, settledAt: at(30) });
-    await order({ customerId: customerB, purpose: 'NEW_SERVICE', total: 90_000, settledAt: at(13 * 60 + 10) });
+    await order({
+      customerId: customerA,
+      purpose: 'NEW_SERVICE',
+      total: 40_000,
+      settledAt: at(30),
+    });
+    await order({
+      customerId: customerB,
+      purpose: 'NEW_SERVICE',
+      total: 90_000,
+      settledAt: at(13 * 60 + 10),
+    });
     await customer(String(tenantA.tenantId), at(100));
     await customer(String(tenantA.tenantId), END.toISOString());
 
@@ -204,15 +296,27 @@ describe('the nightly report reader', () => {
     expect(data.bestHour).toBe(13);
     expect(data.newCustomers).toBe(1);
     expect(data.panels).toHaveLength(1);
-    expect(data.panels[0]).toMatchObject({ name: 'پنل ۱', orders: 2, sum: 130_000n, soldBytes: 2n * 1073741824n });
+    expect(data.panels[0]).toMatchObject({
+      name: 'پنل ۱',
+      orders: 2,
+      sum: 130_000n,
+      soldBytes: 2n * 1073741824n,
+    });
   });
 
   it('renders all three reports from real figures without NaN, and a quiet day is a day', async () => {
     const quiet = await read();
     for (const built of nightlyReports({ ...quiet, day: START }, i18nOpsLogWords)) {
-      expect(JSON.stringify(built.values, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))).not.toMatch(/NaN/);
+      expect(
+        JSON.stringify(built.values, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)),
+      ).not.toMatch(/NaN/);
     }
-    await order({ customerId: customerA, purpose: 'NEW_SERVICE', total: 100_000, settledAt: at(60) });
+    await order({
+      customerId: customerA,
+      purpose: 'NEW_SERVICE',
+      total: 100_000,
+      settledAt: at(60),
+    });
     const data = await read();
     const [summary] = nightlyReports({ ...data, day: START }, i18nOpsLogWords);
     expect(summary!.values['sales']).toEqual(money(100_000n, 'IRT'));

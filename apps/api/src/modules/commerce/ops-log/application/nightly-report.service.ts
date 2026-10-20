@@ -27,7 +27,11 @@ export const NIGHTLY_REPORT_PRESENTATION = { timezone: 'Asia/Tehran', calendar: 
  */
 export const NIGHTLY_REPORT_CATCH_UP_MS = 12 * 60 * 60_000;
 
-const REPORT_TYPES: readonly OpsLogTypeId[] = ['REPORT_SUMMARY', 'REPORT_FINANCIAL', 'REPORT_PANELS'];
+const REPORT_TYPES: readonly OpsLogTypeId[] = [
+  'REPORT_SUMMARY',
+  'REPORT_FINANCIAL',
+  'REPORT_PANELS',
+];
 
 export interface NightlyReportServiceDeps {
   readonly uow: UnitOfWork<TransactionScope>;
@@ -36,7 +40,9 @@ export interface NightlyReportServiceDeps {
   readonly lane: OpsLogLane;
   readonly words: OpsLogWords;
   readonly settings: { valueOf<T>(scope: ScopeContext, key: SettingKey, tx?: unknown): Promise<T> };
-  readonly features: { isEnabled(scope: ScopeContext, key: FeatureFlagKey, tx?: unknown): Promise<boolean> };
+  readonly features: {
+    isEnabled(scope: ScopeContext, key: FeatureFlagKey, tx?: unknown): Promise<boolean>;
+  };
   readonly periods: TimePeriodResolver;
   readonly clock: Clock;
 }

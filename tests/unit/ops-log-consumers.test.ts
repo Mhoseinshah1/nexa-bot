@@ -86,8 +86,7 @@ class FakeFacts {
   order = async (_s: unknown, id: string) => this.orders.get(id) ?? null;
   service = async (_s: unknown, id: string) => this.services.get(id) ?? null;
   operation = async (_s: unknown, id: string) => this.operations.get(id) ?? null;
-  paymentOfOrder = async (_s: unknown, orderId: string) =>
-    this.payments.get(orderId) ?? null;
+  paymentOfOrder = async (_s: unknown, orderId: string) => this.payments.get(orderId) ?? null;
   serviceBefore = async () => this.before;
   latestLinkOperation = async () => this.link;
   rotationsInLast30Days = async () => this.rotations;
@@ -237,10 +236,31 @@ describe('L10 / L11 / L16 / L15 — the services log', () => {
     const { facts, queued, lane, ofFacts } = setup();
     facts.payments.set('ord-1', paymentFact('WALLET'));
     facts.ledger = [
-      { id: 'l1', customerId: 'cust-1', signed: 600_000n, reason: 'ADMIN_CREDIT', orderId: null, at: 1 },
-      { id: 'l2', customerId: 'cust-1', signed: -250_000n, reason: 'PURCHASE', orderId: 'ord-1', at: 2 },
+      {
+        id: 'l1',
+        customerId: 'cust-1',
+        signed: 600_000n,
+        reason: 'ADMIN_CREDIT',
+        orderId: null,
+        at: 1,
+      },
+      {
+        id: 'l2',
+        customerId: 'cust-1',
+        signed: -250_000n,
+        reason: 'PURCHASE',
+        orderId: 'ord-1',
+        at: 2,
+      },
       // A later top-up: after the figure being asked for, so not in it.
-      { id: 'l3', customerId: 'cust-1', signed: 900_000n, reason: 'ADMIN_CREDIT', orderId: null, at: 3 },
+      {
+        id: 'l3',
+        customerId: 'cust-1',
+        signed: 900_000n,
+        reason: 'ADMIN_CREDIT',
+        orderId: null,
+        at: 3,
+      },
     ];
     const consumer = new ServiceLogConsumer({ lane, facts: ofFacts, words });
     return consumer.handle(event('ServiceProvisioned', 'svc-1'), TX).then(() => {
@@ -326,8 +346,22 @@ describe('L12 / L13 / L14 — a renewal, extra traffic, extra time', () => {
       trafficUsedBytes: 42n * GIB,
     };
     facts.ledger = [
-      { id: 'l1', customerId: 'cust-1', signed: 500_000n, reason: 'ADMIN_CREDIT', orderId: null, at: 1 },
-      { id: 'l2', customerId: 'cust-1', signed: -250_000n, reason: 'PURCHASE', orderId: 'ord-1', at: 2 },
+      {
+        id: 'l1',
+        customerId: 'cust-1',
+        signed: 500_000n,
+        reason: 'ADMIN_CREDIT',
+        orderId: null,
+        at: 1,
+      },
+      {
+        id: 'l2',
+        customerId: 'cust-1',
+        signed: -250_000n,
+        reason: 'PURCHASE',
+        orderId: 'ord-1',
+        at: 2,
+      },
     ];
     const hook = new OperationLog({ lane, facts: ofFacts, words, clock });
     await hook.operationSucceeded(SCOPE, 'op-1', TX);
@@ -354,7 +388,11 @@ describe('L12 / L13 / L14 — a renewal, extra traffic, extra time', () => {
     facts.operations.set('op-1', op());
     facts.payments.set('ord-1', paymentFact('MANUAL_TRANSFER'));
     facts.before = null;
-    await new OperationLog({ lane, facts: ofFacts, words, clock }).operationSucceeded(SCOPE, 'op-1', TX);
+    await new OperationLog({ lane, facts: ofFacts, words, clock }).operationSucceeded(
+      SCOPE,
+      'op-1',
+      TX,
+    );
     expect(queued[0]!.values).not.toHaveProperty('expiresBefore');
     expect(queued[0]!.values).not.toHaveProperty('balanceBefore');
     expect(render(queued[0]!)).not.toContain('📅');
@@ -373,7 +411,11 @@ describe('L12 / L13 / L14 — a renewal, extra traffic, extra time', () => {
 
     facts.orders.set('ord-1', orderFact({ purpose: 'ADD_TIME', durationDays: 15 }));
     facts.operations.set('op-2', op({ id: 'op-2', type: 'ADD_TIME', orderId: 'ord-1' }));
-    facts.before = { expiresAt: new Date('2026-11-11T00:00:00Z'), trafficLimitBytes: null, trafficUsedBytes: null };
+    facts.before = {
+      expiresAt: new Date('2026-11-11T00:00:00Z'),
+      trafficLimitBytes: null,
+      trafficUsedBytes: null,
+    };
     await hook.operationSucceeded(SCOPE, 'op-2', TX);
     expect(queued[1]!.logType).toBe('TIME_ADDED');
     expect(queued[1]!.values['addedDays']).toBe(15);
@@ -461,12 +503,22 @@ describe('L23 / L24 — each error is its own message, and an unknown outcome is
     const { facts, queued, lane, ofFacts } = setup();
     const consumer = new FailureLogConsumer({ lane, facts: ofFacts, words });
     await consumer.handle(
-      event('OrderRefunded', 'ord-1', { customerId: 'cust-1', amountMinor: '1', currency: 'IRT', reason: 'OPERATOR' }),
+      event('OrderRefunded', 'ord-1', {
+        customerId: 'cust-1',
+        amountMinor: '1',
+        currency: 'IRT',
+        reason: 'OPERATOR',
+      }),
       TX,
     );
     facts.orders.set('ord-1', orderFact({ origin: 'ADOPTED' }));
     await consumer.handle(
-      event('OrderRefunded', 'ord-1', { customerId: 'cust-1', amountMinor: '1', currency: 'IRT', reason: AUTOMATIC_REFUND_REASON }),
+      event('OrderRefunded', 'ord-1', {
+        customerId: 'cust-1',
+        amountMinor: '1',
+        currency: 'IRT',
+        reason: AUTOMATIC_REFUND_REASON,
+      }),
       TX,
     );
     expect(queued).toEqual([]);
@@ -499,7 +551,12 @@ describe('L19 / L21 — administrators and a service alert', () => {
   it('one alert per reminder, with the customer’s service; an imported service is silent', async () => {
     const { facts, queued, lane, ofFacts } = setup();
     const hook = new ServiceAlertLog({ lane, facts: ofFacts, words, clock: { now: () => AT } });
-    const input = { reminderId: 'rem-1', serviceId: 'svc-1', kind: 'USAGE_FINAL' as const, remainingDays: 3 };
+    const input = {
+      reminderId: 'rem-1',
+      serviceId: 'svc-1',
+      kind: 'USAGE_FINAL' as const,
+      remainingDays: 3,
+    };
     await hook.serviceAlerted(SCOPE, input, TX);
     expect(queued).toHaveLength(1);
     expect(queued[0]!.dedupeKey).toBe('oplog:alert:rem-1');
@@ -542,10 +599,30 @@ function reportData(overrides: Partial<NightlyReportData> = {}): NightlyReportDa
       { key: 'TONPAYS', sum: 300_000n },
     ],
     panels: [
-      { name: 'پنل ۱', orders: 6, sum: 1_200_000n, soldBytes: 300n * GIB, health: 'HEALTHY', used: 40, capacity: 100 },
-      { name: 'پنل ۲', orders: 0, sum: 0n, soldBytes: 0n, health: 'HEALTHY', used: 0, capacity: null },
+      {
+        name: 'پنل ۱',
+        orders: 6,
+        sum: 1_200_000n,
+        soldBytes: 300n * GIB,
+        health: 'HEALTHY',
+        used: 40,
+        capacity: 100,
+      },
+      {
+        name: 'پنل ۲',
+        orders: 0,
+        sum: 0n,
+        soldBytes: 0n,
+        health: 'HEALTHY',
+        used: 0,
+        capacity: null,
+      },
     ],
-    resellers: { active: 2, salesSum: 500_000n, top: { username: 'agent1', name: 'نماینده', sum: 400_000n } },
+    resellers: {
+      active: 2,
+      salesSum: 500_000n,
+      top: { username: 'agent1', name: 'نماینده', sum: 400_000n },
+    },
     ...overrides,
   };
 }
@@ -579,14 +656,28 @@ describe('L27 / L28 / L29 / L30 — the figures of the nightly reports', () => {
     expect(render(withCleanup[0] as never)).toMatch(/۷/);
     const without = nightlyReports(reportData({ expiredPayments: 0 }), words);
     expect(without[0]!.values).not.toHaveProperty('cleanup');
-    expect(without.map((built) => built.logType)).toEqual(['REPORT_SUMMARY', 'REPORT_FINANCIAL', 'REPORT_PANELS']);
+    expect(without.map((built) => built.logType)).toEqual([
+      'REPORT_SUMMARY',
+      'REPORT_FINANCIAL',
+      'REPORT_PANELS',
+    ]);
   });
 
   it('a quiet day has no NaN: no sales, no previous day, no best hour', () => {
     const quiet = reportData({
-      newPurchases: tally(0, 0), renewals: tally(0, 0), traffic: tally(0, 0), time: tally(0, 0),
-      firstPurchases: 0, previousGross: 0n, bestHour: null, refunds: tally(0, 0), commissions: tally(0, 0),
-      giftSum: 0n, methods: [], panels: [], expiredPayments: 0,
+      newPurchases: tally(0, 0),
+      renewals: tally(0, 0),
+      traffic: tally(0, 0),
+      time: tally(0, 0),
+      firstPurchases: 0,
+      previousGross: 0n,
+      bestHour: null,
+      refunds: tally(0, 0),
+      commissions: tally(0, 0),
+      giftSum: 0n,
+      methods: [],
+      panels: [],
+      expiredPayments: 0,
       resellers: { active: 0, salesSum: 0n, top: null },
     });
     for (const built of nightlyReports(quiet, words)) {
@@ -605,7 +696,9 @@ describe('the nightly report’s time and day', () => {
     const clock: Clock = { now: () => now.current };
     const periods: TimePeriodResolver = new IntlTimePeriodResolver(clock);
     const reporter = new NightlyReportService({
-      uow: { run: async (_scope: unknown, work: (tx: never) => Promise<number>) => work(TX) } as never,
+      uow: {
+        run: async (_scope: unknown, work: (tx: never) => Promise<number>) => work(TX),
+      } as never,
       scopeActivity: { scopeIsActive: async () => true } as never,
       reader: {
         alreadyPosted: async (_s: unknown, key: string) => posted.has(key),
@@ -646,7 +739,11 @@ describe('the nightly report’s time and day', () => {
     expect(await reporter.runOnce(SCOPE)).toBe(0);
     now.current = new Date('2026-10-12T20:29:00Z'); // 23:59 Tehran
     expect(await reporter.runOnce(SCOPE)).toBe(3);
-    expect(queued.map((one) => one.logType).sort()).toEqual(['REPORT_FINANCIAL', 'REPORT_PANELS', 'REPORT_SUMMARY']);
+    expect(queued.map((one) => one.logType).sort()).toEqual([
+      'REPORT_FINANCIAL',
+      'REPORT_PANELS',
+      'REPORT_SUMMARY',
+    ]);
     // [00:00 Tehran, next 00:00 Tehran): end is the NEXT midnight, not 23:59:59.
     expect(reads[0]!.start.toISOString()).toBe('2026-10-11T20:30:00.000Z');
     expect(reads[0]!.end.toISOString()).toBe('2026-10-12T20:30:00.000Z');
@@ -686,7 +783,11 @@ describe('the nightly report’s time and day', () => {
     expect(soon.reads[0]!.start.toISOString()).toBe('2026-10-11T20:30:00.000Z');
     // Past the catch-up bound, yesterday's is not posted; today's time has not come.
     const late = service(
-      { current: new Date(Date.parse('2026-10-12T20:29:00Z') + NIGHTLY_REPORT_CATCH_UP_MS + 3_600_000) },
+      {
+        current: new Date(
+          Date.parse('2026-10-12T20:29:00Z') + NIGHTLY_REPORT_CATCH_UP_MS + 3_600_000,
+        ),
+      },
       {},
     );
     expect(await late.reporter.runOnce(SCOPE)).toBe(0);
