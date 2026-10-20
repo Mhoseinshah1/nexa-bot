@@ -6,7 +6,10 @@ import {
   SERVICE_REMINDER_SWEEP_LIMIT,
   expiryReminderDue,
   usageRemindersReached,
+  systemJobActor,
+  type AuditWriter,
   type Clock,
+  type CorrelationId,
   type FeatureFlagKey,
   type IdGenerator,
   type ScopeContext,
@@ -42,6 +45,10 @@ export interface ReminderFeatureReader {
 }
 
 const DAY_MS = 86_400_000;
+
+/** Round 5A item 1: one reconcile batch, and how many a pass may run. */
+const RECONCILE_BATCH_SIZE = 500;
+const RECONCILE_MAX_BATCHES_PER_PASS = 40;
 
 /** What one pass did, for the loop's log and for a test. */
 export interface ServiceReminderReport {
@@ -146,6 +153,11 @@ export interface ServiceReminderServiceDeps {
   readonly clock: Clock;
   readonly ids: IdGenerator;
   /**
+   * Round 5A item 1: the audit row each reconcile batch writes. Without it the reconcile of
+   * notices an earlier release queued does not run (a batch with no record is not allowed).
+   */
+  readonly audit?: AuditWriter;
+  /**
    * Round 4 PR-D (log L21): told once per service and kind when the CUSTOMER was told, so the
    * operations log group gets one message per service. A savepoint of its own: a log that
    * cannot be written never costs a reminder.
@@ -225,6 +237,7 @@ export class ServiceReminderService {
    * stopped a tenant would otherwise make the worker report itself unhealthy.
    */
   async runOnce(scope: TenantContext): Promise<ServiceReminderReport> {
+    await this.reconcileImportedUsageNotices(scope);
     const now = this.deps.clock.now();
 
     return this.deps.uow.run(scope, async (tx) => {
@@ -236,6 +249,65 @@ export class ServiceReminderService {
       const usage = await this.sweepUsage(scope, now, thresholds, tx);
       return { expiry, usage };
     });
+  }
+
+  /**
+   * Round 5A item 1 — notices an earlier release queued for imported services.
+   *
+   * Before the first usage figure after an import became the service's silent baseline, the
+   * first `SYNC_USAGE` read was announced: «اولین استفاده از سرویس» to customers whose usage
+   * the previous bot had long ago handled. Those notices are still `PENDING`, and the
+   * send-time precondition (`importedUnmeasuredUsageNotice`) would stop each at its own
+   * claim; this moves them to `SUPERSEDED` ahead of it, in bounded batches, each with ONE
+   * audit row (counts by kind, never a customer). The lane's own `PENDING -> SUPERSEDED`
+   * transition and nothing else: no row is deleted, no `announced_at` is touched, nothing
+   * is sent. Idempotent — a pass that finds none writes nothing.
+   *
+   * Bounded per pass so a huge queue cannot hold the worker, and every batch is its own
+   * transaction with its own scope-activity check.
+   */
+  async reconcileImportedUsageNotices(scope: TenantContext): Promise<number> {
+    const audit = this.deps.audit;
+    if (audit === undefined) return 0;
+    let total = 0;
+    for (let batch = 0; batch < RECONCILE_MAX_BATCHES_PER_PASS; batch += 1) {
+      const moved = await this.deps.uow.run(scope, async (tx) => {
+        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 0;
+        const now = this.deps.clock.now();
+        const rows = await this.deps.reminders.supersedeImportedUsageNotices(
+          scope,
+          RECONCILE_BATCH_SIZE,
+          now,
+          tx,
+        );
+        if (rows.length === 0) return 0;
+        const byKind: Record<string, number> = {};
+        for (const row of rows) byKind[row.kind] = (byKind[row.kind] ?? 0) + 1;
+        await audit.record(
+          scope,
+          systemJobActor('service-reminders', this.deps.ids.uuid() as CorrelationId),
+          {
+            action: 'service_reminder.imported_usage_notices_superseded',
+            entityType: 'CustomerNotification',
+            entityId: null,
+            before: { state: 'PENDING' },
+            after: {
+              state: 'SUPERSEDED',
+              count: rows.length,
+              customers: new Set(rows.map((row) => row.customerId)).size,
+              byKind,
+            },
+            reason: 'usage notice for a state that already existed when the service was imported',
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        return rows.length;
+      });
+      total += moved;
+      if (moved < RECONCILE_BATCH_SIZE) break;
+    }
+    return total;
   }
 
   /**
@@ -530,7 +602,19 @@ export class ServiceReminderService {
        * thresholds): the crossing happened under the previous bot, so it is recorded and not
        * announced. A kind first reached by a figure measured after the import is sent.
        */
-      const historical = importedReminderKinds(candidate, thresholds).usage.includes(due);
+      /*
+       * Round 5A item 1: and an imported service whose baseline has NO figure for this period
+       * has not had its first post-import usage read recorded as the baseline yet
+       * (`DrizzleServiceRepository.recordUsage` writes it on the first sync). Whatever the
+       * figure on the row says is then a state the import already held, or one this lane cannot
+       * tell from it — a service synced before the baseline was written by the sync — so it
+       * is recorded and not announced; the next sync sets the figure and every later crossing
+       * is told as for a service Nexa sold.
+       */
+      const unmeasuredImport =
+        candidate.importBaseline != null && candidate.importBaseline.usedBytes === null;
+      const historical =
+        unmeasuredImport || importedReminderKinds(candidate, thresholds).usage.includes(due);
       if (await this.raise(scope, candidate, reached, historical ? null : due, now, tx)) {
         sent += 1;
       }

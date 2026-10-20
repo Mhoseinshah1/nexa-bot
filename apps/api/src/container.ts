@@ -4350,6 +4350,7 @@ export function createContainer(
     uow,
     clock,
     ids,
+    audit,
     // Round 4 PR-D (L21): one operations-log message per service the customer was told about.
     opsLog: new ServiceAlertLog({
       lane: opsLogLane,

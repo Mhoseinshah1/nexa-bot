@@ -2,6 +2,8 @@ import { and, eq, sql } from 'drizzle-orm';
 import {
   EXPIRY_DAY_MIN_NOTICE_MS,
   EXPIRY_REMINDER_STATES,
+  SERVICE_REMINDER_NOTIFICATION_KINDS,
+  USAGE_REMINDER_KINDS,
   USAGE_REMINDER_STATES,
   type TenantContext,
   type UserId,
@@ -12,6 +14,7 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { serviceReminders } from '../../../../infrastructure/persistence/schema.js';
+import { importedUnmeasuredUsageNotice } from '../../../../infrastructure/persistence/imported-usage-notice.js';
 import type {
   ServiceReminderBasis,
   ServiceReminderCandidate,
@@ -375,6 +378,42 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
       RETURNING service_id
     `);
     return inserted.rows.length > 0;
+  }
+
+  /** See the port. One conditional UPDATE over a locked, bounded batch; never a DELETE. */
+  async supersedeImportedUsageNotices(
+    scope: TenantContext,
+    limit: number,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<readonly { readonly kind: string; readonly customerId: string }[]> {
+    const tenantId = requireTenantId(scope);
+    const kinds = USAGE_REMINDER_KINDS.map((k) => SERVICE_REMINDER_NOTIFICATION_KINDS[k]);
+    const moved = await this.exec(tx).execute(sql`
+      WITH cand AS (
+        SELECT cn.id
+        FROM customer_notifications cn
+        JOIN service_reminders r ON r.tenant_id = cn.tenant_id AND r.id = cn.subject_id
+        JOIN services s ON s.tenant_id = r.tenant_id AND s.id = r.service_id
+        WHERE cn.tenant_id = ${tenantId}
+          AND cn.kind = ANY(${sql.param(kinds)}::text[])
+          AND cn.state = 'PENDING'
+          AND cn.send_started_at IS NULL
+          AND ${importedUnmeasuredUsageNotice()}
+        ORDER BY cn.created_at, cn.id
+        LIMIT ${limit}
+        FOR UPDATE OF cn SKIP LOCKED
+      )
+      UPDATE customer_notifications n
+      SET state = 'SUPERSEDED', resolved_at = ${now}, next_attempt_at = NULL, updated_at = ${now}
+      FROM cand
+      WHERE n.id = cand.id AND n.state = 'PENDING' AND n.send_started_at IS NULL
+      RETURNING n.kind, n.customer_id
+    `);
+    return (moved.rows as unknown as { kind: string; customer_id: string }[]).map((row) => ({
+      kind: row.kind,
+      customerId: row.customer_id,
+    }));
   }
 }
 
