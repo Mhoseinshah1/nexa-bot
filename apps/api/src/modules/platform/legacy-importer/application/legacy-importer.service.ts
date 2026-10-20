@@ -154,6 +154,11 @@ import {
   type CutoverExpectation,
 } from '../../legacy-cutover/domain/cutover-rules.js';
 import { USER_STATUS_READ_SET } from './read-set.js';
+import {
+  backfillLegacyTerms,
+  type TermsBackfillInput,
+  type TermsBackfillOutcome,
+} from './terms-backfill.js';
 
 /** The `user-status` read set's recorded name (OQ-LWD-07). */
 const USER_STATUS_READ_SET_NAME: LegacyReadSetName = 'user-status';
@@ -2042,6 +2047,39 @@ export class LegacyImporterService {
     );
   }
 
+  /**
+   * R4 A4 — `legacy-import terms-backfill` (`terms-backfill.ts`): the previous bot's rules
+   * acceptance, for an installation imported before the import carried it. Digest-only
+   * without the read set's approval; with it, idempotent batches of one conditional UPDATE
+   * each, under this tenant's importer claim. Sends nothing.
+   */
+  backfillTerms(input: TermsBackfillInput): Promise<TermsBackfillOutcome> {
+    return backfillLegacyTerms(
+      {
+        processLock: this.deps.processLock,
+        customers: this.deps.customers,
+        mutate: (scope, actor, action, entityId, fn) =>
+          this.mutate(scope, actor, action, entityId, fn, 'LegacyReadSet'),
+        audit: (scope, actor, after, tx) =>
+          this.deps.audit.record(
+            scope,
+            actor,
+            {
+              action: 'legacy_import.terms_backfill',
+              entityType: 'LegacyReadSet',
+              entityId: String(after['readSetFingerprint']),
+              before: null,
+              after,
+              result: 'SUCCESS',
+            },
+            tx,
+          ),
+        now: () => this.deps.clock.now(),
+      },
+      input,
+    );
+  }
+
   /** Aborts the tenant's RUNNING run (any mode). The operator's exit from a stuck run. */
   async abortRunning(scope: TenantContext, actor: ActorContext, runId: string): Promise<void> {
     await this.mutate(scope, actor, 'legacy_import.run.abort', runId, async (tx) => {
@@ -2201,6 +2239,8 @@ export class LegacyImporterService {
             }
           });
           const created: { customerId: string; blocked: boolean }[] = [];
+          // R4 A4: the users whose previous-bot rules acceptance this batch carries over.
+          const rulesAccepted: string[] = [];
           importing.forEach(({ row, decision }, i) => {
             const outcome = outcomes[reviews.length + i] as (typeof outcomes)[number];
             const customer = customers[i] as (typeof customers)[number];
@@ -2231,7 +2271,14 @@ export class LegacyImporterService {
               telegramUserId: decision.telegramUserId,
               customerId: customer.customerId,
             });
+            if (row.termsAccepted) rulesAccepted.push(row.id);
           });
+          /*
+           * R4 A4: a user who accepted the previous bot's rules is imported as having accepted
+           * them, through the map rows this transaction just wrote — a conditional UPDATE
+           * (`IS NULL`), so a resume or a rerun sets nothing twice. No message, no event.
+           */
+          await this.deps.customers.markLegacyTermsAccepted(scope, rulesAccepted, now, tx);
           await recordAuditMany(
             this.deps.audit,
             scope,

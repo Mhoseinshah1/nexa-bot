@@ -32,6 +32,7 @@ import {
   type TestContext,
 } from './harness';
 import { AudienceFixtures } from './audience-fixtures';
+import { CachedTenantPresentationReader } from '../../apps/api/src/modules/control/templates/infrastructure/cached-tenant-presentation.reader';
 
 /**
  * Roadmap C1 — automated readiness of the broadcast lane for what a fake can prove: each
@@ -179,6 +180,7 @@ describe('broadcast readiness (roadmap C1)', () => {
       outbox: c.outbox,
       clock,
       ids: c.ids,
+      presentation: new CachedTenantPresentationReader(c.tenants, clock),
       marketingOptOut: optOutPolicy,
       auditHistory: new DrizzleAuditHistoryReader(c.database.db),
     });

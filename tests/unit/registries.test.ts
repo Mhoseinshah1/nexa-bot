@@ -341,7 +341,14 @@ describe('the feature flag registry', () => {
       // Program §6. Off by default; the one Telegram gate it switches on is reachable, and
       // with no published version it stops nobody.
       'terms_enforcement',
+      // Round 4 A4. Off by default: an accepted customer is never asked again unless the
+      // owner turns re-prompting on for a new rules version.
+      'terms_reprompt_on_new_version',
       // `trials` (WP6-A) left in F5: each panel's own trial is the switch.
+      // Round 4 A5. On by default: a live operator credit or debit tells the customer; an
+      // imported or system entry never does.
+      'wallet_admin_credit_notice',
+      'wallet_admin_debit_notice',
       // WP-A9. Off by default; the low-balance lane it switches on is reachable, and it
       // does nothing until wallet.low_balance.threshold is a positive amount.
       'wallet_low_balance_reminders',

@@ -389,9 +389,10 @@ export const FEATURE_FLAGS = [
       '(program §6). While it is on, a customer who has not accepted the newest PUBLISHED ' +
       'version is shown it, with an accept button, instead of what they asked for — at one ' +
       'gate in front of every customer action; support, help and the promotional opt-out ' +
-      'stay reachable. With no published version nobody is stopped. Publishing a new version ' +
-      'never marks anybody as having accepted it, so every customer is asked again. Turning ' +
-      'it off lets everyone through and erases no acceptance.',
+      'stay reachable. With no published version nobody is stopped. A customer who accepted ' +
+      'once (any version, or the previous bot\u2019s rules carried by the import) is not asked ' +
+      'again when a new version is published, unless `terms_reprompt_on_new_version` is on ' +
+      '(R4 A4). Turning it off lets everyone through and erases no acceptance.',
     defaultEnabled: false,
     // Turning it on stops every customer who has not accepted, at once.
     blastRadius: 'TENANT_WIDE',
@@ -425,6 +426,37 @@ export const FEATURE_FLAGS = [
     // TENANT_WIDE (PR #295 review): it changes every rich message every customer of the
     // tenant receives from an eligible bot.
     blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
+  {
+    key: 'terms_reprompt_on_new_version',
+    description:
+      'R4 A4: ask a customer who already accepted the rules to accept AGAIN when a newer ' +
+      'version is published. Off by default, the owner\u2019s rule: a customer who accepted ' +
+      'once \u2014 in this bot, or in the previous bot before the import \u2014 is never asked ' +
+      'again, whatever the rules text becomes. Only read while `terms_enforcement` is on.',
+    defaultEnabled: false,
+    // Turning it on stops every customer who has not accepted the newest version, at once.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
+  {
+    key: 'wallet_admin_credit_notice',
+    description:
+      'R4 A5: tell a customer when an administrator credits their wallet by hand \u2014 the ' +
+      'amount, the new balance and, only when the administrator ticked it, the reason. ' +
+      'Never for an imported opening balance or any other ledger movement.',
+    defaultEnabled: true,
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
+  {
+    key: 'wallet_admin_debit_notice',
+    description:
+      'R4 A5: tell a customer when an administrator debits their wallet by hand, the same ' +
+      'sentence as the credit in the other direction.',
+    defaultEnabled: true,
+    blastRadius: 'LOCAL',
     configuredBy: [],
   },
 ] as const satisfies readonly FeatureFlagDefinition[];

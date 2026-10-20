@@ -65,7 +65,7 @@ interface Harness {
   readonly budget: ReturnType<typeof vi.fn>;
   readonly clock: { at: Date };
   readonly openConditions: Set<string>;
-  readonly row: { usageSyncedAt: Date | null; state: string };
+  readonly row: { usageSyncedAt: Date | null; state: string; missingOnPanelAt: Date | null };
 }
 
 function harness(
@@ -85,6 +85,7 @@ function harness(
         ? new Date(T0.getTime() - 10 * 60_000)
         : options.usageSyncedAt,
     state: 'ACTIVE',
+    missingOnPanelAt: null as Date | null,
   };
   const serviceRow = () => ({
     id: 's-1',
@@ -125,6 +126,17 @@ function harness(
     services: { getForCustomer: vi.fn(async () => serviceRow() as never) },
     rows: {
       recordUsage: recordUsage as never,
+      // R4 A2: the conditional set (first finding kept) and the clear, against the row.
+      markMissingOnPanel: vi.fn(async (_s: unknown, _id: string, at: Date) => {
+        if (row.missingOnPanelAt !== null) return false;
+        row.missingOnPanelAt = at;
+        return true;
+      }),
+      clearMissingOnPanel: vi.fn(async () => {
+        const had = row.missingOnPanelAt !== null;
+        row.missingOnPanelAt = null;
+        return had;
+      }),
       reserveUsageRefresh: vi.fn(async () => true),
       endUsageRefresh: vi.fn(async () => undefined),
     },
@@ -218,6 +230,14 @@ describe('opening a card checks the panel live (Track 3 §1)', () => {
       }),
     ]);
     expect(h.row.state, 'the service keeps its state').toBe('ACTIVE');
+    // R4 A2: and is FLAGGED missing — the flag that takes it out of «سرویس‌های من».
+    expect(h.row.missingOnPanelAt, 'flagged when the panel confirmed it missing').toEqual(T0);
+  });
+
+  it('R4 A2: missing once, found on the confirming read: never flagged', async () => {
+    const h = harness([MISSING, FOUND]);
+    await h.service.liveCheck(scope, actor, input);
+    expect(h.row.missingOnPanelAt).toBeNull();
   });
 
   it('missing once, found on the confirming read: FRESH, and no condition', async () => {
@@ -328,6 +348,8 @@ describe('opening a card checks the panel live (Track 3 §1)', () => {
       SERVICE_PANEL_ACCOUNT_MISSING_CODE,
       SERVICE_PANEL_ACCOUNT_FOUND_CODE,
     ]);
+    // R4 A2: found again — the flag is cleared, so the service is listed again.
+    expect(h.row.missingOnPanelAt, 'cleared when a read found it again').toBeNull();
     expect(h.recorded[1]).toMatchObject({
       recoversCode: SERVICE_PANEL_ACCOUNT_MISSING_CODE,
       recoversDedupeKey: servicePanelAccountMissingKey('s-1'),

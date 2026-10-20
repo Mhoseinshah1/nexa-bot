@@ -1821,6 +1821,20 @@
       "when": 1792453301603,
       "tag": "0259_reminder_raise_counter",
       "breakpoints": true
+    },
+    {
+      "idx": 260,
+      "version": "7",
+      "when": 1792454611728,
+      "tag": "0260_r4_bot_ux",
+      "breakpoints": true
+    },
+    {
+      "idx": 261,
+      "version": "7",
+      "when": 1792454621971,
+      "tag": "0261_payment_destination_switches_append_only",
+      "breakpoints": true
     }
   ]
 }

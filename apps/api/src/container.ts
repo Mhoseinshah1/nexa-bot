@@ -442,6 +442,8 @@ import type {
 import { ReceiptService } from './modules/commerce/payments/application/receipt.service.js';
 import { TelegramReceiptFiles } from './modules/commerce/payments/infrastructure/telegram-receipt-files.js';
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
+import { CardSwitchService } from './modules/commerce/payments/application/card-switch.service.js';
+import { CustomerFactNoticeConsumer } from './modules/commerce/messaging/application/customer-fact-notice.consumer.js';
 import { RefundService } from './modules/commerce/payments/application/refund.service.js';
 import { ServiceRefundRequestService } from './modules/commerce/payments/application/service-refund-request.service.js';
 import { ServiceRefundDecisionService } from './modules/commerce/payments/application/service-refund-decision.service.js';
@@ -1211,6 +1213,8 @@ export interface Container {
   readonly legacyEndedServices: TerminatedServicesStep;
   readonly payments: PaymentService;
   readonly paymentAccounts: PaymentAccountService;
+  /** R4 A1: «🔄 تغییر شماره کارت» on the card-to-card invoice. */
+  readonly cardSwitch: CardSwitchService;
   /** WP13 — the Web Admin's management of this tenant's Telegram bot instances. */
   readonly botManagement: BotManagementService;
   /** Round P — the bot's menu: items, desired commands, and every bot's sync state. */
@@ -1946,6 +1950,22 @@ export function createContainer(
       // became ACTIVE queues a command-menu sync. A DB write with the relay's claim; the
       // Telegram call is the lane's, on its own tick.
       new BotCommandSyncConsumer(botCommandSync),
+      /*
+       * R4 A5: an administrator's manual wallet credit or debit, and an unblock, told to the
+       * customer — a lane row written with the relay's claim, so only a committed fact is
+       * told. Both collaborators are built further down; the closures run only once the relay
+       * does.
+       */
+      new CustomerFactNoticeConsumer({
+        notifier: {
+          notify: (scope, customerId, kind, subjectId, now, tx, notBefore) =>
+            customerNotifier.notify(scope, customerId, kind, subjectId, now, tx, notBefore),
+        },
+        flags: {
+          isEnabled: (scope, key, tx) => featureFlagResolver.isEnabled(scope, key, tx),
+        },
+        clock,
+      }),
       /*
        * WHO is pushed a new receipt (WP10 follow-up §3, ADR-0031). A consumer, so the fan-out
        * commits with the relay's claim and never inside the transaction that filed the
@@ -3424,6 +3444,26 @@ export function createContainer(
       quoteFor: (scope, baseAsset, now, tx) => fxRef.current.quoteFor(scope, baseAsset, now, tx),
       recordStaleUse: (scope, quote, tx) => fxRef.current.recordStaleUse(scope, quote, tx),
     },
+  });
+  /*
+   * R4 A1: «🔄 تغییر شماره کارت». Reads the accounts and the payment, writes a switch row and
+   * an audit row — never an account, never the payment.
+   */
+  const cardSwitchService = new CardSwitchService({
+    payments: paymentRepository,
+    accounts: paymentAccountRepository,
+    destinations: paymentDestinationRepository,
+    receipts: paymentReceiptRepository,
+    settings: settingsResolver,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
   });
 
   /*
@@ -5296,6 +5336,8 @@ export function createContainer(
        * prevent, applied to the reading side.
        */
       refundFigures: walletRepository,
+      // R4 A5: an administrator's adjustment, read from its own ledger entry.
+      adminAdjustments: walletRepository,
       // The rejection's reason (File 01 §7), from the payment's own row.
       rejectionReasons: paymentRepository,
       // The same repository, for the same reason: the three payment-credit sentences
@@ -5420,9 +5462,14 @@ export function createContainer(
     botInstances,
     config.TELEGRAM_API_BASE_URL,
     config.NOTIFICATION_SEND_TIMEOUT_MS,
+    // R4 A6: `{today}` in the tenant's zone and calendar.
+    templatePresentation,
   );
-  const broadcastFacts = new DrizzleRecipientFactsReader(database.db, (scope) =>
-    settingsResolver.valueOf<SalesCurrencyCode>(scope, 'sales.currency'),
+  const broadcastFacts = new DrizzleRecipientFactsReader(
+    database.db,
+    (scope) => settingsResolver.valueOf<SalesCurrencyCode>(scope, 'sales.currency'),
+    // R4 A6: `{servicesTotal}` / `{servicesActive}` from the customer list's own predicate.
+    serviceRepository,
   );
   /*
    * Spec §9: a customer's stored promotional opt-out is honoured exactly while the
@@ -5450,6 +5497,8 @@ export function createContainer(
     ids,
     // Broadcast V2: the preview's opted-out estimate only; the stamp still decides.
     marketingOptOut: marketingOptOutPolicy,
+    // R4 A6: the composer previews `{today}` in the zone and calendar the sender uses.
+    presentation: templatePresentation,
     // Roadmap C2: the broadcast's own history card.
     auditHistory: new DrizzleAuditHistoryReader(database.db),
   });
@@ -7494,6 +7543,7 @@ export function createContainer(
     legacyEndedServices,
     payments: paymentService,
     paymentAccounts: paymentAccountService,
+    cardSwitch: cardSwitchService,
     botManagement,
     botMenu,
     botMenuBuilder,
@@ -7571,6 +7621,8 @@ export function createContainer(
       // button routes under its new name — the same object the messenger draws from.
       menuRoutes: mainMenuLayout,
       destinations: paymentDestinationRenderer,
+      // R4 A1: «🔄 تغییر شماره کارت» on the card-to-card invoice.
+      cardSwitch: cardSwitchService,
       receipts: receiptService,
       receiptCredits: receiptCreditCaptureService,
       serviceRefunds: serviceRefundRequests,

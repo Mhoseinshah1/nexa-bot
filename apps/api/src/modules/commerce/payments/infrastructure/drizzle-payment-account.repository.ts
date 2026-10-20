@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import type { PaymentAccountId, PaymentId, TenantContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -7,6 +7,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   paymentAccounts,
+  paymentDestinationSwitches,
   paymentDestinations,
 } from '../../../../infrastructure/persistence/schema.js';
 import type {
@@ -15,6 +16,7 @@ import type {
   PaymentAccountRepository,
   PaymentDestinationRecord,
   PaymentDestinationRepository,
+  PaymentDestinationSwitchRecord,
 } from '../application/account-ports.js';
 
 /** The columns the record is built from. Selected explicitly, in one place. */
@@ -376,6 +378,20 @@ export class DrizzlePaymentDestinationRepository implements PaymentDestinationRe
     tx?: unknown,
   ): Promise<PaymentDestinationRecord | null> {
     const tenantId = requireTenantId(scope);
+    // R4 A1: the card shown LAST — the newest switch — before the one it was issued against.
+    const switched = await this.exec(tx)
+      .select(SWITCH_COLUMNS)
+      .from(paymentDestinationSwitches)
+      .where(
+        and(
+          eq(paymentDestinationSwitches.tenantId, tenantId),
+          eq(paymentDestinationSwitches.paymentId, paymentId),
+        ),
+      )
+      .orderBy(desc(paymentDestinationSwitches.sequence))
+      .limit(1);
+    const latest = switched[0];
+    if (latest !== undefined) return toDestination(latest);
     const rows = await this.exec(tx)
       .select(DESTINATION_COLUMNS)
       .from(paymentDestinations)
@@ -389,7 +405,108 @@ export class DrizzlePaymentDestinationRepository implements PaymentDestinationRe
     const row = rows[0];
     return row === undefined ? null : toDestination(row);
   }
+
+  async switchCount(scope: TenantContext, paymentId: PaymentId, tx?: unknown): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select({ last: sql<number | null>`max(${paymentDestinationSwitches.sequence})` })
+      .from(paymentDestinationSwitches)
+      .where(
+        and(
+          eq(paymentDestinationSwitches.tenantId, tenantId),
+          eq(paymentDestinationSwitches.paymentId, paymentId),
+        ),
+      );
+    return Number(row?.last ?? 0);
+  }
+
+  async recordSwitch(
+    scope: TenantContext,
+    input: {
+      readonly id: string;
+      readonly paymentId: PaymentId;
+      readonly sequence: number;
+      readonly fromAccountId: PaymentAccountId;
+      readonly account: PaymentAccountRecord;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<PaymentDestinationRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const { account } = input;
+    const rows = await this.exec(tx)
+      .insert(paymentDestinationSwitches)
+      .values({
+        id: input.id,
+        tenantId,
+        paymentId: input.paymentId,
+        sequence: input.sequence,
+        fromAccountId: input.fromAccountId,
+        accountId: account.id,
+        label: account.label,
+        bankName: account.bankName,
+        holderName: account.holderName,
+        cardNumber: account.cardNumber,
+        iban: account.iban,
+        createdAt: input.now,
+      })
+      .onConflictDoNothing({
+        target: [
+          paymentDestinationSwitches.tenantId,
+          paymentDestinationSwitches.paymentId,
+          paymentDestinationSwitches.sequence,
+        ],
+      })
+      .returning(SWITCH_COLUMNS);
+    const row = rows[0];
+    return row === undefined ? null : toDestination(row);
+  }
+
+  /** The payment's switches, oldest first, at most `limit` (the timeline's bound). */
+  async switchesFor(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    limit: number,
+  ): Promise<readonly PaymentDestinationSwitchRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.db
+      .select({
+        id: paymentDestinationSwitches.id,
+        sequence: paymentDestinationSwitches.sequence,
+        fromAccountId: paymentDestinationSwitches.fromAccountId,
+        accountId: paymentDestinationSwitches.accountId,
+        cardNumber: paymentDestinationSwitches.cardNumber,
+        createdAt: paymentDestinationSwitches.createdAt,
+      })
+      .from(paymentDestinationSwitches)
+      .where(
+        and(
+          eq(paymentDestinationSwitches.tenantId, tenantId),
+          eq(paymentDestinationSwitches.paymentId, paymentId),
+        ),
+      )
+      .orderBy(asc(paymentDestinationSwitches.sequence))
+      .limit(Math.max(1, limit));
+    return rows.map((row) => ({
+      id: row.id,
+      sequence: row.sequence,
+      fromAccountId: row.fromAccountId as PaymentAccountId,
+      accountId: row.accountId as PaymentAccountId,
+      cardLast4: row.cardNumber.slice(-4),
+      createdAt: row.createdAt,
+    }));
+  }
 }
+
+/** The same five snapshot fields and account, from a switch row. */
+const SWITCH_COLUMNS = {
+  accountId: paymentDestinationSwitches.accountId,
+  label: paymentDestinationSwitches.label,
+  bankName: paymentDestinationSwitches.bankName,
+  holderName: paymentDestinationSwitches.holderName,
+  cardNumber: paymentDestinationSwitches.cardNumber,
+  iban: paymentDestinationSwitches.iban,
+} as const;
 
 /** The composite foreign key to `payment_accounts` is what makes the cast safe. */
 function toDestination(row: {

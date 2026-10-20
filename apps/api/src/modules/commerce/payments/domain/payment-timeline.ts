@@ -163,8 +163,20 @@ export interface TimelineNotificationFacts {
   readonly resolvedAt: Date | null;
 }
 
+/** R4 A1: one press of «🔄 تغییر شماره کارت». */
+export interface TimelineDestinationSwitchFacts {
+  readonly id: string;
+  readonly sequence: number;
+  readonly fromAccountId: string;
+  readonly toAccountId: string;
+  readonly cardLast4: string;
+  readonly at: Date;
+}
+
 export interface PaymentTimelineFacts {
   readonly payment: TimelinePaymentFacts;
+  /** Absent from a reader that predates R4: no switch is shown. */
+  readonly destinationSwitches?: readonly TimelineDestinationSwitchFacts[];
   readonly receiptCredit: TimelineReceiptCreditFacts | null;
   readonly notifications: readonly TimelineNotificationFacts[];
   readonly receipts: readonly TimelineReceiptFacts[];
@@ -285,6 +297,18 @@ export function assemblePaymentTimeline(
         amountMinor: c.amountMinor.toString(),
         currency: c.currency,
         adminId: c.decidedByAdminId,
+      }),
+    );
+  }
+  for (const w of facts.destinationSwitches ?? []) {
+    all.push(
+      sortable(w.at, w.id, {
+        kind: 'DESTINATION_SWITCHED',
+        at: w.at.toISOString(),
+        sequence: w.sequence,
+        fromAccountId: w.fromAccountId,
+        toAccountId: w.toAccountId,
+        cardLast4: w.cardLast4,
       }),
     );
   }

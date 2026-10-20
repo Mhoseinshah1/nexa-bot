@@ -31,6 +31,7 @@ import {
   type TestContext,
 } from './harness';
 import { AudienceFixtures } from './audience-fixtures';
+import { CachedTenantPresentationReader } from '../../apps/api/src/modules/control/templates/infrastructure/cached-tenant-presentation.reader';
 
 /**
  * Broadcast (round N, B1): the regressions the brief names, each against the real tables and
@@ -538,6 +539,7 @@ describe('broadcast', () => {
       outbox: c.outbox,
       clock,
       ids: c.ids,
+      presentation: new CachedTenantPresentationReader(c.tenants, clock),
     });
   }
 

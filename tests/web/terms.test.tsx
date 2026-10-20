@@ -288,6 +288,7 @@ describe('Customer 360’s terms line', () => {
             },
             acceptedCurrent: false,
             reacceptanceRequired: true,
+            acceptedInPreviousBotAt: null,
           },
         }}
       />,
@@ -319,6 +320,7 @@ describe('Customer 360’s terms line', () => {
             },
             acceptedCurrent: true,
             reacceptanceRequired: false,
+            acceptedInPreviousBotAt: null,
           },
         }}
       />,

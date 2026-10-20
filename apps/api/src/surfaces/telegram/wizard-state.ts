@@ -259,6 +259,11 @@ export const WIZARD_GATES: ReadonlyMap<string, WizardGate> = new Map<string, Wiz
    */
   ['PAY_SENT', { kind: null, adoptAs: 'ORDER', from: ['INVOICE'] }],
   ['GATEWAY_CARD_CHANGE', { kind: null, adoptAs: 'ORDER', from: ['INVOICE'] }],
+  /*
+   * R4 A1: «🔄 تغییر شماره کارت» is drawn only on the manual transfer invoice, and its answer
+   * is that invoice again — edited in place, still `INVOICE` — with the next card.
+   */
+  ['PAY_SWITCH_CARD', { kind: null, adoptAs: 'ORDER', from: ['INVOICE'] }],
 ]);
 
 /**
