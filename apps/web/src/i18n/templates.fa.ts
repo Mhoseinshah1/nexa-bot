@@ -515,7 +515,6 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   eventId: 'شناسهٔ رخداد',
   // --- end FIX-04 opsevents ---
   // --- Round 4 PR-D: the operations log group's tokens ---
-  orderCode: 'کد سفارش',
   heading: 'عنوان پیام',
   technical: 'خط فنی کوتاه',
   retry: 'آیا تلاش دوباره کمک می‌کند',
