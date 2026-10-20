@@ -145,6 +145,8 @@ export const EVENT_TYPES = [
   // before WP18 none of the five left anything a consumer could hear.
   'PaymentFailed',
   'PaymentLateCompletionObserved',
+  // R5A item 4: a late gateway approval credited to the wallet (the log's L5 line).
+  'PaymentLateCredited',
   'RefundCompleted',
   'RefundFailed',
   // WP19. A customer filed a service refund request (what the administrators' review-card
@@ -459,6 +461,19 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     customerId: z.string(),
     orderId: z.string().nullable(),
     provider: z.string(),
+  }),
+  /*
+   * R5A item 4. Ids and the closed provider name only: the consumer re-reads the payment, the
+   * invoice and the ledger entry. `entryId` names the GATEWAY_LATE_CREDIT entry, so the log's
+   * wallet before/after is taken around exactly that entry.
+   */
+  PaymentLateCredited: z.object({
+    customerId: z.string(),
+    orderId: z.string().nullable(),
+    provider: z.string(),
+    entryId: z.string(),
+    amountMinor: z.string(),
+    currency: z.string(),
   }),
   RefundCompleted: z.object({
     /** Aggregate is the PAYMENT the refund returns money from; this names the refund. */

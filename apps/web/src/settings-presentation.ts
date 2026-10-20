@@ -1,5 +1,7 @@
 import {
   BACKUP_SCHEDULE_SETTING_KEYS,
+  LATE_CREDIT_SETTING_KEYS,
+  LATE_CREDIT_WINDOW_SETTING_KEY,
   PANEL_SETTING_KEYS,
   isSettingKey,
   settingIntegerRange,
@@ -105,6 +107,11 @@ export type SettingControl =
  * «دکمه‌های ربات» page beside the labels it arranges.
  */
 export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = [
+  // R5A item 4: each gateway's late-credit switch, and the one polling window, are drawn on
+  // that gateway's own page («پرداخت دیرهنگام»), beside the route they govern.
+  LATE_CREDIT_SETTING_KEYS.TONPAYS,
+  LATE_CREDIT_SETTING_KEYS.TONPAYS_TELEGRAM,
+  LATE_CREDIT_WINDOW_SETTING_KEY,
   'bot.main_menu',
   // Owner spec §6: the inline buttons' styles, on the same page («دکمه‌های شیشه‌ای ربات»).
   'bot.inline_buttons',
@@ -223,6 +230,38 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     description: 'web.opslog_types_hint',
     group: 'ops',
     control: { kind: 'text' },
+  },
+  // R5A item 4. Drawn on each gateway's page (`SETTINGS_MANAGED_ELSEWHERE`); the entries exist
+  // because this map is total.
+  [LATE_CREDIT_SETTING_KEYS.TONPAYS]: {
+    title: 'web.late_credit_switch_tonpays',
+    description: 'web.late_credit_switch_hint',
+    group: 'sales',
+    control: {
+      kind: 'select',
+      options: [
+        { value: 'true', label: 'web.backup_schedule_on' },
+        { value: 'false', label: 'web.backup_schedule_off' },
+      ],
+    },
+  },
+  [LATE_CREDIT_SETTING_KEYS.TONPAYS_TELEGRAM]: {
+    title: 'web.late_credit_switch_tonpays_telegram',
+    description: 'web.late_credit_switch_hint',
+    group: 'sales',
+    control: {
+      kind: 'select',
+      options: [
+        { value: 'true', label: 'web.backup_schedule_on' },
+        { value: 'false', label: 'web.backup_schedule_off' },
+      ],
+    },
+  },
+  [LATE_CREDIT_WINDOW_SETTING_KEY]: {
+    title: 'web.late_credit_window',
+    description: 'web.late_credit_window_hint',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_hours' },
   },
   'ops.log.storm_rollup_enabled': {
     title: 'web.opslog_storm_enabled',

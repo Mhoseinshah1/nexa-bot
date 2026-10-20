@@ -810,6 +810,10 @@ export class DrizzlePaymentRepository implements PaymentRepository {
         invoiceCreation: sql<string | null>`(
           SELECT gi.creation_state FROM gateway_invoices gi
            WHERE gi.tenant_id = ${payments.tenantId} AND gi.payment_id = ${payments.id})`,
+        lateCredited: sql<boolean>`EXISTS (
+          SELECT 1 FROM gateway_invoices gi
+           WHERE gi.tenant_id = ${payments.tenantId} AND gi.payment_id = ${payments.id}
+             AND gi.outcome = 'LATE_CREDITED')`,
       })
       .from(payments)
       .where(
@@ -832,6 +836,7 @@ export class DrizzlePaymentRepository implements PaymentRepository {
         refundOpen: row['refundOpen'] === true,
         refundCompleted: row['refundCompleted'] === true,
         invoiceCreation: (row['invoiceCreation'] ?? null) as GatewayInvoiceCreationState | null,
+        lateCredited: row['lateCredited'] === true,
       });
     }
     return found;

@@ -281,6 +281,8 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   answer: 'پاسخ',
   app: 'نام برنامه (با نماد، اگر تعیین شده باشد)',
   at: 'زمان',
+  expiredAt: 'زمان پایان مهلت پرداخت',
+  approvedAt: 'زمان تأیید و واریز',
   automatic: 'نشانهٔ روشن بودن انتخاب خودکار',
   availableAt: 'زمان مجاز بعدی',
   balance: 'موجودی کیف پول',
@@ -1456,6 +1458,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'پرداخت دیگر در انتظار نیست',
     'وقتی مشتری روی پرداختی اقدام می‌کند که تأیید، لغو، رد یا منقضی شده است.',
   ],
+  'bot.payment.gateway_late_credited': [
+    'واریز پرداخت دیرهنگام به کیف پول',
+    'وقتی درگاه پرداختی را پس از پایان مهلت تأیید کرده، استعلام درگاه آن را تأیید کرده و مبلغ به کیف پول مشتری واریز شده است؛ سفارش پرداخت نمی‌شود.',
+  ],
   'bot.payment.receipt_credited_to_wallet': [
     'واریز مبلغ رسید به کیف پول',
     'وقتی مدیر به جای تأیید پرداخت، مبلغ رسید کارت‌به‌کارت را به کیف پول مشتری واریز کرده است.',
@@ -1585,6 +1591,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.payment.gateway_confirmed': [
     'پرداخت درگاه تأیید شد',
     'درگاه پرداخت را تأیید کرد و ثبت شد؛ برای سفارش، تحویل جداگانه انجام می‌شود.',
+  ],
+  'bot.payment.gateway_late_credited_screen': [
+    'پیام فاکتور پس از واریز پرداخت دیرهنگام',
+    'جایگزین متن «منقضی شد» یا «نامشخص» روی پیام فاکتور، وقتی پرداخت دیرهنگام به کیف پول واریز شده است.',
   ],
   'bot.payment.gateway_failed': [
     'پرداخت درگاه تأیید نشد',
@@ -3590,6 +3600,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'ops.financial.late_completion': [
     'گزارش مالی: تأیید دیرهنگام درگاه',
     'درگاه پرداختی را پس از بسته شدن آن تأیید کرده است؛ چیزی تسویه نشده و مدیر باید آن را بررسی کند.',
+  ],
+  'ops.financial.late_credit': [
+    'گزارش مالی: تأیید دیرهنگام و واریز به کیف پول',
+    'درگاه پرداختی را پس از بسته شدن آن تأیید کرده، استعلام درگاه آن را دوباره تأیید کرده و مبلغ خودکار به کیف پول مشتری واریز شده است.',
   ],
   'ops.financial.outcome_unknown': [
     'گزارش مالی: نتیجهٔ پرداخت درگاه نامعلوم',

@@ -2406,6 +2406,20 @@ settles automatically; the lane records `LATE_COMPLETION` on the invoice, an aud
 the condition `payments.gateway_late_completion`. What an operator then does — credit the
 wallet by hand, or nothing — is UNRESOLVED; TonPays documents no refund.
 
+RESOLVED (R5A item 4, owner decision of 2026-10-20; `docs/tonpays-gateway-audit.md` §8). For
+TonPays and TonPays Telegram a late approval is credited to the customer's WALLET
+automatically — by default, per route, switchable on the gateway's Web Admin page — and only
+after the provider's own inquiry re-verified it (`completed` AND `paid === true`, identity and
+the echoed request amount matching the payment). Exactly once (`GATEWAY_LATE_CREDIT`,
+`<paymentId>:late-credit`); the order is never reopened and no service is built; an `UNKNOWN`
+payment is credited to the wallet only, and an operator's later reconciliation cannot credit it
+again. The switch OFF keeps the behaviour above. An amount mismatch credits nothing and
+raises `payments.gateway_late_completion`. The two cases the paragraph above lists that are
+not an expired or unknown payment — an order paid another way, an order cancelled — stay
+recorded for an operator, as before. TonPays' own invoice expiry (how late an approval can
+still arrive) remains unproven against the real provider (`OQ-WP10-01`). It also settles `OQ-TPTG-11`'s
+"an operator reconciles it" half for a late approval on an `UNKNOWN` TonPays Telegram payment.
+
 ## OQ-WP10-02 — the customer's claimed amount, reference and date on a receipt
 
 Not captured: the reviewer reads them from the image, and asking for them adds turns to the

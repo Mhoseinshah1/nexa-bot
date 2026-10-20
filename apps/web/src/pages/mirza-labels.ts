@@ -60,6 +60,7 @@ export const LEDGER_REASON_LABELS: Readonly<Record<LedgerReason, WebKey>> = {
   TOPUP_STARS: 'web.ledger_reason_topup_stars',
   TOPUP_CRYPTO: 'web.ledger_reason_topup_crypto',
   RECEIPT_CREDIT: 'web.ledger_reason_receipt_credit',
+  GATEWAY_LATE_CREDIT: 'web.ledger_reason_gateway_late_credit',
   PURCHASE: 'web.ledger_reason_purchase',
   PURCHASE_REVERSAL: 'web.ledger_reason_purchase_reversal',
   REFUND: 'web.ledger_reason_refund',

@@ -885,7 +885,10 @@ state, no edge, no evidence kind and no event:
    `…:<paymentId>`, context ids only), recovered by `payments.gateway_review_reconciled` when
    the payment leaves `UNKNOWN`. Both are declared beside the producer and become schema once
    shipped (CLAUDE.md, operational-event codes).
-3. **Evidence keeps arriving, and is never acted on automatically.** The lane already treats a
+3. **Evidence keeps arriving, and is never acted on automatically.** _(R5A item 4, owner
+   decision of 2026-10-20: a late approval the inquiry verified is now credited to the
+   customer's WALLET — never settled into the order — by default; see the end of this section.
+   What follows is the behaviour with the route's switch OFF.)_ The lane already treats a
    payment that is not `PENDING` as post-deadline: no further schedule
    (`gateway-payment.service.ts:626`), webhook-triggered diagnostics at most
    `POST_DEADLINE_INQUIRY_MAX = 3` (`domain/tonpays.ts:173`; `gateway-payment.service.ts:978-986`). A later approval goes
@@ -923,6 +926,25 @@ state, no edge, no evidence kind and no event:
      the ordinary budget.
 5. **Financial log:** `financial-log.consumer.ts` gains a `PaymentOutcomeUnknown` case
    (WP18, so the money log hears of it as it hears of a late completion).
+
+##### Late approvals credited to the wallet (R5A item 4, owner decision of 2026-10-20)
+
+Resolves the "an operator reconciles it" half of `OQ-TPTG-11` for an approval that arrives
+after the effective deadline, or on an `UNKNOWN` payment. The rules of §9.4 and §9.6 hold:
+only the inquiry decides, the effective deadline is judged under the payment's lock, an
+`UNKNOWN` payment is never auto-settled into an order. With the route's setting
+`payments.late_credit.tonpays_telegram_enabled` ON (the default), an approval the inquiry
+re-verified (`completed` AND `paid === true`, identity matched, the provider's echoed
+`request_amount` equal to what Nexa sent; `final_amount` stays metadata) is credited to the
+customer's wallet ONCE — `GATEWAY_LATE_CREDIT`, `<paymentId>:late-credit`, in the transaction
+that records it — whatever the payment's state (`EXPIRED`, `UNKNOWN`, or `PENDING` past the
+review deadline). The payment keeps its state, the order is not reopened, no service is built.
+An operator's `CONFIRMED` reconciliation of that `UNKNOWN` payment is then refused
+(`LATE_CREDIT_ALREADY_APPLIED`); `FAILED` closes it and moves nothing. An amount mismatch
+credits nothing and raises `payments.gateway_late_completion`. OFF is the behaviour described
+above. The slow late poll (5 minutes, 15, then hourly, for `payments.late_credit.window_hours`,
+default 48, after the effective — review — deadline) lets the approval be seen without a
+webhook. The complete design is `docs/tonpays-gateway-audit.md` §8.
 
 #### 9.6.5 Inquiry cadence during the 24 hours
 

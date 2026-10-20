@@ -138,6 +138,25 @@ export function paymentMethodSlugOf(provider: string): string | null {
 }
 
 /**
+ * R5A item 4: the settings that govern crediting a gateway's LATE approval to the customer's
+ * wallet. A route that supports it names its on/off setting in its descriptor
+ * (`lateCreditSetting`); the window is one setting for every such route. Strings here, and
+ * the registry (`settings.ts`) is what declares them — the registry test holds the two
+ * together, because the contract files cannot import each other in a cycle.
+ *
+ * Gateway-agnostic on purpose: a future route that documents late approvals (Rialit) names its
+ * own switch in its descriptor and gets the same decision, the same credit and the same polling.
+ */
+export const LATE_CREDIT_SETTING_KEYS = {
+  TONPAYS: 'payments.late_credit.tonpays_enabled',
+  TONPAYS_TELEGRAM: 'payments.late_credit.tonpays_telegram_enabled',
+} as const;
+export const LATE_CREDIT_WINDOW_SETTING_KEY = 'payments.late_credit.window_hours' as const;
+export const LATE_CREDIT_WINDOW_HOURS_MIN = 1;
+export const LATE_CREDIT_WINDOW_HOURS_MAX = 720;
+export const LATE_CREDIT_WINDOW_HOURS_DEFAULT = 48;
+
+/**
  * What each route needs and how it settles, so no caller infers either from the name.
  *
  * `settlesVia` is what makes this layer provider-neutral in the only way that matters: a
@@ -231,6 +250,15 @@ export interface PaymentGatewayDescriptor {
    * (`docs/centralpay-gateway-audit.md` §3).
    */
   readonly numericIdentity: boolean;
+  /**
+   * R5A item 4: the setting that switches on crediting this route's verified LATE approval
+   * (after the deadline, or on an EXPIRED / UNKNOWN payment) to the customer's wallet, or null
+   * for a route that never does — `OFF` there is today's behaviour exactly: the approval is
+   * recorded as a late completion and an operator decides. Only an `INQUIRY` route has one:
+   * the credit is triggered by an approval the provider's own inquiry re-verified, never by a
+   * webhook or a pushed payment.
+   */
+  readonly lateCreditSetting: string | null;
 }
 
 export const PAYMENT_GATEWAY_DESCRIPTORS: {
@@ -251,6 +279,7 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     verifyKey: false,
     browserReturn: false,
     numericIdentity: false,
+    lateCreditSetting: null,
   },
   TONPAYS: {
     provider: 'TONPAYS',
@@ -267,6 +296,7 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     verifyKey: false,
     browserReturn: false,
     numericIdentity: false,
+    lateCreditSetting: LATE_CREDIT_SETTING_KEYS.TONPAYS,
   },
   TELEGRAM_STARS: {
     provider: 'TELEGRAM_STARS',
@@ -298,6 +328,7 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     verifyKey: false,
     browserReturn: false,
     numericIdentity: false,
+    lateCreditSetting: null,
   },
   TONPAYS_TELEGRAM: {
     provider: 'TONPAYS_TELEGRAM',
@@ -315,6 +346,7 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     verifyKey: false,
     browserReturn: false,
     numericIdentity: false,
+    lateCreditSetting: LATE_CREDIT_SETTING_KEYS.TONPAYS_TELEGRAM,
   },
   NOWPAYMENTS: {
     provider: 'NOWPAYMENTS',
@@ -349,6 +381,7 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     verifyKey: false,
     browserReturn: false,
     numericIdentity: false,
+    lateCreditSetting: null,
   },
   CENTRALPAY: {
     provider: 'CENTRALPAY',
@@ -367,6 +400,7 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     verifyKey: true,
     browserReturn: true,
     numericIdentity: true,
+    lateCreditSetting: null,
   },
 };
 

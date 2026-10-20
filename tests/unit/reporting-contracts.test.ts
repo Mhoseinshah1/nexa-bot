@@ -56,7 +56,13 @@ describe('reporting contracts', () => {
   it('classifies every ledger reason into exactly one wallet group, top-ups apart from gifts', () => {
     expect(Object.keys(WALLET_REPORT_GROUP_OF).sort()).toEqual([...LEDGER_REASONS].sort());
     expect([...ledgerReasonsIn('TOPUP')].sort()).toEqual(
-      ['TOPUP_CRYPTO', 'TOPUP_GATEWAY', 'TOPUP_RECEIPT', 'TOPUP_STARS'].sort(),
+      [
+        'GATEWAY_LATE_CREDIT',
+        'TOPUP_CRYPTO',
+        'TOPUP_GATEWAY',
+        'TOPUP_RECEIPT',
+        'TOPUP_STARS',
+      ].sort(),
     );
     // Cashback, gifts and commissions are never a top-up: that is wallet inflow the
     // customer paid for, and the other three are money the business gave away.

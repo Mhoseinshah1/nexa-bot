@@ -267,6 +267,8 @@ export interface PaymentSituationFactsRecord {
   readonly refundCompleted: boolean;
   readonly refundRemaining: boolean;
   readonly invoiceCreation: GatewayInvoiceCreationState | null;
+  /** R5A item 4: the invoice's outcome is `LATE_CREDITED`. */
+  readonly lateCredited: boolean;
 }
 
 export interface PaymentRepository {

@@ -1754,6 +1754,40 @@ export const TEMPLATES = [
       },
     ],
   },
+  {
+    key: 'bot.payment.gateway_late_credited',
+    description:
+      'R5A item 4: sent when an online gateway approved a payment AFTER Nexa had told the ' +
+      'customer it expired, the gateway\u2019s own inquiry re-verified the approval, and the paid ' +
+      'amount was credited to the wallet. Says the payment was confirmed late and the amount is ' +
+      'in the wallet; the order is not paid by it. Both figures are read at send time from the ' +
+      'payment\u2019s `GATEWAY_LATE_CREDIT` ledger entry and the wallet \u2014 a reader rather ' +
+      'than a payload (ADR 0030 \u00a71).',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'The amount credited, from the GATEWAY_LATE_CREDIT entry.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'balance',
+        type: 'MONEY',
+        description: 'The customer\u2019s wallet balance now, derived from the ledger.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The payment\u2019s tracking code (`payments.reference`), read at send time.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
   /* ---------------------------------------------------------------------------
    * Phase 5T — the Telegram admin surface.
    *
@@ -8712,6 +8746,25 @@ export const TEMPLATES = [
         description:
           'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
           'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_late_credited_screen',
+    description:
+      'R5A item 4: what the payment\u2019s own invoice message says once the gateway approved the ' +
+      'payment after it had closed and the amount was credited to the wallet \u2014 the screen the ' +
+      'customer would otherwise still read as expired or unresolved. No figure: the amount and ' +
+      'balance are in the separate notice (`bot.payment.gateway_late_credited`).',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment\u2019s public tracking code, `paymentTrackingCode` of the payment.',
         required: false,
         repeatable: false,
       },

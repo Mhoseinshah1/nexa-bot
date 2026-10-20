@@ -194,7 +194,7 @@ export const METRIC_DEFINITIONS: readonly MetricDefinition[] = [
     name: 'wallet.topup',
     kind: 'SUM_MONEY',
     formula:
-      'sum(wallet_entries.amount) and count, CREDIT entries with reason TOPUP_GATEWAY, TOPUP_RECEIPT, TOPUP_STARS or TOPUP_CRYPTO, by currency',
+      'sum(wallet_entries.amount) and count, CREDIT entries with reason TOPUP_GATEWAY, TOPUP_RECEIPT, TOPUP_STARS, TOPUP_CRYPTO or GATEWAY_LATE_CREDIT, by currency',
     timestampBasis: 'OCCURRED_AT',
     filters: ['tenant-scoped', 'classified by reason code, never by note'],
     supportedPeriods: REPORT_PERIODS,

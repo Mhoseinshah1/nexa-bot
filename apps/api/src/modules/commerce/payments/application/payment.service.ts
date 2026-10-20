@@ -104,6 +104,11 @@ import {
   requiresProviderReference,
 } from '../domain/gateway-reconciliation.js';
 import {
+  lateCreditAmountMatches,
+  lateCreditReference,
+  lateCreditStateDecision,
+} from '../domain/late-credit.js';
+import {
   GATEWAY_REVIEW_RECONCILED_CODE,
   GATEWAY_REVIEW_UNRESOLVED_CODE,
 } from './gateway-payment.service.js';
@@ -329,6 +334,7 @@ export interface PaymentServiceDeps {
     | 'findByPayment'
     | 'requestReconcileInquiry'
     | 'requestInquiry'
+    | 'markLateCredited'
     | 'providerOrderIdTaken'
     | 'customerNumberFor'
   >;
@@ -405,12 +411,53 @@ export type GatewayConfirmation =
         | 'NOT_A_GATEWAY_PAYMENT'
         | 'ORDER_NOT_AWAITING_PAYMENT'
         /*
+         * R5A item 4: this payment's late approval was already credited to the wallet
+         * (`<paymentId>:late-credit`). It never also settles its order or top-up.
+         */
+        | 'LATE_CREDIT_ALREADY_APPLIED'
+        /*
          * CentralPay: the provider reference the lane bound is not this attempt's under the
          * payment's lock — the money is not provably this payment's. Held, never settled.
          */
         | 'PROVIDER_REFERENCE_MISMATCH';
       readonly payment: PaymentRecord;
     };
+
+/**
+ * R5A item 4: the answer of `creditLateGatewayApproval`.
+ *
+ * - `CREDITED` — the payment's late credit exists: this call wrote it (`credited`), or an
+ *   earlier call had (a webhook, a repeated inquiry, a polling pass or a replica racing this
+ *   one) and nothing more happened. The wallet holds the payment's amount ONCE either way.
+ * - `NOT_ELIGIBLE` — nothing moved, and `reason` says why. The caller records the approval as
+ *   a late completion for an operator, exactly as it did before the credit existed.
+ */
+export type LateGatewayCredit =
+  | {
+      readonly outcome: 'CREDITED';
+      readonly payment: PaymentRecord;
+      readonly entryId: string;
+      readonly amount: Money;
+      /** True only for the call that wrote the ledger entry. */
+      readonly credited: boolean;
+    }
+  | {
+      readonly outcome: 'NOT_ELIGIBLE';
+      readonly reason:
+        | 'NOT_A_GATEWAY_PAYMENT'
+        | 'ROUTE_HAS_NO_LATE_CREDIT'
+        | 'SETTING_OFF'
+        | 'APPROVAL_NOT_VERIFIED'
+        | 'ALREADY_CONFIRMED'
+        | 'PAYMENT_CLOSED'
+        | 'STILL_PAYABLE'
+        | 'AMOUNT_MISMATCH'
+        | 'CURRENCY_UNSUPPORTED';
+      readonly payment: PaymentRecord;
+    };
+
+/** The audit action of every late credit this path writes. */
+export const GATEWAY_LATE_CREDIT_ACTION = 'payment.gateway_late_credit';
 
 /** How many random order ids a `numericIdentity` attempt draws before refusing (§3). */
 const NUMERIC_ORDER_ID_DRAWS = 5;
@@ -3690,6 +3737,17 @@ export class PaymentService {
           return { outcome: 'NOT_ELIGIBLE', reason: 'PAYMENT_NOT_PENDING', payment };
         }
         /*
+         * R5A item 4: a payment already credited to the wallet as a late approval is never
+         * settled into its order or top-up as well, whatever its deadline now says (a PENDING
+         * payment credited past its deadline, a review deadline that moved).
+         */
+        if (
+          (await this.deps.wallet.findByReference(scope, lateCreditReference(payment.id), tx)) !==
+          null
+        ) {
+          return { outcome: 'NOT_ELIGIBLE', reason: 'LATE_CREDIT_ALREADY_APPLIED', payment };
+        }
+        /*
          * The attempt's own deadline, hard, with no grace (brief §3) — its EFFECTIVE one
          * (§9.6.3 d): the provider review deadline once a provider acknowledged the
          * receipt under this same lock, `expires_at` otherwise. Read from the row held FOR
@@ -3767,6 +3825,239 @@ export class PaymentService {
           GATEWAY_CONFIRM_ACTION,
         );
         return { outcome: 'SETTLED', payment: settled.payment, orderPurpose: order.purpose };
+      },
+    );
+  }
+
+  /**
+   * R5A item 4 — a gateway's LATE approval, credited to the customer's WALLET.
+   *
+   * The caller is the gateway lane, after the provider's own inquiry answered `completed`
+   * AND `paid === true` for this attempt's identity and `confirmGatewayPayment` answered
+   * `NOT_ELIGIBLE` (the deadline passed, or the payment was already EXPIRED / UNKNOWN). A
+   * webhook never gets here: it only brings that inquiry forward. Everything below is decided
+   * again under the payment's lock, whatever the caller believed:
+   *
+   * - an entry already under `<paymentId>:late-credit` means the credit was done: `CREDITED`,
+   *   `credited: false`, and nothing is written twice — however many webhooks, inquiries,
+   *   polling passes or replicas arrive, and whatever the setting says by now;
+   * - the route must name a late-credit setting in its descriptor, and the setting must be ON
+   *   (read in this transaction): OFF is today's behaviour exactly, a late completion;
+   * - the invoice's RECORDED answer must still be an approval by the route's own evidence
+   *   table (the same one an operator's reconciliation needs), and the request amount the
+   *   provider echoed must equal the amount Nexa sent. A mismatch credits nothing;
+   * - the payment must be `EXPIRED`, `UNKNOWN`, or `PENDING` past its effective deadline;
+   *   `CONFIRMED` and `FAILED` are never credited;
+   * - and the amount is the payment's OWN frozen amount, in the currency this installation
+   *   still sells in.
+   *
+   * It writes ONE `GATEWAY_LATE_CREDIT` entry, in the payment's currency, naming the payment
+   * and never the order; `WalletEntryRecorded` and `PaymentLateCredited` in the outbox; an
+   * audit row; the customer's `GATEWAY_LATE_PAYMENT_CREDITED` notice; and the invoice's
+   * `LATE_CREDITED` outcome — all in this transaction. The payment row is not touched, the
+   * order is not reopened, no service is built, and no top-up gift is earned (a late credit is
+   * the principal only). The customer's wallet row is locked after the payment's.
+   */
+  async creditLateGatewayApproval(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+    input: {
+      /**
+       * The request amount the provider's inquiry echoed, or null when it named none.
+       * Metadata, compared and never credited.
+       */
+      readonly providerRequestAmount: bigint | null;
+      readonly evidenceNote: string | null;
+    },
+  ): Promise<LateGatewayCredit> {
+    const paymentId = this.paymentId(id);
+    const denial = {
+      action: GATEWAY_LATE_CREDIT_ACTION,
+      entityType: 'Payment',
+      entityId: paymentId,
+    };
+    await this.authorize(scope, actor, PAYMENT_PLACE_PERMISSION, denial);
+
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PAYMENT_PLACE_PERMISSION,
+      denial,
+      async (tx): Promise<LateGatewayCredit> => {
+        await this.assertScopeActive(scope, tx);
+        const payment = await this.deps.repository.findByIdForUpdate(scope, paymentId, tx);
+        // After the lock, like `confirmGatewayPayment`: the deadline and the state are judged together.
+        const now = this.deps.clock.now();
+        if (payment === null) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+        }
+        if (payment.method !== 'GATEWAY' || payment.gatewayProvider === null) {
+          return { outcome: 'NOT_ELIGIBLE', reason: 'NOT_A_GATEWAY_PAYMENT', payment };
+        }
+        const reference = lateCreditReference(payment.id);
+        const existing = await this.deps.wallet.findByReference(scope, reference, tx);
+        if (existing !== null) {
+          // Done already. Make sure the record says so, and write nothing else.
+          await this.deps.gatewayInvoices.markLateCredited(scope, payment.id, now, tx);
+          return {
+            outcome: 'CREDITED',
+            payment,
+            entryId: existing.id,
+            amount: existing.amount,
+            credited: false,
+          };
+        }
+        const settingName = PAYMENT_GATEWAY_DESCRIPTORS[payment.gatewayProvider].lateCreditSetting;
+        if (settingName === null) {
+          return { outcome: 'NOT_ELIGIBLE', reason: 'ROUTE_HAS_NO_LATE_CREDIT', payment };
+        }
+        const enabled = await this.deps.settings.valueOf<boolean>(
+          scope,
+          settingKeyOf(settingName),
+          tx,
+        );
+        if (enabled !== true) return { outcome: 'NOT_ELIGIBLE', reason: 'SETTING_OFF', payment };
+
+        const state = lateCreditStateDecision({
+          state: payment.state,
+          deadline: gatewaySettlementDeadline(payment),
+          now,
+        });
+        if (!state.creditable) {
+          return { outcome: 'NOT_ELIGIBLE', reason: state.reason, payment };
+        }
+        /*
+         * The re-verify rule, held here as well as in the lane: the invoice's recorded inquiry
+         * must be an approval by the route's own table (`completed` AND `paid === true`), and
+         * the provider's echoed request amount must be the amount Nexa sent.
+         */
+        const invoice = await this.deps.gatewayInvoices.findByPayment(scope, payment.id, tx);
+        if (
+          invoice === null ||
+          invoice.providerPaid !== true ||
+          !reconciliationEvidenceAllows(payment.gatewayProvider, 'CONFIRMED', {
+            status: invoice.providerStatus,
+            paid: invoice.providerPaid,
+          })
+        ) {
+          return { outcome: 'NOT_ELIGIBLE', reason: 'APPROVAL_NOT_VERIFIED', payment };
+        }
+        if (
+          !lateCreditAmountMatches({
+            providerRequestAmount: input.providerRequestAmount,
+            sentAmount: invoice.sentAmount,
+          })
+        ) {
+          return { outcome: 'NOT_ELIGIBLE', reason: 'AMOUNT_MISMATCH', payment };
+        }
+        if (payment.amount.currency !== (await this.sellingCurrency(scope, tx))) {
+          return { outcome: 'NOT_ELIGIBLE', reason: 'CURRENCY_UNSUPPORTED', payment };
+        }
+
+        if (!(await this.deps.wallet.lockCustomer(scope, payment.customerId, tx))) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+        }
+        const before = await this.deps.wallet.balanceOf(
+          scope,
+          payment.customerId,
+          payment.amount.currency,
+          tx,
+        );
+        const { entry, inserted } = await this.deps.wallet.append(
+          scope,
+          {
+            id: this.deps.ids.uuid(),
+            customerId: payment.customerId,
+            direction: 'CREDIT',
+            reason: 'GATEWAY_LATE_CREDIT',
+            // The payment's OWN frozen amount: never a figure the provider reported.
+            amount: payment.amount,
+            reference,
+            // The wallet, never the order: the order is not reopened and nothing is built.
+            orderId: null,
+            paymentId: payment.id,
+            note: null,
+            now,
+          },
+          tx,
+        );
+        // Written (or found) in this transaction either way; a replay changes nothing else.
+        await this.deps.gatewayInvoices.markLateCredited(scope, payment.id, now, tx);
+        if (inserted) {
+          await this.deps.outbox.write(tx, actor, {
+            eventType: 'WalletEntryRecorded',
+            aggregateType: 'Wallet',
+            aggregateId: entry.customerId,
+            payload: {
+              customerId: entry.customerId,
+              entryId: entry.id,
+              direction: entry.direction,
+              reason: entry.reason,
+              amountMinor: entry.amount.amountMinor.toString(),
+              currency: entry.amount.currency,
+            },
+          });
+          await this.deps.outbox.write(tx, actor, {
+            eventType: 'PaymentLateCredited',
+            aggregateType: 'Payment',
+            aggregateId: payment.id,
+            payload: {
+              customerId: payment.customerId,
+              orderId: payment.orderId,
+              provider: payment.gatewayProvider,
+              entryId: entry.id,
+              amountMinor: entry.amount.amountMinor.toString(),
+              currency: entry.amount.currency,
+            },
+          });
+          await this.deps.audit.record(
+            scope,
+            actor,
+            {
+              action: GATEWAY_LATE_CREDIT_ACTION,
+              entityType: 'Payment',
+              entityId: payment.id,
+              before: { state: payment.state },
+              after: {
+                state: payment.state,
+                gatewayProvider: payment.gatewayProvider,
+                orderId: payment.orderId,
+                walletEntryId: entry.id,
+                amountMinor: entry.amount.amountMinor.toString(),
+                currency: entry.amount.currency,
+                balanceBeforeMinor: before.amountMinor.toString(),
+                providerStatus: invoice.providerStatus,
+                evidenceNote: input.evidenceNote,
+                credited: true,
+              },
+              result: 'SUCCESS',
+            },
+            tx,
+          );
+          /*
+           * Told in THIS transaction, like every credit: once, by
+           * `customer_notifications_subject_key` on (tenant, kind, payment). The answer is not
+           * checked — a customer with no durable bot link has nobody to tell, and a messaging
+           * concern may not veto a credit.
+           */
+          await this.deps.notifier.notify(
+            scope,
+            payment.customerId,
+            'GATEWAY_LATE_PAYMENT_CREDITED',
+            payment.id,
+            now,
+            tx,
+          );
+        }
+        return {
+          outcome: 'CREDITED',
+          payment,
+          entryId: entry.id,
+          amount: entry.amount,
+          credited: inserted,
+        };
       },
     );
   }
@@ -4155,17 +4446,36 @@ export class PaymentService {
         }
         const invoice = await this.deps.gatewayInvoices.findByPayment(scope, paymentId, tx);
         const status = invoice?.providerStatus ?? null;
+        /*
+         * R5A item 4: a late approval already credited this payment's amount to the wallet
+         * (`<paymentId>:late-credit`). Confirming it now would credit the same money a second
+         * time, through the order or the top-up: refused. Closing it FAILED is the one exit
+         * left, and it is allowed — the money is in the wallet, which is the evidence the
+         * provider's `completed` could not be for a FAILED — and it moves nothing and tells the
+         * customer nothing (they were told the credit).
+         */
+        const lateCredited =
+          (await this.deps.wallet.findByReference(scope, lateCreditReference(paymentId), tx)) !==
+          null;
+        if (lateCredited && input.to === 'CONFIRMED') {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+            'This payment was already credited to the wallet as a late approval.',
+            { reason: 'LATE_CREDIT_ALREADY_APPLIED' },
+          );
+        }
         // The provider's own vocabulary, one table (`domain/gateway-reconciliation.ts`).
         const evidenceAllows =
           invoice !== null &&
-          reconciliationEvidenceAllows(payment.gatewayProvider ?? invoice.provider, input.to, {
-            status,
-            paid: invoice.providerPaid,
-          }) &&
-          // A reference-bound route (CentralPay) confirms only with its reference bound.
-          (input.to !== 'CONFIRMED' ||
-            !requiresProviderReference(invoice.provider) ||
-            invoice.providerChargeId !== null);
+          (lateCredited ||
+            (reconciliationEvidenceAllows(payment.gatewayProvider ?? invoice.provider, input.to, {
+              status,
+              paid: invoice.providerPaid,
+            }) &&
+              // A reference-bound route (CentralPay) confirms only with its reference bound.
+              (input.to !== 'CONFIRMED' ||
+                !requiresProviderReference(invoice.provider) ||
+                invoice.providerChargeId !== null)));
         if (invoice === null || !evidenceAllows) {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
@@ -4267,7 +4577,10 @@ export class PaymentService {
             paymentId,
             {
               resolvedByAdminId: adminIdOf(actor),
-              resolutionNote: `${provider}:${status ?? 'unknown'}`.slice(0, 120),
+              resolutionNote: (lateCredited
+                ? `${provider}:${status ?? 'unknown'}:paid:late_credited`
+                : `${provider}:${status ?? 'unknown'}`
+              ).slice(0, 120),
               resolvedAt: now,
             },
             now,
@@ -4279,25 +4592,32 @@ export class PaymentService {
               'This payment was already resolved.',
             );
           }
-          await this.deps.notifier.notify(
-            scope,
-            payment.customerId,
-            'GATEWAY_PAYMENT_FAILED',
-            paymentId,
-            now,
-            tx,
-          );
-          await this.deps.outbox.write(tx, actor, {
-            eventType: 'PaymentFailed',
-            aggregateType: 'Payment',
-            aggregateId: paymentId,
-            payload: {
-              customerId: payment.customerId,
-              orderId: payment.orderId,
-              method: payment.method,
-              cause: 'GATEWAY_FAILED',
-            },
-          });
+          /*
+           * Not for a payment whose late approval was credited to the wallet: it did not fail,
+           * the customer was told the credit, and a "your payment failed" now would contradict
+           * it (nor would the log's "payment failed" line be true).
+           */
+          if (!lateCredited) {
+            await this.deps.notifier.notify(
+              scope,
+              payment.customerId,
+              'GATEWAY_PAYMENT_FAILED',
+              paymentId,
+              now,
+              tx,
+            );
+            await this.deps.outbox.write(tx, actor, {
+              eventType: 'PaymentFailed',
+              aggregateType: 'Payment',
+              aggregateId: paymentId,
+              payload: {
+                customerId: payment.customerId,
+                orderId: payment.orderId,
+                method: payment.method,
+                cause: 'GATEWAY_FAILED',
+              },
+            });
+          }
           const failed = await this.deps.repository.findById(scope, paymentId, tx);
           if (failed === null) {
             throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');

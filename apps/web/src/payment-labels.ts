@@ -104,6 +104,7 @@ export const GATEWAY_OUTCOME_LABELS: Readonly<Record<GatewayInvoiceOutcome, WebK
   ALREADY_SETTLED: 'web.pay_outcome_already_settled',
   UNSUCCESSFUL: 'web.pay_outcome_unsuccessful',
   LATE_COMPLETION: 'web.pay_outcome_late_completion',
+  LATE_CREDITED: 'web.pay_outcome_late_credited',
 };
 
 export const CUSTOMER_NOTIFICATION_KIND_NAMES: Readonly<Record<CustomerNotificationKind, WebKey>> =
@@ -127,6 +128,7 @@ export const CUSTOMER_NOTIFICATION_KIND_NAMES: Readonly<Record<CustomerNotificat
     TRIAL_NOT_DELIVERED: 'web.pay_notice_trial_not_delivered',
     RECEIPT_CREDITED_TO_WALLET: 'web.pay_notice_receipt_credited_to_wallet',
     WALLET_TOPUP_GIFT_CREDITED: 'web.pay_notice_wallet_topup_gift_credited',
+    GATEWAY_LATE_PAYMENT_CREDITED: 'web.pay_notice_gateway_late_payment_credited',
     REFUND_COMPLETED: 'web.pay_notice_refund_completed',
     GATEWAY_PAYMENT_FAILED: 'web.pay_notice_gateway_payment_failed',
     SERVICE_REFUND_REQUEST_REGISTERED: 'web.pay_notice_service_refund_request_registered',

@@ -316,6 +316,8 @@ export function telegramLaneWith(
     readonly invoices?: (real: DrizzleGatewayInvoiceRepository) => DrizzleGatewayInvoiceRepository;
     /** FIX10: the receipt downloader, so a case can make one submission's download throw. */
     readonly receiptFiles?: GatewayPaymentServiceDeps['receiptFiles'];
+    /** R5A item 4: the late-credit collaborator the production lane is given; absent, none. */
+    readonly lateCredit?: GatewayPaymentServiceDeps['lateCredit'];
   } = {},
 ): GatewayPaymentService {
   const db = ctx.container.database.db;
@@ -371,6 +373,7 @@ export function telegramLaneWith(
       error: () => undefined,
     },
     ...(overrides.invoiceScreens === undefined ? {} : { invoiceScreens: overrides.invoiceScreens }),
+    ...(overrides.lateCredit === undefined ? {} : { lateCredit: overrides.lateCredit }),
   });
 }
 

@@ -851,6 +851,22 @@ export const WEB_FA = {
   'web.backup_interval_custom': 'سفارشی',
   'web.backup_interval_value': 'مقدار',
   'web.backup_interval_unit': 'واحد',
+  /* R5A item 4: a gateway's late approval, credited to the wallet automatically. */
+  'web.late_credit_title': 'پرداخت دیرهنگام',
+  'web.late_credit_hint': 'وقتی درگاه پرداختی را پس از پایان مهلت تأیید می‌کند، چه می‌شود.',
+  'web.late_credit_switch': 'پرداخت دیرهنگام را خودکار به کیف پول واریز کن',
+  'web.late_credit_switch_tonpays':
+    'پرداخت دیرهنگام تون‌پی (وب‌سایت) را خودکار به کیف پول واریز کن',
+  'web.late_credit_switch_tonpays_telegram':
+    'پرداخت دیرهنگام تون‌پی تلگرام را خودکار به کیف پول واریز کن',
+  'web.late_credit_switch_hint':
+    'روشن: اگر استعلام خود درگاه تأیید کند که پرداخت انجام شده و مبلغ با فاکتور یکی است، همان مبلغ فقط یک بار به کیف پول مشتری واریز می‌شود و به مشتری پیام می‌رود. سفارش دوباره باز نمی‌شود و سرویسی ساخته نمی‌شود. خاموش: مثل قبل فقط ثبت می‌شود و مدیر تصمیم می‌گیرد.',
+  'web.late_credit_window': 'مدت پیگیری پرداخت دیرهنگام (ساعت)',
+  'web.late_credit_window_hint':
+    'پس از بسته‌شدن پرداخت، فاکتور باز درگاه به‌آهستگی (۵ دقیقه، ۱۵ دقیقه، سپس ساعتی) پیگیری می‌شود تا تأیید دیرهنگام بدون وبهوک هم دیده شود. بین ۱ تا ۷۲۰ ساعت.',
+  'web.late_credit_window_invalid': 'یک عدد صحیح بین ۱ تا ۷۲۰ بنویسید.',
+  'web.late_credit_window_save': 'ذخیرهٔ مدت پیگیری',
+  'web.late_credit_read_only': 'برای تغییر این گزینه‌ها دسترسی ویرایش تنظیمات لازم است.',
   'web.backup_interval_bounds': 'کمترین فاصله ۱۵ دقیقه و بیشترین ۳۰ روز است.',
   'web.backup_interval_invalid': 'یک عدد صحیح وارد کنید.',
   'web.backup_interval_too_short': 'فاصله نمی‌تواند کمتر از ۱۵ دقیقه باشد.',
@@ -2275,6 +2291,11 @@ export const WEB_FA = {
   'web.payment_situation_refund_in_progress': 'بازپرداخت در جریان',
   'web.payment_situation_refunded': 'بازپرداخت‌شده',
   'web.payment_situation_credited_to_wallet': 'واریز به کیف پول',
+  'web.payment_situation_late_credited': 'تأیید دیرهنگام — به کیف پول واریز شد',
+  'web.payment_situation_what_late_credited':
+    'درگاه پرداخت را پس از پایان مهلت تأیید کرد، استعلام درگاه آن را دوباره تأیید کرد و مبلغ همان‌جا به کیف پول مشتری واریز شد. سفارش پرداخت نشده است و سرویسی ساخته نشد.',
+  'web.payment_situation_safe_late_credited':
+    'به مشتری نگویید دوباره پرداخت کند: پول در کیف پول اوست و می‌تواند از همان برای خرید استفاده کند.',
   'web.payment_situation_rejected': 'ردشده توسط بازبین',
   'web.payment_situation_failed': 'ناموفق',
   'web.payment_situation_expired': 'منقضی‌شده',
@@ -9258,6 +9279,7 @@ export const WEB_FA = {
   'web.ledger_reason_topup_stars': 'شارژ با استارز تلگرام',
   'web.ledger_reason_topup_crypto': 'شارژ با رمزارز',
   'web.ledger_reason_receipt_credit': 'واریز مبلغ رسید به کیف پول',
+  'web.ledger_reason_gateway_late_credit': 'تأیید دیرهنگام پرداخت',
   'web.ledger_reason_purchase': 'خرید',
   'web.ledger_reason_purchase_reversal': 'برگشت خرید',
   'web.ledger_reason_refund': 'بازپرداخت',
@@ -10174,6 +10196,7 @@ export const WEB_FA = {
   'web.pay_outcome_already_settled': 'پیش‌تر تسویه شده بود',
   'web.pay_outcome_unsuccessful': 'ناموفق',
   'web.pay_outcome_late_completion': 'تأیید دیرهنگام',
+  'web.pay_outcome_late_credited': 'تأیید دیرهنگام — به کیف پول واریز شد',
   'web.pay_notice_payment_rejected': 'رد پرداخت',
   'web.pay_notice_payment_expired': 'پایان مهلت پرداخت',
   'web.pay_notice_order_expired': 'پایان مهلت سفارش',
@@ -10193,6 +10216,7 @@ export const WEB_FA = {
   'web.pay_notice_trial_not_delivered': 'تحویل‌نشدن سرویس تست',
   'web.pay_notice_receipt_credited_to_wallet': 'واریز رسید به کیف پول',
   'web.pay_notice_wallet_topup_gift_credited': 'هدیهٔ شارژ کیف پول',
+  'web.pay_notice_gateway_late_payment_credited': 'واریز پرداخت دیرهنگام به کیف پول',
   'web.pay_notice_refund_completed': 'انجام بازگشت وجه',
   'web.pay_notice_gateway_payment_failed': 'ناموفق‌بودن پرداخت درگاه',
   'web.pay_notice_service_refund_request_registered': 'ثبت درخواست بازگشت وجه سرویس',
@@ -10588,6 +10612,7 @@ export const WEB_FA = {
   'web.outbox_event_payment_receipt_submitted': 'ارسال رسید',
   'web.outbox_event_payment_failed': 'پرداخت ناموفق',
   'web.outbox_event_payment_late_completion_observed': 'تأیید دیرهنگام پرداخت',
+  'web.outbox_event_payment_late_credited': 'واریز پرداخت دیرهنگام به کیف پول',
   'web.outbox_event_refund_completed': 'بازپرداخت انجام شد',
   'web.outbox_event_refund_failed': 'بازپرداخت ناموفق',
   'web.outbox_event_service_refund_requested': 'درخواست بازپرداخت سرویس',

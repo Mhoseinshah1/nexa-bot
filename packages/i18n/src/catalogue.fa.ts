@@ -1083,6 +1083,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.trial.not_delivered':
     '{icon:error} متأسفیم، سرویس آزمایشی شما ساخته نشد. این مورد جزو سهمیه سرویس آزمایشی شما حساب نمی‌شود.',
   /*
+   * R5A item 4: the gateway approved after Nexa had told the customer the payment expired.
+   * The owner's sentence, plus one line that keeps the order honest: the credit went to the
+   * wallet and did not pay the order, which stays as it was (expired, or still awaiting payment).
+   */
+  'bot.payment.gateway_late_credited':
+    '{icon:success} پرداخت شما با تأخیر تأیید شد و مبلغ {amount} به کیف پول شما اضافه شد.\n{icon:amount} موجودی فعلی: {balance}\n\nاین مبلغ به‌عنوان پرداخت سفارش ثبت نشده است؛ می‌توانید از موجودی کیف پول برای خرید استفاده کنید.\n\n\nکد پیگیری پرداخت: {reference}',
+  /*
    * WP10 P3. True of both refund channels — the wallet and a transfer out of band — so it
    * names neither, and points at the one place a figure is shown.
    */
@@ -1238,6 +1245,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_check_button': '🔄 بررسی وضعیت پرداخت',
   'bot.payment.gateway_confirmed':
     '{icon:success} پرداخت شما توسط درگاه تأیید و ثبت شد.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_late_credited_screen':
+    '{icon:success} پرداخت شما با تأخیر توسط درگاه تأیید شد و مبلغ آن به کیف پول شما اضافه شد.\nاین پرداخت، سفارش را پرداخت نکرده است؛ از موجودی کیف پول می‌توانید برای خرید استفاده کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_failed':
     '{icon:error} پرداخت آنلاین شما توسط درگاه تأیید نشد و از این پرداخت مبلغی ثبت نشد.\n\nدر صورت تمایل می‌توانید دوباره پرداخت کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_unavailable':

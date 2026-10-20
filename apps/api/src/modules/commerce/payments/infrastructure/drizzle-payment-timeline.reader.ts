@@ -66,6 +66,8 @@ const PAYMENT_SUBJECT_KINDS: readonly CustomerNotificationKind[] = [
   'RECEIPT_CREDITED_TO_WALLET',
   'WALLET_TOPUP_GIFT_CREDITED',
   'GATEWAY_PAYMENT_FAILED',
+  // R5A item 4: a late approval credited to the wallet.
+  'GATEWAY_LATE_PAYMENT_CREDITED',
 ];
 
 /**

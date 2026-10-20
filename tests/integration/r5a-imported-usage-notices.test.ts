@@ -329,10 +329,17 @@ describe('Round 5A item 1: imported services and usage notices', () => {
     });
     await queueNotice(native, 'USAGE_FIRST', 'SERVICE_USAGE_FIRST');
     const measured = activeImported[1_100] ?? '';
+    /*
+     * The baseline holds the figure the service is at now, so the sweep in the same pass sees
+     * no new crossing. A baseline of 1 byte made the 90 % figure a genuine second-threshold
+     * crossing, and whether the sweep's 200-row batch reached this service depended on the ids'
+     * order — one extra PENDING notice on some runs (CI on #304).
+     */
     await exec(sql`INSERT INTO service_reminder_baselines
                      (tenant_id, service_id, baseline_at, basis_expires_at,
                       basis_traffic_limit_bytes, used_bytes)
-                   SELECT tenant_id, id, created_at, expires_at, traffic_limit_bytes, 1
+                   SELECT tenant_id, id, created_at, expires_at, traffic_limit_bytes,
+                          traffic_used_bytes
                      FROM services WHERE id = ${measured}`);
     await queueNotice(measured, 'USAGE_FIRST', 'SERVICE_USAGE_FIRST');
     const claimed = activeImported[1_101] ?? '';

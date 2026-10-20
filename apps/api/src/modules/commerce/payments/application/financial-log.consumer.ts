@@ -24,6 +24,7 @@ import type { CustomerRecord, CustomerRepository } from '../../customers/applica
 import { identityOf } from '../../ops-log/application/presenters.js';
 import type { CustomerFact, OpsLogFacts, OpsLogWords } from '../../ops-log/application/ports.js';
 import type { GatewayInvoiceRecord, GatewayInvoiceRepository } from './gateway-invoice-ports.js';
+import { gatewaySettlementDeadline } from '../domain/settlement.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
 import type { ServiceRefundRequestRepository } from './service-refund-request-ports.js';
 
@@ -90,6 +91,8 @@ export class FinancialLogConsumer implements EventConsumer {
     'PaymentConfirmed',
     'PaymentFailed',
     'PaymentLateCompletionObserved',
+    // R5A item 4: a late approval credited to the wallet (log L5, its own message).
+    'PaymentLateCredited',
     // TonPays Telegram (§9.6.4): a provider review that lapsed with no trustworthy answer.
     'PaymentOutcomeUnknown',
     'RefundCompleted',
@@ -297,6 +300,45 @@ export class FinancialLogConsumer implements EventConsumer {
           buttons: [
             { kind: 'MANUAL_CREDIT', ref: payment.customerId },
             { kind: 'USER', ref: payment.customerId },
+          ],
+        };
+      }
+      case 'PaymentLateCredited': {
+        const payload = EVENT_PAYLOAD_SCHEMAS.PaymentLateCredited.parse(event.payload);
+        const found = await this.facts(scope, event.aggregateId as PaymentId, tx);
+        if (found === null || found.payment.source !== 'NEXA') return null;
+        const { payment, customer } = found;
+        const occurredAt = new Date(event.occurredAt);
+        const currency = payload.currency as CurrencyCode;
+        const values: Record<string, TemplateValue> = {
+          gateway: words.gatewayName(payload.provider),
+          ...who(customer, words),
+          reference: paymentTrackingCode(payment),
+          amount: money(BigInt(payload.amountMinor), currency),
+          // When the payment stopped being payable in Nexa, against when the approval was credited.
+          expiredAt: gatewaySettlementDeadline(payment) ?? occurredAt,
+          approvedAt: occurredAt,
+        };
+        await this.withOrderCode(scope, payment, values, tx);
+        // The wallet on either side of THIS payment's late credit, found by its entry.
+        const balance = await facts.balanceAround(
+          scope,
+          payment.customerId,
+          currency,
+          [payload.entryId],
+          tx,
+        );
+        if (balance !== null) {
+          values['balanceBefore'] = balance.before;
+          values['balanceAfter'] = balance.after;
+        }
+        return {
+          templateKey: 'ops.financial.late_credit' as TemplateKey,
+          values,
+          logType: 'PAYMENT_LATE',
+          buttons: [
+            { kind: 'USER', ref: payment.customerId },
+            { kind: 'PAYMENT', ref: payment.id },
           ],
         };
       }

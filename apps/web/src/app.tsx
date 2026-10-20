@@ -806,6 +806,8 @@ export function resolve(
           mayEditGateways={may('payments.gateways.edit')}
           mayViewCards={may('payments.accounts.view')}
           mayEditCards={may('payments.accounts.edit')}
+          maySettingsView={may('settings.view')}
+          maySettingsEdit={may('settings.edit')}
         />
       ),
       crumbs: [nav('payment-gateways'), { label }],
