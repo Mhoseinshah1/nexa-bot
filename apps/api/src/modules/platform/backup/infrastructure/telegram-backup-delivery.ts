@@ -47,6 +47,7 @@ export class TelegramBackupDelivery implements BackupDeliveryChannel {
     archivePath: string;
     filename: string;
     caption: string;
+    range?: { start: number; end: number };
   }): Promise<DeliveryAttempt> {
     // An archive upload is the longest-running external call in this codebase.
     // Inside a transaction it would hold a pooled connection for the length of a
@@ -59,7 +60,11 @@ export class TelegramBackupDelivery implements BackupDeliveryChannel {
     // done properly is that the ceiling is Telegram's, not ours.
     let body: FormData;
     try {
-      const blob = await openAsBlob(input.archivePath);
+      const whole = await openAsBlob(input.archivePath);
+      // One part of a split archive (E4) is a SLICE of the file-backed blob: still read
+      // from disk as the body streams, never copied into memory.
+      const blob =
+        input.range === undefined ? whole : whole.slice(input.range.start, input.range.end);
       body = new FormData();
       body.set('chat_id', this.options.chatId);
       this.setThread(body);
@@ -131,7 +136,12 @@ export class TelegramBackupDelivery implements BackupDeliveryChannel {
         },
       );
 
-      let payload: { ok?: boolean; description?: string; error_code?: number } | null;
+      let payload: {
+        ok?: boolean;
+        description?: string;
+        error_code?: number;
+        result?: { message_id?: unknown };
+      } | null;
       try {
         payload = (await response.json()) as typeof payload;
       } catch {
@@ -139,7 +149,16 @@ export class TelegramBackupDelivery implements BackupDeliveryChannel {
       }
 
       if (response.ok && payload?.ok === true) {
-        return { state: 'SUCCEEDED', detail: null };
+        // The message id is what proves a part was delivered (E4). An `ok` without a
+        // readable one is still SUCCEEDED — Telegram said so — but carries none, so the
+        // local copy is kept: nothing can show this part is in the group by id.
+        const messageId = payload.result?.message_id;
+        return {
+          state: 'SUCCEEDED',
+          detail: null,
+          messageId:
+            typeof messageId === 'number' && Number.isSafeInteger(messageId) ? messageId : null,
+        };
       }
 
       if (payload === null) {

@@ -1,4 +1,5 @@
 import type {
+  BackupArchiveFormat,
   BackupDeliveryDestination,
   BackupDeliveryState,
   BackupManifest,
@@ -41,8 +42,11 @@ export interface DatabaseTools {
   pgDumpVersion(): Promise<string>;
   /** The SERVER's version, which decides whether a restore is a downgrade. */
   serverVersion(): Promise<string>;
-  /** Custom-format dump of the whole database to `destination`. */
-  dump(destination: string): Promise<DumpOutcome>;
+  /**
+   * Custom-format dump of the whole database to `destination`. `uncompressed` (E4) when
+   * the archive itself compresses — the 7-Zip container.
+   */
+  dump(destination: string, options?: { readonly uncompressed?: boolean }): Promise<DumpOutcome>;
   /**
    * Creates an EMPTY scratch database, restores `dumpPath` into it, checks that
    * something arrived, and drops it. Never touches the live database.
@@ -66,6 +70,8 @@ export interface DatabaseTools {
 export interface BackupWorkspace {
   readonly dumpPath: string;
   readonly archivePath: string;
+  /** Where a `SEVEN_ZIP` archive is written instead of `archivePath` (E4). */
+  readonly sevenZipPath?: string;
   /**
    * Where verification decrypts to — a second path, not `dumpPath`.
    *
@@ -127,7 +133,16 @@ export interface BackupDebrisStore {
  * into either of the other two would be inventing a fact.
  */
 export type DeliveryAttempt =
-  | { readonly state: 'SUCCEEDED'; readonly detail: string | null }
+  | {
+      readonly state: 'SUCCEEDED';
+      readonly detail: string | null;
+      /**
+       * The Telegram `message_id` of what was posted, when the answer carried one (E4). A
+       * part with no recorded message id is never treated as delivered by the local-copy
+       * retention, so an `ok: true` without one keeps the local copy — the safe reading.
+       */
+      readonly messageId?: number | null;
+    }
   | {
       readonly state: 'FAILED_DEFINITIVE';
       readonly detail: string;
@@ -158,6 +173,11 @@ export interface BackupDeliveryChannel {
     readonly archivePath: string;
     readonly filename: string;
     readonly caption: string;
+    /**
+     * The byte range `[start, end)` of the archive to send, for one part of a split archive
+     * (E4). Absent sends the whole file. Streamed from disk either way.
+     */
+    readonly range?: { readonly start: number; readonly end: number };
   }): Promise<DeliveryAttempt>;
   /**
    * Sends a message with no document.
@@ -209,6 +229,62 @@ export function isBackupDeliveryRouter(delivery: BackupDelivery): delivery is Ba
   return 'resolve' in delivery && typeof delivery.resolve === 'function';
 }
 
+/**
+ * One part of an archive (E4): a byte range of the ONE verified file, never a second copy.
+ * `filename` is what Telegram shows — `….7z` for a single part, `….7z.001`… otherwise.
+ */
+export interface BackupArchivePart {
+  readonly partNumber: number;
+  readonly start: number;
+  readonly end: number;
+  readonly bytes: number;
+  readonly sha256: string;
+  readonly filename: string;
+}
+
+/** Splits an archive into parts. One pass over the file; see `archive-parts.ts`. */
+export interface BackupPartPlanner {
+  plan(input: {
+    readonly archivePath: string;
+    readonly filename: string;
+  }): Promise<readonly BackupArchivePart[]>;
+}
+
+/** A part as the run table records it, with its own delivery outcome. */
+export interface BackupRunPartRow {
+  readonly backupId: string;
+  readonly partNumber: number;
+  readonly filename: string;
+  readonly bytes: bigint;
+  readonly sha256: string;
+  readonly deliveryState: BackupDeliveryState;
+  readonly deliveryAttemptedAt: Date | null;
+  /** Telegram's message id. Its presence is what "this part was delivered" means. */
+  readonly telegramMessageId: bigint | null;
+  readonly deliveryDetail: string | null;
+}
+
+/** What the run table holds about parts, beside `BackupRunRepository` (E4). */
+export interface BackupRunPartStore {
+  /** Records the plan before the first send. Lease-guarded like every run write. */
+  recordParts(input: {
+    readonly id: string;
+    readonly leaseOwner: string;
+    readonly parts: readonly BackupArchivePart[];
+  }): Promise<void>;
+  /** One part's outcome, written as soon as it is known — before the next part is sent. */
+  recordPartOutcome(input: {
+    readonly id: string;
+    readonly leaseOwner: string;
+    readonly partNumber: number;
+    readonly state: BackupDeliveryState;
+    readonly attemptedAt: Date;
+    readonly messageId: number | null;
+    readonly detail: string | null;
+  }): Promise<void>;
+  parts(id: string): Promise<readonly BackupRunPartRow[]>;
+}
+
 export interface BackupRunRow {
   readonly id: string;
   readonly trigger: BackupTrigger;
@@ -231,6 +307,14 @@ export interface BackupRunRow {
   readonly cleanupDetail: string | null;
   /** When archive retention removed this run's directory, or null while it may be on disk. */
   readonly archivePrunedAt: Date | null;
+  /** The container (E4). Null on a run from before it was recorded: `NXB`. */
+  readonly archiveFormat: BackupArchiveFormat | null;
+  /** How many parts the archive was split into, once planned. */
+  readonly partCount: number | null;
+  /** Which stored backup password sealed a `SEVEN_ZIP` archive. Never the password. */
+  readonly archiveSealId: string | null;
+  /** The summary message's outcome (a split archive only). */
+  readonly summaryDeliveryState: BackupDeliveryState | null;
 }
 
 /**
@@ -264,6 +348,19 @@ export interface BackupArchiveRetentionStore {
     readonly protectedIds: readonly string[];
     readonly limit: number;
   }): Promise<readonly { readonly id: string; readonly state: BackupRunState }[]>;
+  /**
+   * E4: runs whose LOCAL copy may go because Telegram holds every part of it.
+   *
+   * Every exclusion is in the query: a run that is not SUCCEEDED, whose directory is gone,
+   * whose recorded part count does not match its part rows, ANY of whose parts lacks a
+   * Telegram message id, or that is among the newest `keepDelivered` such runs, or in
+   * `protectedIds`. A run delivered only in part, or not at all, is never a candidate.
+   */
+  deliveredCopyPruneCandidates(input: {
+    readonly keepDelivered: number;
+    readonly protectedIds: readonly string[];
+    readonly limit: number;
+  }): Promise<readonly { readonly id: string }[]>;
   /** Records that the directory is gone. Conditional: a second stamp is a no-op. */
   markArchivePruned(input: { readonly id: string; readonly now: Date }): Promise<boolean>;
   /** Ids of runs that are RUNNING now: their directories are being written. */
@@ -328,6 +425,10 @@ export interface BackupRunRepository {
     readonly failureMessage?: string | null;
     readonly cleanupOk: boolean;
     readonly cleanupDetail?: string | null;
+    readonly archiveFormat?: BackupArchiveFormat | null;
+    readonly partCount?: number | null;
+    readonly archiveSealId?: string | null;
+    readonly summaryDeliveryState?: BackupDeliveryState | null;
   }): Promise<void>;
 
   /**
@@ -416,18 +517,41 @@ export interface BackupRunRepository {
  * reason it is one method on one port rather than two conveniences.
  */
 export interface BackupArchiver {
+  /**
+   * Seals the dump. With an owner-set backup password stored, a `SEVEN_ZIP` archive at
+   * `sevenZipPath` (E4); without one, the keyring `NXB` at `archivePath`. The result says
+   * which, and where — absent fields mean `NXB` at `archivePath`.
+   */
   seal(input: {
     readonly dumpPath: string;
     readonly archivePath: string;
+    readonly sevenZipPath?: string;
     readonly manifest: BackupManifest;
-  }): Promise<{ readonly archiveBytes: number; readonly keyId: string }>;
-  open(input: { readonly archivePath: string; readonly dumpPath: string }): Promise<{
+  }): Promise<{
+    readonly archiveBytes: number;
+    readonly keyId: string | null;
+    readonly format?: BackupArchiveFormat;
+    readonly archivePath?: string;
+    readonly passwordId?: string | null;
+  }>;
+  /**
+   * The ONE open, for either container, chosen by the file's own magic bytes. `passwords`
+   * (a 7z only) are tried first, in order; without them the stored backup passwords are.
+   */
+  open(input: {
+    readonly archivePath: string;
+    readonly dumpPath: string;
+    readonly passwords?: readonly string[];
+  }): Promise<{
     readonly manifest: BackupManifest;
     readonly dumpChecksum: string;
     readonly dumpBytes: number;
+    readonly format?: BackupArchiveFormat;
   }>;
   /** SHA-256 over a file, streamed. What the manifest's checksum is taken with. */
   checksum(path: string): Promise<{ readonly checksum: string; readonly bytes: number }>;
+  /** The container the next `seal` will write (E4): `SEVEN_ZIP` when a password is set. */
+  nextFormat?(): Promise<BackupArchiveFormat>;
 }
 
 export interface BackupManifestInput {
@@ -442,3 +566,15 @@ export interface BackupManifestInput {
 }
 
 export type { BackupManifest };
+
+/**
+ * The owner-set backup passwords (E4), decrypted for the archiver and nobody else.
+ *
+ * `current` seals new archives; `all` (newest first) is what an archive THIS installation
+ * sealed is opened with — a replaced password is superseded, not deleted, so the archives
+ * it sealed still open here. No response, log or event ever carries one.
+ */
+export interface BackupArchivePasswordSource {
+  current(): Promise<{ readonly id: string; readonly password: string } | null>;
+  all(): Promise<readonly { readonly id: string; readonly password: string }[]>;
+}

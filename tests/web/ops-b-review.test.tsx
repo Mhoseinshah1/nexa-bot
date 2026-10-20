@@ -512,6 +512,7 @@ describe('the recovery step strip after a verification fails', () => {
           running: null,
           unknownDeliveries: 0,
           quiesced: false,
+          archivePassword: { configured: false, setAt: null },
         },
       },
       {

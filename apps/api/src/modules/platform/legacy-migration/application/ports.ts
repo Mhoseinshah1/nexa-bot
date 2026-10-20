@@ -155,7 +155,10 @@ export interface LegacyNxpkgTransition {
  * same, so a caller that forgets is refused by the database, not trusted.
  */
 export interface LegacyNxpkgImportRepository {
-  /** Throws a CONFLICT (`legacy_migration.already_active`) when a non-terminal import exists. */
+  /**
+   * Throws a CONFLICT (`legacy_migration.already_active`) when a non-terminal import exists,
+   * and (`legacy_compaction.active`) while a compaction of the legacy data is active.
+   */
   insert(input: NewLegacyNxpkgImport, tx?: TransactionScope): Promise<LegacyNxpkgImportRow>;
   /** Scoped; `lock` takes the row lock (inside a transaction only). */
   byId(

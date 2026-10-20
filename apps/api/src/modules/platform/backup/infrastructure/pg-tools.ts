@@ -353,11 +353,18 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
    * Read-only against the live database, and it takes no lock that blocks
    * writers — `pg_dump` runs in a repeatable-read snapshot.
    */
-  async dump(destination: string): Promise<DumpOutcome> {
+  async dump(
+    destination: string,
+    options: { readonly uncompressed?: boolean } = {},
+  ): Promise<DumpOutcome> {
     const result = await run(
       this.bin('pg_dump'),
       [
         '--format=custom',
+        // E4: a dump the 7-Zip archive will compress is written UNCOMPRESSED, so LZMA2
+        // compresses the data rather than gzip's output (which it cannot shrink). The
+        // custom format is unchanged; `pg_restore` reads both.
+        ...(options.uncompressed === true ? ['--compress=0'] : []),
         // No owner or ACL statements: a restore into a scratch database owned
         // by whoever is verifying must not fail because a role does not exist
         // there. The roles are a property of the cluster, not of this database.

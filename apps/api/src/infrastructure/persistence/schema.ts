@@ -21,6 +21,9 @@ import { sql, type SQL } from 'drizzle-orm';
 import {
   ACTOR_TYPES,
   ADMIN_STATUSES,
+  BACKUP_ARCHIVE_FORMATS,
+  LEGACY_COMPACTION_FAILURE_CODES,
+  LEGACY_COMPACTION_STATES,
   BACKUP_DELIVERY_STATES,
   BACKUP_RUN_STATES,
   BACKUP_STAGES,
@@ -3067,9 +3070,27 @@ export const backupRuns = pgTable(
      * than "missing".
      */
     archivePrunedAt: timestamptz('archive_pruned_at'),
+
+    /**
+     * E4 (Round 4 PR-E). The container (`NXB` or `SEVEN_ZIP`; NULL on a run before this
+     * column, which is `NXB`), how many ≤ 45 MiB parts it was delivered in, which stored
+     * backup password sealed a 7-Zip archive (an id, never the password), and the summary
+     * message's outcome for a split archive. Each part's own outcome is a
+     * `backup_run_parts` row.
+     */
+    archiveFormat: text('archive_format'),
+    partCount: integer('part_count'),
+    archiveSealId: uuid('archive_seal_id'),
+    summaryDeliveryState: text('summary_delivery_state'),
   },
   (table) => [
     check('backup_runs_trigger_check', enumCheck('trigger', BACKUP_TRIGGERS)),
+    check('backup_runs_archive_format_check', enumCheck('archive_format', BACKUP_ARCHIVE_FORMATS)),
+    check(
+      'backup_runs_summary_delivery_state_check',
+      enumCheck('summary_delivery_state', BACKUP_DELIVERY_STATES),
+    ),
+    check('backup_runs_part_count_check', sql`part_count IS NULL OR part_count > 0`),
     check('backup_runs_state_check', enumCheck('state', BACKUP_RUN_STATES)),
     check('backup_runs_stage_check', enumCheck('stage', BACKUP_STAGES)),
     check('backup_runs_delivery_state_check', enumCheck('delivery_state', BACKUP_DELIVERY_STATES)),
@@ -3094,6 +3115,86 @@ export const backupRuns = pgTable(
       .where(sql`state = 'RUNNING'`),
     /** The operator's list, and the scheduler's "when did we last succeed". */
     index('backup_runs_started_at_idx').on(table.startedAt),
+  ],
+);
+
+/**
+ * One part of a backup's archive and its OWN delivery outcome (Round 4 PR-E, E4).
+ *
+ * A part is a byte range of the run's one verified archive (`[start, end)`, ≤ 45 MiB),
+ * delivered as its own Telegram document. Its row is written NOT_ATTEMPTED before the
+ * first send and updated the moment its answer is known, so a process that dies
+ * mid-delivery leaves every part's truth behind.
+ *
+ * `telegram_message_id` is the whole point of the table: the local copy is removed only
+ * when EVERY part of the run has one (`deliveredCopyPruneCandidates`). A part answered
+ * `ok` without a message id keeps the local copy — the safe reading.
+ *
+ * Installation-wide like `backup_runs` (no tenant): a backup is of the whole database.
+ * Cascades with its run, so the run-row purge (ADR-0027) takes its parts with it.
+ */
+export const backupRunParts = pgTable(
+  'backup_run_parts',
+  {
+    backupId: uuid('backup_id')
+      .notNull()
+      .references(() => backupRuns.id, { onDelete: 'cascade' }),
+    partNumber: integer('part_number').notNull(),
+    /** What Telegram shows: `….7z` for a single part, `….7z.001`… otherwise. Not a path. */
+    filename: text('filename').notNull(),
+    rangeStart: bigint('range_start', { mode: 'bigint' }).notNull(),
+    bytes: bigint('bytes', { mode: 'bigint' }).notNull(),
+    /** SHA-256 of the part's bytes, lowercase hex. Not a secret. */
+    sha256: text('sha256').notNull(),
+    deliveryState: text('delivery_state').notNull(),
+    deliveryAttemptedAt: timestamptz('delivery_attempted_at'),
+    telegramMessageId: bigint('telegram_message_id', { mode: 'bigint' }),
+    /** Redacted operator-facing detail. Never a token. */
+    deliveryDetail: text('delivery_detail'),
+  },
+  (table) => [
+    primaryKey({ columns: [table.backupId, table.partNumber] }),
+    check(
+      'backup_run_parts_delivery_state_check',
+      enumCheck('delivery_state', BACKUP_DELIVERY_STATES),
+    ),
+    check('backup_run_parts_part_number_check', sql`part_number > 0`),
+    check('backup_run_parts_bytes_check', sql`bytes >= 0 AND range_start >= 0`),
+    /** A message id is a delivered part, and only a delivered part has one. */
+    check(
+      'backup_run_parts_message_id_check',
+      sql`telegram_message_id IS NULL OR delivery_state = 'SUCCEEDED'`,
+    ),
+  ],
+);
+
+/**
+ * The owner-set backup password (Round 4 PR-E, E4), sealed with `SecretCipher`
+ * (purpose `backup.archive_password`, entity = this row's id).
+ *
+ * Never returned once stored. A replacement SUPERSEDES the current row rather than
+ * deleting it: the archives a password sealed must still open on this server, so every
+ * stored password is tried (newest first) when one of them is opened. The partial unique
+ * index makes "the current password" one row per tenant whatever writes race.
+ */
+export const backupArchivePasswords = pgTable(
+  'backup_archive_passwords',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    passwordCiphertext: text('password_ciphertext').notNull(),
+    passwordKeyId: text('password_key_id').notNull(),
+    createdAt: timestamptz('created_at').notNull(),
+    createdByAdminId: uuid('created_by_admin_id').references(() => admins.id),
+    supersededAt: timestamptz('superseded_at'),
+  },
+  (table) => [
+    uniqueIndex('backup_archive_passwords_current_idx')
+      .on(table.tenantId)
+      .where(sql`superseded_at IS NULL`),
+    index('backup_archive_passwords_tenant_created_idx').on(table.tenantId, table.createdAt),
   ],
 );
 
@@ -14915,6 +15016,61 @@ export const legacyHistoryRecords = pgTable(
       'legacy_history_records_shape_check',
       sql`idempotency_key LIKE 'legacy:%' AND char_length(idempotency_key) BETWEEN 8 AND 512 AND char_length(package_import_id) BETWEEN 1 AND 200 AND (legacy_user_id IS NULL OR char_length(legacy_user_id) BETWEEN 1 AND 64) AND jsonb_typeof(payload) = 'object'`,
     ),
+  ],
+);
+
+/**
+ * The compaction of the imported legacy data (Round 4 PR-E, E1): one row per run, the
+ * worker's durable, resumable state. `cursor` is the last id the current stage committed,
+ * so a restarted worker resumes the batch after it; `archive_backup_id` is the
+ * «آرشیو ربات قبلی» backup that MUST be delivered in full before anything is deleted;
+ * `before`/`after` are the report (sizes per table, rows per record type). Every state
+ * change is a conditional UPDATE naming its `from` state. One active run per tenant.
+ */
+export const legacyCompactionRuns = pgTable(
+  'legacy_compaction_runs',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    state: text('state').notNull(),
+    requestedAt: timestamptz('requested_at').notNull(),
+    requestedByAdminId: uuid('requested_by_admin_id').references(() => admins.id),
+    requestedByLabel: text('requested_by_label'),
+    updatedAt: timestamptz('updated_at').notNull(),
+    leaseOwner: text('lease_owner'),
+    leaseHeartbeatAt: timestamptz('lease_heartbeat_at'),
+    archiveBackupId: uuid('archive_backup_id'),
+    cursor: uuid('cursor'),
+    deleted: bigint('deleted', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    deduplicated: bigint('deduplicated', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    stripped: bigint('stripped', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    before: jsonb('before'),
+    after: jsonb('after'),
+    failureCode: text('failure_code'),
+    finishedAt: timestamptz('finished_at'),
+  },
+  (table) => [
+    check('legacy_compaction_runs_state_check', enumCheck('state', LEGACY_COMPACTION_STATES)),
+    check(
+      'legacy_compaction_runs_failure_code_check',
+      enumCheck('failure_code', LEGACY_COMPACTION_FAILURE_CODES),
+    ),
+    check(
+      'legacy_compaction_runs_finished_check',
+      sql`(state IN ('COMPLETED', 'FAILED')) = (finished_at IS NOT NULL)`,
+    ),
+    uniqueIndex('legacy_compaction_runs_one_active_idx')
+      .on(table.tenantId)
+      .where(sql`state NOT IN ('COMPLETED', 'FAILED')`),
+    index('legacy_compaction_runs_tenant_requested_idx').on(table.tenantId, table.requestedAt),
   ],
 );
 

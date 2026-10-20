@@ -58,6 +58,10 @@ function row(overrides: Partial<BackupRunRow> = {}): BackupRunRow {
     deliveryState: 'SUCCEEDED',
     deliveryAttemptedAt: NOW,
     deliveryDetail: null,
+    archiveFormat: null,
+    partCount: null,
+    archiveSealId: null,
+    summaryDeliveryState: null,
     failureCode: null,
     failureMessage: null,
     cleanupOk: true,
@@ -90,6 +94,8 @@ interface World {
   lastSucceededAt: Date | null;
   open: Set<string>;
   recorded: OperationalEventInput[];
+  /** Delivered runs the query offers for local-copy removal; `localCopies` wired when set. */
+  delivered?: { id: string }[];
 }
 
 function world(): World {
@@ -126,6 +132,9 @@ function housekeeping(w: World, scoped = true): BackupHousekeeping {
         w.candidateQueries.push(input);
         return w.candidates;
       },
+      // E4's delivered-copy rule is a query; it is tested against PostgreSQL
+      // (`tests/integration/backup-parts.test.ts`), and this world wires no `localCopies`.
+      deliveredCopyPruneCandidates: async () => (w.delivered ?? []) as never,
       markArchivePruned: async ({ id }) => {
         w.stamped.push(id);
         w.stampedAfterRemoval.push(w.removed.includes(id));
@@ -170,6 +179,7 @@ function housekeeping(w: World, scoped = true): BackupHousekeeping {
     schedule: async () => w.schedule,
     retention: async () => w.retention,
     protectedByRecovery: async () => w.protectedIds,
+    ...(w.delivered === undefined ? {} : { localCopies: async () => 1 }),
     plaintextGraceMs: DAY,
     diskFloorBytes: GIB,
     tickIntervalMs: 15 * 60_000,
@@ -303,27 +313,52 @@ describe('backup housekeeping: plaintext debris and the cleanup condition', () =
   });
 });
 
+describe('backup housekeeping: delivered local copies (E4)', () => {
+  it('opens backup.cleanup_failed when a delivered copy cannot be removed, and never closes it that pass', async () => {
+    const w = world();
+    w.delivered = [{ id: 'run-a' }, { id: 'run-b' }];
+    w.removeSurvives.add('run-b');
+    await housekeeping(w).pruneDeliveredCopies();
+    expect(w.stamped).toEqual(['run-a']);
+    expect(codes(w)).toEqual(['backup.cleanup_failed']);
+    expect(w.recorded[0]?.dedupeKey).toBe('backup.cleanup');
+    expect(JSON.stringify(w.recorded[0]?.context)).not.toContain('/b/');
+
+    // The same pass's sweep is clean, and the condition is open: it stays open.
+    w.recorded = [];
+    w.open.add('backup.cleanup_failed');
+    const hk = housekeeping(w);
+    await hk.pruneDeliveredCopies();
+    w.recorded = [];
+    await hk.sweepDebris();
+    expect(codes(w)).toEqual([]);
+  });
+});
+
 describe('backup housekeeping: disk space', () => {
   it('estimates the next run from the last verified one, with a floor', () => {
     expect(requiredFreeBytes(null, GIB)).toBe(GIB);
     expect(requiredFreeBytes({ dumpBytes: 10n, archiveBytes: 10n }, GIB)).toBe(GIB);
     const big = 4 * GIB;
+    // One dump and the archive: the plaintext dump is gone before the verification
+    // decrypts its copy, so two dumps never coexist (review of #300).
     expect(requiredFreeBytes({ dumpBytes: BigInt(big), archiveBytes: BigInt(big) }, GIB)).toBe(
-      Math.ceil(3 * big * 1.5),
+      Math.ceil(2 * big * 1.5),
     );
   });
 
   it('opens below the requirement and closes above it only when open', async () => {
     const w = world();
     w.latestVerified = row({ dumpBytes: BigInt(2 * GIB), archiveBytes: BigInt(2 * GIB) });
-    // needs (2*2 + 2) * 1.5 = 9 GiB
-    w.free = 8 * GIB;
+    // needs (2 + 2) * 1.5 = 6 GiB
+    w.free = 5 * GIB;
     await housekeeping(w).checkDisk();
     expect(codes(w)).toEqual(['backup.disk_threshold_exceeded']);
     expect(w.recorded[0]?.dedupeKey).toBe('backup.disk');
 
     w.recorded = [];
-    w.free = 10 * GIB;
+    // 7 GiB is enough now; the old two-dump estimate (9 GiB) would still have warned.
+    w.free = 7 * GIB;
     await housekeeping(w).checkDisk();
     expect(codes(w)).toEqual([]);
 

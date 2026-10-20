@@ -97,7 +97,7 @@ export const EXTRA_LIVE_STATE_FLAGS = [
   'services_reprovisioned',
 ] as const;
 
-const ALL_LIVE_FLAGS: readonly string[] = [...LIVE_STATE_FLAGS, ...EXTRA_LIVE_STATE_FLAGS];
+export const ALL_LIVE_FLAGS: readonly string[] = [...LIVE_STATE_FLAGS, ...EXTRA_LIVE_STATE_FLAGS];
 
 /** One history file: the converter's `record_type` it holds and the archive type it becomes. */
 export interface HistoryFileSpec {
@@ -346,8 +346,16 @@ export interface ReadHistoryRecord {
   readonly idempotencyKey: string;
   readonly legacyUserId: string | null;
   readonly occurredAt: Date | null;
-  /** The record exactly as packaged. */
+  /**
+   * The record as packaged, minus its top-level live-state flags (Round 4 PR-E, E2). Every
+   * one of them is `false` on a record that reaches here — a `true` is refused above — so
+   * storing them on each of a million rows records one constant a million times. Which
+   * flags were present is reported ONCE per record type in the ingest report
+   * (`strippedFlags`), and nothing reads them from a stored payload.
+   */
   readonly payload: Record<string, unknown>;
+  /** The live-state flags this record carried (all `false`) and that were not stored. */
+  readonly strippedFlags: readonly string[];
 }
 
 /** A Telegram user id as the converter writes it: decimal digits, no sign, no padding. */
@@ -394,12 +402,22 @@ export function readHistoryRecord(
   if (live !== undefined) {
     throw new LegacyHistoryIngestRefused('LIVE_FLAG', file.path, line, live);
   }
+  const strippedFlags: string[] = [];
+  const slim: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(payload)) {
+    if (value === false && ALL_LIVE_FLAGS.includes(name)) {
+      strippedFlags.push(name);
+      continue;
+    }
+    slim[name] = value;
+  }
   return {
     historyType: file.historyType,
     idempotencyKey: key,
     legacyUserId: legacyUserIdOf(file.historyType, payload),
     occurredAt: occurredAtOf(file.historyType, payload),
-    payload,
+    payload: slim,
+    strippedFlags,
   };
 }
 

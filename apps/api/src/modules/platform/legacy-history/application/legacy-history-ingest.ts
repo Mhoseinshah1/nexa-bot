@@ -95,6 +95,11 @@ export interface LegacyHistoryIngestResult {
   readonly operationalFiles: readonly string[];
   readonly sections: Readonly<Partial<Record<LegacyHistoryRecordType, LegacyHistorySectionCounts>>>;
   readonly totals: LegacyHistorySectionCounts;
+  /**
+   * E2: the live-state flags each record type carried — every one `false`, or the package
+   * was refused — reported ONCE per type here instead of stored on every row.
+   */
+  readonly liveFlagsAllFalse: Readonly<Partial<Record<LegacyHistoryRecordType, readonly string[]>>>;
 }
 
 export interface LegacyHistoryIngestDeps {
@@ -150,12 +155,15 @@ export class LegacyHistoryIngest {
 
     // Pass 1: every record validated, counted, its key checked unique. Nothing written.
     const sections: Partial<Record<LegacyHistoryRecordType, LegacyHistorySectionCounts>> = {};
+    const flags: Partial<Record<LegacyHistoryRecordType, Set<string>>> = {};
     let validated = 0;
     {
       const seen = new Set<string>();
       for (const file of plan.files) {
         for await (const record of this.records(options, file, seen)) {
           (sections[record.historyType] ??= zero()).source += 1;
+          const set = (flags[record.historyType] ??= new Set<string>());
+          for (const flag of record.strippedFlags) set.add(flag);
           validated += 1;
         }
       }
@@ -213,6 +221,9 @@ export class LegacyHistoryIngest {
       operationalFiles: plan.operational,
       sections,
       totals,
+      liveFlagsAllFalse: Object.fromEntries(
+        Object.entries(flags).map(([type, set]) => [type, [...set].sort()]),
+      ),
     };
     if (!dryRun) await this.auditIngest(scope, actor, options, result);
     return result;
@@ -377,6 +388,8 @@ export class LegacyHistoryIngest {
               sections: Object.fromEntries(
                 Object.entries(result.sections).map(([type, counts]) => [type, { ...counts }]),
               ),
+              // E2: the constant import-decision flags, once per type, instead of per row.
+              liveFlagsAllFalse: result.liveFlagsAllFalse,
             },
             result: 'SUCCESS',
           },

@@ -94,8 +94,37 @@ describe('backup delivery to Telegram', () => {
     delivery().sendDocument({ archivePath, filename: 'b.nxb', caption: 'NEXA BACKUP' });
 
   it('reports SUCCEEDED only when Telegram says ok', async () => {
-    await expect(send()).resolves.toEqual({ state: 'SUCCEEDED', detail: null });
+    await expect(send()).resolves.toEqual({ state: 'SUCCEEDED', detail: null, messageId: 1 });
     expect(requests[0]?.url).toContain('/sendDocument');
+  });
+
+  // E4: the message id is what proves a part is in the group; the local copy waits for it.
+  it('records the message id Telegram answered, and none when the answer carries none', async () => {
+    capture({ status: 200, body: { ok: true, result: { message_id: 4242 } } });
+    expect(await send()).toEqual({ state: 'SUCCEEDED', detail: null, messageId: 4242 });
+    capture({ status: 200, body: { ok: true, result: {} } });
+    const without = await send();
+    expect(without).toEqual({ state: 'SUCCEEDED', detail: null, messageId: null });
+    capture({ status: 200, body: { ok: true, result: { message_id: 'x' } } });
+    expect(await send()).toEqual({ state: 'SUCCEEDED', detail: null, messageId: null });
+  });
+
+  // E4: one part of a split archive is a byte RANGE of the one file, sent as the document.
+  it('sends exactly the bytes of the requested range as the document', async () => {
+    await writeFile(archivePath, Buffer.from('AAAAABBBBBCCC'));
+    const seen = capture({ status: 200, body: { ok: true, result: { message_id: 2 } } });
+    const result = await delivery().sendDocument({
+      archivePath,
+      filename: 'b.7z.002',
+      caption: 'part 2',
+      range: { start: 5, end: 10 },
+    });
+    expect(result).toEqual({ state: 'SUCCEEDED', detail: null, messageId: 2 });
+    const body = seen.body();
+    expect(body).toContain('filename="b.7z.002"');
+    expect(body).toContain('\r\n\r\nBBBBB\r\n');
+    expect(body).not.toContain('AAAAA');
+    expect(body).not.toContain('CCC');
   });
 
   it('treats a parsed rejection as definitive', async () => {

@@ -1,3 +1,4 @@
+import { ALL_LIVE_FLAGS } from '../../apps/api/src/modules/platform/legacy-history/application/record-map';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -257,6 +258,9 @@ describe('Mirza .nxpkg importer: the history archive', () => {
     );
     expect(audits).toHaveLength(2);
     expect(JSON.stringify(audits)).not.toContain(TG_A);
+    // E2: the constant live-state flags, once per record type, in the report.
+    const reported = audits[0]?.after['liveFlagsAllFalse'] as Record<string, string[]>;
+    expect(reported['payment']).toContain('affects_wallet');
   });
 
   it('links each record to its customer before the insert, keeps the payload verbatim', async () => {
@@ -280,7 +284,16 @@ describe('Mirza .nxpkg importer: the history archive', () => {
     expect(new Date(String(byKey.get('legacy:payment:1')?.occurred_at)).toISOString()).toBe(
       new Date((1_735_700_000 + 1) * 1000).toISOString(),
     );
-    expect(byKey.get('legacy:payment:1')?.payload).toEqual(payment(1, TG_A));
+    // Verbatim minus the top-level live-state flags, all false (Round 4 PR-E, E2): they are
+    // reported once per type in the ingest report instead of stored on every row.
+    const packaged = payment(1, TG_A) as Rec;
+    const flags = Object.keys(packaged).filter(
+      (key) => packaged[key] === false && ALL_LIVE_FLAGS.includes(key),
+    );
+    expect(flags.length).toBeGreaterThan(0);
+    expect(byKey.get('legacy:payment:1')?.payload).toEqual(
+      Object.fromEntries(Object.entries(packaged).filter(([key]) => !flags.includes(key))),
+    );
     expect(byKey.get('legacy:payment:4')).toMatchObject({
       legacy_user_id: TG_NOBODY,
       customer_id: null,

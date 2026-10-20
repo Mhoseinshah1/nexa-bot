@@ -136,6 +136,9 @@ export const OPS_LOG_TOPIC_ROUTES: readonly {
   // The exchange rate prices every central-rate invoice; a stale or missing quote
   // refuses payments, so it is read beside them.
   { prefix: 'fx.', category: 'PAYMENTS' },
+  // A split archive that reached Telegram only in part (E4): reported in ERRORS, where an
+  // operator looks for what failed, not beside the parts that did arrive. Before `backup.`.
+  { prefix: 'backup.delivery_partial', category: 'ERRORS' },
   // Backup and disaster recovery: a run's outcome lands beside its archive.
   { prefix: 'backup.', category: 'BACKUPS' },
   { prefix: 'recovery.', category: 'BACKUPS' },

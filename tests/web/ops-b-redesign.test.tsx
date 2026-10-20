@@ -512,6 +512,7 @@ describe('the recovery page', () => {
           running: null,
           unknownDeliveries: 0,
           quiesced: false,
+          archivePassword: { configured: false, setAt: null },
         },
       },
       { url: '/backups?', body: { runs: [], nextCursor: null } },

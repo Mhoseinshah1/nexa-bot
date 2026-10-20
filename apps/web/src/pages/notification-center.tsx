@@ -98,6 +98,7 @@ const TITLES: Readonly<Record<string, WebKey>> = {
   'order.refunded_undeliverable': 'web.nc_t_refunded_undeliverable',
   'backup.run_failed': 'web.nc_t_backup_failed',
   'backup.delivery_failed': 'web.nc_t_backup_delivery_failed',
+  'backup.delivery_partial': 'web.nc_t_backup_delivery_partial',
   'backup.cleanup_failed': 'web.nc_t_backup_cleanup_failed',
   'backup.disk_threshold_exceeded': 'web.nc_t_backup_disk_low',
   'backup.interval_exceeded': 'web.nc_t_backup_overdue',

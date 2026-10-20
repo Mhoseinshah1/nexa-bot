@@ -13,7 +13,12 @@ import {
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import { recordMutationDenial } from '../../access/application/authorized-mutation.js';
-import type { BackupRunRepository, BackupRunRow } from '../../backup/application/ports.js';
+import type {
+  BackupRunPartRow,
+  BackupRunPartStore,
+  BackupRunRepository,
+  BackupRunRow,
+} from '../../backup/application/ports.js';
 import type { BackupService } from '../../backup/application/backup.service.js';
 import type { EffectiveBackupSchedule } from '../../backup/application/backup-schedule.js';
 import type { RecoveryRequestRepository } from './ports.js';
@@ -38,7 +43,11 @@ export const BACKUP_RUN: PermissionKey = 'backup.run';
 export const BACKUP_DOWNLOAD: PermissionKey = 'backup.download';
 
 export interface BackupAdminServiceDeps {
-  readonly runs: BackupRunRepository;
+  readonly runs: BackupRunRepository & BackupRunPartStore;
+  /** Whether an owner-set backup password is stored (E4). Never the password. */
+  readonly archivePassword: (
+    scope: TenantContext,
+  ) => Promise<{ readonly configured: boolean; readonly setAt: Date | null }>;
   readonly recoveries: RecoveryRequestRepository;
   readonly backup: BackupService;
   readonly guard: PermissionGuard;
@@ -59,6 +68,8 @@ export interface BackupAdminServiceDeps {
 export interface BackupRunView {
   readonly run: BackupRunRow;
   readonly archiveAvailable: boolean;
+  /** Each part's own outcome (E4), in order. */
+  readonly parts: readonly BackupRunPartRow[];
 }
 
 export interface BackupStatusView {
@@ -70,6 +81,7 @@ export interface BackupStatusView {
   readonly running: BackupRunView | null;
   readonly unknownDeliveries: number;
   readonly quiesced: boolean;
+  readonly archivePassword: { readonly configured: boolean; readonly setAt: Date | null };
 }
 
 export class BackupAdminService {
@@ -81,15 +93,23 @@ export class BackupAdminService {
       entityType: 'Backup',
       entityId: null,
     });
-    const [lastSucceededAt, running, unknownDeliveries, lock, schedule, deliveryDestination] =
-      await Promise.all([
-        this.deps.runs.lastSucceededAt(),
-        this.deps.runs.active(),
-        this.deps.runs.countUnknownDeliveries(),
-        this.deps.recoveries.installationLock(),
-        this.deps.schedule(),
-        this.deps.backup.deliveryDestination(),
-      ]);
+    const [
+      lastSucceededAt,
+      running,
+      unknownDeliveries,
+      lock,
+      schedule,
+      deliveryDestination,
+      archivePassword,
+    ] = await Promise.all([
+      this.deps.runs.lastSucceededAt(),
+      this.deps.runs.active(),
+      this.deps.runs.countUnknownDeliveries(),
+      this.deps.recoveries.installationLock(),
+      this.deps.schedule(),
+      this.deps.backup.deliveryDestination(),
+      this.deps.archivePassword(scope),
+    ]);
     return {
       scheduleEnabled: schedule.enabled,
       intervalMs: schedule.intervalMs,
@@ -102,6 +122,7 @@ export class BackupAdminService {
       // wondering why "take a backup now" is refused looks at the backup card
       // first. One read, from the same predicate the write gate uses.
       quiesced: lock !== null && lock.quiescing,
+      archivePassword,
     };
   }
 
@@ -235,26 +256,53 @@ export class BackupAdminService {
     scope: TenantContext,
     actor: ActorContext,
     id: string,
-  ): Promise<{ path: string; filename: string; bytes: number }> {
+    /** One part of a split archive (E4), 1-based; absent is the whole archive. */
+    part: number | null = null,
+  ): Promise<{
+    path: string;
+    filename: string;
+    bytes: number;
+    range: { start: number; end: number } | null;
+  }> {
     await this.authorize(scope, actor, BACKUP_DOWNLOAD, {
       action: 'backup.download',
       entityType: 'Backup',
       entityId: id,
     });
     const run = await this.requireRun(id);
-    const path = this.pathFor(run.id);
+    const path = this.pathFor(run);
     if (path === null) {
       throw errors.notFound(
         PLATFORM_ERROR_CODES.BACKUP_RUN_MISSING,
         'This backup produced no archive.',
       );
     }
-    const bytes = await this.archiveBytes(run);
-    if (bytes === null) {
+    const archiveBytes = await this.archiveBytes(run);
+    if (archiveBytes === null) {
       throw errors.notFound(
         PLATFORM_ERROR_CODES.BACKUP_RUN_MISSING,
         'The local archive for this backup is no longer on this host.',
       );
+    }
+    // A part is a range of the one file, exactly as it was delivered (E4).
+    let range: { start: number; end: number } | null = null;
+    let bytes = archiveBytes;
+    let partName: string | null = null;
+    if (part !== null) {
+      const parts = await this.deps.runs.parts(run.id);
+      const found = parts.find((candidate) => candidate.partNumber === part);
+      if (found === undefined || parts.length < 2) {
+        throw errors.notFound(PLATFORM_ERROR_CODES.BACKUP_RUN_MISSING, 'No such part.');
+      }
+      const start = parts
+        .filter((candidate) => candidate.partNumber < part)
+        .reduce((sum, candidate) => sum + Number(candidate.bytes), 0);
+      bytes = Number(found.bytes);
+      range = { start, end: start + bytes };
+      if (range.end > archiveBytes) {
+        throw errors.notFound(PLATFORM_ERROR_CODES.BACKUP_RUN_MISSING, 'No such part.');
+      }
+      partName = `.${String(part).padStart(3, '0')}`;
     }
 
     // CRITICAL, and therefore audited on the attempt rather than on success
@@ -265,7 +313,7 @@ export class BackupAdminService {
       entityType: 'Backup',
       entityId: run.id,
       before: null,
-      after: { bytes, checksum: run.checksum },
+      after: { bytes, checksum: run.checksum, part },
       reason: 'An administrator downloaded an encrypted backup archive.',
       result: 'SUCCESS',
     });
@@ -273,16 +321,26 @@ export class BackupAdminService {
     // The filename is BUILT from the run id, not from anything stored. A
     // `Content-Disposition` assembled from a stored string is a header-injection
     // surface, and a uuid cannot carry a quote, a newline or a semicolon.
-    return { path, filename: `nexa-backup-${run.id}.nxb`, bytes };
+    const extension = run.archiveFormat === 'SEVEN_ZIP' ? '7z' : 'nxb';
+    return {
+      path,
+      filename: `nexa-backup-${run.id}.${extension}${partName ?? ''}`,
+      bytes,
+      range,
+    };
   }
 
   /** Whether this run's archive is still on disk, for the list and the detail. */
   private async withAvailability(run: BackupRunRow): Promise<BackupRunView> {
-    return { run, archiveAvailable: (await this.archiveBytes(run)) !== null };
+    const [bytes, parts] = await Promise.all([
+      this.archiveBytes(run),
+      this.deps.runs.parts(run.id),
+    ]);
+    return { run, archiveAvailable: bytes !== null, parts };
   }
 
   private async archiveBytes(run: BackupRunRow): Promise<number | null> {
-    const path = this.pathFor(run.id);
+    const path = this.pathFor(run);
     if (path === null) return null;
     try {
       const stats = await stat(path);
@@ -303,9 +361,14 @@ export class BackupAdminService {
    * a separator, a dot segment or a NUL. The filename inside the directory is the
    * constant the workspace uses.
    */
-  private pathFor(id: string): string | null {
-    if (!uuidV7Schema.safeParse(id).success) return null;
-    return join(this.deps.workRoot, id, 'archive.nxb');
+  private pathFor(run: BackupRunRow): string | null {
+    if (!uuidV7Schema.safeParse(run.id).success) return null;
+    // The container's own constant name (E4): `archive.7z` or `archive.nxb`.
+    return join(
+      this.deps.workRoot,
+      run.id,
+      run.archiveFormat === 'SEVEN_ZIP' ? 'archive.7z' : 'archive.nxb',
+    );
   }
 
   private async requireRun(id: string): Promise<BackupRunRow> {

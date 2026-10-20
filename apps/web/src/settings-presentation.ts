@@ -301,6 +301,26 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'ops',
     control: { kind: 'integer', unit: 'web.unit_days' },
   },
+  // E4: fully delivered backups' local copies (0 keeps none).
+  'backup.local_copies_keep': {
+    title: 'web.setting_backup_local_copies',
+    description: 'web.setting_backup_local_copies_desc',
+    group: 'ops',
+    control: { kind: 'integer', unit: 'web.unit_archives' },
+  },
+  // E3: retention of the outbox's published history and of interactive idempotency keys.
+  'retention.outbox_published_days': {
+    title: 'web.setting_retention_outbox',
+    description: 'web.setting_retention_outbox_desc',
+    group: 'ops',
+    control: { kind: 'integer', unit: 'web.unit_days' },
+  },
+  'retention.idempotency_interactive_days': {
+    title: 'web.setting_retention_idempotency',
+    description: 'web.setting_retention_idempotency_desc',
+    group: 'ops',
+    control: { kind: 'integer', unit: 'web.unit_days' },
+  },
   'sales.currency': {
     title: 'web.setting_sales_currency',
     description: 'web.setting_sales_currency_desc',

@@ -236,6 +236,11 @@ jobs:
         with:
           name: dist
 
+      # The backup pipeline's 7-Zip archive (Round 4 PR-E, E4) is tested against the REAL
+      # binary, and that suite fails rather than skips without it.
+      - name: 7-Zip for the backup archive tests
+        run: command -v 7z || (sudo apt-get update -qq && sudo apt-get install -y -qq 7zip)
+
       - name: Unit tests
         run: pnpm test
 
@@ -367,6 +372,11 @@ jobs:
       # runner ever starts loading the full application configuration again,
       # this step fails. Every shard runs it, so every shard's suites start
       # from a database the compiled migrator built.
+      # The backup pipeline's 7-Zip archive (Round 4 PR-E, E4) is tested against the REAL
+      # binary, and that suite fails rather than skips without it.
+      - name: 7-Zip for the backup archive tests
+        run: command -v 7z || (sudo apt-get update -qq && sudo apt-get install -y -qq 7zip)
+
       - name: Apply migrations without application secrets
         run: env -u SECRETS_KEK -u SECRETS_KEK_ID pnpm db:migrate
 

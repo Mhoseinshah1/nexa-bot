@@ -58,6 +58,10 @@
  * `legacy_migration.package_key` is the key (or passphrase) of one uploaded Mirza `.nxpkg`
  * package, on its `legacy_nxpkg_imports` row (`docs/legacy-migration/nxpkg-importer.md` §0.6);
  * the entity is that row's id, and the column is set to NULL when the import is terminal.
+ *
+ * `backup.archive_password` is the owner-set password that seals a 7-Zip backup archive
+ * (Round 4 PR-E, E4), on its `backup_archive_passwords` row; the entity is that row's id.
+ * Never returned by any response once stored.
  */
 export const SECRET_PURPOSES = [
   'bot_instance.token',
@@ -70,6 +74,7 @@ export const SECRET_PURPOSES = [
   'admin.totp_secret',
   'support_ai_provider.api_key',
   'legacy_migration.package_key',
+  'backup.archive_password',
 ] as const;
 export type SecretPurpose = (typeof SECRET_PURPOSES)[number];
 

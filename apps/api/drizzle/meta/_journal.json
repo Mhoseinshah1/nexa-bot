@@ -1849,6 +1849,27 @@
       "when": 1792459700741,
       "tag": "0263_public_code_triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 264,
+      "version": "7",
+      "when": 1792467530145,
+      "tag": "0264_backup_parts_and_password",
+      "breakpoints": true
+    },
+    {
+      "idx": 265,
+      "version": "7",
+      "when": 1792467536279,
+      "tag": "0265_legacy_compaction_runs",
+      "breakpoints": true
+    },
+    {
+      "idx": 266,
+      "version": "7",
+      "when": 1792467544076,
+      "tag": "0266_legacy_history_compaction_guard",
+      "breakpoints": true
     }
   ]
 }
