@@ -21,6 +21,7 @@ import {
   categoryIconOf,
   inlineButtonIconOf,
   inlineButtonStyleOf,
+  CUSTOMER_NOTIFICATION_TEMPLATES,
   MESSAGING_ERROR_CODES,
   opsAggregationKey,
   type AppearanceTestErrorCode,
@@ -321,6 +322,15 @@ function rawIconSource(
  * key; a different sentence, because its remedy is the Web Admin token replacement and not
  * anything about the customer's chat.
  */
+const NOTIFICATION_KIND_OF_TEMPLATE: ReadonlyMap<string, string> = new Map(
+  Object.entries(CUSTOMER_NOTIFICATION_TEMPLATES).map(([kind, key]) => [key, kind]),
+);
+
+/** The customer notification kind whose frozen sentence this template is, or null. */
+export function notificationKindOf(templateKey: string): string | null {
+  return NOTIFICATION_KIND_OF_TEMPLATE.get(templateKey) ?? null;
+}
+
 type SendFailureReason = 'NO_BOT' | 'UNCERTAIN' | 'REFUSED' | 'TOKEN_REJECTED';
 
 /**
@@ -1149,6 +1159,11 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
           context: {
             botInstanceId: message.botInstanceId,
             templateKey: message.templateKey,
+            // Round 5A item 1: WHAT could not be sent — the closed kind, never the text — so the
+            // group names it in Persian. Absent for a reply that is not a lane notification.
+            ...(notificationKindOf(message.templateKey) === null
+              ? {}
+              : { notificationKind: notificationKindOf(message.templateKey) }),
             reason,
             ...(errorCode === null ? {} : { errorCode }),
           },

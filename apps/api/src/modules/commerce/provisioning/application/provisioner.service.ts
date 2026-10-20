@@ -63,7 +63,7 @@ import {
   isFreeTrial,
   type UndeliverableOrderRefunder,
 } from '../../orders/application/undeliverable-order-refunder.js';
-import type { PaymentRepository } from '../../payments/application/ports.js';
+import type { PaymentRecord, PaymentRepository } from '../../payments/application/ports.js';
 import {
   ALLOWANCE_VERIFICATION_READS,
   BACKOFF_BASE_MS,
@@ -122,6 +122,15 @@ import type {
  * still open under it, unresolvable, for ever.
  */
 export const PROVISIONING_STALLED_CODE = 'provisioning.stalled';
+
+/**
+ * The context value on a `provisioning.stalled` row that says the refund is written in
+ * the SAME transaction. Its error report (L23) is posted by the refund's own event, so
+ * the generic line for this condition is not posted beside it (R5A item 2). Written only
+ * where `refundTarget` has just answered that a refund follows; a row without it is one
+ * nobody is going to answer and keeps its message.
+ */
+export const REFUND_ANSWERS = 'REFUND';
 
 /**
  * The recovery, and deliberately NOT deduplicated.
@@ -1377,6 +1386,28 @@ export class ProvisionerService {
     await this.deps.uow.run(scope, async (tx) => {
       const retired = await this.deps.operations.retireExhausted(scope, now, LEASE_SWEEP_LIMIT, tx);
       for (const operation of retired) {
+        /*
+         * A paid CREATE that is spent is refunded, like every other definitive end.
+         *
+         * This path used to record the condition and stop, so a paid order whose last
+         * attempt ended with the claim lost sat `PENDING_PROVISION` with its money taken
+         * and neither of the two outcomes the product has. `PLANNED` at the ceiling means
+         * no create is outstanding (an unknown one is `UNKNOWN`, never `PLANNED`, and a
+         * released lease cleared its stamp), so this is as definitive as a refusal.
+         * Restricted to `PROVISION`: a replayable commercial write that was stranded may
+         * have been applied, and nothing here can say it was not.
+         */
+        const service =
+          operation.type === 'PROVISION'
+            ? await this.deps.services.findById(scope, operation.serviceId, tx)
+            : null;
+        const refundFollows =
+          service !== null &&
+          (await this.refundTarget(
+            scope,
+            { orderId: operation.orderId, purchasedAs: 'PROVISION' },
+            tx,
+          )) !== null;
         await this.deps.opsLog.record(
           scope,
           {
@@ -1387,11 +1418,25 @@ export class ProvisionerService {
               serviceId: operation.serviceId,
               panelId: operation.panelId,
               reason: 'ATTEMPTS_SPENT',
+              ...(refundFollows ? { answeredBy: REFUND_ANSWERS } : {}),
             },
             dedupeKey: provisioningConditionKey(operation.serviceId),
           },
           tx,
         );
+        if (service !== null) {
+          await this.refundPurchase(
+            scope,
+            {
+              orderId: operation.orderId,
+              purchasedAs: 'PROVISION',
+              service,
+              reason: 'ATTEMPTS_SPENT',
+              now,
+            },
+            tx,
+          );
+        }
       }
     });
   }
@@ -1686,6 +1731,12 @@ export class ProvisionerService {
            * for `UNRECONCILED` services. An operator gets the stalled condition and
            * `retryProvisioning` is the deliberate way back in.
            */
+          const refundFollows =
+            (await this.refundTarget(
+              scope,
+              { orderId: operation.orderId, purchasedAs: 'PROVISION' },
+              tx,
+            )) !== null;
           await this.deps.opsLog.record(
             scope,
             {
@@ -1696,6 +1747,7 @@ export class ProvisionerService {
                 serviceId,
                 panelId: service.panelId,
                 reason: 'PROVISION_CYCLE_EXHAUSTED',
+                ...(refundFollows ? { answeredBy: REFUND_ANSWERS } : {}),
               },
               dedupeKey: provisioningConditionKey(serviceId),
             },
@@ -3440,6 +3492,54 @@ export class ProvisionerService {
   private static readonly PURCHASED_AS = PURCHASED_AS;
 
   /**
+   * The order and payment a definitive failure would give back, or null when nothing
+   * is owed.
+   *
+   * The preconditions of `refundPurchase`, asked on their own so a caller can say in the
+   * operational event it records BEFORE the refund whether a refund follows (R5A item 2:
+   * the customer-facing error report, L23, is written by the refund's own event, so the
+   * generic line for the same fact is not posted beside it). One definition: the refund
+   * below is gated by this same answer, never by a copy of it.
+   */
+  private async refundTarget(
+    scope: TenantContext,
+    input: {
+      readonly orderId: OrderId | null;
+      readonly purchasedAs: OperationType;
+    },
+    tx: TransactionScope,
+  ): Promise<{ readonly order: OrderRecord; readonly payment: PaymentRecord | null } | null> {
+    const { orderId, purchasedAs } = input;
+    if (orderId === null) return null;
+
+    const order: OrderRecord | null = await this.deps.orders.findById(scope, orderId, tx);
+    /*
+     * `PAID` and nothing else. A refunded order is a replay and writes nothing twice;
+     * an order in any other state did not pay for this operation.
+     */
+    if (order === null || order.state !== 'PAID') return null;
+    if (ProvisionerService.PURCHASED_AS[order.purpose] !== purchasedAs) return null;
+    /*
+     * A legacy adoption (Migration P3) paid this installation nothing, so there is nothing to
+     * give back: the legacy bot took the money. Declined here, before any service
+     * transition, rather than left to the absent payment below — and the database refuses
+     * the REFUNDED state for one anyway (`orders_legacy_adoption_shape_check`).
+     */
+    if (order.origin === 'LEGACY_ADOPTION') return null;
+
+    /*
+     * A trial has no payment and must not be asked for one: `isFreeTrial` is the
+     * refunder's own test, and the refunder declines a null payment for anything else.
+     * Every other order keeps the rule below.
+     */
+    const payment = isFreeTrial(order)
+      ? null
+      : await this.deps.payments.findConfirmedForOrder(scope, orderId, tx);
+    if (payment === null && !isFreeTrial(order)) return null;
+    return { order, payment };
+  }
+
+  /**
    * A paid operation has definitively failed, so the customer gets their money back.
    *
    * The second lane into `UndeliverableOrderRefunder`. The first is settlement
@@ -3496,33 +3596,10 @@ export class ProvisionerService {
     },
     tx: TransactionScope,
   ): Promise<void> {
-    const { orderId, purchasedAs, service, reason, now } = input;
-    if (orderId === null) return;
-
-    const order: OrderRecord | null = await this.deps.orders.findById(scope, orderId, tx);
-    /*
-     * `PAID` and nothing else. A refunded order is a replay and writes nothing twice;
-     * an order in any other state did not pay for this operation.
-     */
-    if (order === null || order.state !== 'PAID') return;
-    if (ProvisionerService.PURCHASED_AS[order.purpose] !== purchasedAs) return;
-    /*
-     * A legacy adoption (Migration P3) paid this installation nothing, so there is nothing
-     * to give back: the legacy bot took the money. Declined here, before any service
-     * transition, rather than left to the absent payment below — and the database refuses
-     * the REFUNDED state for one anyway (`orders_legacy_adoption_shape_check`).
-     */
-    if (order.origin === 'LEGACY_ADOPTION') return;
-
-    /*
-     * A trial has no payment and must not be asked for one: `isFreeTrial` is the
-     * refunder's own test, and the refunder declines a null payment for anything else.
-     * Every other order keeps the rule below.
-     */
-    const payment = isFreeTrial(order)
-      ? null
-      : await this.deps.payments.findConfirmedForOrder(scope, orderId, tx);
-    if (payment === null && !isFreeTrial(order)) return;
+    const { purchasedAs, service, reason, now } = input;
+    const target = await this.refundTarget(scope, input, tx);
+    if (target === null) return;
+    const { order, payment } = target;
 
     if (purchasedAs === 'PROVISION') {
       /*
@@ -3710,13 +3787,24 @@ export class ProvisionerService {
         tx,
       );
       if (permanent) {
+        const refundFollows =
+          (await this.refundTarget(
+            scope,
+            { orderId: operation.orderId, purchasedAs: operation.type },
+            tx,
+          )) !== null;
         await this.deps.opsLog.record(
           scope,
           {
             code: PROVISIONING_STALLED_CODE,
             severity: 'ERROR',
             message: 'A paid service could not be created on its panel.',
-            context: { serviceId: service.id, panelId: service.panelId, reason },
+            context: {
+              serviceId: service.id,
+              panelId: service.panelId,
+              reason,
+              ...(refundFollows ? { answeredBy: REFUND_ANSWERS } : {}),
+            },
             dedupeKey: provisioningConditionKey(service.id),
           },
           tx,
@@ -3860,6 +3948,14 @@ export class ProvisionerService {
       const roundEnding = operation.type === 'RECONCILE' && extras.reconcileExhausted !== true;
       if (!retryable && !roundEnding) {
         const reconcileSpent = operation.type === 'RECONCILE';
+        // Only a definitive failure is refunded, and only when an order is owed money.
+        const refundFollows =
+          outcome === 'FAILED' &&
+          (await this.refundTarget(
+            scope,
+            { orderId: operation.orderId, purchasedAs: operation.type },
+            tx,
+          )) !== null;
         await this.deps.opsLog.record(
           scope,
           {
@@ -3878,6 +3974,7 @@ export class ProvisionerService {
                   : 'EXHAUSTED',
               failureKind: failure,
               ...(extras.detail === undefined ? {} : { detail: extras.detail }),
+              ...(refundFollows ? { answeredBy: REFUND_ANSWERS } : {}),
             },
             dedupeKey: provisioningConditionKey(serviceId),
           },

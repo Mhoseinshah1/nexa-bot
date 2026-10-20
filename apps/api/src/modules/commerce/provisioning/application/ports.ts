@@ -1290,6 +1290,9 @@ export interface OperationRepository {
    * WHERE clause. A row whose `call_started_at` is set is deliberately left
    * `IN_FLIGHT`: handing it to another worker would repeat a mutation that may have
    * taken effect, and leaving it is what a human can then reconcile.
+   *
+   * The attempt the claim counted is given back (`attempts - 1`, floored at zero): no
+   * provider was dialled, and an attempt is a call to the panel (R5A item 2).
    */
   releaseExpiredLeases(
     scope: TenantContext,

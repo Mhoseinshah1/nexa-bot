@@ -13,6 +13,7 @@ import {
 } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { importedUnmeasuredUsageNotice } from '../../../../infrastructure/persistence/imported-usage-notice.js';
 import {
   customerDirectMessages,
   customerNotifications,
@@ -250,6 +251,7 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
         AND r.basis_expires_at IS NOT DISTINCT FROM s.expires_at
         AND s.state = ANY(${sql.param([...states])}::text[])
         ${expiry ? sql`` : sql`AND r.basis_traffic_limit_bytes = s.traffic_limit_bytes`}
+        ${expiry ? sql`` : sql`AND NOT ${importedUnmeasuredUsageNotice()}`}
         ${advance ? sql`AND s.expires_at > ${now}` : sql``}
         ${
           moreUrgent.length === 0

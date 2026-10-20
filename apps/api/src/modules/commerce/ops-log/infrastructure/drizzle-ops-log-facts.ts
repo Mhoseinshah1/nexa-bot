@@ -5,6 +5,7 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { balanceInCommitOrder } from '../../wallet/infrastructure/balance-in-commit-order.js';
 import type {
   AdminFact,
   BalanceAround,
@@ -237,51 +238,10 @@ export class DrizzleOpsLogFacts implements OpsLogFacts {
   ): Promise<BalanceAround | null> {
     const tenantId = requireTenantId(scope);
     if (entryIds.length === 0) return null;
-    /*
-     * The ORDER the balance is summed in is the whole rule (independent money review of
-     * #301). `created_at` is not it: every writer stamps its entry from the clock BEFORE it
-     * takes the customer lock (`WalletService.adjust`, `settleFromWallet`), and an operator's
-     * credit takes no customer lock at all, so a debit that waited for the lock while a credit
-     * committed carries the EARLIER stamp — summed by `created_at`, a 100 000 → 0 debit read
-     * 0 → -100 000 (`ops-log-money.test.ts` reproduces it with the row held).
-     *
-     * Commit order is recorded already, under a lock every writer takes: each entry's
-     * `WalletEntryRecorded` event is written in the entry's own transaction, and its
-     * per-aggregate `sequence` comes from the `('Wallet', customer)` row of
-     * `aggregate_sequences`, whose row lock is held until that transaction commits. So for
-     * one customer a higher sequence is a later commit, and the sum of every entry whose
-     * event sequence is at most the group's last is the balance the instant the group
-     * committed. An entry with no event is placed by `(created_at, id)` against the last.
-     */
+    // Summed in COMMIT order — see `balanceInCommitOrder`, the one reader.
     const [row] = await this.rows(
       tx,
-      sql`WITH ev AS (
-            SELECT m.payload ->> 'entryId' AS entry_id, min(m.sequence) AS seq
-              FROM outbox_messages m
-             WHERE m.tenant_id = ${tenantId} AND m.aggregate_type = 'Wallet'
-               AND m.aggregate_id = ${customerId} AND m.event_type = 'WalletEntryRecorded'
-             GROUP BY 1
-          ), e AS (
-            SELECT w.id, w.created_at, ev.seq,
-                   CASE w.direction WHEN 'CREDIT' THEN w.amount ELSE -w.amount END AS signed
-              FROM wallet_entries w
-              LEFT JOIN ev ON ev.entry_id = w.id::text
-             WHERE w.tenant_id = ${tenantId} AND w.customer_id = ${customerId}
-               AND w.currency = ${currency}
-          ), last AS (
-            SELECT e.seq, e.created_at, e.id FROM e
-             WHERE e.id::text IN ${list(entryIds)}
-             ORDER BY e.seq DESC NULLS LAST, e.created_at DESC, e.id DESC
-             LIMIT 1
-          )
-          SELECT EXISTS (SELECT 1 FROM last) AS found,
-                 (SELECT COALESCE(SUM(e.signed), 0) FROM e, last
-                   WHERE CASE WHEN e.seq IS NOT NULL AND last.seq IS NOT NULL
-                              THEN e.seq <= last.seq
-                              ELSE (e.created_at, e.id) <= (last.created_at, last.id) END
-                 )::text AS after,
-                 (SELECT COALESCE(SUM(e.signed), 0) FROM e
-                   WHERE e.id::text IN ${list(entryIds)})::text AS own`,
+      balanceInCommitOrder({ tenantId, customerId, currency, entryIds }),
     );
     if (row === undefined || row['found'] !== true) return null;
     const afterMinor = big(row['after'] ?? '0');
@@ -630,5 +590,21 @@ export class DrizzleOpsLogFacts implements OpsLogFacts {
       sql`SELECT name FROM panels WHERE tenant_id = ${tenantId} AND id = ${id}`,
     );
     return row === undefined ? null : String(row['name']);
+  }
+
+  async undeliveredCustomerCount(
+    scope: TenantContext,
+    botInstanceId: string,
+    notificationKind: string,
+    tx: TransactionScope,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.rows(
+      tx,
+      sql`SELECT COUNT(DISTINCT customer_id) AS n FROM customer_notifications
+          WHERE tenant_id = ${tenantId} AND bot_instance_id = ${botInstanceId}
+            AND kind = ${notificationKind} AND state IN ('PENDING', 'FAILED')`,
+    );
+    return row === undefined ? 0 : Number(row['n']);
   }
 }

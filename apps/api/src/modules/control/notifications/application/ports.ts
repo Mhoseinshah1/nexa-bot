@@ -509,7 +509,11 @@ export interface NotificationTransport {
 export interface PresentedOpsEvent {
   readonly templateKey: TemplateKey;
   readonly values: TemplateValues;
-  readonly logType: OpsLogTypeId;
+  /**
+   * Absent for an event that rides the generic layout with values of its own (Round 5A item 1):
+   * it is then routed by its code's topic alone, like any other generic event.
+   */
+  readonly logType?: OpsLogTypeId;
   readonly buttons?: readonly OpsLogButton[];
   /** The optional storm roll-up's identity for this error; see `NotificationService.queue`. */
   readonly storm?: {
@@ -542,6 +546,13 @@ export interface OpsEventPresenter {
    * that opens or reopens its condition (Round 4 PR-D: «every error is its own message»).
    */
   projectsEveryOccurrence(code: string): boolean;
+  /**
+   * Whether this event's own message is not posted because another message already says it
+   * (R5A item 2: a paid service refunded because it could not be created is reported once,
+   * by the refund's error report, never also by the generic line). The event is still
+   * recorded; only its projection is skipped.
+   */
+  suppresses?(input: OperationalEventInput): boolean;
   /** The Persian title of an event code; never the raw code. */
   title(code: string): string;
   /** The Persian name of a severity class. */
