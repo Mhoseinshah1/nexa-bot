@@ -479,7 +479,7 @@ import {
 } from './modules/commerce/ops-log/application/nightly-report-loop.js';
 import { DrizzleNightlyReportReader } from './modules/commerce/ops-log/infrastructure/drizzle-nightly-report.reader.js';
 import { IntlTimePeriodResolver } from './infrastructure/time/report-calendar.js';
-import { formatPersianInteger } from '@nexa/contracts';
+import { backupCaptionRenderer } from './modules/commerce/ops-log/application/backup-caption.js';
 import { OperationLog } from './modules/commerce/ops-log/application/operation-log.js';
 import { ServiceAlertLog } from './modules/commerce/ops-log/application/service-alert-log.js';
 import type { OpsLogLane } from './modules/commerce/ops-log/application/ports.js';
@@ -6895,25 +6895,15 @@ export function createContainer(
   const backup = new BackupService({
     // Round 4 PR-D (L31): the caption is the operator's template, short and in Persian, with
     // the time of the next automatic backup when one is scheduled.
-    renderCaption: async (facts) => {
-      if (installationTenantId === null) return null;
-      const scope = { tenantId: installationTenantId, botInstanceId: null };
-      const schedule = await backupSchedule.effective();
-      const next = schedule.enabled ? new Date(facts.at.getTime() + schedule.intervalMs) : null;
-      const mebibytes = Math.max(1, Math.round(facts.archiveBytes / (1024 * 1024)));
-      return templateResolver.render(
-        scope,
-        'ops.log.backup_caption',
-        {
-          at: facts.at,
-          fileName: facts.fileName,
-          size: `${formatPersianInteger(mebibytes)} مگ`,
-          checksum: facts.checksum.slice(0, 16),
-          ...(next === null ? {} : { nextAt: next }),
-        },
-        'fa',
-      );
-    },
+    renderCaption: backupCaptionRenderer({
+      scope: () =>
+        installationTenantId === null
+          ? null
+          : { tenantId: installationTenantId, botInstanceId: null },
+      settings: settingsResolver,
+      schedule: () => backupSchedule.effective(),
+      render: (scope, key, values) => templateResolver.render(scope, key, values, 'fa'),
+    }),
     runs: backupRuns,
     tools: backupTools,
     // The SAME keyring the secret cipher uses. One active key encrypts, every
