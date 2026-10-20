@@ -17,6 +17,7 @@ import {
 } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
+import { RecordLink, recordHref } from '../ui/record-ref';
 import {
   LIST_PAGE_SIZE,
   usePagedRows,
@@ -216,7 +217,7 @@ export function ResellerPurchasesCard({
       header: t('web.reseller_purchase_order'),
       render: (row) => (
         <span>
-          <Ltr>{row.orderId.slice(0, 8)}</Ltr>{' '}
+          <RecordLink href={recordHref.order(row.orderId)} id={row.orderId} code={null} />{' '}
           <Badge tone={ORDER_STATE_TONES[row.orderState]}>
             {t(ORDER_STATE_LABELS[row.orderState])}
           </Badge>

@@ -62,6 +62,8 @@ export interface CustomerInsightReader {
 /** One of the customer's newest orders, as the workspace lists it. */
 export interface WorkspaceOrderRow {
   readonly id: string;
+  /** The order's short public code (PR-C). */
+  readonly code: string | null;
   readonly lineTitle: string;
   readonly purpose: OrderPurpose;
   readonly state: OrderState;
@@ -73,6 +75,8 @@ export interface WorkspaceOrderRow {
 /** One of the customer's newest payments, as the workspace lists it. */
 export interface WorkspacePaymentRow {
   readonly id: string;
+  /** The payment's short public code — its tracking code (PR-C). */
+  readonly code: string | null;
   readonly reference: string;
   readonly method: PaymentMethod;
   readonly state: PaymentState;

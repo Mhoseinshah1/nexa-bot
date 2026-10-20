@@ -364,8 +364,12 @@ describe('the online index build', () => {
       // `indexdef` is a full statement; the declaration is everything from `ON`
       // onwards. Strip the prefix and the schema qualification so what remains
       // is the same clause in the same order: method, columns, predicate.
+      // PR-C: a declared UNIQUE index must be built unique, and only a declared one.
+      expect(normalise(actual).startsWith('create unique index'), `${index.name} uniqueness`).toBe(
+        index.unique === true,
+      );
       const built = normalise(actual)
-        .replace(new RegExp(`^create index ${index.name} `), '')
+        .replace(new RegExp(`^create (?:unique )?index ${index.name} `), '')
         .replace(/public\./g, '');
 
       // The two halves separately, so a failure names WHICH one moved rather

@@ -32,6 +32,7 @@ import {
 } from '../api/client';
 import { formatNumber, formatTimestampNumeric, formatTrafficGbText } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
+import { RecordLink, recordHref } from '../ui/record-ref';
 import { navigate, setQuery, useLinkHandler, type Route } from '../router';
 import { useSubmissionKey } from '../submission-key';
 import {
@@ -554,7 +555,15 @@ export function BulkOperationNewPage({
                 {
                   key: 'who',
                   header: t('web.bc_customer'),
-                  render: (row) => row.firstName ?? row.username ?? row.customerId.slice(0, 8),
+                  render: (row) =>
+                    row.firstName ??
+                    row.username ?? (
+                      <RecordLink
+                        href={recordHref.customer(row.customerId)}
+                        id={row.customerId}
+                        code={null}
+                      />
+                    ),
                 },
                 {
                   key: 'service',
@@ -923,7 +932,14 @@ export function BulkOperationDetailPage({
                         key: 'who',
                         header: t('web.bc_customer'),
                         render: (row) =>
-                          row.firstName ?? row.username ?? row.customerId.slice(0, 8),
+                          row.firstName ??
+                          row.username ?? (
+                            <RecordLink
+                              href={recordHref.customer(row.customerId)}
+                              id={row.customerId}
+                              code={null}
+                            />
+                          ),
                       },
                       {
                         key: 'service',

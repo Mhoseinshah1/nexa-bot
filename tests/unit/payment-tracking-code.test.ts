@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   operationIdFrom,
+  legacyPaymentTrackingCode,
   paymentTrackingCode,
   PAYMENT_TRACKING_CODE_PATTERN,
   templateDefinition,
@@ -19,23 +20,39 @@ const sha256 = (input: string) => createHash('sha256').update(input, 'utf8').dig
 /** Every role `PaymentService.referenceFor` writes a PAYMENT row under. */
 const PAYMENT_ROLES = ['manual', 'topup', 'gateway', 'gateway-topup', 'wallet'] as const;
 
-describe('paymentTrackingCode', () => {
+describe('paymentTrackingCode (PR-C: the 8-character public code IS the tracking code)', () => {
+  it("is the payment's own public code whenever it has one", () => {
+    expect(paymentTrackingCode({ code: 'K7M2P9QA', reference: '7d433a363380f69e:topup' })).toBe(
+      'K7M2P9QA',
+    );
+    // An imported payment, whose reference has no FIX-02 shape, still has a short code.
+    expect(paymentTrackingCode({ code: 'HX4N8RTW', reference: 'MIRZA-123456' })).toBe('HX4N8RTW');
+  });
+
+  it('falls back to the FIX-02 code only for a row the backfill has not reached', () => {
+    expect(paymentTrackingCode({ code: null, reference: '7d433a363380f69e:gateway' })).toBe(
+      '7d433a363380f69e',
+    );
+  });
+});
+
+describe('legacyPaymentTrackingCode (the FIX-02 code, search and fallback only)', () => {
   it('strips every role suffix a payment is written with, and only that', () => {
     for (const role of PAYMENT_ROLES) {
-      expect(paymentTrackingCode(`7d433a363380f69e:${role}`)).toBe('7d433a363380f69e');
+      expect(legacyPaymentTrackingCode(`7d433a363380f69e:${role}`)).toBe('7d433a363380f69e');
     }
   });
 
   it('is the operation id the reference was derived from, for a real derived key', () => {
     const operationId = operationIdFrom('payment', 'tg:42:topup:1', sha256);
-    const code = paymentTrackingCode(`${operationId}:topup`);
+    const code = legacyPaymentTrackingCode(`${operationId}:topup`);
     expect(code).toBe(operationId);
     expect(PAYMENT_TRACKING_CODE_PATTERN.test(code)).toBe(true);
   });
 
   it('never leaves a suffix, a colon or a role name in the code', () => {
     for (const role of PAYMENT_ROLES) {
-      const code = paymentTrackingCode(`0123456789abcdef:${role}`);
+      const code = legacyPaymentTrackingCode(`0123456789abcdef:${role}`);
       expect(code).not.toContain(':');
       expect(code).not.toContain(role);
     }
@@ -43,15 +60,15 @@ describe('paymentTrackingCode', () => {
 
   it('is stable: the same reference always gives the same code', () => {
     const reference = 'aaaaaaaaaaaaaaaa:gateway';
-    expect(paymentTrackingCode(reference)).toBe(paymentTrackingCode(reference));
+    expect(legacyPaymentTrackingCode(reference)).toBe(legacyPaymentTrackingCode(reference));
   });
 
   it('returns a reference of any other shape unchanged rather than guessing a cut', () => {
     // Backward compatibility: nothing writes these, but a row is not a promise.
-    expect(paymentTrackingCode('LEGACY-123')).toBe('LEGACY-123');
-    expect(paymentTrackingCode('abc:topup')).toBe('abc:topup');
-    expect(paymentTrackingCode('7d433a363380f69e')).toBe('7d433a363380f69e');
-    expect(paymentTrackingCode('7D433A363380F69E:topup')).toBe('7D433A363380F69E:topup');
+    expect(legacyPaymentTrackingCode('LEGACY-123')).toBe('LEGACY-123');
+    expect(legacyPaymentTrackingCode('abc:topup')).toBe('abc:topup');
+    expect(legacyPaymentTrackingCode('7d433a363380f69e')).toBe('7d433a363380f69e');
+    expect(legacyPaymentTrackingCode('7D433A363380F69E:topup')).toBe('7D433A363380F69E:topup');
   });
 });
 

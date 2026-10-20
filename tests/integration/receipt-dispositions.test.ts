@@ -590,15 +590,15 @@ describe('a submitted receipt and its three dispositions', () => {
         (one) => one.templateKey === 'bot.payment.receipt_credited_to_wallet',
       );
       // B14: and the payment's own tracking code, after two blank lines.
-      const [payment] = await rows<{ reference: string }>(
-        sql`SELECT reference FROM payments WHERE id = ${paymentId}`,
+      const [payment] = await rows<{ reference: string; code: string | null }>(
+        sql`SELECT reference, code FROM payments WHERE id = ${paymentId}`,
       );
       expect(said.map((one) => one.values)).toEqual([
         // FIX-02: the public code, never the stored `:topup`/`:manual` reference.
-        { amount: money(240_000n, 'IRT'), reference: paymentTrackingCode(payment!.reference) },
+        { amount: money(240_000n, 'IRT'), reference: paymentTrackingCode(payment!) },
       ]);
       expect(lane.rendered().join('\n')).toContain(
-        `پرداخت کنید.\n\n\nکد پیگیری پرداخت: ${paymentTrackingCode(payment?.reference ?? 'MISSING')}`,
+        `پرداخت کنید.\n\n\nکد پیگیری پرداخت: ${paymentTrackingCode(payment!)}`,
       );
       // The reviewer's figure, and no command.
       expect(lane.rendered().join('\n')).toContain(

@@ -176,7 +176,7 @@ describe('the service list', () => {
     stubApi(list([service()]));
     renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
 
-    expect(await screen.findByText('nx-7f3a91')).toBeInTheDocument();
+    expect((await screen.findAllByText('nx-7f3a91')).length).toBeGreaterThan(0);
     // Inside the TABLE, not the filter pills above it — both carry these labels, and a
     // bare `getByText` would pass on the pill while the column rendered nothing.
     const table = screen.getByRole('table');
@@ -222,7 +222,7 @@ describe('the service list', () => {
       ]),
     );
     const { container } = renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
 
     const markup = container.innerHTML;
     expect(markup).not.toContain('DEADBEEFDEADBEEF');
@@ -243,7 +243,7 @@ describe('the service list', () => {
   it('shows an active service whose delivery failed as active, and separately as failed', async () => {
     stubApi(list([service({ state: 'ACTIVE', deliveryState: 'FAILED' })]));
     renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
 
     const table = screen.getByRole('table');
     expect(within(table).getByText('فعال')).toBeInTheDocument();
@@ -293,7 +293,7 @@ describe('the service list', () => {
         denied={false}
       />,
     );
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
 
     expect(api.calls[0]?.url).toContain('q=NX-7F3A91');
     expect(api.calls[0]?.url).not.toContain('providerUsername=');
@@ -307,7 +307,7 @@ describe('the service list', () => {
      */
     const api = stubApi(list([service()]));
     renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
     const before = api.calls.length;
 
     fireEvent.change(screen.getByLabelText('جست‌وجو'), { target: { value: '@maryam' } });
@@ -335,7 +335,7 @@ describe('the service list', () => {
   it('offers no write from the list: every request it makes is a GET', async () => {
     const api = stubApi(list([service()]));
     const { container } = renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
 
     expect(api.calls.map((call) => call.method)).toEqual(['GET']);
     // One form, and it is the filter: no create, no edit, no decision anywhere.
@@ -417,7 +417,7 @@ describe('the service detail', () => {
     stubApi(detail());
     renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
 
-    expect(await screen.findByText('nx-7f3a91')).toBeInTheDocument();
+    expect((await screen.findAllByText('nx-7f3a91')).length).toBeGreaterThan(0);
     expect(screen.getByText('4821')).toBeInTheDocument();
     // 50 GiB, formatted from the string the contract carries because a byte count
     // passes 2^53 and JSON has one number type.
@@ -439,7 +439,7 @@ describe('the service detail', () => {
     const { container } = renderPage(
       <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />,
     );
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
     expect(container.querySelector('a[href^="/products/"]')).toBeNull();
     expect(screen.getByText('سرویس دلخواه')).toBeInTheDocument();
   });
@@ -450,7 +450,7 @@ describe('the service detail', () => {
     const { container } = renderPage(
       <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />,
     );
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
 
     expect(container.innerHTML).not.toContain('DEADBEEFDEADBEEF');
     // And it says the link is WITHHELD rather than leaving an operator to conclude the
@@ -545,7 +545,7 @@ describe('the service detail', () => {
      */
     stubApi(detail({ actions: actionsWith({}) }));
     renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
 
     for (const label of [
       'به‌روزرسانی مصرف از پنل',
@@ -575,7 +575,7 @@ describe('the service detail', () => {
       }),
     );
     renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
 
     expect(screen.getByRole('button', { name: 'موقتاً غیرفعال کن' })).toBeDisabled();
     expect(screen.getByText(/نوع پنل این سرویس چنین کاری را پشتیبانی نمی‌کند/)).toBeInTheDocument();
@@ -647,7 +647,7 @@ describe('the service detail', () => {
     renderPage(
       <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit={false} mayTerminate={false} />,
     );
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
 
     expect(screen.getByText(/به دسترسی «ویرایش سرویس» نیاز دارید/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'موقتاً غیرفعال کن' })).toBeDisabled();
@@ -664,7 +664,7 @@ describe('the service detail', () => {
     renderPage(
       <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit={false} mayTerminate={false} />,
     );
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
     const panel = screen.getByRole('region', { name: t('web.service_action_panel_title') });
     const disabled = panel.querySelectorAll('.action-group-buttons button:disabled').length;
     const why = panel.querySelector('details.action-panel-why') as HTMLElement;
@@ -689,7 +689,7 @@ describe('the service detail', () => {
       }),
     );
     renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate={false} />);
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
 
     expect(screen.getByRole('button', { name: 'موقتاً غیرفعال کن' })).toBeEnabled();
     expect(screen.getByText(/پایان دادن به سرویس دسترسی جداگانه‌ای دارد/)).toBeInTheDocument();
@@ -709,7 +709,7 @@ describe('the service detail', () => {
       actionRoute('terminate', { state: 'ACTIVE' }),
     ]);
     renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
 
     // Item 11: «حذف سرویس…» opens the modal; «فقط حذف سرویس» is the default option.
     fireEvent.click(screen.getByRole('button', { name: 'حذف سرویس…' }));
@@ -734,7 +734,7 @@ describe('the service detail', () => {
       actionRoute('terminate', { state: 'TERMINATED' }),
     ]);
     renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
 
     fireEvent.click(screen.getByRole('button', { name: 'حذف سرویس…' }));
     const dialog = await screen.findByRole('dialog');
@@ -776,7 +776,7 @@ describe('the service detail', () => {
   it('draws no transfer control, and no longer the meta note about it (W5)', async () => {
     stubApi(detail());
     renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
 
     // Package F built the CUSTOMER's transfer, from the bot. The operator page has no
     // transfer, not even a disabled one, and no longer narrates the absence.
@@ -899,7 +899,7 @@ describe('the promotion of /services', () => {
   it('labels the next page older, the way a descending list must', async () => {
     stubApi(list([service()], 'cursor-2'));
     const { container } = renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
 
     const pager = container.querySelector('.pager');
     expect(pager).not.toBeNull();
@@ -937,7 +937,7 @@ describe('the service action panel', () => {
   it('draws each button inside its group, and terminate in the sensitive strip', async () => {
     stubApi(detail({ actions: actionsWith({ SUSPEND: 'AVAILABLE', TERMINATE: 'AVAILABLE' }) }));
     renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate mayGrant />);
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
     const panel = screen.getByRole('region', { name: t('web.service_action_panel_title') });
     const group = (key: WebKey) => within(panel).getByRole('group', { name: t(key) });
     expect(
@@ -972,7 +972,7 @@ describe('the service action panel', () => {
   it('opens the delete modal with the danger sentence first', async () => {
     stubApi(detail({ actions: actionsWith({ TERMINATE: 'AVAILABLE' }) }));
     renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
     fireEvent.click(screen.getByRole('button', { name: 'حذف سرویس…' }));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText(t('web.service_terminate_danger'))).toBeInTheDocument();
@@ -981,7 +981,7 @@ describe('the service action panel', () => {
   it('disables terminate on a server blocker and says why in the folded reasons', async () => {
     stubApi(detail({ actions: actionsWith({ TERMINATE: 'IN_PROGRESS' }) }));
     renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
     const terminate = screen.getByRole('button', { name: 'حذف سرویس…' });
     expect(terminate).toBeDisabled();
     expect(terminate).toHaveAccessibleDescription(t('web.service_blocker_in_progress'));
@@ -992,7 +992,7 @@ describe('the service action panel', () => {
     const { container } = renderPage(
       <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />,
     );
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
     const pair = container.querySelector('.wb-balance');
     expect(pair).not.toBeNull();
     expect(within(pair as HTMLElement).getByText(t('web.service_identity_title'))).toBeTruthy();
@@ -1094,7 +1094,7 @@ describe('the lifecycle tabs', () => {
   it('asks the server for the LIVE services when the URL names no tab', async () => {
     const api = stubApi(list([service()]));
     renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
 
     expect(listParams(api.calls).map((params) => params.get('lifecycle'))).toEqual(['LIVE']);
     const tabs = screen.getAllByRole('tab');
@@ -1124,7 +1124,7 @@ describe('the lifecycle tabs', () => {
           denied={false}
         />,
       );
-      await screen.findByText('nx-7f3a91');
+      await screen.findAllByText('nx-7f3a91');
       const sent = listParams(api.calls);
       expect(
         sent.map((params) => params.get('lifecycle')),
@@ -1146,7 +1146,7 @@ describe('the lifecycle tabs', () => {
           denied={false}
         />,
       );
-      await screen.findByText('nx-7f3a91');
+      await screen.findAllByText('nx-7f3a91');
       expect(listParams(api.calls).map((params) => params.get('lifecycle'))).toEqual([lifecycle]);
       unmount();
     }
@@ -1164,7 +1164,7 @@ describe('the lifecycle tabs', () => {
         denied={false}
       />,
     );
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
     fireEvent.click(screen.getByRole('tab', { name: 'پایان‌یافته' }));
     await waitFor(() =>
       expect(new URLSearchParams(window.location.search).get('lifecycle')).toBe('ENDED'),
@@ -1185,7 +1185,7 @@ describe('the lifecycle tabs', () => {
         denied={false}
       />,
     );
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
     fireEvent.click(screen.getByRole('tab', { name: 'فعال' }));
     await waitFor(() => expect(window.location.search).toBe(''));
   });
@@ -1238,7 +1238,7 @@ describe('the lifecycle tabs', () => {
   it('offers only the states the open tab can show', async () => {
     stubApi(list([service()]));
     renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
-    await screen.findByText('nx-7f3a91');
+    await screen.findAllByText('nx-7f3a91');
     const panel = openFilterPanel();
     expect(within(panel).queryByRole('button', { name: 'فعال' })).not.toBeNull();
     expect(

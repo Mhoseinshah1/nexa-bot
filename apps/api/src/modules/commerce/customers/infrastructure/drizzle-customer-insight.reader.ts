@@ -217,7 +217,7 @@ export class DrizzleCustomerInsightReader
   ): Promise<readonly WorkspaceOrderRow[]> {
     const tenantId = requireTenantId(scope);
     const result = await this.db.execute(sql`
-      SELECT id, line_title, purpose, state, total_amount::text AS total_amount, currency,
+      SELECT id, code, line_title, purpose, state, total_amount::text AS total_amount, currency,
              created_at
       FROM orders
       WHERE tenant_id = ${tenantId} AND customer_id = ${customerId}
@@ -226,6 +226,7 @@ export class DrizzleCustomerInsightReader
     `);
     return (result.rows as Record<string, unknown>[]).map((row) => ({
       id: String(row.id),
+      code: row.code === null ? null : String(row.code),
       lineTitle: String(row.line_title),
       purpose: String(row.purpose) as OrderPurpose,
       state: String(row.state) as OrderState,
@@ -242,7 +243,7 @@ export class DrizzleCustomerInsightReader
   ): Promise<readonly WorkspacePaymentRow[]> {
     const tenantId = requireTenantId(scope);
     const result = await this.db.execute(sql`
-      SELECT id, reference, method, state, amount::text AS amount, currency, created_at
+      SELECT id, code, reference, method, state, amount::text AS amount, currency, created_at
       FROM payments
       WHERE tenant_id = ${tenantId} AND customer_id = ${customerId}
       ORDER BY created_at DESC, id DESC
@@ -250,6 +251,7 @@ export class DrizzleCustomerInsightReader
     `);
     return (result.rows as Record<string, unknown>[]).map((row) => ({
       id: String(row.id),
+      code: row.code === null ? null : String(row.code),
       reference: String(row.reference),
       method: String(row.method) as PaymentMethod,
       state: String(row.state) as PaymentState,

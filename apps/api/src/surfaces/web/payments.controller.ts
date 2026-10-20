@@ -43,6 +43,7 @@ import {
   type GatewayInvoiceView,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
+import type { PublicLabels } from '../../modules/commerce/public-codes/application/public-labels.js';
 import { adminActor, requireSessionToken } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
@@ -147,6 +148,8 @@ export class PaymentsController {
     const signals = await this.container.payments.gatewaySignals(scope, actor, result.items);
     // Roadmap E1: each payment's situation, from the ONE classifier, and its queues.
     const situations = await this.container.payments.situations(scope, actor, result.items);
+    // PR-C: the settled orders' short codes, so a row never prints an order uuid.
+    const orderCodes = await this.orderCodes(scope, actor, result.items);
     return {
       // The LIST omits `evidenceNote`: it is an operator's own text about somebody's
       // bank transfer, and it is returned only on the detail, behind the same
@@ -158,6 +161,7 @@ export class PaymentsController {
           dispositions.get(record.id) ?? null,
           signals.get(record.id) ?? null,
           situations.get(record.id) ?? null,
+          orderCodes,
         ),
       ),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
@@ -231,8 +235,21 @@ export class PaymentsController {
         cardFacts,
         situations.get(payment.id) ?? null,
         signals.get(payment.id) ?? null,
+        await this.orderCodes(scope, actor, [payment]),
       ),
     };
+  }
+
+  /** PR-C: the short codes of the orders a page of payments settles, in one read. */
+  private async orderCodes(
+    scope: TenantContext,
+    actor: ReturnType<typeof adminActor>,
+    records: readonly PaymentRecord[],
+  ): Promise<ReadonlyMap<string, string | null>> {
+    const labels = await this.container.publicLabels.read(scope, actor, 'payments.view', {
+      orderIds: records.map((record) => record.orderId),
+    });
+    return labels.orders;
   }
 
   /**
@@ -311,8 +328,13 @@ export class PaymentsController {
       ...(page.limit === undefined ? {} : { limit: page.limit }),
       ...(page.cursor === undefined ? {} : { cursor: compensationCursorFrom(page.cursor) }),
     });
+    // PR-C: the payments' tracking codes and the orders' codes, never their uuids.
+    const labels = await this.container.publicLabels.read(scope, actor, 'payments.view', {
+      paymentIds: result.items.map((record) => record.paymentId),
+      orderIds: result.items.map((record) => record.orderId),
+    });
     return {
-      compensations: result.items.map(toCompensationView),
+      compensations: result.items.map((record) => toCompensationView(record, labels)),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
     };
   }
@@ -451,9 +473,13 @@ function toSummary(
   receiptDisposition: ReceiptDisposition | null,
   gatewaySignal: PaymentGatewaySignalRecord | null = null,
   situation: PaymentSituationRead | null = null,
+  orderCodes: ReadonlyMap<string, string | null> = new Map(),
 ): PaymentSummaryResponse {
   return {
     id: record.id,
+    // PR-C: THE tracking code, and the settled order's code beside its id.
+    code: record.code,
+    orderCode: record.orderId === null ? null : (orderCodes.get(record.orderId) ?? null),
     source: record.source,
     customerId: record.customerId,
     orderId: record.orderId,
@@ -643,9 +669,10 @@ function toDetail(
   cardFacts: GatewayCardFacts | null = null,
   situation: PaymentSituationRead | null = null,
   gatewaySignal: PaymentGatewaySignalRecord | null = null,
+  orderCodes: ReadonlyMap<string, string | null> = new Map(),
 ): PaymentDetailResponse {
   return {
-    ...toSummary(record, identity, receiptDisposition, gatewaySignal, situation),
+    ...toSummary(record, identity, receiptDisposition, gatewaySignal, situation, orderCodes),
     evidenceNote: record.evidenceNote,
     resolutionNote: record.resolutionNote,
     destination: destination === null ? null : toDestinationView(destination),
@@ -713,11 +740,13 @@ function toReceiptCreditView(credit: ReceiptCreditRecord): ReceiptCreditView {
 }
 
 /** One compensation, amounts as decimal strings with their currency (D7). */
-function toCompensationView(record: CompensationRecord): CompensationView {
+function toCompensationView(record: CompensationRecord, labels: PublicLabels): CompensationView {
   return {
     refundId: record.refundId,
     paymentId: record.paymentId,
+    paymentCode: labels.payments.get(record.paymentId) ?? null,
     orderId: record.orderId,
+    orderCode: record.orderId === null ? null : (labels.orders.get(record.orderId) ?? null),
     customerId: record.customerId,
     customerTelegramUserId: record.customerTelegramUserId,
     customerUsername: record.customerUsername,

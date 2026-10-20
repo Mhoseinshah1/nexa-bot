@@ -3,6 +3,7 @@ import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
   PRODUCT_ROUTES,
+  productCode,
   UNLIMITED_TRAFFIC_BYTES,
   money,
   parseTrafficGb,
@@ -249,6 +250,7 @@ function productCursorFrom(raw: string): ProductCursor {
 function toSummary(record: ProductRecord): ProductSummaryResponse {
   return {
     id: record.id,
+    code: record.codeNumber === null ? null : productCode(record.codeNumber),
     source: record.source,
     title: record.title,
     description: record.description,

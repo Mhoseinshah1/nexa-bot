@@ -243,6 +243,19 @@ describe('the pre-invoice', () => {
     );
   });
 
+  it("PR-C: carries the order's short public code under the title, and drops the line without one", async () => {
+    const coded = await composer.preinvoice(scope, {
+      ...facts,
+      description,
+      orderCode: 'K7M2P9QA',
+    });
+    expect(render(coded.key, coded.values)).toContain(
+      '🧾 پیش‌فاکتور\n🔖 کد سفارش: K7M2P9QA\n\n📦 سرویس: پلن ۳۰ روزه',
+    );
+    const uncoded = await composer.preinvoice(scope, { ...facts, description, orderCode: null });
+    expect(render(uncoded.key, uncoded.values)).not.toContain('کد سفارش');
+  });
+
   it.each([
     ['no description', null],
     ['a blank description', '  \n '],

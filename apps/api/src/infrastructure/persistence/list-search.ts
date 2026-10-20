@@ -1,6 +1,8 @@
-import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
+import { publicCodeFromSearch, type ListSearchTerm } from '@nexa/contracts';
 import type { Executor } from './database.js';
-import { customers } from './schema.js';
+import { customers, orders } from './schema.js';
 
 /**
  * The SQL halves of the Web Admin's one search box (spec §10), shared by every list that
@@ -53,6 +55,8 @@ export function customerIdsWithUsernamePrefix(tenantId: string, folded: string):
 export interface CustomerTelegramIdentity {
   readonly telegramUserId: string;
   readonly username: string | null;
+  /** First and last name as Telegram gave them, joined; null when neither is known (PR-C). */
+  readonly displayName: string | null;
 }
 
 /**
@@ -73,11 +77,54 @@ export async function readCustomerIdentities(
       id: customers.id,
       telegramUserId: customers.telegramUserId,
       username: customers.username,
+      firstName: customers.firstName,
+      lastName: customers.lastName,
     })
     .from(customers)
     .where(and(eq(customers.tenantId, tenantId), inArray(customers.id, [...new Set(customerIds)])));
   for (const row of rows) {
-    identities.set(row.id, { telegramUserId: row.telegramUserId, username: row.username });
+    const name = [row.firstName, row.lastName]
+      .filter((part): part is string => part !== null && part.trim() !== '')
+      .join(' ');
+    identities.set(row.id, {
+      telegramUserId: row.telegramUserId,
+      username: row.username,
+      displayName: name === '' ? null : name,
+    });
   }
   return identities;
+}
+
+/**
+ * Round 4, PR-C: the short public code a term would be, when the box was given one. A code
+ * is 8 characters of the 30-symbol alphabet, so one made only of digits is classified as a
+ * Telegram id and one with letters as text; both are asked. Exact, like every arm here.
+ */
+export function publicCodeOfTerm(term: ListSearchTerm): string | null {
+  if (term.kind !== 'TEXT' && term.kind !== 'TELEGRAM_ID') return null;
+  return publicCodeFromSearch(term.value);
+}
+
+/**
+ * `condition`, OR the row whose own public code is the term (`<table>_tenant_code_key`), OR —
+ * through `orderColumn` — the row that belongs to the ORDER with that code, so an operator
+ * who was quoted an order code finds its service or its payments from their own lists. The
+ * order arm is an InitPlan like `customerIdsWithTelegramId`, at most one id (unique key).
+ */
+export function orPublicCode(
+  condition: SQL,
+  tenantId: string,
+  term: ListSearchTerm,
+  codeColumn: AnyPgColumn,
+  orderColumn?: AnyPgColumn,
+): SQL {
+  const code = publicCodeOfTerm(term);
+  if (code === null) return condition;
+  const arms: SQL[] = [condition, eq(codeColumn, code)];
+  if (orderColumn !== undefined) {
+    arms.push(
+      sql`${orderColumn} = ANY(ARRAY(SELECT ${orders.id} FROM ${orders} WHERE ${orders.tenantId} = ${tenantId} AND ${orders.code} = ${code}))`,
+    );
+  }
+  return or(...arms) as SQL;
 }

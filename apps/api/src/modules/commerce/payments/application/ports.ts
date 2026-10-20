@@ -37,8 +37,14 @@ export interface PaymentRecord {
   readonly state: PaymentState;
   readonly method: PaymentMethod;
   readonly amount: Money;
-  /** Generated, unique per tenant, quoted by the customer. Never customer-supplied. */
+  /** Generated, unique per tenant. The internal key a ledger entry names; never printed. */
   readonly reference: string;
+  /**
+   * The 8-character public code (PR-C) — THE tracking code, read through
+   * `paymentTrackingCode(payment)`. Assigned by the database at insert; null only for a row
+   * the backfill has not reached.
+   */
+  readonly code: string | null;
   readonly evidenceKind: PaymentEvidenceKind | null;
   readonly evidenceNote: string | null;
   readonly externalReference: string | null;
@@ -584,9 +590,9 @@ export interface PaymentRepository {
   rejectionReasonFor(scope: TenantContext, paymentId: string, tx?: unknown): Promise<string | null>;
 
   /**
-   * B14: the payment's tracking code — `paymentTrackingCode` of its own `reference` (FIX-02: never the
-   * stored reference, whose role suffix is an operational key), stable because that reference
-   * is never rewritten — for the wallet-credit messages to quote: an approved receipt or a
+   * B14: the payment's tracking code — `paymentTrackingCode(payment)`, its 8-character public
+   * code since PR-C (never the stored reference, whose role suffix is an operational key),
+   * stable because a code is written once — for the wallet-credit messages to quote: an approved receipt or a
    * gateway top-up (both `WALLET_TOPUP_CREDITED`) and a receipt credited to the wallet.
    * Null only for a payment this tenant does not have.
    */
@@ -705,4 +711,5 @@ export interface PaymentRepository {
 export interface PaymentCustomerIdentity {
   readonly telegramUserId: string;
   readonly username: string | null;
+  readonly displayName?: string | null;
 }

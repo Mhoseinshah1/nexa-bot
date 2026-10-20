@@ -36,6 +36,11 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
  */
 export interface ServiceRecord {
   readonly id: string;
+  /**
+   * The 8-character public code (PR-C) every surface prints instead of the id. Assigned by
+   * the database at insert; null only for a row the backfill has not reached.
+   */
+  readonly code: string | null;
   readonly tenantId: string;
   /** Provenance (owner decision 2026-10-17): `MIRZA` marks a row the one-time import wrote. */
   readonly source: RecordSource;
@@ -196,6 +201,8 @@ export interface ServicePage {
 export interface ServiceCustomerIdentity {
   readonly telegramUserId: string;
   readonly username: string | null;
+  /** First and last name as Telegram gave them (PR-C: the service detail's «مشتری»). */
+  readonly displayName?: string | null;
 }
 
 export interface ServiceSearch {

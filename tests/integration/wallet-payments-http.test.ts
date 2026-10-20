@@ -956,6 +956,15 @@ describe('wallet and payment HTTP surfaces', () => {
         reason: 'UNDELIVERABLE',
         state: 'COMPLETED',
       });
+      // PR-C (Codex review of #299): the payment's and order's short codes ride on the row.
+      const coded = await api.container.database.db.execute(
+        sql`SELECT p.code AS payment_code, o.code AS order_code
+              FROM payments p LEFT JOIN orders o ON o.id = p.order_id WHERE p.id = ${refunded[0]!}`,
+      );
+      const stored = coded.rows[0] as { payment_code: string; order_code: string | null };
+      expect(first.compensations[0]?.paymentCode).toBe(stored.payment_code);
+      expect(first.compensations[0]?.orderCode).toBe(stored.order_code);
+      expect(stored.payment_code).toMatch(/^[2-9A-HJKMNP-TV-Z]{8}$/u);
       expect(first.nextCursor).not.toBeNull();
       const second = compensationListResponseSchema.parse(
         JSON.parse(

@@ -42,6 +42,7 @@ import {
   customerIdsWithUsernamePrefix,
   escapeLike,
   lowerPrefix,
+  orPublicCode,
   readCustomerIdentities,
 } from '../../../../infrastructure/persistence/list-search.js';
 import type {
@@ -232,7 +233,15 @@ export class DrizzleOrderRepository implements OrderRepository {
     if (search.productId !== undefined) conditions.push(eq(orders.productId, search.productId));
     if (search.source !== undefined) conditions.push(eq(orders.source, search.source));
     if (search.text !== undefined) {
-      conditions.push(orderTextCondition(tenantId, search.text, productIds));
+      // PR-C: an order's short public code, whatever the box classified it as.
+      conditions.push(
+        orPublicCode(
+          orderTextCondition(tenantId, search.text, productIds),
+          tenantId,
+          search.text,
+          orders.code,
+        ),
+      );
     }
     if (cursor !== null) {
       conditions.push(
@@ -498,6 +507,7 @@ function toRecord(row: typeof orders.$inferSelect): OrderRecord {
     id: row.id as OrderId,
     customerId: row.customerId as UserId,
     state: row.state as OrderState,
+    code: row.code,
     source: row.source as RecordSource,
     purpose: row.purpose as OrderPurpose,
     origin: row.origin as OrderOrigin,

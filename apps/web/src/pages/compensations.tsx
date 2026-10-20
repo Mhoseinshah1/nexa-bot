@@ -4,7 +4,8 @@ import { AUTOMATIC_REFUND_REASON, type CompensationView, type RefundState } from
 import { fetchCompensations } from '../api/client';
 import { formatTimestampNumeric } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
-import { setQuery, useLinkHandler, type Route } from '../router';
+import { RecordLink, recordHref } from '../ui/record-ref';
+import { setQuery, type Route } from '../router';
 import {
   LIST_PAGE_SIZE,
   Badge,
@@ -61,7 +62,6 @@ function reasonOf(reason: string) {
 }
 
 export function CompensationsPage({ route, denied }: { route: Route; denied: boolean }) {
-  const onLink = useLinkHandler();
   const cursor = route.query.get('cursor');
 
   const compensations = useQuery(
@@ -82,13 +82,11 @@ export function CompensationsPage({ route, denied }: { route: Route; denied: boo
       key: 'payment',
       header: t('web.compensation_payment'),
       render: (row) => (
-        <a
-          href={`/payments/${encodeURIComponent(row.paymentId)}`}
-          onClick={onLink}
-          className="strong"
-        >
-          <Ltr>{row.paymentId.slice(0, 8)}</Ltr>
-        </a>
+        <RecordLink
+          href={recordHref.payment(row.paymentId)}
+          id={row.paymentId}
+          code={row.paymentCode}
+        />
       ),
     },
     {
@@ -98,9 +96,7 @@ export function CompensationsPage({ route, denied }: { route: Route; denied: boo
         row.orderId === null ? (
           <span className="faint">—</span>
         ) : (
-          <a href={`/orders/${encodeURIComponent(row.orderId)}`} onClick={onLink}>
-            <Ltr>{row.orderId.slice(0, 8)}</Ltr>
-          </a>
+          <RecordLink href={recordHref.order(row.orderId)} id={row.orderId} code={row.orderCode} />
         ),
     },
     {
@@ -108,9 +104,7 @@ export function CompensationsPage({ route, denied }: { route: Route; denied: boo
       header: t('web.compensation_customer'),
       render: (row) => (
         <span className="nowrap">
-          <a href={`/users/${encodeURIComponent(row.customerId)}`} onClick={onLink}>
-            <Ltr>{row.customerId.slice(0, 8)}</Ltr>
-          </a>{' '}
+          <RecordLink href={recordHref.customer(row.customerId)} id={row.customerId} code={null} />{' '}
           <TelegramIdentity
             telegramUserId={row.customerTelegramUserId}
             username={row.customerUsername}

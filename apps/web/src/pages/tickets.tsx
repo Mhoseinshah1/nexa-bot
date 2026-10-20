@@ -45,6 +45,7 @@ import {
 } from '../api/client';
 import { formatTimestamp, splitBytes } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
+import { CodeText, CopyIdButton, RecordLink } from '../ui/record-ref';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { HandoffContextView } from './handoff-context';
 import { OpsActionDrawer } from './ops-drawer';
@@ -446,7 +447,11 @@ export function TicketsPage({
                 className="strong tickets-number"
               >
                 <Ltr>#{row.number}</Ltr>
-              </a>
+              </a>{' '}
+              {/* PR-C: the ticket's short public code beside its number. */}
+              <span className="muted small">
+                <CodeText code={row.code} />
+              </span>
               <SourceBadge source={row.source} />
             </>
           }
@@ -470,7 +475,7 @@ export function TicketsPage({
       header: t('web.ticket_customer'),
       render: (row) => (
         <IdentityCell
-          name={row.customerDisplayName ?? <Ltr>{row.customerId.slice(0, 8)}</Ltr>}
+          name={row.customerDisplayName ?? t('web.customer_identity_unknown')}
           username={row.customerUsername}
           id={row.customerTelegramUserId}
           href={`/users/${encodeURIComponent(row.customerId)}`}
@@ -1159,7 +1164,11 @@ export function TicketDetailPage({
             t('web.ticket_detail')
           ) : (
             <>
-              {t('web.ticket_detail')} <Ltr mono={false}>#{data.ticket.number}</Ltr>
+              {t('web.ticket_detail')} <Ltr mono={false}>#{data.ticket.number}</Ltr>{' '}
+              <span className="record-ref">
+                <CodeText code={data.ticket.code} />
+                <CopyIdButton id={data.ticket.id} />
+              </span>
             </>
           )
         }
@@ -1266,13 +1275,12 @@ function TicketContextCard({
 }) {
   const onLink = useLinkHandler();
   const { ticket, customer } = detail;
-  const link = (path: string, value: string | null) =>
+  // PR-C: a linked record by its short code, with «کپی شناسه»; never its uuid.
+  const link = (path: string, value: string | null, code: string | null) =>
     value === null ? (
       <Dash />
     ) : (
-      <a href={`/${path}/${encodeURIComponent(value)}`} onClick={onLink}>
-        <Ltr>{value.slice(0, 8)}</Ltr>
-      </a>
+      <RecordLink href={`/${path}/${encodeURIComponent(value)}`} id={value} code={code} />
     );
   const [editingLinks, setEditingLinks] = useState(false);
   return (
@@ -1312,9 +1320,9 @@ function TicketContextCard({
               )}
             </Badge>,
           ],
-          [t('web.ticket_link_service'), link('services', ticket.serviceId)],
-          [t('web.ticket_link_order'), link('orders', ticket.orderId)],
-          [t('web.ticket_link_payment'), link('payments', ticket.paymentId)],
+          [t('web.ticket_link_service'), link('services', ticket.serviceId, ticket.serviceCode)],
+          [t('web.ticket_link_order'), link('orders', ticket.orderId, ticket.orderCode)],
+          [t('web.ticket_link_payment'), link('payments', ticket.paymentId, ticket.paymentCode)],
         ]}
       />
       {mayAssign && editingLinks && (

@@ -731,12 +731,12 @@ describe('the wizard is one message, edited in place', () => {
     expect(text).toContain(renewedText);
     expect(text).toContain(service.username);
     expect(text).toContain('30 روز');
-    const [paid] = await rows<{ reference: string }>(
-      sql`SELECT p.reference FROM payments p JOIN orders o ON o.id = p.order_id
+    const [paid] = await rows<{ reference: string; code: string | null }>(
+      sql`SELECT p.reference, p.code FROM payments p JOIN orders o ON o.id = p.order_id
           WHERE o.purpose = 'RENEW' AND p.state = 'CONFIRMED' AND p.tenant_id = ${tenantA.tenantId}`,
     );
     // FIX-02: the renewal quotes the public code under the exact label, never `:wallet`.
-    expect(text).toContain(`کد پیگیری پرداخت: ${paymentTrackingCode(paid?.reference ?? 'none')}`);
+    expect(text).toContain(`کد پیگیری پرداخت: ${paymentTrackingCode(paid!)}`);
     expect(text).not.toContain(':wallet');
     const after = await services.findById(tenantA, service.id);
     expect(after?.expiresAt?.getTime()).toBeGreaterThan(before?.expiresAt?.getTime() ?? 0);

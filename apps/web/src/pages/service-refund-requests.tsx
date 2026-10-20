@@ -148,7 +148,7 @@ function columns(
           onClick={onLink}
           className="strong"
         >
-          <Ltr>{row.serviceUsername ?? row.serviceId}</Ltr>
+          {row.serviceUsername === null ? t('web.record_open') : <Ltr>{row.serviceUsername}</Ltr>}
         </a>
       ),
     },

@@ -2263,6 +2263,8 @@ export const PRODUCT_PAGE_MAX = 100;
 export const productSummarySchema = z
   .object({
     id: z.string(),
+    /** `P-102` (Round 4, PR-C): the per-tenant product code shown beside the name. */
+    code: z.string().nullable().default(null),
     /**
      * Where the row came from (owner decision 2026-10-17): drives the «از میرزا» badge. Absent on
      * the wire reads as NEXA, so a page loaded against an API that has not been updated yet keeps
@@ -3964,6 +3966,12 @@ export const ORDER_PAGE_MAX = 100;
 export const orderSummarySchema = z.object({
   id: z.string(),
   /**
+   * The short public code (Round 4, PR-C; `public-code.ts`) — what every surface prints
+   * instead of the uuid. Null only before the backfill reaches the row, and on a response
+   * from a server before the field (defaulted on parse).
+   */
+  code: z.string().nullable().default(null),
+  /**
    * Where the row came from (owner decision 2026-10-17): drives the «از میرزا» badge. Absent on
    * the wire reads as NEXA, so a page loaded against an API that has not been updated yet keeps
    * parsing; the API always sends it.
@@ -4021,6 +4029,14 @@ export const orderSummarySchema = z.object({
    */
   customerTelegramUserId: z.string().nullable().default(null),
   customerUsername: z.string().nullable().default(null),
+  /**
+   * What the product and panel ids name, so a row shows «P-102 · name» and the panel's name
+   * rather than two uuids (PR-C). The product's CURRENT code and title, beside the frozen
+   * `lineTitle`; null when there is no product (a custom service) or on an older response.
+   */
+  productCode: z.string().nullable().default(null),
+  productTitle: z.string().nullable().default(null),
+  panelName: z.string().nullable().default(null),
 });
 export type OrderSummaryResponse = z.infer<typeof orderSummarySchema>;
 
@@ -4537,6 +4553,14 @@ export type PaymentGatewaySignal = z.infer<typeof paymentGatewaySignalSchema>;
  */
 export const paymentSummarySchema = z.object({
   id: z.string(),
+  /**
+   * The short public code (Round 4, PR-C; `public-code.ts`) — THE payment tracking code (`paymentTrackingCode`), what every surface prints
+   * instead of the uuid. Null only before the backfill reaches the row, and on a response
+   * from a server before the field (defaulted on parse).
+   */
+  code: z.string().nullable().default(null),
+  /** The order's short code, when the payment settles one (PR-C). */
+  orderCode: z.string().nullable().default(null),
   /**
    * Where the row came from (owner decision 2026-10-17): drives the «از میرزا» badge. Absent on
    * the wire reads as NEXA, so a page loaded against an API that has not been updated yet keeps
@@ -5333,7 +5357,10 @@ export type RefundResponse = z.infer<typeof refundResponseSchema>;
 export const compensationSchema = z.object({
   refundId: z.string(),
   paymentId: z.string(),
+  /** PR-C: the payment's tracking code and the order's short code, printed instead of uuids. */
+  paymentCode: z.string().nullable().default(null),
   orderId: z.string().nullable(),
+  orderCode: z.string().nullable().default(null),
   customerId: z.string(),
   customerTelegramUserId: z.string().nullable(),
   customerUsername: z.string().nullable(),
@@ -5951,6 +5978,12 @@ export const SERVICE_PAGE_MAX = 100;
 export const serviceSummarySchema = z.object({
   id: z.string(),
   /**
+   * The short public code (Round 4, PR-C; `public-code.ts`) — what every surface prints
+   * instead of the uuid. Null only before the backfill reaches the row, and on a response
+   * from a server before the field (defaulted on parse).
+   */
+  code: z.string().nullable().default(null),
+  /**
    * Where the row came from (owner decision 2026-10-17): drives the «از میرزا» badge. Absent on
    * the wire reads as NEXA, so a page loaded against an API that has not been updated yet keeps
    * parsing; the API always sends it.
@@ -6015,6 +6048,16 @@ export const serviceSummarySchema = z.object({
    * Defaulted on parse, like the identity pair above.
    */
   locationLabel: z.string().nullable().default(null),
+  /**
+   * PR-C: what the order, panel and product ids name — the order's code, the panel's name,
+   * and the product's code and title — so the service shows «P-102 · name» and never a uuid.
+   */
+  orderCode: z.string().nullable().default(null),
+  panelName: z.string().nullable().default(null),
+  productCode: z.string().nullable().default(null),
+  productTitle: z.string().nullable().default(null),
+  /** PR-C: the customer's name as Telegram gave it (first and last), beside the numeric id. */
+  customerDisplayName: z.string().nullable().default(null),
   /**
    * R4 A2: when a live panel check last found this service's account MISSING on its panel
    * (the panel answered twice that it does not exist); null while it is there or was never

@@ -4,7 +4,7 @@ import { EVENT_TYPES, STUCK_OPERATION_REASONS, type EventType } from '@nexa/cont
 import { fetchSystemDiagnostics } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
-import { useLinkHandler } from '../router';
+import { RecordLink, recordHref } from '../ui/record-ref';
 import {
   Badge,
   Banner,
@@ -159,7 +159,6 @@ function TypeName({ value, known }: { value: string; known: WebKey | undefined }
 }
 
 export function DiagnosticsSection({ denied }: { denied: boolean }) {
-  const onLink = useLinkHandler();
   const diagnostics = useQuery({
     queryKey: ['system-diagnostics'],
     queryFn: fetchSystemDiagnostics,
@@ -202,9 +201,7 @@ export function DiagnosticsSection({ denied }: { denied: boolean }) {
       key: 'service',
       header: t('web.diagnostics_service'),
       render: (row) => (
-        <a href={`/services/${row.serviceId}`} onClick={onLink}>
-          <Ltr>{row.serviceId.slice(0, 8)}</Ltr>
-        </a>
+        <RecordLink href={recordHref.service(row.serviceId)} id={row.serviceId} code={null} />
       ),
     },
   ];

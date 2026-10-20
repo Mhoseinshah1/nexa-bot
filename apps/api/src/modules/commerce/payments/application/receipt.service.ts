@@ -301,7 +301,10 @@ export class ReceiptService {
             {
               paymentId: open.paymentId,
               next: reopenable ? 'REOPEN' : underReview ? 'UNDER_REVIEW' : 'CLOSED',
-              ...(underReview && expiredFor !== null ? { reference: expiredFor.reference } : {}),
+              // The PUBLIC tracking code (PR-C), never the stored reference.
+              ...(underReview && expiredFor !== null
+                ? { reference: paymentTrackingCode(expiredFor) }
+                : {}),
             },
           );
         }
@@ -616,7 +619,7 @@ export class ReceiptService {
     await this.deps.guard.check(scope, actor, RECEIPT_SUBMIT_PERMISSION);
     const payment = await this.deps.payments.findById(scope, paymentId);
     if (payment === null || payment.customerId !== customerId) return null;
-    return paymentTrackingCode(payment.reference);
+    return paymentTrackingCode(payment);
   }
 
   async listForPayment(

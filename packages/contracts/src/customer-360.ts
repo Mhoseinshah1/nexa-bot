@@ -483,6 +483,8 @@ const workspaceCount = z.number().int().min(0).max(CUSTOMER_WORKSPACE_COUNT_CAP)
 
 export const customerWorkspaceOrderSchema = z.object({
   id: z.string(),
+  /** The order's short public code (PR-C), printed instead of the uuid. */
+  code: z.string().nullable().default(null),
   /** The snapshot title: what the customer bought, never a lookup of today's product. */
   lineTitle: z.string(),
   purpose: z.enum(ORDER_PURPOSES),
@@ -495,6 +497,8 @@ export type CustomerWorkspaceOrder = z.infer<typeof customerWorkspaceOrderSchema
 
 export const customerWorkspacePaymentSchema = z.object({
   id: z.string(),
+  /** The payment's short public code — its tracking code since PR-C (`paymentTrackingCode`). */
+  code: z.string().nullable().default(null),
   /** The code the customer quotes. */
   reference: z.string(),
   method: z.enum(PAYMENT_METHODS),

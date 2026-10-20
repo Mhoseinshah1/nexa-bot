@@ -13,6 +13,7 @@ import {
   PANEL_ERROR_CODES,
   PLATFORM_ERROR_CODES,
   providerDescriptor,
+  orderCodeOf,
   paymentTrackingCode,
   isNexaError,
   currencyCodeSchema,
@@ -5147,7 +5148,8 @@ function receiptRefusal(error: unknown): PendingReply {
     if (next === 'UNDER_REVIEW') {
       return {
         key: 'bot.payment.received_for_review',
-        values: typeof reference === 'string' ? { reference: paymentTrackingCode(reference) } : {},
+        // Already the public tracking code (`ReceiptService`), never the stored reference.
+        values: typeof reference === 'string' ? { reference } : {},
         buttons: [],
         orderId: null,
       };
@@ -6751,7 +6753,7 @@ export class BotRuntime {
       buttons: items.map((item) => ({
         label: {
           kind: 'TEXT' as const,
-          text: paymentTrackingCode(item.payment.reference),
+          text: paymentTrackingCode(item.payment),
           amount: item.payment.amount,
         },
         data: `${ADMIN_RECEIPT_CALLBACK_PREFIX}${item.payment.id}`,
@@ -6885,7 +6887,7 @@ export class BotRuntime {
       return {
         key: 'bot.admin.credit_amount_prompt',
         values: {
-          reference: paymentTrackingCode(opened.payment.reference),
+          reference: paymentTrackingCode(opened.payment),
           total: opened.payment.amount,
           minutes: Math.round(ADMIN_AMOUNT_CAPTURE_TTL_MS / 60_000),
         },
@@ -6957,7 +6959,7 @@ export class BotRuntime {
             key: 'bot.admin.credit_confirm',
             values: {
               amount: result.amount,
-              reference: paymentTrackingCode(result.payment.reference),
+              reference: paymentTrackingCode(result.payment),
               customer: result.customer?.telegramUserId ?? result.payment.customerId,
               total: result.payment.amount,
             },
@@ -6993,7 +6995,7 @@ export class BotRuntime {
           key: 'bot.admin.credited',
           values: {
             amount: result.amount,
-            reference: paymentTrackingCode(result.result.payment.reference),
+            reference: paymentTrackingCode(result.result.payment),
           },
           buttons: [],
           orderId: null,
@@ -7456,7 +7458,7 @@ export class BotRuntime {
           return {
             key: 'bot.admin.reject_confirm',
             values: {
-              reference: paymentTrackingCode(result.payment.reference),
+              reference: paymentTrackingCode(result.payment),
               reason: result.reason,
             },
             buttons: [
@@ -7642,7 +7644,7 @@ export class BotRuntime {
         return {
           key: 'bot.admin.reject_reason_prompt',
           values: {
-            reference: paymentTrackingCode(opened.payment.reference),
+            reference: paymentTrackingCode(opened.payment),
             minutes: Math.round(ADMIN_AMOUNT_CAPTURE_TTL_MS / 60_000),
           },
           buttons: [rejectCancelButton(opened.capture.id)],
@@ -14098,6 +14100,8 @@ export class BotRuntime {
         ? await this.deps.customService?.termsFor(scope, order.id)
         : undefined;
     const screen = await this.deps.screens.preinvoice(scope, {
+      // PR-C: the order's public code, the one the customer quotes and every log prints.
+      orderCode: orderCodeOf(order),
       custom:
         custom === undefined || custom === null
           ? null
@@ -15352,7 +15356,7 @@ export class BotRuntime {
     }
     return {
       key: 'bot.payment.gateway_closed',
-      values: { reference: paymentTrackingCode(view.payment.reference) },
+      values: { reference: paymentTrackingCode(view.payment) },
       buttons: [mainMenuButton()],
       orderId: null,
     };
@@ -15425,7 +15429,7 @@ export class BotRuntime {
     if (paymentId === undefined) return {};
     const view = await this.deps.gateway.attemptFor(scope, customer.id, paymentId);
     if (view === null || view.invoice.botInstanceId !== botInstanceId) return {};
-    return { reference: paymentTrackingCode(view.payment.reference) };
+    return { reference: paymentTrackingCode(view.payment) };
   }
 
   /**
@@ -15494,7 +15498,7 @@ export class BotRuntime {
           : 'bot.payment.transfer_instructions',
       values: {
         total: payment.amount,
-        reference: paymentTrackingCode(payment.reference),
+        reference: paymentTrackingCode(payment),
         /*
          * Composed behind the application layer, by the renderer this surface is
          * handed. A surface may not resolve the catalogue — `check-boundaries.sh`
@@ -15604,7 +15608,7 @@ export class BotRuntime {
     return {
       key: 'bot.payment.cancel_confirm',
       // FIX-02: the question replaces the invoice; the code it carried stays on the message.
-      values: { reference: paymentTrackingCode(payment.reference) },
+      values: { reference: paymentTrackingCode(payment) },
       buttons: [
         {
           ...inlineLabel('payment.cancel_confirm'),
@@ -15723,7 +15727,7 @@ export class BotRuntime {
         return {
           key: 'bot.payment.received_for_review',
           // Roadmap E6: the code the invoice carried stays on the message that replaces it.
-          values: { reference: paymentTrackingCode(payment.reference) },
+          values: { reference: paymentTrackingCode(payment) },
           // Nothing more to do on this message: no button, as the receipt's final state.
           buttons: [],
           orderId: null,
@@ -15742,7 +15746,7 @@ export class BotRuntime {
         values: {
           minutes: receiptWindow.minutes,
           // FIX-02: this edits the invoice — the code it carried stays on the message.
-          reference: paymentTrackingCode(payment.reference),
+          reference: paymentTrackingCode(payment),
         },
         /*
          * Owner spec §2.4, state 2: the receipt is asked for, with no card details and no
@@ -16646,7 +16650,7 @@ function starsInvoiceBody(
   const fee = payment.customerFee;
   const expiresAt = payment.expiresAt ?? new Date(0);
   // FIX-02: the payment's one public code, on the invoice before anything is paid.
-  const reference = paymentTrackingCode(payment.reference);
+  const reference = paymentTrackingCode(payment);
   if (fee !== null && fee.fee.amountMinor > 0n) {
     return {
       key:
@@ -16795,7 +16799,7 @@ function cardTransferScreen(
     payment.orderId === null ? topupButton() : payMethodsButton(payment.orderId);
   const wizard = { kind, step: 'INVOICE' as const, paymentId: payment.id };
   // FIX-02: every screen of this attempt quotes the same public code.
-  const reference = paymentTrackingCode(payment.reference);
+  const reference = paymentTrackingCode(payment);
   if (invoice.creationErrorCode !== null) {
     // Created without a card: it cannot be paid from here, and a new attempt is the way on.
     return {
@@ -16984,7 +16988,7 @@ export function gatewayAttemptScreen(
    * preparing screen, the invoice, the review and every end — computed from the payment's
    * own stored reference, so a re-render, a worker edit or a replayed tap shows the same code.
    */
-  const reference = paymentTrackingCode(payment.reference);
+  const reference = paymentTrackingCode(payment);
   const check: CustomerButton = {
     ...inlineLabel('payment.gateway_check'),
     data: `${GATEWAY_CHECK_CALLBACK_PREFIX}${payment.id}`,

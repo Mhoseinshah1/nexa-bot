@@ -1,4 +1,16 @@
-import { and, asc, count, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import {
   TICKET_ACTIVE_STATUSES,
@@ -110,6 +122,7 @@ type MessageRow = typeof ticketMessages.$inferSelect;
 function toTicket(row: TicketRow): TicketRecord {
   return {
     id: row.id as TicketId,
+    code: row.code,
     source: row.source as RecordSource,
     // An identity bounded far below 2^53 in any installation's lifetime.
     number: Number(row.number),
@@ -451,7 +464,7 @@ export class DrizzleTicketRepository implements TicketRepository {
   async list(scope: TenantContext, filter: TicketListFilter): Promise<readonly TicketListItem[]> {
     const tenantId = requireTenantId(scope);
     // A customer was named and nobody matched: the answer is no rows, not every row.
-    if (filter.customerId === null) return [];
+    if (filter.customerId === null && filter.code === undefined) return [];
     const rows = await this.listSelect()
       .where(
         and(
@@ -460,7 +473,7 @@ export class DrizzleTicketRepository implements TicketRepository {
           filter.source === undefined ? undefined : eq(tickets.source, filter.source),
           filter.statuses === undefined ? undefined : inArray(tickets.status, [...filter.statuses]),
           filter.categoryId === undefined ? undefined : eq(tickets.categoryId, filter.categoryId),
-          filter.customerId === undefined ? undefined : eq(tickets.customerId, filter.customerId),
+          ticketWhoCondition(filter),
           filter.assignedAdminId === undefined
             ? undefined
             : filter.assignedAdminId === null
@@ -831,4 +844,15 @@ function toListItem(row: {
           },
     assignedAdminUsername: row.assignedAdminUsername,
   };
+}
+
+/** The customer named, the ticket coded (PR-C), or both — never neither when one was asked. */
+function ticketWhoCondition(filter: TicketListFilter): SQL | undefined {
+  const byCustomer =
+    filter.customerId === undefined || filter.customerId === null
+      ? undefined
+      : eq(tickets.customerId, filter.customerId);
+  if (filter.code === undefined) return byCustomer;
+  const byCode = eq(tickets.code, filter.code);
+  return byCustomer === undefined ? byCode : or(byCustomer, byCode);
 }

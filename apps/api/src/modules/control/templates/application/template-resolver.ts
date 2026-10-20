@@ -1,6 +1,8 @@
 import {
   CONTROL_ERROR_CODES,
   errors,
+  ORDER_CODE_LINE_KEY,
+  ORDER_CODE_LINE_KEYS,
   placeholderTokensIn,
   templateDefinition,
   TRACKING_CODE_LINE_KEY,
@@ -172,7 +174,15 @@ export class TemplateResolver {
     }
 
     const resolved = await this.resolve(scope, key, locale, tx);
-    const body = await this.withTrackingCodeLine(scope, key, resolved, values, locale, tx);
+    const body = await this.withOrderCodeLine(
+      scope,
+      key,
+      resolved,
+      await this.withTrackingCodeLine(scope, key, resolved, values, locale, tx),
+      values,
+      locale,
+      tx,
+    );
     // The tenant's zone and calendar, resolved HERE so every DATETIME in the message
     // is shown the same way, and so a caller cannot render one for a tenant with a
     // presentation that belongs to another.
@@ -210,5 +220,34 @@ export class TemplateResolver {
     }
     const line = await this.resolve(scope, TRACKING_CODE_LINE_KEY, locale, tx);
     return `${resolved.body}\n\n${line.body}`;
+  }
+
+  /**
+   * PR-C (Codex review of #299): the pre-invoice carries the order's public code, and a tenant
+   * override of `ORDER_CODE_LINE_KEYS` saved before then cannot. The same arrangement as the
+   * tracking-code line above: the stored override is never rewritten; its rendering gets
+   * `bot.order.order_code_line` PREPENDED, so the code sits under nothing the operator wrote.
+   * Only an override, only of those keys, only without its own `{orderCode}`, and only when a
+   * code is in hand — so the code is never shown twice.
+   */
+  private async withOrderCodeLine(
+    scope: ScopeContext,
+    key: TemplateKey,
+    resolved: ResolvedTemplate,
+    body: string,
+    values: TemplateValues,
+    locale: Locale,
+    tx: unknown,
+  ): Promise<string> {
+    if (
+      resolved.source !== 'TENANT' ||
+      !(ORDER_CODE_LINE_KEYS as readonly string[]).includes(key) ||
+      typeof values['orderCode'] !== 'string' ||
+      placeholderTokensIn(resolved.body).includes('orderCode')
+    ) {
+      return body;
+    }
+    const line = await this.resolve(scope, ORDER_CODE_LINE_KEY, locale, tx);
+    return `${line.body}\n\n${body}`;
   }
 }

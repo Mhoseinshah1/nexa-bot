@@ -26,6 +26,7 @@ function payment(overrides: Partial<PaymentRecord> = {}): PaymentRecord {
     method: 'GATEWAY',
     amount: money(250_000n, 'IRT'),
     reference: 'ref',
+    code: null,
     evidenceKind: null,
     evidenceNote: null,
     externalReference: 'TPT-1',

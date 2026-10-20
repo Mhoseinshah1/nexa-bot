@@ -1,6 +1,6 @@
 {
-  "id": "8f1c49fd-e8b2-4fdc-b2bd-c328d47d93af",
-  "prevId": "a22a99e4-a185-41c0-bccf-42ec59cac915",
+  "id": "f008129d-4503-436b-a900-726689ee17e7",
+  "prevId": "0ec98470-d7f9-49cf-a2c1-44df0391c9ba",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -21272,6 +21272,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -21463,6 +21469,10 @@
         "orders_source_ref_check": {
           "name": "orders_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
+        },
+        "orders_code_check": {
+          "name": "orders_code_check",
+          "value": "code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'"
         },
         "orders_state_check": {
           "name": "orders_state_check",
@@ -24601,6 +24611,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -24920,6 +24936,10 @@
         "payments_source_ref_check": {
           "name": "payments_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
+        },
+        "payments_code_check": {
+          "name": "payments_code_check",
+          "value": "code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'"
         },
         "payments_state_check": {
           "name": "payments_state_check",
@@ -25356,6 +25376,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "code_number": {
+          "name": "code_number",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -25547,6 +25573,10 @@
         "products_source_ref_check": {
           "name": "products_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
+        },
+        "products_code_number_check": {
+          "name": "products_code_number_check",
+          "value": "code_number IS NULL OR code_number > 0"
         },
         "products_status_check": {
           "name": "products_status_check",
@@ -32203,6 +32233,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -32511,6 +32547,10 @@
         "services_source_ref_check": {
           "name": "services_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
+        },
+        "services_code_check": {
+          "name": "services_code_check",
+          "value": "code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'"
         },
         "services_is_test_source_check": {
           "name": "services_is_test_source_check",
@@ -38431,6 +38471,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -38705,6 +38751,10 @@
         "tickets_source_ref_check": {
           "name": "tickets_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
+        },
+        "tickets_code_check": {
+          "name": "tickets_code_check",
+          "value": "code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'"
         },
         "tickets_status_check": {
           "name": "tickets_status_check",
