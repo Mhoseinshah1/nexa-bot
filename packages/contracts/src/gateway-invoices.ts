@@ -108,12 +108,17 @@ export type GatewayApprovalVerdict = (typeof GATEWAY_APPROVAL_VERDICTS)[number];
  * - `UNSUCCESSFUL` — the provider did not approve; the payment is FAILED.
  * - `LATE_COMPLETION` — the provider approved AFTER the attempt stopped being eligible
  *   (its deadline passed, or it was closed another way). Recorded; nothing moved.
+ * - `LATE_CREDITED` — R5A item 4: the same late approval, with the route's late-credit
+ *   setting ON: the provider's inquiry re-verified it and the paid amount was credited to the
+ *   customer's WALLET once (`GATEWAY_LATE_CREDIT`, `<paymentId>:late-credit`). The payment and
+ *   its order are untouched; the ledger entry is the link.
  */
 export const GATEWAY_INVOICE_OUTCOMES = [
   'SETTLED',
   'ALREADY_SETTLED',
   'UNSUCCESSFUL',
   'LATE_COMPLETION',
+  'LATE_CREDITED',
 ] as const;
 export type GatewayInvoiceOutcome = (typeof GATEWAY_INVOICE_OUTCOMES)[number];
 

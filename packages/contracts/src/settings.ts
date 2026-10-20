@@ -53,6 +53,13 @@ import {
   OUTBOX_PUBLISHED_RETENTION_DAYS_MIN,
 } from './data-retention.js';
 import { uuidV7Schema } from './ids.js';
+import {
+  LATE_CREDIT_SETTING_KEYS,
+  LATE_CREDIT_WINDOW_HOURS_DEFAULT,
+  LATE_CREDIT_WINDOW_HOURS_MAX,
+  LATE_CREDIT_WINDOW_HOURS_MIN,
+  LATE_CREDIT_WINDOW_SETTING_KEY,
+} from './payment-gateways.js';
 import { connectionFileCaptionTemplateIssues } from './templates.js';
 import {
   REFERRAL_COMMISSION_PERCENT_MAX,
@@ -840,6 +847,54 @@ export const SETTINGS = [
     schema: z.number().int().min(0).max(100),
     defaultValue: 0,
     zeroMeaning: 'UNLIMITED',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: LATE_CREDIT_SETTING_KEYS.TONPAYS,
+    description:
+      'R5A item 4: whether a TonPays (website) approval that arrives AFTER the payment closed ' +
+      '(deadline passed, EXPIRED, or UNKNOWN) is credited to the customer\u2019s wallet ' +
+      'automatically. The credit happens only when the provider\u2019s own inquiry re-verifies ' +
+      'the approval (completed AND paid, for the amount invoiced), exactly once, to the wallet ' +
+      'and never to the order: the order is not reopened and no service is built. Off: the ' +
+      'approval is recorded as a late completion and an operator decides, as before.',
+    schema: z.boolean(),
+    defaultValue: true,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: LATE_CREDIT_SETTING_KEYS.TONPAYS_TELEGRAM,
+    description:
+      'R5A item 4: the same switch for TonPays Telegram (card-to-card through TonPays): a ' +
+      'late or UNKNOWN approval, re-verified by the provider\u2019s inquiry, is credited to the ' +
+      'customer\u2019s wallet once and never settles the order. Off: recorded as a late ' +
+      'completion for an operator, as before.',
+    schema: z.boolean(),
+    defaultValue: true,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: LATE_CREDIT_WINDOW_SETTING_KEY,
+    description:
+      'R5A item 4: how long after a gateway payment closed its still-open invoice keeps being ' +
+      'asked about, slowly (5 minutes, then 15, then hourly, inside the provider\u2019s inquiry ' +
+      'budget), so a late approval is seen without a webhook. Hours. Only routes whose ' +
+      'late-credit switch is on are asked; when it is off nothing is asked after the deadline ' +
+      'except what a webhook or an operator brings forward, as before.',
+    schema: z.number().int().min(LATE_CREDIT_WINDOW_HOURS_MIN).max(LATE_CREDIT_WINDOW_HOURS_MAX),
+    defaultValue: LATE_CREDIT_WINDOW_HOURS_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     configures: null,

@@ -31,6 +31,12 @@ export const LEDGER_REASONS = [
   // there is one per payment, by `wallet_entries_receipt_credit_payment_key`.
   // `docs/payments-file02-design.md` D2.
   'RECEIPT_CREDIT',
+  // R5A item 4: a gateway's verified approval that arrived AFTER Nexa had closed the payment
+  // (deadline passed, or EXPIRED / UNKNOWN), credited to the customer's wallet and never to the
+  // order. Its own reason rather than `TOPUP_GATEWAY` (a top-up the payment settled, which earns
+  // a gift) or `ADMIN_CREDIT` (no operator decided it): the money came from a payment, once, by
+  // `<paymentId>:late-credit`, and `wallet_entries_gateway_late_credit_payment_key` holds that.
+  'GATEWAY_LATE_CREDIT',
   // Commerce
   'PURCHASE',
   'PURCHASE_REVERSAL',

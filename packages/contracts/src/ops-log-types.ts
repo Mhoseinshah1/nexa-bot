@@ -93,7 +93,11 @@ export const OPS_LOG_TYPES = {
   PAYMENT_LATE: {
     l: 'L5',
     topic: 'PAYMENTS',
-    templates: ['ops.financial.late_completion', 'ops.financial.outcome_unknown'],
+    templates: [
+      'ops.financial.late_completion',
+      'ops.financial.outcome_unknown',
+      'ops.financial.late_credit',
+    ],
   },
   REFUND: {
     l: 'L6',
@@ -302,6 +306,11 @@ const TOKENS = {
   serviceCode: ['STRING', 'The service’s 8-character public code.'],
   ticketNumber: ['STRING', 'The ticket’s number.'],
   at: ['DATETIME', 'When the fact was recorded.'],
+  expiredAt: [
+    'DATETIME',
+    'R5A item 4: when the payment stopped being payable in Nexa (its effective deadline).',
+  ],
+  approvedAt: ['DATETIME', 'R5A item 4: when the gateway’s approval was observed and credited.'],
   // Payment detail.
   method: ['STRING', 'The payment method, in Persian, once.'],
   evidence: ['STRING', 'What confirmed the payment, in Persian.'],
@@ -538,6 +547,15 @@ export const OPS_LOG_TEMPLATES = [
       ...req('gateway', 'reference', 'principal', 'fee', 'payable', 'at'),
       ...WHO(),
       ...opt('orderCode', 'providerInvoiceId', 'providerFinalAmount'),
+    ],
+  ),
+  logTemplate(
+    'ops.financial.late_credit',
+    'Log L5 (R5A item 4): a gateway approved a payment after Nexa had closed it, its inquiry re-verified the approval, and the paid amount was credited to the customer’s wallet. The order was not reopened and no service was built.',
+    [
+      ...req('gateway', 'reference', 'amount', 'expiredAt', 'approvedAt'),
+      ...WHO(),
+      ...opt('orderCode', 'balanceBefore', 'balanceAfter'),
     ],
   ),
   logTemplate(

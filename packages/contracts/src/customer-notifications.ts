@@ -176,6 +176,19 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    */
   'WALLET_TOPUP_GIFT_CREDITED',
   /**
+   * R5A item 4: a gateway approved a payment AFTER Nexa had told the customer it expired (or
+   * it was UNKNOWN), the provider's own inquiry re-verified it, and the paid amount was
+   * credited to the wallet. `payments.id` is the subject — one late credit per payment, so one
+   * sentence per payment, by `customer_notifications_subject_key`.
+   *
+   * Its own sentence rather than `WALLET_TOPUP_CREDITED`: the customer was already told the
+   * payment expired, and must learn that the money arrived late, is in the wallet, and that
+   * the order (when there was one) was NOT paid by it. The amount and the balance are read
+   * at send time from the payment's `GATEWAY_LATE_CREDIT` ledger entry — a reader, not a
+   * payload (ADR 0030 §1).
+   */
+  'GATEWAY_LATE_PAYMENT_CREDITED',
+  /**
    * An operator's refund is COMPLETE: the money is back on the wallet, or has been sent
    * back out of band. `refunds.id` is the subject — the one kind in this list whose
    * subject is a refund row, and the reason it is one row per refund: a payment refunded
@@ -460,6 +473,8 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    */
   RECEIPT_CREDITED_TO_WALLET: false,
   WALLET_TOPUP_GIFT_CREDITED: false,
+  /* `false`, like every ledger fact above: an append-only credit cannot stop having happened. */
+  GATEWAY_LATE_PAYMENT_CREDITED: false,
   REFUND_COMPLETED: false,
   /*
    * `false`: a FAILED payment is frozen by 0052/0114, so "this attempt was not approved"
@@ -599,6 +614,7 @@ export const CUSTOMER_NOTIFICATION_QUIET_HOURS: Readonly<
   TRIAL_NOT_DELIVERED: false,
   RECEIPT_CREDITED_TO_WALLET: false,
   WALLET_TOPUP_GIFT_CREDITED: false,
+  GATEWAY_LATE_PAYMENT_CREDITED: false,
   REFUND_COMPLETED: false,
   GATEWAY_PAYMENT_FAILED: false,
   SERVICE_REFUND_REQUEST_REGISTERED: false,
@@ -688,6 +704,7 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
    */
   RECEIPT_CREDITED_TO_WALLET: 'bot.payment.receipt_credited_to_wallet',
   WALLET_TOPUP_GIFT_CREDITED: 'bot.wallet.topup_gift_credited',
+  GATEWAY_LATE_PAYMENT_CREDITED: 'bot.payment.gateway_late_credited',
   REFUND_COMPLETED: 'bot.refund.completed',
   GATEWAY_PAYMENT_FAILED: 'bot.payment.gateway_failed',
   SERVICE_REFUND_REQUEST_REGISTERED: 'bot.service.refund_request_registered',
