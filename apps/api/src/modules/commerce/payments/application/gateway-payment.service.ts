@@ -2057,7 +2057,9 @@ export class GatewayPaymentService {
         if (
           lateCreditInput !== null &&
           (confirmation.reason === 'DEADLINE_PASSED' ||
-            confirmation.reason === 'PAYMENT_NOT_PENDING')
+            confirmation.reason === 'PAYMENT_NOT_PENDING' ||
+            // Already credited: the credit path answers CREDITED again and records the outcome.
+            confirmation.reason === 'LATE_CREDIT_ALREADY_APPLIED')
         ) {
           const credited = await this.creditLateApproval(
             scope,

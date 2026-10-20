@@ -850,6 +850,34 @@ describe('a late gateway approval, credited to the wallet', () => {
     );
   });
 
+  it('a payment credited to the wallet can never also settle its order, even if its deadline moves', async () => {
+    const { orderId, paymentId, invoice, invoiceId } = await createdAttempt();
+    await pastDeadline(paymentId);
+    tonpays.set(invoiceId, 'completed', true);
+    await webhook(invoice, 'completed', 'belt-1');
+    offsetMs += 6_000;
+    await pass();
+    expect(await walletTotal()).toBe(250_000n);
+    // The payment is still PENDING; its deadline moves ahead again.
+    await ctx.container.database.db.execute(
+      sql`UPDATE payments SET expires_at = now() + interval '1 hour' WHERE id = ${paymentId}`,
+    );
+    const settled = await ctx.container.payments.confirmGatewayPayment(
+      tenantA,
+      systemActor('belt'),
+      paymentId,
+      { evidenceNote: 'belt' },
+    );
+    expect(settled).toMatchObject({
+      outcome: 'NOT_ELIGIBLE',
+      reason: 'LATE_CREDIT_ALREADY_APPLIED',
+    });
+    expect((await paymentOf(paymentId)).state).toBe('PENDING');
+    expect(await orderState(orderId)).toBe('AWAITING_PAYMENT');
+    expect(await serviceCount()).toBe(0);
+    expect(await walletTotal()).toBe(250_000n);
+  });
+
   describe('the operations log', () => {
     const LOG_CHAT = '-1001234567890';
     const PAYMENTS_TOPIC = 77;

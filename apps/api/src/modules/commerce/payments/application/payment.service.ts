@@ -411,6 +411,11 @@ export type GatewayConfirmation =
         | 'NOT_A_GATEWAY_PAYMENT'
         | 'ORDER_NOT_AWAITING_PAYMENT'
         /*
+         * R5A item 4: this payment's late approval was already credited to the wallet
+         * (`<paymentId>:late-credit`). It never also settles its order or top-up.
+         */
+        | 'LATE_CREDIT_ALREADY_APPLIED'
+        /*
          * CentralPay: the provider reference the lane bound is not this attempt's under the
          * payment's lock — the money is not provably this payment's. Held, never settled.
          */
@@ -3730,6 +3735,17 @@ export class PaymentService {
         if (payment.state === 'CONFIRMED') return { outcome: 'ALREADY_CONFIRMED', payment };
         if (payment.state !== 'PENDING') {
           return { outcome: 'NOT_ELIGIBLE', reason: 'PAYMENT_NOT_PENDING', payment };
+        }
+        /*
+         * R5A item 4: a payment already credited to the wallet as a late approval is never
+         * settled into its order or top-up as well, whatever its deadline now says (a PENDING
+         * payment credited past its deadline, a review deadline that moved).
+         */
+        if (
+          (await this.deps.wallet.findByReference(scope, lateCreditReference(payment.id), tx)) !==
+          null
+        ) {
+          return { outcome: 'NOT_ELIGIBLE', reason: 'LATE_CREDIT_ALREADY_APPLIED', payment };
         }
         /*
          * The attempt's own deadline, hard, with no grace (brief §3) — its EFFECTIVE one
