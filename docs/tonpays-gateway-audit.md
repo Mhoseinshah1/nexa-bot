@@ -77,7 +77,9 @@ fixed in this package:
    `paid == true`, observed through the **inquiry** endpoint. A webhook is a hint.
 3. Each attempt has a hard Nexa-owned lifetime of **70 minutes** from the creation of the
    internal attempt, with no grace. After it nothing settles automatically; a later
-   provider completion is recorded for diagnostics and moves no money.
+   provider completion is recorded for diagnostics and moves no money — _until R5A item 4
+   (owner decision of 2026-10-20), which credits a re-verified late approval to the customer's
+   WALLET, never to the order (§8)._
 4. Amounts: the provider's `request_amount`, `final_amount` and `credit_amount` are
    stored as non-authoritative metadata and never decide approval or the credited
    figure. The amount is the payment's own frozen snapshot.
@@ -213,7 +215,9 @@ and wallet code is unchanged except for the reason a gateway top-up credits unde
   customer is told `GATEWAY_PAYMENT_FAILED`. The order is untouched.
 - APPROVED after the deadline, or against a payment no longer PENDING →
   `late_completion_observed_at`, an audit row and the operational condition
-  `payments.gateway_late_completion`. Nothing else.
+  `payments.gateway_late_completion`. Nothing else. _With the route's late-credit switch ON
+  (the default since R5A item 4) the approval is instead credited to the wallet, §8; this
+  paragraph is exactly the behaviour with the switch OFF._
 
 Exactly once: the payment's conditional `PENDING → CONFIRMED`,
 `payments_order_confirmed_key`, the ledger's per-payment unique indexes, and the
@@ -349,7 +353,8 @@ What was built, where it differs in detail from §5, and why.
 - **Not yet proven against the real provider** (`OQ-WP10-01`, `CLAUDE.md`'s provider
   rule). Every test uses a fake written from the documentation.
 - **A closed attempt can still be paid at TonPays.** Nexa has no cancel API to call. Late
-  money is recorded (`LATE_COMPLETION`) and never settled automatically (`OQ-WP11A-03`).
+  money is never SETTLED automatically: it is recorded (`LATE_COMPLETION`), or — owner decision
+  of 2026-10-20, `OQ-WP11A-03` — credited to the customer's wallet by §8.
 - **Migration number.** WP10G merged first and kept `0121`; this package's migration was
   regenerated at integration as `0122_tonpays_gateway`, chained to WP10G's snapshot and
   stamped with the time it was regenerated, so the migrator's watermark cannot skip it
@@ -470,3 +475,75 @@ cause: `http.timeout` with ~15000 ms (the provider is slower than the timeout),
 front of the API), `…unexpected_body:<field>` or `…validation:<field>` (the real answer
 differs from the documentation in that field). That reading is still owed against the real
 provider (`OQ-WP10-01`).
+
+## 8. Late approvals credited to the wallet (R5A item 4, owner decision of 2026-10-20)
+
+Resolves `OQ-WP11A-03`. The three rules at the head of this file are unchanged: only the
+inquiry decides, the deadline is judged under the payment's lock, and nothing a webhook says
+moves money. What changes is what happens to an approval the inquiry has ALREADY verified and
+the settlement path has refused as late.
+
+**The decision.** For TonPays and TonPays Telegram, a late approval is credited to the
+customer's WALLET automatically, by default. A setting per route switches it
+(`payments.late_credit.tonpays_enabled`, `payments.late_credit.tonpays_telegram_enabled`,
+both default ON, drawn on each gateway's own Web Admin page as «پرداخت دیرهنگام را خودکار به
+کیف پول واریز کن»). OFF is today's behaviour exactly: `LATE_COMPLETION`, an audit row, the
+condition `payments.gateway_late_completion`, and an operator decides.
+
+**What is credited, once.** `PaymentService.creditLateGatewayApproval`, called by the lane
+only after `confirmGatewayPayment` answered `NOT_ELIGIBLE` (`DEADLINE_PASSED`, or
+`PAYMENT_NOT_PENDING`). Under the payment's `FOR UPDATE` lock, then the customer's wallet lock,
+it decides again, whatever the lane believed:
+
+1. an entry already under `<paymentId>:late-credit` means done — nothing is written twice,
+   whatever the setting says by now. The reference, the partial unique index
+   `wallet_entries_gateway_late_credit_payment_key` and the replay answer are three layers of
+   one rule;
+2. the route's switch (read in this transaction), the payment's state (`EXPIRED`, `UNKNOWN`, or
+   `PENDING` past its effective deadline — never `CONFIRMED`, `FAILED` or `CANCELLED`);
+3. the invoice's RECORDED answer is an approval by the route's own evidence table (`completed`
+   AND `paid === true`, the table an operator's reconciliation uses), and the request amount
+   the provider echoed equals the amount Nexa sent. **Only the request amount is compared**;
+   `final_amount` stays metadata (§1.4), and an echo the provider did not send is not a
+   mismatch. A different figure credits nothing and raises the existing
+   `payments.gateway_late_completion` condition with `reason: LATE_CREDIT_AMOUNT_MISMATCH`;
+4. the currency is the one the installation still sells in.
+
+It writes ONE `GATEWAY_LATE_CREDIT` ledger entry for **the payment's own frozen amount**
+(`payments.amount`: the principal — the figure a settled top-up credits and an automatic refund
+returns; a customer fee is never credited, `docs/payment-fees-fx.md`), naming the payment and
+never the order; `WalletEntryRecorded` and `PaymentLateCredited` in the outbox; an audit row
+(`payment.gateway_late_credit`); the customer's `GATEWAY_LATE_PAYMENT_CREDITED` notice; and the
+invoice's outcome `LATE_CREDITED`, all in that transaction. No top-up gift is earned. The
+payment row is not touched, **the order is not reopened and no service is built**: prices and
+stock may have changed, and the customer was already told the payment expired.
+
+**UNKNOWN.** An `UNKNOWN` payment is never auto-settled into an order, and still is not. A late
+approval on one is credited to the wallet under the same key and the payment stays `UNKNOWN`.
+The operator's reconciliation checks the key: `CONFIRMED` is refused
+(`LATE_CREDIT_ALREADY_APPLIED`), so the money cannot be credited twice; `FAILED` is allowed —
+it is the payment's terminal exit — moves nothing, and tells the customer nothing (note
+`…:paid:late_credited`).
+
+**Seeing a late approval without a webhook.** With the switch ON, the inquiry schedule does not
+end at the deadline: the invoice of a payment that is not closed for good is asked about
+slowly for `payments.late_credit.window_hours` (default 48, 1–720) after the effective
+deadline — 5 minutes, then 15, then hourly, ±10 % jitter, the last question at the window's
+end. A late poll takes at most half of the scheduled share of the tenant's inquiry budget and
+is never counted as a hint, so the rows a customer is waiting behind keep the rest. The
+provider's total is unchanged. A webhook after the deadline brings an inquiry forward for as
+long as the window is open (it was three, ever).
+
+**Operator-facing.** The PAYMENTS-topic log «تأیید دیرهنگام — واریز به کیف پول»
+(`ops.financial.late_credit`, log type L5, `PaymentLateCredited`): customer, the payment's
+8-character code, the gateway, the amount, the wallet before → after, and the time the payment
+expired against the time the approval was credited. The payment's late-completion queue no
+longer lists a credited payment.
+
+**Designed for reuse.** The rules are pure (`domain/late-credit.ts`) and name no provider; a
+route opts in through its descriptor's `lateCreditSetting`. A future inquiry-approved route
+(Rialit) names its own switch and gets the same decision, credit and polling. It is not
+implemented here.
+
+**Still owed:** like the rest of this route, none of it is proven against the real provider
+(`OQ-WP10-01`): TonPays' own invoice expiry decides how long a late approval can arrive.
