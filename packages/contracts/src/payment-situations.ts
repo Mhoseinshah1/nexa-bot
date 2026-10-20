@@ -58,6 +58,12 @@ export const PAYMENT_SITUATIONS = [
   'PARTIAL',
   /** The provider approved after the attempt stopped being eligible. Nothing settled. */
   'LATE_COMPLETION',
+  /**
+   * R5A item 4: the provider approved after the attempt stopped being payable and the amount
+   * was credited to the customer's WALLET (`GATEWAY_LATE_CREDIT`), whatever state the payment
+   * is in. The money is in the wallet: the customer is never invited to pay again.
+   */
+  'LATE_CREDITED',
   /** CONFIRMED with no refund row. */
   'CONFIRMED',
   /** CONFIRMED with a refund still open (REQUESTED or AWAITING_EXTERNAL). */
@@ -177,6 +183,8 @@ export interface PaymentSituationFacts {
   readonly receiptDisposition: ReceiptDisposition | null;
   /** The gateway invoice's creation state, or null for a payment with no invoice. */
   readonly invoiceCreation: GatewayInvoiceCreationState | null;
+  /** R5A item 4: the invoice's outcome is `LATE_CREDITED` — a late approval went to the wallet. */
+  readonly lateCredited: boolean;
   /**
    * The Payment Operations Center queues the payment is in, from the SAME SQL predicates
    * the queue list and counts use — so the MISMATCH, PARTIAL and LATE_COMPLETION facts here
@@ -229,11 +237,13 @@ export function paymentSituationCode(facts: PaymentSituationFacts): PaymentSitua
       if (facts.refundCompleted) return 'REFUNDED';
       return 'CONFIRMED';
     case 'UNKNOWN':
+      if (facts.lateCredited) return 'LATE_CREDITED';
       if (inQueue('LATE_COMPLETION')) return 'LATE_COMPLETION';
       if (inQueue('PARTIAL')) return 'PARTIAL';
       if (inQueue('MISMATCH')) return 'MISMATCH';
       return 'OUTCOME_UNKNOWN';
     case 'PENDING':
+      if (facts.lateCredited) return 'LATE_CREDITED';
       /*
        * A late approval recorded while the payment is still PENDING (the sweep has not
        * reached it): money at the provider. Saying "awaiting payment, pay within the window"
@@ -263,6 +273,7 @@ export function paymentSituationCode(facts: PaymentSituationFacts): PaymentSitua
        * outranks both: a FAILED payment refunded to the wallet is not "no money".
        */
       if (facts.refundCompleted && !facts.refundOpen) return 'REFUNDED';
+      if (facts.lateCredited) return 'LATE_CREDITED';
       if (inQueue('LATE_COMPLETION')) return 'LATE_COMPLETION';
       if (inQueue('PARTIAL')) return 'PARTIAL';
       if (facts.state === 'EXPIRED') return 'EXPIRED';
@@ -284,6 +295,7 @@ const MONEY: Readonly<Record<PaymentSituation, PaymentMoneySignal>> = {
   MISMATCH: 'POSSIBLY',
   PARTIAL: 'PARTIALLY',
   LATE_COMPLETION: 'AT_PROVIDER',
+  LATE_CREDITED: 'TO_WALLET',
   CONFIRMED: 'YES',
   REFUND_IN_PROGRESS: 'RETURNING',
   REFUNDED: 'RETURNED',
@@ -304,6 +316,7 @@ const CUSTOMER: Readonly<Record<PaymentSituation, PaymentCustomerGuidance>> = {
   MISMATCH: 'WAIT_DO_NOT_PAY_AGAIN',
   PARTIAL: 'WAIT_DO_NOT_PAY_AGAIN',
   LATE_COMPLETION: 'WAIT_DO_NOT_PAY_AGAIN',
+  LATE_CREDITED: 'NOTHING',
   CONFIRMED: 'NOTHING',
   REFUND_IN_PROGRESS: 'NOTHING',
   REFUNDED: 'NOTHING',
@@ -364,6 +377,9 @@ function actionsFor(
       return reconcilable
         ? ['VERIFY_AT_PROVIDER', 'ASK_PROVIDER_AGAIN', 'RECONCILE']
         : ['VERIFY_AT_PROVIDER', 'MANUAL_WALLET_ADJUSTMENT'];
+    case 'LATE_CREDITED':
+      // An UNKNOWN one is closed by the operator (FAILED moves nothing); otherwise nothing is left.
+      return reconcilable ? ['RECONCILE'] : [];
     case 'CONFIRMED':
     case 'REFUNDED':
       return refundable ? ['ISSUE_REFUND'] : [];
@@ -432,6 +448,7 @@ export const PAYMENT_SITUATION_CUSTOMER_TEMPLATES: Readonly<
   ],
   PARTIAL: ['bot.payment.nowpayments_review_unresolved'],
   LATE_COMPLETION: [],
+  LATE_CREDITED: [CUSTOMER_NOTIFICATION_TEMPLATES.GATEWAY_LATE_PAYMENT_CREDITED],
   CONFIRMED: [
     'bot.payment.gateway_confirmed',
     CUSTOMER_NOTIFICATION_TEMPLATES.WALLET_TOPUP_CREDITED,
