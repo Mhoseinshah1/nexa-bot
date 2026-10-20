@@ -646,9 +646,21 @@ export type BroadcastResponseItem = z.infer<typeof broadcastSchema>;
 export const broadcastResponseSchema = z.object({ broadcast: broadcastSchema });
 export type BroadcastResponse = z.infer<typeof broadcastResponseSchema>;
 
+/**
+ * The tenant's zone and calendar, as the sender renders `{today}` with them. The composer's
+ * live preview renders with THIS, never the product default: a tenant on another zone or
+ * calendar would otherwise be shown a different date from the one its customers receive.
+ */
+export const broadcastPresentationSchema = z.object({
+  timezone: z.string(),
+  calendar: z.enum(['jalali', 'gregorian']),
+});
+export type BroadcastPresentation = z.infer<typeof broadcastPresentationSchema>;
+
 export const broadcastListResponseSchema = z.object({
   broadcasts: z.array(broadcastSchema),
   nextCursor: z.string().nullable(),
+  presentation: broadcastPresentationSchema,
 });
 export type BroadcastListResponse = z.infer<typeof broadcastListResponseSchema>;
 
