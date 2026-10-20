@@ -38,7 +38,7 @@ Steps 3–5 run in **keyset batches of 5000** by id: each batch, its cursor and 
 (`legacy.compaction.batch`: stage, rows, cursor — never a value) commit in one unit-of-work
 transaction, which the recovery quiesce refuses and which checks scope activity. A restarted
 worker (any replica, after the 15-minute lease) resumes after the last committed batch.
-Migration 0260 keeps `legacy_history_records` append-only for everything else: an update or
+Migration 0262 keeps `legacy_history_records` append-only for everything else: an update or
 delete is accepted only inside a transaction that named (`set_config`, transaction-local) a
 compaction run of the row's tenant that is in DROPPING, DEDUPING or STRIPPING, and an update
 may change the payload only.

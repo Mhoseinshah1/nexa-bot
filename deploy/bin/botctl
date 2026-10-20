@@ -104,6 +104,8 @@ botctl — operate a Nexa installation
   botctl rollback            return to the previous release's image
   botctl logs [SERVICE]      follow logs
   botctl restart             restart the stack
+  botctl restart background  restart the worker, monitor and provisioner — run it after a
+                             legacy import or a restore completes
 
   botctl telegram status     the local registration AND Telegram's own webhook state
   botctl telegram register   reconcile the webhook with Telegram (keeps queued updates)
@@ -1706,6 +1708,15 @@ cmd_logs() {
 }
 
 cmd_restart() {
+  case "${1:-}" in
+    '') ;;
+    background)
+      shift
+      cmd_restart_background "$@"
+      return
+      ;;
+    *) nexa_die "usage: botctl restart [background]" ;;
+  esac
   require_installed
   nexa_acquire_lock 0
   # `version` and `status` REPORT a divergence; restart is the command that
@@ -1737,6 +1748,53 @@ cmd_restart() {
   nexa_set_deploy_values "NEXA_EDGE_CONFIG=${edge}"
   nexa_ok "restarted"
   nexa_ok "the edge serves ${edge#sha256:}"
+}
+
+# The step after a legacy import (Web Admin «بکاپ و بازیابی», the one-time import from the
+# previous bot) or a restore: restart the three BACKGROUND roles so each one starts again
+# against the database as it now is.
+#
+# Nothing restarts them on its own (docs/PROGRESS.md, Web Admin Disaster Recovery). Their
+# pools recover from the cutover, but each process still holds what it read before it — the
+# installation's tenant, cached presentation and settings, the loops' progress — and the
+# owner's runbook wants the first reminder and monitor passes after an import to be ones that
+# started after it. The import completion screen tells the owner to run this.
+#
+# `compose restart`, not `up -d`: the containers that are running are restarted as they are,
+# from the image they were created from, so this cannot start a different release whatever
+# deploy.env says — which is why, unlike the full restart, it needs no divergence check. The
+# api, the recovery role and the edge are left alone: the owner is reading the result of the
+# import in the api, and nothing they hold is the import's.
+#
+# Only the roles THIS topology defines are named (`compose config --services`), so a release
+# without a provisioner is not asked to restart one; none defined is a refusal, never a
+# silent success. Readiness is then waited for exactly as after an update.
+NEXA_BACKGROUND_SERVICES="worker monitor provisioner"
+
+cmd_restart_background() {
+  [ $# -eq 0 ] || nexa_die "usage: botctl restart background"
+  require_installed
+  nexa_acquire_lock 0
+  local defined="" service services=""
+  defined="$(nexa_compose config --services 2>/dev/null)" ||
+    nexa_die "cannot read the stack's services, so nothing was restarted. Run 'botctl status'."
+  # A case match on the newline-delimited list, not `grep -q` (see nexa_required_services).
+  for service in $NEXA_BACKGROUND_SERVICES; do
+    case "
+${defined}
+" in
+      *"
+${service}
+"*) services="${services:+${services} }${service}" ;;
+    esac
+  done
+  [ -n "$services" ] ||
+    nexa_die "this release defines none of the background roles (${NEXA_BACKGROUND_SERVICES}); nothing was restarted."
+  # shellcheck disable=SC2086
+  nexa_compose restart $services ||
+    nexa_die "restarting ${services} failed. Run 'botctl status' and 'botctl logs worker'."
+  nexa_wait_ready || nexa_die "restarted ${services}, but the installation is not ready."
+  nexa_ok "restarted ${services}"
 }
 
 # ---------------------------------------------------------------------------

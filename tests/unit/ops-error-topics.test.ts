@@ -97,6 +97,8 @@ const EXPECTED: Readonly<Record<string, OpsLogTopicCategory>> = {
   'admin.': 'SECURITY',
   'outbox.message_exhausted': 'SYSTEM',
   'notification.sweep_withdrawn': 'SYSTEM',
+  'notification.reminder_burst': 'ERRORS',
+  'notification.reminder_burst_cleared': 'ERRORS',
   'ops_group.topic_recreated': 'SYSTEM',
   'job.loop_stalled': 'SYSTEM',
   'job.loop_recovered': 'SYSTEM',

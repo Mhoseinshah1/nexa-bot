@@ -865,6 +865,9 @@ function AdoptLaneStep({ row }: { row: LegacyMigrationImportView }) {
           {t(complete ? 'web.mrz_adopt_all_done' : 'web.mrz_adopt_partial')}
         </Banner>
       )}
+      {row.status === 'ADOPT_DONE' && report !== null && report.adopted > 0 && (
+        <RestartAfterImport />
+      )}
       {report !== null && (
         <>
           <KV
@@ -1506,6 +1509,22 @@ function ProgressStep({ row }: { row: LegacyMigrationImportView }) {
   );
 }
 
+/**
+ * Round 4 PR-H: the one server step after an import — restart the background roles so the
+ * first reminder and monitor passes are ones that started after the import. The command is
+ * shown to copy, never run from here: no HTTP request restarts a process.
+ */
+export const RESTART_AFTER_IMPORT_COMMAND = 'sudo botctl restart background';
+
+export function RestartAfterImport() {
+  return (
+    <Banner tone="info" title={t('web.mrz_restart_after_import_title')}>
+      <p>{t('web.mrz_restart_after_import_body')}</p>
+      <Copyable value={RESTART_AFTER_IMPORT_COMMAND} />
+    </Banner>
+  );
+}
+
 function ResultStep({ row }: { row: LegacyMigrationImportView }) {
   const onLink = useLinkHandler();
   const report = row.applyReport;
@@ -1515,6 +1534,7 @@ function ResultStep({ row }: { row: LegacyMigrationImportView }) {
     <Step title={t('web.mrz_result_title')}>
       {completed && clean && <Banner tone="ok">{t('web.mrz_result_ok')}</Banner>}
       {completed && !clean && <Banner tone="warn">{t('web.lmg_report_discrepancy')}</Banner>}
+      {completed && <RestartAfterImport />}
       {row.status === 'FAILED' && <Banner tone="danger">{t('web.mrz_result_failed')}</Banner>}
       <KV
         items={[
