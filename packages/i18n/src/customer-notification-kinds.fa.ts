@@ -30,6 +30,7 @@ export const CUSTOMER_NOTIFICATION_KIND_NAMES_FA: Readonly<
   TRIAL_NOT_DELIVERED: 'تحویل‌نشدن سرویس تست',
   RECEIPT_CREDITED_TO_WALLET: 'واریز رسید به کیف پول',
   WALLET_TOPUP_GIFT_CREDITED: 'هدیهٔ شارژ کیف پول',
+  GATEWAY_LATE_PAYMENT_CREDITED: 'واریز پرداخت دیرهنگام به کیف پول',
   REFUND_COMPLETED: 'انجام بازگشت وجه',
   GATEWAY_PAYMENT_FAILED: 'ناموفق‌بودن پرداخت درگاه',
   SERVICE_REFUND_REQUEST_REGISTERED: 'ثبت درخواست بازگشت وجه سرویس',
