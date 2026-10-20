@@ -274,11 +274,10 @@ export function serviceCreated(input: {
     method: words.methodName(payment?.method ?? 'GATEWAY', payment?.gatewayProvider ?? null),
     at,
   };
-  put(
-    values,
-    'badges',
-    words.badges({ firstPurchase: order.isFirstPurchase, reseller: order.reseller }),
-  );
+  // Always present, empty when no badge applies: the title line is made of its words and
+  // this token, and the renderer drops a line whose tokens are ALL absent — the title with it.
+  values['badges'] =
+    words.badges({ firstPurchase: order.isFirstPurchase, reseller: order.reseller }) ?? '';
   put(values, 'phone', customer?.phone);
   put(values, 'location', order.locationLabel);
   put(values, 'panelName', service.panelName === '' ? null : service.panelName);
@@ -329,7 +328,8 @@ export function serviceChanged(input: {
     method: words.methodName(payment?.method ?? 'GATEWAY', payment?.gatewayProvider ?? null),
     at,
   };
-  put(values, 'badges', words.badges({ firstPurchase: false, reseller: order.reseller }));
+  // Always present (see `serviceCreated`): the title line must survive an absent badge.
+  values['badges'] = words.badges({ firstPurchase: false, reseller: order.reseller }) ?? '';
   put(values, 'phone', customer?.phone);
   put(values, 'panelName', service.panelName === '' ? null : service.panelName);
   put(values, 'serviceUsername', service.providerUsername);
