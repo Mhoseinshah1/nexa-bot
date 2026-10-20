@@ -807,22 +807,27 @@ describe('terms and rules (program §6)', () => {
       expectedRevision: 1,
     });
     expect(edited.revision).toBe(2);
-    // The stale editor, and a publish of a revision nobody previewed.
+    // The stale editor, and a publish of a revision nobody previewed. Thunks, started one at
+    // a time: two promises built in one array literal both run at once, and the second's
+    // refusal lands before anything awaits it — an unhandled rejection that fails the run
+    // with every test green.
     for (const work of [
-      api.container.terms.updateDraft(tenantA, operator, {
-        idempotencyKey: key(),
-        id: draft.id,
-        title: 'کهنه',
-        body: 'کهنه',
-        expectedRevision: 1,
-      }),
-      api.container.terms.publish(tenantA, owner, {
-        idempotencyKey: key(),
-        id: draft.id,
-        expectedRevision: 1,
-      }),
+      () =>
+        api.container.terms.updateDraft(tenantA, operator, {
+          idempotencyKey: key(),
+          id: draft.id,
+          title: 'کهنه',
+          body: 'کهنه',
+          expectedRevision: 1,
+        }),
+      () =>
+        api.container.terms.publish(tenantA, owner, {
+          idempotencyKey: key(),
+          id: draft.id,
+          expectedRevision: 1,
+        }),
     ]) {
-      expect(await codeOf(work)).toBe(TERMS_ERROR_CODES.TERMS_DRAFT_CONFLICT);
+      expect(await codeOf(work())).toBe(TERMS_ERROR_CODES.TERMS_DRAFT_CONFLICT);
     }
 
     const publishKey = key();
