@@ -14,7 +14,13 @@ import {
   RECOVERY_CONFIRMATION_TTL_MS,
   RECOVERY_ROUTES,
   recoveryConfirmationSchema,
+  recoveryVerifyRequestSchema,
+  LEGACY_COMPACTION_ROUTES,
+  requestLegacyCompactionSchema,
+  type LegacyCompactionRun,
+  type LegacyCompactionStatusResponse,
   runBackupRequestSchema,
+  setBackupArchivePasswordRequestSchema,
   uuidV7Schema,
   type BackupHistoryResponse,
   type BackupRunDetailResponse,
@@ -25,6 +31,7 @@ import {
   type RecoveryListResponse,
   type RecoveryRequestSummary,
   type RunBackupResponse,
+  type SetBackupArchivePasswordResponse,
   type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
@@ -33,6 +40,7 @@ import { singleValued } from './query.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type { BackupRunView } from '../../modules/platform/recovery/application/backup-admin.service.js';
 import type { RecoveryRequestRow } from '../../modules/platform/recovery/application/ports.js';
+import type { LegacyCompactionRow } from '../../modules/platform/legacy-compaction/application/ports.js';
 
 /**
  * Backup and disaster recovery over HTTP.
@@ -96,7 +104,41 @@ export class RecoveryController {
       running: status.running === null ? null : toRunSummary(status.running),
       unknownDeliveries: status.unknownDeliveries,
       quiesced: status.quiesced,
+      archivePassword: {
+        configured: status.archivePassword.configured,
+        setAt: status.archivePassword.setAt?.toISOString() ?? null,
+      },
     };
+  }
+
+  /**
+   * Sets the owner's backup password (E4). Typed twice and behind the account-password
+   * step-up; the response says only that it is set and since when — never the value.
+   */
+  @Post(BACKUP_ROUTES.archivePassword)
+  async setArchivePassword(
+    @Req() request: FastifyRequest,
+    @Body() body: unknown,
+  ): Promise<SetBackupArchivePasswordResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const command = setBackupArchivePasswordRequestSchema.parse(body);
+    const result = await this.container.backupPasswords.set(
+      scope,
+      actor,
+      {
+        idempotencyKey: command.idempotencyKey,
+        password: command.password,
+        stepUp: {
+          password: command.stepUp.password,
+          ...(command.stepUp.code === undefined ? {} : { code: command.stepUp.code }),
+          ...(command.stepUp.backupCode === undefined
+            ? {}
+            : { backupCode: command.stepUp.backupCode }),
+        },
+      },
+      { ip: request.ip ?? null },
+    );
+    return { archivePassword: { configured: true, setAt: result.setAt.toISOString() } };
   }
 
   @Get(BACKUP_ROUTES.history)
@@ -159,7 +201,17 @@ export class RecoveryController {
     @Param('id') id: string,
   ): Promise<void> {
     const { scope, actor } = await this.authenticate(request);
-    const artifact = await this.container.backupAdmin.archivePath(scope, actor, id);
+    // `?part=N` is one part of a split archive, byte for byte as it was delivered (E4).
+    const params = singleValued((request.query ?? {}) as Record<string, unknown>);
+    const rawPart = params.part;
+    let part: number | null = null;
+    if (rawPart !== undefined) {
+      if (typeof rawPart !== 'string' || !/^[1-9][0-9]{0,4}$/.test(rawPart)) {
+        throw errors.validation(PLATFORM_ERROR_CODES.BACKUP_RUN_MISSING, 'No such part.');
+      }
+      part = Number(rawPart);
+    }
+    const artifact = await this.container.backupAdmin.archivePath(scope, actor, id, part);
     await reply
       .header('content-type', 'application/octet-stream')
       // The filename is built from a validated uuid by the service, so it cannot
@@ -169,7 +221,44 @@ export class RecoveryController {
       .header('content-length', String(artifact.bytes))
       // An encrypted database must not sit in a proxy or a browser cache.
       .header('cache-control', 'no-store')
-      .send(createReadStream(artifact.path));
+      .send(
+        artifact.range === null
+          ? createReadStream(artifact.path)
+          : // `end` is INCLUSIVE for a read stream.
+            createReadStream(artifact.path, {
+              start: artifact.range.start,
+              end: artifact.range.end - 1,
+            }),
+      );
+  }
+
+  // --- E1: compacting the imported legacy data ------------------------------
+
+  @Get(LEGACY_COMPACTION_ROUTES.status)
+  async legacyCompactionStatus(
+    @Req() request: FastifyRequest,
+  ): Promise<LegacyCompactionStatusResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const status = await this.container.legacyCompaction.status(scope, actor);
+    return {
+      available: status.available,
+      run: status.run === null ? null : toCompactionRun(status.run),
+    };
+  }
+
+  /**
+   * The owner's request. Writes one REQUESTED row; the worker does the work, never this
+   * request (the archive backup, the deletes and VACUUM FULL are all long).
+   */
+  @Post(LEGACY_COMPACTION_ROUTES.request)
+  async requestLegacyCompaction(
+    @Req() request: FastifyRequest,
+    @Body() body: unknown,
+  ): Promise<LegacyCompactionStatusResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const command = requestLegacyCompactionSchema.parse(body);
+    const run = await this.container.legacyCompaction.request(scope, actor, command);
+    return { available: false, run: toCompactionRun(run) };
   }
 
   // --- Recovery ------------------------------------------------------------
@@ -324,9 +413,18 @@ export class RecoveryController {
   async verify(
     @Req() request: FastifyRequest,
     @Param('id') id: string,
+    @Body() body: unknown,
   ): Promise<RecoveryDetailResponse> {
     const { scope, actor } = await this.authenticate(request, { write: true });
-    const outcome = await this.container.recoveryService.verifyAndTest(scope, actor, id);
+    // E4: the optional password of an uploaded 7-Zip archive. Used for this verification
+    // only — never stored, never logged, never echoed.
+    const command = recoveryVerifyRequestSchema.parse(body ?? {});
+    const outcome = await this.container.recoveryService.verifyAndTest(
+      scope,
+      actor,
+      id,
+      command.archivePassword === undefined ? {} : { archivePassword: command.archivePassword },
+    );
     // A failed verification is a 200 with a FAILED row, not a 4xx. The request
     // was well-formed and the server did what was asked; what it learned is the
     // answer, and it is on the row with a safe code. A 4xx here would make the
@@ -423,6 +521,36 @@ function toRunSummary(view: BackupRunView): BackupRunSummary {
      */
     cleanupLeftovers: run.cleanupDetail === null ? 0 : run.cleanupDetail.split(', ').length,
     archiveAvailable: view.archiveAvailable,
+    archiveFormat: run.archiveFormat ?? 'NXB',
+    partCount: run.partCount,
+    partsDelivered: view.parts.filter((part) => part.telegramMessageId !== null).length,
+    // Never the message id and never the detail: the outcome is what an operator acts on.
+    parts: view.parts.map((part) => ({
+      partNumber: part.partNumber,
+      bytes: String(part.bytes),
+      sha256: part.sha256,
+      deliveryState: part.deliveryState,
+    })),
+    summaryDeliveryState: run.summaryDeliveryState,
+  };
+}
+
+/** A compaction run as JSON: counts and sizes, never a record value. */
+function toCompactionRun(row: LegacyCompactionRow): LegacyCompactionRun {
+  return {
+    id: row.id,
+    state: row.state,
+    requestedAt: row.requestedAt.toISOString(),
+    requestedBy: row.requestedByLabel,
+    updatedAt: row.updatedAt.toISOString(),
+    archiveBackupId: row.archiveBackupId,
+    deleted: Number(row.deleted),
+    deduplicated: Number(row.deduplicated),
+    stripped: Number(row.stripped),
+    before: row.before as LegacyCompactionRun['before'],
+    after: row.after as LegacyCompactionRun['after'],
+    failureCode: row.failureCode,
+    finishedAt: row.finishedAt?.toISOString() ?? null,
   };
 }
 

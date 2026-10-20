@@ -127,6 +127,8 @@ describe('Round 4 PR-H: the first sweeps after an import send nothing historical
       }[]
     ).map((row) => row.kind);
 
+  const IMPORT_BATCH = 1_000;
+
   /**
    * `n` services as the import writes them, one customer each, born at `T0`: half already
    * EXPIRED (their deadline one to five days behind them, the allowance used up), half
@@ -134,6 +136,19 @@ describe('Round 4 PR-H: the first sweeps after an import send nothing historical
    * is the panel's, read a minute before the import wrote it.
    */
   async function importServices(n: number, offset = 0): Promise<string[]> {
+    // In statements of at most 1,000 services. One statement of 10,000 (30,000 rows and
+    // their foreign-key checks) takes about 1.5 s on its own, and it ran past the 15 s
+    // statement_timeout in CI's integration shard 7 — and once locally in the same shard —
+    // cancelled inside a foreign-key check on `customers`. The rows are the same either way;
+    // no statement here should depend on the database being idle.
+    const ids: string[] = [];
+    for (let done = 0; done < n; done += IMPORT_BATCH) {
+      ids.push(...(await importBatch(Math.min(IMPORT_BATCH, n - done), offset + done)));
+    }
+    return ids;
+  }
+
+  async function importBatch(n: number, offset: number): Promise<string[]> {
     const result = await exec(sql`
       WITH ids AS (
         SELECT g, gen_random_uuid() AS c, gen_random_uuid() AS o, gen_random_uuid() AS s

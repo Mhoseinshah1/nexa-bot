@@ -4,6 +4,7 @@ import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import type { Database, Executor } from '../persistence/database.js';
 import {
   adminTotpFactors,
+  backupArchivePasswords,
   botInstances,
   legacyNxpkgImports,
   panelCredentials,
@@ -641,6 +642,62 @@ const legacyNxpkgPackageKey: SecretColumn = {
   },
 };
 
+// E4: the owner-set backup password; superseded rows stay (their archives still open).
+const backupArchivePassword: SecretColumn = {
+  purpose: 'backup.archive_password',
+  table: 'backup_archive_passwords',
+  ciphertextColumn: 'password_ciphertext',
+  keyIdColumn: 'password_key_id',
+
+  async all(db) {
+    return db
+      .select({
+        ciphertext: backupArchivePasswords.passwordCiphertext,
+        keyId: backupArchivePasswords.passwordKeyId,
+      })
+      .from(backupArchivePasswords);
+  },
+
+  async page(db, cursor, limit) {
+    const rows = await db
+      .select({ id: backupArchivePasswords.id })
+      .from(backupArchivePasswords)
+      .where(cursor === null ? undefined : gt(backupArchivePasswords.id, cursor))
+      .orderBy(asc(backupArchivePasswords.id))
+      .limit(limit);
+    return rows.map((row) => row.id);
+  },
+
+  async lock(tx, id) {
+    const [row] = await tx
+      .select({
+        id: backupArchivePasswords.id,
+        tenantId: backupArchivePasswords.tenantId,
+        ciphertext: backupArchivePasswords.passwordCiphertext,
+        keyId: backupArchivePasswords.passwordKeyId,
+      })
+      .from(backupArchivePasswords)
+      .where(eq(backupArchivePasswords.id, id))
+      .for('update')
+      .limit(1);
+    return row ?? null;
+  },
+
+  async replace(tx, id, expectedCiphertext, next) {
+    const updated = await tx
+      .update(backupArchivePasswords)
+      .set({ passwordCiphertext: next.ciphertext, passwordKeyId: next.keyId })
+      .where(
+        and(
+          eq(backupArchivePasswords.id, id),
+          eq(backupArchivePasswords.passwordCiphertext, expectedCiphertext),
+        ),
+      )
+      .returning({ id: backupArchivePasswords.id });
+    return updated.length > 0;
+  },
+};
+
 export const SECRET_COLUMNS: readonly SecretColumn[] = [
   botInstanceToken,
   panelUsername,
@@ -652,4 +709,5 @@ export const SECRET_COLUMNS: readonly SecretColumn[] = [
   adminTotpSecret,
   supportAiProviderApiKey,
   legacyNxpkgPackageKey,
+  backupArchivePassword,
 ];

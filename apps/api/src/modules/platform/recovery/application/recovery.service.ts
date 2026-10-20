@@ -21,7 +21,7 @@ import {
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../access/application/permission-guard.js';
 import { recordMutationDenial } from '../../access/application/authorized-mutation.js';
-import type { BackupArchiver } from '../../backup/application/ports.js';
+import type { BackupArchiver, BackupManifest } from '../../backup/application/ports.js';
 import {
   compareMigrations,
   type ExpectedMigration,
@@ -66,6 +66,18 @@ export interface RecoveryServiceDeps {
   readonly requests: RecoveryRequestRepository;
   readonly workspaces: RecoveryWorkspaceFactory;
   readonly archiver: BackupArchiver;
+  /**
+   * E4: re-seals a VERIFIED 7-Zip upload's dump into the keyring container in place, so
+   * the executor — a different process, later — opens it with the keyring and never needs
+   * the password the operator typed (which is used for this one verification and never
+   * stored). The dump checksum is unchanged by the re-seal, so the confirmation's binding
+   * to it holds.
+   */
+  readonly resealToKeyring?: (input: {
+    readonly dumpPath: string;
+    readonly archivePath: string;
+    readonly manifest: BackupManifest;
+  }) => Promise<void>;
   readonly engine: RestoreEngine;
   /**
    * The keyring, as a restore needs it (ADR-0032): re-read before an archive is
@@ -247,6 +259,8 @@ export class RecoveryService {
     scope: TenantContext,
     actor: ActorContext,
     id: string,
+    /** E4: the password of an uploaded 7-Zip archive; used once, never stored. */
+    input: { readonly archivePassword?: string } = {},
   ): Promise<RecoveryStepOutcome> {
     await this.authorize(scope, actor, BACKUP_VIEW, {
       action: 'recovery.verify',
@@ -272,7 +286,7 @@ export class RecoveryService {
     }
 
     const workspace = this.deps.workspaces.open(request.workspacePath);
-    const verified = await this.decryptAndCheck(scope, id, workspace);
+    const verified = await this.decryptAndCheck(scope, id, workspace, input.archivePassword);
     if (verified.failureCode !== null) return verified;
     return this.restoreTest(scope, id, workspace);
   }
@@ -282,6 +296,7 @@ export class RecoveryService {
     scope: TenantContext,
     id: string,
     workspace: RecoveryWorkspace,
+    archivePassword: string | undefined,
   ): Promise<RecoveryStepOutcome> {
     let verification: RecoveryVerification;
     try {
@@ -295,6 +310,9 @@ export class RecoveryService {
       const opened = await this.deps.archiver.open({
         archivePath: workspace.archivePath,
         dumpPath: workspace.dumpPath,
+        // A 7-Zip upload (E4): the operator's password first; without one, this
+        // installation's own stored passwords (an archive it sealed itself).
+        ...(archivePassword === undefined ? {} : { passwords: [archivePassword] }),
       });
       const matches = opened.dumpChecksum === opened.manifest.checksum;
       verification = {
@@ -352,6 +370,20 @@ export class RecoveryService {
       if (!described) {
         return this.failStep(scope, id, workspace, 'recovery.manifest_invalid', 'VERIFYING', {
           verification,
+        });
+      }
+      if (opened.format === 'SEVEN_ZIP') {
+        // Verified: re-seal the SAME dump under the keyring, in place, so the executor
+        // opens what was verified without the operator's password ever being stored.
+        if (this.deps.resealToKeyring === undefined) {
+          return this.failStep(scope, id, workspace, 'recovery.archive_malformed', 'VERIFYING', {
+            verification,
+          });
+        }
+        await this.deps.resealToKeyring({
+          dumpPath: workspace.dumpPath,
+          archivePath: workspace.archivePath,
+          manifest: opened.manifest,
         });
       }
     } catch (error) {

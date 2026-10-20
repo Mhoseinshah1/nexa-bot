@@ -149,12 +149,21 @@ RUN set -eux; \
     echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
       > /etc/apt/sources.list.d/pgdg.list; \
     apt-get update; \
-    apt-get install -y --no-install-recommends "postgresql-client-${PG_MAJOR}"; \
+    apt-get install -y --no-install-recommends "postgresql-client-${PG_MAJOR}" 7zip; \
     apt-get purge -y --auto-remove curl gnupg; \
     rm -rf /var/lib/apt/lists/*; \
+    command -v 7z >/dev/null 2>&1 || ln -s "$(command -v 7zz)" /usr/local/bin/7z; \
     pg_dump --version; \
     pg_restore --version; \
-    psql --version
+    psql --version; \
+    7z i >/dev/null
+
+# 7-ZIP (Round 4 PR-E, E4), in the same layer. Once the owner sets a backup password,
+# every backup is a 7z archive — LZMA2 inside, AES-256 with encrypted headers — that opens
+# in 7-Zip on Windows with that password alone; the pipeline seals it, verifies it by
+# restoring through it, and the recovery opens it. Debian bookworm's `7zip` package ships
+# the binary as `7zz`; it is linked to `7z`, the name `BACKUP_SEVEN_ZIP_BIN` defaults to,
+# and `7z i` proves it runs. Without it a password-protected backup fails at ENCRYPT.
 
 # THE ARTIFACT DIRECTORIES, owned by the user that writes them.
 #

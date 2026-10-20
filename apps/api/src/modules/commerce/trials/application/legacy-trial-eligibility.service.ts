@@ -463,25 +463,40 @@ export class LegacyTrialEligibilityService {
           now,
           tx,
         );
-        await recordAuditMany(
-          this.deps.audit,
-          scope,
-          actor,
-          verdicts.map(({ w, prior, verdict }) => ({
-            action: 'trial.legacy.preserve',
-            entityType: 'Customer',
-            entityId: w.item.customerId,
-            before: { override: prior?.limit ?? null },
-            after: {
-              override: verdict.overrideAfter,
-              decision: verdict.decision,
-              legacyLimitUsertest: verdict.legacyLimit,
-              legacyHadTrial: w.item.legacy.hadTrial,
-            },
-            result: 'SUCCESS' as const,
-          })),
-          tx,
-        );
+        /*
+         * ONE summary audit row per batch (Round 4 PR-E, E2), not one per customer. Each
+         * customer's before and after are values on its `legacy_trial_eligibility` row
+         * (override before, override after, the legacy facts, the decision), written in
+         * this same transaction; the audit says who ran the batch and what it decided.
+         */
+        if (verdicts.length > 0) {
+          const decisions: Record<string, number> = {};
+          for (const { verdict } of verdicts) {
+            decisions[verdict.decision] = (decisions[verdict.decision] ?? 0) + 1;
+          }
+          await recordAuditMany(
+            this.deps.audit,
+            scope,
+            actor,
+            [
+              {
+                action: 'trial.legacy.preserve',
+                entityType: 'LegacyTrialEligibilityBatch',
+                entityId: verdicts[0]?.w.item.customerId ?? null,
+                before: null,
+                after: {
+                  customers: verdicts.length,
+                  decisions,
+                  overridesWritten: overrides.length,
+                  firstCustomerId: verdicts[0]?.w.item.customerId ?? null,
+                  lastCustomerId: verdicts.at(-1)?.w.item.customerId ?? null,
+                },
+                result: 'SUCCESS' as const,
+              },
+            ],
+            tx,
+          );
+        }
         verdicts.forEach(({ w }, i) => {
           const record = records[i];
           if (record === undefined) throw new Error('a trial record was not written');

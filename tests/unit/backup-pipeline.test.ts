@@ -9,8 +9,11 @@ import { BackupService } from '../../apps/api/src/modules/platform/backup/applic
 import { BackupScheduler } from '../../apps/api/src/modules/platform/backup/application/backup-scheduler';
 import { BackupSchedulePolicy } from '../../apps/api/src/modules/platform/backup/application/backup-schedule';
 import type {
+  BackupArchivePart,
   BackupDelivery,
   BackupDeliveryResolution,
+  BackupRunPartRow,
+  BackupRunPartStore,
   BackupRunRepository,
   BackupRunRow,
   BackupWorkspace,
@@ -45,8 +48,58 @@ class FakeClock {
   }
 }
 
-class FakeRuns implements BackupRunRepository {
+class FakeRuns implements BackupRunRepository, BackupRunPartStore {
   readonly rows = new Map<string, BackupRunRow>();
+  /** Every part row, by `<run>:<part>`, as the repository would hold them (E4). */
+  readonly partRows = new Map<string, BackupRunPartRow>();
+
+  async recordParts(input: {
+    id: string;
+    leaseOwner: string;
+    parts: readonly BackupArchivePart[];
+  }): Promise<void> {
+    this.writes.push(`parts:${String(input.parts.length)}`);
+    for (const part of input.parts) {
+      this.partRows.set(`${input.id}:${String(part.partNumber)}`, {
+        backupId: input.id,
+        partNumber: part.partNumber,
+        filename: part.filename,
+        bytes: BigInt(part.bytes),
+        sha256: part.sha256,
+        deliveryState: 'NOT_ATTEMPTED',
+        deliveryAttemptedAt: null,
+        telegramMessageId: null,
+        deliveryDetail: null,
+      });
+    }
+  }
+
+  async recordPartOutcome(input: {
+    id: string;
+    partNumber: number;
+    state: BackupDeliveryState;
+    attemptedAt: Date;
+    messageId: number | null;
+    detail: string | null;
+  }): Promise<void> {
+    this.writes.push(`part:${String(input.partNumber)}:${input.state}`);
+    const key = `${input.id}:${String(input.partNumber)}`;
+    const row = this.partRows.get(key);
+    if (row === undefined) throw new Error('a part outcome was recorded for a part never planned');
+    this.partRows.set(key, {
+      ...row,
+      deliveryState: input.state,
+      deliveryAttemptedAt: input.attemptedAt,
+      telegramMessageId: input.messageId === null ? null : BigInt(input.messageId),
+      deliveryDetail: input.detail,
+    });
+  }
+
+  async parts(id: string): Promise<readonly BackupRunPartRow[]> {
+    return [...this.partRows.values()]
+      .filter((row) => row.backupId === id)
+      .sort((a, b) => a.partNumber - b.partNumber);
+  }
   readonly stages: BackupStage[] = [];
   reclaimed = 0;
   /** When set, `start` reports the installation is already busy. */
@@ -90,6 +143,10 @@ class FakeRuns implements BackupRunRepository {
       cleanupOk: true,
       cleanupDetail: null,
       archivePrunedAt: null,
+      archiveFormat: null,
+      partCount: null,
+      archiveSealId: null,
+      summaryDeliveryState: null,
     };
     this.rows.set(row.id, row);
     return { claimed: true, run: row };
@@ -132,6 +189,10 @@ class FakeRuns implements BackupRunRepository {
     failureMessage?: string | null;
     cleanupOk: boolean;
     cleanupDetail?: string | null;
+    archiveFormat?: BackupRunRow['archiveFormat'];
+    partCount?: number | null;
+    archiveSealId?: string | null;
+    summaryDeliveryState?: BackupDeliveryState | null;
   }): Promise<void> {
     this.writes.push(`finish:${input.state}`);
     const row = this.rows.get(input.id);
@@ -152,6 +213,10 @@ class FakeRuns implements BackupRunRepository {
       failureMessage: input.failureMessage ?? null,
       cleanupOk: input.cleanupOk,
       cleanupDetail: input.cleanupDetail ?? null,
+      archiveFormat: input.archiveFormat ?? null,
+      partCount: input.partCount ?? null,
+      archiveSealId: input.archiveSealId ?? null,
+      summaryDeliveryState: input.summaryDeliveryState ?? null,
     });
   }
 
@@ -215,6 +280,18 @@ interface Harness {
     plaintextRemoved: boolean;
     everythingRemoved: boolean;
     deliveredDocument: { caption: string; filename: string } | null;
+    /** Every document sent, in order, with its range (E4). */
+    documents: {
+      caption: string;
+      filename: string;
+      range: { start: number; end: number } | null;
+    }[];
+    /** Per-call outcomes for `sendDocument`, consumed in order; `delivery` once empty. */
+    documentOutcomes: DeliveryAttempt[];
+    /** The part size the planner splits at (E4). */
+    partBytes: number;
+    /** The container `seal` reports; absent is the pre-E4 answer (NXB). */
+    sealFormat?: 'NXB' | 'SEVEN_ZIP';
     deliveredMessage: string | null;
     leaked: string[];
     cleanupFails: boolean;
@@ -261,6 +338,9 @@ function harness(options: { delivery?: BackupDelivery } = {}): Harness {
     plaintextRemoved: false,
     everythingRemoved: false,
     deliveredDocument: null,
+    documents: [],
+    documentOutcomes: [],
+    partBytes: 45 * 1024 * 1024,
     deliveredMessage: null,
     leaked: [],
     cleanupFails: false,
@@ -314,7 +394,11 @@ function harness(options: { delivery?: BackupDelivery } = {}): Harness {
     archiver: {
       async seal() {
         if (state.sealFails) throw new Error('encryption failed');
-        return { archiveBytes: state.archiveBytes, keyId: 'k1' };
+        return {
+          archiveBytes: state.archiveBytes,
+          keyId: 'k1',
+          ...(state.sealFormat === undefined ? {} : { format: state.sealFormat }),
+        };
       },
       async open(): Promise<{ manifest: BackupManifest; dumpChecksum: string; dumpBytes: number }> {
         return {
@@ -351,7 +435,12 @@ function harness(options: { delivery?: BackupDelivery } = {}): Harness {
       },
       async sendDocument(input) {
         state.deliveredDocument = { caption: input.caption, filename: input.filename };
-        return state.delivery;
+        state.documents.push({
+          caption: input.caption,
+          filename: input.filename,
+          range: input.range ?? null,
+        });
+        return state.documentOutcomes.shift() ?? state.delivery;
       },
       async sendMessage(text) {
         state.deliveredMessage = text;
@@ -408,7 +497,30 @@ function harness(options: { delivery?: BackupDelivery } = {}): Harness {
     scope: () => (state.scoped ? { tenantId: 't1' as never, botInstanceId: null } : null),
     logger: { info() {}, warn() {}, error() {} },
     leaseOwner: 'worker:1:aaaa',
-    retainedArchiveHint: '/var/lib/nexa/backups',
+    // The planner's arithmetic, without a file: ranges of `archiveBytes` at `partBytes`.
+    parts: {
+      async plan(input) {
+        const count = Math.max(1, Math.ceil(state.archiveBytes / state.partBytes));
+        return Array.from({ length: count }, (_, index) => {
+          const start = index * state.partBytes;
+          const end = Math.min(state.archiveBytes, start + state.partBytes);
+          return {
+            partNumber: index + 1,
+            start,
+            end,
+            bytes: end - start,
+            sha256: String(index + 1)
+              .repeat(64)
+              .slice(0, 64),
+            filename:
+              count === 1
+                ? input.filename
+                : `${input.filename}.${String(index + 1).padStart(3, '0')}`,
+          };
+        });
+      },
+    },
+    restoreCommand: 'botctl restore --target <db> <parts>',
     conditionOpen: async (code) => state.open.has(code),
   });
 
@@ -611,18 +723,139 @@ describe('the backup pipeline', () => {
     expect(h.state.deliveredDocument).toBeNull();
   });
 
-  it('notifies rather than sends when the archive is above the Telegram ceiling', async () => {
-    const h = harness();
-    h.state.archiveBytes = 50 * 1024 * 1024 + 1;
+  /*
+   * E4 (Round 4 PR-E): above 45 MiB the archive is SPLIT, never retained with a notice.
+   * Each part is its own document with its own recorded outcome; the summary follows only
+   * when every part arrived.
+   */
+  describe('split delivery (E4)', () => {
+    const MiB = 1024 * 1024;
 
-    const run = await completed(h);
-    expect(h.state.deliveredDocument).toBeNull();
-    expect(h.state.deliveredMessage).toContain('RETAINED: /var/lib/nexa/backups');
-    expect(h.state.deliveredMessage).toContain(CHECKSUM);
-    // Spec §13.1: a notice nobody can read as a delivered file — in Persian, first.
-    expect(h.state.deliveredMessage?.split('\n')[0]).toMatch(/فایل ارسال نشد/);
-    expect(run.deliveryState).toBe('SUCCEEDED');
-    expect(run.deliveryDetail).toContain('retained on the server');
+    it('sends one document per ≤45 MiB part, as ranges of the one archive, then one summary', async () => {
+      const h = harness();
+      h.state.archiveBytes = 100 * MiB;
+      h.state.sealFormat = 'SEVEN_ZIP';
+      h.state.documentOutcomes = [
+        { state: 'SUCCEEDED', detail: null, messageId: 11 },
+        { state: 'SUCCEEDED', detail: null, messageId: 12 },
+        { state: 'SUCCEEDED', detail: null, messageId: 13 },
+      ];
+      const run = await completed(h);
+      expect(run.state).toBe('SUCCEEDED');
+      expect(run.deliveryState).toBe('SUCCEEDED');
+      expect(run.partCount).toBe(3);
+      expect(h.state.documents.map((doc) => doc.range)).toEqual([
+        { start: 0, end: 45 * MiB },
+        { start: 45 * MiB, end: 90 * MiB },
+        { start: 90 * MiB, end: 100 * MiB },
+      ]);
+      expect(h.state.documents.map((doc) => doc.filename.slice(-4))).toEqual([
+        '.001',
+        '.002',
+        '.003',
+      ]);
+      // Every part carries its own digest in its caption.
+      expect(h.state.documents[1]?.caption).toContain('2'.repeat(64));
+      const parts = await h.runs.parts(run.id);
+      expect(parts.map((part) => part.telegramMessageId)).toEqual([11n, 12n, 13n]);
+      // The summary: the owner's restore sentence, the botctl command, every part's digest.
+      expect(h.state.deliveredMessage).toContain('همهٔ بخش‌ها را در یک پوشه بگذارید');
+      expect(h.state.deliveredMessage).toContain('botctl restore');
+      expect(h.state.deliveredMessage).toContain('3'.repeat(64));
+      expect(run.summaryDeliveryState).toBe('SUCCEEDED');
+      // The plan is on the row BEFORE the first send.
+      const order = h.runs.writes.filter((write) => write.startsWith('part'));
+      expect(order[0]).toBe('parts:3');
+    });
+
+    it('sends a single part whole, with the summary in its caption and no second message', async () => {
+      const h = harness();
+      h.state.archiveBytes = 45 * MiB;
+      h.state.documentOutcomes = [{ state: 'SUCCEEDED', detail: null, messageId: 7 }];
+      const run = await completed(h);
+      expect(run.partCount).toBe(1);
+      expect(h.state.documents).toHaveLength(1);
+      expect(h.state.documents[0]?.range).toBeNull();
+      expect(h.state.documents[0]?.filename).not.toMatch(/\.001$/);
+      expect(h.state.deliveredMessage).toBeNull();
+      expect(run.summaryDeliveryState).toBeNull();
+    });
+
+    it('stops at an unknown part: never resends it, never sends the rest, reports PARTIAL in ERRORS', async () => {
+      const h = harness();
+      h.state.archiveBytes = 100 * MiB;
+      h.state.documentOutcomes = [
+        { state: 'SUCCEEDED', detail: null, messageId: 21 },
+        { state: 'OUTCOME_UNKNOWN', detail: 'HTTP 502' },
+        { state: 'SUCCEEDED', detail: null, messageId: 23 },
+      ];
+      const run = await completed(h);
+      expect(run.state).toBe('SUCCEEDED');
+      expect(run.deliveryState).toBe('OUTCOME_UNKNOWN');
+      // Exactly two attempts: the unknown part once, and nothing after it.
+      expect(h.state.documents).toHaveLength(2);
+      expect(h.state.deliveredMessage).toBeNull();
+      const parts = await h.runs.parts(run.id);
+      expect(parts.map((part) => part.deliveryState)).toEqual([
+        'SUCCEEDED',
+        'OUTCOME_UNKNOWN',
+        'NOT_ATTEMPTED',
+      ]);
+      expect(parts.map((part) => part.telegramMessageId)).toEqual([21n, null, null]);
+      const partial = h.state.recorded.find((event) => event.code === 'backup.delivery_partial');
+      expect(partial?.message).toContain('1 of 3');
+      expect(partial?.dedupeKey).toBe('backup.delivery_partial');
+      // The verified archive stays: only the plaintext went.
+      expect(h.state.everythingRemoved).toBe(false);
+    });
+
+    it('a refused FIRST part is a failed delivery, not a partial one', async () => {
+      const h = harness();
+      h.state.archiveBytes = 100 * MiB;
+      h.state.documentOutcomes = [{ state: 'FAILED_DEFINITIVE', detail: 'HTTP 400' }];
+      const run = await completed(h);
+      expect(run.deliveryState).toBe('FAILED_DEFINITIVE');
+      expect(h.state.documents).toHaveLength(1);
+      const codes = h.state.recorded.map((event) => event.code);
+      expect(codes).toContain('backup.delivery_failed');
+      expect(codes).not.toContain('backup.delivery_partial');
+    });
+
+    it('a channel that THROWS mid-delivery is an unknown part, recorded and never resent', async () => {
+      let calls = 0;
+      const h = harness({
+        delivery: {
+          configured: true,
+          async sendDocument() {
+            calls += 1;
+            if (calls === 2) throw new Error('socket hang up');
+            return { state: 'SUCCEEDED', detail: null, messageId: calls };
+          },
+          async sendMessage() {
+            return { state: 'SUCCEEDED', detail: null };
+          },
+        },
+      });
+      h.state.archiveBytes = 100 * MiB;
+      const run = await completed(h);
+      expect(calls).toBe(2);
+      expect(run.deliveryState).toBe('OUTCOME_UNKNOWN');
+      const parts = await h.runs.parts(run.id);
+      expect(parts[1]?.deliveryState).toBe('OUTCOME_UNKNOWN');
+    });
+
+    it('a full delivery closes an open partial-delivery condition', async () => {
+      const h = harness();
+      h.state.open.add('backup.delivery_partial');
+      h.state.archiveBytes = 50 * MiB;
+      h.state.documentOutcomes = [
+        { state: 'SUCCEEDED', detail: null, messageId: 1 },
+        { state: 'SUCCEEDED', detail: null, messageId: 2 },
+      ];
+      await completed(h);
+      const closing = h.state.recorded.find((event) => event.code === 'backup.delivery_partial_ok');
+      expect(closing?.recoversCode).toBe('backup.delivery_partial');
+    });
   });
 
   /*
@@ -796,7 +1029,11 @@ describe('the backup pipeline', () => {
      * An hour chasing a backup that is fine is the acceptable cost. Believing a
      * broken backup recovered is not.
      */
-    expect(h.runs.writes).toEqual(['report:backup.run_ok', 'finish:SUCCEEDED']);
+    // The part writes (E4) happen at DELIVER, before both; the ORDER of these two is the rule.
+    expect(h.runs.writes.filter((write) => !write.startsWith('part'))).toEqual([
+      'report:backup.run_ok',
+      'finish:SUCCEEDED',
+    ]);
   });
 
   it('records nothing rather than addressing an alert to nobody', async () => {

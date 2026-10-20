@@ -1,9 +1,10 @@
 import {
   BACKUP_LEASE_HEARTBEAT_MS,
   BACKUP_LEASE_STALE_AFTER_MS,
-  BACKUP_TELEGRAM_DOCUMENT_MAX_BYTES,
+  BACKUP_SEVEN_ZIP_RESTORE_INSTRUCTION,
   NexaError,
   PLATFORM_ERROR_CODES,
+  type BackupArchiveFormat,
   type BackupDeliveryDestination,
   type BackupDeliveryState,
   type BackupManifest,
@@ -11,9 +12,13 @@ import {
   type BackupTrigger,
 } from '@nexa/contracts';
 import type { Clock, IdGenerator, OperationalEventRecorder, ScopeContext } from '@nexa/contracts';
+import type { DeliveryAttempt } from './ports.js';
 import {
   isBackupDeliveryRouter,
+  type BackupArchivePart,
   type BackupArchiver,
+  type BackupPartPlanner,
+  type BackupRunPartStore,
   type BackupDelivery,
   type BackupDeliveryResolution,
   type BackupRunRepository,
@@ -22,7 +27,7 @@ import {
   type BackupWorkspaceFactory,
   type DatabaseTools,
 } from './ports.js';
-import { backupCaption, backupRetainedNotice } from './backup-caption.js';
+import { backupPartCaption, backupSummaryMessage } from './backup-caption.js';
 
 /**
  * The backup pipeline.
@@ -55,7 +60,19 @@ import { backupCaption, backupRetainedNotice } from './backup-caption.js';
  */
 
 export interface BackupServiceDeps {
-  readonly runs: BackupRunRepository;
+  readonly runs: BackupRunRepository & BackupRunPartStore;
+  /**
+   * Splits the verified archive into ≤ 45 MiB parts (E4): byte ranges of that one file,
+   * each with its own SHA-256, so what is delivered is exactly what was verified.
+   */
+  readonly parts: BackupPartPlanner;
+  /** The operator's restore command, printed in the summary (`docs/backup.md`). */
+  readonly restoreCommand: string;
+  /**
+   * How the caption shows the moment the dump began (the installation's calendar and zone,
+   * bound in the container). Absent: the ISO instant.
+   */
+  readonly formatTakenAt?: (at: Date) => string;
   readonly tools: DatabaseTools;
   readonly archiver: BackupArchiver;
   readonly workspaces: BackupWorkspaceFactory;
@@ -105,13 +122,6 @@ export interface BackupServiceDeps {
   readonly quietOpsLog: OperationalEventRecorder;
   readonly scope: () => ScopeContext | null;
   /**
-   * Where the archive stays when it is too large to send.
-   *
-   * Named in the notification rather than logged, so an operator reading the
-   * group knows where to look. It is a path on their own server, not a secret.
-   */
-  readonly retainedArchiveHint: string;
-  /**
    * Whether the installation's condition of this code is open now (E5).
    *
    * Asked before a RECOVERY is recorded, because the recorder always inserts one:
@@ -136,6 +146,26 @@ const BACKUP_CONDITION_KEY = 'backup.run';
 const DELIVERY_CONDITION_KEY = 'backup.delivery';
 /** The cleanup condition's key, shared with the debris sweep that also opens it. */
 const CLEANUP_CONDITION_KEY = 'backup.cleanup';
+/** A split archive that reached Telegram only in part (E4): one installation condition. */
+const PARTIAL_CONDITION_KEY = 'backup.delivery_partial';
+
+/** What the DELIVER stage learned, part by part (E4). */
+interface DeliveryResult {
+  readonly state: BackupDeliveryState;
+  readonly detail: string | null;
+  readonly attemptedAt: Date | null;
+  /** Parts Telegram answered `ok` for, with a message id. */
+  readonly delivered: number;
+  readonly summaryState: BackupDeliveryState | null;
+}
+
+/** `nexa-backup-20261019-0400-0193ab12.7z`: sortable, and names the run. */
+function archiveFilename(id: string, startedAt: Date, format: BackupArchiveFormat): string {
+  const iso = startedAt.toISOString();
+  const stamp = `${iso.slice(0, 4)}${iso.slice(5, 7)}${iso.slice(8, 10)}-${iso.slice(11, 13)}${iso.slice(14, 16)}`;
+  const short = id.replace(/-/g, '').slice(0, 8);
+  return `nexa-backup-${stamp}-${short}.${format === 'SEVEN_ZIP' ? '7z' : 'nxb'}`;
+}
 
 export type BackupOutcome =
   | { readonly kind: 'BUSY'; readonly holder: BackupRunRow }
@@ -176,7 +206,15 @@ export class BackupService {
      * holds every imported customer). Every other stage, the lock and the verification are
      * the same run's.
      */
-    options: { readonly deliver?: boolean } = {},
+    options: {
+      readonly deliver?: boolean;
+      /**
+       * E1: the headline the delivered parts and summary carry instead of «بکاپ» — the
+       * one-time «آرشیو ربات قبلی» the legacy compaction takes before deleting anything.
+       * Recorded nowhere else: the run is an ordinary, complete, verified backup.
+       */
+      readonly title?: string;
+    } = {},
   ): Promise<BackupOutcome> {
     // Release any lock whose owner died before it could. Done first, and by
     // FAILING the abandoned run rather than adopting it: its files belong to a
@@ -266,6 +304,10 @@ export class BackupService {
     let deliveryState: BackupDeliveryState = 'NOT_ATTEMPTED';
     let deliveryAttemptedAt: Date | null = null;
     let deliveryDetail: string | null = null;
+    let archiveFormat: BackupArchiveFormat | null = null;
+    let partCount: number | null = null;
+    let archiveSealId: string | null = null;
+    let summaryDeliveryState: BackupDeliveryState | null = null;
 
     try {
       // ---- DUMP ------------------------------------------------------------
@@ -276,7 +318,11 @@ export class BackupService {
         now: this.deps.clock.now(),
       });
       workspace = await this.deps.workspaces.create(id);
-      const dump = await this.deps.tools.dump(workspace.dumpPath);
+      // E4: a 7-Zip archive compresses the dump itself, so the dump is written uncompressed.
+      const plannedFormat = (await this.deps.archiver.nextFormat?.()) ?? 'NXB';
+      const dump = await this.deps.tools.dump(workspace.dumpPath, {
+        uncompressed: plannedFormat === 'SEVEN_ZIP',
+      });
 
       // ---- CHECKSUM --------------------------------------------------------
       stage = 'CHECKSUM';
@@ -331,9 +377,25 @@ export class BackupService {
       const sealed = await this.deps.archiver.seal({
         dumpPath: workspace.dumpPath,
         archivePath: workspace.archivePath,
+        ...(workspace.sevenZipPath === undefined ? {} : { sevenZipPath: workspace.sevenZipPath }),
         manifest,
       });
       archiveBytes = BigInt(sealed.archiveBytes);
+      archiveFormat = sealed.format ?? 'NXB';
+      archiveSealId = sealed.passwordId ?? null;
+      const archivePath = sealed.archivePath ?? workspace.archivePath;
+      // The parts: ranges of THIS file, each with its own SHA-256, planned before the
+      // verification so that a failure to read the archive fails the run, not the delivery.
+      const parts = await this.deps.parts.plan({
+        archivePath,
+        filename: archiveFilename(id, startedAt, archiveFormat),
+      });
+      partCount = parts.length;
+      // The sealed archive holds the dump now and the checksum was taken before it, so
+      // the plaintext dump goes BEFORE the verification decrypts a second copy: an
+      // uncompressed (E4) dump is the database's size, and two at once is the disk's
+      // worst moment. What could not be removed is reported with the rest at CLEANUP.
+      const sealedLeft = await workspace.discardPlaintext();
 
       // ---- VERIFY_RESTORE --------------------------------------------------
       //
@@ -348,7 +410,7 @@ export class BackupService {
         leaseOwner: this.deps.leaseOwner,
         now: this.deps.clock.now(),
       });
-      const verified = await this.verify(workspace, checksum, digest.bytes);
+      const verified = await this.verify(workspace, archivePath, checksum, digest.bytes);
       verifiedAt = this.deps.clock.now();
       this.deps.logger.info(
         { backupId: id, tables: verified.tableCount },
@@ -369,26 +431,40 @@ export class BackupService {
         leaseOwner: this.deps.leaseOwner,
         now: this.deps.clock.now(),
       });
-      const delivered =
+      // Every part is on the row, NOT_ATTEMPTED, before anything is sent: a process that
+      // dies mid-delivery leaves each part's truth behind, never a plan nobody can read.
+      await this.deps.runs.recordParts({ id, leaseOwner: this.deps.leaseOwner, parts });
+      const delivered: DeliveryResult =
         options.deliver === false
           ? {
-              state: 'NOT_ATTEMPTED' as const,
+              state: 'NOT_ATTEMPTED',
               detail: 'Kept on this server only: this run was asked not to leave it.',
               attemptedAt: null,
+              delivered: 0,
+              summaryState: null,
             }
           : await this.deliver({
               id,
               manifest,
-              archivePath: workspace.archivePath,
+              archivePath,
               archiveBytes: sealed.archiveBytes,
+              format: archiveFormat,
+              parts,
               tableCount: verified.tableCount,
+              ...(options.title === undefined ? {} : { title: options.title }),
             });
       deliveryState = delivered.state;
       deliveryDetail = delivered.detail;
       deliveryAttemptedAt = delivered.attemptedAt;
+      summaryDeliveryState = delivered.summaryState;
 
       // ---- CLEANUP ---------------------------------------------------------
       stage = 'CLEANUP';
+      // The second removal is the one whose answer counts: it retries whatever the first
+      // (`sealedLeft`) could not remove.
+      if (sealedLeft.length > 0) {
+        this.deps.logger.warn({ backupId: id, sealedLeft }, 'plaintext survived the first removal');
+      }
       const leftovers = [...plaintextLeft, ...this.deps.tools.leaked];
       const cleanupOk = leftovers.length === 0;
       if (!cleanupOk) {
@@ -415,7 +491,7 @@ export class BackupService {
       );
       // A run asked NOT to deliver says nothing about delivery (M2): it neither opens nor
       // closes the delivery condition — "not attempted" here is not "not configured".
-      if (!quiet) await this.reportDelivery(id, deliveryState);
+      if (!quiet) await this.reportDelivery(id, deliveryState, delivered.delivered, parts.length);
       if (!cleanupOk) await this.reportCleanup(id, 'SUCCEEDED', leftovers.length, quiet);
 
       // Inside the `try`, so a rejection here is caught below and re-finished as
@@ -440,6 +516,10 @@ export class BackupService {
         deliveryDetail,
         cleanupOk,
         cleanupDetail: cleanupOk ? null : leftovers.join(', '),
+        archiveFormat,
+        partCount,
+        archiveSealId,
+        summaryDeliveryState,
       });
     } catch (error) {
       const failureCode = error instanceof NexaError ? error.code : 'backup.failed';
@@ -509,6 +589,10 @@ export class BackupService {
         failureMessage,
         cleanupOk: leftovers.length === 0,
         cleanupDetail: leftovers.length === 0 ? null : leftovers.join(', '),
+        archiveFormat,
+        partCount,
+        archiveSealId,
+        summaryDeliveryState,
       });
     } finally {
       heartbeat.stop();
@@ -542,11 +626,14 @@ export class BackupService {
    */
   private async verify(
     workspace: BackupWorkspace,
+    archivePath: string,
     expectedChecksum: string,
     expectedBytes: number,
   ): Promise<{ tableCount: number }> {
+    // The archive that was sealed — `.nxb` or `.7z` — opened by the same `open` a restore
+    // uses, which picks the container by the file's own magic bytes.
     const opened = await this.deps.archiver.open({
-      archivePath: workspace.archivePath,
+      archivePath,
       dumpPath: workspace.verifyDumpPath,
     });
 
@@ -592,38 +679,37 @@ export class BackupService {
   }
 
   /**
-   * Delivers the archive, and records what we actually learned.
+   * Delivers the archive PART BY PART, and records what we actually learned (E4).
    *
-   * Above Telegram's document ceiling the group gets a MESSAGE naming the
-   * backup and where it stays — ADR-0011's third compensating control. That is
-   * a successful delivery of the thing that could be delivered, not a failure:
-   * the artifact is on the operator's disk, verified, and they have been told.
+   * Each part is its own `sendDocument` with its own outcome, recorded on its own row the
+   * moment it is known. The first part that is not `SUCCEEDED` STOPS the delivery: the
+   * parts after it stay `NOT_ATTEMPTED`, and nothing is resent — an `OUTCOME_UNKNOWN` part
+   * may be in the group, and a blind resend of it would be a second copy decided by a
+   * process that admits it does not know (ADR-0025). Only when every part arrived is the
+   * one summary message sent (a single part's caption already is the summary).
    *
-   * Nothing here retries. An `OUTCOME_UNKNOWN` is recorded and left alone,
-   * because a blind resend of a document Telegram may already hold is a second
-   * copy of an encrypted database in a chat, decided by a process that admits
-   * it does not know.
+   * The run's delivery state is the aggregate: `SUCCEEDED` only when every part was; else
+   * `OUTCOME_UNKNOWN` if the stopping part's outcome is unknown, else `FAILED_DEFINITIVE`.
    */
   private async deliver(input: {
     id: string;
     manifest: BackupManifest;
     archivePath: string;
     archiveBytes: number;
+    format: BackupArchiveFormat;
+    parts: readonly BackupArchivePart[];
     tableCount: number;
-  }): Promise<{
-    state: BackupDeliveryState;
-    detail: string | null;
-    attemptedAt: Date | null;
-  }> {
+    title?: string;
+  }): Promise<DeliveryResult> {
     /*
      * WHERE, decided now, once, for this run (spec §13.1): the operations group's backups
      * topic, else the environment's dedicated chat, else nowhere. See
-     * `RoutedBackupDelivery` for the precedence.
+     * `RoutedBackupDelivery` for the precedence. Every part goes to the same place.
      *
      * Nothing in delivery may fail the RUN. The archive is verified and on disk by now, so
-     * a destination that cannot be resolved — a database hiccup reading the group, a topic
-     * Telegram will not create — is recorded as a delivery that did not happen, never as a
-     * backup that did not happen. Resolution sends nothing, so a throw here is definitive.
+     * a destination that cannot be resolved is recorded as a delivery that did not happen,
+     * never as a backup that did not happen. Resolution sends nothing, so a throw here is
+     * definitive.
      */
     let resolution: BackupDeliveryResolution;
     try {
@@ -633,6 +719,8 @@ export class BackupService {
         state: 'FAILED_DEFINITIVE',
         detail: `The backup destination could not be resolved: ${messageOf(error)}`,
         attemptedAt: this.deps.clock.now(),
+        delivered: 0,
+        summaryState: null,
       };
     }
     if (resolution.kind === 'NONE') {
@@ -640,53 +728,120 @@ export class BackupService {
         state: 'NOT_ATTEMPTED',
         detail: 'No backup destination is configured.',
         attemptedAt: null,
+        delivered: 0,
+        summaryState: null,
       };
     }
     const attemptedAt = this.deps.clock.now();
     if (resolution.kind === 'UNAVAILABLE') {
-      return { state: 'FAILED_DEFINITIVE', detail: resolution.detail, attemptedAt };
+      return {
+        state: 'FAILED_DEFINITIVE',
+        detail: resolution.detail,
+        attemptedAt,
+        delivered: 0,
+        summaryState: null,
+      };
     }
 
     const { channel } = resolution;
-    const caption = backupCaption(input);
-    try {
-      if (input.archiveBytes > BACKUP_TELEGRAM_DOCUMENT_MAX_BYTES) {
-        // Too large for a bot to send. The group is TOLD — a notice, never a pretend
-        // document — and the run records that notice's own outcome. The archive is the
-        // operator's to fetch from the server.
-        const attempt = await channel.sendMessage(
-          backupRetainedNotice({
-            caption,
-            retainedHint: this.deps.retainedArchiveHint,
-            archiveBytes: input.archiveBytes,
+    const created = new Date(input.manifest.createdAt);
+    const takenAt = this.deps.formatTakenAt?.(created) ?? created.toISOString();
+    const sevenZip = input.format === 'SEVEN_ZIP';
+    const count = input.parts.length;
+    let delivered = 0;
+    let stopped: { state: BackupDeliveryState; detail: string | null } | null = null;
+    for (const part of input.parts) {
+      const at = this.deps.clock.now();
+      let attempt: DeliveryAttempt;
+      try {
+        attempt = await channel.sendDocument({
+          archivePath: input.archivePath,
+          filename: part.filename,
+          caption: backupPartCaption({
+            id: input.id,
+            takenAt,
+            partNumber: part.partNumber,
+            partCount: count,
+            filename: part.filename,
+            bytes: part.bytes,
+            sha256: part.sha256,
+            sevenZip,
+            totalBytes: input.archiveBytes,
+            dumpChecksum: input.manifest.checksum,
+            restoreCommand: this.deps.restoreCommand,
+            tableCount: input.tableCount,
+            postgresVersion: input.manifest.postgresVersion,
+            ...(input.title === undefined ? {} : { title: input.title }),
           }),
-        );
-        return {
-          state: attempt.state,
-          detail:
-            attempt.state === 'SUCCEEDED'
-              ? 'The archive is larger than Telegram accepts from a bot and was retained on the ' +
-                'server; a notice was delivered instead of the document.'
-              : attempt.detail,
-          attemptedAt,
+          // One part is the whole file; several are ranges of it.
+          ...(count === 1 ? {} : { range: { start: part.start, end: part.end } }),
+        });
+      } catch (error) {
+        // A channel is built not to throw. If one did anyway, bytes may have left: that is
+        // precisely an outcome nobody observed, and it is recorded as one — never resent.
+        attempt = {
+          state: 'OUTCOME_UNKNOWN',
+          detail: `The delivery did not complete: ${messageOf(error)}`,
         };
       }
-
-      const attempt = await channel.sendDocument({
-        archivePath: input.archivePath,
-        filename: `nexa-backup-${input.id}.nxb`,
-        caption,
+      const messageId = attempt.state === 'SUCCEEDED' ? (attempt.messageId ?? null) : null;
+      await this.deps.runs.recordPartOutcome({
+        id: input.id,
+        leaseOwner: this.deps.leaseOwner,
+        partNumber: part.partNumber,
+        state: attempt.state,
+        attemptedAt: at,
+        messageId,
+        detail: attempt.detail,
       });
-      return { state: attempt.state, detail: attempt.detail, attemptedAt };
-    } catch (error) {
-      // A channel is built not to throw. If one did anyway, bytes may have left: that is
-      // precisely an outcome nobody observed, and it is recorded as one — never resent.
+      if (attempt.state !== 'SUCCEEDED') {
+        stopped = { state: attempt.state, detail: attempt.detail };
+        break;
+      }
+      delivered += 1;
+    }
+
+    if (stopped !== null) {
       return {
-        state: 'OUTCOME_UNKNOWN',
-        detail: `The delivery did not complete: ${messageOf(error)}`,
+        state: stopped.state === 'OUTCOME_UNKNOWN' ? 'OUTCOME_UNKNOWN' : 'FAILED_DEFINITIVE',
+        detail:
+          `${String(delivered)} of ${String(count)} part(s) delivered; part ${String(delivered + 1)}: ` +
+          (stopped.detail ?? stopped.state),
         attemptedAt,
+        delivered,
+        summaryState: null,
       };
     }
+
+    let summaryState: BackupDeliveryState | null = null;
+    let detail: string | null = count === 1 ? null : `All ${String(count)} parts delivered.`;
+    if (count > 1) {
+      let summary: DeliveryAttempt;
+      try {
+        summary = await channel.sendMessage(
+          backupSummaryMessage({
+            id: input.id,
+            takenAt,
+            totalBytes: input.archiveBytes,
+            parts: input.parts,
+            sevenZip,
+            dumpChecksum: input.manifest.checksum,
+            restoreInstruction: BACKUP_SEVEN_ZIP_RESTORE_INSTRUCTION,
+            restoreCommand: this.deps.restoreCommand,
+            ...(input.title === undefined ? {} : { title: input.title }),
+          }),
+        );
+      } catch (error) {
+        summary = { state: 'OUTCOME_UNKNOWN', detail: messageOf(error) };
+      }
+      summaryState = summary.state;
+      if (summary.state !== 'SUCCEEDED') {
+        // The parts are there and each carries its own digest; a missing summary is a
+        // note on the row, not a failed copy.
+        detail = `All ${String(count)} parts delivered; the summary message: ${summary.state}.`;
+      }
+    }
+    return { state: 'SUCCEEDED', detail, attemptedAt, delivered, summaryState };
   }
 
   /** Where the next archive would go, for the status card. A read; no Telegram call. */
@@ -717,7 +872,41 @@ export class BackupService {
    * Closed by a run that delivered, or that had no destination to deliver to —
    * the latter is a configuration the status card already shows, not a failure.
    */
-  private async reportDelivery(id: string, state: BackupDeliveryState): Promise<void> {
+  private async reportDelivery(
+    id: string,
+    state: BackupDeliveryState,
+    delivered: number,
+    partCount: number,
+  ): Promise<void> {
+    if ((state === 'FAILED_DEFINITIVE' || state === 'OUTCOME_UNKNOWN') && delivered > 0) {
+      /*
+       * PARTIAL (E4): some parts are in the group and some are not, so the copy that left
+       * the host cannot be restored from. Its own condition, routed to the ERRORS topic,
+       * stated in numbers — never "delivered". The local copy is kept: the local-copy
+       * retention removes only runs whose every part carries a message id.
+       */
+      await this.report({
+        code: 'backup.delivery_partial',
+        severity: 'WARN',
+        message:
+          `Backup ${id} reached Telegram only in part: ${String(delivered)} of ` +
+          `${String(partCount)} part(s) delivered (delivery ${state}). The parts in the ` +
+          'group cannot be restored on their own; the archive is retained on this server.',
+        context: { backupId: id, delivery: state, delivered, partCount },
+        dedupeKey: PARTIAL_CONDITION_KEY,
+      });
+      return;
+    }
+    if (state === 'SUCCEEDED' && (await this.isOpen('backup.delivery_partial'))) {
+      await this.report({
+        code: 'backup.delivery_partial_ok',
+        severity: 'INFO',
+        message: `Backup ${id} was delivered in full (${String(partCount)} part(s)).`,
+        context: { backupId: id, partCount },
+        recoversCode: 'backup.delivery_partial',
+        recoversDedupeKey: PARTIAL_CONDITION_KEY,
+      });
+    }
     if (state === 'FAILED_DEFINITIVE' || state === 'OUTCOME_UNKNOWN') {
       await this.report({
         code: 'backup.delivery_failed',

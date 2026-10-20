@@ -56,3 +56,93 @@ export function backupRetainedNotice(input: {
     'The archive is larger than Telegram accepts from a bot, so it stays on the server.',
   ].join('\n');
 }
+
+/** Mebibytes, one decimal, for a person reading the group: `42.3 مگ`. Never money. */
+export function mebibytes(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} مگ`;
+}
+
+/** What one part of a backup is captioned with (E4). Its OWN SHA-256 travels with it. */
+export function backupPartCaption(input: {
+  readonly id: string;
+  readonly takenAt: string;
+  readonly partNumber: number;
+  readonly partCount: number;
+  readonly filename: string;
+  readonly bytes: number;
+  readonly sha256: string;
+  readonly sevenZip: boolean;
+  readonly totalBytes: number;
+  readonly dumpChecksum: string;
+  readonly restoreCommand: string;
+  /** What the verification restored, and against which server (single part only). */
+  readonly tableCount: number;
+  readonly postgresVersion: string;
+  /** The headline instead of «بکاپ» (E1's «آرشیو ربات قبلی»). */
+  readonly title?: string;
+}): string {
+  const title = input.title ?? 'بکاپ';
+  if (input.partCount === 1) {
+    // One file: the caption IS the summary (L31), so no second message is posted.
+    return [
+      `💾 ${title} — ${input.takenAt}`,
+      `📦 ${input.filename} · ${mebibytes(input.bytes)}`,
+      '✅ رمزگذاری و بازیابی آزمایشی موفق',
+      ...(input.sevenZip ? ['🔐 با 7-Zip و رمز بکاپ باز می‌شود.'] : []),
+      '',
+      `Backup: ${input.id}`,
+      `PostgreSQL ${input.postgresVersion}; verified: restored into an empty database, ${String(input.tableCount)} tables`,
+      `SHA-256 (file): ${input.sha256}`,
+      `SHA-256 (dump): ${input.dumpChecksum}`,
+      `Restore: ${input.restoreCommand}`,
+    ].join('\n');
+  }
+  return [
+    `💾 ${title} — ${input.takenAt} — بخش ${String(input.partNumber)} از ${String(input.partCount)}`,
+    `📦 ${input.filename} · ${mebibytes(input.bytes)}`,
+    '',
+    `Backup: ${input.id}`,
+    `Part: ${String(input.partNumber)}/${String(input.partCount)}`,
+    `SHA-256: ${input.sha256}`,
+  ].join('\n');
+}
+
+/** The ceiling the summary is kept under: Telegram's message limit is 4096 characters. */
+const SUMMARY_MAX_CHARS = 3800;
+
+/**
+ * The ONE summary message after every part of a split archive arrived (E4): date, total
+ * size, part count, SHA-256 per part, and how to restore — the owner's sentence, word for
+ * word, and the `botctl` command. Above the message ceiling the per-part digests are left
+ * to each part's own caption (where they always are) and the summary says so.
+ */
+export function backupSummaryMessage(input: {
+  readonly id: string;
+  readonly takenAt: string;
+  readonly totalBytes: number;
+  readonly parts: readonly { readonly filename: string; readonly sha256: string }[];
+  readonly sevenZip: boolean;
+  readonly dumpChecksum: string;
+  readonly restoreInstruction: string;
+  readonly restoreCommand: string;
+  readonly title?: string;
+}): string {
+  const head = [
+    `💾 ${input.title ?? 'بکاپ'} — ${input.takenAt}`,
+    `📦 حجم کل: ${mebibytes(input.totalBytes)} · ${String(input.parts.length)} بخش`,
+    '✅ رمزگذاری و بازیابی آزمایشی موفق',
+    '',
+  ];
+  const restore = [
+    '',
+    `♻️ بازیابی: ${input.sevenZip ? input.restoreInstruction : 'همهٔ بخش‌ها را به ترتیب پشت هم بچسبانید (cat) تا فایل ‎.nxb ساخته شود.'}`,
+    `botctl: ${input.restoreCommand}`,
+    '',
+    `Backup: ${input.id}`,
+    `SHA-256 (dump): ${input.dumpChecksum}`,
+  ];
+  const lines = input.parts.map((part) => `${part.filename}\n${part.sha256}`);
+  const full = [...head, 'SHA-256 هر بخش:', ...lines, ...restore].join('\n');
+  if (full.length <= SUMMARY_MAX_CHARS) return full;
+  return [...head, 'SHA-256 هر بخش در کپشن همان بخش آمده است.', ...restore].join('\n');
+}

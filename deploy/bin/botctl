@@ -97,6 +97,9 @@ botctl — operate a Nexa installation
   botctl status              what is running, and whether it is ready
   botctl version             installed version, source commit, image digest
   botctl backup              a consistent PostgreSQL dump, timestamped
+  botctl restore --target DB PART...
+                             restore a Nexa backup (.nxb, .7z, or every part .001 .002 …)
+                             into an EMPTY database you created; never the live one
   botctl update VERSION      update to VERSION, by digest
   botctl rollback            return to the previous release's image
   botctl logs [SERVICE]      follow logs
@@ -995,6 +998,83 @@ cmd_backup() {
   chmod 0600 "$target"
   nexa_ok "backup written: ${target} (${size} bytes of SQL)"
   printf '%s' "$target"
+}
+
+# ---------------------------------------------------------------------------
+# restore (Round 4 PR-E, E4): a backup from the BACKUPS topic, in its parts
+# ---------------------------------------------------------------------------
+#
+# The parts are byte-exact slices of one archive (7-Zip's own volume layout), so they
+# are joined IN NAME ORDER, streamed straight into a private scratch directory inside
+# the api container (`.cli-*`, swept by the backup housekeeping if this is killed), and
+# restored there by `backup.cli.js restore` — the same open the Web Admin and the
+# pipeline's verification use. A 7-Zip archive's password is read from the terminal
+# without echo and handed over on stdin, never as an argument. The target must be an
+# EMPTY database you created; the live database is refused by the CLI itself.
+cmd_restore() {
+  require_installed
+  local target=""
+  local parts=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --target)
+        target="${2:-}"
+        shift 2 || nexa_die "--target needs a database name."
+        ;;
+      --target=*)
+        target="${1#--target=}"
+        shift
+        ;;
+      -*) nexa_die "unknown option $1. usage: botctl restore --target DB PART..." ;;
+      *)
+        parts+=("$1")
+        shift
+        ;;
+    esac
+  done
+  [ -n "$target" ] || nexa_die "restore needs --target DB: an EMPTY database you created first, never the live one."
+  [ "${#parts[@]}" -gt 0 ] || nexa_die "restore needs the archive, or every part of it (.001, .002 …)."
+  local part
+  for part in "${parts[@]}"; do
+    [ -r "$part" ] || nexa_die "cannot read ${part}."
+  done
+  local sorted=()
+  while IFS= read -r part; do sorted+=("$part"); done < <(printf '%s\n' "${parts[@]}" | LC_ALL=C sort)
+
+  local magic
+  magic="$(head -c 6 "${sorted[0]}" | od -An -tx1 | tr -d ' \n')"
+  local password=""
+  if [ "$magic" = "377abcaf271c" ]; then
+    printf 'Backup password: ' >&2
+    IFS= read -rs password </dev/tty || nexa_die "could not read the backup password."
+    printf '\n' >&2
+    [ -n "$password" ] || nexa_die "a 7-Zip backup needs its password."
+  fi
+
+  local scratch
+  scratch="$(nexa_compose exec -T api mktemp -d /var/lib/nexa/backups/.cli-restore-XXXXXX)" ||
+    nexa_die "could not make a scratch directory in the api container."
+  scratch="$(printf '%s' "$scratch" | tr -d '\r')"
+  # shellcheck disable=SC2064 # the path is fixed now, on purpose.
+  trap "nexa_compose exec -T api rm -rf '${scratch}' >/dev/null 2>&1 || true" EXIT
+
+  nexa_step "joining ${#sorted[@]} part(s) into the api container"
+  # shellcheck disable=SC2016 # "$1" expands in the container's shell, deliberately.
+  cat "${sorted[@]}" | nexa_compose exec -T api sh -c 'umask 077; cat > "$1"' sh "${scratch}/archive" ||
+    nexa_die "the parts could not be copied into the api container."
+
+  nexa_step "restoring into ${target}"
+  if [ -n "$password" ]; then
+    printf '%s' "$password" | nexa_compose exec -T api node dist/backup.cli.js restore \
+      --archive "${scratch}/archive" --target "$target" --password-stdin ||
+      nexa_die "the restore did not complete. Nothing was changed in the live database."
+    password=""
+  else
+    nexa_compose exec -T api node dist/backup.cli.js restore \
+      --archive "${scratch}/archive" --target "$target" </dev/null ||
+      nexa_die "the restore did not complete. Nothing was changed in the live database."
+  fi
+  nexa_ok "restored into ${target}"
 }
 
 # ---------------------------------------------------------------------------
@@ -2170,6 +2250,7 @@ main() {
     version) cmd_version "$@" ;;
     status) cmd_status "$@" ;;
     backup) cmd_backup ;;
+    restore) cmd_restore "$@" ;;
     update) cmd_update "$@" ;;
     rollback) cmd_rollback "$@" ;;
     secrets) cmd_secrets "$@" ;;

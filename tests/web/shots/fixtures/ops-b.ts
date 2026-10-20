@@ -568,6 +568,11 @@ function run(id: string, minutes: number, over: Json = {}): Json {
     cleanupOk: true,
     cleanupLeftovers: 0,
     archiveAvailable: true,
+    archiveFormat: 'NXB',
+    partCount: 1,
+    partsDelivered: 0,
+    parts: [],
+    summaryDeliveryState: null,
     ...over,
   };
 }
@@ -585,6 +590,11 @@ const RUNS = [
     deliveryDetailPresent: false,
     failureCode: 'RESTORE_FAILED',
     archiveAvailable: false,
+    archiveFormat: 'NXB',
+    partCount: 1,
+    partsDelivered: 0,
+    parts: [],
+    summaryDeliveryState: null,
   }),
   run('01a05e35-c9ad-7e93-bef3-1ed9b5529a05', 60 * 25, { archiveAvailable: false }),
 ];
@@ -674,6 +684,7 @@ export const OPS_B: readonly ShotFixture[] = [
     running: null,
     unknownDeliveries: 1,
     quiesced: false,
+    archivePassword: { configured: false, setAt: null },
   }),
   fixture('/backups', backupHistoryResponseSchema, { runs: RUNS, nextCursor: null }),
   fixture('/recoveries/capabilities', recoveryCapabilitiesResponseSchema, {

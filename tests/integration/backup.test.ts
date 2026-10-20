@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { Client } from 'pg';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import type { BackupManifest } from '@nexa/contracts';
+import { BACKUP_PART_MAX_BYTES, type BackupManifest } from '@nexa/contracts';
+import { planArchiveParts } from '../../apps/api/src/modules/platform/backup/infrastructure/archive-parts';
 import { createTestContext, testConfig, type TestContext } from './harness';
 import { SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { checksumFile } from '../../apps/api/src/modules/platform/backup/infrastructure/archive';
@@ -88,7 +89,9 @@ describe('backup against a real database', () => {
    * — is asserted from the artifact on disk, so the substitution cannot hide a
    * pipeline that delivered the wrong thing.
    */
-  function service(overrides: { leaseOwner?: string; workDir?: string } = {}): BackupService {
+  function service(
+    overrides: { leaseOwner?: string; workDir?: string; partBytes?: number } = {},
+  ): BackupService {
     const config = testConfig();
     const tools = new PostgresDatabaseTools({
       databaseUrl: config.DATABASE_URL,
@@ -109,14 +112,17 @@ describe('backup against a real database', () => {
           return deliveryConfigured;
         },
         async sendDocument(input) {
-          const { size } = await stat(input.archivePath);
           // Read the bytes that would go over the wire, so the "no plaintext is
           // ever delivered" assertion is about the actual file rather than
-          // about a path string.
-          const bytes = await readFile(input.archivePath);
-          delivered.push({ kind: 'document', caption: input.caption, bytes: size });
+          // about a path string. A part of a split archive is a RANGE (E4).
+          const whole = await readFile(input.archivePath);
+          const bytes =
+            input.range === undefined ? whole : whole.subarray(input.range.start, input.range.end);
+          delivered.push({ kind: 'document', caption: input.caption, bytes: bytes.length });
           deliveredBodies.push(bytes);
-          return nextDelivery;
+          return nextDelivery.state === 'SUCCEEDED'
+            ? { ...nextDelivery, messageId: delivered.length }
+            : nextDelivery;
         },
         async sendMessage(text) {
           delivered.push({ kind: 'message', caption: text, bytes: 0 });
@@ -134,7 +140,11 @@ describe('backup against a real database', () => {
       scope: () => ({ tenantId: SEED_IDS.tenantA as never, botInstanceId: null }),
       logger: { info() {}, warn() {}, error() {} },
       leaseOwner: overrides.leaseOwner ?? `test:${randomBytes(4).toString('hex')}`,
-      retainedArchiveHint: workDir,
+      parts: {
+        plan: (input) =>
+          planArchiveParts({ ...input, partBytes: overrides.partBytes ?? BACKUP_PART_MAX_BYTES }),
+      },
+      restoreCommand: 'botctl restore --target <db> <parts>',
     });
   }
 
@@ -541,26 +551,26 @@ describe('backup against a real database', () => {
     expect(body).not.toContain(config.SECRETS_KEK ?? 'no-kek-configured');
   }, 180_000);
 
-  it('records what it left behind when a manifest is delivered instead of a document', async () => {
-    // Not reachable by making a real database bigger than 50 MiB in a test, so
-    // the ceiling is exercised through the archive size the pipeline observes.
-    // The assertion is about behaviour at the boundary, not about the number.
-    deliveryConfigured = true;
-    const svc = service();
-    const deps = (svc as any).deps as { archiver: { seal: (i: unknown) => Promise<unknown> } };
-    const realSeal = deps.archiver.seal.bind(deps.archiver);
-    deps.archiver.seal = async (input: unknown) => {
-      const sealed = (await realSeal(input)) as { archiveBytes: number; keyId: string };
-      return { ...sealed, archiveBytes: 50 * 1024 * 1024 + 1 };
-    };
-
-    const outcome = await svc.run('MANUAL');
+  it('splits an archive above the part size into ranges whose concatenation IS the verified archive (E4)', async () => {
+    // A real dump of the test database, split at 32 KiB so it has several parts.
+    const outcome = await service({ partBytes: 32 * 1024 }).run('MANUAL');
     if (outcome.kind !== 'COMPLETED') throw new Error('unreachable');
-    expect(outcome.run.state).toBe('SUCCEEDED');
-    expect(delivered).toHaveLength(1);
-    expect(delivered[0]?.kind).toBe('message');
-    expect(delivered[0]?.caption).toContain('RETAINED:');
-    expect(delivered[0]?.caption).toContain(outcome.run.checksum ?? 'no-checksum');
+    const run = outcome.run;
+    expect(run.state).toBe('SUCCEEDED');
+    expect(run.deliveryState).toBe('SUCCEEDED');
+    const documents = delivered.filter((entry) => entry.kind === 'document');
+    expect(run.partCount).toBe(documents.length);
+    expect(documents.length).toBeGreaterThan(1);
+    // The summary, once, after the parts.
+    expect(delivered.at(-1)?.kind).toBe('message');
+    expect(delivered.filter((entry) => entry.kind === 'message')).toHaveLength(1);
+    const archive = await readFile(join(workDir, run.id, 'archive.nxb'));
+    expect(Buffer.concat(deliveredBodies.slice(-documents.length))).toEqual(archive);
+    const parts = await context.container.backupRuns.parts(run.id);
+    expect(parts.map((part) => part.deliveryState).every((state) => state === 'SUCCEEDED')).toBe(
+      true,
+    );
+    expect(parts.every((part) => part.telegramMessageId !== null)).toBe(true);
   }, 180_000);
 
   it('stops a dump that runs past its timeout, and kills the subprocess', async () => {

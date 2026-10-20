@@ -117,6 +117,8 @@ export * from './features.js';
 export * from './notifications.js';
 export * from './ops-log-group.js';
 export * from './backup.js';
+export * from './data-retention.js';
+export * from './legacy-compaction.js';
 export * from './recovery.js';
 export * from './recovery-kit.js';
 export * from './secrets.js';

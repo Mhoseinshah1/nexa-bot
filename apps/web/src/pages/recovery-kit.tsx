@@ -600,7 +600,13 @@ const KIT_ERRORS: Record<string, WebKey> = {
  * The code half of the step-up (D2 review): required by the server when the
  * administrator's own two-step sign-in is on, and ignored when it is off.
  */
-function StepUpCodeField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+export function StepUpCodeField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
   return (
     <label className="field">
       <span className="field-label">{t('web.admin_step_up_code')}</span>

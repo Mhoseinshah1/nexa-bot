@@ -755,6 +755,83 @@ export const WEB_FA = {
   'web.recovery_schedule_off_hint':
     'بکاپ خودکار خاموش است. تاریخچه‌ی سالم به‌تنهایی معنایش این نیست که بکاپی گرفته می‌شود.',
   'web.recovery_interval': 'فاصله‌ی بکاپ‌ها',
+  'web.err_backup_archive_password_invalid':
+    'رمز فایل بکاپ نمی‌تواند شکست خط یا نویسه‌ی کنترلی داشته باشد.',
+  'web.setting_backup_local_copies': 'کپی‌های محلی بکاپ‌های ارسال‌شده',
+  'web.setting_backup_local_copies_desc':
+    'چند بکاپ که همه‌ی بخش‌هایشان به تلگرام رسیده، روی سرور هم نگه داشته شوند (۰ یعنی هیچ). بکاپی که ارسالش ناقص یا نامعلوم است هرگز با این تنظیم پاک نمی‌شود.',
+  'web.setting_retention_outbox': 'نگه‌داری رویدادهای منتشرشده',
+  'web.setting_retention_outbox_desc':
+    'رویدادهای منتشرشده‌ی صف خروجی پس از چند روز پاک شوند. رویدادی که هنوز منتشر نشده هرگز پاک نمی‌شود.',
+  'web.setting_retention_idempotency': 'نگه‌داری کلیدهای تکرارناپذیری',
+  'web.setting_retention_idempotency_desc':
+    'کلیدهای پنل وب و تلگرام پس از چند روز پاک شوند. کلیدهای کارهای پس‌زمینه و انتقال داده هرگز پاک نمی‌شوند.',
+  // Round 4 PR-E (E1) — compacting the imported legacy data.
+  'web.lcp_title': 'فشرده‌سازی داده‌های ربات قبلی',
+  'web.lcp_hint':
+    'داده‌های واردشده از ربات قبلی که هیچ صفحه یا روندی آن‌ها را نمی‌خواند حذف و بقیه سبک می‌شوند. ابتدا یک بکاپ کامل با عنوان «آرشیو ربات قبلی» در تاپیک بکاپ‌ها ارسال می‌شود و تا همه‌ی بخش‌هایش نرسد چیزی حذف نمی‌شود.',
+  'web.lcp_state': 'وضعیت',
+  'web.lcp_requested': 'زمان درخواست',
+  'web.lcp_deleted': 'سطرهای حذف‌شده',
+  'web.lcp_deduplicated': 'سطرهای تکراری حذف‌شده',
+  'web.lcp_stripped': 'سطرهای سبک‌شده',
+  'web.lcp_state_requested': 'در صف',
+  'web.lcp_state_archiving': 'در حال تهیه و ارسال «آرشیو ربات قبلی»',
+  'web.lcp_state_measuring': 'در حال اندازه‌گیری',
+  'web.lcp_state_dropping': 'در حال حذف داده‌های بی‌استفاده',
+  'web.lcp_state_deduping': 'در حال حذف موارد تکراری',
+  'web.lcp_state_stripping': 'در حال سبک‌کردن سوابق',
+  'web.lcp_state_vacuuming': 'نگه‌داری پایگاه داده',
+  'web.lcp_state_completed': 'انجام شد',
+  'web.lcp_state_failed': 'متوقف شد؛ چیزی حذف نشد',
+  'web.lcp_maintenance':
+    'در حال بازنویسی جدول‌های سوابق ربات قبلی؛ تا پایان این مرحله صفحه‌های سوابق ربات قبلی منتظر می‌مانند.',
+  'web.lcp_failed': 'فشرده‌سازی متوقف شد و هیچ داده‌ای حذف نشد.',
+  'web.lcp_table': 'جدول',
+  'web.lcp_before': 'پیش از فشرده‌سازی',
+  'web.lcp_after': 'پس از فشرده‌سازی',
+  'web.lcp_warning':
+    'این کار برگشت‌ناپذیر است. سوابقی که حذف می‌شوند فقط از «آرشیو ربات قبلی» قابل بازیابی‌اند.',
+  'web.lcp_type_phrase': 'برای تأیید، عبارت {phrase} را دقیقاً بنویسید',
+  'web.lcp_start': 'شروع فشرده‌سازی',
+  'web.lcp_unavailable':
+    'فشرده‌سازی فقط پس از پایان کامل انتقال داده از ربات قبلی و وقتی انتقالی در جریان نیست در دسترس است.',
+  'web.err_legacy_compaction_unavailable':
+    'فشرده‌سازی فقط پس از پایان انتقال داده و وقتی انتقالی در جریان نیست ممکن است.',
+  'web.err_legacy_compaction_phrase_invalid': 'عبارت تأیید درست نوشته نشده است.',
+  'web.err_legacy_compaction_active': 'فشرده‌سازی در جریان است یا قبلاً انجام شده است.',
+  // Round 4 PR-E (E4) — the owner-set backup password; never shown once stored.
+  'web.backup_password_title': 'رمز فایل بکاپ',
+  'web.backup_password_card_hint':
+    'با این رمز، هر بکاپ یک فایل 7-Zip رمزدار (AES-256) می‌شود که در ویندوز با 7-Zip و همین رمز باز می‌شود.',
+  'web.backup_password_state': 'وضعیت رمز',
+  'web.backup_password_set': 'تنظیم شده است',
+  'web.backup_password_unset': 'تنظیم نشده است',
+  'web.backup_password_set_at': 'زمان تنظیم',
+  'web.backup_password_hint_set':
+    'رمز ذخیره شده و دیگر نمایش داده نمی‌شود. با تنظیم رمز تازه، بکاپ‌های بعدی با رمز تازه ساخته می‌شوند و بکاپ‌های قبلی همچنان روی همین سرور باز می‌شوند.',
+  'web.backup_password_hint_unset':
+    'تا رمزی تنظیم نشود، بکاپ‌ها به قالب قبلی ‎.nxb و با کلید سرور رمزگذاری می‌شوند و فقط روی همین نصب (یا با کیت بازیابی) باز می‌شوند.',
+  'web.backup_password_owner_only': 'تنظیم رمز فایل بکاپ فقط برای مالک است.',
+  'web.backup_password_new': 'رمز تازه‌ی فایل بکاپ',
+  'web.backup_password_again': 'تکرار رمز',
+  'web.backup_password_short': 'رمز باید دست‌کم ۱۲ نویسه باشد.',
+  'web.backup_password_mismatch': 'دو رمز یکسان نیستند.',
+  'web.backup_password_warning':
+    'این رمز را جایی امن و جدا از سرور نگه دارید. بدون آن هیچ‌کس — حتی پشتیبانی — نمی‌تواند فایل بکاپ را باز کند.',
+  'web.backup_password_save': 'ذخیره‌ی رمز',
+  'web.backup_password_saving': 'در حال ذخیره…',
+  'web.backup_password_saved': 'رمز ذخیره شد. بکاپ بعدی با این رمز ساخته می‌شود.',
+  'web.backup_password_reauth_failed': 'رمز حساب شما پذیرفته نشد؛ رمز فایل بکاپ تغییر نکرد.',
+  // E4: restoring a backup delivered in parts.
+  'web.recovery_parts_hint':
+    'اگر بکاپ چندبخشی است، همه‌ی بخش‌ها (‎.001، ‎.002 …) را با هم انتخاب کنید؛ به ترتیب به هم چسبانده و یک‌جا بارگذاری می‌شوند.',
+  'web.recovery_parts_invalid':
+    'بخش‌های انتخاب‌شده کامل یا هم‌نام نیستند. همه‌ی بخش‌های یک بکاپ، از ‎.001 تا آخر، را بی‌کم‌وکاست انتخاب کنید.',
+  'web.recovery_parts_joined': '{n} بخش به ترتیب به هم چسبانده شد.',
+  'web.recovery_archive_password': 'رمز فایل بکاپ',
+  'web.recovery_archive_password_hint':
+    'این فایل 7-Zip رمزدار است. رمز فقط برای همین بررسی به کار می‌رود و ذخیره نمی‌شود. اگر این بکاپ روی همین سرور ساخته شده، می‌توانید خالی بگذارید.',
   // Spec §13.2 — the automatic schedule, edited here instead of in the server's settings.
   'web.backup_schedule_title': 'زمان‌بندی بکاپ خودکار',
   'web.backup_schedule_hint':
@@ -7367,6 +7444,7 @@ export const WEB_FA = {
   'web.nc_t_refunded_undeliverable': 'سفارشی تحویل‌نشدنی بود و وجه آن بازگشت',
   'web.nc_t_backup_failed': 'پشتیبان‌گیری ناموفق بود',
   'web.nc_t_backup_delivery_failed': 'آرشیو بکاپ از سرور خارج نشد',
+  'web.nc_t_backup_delivery_partial': 'بکاپ فقط بخشی از بخش‌هایش را به تلگرام رساند',
   'web.nc_t_backup_cleanup_failed': 'فایل رمزنشدهٔ بکاپ روی سرور مانده است',
   'web.nc_t_backup_disk_low': 'فضای دیسک بکاپ رو به پایان است',
   'web.nc_t_backup_overdue': 'بکاپ خودکار عقب افتاده است',
