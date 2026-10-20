@@ -296,6 +296,14 @@ export const OPS_GROUP_MANAGED_SETTING_KEYS = [
   'ops.notifications.payments_topic_id',
   'ops.notifications.min_severity',
   'ops.notifications.max_attempts',
+  // Round 4 PR-D: the log types' switches and options are edited on the group's own page,
+  // beside the topics they belong to, never on the generic settings page.
+  'ops.log.disabled_types',
+  'ops.log.storm_rollup_enabled',
+  'ops.log.storm_threshold',
+  'ops.log.storm_window_minutes',
+  'ops.log.nightly_report_time',
+  'ops.log.admin_base_url',
 ] as const;
 
 /** The delivery allowance of one ops-log notification, and after a manual retry. */
