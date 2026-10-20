@@ -1280,6 +1280,67 @@ describe('payment accounts and the destination a payment freezes', () => {
       ).toBe(1);
     });
 
+    it('a redelivered tap after the invoice closed answers NOT_SWITCHABLE, exactly as a fresh tap would', async () => {
+      await addAccount(tenantA, owner, 'replay-two', {
+        label: 'دوم',
+        cardNumber: CARD_TWO,
+        sortOrder: 5,
+      });
+      // Past its window: the replay of a tap that switched must not redraw an open invoice.
+      const expiredOrder = await awaitingPayment('replay-expired');
+      const expired = (await issue('replay-expired-pay', expiredOrder)).payment;
+      expect((await tap(expired.id, 0, 'replay-expired-tap')).outcome).toBe('SWITCHED');
+      await ctx.container.database.db.execute(
+        sql`UPDATE payments SET expires_at = now() - interval '1 minute' WHERE id = ${expired.id}`,
+      );
+      expect((await tap(expired.id, 1, 'replay-expired-fresh')).outcome).toBe('NOT_SWITCHABLE');
+      expect((await tap(expired.id, 0, 'replay-expired-tap')).outcome).toBe('NOT_SWITCHABLE');
+
+      // Claimed as sent: the same for the replay of a tap that answered UNCHANGED.
+      const signalledOrder = await awaitingPayment('replay-signalled');
+      const signalled = (await issue('replay-signalled-pay', signalledOrder)).payment;
+      expect((await tap(signalled.id, 7, 'replay-signalled-tap')).outcome).toBe('UNCHANGED');
+      await ctx.container.database.db.execute(
+        sql`UPDATE payments SET customer_signalled_at = now() WHERE id = ${signalled.id}`,
+      );
+      const replayed = await tap(signalled.id, 7, 'replay-signalled-tap');
+      expect(replayed.outcome).toBe('NOT_SWITCHABLE');
+      // Still PENDING, so the invoice is redrawn as it stands — without the button.
+      expect(replayed.outcome === 'NOT_SWITCHABLE' && replayed.instruction?.payment.id).toBe(
+        signalled.id,
+      );
+      expect(
+        (
+          (await ctx.container.database.db.execute(
+            sql`SELECT count(*)::int AS n FROM payment_destination_switches WHERE payment_id = ${signalled.id}` as never,
+          )) as unknown as { rows: { n: number }[] }
+        ).rows[0]?.n,
+      ).toBe(0);
+
+      // A receipt filed (and nothing else changed): the replay is closed by the receipt alone.
+      const filedOrder = await awaitingPayment('replay-filed');
+      const filed = (await issue('replay-filed-pay', filedOrder)).payment;
+      expect((await tap(filed.id, 7, 'replay-filed-tap')).outcome).toBe('UNCHANGED');
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO payment_receipts (id, tenant_id, bot_instance_id, customer_id, payment_id, kind,
+                                      file_id, file_unique_id, caption, created_at)
+        VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${BOT_A}, ${customerA},
+                ${filed.id}, 'PHOTO', 'file-replay', 'unique-replay', NULL, now())`);
+      expect((await tap(filed.id, 7, 'replay-filed-tap')).outcome).toBe('NOT_SWITCHABLE');
+
+      // The payment ended (rejected by an operator): no longer PENDING, so nothing is redrawn.
+      const endedOrder = await awaitingPayment('replay-ended');
+      const ended = (await issue('replay-ended-pay', endedOrder)).payment;
+      expect((await tap(ended.id, 7, 'replay-ended-tap')).outcome).toBe('UNCHANGED');
+      await ctx.container.payments.rejectManualTransfer(tenantA, owner, ended.id, {
+        idempotencyKey: 'replay-ended-reject',
+        note: 'واریزی پیدا نشد',
+      });
+      const endedReplay = await tap(ended.id, 7, 'replay-ended-tap');
+      expect(endedReplay.outcome).toBe('NOT_SWITCHABLE');
+      expect(endedReplay.outcome === 'NOT_SWITCHABLE' && endedReplay.instruction).toBeNull();
+    });
+
     it('one enabled card: the button is not offered and a forged tap switches nothing', async () => {
       const orderId = await awaitingPayment('single');
       const { payment } = await issue('single-pay', orderId);

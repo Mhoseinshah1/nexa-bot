@@ -5497,6 +5497,8 @@ export function createContainer(
     ids,
     // Broadcast V2: the preview's opted-out estimate only; the stamp still decides.
     marketingOptOut: marketingOptOutPolicy,
+    // R4 A6: the composer previews `{today}` in the zone and calendar the sender uses.
+    presentation: templatePresentation,
     // Roadmap C2: the broadcast's own history card.
     auditHistory: new DrizzleAuditHistoryReader(database.db),
   });

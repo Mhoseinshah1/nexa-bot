@@ -58,7 +58,8 @@ describe('A11: the gateway invoice says the payment is checked automatically', (
 describe('A3: the wallet screen calls the identifier «شناسه کاربری»', () => {
   it('bot.wallet.summary labels the Telegram id «شناسه کاربری»', () => {
     const text = body('bot.wallet.summary');
-    expect(text).toContain('{icon:identity} شناسه کاربری: {telegramId}');
+    // R4 A3: the id is wrapped in `<code>` so it is tap-to-copy; the label is unchanged.
+    expect(text).toContain('{icon:identity} شناسه کاربری: <code>{telegramId}</code>');
     expect(text).not.toContain('آی دی عددی');
     // The brief spells the old label with a zero-width non-joiner; that form is refused too.
     expect(text).not.toContain('آی\u200cدی');

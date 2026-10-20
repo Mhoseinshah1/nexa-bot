@@ -59,6 +59,10 @@ import {
   type AudienceService,
 } from '../../audience/application/audience.service.js';
 import type { FrozenAudienceRecord } from '../../audience/application/ports.js';
+import type {
+  TemplatePresentation,
+  TenantPresentationReader,
+} from '../../../control/templates/application/ports.js';
 import {
   AUDIT_VIEW_PERMISSION,
   type AuditHistoryReader,
@@ -96,6 +100,11 @@ export interface BroadcastServiceDeps {
   readonly outbox: OutboxWriter;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /**
+   * The tenant's zone and calendar — the reader the sender renders `{today}` with — handed
+   * to the composer so its live preview shows the date a recipient will be sent.
+   */
+  readonly presentation: TenantPresentationReader;
   /**
    * Broadcast V2: the same switch the dispatcher's stamp reads, used here ONLY for the
    * preview's opted-out estimate. It never narrows what is counted or materialised.
@@ -216,6 +225,15 @@ export class BroadcastService {
   ): Promise<readonly BroadcastRecord[]> {
     await this.deps.guard.check(scope, actor, BROADCAST_VIEW);
     return this.deps.repository.list(scope, input.limit, input.cursor);
+  }
+
+  /**
+   * The tenant's zone and calendar, for the composer's preview of `{today}`. `broadcasts.view`,
+   * like the list it is answered with.
+   */
+  async presentation(scope: TenantContext, actor: ActorContext): Promise<TemplatePresentation> {
+    await this.deps.guard.check(scope, actor, BROADCAST_VIEW);
+    return this.deps.presentation.presentationFor(scope);
   }
 
   /** Per-state recipient counts for the given broadcasts, for a list or a detail view. */

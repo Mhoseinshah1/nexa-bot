@@ -22,7 +22,11 @@ import type { SessionRepository } from '../../../platform/identity/application/p
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { PaymentAccountRecord, PaymentDestinationRepository } from './account-ports.js';
+import type {
+  PaymentAccountRecord,
+  PaymentDestinationRecord,
+  PaymentDestinationRepository,
+} from './account-ports.js';
 import type { PaymentReceiptRepository } from './receipt-ports.js';
 import type { ManualTransferInstruction } from './payment.service.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
@@ -186,10 +190,17 @@ export class CardSwitchService {
       requestHash,
     );
     if (replay !== null) {
-      // One Telegram update delivered twice: answer with what is shown now, write nothing.
+      /*
+       * One Telegram update delivered twice: answer with what is shown now, write nothing.
+       * The invoice is judged again by the SAME rule the locked path applies — a redelivery
+       * after the window closed, the payment ended or a receipt was filed is NOT_SWITCHABLE,
+       * so the redrawn invoice never offers the button again.
+       */
       const payment = await this.deps.payments.findById(scope, paymentId);
       if (payment === null || payment.customerId !== customerId) throw this.notFound();
       const destination = await this.deps.destinations.findByPayment(scope, paymentId);
+      const closed = await this.closedInvoice(scope, payment, destination, this.deps.clock.now());
+      if (closed !== null) return closed;
       return {
         outcome: 'UNCHANGED',
         reason: 'STALE',
@@ -238,20 +249,10 @@ export class CardSwitchService {
           );
         const current = await this.deps.destinations.findByPayment(scope, paymentId, tx);
         const sequence = await this.deps.destinations.switchCount(scope, paymentId, tx);
-        if (
-          current === null ||
-          !this.switchable(payment, now) ||
-          (await this.deps.receipts.countForPayment(scope, paymentId, tx)) > 0
-        ) {
+        const closed = await this.closedInvoice(scope, payment, current, now, tx);
+        if (closed !== null || current === null) {
           await remember(sequence);
-          return {
-            outcome: 'NOT_SWITCHABLE',
-            payment,
-            instruction:
-              payment.state === 'PENDING' && payment.method === 'MANUAL_TRANSFER'
-                ? { payment, destination: current }
-                : null,
-          };
+          return closed ?? this.notSwitchable(payment, current);
         }
         const unchanged = async (
           reason: 'STALE' | 'LIMIT' | 'NO_OTHER_CARD',
@@ -315,6 +316,41 @@ export class CardSwitchService {
         };
       },
     );
+  }
+
+  /**
+   * The one rule both the locked press and a replayed one apply: NOT_SWITCHABLE when no card
+   * was recorded, the invoice is no longer open, or a receipt has been filed; else null.
+   */
+  private async closedInvoice(
+    scope: TenantContext,
+    payment: PaymentRecord,
+    current: PaymentDestinationRecord | null,
+    now: Date,
+    tx?: TransactionScope,
+  ): Promise<CardSwitchResult | null> {
+    if (
+      current === null ||
+      !this.switchable(payment, now) ||
+      (await this.deps.receipts.countForPayment(scope, payment.id, tx)) > 0
+    ) {
+      return this.notSwitchable(payment, current);
+    }
+    return null;
+  }
+
+  private notSwitchable(
+    payment: PaymentRecord,
+    current: PaymentDestinationRecord | null,
+  ): CardSwitchResult {
+    return {
+      outcome: 'NOT_SWITCHABLE',
+      payment,
+      instruction:
+        payment.state === 'PENDING' && payment.method === 'MANUAL_TRANSFER'
+          ? { payment, destination: current }
+          : null,
+    };
   }
 
   /**

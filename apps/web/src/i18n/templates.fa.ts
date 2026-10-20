@@ -56,6 +56,7 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
       'bot.callback.',
       'bot.request_unavailable',
       'bot.blocked',
+      'bot.account.unblocked',
     ],
   },
   { id: 'channels', label: 'عضویت اجباری در کانال', prefixes: ['bot.channels.'] },

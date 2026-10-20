@@ -27,13 +27,14 @@ import {
   type BroadcastContentKind,
   type BroadcastHistoryAction,
   type BroadcastPinState,
+  type BroadcastPresentation,
   type BroadcastPurpose,
   type BroadcastRecipientState,
   type BroadcastResponseItem,
   type BroadcastState,
   type BroadcastTestResponse,
 } from '@nexa/contracts';
-import { DEFAULT_TEMPLATE_PRESENTATION, renderTemplateBody } from '@nexa/i18n';
+import { renderTemplateBody } from '@nexa/i18n';
 import {
   ApiError,
   createBroadcast,
@@ -512,10 +513,12 @@ function sourceOf(state: ComposerState): { chatId: string; messageId: number } |
  * `BROADCAST_BODY_DEFINITION`) for a sample recipient. Without `sample` it is the composer's
  * default sample. A sample field left empty is absent, so its line drops exactly as it would
  * for a recipient without that fact — except `{phone}`, which renders empty, as the bot does.
- * `{today}` is `now` in the default zone and calendar; `{walletBalance}` is never sampled.
+ * `{today}` is `now` in the TENANT's zone and calendar — the presentation the sender renders
+ * with, as the list answers it — never the product default; `{walletBalance}` is never sampled.
  */
 export function renderBroadcastPreview(
   body: string,
+  presentation: BroadcastPresentation,
   sample: SampleRecipient = defaultSample(),
   now: Date = new Date(),
 ): string {
@@ -527,13 +530,19 @@ export function renderBroadcastPreview(
   if (DIGITS.test(sample.servicesActive.trim())) {
     values.servicesActive = Number(sample.servicesActive);
   }
-  return renderTemplateBody(
-    BROADCAST_BODY_DEFINITION,
-    body,
-    values,
-    undefined,
-    DEFAULT_TEMPLATE_PRESENTATION,
-  );
+  return renderTemplateBody(BROADCAST_BODY_DEFINITION, body, values, undefined, presentation);
+}
+
+/**
+ * The tenant's zone and calendar, as the broadcast list answers them. The preview is not drawn
+ * without them: a default in the meantime would show a date the recipient may not be sent.
+ */
+function useBroadcastPresentation() {
+  return useQuery({
+    queryKey: ['broadcasts', 'presentation'],
+    queryFn: async () => (await fetchBroadcasts({ limit: 1 })).presentation,
+    staleTime: 60_000,
+  });
 }
 
 /** The composer's starting sample: a name and a handle, plainly a sample, nothing else. */
@@ -556,6 +565,7 @@ function Composer({
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [state, setState] = useState<ComposerState>(() => initial(record));
+  const presentation = useBroadcastPresentation();
   /*
    * The saved draft the edits are based on, and whose version a save names. PR #245 (Codex
    * CX2, review M1): when the server's draft moves on — a 409 re-read, another operator's
@@ -827,8 +837,12 @@ function Composer({
                   <span className="faint">{t(KIND_LABELS[state.contentKind])}</span>
                 ) : state.body.trim() === '' ? (
                   <span className="faint">{t('web.bc_preview_empty')}</span>
+                ) : presentation.data === undefined ? (
+                  <span className="faint">{t('web.loading')}</span>
                 ) : (
-                  <pre className="preview-text">{renderBroadcastPreview(state.body, sample)}</pre>
+                  <pre className="preview-text">
+                    {renderBroadcastPreview(state.body, presentation.data, sample)}
+                  </pre>
                 )}
               </div>
               {state.buttons
@@ -1945,6 +1959,7 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
 /** What the broadcast is and whom it goes to, as saved. */
 function BroadcastSummary({ record }: { record: BroadcastResponseItem }) {
   const botNames = useCachedBotNames();
+  const presentation = useBroadcastPresentation();
   return (
     <Card title={t('web.bc_summary')}>
       <KV
@@ -2002,7 +2017,13 @@ function BroadcastSummary({ record }: { record: BroadcastResponseItem }) {
           <h3>{t('web.bc_preview')}</h3>
           <div className="bc-phone">
             <div className="broadcast-preview bc-bubble" dir="auto">
-              <pre className="preview-text">{renderBroadcastPreview(record.body)}</pre>
+              {presentation.data === undefined ? (
+                <span className="faint">{t('web.loading')}</span>
+              ) : (
+                <pre className="preview-text">
+                  {renderBroadcastPreview(record.body, presentation.data)}
+                </pre>
+              )}
             </div>
           </div>
         </>

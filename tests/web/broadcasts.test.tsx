@@ -16,6 +16,7 @@ import {
   renderBroadcastPreview,
   wireButton,
 } from '../../apps/web/src/pages/broadcasts';
+import { renderTemplateBody } from '@nexa/i18n';
 import { renderPage, stubApi } from './harness';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { openFilterPanel, setDateField } from './ui-helpers';
@@ -27,6 +28,7 @@ import { openFilterPanel, setDateField } from './ui-helpers';
  */
 
 const ID = '019280ab-cdef-7012-8345-6789abcdef01';
+const TEHRAN = { timezone: 'Asia/Tehran', calendar: 'jalali' } as const;
 const HASH = 'a'.repeat(64);
 const FINGERPRINT = 'b'.repeat(32);
 
@@ -112,6 +114,7 @@ describe('broadcast in the Web Admin', () => {
         body: {
           broadcasts: [broadcast({ state: 'SENDING', progressPercent: 40, recipientCount: 10 })],
           nextCursor: null,
+          presentation: TEHRAN,
         },
       },
     ]);
@@ -132,9 +135,11 @@ describe('broadcast in the Web Admin', () => {
   });
 
   it('renders the preview with the bot’s renderer and the placeholder catalogue', () => {
-    expect(renderBroadcastPreview('سلام {firstName}\n@{username}')).toBe('سلام سارا\n@sample_user');
+    expect(renderBroadcastPreview('سلام {firstName}\n@{username}', TEHRAN)).toBe(
+      'سلام سارا\n@sample_user',
+    );
     // A token outside the catalogue is left as written, never silently filled.
-    expect(renderBroadcastPreview('{subscriptionUrl}')).toBe('{subscriptionUrl}');
+    expect(renderBroadcastPreview('{subscriptionUrl}', TEHRAN)).toBe('{subscriptionUrl}');
   });
 
   it('R4 A6: a chip for every catalogue token, and the preview draws the sample typed in the form', () => {
@@ -150,6 +155,7 @@ describe('broadcast in the Web Admin', () => {
     };
     const text = renderBroadcastPreview(
       'id {telegramId}\nتلفن [{phone}]\nکل {servicesTotal} فعال {servicesActive}\n{today}',
+      TEHRAN,
       sample,
       new Date('2026-10-19T08:00:00Z'),
     );
@@ -158,7 +164,26 @@ describe('broadcast in the Web Admin', () => {
     expect(text).toMatch(/کل (3|۳) فعال (1|۱)/u);
     expect(text).toMatch(/۱۴۰۵|1405/u);
     // An empty sample field is a recipient without that fact: its line drops.
-    expect(renderBroadcastPreview('a\nid {telegramId}', defaultSample())).toBe('a');
+    expect(renderBroadcastPreview('a\nid {telegramId}', TEHRAN, defaultSample())).toBe('a');
+  });
+
+  it('R4 A6: `{today}` is previewed in the TENANT zone and calendar, as the sender renders it', () => {
+    // 22:00 UTC on 19 October is already 20 October in Tehran: zone and calendar both show.
+    const now = new Date('2026-10-19T22:00:00Z');
+    const utcGregorian = { timezone: 'UTC', calendar: 'gregorian' } as const;
+    const tenant = renderBroadcastPreview('{today}', utcGregorian, defaultSample(), now);
+    expect(tenant).toBe(
+      renderTemplateBody(
+        BROADCAST_BODY_DEFINITION,
+        '{today}',
+        { today: now },
+        undefined,
+        utcGregorian,
+      ),
+    );
+    expect(tenant).toMatch(/2026|۲۰۲۶/u);
+    expect(tenant).not.toMatch(/1405|۱۴۰۵/u);
+    expect(tenant).not.toBe(renderBroadcastPreview('{today}', TEHRAN, defaultSample(), now));
   });
 
   it('R4 A6: link and in-bot action buttons are sent in the shapes the API accepts', () => {
@@ -316,7 +341,9 @@ describe('broadcast in the Web Admin', () => {
 
   // Codex R6 on PR #117: the recipients are read again with the detail while sending.
   it('asks for ten broadcasts a page', async () => {
-    const api = stubApi([{ url: '/broadcasts', body: { broadcasts: [], nextCursor: null } }]);
+    const api = stubApi([
+      { url: '/broadcasts', body: { broadcasts: [], nextCursor: null, presentation: TEHRAN } },
+    ]);
     renderPage(
       <BroadcastsPage
         route={{ path: '/broadcasts', query: new URLSearchParams() }}

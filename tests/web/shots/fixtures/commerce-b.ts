@@ -1362,7 +1362,11 @@ export const COMMERCE_B: readonly ShotFixture[] = [
       { id: '0192c0de-0000-7000-8000-000000000902', label: 'قدیمی', archived: true },
     ],
   }),
-  fixture('/broadcasts', broadcastListResponseSchema, { broadcasts: BROADCASTS, nextCursor: null }),
+  fixture('/broadcasts', broadcastListResponseSchema, {
+    broadcasts: BROADCASTS,
+    nextCursor: null,
+    presentation: { timezone: 'Asia/Tehran', calendar: 'jalali' },
+  }),
   fixture('/broadcasts/:id', broadcastResponseSchema, { broadcast: BROADCASTS[0] }),
   fixture('/broadcasts/0192c0de-0000-7000-8000-000000000802', broadcastResponseSchema, {
     broadcast: SENDING_BROADCAST,
