@@ -244,10 +244,8 @@ import { planArchiveParts } from './modules/platform/backup/infrastructure/archi
 import { purgePublishedOutboxBefore } from './modules/platform/eventing/infrastructure/outbox-retention.js';
 import { purgeExpiredIdempotencyBefore } from './modules/platform/idempotency/infrastructure/idempotency-retention.js';
 import { BackupPasswordService } from './modules/platform/backup/application/backup-password.service.js';
-import {
-  LegacyCompactionExecutor,
-  LegacyCompactionService,
-} from './modules/platform/legacy-compaction/application/legacy-compaction.service.js';
+import { LegacyCompactionService } from './modules/platform/legacy-compaction/application/legacy-compaction.service.js';
+import { LegacyCompactionExecutor } from './modules/platform/legacy-compaction/application/legacy-compaction.executor.js';
 import { DrizzleLegacyCompactionRepository } from './modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository.js';
 import { PostgresDatabaseTools } from './modules/platform/backup/infrastructure/pg-tools.js';
 import { TelegramBackupDelivery } from './modules/platform/backup/infrastructure/telegram-backup-delivery.js';

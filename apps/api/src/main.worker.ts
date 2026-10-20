@@ -84,6 +84,8 @@ async function main(): Promise<void> {
         // uploads an archive, which has nothing to do with any schedule.
         ['recovery-request-sweeper', true, () => container.recoveryRequestSweeper.isFresh(now)],
         ['outbox-retention-sweeper', true, () => container.outboxRetentionSweeper.isFresh(now)],
+        // E1: the legacy-data compaction executor; idle (and fresh) unless one was requested.
+        ['legacy-compaction-executor', true, () => container.legacyCompactionExecutor.isFresh(now)],
         [
           'idempotency-retention-sweeper',
           true,

@@ -13,6 +13,7 @@ import {
   cmdRun,
   cmdVerify,
   EXIT_RECOVERY_QUIESCED,
+  orderedParts,
   parseArgs,
   UsageError,
   USAGE,
@@ -54,10 +55,42 @@ describe('the backup CLI arguments', () => {
     expect(parseArgs(['restore', '--archive', '/tmp/a.nxb', '--target', 'nexa_drill'])).toEqual({
       command: 'restore',
       archive: '/tmp/a.nxb',
+      archives: ['/tmp/a.nxb'],
+      passwordStdin: false,
       target: 'nexa_drill',
       limit: 20,
       kit: null,
     });
+  });
+
+  // E4: a backup delivered in parts, and a 7-Zip archive's password.
+  it('collects every --archive part, and reads the 7-Zip password from stdin only', () => {
+    const args = parseArgs([
+      'verify',
+      '--archive',
+      '/tmp/b.7z.002',
+      '--archive',
+      '/tmp/b.7z.001',
+      '--password-stdin',
+    ]);
+    expect(args.archives).toEqual(['/tmp/b.7z.002', '/tmp/b.7z.001']);
+    expect(args.passwordStdin).toBe(true);
+    expect(() => parseArgs(['verify', '--archive', '/tmp/a.7z', '--password', 'x'])).toThrow(
+      UsageError,
+    );
+    expect(() =>
+      parseArgs(['verify', '--archive', '/tmp/a.7z', '--password-stdin', '--kit', '/tmp/k']),
+    ).toThrow(UsageError);
+  });
+
+  it('orders numbered parts and refuses a gap by name', async () => {
+    await expect(
+      orderedParts(['/tmp/b.7z.003', '/tmp/b.7z.001', '/tmp/b.7z.002']),
+    ).resolves.toEqual(['/tmp/b.7z.001', '/tmp/b.7z.002', '/tmp/b.7z.003']);
+    await expect(orderedParts(['/tmp/b.7z.001', '/tmp/b.7z.003'])).rejects.toThrow(
+      /002 is missing/,
+    );
+    await expect(orderedParts(['/tmp/a.nxb', '/tmp/b.nxb'])).rejects.toThrow(UsageError);
   });
 
   it('takes a Recovery Kit for verify and restore, and for nothing else', () => {

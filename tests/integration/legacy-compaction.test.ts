@@ -13,7 +13,7 @@ import {
   tenantA,
   type TestContext,
 } from './harness';
-import { LegacyCompactionExecutor } from '../../apps/api/src/modules/platform/legacy-compaction/application/legacy-compaction.service';
+import { LegacyCompactionExecutor } from '../../apps/api/src/modules/platform/legacy-compaction/application/legacy-compaction.executor';
 import { DrizzleLegacyCompactionRepository } from '../../apps/api/src/modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository';
 import type { BackupRunPartRow } from '../../apps/api/src/modules/platform/backup/application/ports';
 
