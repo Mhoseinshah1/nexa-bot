@@ -2011,9 +2011,19 @@ describe('the referral surfaces: HTTP for the operator, Telegram for the custome
         buttons().filter((b) => b.text === CATALOGUE_FA['bot.referral.button']),
         'no «دعوت دوستان» on the wallet',
       ).toEqual([]);
-      // What IS on it is a wallet operation (the top-up menu, `o:`) or the way back (`mm:`).
+      // What IS on it is a wallet operation (the top-up menu, `o:`), the way back (`mm:`),
+      // or R4 A3's copy button, which carries the customer's own Telegram id and no callback.
       expect(buttons().length).toBeGreaterThan(0);
-      for (const button of buttons()) {
+      for (const button of buttons() as {
+        text: string;
+        callback_data?: string;
+        copy_text?: { text: string };
+      }[]) {
+        if (button.copy_text !== undefined) {
+          expect(button.callback_data, button.text).toBeUndefined();
+          expect(button.copy_text.text).toBe(String(REFERRER_TELEGRAM_ID));
+          continue;
+        }
         expect(['o:', 'mm:'], button.text).toContain(button.callback_data);
       }
 

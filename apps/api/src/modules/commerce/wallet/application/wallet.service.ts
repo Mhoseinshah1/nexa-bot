@@ -123,6 +123,11 @@ export interface WalletAdjustment {
   readonly amountMinor: bigint;
   readonly currency: CurrencyCode;
   readonly note: string;
+  /**
+   * R4 A5: «نمایش دلیل به مشتری». When true the customer's adjustment message quotes `note`
+   * as its reason; absent or false, the note stays the operator's.
+   */
+  readonly showNoteToCustomer?: boolean;
 }
 
 export interface WalletHistoryQuery {
@@ -286,6 +291,8 @@ export class WalletService {
       amount: input.amountMinor.toString(),
       currency: input.currency,
       note: input.note,
+      // In the hash only when set, so a key from before the field replays as itself.
+      ...(input.showNoteToCustomer === true ? { showNoteToCustomer: true } : {}),
     });
     const replay = await this.deps.idempotency.find<{ reference: string }>(
       scope,
@@ -385,6 +392,7 @@ export class WalletService {
             reference,
             actorAdminId: adminIdOf(actor),
             note: input.note,
+            noteShownToCustomer: input.showNoteToCustomer === true,
             now,
           },
           tx,

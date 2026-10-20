@@ -754,6 +754,22 @@ export const SETTINGS = [
     consumer: 'ACTIVE',
   },
   {
+    key: 'payments.card_switch_limit',
+    description:
+      'R4 A1: how many times a customer may press «🔄 تغییر شماره کارت» on ONE card-to-card ' +
+      'invoice. Each press edits the invoice to show the next enabled receiving card and is ' +
+      'recorded on the payment; once a payment has used its presses the button is no longer ' +
+      'drawn and a stale tap redraws the invoice unchanged. Zero means no limit, the default ' +
+      '(the owner\u2019s "off"). Never changes the payment, its amount or its tracking code.',
+    schema: z.number().int().min(0).max(100),
+    defaultValue: 0,
+    zeroMeaning: 'UNLIMITED',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
     key: 'provisioning.usage_sync_minutes',
     description:
       'How stale a service\u2019s traffic figure may get before this installation asks its panel ' +

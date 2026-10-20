@@ -61,6 +61,11 @@ export interface WalletEntryDraft {
   readonly actorAdminId?: string | null;
   readonly note?: string | null;
   /**
+   * R4 A5: «نمایش دلیل به مشتری» — the customer's adjustment message quotes `note`. Only an
+   * administrative adjustment sets it; absent is false.
+   */
+  readonly noteShownToCustomer?: boolean;
+  /**
    * The entry this one reverses, for a `REVERSAL_REASONS` entry.
    *
    * WP8 is the first writer: a `CASHBACK_REVERSAL` names the `CASHBACK_PURCHASE` credit

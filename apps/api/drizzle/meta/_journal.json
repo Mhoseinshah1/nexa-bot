@@ -1825,15 +1825,29 @@
     {
       "idx": 260,
       "version": "7",
-      "when": 1792456709515,
-      "tag": "0260_public_codes",
+      "when": 1792454611728,
+      "tag": "0260_r4_bot_ux",
       "breakpoints": true
     },
     {
       "idx": 261,
       "version": "7",
-      "when": 1792456721856,
-      "tag": "0261_public_code_triggers",
+      "when": 1792454621971,
+      "tag": "0261_payment_destination_switches_append_only",
+      "breakpoints": true
+    },
+    {
+      "idx": 262,
+      "version": "7",
+      "when": 1792459696363,
+      "tag": "0262_public_codes",
+      "breakpoints": true
+    },
+    {
+      "idx": 263,
+      "version": "7",
+      "when": 1792459700741,
+      "tag": "0263_public_code_triggers",
       "breakpoints": true
     }
   ]

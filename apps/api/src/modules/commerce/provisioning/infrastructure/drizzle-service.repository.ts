@@ -104,7 +104,14 @@ function notRefundedAway(): SQL {
  * (an old `sv:` button), and the operator's queries and the support context still see it.
  */
 function listedForCustomer(): SQL {
-  return sql`${ne(services.state, 'TERMINATED')} AND ${notRefundedAway()}`;
+  /*
+   * R4 A2: and not MISSING on its panel. A service a live check found gone from its panel
+   * leaves the customer's list, its count and its pages together — the same one predicate —
+   * and comes back by itself when a read finds the account again (`recordUsage` clears the
+   * flag). The card still answers by id (an old message, a deep link), with the not-found
+   * notice; the operator's queries and the support context still see it.
+   */
+  return sql`${ne(services.state, 'TERMINATED')} AND ${services.missingOnPanelAt} IS NULL AND ${notRefundedAway()}`;
 }
 
 /**
@@ -159,6 +166,7 @@ function toRecord(row: Row): ServiceRecord {
     locationKey: row.locationKey,
     locationLabel: row.locationLabel,
     usageSyncedAt: row.usageSyncedAt,
+    missingOnPanelAt: row.missingOnPanelAt,
     deliveryState: row.deliveryState as ServiceDeliveryState,
     deliveryAttempts: row.deliveryAttempts,
     deliveredAt: row.deliveredAt,
@@ -1074,6 +1082,39 @@ export class DrizzleServiceRepository implements ServiceRepository {
     return { items: rows.map(toRecord), count: total };
   }
 
+  /**
+   * R4 A6: what a broadcast's `{servicesTotal}` and `{servicesActive}` say — the services the
+   * customer's own list shows (the SAME `listedForCustomer` predicate as the page and its
+   * count), and how many of them serve at `now`: ACTIVE, inside their window (half-open, as
+   * `isPastDeadline`), and not out of a finite allowance that has been read — exactly the
+   * `serviceDisplayStatus` ACTIVE row.
+   */
+  async listedCountsForCustomer(
+    scope: TenantContext,
+    customerId: string,
+    now: Date,
+  ): Promise<{ readonly listed: number; readonly serving: number }> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.db
+      .select({
+        listed: sql<number>`count(*)::int`,
+        serving: sql<number>`count(*) FILTER (WHERE ${services.state} = 'ACTIVE'
+          AND (${services.expiresAt} IS NULL OR ${services.expiresAt} > ${now})
+          AND NOT (${services.usageSyncedAt} IS NOT NULL
+                   AND ${services.trafficLimitBytes} <> 0
+                   AND ${services.trafficUsedBytes} >= ${services.trafficLimitBytes}))::int`,
+      })
+      .from(services)
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.customerId, customerId),
+          listedForCustomer(),
+        ),
+      );
+    return { listed: Number(row?.listed ?? 0), serving: Number(row?.serving ?? 0) };
+  }
+
   async supportServicesForCustomer(
     scope: TenantContext,
     customerId: UserId,
@@ -1255,6 +1296,8 @@ export class DrizzleServiceRepository implements ServiceRepository {
         usageSyncedAt: usage.syncedAt,
         updatedAt: usage.syncedAt,
         ...lastSeenColumns(usage.lastSeen, usage.syncedAt),
+        // R4 A2: a usage the panel answered proves the account is there again.
+        missingOnPanelAt: null,
       })
       .where(
         and(
@@ -1270,6 +1313,47 @@ export class DrizzleServiceRepository implements ServiceRepository {
            * guarantee from every caller at once.
            */
           eq(services.state, 'ACTIVE'),
+        ),
+      )
+      .returning({ id: services.id });
+    return rows.length === 1;
+  }
+
+  async markMissingOnPanel(
+    scope: TenantContext,
+    id: string,
+    at: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(services)
+      .set({ missingOnPanelAt: at })
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.id, id),
+          isNull(services.missingOnPanelAt),
+        ),
+      )
+      .returning({ id: services.id });
+    return rows.length === 1;
+  }
+
+  async clearMissingOnPanel(
+    scope: TenantContext,
+    id: string,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(services)
+      .set({ missingOnPanelAt: null })
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.id, id),
+          isNotNull(services.missingOnPanelAt),
         ),
       )
       .returning({ id: services.id });

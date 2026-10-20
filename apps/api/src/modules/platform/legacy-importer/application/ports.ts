@@ -263,6 +263,19 @@ export interface LegacyCustomerWriter {
     inputs: readonly LegacyCustomerInsert[],
     tx: TransactionScope,
   ): Promise<{ readonly customerId: string; readonly created: boolean }[]>;
+  /**
+   * R4 A4: records, at `at`, that the customers these LEGACY user ids were imported as had
+   * accepted the previous bot's rules — through `legacy_import_map` (`user`, IMPORTED,
+   * CUSTOMER), and only where `legacy_terms_accepted_at` IS NULL, so a rerun, a resume and
+   * the backfill change nothing twice. Touches no other column and sends nothing. Returns how
+   * many rows it set.
+   */
+  markLegacyTermsAccepted(
+    scope: TenantContext,
+    legacyUserIds: readonly string[],
+    at: Date,
+    tx: TransactionScope,
+  ): Promise<number>;
 }
 
 // --- provider --------------------------------------------------------------------------------

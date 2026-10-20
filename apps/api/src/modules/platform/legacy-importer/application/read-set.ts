@@ -419,3 +419,44 @@ export async function readUserStatusInSnapshot(
     for (const row of batch.rows) onRow(row[0] ?? null, row[1] ?? null);
   });
 }
+
+// --- user-terms (R4 A4, owner instruction: the previous bot's rules acceptance) --------------
+
+/**
+ * `legacy-read-set:user-terms:v1` — the legacy `user` table's `id` and, when the source has
+ * it, `roll_Status`: whether the user accepted the previous bot's rules. Evidence: the public
+ * previous bot’s source (`mahdiMGF2/botmirzapanel` @ 92c0ed06) creates `user.roll_Status bool NOT
+ * NULL` in `table.php`, gates every customer action on `$user['roll_Status'] == 0` while the
+ * rules are switched on, and writes `true` on the «قوانین را می‌پذیرم» tap (`index.php`); the
+ * research corpus records the same per-user field as «وضعیت تایید قانون».
+ *
+ * OPTIONAL, unlike `user-status`: a source without the column imports nobody as accepted —
+ * the customer is asked once, the safe direction — and is never refused. Outside the frozen
+ * v1 fingerprint, like `user-status`; it decides no money, no identity and no service, so it
+ * is not bound into `legacy_read_set_runs` either.
+ */
+export const USER_TERMS_READ_SET = defineLegacyReadSet({
+  name: 'user-terms',
+  version: 1,
+  tables: [{ table: 'user', primaryKey: 'id', columns: ['id'], optionalColumns: ['roll_Status'] }],
+});
+
+/** `roll_Status` as a fact: accepted only for the values a MySQL `bool` (or a dump of one) is. */
+export function legacyRulesAccepted(raw: LegacyCell): boolean {
+  if (raw === null) return false;
+  const value = raw.trim().toLowerCase();
+  return value === '1' || value === 'true';
+}
+
+/**
+ * Reads `USER_TERMS_READ_SET` once in the importer's own snapshot session, handing every
+ * `[id, roll_Status]` row to `onRow` (`roll_Status` null when the source has no such column).
+ */
+export async function readUserTermsInSnapshot(
+  session: LegacySourceSession,
+  onRow: (id: string | null, accepted: boolean) => void,
+): Promise<LegacyReadSetResult> {
+  return scanReadSet(session, USER_TERMS_READ_SET, READ_SET_MAX_BATCH, (batch) => {
+    for (const row of batch.rows) onRow(row[0] ?? null, legacyRulesAccepted(row[1] ?? null));
+  });
+}

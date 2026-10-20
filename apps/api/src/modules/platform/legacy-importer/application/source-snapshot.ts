@@ -16,7 +16,11 @@ import {
   type LegacySourceTableName,
 } from './source-port.js';
 import { classifyLegacyPhone, type LegacyPhoneClass } from './decisions.js';
-import { readUserStatusInSnapshot, type LegacyReadSetResult } from './read-set.js';
+import {
+  readUserStatusInSnapshot,
+  readUserTermsInSnapshot,
+  type LegacyReadSetResult,
+} from './read-set.js';
 
 /**
  * Migration P7 — one read of the legacy source, and its fingerprint
@@ -61,6 +65,12 @@ export interface LegacyUserRow {
    * once, when the customer is created, and an existing customer's is never changed.
    */
   readonly status: LegacyUserStatusClass;
+  /**
+   * R4 A4: `roll_Status`, from the `user-terms` read set of the same snapshot — whether the
+   * user accepted the previous bot's rules. Not part of `checksum` (the `user:v1` facts are
+   * frozen); a source without the column reads false for everybody.
+   */
+  readonly termsAccepted: boolean;
   /** SHA-256 of the facts the import decides from: the `legacy_import_map.checksum`. */
   readonly checksum: string;
 }
@@ -315,6 +325,7 @@ export async function readFromSession(
       username,
       phone: classifyLegacyPhone(cellOf(userColumns, row, 'number')),
       status: 'UNKNOWN',
+      termsAccepted: false,
       checksum: '',
     });
   });
@@ -373,10 +384,17 @@ export async function readFromSession(
     if (id !== null) statusById.set(id, classifyLegacyUserStatus(raw));
   });
 
+  // R4 A4: `roll_Status`, through its own optional read set, in this same session.
+  const acceptedIds = new Set<string>();
+  await readUserTermsInSnapshot(session, (id, accepted) => {
+    if (id !== null && accepted) acceptedIds.add(id);
+  });
+
   // The user checksum needs had_trial, which is known only after the invoice scan.
   const withChecksums = users.map((u) => ({
     ...u,
     status: statusById.get(u.id) ?? ('UNKNOWN' as const),
+    termsAccepted: acceptedIds.has(u.id),
     checksum: legacyRowChecksum('user:v1', [
       u.id,
       u.balance,

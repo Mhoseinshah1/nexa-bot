@@ -98,6 +98,7 @@ export class DrizzleWalletRepository implements WalletRepository {
         paymentId: draft.paymentId ?? null,
         actorAdminId: draft.actorAdminId ?? null,
         note: draft.note ?? null,
+        noteShownToCustomer: draft.noteShownToCustomer === true,
         reversesEntryId: draft.reversesEntryId ?? null,
         createdAt: draft.now,
       })
@@ -404,24 +405,27 @@ export class DrizzleWalletRepository implements WalletRepository {
          * cannot describe different sets. A correlated subquery rather than two
          * round trips: the second read could see a credit the first did not.
          */
+        /*
+         * Explicit aliases (R4): drizzle renders a one-table SELECT's columns UNQUALIFIED, so
+         * the `${credit.…}` references this used inside the subqueries named the subquery's
+         * own row — the bound compared a row with itself and the customer filter matched
+         * every customer of the tenant.
+         */
         refunded: sql<string>`COALESCE((
-          SELECT SUM(${walletEntries.amount}) FROM ${walletEntries}
-           WHERE ${walletEntries.tenantId} = ${tenantId}
-             AND ${walletEntries.orderId} = ${orderId}
-             AND ${walletEntries.reason} = 'REFUND'
-             AND ${walletEntries.direction} = 'CREDIT'
-             AND ${walletEntries.currency} = ${credit.currency}
+          SELECT SUM(w.amount) FROM wallet_entries w
+           WHERE w.tenant_id = ${tenantId}
+             AND w.order_id = ${orderId}
+             AND w.reason = 'REFUND'
+             AND w.direction = 'CREDIT'
+             AND w.currency = "refund_credit"."currency"
         ), 0)`,
         balance: sql<string>`COALESCE((
-          SELECT SUM(CASE WHEN ${walletEntries.direction} = 'CREDIT'
-                          THEN ${walletEntries.amount}
-                          ELSE -${walletEntries.amount} END)
-            FROM ${walletEntries}
-           WHERE ${walletEntries.tenantId} = ${tenantId}
-             AND ${walletEntries.customerId} = ${credit.customerId}
-             AND ${walletEntries.currency} = ${credit.currency}
-             AND (${walletEntries.createdAt}, ${walletEntries.id})
-                 <= (${credit.createdAt}, ${credit.id})
+          SELECT SUM(CASE WHEN w.direction = 'CREDIT' THEN w.amount ELSE -w.amount END)
+            FROM wallet_entries w
+           WHERE w.tenant_id = ${tenantId}
+             AND w.customer_id = "refund_credit"."customer_id"
+             AND w.currency = "refund_credit"."currency"
+             AND (w.created_at, w.id) <= ("refund_credit"."created_at", "refund_credit"."id")
         ), 0)`,
       })
       .from(credit)
@@ -445,6 +449,66 @@ export class DrizzleWalletRepository implements WalletRepository {
     return {
       amount: money(BigInt(row.refunded), currency),
       balanceAfter: money(BigInt(row.balance), currency),
+    };
+  }
+
+  /**
+   * R4 A5: one ADMINISTRATIVE adjustment as its customer is told it — the amount, the balance
+   * right after it (as of the entry, `(created_at, id)` ordered, never today's) and its note
+   * only when the operator chose to show it. Null for any entry that is not an ADMIN_CREDIT
+   * or ADMIN_DEBIT, so a migration's opening balance can never be rendered as one.
+   */
+  async adminAdjustmentFor(
+    scope: TenantContext,
+    entryId: string,
+    tx?: unknown,
+  ): Promise<{
+    readonly direction: 'CREDIT' | 'DEBIT';
+    readonly amount: Money;
+    readonly balanceAfter: Money;
+    readonly shownNote: string | null;
+  } | null> {
+    const tenantId = requireTenantId(scope);
+    const entry = alias(walletEntries, 'adjustment');
+    const rows = await this.exec(tx)
+      .select({
+        direction: entry.direction,
+        amount: entry.amount,
+        currency: entry.currency,
+        note: entry.note,
+        shown: entry.noteShownToCustomer,
+        /*
+         * Written with explicit aliases on purpose: in a one-table SELECT drizzle renders its
+         * columns UNQUALIFIED, so `${entry.createdAt}` inside this subquery would name the
+         * subquery's own row and the bound would compare a row with itself.
+         */
+        balance: sql<string>`COALESCE((
+          SELECT SUM(CASE WHEN w.direction = 'CREDIT' THEN w.amount ELSE -w.amount END)
+            FROM wallet_entries w
+           WHERE w.tenant_id = ${tenantId}
+             AND w.customer_id = "adjustment"."customer_id"
+             AND w.currency = "adjustment"."currency"
+             AND (w.created_at, w.id) <= ("adjustment"."created_at", "adjustment"."id")
+        ), 0)`,
+      })
+      .from(entry)
+      .where(
+        and(
+          eq(entry.tenantId, tenantId),
+          eq(entry.id, entryId),
+          inArray(entry.reason, ['ADMIN_CREDIT', 'ADMIN_DEBIT']),
+        ),
+      )
+      .limit(1);
+    const row = rows[0];
+    if (row === undefined) return null;
+    const currency = row.currency as CurrencyCode;
+    const note = row.note?.trim() ?? '';
+    return {
+      direction: row.direction === 'DEBIT' ? 'DEBIT' : 'CREDIT',
+      amount: money(row.amount, currency),
+      balanceAfter: money(BigInt(row.balance), currency),
+      shownNote: row.shown && note !== '' ? note : null,
     };
   }
 

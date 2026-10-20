@@ -23,6 +23,9 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type { FeatureFlagResolver } from '../../features/application/feature-flags.service.js';
 import type { PublishedTermsVersion, TermsAcceptanceRecord, TermsRepository } from './ports.js';
 
+/** R4 A4: the owner's toggle for asking an accepted customer again (default OFF). */
+export const TERMS_REPROMPT_FLAG = 'terms_reprompt_on_new_version' as const;
+
 /**
  * The permission a customer's acceptance is written under. The Telegram surface acts as
  * `SYSTEM_JOB`, which holds exactly `maintenance.run`, as `CustomerService` does for the
@@ -66,6 +69,8 @@ export type TermsAcceptOutcome =
 /** One customer's standing, as Customer 360 shows it and as the gate decides it. */
 export interface CustomerTermsStanding {
   readonly enforced: boolean;
+  /** R4 A4: the imported acceptance of the previous bot's rules, or null. */
+  readonly acceptedInPreviousBotAt: Date | null;
   readonly current: PublishedTermsVersion | null;
   readonly lastAccepted: TermsAcceptanceRecord | null;
   readonly acceptedCurrent: boolean;
@@ -94,7 +99,16 @@ interface AcceptReplay {
 export class TermsAcceptanceService {
   constructor(private readonly deps: TermsAcceptanceServiceDeps) {}
 
-  /** The version this customer must accept now, or null when nothing stops them. */
+  /**
+   * The version this customer must accept now, or null when nothing stops them.
+   *
+   * R4 A4, the owner's rule: accept ONCE. A customer who has accepted any version of these
+   * rules — or whose acceptance of the previous bot's rules the import carried — is not
+   * asked again when a newer version is published, unless the owner turned
+   * `terms_reprompt_on_new_version` on (default OFF). With it on, the pre-R4 behaviour: the
+   * newest version must itself be accepted, and an older or imported acceptance does not
+   * count for it.
+   */
   async requirement(
     scope: TenantContext,
     customerId: string,
@@ -102,7 +116,19 @@ export class TermsAcceptanceService {
     if (!(await this.deps.flags.isEnabled(scope, TERMS_ENFORCEMENT_FLAG))) return null;
     const current = await this.deps.repository.current(scope);
     if (current === null) return null;
-    return (await this.deps.repository.hasAccepted(scope, customerId, current.id)) ? null : current;
+    if (await this.deps.repository.hasAccepted(scope, customerId, current.id)) return null;
+    return (await this.acceptedOnce(scope, customerId)) ? null : current;
+  }
+
+  /**
+   * Whether an acceptance OTHER than of the current version stands for it: only while the
+   * owner's re-prompt flag is off, and then any acceptance of this bot's rules, or the
+   * imported acceptance of the previous bot's, does.
+   */
+  private async acceptedOnce(scope: TenantContext, customerId: string): Promise<boolean> {
+    if (await this.deps.flags.isEnabled(scope, TERMS_REPROMPT_FLAG)) return false;
+    if ((await this.deps.repository.lastAcceptance(scope, customerId)) !== null) return true;
+    return (await this.deps.repository.legacyAcceptedAt(scope, customerId)) !== null;
   }
 
   /**
@@ -110,19 +136,26 @@ export class TermsAcceptanceService {
    * the overview, which has already charged `users.view` for this customer.
    */
   async standing(scope: TenantContext, customerId: string): Promise<CustomerTermsStanding> {
-    const [enforced, current, lastAccepted] = await Promise.all([
+    const [enforced, current, lastAccepted, acceptedInPreviousBotAt] = await Promise.all([
       this.deps.flags.isEnabled(scope, TERMS_ENFORCEMENT_FLAG),
       this.deps.repository.current(scope),
       this.deps.repository.lastAcceptance(scope, customerId),
+      this.deps.repository.legacyAcceptedAt(scope, customerId),
     ]);
     const acceptedCurrent =
       current !== null && (await this.deps.repository.hasAccepted(scope, customerId, current.id));
+    // The SAME decision the gate makes (`requirement`), never a second one.
+    const required =
+      enforced && current !== null && !acceptedCurrent
+        ? !(await this.acceptedOnce(scope, customerId))
+        : false;
     return {
       enforced,
       current,
       lastAccepted,
+      acceptedInPreviousBotAt,
       acceptedCurrent,
-      reacceptanceRequired: enforced && current !== null && !acceptedCurrent,
+      reacceptanceRequired: required,
     };
   }
 

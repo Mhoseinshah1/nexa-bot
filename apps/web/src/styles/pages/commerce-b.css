@@ -484,6 +484,22 @@
   max-width: 100%;
   font-size: var(--fs-sm);
 }
+/* R4 A6: the variable chips under the body, and the preview's sample recipient. */
+.bc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.bc-sample {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+}
+.bc-sample .form-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
 @media (max-width: 1200px) {
   .bc-compose {
     grid-template-columns: minmax(0, 1fr);

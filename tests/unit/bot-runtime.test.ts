@@ -763,6 +763,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
        * in the owner's words. It says the account is blocked, why, and to contact
        * support; it promises no unblock the runtime would perform.
        */
+      'bot.blocked.support_button',
       'bot.blocked_spam',
       'bot.blocked_with_reason',
       // Item 12 (C4): a tapped button this installation does not recognise.
@@ -922,6 +923,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.stars_invoice_order_fee',
       'bot.payment.stars_invoice_topup',
       'bot.payment.stars_invoice_topup_fee',
+      'bot.payment.switch_card_button',
       'bot.payment.transfer_instructions',
       'bot.payment.transfer_under_review',
       'bot.payment.unconfigured',
@@ -1150,6 +1152,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.username.stale',
       'bot.username.taken',
       'bot.username.unavailable',
+      'bot.wallet.copy_id_button',
       'bot.wallet.insufficient',
       'bot.wallet.negative_balance',
       // Owner spec §2.2: a button label under a wallet credit, opening the wallet screen.

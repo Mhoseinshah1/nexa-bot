@@ -331,6 +331,12 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'sales',
     control: { kind: 'integer', unit: 'web.unit_minutes' },
   },
+  'payments.card_switch_limit': {
+    title: 'web.setting_card_switch_limit',
+    description: 'web.setting_card_switch_limit_desc',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_times' },
+  },
   'provisioning.usage_sync_minutes': {
     title: 'web.setting_usage_sync_minutes',
     description: 'web.setting_usage_sync_minutes_desc',

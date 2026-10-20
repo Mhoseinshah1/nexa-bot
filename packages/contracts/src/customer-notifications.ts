@@ -348,6 +348,23 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    * after a counted preview and a confirmation of that count.
    */
   'INCIDENT_NOTICE',
+  /*
+   * R4 A5: an administrator moved a customer's money by hand. `wallet_entries.id` is the
+   * subject — the ADMIN_CREDIT or ADMIN_DEBIT entry itself, so each adjustment is one fact,
+   * told once. The amount, the balance right after the entry and (only when the operator
+   * ticked «نمایش دلیل به مشتری», stored on the entry) the note are read at send time from
+   * that entry and the ledger before it: a reader, not a payload (ADR 0030 §1). Enqueued by
+   * an outbox consumer of `WalletEntryRecorded`, which ignores every other ledger reason —
+   * an imported opening balance (`MIGRATION_OPENING_BALANCE`) is never announced.
+   */
+  'WALLET_ADMIN_CREDITED',
+  'WALLET_ADMIN_DEBITED',
+  /*
+   * R4 A5: the customer's block was lifted. The subject is the `CustomerUnblocked` outbox
+   * message — one per unblock, so a customer unblocked twice is told twice — and the
+   * sentence carries no value at all.
+   */
+  'ACCOUNT_UNBLOCKED',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -528,6 +545,14 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    * notice is older than `INCIDENT_NOTICE_STALE_AFTER_MS`, it is superseded unsent.
    */
   INCIDENT_NOTICE: true,
+  /*
+   * R4 A5: all three `false`. A ledger entry is append-only, so an adjustment cannot stop
+   * having happened. An unblock followed by a new block before the send is not superseded
+   * here: the dispatcher's contact read answers BLOCKED for that customer and nothing goes.
+   */
+  WALLET_ADMIN_CREDITED: false,
+  WALLET_ADMIN_DEBITED: false,
+  ACCOUNT_UNBLOCKED: false,
 };
 
 /**
@@ -607,6 +632,10 @@ export const CUSTOMER_NOTIFICATION_QUIET_HOURS: Readonly<
   DIRECT_MESSAGE_MEDIA: false,
   // Phase E3: an operator chose to tell customers now.
   INCIDENT_NOTICE: false,
+  // R4 A5: an administrator acted now; the customer is told now.
+  WALLET_ADMIN_CREDITED: false,
+  WALLET_ADMIN_DEBITED: false,
+  ACCOUNT_UNBLOCKED: false,
 };
 
 /**
@@ -685,6 +714,10 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   DIRECT_MESSAGE_MEDIA: 'bot.direct_message.media',
   // Phase E3: the notice's words, read at send time from the communication row.
   INCIDENT_NOTICE: 'bot.incident.notice',
+  // R4 A5: values read at send time from the ledger entry the notification names.
+  WALLET_ADMIN_CREDITED: 'bot.wallet.admin_credited',
+  WALLET_ADMIN_DEBITED: 'bot.wallet.admin_debited',
+  ACCOUNT_UNBLOCKED: 'bot.account.unblocked',
 };
 
 /**

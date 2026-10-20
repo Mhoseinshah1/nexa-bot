@@ -196,6 +196,9 @@ export const WEB_FA = {
   'web.setting_order_expiry_minutes_desc':
     'سفارشی که در این مدت پرداخت نشود منقضی می‌شود و مشتری باید دوباره سفارش دهد.',
   'web.setting_payment_window_minutes': 'مهلت پرداخت',
+  'web.setting_card_switch_limit': 'سقف «تغییر شماره کارت» در هر پرداخت',
+  'web.setting_card_switch_limit_desc':
+    'چند بار مشتری می‌تواند روی فاکتور کارت‌به‌کارت دکمهٔ «🔄 تغییر شماره کارت» را بزند تا کارت مقصد فعال بعدی را ببیند. صفر یعنی بدون محدودیت. مبلغ، کد پیگیری و خود پرداخت تغییر نمی‌کند؛ هر تغییر در تاریخچهٔ پرداخت ثبت می‌شود.',
   'web.setting_payment_window_minutes_desc':
     'مدتی که یک پرداخت در انتظار باز می‌ماند؛ پس از آن پرداخت و سفارشش منقضی می‌شوند.',
   'web.setting_usage_sync_minutes': 'فاصلهٔ به‌روزرسانی مصرف سرویس‌ها',
@@ -367,6 +370,20 @@ export const WEB_FA = {
   'web.feature_custom_service_summary':
     'مشتری موقعیت، حجم و مدت دلخواه خود را انتخاب می‌کند و قیمت بر اساس قیمت هر گیگابایت و هر روز محاسبه می‌شود.',
   'web.feature_central_fx_title': 'نرخ ارز مرکزی',
+  'web.feature_terms_reprompt_title': 'درخواست پذیرش دوباره پس از انتشار نسخهٔ تازه',
+  'web.feature_terms_reprompt_summary':
+    'خاموش (پیش‌فرض): مشتری‌ای که یک بار قوانین را پذیرفته — در این ربات یا در ربات قبلی — دیگر هرگز پرسیده نمی‌شود، حتی اگر متن قوانین ویرایش شود. روشن: با هر نسخهٔ تازه همه باید دوباره بپذیرند.',
+  'web.feature_terms_reprompt_confirm_question': 'پذیرش دوباره پس از هر نسخهٔ تازه روشن شود؟',
+  'web.feature_terms_reprompt_confirm_detail':
+    'از همین لحظه، تا وقتی الزام پذیرش روشن است، هر مشتری‌ای که نسخهٔ فعلی را نپذیرفته — حتی اگر نسخهٔ قبلی را پذیرفته باشد — تا پذیرش آن نمی‌تواند از ربات استفاده کند.',
+  'web.feature_wallet_admin_credit_notice_title': 'پیام افزایش موجودی دستی به مشتری',
+  'web.feature_wallet_admin_credit_notice_summary':
+    'وقتی ادمین کیف پول مشتری را دستی شارژ می‌کند، به مشتری مبلغ و موجودی جدید گفته می‌شود؛ دلیل فقط اگر «نمایش دلیل به مشتری» زده شده باشد. برای موجودی منتقل‌شده از ربات قبلی هرگز پیامی فرستاده نمی‌شود.',
+  'web.feature_wallet_admin_debit_notice_title': 'پیام کسر موجودی دستی به مشتری',
+  'web.feature_wallet_admin_debit_notice_summary':
+    'وقتی ادمین از کیف پول مشتری دستی کسر می‌کند، به مشتری مبلغ و موجودی جدید گفته می‌شود؛ دلیل فقط اگر «نمایش دلیل به مشتری» زده شده باشد.',
+  'web.feature_wallet_admin_notice_off_effect':
+    'تا وقتی خاموش است، تغییرهای دستی موجودی به مشتری گفته نمی‌شود و روشن کردن دوباره، پیام تغییرهای این مدت را نمی‌فرستد.',
   'web.feature_rich_messages_title': 'دکمه‌های داخل پیام',
   'web.feature_rich_messages_summary':
     'صفحه‌های دکمه‌دار ربات به‌صورت «پیام غنی» تلگرام فرستاده می‌شوند و دکمه‌ها داخل خود پیام، بالای ساعت، قرار می‌گیرند؛ فهرست پلن‌ها جدول می‌شود و هر تاریخ طوری فرستاده می‌شود که کاربر بتواند آن را به وقت محلی خودش هم ببیند. اگر تلگرام پیامی را نپذیرد، همان صفحه یک بار به روش قبلی فرستاده و یک خطا در تاپیک «خطاها» ثبت می‌شود. منوی اصلی و صفحه‌های عکس‌دار تغییر نمی‌کنند.',
@@ -2007,6 +2024,9 @@ export const WEB_FA = {
   'web.wallet_adjust_hint':
     'مبلغ به واحد خرد و فقط رقم. علت تراکنش از روی جهت آن تعیین می‌شود و قابل انتخاب نیست.',
   'web.wallet_adjust_amount': 'مبلغ (واحد خرد)',
+  'web.wallet_adjust_show_note': 'نمایش دلیل به مشتری',
+  'web.wallet_adjust_show_note_hint':
+    'مشتری پیام افزایش یا کسر موجودی را با مبلغ و موجودی جدید دریافت می‌کند. یادداشت بالا فقط وقتی به‌عنوان دلیل به او نشان داده می‌شود که این گزینه را بزنید.',
   'web.wallet_adjust_note': 'یادداشت',
   'web.wallet_credit': 'واریز به کیف پول',
   'web.wallet_debit': 'برداشت از کیف پول',
@@ -2678,7 +2698,7 @@ export const WEB_FA = {
   'web.terms_page_subtitle': 'متن قوانین ربات، نسخه‌های منتشرشده و پذیرش آن توسط مشتریان.',
   'web.terms_enforcement_label': 'الزام پذیرش قوانین',
   'web.terms_enforcement_hint':
-    'وقتی روشن است، مشتری‌ای که نسخهٔ فعلی را نپذیرفته پیش از هر کاری در ربات، متن قوانین و دکمهٔ پذیرش را می‌بیند. پشتیبانی و راهنما همیشه در دسترس می‌ماند.',
+    'وقتی روشن است، مشتری‌ای که هنوز قوانین را نپذیرفته پیش از هر کاری در ربات، متن قوانین و دکمهٔ پذیرش را می‌بیند. کسی که یک بار پذیرفته (در این ربات یا در ربات قبلی) با ویرایش قوانین دوباره پرسیده نمی‌شود، مگر قابلیت «درخواست پذیرش دوباره پس از انتشار نسخهٔ تازه» روشن باشد. پشتیبانی و راهنما همیشه در دسترس می‌ماند.',
   'web.terms_enforcement_no_permission':
     'روشن و خاموش کردن این الزام دسترسی ویرایش قابلیت‌ها را لازم دارد.',
   'web.terms_enforcement_nothing_published':
@@ -2686,7 +2706,7 @@ export const WEB_FA = {
   'web.terms_enforcement_saved': 'وضعیت الزام پذیرش ذخیره شد.',
   'web.terms_enforce_confirm_question': 'الزام پذیرش قوانین روشن شود؟',
   'web.terms_enforce_confirm_detail':
-    'از همین لحظه هر مشتری‌ای که نسخهٔ فعلی را نپذیرفته، تا پذیرش آن نمی‌تواند از ربات استفاده کند.',
+    'از همین لحظه هر مشتری‌ای که هنوز قوانین را نپذیرفته، تا پذیرش آن نمی‌تواند از ربات استفاده کند.',
   'web.terms_enforce_confirm': 'روشن کن',
   'web.terms_stat_current': 'نسخهٔ فعلی',
   'web.terms_stat_customers': 'همهٔ مشتریان',
@@ -2711,7 +2731,7 @@ export const WEB_FA = {
   'web.terms_publish_confirm_title': 'انتشار نسخهٔ تازهٔ قوانین',
   'web.terms_publish_confirm_question': 'این پیش‌نویس به‌عنوان نسخهٔ فعلی منتشر شود؟',
   'web.terms_publish_confirm_detail':
-    'انتشار هیچ مشتری‌ای را پذیرفته ثبت نمی‌کند: تا وقتی الزام روشن است، همهٔ مشتریان، حتی آن‌ها که نسخهٔ قبلی را پذیرفته‌اند، باید نسخهٔ تازه را بپذیرند. نسخهٔ منتشرشده دیگر قابل ویرایش نیست.',
+    'انتشار هیچ مشتری‌ای را پذیرفته ثبت نمی‌کند. مشتری‌ای که قبلاً قوانین را پذیرفته دوباره پرسیده نمی‌شود، مگر قابلیت «درخواست پذیرش دوباره پس از انتشار نسخهٔ تازه» روشن باشد. نسخهٔ منتشرشده دیگر قابل ویرایش نیست.',
   'web.terms_published': 'نسخهٔ تازهٔ قوانین منتشر شد.',
   'web.terms_history_title': 'تاریخچهٔ نسخه‌ها',
   'web.terms_history_hint': 'هر نسخهٔ منتشرشده، از تازه‌ترین؛ فقط خواندنی.',
@@ -2745,6 +2765,7 @@ export const WEB_FA = {
   'web.c360_terms_not_accepted': 'نسخهٔ فعلی را نپذیرفته (الزام خاموش است)',
   'web.c360_terms_current': 'نسخهٔ فعلی',
   'web.c360_terms_last': 'آخرین پذیرش',
+  'web.c360_terms_previous_bot': 'قوانین را در ربات قبلی پذیرفته بود',
   'web.c360_terms_never': 'هیچ نسخه‌ای را نپذیرفته',
   'web.c360_action_terms_accept': 'پذیرش قوانین',
   'web.support_faq_empty': 'هنوز پرسشی ثبت نشده است.',
@@ -2888,6 +2909,8 @@ export const WEB_FA = {
   'web.client_apps_video_close': 'بستن',
   'web.payment_resolution': 'نتیجهٔ بدون دریافت وجه',
   'web.payment_destination': 'مقصد واریز اعلام‌شده',
+  'web.payment_destination_last_hint':
+    'آخرین کارتی که به مشتری نشان داده شد؛ اگر مشتری «تغییر شماره کارت» زده باشد، هر تغییر در تاریخچهٔ پرداخت آمده است.',
   'web.payment_destination_label': 'عنوان حساب',
   'web.payment_destination_bank': 'بانک',
   'web.payment_destination_holder': 'به نام',
@@ -3036,6 +3059,8 @@ export const WEB_FA = {
   'web.payment_timeline_by_customer': 'مشتری',
   'web.payment_timeline_created': 'پرداخت ایجاد شد',
   'web.payment_timeline_signalled': 'مشتری اعلام کرد واریز کرده است',
+  'web.payment_timeline_destination_switched': 'مشتری کارت مقصد را تغییر داد',
+  'web.payment_timeline_switch_sequence': 'تغییر شمارهٔ {n}',
   'web.payment_timeline_receipt': 'رسید ارسال شد',
   'web.payment_timeline_confirmed': 'پرداخت تأیید شد',
   /*
@@ -4010,6 +4035,7 @@ export const WEB_FA = {
 
   // R1: the free trial per panel — its tab on the panel page and the Trials page overview.
   'web.panel_tab_trial': 'سرویس تست',
+  'web.service_missing_on_panel': 'روی پنل نیست',
   'web.service_trial_badge': 'سرویس تست',
   'web.service_original_product': 'محصول اصلی',
   'web.service_original_price': 'مبلغ اصلی',
@@ -4352,6 +4378,9 @@ export const WEB_FA = {
   'web.ib_button_payment_gateway_card_check': 'بررسی وضعیت (کارت‌به‌کارت درگاه)',
   'web.ib_button_payment_gateway_receipt': 'ارسال فیش واریزی (درگاه)',
   'web.ib_button_payment_gateway_change_card': 'تعویض کارت (درگاه)',
+  'web.ib_button_payment_switch_card': 'تغییر شماره کارت (کارت‌به‌کارت)',
+  'web.ib_button_account_copy_id': 'کپی شناسهٔ کاربری',
+  'web.ib_button_blocked_support': 'ارتباط با پشتیبانی (پیام مسدودی)',
   // Batch 01 item 3: green/red is derived from the service; this style applies only otherwise.
   'web.ib_button_services_item':
     'سرویس‌ها در فهرست «سرویس‌های من» (سبز و قرمز خودکار از وضعیت سرویس است)',
@@ -6923,6 +6952,31 @@ export const WEB_FA = {
   'web.bc_ph_first_name': 'نام کوچک کاربر',
   'web.bc_ph_username': 'نام کاربری تلگرام',
   'web.bc_ph_wallet': 'موجودی کیف پول کاربر',
+  'web.bc_ph_telegram_id': 'شناسهٔ عددی تلگرام',
+  'web.bc_ph_phone': 'شمارهٔ تلفن (اگر ثبت شده)',
+  'web.bc_ph_services_total': 'تعداد کل سرویس‌ها',
+  'web.bc_ph_services_active': 'تعداد سرویس‌های فعال',
+  'web.bc_ph_today': 'تاریخ امروز (شمسی)',
+  'web.bc_placeholders_safe_hint':
+    'روی هر متغیر بزنید تا در جای مکان‌نما درج شود. همهٔ متغیرها فقط اطلاعات خود گیرنده‌اند؛ هیچ لینک، توکن یا اطلاعات کاربر دیگری در دسترس نیست.',
+  'web.bc_sample_title': 'گیرندهٔ نمونه (فقط برای پیش‌نمایش)',
+  'web.bc_sample_hint':
+    'این مقدارها فقط پیش‌نمایش بالا را می‌سازند و ذخیره یا ارسال نمی‌شوند. خانهٔ خالی یعنی گیرنده آن اطلاعات را ندارد؛ موجودی کیف پول در پیش‌نمایش نشان داده نمی‌شود.',
+  'web.bc_buttons_hint':
+    'هر دکمه یا لینک است یا یکی از کارهای خود ربات؛ دکمهٔ ربات همان کاری را می‌کند که دکمهٔ هم‌نام منوی اصلی. حداکثر ۱۰ دکمه، هر کدام در یک ردیف.',
+  'web.bc_button_kind': 'نوع دکمه',
+  'web.bc_button_kind_url': 'لینک',
+  'web.bc_button_kind_action': 'دکمهٔ داخل ربات',
+  'web.bc_button_action': 'کار دکمه',
+  'web.bc_action_start': 'شروع',
+  'web.bc_action_catalog': 'خرید سرویس',
+  'web.bc_action_trial': 'اکانت تست',
+  'web.bc_action_wallet_topup': 'شارژ کیف پول',
+  'web.bc_action_referral': 'زیرمجموعه‌گیری',
+  'web.bc_action_services': 'سرویس‌های من',
+  'web.bc_action_renew': 'تمدید',
+  'web.bc_action_support': 'پشتیبانی',
+  'web.bc_action_tutorial': 'آموزش',
   'web.bc_buttons': 'دکمه‌های لینک (اختیاری)',
   'web.bc_button_label': 'متن دکمه',
   'web.bc_button_url': 'لینک (https یا tg)',
@@ -10081,6 +10135,9 @@ export const WEB_FA = {
   'web.pay_notice_direct_message': 'پیام مستقیم',
   'web.pay_notice_direct_message_media': 'پیام مستقیم با رسانه',
   'web.pay_notice_incident_notice': 'اطلاعیهٔ رخداد',
+  'web.pay_notice_wallet_admin_credited': 'افزایش دستی موجودی',
+  'web.pay_notice_wallet_admin_debited': 'کسر دستی موجودی',
+  'web.pay_notice_account_unblocked': 'رفع مسدودی حساب',
   'web.pay_provider_pending': 'در انتظار',
   'web.pay_provider_processing': 'در حال پردازش',
   'web.pay_provider_completed': 'تکمیل‌شده',
