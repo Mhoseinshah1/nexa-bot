@@ -234,7 +234,7 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
   // R5A item 4. Drawn on each gateway's page (`SETTINGS_MANAGED_ELSEWHERE`); the entries exist
   // because this map is total.
   [LATE_CREDIT_SETTING_KEYS.TONPAYS]: {
-    title: 'web.late_credit_switch',
+    title: 'web.late_credit_switch_tonpays',
     description: 'web.late_credit_switch_hint',
     group: 'sales',
     control: {
@@ -246,7 +246,7 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     },
   },
   [LATE_CREDIT_SETTING_KEYS.TONPAYS_TELEGRAM]: {
-    title: 'web.late_credit_switch',
+    title: 'web.late_credit_switch_tonpays_telegram',
     description: 'web.late_credit_switch_hint',
     group: 'sales',
     control: {
