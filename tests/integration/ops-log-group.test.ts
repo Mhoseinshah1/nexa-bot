@@ -472,6 +472,8 @@ describe('the operations log group (WP-A4)', () => {
           '🤖 ربات و پیام‌رسانی',
           '🛡 امنیت و دسترسی',
           '💾 بکاپ‌ها',
+          '👥 کاربران',
+          '📊 گزارش‌ها',
         ].sort(),
       );
       const view = await service.view(tenantA, owner);
@@ -881,13 +883,17 @@ describe('the operations log group (WP-A4)', () => {
       });
       await dispatcher.tick();
       const text = transport.messages[0]?.text ?? '';
-      expect(text).toContain('payments.gateway_create_unknown');
-      expect(text).toContain('paymentId: 01900000-0000-7000-8000-00000000fa11');
-      expect(text).toContain('orderId: 01900000-0000-7000-8000-00000000fa12');
+      // R4 PR-D: titled in Persian from the code; the code itself is the short technical line.
+      expect(text).toContain('🚨 خطا — نتیجهٔ ساخت پرداخت در درگاه نامعلوم است');
+      expect(text).toContain('🔧 payments.gateway_create_unknown');
       expect(text).toContain('from: AWAITING_PAYMENT');
       expect(text).toContain('to: PAID');
-      expect(text).toContain(String(SEED_IDS.tenantA));
-      expect(text).toContain('corr-1234');
+      // No id line of any kind: not the payment's or the order's, not the tenant's, and not
+      // the correlation id.
+      expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
+      expect(text).not.toContain(String(SEED_IDS.tenantA));
+      expect(text).not.toContain('corr-1234');
+      expect(text).not.toMatch(/paymentId|orderId|tenantId|correlation/i);
       for (const secret of [
         'AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw',
         'sk_live_supersecretvalue',

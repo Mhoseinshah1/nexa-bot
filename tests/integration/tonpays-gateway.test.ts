@@ -2685,21 +2685,28 @@ describe('TonPays, through the one settlement path', () => {
       // so a new kind would break its whole notifications page after a rollback.
       expect(log!.kind).toBe('OPERATIONAL_EVENT');
       expect(log!.destination).toMatchObject({ chatId: LOG_CHAT, topicId: PAYMENTS_TOPIC });
+      // R4 PR-D (L2): the method once and in Persian, no id of any row in the text — the
+      // payment and the order are reached by the buttons, which carry them, not by a line.
       expect(log!.payload).toMatchObject({
-        method: 'GATEWAY',
-        route: 'TONPAYS',
+        method: 'تون‌پی (وب‌سایت)',
         telegramId: MARYAM,
         displayName: 'مریم',
-        paymentId,
-        orderId,
         principal: { amountMinor: '200000', currency: 'IRT' },
         fee: { amountMinor: '10000', currency: 'IRT' },
         payable: { amountMinor: '210000', currency: 'IRT' },
         providerInvoiceId: invoice.provider_invoice_id,
         // The fake reports its documented final amount, 37 above the request: diagnostic.
-        providerFinalAmount: '210037 IRT',
-        evidence: 'GATEWAY_INQUIRY',
+        providerFinalAmount: '۲۱۰۰۳۷ تومان',
+        evidence: 'استعلام درگاه',
       });
+      expect(log!.payload).not.toHaveProperty('paymentId');
+      expect(log!.payload).not.toHaveProperty('orderId');
+      expect(log!.payload).not.toHaveProperty('route');
+      expect(log!.payload['__buttons']).toEqual([
+        { kind: 'USER', ref: expect.any(String) },
+        { kind: 'PAYMENT', ref: paymentId },
+        { kind: 'ORDER', ref: orderId },
+      ]);
       // Nothing that is a key, a link or a raw payload.
       const serialised = JSON.stringify(written);
       expect(serialised).not.toContain(API_KEY);
@@ -2767,9 +2774,10 @@ describe('TonPays, through the one settlement path', () => {
       const failure = (await logs()).find(
         (log) => log.template_key === 'ops.financial.payment_failed',
       );
-      expect(failure!.payload).toMatchObject({
-        cause: 'GATEWAY_FAILED',
-        paymentId: failed.paymentId,
+      expect(failure!.payload).toMatchObject({ cause: 'درگاه پرداخت را ناموفق اعلام کرد' });
+      expect(failure!.payload['__buttons']).toContainEqual({
+        kind: 'PAYMENT',
+        ref: failed.paymentId,
       });
       expect((await paymentOf(late.paymentId)).state).not.toBe('CONFIRMED');
     });
@@ -2861,7 +2869,7 @@ describe('TonPays, through the one settlement path', () => {
       ]);
       const failed = written.find((log) => log.template_key === 'ops.financial.refund_failed');
       expect(failed!.payload).toMatchObject({
-        cause: 'SUPERSEDED',
+        cause: 'بازگشت وجه با درخواست دیگری جایگزین شد',
         amount: { amountMinor: '1000' },
       });
       const completed = written.find(

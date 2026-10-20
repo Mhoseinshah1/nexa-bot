@@ -8,6 +8,7 @@ import {
   EMPTY_PRODUCT_DISPLAY,
   isNexaError,
   money,
+  paymentTrackingCode,
   TELEGRAM_SECRET_TOKEN_HEADER,
   type ActorContext,
   type BotInstanceId,
@@ -817,15 +818,21 @@ describe('Telegram Stars (Package A)', () => {
       );
       expect(logs).toHaveLength(1);
       expect(logs[0]!.template_key).toBe('ops.financial.topup_credited');
+      // R4 PR-D (L2): the method once, in Persian; the payment is reached by its button and
+      // its short public code, never by an id line.
       expect(logs[0]!.payload).toMatchObject({
-        method: 'GATEWAY',
-        route: 'TELEGRAM_STARS',
-        paymentId: attempt.payment.id,
+        method: 'استارز تلگرام',
+        reference: paymentTrackingCode(attempt.payment),
         principal: { amountMinor: '100000', currency: 'IRT' },
         fee: { amountMinor: '5000', currency: 'IRT' },
         payable: { amountMinor: '105000', currency: 'IRT' },
         providerInvoiceId: 'charge:charge-log',
-        providerFinalAmount: '81 XTR',
+      });
+      expect(logs[0]!.payload).not.toHaveProperty('paymentId');
+      expect(logs[0]!.payload).not.toHaveProperty('route');
+      expect(logs[0]!.payload['__buttons']).toContainEqual({
+        kind: 'PAYMENT',
+        ref: attempt.payment.id,
       });
       const serialised = JSON.stringify(logs);
       expect(serialised).not.toContain('seed-token');

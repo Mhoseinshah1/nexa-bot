@@ -1497,20 +1497,35 @@ describe('WP19 — a customer asks for their money back', () => {
            WHERE kind = 'OPERATIONAL_EVENT' AND template_key = 'ops.financial.service_refund_request'
            ORDER BY created_at` as never,
     )) as unknown as { rows: { payload: Record<string, unknown> }[] };
-    const byRequest = new Map(result.rows.map((row) => [row.payload['requestId'], row.payload]));
-    expect(byRequest.get(approvedRequest.request.id)).toMatchObject({
-      outcome: 'COMPLETED',
-      serviceId: approvedService.id,
+    // R4 PR-D (L6): the message carries the service's public code, never a request id.
+    const codeOf = async (serviceId: string): Promise<string> =>
+      (
+        (await ctx.container.database.db.execute(
+          sql`SELECT code FROM services WHERE id = ${serviceId}` as never,
+        )) as unknown as { rows: { code: string }[] }
+      ).rows[0]!.code;
+    const byService = new Map(result.rows.map((row) => [row.payload['serviceCode'], row.payload]));
+    const approvedLog = byService.get(await codeOf(approvedService.id));
+    expect(approvedLog).toMatchObject({
+      outcome: 'تأیید شد؛ سرویس حذف و مبلغ به کیف پول برگشت',
       telegramId: CUSTOMER_TG,
-      adminId: ownerId,
+      adminName: expect.any(String),
     });
-    expect(byRequest.get(approvedRequest.request.id)?.['amount']).toBeDefined();
-    const rejectedLog = byRequest.get(rejectedRequest.request.id);
-    expect(rejectedLog).toMatchObject({ outcome: 'REJECTED', adminId: ownerId });
+    expect(approvedLog?.['amount']).toBeDefined();
+    const rejectedLog = byService.get(await codeOf(rejectedService.id));
+    expect(rejectedLog).toMatchObject({ adminName: expect.any(String) });
+    expect(rejectedLog?.['outcome']).not.toEqual(approvedLog?.['outcome']);
     expect(
       rejectedLog?.['amount'],
       'a rejection moved nothing, so it states no amount',
     ).toBeUndefined();
+    for (const row of result.rows) {
+      // The buttons carry the record ids; the text values carry none.
+      const { __buttons: _buttons, ...text } = row.payload;
+      expect(JSON.stringify(text)).not.toMatch(
+        /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/,
+      );
+    }
   });
 
   // ===========================================================================

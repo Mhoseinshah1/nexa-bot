@@ -12,6 +12,7 @@ import {
   formatPersianChange,
   formatPersianInteger,
   formatPersianPercent,
+  money,
   opsLogButtonPath,
   opsLogTypeEnabled,
   opsLogTypeOfTemplate,
@@ -153,7 +154,7 @@ describe('the templates carry no id line and no English enum (global rules 1 and
     for (const key of Object.keys(OPS_LOG_BODIES_FA)) {
       const definition = templateDefinition(key as never);
       const declared = new Set(definition.placeholders.map((placeholder) => placeholder.token));
-      for (const token of CATALOGUE_FA[key as never].matchAll(/\{([A-Za-z_]+)\}/g)) {
+      for (const token of (CATALOGUE_FA[key as never] as string).matchAll(/\{([A-Za-z_]+)\}/g)) {
         expect(declared.has(token[1] as string), `${key} uses {${String(token[1])}}`).toBe(true);
       }
     }
@@ -191,9 +192,9 @@ describe('Persian digits', () => {
       '{amount} | {balanceBefore} | {at} | {reason} | {telegramId}',
       {
         heading: 'h',
-        amount: { amountMinor: 1_000n, currency: 'IRT' },
-        balanceBefore: { amountMinor: 2_659_767n, currency: 'IRT' },
-        balanceAfter: { amountMinor: 2_660_767n, currency: 'IRT' },
+        amount: money(1_000n, 'IRT'),
+        balanceBefore: money(2_659_767n, 'IRT'),
+        balanceAfter: money(2_660_767n, 'IRT'),
         reason: 'ref 12345',
         telegramId: '100200300',
         at: new Date('2026-10-19T08:30:00Z'),

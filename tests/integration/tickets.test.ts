@@ -1070,7 +1070,7 @@ describe('WP-A7 — support tickets', () => {
   // Support notifications and attachments for support
   // ===========================================================================
 
-  it('tells support about a new ticket and a customer reply, naming the ticket and never the words', async () => {
+  it('tells support about a new ticket and a customer reply, naming the ticket and showing only the first two lines (L26)', async () => {
     await createAdmin(ctx.container, tenantA, {
       username: 'support-bound',
       roleKeys: ['support'],
@@ -1091,7 +1091,11 @@ describe('WP-A7 — support tickets', () => {
       ['ops.support.ticket_opened', ADMIN_TG],
       ['ops.support.customer_replied', ADMIN_TG],
     ]);
-    expect(JSON.stringify(queued)).not.toContain('متن خصوصی');
+    // Round 4 PR-D (L26): the owner's decision is the customer's first two lines in the
+    // message; the rest of a message is read in the Web Admin.
+    const sent = JSON.stringify(queued);
+    expect(sent).toContain('متن خصوصی مشتری');
+    expect(sent).toContain('متن خصوصی دوم');
   });
 
   it('serves an attachment’s bytes to support through the API, never its file id', async () => {

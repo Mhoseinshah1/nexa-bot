@@ -11,7 +11,7 @@ import {
   type TenantContext,
   type UserId,
 } from '@nexa/contracts';
-import { CATALOGUE_FA, renderTemplateBody } from '@nexa/i18n';
+import { CATALOGUE_FA, DEFAULT_TEMPLATE_PRESENTATION, renderTemplateBody } from '@nexa/i18n';
 import { DrizzleCustomerRepository } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer.repository';
 import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
 import { DrizzleGatewayInvoiceRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-invoice.repository';
@@ -330,6 +330,8 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
           templateDefinition('ops.notification.payment_link_failed'),
           CATALOGUE_FA['ops.notification.payment_link_failed'],
           deserialiseValues({ templateKey: row.template_key, payload: row.payload }),
+          'fa',
+          DEFAULT_TEMPLATE_PRESENTATION,
         ),
     );
   }
@@ -356,7 +358,7 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
       code: 'payments.gateway_link_create_failed',
       kind: 'NO_LINK',
       status: null,
-      line: 'علت: درگاه پیش‌فاکتور را ساخت اما لینک پرداخت برنگرداند',
+      line: 'درگاه پیش‌فاکتور را ساخت اما لینک پرداخت برنگرداند',
       paymentState: 'PENDING',
     },
     {
@@ -365,7 +367,7 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
       code: 'payments.gateway_link_create_failed',
       kind: 'MALFORMED_LINK',
       status: null,
-      line: 'علت: لینک پرداختی که درگاه برگرداند نامعتبر یا ناامن بود',
+      line: 'لینک پرداختی که درگاه برگرداند نامعتبر یا ناامن بود',
       paymentState: 'PENDING',
     },
     {
@@ -374,7 +376,7 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
       code: 'payments.gateway_link_create_failed',
       kind: 'BAD_REQUEST',
       status: 400,
-      line: 'علت: درگاه درخواست را نپذیرفت',
+      line: 'درگاه درخواست را رد کرد (اطلاعات ارسالی نامعتبر)',
       paymentState: 'FAILED',
     },
     {
@@ -383,7 +385,7 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
       code: 'payments.gateway_link_create_failed',
       kind: 'UNAUTHORIZED',
       status: 401,
-      line: 'علت: درگاه احراز هویت را رد کرد',
+      line: 'درگاه احراز هویت را رد کرد؛ کلید API درگاه را بررسی کنید',
       paymentState: 'FAILED',
       misconfigured: true,
     },
@@ -393,7 +395,7 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
       code: 'payments.gateway_link_create_failed',
       kind: 'FORBIDDEN',
       status: 403,
-      line: 'علت: درگاه دسترسی را رد کرد',
+      line: 'درگاه دسترسی را رد کرد',
       paymentState: 'FAILED',
       misconfigured: true,
     },
@@ -403,7 +405,7 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
       code: 'payments.gateway_create_unknown',
       kind: 'PROVIDER_ERROR',
       status: 502,
-      line: 'علت: پاسخ نامعتبر درگاه؛ خطای سمت درگاه',
+      line: 'خطای سمت درگاه',
       paymentState: 'PENDING',
     },
     {
@@ -412,7 +414,7 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
       code: 'payments.gateway_create_unknown',
       kind: 'TIMEOUT',
       status: null,
-      line: 'علت: پاسخی از درگاه در مهلت مقرر نرسید',
+      line: 'پاسخی از درگاه در مهلت مقرر نرسید',
       paymentState: 'PENDING',
     },
     {
@@ -421,7 +423,7 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
       code: 'payments.gateway_create_unknown',
       kind: 'UNREACHABLE',
       status: null,
-      line: 'علت: اتصال به درگاه برقرار نشد',
+      line: 'اتصال به درگاه برقرار نشد',
       paymentState: 'PENDING',
     },
     {
@@ -430,7 +432,7 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
       code: 'payments.gateway_create_unknown',
       kind: 'UNKNOWN',
       status: 409,
-      line: 'علت: نتیجهٔ درخواست نامشخص است',
+      line: 'نتیجهٔ درخواست نامشخص است',
       paymentState: 'PENDING',
     },
   ];
@@ -467,16 +469,23 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
 
       const [text, ...more] = await messages();
       expect(more).toEqual([]);
-      expect(text).toContain('🚨 خطای ساخت لینک پرداخت');
-      expect(text).toContain('درگاه: TONPAYS');
-      expect(text).toContain(`کاربر: <code>${MARYAM}</code>`);
+      // R4 PR-D (L22): its own message — the customer, the Persian cause, one short
+      // technical line, and what happened to the customer. No id line of any kind.
+      expect(text).toContain('🚨 خطای درگاه — لینک پرداخت ساخته نشد');
+      expect(text).toContain('💠 درگاه: تون‌پی (وب‌سایت)');
+      expect(text).toContain('👤 آزمون');
+      expect(text).toContain(MARYAM);
+      expect(text).toContain(`🔖 کد پیگیری: ${paymentTrackingCode(attempt.payment!)}`);
+      expect(text).toContain(`❗ علت: ${c.line}`);
+      expect(text).not.toContain(rows[0]!.id);
+      expect(text).not.toContain(attempt.payment.id);
+      expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
+      if (c.status !== null) expect(text).toContain(`🔧 کد: HTTP ${String(c.status)}`);
       expect(text).toContain(
-        `کد پیگیری پرداخت: <code>${paymentTrackingCode(attempt.payment!)}</code>`,
+        c.code.endsWith('unknown')
+          ? 'پولی کم نشد؛ نتیجهٔ ساخت فاکتور نامشخص است'
+          : 'پولی کم نشد؛ لینک پرداخت دریافت نکرد',
       );
-      expect(text).toContain(c.line);
-      expect(text).toContain(`شناسه رخداد: <code>${rows[0]!.id}</code>`);
-      if (c.status !== null) expect(text).toContain(`وضعیت HTTP درگاه: ${String(c.status)}`);
-      expect(text).toContain(c.code.endsWith('unknown') ? 'وضعیت: نیازمند بررسی' : 'وضعیت: نهایی');
       expectNoSecret(text!);
 
       const payment = await ctx.container.database.db.execute(
@@ -499,7 +508,8 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
       rows.map((row) => [row.code, row.context['failureKind'], row.context['errorCode']]),
     ).toEqual([['payments.gateway_create_unknown', 'UNKNOWN', 'nexa.send_interrupted']]);
     const [text] = await messages();
-    expect(text).toContain('علت: نتیجهٔ درخواست نامشخص است (<code>nexa.send_interrupted</code>)');
+    expect(text).toContain('❗ علت: نتیجهٔ درخواست نامشخص است');
+    expect(text).toContain('🔧 کد: nexa.send_interrupted');
   });
 
   it('a route whose key is missing is reported as a configuration failure', async () => {
@@ -513,7 +523,7 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
       ['CONFIGURATION', 'nexa.credential_missing'],
     ]);
     const [text] = await messages();
-    expect(text).toContain('علت: تنظیمات درگاه کامل نیست یا درگاه آن را نپذیرفت');
+    expect(text).toContain('❗ علت: تنظیمات درگاه کامل نیست یا درگاه آن را نپذیرفت');
   });
 
   it('429: reported once, when the last allowed attempt is refused — never while it is retried', async () => {
@@ -533,8 +543,9 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
       rows.map((row) => [row.code, row.context['failureKind'], row.context['httpStatus']]),
     ).toEqual([['payments.gateway_link_create_failed', 'RATE_LIMITED', 429]]);
     const [text] = await messages();
-    expect(text).toContain('علت: محدودیت تعداد درخواست درگاه');
-    expect(text).toContain('تکرار: ممکن است تلاش بعدی بدون تغییر موفق شود');
+    expect(text).toContain('❗ علت: محدودیت تعداد درخواست درگاه');
+    expect(text).toContain('🔧 کد: HTTP 429');
+    expect(text).toContain('🔁 تلاش دوباره: ممکن است تلاش بعدی بدون تغییر موفق شود');
   });
 
   it('aggregates a storm: two customers’ identical failures are one row, one message, counted twice', async () => {
@@ -549,12 +560,12 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
     );
     expect(rows).toHaveLength(1);
     expect(rows[0]!.occurrence_count).toBe(2);
+    // R4 PR-D (L22): every error is its own message — two customers, two messages — and
+    // none carries a counter that would stay at 1. The optional storm roll-up (default OFF)
+    // is the only thing that merges them; the row's live count is in the notification centre.
     const sent = await messages();
-    expect(sent).toHaveLength(1);
-    // Codex P2 #251: the message is the FIRST occurrence and carries no counter that would
-    // stay at 1; it points at the notification centre, where the live count is 2.
-    expect(sent[0]).toContain('این پیام نخستین رخداد است');
-    expect(sent[0]).not.toMatch(/تعداد رخداد/);
+    expect(sent).toHaveLength(2);
+    for (const message of sent) expect(message).not.toMatch(/تعداد رخداد|نخستین رخداد/);
     const inbox = await ctx.container.notificationCenter.list(tenantA, owner, {
       limit: 20,
       unreadOnly: false,
