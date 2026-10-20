@@ -834,7 +834,14 @@ What to look for:
 - **reminders**: after the first reminder sweep, customer notifications since unfreeze look
   like an ordinary day's volume, not a burst — adopted services had their passed thresholds
   seeded (Item 8) and carry a reminder baseline (Round 4 PR-H), so a threshold moved after the
-  import does not announce a period the previous bot handled either. Automatic reminders are
+  import does not announce a period the previous bot handled either. Usage notices are covered
+  at the first measurement too (Round 5A): the first `SYNC_USAGE` after an import records the
+  panel's figure as the service's baseline and announces nothing — a service already used,
+  near its limit or used up is silent — while a crossing any later sync observes is told as for
+  a service Nexa sold. Notices an earlier release had already queued for imported services are
+  moved to `SUPERSEDED` by the reminder sweep (one audit row per batch,
+  `service_reminder.imported_usage_notices_superseded`), and the dispatcher refuses them at
+  send time. Automatic reminders are
   capped per minute (`reminders.max_per_minute`, 300 by default) and more fresh reminders in an
   hour than `reminders.burst_alarm_per_hour` (1000) opens `notification.reminder_burst` in the
   ops group's ERRORS topic. The alarm counts reminders as they are raised, whatever the

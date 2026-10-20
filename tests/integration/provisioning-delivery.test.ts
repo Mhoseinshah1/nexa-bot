@@ -1461,6 +1461,154 @@ describe('a provisioned service announces itself', () => {
     expect((await services.findByOrderId(tenantA, orderId))?.state).toBe('ACTIVE');
   });
 
+  it('does not spend attempts on a paid create while no provisioner is running', async () => {
+    /*
+     * R5A item 2. An attempt is a call to the panel, and the claim used to count it
+     * before one was made. A provisioner stopped (or killed) between the claim and the
+     * stamp left the row `IN_FLIGHT` with an attempt spent; the lease sweep returned it
+     * to `PLANNED` and kept the count. Five restarts later the order sat at the ceiling,
+     * `claimDue` refused it, and the paid customer was retired without any panel having
+     * been asked for anything.
+     *
+     * Eight is more than `OPERATION_MAX_ATTEMPTS`, so the whole retry window is passed
+     * without a single call.
+     */
+    const orderId = await paidOrder('provisioner-down');
+    const serviceId = (await services.findByOrderId(tenantA, orderId))?.id ?? '';
+
+    for (let restart = 0; restart < 8; restart += 1) {
+      const claimed = await ctx.container.uow.run(tenantA, async (tx) =>
+        operations.claimDue(
+          tenantA,
+          'worker-that-was-stopped',
+          ctx.container.clock.now(),
+          new Date(Date.now() + 60_000),
+          tx,
+        ),
+      );
+      expect(claimed, `restart ${String(restart)}: the create is still claimable`).not.toBeNull();
+      // Stopped before the stamp: the lease runs out with no call ever started.
+      await ctx.container.database.db.execute(
+        sql`UPDATE provisioning_operations SET lease_until = now() - interval '1 hour'`,
+      );
+      await ctx.container.uow.run(tenantA, async (tx) =>
+        operations.releaseExpiredLeases(tenantA, new Date(), 20, tx),
+      );
+    }
+    expect(addClientCalls(), 'and the panel was never asked for anything').toBe(0);
+    const waiting = await operations.findOpen(tenantA, serviceId, 'PROVISION');
+    expect(waiting?.state).toBe('PLANNED');
+    expect(waiting?.attempts, 'no call was made, so no attempt was spent').toBe(0);
+
+    // The role comes back, long after any backoff or lease: it provisions the order.
+    await ctx.container.provisionerLoop.tick();
+    expect((await services.findByOrderId(tenantA, orderId))?.state).toBe('ACTIVE');
+    expect(addClientCalls(), 'exactly one account').toBe(1);
+    const order = (await ctx.container.database.db.execute(
+      sql`SELECT state, (SELECT count(*)::int FROM refunds WHERE order_id = ${orderId}) AS refunds
+            FROM orders WHERE id = ${orderId}` as never,
+    )) as unknown as { rows: { state: string; refunds: number }[] };
+    expect(order.rows[0], 'delivered, not exhausted and not refunded').toEqual({
+      state: 'PAID',
+      refunds: 0,
+    });
+    expect(await stalledReason(serviceId), 'and no condition was ever opened').toBeNull();
+  });
+
+  it('refunds a paid create once and tells the customer once when the attempts are really spent', async () => {
+    /*
+     * R5A item 2, the other half: a panel that really fails every call. Five real
+     * attempts, then the refund, the customer's message and the group's error report —
+     * each exactly once, and none again however often the loop runs afterwards.
+     */
+    await ctx.container.featureFlags.set(tenantA, owner, {
+      key: 'ops_notifications',
+      enabled: true,
+      expectedVersion: null,
+      idempotencyKey: 'ops-on-exhausted',
+      confirmKey: 'ops_notifications',
+      reason: 'exhausted provisioning test',
+    });
+    const orderId = await paidOrder('really-exhausted');
+    const serviceId = (await services.findByOrderId(tenantA, orderId))?.id ?? '';
+    panel.setBehaviour('login-429');
+
+    await ctx.container.provisionerLoop.tick();
+    for (let round = 0; round < 8; round += 1) {
+      await makeOperationDue();
+      await ctx.container.provisionerLoop.tick();
+    }
+    await ctx.container.relay.processBatch();
+
+    const create = (await operations.listForService(tenantA, serviceId, 10)).find(
+      (operation) => operation.type === 'PROVISION',
+    );
+    expect(create?.state).toBe('FAILED');
+    expect(create?.attempts, 'five real calls, no more').toBe(5);
+    expect(addClientCalls(), 'no account was created').toBe(0);
+
+    const money = (await ctx.container.database.db.execute(
+      sql`SELECT o.state,
+                 (SELECT count(*)::int FROM refunds WHERE order_id = o.id) AS refunds,
+                 (SELECT count(*)::int FROM customer_notifications
+                   WHERE kind = 'ORDER_REFUNDED_TO_WALLET') AS customer_messages
+            FROM orders o WHERE o.id = ${orderId}` as never,
+    )) as unknown as {
+      rows: { state: string; refunds: number; customer_messages: number }[];
+    };
+    expect(money.rows[0], 'refunded once and the customer told once').toEqual({
+      state: 'REFUNDED',
+      refunds: 1,
+      customer_messages: 1,
+    });
+
+    // The group hears it ONCE, as the L23 report — never also as the generic English line.
+    const groupRows = (await ctx.container.database.db.execute(
+      sql`SELECT template_key FROM notifications
+           WHERE template_key IN ('ops.log.error_provision', 'ops.notification.operational_event')
+             AND (payload::text LIKE '%provisioning.stalled%' OR template_key = 'ops.log.error_provision')` as never,
+    )) as unknown as { rows: { template_key: string }[] };
+    expect(groupRows.rows.map((row) => row.template_key)).toEqual(['ops.log.error_provision']);
+
+    // And nothing moves on a later sweep.
+    await ctx.container.provisionerLoop.tick();
+    await ctx.container.relay.processBatch();
+    const again = (await ctx.container.database.db.execute(
+      sql`SELECT (SELECT count(*)::int FROM refunds WHERE order_id = ${orderId}) AS refunds,
+                 (SELECT count(*)::int FROM customer_notifications
+                   WHERE kind = 'ORDER_REFUNDED_TO_WALLET') AS customer_messages,
+                 (SELECT count(*)::int FROM notifications
+                   WHERE template_key = 'ops.log.error_provision') AS reports` as never,
+    )) as unknown as { rows: { refunds: number; customer_messages: number; reports: number }[] };
+    expect(again.rows[0]).toEqual({ refunds: 1, customer_messages: 1, reports: 1 });
+  });
+
+  it('refunds a paid create that sits PLANNED at the ceiling, instead of only reporting it', async () => {
+    /*
+     * R5A item 2: the retirement sweep used to open the condition and stop, leaving the
+     * paid order `PENDING_PROVISION` with its money taken and neither terminal outcome.
+     */
+    const orderId = await paidOrder('retired-at-ceiling');
+    const serviceId = (await services.findByOrderId(tenantA, orderId))?.id ?? '';
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET attempts = 5 WHERE type = 'PROVISION'`,
+    );
+
+    await ctx.container.provisionerLoop.tick();
+    await ctx.container.provisionerLoop.tick();
+
+    expect(addClientCalls(), 'nothing was dialled').toBe(0);
+    const row = (await ctx.container.database.db.execute(
+      sql`SELECT o.state, (SELECT count(*)::int FROM refunds WHERE order_id = o.id) AS refunds,
+                 (SELECT count(*)::int FROM customer_notifications
+                   WHERE kind = 'ORDER_REFUNDED_TO_WALLET') AS customer_messages
+            FROM orders o WHERE o.id = ${orderId}` as never,
+    )) as unknown as { rows: { state: string; refunds: number; customer_messages: number }[] };
+    expect(row.rows[0]).toEqual({ state: 'REFUNDED', refunds: 1, customer_messages: 1 });
+    expect((await services.findById(tenantA, serviceId))?.state).toBe('TERMINATED');
+    expect(await stalledReason(serviceId), 'the refund answered the condition').toBeNull();
+  });
+
   it('gives up announcing after the attempts are spent, and says so', async () => {
     reply = (_request, response) => {
       response.writeHead(403, { 'content-type': 'application/json' });

@@ -26,7 +26,8 @@ untouched. Nothing here may run against them until the owner approves activation
    the server once (the screen shows it to copy). It restarts the worker, the monitor and the
    provisioner, so the first reminder and monitor passes are ones that started after the
    import. They send nothing historical either way: every imported service carries a reminder
-   baseline, automatic reminders are capped per minute (`reminders.max_per_minute`), and a
+   baseline (the first usage sync after the import is recorded silently as part of it — Round
+   5A), automatic reminders are capped per minute (`reminders.max_per_minute`), and a
    burst opens `notification.reminder_burst` in the ops group's ERRORS topic.
 
 ## 2. Isolated rehearsal (what was run for this PR)

@@ -1278,6 +1278,61 @@ export class DrizzleServiceRepository implements ServiceRepository {
       );
   }
 
+  /**
+   * Round 5A item 1 — the silent first sync of an imported service.
+   *
+   * CHOICE: the first usage figure read after an import is the service's BASELINE, written
+   * here (before the figure replaces the row's own) as `service_reminder_baselines.used_bytes`.
+   * The reminder sweep already records every threshold a baseline figure had reached and
+   * announces none (`importedReminderKinds`), so nothing the import left behind — a service
+   * already used, near its limit, or expired — becomes a customer message, and a crossing
+   * observed by any LATER sync is announced exactly as for a service Nexa sold. The
+   * alternative, "only transitions after the import's completion time", would need a second
+   * clock beside the baseline the expiry half already uses, and could not tell a figure the
+   * import carried from one the first sync read.
+   *
+   * The statement is a no-op for a native service and for a service that is not ACTIVE (the
+   * update below would not write it either). It locks the service row first, so the decision
+   * and the figure belong to one version of it.
+   *   - No baseline row (an earlier release's adoption, or a package import that seeded none):
+   *     one is written for the service's current period, from the figure the import left when
+   *     that was a measurement (`usage_synced_at <= created_at`), otherwise from THIS read.
+   *   - A row with no figure, for the period the service is still in: the figure is set. A row
+   *     for an earlier period (a renewal or added traffic since) says nothing about this one
+   *     and is left alone, as is a row that already holds a figure — the import measured it.
+   * Never a message, never a panel call.
+   */
+  private async baselineImportedUsage(
+    tenantId: string,
+    id: string,
+    usage: { readonly usedBytes: bigint; readonly syncedAt: Date },
+    tx: TransactionScope,
+  ): Promise<void> {
+    await this.exec(tx).execute(sql`
+      WITH s AS (
+        SELECT tenant_id, id, created_at, expires_at, traffic_limit_bytes, traffic_used_bytes,
+               usage_synced_at
+        FROM services
+        WHERE tenant_id = ${tenantId} AND id = ${id}
+          AND state = 'ACTIVE' AND source <> 'NEXA'
+        FOR UPDATE
+      )
+      INSERT INTO service_reminder_baselines (tenant_id, service_id, baseline_at,
+                                              basis_expires_at, basis_traffic_limit_bytes,
+                                              used_bytes, created_at)
+      SELECT s.tenant_id, s.id, s.created_at, s.expires_at, s.traffic_limit_bytes,
+             CASE WHEN s.usage_synced_at IS NOT NULL AND s.usage_synced_at <= s.created_at
+                  THEN s.traffic_used_bytes ELSE ${usage.usedBytes} END,
+             ${usage.syncedAt}
+      FROM s
+      ON CONFLICT (tenant_id, service_id) DO UPDATE
+        SET used_bytes = EXCLUDED.used_bytes
+        WHERE service_reminder_baselines.used_bytes IS NULL
+          AND service_reminder_baselines.basis_expires_at IS NOT DISTINCT FROM EXCLUDED.basis_expires_at
+          AND service_reminder_baselines.basis_traffic_limit_bytes = EXCLUDED.basis_traffic_limit_bytes
+    `);
+  }
+
   async recordUsage(
     scope: TenantContext,
     id: string,
@@ -1289,6 +1344,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
     tx: TransactionScope,
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
+    await this.baselineImportedUsage(tenantId, id, usage, tx);
     const rows = await this.exec(tx)
       .update(services)
       .set({

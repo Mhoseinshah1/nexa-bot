@@ -213,6 +213,7 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
     // the caller's own write is lost — while this catch block reports that it
     // kept it. That is the failure mode this whole subsystem exists to make
     // hard, written into its own error handling.
+    if (this.presenter?.suppresses?.(event) === true) return;
     await this.uow.runNested(scope, tx, async (nested) => {
       // No severity threshold (WP-A4): routing decides WHERE, never whether.
       const presented =
@@ -229,7 +230,7 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
             dedupeKey: `opslog:${recorded.id}:${recorded.occurrenceCount}`,
             templateKey: presented.templateKey,
             values: presented.values,
-            logType: presented.logType,
+            ...(presented.logType === undefined ? {} : { logType: presented.logType }),
             ...(presented.buttons === undefined ? {} : { buttons: presented.buttons }),
             ...(presented.storm === undefined ? {} : { storm: presented.storm }),
             ...(event.correlationId ? { correlationId: event.correlationId } : {}),

@@ -1,6 +1,6 @@
-import { alias } from 'drizzle-orm/pg-core';
 import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import { money, type Money } from '@nexa/contracts';
+import { balanceInCommitOrder } from './balance-in-commit-order.js';
 import type {
   CurrencyCode,
   WalletHistoryImportOrigin,
@@ -383,9 +383,9 @@ export class DrizzleWalletRepository implements WalletRepository {
    * The BALANCE is taken as of the last of those credits, not as of now. A
    * customer who has spent money since must not be told the refund produced a
    * balance they never had, and a resend must not disagree with the first copy.
-   * `(created_at, id)` is a total order over an immutable table — `id` is uuidv7
-   * and nothing updates an entry — and `wallet_entries_customer_created_idx`
-   * serves exactly this comparison.
+   * "As of" is COMMIT order (`balanceInCommitOrder`), not `(created_at, id)`: the
+   * stamp is taken before the customer lock, so a later commit can carry an
+   * earlier one.
    *
    * Null when the order has no refund credit: nothing was given back, so there
    * is no sentence to send. The caller treats that as a message it must not send
@@ -397,68 +397,62 @@ export class DrizzleWalletRepository implements WalletRepository {
     tx?: unknown,
   ): Promise<{ readonly amount: Money; readonly balanceAfter: Money } | null> {
     const tenantId = requireTenantId(scope);
-    const credit = alias(walletEntries, 'refund_credit');
-    const rows = await this.exec(tx)
+    const credits = await this.exec(tx)
       .select({
-        currency: credit.currency,
-        customerId: credit.customerId,
-        createdAt: credit.createdAt,
-        id: credit.id,
-        /*
-         * Summed in the same statement that finds the latest one, so the two
-         * cannot describe different sets. A correlated subquery rather than two
-         * round trips: the second read could see a credit the first did not.
-         */
-        /*
-         * Explicit aliases (R4): drizzle renders a one-table SELECT's columns UNQUALIFIED, so
-         * the `${credit.…}` references this used inside the subqueries named the subquery's
-         * own row — the bound compared a row with itself and the customer filter matched
-         * every customer of the tenant.
-         */
-        refunded: sql<string>`COALESCE((
-          SELECT SUM(w.amount) FROM wallet_entries w
-           WHERE w.tenant_id = ${tenantId}
-             AND w.order_id = ${orderId}
-             AND w.reason = 'REFUND'
-             AND w.direction = 'CREDIT'
-             AND w.currency = "refund_credit"."currency"
-        ), 0)`,
-        balance: sql<string>`COALESCE((
-          SELECT SUM(CASE WHEN w.direction = 'CREDIT' THEN w.amount ELSE -w.amount END)
-            FROM wallet_entries w
-           WHERE w.tenant_id = ${tenantId}
-             AND w.customer_id = "refund_credit"."customer_id"
-             AND w.currency = "refund_credit"."currency"
-             AND (w.created_at, w.id) <= ("refund_credit"."created_at", "refund_credit"."id")
-        ), 0)`,
+        id: walletEntries.id,
+        customerId: walletEntries.customerId,
+        currency: walletEntries.currency,
+        amount: walletEntries.amount,
       })
-      .from(credit)
+      .from(walletEntries)
       .where(
         and(
-          eq(credit.tenantId, tenantId),
-          eq(credit.orderId, orderId),
-          eq(credit.reason, 'REFUND'),
-          eq(credit.direction, 'CREDIT'),
+          eq(walletEntries.tenantId, tenantId),
+          eq(walletEntries.orderId, orderId),
+          eq(walletEntries.reason, 'REFUND'),
+          eq(walletEntries.direction, 'CREDIT'),
         ),
       )
-      // The LAST credit, so a refund written as two entries reports the balance
-      // after both rather than after the first.
-      .orderBy(desc(credit.createdAt), desc(credit.id))
-      .limit(1);
+      // Only to pick the wallet to describe when an order somehow has credits in two: the
+      // balance below is NOT ordered by this (see `balanceInCommitOrder`).
+      .orderBy(desc(walletEntries.createdAt), desc(walletEntries.id));
 
-    const row = rows[0];
-    if (row === undefined) return null;
-    const currency = row.currency as CurrencyCode;
+    const head = credits[0];
+    if (head === undefined) return null;
+    const currency = head.currency as CurrencyCode;
+    const same = credits.filter(
+      (one) => one.customerId === head.customerId && one.currency === head.currency,
+    );
+    /*
+     * The balance is as of the LAST of the order's credits to COMMIT, so a refund written as
+     * two entries reports the balance after both; and it is summed in commit order, never by
+     * `created_at` (Round 5A item 3 — the stamp is taken before the customer lock, so a
+     * movement that committed after the refund can carry an earlier one). The ids are the
+     * ones read above, so the amount and the balance describe the same set.
+     */
+    const [around] = (
+      await this.exec(tx).execute(
+        balanceInCommitOrder({
+          tenantId,
+          customerId: head.customerId,
+          currency: head.currency,
+          entryIds: same.map((one) => one.id),
+        }),
+      )
+    ).rows as { after?: string }[];
     // `BigInt(string)`, for the reason `balanceOf` above states at length.
     return {
-      amount: money(BigInt(row.refunded), currency),
-      balanceAfter: money(BigInt(row.balance), currency),
+      amount: money(
+        same.reduce((sum, one) => sum + BigInt(one.amount), 0n),
+        currency,
+      ),
+      balanceAfter: money(BigInt(around?.after ?? '0'), currency),
     };
   }
 
   /**
    * R4 A5: one ADMINISTRATIVE adjustment as its customer is told it — the amount, the balance
-   * right after it (as of the entry, `(created_at, id)` ordered, never today's) and its note
+   * right after it (as of the entry, in COMMIT order, never today's) and its note
    * only when the operator chose to show it. Null for any entry that is not an ADMIN_CREDIT
    * or ADMIN_DEBIT, so a migration's opening balance can never be rendered as one.
    */
@@ -473,46 +467,43 @@ export class DrizzleWalletRepository implements WalletRepository {
     readonly shownNote: string | null;
   } | null> {
     const tenantId = requireTenantId(scope);
-    const entry = alias(walletEntries, 'adjustment');
-    const rows = await this.exec(tx)
+    const [entry] = await this.exec(tx)
       .select({
-        direction: entry.direction,
-        amount: entry.amount,
-        currency: entry.currency,
-        note: entry.note,
-        shown: entry.noteShownToCustomer,
-        /*
-         * Written with explicit aliases on purpose: in a one-table SELECT drizzle renders its
-         * columns UNQUALIFIED, so `${entry.createdAt}` inside this subquery would name the
-         * subquery's own row and the bound would compare a row with itself.
-         */
-        balance: sql<string>`COALESCE((
-          SELECT SUM(CASE WHEN w.direction = 'CREDIT' THEN w.amount ELSE -w.amount END)
-            FROM wallet_entries w
-           WHERE w.tenant_id = ${tenantId}
-             AND w.customer_id = "adjustment"."customer_id"
-             AND w.currency = "adjustment"."currency"
-             AND (w.created_at, w.id) <= ("adjustment"."created_at", "adjustment"."id")
-        ), 0)`,
+        customerId: walletEntries.customerId,
+        direction: walletEntries.direction,
+        amount: walletEntries.amount,
+        currency: walletEntries.currency,
+        note: walletEntries.note,
+        shown: walletEntries.noteShownToCustomer,
       })
-      .from(entry)
+      .from(walletEntries)
       .where(
         and(
-          eq(entry.tenantId, tenantId),
-          eq(entry.id, entryId),
-          inArray(entry.reason, ['ADMIN_CREDIT', 'ADMIN_DEBIT']),
+          eq(walletEntries.tenantId, tenantId),
+          eq(walletEntries.id, entryId),
+          inArray(walletEntries.reason, ['ADMIN_CREDIT', 'ADMIN_DEBIT']),
         ),
       )
       .limit(1);
-    const row = rows[0];
-    if (row === undefined) return null;
-    const currency = row.currency as CurrencyCode;
-    const note = row.note?.trim() ?? '';
+    if (entry === undefined) return null;
+    const currency = entry.currency as CurrencyCode;
+    // The balance right after THIS entry committed, in commit order (Round 5A item 3).
+    const [around] = (
+      await this.exec(tx).execute(
+        balanceInCommitOrder({
+          tenantId,
+          customerId: entry.customerId,
+          currency: entry.currency,
+          entryIds: [entryId],
+        }),
+      )
+    ).rows as { after?: string }[];
+    const note = entry.note?.trim() ?? '';
     return {
-      direction: row.direction === 'DEBIT' ? 'DEBIT' : 'CREDIT',
-      amount: money(row.amount, currency),
-      balanceAfter: money(BigInt(row.balance), currency),
-      shownNote: row.shown && note !== '' ? note : null,
+      direction: entry.direction === 'DEBIT' ? 'DEBIT' : 'CREDIT',
+      amount: money(entry.amount, currency),
+      balanceAfter: money(BigInt(around?.after ?? '0'), currency),
+      shownNote: entry.shown && note !== '' ? note : null,
     };
   }
 

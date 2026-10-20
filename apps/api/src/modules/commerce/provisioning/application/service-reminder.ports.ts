@@ -196,6 +196,20 @@ export interface ServiceReminderRepository {
     },
     tx: TransactionScope,
   ): Promise<boolean>;
+
+  /**
+   * Round 5A item 1: resolves to `SUPERSEDED` — unsent, no attempt spent, the lane's own
+   * `PENDING -> SUPERSEDED` transition and nothing else — up to `limit` queued usage notices
+   * on imported services that describe a state the import already held
+   * (`importedUnmeasuredUsageNotice`). Rows already claimed for a send are left alone.
+   * Returns the notices moved, by kind, so the caller can audit the batch.
+   */
+  supersedeImportedUsageNotices(
+    scope: TenantContext,
+    limit: number,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<readonly { readonly kind: string; readonly customerId: string }[]>;
 }
 
 /**
