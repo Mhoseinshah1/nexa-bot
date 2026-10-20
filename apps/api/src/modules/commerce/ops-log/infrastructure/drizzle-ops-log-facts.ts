@@ -631,4 +631,20 @@ export class DrizzleOpsLogFacts implements OpsLogFacts {
     );
     return row === undefined ? null : String(row['name']);
   }
+
+  async undeliveredCustomerCount(
+    scope: TenantContext,
+    botInstanceId: string,
+    notificationKind: string,
+    tx: TransactionScope,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.rows(
+      tx,
+      sql`SELECT COUNT(DISTINCT customer_id) AS n FROM customer_notifications
+          WHERE tenant_id = ${tenantId} AND bot_instance_id = ${botInstanceId}
+            AND kind = ${notificationKind} AND state IN ('PENDING', 'FAILED')`,
+    );
+    return row === undefined ? 0 : Number(row['n']);
+  }
 }

@@ -1,4 +1,8 @@
-import { OPS_LOG_WORDS_FA as W, operationalEventLabelFa } from '@nexa/i18n';
+import {
+  CUSTOMER_NOTIFICATION_KIND_NAMES_FA,
+  OPS_LOG_WORDS_FA as W,
+  operationalEventLabelFa,
+} from '@nexa/i18n';
 import { toPersianDigits } from '@nexa/contracts';
 import type { OpsLogWords } from '../application/ports.js';
 
@@ -60,6 +64,15 @@ export const i18nOpsLogWords: OpsLogWords = {
   retry: (kind) => (kind === 'YES' ? W.retry.yes : kind === 'NO' ? W.retry.no : W.retry.unknown),
   impact: (kind) => pick(W.impact, kind, W.impact.notRefunded),
   serviceState: (state) => pick(W.serviceStates, state, W.serviceStates.NO_DATA),
+  notificationKindName: (kind) =>
+    kind === null
+      ? W.customerSend.unknownKind
+      : pick(CUSTOMER_NOTIFICATION_KIND_NAMES_FA, kind, W.customerSend.unknownKind),
+  customerSend: {
+    cause: (reason) => pick(W.customerSend.causes, reason, W.customerSend.causes.REFUSED),
+    kindLabel: W.customerSend.kindLabel,
+    customersLabel: W.customerSend.customersLabel,
+  },
   reminderHeading: (kind) => pick(W.reminderHeadings, kind, W.reminderHeadings.USAGE_FIRST),
   timeLeft(days) {
     if (days === null) return W.time.unlimited;

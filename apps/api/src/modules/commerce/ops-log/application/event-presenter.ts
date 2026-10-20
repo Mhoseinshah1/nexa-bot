@@ -2,6 +2,8 @@ import {
   PAYMENT_LINK_FAILURE_KINDS,
   PAYMENT_LINK_CREATE_FAILED_CODE,
   money,
+  opsErrorClassOf,
+  toPersianDigits,
   type CurrencyCode,
   type OperationalEventInput,
   type OpsLogButton,
@@ -25,6 +27,8 @@ import type {
 } from '../../../control/notifications/application/ports.js';
 
 const GATEWAY_CREATE_UNKNOWN = 'payments.gateway_create_unknown';
+/** `CUSTOMER_SEND_FAILED_CODE` of the messenger, which the application layer does not import. */
+const CUSTOMER_SEND_FAILED = 'telegram.customer_send_failed';
 const PANEL_DOWN_PREFIX = 'panel.health.';
 /** The `panel.health.*` codes that are not a panel going out of reach. */
 const PANEL_NOT_DOWN = new Set([
@@ -83,6 +87,9 @@ export class OperationalEventPresenter implements OpsEventPresenter {
     const scoped = tx as TransactionScope;
     if (everyOccurrenceIsAMessage(recorded.code)) {
       return this.paymentLink(scope, input, recorded, scoped);
+    }
+    if (recorded.code === CUSTOMER_SEND_FAILED) {
+      return this.customerSendFailed(scope, input, recorded, scoped);
     }
     if (recorded.code === 'panel.health.recovered') {
       return this.panelUp(scope, input, recorded, scoped);
@@ -172,6 +179,61 @@ export class OperationalEventPresenter implements OpsEventPresenter {
         key: `ERROR_PAYMENT_LINK:${provider}:${kind}`,
         customer: telegramId,
         rollup: { heading: words.stormHeading, cause, technical },
+      },
+    };
+  }
+
+  // --- Round 5A item 1 ------------------------------------------------------------------
+
+  /**
+   * A customer message that did not go out, named by WHAT it was: the Persian title of the
+   * event, then the Persian name of the notification kind, then the number of customers who
+   * still have one of that kind undelivered. It rides the generic template (no new key), with
+   * the same fields the generic layout fills, so the heading is Persian and the code is only
+   * the short technical line beneath.
+   *
+   * A condition is one row per bot, so this is the kind that OPENED it; a later refusal of
+   * another kind on the same bot is counted on the row and announced when the condition
+   * reopens. The number is read when the message is made.
+   */
+  private async customerSendFailed(
+    scope: TenantContext,
+    input: OperationalEventInput,
+    recorded: RecordedOperationalEvent,
+    tx: TransactionScope,
+  ): Promise<PresentedOpsEvent | null> {
+    const { words, facts } = this.deps;
+    const context = input.context;
+    if (context === undefined) return null;
+    const kind =
+      typeof context['notificationKind'] === 'string' ? context['notificationKind'] : null;
+    const bot = safeIdentifier(context['botInstanceId']);
+    const reason = typeof context['reason'] === 'string' ? context['reason'] : 'REFUSED';
+    const kindName = words.notificationKindName(kind);
+    const customers =
+      kind === null || bot === null
+        ? null
+        : await facts.undeliveredCustomerCount(scope, bot, kind, tx);
+    const rawCode = context['errorCode'];
+    const code = typeof rawCode === 'string' ? sanitizedErrorCode(rawCode) : null;
+    const details = [
+      `${words.customerSend.kindLabel}: ${kindName}`,
+      ...(customers === null || customers === 0
+        ? []
+        : [`${words.customerSend.customersLabel}: ${toPersianDigits(String(customers))}`]),
+    ].join('\n');
+    return {
+      templateKey: 'ops.notification.operational_event' as TemplateKey,
+      values: {
+        severity: words.severity(opsErrorClassOf(recorded.code, recorded.severity)),
+        heading: `${words.eventTitle(recorded.code)} — ${kindName}`,
+        technical: technicalLine(words.customerSend.cause(reason), code),
+        code: recorded.code,
+        message: words.customerSend.cause(reason),
+        occurrences: recorded.occurrenceCount,
+        firstSeenAt: recorded.firstSeenAt,
+        lastSeenAt: recorded.lastSeenAt,
+        details,
       },
     };
   }

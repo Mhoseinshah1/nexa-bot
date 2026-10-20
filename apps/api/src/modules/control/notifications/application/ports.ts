@@ -509,7 +509,11 @@ export interface NotificationTransport {
 export interface PresentedOpsEvent {
   readonly templateKey: TemplateKey;
   readonly values: TemplateValues;
-  readonly logType: OpsLogTypeId;
+  /**
+   * Absent for an event that rides the generic layout with values of its own (Round 5A item 1):
+   * it is then routed by its code's topic alone, like any other generic event.
+   */
+  readonly logType?: OpsLogTypeId;
   readonly buttons?: readonly OpsLogButton[];
   /** The optional storm roll-up's identity for this error; see `NotificationService.queue`. */
   readonly storm?: {

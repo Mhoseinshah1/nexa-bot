@@ -264,6 +264,19 @@ export const OPS_LOG_WORDS_FA = {
     USAGE_SECOND: '📉 کم شدن حجم',
     USAGE_FINAL: '⛔ پایان حجم',
   },
+  /** Round 5A item 1: why a customer message did not go out, as the operator reads it. */
+  customerSend: {
+    causes: {
+      REFUSED:
+        'تلگرام ارسال پیام را نپذیرفت (معمولاً مشتری ربات را شروع نکرده یا آن را مسدود کرده است)',
+      UNCERTAIN: 'معلوم نیست پیام به مشتری رسیده یا نه؛ دوباره ارسال نمی‌شود',
+      NO_BOT: 'ربات فرستنده توکن قابل استفاده ندارد',
+      TOKEN_REJECTED: 'تلگرام توکن ربات را نپذیرفت؛ توکن را در صفحهٔ ربات عوض کنید',
+    },
+    kindLabel: 'نوع پیام',
+    customersLabel: 'تعداد مشتریان در انتظار یا ناموفق',
+    unknownKind: 'پیام غیر از اعلان‌های مشتری',
+  },
   time: { unlimited: 'نامحدود', expired: 'تمام شده', daysLeft: 'روز', hoursLeft: 'ساعت' },
 
   panel: {

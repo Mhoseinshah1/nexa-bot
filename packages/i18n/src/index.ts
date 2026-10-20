@@ -26,6 +26,7 @@ export {
   OPERATIONAL_EVENT_LABELS_FA,
   operationalEventLabelFa,
 } from './operational-events.fa.js';
+export { CUSTOMER_NOTIFICATION_KIND_NAMES_FA } from './customer-notification-kinds.fa.js';
 import { clipEntities, parseCaptionMarkup, type CaptionMarkup } from './caption-markup.js';
 
 /**

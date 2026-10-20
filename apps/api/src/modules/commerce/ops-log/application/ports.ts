@@ -298,6 +298,17 @@ export interface OpsLogFacts {
   ): Promise<Date | null>;
   /** The panel's name, or null. */
   panelName(scope: TenantContext, id: string, tx: TransactionScope): Promise<string | null>;
+  /**
+   * Round 5A item 1: how many DISTINCT customers of this bot still have a notification of this
+   * kind that was not delivered — queued (`PENDING`) or refused (`FAILED`). The "customers
+   * affected" of a failing-send message.
+   */
+  undeliveredCustomerCount(
+    scope: TenantContext,
+    botInstanceId: string,
+    notificationKind: string,
+    tx: TransactionScope,
+  ): Promise<number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -335,6 +346,14 @@ export interface OpsLogWords {
   impact(kind: string): string;
   serviceState(state: string): string;
   reminderHeading(kind: string): string;
+  /** Round 5A item 1: a customer notification kind in Persian; a kind this build lacks is a Persian word too. */
+  notificationKindName(kind: string | null): string;
+  /** Round 5A item 1: the labels and causes of the failing-send message. */
+  customerSend: {
+    cause(reason: string): string;
+    readonly kindLabel: string;
+    readonly customersLabel: string;
+  };
   timeLeft(days: number | null): string;
   panelSalesStopped(stopped: boolean): string;
   downtime(minutes: number): string;

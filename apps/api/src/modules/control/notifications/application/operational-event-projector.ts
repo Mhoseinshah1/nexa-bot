@@ -229,7 +229,7 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
             dedupeKey: `opslog:${recorded.id}:${recorded.occurrenceCount}`,
             templateKey: presented.templateKey,
             values: presented.values,
-            logType: presented.logType,
+            ...(presented.logType === undefined ? {} : { logType: presented.logType }),
             ...(presented.buttons === undefined ? {} : { buttons: presented.buttons }),
             ...(presented.storm === undefined ? {} : { storm: presented.storm }),
             ...(event.correlationId ? { correlationId: event.correlationId } : {}),
