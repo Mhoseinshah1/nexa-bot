@@ -1098,7 +1098,10 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         and(
           eq(gatewayInvoices.tenantId, tenantId),
           eq(gatewayInvoices.paymentId, paymentId),
-          or(isNull(gatewayInvoices.outcome), eq(gatewayInvoices.outcome, 'LATE_COMPLETION')),
+          or(
+            isNull(gatewayInvoices.outcome),
+            inArray(gatewayInvoices.outcome, ['LATE_COMPLETION', 'UNSUCCESSFUL']),
+          ),
         ),
       )
       .returning({ paymentId: gatewayInvoices.paymentId });

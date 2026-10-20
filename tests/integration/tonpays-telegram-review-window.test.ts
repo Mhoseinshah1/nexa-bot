@@ -34,6 +34,7 @@ import {
 } from '../../apps/api/src/modules/commerce/payments/application/gateway-payment-loop';
 import { GATEWAY_DECISION_RETRY_MAX } from '../../apps/api/src/modules/commerce/payments/application/gateway-payment.service';
 import { POST_DEADLINE_INQUIRY_MAX } from '../../apps/api/src/modules/commerce/payments/domain/tonpays';
+import { settingsLateCreditPolicy } from '../../apps/api/src/modules/commerce/payments/application/late-credit-policy';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
   adminActorFor,
@@ -877,6 +878,118 @@ describe('the TonPays Telegram provider review window', () => {
       expect(conditions).toHaveLength(1);
       expect(await notified(review.paymentId)).not.toContain('GATEWAY_PAYMENT_FAILED');
       expect(await notified(review.paymentId)).not.toContain('PAYMENT_EXPIRED');
+    });
+
+    /**
+     * R5A item 4 (owner decision of 2026-10-20): the same UNKNOWN payment, with the route's
+     * late-credit switch on. The approval — re-verified by the inquiry — is credited to the
+     * WALLET, once; the payment stays UNKNOWN, the order is not paid and nothing is built.
+     */
+    describe('R5A item 4: a late approval on an UNKNOWN payment', () => {
+      const lateCreditLane = () =>
+        telegramLaneWith(ctx, fake, {
+          lateCredit: {
+            policyFor: settingsLateCreditPolicy(ctx.container.settingsResolver),
+            credit: (scope, actor, id, input) =>
+              ctx.container.payments.creditLateGatewayApproval(scope, actor, id, input),
+          },
+        });
+      const ledgerRows = (paymentId: string) =>
+        rows<{ reason: string; amount: string; order_id: string | null; reference: string }>(
+          sql`SELECT reason, amount::text AS amount, order_id, reference FROM wallet_entries
+               WHERE tenant_id = ${tenantA.tenantId} AND payment_id = ${paymentId}`,
+        );
+      const hintFor = async (
+        review: { paymentId: string; invoiceId: string },
+        delivery: string,
+      ) => {
+        const invoice = (
+          await rows<{ provider_order_id: string }>(
+            sql`SELECT provider_order_id FROM gateway_invoices WHERE payment_id = ${review.paymentId}`,
+          )
+        )[0]!;
+        await lane.receiveWebhook(
+          String(tenantA.tenantId),
+          'TONPAYS_TELEGRAM',
+          {
+            invoice_id: review.invoiceId,
+            order_id: invoice.provider_order_id,
+            status: 'completed',
+            delivery_id: delivery,
+          },
+          delivery,
+        );
+      };
+
+      it('credits the wallet once, never the order, and the operator cannot confirm it again', async () => {
+        const review = await reviewed(40);
+        await lapse(review);
+        lane = lateCreditLane();
+        fake.set(review.invoiceId, 'completed', true);
+        await hintFor(review, 'lc-1');
+        await hintFor(review, 'lc-1');
+        clock.at(new Date(review.reviewUntil.getTime() + 20_000));
+        await lane.runOnce(tenantA);
+        clock.at(new Date(review.reviewUntil.getTime() + 40_000));
+        await lane.runOnce(tenantA);
+
+        expect(await ledgerRows(review.paymentId)).toEqual([
+          {
+            reason: 'GATEWAY_LATE_CREDIT',
+            amount: '250000',
+            order_id: null,
+            reference: `${review.paymentId}:late-credit`,
+          },
+        ]);
+        expect((await paymentOf(review.paymentId)).state).toBe('UNKNOWN');
+        expect(await orderState(review.orderId)).toBe('AWAITING_PAYMENT');
+        const recorded = await invoiceOf(review.paymentId);
+        expect(recorded.outcome).toBe('LATE_CREDITED');
+        expect(recorded.late_completion_observed_at).toBeNull();
+        expect(
+          await rows(
+            sql`SELECT code FROM operational_events WHERE code = 'payments.gateway_late_completion'`,
+          ),
+        ).toHaveLength(0);
+        expect(await notified(review.paymentId)).toContain('GATEWAY_LATE_PAYMENT_CREDITED');
+        expect(await notified(review.paymentId)).not.toContain('GATEWAY_PAYMENT_FAILED');
+
+        await expect(
+          ctx.container.payments.reconcileGatewayPayment(tenantA, owner, review.paymentId, {
+            to: 'CONFIRMED',
+            note: null,
+            idempotencyKey: key(),
+          }),
+        ).rejects.toMatchObject({ details: { reason: 'LATE_CREDIT_ALREADY_APPLIED' } });
+        expect(await ledgerRows(review.paymentId)).toHaveLength(1);
+        expect(await orderState(review.orderId)).toBe('AWAITING_PAYMENT');
+      });
+
+      it('with TonPays Telegram’s own switch OFF it is a late completion, as before — the other route’s switch does not count', async () => {
+        const current = (await ctx.container.settingsService.list(tenantA, owner)).find(
+          (row) => row.key === 'payments.late_credit.tonpays_telegram_enabled',
+        );
+        await ctx.container.settingsService.set(tenantA, owner, {
+          key: 'payments.late_credit.tonpays_telegram_enabled',
+          value: false,
+          expectedVersion: current?.version ?? null,
+          idempotencyKey: `late-credit-${key()}`,
+        });
+        const review = await reviewed(40);
+        await lapse(review);
+        lane = lateCreditLane();
+        fake.set(review.invoiceId, 'completed', true);
+        await hintFor(review, 'lc-off');
+        clock.at(new Date(review.reviewUntil.getTime() + 20_000));
+        await lane.runOnce(tenantA);
+        expect(await ledgerRows(review.paymentId)).toEqual([]);
+        expect((await invoiceOf(review.paymentId)).outcome).toBe('LATE_COMPLETION');
+        expect(
+          await rows(
+            sql`SELECT code FROM operational_events WHERE code = 'payments.gateway_late_completion'`,
+          ),
+        ).toHaveLength(1);
+      });
     });
 
     it('TPTG-35: UNKNOWN is never auto-settled or auto-failed — a later approval is LATE_COMPLETION, a later "no" is recorded only', async () => {
