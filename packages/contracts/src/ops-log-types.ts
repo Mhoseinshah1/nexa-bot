@@ -421,6 +421,8 @@ const TOKENS = {
   trafficSum: ['MONEY', 'Extra-traffic total.'],
   timeCount: ['NUMBER', 'Extra-time purchases.'],
   timeSum: ['MONEY', 'Extra-time total.'],
+  otherCount: ['NUMBER', 'Paid orders that are none of the four categories.'],
+  otherSum: ['MONEY', 'Their total.'],
   gross: ['MONEY', 'Gross income.'],
   refundsCount: ['NUMBER', 'Refunds.'],
   refundsSum: ['MONEY', 'Refunds total.'],
@@ -890,7 +892,7 @@ export const OPS_LOG_TEMPLATES = [
         'giftSum',
         'net',
       ),
-      ...opt('methods'),
+      ...opt('otherCount', 'otherSum', 'methods'),
     ],
   ),
   logTemplate(
