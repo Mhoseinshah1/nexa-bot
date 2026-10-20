@@ -94,6 +94,7 @@ export const OUTBOX_EVENT_LABELS: Readonly<Record<EventType, WebKey>> = {
   PaymentReceiptSubmitted: 'web.outbox_event_payment_receipt_submitted',
   PaymentFailed: 'web.outbox_event_payment_failed',
   PaymentLateCompletionObserved: 'web.outbox_event_payment_late_completion_observed',
+  PaymentLateCredited: 'web.outbox_event_payment_late_credited',
   RefundCompleted: 'web.outbox_event_refund_completed',
   RefundFailed: 'web.outbox_event_refund_failed',
   ServiceRefundRequested: 'web.outbox_event_service_refund_requested',

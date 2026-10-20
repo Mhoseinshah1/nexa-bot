@@ -7,6 +7,7 @@ import { Icon } from '../ui/icons';
 import { GatewayHealthPanel, PROVIDER_LABELS } from './gateway-health';
 import { CardAccountsSection } from './payment-accounts';
 import { PaymentGatewaysPage } from './payment-gateways';
+import { LateCreditCard } from './late-credit-card';
 
 /**
  * One payment method's own view, at `/payment-gateways/<slug>` (UX Batch 01, items 7 and 8).
@@ -32,6 +33,8 @@ export function PaymentMethodPage({
   mayEditGateways,
   mayViewCards,
   mayEditCards,
+  maySettingsView,
+  maySettingsEdit,
 }: {
   route: Route;
   slug: string;
@@ -39,6 +42,9 @@ export function PaymentMethodPage({
   mayEditGateways: boolean;
   mayViewCards: boolean;
   mayEditCards: boolean;
+  /** R5A item 4: the late-credit switch is a registry setting, charged on the settings keys. */
+  maySettingsView: boolean;
+  maySettingsEdit: boolean;
 }) {
   const onLink = useLinkHandler();
   /*
@@ -96,6 +102,13 @@ export function PaymentMethodPage({
                 ),
               }
             : {})}
+        />
+      )}
+      {mayViewGateways && (
+        <LateCreditCard
+          provider={provider}
+          maySettingsView={maySettingsView}
+          maySettingsEdit={maySettingsEdit}
         />
       )}
       {cards && (
