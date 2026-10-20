@@ -259,7 +259,7 @@ function OptionRow({
        * ever (Codex review of #301). The re-read remounts the row under its new version, so
        * the reason is said as a toast, which outlives the row.
        */
-      notify({ tone: 'danger', message: messageFor(error) });
+      notify({ tone: 'danger', message: messageFor(error), error });
       await queries.invalidateQueries({ queryKey: ['settings'] });
     },
   });
