@@ -8752,6 +8752,24 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.payment.gateway_late_credited_screen',
+    description:
+      'R5A item 4: what the payment\u2019s own invoice message says once the gateway approved the ' +
+      'payment after it had closed and the amount was credited to the wallet \u2014 the screen the ' +
+      'customer would otherwise still read as expired or unresolved. No figure: the amount and ' +
+      'balance are in the separate notice (`bot.payment.gateway_late_credited`).',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The payment\u2019s public tracking code, `paymentTrackingCode` of the payment.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.payment.gateway_failed',
     description:
       'The gateway definitively did not approve this attempt. Sent by the customer ' +
