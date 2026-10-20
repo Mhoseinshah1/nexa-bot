@@ -26,6 +26,7 @@ import { pollUnlessFinalWhile } from '../polling';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { messageFor } from './settings';
+import { OpsLogTypeSwitches } from './ops-log-types';
 import {
   Disclosure,
   Badge,
@@ -96,6 +97,8 @@ const TOPIC_NAME: Readonly<Record<OpsLogTopicCategory, WebKey>> = {
   BOT: 'web.opsgroup_topic_bot',
   SECURITY: 'web.opsgroup_topic_security',
   BACKUPS: 'web.opsgroup_topic_backups',
+  USERS: 'web.opsgroup_topic_users',
+  REPORTS: 'web.opsgroup_topic_reports',
 };
 const TOPIC_STATE: Readonly<Record<OpsLogTopicState, WebKey>> = {
   PENDING: 'web.opsgroup_topic_pending',
@@ -544,6 +547,8 @@ export function OpsGroupPage({ denied, mayManage }: { denied: boolean; mayManage
                 )}
               </Card>
             )}
+
+            <OpsLogTypeSwitches mayManage={mayManage} />
 
             {mayManage && <ManualFallback inUse={view.manual.inUse} />}
 

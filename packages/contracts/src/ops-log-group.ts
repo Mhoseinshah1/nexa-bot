@@ -36,6 +36,11 @@ export const OPS_LOG_TOPIC_CATEGORIES = [
   'BOT',
   'SECURITY',
   'BACKUPS',
+  // Round 4 PR-D: the customers' log (new customers, blocks, reseller changes) and the
+  // nightly reports. Appended, so every stored category keeps its meaning and an older
+  // replica reads the two as SYSTEM (`opsLogTopicCategoryOf`).
+  'USERS',
+  'REPORTS',
 ] as const;
 export type OpsLogTopicCategory = (typeof OPS_LOG_TOPIC_CATEGORIES)[number];
 
@@ -78,6 +83,8 @@ export const OPS_LOG_TOPIC_NAME_TEMPLATES = {
   BOT: 'ops.group.topic_name.bot',
   SECURITY: 'ops.group.topic_name.security',
   BACKUPS: 'ops.group.topic_name.backups',
+  USERS: 'ops.group.topic_name.users',
+  REPORTS: 'ops.group.topic_name.reports',
 } as const satisfies Record<OpsLogTopicCategory, string>;
 
 // ---------------------------------------------------------------------------
@@ -164,6 +171,12 @@ export const OPS_LOG_TOPIC_ROUTES: readonly {
   // that is unusable, a hand-off owed (FIX-03, batch 2026-10-10; they used to fall through
   // to SYSTEM).
   { prefix: 'support.', category: 'BOT' },
+  // Round 4 PR-D: the customers' and the reports' topics. Their messages are posted by their
+  // own log types (`OPS_LOG_TYPES`), not by an operational event; the prefixes are reserved so
+  // an event recorded under one lands where an operator looks for it, not in SYSTEM.
+  { prefix: 'customer.', category: 'USERS' },
+  { prefix: 'reseller.', category: 'USERS' },
+  { prefix: 'report.', category: 'REPORTS' },
   // Round 4 PR-H: a burst of automatic reminders is an incident (the cutover runbook's step
   // 18), read beside the other errors rather than in SYSTEM where `notification.` falls.
   // Both the condition and its recovery match this prefix.
@@ -296,6 +309,14 @@ export const OPS_GROUP_MANAGED_SETTING_KEYS = [
   'ops.notifications.payments_topic_id',
   'ops.notifications.min_severity',
   'ops.notifications.max_attempts',
+  // Round 4 PR-D: the log types' switches and options are edited on the group's own page,
+  // beside the topics they belong to, never on the generic settings page.
+  'ops.log.disabled_types',
+  'ops.log.storm_rollup_enabled',
+  'ops.log.storm_threshold',
+  'ops.log.storm_window_minutes',
+  'ops.log.nightly_report_time',
+  'ops.log.admin_base_url',
 ] as const;
 
 /** The delivery allowance of one ops-log notification, and after a manual retry. */

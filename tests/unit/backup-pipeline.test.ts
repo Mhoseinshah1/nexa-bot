@@ -323,7 +323,12 @@ const TICK_MS = 5 * 60_000;
 /** `BACKUP_LEASE_STALE_AFTER_MS`: how long a run's heartbeat may be silent. */
 const RUN_STALE_MS = 15 * 60_000;
 
-function harness(options: { delivery?: BackupDelivery } = {}): Harness {
+function harness(
+  options: {
+    delivery?: BackupDelivery;
+    renderCaption?: ConstructorParameters<typeof BackupService>[0]['renderCaption'];
+  } = {},
+): Harness {
   const clock = new FakeClock();
   const runs = new FakeRuns();
   const state: Harness['state'] = {
@@ -447,6 +452,7 @@ function harness(options: { delivery?: BackupDelivery } = {}): Harness {
         return state.delivery;
       },
     },
+    ...(options.renderCaption === undefined ? {} : { renderCaption: options.renderCaption }),
     clock,
     ids: {
       uuid: () => `run-${String(++counter)}`,
@@ -949,6 +955,42 @@ describe('the backup pipeline', () => {
     expect(caption).not.toMatch(/password/i);
     expect(caption).not.toMatch(/\bk1\b/);
     expect(caption).not.toMatch(/SECRETS_/);
+  });
+
+  it('L31: a one-file caption takes the operator’s Persian head, timed at COMPLETION, and keeps the technical block', async () => {
+    const seen: { at: Date; startedAt: Date }[] = [];
+    const h = harness({
+      renderCaption: async (facts) => {
+        seen.push({ at: facts.at, startedAt: facts.startedAt });
+        return '💾 بکاپ — سرآغاز اپراتور';
+      },
+    });
+    h.state.onDump = () => h.clock.advance(7 * 60_000);
+    const run = await completed(h);
+    const caption = h.state.deliveredDocument?.caption ?? '';
+    expect(caption.startsWith('💾 بکاپ — سرآغاز اپراتور\n\n')).toBe(true);
+    // The technical block is never traded for the head.
+    expect(caption).toContain(run.id);
+    expect(caption).toContain(CHECKSUM);
+    // The head's time is when the backup COMPLETED; the next run counts from its start.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.startedAt.getTime()).toBe(NOW.getTime());
+    expect(seen[0]!.at.getTime()).toBe(NOW.getTime() + 7 * 60_000);
+  });
+
+  it('L31: a head that would pass Telegram’s caption limit, or a renderer that throws, leaves the built-in caption', async () => {
+    const long = harness({ renderCaption: async () => 'ب'.repeat(1_100) });
+    await completed(long);
+    expect(long.state.deliveredDocument?.caption).not.toContain('ببب');
+    expect(long.state.deliveredDocument?.caption).toContain(CHECKSUM);
+    const broken = harness({
+      renderCaption: async () => {
+        throw new Error('no template');
+      },
+    });
+    const run = await completed(broken);
+    expect(run.state).toBe('SUCCEEDED');
+    expect(broken.state.deliveredDocument?.caption).toContain(CHECKSUM);
   });
 
   it('reports BUSY truthfully instead of taking a second backup', async () => {

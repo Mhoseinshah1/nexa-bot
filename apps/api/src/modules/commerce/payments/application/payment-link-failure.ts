@@ -161,6 +161,9 @@ export interface PaymentLinkFailureFacts {
    */
   readonly trackingCode: string | null;
   readonly telegramUserId: string | null;
+  /** Round 4 PR-D (log L22): who the failure happened to, and for how much. */
+  readonly customerId?: string | null;
+  readonly amount?: { readonly amountMinor: bigint; readonly currency: string } | null;
   readonly botInstanceId: string | null;
   readonly elapsedMs: number | null;
   readonly at: Date;
@@ -208,6 +211,12 @@ export function paymentLinkFailureEvent(
   if (trackingCode !== null) context['trackingCode'] = trackingCode;
   const telegramUserId = safeTelegramUserId(facts.telegramUserId);
   if (telegramUserId !== null) context['telegramUserId'] = telegramUserId;
+  const customerId = safeIdentifier(facts.customerId ?? null);
+  if (customerId !== null) context['customerId'] = customerId;
+  if (facts.amount !== undefined && facts.amount !== null) {
+    context['amountMinor'] = facts.amount.amountMinor.toString();
+    context['currency'] = facts.amount.currency;
+  }
   const botInstanceId = safeIdentifier(facts.botInstanceId);
   if (botInstanceId !== null) context['botInstanceId'] = botInstanceId;
   if (failure.httpStatus !== null) context['httpStatus'] = failure.httpStatus;

@@ -120,21 +120,47 @@ export class TelegramNotificationTransport implements NotificationTransport {
     // format decides the HTML flag, per key: UNK-TXT-002 records that the legacy
     // renderer's HTML contract is unstated and contradictory, and we do not have one
     // global answer either.
+    const buttons = message.buttons;
     const body = textMessageBody({
       chatId,
       text: message.text,
       html: message.html,
+      ...(buttons === undefined || buttons.length === 0
+        ? {}
+        : { buttons: buttons.map(({ text, url, row }) => ({ text, url, row })) }),
     });
     if (message.destination.topicId !== null) {
       body.message_thread_id = message.destination.topicId;
     }
 
-    const result = await telegramSend({
+    let result = await telegramSend({
       token,
       apiBaseUrl: this.apiBaseUrl,
       timeoutMs: this.timeoutMs,
       body,
     });
+    /*
+     * A button Telegram cannot open (BUTTON_URL_INVALID) is not a reason to lose the log
+     * line: the address was a courtesy. Sent once more, plain. Only that refusal — any other
+     * failure keeps its ordinary classification and the dispatcher's retry.
+     */
+    if (
+      buttons !== undefined &&
+      buttons.length > 0 &&
+      result.outcome === 'FAILED_PERMANENT' &&
+      /BUTTON_URL_INVALID/i.test(result.errorMessage)
+    ) {
+      const plain = textMessageBody({ chatId, text: message.text, html: message.html });
+      if (message.destination.topicId !== null) {
+        plain.message_thread_id = message.destination.topicId;
+      }
+      result = await telegramSend({
+        token,
+        apiBaseUrl: this.apiBaseUrl,
+        timeoutMs: this.timeoutMs,
+        body: plain,
+      });
+    }
     // The transport's own result shape carries no message id, so it is dropped here
     // rather than widened: a notification's identity is its row, and an operations
     // message nobody replies to has no use for Telegram's id.

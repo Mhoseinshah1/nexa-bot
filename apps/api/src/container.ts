@@ -61,6 +61,7 @@ import type {
 } from '@nexa/contracts';
 import {
   CATALOGUE_FA,
+  OPS_LOG_BUTTON_LABELS_FA,
   createTranslator,
   DEFAULT_TEMPLATE_PRESENTATION,
   formatDateTime,
@@ -488,6 +489,26 @@ import {
 import { customerBlockCaptures } from './modules/commerce/customers/application/customer-block-capture.js';
 import { ReceiptReviewCaption } from './modules/commerce/payments/application/receipt-review-caption.js';
 import { FinancialLogConsumer } from './modules/commerce/payments/application/financial-log.consumer.js';
+import { DrizzleOpsLogFacts } from './modules/commerce/ops-log/infrastructure/drizzle-ops-log-facts.js';
+import { i18nOpsLogWords } from './modules/commerce/ops-log/infrastructure/i18n-ops-log-words.js';
+import { LedgerLogConsumer } from './modules/commerce/ops-log/application/ledger-log.consumer.js';
+import { CustomerLogConsumer } from './modules/commerce/ops-log/application/customer-log.consumer.js';
+import { ServiceLogConsumer } from './modules/commerce/ops-log/application/service-log.consumer.js';
+import { AdminLogConsumer } from './modules/commerce/ops-log/application/admin-log.consumer.js';
+import { FailureLogConsumer } from './modules/commerce/ops-log/application/failure-log.consumer.js';
+import { OperationalEventPresenter } from './modules/commerce/ops-log/application/event-presenter.js';
+import { NightlyReportService } from './modules/commerce/ops-log/application/nightly-report.service.js';
+import {
+  NIGHTLY_REPORT_INTERVAL_MS,
+  NightlyReportLoop,
+} from './modules/commerce/ops-log/application/nightly-report-loop.js';
+import { DrizzleNightlyReportReader } from './modules/commerce/ops-log/infrastructure/drizzle-nightly-report.reader.js';
+import { IntlTimePeriodResolver } from './infrastructure/time/report-calendar.js';
+import { backupCaptionRenderer } from './modules/commerce/ops-log/application/backup-caption.js';
+import { OperationLog } from './modules/commerce/ops-log/application/operation-log.js';
+import { ServiceAlertLog } from './modules/commerce/ops-log/application/service-alert-log.js';
+import type { OpsLogLane } from './modules/commerce/ops-log/application/ports.js';
+import { WebAdminButtonResolver } from './modules/control/notifications/application/ops-button-resolver.js';
 import { ReceiptReviewPushConsumer } from './modules/commerce/payments/application/receipt-review-push.consumer.js';
 import { ReceiptReviewPushService } from './modules/commerce/payments/application/receipt-review-push.service.js';
 import {
@@ -976,6 +997,8 @@ export interface Container {
    * installation already maintains and neither dials a panel.
    */
   readonly serviceReminderLoop: ServiceReminderLoop;
+  /** Round 4 PR-D: the nightly reports (L27-L30), posted to the REPORTS topic. */
+  readonly nightlyReportLoop: NightlyReportLoop;
   /** The sweep itself, so a test runs one pass instead of starting a timer. */
   readonly serviceReminderSweep: ServiceReminderService;
   /**
@@ -1976,6 +1999,16 @@ export function createContainer(
 
   let installationTenantId: TenantId | null = null;
 
+  /*
+   * Round 4 PR-D: the operations log group's facts and its lane. The lane is a closure over
+   * `notifications`, which is built further down: it is called only once the relay (or a
+   * sweep) runs, never during construction.
+   */
+  const opsLogFacts = new DrizzleOpsLogFacts(database.db);
+  const opsLogLane: OpsLogLane = {
+    queue: (scope, input, tx) => notifications.queue(scope, input, tx),
+  };
+
   const relay = new OutboxRelay(
     database.db,
     [
@@ -2039,7 +2072,8 @@ export function createContainer(
         payments: new DrizzlePaymentRepository(database.db),
         customers: new DrizzleCustomerRepository(database.db),
         invoices: new DrizzleGatewayInvoiceRepository(database.db),
-        wallet: new DrizzleWalletRepository(database.db),
+        facts: opsLogFacts,
+        words: i18nOpsLogWords,
         refundRequests: new DrizzleServiceRefundRequestRepository(database.db),
       }),
       /*
@@ -2048,11 +2082,23 @@ export function createContainer(
        * who may reply. A consumer, so nothing about it can reach the customer's message. The
        * lane is resolved lazily, as the financial log's is.
        */
+      /*
+       * Round 4 PR-D: the rest of the operations log group's messages, each a consumer of
+       * the domain event that is its fact, so none can reach the transaction that did the
+       * work. Imports are excluded twice: by the events they do not emit, and by the
+       * provenance each consumer checks.
+       */
+      new LedgerLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
+      new CustomerLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
+      new ServiceLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
+      new AdminLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
+      new FailureLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
       new TicketSupportNotifyConsumer({
         lane: { queue: (scope, input, tx) => notifications.queue(scope, input, tx) },
         tickets: new DrizzleTicketRepository(database.db),
-        customers: new DrizzleCustomerRepository(database.db),
         reviewers: telegramAdmins,
+        facts: opsLogFacts,
+        words: i18nOpsLogWords,
       }),
     ],
     clock,
@@ -2695,6 +2741,7 @@ export function createContainer(
     wallet: walletRepository,
     settings: settingsResolver,
     auditHistory: new DrizzleAuditHistoryReader(database.db),
+    outbox,
   });
   const discountRepository = new DrizzleDiscountRepository(database.db);
   const cashbackRuleRepository = new DrizzleCashbackRuleRepository(database.db);
@@ -4303,6 +4350,18 @@ export function createContainer(
     uow,
     clock,
     ids,
+    // Round 4 PR-D (L21): one operations-log message per service the customer was told about.
+    opsLog: new ServiceAlertLog({
+      lane: opsLogLane,
+      facts: opsLogFacts,
+      words: i18nOpsLogWords,
+      clock,
+    }),
+    opsLogFailed: (error, serviceId) =>
+      logger.warn(
+        { err: error instanceof Error ? error.message : String(error), serviceId },
+        'Could not write the operations log message for a service reminder',
+      ),
   });
   /*
    * Migration P6. After the reminder sweep, whose burst seed it runs inside its own
@@ -4342,6 +4401,28 @@ export function createContainer(
     clock,
     ids,
   });
+  const nightlyReportLoop = new NightlyReportLoop(
+    new NightlyReportService({
+      uow,
+      scopeActivity: tenants,
+      reader: new DrizzleNightlyReportReader(database.db),
+      lane: opsLogLane,
+      words: i18nOpsLogWords,
+      settings: settingsResolver,
+      features: featureFlagResolver,
+      periods: new IntlTimePeriodResolver(clock),
+      clock,
+    }),
+    {
+      scope: () =>
+        installationTenantId === null
+          ? null
+          : { tenantId: installationTenantId, botInstanceId: null },
+      intervalMs: NIGHTLY_REPORT_INTERVAL_MS,
+      now: () => clock.now().getTime(),
+      logger,
+    },
+  );
   const serviceReminderLoop = new ServiceReminderLoop(serviceReminderSweep, {
     // The same per-pass closure the payment expiry loop uses, and for the same
     // reason: the installation's tenant is a row, so it is not known while this
@@ -6150,6 +6231,18 @@ export function createContainer(
     notifier: customerNotifier,
     uow,
     clock,
+    // Round 4 PR-D (L12-L14): a renewal or an addition is told to the operations log group.
+    opsLog: new OperationLog({
+      lane: opsLogLane,
+      facts: opsLogFacts,
+      words: i18nOpsLogWords,
+      clock,
+    }),
+    opsLogFailed: (error, operationId) =>
+      logger.warn(
+        { err: error instanceof Error ? error.message : String(error), operationId },
+        'Could not write the operations log message for an operation',
+      ),
   });
 
   /*
@@ -6620,6 +6713,8 @@ export function createContainer(
     notifications,
     uow,
     logger,
+    // Round 4 PR-D: the events with a message of their own, and every title in Persian.
+    new OperationalEventPresenter({ facts: opsLogFacts, words: i18nOpsLogWords }),
   );
 
   const notificationTransport: NotificationTransport =
@@ -6653,6 +6748,12 @@ export function createContainer(
     },
     // WP-A4: an intent routed to the group goes where the group is NOW.
     opsGroupRouter,
+    // Round 4 PR-D: the inline URL buttons, addressed to the Web Admin at send time.
+    new WebAdminButtonResolver({
+      settings: settingsResolver,
+      defaultOrigin: config.WEB_ADMIN_ORIGINS[0] ?? null,
+      labelOf: (kind) => OPS_LOG_BUTTON_LABELS_FA[kind],
+    }),
   );
 
   const opsLogService = new OpsLogService(guard, new DrizzleOperationalEventReader(database.db));
@@ -6945,6 +7046,17 @@ export function createContainer(
     },
   });
   const backup = new BackupService({
+    // Round 4 PR-D (L31): the caption is the operator's template, short and in Persian, with
+    // the time of the next automatic backup when one is scheduled.
+    renderCaption: backupCaptionRenderer({
+      scope: () =>
+        installationTenantId === null
+          ? null
+          : { tenantId: installationTenantId, botInstanceId: null },
+      settings: settingsResolver,
+      schedule: () => backupSchedule.effective(),
+      render: (scope, key, values) => templateResolver.render(scope, key, values, 'fa'),
+    }),
     runs: backupRuns,
     tools: backupTools,
     // The SAME keyring the secret cipher uses. One active key encrypts, every
@@ -7608,6 +7720,7 @@ export function createContainer(
     usernameLane,
     usernameNamespace: serviceUsernameRepository,
     serviceReminderLoop,
+    nightlyReportLoop,
     serviceReminderSweep,
     customerReminderLoop,
     pendingPaymentReminderSweep,
@@ -8155,6 +8268,7 @@ export function createContainer(
       await paymentExpiryLoop.stop();
       await gatewayPaymentLoop.stop();
       await serviceReminderLoop.stop();
+      await nightlyReportLoop.stop();
       await customerReminderLoop.stop();
       await campaignScheduleLoop.stop();
       await telegramMessageRetentionLoop.stop();

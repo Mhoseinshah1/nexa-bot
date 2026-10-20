@@ -1,0 +1,335 @@
+import type { OpsLogButtonKind } from '@nexa/contracts';
+
+/**
+ * Round 4 PR-D — the operations log group, in Persian.
+ *
+ * Every log type's DEFAULT body (the owner's reviewed spec, Appendix L) and the few words
+ * the application layer needs but may not import this package for (the boundary check keeps
+ * `@nexa/i18n` out of application code): the container binds `OPS_LOG_WORDS_FA` to the
+ * `OpsLogWords` port.
+ *
+ * The bodies are RAW — `{token}` placeholders un-substituted, and no UUID, tenant, bot or
+ * correlation line anywhere: a short public code stands where an id used to. A line whose
+ * placeholders are all absent is dropped by the renderer, so a fact the message does not have
+ * (a fee of zero, a phone number nobody verified) leaves no empty label behind. The
+ * templates are rendered with Persian digits (`digits: 'PERSIAN'`); a STRING value is never
+ * converted.
+ */
+
+export const OPS_LOG_BODIES_FA = {
+  // --- Generic operational events and the error reports (ERRORS topic) --------------------
+  'ops.notification.operational_event':
+    '{severity} — {heading}\n\n🔧 {technical}\n{details}\n🔁 تعداد رخداد: {occurrences}\n🕒 نخستین بار: {firstSeenAt}\n🕒 این بار: {lastSeenAt}',
+  'ops.notification.payment_link_failed':
+    '🚨 خطای درگاه — لینک پرداخت ساخته نشد\n\n👤 {displayName} · {username} · {telegramId}\n💠 درگاه: {gateway}\n💰 مبلغ: {amount}\n❗ علت: {cause}\n🔧 کد: {technical}\n🔁 تلاش دوباره: {retry}\n👤 برای مشتری: {impact}\n🔖 کد پیگیری: {reference}\n📦 سفارش: {orderCode}\n🧾 فاکتور درگاه: {providerInvoiceId}\n🕒 {at}',
+  'ops.log.error_provision':
+    '🚨 سرویس ساخته نشد — {cause}\n\n👤 {displayName} · {username} · {telegramId}\n📦 {productTitle}\n🖥 پنل: {panelName}\n💰 مبلغ: {amount}\n❗ علت: {cause}\n🔧 کد: {technical}\n↩️ برای مشتری: {impact}\n🔖 کد سفارش: {orderCode}\n🔖 کد پرداخت: {reference}\n🕒 {at}',
+  'ops.log.error_operation':
+    '🚨 {operation} — {state}\n\n👤 {displayName} · {username} · {telegramId}\n🔑 نام سرویس: {serviceUsername}\n🖥 پنل: {panelName}\n💰 مبلغ: {amount}\n❗ علت: {cause}\n🔧 کد: {technical}\n❓ برای مشتری: {impact}\n🔁 {retry}\n🔖 کد سفارش: {orderCode}\n🔖 کد پرداخت: {reference}\n🕒 {at}',
+  'ops.log.storm_rollup':
+    '🚨 {heading}\n\n🔁 {count} خطای دیگر — {users} کاربر\n❗ علت: {cause}\n🔧 کد: {technical}\n🖥 پنل: {panelName}\n🕒 {at}',
+
+  // --- Payments ---------------------------------------------------------------------------
+  'ops.financial.topup_credited':
+    '✅ شارژ کیف پول تأیید و واریز شد\n\n💠 روش: {method}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n💰 مبلغ واریز به کیف پول: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مجموع پرداختی: {payable}\n🎁 هدیهٔ شارژ: {gift}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🔎 منبع تأیید: {evidence}\n👛 موجودی کیف پول: {balanceBefore} ← {balanceAfter}\n🕒 زمان: {at}',
+  'ops.financial.order_paid':
+    '✅ پرداخت سفارش تأیید شد\n\n💠 روش: {method}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n📦 سفارش: {orderCode}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🔎 منبع تأیید: {evidence}\n👛 موجودی کیف پول: {balanceBefore} ← {balanceAfter}\n🕒 زمان: {at}',
+  'ops.log.payment_crypto':
+    '🪙 {kindTitle} — {principal}\n\n👤 {displayName} · {username} · {telegramId}\n💠 روش: {method}\n📦 سفارش: {orderCode}\n🧾 فاکتور درگاه: {providerInvoiceId}\n🆔 شناسهٔ پرداخت درگاه: {providerPaymentId}\n💱 معادل ارزی سفارش: {fiatEquivalent}\n🔢 مبلغ درخواستی: {cryptoRequested}\n💸 مبلغ پرداخت‌شده: {cryptoPaid}\n📥 مبلغ دریافتی نهایی: {cryptoReceived}\n📍 وضعیت پرداخت: {providerStatus}\n🏦 آدرس کیف پول: {walletAddress}\n👛 موجودی کیف پول: {balanceBefore} ← {balanceAfter}\n🔖 کد پیگیری: {reference}\n🕒 {at}',
+  'ops.financial.payment_failed':
+    '❌ پرداخت ناموفق/رد شد\n\n⚠️ علت: {cause}\n💠 روش: {method}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n📦 سفارش: {orderCode}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🕒 زمان: {at}',
+  'ops.financial.late_completion':
+    '⚠️ تأیید دیرهنگام درگاه پس از بسته‌شدن پرداخت\n\nاین پرداخت در Nexa بسته شده بود و هیچ مبلغی ثبت نشد؛ نیاز به بررسی دستی دارد.\n\n💠 درگاه: {gateway}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n📦 سفارش: {orderCode}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🕒 زمان: {at}',
+  'ops.financial.outcome_unknown':
+    '❓ نتیجهٔ پرداخت درگاه نامعلوم ماند\n\nمهلت بررسی درگاه بدون پاسخ قطعی تمام شد. هیچ مبلغی ثبت یا رد نشده است؛ نیاز به تطبیق دستی دارد.\n\n💠 درگاه: {gateway}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n📦 سفارش: {orderCode}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🕒 زمان: {at}',
+  'ops.financial.refund_completed':
+    '↩️ بازگشت وجه انجام شد\n\n📤 مقصد: {channel}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n📦 سفارش: {orderCode}\n💰 مبلغ بازگشتی: {amount}\n👛 موجودی کیف پول: {balanceBefore} ← {balanceAfter}\n🕒 زمان: {at}',
+  'ops.financial.refund_failed':
+    '⛔️ بازگشت وجه ناموفق/لغو شد\n\n📤 مقصد: {channel}\n⚠️ علت: {cause}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n📦 سفارش: {orderCode}\n💰 مبلغ: {amount}\n🕒 زمان: {at}',
+  'ops.financial.service_refund_request':
+    '📝 نتیجهٔ درخواست بازگشت وجه سرویس\n\nوضعیت: {outcome}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🧩 کد سرویس: {serviceCode}\n🔖 کد پیگیری پرداخت: {reference}\n💰 مبلغ تأییدشده: {amount}\n👮 تصمیم‌گیرنده: {adminName}\n🕒 زمان: {at}',
+  'ops.log.wallet_adjusted':
+    '{heading} — {amount}\n\n👤 کاربر: {displayName} · {username} · {telegramId}\n👛 موجودی: {balanceBefore} ← {balanceAfter}\n👮 ادمین: {adminName} · {adminUsername} · {adminTelegramId}\n📝 دلیل: {reason}\n🕒 {at}',
+  'ops.log.referral_commission':
+    '🤝 پرداخت پورسانت معرف — {amount}\n\n👤 دریافت‌کنندهٔ پورسانت (معرف): {referrerName} · {referrerUsername} · {referrerTelegramId}\n📞 شمارهٔ معرف: {referrerPhone}\n🛒 کاربر خریدار (زیرمجموعه): {buyerName} · {buyerUsername} · {buyerTelegramId}\n📞 شمارهٔ خریدار: {buyerPhone}\n📦 بابت: {productTitle}\n💵 مبلغ خرید: {orderTotal}\n📐 سهم پورسانت: {percent}\n👛 موجودی معرف: {balanceBefore} ← {balanceAfter}\n🔖 کد سفارش: {orderCode}\n🔖 کد پرداخت: {reference}\n🕒 {at}',
+  'ops.log.signup_gift':
+    '🎁 هدیهٔ عضویت\n\n🆕 زیرمجموعه (کاربر جدید): {refereeName} · {refereeUsername} · {refereeTelegramId}\n   👛 {refereeBefore} ← {refereeAfter}\n👤 معرف: {referrerName} · {referrerUsername} · {referrerTelegramId}\n   👛 {referrerBefore} ← {referrerAfter}\n🕒 {at}',
+
+  // --- Orders and services (SERVICES topic) -----------------------------------------------
+  'ops.log.service_created':
+    '🛒 خرید جدید{badges}\n\n👤 {displayName} · {username} · {telegramId}\n📞 شماره: {phone}\n📦 {productTitle}\n📍 لوکیشن: {location}\n📊 حجم: {traffic}\n⏳ مدت: {duration}\n🖥 پنل: {panelName}\n🔑 نام سرویس: {serviceUsername}\n💵 قیمت محصول: {listPrice}\n💵 قیمت نهایی: {price}\n💠 پرداخت: {method} — کیف پول استفاده نشد\n🔖 کد سفارش: {orderCode}\n🔖 کد پرداخت: {reference}\n🧩 کد سرویس: {serviceCode}\n🕒 {at}',
+  'ops.log.service_created_wallet':
+    '🛒 خرید جدید{badges}\n\n👤 {displayName} · {username} · {telegramId}\n📞 شماره: {phone}\n📦 {productTitle}\n📍 لوکیشن: {location}\n📊 حجم: {traffic}\n⏳ مدت: {duration}\n🖥 پنل: {panelName}\n🔑 نام سرویس: {serviceUsername}\n💵 قیمت محصول: {listPrice}\n💵 قیمت نهایی: {price}\n👛 کیف پول: {balanceBefore} ← {balanceAfter}\n🔖 کد سفارش: {orderCode}\n🔖 کد پرداخت: {reference}\n🧩 کد سرویس: {serviceCode}\n🕒 {at}',
+  'ops.log.service_renewed':
+    '🔄 تمدید سرویس{badges}\n\n👤 {displayName} · {username} · {telegramId}\n📞 شماره: {phone}\n🔑 نام سرویس: {serviceUsername}\n🖥 پنل: {panelName}\n📦 {productTitle}\n📊 مصرف قبل از تمدید: {usedBytes} از {limitBefore}\n📅 انقضا: {expiresBefore} ← {expiresAfter}\n💵 قیمت محصول: {listPrice}\n💵 مبلغ تمدید: {price}\n💠 پرداخت: {method}\n👛 کیف پول: {balanceBefore} ← {balanceAfter}\n🔖 کد سفارش: {orderCode}\n🔖 کد پرداخت: {reference}\n🧩 کد سرویس: {serviceCode}\n🕒 {at}',
+  'ops.log.traffic_added':
+    '➕ حجم اضافه — {addedBytes}{badges}\n\n👤 {displayName} · {username} · {telegramId}\n📞 شماره: {phone}\n🔑 نام سرویس: {serviceUsername}\n🖥 پنل: {panelName}\n📊 حجم کل: {limitBefore} ← {limitAfter}\n📉 مصرف‌شده: {usedBytes}\n💵 مبلغ: {price}\n💠 پرداخت: {method}\n👛 کیف پول: {balanceBefore} ← {balanceAfter}\n🔖 کد سفارش: {orderCode}\n🔖 کد پرداخت: {reference}\n🧩 کد سرویس: {serviceCode}\n🕒 {at}',
+  'ops.log.time_added':
+    '⏳ زمان اضافه — {addedDays}{badges}\n\n👤 {displayName} · {username} · {telegramId}\n📞 شماره: {phone}\n🔑 نام سرویس: {serviceUsername}\n🖥 پنل: {panelName}\n📅 انقضا: {expiresBefore} ← {expiresAfter}\n💵 مبلغ: {price}\n💠 پرداخت: {method}\n👛 کیف پول: {balanceBefore} ← {balanceAfter}\n🔖 کد سفارش: {orderCode}\n🔖 کد پرداخت: {reference}\n🧩 کد سرویس: {serviceCode}\n🕒 {at}',
+  'ops.log.link_changed':
+    '🔁 تغییر لینک سرویس\n\n👤 {displayName} · {username} · {telegramId}\n🔑 نام سرویس: {serviceUsername}\n🖥 پنل: {panelName}\n🙋 درخواست از: {byWhom}\n🔢 بار {rotations} در ۳۰ روز گذشته\n🚫 لینک قبلی دیگر کار نمی‌کند.\n🧩 کد سرویس: {serviceCode}\n🕒 {at}',
+  'ops.log.trial_created':
+    '🧪 اکانت تست\n\n👤 {displayName} · {username} · {telegramId}\n📞 شماره: {phone}\n🔑 نام سرویس: {serviceUsername}\n🖥 پنل: {panelName}\n📊 حجم: {traffic}\n⏳ مدت: {duration}\n🧩 کد سرویس: {serviceCode}\n🕒 {at}',
+  'ops.log.service_alert':
+    '{heading}\n\n👤 {displayName} · {username} · {telegramId}\n🔑 نام سرویس: {serviceUsername}\n🖥 پنل: {panelName}\n📍 وضعیت: {status}\n📉 حجم باقی‌مانده: {remainingBytes}\n⏳ زمان باقی‌مانده: {remainingTime}\n🔌 آخرین اتصال: {lastConnection}\n🕒 {at}',
+
+  // --- Customers, administrators, resellers -----------------------------------------------
+  'ops.log.user_new':
+    '🆕 کاربر جدید\n\n👤 {displayName} · {username} · {telegramId}\n📞 شماره: {phone}\n🤝 معرف: {referrerName} · {referrerUsername} · {referrerTelegramId}\n🕒 {at}',
+  'ops.log.user_blocked':
+    '{heading}\n\n👤 {displayName} · {username} · {telegramId}\n👮 ادمین: {adminName} · {adminUsername}\n🧭 نوع: {blockType}\n⏳ مدت: {until}\n📝 دلیل: {reason}\n🕒 {at}',
+  'ops.log.admin_changed':
+    '{heading}\n\n👤 {targetName} · @{targetUsername} · {targetTelegramId}\n🎭 نقش‌ها: {roles}\n🎭 تغییر نقش: {rolesBefore} ← {rolesAfter}\n🔐 دسترسی‌ها: {permissions} مجوز\n🙋 توسط: {actorName}\n🕒 {at}',
+  'ops.log.reseller_changed':
+    '{heading}\n\n👤 {displayName} · {username} · {telegramId}\n🧑‍💼 {tierBefore} ← {tierAfter}\n📝 دلیل: {reason}\n🙋 توسط: {actorName}\n🕒 {at}',
+
+  // --- Panels and support -----------------------------------------------------------------
+  'ops.log.panel_down':
+    '🟥 پنل «{panelName}» از دسترس خارج شد\n\n❗ علت: {cause}\n🔧 کد: {technical}\n⛔ {salesNote}\n🕒 از {since}',
+  'ops.log.panel_up': '🟩 پنل «{panelName}» برگشت — {at}\n⏱ مدت قطعی: {downtime}',
+  'ops.support.ticket_opened':
+    '🎫 تیکت جدید #{ticketNumber} · {category}\n\n👤 {displayName} · {username} · {telegramId}\n💬 «{snippet}»\n🕒 {at}',
+  'ops.support.customer_replied':
+    '💬 پیام تازهٔ کاربر — تیکت #{ticketNumber} · {category}\n\n👤 {displayName} · {username} · {telegramId}\n💬 «{snippet}»\n🕒 {at}',
+
+  // --- The nightly reports (REPORTS topic) and the backup caption -------------------------
+  'ops.log.report_summary':
+    '📊 گزارش روز — {day}\n\n💰 فروش: {sales} {salesChange}\n🛒 خرید جدید: {newPurchases} (🥇 خرید اول: {firstPurchases})\n🔄 تمدید: {renewals}\n👥 کاربر جدید: {newCustomers}\n👤 کاربر فعال: {activeCustomers}\n🧪 تست: {trials}\n📶 سرویس فعال: {activeServices}\n⏰ بهترین ساعت: {bestHour}\n⚠️ خطاها: {errors}\n❌ پرداخت ناموفق: {failedPayments}\n🎫 تیکت باز: {openTickets}\n{cleanup}',
+  'ops.log.report_financial':
+    '💵 مالی امروز — {day}\n\n🛒 خرید جدید: {newOrdersSum}\n🔄 تمدید: {renewalsSum}\n➕ حجم اضافه ({trafficCount}): {trafficSum}\n⏳ زمان اضافه ({timeCount}): {timeSum}\n🔧 سایر خریدها ({otherCount}): {otherSum}\n━━━━━━━━━━━━━━\n📥 ناخالص: {gross}\n➖ بازگشت وجه ({refundsCount}): {refundsSum}\n➖ پورسانت ({commissionCount}): {commissionSum}\n➖ هدیهٔ شارژ: {giftSum}\n✅ خالص: {net}\n\n💠 به تفکیک روش: {methods}',
+  'ops.log.report_panels': '🖥 پنل‌ها و نماینده‌ها — {day}\n\n{panelsBlock}\n\n{resellersBlock}',
+  'ops.log.backup_caption':
+    '💾 بکاپ — {at}\n📦 {fileName} · {size}\n✅ رمزگذاری و بازیابی آزمایشی موفق\n🕒 بکاپ بعدی: {nextAt}\nSHA-256: {checksum}',
+
+  // --- Topic names ------------------------------------------------------------------------
+  'ops.group.topic_name.users': '👥 کاربران',
+  'ops.group.topic_name.reports': '📊 گزارش‌ها',
+} as const;
+
+/**
+ * The words the log builders need, as plain data. The application layer reaches them through
+ * the `OpsLogWords` port and never imports this package.
+ */
+export const OPS_LOG_WORDS_FA = {
+  /** What a missing name, username or Telegram id reads as: a word, never a dash. */
+  noName: 'بدون نام',
+  noUsername: 'بدون یوزرنیم',
+  noTelegram: 'بدون تلگرام',
+  none: '—',
+  /** The title of an operational event whose code the Persian label map does not know. */
+  unknownEvent: 'رویداد سامانه',
+
+  paymentMethods: {
+    WALLET: 'کیف پول',
+    MANUAL_TRANSFER: 'کارت به کارت',
+    GATEWAY: 'درگاه پرداخت',
+  },
+  /** The gateway a customer paid through, by provider: the method's name, shown ONCE. */
+  gateways: {
+    MANUAL_TRANSFER: 'کارت به کارت',
+    TONPAYS: 'تون‌پی (وب‌سایت)',
+    TONPAYS_TELEGRAM: 'تون‌پی تلگرام',
+    TELEGRAM_STARS: 'استارز تلگرام',
+    NOWPAYMENTS: 'ارز دیجیتال (NowPayments)',
+    CENTRALPAY: 'سنترال‌پی',
+  },
+  evidence: {
+    OPERATOR_REVIEW: 'بررسی اپراتور',
+    WALLET_DEBIT: 'کسر از کیف پول',
+    GATEWAY_CALLBACK: 'پیام تأیید تلگرام',
+    RECONCILIATION: 'تطبیق دستی با درگاه',
+    GATEWAY_INQUIRY: 'استعلام درگاه',
+    LEGACY_IMPORT: 'انتقال از ربات قبلی',
+  },
+  paymentFailure: {
+    REJECTED: 'رسید توسط اپراتور رد شد',
+    GATEWAY_FAILED: 'درگاه پرداخت را ناموفق اعلام کرد',
+  },
+  refundChannels: {
+    WALLET_CREDIT: 'کیف پول',
+    EXTERNAL_MANUAL: 'بازگشت دستی بیرون از ربات',
+    PROVIDER: 'درگاه پرداخت',
+  },
+  refundFailure: {
+    OPERATOR_FAILED: 'اپراتور بازگشت وجه را ناموفق ثبت کرد',
+    SUPERSEDED: 'بازگشت وجه با درخواست دیگری جایگزین شد',
+  },
+  refundRequestOutcomes: {
+    COMPLETED: 'تأیید شد؛ سرویس حذف و مبلغ به کیف پول برگشت',
+    REJECTED: 'رد شد؛ چیزی تغییر نکرد',
+    FAILED: 'اجرا نشد؛ سرویس حذف نشد و مبلغی برنگشت',
+  },
+  cryptoKinds: { topup: 'شارژ کیف پول', order: 'پرداخت سفارش' },
+
+  walletAdjust: { CREDIT: '➕ افزایش دستی موجودی', DEBIT: '➖ کاهش دستی موجودی' },
+
+  badges: { firstPurchase: '🥇 اولین خرید', reseller: '🧑‍💼 نماینده', separator: ' · ' },
+  operations: {
+    RENEW: 'تمدید انجام نشد',
+    ADD_TRAFFIC: 'خرید حجم اضافه انجام نشد',
+    ADD_TIME: 'خرید زمان اضافه انجام نشد',
+    TRIAL: 'ساخت اکانت تست انجام نشد',
+    PROVISION: 'ساخت سرویس انجام نشد',
+    OTHER: 'عملیات سرویس انجام نشد',
+  },
+  operationStates: { FAILED: 'ناموفق', UNKNOWN: 'نتیجه نامشخص' },
+  byWhom: { CUSTOMER: 'مشتری', ADMIN: 'ادمین', SYSTEM: 'سیستم' },
+
+  providerFailures: {
+    AUTHENTICATION_FAILED: 'پنل نام کاربری یا رمز عبور را نپذیرفت',
+    AUTHENTICATION_REQUIRES_INTERACTION: 'پنل ورود دومرحله‌ای می‌خواهد',
+    UNREACHABLE: 'اتصال به پنل برقرار نشد',
+    TIMEOUT: 'پنل در مهلت مقرر جواب نداد',
+    TLS_FAILED: 'گواهی SSL پنل نامعتبر یا منقضی شده است',
+    BLOCKED_TARGET: 'نشانی پنل مجاز نیست',
+    RATE_LIMITED: 'پنل محدودیت تعداد درخواست اعمال کرد',
+    MALFORMED_RESPONSE: 'پاسخ پنل قابل خواندن نبود',
+    PROVIDER_ERROR: 'پنل خطای داخلی داد',
+    PROVIDER_REFUSED: 'پنل درخواست را نپذیرفت',
+    UNSUPPORTED_CAPABILITY: 'این پنل از این عملیات پشتیبانی نمی‌کند',
+    UNKNOWN: 'علت مشخص نیست',
+  },
+  /** Why an order that was paid could not be delivered and was refunded (a closed vocabulary). */
+  refundReasons: {
+    ARCHIVED: 'پنل بایگانی شده است',
+    DISABLED: 'پنل غیرفعال است',
+    DRAINING: 'فروش روی پنل در حال بسته شدن است',
+    PROVISION_UNSUPPORTED: 'پنل ساخت سرویس را پشتیبانی نمی‌کند',
+    CREDENTIALS_MISSING: 'مشخصات ورود پنل ثبت نشده است',
+    ACTIVATION_INCOMPLETE: 'فعال‌سازی پنل کامل نیست',
+    UNHEALTHY: 'پنل ناسالم است و در دسترس نیست',
+    UNVALIDATED: 'اتصال پنل هنوز آزمایش نشده است',
+    AT_CAPACITY: 'ظرفیت پنل پر است',
+    ACTION_IN_PROGRESS: 'عملیات دیگری روی همین سرویس در جریان بود',
+    SERVICE_NOT_ELIGIBLE: 'سرویس برای این عملیات مجاز نبود',
+    SERVICE_NOT_OWNED: 'سرویس متعلق به این مشتری نبود',
+    UNLIMITED: 'سرویس نامحدود است و این عملیات روی آن معنا ندارد',
+    LIMIT_EXCEEDED: 'مقدار درخواستی از سقف مجاز بیشتر است',
+    CALL_STRANDED: 'پنل جواب نداد و ساخت سرویس نیمه‌کاره ماند',
+    ATTEMPTS_SPENT: 'تلاش‌های ساخت سرویس تمام شد و پنل خطا داد',
+    PROVISION_CYCLE_EXHAUSTED: 'تلاش‌های ساخت سرویس تمام شد',
+    FOUND_WITHOUT_PROVENANCE: 'سرویس روی پنل پیدا شد اما مال این سفارش نبود',
+    ALLOWANCE_UNVERIFIED: 'اعمال تغییر روی پنل تأیید نشد',
+    TERMINATED_BEFORE_PROVISION: 'سرویس پیش از ساخته شدن حذف شد',
+    RECONCILE_FIRST: 'سرویس نیازمند بررسی دستی بود',
+    FEATURE_DISABLED: 'این قابلیت خاموش بود',
+    DEFAULT: 'ساخت روی پنل ممکن نشد',
+  },
+  paymentLinkCauses: {
+    NO_LINK: 'درگاه پیش‌فاکتور را ساخت اما لینک پرداخت برنگرداند',
+    MALFORMED_LINK: 'لینک پرداختی که درگاه برگرداند نامعتبر یا ناامن بود',
+    NO_CARD: 'درگاه پیش‌فاکتور را ساخت اما کارت مقصد را برنگرداند',
+    BAD_REQUEST: 'درگاه درخواست را رد کرد (اطلاعات ارسالی نامعتبر)',
+    UNAUTHORIZED: 'درگاه احراز هویت را رد کرد؛ کلید API درگاه را بررسی کنید',
+    FORBIDDEN: 'درگاه دسترسی را رد کرد',
+    CONFIGURATION: 'تنظیمات درگاه کامل نیست یا درگاه آن را نپذیرفت',
+    RATE_LIMITED: 'محدودیت تعداد درخواست درگاه',
+    PROVIDER_ERROR: 'خطای سمت درگاه',
+    BAD_RESPONSE: 'پاسخ درگاه قابل خواندن نبود',
+    TIMEOUT: 'پاسخی از درگاه در مهلت مقرر نرسید',
+    UNREACHABLE: 'اتصال به درگاه برقرار نشد',
+    UNKNOWN: 'نتیجهٔ درخواست نامشخص است',
+  },
+  retry: {
+    yes: 'ممکن است تلاش بعدی بدون تغییر موفق شود',
+    no: 'بی‌فایده تا رفع مشکل (تنظیمات درگاه یا کلید را بررسی کنید)',
+    unknown: 'خودکار تکرار نمی‌شود؛ ممکن است پیش‌فاکتور نزد درگاه ساخته شده باشد',
+  },
+  impact: {
+    paymentLinkNoCharge: 'پولی کم نشد؛ لینک پرداخت دریافت نکرد و می‌تواند دوباره تلاش کند',
+    paymentLinkUnknown: 'پولی کم نشد؛ نتیجهٔ ساخت فاکتور نامشخص است و بررسی می‌شود',
+    refundedToWallet: 'مبلغ به کیف پولش برگشت',
+    trialGivenBack: 'اکانت تست به حساب او نخورد',
+    pending: 'پول برنمی‌گردد تا نتیجه روشن شود؛ پنل بررسی می‌شود',
+    retrying: 'سیستم دوباره تلاش می‌کند؛ پولی برنگشته',
+    notRefunded: 'هنوز بازگشت وجهی ثبت نشده است',
+  },
+
+  serviceStates: {
+    PENDING_PROVISION: 'در انتظار ساخت',
+    ACTIVE: 'فعال',
+    SUSPENDED: 'معلق',
+    EXPIRED: 'منقضی',
+    TERMINATED: 'حذف‌شده',
+    UNRECONCILED: 'نیازمند بررسی',
+    NO_DATA: 'نامشخص',
+  },
+  reminderHeadings: {
+    EXPIRY_EARLY: '🔔 نزدیک انقضا',
+    EXPIRY_FIRST: '🔔 نزدیک انقضا',
+    EXPIRY_SECOND: '🔔 نزدیک انقضا',
+    EXPIRY_DAY: '⏰ امروز زمان سرویس تمام می‌شود',
+    EXPIRED: '⛔ پایان زمان سرویس',
+    USAGE_FIRST: '📉 کم شدن حجم',
+    USAGE_SECOND: '📉 کم شدن حجم',
+    USAGE_FINAL: '⛔ پایان حجم',
+  },
+  time: { unlimited: 'نامحدود', expired: 'تمام شده', daysLeft: 'روز', hoursLeft: 'ساعت' },
+
+  panel: {
+    salesStopped: 'فروش روی این پنل تا برگشت پنل متوقف است',
+    salesContinue: 'فروش روی این پنل ادامه دارد (پنل ناپایدار است)',
+    downFor: { minutes: 'دقیقه', hours: 'ساعت', and: 'و' },
+  },
+  block: {
+    blocked: '⛔ کاربر مسدود شد',
+    unblocked: '✅ رفع مسدودی کاربر',
+    manual: 'دستی (توسط ادمین)',
+    spam: 'خودکار (ضد اسپم)',
+    until: 'تا رفع مسدودی توسط ادمین',
+  },
+  admin: {
+    created: '👮 ادمین جدید',
+    rolesChanged: '🎭 تغییر نقش ادمین',
+    disabled: '🚫 ادمین غیرفعال شد',
+    enabled: '✅ ادمین دوباره فعال شد',
+    noRole: 'بدون نقش',
+    system: 'سیستم',
+  },
+  reseller: {
+    PROMOTED: '🧑‍💼 ارتقا به نماینده',
+    TIER_CHANGED: '🧑‍💼 تغییر سطح نماینده',
+    SUSPENDED: '⬇️ خروج از نمایندگی',
+    REACTIVATED: '⬆️ بازگشت به نمایندگی',
+    ordinary: 'کاربر عادی',
+  },
+  storm: { heading: 'خطاهای تکراری' },
+  report: {
+    cleanup: (n: string) => `🧹 پاکسازی: ${n} پرداخت ناتمام منقضی شد`,
+    noActivity: 'امروز فعالیتی ثبت نشده است.',
+    resellerLine: 'نماینده‌ها',
+    gb: 'گیگ',
+    orders: 'سفارش',
+    health: {
+      HEALTHY: 'سالم',
+      DEGRADED: 'ناپایدار',
+      UNHEALTHY: 'ناسالم',
+      UNCHECKED: 'بررسی‌نشده',
+      DISABLED: 'غیرفعال',
+    },
+    methods: {
+      MANUAL_TRANSFER: 'کارت',
+      TONPAYS: 'تون‌پی',
+      TONPAYS_TELEGRAM: 'تون‌پی تلگرام',
+      TELEGRAM_STARS: 'استارز',
+      NOWPAYMENTS: 'ارز',
+      CENTRALPAY: 'سنترال‌پی',
+      GATEWAY: 'درگاه',
+      WALLET: 'کیف پول',
+    },
+  },
+} as const;
+
+/** The label of each inline URL button. */
+export const OPS_LOG_BUTTON_LABELS_FA: Readonly<Record<OpsLogButtonKind, string>> = {
+  USER: '👤 پروفایل کاربر',
+  PAYMENT: '🧾 پرداخت',
+  ORDER: '📦 سفارش',
+  SERVICE: '🔑 سرویس',
+  PANEL: '🖥 وضعیت پنل',
+  GATEWAY: '⚙️ تنظیمات درگاه',
+  TICKET: '💬 پاسخ در پنل',
+  MANUAL_CREDIT: '✅ شارژ دستی کیف پول',
+  DASHBOARD: '📈 داشبورد',
+  NOTIFICATIONS: '📋 فهرست کامل در پنل',
+};

@@ -450,6 +450,98 @@ export const SETTINGS = [
     consumer: 'ACTIVE',
   },
   /*
+   * Round 4 PR-D — the operations log group's log types (`OPS_LOG_TYPES`). Read at the point a
+   * message is queued, so a change applies to the next message and never to one already waiting.
+   */
+  {
+    key: 'ops.log.disabled_types',
+    description:
+      'The log types switched OFF in the operations log group (`OPS_LOG_TYPES`): a type listed ' +
+      'here is not posted at all. Empty — the default — posts every type. A name this release ' +
+      'does not know is kept and ignored, so a setting written by a later release still parses. ' +
+      'Edited on the operations log group page, one switch per type under its topic.',
+    schema: z.array(z.string().min(1).max(48)).max(64),
+    defaultValue: [] as string[],
+    // An empty list is the default and means "every type is posted".
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: 'ops_notifications',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'ops.log.storm_rollup_enabled',
+    description:
+      'Whether identical error reports are merged during a storm. Off — the default — every ' +
+      'error is its own message, always. On, more than `ops.log.storm_threshold` identical ' +
+      'errors inside `ops.log.storm_window_minutes` are replaced by one roll-up message per ' +
+      'window («۳۷ خطای دیگر — ۲۹ کاربر»); the individual events stay in the notification centre.',
+    schema: z.boolean(),
+    defaultValue: false,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: 'ops_notifications',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'ops.log.storm_threshold',
+    description:
+      'How many identical error messages one window posts individually before the storm ' +
+      'roll-up takes over. Read only when `ops.log.storm_rollup_enabled` is on.',
+    schema: z.number().int().min(2).max(500),
+    defaultValue: 20,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: 'ops_notifications',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'ops.log.storm_window_minutes',
+    description:
+      'The length, in minutes, of the window the storm roll-up counts identical errors in, and ' +
+      'of the interval between two roll-up messages. Read only when ' +
+      '`ops.log.storm_rollup_enabled` is on.',
+    schema: z.number().int().min(1).max(60),
+    defaultValue: 5,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: 'ops_notifications',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'ops.log.nightly_report_time',
+    description:
+      'The Tehran wall-clock time (HH:MM) the nightly reports are posted to the reports topic. ' +
+      'They always report the PREVIOUS, completed Tehran day, half-open [00:00, next 00:00): ' +
+      'at 00:05 on the 21st the report is the 20th, so a report never describes a day that ' +
+      'has not ended. Default 00:05.',
+    schema: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'A time of day written HH:MM.'),
+    defaultValue: '00:05',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: 'ops_notifications',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'ops.log.admin_base_url',
+    description:
+      'The https address of the Web Admin, which the inline buttons of the operations log ' +
+      'messages open (user, payment, service, panel). Empty — the default — uses the first ' +
+      'address in WEB_ADMIN_ORIGINS; with neither, or with an address that is not https, the ' +
+      'messages carry no buttons rather than a link Telegram would refuse.',
+    schema: z.union([z.literal(''), z.url({ protocol: /^https$/ })]),
+    defaultValue: '',
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'SENSITIVE',
+    configures: 'ops_notifications',
+    consumer: 'ACTIVE',
+  },
+  /*
    * The automatic backup schedule (spec §13.2). Read on the INSTALLATION tenant by the
    * worker's backup scheduler on every tick, so a change applies within one tick and
    * needs no restart. Null — the default — means the installation's environment value

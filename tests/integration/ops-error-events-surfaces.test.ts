@@ -256,10 +256,14 @@ describe('FIX-05: the surfaces report through the one recorder', () => {
       payload: Record<string, unknown>;
       destination: Record<string, unknown>;
     }[];
-    const blocked = intents.filter((row) => row.payload['code'] === 'antispam.customer_blocked');
+    // R4 PR-D: the message carries no event code (that is an id-like line); it is titled in
+    // Persian from the code, with the code itself only in the short technical line.
+    const blocked = intents.filter(
+      (row) => row.payload['heading'] === 'مشتری به‌خاطر پیام‌های زیاد موقتاً مسدود شد',
+    );
     expect(blocked).toHaveLength(1);
     // Stored as WARN (the CHECK-pinned vocabulary), presented as SECURITY, in its topic.
-    expect(blocked[0]!.payload['severity']).toBe('SECURITY');
+    expect(blocked[0]!.payload['severity']).toBe('🛡 امنیتی');
     expect(blocked[0]!.destination['opsTopic']).toBe('SECURITY');
   });
 });

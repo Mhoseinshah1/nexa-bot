@@ -1,4 +1,4 @@
-import type { PaymentGatewayProvider } from '@nexa/contracts';
+import { PAYMENT_METHOD_SLUGS, type PaymentGatewayProvider } from '@nexa/contracts';
 
 /**
  * UX Batch 01, item 8: every payment method has its own view at its own URL.
@@ -9,16 +9,10 @@ import type { PaymentGatewayProvider } from '@nexa/contracts';
  *
  * The table is TOTAL over `PaymentGatewayProvider` (a `Record`, not a partial map), so a
  * provider added to the contract does not compile until it has a view — rather than
- * appearing in the list with a link to a 404.
+ * appearing in the list with a link to a 404. It lives in `@nexa/contracts` (Round 4 PR-D)
+ * because an operations-log message's gateway button must open the same route.
  */
-export const PAYMENT_METHOD_SLUGS: Readonly<Record<PaymentGatewayProvider, string>> = {
-  MANUAL_TRANSFER: 'card-to-card',
-  TONPAYS: 'tonpays',
-  TONPAYS_TELEGRAM: 'tonpays-telegram',
-  TELEGRAM_STARS: 'telegram-stars',
-  NOWPAYMENTS: 'nowpayments',
-  CENTRALPAY: 'centralpay',
-};
+export { PAYMENT_METHOD_SLUGS };
 
 /** The list of payment methods. */
 export const PAYMENT_METHODS_PATH = '/payment-gateways';

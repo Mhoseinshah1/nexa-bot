@@ -127,9 +127,9 @@ describe('deserialising a stored notification payload', () => {
   it('skips a placeholder the payload does not carry', () => {
     const values = deserialiseValues({
       templateKey: 'ops.notification.operational_event',
-      payload: { code: 'panel.unreachable' },
+      payload: { technical: 'panel.unreachable' },
     });
-    expect(Object.keys(values)).toEqual(['code']);
+    expect(Object.keys(values)).toEqual(['technical']);
   });
 });
 

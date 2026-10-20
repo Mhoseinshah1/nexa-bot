@@ -2104,7 +2104,7 @@ export class ProvisionerService {
         eventType: 'ServiceSubscriptionRotated',
         aggregateType: 'Service',
         aggregateId: serviceId,
-        payload: { customerId: service.customerId },
+        payload: { customerId: service.customerId, operationId: operation.id },
       });
     });
 
@@ -2486,7 +2486,7 @@ export class ProvisionerService {
           eventType: 'ServiceSubscriptionRotated',
           aggregateType: 'Service',
           aggregateId: serviceId,
-          payload: { customerId: service.customerId },
+          payload: { customerId: service.customerId, operationId: operation.id },
         });
       }
     });
@@ -2591,6 +2591,9 @@ export class ProvisionerService {
             state: from,
             expiresAt: service.expiresAt?.toISOString() ?? null,
             trafficLimitBytes: service.trafficLimitBytes.toString(),
+            // Round 4 PR-D: what the operations log group reports as "used before the
+            // renewal" (L12) — the usage last synced, read before this change.
+            trafficUsedBytes: service.trafficUsedBytes.toString(),
             deviceLimit: service.deviceLimit,
           },
           after: {

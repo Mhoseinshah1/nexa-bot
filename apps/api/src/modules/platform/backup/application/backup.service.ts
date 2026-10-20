@@ -130,7 +130,27 @@ export interface BackupServiceDeps {
    * open is recoverable, a closed one that should not be is not.
    */
   readonly conditionOpen?: (code: string) => Promise<boolean>;
+  /**
+   * Round 4 PR-D (log L31): the Persian head of a ONE-FILE archive's caption as the operator's
+   * own template renders it (`ops.log.backup_caption`, edited in «متن‌ها»). It replaces only
+   * the head of `backupPartCaption`; the technical block (id, digests, the restore command)
+   * is always kept beneath it. Null — or a throw, no renderer, a split archive, or a caption
+   * that would pass Telegram's limit — keeps `backupPartCaption` whole, so a caption that
+   * cannot be rendered never costs the delivery.
+   */
+  readonly renderCaption?: (facts: {
+    /** When the backup was completed: verified and about to be delivered. */
+    readonly at: Date;
+    /** When the run began — what the scheduler's next run is counted from. */
+    readonly startedAt: Date;
+    readonly fileName: string;
+    readonly archiveBytes: number;
+    readonly checksum: string;
+  }) => Promise<string | null>;
 }
+
+/** Telegram's limit on a document caption. */
+const BACKUP_CAPTION_MAX_CHARS = 1024;
 
 /**
  * One key for the installation's backup condition.
@@ -754,25 +774,29 @@ export class BackupService {
       const at = this.deps.clock.now();
       let attempt: DeliveryAttempt;
       try {
+        const technical = backupPartCaption({
+          id: input.id,
+          takenAt,
+          partNumber: part.partNumber,
+          partCount: count,
+          filename: part.filename,
+          bytes: part.bytes,
+          sha256: part.sha256,
+          sevenZip,
+          totalBytes: input.archiveBytes,
+          dumpChecksum: input.manifest.checksum,
+          restoreCommand: this.deps.restoreCommand,
+          tableCount: input.tableCount,
+          postgresVersion: input.manifest.postgresVersion,
+          ...(input.title === undefined ? {} : { title: input.title }),
+        });
         attempt = await channel.sendDocument({
           archivePath: input.archivePath,
           filename: part.filename,
-          caption: backupPartCaption({
-            id: input.id,
-            takenAt,
-            partNumber: part.partNumber,
-            partCount: count,
-            filename: part.filename,
-            bytes: part.bytes,
-            sha256: part.sha256,
-            sevenZip,
-            totalBytes: input.archiveBytes,
-            dumpChecksum: input.manifest.checksum,
-            restoreCommand: this.deps.restoreCommand,
-            tableCount: input.tableCount,
-            postgresVersion: input.manifest.postgresVersion,
-            ...(input.title === undefined ? {} : { title: input.title }),
-          }),
+          caption:
+            count === 1 && input.title === undefined
+              ? await this.withRenderedHead(technical, input, part.filename)
+              : technical,
           // One part is the whole file; several are ranges of it.
           ...(count === 1 ? {} : { range: { start: part.start, end: part.end } }),
         });
@@ -842,6 +866,38 @@ export class BackupService {
       }
     }
     return { state: 'SUCCEEDED', detail, attemptedAt, delivered, summaryState };
+  }
+
+  /**
+   * The one-file caption with the operator's Persian head (L31) in place of the built-in one,
+   * the technical block kept beneath it. The head's time is the COMPLETION time and its «next
+   * backup» is the scheduler's own rule, the run's start plus the interval (Codex review of
+   * #301) — never the manifest's dump time presented as when the backup was made.
+   */
+  private async withRenderedHead(
+    technical: string,
+    input: { id: string; manifest: BackupManifest; archiveBytes: number },
+    fileName: string,
+  ): Promise<string> {
+    if (this.deps.renderCaption === undefined) return technical;
+    let head: string | null;
+    try {
+      head = await this.deps.renderCaption({
+        at: this.deps.clock.now(),
+        startedAt: new Date(input.manifest.createdAt),
+        fileName,
+        archiveBytes: input.archiveBytes,
+        checksum: input.manifest.checksum,
+      });
+    } catch {
+      // The caption is a courtesy: the built-in one stands and the archive is delivered.
+      return technical;
+    }
+    if (head === null || head.trim() === '') return technical;
+    const split = technical.indexOf('\n\n');
+    const tail = split === -1 ? '' : technical.slice(split + 2);
+    const caption = tail === '' ? head.trim() : `${head.trim()}\n\n${tail}`;
+    return caption.length > BACKUP_CAPTION_MAX_CHARS ? technical : caption;
   }
 
   /** Where the next archive would go, for the status card. A read; no Telegram call. */

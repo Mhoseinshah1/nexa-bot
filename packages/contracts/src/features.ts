@@ -90,6 +90,12 @@ export const FEATURE_FLAGS = [
       'ops.notifications.payments_topic_id',
       'ops.notifications.max_attempts',
       'ops.notifications.max_per_minute',
+      'ops.log.disabled_types',
+      'ops.log.storm_rollup_enabled',
+      'ops.log.storm_threshold',
+      'ops.log.storm_window_minutes',
+      'ops.log.nightly_report_time',
+      'ops.log.admin_base_url',
     ],
   },
   {

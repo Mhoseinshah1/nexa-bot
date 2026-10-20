@@ -25,7 +25,7 @@ import {
   type TenantContext,
   type TenantId,
 } from '@nexa/contracts';
-import { CATALOGUE_FA, renderTemplateBody } from '@nexa/i18n';
+import { CATALOGUE_FA, DEFAULT_TEMPLATE_PRESENTATION, renderTemplateBody } from '@nexa/i18n';
 import {
   REDACTED,
   redactCardNumbers,
@@ -55,7 +55,9 @@ import {
 } from '../../apps/api/src/modules/commerce/payments/application/payment-link-failure';
 import { GATEWAY_CREATE_UNKNOWN_CODE } from '../../apps/api/src/modules/commerce/payments/application/gateway-payment.service';
 import type { GatewayCreateOutcome } from '../../apps/api/src/modules/commerce/payments/application/gateway-invoice-ports';
-import { paymentLinkFailureValues } from '../../apps/api/src/modules/control/notifications/application/payment-link-presentation';
+import { OperationalEventPresenter } from '../../apps/api/src/modules/commerce/ops-log/application/event-presenter';
+import { i18nOpsLogWords } from '../../apps/api/src/modules/commerce/ops-log/infrastructure/i18n-ops-log-words';
+import type { OpsLogFacts } from '../../apps/api/src/modules/commerce/ops-log/application/ports';
 import { NotifyingOperationalEventRecorder } from '../../apps/api/src/modules/control/notifications/application/operational-event-projector';
 
 /**
@@ -516,50 +518,84 @@ describe('FIX-04: a payment link failure, classified once', () => {
 // FIX-04: the group message
 // ---------------------------------------------------------------------------------------
 
-function renderPaymentLink(event: OperationalEventInput): string {
-  const values = paymentLinkFailureValues(event.context, {
-    eventId: 'evt_01900000-0000-7000-8000-00000000e001',
-    at: AT,
-    tenantId: '01900000-0000-7000-8000-000000000001',
-  });
-  expect(values).not.toBeNull();
+/** The customer the failure happened to, as the ops-log facts reader would find them. */
+const FAKE_FACTS = {
+  customer: async (_scope: unknown, id: string) =>
+    id === 'cust-1'
+      ? {
+          id,
+          telegramUserId: '123456789',
+          username: 'maryam_s',
+          firstName: 'مریم',
+          lastName: null,
+          phone: null,
+          source: 'NEXA',
+          status: 'ACTIVE',
+          blockedReason: null,
+        }
+      : null,
+  order: async () => ({ code: 'KQ7M2X9T' }),
+} as unknown as OpsLogFacts;
+
+const presenter = new OperationalEventPresenter({ facts: FAKE_FACTS, words: i18nOpsLogWords });
+
+const RECORDED = {
+  id: 'evt-1',
+  code: PAYMENT_LINK_CREATE_FAILED_CODE,
+  severity: 'ERROR' as const,
+  message: 'x',
+  occurrenceCount: 1,
+  firstSeenAt: AT,
+  lastSeenAt: AT,
+  isNew: true,
+  reopened: false,
+};
+
+async function presentPaymentLink(event: OperationalEventInput): Promise<string> {
+  const presented = await presenter.present(tenant, event, RECORDED, {} as never);
+  expect(presented).not.toBeNull();
+  expect(presented!.logType).toBe('ERROR_PAYMENT_LINK');
   return renderTemplateBody(
-    templateDefinition('ops.notification.payment_link_failed'),
-    CATALOGUE_FA['ops.notification.payment_link_failed'],
-    values!,
+    templateDefinition(presented!.templateKey),
+    CATALOGUE_FA[presented!.templateKey],
+    presented!.values,
+    'fa',
+    DEFAULT_TEMPLATE_PRESENTATION,
   );
 }
 
-describe('FIX-04: the Persian report in the group', () => {
-  it('reads like the owner’s example: gateway, user, tracking code, phase, cause, status', () => {
-    const text = renderPaymentLink(
+describe('R4 PR-D (L22): the Persian report in the group', () => {
+  it('is its own message: customer, Persian cause, one technical line, retry and customer impact', async () => {
+    const text = await presentPaymentLink(
       paymentLinkFailureEvent(
         paymentLinkFailureOf({ kind: 'UNKNOWN', code: 'http.502' }, 'LINK', {
           rateLimitIsFinal: true,
         })!,
-        FACTS,
+        { ...FACTS, customerId: 'cust-1', amount: { amountMinor: 188_000n, currency: 'IRT' } },
       ),
     );
-    expect(text.split('\n')[0]).toBe('🚨 خطای ساخت لینک پرداخت');
-    expect(text).toContain('درگاه: TONPAYS');
-    expect(text).toContain('کاربر: <code>123456789</code>');
-    expect(text).toContain('کد پیگیری پرداخت: <code>7d433a363380f69e</code>');
-    expect(text).toContain('مرحله: ایجاد پیش‌فاکتور (PAYMENT_LINK_CREATE)');
-    expect(text).toContain('علت: پاسخ نامعتبر درگاه؛ خطای سمت درگاه (<code>http.502</code>)');
-    expect(text).toContain('وضعیت HTTP درگاه: 502');
-    expect(text).toContain('وضعیت: نیازمند بررسی');
-    expect(text).toContain('شناسه رخداد: <code>evt_01900000-0000-7000-8000-00000000e001</code>');
-    expect(text).toContain('زمان: 2026-10-09T09:37:00.000Z');
-    // Exactly one cause line, one retry line and one status line survive.
-    expect(text.match(/^علت: /gm)).toHaveLength(1);
-    expect(text.match(/^تکرار: /gm)).toHaveLength(1);
-    expect(text.match(/^وضعیت: /gm)).toHaveLength(1);
+    expect(text.split('\n')[0]).toBe('🚨 خطای درگاه — لینک پرداخت ساخته نشد');
+    expect(text).toContain('👤 مریم · @maryam_s · 123456789');
+    expect(text).toContain('💠 درگاه: تون‌پی (وب‌سایت)');
+    expect(text).toContain('💰 مبلغ: ۱۸۸٬۰۰۰ تومان');
+    expect(text).toContain('❗ علت: خطای سمت درگاه');
+    expect(text).toContain('🔧 کد: HTTP 502 · http.502');
+    expect(text).toContain('👤 برای مشتری: پولی کم نشد؛ نتیجهٔ ساخت فاکتور نامشخص است');
+    expect(text).toContain('🔖 کد پیگیری: 7d433a363380f69e');
+    expect(text).toContain('📦 سفارش: KQ7M2X9T');
+    expect(text).toContain('🕒 ۱۴۰۵/۰۷/۱۷ ۱۳:۰۷');
+    // No id line of any kind, and the English enum of the phase or the gateway is gone.
+    expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
+    expect(text).not.toMatch(/PAYMENT_LINK_CREATE|TONPAYS|مستأجر|شناسه رخداد/);
   });
 
-  it('gives every failure kind its own line, and none of them an empty or raw token', () => {
+  it('gives every failure kind a Persian cause and no raw token', async () => {
     for (const kind of Object.keys(PAYMENT_LINK_CAUSE_TOKENS) as PaymentLinkFailureKind[]) {
-      const values = paymentLinkFailureValues(
-        {
+      const text = await presentPaymentLink({
+        code: PAYMENT_LINK_CREATE_FAILED_CODE,
+        severity: 'ERROR',
+        message: 'x',
+        context: {
           phase: 'PAYMENT_LINK_CREATE',
           provider: 'NOWPAYMENTS',
           failureKind: kind,
@@ -567,26 +603,17 @@ describe('FIX-04: the Persian report in the group', () => {
           classification: kind === 'UNKNOWN' ? 'UNKNOWN' : 'FINAL',
           creationState: 'CREATE_FAILED',
         },
-        { eventId: 'e', at: AT, tenantId: 't' },
-      )!;
-      const text = renderTemplateBody(
-        templateDefinition('ops.notification.payment_link_failed'),
-        CATALOGUE_FA['ops.notification.payment_link_failed'],
-        values,
-      );
-      const causes = text.split('\n').filter((line) => line.startsWith('علت: '));
+      });
+      const causes = text.split('\n').filter((line) => line.startsWith('❗ علت: '));
       expect(causes, kind).toHaveLength(1);
-      expect(causes[0], kind).toContain(`code.${kind.toLowerCase()}`);
+      expect(text, kind).toContain(`🔧 کد: code.${kind.toLowerCase()}`);
       expect(text, kind).not.toMatch(/\{[A-Za-z]+\}/);
-      // The FIRST occurrence, never a frozen counter (Codex P2 #251).
-      expect(text, kind).toContain('این پیام نخستین رخداد است');
-      expect(text, kind).toContain('«مرکز اعلان‌ها»');
-      expect(text, kind).not.toMatch(/تعداد رخداد/);
+      expect(text, kind).not.toMatch(/NaN|undefined/);
     }
   });
 
-  it('never prints a secret, a signed link or a card number, whatever the context holds', () => {
-    const text = renderPaymentLink({
+  it('never prints a secret, a signed link or a card number, whatever the context holds', async () => {
+    const text = await presentPaymentLink({
       code: PAYMENT_LINK_CREATE_FAILED_CODE,
       severity: 'ERROR',
       message: 'x',
@@ -610,20 +637,39 @@ describe('FIX-04: the Persian report in the group', () => {
     }
   });
 
-  it('leaves an event of the same code in another shape to the generic layout', () => {
+  it('leaves an event of the same code in another shape to the generic layout', async () => {
     expect(
-      paymentLinkFailureValues(
-        { paymentId: 'p', provider: 'TONPAYS', reason: 'http.timeout' },
-        { eventId: 'e', at: AT, tenantId: 't' },
+      await presenter.present(
+        tenant,
+        {
+          code: PAYMENT_LINK_CREATE_FAILED_CODE,
+          severity: 'ERROR',
+          message: 'x',
+          context: { paymentId: 'p', provider: 'TONPAYS', reason: 'http.timeout' },
+        },
+        RECORDED,
+        {} as never,
       ),
     ).toBeNull();
     // Even one that names a failure kind: without the mapping's phase it is not its shape.
     expect(
-      paymentLinkFailureValues(
-        { paymentId: 'p', provider: 'TONPAYS', failureKind: 'TIMEOUT', reason: 'http.timeout' },
-        { eventId: 'e', at: AT, tenantId: 't' },
+      await presenter.present(
+        tenant,
+        {
+          code: PAYMENT_LINK_CREATE_FAILED_CODE,
+          severity: 'ERROR',
+          message: 'x',
+          context: { paymentId: 'p', provider: 'TONPAYS', failureKind: 'TIMEOUT' },
+        },
+        RECORDED,
+        {} as never,
       ),
     ).toBeNull();
+  });
+
+  it('is a message for EVERY occurrence of the code, not only the one that opens it', () => {
+    expect(presenter.projectsEveryOccurrence(PAYMENT_LINK_CREATE_FAILED_CODE)).toBe(true);
+    expect(presenter.projectsEveryOccurrence('panel.health.unreachable')).toBe(false);
   });
 });
 
@@ -703,6 +749,7 @@ function projectorWith(queue: (input: Record<string, unknown>) => Promise<void>)
     { queue: (_scope: unknown, input: Record<string, unknown>) => queue(input) } as never,
     uow as never,
     logger as never,
+    presenter,
   );
   return { recorder, logger };
 }
@@ -725,14 +772,16 @@ describe('the projector lays each event out by its presentation', () => {
     });
     expect(queued[0]).toMatchObject({
       templateKey: 'ops.notification.payment_link_failed',
+      logType: 'ERROR_PAYMENT_LINK',
       opsTopic: 'PAYMENTS',
-      values: { gateway: 'TONPAYS', causeConfiguration: 'nexa.credential_missing' },
+      values: { gateway: 'تون‌پی (وب‌سایت)', technical: 'nexa.credential_missing' },
     });
     expect(queued[1]).toMatchObject({
       templateKey: 'ops.notification.operational_event',
       opsTopic: 'SECURITY',
-      // The CLASS is what the group reads, though the row stores WARN.
-      values: { severity: 'SECURITY' },
+      // The CLASS is what the group reads, though the row stores WARN — in Persian, and the
+      // title is the Persian name of the code, never the code itself.
+      values: { severity: '🛡 امنیتی', heading: 'مشتری به‌خاطر پیام‌های زیاد موقتاً مسدود شد' },
     });
   });
 

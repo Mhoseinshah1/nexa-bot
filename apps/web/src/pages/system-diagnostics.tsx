@@ -122,6 +122,7 @@ export const OUTBOX_EVENT_LABELS: Readonly<Record<EventType, WebKey>> = {
   IncidentStateChanged: 'web.outbox_event_incident_state_changed',
   LegacyImportReviewStateChanged: 'web.outbox_event_legacy_import_review_state_changed',
   ServiceAdopted: 'web.outbox_event_service_adopted',
+  ResellerStandingChanged: 'web.outbox_event_reseller_standing_changed',
 };
 
 export const OUTBOX_AGGREGATE_LABELS: Readonly<Record<string, WebKey>> = {

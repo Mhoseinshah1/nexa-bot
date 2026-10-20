@@ -19,6 +19,7 @@ import {
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { CustomerNotifier } from '../../messaging/application/customer-notifier.js';
+import type { ServiceAlertHook } from '../../ops-log/application/service-alert-log.js';
 import type {
   ServiceReminderCandidate,
   ServiceReminderRepository,
@@ -144,6 +145,14 @@ export interface ServiceReminderServiceDeps {
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /**
+   * Round 4 PR-D (log L21): told once per service and kind when the CUSTOMER was told, so the
+   * operations log group gets one message per service. A savepoint of its own: a log that
+   * cannot be written never costs a reminder.
+   */
+  readonly opsLog?: ServiceAlertHook;
+  /** Where a log that could not be written is reported; never rethrown. */
+  readonly opsLogFailed?: (error: unknown, serviceId: string) => void;
 }
 
 /**
@@ -574,6 +583,25 @@ export class ServiceReminderService {
         now,
         tx,
       );
+      if (told && this.deps.opsLog !== undefined) {
+        const hook = this.deps.opsLog;
+        try {
+          await this.deps.uow.runNested(scope, tx, (nested) =>
+            hook.serviceAlerted(
+              scope,
+              {
+                reminderId: id,
+                serviceId: candidate.serviceId,
+                kind,
+                remainingDays: snapshot.remainingDays,
+              },
+              nested,
+            ),
+          );
+        } catch (error) {
+          this.deps.opsLogFailed?.(error, candidate.serviceId);
+        }
+      }
     }
     return told;
   }

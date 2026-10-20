@@ -269,7 +269,7 @@ describe('notification delivery', () => {
       await ctx.container.notificationDispatcher.tick();
 
       expect(transport.messages[0]?.text).toBe(
-        'هشدار ERROR: panel.unreachable — The panel did not answer.',
+        'هشدار 🚨 خطا: panel.unreachable — The panel did not answer.',
       );
     });
 
@@ -285,8 +285,11 @@ describe('notification delivery', () => {
       });
       await ctx.container.notificationDispatcher.tick();
 
-      expect(transport.messages[0]?.text).toContain('&lt;b&gt;down&lt;/b&gt;');
-      expect(transport.messages[0]?.html).toBe(true);
+      // R4 PR-D: the group message is plain text and the technical line drops markup, so an
+      // event message containing `<` can neither close a tag nor inject one.
+      expect(transport.messages[0]?.text).toContain('panel down');
+      expect(transport.messages[0]?.text).not.toContain('<b>');
+      expect(transport.messages[0]?.html).toBe(false);
     });
 
     /** Brings every pending intent due now, past the back-off its failure scheduled. */

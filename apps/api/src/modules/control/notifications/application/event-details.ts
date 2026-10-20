@@ -63,6 +63,37 @@ export const DETAIL_KEYS: readonly string[] = [
   'httpStatus',
 ];
 
+/**
+ * A UUID anywhere in a value. The operations log group prints no id (Round 4 PR-D, global rule
+ * 1): the short public codes stand in for them, so a detail whose value IS an id — or carries
+ * one — is left out rather than printed. What remains is the state, the reason and the code.
+ */
+const UUID_ANYWHERE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+
+/** `text` with every UUID taken out, whitespace collapsed. */
+export function withoutIds(text: string): string {
+  return text
+    .replace(UUID_ANYWHERE, '')
+    .replace(/\s+/g, ' ')
+    .replace(/\(\s*\)/g, '')
+    .trim();
+}
+
+/**
+ * The one short technical line of a generic operational event: its machine code, then the
+ * server's own (English) message, bounded and free of ids. Never the title — that is Persian
+ * and comes from the code.
+ */
+export function cleanMessageOf(message: string): string {
+  const cleaned = withoutIds(message).replace(/<[^>]*>/g, '');
+  return cleaned.length > 120 ? `${cleaned.slice(0, 119)}…` : cleaned;
+}
+
+export function technicalOf(code: string, message: string): string {
+  const bounded = cleanMessageOf(message);
+  return bounded === '' ? code : `${code} · ${bounded}`;
+}
+
 /** How much of any one value is printed. An id is 36 characters; a reason, a sentence. */
 const VALUE_MAX = 160;
 
@@ -136,7 +167,8 @@ export function operationalEventDetails(
     else if (typeof value === 'number' && Number.isFinite(value)) text = String(value);
     else if (typeof value === 'boolean') text = value ? 'true' : 'false';
     if (text === null) continue;
-    const cleaned = redactSecretText(text).replace(/\s+/g, ' ').trim().slice(0, VALUE_MAX);
+    const cleaned = withoutIds(redactSecretText(text)).slice(0, VALUE_MAX);
+    // A value that was nothing but an id is gone; an empty line is never printed.
     if (cleaned === '') continue;
     lines.push(`${key}: ${cleaned}`);
   }

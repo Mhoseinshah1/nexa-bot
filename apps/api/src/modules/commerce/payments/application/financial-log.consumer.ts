@@ -2,15 +2,18 @@ import {
   EVENT_PAYLOAD_SCHEMAS,
   money,
   paymentTrackingCode,
-  topupCashbackReference,
+  toPersianDigits,
   type CurrencyCode,
   type DomainEvent,
   type EventType,
   type Money,
   type NotificationDestination,
   type NotificationKind,
+  type OpsLogButton,
+  type OpsLogTypeId,
   type PaymentId,
   type TemplateKey,
+  type TemplateValue,
   type TemplateValues,
   type TenantContext,
   type UserId,
@@ -18,7 +21,8 @@ import {
 import type { EventConsumer } from '../../../platform/eventing/application/event-consumer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { CustomerRecord, CustomerRepository } from '../../customers/application/ports.js';
-import type { WalletRepository } from '../../wallet/application/ports.js';
+import { identityOf } from '../../ops-log/application/presenters.js';
+import type { CustomerFact, OpsLogFacts, OpsLogWords } from '../../ops-log/application/ports.js';
 import type { GatewayInvoiceRecord, GatewayInvoiceRepository } from './gateway-invoice-ports.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
 import type { ServiceRefundRequestRepository } from './service-refund-request-ports.js';
@@ -35,17 +39,27 @@ export interface FinancialLogLane {
       readonly values: TemplateValues;
       readonly correlationId?: string;
       readonly destination?: NotificationDestination;
+      /** Round 4 PR-D: the log type (its switch and topic) and the buttons under the message. */
+      readonly logType?: OpsLogTypeId;
+      readonly buttons?: readonly OpsLogButton[];
     },
     tx?: unknown,
   ): Promise<unknown>;
 }
 
-/** A value the log has no answer for. Punctuation, not language: a template renders it. */
-const NONE = '—';
+/** Every ledger reason a payment's wallet credit is written under. */
+const PAYMENT_CREDIT_REASONS = [
+  'TOPUP_GATEWAY',
+  'TOPUP_RECEIPT',
+  'TOPUP_STARS',
+  'TOPUP_CRYPTO',
+  'RECEIPT_CREDIT',
+  'CASHBACK_TOPUP',
+] as const;
 
 /**
- * The financial log (WP18 §1.3): one provider-neutral pipeline from a committed financial
- * fact to the log group's payments topic.
+ * The financial log (WP18, reworked by Round 4 PR-D, L1-L6): one provider-neutral pipeline
+ * from a committed financial fact to the log group's payments topic.
  *
  * A CONSUMER, so it runs in the outbox relay's transaction, after the business transaction
  * committed, and never inside it — a log that fails, is not configured, or is never
@@ -59,10 +73,11 @@ const NONE = '—';
  * Web Admin refuses (`notificationSchema.kind` is a strict enum), so a rollback would take
  * its whole notifications page down; an unfamiliar template key is only a string there.
  *
- * What it renders is named field by field — ids, amounts, a Telegram id, username and
- * display name, a provider invoice id and the provider's final amount labelled diagnostic.
- * Never a raw provider payload, an invoice or payment link, a subscription link, a key, a
- * token or an operator's free-text note.
+ * What it renders is named field by field — a short public code instead of an id, the
+ * method's name ONCE and in Persian, the amounts, a Telegram id, username and display name,
+ * and the wallet BEFORE and AFTER, derived from the ledger. Never a raw provider payload, an
+ * invoice or payment link, a subscription link, a key, a token or an operator's free-text
+ * note, and never an id of a row: the buttons carry those, and a button is not a text line.
  *
  * Idempotent twice over: the relay's `processed_messages` claim, and the dedupe key
  * `fin:<event id>` on `(tenant, dedupe_key)`, so a replay whose claim was lost writes
@@ -88,7 +103,9 @@ export class FinancialLogConsumer implements EventConsumer {
       readonly payments: Pick<PaymentRepository, 'findById'>;
       readonly customers: Pick<CustomerRepository, 'findById'>;
       readonly invoices: Pick<GatewayInvoiceRepository, 'findByPayment'>;
-      readonly wallet: Pick<WalletRepository, 'findByReference'>;
+      /** The facts the ledger and the orders hold: balances, order codes, services, admins. */
+      readonly facts: OpsLogFacts;
+      readonly words: OpsLogWords;
       /** WP19: the request an outcome names, read as it stands. */
       readonly refundRequests: Pick<ServiceRefundRequestRepository, 'findById'>;
     },
@@ -114,6 +131,8 @@ export class FinancialLogConsumer implements EventConsumer {
         values: rendered.values,
         correlationId: event.correlationId,
         destination,
+        logType: rendered.logType,
+        buttons: rendered.buttons,
       },
       tx,
     );
@@ -123,110 +142,220 @@ export class FinancialLogConsumer implements EventConsumer {
     scope: TenantContext,
     event: DomainEvent,
     tx: TransactionScope,
-  ): Promise<{ readonly templateKey: TemplateKey; readonly values: TemplateValues } | null> {
+  ): Promise<{
+    readonly templateKey: TemplateKey;
+    readonly values: TemplateValues;
+    readonly logType: OpsLogTypeId;
+    readonly buttons: readonly OpsLogButton[];
+  } | null> {
+    const { words, facts } = this.deps;
     switch (event.eventType as EventType) {
       case 'PaymentConfirmed': {
         const payload = EVENT_PAYLOAD_SCHEMAS.PaymentConfirmed.parse(event.payload);
-        const facts = await this.facts(scope, event.aggregateId as PaymentId, tx);
-        if (facts === null) return null;
-        const common = {
-          method: facts.payment.method,
-          route: facts.payment.gatewayProvider ?? NONE,
-          ...who(facts.customer),
-          reference: paymentTrackingCode(facts.payment),
-          paymentId: facts.payment.id,
-          ...amounts(facts.payment),
-          ...gatewayProviderFacts(facts.invoice),
-          evidence: payload.evidenceKind,
-          at: facts.payment.confirmedAt ?? new Date(event.occurredAt),
+        const found = await this.facts(scope, event.aggregateId as PaymentId, tx);
+        if (found === null) return null;
+        const { payment, customer, invoice } = found;
+        // A payment the import carried as history credits and settles nothing: no message.
+        if (payload.evidenceKind === 'LEGACY_IMPORT' || payment.source !== 'NEXA') return null;
+        const order =
+          payment.orderId === null ? null : await facts.order(scope, payment.orderId, tx);
+        const crypto = payment.gatewayProvider === 'NOWPAYMENTS';
+        const common: Record<string, TemplateValue> = {
+          method: words.methodName(payment.method, payment.gatewayProvider),
+          ...who(customer, words),
+          reference: paymentTrackingCode(payment),
+          ...amounts(payment),
+          ...providerLines(invoice),
+          evidence: words.evidenceName(payload.evidenceKind),
+          at: payment.confirmedAt ?? new Date(event.occurredAt),
         };
-        if (facts.payment.orderId === null) {
+        if (order?.code !== null && order?.code !== undefined) common['orderCode'] = order.code;
+        const buttons: OpsLogButton[] = [
+          { kind: 'USER', ref: payment.customerId },
+          { kind: 'PAYMENT', ref: payment.id },
+        ];
+
+        if (payment.orderId === null) {
           // The gift actually CREDITED, read from the ledger — never recomputed here.
-          const gift = await this.deps.wallet.findByReference(
+          const entries = await facts.entriesOfPayment(
             scope,
-            topupCashbackReference(facts.payment.id),
+            payment.id,
+            [...PAYMENT_CREDIT_REASONS],
             tx,
           );
+          const gift = entries.find((entry) => entry.reason === 'CASHBACK_TOPUP');
+          const balance = await facts.balanceAround(
+            scope,
+            payment.customerId,
+            payment.amount.currency,
+            entries.map((entry) => entry.id),
+            tx,
+          );
+          const values: Record<string, TemplateValue> = { ...common };
+          if (balance !== null) {
+            values['balanceBefore'] = balance.before;
+            values['balanceAfter'] = balance.after;
+          }
+          if (crypto) {
+            return {
+              templateKey: 'ops.log.payment_crypto' as TemplateKey,
+              values: cryptoValues(values, invoice, words, true),
+              logType: 'PAYMENT_CRYPTO',
+              buttons,
+            };
+          }
+          values['gift'] = gift?.amount ?? money(0n, payment.amount.currency);
           return {
             templateKey: 'ops.financial.topup_credited' as TemplateKey,
-            values: {
-              ...common,
-              gift: gift?.amount ?? money(0n, facts.payment.amount.currency),
-            },
+            values,
+            logType: 'PAYMENT_TOPUP',
+            buttons,
+          };
+        }
+        // A wallet payment: the wallet on either side of this order's purchase debit.
+        if (payment.method === 'WALLET') {
+          const entries = await facts.entriesOfOrder(scope, payment.orderId, 'PURCHASE', tx);
+          const balance = await facts.balanceAround(
+            scope,
+            payment.customerId,
+            payment.amount.currency,
+            entries.map((entry) => entry.id),
+            tx,
+          );
+          if (balance !== null) {
+            common['balanceBefore'] = balance.before;
+            common['balanceAfter'] = balance.after;
+          }
+        }
+        if (crypto) {
+          return {
+            templateKey: 'ops.log.payment_crypto' as TemplateKey,
+            values: cryptoValues(common, invoice, words, false),
+            logType: 'PAYMENT_CRYPTO',
+            buttons,
           };
         }
         return {
           templateKey: 'ops.financial.order_paid' as TemplateKey,
-          values: { ...common, orderId: facts.payment.orderId },
+          values: common,
+          logType: 'PAYMENT_ORDER',
+          buttons: [
+            ...buttons,
+            ...(order === null ? [] : [{ kind: 'ORDER' as const, ref: order.id }]),
+          ],
         };
       }
       case 'PaymentFailed': {
         const payload = EVENT_PAYLOAD_SCHEMAS.PaymentFailed.parse(event.payload);
-        const facts = await this.facts(scope, event.aggregateId as PaymentId, tx);
-        if (facts === null) return null;
+        const found = await this.facts(scope, event.aggregateId as PaymentId, tx);
+        if (found === null || found.payment.source !== 'NEXA') return null;
+        const { payment, customer } = found;
+        const values: Record<string, TemplateValue> = {
+          cause: words.paymentFailure(payload.cause),
+          method: words.methodName(payment.method, payment.gatewayProvider),
+          ...who(customer, words),
+          reference: paymentTrackingCode(payment),
+          ...amounts(payment),
+          at: payment.resolvedAt ?? new Date(event.occurredAt),
+        };
+        await this.withOrderCode(scope, payment, values, tx);
         return {
           templateKey: 'ops.financial.payment_failed' as TemplateKey,
-          values: {
-            cause: payload.cause,
-            method: facts.payment.method,
-            route: facts.payment.gatewayProvider ?? NONE,
-            ...who(facts.customer),
-            reference: paymentTrackingCode(facts.payment),
-            paymentId: facts.payment.id,
-            orderId: facts.payment.orderId ?? NONE,
-            ...amounts(facts.payment),
-            at: facts.payment.resolvedAt ?? new Date(event.occurredAt),
-          },
+          values,
+          logType: 'PAYMENT_FAILED',
+          buttons: [
+            { kind: 'USER', ref: payment.customerId },
+            { kind: 'PAYMENT', ref: payment.id },
+          ],
         };
       }
-      case 'PaymentLateCompletionObserved': {
-        const payload = EVENT_PAYLOAD_SCHEMAS.PaymentLateCompletionObserved.parse(event.payload);
-        const facts = await this.facts(scope, event.aggregateId as PaymentId, tx);
-        if (facts === null) return null;
-        return {
-          templateKey: 'ops.financial.late_completion' as TemplateKey,
-          values: {
-            route: payload.provider,
-            ...who(facts.customer),
-            reference: paymentTrackingCode(facts.payment),
-            paymentId: facts.payment.id,
-            orderId: facts.payment.orderId ?? NONE,
-            ...amounts(facts.payment),
-            ...gatewayProviderFacts(facts.invoice),
-            at: new Date(event.occurredAt),
-          },
-        };
-      }
+      case 'PaymentLateCompletionObserved':
       case 'PaymentOutcomeUnknown': {
-        const facts = await this.facts(scope, event.aggregateId as PaymentId, tx);
-        if (facts === null) return null;
+        const late = (event.eventType as EventType) === 'PaymentLateCompletionObserved';
+        const route = late
+          ? EVENT_PAYLOAD_SCHEMAS.PaymentLateCompletionObserved.parse(event.payload).provider
+          : null;
+        const found = await this.facts(scope, event.aggregateId as PaymentId, tx);
+        if (found === null || found.payment.source !== 'NEXA') return null;
+        const { payment, customer, invoice } = found;
+        const values: Record<string, TemplateValue> = {
+          gateway: words.gatewayName(route ?? payment.gatewayProvider),
+          ...who(customer, words),
+          reference: paymentTrackingCode(payment),
+          ...amounts(payment),
+          ...providerLines(invoice),
+          at: new Date(event.occurredAt),
+        };
+        await this.withOrderCode(scope, payment, values, tx);
+        // The payment is not credited: the one thing an operator can do is credit it by hand.
         return {
-          templateKey: 'ops.financial.outcome_unknown' as TemplateKey,
-          values: {
-            route: facts.payment.gatewayProvider ?? NONE,
-            ...who(facts.customer),
-            reference: paymentTrackingCode(facts.payment),
-            paymentId: facts.payment.id,
-            orderId: facts.payment.orderId ?? NONE,
-            ...amounts(facts.payment),
-            ...gatewayProviderFacts(facts.invoice),
-            at: new Date(event.occurredAt),
-          },
+          templateKey: (late
+            ? 'ops.financial.late_completion'
+            : 'ops.financial.outcome_unknown') as TemplateKey,
+          values,
+          logType: 'PAYMENT_LATE',
+          buttons: [
+            { kind: 'MANUAL_CREDIT', ref: payment.customerId },
+            { kind: 'USER', ref: payment.customerId },
+          ],
         };
       }
-      case 'RefundCompleted': {
-        const payload = EVENT_PAYLOAD_SCHEMAS.RefundCompleted.parse(event.payload);
-        const values = await this.refundValues(scope, event, payload, tx);
-        if (values === null) return null;
-        return { templateKey: 'ops.financial.refund_completed' as TemplateKey, values };
-      }
+      case 'RefundCompleted':
       case 'RefundFailed': {
-        const payload = EVENT_PAYLOAD_SCHEMAS.RefundFailed.parse(event.payload);
-        const values = await this.refundValues(scope, event, payload, tx);
-        if (values === null) return null;
+        const completed = (event.eventType as EventType) === 'RefundCompleted';
+        const payload = completed
+          ? EVENT_PAYLOAD_SCHEMAS.RefundCompleted.parse(event.payload)
+          : EVENT_PAYLOAD_SCHEMAS.RefundFailed.parse(event.payload);
+        const found = await this.facts(scope, payload.paymentId as PaymentId, tx);
+        if (found === null || found.payment.source !== 'NEXA') return null;
+        const { payment, customer } = found;
+        const values: Record<string, TemplateValue> = {
+          channel: words.refundChannel(payload.channel),
+          ...who(customer, words),
+          reference: paymentTrackingCode(payment),
+          amount: money(BigInt(payload.amountMinor), payload.currency as CurrencyCode),
+          at: new Date(event.occurredAt),
+        };
+        await this.withOrderCode(scope, payment, values, tx);
+        if (completed) {
+          // A refund into the wallet: the wallet on either side of the credit THIS refund
+          // wrote — found by its own reference, never as the payment's newest REFUND entry,
+          // which after a second partial refund is the other refund's (money review of #301).
+          if (payload.channel === 'WALLET_CREDIT') {
+            const credit = await facts.ledgerEntryByReference(
+              scope,
+              `${payload.refundId}:refund`,
+              tx,
+            );
+            if (credit !== null && credit.customerId === payment.customerId) {
+              const balance = await facts.balanceAround(
+                scope,
+                payment.customerId,
+                credit.amount.currency,
+                [credit.id],
+                tx,
+              );
+              if (balance !== null) {
+                values['balanceBefore'] = balance.before;
+                values['balanceAfter'] = balance.after;
+              }
+            }
+          }
+        } else {
+          values['cause'] = words.refundFailure(
+            EVENT_PAYLOAD_SCHEMAS.RefundFailed.parse(event.payload).cause,
+          );
+        }
         return {
-          templateKey: 'ops.financial.refund_failed' as TemplateKey,
-          values: { ...values, cause: payload.cause },
+          templateKey: (completed
+            ? 'ops.financial.refund_completed'
+            : 'ops.financial.refund_failed') as TemplateKey,
+          values,
+          logType: 'REFUND',
+          buttons: [
+            { kind: 'USER', ref: payment.customerId },
+            { kind: 'PAYMENT', ref: payment.id },
+          ],
         };
       }
       case 'ServiceRefundRequestResolved': {
@@ -240,19 +369,31 @@ export class FinancialLogConsumer implements EventConsumer {
         const request = await this.deps.refundRequests.findById(scope, payload.requestId, tx);
         if (request === null) return null;
         const customer = await this.deps.customers.findById(scope, request.customerId, tx);
+        const values: Record<string, TemplateValue> = {
+          outcome: words.refundRequestOutcome(payload.outcome),
+          ...who(customer, words),
+          at: request.resolvedAt ?? new Date(event.occurredAt),
+        };
+        const service = await facts.service(scope, request.serviceId, tx);
+        if (service?.code !== null && service?.code !== undefined)
+          values['serviceCode'] = service.code;
+        const payment = await this.deps.payments.findById(
+          scope,
+          request.paymentId as PaymentId,
+          tx,
+        );
+        if (payment !== null) values['reference'] = paymentTrackingCode(payment);
+        // Absent for a rejection: the template drops the line rather than print a zero.
+        if (request.approvedAmount !== null) values['amount'] = request.approvedAmount;
+        if (request.decidedByAdminId !== null) {
+          const admin = await facts.admin(scope, request.decidedByAdminId, tx);
+          if (admin !== null) values['adminName'] = admin.displayName;
+        }
         return {
           templateKey: 'ops.financial.service_refund_request' as TemplateKey,
-          values: {
-            outcome: payload.outcome,
-            requestId: request.id,
-            serviceId: request.serviceId,
-            ...who(customer),
-            paymentId: request.paymentId,
-            // Absent for a rejection: the template drops the line rather than print a zero.
-            ...(request.approvedAmount === null ? {} : { amount: request.approvedAmount }),
-            adminId: request.decidedByAdminId ?? NONE,
-            at: request.resolvedAt ?? new Date(event.occurredAt),
-          },
+          values,
+          logType: 'REFUND',
+          buttons: [{ kind: 'USER', ref: request.customerId }],
         };
       }
       /* istanbul ignore next -- `subscribesTo` is the list above; the relay routes by it. */
@@ -261,32 +402,16 @@ export class FinancialLogConsumer implements EventConsumer {
     }
   }
 
-  /** What both refund logs say: the refund, the payment it returns money from, and who. */
-  private async refundValues(
+  /** The order's public code, when the payment is for an order that has one. */
+  private async withOrderCode(
     scope: TenantContext,
-    event: DomainEvent,
-    payload: {
-      readonly refundId: string;
-      readonly paymentId: string;
-      readonly orderId: string | null;
-      readonly channel: string;
-      readonly amountMinor: string;
-      readonly currency: string;
-    },
+    payment: PaymentRecord,
+    values: Record<string, TemplateValue>,
     tx: TransactionScope,
-  ): Promise<TemplateValues | null> {
-    const facts = await this.facts(scope, payload.paymentId as PaymentId, tx);
-    if (facts === null) return null;
-    return {
-      refundId: payload.refundId,
-      channel: payload.channel,
-      ...who(facts.customer),
-      reference: paymentTrackingCode(facts.payment),
-      paymentId: facts.payment.id,
-      orderId: payload.orderId ?? NONE,
-      amount: money(BigInt(payload.amountMinor), payload.currency as CurrencyCode),
-      at: new Date(event.occurredAt),
-    };
+  ): Promise<void> {
+    if (payment.orderId === null) return;
+    const order = await this.deps.facts.order(scope, payment.orderId, tx);
+    if (order?.code !== null && order?.code !== undefined) values['orderCode'] = order.code;
   }
 
   /** The payment, its customer and (for a gateway payment) its invoice, as they stand. */
@@ -310,17 +435,23 @@ export class FinancialLogConsumer implements EventConsumer {
   }
 }
 
-/** Who paid, as Telegram knows them. A dash, never a guess, for what is not known. */
-function who(customer: CustomerRecord | null): TemplateValues {
-  if (customer === null) return { telegramId: NONE, username: NONE, displayName: NONE };
-  const name = [customer.firstName, customer.lastName]
-    .filter((part): part is string => part !== null && part.trim() !== '')
-    .join(' ');
-  return {
-    telegramId: customer.telegramUserId,
-    username: customer.username === null ? NONE : `@${customer.username}`,
-    displayName: name === '' ? NONE : name,
-  };
+/** Who paid: the three customer values, with a Persian word for each one that is unknown. */
+function who(customer: CustomerRecord | null, words: OpsLogWords): TemplateValues {
+  const fact: CustomerFact | null =
+    customer === null
+      ? null
+      : {
+          id: customer.id,
+          telegramUserId: customer.telegramUserId,
+          username: customer.username,
+          firstName: customer.firstName,
+          lastName: customer.lastName,
+          phone: customer.phoneNumber,
+          source: customer.source,
+          status: customer.status,
+          blockedReason: customer.blockedReason,
+        };
+  return { ...identityOf(fact, words) };
 }
 
 /**
@@ -339,6 +470,69 @@ function amounts(payment: PaymentRecord): {
     payable: fee?.payable ?? payment.amount,
   };
 }
+
+/** A provider's unit as the group reads it: never the ISO code the provider's API uses. */
+const UNIT_WORDS: Readonly<Record<string, string>> = {
+  IRT: 'تومان',
+  IRR: 'ریال',
+  USD: 'دلار',
+  XTR: 'استارز',
+};
+
+/**
+ * The provider's side of a gateway payment, for the group: its invoice id, and the final
+ * amount it reported with the unit in Persian and the digits in Persian. A line the provider
+ * gave nothing for is ABSENT — the template drops it — rather than a dash.
+ */
+function providerLines(invoice: GatewayInvoiceRecord | null): Record<string, TemplateValue> {
+  const facts = gatewayProviderFacts(invoice);
+  const out: Record<string, TemplateValue> = {};
+  const id = facts['providerInvoiceId'];
+  const amount = facts['providerFinalAmount'];
+  if (typeof id === 'string' && id !== '—') out['providerInvoiceId'] = id;
+  if (typeof amount === 'string' && amount !== '—') {
+    out['providerFinalAmount'] = toPersianDigits(
+      amount.replace(/\b(IRT|IRR|USD|XTR)\b/g, (code) => UNIT_WORDS[code] ?? code),
+    );
+  }
+  return out;
+}
+
+/**
+ * The extra lines of a crypto payment (L3) from what the invoice records: the dollar amount
+ * the invoice was priced at, the provider's status and its payment id. The crypto amounts and
+ * the deposit address the provider reports are shown only when the invoice carries them
+ * (`GatewayInvoiceRecord` has no field for them yet), so a line is never invented.
+ */
+function cryptoValues(
+  base: Record<string, TemplateValue>,
+  invoice: GatewayInvoiceRecord | null,
+  words: OpsLogWords,
+  topup: boolean,
+): TemplateValues {
+  const values: Record<string, TemplateValue> = {
+    ...base,
+    kindTitle: words.cryptoKindTitle(topup),
+  };
+  delete values['fee'];
+  delete values['payable'];
+  delete values['evidence'];
+  delete values['providerFinalAmount'];
+  if (invoice !== null) {
+    if (invoice.providerUnit === 'USD') {
+      const cents = invoice.requestAmount ?? invoice.sentAmount;
+      values['fiatEquivalent'] = toPersianDigits(
+        `${(cents / 100n).toString()}.${(cents % 100n).toString().padStart(2, '0')} ${UNIT_WORDS['USD'] as string}`,
+      );
+    }
+    if (invoice.providerStatus !== null) values['providerStatus'] = invoice.providerStatus;
+    if (invoice.hintedPaymentId !== null) values['providerPaymentId'] = invoice.hintedPaymentId;
+  }
+  return values;
+}
+
+/** A value the provider gave nothing for. Punctuation, not language. */
+const NONE = '—';
 
 /**
  * The provider's side, for a gateway payment: its invoice id and the final amount it

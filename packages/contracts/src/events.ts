@@ -199,6 +199,10 @@ export const EVENT_TYPES = [
   // with a LEGACY_ADOPTION order — no provider call, no money. Ids and the state only: never
   // the username, the subscription link or the legacy key.
   'ServiceAdopted',
+  // Round 4 PR-D (log L20): a customer's reseller standing changed — promoted, moved between
+  // tiers, suspended or reactivated. Aggregate is the CUSTOMER. Tier NAMES and closed status
+  // words only: no price, no limit, no free text.
+  'ResellerStandingChanged',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -266,10 +270,28 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     username: z.string(),
     roleKeys: z.array(z.string()),
   }),
-  AdminStatusChanged: z.object({ from: z.string(), to: z.string() }),
+  AdminStatusChanged: z.object({
+    from: z.string(),
+    to: z.string(),
+    /**
+     * Round 4 PR-D (Codex review of #301): the administrator's role keys as they stood in the
+     * transaction that changed the status, so a consumer that runs later renders the roles of
+     * THAT moment rather than whatever a later change made them. Optional: an event written
+     * before the field has none, and its reader falls back to the roles it can read.
+     */
+    roleKeys: z.array(z.string()).optional(),
+  }),
   AdminRolesChanged: z.object({
     added: z.array(z.string()),
     removed: z.array(z.string()),
+    /**
+     * Round 4 PR-D (Codex review of #301): the full role-key sets on either side of THIS
+     * change, read under the change's own lock. A consumer reading the roles when it runs
+     * would attribute a later change's roles to this one. Optional, for events written
+     * before the fields.
+     */
+    before: z.array(z.string()).optional(),
+    after: z.array(z.string()).optional(),
   }),
   // Carries no password material of any kind, not even a length.
   AdminPasswordChanged: z.object({ bySelf: z.boolean() }),
@@ -503,6 +525,13 @@ export const EVENT_PAYLOAD_SCHEMAS = {
   }),
   ServiceSubscriptionRotated: z.object({
     customerId: z.string(),
+    /**
+     * Round 4 PR-D (Codex review of #301): the operation that changed the link, so the
+     * operations log names who asked for THIS change rather than the latest one by the time it
+     * runs. Optional: an event written before the field has none, and the log then reads the
+     * last link operation completed by the event's own time.
+     */
+    operationId: z.string().optional(),
   }),
   /*
    * Package F. Aggregate is the SERVICE. The three ids are the whole fact; the
@@ -663,6 +692,19 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     orderId: z.string(),
     panelId: z.string(),
     state: z.string(),
+  }),
+  /*
+   * Round 4 PR-D (log L20). Aggregate is the CUSTOMER. `change` is the closed reading of the
+   * two rows: `PROMOTED` (registered), `TIER_CHANGED`, `SUSPENDED` (an ordinary customer
+   * again) and `REACTIVATED`. The tiers are named, never priced.
+   */
+  ResellerStandingChanged: z.object({
+    customerId: z.string(),
+    change: z.enum(['PROMOTED', 'TIER_CHANGED', 'SUSPENDED', 'REACTIVATED']),
+    fromStatus: z.string().nullable(),
+    toStatus: z.string(),
+    fromTierName: z.string().nullable(),
+    toTierName: z.string(),
   }),
 } as const satisfies Record<EventType, z.ZodType>;
 

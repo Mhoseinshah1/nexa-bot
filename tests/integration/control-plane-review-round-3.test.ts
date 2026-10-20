@@ -454,7 +454,8 @@ describe('control plane, third review round', () => {
       // The NUMBER itself. Asserting only that the token was replaced would
       // pass for `NaN`, `Infinity`, `0`, or the string it arrived as — which is
       // most of what the coercion exists to prevent.
-      expect(result.rendered).toContain('3');
+      // R4 PR-D: the group's templates write Persian digits.
+      expect(result.rendered).toContain('۳');
     });
 
     it('names the token and the form when a sample does not fit its type', async () => {
@@ -484,13 +485,15 @@ describe('control plane, third review round', () => {
     });
 
     it('leaves an unsupplied REQUIRED placeholder in the body and reports it', async () => {
+      // `severity` is the one required token of the generic event; `message` is optional
+      // since Round 4 (kept only so older bodies still save).
       const result = await ctx.container.templatesService.preview(tenantA, owner, {
         key: 'ops.notification.operational_event',
-        body: '{severity}: {code} — {message}',
-        values: { severity: 'ERROR', code: 'panel.unreachable' },
+        body: '{severity}: {code} — {heading}',
+        values: { code: 'panel.unreachable', heading: 'h' },
       });
-      expect(result.rendered).toBe('ERROR: panel.unreachable — {message}');
-      expect(result.unresolved).toEqual(['message']);
+      expect(result.rendered).toBe('{severity}: panel.unreachable — h');
+      expect(result.unresolved).toEqual(['severity']);
     });
   });
 
@@ -1362,7 +1365,7 @@ describe('control plane, Codex round', () => {
       // A payload with a required value removed, as a hand-written row or an
       // emitter's mistake would leave it.
       await ctx.container.database.withClient((client) =>
-        client.query(`UPDATE notifications SET payload = payload - 'message' WHERE id = $1`, [
+        client.query(`UPDATE notifications SET payload = payload - 'severity' WHERE id = $1`, [
           intent!.id,
         ]),
       );
