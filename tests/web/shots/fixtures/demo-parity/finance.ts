@@ -102,6 +102,7 @@ function situationOf(row: DemoPayment, topup: boolean): Json {
     resolvedByAdmin: false,
     receiptDisposition: null,
     invoiceCreation: row.method === 'GATEWAY' ? 'CREATED' : null,
+    lateCredited: false,
     queues: [],
     refundOpen: false,
     refundCompleted: false,
