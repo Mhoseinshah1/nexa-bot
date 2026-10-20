@@ -25,6 +25,20 @@ const LIVE = 10_000;
 const FOREIGN = 5_000;
 const PAGE = 25;
 
+/**
+ * A distinct public code per row, written by the fixture rather than drawn by the insert
+ * trigger (`nexa_assign_public_code`). The trigger looks each candidate up in a table the
+ * planner still believes is empty, which is a sequential scan per row — quadratic over 200 000
+ * rows, and what made this file's setup outlast its hook timeout. The code is the four-letter
+ * `prefix` plus the row number in the code alphabet (30^4 > 200 000), so it is unique per tenant
+ * and well-formed (`PUBLIC_CODE_ALPHABET`).
+ */
+const CODE_SQL = (prefix: string, n: string): string =>
+  `'${prefix}' || substr('23456789ABCDEFGHJKMNPQRSTVWXYZ', 1 + (${n} / 27000) % 30, 1)
+        || substr('23456789ABCDEFGHJKMNPQRSTVWXYZ', 1 + (${n} / 900) % 30, 1)
+        || substr('23456789ABCDEFGHJKMNPQRSTVWXYZ', 1 + (${n} / 30) % 30, 1)
+        || substr('23456789ABCDEFGHJKMNPQRSTVWXYZ', 1 + ${n} % 30, 1)`;
+
 describe('the services list plans over 200 000 services', () => {
   let ctx: TestContext;
   let repository: DrizzleServiceRepository;
@@ -66,11 +80,12 @@ describe('the services list plans over 200 000 services', () => {
                (id, tenant_id, customer_id, state, product_id, panel_id, line_title,
                 line_duration_days, line_traffic_bytes, line_unit_price_amount, line_quantity,
                 subtotal_amount, discount_amount, total_amount, currency, quote, settled_at,
-                created_at)
+                created_at, code)
                SELECT ('00000000-0000-4000-8000-' || lpad(($2::int + g)::text, 12, '0'))::uuid,
                       $1::uuid, $3::uuid, 'PAID', $4::uuid, $5::uuid, 'plan', 30,
                       53687091200, 250000, 1, 250000, 0, 250000, 'IRT', '{}'::jsonb, now(),
-                      now() - ((g) || ' minutes')::interval
+                      now() - ((g) || ' minutes')::interval,
+                      ${CODE_SQL('SPQN', '($2::int + g)')}
                  FROM generate_series(1, $6::int) AS g`,
             [scope.tenantId, offset, customerId, productId, panelId, rows],
           );
@@ -90,7 +105,7 @@ describe('the services list plans over 200 000 services', () => {
             `INSERT INTO services
                (id, tenant_id, customer_id, order_id, panel_id, product_id, provider_username,
                 state, delivery_state, traffic_limit_bytes, traffic_used_bytes, created_at,
-                updated_at, provisioned_at, delivered_at, terminated_at, original_started_at)
+                updated_at, provisioned_at, delivered_at, terminated_at, original_started_at, code)
                SELECT gen_random_uuid(), $1::uuid, $2::uuid,
                       ('00000000-0000-4000-8000-' || lpad(($3::int + g)::text, 12, '0'))::uuid,
                       $4::uuid, $5::uuid, 'nxstart' || ($3::int + g),
@@ -102,7 +117,8 @@ describe('the services list plans over 200 000 services', () => {
                       now() - ((g) || ' minutes')::interval,
                       now() - ((g) || ' minutes')::interval,
                       CASE WHEN g % 20 = 0 THEN NULL ELSE now() END,
-                      CASE WHEN g % 10 = 3 THEN now() - ((g + 525600) || ' minutes')::interval END
+                      CASE WHEN g % 10 = 3 THEN now() - ((g + 525600) || ' minutes')::interval END,
+                      ${CODE_SQL('SPQS', '($3::int + g)')}
                  FROM generate_series(1, $6::int) AS g`,
             [scope.tenantId, customerId, offset, panelId, productId, rows],
           );
