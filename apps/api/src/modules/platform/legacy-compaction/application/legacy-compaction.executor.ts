@@ -35,6 +35,10 @@ export interface LegacyCompactionExecutorDeps {
   readonly leaseOwner: string;
   readonly batchSize: number;
   readonly tickIntervalMs: number;
+  /** How often a long stage refreshes the lease. Default one minute. */
+  readonly heartbeatIntervalMs?: number;
+  /** Consecutive failures of one stage before the run is FAILED. Default three. */
+  readonly maxStepAttempts?: number;
   readonly logger: {
     info(context: Record<string, unknown>, message: string): void;
     warn(context: Record<string, unknown>, message: string): void;
@@ -43,6 +47,8 @@ export interface LegacyCompactionExecutorDeps {
 }
 
 const LEASE_STALE_MS = 15 * 60_000;
+const HEARTBEAT_MS = 60_000;
+const MAX_STEP_ATTEMPTS = 3;
 
 /**
  * Runs a REQUESTED compaction to the end, stage by stage, resumable at every batch.
@@ -58,6 +64,8 @@ export class LegacyCompactionExecutor {
   private timer: NodeJS.Timeout | null = null;
   private ticking = false;
   private lastTickAt: number | null = null;
+  /** Consecutive failures of the stage a run is in, by `<run id>:<state>`. */
+  private readonly failures = new Map<string, number>();
 
   constructor(private readonly deps: LegacyCompactionExecutorDeps) {}
 
@@ -110,11 +118,69 @@ export class LegacyCompactionExecutor {
   async drive(start: LegacyCompactionRow): Promise<LegacyCompactionRow | null> {
     let run: LegacyCompactionRow | null = start;
     while (run !== null && run.state !== 'COMPLETED' && run.state !== 'FAILED') {
-      const next = await this.step(run);
+      // A lease another replica took over (this one stalled past the stale window) is no
+      // longer this process's run: stop, rather than drive a row whose writes now fail and
+      // repeat a stage (a second archive backup) for ever.
+      if (run.leaseOwner !== this.deps.leaseOwner) return run;
+      const key = `${run.id}:${run.state}`;
+      let next: 'NEXT' | 'WAIT';
+      try {
+        next = await this.step(run);
+        this.failures.delete(key);
+      } catch (error) {
+        await this.stepFailed(run, key, error);
+        return this.deps.repository.latest(run.tenantId);
+      }
       if (next === 'WAIT') return run;
       run = await this.deps.repository.latest(run.tenantId);
     }
     return run;
+  }
+
+  /**
+   * A stage that threw. Retried on the next tick, but not for ever: a deterministic failure
+   * (VACUUM FULL on a volume without room, say) would otherwise keep the run active, the
+   * one-active index refusing a replacement, and the worker green. After `maxStepAttempts`
+   * consecutive failures the run is FAILED with `legacy_compaction.step_failed`, by the same
+   * conditional update as every other change, so only the lease holder can do it.
+   */
+  private async stepFailed(run: LegacyCompactionRow, key: string, error: unknown): Promise<void> {
+    const attempts = (this.failures.get(key) ?? 0) + 1;
+    this.deps.logger.error(
+      {
+        compactionId: run.id,
+        state: run.state,
+        attempts,
+        err: error instanceof Error ? error.message : String(error),
+      },
+      'a legacy compaction stage failed',
+    );
+    if (attempts < (this.deps.maxStepAttempts ?? MAX_STEP_ATTEMPTS)) {
+      this.failures.set(key, attempts);
+      return;
+    }
+    this.failures.delete(key);
+    await this.fail(run, 'legacy_compaction.step_failed');
+  }
+
+  /** A long stage, with the lease refreshed while it runs so no replica takes it over. */
+  private async heartbeating<T>(run: LegacyCompactionRow, work: () => Promise<T>): Promise<T> {
+    const beat = setInterval(() => {
+      void this.deps.repository
+        .heartbeat({ id: run.id, leaseOwner: this.deps.leaseOwner, now: this.deps.clock.now() })
+        .catch((error: unknown) => {
+          this.deps.logger.warn(
+            { compactionId: run.id, err: error instanceof Error ? error.message : String(error) },
+            'a legacy compaction heartbeat failed',
+          );
+        });
+    }, this.deps.heartbeatIntervalMs ?? HEARTBEAT_MS);
+    beat.unref();
+    try {
+      return await work();
+    } finally {
+      clearInterval(beat);
+    }
   }
 
   private async step(run: LegacyCompactionRow): Promise<'NEXT' | 'WAIT'> {
@@ -123,27 +189,26 @@ export class LegacyCompactionExecutor {
     const now = () => this.deps.clock.now();
     switch (run.state) {
       case 'REQUESTED': {
-        const readiness = await this.deps.repository.importReadiness(run.tenantId);
-        if (!readiness.completed || readiness.inFlight) {
-          await this.fail(run, 'legacy_compaction.import_not_completed');
-          return 'NEXT';
-        }
-        await this.deps.repository.advance({
+        // Decided under the lock an import's start takes: from here until the run ends, no
+        // import of this tenant can begin (`legacy-import-exclusion.ts`).
+        const begun = await this.deps.repository.beginArchiving({
           id: run.id,
+          tenantId: run.tenantId,
           leaseOwner: owner,
-          from: 'REQUESTED',
-          to: 'ARCHIVING',
           now: now(),
         });
+        if (begun === 'IMPORT_NOT_READY') {
+          await this.fail(run, 'legacy_compaction.import_not_completed');
+        }
         return 'NEXT';
       }
       case 'ARCHIVING': {
         // A previous tick's archive is re-checked, never re-taken.
         let backupId = run.archiveBackupId;
         if (backupId === null) {
-          const outcome = await this.deps.backup.run('MANUAL', {
-            title: LEGACY_COMPACTION_ARCHIVE_TITLE,
-          });
+          const outcome = await this.heartbeating(run, () =>
+            this.deps.backup.run('MANUAL', { title: LEGACY_COMPACTION_ARCHIVE_TITLE }),
+          );
           if (outcome.kind === 'BUSY') return 'WAIT';
           backupId = outcome.run.id;
           if (outcome.run.state !== 'SUCCEEDED' || outcome.run.verifiedAt === null) {
@@ -214,7 +279,7 @@ export class LegacyCompactionExecutor {
         );
       case 'VACUUMING': {
         await this.notice(scope, run, 'maintenance', {});
-        await this.deps.repository.vacuum();
+        await this.heartbeating(run, () => this.deps.repository.vacuum());
         const after = await this.deps.repository.measure(run.tenantId);
         await this.deps.repository.advance({
           id: run.id,
@@ -308,7 +373,8 @@ export class LegacyCompactionExecutor {
     code:
       | 'legacy_compaction.archive_failed'
       | 'legacy_compaction.archive_not_delivered'
-      | 'legacy_compaction.import_not_completed',
+      | 'legacy_compaction.import_not_completed'
+      | 'legacy_compaction.step_failed',
     backupId?: string,
   ): Promise<void> {
     await this.deps.repository.advance({
@@ -322,7 +388,9 @@ export class LegacyCompactionExecutor {
     });
     this.deps.logger.warn(
       { compactionId: run.id, code },
-      'legacy compaction stopped; nothing was deleted',
+      run.state === 'REQUESTED' || run.state === 'ARCHIVING' || run.state === 'MEASURING'
+        ? 'legacy compaction stopped; nothing was deleted'
+        : 'legacy compaction stopped at a failing stage; its archive backup holds what was there',
     );
   }
 

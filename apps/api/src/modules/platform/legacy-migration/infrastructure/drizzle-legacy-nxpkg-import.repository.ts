@@ -12,6 +12,7 @@ import {
 } from 'drizzle-orm';
 import {
   errors,
+  PLATFORM_ERROR_CODES,
   LEGACY_MIGRATION_HTTP_ERROR_CODES,
   LEGACY_NXPKG_TERMINAL_STATUSES,
   type LegacyMigrationAdoptReport,
@@ -28,6 +29,10 @@ import type { Database, Executor } from '../../../../infrastructure/persistence/
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { legacyNxpkgImports } from '../../../../infrastructure/persistence/schema.js';
 import { isUniqueViolation } from '../../../../infrastructure/persistence/sqlstate.js';
+import {
+  legacyCompactionActive,
+  lockLegacyImportExclusion,
+} from '../../../../infrastructure/persistence/legacy-import-exclusion.js';
 import {
   EMPTY_LEGACY_MIGRATION_PROGRESS,
   isLegacyMigrationFailure,
@@ -125,8 +130,25 @@ export class DrizzleLegacyNxpkgImportRepository implements LegacyNxpkgImportRepo
   }
 
   async insert(input: NewLegacyNxpkgImport, tx?: TransactionScope): Promise<LegacyNxpkgImportRow> {
+    // The exclusion with a legacy-data compaction is decided in a transaction, under the
+    // shared per-tenant lock; one is opened when the caller has none.
+    if (tx === undefined) return this.db.transaction((own) => this.insertIn(input, own));
+    return this.insertIn(input, tx.tx);
+  }
+
+  private async insertIn(input: NewLegacyNxpkgImport, tx: Executor): Promise<LegacyNxpkgImportRow> {
+    // A compaction archives the legacy data and then deletes from it: an import that began
+    // during it would write rows the archive predates. Refused while one is active, decided
+    // under the lock the compaction's own start takes (`legacy-import-exclusion.ts`).
+    await lockLegacyImportExclusion(tx, input.tenantId);
+    if (await legacyCompactionActive(tx, input.tenantId)) {
+      throw errors.conflict(
+        PLATFORM_ERROR_CODES.LEGACY_COMPACTION_ACTIVE,
+        'A compaction of the legacy data is running. An import waits until it has finished.',
+      );
+    }
     try {
-      const [row] = await this.exec(tx)
+      const [row] = await tx
         .insert(t)
         .values({
           id: input.id,

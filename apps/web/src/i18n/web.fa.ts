@@ -7373,6 +7373,7 @@ export const WEB_FA = {
   'web.nc_t_refunded_undeliverable': 'سفارشی تحویل‌نشدنی بود و وجه آن بازگشت',
   'web.nc_t_backup_failed': 'پشتیبان‌گیری ناموفق بود',
   'web.nc_t_backup_delivery_failed': 'آرشیو بکاپ از سرور خارج نشد',
+  'web.nc_t_backup_delivery_partial': 'بکاپ فقط بخشی از بخش‌هایش را به تلگرام رساند',
   'web.nc_t_backup_cleanup_failed': 'فایل رمزنشدهٔ بکاپ روی سرور مانده است',
   'web.nc_t_backup_disk_low': 'فضای دیسک بکاپ رو به پایان است',
   'web.nc_t_backup_overdue': 'بکاپ خودکار عقب افتاده است',

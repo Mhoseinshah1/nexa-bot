@@ -553,8 +553,7 @@ function RecoveryOperations({
   const [phrase, setPhrase] = useState('');
   /** E4: how many parts the chosen file was joined from, or a refused set. */
   const [parts, setParts] = useState<number | 'INVALID'>(1);
-  /** E4: whether the chosen (or uploaded) backup is a 7-Zip archive needing a password. */
-  const [sevenZip, setSevenZip] = useState(false);
+  /** E4: whether the UPLOADED backup is a 7-Zip archive, whose verification needs a password. */
   const [uploadedSevenZip, setUploadedSevenZip] = useState(false);
   const [archivePassword, setArchivePassword] = useState('');
 
@@ -562,11 +561,18 @@ function RecoveryOperations({
   const mirzaReady = mirza.mayView && imports.enabled && imports.capabilities !== null;
 
   const upload = useMutation({
-    mutationFn: (chosen: File) => uploadRecoveryArchive(chosen),
+    // The format is read from the file that is SUBMITTED, inside the mutation, never from
+    // the picker's state: that follows whatever is chosen while the upload is in flight
+    // (or has not been read yet), and a 7-Zip upload marked otherwise would hide the
+    // password its verification needs (review of #300).
+    mutationFn: async (chosen: File) => {
+      const submittedSevenZip = await isSevenZipBackup(chosen).catch(() => false);
+      return { ...(await uploadRecoveryArchive(chosen)), submittedSevenZip };
+    },
     onSuccess: (result) => {
       setCurrent(result.recovery);
       setShown('NEXA');
-      setUploadedSevenZip(sevenZip);
+      setUploadedSevenZip(result.submittedSevenZip);
       onChanged();
     },
     // A refusal may have left a FAILED row (oversized, empty) or none at all (uploads
@@ -643,18 +649,12 @@ function RecoveryOperations({
     chosenRef.current = chosen;
     setFile(chosen);
     setKind(null);
-    setSevenZip(false);
     if (chosen === null) return;
     // The answer for a file the operator has since replaced is dropped.
     void sniffRestoreFile(chosen)
       .catch((): RestoreFileKind => 'UNKNOWN')
       .then((found) => {
         if (chosenRef.current === chosen) setKind(found);
-      });
-    void isSevenZipBackup(chosen)
-      .catch(() => false)
-      .then((found) => {
-        if (chosenRef.current === chosen) setSevenZip(found);
       });
   };
 

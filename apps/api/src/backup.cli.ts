@@ -1,6 +1,6 @@
 import { createReadStream, createWriteStream } from 'node:fs';
 import { readFile, rm, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { isNexaError } from '@nexa/contracts';
 import { createContainer, type Container } from './container.js';
@@ -178,12 +178,20 @@ async function siblingParts(first: string): Promise<string[]> {
 async function orderedParts(archives: readonly string[]): Promise<string[]> {
   if (archives.length === 1) return siblingParts(archives[0] ?? '');
   const numbered = archives.map((path) => {
-    const match = /\.(\d{3,})$/.exec(path);
+    const match = /^(.*)\.(\d{3,})$/.exec(basename(path));
     if (match === null) {
       throw new UsageError(`${path} is not a numbered part (.001, .002 …).`);
     }
-    return { path, n: Number(match[1]) };
+    return { path, base: match[1] ?? '', n: Number(match[2]) };
   });
+  // One backup's parts share one name: `a.7z.001` with `b.7z.002` is two backups, and
+  // joining them would fail later as an unreadable archive instead of saying so here.
+  const bases = new Set(numbered.map((part) => part.base));
+  if (bases.size > 1) {
+    throw new UsageError(
+      `These parts belong to different backups (${[...bases].join(', ')}). Give one backup's parts.`,
+    );
+  }
   numbered.sort((a, b) => a.n - b.n);
   numbered.forEach((part, index) => {
     if (part.n !== index + 1) {
@@ -468,23 +476,35 @@ async function cmdVerify(
     sevenZipOptionsFromEnvironment(),
   );
 
+  // The archive is RECOGNISED before anything is created. A file that is not an archive,
+  // or a 7-Zip one without its password, is refused here, so neither needs a writable
+  // BACKUP_WORK_DIR: an operator verifying a file on a broken host is told what the file
+  // is, not that a directory it never needed cannot be made. The scratch directory stays
+  // on the backup volume (never /tmp, see above); only its creation comes later.
+  const parts = await orderedParts(paths);
+  const sevenZip = await isSevenZipFile(parts[0] ?? '');
+  if (sevenZip && passwords === undefined) {
+    throw new UsageError('A 7-Zip backup needs its password: add --password-stdin.');
+  }
+  const describeNative = async (path: string): Promise<void> => {
+    const header = await readArchiveHeader(path);
+    process.stdout.write(
+      `archive  format ${String(header.header.format)}, ${String(header.archiveBytes)} bytes\n` +
+        `backup   ${header.header.backupId}\n` +
+        `key      ${header.header.keyId}\n`,
+    );
+  };
+  if (!sevenZip && parts.length === 1) await describeNative(parts[0] ?? '');
+
   const directory = await privateScratchDirectory(backupWorkDirFromEnvironment(), 'verify');
   const alive = keepScratchAlive(directory);
   try {
-    const archivePath = await joinedArchive(await orderedParts(paths), directory);
-    if (await isSevenZipFile(archivePath)) {
+    const archivePath = await joinedArchive(parts, directory);
+    if (sevenZip) {
       const { size } = await stat(archivePath);
       process.stdout.write(`archive  7-Zip (AES-256, encrypted headers), ${String(size)} bytes\n`);
-      if (passwords === undefined) {
-        throw new UsageError('A 7-Zip backup needs its password: add --password-stdin.');
-      }
-    } else {
-      const header = await readArchiveHeader(archivePath);
-      process.stdout.write(
-        `archive  format ${String(header.header.format)}, ${String(header.archiveBytes)} bytes\n` +
-          `backup   ${header.header.backupId}\n` +
-          `key      ${header.header.keyId}\n`,
-      );
+    } else if (parts.length > 1) {
+      await describeNative(archivePath);
     }
     const opened = await archiver.open({
       archivePath,

@@ -190,6 +190,46 @@ describe('backup parts, the 7-Zip archive and local-copy retention (E4)', () => 
     expect((await context.container.backupPasswords.status(tenantA)).configured).toBe(false);
   }, 60_000);
 
+  // Review of #300: a retry of a committed request is answered before the step-up, whose
+  // one-time proof (a TOTP step, a backup code) the first request already spent. A wrong
+  // account password stands in for that spent proof here.
+  it('replays a committed change without asking for the spent step-up again', async () => {
+    const owner = await createAdmin(context.container, tenantA, {
+      username: 'backup-owner-3',
+      password: OWNER_PASSWORD,
+      roleKeys: ['owner'],
+    });
+    const command = (stepUpPassword: string) => ({
+      idempotencyKey: 'set-then-retry',
+      password: BACKUP_PASSWORD,
+      stepUp: { password: stepUpPassword },
+    });
+    const first = await context.container.backupPasswords.set(
+      tenantA,
+      adminActorFor(owner),
+      command(OWNER_PASSWORD),
+      { ip: null },
+    );
+    const retry = await context.container.backupPasswords.set(
+      tenantA,
+      adminActorFor(owner),
+      command('a proof that is no longer valid'),
+      { ip: null },
+    );
+    expect(retry).toEqual({ setAt: first.setAt, replayed: true });
+    // A NEW key still needs the step-up.
+    await expect(
+      context.container.backupPasswords.set(
+        tenantA,
+        adminActorFor(owner),
+        { ...command('a proof that is no longer valid'), idempotencyKey: 'a-new-change' },
+        { ip: null },
+      ),
+    ).rejects.toMatchObject({
+      code: PLATFORM_ERROR_CODES.BACKUP_ARCHIVE_PASSWORD_REAUTHENTICATION_FAILED,
+    });
+  }, 60_000);
+
   it('refuses a holder without backup.download before any step-up', async () => {
     const operator = await createAdmin(context.container, tenantA, {
       username: 'backup-operator',

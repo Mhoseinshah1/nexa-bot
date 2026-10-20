@@ -7,6 +7,7 @@ import type {
 import { LEGACY_COMPACTION_ACTIVE_STATES } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import { isUniqueViolation } from '../../../../infrastructure/persistence/sqlstate.js';
+import { lockLegacyImportExclusion } from '../../../../infrastructure/persistence/legacy-import-exclusion.js';
 import type {
   CompactionSizes,
   LegacyCompactionRepository,
@@ -162,6 +163,45 @@ export class DrizzleLegacyCompactionRepository implements LegacyCompactionReposi
       RETURNING *`);
     const row = rows.rows[0];
     return row === undefined ? null : toRow(row);
+  }
+
+  async heartbeat(input: {
+    readonly id: string;
+    readonly leaseOwner: string;
+    readonly now: Date;
+  }): Promise<boolean> {
+    const rows = await this.db.execute(sql`
+      UPDATE legacy_compaction_runs SET lease_heartbeat_at = ${input.now}
+       WHERE id = ${input.id}::uuid AND lease_owner = ${input.leaseOwner}
+         AND state = ANY(${textArray(LEGACY_COMPACTION_ACTIVE_STATES)})
+      RETURNING id`);
+    return rows.rows.length > 0;
+  }
+
+  async beginArchiving(input: {
+    readonly id: string;
+    readonly tenantId: string;
+    readonly leaseOwner: string;
+    readonly now: Date;
+  }): Promise<'ADVANCED' | 'IMPORT_NOT_READY' | 'LEASE_LOST'> {
+    return this.db.transaction(async (tx) => {
+      // The lock FIRST, the readiness AFTER: an import's insert takes the same lock, so the
+      // two decisions are serialised and each sees the other's committed row.
+      await lockLegacyImportExclusion(tx, input.tenantId);
+      const readiness = await this.importReadiness(input.tenantId, tx);
+      if (!readiness.completed || readiness.inFlight) return 'IMPORT_NOT_READY';
+      const moved = await this.advance(
+        {
+          id: input.id,
+          leaseOwner: input.leaseOwner,
+          from: 'REQUESTED',
+          to: 'ARCHIVING',
+          now: input.now,
+        },
+        tx,
+      );
+      return moved ? 'ADVANCED' : 'LEASE_LOST';
+    });
   }
 
   async advance(

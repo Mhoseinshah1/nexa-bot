@@ -97,7 +97,9 @@ function hasControlCharacter(value: string): boolean {
 /**
  * The idempotency fingerprint. Deliberately NOT derived from the password: a key reused
  * with a different password replays the first answer ("set at …") rather than storing a
- * digest of either. The step-up already ran for the replaying request.
+ * digest of either. The step-up ran for the request that committed; a replay is answered
+ * BEFORE the step-up, because a TOTP step or a backup code that request used is spent, and
+ * asking for it again would tell the owner a change that happened did not.
  */
 const REQUEST_HASH = 'backup.archive_password.set.v1';
 
@@ -145,6 +147,17 @@ export class BackupPasswordService {
         'A backup password cannot contain line breaks or other control characters.',
       );
     }
+    // The replay BEFORE the step-up, and after the permission: a retry of a request that
+    // committed (its response lost) carries the same proof, and a one-time proof is spent.
+    // It changes nothing and says only when the password was set.
+    const existing = await this.deps.idempotency.find<{ setAt: string }>(
+      scope,
+      actor.surface,
+      command.idempotencyKey,
+      REQUEST_HASH,
+    );
+    if (existing) return { setAt: new Date(existing.result.setAt), replayed: true };
+
     try {
       await this.deps.verifyStepUp(scope, actor, command.stepUp, context, denial.action);
     } catch (error) {
@@ -162,14 +175,6 @@ export class BackupPasswordService {
       }
       throw error;
     }
-
-    const existing = await this.deps.idempotency.find<{ setAt: string }>(
-      scope,
-      actor.surface,
-      command.idempotencyKey,
-      REQUEST_HASH,
-    );
-    if (existing) return { setAt: new Date(existing.result.setAt), replayed: true };
 
     const result = await runAuthorizedMutation(
       this.mutationDeps(),

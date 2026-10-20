@@ -104,9 +104,12 @@ const KEYS = {
 const PRUNE_BATCH = 200;
 
 /**
- * Peak bytes a run holds on the volume, from the last verified run: the dump,
- * the verification's decrypted copy and the archive coexist during
- * VERIFY_RESTORE. Times one and a half, because a database grows between runs.
+ * Peak bytes a run holds on the volume, from the last verified run: ONE dump and
+ * the archive. The pipeline removes its plaintext dump once the archive is sealed
+ * and BEFORE the verification decrypts its own copy (E4), so the two dumps never
+ * coexist: the peak is the dump with the archive being written (ENCRYPT), or the
+ * archive with the verification's copy (VERIFY_RESTORE). Times one and a half,
+ * because a database grows between runs.
  */
 export function requiredFreeBytes(
   latest: { readonly dumpBytes: bigint | null; readonly archiveBytes: bigint | null } | null,
@@ -115,7 +118,7 @@ export function requiredFreeBytes(
   if (latest === null) return floorBytes;
   const dump = Number(latest.dumpBytes ?? 0n);
   const archive = Number(latest.archiveBytes ?? 0n);
-  return Math.max(floorBytes, Math.ceil((2 * dump + archive) * 1.5));
+  return Math.max(floorBytes, Math.ceil((dump + archive) * 1.5));
 }
 
 export interface HousekeepingPassResult {
@@ -285,6 +288,7 @@ export class BackupHousekeeping {
       limit: PRUNE_BATCH,
     });
     let pruned = 0;
+    let survivedDirectories = 0;
     for (const candidate of candidates) {
       const survived = await this.deps.debris.removeRunDirectory(candidate.id);
       if (survived.length > 0) {
@@ -292,7 +296,7 @@ export class BackupHousekeeping {
           { backupId: candidate.id, survived },
           'could not remove the local copy of a delivered backup',
         );
-        this.retentionSurvivors += 1;
+        survivedDirectories += 1;
         continue;
       }
       if (await this.deps.runs.markArchivePruned({ id: candidate.id, now })) pruned += 1;
@@ -302,6 +306,19 @@ export class BackupHousekeeping {
         { pruned, keepDelivered },
         'local copies of backups delivered in full were removed',
       );
+    }
+    // OPENED, not only kept open: like retention's survivors, a delivered copy that could
+    // not be removed is something left on this host that keeps taking its disk, and an
+    // installation with no cleanup condition open yet must be told (review of #300).
+    this.retentionSurvivors += survivedDirectories;
+    if (survivedDirectories > 0) {
+      await this.record({
+        code: 'backup.cleanup_failed',
+        severity: 'ERROR',
+        message: `${String(survivedDirectories)} local copy(ies) of a delivered backup could not be removed.`,
+        context: { deliveredCopySurvivors: survivedDirectories },
+        dedupeKey: KEYS.cleanup,
+      });
     }
     return pruned;
   }

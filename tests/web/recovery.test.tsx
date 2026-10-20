@@ -601,6 +601,26 @@ describe('the recovery page', () => {
       expect(await screen.findByText(/کیت بازیابی همان سرور را/)).toBeInTheDocument();
     });
 
+    // Review of #300: the password field follows the file that was UPLOADED, not whatever
+    // the picker holds when the answer arrives.
+    it('asks for the 7-Zip password of the uploaded archive even if the picker changed meanwhile', async () => {
+      stubApi([
+        ...routes(),
+        { url: `${API_PREFIX}${RECOVERY_ROUTES.upload}`, body: { recovery: recovery() } },
+      ]);
+      renderPage(<RecoveryPage route={route} permissions={ALL} />);
+      const picker = await screen.findByLabelText('انتخاب فایل');
+      const sevenZip = new Uint8Array([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0, 4, 1, 2, 3, 4]);
+      fireEvent.change(picker, { target: { files: [new File([sevenZip], 'b.7z')] } });
+      const send = screen.getByRole('button', { name: 'بارگذاری' });
+      await waitFor(() => expect(send).toBeEnabled());
+      fireEvent.click(send);
+      // Another (non-7-Zip) file is chosen while the upload is in flight.
+      fireEvent.change(picker, { target: { files: [new File([NEXA_ARCHIVE_BYTES], 'old.nxb')] } });
+      // The verification card's own password field, by its hint.
+      expect(await screen.findByText(/این فایل 7-Zip رمزدار است/)).toBeInTheDocument();
+    });
+
     it('says a failure the advice did not cover in words too, with the code beside it (C5.9)', async () => {
       stubApi([
         ...routes(),

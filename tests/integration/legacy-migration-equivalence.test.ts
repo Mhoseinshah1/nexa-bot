@@ -47,14 +47,17 @@ const PINNED: Record<string, string> = {
   wallet: '75a385e8b3e2d0757651d8ba72a53de012a355f0eaa4dbd454541d79ff734d3b',
   trials: '559b0781174574a505585078a6692341553dbc4666b0cffa0e746614da1ef3ee',
   importMap: '4a0d73f6ee1646f9e431053b5396d7cd15d76091885452f0f7d8cbd292803ab6',
-  audit: 'b71cb66189c8719adec16f99c24a94927ce9a0e135319a6d5e5da239b42c2f30',
+  // Re-pinned in Round 4 PR-E (E2): customer.legacy_imported and trial.legacy.preserve are one
+  // summary row per batch, not one per customer.
+  audit: '06c70ecb0535041f7ec52688cc57b91db89a4353962dc2edc7edfb0390fc2885',
   outbox: 'e2615b8d0c5d373c9df2d6914c06baecc754a8b3101e7b7a49a4861f2ed9b043',
   aggregateSequences: 'bb2d305752089dd2e885db2ee5917498f23a042490da4822b0cb2f3b734a4d1c',
   idempotency: '9c2f50df9573ee59f3dd540600387326ab0c37096ea8a6bb5e2565dff39307c5',
   services: '2a0ee48ad33c0fe900fd7e756650579b5c2f93a0d5c3596570c525efbeb373d6',
   orders: '73978c181f0c7b35ded662d22d855d84e600b33bc463220700b8a1072762da2d',
   payments: 'fea44bf614ec8e726c02f9bd96958919f727ecdd709ce9a2a627afd783ba0665',
-  history: '03feecc26487a7c0ecd6f6434809336a054a1f2cf110a6ce91759c00b752c054',
+  // Re-pinned in Round 4 PR-E (E2): a stored record no longer carries its all-false live flags.
+  history: 'c84849d7a29d5e1ea0a53ddfab00e47007f28bac62d6698849a93626930434d8',
   candidates: 'dbec493afb42de2b30de09a68b340f42dad997a3b995f88ecd5c2cc830169517',
   invoiceArchive: '2fe38032bcbb79542e416610c7687e11dbbe7cf27d6bb0acc3b1e33e9bb00c4a',
   runs: '1c6d1c56c6005d1e4bc1841dc7b4026408671a3dda979198957bcc6a121f7a5c',

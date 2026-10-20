@@ -15,6 +15,7 @@ import {
 } from './harness';
 import { LegacyCompactionExecutor } from '../../apps/api/src/modules/platform/legacy-compaction/application/legacy-compaction.executor';
 import { DrizzleLegacyCompactionRepository } from '../../apps/api/src/modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository';
+import { lockLegacyImportExclusion } from '../../apps/api/src/infrastructure/persistence/legacy-import-exclusion';
 import type { BackupRunPartRow } from '../../apps/api/src/modules/platform/backup/application/ports';
 
 /**
@@ -90,6 +91,9 @@ describe('the legacy data compaction (E1)', () => {
   function executor(input: {
     parts: readonly Partial<BackupRunPartRow>[];
     backupState?: 'SUCCEEDED' | 'FAILED';
+    /** Runs inside the substituted backup, before it answers (a long or failing archive). */
+    during?: () => Promise<void>;
+    heartbeatIntervalMs?: number;
   }): { executor: LegacyCompactionExecutor; titles: string[] } {
     const titles: string[] = [];
     const backupId = randomUUID();
@@ -106,6 +110,7 @@ describe('the legacy data compaction (E1)', () => {
         backup: {
           run: async (_trigger, options) => {
             titles.push(options.title);
+            await input.during?.();
             return {
               kind: 'COMPLETED',
               run: {
@@ -140,6 +145,9 @@ describe('the legacy data compaction (E1)', () => {
         leaseOwner: 'test:compaction',
         batchSize: 2,
         tickIntervalMs: 60_000,
+        ...(input.heartbeatIntervalMs === undefined
+          ? {}
+          : { heartbeatIntervalMs: input.heartbeatIntervalMs }),
         logger: {
           info() {},
           warn() {},
@@ -340,6 +348,192 @@ describe('the legacy data compaction (E1)', () => {
       await tx.execute(sql`DELETE FROM legacy_history_records WHERE id = ${row}::uuid`);
     });
     expect((await ids()).has(row)).toBe(false);
+  });
+
+  /*
+   * Review of #300: the lease during a long stage, a lease another replica took over, a stage
+   * that keeps failing, and the exclusion with an import for the run's whole lifetime.
+   */
+  const leaseOf = async (): Promise<{ owner: string | null; beat: Date; state: string }> => {
+    const [row] = await q<{ lease_owner: string | null; lease_heartbeat_at: Date; state: string }>(
+      sql`SELECT lease_owner, lease_heartbeat_at, state FROM legacy_compaction_runs`,
+    );
+    if (row === undefined) throw new Error('no compaction run');
+    return { owner: row.lease_owner, beat: new Date(row.lease_heartbeat_at), state: row.state };
+  };
+  const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it('keeps its lease alive while the archive backup runs, however long it takes', async () => {
+    await history('agent_log', { a: 1 });
+    await request();
+    let during: Date | null = null;
+    const { executor: run } = executor({
+      parts: [{}],
+      heartbeatIntervalMs: 20,
+      during: async () => {
+        // As if the lease had gone stale mid-backup; the heartbeat must bring it back.
+        await ctx.container.database.db.execute(
+          sql`UPDATE legacy_compaction_runs SET lease_heartbeat_at = 'epoch'`,
+        );
+        await pause(200);
+        during = (await leaseOf()).beat;
+      },
+    });
+    const ended = await run.tick();
+    expect(ended?.state).toBe('COMPLETED');
+    expect(during).not.toBeNull();
+    expect((during as Date | null)?.getTime() ?? 0).toBeGreaterThan(0);
+  });
+
+  it('stops driving a run whose lease another replica took over, and takes no second archive', async () => {
+    const kept = await history('agent_log', { a: 1 });
+    await request();
+    const { executor: run, titles } = executor({
+      parts: [{}],
+      during: async () => {
+        await ctx.container.database.db.execute(
+          sql`UPDATE legacy_compaction_runs SET lease_owner = 'test:other-replica'`,
+        );
+      },
+    });
+    const ended = await run.tick();
+    expect(ended?.state).toBe('ARCHIVING');
+    expect(titles).toHaveLength(1);
+    expect(await leaseOf()).toMatchObject({ owner: 'test:other-replica', state: 'ARCHIVING' });
+    expect((await ids()).has(kept)).toBe(true);
+  });
+
+  it('fails a stage that keeps failing as step_failed, rather than retrying it for ever', async () => {
+    const kept = await history('agent_log', { a: 1 });
+    await request();
+    const { executor: run } = executor({
+      parts: [{}],
+      during: async () => {
+        throw new Error('no space left on device');
+      },
+    });
+    expect((await run.tick())?.state).toBe('ARCHIVING');
+    expect((await run.tick())?.state).toBe('ARCHIVING');
+    const ended = await run.tick();
+    expect(ended?.state).toBe('FAILED');
+    expect(ended?.failureCode).toBe('legacy_compaction.step_failed');
+    expect((await ids()).has(kept)).toBe(true);
+  });
+
+  it('refuses a new import for the whole life of a compaction, and accepts one after it', async () => {
+    await request();
+    const [admin] = await q<{ id: string }>(
+      sql`SELECT requested_by_admin_id AS id FROM legacy_nxpkg_imports LIMIT 1`,
+    );
+    const newImport = () =>
+      ctx.container.legacyNxpkgImports.insert({
+        id: randomUUID(),
+        tenantId: tenantA.tenantId,
+        fileName: 'later.nxpkg',
+        filePath: '/nonexistent/later.nxpkg',
+        fileSha256: 'd'.repeat(64),
+        fileBytes: 1n,
+        requestedByAdminId: admin?.id ?? '',
+        now: new Date(),
+      });
+    await expect(newImport()).rejects.toMatchObject({
+      code: PLATFORM_ERROR_CODES.LEGACY_COMPACTION_ACTIVE,
+    });
+    // Past REQUESTED, into the deleting stages: still refused.
+    await ctx.container.database.db.execute(
+      sql`UPDATE legacy_compaction_runs SET state = 'DROPPING'`,
+    );
+    await expect(newImport()).rejects.toMatchObject({
+      code: PLATFORM_ERROR_CODES.LEGACY_COMPACTION_ACTIVE,
+    });
+    await ctx.container.database.db.execute(
+      sql`UPDATE legacy_compaction_runs SET state = 'COMPLETED', finished_at = now()`,
+    );
+    await expect(newImport()).resolves.toMatchObject({ status: 'UPLOADED' });
+  });
+
+  it('decides its start in one transaction: an import that began first fails the run', async () => {
+    const kept = await history('agent_log', { a: 1 });
+    await request();
+    // An import row that got in before the compaction's start (the request's own check
+    // passed earlier): the start, decided under the lock, sees it and stops.
+    await importInFlight();
+    const { executor: run, titles } = executor({ parts: [{}] });
+    const ended = await run.tick();
+    expect(ended?.state).toBe('FAILED');
+    expect(ended?.failureCode).toBe('legacy_compaction.import_not_completed');
+    expect(titles).toHaveLength(0);
+    expect((await ids()).has(kept)).toBe(true);
+  });
+
+  /** Holds the shared per-tenant lock in another transaction until `release` is called. */
+  async function holdImportLock(): Promise<{ release: () => Promise<void> }> {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let held!: () => void;
+    const holding = new Promise<void>((resolve) => (held = resolve));
+    const done = ctx.container.database.db.transaction(async (tx) => {
+      await lockLegacyImportExclusion(tx, tenantA.tenantId);
+      held();
+      await released;
+    });
+    await holding;
+    return {
+      release: async () => {
+        release();
+        await done;
+      },
+    };
+  }
+  const settledWithin = async (work: Promise<unknown>, ms: number): Promise<boolean> =>
+    Promise.race([
+      work.then(
+        () => true,
+        () => true,
+      ),
+      pause(ms).then(() => false),
+    ]);
+
+  it('an import start and a compaction start both wait on the same per-tenant lock', async () => {
+    await request();
+    const [run] = await q<{ id: string }>(sql`SELECT id FROM legacy_compaction_runs`);
+    const repository = new DrizzleLegacyCompactionRepository(ctx.container.database.db);
+    await repository.claim({
+      leaseOwner: 'test:compaction',
+      now: new Date(),
+      staleBefore: new Date(0),
+    });
+
+    const lock = await holdImportLock();
+    const begin = repository.beginArchiving({
+      id: run?.id ?? '',
+      tenantId: tenantA.tenantId,
+      leaseOwner: 'test:compaction',
+      now: new Date(),
+    });
+    expect(await settledWithin(begin, 300)).toBe(false);
+    await lock.release();
+    await expect(begin).resolves.toBe('ADVANCED');
+
+    const [admin] = await q<{ id: string }>(
+      sql`SELECT requested_by_admin_id AS id FROM legacy_nxpkg_imports LIMIT 1`,
+    );
+    const second = await holdImportLock();
+    const insert = ctx.container.legacyNxpkgImports.insert({
+      id: randomUUID(),
+      tenantId: tenantA.tenantId,
+      fileName: 'later.nxpkg',
+      filePath: '/nonexistent/later.nxpkg',
+      fileSha256: 'd'.repeat(64),
+      fileBytes: 1n,
+      requestedByAdminId: admin?.id ?? '',
+      now: new Date(),
+    });
+    expect(await settledWithin(insert, 300)).toBe(false);
+    await second.release();
+    await expect(insert).rejects.toMatchObject({
+      code: PLATFORM_ERROR_CODES.LEGACY_COMPACTION_ACTIVE,
+    });
   });
 
   /** A valid `legacy_invoice_archive` row (the fixture `legacy-customer-invoices.test.ts` uses). */

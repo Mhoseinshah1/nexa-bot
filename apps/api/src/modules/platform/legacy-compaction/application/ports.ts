@@ -58,6 +58,25 @@ export interface LegacyCompactionRepository {
     readonly now: Date;
     readonly staleBefore: Date;
   }): Promise<LegacyCompactionRow | null>;
+  /**
+   * Keeps the lease of a run this owner holds alive during a long stage (the archive
+   * backup, VACUUM FULL). False when the lease is no longer this owner's.
+   */
+  heartbeat(input: {
+    readonly id: string;
+    readonly leaseOwner: string;
+    readonly now: Date;
+  }): Promise<boolean>;
+  /**
+   * REQUESTED → ARCHIVING, decided under the lock an import's start also takes: refused
+   * (`IMPORT_NOT_READY`) while an import is in flight or none has completed.
+   */
+  beginArchiving(input: {
+    readonly id: string;
+    readonly tenantId: string;
+    readonly leaseOwner: string;
+    readonly now: Date;
+  }): Promise<'ADVANCED' | 'IMPORT_NOT_READY' | 'LEASE_LOST'>;
   advance(
     input: {
       readonly id: string;

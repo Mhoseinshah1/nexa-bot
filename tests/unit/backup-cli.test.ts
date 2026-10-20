@@ -93,6 +93,17 @@ describe('the backup CLI arguments', () => {
     await expect(orderedParts(['/tmp/a.nxb', '/tmp/b.nxb'])).rejects.toThrow(UsageError);
   });
 
+  // Review of #300: two backups' parts are refused by name, not joined into garbage.
+  it('refuses parts of two different backups, and accepts one backup across directories', async () => {
+    await expect(orderedParts(['/tmp/backup-A.7z.001', '/tmp/backup-B.7z.002'])).rejects.toThrow(
+      /different backups/,
+    );
+    await expect(orderedParts(['/x/b.7z.002', '/y/b.7z.001'])).resolves.toEqual([
+      '/y/b.7z.001',
+      '/x/b.7z.002',
+    ]);
+  });
+
   it('takes a Recovery Kit for verify and restore, and for nothing else', () => {
     expect(parseArgs(['verify', '--archive', '/tmp/a.nxb', '--kit', '/tmp/k.nxkit']).kit).toBe(
       '/tmp/k.nxkit',
@@ -157,7 +168,10 @@ describe('the backup CLI arguments', () => {
 describe('the backup CLI as a process', () => {
   const cli = join(__dirname, '../../apps/api/dist/backup.cli.js');
 
-  function run(args: readonly string[]): { code: number; stderr: string; stdout: string } {
+  function run(
+    args: readonly string[],
+    extraEnv: Readonly<Record<string, string>> = {},
+  ): { code: number; stderr: string; stdout: string } {
     try {
       const stdout = execFileSync(process.execPath, [cli, ...args], {
         encoding: 'utf8',
@@ -169,6 +183,7 @@ describe('the backup CLI as a process', () => {
           PATH: process.env.PATH ?? '',
           SECRETS_KEK: 'A'.repeat(42) + '0=',
           SECRETS_KEK_ID: 'test-1',
+          ...extraEnv,
         },
       });
       return { code: 0, stdout, stderr: '' };
@@ -206,6 +221,38 @@ describe('the backup CLI as a process', () => {
     const result = run(['verify', '--archive', '/etc/hostname']);
     expect(result.code).toBe(1);
     expect(result.stderr).toMatch(/backup\.archive_malformed/);
+  });
+
+  /*
+   * The archive is recognised BEFORE the scratch directory is made. A BACKUP_WORK_DIR
+   * under a regular file cannot be created by anyone, root included, so these fail with
+   * ENOTDIR if the directory comes first: the CI regression was EACCES on the default
+   * /var/lib/nexa/backups for an archive that was never an archive.
+   */
+  const unwritable = { BACKUP_WORK_DIR: '/etc/hostname/nexa-backups' };
+
+  it('refuses a non-archive without needing a writable BACKUP_WORK_DIR', () => {
+    const result = run(['verify', '--archive', '/etc/hostname'], unwritable);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toMatch(/backup\.archive_malformed/);
+    expect(result.stderr).not.toMatch(/ENOTDIR|EACCES/);
+  });
+
+  it('asks for the 7-Zip password without needing a writable BACKUP_WORK_DIR', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'nexa-cli-7z-'));
+    try {
+      const archive = join(dir, 'b.7z');
+      await writeFile(
+        archive,
+        Buffer.concat([Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]), randomBytes(64)]),
+      );
+      const result = run(['verify', '--archive', archive], unwritable);
+      expect(result.code).toBe(64);
+      expect(result.stderr).toMatch(/--password-stdin/);
+      expect(result.stderr).not.toMatch(/ENOTDIR|EACCES/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
