@@ -687,6 +687,17 @@ export interface CustomerNotificationRepository {
     leaseUntil: Date,
     limit: number,
     tx?: unknown,
+    /**
+     * Round 4 PR-H: claim only the IMMEDIATE kinds, or only the reminders (the kinds quiet
+     * hours hold), so the reminder ceiling can bound the second without touching the
+     * first. Absent claims both, immediate first.
+     */
+    only?: 'IMMEDIATE' | 'QUIET',
+    /**
+     * Codex review of PR #296: kinds NOT to claim this pass — the reminders whose feature
+     * flag is off. They stay queued, unclaimed, with no attempt spent.
+     */
+    exceptKinds?: readonly CustomerNotificationKind[],
   ): Promise<readonly CustomerNotificationRecord[]>;
 
   /** Stamps a send as in flight, in its own transaction, before it leaves. */

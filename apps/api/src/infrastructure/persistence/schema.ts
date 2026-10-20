@@ -416,7 +416,7 @@ function recordSourceChecks(
 /**
  * The short public code (Round 4, PR-C; `@nexa/contracts` `public-code.ts`): 8 characters of
  * Crockford base32 without 0/O/1/I/L, unique per tenant and table, beside the uuid key and
- * never instead of it. Nullable only for the expand step: `nexa_assign_public_code` (0258)
+ * never instead of it. Nullable only for the expand step: `nexa_assign_public_code` (0261)
  * fills it on every INSERT from every writer, and the post-migration backfill
  * (`public-code-backfill.ts`) fills every row that existed before. Written once: the
  * database refuses changing a code that is set.
@@ -425,14 +425,12 @@ function publicCodeColumns() {
   return { code: text('code') };
 }
 
-function publicCodeChecks(
-  name: string,
-  table: { readonly tenantId: AnyPgColumn; readonly code: AnyPgColumn },
-) {
-  return [
-    check(`${name}_code_check`, sql`code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'`),
-    uniqueIndex(`${name}_tenant_code_key`).on(table.tenantId, table.code),
-  ];
+/*
+ * The per-tenant unique key, `<table>_tenant_code_key`, is built ONLINE (`online-indexes.ts`)
+ * and so deliberately not declared here (Codex review of #299).
+ */
+function publicCodeChecks(name: string) {
+  return [check(`${name}_code_check`, sql`code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'`)];
 }
 
 export function enumCheck(column: string, values: readonly string[]): SQL {
@@ -3781,7 +3779,7 @@ export const products = pgTable(
   (table) => [
     ...recordSourceChecks('products', table),
     check('products_code_number_check', sql`code_number IS NULL OR code_number > 0`),
-    uniqueIndex('products_tenant_code_number_key').on(table.tenantId, table.codeNumber),
+    // `products_tenant_code_number_key` is built online (`online-indexes.ts`).
     index('products_tenant_status_idx').on(table.tenantId, table.status),
     /** The catalogue's order, and the list's keyset: sort, then created, then id. */
     index('products_tenant_sort_idx').on(
@@ -4125,7 +4123,7 @@ export const orders = pgTable(
   },
   (table) => [
     ...recordSourceChecks('orders', table),
-    ...publicCodeChecks('orders', table),
+    ...publicCodeChecks('orders'),
     /** A child row may not name a customer of another tenant. */
     foreignKey({
       columns: [table.tenantId, table.customerId],
@@ -4448,7 +4446,7 @@ export const payments = pgTable(
   },
   (table) => [
     ...recordSourceChecks('payments', table),
-    ...publicCodeChecks('payments', table),
+    ...publicCodeChecks('payments'),
     foreignKey({
       columns: [table.tenantId, table.customerId],
       foreignColumns: [customers.tenantId, customers.id],
@@ -6969,7 +6967,7 @@ export const services = pgTable(
   },
   (table) => [
     ...recordSourceChecks('services', table),
-    ...publicCodeChecks('services', table),
+    ...publicCodeChecks('services'),
     check('services_is_test_source_check', sql`NOT is_test OR source = 'MIRZA'`),
     foreignKey({
       columns: [table.tenantId, table.customerId],
@@ -7276,6 +7274,57 @@ export const serviceReminders = pgTable(
      * service — which is precisely the silence this whole lane exists to break.
      */
     check('service_reminders_basis_check', sql`${table.basisTrafficLimitBytes} >= 0`),
+  ],
+);
+
+/**
+ * Round 4 PR-H (post-import safety): what an imported service already WAS when the import
+ * created it — one row per service, written by the reminder seed inside the adoption's own
+ * transaction, never updated.
+ *
+ * The seed (`ServiceReminderService.seedPassedThresholds`) records every reminder already
+ * behind the service as raised, under the thresholds in force at that moment. That is not
+ * enough on its own: an operator who moves a threshold after the import (seven days to ten,
+ * eighty percent to seventy) makes a crossing the seed never recorded, and the next sweep
+ * would announce it — to every imported service at once, about a period the previous bot
+ * already handled. So the sweep also asks THIS row: a kind that was already behind the
+ * service at `baseline_at`, under the thresholds in force NOW, is history, recorded and
+ * never sent. Customers are told only of a state change observed after their import.
+ *
+ * The basis is the period the baseline describes, compared the way `service_reminders`
+ * compares it: a renewal (a new deadline) or added traffic (a new allowance) starts a new
+ * period this row says nothing about, and every reminder of that period is sent as usual.
+ * `used_bytes` is the figure the import read from the panel; NULL means nothing was
+ * measured and the usage half has no baseline. A native service has no row and the rule
+ * never applies to it.
+ */
+export const serviceReminderBaselines = pgTable(
+  'service_reminder_baselines',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    serviceId: uuid('service_id').notNull(),
+    baselineAt: timestamptz('baseline_at').notNull(),
+    basisExpiresAt: timestamptz('basis_expires_at'),
+    basisTrafficLimitBytes: bigint('basis_traffic_limit_bytes', { mode: 'bigint' }).notNull(),
+    usedBytes: bigint('used_bytes', { mode: 'bigint' }),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'service_reminder_baselines_pk',
+      columns: [table.tenantId, table.serviceId],
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+      name: 'service_reminder_baselines_service_fk',
+    }),
+    check(
+      'service_reminder_baselines_figures_check',
+      sql`${table.basisTrafficLimitBytes} >= 0 AND (${table.usedBytes} IS NULL OR ${table.usedBytes} >= 0)`,
+    ),
   ],
 );
 
@@ -9379,6 +9428,12 @@ export const resellerTiers = pgTable(
      */
     monthlyMinimumAmount: bigint('monthly_minimum_amount', { mode: 'bigint' }),
     monthlyMinimumCurrency: text('monthly_minimum_currency'),
+    /**
+     * Round 4 PR-G, «قیمت عادی برای محصولات بدون قیمت»: under `FIXED_PRICE_TABLE`, a product
+     * `reseller_tier_product_prices` does not price is sold at its list price (true) or not
+     * sold to the tier at all (false, the default). Read by no other mode.
+     */
+    unpricedListFallback: boolean('unpriced_list_fallback').notNull().default(false),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -9413,6 +9468,57 @@ export const resellerTiers = pgTable(
       'reseller_tiers_discount_range_check',
       sql`discount_percentage IS NULL OR (discount_percentage >= 1 AND discount_percentage <= 100)`,
     ),
+  ],
+);
+
+/**
+ * Round 4 PR-G: a `FIXED_PRICE_TABLE` tier's exact price for one product — the price the
+ * `TIER_PRICE` step replaces the list subtotal with, for the purposes in
+ * `RESELLER_TIER_PRICE_PURPOSES`. At most one row per (tier, product): no priority, no
+ * date scope, nothing to overlap. No row is "not priced for this tier", which the tier's
+ * `unpriced_list_fallback` decides.
+ *
+ * Written only under the tier's `FOR UPDATE` (`ResellerAdminService.setProductPrices`), so a
+ * confirmation reading the tier `FOR SHARE` and then this row sees the price its quote was
+ * compared with, or waits for the change. The currency is the product's own list currency
+ * at write time; a row whose currency no longer matches the product is read as no price.
+ */
+export const resellerTierProductPrices = pgTable(
+  'reseller_tier_product_prices',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    tierId: uuid('tier_id').notNull(),
+    productId: uuid('product_id').notNull(),
+    priceAmount: bigint('price_amount', { mode: 'bigint' }).notNull(),
+    priceCurrency: text('price_currency').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.tenantId, table.tierId, table.productId],
+      name: 'reseller_tier_product_prices_pkey',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.tierId],
+      foreignColumns: [resellerTiers.tenantId, resellerTiers.id],
+      name: 'reseller_tier_product_prices_tier_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.tenantId, table.productId],
+      foreignColumns: [products.tenantId, products.id],
+      name: 'reseller_tier_product_prices_product_fk',
+    }).onDelete('cascade'),
+    /** A product's prices across tiers: the cascade's and an operator's "who prices this". */
+    index('reseller_tier_product_prices_product_idx').on(table.tenantId, table.productId),
+    check(
+      'reseller_tier_product_prices_currency_check',
+      enumCheck('price_currency', CURRENCY_CODES),
+    ),
+    /** Never zero: a zero-cost order is one nobody can pay (`resellerReductionMinor`). */
+    check('reseller_tier_product_prices_amount_check', sql`price_amount > 0`),
   ],
 );
 
@@ -9742,6 +9848,11 @@ export const orderResellerTerms = pgTable(
     marginAmount: bigint('margin_amount', { mode: 'bigint' }).notNull(),
     currency: text('currency').notNull(),
     botInstanceId: uuid('bot_instance_id'),
+    /**
+     * Round 4 PR-G: the cost is a `FIXED_PRICE_TABLE` tier's price for the product (layer
+     * `TIER`, no percent), not a rate. False on every row written before the table existed.
+     */
+    fixedPrice: boolean('fixed_price').notNull().default(false),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
   },
   (table) => [
@@ -9773,8 +9884,13 @@ export const orderResellerTerms = pgTable(
     check(
       'order_reseller_terms_percent_check',
       sql`(percent IS NULL OR (percent >= 1 AND percent <= 100))
-          AND (layer <> 'TIER' OR percent IS NOT NULL)
+          AND (layer <> 'TIER' OR percent IS NOT NULL OR fixed_price)
           AND (layer <> 'LIST' OR (percent IS NULL AND cost_amount = list_amount))`,
+    ),
+    /** A table price is the tier's, has no percent, and took something off the list. */
+    check(
+      'order_reseller_terms_fixed_price_check',
+      sql`NOT fixed_price OR (layer = 'TIER' AND percent IS NULL AND cost_amount < list_amount AND cost_amount > 0)`,
     ),
   ],
 );
@@ -9907,6 +10023,75 @@ export const customerNotifications = pgTable(
       .on(table.nextAttemptAt)
       .where(sql`state = 'PENDING'`),
   ],
+);
+
+/**
+ * Round 4 PR-H (post-import safety): how many automatic reminders the customer notification
+ * lane has claimed in the current minute and the current hour, per tenant — latest state
+ * only, one row.
+ *
+ * A ROW taken under its lock, never a counter in a process, for the reason the gateway call
+ * budget gives: two worker replicas are the normal case on every rolling update, and a
+ * ceiling each replica counted for itself would be twice the ceiling. The dispatcher locks
+ * this row, claims at most what `reminders.max_per_minute` leaves, and writes the new counts
+ * in the same transaction, so two replicas are serialised by the row.
+ *
+ * `hour_fresh` counts the reminders claimed this hour that were raised within the hour — a
+ * reminder quiet hours held overnight is not fresh — and is what the burst alarm
+ * (`notification.reminder_burst`) compares with `reminders.burst_alarm_per_hour`.
+ * `burst_open` says the alarm's condition is open, so its recovery is recorded once, when
+ * an hour ends below the threshold, and never on every quiet pass.
+ */
+export const customerNotificationRateWindows = pgTable(
+  'customer_notification_rate_windows',
+  {
+    tenantId: uuid('tenant_id')
+      .primaryKey()
+      .references(() => tenants.id),
+    minuteStartedAt: timestamptz('minute_started_at').notNull(),
+    minuteClaimed: integer('minute_claimed').notNull(),
+    hourStartedAt: timestamptz('hour_started_at').notNull(),
+    hourFresh: integer('hour_fresh').notNull(),
+    burstOpen: boolean('burst_open').notNull().default(false),
+    /**
+     * Codex review of PR #296: the last `customer_reminder_raise_counters.raised_total` this
+     * row has counted. `hour_fresh` grows by the difference on each pass, so the burst alarm
+     * counts reminders as they are RAISED, whatever the ceiling lets the claim take.
+     */
+    raisedSeen: bigint('raised_seen', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  () => [
+    check(
+      'customer_notification_rate_windows_counts_check',
+      sql`minute_claimed >= 0 AND hour_fresh >= 0 AND raised_seen >= 0`,
+    ),
+  ],
+);
+
+/**
+ * Codex review of PR #296: how many automatic reminders (the kinds quiet hours hold) have
+ * ever been QUEUED for a tenant — a monotonic counter, bumped by `CustomerNotifier` in the
+ * producer's own transaction, so it commits with the rows it counts.
+ *
+ * Its own row, apart from `customer_notification_rate_windows`, on purpose: the dispatcher
+ * locks that row for its claim, and a sweep that also had to lock it would sit in a lock
+ * cycle with a dispatcher holding the notification row the sweep's insert waits on. The
+ * dispatcher only READS this one, without a lock, and counts the difference since its last
+ * pass.
+ */
+export const customerReminderRaiseCounters = pgTable(
+  'customer_reminder_raise_counters',
+  {
+    tenantId: uuid('tenant_id')
+      .primaryKey()
+      .references(() => tenants.id),
+    raisedTotal: bigint('raised_total', { mode: 'bigint' }).notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  () => [check('customer_reminder_raise_counters_total_check', sql`raised_total >= 0`)],
 );
 
 // --- Customer UX completion (docs/customer-ux-completion-audit.md) -------------
@@ -11298,7 +11483,7 @@ export const tickets = pgTable(
   },
   (table) => [
     ...recordSourceChecks('tickets', table),
-    ...publicCodeChecks('tickets', table),
+    ...publicCodeChecks('tickets'),
     unique('tickets_tenant_id_key').on(table.tenantId, table.id),
     unique('tickets_opening_key').on(table.tenantId, table.openingKey),
     /** The inbox: newest first, under a keyset on the immutable `(created_at, id)`. */

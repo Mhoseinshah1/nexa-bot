@@ -5260,6 +5260,25 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.order.order_code_line',
+    description:
+      'PR-C: the one order-code line, «کد سفارش: …», prepended at render time to a TENANT ' +
+      'OVERRIDE of the pre-invoice (`ORDER_CODE_LINE_KEYS`) whose body does not carry ' +
+      '{orderCode} — an override saved before the pre-invoice carried the code. The stored ' +
+      'override is never rewritten; a default body, or an override that already carries ' +
+      '{orderCode}, never gets it, so the code is shown exactly once.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'orderCode',
+        type: 'STRING',
+        description: 'The order\u2019s 8-character public code, `orderCodeOf` of the order.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.payment.tracking_code_line',
     description:
       'FIX-02: the one tracking-code line, «کد پیگیری پرداخت: …», appended at render time to a ' +

@@ -1,3 +1,4 @@
+import { CUSTOMER_NOTIFICATION_QUIET_HOURS } from '@nexa/contracts';
 import type {
   BotInstanceId,
   CustomerNotificationKind,
@@ -7,6 +8,7 @@ import type {
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { CustomerNotificationRepository } from './ports.js';
+import type { ReminderRaiseCounter } from './reminder-rate.js';
 
 /**
  * Which bot a customer is reachable on.
@@ -47,6 +49,12 @@ export class CustomerNotifier {
       readonly notifications: CustomerNotificationRepository;
       readonly bots: CustomerBotReader;
       readonly ids: IdGenerator;
+      /**
+       * Codex review of PR #296: counts every automatic reminder (a kind quiet hours hold)
+       * this notifier queues, in the producer's transaction, for the burst alarm. Absent,
+       * nothing is counted.
+       */
+      readonly raises?: ReminderRaiseCounter;
     },
   ) {}
 
@@ -107,7 +115,7 @@ export class CustomerNotifier {
     return this.enqueue(scope, customerId, botInstanceId, kind, subjectId, now, tx, null);
   }
 
-  private enqueue(
+  private async enqueue(
     scope: TenantContext,
     customerId: UserId,
     botInstanceId: BotInstanceId,
@@ -117,7 +125,7 @@ export class CustomerNotifier {
     tx: TransactionScope,
     notBefore: Date | null | undefined,
   ): Promise<boolean> {
-    return this.deps.notifications.enqueue(
+    const queued = await this.deps.notifications.enqueue(
       scope,
       {
         id: this.deps.ids.uuid(),
@@ -130,5 +138,10 @@ export class CustomerNotifier {
       now,
       tx,
     );
+    // Only a row THIS call queued is a raise: a conflict is a fact already counted.
+    if (queued && CUSTOMER_NOTIFICATION_QUIET_HOURS[kind] && this.deps.raises !== undefined) {
+      await this.deps.raises.add(scope, 1, now, tx);
+    }
+    return queued;
   }
 }

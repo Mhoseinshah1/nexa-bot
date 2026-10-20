@@ -96,6 +96,46 @@ export function passedReminderKinds(
   return { expiry, usage };
 }
 
+/**
+ * Round 4 PR-H (post-import safety): the kinds that were ALREADY behind an imported service
+ * when the import created it — judged under the thresholds in force NOW — for its current
+ * period. Pure, so a unit test pins every branch.
+ *
+ * The burst seed records what was behind the service under the thresholds of the moment it
+ * ran. This is the same question asked again at every pass, of the baseline the seed left,
+ * so a threshold an operator moves after the import (a week to ten days, eighty percent to
+ * seventy) cannot turn a period the previous bot already handled into a crossing: "already
+ * behind at the import, under today's thresholds" is `passedReminderKinds` evaluated at the
+ * import's moment, with the figure the import read. A kind in the answer is recorded and
+ * never sent; a kind first reached after the import is a genuine change and is sent as
+ * usual. A native service, or an imported one whose period has moved since, has no
+ * baseline and the answer is empty.
+ */
+export function importedReminderKinds(
+  candidate: Pick<
+    ServiceReminderCandidate,
+    'expiresAt' | 'expiryDayStartsAt' | 'trafficLimitBytes' | 'importBaseline'
+  >,
+  thresholds: ServiceReminderThresholds,
+): {
+  readonly expiry: readonly ServiceReminderKind[];
+  readonly usage: readonly ServiceReminderKind[];
+} {
+  const baseline = candidate.importBaseline ?? null;
+  if (baseline === null) return { expiry: [], usage: [] };
+  return passedReminderKinds(
+    {
+      expiresAt: candidate.expiresAt,
+      expiryDayStartsAt: candidate.expiryDayStartsAt,
+      trafficLimitBytes: candidate.trafficLimitBytes,
+      trafficUsedBytes: baseline.usedBytes ?? 0n,
+      usageMeasured: baseline.usedBytes !== null,
+    },
+    baseline.at,
+    thresholds,
+  );
+}
+
 export interface ServiceReminderServiceDeps {
   readonly reminders: ServiceReminderRepository;
   readonly settings: ReminderSettingsReader;
@@ -265,6 +305,21 @@ export class ServiceReminderService {
       );
       if (written) seeded.push(kind);
     }
+    /*
+     * Round 4 PR-H: and the baseline those kinds were decided from, so the sweep can ask the
+     * same question again under thresholds an operator changes after the import
+     * (`importedReminderKinds`). Once per service: a rerun keeps the import's row.
+     */
+    await this.deps.reminders.recordBaseline(
+      scope,
+      {
+        serviceId: candidate.serviceId,
+        at: now,
+        basis: candidate.basis,
+        usedBytes: candidate.usageMeasured ? candidate.trafficUsedBytes : null,
+      },
+      tx,
+    );
     return { passed: [...passed.expiry, ...passed.usage], seeded };
   }
 
@@ -422,12 +477,19 @@ export class ServiceReminderService {
        * suddenly post "your service expired" to everyone whose service lapsed while it
        * was off.
        */
-      const announce =
+      const enabled =
         due === 'EXPIRED'
           ? thresholds.expiredNoticeEnabled
           : due === 'EXPIRY_DAY'
             ? thresholds.expiryDayEnabled
             : thresholds.expiryEnabled;
+      /*
+       * Round 4 PR-H: a kind that was already behind the service when an import created it
+       * is history — recorded with the rest of the prefix, never announced. Every less urgent
+       * kind was behind it too (the prefix is in time order), so nothing in `upTo` is sent.
+       */
+      const historical = importedReminderKinds(candidate, thresholds).expiry.includes(due);
+      const announce = enabled && !historical;
       if (await this.raise(scope, candidate, upTo, announce ? due : null, now, tx)) sent += 1;
     }
     return sent;
@@ -463,7 +525,15 @@ export class ServiceReminderService {
       );
       const due = reached[0];
       if (due === undefined) continue;
-      if (await this.raise(scope, candidate, reached, due, now, tx)) sent += 1;
+      /*
+       * Round 4 PR-H: the figure the import read had already reached `due` (under today's
+       * thresholds): the crossing happened under the previous bot, so it is recorded and not
+       * announced. A kind first reached by a figure measured after the import is sent.
+       */
+      const historical = importedReminderKinds(candidate, thresholds).usage.includes(due);
+      if (await this.raise(scope, candidate, reached, historical ? null : due, now, tx)) {
+        sent += 1;
+      }
     }
     return sent;
   }

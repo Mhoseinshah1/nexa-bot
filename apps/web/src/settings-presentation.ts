@@ -399,6 +399,19 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'reminders',
     control: { kind: 'integer', unit: 'web.unit_days' },
   },
+  // Round 4 PR-H: the ceiling on automatic reminders and the burst alarm.
+  'reminders.max_per_minute': {
+    title: 'web.setting_reminders_max_per_minute',
+    description: 'web.setting_reminders_max_per_minute_desc',
+    group: 'reminders',
+    control: { kind: 'integer', unit: 'web.unit_messages' },
+  },
+  'reminders.burst_alarm_per_hour': {
+    title: 'web.setting_reminders_burst_alarm_per_hour',
+    description: 'web.setting_reminders_burst_alarm_per_hour_desc',
+    group: 'reminders',
+    control: { kind: 'integer', unit: 'web.unit_messages' },
+  },
   // HF-A9: the quiet window, as the HH:MM text the registry stores. The reminders page
   // edits the same two keys with a time picker.
   'reminders.quiet_hours_start': {

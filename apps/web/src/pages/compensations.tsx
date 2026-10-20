@@ -82,7 +82,11 @@ export function CompensationsPage({ route, denied }: { route: Route; denied: boo
       key: 'payment',
       header: t('web.compensation_payment'),
       render: (row) => (
-        <RecordLink href={recordHref.payment(row.paymentId)} id={row.paymentId} code={null} />
+        <RecordLink
+          href={recordHref.payment(row.paymentId)}
+          id={row.paymentId}
+          code={row.paymentCode}
+        />
       ),
     },
     {
@@ -92,7 +96,7 @@ export function CompensationsPage({ route, denied }: { route: Route; denied: boo
         row.orderId === null ? (
           <span className="faint">—</span>
         ) : (
-          <RecordLink href={recordHref.order(row.orderId)} id={row.orderId} code={null} />
+          <RecordLink href={recordHref.order(row.orderId)} id={row.orderId} code={row.orderCode} />
         ),
     },
     {

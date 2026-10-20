@@ -188,6 +188,31 @@ describe('short public codes', () => {
     return row!.code;
   }
 
+  it('a product created before the backfill never takes a number ahead of the older catalogue', async () => {
+    const panelA = await a.panel();
+    // Two products from before 0260: written with no number.
+    await q(`ALTER TABLE products DISABLE TRIGGER nexa_products_code_number`);
+    let older: string[];
+    try {
+      older = [await a.product(panelA, 'old one'), await a.product(panelA, 'old two')];
+    } finally {
+      await q(`ALTER TABLE products ENABLE TRIGGER nexa_products_code_number`);
+    }
+    // A product created between the migration and the backfill (Codex review of #299).
+    const fresh = await a.product(panelA, 'new');
+    const numbers = await q<{ id: string; code_number: number }>(
+      `SELECT id, code_number FROM products WHERE id = ANY($1::uuid[])`,
+      [[...older, fresh]],
+    );
+    const byId = new Map(numbers.map((row) => [row.id, row.code_number]));
+    expect(byId.get(older[0]!)).toBe(101);
+    expect(byId.get(older[1]!)).toBe(102);
+    expect(byId.get(fresh)).toBe(103);
+    // And the backfill, arriving afterwards, has nothing left to number.
+    const reports = await backfillPublicCodes(ctx.container.database);
+    expect(reports.find((report) => report.table === 'products')?.filled).toBe(0);
+  });
+
   it('a code is unique per tenant and table, and only that', async () => {
     const w = await world();
     const code = (await codeOf('orders', w.orderId))!;
@@ -246,7 +271,7 @@ describe('short public codes', () => {
     ).rejects.toMatchObject({ code: '23001' });
   });
 
-  describe('the backfill of rows from before 0257', () => {
+  describe('the backfill of rows from before 0260', () => {
     const TRIGGERS = [
       ['orders', 'nexa_orders_public_code'],
       ['services', 'nexa_services_public_code'],
@@ -255,7 +280,7 @@ describe('short public codes', () => {
       ['products', 'nexa_products_code_number'],
     ] as const;
 
-    /** Rows written as the release before 0258 wrote them: with no code. */
+    /** Rows written as the release before 0261 wrote them: with no code. */
     async function withoutCodes<T>(write: () => Promise<T>): Promise<T> {
       for (const [table, trigger] of TRIGGERS) {
         await q(`ALTER TABLE ${table} DISABLE TRIGGER ${trigger}`);

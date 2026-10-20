@@ -822,6 +822,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'آیا از انصراف این پرداخت مطمئن هستید؟ کد پیگیری فعلی باطل می‌شود و اگر پس از آن مبلغی واریز کنید، قابل پیگیری نخواهد بود. این کار برگشت‌پذیر نیست.\n\nکد پیگیری پرداخت: {reference}',
   /* FIX-02: appended to an old tenant override of an invoice that lacks {reference}. */
   'bot.payment.tracking_code_line': 'کد پیگیری پرداخت: {reference}',
+  'bot.order.order_code_line': '🔖 کد سفارش: {orderCode}',
   'bot.payment.cancel_confirm_button': 'بله، انصراف بده',
   'bot.payment.cancelled':
     '{icon:warning} پرداخت شما لغو شد و کد پیگیری قبلی دیگر معتبر نیست. سفارش تا پایان مهلت آن باز است و می‌توانید با روش دیگری پرداخت کنید.',

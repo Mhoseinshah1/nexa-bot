@@ -174,6 +174,10 @@ export const OPS_LOG_TOPIC_ROUTES: readonly {
   { prefix: 'customer.', category: 'USERS' },
   { prefix: 'reseller.', category: 'USERS' },
   { prefix: 'report.', category: 'REPORTS' },
+  // Round 4 PR-H: a burst of automatic reminders is an incident (the cutover runbook's step
+  // 18), read beside the other errors rather than in SYSTEM where `notification.` falls.
+  // Both the condition and its recovery match this prefix.
+  { prefix: 'notification.reminder_burst', category: 'ERRORS' },
   // Failures nobody anticipated: an unhandled exception, an error the API answered.
   { prefix: 'internal.', category: 'ERRORS' },
   { prefix: 'http.', category: 'ERRORS' },

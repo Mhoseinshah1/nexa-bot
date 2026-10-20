@@ -9,6 +9,8 @@ import {
   RESELLER_PAGE_MAX,
   RESELLER_PURCHASE_PAGE_DEFAULT,
   RESELLER_PURCHASE_PAGE_MAX,
+  RESELLER_TIER_PRICES_PAGE_DEFAULT,
+  RESELLER_TIER_PRICES_PAGE_MAX,
   errors,
   resellerPriceLayer,
   uuidV7Schema,
@@ -88,6 +90,8 @@ import type {
   ResellerRepository,
   ResellerTierGrantRecord,
   ResellerTierListing,
+  ResellerTierPriceCursor,
+  ResellerTierPriceTableRow,
   ResellerWrite,
   TierWrite,
 } from './ports.js';
@@ -381,6 +385,170 @@ export class ResellerAdminService {
       },
     );
     return this.tierListing(scope, tierId);
+  }
+
+  // -- Round 4 PR-G: a tier's price table ---------------------------------------------------
+
+  /**
+   * One keyset page of every product beside this tier's price for it. `resellers.view` for
+   * the tier and `catalog.view` for the products: titles and list prices are the
+   * catalogue's, and `resellers.view` alone must not read them around its gate.
+   */
+  async productPriceTable(
+    scope: TenantContext,
+    actor: ActorContext,
+    rawTierId: string,
+    query: {
+      readonly limit?: number;
+      readonly cursor: ResellerTierPriceCursor | null;
+      readonly categoryId?: string;
+    },
+  ): Promise<{
+    readonly tierId: string;
+    readonly items: readonly ResellerTierPriceTableRow[];
+    readonly next: ResellerTierPriceCursor | null;
+  }> {
+    await this.deps.guard.check(scope, actor, RESELLERS_VIEW_PERMISSION);
+    await this.deps.guard.check(scope, actor, PRODUCT_VIEW_PERMISSION);
+    const tierId = this.id(rawTierId, 'tier');
+    if ((await this.deps.resellers.findTier(scope, tierId)) === null) throw tierNotFound();
+    const limit = Math.min(
+      query.limit ?? RESELLER_TIER_PRICES_PAGE_DEFAULT,
+      RESELLER_TIER_PRICES_PAGE_MAX,
+    );
+    const page = await this.deps.resellers.listTierPriceTable(
+      scope,
+      tierId,
+      query.categoryId === undefined ? {} : { categoryId: query.categoryId },
+      limit,
+      query.cursor,
+    );
+    return { tierId, ...page };
+  }
+
+  /**
+   * Sets or clears the tier's price of each listed product (Round 4 PR-G), under the tier's
+   * row lock — the lock a confirmation's `FOR SHARE` waits on, so a confirmation sees the
+   * price its quote was compared with or the new one, never half of a write. Every product
+   * must be this tenant's and have a list price, and a price must be in that list price's
+   * currency: a tier price is compared with the list, never converted. Audited with the
+   * before and after of every row it names.
+   */
+  async setProductPrices(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly tierId: string;
+      readonly prices: readonly { readonly productId: string; readonly price: Money | null }[];
+    },
+  ): Promise<{ readonly tierId: string; readonly set: number; readonly cleared: number }> {
+    const tierId = this.id(input.tierId, 'tier');
+    const prices = [...input.prices].sort((a, b) => a.productId.localeCompare(b.productId));
+    const requestHash = hashRequest({
+      tierId,
+      prices: prices.map((p) => ({ productId: p.productId, price: serialisableMoney(p.price) })),
+    });
+    const denial = {
+      action: 'reseller_tier.product_prices',
+      entityType: 'ResellerTier',
+      entityId: tierId,
+    };
+    await this.authorize(scope, actor, denial);
+
+    const replay = await this.replay<{ tierId: string; set: string; cleared: string }>(
+      scope,
+      input.idempotencyKey,
+      requestHash,
+    );
+    if (replay !== null) {
+      return { tierId: replay.tierId, set: Number(replay.set), cleared: Number(replay.cleared) };
+    }
+
+    const now = this.deps.clock.now();
+    let result = { set: 0, cleared: 0 };
+    await runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      RESELLERS_EDIT_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        if ((await this.deps.resellers.lockTier(scope, tierId, tx)) === null) throw tierNotFound();
+        const ids = prices.map((p) => p.productId);
+        const lists = await this.deps.resellers.productListPrices(scope, ids, tx);
+        for (const one of prices) {
+          if (one.price === null) continue;
+          const list = lists.get(one.productId);
+          if (list === undefined) {
+            throw errors.validation(
+              COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+              'A tier price names a product this installation does not have.',
+              { productId: one.productId },
+            );
+          }
+          if (list === null || list.currency !== one.price.currency) {
+            throw errors.validation(
+              COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+              "A tier price is in the product's own list-price currency.",
+              { productId: one.productId },
+            );
+          }
+          if (one.price.amountMinor <= 0n) {
+            throw errors.validation(
+              COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+              'A tier price is a positive amount.',
+              { productId: one.productId },
+            );
+          }
+        }
+        const before = await this.deps.resellers.tierPricesFor(scope, tierId, ids, tx);
+        result = await this.deps.resellers.setTierPrices(
+          scope,
+          tierId,
+          {
+            set: prices.flatMap((p) =>
+              p.price === null ? [] : [{ productId: p.productId, price: p.price }],
+            ),
+            cleared: prices.filter((p) => p.price === null).map((p) => p.productId),
+          },
+          now,
+          tx,
+        );
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'reseller_tier.product_prices',
+            entityType: 'ResellerTier',
+            entityId: tierId,
+            before: {
+              prices: prices.map((p) => ({
+                productId: p.productId,
+                price: serialisableMoney(before.get(p.productId)?.price ?? null),
+              })),
+            },
+            after: {
+              prices: prices.map((p) => ({
+                productId: p.productId,
+                price: serialisableMoney(p.price),
+              })),
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        await this.remember(
+          scope,
+          input.idempotencyKey,
+          requestHash,
+          { tierId, set: String(result.set), cleared: String(result.cleared) },
+          tx,
+        );
+      },
+    );
+    return { tierId, ...result };
   }
 
   // -- Resellers --------------------------------------------------------------------------
@@ -1170,6 +1338,12 @@ function serialisableTier(t: TierWrite) {
     pricingMode: t.pricingMode,
     discountPercentage: t.discountPercentage,
     creditLimit: { amount: t.creditLimit.amountMinor.toString(), currency: t.creditLimit.currency },
+    /*
+     * Round 4 PR-G. Written only when on, so a tier with the option off fingerprints and
+     * audits exactly as every tier did before it existed — a command that committed before
+     * the upgrade and lost its response still replays rather than reading as a reused key.
+     */
+    ...(t.unpricedListFallback === true ? { unpricedListFallback: true } : {}),
   };
 }
 

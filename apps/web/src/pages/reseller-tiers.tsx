@@ -41,6 +41,7 @@ import {
   Badge,
   Banner,
   Card,
+  Checkbox,
   Copyable,
   DataTable,
   Empty,
@@ -60,6 +61,7 @@ import { Icon } from '../ui/icons';
 import { SaveBar } from './editor-layout';
 import { Drawer } from '../ui/overlays';
 import { TierHistoryCard } from './reseller-standing';
+import { TierPricesEditor } from './reseller-tier-prices';
 import { ErrorRef } from '../ui/technical-details';
 
 /**
@@ -369,6 +371,11 @@ export function ResellerTiersPage({
   const grantsKey = useSubmissionKey();
   const [grantsId, setGrantsId] = useState<string | null>(null);
   const [historyId, setHistoryId] = useState<string | null>(null);
+  /** Round 4 PR-G: whose product-prices drawer is open; closing over edits asks first. */
+  const [pricesId, setPricesId] = useState<string | null>(null);
+  const pricesGuard = useDiscardGuard();
+  const pricesKey = useSubmissionKey();
+  const pricing = rows.find((row) => row.id === pricesId);
   const editing = rows.find((row) => row.id === editingId);
   const granting = rows.find((row) => row.id === grantsId);
 
@@ -417,6 +424,9 @@ export function ResellerTiersPage({
           )}
           <Button size="sm" variant="ghost" icon="shield" onClick={() => setGrantsId(row.id)}>
             {t('web.reseller_grants_open')}
+          </Button>
+          <Button size="sm" variant="ghost" icon="tag" onClick={() => setPricesId(row.id)}>
+            {t('web.tier_prices_open')}
           </Button>
           <Button size="sm" variant="ghost" icon="clock" onClick={() => setHistoryId(row.id)}>
             {t('web.history_open')}
@@ -505,6 +515,24 @@ export function ResellerTiersPage({
       </Drawer>
 
       <Drawer
+        open={pricing !== undefined}
+        onClose={() => pricesGuard.confirmDiscard(() => setPricesId(null))}
+        title={`${t('web.tier_prices_open')} — ${pricing?.name ?? ''}`}
+        wide
+      >
+        {pricing !== undefined && (
+          <TierPricesEditor
+            key={pricing.id}
+            tier={pricing}
+            mayEdit={mayEdit}
+            mayViewCatalog={mayViewCatalog}
+            held={pricesKey}
+            onDirtyChange={pricesGuard.onDirtyChange}
+          />
+        )}
+      </Drawer>
+
+      <Drawer
         open={!denied && historyId !== null}
         onClose={() => setHistoryId(null)}
         title={`${t('web.history_open')} — ${rows.find((row) => row.id === historyId)?.name ?? ''}`}
@@ -556,6 +584,7 @@ export function ResellerTiersPage({
       </div>
       {discard.dialog}
       {editGuard.dialog}
+      {pricesGuard.dialog}
     </>
   );
 }
@@ -850,6 +879,8 @@ export interface TierFormState {
    * one on an edit, so a save does not rewrite it for nothing.
    */
   limitCurrency: CurrencyCode;
+  /** Round 4 PR-G: sell an unpriced product at list; read only by a price-table tier. */
+  unpricedListFallback: boolean;
 }
 
 const BLANK_TIER: TierFormState = {
@@ -857,6 +888,7 @@ const BLANK_TIER: TierFormState = {
   pricingMode: 'LIST_PRICE',
   percent: '',
   limitCurrency: SALES_CURRENCY_CODES[0],
+  unpricedListFallback: false,
 };
 
 function tierStateOf(tier: ResellerTierSummaryResponse): TierFormState {
@@ -865,6 +897,7 @@ function tierStateOf(tier: ResellerTierSummaryResponse): TierFormState {
     pricingMode: tier.pricingMode,
     percent: tier.discountPercentage === null ? '' : String(tier.discountPercentage),
     limitCurrency: tier.creditLimit.currency,
+    unpricedListFallback: tier.unpricedListFallback,
   };
 }
 
@@ -895,6 +928,7 @@ export function tierBodyFrom(
         amount: RESELLER_DEFAULT_CREDIT_LIMIT_MINOR.toString(),
         currency: state.limitCurrency,
       },
+      unpricedListFallback: state.unpricedListFallback,
     },
   };
 }
@@ -1002,6 +1036,17 @@ function TierForm({
             onChange={(event) => set('percent', event.target.value.trim())}
           />
         </Field>
+      )}
+      {state.pricingMode === 'FIXED_PRICE_TABLE' && (
+        <>
+          <p className="muted small">{t('web.reseller_tier_fixed_hint')}</p>
+          <Checkbox
+            label={t('web.reseller_tier_unpriced_fallback')}
+            checked={state.unpricedListFallback}
+            onChange={(next) => set('unpricedListFallback', next)}
+          />
+          <p className="muted small">{t('web.reseller_tier_unpriced_fallback_hint')}</p>
+        </>
       )}
       {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
       <SaveBar dirty={dirty}>
