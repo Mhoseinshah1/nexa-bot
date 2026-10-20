@@ -11,6 +11,12 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import {
+  safeHttpStatus,
+  safeIdentifier,
+  safeTelegramUserId,
+  sanitizedErrorCode,
+} from '../../../platform/opslog/application/error-events.js';
 import type { OpsLogFacts, OpsLogWords } from './ports.js';
 import { identityOf, technicalLine } from './presenters.js';
 import type {
@@ -100,25 +106,29 @@ export class OperationalEventPresenter implements OpsEventPresenter {
     if (context === undefined || context['phase'] !== 'PAYMENT_LINK_CREATE') return null;
     const kind = context['failureKind'];
     if (typeof kind !== 'string' || !(kind in PAYMENT_LINK_FAILURE_KINDS)) return null;
-    const provider = typeof context['provider'] === 'string' ? context['provider'] : null;
+    const provider = safeIdentifier(context['provider'], 40);
     if (provider === null) return null;
 
-    const customerId = typeof context['customerId'] === 'string' ? context['customerId'] : null;
+    // Every value is re-read through the same allow-list the old layout used: an id against
+    // the id alphabet, the Telegram id as digits, the error code through the redactor — a
+    // context that somehow carried a link, a key or a card number has nowhere to put it.
+    const customerId = safeIdentifier(context['customerId']);
     const customer = customerId === null ? null : await facts.customer(scope, customerId, tx);
     const who = identityOf(customer, words);
-    const telegramId =
-      customer?.telegramUserId ??
-      (typeof context['telegramUserId'] === 'string' ? context['telegramUserId'] : null);
+    const telegramId = customer?.telegramUserId ?? safeTelegramUserId(context['telegramUserId']);
 
     const unknown = context['classification'] === 'UNKNOWN';
     const retryable =
       typeof context['retryable'] === 'boolean'
         ? context['retryable']
         : PAYMENT_LINK_FAILURE_KINDS[kind as keyof typeof PAYMENT_LINK_FAILURE_KINDS].retryable;
-    const status =
-      typeof context['httpStatus'] === 'number' ? `HTTP ${String(context['httpStatus'])}` : null;
-    const code = typeof context['errorCode'] === 'string' ? context['errorCode'] : null;
-    const technical = technicalLine(status, code ?? kind);
+    const status = safeHttpStatus(context['httpStatus']);
+    const rawCode = context['errorCode'] ?? context['reason'];
+    const code = typeof rawCode === 'string' ? sanitizedErrorCode(rawCode) : null;
+    const technical = technicalLine(
+      status === null ? null : `HTTP ${String(status)}`,
+      code ?? kind,
+    );
     const cause = words.paymentLinkCause(kind);
 
     const values: Record<string, TemplateValue> = {
@@ -135,16 +145,16 @@ export class OperationalEventPresenter implements OpsEventPresenter {
     const currency = context['currency'];
     if (
       typeof amountMinor === 'string' &&
-      /^\d+$/.test(amountMinor) &&
+      /^\d{1,30}$/.test(amountMinor) &&
       typeof currency === 'string'
     ) {
       values['amount'] = money(BigInt(amountMinor), currency as CurrencyCode);
     }
-    if (typeof context['trackingCode'] === 'string') values['reference'] = context['trackingCode'];
-    if (typeof context['providerInvoiceId'] === 'string') {
-      values['providerInvoiceId'] = context['providerInvoiceId'];
-    }
-    const orderId = typeof context['orderId'] === 'string' ? context['orderId'] : null;
+    const tracking = safeIdentifier(context['trackingCode'], 64);
+    if (tracking !== null) values['reference'] = tracking;
+    const invoice = safeIdentifier(context['providerInvoiceId']);
+    if (invoice !== null) values['providerInvoiceId'] = invoice;
+    const orderId = safeIdentifier(context['orderId']);
     if (orderId !== null) {
       const order = await facts.order(scope, orderId, tx);
       if (order?.code !== null && order?.code !== undefined) values['orderCode'] = order.code;
