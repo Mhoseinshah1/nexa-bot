@@ -256,6 +256,40 @@ describe('short public codes', () => {
     });
   });
 
+  it('a bulk insert into one tenant looks each code up by the code key, not by scanning the tenant', async () => {
+    // CI, integration shard 7: `reporting-plan.test.ts` seeds 40,000 orders and payments in
+    // one statement per tenant, and went from 9 s to past its 180 s hook. The lookup named
+    // the tenant, so on statistics older than the insert the planner served it from
+    // `payments_tenant_external_reference_idx` and filtered every row of the tenant, on
+    // every insert. `pg_stat_xact_user_tables` counts the rows this transaction read from
+    // the table, through an index or by a sequential scan: a lookup the code key serves
+    // reads none (an index-only probe for a code nobody holds), a lookup that walks the
+    // tenant reads about rows²/2.
+    const w = await world();
+    const rows = 2_000;
+    await ctx.container.database.withClient(async (client) => {
+      await client.query('BEGIN');
+      try {
+        await client.query(
+          `INSERT INTO payments (id, tenant_id, customer_id, state, method, amount, currency,
+                                 reference, resolved_at)
+             SELECT gen_random_uuid(), $1::uuid, $2::uuid, 'CANCELLED', 'MANUAL_TRANSFER',
+                    50000, 'IRT', 'pc-bulk-' || g, now()
+               FROM generate_series(1, $3::int) AS g`,
+          [tenantA.tenantId, w.customerId, rows],
+        );
+        const read = await client.query<{ fetched: string; scanned: string }>(
+          `SELECT idx_tup_fetch::text AS fetched, seq_tup_read::text AS scanned
+             FROM pg_stat_xact_user_tables WHERE relname = 'payments'`,
+        );
+        const total = Number(read.rows[0]!.fetched) + Number(read.rows[0]!.scanned);
+        expect(total, JSON.stringify(read.rows)).toBeLessThan(rows);
+      } finally {
+        await client.query('ROLLBACK');
+      }
+    });
+  });
+
   it('a code, once written, never changes and is never cleared', async () => {
     const w = await world();
     await expect(
