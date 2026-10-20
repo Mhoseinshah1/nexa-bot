@@ -12,6 +12,7 @@ import {
   type TemplateKey,
   type UserId,
 } from '@nexa/contracts';
+import { deserialiseValues } from '../../apps/api/src/modules/control/notifications/application/notification-dispatcher';
 import { DrizzleOpsLogFacts } from '../../apps/api/src/modules/commerce/ops-log/infrastructure/drizzle-ops-log-facts';
 import { i18nOpsLogWords } from '../../apps/api/src/modules/commerce/ops-log/infrastructure/i18n-ops-log-words';
 import { LedgerLogConsumer } from '../../apps/api/src/modules/commerce/ops-log/application/ledger-log.consumer';
@@ -605,6 +606,15 @@ describe('the ops log: wallet figures, imports, switches and the storm roll-up',
     const rollups = await notificationRows('ops.log.storm_rollup');
     expect(rollups).toHaveLength(1);
     // Five errors from four customers, counted once each.
-    expect(rollups[0]!.payload).toMatchObject({ count: 5, users: expect.any(Number) });
+    expect(rollups[0]!.payload).toMatchObject({ count: 5 });
+    const text = render(
+      'ops.log.storm_rollup',
+      deserialiseValues({
+        templateKey: 'ops.log.storm_rollup',
+        payload: rollups[0]!.payload,
+      }) as never,
+    );
+    expect(text).toContain('۵ خطای دیگر — ۴ کاربر');
+    expect(text).not.toMatch(/NaN|undefined/);
   });
 });
