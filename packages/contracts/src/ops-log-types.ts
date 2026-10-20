@@ -316,6 +316,11 @@ const TOKENS = {
   kindTitle: ['STRING', 'What the payment was for, in Persian.'],
   // The log's own headings and badges.
   heading: ['STRING', 'The message’s title line, in Persian.'],
+  code: ['STRING', 'The event code, for a template written before Round 4.'],
+  message: [
+    'STRING',
+    'The server’s own short English message, for a template written before Round 4.',
+  ],
   badges: ['STRING', 'The title badges (first purchase, reseller), already separated; or absent.'],
   // Orders and services.
   productTitle: ['STRING', 'The product or order line title.'],
@@ -474,8 +479,9 @@ export const OPS_LOG_TEMPLATES = [
     'ops.notification.operational_event',
     'An operational event, projected into the operations destination, titled in Persian from its code. Sent once per deduplicated condition; the occurrence count is part of the message.',
     [
-      ...req('severity', 'heading', 'technical'),
-      ...opt('details', 'occurrences', 'firstSeenAt', 'lastSeenAt'),
+      ...req('severity'),
+      // Optional so a body written before Round 4, which has none of them, stays valid.
+      ...opt('heading', 'technical', 'details', 'occurrences', 'firstSeenAt', 'lastSeenAt'),
       // Kept so an override written before Round 4 (`{code}`, `{message}`) still saves and renders.
       ...opt('code', 'message'),
     ],
