@@ -1071,7 +1071,23 @@ export class DrizzleOperationRepository implements OperationRepository {
 
     const rows = await this.exec(tx)
       .update(provisioningOperations)
-      .set({ state: 'PLANNED', claimedBy: null, leaseUntil: null, updatedAt: now })
+      .set({
+        state: 'PLANNED',
+        claimedBy: null,
+        leaseUntil: null,
+        /*
+         * The attempt the claim counted is GIVEN BACK (R5A item 2).
+         *
+         * `call_started_at` is null, so no provider was dialled: the worker died, was
+         * stopped or stalled between the claim and the stamp. An attempt is a call to the
+         * panel, and charging this one meant every restart of the provisioner while a paid
+         * order sat claimed spent one of its five, so a role that was simply not running
+         * retired an order no panel had ever heard about. `holdOff` gives its attempt
+         * back for the same reason and the same way.
+         */
+        attempts: sql`GREATEST(${provisioningOperations.attempts} - 1, 0)`,
+        updatedAt: now,
+      })
       .where(
         and(
           eq(provisioningOperations.tenantId, tenantId),
