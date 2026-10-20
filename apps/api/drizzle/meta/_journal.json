@@ -1835,6 +1835,20 @@
       "when": 1792454621971,
       "tag": "0261_payment_destination_switches_append_only",
       "breakpoints": true
+    },
+    {
+      "idx": 262,
+      "version": "7",
+      "when": 1792459696363,
+      "tag": "0262_public_codes",
+      "breakpoints": true
+    },
+    {
+      "idx": 263,
+      "version": "7",
+      "when": 1792459700741,
+      "tag": "0263_public_code_triggers",
+      "breakpoints": true
     }
   ]
 }

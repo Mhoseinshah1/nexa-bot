@@ -23,6 +23,7 @@ import {
 } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
+import { CopyIdButton } from '../ui/record-ref';
 import { pollUnlessFinal } from '../polling';
 import { RUN_KEY_HELD_MS, useSubmissionKey } from '../submission-key';
 import { setQuery, useLinkHandler, type Route } from '../router';
@@ -376,7 +377,7 @@ function BackupStatus({
       )}
       {status.running !== null && (
         <Banner tone="info" title={t('web.recovery_running')}>
-          <Ltr>{status.running.id}</Ltr>
+          <CopyIdButton id={status.running.id} />
         </Banner>
       )}
 

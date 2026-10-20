@@ -42,6 +42,7 @@ import { formatNumber, formatTimestamp, formatTrafficGbText } from '../format';
 import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
+import { CodeText, CopyIdButton, productLabel } from '../ui/record-ref';
 import { setQuery, useLinkHandler, type Route } from '../router';
 import { messageFor } from './settings';
 import {
@@ -58,7 +59,6 @@ import {
   Field,
   KV,
   ListEditor,
-  Ltr,
   Money,
   PageHead,
   StateSwitch,
@@ -464,7 +464,8 @@ export function ProductsPage({
                 onClick={onLink}
                 className="strong"
               >
-                {row.title}
+                {/* PR-C: «P-102 · name», the way an operator says it. */}
+                {productLabel(row.code, row.title)}
               </a>
             }
             secondary={
@@ -1659,7 +1660,10 @@ export function ProductDetailPage({
               subtitle: (
                 <span className="cb-meta">
                   <span>{t('web.product_detail')}</span>
-                  <Ltr>{row.id}</Ltr>
+                  <span className="record-ref">
+                    <CodeText code={row.code} />
+                    <CopyIdButton id={row.id} />
+                  </span>
                 </span>
               ),
             })}
@@ -1800,6 +1804,7 @@ export function ProductDetailPage({
                 <Card title={t('web.product_identity_title')}>
                   <KV
                     items={[
+                      [t('web.record_code'), <CodeText key="code" code={row.code} />],
                       [t('web.product_title'), row.title],
                       [t('web.product_description'), row.description ?? <Dash key="d" />],
                       [

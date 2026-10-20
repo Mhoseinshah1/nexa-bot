@@ -26,7 +26,10 @@ import type { GatewayCardFacts } from '../../apps/api/src/modules/commerce/payme
  * a call site that passes the raw reference, fails here as the customer would see it.
  */
 
-const CODE = '7d433a363380f69e';
+/** The payment's 8-character public code — THE tracking code since PR-C. */
+const CODE = 'K7M2P9QA';
+/** The FIX-02 operation id the stored reference begins with; never printed since PR-C. */
+const LEGACY = '7d433a363380f69e';
 const LINE = `کد پیگیری پرداخت: ${CODE}`;
 /** Every role suffix a payment reference is written with — none may reach a customer. */
 const SUFFIXES = [':topup', ':gateway', ':gateway-topup', ':manual', ':wallet', ':purchase'];
@@ -51,7 +54,8 @@ function payment(kind: 'ORDER' | 'TOPUP', overrides: Partial<PaymentRecord> = {}
     method: 'GATEWAY',
     amount: money(250_000n, 'IRT'),
     // The stored shape, suffix and all: what the screens must NOT print.
-    reference: `${CODE}:${kind === 'ORDER' ? 'gateway' : 'gateway-topup'}`,
+    reference: `${LEGACY}:${kind === 'ORDER' ? 'gateway' : 'gateway-topup'}`,
+    code: CODE,
     evidenceKind: null,
     evidenceNote: null,
     externalReference: null,
@@ -156,6 +160,8 @@ function screen(
 
 function expectCodeAndNoSuffix(text: string, where: string): void {
   expect(text, `${where}: the code line`).toContain(LINE);
+  // PR-C: the 8-character public code, never the FIX-02 operation id it replaced.
+  expect(text, `${where}: the FIX-02 code leaked`).not.toContain(LEGACY);
   for (const suffix of SUFFIXES) {
     expect(text, `${where}: ${suffix} leaked`).not.toContain(suffix);
   }
@@ -252,7 +258,7 @@ describe('FIX-02: the manual transfer and custom-instruction invoices', () => {
       const text = rendered('bot.payment.transfer_instructions', {
         total,
         destination: 'شماره کارت: 6037991234567893',
-        reference: paymentTrackingCode(`${CODE}:${role}`),
+        reference: paymentTrackingCode({ code: CODE, reference: `${LEGACY}:${role}` }),
       });
       expectCodeAndNoSuffix(text, `transfer ${role}`);
       expect(text).not.toContain('شناسه فاکتور');
@@ -262,7 +268,7 @@ describe('FIX-02: the manual transfer and custom-instruction invoices', () => {
   it('the custom-instruction invoice (no destination) labels it exactly', () => {
     const text = rendered('bot.payment.manual_instructions', {
       total,
-      reference: paymentTrackingCode(`${CODE}:manual`),
+      reference: paymentTrackingCode({ code: CODE, reference: `${LEGACY}:manual` }),
     });
     expectCodeAndNoSuffix(text, 'manual instructions');
     expect(text).not.toContain('کد پیگیری این پرداخت');
@@ -278,7 +284,10 @@ describe('FIX-02: the manual transfer and custom-instruction invoices', () => {
     ['bot.wallet.topup_credited', { amount: total }],
     ['bot.payment.receipt_credited_to_wallet', { amount: total }],
   ] as const)('%s, after the invoice, quotes the same code', (key, extra) => {
-    const text = rendered(key, { ...extra, reference: paymentTrackingCode(`${CODE}:topup`) });
+    const text = rendered(key, {
+      ...extra,
+      reference: paymentTrackingCode({ code: CODE, reference: `${LEGACY}:topup` }),
+    });
     expectCodeAndNoSuffix(text, key);
   });
 });

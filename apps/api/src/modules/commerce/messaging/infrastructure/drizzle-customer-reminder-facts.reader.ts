@@ -36,14 +36,15 @@ export class DrizzleCustomerReminderFactsReader {
     const tenantId = requireTenantId(scope);
     if (kind === 'PAYMENT_PENDING_REMINDER') {
       const result = await this.db.execute(sql`
-        SELECT reference, expires_at FROM payments
+        SELECT reference, code, expires_at FROM payments
         WHERE tenant_id = ${tenantId} AND id = ${subjectId} AND expires_at IS NOT NULL
         LIMIT 1`);
-      const row = result.rows[0] as { reference: string; expires_at: string } | undefined;
+      const row = result.rows[0] as
+        { reference: string; code: string | null; expires_at: string } | undefined;
       if (row === undefined) return null;
       const expiresAt = new Date(row.expires_at);
       return {
-        reference: paymentTrackingCode(row.reference),
+        reference: paymentTrackingCode(row),
         expiresAt,
         minutes: minutesLeft(expiresAt, now),
       };

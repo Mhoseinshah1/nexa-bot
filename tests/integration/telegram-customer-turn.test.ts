@@ -574,13 +574,13 @@ describe('the customer Telegram turn', () => {
     sent = [];
     await tap(5550000001, `C:${payment.id}`);
     // FIX-02: the reviewer sees the public code, never the stored role-suffixed reference.
-    expect(lastText()).toContain(paymentTrackingCode(payment.reference));
+    expect(lastText()).toContain(paymentTrackingCode(payment!));
     expect(lastText()).not.toContain(payment.reference);
     expect(decisionButtons(), 'the observer was drawn decision buttons').toEqual([]);
 
     sent = [];
     await tap(5550000002, `C:${payment.id}`);
-    expect(lastText()).toContain(paymentTrackingCode(payment.reference));
+    expect(lastText()).toContain(paymentTrackingCode(payment!));
     expect(decisionButtons().sort()).toEqual([`D:${payment.id}`, `E:${payment.id}`].sort());
   });
 

@@ -413,6 +413,26 @@ function recordSourceChecks(
   ];
 }
 
+/**
+ * The short public code (Round 4, PR-C; `@nexa/contracts` `public-code.ts`): 8 characters of
+ * Crockford base32 without 0/O/1/I/L, unique per tenant and table, beside the uuid key and
+ * never instead of it. Nullable only for the expand step: `nexa_assign_public_code` (0263)
+ * fills it on every INSERT from every writer, and the post-migration backfill
+ * (`public-code-backfill.ts`) fills every row that existed before. Written once: the
+ * database refuses changing a code that is set.
+ */
+function publicCodeColumns() {
+  return { code: text('code') };
+}
+
+/*
+ * The per-tenant unique key, `<table>_tenant_code_key`, is built ONLINE (`online-indexes.ts`)
+ * and so deliberately not declared here (Codex review of #299).
+ */
+function publicCodeChecks(name: string) {
+  return [check(`${name}_code_check`, sql`code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'`)];
+}
+
 export function enumCheck(column: string, values: readonly string[]): SQL {
   // This is the only sql.raw in the codebase. Every argument today is a
   // compile-time literal from a contract enum, which is what makes it safe — so
@@ -3759,9 +3779,17 @@ export const products = pgTable(
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     ...recordSourceColumns(),
+    /**
+     * The per-tenant product number behind `P-102` (Round 4, PR-C; `productCode`). Assigned at
+     * INSERT by `nexa_assign_product_code` under a per-tenant advisory lock, backfilled for every
+     * product that existed before, and never changed afterwards.
+     */
+    codeNumber: integer('code_number'),
   },
   (table) => [
     ...recordSourceChecks('products', table),
+    check('products_code_number_check', sql`code_number IS NULL OR code_number > 0`),
+    // `products_tenant_code_number_key` is built online (`online-indexes.ts`).
     index('products_tenant_status_idx').on(table.tenantId, table.status),
     /** The catalogue's order, and the list's keyset: sort, then created, then id. */
     index('products_tenant_sort_idx').on(
@@ -4101,9 +4129,11 @@ export const orders = pgTable(
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     ...recordSourceColumns(),
+    ...publicCodeColumns(),
   },
   (table) => [
     ...recordSourceChecks('orders', table),
+    ...publicCodeChecks('orders'),
     /** A child row may not name a customer of another tenant. */
     foreignKey({
       columns: [table.tenantId, table.customerId],
@@ -4422,9 +4452,11 @@ export const payments = pgTable(
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     ...recordSourceColumns(),
+    ...publicCodeColumns(),
   },
   (table) => [
     ...recordSourceChecks('payments', table),
+    ...publicCodeChecks('payments'),
     foreignKey({
       columns: [table.tenantId, table.customerId],
       foreignColumns: [customers.tenantId, customers.id],
@@ -7028,9 +7060,11 @@ export const services = pgTable(
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     ...recordSourceColumns(),
+    ...publicCodeColumns(),
   },
   (table) => [
     ...recordSourceChecks('services', table),
+    ...publicCodeChecks('services'),
     check('services_is_test_source_check', sql`NOT is_test OR source = 'MIRZA'`),
     foreignKey({
       columns: [table.tenantId, table.customerId],
@@ -11542,9 +11576,11 @@ export const tickets = pgTable(
     lastMessageAt: timestamptz('last_message_at').notNull().defaultNow(),
     closedAt: timestamptz('closed_at'),
     ...recordSourceColumns(),
+    ...publicCodeColumns(),
   },
   (table) => [
     ...recordSourceChecks('tickets', table),
+    ...publicCodeChecks('tickets'),
     unique('tickets_tenant_id_key').on(table.tenantId, table.id),
     unique('tickets_opening_key').on(table.tenantId, table.openingKey),
     /** The inbox: newest first, under a keyset on the immutable `(created_at, id)`. */

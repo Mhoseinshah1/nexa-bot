@@ -37,6 +37,11 @@ export interface TicketCategoryRecord {
 
 export interface TicketRecord {
   readonly id: TicketId;
+  /**
+   * The 8-character public code (PR-C) every surface prints instead of the id. Assigned by
+   * the database at insert; null only for a row the backfill has not reached.
+   */
+  readonly code: string | null;
   /** Provenance (owner decision 2026-10-17): `MIRZA` marks a row the one-time import wrote. */
   readonly source: RecordSource;
   readonly number: number;
@@ -142,6 +147,12 @@ export interface TicketListFilter {
   readonly categoryId?: TicketCategoryId;
   /** A resolved customer. Null means "a customer was named and none matched": no rows. */
   readonly customerId?: UserId | null;
+  /**
+   * PR-C: the box's term was shaped like a ticket's 8-character public code. A ticket with
+   * that code matches OR the customer above does — a code made of digits is also a Telegram
+   * id, so neither reading is dropped.
+   */
+  readonly code?: string;
   /** An administrator's id, or `null` for "unassigned". */
   readonly assignedAdminId?: AdminId | null;
   /** Half-open `[from, to)` on `created_at`. */

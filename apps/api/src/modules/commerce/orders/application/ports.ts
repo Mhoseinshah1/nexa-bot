@@ -71,6 +71,11 @@ export interface OrderTotalsRecord {
 
 export interface OrderRecord {
   readonly id: OrderId;
+  /**
+   * The 8-character public code (PR-C) every surface prints instead of the id. Assigned by
+   * the database at insert; null only for a row the backfill has not reached.
+   */
+  readonly code: string | null;
   readonly customerId: UserId;
   readonly state: OrderState;
   /** Provenance (owner decision 2026-10-17): `MIRZA` marks a row the one-time import wrote. */
@@ -159,6 +164,7 @@ export interface OrderSearch {
 export interface OrderCustomerIdentity {
   readonly telegramUserId: string;
   readonly username: string | null;
+  readonly displayName?: string | null;
 }
 
 /** Everything the DRAFT row carries at creation. Every field is a snapshot. */

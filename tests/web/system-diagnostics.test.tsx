@@ -135,7 +135,12 @@ describe('the diagnostics tab', () => {
     const view = renderPage(<SystemPage route={route} permissions={['opslog.view']} />);
     await screen.findByRole('table', { name: t('web.diagnostics_provisioning_title') });
     const panel = view.container.querySelector('#system-panel') ?? view.container;
-    // The tab strip lives outside the panel; inside it there is nothing to press.
-    expect(within(panel as HTMLElement).queryAllByRole('button')).toHaveLength(0);
+    // The tab strip lives outside the panel; inside it there is nothing to press — but
+    // «کپی شناسه» (PR-C), which copies and changes nothing.
+    expect(
+      within(panel as HTMLElement)
+        .queryAllByRole('button')
+        .filter((button) => button.getAttribute('data-copy-value') === null),
+    ).toHaveLength(0);
   });
 });

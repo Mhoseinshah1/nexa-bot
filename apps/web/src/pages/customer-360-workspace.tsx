@@ -8,6 +8,7 @@ import {
 import { fetchCustomerWorkspace, fetchTickets } from '../api/client';
 import { customerAttentionItems, workspaceWithheld } from '../attention-view';
 import { formatTimestamp } from '../format';
+import { CodeText } from '../ui/record-ref';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
 import {
@@ -109,6 +110,12 @@ export function CustomerLatestCard({ customerId }: { customerId: string }) {
       ),
     },
     {
+      // PR-C: the order's short public code.
+      key: 'code',
+      header: t('web.record_code'),
+      render: (row) => <CodeText code={row.code} />,
+    },
+    {
       key: 'state',
       header: t('web.status'),
       render: (row) => (
@@ -135,7 +142,7 @@ export function CustomerLatestCard({ customerId }: { customerId: string }) {
       header: t('web.payment_reference'),
       render: (row) => (
         <a href={`/payments/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-          <Ltr>{paymentTrackingCode(row.reference)}</Ltr>
+          <Ltr>{paymentTrackingCode(row)}</Ltr>
         </a>
       ),
     },

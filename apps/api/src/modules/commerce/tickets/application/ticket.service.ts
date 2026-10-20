@@ -36,6 +36,7 @@ import {
   type PermissionKey,
   type TemplateValues,
   type TenantContext,
+  publicCodeFromSearch,
   type TicketAttachmentKind,
   type TicketCategoryId,
   type TicketId,
@@ -769,6 +770,10 @@ export class TicketService {
       ...(query.customer === undefined
         ? {}
         : { customerId: await this.customerNamed(scope, query.customer) }),
+      // PR-C: the same box finds a ticket by its short public code.
+      ...(query.customer === undefined || publicCodeFromSearch(query.customer) === null
+        ? {}
+        : { code: publicCodeFromSearch(query.customer) as string }),
       ...(assigned === undefined ? {} : { assignedAdminId: assigned }),
       ...(query.from === undefined ? {} : { from: query.from }),
       ...(query.to === undefined ? {} : { to: query.to }),

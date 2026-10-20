@@ -303,10 +303,11 @@ describe('TonPays Telegram in the bot', () => {
 
   it('FIX-02: a photo after the receipt window’s deadline is answered closed WITH the payment’s code', async () => {
     const { paymentId, message } = await cardOnScreen();
-    const [stored] = await rows<{ reference: string }>(
-      sql`SELECT reference FROM payments WHERE id = ${paymentId}`,
+    const [stored] = await rows<{ code: string; reference: string }>(
+      sql`SELECT code, reference FROM payments WHERE id = ${paymentId}`,
     );
-    const code = stored!.reference.split(':')[0]!;
+    // PR-C: the 8-character public code is the tracking code.
+    const code = stored!.code;
     // The card invoice already carries it, before anything is paid.
     expect(String(lastOn(message)?.['text'])).toContain(`کد پیگیری پرداخت: ${code}`);
     await tapOn(message, `gr:${paymentId}`);

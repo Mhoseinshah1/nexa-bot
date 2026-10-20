@@ -41,6 +41,7 @@ import {
 import { formatMoney, formatNumber, formatTrafficGbText } from '../format';
 import { LEDGER_REASON_LABELS } from './mirza-labels';
 import { t, type WebKey } from '../i18n/web.fa';
+import { RecordLink, recordHref } from '../ui/record-ref';
 import { pollUnlessFinal } from '../polling';
 import {
   BUSINESS_REFRESH_MS,
@@ -1480,7 +1481,6 @@ function ResellersReport({ selection }: { selection: ReportRangeSelection }) {
     () => fetchReportResellers(selection),
     rangeIsComplete(selection),
   );
-  const onLink = useLinkHandler();
   const data = resellers.data;
   return (
     <Card
@@ -1502,9 +1502,11 @@ function ResellersReport({ selection }: { selection: ReportRangeSelection }) {
                 render: (r) => (
                   // The customer page, whose reseller card shows the standing: there is
                   // no `/resellers/:id` route, and this link resolved to Not Found (D1).
-                  <a href={`/users/${encodeURIComponent(r.resellerCustomerId)}`} onClick={onLink}>
-                    <Ltr>{r.resellerCustomerId.slice(-8)}</Ltr>
-                  </a>
+                  <RecordLink
+                    href={recordHref.customer(r.resellerCustomerId)}
+                    id={r.resellerCustomerId}
+                    code={null}
+                  />
                 ),
               },
               {

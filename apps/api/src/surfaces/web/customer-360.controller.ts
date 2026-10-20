@@ -225,6 +225,7 @@ export class Customer360Controller {
                 unknown: found.payments.unknown,
                 latest: found.payments.latest.map((row) => ({
                   id: row.id,
+                  code: row.code,
                   reference: row.reference,
                   method: row.method,
                   state: row.state,
@@ -240,6 +241,7 @@ export class Customer360Controller {
             : {
                 latest: found.orders.latest.map((row) => ({
                   id: row.id,
+                  code: row.code,
                   lineTitle: row.lineTitle,
                   purpose: row.purpose,
                   state: row.state,

@@ -1,5 +1,5 @@
-import { and, asc, eq, getTableColumns, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
-import { money } from '@nexa/contracts';
+import { and, asc, eq, getTableColumns, isNotNull, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { money, productCodeNumberFromSearch } from '@nexa/contracts';
 import type {
   CurrencyCode,
   PanelId,
@@ -220,7 +220,12 @@ export class DrizzleProductRepository implements ProductRepository {
     if (search.titlePrefix !== undefined && search.titlePrefix !== '') {
       // Escaped, so a title containing `%` or `_` matches no more than it spells.
       const needle = search.titlePrefix.toLowerCase().replace(/[\\%_]/g, '\\$&');
-      conditions.push(sql`lower(${products.title}) like ${`${needle}%`}`);
+      const byTitle = sql`lower(${products.title}) like ${`${needle}%`}`;
+      // PR-C: the same box finds a product by its code, «P-102».
+      const codeNumber = productCodeNumberFromSearch(search.titlePrefix);
+      conditions.push(
+        codeNumber === null ? byTitle : (or(byTitle, eq(products.codeNumber, codeNumber)) as SQL),
+      );
     }
     if (cursor !== null) {
       conditions.push(
@@ -694,6 +699,7 @@ function toCategoryRecord(row: typeof productCategories.$inferSelect): ProductCa
 function toRecord(row: typeof products.$inferSelect): ProductRecord {
   return {
     id: row.id as ProductId,
+    codeNumber: row.codeNumber,
     source: row.source as RecordSource,
     title: row.title,
     description: row.description,

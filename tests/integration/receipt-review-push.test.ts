@@ -680,12 +680,13 @@ describe('the administrators’ receipt push', () => {
 
     const owner = String(filesTo(TG.owner)[0]?.body['caption'] ?? '');
     const plain = String(filesTo(TG.reviewer)[0]?.body['caption'] ?? '');
-    const reference = (
-      await rows<{ reference: string }>(
+    const stored = (
+      await rows<{ reference: string; code: string | null }>(
         f,
-        sql`SELECT reference FROM payments WHERE id = ${payment}`,
+        sql`SELECT reference, code FROM payments WHERE id = ${payment}`,
       )
-    )[0]?.reference;
+    )[0]!;
+    const reference = stored.reference;
     for (const caption of [owner, plain]) {
       expect(caption).toContain('خرید سرویس جدید'); // operation
       expect(caption).toContain('پلن پایه'); // product title, from the order snapshot
@@ -694,7 +695,7 @@ describe('the administrators’ receipt push', () => {
       expect(caption).toContain('@zahra_pay'); // username
       expect(caption).toContain('250,000'); // amount
       // FIX-02: the public tracking code, never the stored `:manual` reference.
-      expect(caption).toContain(paymentTrackingCode(String(reference)));
+      expect(caption).toContain(paymentTrackingCode(stored));
       expect(caption).not.toContain(String(reference));
       expect(caption).toContain('یادداشت مشتری'); // the customer's note
       expect(caption).not.toContain('file-caption'); // never a file id

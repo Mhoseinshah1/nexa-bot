@@ -455,7 +455,7 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
         provider: 'TONPAYS',
         method: 'GATEWAY',
         paymentId: attempt.payment.id,
-        trackingCode: paymentTrackingCode(attempt.payment.reference),
+        trackingCode: paymentTrackingCode(attempt.payment!),
         telegramUserId: MARYAM,
         failureKind: c.kind,
         classification: c.code.endsWith('unknown') ? 'UNKNOWN' : 'FINAL',
@@ -471,7 +471,7 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
       expect(text).toContain('درگاه: TONPAYS');
       expect(text).toContain(`کاربر: <code>${MARYAM}</code>`);
       expect(text).toContain(
-        `کد پیگیری پرداخت: <code>${paymentTrackingCode(attempt.payment.reference)}</code>`,
+        `کد پیگیری پرداخت: <code>${paymentTrackingCode(attempt.payment!)}</code>`,
       );
       expect(text).toContain(c.line);
       expect(text).toContain(`شناسه رخداد: <code>${rows[0]!.id}</code>`);

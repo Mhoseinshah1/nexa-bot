@@ -29,6 +29,7 @@ import { useSubmissionKey } from '../submission-key';
 import { mayRequest } from '../view-state';
 import { listRouteKey, useDebouncedApply } from '../ui/list-search';
 import { t, type WebKey } from '../i18n/web.fa';
+import { RecordLink, recordHref } from '../ui/record-ref';
 import { setQueries, useLinkHandler, type Route } from '../router';
 import { messageFor } from './settings';
 import { ListFilterBar } from '../ui/filter-bar';
@@ -44,7 +45,6 @@ import {
   Empty,
   Field,
   KV,
-  RefLink,
   Ltr,
   Money,
   PageHead,
@@ -408,9 +408,7 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
       header: t('web.referral_order'),
       // The order's id as the demo's underlined code link (X7).
       render: (row) => (
-        <RefLink href={`/orders/${encodeURIComponent(row.orderId)}`} mono title={row.orderId}>
-          {row.orderId.slice(0, 8)}
-        </RefLink>
+        <RecordLink href={recordHref.order(row.orderId)} id={row.orderId} code={null} />
       ),
     },
     {

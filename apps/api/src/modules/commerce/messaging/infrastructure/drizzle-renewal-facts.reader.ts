@@ -60,15 +60,17 @@ export class DrizzleRenewalFactsReader {
              COALESCE(op.target_expires_at, s.expires_at) AS expires_at,
              op.order_id,
              o.line_duration_days,
-             (SELECT p.reference FROM payments p
-               WHERE p.tenant_id = op.tenant_id
-                 AND p.order_id = op.order_id
-                 AND p.state = 'CONFIRMED'
-               ORDER BY p.confirmed_at DESC NULLS LAST
-               LIMIT 1) AS reference
+             pay.payment_reference, pay.payment_code
       FROM provisioning_operations op
       JOIN services s ON s.tenant_id = op.tenant_id AND s.id = op.service_id
       LEFT JOIN orders o ON o.tenant_id = op.tenant_id AND o.id = op.order_id
+      LEFT JOIN LATERAL (
+        SELECT p.reference AS payment_reference, p.code AS payment_code FROM payments p
+         WHERE p.tenant_id = op.tenant_id
+           AND p.order_id = op.order_id
+           AND p.state = 'CONFIRMED'
+         ORDER BY p.confirmed_at DESC NULLS LAST
+         LIMIT 1) pay ON true
       WHERE op.tenant_id = ${tenantId}
         AND op.id = ${operationId}
         AND op.type = 'RENEW'
@@ -81,7 +83,8 @@ export class DrizzleRenewalFactsReader {
           expires_at: string | Date | null;
           order_id: string | null;
           line_duration_days: number | string | null;
-          reference: string | null;
+          payment_reference: string | null;
+          payment_code: string | null;
         }
       | undefined;
     if (row === undefined) return null;
@@ -94,7 +97,15 @@ export class DrizzleRenewalFactsReader {
           ? {}
           : { durationDays: Number(row.line_duration_days) }),
         ...(row.expires_at === null ? {} : { expiresAt: new Date(row.expires_at) }),
-        ...(row.reference === null ? {} : { reference: paymentTrackingCode(row.reference) }),
+        // The PUBLIC tracking code (PR-C), never the stored reference.
+        ...(row.payment_reference === null
+          ? {}
+          : {
+              reference: paymentTrackingCode({
+                code: row.payment_code,
+                reference: row.payment_reference,
+              }),
+            }),
       },
     };
   }

@@ -8,6 +8,7 @@ import type {
 } from '@nexa/contracts';
 import { formatNumber } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
+import { CopyIdButton } from '../ui/record-ref';
 import { Banner, Disclosure, KV, Ltr, Num } from '../ui/kit';
 
 /**
@@ -99,7 +100,14 @@ function PanelDiagnostics({
       variant="boxed"
       summary={
         <span>
-          <Ltr>{codes.length > 0 ? codes.join(', ') : panel.panelId}</Ltr>{' '}
+          {codes.length > 0 ? (
+            <Ltr>{codes.join(', ')}</Ltr>
+          ) : (
+            <span className="record-ref">
+              {t('web.mrz_diag_panel_without_code')}
+              <CopyIdButton id={panel.panelId} />
+            </span>
+          )}{' '}
           {fill('web.mrz_diag_panel_summary', {
             unresolved: panel.unresolved,
             needed: panel.needed,

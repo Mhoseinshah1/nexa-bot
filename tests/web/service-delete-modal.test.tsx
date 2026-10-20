@@ -206,7 +206,10 @@ describe('the delete modal', () => {
     expect(
       new Set(posts.map((post) => (post.body as { idempotencyKey: string }).idempotencyKey)).size,
     ).toBe(1);
-    expect(within(dialog).getByText(REFUND_ID)).toBeInTheDocument();
+    // PR-C: the refund's id is copyable, never drawn.
+    expect(
+      within(dialog).getByRole('button', { name: 'کپی شناسه' }).getAttribute('data-copy-value'),
+    ).toBe(REFUND_ID);
   });
 
   it('re-reads the quote and the requests after an ALREADY_REQUESTED refusal and shows the standing request', async () => {

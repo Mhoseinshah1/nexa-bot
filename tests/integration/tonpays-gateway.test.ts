@@ -1168,12 +1168,14 @@ describe('TonPays, through the one settlement path', () => {
      * The stored reference itself, suffix and all, never reaches the customer.
      */
     async function codeOf(paymentId: string): Promise<{ code: string; reference: string }> {
-      const [row] = await rows<{ reference: string }>(
-        sql`SELECT reference FROM payments WHERE id = ${paymentId}`,
+      const [row] = await rows<{ reference: string; code: string }>(
+        sql`SELECT reference, code FROM payments WHERE id = ${paymentId}`,
       );
       if (row === undefined) throw new Error('no payment');
       expect(row.reference).toMatch(/^[0-9a-f]{16}:gateway$/u);
-      return { code: row.reference.split(':')[0]!, reference: row.reference };
+      // PR-C: the 8-character public code is the tracking code.
+      expect(row.code).toMatch(/^[2-9A-HJKMNP-TV-Z]{8}$/u);
+      return { code: row.code, reference: row.reference };
     }
 
     it('FIX-02: the preparing screen, the invoice and the confirmation carry ONE code, never the stored reference', async () => {

@@ -847,6 +847,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'آیا از انصراف این پرداخت مطمئن هستید؟ کد پیگیری فعلی باطل می‌شود و اگر پس از آن مبلغی واریز کنید، قابل پیگیری نخواهد بود. این کار برگشت‌پذیر نیست.\n\nکد پیگیری پرداخت: {reference}',
   /* FIX-02: appended to an old tenant override of an invoice that lacks {reference}. */
   'bot.payment.tracking_code_line': 'کد پیگیری پرداخت: {reference}',
+  'bot.order.order_code_line': '🔖 کد سفارش: {orderCode}',
   'bot.payment.cancel_confirm_button': 'بله، انصراف بده',
   'bot.payment.cancelled':
     '{icon:warning} پرداخت شما لغو شد و کد پیگیری قبلی دیگر معتبر نیست. سفارش تا پایان مهلت آن باز است و می‌توانید با روش دیگری پرداخت کنید.',
@@ -1199,7 +1200,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.support.handoff_notice':
     'پیام شما برای بررسی بیشتر به پشتیبان ارجاع شد و پاسخ در همین گفتگو داده می‌شود. لطفاً گفتگو را همین‌جا ادامه دهید؛ نیازی به ارسال دوبارهٔ پیام نیست.',
   'bot.order.preinvoice':
-    '{icon:invoice} پیش‌فاکتور\n\n{icon:service} سرویس: {productName}\n{icon:user} نام کاربری: {serviceUsername}\n{icon:date} مدت: {durationDays}\n{icon:traffic} حجم: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{customBlock}\n{devicesBlock}\n{locationChangeBlock}\n{discountLine}\n{cashbackLine}\n{icon:amount} مبلغ سفارش: {total}\n\n{description}\n\n{icon:wallet} موجودی کیف پول: {walletBalance}\n\n{icon:purchase} سفارش شما آماده پرداخت است؛ روش پرداخت را با دکمه‌های زیر انتخاب کنید. اگر روشی کارمزد داشته باشد، کارمزد و مبلغ قابل پرداخت در فاکتور همان روش جداگانه نمایش داده می‌شود.',
+    '{icon:invoice} پیش‌فاکتور\n🔖 کد سفارش: {orderCode}\n\n{icon:service} سرویس: {productName}\n{icon:user} نام کاربری: {serviceUsername}\n{icon:date} مدت: {durationDays}\n{icon:traffic} حجم: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{customBlock}\n{devicesBlock}\n{locationChangeBlock}\n{discountLine}\n{cashbackLine}\n{icon:amount} مبلغ سفارش: {total}\n\n{description}\n\n{icon:wallet} موجودی کیف پول: {walletBalance}\n\n{icon:purchase} سفارش شما آماده پرداخت است؛ روش پرداخت را با دکمه‌های زیر انتخاب کنید. اگر روشی کارمزد داشته باشد، کارمزد و مبلغ قابل پرداخت در فاکتور همان روش جداگانه نمایش داده می‌شود.',
   'bot.order.preinvoice_custom':
     '🛠 سرویس دلخواه\n📍 لوکیشن: {location}\n📦 حجم: {volumeBytes} × {pricePerGb} = {volumePrice}\n{icon:time} مدت: {durationDays} × {pricePerDay} = {timePrice}',
   'bot.order.preinvoice_devices':

@@ -35,6 +35,14 @@ import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
 import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
 import { CustomerIdentityLink } from '../ui/customer-identity';
+import {
+  CodeText,
+  CopyIdButton,
+  PanelLink,
+  ProductLink,
+  RecordLink,
+  recordHref,
+} from '../ui/record-ref';
 import { BalancedColumns, ChipGroup, useListClearAll } from './commerce-parts';
 import { ActionPanel } from '../ui/action-panel';
 import {
@@ -406,6 +414,12 @@ export function ServicesPage({
       ),
     },
     {
+      // PR-C: the service's short public code, never its uuid.
+      key: 'code',
+      header: t('web.record_code'),
+      render: (row) => <RecordLink href={recordHref.service(row.id)} id={row.id} code={row.code} />,
+    },
+    {
       key: 'state',
       header: t('web.service_state'),
       render: (row) => (
@@ -435,11 +449,8 @@ export function ServicesPage({
     {
       key: 'panel',
       header: t('web.service_panel'),
-      render: (row) => (
-        <a href={`/panels/${encodeURIComponent(row.panelId)}`} onClick={onLink}>
-          <Ltr>{row.panelId.slice(0, 8)}</Ltr>
-        </a>
-      ),
+      // PR-C: the panel by its name.
+      render: (row) => <PanelLink id={row.panelId} name={row.panelName} />,
     },
     {
       // Program §13: where it is, as the panel's location configuration names it.
@@ -1158,7 +1169,11 @@ export function ServiceDetailPage({
               side={<ServiceDelivery row={row} />}
             />
 
-            <Card title={t('web.service_operations_title')} hint={t('web.service_operations_hint')}>
+            <Card
+              id={SERVICE_PROVISIONING_ANCHOR}
+              title={t('web.service_operations_title')}
+              hint={t('web.service_operations_hint')}
+            >
               <StateSwitch query={operations} denied={denied}>
                 {operations.data === undefined ? null : operations.data.operations.length === 0 ? (
                   <Empty variant="compact" title={t('web.service_operations_empty')} />
@@ -1325,39 +1340,53 @@ function UsageMeter({ used, limit }: { used: bigint; limit: bigint }) {
   );
 }
 
-/** Who and what this service belongs to, as full-id links. */
+/**
+ * Who and what this service belongs to (PR-C): the customer by Telegram id and name, the
+ * order by its code, the panel by its name and the product by «P-102 · name» — each a link to
+ * its page, and never a uuid, which only «کپی شناسه» reaches.
+ */
 function ServiceIdentity({ row }: { row: ServiceDetail }) {
   const onLink = useLinkHandler();
   return (
     <Card title={t('web.service_identity_title')}>
       <KV
         items={[
+          [t('web.record_code'), <CodeWithCopy key="code" code={row.code} id={row.id} />],
+          [t('web.service_provider_user_id'), <PanelUsername key="pu" row={row} />],
           [
-            t('web.service_provider_user_id'),
+            // The panel's own id for the account, beside the name an operator searches for.
+            t('web.service_panel_account_id'),
             row.providerUserId === null ? (
-              <Dash key="pu" />
+              <Dash key="pa" />
             ) : (
-              <Copyable key="pu" value={row.providerUserId} />
+              <Copyable key="pa" value={row.providerUserId} />
             ),
           ],
           [
             t('web.service_customer'),
-            <a key="c" href={`/users/${encodeURIComponent(row.customerId)}`} onClick={onLink}>
-              <Ltr>{row.customerId}</Ltr>
-            </a>,
+            <span key="c" className="nowrap record-ref">
+              <CustomerIdentityLink
+                customerId={row.customerId}
+                telegramUserId={row.customerTelegramUserId}
+                username={row.customerUsername}
+                onLink={onLink}
+              />
+              {row.customerDisplayName !== null && (
+                <span className="muted">{row.customerDisplayName}</span>
+              )}
+              <CopyIdButton id={row.customerId} />
+            </span>,
           ],
           [
             t('web.service_order'),
-            <a key="o" href={`/orders/${encodeURIComponent(row.orderId)}`} onClick={onLink}>
-              <Ltr>{row.orderId}</Ltr>
-            </a>,
+            <RecordLink
+              key="o"
+              href={recordHref.order(row.orderId)}
+              id={row.orderId}
+              code={row.orderCode}
+            />,
           ],
-          [
-            t('web.service_panel'),
-            <a key="p" href={`/panels/${encodeURIComponent(row.panelId)}`} onClick={onLink}>
-              <Ltr>{row.panelId}</Ltr>
-            </a>,
-          ],
+          [t('web.service_panel'), <PanelLink key="p" id={row.panelId} name={row.panelName} />],
           [
             t('web.service_product'),
             // Package D: a custom service has no product, and says so rather than
@@ -1367,9 +1396,12 @@ function ServiceIdentity({ row }: { row: ServiceDetail }) {
                 {t('web.purpose_custom_service')}
               </span>
             ) : (
-              <a key="pr" href={`/products/${encodeURIComponent(row.productId)}`} onClick={onLink}>
-                <Ltr>{row.productId}</Ltr>
-              </a>
+              <ProductLink
+                key="pr"
+                id={row.productId}
+                code={row.productCode}
+                title={row.productTitle}
+              />
             ),
           ],
           [t('web.service_created_at'), formatTimestampNumeric(row.createdAt)],
@@ -1380,6 +1412,47 @@ function ServiceIdentity({ row }: { row: ServiceDetail }) {
     </Card>
   );
 }
+
+/** A record's own code with the copy-id action beside it — on its own page, so not a link. */
+function CodeWithCopy({ code, id }: { code: string | null; id: string }) {
+  return (
+    <span className="nowrap record-ref">
+      <CodeText code={code} />
+      <CopyIdButton id={id} />
+    </span>
+  );
+}
+
+/**
+ * «شناسهٔ کاربری در پنل» (PR-C): the username the panel holds for this service, once the
+ * panel has the account. Until then the reserved name is NOT the panel's — saying it is would
+ * send an operator to search a panel for an account that is not there — so the cell says why
+ * it is empty, from the service's own state, and links to the provisioning history below.
+ */
+export function panelUsernameAbsence(
+  row: Pick<ServiceDetail, 'providerUserId' | 'provisionedAt' | 'state'>,
+): WebKey | null {
+  if (row.providerUserId !== null || row.provisionedAt !== null) return null;
+  if (row.state === 'UNRECONCILED') return 'web.service_panel_username_unknown';
+  if (row.state === 'PENDING_PROVISION') return 'web.service_panel_username_pending';
+  return 'web.service_panel_username_never';
+}
+
+function PanelUsername({ row }: { row: ServiceDetail }) {
+  const absence = panelUsernameAbsence(row);
+  if (absence === null) return <Copyable value={row.providerUsername} />;
+  return (
+    <span className="muted">
+      {t(absence)}{' '}
+      <a className="lk" href={`#${SERVICE_PROVISIONING_ANCHOR}`}>
+        {t('web.service_panel_username_history')}
+      </a>
+    </span>
+  );
+}
+
+/** The provisioning history card's anchor, which the panel-username cell links to. */
+const SERVICE_PROVISIONING_ANCHOR = 'service-provisioning';
 
 /**
  * Delivery, on its own, with the subscription reduced to a yes or a no.

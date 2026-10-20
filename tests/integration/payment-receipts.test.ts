@@ -266,9 +266,10 @@ describe('a customer sending a receipt', () => {
     );
     const details = await refusalDetails(submit(payment.id, photo('u-n2b'), 'n2b-file'));
     const row = (await ctx.container.database.db.execute(
-      sql`SELECT reference FROM payments WHERE id = ${payment.id}`,
-    )) as unknown as { rows: { reference: string }[] };
-    expect(details).toMatchObject({ next: 'UNDER_REVIEW', reference: row.rows[0]?.reference });
+      sql`SELECT code FROM payments WHERE id = ${payment.id}`,
+    )) as unknown as { rows: { code: string }[] };
+    // PR-C: the refusal carries the public tracking code, never the stored reference.
+    expect(details).toMatchObject({ next: 'UNDER_REVIEW', reference: row.rows[0]?.code });
   });
 
   it('reads a tracking code only for the customer whose payment it is (R1)', async () => {
@@ -280,12 +281,13 @@ describe('a customer sending a receipt', () => {
       customerA,
       payment.id as PaymentId,
     );
-    // FIX-02: the PUBLIC code — the operation-id half of the stored `<id>:manual` reference.
+    // The PUBLIC code — never the stored `<id>:manual` reference.
     const stored = (await ctx.container.database.db.execute(
-      sql`SELECT reference FROM payments WHERE id = ${payment.id}`,
-    )) as unknown as { rows: { reference: string }[] };
+      sql`SELECT reference, code FROM payments WHERE id = ${payment.id}`,
+    )) as unknown as { rows: { reference: string; code: string }[] };
     expect(stored.rows[0]?.reference).toMatch(/^[0-9a-f]{16}:manual$/u);
-    expect(mine).toBe(stored.rows[0]?.reference.split(':')[0]);
+    // PR-C: the 8-character public code is the tracking code.
+    expect(mine).toBe(stored.rows[0]?.code);
     expect(
       await ctx.container.receipts.trackingCodeForCustomer(
         tenantA,

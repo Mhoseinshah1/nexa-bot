@@ -17,6 +17,7 @@ import {
   money,
   paymentTrackingCode,
   trackingCodeFromSearch,
+  publicCodeFromSearch,
   PAYMENT_GATEWAY_PROVIDERS,
   PAYMENT_OPS_QUEUES,
   PROVIDER_REVIEW_GATEWAY_PROVIDERS,
@@ -42,6 +43,7 @@ import type { Database, Executor } from '../../../../infrastructure/persistence/
 import {
   customerIdsWithTelegramId,
   customerIdsWithUsernamePrefix,
+  orPublicCode,
   readCustomerIdentities,
 } from '../../../../infrastructure/persistence/list-search.js';
 import {
@@ -253,7 +255,18 @@ export class DrizzlePaymentRepository implements PaymentRepository {
       conditions.push(eq(payments.customerId, search.customerId));
     if (search.orderId !== undefined) conditions.push(eq(payments.orderId, search.orderId));
     if (search.reference !== undefined) conditions.push(referenceCondition(search.reference));
-    if (search.text !== undefined) conditions.push(paymentTextCondition(tenantId, search.text));
+    if (search.text !== undefined) {
+      // PR-C: the payment's own code (in `referenceCondition`), or its order's code.
+      conditions.push(
+        orPublicCode(
+          paymentTextCondition(tenantId, search.text),
+          tenantId,
+          search.text,
+          payments.code,
+          payments.orderId,
+        ),
+      );
+    }
     if (search.disposition !== undefined) {
       conditions.push(sql`(${receiptDispositionSql()}) = ${search.disposition}`);
     }
@@ -1084,12 +1097,12 @@ export class DrizzlePaymentRepository implements PaymentRepository {
   ): Promise<string | null> {
     const tenantId = requireTenantId(scope);
     const [row] = await this.exec(tx)
-      .select({ reference: payments.reference })
+      .select({ code: payments.code, reference: payments.reference })
       .from(payments)
       .where(and(eq(payments.tenantId, tenantId), eq(payments.id, paymentId)))
       .limit(1);
-    // FIX-02: the PUBLIC code, never the role-suffixed reference it is derived from.
-    return row === undefined ? null : paymentTrackingCode(row.reference);
+    // The PUBLIC code (PR-C), never the role-suffixed reference.
+    return row === undefined ? null : paymentTrackingCode(row);
   }
 
   async rejectionReasonFor(
@@ -1182,6 +1195,7 @@ type Row = {
   amount: bigint;
   currency: string;
   reference: string;
+  code: string | null;
   evidenceKind: string | null;
   evidenceNote: string | null;
   externalReference: string | null;
@@ -1215,6 +1229,7 @@ function toRecord(row: Row): PaymentRecord {
     // One value, so nothing downstream can read an amount without its currency.
     amount: money(row.amount, row.currency as CurrencyCode),
     reference: row.reference,
+    code: row.code,
     evidenceKind: row.evidenceKind as PaymentEvidenceKind | null,
     evidenceNote: row.evidenceNote,
     externalReference: row.externalReference,
@@ -1308,23 +1323,25 @@ function paymentTextCondition(tenantId: string, term: ListSearchTerm): SQL {
 }
 
 /**
- * A payment by what an operator was QUOTED (FIX-02): the stored reference exactly, as before,
- * or — when the term is shaped like one — the public tracking code the customer was shown,
- * which is the reference's operation-id half (`paymentTrackingCode`). An old suffixed reference
- * pasted from an earlier screen is reduced to its code too, so both shapes find the payment.
+ * A payment by what an operator was QUOTED: the 8-character public code (PR-C, THE tracking
+ * code since then, served by `payments_tenant_code_key`), the stored reference exactly, or —
+ * when the term is shaped like one — the FIX-02 code customers were shown before PR-C, the
+ * reference's operation-id half (`legacyPaymentTrackingCode`). An old suffixed reference
+ * pasted from an earlier screen is reduced to its FIX-02 code too, so every shape a customer
+ * may hold still finds the payment.
  *
- * `split_part(reference, ':', 1)` is the code for every reference `referenceFor` writes, and
- * `payments_tenant_tracking_code_idx` indexes exactly that expression, so the arm is an index
- * scan beside `payments_tenant_reference_key`. A code is not a unique key — it is 64 bits of a
- * hash — so this is a predicate that may match more than one row, and the list shows them all.
+ * `split_part(reference, ':', 1)` is the FIX-02 code for every reference `referenceFor`
+ * writes, and `payments_tenant_tracking_code_idx` indexes exactly that expression. A FIX-02
+ * code is not a unique key — it is 64 bits of a hash — so that arm may match more than one
+ * row, and the list shows them all. The public code is unique per tenant.
  */
 function referenceCondition(value: string): SQL {
-  const code = trackingCodeFromSearch(value);
-  if (code === null) return eq(payments.reference, value);
-  return or(
-    eq(payments.reference, value),
-    sql`split_part(${payments.reference}, ':', 1) = ${code}`,
-  ) as SQL;
+  const arms: SQL[] = [eq(payments.reference, value)];
+  const publicCode = publicCodeFromSearch(value);
+  if (publicCode !== null) arms.push(eq(payments.code, publicCode));
+  const legacy = trackingCodeFromSearch(value);
+  if (legacy !== null) arms.push(sql`split_part(${payments.reference}, ':', 1) = ${legacy}`);
+  return arms.length === 1 ? (arms[0] as SQL) : (or(...arms) as SQL);
 }
 
 /**

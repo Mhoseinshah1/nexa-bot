@@ -1014,7 +1014,7 @@ describe('a customer topping up their wallet', () => {
       expect(lane.sends.map((one) => [one.templateKey, one.values])).toEqual([
         [
           'bot.wallet.topup_credited',
-          { amount: money(500_000n, 'IRT'), reference: paymentTrackingCode(payment.reference) },
+          { amount: money(500_000n, 'IRT'), reference: paymentTrackingCode(payment!) },
         ],
         ['bot.wallet.topup_gift_credited', { amount: money(50_000n, 'IRT') }],
       ]);
@@ -1038,8 +1038,8 @@ describe('a customer topping up their wallet', () => {
       const { payment } = await topup(500_000n, 'b14');
       await confirm(payment.id, 'b14-confirm');
       const [stored] = await ctx.container.database.db
-        .execute(sql`SELECT reference FROM payments WHERE id = ${payment.id}`)
-        .then((result) => result.rows as { reference: string }[]);
+        .execute(sql`SELECT reference, code FROM payments WHERE id = ${payment.id}`)
+        .then((result) => result.rows as { reference: string; code: string | null }[]);
       expect(stored?.reference).toBe(payment.reference);
 
       const lane = capturingLane(ctx);
@@ -1047,7 +1047,7 @@ describe('a customer topping up their wallet', () => {
       const [first] = lane.rendered();
       expect(first).toBe(
         '✅ پرداخت شما بررسی و تأیید شد.\n💎 مبلغ 500,000 تومان به کیف پول شما اضافه شد.' +
-          `\n\n\nکد پیگیری پرداخت: ${paymentTrackingCode(stored?.reference ?? 'MISSING')}`,
+          `\n\n\nکد پیگیری پرداخت: ${paymentTrackingCode(stored!)}`,
       );
 
       // The same notification dispatched again (a redelivery, a re-armed row).

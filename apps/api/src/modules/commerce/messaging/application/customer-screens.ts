@@ -31,6 +31,8 @@ export interface ComposedScreen {
 }
 
 export interface PreinvoiceFacts {
+  /** The order's 8-character public code (PR-C); absent before the backfill reaches it. */
+  readonly orderCode?: string | null;
   readonly serviceUsername: string | null;
   readonly productName: string;
   /** Validity bought; null for a traffic-only package. */
@@ -197,6 +199,9 @@ export class CustomerScreenComposer {
   async preinvoice(scope: ScopeContext, facts: PreinvoiceFacts): Promise<ComposedScreen> {
     const lines = (items: readonly string[]) => items.join('\n');
     const values: TemplateValues = {
+      ...(facts.orderCode === null || facts.orderCode === undefined
+        ? {}
+        : { orderCode: facts.orderCode }),
       ...(facts.serviceUsername === null ? {} : { serviceUsername: facts.serviceUsername }),
       productName: facts.productName,
       ...(facts.durationDays === null ? {} : { durationDays: facts.durationDays }),

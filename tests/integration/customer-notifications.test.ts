@@ -280,19 +280,23 @@ describe('the customer notification lane', () => {
 
   it('quotes the payment’s tracking code on a rejection, an expiry and a recorded claim (roadmap E6)', async () => {
     const id = await customer(tenantA, '5090');
-    const paymentRow = async (state: 'FAILED' | 'EXPIRED' | 'PENDING', reference: string) => {
+    const paymentRow = async (
+      state: 'FAILED' | 'EXPIRED' | 'PENDING',
+      reference: string,
+      code: string,
+    ) => {
       const paymentId = ctx.container.ids.uuid();
       await ctx.container.database.db.execute(sql`
         INSERT INTO payments (id, tenant_id, customer_id, method, state, amount, currency,
-                              reference, resolved_at, expires_at)
+                              reference, resolved_at, expires_at, code)
         VALUES (${paymentId}, ${tenantA.tenantId}, ${id}, 'MANUAL_TRANSFER', ${state}, 1000,
                 'IRT', ${reference}, ${state === 'PENDING' ? null : new Date()},
-                ${new Date(Date.now() + 3_600_000)})`);
+                ${new Date(Date.now() + 3_600_000)}, ${code})`);
       return paymentId;
     };
-    const rejected = await paymentRow('FAILED', 'e6-rejected-ref');
-    const expired = await paymentRow('EXPIRED', 'e6-expired-ref');
-    const claimed = await paymentRow('PENDING', 'e6-claimed-ref');
+    const rejected = await paymentRow('FAILED', 'e6-rejected-ref', 'E6REJECT');
+    const expired = await paymentRow('EXPIRED', 'e6-expired-ref', 'E6EXPRED');
+    const claimed = await paymentRow('PENDING', 'e6-claimed-ref', 'E6CHAMED');
     await enqueue(tenantA, id, 'PAYMENT_REJECTED', rejected);
     await enqueue(tenantA, id, 'PAYMENT_EXPIRED', expired);
     await enqueue(tenantA, id, 'PAYMENT_TRANSFER_RECORDED', claimed);
@@ -302,35 +306,57 @@ describe('the customer notification lane', () => {
     // A rejection recorded with no administrator has no reason: a dash, never a sentence.
     expect(byKey.get('bot.payment.rejected')).toEqual({
       reason: '\u2014',
-      reference: 'e6-rejected-ref',
+      reference: 'E6REJECT',
     });
-    expect(byKey.get('bot.payment.expired')).toEqual({ reference: 'e6-expired-ref' });
+    // PR-C: the payment's public code, never its stored reference.
+    expect(byKey.get('bot.payment.expired')).toEqual({ reference: 'E6EXPRED' });
     expect(byKey.get('bot.payment.received_for_review')).toEqual({
-      reference: 'e6-claimed-ref',
+      reference: 'E6CHAMED',
     });
   });
 
-  it('FIX-02: quotes the PUBLIC code — never the stored `:manual`/`:topup`/`:gateway` reference — on every payment kind', async () => {
+  it('PR-C: quotes the PUBLIC code — never the stored `:manual`/`:topup`/`:gateway` reference — on every payment kind', async () => {
     const id = await customer(tenantA, '5091');
     const paymentRow = async (
       state: 'FAILED' | 'EXPIRED' | 'PENDING',
       method: 'MANUAL_TRANSFER' | 'GATEWAY',
       reference: string,
+      code: string,
     ) => {
       const paymentId = ctx.container.ids.uuid();
       await ctx.container.database.db.execute(sql`
         INSERT INTO payments (id, tenant_id, customer_id, method, state, amount, currency,
-                              reference, resolved_at, expires_at, gateway_provider)
+                              reference, resolved_at, expires_at, gateway_provider, code)
         VALUES (${paymentId}, ${tenantA.tenantId}, ${id}, ${method}, ${state}, 1000,
                 'IRT', ${reference}, ${state === 'PENDING' ? null : new Date()},
                 ${new Date(Date.now() + 3_600_000)},
-                ${method === 'GATEWAY' ? 'TONPAYS' : null})`);
+                ${method === 'GATEWAY' ? 'TONPAYS' : null}, ${code})`);
       return paymentId;
     };
-    const rejected = await paymentRow('FAILED', 'MANUAL_TRANSFER', 'aaaaaaaaaaaaaaa1:manual');
-    const expired = await paymentRow('EXPIRED', 'MANUAL_TRANSFER', 'aaaaaaaaaaaaaaa2:topup');
-    const claimed = await paymentRow('PENDING', 'MANUAL_TRANSFER', 'aaaaaaaaaaaaaaa3:manual');
-    const failed = await paymentRow('FAILED', 'GATEWAY', 'aaaaaaaaaaaaaaa4:gateway-topup');
+    const rejected = await paymentRow(
+      'FAILED',
+      'MANUAL_TRANSFER',
+      'aaaaaaaaaaaaaaa1:manual',
+      'AAAAAAA2',
+    );
+    const expired = await paymentRow(
+      'EXPIRED',
+      'MANUAL_TRANSFER',
+      'aaaaaaaaaaaaaaa2:topup',
+      'AAAAAAA3',
+    );
+    const claimed = await paymentRow(
+      'PENDING',
+      'MANUAL_TRANSFER',
+      'aaaaaaaaaaaaaaa3:manual',
+      'AAAAAAA4',
+    );
+    const failed = await paymentRow(
+      'FAILED',
+      'GATEWAY',
+      'aaaaaaaaaaaaaaa4:gateway-topup',
+      'AAAAAAA5',
+    );
     await enqueue(tenantA, id, 'PAYMENT_REJECTED', rejected);
     await enqueue(tenantA, id, 'PAYMENT_EXPIRED', expired);
     await enqueue(tenantA, id, 'PAYMENT_TRANSFER_RECORDED', claimed);
@@ -340,14 +366,14 @@ describe('the customer notification lane', () => {
     const byKey = new Map(sends.map((one) => [one.templateKey, one.values]));
     expect(byKey.get('bot.payment.rejected')).toEqual({
       reason: '\u2014',
-      reference: 'aaaaaaaaaaaaaaa1',
+      reference: 'AAAAAAA2',
     });
-    expect(byKey.get('bot.payment.expired')).toEqual({ reference: 'aaaaaaaaaaaaaaa2' });
+    expect(byKey.get('bot.payment.expired')).toEqual({ reference: 'AAAAAAA3' });
     expect(byKey.get('bot.payment.received_for_review')).toEqual({
-      reference: 'aaaaaaaaaaaaaaa3',
+      reference: 'AAAAAAA4',
     });
     // A gateway attempt's failure quotes the code its invoice carried.
-    expect(byKey.get('bot.payment.gateway_failed')).toEqual({ reference: 'aaaaaaaaaaaaaaa4' });
+    expect(byKey.get('bot.payment.gateway_failed')).toEqual({ reference: 'AAAAAAA5' });
   });
 
   it('a rate limit spends NO attempt and leaves the row claimable at Telegram’s time', async () => {

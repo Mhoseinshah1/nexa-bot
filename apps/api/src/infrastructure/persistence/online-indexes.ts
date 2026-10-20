@@ -26,8 +26,14 @@ import type { DatabaseHandle } from './database.js';
 export interface OnlineIndex {
   /** The index name. Also the recovery key, so it never changes casually. */
   readonly name: string;
-  /** Everything after `CREATE INDEX CONCURRENTLY <name>`. */
+  /** Everything after `CREATE [UNIQUE] INDEX CONCURRENTLY <name>`. */
   readonly definition: string;
+  /**
+   * `CREATE UNIQUE INDEX CONCURRENTLY` (PR-C, Codex review of #299): a key that must not take
+   * a SHARE lock on a large table inside the migrator's one transaction. A build that finds a
+   * duplicate leaves an INVALID index, which the validity check below refuses loudly.
+   */
+  readonly unique?: true;
 }
 
 export const ONLINE_INDEXES: readonly OnlineIndex[] = [
@@ -619,6 +625,47 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
     definition:
       'ON "services" USING btree ("tenant_id","state",COALESCE("original_started_at","created_at"),"id")',
   },
+  /*
+   * PR-C: the short public codes' per-tenant keys (Codex review of #299). Built here, not in
+   * 0262, because a plain CREATE UNIQUE INDEX on orders, payments, services and tickets would
+   * hold a SHARE lock on each for the whole migrator transaction while the outgoing release
+   * serves. Uniqueness does not wait for them: `nexa_assign_public_code` looks a candidate up
+   * before using it (a lookup, not this index), and the post-migration backfill runs only
+   * after these are valid, so its batches are refused on a duplicate and drawn again.
+   * `products` is small, but its number key is here too, so the five keys live in one place.
+   *
+   * The four code keys lead with the CODE: the trigger's collision lookup names the code alone,
+   * and this is the one index that can serve it, whatever the statistics say. Led by the
+   * tenant, the planner could serve that lookup from any other tenant-leading index on
+   * statistics older than a bulk insert into one tenant, and filter that tenant's every row on
+   * every insert. A read naming tenant and code binds both columns either way. The product
+   * number stays tenant-led: its trigger asks the tenant's `max(code_number)`.
+   */
+  {
+    name: 'orders_tenant_code_key',
+    definition: 'ON "orders" USING btree ("code","tenant_id")',
+    unique: true,
+  },
+  {
+    name: 'payments_tenant_code_key',
+    definition: 'ON "payments" USING btree ("code","tenant_id")',
+    unique: true,
+  },
+  {
+    name: 'services_tenant_code_key',
+    definition: 'ON "services" USING btree ("code","tenant_id")',
+    unique: true,
+  },
+  {
+    name: 'tickets_tenant_code_key',
+    definition: 'ON "tickets" USING btree ("code","tenant_id")',
+    unique: true,
+  },
+  {
+    name: 'products_tenant_code_number_key',
+    definition: 'ON "products" USING btree ("tenant_id","code_number")',
+    unique: true,
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */
@@ -740,7 +787,7 @@ async function buildIfNeeded(
   if (state === 'VALID') return;
   try {
     await client.query(
-      `CREATE INDEX CONCURRENTLY IF NOT EXISTS "${index.name}" ${index.definition}`,
+      `CREATE ${index.unique === true ? 'UNIQUE ' : ''}INDEX CONCURRENTLY IF NOT EXISTS "${index.name}" ${index.definition}`,
     );
   } catch (error) {
     // `IF NOT EXISTS` resolves at statement start, so two builders that

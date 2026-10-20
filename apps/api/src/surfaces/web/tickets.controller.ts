@@ -16,6 +16,7 @@ import {
   ticketPriorityRequestSchema,
   ticketReplyRequestSchema,
   ticketStatusRequestSchema,
+  ticketCodeOf,
   type TenantContext,
   type TicketAssigneesResponse,
   type TicketCategoryListResponse,
@@ -29,6 +30,7 @@ import {
   type TicketSummary,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
+import type { PublicLabels } from '../../modules/commerce/public-codes/application/public-labels.js';
 import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type {
@@ -36,6 +38,7 @@ import type {
   TicketListItem,
   TicketMessageListItem,
   TicketMessageRecord,
+  TicketRecord,
 } from '../../modules/commerce/tickets/application/ports.js';
 
 /**
@@ -74,8 +77,13 @@ export class TicketsController {
     });
     const page = items.slice(0, limit);
     const last = page[page.length - 1];
+    const labels = await this.labels(
+      scope,
+      actor,
+      page.map((item) => item.ticket),
+    );
     return {
-      tickets: page.map(toSummary),
+      tickets: page.map((item) => toSummary(item, labels)),
       nextCursor:
         items.length > limit && last !== undefined
           ? { at: last.ticket.createdAt.toISOString(), id: last.ticket.id }
@@ -105,7 +113,10 @@ export class TicketsController {
     const found = await this.container.tickets.detail(scope, actor, ticketId);
     const customer = found.customer;
     return {
-      ticket: { ...toSummary(found.item), origin: found.item.ticket.origin },
+      ticket: {
+        ...toSummary(found.item, await this.labels(scope, actor, [found.item.ticket])),
+        origin: found.item.ticket.origin,
+      },
       escalations: found.escalations.map((escalation) => ({
         conversationId: escalation.conversationId,
         // The handoff-reason follow-up to CX1: the old bundle's reason, the real one beside it.
@@ -295,6 +306,19 @@ export class TicketsController {
     return { ticket: toSummary(item), changed: result.changed };
   }
 
+  /** PR-C: the codes of the services, orders and payments a page of tickets links to. */
+  private labels(
+    scope: TenantContext,
+    actor: ReturnType<typeof adminActor>,
+    tickets: readonly TicketRecord[],
+  ): Promise<PublicLabels> {
+    return this.container.publicLabels.read(scope, actor, 'tickets.view', {
+      serviceIds: tickets.map((ticket) => ticket.serviceId),
+      orderIds: tickets.map((ticket) => ticket.orderId),
+      paymentIds: tickets.map((ticket) => ticket.paymentId),
+    });
+  }
+
   private async authenticate(
     request: FastifyRequest,
     options: { write?: boolean } = {},
@@ -326,10 +350,16 @@ function displayNameOf(
   return name === '' ? null : name;
 }
 
-function toSummary(item: TicketListItem): TicketSummary {
+function toSummary(item: TicketListItem, labels: PublicLabels | null = null): TicketSummary {
   const { ticket } = item;
   return {
     id: ticket.id,
+    code: ticketCodeOf(ticket),
+    serviceCode:
+      ticket.serviceId === null ? null : (labels?.services.get(ticket.serviceId) ?? null),
+    orderCode: ticket.orderId === null ? null : (labels?.orders.get(ticket.orderId) ?? null),
+    paymentCode:
+      ticket.paymentId === null ? null : (labels?.payments.get(ticket.paymentId) ?? null),
     source: ticket.source,
     number: ticket.number,
     status: ticket.status,

@@ -166,9 +166,9 @@ describe('the commission ledger', () => {
     expect(within(row).getByText('واریز شده')).toBeInTheDocument();
     // The scope the commission was promised under, frozen on the row.
     expect(within(row).getByText('فقط نخستین سفارش پرداخت‌شده')).toBeInTheDocument();
-    expect(within(row).getByText(ORDER_ID.slice(0, 8)).closest('a')?.getAttribute('href')).toBe(
-      `/orders/${ORDER_ID}`,
-    );
+    // PR-C: the order is a link and «کپی شناسه», never a uuid prefix.
+    expect(row.querySelector(`a[href="/orders/${ORDER_ID}"]`)).not.toBeNull();
+    expect(row.textContent).not.toContain(ORDER_ID.slice(0, 8));
     // Nothing went uncovered, so nothing is said about it.
     expect(screen.queryByText(/هرگز از معرف مطالبه نمی‌شود/)).toBeNull();
   });

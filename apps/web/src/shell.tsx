@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { productCode, productCodeNumberFromSearch, publicCodeFromSearch } from '@nexa/contracts';
 import { fetchInfo } from './api/client';
 import { t, type WebKey } from './i18n/web.fa';
 import { navigate, useLinkHandler } from './router';
@@ -565,6 +566,54 @@ export function Topbar({
 /* ---------------------------------------------------------- command search --- */
 
 /**
+ * Round 4, PR-C: the command search also takes a short public code. An 8-character code may
+ * be an order's, a service's, a payment's or a ticket's — the alphabet does not say which —
+ * so it is offered as a search of each of those lists the operator can open; `P-102` is
+ * offered as a search of the products. Still navigation only: the list's own search, under
+ * the list's own permission, finds the record. Nothing is fetched here, and a list the
+ * sidebar does not draw for this operator is not offered.
+ */
+const CODE_SEARCH_TARGETS: readonly {
+  readonly path: string;
+  readonly param: string;
+  readonly label: WebKey;
+}[] = [
+  { path: '/orders', param: 'q', label: 'web.search_code_orders' },
+  { path: '/payments', param: 'q', label: 'web.search_code_payments' },
+  { path: '/services', param: 'q', label: 'web.search_code_services' },
+  { path: '/tickets', param: 'customer', label: 'web.search_code_tickets' },
+];
+
+export function codeSearchEntries(query: string, entries: readonly NavEntry[]): NavEntry[] {
+  const code = publicCodeFromSearch(query);
+  if (code !== null) {
+    return CODE_SEARCH_TARGETS.flatMap((target) => {
+      const entry = entries.find((one) => one.path === target.path);
+      if (entry === undefined) return [];
+      return [
+        {
+          ...entry,
+          id: `code:${target.path}`,
+          path: `${target.path}?${new URLSearchParams({ [target.param]: code }).toString()}`,
+          label: target.label,
+        },
+      ];
+    });
+  }
+  const productNumber = productCodeNumberFromSearch(query);
+  const products = entries.find((one) => one.path === '/products');
+  if (productNumber === null || products === undefined) return [];
+  return [
+    {
+      ...products,
+      id: 'code:/products',
+      path: `/products?${new URLSearchParams({ title: productCode(productNumber) }).toString()}`,
+      label: 'web.search_code_products',
+    },
+  ];
+}
+
+/**
  * Ctrl+K: go to any page this operator may see, by typing part of its name.
  *
  * Client-side over the SAME entries the sidebar draws — so it offers exactly
@@ -588,12 +637,16 @@ export function CommandSearch({
   const results = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (needle === '') return entries;
-    return entries.filter(
-      (entry) =>
-        t(entry.label).toLowerCase().includes(needle) ||
-        t(entry.group).toLowerCase().includes(needle) ||
-        entry.path.toLowerCase().includes(needle),
-    );
+    return [
+      // PR-C: a short public code goes straight to the lists it can name.
+      ...codeSearchEntries(query, entries),
+      ...entries.filter(
+        (entry) =>
+          t(entry.label).toLowerCase().includes(needle) ||
+          t(entry.group).toLowerCase().includes(needle) ||
+          entry.path.toLowerCase().includes(needle),
+      ),
+    ];
   }, [entries, query]);
 
   const go = (entry: NavEntry | undefined) => {
