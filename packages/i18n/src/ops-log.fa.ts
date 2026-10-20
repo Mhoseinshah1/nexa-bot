@@ -96,7 +96,7 @@ export const OPS_LOG_BODIES_FA = {
   'ops.log.report_summary':
     '📊 گزارش روز — {day}\n\n💰 فروش: {sales} {salesChange}\n🛒 خرید جدید: {newPurchases} (🥇 خرید اول: {firstPurchases})\n🔄 تمدید: {renewals}\n👥 کاربر جدید: {newCustomers}\n👤 کاربر فعال: {activeCustomers}\n🧪 تست: {trials}\n📶 سرویس فعال: {activeServices}\n⏰ بهترین ساعت: {bestHour}\n⚠️ خطاها: {errors}\n❌ پرداخت ناموفق: {failedPayments}\n🎫 تیکت باز: {openTickets}\n{cleanup}',
   'ops.log.report_financial':
-    '💵 مالی امروز — {day}\n\n🛒 خرید جدید: {newOrdersSum}\n🔄 تمدید: {renewalsSum}\n➕ حجم اضافه ({trafficCount}): {trafficSum}\n⏳ زمان اضافه ({timeCount}): {timeSum}\n━━━━━━━━━━━━━━\n📥 ناخالص: {gross}\n➖ بازگشت وجه ({refundsCount}): {refundsSum}\n➖ پورسانت ({commissionCount}): {commissionSum}\n➖ هدیهٔ شارژ: {giftSum}\n✅ خالص: {net}\n\n💠 به تفکیک روش: {methods}',
+    '💵 مالی امروز — {day}\n\n🛒 خرید جدید: {newOrdersSum}\n🔄 تمدید: {renewalsSum}\n➕ حجم اضافه ({trafficCount}): {trafficSum}\n⏳ زمان اضافه ({timeCount}): {timeSum}\n🔧 سایر خریدها ({otherCount}): {otherSum}\n━━━━━━━━━━━━━━\n📥 ناخالص: {gross}\n➖ بازگشت وجه ({refundsCount}): {refundsSum}\n➖ پورسانت ({commissionCount}): {commissionSum}\n➖ هدیهٔ شارژ: {giftSum}\n✅ خالص: {net}\n\n💠 به تفکیک روش: {methods}',
   'ops.log.report_panels': '🖥 پنل‌ها و نماینده‌ها — {day}\n\n{panelsBlock}\n\n{resellersBlock}',
   'ops.log.backup_caption':
     '💾 بکاپ — {at}\n📦 {fileName} · {size}\n✅ رمزگذاری و بازیابی آزمایشی موفق\n🕒 بکاپ بعدی: {nextAt}\nSHA-256: {checksum}',

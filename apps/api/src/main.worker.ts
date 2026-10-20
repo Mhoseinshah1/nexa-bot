@@ -115,6 +115,10 @@ async function main(): Promise<void> {
         // customers are told nothing until their configuration stops working. Its
         // failure mode is silence, so it is health-checked rather than trusted.
         ['service-reminders', true, () => container.serviceReminderLoop.isFresh(now)],
+        // Round 4 PR-D: the nightly reports to the REPORTS topic. No flag on the loop: a
+        // pass reads the lane's own flag and the report switches inside and does nothing
+        // while they are off, so a stalled lane is visible whatever an operator switched.
+        ['nightly-reports', true, () => container.nightlyReportLoop.isFresh(now)],
         // WP-A9: pending-payment and wallet low-balance reminders. Always running — each
         // sweep reads its own flag inside its transaction and does nothing when it is off —
         // so a stalled loop is visible whatever an operator has switched on.
@@ -243,6 +247,9 @@ async function main(): Promise<void> {
   // And the reminder lane. Nothing here dials a panel: both halves read columns
   // `SYNC_USAGE` and the commercial actions already maintain.
   container.serviceReminderLoop.start();
+  // Round 4 PR-D: and the nightly reports, from the ledger and the orders, at the configured
+  // Tehran time.
+  container.nightlyReportLoop.start();
   // WP-A9: and the reminders that are not about a service — a payment about to lapse, a
   // wallet below its threshold. Both only enqueue; the lane below sends.
   container.customerReminderLoop.start();

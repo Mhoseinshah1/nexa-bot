@@ -220,6 +220,12 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
     label: 'اعلان تیکت‌ها به پشتیبانی',
     prefixes: ['ops.support.'],
   },
+  // Round 4 PR-D: the log types the owner reviewed one by one (Appendix L).
+  {
+    id: 'ops_log',
+    label: 'گزارش‌های گروه مدیریتی — نوع‌های گزارش',
+    prefixes: ['ops.log.'],
+  },
 ];
 
 /** Where a key no group claims is shown. Nothing registered today lands here. */
@@ -507,6 +513,113 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   unknownState: 'وضعیت نامشخص تلاش',
   eventId: 'شناسهٔ رخداد',
   // --- end FIX-04 opsevents ---
+  // --- Round 4 PR-D: the operations log group's tokens ---
+  orderCode: 'کد سفارش',
+  heading: 'عنوان پیام',
+  technical: 'خط فنی کوتاه',
+  retry: 'آیا تلاش دوباره کمک می‌کند',
+  impact: 'برای مشتری چه شد',
+  balanceBefore: 'موجودی کیف پول پیش از عملیات',
+  balanceAfter: 'موجودی کیف پول پس از عملیات',
+  serviceCode: 'کد سرویس',
+  adminName: 'نام ادمین',
+  ticketNumber: 'شمارهٔ تیکت',
+  snippet: 'دو خط اول پیام مشتری',
+  kindTitle: 'پرداخت برای چه بود',
+  fiatEquivalent: 'معادل دلاری',
+  cryptoRequested: 'مبلغ ارزی درخواستی',
+  cryptoPaid: 'مبلغ ارزی پرداخت‌شده',
+  cryptoReceived: 'مبلغ ارزی دریافتی نهایی',
+  providerStatus: 'وضعیت پرداخت نزد درگاه',
+  walletAddress: 'آدرس کیف پول درگاه',
+  providerPaymentId: 'شناسهٔ پرداخت نزد درگاه',
+  adminUsername: 'یوزرنیم ادمین',
+  adminTelegramId: 'شناسهٔ تلگرام ادمین',
+  referrerName: 'نام معرف',
+  referrerUsername: 'یوزرنیم معرف',
+  referrerTelegramId: 'شناسهٔ تلگرام معرف',
+  referrerPhone: 'شمارهٔ معرف',
+  buyerName: 'نام خریدار',
+  buyerUsername: 'یوزرنیم خریدار',
+  buyerTelegramId: 'شناسهٔ تلگرام خریدار',
+  buyerPhone: 'شمارهٔ خریدار',
+  orderTotal: 'مبلغ سفارش',
+  refereeName: 'نام زیرمجموعه',
+  refereeUsername: 'یوزرنیم زیرمجموعه',
+  refereeTelegramId: 'شناسهٔ تلگرام زیرمجموعه',
+  refereeBefore: 'موجودی زیرمجموعه پیش از هدیه',
+  refereeAfter: 'موجودی زیرمجموعه پس از هدیه',
+  referrerBefore: 'موجودی معرف پیش از واریز',
+  referrerAfter: 'موجودی معرف پس از واریز',
+  badges: 'برچسب‌های عنوان (اولین خرید، نماینده)',
+  phone: 'شمارهٔ تأییدشدهٔ مشتری',
+  duration: 'مدت',
+  panelName: 'نام پنل',
+  listPrice: 'قیمت محصول پیش از تخفیف',
+  usedBytes: 'حجم مصرف‌شده',
+  limitBefore: 'حجم کل پیش از عملیات',
+  expiresBefore: 'انقضای پیشین',
+  expiresAfter: 'انقضای جدید',
+  addedBytes: 'حجم اضافه‌شده',
+  limitAfter: 'حجم کل پس از عملیات',
+  addedDays: 'روزهای اضافه‌شده',
+  byWhom: 'درخواست از طرف',
+  rotations: 'تعداد تغییر لینک در ۳۰ روز',
+  blockType: 'نوع مسدودی',
+  until: 'مدت مسدودی',
+  targetUsername: 'یوزرنیم ادمین',
+  targetName: 'نام ادمین',
+  targetTelegramId: 'شناسهٔ تلگرام ادمین',
+  rolesBefore: 'نقش‌های پیشین',
+  rolesAfter: 'نقش‌های جدید',
+  permissions: 'تعداد مجوزها',
+  actorName: 'انجام‌دهنده',
+  tierBefore: 'سطح پیشین',
+  tierAfter: 'سطح جدید',
+  remainingBytes: 'حجم باقی‌مانده',
+  remainingTime: 'زمان باقی‌مانده',
+  lastConnection: 'آخرین اتصال',
+  users: 'تعداد کاربران',
+  since: 'از چه زمانی',
+  salesNote: 'وضعیت فروش',
+  downtime: 'مدت قطعی',
+  day: 'روز گزارش',
+  sales: 'فروش کل',
+  newPurchases: 'خریدهای جدید',
+  firstPurchases: 'خریدهای اول',
+  renewals: 'تعداد تمدیدها',
+  newCustomers: 'کاربران جدید',
+  trials: 'تعداد تست‌ها',
+  salesChange: 'تغییر نسبت به دیروز',
+  activeCustomers: 'کاربران فعال',
+  activeServices: 'سرویس‌های فعال',
+  bestHour: 'بهترین ساعت فروش',
+  errors: 'تعداد خطاها',
+  failedPayments: 'پرداخت‌های ناموفق',
+  openTickets: 'تیکت‌های باز',
+  cleanup: 'خط پاکسازی خودکار',
+  newOrdersSum: 'جمع خریدهای جدید',
+  renewalsSum: 'جمع تمدیدها',
+  trafficCount: 'تعداد خرید حجم اضافه',
+  trafficSum: 'جمع حجم اضافه',
+  timeCount: 'تعداد خرید زمان اضافه',
+  timeSum: 'جمع زمان اضافه',
+  gross: 'درآمد ناخالص',
+  refundsCount: 'تعداد بازگشت وجه',
+  refundsSum: 'جمع بازگشت وجه',
+  commissionCount: 'تعداد پورسانت',
+  commissionSum: 'جمع پورسانت',
+  giftSum: 'جمع هدیهٔ شارژ',
+  net: 'درآمد خالص',
+  otherCount: 'تعداد سایر خریدها',
+  otherSum: 'جمع سایر خریدها',
+  methods: 'تفکیک روش پرداخت',
+  panelsBlock: 'بخش پنل‌ها',
+  resellersBlock: 'بخش نماینده‌ها',
+  fileName: 'نام فایل بکاپ',
+  size: 'اندازهٔ فایل',
+  nextAt: 'زمان بکاپ بعدی',
+  checksum: 'اثر انگشت SHA-256',
 };
 
 /**
@@ -519,7 +632,6 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
 export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   Record<TemplateKey, Readonly<Record<string, string>>>
 > = {
-  'ops.notification.operational_event': { code: 'کد رخداد' },
   // B1: the product's own description, the one customer-facing text on the pre-invoice.
   'bot.order.preinvoice': { description: 'توضیح محصول برای مشتری' },
   'bot.channels.join_private_button': { number: 'شمارهٔ کانال در فهرست' },
@@ -630,8 +742,8 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.direct_message.text': { text: 'متن پیام اپراتور' },
   'bot.direct_message.media': { caption: 'توضیح عکس یا فایل' },
   'bot.incident.notice': { message: 'پیام اپراتور به مشتری' },
-  'ops.support.ticket_opened': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
-  'ops.support.customer_replied': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
+  'ops.support.ticket_opened': { category: 'موضوع تیکت' },
+  'ops.support.customer_replied': { category: 'موضوع تیکت' },
   // Round N: the broadcast wrapper and the two mass-action notices.
   'bot.broadcast.message': { message: 'متن پیام همگانی' },
   'bot.wallet.mass_credited': { amount: 'مبلغ شارژ همگانی' },
@@ -3390,7 +3502,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   // --- Operations group -------------------------------------------------------------
   'ops.notification.operational_event': [
     'گزارش رخداد عملیاتی',
-    'برای هر رخداد عملیاتی (مثل خطای پنل) به گروه اعلان‌های عملیاتی فرستاده می‌شود؛ رخداد تکراری یک بار و با تعداد تکرار.',
+    'برای هر رخداد عملیاتی (مثل خطای پنل) به تاپیک مربوط فرستاده می‌شود؛ عنوان فارسی از روی کد رخداد، یک خط فنی کوتاه و تعداد تکرار. رخداد تکراری یک بار می‌آید.',
   ],
   'ops.notification.test': [
     'پیام آزمایشی گروه عملیات',
@@ -3481,14 +3593,121 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'وقتی درخواست بازگشت وجه یک سرویس به نتیجهٔ نهایی می‌رسد: انجام‌شده، ردشده یا ناموفق.',
   ],
 
+  // --- Round 4 PR-D: the operations log group's log types ------------------------------
+  'ops.group.topic_name.users': [
+    'نام تاپیک کاربران',
+    'نامی که Nexa به تاپیک کاربران (کاربر جدید، مسدودی، تغییر سطح نماینده) می‌دهد.',
+  ],
+  'ops.group.topic_name.reports': [
+    'نام تاپیک گزارش‌ها',
+    'نامی که Nexa به تاپیک گزارش‌های شبانه می‌دهد.',
+  ],
+  'ops.log.payment_crypto': [
+    'گزارش مالی: پرداخت ارز دیجیتال',
+    'پس از تأیید پرداخت ارزی (NowPayments)؛ مبلغ سفارش، معادل دلاری، وضعیت درگاه، موجودی قبل و بعد و دکمه‌های کاربر و پرداخت.',
+  ],
+  'ops.log.wallet_adjusted': [
+    'گزارش مالی: افزایش یا کاهش دستی موجودی',
+    'وقتی ادمینی موجودی کاربری را کم یا زیاد می‌کند؛ ادمین، کاربر، مبلغ، موجودی قبل و بعد و دلیل.',
+  ],
+  'ops.log.referral_commission': [
+    'گزارش مالی: پورسانت معرف',
+    'وقتی پورسانت خرید یک زیرمجموعه به کیف پول معرف واریز می‌شود؛ هر دو طرف، سرویس خریداری‌شده و موجودی معرف قبل و بعد.',
+  ],
+  'ops.log.signup_gift': [
+    'گزارش مالی: هدیهٔ عضویت',
+    'وقتی هدیهٔ عضویت یک زیرمجموعه به کیف پول یکی از دو طرف واریز می‌شود؛ موجودی واقعی قبل و بعد برای هر طرف.',
+  ],
+  'ops.log.service_created': [
+    'گزارش سرویس: خرید جدید',
+    'پس از ساخته شدن سرویس روی پنل برای خریدی که با کارت، درگاه، استارز یا ارز پرداخت شده؛ برچسب اولین خرید و نماینده در عنوان.',
+  ],
+  'ops.log.service_created_wallet': [
+    'گزارش سرویس: خرید با موجودی کیف پول',
+    'مثل خرید جدید، اما پرداخت از کیف پول بوده و موجودی قبل و بعد نشان داده می‌شود.',
+  ],
+  'ops.log.service_renewed': [
+    'گزارش سرویس: تمدید',
+    'پس از تمدید موفق؛ مصرف پیش از تمدید و تاریخ انقضای قبل و بعد (دو تاریخ هرگز یکی نیستند).',
+  ],
+  'ops.log.traffic_added': [
+    'گزارش سرویس: حجم اضافه',
+    'پس از خرید موفق حجم اضافه؛ حجم اضافه‌شده و حجم کل قبل و بعد.',
+  ],
+  'ops.log.time_added': [
+    'گزارش سرویس: زمان اضافه',
+    'پس از خرید موفق زمان اضافه؛ روزهای اضافه‌شده و انقضای قبل و بعد.',
+  ],
+  'ops.log.link_changed': [
+    'گزارش سرویس: تغییر لینک',
+    'وقتی لینک اشتراک یک سرویس عوض می‌شود؛ چه کسی خواسته و چندمین بار در ۳۰ روز گذشته است.',
+  ],
+  'ops.log.trial_created': [
+    'گزارش سرویس: اکانت تست',
+    'وقتی اکانت تست روی پنل ساخته می‌شود؛ حجم، مدت و پنل.',
+  ],
+  'ops.log.user_new': [
+    'گزارش کاربران: کاربر جدید',
+    'وقتی کاربر تازه‌ای ربات را استارت می‌کند؛ با معرف، اگر با لینک دعوت آمده باشد.',
+  ],
+  'ops.log.user_blocked': [
+    'گزارش کاربران: مسدود یا رفع مسدودی',
+    'وقتی کاربری مسدود یا آزاد می‌شود؛ ادمین (یا خودکار)، دلیل، نوع و مدت مسدودی.',
+  ],
+  'ops.log.admin_changed': [
+    'گزارش امنیتی: تغییر ادمین',
+    'وقتی ادمینی اضافه، غیرفعال یا فعال می‌شود یا نقشش عوض می‌شود؛ نقش قبل و بعد و تعداد مجوزها.',
+  ],
+  'ops.log.reseller_changed': [
+    'گزارش کاربران: تغییر سطح نماینده',
+    'وقتی کاربری نماینده می‌شود، سطحش عوض می‌شود یا از نمایندگی خارج می‌شود.',
+  ],
+  'ops.log.service_alert': [
+    'گزارش سرویس: هشدار حجم یا زمان',
+    'برای هر سرویسی که مشتری دربارهٔ کم شدن حجم یا نزدیکی انقضایش پیام گرفته، یک پیام جدا؛ حجم باقی‌مانده «۰ بایت» نشان داده می‌شود، هرگز نامعتبر.',
+  ],
+  'ops.log.error_provision': [
+    'گزارش خطا: ساخت سرویس انجام نشد',
+    'وقتی سرویسِ خریداری‌شده روی پنل ساخته نمی‌شود؛ مشتری، علت فارسی، یک خط فنی کوتاه و اینکه برای مشتری چه شد.',
+  ],
+  'ops.log.error_operation': [
+    'گزارش خطا: تمدید، حجم، زمان یا تست انجام نشد',
+    'وقتی تمدید، خرید حجم یا زمان اضافه یا ساخت اکانت تست کامل نمی‌شود؛ نتیجهٔ نامشخص با ناموفق فرق دارد و پولی که برنگشته برگشت‌خورده معرفی نمی‌شود.',
+  ],
+  'ops.log.storm_rollup': [
+    'گزارش خطا: ادغام خطاهای تکراری',
+    'فقط وقتی «ادغام خطاهای تکراری» روشن باشد: خطاهای یکسانِ بیش از حد مجاز در یک بازه، یک‌جا.',
+  ],
+  'ops.log.panel_down': [
+    'گزارش پنل: قطع شدن پنل',
+    'وقتی پنلی از دسترس خارج می‌شود؛ علت، وضعیت فروش و زمان شروع.',
+  ],
+  'ops.log.panel_up': ['گزارش پنل: برگشت پنل', 'وقتی پنل برمی‌گردد؛ با مدت قطعی.'],
+  'ops.log.report_summary': [
+    'گزارش شبانه: خلاصه',
+    'هر شب در تاپیک گزارش‌ها؛ فروش، خرید و تمدید، کاربران، تست‌ها، تغییر نسبت به دیروز، بهترین ساعت و خط پاکسازی خودکار.',
+  ],
+  'ops.log.report_financial': [
+    'گزارش شبانه: مالی',
+    'هر شب؛ همهٔ ارقام از دفتر کیف پول و سفارش‌ها محاسبه می‌شود: ناخالص، بازگشت وجه، پورسانت، هدیهٔ شارژ و خالص.',
+  ],
+  'ops.log.report_panels': [
+    'گزارش شبانه: پنل‌ها و نماینده‌ها',
+    'هر شب؛ سفارش، فروش و گیگ فروخته‌شده به تفکیک پنل، وضعیت و ظرفیت پنل و خلاصهٔ نماینده‌ها.',
+  ],
+  'ops.log.backup_caption': [
+    'کپشن فایل بکاپ',
+    'زیر فایل رمزشدهٔ بکاپ در تاپیک بکاپ‌ها: زمان، نام و اندازهٔ فایل، نتیجهٔ بازیابی آزمایشی و زمان بکاپ بعدی.',
+  ],
+
   // --- Support tickets, to support ---------------------------------------------------
   'ops.support.ticket_opened': [
     'اعلان تیکت تازه به پشتیبانی',
-    'وقتی مشتری تیکت تازه ثبت می‌کند به مدیران پشتیبانی فرستاده می‌شود؛ شماره، موضوع و مشتری را می‌گوید و متن مشتری را هرگز.',
+    'وقتی مشتری تیکت تازه ثبت می‌کند در گروه و به مدیران پشتیبانی فرستاده می‌شود؛ شماره، موضوع، مشتری و دو خط اول پیام او.',
   ],
   'ops.support.customer_replied': [
     'اعلان پیام تازهٔ مشتری در تیکت',
-    'وقتی مشتری در تیکتی موجود می‌نویسد به مدیران پشتیبانی فرستاده می‌شود؛ متن مشتری را هرگز.',
+    'وقتی مشتری در تیکتی موجود می‌نویسد در گروه و به مدیران پشتیبانی فرستاده می‌شود؛ با دو خط اول پیام او.',
   ],
 
   // --- Round N: broadcast and mass actions ------------------------------------------
@@ -3507,7 +3726,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   // --- FIX-04 opsevents ---
   'ops.notification.payment_link_failed': [
     'گزارش خطای ساخت لینک پرداخت',
-    'وقتی درخواست ساخت پیش‌فاکتور یا لینک پرداخت از درگاه بی‌نتیجه بماند به تاپیک پرداخت‌های گروه گزارش‌ها فرستاده می‌شود؛ فقط یکی از خطوط «علت» نمایش داده می‌شود.',
+    'هر بار که درخواست ساخت پیش‌فاکتور یا لینک پرداخت از درگاه بی‌نتیجه بماند، یک پیام جدا در تاپیک خطاها: مشتری، علت فارسی، یک خط فنی کوتاه، آیا تلاش دوباره کمک می‌کند و برای مشتری چه شد.',
   ],
   // --- end FIX-04 opsevents ---
 };

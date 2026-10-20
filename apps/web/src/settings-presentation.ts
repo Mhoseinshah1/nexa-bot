@@ -216,6 +216,50 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'ops',
     control: { kind: 'integer', unit: 'web.unit_times' },
   },
+  // Round 4 PR-D. Drawn on «گروه گزارش‌های مدیریتی» (`SETTINGS_MANAGED_ELSEWHERE`); the
+  // entries exist because this map is total.
+  'ops.log.disabled_types': {
+    title: 'web.opslog_types_title',
+    description: 'web.opslog_types_hint',
+    group: 'ops',
+    control: { kind: 'text' },
+  },
+  'ops.log.storm_rollup_enabled': {
+    title: 'web.opslog_storm_enabled',
+    description: 'web.opslog_storm_enabled_hint',
+    group: 'ops',
+    control: {
+      kind: 'select',
+      options: [
+        { value: 'true', label: 'web.backup_schedule_on' },
+        { value: 'false', label: 'web.backup_schedule_off' },
+      ],
+    },
+  },
+  'ops.log.storm_threshold': {
+    title: 'web.opslog_storm_threshold',
+    description: 'web.opslog_storm_threshold_hint',
+    group: 'ops',
+    control: { kind: 'integer', unit: 'web.unit_messages' },
+  },
+  'ops.log.storm_window_minutes': {
+    title: 'web.opslog_storm_window',
+    description: 'web.opslog_storm_window_hint',
+    group: 'ops',
+    control: { kind: 'integer', unit: 'web.unit_minutes' },
+  },
+  'ops.log.nightly_report_time': {
+    title: 'web.opslog_report_time',
+    description: 'web.opslog_report_time_hint',
+    group: 'ops',
+    control: { kind: 'text' },
+  },
+  'ops.log.admin_base_url': {
+    title: 'web.opslog_admin_url',
+    description: 'web.opslog_admin_url_hint',
+    group: 'ops',
+    control: { kind: 'text' },
+  },
   'ops.notifications.max_per_minute': {
     title: 'web.setting_ops_max_per_minute',
     description: 'web.setting_ops_max_per_minute_desc',

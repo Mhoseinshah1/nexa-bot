@@ -120,6 +120,17 @@ export interface BackupServiceDeps {
    * open is recoverable, a closed one that should not be is not.
    */
   readonly conditionOpen?: (code: string) => Promise<boolean>;
+  /**
+   * Round 4 PR-D (log L31): the archive's caption as the operator's own template renders it
+   * (`ops.log.backup_caption`, edited in «متن‌ها»). Null — or a throw, or no renderer — falls
+   * back to `backupCaption`, so a caption that cannot be rendered never costs the delivery.
+   */
+  readonly renderCaption?: (facts: {
+    readonly at: Date;
+    readonly fileName: string;
+    readonly archiveBytes: number;
+    readonly checksum: string;
+  }) => Promise<string | null>;
 }
 
 /**
@@ -648,7 +659,21 @@ export class BackupService {
     }
 
     const { channel } = resolution;
-    const caption = backupCaption(input);
+    const filename = `nexa-backup-${input.id}.nxb`;
+    let caption = backupCaption(input);
+    if (this.deps.renderCaption !== undefined) {
+      try {
+        caption =
+          (await this.deps.renderCaption({
+            at: new Date(input.manifest.createdAt),
+            fileName: filename,
+            archiveBytes: input.archiveBytes,
+            checksum: input.manifest.checksum,
+          })) ?? caption;
+      } catch {
+        // The caption is a courtesy: the technical one stands and the archive is delivered.
+      }
+    }
     try {
       if (input.archiveBytes > BACKUP_TELEGRAM_DOCUMENT_MAX_BYTES) {
         // Too large for a bot to send. The group is TOLD — a notice, never a pretend
@@ -674,7 +699,7 @@ export class BackupService {
 
       const attempt = await channel.sendDocument({
         archivePath: input.archivePath,
-        filename: `nexa-backup-${input.id}.nxb`,
+        filename,
         caption,
       });
       return { state: attempt.state, detail: attempt.detail, attemptedAt };

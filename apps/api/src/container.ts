@@ -471,6 +471,14 @@ import { ServiceLogConsumer } from './modules/commerce/ops-log/application/servi
 import { AdminLogConsumer } from './modules/commerce/ops-log/application/admin-log.consumer.js';
 import { FailureLogConsumer } from './modules/commerce/ops-log/application/failure-log.consumer.js';
 import { OperationalEventPresenter } from './modules/commerce/ops-log/application/event-presenter.js';
+import { NightlyReportService } from './modules/commerce/ops-log/application/nightly-report.service.js';
+import {
+  NIGHTLY_REPORT_INTERVAL_MS,
+  NightlyReportLoop,
+} from './modules/commerce/ops-log/application/nightly-report-loop.js';
+import { DrizzleNightlyReportReader } from './modules/commerce/ops-log/infrastructure/drizzle-nightly-report.reader.js';
+import { IntlTimePeriodResolver } from './infrastructure/time/report-calendar.js';
+import { formatPersianInteger } from '@nexa/contracts';
 import { OperationLog } from './modules/commerce/ops-log/application/operation-log.js';
 import { ServiceAlertLog } from './modules/commerce/ops-log/application/service-alert-log.js';
 import type { OpsLogLane } from './modules/commerce/ops-log/application/ports.js';
@@ -956,6 +964,8 @@ export interface Container {
    * installation already maintains and neither dials a panel.
    */
   readonly serviceReminderLoop: ServiceReminderLoop;
+  /** Round 4 PR-D: the nightly reports (L27-L30), posted to the REPORTS topic. */
+  readonly nightlyReportLoop: NightlyReportLoop;
   /** The sweep itself, so a test runs one pass instead of starting a timer. */
   readonly serviceReminderSweep: ServiceReminderService;
   /**
@@ -4312,6 +4322,28 @@ export function createContainer(
     clock,
     ids,
   });
+  const nightlyReportLoop = new NightlyReportLoop(
+    new NightlyReportService({
+      uow,
+      scopeActivity: tenants,
+      reader: new DrizzleNightlyReportReader(database.db),
+      lane: opsLogLane,
+      words: i18nOpsLogWords,
+      settings: settingsResolver,
+      features: featureFlagResolver,
+      periods: new IntlTimePeriodResolver(clock),
+      clock,
+    }),
+    {
+      scope: () =>
+        installationTenantId === null
+          ? null
+          : { tenantId: installationTenantId, botInstanceId: null },
+      intervalMs: NIGHTLY_REPORT_INTERVAL_MS,
+      now: () => clock.now().getTime(),
+      logger,
+    },
+  );
   const serviceReminderLoop = new ServiceReminderLoop(serviceReminderSweep, {
     // The same per-pass closure the payment expiry loop uses, and for the same
     // reason: the installation's tenant is a row, so it is not known while this
@@ -6830,6 +6862,27 @@ export function createContainer(
     },
   });
   const backup = new BackupService({
+    // Round 4 PR-D (L31): the caption is the operator's template, short and in Persian, with
+    // the time of the next automatic backup when one is scheduled.
+    renderCaption: async (facts) => {
+      if (installationTenantId === null) return null;
+      const scope = { tenantId: installationTenantId, botInstanceId: null };
+      const schedule = await backupSchedule.effective();
+      const next = schedule.enabled ? new Date(facts.at.getTime() + schedule.intervalMs) : null;
+      const mebibytes = Math.max(1, Math.round(facts.archiveBytes / (1024 * 1024)));
+      return templateResolver.render(
+        scope,
+        'ops.log.backup_caption',
+        {
+          at: facts.at,
+          fileName: facts.fileName,
+          size: `${formatPersianInteger(mebibytes)} مگ`,
+          checksum: facts.checksum.slice(0, 16),
+          ...(next === null ? {} : { nextAt: next }),
+        },
+        'fa',
+      );
+    },
     runs: backupRuns,
     tools: backupTools,
     // The SAME keyring the secret cipher uses. One active key encrypts, every
@@ -7421,6 +7474,7 @@ export function createContainer(
     usernameLane,
     usernameNamespace: serviceUsernameRepository,
     serviceReminderLoop,
+    nightlyReportLoop,
     serviceReminderSweep,
     customerReminderLoop,
     pendingPaymentReminderSweep,
@@ -7959,6 +8013,7 @@ export function createContainer(
       await paymentExpiryLoop.stop();
       await gatewayPaymentLoop.stop();
       await serviceReminderLoop.stop();
+      await nightlyReportLoop.stop();
       await customerReminderLoop.stop();
       await campaignScheduleLoop.stop();
       await telegramMessageRetentionLoop.stop();

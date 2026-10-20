@@ -8,6 +8,7 @@ import type {
   TenantContext,
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import type { NightlyReportData } from './nightly-report.js';
 
 /**
  * Round 4 PR-D — what the operations log group's builders read and write.
@@ -367,4 +368,29 @@ export interface OpsLogLane {
     },
     tx?: unknown,
   ): Promise<unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// The nightly reports
+// ---------------------------------------------------------------------------
+
+/** One report day and the one before it, both half-open `[start, end)`. */
+export interface NightlyReportWindow {
+  readonly start: Date;
+  readonly end: Date;
+  readonly previousStart: Date;
+  readonly previousEnd: Date;
+  readonly currency: Money['currency'];
+  /** The IANA zone the «best hour» is read in. */
+  readonly timezone: string;
+}
+
+export interface NightlyReportReader {
+  /** Whether a notification under this dedupe key exists: the report was already queued. */
+  alreadyPosted(scope: TenantContext, dedupeKey: string, tx: TransactionScope): Promise<boolean>;
+  read(
+    scope: TenantContext,
+    window: NightlyReportWindow,
+    tx: TransactionScope,
+  ): Promise<Omit<NightlyReportData, 'day'>>;
 }
