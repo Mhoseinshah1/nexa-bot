@@ -14,10 +14,16 @@
 -- 2. `nexa_assign_public_code()` fills NEW.code on every INSERT whose writer left it NULL —
 --    the application, the one-time import, a fixture, and the release running beside this
 --    one during an update, none of which has to remember to ask. It looks the candidate up in
---    the tenant's rows of the same table and draws again on a collision (the retry), up to 16
---    times. `<table>_tenant_code_key` is the arbiter for the one race a lookup cannot see —
---    two transactions drawing the same code at once — which is a unique violation, never a
---    duplicate. A code a writer supplies (a restore) is kept as written.
+--    the same table — by code ALONE, across every tenant — and draws again on a collision (the
+--    retry), up to 16 times. Code alone is on purpose: `<table>_tenant_code_key` leads with
+--    the code, so it is the one index that can serve the lookup. A lookup naming the tenant
+--    too lets the planner, on statistics that predate a bulk insert into one tenant (an
+--    import, a fresh install), pick another tenant-leading index and filter every row of that
+--    tenant for each insert — quadratic, 20,000 payments in 40 s instead of 2. A code another
+--    tenant holds is drawn again too, which costs nothing. `<table>_tenant_code_key` is the
+--    arbiter for the one race a lookup cannot see — two transactions drawing the same code at
+--    once — which is a unique violation, never a duplicate. A code a writer supplies (a
+--    restore) is kept as written.
 -- 3. `nexa_assign_product_code()` gives a product the next per-tenant number (`P-101` first)
 --    under a per-tenant transaction advisory lock, so two concurrent creates cannot take one
 --    number, after numbering any of the tenant's older products still without one. The
@@ -52,9 +58,9 @@ BEGIN
   FOR attempt IN 1..16 LOOP
     candidate := nexa_public_code();
     EXECUTE format(
-      'SELECT EXISTS (SELECT 1 FROM %I.%I WHERE tenant_id = $1 AND code = $2)',
+      'SELECT EXISTS (SELECT 1 FROM %I.%I WHERE code = $1)',
       TG_TABLE_SCHEMA, TG_TABLE_NAME
-    ) INTO taken USING NEW.tenant_id, candidate;
+    ) INTO taken USING candidate;
     IF NOT taken THEN
       NEW.code := candidate;
       RETURN NEW;
