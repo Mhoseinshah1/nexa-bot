@@ -1245,6 +1245,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_check_button': '🔄 بررسی وضعیت پرداخت',
   'bot.payment.gateway_confirmed':
     '{icon:success} پرداخت شما توسط درگاه تأیید و ثبت شد.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_late_credited_screen':
+    '{icon:success} پرداخت شما با تأخیر توسط درگاه تأیید شد و مبلغ آن به کیف پول شما اضافه شد.\nاین پرداخت، سفارش را پرداخت نکرده است؛ از موجودی کیف پول می‌توانید برای خرید استفاده کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_failed':
     '{icon:error} پرداخت آنلاین شما توسط درگاه تأیید نشد و از این پرداخت مبلغی ثبت نشد.\n\nدر صورت تمایل می‌توانید دوباره پرداخت کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_unavailable':

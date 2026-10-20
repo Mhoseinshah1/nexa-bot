@@ -880,6 +880,8 @@ export class GatewayPaymentService {
         result === 'SETTLED' ||
         result === 'UNSUCCESSFUL' ||
         result === 'LATE' ||
+        // R5A item 4: a credited approval ends the attempt; its message must stop saying "unresolved".
+        result === 'CREDITED' ||
         result === 'REVIEW' ||
         result === 'HELD'
       ) {

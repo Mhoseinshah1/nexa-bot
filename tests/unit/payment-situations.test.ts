@@ -38,6 +38,7 @@ const base: PaymentSituationFacts = {
   resolvedByAdmin: false,
   receiptDisposition: null,
   invoiceCreation: null,
+  lateCredited: false,
   queues: [],
   refundOpen: false,
   refundCompleted: false,
@@ -62,6 +63,7 @@ const STATES_OF: Readonly<Record<PaymentSituation, readonly PaymentState[]>> = {
   MISMATCH: ['UNKNOWN'],
   PARTIAL: ['PENDING', 'UNKNOWN', 'FAILED', 'EXPIRED', 'CANCELLED'],
   LATE_COMPLETION: ['PENDING', 'UNKNOWN', 'FAILED', 'EXPIRED', 'CANCELLED'],
+  LATE_CREDITED: ['PENDING', 'UNKNOWN', 'FAILED', 'EXPIRED', 'CANCELLED'],
   CONFIRMED: ['CONFIRMED'],
   REFUND_IN_PROGRESS: ['CONFIRMED'],
   // A refund is money back on the wallet whether the payment confirmed or failed (OQ-TPTG-17).
@@ -118,6 +120,7 @@ function* everyFacts(): Generator<PaymentSituationFacts> {
                         resolvedByAdmin,
                         receiptDisposition,
                         invoiceCreation,
+                        lateCredited: false,
                         queues,
                         refundOpen,
                         refundCompleted,
@@ -156,6 +159,7 @@ describe('the payment situation classifier', () => {
         'LATE_COMPLETION',
         { method: 'GATEWAY', invoiceCreation: 'CREATED', queues: ['PENDING', 'LATE_COMPLETION'] },
       ],
+      ['LATE_CREDITED', { method: 'GATEWAY', lateCredited: true }],
       ['PROVIDER_REVIEW', { method: 'GATEWAY', providerReviewOpened: true }],
       ['OUTCOME_UNKNOWN', { state: 'UNKNOWN', method: 'GATEWAY' }],
       ['MISMATCH', { state: 'UNKNOWN', method: 'GATEWAY', queues: ['MISMATCH'] }],
@@ -398,5 +402,49 @@ describe('the payment situation classifier', () => {
         paymentSituationCode(facts({ state: 'UNKNOWN', method: 'GATEWAY', queues: [queue] })),
       ).toBe(plain);
     }
+  });
+});
+
+describe('R5A item 4: a late approval credited to the wallet', () => {
+  const credited = (state: PaymentState, over: Partial<PaymentSituationFacts> = {}) =>
+    paymentSituationOf(
+      facts({
+        state,
+        method: 'GATEWAY',
+        lateCredited: true,
+        refundRefusal: 'PAYMENT_NOT_SETTLED',
+        ...over,
+      }),
+    );
+
+  it.each(['PENDING', 'EXPIRED', 'UNKNOWN', 'FAILED'] as const)(
+    'reads %s as money already in the wallet — never awaiting, never "may pay again"',
+    (state) => {
+      const guide = credited(state);
+      expect(guide.situation).toBe('LATE_CREDITED');
+      expect(guide.money).toBe('TO_WALLET');
+      expect(guide.customer).toBe('NOTHING');
+      // It outranks the late-completion queue a stale invoice marker could still put it in.
+      expect(credited(state, { queues: ['LATE_COMPLETION'] }).situation).toBe('LATE_CREDITED');
+    },
+  );
+
+  it('leaves an UNKNOWN one a single exit — reconcile — and offers a settled one none', () => {
+    expect(credited('UNKNOWN').actions).toEqual(['RECONCILE']);
+    expect(credited('UNKNOWN').needsAction).toBe(true);
+    expect(credited('EXPIRED').actions).toEqual([]);
+    expect(credited('PENDING').needsAction).toBe(false);
+  });
+
+  it('is only the fact: without it the same payments read as before', () => {
+    expect(paymentSituationOf(facts({ state: 'PENDING', method: 'GATEWAY' })).situation).toBe(
+      'AWAITING_PAYMENT',
+    );
+    expect(paymentSituationOf(facts({ state: 'EXPIRED', method: 'GATEWAY' })).customer).toBe(
+      'MAY_PAY_AGAIN',
+    );
+    expect(paymentSituationOf(facts({ state: 'UNKNOWN', method: 'GATEWAY' })).money).toBe(
+      'POSSIBLY',
+    );
   });
 });

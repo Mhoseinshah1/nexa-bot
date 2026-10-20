@@ -34,6 +34,7 @@ import {
   GatewayPaymentService,
   gatewayCallbackUrl,
 } from '../../apps/api/src/modules/commerce/payments/application/gateway-payment.service';
+import { gatewayAttemptScreen } from '../../apps/api/src/surfaces/telegram/bot-runtime';
 import { settingsLateCreditPolicy } from '../../apps/api/src/modules/commerce/payments/application/late-credit-policy';
 import { CustomerNotificationService } from '../../apps/api/src/modules/commerce/messaging/application/customer-notification.service';
 import { DrizzleWalletRepository } from '../../apps/api/src/modules/commerce/wallet/infrastructure/drizzle-wallet.repository';
@@ -252,7 +253,11 @@ describe('a late gateway approval, credited to the wallet', () => {
   });
 
   /** The production lane's wiring: the same policy reader and the same credit path. */
-  function laneWith(fake: FakeTonPays, withLateCredit = true): GatewayPaymentService {
+  function laneWith(
+    fake: FakeTonPays,
+    withLateCredit = true,
+    invoiceScreens?: { refresh(scope: TenantContext, paymentId: string): Promise<void> },
+  ): GatewayPaymentService {
     const db = ctx.container.database.db;
     const adapter = new TonPaysAdapter({ fetch: fake.fetch });
     const origins = new DrizzlePublicOriginReader(db);
@@ -279,6 +284,7 @@ describe('a late gateway approval, credited to the wallet', () => {
       clock: { now: () => new Date(Date.now() + offsetMs) },
       ids: ctx.container.ids,
       logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+      ...(invoiceScreens === undefined ? {} : { invoiceScreens }),
       ...(withLateCredit
         ? {
             lateCredit: {
@@ -876,6 +882,120 @@ describe('a late gateway approval, credited to the wallet', () => {
     expect(await orderState(orderId)).toBe('AWAITING_PAYMENT');
     expect(await serviceCount()).toBe(0);
     expect(await walletTotal()).toBe(250_000n);
+  });
+
+  describe('Codex review: what an operator, the customer and the timeline see after a credit', () => {
+    const guideOf = async (paymentId: string) => {
+      const record = await ctx.container.payments.get(tenantA, owner, paymentId);
+      const read = await ctx.container.payments.situations(tenantA, owner, [record]);
+      return read.get(record.id)!.guide;
+    };
+    const credit = async (
+      paymentId: string,
+      invoice: Awaited<ReturnType<typeof invoiceOf>>,
+      invoiceId: string,
+    ) => {
+      tonpays.set(invoiceId, 'completed', true);
+      await webhook(invoice, 'completed', 'cx-1');
+      offsetMs += 6_000;
+      await pass();
+      expect(await walletTotal()).toBe(250_000n);
+    };
+
+    it('P1: a credited PENDING, then EXPIRED, payment is money in the wallet — never awaiting payment, never "pay again"', async () => {
+      const { paymentId, invoice, invoiceId } = await createdAttempt();
+      await pastDeadline(paymentId);
+      await credit(paymentId, invoice, invoiceId);
+      expect((await paymentOf(paymentId)).state).toBe('PENDING');
+      expect(await guideOf(paymentId)).toMatchObject({
+        situation: 'LATE_CREDITED',
+        money: 'TO_WALLET',
+        customer: 'NOTHING',
+      });
+      await ctx.container.paymentExpirySweep.runOnce(tenantA);
+      expect((await paymentOf(paymentId)).state).toBe('EXPIRED');
+      expect(await guideOf(paymentId)).toMatchObject({
+        situation: 'LATE_CREDITED',
+        money: 'TO_WALLET',
+        customer: 'NOTHING',
+      });
+    });
+
+    it('P1: a credited UNKNOWN payment is not "possibly paid, wait" — and still has its one exit', async () => {
+      const { paymentId, invoiceId } = await createdAttempt();
+      await ctx.container.uow.run(tenantA, (tx) =>
+        new DrizzlePaymentRepository(ctx.container.database.db).loseTrack(
+          tenantA,
+          paymentId,
+          ctx.container.clock.now(),
+          tx,
+        ),
+      );
+      tonpays.set(invoiceId, 'completed', true);
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = now() - interval '1 second' WHERE payment_id = ${paymentId}`,
+      );
+      await pass();
+      expect(await walletTotal()).toBe(250_000n);
+      expect(await guideOf(paymentId)).toMatchObject({
+        situation: 'LATE_CREDITED',
+        money: 'TO_WALLET',
+        customer: 'NOTHING',
+        actions: ['RECONCILE'],
+      });
+    });
+
+    it('P2: the customer’s invoice message is refreshed on a credit and no longer says unresolved', async () => {
+      const refreshed: string[] = [];
+      lane = laneWith(tonpays, true, {
+        refresh: async (_scope, id) => {
+          refreshed.push(id);
+        },
+      });
+      const { orderId, paymentId, invoice, invoiceId } = await createdAttempt();
+      // createdAttempt's own pass refreshed the ready invoice; only the credit's counts.
+      refreshed.length = 0;
+      await pastDeadline(paymentId);
+      await credit(paymentId, invoice, invoiceId);
+      expect(refreshed).toEqual([paymentId]);
+
+      const view = await ctx.container.gatewayPayments.attemptFor(tenantA, maryam, paymentId);
+      const screen = gatewayAttemptScreen(view!, orderId, new Date(Date.now() + 6 * 60_000));
+      expect(screen.key).toBe('bot.payment.gateway_late_credited_screen');
+      // No way to pay again is drawn on it.
+      expect(JSON.stringify(screen.buttons)).not.toContain('gc:');
+    });
+
+    it('P2: …and the same payment read UNKNOWN shows the credited screen, not the unresolved one', async () => {
+      const { orderId, paymentId, invoiceId } = await createdAttempt();
+      await ctx.container.uow.run(tenantA, (tx) =>
+        new DrizzlePaymentRepository(ctx.container.database.db).loseTrack(
+          tenantA,
+          paymentId,
+          ctx.container.clock.now(),
+          tx,
+        ),
+      );
+      tonpays.set(invoiceId, 'completed', true);
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = now() - interval '1 second' WHERE payment_id = ${paymentId}`,
+      );
+      await pass();
+      const view = await ctx.container.gatewayPayments.attemptFor(tenantA, maryam, paymentId);
+      expect(gatewayAttemptScreen(view!, orderId, new Date()).key).toBe(
+        'bot.payment.gateway_late_credited_screen',
+      );
+    });
+
+    it('P2: the notice is on the payment timeline', async () => {
+      const { paymentId, invoice, invoiceId } = await createdAttempt();
+      await pastDeadline(paymentId);
+      await credit(paymentId, invoice, invoiceId);
+      const view = await ctx.container.paymentTimeline.timeline(tenantA, owner, paymentId);
+      expect(
+        view.entries.map((e) => ('notificationKind' in e ? e.notificationKind : null)),
+      ).toContain('GATEWAY_LATE_PAYMENT_CREDITED');
+    });
   });
 
   describe('the operations log', () => {

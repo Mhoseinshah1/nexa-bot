@@ -17014,6 +17014,14 @@ export function gatewayAttemptScreen(
   });
   if (payment.state === 'CONFIRMED') return screen('bot.payment.gateway_confirmed', [], 'CLOSED');
   /*
+   * R5A item 4: the gateway approved after the payment closed and the amount went to the
+   * wallet. Decided BEFORE the unresolved / closed / failed screens below, which would all
+   * still tell this customer the payment is open, expired or lost. It offers no way to pay.
+   */
+  if (invoice.outcome === 'LATE_CREDITED') {
+    return screen('bot.payment.gateway_late_credited_screen', [], 'CLOSED');
+  }
+  /*
    * TonPays Telegram, the owner's review window (§8.1, §9.6.6), decided BEFORE the "closed"
    * test below: a payment whose receipt the provider is reviewing is not closed, and one
    * whose review ended unresolved has neither failed nor closed. Neither invites a new

@@ -2291,6 +2291,11 @@ export const WEB_FA = {
   'web.payment_situation_refund_in_progress': 'بازپرداخت در جریان',
   'web.payment_situation_refunded': 'بازپرداخت‌شده',
   'web.payment_situation_credited_to_wallet': 'واریز به کیف پول',
+  'web.payment_situation_late_credited': 'تأیید دیرهنگام — به کیف پول واریز شد',
+  'web.payment_situation_what_late_credited':
+    'درگاه پرداخت را پس از پایان مهلت تأیید کرد، استعلام درگاه آن را دوباره تأیید کرد و مبلغ همان‌جا به کیف پول مشتری واریز شد. سفارش پرداخت نشده است و سرویسی ساخته نشد.',
+  'web.payment_situation_safe_late_credited':
+    'به مشتری نگویید دوباره پرداخت کند: پول در کیف پول اوست و می‌تواند از همان برای خرید استفاده کند.',
   'web.payment_situation_rejected': 'ردشده توسط بازبین',
   'web.payment_situation_failed': 'ناموفق',
   'web.payment_situation_expired': 'منقضی‌شده',
