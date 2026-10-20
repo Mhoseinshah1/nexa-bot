@@ -168,6 +168,12 @@ export const OPS_LOG_TOPIC_ROUTES: readonly {
   // that is unusable, a hand-off owed (FIX-03, batch 2026-10-10; they used to fall through
   // to SYSTEM).
   { prefix: 'support.', category: 'BOT' },
+  // Round 4 PR-D: the customers' and the reports' topics. Their messages are posted by their
+  // own log types (`OPS_LOG_TYPES`), not by an operational event; the prefixes are reserved so
+  // an event recorded under one lands where an operator looks for it, not in SYSTEM.
+  { prefix: 'customer.', category: 'USERS' },
+  { prefix: 'reseller.', category: 'USERS' },
+  { prefix: 'report.', category: 'REPORTS' },
   // Failures nobody anticipated: an unhandled exception, an error the API answered.
   { prefix: 'internal.', category: 'ERRORS' },
   { prefix: 'http.', category: 'ERRORS' },

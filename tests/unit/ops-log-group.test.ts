@@ -19,12 +19,17 @@ import {
 } from '../../apps/api/src/infrastructure/telegram/send-message';
 import {
   DETAIL_KEYS,
-  OPERATIONAL_MESSAGE_BUDGET,
   TELEGRAM_MESSAGE_MAX,
   boundedForTelegram,
   operationalEventDetails,
+  technicalOf,
 } from '../../apps/api/src/modules/control/notifications/application/event-details';
-import { CATALOGUE_FA, escapeTelegramHtml, renderTemplateBody } from '@nexa/i18n';
+import {
+  CATALOGUE_FA,
+  DEFAULT_TEMPLATE_PRESENTATION,
+  escapeTelegramHtml,
+  renderTemplateBody,
+} from '@nexa/i18n';
 import { templateDefinition } from '@nexa/contracts';
 import {
   hashOpsConnectCode,
@@ -277,9 +282,9 @@ describe('what Telegram refusals mean', () => {
 });
 
 describe('the rendered event fits one Telegram message (Codex review #1 of PR #99)', () => {
-  it('renders a maximal event under 4096 characters, code and correlation id intact', () => {
-    // Every allowed key at its longest, in the character that escapes worst (`&` is five).
-    const context = Object.fromEntries(DETAIL_KEYS.map((key) => [key, '&'.repeat(500)]));
+  it('renders a maximal event under 4096 characters, titled in Persian with a short technical line', () => {
+    // Every allowed key at its longest, in a character that is not an id.
+    const context = Object.fromEntries(DETAIL_KEYS.map((key) => [key, 'x'.repeat(500)]));
     const details = operationalEventDetails(context);
     expect(details).toMatch(/… \(\+\d+ more\)$/);
     const rendered = renderTemplateBody(
@@ -287,21 +292,22 @@ describe('the rendered event fits one Telegram message (Codex review #1 of PR #9
       CATALOGUE_FA['ops.notification.operational_event'],
       {
         severity: 'CRITICAL',
-        code: 'payments.gateway_create_unknown',
-        message: boundedForTelegram('<'.repeat(10_000), OPERATIONAL_MESSAGE_BUDGET),
+        heading: 'نتیجهٔ ساخت پرداخت در درگاه نامعلوم است',
+        technical: technicalOf('payments.gateway_create_unknown', 'x'.repeat(10_000)),
         occurrences: 123456,
         firstSeenAt: new Date('2026-09-01T10:00:00Z'),
         lastSeenAt: new Date('2026-09-01T11:00:00Z'),
-        tenantId: '01900000-0000-7000-8000-000000000001',
-        botInstanceId: '01900000-0000-7000-8000-00000000a001',
-        correlationId: boundedForTelegram('c'.repeat(500), 100),
         ...(details ? { details } : {}),
       },
+      'fa',
+      DEFAULT_TEMPLATE_PRESENTATION,
     );
     expect(rendered.length).toBeLessThan(TELEGRAM_MESSAGE_MAX);
+    // The title is Persian and the code is the technical line; no id line, no tenant, no bot.
+    expect(rendered).toContain('نتیجهٔ ساخت پرداخت در درگاه نامعلوم است');
     expect(rendered).toContain('payments.gateway_create_unknown');
     expect(rendered).toContain('CRITICAL');
-    expect(rendered).toContain('c'.repeat(90));
+    expect(rendered).not.toMatch(/مستأجر|شناسه همبستگی|🏢|🤖/u);
   });
 
   it('cuts text by its escaped length and says it did', () => {

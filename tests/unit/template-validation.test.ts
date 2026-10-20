@@ -222,12 +222,17 @@ describe('renderTemplateBody', () => {
     // The body's markup is the administrator's; the value is an event message
     // and must not be able to close a tag. An unescaped `<` fails the parse,
     // and the notification that fails is the one telling somebody about it.
+    // `bot.service.subscription` is the one HTML-format key a value reaches: the link is
+    // rendered in <code>. (The operational event was HTML until Round 4 PR-D made it plain
+    // text, so that no value in the operations log needs escaping.)
     const rendered = renderTemplateBody(
-      templateDefinition('ops.notification.operational_event'),
-      '<code>{code}</code> {message}',
-      { severity: 'ERROR', code: 'x', message: 'panel <b>down</b> & unreachable' },
+      templateDefinition('bot.service.subscription'),
+      '<code>{subscriptionUrl}</code>',
+      { subscriptionUrl: 'https://x.example/sub?a=<b>down</b>&c=d' },
     );
-    expect(rendered).toBe('<code>x</code> panel &lt;b&gt;down&lt;/b&gt; &amp; unreachable');
+    expect(rendered).toBe(
+      '<code>https://x.example/sub?a=&lt;b&gt;down&lt;/b&gt;&amp;c=d</code>',
+    );
   });
 
   it('does not escape in a plain-text template', () => {
