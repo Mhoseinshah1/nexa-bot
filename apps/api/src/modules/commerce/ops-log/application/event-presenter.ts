@@ -19,6 +19,10 @@ import {
 } from '../../../platform/opslog/application/error-events.js';
 import type { OpsLogFacts, OpsLogWords } from './ports.js';
 import { identityOf, technicalLine } from './presenters.js';
+import {
+  PROVISIONING_STALLED_CODE,
+  REFUND_ANSWERS,
+} from '../../provisioning/application/provisioner.service.js';
 import type {
   OpsEventPresenter,
   PresentedOpsEvent,
@@ -64,6 +68,12 @@ export class OperationalEventPresenter implements OpsEventPresenter {
 
   projectsEveryOccurrence(code: string): boolean {
     return everyOccurrenceIsAMessage(code);
+  }
+
+  suppresses(input: OperationalEventInput): boolean {
+    return (
+      input.code === PROVISIONING_STALLED_CODE && input.context?.['answeredBy'] === REFUND_ANSWERS
+    );
   }
 
   title(code: string): string {

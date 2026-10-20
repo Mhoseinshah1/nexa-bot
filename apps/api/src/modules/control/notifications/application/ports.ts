@@ -542,6 +542,13 @@ export interface OpsEventPresenter {
    * that opens or reopens its condition (Round 4 PR-D: «every error is its own message»).
    */
   projectsEveryOccurrence(code: string): boolean;
+  /**
+   * Whether this event's own message is not posted because another message already says it
+   * (R5A item 2: a paid service refunded because it could not be created is reported once,
+   * by the refund's error report, never also by the generic line). The event is still
+   * recorded; only its projection is skipped.
+   */
+  suppresses?(input: OperationalEventInput): boolean;
   /** The Persian title of an event code; never the raw code. */
   title(code: string): string;
   /** The Persian name of a severity class. */
