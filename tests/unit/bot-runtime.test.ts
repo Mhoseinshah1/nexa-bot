@@ -880,6 +880,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
        */
       'bot.payment.gateway_invoice_order_fee',
       'bot.payment.gateway_invoice_topup_fee',
+      // R5A item 4: the invoice message of a payment whose late approval went to the wallet.
+      'bot.payment.gateway_late_credited_screen',
       /*
        * F3 (round N): the gateway reported the invoice created without a link that can be
        * opened. Says only that, that nothing was recorded as paid, and that the customer may
