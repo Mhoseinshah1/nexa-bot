@@ -476,6 +476,8 @@ export const OPS_LOG_TEMPLATES = [
     [
       ...req('severity', 'heading', 'technical'),
       ...opt('details', 'occurrences', 'firstSeenAt', 'lastSeenAt'),
+      // Kept so an override written before Round 4 (`{code}`, `{message}`) still saves and renders.
+      ...opt('code', 'message'),
     ],
   ),
   logTemplate(
