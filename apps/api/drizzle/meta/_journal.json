@@ -1870,6 +1870,13 @@
       "when": 1792467544076,
       "tag": "0266_legacy_history_compaction_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 267,
+      "version": "7",
+      "when": 1792496757984,
+      "tag": "0267_late_gateway_credit",
+      "breakpoints": true
     }
   ]
 }
