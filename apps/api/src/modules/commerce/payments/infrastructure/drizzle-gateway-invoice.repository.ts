@@ -1084,6 +1084,27 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     return rows.length > 0;
   }
 
+  async markLateCredited(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(gatewayInvoices)
+      .set({ outcome: 'LATE_CREDITED', outcomeAt: now, nextInquiryAt: null, updatedAt: now })
+      .where(
+        and(
+          eq(gatewayInvoices.tenantId, tenantId),
+          eq(gatewayInvoices.paymentId, paymentId),
+          or(isNull(gatewayInvoices.outcome), eq(gatewayInvoices.outcome, 'LATE_COMPLETION')),
+        ),
+      )
+      .returning({ paymentId: gatewayInvoices.paymentId });
+    return rows.length > 0;
+  }
+
   async markLateCompletion(
     scope: TenantContext,
     paymentId: PaymentId,

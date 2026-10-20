@@ -113,9 +113,13 @@ function mismatchHoldAudit(): SQL {
  * The durable marker as well as the outcome (review of PR #243, CX1): an attempt the
  * provider refused first (UNSUCCESSFUL) and approved later keeps its first outcome, and only
  * `late_completion_observed_at` says the money arrived. `gi` is the invoice.
+ *
+ * R5A item 4: not once the late approval was CREDITED to the wallet (`LATE_CREDITED`, which may
+ * overwrite an earlier `LATE_COMPLETION` outcome): nobody has anything left to decide.
  */
 function lateCompletionInvoice(): SQL {
-  return sql`(gi.outcome = 'LATE_COMPLETION' OR gi.late_completion_observed_at IS NOT NULL)`;
+  return sql`(gi.outcome = 'LATE_COMPLETION'
+    OR (gi.late_completion_observed_at IS NOT NULL AND gi.outcome IS DISTINCT FROM 'LATE_CREDITED'))`;
 }
 
 function providerErrorInvoice(): SQL {

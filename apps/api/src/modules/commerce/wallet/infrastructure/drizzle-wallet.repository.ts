@@ -332,7 +332,11 @@ export class DrizzleWalletRepository implements WalletRepository {
     paymentId: string,
     reasons: readonly Extract<
       LedgerReason,
-      'TOPUP_RECEIPT' | 'TOPUP_GATEWAY' | 'CASHBACK_TOPUP' | 'RECEIPT_CREDIT'
+      | 'TOPUP_RECEIPT'
+      | 'TOPUP_GATEWAY'
+      | 'CASHBACK_TOPUP'
+      | 'RECEIPT_CREDIT'
+      | 'GATEWAY_LATE_CREDIT'
     >[],
     tx?: unknown,
   ): Promise<Money | null> {

@@ -82,6 +82,11 @@ import {
   sanitizedErrorCode,
 } from '../../../platform/opslog/application/error-events.js';
 import { GatewayInquiryHealth } from './gateway-inquiry-health.js';
+import {
+  lateCreditPollAt,
+  lateCreditPollingOpen,
+  type LateCreditPolicy,
+} from '../domain/late-credit.js';
 
 /**
  * Operational codes this lane raises. Declared beside their producer, and each is part
@@ -429,6 +434,17 @@ export interface GatewayPaymentServiceDeps {
   /** FIX10 R1: `GATEWAY_ROW_BOUND_MS` from the configured timeouts; the default otherwise. */
   readonly rowBoundMs?: number;
   /**
+   * R5A item 4: crediting a route's verified LATE approval to the customer's wallet. Absent,
+   * a late approval is recorded as a late completion and nothing else, exactly as before
+   * this existed. `policyFor` is the route's switch and the polling window (the lane's
+   * scheduling reads it); `credit` is `PaymentService.creditLateGatewayApproval`, which
+   * decides again under the payment's lock — the switch included.
+   */
+  readonly lateCredit?: {
+    policyFor(scope: TenantContext, provider: PaymentGatewayProvider): Promise<LateCreditPolicy>;
+    credit: PaymentService['creditLateGatewayApproval'];
+  };
+  /**
    * FIX-03 (batch 2026-10-10): the per-gateway count of failed inquiries behind
    * `payments.gateway_inquiry_failing`. Absent, the defaults (`GatewayInquiryHealth`).
    */
@@ -445,6 +461,8 @@ export interface GatewayPassReport {
   readonly settled: number;
   readonly unsuccessful: number;
   readonly lateCompletions: number;
+  /** R5A item 4: late approvals credited to a wallet this pass. */
+  readonly lateCredits: number;
   readonly budgetExhausted: boolean;
   /** TonPays Telegram: payments whose review lapsed (UNKNOWN), card changes, receipts. */
   readonly reviewsLapsed: number;
@@ -574,6 +592,7 @@ export class GatewayPaymentService {
       settled: 0,
       unsuccessful: 0,
       lateCompletions: 0,
+      lateCredits: 0,
       budgetExhausted: false,
       reviewsLapsed: 0,
       cardChanges: 0,
@@ -853,6 +872,7 @@ export class GatewayPaymentService {
       if (result === 'SETTLED') report.settled += 1;
       if (result === 'UNSUCCESSFUL') report.unsuccessful += 1;
       if (result === 'LATE') report.lateCompletions += 1;
+      if (result === 'CREDITED') report.lateCredits += 1;
       if (result === 'REVIEW') report.reviewsOpened += 1;
       if (result === 'HELD') report.held += 1;
       // R2: an attempt that settled or ended is shown so on the message that shows it.
@@ -870,6 +890,7 @@ export class GatewayPaymentService {
         result === 'SETTLED' ||
         result === 'UNSUCCESSFUL' ||
         result === 'LATE' ||
+        result === 'CREDITED' ||
         result === 'HELD'
       ) {
         await this.settlementDecided(scope, claimed.invoice.paymentId);
@@ -1382,7 +1403,16 @@ export class GatewayPaymentService {
      */
     leaseUntil: Date,
   ): Promise<
-    'OPEN' | 'SETTLED' | 'UNSUCCESSFUL' | 'LATE' | 'ERROR' | 'BUDGET' | 'REVIEW' | 'HELD' | 'LOST'
+    | 'OPEN'
+    | 'SETTLED'
+    | 'UNSUCCESSFUL'
+    | 'LATE'
+    | 'CREDITED'
+    | 'ERROR'
+    | 'BUDGET'
+    | 'REVIEW'
+    | 'HELD'
+    | 'LOST'
   > {
     const { invoice } = claimed;
     const now = this.deps.clock.now();
@@ -1415,6 +1445,23 @@ export class GatewayPaymentService {
       invoice.lateCompletionObservedAt === null;
     const postDeadlineBound =
       POST_DEADLINE_INQUIRY_MAX + (approvalUndecided ? GATEWAY_DECISION_RETRY_MAX : 0);
+    /*
+     * R5A item 4: with the route's late-credit switch ON, a closed payment's open invoice keeps
+     * being asked about, slowly, until the window ends — so the ordinary post-deadline bound
+     * does not stop it while that window is open. Off (or not wired), nothing below differs
+     * from before this existed.
+     */
+    const lateCredit = await this.lateCreditPolicy(scope, invoice.provider);
+    const lateWindowOpen =
+      postDeadline &&
+      lateCredit.enabled &&
+      invoice.outcome === null &&
+      lateCreditPollingOpen({
+        state: paymentState,
+        now,
+        deadline: expiresAt,
+        windowMs: lateCredit.windowMs,
+      });
 
     /*
      * A provider that PUSHES its payments (Stars) is never asked. Its row is due only
@@ -1441,7 +1488,10 @@ export class GatewayPaymentService {
       invoiceId === null ||
       adapter === null ||
       apiKey === null ||
-      (postDeadline && invoice.postDeadlineInquiries >= postDeadlineBound && !operatorAsked)
+      (postDeadline &&
+        invoice.postDeadlineInquiries >= postDeadlineBound &&
+        !operatorAsked &&
+        !lateWindowOpen)
     ) {
       // Nothing that could be asked, or nothing more to ask. Stop scheduling.
       const kept = await this.deps.uow.run(scope, (tx) =>
@@ -1480,9 +1530,18 @@ export class GatewayPaymentService {
      * FIX-06: a scheduled inquiry may not take the top quarter of the provider's inquiry
      * budget; a hinted one may. The budget itself is the provider's, unchanged.
      */
+    const scheduledLimit =
+      adapter.inquiryBudgetPerMinute - hintReservePerMinute(adapter.inquiryBudgetPerMinute);
+    /*
+     * R5A item 4: a late poll is the LOWEST priority question this lane asks — nobody is waiting
+     * on it — so it may use at most half of the scheduled share of the minute. The rows a
+     * customer is waiting behind keep the rest, and the provider's total is unchanged.
+     */
     const inquiryLimit = this.isHinted(claimed)
       ? adapter.inquiryBudgetPerMinute
-      : adapter.inquiryBudgetPerMinute - hintReservePerMinute(adapter.inquiryBudgetPerMinute);
+      : lateWindowOpen
+        ? Math.max(1, Math.floor(scheduledLimit / 2))
+        : scheduledLimit;
     if (!(await this.deps.budget.take(scope, invoice.provider, inquiryLimit, now))) {
       await this.deps.uow.run(scope, (tx) =>
         this.deps.invoices.requestInquiry(
@@ -1538,6 +1597,26 @@ export class GatewayPaymentService {
             (ms) => jitteredMs(ms, invoice.paymentId, invoice.inquiryAttempts + 1),
           )
         : this.nextInquiryAt(invoice, at, expiresAt);
+    /*
+     * R5A item 4: where the normal schedule ends (the deadline), the slow late poll begins and
+     * continues — 5 minutes, then 15, then hourly — until the window closes. Only for an
+     * undecided invoice of a payment that is not closed for good, and only while the route's
+     * switch is on; the first one is scheduled by the last inquiry inside the deadline.
+     */
+    const lateNext =
+      lateCredit.enabled && invoice.outcome === null && expiresAt !== null
+        ? lateCreditPollAt({
+            at,
+            paymentId: invoice.paymentId,
+            step: invoice.postDeadlineInquiries + (postDeadline ? 1 : 0),
+            deadline: expiresAt,
+            windowMs: lateCredit.windowMs,
+          })
+        : null;
+    const lateNextAllowed =
+      paymentState === 'CONFIRMED' || paymentState === 'FAILED' || paymentState === 'CANCELLED'
+        ? null
+        : lateNext;
 
     if (outcome.kind !== 'OBSERVED') {
       const retry =
@@ -1560,7 +1639,7 @@ export class GatewayPaymentService {
       const nextInquiryAt =
         scheduled === null && approvalUndecided
           ? new Date(at.getTime() + RECORDED_OUTCOME_RETRY_MS)
-          : scheduled;
+          : (scheduled ?? lateNextAllowed);
       const kept = await this.deps.uow.run(scope, (tx) =>
         this.deps.invoices.recordInquiry(
           scope,
@@ -1708,7 +1787,7 @@ export class GatewayPaymentService {
             (verdict === 'APPROVED' ||
             (verdict === 'MISMATCH' && !eligible && paymentState !== 'UNKNOWN')
               ? new Date(at.getTime() + RECORDED_OUTCOME_RETRY_MS)
-              : null),
+              : lateNextAllowed),
           postDeadline,
           // The payment this identity-checked answer described (NOWPayments): followed next.
           hintedPaymentId: outcome.providerPaymentId ?? null,
@@ -1803,6 +1882,8 @@ export class GatewayPaymentService {
         ),
         dueAt: invoice.nextInquiryAt,
       },
+      // What the late-credit decision compares: the provider's echo of the amount Nexa sent.
+      { providerRequestAmount: outcome.requestAmount },
     );
   }
 
@@ -1888,7 +1969,13 @@ export class GatewayPaymentService {
       trigger: 'SCHEDULED',
       dueAt: invoice.nextInquiryAt,
     },
-  ): Promise<'SETTLED' | 'LATE' | 'ERROR' | 'HELD'> {
+    /**
+     * R5A item 4: set only by the INQUIRY path, whose answer re-verified the approval. A late
+     * approval is offered to the wallet credit with it; a recorded payment (Stars) passes none
+     * and is never credited this way.
+     */
+    lateCreditInput: { readonly providerRequestAmount: bigint | null } | null = null,
+  ): Promise<'SETTLED' | 'LATE' | 'CREDITED' | 'ERROR' | 'HELD'> {
     /*
      * FIX10 BUG-2: EVERY approval goes to the settlement path, whatever the caller's snapshot
      * said about eligibility. Only its answer, taken under the payment's lock, decides whether
@@ -1967,8 +2054,116 @@ export class GatewayPaymentService {
             ? 'HELD'
             : 'ERROR';
         }
+        if (
+          lateCreditInput !== null &&
+          (confirmation.reason === 'DEADLINE_PASSED' ||
+            confirmation.reason === 'PAYMENT_NOT_PENDING')
+        ) {
+          const credited = await this.creditLateApproval(
+            scope,
+            actor,
+            invoice,
+            evidenceNote,
+            lateCreditInput.providerRequestAmount,
+          );
+          if (credited.kind === 'CREDITED') return 'CREDITED';
+          if (credited.kind === 'ERROR') return 'ERROR';
+          await this.lateCompletion(scope, actor, invoice, credited.reason ?? confirmation.reason);
+          return 'LATE';
+        }
         await this.lateCompletion(scope, actor, invoice, confirmation.reason);
         return 'LATE';
+    }
+  }
+
+  /**
+   * R5A item 4: the policy of a route's late credit — its switch and the polling window — or
+   * OFF when the lane has no late-credit collaborator, the route names no switch, or the
+   * settings cannot be read (a read that fails never turns a credit ON). Never throws.
+   */
+  private async lateCreditPolicy(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+  ): Promise<LateCreditPolicy> {
+    const off: LateCreditPolicy = { enabled: false, windowMs: 0 };
+    if (
+      this.deps.lateCredit === undefined ||
+      PAYMENT_GATEWAY_DESCRIPTORS[provider].lateCreditSetting === null
+    ) {
+      return off;
+    }
+    try {
+      return await this.deps.lateCredit.policyFor(scope, provider);
+    } catch (error: unknown) {
+      this.deps.logger.error(
+        { provider, ...errorFacts(error) },
+        'a late-credit policy could not be read; late approvals are recorded, not credited',
+      );
+      return off;
+    }
+  }
+
+  /**
+   * Offers a re-verified LATE approval to the wallet credit. The credit decides under the
+   * payment's lock (its switch, its state, the recorded approval, the amount); the lane maps
+   * its answer:
+   *
+   * - `CREDITED` — the wallet holds the payment's amount once; nothing else to record here.
+   * - `NOT_CREDITED` — recorded as a late completion for an operator, as before. `reason`
+   *   names a more specific cause where the credit refused for the amount or the evidence (an
+   *   operator reads it on the late-completion record); null keeps the confirmation's own.
+   * - `ERROR` — the credit threw. Nothing moved; the approval stays undecided and the row is
+   *   asked again, and the operator is told once per payment (the settlement-failed alarm).
+   */
+  private async creditLateApproval(
+    scope: TenantContext,
+    actor: ActorContext,
+    invoice: GatewayInvoiceRecord,
+    evidenceNote: string,
+    providerRequestAmount: bigint | null,
+  ): Promise<
+    | { readonly kind: 'CREDITED' }
+    | { readonly kind: 'ERROR' }
+    | { readonly kind: 'NOT_CREDITED'; readonly reason: string | null }
+  > {
+    const collaborator = this.deps.lateCredit;
+    if (collaborator === undefined) return { kind: 'NOT_CREDITED', reason: null };
+    let credit: Awaited<ReturnType<typeof collaborator.credit>>;
+    try {
+      credit = await collaborator.credit(scope, actor, invoice.paymentId, {
+        providerRequestAmount,
+        evidenceNote,
+      });
+    } catch (error: unknown) {
+      const errorName = error instanceof Error ? error.name : 'unknown';
+      this.deps.logger.error(
+        { paymentId: invoice.paymentId, error: errorName },
+        'a late gateway approval could not be credited',
+      );
+      await recordQuietly(
+        this.deps.opsLog,
+        scope,
+        {
+          code: GATEWAY_SETTLEMENT_FAILED_CODE,
+          severity: 'ERROR',
+          message:
+            'A payment the gateway approved late could not be credited to the wallet. Nothing ' +
+            'was credited; it is asked again.',
+          dedupeKey: `${GATEWAY_SETTLEMENT_FAILED_CODE}:${invoice.paymentId}`,
+          context: { paymentId: invoice.paymentId, provider: invoice.provider, error: errorName },
+        },
+        this.deps.logger,
+      );
+      return { kind: 'ERROR' };
+    }
+    if (credit.outcome === 'CREDITED') return { kind: 'CREDITED' };
+    switch (credit.reason) {
+      case 'AMOUNT_MISMATCH':
+        return { kind: 'NOT_CREDITED', reason: 'LATE_CREDIT_AMOUNT_MISMATCH' };
+      case 'APPROVAL_NOT_VERIFIED':
+        return { kind: 'NOT_CREDITED', reason: 'LATE_CREDIT_APPROVAL_NOT_VERIFIED' };
+      default:
+        return { kind: 'NOT_CREDITED', reason: null };
     }
   }
 
@@ -2084,6 +2279,8 @@ export class GatewayPaymentService {
       null,
       { trigger: 'STARS_RECOVERY', dueAt: invoice.nextInquiryAt },
     );
+    // A recorded payment passes no late-credit input, so it is never credited this way.
+    if (settled === 'CREDITED') throw new Error('a recorded payment is never a late credit');
     return settled === 'HELD' ? 'ERROR' : settled;
   }
 
@@ -2125,6 +2322,8 @@ export class GatewayPaymentService {
     if (settled === 'SETTLED' || settled === 'LATE') {
       await this.settlementDecided(scope, paymentId);
     }
+    // A recorded payment passes no late-credit input, so it is never credited this way.
+    if (settled === 'CREDITED') throw new Error('a recorded payment is never a late credit');
     return settled === 'HELD' ? 'ERROR' : settled;
   }
 
@@ -2177,7 +2376,24 @@ export class GatewayPaymentService {
       expiresAt: claimed.paymentExpiresAt,
       providerReviewUntil: claimed.paymentReviewUntil,
     });
-    return this.discoveryTriggerOf(claimed, expiresAt) !== 'SCHEDULED';
+    const trigger = this.discoveryTriggerOf(claimed, expiresAt);
+    if (trigger === 'SCHEDULED') return false;
+    /*
+     * R5A item 4: a row that fell due AT OR AFTER the deadline with nothing but the schedule
+     * behind it is the slow late poll, whose due time the inside-the-deadline schedule cannot
+     * reproduce. It is on its schedule, not hinted: it takes the lowest share of the budget
+     * and is never asked ahead of the rows a customer is waiting behind. A webhook or an
+     * operator's request is still recognised before this and stays a hint.
+     */
+    if (
+      trigger === 'CUSTOMER_HINT' &&
+      expiresAt !== null &&
+      claimed.invoice.nextInquiryAt !== null &&
+      claimed.invoice.nextInquiryAt.getTime() >= expiresAt.getTime() - 15_000
+    ) {
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -3105,6 +3321,17 @@ export class GatewayPaymentService {
     // A created invoice, or a create whose answer was lost — which the webhook may name.
     const askable =
       invoice.creationState === 'CREATED' || invoice.creationState === 'CREATE_UNKNOWN';
+    // R5A item 4: with the route's late-credit switch ON, the window — not the count — bounds it.
+    const lateCredit = await this.lateCreditPolicy(scope, invoice.provider);
+    const lateWindowOpen =
+      lateCredit.enabled &&
+      invoice.outcome === null &&
+      lateCreditPollingOpen({
+        state: payment.state,
+        now,
+        deadline,
+        windowMs: lateCredit.windowMs,
+      });
     let inquireAt: Date | null = null;
     if (askable && invoice.outcome === null && eligible) {
       inquireAt = earliest;
@@ -3113,7 +3340,7 @@ export class GatewayPaymentService {
       !eligible &&
       payment.state !== 'CONFIRMED' &&
       invoice.lateCompletionObservedAt === null &&
-      invoice.postDeadlineInquiries < POST_DEADLINE_INQUIRY_MAX
+      (invoice.postDeadlineInquiries < POST_DEADLINE_INQUIRY_MAX || lateWindowOpen)
     ) {
       // Diagnostics only: whether the provider now says a closed attempt was paid.
       inquireAt = earliest;

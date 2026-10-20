@@ -188,7 +188,7 @@ export interface NotificationFile {
 
 /** The ledger reasons a payment's credit sentence can name. */
 export type PaymentCreditReason =
-  'TOPUP_RECEIPT' | 'TOPUP_GATEWAY' | 'CASHBACK_TOPUP' | 'RECEIPT_CREDIT';
+  'TOPUP_RECEIPT' | 'TOPUP_GATEWAY' | 'CASHBACK_TOPUP' | 'RECEIPT_CREDIT' | 'GATEWAY_LATE_CREDIT';
 
 /**
  * The three kinds whose subject is a PAYMENT and whose sentence names what it credited
@@ -207,6 +207,8 @@ export const PAYMENT_CREDIT_FIGURES: Readonly<
   WALLET_TOPUP_CREDITED: ['TOPUP_RECEIPT', 'TOPUP_GATEWAY'],
   WALLET_TOPUP_GIFT_CREDITED: ['CASHBACK_TOPUP'],
   RECEIPT_CREDITED_TO_WALLET: ['RECEIPT_CREDIT'],
+  // R5A item 4: a gateway's late approval, credited once under `<paymentId>:late-credit`.
+  GATEWAY_LATE_PAYMENT_CREDITED: ['GATEWAY_LATE_CREDIT'],
 };
 
 /**
@@ -222,6 +224,7 @@ export const PAYMENT_CREDIT_FIGURES: Readonly<
 const PAYMENT_TRACKED_KINDS: ReadonlySet<CustomerNotificationKind> = new Set([
   'WALLET_TOPUP_CREDITED',
   'RECEIPT_CREDITED_TO_WALLET',
+  'GATEWAY_LATE_PAYMENT_CREDITED',
 ]);
 
 /**
@@ -320,6 +323,18 @@ export interface CustomerNotificationDeps {
       paymentId: string,
       reasons: readonly PaymentCreditReason[],
     ) => Promise<Money | null>;
+  };
+  /**
+   * R5A item 4: the customer's wallet balance NOW, derived from the ledger, for the one credit
+   * sentence that names it («موجودی فعلی»). A reader, not a payload (ADR 0030 §1). Absent, that
+   * sentence cannot state its figure and is not sent — silence beats an invented balance.
+   */
+  readonly walletBalances?: {
+    balanceNow: (
+      scope: TenantContext,
+      customerId: CustomerNotificationRecord['customerId'],
+      currency: Money['currency'],
+    ) => Promise<Money>;
   };
   /**
    * B14: the tracking code a wallet-credit message ends with (an approved receipt, a
@@ -1045,6 +1060,19 @@ export class CustomerNotificationService {
       const reference = PAYMENT_TRACKED_KINDS.has(row.kind)
         ? await this.paymentTrackingCode(scope, row.subjectId)
         : null;
+      /*
+       * R5A item 4: the late credit's sentence also names the wallet's balance now. Without a
+       * reader for it the sentence is not sent (`null`), never sent with a figure left out.
+       */
+      if (row.kind === 'GATEWAY_LATE_PAYMENT_CREDITED') {
+        if (this.deps.walletBalances === undefined) return null;
+        const balance = await this.deps.walletBalances.balanceNow(
+          scope,
+          row.customerId,
+          amount.currency,
+        );
+        return reference === null ? { amount, balance } : { amount, balance, reference };
+      }
       return reference === null ? { amount } : { amount, reference };
     }
     if (ACCOUNT_REMINDER_KINDS.has(row.kind)) {

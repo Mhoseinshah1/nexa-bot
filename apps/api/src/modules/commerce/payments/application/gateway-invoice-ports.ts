@@ -800,6 +800,19 @@ export interface GatewayInvoiceRepository {
     tx?: unknown,
   ): Promise<boolean>;
 
+  /**
+   * R5A item 4: records that a late approval was CREDITED to the wallet — outcome
+   * `LATE_CREDITED`, the schedule cleared — in the transaction that wrote the credit. Moves a row
+   * with no outcome yet, or one recorded `LATE_COMPLETION` earlier (the setting was off then, an
+   * operator asked again now); never one that settled or failed. True when it moved.
+   */
+  markLateCredited(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean>;
+
   /** Stamps the first late completion, once. */
   markLateCompletion(
     scope: TenantContext,

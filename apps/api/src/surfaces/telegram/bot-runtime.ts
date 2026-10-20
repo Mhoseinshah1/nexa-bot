@@ -17410,6 +17410,8 @@ export function notificationButtons(
   if (
     kind === 'WALLET_TOPUP_CREDITED' ||
     kind === 'RECEIPT_CREDITED_TO_WALLET' ||
+    // R5A item 4: a late gateway approval credited to the wallet offers the same next steps.
+    kind === 'GATEWAY_LATE_PAYMENT_CREDITED' ||
     // R4 A5: an administrator's manual credit offers the same two next steps.
     kind === 'WALLET_ADMIN_CREDITED'
   ) {
