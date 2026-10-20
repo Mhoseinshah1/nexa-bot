@@ -263,6 +263,18 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
   },
   {
     /*
+     * R5A item 4: ONE late-credit entry per payment, decided by the database — the backstop behind
+     * the `<paymentId>:late-credit` reference. Unique and concurrent: `wallet_entries` is large
+     * after an import and the outgoing release is serving while the migrator runs.
+     */
+    name: 'wallet_entries_gateway_late_credit_payment_key',
+    definition:
+      'ON "wallet_entries" USING btree ("tenant_id","payment_id") ' +
+      "WHERE (reason = 'GATEWAY_LATE_CREDIT'::text)",
+    unique: true,
+  },
+  {
+    /*
      * The outbox messages that failed and are still being retried (WP20): what the relay
      * claim's sibling rule asks for, once per candidate, and nothing else.
      *

@@ -1,5 +1,5 @@
 {
-  "id": "83523c4b-1e98-4370-aab4-5ce8d2ab47db",
+  "id": "648d76ab-7f56-459c-94a5-5fe92a52e67e",
   "prevId": "f008129d-4503-436b-a900-726689ee17e7",
   "version": "7",
   "dialect": "postgresql",
@@ -39716,28 +39716,6 @@
           ],
           "isUnique": true,
           "where": "reason = 'TOPUP_GATEWAY'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "wallet_entries_gateway_late_credit_payment_key": {
-          "name": "wallet_entries_gateway_late_credit_payment_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "payment_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "reason = 'GATEWAY_LATE_CREDIT'",
           "concurrently": false,
           "method": "btree",
           "with": {}

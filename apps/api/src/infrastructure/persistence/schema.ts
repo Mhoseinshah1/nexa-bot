@@ -6686,8 +6686,10 @@ export const walletEntries = pgTable(
       .where(sql`reason = 'TOPUP_GATEWAY'`),
     /**
      * R5A item 4: a LATE gateway approval's credit names its payment and is once per payment,
-     * decided by the database. The reference key (`<paymentId>:late-credit`) gives the same
-     * guarantee; this one cannot be removed by a change to the reference. A webhook, a
+     * decided by the database. The reference key (`<paymentId>:late-credit`) is the primary
+     * rule; the partial unique index `wallet_entries_gateway_late_credit_payment_key` is the
+     * backstop a change to the reference cannot remove, built concurrently in
+     * `online-indexes.ts` (it is not declared here). A webhook, a
      * repeated inquiry, a polling pass and a replica racing another all name the same payment,
      * so all but one conflict here.
      */
@@ -6695,9 +6697,6 @@ export const walletEntries = pgTable(
       'wallet_entries_gateway_late_credit_payment_check',
       sql`reason <> 'GATEWAY_LATE_CREDIT' OR payment_id IS NOT NULL`,
     ),
-    uniqueIndex('wallet_entries_gateway_late_credit_payment_key')
-      .on(table.tenantId, table.paymentId)
-      .where(sql`reason = 'GATEWAY_LATE_CREDIT'`),
     /**
      * Migration P2: a legacy opening balance and its reference prefix are ONE thing.
      *
