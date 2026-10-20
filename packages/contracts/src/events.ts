@@ -270,10 +270,28 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     username: z.string(),
     roleKeys: z.array(z.string()),
   }),
-  AdminStatusChanged: z.object({ from: z.string(), to: z.string() }),
+  AdminStatusChanged: z.object({
+    from: z.string(),
+    to: z.string(),
+    /**
+     * Round 4 PR-D (Codex review of #301): the administrator's role keys as they stood in the
+     * transaction that changed the status, so a consumer that runs later renders the roles of
+     * THAT moment rather than whatever a later change made them. Optional: an event written
+     * before the field has none, and its reader falls back to the roles it can read.
+     */
+    roleKeys: z.array(z.string()).optional(),
+  }),
   AdminRolesChanged: z.object({
     added: z.array(z.string()),
     removed: z.array(z.string()),
+    /**
+     * Round 4 PR-D (Codex review of #301): the full role-key sets on either side of THIS
+     * change, read under the change's own lock. A consumer reading the roles when it runs
+     * would attribute a later change's roles to this one. Optional, for events written
+     * before the fields.
+     */
+    before: z.array(z.string()).optional(),
+    after: z.array(z.string()).optional(),
   }),
   // Carries no password material of any kind, not even a length.
   AdminPasswordChanged: z.object({ bySelf: z.boolean() }),
@@ -507,6 +525,13 @@ export const EVENT_PAYLOAD_SCHEMAS = {
   }),
   ServiceSubscriptionRotated: z.object({
     customerId: z.string(),
+    /**
+     * Round 4 PR-D (Codex review of #301): the operation that changed the link, so the
+     * operations log names who asked for THIS change rather than the latest one by the time it
+     * runs. Optional: an event written before the field has none, and the log then reads the
+     * last link operation completed by the event's own time.
+     */
+    operationId: z.string().optional(),
   }),
   /*
    * Package F. Aggregate is the SERVICE. The three ids are the whole fact; the

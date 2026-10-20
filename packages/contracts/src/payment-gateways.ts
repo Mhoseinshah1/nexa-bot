@@ -111,6 +111,33 @@ export type PaymentGatewayProvider = (typeof PAYMENT_GATEWAY_PROVIDERS)[number];
 export const paymentGatewayProviderSchema = z.enum(PAYMENT_GATEWAY_PROVIDERS);
 
 /**
+ * The Web Admin path segment of each payment method (UX Batch 01, item 8): its own view is
+ * `/payment-gateways/<slug>`. A slug rather than the enum value, because the path is what an
+ * operator reads, pastes and bookmarks.
+ *
+ * In contracts (Round 4 PR-D, Codex review of #301) because two sides need the SAME answer:
+ * the Web Admin routes by it, and an operations-log message's gateway button links to it. A
+ * second table would be a second answer, and a button built from the enum opened a route the
+ * admin does not have. TOTAL over `PaymentGatewayProvider`, so a provider added to the
+ * contract does not compile until it has a view.
+ */
+export const PAYMENT_METHOD_SLUGS: Readonly<Record<PaymentGatewayProvider, string>> = {
+  MANUAL_TRANSFER: 'card-to-card',
+  TONPAYS: 'tonpays',
+  TONPAYS_TELEGRAM: 'tonpays-telegram',
+  TELEGRAM_STARS: 'telegram-stars',
+  NOWPAYMENTS: 'nowpayments',
+  CENTRALPAY: 'centralpay',
+};
+
+/** The slug of a provider key, or null for a string that names no provider this release has. */
+export function paymentMethodSlugOf(provider: string): string | null {
+  return Object.prototype.hasOwnProperty.call(PAYMENT_METHOD_SLUGS, provider)
+    ? PAYMENT_METHOD_SLUGS[provider as PaymentGatewayProvider]
+    : null;
+}
+
+/**
  * What each route needs and how it settles, so no caller infers either from the name.
  *
  * `settlesVia` is what makes this layer provider-neutral in the only way that matters: a

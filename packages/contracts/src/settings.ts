@@ -502,10 +502,11 @@ export const SETTINGS = [
     key: 'ops.log.nightly_report_time',
     description:
       'The Tehran wall-clock time (HH:MM) the nightly reports are posted to the reports topic. ' +
-      'The day they cover is the Tehran day that ends at this time’s date, half-open: ' +
-      '[00:00, next 00:00). Default 23:59.',
+      'They always report the PREVIOUS, completed Tehran day, half-open [00:00, next 00:00): ' +
+      'at 00:05 on the 21st the report is the 20th, so a report never describes a day that ' +
+      'has not ended. Default 00:05.',
     schema: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'A time of day written HH:MM.'),
-    defaultValue: '23:59',
+    defaultValue: '00:05',
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',

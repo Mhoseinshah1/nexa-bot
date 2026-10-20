@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { OpsLogTopicCategory } from './ops-log-group.js';
+import { paymentMethodSlugOf } from './payment-gateways.js';
 import type { PlaceholderDefinition, PlaceholderType, TemplateDefinition } from './templates.js';
 
 /**
@@ -251,8 +252,10 @@ export function opsLogButtonPath(button: OpsLogButton): string | null {
       return id === null ? null : `/panels/${id}`;
     }
     case 'GATEWAY': {
-      const id = needsRef();
-      return id === null ? '/payment-gateways' : `/payment-gateways/${id}`;
+      // The ref is the provider's KEY (`TONPAYS`); the route is its Web Admin slug
+      // (`tonpays`). A key this release does not know opens the list, never a guessed path.
+      const slug = ref === undefined ? null : paymentMethodSlugOf(ref);
+      return slug === null ? '/payment-gateways' : `/payment-gateways/${slug}`;
     }
     case 'TICKET': {
       const id = needsRef();
