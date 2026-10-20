@@ -313,7 +313,7 @@ export class NotificationService {
     const dedupeKey = `storm:${storm.key}:${String(bucket)}`;
     if (await this.notifications.bumpStormRollup(scope, dedupeKey, storm.customer, tx)) return true;
     const endsAt = new Date((bucket + 1) * windowMs);
-    await this.notifications.create(
+    const created = await this.notifications.create(
       scope,
       {
         id: this.ids.uuid(),
@@ -340,8 +340,17 @@ export class NotificationService {
       },
       tx,
     );
-    // Created, or already sent in this bucket by a replica a moment ago: either way this
-    // error is accounted for by the roll-up and is not a message of its own.
+    /*
+     * Lost the create race (Codex review of #301): another replica's roll-up for this bucket
+     * committed between the bump above, which found nothing, and this insert, which then
+     * conflicted on the dedupe key. Its row is visible now, so this error is counted into it
+     * — dropping the bump undercounted the storm by one per race. If that roll-up has already
+     * been claimed, its count is what was sent; either way this error is accounted for by
+     * the roll-up and is not a message of its own.
+     */
+    if (!created.created) {
+      await this.notifications.bumpStormRollup(scope, dedupeKey, storm.customer, tx);
+    }
     return true;
   }
 

@@ -288,7 +288,18 @@ describe('a RickPanel subscription rotation', () => {
       )) as unknown as { rows: { payload: string }[] }
     ).rows;
     expect(events).toHaveLength(1);
-    expect(JSON.parse(events[0]?.payload ?? '{}')).toEqual({ customerId });
+    // The customer, and (Round 4 PR-D) the operation that rotated it — never the link.
+    const rotation = (
+      (await ctx.container.database.db.execute(
+        sql`SELECT id FROM provisioning_operations
+             WHERE service_id = ${service.id} AND type = 'ROTATE_SUBSCRIPTION'` as never,
+      )) as unknown as { rows: { id: string }[] }
+    ).rows;
+    expect(rotation).toHaveLength(1);
+    expect(JSON.parse(events[0]?.payload ?? '{}')).toEqual({
+      customerId,
+      operationId: rotation[0]!.id,
+    });
     for (const text of [audit[0]?.before, audit[0]?.after, events[0]?.payload]) {
       expect(text).not.toContain('/sub/');
       expect(text).not.toContain(held?.subToken ?? 'no-token');

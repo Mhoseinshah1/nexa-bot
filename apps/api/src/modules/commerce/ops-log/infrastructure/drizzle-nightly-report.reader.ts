@@ -163,20 +163,44 @@ export class DrizzleNightlyReportReader implements NightlyReportReader {
              AND COALESCE(resolved_at, updated_at) < ${end}`,
     );
 
-    // --- the ledger: refunds, commissions, gifts --------------------------------------
-    const ledger = async (reason: string): Promise<Tally> => {
+    // --- refunds, commissions, gifts -------------------------------------------------
+    const ledger = async (reason: string, direction: 'CREDIT' | 'DEBIT'): Promise<Tally> => {
       const [row] = await this.rows(
         tx,
         sql`SELECT count(*)::int AS n, COALESCE(sum(amount), 0)::text AS s FROM wallet_entries
-             WHERE tenant_id = ${tenantId} AND direction = 'CREDIT' AND reason = ${reason}
+             WHERE tenant_id = ${tenantId} AND direction = ${direction} AND reason = ${reason}
                AND currency = ${currency}
                AND created_at >= ${start} AND created_at < ${end}`,
       );
       return { count: num(row?.['n']), sum: big(row?.['s']) };
     };
-    const refunds = await ledger('REFUND');
-    const commissions = await ledger('REFERRAL_COMMISSION');
-    const gifts = await ledger('CASHBACK_TOPUP');
+    /*
+     * REFUNDS are the refunds COMPLETED in the day, on EVERY channel, counted once each from
+     * the refund rows themselves (money review of #301). The wallet's REFUND credits are only
+     * the WALLET_CREDIT channel: a bank transfer back (EXTERNAL_MANUAL) or a provider refund
+     * writes no wallet entry and was missing from the net, and a refund row per refund is
+     * what keeps one refund from being counted twice. Day by `completed_at`, the moment the
+     * money left; only the selling currency.
+     */
+    const [refundRow] = await this.rows(
+      tx,
+      sql`SELECT count(*)::int AS n, COALESCE(sum(amount), 0)::text AS s FROM refunds
+           WHERE tenant_id = ${tenantId} AND state = 'COMPLETED' AND currency = ${currency}
+             AND completed_at >= ${start} AND completed_at < ${end}`,
+    );
+    const refunds: Tally = { count: num(refundRow?.['n']), sum: big(refundRow?.['s']) };
+    /*
+     * COMMISSIONS are what the day's commissions COST: the credits less the day's reversals
+     * (a refunded order takes its commission back, `REFERRAL_COMMISSION_REVERSAL`), never
+     * below zero — a day of reversals is not income. The count is the credits'.
+     */
+    const credited = await ledger('REFERRAL_COMMISSION', 'CREDIT');
+    const reversed = await ledger('REFERRAL_COMMISSION_REVERSAL', 'DEBIT');
+    const commissions: Tally = {
+      count: credited.count,
+      sum: credited.sum > reversed.sum ? credited.sum - reversed.sum : 0n,
+    };
+    const gifts = await ledger('CASHBACK_TOPUP', 'CREDIT');
 
     // --- payment methods ---------------------------------------------------------------
     const methods = await this.rows(
@@ -229,7 +253,19 @@ export class DrizzleNightlyReportReader implements NightlyReportReader {
       sql`SELECT count(*)::int AS n FROM resellers
            WHERE tenant_id = ${tenantId} AND status = 'ACTIVE' AND source = 'NEXA'`,
     );
-    const resellerSales = await this.rows(
+    // The resellers' sales, summed in SQL over every reseller order of the day — never over a
+    // capped list of resellers, which would drop the tail from the total (money review of
+    // #301) — and the one top reseller beside it, by the same predicate.
+    const [resellerTotal] = await this.rows(
+      tx,
+      sql`SELECT COALESCE(sum(o.total_amount), 0)::text AS s
+            FROM order_reseller_terms t
+            JOIN orders o ON o.tenant_id = t.tenant_id AND o.id = t.order_id
+           WHERE t.tenant_id = ${tenantId} AND o.origin = 'STANDARD' AND o.source = 'NEXA'
+             AND o.currency = ${currency} AND o.purpose <> 'TRIAL'
+             AND o.settled_at >= ${start} AND o.settled_at < ${end}`,
+    );
+    const [topRow] = await this.rows(
       tx,
       sql`SELECT c.username AS username, c.first_name AS first_name, c.last_name AS last_name,
                  c.telegram_user_id AS telegram_id, sum(o.total_amount)::text AS s
@@ -239,11 +275,10 @@ export class DrizzleNightlyReportReader implements NightlyReportReader {
            WHERE t.tenant_id = ${tenantId} AND o.origin = 'STANDARD' AND o.source = 'NEXA'
              AND o.currency = ${currency} AND o.purpose <> 'TRIAL'
              AND o.settled_at >= ${start} AND o.settled_at < ${end}
-           GROUP BY c.username, c.first_name, c.last_name, c.telegram_user_id
-           ORDER BY sum(o.total_amount) DESC, c.telegram_user_id LIMIT 1000`,
+           GROUP BY c.id, c.username, c.first_name, c.last_name, c.telegram_user_id
+           ORDER BY sum(o.total_amount) DESC, c.telegram_user_id LIMIT 1`,
     );
-    const topRow = resellerSales[0];
-    const salesSum = resellerSales.reduce((total, row) => total + big(row['s']), 0n);
+    const salesSum = big(resellerTotal?.['s']);
 
     return {
       currency: currency as CurrencyCode,

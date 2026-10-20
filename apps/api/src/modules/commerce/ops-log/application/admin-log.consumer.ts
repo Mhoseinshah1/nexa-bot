@@ -11,9 +11,11 @@ import type { OpsLogFacts, OpsLogLane, OpsLogWords } from './ports.js';
  * and who did it. It replaces the generic operational event the same fact used to produce
  * (an English code and a column of ids).
  *
- * A CONSUMER of the identity module's own events, so what is read is the administrator as
- * they stand once the change committed; the roles BEFORE are the current ones with the
- * event's additions taken away and its removals put back.
+ * A CONSUMER of the identity module's own events, so it runs AFTER the change — possibly
+ * after a later one too. The roles it prints are therefore the ones the EVENT carries (the
+ * sets under the change's own lock, Codex review of #301), never the roles as they stand when
+ * the consumer runs; only an event written before those fields falls back to the current
+ * roles, with its additions taken away and its removals put back for "before".
  */
 export class AdminLogConsumer implements EventConsumer {
   readonly name = 'ops-log.admins';
@@ -44,19 +46,31 @@ export class AdminLogConsumer implements EventConsumer {
           : null;
     const at = new Date(event.occurredAt);
 
+    // The roles as of the event, when it carries them: names and the permissions they grant.
+    const asOf = async (keys: readonly string[] | undefined) => {
+      if (keys === undefined) return undefined;
+      const names = await this.deps.facts.roleNames(scope, keys, tx);
+      return {
+        roleNames: [...keys].map((key) => names.get(key) ?? key).sort((a, b) => a.localeCompare(b)),
+        permissionCount: await this.deps.facts.permissionCountOf(scope, keys, tx),
+      };
+    };
+
     let built;
     if (event.eventType === 'AdminCreated') {
+      const payload = EVENT_PAYLOAD_SCHEMAS.AdminCreated.parse(event.payload);
       built = adminChanged({
         kind: 'created',
         target,
         rolesBefore: null,
+        asOfEvent: await asOf(payload.roleKeys),
         actor,
         at,
         words: this.deps.words,
       });
     } else if (event.eventType === 'AdminRolesChanged') {
       const payload = EVENT_PAYLOAD_SCHEMAS.AdminRolesChanged.parse(event.payload);
-      const beforeKeys = [
+      const beforeKeys = payload.before ?? [
         ...target.roleKeys.filter((key) => !payload.added.includes(key)),
         ...payload.removed,
       ];
@@ -65,6 +79,7 @@ export class AdminLogConsumer implements EventConsumer {
         kind: 'rolesChanged',
         target,
         rolesBefore: beforeKeys.map((key) => names.get(key) ?? key),
+        asOfEvent: await asOf(payload.after),
         actor,
         at,
         words: this.deps.words,
@@ -75,6 +90,7 @@ export class AdminLogConsumer implements EventConsumer {
         kind: payload.to === 'ACTIVE' ? 'enabled' : 'disabled',
         target,
         rolesBefore: null,
+        asOfEvent: await asOf(payload.roleKeys),
         actor,
         at,
         words: this.deps.words,

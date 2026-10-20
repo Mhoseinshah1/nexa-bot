@@ -1,4 +1,5 @@
 import {
+  CURRENCY_EXPONENT,
   formatPersianInteger,
   paymentTrackingCode,
   toPersianDigits,
@@ -552,11 +553,25 @@ export function adminChanged(input: {
   readonly kind: 'created' | 'rolesChanged' | 'disabled' | 'enabled';
   readonly target: AdminFact;
   readonly rolesBefore: readonly string[] | null;
+  /**
+   * The roles (display names) and permission count AS OF THE EVENT, when the event carried
+   * them; absent, the target's current ones stand (an event from before the snapshot).
+   */
+  readonly asOfEvent?:
+    { readonly roleNames: readonly string[]; readonly permissionCount: number } | undefined;
   readonly actor: AdminFact | null;
   readonly at: Date;
   readonly words: OpsLogWords;
 }): Built {
-  const { kind, target, rolesBefore, actor, at, words } = input;
+  const { kind, rolesBefore, actor, at, words } = input;
+  const target: AdminFact =
+    input.asOfEvent === undefined
+      ? input.target
+      : {
+          ...input.target,
+          roleNames: input.asOfEvent.roleNames,
+          permissionCount: input.asOfEvent.permissionCount,
+        };
   const roles = (names: readonly string[]): string =>
     names.length === 0 ? words.noRole : names.join('، ');
   const values: Mutable = {
@@ -651,7 +666,8 @@ export function provisionFailure(input: {
   readonly operation: OperationFact | null;
   readonly reason: string | null;
   readonly payment: PaymentFact | null;
-  readonly refunded: boolean;
+  /** What the ledger says was credited back for this order; null when nothing was. */
+  readonly refunded: Money | null;
   readonly unknown: boolean;
   readonly at: Date;
   readonly words: OpsLogWords;
@@ -668,8 +684,8 @@ export function provisionFailure(input: {
     ),
     impact: unknown
       ? words.impact('pending')
-      : refunded
-        ? `${words.impact('refundedToWallet')} (${formatMoneyText(order.total)})`
+      : refunded !== null
+        ? `${words.impact('refundedToWallet')} (${formatMoneyText(refunded)})`
         : words.impact('notRefunded'),
     productTitle: order.title,
     amount: order.total,
@@ -693,7 +709,8 @@ export function operationFailure(input: {
   readonly operation: OperationFact | null;
   readonly reason: string | null;
   readonly payment: PaymentFact | null;
-  readonly refunded: boolean;
+  /** What the ledger says was credited back for this order; null when nothing was. */
+  readonly refunded: Money | null;
   readonly unknown: boolean;
   readonly at: Date;
   readonly words: OpsLogWords;
@@ -713,8 +730,8 @@ export function operationFailure(input: {
     ),
     impact: unknown
       ? words.impact('pending')
-      : refunded
-        ? `${words.impact('refundedToWallet')} (${formatMoneyText(order.total)})`
+      : refunded !== null
+        ? `${words.impact('refundedToWallet')} (${formatMoneyText(refunded)})`
         : order.purpose === 'TRIAL'
           ? words.impact('trialGivenBack')
           : words.impact('notRefunded'),
@@ -754,7 +771,18 @@ export function formatMoneyText(amount: Money): string {
     EUR: 'یورو',
     USDT: 'تتر',
   };
-  return `${formatPersianInteger(amount.amountMinor)} ${unit[amount.currency] ?? amount.currency}`;
+  // Minor units are not major units (money review of #301): a dollar amount of 1234 minor
+  // units is ۱۲٫۳۴ دلار, never ۱٬۲۳۴ دلار. The exponent is the currency's, as `formatMoney`'s.
+  const exponent = CURRENCY_EXPONENT[amount.currency];
+  const negative = amount.amountMinor < 0n;
+  const magnitude = negative ? -amount.amountMinor : amount.amountMinor;
+  const scale = 10n ** BigInt(exponent);
+  const major = formatPersianInteger(magnitude / scale);
+  const figure =
+    exponent === 0
+      ? major
+      : `${major}٫${toPersianDigits((magnitude % scale).toString().padStart(exponent, '0'))}`;
+  return `${negative ? '-' : ''}${figure} ${unit[amount.currency] ?? amount.currency}`;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,9 @@
 import {
   AUTOMATIC_REFUND_REASON,
   EVENT_PAYLOAD_SCHEMAS,
+  money,
   type DomainEvent,
+  type Money,
   type EventType,
   type TenantContext,
 } from '@nexa/contracts';
@@ -97,7 +99,10 @@ export class FailureLogConsumer implements EventConsumer {
       operation !== null && operation.serviceId !== ''
         ? await this.deps.facts.service(scope, operation.serviceId, tx)
         : null;
-    const refunded = !unknown && order.total.amountMinor > 0n;
+    // What was REALLY given back: the order's REFUND credits on the ledger, never its total
+    // (money review of #301). None — an unknown outcome, a free order, a refund not yet
+    // written — and the message says nothing was refunded rather than name a figure.
+    const refunded = unknown ? null : await this.refundedOf(scope, order, tx);
 
     const createsService = order.purpose === 'NEW_SERVICE' || order.purpose === 'CUSTOM_SERVICE';
     const built: Built = createsService
@@ -140,5 +145,20 @@ export class FailureLogConsumer implements EventConsumer {
         },
       },
     });
+  }
+
+  /** The sum of the order's REFUND credits in its own currency, or null when there are none. */
+  private async refundedOf(
+    scope: TenantContext,
+    order: { readonly id: string; readonly total: Money },
+    tx: TransactionScope,
+  ): Promise<Money | null> {
+    const entries = await this.deps.facts.entriesOfOrder(scope, order.id, 'REFUND', tx);
+    const sum = entries
+      .filter(
+        (entry) => entry.direction === 'CREDIT' && entry.amount.currency === order.total.currency,
+      )
+      .reduce((total, entry) => total + entry.amount.amountMinor, 0n);
+    return sum > 0n ? money(sum, order.total.currency) : null;
   }
 }

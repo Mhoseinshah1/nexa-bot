@@ -9,7 +9,14 @@ import {
 
 /** What the backup pipeline knows about the archive it is about to deliver. */
 export interface BackupCaptionFacts {
+  /** When the backup was completed (verified, about to be delivered): the caption's time. */
   readonly at: Date;
+  /**
+   * When the run began. The scheduler counts the next run from the last SUCCEEDED run's start
+   * (`BackupScheduler`: `lastSucceededAt + interval`, and `lastSucceededAt` reads
+   * `started_at`), so the caption's «next backup» is counted from here too.
+   */
+  readonly startedAt: Date;
   readonly fileName: string;
   readonly archiveBytes: number;
   readonly checksum: string;
@@ -50,7 +57,9 @@ export function backupCaptionRenderer(
     );
     if (!opsLogTypeEnabled(off, 'BACKUP_FILE')) return null;
     const schedule = await deps.schedule();
-    const next = schedule.enabled ? new Date(facts.at.getTime() + schedule.intervalMs) : null;
+    const next = schedule.enabled
+      ? new Date(facts.startedAt.getTime() + schedule.intervalMs)
+      : null;
     const mebibytes = Math.max(1, Math.round(facts.archiveBytes / (1024 * 1024)));
     return deps.render(scope, 'ops.log.backup_caption' as TemplateKey, {
       at: facts.at,

@@ -39,6 +39,7 @@ interface Row {
   signed: bigint;
   reason: string;
   at: number;
+  reference?: string;
 }
 
 function harness(options: { method: string; orderId: string | null; provider?: string | null }) {
@@ -71,8 +72,10 @@ function harness(options: { method: string; orderId: string | null; provider?: s
   const entryOf = (row: Row): LedgerEntryFact =>
     ({
       id: row.id,
+      customerId: 'cust-1',
       amount: irt(Number(row.signed < 0n ? -row.signed : row.signed)),
       reason: row.reason,
+      reference: row.reference ?? `ref-${row.id}`,
     }) as LedgerEntryFact;
   const facts = {
     order: async () =>
@@ -81,6 +84,10 @@ function harness(options: { method: string; orderId: string | null; provider?: s
       ledger
         .filter((row) => row.paymentId === paymentId && reasons.includes(row.reason))
         .map(entryOf),
+    ledgerEntryByReference: async (_s: unknown, reference: string) => {
+      const row = ledger.find((one) => one.reference === reference);
+      return row === undefined ? null : entryOf(row);
+    },
     entriesOfOrder: async (_s: unknown, orderId: string, reason: string) =>
       ledger.filter((row) => row.orderId === orderId && row.reason === reason).map(entryOf),
     balanceAround: async (
@@ -341,7 +348,15 @@ describe('L6 — a refund', () => {
     const h = harness({ method: 'MANUAL_TRANSFER', orderId: 'ord-1' });
     h.ledger.push(
       { id: 'e0', paymentId: null, orderId: null, signed: 10_000n, reason: 'ADMIN_CREDIT', at: 1 },
-      { id: 'e1', paymentId: 'pay-1', orderId: 'ord-1', signed: 250_000n, reason: 'REFUND', at: 2 },
+      {
+        id: 'e1',
+        paymentId: 'pay-1',
+        orderId: 'ord-1',
+        signed: 250_000n,
+        reason: 'REFUND',
+        at: 2,
+        reference: 'rf-1:refund',
+      },
     );
     await h.consumer.handle(h.event('RefundCompleted', refundPayload('WALLET_CREDIT')), TX);
     const message = h.queued[0]!;
@@ -351,6 +366,44 @@ describe('L6 — a refund', () => {
       balanceAfter: irt(260_000),
     });
     expect(render(message)).toContain('۱۰٬۰۰۰ تومان ← ۲۶۰٬۰۰۰ تومان');
+  });
+
+  it('two partial refunds: each message shows the wallet around ITS OWN credit, never the newest', async () => {
+    const h = harness({ method: 'MANUAL_TRANSFER', orderId: 'ord-1' });
+    h.ledger.push(
+      { id: 'e0', paymentId: null, orderId: null, signed: 10_000n, reason: 'ADMIN_CREDIT', at: 1 },
+      {
+        id: 'e1',
+        paymentId: 'pay-1',
+        orderId: 'ord-1',
+        signed: 100_000n,
+        reason: 'REFUND',
+        at: 2,
+        reference: 'rf-1:refund',
+      },
+      {
+        id: 'e2',
+        paymentId: 'pay-1',
+        orderId: 'ord-1',
+        signed: 50_000n,
+        reason: 'REFUND',
+        at: 3,
+        reference: 'rf-2:refund',
+      },
+    );
+    // The FIRST refund's event, handled after the second refund was written.
+    await h.consumer.handle(
+      h.event('RefundCompleted', {
+        ...refundPayload('WALLET_CREDIT'),
+        refundId: 'rf-1',
+        amountMinor: '100000',
+      }),
+      TX,
+    );
+    expect(h.queued[0]!.values).toMatchObject({
+      balanceBefore: irt(10_000),
+      balanceAfter: irt(110_000),
+    });
   });
 
   it('a refund outside the wallet moves no wallet line, and a failed one says why in Persian', async () => {

@@ -26,8 +26,10 @@ import type { OpsLogWords } from './ports.js';
  *    afterwards — a refund is a second movement and is its own deduction line below;
  *  - SALES are gross: new purchases, renewals, extra traffic and extra time together, so the
  *    summary's figure and the financial report's «ناخالص» are the same number;
- *  - NET is gross less refunds, referral commissions and top-up gifts — all ledger entries of
- *    the day;
+ *  - NET is gross less refunds, referral commissions and top-up gifts: refunds are the refunds
+ *    COMPLETED in the day on every channel (wallet, bank, provider), counted once each from
+ *    the refunds themselves; commissions are the day's commission credits less the day's
+ *    commission reversals, never below zero; gifts are the day's top-up gift credits;
  *  - a trial is counted, never summed (it moved no money).
  */
 export interface Tally {
@@ -155,7 +157,7 @@ function resellersBlock(data: NightlyReportData, words: OpsLogWords): string {
   const head = `🧑‍💼 ${words.reportResellers}: ${formatPersianInteger(resellers.active)} فعال · فروش ${formatMoneyText(money(resellers.salesSum, data.currency))}`;
   if (resellers.top === null) return head;
   const who = resellers.top.username === null ? resellers.top.name : `@${resellers.top.username}`;
-  return `${head}\n   برترین: ${who} — ${formatPersianInteger(resellers.top.sum)}`;
+  return `${head}\n   برترین: ${who} — ${formatMoneyText(money(resellers.top.sum, data.currency))}`;
 }
 
 /** The three nightly messages, from one day's data. */
@@ -178,7 +180,9 @@ export function nightlyReports(data: NightlyReportData, words: OpsLogWords): rea
     openTickets: data.openTickets,
   };
   const change = formatPersianChange(gross, data.previousGross);
-  if (change !== null) summary['salesChange'] = `(${change} نسبت به دیروز)`;
+  // The report is of a COMPLETED day, posted the morning after; it is compared with the
+  // day before IT, which is no longer "yesterday" to the reader.
+  if (change !== null) summary['salesChange'] = `(${change} نسبت به روز قبل)`;
   const hour = bestHourText(data.bestHour);
   if (hour !== null) summary['bestHour'] = hour;
   // L30: the automatic cleanup is never a message of its own, only this line.

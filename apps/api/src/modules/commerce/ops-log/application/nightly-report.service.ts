@@ -20,10 +20,9 @@ import type { NightlyReportReader, OpsLogLane, OpsLogWords } from './ports.js';
 export const NIGHTLY_REPORT_PRESENTATION = { timezone: 'Asia/Tehran', calendar: 'jalali' } as const;
 
 /**
- * How long after its time a report is still posted. A worker that was down at 23:59 posts the
- * evening's report when it returns, up to this long afterwards; a report older than that is
- * never posted late — an operator reading yesterday's figures at noon today would take them
- * for today's.
+ * How long after its time a report is still posted. A worker that was down at the report time
+ * posts the report when it returns, up to this long afterwards; a report older than that is
+ * never posted late — a report arriving half a day after its time reads as a different day's.
  */
 export const NIGHTLY_REPORT_CATCH_UP_MS = 12 * 60 * 60_000;
 
@@ -49,11 +48,14 @@ export interface NightlyReportServiceDeps {
 
 /**
  * The nightly reports (Round 4 PR-D, L27-L29), posted to the REPORTS topic at the configured
- * Tehran time (`ops.log.nightly_report_time`, default 23:59).
+ * Tehran time (`ops.log.nightly_report_time`, default 00:05).
  *
- * The day is the Tehran day `[00:00, next 00:00)` that `TimePeriodResolver` produced — this
- * class cuts no date range of its own — and every figure is read from the ledger and the
- * orders by `NightlyReportReader`. It is idempotent by construction: each report's
+ * A report is always of a COMPLETED day (Codex review of #301): at the configured time on a
+ * Tehran day, it reports the PREVIOUS Tehran day `[00:00, next 00:00)` — the one
+ * `TimePeriodResolver` calls YESTERDAY; this class cuts no date range of its own. Posting the
+ * running day at 23:59 left its last minute out, and every sale settled in it was reported by
+ * no report at all. Every figure is read from the ledger and the orders by
+ * `NightlyReportReader`. It is idempotent by construction: each report's
  * notification carries a dedupe key made of its type and the day's start instant, so two
  * replicas, a retried tick and a restarted worker post it once; and once every enabled type
  * of a day has been queued, a tick for that day does one indexed lookup and nothing more.
@@ -90,10 +92,23 @@ export class NightlyReportService {
         tx,
       );
 
+      /*
+       * The report of day D is due at the configured time on the day AFTER D: D's end plus the
+       * minutes. Two days can be due: yesterday (due today) and the day before it (due
+       * yesterday, still inside the catch-up bound just after midnight for a late time such
+       * as 23:59). Tehran observes no summer time, so a day is 24 hours and the day before
+       * yesterday is yesterday shifted by its own length.
+       */
+      const yesterday = this.deps.periods.resolve('YESTERDAY', NIGHTLY_REPORT_PRESENTATION);
+      const length = yesterday.end.getTime() - yesterday.start.getTime();
+      const dayBefore: TimePeriod = {
+        ...yesterday,
+        start: new Date(yesterday.start.getTime() - length),
+        end: yesterday.start,
+      };
       let queued = 0;
-      for (const label of ['YESTERDAY', 'TODAY'] as const) {
-        const day = this.deps.periods.resolve(label, NIGHTLY_REPORT_PRESENTATION);
-        const dueAt = day.start.getTime() + minutes * 60_000;
+      for (const day of [dayBefore, yesterday]) {
+        const dueAt = day.end.getTime() + minutes * 60_000;
         // Due once its time has come, and only for a while after: see the catch-up bound.
         if (now.getTime() < dueAt || now.getTime() - dueAt > NIGHTLY_REPORT_CATCH_UP_MS) continue;
         queued += await this.post(scope, day, enabled, currency, tx);
@@ -142,9 +157,9 @@ export class NightlyReportService {
   }
 }
 
-/** `23:59` as minutes into the day; anything unreadable is the default time. */
+/** `00:05` as minutes into the day; anything unreadable is the default time (00:05). */
 export function minutesOfDay(time: string): number {
   const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(time);
-  if (match === null) return 23 * 60 + 59;
+  if (match === null) return 5;
   return Number(match[1]) * 60 + Number(match[2]);
 }

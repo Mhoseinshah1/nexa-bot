@@ -173,7 +173,7 @@ export class TemplateResolver {
       );
     }
 
-    const resolved = await this.resolve(scope, key, locale, tx);
+    const resolved = this.compatible(definition, await this.resolve(scope, key, locale, tx));
     const body = await this.withOrderCodeLine(
       scope,
       key,
@@ -188,6 +188,27 @@ export class TemplateResolver {
     // presentation that belongs to another.
     const presentation = await this.presentation.presentationFor(scope, tx);
     return { definition, body, presentation };
+  }
+
+  /**
+   * An override is rendered only while every token it uses is still DECLARED (Codex review of
+   * #301). Round 4 reworked templates in place under their old keys and removed tokens from
+   * some (`{paymentId}`, `{route}`, `{refundId}`, `{number}` …); an override saved before that
+   * still names them, and nothing supplies them any more, so it would be sent with the
+   * literal `{paymentId}` in it. Such an override is not rewritten — a body is stored raw and
+   * only its administrator edits it — it is set aside for this render and the default body
+   * is sent instead; the editor shows it as it is, where saving it again is refused by the
+   * same declaration until the token is removed. A valid override is untouched.
+   */
+  private compatible(definition: TemplateDefinition, resolved: ResolvedTemplate): ResolvedTemplate {
+    if (resolved.source !== 'TENANT') return resolved;
+    const declared = new Set(definition.placeholders.map((placeholder) => placeholder.token));
+    if (placeholderTokensIn(resolved.body).every((token) => declared.has(token))) return resolved;
+    return {
+      ...resolved,
+      body: this.catalogue.defaultBody(resolved.key, resolved.locale),
+      source: 'DEFAULT',
+    };
   }
 
   /**

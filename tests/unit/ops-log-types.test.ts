@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  PAYMENT_GATEWAY_PROVIDERS,
   OPS_LOG_BUTTON_KINDS,
   OPS_LOG_TOPIC_CATEGORIES,
   OPS_LOG_TYPES,
@@ -21,6 +22,7 @@ import {
   toPersianDigits,
   type SettingKey,
 } from '@nexa/contracts';
+import { providerOfSlug } from '../../apps/web/src/payment-method-routes';
 import {
   CATALOGUE_FA,
   DEFAULT_TEMPLATE_PRESENTATION,
@@ -95,13 +97,14 @@ describe('the log types registry', () => {
     expect(opsLogTypeEnabled(['SOMETHING_A_LATER_RELEASE_ADDED'], 'USER_NEW')).toBe(true);
   });
 
-  it('declares the settings with the owner’s defaults: nothing off, no roll-up, 20 in 5 minutes, 23:59', () => {
+  it('declares the settings with the owner’s defaults: nothing off, no roll-up, 20 in 5 minutes, 00:05', () => {
     const value = (key: string) => settingDefinition(key as SettingKey).defaultValue;
     expect(value('ops.log.disabled_types')).toEqual([]);
     expect(value('ops.log.storm_rollup_enabled')).toBe(false);
     expect(value('ops.log.storm_threshold')).toBe(20);
     expect(value('ops.log.storm_window_minutes')).toBe(5);
-    expect(value('ops.log.nightly_report_time')).toBe('23:59');
+    // 00:05: the report is of the COMPLETED previous day, so it is posted just after midnight.
+    expect(value('ops.log.nightly_report_time')).toBe('00:05');
     const schema = settingDefinition('ops.log.nightly_report_time' as SettingKey).schema;
     expect(schema.safeParse('23:59').success).toBe(true);
     expect(schema.safeParse('24:00').success).toBe(false);
@@ -227,7 +230,20 @@ describe('the inline URL buttons', () => {
     expect(opsLogButtonPath({ kind: 'PAYMENT', ref: 'abc-123' })).toBe('/payments/abc-123');
     expect(opsLogButtonPath({ kind: 'SERVICE', ref: 'abc-123' })).toBe('/services/abc-123');
     expect(opsLogButtonPath({ kind: 'PANEL', ref: 'abc-123' })).toBe('/panels/abc-123');
-    expect(opsLogButtonPath({ kind: 'GATEWAY', ref: 'TONPAYS' })).toBe('/payment-gateways/TONPAYS');
+    // The provider KEY maps to the Web Admin's slug route, the same table the admin routes by.
+    expect(opsLogButtonPath({ kind: 'GATEWAY', ref: 'TONPAYS' })).toBe('/payment-gateways/tonpays');
+    expect(opsLogButtonPath({ kind: 'GATEWAY', ref: 'TONPAYS_TELEGRAM' })).toBe(
+      '/payment-gateways/tonpays-telegram',
+    );
+    expect(opsLogButtonPath({ kind: 'GATEWAY', ref: 'MANUAL_TRANSFER' })).toBe(
+      '/payment-gateways/card-to-card',
+    );
+    for (const provider of PAYMENT_GATEWAY_PROVIDERS) {
+      const path = opsLogButtonPath({ kind: 'GATEWAY', ref: provider });
+      expect(providerOfSlug(path!.replace('/payment-gateways/', '')), provider).toBe(provider);
+    }
+    // A key this release does not know opens the list, never a guessed path.
+    expect(opsLogButtonPath({ kind: 'GATEWAY', ref: 'SOMETHING_NEW' })).toBe('/payment-gateways');
     expect(opsLogButtonPath({ kind: 'MANUAL_CREDIT', ref: 'abc-123' })).toBe('/users/abc-123');
     expect(opsLogButtonPath({ kind: 'DASHBOARD' })).toBe('/');
     expect(opsLogButtonPath({ kind: 'USER', ref: '../admin' })).toBeNull();

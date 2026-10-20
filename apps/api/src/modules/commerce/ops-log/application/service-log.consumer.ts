@@ -1,4 +1,9 @@
-import { type DomainEvent, type EventType, type TenantContext } from '@nexa/contracts';
+import {
+  EVENT_PAYLOAD_SCHEMAS,
+  type DomainEvent,
+  type EventType,
+  type TenantContext,
+} from '@nexa/contracts';
 import type { EventConsumer } from '../../../platform/eventing/application/event-consumer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { publish, scopeOf } from './publish.js';
@@ -43,7 +48,7 @@ export class ServiceLogConsumer implements EventConsumer {
     if (event.eventType === 'ServiceProvisioned') {
       built = await this.provisioned(scope, service.orderId, service, customer, at, tx);
     } else {
-      const last = await this.deps.facts.latestLinkOperation(scope, service.id, tx);
+      const last = await this.linkOperation(scope, event, service.id, at, tx);
       built = linkChanged({
         service,
         customer,
@@ -58,6 +63,27 @@ export class ServiceLogConsumer implements EventConsumer {
       dedupeKey: `oplog:service:${event.eventId}`,
       correlationId: event.correlationId,
     });
+  }
+
+  /**
+   * Who changed THIS link (Codex review of #301): the operation the event names, read by id.
+   * An event from before it named one falls back to the last link operation completed by the
+   * event's own time — never the latest by the time the consumer runs, which would credit a
+   * later rotation's requester with this one.
+   */
+  private async linkOperation(
+    scope: TenantContext,
+    event: DomainEvent,
+    serviceId: string,
+    at: Date,
+    tx: TransactionScope,
+  ): Promise<{ readonly type: string; readonly requestedByCustomerId: string | null } | null> {
+    const payload = EVENT_PAYLOAD_SCHEMAS.ServiceSubscriptionRotated.parse(event.payload);
+    if (payload.operationId !== undefined) {
+      const named = await this.deps.facts.operation(scope, payload.operationId, tx);
+      if (named !== null && named.serviceId === serviceId) return named;
+    }
+    return this.deps.facts.latestLinkOperation(scope, serviceId, at, tx);
   }
 
   private async provisioned(

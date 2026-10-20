@@ -8,12 +8,15 @@ import { backupCaptionRenderer } from '../../apps/api/src/modules/commerce/ops-l
  * switch that never costs a backup its delivery.
  *
  * MUTATION: ignoring the type's switch -> the "switched off" test; sizing in bytes instead of
- * mebibytes -> the size line.
+ * mebibytes -> the size line; counting the next backup from the completion time instead of
+ * the run's start (the scheduler's `lastSucceededAt + interval`) -> the next-backup line.
  */
 
-const AT = new Date('2026-10-12T00:30:00Z'); // 04:00 Tehran
+const AT = new Date('2026-10-12T00:30:00Z'); // 04:00 Tehran: the run COMPLETED then
+const STARTED = new Date('2026-10-12T00:20:00Z'); // 03:50 Tehran: the run began then
 const facts = {
   at: AT,
+  startedAt: STARTED,
   fileName: 'nexa-backup-test.nxb',
   archiveBytes: 44 * 1024 * 1024 + 300_000,
   checksum: 'a'.repeat(64),
@@ -45,7 +48,8 @@ describe('L31 — the backup caption', () => {
     expect(text).toContain('💾 بکاپ — ۱۴۰۵/۰۷/۲۰ ۰۴:۰۰');
     expect(text).toContain('nexa-backup-test.nxb · ۴۴ مگ');
     expect(text).toContain('✅ رمزگذاری و بازیابی آزمایشی موفق');
-    expect(text).toContain('🕒 بکاپ بعدی: ۱۴۰۵/۰۷/۲۰ ۰۶:۰۰');
+    // The scheduler's own rule: the run's START plus the interval (03:50 + 2h), not 04:00 + 2h.
+    expect(text).toContain('🕒 بکاپ بعدی: ۱۴۰۵/۰۷/۲۰ ۰۵:۵۰');
     expect(text).not.toMatch(/NaN|undefined|\{[a-zA-Z]+\}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/);
   });
 

@@ -641,7 +641,7 @@ describe('L23 / L24 — each error is its own message with customer, cause, tech
       }),
       reason: 'PANEL_REJECTED',
       payment: payment({ method: 'MANUAL_TRANSFER' }),
-      refunded: true,
+      refunded: money(250_000n, 'IRT'),
       unknown: false,
       at: AT,
       words,
@@ -659,13 +659,45 @@ describe('L23 / L24 — each error is its own message with customer, cause, tech
         operation: null,
         reason: null,
         payment: null,
-        refunded: false,
+        refunded: null,
         unknown: true,
         at: AT,
         words,
       }),
     );
     expect(pending).not.toEqual(text);
+  });
+
+  it('L23/L24 name the amount the LEDGER credited back, and say nothing was refunded when none was', () => {
+    // A partial refund: the order cost 250 000, the ledger gave back 100 000.
+    const partial = render(
+      'L23 partial',
+      provisionFailure({
+        order: order(),
+        customer: customer(),
+        operation: null,
+        reason: 'PANEL_REJECTED',
+        payment: payment(),
+        refunded: money(100_000n, 'IRT'),
+        unknown: false,
+        at: AT,
+        words,
+      }),
+    );
+    expect(partial).toContain(`${words.impact('refundedToWallet')} (۱۰۰٬۰۰۰ تومان)`);
+    const none = operationFailure({
+      order: order({ purpose: 'RENEW' }),
+      service: service(),
+      customer: customer(),
+      operation: null,
+      reason: 'PANEL_REJECTED',
+      payment: payment(),
+      refunded: null,
+      unknown: false,
+      at: AT,
+      words,
+    });
+    expect(String(none.values['impact'])).toBe(words.impact('notRefunded'));
   });
 
   it('L24 (an operation on an existing service) keeps the raw reason line and the retry hint of an UNKNOWN outcome', () => {
@@ -676,7 +708,7 @@ describe('L23 / L24 — each error is its own message with customer, cause, tech
       operation: operation({ state: 'UNKNOWN', failureKind: 'TIMEOUT', failureMessage: null }),
       reason: null,
       payment: payment(),
-      refunded: false,
+      refunded: null,
       unknown: true,
       at: AT,
       words,

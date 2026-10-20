@@ -1246,6 +1246,24 @@ export function deserialiseValues(intent: {
       out[placeholder.token] = new Date(raw);
       continue;
     }
+    /*
+     * A whole-number placeholder whose value was a bigint (a byte count, a day count) went in
+     * as its decimal string — JSON has no bigint (`serialiseValues`) — and must come back a
+     * bigint: left a string, the render's type check refused it and the message failed with
+     * `notification.render_failed` (Codex review of #301). Only an exact integer string; any
+     * other string is left as it is, for the check to name.
+     */
+    if (
+      (placeholder.type === 'NUMBER' ||
+        placeholder.type === 'DURATION_DAYS' ||
+        placeholder.type === 'BYTES' ||
+        placeholder.type === 'TRAFFIC_LIMIT') &&
+      typeof raw === 'string' &&
+      /^-?\d{1,20}$/.test(raw)
+    ) {
+      out[placeholder.token] = BigInt(raw);
+      continue;
+    }
     if (placeholder.type === 'MONEY' && typeof raw === 'object') {
       const value = raw as { amountMinor?: string; currency?: string };
       if (value.amountMinor !== undefined && value.currency !== undefined) {

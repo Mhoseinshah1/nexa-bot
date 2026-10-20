@@ -169,6 +169,12 @@ export interface OpsLogFacts {
     keys: readonly string[],
     tx: TransactionScope,
   ): Promise<ReadonlyMap<string, string>>;
+  /** How many distinct permissions the roles with these keys grant together. */
+  permissionCountOf(
+    scope: TenantContext,
+    keys: readonly string[],
+    tx: TransactionScope,
+  ): Promise<number>;
   ledgerEntry(
     scope: TenantContext,
     id: string,
@@ -176,8 +182,15 @@ export interface OpsLogFacts {
   ): Promise<LedgerEntryFact | null>;
   /**
    * The wallet on either side of these entries, derived from the ledger: `after` is the sum of
-   * every entry of the customer up to and including the LAST of them (by `created_at`, then
-   * id), and `before` is `after` minus their own signed sum. Never a stored balance.
+   * every entry of the customer up to and including the LAST of them in COMMIT order, and
+   * `before` is `after` minus their own signed sum. Never a stored balance.
+   *
+   * Commit order is the per-customer sequence of the entries' `WalletEntryRecorded` events
+   * (`aggregate_sequences` is a row lock every wallet writer takes, held to commit), never
+   * `created_at`: a writer stamps its entry BEFORE it waits for the customer lock, so the
+   * entry that waited can carry the earlier stamp. An entry without an event (none is
+   * written that way today) is placed by `(created_at, id)`. Null when none of the entries
+   * is the customer's in that currency.
    */
   balanceAround(
     scope: TenantContext,
@@ -242,12 +255,15 @@ export interface OpsLogFacts {
     tx: TransactionScope,
   ): Promise<string | null>;
   /**
-   * The latest finished operation that changes a service's link — a rotation or a location
-   * change — and who asked for it (a customer id, or null when an operator did).
+   * The latest operation completed by `until` that changes a service's link — a rotation or a
+   * location change — and who asked for it (a customer id, or null when an operator did). The
+   * fallback for an event that does not name its operation.
    */
   latestLinkOperation(
     scope: TenantContext,
     serviceId: string,
+    /** Only operations completed by this instant: the event's own time. */
+    until: Date,
     tx: TransactionScope,
   ): Promise<{ readonly type: string; readonly requestedByCustomerId: string | null } | null>;
   /** How many link rotations the service had in the 30 days up to `until`, this one included. */

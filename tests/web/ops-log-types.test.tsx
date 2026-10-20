@@ -99,6 +99,36 @@ describe('the per-type switches of the operations log group', () => {
     });
   });
 
+  it('reads the settings again after a stale-version refusal, so the next save carries the new version', async () => {
+    const api = stubApi([
+      ...rows(),
+      {
+        url: '/settings/ops.log.storm_threshold',
+        method: 'POST',
+        status: 409,
+        body: {
+          error: {
+            kind: 'conflict',
+            code: 'control.version_conflict',
+            message: 'stale',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(<OpsLogTypeSwitches mayManage />);
+    await screen.findByTestId('ops-log-types');
+    const reads = () =>
+      api.calls.filter((call) => call.method === 'GET' && call.url.endsWith('/settings')).length;
+    const before = reads();
+    const field = screen.getByLabelText(t('web.opslog_storm_threshold'));
+    fireEvent.change(field, { target: { value: '30' } });
+    const row = field.closest('.field-row') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: t('web.save') }));
+    await waitFor(() => expect(api.calls.some((call) => call.method === 'POST')).toBe(true));
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+  });
+
   it('is read-only for an administrator without settings.edit', async () => {
     stubApi(rows());
     renderPage(<OpsLogTypeSwitches mayManage={false} />);

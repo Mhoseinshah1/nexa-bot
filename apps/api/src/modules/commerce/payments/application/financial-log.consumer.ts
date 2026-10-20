@@ -318,16 +318,21 @@ export class FinancialLogConsumer implements EventConsumer {
         };
         await this.withOrderCode(scope, payment, values, tx);
         if (completed) {
-          // A refund into the wallet: the wallet on either side of the credit it wrote.
+          // A refund into the wallet: the wallet on either side of the credit THIS refund
+          // wrote — found by its own reference, never as the payment's newest REFUND entry,
+          // which after a second partial refund is the other refund's (money review of #301).
           if (payload.channel === 'WALLET_CREDIT') {
-            const entries = await facts.entriesOfPayment(scope, payment.id, ['REFUND'], tx);
-            const last = entries.at(-1);
-            if (last !== undefined) {
+            const credit = await facts.ledgerEntryByReference(
+              scope,
+              `${payload.refundId}:refund`,
+              tx,
+            );
+            if (credit !== null && credit.customerId === payment.customerId) {
               const balance = await facts.balanceAround(
                 scope,
                 payment.customerId,
-                last.amount.currency,
-                [last.id],
+                credit.amount.currency,
+                [credit.id],
                 tx,
               );
               if (balance !== null) {

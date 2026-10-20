@@ -251,7 +251,17 @@ function OptionRow({
       notify({ tone: 'ok', message: t('web.opslog_types_saved') });
       await queries.invalidateQueries({ queryKey: ['settings'] });
     },
-    onError: (error) => submission.settleOn(error),
+    onError: async (error) => {
+      submission.settleOn(error);
+      /*
+       * A stale version (another administrator saved this option) is read again, never
+       * retried with the version this row was drawn with — which would fail the same way for
+       * ever (Codex review of #301). The re-read remounts the row under its new version, so
+       * the reason is said as a toast, which outlives the row.
+       */
+      notify({ tone: 'danger', message: messageFor(error) });
+      await queries.invalidateQueries({ queryKey: ['settings'] });
+    },
   });
   const id = `ops-log-option-${option.key}`;
   if (option.kind === 'boolean') {

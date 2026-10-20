@@ -88,15 +88,33 @@ class FakeFacts {
   operation = async (_s: unknown, id: string) => this.operations.get(id) ?? null;
   paymentOfOrder = async (_s: unknown, orderId: string) => this.payments.get(orderId) ?? null;
   serviceBefore = async () => this.before;
-  latestLinkOperation = async () => this.link;
+  /** The operations completed by `until`, latest first: what the SQL bounds by event time. */
+  linkHistory: { at: number; type: string; requestedByCustomerId: string | null }[] = [];
+  latestLinkOperation = async (_s: unknown, _service: string, until: Date) =>
+    this.linkHistory.length === 0
+      ? this.link
+      : ([...this.linkHistory]
+          .filter((one) => one.at <= until.getTime())
+          .sort((a, b) => b.at - a.at)[0] ?? null);
   rotationsInLast30Days = async () => this.rotations;
   undeliverableReason = async () => this.undeliverable;
   failedOperationOfOrder = async () => this.failed;
   roleNamesOf = async () => this.roleNames;
+  /** Permissions per role key, for the snapshot an event carries. */
+  rolePermissions = new Map<string, number>();
+  permissionCountOf = async (_s: unknown, keys: readonly string[]) =>
+    keys.reduce((sum, key) => sum + (this.rolePermissions.get(key) ?? 0), 0);
   entriesOfOrder = async (_s: unknown, orderId: string, reason: string) =>
     this.ledger
       .filter((row) => row.orderId === orderId && row.reason === reason)
-      .map((row) => ({ id: row.id }) as LedgerEntryFact);
+      .map(
+        (row) =>
+          ({
+            id: row.id,
+            direction: row.signed < 0n ? 'DEBIT' : 'CREDIT',
+            amount: money(row.signed < 0n ? -row.signed : row.signed, 'IRT'),
+          }) as LedgerEntryFact,
+      );
   /** The same arithmetic as the SQL: the wallet up to the last named entry, less their own sum. */
   balanceAround = async (
     _s: unknown,
@@ -290,11 +308,66 @@ describe('L10 / L11 / L16 / L15 — the services log', () => {
     const { facts, queued, lane, ofFacts } = setup();
     const consumer = new ServiceLogConsumer({ lane, facts: ofFacts, words });
     facts.link = { type: 'ROTATE_SUBSCRIPTION', requestedByCustomerId: 'cust-1' };
-    await consumer.handle(event('ServiceSubscriptionRotated', 'svc-1'), TX);
+    await consumer.handle(
+      event('ServiceSubscriptionRotated', 'svc-1', { customerId: 'cust-1' }),
+      TX,
+    );
     facts.link = { type: 'ROTATE_SUBSCRIPTION', requestedByCustomerId: null };
-    await consumer.handle(event('ServiceSubscriptionRotated', 'svc-1'), TX);
+    await consumer.handle(
+      event('ServiceSubscriptionRotated', 'svc-1', { customerId: 'cust-1' }),
+      TX,
+    );
     expect(queued.map((one) => one.values['byWhom'])).toEqual([
       words.byWhom('CUSTOMER'),
+      words.byWhom('ADMIN'),
+    ]);
+  });
+
+  it('a link change is attributed to ITS operation, never to a later one the consumer finds first', async () => {
+    const { facts, queued, lane, ofFacts } = setup();
+    const consumer = new ServiceLogConsumer({ lane, facts: ofFacts, words });
+    // The customer's rotation completed at AT.
+    facts.operations.set('op-customer', {
+      id: 'op-customer',
+      type: 'ROTATE_SUBSCRIPTION',
+      state: 'SUCCEEDED',
+      serviceId: 'svc-1',
+      orderId: null,
+      requestedByCustomerId: 'cust-1',
+      panelId: 'pan-1',
+      failureKind: null,
+      failureMessage: null,
+      targetExpiresAt: null,
+      targetTrafficLimitBytes: null,
+      completedAt: AT,
+    });
+    // The history the fallback reads: an operator's rotation just before the event's time, and
+    // a customer's an hour after it (later than the event, so never its author).
+    facts.linkHistory = [
+      { at: AT.getTime() - 1, type: 'ROTATE_SUBSCRIPTION', requestedByCustomerId: null },
+      {
+        at: AT.getTime() + 3_600_000,
+        type: 'ROTATE_SUBSCRIPTION',
+        requestedByCustomerId: 'cust-1',
+      },
+    ];
+    // The event names its operation…
+    await consumer.handle(
+      event('ServiceSubscriptionRotated', 'svc-1', {
+        customerId: 'cust-1',
+        operationId: 'op-customer',
+      }),
+      TX,
+    );
+    // …and an event from before the field is bounded by its own time.
+    await consumer.handle(
+      event('ServiceSubscriptionRotated', 'svc-1', { customerId: 'cust-1' }),
+      TX,
+    );
+    expect(queued.map((one) => one.values['byWhom'])).toEqual([
+      // The named operation: the customer's, whatever the history says.
+      words.byWhom('CUSTOMER'),
+      // No name: the last one completed by the event's time, the operator's — not the later one.
       words.byWhom('ADMIN'),
     ]);
   });
@@ -456,6 +529,15 @@ describe('L23 / L24 — each error is its own message, and an unknown outcome is
     const { facts, queued, lane, ofFacts } = setup();
     facts.payments.set('ord-1', paymentFact('MANUAL_TRANSFER'));
     facts.failed = failure();
+    // What the refund wrote: the figure comes from here, never from the order's total.
+    facts.ledger.push({
+      id: 'refund-1',
+      customerId: 'cust-1',
+      signed: 250_000n,
+      reason: 'REFUND',
+      orderId: 'ord-1',
+      at: 1,
+    });
     const consumer = new FailureLogConsumer({ lane, facts: ofFacts, words });
     await consumer.handle(
       event('OrderRefunded', 'ord-1', {
@@ -475,6 +557,33 @@ describe('L23 / L24 — each error is its own message, and an unknown outcome is
     expect(text).not.toMatch(UUID);
     // The optional roll-up input is always supplied; whether it applies is the lane's to say.
     expect(queued[0]!.storm).toMatchObject({ customer: '700100200' });
+  });
+
+  it('an automatic refund with no REFUND credit on the ledger says nothing was refunded, never the order’s total', async () => {
+    const { facts, queued, lane, ofFacts } = setup();
+    facts.payments.set('ord-1', paymentFact('MANUAL_TRANSFER'));
+    facts.failed = failure();
+    // A partial credit of 100 000 on a 250 000 order: the message names the 100 000.
+    const consumer = new FailureLogConsumer({ lane, facts: ofFacts, words });
+    const refunded = event('OrderRefunded', 'ord-1', {
+      customerId: 'cust-1',
+      amountMinor: '250000',
+      currency: 'IRT',
+      reason: AUTOMATIC_REFUND_REASON,
+    });
+    await consumer.handle(refunded, TX);
+    expect(render(queued[0]!)).toContain(words.impact('notRefunded'));
+    expect(render(queued[0]!)).not.toContain('۲۵۰٬۰۰۰ تومان)');
+    facts.ledger.push({
+      id: 'refund-p',
+      customerId: 'cust-1',
+      signed: 100_000n,
+      reason: 'REFUND',
+      orderId: 'ord-1',
+      at: 1,
+    });
+    await consumer.handle(refunded, TX);
+    expect(render(queued[1]!)).toContain('(۱۰۰٬۰۰۰ تومان)');
   });
 
   it('an UNKNOWN outcome is not refunded and not called a failure of money: the panel is being asked', async () => {
@@ -546,6 +655,55 @@ describe('L19 / L21 — administrators and a service alert', () => {
     const text = render(queued[0]!);
     expect(text).toContain('پشتیبان ← مدیر مالی');
     expect(text).toContain('۳۰ مجوز');
+  });
+
+  it('renders the roles AS OF THE EVENT, not the roles a later change left by the time it runs', async () => {
+    const { facts, queued, lane, ofFacts } = setup();
+    // When the consumer runs the admin is already an owner — a LATER change.
+    facts.admins.set('adm-1', {
+      id: 'adm-1',
+      username: 'finance_lead',
+      displayName: 'مدیر مالی',
+      telegramUserId: '700900100',
+      roleNames: ['مالک'],
+      roleKeys: ['owner'],
+      permissionCount: 99,
+    });
+    facts.roleNames = new Map([
+      ['support', 'پشتیبان'],
+      ['finance', 'مدیر مالی'],
+      ['owner', 'مالک'],
+    ]);
+    facts.rolePermissions = new Map([
+      ['support', 4],
+      ['finance', 30],
+    ]);
+    const consumer = new AdminLogConsumer({ lane, facts: ofFacts, words });
+    await consumer.handle(
+      event('AdminRolesChanged', 'adm-1', {
+        added: ['finance'],
+        removed: ['support'],
+        before: ['support'],
+        after: ['finance'],
+      }),
+      TX,
+    );
+    await consumer.handle(
+      event('AdminStatusChanged', 'adm-1', {
+        from: 'ACTIVE',
+        to: 'DISABLED',
+        roleKeys: ['finance'],
+      }),
+      TX,
+    );
+    const changed = render(queued[0]!);
+    expect(changed).toContain('پشتیبان ← مدیر مالی');
+    expect(changed).toContain('۳۰ مجوز');
+    expect(changed).not.toContain('مالک');
+    const disabled = render(queued[1]!);
+    expect(disabled).toContain('مدیر مالی');
+    expect(disabled).not.toContain('مالک');
+    expect(disabled).toContain('۳۰ مجوز');
   });
 
   it('one alert per reminder, with the customer’s service; an imported service is silent', async () => {
@@ -728,31 +886,45 @@ describe('the nightly report’s time and day', () => {
   }
   const DEFAULTS: Record<string, unknown> = {
     'ops.log.disabled_types': [],
-    'ops.log.nightly_report_time': '23:59',
+    'ops.log.nightly_report_time': '00:05',
     'sales.currency': 'IRT',
   };
 
-  it('posts nothing before 23:59 Tehran, and the three reports at 23:59, for the half-open Tehran day', async () => {
-    // 23:58 Tehran on 2026-10-12 is 20:28 UTC.
-    const now = { current: new Date('2026-10-12T20:28:00Z') };
+  it('posts nothing before 00:05 Tehran, and at 00:05 the three reports of the COMPLETED previous day', async () => {
+    // 00:04 Tehran on 2026-10-13 is 2026-10-12T20:34:00Z.
+    const now = { current: new Date('2026-10-12T20:34:00Z') };
     const { reporter, queued, reads } = service(now, {});
     expect(await reporter.runOnce(SCOPE)).toBe(0);
-    now.current = new Date('2026-10-12T20:29:00Z'); // 23:59 Tehran
+    now.current = new Date('2026-10-12T20:35:00Z'); // 00:05 Tehran, 2026-10-13
     expect(await reporter.runOnce(SCOPE)).toBe(3);
     expect(queued.map((one) => one.logType).sort()).toEqual([
       'REPORT_FINANCIAL',
       'REPORT_PANELS',
       'REPORT_SUMMARY',
     ]);
-    // [00:00 Tehran, next 00:00 Tehran): end is the NEXT midnight, not 23:59:59.
+    // The day reported is 2026-10-12 Tehran, [00:00, next 00:00) — ended before the report.
     expect(reads[0]!.start.toISOString()).toBe('2026-10-11T20:30:00.000Z');
     expect(reads[0]!.end.toISOString()).toBe('2026-10-12T20:30:00.000Z');
+    expect(reads[0]!.end.getTime()).toBeLessThanOrEqual(now.current.getTime());
+    // Compared with the day before IT.
+    expect(reads[0]!.previousStart.toISOString()).toBe('2026-10-10T20:30:00.000Z');
     expect(reads[0]!.previousEnd.toISOString()).toBe(reads[0]!.start.toISOString());
-    expect(reads[0]!.end.getTime() - reads[0]!.start.getTime()).toBe(24 * 3_600_000);
+  });
+
+  it('never reports a day that has not ended: at 23:59 the running day is not reported', async () => {
+    // 23:59 Tehran on 2026-10-12, time set to 23:59: the report due now is 2026-10-11's.
+    const { reporter, reads } = service(
+      { current: new Date('2026-10-12T20:29:00Z') },
+      { 'ops.log.nightly_report_time': '23:59' },
+    );
+    expect(await reporter.runOnce(SCOPE)).toBe(3);
+    expect(reads).toHaveLength(1);
+    expect(reads[0]!.start.toISOString()).toBe('2026-10-10T20:30:00.000Z');
+    expect(reads[0]!.end.toISOString()).toBe('2026-10-11T20:30:00.000Z');
   });
 
   it('posts a day once: a second pass, a second replica and a restart add nothing', async () => {
-    const now = { current: new Date('2026-10-12T20:29:30Z') };
+    const now = { current: new Date('2026-10-12T20:35:30Z') };
     const { reporter, queued } = service(now, {});
     expect(await reporter.runOnce(SCOPE)).toBe(3);
     expect(await reporter.runOnce(SCOPE)).toBe(0);
@@ -777,15 +949,19 @@ describe('the nightly report’s time and day', () => {
   });
 
   it('catches up a report a downed worker missed, but never posts a stale one as if it were fresh', async () => {
-    // 01:00 Tehran the next day: yesterday's 23:59 is an hour and a bit ago.
-    const soon = service({ current: new Date('2026-10-12T21:40:00Z') }, {});
+    // Time 23:59; at 01:00 Tehran on the 13th the 11th's report (due 23:59 on the 12th) is an
+    // hour late and still posted, and the 12th's (due 23:59 on the 13th) is not due yet.
+    const soon = service(
+      { current: new Date('2026-10-12T21:30:00Z') },
+      { 'ops.log.nightly_report_time': '23:59' },
+    );
     expect(await soon.reporter.runOnce(SCOPE)).toBe(3);
-    expect(soon.reads[0]!.start.toISOString()).toBe('2026-10-11T20:30:00.000Z');
-    // Past the catch-up bound, yesterday's is not posted; today's time has not come.
+    expect(soon.reads[0]!.start.toISOString()).toBe('2026-10-10T20:30:00.000Z');
+    // Past the catch-up bound, the 12th's 00:05 report is not posted.
     const late = service(
       {
         current: new Date(
-          Date.parse('2026-10-12T20:29:00Z') + NIGHTLY_REPORT_CATCH_UP_MS + 3_600_000,
+          Date.parse('2026-10-12T20:35:00Z') + NIGHTLY_REPORT_CATCH_UP_MS + 3_600_000,
         ),
       },
       {},

@@ -2104,7 +2104,7 @@ export class ProvisionerService {
         eventType: 'ServiceSubscriptionRotated',
         aggregateType: 'Service',
         aggregateId: serviceId,
-        payload: { customerId: service.customerId },
+        payload: { customerId: service.customerId, operationId: operation.id },
       });
     });
 
@@ -2486,7 +2486,7 @@ export class ProvisionerService {
           eventType: 'ServiceSubscriptionRotated',
           aggregateType: 'Service',
           aggregateId: serviceId,
-          payload: { customerId: service.customerId },
+          payload: { customerId: service.customerId, operationId: operation.id },
         });
       }
     });

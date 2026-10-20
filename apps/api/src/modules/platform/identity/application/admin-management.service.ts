@@ -580,7 +580,7 @@ export class AdminManagementService {
           eventType: 'AdminStatusChanged',
           aggregateType: 'Admin',
           aggregateId: targetId,
-          payload: { from: target.status, to: command.status },
+          payload: { from: target.status, to: command.status, roleKeys: [...targetRoleKeys] },
         });
 
         // The role keys come back with the status, read under the same lock
@@ -752,7 +752,12 @@ export class AdminManagementService {
           eventType: 'AdminRolesChanged',
           aggregateType: 'Admin',
           aggregateId: target.id,
-          payload: { added: delta.added, removed: delta.removed },
+          payload: {
+            added: delta.added,
+            removed: delta.removed,
+            before: [...current],
+            after: [...next],
+          },
         });
         // In the SAME transaction as the write, so a crash between them cannot leave a
         // change with no record that would let a redelivery repeat it.

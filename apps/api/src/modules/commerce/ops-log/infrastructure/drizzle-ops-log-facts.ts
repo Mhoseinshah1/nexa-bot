@@ -27,12 +27,25 @@ const date = (value: unknown): Date | null =>
 const big = (value: unknown): bigint => BigInt(typeof value === 'string' ? value : String(value));
 
 /**
+ * `(p1, p2, …)` for an `IN`, one bound parameter per element, spelled out with `sql.join`
+ * rather than left to how a driver or a drizzle release expands an interpolated array (Codex
+ * review of #301). Never called with an empty list: every caller answers that case first,
+ * because `IN ()` is not SQL.
+ */
+const list = (values: readonly string[]): ReturnType<typeof sql> =>
+  sql`(${sql.join(
+    values.map((value) => sql`${value}`),
+    sql`, `,
+  )})`;
+
+/**
  * The facts the operations log group's builders read (Round 4 PR-D), straight from the
  * tables that own them.
  *
  * Read-only and inside the caller's transaction. A balance is never read from a column — there
- * is none: `balanceAround` SUMS the ledger up to a named entry, so a message that says «موجودی
- * قبل ← بعد» is arithmetic over the same append-only rows the wallet itself is derived from.
+ * is none: `balanceAround` SUMS the ledger up to a named entry, in commit order, so a message
+ * that says «موجودی قبل ← بعد» is arithmetic over the same append-only rows the wallet itself
+ * is derived from.
  * Every query names the tenant; an id of another tenant's row answers null.
  */
 export class DrizzleOpsLogFacts implements OpsLogFacts {
@@ -113,9 +126,25 @@ export class DrizzleOpsLogFacts implements OpsLogFacts {
     if (keys.length === 0) return new Map();
     const found = await this.rows(
       tx,
-      sql`SELECT key, name FROM roles WHERE tenant_id = ${tenantId} AND key IN ${[...keys]}`,
+      sql`SELECT key, name FROM roles WHERE tenant_id = ${tenantId} AND key IN ${list(keys)}`,
     );
     return new Map(found.map((row) => [String(row['key']), String(row['name'])]));
+  }
+
+  async permissionCountOf(
+    scope: TenantContext,
+    keys: readonly string[],
+    tx: TransactionScope,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    if (keys.length === 0) return 0;
+    const [row] = await this.rows(
+      tx,
+      sql`SELECT count(DISTINCT rp.permission_key)::int AS n FROM roles r
+            JOIN role_permissions rp ON rp.tenant_id = r.tenant_id AND rp.role_id = r.id
+           WHERE r.tenant_id = ${tenantId} AND r.key IN ${list(keys)}`,
+    );
+    return Number(row?.['n'] ?? 0);
   }
 
   private toEntry(row: Row): LedgerEntryFact {
@@ -172,11 +201,12 @@ export class DrizzleOpsLogFacts implements OpsLogFacts {
     tx: TransactionScope,
   ): Promise<readonly LedgerEntryFact[]> {
     const tenantId = requireTenantId(scope);
+    if (reasons.length === 0) return [];
     const found = await this.rows(
       tx,
       sql`SELECT ${DrizzleOpsLogFacts.ENTRY_COLUMNS} FROM wallet_entries
            WHERE tenant_id = ${tenantId} AND payment_id = ${paymentId}
-             AND reason IN ${reasons}
+             AND reason IN ${list(reasons)}
            ORDER BY created_at, id`,
     );
     return found.map((row) => this.toEntry(row));
@@ -207,26 +237,55 @@ export class DrizzleOpsLogFacts implements OpsLogFacts {
   ): Promise<BalanceAround | null> {
     const tenantId = requireTenantId(scope);
     if (entryIds.length === 0) return null;
-    const ids = [...entryIds];
-    const [after] = await this.rows(
+    /*
+     * The ORDER the balance is summed in is the whole rule (independent money review of
+     * #301). `created_at` is not it: every writer stamps its entry from the clock BEFORE it
+     * takes the customer lock (`WalletService.adjust`, `settleFromWallet`), and an operator's
+     * credit takes no customer lock at all, so a debit that waited for the lock while a credit
+     * committed carries the EARLIER stamp — summed by `created_at`, a 100 000 → 0 debit read
+     * 0 → -100 000 (`ops-log-money.test.ts` reproduces it with the row held).
+     *
+     * Commit order is recorded already, under a lock every writer takes: each entry's
+     * `WalletEntryRecorded` event is written in the entry's own transaction, and its
+     * per-aggregate `sequence` comes from the `('Wallet', customer)` row of
+     * `aggregate_sequences`, whose row lock is held until that transaction commits. So for
+     * one customer a higher sequence is a later commit, and the sum of every entry whose
+     * event sequence is at most the group's last is the balance the instant the group
+     * committed. An entry with no event is placed by `(created_at, id)` against the last.
+     */
+    const [row] = await this.rows(
       tx,
-      sql`SELECT COALESCE(SUM(CASE w.direction WHEN 'CREDIT' THEN w.amount ELSE -w.amount END), 0)::text AS balance
-            FROM wallet_entries w
-           WHERE w.tenant_id = ${tenantId} AND w.customer_id = ${customerId}
-             AND w.currency = ${currency}
-             AND (w.created_at, w.id) <= (
-               SELECT l.created_at, l.id FROM wallet_entries l
-                WHERE l.tenant_id = ${tenantId} AND l.id IN ${ids}
-                ORDER BY l.created_at DESC, l.id DESC LIMIT 1)`,
+      sql`WITH ev AS (
+            SELECT m.payload ->> 'entryId' AS entry_id, min(m.sequence) AS seq
+              FROM outbox_messages m
+             WHERE m.tenant_id = ${tenantId} AND m.aggregate_type = 'Wallet'
+               AND m.aggregate_id = ${customerId} AND m.event_type = 'WalletEntryRecorded'
+             GROUP BY 1
+          ), e AS (
+            SELECT w.id, w.created_at, ev.seq,
+                   CASE w.direction WHEN 'CREDIT' THEN w.amount ELSE -w.amount END AS signed
+              FROM wallet_entries w
+              LEFT JOIN ev ON ev.entry_id = w.id::text
+             WHERE w.tenant_id = ${tenantId} AND w.customer_id = ${customerId}
+               AND w.currency = ${currency}
+          ), last AS (
+            SELECT e.seq, e.created_at, e.id FROM e
+             WHERE e.id::text IN ${list(entryIds)}
+             ORDER BY e.seq DESC NULLS LAST, e.created_at DESC, e.id DESC
+             LIMIT 1
+          )
+          SELECT EXISTS (SELECT 1 FROM last) AS found,
+                 (SELECT COALESCE(SUM(e.signed), 0) FROM e, last
+                   WHERE CASE WHEN e.seq IS NOT NULL AND last.seq IS NOT NULL
+                              THEN e.seq <= last.seq
+                              ELSE (e.created_at, e.id) <= (last.created_at, last.id) END
+                 )::text AS after,
+                 (SELECT COALESCE(SUM(e.signed), 0) FROM e
+                   WHERE e.id::text IN ${list(entryIds)})::text AS own`,
     );
-    const [own] = await this.rows(
-      tx,
-      sql`SELECT COALESCE(SUM(CASE direction WHEN 'CREDIT' THEN amount ELSE -amount END), 0)::text AS signed
-            FROM wallet_entries
-           WHERE tenant_id = ${tenantId} AND customer_id = ${customerId} AND id IN ${ids}`,
-    );
-    const afterMinor = big(after?.['balance'] ?? '0');
-    const ownMinor = big(own?.['signed'] ?? '0');
+    if (row === undefined || row['found'] !== true) return null;
+    const afterMinor = big(row['after'] ?? '0');
+    const ownMinor = big(row['own'] ?? '0');
     return {
       before: money(afterMinor - ownMinor, currency),
       after: money(afterMinor, currency),
@@ -462,6 +521,7 @@ export class DrizzleOpsLogFacts implements OpsLogFacts {
   async latestLinkOperation(
     scope: TenantContext,
     serviceId: string,
+    until: Date,
     tx: TransactionScope,
   ): Promise<{ readonly type: string; readonly requestedByCustomerId: string | null } | null> {
     const tenantId = requireTenantId(scope);
@@ -470,6 +530,7 @@ export class DrizzleOpsLogFacts implements OpsLogFacts {
       sql`SELECT type, requested_by_customer_id FROM provisioning_operations
            WHERE tenant_id = ${tenantId} AND service_id = ${serviceId}
              AND type IN ('ROTATE_SUBSCRIPTION', 'CHANGE_LOCATION') AND state = 'SUCCEEDED'
+             AND completed_at <= ${until}
            ORDER BY completed_at DESC NULLS LAST, created_at DESC, id DESC LIMIT 1`,
     );
     return row === undefined
