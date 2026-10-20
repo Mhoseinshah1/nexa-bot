@@ -12,7 +12,7 @@ import {
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { NotificationService } from './notification.service.js';
-import { operationalEventDetails, technicalOf } from './event-details.js';
+import { cleanMessageOf, operationalEventDetails, technicalOf } from './event-details.js';
 import type { OpsEventPresenter } from './ports.js';
 
 /**
@@ -258,6 +258,9 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
             // own English message are the one short technical line beneath.
             heading: this.presenter?.title(recorded.code) ?? recorded.code,
             technical: technicalOf(recorded.code, recorded.message),
+            // Declared for the overrides written before Round 4; the default body prints neither.
+            code: recorded.code,
+            message: cleanMessageOf(recorded.message),
             occurrences: recorded.occurrenceCount,
             firstSeenAt: recorded.firstSeenAt,
             lastSeenAt: recorded.lastSeenAt,

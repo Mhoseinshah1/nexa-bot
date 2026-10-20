@@ -84,9 +84,13 @@ export function withoutIds(text: string): string {
  * server's own (English) message, bounded and free of ids. Never the title — that is Persian
  * and comes from the code.
  */
-export function technicalOf(code: string, message: string): string {
+export function cleanMessageOf(message: string): string {
   const cleaned = withoutIds(message).replace(/<[^>]*>/g, '');
-  const bounded = cleaned.length > 120 ? `${cleaned.slice(0, 119)}…` : cleaned;
+  return cleaned.length > 120 ? `${cleaned.slice(0, 119)}…` : cleaned;
+}
+
+export function technicalOf(code: string, message: string): string {
+  const bounded = cleanMessageOf(message);
   return bounded === '' ? code : `${code} · ${bounded}`;
 }
 
