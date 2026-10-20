@@ -103,8 +103,9 @@ describe('ledger reason catalog', () => {
     // payment package added RECEIPT_CREDIT (docs/payments-file02-design.md D2).
     // Customer 360 added the ACCOUNT_TRANSFER_OUT/IN pair
     // (docs/customer-account-transfer-audit.md). Migration P2 added
-    // MIGRATION_OPENING_BALANCE (docs/migration-opening-balance.md).
-    expect(LEDGER_REASONS.length).toBe(31);
+    // MIGRATION_OPENING_BALANCE (docs/migration-opening-balance.md). R5A item 4 added
+    // GATEWAY_LATE_CREDIT (a gateway's late approval credited to the wallet).
+    expect(LEDGER_REASONS.length).toBe(32);
     expect(new Set(LEDGER_REASONS).size).toBe(LEDGER_REASONS.length);
   });
 

@@ -281,6 +281,8 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   answer: 'پاسخ',
   app: 'نام برنامه (با نماد، اگر تعیین شده باشد)',
   at: 'زمان',
+  expiredAt: 'زمان پایان مهلت پرداخت',
+  approvedAt: 'زمان تأیید و واریز',
   automatic: 'نشانهٔ روشن بودن انتخاب خودکار',
   availableAt: 'زمان مجاز بعدی',
   balance: 'موجودی کیف پول',

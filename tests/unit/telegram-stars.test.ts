@@ -91,6 +91,8 @@ describe('the conversion (A1)', () => {
       verifyKey: false,
       browserReturn: false,
       numericIdentity: false,
+      // R5A item 4: only an inquiry route can credit a late approval; a pushed payment never does.
+      lateCreditSetting: null,
     });
     expect(PAYMENT_GATEWAY_DESCRIPTORS.TONPAYS.approval).toBe('INQUIRY');
   });
