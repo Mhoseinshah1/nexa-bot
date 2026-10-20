@@ -1,4 +1,4 @@
-import type { Money } from '@nexa/contracts';
+import type { FeatureFlagKey, Money } from '@nexa/contracts';
 import {
   CUSTOMER_NOTIFICATION_BACKOFF_MS,
   CUSTOMER_NOTIFICATION_KINDS,
@@ -27,6 +27,15 @@ import type {
 } from './ports.js';
 import type { OrderScreenReadiness, OrderScreenWait } from './order-screen-answer.js';
 import type { ServiceReminderSnapshotReader } from '../../provisioning/application/service-reminder.ports.js';
+import {
+  REMINDER_KIND_FLAGS,
+  decideReminderBurst,
+  reminderAllowance,
+  reminderBurstEvent,
+  reminderRaisesSince,
+  rollReminderWindow,
+  type ReminderRateDeps,
+} from './reminder-rate.js';
 import {
   CUSTOMER_NOTIFICATION_LATENCY_WARN_MS,
   notificationLatency,
@@ -505,6 +514,12 @@ export interface CustomerNotificationDeps {
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
   readonly scopeIsActive: (scope: TenantContext) => Promise<boolean>;
+  /**
+   * Round 4 PR-H (post-import safety): the ceiling on automatic reminders and the burst
+   * alarm (`reminder-rate.ts`). Absent, the claim is what it always was — one statement,
+   * immediate kinds first, bounded only by the pass. Wired in every process that sends.
+   */
+  readonly reminderRate?: ReminderRateDeps;
   readonly logger: {
     info: (context: Record<string, unknown>, message: string) => void;
     error: (context: Record<string, unknown>, message: string) => void;
@@ -632,7 +647,16 @@ export class CustomerNotificationService {
     }
 
     const leaseUntil = new Date(now.getTime() + NOTIFICATION_LEASE_MS);
-    const claimed = await this.deps.notifications.claimDue(scope, now, leaseUntil, limit);
+    const claimed =
+      this.deps.reminderRate === undefined
+        ? await this.deps.notifications.claimDue(scope, now, leaseUntil, limit)
+        : await this.claimWithinReminderCeiling(
+            scope,
+            this.deps.reminderRate,
+            now,
+            leaseUntil,
+            limit,
+          );
 
     const report = { ...empty, claimed: claimed.length, quietReleased };
     const counts: Record<string, number> = {};
@@ -656,6 +680,108 @@ export class CustomerNotificationService {
       errored: counts.errored ?? 0,
       lost: counts.lost ?? 0,
     };
+  }
+
+  /**
+   * Round 4 PR-H: the claim, with the reminders bounded by `reminders.max_per_minute`.
+   *
+   * ONE transaction, holding the tenant's rate-window row for its length: the immediate
+   * kinds are claimed first and in full — a reply or a payment outcome never waits on the
+   * ceiling — then at most what the minute leaves of the reminders, and the counts are
+   * written back before the lock is released. Two replicas are serialised by the row, so
+   * they share the ceiling. Nothing is sent in here: the transaction commits, and the
+   * batch it returns is sent afterwards exactly as before.
+   *
+   * The burst alarm is decided in the same transaction, from the reminders RAISED this hour
+   * (the producers' counter) — a reminder quiet hours held overnight was counted the night it
+   * was raised, so a late backlog is not a burst — and its event is recorded through the one
+   * recorder, in this transaction, so the condition and the count that opened it commit
+   * together. A reminder whose feature flag is off is not claimed at all.
+   */
+  private async claimWithinReminderCeiling(
+    scope: TenantContext,
+    rate: ReminderRateDeps,
+    now: Date,
+    leaseUntil: Date,
+    limit: number,
+  ): Promise<readonly CustomerNotificationRecord[]> {
+    return this.deps.uow.run(scope, async (tx) => {
+      const immediate = await this.deps.notifications.claimDue(
+        scope,
+        now,
+        leaseUntil,
+        limit,
+        tx,
+        'IMMEDIATE',
+      );
+      const limits = await rate.limits(scope, tx);
+      const window = rollReminderWindow(await rate.windows.lock(scope, now, tx), now);
+      /*
+       * Codex review of PR #296: a reminder whose flag is off is not claimed, so switching a
+       * family off halts what is already queued. One flag read per family, in this
+       * transaction, one after another (one client, one transaction).
+       */
+      const held: CustomerNotificationKind[] = [];
+      const flags = new Map<FeatureFlagKey, boolean>();
+      for (const [kind, flag] of Object.entries(REMINDER_KIND_FLAGS) as [
+        CustomerNotificationKind,
+        FeatureFlagKey,
+      ][]) {
+        if (!flags.has(flag)) flags.set(flag, await rate.isEnabled(scope, flag, tx));
+        if (flags.get(flag) === false) held.push(kind);
+      }
+      const allowance = reminderAllowance(window, limits.perMinute, limit - immediate.length);
+      const reminders =
+        allowance === 0
+          ? []
+          : await this.deps.notifications.claimDue(
+              scope,
+              now,
+              leaseUntil,
+              allowance,
+              tx,
+              'QUIET',
+              held,
+            );
+      /*
+       * Codex review of PR #296: the alarm counts reminders as they are RAISED — the producers'
+       * counter, read without a lock — never as the ceiling lets them be claimed, so a bulk
+       * enqueue opens it however low the ceiling is.
+       */
+      const total = await rate.raises.total(scope, tx);
+      const counted = {
+        ...window,
+        minuteClaimed: window.minuteClaimed + reminders.length,
+        hourFresh: window.hourFresh + reminderRaisesSince(window.raisedSeen, total),
+        raisedSeen: total > window.raisedSeen ? total : window.raisedSeen,
+      };
+      const burst = decideReminderBurst(counted, limits.burstPerHour);
+      if (burst !== 'NONE') {
+        await rate.opsLog.record(
+          scope,
+          reminderBurstEvent(burst, {
+            hourFresh: counted.hourFresh,
+            burstPerHour: limits.burstPerHour,
+            perMinute: limits.perMinute,
+          }),
+          tx,
+        );
+      }
+      await rate.windows.save(
+        scope,
+        {
+          minuteStartedAt: counted.minuteStartedAt,
+          minuteClaimed: counted.minuteClaimed,
+          hourStartedAt: counted.hourStartedAt,
+          hourFresh: counted.hourFresh,
+          burstOpen: burst === 'OPEN' ? true : burst === 'CLOSE' ? false : counted.burstOpen,
+          raisedSeen: counted.raisedSeen,
+        },
+        now,
+        tx,
+      );
+      return [...immediate, ...reminders];
+    });
   }
 
   /**

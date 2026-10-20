@@ -64,6 +64,8 @@ export const OPERATIONAL_EVENT_LABELS_FA: Readonly<Record<string, string>> = {
   'nexa.receipt_too_large': 'تصویر رسید بزرگ است',
   'notification.attempts_exhausted': 'تلاش‌های ارسال اعلان تمام شد',
   'notification.sweep_withdrawn': 'اعلان پس گرفته شد',
+  'notification.reminder_burst': 'تعداد یادآوری‌های خودکار از سقف هشدار گذشت',
+  'notification.reminder_burst_cleared': 'تعداد یادآوری‌های خودکار به حالت عادی برگشت',
   'ops_group.topic_recreated': 'موضوع گروه عملیات دوباره ساخته شد',
   'order.refunded_undeliverable': 'سفارش تحویل‌نشدنی بازپرداخت شد',
   'outbox.message_exhausted': 'تلاش‌های ارسال پیام تمام شد',

@@ -1,5 +1,5 @@
 {
-  "id": "98e59e74-3806-4f8f-a2c4-146a5f24ca23",
+  "id": "be032233-aa83-4111-83ea-1917dd4814b3",
   "prevId": "847b5239-6f40-4a4a-b698-2a9c506f3266",
   "version": "7",
   "dialect": "postgresql",
@@ -8241,6 +8241,81 @@
         "customer_notes_author_check": {
           "name": "customer_notes_author_check",
           "value": "length(author_label) BETWEEN 1 AND 200"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.customer_notification_rate_windows": {
+      "name": "customer_notification_rate_windows",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "minute_started_at": {
+          "name": "minute_started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "minute_claimed": {
+          "name": "minute_claimed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "hour_started_at": {
+          "name": "hour_started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "hour_fresh": {
+          "name": "hour_fresh",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "burst_open": {
+          "name": "burst_open",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "customer_notification_rate_windows_tenant_id_tenants_id_fk": {
+          "name": "customer_notification_rate_windows_tenant_id_tenants_id_fk",
+          "tableFrom": "customer_notification_rate_windows",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "customer_notification_rate_windows_counts_check": {
+          "name": "customer_notification_rate_windows_counts_check",
+          "value": "minute_claimed >= 0 AND hour_fresh >= 0"
         }
       },
       "isRLSEnabled": false
@@ -20664,12 +20739,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "code": {
-          "name": "code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -20861,10 +20930,6 @@
         "orders_source_ref_check": {
           "name": "orders_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
-        },
-        "orders_code_check": {
-          "name": "orders_code_check",
-          "value": "code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'"
         },
         "orders_state_check": {
           "name": "orders_state_check",
@@ -23836,12 +23901,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "code": {
-          "name": "code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -24161,10 +24220,6 @@
         "payments_source_ref_check": {
           "name": "payments_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
-        },
-        "payments_code_check": {
-          "name": "payments_code_check",
-          "value": "code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'"
         },
         "payments_state_check": {
           "name": "payments_state_check",
@@ -24601,12 +24656,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "code_number": {
-          "name": "code_number",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -24798,10 +24847,6 @@
         "products_source_ref_check": {
           "name": "products_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
-        },
-        "products_code_number_check": {
-          "name": "products_code_number_check",
-          "value": "code_number IS NULL OR code_number > 0"
         },
         "products_status_check": {
           "name": "products_status_check",
@@ -30779,6 +30824,104 @@
       },
       "isRLSEnabled": false
     },
+    "public.service_reminder_baselines": {
+      "name": "service_reminder_baselines",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "service_id": {
+          "name": "service_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "baseline_at": {
+          "name": "baseline_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "basis_expires_at": {
+          "name": "basis_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "basis_traffic_limit_bytes": {
+          "name": "basis_traffic_limit_bytes",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "used_bytes": {
+          "name": "used_bytes",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "service_reminder_baselines_tenant_id_tenants_id_fk": {
+          "name": "service_reminder_baselines_tenant_id_tenants_id_fk",
+          "tableFrom": "service_reminder_baselines",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_reminder_baselines_service_fk": {
+          "name": "service_reminder_baselines_service_fk",
+          "tableFrom": "service_reminder_baselines",
+          "tableTo": "services",
+          "columnsFrom": [
+            "tenant_id",
+            "service_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "service_reminder_baselines_pk": {
+          "name": "service_reminder_baselines_pk",
+          "columns": [
+            "tenant_id",
+            "service_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "service_reminder_baselines_figures_check": {
+          "name": "service_reminder_baselines_figures_check",
+          "value": "\"service_reminder_baselines\".\"basis_traffic_limit_bytes\" >= 0 AND (\"service_reminder_baselines\".\"used_bytes\" IS NULL OR \"service_reminder_baselines\".\"used_bytes\" >= 0)"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.service_reminders": {
       "name": "service_reminders",
       "schema": "",
@@ -31354,12 +31497,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "code": {
-          "name": "code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -31668,10 +31805,6 @@
         "services_source_ref_check": {
           "name": "services_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
-        },
-        "services_code_check": {
-          "name": "services_code_check",
-          "value": "code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'"
         },
         "services_is_test_source_check": {
           "name": "services_is_test_source_check",
@@ -37592,12 +37725,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "code": {
-          "name": "code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -37872,10 +37999,6 @@
         "tickets_source_ref_check": {
           "name": "tickets_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
-        },
-        "tickets_code_check": {
-          "name": "tickets_code_check",
-          "value": "code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'"
         },
         "tickets_status_check": {
           "name": "tickets_status_check",

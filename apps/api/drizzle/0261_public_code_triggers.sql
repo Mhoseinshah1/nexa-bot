@@ -1,4 +1,4 @@
--- Round 4, PR-C: short public codes. 0258 added the nullable columns, their format CHECKs and
+-- Round 4, PR-C: short public codes. 0260 added the nullable columns, their format CHECKs and
 -- the per-tenant unique keys; this file adds what drizzle-kit does not model.
 --
 -- The per-tenant unique keys are built ONLINE after the migrator (`online-indexes.ts`, Codex
@@ -79,7 +79,7 @@ BEGIN
     RETURN NEW;
   END IF;
   PERFORM pg_advisory_xact_lock(hashtext('nexa.product-code'), hashtext(NEW.tenant_id::text));
-  -- Codex review of #299: the tenant's products from before 0258 are numbered FIRST, oldest
+  -- Codex review of #299: the tenant's products from before 0260 are numbered FIRST, oldest
   -- first, so a product created between this migration and the backfill never takes P-101
   -- ahead of the catalogue the operator already had. A catalogue is tens of rows, and only
   -- the first insert after the migration finds any.

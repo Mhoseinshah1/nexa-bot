@@ -833,6 +833,23 @@ print(json.dumps({"services": {"api": {"environment": env}}}))
               absent) ;;
               *) printf '{"Service":"monitor","State":"%s"}\n' "$_monitor_state" ;;
             esac
+            # The provisioner, the same way (Round 4 PR-H: `botctl restart background`
+            # restarts it and then waits for readiness, which requires it whenever the
+            # topology defines it). Listed only for a topology that defines one, so the
+            # older fixtures that do not are unchanged.
+            case " $(read_state compose_services 'api worker monitor postgres redis caddy') " in
+              *' provisioner '*)
+                _prov_state="$(read_state provisioner_state running)"
+                case "$_prov_state" in
+                  running)
+                    printf '{"Service":"provisioner","State":"running","Health":"%s"}\n' \
+                      "$(read_state provisioner_health healthy)"
+                    ;;
+                  absent) ;;
+                  *) printf '{"Service":"provisioner","State":"%s"}\n' "$_prov_state" ;;
+                esac
+                ;;
+            esac
             # And the EDGE, modelled the same way. It is the only container
             # that publishes a port, so an installation whose api, worker and
             # monitor are all healthy behind an edge that never started is one
@@ -979,6 +996,9 @@ print(json.dumps({"services": {"api": {"environment": env}}}))
         printf -- '-- PostgreSQL database dump complete\n'
         exit 0
         ;;
+      # `compose restart SERVICE...` (`botctl restart background`): restarts what is
+      # running, from the image it was created from. `restart_exit` models a refusal.
+      restart) exit "$(read_state restart_exit 0)" ;;
       logs) exit 0 ;;
       *) exit 0 ;;
     esac
