@@ -688,4 +688,13 @@ describe('R5C-2 C4: the crypto figures are exact decimal text, or absent', () =>
     expect(cryptoDecimalOf('12 BTC')).toBeNull();
     expect(cryptoDecimalOf(null)).toBeNull();
   });
+
+  it('keeps every place the column allows: 1e-13 is not rounded to zero, 18 places survive, 19 are refused', () => {
+    expect(cryptoDecimalOf(1e-13)).toBe('0.0000000000001');
+    expect(cryptoDecimalOf(1.5e-13)).toBe('0.00000000000015');
+    expect(cryptoDecimalOf(1e-18)).toBe('0.000000000000000001');
+    expect(cryptoDecimalOf(1.234e-15)).toBe('0.000000000000001234');
+    expect(cryptoDecimalOf(1e-19)).toBeNull();
+    expect(cryptoDecimalOf(123456789012345)).toBe('123456789012345');
+  });
 });

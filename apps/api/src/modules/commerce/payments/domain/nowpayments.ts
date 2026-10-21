@@ -168,11 +168,30 @@ export function strongestJudgement<T extends NowPaymentsJudgement>(judged: reado
  * (never `1e-7`); a string must already be a plain decimal. Diagnostic only: the figure is
  * shown to an operator and decides nothing, so anything unreadable is simply absent.
  */
+/**
+ * A finite non-negative JSON number as plain decimal text, exact to the digits `toString()`
+ * carries: `1e-13` is `0.0000000000001`, never rounded to a fixed number of places (the column
+ * and the parser below allow 18). A figure with more places than that fails the parser.
+ */
+function plainDecimalOf(value: number): string {
+  const text = value.toString();
+  const match = /^([0-9]+)(?:\.([0-9]+))?e([+-][0-9]+)$/u.exec(text);
+  if (match === null) return text;
+  const whole = match[1] as string;
+  const fraction = match[2] ?? '';
+  const exponent = Number(match[3]);
+  const digits = whole + fraction;
+  const point = whole.length + exponent;
+  if (point <= 0) return `0.${'0'.repeat(-point)}${digits}`;
+  if (point >= digits.length) return digits + '0'.repeat(point - digits.length);
+  return `${digits.slice(0, point)}.${digits.slice(point)}`;
+}
+
 export function cryptoDecimalOf(value: unknown): string | null {
   let text: string;
   if (typeof value === 'number') {
     if (!Number.isFinite(value) || value < 0 || value >= 1e15) return null;
-    text = value.toFixed(12);
+    text = plainDecimalOf(value);
   } else if (typeof value === 'string') {
     text = value.trim();
   } else {
