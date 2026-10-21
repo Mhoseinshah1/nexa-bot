@@ -107,6 +107,10 @@ botctl — operate a Nexa installation
   botctl restart background  restart the worker, monitor and provisioner — run it after a
                              legacy import or a restore completes
 
+  botctl roles status        which background roles are switched off
+  botctl roles disable ROLE...   keep monitor, provisioner or assistant stopped, across update/restart/rollback
+  botctl roles enable ROLE...    start them again and stop keeping them off
+
   botctl telegram status     the local registration AND Telegram's own webhook state
   botctl telegram register   reconcile the webhook with Telegram (keeps queued updates)
 
@@ -846,6 +850,15 @@ cmd_status() {
   nexa_compose ps --format 'table {{.Service}}\t{{.State}}\t{{.Status}}' 2>/dev/null ||
     nexa_warn "could not read container state."
 
+  # Roles the owner keeps stopped (NEXA_DISABLED_ROLES). Printed only when there are some,
+  # so an installation that disables nothing reads exactly as before.
+  local disabled_roles=""
+  if disabled_roles="$(nexa_disabled_roles)"; then
+    [ -z "$disabled_roles" ] || printf '\nنقش‌های خاموش‌شده: %s\n' "${disabled_roles// /, }"
+  else
+    nexa_warn "NEXA_DISABLED_ROLES in nexa.env is not valid; 'botctl update' and 'botctl restart' will refuse until it is fixed."
+  fi
+
   local diverged=0
   nexa_check_divergence || diverged=$?
 
@@ -1082,6 +1095,9 @@ cmd_restore() {
 # ---------------------------------------------------------------------------
 cmd_update() {
   require_installed
+  # An unreadable NEXA_DISABLED_ROLES is refused BEFORE anything moves: found after the
+  # migration it would fail the start and the back-out alike.
+  nexa_disabled_roles >/dev/null || nexa_die "fix NEXA_DISABLED_ROLES in ${NEXA_CONFIG_DIR}/nexa.env first (or run 'botctl roles enable ...'). Nothing was changed."
   local target="${1:-}"
   [ -n "$target" ] || nexa_die "usage: botctl update VERSION"
   nexa_require_version "$target"
@@ -1491,6 +1507,9 @@ cmd_update() {
 # ADR-0022. Rolling back ACROSS more than one release is not promised.
 cmd_rollback() {
   require_installed
+  # An unreadable NEXA_DISABLED_ROLES is refused BEFORE anything moves: found after the
+  # migration it would fail the start and the back-out alike.
+  nexa_disabled_roles >/dev/null || nexa_die "fix NEXA_DISABLED_ROLES in ${NEXA_CONFIG_DIR}/nexa.env first (or run 'botctl roles enable ...'). Nothing was changed."
   nexa_acquire_lock 0
 
   local current previous previous_image
@@ -1718,6 +1737,9 @@ cmd_restart() {
     *) nexa_die "usage: botctl restart [background]" ;;
   esac
   require_installed
+  # An unreadable NEXA_DISABLED_ROLES is refused BEFORE anything moves: found after the
+  # migration it would fail the start and the back-out alike.
+  nexa_disabled_roles >/dev/null || nexa_die "fix NEXA_DISABLED_ROLES in ${NEXA_CONFIG_DIR}/nexa.env first (or run 'botctl roles enable ...'). Nothing was changed."
   nexa_acquire_lock 0
   # `version` and `status` REPORT a divergence; restart is the command that
   # would act on it, by starting the image deploy.env names instead of the
@@ -1779,7 +1801,12 @@ cmd_restart_background() {
   defined="$(nexa_compose config --services 2>/dev/null)" ||
     nexa_die "cannot read the stack's services, so nothing was restarted. Run 'botctl status'."
   # A case match on the newline-delimited list, not `grep -q` (see nexa_required_services).
+  local disabled=""
+  disabled="$(nexa_disabled_roles)" ||
+    nexa_die "fix NEXA_DISABLED_ROLES in ${NEXA_CONFIG_DIR}/nexa.env first. Nothing was restarted."
   for service in $NEXA_BACKGROUND_SERVICES; do
+    # `compose restart` STARTS a stopped container, so a role the owner disabled is skipped.
+    nexa_in_list "$service" "$disabled" && continue
     case "
 ${defined}
 " in
@@ -1789,7 +1816,7 @@ ${service}
     esac
   done
   [ -n "$services" ] ||
-    nexa_die "this release defines none of the background roles (${NEXA_BACKGROUND_SERVICES}); nothing was restarted."
+    nexa_die "this release defines none of the background roles (${NEXA_BACKGROUND_SERVICES}); nothing was restarted (roles disabled with 'botctl roles disable' are skipped)."
   # shellcheck disable=SC2086
   nexa_compose restart $services ||
     nexa_die "restarting ${services} failed. Run 'botctl status' and 'botctl logs worker'."
@@ -1983,7 +2010,7 @@ cmd_secrets_disable_v1() {
   nexa_ok "SECRETS_ACCEPT_V1=false"
 
   nexa_step "restarting so the setting takes effect"
-  if ! (nexa_compose up -d --remove-orphans && nexa_wait_ready); then
+  if ! (nexa_up_stack && nexa_wait_ready); then
     # Put it back. An installation that will not come up is worse than one that
     # still reads v1, and the operator must not be left to discover which of the
     # two states they are in.
@@ -1993,7 +2020,7 @@ cmd_secrets_disable_v1() {
       SECRETS_ACCEPT_V1=true
     fi
     nexa_env_rewrite "$file" "" SECRETS_ACCEPT_V1
-    nexa_compose up -d --remove-orphans >/dev/null 2>&1 || true
+    nexa_up_stack >/dev/null 2>&1 || true
     nexa_die "the stack did not come back after disabling v1, so SECRETS_ACCEPT_V1 has been restored to ${SECRETS_ACCEPT_V1} and the stack restarted. Read 'botctl logs api'."
   fi
 
@@ -2243,6 +2270,116 @@ cmd_admin() {
   esac
 }
 
+# ---------------------------------------------------------------------------
+# roles — keep a background role switched off
+# ---------------------------------------------------------------------------
+#
+# The setting is NEXA_DISABLED_ROLES in nexa.env (see `NEXA_DISABLABLE_ROLES` in the library
+# for which roles and why). This command is the only supported way to change it: it edits one
+# line through the same atomic, owner- and mode-preserving rewrite the other nexa.env edits
+# use, and then APPLIES the change, because a setting the running stack has not seen is the
+# operator believing a role is off while it is on.
+cmd_roles() {
+  require_installed
+  local action="${1:-}"
+  shift || true
+  local file="${NEXA_CONFIG_DIR}/nexa.env"
+  [ -r "$file" ] || nexa_die "cannot read ${file}."
+  local current
+  current="$(nexa_disabled_roles)" ||
+    nexa_die "NEXA_DISABLED_ROLES in ${file} is not valid; fix it by hand, then retry."
+
+  case "$action" in
+    status)
+      [ $# -eq 0 ] || nexa_die "usage: botctl roles status"
+      local role
+      for role in $NEXA_DISABLABLE_ROLES; do
+        if nexa_in_list "$role" "$current"; then
+          printf '%-12s disabled\n' "$role"
+        else
+          printf '%-12s enabled\n' "$role"
+        fi
+      done
+      if [ -n "$current" ]; then
+        printf '\nنقش‌های خاموش‌شده: %s\n' "${current// /, }"
+      else
+        printf '\nنقش‌های خاموش‌شده: هیچ\n'
+      fi
+      ;;
+    disable | enable)
+      [ $# -ge 1 ] || nexa_die "usage: botctl roles ${action} ROLE... (${NEXA_DISABLABLE_ROLES// /, })"
+      local arg
+      for arg in "$@"; do
+        nexa_in_list "$arg" "$NEXA_DISABLABLE_ROLES" ||
+          nexa_die "\"${arg}\" cannot be ${action}d. Roles that can be: ${NEXA_DISABLABLE_ROLES// /, }. The api, worker, recovery, edge and data stores are never switchable: turning one off breaks the installation."
+      done
+      nexa_acquire_lock 0
+      local role next=""
+      for role in $NEXA_DISABLABLE_ROLES; do
+        if [ "$action" = disable ]; then
+          if nexa_in_list "$role" "$current" || nexa_in_list "$role" "$*"; then
+            next="${next:+${next},}${role}"
+          fi
+        else
+          if nexa_in_list "$role" "$current" && ! nexa_in_list "$role" "$*"; then
+            next="${next:+${next},}${role}"
+          fi
+        fi
+      done
+      local current_csv="${current// /,}"
+      if [ "$next" = "$current_csv" ]; then
+        nexa_ok "NEXA_DISABLED_ROLES is already ${next:-empty}; nothing to write."
+      else
+        # shellcheck disable=SC2034  # read by nexa_env_rewrite through the NAME it is given
+        local NEXA_DISABLED_ROLES="$next"
+        if [ -n "$next" ]; then
+          nexa_env_rewrite "$file" "" NEXA_DISABLED_ROLES
+        else
+          # Empty is the default, so the line goes rather than being written blank.
+          nexa_env_rewrite "$file" NEXA_DISABLED_ROLES
+        fi
+        nexa_ok "NEXA_DISABLED_ROLES=${next:-<unset>}"
+      fi
+      # Applied either way: running it again is how an operator makes sure the containers
+      # match the setting.
+      local defined service targets=""
+      defined="$(nexa_compose config --services 2>/dev/null)" ||
+        nexa_die "cannot read the stack's services; the setting is saved but was not applied. Run 'botctl status'."
+      for service in "$@"; do
+        case "
+${defined}
+" in *"
+${service}
+"*) targets="${targets:+${targets} }${service}" ;; esac
+      done
+      if [ -z "$targets" ]; then
+        nexa_ok "this release does not define ${*}; nothing to ${action}."
+        return 0
+      fi
+      if [ "$action" = disable ]; then
+        # shellcheck disable=SC2086
+        nexa_compose stop $targets ||
+          nexa_die "the setting is saved, but stopping ${targets} failed. Run 'botctl status'."
+        nexa_ok "stopped ${targets}; they stay stopped across update, restart and rollback"
+      else
+        local divergence=0
+        nexa_check_divergence || divergence=$?
+        [ "$divergence" -ne 1 ] ||
+          nexa_die "the setting is saved, but ${targets} was not started: the recorded release and deploy.env disagree, and starting a container would act on that. Settle it with 'botctl update'."
+        # `--no-deps`: only the named roles; the rest of the stack is left exactly as it is.
+        # shellcheck disable=SC2086
+        nexa_compose up -d --no-deps $targets ||
+          nexa_die "the setting is saved, but starting ${targets} failed. Run 'botctl logs'."
+        nexa_wait_ready || nexa_die "started ${targets}, but the installation is not ready."
+        nexa_ok "started ${targets}"
+      fi
+      ;;
+    *)
+      nexa_die "usage: botctl roles <status|disable ROLE...|enable ROLE...>"
+      ;;
+  esac
+}
+
 main() {
   local command="${1:-}"
   shift || true
@@ -2253,6 +2390,7 @@ main() {
     restore) cmd_restore "$@" ;;
     update) cmd_update "$@" ;;
     rollback) cmd_rollback "$@" ;;
+    roles) cmd_roles "$@" ;;
     secrets) cmd_secrets "$@" ;;
     telegram) cmd_telegram "$@" ;;
     admin) cmd_admin "$@" ;;

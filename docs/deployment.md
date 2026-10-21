@@ -2577,6 +2577,31 @@ database seeded before this release is the one place it will actually happen —
 the old seed made both of its tenants `PRIMARY` — and there the answer is to
 reseed, not to reconcile.
 
+## Keeping a background role switched off
+
+`docker stop nexa-provisioner-1` does not last: every `botctl update`, `restart` and `rollback`
+(and the update back-out, and an installer rerun) runs `compose up -d`, which starts it again.
+The decision belongs in `/etc/nexa/nexa.env`:
+
+```bash
+sudo botctl roles disable provisioner monitor   # writes NEXA_DISABLED_ROLES=monitor,provisioner, stops both
+sudo botctl roles enable provisioner            # removes it from the setting, starts it
+sudo botctl roles status                        # each switchable role, enabled or disabled
+```
+
+- **Only `monitor`, `provisioner` and `assistant` can be disabled.** The api, edge, PostgreSQL,
+  Redis, the worker (outbox, notifications, scheduled backup) and the recovery role are never
+  switchable; `botctl roles disable api` and a hand-edited `NEXA_DISABLED_ROLES=worker` are both
+  refused, and an update or restart refuses to start while the file says so.
+- A disabled role is excluded from the services `compose up -d` is given, stopped after it, and not
+  waited for by the readiness check of `update` and `rollback`. `botctl restart background` skips it
+  (`compose restart` would start it).
+- `botctl status` prints `نقش‌های خاموش‌شده: monitor, provisioner` when any is disabled, and nothing
+  when none is. A fresh installation disables nothing.
+- The edit is one atomic rewrite of `nexa.env` (mode and owner kept, every other line kept) and is
+  idempotent. With the provisioner off nothing creates accounts for paid orders, so enable it again before
+  taking orders.
+
 ## Reboots
 
 Every long-running service has `restart: unless-stopped`, so Docker brings the
