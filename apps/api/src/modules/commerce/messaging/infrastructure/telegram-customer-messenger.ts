@@ -23,7 +23,6 @@ import {
   inlineButtonStyleOf,
   CUSTOMER_NOTIFICATION_TEMPLATES,
   MESSAGING_ERROR_CODES,
-  opsAggregationKey,
   type AppearanceTestErrorCode,
   type CategoryColors,
   type CategoryIcons,
