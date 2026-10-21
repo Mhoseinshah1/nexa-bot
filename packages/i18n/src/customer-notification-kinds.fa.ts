@@ -55,4 +55,6 @@ export const CUSTOMER_NOTIFICATION_KIND_NAMES_FA: Readonly<
   WALLET_ADMIN_CREDITED: 'افزایش دستی موجودی',
   WALLET_ADMIN_DEBITED: 'کسر دستی موجودی',
   ACCOUNT_UNBLOCKED: 'رفع مسدودی حساب',
+  SERVICE_TRAFFIC_ADDED: 'خرید حجم اضافه',
+  SERVICE_TIME_ADDED: 'خرید زمان اضافه',
 };

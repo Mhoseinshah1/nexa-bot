@@ -891,4 +891,78 @@ describe('a customer pays through the approved screens', () => {
       expect(lastText()).toContain('📊 آمار شما');
     });
   });
+
+  // =========================================================================
+  // R5C-1 item 2 — the limits on «🔄 تغییر شماره کارت», as the customer meets them
+  // =========================================================================
+  describe('«🔄 تغییر شماره کارت» limits', () => {
+    // The seed already holds the first receiving card; these two make it three.
+    const CARDS = ['6037991234567992', '6037991234567810'];
+
+    async function invoice(key: string): Promise<{ paymentId: string; orderId: string }> {
+      for (const [index, cardNumber] of CARDS.entries()) {
+        await ctx.container.paymentAccounts.create(tenantA, owner, {
+          idempotencyKey: `${key}-card-${String(index)}`,
+          fields: {
+            label: `کارت ${String(index)}`,
+            bankName: 'بانک ملی ایران',
+            holderName: 'فروشگاه آکمی',
+            cardNumber,
+            iban: null,
+            sortOrder: 50 + index * 5,
+          } as never,
+          enabled: true,
+          makeDefault: false,
+        });
+      }
+      const orderId = await draftTo(await product(key));
+      await handle(tap(`m:${orderId}`));
+      const switchData = buttonsOf(lastMarkup()).find((b) => b.startsWith('pk:'));
+      if (switchData === undefined) throw new Error(`no switch button: ${lastMarkup()}`);
+      return { paymentId: switchData.slice(3).split('.')[0] as string, orderId };
+    }
+
+    const answers = (from: number) =>
+      sent.slice(from).filter((one) => one.url.includes('/answerCallbackQuery'));
+
+    it('a press too early is a toast with the wait, and the invoice is left as it is', async () => {
+      await setSetting('payments.card_switch_cooldown_seconds', 3600);
+      await setSetting('payments.card_switch_limit', 5);
+      const { paymentId } = await invoice('toast-cooldown');
+      await handle(tap(`pk:${paymentId}.0`));
+      expect(buttonsOf(lastMarkup())).toContain(`pk:${paymentId}.1`);
+
+      const before = messages().length;
+      const from = sent.length;
+      await handle(tap(`pk:${paymentId}.1`));
+      expect(messages()).toHaveLength(before);
+      const [toast] = answers(from);
+      expect(String(toast?.body['text'] ?? '')).toMatch(/ثانیه دیگر دوباره امتحان کنید/u);
+      const rows = await ctx.container.database.db.execute(
+        sql`SELECT count(*)::int AS n FROM payment_destination_switches WHERE payment_id = ${paymentId}`,
+      );
+      expect((rows.rows[0] as { n: number }).n).toBe(1);
+    });
+
+    it('the press that uses the last switch redraws the invoice without the button, and a forged one is refused', async () => {
+      await setSetting('payments.card_switch_cooldown_seconds', 0);
+      await setSetting('payments.card_switch_limit', 1);
+      const { paymentId } = await invoice('toast-limit');
+      await handle(tap(`pk:${paymentId}.0`));
+      // That was the only switch the owner allows: the redrawn invoice has no button.
+      expect(buttonsOf(lastMarkup()).some((b) => b.startsWith('pk:'))).toBe(false);
+
+      const from = sent.length;
+      await handle(tap(`pk:${paymentId}.1`));
+      const [toast] = answers(from);
+      expect(String(toast?.body['text'] ?? '')).toBe(
+        'امکان تغییر کارت دیگری برای این پرداخت وجود ندارد',
+      );
+      expect(buttonsOf(lastMarkup()).some((b) => b.startsWith('pk:'))).toBe(false);
+      const rows = await ctx.container.database.db.execute(
+        sql`SELECT count(*)::int AS n FROM payment_destination_switches WHERE payment_id = ${paymentId}`,
+      );
+      expect((rows.rows[0] as { n: number }).n).toBe(1);
+    });
+  });
 });

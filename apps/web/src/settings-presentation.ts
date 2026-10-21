@@ -1,5 +1,6 @@
 import {
   BACKUP_SCHEDULE_SETTING_KEYS,
+  CARD_SWITCH_SETTING_KEYS,
   LATE_CREDIT_SETTING_KEYS,
   LATE_CREDIT_WINDOW_SETTING_KEY,
   PANEL_SETTING_KEYS,
@@ -114,6 +115,10 @@ export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = [
   LATE_CREDIT_SETTING_KEYS.TONPAYS,
   LATE_CREDIT_SETTING_KEYS.TONPAYS_TELEGRAM,
   LATE_CREDIT_WINDOW_SETTING_KEY,
+  // R5C-1 item 2: the three «تغییر شماره کارت» limits, on the card-to-card method's page.
+  CARD_SWITCH_SETTING_KEYS.MAX_SWITCHES,
+  CARD_SWITCH_SETTING_KEYS.COOLDOWN_SECONDS,
+  CARD_SWITCH_SETTING_KEYS.MAX_DISTINCT_CARDS,
   'bot.main_menu',
   // Owner spec §6: the inline buttons' styles, on the same page («دکمه‌های شیشه‌ای ربات»).
   'bot.inline_buttons',
@@ -413,10 +418,22 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     control: { kind: 'integer', unit: 'web.unit_minutes' },
   },
   'payments.card_switch_limit': {
-    title: 'web.setting_card_switch_limit',
-    description: 'web.setting_card_switch_limit_desc',
+    title: 'web.card_switch_max',
+    description: 'web.card_switch_max_hint',
     group: 'sales',
     control: { kind: 'integer', unit: 'web.unit_times' },
+  },
+  [CARD_SWITCH_SETTING_KEYS.COOLDOWN_SECONDS]: {
+    title: 'web.card_switch_cooldown',
+    description: 'web.card_switch_cooldown_hint',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_seconds' },
+  },
+  [CARD_SWITCH_SETTING_KEYS.MAX_DISTINCT_CARDS]: {
+    title: 'web.card_switch_distinct',
+    description: 'web.card_switch_distinct_hint',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_cards' },
   },
   'provisioning.usage_sync_minutes': {
     title: 'web.setting_usage_sync_minutes',

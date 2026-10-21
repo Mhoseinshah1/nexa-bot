@@ -31,6 +31,10 @@ import type { LegacyImportV1Identity } from './source-snapshot.js';
  *    users whose `roll_Status` is true are marked in batches — each batch ONE transaction,
  *    a conditional UPDATE through `legacy_import_map` (`legacy_terms_accepted_at IS NULL`).
  *
+ * OPTIONAL since R5C-1 item 1: an imported customer (an IMPORTED CUSTOMER `legacy_import_map`
+ * row) is treated as having accepted the rules without this timestamp, so running it is no
+ * longer needed for the gate. It still records the previous bot's acceptance for Customer 360.
+ *
  * Idempotent and resumable by construction: a rerun, or a run after a crash, marks only the
  * customers not marked yet. Nothing else is touched — no status, no wallet, no service — and
  * nothing is sent: it writes one timestamp column and one audit row per batch, never an

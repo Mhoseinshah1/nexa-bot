@@ -4271,6 +4271,13 @@ export interface BotRuntimeDeps {
   };
   readonly mainMenu: MainMenuRoutes;
   /**
+   * R5C-1 item 4: whether the renewal menu also lists the extra-time packages (the feature flag
+   * `addon_time_in_renew_menu`, default ON). A DISPLAY choice only: the time packages stay
+   * purchasable from their own «⏳ خرید زمان اضافه» button either way, and every purchase
+   * re-decides its own eligibility. Absent means on, which is how the menu always was.
+   */
+  readonly renewMenuShowsTime?: (scope: TenantContext) => Promise<boolean>;
+  /**
    * R1: this tenant's CURRENT main-menu labels and their commands (`MainMenuLayout`), the
    * same object the messenger draws the keyboard from. Matched over `mainMenu`'s shared
    * defaults, so a renamed button routes under its new name and a keyboard drawn before
@@ -5681,7 +5688,10 @@ export class BotRuntime {
         updateKey: input.idempotencyKey,
       });
       if (claimed.outcome === 'CLAIMED') claim = claimed.wizard;
-      else if (claimed.outcome === 'STALE') staleWizard = true;
+      else if (claimed.outcome === 'STALE') {
+        // Lenient only for a CLOSED wizard; a message another turn still holds is swallowed.
+        staleWizard = gate.lenient !== true || claimed.held === true;
+      }
     }
     /*
      * F1 (round N): a repeated review tap is still answered and nothing else — but with the
@@ -5841,7 +5851,7 @@ export class BotRuntime {
             undefined,
           );
         }
-        await this.stopSpinner(scope, command, input.botInstanceId);
+        await this.stopSpinner(scope, command, input.botInstanceId, reply.toast);
         return {
           intent,
           arrival,
@@ -11104,7 +11114,28 @@ export class BotRuntime {
         row: 2,
       });
     }
-    if (commercial.includes('RENEW') || commercial.includes('ADD_TIME')) {
+    /*
+     * R5C-1 item 4: «⏳ خرید زمان اضافه», beside «➕ خرید حجم اضافه». `availableFor` includes
+     * ADD_TIME only when the service, the panel and its policy allow one AND at least one
+     * priced time package is on offer (`offerableAddons`), so the tap always has a list.
+     */
+    if (commercial.includes('ADD_TIME')) {
+      buttons.push({
+        ...inlineLabel('service.add_time'),
+        data: `${SERVICE_ADD_TIME_CALLBACK_PREFIX}${service.id}`,
+        row: 2,
+      });
+    }
+    /*
+     * The renewal menu is for renewing. With the time packages no longer a reason to open it
+     * on their own (they have their button), a service whose only commercial action is time
+     * is renewed from nowhere: «💊 تمدید سرویس» is drawn when a renewal is available, or when
+     * the owner keeps time packages in that menu (`addon_time_in_renew_menu`, default ON).
+     */
+    if (
+      commercial.includes('RENEW') ||
+      (commercial.includes('ADD_TIME') && (await this.renewMenuShowsTime(scope)))
+    ) {
       buttons.push({
         ...inlineLabel('service.renew'),
         data: `${SERVICE_RENEW_CALLBACK_PREFIX}${service.id}`,
@@ -12921,7 +12952,8 @@ export class BotRuntime {
         }
       }
     }
-    if (offered.includes('ADD_TIME')) {
+    // R5C-1 item 4: the owner may keep the time packages out of this menu (`addon_time_in_renew_menu`).
+    if (offered.includes('ADD_TIME') && (await this.renewMenuShowsTime(scope))) {
       const packages = await this.offerOrNull(scope, actor, customer, service.id, 'ADD_TIME');
       for (const addon of packages?.addons ?? []) {
         if (addon.price === null) continue;
@@ -12942,7 +12974,17 @@ export class BotRuntime {
       };
     }
     buttons.push(backToServiceButton(service.id));
-    return { key: 'bot.service.renew_choose', values: {}, buttons, orderId: null };
+    return {
+      key: 'bot.service.renew_choose',
+      values: {},
+      buttons,
+      orderId: null,
+    };
+  }
+
+  /** The flag read once per screen; absent (a fixture without it) is on, as the menu always was. */
+  private async renewMenuShowsTime(scope: TenantContext): Promise<boolean> {
+    return (await this.deps.renewMenuShowsTime?.(scope)) ?? true;
   }
 
   /** `commercial.offer`, with "nothing offered" as null rather than a throw: the menu decides. */
@@ -14914,7 +14956,7 @@ export class BotRuntime {
        * paid" sentence: its payment message says the renewal is on its way.
        */
       return {
-        key: order.purpose === 'RENEW' ? 'bot.service.renew_paid' : 'bot.order.settled',
+        key: settledKeyFor(order.purpose),
         values: {},
         buttons: [],
         orderId: order.id,
@@ -15682,6 +15724,27 @@ export class BotRuntime {
         paymentId,
         expectedSequence,
       });
+      /*
+       * R5C-1: a press that came too early is a notice on the button and nothing else — the
+       * invoice stays exactly as it is. A press over a limit is the same notice, and the
+       * invoice is redrawn (below) without the button the limit has taken away.
+       */
+      if (result.outcome === 'COOLDOWN') {
+        return {
+          key: null,
+          values: {},
+          buttons: [],
+          orderId: null,
+          toast: {
+            key: 'bot.payment.switch_card_cooldown',
+            values: { seconds: result.retryAfterSeconds },
+          },
+        };
+      }
+      const refused =
+        result.outcome === 'UNCHANGED' && result.reason === 'LIMIT'
+          ? { toast: { key: 'bot.payment.switch_card_refused' as const, values: {} } }
+          : {};
       const instruction = result.instruction;
       if (instruction === null) {
         return {
@@ -15691,7 +15754,10 @@ export class BotRuntime {
           orderId: null,
         };
       }
-      return this.transferInstruction(scope, instruction, instruction.payment.orderId);
+      return {
+        ...(await this.transferInstruction(scope, instruction, instruction.payment.orderId)),
+        ...refused,
+      };
     } catch (error) {
       return refusal(error);
     }
@@ -16545,6 +16611,17 @@ export class BotRuntime {
     });
     return edited.outcome === 'REFUSED' ? asText() : edited;
   }
+}
+
+/**
+ * R5C-1 item 4: the sentence the payment message carries once the wallet has paid. A renewal
+ * and a package say the action is on its way (the same message is then edited into the result:
+ * the renewal's result, or the package's receipt); everything else keeps `bot.order.settled`.
+ */
+export function settledKeyFor(purpose: OrderPurpose): TemplateKey {
+  if (purpose === 'RENEW') return 'bot.service.renew_paid';
+  if (purpose === 'ADD_TRAFFIC' || purpose === 'ADD_TIME') return 'bot.service.addon_paid';
+  return 'bot.order.settled';
 }
 
 /**
@@ -17435,7 +17512,13 @@ export function notificationButtons(
   // R4 A5: unblocked — the way back into the bot.
   if (kind === 'ACCOUNT_UNBLOCKED') return [mainMenuButton()];
   // R2 (item 11): the renewal result's one button opens the renewed service's card.
-  if (kind === 'SERVICE_RENEWED' && subject.serviceId !== undefined) {
+  if (
+    (kind === 'SERVICE_RENEWED' ||
+      // R5C-1 item 4: a package's receipt opens the service it was bought for, like a renewal's.
+      kind === 'SERVICE_TRAFFIC_ADDED' ||
+      kind === 'SERVICE_TIME_ADDED') &&
+    subject.serviceId !== undefined
+  ) {
     return [
       {
         ...inlineLabel('service.renewed_details'),

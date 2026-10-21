@@ -11,6 +11,7 @@ import {
   ANNOUNCE_GRACE_MS,
   CUSTOMER_REQUESTABLE_OPERATIONS,
   OperationOutcomeAnnouncer,
+  successKindFor,
 } from '../../apps/api/src/modules/commerce/messaging/application/operation-outcome-announcer';
 import { CARD_FAILURE_ANSWERED_OPERATIONS } from '../../apps/api/src/modules/commerce/provisioning/application/operation-card';
 import type { CustomerNotifier } from '../../apps/api/src/modules/commerce/messaging/application/customer-notifier';
@@ -69,6 +70,8 @@ describe('announcing how an operation turned out', () => {
     nextAttemptAt: Date | null = null,
     /** R3: the request was made from a service card, which the card editor answers. */
     answeredOnCard = false,
+    /** R5C-1: the operation's type is what its order BOUGHT (`PURCHASED_AS`). */
+    purchasedAsType = false,
   ) {
     const queued: Queued[] = [];
     /*
@@ -89,6 +92,7 @@ describe('announcing how an operation turned out', () => {
           requestedByCustomerId,
           nextAttemptAt,
           answeredOnCard,
+          purchasedAsType,
         }),
         dueForAnnouncement: async () => [],
       },
@@ -169,6 +173,35 @@ describe('announcing how an operation turned out', () => {
         other.queued.map((q) => q.kind),
         type,
       ).toEqual(['SERVICE_ACTION_SUCCEEDED']);
+    }
+  });
+
+  /*
+   * R5C-1 item 4: a package the customer PAID for ends with its receipt, one kind per package
+   * kind — and only when the operation's order bought exactly this (`PURCHASED_AS`). The same
+   * type without that evidence keeps the generic sentence, and a failure is the shared one.
+   */
+  it('announces a paid ADD_TRAFFIC / ADD_TIME as its receipt, and only when PURCHASED_AS', async () => {
+    expect(successKindFor('ADD_TRAFFIC', true)).toBe('SERVICE_TRAFFIC_ADDED');
+    expect(successKindFor('ADD_TIME', true)).toBe('SERVICE_TIME_ADDED');
+    expect(successKindFor('ADD_TRAFFIC')).toBe('SERVICE_ACTION_SUCCEEDED');
+    expect(successKindFor('ADD_TIME', false)).toBe('SERVICE_ACTION_SUCCEEDED');
+    // A SUSPEND is never a receipt, whatever the flag says.
+    expect(successKindFor('SUSPEND', true)).toBe('SERVICE_ACTION_SUCCEEDED');
+
+    for (const [type, kind] of [
+      ['ADD_TRAFFIC', 'SERVICE_TRAFFIC_ADDED'],
+      ['ADD_TIME', 'SERVICE_TIME_ADDED'],
+    ] as const) {
+      const bought = announcerFor(type, 'SUCCEEDED', CUSTOMER, null, false, true);
+      await bought.announcer.announce(scope, 'operation-1');
+      expect(bought.queued.map((q) => q.kind)).toEqual([kind]);
+      expect(bought.queued[0]?.subjectId, 'the subject is the operation').toBe('operation-1');
+      expect(bought.stamped, 'answered exactly once').toEqual(['operation-1']);
+
+      const failed = announcerFor(type, 'ABANDONED', CUSTOMER, null, false, true);
+      await failed.announcer.announce(scope, 'operation-1');
+      expect(failed.queued.map((q) => q.kind)).toEqual(['SERVICE_ACTION_FAILED']);
     }
   });
 

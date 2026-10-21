@@ -242,6 +242,9 @@ export class TermsService {
         if (after === null || after.versionNumber === null) {
           throw await this.draftConflict(scope, input.id, tx);
         }
+        // R5C-1 item 1: if the flag is already on, this publication is what makes the rules
+        // enforced for the first time — stamp it, in this transaction, once (never moved).
+        await this.deps.repository.stampFirstEnforced(scope, now, tx);
         await this.record(
           scope,
           actor,

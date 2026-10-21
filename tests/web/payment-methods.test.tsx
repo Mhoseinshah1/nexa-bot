@@ -17,7 +17,7 @@ import {
 } from '../../apps/web/src/payment-method-routes';
 import { PaymentGatewaysPage } from '../../apps/web/src/pages/payment-gateways';
 import { navigate } from '../../apps/web/src/router';
-import { renderPage, stubApi } from './harness';
+import { renderPage, setting, stubApi } from './harness';
 
 /**
  * UX Batch 01, item 8: every payment method has its own view at its own URL, instead of
@@ -387,6 +387,18 @@ describe('a provider’s own view', () => {
 });
 
 describe('card-to-card: the cards beside the route (item 7)', () => {
+  it('carries the «تغییر شماره کارت» limits on the card-to-card view only (R5C-1)', async () => {
+    api();
+    go(CARD_TO_CARD_PATH);
+    const view = renderPage(<App />);
+    expect(await screen.findByText(t('web.card_switch_title'))).toBeInTheDocument();
+    view.unmount();
+    go('/payment-gateways/tonpays');
+    renderPage(<App />);
+    await heading(t('web.payment_gateway_provider_tonpays'));
+    expect(screen.queryByText(t('web.card_switch_title'))).toBeNull();
+  });
+
   it('shows the route, «افزودن کارت» beside its actions, and the cards — on one view', async () => {
     api();
     go(CARD_TO_CARD_PATH);
@@ -448,6 +460,45 @@ describe('card-to-card: the cards beside the route (item 7)', () => {
     const [posted] = calls.calls.filter((call) => call.method === 'POST');
     expect(posted!.url).toMatch(/\/payment-accounts$/u);
     expect(posted!.url).not.toContain(ACCOUNT.id);
+  });
+
+  it('gives a settings-only role the card-switch limits, from the list, and lets it edit them (R5C-1)', async () => {
+    const cooldown = 'payments.card_switch_cooldown_seconds';
+    const calls = stubApi([
+      session(['settings.view', 'settings.edit']),
+      {
+        url: '/settings',
+        body: {
+          settings: [
+            setting({ key: cooldown, value: 60, version: null }),
+            setting({ key: 'payments.card_switch_limit', value: 2, version: 3 }),
+            setting({ key: 'payments.card_switch_max_distinct_cards', value: 2, version: null }),
+          ],
+        },
+      },
+      {
+        url: `/settings/${cooldown}`,
+        method: 'POST',
+        body: { setting: setting({ key: cooldown, value: 90, version: 1 }), changed: true },
+      },
+    ]);
+    go('/payment-gateways');
+    renderPage(<App />);
+    const link = await screen.findByRole('link', { name: t('web.payment_method_open') });
+    act(() => {
+      fireEvent.click(link);
+    });
+    const field = await screen.findByLabelText(new RegExp(t('web.card_switch_cooldown'), 'u'));
+    expect(field).toHaveValue('60');
+    // No cards, no route settings: only the limits this role may reach.
+    expect(screen.queryByRole('button', { name: t('web.payment_account_add') })).toBeNull();
+    fireEvent.change(field, { target: { value: '90' } });
+    fireEvent.click(screen.getByRole('button', { name: t('web.card_switch_save') }));
+    await waitFor(() =>
+      expect(
+        calls.calls.some((call) => call.method === 'POST' && call.url.includes(cooldown)),
+      ).toBe(true),
+    );
   });
 
   it('has no cards on another provider’s view', async () => {

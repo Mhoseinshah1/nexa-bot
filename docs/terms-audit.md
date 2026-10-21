@@ -33,6 +33,20 @@ With enforcement on and something published, `TermsAcceptanceService.requirement
 one question: has this customer accepted the CURRENT version? An older acceptance never
 counts. Publishing writes no acceptance, so every customer is asked again.
 
+R5C-1 item 1 (supersedes "every customer is asked" for existing customers): the rules are
+put to **new customers only**. `tenants.rules_first_enforced_at` records, once and never
+moved, when enforcement (flag on AND a published version) first became true; it is stamped
+idempotently (`UPDATE ... WHERE rules_first_enforced_at IS NULL`) in the transaction of
+whichever write made it true — the flag turning on (`FeatureFlagsService`, via a
+`FlagEnabledEffect`) or a version being published (`TermsService.publish`) — and migration
+`0269` stamps every tenant already enforcing. A customer is then treated as having accepted,
+silently, when they were **imported** (an IMPORTED CUSTOMER row in `legacy_import_map`) or
+**created before** that moment; no customer row is backfilled. This is part of
+`acceptedOnce`, so a new version still re-asks nobody and `standing` (Customer 360) reports
+the same decision as the gate. With `terms_reprompt_on_new_version` ON the owner has asked
+for the newest version to be accepted by everyone, and that wins. `legacy-import
+terms-backfill` is optional now: imported customers are exempt without it.
+
 ## The gate
 
 `BotRuntime.guardedAct` (membership) → `termsGatedAct` (terms) → `act`. `act` is

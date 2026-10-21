@@ -17,6 +17,7 @@ import type {
   PaymentDestinationRecord,
   PaymentDestinationRepository,
   PaymentDestinationSwitchRecord,
+  PaymentSwitchHistory,
 } from '../application/account-ports.js';
 
 /** The columns the record is built from. Selected explicitly, in one place. */
@@ -418,6 +419,47 @@ export class DrizzlePaymentDestinationRepository implements PaymentDestinationRe
         ),
       );
     return Number(row?.last ?? 0);
+  }
+
+  async switchHistory(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    tx?: unknown,
+  ): Promise<PaymentSwitchHistory> {
+    const tenantId = requireTenantId(scope);
+    const switches = await this.exec(tx)
+      .select({
+        sequence: paymentDestinationSwitches.sequence,
+        accountId: paymentDestinationSwitches.accountId,
+        createdAt: paymentDestinationSwitches.createdAt,
+      })
+      .from(paymentDestinationSwitches)
+      .where(
+        and(
+          eq(paymentDestinationSwitches.tenantId, tenantId),
+          eq(paymentDestinationSwitches.paymentId, paymentId),
+        ),
+      )
+      .orderBy(asc(paymentDestinationSwitches.sequence));
+    const first = await this.exec(tx)
+      .select({ accountId: paymentDestinations.accountId })
+      .from(paymentDestinations)
+      .where(
+        and(
+          eq(paymentDestinations.tenantId, tenantId),
+          eq(paymentDestinations.paymentId, paymentId),
+        ),
+      )
+      .limit(1);
+    const shown = new Set<string>();
+    if (first[0] !== undefined) shown.add(first[0].accountId);
+    for (const row of switches) shown.add(row.accountId);
+    const last = switches[switches.length - 1];
+    return {
+      switchCount: last === undefined ? 0 : last.sequence,
+      lastSwitchAt: last === undefined ? null : last.createdAt,
+      shownAccountIds: [...shown],
+    };
   }
 
   async recordSwitch(

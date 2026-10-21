@@ -455,6 +455,23 @@ export interface CustomerNotificationDeps {
      * and is never answered on that order's screen.
      */
     purchasedOrderFor?(scope: TenantContext, operationId: string): Promise<string | null>;
+    /**
+     * R5C-1 item 4: what the receipt of a PAID extra-traffic / extra-time package renders
+     * (`SERVICE_TRAFFIC_ADDED` / `SERVICE_TIME_ADDED`) — the package, its price, the wallet
+     * balance before and after or the payment's tracking code, the account, the new total
+     * traffic or expiry and the order's code — read at send time from the operation. A reader,
+     * not a payload (ADR 0030 §1). Null unless the operation is a SUCCEEDED purchase of that
+     * very kind (`PURCHASED_AS`), which sends nothing.
+     */
+    addonReceiptFacts?(
+      scope: TenantContext,
+      operationId: string,
+    ): Promise<{
+      readonly kind: 'ADD_TRAFFIC' | 'ADD_TIME';
+      readonly values: TemplateValues;
+      readonly serviceId: string;
+      readonly orderId: string;
+    } | null>;
   };
   /**
    * The order's payment screens (R2 item 11; FIX-08).
@@ -859,6 +876,22 @@ export class CustomerNotificationService {
         values: facts.values,
         buttons: this.deps.buttonsFor?.(row.kind, { serviceId: facts.serviceId }) ?? [],
         ...(facts.orderId === null ? {} : { closesOrder: facts.orderId }),
+      };
+    }
+    /*
+     * R5C-1 item 4: the receipt of a paid package, onto the order's payment message exactly as
+     * a renewal's result is. The kind must match the operation's type: a traffic receipt for
+     * a time operation (or the reverse) renders nothing.
+     */
+    if (row.kind === 'SERVICE_TRAFFIC_ADDED' || row.kind === 'SERVICE_TIME_ADDED') {
+      if (this.deps.renewals?.addonReceiptFacts === undefined) return null;
+      const facts = await this.deps.renewals.addonReceiptFacts(scope, row.subjectId);
+      if (facts === null) return null;
+      if ((row.kind === 'SERVICE_TRAFFIC_ADDED') !== (facts.kind === 'ADD_TRAFFIC')) return null;
+      return {
+        values: facts.values,
+        buttons: this.deps.buttonsFor?.(row.kind, { serviceId: facts.serviceId }) ?? [],
+        closesOrder: facts.orderId,
       };
     }
     /*

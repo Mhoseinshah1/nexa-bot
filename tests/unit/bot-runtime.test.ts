@@ -49,6 +49,7 @@ import {
   parseCatalogPage,
   refusalValuesFor,
   followUpForSettlement,
+  settledKeyFor,
   GATEWAY_CHECK_CALLBACK_PREFIX,
   GATEWAY_RECEIPT_CALLBACK_PREFIX,
   GATEWAY_CARD_CHANGE_CALLBACK_PREFIX,
@@ -926,6 +927,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.stars_invoice_topup',
       'bot.payment.stars_invoice_topup_fee',
       'bot.payment.switch_card_button',
+      'bot.payment.switch_card_cooldown',
+      'bot.payment.switch_card_refused',
       'bot.payment.transfer_instructions',
       'bot.payment.transfer_under_review',
       'bot.payment.unconfigured',
@@ -945,9 +948,15 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.action_requested',
       'bot.service.action_unavailable',
       'bot.service.add_devices_button',
+      // R5C-1 item 4: drawn now (the service card's own «⏳ خرید زمان اضافه»), under the same
+      // conditions as the extra-traffic button beside it.
+      'bot.service.add_time_button',
       'bot.service.add_traffic_button',
       'bot.service.addon_choice',
       'bot.service.addon_option',
+      // R5C-1 item 4: what the payment message of a wallet-paid package says until the receipt
+      // replaces it. It claims only that the package is being applied, never that it was.
+      'bot.service.addon_paid',
       // R3 item 9: a button label; it puts the service card back in the same message.
       'bot.service.back_to_card_button',
       'bot.service.back_to_list_button',
@@ -2119,6 +2128,14 @@ describe('what follows a settlement', () => {
    * left the whole suite green. A rule that can only be reached through a webhook is a
    * rule the suite cannot distinguish from its absence.
    */
+  it('R5C-1: a wallet-paid package says it is being applied, on the message the receipt will replace', () => {
+    expect(settledKeyFor('ADD_TRAFFIC')).toBe('bot.service.addon_paid');
+    expect(settledKeyFor('ADD_TIME')).toBe('bot.service.addon_paid');
+    expect(settledKeyFor('RENEW')).toBe('bot.service.renew_paid');
+    expect(settledKeyFor('NEW_SERVICE')).toBe('bot.order.settled');
+    expect(settledKeyFor('ADD_DEVICES')).toBe('bot.order.settled');
+  });
+
   it('promises a service only for the purposes that create one by a payment', () => {
     expect(followUpForSettlement('NEW_SERVICE')).toEqual({
       followUpKey: 'bot.service.provisioning',
