@@ -570,7 +570,11 @@ export const WEB_FA = {
   'web.copied': 'کپی شد',
   'web.copy_failed': 'کپی نشد. مرورگر اجازهٔ دسترسی به حافظهٔ موقت را نداد.',
   /* PR-C: the one action that reaches a record's internal id — it copies, it never draws it. */
-  'web.copy_id': 'کپی شناسه',
+  'web.copy_code': 'کپی کد',
+  'web.copy_internal_id': 'کپی شناسهٔ داخلی',
+  'web.technical_section': 'بخش فنی',
+  'web.technical_section_body':
+    'شناسهٔ داخلی فقط برای پرس‌وجو در پایگاه داده یا ارجاع به پشتیبانی فنی است؛ کد کوتاه همان است که در صفحه می‌بینید.',
   'web.record_open': 'مشاهده',
   'web.record_code': 'کد',
   'web.panel_unlisted': 'پنلی که دیگر در فهرست نیست',
@@ -2215,7 +2219,6 @@ export const WEB_FA = {
    * Payment File 02 §21 (D7): the diagnostics an operator reconciles against, on the list
    * and the detail. Read-only — card-to-card is decided in Telegram (§10).
    */
-  'web.payment_id': 'شناسهٔ پرداخت',
   'web.payment_telegram': 'تلگرام مشتری',
   'web.payment_gateway': 'درگاه',
   'web.payment_external_reference': 'شناسهٔ پیگیری بیرونی',
@@ -5218,6 +5221,10 @@ export const WEB_FA = {
   'web.extra_devices_state': 'وضعیت',
   'web.extra_devices_active': 'فعال',
   'web.extra_devices_inactive': 'غیرفعال',
+  'web.extra_packages_active': 'فعال',
+  'web.extra_packages_active_hint':
+    'روشن: بسته همین حالا در ربات نمایش داده می‌شود. خاموش: ذخیره می‌شود ولی نمایش داده نمی‌شود تا آن را فعال کنید.',
+  'web.extra_packages_inactive_warning': 'غیرفعال است؛ در ربات نمایش داده نمی‌شود',
   'web.extra_devices_updated': 'آخرین تغییر',
   'web.extra_devices_actions': 'عملیات',
   'web.extra_devices_edit': 'ویرایش',
@@ -9123,6 +9130,18 @@ export const WEB_FA = {
   'web.lmg_col_error': 'علت توقف',
   'web.lmg_none': 'هیچ',
   'web.lmg_history_title': 'بازیابی‌های پیشین از ربات قبلی',
+  'web.lio_title': 'نتیجهٔ انتقال هر فاکتور قدیمی',
+  'web.lio_hint':
+    'فقط‌خواندنی. برای هر فاکتور قدیمی می‌بینید منتقل شد، فقط در آرشیو ماند یا روی پنل پیدا نشد، و دلیلش چیست.',
+  'web.lio_search': 'جستجو با شمارهٔ فاکتور قدیمی',
+  'web.lio_search_placeholder': 'شمارهٔ فاکتور (ابتدای شماره)',
+  'web.lio_col_invoice': 'فاکتور قدیمی',
+  'web.lio_col_outcome': 'نتیجه',
+  'web.lio_col_reason': 'دلیل',
+  'web.lio_group_migrated': 'منتقل شد',
+  'web.lio_group_archived': 'آرشیو شد',
+  'web.lio_group_not_on_panel': 'روی پنل نیست',
+  'web.lio_empty': 'فاکتوری با این مشخصات در گزارش انتقال نیست.',
   // Phase 7: the Mirza restore inside «بکاپ و بازیابی ← عملیات بازیابی».
   'web.mrz_steps_label': 'گام‌های بازیابی از ربات قبلی',
   'web.mrz_step_upload': 'بارگذاری',

@@ -42,7 +42,7 @@ import { formatNumber, formatTimestamp, formatTrafficGbText } from '../format';
 import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
-import { CodeText, CopyIdButton, productLabel } from '../ui/record-ref';
+import { CodeText, CopyCodeButton, TechnicalIds, productLabel } from '../ui/record-ref';
 import { setQuery, useLinkHandler, type Route } from '../router';
 import { messageFor } from './settings';
 import {
@@ -1662,7 +1662,7 @@ export function ProductDetailPage({
                   <span>{t('web.product_detail')}</span>
                   <span className="record-ref">
                     <CodeText code={row.code} />
-                    <CopyIdButton id={row.id} />
+                    {row.code !== null && <CopyCodeButton code={row.code} />}
                   </span>
                 </span>
               ),
@@ -1672,6 +1672,7 @@ export function ProductDetailPage({
       <StateSwitch query={product} denied={denied}>
         {row === undefined ? null : (
           <>
+            <TechnicalIds id={row.id} />
             {gap !== null && (
               <Banner
                 tone={isUnlistedGap(gap) ? 'info' : 'warn'}

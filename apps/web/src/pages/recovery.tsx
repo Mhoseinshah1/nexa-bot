@@ -1,3 +1,4 @@
+import { LegacyInvoiceOutcomes } from './legacy-invoice-outcomes';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
@@ -291,6 +292,18 @@ export function RecoveryPage({
           </StateSwitch>
         )}
       </Card>
+
+      {/*
+        R5C-2 D3: the per-invoice import report. Read-only and served under
+        `legacy.services.view` alone, so it is drawn on that permission and nothing else — never
+        behind the upload card's readiness, which needs `legacy.migration.view` and an enabled
+        migration capability (Codex on #307).
+      */}
+      {mirza.mayViewInvoices && (
+        <Card>
+          <LegacyInvoiceOutcomes />
+        </Card>
+      )}
 
       {/* E1: compacting the imported legacy data, for a reader of the migration. */}
       {mirza.mayView && (

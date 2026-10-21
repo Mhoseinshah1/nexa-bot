@@ -305,7 +305,10 @@ describe('the 7-Zip backup archive (E4)', () => {
     expect(argv).toMatch(/^x /m);
     expect(argv).toContain('-mhe=on');
     expect(argv).not.toContain(PASSWORD);
-    expect(argv).not.toMatch(/-p\S/);
+    // A `-p<password>` ARGUMENT, not the two characters anywhere: the temporary directory is
+    // `mkdtemp('nexa-7z-')`, whose random suffix starts with `p` about once in 62 runs and made
+    // every path in argv match `-p\S` (a failure on main, unrelated to any change).
+    expect(argv).not.toMatch(/(^|\s)-p\S/m);
   });
 
   it('the ONE open picks the container by magic bytes: keyring NXB without a password, 7z with one', async () => {

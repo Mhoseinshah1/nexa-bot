@@ -422,6 +422,31 @@ describe('one ticket', () => {
     expect(screen.queryByText(t(HANDOFF_LABELS.LOOP_GUARD))).toBeNull();
   });
 
+  it('copies the ticket code shown beside it, never the uuid (R5C-2 D1, Codex on #307)', async () => {
+    const writes: string[] = [];
+    Object.defineProperty(globalThis.navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: vi.fn((text: string) => {
+          writes.push(text);
+          return Promise.resolve();
+        }),
+      },
+    });
+    stubApi([{ url: `/tickets/${TICKET_ID}`, body: detail({ code: 'T4K7M2PQ' }) }]);
+    renderPage(
+      <TicketDetailPage
+        id={TICKET_ID}
+        denied={false}
+        mayReply={false}
+        mayAssign={false}
+        mayClose={false}
+      />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: t('web.copy_code') }));
+    await waitFor(() => expect(writes).toEqual(['T4K7M2PQ']));
+  });
+
   it('shows who wrote what, each reply’s delivery, and the attachment control', async () => {
     stubApi([{ url: `/tickets/${TICKET_ID}`, body: detail() }]);
     renderPage(

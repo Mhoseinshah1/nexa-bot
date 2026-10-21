@@ -186,14 +186,15 @@ describe('extra traffic and time: configured on the web, bought in the bot', () 
     ...fields,
   });
 
-  /** Create then activate over HTTP, exactly as the page's «افزودن» then «فعال کردن». */
+  /**
+   * Create over HTTP, exactly as the page's «افزودن» does with its «فعال» switch left ON (the
+   * default): the package is offered at once, with no second «فعال کردن» (Round 5C-2 D2).
+   */
   async function offerOverHttp(fields: Record<string, unknown>): Promise<string> {
     const created = await post(SERVICE_ADDON_ROUTES.create, packageBody(fields));
     expect(created.statusCode, created.body).toBe(201);
     const addon = serviceAddonResponseSchema.parse(JSON.parse(created.body)).addon;
-    expect(addon.status, 'a new package is created INACTIVE').toBe('INACTIVE');
-    const on = await post(SERVICE_ADDON_ROUTES.activate(addon.id), { idempotencyKey: key() });
-    expect(on.statusCode, on.body).toBe(201);
+    expect(addon.status, 'a new package is created ACTIVE by default').toBe('ACTIVE');
     return addon.id;
   }
 
@@ -318,6 +319,52 @@ describe('extra traffic and time: configured on the web, bought in the bot', () 
       priceAmount: '90000',
       priceCurrency: 'IRT',
     });
+  });
+
+  it('D2: active defaults ON, false keeps it INACTIVE, an unpriced one never goes live, an edit ignores it', async () => {
+    const statusOf = async (body: Record<string, unknown>) => {
+      const created = await post(SERVICE_ADDON_ROUTES.create, packageBody(body));
+      expect(created.statusCode, created.body).toBe(201);
+      return serviceAddonResponseSchema.parse(JSON.parse(created.body)).addon;
+    };
+    const base = { kind: 'ADD_TRAFFIC', trafficGb: '5', priceAmount: '45000' };
+
+    expect((await statusOf({ ...base, title: 'پیش‌فرض' })).status).toBe('ACTIVE');
+    expect((await statusOf({ ...base, title: 'روشن', active: true })).status).toBe('ACTIVE');
+    const off = await statusOf({ ...base, title: 'خاموش', active: false });
+    expect(off.status).toBe('INACTIVE');
+    // No price means not for sale: the flag cannot publish what activate would refuse.
+    const unpriced = await statusOf({
+      kind: 'ADD_TRAFFIC',
+      trafficGb: '5',
+      title: 'بی‌قیمت',
+      priceAmount: null,
+      priceCurrency: null,
+      active: true,
+    });
+    expect(unpriced.status).toBe('INACTIVE');
+
+    // An edit never changes availability, whatever it carries.
+    const edited = await post(SERVICE_ADDON_ROUTES.update(off.id), {
+      ...packageBody({ ...base, title: 'خاموش ویرایش', active: true }),
+    });
+    expect(edited.statusCode, edited.body).toBe(201);
+    expect(serviceAddonResponseSchema.parse(JSON.parse(edited.body)).addon.status).toBe('INACTIVE');
+  });
+
+  it('D2: one key with the opposite «فعال» is a payload mismatch, never a replay (Codex on #307)', async () => {
+    const base = packageBody({
+      kind: 'ADD_TRAFFIC',
+      trafficGb: '5',
+      priceAmount: '45000',
+      title: 'کلید',
+      active: true,
+    });
+    const first = await post(SERVICE_ADDON_ROUTES.create, base);
+    expect(first.statusCode, first.body).toBe(201);
+    const flipped = await post(SERVICE_ADDON_ROUTES.create, { ...base, active: false });
+    expect(flipped.statusCode, flipped.body).toBe(409);
+    expect(flipped.body).toContain('idempotency_payload_mismatch');
   });
 
   it('refuses a scope or a maximum on a package: only the user rate has them', async () => {

@@ -211,7 +211,11 @@ describe('the CI workflow', () => {
     expect(shards).toEqual(shards.map((_, i) => i + 1));
     // One failing shard must not cancel the others' evidence.
     expect(job.strategy?.['fail-fast']).toBe(false);
-    expect(Object.keys(job.services ?? {})).toEqual(expect.arrayContaining(['postgres', 'redis']));
+    // R5C-2 E: the database and cache are started by a retried step, never `services:` — a
+    // service container that fails at "Initialize containers" cannot be retried.
+    expect(job.services).toBeUndefined();
+    const start = job.steps.find((s) => s.name === 'Start PostgreSQL and Redis (bounded retry)');
+    expect(start?.run).toBe('bash scripts/ci-start-services.sh');
     const tests = job.steps.find((s) => s.name === 'Integration tests');
     // The count is the matrix length, so the denominator cannot drift from
     // the list: a stale `/4` with five matrix entries would run some files
@@ -230,14 +234,16 @@ describe('the CI workflow', () => {
   it('prepares each shard database with the compiled migrator, without secrets, after tuning', () => {
     const steps = workflow.jobs.integration!.steps;
     const names = steps.map((s) => s.name);
+    const start = names.indexOf('Start PostgreSQL and Redis (bounded retry)');
     const tune = names.indexOf('Make the throwaway database non-durable');
     const migrate = names.indexOf('Apply migrations without application secrets');
     const tests = names.indexOf('Integration tests');
-    expect(tune).toBeGreaterThan(-1);
+    expect(start).toBeGreaterThan(-1);
+    expect(tune).toBeGreaterThan(start);
     expect(migrate).toBeGreaterThan(tune);
     expect(tests).toBeGreaterThan(migrate);
     expect(steps[migrate]?.run).toBe('env -u SECRETS_KEK -u SECRETS_KEK_ID pnpm db:migrate');
-    expect(steps[tune]?.env?.POSTGRES_CONTAINER).toBe('${{ job.services.postgres.id }}');
+    expect(steps[tune]?.env?.POSTGRES_CONTAINER).toBe('nexa-ci-postgres');
   });
 
   it('reports one result that is green only when every test job is', () => {

@@ -640,8 +640,11 @@ export const NAV: readonly NavEntry[] = [
      * now redirects to) is authorised by `legacy.migration.*`, whose graph does not
      * include `backup.view` — so an actor can hold the one and not the other, the
      * condition under which a list is needed (Codex review on #278).
+     *
+     * `legacy.services.view` (R5C-2 D3): the per-invoice import report on this page is served
+     * under that permission alone.
      */
-    permission: ['backup.view', 'legacy.migration.view'],
+    permission: ['backup.view', 'legacy.migration.view', 'legacy.services.view'],
     group: 'web.navgroup_system',
   },
 ];
