@@ -387,6 +387,18 @@ describe('a provider’s own view', () => {
 });
 
 describe('card-to-card: the cards beside the route (item 7)', () => {
+  it('carries the «تغییر شماره کارت» limits on the card-to-card view only (R5C-1)', async () => {
+    api();
+    go(CARD_TO_CARD_PATH);
+    const view = renderPage(<App />);
+    expect(await screen.findByText(t('web.card_switch_title'))).toBeInTheDocument();
+    view.unmount();
+    go('/payment-gateways/tonpays');
+    renderPage(<App />);
+    await heading(t('web.payment_gateway_provider_tonpays'));
+    expect(screen.queryByText(t('web.card_switch_title'))).toBeNull();
+  });
+
   it('shows the route, «افزودن کارت» beside its actions, and the cards — on one view', async () => {
     api();
     go(CARD_TO_CARD_PATH);

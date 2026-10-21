@@ -765,6 +765,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.copy_card_button': '📋 کپی شماره کارت',
   // R4 A1: rotate the receiving card on the same invoice.
   'bot.payment.switch_card_button': '🔄 تغییر شماره کارت',
+  'bot.payment.switch_card_cooldown': 'لطفاً {seconds} ثانیه دیگر دوباره امتحان کنید',
+  'bot.payment.switch_card_refused': 'امکان تغییر کارت دیگری برای این پرداخت وجود ندارد',
   'bot.payment.copy_amount_button': '💵 کپی مبلغ',
   'bot.payment.wallet_button': '💰 پرداخت از کیف پول',
   'bot.payment.manual_button': '🧾 ثبت پرداخت',

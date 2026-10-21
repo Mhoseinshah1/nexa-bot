@@ -5103,6 +5103,34 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.payment.switch_card_cooldown',
+    description:
+      'R5C-1: the notice (a toast on the tapped button) when «🔄 تغییر شماره کارت» is pressed ' +
+      'again before payments.card_switch_cooldown_seconds has passed since the last switch. ' +
+      'Names the seconds remaining, rounded up, computed on the server. The invoice is left ' +
+      'exactly as it is.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'seconds',
+        type: 'NUMBER',
+        description: 'Whole seconds until another switch is accepted, rounded up; at least 1.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.switch_card_refused',
+    description:
+      'R5C-1: the notice (a toast on the tapped button) when «🔄 تغییر شماره کارت» is pressed ' +
+      'on a payment that has used its switches or its distinct cards. One sentence for both ' +
+      'limits, so it is not an oracle for how many cards exist. The invoice is redrawn without ' +
+      'the button.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.payment.wallet_button',
     description:
       'The label on the button a customer presses to pay for an order from their ' +

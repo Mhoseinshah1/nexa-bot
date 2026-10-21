@@ -926,6 +926,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.stars_invoice_topup',
       'bot.payment.stars_invoice_topup_fee',
       'bot.payment.switch_card_button',
+      'bot.payment.switch_card_cooldown',
+      'bot.payment.switch_card_refused',
       'bot.payment.transfer_instructions',
       'bot.payment.transfer_under_review',
       'bot.payment.unconfigured',
