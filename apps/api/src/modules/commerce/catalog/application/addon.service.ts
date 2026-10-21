@@ -593,7 +593,17 @@ function serialisableEdit(edit: ServiceAddonEdit): Record<string, unknown> {
 }
 
 function serialisableDraft(draft: ServiceAddonDraft): Record<string, unknown> {
-  return { kind: draft.kind, ...serialisableEdit(draft) };
+  /*
+   * R5C-2 D2 (Codex on #307): `active` decides the row's status, so it is part of the command a
+   * key names — the same key with the opposite choice is a payload mismatch, never a replay of
+   * the first row. Hashed only when asked for, so a key recorded before the field existed (an
+   * inactive create) still matches its own retry.
+   */
+  return {
+    kind: draft.kind,
+    ...serialisableEdit(draft),
+    ...(draft.active === true ? { active: true } : {}),
+  };
 }
 
 /** Every mutable field, so a before/after pair answers what an edit changed. */

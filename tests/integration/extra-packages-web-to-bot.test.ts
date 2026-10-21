@@ -352,6 +352,21 @@ describe('extra traffic and time: configured on the web, bought in the bot', () 
     expect(serviceAddonResponseSchema.parse(JSON.parse(edited.body)).addon.status).toBe('INACTIVE');
   });
 
+  it('D2: one key with the opposite «فعال» is a payload mismatch, never a replay (Codex on #307)', async () => {
+    const base = packageBody({
+      kind: 'ADD_TRAFFIC',
+      trafficGb: '5',
+      priceAmount: '45000',
+      title: 'کلید',
+      active: true,
+    });
+    const first = await post(SERVICE_ADDON_ROUTES.create, base);
+    expect(first.statusCode, first.body).toBe(201);
+    const flipped = await post(SERVICE_ADDON_ROUTES.create, { ...base, active: false });
+    expect(flipped.statusCode, flipped.body).toBe(409);
+    expect(flipped.body).toContain('idempotency_payload_mismatch');
+  });
+
   it('refuses a scope or a maximum on a package: only the user rate has them', async () => {
     const scoped = await post(
       SERVICE_ADDON_ROUTES.create,
