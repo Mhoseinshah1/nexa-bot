@@ -43,6 +43,7 @@ export const SETTING_GROUPS = [
   'wallet',
   'services',
   'reminders',
+  'customer_notices',
   'trial',
   'referral',
   'support',
@@ -56,6 +57,7 @@ export const SETTING_GROUP_TITLES: Readonly<Record<SettingGroup, WebKey>> = {
   wallet: 'web.settings_group_wallet',
   services: 'web.settings_group_services',
   reminders: 'web.settings_group_reminders',
+  customer_notices: 'web.settings_group_customer_notices',
   trial: 'web.settings_group_trial',
   referral: 'web.settings_group_referral',
   support: 'web.settings_group_support',
@@ -262,6 +264,19 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     description: 'web.late_credit_window_hint',
     group: 'sales',
     control: { kind: 'integer', unit: 'web.unit_hours' },
+  },
+  // R5A-2 item 5: the emergency switch for automated customer messages.
+  'customer_notices.pause_automated': {
+    title: 'web.cn_pause_title',
+    description: 'web.cn_pause_hint',
+    group: 'customer_notices',
+    control: {
+      kind: 'select',
+      options: [
+        { value: 'true', label: 'web.cn_pause_on' },
+        { value: 'false', label: 'web.cn_pause_off' },
+      ],
+    },
   },
   'ops.log.storm_rollup_enabled': {
     title: 'web.opslog_storm_enabled',
