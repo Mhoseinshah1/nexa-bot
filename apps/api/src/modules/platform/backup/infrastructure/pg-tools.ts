@@ -11,6 +11,12 @@ import type {
 import type { DatabaseInspection, RestoreEngine } from '../../recovery/application/ports.js';
 import type { AppliedMigration } from '../../../../infrastructure/persistence/migration-state.js';
 import { assertOutsideTransaction } from '../../../../infrastructure/transaction-boundary.js';
+import {
+  defaultLowPriorityPrefix,
+  killedBySignal,
+  toolOomKilled,
+  wrapLowPriority,
+} from './tool-process.js';
 
 /**
  * The PostgreSQL command-line tools, as an adapter.
@@ -114,6 +120,8 @@ function run(
   args: readonly string[],
   env: NodeJS.ProcessEnv,
   timeoutMs: number,
+  /** `prefix` set: the tool runs under nice/ionice (`tool-process.ts`). */
+  lowPriority?: { readonly prefix: readonly string[] },
 ): Promise<RunResult> {
   // `pg_dump` and `pg_restore` open their OWN connections to the database, and
   // a dump runs for as long as the database is large. Inside a transaction that
@@ -123,7 +131,11 @@ function run(
   assertOutsideTransaction(`The ${command} subprocess`);
 
   return new Promise((resolve, reject) => {
-    const child = spawn(command, [...args], {
+    const wrapped =
+      lowPriority === undefined
+        ? { command, args }
+        : wrapLowPriority(command, args, lowPriority.prefix);
+    const child = spawn(wrapped.command, [...wrapped.args], {
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -217,7 +229,25 @@ export interface PgToolsOptions {
    * the migrator this release ships rather than whatever is on disk.
    */
   readonly migratorEntrypoint: string;
+  /**
+   * The nice/ionice argv prefix `pg_dump` and the verification's `pg_restore` run under.
+   * Absent: detected once per process. `[]`: none. A test seam as much as a setting.
+   */
+  readonly lowPriorityPrefix?: readonly string[] | undefined;
 }
+
+/**
+ * The session settings of the VERIFICATION's `pg_restore` (Round 5B), passed as `PGOPTIONS` so
+ * they bind that connection only and no server configuration changes. Verifying a backup
+ * rebuilds every index of the database on the same two vCPUs the bot runs on: index builds
+ * get a bounded sort memory and no parallel workers, so the check is slower and cannot peg
+ * the host. (`nice` lowers the client only; these are what bound the server's work.)
+ */
+export const VERIFY_RESTORE_PGOPTIONS =
+  '-c maintenance_work_mem=64MB -c max_parallel_maintenance_workers=0';
+
+/** How a restore is run: the operator's, at full speed, or the pipeline's verification. */
+export type RestoreMode = 'FULL' | 'VERIFY';
 
 /**
  * How hard the cutover tries to win the race against a reconnecting pool.
@@ -294,6 +324,10 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
     if (this.connection.user !== '') env.PGUSER = this.connection.user;
     if (this.connection.password !== null) env.PGPASSWORD = this.connection.password;
     return env;
+  }
+
+  private lowPriority(): { readonly prefix: readonly string[] } {
+    return { prefix: this.options.lowPriorityPrefix ?? defaultLowPriorityPrefix() };
   }
 
   private async version(command: string): Promise<string> {
@@ -376,7 +410,11 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
       ],
       this.env(this.databaseName),
       this.options.dumpTimeoutMs,
+      this.lowPriority(),
     );
+    if (killedBySignal(result.code, result.signal)) {
+      throw toolOomKilled('pg_dump', result.code, result.signal);
+    }
     if (result.code !== 0) {
       throw new NexaError({
         kind: 'INTERNAL',
@@ -499,14 +537,20 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
    * managed first, which looks like a restore that nearly worked and is in fact
    * two damaged copies.
    */
-  async restoreIntoEmpty(name: string, dumpPath: string): Promise<void> {
+  async restoreIntoEmpty(
+    name: string,
+    dumpPath: string,
+    mode: RestoreMode = 'FULL',
+  ): Promise<void> {
     assertNotLiveTarget({ database: name }, this.databaseName);
     const env = this.env(name);
     await this.assertEmpty(name, env);
+    const verifying = mode === 'VERIFY';
 
     const restore = await run(
       this.bin('pg_restore'),
       [
+        ...(verifying ? ['--jobs=1'] : []),
         '--no-owner',
         '--no-acl',
         // Every error is fatal. `--exit-on-error` is what makes a partial
@@ -516,9 +560,13 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
         name,
         dumpPath,
       ],
-      env,
+      verifying ? { ...env, PGOPTIONS: VERIFY_RESTORE_PGOPTIONS } : env,
       this.options.restoreTimeoutMs,
+      verifying ? this.lowPriority() : undefined,
     );
+    if (killedBySignal(restore.code, restore.signal)) {
+      throw toolOomKilled('pg_restore', restore.code, restore.signal);
+    }
     if (restore.code !== 0) {
       throw new NexaError({
         kind: 'INTERNAL',
@@ -930,7 +978,7 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
     let tableCount = 0;
     let failure: string | null = null;
     try {
-      await this.restoreIntoEmpty(scratch, dumpPath);
+      await this.restoreIntoEmpty(scratch, dumpPath, 'VERIFY');
       tableCount = (await this.inspectDatabase(scratch)).tableCount;
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);

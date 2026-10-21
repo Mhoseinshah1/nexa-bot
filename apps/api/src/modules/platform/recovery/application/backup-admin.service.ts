@@ -75,6 +75,7 @@ export interface BackupRunView {
 export interface BackupStatusView {
   readonly scheduleEnabled: boolean;
   readonly intervalMs: number;
+  readonly dailyTime: string | null;
   readonly scheduleSource: EffectiveBackupSchedule['source'];
   readonly deliveryDestination: BackupDeliveryDestination;
   readonly lastSucceededAt: Date | null;
@@ -113,6 +114,7 @@ export class BackupAdminService {
     return {
       scheduleEnabled: schedule.enabled,
       intervalMs: schedule.intervalMs,
+      dailyTime: schedule.dailyTime,
       scheduleSource: schedule.source,
       deliveryDestination,
       lastSucceededAt,

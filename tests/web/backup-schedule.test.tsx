@@ -46,11 +46,12 @@ function settingRow(key: string, value: unknown, version: number | null) {
 
 const STATUS: Pick<
   BackupStatusResponse,
-  'scheduleEnabled' | 'intervalMs' | 'scheduleSource' | 'deliveryDestination'
+  'scheduleEnabled' | 'intervalMs' | 'dailyTime' | 'scheduleSource' | 'deliveryDestination'
 > = {
   scheduleEnabled: false,
   intervalMs: 24 * 3_600_000,
-  scheduleSource: { enabled: 'ENVIRONMENT', interval: 'ENVIRONMENT' },
+  dailyTime: null,
+  scheduleSource: { enabled: 'ENVIRONMENT', interval: 'ENVIRONMENT', dailyTime: 'ENVIRONMENT' },
   deliveryDestination: 'OPS_GROUP_TOPIC',
 };
 
@@ -67,7 +68,15 @@ function routes(
         settings: [
           settingRow(BACKUP_SCHEDULE_SETTING_KEYS.enabled, null, versions.enabled),
           settingRow(BACKUP_SCHEDULE_SETTING_KEYS.intervalMinutes, null, versions.interval),
+          settingRow(BACKUP_SCHEDULE_SETTING_KEYS.dailyTime, null, null),
         ],
+      },
+    },
+    {
+      url: `${API_PREFIX}${CONTROL_ROUTES.setting(BACKUP_SCHEDULE_SETTING_KEYS.dailyTime)}`,
+      body: {
+        setting: settingRow(BACKUP_SCHEDULE_SETTING_KEYS.dailyTime, '04:00', 1),
+        changed: true,
       },
     },
     {
@@ -153,6 +162,23 @@ describe('the backup schedule card', () => {
     expect(api.calls.find((call) => call.method === 'POST')?.body).toMatchObject({
       value: 2 * 24 * 60,
     });
+  });
+
+  it('saves a once-a-day time as HH:MM and refuses a malformed one before any request', async () => {
+    const api = stubApi(routes());
+    renderPage(<BackupScheduleCard status={STATUS} permissions={EDIT} />);
+    const input = await screen.findByLabelText('ساعت روزانه (مثلاً ۰۴:۰۰)');
+    fireEvent.change(input, { target: { value: '25:99' } });
+    expect(screen.getByText('ساعت را به‌صورت ۲۴ ساعته و مثل 04:00 بنویسید.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'ذخیره‌ی ساعت' })).toBeDisabled();
+    expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(0);
+
+    fireEvent.change(input, { target: { value: '04:00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره‌ی ساعت' }));
+    await waitFor(() => expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(1));
+    const write = api.calls.find((call) => call.method === 'POST');
+    expect(write?.url).toContain(encodeURIComponent(BACKUP_SCHEDULE_SETTING_KEYS.dailyTime));
+    expect(write?.body).toMatchObject({ value: '04:00' });
   });
 
   it('offers nothing to change to an actor without settings.edit', async () => {

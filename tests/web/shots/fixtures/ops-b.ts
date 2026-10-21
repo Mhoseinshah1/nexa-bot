@@ -573,6 +573,7 @@ function run(id: string, minutes: number, over: Json = {}): Json {
     partsDelivered: 0,
     parts: [],
     summaryDeliveryState: null,
+    phaseDurationsMs: null,
     ...over,
   };
 }
@@ -595,6 +596,7 @@ const RUNS = [
     partsDelivered: 0,
     parts: [],
     summaryDeliveryState: null,
+    phaseDurationsMs: null,
   }),
   run('01a05e35-c9ad-7e93-bef3-1ed9b5529a05', 60 * 25, { archiveAvailable: false }),
 ];

@@ -310,6 +310,20 @@ export const PLATFORM_ERROR_CODES = {
   /** `pg_dump`, `pg_restore` or `psql` could not be run, or did not succeed. */
   BACKUP_TOOL_FAILED: 'backup.tool_failed',
   /**
+   * A backup tool (7-Zip, `pg_dump`) was ended by a signal it did not choose — SIGKILL, or exit
+   * 137 — which on a small host is the kernel's out-of-memory killer. Distinct from
+   * `BACKUP_TOOL_FAILED` because the remedy and the retry rule differ: a tool that failed may
+   * succeed next tick, one the kernel killed for memory will be killed again at the same size,
+   * so the scheduler does not start another run for an hour (and the card says «حافظه»).
+   */
+  BACKUP_TOOL_OOM_KILLED: 'backup.tool_oom_killed',
+  /**
+   * The host had less free memory than the lowest 7-Zip compression level needs, so 7-Zip was
+   * NOT started. Refused before spawning: a tool started with too little memory is killed by
+   * the kernel part-way, which costs the whole dump and may take another process with it.
+   */
+  BACKUP_MEMORY_INSUFFICIENT: 'backup.memory_insufficient',
+  /**
    * A restore was aimed at the database this installation is running on.
    *
    * The one refusal here that exists to prevent a catastrophe rather than to

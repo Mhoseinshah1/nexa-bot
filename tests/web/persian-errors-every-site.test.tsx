@@ -147,11 +147,12 @@ function settingRow(key: string, value: unknown) {
 
 const BACKUP_STATUS: Pick<
   BackupStatusResponse,
-  'scheduleEnabled' | 'intervalMs' | 'scheduleSource' | 'deliveryDestination'
+  'scheduleEnabled' | 'intervalMs' | 'dailyTime' | 'scheduleSource' | 'deliveryDestination'
 > = {
   scheduleEnabled: false,
   intervalMs: 24 * 3_600_000,
-  scheduleSource: { enabled: 'ENVIRONMENT', interval: 'ENVIRONMENT' },
+  dailyTime: null,
+  scheduleSource: { enabled: 'ENVIRONMENT', interval: 'ENVIRONMENT', dailyTime: 'ENVIRONMENT' },
   deliveryDestination: 'OPS_GROUP_TOPIC',
 };
 

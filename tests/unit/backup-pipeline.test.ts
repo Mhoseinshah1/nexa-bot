@@ -1,13 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
-import type {
-  BackupDeliveryState,
-  BackupManifest,
-  BackupStage,
-  BackupTrigger,
+import {
+  NexaError,
+  PLATFORM_ERROR_CODES,
+  type BackupDeliveryState,
+  type BackupManifest,
+  type BackupStage,
+  type BackupTrigger,
 } from '@nexa/contracts';
 import { BackupService } from '../../apps/api/src/modules/platform/backup/application/backup.service';
 import { BackupScheduler } from '../../apps/api/src/modules/platform/backup/application/backup-scheduler';
-import { BackupSchedulePolicy } from '../../apps/api/src/modules/platform/backup/application/backup-schedule';
+import {
+  BackupSchedulePolicy,
+  latestDailySlot,
+} from '../../apps/api/src/modules/platform/backup/application/backup-schedule';
 import type {
   BackupArchivePart,
   BackupDelivery,
@@ -147,6 +152,7 @@ class FakeRuns implements BackupRunRepository, BackupRunPartStore {
       partCount: null,
       archiveSealId: null,
       summaryDeliveryState: null,
+      phaseDurationsMs: null,
     };
     this.rows.set(row.id, row);
     return { claimed: true, run: row };
@@ -158,7 +164,13 @@ class FakeRuns implements BackupRunRepository, BackupRunPartStore {
     if (row !== undefined) this.rows.set(input.id, { ...row, stage: input.stage });
   }
 
-  async heartbeat(): Promise<void> {}
+  /** Scripted: the nth heartbeat's behaviour (1-based); default succeeds. */
+  heartbeatCalls = 0;
+  heartbeatScript: ((call: number) => Promise<void>) | null = null;
+  async heartbeat(): Promise<void> {
+    this.heartbeatCalls += 1;
+    if (this.heartbeatScript !== null) await this.heartbeatScript(this.heartbeatCalls);
+  }
 
   /**
    * Retention is not the pipeline's concern, and the fake says so.
@@ -193,6 +205,7 @@ class FakeRuns implements BackupRunRepository, BackupRunPartStore {
     partCount?: number | null;
     archiveSealId?: string | null;
     summaryDeliveryState?: BackupDeliveryState | null;
+    phaseDurationsMs?: BackupRunRow['phaseDurationsMs'];
   }): Promise<void> {
     this.writes.push(`finish:${input.state}`);
     const row = this.rows.get(input.id);
@@ -217,6 +230,7 @@ class FakeRuns implements BackupRunRepository, BackupRunPartStore {
       partCount: input.partCount ?? null,
       archiveSealId: input.archiveSealId ?? null,
       summaryDeliveryState: input.summaryDeliveryState ?? null,
+      phaseDurationsMs: input.phaseDurationsMs ?? null,
     });
   }
 
@@ -246,7 +260,8 @@ class FakeRuns implements BackupRunRepository, BackupRunPartStore {
   }
 
   async latest(): Promise<readonly BackupRunRow[]> {
-    return [...this.rows.values()];
+    // Newest first, as the repository returns it.
+    return [...this.rows.values()].reverse();
   }
 
   async byId(id: string): Promise<BackupRunRow | null> {
@@ -313,6 +328,16 @@ interface Harness {
     open: Set<string>;
     /** Called inside the DUMP stage, so a test can look at the service mid-run. */
     onDump?: () => void;
+    /** Milliseconds each stage's tool takes on the fake clock (Round 5B phase durations). */
+    delays: { dump: number; encrypt: number; verify: number; deliver: number };
+    /** Thrown by the archiver's `preflight` before the dump, when set (Round 5B). */
+    preflightError: Error | null;
+    /** The number of times `dump` ran: a refused preflight must leave it at zero. */
+    dumps: number;
+    /** Thrown by `seal`, when set, instead of the generic `sealFails` Error. */
+    sealError: Error | null;
+    /** Real milliseconds the dump takes, so the lease heartbeat has time to fire. */
+    dumpRealMs: number;
   };
 }
 
@@ -327,6 +352,8 @@ function harness(
   options: {
     delivery?: BackupDelivery;
     renderCaption?: ConstructorParameters<typeof BackupService>[0]['renderCaption'];
+    heartbeat?: ConstructorParameters<typeof BackupService>[0]['heartbeat'];
+    logger?: ConstructorParameters<typeof BackupService>[0]['logger'];
   } = {},
 ): Harness {
   const clock = new FakeClock();
@@ -354,6 +381,11 @@ function harness(
     scoped: true,
     opsLogThrows: false,
     open: new Set<string>(),
+    delays: { dump: 0, encrypt: 0, verify: 0, deliver: 0 },
+    preflightError: null,
+    dumps: 0,
+    sealError: null,
+    dumpRealMs: 0,
   };
 
   const workspace: BackupWorkspace = {
@@ -382,11 +414,15 @@ function harness(
         return '16.13';
       },
       async dump() {
+        state.dumps += 1;
+        clock.advance(state.delays.dump);
+        if (state.dumpRealMs > 0) await new Promise((r) => setTimeout(r, state.dumpRealMs));
         state.onDump?.();
         if (state.dumpFails) throw new Error('pg_dump exploded');
         return { databaseName: 'nexa', pgDumpVersion: 'pg_dump 16.13' };
       },
       async verifyRestore() {
+        clock.advance(state.delays.verify);
         return state.verify;
       },
       async restoreInto() {
@@ -397,7 +433,12 @@ function harness(
       },
     },
     archiver: {
+      async preflight() {
+        if (state.preflightError !== null) throw state.preflightError;
+      },
       async seal() {
+        clock.advance(state.delays.encrypt);
+        if (state.sealError !== null) throw state.sealError;
         if (state.sealFails) throw new Error('encryption failed');
         return {
           archiveBytes: state.archiveBytes,
@@ -439,6 +480,7 @@ function harness(
         return state.deliveryConfigured;
       },
       async sendDocument(input) {
+        clock.advance(state.delays.deliver);
         state.deliveredDocument = { caption: input.caption, filename: input.filename };
         state.documents.push({
           caption: input.caption,
@@ -501,7 +543,8 @@ function harness(
       },
     },
     scope: () => (state.scoped ? { tenantId: 't1' as never, botInstanceId: null } : null),
-    logger: { info() {}, warn() {}, error() {} },
+    logger: options.logger ?? { info() {}, warn() {}, error() {} },
+    ...(options.heartbeat === undefined ? {} : { heartbeat: options.heartbeat }),
     leaseOwner: 'worker:1:aaaa',
     // The planner's arithmetic, without a file: ranges of `archiveBytes` at `partBytes`.
     parts: {
@@ -1461,7 +1504,8 @@ describe('the backup schedule policy', () => {
     await expect(policy({ enabled: null, intervalMinutes: null }).effective()).resolves.toEqual({
       enabled: false,
       intervalMs: DAY_MS,
-      source: { enabled: 'ENVIRONMENT', interval: 'ENVIRONMENT' },
+      dailyTime: null,
+      source: { enabled: 'ENVIRONMENT', interval: 'ENVIRONMENT', dailyTime: 'ENVIRONMENT' },
     });
   });
 
@@ -1469,12 +1513,14 @@ describe('the backup schedule policy', () => {
     await expect(policy({ enabled: true, intervalMinutes: null }).effective()).resolves.toEqual({
       enabled: true,
       intervalMs: DAY_MS,
-      source: { enabled: 'SETTING', interval: 'ENVIRONMENT' },
+      dailyTime: null,
+      source: { enabled: 'SETTING', interval: 'ENVIRONMENT', dailyTime: 'ENVIRONMENT' },
     });
     await expect(policy({ enabled: null, intervalMinutes: 180 }).effective()).resolves.toEqual({
       enabled: false,
       intervalMs: 3 * 3_600_000,
-      source: { enabled: 'ENVIRONMENT', interval: 'SETTING' },
+      dailyTime: null,
+      source: { enabled: 'ENVIRONMENT', interval: 'SETTING', dailyTime: 'ENVIRONMENT' },
     });
     // A stored OFF is an answer, not an absence: it beats an environment that says on.
     const off = new BackupSchedulePolicy({
@@ -1488,7 +1534,11 @@ describe('the backup schedule policy', () => {
   it('is the environment before a tenant exists to hold a setting', async () => {
     const effective = await policy({ enabled: true, intervalMinutes: 60 }, false).effective();
     expect(effective.enabled).toBe(false);
-    expect(effective.source).toEqual({ enabled: 'ENVIRONMENT', interval: 'ENVIRONMENT' });
+    expect(effective.source).toEqual({
+      enabled: 'ENVIRONMENT',
+      interval: 'ENVIRONMENT',
+      dailyTime: 'ENVIRONMENT',
+    });
   });
 });
 
@@ -1569,5 +1619,298 @@ describe('the backup conditions beside the run (E5)', () => {
     const h = harness();
     await completed(h);
     expect(h.state.recorded.map((event) => event.code)).not.toContain('backup.cleanup_failed');
+  });
+});
+
+describe('Round 5B: phase durations, memory failures and the lease heartbeat', () => {
+  it('records how long each stage took, from the clock the pipeline runs on', async () => {
+    const h = harness();
+    h.state.delays = { dump: 5_000, encrypt: 7_000, verify: 3_000, deliver: 2_000 };
+    const run = await completed(h);
+
+    expect(run.phaseDurationsMs).toEqual({
+      DUMP: 5_000,
+      CHECKSUM: 0,
+      ENCRYPT: 7_000,
+      VERIFY_RESTORE: 3_000,
+      DELIVER: 2_000,
+      CLEANUP: 0,
+    });
+  });
+
+  it('times a failing stage up to its failure and leaves the stages after it absent', async () => {
+    const h = harness();
+    h.state.delays = { dump: 4_000, encrypt: 9_000, verify: 3_000, deliver: 2_000 };
+    h.state.sealFails = true;
+    const run = await completed(h);
+
+    expect(run.state).toBe('FAILED');
+    // "Not run" is an absent key, never a zero.
+    expect(run.phaseDurationsMs).toEqual({ DUMP: 4_000, CHECKSUM: 0, ENCRYPT: 9_000 });
+  });
+
+  it('refuses a host without the memory to compress BEFORE the dump, and reports it once', async () => {
+    const h = harness();
+    h.state.preflightError = new NexaError({
+      kind: 'INTERNAL',
+      code: PLATFORM_ERROR_CODES.BACKUP_MEMORY_INSUFFICIENT,
+      message: 'There is not enough free memory to compress the backup.',
+    });
+    const run = await completed(h);
+
+    expect(run.state).toBe('FAILED');
+    expect(run.failureCode).toBe('backup.memory_insufficient');
+    // Nothing was dumped for nothing.
+    expect(h.state.dumps).toBe(0);
+    const failures = h.state.recorded.filter((event) => event.code === 'backup.run_failed');
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.severity).toBe('ERROR');
+    expect(failures[0]?.context).toMatchObject({ failureCode: 'backup.memory_insufficient' });
+  });
+
+  it('records a tool killed by the kernel with its own code, once', async () => {
+    const h = harness();
+    h.state.sealError = new NexaError({
+      kind: 'INTERNAL',
+      code: PLATFORM_ERROR_CODES.BACKUP_TOOL_OOM_KILLED,
+      message: '7-Zip was killed by the system.',
+    });
+    const run = await completed(h);
+
+    expect(run.state).toBe('FAILED');
+    expect(run.stage).toBe('ENCRYPT');
+    expect(run.failureCode).toBe('backup.tool_oom_killed');
+    expect(h.state.recorded.filter((event) => event.code === 'backup.run_failed')).toHaveLength(1);
+  });
+
+  describe('the scheduler after a memory failure', () => {
+    function schedulerFor(h: Harness, dailyTime: string | null = null): BackupScheduler {
+      return new BackupScheduler({
+        service: h.service,
+        runs: h.runs,
+        quiesced: async () => false,
+        clock: h.clock,
+        schedule: async () => ({ enabled: true, intervalMs: DAY_MS, dailyTime }),
+        tickIntervalMs: TICK_MS,
+        runHeartbeatAt: () => null,
+        runStaleAfterMs: RUN_STALE_MS,
+        logger: { info() {}, warn() {}, error() {} },
+      });
+    }
+    const oom = () =>
+      new NexaError({
+        kind: 'INTERNAL',
+        code: PLATFORM_ERROR_CODES.BACKUP_TOOL_OOM_KILLED,
+        message: 'killed',
+      });
+
+    it('does not start another run for an hour, then does', async () => {
+      const h = harness();
+      const scheduler = schedulerFor(h);
+      h.state.sealError = oom();
+      await scheduler.tick();
+      expect(h.runs.rows.size).toBe(1);
+
+      // Five minutes later, thirty, and fifty-nine: held back.
+      for (const minutes of [5, 25, 29]) {
+        h.clock.advance(minutes * 60_000);
+        await scheduler.tick();
+      }
+      expect(h.runs.rows.size).toBe(1);
+
+      // Past the hour (the failure finished at t=0): tried again.
+      h.clock.advance(2 * 60_000);
+      h.state.sealError = null;
+      await scheduler.tick();
+      expect(h.runs.rows.size).toBe(2);
+    });
+
+    it('holds back after a refusal for memory too, but NOT after an ordinary tool failure', async () => {
+      const refused = harness();
+      refused.state.preflightError = new NexaError({
+        kind: 'INTERNAL',
+        code: PLATFORM_ERROR_CODES.BACKUP_MEMORY_INSUFFICIENT,
+        message: 'no memory',
+      });
+      const a = schedulerFor(refused);
+      await a.tick();
+      refused.clock.advance(10 * 60_000);
+      await a.tick();
+      expect(refused.runs.rows.size).toBe(1);
+
+      // The positive control: the same fixture with an ordinary failure retries next tick.
+      const ordinary = harness();
+      ordinary.state.sealError = new NexaError({
+        kind: 'INTERNAL',
+        code: PLATFORM_ERROR_CODES.BACKUP_TOOL_FAILED,
+        message: 'exited 2',
+      });
+      const b = schedulerFor(ordinary);
+      await b.tick();
+      ordinary.clock.advance(10 * 60_000);
+      await b.tick();
+      expect(ordinary.runs.rows.size).toBe(2);
+    });
+
+    it('does not hold back a MANUAL run', async () => {
+      const h = harness();
+      const scheduler = schedulerFor(h);
+      h.state.sealError = oom();
+      await scheduler.tick();
+      h.state.sealError = null;
+      const manual = await completed(h, 'MANUAL');
+      expect(manual.state).toBe('SUCCEEDED');
+    });
+  });
+
+  describe('the once-a-day time', () => {
+    // 2026-03-01T09:00Z is 12:30 in Tehran (UTC+3:30), so today's 04:00 was at 00:30Z.
+    it('computes the latest slot in the installation zone', () => {
+      expect(latestDailySlot(new Date('2026-03-01T09:00:00Z'), '04:00').toISOString()).toBe(
+        '2026-03-01T00:30:00.000Z',
+      );
+      // Before today's 04:00 Tehran (03:30 local): the slot is yesterday's.
+      expect(latestDailySlot(new Date('2026-03-01T00:00:00Z'), '04:00').toISOString()).toBe(
+        '2026-02-28T00:30:00.000Z',
+      );
+    });
+
+    it('is due once the day passes the time and nothing verified has run since', async () => {
+      const due = harness();
+      due.runs.lastSuccess = new Date('2026-02-28T20:00:00Z'); // 23:30 Tehran, before today's slot
+      const dueScheduler = new BackupScheduler({
+        service: due.service,
+        runs: due.runs,
+        quiesced: async () => false,
+        clock: due.clock,
+        schedule: async () => ({ enabled: true, intervalMs: DAY_MS, dailyTime: '04:00' }),
+        tickIntervalMs: TICK_MS,
+        runHeartbeatAt: () => null,
+        runStaleAfterMs: RUN_STALE_MS,
+        logger: { info() {}, warn() {}, error() {} },
+      });
+      await dueScheduler.tick();
+      expect(due.runs.rows.size).toBe(1);
+
+      const done = harness();
+      done.runs.lastSuccess = new Date('2026-03-01T01:00:00Z'); // 04:30 Tehran, after the slot
+      const doneScheduler = new BackupScheduler({
+        service: done.service,
+        runs: done.runs,
+        quiesced: async () => false,
+        clock: done.clock,
+        schedule: async () => ({ enabled: true, intervalMs: DAY_MS, dailyTime: '04:00' }),
+        tickIntervalMs: TICK_MS,
+        runHeartbeatAt: () => null,
+        runStaleAfterMs: RUN_STALE_MS,
+        logger: { info() {}, warn() {}, error() {} },
+      });
+      await doneScheduler.tick();
+      expect(done.runs.rows.size).toBe(0);
+    });
+
+    it('a stored interval beats the environment default time; a stored time beats both', async () => {
+      const settings = (stored: {
+        enabled: boolean | null;
+        intervalMinutes: number | null;
+        dailyTime: string | null;
+      }) =>
+        new BackupSchedulePolicy({
+          settings: { read: async () => stored },
+          scope: () => ({ tenantId: 't1' as never, botInstanceId: null }),
+          environment: { enabled: true, intervalMs: DAY_MS, dailyTime: '04:00' },
+        }).effective();
+
+      // A new install: nothing stored, the template's 04:00 governs.
+      expect(
+        await settings({ enabled: null, intervalMinutes: null, dailyTime: null }),
+      ).toMatchObject({
+        dailyTime: '04:00',
+        intervalMs: DAY_MS,
+        source: { dailyTime: 'ENVIRONMENT' },
+      });
+      // An owner who stored every 6 hours keeps it: the environment's time does not override.
+      expect(
+        await settings({ enabled: null, intervalMinutes: 360, dailyTime: null }),
+      ).toMatchObject({ dailyTime: null, intervalMs: 360 * 60_000 });
+      // A time the owner stored wins over everything.
+      expect(
+        await settings({ enabled: null, intervalMinutes: 360, dailyTime: '02:15' }),
+      ).toMatchObject({ dailyTime: '02:15', source: { dailyTime: 'SETTING' } });
+    });
+
+    it('leaves an existing installation alone: no environment time, no stored one', async () => {
+      const policy = new BackupSchedulePolicy({
+        settings: { read: async () => ({ enabled: null, intervalMinutes: null, dailyTime: null }) },
+        scope: () => ({ tenantId: 't1' as never, botInstanceId: null }),
+        environment: { enabled: true, intervalMs: 6 * 3_600_000, dailyTime: '' },
+      });
+      expect(await policy.effective()).toMatchObject({
+        dailyTime: null,
+        intervalMs: 6 * 3_600_000,
+      });
+    });
+  });
+
+  describe('the lease heartbeat', () => {
+    const warnings: string[] = [];
+    const logger = {
+      info() {},
+      warn(_context: Record<string, unknown>, message: string) {
+        warnings.push(message);
+      },
+      error() {},
+    };
+
+    it('survives a single transient failure without reporting it', async () => {
+      warnings.length = 0;
+      const h = harness({
+        heartbeat: { intervalMs: 20, timeoutMs: 1_000, retryMs: 5 },
+        logger,
+      });
+      h.state.dumpRealMs = 150;
+      h.runs.heartbeatScript = async (call) => {
+        if (call === 1) throw new Error('the database is busy');
+      };
+      const run = await completed(h);
+
+      expect(run.state).toBe('SUCCEEDED');
+      expect(h.runs.heartbeatCalls).toBeGreaterThanOrEqual(2);
+      expect(warnings).not.toContain('backup lease heartbeat failed');
+    });
+
+    it('reports only after three consecutive failures, and still does not fail the run', async () => {
+      warnings.length = 0;
+      const h = harness({
+        heartbeat: { intervalMs: 15, timeoutMs: 1_000, retryMs: 5 },
+        logger,
+      });
+      h.state.dumpRealMs = 250;
+      h.runs.heartbeatScript = async () => {
+        throw new Error('the database is gone');
+      };
+      const run = await completed(h);
+
+      expect(run.state).toBe('SUCCEEDED');
+      expect(warnings).toContain('backup lease heartbeat failed');
+    });
+
+    it('gives each attempt its own timeout, so one hung statement does not stop the beat', async () => {
+      warnings.length = 0;
+      const h = harness({
+        heartbeat: { intervalMs: 20, timeoutMs: 15, retryMs: 5 },
+        logger,
+      });
+      h.state.dumpRealMs = 250;
+      h.runs.heartbeatScript = async (call) => {
+        // The first statement never answers.
+        if (call === 1) await new Promise(() => undefined);
+      };
+      const run = await completed(h);
+
+      expect(run.state).toBe('SUCCEEDED');
+      expect(h.runs.heartbeatCalls).toBeGreaterThanOrEqual(3);
+      expect(warnings).not.toContain('backup lease heartbeat failed');
+    });
   });
 });
