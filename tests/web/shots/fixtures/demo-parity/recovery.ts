@@ -247,7 +247,8 @@ export const DEMO_RECOVERY: readonly ShotFixture[] = [
   fixture('/backups/status', backupStatusResponseSchema, {
     scheduleEnabled: true,
     intervalMs: 12 * 60 * 60 * 1000,
-    scheduleSource: { enabled: 'SETTING', interval: 'SETTING' },
+    dailyTime: null,
+    scheduleSource: { enabled: 'SETTING', interval: 'SETTING', dailyTime: 'ENVIRONMENT' },
     deliveryDestination: 'OPS_GROUP_TOPIC',
     lastSucceededAt: ago(5 * HOUR - 4),
     running: null,
