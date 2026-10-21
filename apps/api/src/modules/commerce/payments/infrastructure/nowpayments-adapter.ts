@@ -31,6 +31,7 @@ import type {
 import {
   NOWPAYMENTS_ORDER_ID_RANDOM_BYTES,
   centsOfPriceAmount,
+  cryptoFiguresOf,
   nowpaymentsOrderId,
   nowpaymentsStatusRank,
   nowpaymentsVerdict,
@@ -102,6 +103,12 @@ const paymentSchema = z.object({
   order_id: z.union([providerId, z.null()]).optional(),
   price_amount: z.unknown().optional(),
   price_currency: z.unknown().optional(),
+  // R5C-2 C4: the coin side, read for the operators' log only and never judged.
+  pay_currency: z.unknown().optional(),
+  pay_amount: z.unknown().optional(),
+  actually_paid: z.unknown().optional(),
+  outcome_amount: z.unknown().optional(),
+  pay_address: z.unknown().optional(),
 });
 
 type NowPaymentsRecord = z.infer<typeof paymentSchema>;
@@ -450,6 +457,7 @@ export class NowPaymentsAdapter implements ExternalGatewayAdapter {
       verdict: judgement.verdict,
       requestAmount: centsOfPriceAmount(payment.price_amount),
       finalAmount: null,
+      crypto: cryptoFiguresOf(payment),
       providerPaymentId: PAYMENT_ID_TEXT.test(payment.payment_id) ? payment.payment_id : null,
       fundsDetected: judgement.fundsDetected,
     };

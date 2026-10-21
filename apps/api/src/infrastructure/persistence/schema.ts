@@ -4922,6 +4922,20 @@ export const gatewayInvoices = pgTable(
      * against what was SENT. Write-once (`nexa_gateway_invoices_provider_user_guard`).
      */
     providerUserId: text('provider_user_id'),
+    /*
+     * A crypto route's figures (NOWPayments, R5C-2 C4), as the provider's own payment record
+     * reported them on an inquiry that already ran: the coin, the amount it asked the payer
+     * for (`pay_amount`), what the payer actually sent (`actually_paid`), what the provider
+     * says it received after its own fees (`outcome_amount`), and the deposit address.
+     * DECIMAL TEXT in the coin's own unit — the units differ per coin, so no minor-unit
+     * integer exists — and DIAGNOSTIC ONLY: nothing reads them to approve, price or credit.
+     * Replaced by each inquiry that carries them; null until a record reports one.
+     */
+    cryptoPayCurrency: text('crypto_pay_currency'),
+    cryptoRequested: text('crypto_requested'),
+    cryptoPaid: text('crypto_paid'),
+    cryptoReceived: text('crypto_received'),
+    cryptoPayAddress: text('crypto_pay_address'),
     /**
      * FIX10 (audit P1-b on #268): how many times in a row this row's processing in the
      * creation or inquiry lane THREW (a local exception, never a provider answer). Advanced
@@ -4980,6 +4994,14 @@ export const gatewayInvoices = pgTable(
           AND (fx_effective_rate_numerator IS NULL OR fx_effective_rate_numerator > 0)
           AND (fx_effective_rate_denominator IS NULL OR fx_effective_rate_denominator > 0)
           AND (fx_quote_id IS NULL OR length(fx_quote_id) BETWEEN 1 AND 96)`,
+    ),
+    check(
+      'gateway_invoices_crypto_figures_check',
+      sql`(crypto_pay_currency IS NULL OR length(crypto_pay_currency) BETWEEN 1 AND 24)
+          AND (crypto_requested IS NULL OR crypto_requested ~ '^[0-9]{1,24}(\\.[0-9]{1,18})?$')
+          AND (crypto_paid IS NULL OR crypto_paid ~ '^[0-9]{1,24}(\\.[0-9]{1,18})?$')
+          AND (crypto_received IS NULL OR crypto_received ~ '^[0-9]{1,24}(\\.[0-9]{1,18})?$')
+          AND (crypto_pay_address IS NULL OR length(crypto_pay_address) BETWEEN 1 AND 256)`,
     ),
     uniqueIndex('gateway_invoices_charge_id_key')
       .on(table.tenantId, table.provider, table.providerChargeId)

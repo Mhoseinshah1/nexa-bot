@@ -54,6 +54,7 @@ function harness(options: {
   orderId: string | null;
   provider?: string | null;
   order?: OrderOverrides;
+  invoice?: Record<string, unknown> | null;
 }) {
   const payment = {
     id: 'pay-1',
@@ -145,7 +146,7 @@ function harness(options: {
     },
     payments: { findById: async () => payment as never },
     customers: { findById: async () => customer as never },
-    invoices: { findByPayment: async () => null },
+    invoices: { findByPayment: async () => (options.invoice ?? null) as never },
     facts,
     words,
     refundRequests: { findById: async () => null },
@@ -353,6 +354,58 @@ describe('L3 — a crypto payment', () => {
     expect(text).toContain('شارژ کیف پول');
     // A figure this system does not hold is not printed, and the line is dropped whole.
     expect(text).not.toMatch(/\{[a-zA-Z]+\}|NaN|undefined/);
+  });
+});
+
+describe('L3 — the crypto figures the provider reported (R5C-2 C4)', () => {
+  const invoice = (overrides: Record<string, unknown> = {}) => ({
+    provider: 'NOWPAYMENTS',
+    providerUnit: 'USD',
+    sentAmount: 1234n,
+    requestAmount: 1234n,
+    finalAmount: null,
+    providerStatus: 'finished',
+    providerInvoiceId: 'INV-1',
+    hintedPaymentId: '5077125051',
+    providerChargeId: null,
+    conversionRateMinor: null,
+    cryptoPayCurrency: 'MANA',
+    cryptoRequested: '155.38559757',
+    cryptoPaid: '155.38559757',
+    cryptoReceived: '1131.7812095',
+    cryptoPayAddress: '0xd1cDE08A07cD25adEbEd35c3867a59228C09B606',
+    ...overrides,
+  });
+  const paidCrypto = async (inv: Record<string, unknown>) => {
+    const h = harness({
+      method: 'GATEWAY',
+      orderId: 'ord-1',
+      provider: 'NOWPAYMENTS',
+      invoice: inv,
+    });
+    await h.consumer.handle(
+      h.event('PaymentConfirmed', confirmed('GATEWAY', 'ord-1', 'GATEWAY_INQUIRY')),
+      TX,
+    );
+    return render(h.queued[0]!);
+  };
+
+  it('prints the requested, paid and received amounts and the pay address', async () => {
+    const text = await paidCrypto(invoice());
+    expect(text).toContain('🔢 مبلغ درخواستی: ۱۵۵٫۳۸۵۵۹۷۵۷ MANA');
+    expect(text).toContain('💸 مبلغ پرداخت‌شده: ۱۵۵٫۳۸۵۵۹۷۵۷ MANA');
+    expect(text).toContain('📥 مبلغ دریافتی نهایی: ۱۱۳۱٫۷۸۱۲۰۹۵ MANA');
+    // The address is a token, never converted to Persian digits.
+    expect(text).toContain('🏦 آدرس کیف پول: 0xd1cDE08A07cD25adEbEd35c3867a59228C09B606');
+    expect(text).not.toMatch(/\{[a-zA-Z]+\}|NaN|undefined/);
+  });
+
+  it('drops a line the provider reported nothing for', async () => {
+    const text = await paidCrypto(
+      invoice({ cryptoPaid: null, cryptoReceived: null, cryptoPayAddress: null }),
+    );
+    expect(text).toContain('مبلغ درخواستی');
+    expect(text).not.toMatch(/مبلغ پرداخت‌شده|مبلغ دریافتی نهایی|آدرس کیف پول/);
   });
 });
 

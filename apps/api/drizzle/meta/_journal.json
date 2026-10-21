@@ -1884,6 +1884,13 @@
       "when": 1792563159072,
       "tag": "0268_backup_phase_durations",
       "breakpoints": true
+    },
+    {
+      "idx": 273,
+      "version": "7",
+      "when": 1792595672534,
+      "tag": "0273_crypto_invoice_figures",
+      "breakpoints": true
     }
   ]
 }

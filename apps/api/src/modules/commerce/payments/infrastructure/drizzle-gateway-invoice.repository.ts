@@ -30,6 +30,7 @@ import type {
   GatewayCardChangePolicy,
   GatewayCardInstructions,
   GatewayCardRecord,
+  GatewayCryptoFigures,
   GatewayInvoiceFxSnapshot,
   GatewayInvoiceRecord,
   GatewayInvoiceRepository,
@@ -132,6 +133,11 @@ function toRecord(row: Row): GatewayInvoiceRecord {
     cardChangeExhausted: row.cardChangeExhausted,
     reconcileInquiryRequestedAt: row.reconcileInquiryRequestedAt,
     hintedPaymentId: row.hintedPaymentId,
+    cryptoPayCurrency: row.cryptoPayCurrency,
+    cryptoRequested: row.cryptoRequested,
+    cryptoPaid: row.cryptoPaid,
+    cryptoReceived: row.cryptoReceived,
+    cryptoPayAddress: row.cryptoPayAddress,
     providerUserId: row.providerUserId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -1013,6 +1019,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly nextInquiryAt: Date | null;
       readonly postDeadline: boolean;
       readonly hintedPaymentId?: string | null;
+      readonly crypto?: GatewayCryptoFigures | null;
       readonly claimedUntil?: Date;
     },
     now: Date,
@@ -1036,6 +1043,25 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         ...(result.hintedPaymentId === undefined || result.hintedPaymentId === null
           ? {}
           : { hintedPaymentId: result.hintedPaymentId }),
+        // R5C-2 C4: the coin side of the record the answer described. A part the record did
+        // not carry leaves what an earlier answer recorded standing.
+        ...(result.crypto === undefined || result.crypto === null
+          ? {}
+          : {
+              ...(result.crypto.payCurrency === null
+                ? {}
+                : { cryptoPayCurrency: result.crypto.payCurrency }),
+              ...(result.crypto.requested === null
+                ? {}
+                : { cryptoRequested: result.crypto.requested }),
+              ...(result.crypto.paid === null ? {} : { cryptoPaid: result.crypto.paid }),
+              ...(result.crypto.received === null
+                ? {}
+                : { cryptoReceived: result.crypto.received }),
+              ...(result.crypto.payAddress === null
+                ? {}
+                : { cryptoPayAddress: result.crypto.payAddress }),
+            }),
         lastInquiryAt: now,
         lastInquiryErrorCode: result.errorCode,
         inquiryAttempts: sql`${gatewayInvoices.inquiryAttempts} + 1`,

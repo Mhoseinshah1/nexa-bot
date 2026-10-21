@@ -553,8 +553,8 @@ function providerLines(invoice: GatewayInvoiceRecord | null): Record<string, Tem
 /**
  * The extra lines of a crypto payment (L3) from what the invoice records: the dollar amount
  * the invoice was priced at, the provider's status and its payment id. The crypto amounts and
- * the deposit address the provider reports are shown only when the invoice carries them
- * (`GatewayInvoiceRecord` has no field for them yet), so a line is never invented.
+ * crypto amounts and deposit address the provider reported, shown only when the invoice carries them
+ * so a line is never invented.
  */
 function cryptoValues(
   base: Record<string, TemplateValue>,
@@ -577,6 +577,19 @@ function cryptoValues(
         `${(cents / 100n).toString()}.${(cents % 100n).toString().padStart(2, '0')} ${UNIT_WORDS['USD'] as string}`,
       );
     }
+    // R5C-2 C4: the coin side, from what the provider's own record reported. Each line is
+    // present only when the provider reported it, and the template drops an absent one.
+    const coin = invoice.cryptoPayCurrency === null ? '' : ` ${invoice.cryptoPayCurrency}`;
+    if (invoice.cryptoRequested !== null) {
+      values['cryptoRequested'] = `${toPersianDigits(invoice.cryptoRequested)}${coin}`;
+    }
+    if (invoice.cryptoPaid !== null) {
+      values['cryptoPaid'] = `${toPersianDigits(invoice.cryptoPaid)}${coin}`;
+    }
+    if (invoice.cryptoReceived !== null) {
+      values['cryptoReceived'] = `${toPersianDigits(invoice.cryptoReceived)}${coin}`;
+    }
+    if (invoice.cryptoPayAddress !== null) values['walletAddress'] = invoice.cryptoPayAddress;
     if (invoice.providerStatus !== null) values['providerStatus'] = invoice.providerStatus;
     if (invoice.hintedPaymentId !== null) values['providerPaymentId'] = invoice.hintedPaymentId;
   }
