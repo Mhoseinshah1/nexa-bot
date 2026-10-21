@@ -35,6 +35,7 @@ import {
   BACKUP_ARCHIVE_KEEP_DAYS_MAX,
   BACKUP_ARCHIVE_KEEP_DAYS_MIN,
   BACKUP_ARCHIVE_RETENTION_SETTING_KEYS,
+  BACKUP_DAILY_TIME_PATTERN,
   BACKUP_INTERVAL_MINUTES_MAX,
   BACKUP_INTERVAL_MINUTES_MIN,
   BACKUP_SCHEDULE_SETTING_KEYS,
@@ -584,6 +585,21 @@ export const SETTINGS = [
       .min(BACKUP_INTERVAL_MINUTES_MIN)
       .max(BACKUP_INTERVAL_MINUTES_MAX)
       .nullable(),
+    defaultValue: null,
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: BACKUP_SCHEDULE_SETTING_KEYS.dailyTime,
+    description:
+      'A time of day, HH:MM in Asia/Tehran, for a once-a-day automatic backup: the backup is ' +
+      'due once the day reaches that time and no verified backup has been taken since. Null ' +
+      'uses the installation environment value BACKUP_DAILY_TIME, and when that is empty too, ' +
+      'the interval.',
+    schema: z.string().regex(BACKUP_DAILY_TIME_PATTERN).nullable(),
     defaultValue: null,
     zeroMeaning: 'LITERAL',
     mutability: 'RUNTIME',

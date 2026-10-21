@@ -1268,7 +1268,7 @@ configure_telegram_bot() {
 
 start_everything() {
   nexa_step "starting the full stack"
-  nexa_compose up -d --remove-orphans
+  nexa_up_stack || nexa_die "the stack did not start. Run 'botctl logs'."
   nexa_wait_ready 240 || nexa_die "the API did not become ready. Run 'botctl logs api'."
   nexa_ok "the stack is up and the API is ready"
 }

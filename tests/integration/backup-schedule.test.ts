@@ -67,7 +67,8 @@ describe('the automatic backup schedule (spec 13.2)', () => {
     expect(before).toMatchObject({
       scheduleEnabled: true,
       intervalMs: 24 * 3_600_000,
-      scheduleSource: { enabled: 'ENVIRONMENT', interval: 'ENVIRONMENT' },
+      dailyTime: null,
+      scheduleSource: { enabled: 'ENVIRONMENT', interval: 'ENVIRONMENT', dailyTime: 'ENVIRONMENT' },
       deliveryDestination: 'NONE',
     });
   });
@@ -78,13 +79,15 @@ describe('the automatic backup schedule (spec 13.2)', () => {
     expect(await status()).toMatchObject({
       scheduleEnabled: false,
       intervalMs: 3 * 3_600_000,
-      scheduleSource: { enabled: 'SETTING', interval: 'SETTING' },
+      dailyTime: null,
+      scheduleSource: { enabled: 'SETTING', interval: 'SETTING', dailyTime: 'ENVIRONMENT' },
     });
 
     await set(null, 'enabled', off.setting.version);
     expect(await status()).toMatchObject({
       scheduleEnabled: true,
-      scheduleSource: { enabled: 'ENVIRONMENT', interval: 'SETTING' },
+      dailyTime: null,
+      scheduleSource: { enabled: 'ENVIRONMENT', interval: 'SETTING', dailyTime: 'ENVIRONMENT' },
     });
   });
 

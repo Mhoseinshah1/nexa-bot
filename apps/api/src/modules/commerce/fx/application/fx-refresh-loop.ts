@@ -10,6 +10,25 @@ import type { FxService } from './fx.service.js';
  */
 export const FX_REFRESH_INTERVAL_MS = 10_000;
 
+/**
+ * How long the loop waits before its next DIAL after N consecutive failed passes: the
+ * first failure retries at the normal interval, then 30 s, 1 m, 5 m and 10 m, the last
+ * being the cap. A stored quote or a pass that found nothing due resets it. A ticking
+ * timer still runs every interval and records progress; only the dialling is spaced.
+ *
+ * In-process state, on purpose: this loop has one writer per process, the lease on the
+ * quote row is what serialises replicas, and a restart that forgets the streak merely
+ * dials once at the normal interval and backs off again. Per-SOURCE backoff, which must
+ * agree across replicas, is stored (`FX_SOURCE_BACKOFF_MS` in the service).
+ */
+export const FX_REFRESH_BACKOFF_MS: readonly number[] = [
+  FX_REFRESH_INTERVAL_MS,
+  30_000,
+  60_000,
+  300_000,
+  600_000,
+];
+
 /** Slack: the longest a pass may take (both sources, each its whole timeout) plus three intervals. */
 export function fxLoopSlackIntervals(intervalMs: number, passBoundMs: number): number {
   return Math.ceil(passBoundMs / intervalMs) + 3;
@@ -29,6 +48,12 @@ export class FxRefreshLoop {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private readonly progress: LoopProgress;
+  private failureStreak = 0;
+  /** True while the last dialled pass threw: backoff skips then do not count as progress. */
+  private lastPassThrew = false;
+  private nextDialAt = 0;
+  /** The delay last warned about, so a warning is written once per backoff step. */
+  private warnedDelayMs: number | null = null;
 
   constructor(
     private readonly fx: Pick<FxService, 'refreshIfDue'>,
@@ -38,8 +63,11 @@ export class FxRefreshLoop {
       readonly intervalMs: number;
       readonly passBoundMs: number;
       readonly now: () => number;
+      /** Wait after the Nth consecutive failed pass; the last entry is the cap. */
+      readonly backoffMs?: readonly number[];
       readonly logger: {
         info: (context: Record<string, unknown>, message: string) => void;
+        warn?: (context: Record<string, unknown>, message: string) => void;
         error: (context: Record<string, unknown>, message: string) => void;
       };
     },
@@ -70,6 +98,26 @@ export class FxRefreshLoop {
     this.progress.end();
   }
 
+  private backOff(reason: string | null): void {
+    const steps = this.options.backoffMs ?? FX_REFRESH_BACKOFF_MS;
+    this.failureStreak += 1;
+    const delayMs =
+      steps[Math.min(this.failureStreak, steps.length) - 1] ?? this.options.intervalMs;
+    this.nextDialAt = this.options.now() + delayMs;
+    // At most one warning per backoff step; the operational log carries the outage itself.
+    if (this.warnedDelayMs === delayMs) return;
+    this.warnedDelayMs = delayMs;
+    (this.options.logger.warn ?? this.options.logger.info)(
+      {
+        outcome: 'FAILED',
+        reason,
+        consecutiveFailures: this.failureStreak,
+        nextAttemptInMs: delayMs,
+      },
+      'fx refresh failing; backing off',
+    );
+  }
+
   /** One pass. Re-entrancy is refused rather than queued. Public so a test can drive it. */
   async tick(): Promise<void> {
     if (this.running) return;
@@ -80,16 +128,30 @@ export class FxRefreshLoop {
         this.progress.record(this.options.now());
         return;
       }
+      if (this.options.now() < this.nextDialAt) {
+        // Backing off after a reported failure is a completed pass that dialled nothing.
+        // After a THROWN pass it is not: the loop must keep reading as stale.
+        if (!this.lastPassThrew) this.progress.record(this.options.now());
+        return;
+      }
       const { outcome, reason } = await this.fx.refreshIfDue(scope, this.options.baseAsset);
-      if (outcome !== 'NOT_DUE' && outcome !== 'DISABLED') {
-        this.options.logger.info({ outcome, reason }, 'fx refresh pass');
+      this.lastPassThrew = false;
+      if (outcome === 'FAILED') {
+        this.backOff(reason);
+      } else {
+        this.failureStreak = 0;
+        this.nextDialAt = 0;
+        this.warnedDelayMs = null;
+        if (outcome !== 'NOT_DUE' && outcome !== 'DISABLED') {
+          this.options.logger.info({ outcome, reason }, 'fx refresh pass');
+        }
       }
       this.progress.record(this.options.now());
     } catch (error) {
-      this.options.logger.error(
-        { error: error instanceof Error ? error.message : String(error) },
-        'fx refresh pass failed',
-      );
+      // A pass that THROWS backs off exactly like one that reports FAILED, and logs once per
+      // step: otherwise a persistent fault dials and logs every tick.
+      this.lastPassThrew = true;
+      this.backOff(error instanceof Error ? error.message : String(error));
     } finally {
       this.running = false;
     }

@@ -3,6 +3,7 @@ import { parseKeyring, type SecretKeyring } from '../crypto/keyring.js';
 import { isValidTrustedEntry } from '../trusted-proxy.js';
 import { publicExposureSignals } from './exposure.js';
 import {
+  BACKUP_DAILY_TIME_PATTERN,
   BACKUP_INTERVAL_MINUTES_MAX,
   BACKUP_INTERVAL_MINUTES_MIN,
   MAX_REQUESTS_PER_PROBE,
@@ -611,6 +612,19 @@ export const configSchema = z
       .max(BACKUP_INTERVAL_MINUTES_MAX * 60_000)
       .default(24 * 3_600_000),
     /**
+     * The DEFAULT once-a-day time (`HH:MM`, Asia/Tehran) of the automatic backup. Empty — the
+     * schema default, so an existing installation's behaviour is untouched — means the
+     * interval governs. The installer's `nexa.env` template sets `04:00` for a NEW install;
+     * the Web Admin's `backup.daily_time` overrides either.
+     */
+    BACKUP_DAILY_TIME: z
+      .string()
+      .trim()
+      .refine((value) => value === '' || BACKUP_DAILY_TIME_PATTERN.test(value), {
+        message: 'BACKUP_DAILY_TIME must be empty or HH:MM, such as 04:00.',
+      })
+      .default(''),
+    /**
      * How often the worker asks whether a backup is due. Asking is cheap.
      *
      * NOT a readiness knob any more (spec §14). The scheduler is fresh from `start()`
@@ -687,12 +701,21 @@ export const configSchema = z
      */
     BACKUP_SEVEN_ZIP_BIN: z.string().trim().min(1).default('7z'),
     /**
-     * E4: LZMA2 level and threads. The defaults are the measured choice for a 2 vCPU /
-     * 4 GB host (`docs/backup.md` § Compression): level 9 is the smallest archive, and two
-     * threads keep its memory near 1.3 GB.
+     * E4: the CEILINGS on LZMA2 effort and threads. Since Round 5B the level is chosen from
+     * a table of measured memory peaks (`seven-zip-levels.ts`), strongest first, and these
+     * only cap it: `-mx=9` with every core measured about 2.4 GB on a 4 GB / 2 vCPU host
+     * and was killed by the kernel. Lower them to force a lighter archive.
      */
     BACKUP_SEVEN_ZIP_LEVEL: z.coerce.number().int().min(1).max(9).default(9),
     BACKUP_SEVEN_ZIP_THREADS: z.coerce.number().int().min(1).max(16).default(2),
+    /**
+     * The most memory 7-Zip may use while sealing a backup, MiB. The strongest level whose
+     * measured peak fits this AND the host's free memory (less the headroom) is used; when
+     * none does the run is refused before 7-Zip starts.
+     */
+    BACKUP_SEVEN_ZIP_MEMORY_MB: z.coerce.number().int().min(64).max(32_768).default(600),
+    /** Memory the rest of the host keeps free beside 7-Zip, MiB. */
+    BACKUP_SEVEN_ZIP_HEADROOM_MB: z.coerce.number().int().min(0).max(8_192).default(256),
 
     /**
      * Disaster recovery.

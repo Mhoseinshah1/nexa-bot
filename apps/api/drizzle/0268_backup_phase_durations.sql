@@ -1,0 +1,3 @@
+ALTER TABLE "legacy_compaction_runs" DROP CONSTRAINT "legacy_compaction_runs_failure_code_check";--> statement-breakpoint
+ALTER TABLE "backup_runs" ADD COLUMN "phase_durations_ms" jsonb;--> statement-breakpoint
+ALTER TABLE "legacy_compaction_runs" ADD CONSTRAINT "legacy_compaction_runs_failure_code_check" CHECK (failure_code IN ('legacy_compaction.archive_failed', 'legacy_compaction.archive_not_delivered', 'legacy_compaction.archive_out_of_memory', 'legacy_compaction.import_not_completed', 'legacy_compaction.step_failed'));

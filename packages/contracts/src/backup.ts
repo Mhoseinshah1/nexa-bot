@@ -66,6 +66,12 @@ export const BACKUP_STAGES = [
 export type BackupStage = (typeof BACKUP_STAGES)[number];
 
 /**
+ * How long each stage of a run took, in whole milliseconds, by stage. A stage the run never
+ * reached is absent — an absent key is "not run", never zero.
+ */
+export type BackupPhaseDurationsMs = Partial<Record<BackupStage, number>>;
+
+/**
  * What we know about the delivery — which is not always whether it happened.
  *
  * This is the state the rest of the codebase does not have. `DELIVERY_OUTCOMES`
@@ -283,7 +289,14 @@ export const BACKUP_INTERVAL_MINUTES_MAX = 30 * 24 * 60;
 export const BACKUP_SCHEDULE_SETTING_KEYS = {
   enabled: 'backup.schedule_enabled',
   intervalMinutes: 'backup.interval_minutes',
+  /** A time of day (`HH:MM`, installation zone) for a once-a-day backup; null = use the interval. */
+  dailyTime: 'backup.daily_time',
 } as const;
+
+/** `HH:MM`, 24-hour. */
+export const BACKUP_DAILY_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+/** The zone a daily backup time is read in. A constant: an installation has one clock. */
+export const BACKUP_DAILY_TIME_ZONE = 'Asia/Tehran';
 
 /**
  * The settings-registry keys that bound how many archive FILES stay on the host.

@@ -51,6 +51,7 @@ import { BackupScheduleCard } from './backup-schedule';
 import { BackupPasswordCard } from './backup-password';
 import { LegacyCompactionCard } from './legacy-compaction';
 import { assembleParts } from '../backup-parts';
+import { phaseRows } from '../backup-phases';
 import { CodeName } from './code-name';
 import { RecoveryKitSection } from './recovery-kit';
 import {
@@ -74,7 +75,7 @@ import {
   type MirzaAccess,
   type RestoreFileKind,
 } from './recovery-mirza';
-import { ErrorRef } from '../ui/technical-details';
+import { ErrorCodeLabel, ErrorRef } from '../ui/technical-details';
 
 /**
  * Backup and disaster recovery.
@@ -466,6 +467,7 @@ function LastSuccess({
           [t('web.recovery_checksum'), <Copyable key="c" value={newest.checksum ?? ''} />],
           [t('web.recovery_archive_size'), <Bytes key="b" value={newest.archiveBytes} />],
           [t('web.recovery_delivery'), <DeliveryBadge key="d" outcome={newest.deliveryState} />],
+          [t('web.recovery_phases'), <PhaseDurations key="p" run={newest} />],
         ]}
       />
       {/*
@@ -1058,6 +1060,22 @@ function RestoreConfirmation({
   );
 }
 
+/** How long each stage of a run took, one line per stage the run reached. */
+function PhaseDurations({ run }: { run: BackupRunSummary }) {
+  const rows = phaseRows(run);
+  if (rows.length === 0)
+    return <span className="muted small">{t('web.recovery_phases_none')}</span>;
+  return (
+    <div className="stack small">
+      {rows.map((row) => (
+        <div key={row.stage}>
+          {t(row.label)}: <Duration ms={Math.round(row.ms / 1000) * 1000} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function historyColumns(mayDownload: boolean): readonly Column<BackupRunSummary>[] {
   const columns: Column<BackupRunSummary>[] = [
     {
@@ -1099,6 +1117,19 @@ function historyColumns(mayDownload: boolean): readonly Column<BackupRunSummary>
       header: t('web.recovery_archive_size'),
       align: 'end',
       render: (run) => <Bytes value={run.archiveBytes} />,
+    },
+    {
+      // Why a run failed, in words (a memory kill reads «حافظهٔ سرور کافی نبود»), the code beside it.
+      key: 'failure',
+      header: t('web.recovery_failure_reason'),
+      wrap: true,
+      render: (run) => (run.failureCode === null ? '—' : <ErrorCodeLabel code={run.failureCode} />),
+    },
+    {
+      key: 'phases',
+      header: t('web.recovery_phases'),
+      wrap: true,
+      render: (run) => <PhaseDurations run={run} />,
     },
   ];
   if (mayDownload) {
