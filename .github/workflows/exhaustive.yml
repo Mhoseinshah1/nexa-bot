@@ -27,33 +27,10 @@ env:
 jobs:
   exhaustive:
     name: Exhaustive orderings
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Generous, because the point of this job is to be thorough rather than
     # quick — but bounded, so a hang is reported rather than billed.
     timeout-minutes: 60
-
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: nexa
-          POSTGRES_PASSWORD: nexa
-          POSTGRES_DB: nexa_test
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U nexa -d nexa_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-      redis:
-        image: redis:7-alpine
-        ports: ['6379:6379']
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
 
     env:
       DATABASE_URL: postgres://nexa:nexa@127.0.0.1:5432/nexa_test
@@ -84,13 +61,20 @@ jobs:
           BUILD_VERSION: ${{ github.sha }}
           BUILD_COMMIT: ${{ github.sha }}
 
+      # Started here rather than as `services:` so a failed pull or a container that
+      # never turns healthy is retried (scripts/ci-start-services.sh). A service
+      # container that fails stops the job at "Initialize containers" with no step
+      # to retry it, which is how 2/10 to 9/10 shards of one run failed on main.
+      - name: Start PostgreSQL and Redis (bounded retry)
+        run: bash scripts/ci-start-services.sh
+
       # Every ordering resets the database, and a reset TRUNCATEs ~150 tables:
       # with fsync on, that is hundreds of synced file creations per ordering.
       # The container is discarded with the job; see the script for numbers.
       - name: Make the throwaway database non-durable
         run: bash scripts/ci-test-postgres.sh "$POSTGRES_CONTAINER"
         env:
-          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+          POSTGRES_CONTAINER: nexa-ci-postgres
 
       - name: Apply migrations
         run: pnpm db:migrate
