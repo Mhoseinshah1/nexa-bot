@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { PermissionKey } from './permissions.js';
 import { OPERATIONAL_SEVERITIES, type OperationalSeverity } from './ports.js';
+import { OPERATION_TYPES } from './provisioning.js';
 
 /**
  * Phase B3 — the Web Admin Notification Center (`docs/notification-center.md`).
@@ -415,6 +416,12 @@ export const inboxNotificationSchema = z.object({
   resolvedAt: z.iso.datetime().nullable(),
   read: z.boolean(),
   link: inboxLinkSchema,
+  /**
+   * The provisioning operation a `provisioning.stalled` row stalled on, from the event's
+   * context (a closed enum, never free text), so the title can name what actually stalled
+   * instead of always saying a service build did (R5C-2 C1). Absent or null elsewhere.
+   */
+  operationType: z.enum(OPERATION_TYPES).nullable().optional(),
 });
 export type InboxNotification = z.infer<typeof inboxNotificationSchema>;
 
