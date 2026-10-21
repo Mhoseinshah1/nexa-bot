@@ -44,6 +44,7 @@ import {
   fetchBroadcastHistory,
   fetchBroadcastRecipients,
   fetchBroadcasts,
+  fetchFeatureFlags,
   launchBroadcast,
   previewBroadcast,
   removeBroadcastMedia,
@@ -548,6 +549,21 @@ function useBroadcastPresentation() {
   });
 }
 
+/**
+ * Whether a TEXT broadcast goes out as a rich message («دکمه‌های داخل پیام», `rich_messages`):
+ * the table as a table and the buttons inside the bubble. Off, or unreadable, it is the ordinary
+ * message — the table as plain lines, the buttons under it — exactly as the sender decides.
+ */
+function useRichMessagesOn(): boolean {
+  const flags = useQuery({
+    queryKey: ['features'],
+    queryFn: fetchFeatureFlags,
+    staleTime: 60_000,
+    retry: false,
+  });
+  return flags.data?.flags.find((flag) => flag.key === 'rich_messages')?.enabled === true;
+}
+
 /** The composer's starting sample: a name and a handle, plainly a sample, nothing else. */
 export function defaultSample(): SampleRecipient {
   return {
@@ -569,6 +585,7 @@ function Composer({
 }) {
   const [state, setState] = useState<ComposerState>(() => initial(record));
   const presentation = useBroadcastPresentation();
+  const richOn = useRichMessagesOn();
   /*
    * The saved draft the edits are based on, and whose version a save names. PR #245 (Codex
    * CX2, review M1): when the server's draft moves on — a 409 re-read, another operator's
@@ -609,6 +626,16 @@ function Composer({
   const set = (patch: Partial<ComposerState>) => setState((current) => ({ ...current, ...patch }));
   const max =
     state.contentKind === 'TEXT' ? BROADCAST_TEXT_MAX_LENGTH : BROADCAST_CAPTION_MAX_LENGTH;
+  // A TEXT broadcast is a rich message only with «دکمه‌های داخل پیام» on: then its table is a
+  // table and its buttons sit INSIDE the bubble; otherwise plain lines and buttons below.
+  const inBubble = richOn && state.contentKind === 'TEXT';
+  const previewButtons = state.buttons
+    .filter((button) => button.label.trim() !== '')
+    .map((button, index) => (
+      <div className="bc-inline-button" key={index} data-in-bubble={inBubble ? 'true' : 'false'}>
+        {button.label}
+      </div>
+    ));
   // R4 A6: the preview's sample recipient, and the chips' insertion at the caret.
   const [sample, setSample] = useState<SampleRecipient>(defaultSample);
   const bodyRef = useRef<HTMLTextAreaElement | null>(null);
@@ -865,16 +892,12 @@ function Composer({
                 ) : (
                   <TextWithTables
                     text={renderBroadcastPreview(state.body, presentation.data, sample)}
+                    plain={!inBubble}
                   />
                 )}
+                {inBubble && previewButtons}
               </div>
-              {state.buttons
-                .filter((button) => button.label.trim() !== '')
-                .map((button, index) => (
-                  <div className="bc-inline-button" key={index}>
-                    {button.label}
-                  </div>
-                ))}
+              {!inBubble && previewButtons}
             </div>
             <p className="muted small">{t('web.bc_preview_hint')}</p>
             {/*
@@ -1991,6 +2014,7 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
 function BroadcastSummary({ record }: { record: BroadcastResponseItem }) {
   const botNames = useCachedBotNames();
   const presentation = useBroadcastPresentation();
+  const richOn = useRichMessagesOn();
   return (
     <Card title={t('web.bc_summary')}>
       <KV
@@ -2051,7 +2075,10 @@ function BroadcastSummary({ record }: { record: BroadcastResponseItem }) {
               {presentation.data === undefined ? (
                 <span className="faint">{t('web.loading')}</span>
               ) : (
-                <TextWithTables text={renderBroadcastPreview(record.body, presentation.data)} />
+                <TextWithTables
+                  text={renderBroadcastPreview(record.body, presentation.data)}
+                  plain={!(richOn && record.contentKind === 'TEXT')}
+                />
               )}
             </div>
           </div>

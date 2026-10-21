@@ -62,6 +62,21 @@ export function textSegments(text: string): TextSegment[] {
 }
 
 /**
+ * The text as the bot sends it when it is NOT a rich message: each table as `a | b` rows,
+ * the separator dropped, every other line byte for byte. The same reading as the bot's
+ * `plainTableText`, which `tests/unit/r5c2-web-table-text.test.ts` runs over the same fixtures.
+ */
+export function plainTableLines(text: string): string {
+  return textSegments(text)
+    .map((segment) =>
+      segment.kind === 'text'
+        ? segment.text
+        : [segment.header, ...segment.rows].map((cells) => cells.join(' | ')).join('\n'),
+    )
+    .join('\n');
+}
+
+/**
  * `body` with `skeleton` inserted at the selection, on lines of its own. Null when the result
  * would not fit `max`, so the caller leaves the text alone rather than cutting a table.
  */

@@ -98,6 +98,26 @@ const OPTIONS = {
   body: { currency: 'IRT', resellerTiers: [], products: [], panels: [], tags: [] },
 };
 
+const RICH_FLAG = (enabled: boolean) => ({
+  url: '/features',
+  body: {
+    flags: [
+      {
+        key: 'rich_messages',
+        description: 'Inline-button screens as rich messages.',
+        enabled,
+        source: 'TENANT',
+        blastRadius: 'LOCAL',
+        version: 2,
+        reason: null,
+        updatedAt: '2026-09-01T00:00:00.000Z',
+        updatedByAdminId: 'a1',
+        configuration: [],
+      },
+    ],
+  },
+});
+
 describe('broadcast in the Web Admin', () => {
   it('is reached on broadcasts.view', () => {
     const entry = NAV.find((candidate) => candidate.id === 'broadcasts');
@@ -509,6 +529,7 @@ describe('a draft that moved on while it was being edited (PR #245, Codex CX2 an
   it('R5C-2 B2: «افزودن جدول» inserts a table skeleton, and the preview draws it as a table', async () => {
     stubApi([
       OPTIONS,
+      RICH_FLAG(true),
       { url: `/broadcasts/${ID}`, body: { broadcast: broadcast() } },
       { url: '/broadcasts', body: { broadcasts: [], nextCursor: null, presentation: TEHRAN } },
     ]);
@@ -520,6 +541,50 @@ describe('a draft that moved on while it was being edited (PR #245, Codex CX2 an
     // The preview is a real table (header cells and a data row), not pipes in a code block.
     await waitFor(() => expect(document.querySelectorAll('.preview-table th')).toHaveLength(2));
     expect(document.querySelectorAll('.preview-table td')).toHaveLength(2);
+  });
+
+  describe('the preview follows the tenant’s rich-message switch', () => {
+    const TABLE = '| a | b |\n| --- | --- |\n| 1 | 2 |';
+    const open = async (enabled: boolean) => {
+      stubApi([
+        OPTIONS,
+        RICH_FLAG(enabled),
+        {
+          url: `/broadcasts/${ID}`,
+          body: {
+            broadcast: broadcast({
+              body: TABLE,
+              buttons: [{ label: 'برو', url: 'https://example.test' }],
+            }),
+          },
+        },
+        { url: '/broadcasts', body: { broadcasts: [], nextCursor: null, presentation: TEHRAN } },
+      ]);
+      renderPage(<BroadcastDetailPage id={ID} denied={false} maySend />);
+      await screen.findByLabelText('متن پیام');
+      await screen.findAllByText('برو');
+    };
+
+    it('on: the table is a table and the button sits inside the bubble', async () => {
+      await open(true);
+      await waitFor(() =>
+        expect(document.querySelectorAll('.bc-preview-pane .preview-table th')).toHaveLength(2),
+      );
+      const bubble = document.querySelector('.bc-preview-pane .bc-bubble');
+      expect(bubble?.querySelector('.bc-inline-button')).not.toBeNull();
+    });
+
+    it('off: plain `a | b` lines and the button under the bubble', async () => {
+      await open(false);
+      await waitFor(() =>
+        expect(document.querySelector('.bc-preview-pane .preview-text')).not.toBeNull(),
+      );
+      expect(document.querySelectorAll('.preview-table')).toHaveLength(0);
+      const pane = document.querySelector('.bc-preview-pane') as HTMLElement;
+      expect(pane.querySelector('.preview-text')?.textContent).toBe('a | b\n1 | 2');
+      expect(pane.querySelector('.bc-bubble .bc-inline-button')).toBeNull();
+      expect(pane.querySelector('.bc-phone > .bc-inline-button')).not.toBeNull();
+    });
   });
 
   it('sends no audience key at its default, so an older server accepts the save (review m3)', async () => {
