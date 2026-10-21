@@ -286,16 +286,6 @@ export interface GatewayInquiryContext {
   readonly providerOrderId: string;
   readonly sentAmount: bigint;
   readonly hintedPaymentId: string | null;
-  /**
-   * R5C-2 C4: the coin, the amount it asked the payer for, what the payer sent, what the
-   * provider received after its own fees (decimal text in the coin's unit) and the deposit
-   * address, as the provider's last inquiry reported them. Diagnostic only.
-   */
-  readonly cryptoPayCurrency: string | null;
-  readonly cryptoRequested: string | null;
-  readonly cryptoPaid: string | null;
-  readonly cryptoReceived: string | null;
-  readonly cryptoPayAddress: string | null;
   /** The customer's integer as sent, for a `numericIdentity` route; null otherwise. */
   readonly providerUserId?: string | null;
 }
@@ -448,6 +438,16 @@ export interface GatewayInvoiceRecord {
   readonly reconcileInquiryRequestedAt: Date | null;
   /** The provider payment id a verified webhook (or a listing inquiry) last named. A hint. */
   readonly hintedPaymentId: string | null;
+  /**
+   * R5C-2 C4: the coin, the amount it asked the payer for, what the payer sent, what the
+   * provider received after its own fees (decimal text in the coin's unit) and the deposit
+   * address, as the provider's last inquiry reported them. Diagnostic only.
+   */
+  readonly cryptoPayCurrency: string | null;
+  readonly cryptoRequested: string | null;
+  readonly cryptoPaid: string | null;
+  readonly cryptoReceived: string | null;
+  readonly cryptoPayAddress: string | null;
   /** The customer's integer as sent (CentralPay's `userId`), frozen at open. Null otherwise. */
   readonly providerUserId: string | null;
   readonly createdAt: Date;
