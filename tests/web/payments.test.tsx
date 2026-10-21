@@ -1484,9 +1484,15 @@ describe('the payment diagnostics (§21)', () => {
     expect(table.textContent).not.toContain(ROW_ID.slice(0, 8));
     expect(
       within(table)
-        .getAllByRole('button', { name: 'کپی شناسه' })
-        .some((button) => button.getAttribute('data-copy-value') === ROW_ID),
+        .getAllByRole('button', { name: 'کپی کد' })
+        .some((button) => button.getAttribute('data-copy-value') === 'a1b2c3d4e5f60718'),
     ).toBe(true);
+    // The uuid is not offered beside the code any more (D1).
+    expect(
+      within(table)
+        .queryAllByRole('button')
+        .some((button) => button.getAttribute('data-copy-value') === ROW_ID),
+    ).toBe(false);
     /*
      * Spec §10: the customer IS the Telegram id — the link to their page — and the
      * internal uuid is not drawn. This used to be two columns, a uuid prefix headed
