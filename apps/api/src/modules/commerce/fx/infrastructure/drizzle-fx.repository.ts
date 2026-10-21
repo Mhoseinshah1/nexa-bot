@@ -215,7 +215,12 @@ export class DrizzleFxQuoteRepository implements FxQuoteRepository {
   async recordSourceFailure(
     scope: TenantContext,
     source: FxSource,
-    input: { readonly now: Date; readonly code: string; readonly retryAfter: Date | null },
+    input: {
+      readonly now: Date;
+      readonly code: string;
+      readonly retryAfter: Date | null;
+      readonly consecutiveFailures: number;
+    },
     tx: unknown,
   ): Promise<void> {
     const tenantId = requireTenantId(scope);
@@ -228,7 +233,7 @@ export class DrizzleFxQuoteRepository implements FxQuoteRepository {
         lastFailureAt: input.now,
         lastFailureCode: code,
         retryAfter: input.retryAfter,
-        consecutiveFailures: 1,
+        consecutiveFailures: input.consecutiveFailures,
         updatedAt: input.now,
       })
       .onConflictDoUpdate({
@@ -237,7 +242,7 @@ export class DrizzleFxQuoteRepository implements FxQuoteRepository {
           lastFailureAt: input.now,
           lastFailureCode: code,
           retryAfter: input.retryAfter,
-          consecutiveFailures: sql`${fxSourceStates.consecutiveFailures} + 1`,
+          consecutiveFailures: input.consecutiveFailures,
           updatedAt: input.now,
         },
       });

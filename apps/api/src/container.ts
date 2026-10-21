@@ -242,6 +242,7 @@ import {
   type InstallationWriteGate,
 } from './infrastructure/persistence/write-gate.js';
 import { DualFormatBackupArchiver } from './modules/platform/backup/infrastructure/archiver.js';
+import { readMemAvailableMb } from './modules/platform/backup/infrastructure/seven-zip-levels.js';
 import {
   backupArchivePasswordSource,
   DrizzleBackupPasswordStore,
@@ -7055,6 +7056,9 @@ export function createContainer(
       binary: config.BACKUP_SEVEN_ZIP_BIN,
       level: config.BACKUP_SEVEN_ZIP_LEVEL,
       threads: config.BACKUP_SEVEN_ZIP_THREADS,
+      memoryBudgetMb: config.BACKUP_SEVEN_ZIP_MEMORY_MB,
+      memoryHeadroomMb: config.BACKUP_SEVEN_ZIP_HEADROOM_MB,
+      readAvailableMb: readMemAvailableMb,
       sealTimeoutMs: config.BACKUP_DUMP_TIMEOUT_MS,
       openTimeoutMs: config.BACKUP_RESTORE_TIMEOUT_MS,
     },
@@ -7085,6 +7089,10 @@ export function createContainer(
           scope,
           BACKUP_SCHEDULE_SETTING_KEYS.intervalMinutes,
         ),
+        dailyTime: await settingsResolver.valueOf<string | null>(
+          scope,
+          BACKUP_SCHEDULE_SETTING_KEYS.dailyTime,
+        ),
       }),
     },
     scope: () =>
@@ -7094,6 +7102,7 @@ export function createContainer(
     environment: {
       enabled: config.BACKUP_SCHEDULE_ENABLED,
       intervalMs: config.BACKUP_INTERVAL_MS,
+      dailyTime: config.BACKUP_DAILY_TIME,
     },
   });
   const backup = new BackupService({

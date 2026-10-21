@@ -6155,4 +6155,127 @@ done
 assert_contains 'docs/deployment.md does not say the reason is on stderr' \
   "$(cat "${REPO}/docs/deployment.md")" 'printed on stderr'
 
+# =============================================================================
+# NEXA_DISABLED_ROLES — a role the owner stopped stays stopped
+# =============================================================================
+# The owner runs `docker stop nexa-provisioner-1 nexa-monitor-1`, and every `botctl update`
+# then started both again. The setting is in nexa.env and every `compose up -d` honours it.
+setup_root
+setup_fake_docker
+seed_release 'v1.0.0' "$DIGEST_A"
+fake_set resolve_digest "$DIGEST_B"
+fake_set compose_services 'api worker monitor provisioner postgres redis caddy'
+
+test_case 'roles: nothing is disabled by default, and status says nothing extra'
+run_botctl roles status
+assert_equals 'roles status failed' 0 "$BOTCTL_STATUS"
+assert_contains 'roles status does not show the default' "$BOTCTL_OUTPUT" 'provisioner  enabled'
+run_botctl status
+assert_not_contains 'status mentions disabled roles on a default install' "$BOTCTL_OUTPUT" 'نقش‌های خاموش‌شده'
+
+test_case 'roles: an update with nothing disabled still runs the bare up -d'
+reset_docker_log
+run_botctl update v2.0.0
+assert_equals 'the default update failed' 0 "$BOTCTL_STATUS"
+assert_not_contains 'a default update named services in up' "$(docker_log)" 'up -d --remove-orphans api'
+assert_not_contains 'a default update stopped something' "$(docker_log)" ' stop '
+
+test_case 'roles: disable then enable round-trips the file, mode and every other line'
+before="$(grep -v '^NEXA_DISABLED_ROLES=' "${NEXA_CONFIG_DIR}/nexa.env")"
+mode_before="$(stat -c %a "${NEXA_CONFIG_DIR}/nexa.env")"
+reset_docker_log
+run_botctl roles disable provisioner monitor
+assert_equals 'roles disable failed' 0 "$BOTCTL_STATUS"
+assert_equals 'the setting was not written canonically' 'monitor,provisioner' "$(nexa_env_key NEXA_DISABLED_ROLES)"
+assert_contains 'disable did not stop the roles' "$(docker_log)" 'stop provisioner monitor'
+assert_equals 'disable changed another line' "$before" "$(grep -v '^NEXA_DISABLED_ROLES=' "${NEXA_CONFIG_DIR}/nexa.env")"
+assert_equals 'disable changed the file mode' "$mode_before" "$(stat -c %a "${NEXA_CONFIG_DIR}/nexa.env")"
+run_botctl roles disable provisioner
+assert_equals 'a repeated disable failed' 0 "$BOTCTL_STATUS"
+assert_equals 'a repeated disable changed the setting' 'monitor,provisioner' "$(nexa_env_key NEXA_DISABLED_ROLES)"
+assert_equals 'the disable left a temp file' 1 "$(find "$NEXA_CONFIG_DIR" -name 'nexa.env*' | wc -l)"
+
+test_case 'roles: status shows the disabled roles, in Persian'
+run_botctl status
+assert_contains 'status does not list the disabled roles' "$BOTCTL_OUTPUT" 'نقش‌های خاموش‌شده: monitor, provisioner'
+run_botctl roles status
+assert_contains 'roles status does not show provisioner disabled' "$BOTCTL_OUTPUT" 'provisioner  disabled'
+
+test_case 'roles: an update does not start a disabled role, and does not wait for it'
+fake_set monitor_health unhealthy
+fake_set provisioner_health unhealthy
+reset_docker_log
+NEXA_READY_TIMEOUT=4 run_botctl update v3.0.0
+log="$(docker_log)"
+up_line="$(printf '%s\n' "$log" | grep -- ' up -d --remove-orphans' | head -n 1)"
+assert_equals 'the update failed because of a role that is disabled' 0 "$BOTCTL_STATUS"
+assert_contains 'up did not name the enabled services' "$up_line" 'api'
+assert_not_contains 'up started the disabled provisioner' "$up_line" 'provisioner'
+assert_not_contains 'up started the disabled monitor' "$up_line" 'monitor'
+assert_contains 'the disabled roles were not stopped after up' "$log" 'stop monitor provisioner'
+fake_set monitor_health healthy
+fake_set provisioner_health healthy
+
+test_case 'roles: restart and background restart leave a disabled role alone'
+reset_docker_log
+run_botctl restart
+assert_equals 'restart failed' 0 "$BOTCTL_STATUS"
+assert_not_contains 'restart started a disabled role' \
+  "$(printf '%s\n' "$(docker_log)" | grep -- ' up -d --remove-orphans' | head -n 1)" 'provisioner'
+reset_docker_log
+run_botctl restart background
+assert_equals 'restart background failed' 0 "$BOTCTL_STATUS"
+assert_contains 'restart background restarted the worker' "$(docker_log)" 'restart worker'
+assert_not_contains 'restart background started a disabled role' "$(docker_log)" 'restart worker monitor'
+
+test_case 'roles: enable starts only the named role and removes it from the setting'
+reset_docker_log
+run_botctl roles enable provisioner
+assert_equals 'roles enable failed' 0 "$BOTCTL_STATUS"
+assert_equals 'enable removed the wrong role' 'monitor' "$(nexa_env_key NEXA_DISABLED_ROLES)"
+assert_contains 'enable did not start the role alone' "$(docker_log)" 'up -d --no-deps provisioner'
+run_botctl roles enable monitor
+assert_equals 'the last enable failed' 0 "$BOTCTL_STATUS"
+assert_equals 'the setting was not removed when empty' '' "$(nexa_env_key NEXA_DISABLED_ROLES)"
+assert_not_contains 'an empty setting left a line behind' "$(cat "${NEXA_CONFIG_DIR}/nexa.env")" 'NEXA_DISABLED_ROLES'
+assert_equals 'enable changed another line' "$before" "$(cat "${NEXA_CONFIG_DIR}/nexa.env")"
+
+test_case 'roles: protected and unknown roles are refused, in the command and in the file'
+for bad in api worker recovery caddy postgres bogus; do
+  run_botctl roles disable "$bad"
+  assert_fails "disabling ${bad} was accepted" test "$BOTCTL_STATUS" -eq 0
+done
+assert_equals 'a refused disable wrote the setting' '' "$(nexa_env_key NEXA_DISABLED_ROLES)"
+printf 'NEXA_DISABLED_ROLES=provisioner,worker\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+reset_docker_log
+run_botctl update v4.0.0
+assert_fails 'an update ran with an invalid NEXA_DISABLED_ROLES' test "$BOTCTL_STATUS" -eq 0
+assert_not_contains 'an invalid setting still migrated' "$(docker_log)" 'migrate.js'
+assert_contains 'the refusal does not tell the operator to edit the line' "$BOTCTL_OUTPUT" 'edit that line by hand'
+assert_not_contains 'the refusal advises a command that refuses the same value' "$BOTCTL_OUTPUT" 'roles enable'
+for verb in rollback restart; do
+  run_botctl "$verb"
+  assert_not_contains "${verb} advises roles enable on an invalid setting" "$BOTCTL_OUTPUT" 'roles enable'
+done
+# Whitespace is trimmed around an item, never inside one: "provis ioner" is not "provisioner".
+grep -v '^NEXA_DISABLED_ROLES=' "${NEXA_CONFIG_DIR}/nexa.env" >"${NEXA_CONFIG_DIR}/nexa.env.new"
+mv "${NEXA_CONFIG_DIR}/nexa.env.new" "${NEXA_CONFIG_DIR}/nexa.env"
+printf 'NEXA_DISABLED_ROLES=monitor, provis ioner\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+reset_docker_log
+run_botctl update v4.0.0
+assert_fails 'an update accepted "provis ioner" as provisioner' test "$BOTCTL_STATUS" -eq 0
+assert_not_contains 'an inner space was collapsed into a valid role' "$(docker_log)" 'migrate.js'
+grep -v '^NEXA_DISABLED_ROLES=' "${NEXA_CONFIG_DIR}/nexa.env" >"${NEXA_CONFIG_DIR}/nexa.env.new"
+mv "${NEXA_CONFIG_DIR}/nexa.env.new" "${NEXA_CONFIG_DIR}/nexa.env"
+printf 'NEXA_DISABLED_ROLES= monitor , provisioner \n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+run_botctl roles status
+assert_equals 'padding around items was refused' 0 "$BOTCTL_STATUS"
+assert_contains 'padded monitor was not read' "$BOTCTL_OUTPUT" 'monitor      disabled'
+teardown_root
+
+test_case 'roles: docs and usage describe the command'
+assert_contains 'docs/deployment.md does not document botctl roles' \
+  "$(cat "${REPO}/docs/deployment.md")" 'NEXA_DISABLED_ROLES'
+assert_contains 'usage does not list botctl roles' "$("$BOTCTL" help)" 'botctl roles disable'
+
 report

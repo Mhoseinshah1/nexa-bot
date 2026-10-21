@@ -137,10 +137,20 @@ export interface FxQuoteRepository {
     now: Date,
     tx: unknown,
   ): Promise<void>;
+  /**
+   * `consecutiveFailures` is decided by the service and stored as given: the number of
+   * TRANSPORT failures in a row, which the next backoff step reads. A rejected quote (the
+   * source answered) stores zero.
+   */
   recordSourceFailure(
     scope: TenantContext,
     source: FxSource,
-    input: { readonly now: Date; readonly code: string; readonly retryAfter: Date | null },
+    input: {
+      readonly now: Date;
+      readonly code: string;
+      readonly retryAfter: Date | null;
+      readonly consecutiveFailures: number;
+    },
     tx: unknown,
   ): Promise<void>;
 }

@@ -91,6 +91,8 @@ describe('the legacy data compaction (E1)', () => {
   function executor(input: {
     parts: readonly Partial<BackupRunPartRow>[];
     backupState?: 'SUCCEEDED' | 'FAILED';
+    /** The failed archive backup's failure code, as its run row carries it. */
+    backupFailureCode?: string;
     /** Runs inside the substituted backup, before it answers (a long or failing archive). */
     during?: () => Promise<void>;
     heartbeatIntervalMs?: number;
@@ -117,6 +119,7 @@ describe('the legacy data compaction (E1)', () => {
                 id: backupId,
                 state: input.backupState ?? 'SUCCEEDED',
                 verifiedAt: input.backupState === 'FAILED' ? null : new Date(),
+                failureCode: input.backupFailureCode ?? null,
               },
             } as never;
           },
@@ -209,6 +212,21 @@ describe('the legacy data compaction (E1)', () => {
     expect((await run.tick())?.failureCode).toBe('legacy_compaction.archive_failed');
     expect((await ids()).has(dropped)).toBe(true);
   });
+
+  it.each(['backup.tool_oom_killed', 'backup.memory_insufficient'])(
+    'names a memory failure of the archive backup (%s) and deletes NOTHING',
+    async (failureCode) => {
+      const dropped = await history('agent_log', { a: 1 });
+      await request();
+      const { executor: run } = executor({
+        parts: [{}],
+        backupState: 'FAILED',
+        backupFailureCode: failureCode,
+      });
+      expect((await run.tick())?.failureCode).toBe('legacy_compaction.archive_out_of_memory');
+      expect((await ids()).has(dropped)).toBe(true);
+    },
+  );
 
   it('archives first, then drops unread types, dedups invoice twins, strips flags, and reports', async () => {
     const drop1 = await history('panel_target', { x: 1 });

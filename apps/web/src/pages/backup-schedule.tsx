@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  BACKUP_DAILY_TIME_PATTERN,
   BACKUP_INTERVAL_MINUTES_MAX,
   BACKUP_INTERVAL_MINUTES_MIN,
   BACKUP_SCHEDULE_SETTING_KEYS,
@@ -91,7 +92,7 @@ const DESTINATION_LABEL: Readonly<Record<BackupDeliveryDestination, WebKey>> = {
 
 type ScheduleStatus = Pick<
   BackupStatusResponse,
-  'scheduleEnabled' | 'intervalMs' | 'scheduleSource' | 'deliveryDestination'
+  'scheduleEnabled' | 'intervalMs' | 'dailyTime' | 'scheduleSource' | 'deliveryDestination'
 >;
 
 export function BackupScheduleCard({
@@ -108,7 +109,13 @@ export function BackupScheduleCard({
   const all = settings.data?.settings ?? [];
   const enabledRow = all.find((row) => row.key === BACKUP_SCHEDULE_SETTING_KEYS.enabled);
   const intervalRow = all.find((row) => row.key === BACKUP_SCHEDULE_SETTING_KEYS.intervalMinutes);
+  const dailyRow = all.find((row) => row.key === BACKUP_SCHEDULE_SETTING_KEYS.dailyTime);
   const editable = mayEdit && enabledRow !== undefined && intervalRow !== undefined;
+  const [dailyText, setDailyText] = useState(status.dailyTime ?? '');
+  useEffect(() => setDailyText(status.dailyTime ?? ''), [status.dailyTime]);
+  const dailyTrimmed = dailyText.trim();
+  const dailyValid = BACKUP_DAILY_TIME_PATTERN.test(dailyTrimmed);
+  const dailyChanged = dailyValid && dailyTrimmed !== status.dailyTime;
 
   const effectiveMinutes = Math.round(status.intervalMs / 60_000);
   const [choice, setChoice] = useState<BackupIntervalChoice>(presetOf(effectiveMinutes));
@@ -134,12 +141,17 @@ export function BackupScheduleCard({
   // One key per ROW: a success on one setting must not retire the key another holds.
   const enabledKey = useSubmissionKey();
   const intervalKey = useSubmissionKey();
+  const dailyKey = useSubmissionKey();
   const keyFor = (settingKey: string) =>
-    settingKey === BACKUP_SCHEDULE_SETTING_KEYS.enabled ? enabledKey : intervalKey;
+    settingKey === BACKUP_SCHEDULE_SETTING_KEYS.enabled
+      ? enabledKey
+      : settingKey === BACKUP_SCHEDULE_SETTING_KEYS.dailyTime
+        ? dailyKey
+        : intervalKey;
   const save = useMutation({
     mutationFn: (command: {
       key: string;
-      value: boolean | number | null;
+      value: boolean | number | string | null;
       expectedVersion: number | null;
       idempotencyKey: string;
     }) => saveSetting(command),
@@ -152,7 +164,10 @@ export function BackupScheduleCard({
    * One key per logical attempt (`useSubmissionKey`): a re-press after a lost answer is the
    * same command with the same key, and any other value or version is a new one.
    */
-  const write = (row: ResolvedSettingResponse | undefined, value: boolean | number | null) => {
+  const write = (
+    row: ResolvedSettingResponse | undefined,
+    value: boolean | number | string | null,
+  ) => {
     if (row === undefined) return;
     const command = { key: row.key, value, expectedVersion: row.version };
     save.mutate({ ...command, idempotencyKey: keyFor(row.key).current(command) });
@@ -162,7 +177,10 @@ export function BackupScheduleCard({
     choice === 'custom'
       ? intervalMinutes(customText, custom.unit)
       : ({ ok: true, minutes: presetMinutes(choice) } as const);
-  const intervalChanged = parsed.ok && parsed.minutes !== effectiveMinutes;
+  // While a stored daily time is in force the policy reports a 24 h interval, so picking
+  // that same interval is still a change: it is how an operator leaves the daily time.
+  const dailyInForce = status.scheduleSource.dailyTime === 'SETTING' && status.dailyTime !== null;
+  const intervalChanged = parsed.ok && (parsed.minutes !== effectiveMinutes || dailyInForce);
 
   return (
     <div className="stack">
@@ -193,6 +211,19 @@ export function BackupScheduleCard({
             </span>,
           ],
           [
+            t('web.backup_schedule_daily'),
+            <span key="daily">
+              {status.dailyTime === null ? (
+                t('web.backup_schedule_daily_none')
+              ) : (
+                <Ltr>{status.dailyTime}</Ltr>
+              )}{' '}
+              <Badge tone={status.scheduleSource.dailyTime === 'SETTING' ? 'info' : 'neutral'}>
+                {t(SOURCE_LABEL[status.scheduleSource.dailyTime])}
+              </Badge>
+            </span>,
+          ],
+          [
             t('web.backup_destination'),
             <Badge key="destination" tone={status.deliveryDestination === 'NONE' ? 'warn' : 'ok'}>
               {t(DESTINATION_LABEL[status.deliveryDestination])}
@@ -204,12 +235,63 @@ export function BackupScheduleCard({
         <Banner tone="warn">{t('web.backup_destination_none_hint')}</Banner>
       )}
 
+      {editable && dailyRow !== undefined && (
+        <form
+          className="stack"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (dailyChanged) write(dailyRow, dailyTrimmed);
+          }}
+        >
+          <Field
+            label={t('web.backup_schedule_daily_edit')}
+            hint={t('web.backup_schedule_daily_hint')}
+            htmlFor="backup-daily-time"
+            {...(dailyTrimmed === '' || dailyValid
+              ? {}
+              : { error: t('web.backup_schedule_daily_invalid') })}
+          >
+            <Input
+              id="backup-daily-time"
+              dir="ltr"
+              inputMode="numeric"
+              placeholder="04:00"
+              value={dailyText}
+              onChange={(event) => setDailyText(event.target.value)}
+            />
+          </Field>
+          <div className="btn-group">
+            <button
+              type="submit"
+              className="btn primary"
+              disabled={!dailyChanged || save.isPending}
+            >
+              {t('web.backup_schedule_daily_save')}
+            </button>
+            {status.scheduleSource.dailyTime === 'SETTING' && (
+              <button
+                type="button"
+                className="btn"
+                disabled={save.isPending}
+                onClick={() => write(dailyRow, null)}
+              >
+                {t('web.backup_schedule_reset_daily')}
+              </button>
+            )}
+          </div>
+        </form>
+      )}
+
       {editable && (
         <form
           className="stack"
           onSubmit={(event) => {
             event.preventDefault();
-            if (parsed.ok && intervalChanged) write(intervalRow, parsed.minutes);
+            if (parsed.ok && intervalChanged) {
+              // A stored daily time beats any interval, so choosing an interval clears it.
+              if (dailyInForce) write(dailyRow, null);
+              write(intervalRow, parsed.minutes);
+            }
           }}
         >
           <Field
@@ -308,6 +390,12 @@ export function BackupScheduleCard({
             [
               t('web.backup_schedule_auto'),
               <Ltr key="e">BACKUP_SCHEDULE_ENABLED · {BACKUP_SCHEDULE_SETTING_KEYS.enabled}</Ltr>,
+            ],
+            [
+              t('web.backup_schedule_daily'),
+              <Ltr key="d">
+                BACKUP_DAILY_TIME · {BACKUP_SCHEDULE_SETTING_KEYS.dailyTime} (HH:MM, Asia/Tehran)
+              </Ltr>,
             ],
             [
               t('web.backup_schedule_interval'),

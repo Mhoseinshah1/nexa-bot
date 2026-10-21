@@ -116,7 +116,11 @@ export function LegacyCompactionCard({ mayApply }: { mayApply: boolean }) {
         {run?.state === 'VACUUMING' && <Banner tone="warn">{t('web.lcp_maintenance')}</Banner>}
         {run?.state === 'FAILED' && (
           <Banner tone="danger">
-            {t('web.lcp_failed')}{' '}
+            {t(
+              run.failureCode === 'legacy_compaction.archive_out_of_memory'
+                ? 'web.lcp_failed_memory'
+                : 'web.lcp_failed',
+            )}{' '}
             <bdi dir="ltr" className="ltr mono">
               {run.failureCode}
             </bdi>

@@ -3,6 +3,7 @@ import type {
   BackupArchiveFormat,
   BackupDeliveryState,
   BackupRunState,
+  BackupPhaseDurationsMs,
   BackupStage,
   BackupTrigger,
 } from '@nexa/contracts';
@@ -65,6 +66,7 @@ function toRow(row: Row): BackupRunRow {
     partCount: row.partCount,
     archiveSealId: row.archiveSealId,
     summaryDeliveryState: row.summaryDeliveryState as BackupDeliveryState | null,
+    phaseDurationsMs: row.phaseDurationsMs as BackupPhaseDurationsMs | null,
   };
 }
 
@@ -323,6 +325,7 @@ export class DrizzleBackupRunRepository
     partCount?: number | null;
     archiveSealId?: string | null;
     summaryDeliveryState?: BackupDeliveryState | null;
+    phaseDurationsMs?: BackupPhaseDurationsMs | null;
   }): Promise<void> {
     await this.db
       .update(backupRuns)
@@ -331,6 +334,7 @@ export class DrizzleBackupRunRepository
         partCount: input.partCount ?? null,
         archiveSealId: input.archiveSealId ?? null,
         summaryDeliveryState: input.summaryDeliveryState ?? null,
+        phaseDurationsMs: input.phaseDurationsMs ?? null,
         state: input.state,
         stage: input.stage,
         finishedAt: input.now,

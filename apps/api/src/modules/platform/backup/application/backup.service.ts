@@ -8,6 +8,7 @@ import {
   type BackupDeliveryDestination,
   type BackupDeliveryState,
   type BackupManifest,
+  type BackupPhaseDurationsMs,
   type BackupStage,
   type BackupTrigger,
 } from '@nexa/contracts';
@@ -97,6 +98,16 @@ export interface BackupServiceDeps {
   /** This process's identity, so two replicas hold distinguishable leases. */
   readonly leaseOwner: string;
   /**
+   * The lease heartbeat's own timing (Round 5B). Defaults: every `BACKUP_LEASE_HEARTBEAT_MS`,
+   * each attempt bounded to 10 s, a failed attempt retried after 5 s, and a warning only
+   * after three consecutive failures. All three exist for tests.
+   */
+  readonly heartbeat?: {
+    readonly intervalMs?: number;
+    readonly timeoutMs?: number;
+    readonly retryMs?: number;
+  };
+  /**
    * Where a failed run is reported, and who it is reported to.
    *
    * Backup V1 shipped without this, and the consequence was the worst shape a
@@ -148,6 +159,15 @@ export interface BackupServiceDeps {
     readonly checksum: string;
   }) => Promise<string | null>;
 }
+
+/**
+ * Consecutive failed lease heartbeats before one is reported. A single failure under heavy
+ * disk I/O is routine and costs nothing: the lease is stale after 15 minutes and beats once a
+ * minute, so three failures in a row are still eleven minutes inside the window.
+ */
+const HEARTBEAT_MAX_CONSECUTIVE_FAILURES = 3;
+const HEARTBEAT_TIMEOUT_MS = 10_000;
+const HEARTBEAT_RETRY_MS = 5_000;
 
 /** Telegram's limit on a document caption. */
 const BACKUP_CAPTION_MAX_CHARS = 1024;
@@ -294,6 +314,14 @@ export class BackupService {
     const heartbeat = this.startHeartbeat(id);
 
     let stage: BackupStage = 'DUMP';
+    // How long each stage took (Round 5B): a lap closes the stage that just ended.
+    const phaseDurationsMs: BackupPhaseDurationsMs = {};
+    let lapStartedAt = startedAt.getTime();
+    const lap = (finished: BackupStage): void => {
+      const at = this.deps.clock.now().getTime();
+      phaseDurationsMs[finished] = Math.max(0, at - lapStartedAt);
+      lapStartedAt = at;
+    };
     /*
      * Created INSIDE the recorded region, because creating it can fail.
      *
@@ -340,9 +368,12 @@ export class BackupService {
       workspace = await this.deps.workspaces.create(id);
       // E4: a 7-Zip archive compresses the dump itself, so the dump is written uncompressed.
       const plannedFormat = (await this.deps.archiver.nextFormat?.()) ?? 'NXB';
+      // A host that cannot compress is refused now, before an hour of dumping (Round 5B).
+      await this.deps.archiver.preflight?.();
       const dump = await this.deps.tools.dump(workspace.dumpPath, {
         uncompressed: plannedFormat === 'SEVEN_ZIP',
       });
+      lap('DUMP');
 
       // ---- CHECKSUM --------------------------------------------------------
       stage = 'CHECKSUM';
@@ -355,6 +386,7 @@ export class BackupService {
       const digest = await this.deps.archiver.checksum(workspace.dumpPath);
       checksum = digest.checksum;
       dumpBytes = BigInt(digest.bytes);
+      lap('CHECKSUM');
       if (digest.bytes === 0) {
         // pg_dump can exit zero having written nothing if its output was
         // redirected somewhere unwritable in an unusual way. An empty dump
@@ -416,6 +448,7 @@ export class BackupService {
       // uncompressed (E4) dump is the database's size, and two at once is the disk's
       // worst moment. What could not be removed is reported with the rest at CLEANUP.
       const sealedLeft = await workspace.discardPlaintext();
+      lap('ENCRYPT');
 
       // ---- VERIFY_RESTORE --------------------------------------------------
       //
@@ -432,6 +465,7 @@ export class BackupService {
       });
       const verified = await this.verify(workspace, archivePath, checksum, digest.bytes);
       verifiedAt = this.deps.clock.now();
+      lap('VERIFY_RESTORE');
       this.deps.logger.info(
         { backupId: id, tables: verified.tableCount },
         'backup archive restored into a scratch database and checked',
@@ -477,6 +511,7 @@ export class BackupService {
       deliveryDetail = delivered.detail;
       deliveryAttemptedAt = delivered.attemptedAt;
       summaryDeliveryState = delivered.summaryState;
+      lap('DELIVER');
 
       // ---- CLEANUP ---------------------------------------------------------
       stage = 'CLEANUP';
@@ -521,11 +556,13 @@ export class BackupService {
       // what a connection death at this point looks like: the process used to die
       // and an orchestrator made that visible, and now it survives, so the recorded
       // failure is the only thing that will say anything.
+      lap('CLEANUP');
       await this.deps.runs.finish({
         id,
         leaseOwner: this.deps.leaseOwner,
         state: 'SUCCEEDED',
         stage: 'CLEANUP',
+        phaseDurationsMs,
         now: this.deps.clock.now(),
         dumpBytes,
         archiveBytes,
@@ -592,11 +629,14 @@ export class BackupService {
         ...this.deps.tools.leaked,
       ];
       if (leftovers.length > 0) await this.reportCleanup(id, 'FAILED', leftovers.length, quiet);
+      // The stage that failed is timed up to the failure; stages after it are absent.
+      lap(stage);
       await this.deps.runs.finish({
         id,
         leaseOwner: this.deps.leaseOwner,
         state: 'FAILED',
         stage,
+        phaseDurationsMs,
         now: this.deps.clock.now(),
         dumpBytes,
         archiveBytes,
@@ -678,6 +718,15 @@ export class BackupService {
     }
 
     const outcome = await this.deps.tools.verifyRestore(workspace.verifyDumpPath);
+    if (!outcome.ok && outcome.oomKilled === true) {
+      throw new NexaError({
+        kind: 'INTERNAL',
+        code: PLATFORM_ERROR_CODES.BACKUP_TOOL_OOM_KILLED,
+        message:
+          'pg_restore was killed by the system while verifying, which means it ran out of memory.',
+        details: { detail: outcome.detail },
+      });
+    }
     if (!outcome.ok) {
       throw new NexaError({
         kind: 'INTERNAL',
@@ -1076,25 +1125,71 @@ export class BackupService {
    * the failure mode a lease introduces and the heartbeat removes.
    */
   private startHeartbeat(id: string): { stop(): void } {
-    const timer = setInterval(() => {
-      void this.deps.runs
-        .heartbeat({ id, leaseOwner: this.deps.leaseOwner, now: this.deps.clock.now() })
-        .then(() => {
-          if (this.leaseRunId === id) this.leaseRefreshedAt = this.deps.clock.now().getTime();
-        })
-        .catch((error: unknown) => {
-          // Not fatal to the run: the work is still progressing, and a lost
-          // heartbeat costs the lock, not the dump. Loud, because a run whose
-          // lock is reclaimed while it is still writing is worth knowing about.
+    const timing = this.deps.heartbeat ?? {};
+    const timeoutMs = timing.timeoutMs ?? HEARTBEAT_TIMEOUT_MS;
+    const retryMs = timing.retryMs ?? HEARTBEAT_RETRY_MS;
+    let consecutiveFailures = 0;
+    let inFlight = false;
+    let retryTimer: NodeJS.Timeout | null = null;
+    let stopped = false;
+
+    // One attempt, bounded by its own short timeout: a database that is slow under heavy disk
+    // I/O must neither hang the beat nor — once a few in a row have gone wrong — be taken for
+    // a failed run. The statement keeps running if abandoned; its result is ignored.
+    const attempt = async (): Promise<void> => {
+      if (stopped || inFlight) return;
+      inFlight = true;
+      let timeout: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([
+          this.deps.runs.heartbeat({
+            id,
+            leaseOwner: this.deps.leaseOwner,
+            now: this.deps.clock.now(),
+          }),
+          new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error(`the heartbeat did not answer within ${String(timeoutMs)}ms`)),
+              timeoutMs,
+            );
+            timeout.unref();
+          }),
+        ]);
+        consecutiveFailures = 0;
+        if (this.leaseRunId === id) this.leaseRefreshedAt = this.deps.clock.now().getTime();
+      } catch (error: unknown) {
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= HEARTBEAT_MAX_CONSECUTIVE_FAILURES) {
+          // Not fatal to the run even now: the work is still progressing, and a lost
+          // heartbeat costs the lock, not the dump. Loud, because a run whose lock is
+          // reclaimed while it is still writing is worth knowing about.
           this.deps.logger.warn(
-            { backupId: id, reason: error instanceof Error ? error.message : String(error) },
+            {
+              backupId: id,
+              consecutiveFailures,
+              reason: error instanceof Error ? error.message : String(error),
+            },
             'backup lease heartbeat failed',
           );
-        });
-    }, BACKUP_LEASE_HEARTBEAT_MS);
+        } else if (!stopped) {
+          // A transient failure is retried soon, not after a whole interval.
+          retryTimer = setTimeout(() => void attempt(), retryMs);
+          retryTimer.unref();
+        }
+      } finally {
+        if (timeout !== undefined) clearTimeout(timeout);
+        inFlight = false;
+      }
+    };
+
+    const timer = setInterval(() => void attempt(), timing.intervalMs ?? BACKUP_LEASE_HEARTBEAT_MS);
     timer.unref();
     return {
-      stop: () => clearInterval(timer),
+      stop: () => {
+        stopped = true;
+        clearInterval(timer);
+        if (retryTimer !== null) clearTimeout(retryTimer);
+      },
     };
   }
 }

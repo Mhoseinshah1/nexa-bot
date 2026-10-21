@@ -3,7 +3,13 @@ import { dirname, join } from 'node:path';
 import type { SecretKeyring } from '../../../../infrastructure/crypto/keyring.js';
 import type { BackupArchivePasswordSource, BackupArchiver } from '../application/ports.js';
 import { checksumFile, openArchive, sealArchive } from './archive.js';
-import { isSevenZipFile, openSevenZip, sealSevenZip, type SevenZipOptions } from './seven-zip.js';
+import {
+  assertSevenZipMemory,
+  isSevenZipFile,
+  openSevenZip,
+  sealSevenZip,
+  type SevenZipOptions,
+} from './seven-zip.js';
 
 /**
  * Binds the archive format to this installation's keyring.
@@ -100,6 +106,11 @@ export class DualFormatBackupArchiver implements BackupArchiver {
 
   async nextFormat(): Promise<BackupArchiveFormat> {
     return (await this.passwords.current()) === null ? 'NXB' : 'SEVEN_ZIP';
+  }
+
+  async preflight(): Promise<void> {
+    if ((await this.passwords.current()) === null) return;
+    await assertSevenZipMemory(this.sevenZip);
   }
 
   /** The keyring container only — the recovery's re-seal of a verified upload (E4). */

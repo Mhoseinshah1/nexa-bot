@@ -1,13 +1,67 @@
-import type { BackupScheduleSource, ScopeContext } from '@nexa/contracts';
+import {
+  BACKUP_DAILY_TIME_ZONE,
+  type BackupScheduleSource,
+  type ScopeContext,
+} from '@nexa/contracts';
 
 /** The schedule the scheduler obeys right now, and where each half came from. */
 export interface EffectiveBackupSchedule {
   readonly enabled: boolean;
+  /**
+   * How long after the last verified backup the next is due. With a daily time in force it
+   * is 24 hours — what the overdue check and the status card measure against — while the
+   * scheduler itself obeys `dailyTime`.
+   */
   readonly intervalMs: number;
+  /** `HH:MM` in `BACKUP_DAILY_TIME_ZONE` when a once-a-day time governs; else null. */
+  readonly dailyTime: string | null;
   readonly source: {
     readonly enabled: BackupScheduleSource;
     readonly interval: BackupScheduleSource;
+    readonly dailyTime: BackupScheduleSource;
   };
+}
+
+const DAY_MS = 24 * 3_600_000;
+
+/**
+ * The latest instant at or before `now` whose wall clock in `timeZone` reads `hhmm`.
+ *
+ * A once-a-day backup is DUE when this instant is later than the last verified backup (or
+ * there is none), so a worker that was down at 04:00 takes it on restart rather than waiting
+ * a day, and a backup taken at 03:50 by hand does not suppress the 04:00 one but one taken at
+ * 04:10 does. Computed from the zone's own offset at `now`; Asia/Tehran has no DST.
+ */
+export function latestDailySlot(
+  now: Date,
+  hhmm: string,
+  timeZone: string = BACKUP_DAILY_TIME_ZONE,
+): Date {
+  const [hour, minute] = hhmm.split(':').map(Number) as [number, number];
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(now);
+  const field = (type: string): number => Number(parts.find((p) => p.type === type)?.value);
+  const localNow = Date.UTC(
+    field('year'),
+    field('month') - 1,
+    field('day'),
+    field('hour'),
+    field('minute'),
+    field('second'),
+  );
+  const offsetMs = localNow - Math.floor(now.getTime() / 1000) * 1000;
+  const localSlot = Date.UTC(field('year'), field('month') - 1, field('day'), hour, minute);
+  let slot = localSlot - offsetMs;
+  if (slot > now.getTime()) slot -= DAY_MS;
+  return new Date(slot);
 }
 
 /**
@@ -19,6 +73,8 @@ export interface BackupScheduleSettings {
   read(scope: ScopeContext): Promise<{
     readonly enabled: boolean | null;
     readonly intervalMinutes: number | null;
+    /** `HH:MM`, or null. Optional so a reader written before the daily time keeps working. */
+    readonly dailyTime?: string | null;
   }>;
 }
 
@@ -31,7 +87,12 @@ export interface BackupSchedulePolicyDeps {
    * removed (spec §13.2, §14). An installation that set them and never opens the backup
    * page keeps exactly the schedule it had.
    */
-  readonly environment: { readonly enabled: boolean; readonly intervalMs: number };
+  readonly environment: {
+    readonly enabled: boolean;
+    readonly intervalMs: number;
+    /** `BACKUP_DAILY_TIME`; empty or absent: none. */
+    readonly dailyTime?: string;
+  };
 }
 
 /**
@@ -54,15 +115,26 @@ export class BackupSchedulePolicy {
     const scope = this.deps.scope();
     const stored =
       scope === null
-        ? { enabled: null, intervalMinutes: null }
+        ? { enabled: null, intervalMinutes: null, dailyTime: null }
         : await this.deps.settings.read(scope);
+    const storedDaily = stored.dailyTime ?? null;
+    const envDaily = (environment.dailyTime ?? '') === '' ? null : (environment.dailyTime ?? null);
+    // An interval the operator stored is a choice of interval: it beats the environment's daily
+    // default, or a new install's 04:00 could never be changed to "every 6 hours".
+    const dailyTime = storedDaily ?? (stored.intervalMinutes === null ? envDaily : null);
     return {
       enabled: stored.enabled ?? environment.enabled,
       intervalMs:
-        stored.intervalMinutes === null ? environment.intervalMs : stored.intervalMinutes * 60_000,
+        dailyTime !== null
+          ? DAY_MS
+          : stored.intervalMinutes === null
+            ? environment.intervalMs
+            : stored.intervalMinutes * 60_000,
+      dailyTime,
       source: {
         enabled: stored.enabled === null ? 'ENVIRONMENT' : 'SETTING',
         interval: stored.intervalMinutes === null ? 'ENVIRONMENT' : 'SETTING',
+        dailyTime: storedDaily === null ? 'ENVIRONMENT' : 'SETTING',
       },
     };
   }

@@ -6689,6 +6689,13 @@ export const backupRunSummarySchema = z.object({
   ),
   /** The summary message's outcome, or null when none was owed or sent. */
   summaryDeliveryState: z.enum(BACKUP_DELIVERY_STATES).nullable(),
+  /**
+   * How long each stage took, in milliseconds, by stage. Null on a run from before it was
+   * recorded; a stage the run did not reach is absent from the object.
+   */
+  phaseDurationsMs: z
+    .partialRecord(z.enum(BACKUP_STAGES), z.number().int().nonnegative())
+    .nullable(),
 });
 export type BackupRunSummary = z.infer<typeof backupRunSummarySchema>;
 
@@ -6714,10 +6721,13 @@ export const backupStatusResponseSchema = z.object({
   /** The EFFECTIVE schedule: the Web Admin's stored value, else the environment's. */
   scheduleEnabled: z.boolean(),
   intervalMs: z.number().int().positive(),
+  /** The once-a-day time (`HH:MM`, Asia/Tehran) in force, or null when the interval governs. */
+  dailyTime: z.string().nullable(),
   /** Where each effective schedule value came from (spec §13.2). */
   scheduleSource: z.object({
     enabled: z.enum(BACKUP_SCHEDULE_SOURCES),
     interval: z.enum(BACKUP_SCHEDULE_SOURCES),
+    dailyTime: z.enum(BACKUP_SCHEDULE_SOURCES),
   }),
   /** Where the next run's archive would be delivered, as configured now (spec §13.1). */
   deliveryDestination: z.enum(BACKUP_DELIVERY_DESTINATIONS),

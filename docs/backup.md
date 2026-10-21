@@ -78,11 +78,34 @@ pessimistic and noisy; sizes are exact):
 | 7z LZMA2 -mx=9 -mmt=2 (chosen) | 182.1 MB | 1464 s    | 704 MB   |
 | 7z LZMA2 -mx=5 -mmt=2          | 189.1 MB | 1465 s    | 204 MB   |
 
-LZMA2 `-mx=9` is the smallest (5.5 % below zstd), is 7-Zip's native method (a zstd stream
-inside a 7z would need a 7-Zip fork on Windows), and fits a 2 vCPU / 4 GB host at ~0.7 GB.
-`BACKUP_SEVEN_ZIP_LEVEL` (default 9) and `BACKUP_SEVEN_ZIP_THREADS` (default 2) tune it;
-`BACKUP_SEVEN_ZIP_BIN` (default `7z`) names the binary — the image installs Debian's `7zip`
-and links its `7zz` to `7z`.
+LZMA2 `-mx=9` is the smallest (5.5 % below zstd) and is 7-Zip's native method (a zstd stream
+inside a 7z would need a 7-Zip fork on Windows). `BACKUP_SEVEN_ZIP_BIN` (default `7z`) names
+the binary — the image installs Debian's `7zip` and links its `7zz` to `7z`.
+
+**Memory (Round 5B).** Left to itself 7-Zip sizes its dictionary and threads to the host, and
+`-mx=9` with every core reached about 2.4 GB resident on a 4 GB / 2 vCPU server, where the
+kernel killed it half way through the archive. The seal now always passes `-mx`, `-md` and
+`-mmt` explicitly, chosen from the table in `seven-zip-levels.ts` — the strongest row whose
+measured peak fits `min(BACKUP_SEVEN_ZIP_MEMORY_MB, MemAvailable − BACKUP_SEVEN_ZIP_HEADROOM_MB)`
+(defaults 600 and 256 MiB). Peak resident memory of `7z a`, 7-Zip 23.01, over a synthetic dump
+(`scripts/measure-seven-zip-memory.sh`; wall time on a shared 4-CPU box):
+
+| Level (`-mx` / `-md` / `-mmt`) | Peak RSS | Archive (150 MB input) | Wall time |
+| ------------------------------ | -------- | ---------------------- | --------- |
+| 9 / 64m / 2 (`max`)            | 687 MiB  | 131 MiB (620 MB input) | 12m 39s   |
+| 9 / 64m / 1 (`high`)           | 680 MiB  | 32 MiB                 | 4m 18s    |
+| 7 / 32m / 1 (`balanced`)       | 376 MiB  | 32 MiB                 | 3m 40s    |
+| 5 / 16m / 1 (`light`)          | 192 MiB  | 33 MiB                 | 2m 47s    |
+| 3 / 4m / 1 (`minimal`)         | 38 MiB   | 46 MiB                 | 0m 24s    |
+
+The default budget therefore selects `balanced`. `BACKUP_SEVEN_ZIP_LEVEL` and
+`BACKUP_SEVEN_ZIP_THREADS` are now only ceilings on that choice. When not even `minimal` fits,
+the run is refused before the dump with `backup.memory_insufficient`; a 7-Zip (or `pg_dump`)
+the kernel kills anyway is recorded as `backup.tool_oom_killed`. Neither is retried by the
+scheduler for an hour. 7-Zip, `pg_dump` and the verification's `pg_restore` run under
+`nice -n 10` and `ionice -c3` (`-c2 -n7` where idle is refused, nothing where the binaries are
+missing). The verification's `pg_restore` also runs `--jobs=1` with
+`maintenance_work_mem=64MB` and no parallel index workers for its own session.
 
 ### Restoring a backup that came in parts
 

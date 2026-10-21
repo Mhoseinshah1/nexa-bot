@@ -212,7 +212,17 @@ export class LegacyCompactionExecutor {
           if (outcome.kind === 'BUSY') return 'WAIT';
           backupId = outcome.run.id;
           if (outcome.run.state !== 'SUCCEEDED' || outcome.run.verifiedAt === null) {
-            await this.fail(run, 'legacy_compaction.archive_failed', backupId);
+            // The reason the card can name: the archive's 7-Zip had too little memory.
+            const memory =
+              outcome.run.failureCode === 'backup.tool_oom_killed' ||
+              outcome.run.failureCode === 'backup.memory_insufficient';
+            await this.fail(
+              run,
+              memory
+                ? 'legacy_compaction.archive_out_of_memory'
+                : 'legacy_compaction.archive_failed',
+              backupId,
+            );
             return 'NEXT';
           }
         }
@@ -373,6 +383,7 @@ export class LegacyCompactionExecutor {
     code:
       | 'legacy_compaction.archive_failed'
       | 'legacy_compaction.archive_not_delivered'
+      | 'legacy_compaction.archive_out_of_memory'
       | 'legacy_compaction.import_not_completed'
       | 'legacy_compaction.step_failed',
     backupId?: string,

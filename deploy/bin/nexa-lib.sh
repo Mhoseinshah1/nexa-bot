@@ -162,6 +162,111 @@ nexa_compose() {
     "$@"
 }
 
+# --- Roles an operator may keep switched off ----------------------------------
+#
+# NEXA_DISABLED_ROLES in nexa.env is the ONE place the owner's decision "this process stays
+# stopped" lives. Without it the decision lived in `docker stop`, and every command that runs
+# `compose up -d` (update, restart, rollback, the update back-out, the installer rerun)
+# started the container again: the provisioner creating accounts and the monitor dialling
+# panels, on an installation whose owner had stopped them on purpose.
+#
+# WHICH roles may be disabled is a closed list, and short on purpose:
+#   monitor      health reporting only; it writes nothing a customer or a ledger depends on
+#   provisioner  creates accounts on panels; paid orders wait or refund, nothing breaks
+#   assistant    the AI background role; optional by design
+# and NOT these, because disabling any of them would brick or silently corrupt the install:
+#   api caddy postgres redis   the product, its edge and its stores
+#   worker                     the outbox, notifications and the scheduled backup
+#   recovery                   the only process allowed to run a restore
+# An unknown or protected name is REFUSED, in the file as well as on the command line: a typo
+# that silently disabled nothing (or the wrong thing) is the failure this setting exists to end.
+NEXA_DISABLABLE_ROLES="monitor provisioner assistant"
+
+# The roles nexa.env disables, normalised: de-duplicated, in the order above, space-separated.
+# Empty output means none. Returns 1 (with the reason on stderr) when the value names a role
+# that cannot be disabled, so a caller never acts on a half-understood setting.
+nexa_disabled_roles() {
+  local raw="" item role listed="" out=""
+  raw="$(nexa_compose_env_value "${NEXA_CONFIG_DIR}/nexa.env" NEXA_DISABLED_ROLES 2>/dev/null || true)"
+  [ -n "${raw//[[:space:]]/}" ] || return 0
+  local IFS=,
+  for item in $raw; do
+    # Whitespace is trimmed around an item only; inside one it makes the value invalid
+    # ("provis ioner" must not be read as "provisioner").
+    item="${item#"${item%%[![:space:]]*}"}"
+    item="${item%"${item##*[![:space:]]}"}"
+    [ -n "$item" ] || continue
+    case " ${NEXA_DISABLABLE_ROLES} " in
+      *" ${item} "*) ;;
+      *)
+        nexa_warn "NEXA_DISABLED_ROLES names \"${item}\", which is not a role that can be disabled (${NEXA_DISABLABLE_ROLES// /, })."
+        return 1
+        ;;
+    esac
+    listed="${listed} ${item} "
+  done
+  unset IFS
+  for role in $NEXA_DISABLABLE_ROLES; do
+    case "$listed" in *" ${role} "*) out="${out:+${out} }${role}" ;; esac
+  done
+  printf '%s' "$out"
+}
+
+# True when $1 is in the space-separated list $2.
+nexa_in_list() {
+  case " $2 " in *" $1 "*) return 0 ;; esac
+  return 1
+}
+
+# The services `up -d` is given when something is disabled: every service this topology
+# defines MINUS the disabled ones. Empty output means "nothing is disabled, run the bare
+# `up -d` exactly as before". Naming the services (rather than `--scale x=0`) leaves a
+# disabled container alone instead of removing it, and starts nothing it should not.
+nexa_enabled_services() {
+  local disabled defined service out=""
+  disabled="$(nexa_disabled_roles)" || return 1
+  [ -n "$disabled" ] || return 0
+  defined="$(nexa_compose config --services 2>/dev/null)" || return 1
+  for service in $defined; do
+    nexa_in_list "$service" "$disabled" || out="${out:+${out} }${service}"
+  done
+  [ -n "$out" ] || return 1
+  printf '%s' "$out"
+}
+
+# Stop the disabled roles this topology defines. Run AFTER every `up -d`: an explicit service
+# list already keeps `up` from starting them, and this also stops one that was running when
+# the owner disabled it (or that an earlier release's `up` started).
+nexa_stop_disabled_roles() {
+  local disabled defined service stop=""
+  disabled="$(nexa_disabled_roles)" || return 1
+  [ -n "$disabled" ] || return 0
+  defined="$(nexa_compose config --services 2>/dev/null || true)"
+  for service in $disabled; do
+    case "
+${defined}
+" in *"
+${service}
+"*) stop="${stop:+${stop} }${service}" ;; esac
+  done
+  [ -n "$stop" ] || return 0
+  # shellcheck disable=SC2086
+  nexa_compose stop $stop >/dev/null || return 1
+}
+
+# `compose up -d --remove-orphans` for the whole stack, honouring NEXA_DISABLED_ROLES. For the
+# callers that do not need the edge handling of `nexa_bring_up_with_edge`.
+nexa_up_stack() {
+  local enabled
+  enabled="$(nexa_enabled_services)" || {
+    nexa_warn "cannot work out which services to start (see NEXA_DISABLED_ROLES in nexa.env)."
+    return 1
+  }
+  # shellcheck disable=SC2086
+  nexa_compose up -d --remove-orphans $enabled || return 1
+  nexa_stop_disabled_roles
+}
+
 # --- Releases ----------------------------------------------------------------
 
 nexa_current_version() {
@@ -388,7 +493,13 @@ nexa_required_services() {
   # A case match on the newline-delimited list, not `grep -q`: a pipeline whose
   # consumer exits early returns 141 under `pipefail` precisely when it
   # succeeds, and `set -e` then aborts the script.
+  # A role the owner disabled is not waited for: it is stopped on purpose, and a wait that
+  # demanded it would fail every update on exactly the installation that chose this. An
+  # unreadable setting filters nothing; the `up` that precedes every wait refuses it first.
+  local disabled=""
+  disabled="$(nexa_disabled_roles 2>/dev/null || true)"
   for service in $NEXA_READY_SERVICES; do
+    nexa_in_list "$service" "$disabled" && continue
     case "
 ${defined}
 " in
@@ -743,7 +854,17 @@ nexa_bring_up_with_edge() {
     return 1
   fi
 
-  nexa_edge_compose "$image" "$edge" up -d --remove-orphans || return 1
+  # NEXA_DISABLED_ROLES: the services named here exclude the roles the owner keeps stopped,
+  # and they are stopped again below. Empty when nothing is disabled, which is the bare
+  # `up -d` this function always ran.
+  local enabled
+  enabled="$(nexa_enabled_services)" || {
+    nexa_warn "cannot work out which services to start (see NEXA_DISABLED_ROLES in nexa.env)."
+    return 1
+  }
+  # shellcheck disable=SC2086
+  nexa_edge_compose "$image" "$edge" up -d --remove-orphans $enabled || return 1
+  nexa_stop_disabled_roles || return 1
   nexa_verify_edge_config "$edge" && return 0
 
   nexa_warn "the edge is still running a different configuration generation; recreating just that container."

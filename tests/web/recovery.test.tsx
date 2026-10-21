@@ -69,6 +69,7 @@ function run(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     partsDelivered: 0,
     parts: [],
     summaryDeliveryState: null,
+    phaseDurationsMs: null,
     ...overrides,
   };
 }
@@ -120,7 +121,8 @@ function installationKey(overrides: Record<string, unknown> = {}): Record<string
 const status = (overrides: Record<string, unknown> = {}) => ({
   scheduleEnabled: true,
   intervalMs: 86_400_000,
-  scheduleSource: { enabled: 'SETTING', interval: 'SETTING' },
+  dailyTime: null,
+  scheduleSource: { enabled: 'SETTING', interval: 'SETTING', dailyTime: 'ENVIRONMENT' },
   deliveryDestination: 'OPS_GROUP_TOPIC',
   lastSucceededAt: '2026-09-09T02:00:00.000Z',
   running: null,
@@ -1025,5 +1027,54 @@ describe('the backup run key', () => {
     await waitFor(() => expect(sent.keys).toHaveLength(2));
     // The same key would be answered from the stored response: no second backup at all.
     expect(sent.keys[1]).not.toBe(sent.keys[0]);
+  });
+});
+
+describe('Round 5B: the backup run detail', () => {
+  const phases = {
+    DUMP: 41_000,
+    CHECKSUM: 3_000,
+    ENCRYPT: 96_000,
+    VERIFY_RESTORE: 120_000,
+    DELIVER: 5_000,
+    CLEANUP: 0,
+  };
+
+  it('shows how long each phase took on the last verified backup', async () => {
+    stubApi(routes({ runs: [run({ phaseDurationsMs: phases })] }));
+    renderPage(<RecoveryPage route={route} permissions={ALL} />);
+
+    // The labels are the catalogue's, the figures the run's own (rounded to the second).
+    // Twice: on the last-success card and on that run's row of the history.
+    expect(await screen.findAllByText(/تهیهٔ دامپ/)).toHaveLength(2);
+    expect(screen.getAllByText(/فشرده‌سازی و رمزنگاری/)).toHaveLength(2);
+    expect(screen.getAllByText(/راستی‌آزمایی:/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/ارسال:/).length).toBeGreaterThan(0);
+  });
+
+  it('says «ثبت نشده» for a run from before durations were recorded, not zero seconds', async () => {
+    stubApi(routes({ runs: [run({ phaseDurationsMs: null })] }));
+    renderPage(<RecoveryPage route={route} permissions={ALL} />);
+    expect((await screen.findAllByText('ثبت نشده')).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/تهیهٔ دامپ/)).toBeNull();
+  });
+
+  it('names a memory failure in words on the history, with the code beside it', async () => {
+    stubApi(
+      routes({
+        runs: [
+          run({
+            state: 'FAILED',
+            stage: 'ENCRYPT',
+            verifiedAt: null,
+            failureCode: 'backup.tool_oom_killed',
+            phaseDurationsMs: { DUMP: 41_000, CHECKSUM: 3_000, ENCRYPT: 7_000 },
+          }),
+        ],
+      }),
+    );
+    renderPage(<RecoveryPage route={route} permissions={ALL} />);
+    expect((await screen.findAllByText(/حافظهٔ سرور کافی نبود/)).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('backup.tool_oom_killed').length).toBeGreaterThan(0);
   });
 });

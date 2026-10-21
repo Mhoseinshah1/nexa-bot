@@ -50,6 +50,8 @@ export const LEGACY_COMPACTION_ACTIVE_STATES = [
 export const LEGACY_COMPACTION_FAILURE_CODES = [
   'legacy_compaction.archive_failed',
   'legacy_compaction.archive_not_delivered',
+  /** The archive backup's 7-Zip had too little memory (refused, or killed by the kernel). */
+  'legacy_compaction.archive_out_of_memory',
   'legacy_compaction.import_not_completed',
   'legacy_compaction.step_failed',
 ] as const;

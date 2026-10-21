@@ -506,7 +506,8 @@ describe('the recovery step strip after a verification fails', () => {
         body: {
           scheduleEnabled: true,
           intervalMs: 21_600_000,
-          scheduleSource: { enabled: 'SETTING', interval: 'SETTING' },
+          dailyTime: null,
+          scheduleSource: { enabled: 'SETTING', interval: 'SETTING', dailyTime: 'ENVIRONMENT' },
           deliveryDestination: 'OPS_GROUP_TOPIC',
           lastSucceededAt: null,
           running: null,
