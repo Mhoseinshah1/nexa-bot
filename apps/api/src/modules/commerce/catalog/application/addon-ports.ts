@@ -88,6 +88,22 @@ export interface ServiceAddonDraft {
   /** WP-A5, `ADD_DEVICES` only. Absent or null is "every panel" / "every product". */
   readonly panelId?: PanelId | null;
   readonly productId?: ProductId | null;
+  /**
+   * CREATE only (Round 5C-2 D2): offer the add-on at once. Absent or false is INACTIVE, the
+   * application default; the web surface defaults it to true. See `initialAddonStatus`.
+   */
+  readonly active?: boolean;
+}
+
+/**
+ * The status a new add-on is created with. An unpriced add-on is never ACTIVE, whatever was
+ * asked: the activate command refuses it (`ADDON_NOT_PURCHASABLE`), and a create must not be
+ * a way round that.
+ */
+export function initialAddonStatus(
+  draft: Pick<ServiceAddonDraft, 'active' | 'price'>,
+): ServiceAddonStatus {
+  return draft.active === true && draft.price !== null ? 'ACTIVE' : 'INACTIVE';
 }
 
 /**
@@ -98,7 +114,7 @@ export interface ServiceAddonDraft {
  * wrong unit, and those rows are append-only evidence: there is no correcting them
  * afterwards. An operator who wants the other kind creates one and withdraws this.
  */
-export type ServiceAddonEdit = Omit<ServiceAddonDraft, 'kind'>;
+export type ServiceAddonEdit = Omit<ServiceAddonDraft, 'kind' | 'active'>;
 
 /** WP-A8: the largest single package a panel admits; null for no cap on that axis. */
 export interface AddonCap {

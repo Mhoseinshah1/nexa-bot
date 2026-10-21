@@ -208,7 +208,9 @@ describe('the delete modal', () => {
     ).toBe(1);
     // PR-C: the refund's id is copyable, never drawn.
     expect(
-      within(dialog).getByRole('button', { name: 'کپی شناسه' }).getAttribute('data-copy-value'),
+      within(dialog)
+        .getByRole('button', { name: 'کپی شناسهٔ داخلی' })
+        .getAttribute('data-copy-value'),
     ).toBe(REFUND_ID);
   });
 

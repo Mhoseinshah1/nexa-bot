@@ -346,7 +346,9 @@ describe('registering and editing a reseller', () => {
     const chosen = screen.getByRole('group', { name: t('web.customer_picker_selected') });
     expect(chosen.textContent).not.toContain(CUSTOMER_ID);
     expect(
-      within(chosen).getByRole('button', { name: 'کپی شناسه' }).getAttribute('data-copy-value'),
+      within(chosen)
+        .getByRole('button', { name: 'کپی شناسهٔ داخلی' })
+        .getAttribute('data-copy-value'),
     ).toBe(CUSTOMER_ID);
 
     fireEvent.change(screen.getByLabelText('سطح', { selector: '#reseller-register-tier' }), {

@@ -35,7 +35,9 @@ import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
 import { CustomerIdentityLink } from '../ui/customer-identity';
 import {
   CodeText,
+  CopyCodeButton,
   CopyIdButton,
+  TechnicalIds,
   PanelLink,
   ProductLink,
   RecordLink,
@@ -463,7 +465,7 @@ export function OrderDetailPage({
               <span>{t('web.order_detail')}</span>
               <span className="record-ref">
                 <CodeText code={row.code} />
-                <CopyIdButton id={row.id} />
+                {row.code !== null && <CopyCodeButton code={row.code} />}
               </span>
             </span>
           }
@@ -473,6 +475,7 @@ export function OrderDetailPage({
       <StateSwitch query={order} denied={denied}>
         {row === undefined ? null : (
           <>
+            <TechnicalIds id={row.id} />
             {row.state === 'AWAITING_PAYMENT' && (
               /*
                * The boundary, said to the operator who is looking at it: this order is

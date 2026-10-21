@@ -700,6 +700,9 @@ import {
   legacyMigrationCapabilitiesResponseSchema,
   legacyMigrationImportListResponseSchema,
   legacyMigrationImportResponseSchema,
+  legacyServiceCandidateListResponseSchema,
+  LEGACY_SERVICE_REVIEW_ROUTES,
+  type LegacyServiceCandidateListResponse,
   type LegacyMigrationApproveRequest,
   type LegacyMigrationCapabilitiesResponse,
   type LegacyMigrationImportListResponse,
@@ -2126,6 +2129,8 @@ export interface ServiceAddonWriteInput {
   productId: string | null;
   priceAmount: string | null;
   priceCurrency: CurrencyCode | null;
+  /** CREATE only: offer it at once. The server defaults to true; an edit ignores it. */
+  active?: boolean;
   idempotencyKey: string;
 }
 
@@ -5346,6 +5351,28 @@ export function sendIncidentNotice(
 /** What the server can do: the flag, the ceilings, the approval phrase, production-likeness. */
 export function fetchLegacyMigrationCapabilities(): Promise<LegacyMigrationCapabilitiesResponse> {
   return authedGet(LEGACY_MIGRATION_ROUTES.capabilities, legacyMigrationCapabilitiesResponseSchema);
+}
+
+/**
+ * One keyset page of the import report: each old invoice's outcome (`legacy.services.view`).
+ * `invoiceId` is matched verbatim, from the start of the key. Read-only.
+ */
+export function fetchLegacyServiceCandidates(input: {
+  invoiceId?: string;
+  after?: string;
+}): Promise<LegacyServiceCandidateListResponse> {
+  const query = new URLSearchParams();
+  if (input.invoiceId !== undefined && input.invoiceId !== '') {
+    query.set('invoiceId', input.invoiceId);
+  }
+  if (input.after !== undefined) query.set('after', input.after);
+  const text = query.toString();
+  return authedGet(
+    text === ''
+      ? LEGACY_SERVICE_REVIEW_ROUTES.list
+      : `${LEGACY_SERVICE_REVIEW_ROUTES.list}?${text}`,
+    legacyServiceCandidateListResponseSchema,
+  );
 }
 
 function pageOf(route: string, after?: string): string {

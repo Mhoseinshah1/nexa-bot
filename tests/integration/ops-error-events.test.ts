@@ -189,7 +189,13 @@ describe('FIX-04: payment-link failures reach the operations log', () => {
   ): GatewayPaymentService {
     const db = ctx.container.database.db;
     const fake = fakeTonPays(() => mode);
-    const adapter = new TonPaysAdapter({ fetch: fake.fetch, timeoutMs: 50 });
+    // Only the TIMEOUT case needs a short deadline. Every other case answers at once, and a
+    // 50 ms abort timer can fire first on a loaded runner (a GC pause or a slow reset between
+    // the call and the body read), turning a 502 or a 401 into a timeout.
+    const adapter = new TonPaysAdapter({
+      fetch: fake.fetch,
+      timeoutMs: mode === 'TIMEOUT' ? 50 : 10_000,
+    });
     void key;
     const store = new DrizzleGatewayCredentialStore(db, ctx.container.cipher, () =>
       ctx.container.ids.uuid(),

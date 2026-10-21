@@ -45,7 +45,7 @@ import {
 } from '../api/client';
 import { formatTimestamp, splitBytes } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
-import { CodeText, CopyIdButton, RecordLink } from '../ui/record-ref';
+import { CodeText, CopyCodeButton, CopyIdButton, RecordLink, TechnicalIds } from '../ui/record-ref';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { HandoffContextView } from './handoff-context';
 import { OpsActionDrawer } from './ops-drawer';
@@ -1167,7 +1167,12 @@ export function TicketDetailPage({
               {t('web.ticket_detail')} <Ltr mono={false}>#{data.ticket.number}</Ltr>{' '}
               <span className="record-ref">
                 <CodeText code={data.ticket.code} />
-                <CopyIdButton id={data.ticket.id} />
+                {/* R5C-2 D1: the copy beside the code copies the code; the uuid only from the technical section. */}
+                {data.ticket.code === null ? (
+                  <CopyIdButton id={data.ticket.id} />
+                ) : (
+                  <CopyCodeButton code={data.ticket.code} />
+                )}
               </span>
             </>
           )
@@ -1183,6 +1188,7 @@ export function TicketDetailPage({
         subtitle={data?.ticket.subject ?? t('web.ticket_detail_intro')}
       />
       <StateSwitch query={ticket} denied={denied}>
+        {data !== undefined && data.ticket.code !== null && <TechnicalIds id={data.ticket.id} />}
         {data !== undefined && (
           <div className="two-col ticket-layout ops-sticky-cols">
             <div className="stack">

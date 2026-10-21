@@ -56,7 +56,13 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { setQuery, useLinkHandler, type Route } from '../router';
 import { ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { CustomerIdentityLink } from '../ui/customer-identity';
-import { CopyIdButton, RecordLink, recordHref } from '../ui/record-ref';
+import {
+  CopyCodeButton,
+  CopyIdButton,
+  RecordLink,
+  TechnicalIds,
+  recordHref,
+} from '../ui/record-ref';
 import { messageFor } from './settings';
 import { PaymentTimelineCard } from './payment-timeline';
 import { Modal } from '../ui/overlays';
@@ -73,7 +79,6 @@ import {
   Banner,
   Button,
   Card,
-  CopyButton,
   Copyable,
   IdText,
   CursorPager,
@@ -900,7 +905,7 @@ export function PaymentsPage({
           <a href={`/payments/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
             <Ltr>{paymentTrackingCode(row)}</Ltr>
           </a>
-          <CopyIdButton id={row.id} />
+          <CopyCodeButton code={paymentTrackingCode(row)} />
           <SourceBadge source={row.source} />
         </span>
       ),
@@ -1992,8 +1997,7 @@ export function PaymentDetailPage({
           title={
             <span className="ca-title-id">
               <Ltr>{paymentTrackingCode(row)}</Ltr>
-              <CopyButton value={paymentTrackingCode(row)} />
-              <CopyIdButton id={row.id} />
+              <CopyCodeButton code={paymentTrackingCode(row)} />
             </span>
           }
           badge={<StateBadge value={row.state} />}
@@ -2004,6 +2008,7 @@ export function PaymentDetailPage({
       <StateSwitch query={payment} denied={denied}>
         {row === undefined ? null : (
           <>
+            <TechnicalIds id={row.id} />
             {row.state === 'UNKNOWN' && (
               <Banner tone="warn">{t('web.payment_unknown_banner')}</Banner>
             )}
@@ -2118,7 +2123,6 @@ export function PaymentDetailPage({
                     <Card title={t('web.payment_detail')}>
                       <KV
                         items={[
-                          [t('web.payment_id'), <Copyable key="id" value={row.id} />],
                           [
                             t('web.payment_disposition'),
                             <DispositionBadge key="d" value={row.receiptDisposition} />,
