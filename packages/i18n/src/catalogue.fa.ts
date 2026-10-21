@@ -961,7 +961,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'ساخت سرویس کامل نشد و موضوع به پشتیبانی اطلاع داده شد. لطفاً منتظر پیگیری بمانید.',
   'bot.service.renew_button': '💊 تمدید سرویس',
   'bot.service.add_traffic_button': '➕ خرید حجم اضافه',
-  'bot.service.add_time_button': 'زمان اضافه',
+  'bot.service.add_time_button': '⏳ خرید زمان اضافه',
   // WP-A5: extra users / devices, shown only where the panel can really raise the limit.
   'bot.service.add_devices_button': '👥 افزایش کاربر / دستگاه',
   'bot.service.devices_choice':
@@ -1024,6 +1024,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.renewed':
     '{icon:success} سرویس شما با موفقیت تمدید شد\n\n{icon:user} نام کاربری: {username}\n{icon:time} مدت تمدید: {durationDays}\n{icon:date} تاریخ انقضای جدید: {expiresAt}\n{icon:invoice} کد پیگیری پرداخت: {reference}',
   'bot.service.renewed_details_button': '📊 مشخصات سرویس',
+  // R5C-1 item 4: the receipt of a paid extra-traffic / extra-time package (the notification
+  // lane edits the order's payment message into it) and the sentence it carries until then.
+  'bot.service.addon_paid': '{icon:time} پرداخت شما ثبت شد؛ بسته در حال اعمال روی سرویس است…',
+  'bot.service.addon_traffic_added':
+    '{icon:success} حجم اضافه خریداری شد\n\n{icon:traffic} بسته: {title}\n{icon:traffic} حجم اضافه: {traffic}\n{icon:amount} مبلغ پرداختی: {price}\n{icon:wallet} موجودی کیف پول: {balanceBefore} ← {balanceAfter}\n{icon:invoice} کد پیگیری پرداخت: {reference}\n{icon:user} نام کاربری: {username}\n{icon:traffic} حجم کل جدید: {totalTraffic}\n{icon:invoice} کد پیگیری سفارش: {orderCode}',
+  'bot.service.addon_time_added':
+    '{icon:success} زمان اضافه خریداری شد\n\n{icon:time} بسته: {title}\n{icon:time} زمان اضافه: {durationDays}\n{icon:amount} مبلغ پرداختی: {price}\n{icon:wallet} موجودی کیف پول: {balanceBefore} ← {balanceAfter}\n{icon:invoice} کد پیگیری پرداخت: {reference}\n{icon:user} نام کاربری: {username}\n{icon:date} تاریخ انقضای جدید: {expiresAt}\n{icon:invoice} کد پیگیری سفارش: {orderCode}',
   'bot.service.renew_paid':
     '{icon:success} پرداخت تمدید ثبت شد؛ تمدید سرویس در حال انجام است و نتیجه در همین ربات به شما اعلام می‌شود.',
   'bot.service.capability_unsupported': 'این قابلیت برای سرویس شما در دسترس نیست.',

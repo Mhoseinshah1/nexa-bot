@@ -6934,6 +6934,172 @@ export const TEMPLATES = [
     ],
   },
   /*
+   * R5C-1 item 4: the receipt of a paid extra-traffic or extra-time package. Sent by the
+   * notification lane as `SERVICE_TRAFFIC_ADDED` / `SERVICE_TIME_ADDED`, which EDITS the
+   * order's payment message into it; every value is read at send time from the operation the
+   * row names \u2014 a reader, not a payload (ADR 0030 \u00a71). `bot.service.addon_paid` is the
+   * sentence that message carries until the receipt replaces it.
+   */
+  {
+    key: 'bot.service.addon_traffic_added',
+    description:
+      'R5C-1: the receipt of a successful extra-traffic purchase, sent by the customer notification lane (SERVICE_TRAFFIC_ADDED) onto the order\u2019s payment message when it can be edited, else as a new message. Values are read at send time from the ADD_TRAFFIC operation, its order, the wallet debit or payment that paid for it, and the service; its one button opens the service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'title',
+        type: 'STRING',
+        description: 'The title of the package that was bought, as the operator named it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'traffic',
+        type: 'BYTES',
+        description: 'The traffic the package added, from the order’s frozen line.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'price',
+        type: 'MONEY',
+        description: 'What the customer paid for the package, from the order that bought it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'balanceBefore',
+        type: 'MONEY',
+        description:
+          'The wallet balance just before the purchase debit. Present only for a wallet payment; its line is dropped otherwise.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'balanceAfter',
+        type: 'MONEY',
+        description:
+          'The wallet balance right after the purchase debit. Present only for a wallet payment.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The 8-character tracking code of the payment, for a payment that did not come from the wallet. Absent otherwise.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'username',
+        type: 'STRING',
+        description: 'The account name on the panel, as the service card shows it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'totalTraffic',
+        type: 'TRAFFIC_LIMIT',
+        description:
+          'The service’s new total traffic allowance, from the operation’s own frozen target.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'orderCode',
+        type: 'STRING',
+        description: 'The 8-character tracking code of the order.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.addon_time_added',
+    description:
+      'R5C-1: the receipt of a successful extra-time purchase, sent by the customer notification lane (SERVICE_TIME_ADDED) onto the order\u2019s payment message when it can be edited, else as a new message. Values are read at send time from the ADD_TIME operation, its order, the wallet debit or payment that paid for it, and the service; its one button opens the service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'title',
+        type: 'STRING',
+        description: 'The title of the package that was bought, as the operator named it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'durationDays',
+        type: 'DURATION_DAYS',
+        description: 'The days the package added, from the order’s frozen line.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'price',
+        type: 'MONEY',
+        description: 'What the customer paid for the package, from the order that bought it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'balanceBefore',
+        type: 'MONEY',
+        description:
+          'The wallet balance just before the purchase debit. Present only for a wallet payment; its line is dropped otherwise.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'balanceAfter',
+        type: 'MONEY',
+        description:
+          'The wallet balance right after the purchase debit. Present only for a wallet payment.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The 8-character tracking code of the payment, for a payment that did not come from the wallet. Absent otherwise.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'username',
+        type: 'STRING',
+        description: 'The account name on the panel, as the service card shows it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'The service’s new expiry, from the operation’s own frozen target.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'orderCode',
+        type: 'STRING',
+        description: 'The 8-character tracking code of the order.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.addon_paid',
+    description:
+      'R5C-1: what the order\u2019s payment message says once an extra-traffic or extra-time ' +
+      'package is paid from the wallet and until it reaches the panel \u2014 the same message is ' +
+      'then edited into the receipt (`bot.service.addon_traffic_added` / ' +
+      '`bot.service.addon_time_added`). It claims only that the package is being applied.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  /*
    * Round N, package D: the reseller monthly minimum (`docs/round-n-reseller-audit.md` §3.4).
    * Sent by the customer notification lane only; values read at send time from the
    * `reseller_minimum_notices` row the notification names and the month's sales.

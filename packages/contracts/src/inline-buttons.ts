@@ -227,6 +227,8 @@ export const INLINE_BUTTONS = [
   button('service.renew', 'SERVICE_ACTIONS', 'bot.service.renew_button'),
   button('service.renew_option', 'SERVICE_ACTIONS', 'bot.service.renew_option_button'),
   button('service.add_traffic', 'SERVICE_ACTIONS', 'bot.service.add_traffic_button'),
+  // R5C-1 item 4: «⏳ خرید زمان اضافه», beside the extra-traffic button.
+  button('service.add_time', 'SERVICE_ACTIONS', 'bot.service.add_time_button'),
   button('service.addon_option', 'SERVICE_ACTIONS', 'bot.service.addon_option'),
   button('service.add_devices', 'SERVICE_ACTIONS', 'bot.service.add_devices_button'),
   button('service.devices_option', 'SERVICE_ACTIONS', 'bot.service.devices_option'),
