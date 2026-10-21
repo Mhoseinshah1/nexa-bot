@@ -1067,13 +1067,17 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.custom_service.button': '🛠 سرویس دلخواه',
   'bot.custom_service.locations': '📍 لوکیشن سرویس دلخواه خود را انتخاب کنید:',
   'bot.custom_service.ask_volume':
-    '📍 لوکیشن: {location}\n\n📦 حجم مورد نظر خود را به گیگابایت بفرستید؛ حداکثر با دو رقم اعشار (مثلاً 10 یا 10.5).',
+    '📍 لوکیشن: {location}\n\n📦 حجم مورد نظر خود را به گیگابایت بفرستید؛ حداکثر با دو رقم اعشار (مثلاً 10 یا 10.5).\n\n📏 حجم را بین {minGb} تا {maxGb} گیگابایت وارد کنید.',
   'bot.custom_service.invalid_volume':
-    'این حجم معتبر نیست. یک عدد مثبت به گیگابایت و حداکثر با دو رقم اعشار بفرستید (مثلاً 10 یا 10.25).',
+    'حجم واردشده درست نیست. حجم را بین {minGb} تا {maxGb} گیگابایت وارد کنید (حداکثر دو رقم اعشار).',
   'bot.custom_service.ask_days':
-    '📦 حجم: {volumeBytes}\n\n{icon:time} مدت مورد نظر خود را به روز بفرستید؛ یک عدد صحیح (مثلاً 30).',
+    '📦 حجم: {volumeBytes}\n\n{icon:time} مدت مورد نظر خود را به روز بفرستید؛ یک عدد صحیح (مثلاً 30).\n\n📏 مدت را بین {minDays} تا {maxDays} روز وارد کنید.',
   'bot.custom_service.invalid_days':
-    'این مدت معتبر نیست. تعداد روز را به صورت یک عدد صحیح مثبت بفرستید (مثلاً 30).',
+    'مدت واردشده درست نیست. مدت را بین {minDays} تا {maxDays} روز وارد کنید (عدد صحیح).',
+  'bot.custom_service.volume_unpriced':
+    'برای این حجم قیمتی تعریف نشده است. حجم دیگری را امتحان کنید.',
+  'bot.custom_service.days_unpriced':
+    'برای این مدت قیمتی تعریف نشده است. مدت دیگری را امتحان کنید.',
   'bot.custom_service.unavailable':
     'سرویس دلخواه با این مشخصات در حال حاضر قابل خرید نیست. می‌توانید حجم یا مدت دیگری را امتحان کنید.',
   'bot.custom_service.not_extendable':
