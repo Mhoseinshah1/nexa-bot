@@ -6251,6 +6251,26 @@ reset_docker_log
 run_botctl update v4.0.0
 assert_fails 'an update ran with an invalid NEXA_DISABLED_ROLES' test "$BOTCTL_STATUS" -eq 0
 assert_not_contains 'an invalid setting still migrated' "$(docker_log)" 'migrate.js'
+assert_contains 'the refusal does not tell the operator to edit the line' "$BOTCTL_OUTPUT" 'edit that line by hand'
+assert_not_contains 'the refusal advises a command that refuses the same value' "$BOTCTL_OUTPUT" 'roles enable'
+for verb in rollback restart; do
+  run_botctl "$verb"
+  assert_not_contains "${verb} advises roles enable on an invalid setting" "$BOTCTL_OUTPUT" 'roles enable'
+done
+# Whitespace is trimmed around an item, never inside one: "provis ioner" is not "provisioner".
+grep -v '^NEXA_DISABLED_ROLES=' "${NEXA_CONFIG_DIR}/nexa.env" >"${NEXA_CONFIG_DIR}/nexa.env.new"
+mv "${NEXA_CONFIG_DIR}/nexa.env.new" "${NEXA_CONFIG_DIR}/nexa.env"
+printf 'NEXA_DISABLED_ROLES=monitor, provis ioner\n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+reset_docker_log
+run_botctl update v4.0.0
+assert_fails 'an update accepted "provis ioner" as provisioner' test "$BOTCTL_STATUS" -eq 0
+assert_not_contains 'an inner space was collapsed into a valid role' "$(docker_log)" 'migrate.js'
+grep -v '^NEXA_DISABLED_ROLES=' "${NEXA_CONFIG_DIR}/nexa.env" >"${NEXA_CONFIG_DIR}/nexa.env.new"
+mv "${NEXA_CONFIG_DIR}/nexa.env.new" "${NEXA_CONFIG_DIR}/nexa.env"
+printf 'NEXA_DISABLED_ROLES= monitor , provisioner \n' >>"${NEXA_CONFIG_DIR}/nexa.env"
+run_botctl roles status
+assert_equals 'padding around items was refused' 0 "$BOTCTL_STATUS"
+assert_contains 'padded monitor was not read' "$BOTCTL_OUTPUT" 'monitor      disabled'
 teardown_root
 
 test_case 'roles: docs and usage describe the command'

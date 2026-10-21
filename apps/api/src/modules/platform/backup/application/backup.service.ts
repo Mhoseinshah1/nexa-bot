@@ -718,6 +718,15 @@ export class BackupService {
     }
 
     const outcome = await this.deps.tools.verifyRestore(workspace.verifyDumpPath);
+    if (!outcome.ok && outcome.oomKilled === true) {
+      throw new NexaError({
+        kind: 'INTERNAL',
+        code: PLATFORM_ERROR_CODES.BACKUP_TOOL_OOM_KILLED,
+        message:
+          'pg_restore was killed by the system while verifying, which means it ran out of memory.',
+        details: { detail: outcome.detail },
+      });
+    }
     if (!outcome.ok) {
       throw new NexaError({
         kind: 'INTERNAL',

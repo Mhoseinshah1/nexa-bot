@@ -149,7 +149,7 @@ class FakeRepository implements FxQuoteRepository {
   recordSourceFailure(
     _scope: TenantContext,
     source: FxSource,
-    input: { now: Date; code: string; retryAfter: Date | null },
+    input: { now: Date; code: string; retryAfter: Date | null; consecutiveFailures: number },
   ): Promise<void> {
     const before = this.states.get(source);
     this.states.set(source, {
@@ -158,7 +158,7 @@ class FakeRepository implements FxQuoteRepository {
       lastFailureAt: input.now,
       lastFailureCode: input.code,
       retryAfter: input.retryAfter,
-      consecutiveFailures: (before?.consecutiveFailures ?? 0) + 1,
+      consecutiveFailures: input.consecutiveFailures,
     });
     return Promise.resolve();
   }
@@ -667,6 +667,8 @@ describe('the refresh loop', () => {
     }
     expect(loop.isFresh(now)).toBe(false);
     fail = false;
+    // Past the backoff the next pass dials, succeeds, and the loop is fresh again.
+    now += 600_000;
     await loop.tick();
     expect(loop.isFresh(now)).toBe(true);
     await loop.stop();
@@ -741,6 +743,48 @@ describe('the refresh loop backs off', () => {
     expect(h.dials.at(-1)).toBe(450);
   });
 
+  it('a pass that THROWS backs off like a FAILED one and logs once per step', async () => {
+    let now = T0;
+    const dials: number[] = [];
+    const warnings: Record<string, unknown>[] = [];
+    const errors: unknown[] = [];
+    const loop = new FxRefreshLoop(
+      {
+        refreshIfDue: () => {
+          dials.push((now - T0) / 1_000);
+          return Promise.reject(new Error('db is down'));
+        },
+      },
+      {
+        scope: () => scope,
+        baseAsset: 'USDT',
+        intervalMs: FX_REFRESH_INTERVAL_MS,
+        passBoundMs: 10_000,
+        now: () => now,
+        logger: {
+          info: () => undefined,
+          error: (context) => void errors.push(context),
+          warn: (context) => void warnings.push(context),
+        },
+      },
+    );
+    loop.start();
+    await loop.tick();
+    for (let i = 0; i < 250; i += 1) {
+      now += FX_REFRESH_INTERVAL_MS;
+      await loop.tick();
+    }
+    // 0, +10, +30, +60, +300, +600 ... not a dial every 10 s.
+    expect(dials).toEqual([0, 10, 40, 100, 400, 1_000, 1_600, 2_200]);
+    expect(warnings.map((w) => w['nextAttemptInMs'])).toEqual([
+      10_000, 30_000, 60_000, 300_000, 600_000,
+    ]);
+    expect(errors).toEqual([]);
+    // A throwing loop still reads as stale while it waits out the backoff.
+    expect(loop.isFresh(now)).toBe(false);
+    await loop.stop();
+  });
+
   it('warns once per backoff step, not on every failed pass', async () => {
     const h = harness(() => 'FAILED');
     await h.loop.tick();
@@ -782,6 +826,28 @@ describe('the central rate: a source that keeps failing', () => {
       w.clockMs = Math.max(state?.retryAfter?.getTime() ?? 0, dialledAt + 46_000);
     }
     expect(waits).toEqual([30_000, 60_000, 300_000, 600_000, 600_000, 600_000]);
+  });
+
+  it('counts only transport failures in the step: rejected quotes before an outage do not skip ahead', async () => {
+    let mode: 'rejected' | 'down' = 'rejected';
+    const w = world({
+      nobitex: () => (mode === 'rejected' ? reading('NOBITEX', 0n, 'IRR') : blocked()),
+    });
+    for (let i = 0; i < 3; i += 1) {
+      await w.service.refreshIfDue(scope, 'USDT');
+      w.clockMs += 46_000;
+    }
+    expect(w.repository.states.get('NOBITEX')).toMatchObject({
+      retryAfter: null,
+      consecutiveFailures: 0,
+    });
+    mode = 'down';
+    const dialledAt = w.clockMs;
+    await w.service.refreshIfDue(scope, 'USDT');
+    const state = w.repository.states.get('NOBITEX');
+    // The FIRST transport failure waits the first step, not the third (5 minutes).
+    expect(state?.retryAfter).toEqual(new Date(dialledAt + (FX_SOURCE_BACKOFF_MS[0] ?? 0)));
+    expect(state?.consecutiveFailures).toBe(1);
   });
 
   it('raises one alert per outage and one recovery, however many passes run', async () => {

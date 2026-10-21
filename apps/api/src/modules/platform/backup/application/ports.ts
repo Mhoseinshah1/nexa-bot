@@ -32,6 +32,11 @@ export interface VerifyOutcome {
   /** Tables in `public` after the restore. Zero is a failure, not a success. */
   readonly tableCount: number;
   readonly detail: string | null;
+  /**
+   * True when the restore tool was killed for memory. Kept apart from `detail` so the run's
+   * failure code stays `backup.tool_oom_killed` and the scheduler's memory cooldown applies.
+   */
+  readonly oomKilled?: boolean;
 }
 
 export interface RestoreTarget {

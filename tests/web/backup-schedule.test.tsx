@@ -181,6 +181,37 @@ describe('the backup schedule card', () => {
     expect(write?.body).toMatchObject({ value: '04:00' });
   });
 
+  it('lets the operator leave a stored daily time by choosing the 24 h interval', async () => {
+    const api = stubApi(routes());
+    renderPage(
+      <BackupScheduleCard
+        status={{
+          ...STATUS,
+          dailyTime: '04:00',
+          scheduleSource: { ...STATUS.scheduleSource, dailyTime: 'SETTING' },
+        }}
+        permissions={EDIT}
+      />,
+    );
+    // The 24 h preset is already selected (the daily time reports a 24 h interval) ...
+    expect(await screen.findByRole('button', { name: 'هر ۲۴ ساعت' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    // ... and saving it must still clear the daily time and store the interval.
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره‌ی فاصله' }));
+    await waitFor(() => expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(2));
+    const posts = api.calls.filter((call) => call.method === 'POST');
+    const daily = posts.find((call) =>
+      call.url.includes(encodeURIComponent(BACKUP_SCHEDULE_SETTING_KEYS.dailyTime)),
+    );
+    const interval = posts.find((call) =>
+      call.url.includes(encodeURIComponent(BACKUP_SCHEDULE_SETTING_KEYS.intervalMinutes)),
+    );
+    expect(daily?.body).toMatchObject({ value: null });
+    expect(interval?.body).toMatchObject({ value: 1440 });
+  });
+
   it('offers nothing to change to an actor without settings.edit', async () => {
     stubApi(routes());
     renderPage(

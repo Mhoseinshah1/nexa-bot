@@ -49,6 +49,8 @@ export class FxRefreshLoop {
   private running = false;
   private readonly progress: LoopProgress;
   private failureStreak = 0;
+  /** True while the last dialled pass threw: backoff skips then do not count as progress. */
+  private lastPassThrew = false;
   private nextDialAt = 0;
   /** The delay last warned about, so a warning is written once per backoff step. */
   private warnedDelayMs: number | null = null;
@@ -127,11 +129,13 @@ export class FxRefreshLoop {
         return;
       }
       if (this.options.now() < this.nextDialAt) {
-        // Backing off after failures: a completed pass that dialled nothing.
-        this.progress.record(this.options.now());
+        // Backing off after a reported failure is a completed pass that dialled nothing.
+        // After a THROWN pass it is not: the loop must keep reading as stale.
+        if (!this.lastPassThrew) this.progress.record(this.options.now());
         return;
       }
       const { outcome, reason } = await this.fx.refreshIfDue(scope, this.options.baseAsset);
+      this.lastPassThrew = false;
       if (outcome === 'FAILED') {
         this.backOff(reason);
       } else {
@@ -144,10 +148,10 @@ export class FxRefreshLoop {
       }
       this.progress.record(this.options.now());
     } catch (error) {
-      this.options.logger.error(
-        { error: error instanceof Error ? error.message : String(error) },
-        'fx refresh pass failed',
-      );
+      // A pass that THROWS backs off exactly like one that reports FAILED, and logs once per
+      // step: otherwise a persistent fault dials and logs every tick.
+      this.lastPassThrew = true;
+      this.backOff(error instanceof Error ? error.message : String(error));
     } finally {
       this.running = false;
     }

@@ -404,7 +404,12 @@ export class FxService {
           };
 
     const judged: JudgedCandidate[] = [];
-    const failures: { source: FxSource; code: string; retryAfter: Date | null }[] = [];
+    const failures: {
+      source: FxSource;
+      code: string;
+      retryAfter: Date | null;
+      streak: number;
+    }[] = [];
     const successes: FxSource[] = [];
     const rejected: { source: FxSource; code: string; deviationBps: bigint | null }[] = [];
     // Sources left alone this pass because their cooldown or backoff has not elapsed.
@@ -424,7 +429,7 @@ export class FxService {
       }
       const adapter = this.deps.sources.get(source);
       if (adapter === undefined) {
-        failures.push({ source, code: 'nexa.no_adapter', retryAfter: null });
+        failures.push({ source, code: 'nexa.no_adapter', retryAfter: null, streak: 0 });
         continue;
       }
       const outcome = await adapter.read(pair.baseAsset);
@@ -434,6 +439,7 @@ export class FxService {
           source,
           code: outcome.code,
           retryAfter: new Date(answeredAt.getTime() + FX_RATE_LIMIT_COOLDOWN_MS),
+          streak: (state?.consecutiveFailures ?? 0) + 1,
         });
         continue;
       }
@@ -444,6 +450,7 @@ export class FxService {
           source,
           code: outcome.code,
           retryAfter: step === undefined ? null : new Date(answeredAt.getTime() + step),
+          streak: consecutive,
         });
         continue;
       }
@@ -489,7 +496,12 @@ export class FxService {
         await this.deps.repository.recordSourceFailure(
           scope,
           failure.source,
-          { now: fetchedAt, code: failure.code, retryAfter: failure.retryAfter },
+          {
+            now: fetchedAt,
+            code: failure.code,
+            retryAfter: failure.retryAfter,
+            consecutiveFailures: failure.streak,
+          },
           tx,
         );
         await this.deps.opsLog.record(
@@ -510,7 +522,13 @@ export class FxService {
         await this.deps.repository.recordSourceFailure(
           scope,
           entry.source,
-          { now: fetchedAt, code: entry.code, retryAfter: null },
+          {
+            now: fetchedAt,
+            code: entry.code,
+            retryAfter: null,
+            // The source answered: a rejected figure ends the transport streak.
+            consecutiveFailures: 0,
+          },
           tx,
         );
         await this.deps.opsLog.record(

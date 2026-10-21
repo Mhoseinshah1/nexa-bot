@@ -666,6 +666,24 @@ describe('the backup pipeline', () => {
     expect(run.verifiedAt).toBeNull();
   });
 
+  it('keeps a verification pg_restore OOM kill as backup.tool_oom_killed (memory cooldown)', async () => {
+    const h = harness();
+    h.state.verify = {
+      ok: false,
+      scratchDatabase: 'nexa_verify_x',
+      tableCount: 0,
+      detail: 'pg_restore was killed by the system',
+      oomKilled: true,
+    };
+
+    const run = await completed(h);
+
+    expect(run.state).toBe('FAILED');
+    expect(run.stage).toBe('VERIFY_RESTORE');
+    expect(run.failureCode).toBe('backup.tool_oom_killed');
+    expect(h.state.deliveredDocument).toBeNull();
+  });
+
   it('fails a restore that succeeds and produces no tables', async () => {
     const h = harness();
     // An empty dump restores perfectly. This is the failure that looks most

@@ -177,7 +177,10 @@ export function BackupScheduleCard({
     choice === 'custom'
       ? intervalMinutes(customText, custom.unit)
       : ({ ok: true, minutes: presetMinutes(choice) } as const);
-  const intervalChanged = parsed.ok && parsed.minutes !== effectiveMinutes;
+  // While a stored daily time is in force the policy reports a 24 h interval, so picking
+  // that same interval is still a change: it is how an operator leaves the daily time.
+  const dailyInForce = status.scheduleSource.dailyTime === 'SETTING' && status.dailyTime !== null;
+  const intervalChanged = parsed.ok && (parsed.minutes !== effectiveMinutes || dailyInForce);
 
   return (
     <div className="stack">
@@ -286,7 +289,7 @@ export function BackupScheduleCard({
             event.preventDefault();
             if (parsed.ok && intervalChanged) {
               // A stored daily time beats any interval, so choosing an interval clears it.
-              if (status.scheduleSource.dailyTime === 'SETTING') write(dailyRow, null);
+              if (dailyInForce) write(dailyRow, null);
               write(intervalRow, parsed.minutes);
             }
           }}

@@ -977,11 +977,16 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
 
     let tableCount = 0;
     let failure: string | null = null;
+    let oomKilled = false;
     try {
       await this.restoreIntoEmpty(scratch, dumpPath, 'VERIFY');
       tableCount = (await this.inspectDatabase(scratch)).tableCount;
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
+      // A memory kill is not "this archive cannot be restored": it must reach the run's
+      // failure code, or the scheduler's memory cooldown never applies.
+      oomKilled =
+        error instanceof NexaError && error.code === PLATFORM_ERROR_CODES.BACKUP_TOOL_OOM_KILLED;
     } finally {
       // `dropDatabase` records a failed drop on `leaked` itself, which the
       // cleanup stage reports. Visible, never swallowed: a scratch database left
@@ -990,7 +995,13 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
     }
 
     if (failure !== null) {
-      return { ok: false, scratchDatabase: scratch, tableCount: 0, detail: failure };
+      return {
+        ok: false,
+        scratchDatabase: scratch,
+        tableCount: 0,
+        detail: failure,
+        ...(oomKilled ? { oomKilled } : {}),
+      };
     }
     return { ok: true, scratchDatabase: scratch, tableCount, detail: null };
   }

@@ -1097,7 +1097,7 @@ cmd_update() {
   require_installed
   # An unreadable NEXA_DISABLED_ROLES is refused BEFORE anything moves: found after the
   # migration it would fail the start and the back-out alike.
-  nexa_disabled_roles >/dev/null || nexa_die "fix NEXA_DISABLED_ROLES in ${NEXA_CONFIG_DIR}/nexa.env first (or run 'botctl roles enable ...'). Nothing was changed."
+  nexa_disabled_roles >/dev/null || nexa_die "NEXA_DISABLED_ROLES in ${NEXA_CONFIG_DIR}/nexa.env is not valid; edit that line by hand first ('botctl roles' refuses it too). Nothing was changed."
   local target="${1:-}"
   [ -n "$target" ] || nexa_die "usage: botctl update VERSION"
   nexa_require_version "$target"
@@ -1509,7 +1509,7 @@ cmd_rollback() {
   require_installed
   # An unreadable NEXA_DISABLED_ROLES is refused BEFORE anything moves: found after the
   # migration it would fail the start and the back-out alike.
-  nexa_disabled_roles >/dev/null || nexa_die "fix NEXA_DISABLED_ROLES in ${NEXA_CONFIG_DIR}/nexa.env first (or run 'botctl roles enable ...'). Nothing was changed."
+  nexa_disabled_roles >/dev/null || nexa_die "NEXA_DISABLED_ROLES in ${NEXA_CONFIG_DIR}/nexa.env is not valid; edit that line by hand first ('botctl roles' refuses it too). Nothing was changed."
   nexa_acquire_lock 0
 
   local current previous previous_image
@@ -1739,7 +1739,7 @@ cmd_restart() {
   require_installed
   # An unreadable NEXA_DISABLED_ROLES is refused BEFORE anything moves: found after the
   # migration it would fail the start and the back-out alike.
-  nexa_disabled_roles >/dev/null || nexa_die "fix NEXA_DISABLED_ROLES in ${NEXA_CONFIG_DIR}/nexa.env first (or run 'botctl roles enable ...'). Nothing was changed."
+  nexa_disabled_roles >/dev/null || nexa_die "NEXA_DISABLED_ROLES in ${NEXA_CONFIG_DIR}/nexa.env is not valid; edit that line by hand first ('botctl roles' refuses it too). Nothing was changed."
   nexa_acquire_lock 0
   # `version` and `status` REPORT a divergence; restart is the command that
   # would act on it, by starting the image deploy.env names instead of the
@@ -1803,7 +1803,7 @@ cmd_restart_background() {
   # A case match on the newline-delimited list, not `grep -q` (see nexa_required_services).
   local disabled=""
   disabled="$(nexa_disabled_roles)" ||
-    nexa_die "fix NEXA_DISABLED_ROLES in ${NEXA_CONFIG_DIR}/nexa.env first. Nothing was restarted."
+    nexa_die "NEXA_DISABLED_ROLES in ${NEXA_CONFIG_DIR}/nexa.env is not valid; edit that line by hand first ('botctl roles' refuses it too). Nothing was restarted."
   for service in $NEXA_BACKGROUND_SERVICES; do
     # `compose restart` STARTS a stopped container, so a role the owner disabled is skipped.
     nexa_in_list "$service" "$disabled" && continue

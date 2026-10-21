@@ -188,10 +188,13 @@ NEXA_DISABLABLE_ROLES="monitor provisioner assistant"
 nexa_disabled_roles() {
   local raw="" item role listed="" out=""
   raw="$(nexa_compose_env_value "${NEXA_CONFIG_DIR}/nexa.env" NEXA_DISABLED_ROLES 2>/dev/null || true)"
-  raw="${raw//[[:space:]]/}"
-  [ -n "$raw" ] || return 0
+  [ -n "${raw//[[:space:]]/}" ] || return 0
   local IFS=,
   for item in $raw; do
+    # Whitespace is trimmed around an item only; inside one it makes the value invalid
+    # ("provis ioner" must not be read as "provisioner").
+    item="${item#"${item%%[![:space:]]*}"}"
+    item="${item%"${item##*[![:space:]]}"}"
     [ -n "$item" ] || continue
     case " ${NEXA_DISABLABLE_ROLES} " in
       *" ${item} "*) ;;

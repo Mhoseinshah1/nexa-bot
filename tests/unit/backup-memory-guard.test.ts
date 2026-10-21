@@ -368,6 +368,22 @@ describe('the PostgreSQL tools under a low-priority wrapper', () => {
     expect(wrapped[1]).toBe(join(dir, 'pg_restore'));
   });
 
+  it('reports a verification pg_restore the kernel killed as oomKilled, not a plain failure', async () => {
+    await tools();
+    await script('pg_restore', 'kill -9 $$');
+    const verify = new VerifyProbe({
+      databaseUrl: 'postgres://nexa:secret@localhost:5432/nexa',
+      dumpTimeoutMs: 60_000,
+      restoreTimeoutMs: 60_000,
+      binDir: dir,
+      migratorEntrypoint: '/nonexistent',
+      lowPriorityPrefix: [join(dir, 'wrapper'), 'low-priority'],
+    });
+    const outcome = await verify.verifyRestore('/tmp/does-not-matter.dump');
+    expect(outcome.ok).toBe(false);
+    expect(outcome.oomKilled).toBe(true);
+  });
+
   it("leaves the operator's own restore at full speed", async () => {
     const full = await tools();
     await full.restoreIntoEmpty('nexa_target', '/tmp/x.dump');
