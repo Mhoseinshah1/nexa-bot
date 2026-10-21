@@ -410,6 +410,13 @@ export class DrizzleTermsRepository implements TermsRepository {
 
   async stampFirstEnforced(scope: ScopeContext, now: Date, tx: unknown): Promise<boolean> {
     const tenantId = requireTenantId(scope);
+    // The two prerequisites (the flag, a published version) are written by different
+    // transactions, and under READ COMMITTED each would see only its OWN uncommitted one —
+    // both EXISTS fail, both commit, the stamp stays NULL while enforcement is on. So the
+    // stamp is serialised per tenant: the caller has already written its prerequisite, takes
+    // the tenant row lock, and the second waiter's UPDATE (a fresh snapshot) sees the first's
+    // committed one.
+    await this.exec(tx).execute(sql`SELECT 1 FROM tenants WHERE id = ${tenantId} FOR NO KEY UPDATE`);
     const result = await this.exec(tx).execute<{ id: string }>(sql`
       UPDATE tenants t
          SET rules_first_enforced_at = ${now.toISOString()}::timestamptz

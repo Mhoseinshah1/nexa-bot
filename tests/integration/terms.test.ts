@@ -29,6 +29,7 @@ import {
 import { CATALOGUE_FA } from '@nexa/i18n';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
+import { DrizzleTermsRepository } from '../../apps/api/src/modules/control/terms/infrastructure/drizzle-terms.repository';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import type { TermsVersionRecord } from '../../apps/api/src/modules/control/terms/application/ports';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
@@ -1216,5 +1217,38 @@ describe('terms and rules (program §6)', () => {
     expect(await firstEnforcedAt(tenantB.tenantId)).toBeNull();
     await enforce(true, tenantB);
     expect(await firstEnforcedAt(tenantB.tenantId)).not.toBeNull();
+  });
+
+  it('R5C-1: a flag enabled and a first version published in concurrent transactions still stamp', async () => {
+    const db = api.container.database.db;
+    const repository = new DrizzleTermsRepository(db);
+    const at = new Date('2026-10-01T00:00:00.000Z');
+    let releaseFlag: () => void = () => undefined;
+    const flagMayCommit = new Promise<void>((resolve) => (releaseFlag = resolve));
+    let flagStamped: () => void = () => undefined;
+    const flagHasStamped = new Promise<void>((resolve) => (flagStamped = resolve));
+    // Transaction A: the flag turns on; its stamp runs while B's version is uncommitted.
+    const flagTx = db.transaction(async (tx) => {
+      await tx.execute(sql`
+        INSERT INTO feature_flag_states (id, tenant_id, flag_key, enabled, version)
+        VALUES (gen_random_uuid(), ${tenantA.tenantId}, 'terms_enforcement', true, 1)
+        ON CONFLICT (tenant_id, flag_key) DO UPDATE SET enabled = true`);
+      await repository.stampFirstEnforced(tenantA, at, { tx, scope: tenantA });
+      flagStamped();
+      await flagMayCommit;
+    });
+    await flagHasStamped;
+    // Transaction B: the first version is published; its stamp must wait for A, then see it.
+    const publishTx = db.transaction(async (tx) => {
+      await tx.execute(sql`
+        INSERT INTO terms_versions (id, tenant_id, status, version_number, title, body,
+                                    published_at)
+        VALUES (gen_random_uuid(), ${tenantA.tenantId}, 'PUBLISHED', 1, 't', 'b', now())`);
+      await repository.stampFirstEnforced(tenantA, at, { tx, scope: tenantA });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    releaseFlag();
+    await Promise.all([flagTx, publishTx]);
+    expect((await firstEnforcedAt())?.getTime()).toBe(at.getTime());
   });
 });
