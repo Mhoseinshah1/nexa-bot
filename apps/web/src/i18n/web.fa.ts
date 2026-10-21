@@ -9112,6 +9112,18 @@ export const WEB_FA = {
   'web.lmg_col_error': 'علت توقف',
   'web.lmg_none': 'هیچ',
   'web.lmg_history_title': 'بازیابی‌های پیشین از ربات قبلی',
+  'web.lio_title': 'نتیجهٔ انتقال هر فاکتور قدیمی',
+  'web.lio_hint':
+    'فقط‌خواندنی. برای هر فاکتور قدیمی می‌بینید منتقل شد، فقط در آرشیو ماند یا روی پنل پیدا نشد، و دلیلش چیست.',
+  'web.lio_search': 'جستجو با شمارهٔ فاکتور قدیمی',
+  'web.lio_search_placeholder': 'شمارهٔ فاکتور (ابتدای شماره)',
+  'web.lio_col_invoice': 'فاکتور قدیمی',
+  'web.lio_col_outcome': 'نتیجه',
+  'web.lio_col_reason': 'دلیل',
+  'web.lio_group_migrated': 'منتقل شد',
+  'web.lio_group_archived': 'آرشیو شد',
+  'web.lio_group_not_on_panel': 'روی پنل نیست',
+  'web.lio_empty': 'فاکتوری با این مشخصات در گزارش انتقال نیست.',
   // Phase 7: the Mirza restore inside «بکاپ و بازیابی ← عملیات بازیابی».
   'web.mrz_steps_label': 'گام‌های بازیابی از ربات قبلی',
   'web.mrz_step_upload': 'بارگذاری',
