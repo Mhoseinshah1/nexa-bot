@@ -1198,12 +1198,28 @@ describe('payment accounts and the destination a payment freezes', () => {
         expectedSequence,
       });
 
+    /** One tenant setting row, written the way the existing limit test does. */
+    const setLimit = async (key: string, value: number): Promise<void> => {
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO setting_values (id, tenant_id, setting_key, value, version, updated_at)
+        VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${key}, ${String(value)}::jsonb, 1, now())`);
+    };
+    const switchRows = async (
+      paymentId: string,
+    ): Promise<{ sequence: number; card_number: string }[]> =>
+      (
+        (await ctx.container.database.db.execute(
+          sql`SELECT sequence, card_number FROM payment_destination_switches WHERE payment_id = ${paymentId} ORDER BY sequence` as never,
+        )) as unknown as { rows: { sequence: number; card_number: string }[] }
+      ).rows;
+
     it('records the card it shows, and every reader of the destination reads that card', async () => {
       await addAccount(tenantA, owner, 'switch-two', {
         label: 'دوم',
         cardNumber: CARD_TWO,
         sortOrder: 5,
       });
+      await setLimit('payments.card_switch_cooldown_seconds', 0);
       const orderId = await awaitingPayment('switch');
       const { payment, destination } = await issue('switch-pay', orderId);
       expect(destination?.cardNumber).toBe(CARD_ONE);
@@ -1365,6 +1381,131 @@ describe('payment accounts and the destination a payment freezes', () => {
       expect(await tap(payment.id, 1, 'limit-2')).toMatchObject({
         outcome: 'UNCHANGED',
         reason: 'LIMIT',
+      });
+    });
+
+    describe('R5C-1: cooldown, maximum switches and distinct cards, decided under the payment lock', () => {
+      async function threeCards(prefix: string): Promise<void> {
+        await addAccount(tenantA, owner, `${prefix}-two`, {
+          label: 'دوم',
+          cardNumber: CARD_TWO,
+          sortOrder: 5,
+        });
+        await addAccount(tenantA, owner, `${prefix}-three`, {
+          label: 'سوم',
+          cardNumber: CARD_THREE,
+          sortOrder: 6,
+        });
+      }
+
+      it('cooldown: a second press inside the window switches nothing and answers the wait', async () => {
+        await threeCards('cd');
+        await setLimit('payments.card_switch_cooldown_seconds', 3600);
+        await setLimit('payments.card_switch_max_distinct_cards', 3);
+        const { payment } = await issue('cd-pay', await awaitingPayment('cd'));
+        const first = await tap(payment.id, 0, 'cd-1');
+        expect(first.outcome).toBe('SWITCHED');
+        const early = await tap(payment.id, 1, 'cd-2');
+        expect(early.outcome).toBe('COOLDOWN');
+        if (early.outcome !== 'COOLDOWN') throw new Error('unreachable');
+        expect(early.retryAfterSeconds).toBeGreaterThan(3590);
+        expect(early.retryAfterSeconds).toBeLessThanOrEqual(3600);
+        // Nothing written, and the card recorded is still the one shown last.
+        const rows = await switchRows(payment.id);
+        expect(rows).toHaveLength(1);
+        expect(early.instruction.destination?.cardNumber).toBe(CARD_TWO);
+        expect(
+          (await ctx.container.payments.destinationFor(tenantA, owner, payment.id))?.cardNumber,
+        ).toBe(CARD_TWO);
+        // A cooldown is temporary: the button is still drawn.
+        expect((await ctx.container.cardSwitch.offer(tenantA, payment)).offered).toBe(true);
+      });
+
+      it('cooldown of zero lets presses follow each other', async () => {
+        await threeCards('cd0');
+        await setLimit('payments.card_switch_cooldown_seconds', 0);
+        await setLimit('payments.card_switch_max_distinct_cards', 3);
+        const { payment } = await issue('cd0-pay', await awaitingPayment('cd0'));
+        expect((await tap(payment.id, 0, 'cd0-1')).outcome).toBe('SWITCHED');
+        expect((await tap(payment.id, 1, 'cd0-2')).outcome).toBe('SWITCHED');
+      });
+
+      it('maximum switches: the press over the limit is refused on the server, even forged', async () => {
+        await threeCards('ms');
+        await setLimit('payments.card_switch_cooldown_seconds', 0);
+        await setLimit('payments.card_switch_limit', 2);
+        await setLimit('payments.card_switch_max_distinct_cards', 3);
+        const { payment } = await issue('ms-pay', await awaitingPayment('ms'));
+        expect((await tap(payment.id, 0, 'ms-1')).outcome).toBe('SWITCHED');
+        expect((await ctx.container.cardSwitch.offer(tenantA, payment)).offered).toBe(true);
+        expect((await tap(payment.id, 1, 'ms-2')).outcome).toBe('SWITCHED');
+        // The keyboard is gone, and a tap that still arrives (a stale or forged one) switches nothing.
+        expect((await ctx.container.cardSwitch.offer(tenantA, payment)).offered).toBe(false);
+        expect(await tap(payment.id, 2, 'ms-3')).toMatchObject({
+          outcome: 'UNCHANGED',
+          reason: 'LIMIT',
+        });
+        expect(await switchRows(payment.id)).toHaveLength(2);
+      });
+
+      it('maximum distinct cards: a card beyond the cap is never shown, only cards already seen', async () => {
+        await threeCards('dc');
+        await setLimit('payments.card_switch_cooldown_seconds', 0);
+        await setLimit('payments.card_switch_limit', 6);
+        await setLimit('payments.card_switch_max_distinct_cards', 2);
+        const { payment } = await issue('dc-pay', await awaitingPayment('dc'));
+        for (let n = 0; n < 4; n += 1) {
+          expect((await tap(payment.id, n, `dc-${String(n)}`)).outcome).toBe('SWITCHED');
+        }
+        const shown = (await switchRows(payment.id)).map((row) => row.card_number);
+        expect(shown).toEqual([CARD_TWO, CARD_ONE, CARD_TWO, CARD_ONE]);
+        expect(shown).not.toContain(CARD_THREE);
+      });
+
+      it('maximum distinct cards of one: the customer is never shown a second card', async () => {
+        await threeCards('dc1');
+        await setLimit('payments.card_switch_cooldown_seconds', 0);
+        await setLimit('payments.card_switch_max_distinct_cards', 1);
+        const { payment } = await issue('dc1-pay', await awaitingPayment('dc1'));
+        expect((await ctx.container.cardSwitch.offer(tenantA, payment)).offered).toBe(false);
+        expect(await tap(payment.id, 0, 'dc1-1')).toMatchObject({
+          outcome: 'UNCHANGED',
+          reason: 'LIMIT',
+        });
+        expect(await switchRows(payment.id)).toHaveLength(0);
+      });
+
+      it('a concurrent double tap records exactly one switch', async () => {
+        await threeCards('cc');
+        await setLimit('payments.card_switch_cooldown_seconds', 0);
+        await setLimit('payments.card_switch_max_distinct_cards', 3);
+        const { payment } = await issue('cc-pay', await awaitingPayment('cc'));
+        const results = await Promise.all([
+          tap(payment.id, 0, 'cc-a'),
+          tap(payment.id, 0, 'cc-b'),
+          tap(payment.id, 0, 'cc-c'),
+        ]);
+        expect(results.filter((r) => r.outcome === 'SWITCHED')).toHaveLength(1);
+        expect(await switchRows(payment.id)).toHaveLength(1);
+      });
+
+      it('a burst after a switch is refused by the cooldown and writes nothing', async () => {
+        await threeCards('burst');
+        await setLimit('payments.card_switch_cooldown_seconds', 3600);
+        await setLimit('payments.card_switch_limit', 10);
+        await setLimit('payments.card_switch_max_distinct_cards', 3);
+        const { payment } = await issue('burst-pay', await awaitingPayment('burst'));
+        expect((await tap(payment.id, 0, 'burst-0')).outcome).toBe('SWITCHED');
+        const burst = await Promise.all(
+          [1, 2, 3, 4].map((n) => tap(payment.id, 1, `burst-${String(n)}`)),
+        );
+        expect(burst.map((r) => r.outcome)).toEqual([
+          'COOLDOWN',
+          'COOLDOWN',
+          'COOLDOWN',
+          'COOLDOWN',
+        ]);
+        expect(await switchRows(payment.id)).toHaveLength(1);
       });
     });
   });

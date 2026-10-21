@@ -5841,7 +5841,7 @@ export class BotRuntime {
             undefined,
           );
         }
-        await this.stopSpinner(scope, command, input.botInstanceId);
+        await this.stopSpinner(scope, command, input.botInstanceId, reply.toast);
         return {
           intent,
           arrival,
@@ -15682,6 +15682,27 @@ export class BotRuntime {
         paymentId,
         expectedSequence,
       });
+      /*
+       * R5C-1: a press that came too early is a notice on the button and nothing else — the
+       * invoice stays exactly as it is. A press over a limit is the same notice, and the
+       * invoice is redrawn (below) without the button the limit has taken away.
+       */
+      if (result.outcome === 'COOLDOWN') {
+        return {
+          key: null,
+          values: {},
+          buttons: [],
+          orderId: null,
+          toast: {
+            key: 'bot.payment.switch_card_cooldown',
+            values: { seconds: result.retryAfterSeconds },
+          },
+        };
+      }
+      const refused =
+        result.outcome === 'UNCHANGED' && result.reason === 'LIMIT'
+          ? { toast: { key: 'bot.payment.switch_card_refused' as const, values: {} } }
+          : {};
       const instruction = result.instruction;
       if (instruction === null) {
         return {
@@ -15691,7 +15712,10 @@ export class BotRuntime {
           orderId: null,
         };
       }
-      return this.transferInstruction(scope, instruction, instruction.payment.orderId);
+      return {
+        ...(await this.transferInstruction(scope, instruction, instruction.payment.orderId)),
+        ...refused,
+      };
     } catch (error) {
       return refusal(error);
     }

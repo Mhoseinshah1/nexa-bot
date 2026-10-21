@@ -8,6 +8,7 @@ import { GatewayHealthPanel, PROVIDER_LABELS } from './gateway-health';
 import { CardAccountsSection } from './payment-accounts';
 import { PaymentGatewaysPage } from './payment-gateways';
 import { LateCreditCard } from './late-credit-card';
+import { CardSwitchLimitsCard } from './card-switch-limits-card';
 
 /**
  * One payment method's own view, at `/payment-gateways/<slug>` (UX Batch 01, items 7 and 8).
@@ -106,6 +107,13 @@ export function PaymentMethodPage({
       )}
       {mayViewGateways && (
         <LateCreditCard
+          provider={provider}
+          maySettingsView={maySettingsView}
+          maySettingsEdit={maySettingsEdit}
+        />
+      )}
+      {cards && (
+        <CardSwitchLimitsCard
           provider={provider}
           maySettingsView={maySettingsView}
           maySettingsEdit={maySettingsEdit}

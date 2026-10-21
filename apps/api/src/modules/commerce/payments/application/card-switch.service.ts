@@ -1,4 +1,5 @@
 import {
+  CARD_SWITCH_SETTING_KEYS,
   COMMERCE_ERROR_CODES,
   errors,
   paymentIdSchema,
@@ -28,6 +29,11 @@ import type {
   PaymentDestinationRepository,
 } from './account-ports.js';
 import type { PaymentReceiptRepository } from './receipt-ports.js';
+import {
+  decideCardSwitch,
+  nextReceivingCard,
+  type CardSwitchLimits,
+} from './card-switch-policy.js';
 import type { ManualTransferInstruction } from './payment.service.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
 
@@ -45,30 +51,12 @@ import type { PaymentRecord, PaymentRepository } from './ports.js';
  * Telegram surface acts as `SYSTEM_JOB`, and the payment is re-read by id AND owner.
  */
 export const CARD_SWITCH_PERMISSION = 'maintenance.run' satisfies PermissionKey;
-export const CARD_SWITCH_LIMIT_SETTING = 'payments.card_switch_limit' as const;
+export const CARD_SWITCH_LIMIT_SETTING = CARD_SWITCH_SETTING_KEYS.MAX_SWITCHES;
+
+export { nextReceivingCard };
 
 /** The surface a customer's tap arrives through. */
 const CUSTOMER_NAMESPACE = 'TELEGRAM' as const;
-
-/**
- * The card a press shows, decided from the tenant's ENABLED accounts in their render order
- * `(sort_order, created_at, id)` — the order `PaymentAccountRepository.list` returns.
- *
- * Pure. The next card after the one shown now, wrapping round to the first, and never the
- * one shown now: two enabled cards alternate, three rotate A → B → C → A. A card shown now
- * that has since been DISABLED is no longer in the list, so the rotation starts again from
- * the first enabled card. Null when no other enabled card exists — the button is not drawn.
- */
-export function nextReceivingCard(
-  enabled: readonly PaymentAccountRecord[],
-  currentAccountId: string | null,
-): PaymentAccountRecord | null {
-  const others = enabled.filter((account) => account.id !== currentAccountId);
-  if (others.length === 0) return null;
-  const at = enabled.findIndex((account) => account.id === currentAccountId);
-  if (at === -1) return others[0] ?? null;
-  return enabled[(at + 1) % enabled.length] ?? null;
-}
 
 /**
  * Whether the button may be drawn on this payment's invoice, decided from the same facts the
@@ -90,11 +78,22 @@ export type CardSwitchResult =
   /**
    * Nothing was switched, and the invoice is redrawn as it stands: a second tap of the same
    * keyboard or a redelivered update (`STALE`), the press limit reached (`LIMIT`), no other
-   * enabled card (`NO_OTHER_CARD`).
+   * enabled card (`NO_OTHER_CARD`). `LIMIT` is the switch limit or the distinct-card limit
+   * (R5C-1) and the invoice is redrawn without the button.
    */
   | {
       readonly outcome: 'UNCHANGED';
       readonly reason: 'STALE' | 'LIMIT' | 'NO_OTHER_CARD';
+      readonly instruction: ManualTransferInstruction;
+      readonly sequence: number;
+    }
+  /**
+   * R5C-1: pressed before the cooldown since the last switch ended. Nothing is written and the
+   * invoice is left as it is; `retryAfterSeconds` (rounded up, at least 1) is the answer.
+   */
+  | {
+      readonly outcome: 'COOLDOWN';
+      readonly retryAfterSeconds: number;
       readonly instruction: ManualTransferInstruction;
       readonly sequence: number;
     }
@@ -116,7 +115,7 @@ export interface CardSwitchServiceDeps {
   };
   readonly destinations: Pick<
     PaymentDestinationRepository,
-    'findByPayment' | 'switchCount' | 'recordSwitch'
+    'findByPayment' | 'switchCount' | 'switchHistory' | 'recordSwitch'
   >;
   readonly receipts: Pick<PaymentReceiptRepository, 'countForPayment'>;
   readonly settings: Pick<SettingsResolver, 'valueOf'>;
@@ -139,15 +138,25 @@ export class CardSwitchService {
    * Read-only; the press decides everything again under the payment's lock.
    */
   async offer(scope: TenantContext, payment: PaymentRecord): Promise<CardSwitchOffer> {
-    const sequence = await this.deps.destinations.switchCount(scope, payment.id);
+    const history = await this.deps.destinations.switchHistory(scope, payment.id);
+    const sequence = history.switchCount;
     if (!this.switchable(payment, this.deps.clock.now())) return { offered: false, sequence };
     const current = await this.deps.destinations.findByPayment(scope, payment.id);
     if (current === null) return { offered: false, sequence };
-    const limit = await this.limit(scope);
-    if (limit > 0 && sequence >= limit) return { offered: false, sequence };
-    const enabled = (await this.deps.accounts.list(scope)).filter((account) => account.enabled);
-    const next = nextReceivingCard(enabled, current.accountId);
-    if (next === null) return { offered: false, sequence };
+    const decision = decideCardSwitch({
+      limits: await this.limits(scope),
+      now: this.deps.clock.now(),
+      switchCount: history.switchCount,
+      lastSwitchAt: history.lastSwitchAt,
+      shownAccountIds: history.shownAccountIds,
+      currentAccountId: current.accountId,
+      enabled: (await this.deps.accounts.list(scope)).filter((account) => account.enabled),
+    });
+    // A cooldown is temporary: the button stays and the press answers with the wait. Only a
+    // limit or the lack of another card takes it away.
+    if (decision.kind !== 'SWITCH' && decision.kind !== 'COOLDOWN') {
+      return { offered: false, sequence };
+    }
     if ((await this.deps.receipts.countForPayment(scope, payment.id, undefined)) > 0) {
       return { offered: false, sequence };
     }
@@ -248,7 +257,8 @@ export class CardSwitchService {
             tx,
           );
         const current = await this.deps.destinations.findByPayment(scope, paymentId, tx);
-        const sequence = await this.deps.destinations.switchCount(scope, paymentId, tx);
+        const history = await this.deps.destinations.switchHistory(scope, paymentId, tx);
+        const sequence = history.switchCount;
         const closed = await this.closedInvoice(scope, payment, current, now, tx);
         if (closed !== null || current === null) {
           await remember(sequence);
@@ -268,13 +278,32 @@ export class CardSwitchService {
         // A second tap of a keyboard drawn before the last switch: the customer is shown the
         // card recorded now, and nothing is switched twice.
         if (sequence !== input.expectedSequence) return unchanged('STALE');
-        const limit = await this.limit(scope, tx);
-        if (limit > 0 && sequence >= limit) return unchanged('LIMIT');
-        const enabled = (await this.deps.accounts.list(scope, tx)).filter(
-          (account) => account.enabled,
-        );
-        const next = nextReceivingCard(enabled, current.accountId);
-        if (next === null) return unchanged('NO_OTHER_CARD');
+        /*
+         * R5C-1: the limits, decided HERE under the payment's lock from facts read in this same
+         * transaction. The button showing is never the authorisation; a refused press writes
+         * nothing and the card recorded stays the card shown last.
+         */
+        const decision = decideCardSwitch({
+          limits: await this.limits(scope, tx),
+          now,
+          switchCount: history.switchCount,
+          lastSwitchAt: history.lastSwitchAt,
+          shownAccountIds: history.shownAccountIds,
+          currentAccountId: current.accountId,
+          enabled: (await this.deps.accounts.list(scope, tx)).filter((account) => account.enabled),
+        });
+        if (decision.kind === 'LIMIT') return unchanged('LIMIT');
+        if (decision.kind === 'NO_OTHER_CARD') return unchanged('NO_OTHER_CARD');
+        if (decision.kind === 'COOLDOWN') {
+          await remember(sequence);
+          return {
+            outcome: 'COOLDOWN',
+            retryAfterSeconds: decision.retryAfterSeconds,
+            instruction: { payment, destination: current },
+            sequence,
+          };
+        }
+        const next = decision.next;
 
         const recorded = await this.deps.destinations.recordSwitch(
           scope,
@@ -369,8 +398,15 @@ export class CardSwitchService {
     );
   }
 
-  private async limit(scope: TenantContext, tx?: TransactionScope): Promise<number> {
-    return this.deps.settings.valueOf<number>(scope, CARD_SWITCH_LIMIT_SETTING, tx);
+  private async limits(scope: TenantContext, tx?: TransactionScope): Promise<CardSwitchLimits> {
+    const read = (
+      key: (typeof CARD_SWITCH_SETTING_KEYS)[keyof typeof CARD_SWITCH_SETTING_KEYS],
+    ): Promise<number> => this.deps.settings.valueOf<number>(scope, key, tx);
+    return {
+      maxSwitches: await read(CARD_SWITCH_SETTING_KEYS.MAX_SWITCHES),
+      cooldownSeconds: await read(CARD_SWITCH_SETTING_KEYS.COOLDOWN_SECONDS),
+      maxDistinctCards: await read(CARD_SWITCH_SETTING_KEYS.MAX_DISTINCT_CARDS),
+    };
   }
 
   private paymentId(raw: string): PaymentId {

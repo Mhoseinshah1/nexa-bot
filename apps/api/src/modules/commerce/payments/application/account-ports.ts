@@ -201,6 +201,17 @@ export interface PaymentDestinationRepository {
   switchCount(scope: TenantContext, paymentId: PaymentId, tx?: unknown): Promise<number>;
 
   /**
+   * What the customer has been shown on this payment (R5C-1): the switches recorded, when the
+   * last was, and every account shown — the first card included. Read under the payment's row
+   * lock by the press, so the facts a limit is decided on cannot move.
+   */
+  switchHistory(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    tx?: unknown,
+  ): Promise<PaymentSwitchHistory>;
+
+  /**
    * Records one switch, as `sequence`, frozen from `account`. Null when that sequence is
    * already taken (`payment_destination_switches_sequence_key`): another tap won, and this
    * one switched nothing. Called under the payment's row lock.
@@ -217,6 +228,15 @@ export interface PaymentDestinationRepository {
     },
     tx: unknown,
   ): Promise<PaymentDestinationRecord | null>;
+}
+
+/** What a payment's customer has been shown, for the card-switch limits (R5C-1). */
+export interface PaymentSwitchHistory {
+  /** Switches recorded: the greatest sequence, 0 for none. */
+  readonly switchCount: number;
+  readonly lastSwitchAt: Date | null;
+  /** Every distinct account shown, the card first issued included. */
+  readonly shownAccountIds: readonly string[];
 }
 
 /** One recorded switch, as the payment's history reads it (R4 A1). */
