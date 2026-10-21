@@ -6693,7 +6693,9 @@ export const backupRunSummarySchema = z.object({
    * How long each stage took, in milliseconds, by stage. Null on a run from before it was
    * recorded; a stage the run did not reach is absent from the object.
    */
-  phaseDurationsMs: z.partialRecord(z.enum(BACKUP_STAGES), z.number().int().nonnegative()).nullable(),
+  phaseDurationsMs: z
+    .partialRecord(z.enum(BACKUP_STAGES), z.number().int().nonnegative())
+    .nullable(),
 });
 export type BackupRunSummary = z.infer<typeof backupRunSummarySchema>;
 
