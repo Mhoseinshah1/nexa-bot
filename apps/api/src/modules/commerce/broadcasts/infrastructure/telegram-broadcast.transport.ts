@@ -181,13 +181,11 @@ export class TelegramBroadcastTransport implements BroadcastTransport {
     const key = String(scope.tenantId);
     const cached = this.bubbleCache.get(key);
     if (cached !== undefined && cached.until > now) return cached.on;
-    let on = false;
-    try {
-      on = (await rich.modeFor(scope)).enabled;
-    } catch {
-      // Unreadable is off: today's behaviour, never a failed broadcast.
-      on = false;
-    }
+    // Unreadable is off: today's behaviour, never a failed broadcast.
+    const on = await rich.modeFor(scope).then(
+      (mode) => mode.enabled,
+      () => false,
+    );
     this.bubbleCache.set(key, { until: now + 60_000, on });
     return on;
   }
