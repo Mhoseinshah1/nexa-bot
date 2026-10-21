@@ -365,6 +365,8 @@ export interface OpsLogWords {
   resellerOrdinary: string;
   stormHeading: string;
   eventTitle(code: string): string;
+  /** The Persian title of a stalled NON-PROVISION operation; null for an unknown type. */
+  stalledOperationTitle(operationType: string): string | null;
   severity(klass: string): string;
   cleanupLine(countText: string): string;
   reportHealth(state: string): string;
