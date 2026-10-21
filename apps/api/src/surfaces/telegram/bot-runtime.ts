@@ -5688,7 +5688,10 @@ export class BotRuntime {
         updateKey: input.idempotencyKey,
       });
       if (claimed.outcome === 'CLAIMED') claim = claimed.wizard;
-      else if (claimed.outcome === 'STALE') staleWizard = gate.lenient !== true;
+      else if (claimed.outcome === 'STALE') {
+        // Lenient only for a CLOSED wizard; a message another turn still holds is swallowed.
+        staleWizard = gate.lenient !== true || claimed.held === true;
+      }
     }
     /*
      * F1 (round N): a repeated review tap is still answered and nothing else — but with the

@@ -241,10 +241,11 @@ export const WIZARD_GATES: ReadonlyMap<string, WizardGate> = new Map<string, Wiz
    * receipt are all edits of it.
    *
    * LENIENT: a message the wizard no longer lets move (it ended as a receipt or a notice and was
-   * then turned back into the service card, or a double tap found it already claimed) is not a
+   * then turned back into the service card) is not a
    * dead end for the customer. The tap is answered exactly as it was before this gate existed
    * — a quote in a NEW message — and the old message stays closed. Every write behind the tap
-   * re-decides under its own locks and idempotency keys, as for any wizard step.
+   * re-decides under its own locks and idempotency keys, as for any wizard step. A message another
+   * turn still HOLDS (a rapid second tap) is not closed: it is swallowed like any other gate's.
    */
   ['SERVICE_BUY_TRAFFIC', { ...ORDER('PRODUCTS'), lenient: true }],
   ['SERVICE_BUY_TIME', { ...ORDER('PRODUCTS'), lenient: true }],

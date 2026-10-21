@@ -1217,6 +1217,26 @@ describe('the wizard is one message, edited in place', () => {
     expect(calls.find((call) => call.method === 'sendMessage')?.body['text']).toContain('50,000');
   });
 
+  it('two rapid taps on a package make ONE draft order and ONE quote (R5C-1)', async () => {
+    const service = await activeService('addon-double');
+    const addonId = await addon('ADD_TRAFFIC', 'addon-double');
+    await tapOn(840, `v:${service.id}`);
+    const tap = `a:${encodeIdPair(service.id, addonId)}`;
+    const sent: string[] = [];
+    const both = await Promise.all([tapOn(840, tap), tapOn(840, tap)]);
+    expect(both).toHaveLength(2);
+    sent.push(...methods());
+    const [{ n } = { n: '0' }] = await rows<{ n: string }>(
+      sql`SELECT count(*)::text AS n FROM orders
+           WHERE purpose = 'ADD_TRAFFIC' AND tenant_id = ${tenantA.tenantId}`,
+    );
+    expect(n, 'one draft order, not two').toBe('1');
+    expect(
+      sent.filter((method) => method === 'editMessageText' || method === 'sendMessage'),
+      'one quote on the screen',
+    ).toHaveLength(1);
+  });
+
   it('shows the payment code, not the wallet, for a package paid by bank transfer (R5C-1)', async () => {
     const service = await activeService('addon-xfer');
     const addonId = await addon('ADD_TIME', 'addon-xfer');
