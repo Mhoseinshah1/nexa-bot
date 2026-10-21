@@ -180,6 +180,25 @@ describe('Round 5C-2 A: the first usage figure after the backfill is silent', ()
     expect(await sweep(T1 + 180_000)).toBe(0);
   }, 120_000);
 
+  it('NO baseline row at all (the provisioner syncs before the backfill ran): a 92 % sync over a 30 % import figure is silent and is the baseline; a later crossing: exactly 1', async () => {
+    const id = await importOne(6, pct(30n));
+    // No reconcile: the INSERT path of the baseline is the one taken.
+    await sync(id, pct(92n), T1 + 60_000);
+    expect(await sweep(T1 + 61_000)).toBe(0);
+    expect(await kindsSent()).toEqual([]);
+    const baseline = (
+      (
+        await exec(sql`SELECT used_bytes::text AS u FROM service_reminder_baselines
+                       WHERE service_id = ${id}`)
+      ).rows as { u: string }[]
+    )[0]?.u;
+    expect(baseline).toBe(pct(92n).toString());
+
+    await sync(id, pct(100n), T1 + 120_000);
+    expect(await sweep(T1 + 121_000)).toBe(1);
+    expect(await kindsSent()).toEqual(['SERVICE_USAGE_FINAL']);
+  }, 120_000);
+
   it('a stale 85 % row reading 100 % at the first sync is silent too', async () => {
     const id = await importOne(3, pct(85n));
     await lane(T1).reconcileImportedNotices(tenantA as TenantContext, { unbounded: true });
