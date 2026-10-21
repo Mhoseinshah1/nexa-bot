@@ -108,6 +108,16 @@ export type CardSwitchResult =
       readonly instruction: ManualTransferInstruction | null;
     };
 
+/** What a committed refusal stores beside `sequence`, so a replay can say the same thing. */
+type Refusal =
+  | { readonly kind: 'COOLDOWN'; readonly retryAfterSeconds: number }
+  | { readonly kind: 'LIMIT' | 'NO_OTHER_CARD' };
+
+interface RememberedPress {
+  readonly sequence: number;
+  readonly refusal?: Refusal;
+}
+
 export interface CardSwitchServiceDeps {
   readonly payments: Pick<PaymentRepository, 'findById' | 'findByIdForUpdate'>;
   readonly accounts: {
@@ -192,7 +202,7 @@ export class CardSwitchService {
       customerId,
       expectedSequence: input.expectedSequence,
     });
-    const replay = await this.deps.idempotency.find<{ sequence: number }>(
+    const replay = await this.deps.idempotency.find<RememberedPress>(
       scope,
       CUSTOMER_NAMESPACE,
       input.idempotencyKey,
@@ -210,11 +220,32 @@ export class CardSwitchService {
       const destination = await this.deps.destinations.findByPayment(scope, paymentId);
       const closed = await this.closedInvoice(scope, payment, destination, this.deps.clock.now());
       if (closed !== null) return closed;
+      const sequence = await this.deps.destinations.switchCount(scope, paymentId);
+      // A refusal the first press committed is answered again as that refusal, so a redelivery
+      // after a crash before answerCallbackQuery still gives the customer the toast. A record
+      // written before this field existed carries only `sequence` and replays as it always did.
+      const refusal = replay.result.refusal;
+      if (refusal?.kind === 'COOLDOWN') {
+        return {
+          outcome: 'COOLDOWN',
+          retryAfterSeconds: refusal.retryAfterSeconds,
+          instruction: { payment, destination },
+          sequence,
+        };
+      }
+      if (refusal?.kind === 'LIMIT' || refusal?.kind === 'NO_OTHER_CARD') {
+        return {
+          outcome: 'UNCHANGED',
+          reason: refusal.kind,
+          instruction: { payment, destination },
+          sequence,
+        };
+      }
       return {
         outcome: 'UNCHANGED',
         reason: 'STALE',
         instruction: { payment, destination },
-        sequence: await this.deps.destinations.switchCount(scope, paymentId),
+        sequence,
       };
     }
 
@@ -246,14 +277,14 @@ export class CardSwitchService {
          */
         const payment = await this.deps.payments.findByIdForUpdate(scope, paymentId, tx);
         if (payment === null || payment.customerId !== customerId) throw this.notFound();
-        const remember = async (sequence: number): Promise<void> =>
+        const remember = async (sequence: number, refusal?: Refusal): Promise<void> =>
           rememberOnce(
             this.deps.idempotency,
             scope,
             CUSTOMER_NAMESPACE,
             input.idempotencyKey,
             requestHash,
-            { sequence },
+            refusal === undefined ? { sequence } : { sequence, refusal },
             tx,
           );
         const current = await this.deps.destinations.findByPayment(scope, paymentId, tx);
@@ -267,7 +298,7 @@ export class CardSwitchService {
         const unchanged = async (
           reason: 'STALE' | 'LIMIT' | 'NO_OTHER_CARD',
         ): Promise<CardSwitchResult> => {
-          await remember(sequence);
+          await remember(sequence, reason === 'STALE' ? undefined : { kind: reason });
           return {
             outcome: 'UNCHANGED',
             reason,
@@ -295,7 +326,10 @@ export class CardSwitchService {
         if (decision.kind === 'LIMIT') return unchanged('LIMIT');
         if (decision.kind === 'NO_OTHER_CARD') return unchanged('NO_OTHER_CARD');
         if (decision.kind === 'COOLDOWN') {
-          await remember(sequence);
+          await remember(sequence, {
+            kind: 'COOLDOWN',
+            retryAfterSeconds: decision.retryAfterSeconds,
+          });
           return {
             outcome: 'COOLDOWN',
             retryAfterSeconds: decision.retryAfterSeconds,

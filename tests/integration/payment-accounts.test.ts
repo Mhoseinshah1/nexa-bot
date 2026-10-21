@@ -1421,6 +1421,34 @@ describe('payment accounts and the destination a payment freezes', () => {
         expect((await ctx.container.cardSwitch.offer(tenantA, payment)).offered).toBe(true);
       });
 
+      it('a redelivered cooldown press is answered as the same cooldown, with the same wait', async () => {
+        await threeCards('cdr');
+        await setLimit('payments.card_switch_cooldown_seconds', 3600);
+        await setLimit('payments.card_switch_max_distinct_cards', 3);
+        const { payment } = await issue('cdr-pay', await awaitingPayment('cdr'));
+        expect((await tap(payment.id, 0, 'cdr-1')).outcome).toBe('SWITCHED');
+        const early = await tap(payment.id, 1, 'cdr-2');
+        if (early.outcome !== 'COOLDOWN') throw new Error('expected a cooldown');
+        const replayed = await tap(payment.id, 1, 'cdr-2');
+        expect(replayed).toMatchObject({
+          outcome: 'COOLDOWN',
+          retryAfterSeconds: early.retryAfterSeconds,
+        });
+        expect(await switchRows(payment.id)).toHaveLength(1);
+      });
+
+      it('a redelivered limit press is answered as the same LIMIT', async () => {
+        await threeCards('lmr');
+        await setLimit('payments.card_switch_cooldown_seconds', 0);
+        await setLimit('payments.card_switch_max_distinct_cards', 1);
+        const { payment } = await issue('lmr-pay', await awaitingPayment('lmr'));
+        expect(await tap(payment.id, 0, 'lmr-1')).toMatchObject({ reason: 'LIMIT' });
+        expect(await tap(payment.id, 0, 'lmr-1')).toMatchObject({
+          outcome: 'UNCHANGED',
+          reason: 'LIMIT',
+        });
+      });
+
       it('cooldown of zero lets presses follow each other', async () => {
         await threeCards('cd0');
         await setLimit('payments.card_switch_cooldown_seconds', 0);
