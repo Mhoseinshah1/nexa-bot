@@ -752,7 +752,8 @@ export const CUSTOMER_NOTIFICATION_QUIET_HOURS: Readonly<
   // R4 A5: an administrator acted now; the customer is told now.
   WALLET_ADMIN_CREDITED: false,
   WALLET_ADMIN_DEBITED: false,
-  ACCOUNT_UNBLOCKED: false, // R5C-1: the receipt of a package the customer just paid for is expected NOW.
+  ACCOUNT_UNBLOCKED: false,
+  // R5C-1: the receipt of a package the customer just paid for is expected NOW.
   SERVICE_TRAFFIC_ADDED: false,
   SERVICE_TIME_ADDED: false,
 };
@@ -837,7 +838,8 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   // R4 A5: values read at send time from the ledger entry the notification names.
   WALLET_ADMIN_CREDITED: 'bot.wallet.admin_credited',
   WALLET_ADMIN_DEBITED: 'bot.wallet.admin_debited',
-  ACCOUNT_UNBLOCKED: 'bot.account.unblocked', // R5C-1 item 4: values read at send time from the operation the notification names.
+  ACCOUNT_UNBLOCKED: 'bot.account.unblocked',
+  // R5C-1 item 4: values read at send time from the operation the notification names.
   SERVICE_TRAFFIC_ADDED: 'bot.service.addon_traffic_added',
   SERVICE_TIME_ADDED: 'bot.service.addon_time_added',
 };
