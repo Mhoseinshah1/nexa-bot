@@ -27,7 +27,8 @@ const tenant = {
   botInstanceId: null,
 } as TenantContext;
 const presenter = new OperationalEventPresenter({
-  facts: {} as unknown as OpsLogFacts,
+  // R5C-2 C1: a service that cannot be read keeps the generic layout this file pins.
+  facts: { service: async () => null } as unknown as OpsLogFacts,
   words: i18nOpsLogWords,
 });
 const recorded: RecordedOperationalEvent = {
