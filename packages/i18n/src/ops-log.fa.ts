@@ -120,6 +120,24 @@ export const OPS_LOG_WORDS_FA = {
   none: '—',
   /** The title of an operational event whose code the Persian label map does not know. */
   unknownEvent: 'رویداد سامانه',
+  /**
+   * `provisioning.stalled` for an operation that is NOT a paid PROVISION (R5A-2 item 6): the
+   * title names what actually stalled. The code is unchanged — only the rendered words vary by
+   * the operation type the event's context carries.
+   */
+  stalledOperation: {
+    RENEW: 'تمدید سرویس ناموفق ماند',
+    ADD_TRAFFIC: 'افزودن ترافیک به سرویس ناموفق ماند',
+    ADD_TIME: 'افزودن زمان به سرویس ناموفق ماند',
+    SUSPEND: 'تعلیق سرویس ناموفق ماند',
+    RESUME: 'ازسرگیری سرویس ناموفق ماند',
+    TERMINATE: 'حذف سرویس ناموفق ماند',
+    SYNC_USAGE: 'خواندن مصرف سرویس ناموفق ماند',
+    ROTATE_SUBSCRIPTION: 'تعویض لینک اشتراک سرویس ناموفق ماند',
+    RECONCILE: 'تطبیق سرویس با پنل ناموفق ماند',
+    ADD_DEVICES: 'افزایش تعداد دستگاه سرویس ناموفق ماند',
+    CHANGE_LOCATION: 'تغییر مکان سرویس ناموفق ماند',
+  },
 
   paymentMethods: {
     WALLET: 'کیف پول',

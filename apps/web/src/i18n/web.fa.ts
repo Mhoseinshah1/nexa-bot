@@ -96,6 +96,7 @@ export const WEB_FA = {
   'web.settings_group_support': 'پشتیبانی و کانال‌ها',
   'web.settings_group_fx': 'نرخ ارز',
   'web.settings_group_ops': 'گزارش‌های مدیریتی',
+  'web.settings_group_customer_notices': 'اعلان‌های مشتری',
   'web.settings_group_other': 'سایر تنظیمات',
   'web.settings_current_value': 'مقدار فعلی',
   'web.settings_value_unset': 'تنظیم نشده',
@@ -6371,6 +6372,11 @@ export const WEB_FA = {
   'web.opslog_type_report_financial': 'گزارش شبانه — مالی',
   'web.opslog_type_report_panels': 'گزارش شبانه — پنل‌ها و نماینده‌ها',
   'web.opslog_type_backup_file': 'فایل بکاپ',
+  'web.cn_pause_title': 'توقف همهٔ پیام‌های خودکار به مشتریان',
+  'web.cn_pause_hint':
+    'خاموش: پیام‌های خودکار طبق معمول ارسال می‌شوند. روشن: هیچ یادآوری یا اعلان خودکاری (انقضا، مصرف، کیف پول، پرداخت یا سفارش منقضی، تأخیر در ساخت، یادآوری نمایندگان) به مشتری یا نماینده نمی‌رود؛ این پیام‌ها بعداً هم فرستاده نمی‌شوند و با خاموش‌کردن، پیام قدیمی ارسال نمی‌شود. پیام همگانی، پاسخ مستقیم مدیر و پاسخ به کار خود مشتری ارسال می‌شود.',
+  'web.cn_pause_on': 'روشن — پیام‌های خودکار ارسال نمی‌شود',
+  'web.cn_pause_off': 'خاموش — پیام‌های خودکار ارسال می‌شود',
   'web.opslog_storm_enabled': 'ادغام خطاهای تکراری در زمان طوفان',
   'web.opslog_storm_enabled_hint':
     'خاموش (پیش‌فرض): هر خطا پیام جدا دارد. روشن: وقتی بیش از حد مجاز خطای یکسان در یک بازه بیاید، بقیه هر بازه یک‌جا گزارش می‌شود.',

@@ -95,6 +95,8 @@ const EXPECTED: Readonly<Record<string, OpsLogTopicCategory>> = {
   'access.permission_denied': 'SECURITY',
   'auth.login_locked_out': 'SECURITY',
   'admin.': 'SECURITY',
+  'customer_notices.paused': 'SYSTEM',
+  'customer_notices.resumed': 'SYSTEM',
   'outbox.message_exhausted': 'SYSTEM',
   'notification.sweep_withdrawn': 'SYSTEM',
   'notification.reminder_burst': 'ERRORS',

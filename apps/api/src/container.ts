@@ -43,6 +43,7 @@ import {
   faqNumberMarker,
   isSystemContext,
   systemJobActor,
+  CUSTOMER_NOTICES_PAUSE_SETTING_KEY,
   type PanelBalancingStrategy,
 } from '@nexa/contracts';
 import type {
@@ -1030,6 +1031,8 @@ export interface Container {
   readonly customerNotifications: DrizzleCustomerNotificationRepository;
   /** HF-A9: the quiet window the lane defers reminders by — the instance it is given. */
   readonly reminderQuietHours: SettingsQuietHoursReader;
+  /** R5A-2 item 5: the emergency switch, as the worker's lane reads it. */
+  readonly automatedNoticesPaused: (scope: TenantContext) => Promise<boolean>;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
   /**
@@ -4163,6 +4166,8 @@ export function createContainer(
       // the publish is its one writer.
       new MainMenuSettingGuard(mainMenuBuilderRepository),
     ],
+    // R5A-2 item 5: the emergency switch's announcement is projected to the operations group.
+    opsLog,
   );
 
   /**
@@ -5373,6 +5378,9 @@ export function createContainer(
     features: featureFlagResolver,
     presentation: templatePresentation,
   });
+  /** R5A-2 item 5: whether the owner's emergency switch is on; read per row, never cached. */
+  const automatedNoticesPaused = async (scope: TenantContext): Promise<boolean> =>
+    (await settingsResolver.valueOf<boolean>(scope, CUSTOMER_NOTICES_PAUSE_SETTING_KEY)) === true;
   /**
    * The customer notification lane: repository, dispatcher and timer.
    *
@@ -5537,6 +5545,10 @@ export function createContainer(
       },
       // HF-A9: reminders claimed inside the tenant's quiet window wait for its end.
       quietHours: reminderQuietHours,
+      // R5A-2 item 5: the owner's emergency switch for automated customer messages.
+      automatedPaused: async (scope) =>
+        (await settingsResolver.valueOf<boolean>(scope, CUSTOMER_NOTICES_PAUSE_SETTING_KEY)) ===
+        true,
       /*
        * Round 4 PR-H: the ceiling on automatic reminders and the burst alarm. The settings
        * are read in the claim's own transaction; the alarm goes through the one recorder.
@@ -7756,6 +7768,7 @@ export function createContainer(
     telegramMessageRetentionLoop,
     customerNotifications: customerNotificationRepository,
     reminderQuietHours,
+    automatedNoticesPaused,
     audit,
     opsLog,
     opsLogWriter,

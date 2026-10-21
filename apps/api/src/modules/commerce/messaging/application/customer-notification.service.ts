@@ -3,6 +3,7 @@ import {
   CUSTOMER_NOTIFICATION_BACKOFF_MS,
   CUSTOMER_NOTIFICATION_KINDS,
   CUSTOMER_NOTIFICATION_MAX_ATTEMPTS,
+  CUSTOMER_NOTIFICATION_AUTOMATED,
   CUSTOMER_NOTIFICATION_PRECONDITIONS,
   CUSTOMER_NOTIFICATION_QUIET_HOURS,
   CUSTOMER_NOTIFICATION_TEMPLATES,
@@ -425,6 +426,11 @@ export interface CustomerNotificationDeps {
    * means no quiet hours at all, which is what every kind had before.
    */
   readonly quietHours?: QuietHoursReader;
+  /**
+   * R5A-2 item 5: whether the owner's emergency switch is on for this tenant. Read per row of
+   * an automated kind, never cached. Absent means the switch does not exist in this build.
+   */
+  readonly automatedPaused?: (scope: TenantContext) => Promise<boolean>;
   /**
    * R2 (v0.3.5 real-test item 11): what `SERVICE_RENEWED` renders — the renewed account, the
    * duration bought, the new expiry and the payment's tracking code — read at send time from
@@ -1112,6 +1118,38 @@ export class CustomerNotificationService {
     };
   }
 
+  /**
+   * R5A-2 item 5: the owner's emergency switch. While `customer_notices.pause_automated` is on,
+   * a row of an AUTOMATED kind (`CUSTOMER_NOTIFICATION_AUTOMATED`) is not sent: it is resolved
+   * SUPERSEDED, unsent, with no attempt spent. Superseded rather than put back, so that
+   * switching the switch off does not release a backlog onto customers; the fact that raised
+   * it (a reminder row) stays raised and is not raised again. Every other kind — a reply to
+   * the customer's own action, an operator's message, a broadcast — is untouched.
+   *
+   * Its own function, asked before the precondition and the stamp, so the decision is one
+   * readable rule. Returns whether the row was resolved here.
+   */
+  private async heldByEmergencySwitch(
+    scope: TenantContext,
+    row: CustomerNotificationRecord,
+  ): Promise<boolean> {
+    if (this.deps.automatedPaused === undefined) return false;
+    if (CUSTOMER_NOTIFICATION_AUTOMATED[row.kind] !== true) return false;
+    if (!(await this.deps.automatedPaused(scope))) return false;
+    const at = this.deps.clock.now();
+    await this.deps.uow.run(scope, async (tx) =>
+      this.deps.notifications.record(
+        scope,
+        row.id,
+        'SUPERSEDED',
+        { resolvedAt: at, nextAttemptAt: null },
+        at,
+        tx,
+      ),
+    );
+    return true;
+  }
+
   private async deliverOne(
     scope: TenantContext,
     row: CustomerNotificationRecord,
@@ -1148,6 +1186,11 @@ export class CustomerNotificationService {
         );
         return 'unsupported';
       }
+
+      /*
+       * The emergency switch (R5A-2 item 5), before anything is stamped or sent.
+       */
+      if (await this.heldByEmergencySwitch(scope, row)) return 'superseded';
 
       /*
        * The precondition, re-checked AFTER the claim and before the send.
