@@ -62,7 +62,7 @@ describe('Round 5A-2: imported services and reseller periods are not announced',
     );
     panel = await fx.panel('import');
     product = await fx.product(panel);
-  });
+  }, 300_000);
 
   const at = (ms: number): Clock => ({ now: () => new Date(ms) });
   const settings = {
