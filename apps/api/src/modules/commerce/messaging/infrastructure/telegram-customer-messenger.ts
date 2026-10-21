@@ -85,6 +85,7 @@ import {
   richMessageBody,
   richTableBlock,
   type RichBlock,
+  plainTableText,
 } from '../../../../infrastructure/telegram/rich-message.js';
 import type { InlineButtonStyleReader } from '../application/inline-buttons.js';
 import {
@@ -534,7 +535,10 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       return { outcome: 'REFUSED' };
     }
 
-    const text = await this.templates.render(scope, message.templateKey, message.values);
+    // R5C-2 B2: a hand-written table reads as plain lines wherever it is not sent as a rich table.
+    const text = plainTableText(
+      await this.templates.render(scope, message.templateKey, message.values),
+    );
     /*
      * The FORMAT is a property of the key, read from the frozen catalogue.
      *
@@ -1226,7 +1230,9 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
   async edit(scope: TenantContext, message: CustomerEditMessage): Promise<CustomerSendResult> {
     const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
     if (token === null) return { outcome: 'REFUSED' };
-    const rendered = await this.templates.render(scope, message.templateKey, message.values);
+    const rendered = plainTableText(
+      await this.templates.render(scope, message.templateKey, message.values),
+    );
     const format = templateDefinition(message.templateKey).format;
     const html = format === 'TELEGRAM_HTML';
     /*
@@ -1514,6 +1520,11 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     };
   }
 
+  /** R5C-2 B3: whether inline buttons sit inside the bubble for this tenant. */
+  async buttonsInBubble(scope: TenantContext): Promise<boolean> {
+    return (await this.richModeFor(scope)).enabled;
+  }
+
   /** R4 PR-F: the tenant's rich-message switches; unreadable is off, today's behaviour. */
   private async richModeFor(scope: TenantContext): Promise<RichMessageMode> {
     const rich = this.rich;
@@ -1588,7 +1599,9 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       layout: RICH_SCREEN_LAYOUTS[message.templateKey] ?? {},
     });
     if (text === null) return null;
-    const table = await this.planTable(scope, message.buttons ?? []);
+    // R5C-2 B2: a table only when «نمایش پلن‌ها به‌صورت جدول» is on; off is the plain list.
+    const table =
+      mode.planTable === true ? await this.planTable(scope, message.buttons ?? []) : null;
     const layout = richButtonLayout(premium ? labelled : withoutButtonIcons(labelled));
     return {
       blocks: [...text, ...(table === null ? [] : [table]), ...layout.blocks],

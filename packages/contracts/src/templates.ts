@@ -7239,15 +7239,45 @@ export const TEMPLATES = [
         required: true,
         repeatable: false,
       },
+      {
+        token: 'minGb',
+        type: 'STRING',
+        description: 'The smallest volume the configured rules price here, in GB.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'maxGb',
+        type: 'STRING',
+        description: 'The largest volume the configured rules price here, in GB.',
+        required: true,
+        repeatable: false,
+      },
     ],
   },
   {
     key: 'bot.custom_service.invalid_volume',
     description:
       'The typed volume is not a positive GB figure with at most two decimals. The window ' +
-      'stays open, so the customer simply sends it again.',
+      'stays open, so the customer simply sends it again. Names the volume as the wrong input ' +
+      'and repeats the allowed range.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    placeholders: [
+      {
+        token: 'minGb',
+        type: 'STRING',
+        description: 'The smallest volume the configured rules price here, in GB.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'maxGb',
+        type: 'STRING',
+        description: 'The largest volume the configured rules price here, in GB.',
+        required: true,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.custom_service.ask_days',
@@ -7263,12 +7293,60 @@ export const TEMPLATES = [
         required: true,
         repeatable: false,
       },
+      {
+        token: 'minDays',
+        type: 'STRING',
+        description: 'The fewest days the configured rules price here.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'maxDays',
+        type: 'STRING',
+        description: 'The most days the configured rules price here.',
+        required: true,
+        repeatable: false,
+      },
     ],
   },
   {
     key: 'bot.custom_service.invalid_days',
     description:
-      'The typed day count is not a whole positive number within the limit. The window stays open.',
+      'The typed day count is not a whole positive number within the allowed range. The window ' +
+      'stays open. Names the days as the wrong input and repeats the range.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'minDays',
+        type: 'STRING',
+        description: 'The fewest days the configured rules price here.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'maxDays',
+        type: 'STRING',
+        description: 'The most days the configured rules price here.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.custom_service.volume_unpriced',
+    description:
+      'The typed volume is inside the allowed range but no price rule covers it for this ' +
+      'customer on this location (a gap between rules). Names the volume as the part that ' +
+      'cannot be priced; the window stays open.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.custom_service.days_unpriced',
+    description:
+      'The typed days are inside the allowed range but no price rule covers them for this ' +
+      'customer on this location (a gap between rules). Names the duration as the part that ' +
+      'cannot be priced; the window stays open.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

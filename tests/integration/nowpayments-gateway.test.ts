@@ -93,6 +93,10 @@ interface FakePayment {
   price_amount: number;
   price_currency: string;
   pay_currency: string;
+  pay_amount: number;
+  actually_paid: number;
+  outcome_amount: number;
+  pay_address: string;
   updated_at: string;
 }
 
@@ -160,6 +164,11 @@ class FakeNowPayments {
       price_amount: priceAmount ?? invoice.priceAmount,
       price_currency: 'usd',
       pay_currency: 'usdttrc20',
+      // The coin side a real record carries (R5C-2 C4).
+      pay_amount: 10.05,
+      actually_paid: 10.05,
+      outcome_amount: 9.99,
+      pay_address: 'TXyzABCDEFGHJKLMNPQRSTUVWXYZ123456',
       updated_at: new Date().toISOString(),
     };
     this.payments.set(paymentId, payment);
@@ -522,6 +531,16 @@ describe('NOWPayments, through the one settlement path', () => {
         { reason: 'TOPUP_GATEWAY', amount: String(TOPUP_TOMAN), payment_id: paymentId },
       ]);
       expect((await invoiceOf(paymentId)).outcome).toBe('SETTLED');
+      // R5C-2 C4: the coin side of the record the deciding read already fetched, stored on
+      // the invoice with no further provider call (the one read above is the only one).
+      expect(await invoiceOf(paymentId)).toMatchObject({
+        crypto_pay_currency: 'USDTTRC20',
+        crypto_requested: '10.05',
+        crypto_paid: '10.05',
+        crypto_received: '9.99',
+        crypto_pay_address: 'TXyzABCDEFGHJKLMNPQRSTUVWXYZ123456',
+      });
+      expect(fake.reads).toEqual(['5077125051']);
     });
 
     it('treats a duplicate IPN as a duplicate, and credits exactly once whatever repeats', async () => {

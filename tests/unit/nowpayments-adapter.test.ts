@@ -19,6 +19,7 @@ import {
 } from '../../apps/api/src/modules/commerce/payments/infrastructure/nowpayments-signature';
 import {
   centsOfPriceAmount,
+  cryptoDecimalOf,
   nowpaymentsOrderId,
   nowpaymentsVerdict,
   priceAmountOfCents,
@@ -413,7 +414,33 @@ describe('the authoritative read', () => {
       finalAmount: null,
       providerPaymentId: '5077125051',
       fundsDetected: true,
+      // R5C-2 C4: the coin side of the SAME record, in the coin's own unit as exact text.
+      crypto: {
+        payCurrency: 'MANA',
+        requested: '155.38559757',
+        paid: '155.38559757',
+        received: '1131.7812095',
+        payAddress: '0xd1cDE08A07cD25adEbEd35c3867a59228C09B606',
+      },
     });
+    // No new provider call: the figures come from the one read that decided the status.
+    expect(calls).toHaveLength(1);
+  });
+
+  it('R5C-2 C4: a record with no coin side reports none, and a hostile address is dropped', async () => {
+    const bare = { ...PAYMENT } as Record<string, unknown>;
+    delete bare['pay_amount'];
+    delete bare['actually_paid'];
+    delete bare['outcome_amount'];
+    delete bare['pay_currency'];
+    bare['pay_address'] = '<script>alert(1)</script>';
+    const { adapter } = adapterWith(() => json(200, bare));
+    const outcome = await adapter.inquire(
+      API_KEY,
+      INVOICE_ID,
+      context({ hintedPaymentId: '5077125051' }),
+    );
+    expect(outcome).toMatchObject({ kind: 'OBSERVED', crypto: null });
   });
 
   it('reads ONLY the hinted payment when it is decisive (finished for the price)', async () => {
@@ -646,5 +673,19 @@ describe('reconciliation evidence, per provider vocabulary', () => {
       expect(tp('FAILED', 'canceled', null)).toBe(true);
       expect(tp('FAILED', 'finished', false)).toBe(false);
     }
+  });
+});
+
+describe('R5C-2 C4: the crypto figures are exact decimal text, or absent', () => {
+  it('writes a JSON number out in full, trims trailing zeros, and refuses anything unreadable', () => {
+    expect(cryptoDecimalOf(155.38559757)).toBe('155.38559757');
+    expect(cryptoDecimalOf(1e-7)).toBe('0.0000001');
+    expect(cryptoDecimalOf(12)).toBe('12');
+    expect(cryptoDecimalOf('0.50')).toBe('0.5');
+    expect(cryptoDecimalOf(-1)).toBeNull();
+    expect(cryptoDecimalOf(Number.NaN)).toBeNull();
+    expect(cryptoDecimalOf('1e5')).toBeNull();
+    expect(cryptoDecimalOf('12 BTC')).toBeNull();
+    expect(cryptoDecimalOf(null)).toBeNull();
   });
 });

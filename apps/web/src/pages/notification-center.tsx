@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { OPS_LOG_WORDS_FA } from '@nexa/i18n';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
 import {
@@ -125,7 +126,22 @@ const PREFIX_TITLES: readonly (readonly [string, WebKey])[] = [
   ['maintenance.', 'web.nc_t_incident'],
 ];
 
-export function titleOf(code: string, category: NotificationCategory): string {
+export function titleOf(
+  code: string,
+  category: NotificationCategory,
+  operationType?: string | null,
+): string {
+  /*
+   * R5C-2 C1: `provisioning.stalled` is recorded for every provisioning operation. Only a
+   * service BUILD reads «ساخت سرویس متوقف مانده است»; any other operation is named by the
+   * same Persian words the operations log uses (the shared catalogue), never a build.
+   */
+  if (code === 'provisioning.stalled' && operationType !== undefined && operationType !== null) {
+    const named = (OPS_LOG_WORDS_FA.stalledOperation as Record<string, string | undefined>)[
+      operationType
+    ];
+    if (named !== undefined) return named;
+  }
   const exact = TITLES[code];
   if (exact !== undefined) return t(exact);
   const prefixed = PREFIX_TITLES.find(([prefix]) => code.startsWith(prefix));
@@ -392,7 +408,7 @@ function InboxItem({
   onToggle: () => void;
   onOpen: (event: React.MouseEvent<HTMLAnchorElement>) => void;
 }) {
-  const title = titleOf(row.code, row.category);
+  const title = titleOf(row.code, row.category, row.operationType);
   return (
     <li className={row.read ? 'nc-item' : 'nc-item unread'} aria-label={title}>
       <div className="nc-head">

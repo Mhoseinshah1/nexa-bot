@@ -506,6 +506,22 @@ describe('a draft that moved on while it was being edited (PR #245, Codex CX2 an
     expect(second?.body).toMatchObject({ expectedVersion: 4, body: 'متن من' });
   });
 
+  it('R5C-2 B2: «افزودن جدول» inserts a table skeleton, and the preview draws it as a table', async () => {
+    stubApi([
+      OPTIONS,
+      { url: `/broadcasts/${ID}`, body: { broadcast: broadcast() } },
+      { url: '/broadcasts', body: { broadcasts: [], nextCursor: null, presentation: TEHRAN } },
+    ]);
+    renderPage(<BroadcastDetailPage id={ID} denied={false} maySend />);
+    const body = (await screen.findByLabelText('متن پیام')) as HTMLTextAreaElement;
+    fireEvent.change(body, { target: { value: 'قیمت‌ها' } });
+    fireEvent.click(screen.getByRole('button', { name: 'افزودن جدول' }));
+    await waitFor(() => expect(body.value).toBe(`قیمت‌ها\n${t('web.table_block_skeleton')}`));
+    // The preview is a real table (header cells and a data row), not pipes in a code block.
+    await waitFor(() => expect(document.querySelectorAll('.preview-table th')).toHaveLength(2));
+    expect(document.querySelectorAll('.preview-table td')).toHaveLength(2);
+  });
+
   it('sends no audience key at its default, so an older server accepts the save (review m3)', async () => {
     const api = stubApi([
       OPTIONS,

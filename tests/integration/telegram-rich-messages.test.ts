@@ -166,11 +166,21 @@ describe('rich messages over Telegram', () => {
     expect(last?.body).not.toHaveProperty('rich_message');
   });
 
+  it('on without the table switch: the rich plan list has NO table (R5C-2 B2)', async () => {
+    await setFlag('rich_messages', true);
+    await tap(category());
+    const on = screens().at(-1);
+    const blocks = (on?.body['rich_message'] as { blocks: { type: string }[] }).blocks;
+    expect(blocks.map((block) => block.type)).toEqual(['heading', 'buttons', 'buttons']);
+    expect(JSON.stringify(blocks)).toContain('پلن پایه');
+  });
+
   it('on: the plan list is a rich message with its table, and routes exactly as off', async () => {
     await tap(category());
     const off = screens().at(-1);
     sent = [];
     await setFlag('rich_messages', true);
+    await setFlag('rich_plan_table', true);
     await tap(category());
     const on = screens().at(-1);
     expect(on?.url.endsWith('/editMessageText')).toBe(true);

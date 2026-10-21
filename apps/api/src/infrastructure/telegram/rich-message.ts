@@ -99,7 +99,15 @@ export function richBlocksFromText(source: RichTextSource): RichBlock[] | null {
     if (list !== null) blocks.push({ type: 'list', items: list });
     list = null;
   };
-  for (const line of lines) {
+  const tables = tablesIn(lines);
+  for (const [at, line] of lines.entries()) {
+    const table = tables.get(at);
+    if (table !== undefined) {
+      closeList();
+      // A table is written once, at its first row; its other rows were consumed with it.
+      if (table.block !== null) blocks.push(table.block);
+      continue;
+    }
     const shown = projection(line);
     if (shown.trim() === '') {
       closeList();
@@ -134,6 +142,130 @@ export function richBlocksFromText(source: RichTextSource): RichBlock[] | null {
     }
   }
   return blocks;
+}
+
+// ---------------------------------------------------------------------------
+// Tables written in a text (R5C-2 B2)
+// ---------------------------------------------------------------------------
+
+/**
+ * A table the owner writes by hand in a template or a broadcast: consecutive lines that start
+ * and end with `|`, cells between pipes. The first row is the header; a row of only dashes
+ * (`| --- | --- |`, as in Markdown) is a separator and is dropped. Every row must have the same
+ * number of cells, and there must be a header and at least one data row — anything else is
+ * ordinary paragraphs, so a stray line with pipes is never turned into a one-cell table.
+ */
+const PIPE_ROW = /^\s*\|.*\|\s*$/u;
+const SEPARATOR_CELL = /^:?-{3,}:?$/u;
+
+/** The cells of one pipe row, trimmed; null when the line is not a pipe row. */
+function pipeCells(line: Line): RichText[] | null {
+  if (!PIPE_ROW.test(projection(line))) return null;
+  const cells: RichText[][] = [[]];
+  for (const node of line) {
+    if (typeof node !== 'string') {
+      (cells[cells.length - 1] as RichText[]).push(node);
+      continue;
+    }
+    node.split('|').forEach((segment, index) => {
+      if (index > 0) cells.push([]);
+      if (segment !== '') (cells[cells.length - 1] as RichText[]).push(segment);
+    });
+  }
+  // Text before the first pipe and after the last is the row's edge, not a cell.
+  const inner = cells.slice(1, -1);
+  if (inner.length === 0) return null;
+  return inner.map((parts) => trimmedCell(parts));
+}
+
+function trimmedCell(parts: RichText[]): RichText {
+  const copy = [...parts];
+  if (typeof copy[0] === 'string') copy[0] = copy[0].replace(/^\s+/u, '');
+  const last = copy.length - 1;
+  if (typeof copy[last] === 'string') copy[last] = (copy[last] as string).replace(/\s+$/u, '');
+  const kept = copy.filter((part) => part !== '');
+  if (kept.length === 0) return '';
+  return kept.length === 1 ? (kept[0] as RichText) : kept;
+}
+
+function isSeparatorRow(cells: readonly RichText[]): boolean {
+  return cells.every((cell) => typeof cell === 'string' && SEPARATOR_CELL.test(cell));
+}
+
+/**
+ * The tables in `lines`: for the index of each line a table consumed, `block` is the table
+ * itself on its FIRST line and null on the rest.
+ */
+function tablesIn(lines: readonly Line[]): Map<number, { readonly block: RichBlock | null }> {
+  const found = new Map<number, { readonly block: RichBlock | null }>();
+  let at = 0;
+  while (at < lines.length) {
+    const first = pipeCells(lines[at] as Line);
+    if (first === null) {
+      at += 1;
+      continue;
+    }
+    const rows: { readonly index: number; readonly cells: RichText[] }[] = [];
+    let end = at;
+    while (end < lines.length) {
+      const cells = pipeCells(lines[end] as Line);
+      if (cells === null) break;
+      rows.push({ index: end, cells });
+      end += 1;
+    }
+    const data = rows.filter((row) => !isSeparatorRow(row.cells));
+    const header = data[0];
+    const widths = new Set(data.map((row) => row.cells.length));
+    if (header !== undefined && data.length >= 2 && widths.size === 1) {
+      rows.forEach((row, position) => {
+        found.set(row.index, {
+          block:
+            position === 0
+              ? richTableBlock({
+                  header: header.cells,
+                  rows: data.slice(1).map((row) => row.cells),
+                  compact: true,
+                })
+              : null,
+        });
+      });
+    }
+    at = end;
+  }
+  return found;
+}
+
+/**
+ * A text with its hand-written tables as plain lines, for a message that is NOT rich: the
+ * separator row is dropped and each row reads `a | b | c`. Used wherever the rich block is
+ * not sent, so a table never reaches a customer as a wall of dashes. Lines that are not pipe
+ * rows are returned byte for byte.
+ */
+export function plainTableText(text: string): string {
+  if (!text.includes('|')) return text;
+  const lines = text.split('\n');
+  const out: string[] = [];
+  let at = 0;
+  while (at < lines.length) {
+    if (!PIPE_ROW.test(lines[at] as string)) {
+      out.push(lines[at] as string);
+      at += 1;
+      continue;
+    }
+    let end = at;
+    while (end < lines.length && PIPE_ROW.test(lines[end] as string)) end += 1;
+    const run = lines
+      .slice(at, end)
+      .map((line) =>
+        (/^\s*\|(.*)\|\s*$/u.exec(line)?.[1] ?? '').split('|').map((cell) => cell.trim()),
+      );
+    const data = run.filter((cells) => !cells.every((cell) => SEPARATOR_CELL.test(cell)));
+    const isTable = data.length >= 2 && new Set(data.map((cells) => cells.length)).size === 1;
+    if (isTable) out.push(...data.map((cells) => cells.join(' | ')));
+    else out.push(...lines.slice(at, end));
+    at = end;
+  }
+  return out.join('\n');
 }
 
 function paragraph(line: Line): RichBlock {

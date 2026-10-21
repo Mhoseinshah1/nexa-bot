@@ -184,4 +184,23 @@ describe('the titles', () => {
       );
     }
   });
+
+  it('R5C-2 C1: a stalled provisioning row names the operation that stalled, never a build', () => {
+    // A service build keeps its title, with or without a type.
+    expect(titleOf('provisioning.stalled', 'PROVISIONING')).toBe('ساخت سرویس متوقف مانده است');
+    expect(titleOf('provisioning.stalled', 'PROVISIONING', 'PROVISION')).toBe(
+      'ساخت سرویس متوقف مانده است',
+    );
+    // Any other operation reads as itself.
+    expect(titleOf('provisioning.stalled', 'PROVISIONING', 'RENEW')).toBe(
+      'تمدید سرویس ناموفق ماند',
+    );
+    expect(titleOf('provisioning.stalled', 'PROVISIONING', 'SYNC_USAGE')).toBe(
+      'خواندن مصرف سرویس ناموفق ماند',
+    );
+    // The type only retitles this code.
+    expect(titleOf('backup.run_failed', 'BACKUPS', 'RENEW')).toBe(
+      titleOf('backup.run_failed', 'BACKUPS'),
+    );
+  });
 });

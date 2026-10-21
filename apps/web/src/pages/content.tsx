@@ -20,6 +20,7 @@ import {
 import { formatNumber, formatTimestamp } from '../format';
 import { finalAnswer } from '../polling';
 import { useSubmissionKey } from '../submission-key';
+import { insertTable } from '../table-text';
 import { t, type WebKey } from '../i18n/web.fa';
 import {
   TEMPLATE_GROUPS,
@@ -572,6 +573,20 @@ export const TemplateCard = memo(function TemplateCard({
   // The RAW body. The override when there is one, otherwise the default — never
   // anything that has been through the renderer.
   const [draft, setDraft] = useState(template.overrideBody ?? template.defaultBody);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  // R5C-2 B2: a table skeleton at the caret, on lines of its own.
+  const insertTableBlock = () => {
+    const area = bodyRef.current;
+    const at = area?.selectionStart ?? draft.length;
+    const end = area?.selectionEnd ?? at;
+    const inserted = insertTable(draft, at, end, t('web.table_block_skeleton'), template.maxLength);
+    if (inserted === null) return;
+    setDraft(inserted.next);
+    requestAnimationFrame(() => {
+      area?.focus();
+      area?.setSelectionRange(inserted.caret, inserted.caret);
+    });
+  };
   const [sample, setSample] = useState<Record<string, string>>({});
   const [showHistory, setShowHistory] = useState(false);
   /**
@@ -844,6 +859,7 @@ export const TemplateCard = memo(function TemplateCard({
         <label htmlFor={`body-${template.key}`}>{t('web.template_body')}</label>
         <textarea
           id={`body-${template.key}`}
+          ref={bodyRef}
           className="input"
           value={draft}
           rows={4}
@@ -862,6 +878,14 @@ export const TemplateCard = memo(function TemplateCard({
             ? t('web.template_format_html_hint')
             : t('web.template_format_plain_hint')}
         </p>
+        {mayEdit && (
+          <p className="small">
+            <button type="button" className="chip" onClick={insertTableBlock}>
+              {t('web.table_block_insert')}
+            </button>{' '}
+            <span className="muted">{t('web.table_block_hint')}</span>
+          </p>
+        )}
         {template.placeholders.length > 0 && (
           <p className="small template-tokens">
             {template.placeholders.map((placeholder) => (

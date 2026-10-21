@@ -1886,10 +1886,17 @@
       "breakpoints": true
     },
     {
-      "idx": 272,
+      "idx": 269,
       "version": "7",
       "when": 1792594022690,
-      "tag": "0272_backfill_baselines_unmeasured",
+      "tag": "0269_backfill_baselines_unmeasured",
+      "breakpoints": true
+    },
+    {
+      "idx": 270,
+      "version": "7",
+      "when": 1792595672534,
+      "tag": "0270_crypto_invoice_figures",
       "breakpoints": true
     }
   ]
