@@ -714,9 +714,19 @@ describe('reseller plan controls and the monthly minimum (round N, package D)', 
       });
     }
 
-    /** An instant inside the reminder window of the CURRENT tenant month, never before now. */
-    async function inReminderWindow(days = 3): Promise<number> {
-      const now = ctx.container.clock.now();
+    /**
+     * An instant inside the reminder window of the CURRENT tenant month, never before `nowMs`.
+     *
+     * `nowMs` is the caller's own reading of the clock. Reading it again here made the result a
+     * LATER instant whenever the window had already opened, so `window > now` was true by a
+     * millisecond and the caller expected only the achievement while the reminder was due too
+     * (main, the last three days of a tenant month, on a loaded runner).
+     */
+    async function inReminderWindow(
+      days = 3,
+      nowMs: number = ctx.container.clock.now().getTime(),
+    ): Promise<number> {
+      const now = new Date(nowMs);
       const presentation = await new CachedTenantPresentationReader(
         ctx.container.tenants,
         ctx.container.clock,
@@ -749,8 +759,8 @@ describe('reseller plan controls and the monthly minimum (round N, package D)', 
       const now = ctx.container.clock.now().getTime();
       const flags = { reseller_minimum_reminders: true, reseller_minimum_achieved_notices: true };
 
-      // Before the window only the achievement is due.
-      const window = await inReminderWindow();
+      // Before the window only the achievement is due. The SAME `now` decides "before".
+      const window = await inReminderWindow(3, now);
       if (window > now) {
         expect(await sweep(at(now), flags)).toBe(1);
         expect((await noticeRows()).map((r) => r.kind)).toEqual(['ACHIEVED']);
