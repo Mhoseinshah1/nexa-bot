@@ -1,6 +1,7 @@
 import { and, count, desc, eq, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import {
+  TERMS_ENFORCEMENT_FLAG,
   TERMS_ERROR_CODES,
   errors,
   type ScopeContext,
@@ -23,6 +24,7 @@ import {
   isPublished,
   type PublishedTermsVersion,
   type TermsAcceptanceRecord,
+  type TermsExemptionReason,
   type TermsRepository,
   type TermsVersionRecord,
 } from '../application/ports.js';
@@ -378,6 +380,49 @@ export class DrizzleTermsRepository implements TermsRepository {
       })
       .returning({ id: termsAcceptances.id });
     return rows.length > 0;
+  }
+
+  async exemption(
+    scope: ScopeContext,
+    customerId: string,
+    tx?: unknown,
+  ): Promise<TermsExemptionReason | null> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.exec(tx).execute<{ imported: boolean; predates: boolean }>(sql`
+      SELECT EXISTS (
+               SELECT 1 FROM legacy_import_map m
+                WHERE m.tenant_id = c.tenant_id
+                  AND m.entity_type = 'CUSTOMER'
+                  AND m.status = 'IMPORTED'
+                  AND m.entity_id = c.id
+             ) AS imported,
+             COALESCE(c.created_at < t.rules_first_enforced_at, false) AS predates
+        FROM customers c
+        JOIN tenants t ON t.id = c.tenant_id
+       WHERE c.tenant_id = ${tenantId} AND c.id = ${customerId}
+       LIMIT 1
+    `);
+    const row = result.rows[0];
+    if (row === undefined) return null;
+    if (row.imported) return 'IMPORTED';
+    return row.predates ? 'PREDATES_RULES' : null;
+  }
+
+  async stampFirstEnforced(scope: ScopeContext, now: Date, tx: unknown): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.exec(tx).execute<{ id: string }>(sql`
+      UPDATE tenants t
+         SET rules_first_enforced_at = ${now.toISOString()}::timestamptz
+       WHERE t.id = ${tenantId}
+         AND t.rules_first_enforced_at IS NULL
+         AND EXISTS (SELECT 1 FROM feature_flag_states f
+                      WHERE f.tenant_id = t.id AND f.flag_key = ${TERMS_ENFORCEMENT_FLAG}
+                        AND f.enabled)
+         AND EXISTS (SELECT 1 FROM terms_versions v
+                      WHERE v.tenant_id = t.id AND v.status = 'PUBLISHED')
+      RETURNING t.id
+    `);
+    return result.rows.length > 0;
   }
 
   private async required(

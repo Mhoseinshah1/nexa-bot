@@ -128,7 +128,14 @@ export class TermsAcceptanceService {
   private async acceptedOnce(scope: TenantContext, customerId: string): Promise<boolean> {
     if (await this.deps.flags.isEnabled(scope, TERMS_REPROMPT_FLAG)) return false;
     if ((await this.deps.repository.lastAcceptance(scope, customerId)) !== null) return true;
-    return (await this.deps.repository.legacyAcceptedAt(scope, customerId)) !== null;
+    if ((await this.deps.repository.legacyAcceptedAt(scope, customerId)) !== null) return true;
+    /*
+     * R5C-1 item 1: a customer the rules were never put to — imported, or created before
+     * they were first enforced — is treated as having accepted, silently. Only a customer
+     * created AFTER enforcement began is asked. Read here, so `requirement` and `standing`
+     * cannot disagree about it.
+     */
+    return (await this.deps.repository.exemption(scope, customerId)) !== null;
   }
 
   /**

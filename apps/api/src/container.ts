@@ -289,7 +289,12 @@ import {
 } from './modules/control/media/application/qr-template.service.js';
 import { ReferralSignupGiftService } from './modules/commerce/referrals/application/referral-signup-gift.service.js';
 import { DrizzleReferralSignupGiftRepository } from './modules/commerce/referrals/infrastructure/drizzle-referral-signup-gift.repository.js';
-import { CONTROL_ERROR_CODES, SERVICE_REMINDER_DEFAULTS, isNexaError } from '@nexa/contracts';
+import {
+  CONTROL_ERROR_CODES,
+  SERVICE_REMINDER_DEFAULTS,
+  TERMS_ENFORCEMENT_FLAG,
+  isNexaError,
+} from '@nexa/contracts';
 import { DrizzleFeatureFlagRepository } from './modules/control/features/infrastructure/drizzle-feature-flags.repository.js';
 import {
   FeatureFlagResolver,
@@ -4365,6 +4370,16 @@ export function createContainer(
     sessions,
     // The vetoes over a flag turning on: the signup gift needs coherent terms first.
     [new SignupGiftActivationGuard(settingsResolver)],
+    // R5C-1 item 1: the flag turning on stamps when the rules were first enforced, in the
+    // flag's own transaction (a no-op until a version is published; publishing stamps then).
+    [
+      {
+        key: TERMS_ENFORCEMENT_FLAG,
+        afterEnabled: async (scope, now, tx) => {
+          await termsRepository.stampFirstEnforced(scope, now, tx);
+        },
+      },
+    ],
   );
 
   const serviceReminderSweep = new ServiceReminderService({

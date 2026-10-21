@@ -1093,4 +1093,128 @@ describe('terms and rules (program §6)', () => {
     });
     expect(foreign.statusCode).toBe(403);
   });
+
+  // -------------------------------------------------------------------------------------
+  // R5C-1 item 1: customers the rules were never put to are never asked
+  // -------------------------------------------------------------------------------------
+
+  const firstEnforcedAt = async (tenant: string = tenantA.tenantId): Promise<Date | null> => {
+    const at = (
+      await rows<{ at: string | Date | null }>(
+        sql`SELECT rules_first_enforced_at AS at FROM tenants WHERE id = ${tenant}`,
+      )
+    )[0]?.at;
+    return at === null || at === undefined ? null : new Date(at);
+  };
+
+  /** What the legacy import leaves for a customer: a run and an IMPORTED CUSTOMER map row. */
+  async function markImported(customerId: string): Promise<void> {
+    const runId = api.container.ids.uuid();
+    await api.container.database.db.execute(sql`
+      INSERT INTO legacy_import_runs (id, tenant_id, mode, status, source_fingerprint, code_version,
+                                      started_at, last_progress_at, finished_at)
+      VALUES (${runId}, ${tenantA.tenantId}, 'APPLY', 'COMPLETED', repeat('a', 64), 'test',
+              now(), now(), now())`);
+    await api.container.database.db.execute(sql`
+      INSERT INTO legacy_import_map (tenant_id, legacy_table, legacy_id, run_id, checksum, status,
+                                     entity_type, entity_id, created_at, updated_at)
+      VALUES (${tenantA.tenantId}, 'user', ${String(Math.floor(Math.random() * 1e9))}, ${runId},
+              repeat('b', 64), 'IMPORTED', 'CUSTOMER', ${customerId}, now(), now())`);
+  }
+
+  it('R5C-1: a customer who existed before the rules were enforced is never asked', async () => {
+    const old = user();
+    await say(old, '/start');
+    const oldId = await customerIdOf(old);
+    if (oldId === undefined) throw new Error('no customer');
+    const v1 = await publish('قوانین', 'نسخهٔ یک');
+    await enforce(true);
+    expect(textOf(await say(old, '/start'))).toEqual([WELCOME_BACK]);
+    expect(await acceptances()).toEqual([]);
+    // Customer 360 reports the SAME decision as the gate.
+    const standing = await api.container.termsAcceptance.standing(tenantA, oldId);
+    expect(standing).toMatchObject({ enforced: true, reacceptanceRequired: false });
+    // A customer created after enforcement began is asked: the exemption is not "everyone".
+    const fresh = user();
+    expect(isTermsScreen(await say(fresh, '/start'), v1)).toBe(true);
+    const freshId = await customerIdOf(fresh);
+    if (freshId === undefined) throw new Error('no customer');
+    expect(
+      (await api.container.termsAcceptance.standing(tenantA, freshId)).reacceptanceRequired,
+    ).toBe(true);
+  });
+
+  it('R5C-1: an imported customer is never asked, even created after enforcement', async () => {
+    const v1 = await publish('قوانین', 'نسخهٔ یک');
+    await enforce(true);
+    const imported = user();
+    const control = user();
+    // Both register after enforcement began; only one is marked as imported.
+    await say(control, '/start');
+    await webhook(BOT_A, {
+      message: {
+        message_id: (messageId += 1),
+        date: 0,
+        from: { id: imported, is_bot: false, first_name: 'x' },
+        chat: { id: imported, type: 'private' },
+        text: 'hi',
+      },
+    });
+    const importedId = await customerIdOf(imported);
+    if (importedId === undefined) throw new Error('no customer');
+    await markImported(importedId);
+    expect(textOf(await say(imported, '/start'))).toEqual([WELCOME_BACK]);
+    expect(
+      (await api.container.termsAcceptance.standing(tenantA, importedId)).reacceptanceRequired,
+    ).toBe(false);
+    expect(isTermsScreen(await say(control, '/start'), v1)).toBe(true);
+    expect(await acceptances()).toEqual([]);
+  });
+
+  it('R5C-1: a customer created after enforcement is asked once, and not again after accepting', async () => {
+    const v1 = await publish('قوانین', 'نسخهٔ یک');
+    await enforce(true);
+    const customer = user();
+    expect(isTermsScreen(await say(customer, '/start'), v1)).toBe(true);
+    await tap(customer, `ac:${v1.id}`);
+    expect(textOf(await say(customer, '/start'))).toEqual([WELCOME_BACK]);
+    expect(textOf(await say(customer, '/start'))).toEqual([WELCOME_BACK]);
+    expect((await acceptances()).map((row) => row.terms_version_id)).toEqual([v1.id]);
+  });
+
+  it('R5C-1: publishing an edited version re-asks nobody who is exempt or has accepted', async () => {
+    const old = user();
+    await say(old, '/start');
+    const v1 = await publish('قوانین', 'نسخهٔ یک');
+    await enforce(true);
+    const accepted = user();
+    await say(accepted, '/start');
+    await tap(accepted, `ac:${v1.id}`);
+    const v2 = await publish('قوانین ویرایش‌شده', 'نسخهٔ دو');
+    expect(textOf(await say(old, '/start'))).toEqual([WELCOME_BACK]);
+    expect(textOf(await say(accepted, '/start'))).toEqual([WELCOME_BACK]);
+    // Only a customer who arrives now is asked, and for the current version.
+    expect(isTermsScreen(await say(user(), '/start'), v2)).toBe(true);
+  });
+
+  it('R5C-1: the stamp is written by whichever write makes enforcement true first, once, and never moves', async () => {
+    // Flag on, nothing published: not enforced yet, so no stamp.
+    await enforce(true);
+    expect(await firstEnforcedAt()).toBeNull();
+    // Publishing is the write that makes it true.
+    await publish('قوانین', 'نسخهٔ یک');
+    const stamped = await firstEnforcedAt();
+    expect(stamped).not.toBeNull();
+    // Off, on again, and a new publication: the original moment stands.
+    await enforce(false);
+    await enforce(true);
+    await publish('قوانین ۲', 'نسخهٔ دو');
+    expect((await firstEnforcedAt())?.getTime()).toBe(stamped?.getTime());
+    // The other order: published first, the flag is the write that stamps — per tenant.
+    expect(await firstEnforcedAt(tenantB.tenantId)).toBeNull();
+    await publish('قوانین ب', 'متن ب', tenantB);
+    expect(await firstEnforcedAt(tenantB.tenantId)).toBeNull();
+    await enforce(true, tenantB);
+    expect(await firstEnforcedAt(tenantB.tenantId)).not.toBeNull();
+  });
 });
