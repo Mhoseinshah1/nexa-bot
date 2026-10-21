@@ -183,6 +183,17 @@ export const OPS_LOG_WORDS_FA = {
 
   walletAdjust: { CREDIT: '➕ افزایش دستی موجودی', DEBIT: '➖ کاهش دستی موجودی' },
 
+  /** What a paid order was for (log L2): a purchase, a renewal, extra traffic, extra time. */
+  paidOperations: {
+    NEW_SERVICE: 'خرید',
+    CUSTOM_SERVICE: 'خرید',
+    TRIAL: 'خرید',
+    RENEW: 'تمدید',
+    ADD_TRAFFIC: 'حجم',
+    ADD_TIME: 'زمان',
+    OTHER: 'خرید',
+  },
+
   badges: { firstPurchase: '🥇 اولین خرید', reseller: '🧑‍💼 نماینده', separator: ' · ' },
   operations: {
     RENEW: 'تمدید انجام نشد',

@@ -238,9 +238,19 @@ export class FinancialLogConsumer implements EventConsumer {
             buttons,
           };
         }
+        // C2: what was bought, which operation it was, and the two badges. The badge token is
+        // always present (empty when none applies): the title line is made of its words and
+        // this token, and the renderer drops a line whose tokens are ALL absent.
+        const paidValues: Record<string, TemplateValue> = { ...common };
+        if (order !== null) {
+          paidValues['productTitle'] = order.title;
+          paidValues['operation'] = words.paidOperation(order.purpose);
+          paidValues['badges'] =
+            words.badges({ firstPurchase: order.isFirstPurchase, reseller: order.reseller }) ?? '';
+        }
         return {
           templateKey: 'ops.financial.order_paid' as TemplateKey,
-          values: common,
+          values: paidValues,
           logType: 'PAYMENT_ORDER',
           buttons: [
             ...buttons,

@@ -42,7 +42,19 @@ interface Row {
   reference?: string;
 }
 
-function harness(options: { method: string; orderId: string | null; provider?: string | null }) {
+interface OrderOverrides {
+  readonly title?: string;
+  readonly purpose?: string;
+  readonly isFirstPurchase?: boolean;
+  readonly reseller?: boolean;
+}
+
+function harness(options: {
+  method: string;
+  orderId: string | null;
+  provider?: string | null;
+  order?: OrderOverrides;
+}) {
   const payment = {
     id: 'pay-1',
     code: 'RT4W8N2B',
@@ -79,7 +91,17 @@ function harness(options: { method: string; orderId: string | null; provider?: s
     }) as LedgerEntryFact;
   const facts = {
     order: async () =>
-      options.orderId === null ? null : { id: options.orderId, code: 'KQ7M2X9T' },
+      options.orderId === null
+        ? null
+        : {
+            id: options.orderId,
+            code: 'KQ7M2X9T',
+            title: 'پلن ۳۰ روزه',
+            purpose: 'NEW_SERVICE',
+            isFirstPurchase: false,
+            reseller: false,
+            ...options.order,
+          },
     entriesOfPayment: async (_s: unknown, paymentId: string, reasons: readonly string[]) =>
       ledger
         .filter((row) => row.paymentId === paymentId && reasons.includes(row.reason))
@@ -268,6 +290,42 @@ describe('L2 — an order paid', () => {
     const h = harness({ method: 'MANUAL_TRANSFER', orderId: 'ord-1' });
     await h.consumer.handle(h.event('PaymentConfirmed', confirmed('MANUAL_TRANSFER', 'ord-1')), TX);
     expect(h.queued[0]!.values).not.toHaveProperty('balanceBefore');
+  });
+});
+
+describe('L2 — the product, the operation and the badges (R5C-2 C2)', () => {
+  const paid = async (order: OrderOverrides) => {
+    const h = harness({ method: 'MANUAL_TRANSFER', orderId: 'ord-1', order });
+    await h.consumer.handle(h.event('PaymentConfirmed', confirmed('MANUAL_TRANSFER', 'ord-1')), TX);
+    return { message: h.queued[0]!, text: render(h.queued[0]!) };
+  };
+
+  it('names the product and the operation, and no badge for an ordinary repeat purchase', async () => {
+    const { text } = await paid({});
+    expect(text).toContain('🏷 محصول: پلن ۳۰ روزه');
+    expect(text).toContain('🔧 عملیات: خرید');
+    expect(text.split('\n')[0]).toBe('✅ پرداخت سفارش تأیید شد');
+    expect(text).not.toMatch(/نماینده|اولین خرید/);
+  });
+
+  it.each([
+    ['NEW_SERVICE', 'خرید'],
+    ['CUSTOM_SERVICE', 'خرید'],
+    ['RENEW', 'تمدید'],
+    ['ADD_TRAFFIC', 'حجم'],
+    ['ADD_TIME', 'زمان'],
+  ])('a %s order reads «%s»', async (purpose, word) => {
+    const { text } = await paid({ purpose });
+    expect(text).toContain(`🔧 عملیات: ${word}\n`);
+  });
+
+  it('shows the «اولین خرید» and «نماینده» badges in the title when they apply', async () => {
+    const { text, message } = await paid({ isFirstPurchase: true, reseller: true });
+    expect(text.split('\n')[0]).toBe('✅ پرداخت سفارش تأیید شد · 🥇 اولین خرید · 🧑‍💼 نماینده');
+    expect(message.values).toMatchObject({ badges: ' · 🥇 اولین خرید · 🧑‍💼 نماینده' });
+    expect((await paid({ reseller: true })).text.split('\n')[0]).toBe(
+      '✅ پرداخت سفارش تأیید شد · 🧑‍💼 نماینده',
+    );
   });
 });
 
