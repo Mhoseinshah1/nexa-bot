@@ -10,6 +10,13 @@ import {
 } from '@nexa/contracts';
 import { renderTemplateBody, type TemplatePresentation } from '@nexa/i18n';
 import {
+  plainTableText,
+  richBlocksFromText,
+  richButtonLayout,
+  richMessageBody,
+} from '../../../../infrastructure/telegram/rich-message.js';
+import type { RichMessageSupport } from '../../messaging/application/rich-messages.js';
+import {
   telegramButtonMarkup,
   telegramSend,
   textMessageBody,
@@ -152,7 +159,38 @@ export class TelegramBroadcastTransport implements BroadcastTransport {
     private readonly presentations?: {
       presentationFor(scope: TenantContext): Promise<TemplatePresentation>;
     },
+    /**
+     * R5C-2 B2/B3: «دکمه‌های داخل پیام». With it on, a TEXT broadcast is sent through the same
+     * rich blocks every other inline-button screen uses — its buttons INSIDE the message and a
+     * hand-written table as a table block. Absent, or off, it is the ordinary message it
+     * always was, with any table as plain lines.
+     */
+    private readonly rich?: RichMessageSupport,
   ) {}
+
+  /** The tenant's switch, remembered for a minute: a broadcast asks once per recipient. */
+  private readonly bubbleCache = new Map<
+    string,
+    { readonly until: number; readonly on: boolean }
+  >();
+
+  private async buttonsInBubble(scope: TenantContext): Promise<boolean> {
+    const rich = this.rich;
+    if (rich === undefined) return false;
+    const now = rich.now().getTime();
+    const key = String(scope.tenantId);
+    const cached = this.bubbleCache.get(key);
+    if (cached !== undefined && cached.until > now) return cached.on;
+    let on = false;
+    try {
+      on = (await rich.modeFor(scope)).enabled;
+    } catch {
+      // Unreadable is off: today's behaviour, never a failed broadcast.
+      on = false;
+    }
+    this.bubbleCache.set(key, { until: now + 60_000, on });
+    return on;
+  }
 
   async render(
     scope: TenantContext,
@@ -242,15 +280,43 @@ export class TelegramBroadcastTransport implements BroadcastTransport {
         },
       };
     } else if (rendered.contentKind === 'TEXT') {
-      call = {
+      const ordinary: TelegramRequest = {
         ...base,
         body: textMessageBody({
           chatId: request.chatId,
-          text: rendered.text,
+          text: plainTableText(rendered.text),
           html: false,
           buttons: rendered.buttons.map(broadcastTelegramButton),
         }),
       };
+      const blocks = (await this.buttonsInBubble(scope))
+        ? richBlocksFromText({ text: rendered.text, html: false, customEmoji: false })
+        : null;
+      if (blocks === null) {
+        call = ordinary;
+      } else {
+        const layout = richButtonLayout(rendered.buttons.map(broadcastTelegramButton));
+        const first = await telegramSend({
+          ...base,
+          method: 'sendRichMessage',
+          body: richMessageBody({
+            chatId: request.chatId,
+            blocks: [...blocks, ...layout.blocks],
+            inlineRows: layout.inline,
+          }),
+        });
+        /*
+         * One resend the ordinary way, and only for Telegram saying the REQUEST was bad
+         * (400): a blocked user (403), a dead bot (401/404), a rate limit or an ambiguous
+         * outcome are answers about the recipient or the bot, and a second request would only
+         * repeat them — or duplicate a message that may have arrived.
+         */
+        if (first.outcome === 'FAILED_PERMANENT' && first.errorCode === 'telegram.rejected.400') {
+          call = ordinary;
+        } else {
+          return classify(first);
+        }
+      }
     } else {
       const kind = rendered.contentKind;
       if (request.media === null) {
@@ -263,13 +329,13 @@ export class TelegramBroadcastTransport implements BroadcastTransport {
           body: {
             chat_id: request.chatId,
             [FIELD[kind]]: request.media.fileId,
-            ...(rendered.text.length > 0 ? { caption: rendered.text } : {}),
+            ...(rendered.text.length > 0 ? { caption: plainTableText(rendered.text) } : {}),
             ...(markup === null ? {} : { reply_markup: { inline_keyboard: markup } }),
           },
         };
       } else {
         const fields: Record<string, string> = { chat_id: request.chatId };
-        if (rendered.text.length > 0) fields.caption = rendered.text;
+        if (rendered.text.length > 0) fields.caption = plainTableText(rendered.text);
         if (markup !== null) fields.reply_markup = JSON.stringify({ inline_keyboard: markup });
         call = {
           ...base,

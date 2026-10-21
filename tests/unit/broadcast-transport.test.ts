@@ -244,6 +244,94 @@ describe('TelegramBroadcastTransport', () => {
     expect(upload).toEqual({ outcome: 'SENT', fileId: 'VID', messageId: 9 });
   });
 
+  /**
+   * R5C-2 B2/B3. A broadcast TEXT with «دکمه‌های داخل پیام» on goes through the shared rich
+   * blocks — its buttons inside the message and a hand-written table as a table block — and
+   * with it off (or unreadable) it is the ordinary message with the table as plain lines.
+   * MUTATION: sending the ordinary body whatever the switch says fails the rich test;
+   * dropping `plainTableText` from the ordinary body fails the fallback test.
+   */
+  describe('R5C-2: tables and buttons inside the bubble', () => {
+    const TABLE_TEXT = '📣\n| سرویس | قیمت |\n| --- | --- |\n| طلایی | ۲۵۰ |';
+    const textRequest = {
+      chatId: '42',
+      botInstanceId: 'bot',
+      rendered: {
+        contentKind: 'TEXT' as const,
+        text: TABLE_TEXT,
+        buttons: [{ label: 'Go', url: 'https://example.test' }],
+        source: null,
+      },
+      media: null,
+    };
+    const withRich = (mode: () => Promise<{ enabled: boolean; premiumEmoji: boolean }>) =>
+      new TelegramBroadcastTransport(
+        { render: async (_scope, _key, values) => `📣\n${String(values.message)}` },
+        { tokenForBotInstance: async () => 'TOKEN' },
+        base,
+        2_000,
+        undefined,
+        { modeFor: mode, now: () => new Date('2026-10-21T12:00:00Z') },
+      );
+
+    it('on: one sendRichMessage with the table block and the buttons inside it', async () => {
+      received.length = 0;
+      const result = await withRich(async () => ({ enabled: true, premiumEmoji: false })).deliver(
+        scope,
+        textRequest,
+      );
+      expect(result.outcome).toBe('SENT');
+      expect(received).toHaveLength(1);
+      expect(received[0]?.path).toBe('/botTOKEN/sendRichMessage');
+      const body = JSON.parse(received[0]?.body ?? '{}') as {
+        rich_message: { blocks: { type: string; buttons?: unknown[] }[]; is_rtl: boolean };
+      };
+      expect(body.rich_message.is_rtl).toBe(true);
+      expect(body.rich_message.blocks.map((block) => block.type)).toEqual([
+        'paragraph',
+        'table',
+        'buttons',
+      ]);
+      expect(body).not.toHaveProperty('reply_markup');
+      expect(body.rich_message.blocks[2]?.buttons).toEqual([
+        { text: 'Go', url: 'https://example.test' },
+      ]);
+    });
+
+    it('off, or unreadable: the ordinary message, the table as plain lines', async () => {
+      for (const mode of [
+        async () => ({ enabled: false, premiumEmoji: false }),
+        async (): Promise<{ enabled: boolean; premiumEmoji: boolean }> => {
+          throw new Error('flags unreadable');
+        },
+      ]) {
+        received.length = 0;
+        await withRich(mode).deliver(scope, textRequest);
+        expect(received[0]?.path).toBe('/botTOKEN/sendMessage');
+        const body = JSON.parse(received[0]?.body ?? '{}') as { text: string };
+        expect(body.text).toBe('📣\nسرویس | قیمت\nطلایی | ۲۵۰');
+        expect(body).toHaveProperty('reply_markup');
+      }
+    });
+
+    it('a 400 on the rich request is resent once the ordinary way', async () => {
+      received.length = 0;
+      refuseWith = 'Bad Request: rich_message is invalid';
+      try {
+        await withRich(async () => ({ enabled: true, premiumEmoji: false })).deliver(
+          scope,
+          textRequest,
+        );
+      } finally {
+        refuseWith = null;
+      }
+      expect(received.map((one) => one.path)).toEqual([
+        '/botTOKEN/sendRichMessage',
+        '/botTOKEN/sendMessage',
+      ]);
+    });
+  });
+
   /*
    * Round N close (§C): the Bot API 10.3 shapes. `forwardMessage(chat_id, from_chat_id,
    * message_id)` takes no `reply_markup`; `copyMessage` takes the same three and an inline
