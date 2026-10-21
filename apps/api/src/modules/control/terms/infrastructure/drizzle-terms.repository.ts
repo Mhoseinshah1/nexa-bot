@@ -416,7 +416,9 @@ export class DrizzleTermsRepository implements TermsRepository {
     // stamp is serialised per tenant: the caller has already written its prerequisite, takes
     // the tenant row lock, and the second waiter's UPDATE (a fresh snapshot) sees the first's
     // committed one.
-    await this.exec(tx).execute(sql`SELECT 1 FROM tenants WHERE id = ${tenantId} FOR NO KEY UPDATE`);
+    await this.exec(tx).execute(
+      sql`SELECT 1 FROM tenants WHERE id = ${tenantId} FOR NO KEY UPDATE`,
+    );
     const result = await this.exec(tx).execute<{ id: string }>(sql`
       UPDATE tenants t
          SET rules_first_enforced_at = ${now.toISOString()}::timestamptz
