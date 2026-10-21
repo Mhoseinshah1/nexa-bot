@@ -202,6 +202,8 @@ export class CustomServiceFlowService {
     ) {
       return { outcome: 'INVALID', range: null };
     }
+    // The flag can be turned off between the two steps: the same answer as the volume step.
+    if (!(await this.deps.pricer.enabled(scope))) return { outcome: 'UNAVAILABLE' };
     const range = await this.deps.pricer.rangeFor(
       scope,
       capture.customerId,

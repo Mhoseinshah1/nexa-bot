@@ -232,4 +232,31 @@ describe('R5C-2 B1: the custom service over Telegram', () => {
     await send('text', '3');
     expect(lastText()).toContain('مدت واردشده درست نیست');
   });
+
+  it('the days step answers UNAVAILABLE, not a range, when the flag was turned off after the volume step', async () => {
+    await send('tap', 'cu:');
+    await send('tap', `cv:${panelA}`);
+    await send('text', '10');
+    expect(lastText()).toContain('مدت را بین 7 تا 90 روز');
+
+    const owner = adminActorFor(
+      await createAdmin(api.container, tenantA, { username: 'owner-r5c2-off', roleKeys: ['owner'] }),
+    );
+    const flag = (await api.container.featureFlags.list(tenantA, owner)).find(
+      (one) => one.key === 'custom_service',
+    )!;
+    await api.container.featureFlags.set(tenantA, owner, {
+      idempotencyKey: 'b1-flag-off-key',
+      key: 'custom_service',
+      enabled: false,
+      expectedVersion: flag.version,
+      confirmKey: 'custom_service',
+      reason: 'b1 off',
+    });
+
+    // An out-of-range figure would otherwise be answered with the range prompt.
+    await send('text', '3');
+    expect(lastText()).toBe(CATALOGUE_FA['bot.custom_service.unavailable']);
+    expect(lastText()).not.toContain('مدت را بین');
+  });
 });
