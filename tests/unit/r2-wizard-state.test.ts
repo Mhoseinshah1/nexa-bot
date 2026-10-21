@@ -226,3 +226,29 @@ describe('the gateway invoice screen', () => {
     expect(data(done)).toEqual(['mm:']);
   });
 });
+
+/**
+ * R5C-1 item 4: a package is bought on ONE message. The package taps adopt the list message
+ * as the order wizard (strictly: only while it still shows the list), and the screens that
+ * SHOW a list land the message back at `PRODUCTS` even from a receipt it was a moment ago.
+ */
+describe('the add-on package flow gates', () => {
+  it('adopts the list message on a package tap, and never swallows a tap it finds stale', () => {
+    for (const intent of ['SERVICE_BUY_TRAFFIC', 'SERVICE_BUY_TIME']) {
+      expect(WIZARD_GATES.get(intent), intent).toEqual({
+        kind: 'ORDER',
+        adoptAs: 'ORDER',
+        from: ['PRODUCTS'],
+        lenient: true,
+      });
+    }
+  });
+
+  it('is lenient for those two buttons and for no other gate', () => {
+    const lenient = [...WIZARD_GATES.entries()]
+      .filter(([, gate]) => gate.lenient === true)
+      .map(([intent]) => intent)
+      .sort();
+    expect(lenient).toEqual(['SERVICE_BUY_TIME', 'SERVICE_BUY_TRAFFIC']);
+  });
+});

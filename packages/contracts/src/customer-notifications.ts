@@ -378,6 +378,20 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    * sentence carries no value at all.
    */
   'ACCOUNT_UNBLOCKED',
+  /*
+   * R5C-1 item 4: an extra-traffic or extra-time package the customer PAID for reached the
+   * panel. `provisioning_operations.id` is the subject — the ADD_TRAFFIC / ADD_TIME operation,
+   * as `SERVICE_ACTION_SUCCEEDED` names it — so a service topped up twice is two facts, each
+   * told once. They replace that generic sentence for a package the operation's order BOUGHT
+   * (`PURCHASED_AS`) and for nothing else.
+   *
+   * A receipt, and still not a payload (ADR 0030 §1), exactly as `SERVICE_RENEWED` is: the
+   * producer passes a kind and the operation id; the dispatcher reads every value at send time
+   * from the operation, its order, the wallet entries or the payment that paid for it, and the
+   * service. No value is stored on the row and none is chosen by the producer.
+   */
+  'SERVICE_TRAFFIC_ADDED',
+  'SERVICE_TIME_ADDED',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -453,6 +467,8 @@ export const CUSTOMER_NOTIFICATION_AUTOMATED: Readonly<Record<CustomerNotificati
     WALLET_ADMIN_CREDITED: false,
     WALLET_ADMIN_DEBITED: false,
     ACCOUNT_UNBLOCKED: false,
+    SERVICE_TRAFFIC_ADDED: false,
+    SERVICE_TIME_ADDED: false,
   };
 
 /**
@@ -647,6 +663,12 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
   WALLET_ADMIN_CREDITED: false,
   WALLET_ADMIN_DEBITED: false,
   ACCOUNT_UNBLOCKED: false,
+  /*
+   * R5C-1 item 4: `false`. A SUCCEEDED operation's frozen targets and the order's frozen line
+   * cannot stop having happened, and a late copy of the receipt is still true.
+   */
+  SERVICE_TRAFFIC_ADDED: false,
+  SERVICE_TIME_ADDED: false,
 };
 
 /**
@@ -730,7 +752,9 @@ export const CUSTOMER_NOTIFICATION_QUIET_HOURS: Readonly<
   // R4 A5: an administrator acted now; the customer is told now.
   WALLET_ADMIN_CREDITED: false,
   WALLET_ADMIN_DEBITED: false,
-  ACCOUNT_UNBLOCKED: false,
+  ACCOUNT_UNBLOCKED: false, // R5C-1: the receipt of a package the customer just paid for is expected NOW.
+  SERVICE_TRAFFIC_ADDED: false,
+  SERVICE_TIME_ADDED: false,
 };
 
 /**
@@ -813,7 +837,9 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   // R4 A5: values read at send time from the ledger entry the notification names.
   WALLET_ADMIN_CREDITED: 'bot.wallet.admin_credited',
   WALLET_ADMIN_DEBITED: 'bot.wallet.admin_debited',
-  ACCOUNT_UNBLOCKED: 'bot.account.unblocked',
+  ACCOUNT_UNBLOCKED: 'bot.account.unblocked', // R5C-1 item 4: values read at send time from the operation the notification names.
+  SERVICE_TRAFFIC_ADDED: 'bot.service.addon_traffic_added',
+  SERVICE_TIME_ADDED: 'bot.service.addon_time_added',
 };
 
 /**
