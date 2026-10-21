@@ -1167,7 +1167,7 @@ export function TicketDetailPage({
               {t('web.ticket_detail')} <Ltr mono={false}>#{data.ticket.number}</Ltr>{' '}
               <span className="record-ref">
                 <CodeText code={data.ticket.code} />
-                {/* R5C-2 D1: the copy beside the code copies the code; the uuid only from «بخش فنی». */}
+                {/* R5C-2 D1: the copy beside the code copies the code; the uuid only from the technical section. */}
                 {data.ticket.code === null ? (
                   <CopyIdButton id={data.ticket.id} />
                 ) : (
