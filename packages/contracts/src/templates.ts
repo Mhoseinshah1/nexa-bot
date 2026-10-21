@@ -7238,7 +7238,8 @@ export const TEMPLATES = [
         description: 'The location chosen.',
         required: true,
         repeatable: false,
-      },      {
+      },
+      {
         token: 'minGb',
         type: 'STRING',
         description: 'The smallest volume the configured rules price here, in GB.',
