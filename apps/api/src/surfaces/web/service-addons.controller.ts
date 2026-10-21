@@ -25,7 +25,6 @@ import { currentCorrelationId, newCorrelationId } from '../../infrastructure/log
 import type {
   ServiceAddonCursor,
   ServiceAddonDraft,
-  ServiceAddonEdit,
   ServiceAddonRecord,
 } from '../../modules/commerce/catalog/application/addon-ports.js';
 
@@ -217,7 +216,9 @@ function draftFrom(command: ServiceAddonWriteRequest): ServiceAddonDraft {
         : money(BigInt(command.priceAmount), command.priceCurrency),
     panelId: (command.panelId ?? null) as PanelId | null,
     productId: (command.productId ?? null) as ProductId | null,
-  } satisfies ServiceAddonDraft & ServiceAddonEdit;
+    // The web default is ON (D2); an edit drops it (ServiceAddonEdit omits it).
+    active: command.active ?? true,
+  } satisfies ServiceAddonDraft;
 }
 
 /** The shared cursor, branded for this list. */

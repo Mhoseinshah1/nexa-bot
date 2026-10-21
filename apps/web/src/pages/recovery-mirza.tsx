@@ -287,6 +287,8 @@ export interface MirzaAccess {
   mayApply: boolean;
   /** `panels.view`: the RickPanel list the bindings choose from. */
   mayViewPanels: boolean;
+  /** `legacy.services.view`: the read-only outcome of each old invoice (D3). */
+  mayViewInvoices: boolean;
 }
 
 export function mirzaAccess(permissions: readonly PermissionKey[]): MirzaAccess {
@@ -295,6 +297,7 @@ export function mirzaAccess(permissions: readonly PermissionKey[]): MirzaAccess 
     mayManage: permissions.includes('legacy.migration.manage'),
     mayApply: permissions.includes('legacy.migration.apply'),
     mayViewPanels: permissions.includes('panels.view'),
+    mayViewInvoices: permissions.includes('legacy.services.view'),
   };
 }
 

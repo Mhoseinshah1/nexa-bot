@@ -323,3 +323,21 @@ same failure. Once the fix is on main, the options are:
   CI is green for it.
 
 Neither moves or recreates the tag.
+
+## Service start, retry and the runner image (Round 5C-2)
+
+The integration and exhaustive jobs start PostgreSQL and Redis from a step,
+`scripts/ci-start-services.sh`, not from a `services:` block. A service
+container that fails to pull or to turn healthy fails the job at "Initialize
+containers", before any step exists, so nothing can retry it; on `main` that
+was 2/10 integration shards on one commit and 7/10 and 9/10 on another. The
+script pulls with a bounded retry, waits for health, and removes and restarts a
+container that never answers (4 attempts, 60 s each), then confirms a real
+`SELECT 1`. Images, credentials, ports and probes are the ones the blocks had;
+the container is named `nexa-ci-postgres`, which `ci-test-postgres.sh` is given.
+The other jobs with service containers (`legacy-mysql`, `legacy-rehearsal`) are
+unchanged.
+
+Every job runs on `ubuntu-24.04`, never `ubuntu-latest`, which migrates to a
+newer Ubuntu on GitHub's schedule and would change the toolchain under a green
+commit that the release workflow requires.

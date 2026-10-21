@@ -37,7 +37,9 @@ import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
 import { CustomerIdentityLink } from '../ui/customer-identity';
 import {
   CodeText,
+  CopyCodeButton,
   CopyIdButton,
+  TechnicalIds,
   PanelLink,
   ProductLink,
   RecordLink,
@@ -1101,6 +1103,7 @@ export function ServiceDetailPage({
       <StateSwitch query={service} denied={denied}>
         {row === undefined ? null : (
           <>
+            <TechnicalIds id={row.id} />
             <PageHead
               // The demo's title keeps its copy control, drawn only on hover or focus at
               // desktop and always on a phone (`.ca-title-id`, commerce-a.css).
@@ -1418,7 +1421,7 @@ function CodeWithCopy({ code, id }: { code: string | null; id: string }) {
   return (
     <span className="nowrap record-ref">
       <CodeText code={code} />
-      <CopyIdButton id={id} />
+      {code === null ? <CopyIdButton id={id} /> : <CopyCodeButton code={code} />}
     </span>
   );
 }

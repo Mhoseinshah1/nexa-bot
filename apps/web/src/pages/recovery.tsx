@@ -1,3 +1,4 @@
+import { LegacyInvoiceOutcomes } from './legacy-invoice-outcomes';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
@@ -777,6 +778,7 @@ function RecoveryOperations({
           imported={importedSources(imports.rows)}
         />
       )}
+      {mirzaReady && mirza.mayViewInvoices && <LegacyInvoiceOutcomes />}
       {mirzaReady && (
         <MirzaHistory rows={imports.rows.filter((row) => !(showMirza && row.id === mirzaRow.id))} />
       )}

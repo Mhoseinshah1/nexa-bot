@@ -64,7 +64,7 @@ jobs:
   # file renamed to `.md` counts as the code file it was as well.
   changes:
     name: Changed paths
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       heavy: ${{ steps.decide.outputs.heavy }}
@@ -83,7 +83,7 @@ jobs:
 
   static:
     name: Typecheck, lint and boundaries
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       # Pinned to an immutable commit. A tag is a moving pointer that whoever
@@ -138,7 +138,7 @@ jobs:
   # against the same bytes, stamped with this SHA.
   build:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -218,7 +218,7 @@ jobs:
   unit:
     name: Unit tests
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -254,7 +254,7 @@ jobs:
   web:
     name: Web admin tests
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -288,7 +288,7 @@ jobs:
     name: Integration tests (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: [build, changes]
     if: needs.changes.outputs.heavy == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Bounded so a hang is reported rather than billed for six hours. A shard
     # takes roughly twelve minutes; the step limit below fires first, so the log
     # says which step was stuck.
@@ -305,29 +305,6 @@ jobs:
       # free plan's limit; twelve peaked at 21.
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: nexa
-          POSTGRES_PASSWORD: nexa
-          POSTGRES_DB: nexa_test
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U nexa -d nexa_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-      redis:
-        image: redis:7-alpine
-        ports: ['6379:6379']
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
 
     env:
       DATABASE_URL: postgres://nexa:nexa@127.0.0.1:5432/nexa_test
@@ -354,6 +331,13 @@ jobs:
         with:
           name: dist
 
+      # Started here rather than as `services:` so a failed pull or a container that
+      # never turns healthy is retried (scripts/ci-start-services.sh). A service
+      # container that fails stops the job at "Initialize containers" with no step
+      # to retry it, which is how 2/10 to 9/10 shards of one run failed on main.
+      - name: Start PostgreSQL and Redis (bounded retry)
+        run: bash scripts/ci-start-services.sh
+
       # The single largest cost in this job was durability nobody needs: each
       # test's reset TRUNCATEs ~150 tables, and with fsync on that is hundreds
       # of synced file creations per test. The container is discarded with the
@@ -361,7 +345,7 @@ jobs:
       - name: Make the throwaway database non-durable
         run: bash scripts/ci-test-postgres.sh "$POSTGRES_CONTAINER"
         env:
-          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+          POSTGRES_CONTAINER: nexa-ci-postgres
 
       # `db:migrate` runs COMPILED output — the production path, which is the
       # point of exercising it here rather than the tsx one.
@@ -429,7 +413,7 @@ jobs:
     name: Legacy MySQL source (${{ matrix.engine.label }})
     needs: [build, changes]
     if: needs.changes.outputs.heavy == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     strategy:
@@ -610,7 +594,7 @@ jobs:
         deploy,
         deploy-update,
       ]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Every test job succeeded
@@ -663,7 +647,7 @@ jobs:
   # longest in the workflow once the integration suite was sharded.
   deploy-logic:
     name: Deployment logic
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -709,7 +693,7 @@ jobs:
     name: Deployment smoke
     needs: changes
     if: needs.changes.outputs.heavy == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -733,7 +717,7 @@ jobs:
     name: Deployment update and rollback smoke
     needs: changes
     if: needs.changes.outputs.heavy == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -755,7 +739,7 @@ jobs:
   # it, and do not weaken the threshold to get past it.
   audit:
     name: Dependency audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
