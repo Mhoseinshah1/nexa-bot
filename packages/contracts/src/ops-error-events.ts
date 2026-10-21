@@ -1,5 +1,8 @@
 import type { OperationalSeverity } from './ports.js';
-import { CUSTOMER_NOTICES_PAUSED_CODE, CUSTOMER_NOTICES_RESUMED_CODE } from './customer-notifications.js';
+import {
+  CUSTOMER_NOTICES_PAUSED_CODE,
+  CUSTOMER_NOTICES_RESUMED_CODE,
+} from './customer-notifications.js';
 
 /**
  * FIX-04 / FIX-05 (2026-10-09) — the ONE taxonomy of reportable operational events.
