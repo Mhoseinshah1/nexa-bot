@@ -3082,6 +3082,13 @@ export const backupRuns = pgTable(
     partCount: integer('part_count'),
     archiveSealId: uuid('archive_seal_id'),
     summaryDeliveryState: text('summary_delivery_state'),
+    /**
+     * Round 5B: how long each stage took, in milliseconds, by stage name
+     * (`{"DUMP": 41200, "ENCRYPT": 96000, …}`). Written once, when the run finishes, from the
+     * pipeline's own clock; a stage the run never reached has no key. NULL on a run from
+     * before this column, and on a run reclaimed as abandoned (no process was left to time it).
+     */
+    phaseDurationsMs: jsonb('phase_durations_ms'),
   },
   (table) => [
     check('backup_runs_trigger_check', enumCheck('trigger', BACKUP_TRIGGERS)),
