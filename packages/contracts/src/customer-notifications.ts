@@ -542,7 +542,13 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    * of the sentence is still true.
    */
   RESELLER_MINIMUM_REMINDER: true,
-  RESELLER_MINIMUM_ACHIEVED: false,
+  /*
+   * Round 5A-2: `true` since an imported reseller's first month. The achievement is derived from
+   * the reseller's sales for a month; one the previous bot sold into, before the import, is not
+   * a state this installation observed, so the notice must be refusable at send time (the reader
+   * answers it from the notice row and the reseller's import date, nothing else).
+   */
+  RESELLER_MINIMUM_ACHIEVED: true,
   // Round N: both are terminal facts about work already done.
   WALLET_MASS_CREDITED: false,
   SERVICE_GIFT_APPLIED: false,
