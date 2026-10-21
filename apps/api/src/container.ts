@@ -43,6 +43,8 @@ import {
   faqNumberMarker,
   isSystemContext,
   systemJobActor,
+  CUSTOMER_NOTIFICATION_AUTOMATED,
+  CUSTOMER_NOTIFICATION_KINDS,
   CUSTOMER_NOTICES_PAUSE_SETTING_KEY,
   type PanelBalancingStrategy,
 } from '@nexa/contracts';
@@ -4168,6 +4170,17 @@ export function createContainer(
     ],
     // R5A-2 item 5: the emergency switch's announcement is projected to the operations group.
     opsLog,
+    // R5A-2 (Codex, PR #306): switching it OFF supersedes the automated rows still queued.
+    async (scope, at, tx) => {
+      if (isSystemContext(scope)) return;
+      await customerNotificationRepository.supersedePendingOfKinds(
+        scope,
+        CUSTOMER_NOTIFICATION_KINDS.filter((kind) => CUSTOMER_NOTIFICATION_AUTOMATED[kind]),
+        at,
+        at,
+        tx,
+      );
+    },
   );
 
   /**
@@ -4451,8 +4464,9 @@ export function createContainer(
     now: () => clock.now().getTime(),
     // Round 5A-2: the worker-start reconcile of imported services' baselines and notices,
     // the whole backlog, in the background. Every pass reconciles again before it sweeps.
-    reconcileAtStart: async (scope) => {
-      await serviceReminderSweep.reconcileImportedNotices(scope, { unbounded: true });
+    reconcileAtStart: async (scope, shouldStop) => {
+      await serviceReminderSweep.reconcileImportedNotices(scope, { unbounded: true, shouldStop });
+      if (shouldStop()) return;
       await resellerMinimumService.reconcileImportedPeriodNotices(scope);
     },
     logger,

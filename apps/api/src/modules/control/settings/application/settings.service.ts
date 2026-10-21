@@ -156,6 +156,17 @@ export interface SettingChangeGuard {
   ): Promise<string | null>;
 }
 
+/**
+ * Told, inside the write's transaction, that the emergency switch went ON -> OFF.
+ * Declared here and implemented outward (the container), like `SettingChangeGuard`:
+ * `control` knows nothing about the customer notification lane.
+ */
+export type NoticePauseReleasedHook = (
+  scope: ScopeContext,
+  at: Date,
+  tx: TransactionScope,
+) => Promise<void>;
+
 export class SettingsService {
   constructor(
     private readonly guard: PermissionGuard,
@@ -190,6 +201,11 @@ export class SettingsService {
      * the raw recorder then records the event and nothing is posted.
      */
     private readonly announcer: OperationalEventRecorder = opsLog,
+    /**
+     * R5A-2 (Codex, PR #306): runs in the write's transaction when the switch flips OFF, so
+     * the automated rows still queued are resolved there and then, not released afterwards.
+     */
+    private readonly onNoticePauseReleased?: NoticePauseReleasedHook,
   ) {}
 
   /**
@@ -459,6 +475,9 @@ export class SettingsService {
     const wasOn = from === true;
     const isOn = to === true;
     if (wasOn === isOn) return;
+    if (wasOn && !isOn && this.onNoticePauseReleased !== undefined) {
+      await this.onNoticePauseReleased(scope, this.clock.now(), tx);
+    }
     await this.announcer.record(
       scope,
       isOn

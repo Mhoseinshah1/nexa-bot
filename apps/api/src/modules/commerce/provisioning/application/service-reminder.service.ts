@@ -269,7 +269,7 @@ export class ServiceReminderService {
    */
   async reconcileImportedNotices(
     scope: TenantContext,
-    options: { readonly unbounded?: boolean } = {},
+    options: { readonly unbounded?: boolean; readonly shouldStop?: () => boolean } = {},
   ): Promise<{ readonly baselines: number; readonly superseded: number }> {
     await this.reconcileImportedUsageNotices(scope);
     const baselines = await this.reconcileImportedBaselines(scope, options);
@@ -291,7 +291,7 @@ export class ServiceReminderService {
    */
   async reconcileImportedBaselines(
     scope: TenantContext,
-    options: { readonly unbounded?: boolean } = {},
+    options: { readonly unbounded?: boolean; readonly shouldStop?: () => boolean } = {},
   ): Promise<number> {
     const audit = this.deps.audit;
     if (audit === undefined) return 0;
@@ -300,6 +300,8 @@ export class ServiceReminderService {
     let total = 0;
     let after: string | null = null;
     for (let batch = 0; batch < maxBatches; batch += 1) {
+      // Shutdown (round 5A-2): stop after the batch in hand, never mid-batch.
+      if (options.shouldStop?.() === true) break;
       const done: { readonly count: number; readonly last: string | null; readonly size: number } =
         await this.deps.uow.run(scope, async (tx) => {
           if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
@@ -386,7 +388,7 @@ export class ServiceReminderService {
    */
   async supersedeImportedServiceNotices(
     scope: TenantContext,
-    options: { readonly unbounded?: boolean } = {},
+    options: { readonly unbounded?: boolean; readonly shouldStop?: () => boolean } = {},
   ): Promise<number> {
     const audit = this.deps.audit;
     if (audit === undefined) return 0;
@@ -394,6 +396,8 @@ export class ServiceReminderService {
       options.unbounded === true ? Number.MAX_SAFE_INTEGER : RECONCILE_MAX_BATCHES_PER_PASS;
     let total = 0;
     for (let batch = 0; batch < maxBatches; batch += 1) {
+      // Shutdown (round 5A-2): stop after the batch in hand, never mid-batch.
+      if (options.shouldStop?.() === true) break;
       const moved = await this.deps.uow.run(scope, async (tx) => {
         if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 0;
         const now = this.deps.clock.now();

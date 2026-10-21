@@ -444,6 +444,8 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
       JOIN tenants t ON t.id = s.tenant_id
       WHERE s.tenant_id = ${tenantId}
         AND s.source <> 'NEXA'
+        -- Only a service the sweep itself considers: an ended one gets no baseline or rows.
+        AND s.state = ANY(${sql.param([...new Set([...EXPIRY_REMINDER_STATES, ...USAGE_REMINDER_STATES])])}::text[])
         ${afterId === null ? sql`` : sql`AND s.id > ${afterId}::uuid`}
         AND NOT EXISTS (
           SELECT 1 FROM service_reminder_baselines b

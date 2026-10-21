@@ -264,6 +264,59 @@ describe('the emergency switch for automated customer messages (R5A-2 item 5)', 
     expect(sends).toHaveLength(0);
   });
 
+  it('releases no backlog: automated rows still PENDING when it goes OFF are superseded, not sent', async () => {
+    await setSwitch(true);
+    // Rows queued while the switch is on and never seen by a dispatcher pass (a short pause,
+    // or a backlog beyond one pass's limit).
+    for (const kind of [
+      'SERVICE_EXPIRY_FIRST',
+      'WALLET_LOW_BALANCE',
+      'RESELLER_MINIMUM_REMINDER',
+    ]) {
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO customer_notifications (id, tenant_id, customer_id, bot_instance_id, kind, subject_id,
+                                            state, next_attempt_at, attempts, created_at)
+        VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${customerA}, ${BOT_A}, ${kind},
+                ${ctx.container.ids.uuid()}, 'PENDING', now(), 0, now() - interval '1 minute')`);
+    }
+    // A kind the switch never touches (a real cancelled order, so its precondition holds).
+    const ticketOrder = ctx.container.ids.uuid();
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO orders (id, tenant_id, customer_id, state, product_id, panel_id, purpose,
+                          line_title, line_duration_days, line_traffic_bytes,
+                          line_device_limit, line_unit_price_amount, line_quantity,
+                          subtotal_amount, discount_amount, total_amount, currency, quote,
+                          confirmed_at, cancelled_at)
+      VALUES (${ticketOrder}, ${tenantA.tenantId}, ${customerA}, 'CANCELLED',
+              ${productA}, ${panelA}, 'NEW_SERVICE', 'پلن', 30, ${ALLOWANCE}, 2, 250000, 1,
+              250000, 0, 250000, 'IRT', '{"trace":[]}'::jsonb, now(), now())`);
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO customer_notifications (id, tenant_id, customer_id, bot_instance_id, kind, subject_id,
+                                          state, next_attempt_at, attempts, created_at)
+      VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${customerA}, ${BOT_A}, 'ORDER_CANCELLED',
+              ${ticketOrder}, 'PENDING', now(), 0, now() - interval '1 minute')`);
+
+    await setSwitch(false);
+    const report = await lane().deliverDue(tenantA, 50);
+    const after = await ctx.container.database.db.execute(
+      sql`SELECT kind, state, resolved_at, next_attempt_at FROM customer_notifications ORDER BY kind`,
+    );
+    const rows = after.rows as unknown as {
+      kind: string;
+      state: string;
+      resolved_at: Date | null;
+      next_attempt_at: Date | null;
+    }[];
+    for (const row of rows.filter((r) => r.kind !== 'ORDER_CANCELLED')) {
+      expect(row.state).toBe('SUPERSEDED');
+      expect(row.resolved_at).not.toBeNull();
+      expect(row.next_attempt_at).toBeNull();
+    }
+    expect(rows.find((r) => r.kind === 'ORDER_CANCELLED')?.state).toBe('DELIVERED');
+    expect(report.claimed).toBe(1);
+    expect(sends.map((one) => one.templateKey)).toHaveLength(1);
+  });
+
   it('holds nothing while the switch is off', async () => {
     await expiringService();
     await ctx.container.serviceReminderSweep.runOnce(tenantA);

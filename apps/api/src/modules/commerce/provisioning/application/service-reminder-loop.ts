@@ -40,6 +40,9 @@ export const SERVICE_REMINDER_INTERVAL_MS = 900_000;
 export class ServiceReminderLoop {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private stopping = false;
+  /** The start-up reconcile in flight, so `stop()` can wait for it as it does for a pass. */
+  private reconciling: Promise<void> | null = null;
   private readonly progress: LoopProgress;
 
   constructor(
@@ -54,7 +57,11 @@ export class ServiceReminderLoop {
        * Run once, in the background, never holding the first pass back; a failure is logged
        * and the next pass (which reconciles first) retries.
        */
-      readonly reconcileAtStart?: (scope: TenantContext) => Promise<unknown>;
+      readonly reconcileAtStart?: (
+        scope: TenantContext,
+        /** True once `stop()` has been called: finish the batch in hand and return. */
+        shouldStop: () => boolean,
+      ) => Promise<unknown>;
       readonly logger: {
         info: (context: Record<string, unknown>, message: string) => void;
         error: (context: Record<string, unknown>, message: string) => void;
@@ -75,7 +82,8 @@ export class ServiceReminderLoop {
     this.timer = setInterval(() => void this.tick(), this.options.intervalMs);
     // Never hold the event loop open for a housekeeping timer.
     this.timer.unref?.();
-    void this.reconcileOnStart();
+    this.stopping = false;
+    this.reconciling = this.reconcileOnStart();
   }
 
   /** Round 5A-2: the worker-start reconcile. See `options.reconcileAtStart`. */
@@ -85,7 +93,7 @@ export class ServiceReminderLoop {
     try {
       const scope = this.options.scope();
       if (scope === null) return;
-      await reconcile(scope);
+      await reconcile(scope, () => this.stopping);
     } catch (error: unknown) {
       this.options.logger.error({ error }, 'imported-notice reconcile at start failed');
     }
@@ -101,11 +109,14 @@ export class ServiceReminderLoop {
    * lost and redone, with an error logged, on every rolling deploy.
    */
   async stop(): Promise<void> {
+    this.stopping = true;
     if (this.timer !== null) {
       clearInterval(this.timer);
       this.timer = null;
     }
     while (this.running) await new Promise((resolve) => setTimeout(resolve, 10));
+    // The start-up reconcile is a transaction-bearing job too (it never throws: it logs).
+    if (this.reconciling !== null) await this.reconciling;
     // A stopped loop makes no claim.
     this.progress.end();
   }
