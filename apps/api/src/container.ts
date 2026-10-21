@@ -5638,6 +5638,8 @@ export function createContainer(
     // R5C-2 B2/B3: the SAME switches the customer messenger reads, so a broadcast's buttons and
     // table sit inside its message exactly when every other inline-button screen's do.
     richMessageSupport,
+    // A refused rich broadcast is recorded like a refused screen: same code, same dedupe.
+    opsLog,
   );
   const broadcastFacts = new DrizzleRecipientFactsReader(
     database.db,

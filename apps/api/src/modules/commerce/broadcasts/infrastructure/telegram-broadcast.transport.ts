@@ -4,7 +4,10 @@ import {
   isBroadcastActionButton,
   isSourcedBroadcastKind,
   type BroadcastButton,
+  type BotInstanceId,
   type BroadcastContentKind,
+  type OperationalEventRecorder,
+  type TemplateKey,
   type TemplateValues,
   type TenantContext,
 } from '@nexa/contracts';
@@ -15,7 +18,10 @@ import {
   richButtonLayout,
   richMessageBody,
 } from '../../../../infrastructure/telegram/rich-message.js';
-import type { RichMessageSupport } from '../../messaging/application/rich-messages.js';
+import {
+  recordRichMessageRefusal,
+  type RichMessageSupport,
+} from '../../messaging/application/rich-messages.js';
 import {
   telegramButtonMarkup,
   telegramSend,
@@ -166,6 +172,12 @@ export class TelegramBroadcastTransport implements BroadcastTransport {
      * always was, with any table as plain lines.
      */
     private readonly rich?: RichMessageSupport,
+    /**
+     * A rich request Telegram refuses (400) and the ordinary resend delivers is recorded as
+     * the customer messenger records it — the same code, once per bot per hour — so a tenant
+     * whose broadcasts are silently falling back is visible. Best effort.
+     */
+    private readonly opsLog?: OperationalEventRecorder,
   ) {}
 
   /** The tenant's switch, remembered for a minute: a broadcast asks once per recipient. */
@@ -188,6 +200,25 @@ export class TelegramBroadcastTransport implements BroadcastTransport {
     );
     this.bubbleCache.set(key, { until: now + 60_000, on });
     return on;
+  }
+
+  private async recordRefusal(
+    scope: TenantContext,
+    botInstanceId: string,
+    errorCode: string,
+  ): Promise<void> {
+    const { opsLog, rich } = this;
+    if (opsLog === undefined || rich === undefined) return;
+    try {
+      await recordRichMessageRefusal(opsLog, rich.now(), scope, {
+        botInstanceId: botInstanceId as BotInstanceId,
+        templateKey: 'bot.broadcast.message' as TemplateKey,
+        method: 'sendRichMessage',
+        errorCode,
+      });
+    } catch {
+      // The broadcast is still delivered the ordinary way whatever happens to the log.
+    }
   }
 
   async render(
@@ -310,6 +341,7 @@ export class TelegramBroadcastTransport implements BroadcastTransport {
          * repeat them — or duplicate a message that may have arrived.
          */
         if (first.outcome === 'FAILED_PERMANENT' && first.errorCode === 'telegram.rejected.400') {
+          await this.recordRefusal(scope, request.botInstanceId, first.errorCode);
           call = ordinary;
         } else {
           return classify(first);

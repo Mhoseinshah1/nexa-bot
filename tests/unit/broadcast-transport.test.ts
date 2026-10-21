@@ -126,6 +126,7 @@ describe('TelegramBroadcastTransport', () => {
   let base: string;
   /** When set, the fake Bot API answers 400 with this description. */
   let refuseWith: string | null = null;
+  let refuseRichOnly = false;
   const received: { path: string; contentType: string; body: string }[] = [];
 
   beforeAll(async () => {
@@ -139,7 +140,10 @@ describe('TelegramBroadcastTransport', () => {
           body: Buffer.concat(chunks).toString('utf8'),
         });
         response.setHeader('content-type', 'application/json');
-        if (refuseWith !== null) {
+        if (
+          refuseWith !== null &&
+          (!refuseRichOnly || (request.url ?? '').endsWith('/sendRichMessage'))
+        ) {
           response.statusCode = 400;
           response.end(JSON.stringify({ ok: false, error_code: 400, description: refuseWith }));
           return;
@@ -312,6 +316,51 @@ describe('TelegramBroadcastTransport', () => {
         expect(body.text).toBe('📣\nسرویس | قیمت\nطلایی | ۲۵۰');
         expect(body).toHaveProperty('reply_markup');
       }
+    });
+
+    it('a refused rich broadcast that the ordinary resend delivers is recorded like a refused screen', async () => {
+      received.length = 0;
+      const recorded: { code: string; dedupeKey?: string; context?: unknown; sent: number }[] = [];
+      const t = new TelegramBroadcastTransport(
+        { render: async (_scope, _key, values) => `📣\n${String(values.message)}` },
+        { tokenForBotInstance: async () => 'TOKEN' },
+        base,
+        2_000,
+        undefined,
+        {
+          modeFor: async () => ({ enabled: true, premiumEmoji: false }),
+          now: () => new Date('2026-10-21T12:00:00Z'),
+        },
+        {
+          record: async (
+            _scope: unknown,
+            event: { code: string; dedupeKey?: string; context?: unknown },
+          ) => {
+            recorded.push({ ...event, sent: received.length });
+            return {} as never;
+          },
+        } as never,
+      );
+      refuseWith = 'Bad Request: rich_message is invalid';
+      refuseRichOnly = true;
+      let result;
+      try {
+        result = await t.deliver(scope, textRequest);
+      } finally {
+        refuseWith = null;
+        refuseRichOnly = false;
+      }
+      expect(result.outcome).toBe('SENT');
+      expect(recorded).toHaveLength(1);
+      expect(recorded[0]?.code).toBe('telegram.rich_message_refused');
+      expect(recorded[0]?.dedupeKey).toContain('telegram.rich_message_refused:bot');
+      expect(recorded[0]?.context).toMatchObject({
+        botInstanceId: 'bot',
+        errorCode: 'telegram.rejected.400',
+      });
+      // Recorded BEFORE the ordinary resend: only the rich request had been sent.
+      expect(recorded[0]?.sent).toBe(1);
+      expect(received).toHaveLength(2);
     });
 
     it('a 400 on the rich request is resent once the ordinary way', async () => {

@@ -240,7 +240,10 @@ describe('R5C-2 B1: the custom service over Telegram', () => {
     expect(lastText()).toContain('مدت را بین 7 تا 90 روز');
 
     const owner = adminActorFor(
-      await createAdmin(api.container, tenantA, { username: 'owner-r5c2-off', roleKeys: ['owner'] }),
+      await createAdmin(api.container, tenantA, {
+        username: 'owner-r5c2-off',
+        roleKeys: ['owner'],
+      }),
     );
     const flag = (await api.container.featureFlags.list(tenantA, owner)).find(
       (one) => one.key === 'custom_service',

@@ -1,4 +1,10 @@
-import type { TemplateKey, TenantContext } from '@nexa/contracts';
+import {
+  opsAggregationKey,
+  type BotInstanceId,
+  type OperationalEventRecorder,
+  type TemplateKey,
+  type TenantContext,
+} from '@nexa/contracts';
 
 /**
  * R4 PR-F: what the customer messenger needs to send a screen as a Telegram rich message.
@@ -44,6 +50,40 @@ export interface RichMessageSupport {
  * hour) and routed to the ERRORS topic.
  */
 export const RICH_MESSAGE_REFUSED_CODE = 'telegram.rich_message_refused';
+
+/**
+ * ONE error row per bot per hour (`WINDOW`) for a refused rich message, so a Telegram that
+ * refuses every one of them is a counter, not a storm. The customer messenger and the
+ * broadcast transport both record through this, so the two share one code and one dedupe.
+ * The code and the bot, never Telegram's description, which can quote a chat id. The caller
+ * decides what a failure to record means (both treat it as best effort).
+ */
+export async function recordRichMessageRefusal(
+  opsLog: OperationalEventRecorder,
+  now: Date,
+  scope: TenantContext,
+  refusal: {
+    readonly botInstanceId: BotInstanceId;
+    readonly templateKey: TemplateKey;
+    readonly method: 'sendRichMessage' | 'editMessageText';
+    readonly errorCode: string;
+  },
+): Promise<void> {
+  await opsLog.record(scope, {
+    code: RICH_MESSAGE_REFUSED_CODE,
+    severity: 'ERROR',
+    message:
+      'Telegram refused a screen sent as a rich message; it was sent again the ordinary ' +
+      'way. Turn the rich_messages feature off if this keeps happening.',
+    dedupeKey: opsAggregationKey(`${RICH_MESSAGE_REFUSED_CODE}:${refusal.botInstanceId}`, now),
+    context: {
+      botInstanceId: refusal.botInstanceId,
+      templateKey: refusal.templateKey,
+      method: refusal.method,
+      errorCode: refusal.errorCode,
+    },
+  });
+}
 
 /**
  * How one screen's text is arranged in a rich message, beyond one paragraph per line.

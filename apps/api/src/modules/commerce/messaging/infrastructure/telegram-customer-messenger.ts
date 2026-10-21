@@ -72,7 +72,7 @@ import {
 } from '../application/appearance-render.js';
 import type { MainMenuKeyboardButton } from '../application/main-menu.js';
 import {
-  RICH_MESSAGE_REFUSED_CODE,
+  recordRichMessageRefusal,
   RICH_MESSAGES_OFF,
   RICH_SCREEN_LAYOUTS,
   type RichMessageMode,
@@ -1732,22 +1732,11 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       'record a refused rich message',
       undefined,
       () =>
-        this.opsLog.record(scope, {
-          code: RICH_MESSAGE_REFUSED_CODE,
-          severity: 'ERROR',
-          message:
-            'Telegram refused a screen sent as a rich message; it was sent again the ordinary ' +
-            'way. Turn the rich_messages feature off if this keeps happening.',
-          dedupeKey: opsAggregationKey(
-            `${RICH_MESSAGE_REFUSED_CODE}:${message.botInstanceId}`,
-            rich.now(),
-          ),
-          context: {
-            botInstanceId: message.botInstanceId,
-            templateKey: message.templateKey,
-            method,
-            errorCode,
-          },
+        recordRichMessageRefusal(this.opsLog, rich.now(), scope, {
+          botInstanceId: message.botInstanceId,
+          templateKey: message.templateKey,
+          method,
+          errorCode,
         }),
       { botInstanceId: message.botInstanceId },
     );
