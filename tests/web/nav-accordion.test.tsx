@@ -127,7 +127,7 @@ const BEFORE: readonly [
     '/recovery',
     'web.nav_recovery',
     'database',
-    ['backup.view', 'legacy.migration.view'],
+    ['backup.view', 'legacy.migration.view', 'legacy.services.view'],
     false,
   ],
   ['referrals', '/referrals', 'web.nav_referrals', 'link', 'referrals.view', false],

@@ -261,7 +261,11 @@ function PackageSection({
         priceAmount: price,
         priceCurrency: form.priceCurrency as CurrencyCode,
       };
-      const idempotencyKey = submission.current({ editing, ...fields });
+      // `active` is part of the create command, so it is part of the key's fingerprint: a retry
+      // after flipping it is a different command and must not reuse the earlier key.
+      const idempotencyKey = submission.current(
+        editing === null ? { editing, ...fields, active: form.active } : { editing, ...fields },
+      );
       return editing === null
         ? createServiceAddon({ ...fields, active: form.active, idempotencyKey })
         : updateServiceAddon({ ...fields, idempotencyKey, id: editing });

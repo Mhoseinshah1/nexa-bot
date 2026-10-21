@@ -293,6 +293,18 @@ export function RecoveryPage({
         )}
       </Card>
 
+      {/*
+        R5C-2 D3: the per-invoice import report. Read-only and served under
+        `legacy.services.view` alone, so it is drawn on that permission and nothing else — never
+        behind the upload card's readiness, which needs `legacy.migration.view` and an enabled
+        migration capability (Codex on #307).
+      */}
+      {mirza.mayViewInvoices && (
+        <Card>
+          <LegacyInvoiceOutcomes />
+        </Card>
+      )}
+
       {/* E1: compacting the imported legacy data, for a reader of the migration. */}
       {mirza.mayView && (
         <Card title={t('web.lcp_title')}>
@@ -778,7 +790,6 @@ function RecoveryOperations({
           imported={importedSources(imports.rows)}
         />
       )}
-      {mirzaReady && mirza.mayViewInvoices && <LegacyInvoiceOutcomes />}
       {mirzaReady && (
         <MirzaHistory rows={imports.rows.filter((row) => !(showMirza && row.id === mirzaRow.id))} />
       )}

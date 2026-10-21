@@ -181,6 +181,40 @@ describe('the extra packages page', () => {
     cleanup();
   });
 
+  it('mints a new idempotency key when «فعال» is flipped after an ambiguous failure (Codex on #307)', async () => {
+    const api = stubApi([
+      ...routes().filter((route) => route.method !== 'POST'),
+      { url: '/service-addons', method: 'POST', status: 503, body: { error: { code: 'x' } } },
+    ]);
+    renderPage(page(null));
+    await screen.findByText('ده گیگ');
+    fireEvent.click(screen.getByRole('button', { name: t('web.cb_add') }));
+    await screen.findByText(t('web.extra_packages_new'));
+    fireEvent.change(screen.getByLabelText(t('web.extra_devices_rate_title')), {
+      target: { value: 'پنج گیگ' },
+    });
+    fireEvent.change(screen.getByLabelText(t('web.extra_packages_amount_gb')), {
+      target: { value: '5' },
+    });
+    fireEvent.change(screen.getByLabelText(t('web.extra_packages_price')), {
+      target: { value: '45000' },
+    });
+    const posts = () => api.calls.filter((call) => call.method === 'POST');
+    fireEvent.click(screen.getByText(t('web.extra_devices_save')));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    fireEvent.click(screen.getByRole('switch', { name: t('web.extra_packages_active') }));
+    fireEvent.click(screen.getByText(t('web.extra_devices_save')));
+    await waitFor(() => expect(posts()).toHaveLength(2));
+    const [first, second] = posts().map(
+      (call) => call.body as { active: boolean; idempotencyKey: string },
+    );
+    expect(first!.active).toBe(true);
+    expect(second!.active).toBe(false);
+    // A different command under the same key would be refused (or replayed) by the server.
+    expect(second!.idempotencyKey).not.toBe(first!.idempotencyKey);
+    cleanup();
+  });
+
   it('warns on an inactive row that the bot does not show it, and draws no switch on edit', async () => {
     stubApi([
       {

@@ -477,6 +477,13 @@ describe('the Mirza review', () => {
     expect(api.calls.some((call) => call.url.includes(RECOVERY_ROUTES.capabilities))).toBe(false);
   });
 
+  it('shows the per-invoice import report to a reader of legacy.services.view alone (Codex on #307)', async () => {
+    // The report is read-only and served under its own permission: it must not wait for the
+    // migration-upload readiness (legacy.migration.view and an enabled capability).
+    page([], { permissions: ['legacy.services.view'] });
+    expect(await screen.findByText(t('web.lio_title'))).toBeInTheDocument();
+  });
+
   it('refuses a NEXA archive to that actor, before anything is uploaded', async () => {
     const api = page([], { permissions: ['legacy.migration.view', 'legacy.migration.manage'] });
     await choose(NEXA_ARCHIVE_BYTES, 'mine.nxb');
