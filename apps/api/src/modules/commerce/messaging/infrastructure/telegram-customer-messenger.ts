@@ -1001,7 +1001,10 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       const wire = { caption: caption.rendered.text, entities: caption.rendered.entities };
       return { ...wire, html: false, decorated: false, fallback: wire };
     }
-    const text = await this.templates.render(scope, caption.templateKey, caption.values);
+    // A caption cannot carry a rich table: a hand-written one reads as plain lines here too.
+    const text = plainTableText(
+      await this.templates.render(scope, caption.templateKey, caption.values),
+    );
     // UX Batch 01 item 4: a template whose every line was dropped renders nothing, and a
     // bare file is told apart from another service's by its fallback.
     if (text.trim() === '' && caption.fallback !== undefined) {
@@ -1061,7 +1064,10 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
   ): Promise<CustomerSendResult> {
     const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
     if (token === null) return { outcome: 'REFUSED' };
-    const rendered = await this.templates.render(scope, message.templateKey, message.values);
+    // A caption cannot carry a rich table: a hand-written one reads as plain lines here too.
+    const rendered = plainTableText(
+      await this.templates.render(scope, message.templateKey, message.values),
+    );
     const format = templateDefinition(message.templateKey).format;
     const html = format === 'TELEGRAM_HTML';
     // Premium UI: the same decoration a fresh send of this key would get, by the same path.
