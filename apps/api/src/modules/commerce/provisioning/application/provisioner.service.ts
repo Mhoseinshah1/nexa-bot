@@ -3740,6 +3740,7 @@ export class ProvisionerService {
     return {
       kind: 'REFUSED',
       operationId: operation.id,
+      operationType: operation.type,
       reason,
       serviceId: operation.serviceId,
       orderId: operation.orderId,
@@ -3759,6 +3760,7 @@ export class ProvisionerService {
     return {
       kind: 'ATTEMPTED',
       operationId: operation.id,
+      operationType: operation.type,
       serviceId,
       outcome,
       failureKind,
