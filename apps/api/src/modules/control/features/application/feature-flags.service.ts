@@ -173,6 +173,16 @@ export interface FlagActivationGuard {
   assertMayEnable(scope: ScopeContext, tx: TransactionScope): Promise<void>;
 }
 
+/**
+ * A write another registry makes in the SAME transaction as ONE flag being turned on
+ * (R5C-1 item 1: the terms' "first enforced" stamp). Run after the flag row is written, only
+ * on a change to enabled; it must be idempotent, because enabling again runs it again.
+ */
+export interface FlagEnabledEffect {
+  readonly key: FeatureFlagKey;
+  afterEnabled(scope: ScopeContext, now: Date, tx: TransactionScope): Promise<void>;
+}
+
 export class FeatureFlagsService {
   constructor(
     private readonly guard: PermissionGuard,
@@ -200,6 +210,8 @@ export class FeatureFlagsService {
      * so a caller that registers none behaves exactly as before.
      */
     private readonly activationGuards: readonly FlagActivationGuard[] = [],
+    /** Same-transaction writes that follow a flag being turned on, by key. */
+    private readonly enabledEffects: readonly FlagEnabledEffect[] = [],
   ) {}
 
   async list(scope: ScopeContext, actor: ActorContext): Promise<ResolvedFeatureFlag[]> {
@@ -373,6 +385,13 @@ export class FeatureFlagsService {
             `${key} changed while you were editing it. Reload and reapply your change.`,
             { key, expectedVersion: command.expectedVersion },
           );
+        }
+
+        if (written.enabled) {
+          for (const effect of this.enabledEffects) {
+            if (effect.key !== key) continue;
+            await effect.afterEnabled(scope, this.clock.now(), tx);
+          }
         }
 
         await this.audit.record(

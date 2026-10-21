@@ -13,6 +13,9 @@ import type { LegacySourceConnector } from './modules/platform/legacy-importer/a
 import type { TermsBackfillOutcome } from './modules/platform/legacy-importer/application/terms-backfill.js';
 
 /**
+ * OPTIONAL (R5C-1 item 1): imported customers are treated as having accepted the rules whether
+ * or not this has run; it only records the previous bot's acceptance on the customer.
+ *
  * R4 A4 — `legacy-import terms-backfill`: the previous bot's rules acceptance
  * (`user.roll_Status`) for an installation that was imported before the import carried it.
  *
@@ -37,6 +40,7 @@ export const TERMS_BACKFILL_USAGE = [
   '  customers. Without --expected-terms-fingerprint it prints that fingerprint and writes',
   '  nothing (exit 3). With it, both fingerprints are checked in one read-only session first.',
   '  Idempotent: a rerun marks nobody twice. No customer is sent anything.',
+  '  OPTIONAL: imported customers are treated as having accepted the rules without it.',
 ].join('\n');
 
 export interface TermsBackfillArgs {
