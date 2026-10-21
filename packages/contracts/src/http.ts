@@ -2690,6 +2690,14 @@ export const serviceAddonWriteSchema = z
       .regex(/^\d{1,19}$/u)
       .nullable(),
     priceCurrency: z.enum(CURRENCY_CODES).nullable(),
+    /*
+     * CREATE only (Round 5C-2 D2): whether the add-on is offered to customers as soon as it
+     * exists. Absent means ON on the web surface; the application default stays INACTIVE for
+     * a caller that does not say. An unpriced add-on is never made active by this flag - it
+     * is created INACTIVE, exactly as the activate command would refuse it. An EDIT ignores
+     * the field: availability changes through activate / deactivate only.
+     */
+    active: z.boolean().optional(),
   })
   .refine((a) => (a.priceAmount === null) === (a.priceCurrency === null), {
     message: 'A price is an amount and a currency, or it is absent.',

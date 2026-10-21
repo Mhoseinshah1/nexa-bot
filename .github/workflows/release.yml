@@ -38,7 +38,7 @@ jobs:
   # confirms the version has never been published before.
   gate:
     name: Verify the source commit and the version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       actions: read
@@ -207,7 +207,7 @@ jobs:
 
   publish:
     name: Build and publish the release image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: gate
     permissions:
       contents: read
@@ -289,7 +289,7 @@ jobs:
 
   verify:
     name: Verify the published image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [gate, publish]
     permissions:
       contents: read

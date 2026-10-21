@@ -1,6 +1,6 @@
 import { t } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
-import { CopyButton, Ltr } from './kit';
+import { CopyButton, Disclosure, Ltr } from './kit';
 
 /**
  * Short public codes on the Web Admin (Round 4, PR-C).
@@ -11,12 +11,34 @@ import { CopyButton, Ltr } from './kit';
  * target; and an operator who needs the value itself (a database query, a support ticket
  * upstream) gets it from «کپی شناسه», which copies it and draws nothing.
  *
+ * The copy action beside a short code copies THAT CODE (`CopyCodeButton`): what is copied is
+ * exactly what is read. The uuid is copied only by an explicit «کپی شناسهٔ داخلی»
+ * (`CopyIdButton`), which a detail page keeps in its technical section (`TechnicalIds`).
+ *
  * `CopyIdButton` is the ONE place a record's uuid may reach the page, and only as the
  * clipboard payload. `tests/unit/web-no-uuid-rendered.test.ts` scans every page for an id
  * rendered as text and fails on one outside it.
  */
 export function CopyIdButton({ id }: { id: string }) {
-  return <CopyButton value={id} label={t('web.copy_id')} />;
+  return <CopyButton value={id} label={t('web.copy_internal_id')} />;
+}
+
+/** Copies the short code exactly as it is drawn beside it, never the uuid. */
+export function CopyCodeButton({ code }: { code: string }) {
+  return <CopyButton value={code} label={t('web.copy_code')} />;
+}
+
+/**
+ * The technical section of a record's own page: the internal id, copied only on purpose.
+ * Closed by default, so the uuid is neither drawn nor offered beside the code.
+ */
+export function TechnicalIds({ id }: { id: string }) {
+  return (
+    <Disclosure summary={t('web.technical_section')} size="sm">
+      <p className="muted small">{t('web.technical_section_body')}</p>
+      <CopyIdButton id={id} />
+    </Disclosure>
+  );
 }
 
 /** A code as text: left to right, monospace, or an em dash when the row has none yet. */
@@ -47,7 +69,7 @@ export function RecordLink({
       <a className="lk" href={href} onClick={onLink}>
         {code === null ? t('web.record_open') : <Ltr>{code}</Ltr>}
       </a>
-      {copy && <CopyIdButton id={id} />}
+      {copy && (code === null ? <CopyIdButton id={id} /> : <CopyCodeButton code={code} />)}
     </span>
   );
 }
@@ -68,7 +90,7 @@ export function productLabel(code: string | null, title: string | null): string 
   return code ?? title ?? t('web.record_open');
 }
 
-/** A product link, "P-102 · name", with the copy-id action. */
+/** A product link, "P-102 · name", with the copy-code action (the id when it has no code). */
 export function ProductLink({
   id,
   code,
@@ -84,7 +106,7 @@ export function ProductLink({
       <a className="lk" href={recordHref.product(id)} onClick={onLink}>
         {productLabel(code, title)}
       </a>
-      <CopyIdButton id={id} />
+      {code === null ? <CopyIdButton id={id} /> : <CopyCodeButton code={code} />}
     </span>
   );
 }

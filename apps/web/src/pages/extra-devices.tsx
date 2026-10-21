@@ -253,9 +253,10 @@ export function ExtraDevicesPage({
         priceAmount: price,
         priceCurrency: form.priceCurrency as CurrencyCode,
       };
+      // The user rate keeps its own create-inactive flow (D2 is the packages' form).
       const idempotencyKey = submission.current({ editing, ...fields });
       return editing === null
-        ? createServiceAddon({ ...fields, idempotencyKey })
+        ? createServiceAddon({ ...fields, active: false, idempotencyKey })
         : updateServiceAddon({ ...fields, idempotencyKey, id: editing });
     },
     onSuccess: () => {

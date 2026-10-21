@@ -41,6 +41,7 @@ import {
   PageHead,
   RowActions,
   StateSwitch,
+  ToggleRow,
   TabPanel,
   Tabs,
   useDiscardGuard,
@@ -87,6 +88,8 @@ const EMPTY_FORM = {
   priceAmount: '',
   priceCurrency: 'IRT' as SalesCurrencyCode,
   sortOrder: '0',
+  // Create only: a new package is offered to customers at once unless the operator says not.
+  active: true,
 };
 type FormState = typeof EMPTY_FORM;
 
@@ -100,6 +103,7 @@ function formOf(row: ServiceAddonSummaryResponse): FormState {
     priceAmount: row.priceAmount ?? '',
     priceCurrency: (row.priceCurrency as SalesCurrencyCode | null) ?? 'IRT',
     sortOrder: String(row.sortOrder),
+    active: row.status === 'ACTIVE',
   };
 }
 
@@ -257,9 +261,13 @@ function PackageSection({
         priceAmount: price,
         priceCurrency: form.priceCurrency as CurrencyCode,
       };
-      const idempotencyKey = submission.current({ editing, ...fields });
+      // `active` is part of the create command, so it is part of the key's fingerprint: a retry
+      // after flipping it is a different command and must not reuse the earlier key.
+      const idempotencyKey = submission.current(
+        editing === null ? { editing, ...fields, active: form.active } : { editing, ...fields },
+      );
       return editing === null
-        ? createServiceAddon({ ...fields, idempotencyKey })
+        ? createServiceAddon({ ...fields, active: form.active, idempotencyKey })
         : updateServiceAddon({ ...fields, idempotencyKey, id: editing });
     },
     onSuccess: () => {
@@ -328,9 +336,16 @@ function PackageSection({
       key: 'state',
       header: t('web.extra_devices_state'),
       render: (row) => (
-        <Badge tone={row.status === 'ACTIVE' ? 'ok' : 'neutral'} dot>
-          {t(row.status === 'ACTIVE' ? 'web.extra_devices_active' : 'web.extra_devices_inactive')}
-        </Badge>
+        <>
+          <Badge tone={row.status === 'ACTIVE' ? 'ok' : 'neutral'} dot>
+            {t(row.status === 'ACTIVE' ? 'web.extra_devices_active' : 'web.extra_devices_inactive')}
+          </Badge>
+          {row.status !== 'ACTIVE' && (
+            <p className="small">
+              <Badge tone="warn">{t('web.extra_packages_inactive_warning')}</Badge>
+            </p>
+          )}
+        </>
       ),
     },
     {
@@ -558,6 +573,14 @@ function PackageSection({
                 />
               </Field>
             </div>
+            {editing === null && (
+              <ToggleRow
+                title={t('web.extra_packages_active')}
+                description={t('web.extra_packages_active_hint')}
+                checked={form.active}
+                onChange={(next) => setForm({ ...form, active: next })}
+              />
+            )}
             {save.error !== null && (
               <Banner tone="danger">
                 {messageFor(save.error)}
