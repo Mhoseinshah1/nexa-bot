@@ -109,7 +109,7 @@ export class ServiceAddonService {
     return addon;
   }
 
-  /** Creates an INACTIVE add-on. Idempotent, audited. */
+  /** Creates an add-on, INACTIVE unless the draft asks for it live and priced. Idempotent, audited. */
   async create(
     scope: TenantContext,
     actor: ActorContext,

@@ -2126,6 +2126,8 @@ export interface ServiceAddonWriteInput {
   productId: string | null;
   priceAmount: string | null;
   priceCurrency: CurrencyCode | null;
+  /** CREATE only: offer it at once. The server defaults to true; an edit ignores it. */
+  active?: boolean;
   idempotencyKey: string;
 }
 

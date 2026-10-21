@@ -27,15 +27,16 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { serviceAddons } from '../../../../infrastructure/persistence/schema.js';
-import type {
-  AddonCap,
-  ServiceAddonCursor,
-  ServiceAddonDraft,
-  ServiceAddonEdit,
-  ServiceAddonPage,
-  ServiceAddonRecord,
-  ServiceAddonRepository,
-  ServiceAddonSearch,
+import {
+  initialAddonStatus,
+  type AddonCap,
+  type ServiceAddonCursor,
+  type ServiceAddonDraft,
+  type ServiceAddonEdit,
+  type ServiceAddonPage,
+  type ServiceAddonRecord,
+  type ServiceAddonRepository,
+  type ServiceAddonSearch,
 } from '../application/addon-ports.js';
 
 /**
@@ -66,9 +67,9 @@ export class DrizzleServiceAddonRepository implements ServiceAddonRepository {
         tenantId,
         kind: input.draft.kind,
         ...columnsFor(input.draft),
-        // INACTIVE, stated rather than left to the default, so the rule is visible where
-        // the row is made: an add-on becomes purchasable through its own command.
-        status: 'INACTIVE',
+        // Stated rather than left to the default, so the rule is visible where the row is
+        // made: INACTIVE unless the operator asked for it live AND it has a price.
+        status: initialAddonStatus(input.draft),
         createdAt: input.now,
         updatedAt: input.now,
       })
