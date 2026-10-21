@@ -98,6 +98,7 @@ export class RecoveryController {
     return {
       scheduleEnabled: status.scheduleEnabled,
       intervalMs: status.intervalMs,
+      dailyTime: status.dailyTime,
       scheduleSource: { ...status.scheduleSource },
       deliveryDestination: status.deliveryDestination,
       lastSucceededAt: status.lastSucceededAt?.toISOString() ?? null,
@@ -532,6 +533,7 @@ function toRunSummary(view: BackupRunView): BackupRunSummary {
       deliveryState: part.deliveryState,
     })),
     summaryDeliveryState: run.summaryDeliveryState,
+    phaseDurationsMs: run.phaseDurationsMs,
   };
 }
 

@@ -32,6 +32,9 @@ const OPTIONS: SevenZipOptions = {
   binary: process.env['BACKUP_SEVEN_ZIP_BIN'] ?? '7z',
   level: 1,
   threads: 2,
+  memoryBudgetMb: 1_000,
+  memoryHeadroomMb: 0,
+  readAvailableMb: async () => null,
   sealTimeoutMs: 300_000,
   openTimeoutMs: 300_000,
 };

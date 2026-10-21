@@ -52,6 +52,7 @@ function run(n: number, minutes: number, over: Json = {}): Json {
     partsDelivered: 0,
     parts: [],
     summaryDeliveryState: null,
+    phaseDurationsMs: null,
     ...over,
   };
 }

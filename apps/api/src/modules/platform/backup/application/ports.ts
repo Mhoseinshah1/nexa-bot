@@ -4,6 +4,7 @@ import type {
   BackupDeliveryState,
   BackupManifest,
   BackupRunState,
+  BackupPhaseDurationsMs,
   BackupStage,
   BackupTrigger,
 } from '@nexa/contracts';
@@ -315,6 +316,8 @@ export interface BackupRunRow {
   readonly archiveSealId: string | null;
   /** The summary message's outcome (a split archive only). */
   readonly summaryDeliveryState: BackupDeliveryState | null;
+  /** How long each stage took (Round 5B). Null before it was recorded, or on a reclaimed run. */
+  readonly phaseDurationsMs: BackupPhaseDurationsMs | null;
 }
 
 /**
@@ -429,6 +432,7 @@ export interface BackupRunRepository {
     readonly partCount?: number | null;
     readonly archiveSealId?: string | null;
     readonly summaryDeliveryState?: BackupDeliveryState | null;
+    readonly phaseDurationsMs?: BackupPhaseDurationsMs | null;
   }): Promise<void>;
 
   /**
@@ -552,6 +556,12 @@ export interface BackupArchiver {
   checksum(path: string): Promise<{ readonly checksum: string; readonly bytes: number }>;
   /** The container the next `seal` will write (E4): `SEVEN_ZIP` when a password is set. */
   nextFormat?(): Promise<BackupArchiveFormat>;
+  /**
+   * Refuses, by throwing, a seal that could not run on this host right now — checked BEFORE
+   * the dump so a host without the memory to compress does not spend an hour dumping first.
+   * `seal` decides again with the memory it then sees; this is only the early answer.
+   */
+  preflight?(): Promise<void>;
 }
 
 export interface BackupManifestInput {

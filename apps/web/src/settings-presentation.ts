@@ -127,6 +127,7 @@ export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = [
   // backups it schedules, as a switch and an interval with a unit — never raw minutes.
   BACKUP_SCHEDULE_SETTING_KEYS.enabled,
   BACKUP_SCHEDULE_SETTING_KEYS.intervalMinutes,
+  BACKUP_SCHEDULE_SETTING_KEYS.dailyTime,
   // Track 3 §2: PANEL-scoped — one value per panel, on that panel's «فایل‌های اتصال» tab.
   ...PANEL_SETTING_KEYS,
 ];
@@ -326,6 +327,12 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     description: 'web.backup_schedule_hint',
     group: 'ops',
     control: { kind: 'integer', unit: 'web.unit_minutes', optional: true },
+  },
+  'backup.daily_time': {
+    title: 'web.backup_schedule_daily',
+    description: 'web.backup_schedule_daily_hint',
+    group: 'ops',
+    control: { kind: 'text' },
   },
   // E5: how many archive FILES stay on the server. On the generic settings page, under ops.
   'backup.archive_keep_count': {

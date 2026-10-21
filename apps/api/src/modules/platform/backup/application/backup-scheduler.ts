@@ -1,5 +1,6 @@
-import type { Clock } from '@nexa/contracts';
+import { PLATFORM_ERROR_CODES, type Clock } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
+import { latestDailySlot } from './backup-schedule.js';
 import type { BackupRunRepository } from './ports.js';
 import type { BackupService } from './backup.service.js';
 
@@ -27,6 +28,20 @@ import type { BackupService } from './backup.service.js';
  * is always started: a disabled schedule is a tick that decides nothing is due,
  * not a loop that does not exist.
  */
+/**
+ * After a run failed for MEMORY (a tool the kernel killed, or a refusal because the host had
+ * too little free), the scheduler starts no other for this long. The failure is a property of
+ * the host's load, not a transient fault: an immediate retry five minutes later meets the same
+ * memory, is killed the same way, and takes another process's memory with it for the dump.
+ * A manual backup is not held back — an operator who has freed memory should be able to try.
+ */
+export const BACKUP_MEMORY_FAILURE_COOLDOWN_MS = 60 * 60_000;
+
+const MEMORY_FAILURE_CODES: ReadonlySet<string> = new Set([
+  PLATFORM_ERROR_CODES.BACKUP_TOOL_OOM_KILLED,
+  PLATFORM_ERROR_CODES.BACKUP_MEMORY_INSUFFICIENT,
+]);
+
 export interface BackupSchedulerDeps {
   readonly service: BackupService;
   readonly runs: BackupRunRepository;
@@ -43,7 +58,12 @@ export interface BackupSchedulerDeps {
    * The schedule in force NOW: on/off, and how long after the last successful backup
    * the next one is due. `BackupSchedulePolicy.effective` in production.
    */
-  readonly schedule: () => Promise<{ readonly enabled: boolean; readonly intervalMs: number }>;
+  readonly schedule: () => Promise<{
+    readonly enabled: boolean;
+    readonly intervalMs: number;
+    /** `HH:MM` (Asia/Tehran): due once per day at that time instead of every `intervalMs`. */
+    readonly dailyTime?: string | null;
+  }>;
   /** How often to ask. Much shorter than the interval; asking is cheap. */
   readonly tickIntervalMs: number;
   /**
@@ -151,11 +171,38 @@ export class BackupScheduler {
 
       const now = this.deps.clock.now();
       const last = await this.deps.runs.lastSucceededAt();
-      const dueAt = last === null ? 0 : last.getTime() + schedule.intervalMs;
       // A never-backed-up installation is due immediately. That is the correct
       // reading of "no backup exists", and it is also what makes the first run
       // after an install happen without anybody remembering to ask for one.
-      if (now.getTime() < dueAt) {
+      const due =
+        last === null
+          ? true
+          : schedule.dailyTime !== undefined && schedule.dailyTime !== null
+            ? last.getTime() < latestDailySlot(now, schedule.dailyTime).getTime()
+            : now.getTime() >= last.getTime() + schedule.intervalMs;
+      if (!due) {
+        this.progress.record(now.getTime());
+        return;
+      }
+
+      /*
+       * NOT RIGHT AFTER A MEMORY FAILURE (Round 5B). The newest run is what a failed
+       * attempt leaves behind (a failure never resets the due clock, so without this the
+       * next tick, five minutes on, would dump and compress again into the same wall).
+       */
+      const [newest] = await this.deps.runs.latest(1);
+      if (
+        newest !== undefined &&
+        newest.state === 'FAILED' &&
+        newest.failureCode !== null &&
+        MEMORY_FAILURE_CODES.has(newest.failureCode) &&
+        newest.finishedAt !== null &&
+        now.getTime() - newest.finishedAt.getTime() < BACKUP_MEMORY_FAILURE_COOLDOWN_MS
+      ) {
+        this.deps.logger.info(
+          { backupId: newest.id, code: newest.failureCode },
+          'scheduled backup skipped; the last run failed for memory less than an hour ago',
+        );
         this.progress.record(now.getTime());
         return;
       }

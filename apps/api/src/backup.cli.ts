@@ -8,6 +8,11 @@ import { loadConfig } from './infrastructure/config/load-config.js';
 import { resolveKeyring } from './infrastructure/crypto/resolve-keyring.js';
 import { DualFormatBackupArchiver } from './modules/platform/backup/infrastructure/archiver.js';
 import { isSevenZipFile } from './modules/platform/backup/infrastructure/seven-zip.js';
+import {
+  DEFAULT_SEVEN_ZIP_HEADROOM_MB,
+  DEFAULT_SEVEN_ZIP_MEMORY_MB,
+  readMemAvailableMb,
+} from './modules/platform/backup/infrastructure/seven-zip-levels.js';
 import { readArchiveHeader } from './modules/platform/backup/infrastructure/archive.js';
 import {
   keepScratchAlive,
@@ -414,6 +419,9 @@ function sevenZipOptionsFromEnvironment() {
     binary: process.env.BACKUP_SEVEN_ZIP_BIN?.trim() || '7z',
     level: number('BACKUP_SEVEN_ZIP_LEVEL', 9),
     threads: number('BACKUP_SEVEN_ZIP_THREADS', 2),
+    memoryBudgetMb: number('BACKUP_SEVEN_ZIP_MEMORY_MB', DEFAULT_SEVEN_ZIP_MEMORY_MB),
+    memoryHeadroomMb: number('BACKUP_SEVEN_ZIP_HEADROOM_MB', DEFAULT_SEVEN_ZIP_HEADROOM_MB),
+    readAvailableMb: readMemAvailableMb,
     sealTimeoutMs: number('BACKUP_DUMP_TIMEOUT_MS', 2 * 3_600_000),
     openTimeoutMs: number('BACKUP_RESTORE_TIMEOUT_MS', 2 * 3_600_000),
   };

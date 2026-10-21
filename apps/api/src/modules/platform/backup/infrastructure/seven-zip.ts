@@ -12,6 +12,12 @@ import {
   type BackupManifest,
 } from '@nexa/contracts';
 import { assertOutsideTransaction } from '../../../../infrastructure/transaction-boundary.js';
+import {
+  chooseSevenZipLevel,
+  type AvailableMemoryReader,
+  type SevenZipLevel,
+} from './seven-zip-levels.js';
+import { killedBySignal, toolOomKilled, wrapLowPriority } from './tool-process.js';
 
 /**
  * The 7-Zip backup archive (Round 4 PR-E, E4).
@@ -54,10 +60,21 @@ const MAX_CAPTURED = 16 * 1024;
 export interface SevenZipOptions {
   /** The 7-Zip console binary (`7z`, or `7zz` on Debian bookworm's `7zip`). */
   readonly binary: string;
-  /** LZMA2 level, 1–9. */
+  /** The CEILING on LZMA2 effort, 1–9 (`BACKUP_SEVEN_ZIP_LEVEL`). The level table decides. */
   readonly level: number;
-  /** Compression threads. */
+  /** The CEILING on compression threads (`BACKUP_SEVEN_ZIP_THREADS`). */
   readonly threads: number;
+  /** The most memory 7-Zip may use while sealing, MiB (`BACKUP_SEVEN_ZIP_MEMORY_MB`). */
+  readonly memoryBudgetMb: number;
+  /** Memory the host keeps free beside 7-Zip, MiB. */
+  readonly memoryHeadroomMb: number;
+  /** MemAvailable reader; `readMemAvailableMb` in production, a fake in tests. */
+  readonly readAvailableMb: AvailableMemoryReader;
+  /**
+   * The nice/ionice argv prefix every 7-Zip child runs under. Absent: detected once per
+   * process (`defaultLowPriorityPrefix`). `[]`: none.
+   */
+  readonly lowPriorityPrefix?: readonly string[];
   readonly sealTimeoutMs: number;
   readonly openTimeoutMs: number;
 }
@@ -99,6 +116,7 @@ function authFailed(): NexaError {
 
 interface ChildResult {
   readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
   readonly stderr: string;
   readonly stdout: Buffer;
 }
@@ -117,10 +135,12 @@ function run7z(input: {
   readonly timeoutMs: number;
   readonly stdoutSink?: NodeJS.WritableStream;
   readonly maxStdout?: number;
+  readonly lowPriorityPrefix?: readonly string[] | undefined;
 }): Promise<ChildResult> {
   assertOutsideTransaction('The 7-Zip subprocess');
   return new Promise((resolve, reject) => {
-    const child = spawn(input.binary, [...input.args], {
+    const wrapped = wrapLowPriority(input.binary, input.args, input.lowPriorityPrefix);
+    const child = spawn(wrapped.command, [...wrapped.args], {
       cwd: input.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       // A locale 7-Zip can print paths in; nothing from the parent's environment is needed.
@@ -178,7 +198,7 @@ function run7z(input: {
         }),
       );
     });
-    child.on('close', (code) => {
+    child.on('close', (code, signal) => {
       clearTimeout(timer);
       if (timedOut) {
         reject(
@@ -198,7 +218,7 @@ function run7z(input: {
         reject(malformed('7-Zip wrote more output than a listing can be'));
         return;
       }
-      resolve({ code, stderr, stdout: Buffer.concat(chunks) });
+      resolve({ code, signal, stderr, stdout: Buffer.concat(chunks) });
     });
   });
 }
@@ -206,6 +226,70 @@ function run7z(input: {
 /** The archive-type switch: a `.001` is opened as 7-Zip's split set, anything else as 7z. */
 function typeSwitch(archivePath: string): string {
   return /\.001$/.test(archivePath) ? '-t7z.split' : '-t7z';
+}
+
+/**
+ * The 7-Zip argv for one level. `-mx`, `-md` and `-mmt` are always explicit: left to the tool,
+ * the dictionary and thread count follow the host's cores and RAM, which is how a 2.4 GB peak
+ * reached a 4 GB server.
+ */
+export function sealArgs(
+  level: SevenZipLevel,
+  archivePath: string,
+  dumpName: string,
+): readonly string[] {
+  return [
+    'a',
+    '-t7z',
+    '-m0=lzma2',
+    `-mx=${String(level.mx)}`,
+    `-md=${level.md}`,
+    `-mmt=${String(level.mmt)}`,
+    '-ms=off',
+    '-mhe=on',
+    // `-p` with no value: read the password from stdin.
+    '-p',
+    '-bd',
+    '-y',
+    '--',
+    archivePath,
+    MANIFEST_ENTRY,
+    dumpName,
+  ];
+}
+
+/** Chooses the level for this host right now, or refuses with `backup.memory_insufficient`. */
+async function pickLevel(options: SevenZipOptions): Promise<SevenZipLevel> {
+  const choice = await chooseSevenZipLevel({
+    budgetMb: options.memoryBudgetMb,
+    headroomMb: options.memoryHeadroomMb,
+    maxMx: options.level,
+    maxThreads: options.threads,
+    readAvailableMb: options.readAvailableMb,
+  });
+  if (choice.kind === 'LEVEL') return choice.level;
+  throw new NexaError({
+    kind: 'INTERNAL',
+    code: PLATFORM_ERROR_CODES.BACKUP_MEMORY_INSUFFICIENT,
+    message:
+      'There is not enough free memory to compress the backup, so 7-Zip was not started. ' +
+      `It needs ${String(choice.neededMb)} MiB at the lowest level and may use ` +
+      `${String(choice.allowanceMb)} MiB.`,
+    details: {
+      neededMb: choice.neededMb,
+      allowanceMb: choice.allowanceMb,
+      availableMb: choice.availableMb,
+      budgetMb: options.memoryBudgetMb,
+    },
+  });
+}
+
+/**
+ * Whether a backup could be sealed right now, without sealing one. The pipeline asks before
+ * the dump, so a host that cannot compress does not spend an hour dumping first.
+ */
+export async function assertSevenZipMemory(options: SevenZipOptions): Promise<void> {
+  await pickLevel(options);
 }
 
 /**
@@ -225,6 +309,9 @@ export async function sealSevenZip(input: {
   const manifestPath = join(directory, MANIFEST_ENTRY);
   const dumpName = basename(input.dumpPath);
   if (dumpName === MANIFEST_ENTRY) throw malformed('the dump cannot be named like the manifest');
+  // BEFORE anything is written or spawned: a level that does not fit is refused here, not
+  // discovered when the kernel kills 7-Zip half way through the archive.
+  const level = await pickLevel(input.options);
   await rm(input.archivePath, { force: true });
   await writeFile(manifestPath, JSON.stringify(input.manifest), { mode: 0o600, flag: 'w' });
   try {
@@ -233,24 +320,12 @@ export async function sealSevenZip(input: {
       cwd: directory,
       password: input.password,
       timeoutMs: input.options.sealTimeoutMs,
-      args: [
-        'a',
-        '-t7z',
-        '-m0=lzma2',
-        `-mx=${String(input.options.level)}`,
-        `-mmt=${String(input.options.threads)}`,
-        '-ms=off',
-        '-mhe=on',
-        // `-p` with no value: read the password from stdin.
-        '-p',
-        '-bd',
-        '-y',
-        '--',
-        input.archivePath,
-        MANIFEST_ENTRY,
-        dumpName,
-      ],
+      lowPriorityPrefix: input.options.lowPriorityPrefix,
+      args: sealArgs(level, input.archivePath, dumpName),
     });
+    if (killedBySignal(result.code, result.signal)) {
+      throw toolOomKilled('7-Zip', result.code, result.signal);
+    }
     if (result.code !== 0) {
       throw new NexaError({
         kind: 'INTERNAL',
@@ -280,6 +355,7 @@ async function list(
     binary: options.binary,
     password,
     timeoutMs: options.openTimeoutMs,
+    lowPriorityPrefix: options.lowPriorityPrefix,
     args: ['l', '-slt', '-bd', typeSwitch(archivePath), '--', archivePath],
   });
   const text = result.stdout.toString('utf8');
@@ -352,6 +428,7 @@ export async function openSevenZip(input: {
     password,
     timeoutMs: input.options.openTimeoutMs,
     maxStdout: MAX_MANIFEST_BYTES,
+    lowPriorityPrefix: input.options.lowPriorityPrefix,
     args: [
       'x',
       '-so',
@@ -362,6 +439,9 @@ export async function openSevenZip(input: {
       MANIFEST_ENTRY,
     ],
   });
+  if (killedBySignal(manifestRun.code, manifestRun.signal)) {
+    throw toolOomKilled('7-Zip', manifestRun.code, manifestRun.signal);
+  }
   if (manifestRun.code !== 0) throw authFailed();
   let parsed: unknown;
   try {
@@ -390,9 +470,14 @@ export async function openSevenZip(input: {
     password,
     timeoutMs: input.options.openTimeoutMs,
     stdoutSink: counter,
+    lowPriorityPrefix: input.options.lowPriorityPrefix,
     args: ['x', '-so', '-bd', typeSwitch(input.archivePath), '--', input.archivePath, dumpEntry],
   });
   await sinkDone;
+  if (killedBySignal(dumpRun.code, dumpRun.signal)) {
+    await rm(input.dumpPath, { force: true });
+    throw toolOomKilled('7-Zip', dumpRun.code, dumpRun.signal);
+  }
   if (dumpRun.code !== 0) {
     await rm(input.dumpPath, { force: true });
     if (/missing volume|unexpected end/i.test(dumpRun.stderr)) {
