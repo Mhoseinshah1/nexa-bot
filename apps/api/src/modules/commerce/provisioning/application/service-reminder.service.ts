@@ -281,8 +281,8 @@ export class ServiceReminderService {
    * Round 5A-2 item 1 — gives every imported service lacking a baseline the baseline it
    * would have got at import: every expiry and usage threshold its CURRENT state has already
    * reached is recorded as already passed (`passedReminderKinds`, the seed's own rule), the
-   * baseline row is written at this moment with the figure on the row when it is a
-   * measurement, and nothing is announced.
+   * baseline row is written at this moment WITHOUT a figure (the first panel read after the
+   * takeover is the baseline; round 5C-2), and nothing is announced.
    *
    * Idempotent (`ON CONFLICT DO NOTHING` on both writes), resumable (keyset by id, rows that
    * have a baseline never come back), and bounded per batch: each batch is its own
@@ -342,7 +342,17 @@ export class ServiceReminderService {
                 serviceId: candidate.serviceId,
                 at: now,
                 basis: candidate.basis,
-                usedBytes: candidate.usageMeasured ? candidate.trafficUsedBytes : null,
+                /*
+                 * Round 5C-2: NEVER the figure on the row. A backfill is the lane taking an
+                 * installation over, and the figure the row holds is the import's (or an earlier
+                 * release's) — weeks old by now. Recording it as the baseline made the first
+                 * panel read after the takeover look like a crossing and announced it (38
+                 * notices in 20 minutes on the test server). With NULL the first figure
+                 * `recordUsage` records is the baseline: silent, every threshold it has already
+                 * reached marked as passed; only a LATER crossing is told. The thresholds the
+                 * stale figure reached are still recorded above, silently.
+                 */
+                usedBytes: null,
               },
               tx,
             );
