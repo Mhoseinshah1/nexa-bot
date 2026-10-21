@@ -291,8 +291,12 @@ export class OperationalEventPresenter implements OpsEventPresenter {
     if (service === null || service.source !== 'NEXA') return null;
     const customer = await facts.customer(scope, service.customerId, tx);
     if (customer === null || customer.source !== 'NEXA') return null;
+    // A stall that does not say which operation stalled is NOT a PROVISION: defaulting it
+    // read the service's original order and reported its creation as failed, with that
+    // order's amount. It keeps the generic layout (every producer now names its type).
     const rawType = input.context?.['operationType'];
-    const operationType = typeof rawType === 'string' ? rawType : 'PROVISION';
+    if (typeof rawType !== 'string') return null;
+    const operationType = rawType;
     const reason = typeof input.context?.['reason'] === 'string' ? input.context['reason'] : null;
     const order =
       operationType === 'PROVISION' ? await facts.order(scope, service.orderId, tx) : null;

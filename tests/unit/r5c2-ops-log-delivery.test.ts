@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   money,
@@ -176,7 +177,7 @@ describe('provisioning.stalled is the error report, with every field', () => {
   it('a PROVISION stall is L23: customer, product, panel, amount, cause, technical, impact, codes', async () => {
     const presented = await presenter.present(
       tenant,
-      stalled({ reason: 'ATTEMPTS_SPENT' }),
+      stalled({ reason: 'ATTEMPTS_SPENT', operationType: 'PROVISION' }),
       recorded,
       {},
     );
@@ -202,14 +203,14 @@ describe('provisioning.stalled is the error report, with every field', () => {
     expect(text).not.toMatch(/provisioning\.stalled|A paid service|تعداد رخداد/);
   });
 
-  it('a stall with no operation type is a PROVISION stall too', async () => {
+  it('a stall with no operation type is NOT a PROVISION stall: the generic layout, no order read', async () => {
     const presented = await presenter.present(
       tenant,
       stalled({ reason: 'CALL_STRANDED' }),
       recorded,
       {},
     );
-    expect(presented!.templateKey).toBe('ops.log.error_provision');
+    expect(presented).toBeNull();
   });
 
   it('a non-PROVISION stall is L24 under the R5A-2 wording, and claims no order or amount', async () => {
@@ -307,5 +308,21 @@ describe('L10 — a service created after a purchase, with every field', () => {
       { kind: 'USER', ref: 'cust-1' },
       { kind: 'SERVICE', ref: 'svc-1' },
     ]);
+  });
+});
+
+describe('every producer of provisioning.stalled names the operation that stalled', () => {
+  it('each record() of the code carries operationType in its context', () => {
+    const source = readFileSync(
+      'apps/api/src/modules/commerce/provisioning/application/provisioner.service.ts',
+      'utf8',
+    );
+    const blocks = source
+      .split('code: PROVISIONING_STALLED_CODE,')
+      .slice(1)
+      .map((rest) => rest.slice(0, rest.indexOf('dedupeKey')))
+      .filter((block) => block.includes('context: {'));
+    expect(blocks.length).toBeGreaterThanOrEqual(7);
+    for (const block of blocks) expect(block).toContain('operationType: operation.type');
   });
 });
