@@ -126,8 +126,19 @@ export const DELAY_ANNOUNCED_OPERATIONS: readonly OperationType[] = ['PROVISION'
  * other customer-requested operation keeps the one shared `SERVICE_ACTION_SUCCEEDED`
  * sentence exactly as before; a failure is `SERVICE_ACTION_FAILED` whatever the type.
  */
-export function successKindFor(type: OperationType): CustomerNotificationKind {
-  return type === 'RENEW' ? 'SERVICE_RENEWED' : 'SERVICE_ACTION_SUCCEEDED';
+export function successKindFor(
+  type: OperationType,
+  purchasedAsType = false,
+): CustomerNotificationKind {
+  if (type === 'RENEW') return 'SERVICE_RENEWED';
+  /*
+   * R5C-1 item 4: a package the customer PAID for ends with its receipt. Only when the
+   * operation's order bought exactly this (`PURCHASED_AS`) — the receipt reads the order's
+   * line and the payment that paid for it, and an operation without one has neither.
+   */
+  if (purchasedAsType && type === 'ADD_TRAFFIC') return 'SERVICE_TRAFFIC_ADDED';
+  if (purchasedAsType && type === 'ADD_TIME') return 'SERVICE_TIME_ADDED';
+  return 'SERVICE_ACTION_SUCCEEDED';
 }
 
 /**
@@ -186,6 +197,11 @@ export interface OperationOutcomeReader {
      * that card (`OperationCardEditor`). Absent is false.
      */
     readonly answeredOnCard?: boolean;
+    /**
+     * R5C-1 item 4: the operation is an `ADD_TRAFFIC` / `ADD_TIME` whose ORDER bought exactly
+     * that (`PURCHASED_AS`), so its success is a receipt. Absent is false.
+     */
+    readonly purchasedAsType?: boolean;
   } | null>;
 
   /**
@@ -438,7 +454,9 @@ export class OperationOutcomeAnnouncer {
       await this.deps.notifier.notify(
         scope,
         subject.customerId,
-        outcome === 'SUCCEEDED' ? successKindFor(subject.type) : 'SERVICE_ACTION_FAILED',
+        outcome === 'SUCCEEDED'
+          ? successKindFor(subject.type, subject.purchasedAsType === true)
+          : 'SERVICE_ACTION_FAILED',
         operationId,
         this.deps.clock.now(),
         tx,

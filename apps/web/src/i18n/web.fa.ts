@@ -385,6 +385,9 @@ export const WEB_FA = {
     'وقتی ادمین از کیف پول مشتری دستی کسر می‌کند، به مشتری مبلغ و موجودی جدید گفته می‌شود؛ دلیل فقط اگر «نمایش دلیل به مشتری» زده شده باشد.',
   'web.feature_wallet_admin_notice_off_effect':
     'تا وقتی خاموش است، تغییرهای دستی موجودی به مشتری گفته نمی‌شود و روشن کردن دوباره، پیام تغییرهای این مدت را نمی‌فرستد.',
+  'web.feature_addon_time_in_renew_menu_title': 'نمایش زمان اضافه داخل تمدید هم',
+  'web.feature_addon_time_in_renew_menu_summary':
+    'روشن (پیش‌فرض): بسته‌های زمان اضافه علاوه بر دکمهٔ «خرید زمان اضافه» در منوی «تمدید سرویس» هم نشان داده می‌شوند. خاموش: فقط از دکمهٔ «خرید زمان اضافه» قابل خرید هستند و از منوی تمدید حذف می‌شوند.',
   'web.feature_rich_messages_title': 'دکمه‌های داخل پیام',
   'web.feature_rich_messages_summary':
     'صفحه‌های دکمه‌دار ربات به‌صورت «پیام غنی» تلگرام فرستاده می‌شوند و دکمه‌ها داخل خود پیام، بالای ساعت، قرار می‌گیرند؛ فهرست پلن‌ها جدول می‌شود و هر تاریخ طوری فرستاده می‌شود که کاربر بتواند آن را به وقت محلی خودش هم ببیند. اگر تلگرام پیامی را نپذیرد، همان صفحه یک بار به روش قبلی فرستاده و یک خطا در تاپیک «خطاها» ثبت می‌شود. منوی اصلی و صفحه‌های عکس‌دار تغییر نمی‌کنند.',
@@ -4525,6 +4528,7 @@ export const WEB_FA = {
   'web.ib_button_service_renew': 'تمدید سرویس',
   'web.ib_button_service_renew_option': 'گزینه‌های تمدید',
   'web.ib_button_service_add_traffic': 'افزایش حجم',
+  'web.ib_button_service_add_time': 'افزایش زمان',
   'web.ib_button_service_addon_option': 'بسته‌های افزایش حجم و زمان',
   'web.ib_button_service_add_devices': 'افزایش کاربر',
   'web.ib_button_service_devices_option': 'تعداد کاربر اضافه',
@@ -10269,6 +10273,8 @@ export const WEB_FA = {
   'web.pay_notice_wallet_admin_credited': 'افزایش دستی موجودی',
   'web.pay_notice_wallet_admin_debited': 'کسر دستی موجودی',
   'web.pay_notice_account_unblocked': 'رفع مسدودی حساب',
+  'web.pay_notice_service_traffic_added': 'خرید حجم اضافه',
+  'web.pay_notice_service_time_added': 'خرید زمان اضافه',
   'web.pay_provider_pending': 'در انتظار',
   'web.pay_provider_processing': 'در حال پردازش',
   'web.pay_provider_completed': 'تکمیل‌شده',

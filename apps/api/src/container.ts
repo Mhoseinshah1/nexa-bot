@@ -6257,6 +6257,14 @@ export function createContainer(
           nextAttemptAt: operation.nextAttemptAt,
           // R3 item 10: asked from a service card, whose own edit is the answer.
           answeredOnCard: await operationCardRepository.hasCard(scope, operationId, tx),
+          // R5C-1 item 4 (`PURCHASED_AS`): the operation's type is what its order BOUGHT, so
+          // it is answered with a receipt. A SUSPEND carries the order that created its
+          // service, and never matches.
+          purchasedAsType:
+            operation.orderId !== null &&
+            (operation.type === 'ADD_TRAFFIC' || operation.type === 'ADD_TIME') &&
+            (await orderRepository.findById(scope, operation.orderId, tx))?.purpose ===
+              operation.type,
         };
       },
       /*
@@ -7935,6 +7943,9 @@ export function createContainer(
     }),
     antiSpam,
     botRuntime: new BotRuntime({
+      // R5C-1 item 4: «نمایش زمان اضافه داخل تمدید هم» (flag `addon_time_in_renew_menu`).
+      renewMenuShowsTime: (scope) =>
+        featureFlagResolver.isEnabled(scope, 'addon_time_in_renew_menu'),
       // Best-effort steps are logged here: a card's live read on open that failed
       // unexpectedly (pre-support A2), and a receipt's invoice finalisation that failed
       // after its turn's durable write (A10).

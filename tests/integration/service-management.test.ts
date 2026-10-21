@@ -2178,6 +2178,9 @@ describe('a customer manages the service they bought', () => {
       'quantity-shown',
     );
     await fund('quantity-shown');
+    // The fixture's first update number is 0, which is no Telegram message id: a tap that names
+    // the message it came from needs a real one for its quote to be an edit of it.
+    updateSeq += 7;
 
     const quoted = await runtime().handle(
       tenantA,
@@ -2190,8 +2193,13 @@ describe('a customer manages the service they bought', () => {
     // unit, never the stored integer (pre-release §3). 10^10 bytes is 9.31 GB under the
     // project's binary gigabyte, to the nearest hundredth (Package C), the same figure the
     // Web Admin shows for it.
-    expect(lastMessage()).toContain('حجم افزوده: 9.31 گیگابایت');
-    expect(lastMessage()).not.toContain('10000000000');
+    // R5C-1 item 4: the tap on a package is an EDIT of the tapped message now (the quote is the
+    // list message's next screen), so the screen is the last `editMessageText`.
+    const screen = JSON.stringify(
+      sent.filter((one) => one.url.includes('/editMessageText')).pop() ?? {},
+    );
+    expect(screen).toContain('حجم افزوده: 9.31 گیگابایت');
+    expect(screen).not.toContain('10000000000');
   });
 
   it('answers a stale commercial button when the panel can no longer do it', async () => {
