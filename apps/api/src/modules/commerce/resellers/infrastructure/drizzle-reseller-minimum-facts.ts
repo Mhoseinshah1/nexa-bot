@@ -1,7 +1,14 @@
 import { sql } from 'drizzle-orm';
-import { money, type Calendar, type CurrencyCode, type TemplateValues } from '@nexa/contracts';
+import {
+  money,
+  type Calendar,
+  type RecordSource,
+  type CurrencyCode,
+  type TemplateValues,
+} from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { TenantMonthlyPeriods } from '../../../../infrastructure/time/monthly-period.js';
+import { monthCountsForReseller } from '../domain/import-period.js';
 import { resellerSalesStatement } from '../../reporting/infrastructure/drizzle-reporting.repository.js';
 
 /**
@@ -30,6 +37,9 @@ interface NoticeRow {
   own_minimum_currency: string | null;
   display_timezone: string;
   calendar: string;
+  /** Round 5A-2 item 4: the reseller's provenance and when its row came to exist. */
+  reseller_source: string;
+  reseller_created_at: string;
 }
 
 async function noticeOf(db: Database, tenantId: string, id: string): Promise<NoticeRow | null> {
@@ -40,7 +50,8 @@ async function noticeOf(db: Database, tenantId: string, id: string): Promise<Not
            tr.monthly_minimum_currency AS tier_minimum_currency,
            r.monthly_minimum_amount::text AS own_minimum_amount,
            r.monthly_minimum_currency AS own_minimum_currency,
-           t.display_timezone, t.calendar
+           t.display_timezone, t.calendar,
+           r.source AS reseller_source, r.created_at AS reseller_created_at
       FROM reseller_minimum_notices n
       JOIN resellers r ON r.tenant_id = n.tenant_id AND r.customer_id = n.customer_id
       JOIN reseller_tiers tr ON tr.tenant_id = r.tenant_id AND tr.id = r.tier_id
@@ -82,6 +93,31 @@ function effectiveNow(notice: NoticeRow): { amount: bigint; currency: string } |
 
 const periods = new TenantMonthlyPeriods();
 
+/** Round 5A-2 item 4: the notice's month is one Nexa observed (`monthCountsForReseller`). */
+function noticeMonthCounts(notice: NoticeRow): boolean {
+  return monthCountsForReseller(
+    {
+      source: notice.reseller_source as RecordSource,
+      createdAt: new Date(notice.reseller_created_at),
+    },
+    new Date(notice.period_start),
+  );
+}
+
+/**
+ * `RESELLER_MINIMUM_ACHIEVED`'s precondition (Round 5A-2): the notice is an achievement and
+ * its month is one Nexa observed. The fact itself never lapses; only a month the import
+ * predates is refused.
+ */
+export async function resellerMinimumAchievedHolds(
+  db: Database,
+  tenantId: string,
+  noticeId: string,
+): Promise<boolean> {
+  const notice = await noticeOf(db, tenantId, noticeId);
+  return notice !== null && notice.kind === 'ACHIEVED' && noticeMonthCounts(notice);
+}
+
 /**
  * `RESELLER_MINIMUM_REMINDER`'s precondition: the reseller is still ACTIVE, the month has
  * not ended, the minimum in force is still the one the notice recorded, and the month's
@@ -97,6 +133,7 @@ export async function resellerMinimumReminderHolds(
 ): Promise<boolean> {
   const notice = await noticeOf(db, tenantId, noticeId);
   if (notice === null || notice.kind !== 'REMINDER') return false;
+  if (!noticeMonthCounts(notice)) return false;
   if (notice.status !== 'ACTIVE') return false;
   if (now.getTime() >= new Date(notice.period_end).getTime()) return false;
   const minimum = effectiveNow(notice);

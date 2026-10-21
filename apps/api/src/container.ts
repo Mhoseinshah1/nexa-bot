@@ -4444,6 +4444,12 @@ export function createContainer(
         : { tenantId: installationTenantId, botInstanceId: null },
     intervalMs: SERVICE_REMINDER_INTERVAL_MS,
     now: () => clock.now().getTime(),
+    // Round 5A-2: the worker-start reconcile of imported services' baselines and notices,
+    // the whole backlog, in the background. Every pass reconciles again before it sweeps.
+    reconcileAtStart: async (scope) => {
+      await serviceReminderSweep.reconcileImportedNotices(scope, { unbounded: true });
+      await resellerMinimumService.reconcileImportedPeriodNotices(scope);
+    },
     logger,
   });
 
@@ -4488,6 +4494,7 @@ export function createContainer(
     uow,
     clock,
     ids,
+    audit,
   });
   const customerReminderLoop = new CustomerReminderLoop(
     [

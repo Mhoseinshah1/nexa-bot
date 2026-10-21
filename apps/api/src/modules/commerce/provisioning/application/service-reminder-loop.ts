@@ -48,6 +48,13 @@ export class ServiceReminderLoop {
       readonly scope: () => TenantContext | null;
       readonly intervalMs: number;
       readonly now: () => number;
+      /**
+       * Round 5A-2: what to reconcile when the worker starts — the imported services without a
+       * baseline and the notices queued for them. Optional so a loop in a test needs none.
+       * Run once, in the background, never holding the first pass back; a failure is logged
+       * and the next pass (which reconciles first) retries.
+       */
+      readonly reconcileAtStart?: (scope: TenantContext) => Promise<unknown>;
       readonly logger: {
         info: (context: Record<string, unknown>, message: string) => void;
         error: (context: Record<string, unknown>, message: string) => void;
@@ -68,6 +75,20 @@ export class ServiceReminderLoop {
     this.timer = setInterval(() => void this.tick(), this.options.intervalMs);
     // Never hold the event loop open for a housekeeping timer.
     this.timer.unref?.();
+    void this.reconcileOnStart();
+  }
+
+  /** Round 5A-2: the worker-start reconcile. See `options.reconcileAtStart`. */
+  private async reconcileOnStart(): Promise<void> {
+    const reconcile = this.options.reconcileAtStart;
+    if (reconcile === undefined) return;
+    try {
+      const scope = this.options.scope();
+      if (scope === null) return;
+      await reconcile(scope);
+    } catch (error: unknown) {
+      this.options.logger.error({ error }, 'imported-notice reconcile at start failed');
+    }
   }
 
   /**

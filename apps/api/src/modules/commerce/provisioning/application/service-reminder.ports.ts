@@ -54,6 +54,13 @@ export interface ServiceReminderCandidate {
    * `importedReminderKinds`. Absent is null.
    */
   readonly importBaseline?: ServiceImportBaseline | null;
+  /**
+   * Round 5A-2: an imported service (`source <> 'NEXA'`) with NO baseline row. Nothing can say
+   * what it already was when the import created it, so the sweep records what it reached and
+   * announces none of it (`reconcileImportedBaselines` writes the row; until it has, silence).
+   * Absent is false.
+   */
+  readonly importUnproven?: boolean;
 }
 
 /**
@@ -205,6 +212,32 @@ export interface ServiceReminderRepository {
    * Returns the notices moved, by kind, so the caller can audit the batch.
    */
   supersedeImportedUsageNotices(
+    scope: TenantContext,
+    limit: number,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<readonly { readonly kind: string; readonly customerId: string }[]>;
+
+  /**
+   * Round 5A-2 item 1: up to `limit` imported services (`source <> 'NEXA'`) with NO baseline
+   * row, in id order after `afterId` (keyset — resumable, never an offset), read exactly as
+   * `seedCandidate` reads one, and row-locked `SKIP LOCKED` so two replicas never wait on
+   * each other. A row another transaction holds is left for a later pass.
+   */
+  listUnbaselinedImported(
+    scope: TenantContext,
+    afterId: string | null,
+    limit: number,
+    tx: TransactionScope,
+  ): Promise<readonly (ServiceReminderCandidate & { readonly usageMeasured: boolean })[]>;
+
+  /**
+   * Round 5A-2 item 3: `PENDING -> SUPERSEDED` (unsent, no attempt spent, nothing deleted,
+   * claimed rows untouched) for up to `limit` queued service-reminder notices of EVERY
+   * reminder kind that `importedServiceNoticeRefused` refuses at send time — the same
+   * definition, so a row moved here is one the dispatcher would have refused.
+   */
+  supersedeImportedServiceNotices(
     scope: TenantContext,
     limit: number,
     now: Date,

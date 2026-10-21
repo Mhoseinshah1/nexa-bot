@@ -1,6 +1,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import {
   EXPIRY_DAY_MIN_NOTICE_MS,
+  EXPIRY_REMINDER_KINDS,
   EXPIRY_REMINDER_STATES,
   SERVICE_REMINDER_NOTIFICATION_KINDS,
   USAGE_REMINDER_KINDS,
@@ -15,6 +16,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { serviceReminders } from '../../../../infrastructure/persistence/schema.js';
 import { importedUnmeasuredUsageNotice } from '../../../../infrastructure/persistence/imported-usage-notice.js';
+import { importedServiceNoticeRefused } from '../../../../infrastructure/persistence/imported-notice-guard.js';
 import type {
   ServiceReminderBasis,
   ServiceReminderCandidate,
@@ -37,6 +39,8 @@ interface CandidateRow {
   /** Round 4 PR-H: the import baseline for the current period (`IMPORT_BASELINE_COLUMNS`). */
   readonly baseline_at?: string | null;
   readonly baseline_used_bytes?: string | null;
+  /** Round 5A-2: an imported service with no baseline row. */
+  readonly import_unproven?: boolean | null;
 }
 
 /**
@@ -75,7 +79,8 @@ const IMPORT_BASELINE_COLUMNS = sql`
            THEN b.used_bytes END
     WHEN s.source <> 'NEXA' AND s.usage_synced_at IS NOT NULL
          AND s.usage_synced_at <= s.created_at THEN s.traffic_used_bytes
-  END AS baseline_used_bytes`;
+  END AS baseline_used_bytes,
+  (s.source <> 'NEXA' AND b.service_id IS NULL) AS import_unproven`;
 
 function toCandidate(row: CandidateRow): ServiceReminderCandidate {
   const limit = BigInt(row.traffic_limit_bytes);
@@ -104,6 +109,7 @@ function toCandidate(row: CandidateRow): ServiceReminderCandidate {
     trafficLimitBytes: limit,
     trafficUsedBytes: BigInt(row.traffic_used_bytes),
     basis: { expiresAt: row.expires_at, trafficLimitBytes: limit },
+    importUnproven: row.import_unproven === true,
     importBaseline:
       row.baseline_at === undefined || row.baseline_at === null
         ? null
@@ -186,7 +192,8 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
     const result = await this.exec(tx).execute(sql`
       SELECT c.id, c.customer_id, c.provider_username, c.expires_at,
              c.traffic_limit_bytes, c.traffic_used_bytes,
-             c.day_start AS expiry_day_starts_at, c.baseline_at, c.baseline_used_bytes
+             c.day_start AS expiry_day_starts_at, c.baseline_at, c.baseline_used_bytes,
+             c.import_unproven
       FROM (
         SELECT s.id, s.tenant_id, s.customer_id, s.provider_username, s.expires_at,
                s.traffic_limit_bytes, s.traffic_used_bytes,
@@ -400,6 +407,81 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
           AND cn.state = 'PENDING'
           AND cn.send_started_at IS NULL
           AND ${importedUnmeasuredUsageNotice()}
+        ORDER BY cn.created_at, cn.id
+        LIMIT ${limit}
+        FOR UPDATE OF cn SKIP LOCKED
+      )
+      UPDATE customer_notifications n
+      SET state = 'SUPERSEDED', resolved_at = ${now}, next_attempt_at = NULL, updated_at = ${now}
+      FROM cand
+      WHERE n.id = cand.id AND n.state = 'PENDING' AND n.send_started_at IS NULL
+      RETURNING n.kind, n.customer_id
+    `);
+    return (moved.rows as unknown as { kind: string; customer_id: string }[]).map((row) => ({
+      kind: row.kind,
+      customerId: row.customer_id,
+    }));
+  }
+
+  /** See the port. Keyset by id, `FOR UPDATE OF s SKIP LOCKED`; reads what `seedCandidate` reads. */
+  async listUnbaselinedImported(
+    scope: TenantContext,
+    afterId: string | null,
+    limit: number,
+    tx: TransactionScope,
+  ): Promise<readonly (ServiceReminderCandidate & { readonly usageMeasured: boolean })[]> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.exec(tx).execute(sql`
+      SELECT s.id, s.customer_id, s.provider_username, s.expires_at,
+             s.traffic_limit_bytes, s.traffic_used_bytes,
+             (s.usage_synced_at IS NOT NULL) AS usage_measured,
+             CASE WHEN s.expires_at IS NULL THEN NULL ELSE LEAST(
+               date_trunc('day', s.expires_at AT TIME ZONE t.display_timezone)
+                 AT TIME ZONE t.display_timezone,
+               s.expires_at - make_interval(secs => ${EXPIRY_DAY_MIN_NOTICE_MS / 1000})
+             ) END AS expiry_day_starts_at
+      FROM services s
+      JOIN tenants t ON t.id = s.tenant_id
+      WHERE s.tenant_id = ${tenantId}
+        AND s.source <> 'NEXA'
+        ${afterId === null ? sql`` : sql`AND s.id > ${afterId}::uuid`}
+        AND NOT EXISTS (
+          SELECT 1 FROM service_reminder_baselines b
+          WHERE b.tenant_id = s.tenant_id AND b.service_id = s.id
+        )
+      ORDER BY s.id
+      LIMIT ${limit}
+      FOR UPDATE OF s SKIP LOCKED
+    `);
+    return (result.rows as unknown as (CandidateRow & { usage_measured: boolean })[]).map(
+      (row) => ({ ...toCandidate(row), usageMeasured: row.usage_measured }),
+    );
+  }
+
+  /** See the port. One conditional UPDATE over a locked, bounded batch; never a DELETE. */
+  async supersedeImportedServiceNotices(
+    scope: TenantContext,
+    limit: number,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<readonly { readonly kind: string; readonly customerId: string }[]> {
+    const tenantId = requireTenantId(scope);
+    const expiryKinds = EXPIRY_REMINDER_KINDS.map((k) => SERVICE_REMINDER_NOTIFICATION_KINDS[k]);
+    const usageKinds = USAGE_REMINDER_KINDS.map((k) => SERVICE_REMINDER_NOTIFICATION_KINDS[k]);
+    const moved = await this.exec(tx).execute(sql`
+      WITH cand AS (
+        SELECT cn.id
+        FROM customer_notifications cn
+        JOIN service_reminders r ON r.tenant_id = cn.tenant_id AND r.id = cn.subject_id
+        JOIN services s ON s.tenant_id = r.tenant_id AND s.id = r.service_id
+        WHERE cn.tenant_id = ${tenantId}
+          AND cn.kind = ANY(${sql.param([...expiryKinds, ...usageKinds])}::text[])
+          AND cn.state = 'PENDING'
+          AND cn.send_started_at IS NULL
+          AND (
+            (cn.kind = ANY(${sql.param(expiryKinds)}::text[]) AND ${importedServiceNoticeRefused('EXPIRY')})
+            OR (cn.kind = ANY(${sql.param(usageKinds)}::text[]) AND ${importedServiceNoticeRefused('USAGE')})
+          )
         ORDER BY cn.created_at, cn.id
         LIMIT ${limit}
         FOR UPDATE OF cn SKIP LOCKED
