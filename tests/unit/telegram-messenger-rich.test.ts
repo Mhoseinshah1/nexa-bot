@@ -141,6 +141,8 @@ afterEach(() => {
 
 const ON: RichMessageMode = { enabled: true, premiumEmoji: false };
 const PREMIUM: RichMessageMode = { enabled: true, premiumEmoji: true };
+/** R5C-2 B2: «نمایش پلن‌ها به‌صورت جدول» on, beside the rich-message switch. */
+const TABLE: RichMessageMode = { enabled: true, premiumEmoji: false, planTable: true };
 
 const PRICE = money(250_000n, 'IRT');
 
@@ -342,7 +344,7 @@ function routesOf(body: unknown): string[] {
 
 describe('with «دکمه‌های داخل پیام» on', () => {
   it('sends an inline-button screen as a rich message with its buttons inside it', async () => {
-    const { messenger, calls, respondWith } = harness({ mode: ON, rendered: RENDERED });
+    const { messenger, calls, respondWith } = harness({ mode: TABLE, rendered: RENDERED });
     respondWith([OK]);
     const result = await messenger.send(scope, SCREENS[0]?.message as CustomerMessage);
     expect(result).toEqual({ outcome: 'DELIVERED', messageId: 11 });
@@ -390,7 +392,7 @@ describe('with «دکمه‌های داخل پیام» on', () => {
   });
 
   it('draws the plan table — name, traffic, days, price — compact', async () => {
-    const { messenger, calls, respondWith } = harness({ mode: ON, rendered: RENDERED });
+    const { messenger, calls, respondWith } = harness({ mode: TABLE, rendered: RENDERED });
     respondWith([OK]);
     await messenger.send(scope, SCREENS[0]?.message as CustomerMessage);
     const blocks = (calls[0]?.body.rich_message as { blocks: Record<string, unknown>[] }).blocks;
@@ -409,6 +411,63 @@ describe('with «دکمه‌های داخل پیام» on', () => {
       // The stand-in renderer returns each cell template's raw default body.
       ['پلن طلایی', '{traffic}', '{durationDays}', formatMoney(PRICE)],
     ]);
+  });
+
+  /**
+   * R5C-2 B2. The owner does not want the plan list as a table automatically. With the rich
+   * switch on and «نمایش پلن‌ها به‌صورت جدول» off, the plan list is the table-less blocks.
+   * MUTATION: drawing the table whenever rich messages are on fails this test.
+   */
+  it('R5C-2 B2: draws NO table with the table switch off, and is otherwise the same screen', async () => {
+    const send = async (mode: RichMessageMode) => {
+      const { messenger, calls, respondWith } = harness({ mode, rendered: RENDERED });
+      respondWith([OK]);
+      await messenger.send(scope, SCREENS[0]?.message as CustomerMessage);
+      return (calls[0]?.body.rich_message as { blocks: { type: string }[] }).blocks;
+    };
+    const off = await send(ON);
+    const on = await send(TABLE);
+    expect(off.map((block) => block.type)).not.toContain('table');
+    expect(on.map((block) => block.type)).toContain('table');
+    expect(off).toEqual(on.filter((block) => block.type !== 'table'));
+    // Inert without the rich switch: the ordinary message is untouched by the table switch.
+    const plain = harness({
+      mode: { enabled: false, premiumEmoji: false, planTable: true },
+      rendered: RENDERED,
+    });
+    plain.respondWith([OK]);
+    await plain.messenger.send(scope, SCREENS[0]?.message as CustomerMessage);
+    expect(plain.calls[0]?.method).toBe('sendMessage');
+  });
+
+  /**
+   * R5C-2 B2. The plan-list header is the tenant's template, not a string in the sender: an
+   * edited title, a description under it and a hand-written table all reach the message, and
+   * the same text without rich messages is plain lines.
+   */
+  it('R5C-2 B2: the header, a description and a hand-written table come from the template', async () => {
+    const text = 'عنوان ویرایش‌شده\nتوضیح یک\n| سرویس | قیمت |\n| --- | --- |\n| طلایی | ۲۵۰ |';
+    const rendered = { ...RENDERED, [PLAIN_KEY]: text };
+    const rich = harness({ mode: ON, rendered });
+    rich.respondWith([OK]);
+    await rich.messenger.send(scope, SCREENS[0]?.message as CustomerMessage);
+    const blocks = (rich.calls[0]?.body.rich_message as { blocks: Record<string, unknown>[] })
+      .blocks;
+    expect(blocks.slice(0, 3).map((block) => block['type'])).toEqual([
+      'heading',
+      'paragraph',
+      'table',
+    ]);
+    expect(blocks[0]?.['text']).toBe('عنوان ویرایش‌شده');
+    expect(blocks[1]?.['text']).toBe('توضیح یک');
+
+    const plain = harness({ mode: 'ABSENT', rendered });
+    plain.respondWith([OK]);
+    await plain.messenger.send(scope, SCREENS[0]?.message as CustomerMessage);
+    expect(plain.calls[0]?.method).toBe('sendMessage');
+    expect(plain.calls[0]?.body['text']).toBe(
+      'عنوان ویرایش‌شده\nتوضیح یک\nسرویس | قیمت\nطلایی | ۲۵۰',
+    );
   });
 
   it('collapses the rules into a details block', async () => {
@@ -554,6 +613,19 @@ describe('premium emoji in rich messages (F3)', () => {
       expect(JSON.stringify(sent[0])).not.toContain('custom_emoji');
       expect(JSON.stringify(sent[0])).toContain('✅ یکی را انتخاب کنید');
     }
+  });
+
+  it('R5C-2 B2: a premium emoji written in the TITLE of the screen is drawn in the heading', async () => {
+    const rendered = { ...RENDERED, [PLAIN_KEY]: '{icon:success} عنوان با ایموجی\nتوضیح' };
+    const { messenger, calls, respondWith } = harness({ mode: PREMIUM, rendered, eligible: true });
+    respondWith([OK]);
+    await messenger.send(scope, SCREENS[0]?.message as CustomerMessage);
+    const blocks = (calls[0]?.body.rich_message as { blocks: Record<string, unknown>[] }).blocks;
+    expect(blocks[0]?.['type']).toBe('heading');
+    expect(JSON.stringify(blocks[0])).toContain(
+      `{"type":"custom_emoji","custom_emoji_id":"${ELIGIBLE_EMOJI}","alternative_text":"✅"}`,
+    );
+    expect(blocks[1]).toEqual({ type: 'paragraph', text: 'توضیح' });
   });
 
   it('never fails the screen: a refused premium rich message is sent the ordinary way', async () => {

@@ -44,6 +44,7 @@ import {
   fetchBroadcastHistory,
   fetchBroadcastRecipients,
   fetchBroadcasts,
+  fetchFeatureFlags,
   launchBroadcast,
   previewBroadcast,
   removeBroadcastMedia,
@@ -86,6 +87,8 @@ import {
   PermissionDeniedState,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { insertTable } from '../table-text';
+import { TextWithTables } from '../ui/text-with-tables';
 import { CheckField, FormSection, SaveBar } from './editor-layout';
 import { messageFor } from './settings';
 import {
@@ -546,6 +549,21 @@ function useBroadcastPresentation() {
   });
 }
 
+/**
+ * Whether a TEXT broadcast goes out as a rich message («دکمه‌های داخل پیام», `rich_messages`):
+ * the table as a table and the buttons inside the bubble. Off, or unreadable, it is the ordinary
+ * message — the table as plain lines, the buttons under it — exactly as the sender decides.
+ */
+function useRichMessagesOn(): boolean {
+  const flags = useQuery({
+    queryKey: ['features'],
+    queryFn: fetchFeatureFlags,
+    staleTime: 60_000,
+    retry: false,
+  });
+  return flags.data?.flags.find((flag) => flag.key === 'rich_messages')?.enabled === true;
+}
+
 /** The composer's starting sample: a name and a handle, plainly a sample, nothing else. */
 export function defaultSample(): SampleRecipient {
   return {
@@ -567,6 +585,7 @@ function Composer({
 }) {
   const [state, setState] = useState<ComposerState>(() => initial(record));
   const presentation = useBroadcastPresentation();
+  const richOn = useRichMessagesOn();
   /*
    * The saved draft the edits are based on, and whose version a save names. PR #245 (Codex
    * CX2, review M1): when the server's draft moves on — a 409 re-read, another operator's
@@ -607,6 +626,16 @@ function Composer({
   const set = (patch: Partial<ComposerState>) => setState((current) => ({ ...current, ...patch }));
   const max =
     state.contentKind === 'TEXT' ? BROADCAST_TEXT_MAX_LENGTH : BROADCAST_CAPTION_MAX_LENGTH;
+  // A TEXT broadcast is a rich message only with «دکمه‌های داخل پیام» on: then its table is a
+  // table and its buttons sit INSIDE the bubble; otherwise plain lines and buttons below.
+  const inBubble = richOn && state.contentKind === 'TEXT';
+  const previewButtons = state.buttons
+    .filter((button) => button.label.trim() !== '')
+    .map((button, index) => (
+      <div className="bc-inline-button" key={index} data-in-bubble={inBubble ? 'true' : 'false'}>
+        {button.label}
+      </div>
+    ));
   // R4 A6: the preview's sample recipient, and the chips' insertion at the caret.
   const [sample, setSample] = useState<SampleRecipient>(defaultSample);
   const bodyRef = useRef<HTMLTextAreaElement | null>(null);
@@ -621,6 +650,20 @@ function Composer({
     requestAnimationFrame(() => {
       area?.focus();
       area?.setSelectionRange(at + text.length, at + text.length);
+    });
+  };
+
+  // R5C-2 B2: a table skeleton at the caret, on lines of its own.
+  const insertTableBlock = () => {
+    const area = bodyRef.current;
+    const at = area?.selectionStart ?? state.body.length;
+    const end = area?.selectionEnd ?? at;
+    const inserted = insertTable(state.body, at, end, t('web.table_block_skeleton'), max);
+    if (inserted === null) return;
+    set({ body: inserted.next });
+    requestAnimationFrame(() => {
+      area?.focus();
+      area?.setSelectionRange(inserted.caret, inserted.caret);
     });
   };
 
@@ -817,6 +860,12 @@ function Composer({
                     </button>
                   ))}
                 </div>
+                <div className="bc-chips" role="group" aria-label={t('web.table_block_insert')}>
+                  <button type="button" className="chip bc-chip" onClick={insertTableBlock}>
+                    {t('web.table_block_insert')}
+                  </button>
+                </div>
+                <p className="muted small">{t('web.table_block_hint')}</p>
                 <p className="muted small">{t('web.bc_placeholders_safe_hint')}</p>
               </>
             )}
@@ -841,18 +890,14 @@ function Composer({
                 ) : presentation.data === undefined ? (
                   <span className="faint">{t('web.loading')}</span>
                 ) : (
-                  <pre className="preview-text">
-                    {renderBroadcastPreview(state.body, presentation.data, sample)}
-                  </pre>
+                  <TextWithTables
+                    text={renderBroadcastPreview(state.body, presentation.data, sample)}
+                    plain={!inBubble}
+                  />
                 )}
+                {inBubble && previewButtons}
               </div>
-              {state.buttons
-                .filter((button) => button.label.trim() !== '')
-                .map((button, index) => (
-                  <div className="bc-inline-button" key={index}>
-                    {button.label}
-                  </div>
-                ))}
+              {!inBubble && previewButtons}
             </div>
             <p className="muted small">{t('web.bc_preview_hint')}</p>
             {/*
@@ -1969,6 +2014,7 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
 function BroadcastSummary({ record }: { record: BroadcastResponseItem }) {
   const botNames = useCachedBotNames();
   const presentation = useBroadcastPresentation();
+  const richOn = useRichMessagesOn();
   return (
     <Card title={t('web.bc_summary')}>
       <KV
@@ -2029,9 +2075,10 @@ function BroadcastSummary({ record }: { record: BroadcastResponseItem }) {
               {presentation.data === undefined ? (
                 <span className="faint">{t('web.loading')}</span>
               ) : (
-                <pre className="preview-text">
-                  {renderBroadcastPreview(record.body, presentation.data)}
-                </pre>
+                <TextWithTables
+                  text={renderBroadcastPreview(record.body, presentation.data)}
+                  plain={!(richOn && record.contentKind === 'TEXT')}
+                />
               )}
             </div>
           </div>

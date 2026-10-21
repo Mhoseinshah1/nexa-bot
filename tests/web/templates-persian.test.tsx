@@ -70,6 +70,15 @@ async function renderAll() {
 }
 
 describe('a template card', () => {
+  it('R5C-2 B2: «افزودن جدول» puts a table skeleton in the body, on lines of its own', async () => {
+    await renderAll();
+    const body = editor(BALANCE);
+    fireEvent.change(body, { target: { value: 'موجودی' } });
+    fireEvent.click(screen.getByRole('button', { name: 'افزودن جدول' }));
+    await waitFor(() => expect(body.value).toBe(`موجودی\n${t('web.table_block_skeleton')}`));
+    expect(screen.getAllByText(t('web.table_block_hint')).length).toBeGreaterThan(0);
+  });
+
   it('is titled with its Persian name, and keeps the raw key only as a detail', async () => {
     await renderAll();
 

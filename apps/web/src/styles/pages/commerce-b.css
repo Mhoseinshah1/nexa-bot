@@ -523,6 +523,25 @@
   line-height: 1.7;
 }
 
+/* A hand-written table in the preview, drawn as the rich message draws it (R5C-2 B2). */
+.preview-table {
+  width: 100%;
+  margin-block: 6px;
+  border-collapse: collapse;
+  font-size: var(--fs-body);
+}
+.preview-table th,
+.preview-table td {
+  padding: 4px 8px;
+  border: 1px solid var(--line-2);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.preview-table th {
+  font-weight: 700;
+  background: var(--panel-row);
+}
+
 /* --- /campaigns ------------------------------------------------------------------- */
 
 .cb-editor.no-side {

@@ -1295,9 +1295,14 @@ export class DrizzleServiceRepository implements ServiceRepository {
    * update below would not write it either). It locks the service row first, so the decision
    * and the figure belong to one version of it.
    *   - No baseline row (an earlier release's adoption, or a package import that seeded none):
-   *     one is written for the service's current period, from the figure the import left when
-   *     that was a measurement (`usage_synced_at <= created_at`), otherwise from THIS read.
-   *   - A row with no figure, for the period the service is still in: the figure is set. A row
+   *     one is written for the service's current period from THIS read's figure (round 5C-2:
+   *     it used to take the import's own, weeks-old figure when that looked like a
+   *     measurement, and the next sweep announced the difference as a crossing). The first
+   *     figure recorded after a takeover is always silent.
+   *   - A row with no figure, for the period the service is still in (the backfill's, or an
+   *     unmeasured import's): the figure of THIS read is set — silent, and every threshold it has
+   *     reached is recorded as passed by the sweep (round 5C-2: it used to take the row's own,
+   *     weeks-old figure when that looked like the import's). A row
    *     for an earlier period (a renewal or added traffic since) says nothing about this one
    *     and is left alone, as is a row that already holds a figure — the import measured it.
    * Never a message, never a panel call.
@@ -1321,12 +1326,14 @@ export class DrizzleServiceRepository implements ServiceRepository {
                                               basis_expires_at, basis_traffic_limit_bytes,
                                               used_bytes, created_at)
       SELECT s.tenant_id, s.id, s.created_at, s.expires_at, s.traffic_limit_bytes,
-             CASE WHEN s.usage_synced_at IS NOT NULL AND s.usage_synced_at <= s.created_at
-                  THEN s.traffic_used_bytes ELSE ${usage.usedBytes} END,
+             ${usage.usedBytes},
              ${usage.syncedAt}
       FROM s
       ON CONFLICT (tenant_id, service_id) DO UPDATE
-        SET used_bytes = EXCLUDED.used_bytes
+        -- Round 5C-2: the figure THIS read returned, on both paths. The row's own figure is
+        -- the import's, weeks old, and recording it as the baseline made the first read after
+        -- the takeover look like a crossing.
+        SET used_bytes = ${usage.usedBytes}
         WHERE service_reminder_baselines.used_bytes IS NULL
           AND service_reminder_baselines.basis_expires_at IS NOT DISTINCT FROM EXCLUDED.basis_expires_at
           AND service_reminder_baselines.basis_traffic_limit_bytes = EXCLUDED.basis_traffic_limit_bytes

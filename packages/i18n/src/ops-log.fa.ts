@@ -33,7 +33,7 @@ export const OPS_LOG_BODIES_FA = {
   'ops.financial.topup_credited':
     '✅ شارژ کیف پول تأیید و واریز شد\n\n💠 روش: {method}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n💰 مبلغ واریز به کیف پول: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مجموع پرداختی: {payable}\n🎁 هدیهٔ شارژ: {gift}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🔎 منبع تأیید: {evidence}\n👛 موجودی کیف پول: {balanceBefore} ← {balanceAfter}\n🕒 زمان: {at}',
   'ops.financial.order_paid':
-    '✅ پرداخت سفارش تأیید شد\n\n💠 روش: {method}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n📦 سفارش: {orderCode}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🔎 منبع تأیید: {evidence}\n👛 موجودی کیف پول: {balanceBefore} ← {balanceAfter}\n🕒 زمان: {at}',
+    '✅ پرداخت سفارش تأیید شد{badges}\n\n💠 روش: {method}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n📦 سفارش: {orderCode}\n🏷 محصول: {productTitle}\n🔧 عملیات: {operation}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🔎 منبع تأیید: {evidence}\n👛 موجودی کیف پول: {balanceBefore} ← {balanceAfter}\n🕒 زمان: {at}',
   'ops.log.payment_crypto':
     '🪙 {kindTitle} — {principal}\n\n👤 {displayName} · {username} · {telegramId}\n💠 روش: {method}\n📦 سفارش: {orderCode}\n🧾 فاکتور درگاه: {providerInvoiceId}\n🆔 شناسهٔ پرداخت درگاه: {providerPaymentId}\n💱 معادل ارزی سفارش: {fiatEquivalent}\n🔢 مبلغ درخواستی: {cryptoRequested}\n💸 مبلغ پرداخت‌شده: {cryptoPaid}\n📥 مبلغ دریافتی نهایی: {cryptoReceived}\n📍 وضعیت پرداخت: {providerStatus}\n🏦 آدرس کیف پول: {walletAddress}\n👛 موجودی کیف پول: {balanceBefore} ← {balanceAfter}\n🔖 کد پیگیری: {reference}\n🕒 {at}',
   'ops.financial.payment_failed':
@@ -182,6 +182,17 @@ export const OPS_LOG_WORDS_FA = {
   cryptoKinds: { topup: 'شارژ کیف پول', order: 'پرداخت سفارش' },
 
   walletAdjust: { CREDIT: '➕ افزایش دستی موجودی', DEBIT: '➖ کاهش دستی موجودی' },
+
+  /** What a paid order was for (log L2): a purchase, a renewal, extra traffic, extra time. */
+  paidOperations: {
+    NEW_SERVICE: 'خرید',
+    CUSTOM_SERVICE: 'خرید',
+    TRIAL: 'خرید',
+    RENEW: 'تمدید',
+    ADD_TRAFFIC: 'حجم',
+    ADD_TIME: 'زمان',
+    OTHER: 'خرید',
+  },
 
   badges: { firstPurchase: '🥇 اولین خرید', reseller: '🧑‍💼 نماینده', separator: ' · ' },
   operations: {

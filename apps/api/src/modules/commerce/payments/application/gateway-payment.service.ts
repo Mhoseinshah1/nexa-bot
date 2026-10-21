@@ -1793,6 +1793,7 @@ export class GatewayPaymentService {
           postDeadline,
           // The payment this identity-checked answer described (NOWPayments): followed next.
           hintedPaymentId: outcome.providerPaymentId ?? null,
+          crypto: outcome.crypto ?? null,
           // Unfenced: the claim was checked and locked at the top of this transaction.
         },
         at,

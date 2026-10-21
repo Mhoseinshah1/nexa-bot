@@ -336,6 +336,8 @@ export interface OpsLogWords {
   /** `" · 🥇 اولین خرید · 🧑‍💼 نماینده"`, or null when neither applies. */
   badges(badges: { readonly firstPurchase: boolean; readonly reseller: boolean }): string | null;
   failedOperation(type: string): string;
+  /** What a paid order was for (log L2): خرید / تمدید / حجم / زمان, by the order's purpose. */
+  paidOperation(purpose: string): string;
   operationState(state: 'FAILED' | 'UNKNOWN'): string;
   byWhom(kind: 'CUSTOMER' | 'ADMIN' | 'SYSTEM'): string;
   providerFailure(kind: string | null): string;

@@ -126,6 +126,7 @@ describe('TelegramBroadcastTransport', () => {
   let base: string;
   /** When set, the fake Bot API answers 400 with this description. */
   let refuseWith: string | null = null;
+  let refuseRichOnly = false;
   const received: { path: string; contentType: string; body: string }[] = [];
 
   beforeAll(async () => {
@@ -139,7 +140,10 @@ describe('TelegramBroadcastTransport', () => {
           body: Buffer.concat(chunks).toString('utf8'),
         });
         response.setHeader('content-type', 'application/json');
-        if (refuseWith !== null) {
+        if (
+          refuseWith !== null &&
+          (!refuseRichOnly || (request.url ?? '').endsWith('/sendRichMessage'))
+        ) {
           response.statusCode = 400;
           response.end(JSON.stringify({ ok: false, error_code: 400, description: refuseWith }));
           return;
@@ -242,6 +246,139 @@ describe('TelegramBroadcastTransport', () => {
     expect(received[2]?.body).toContain('name="video"; filename="v.mp4"');
     // The handle Telegram gave the uploaded video is what later recipients are sent.
     expect(upload).toEqual({ outcome: 'SENT', fileId: 'VID', messageId: 9 });
+  });
+
+  /**
+   * R5C-2 B2/B3. A broadcast TEXT with «دکمه‌های داخل پیام» on goes through the shared rich
+   * blocks — its buttons inside the message and a hand-written table as a table block — and
+   * with it off (or unreadable) it is the ordinary message with the table as plain lines.
+   * MUTATION: sending the ordinary body whatever the switch says fails the rich test;
+   * dropping `plainTableText` from the ordinary body fails the fallback test.
+   */
+  describe('R5C-2: tables and buttons inside the bubble', () => {
+    const TABLE_TEXT = '📣\n| سرویس | قیمت |\n| --- | --- |\n| طلایی | ۲۵۰ |';
+    const textRequest = {
+      chatId: '42',
+      botInstanceId: 'bot',
+      rendered: {
+        contentKind: 'TEXT' as const,
+        text: TABLE_TEXT,
+        buttons: [{ label: 'Go', url: 'https://example.test' }],
+        source: null,
+      },
+      media: null,
+    };
+    const withRich = (mode: () => Promise<{ enabled: boolean; premiumEmoji: boolean }>) =>
+      new TelegramBroadcastTransport(
+        { render: async (_scope, _key, values) => `📣\n${String(values.message)}` },
+        { tokenForBotInstance: async () => 'TOKEN' },
+        base,
+        2_000,
+        undefined,
+        { modeFor: mode, now: () => new Date('2026-10-21T12:00:00Z') },
+      );
+
+    it('on: one sendRichMessage with the table block and the buttons inside it', async () => {
+      received.length = 0;
+      const result = await withRich(async () => ({ enabled: true, premiumEmoji: false })).deliver(
+        scope,
+        textRequest,
+      );
+      expect(result.outcome).toBe('SENT');
+      expect(received).toHaveLength(1);
+      expect(received[0]?.path).toBe('/botTOKEN/sendRichMessage');
+      const body = JSON.parse(received[0]?.body ?? '{}') as {
+        rich_message: { blocks: { type: string; buttons?: unknown[] }[]; is_rtl: boolean };
+      };
+      expect(body.rich_message.is_rtl).toBe(true);
+      expect(body.rich_message.blocks.map((block) => block.type)).toEqual([
+        'paragraph',
+        'table',
+        'buttons',
+      ]);
+      expect(body).not.toHaveProperty('reply_markup');
+      expect(body.rich_message.blocks[2]?.buttons).toEqual([
+        { text: 'Go', url: 'https://example.test' },
+      ]);
+    });
+
+    it('off, or unreadable: the ordinary message, the table as plain lines', async () => {
+      for (const mode of [
+        async () => ({ enabled: false, premiumEmoji: false }),
+        async (): Promise<{ enabled: boolean; premiumEmoji: boolean }> => {
+          throw new Error('flags unreadable');
+        },
+      ]) {
+        received.length = 0;
+        await withRich(mode).deliver(scope, textRequest);
+        expect(received[0]?.path).toBe('/botTOKEN/sendMessage');
+        const body = JSON.parse(received[0]?.body ?? '{}') as { text: string };
+        expect(body.text).toBe('📣\nسرویس | قیمت\nطلایی | ۲۵۰');
+        expect(body).toHaveProperty('reply_markup');
+      }
+    });
+
+    it('a refused rich broadcast that the ordinary resend delivers is recorded like a refused screen', async () => {
+      received.length = 0;
+      const recorded: { code: string; dedupeKey?: string; context?: unknown; sent: number }[] = [];
+      const t = new TelegramBroadcastTransport(
+        { render: async (_scope, _key, values) => `📣\n${String(values.message)}` },
+        { tokenForBotInstance: async () => 'TOKEN' },
+        base,
+        2_000,
+        undefined,
+        {
+          modeFor: async () => ({ enabled: true, premiumEmoji: false }),
+          now: () => new Date('2026-10-21T12:00:00Z'),
+        },
+        {
+          record: async (
+            _scope: unknown,
+            event: { code: string; dedupeKey?: string; context?: unknown },
+          ) => {
+            recorded.push({ ...event, sent: received.length });
+            return {} as never;
+          },
+        } as never,
+      );
+      refuseWith = 'Bad Request: rich_message is invalid';
+      refuseRichOnly = true;
+      let result;
+      try {
+        result = await t.deliver(scope, textRequest);
+      } finally {
+        refuseWith = null;
+        refuseRichOnly = false;
+      }
+      expect(result.outcome).toBe('SENT');
+      expect(recorded).toHaveLength(1);
+      expect(recorded[0]?.code).toBe('telegram.rich_message_refused');
+      expect(recorded[0]?.dedupeKey).toContain('telegram.rich_message_refused:bot');
+      expect(recorded[0]?.context).toMatchObject({
+        botInstanceId: 'bot',
+        errorCode: 'telegram.rejected.400',
+      });
+      // Recorded BEFORE the ordinary resend: only the rich request had been sent.
+      expect(recorded[0]?.sent).toBe(1);
+      expect(received).toHaveLength(2);
+    });
+
+    it('a 400 on the rich request is resent once the ordinary way', async () => {
+      received.length = 0;
+      refuseWith = 'Bad Request: rich_message is invalid';
+      try {
+        await withRich(async () => ({ enabled: true, premiumEmoji: false })).deliver(
+          scope,
+          textRequest,
+        );
+      } finally {
+        refuseWith = null;
+      }
+      expect(received.map((one) => one.path)).toEqual([
+        '/botTOKEN/sendRichMessage',
+        '/botTOKEN/sendMessage',
+      ]);
+    });
   });
 
   /*

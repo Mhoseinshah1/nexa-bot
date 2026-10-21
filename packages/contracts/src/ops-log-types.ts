@@ -403,7 +403,10 @@ const TOKENS = {
   technical: ['STRING', 'One short technical line (an HTTP status or a machine code).'],
   retry: ['STRING', 'Whether trying again helps, in Persian.'],
   impact: ['STRING', 'What happened to the customer, in Persian.'],
-  operation: ['STRING', 'The operation that failed, in Persian.'],
+  operation: [
+    'STRING',
+    'The operation in Persian: what failed, or what the paid order was for (purchase, renewal, traffic, time).',
+  ],
   state: ['STRING', 'Whether the outcome is failed or unknown, in Persian.'],
   count: ['NUMBER', 'How many identical errors the roll-up stands for.'],
   users: ['NUMBER', 'How many customers they concern.'],
@@ -518,12 +521,15 @@ export const OPS_LOG_TEMPLATES = [
   ),
   logTemplate(
     'ops.financial.order_paid',
-    'Log L2: an order payment was confirmed, by any method — the order, the amounts and, for a wallet payment, the wallet before and after.',
+    'Log L2: an order payment was confirmed, by any method — the order, the product, the operation (purchase, renewal, traffic, time), the first-purchase and reseller badges, the amounts and, for a wallet payment, the wallet before and after.',
     [
       ...req('method', 'reference', 'principal', 'fee', 'payable', 'evidence', 'at'),
       ...WHO(),
       ...opt(
         'orderCode',
+        'productTitle',
+        'operation',
+        'badges',
         'providerInvoiceId',
         'providerFinalAmount',
         'balanceBefore',

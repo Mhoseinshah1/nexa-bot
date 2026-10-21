@@ -1600,6 +1600,7 @@ export class ProvisionerService {
               serviceId,
               panelId: service.panelId,
               reason: 'FOUND_WITHOUT_PROVENANCE',
+              operationType: operation.type,
             },
             dedupeKey: provisioningConditionKey(serviceId),
           },
@@ -1752,6 +1753,7 @@ export class ProvisionerService {
                 serviceId,
                 panelId: service.panelId,
                 reason: 'PROVISION_CYCLE_EXHAUSTED',
+                operationType: operation.type,
                 ...(refundFollows ? { answeredBy: REFUND_ANSWERS } : {}),
               },
               dedupeKey: provisioningConditionKey(serviceId),
@@ -3740,6 +3742,7 @@ export class ProvisionerService {
     return {
       kind: 'REFUSED',
       operationId: operation.id,
+      operationType: operation.type,
       reason,
       serviceId: operation.serviceId,
       orderId: operation.orderId,
@@ -3759,6 +3762,7 @@ export class ProvisionerService {
     return {
       kind: 'ATTEMPTED',
       operationId: operation.id,
+      operationType: operation.type,
       serviceId,
       outcome,
       failureKind,
@@ -3808,6 +3812,7 @@ export class ProvisionerService {
               serviceId: service.id,
               panelId: service.panelId,
               reason,
+              operationType: operation.type,
               ...(refundFollows ? { answeredBy: REFUND_ANSWERS } : {}),
             },
             dedupeKey: provisioningConditionKey(service.id),
@@ -3978,6 +3983,7 @@ export class ProvisionerService {
                   ? 'UNRECONCILED'
                   : 'EXHAUSTED',
               failureKind: failure,
+              operationType: operation.type,
               ...(extras.detail === undefined ? {} : { detail: extras.detail }),
               ...(refundFollows ? { answeredBy: REFUND_ANSWERS } : {}),
             },

@@ -421,6 +421,19 @@ export const FEATURE_FLAGS = [
     configuredBy: [],
   },
   {
+    key: 'rich_plan_table',
+    description:
+      'R5C-2 B2: draw the plan list as a table (name, traffic, days, price) above the plan ' +
+      'buttons. Off by default and independent of rich_messages in what it means, but inert ' +
+      'without it: a table is a rich-message block, and with rich_messages off the plan list ' +
+      'is the ordinary message it always was. Off with rich_messages on is the plan list ' +
+      'without a table, byte for byte the list a tenant without tables sees.',
+    defaultEnabled: false,
+    // TENANT_WIDE: every customer who opens a category sees the plan list change shape.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
+  {
     key: 'rich_premium_emoji',
     description:
       'Inside rich messages, draw the custom emoji of the bot appearance slots as premium ' +

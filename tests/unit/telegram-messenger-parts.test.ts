@@ -314,6 +314,36 @@ describe('a sent message changed in place (R2)', () => {
     });
   });
 
+  const TABLE = '| a | b |\n| --- | --- |\n| 1 | 2 |';
+  const TABLE_AS_LINES = 'a | b\n1 | 2';
+
+  it('a caption carrying a pipe table is sent as the plain fallback rows (sendFile)', async () => {
+    const { messenger, calls, respondWith } = harness({ [PLAIN_KEY]: TABLE });
+    respondWith([OK]);
+    await messenger.sendFile(scope, {
+      chatId: '42',
+      botInstanceId,
+      kind: 'PHOTO',
+      source: { kind: 'FILE_ID', fileId: 'f' },
+      caption: { templateKey: PLAIN_KEY, values: {} },
+    });
+    expect(calls[0]?.body?.caption).toBe(TABLE_AS_LINES);
+  });
+
+  it('a caption carrying a pipe table is edited in as the plain fallback rows (editCaption)', async () => {
+    const { messenger, calls, respondWith } = harness({ [PLAIN_KEY]: TABLE });
+    respondWith([OK]);
+    await messenger.editCaption(scope, {
+      chatId: '42',
+      messageId: 80,
+      botInstanceId,
+      templateKey: PLAIN_KEY,
+      values: {},
+      buttons: [],
+    });
+    expect(calls[0]?.body?.caption).toBe(TABLE_AS_LINES);
+  });
+
   it('reads "message is not modified" as delivered, and any other refusal as NOT_EDITABLE', async () => {
     const same = harness({ [PLAIN_KEY]: 'same' });
     same.respondWith([

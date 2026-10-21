@@ -23,7 +23,6 @@ import {
   inlineButtonStyleOf,
   CUSTOMER_NOTIFICATION_TEMPLATES,
   MESSAGING_ERROR_CODES,
-  opsAggregationKey,
   type AppearanceTestErrorCode,
   type CategoryColors,
   type CategoryIcons,
@@ -72,7 +71,7 @@ import {
 } from '../application/appearance-render.js';
 import type { MainMenuKeyboardButton } from '../application/main-menu.js';
 import {
-  RICH_MESSAGE_REFUSED_CODE,
+  recordRichMessageRefusal,
   RICH_MESSAGES_OFF,
   RICH_SCREEN_LAYOUTS,
   type RichMessageMode,
@@ -85,6 +84,7 @@ import {
   richMessageBody,
   richTableBlock,
   type RichBlock,
+  plainTableText,
 } from '../../../../infrastructure/telegram/rich-message.js';
 import type { InlineButtonStyleReader } from '../application/inline-buttons.js';
 import {
@@ -534,7 +534,10 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       return { outcome: 'REFUSED' };
     }
 
-    const text = await this.templates.render(scope, message.templateKey, message.values);
+    // R5C-2 B2: a hand-written table reads as plain lines wherever it is not sent as a rich table.
+    const text = plainTableText(
+      await this.templates.render(scope, message.templateKey, message.values),
+    );
     /*
      * The FORMAT is a property of the key, read from the frozen catalogue.
      *
@@ -997,7 +1000,10 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       const wire = { caption: caption.rendered.text, entities: caption.rendered.entities };
       return { ...wire, html: false, decorated: false, fallback: wire };
     }
-    const text = await this.templates.render(scope, caption.templateKey, caption.values);
+    // A caption cannot carry a rich table: a hand-written one reads as plain lines here too.
+    const text = plainTableText(
+      await this.templates.render(scope, caption.templateKey, caption.values),
+    );
     // UX Batch 01 item 4: a template whose every line was dropped renders nothing, and a
     // bare file is told apart from another service's by its fallback.
     if (text.trim() === '' && caption.fallback !== undefined) {
@@ -1057,7 +1063,10 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
   ): Promise<CustomerSendResult> {
     const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
     if (token === null) return { outcome: 'REFUSED' };
-    const rendered = await this.templates.render(scope, message.templateKey, message.values);
+    // A caption cannot carry a rich table: a hand-written one reads as plain lines here too.
+    const rendered = plainTableText(
+      await this.templates.render(scope, message.templateKey, message.values),
+    );
     const format = templateDefinition(message.templateKey).format;
     const html = format === 'TELEGRAM_HTML';
     // Premium UI: the same decoration a fresh send of this key would get, by the same path.
@@ -1226,7 +1235,9 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
   async edit(scope: TenantContext, message: CustomerEditMessage): Promise<CustomerSendResult> {
     const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
     if (token === null) return { outcome: 'REFUSED' };
-    const rendered = await this.templates.render(scope, message.templateKey, message.values);
+    const rendered = plainTableText(
+      await this.templates.render(scope, message.templateKey, message.values),
+    );
     const format = templateDefinition(message.templateKey).format;
     const html = format === 'TELEGRAM_HTML';
     /*
@@ -1514,6 +1525,11 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     };
   }
 
+  /** R5C-2 B3: whether inline buttons sit inside the bubble for this tenant. */
+  async buttonsInBubble(scope: TenantContext): Promise<boolean> {
+    return (await this.richModeFor(scope)).enabled;
+  }
+
   /** R4 PR-F: the tenant's rich-message switches; unreadable is off, today's behaviour. */
   private async richModeFor(scope: TenantContext): Promise<RichMessageMode> {
     const rich = this.rich;
@@ -1588,7 +1604,9 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       layout: RICH_SCREEN_LAYOUTS[message.templateKey] ?? {},
     });
     if (text === null) return null;
-    const table = await this.planTable(scope, message.buttons ?? []);
+    // R5C-2 B2: a table only when «نمایش پلن‌ها به‌صورت جدول» is on; off is the plain list.
+    const table =
+      mode.planTable === true ? await this.planTable(scope, message.buttons ?? []) : null;
     const layout = richButtonLayout(premium ? labelled : withoutButtonIcons(labelled));
     return {
       blocks: [...text, ...(table === null ? [] : [table]), ...layout.blocks],
@@ -1719,22 +1737,11 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       'record a refused rich message',
       undefined,
       () =>
-        this.opsLog.record(scope, {
-          code: RICH_MESSAGE_REFUSED_CODE,
-          severity: 'ERROR',
-          message:
-            'Telegram refused a screen sent as a rich message; it was sent again the ordinary ' +
-            'way. Turn the rich_messages feature off if this keeps happening.',
-          dedupeKey: opsAggregationKey(
-            `${RICH_MESSAGE_REFUSED_CODE}:${message.botInstanceId}`,
-            rich.now(),
-          ),
-          context: {
-            botInstanceId: message.botInstanceId,
-            templateKey: message.templateKey,
-            method,
-            errorCode,
-          },
+        recordRichMessageRefusal(this.opsLog, rich.now(), scope, {
+          botInstanceId: message.botInstanceId,
+          templateKey: message.templateKey,
+          method,
+          errorCode,
         }),
       { botInstanceId: message.botInstanceId },
     );

@@ -106,7 +106,7 @@ import {
   RECEIPT_REVIEW_NOTE_MAX,
   reviewNoteOf,
 } from '../../modules/commerce/payments/application/receipt-review-caption.js';
-import { ADMIN_CAPTURE_REASON_MAX_LENGTH } from '@nexa/contracts';
+import { ADMIN_CAPTURE_REASON_MAX_LENGTH, formatCustomServiceVolume } from '@nexa/contracts';
 import type {
   CustomerButton,
   CustomerSendOutcome,
@@ -3940,7 +3940,11 @@ export interface CustomServiceSurface {
       readonly panelId: string;
     },
   ): Promise<
-    | { readonly outcome: 'ASK_VOLUME'; readonly location: { readonly label: string } }
+    | {
+        readonly outcome: 'ASK_VOLUME';
+        readonly location: { readonly label: string };
+        readonly range: { readonly min: bigint; readonly max: bigint };
+      }
     | { readonly outcome: 'UNAVAILABLE' }
   >;
   recordVolume(
@@ -3952,16 +3956,30 @@ export interface CustomServiceSurface {
       readonly botInstanceId: BotInstanceId;
     },
   ): Promise<
-    | { readonly outcome: 'INVALID' }
+    | {
+        readonly outcome: 'INVALID';
+        readonly range: { readonly min: bigint; readonly max: bigint } | null;
+      }
+    | { readonly outcome: 'UNPRICED' }
     | { readonly outcome: 'UNAVAILABLE' }
-    | { readonly outcome: 'ASK_DAYS'; readonly volumeBytes: bigint }
+    | {
+        readonly outcome: 'ASK_DAYS';
+        readonly volumeBytes: bigint;
+        readonly range: { readonly min: bigint; readonly max: bigint };
+      }
   >;
   recordDays(
     scope: TenantContext,
     actor: ActorContext,
     input: { readonly capture: CustomerCaptureRecord; readonly text: string },
   ): Promise<
-    { readonly outcome: 'INVALID' } | { readonly outcome: 'DRAFTED'; readonly order: OrderRecord }
+    | {
+        readonly outcome: 'INVALID';
+        readonly range: { readonly min: bigint; readonly max: bigint } | null;
+      }
+    | { readonly outcome: 'UNPRICED' }
+    | { readonly outcome: 'UNAVAILABLE' }
+    | { readonly outcome: 'DRAFTED'; readonly order: OrderRecord }
   >;
   termsFor(
     scope: TenantContext,
@@ -13750,18 +13768,24 @@ export class BotRuntime {
      * location could price this customer now. A courtesy — every step after the tap
      * decides again. Unlike the trial it IS a way to buy, so it stays.
      */
-    const leading: CustomerButton[] = [];
-    if (page === 0 && (await this.customServiceOffered(scope, actor, customer))) {
-      leading.push({
+    /*
+     * B1: the entry is the LAST item of the category list — below every category, never
+     * above them — so it sits on the final page, after the categories and before the
+     * paging row. Drawn where the list ends (no further page), not on page 0.
+     */
+    const lastPage = !hasMore || page >= CATALOG_BROWSE_MAX_PAGE;
+    const trailing: CustomerButton[] = [];
+    if (lastPage && (await this.customServiceOffered(scope, actor, customer))) {
+      trailing.push({
         ...inlineLabel('catalog.custom_service'),
         data: CUSTOM_SERVICE_CALLBACK_DATA,
       });
     }
     if (items.length === 0) {
       if (page > 0) return this.catalogue(scope, actor, 0, customer);
-      return { key: 'bot.catalog.empty', values: {}, buttons: leading, orderId: null };
+      return { key: 'bot.catalog.empty', values: {}, buttons: trailing, orderId: null };
     }
-    const buttons: CustomerButton[] = [...leading];
+    const buttons: CustomerButton[] = [];
     buttons.push(
       ...items.map((category) => ({
         // Operator text, exactly as a product title is. The emoji is optional and its
@@ -13774,6 +13798,7 @@ export class BotRuntime {
         // UX Batch 01, item 2: the category's own colour; the route above is unchanged.
         category: category.id,
       })),
+      ...trailing,
     );
     if (page > 0) {
       buttons.push({
@@ -13852,7 +13877,7 @@ export class BotRuntime {
     }
     return {
       key: 'bot.custom_service.ask_volume',
-      values: { location: begun.location.label },
+      values: { location: begun.location.label, ...volumeRangeValues(begun.range) },
       buttons: [],
       orderId: null,
     };
@@ -13881,14 +13906,32 @@ export class BotRuntime {
         botInstanceId: input.botInstanceId,
       });
       if (volume.outcome === 'INVALID') {
-        return { key: 'bot.custom_service.invalid_volume', values: {}, buttons: [], orderId: null };
+        // B1: the wrong input is named and the allowed range repeated. No range means the
+        // window is no longer one this customer can price: the one unavailable sentence.
+        if (volume.range === null) {
+          return { key: 'bot.custom_service.unavailable', values: {}, buttons: [], orderId: null };
+        }
+        return {
+          key: 'bot.custom_service.invalid_volume',
+          values: volumeRangeValues(volume.range),
+          buttons: [],
+          orderId: null,
+        };
+      }
+      if (volume.outcome === 'UNPRICED') {
+        return {
+          key: 'bot.custom_service.volume_unpriced',
+          values: {},
+          buttons: [],
+          orderId: null,
+        };
       }
       if (volume.outcome === 'UNAVAILABLE') {
         return { key: 'bot.custom_service.unavailable', values: {}, buttons: [], orderId: null };
       }
       return {
         key: 'bot.custom_service.ask_days',
-        values: { volumeBytes: volume.volumeBytes },
+        values: { volumeBytes: volume.volumeBytes, ...daysRangeValues(volume.range) },
         buttons: [],
         orderId: null,
       };
@@ -13896,7 +13939,21 @@ export class BotRuntime {
     try {
       const days = await flow.recordDays(scope, actor, { capture, text });
       if (days.outcome === 'INVALID') {
-        return { key: 'bot.custom_service.invalid_days', values: {}, buttons: [], orderId: null };
+        if (days.range === null) {
+          return { key: 'bot.custom_service.unavailable', values: {}, buttons: [], orderId: null };
+        }
+        return {
+          key: 'bot.custom_service.invalid_days',
+          values: daysRangeValues(days.range),
+          buttons: [],
+          orderId: null,
+        };
+      }
+      if (days.outcome === 'UNPRICED') {
+        return { key: 'bot.custom_service.days_unpriced', values: {}, buttons: [], orderId: null };
+      }
+      if (days.outcome === 'UNAVAILABLE') {
+        return { key: 'bot.custom_service.unavailable', values: {}, buttons: [], orderId: null };
       }
       return this.afterDraft(
         scope,
@@ -17281,6 +17338,25 @@ export function staleCallbackReply(): PendingReply {
 }
 
 /** The one trial refusal, with the way back to the main menu. */
+/** The GB bounds a custom-service volume question and its refusal quote (B1). */
+export function volumeRangeValues(range: { readonly min: bigint; readonly max: bigint }): {
+  minGb: string;
+  maxGb: string;
+} {
+  return {
+    minGb: formatCustomServiceVolume(range.min),
+    maxGb: formatCustomServiceVolume(range.max),
+  };
+}
+
+/** The day bounds a custom-service days question and its refusal quote (B1). */
+export function daysRangeValues(range: { readonly min: bigint; readonly max: bigint }): {
+  minDays: string;
+  maxDays: string;
+} {
+  return { minDays: range.min.toString(), maxDays: range.max.toString() };
+}
+
 function trialUnavailable(): PendingReply {
   return { key: 'bot.trial.unavailable', values: {}, buttons: [mainMenuButton()], orderId: null };
 }

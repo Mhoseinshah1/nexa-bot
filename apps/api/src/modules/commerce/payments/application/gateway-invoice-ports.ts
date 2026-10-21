@@ -208,6 +208,16 @@ export interface CardTransferGatewayAdapter extends ExternalGatewayAdapter {
   ): Promise<GatewayReceiptOutcome>;
 }
 
+/** The coin side of a crypto payment, as a provider's record reported it (R5C-2 C4). */
+export interface GatewayCryptoFigures {
+  readonly payCurrency: string | null;
+  readonly requested: string | null;
+  readonly paid: string | null;
+  readonly received: string | null;
+  readonly receivedCurrency: string | null;
+  readonly payAddress: string | null;
+}
+
 /**
  * What an inquiry produced. Only `OBSERVED` carries anything the provider asserted, and
  * only its `verdict` — decided by the adapter's pure mapping — may drive approval.
@@ -228,6 +238,12 @@ export type GatewayInquiryOutcome =
        * reads. Absent for a provider whose invoice IS the payment.
        */
       readonly providerPaymentId?: string | null;
+      /**
+       * R5C-2 C4: the coin side of the payment this answer describes (NOWPayments), read from
+       * the record the inquiry already fetched — no extra call. Diagnostic: it is stored and
+       * shown to an operator and never decides anything.
+       */
+      readonly crypto?: GatewayCryptoFigures | null;
       /**
        * Whether the provider reports the customer's money as already on its way (coins seen
        * on chain) — the trigger, on a route whose descriptor says `providerReview`, that opens
@@ -423,6 +439,18 @@ export interface GatewayInvoiceRecord {
   readonly reconcileInquiryRequestedAt: Date | null;
   /** The provider payment id a verified webhook (or a listing inquiry) last named. A hint. */
   readonly hintedPaymentId: string | null;
+  /**
+   * R5C-2 C4: the coin, the amount it asked the payer for, what the payer sent, what the
+   * provider received after its own fees (decimal text in the coin's unit) and the deposit
+   * address, as the provider's last inquiry reported them. Diagnostic only.
+   */
+  readonly cryptoPayCurrency: string | null;
+  readonly cryptoRequested: string | null;
+  readonly cryptoPaid: string | null;
+  readonly cryptoReceived: string | null;
+  /** The coin `cryptoReceived` is in (`outcome_currency`); null when the provider sent none. */
+  readonly cryptoReceivedCurrency: string | null;
+  readonly cryptoPayAddress: string | null;
   /** The customer's integer as sent (CentralPay's `userId`), frozen at open. Null otherwise. */
   readonly providerUserId: string | null;
   readonly createdAt: Date;
@@ -743,6 +771,8 @@ export interface GatewayInvoiceRepository {
       readonly postDeadline: boolean;
       /** A provider payment id the answer named under this invoice; kept as the hint. */
       readonly hintedPaymentId?: string | null;
+      /** R5C-2 C4: the coin side of that payment, when the record carried one. Diagnostic. */
+      readonly crypto?: GatewayCryptoFigures | null;
       /**
        * FIX10 R1: the claim's lease this answer was asked under. When given, the answer is
        * recorded only while `inquiry_claimed_until` still carries it — a replica whose lease

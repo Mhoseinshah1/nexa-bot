@@ -1898,6 +1898,20 @@
       "when": 1792599512314,
       "tag": "0270_addon_receipt_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 271,
+      "version": "7",
+      "when": 1792604390829,
+      "tag": "0271_backfill_baselines_unmeasured",
+      "breakpoints": true
+    },
+    {
+      "idx": 272,
+      "version": "7",
+      "when": 1792604429229,
+      "tag": "0272_crypto_invoice_figures",
+      "breakpoints": true
     }
   ]
 }

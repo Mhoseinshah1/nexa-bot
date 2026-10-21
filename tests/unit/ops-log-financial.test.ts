@@ -42,7 +42,20 @@ interface Row {
   reference?: string;
 }
 
-function harness(options: { method: string; orderId: string | null; provider?: string | null }) {
+interface OrderOverrides {
+  readonly title?: string;
+  readonly purpose?: string;
+  readonly isFirstPurchase?: boolean;
+  readonly reseller?: boolean;
+}
+
+function harness(options: {
+  method: string;
+  orderId: string | null;
+  provider?: string | null;
+  order?: OrderOverrides;
+  invoice?: Record<string, unknown> | null;
+}) {
   const payment = {
     id: 'pay-1',
     code: 'RT4W8N2B',
@@ -79,7 +92,17 @@ function harness(options: { method: string; orderId: string | null; provider?: s
     }) as LedgerEntryFact;
   const facts = {
     order: async () =>
-      options.orderId === null ? null : { id: options.orderId, code: 'KQ7M2X9T' },
+      options.orderId === null
+        ? null
+        : {
+            id: options.orderId,
+            code: 'KQ7M2X9T',
+            title: 'پلن ۳۰ روزه',
+            purpose: 'NEW_SERVICE',
+            isFirstPurchase: false,
+            reseller: false,
+            ...options.order,
+          },
     entriesOfPayment: async (_s: unknown, paymentId: string, reasons: readonly string[]) =>
       ledger
         .filter((row) => row.paymentId === paymentId && reasons.includes(row.reason))
@@ -123,7 +146,7 @@ function harness(options: { method: string; orderId: string | null; provider?: s
     },
     payments: { findById: async () => payment as never },
     customers: { findById: async () => customer as never },
-    invoices: { findByPayment: async () => null },
+    invoices: { findByPayment: async () => (options.invoice ?? null) as never },
     facts,
     words,
     refundRequests: { findById: async () => null },
@@ -271,6 +294,42 @@ describe('L2 — an order paid', () => {
   });
 });
 
+describe('L2 — the product, the operation and the badges (R5C-2 C2)', () => {
+  const paid = async (order: OrderOverrides) => {
+    const h = harness({ method: 'MANUAL_TRANSFER', orderId: 'ord-1', order });
+    await h.consumer.handle(h.event('PaymentConfirmed', confirmed('MANUAL_TRANSFER', 'ord-1')), TX);
+    return { message: h.queued[0]!, text: render(h.queued[0]!) };
+  };
+
+  it('names the product and the operation, and no badge for an ordinary repeat purchase', async () => {
+    const { text } = await paid({});
+    expect(text).toContain('🏷 محصول: پلن ۳۰ روزه');
+    expect(text).toContain('🔧 عملیات: خرید');
+    expect(text.split('\n')[0]).toBe('✅ پرداخت سفارش تأیید شد');
+    expect(text).not.toMatch(/نماینده|اولین خرید/);
+  });
+
+  it.each([
+    ['NEW_SERVICE', 'خرید'],
+    ['CUSTOM_SERVICE', 'خرید'],
+    ['RENEW', 'تمدید'],
+    ['ADD_TRAFFIC', 'حجم'],
+    ['ADD_TIME', 'زمان'],
+  ])('a %s order reads «%s»', async (purpose, word) => {
+    const { text } = await paid({ purpose });
+    expect(text).toContain(`🔧 عملیات: ${word}\n`);
+  });
+
+  it('shows the «اولین خرید» and «نماینده» badges in the title when they apply', async () => {
+    const { text, message } = await paid({ isFirstPurchase: true, reseller: true });
+    expect(text.split('\n')[0]).toBe('✅ پرداخت سفارش تأیید شد · 🥇 اولین خرید · 🧑‍💼 نماینده');
+    expect(message.values).toMatchObject({ badges: ' · 🥇 اولین خرید · 🧑‍💼 نماینده' });
+    expect((await paid({ reseller: true })).text.split('\n')[0]).toBe(
+      '✅ پرداخت سفارش تأیید شد · 🧑‍💼 نماینده',
+    );
+  });
+});
+
 describe('L3 — a crypto payment', () => {
   it('is its own type, titled by what it paid for, and carries no fee or evidence line', async () => {
     const h = harness({ method: 'GATEWAY', orderId: null, provider: 'NOWPAYMENTS' });
@@ -295,6 +354,64 @@ describe('L3 — a crypto payment', () => {
     expect(text).toContain('شارژ کیف پول');
     // A figure this system does not hold is not printed, and the line is dropped whole.
     expect(text).not.toMatch(/\{[a-zA-Z]+\}|NaN|undefined/);
+  });
+});
+
+describe('L3 — the crypto figures the provider reported (R5C-2 C4)', () => {
+  const invoice = (overrides: Record<string, unknown> = {}) => ({
+    provider: 'NOWPAYMENTS',
+    providerUnit: 'USD',
+    sentAmount: 1234n,
+    requestAmount: 1234n,
+    finalAmount: null,
+    providerStatus: 'finished',
+    providerInvoiceId: 'INV-1',
+    hintedPaymentId: '5077125051',
+    providerChargeId: null,
+    conversionRateMinor: null,
+    cryptoPayCurrency: 'MANA',
+    cryptoRequested: '155.38559757',
+    cryptoPaid: '155.38559757',
+    cryptoReceived: '1131.7812095',
+    cryptoReceivedCurrency: 'TRX',
+    cryptoPayAddress: '0xd1cDE08A07cD25adEbEd35c3867a59228C09B606',
+    ...overrides,
+  });
+  const paidCrypto = async (inv: Record<string, unknown>) => {
+    const h = harness({
+      method: 'GATEWAY',
+      orderId: 'ord-1',
+      provider: 'NOWPAYMENTS',
+      invoice: inv,
+    });
+    await h.consumer.handle(
+      h.event('PaymentConfirmed', confirmed('GATEWAY', 'ord-1', 'GATEWAY_INQUIRY')),
+      TX,
+    );
+    return render(h.queued[0]!);
+  };
+
+  it('prints the requested, paid and received amounts and the pay address', async () => {
+    const text = await paidCrypto(invoice());
+    expect(text).toContain('🔢 مبلغ درخواستی: ۱۵۵٫۳۸۵۵۹۷۵۷ MANA');
+    expect(text).toContain('💸 مبلغ پرداخت‌شده: ۱۵۵٫۳۸۵۵۹۷۵۷ MANA');
+    expect(text).toContain('📥 مبلغ دریافتی نهایی: ۱۱۳۱٫۷۸۱۲۰۹۵ TRX');
+    // The address is a token, never converted to Persian digits.
+    expect(text).toContain('🏦 آدرس کیف پول: 0xd1cDE08A07cD25adEbEd35c3867a59228C09B606');
+    expect(text).not.toMatch(/\{[a-zA-Z]+\}|NaN|undefined/);
+  });
+
+  it('labels the received figure with the pay currency only when the provider sent no outcome currency', async () => {
+    const text = await paidCrypto(invoice({ cryptoReceivedCurrency: null }));
+    expect(text).toContain('📥 مبلغ دریافتی نهایی: ۱۱۳۱٫۷۸۱۲۰۹۵ MANA');
+  });
+
+  it('drops a line the provider reported nothing for', async () => {
+    const text = await paidCrypto(
+      invoice({ cryptoPaid: null, cryptoReceived: null, cryptoPayAddress: null }),
+    );
+    expect(text).toContain('مبلغ درخواستی');
+    expect(text).not.toMatch(/مبلغ پرداخت‌شده|مبلغ دریافتی نهایی|آدرس کیف پول/);
   });
 });
 

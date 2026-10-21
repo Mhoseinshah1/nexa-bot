@@ -20,8 +20,9 @@ import {
   sanitizedErrorCode,
 } from '../../../platform/opslog/application/error-events.js';
 import type { OpsLogFacts, OpsLogWords } from './ports.js';
-import { identityOf, technicalLine } from './presenters.js';
+import { identityOf, stalledReport, technicalLine } from './presenters.js';
 import {
+  PROVISIONING_DELIVERED_CODE,
   PROVISIONING_STALLED_CODE,
   REFUND_ANSWERS,
 } from '../../provisioning/application/provisioner.service.js';
@@ -74,10 +75,27 @@ export class OperationalEventPresenter implements OpsEventPresenter {
     return everyOccurrenceIsAMessage(code);
   }
 
+  /**
+   * An event another message already answers is not posted a second time (R5C-2 C1):
+   *
+   * - `provisioning.stalled` that a refund answered — the refund's own report says so;
+   * - `provisioning.stalled` whose outcome is UNKNOWN (`UNRECONCILED`) — `ProvisioningOutcomeUnknown`
+   *   already posted L23/L24 for it;
+   * - `provisioning.delivered` — the INFO line of a service the panel now holds. The purchase
+   *   is the services topic's «🛒 خرید جدید» (L10/L11, from `ServiceProvisioned`), so a second
+   *   generic English line under it was a duplicate. A service ADOPTED after a lost answer
+   *   emits no `ServiceProvisioned`, so that one keeps its line.
+   *
+   * The event is still RECORDED (it closes the stalled condition); only the message is withheld.
+   */
   suppresses(input: OperationalEventInput): boolean {
-    return (
-      input.code === PROVISIONING_STALLED_CODE && input.context?.['answeredBy'] === REFUND_ANSWERS
-    );
+    if (input.code === PROVISIONING_STALLED_CODE) {
+      return (
+        input.context?.['answeredBy'] === REFUND_ANSWERS ||
+        input.context?.['reason'] === 'UNRECONCILED'
+      );
+    }
+    return input.code === PROVISIONING_DELIVERED_CODE && input.context?.['adopted'] !== true;
   }
 
   title(code: string): string {
@@ -99,7 +117,10 @@ export class OperationalEventPresenter implements OpsEventPresenter {
       return this.paymentLink(scope, input, recorded, scoped);
     }
     if (recorded.code === PROVISIONING_STALLED_CODE) {
-      return this.provisioningStalled(input, recorded);
+      return (
+        (await this.provisioningReport(scope, input, recorded, scoped)) ??
+        this.provisioningStalled(input, recorded)
+      );
     }
     if (recorded.code === CUSTOMER_SEND_FAILED) {
       return this.customerSendFailed(scope, input, recorded, scoped);
@@ -248,6 +269,54 @@ export class OperationalEventPresenter implements OpsEventPresenter {
         lastSeenAt: recorded.lastSeenAt,
         details,
       },
+    };
+  }
+
+  /**
+   * R5C-2 C1: `provisioning.stalled` as the error report it is. A paid service that could not
+   * be created is L23 (customer, product, panel, amount, cause, technical line, what happened
+   * to the customer, codes); any other operation is L24 under the R5A-2 title. Null when the
+   * service, its customer or its order cannot be read, and the layout below is used instead.
+   */
+  private async provisioningReport(
+    scope: TenantContext,
+    input: OperationalEventInput,
+    recorded: RecordedOperationalEvent,
+    tx: TransactionScope,
+  ): Promise<PresentedOpsEvent | null> {
+    const { facts, words } = this.deps;
+    const serviceId = safeIdentifier(input.context?.['serviceId']);
+    if (serviceId === null) return null;
+    const service = await facts.service(scope, serviceId, tx);
+    if (service === null || service.source !== 'NEXA') return null;
+    const customer = await facts.customer(scope, service.customerId, tx);
+    if (customer === null || customer.source !== 'NEXA') return null;
+    // A stall that does not say which operation stalled is NOT a PROVISION: defaulting it
+    // read the service's original order and reported its creation as failed, with that
+    // order's amount. It keeps the generic layout (every producer now names its type).
+    const rawType = input.context?.['operationType'];
+    if (typeof rawType !== 'string') return null;
+    const operationType = rawType;
+    const reason = typeof input.context?.['reason'] === 'string' ? input.context['reason'] : null;
+    const order =
+      operationType === 'PROVISION' ? await facts.order(scope, service.orderId, tx) : null;
+    if (operationType === 'PROVISION' && (order === null || order.source !== 'NEXA')) return null;
+    const payment = order === null ? null : await facts.paymentOfOrder(scope, order.id, tx);
+    const built = stalledReport({
+      operationType,
+      reason,
+      service,
+      order,
+      customer,
+      payment,
+      at: recorded.lastSeenAt,
+      words,
+    });
+    return {
+      templateKey: built.templateKey,
+      values: built.values,
+      logType: built.logType,
+      buttons: built.buttons,
     };
   }
 

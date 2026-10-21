@@ -213,6 +213,13 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: null,
     confirmEnable: null,
   },
+  // R5C-2 B2: the plan table is its own switch, off by default; off is the plain plan list.
+  rich_plan_table: {
+    title: 'web.feature_rich_plan_table_title',
+    summary: 'web.feature_rich_plan_table_summary',
+    disableEffect: null,
+    confirmEnable: null,
+  },
   rich_premium_emoji: {
     title: 'web.feature_rich_premium_emoji_title',
     summary: 'web.feature_rich_premium_emoji_summary',

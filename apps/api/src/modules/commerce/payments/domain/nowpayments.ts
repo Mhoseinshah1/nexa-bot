@@ -161,3 +161,86 @@ export function strongestJudgement<T extends NowPaymentsJudgement>(judged: reado
   }
   return best;
 }
+
+/**
+ * A crypto figure the provider reported (`pay_amount`, `actually_paid`, `outcome_amount`) as
+ * exact decimal TEXT in the coin's own unit, or null. A JSON number is written out in full
+ * (never `1e-7`); a string must already be a plain decimal. Diagnostic only: the figure is
+ * shown to an operator and decides nothing, so anything unreadable is simply absent.
+ */
+/**
+ * A finite non-negative JSON number as plain decimal text, exact to the digits `toString()`
+ * carries: `1e-13` is `0.0000000000001`, never rounded to a fixed number of places (the column
+ * and the parser below allow 18). A figure with more places than that fails the parser.
+ */
+function plainDecimalOf(value: number): string {
+  const text = value.toString();
+  const match = /^([0-9]+)(?:\.([0-9]+))?e([+-][0-9]+)$/u.exec(text);
+  if (match === null) return text;
+  const whole = match[1] as string;
+  const fraction = match[2] ?? '';
+  const exponent = Number(match[3]);
+  const digits = whole + fraction;
+  const point = whole.length + exponent;
+  if (point <= 0) return `0.${'0'.repeat(-point)}${digits}`;
+  if (point >= digits.length) return digits + '0'.repeat(point - digits.length);
+  return `${digits.slice(0, point)}.${digits.slice(point)}`;
+}
+
+export function cryptoDecimalOf(value: unknown): string | null {
+  let text: string;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || value < 0 || value >= 1e15) return null;
+    text = plainDecimalOf(value);
+  } else if (typeof value === 'string') {
+    text = value.trim();
+  } else {
+    return null;
+  }
+  const match = /^([0-9]{1,24})(?:\.([0-9]{1,18}))?$/u.exec(text);
+  if (match === null) return null;
+  const fraction = (match[2] ?? '').replace(/0+$/u, '');
+  return fraction === '' ? (match[1] as string) : `${match[1] as string}.${fraction}`;
+}
+
+/** What a payment record reports about the coin side of a payment; every part may be absent. */
+export interface NowPaymentsCryptoFigures {
+  readonly payCurrency: string | null;
+  readonly requested: string | null;
+  readonly paid: string | null;
+  readonly received: string | null;
+  /** The coin `received` is in (`outcome_currency`); NOT the pay currency. */
+  readonly receivedCurrency: string | null;
+  readonly payAddress: string | null;
+}
+
+/**
+ * The coin side of one payment record, bounded and validated, or null when it reports none.
+ * The address is accepted only in the alphabet deposit addresses use, so a provider body can
+ * put nothing but an address-shaped token into the operators' group.
+ */
+export function cryptoFiguresOf(record: {
+  readonly pay_currency?: unknown;
+  readonly pay_amount?: unknown;
+  readonly actually_paid?: unknown;
+  readonly outcome_amount?: unknown;
+  readonly outcome_currency?: unknown;
+  readonly pay_address?: unknown;
+}): NowPaymentsCryptoFigures | null {
+  const coinOf = (value: unknown): string | null =>
+    typeof value === 'string' && /^[A-Za-z0-9_-]{1,24}$/u.test(value) ? value.toUpperCase() : null;
+  const currency = coinOf(record.pay_currency);
+  const address =
+    typeof record.pay_address === 'string' && /^[A-Za-z0-9:_.-]{10,256}$/u.test(record.pay_address)
+      ? record.pay_address
+      : null;
+  const figures: NowPaymentsCryptoFigures = {
+    payCurrency: currency,
+    requested: cryptoDecimalOf(record.pay_amount),
+    paid: cryptoDecimalOf(record.actually_paid),
+    received: cryptoDecimalOf(record.outcome_amount),
+    receivedCurrency: coinOf(record.outcome_currency),
+    payAddress: address,
+  };
+  return Object.values(figures).every((one) => one === null) ? null : figures;
+}

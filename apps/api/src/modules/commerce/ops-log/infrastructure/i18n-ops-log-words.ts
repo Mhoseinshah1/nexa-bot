@@ -47,6 +47,7 @@ export const i18nOpsLogWords: OpsLogWords = {
     return parts.length === 0 ? null : `${W.badges.separator}${parts.join(W.badges.separator)}`;
   },
   failedOperation: (type) => pick(W.operations, type, W.operations.OTHER),
+  paidOperation: (purpose) => pick(W.paidOperations, purpose, W.paidOperations.OTHER),
   operationState: (state) => W.operationStates[state],
   byWhom: (kind) => W.byWhom[kind],
   providerFailure: (kind) =>

@@ -318,6 +318,7 @@ import { CustomerServicesToggleService } from './modules/commerce/provisioning/a
 import { DrizzleCustomerRepository } from './modules/commerce/customers/infrastructure/drizzle-customer.repository.js';
 import { DrizzleCustomerLocationOverrideRepository } from './modules/commerce/locations/infrastructure/drizzle-customer-location-override.repository.js';
 import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastructure/telegram-customer-messenger.js';
+import type { RichMessageSupport } from './modules/commerce/messaging/application/rich-messages.js';
 import { ProductService } from './modules/commerce/catalog/application/product.service.js';
 import { LegacyProductService } from './modules/commerce/catalog/application/legacy-product.service.js';
 import { LegacyProductReviewService } from './modules/commerce/legacy-product-review/application/legacy-product-review.service.js';
@@ -5264,6 +5265,21 @@ export function createContainer(
     now: () => clock.now(),
     logger,
   });
+  // R4 PR-F: «دکمه‌های داخل پیام» and «ایموجی پریمیوم» (+ R5C-2 B2's «نمایش پلن‌ها به‌صورت جدول»),
+  // the tenant's feature flags; ONE object, read by the customer messenger and the broadcast transport.
+  const richMessageSupport: RichMessageSupport = {
+    modeFor: async (scope) => {
+      // The second switch is inert without the first, so it is read only behind it.
+      const enabled = await featureFlagResolver.isEnabled(scope, 'rich_messages');
+      return {
+        enabled,
+        premiumEmoji: enabled && (await featureFlagResolver.isEnabled(scope, 'rich_premium_emoji')),
+        // R5C-2 B2: the plan table is its own switch, inert without the first.
+        planTable: enabled && (await featureFlagResolver.isEnabled(scope, 'rich_plan_table')),
+      };
+    },
+    now: () => clock.now(),
+  };
   const customerMessenger = new TelegramCustomerMessenger(
     // The tenant's own renderer, so an override lands in exactly the messages a
     // customer reads. It validates values against the key's declaration on the way
@@ -5299,19 +5315,7 @@ export function createContainer(
     },
     // Roadmap D4: best-effort bookkeeping around a send is logged, never thrown.
     logger,
-    // R4 PR-F: «دکمه‌های داخل پیام» and «ایموجی پریمیوم», the tenant's two feature flags.
-    {
-      modeFor: async (scope) => {
-        // The second switch is inert without the first, so it is read only behind it.
-        const enabled = await featureFlagResolver.isEnabled(scope, 'rich_messages');
-        return {
-          enabled,
-          premiumEmoji:
-            enabled && (await featureFlagResolver.isEnabled(scope, 'rich_premium_emoji')),
-        };
-      },
-      now: () => clock.now(),
-    },
+    richMessageSupport,
   );
   const appearance = new AppearanceService({
     repository: appearanceRepository,
@@ -5646,6 +5650,11 @@ export function createContainer(
     config.NOTIFICATION_SEND_TIMEOUT_MS,
     // R4 A6: `{today}` in the tenant's zone and calendar.
     templatePresentation,
+    // R5C-2 B2/B3: the SAME switches the customer messenger reads, so a broadcast's buttons and
+    // table sit inside its message exactly when every other inline-button screen's do.
+    richMessageSupport,
+    // A refused rich broadcast is recorded like a refused screen: same code, same dedupe.
+    opsLog,
   );
   const broadcastFacts = new DrizzleRecipientFactsReader(
     database.db,

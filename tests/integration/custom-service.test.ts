@@ -1173,6 +1173,8 @@ describe('Package D — the custom service', () => {
       expect(begun).toEqual({
         outcome: 'ASK_VOLUME',
         location: { panelId: panelA, label: '🇩🇪 آلمان' },
+        // B1: the range shown BEFORE the question, in hundredths of a GB.
+        range: { min: units('1'), max: units('100') },
       });
 
       const read = async (text: string) => {
@@ -1193,20 +1195,36 @@ describe('Package D — the custom service', () => {
           text: '10.255',
           botInstanceId: BOT_A,
         }),
-      ).toEqual({
-        outcome: 'INVALID',
-      });
+      ).toEqual({ outcome: 'INVALID', range: { min: units('1'), max: units('100') } });
+      // B1: checked the moment it is typed — 2000 GB is out of range NOW, not three steps on.
+      expect(
+        await service.recordVolume(tenantA, actor, {
+          capture: await read('2000'),
+          text: '2000',
+          botInstanceId: BOT_A,
+        }),
+      ).toEqual({ outcome: 'INVALID', range: { min: units('1'), max: units('100') } });
       capture = await read('۱۰٫۵'); // the same window, still open
       expect(capture.purpose).toBe('CUSTOM_SERVICE_VOLUME');
       expect(
         await service.recordVolume(tenantA, actor, { capture, text: '۱۰٫۵', botInstanceId: BOT_A }),
-      ).toEqual({ outcome: 'ASK_DAYS', volumeBytes: customServiceVolumeBytes(1_050n) });
+      ).toEqual({
+        outcome: 'ASK_DAYS',
+        volumeBytes: customServiceVolumeBytes(1_050n),
+        range: { min: 1n, max: 365n },
+      });
 
       capture = await read('سی');
       expect(capture.purpose).toBe('CUSTOM_SERVICE_DAYS');
       expect(capture.customVolumeUnits).toBe(1_050n);
       expect(await service.recordDays(tenantA, actor, { capture, text: 'سی' })).toEqual({
         outcome: 'INVALID',
+        range: { min: 1n, max: 365n },
+      });
+      capture = await read('366');
+      expect(await service.recordDays(tenantA, actor, { capture, text: '366' })).toEqual({
+        outcome: 'INVALID',
+        range: { min: 1n, max: 365n },
       });
       capture = await read('30');
       const drafted = await service.recordDays(tenantA, actor, { capture, text: '30' });
@@ -1224,7 +1242,7 @@ describe('Package D — the custom service', () => {
       expect(next.outcome).toBe('NO_WINDOW');
     });
 
-    it('refuses a volume no rule prices before asking for the days', async () => {
+    it('refuses a volume outside the shown range before asking for the days', async () => {
       await offer();
       const service = f.ctx.container.customServiceFlow;
       const actor = customerActor(f.key());
@@ -1247,7 +1265,47 @@ describe('Package D — the custom service', () => {
           text: '500',
           botInstanceId: BOT_A,
         }),
-      ).toEqual({ outcome: 'UNAVAILABLE' });
+      ).toEqual({ outcome: 'INVALID', range: { min: units('1'), max: units('100') } });
+    });
+
+    it('names the unpriced part when a figure is inside the range but in a gap between rules', async () => {
+      await h.setFlag('custom_service', true);
+      await h.location(panelA);
+      await h.rule({ minUnits: units('1'), maxUnits: units('10') });
+      await h.rule({ minUnits: units('20'), maxUnits: units('30') });
+      await h.timeRule({ minUnits: 1n, maxUnits: 10n });
+      await h.timeRule({ minUnits: 20n, maxUnits: 30n });
+      const service = f.ctx.container.customServiceFlow;
+      const actor = customerActor(f.key());
+      const begun = await service.begin(tenantA, actor, {
+        idempotencyKey: f.key(),
+        botInstanceId: BOT_A,
+        customerId: customer,
+        panelId: panelA,
+      });
+      expect(begun).toMatchObject({ range: { min: units('1'), max: units('30') } });
+      const read = async (text: string) => {
+        const r = await f.ctx.container.customerCaptures.readText(tenantA, actor, {
+          idempotencyKey: f.key(),
+          botInstanceId: BOT_A,
+          customerId: customer,
+          text,
+        });
+        if (r.outcome !== 'READ') throw new Error(r.outcome);
+        return r.capture;
+      };
+      let capture = await read('15');
+      expect(
+        await service.recordVolume(tenantA, actor, { capture, text: '15', botInstanceId: BOT_A }),
+      ).toEqual({ outcome: 'UNPRICED' });
+      capture = await read('25');
+      expect(
+        await service.recordVolume(tenantA, actor, { capture, text: '25', botInstanceId: BOT_A }),
+      ).toMatchObject({ outcome: 'ASK_DAYS', range: { min: 1n, max: 30n } });
+      capture = await read('15');
+      expect(await service.recordDays(tenantA, actor, { capture, text: '15' })).toEqual({
+        outcome: 'UNPRICED',
+      });
     });
 
     it('offers only locations whose panel can sell and that price this customer', async () => {

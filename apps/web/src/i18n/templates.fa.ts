@@ -487,6 +487,10 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   value: 'مقدار',
   visibility: 'نمایش به مشتری',
   volumeBytes: 'حجم',
+  minGb: 'کمترین حجم مجاز (گیگابایت)',
+  maxGb: 'بیشترین حجم مجاز (گیگابایت)',
+  minDays: 'کمترین مدت مجاز (روز)',
+  maxDays: 'بیشترین مدت مجاز (روز)',
   volumePrice: 'قیمت حجم',
   walletAfter: 'موجودی کیف پول پس از واریز',
   walletBalance: 'موجودی کیف پول',
@@ -1212,6 +1216,14 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.custom_service.invalid_volume': [
     'حجم نامعتبر سرویس دلخواه',
     'حجم واردشده عدد مثبت با حداکثر دو رقم اعشار نیست؛ مشتری می‌تواند دوباره بفرستد.',
+  ],
+  'bot.custom_service.volume_unpriced': [
+    'حجم بدون قیمت در سرویس دلخواه',
+    'حجم واردشده در بازهٔ مجاز است اما هیچ قاعدهٔ قیمتی آن را پوشش نمی‌دهد؛ حجم را مشکل معرفی می‌کند.',
+  ],
+  'bot.custom_service.days_unpriced': [
+    'مدت بدون قیمت در سرویس دلخواه',
+    'مدت واردشده در بازهٔ مجاز است اما هیچ قاعدهٔ قیمتی آن را پوشش نمی‌دهد؛ مدت را مشکل معرفی می‌کند.',
   ],
   'bot.custom_service.ask_days': [
     'درخواست مدت سرویس دلخواه',

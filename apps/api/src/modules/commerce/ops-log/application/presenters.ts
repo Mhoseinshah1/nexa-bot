@@ -759,6 +759,74 @@ export function operationFailure(input: {
 }
 
 /**
+ * `provisioning.stalled` as the error report it is (R5C-2 C1): a paid service that could not
+ * be created (L23, `PROVISION` or no type) or any other operation that stalled (L24, named by
+ * the R5A-2 wording). The outcome is NOT decided — nothing here says money moved — so the
+ * customer line is «پول برنمی‌گردد تا نتیجه روشن شود»; a stall a refund already answered is
+ * suppressed before it gets here.
+ */
+export function stalledReport(input: {
+  readonly operationType: string;
+  readonly reason: string | null;
+  readonly service: ServiceFact;
+  /** The order that created the service; used only for a PROVISION stall. */
+  readonly order: OrderFact | null;
+  readonly customer: CustomerFact | null;
+  readonly payment: PaymentFact | null;
+  readonly at: Date;
+  readonly words: OpsLogWords;
+}): Built {
+  const { operationType, reason, service, order, customer, payment, at, words } = input;
+  const cause = words.refundReason(reason, null);
+  const technical = technicalLine(reason, operationType);
+  const impact = words.impact('pending');
+  const panelName = service.panelName === '' ? null : service.panelName;
+  if (operationType === 'PROVISION' && order !== null) {
+    const values: Mutable = {
+      ...identityValues(customer, words),
+      cause,
+      technical,
+      impact,
+      productTitle: order.title,
+      amount: order.total,
+      at,
+    };
+    put(values, 'panelName', panelName ?? (order.panelName === '' ? null : order.panelName));
+    put(values, 'orderCode', order.code);
+    if (payment !== null) put(values, 'reference', paymentTrackingCode(payment));
+    return {
+      logType: 'ERROR_PROVISION',
+      templateKey: 'ops.log.error_provision' as TemplateKey,
+      values,
+      buttons: [{ kind: 'PANEL', ref: service.panelId }, userButton(service.customerId)],
+    };
+  }
+  // The order that created the service is NOT this operation's order (a renewal has its
+  // own), so no amount, order code or payment reference is claimed for it.
+  const values: Mutable = {
+    ...identityValues(customer, words),
+    operation: words.stalledOperationTitle(operationType) ?? words.failedOperation(operationType),
+    state: words.operationState('UNKNOWN'),
+    cause,
+    technical,
+    impact,
+    retry: words.retry('UNKNOWN'),
+    at,
+  };
+  put(values, 'serviceUsername', service.providerUsername);
+  put(values, 'panelName', panelName);
+  return {
+    logType: 'ERROR_OPERATION',
+    templateKey: 'ops.log.error_operation' as TemplateKey,
+    values,
+    buttons: [
+      { kind: 'SERVICE', ref: service.id },
+      { kind: 'PANEL', ref: service.panelId },
+    ],
+  };
+}
+
+/**
  * A money amount as a plain Persian-digit sentence fragment, for the one place a template
  * placeholder cannot reach: a STRING value built from an amount (the customer-impact
  * sentence). Mirrors `formatMoney` — grouped thousands, the currency's Persian unit.

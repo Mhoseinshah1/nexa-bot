@@ -951,6 +951,15 @@ export class DeliveryService {
         mimeType: 'image/png' as const,
       },
     };
+    const text = {
+      chatId,
+      botInstanceId,
+      templateKey: 'bot.service.delivered' as const,
+      values,
+      buttons,
+    };
+    const inBubble = await this.qrThenCard(scope, photo, text);
+    if (inBubble !== null) return inBubble;
     const single = await this.deps.messenger.sendFile(scope, {
       ...photo,
       caption: { templateKey: 'bot.service.delivered', values },
@@ -963,14 +972,40 @@ export class DeliveryService {
       caption: { templateKey: 'bot.service.delivered_qr_caption', values: {} },
     });
     if (first.outcome !== 'DELIVERED') return first;
-    const second = await this.deps.messenger.send(scope, {
-      chatId,
-      botInstanceId,
-      templateKey: 'bot.service.delivered',
-      values,
-      buttons,
+    return this.deps.messenger.send(scope, text);
+  }
+
+  /**
+   * R5C-2 B3: with «دکمه‌های داخل پیام» on, the delivery card is NOT a photo's caption — a
+   * caption cannot hold buttons inside the bubble, which left «مشاهده آموزش استفاده», «مشکل
+   * دارم» and «وصل شدم» under the message. The QR goes first with its short caption (the one
+   * the over-bound fallback already uses) and the card follows as a message whose buttons sit
+   * inside it. A refused QR does not lose the card: the link is what the customer paid for.
+   * An ambiguous or rate-limited QR stops here, as everywhere in this file. Null when buttons
+   * are not inside the bubble, and the caller sends the photo with its caption as before.
+   */
+  private async qrThenCard(
+    scope: TenantContext,
+    photo: {
+      readonly chatId: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly kind: 'PHOTO';
+      readonly source: {
+        readonly kind: 'BYTES';
+        readonly bytes: Uint8Array;
+        readonly fileName: string;
+        readonly mimeType: 'image/png';
+      };
+    },
+    card: Parameters<CustomerMessenger['send']>[1],
+  ): Promise<CustomerSendResult | null> {
+    if ((await this.deps.messenger.buttonsInBubble?.(scope)) !== true) return null;
+    const qr = await this.deps.messenger.sendFile(scope, {
+      ...photo,
+      caption: { templateKey: 'bot.service.delivered_qr_caption', values: {} },
     });
-    return second;
+    if (qr.outcome !== 'DELIVERED' && qr.outcome !== 'REFUSED') return qr;
+    return this.deps.messenger.send(scope, card);
   }
 
   /**
@@ -1093,6 +1128,8 @@ export class DeliveryService {
         mimeType: 'image/png' as const,
       },
     };
+    const inBubble = await this.qrThenCard(scope, photo, text);
+    if (inBubble !== null) return { result: inBubble };
     const single = await this.deps.messenger.sendFile(scope, {
       ...photo,
       caption: { templateKey: 'bot.service.link_rotated', values },

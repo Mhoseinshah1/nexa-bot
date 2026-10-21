@@ -5,6 +5,7 @@ import {
   inboxListQuerySchema,
   markAllInboxRequestSchema,
   markInboxRequestSchema,
+  OPERATION_TYPES,
   type InboxListResponse,
   type InboxNotification,
   type InboxSummaryResponse,
@@ -118,5 +119,17 @@ export function toItem(view: InboxNotificationView): InboxNotification {
     resolvedAt: view.resolvedAt?.toISOString() ?? null,
     read: view.read,
     link: view.link,
+    ...operationTypeOf(view),
   };
+}
+
+/** R5C-2 C1: the stalled operation, only when the event's context names a known type. */
+function operationTypeOf(
+  view: InboxNotificationView,
+): { operationType: (typeof OPERATION_TYPES)[number] } | Record<string, never> {
+  if (view.code !== 'provisioning.stalled') return {};
+  const type = view.context?.['operationType'];
+  return typeof type === 'string' && (OPERATION_TYPES as readonly string[]).includes(type)
+    ? { operationType: type as (typeof OPERATION_TYPES)[number] }
+    : {};
 }

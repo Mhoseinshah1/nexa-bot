@@ -100,6 +100,12 @@ export type ExecutionResult =
        * deterministic and five are not.
        */
       readonly terminal?: boolean;
+      /**
+       * What KIND of operation this was (`PROVISION`, `SYNC_USAGE`, `RENEW`, `SUSPEND`, ...).
+       * In every line: 350 harmless usage syncs a day once read as 350 account creations
+       * because the line named only an operation id.
+       */
+      readonly operationType: OperationType;
     }
   | {
       readonly kind: 'ATTEMPTED';
@@ -110,6 +116,8 @@ export type ExecutionResult =
       readonly orderId?: string | null;
       readonly panelId?: string | null;
       readonly attempt?: number;
+      /** What KIND of operation this was; see the refusal's field of the same name. */
+      readonly operationType: OperationType;
     };
 
 /**
