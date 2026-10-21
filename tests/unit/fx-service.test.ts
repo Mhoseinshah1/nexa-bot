@@ -11,12 +11,14 @@ import {
   FX_QUOTE_REJECTED_CODE,
   FX_QUOTE_UNAVAILABLE_CODE,
   FX_RATE_LIMIT_COOLDOWN_MS,
+  FX_SOURCE_BACKOFF_MS,
   FX_SOURCE_UNAVAILABLE_CODE,
   FX_STALE_QUOTE_USED_CODE,
   FxService,
   type FxServiceDeps,
 } from '../../apps/api/src/modules/commerce/fx/application/fx.service';
 import {
+  FX_REFRESH_BACKOFF_MS,
   FX_REFRESH_INTERVAL_MS,
   FxRefreshLoop,
 } from '../../apps/api/src/modules/commerce/fx/application/fx-refresh-loop';
@@ -668,5 +670,174 @@ describe('the refresh loop', () => {
     await loop.tick();
     expect(loop.isFresh(now)).toBe(true);
     await loop.stop();
+  });
+});
+
+describe('the refresh loop backs off', () => {
+  type Outcome = 'FAILED' | 'REFRESHED_BY_FALLBACK' | 'NOT_DUE';
+  function harness(outcome: () => Outcome) {
+    let now = T0;
+    const dials: number[] = [];
+    const warnings: Record<string, unknown>[] = [];
+    const loop = new FxRefreshLoop(
+      {
+        refreshIfDue: () => {
+          dials.push((now - T0) / 1_000);
+          const o = outcome();
+          return Promise.resolve({
+            outcome: o,
+            reason: o === 'FAILED' ? 'nobitex:http_403' : null,
+          });
+        },
+      },
+      {
+        scope: () => scope,
+        baseAsset: 'USDT',
+        intervalMs: FX_REFRESH_INTERVAL_MS,
+        passBoundMs: 10_000,
+        now: () => now,
+        logger: {
+          info: () => undefined,
+          error: () => undefined,
+          warn: (context) => void warnings.push(context),
+        },
+      },
+    );
+    const advance = async (seconds: number) => {
+      for (let i = 0; i < seconds / 10; i += 1) {
+        now += FX_REFRESH_INTERVAL_MS;
+        await loop.tick();
+      }
+    };
+    return { loop, dials, warnings, advance, clock: () => now };
+  }
+
+  it('spaces the dials 10 s, 30 s, 1 m, 5 m, 10 m and holds at the cap', async () => {
+    expect(FX_REFRESH_BACKOFF_MS).toEqual([10_000, 30_000, 60_000, 300_000, 600_000]);
+    const h = harness(() => 'FAILED');
+    await h.loop.tick();
+    await h.advance(2_500);
+    // 0, +10, +30, +60, +300, +600, +600 ...
+    expect(h.dials).toEqual([0, 10, 40, 100, 400, 1_000, 1_600, 2_200]);
+  });
+
+  it('a stored quote resets the interval, and the next failure starts the ladder again', async () => {
+    let outcome: Outcome = 'FAILED';
+    const h = harness(() => outcome);
+    await h.loop.tick();
+    await h.advance(100);
+    expect(h.dials).toEqual([0, 10, 40, 100]);
+    outcome = 'REFRESHED_BY_FALLBACK';
+    await h.advance(300); // the 300 s wait after the 4th failure ends at t = 400
+    expect(h.dials).toEqual([0, 10, 40, 100, 400]);
+    outcome = 'FAILED';
+    await h.advance(10);
+    await h.advance(10);
+    // Reset: dialled again at the normal interval, then back to the first step.
+    expect(h.dials.slice(-2)).toEqual([410, 420]);
+    await h.advance(20);
+    expect(h.dials.at(-1)).toBe(420);
+    await h.advance(10);
+    expect(h.dials.at(-1)).toBe(450);
+  });
+
+  it('warns once per backoff step, not on every failed pass', async () => {
+    const h = harness(() => 'FAILED');
+    await h.loop.tick();
+    await h.advance(3_000);
+    expect(h.warnings.map((w) => w['nextAttemptInMs'])).toEqual([
+      10_000, 30_000, 60_000, 300_000, 600_000,
+    ]);
+  });
+});
+
+describe('the central rate: a source that keeps failing', () => {
+  const blocked = () => down('nobitex.http_403');
+
+  it('is skipped while its backoff runs, and the fallback answers meanwhile', async () => {
+    const w = world({ nobitex: blocked, settings: { 'fx.fresh_ttl_seconds': 10 } });
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({
+      outcome: 'REFRESHED_BY_FALLBACK',
+    });
+    expect(w.repository.states.get('NOBITEX')).toMatchObject({
+      consecutiveFailures: 1,
+      retryAfter: new Date(T0 + (FX_SOURCE_BACKOFF_MS[0] ?? 0)),
+    });
+    // Inside the 30 s wait the quote is due again (10 s TTL), but only the fallback is dialled.
+    w.clockMs += 15_000;
+    await w.service.refreshIfDue(scope, 'USDT');
+    expect(w.nobitex.calls).toBe(1);
+    expect(w.wallex.calls).toBe(2);
+  });
+
+  it('waits longer after each consecutive failure and holds at the cap', async () => {
+    const w = world({ nobitex: blocked });
+    const waits: number[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      const dialledAt = w.clockMs;
+      await w.service.refreshIfDue(scope, 'USDT');
+      const state = w.repository.states.get('NOBITEX');
+      waits.push((state?.retryAfter?.getTime() ?? 0) - dialledAt);
+      // Past the backoff and past the quote's TTL, so the next pass is due and may dial.
+      w.clockMs = Math.max(state?.retryAfter?.getTime() ?? 0, dialledAt + 46_000);
+    }
+    expect(waits).toEqual([30_000, 60_000, 300_000, 600_000, 600_000, 600_000]);
+  });
+
+  it('raises one alert per outage and one recovery, however many passes run', async () => {
+    let primaryUp = false;
+    const w = world({
+      nobitex: () => (primaryUp ? reading('NOBITEX', 1_035_500n, 'IRR') : blocked()),
+    });
+    // Ten minutes of 46 s passes against a blocked primary.
+    for (let i = 0; i < 13; i += 1) {
+      await w.service.refreshIfDue(scope, 'USDT');
+      w.clockMs += 46_000;
+    }
+    const alerts = w.events.filter((e) => e.code === FX_SOURCE_UNAVAILABLE_CODE);
+    // Dialled only when the backoff allowed it; every dial is the same deduped condition.
+    expect(alerts.length).toBe(w.nobitex.calls);
+    expect(w.nobitex.calls).toBeLessThan(13);
+    expect(new Set(alerts.map((e) => e.dedupeKey))).toEqual(
+      new Set([`${FX_SOURCE_UNAVAILABLE_CODE}:NOBITEX`]),
+    );
+    expect(alerts[0]?.context).toMatchObject({ source: 'NOBITEX', reason: 'nobitex.http_403' });
+    primaryUp = true;
+    w.clockMs += 700_000;
+    await w.service.refreshIfDue(scope, 'USDT');
+    await w.service.refreshIfDue(scope, 'USDT');
+    w.clockMs += 46_000;
+    await w.service.refreshIfDue(scope, 'USDT');
+    const recoveries = w.events.filter((e) => e.recoversCode === FX_SOURCE_UNAVAILABLE_CODE);
+    expect(recoveries).toHaveLength(1);
+    expect(w.open.has(`${FX_SOURCE_UNAVAILABLE_CODE}:NOBITEX`)).toBe(false);
+  });
+
+  it('with every source backing off, dials nothing, warns nothing, and keeps the failure as the reason', async () => {
+    const w = world({ nobitex: blocked, wallex: () => down('wallex.not_json') });
+    const warnings: unknown[] = [];
+    (w.service as unknown as { deps: FxServiceDeps }).deps.logger.warn = (c) =>
+      void warnings.push(c);
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'FAILED' });
+    expect(warnings).toHaveLength(1);
+    w.clockMs += 20_000;
+    const again = await w.service.refreshIfDue(scope, 'USDT');
+    expect(again).toEqual({ outcome: 'FAILED', reason: 'nobitex:nobitex.http_403' });
+    expect(w.nobitex.calls).toBe(1);
+    expect(w.wallex.calls).toBe(1);
+    expect(warnings).toHaveLength(1);
+  });
+
+  it("an operator's refresh ignores a failure backoff but not a rate-limit cooldown", async () => {
+    const w = world({ nobitex: blocked });
+    await w.service.refreshIfDue(scope, 'USDT');
+    await w.service.refresh(scope, actor, 'USDT');
+    expect(w.nobitex.calls).toBe(2);
+    const limited = world({
+      nobitex: () => ({ kind: 'RATE_LIMITED', code: 'nobitex.rate_limited' }),
+    });
+    await limited.service.refreshIfDue(scope, 'USDT');
+    await limited.service.refresh(scope, actor, 'USDT');
+    expect(limited.nobitex.calls).toBe(1);
   });
 });

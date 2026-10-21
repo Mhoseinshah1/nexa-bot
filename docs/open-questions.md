@@ -2854,6 +2854,21 @@ reach them (the staging server can: `POST /api/admin/v1/fx/refresh`, then read t
 operational log and the FX section). A wrong shape fails closed — the source reads
 `UNAVAILABLE`, the other prices the pair, and no figure is invented.
 
+## OQ-FX-03 — Wallex answers `wallex.not_json`, Nobitex `nobitex.http_403`, from the production worker (R5B, 2026-10-21)
+
+The worker logged `wallex.not_json` for every pass. The adapter reaches that code only after
+an HTTP 2xx whose body is not a JSON object (`wallex-source.ts`; a 3xx/4xx/5xx would read
+`wallex.http_<status>`). The endpoint (`GET /v1/depth?symbol=USDTTMN`) and shape were never
+confirmed against the live host (OQ-FX-02), so the cause is NOT decidable from code or docs:
+an HTML or challenge page served with 200 to a foreign address (a geo or bot block, as
+`nobitex.http_403` suggests for the other source), a changed endpoint that now returns a
+JSON array or scalar, or a redirected body are all consistent with it. The parser was not
+changed. Needed: one raw response body and status from the production host's address
+(`curl -si 'https://api.wallex.ir/v1/depth?symbol=USDTTMN'`), and the same for Nobitex; if
+both are address blocks, the answer is egress from an Iranian-reachable address, not code.
+Until then both sources failing is handled as an outage: per-source and loop backoff, and
+one operational alert per source with a recovery.
+
 ## OQ-T-API-01 — `KeyboardButton.style`: its exact values
 
 Round T, button builder. The build session could not reach `core.telegram.org` (egress

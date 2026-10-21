@@ -79,6 +79,14 @@ export const FX_STALE_QUOTE_USED_CODE = 'fx.stale_quote_used';
 
 /** A source that answered "rate limited" is left alone for this long, on every replica. */
 export const FX_RATE_LIMIT_COOLDOWN_MS = 60_000;
+/**
+ * How long a source that failed to answer usably (a 403, a block page, a timeout) is left
+ * alone, by how many passes in a row it has failed: the Nth consecutive failure waits
+ * step N, and the last step is the cap. Carried in `fx_source_states.retry_after`, so it is
+ * the same on every replica and survives a restart. A rate-limit keeps its own cooldown
+ * above, and a rejected figure (an outlier) is not a transport failure and never waits.
+ */
+export const FX_SOURCE_BACKOFF_MS: readonly number[] = [30_000, 60_000, 300_000, 600_000];
 /** The lease one refresh holds: two sources, each allowed its whole timeout, and slack. */
 export const FX_REFRESH_LEASE_MS = 20_000;
 
@@ -260,7 +268,7 @@ export class FxService {
       );
     });
     if (!claimed) return { outcome: 'NOT_DUE', reason: null };
-    return this.performRefresh(scope, settings, pair, claimToken);
+    return this.performRefresh(scope, settings, pair, claimToken, false);
   }
 
   /**
@@ -299,7 +307,7 @@ export class FxService {
         );
       });
       result = claimed
-        ? await this.performRefresh(scope, settings, pair, claimToken)
+        ? await this.performRefresh(scope, settings, pair, claimToken, true)
         : { outcome: 'BUSY', reason: null };
     }
     await this.deps.audit.record(scope, actor, {
@@ -370,6 +378,8 @@ export class FxService {
     settings: FxSettings,
     pair: FxPair,
     claimToken: string,
+    /** An operator pressed refresh: a failure backoff is not honoured (a rate-limit cooldown still is). */
+    ignoreFailureBackoff: boolean,
   ): Promise<FxRefreshResult> {
     const order: FxSource[] = [settings.primary];
     if (settings.fallback !== 'NONE' && settings.fallback !== settings.primary) {
@@ -397,13 +407,20 @@ export class FxService {
     const failures: { source: FxSource; code: string; retryAfter: Date | null }[] = [];
     const successes: FxSource[] = [];
     const rejected: { source: FxSource; code: string; deviationBps: bigint | null }[] = [];
+    // Sources left alone this pass because their cooldown or backoff has not elapsed.
+    const coolingDown: { source: FxSource; code: string }[] = [];
 
     for (const source of order) {
       const state = states.find((entry) => entry.source === source);
       const now = this.deps.clock.now();
       if (state?.retryAfter !== null && state?.retryAfter !== undefined && state.retryAfter > now) {
-        // Still inside the cooldown a rate-limit answer asked for. Not a new failure.
-        continue;
+        // Still inside a cooldown (a rate-limit answer's, or the backoff after repeated
+        // failures). Not a new failure, and the next source is tried meanwhile.
+        const rateLimited = state.lastFailureCode?.endsWith('.rate_limited') === true;
+        if (!ignoreFailureBackoff || rateLimited) {
+          coolingDown.push({ source, code: state.lastFailureCode ?? 'nexa.no_source' });
+          continue;
+        }
       }
       const adapter = this.deps.sources.get(source);
       if (adapter === undefined) {
@@ -421,7 +438,13 @@ export class FxService {
         continue;
       }
       if (outcome.kind === 'UNAVAILABLE') {
-        failures.push({ source, code: outcome.code, retryAfter: null });
+        const consecutive = (state?.consecutiveFailures ?? 0) + 1;
+        const step = FX_SOURCE_BACKOFF_MS[Math.min(consecutive, FX_SOURCE_BACKOFF_MS.length) - 1];
+        failures.push({
+          source,
+          code: outcome.code,
+          retryAfter: step === undefined ? null : new Date(answeredAt.getTime() + step),
+        });
         continue;
       }
       const candidate = toCandidate(outcome.reading, pair.quoteCurrency);
@@ -452,7 +475,11 @@ export class FxService {
 
     // Why a source did not price the pair, whatever the pass then concluded.
     const reason =
-      failures.length + rejected.length > 0 ? refreshErrorCode(failures, rejected) : null;
+      failures.length + rejected.length > 0
+        ? refreshErrorCode(failures, rejected)
+        : coolingDown.length > 0
+          ? refreshErrorCode(coolingDown, [])
+          : null;
 
     return this.deps.uow.run(scope, async (tx) => {
       if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
@@ -531,7 +558,7 @@ export class FxService {
         await this.deps.repository.releaseRefresh(
           scope,
           pair,
-          { now: fetchedAt, errorCode: refreshErrorCode(failures, rejected), claimToken },
+          { now: fetchedAt, errorCode: reason ?? 'nexa.no_source', claimToken },
           tx,
         );
         const usable =
@@ -553,15 +580,18 @@ export class FxService {
                 'past the stale limit (or was never fetched). New invoices through a ' +
                 'central-rate route are refused until a source answers.',
               dedupeKey: `${FX_QUOTE_UNAVAILABLE_CODE}:${pairKey(pair)}`,
-              context: { pair: pairKey(pair), reason: refreshErrorCode(failures, rejected) },
+              context: { pair: pairKey(pair), reason: reason ?? 'nexa.no_source' },
             },
             tx,
           );
         }
-        this.deps.logger.warn(
-          { pair: pairKey(pair), failures, rejected: rejected.map((r) => r.code) },
-          'fx refresh stored no quote',
-        );
+        // A pass that only skipped sources in their backoff dialled nothing new to report.
+        if (failures.length + rejected.length > 0) {
+          this.deps.logger.warn(
+            { pair: pairKey(pair), failures, rejected: rejected.map((r) => r.code) },
+            'fx refresh stored no quote',
+          );
+        }
         return { outcome: 'FAILED', reason: reason ?? 'nexa.no_source' };
       }
 
