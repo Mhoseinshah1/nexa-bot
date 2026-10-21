@@ -1,4 +1,10 @@
-import type { SalesCurrencyCode, TenantContext } from '@nexa/contracts';
+import {
+  CUSTOM_SERVICE_MAX_DAYS,
+  CUSTOM_SERVICE_MAX_VOLUME_UNITS,
+  type CustomServiceRuleDimension,
+  type SalesCurrencyCode,
+  type TenantContext,
+} from '@nexa/contracts';
 import type { FeatureFlagResolver } from '../../../control/features/application/feature-flags.service.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { PanelSalesGate } from '../../../platform/panels/application/panel-sales-gate.js';
@@ -6,6 +12,7 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type { ResellerService } from '../../resellers/application/reseller.service.js';
 import {
   anyRuleFor,
+  ruleLevelFor,
   priceCustomService,
   selectCustomServiceRule,
   type CustomServicePrice,
@@ -24,6 +31,12 @@ export interface CustomServicePricerDeps {
   readonly resellers: Pick<ResellerService, 'standing'>;
   readonly features: Pick<FeatureFlagResolver, 'isEnabled'>;
   readonly settings: SettingsResolver;
+}
+
+/** The inclusive bounds the configured rules price for one dimension, in the rule's own unit. */
+export interface CustomServiceRange {
+  readonly min: bigint;
+  readonly max: bigint;
 }
 
 /** A location a customer may be offered, by its customer-facing label. */
@@ -115,6 +128,56 @@ export class CustomServicePricer {
     const tierId = await this.tierOf(scope, customerId);
     const subject: CustomServiceSubject = { customerId, tierId, panelId };
     return selectCustomServiceRule(rules, 'VOLUME', volumeUnits, subject).kind === 'SELECTED';
+  }
+
+  /**
+   * Whether a TIME rule would price this many days for this customer on this location —
+   * the days counterpart of `volumePriceable`, asked when the days are typed.
+   */
+  async daysPriceable(
+    scope: TenantContext,
+    customerId: string,
+    panelId: string,
+    days: number,
+  ): Promise<boolean> {
+    const rules = await this.deps.rules.list(scope);
+    const tierId = await this.tierOf(scope, customerId);
+    const subject: CustomServiceSubject = { customerId, tierId, panelId };
+    return selectCustomServiceRule(rules, 'TIME', BigInt(days), subject).kind === 'SELECTED';
+  }
+
+  /**
+   * The bounds of what this customer can be priced for on this location: the lowest
+   * `min` and the highest `max` over every enabled rule of the dimension that applies to
+   * them, clamped to what the typed-figure parsers accept. Shown BEFORE the figure is
+   * asked, and repeated when one is refused. Null when no rule applies. A gap between two
+   * rules is inside the range and is refused at the figure (`volumePriceable`).
+   */
+  async rangeFor(
+    scope: TenantContext,
+    customerId: string,
+    panelId: string,
+    dimension: CustomServiceRuleDimension,
+  ): Promise<CustomServiceRange | null> {
+    const rules = await this.deps.rules.list(scope);
+    const tierId = await this.tierOf(scope, customerId);
+    const subject: CustomServiceSubject = { customerId, tierId, panelId };
+    const applicable = rules.filter(
+      (rule) =>
+        rule.enabled && rule.dimension === dimension && ruleLevelFor(rule, subject) !== null,
+    );
+    if (applicable.length === 0) return null;
+    const ceiling =
+      dimension === 'VOLUME' ? CUSTOM_SERVICE_MAX_VOLUME_UNITS : BigInt(CUSTOM_SERVICE_MAX_DAYS);
+    let min = applicable[0]!.minUnits;
+    let max = applicable[0]!.maxUnits;
+    for (const rule of applicable) {
+      if (rule.minUnits < min) min = rule.minUnits;
+      if (rule.maxUnits > max) max = rule.maxUnits;
+    }
+    if (min < 1n) min = 1n;
+    if (max > ceiling) max = ceiling;
+    return min > max ? null : { min, max };
   }
 
   /**

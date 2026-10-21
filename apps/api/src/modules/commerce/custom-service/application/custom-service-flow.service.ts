@@ -2,7 +2,6 @@ import {
   customServiceVolumeBytes,
   parseCustomServiceDays,
   parseCustomServiceVolume,
-  CUSTOM_SERVICE_MAX_VOLUME_UNITS,
   type ActorContext,
   type BotInstanceId,
   type PermissionKey,
@@ -14,7 +13,11 @@ import type { CustomerCaptureService } from '../../customers/application/custome
 import type { CustomerCaptureRecord } from '../../customers/application/customer-capture-ports.js';
 import type { OrderService } from '../../orders/application/order.service.js';
 import type { OrderRecord } from '../../orders/application/ports.js';
-import type { CustomServicePricer, OfferedLocation } from './custom-service-pricer.js';
+import type {
+  CustomServicePricer,
+  CustomServiceRange,
+  OfferedLocation,
+} from './custom-service-pricer.js';
 import type { OrderCustomServiceTerms, OrderCustomServiceTermsRepository } from './ports.js';
 
 /**
@@ -27,7 +30,12 @@ export const CUSTOM_SERVICE_FLOW_PERMISSION: PermissionKey = 'maintenance.run';
 export interface CustomServiceFlowDeps {
   readonly pricer: Pick<
     CustomServicePricer,
-    'enabled' | 'offeredLocations' | 'offeredLocation' | 'volumePriceable'
+    | 'enabled'
+    | 'offeredLocations'
+    | 'offeredLocation'
+    | 'volumePriceable'
+    | 'daysPriceable'
+    | 'rangeFor'
   >;
   readonly captures: Pick<CustomerCaptureService, 'open'>;
   readonly orders: Pick<OrderService, 'createCustomDraft'>;
@@ -36,16 +44,35 @@ export interface CustomServiceFlowDeps {
 }
 
 export type CustomServiceBeginResult =
-  | { readonly outcome: 'ASK_VOLUME'; readonly location: OfferedLocation }
+  | {
+      readonly outcome: 'ASK_VOLUME';
+      readonly location: OfferedLocation;
+      /** In hundredths of a GB. */
+      readonly range: CustomServiceRange;
+    }
   | { readonly outcome: 'UNAVAILABLE' };
 
+/**
+ * `INVALID` is a figure that does not parse OR is outside the allowed range: it carries
+ * the range so the surface can repeat it. `UNPRICED` is a figure inside the range that no
+ * rule covers (a gap) — the surface names which part is the problem.
+ */
 export type CustomServiceVolumeResult =
-  | { readonly outcome: 'INVALID' }
+  | { readonly outcome: 'INVALID'; readonly range: CustomServiceRange | null }
+  | { readonly outcome: 'UNPRICED' }
   | { readonly outcome: 'UNAVAILABLE' }
-  | { readonly outcome: 'ASK_DAYS'; readonly volumeBytes: bigint };
+  | {
+      readonly outcome: 'ASK_DAYS';
+      readonly volumeBytes: bigint;
+      /** In days. */
+      readonly range: CustomServiceRange;
+    };
 
 export type CustomServiceDaysResult =
-  { readonly outcome: 'INVALID' } | { readonly outcome: 'DRAFTED'; readonly order: OrderRecord };
+  | { readonly outcome: 'INVALID'; readonly range: CustomServiceRange | null }
+  | { readonly outcome: 'UNPRICED' }
+  | { readonly outcome: 'UNAVAILABLE' }
+  | { readonly outcome: 'DRAFTED'; readonly order: OrderRecord };
 
 /**
  * The Telegram flow of a custom service (brief D5), from the location to the draft.
@@ -89,6 +116,8 @@ export class CustomServiceFlowService {
     await this.deps.guard.check(scope, actor, CUSTOM_SERVICE_FLOW_PERMISSION);
     const location = await this.deps.pricer.offeredLocation(scope, input.customerId, input.panelId);
     if (location === null) return { outcome: 'UNAVAILABLE' };
+    const range = await this.deps.pricer.rangeFor(scope, input.customerId, input.panelId, 'VOLUME');
+    if (range === null) return { outcome: 'UNAVAILABLE' };
     await this.deps.captures.open(scope, actor, {
       idempotencyKey: input.idempotencyKey,
       botInstanceId: input.botInstanceId,
@@ -96,7 +125,7 @@ export class CustomServiceFlowService {
       purpose: 'CUSTOM_SERVICE_VOLUME',
       subjectId: location.panelId,
     });
-    return { outcome: 'ASK_VOLUME', location };
+    return { outcome: 'ASK_VOLUME', location, range };
   }
 
   /**
@@ -116,18 +145,33 @@ export class CustomServiceFlowService {
   ): Promise<CustomServiceVolumeResult> {
     const { capture } = input;
     if (capture.purpose !== 'CUSTOM_SERVICE_VOLUME' || capture.subjectId === null) {
-      return { outcome: 'INVALID' };
-    }
-    const units = parseCustomServiceVolume(input.text);
-    if (units === null || units <= 0n || units > CUSTOM_SERVICE_MAX_VOLUME_UNITS) {
-      return { outcome: 'INVALID' };
+      return { outcome: 'INVALID', range: null };
     }
     if (!(await this.deps.pricer.enabled(scope))) return { outcome: 'UNAVAILABLE' };
+    const range = await this.deps.pricer.rangeFor(
+      scope,
+      capture.customerId,
+      capture.subjectId,
+      'VOLUME',
+    );
+    if (range === null) return { outcome: 'UNAVAILABLE' };
+    // Checked the moment it is typed, against the bounds the customer was shown.
+    const units = parseCustomServiceVolume(input.text);
+    if (units === null || units < range.min || units > range.max) {
+      return { outcome: 'INVALID', range };
+    }
     if (
       !(await this.deps.pricer.volumePriceable(scope, capture.customerId, capture.subjectId, units))
     ) {
-      return { outcome: 'UNAVAILABLE' };
+      return { outcome: 'UNPRICED' };
     }
+    const daysRange = await this.deps.pricer.rangeFor(
+      scope,
+      capture.customerId,
+      capture.subjectId,
+      'TIME',
+    );
+    if (daysRange === null) return { outcome: 'UNAVAILABLE' };
     // Opening the days window supersedes this one: the volume is now its content.
     await this.deps.captures.open(scope, actor, {
       idempotencyKey: `custom-service-days:${capture.id}`,
@@ -137,7 +181,7 @@ export class CustomServiceFlowService {
       subjectId: capture.subjectId,
       customVolumeUnits: units,
     });
-    return { outcome: 'ASK_DAYS', volumeBytes: customServiceVolumeBytes(units) };
+    return { outcome: 'ASK_DAYS', volumeBytes: customServiceVolumeBytes(units), range: daysRange };
   }
 
   /**
@@ -156,10 +200,35 @@ export class CustomServiceFlowService {
       capture.subjectId === null ||
       capture.customVolumeUnits === null
     ) {
-      return { outcome: 'INVALID' };
+      return { outcome: 'INVALID', range: null };
     }
+    const range = await this.deps.pricer.rangeFor(
+      scope,
+      capture.customerId,
+      capture.subjectId,
+      'TIME',
+    );
+    if (range === null) return { outcome: 'UNAVAILABLE' };
     const days = parseCustomServiceDays(input.text);
-    if (days === null) return { outcome: 'INVALID' };
+    if (days === null || BigInt(days) < range.min || BigInt(days) > range.max) {
+      return { outcome: 'INVALID', range };
+    }
+    if (
+      !(await this.deps.pricer.daysPriceable(scope, capture.customerId, capture.subjectId, days))
+    ) {
+      return { outcome: 'UNPRICED' };
+    }
+    // The volume was priced when typed; a rule edited since says which part broke.
+    if (
+      !(await this.deps.pricer.volumePriceable(
+        scope,
+        capture.customerId,
+        capture.subjectId,
+        capture.customVolumeUnits,
+      ))
+    ) {
+      return { outcome: 'UNAVAILABLE' };
+    }
     const order = await this.deps.orders.createCustomDraft(scope, actor, {
       idempotencyKey: `custom-service-draft:${capture.id}`,
       customerId: capture.customerId,
