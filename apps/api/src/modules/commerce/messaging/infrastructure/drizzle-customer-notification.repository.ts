@@ -278,6 +278,31 @@ export class DrizzleCustomerNotificationRepository implements CustomerNotificati
     return rows.length > 0;
   }
 
+  async supersedePendingOfKinds(
+    scope: TenantContext,
+    kinds: readonly CustomerNotificationKind[],
+    createdAtOrBefore: Date,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<number> {
+    if (kinds.length === 0) return 0;
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(customerNotifications)
+      .set({ state: 'SUPERSEDED', resolvedAt: now, nextAttemptAt: null, updatedAt: now })
+      .where(
+        and(
+          eq(customerNotifications.tenantId, tenantId),
+          eq(customerNotifications.state, 'PENDING'),
+          isNull(customerNotifications.sendStartedAt),
+          inArray(customerNotifications.kind, [...kinds]),
+          lte(customerNotifications.createdAt, createdAtOrBefore),
+        ),
+      )
+      .returning({ id: customerNotifications.id });
+    return rows.length;
+  }
+
   /**
    * Puts a claimed row back on the queue at `retryAt`: still `PENDING`, NO attempt spent.
    *

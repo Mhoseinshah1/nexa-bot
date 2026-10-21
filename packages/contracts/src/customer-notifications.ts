@@ -383,6 +383,79 @@ export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[numb
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
 
 /**
+ * R5A-2 item 5: the owner's emergency switch for AUTOMATED customer messages.
+ *
+ * One setting, default OFF. While it is ON the dispatcher does not send any kind marked
+ * `true` in `CUSTOMER_NOTIFICATION_AUTOMATED`; the row is resolved SUPERSEDED (never
+ * re-queued), so switching it off does not flood customers with a backlog.
+ */
+export const CUSTOMER_NOTICES_PAUSE_SETTING_KEY = 'customer_notices.pause_automated' as const;
+/** The operational-event pair for the switch: opened when it is turned ON, closed when OFF. */
+export const CUSTOMER_NOTICES_PAUSED_CODE = 'customer_notices.paused' as const;
+export const CUSTOMER_NOTICES_RESUMED_CODE = 'customer_notices.resumed' as const;
+
+/**
+ * Whether a kind is AUTOMATED: raised by a timer, a sweep or a deadline, with no customer
+ * action and no operator action behind it. Exactly these are held by the emergency switch.
+ *
+ * `false` is the broad class that always goes out: a reply to something the customer just
+ * did (a recorded transfer, a cancelled order, the result of an operation, a renewal, a
+ * refund request, a failed payment attempt, a refunded order), something an operator did on
+ * purpose (a rejection, a credit, a direct message, a ticket reply, an incident notice, a
+ * mass credit or gift, an unblock) and another customer's act (a transferred service).
+ *
+ * Total over the kinds on purpose: a kind added later has to choose.
+ */
+export const CUSTOMER_NOTIFICATION_AUTOMATED: Readonly<Record<CustomerNotificationKind, boolean>> =
+  {
+    PAYMENT_REJECTED: false,
+    PAYMENT_EXPIRED: true,
+    ORDER_EXPIRED: true,
+    SERVICE_ACTION_SUCCEEDED: false,
+    SERVICE_ACTION_FAILED: false,
+    SERVICE_PROVISION_DELAYED: true,
+    PAYMENT_TRANSFER_RECORDED: false,
+    ORDER_CANCELLED: false,
+    WALLET_TOPUP_CREDITED: false,
+    ORDER_REFUNDED_TO_WALLET: false,
+    SERVICE_EXPIRY_FIRST: true,
+    SERVICE_EXPIRY_SECOND: true,
+    SERVICE_EXPIRED: true,
+    SERVICE_USAGE_FIRST: true,
+    SERVICE_USAGE_SECOND: true,
+    SERVICE_USAGE_FINAL: true,
+    TRIAL_NOT_DELIVERED: false,
+    RECEIPT_CREDITED_TO_WALLET: false,
+    WALLET_TOPUP_GIFT_CREDITED: false,
+    // Nobody asked for it: a late provider approval the reconciliation found and credited.
+    GATEWAY_LATE_PAYMENT_CREDITED: true,
+    REFUND_COMPLETED: false,
+    GATEWAY_PAYMENT_FAILED: false,
+    SERVICE_REFUND_REQUEST_REGISTERED: false,
+    SERVICE_REFUND_REQUEST_APPROVED: false,
+    SERVICE_REFUND_REQUEST_REJECTED: false,
+    SERVICE_TRANSFER_RECEIVED: false,
+    TICKET_REPLY: false,
+    SERVICE_EXPIRY_EARLY: true,
+    SERVICE_EXPIRY_DAY: true,
+    WALLET_LOW_BALANCE: true,
+    PAYMENT_PENDING_REMINDER: true,
+    ORDER_PENDING_REMINDER: true,
+    TICKET_REPLY_ATTACHMENT: false,
+    SERVICE_RENEWED: false,
+    RESELLER_MINIMUM_REMINDER: true,
+    RESELLER_MINIMUM_ACHIEVED: true,
+    WALLET_MASS_CREDITED: false,
+    SERVICE_GIFT_APPLIED: false,
+    DIRECT_MESSAGE: false,
+    DIRECT_MESSAGE_MEDIA: false,
+    INCIDENT_NOTICE: false,
+    WALLET_ADMIN_CREDITED: false,
+    WALLET_ADMIN_DEBITED: false,
+    ACCOUNT_UNBLOCKED: false,
+  };
+
+/**
  * Whether a kind's fact can stop being true between enqueue and send.
  *
  * ADR 0030 §3: staleness is per-kind and re-checked after the claim, NOT a TTL column.
@@ -542,7 +615,13 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    * of the sentence is still true.
    */
   RESELLER_MINIMUM_REMINDER: true,
-  RESELLER_MINIMUM_ACHIEVED: false,
+  /*
+   * Round 5A-2: `true` since an imported reseller's first month. The achievement is derived from
+   * the reseller's sales for a month; one the previous bot sold into, before the import, is not
+   * a state this installation observed, so the notice must be refusable at send time (the reader
+   * answers it from the notice row and the reseller's import date, nothing else).
+   */
+  RESELLER_MINIMUM_ACHIEVED: true,
   // Round N: both are terminal facts about work already done.
   WALLET_MASS_CREDITED: false,
   SERVICE_GIFT_APPLIED: false,

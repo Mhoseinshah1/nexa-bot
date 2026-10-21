@@ -8,6 +8,7 @@ import {
   USAGE_SYNC_MINUTES_MAX,
   USAGE_SYNC_MINUTES_MIN,
 } from './provisioning.js';
+import { CUSTOMER_NOTICES_PAUSE_SETTING_KEY } from './customer-notifications.js';
 import {
   EXPIRY_EARLY_REMINDER_DAYS_MIN,
   EXPIRY_REMINDER_DAYS_MAX,
@@ -863,6 +864,23 @@ export const SETTINGS = [
     schema: z.number().int().min(0).max(100),
     defaultValue: 0,
     zeroMeaning: 'UNLIMITED',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: CUSTOMER_NOTICES_PAUSE_SETTING_KEY,
+    description:
+      'R5A-2 item 5: the emergency switch. While on, every AUTOMATED customer and reseller ' +
+      'notice (expiry, usage and wallet reminders, expired payments and orders, delayed ' +
+      'provisioning, late-credit and reseller-minimum notices) is not sent; each is resolved ' +
+      'as superseded and is never sent later, so turning the switch off sends no backlog. ' +
+      'Broadcasts, an operator\u2019s direct replies and replies to a customer\u2019s own ' +
+      'actions are unaffected. Off by default.',
+    schema: z.boolean(),
+    defaultValue: false,
+    zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     configures: null,

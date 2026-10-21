@@ -1,8 +1,11 @@
 import {
   RESELLER_MINIMUM_PROGRESS_MAX,
   money,
+  systemJobActor,
   type ActorContext,
+  type AuditWriter,
   type Clock,
+  type CorrelationId,
   type CurrencyCode,
   type FeatureFlagKey,
   type IdGenerator,
@@ -27,6 +30,7 @@ import type { TemplatePresentation } from '../../../control/templates/applicatio
 import type { CustomerNotifier } from '../../messaging/application/customer-notifier.js';
 import { ORDER_VIEW_PERMISSION } from '../../orders/application/order.service.js';
 import { effectiveMonthlyMinimum, minimumStanding } from '../domain/monthly-minimum.js';
+import { monthCountsForReseller } from '../domain/import-period.js';
 import type { ResellerCursor, ResellerRepository } from './ports.js';
 import { RESELLERS_VIEW_PERMISSION } from './reseller-admin.service.js';
 
@@ -42,7 +46,12 @@ export const RESELLER_MINIMUM_SWEEP_NOTICES_PER_PASS = 500;
 export interface ResellerMinimumServiceDeps {
   readonly resellers: Pick<
     ResellerRepository,
-    'listAll' | 'pageActive' | 'presentationOf' | 'noticesIn' | 'raiseNotice'
+    | 'listAll'
+    | 'pageActive'
+    | 'presentationOf'
+    | 'noticesIn'
+    | 'raiseNotice'
+    | 'supersedeImportedPeriodNotices'
   >;
   /**
    * WP12's reseller sales, by the one shared statement (`resellerSalesStatement`). The sweep
@@ -87,6 +96,8 @@ export interface ResellerMinimumServiceDeps {
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /** Round 5A-2: the audit row of each cleanup batch. Without it the cleanup does not run. */
+  readonly audit?: AuditWriter;
 }
 
 export interface ResellerMinimumRowRecord {
@@ -214,6 +225,7 @@ export class ResellerMinimumService {
    * Returns how many notifications were queued.
    */
   async runOnce(scope: TenantContext): Promise<number> {
+    await this.reconcileImportedPeriodNotices(scope);
     const now = this.deps.clock.now();
     return this.deps.uow.run(scope, async (tx) => {
       if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 0;
@@ -255,6 +267,9 @@ export class ResellerMinimumService {
         cursor = page.next;
         for (const listing of page.items) {
           if (raised >= cap) return queued;
+          // Round 5A-2 item 4: a month that began before an imported reseller existed here is
+          // not one Nexa observed: no reminder, no achievement.
+          if (!monthCountsForReseller(listing, period.start)) continue;
           const { minimum } = effectiveMonthlyMinimum(
             listing.tier.monthlyMinimum,
             listing.monthlyMinimum,
@@ -301,5 +316,50 @@ export class ResellerMinimumService {
       } while (cursor !== null);
       return queued;
     });
+  }
+
+  /**
+   * Round 5A-2 items 3 and 4 — the notices an earlier release queued for an imported reseller
+   * about a month that began before the import. `PENDING -> SUPERSEDED`, bounded batches each
+   * with one audit row (counts by kind, never a customer), nothing deleted, idempotent. Run at
+   * the start of every pass and at the worker's start.
+   */
+  async reconcileImportedPeriodNotices(scope: TenantContext): Promise<number> {
+    const audit = this.deps.audit;
+    if (audit === undefined) return 0;
+    let total = 0;
+    for (let batch = 0; batch < 40; batch += 1) {
+      const moved = await this.deps.uow.run(scope, async (tx) => {
+        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 0;
+        const rows = await this.deps.resellers.supersedeImportedPeriodNotices(
+          scope,
+          500,
+          this.deps.clock.now(),
+          tx,
+        );
+        if (rows.length === 0) return 0;
+        const byKind: Record<string, number> = {};
+        for (const row of rows) byKind[row.kind] = (byKind[row.kind] ?? 0) + 1;
+        await audit.record(
+          scope,
+          systemJobActor('reseller-minimum', this.deps.ids.uuid() as CorrelationId),
+          {
+            action: 'reseller_minimum.imported_period_notices_superseded',
+            entityType: 'CustomerNotification',
+            entityId: null,
+            before: { state: 'PENDING' },
+            after: { state: 'SUPERSEDED', count: rows.length, byKind },
+            reason:
+              'monthly-minimum notice for a month that began before the reseller was imported',
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        return rows.length;
+      });
+      total += moved;
+      if (moved < 500) break;
+    }
+    return total;
   }
 }

@@ -1000,6 +1000,41 @@ export class DrizzleResellerRepository implements ResellerRepository {
     return inserted.length === 1;
   }
 
+  async supersedeImportedPeriodNotices(
+    scope: TenantContext,
+    limit: number,
+    now: Date,
+    tx: unknown,
+  ): Promise<readonly { readonly kind: string; readonly customerId: string }[]> {
+    const tenantId = requireTenantId(scope);
+    const moved = await exec(this.db, tx).execute(sql`
+      WITH cand AS (
+        SELECT cn.id
+        FROM customer_notifications cn
+        JOIN reseller_minimum_notices n ON n.tenant_id = cn.tenant_id AND n.id = cn.subject_id
+        JOIN resellers r ON r.tenant_id = n.tenant_id AND r.customer_id = n.customer_id
+        WHERE cn.tenant_id = ${tenantId}
+          AND cn.kind IN ('RESELLER_MINIMUM_REMINDER', 'RESELLER_MINIMUM_ACHIEVED')
+          AND cn.state = 'PENDING'
+          AND cn.send_started_at IS NULL
+          AND r.source <> 'NEXA'
+          AND n.period_start < r.created_at
+        ORDER BY cn.created_at, cn.id
+        LIMIT ${limit}
+        FOR UPDATE OF cn SKIP LOCKED
+      )
+      UPDATE customer_notifications n
+      SET state = 'SUPERSEDED', resolved_at = ${now}, next_attempt_at = NULL, updated_at = ${now}
+      FROM cand
+      WHERE n.id = cand.id AND n.state = 'PENDING' AND n.send_started_at IS NULL
+      RETURNING n.kind, n.customer_id
+    `);
+    return (moved.rows as unknown as { kind: string; customer_id: string }[]).map((row) => ({
+      kind: row.kind,
+      customerId: row.customer_id,
+    }));
+  }
+
   // -- Purchase terms ------------------------------------------------------------------
 
   async recordTerms(

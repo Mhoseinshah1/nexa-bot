@@ -101,6 +101,10 @@ export const i18nOpsLogWords: OpsLogWords = {
   // A code the map does not know is still not shown raw as the title: the code is the
   // technical line beneath it.
   eventTitle: (code) => operationalEventLabelFa(code) ?? W.unknownEvent,
+  stalledOperationTitle: (type) =>
+    Object.prototype.hasOwnProperty.call(W.stalledOperation, type)
+      ? (W.stalledOperation as Record<string, string>)[type]!
+      : null,
   severity: (klass) =>
     ({
       SECURITY: '🛡 امنیتی',

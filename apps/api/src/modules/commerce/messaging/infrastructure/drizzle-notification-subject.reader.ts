@@ -13,7 +13,7 @@ import {
 } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { importedUnmeasuredUsageNotice } from '../../../../infrastructure/persistence/imported-usage-notice.js';
+import { importedServiceNoticeRefused } from '../../../../infrastructure/persistence/imported-notice-guard.js';
 import {
   customerDirectMessages,
   customerNotifications,
@@ -21,7 +21,10 @@ import {
   services,
 } from '../../../../infrastructure/persistence/schema.js';
 import type { NotificationSubjectReader } from '../application/customer-notification.service.js';
-import { resellerMinimumReminderHolds } from '../../resellers/infrastructure/drizzle-reseller-minimum-facts.js';
+import {
+  resellerMinimumAchievedHolds,
+  resellerMinimumReminderHolds,
+} from '../../resellers/infrastructure/drizzle-reseller-minimum-facts.js';
 
 /**
  * WP-A9: which service reminder a notification kind carries, inverted from the contract's
@@ -55,6 +58,8 @@ const ANSWERABLE_KINDS: readonly CustomerNotificationKind[] = [
   'ORDER_PENDING_REMINDER',
   // Round N R2: answered from the notice row, the reseller and the month's sales.
   'RESELLER_MINIMUM_REMINDER',
+  // Round 5A-2: and the achievement, refused for a month an import predates.
+  'RESELLER_MINIMUM_ACHIEVED',
   // Phase A2: answered from the direct message's own row.
   'DIRECT_MESSAGE',
   'DIRECT_MESSAGE_MEDIA',
@@ -122,6 +127,9 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
     if (kind === 'ORDER_PENDING_REMINDER') return this.orderStillPending(tenantId, subjectId, now);
     if (kind === 'RESELLER_MINIMUM_REMINDER') {
       return resellerMinimumReminderHolds(this.db, tenantId, subjectId, now);
+    }
+    if (kind === 'RESELLER_MINIMUM_ACHIEVED') {
+      return resellerMinimumAchievedHolds(this.db, tenantId, subjectId);
     }
     if (kind === 'DIRECT_MESSAGE' || kind === 'DIRECT_MESSAGE_MEDIA') {
       return this.directMessageFresh(tenantId, kind, subjectId, now);
@@ -251,7 +259,7 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
         AND r.basis_expires_at IS NOT DISTINCT FROM s.expires_at
         AND s.state = ANY(${sql.param([...states])}::text[])
         ${expiry ? sql`` : sql`AND r.basis_traffic_limit_bytes = s.traffic_limit_bytes`}
-        ${expiry ? sql`` : sql`AND NOT ${importedUnmeasuredUsageNotice()}`}
+        AND NOT ${importedServiceNoticeRefused(expiry ? 'EXPIRY' : 'USAGE')}
         ${advance ? sql`AND s.expires_at > ${now}` : sql``}
         ${
           moreUrgent.length === 0

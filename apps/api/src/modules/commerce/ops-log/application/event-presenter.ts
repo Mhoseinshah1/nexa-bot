@@ -98,6 +98,9 @@ export class OperationalEventPresenter implements OpsEventPresenter {
     if (everyOccurrenceIsAMessage(recorded.code)) {
       return this.paymentLink(scope, input, recorded, scoped);
     }
+    if (recorded.code === PROVISIONING_STALLED_CODE) {
+      return this.provisioningStalled(input, recorded);
+    }
     if (recorded.code === CUSTOMER_SEND_FAILED) {
       return this.customerSendFailed(scope, input, recorded, scoped);
     }
@@ -244,6 +247,36 @@ export class OperationalEventPresenter implements OpsEventPresenter {
         firstSeenAt: recorded.firstSeenAt,
         lastSeenAt: recorded.lastSeenAt,
         details,
+      },
+    };
+  }
+
+  /**
+   * R5A-2 item 6. `provisioning.stalled` is the code for every operation that stalls, but its
+   * title says a service CREATE stalled. For an operation that is not a PROVISION the heading
+   * names the real one, from the operation type in the event's context; the code is unchanged.
+   * A context without a known non-PROVISION type answers null and keeps the generic layout.
+   */
+  private provisioningStalled(
+    input: OperationalEventInput,
+    recorded: RecordedOperationalEvent,
+  ): PresentedOpsEvent | null {
+    const { words } = this.deps;
+    const type = input.context?.['operationType'];
+    if (typeof type !== 'string' || type === 'PROVISION') return null;
+    const heading = words.stalledOperationTitle(type);
+    if (heading === null) return null;
+    return {
+      templateKey: 'ops.notification.operational_event' as TemplateKey,
+      values: {
+        severity: words.severity(opsErrorClassOf(recorded.code, recorded.severity)),
+        heading,
+        technical: technicalLine(recorded.code, type),
+        code: recorded.code,
+        message: heading,
+        occurrences: recorded.occurrenceCount,
+        firstSeenAt: recorded.firstSeenAt,
+        lastSeenAt: recorded.lastSeenAt,
       },
     };
   }

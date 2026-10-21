@@ -419,6 +419,19 @@ export interface ResellerRepository {
     tx: unknown,
   ): Promise<boolean>;
 
+  /**
+   * Round 5A-2 item 4: `PENDING -> SUPERSEDED` (unsent, nothing deleted, claimed rows left
+   * alone) for up to `limit` queued monthly-minimum notices — reminder and achievement — of an
+   * imported reseller for a month that began before the reseller row existed
+   * (`monthCountsForReseller`). Returns the notices moved, for the batch's audit row.
+   */
+  supersedeImportedPeriodNotices(
+    scope: TenantContext,
+    limit: number,
+    now: Date,
+    tx: unknown,
+  ): Promise<readonly { readonly kind: string; readonly customerId: string }[]>;
+
   // -- Purchase terms ------------------------------------------------------------
 
   /** Idempotent per order. True when this call wrote the row. */

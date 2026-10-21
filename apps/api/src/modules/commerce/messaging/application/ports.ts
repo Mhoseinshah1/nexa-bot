@@ -724,6 +724,21 @@ export interface CustomerNotificationRepository {
   ): Promise<boolean>;
 
   /**
+   * R5A-2 (Codex, PR #306): resolves every UNCLAIMED `PENDING` row of the given kinds that
+   * existed at `createdAtOrBefore` as `SUPERSEDED`, unsent, with `resolvedAt = now` and no
+   * next attempt. Called from the settings write that turns the emergency switch OFF, in that
+   * write's transaction, so that turning it off releases no backlog. A row already stamped as
+   * sent is left to the dispatcher. Spends no attempt. Returns the number resolved.
+   */
+  supersedePendingOfKinds(
+    scope: TenantContext,
+    kinds: readonly CustomerNotificationKind[],
+    createdAtOrBefore: Date,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<number>;
+
+  /**
    * Puts a claimed row back on the queue at `retryAt`: no attempt spent.
    *
    * Its own method rather than a flag on `record`, because the difference is exactly

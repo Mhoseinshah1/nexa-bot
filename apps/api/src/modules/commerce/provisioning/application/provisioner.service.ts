@@ -1348,6 +1348,7 @@ export class ProvisionerService {
               serviceId: operation.serviceId,
               panelId: operation.panelId,
               reason: 'CALL_STRANDED',
+              operationType: operation.type,
             },
             dedupeKey: provisioningConditionKey(operation.serviceId),
           },
@@ -1413,11 +1414,15 @@ export class ProvisionerService {
           {
             code: PROVISIONING_STALLED_CODE,
             severity: 'ERROR',
-            message: 'A paid service could not be created on its panel.',
+            message:
+              operation.type === 'PROVISION'
+                ? 'A paid service could not be created on its panel.'
+                : `A ${operation.type} operation spent its attempts without finishing.`,
             context: {
               serviceId: operation.serviceId,
               panelId: operation.panelId,
               reason: 'ATTEMPTS_SPENT',
+              operationType: operation.type,
               ...(refundFollows ? { answeredBy: REFUND_ANSWERS } : {}),
             },
             dedupeKey: provisioningConditionKey(operation.serviceId),

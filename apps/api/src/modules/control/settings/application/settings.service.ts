@@ -6,6 +6,9 @@ import {
   settingDefinition,
   settingScope,
   CONTROL_ERROR_CODES,
+  CUSTOMER_NOTICES_PAUSED_CODE,
+  CUSTOMER_NOTICES_PAUSE_SETTING_KEY,
+  CUSTOMER_NOTICES_RESUMED_CODE,
   PLATFORM_ERROR_CODES,
   type ActorContext,
   type AuditWriter,
@@ -153,6 +156,17 @@ export interface SettingChangeGuard {
   ): Promise<string | null>;
 }
 
+/**
+ * Told, inside the write's transaction, that the emergency switch went ON -> OFF.
+ * Declared here and implemented outward (the container), like `SettingChangeGuard`:
+ * `control` knows nothing about the customer notification lane.
+ */
+export type NoticePauseReleasedHook = (
+  scope: ScopeContext,
+  at: Date,
+  tx: TransactionScope,
+) => Promise<void>;
+
 export class SettingsService {
   constructor(
     private readonly guard: PermissionGuard,
@@ -181,6 +195,17 @@ export class SettingsService {
      * registers none behaves exactly as before.
      */
     private readonly changeGuards: readonly SettingChangeGuard[] = [],
+    /**
+     * The PROJECTING recorder, for the one announcement a setting change makes to the
+     * operations group (the R5A-2 emergency switch). Absent in a caller that never announces:
+     * the raw recorder then records the event and nothing is posted.
+     */
+    private readonly announcer: OperationalEventRecorder = opsLog,
+    /**
+     * R5A-2 (Codex, PR #306): runs in the write's transaction when the switch flips OFF, so
+     * the automated rows still queued are resolved there and then, not released afterwards.
+     */
+    private readonly onNoticePauseReleased?: NoticePauseReleasedHook,
   ) {}
 
   /**
@@ -414,6 +439,10 @@ export class SettingsService {
           );
         }
 
+        if (key === CUSTOMER_NOTICES_PAUSE_SETTING_KEY) {
+          await this.announceNoticePause(scope, before.value, written.value, tx);
+        }
+
         const setting = await this.resolver.resolve(scope, key, tx);
         await rememberOnce(
           this.idempotency,
@@ -429,6 +458,46 @@ export class SettingsService {
     );
 
     return { ...result, replayed: false };
+  }
+
+  /**
+   * R5A-2 item 5: the emergency switch is announced to the operations group when it really
+   * flips — one event on ON (a condition that stays open), one on OFF (its recovery). A write
+   * that leaves the effective value as it was announces nothing. In the write's transaction,
+   * so an announcement cannot outlive a rolled-back change.
+   */
+  private async announceNoticePause(
+    scope: ScopeContext,
+    from: unknown,
+    to: unknown,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const wasOn = from === true;
+    const isOn = to === true;
+    if (wasOn === isOn) return;
+    if (wasOn && !isOn && this.onNoticePauseReleased !== undefined) {
+      await this.onNoticePauseReleased(scope, this.clock.now(), tx);
+    }
+    await this.announcer.record(
+      scope,
+      isOn
+        ? {
+            code: CUSTOMER_NOTICES_PAUSED_CODE,
+            severity: 'WARN',
+            message: 'Automated customer messages are paused by the emergency switch.',
+            dedupeKey: CUSTOMER_NOTICES_PAUSED_CODE,
+            context: { key: CUSTOMER_NOTICES_PAUSE_SETTING_KEY },
+          }
+        : {
+            code: CUSTOMER_NOTICES_RESUMED_CODE,
+            severity: 'INFO',
+            message: 'Automated customer messages are sent again.',
+            recoversCode: CUSTOMER_NOTICES_PAUSED_CODE,
+            recoversDedupeKey: CUSTOMER_NOTICES_PAUSED_CODE,
+            context: { key: CUSTOMER_NOTICES_PAUSE_SETTING_KEY },
+          },
+      tx,
+    );
   }
 
   /**

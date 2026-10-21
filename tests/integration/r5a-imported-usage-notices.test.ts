@@ -337,10 +337,13 @@ describe('Round 5A item 1: imported services and usage notices', () => {
      */
     await exec(sql`INSERT INTO service_reminder_baselines
                      (tenant_id, service_id, baseline_at, basis_expires_at,
-                      basis_traffic_limit_bytes, used_bytes)
+                      basis_traffic_limit_bytes, used_bytes, created_at)
                    SELECT tenant_id, id, created_at, expires_at, traffic_limit_bytes,
-                          traffic_used_bytes
+                          traffic_used_bytes, created_at
                      FROM services WHERE id = ${measured}`);
+    // R5A-2: written at the import's own instant, as the seed writes it (\`created_at\` =
+    // \`baseline_at\`); a row created later is a late baseline and proves nothing earlier.
+
     await queueNotice(measured, 'USAGE_FIRST', 'SERVICE_USAGE_FIRST');
     const claimed = activeImported[1_101] ?? '';
     await queueNotice(claimed, 'USAGE_FIRST', 'SERVICE_USAGE_FIRST');

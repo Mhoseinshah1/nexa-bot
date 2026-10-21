@@ -237,7 +237,7 @@ export class ServiceReminderService {
    * stopped a tenant would otherwise make the worker report itself unhealthy.
    */
   async runOnce(scope: TenantContext): Promise<ServiceReminderReport> {
-    await this.reconcileImportedUsageNotices(scope);
+    await this.reconcileImportedNotices(scope);
     const now = this.deps.clock.now();
 
     return this.deps.uow.run(scope, async (tx) => {
@@ -249,6 +249,193 @@ export class ServiceReminderService {
       const usage = await this.sweepUsage(scope, now, thresholds, tx);
       return { expiry, usage };
     });
+  }
+
+  /**
+   * Round 5A-2 items 1 and 3 — the one reconcile of what an import left behind, run at the
+   * worker's start and at the start of EVERY pass (the sweep must never see an imported
+   * service without a baseline, so this precedes it).
+   *
+   *   1. the usage notices of the earlier 5A rule (unchanged, and first, so its audit rows
+   *      keep their meaning);
+   *   2. a baseline for every imported service that lacks one (`reconcileImportedBaselines`);
+   *   3. every queued service-reminder notice the shared guard refuses is `SUPERSEDED`
+   *      (`supersedeImportedServiceNotices`) — AFTER 2, because the guard asks for a
+   *      baseline and the ones just written are what refuse the notices queued before them.
+   *
+   * `unbounded` is the worker start, which walks the whole backlog; a pass is capped so a
+   * huge installation catches up over several passes without holding the sweep back. Never a
+   * message, never a panel call, nothing deleted.
+   */
+  async reconcileImportedNotices(
+    scope: TenantContext,
+    options: { readonly unbounded?: boolean; readonly shouldStop?: () => boolean } = {},
+  ): Promise<{ readonly baselines: number; readonly superseded: number }> {
+    await this.reconcileImportedUsageNotices(scope);
+    const baselines = await this.reconcileImportedBaselines(scope, options);
+    const superseded = await this.supersedeImportedServiceNotices(scope, options);
+    return { baselines, superseded };
+  }
+
+  /**
+   * Round 5A-2 item 1 — gives every imported service lacking a baseline the baseline it
+   * would have got at import: every expiry and usage threshold its CURRENT state has already
+   * reached is recorded as already passed (`passedReminderKinds`, the seed's own rule), the
+   * baseline row is written at this moment with the figure on the row when it is a
+   * measurement, and nothing is announced.
+   *
+   * Idempotent (`ON CONFLICT DO NOTHING` on both writes), resumable (keyset by id, rows that
+   * have a baseline never come back), and bounded per batch: each batch is its own
+   * transaction with its own scope-activity check and ONE audit row (counts, never a
+   * customer). A row another transaction holds is skipped, not waited for.
+   */
+  async reconcileImportedBaselines(
+    scope: TenantContext,
+    options: { readonly unbounded?: boolean; readonly shouldStop?: () => boolean } = {},
+  ): Promise<number> {
+    const audit = this.deps.audit;
+    if (audit === undefined) return 0;
+    const maxBatches =
+      options.unbounded === true ? Number.MAX_SAFE_INTEGER : RECONCILE_MAX_BATCHES_PER_PASS;
+    let total = 0;
+    let after: string | null = null;
+    for (let batch = 0; batch < maxBatches; batch += 1) {
+      // Shutdown (round 5A-2): stop after the batch in hand, never mid-batch.
+      if (options.shouldStop?.() === true) break;
+      const done: { readonly count: number; readonly last: string | null; readonly size: number } =
+        await this.deps.uow.run(scope, async (tx) => {
+          if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
+            return { count: 0, last: null, size: 0 };
+          }
+          const now = this.deps.clock.now();
+          const rows = await this.deps.reminders.listUnbaselinedImported(
+            scope,
+            after,
+            RECONCILE_BATCH_SIZE,
+            tx,
+          );
+          if (rows.length === 0) return { count: 0, last: null, size: 0 };
+          const thresholds = await this.thresholds(scope, tx);
+          let written = 0;
+          let recorded = 0;
+          for (const candidate of rows) {
+            const passed = passedReminderKinds(candidate, now, thresholds);
+            const snapshot = this.snapshot(candidate, now);
+            for (const kind of [...passed.expiry, ...passed.usage]) {
+              const raised = await this.deps.reminders.raise(
+                scope,
+                {
+                  id: this.deps.ids.uuid(),
+                  serviceId: candidate.serviceId,
+                  kind,
+                  basis: candidate.basis,
+                  snapshot,
+                },
+                now,
+                tx,
+              );
+              if (raised) recorded += 1;
+            }
+            const baseline = await this.deps.reminders.recordBaseline(
+              scope,
+              {
+                serviceId: candidate.serviceId,
+                at: now,
+                basis: candidate.basis,
+                usedBytes: candidate.usageMeasured ? candidate.trafficUsedBytes : null,
+              },
+              tx,
+            );
+            if (baseline) written += 1;
+          }
+          await audit.record(
+            scope,
+            systemJobActor('service-reminders', this.deps.ids.uuid() as CorrelationId),
+            {
+              action: 'service_reminder.imported_baselines_backfilled',
+              entityType: 'Service',
+              entityId: null,
+              before: { baselines: 0 },
+              after: {
+                baselines: written,
+                remindersRecordedSilently: recorded,
+                services: rows.length,
+              },
+              reason:
+                'imported service without a baseline: what it had already reached is history, nothing announced',
+              result: 'SUCCESS',
+            },
+            tx,
+          );
+          return {
+            count: written,
+            last: rows[rows.length - 1]?.serviceId ?? null,
+            size: rows.length,
+          };
+        });
+      total += done.count;
+      if (done.size < RECONCILE_BATCH_SIZE || done.last === null) break;
+      after = done.last;
+    }
+    return total;
+  }
+
+  /**
+   * Round 5A-2 item 3 — `PENDING -> SUPERSEDED` for every queued service-reminder notice the
+   * shared guard (`importedServiceNoticeRefused`) refuses. The lane's own unsent transition:
+   * no row deleted, `FAILED` and `DELIVERED` untouched, claimed rows left to the dispatcher.
+   * One audit row per batch (counts by kind, never a customer). Idempotent.
+   */
+  async supersedeImportedServiceNotices(
+    scope: TenantContext,
+    options: { readonly unbounded?: boolean; readonly shouldStop?: () => boolean } = {},
+  ): Promise<number> {
+    const audit = this.deps.audit;
+    if (audit === undefined) return 0;
+    const maxBatches =
+      options.unbounded === true ? Number.MAX_SAFE_INTEGER : RECONCILE_MAX_BATCHES_PER_PASS;
+    let total = 0;
+    for (let batch = 0; batch < maxBatches; batch += 1) {
+      // Shutdown (round 5A-2): stop after the batch in hand, never mid-batch.
+      if (options.shouldStop?.() === true) break;
+      const moved = await this.deps.uow.run(scope, async (tx) => {
+        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 0;
+        const now = this.deps.clock.now();
+        const rows = await this.deps.reminders.supersedeImportedServiceNotices(
+          scope,
+          RECONCILE_BATCH_SIZE,
+          now,
+          tx,
+        );
+        if (rows.length === 0) return 0;
+        const byKind: Record<string, number> = {};
+        for (const row of rows) byKind[row.kind] = (byKind[row.kind] ?? 0) + 1;
+        await audit.record(
+          scope,
+          systemJobActor('service-reminders', this.deps.ids.uuid() as CorrelationId),
+          {
+            action: 'service_reminder.imported_notices_superseded',
+            entityType: 'CustomerNotification',
+            entityId: null,
+            before: { state: 'PENDING' },
+            after: {
+              state: 'SUPERSEDED',
+              count: rows.length,
+              customers: new Set(rows.map((row) => row.customerId)).size,
+              byKind,
+            },
+            reason:
+              'notice for an imported service not backed by a transition seen after the import',
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        return rows.length;
+      });
+      total += moved;
+      if (moved < RECONCILE_BATCH_SIZE) break;
+    }
+    return total;
   }
 
   /**
@@ -560,7 +747,9 @@ export class ServiceReminderService {
        * is history — recorded with the rest of the prefix, never announced. Every less urgent
        * kind was behind it too (the prefix is in time order), so nothing in `upTo` is sent.
        */
-      const historical = importedReminderKinds(candidate, thresholds).expiry.includes(due);
+      const historical =
+        candidate.importUnproven === true ||
+        importedReminderKinds(candidate, thresholds).expiry.includes(due);
       const announce = enabled && !historical;
       if (await this.raise(scope, candidate, upTo, announce ? due : null, now, tx)) sent += 1;
     }
@@ -614,7 +803,9 @@ export class ServiceReminderService {
       const unmeasuredImport =
         candidate.importBaseline != null && candidate.importBaseline.usedBytes === null;
       const historical =
-        unmeasuredImport || importedReminderKinds(candidate, thresholds).usage.includes(due);
+        candidate.importUnproven === true ||
+        unmeasuredImport ||
+        importedReminderKinds(candidate, thresholds).usage.includes(due);
       if (await this.raise(scope, candidate, reached, historical ? null : due, now, tx)) {
         sent += 1;
       }
