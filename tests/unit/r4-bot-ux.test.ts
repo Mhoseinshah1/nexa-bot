@@ -192,6 +192,7 @@ describe('A4: accept the rules once, never again', () => {
     acceptedOlder?: boolean;
     legacy?: boolean;
     reprompt?: boolean;
+    exemption?: 'IMPORTED' | 'PREDATES_RULES';
   }) {
     return new TermsAcceptanceService({
       repository: {
@@ -202,6 +203,7 @@ describe('A4: accept the rules once, never again', () => {
             ? { termsVersionId: 'v1', versionNumber: 1, acceptedAt: new Date(0) }
             : null,
         legacyAcceptedAt: async () => (facts.legacy === true ? new Date(0) : null),
+        exemption: async () => facts.exemption ?? null,
       } as never,
       flags: {
         isEnabled: async (_scope: unknown, key: string) =>
@@ -221,6 +223,17 @@ describe('A4: accept the rules once, never again', () => {
 
   it('a customer who never accepted anything is asked, once', async () => {
     expect((await gate({}).requirement(scope, 'c'))?.id).toBe('v2');
+  });
+
+  it('R5C-1: an imported or pre-enforcement customer is not asked; requirement and standing agree', async () => {
+    for (const exemption of ['IMPORTED', 'PREDATES_RULES'] as const) {
+      const service = gate({ exemption });
+      expect(await service.requirement(scope, 'c'), exemption).toBeNull();
+      expect((await service.standing(scope, 'c')).reacceptanceRequired, exemption).toBe(false);
+    }
+    const asked = gate({});
+    expect((await asked.requirement(scope, 'c'))?.id).toBe('v2');
+    expect((await asked.standing(scope, 'c')).reacceptanceRequired).toBe(true);
   });
 
   it('the owner toggle ON brings the re-prompt back, for both', async () => {

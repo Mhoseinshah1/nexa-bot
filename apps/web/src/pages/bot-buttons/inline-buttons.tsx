@@ -157,6 +157,7 @@ export const INLINE_BUTTON_NAME: Readonly<Record<InlineButtonKey, WebKey>> = {
   'service.renew': 'web.ib_button_service_renew',
   'service.renew_option': 'web.ib_button_service_renew_option',
   'service.add_traffic': 'web.ib_button_service_add_traffic',
+  'service.add_time': 'web.ib_button_service_add_time',
   'service.addon_option': 'web.ib_button_service_addon_option',
   'service.add_devices': 'web.ib_button_service_add_devices',
   'service.devices_option': 'web.ib_button_service_devices_option',

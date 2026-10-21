@@ -157,6 +157,27 @@ export const LATE_CREDIT_WINDOW_HOURS_MAX = 720;
 export const LATE_CREDIT_WINDOW_HOURS_DEFAULT = 48;
 
 /**
+ * R5C-1 item 2: the three owner limits on «🔄 تغییر شماره کارت». Strings and bounds here; the
+ * registry (`settings.ts`) declares the keys from them, so the server's decision, the registry
+ * and the Web Admin's field can never carry three copies of a bound.
+ */
+export const CARD_SWITCH_SETTING_KEYS = {
+  /** Most switches one payment may have. Zero: the button is never offered. */
+  MAX_SWITCHES: 'payments.card_switch_limit',
+  /** Seconds a customer must wait after a switch before the next one. Zero: none. */
+  COOLDOWN_SECONDS: 'payments.card_switch_cooldown_seconds',
+  /** Most DISTINCT receiving cards one payment may show, the first card included. */
+  MAX_DISTINCT_CARDS: 'payments.card_switch_max_distinct_cards',
+} as const;
+export const CARD_SWITCH_MAX_SWITCHES_MAX = 20;
+export const CARD_SWITCH_MAX_SWITCHES_DEFAULT = 2;
+export const CARD_SWITCH_COOLDOWN_SECONDS_MAX = 3600;
+export const CARD_SWITCH_COOLDOWN_SECONDS_DEFAULT = 60;
+export const CARD_SWITCH_DISTINCT_CARDS_MIN = 1;
+export const CARD_SWITCH_DISTINCT_CARDS_MAX = 20;
+export const CARD_SWITCH_DISTINCT_CARDS_DEFAULT = 2;
+
+/**
  * What each route needs and how it settles, so no caller infers either from the name.
  *
  * `settlesVia` is what makes this layer provider-neutral in the only way that matters: a

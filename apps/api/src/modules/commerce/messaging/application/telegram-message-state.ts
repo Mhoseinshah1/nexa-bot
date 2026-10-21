@@ -334,7 +334,15 @@ export interface TelegramMessageStateDeps {
 
 export type WizardClaim =
   | { readonly outcome: 'CLAIMED'; readonly wizard: TelegramWizardRecord }
-  | { readonly outcome: 'STALE' }
+  | {
+      readonly outcome: 'STALE';
+      /**
+       * True when the message is stale because another turn HOLDS it right now (an unexpired
+       * lease), not because the wizard moved on or closed. A lenient gate answers a closed
+       * message in a new message; it must never answer a held one, or two rapid taps both run.
+       */
+      readonly held?: true;
+    }
   /** The scope stopped accepting work: the turn goes on without a wizard. */
   | { readonly outcome: 'UNAVAILABLE' };
 
@@ -443,7 +451,11 @@ export class TelegramMessageStateService {
           new Date(now.getTime() + WIZARD_CLAIM_LEASE_MS),
           tx,
         );
-        return claimed === null ? { outcome: 'STALE' } : { outcome: 'CLAIMED', wizard: claimed };
+        if (claimed !== null) return { outcome: 'CLAIMED', wizard: claimed };
+        // Why was it refused? A live lease means another turn is mid-flight on this message.
+        const now2 = await this.deps.repository.findWizard(scope, input.ref, tx);
+        const held = now2 !== null && now2.busyUntil !== null && now2.busyUntil > now;
+        return held ? { outcome: 'STALE', held: true } : { outcome: 'STALE' };
       },
     );
   }

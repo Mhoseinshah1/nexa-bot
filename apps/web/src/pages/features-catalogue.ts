@@ -251,6 +251,14 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: 'web.feature_wallet_admin_notice_off_effect',
     confirmEnable: null,
   },
+  // R5C-1 item 4: off hides time packages from the renewal menu only; they stay purchasable.
+  addon_time_in_renew_menu: {
+    title: 'web.feature_addon_time_in_renew_menu_title',
+    summary: 'web.feature_addon_time_in_renew_menu_summary',
+    // A display choice: nothing is lost by switching it off, so it does not ask first.
+    disableEffect: null,
+    confirmEnable: null,
+  },
 };
 
 /**

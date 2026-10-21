@@ -63,7 +63,6 @@ describe('customer inline buttons go through the registry', () => {
       'bot.order.confirm_button',
       'bot.payment.gateway_button',
       'bot.service.action_confirm_button',
-      'bot.service.add_time_button',
       'bot.service.resend_button',
       'bot.service.terminate_button',
       'bot.service.terminate_confirm_button',

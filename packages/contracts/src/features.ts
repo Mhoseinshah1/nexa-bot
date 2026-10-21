@@ -478,6 +478,18 @@ export const FEATURE_FLAGS = [
     blastRadius: 'LOCAL',
     configuredBy: [],
   },
+  {
+    key: 'addon_time_in_renew_menu',
+    description:
+      'R5C-1 item 4 «نمایش زمان اضافه داخل تمدید هم»: keep the extra-time packages in the ' +
+      'renewal menu too. On by default \u2014 the menu is as it has always been, and the ' +
+      'service card also has its own «خرید زمان اضافه» button. Off hides the time packages ' +
+      'from the renewal menu only; they stay purchasable from their own button. It is a ' +
+      'flag and not a setting because it has no parameter: a boolean is a flag.',
+    defaultEnabled: true,
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
 ] as const satisfies readonly FeatureFlagDefinition[];
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[number]['key'];

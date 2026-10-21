@@ -1551,6 +1551,107 @@ describe('a customer manages the service they bought', () => {
     expect(panel.users.get(service.username)?.dataLimit).toBe(Number(before?.trafficLimitBytes));
   });
 
+  /**
+   * Item 3 (R5C-1): an IMPORTED service buys extra traffic and extra time like a Nexa-sold one.
+   *
+   * The import always attaches the adoption order's product (a mapped one or the hidden product
+   * of the invoice's own shape — `nexa_service_requires_purchase_order` pins product NULL to
+   * CUSTOM_SERVICE orders only), so `source = 'MIRZA'` is the marker and a product is present.
+   * These cases pin that nothing about `source` takes the add-on path away.
+   */
+  async function markImported(serviceId: string): Promise<void> {
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET source = 'MIRZA', source_ref = ${`mirza-${serviceId}`}
+           WHERE id = ${serviceId}`,
+    );
+  }
+
+  const availableOf = async (serviceId: string) => {
+    const record = await services.findById(tenantA, serviceId);
+    if (record === null || record === undefined) throw new Error('no service');
+    return ctx.container.commercialActions.availableFor(tenantA, systemActor('avail'), record);
+  };
+
+  it.each([
+    ['ADD_TRAFFIC', { trafficBytes: 10_000_000_000n }],
+    ['ADD_TIME', { durationDays: 15 }],
+  ] as const)(
+    'offers an imported service %s and takes the money from the ledger',
+    async (kind, amount) => {
+      const service = await activeService(`imp-${kind}`);
+      await markImported(service.id);
+      expect(
+        (await services.findById(tenantA, service.id))?.source,
+        'the fixture is imported',
+      ).toBe('MIRZA');
+      const addon = await offeredAddon(kind, amount, `imp-${kind}`);
+      await fund(`imp-${kind}`);
+      expect(await availableOf(service.id)).toContain(kind);
+
+      const before = await services.findById(tenantA, service.id);
+      const walletBefore = await ctx.container.wallet.balance(tenantA, owner, customerA);
+      const orderId = await buy(service.id, kind, addon, `imp-${kind}`);
+      await ctx.container.provisionerLoop.tick();
+
+      expect((await operationOf(service.id, kind))?.state).toBe('SUCCEEDED');
+      const walletAfter = await ctx.container.wallet.balance(tenantA, owner, customerA);
+      expect(walletBefore.amountMinor - walletAfter.amountMinor, 'the quote, once').toBe(50_000n);
+      const after = await services.findById(tenantA, service.id);
+      if (kind === 'ADD_TRAFFIC') {
+        expect(after?.trafficLimitBytes).toBe((before?.trafficLimitBytes ?? 0n) + 10_000_000_000n);
+      } else {
+        expect(after?.expiresAt?.getTime()).toBe(
+          (before?.expiresAt?.getTime() ?? 0) + 15 * 86_400_000,
+        );
+      }
+      const order = (await ctx.container.database.db.execute(
+        sql`SELECT state, purpose FROM orders WHERE id = ${orderId}` as never,
+      )) as unknown as { rows: { state: string; purpose: string }[] };
+      expect(order.rows[0]).toEqual({ state: 'PAID', purpose: kind });
+    },
+  );
+
+  it('applies the panel policy caps to an imported service exactly as to a Nexa-sold one', async () => {
+    const service = await activeService('imp-cap');
+    await markImported(service.id);
+    const small = await offeredAddon('ADD_TRAFFIC', { trafficBytes: 10_000_000_000n }, 'imp-cap-s');
+    const big = await offeredAddon('ADD_TRAFFIC', { trafficBytes: 100_000_000_000n }, 'imp-cap-b');
+    await offeredAddon('ADD_TIME', { durationDays: 90 }, 'imp-cap-t');
+    await fund('imp-cap');
+    const current = await ctx.container.panelAdvanced.advanced(tenantA, owner, panelId);
+    await ctx.container.panelAdvanced.updatePolicy(tenantA, owner, panelId, {
+      policy: {
+        delivery: current.policy.policy.delivery,
+        actions: {
+          ADD_TRAFFIC: { customerEnabled: true, maxTrafficGb: 50 },
+          ADD_TIME: { customerEnabled: true, maxDays: 30 },
+        },
+      },
+      expectedRevision: current.policy.revision,
+      idempotencyKey: 'imp-cap-policy',
+    });
+
+    expect(await availableOf(service.id), 'the 90-day package is over the cap').not.toContain(
+      'ADD_TIME',
+    );
+    const offer = await ctx.container.commercialActions.offer(
+      tenantA,
+      systemActor('imp-cap-offer'),
+      customerA,
+      service.id,
+      'ADD_TRAFFIC',
+    );
+    expect(offer.addons.map((one) => one.id)).toEqual([small]);
+    await expect(
+      ctx.container.commercialActions.draft(tenantA, systemActor('imp-cap-over'), customerA, {
+        serviceId: service.id,
+        kind: 'ADD_TRAFFIC',
+        addonId: big,
+        idempotencyKey: 'imp-cap-over-quote',
+      }),
+    ).rejects.toMatchObject({ code: COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE });
+  });
+
   it('takes an EXPIRED service back to ACTIVE, which is the edge this phase exists for', async () => {
     /*
      * `SERVICE_MACHINE`'s `EXPIRED -> ACTIVE on RENEW` was frozen in Phase 4D with no
@@ -2077,6 +2178,9 @@ describe('a customer manages the service they bought', () => {
       'quantity-shown',
     );
     await fund('quantity-shown');
+    // The fixture's first update number is 0, which is no Telegram message id: a tap that names
+    // the message it came from needs a real one for its quote to be an edit of it.
+    updateSeq += 7;
 
     const quoted = await runtime().handle(
       tenantA,
@@ -2089,8 +2193,13 @@ describe('a customer manages the service they bought', () => {
     // unit, never the stored integer (pre-release §3). 10^10 bytes is 9.31 GB under the
     // project's binary gigabyte, to the nearest hundredth (Package C), the same figure the
     // Web Admin shows for it.
-    expect(lastMessage()).toContain('حجم افزوده: 9.31 گیگابایت');
-    expect(lastMessage()).not.toContain('10000000000');
+    // R5C-1 item 4: the tap on a package is an EDIT of the tapped message now (the quote is the
+    // list message's next screen), so the screen is the last `editMessageText`.
+    const screen = JSON.stringify(
+      sent.filter((one) => one.url.includes('/editMessageText')).pop() ?? {},
+    );
+    expect(screen).toContain('حجم افزوده: 9.31 گیگابایت');
+    expect(screen).not.toContain('10000000000');
   });
 
   it('answers a stale commercial button when the panel can no longer do it', async () => {

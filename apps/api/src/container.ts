@@ -289,7 +289,12 @@ import {
 } from './modules/control/media/application/qr-template.service.js';
 import { ReferralSignupGiftService } from './modules/commerce/referrals/application/referral-signup-gift.service.js';
 import { DrizzleReferralSignupGiftRepository } from './modules/commerce/referrals/infrastructure/drizzle-referral-signup-gift.repository.js';
-import { CONTROL_ERROR_CODES, SERVICE_REMINDER_DEFAULTS, isNexaError } from '@nexa/contracts';
+import {
+  CONTROL_ERROR_CODES,
+  SERVICE_REMINDER_DEFAULTS,
+  TERMS_ENFORCEMENT_FLAG,
+  isNexaError,
+} from '@nexa/contracts';
 import { DrizzleFeatureFlagRepository } from './modules/control/features/infrastructure/drizzle-feature-flags.repository.js';
 import {
   FeatureFlagResolver,
@@ -4366,6 +4371,16 @@ export function createContainer(
     sessions,
     // The vetoes over a flag turning on: the signup gift needs coherent terms first.
     [new SignupGiftActivationGuard(settingsResolver)],
+    // R5C-1 item 1: the flag turning on stamps when the rules were first enforced, in the
+    // flag's own transaction (a no-op until a version is published; publishing stamps then).
+    [
+      {
+        key: TERMS_ENFORCEMENT_FLAG,
+        afterEnabled: async (scope, now, tx) => {
+          await termsRepository.stampFirstEnforced(scope, now, tx);
+        },
+      },
+    ],
   );
 
   const serviceReminderSweep = new ServiceReminderService({
@@ -6266,6 +6281,14 @@ export function createContainer(
           nextAttemptAt: operation.nextAttemptAt,
           // R3 item 10: asked from a service card, whose own edit is the answer.
           answeredOnCard: await operationCardRepository.hasCard(scope, operationId, tx),
+          // R5C-1 item 4 (`PURCHASED_AS`): the operation's type is what its order BOUGHT, so
+          // it is answered with a receipt. A SUSPEND carries the order that created its
+          // service, and never matches.
+          purchasedAsType:
+            operation.orderId !== null &&
+            (operation.type === 'ADD_TRAFFIC' || operation.type === 'ADD_TIME') &&
+            (await orderRepository.findById(scope, operation.orderId, tx))?.purpose ===
+              operation.type,
         };
       },
       /*
@@ -7944,6 +7967,9 @@ export function createContainer(
     }),
     antiSpam,
     botRuntime: new BotRuntime({
+      // R5C-1 item 4: «نمایش زمان اضافه داخل تمدید هم» (flag `addon_time_in_renew_menu`).
+      renewMenuShowsTime: (scope) =>
+        featureFlagResolver.isEnabled(scope, 'addon_time_in_renew_menu'),
       // Best-effort steps are logged here: a card's live read on open that failed
       // unexpectedly (pre-support A2), and a receipt's invoice finalisation that failed
       // after its turn's durable write (A10).

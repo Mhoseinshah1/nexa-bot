@@ -57,6 +57,14 @@ import {
 import { uuidV7Schema } from './ids.js';
 import {
   LATE_CREDIT_SETTING_KEYS,
+  CARD_SWITCH_COOLDOWN_SECONDS_DEFAULT,
+  CARD_SWITCH_COOLDOWN_SECONDS_MAX,
+  CARD_SWITCH_DISTINCT_CARDS_DEFAULT,
+  CARD_SWITCH_DISTINCT_CARDS_MAX,
+  CARD_SWITCH_DISTINCT_CARDS_MIN,
+  CARD_SWITCH_MAX_SWITCHES_DEFAULT,
+  CARD_SWITCH_MAX_SWITCHES_MAX,
+  CARD_SWITCH_SETTING_KEYS,
   LATE_CREDIT_WINDOW_HOURS_DEFAULT,
   LATE_CREDIT_WINDOW_HOURS_MAX,
   LATE_CREDIT_WINDOW_HOURS_MIN,
@@ -854,16 +862,51 @@ export const SETTINGS = [
     consumer: 'ACTIVE',
   },
   {
-    key: 'payments.card_switch_limit',
+    key: CARD_SWITCH_SETTING_KEYS.MAX_SWITCHES,
     description:
-      'R4 A1: how many times a customer may press «🔄 تغییر شماره کارت» on ONE card-to-card ' +
-      'invoice. Each press edits the invoice to show the next enabled receiving card and is ' +
-      'recorded on the payment; once a payment has used its presses the button is no longer ' +
-      'drawn and a stale tap redraws the invoice unchanged. Zero means no limit, the default ' +
-      '(the owner\u2019s "off"). Never changes the payment, its amount or its tracking code.',
-    schema: z.number().int().min(0).max(100),
-    defaultValue: 0,
-    zeroMeaning: 'UNLIMITED',
+      'R4 A1, bounded by R5C-1: how many times a customer may press «🔄 تغییر شماره کارت» on ' +
+      'ONE card-to-card invoice. Each press edits the invoice to show another enabled receiving ' +
+      'card and is recorded on the payment; once a payment has used its presses the button is ' +
+      'no longer drawn and a press is refused. Zero means the button is never offered. ' +
+      'Decided on the server under the payment\u2019s row lock; the button is a courtesy. ' +
+      'Never changes the payment, its amount or its tracking code.',
+    schema: z.number().int().min(0).max(CARD_SWITCH_MAX_SWITCHES_MAX),
+    defaultValue: CARD_SWITCH_MAX_SWITCHES_DEFAULT,
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: CARD_SWITCH_SETTING_KEYS.COOLDOWN_SECONDS,
+    description:
+      'R5C-1: seconds a customer must wait after a «🔄 تغییر شماره کارت» switch before the ' +
+      'next one on the same payment. Measured from the last switch recorded on that payment ' +
+      '(the first press has no wait). Zero is no wait. A press that comes too early is ' +
+      'answered with the seconds remaining and changes nothing.',
+    schema: z.number().int().min(0).max(CARD_SWITCH_COOLDOWN_SECONDS_MAX),
+    defaultValue: CARD_SWITCH_COOLDOWN_SECONDS_DEFAULT,
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: CARD_SWITCH_SETTING_KEYS.MAX_DISTINCT_CARDS,
+    description:
+      'R5C-1: how many DIFFERENT receiving cards one card-to-card payment may show a customer, ' +
+      'counting the card first shown. Once that many have been shown, a press may only return ' +
+      'to one of them (still bounded by the switch limit); a card never shown is not revealed. ' +
+      'One means the customer only ever sees the first card.',
+    schema: z
+      .number()
+      .int()
+      .min(CARD_SWITCH_DISTINCT_CARDS_MIN)
+      .max(CARD_SWITCH_DISTINCT_CARDS_MAX),
+    defaultValue: CARD_SWITCH_DISTINCT_CARDS_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     configures: null,

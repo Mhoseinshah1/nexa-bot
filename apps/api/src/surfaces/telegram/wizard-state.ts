@@ -199,6 +199,12 @@ export interface WizardGate {
   readonly kind: TelegramWizardKind | null;
   readonly adoptAs: TelegramWizardKind;
   readonly from: readonly TelegramWizardStep[];
+  /**
+   * A tap this gate finds STALE is still answered, as a tap on an untracked message is: the
+   * reply goes out as its own message instead of being swallowed. Only for a button whose
+   * message may legitimately be a CLOSED wizard that was turned back into a card.
+   */
+  readonly lenient?: true;
 }
 
 const ORDER = (...from: TelegramWizardStep[]): WizardGate => ({
@@ -228,6 +234,21 @@ export const WIZARD_GATES: ReadonlyMap<string, WizardGate> = new Map<string, Wiz
   ['PAY_METHODS_CLOSE', ORDER('METHODS')],
   ['PAY_MANUAL', ORDER('METHODS', 'PREINVOICE', 'AWAITING_PAYMENT')],
   ['PAY_GATEWAY', ORDER('METHODS', 'PREINVOICE', 'AWAITING_PAYMENT')],
+  /*
+   * R5C-1 item 4: an extra-traffic / extra-time package is bought on ONE message. The service
+   * card is edited into the package list (`inCard`); the tap on a package ADOPTS that message
+   * as the order's wizard (the list is its first screen) and the quote, the payment and the
+   * receipt are all edits of it.
+   *
+   * LENIENT: a message the wizard no longer lets move (it ended as a receipt or a notice and was
+   * then turned back into the service card) is not a
+   * dead end for the customer. The tap is answered exactly as it was before this gate existed
+   * — a quote in a NEW message — and the old message stays closed. Every write behind the tap
+   * re-decides under its own locks and idempotency keys, as for any wizard step. A message another
+   * turn still HOLDS (a rapid second tap) is not closed: it is swallowed like any other gate's.
+   */
+  ['SERVICE_BUY_TRAFFIC', { ...ORDER('PRODUCTS'), lenient: true }],
+  ['SERVICE_BUY_TIME', { ...ORDER('PRODUCTS'), lenient: true }],
   // Wallet top-up: amount → method → invoice. Its entry is the wallet screen's button.
   ['TOPUP_MENU', TOPUP('NOTICE')],
   ['TOPUP_PICK', TOPUP('AMOUNT')],

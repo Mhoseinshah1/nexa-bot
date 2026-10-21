@@ -151,6 +151,7 @@ export const WEB_FA = {
   'web.unit_days': 'روز',
   'web.unit_percent': 'درصد',
   'web.unit_times': 'بار',
+  'web.unit_cards': 'کارت',
   'web.unit_messages': 'پیام',
   'web.unit_archives': 'آرشیو',
   'web.setting_severity_debug': 'جزئیات اشکال‌زدایی',
@@ -197,9 +198,6 @@ export const WEB_FA = {
   'web.setting_order_expiry_minutes_desc':
     'سفارشی که در این مدت پرداخت نشود منقضی می‌شود و مشتری باید دوباره سفارش دهد.',
   'web.setting_payment_window_minutes': 'مهلت پرداخت',
-  'web.setting_card_switch_limit': 'سقف «تغییر شماره کارت» در هر پرداخت',
-  'web.setting_card_switch_limit_desc':
-    'چند بار مشتری می‌تواند روی فاکتور کارت‌به‌کارت دکمهٔ «🔄 تغییر شماره کارت» را بزند تا کارت مقصد فعال بعدی را ببیند. صفر یعنی بدون محدودیت. مبلغ، کد پیگیری و خود پرداخت تغییر نمی‌کند؛ هر تغییر در تاریخچهٔ پرداخت ثبت می‌شود.',
   'web.setting_payment_window_minutes_desc':
     'مدتی که یک پرداخت در انتظار باز می‌ماند؛ پس از آن پرداخت و سفارشش منقضی می‌شوند.',
   'web.setting_usage_sync_minutes': 'فاصلهٔ به‌روزرسانی مصرف سرویس‌ها',
@@ -385,6 +383,9 @@ export const WEB_FA = {
     'وقتی ادمین از کیف پول مشتری دستی کسر می‌کند، به مشتری مبلغ و موجودی جدید گفته می‌شود؛ دلیل فقط اگر «نمایش دلیل به مشتری» زده شده باشد.',
   'web.feature_wallet_admin_notice_off_effect':
     'تا وقتی خاموش است، تغییرهای دستی موجودی به مشتری گفته نمی‌شود و روشن کردن دوباره، پیام تغییرهای این مدت را نمی‌فرستد.',
+  'web.feature_addon_time_in_renew_menu_title': 'نمایش زمان اضافه داخل تمدید هم',
+  'web.feature_addon_time_in_renew_menu_summary':
+    'روشن (پیش‌فرض): بسته‌های زمان اضافه علاوه بر دکمهٔ «خرید زمان اضافه» در منوی «تمدید سرویس» هم نشان داده می‌شوند. خاموش: فقط از دکمهٔ «خرید زمان اضافه» قابل خرید هستند و از منوی تمدید حذف می‌شوند.',
   'web.feature_rich_messages_title': 'دکمه‌های داخل پیام',
   'web.feature_rich_messages_summary':
     'صفحه‌های دکمه‌دار ربات به‌صورت «پیام غنی» تلگرام فرستاده می‌شوند و دکمه‌ها داخل خود پیام، بالای ساعت، قرار می‌گیرند (جدول پلن‌ها یک کلید جدا دارد) و هر تاریخ طوری فرستاده می‌شود که کاربر بتواند آن را به وقت محلی خودش هم ببیند. اگر تلگرام پیامی را نپذیرد، همان صفحه یک بار به روش قبلی فرستاده و یک خطا در تاپیک «خطاها» ثبت می‌شود. منوی اصلی و صفحه‌های عکس‌دار تغییر نمی‌کنند.',
@@ -876,6 +877,22 @@ export const WEB_FA = {
     'پس از بسته‌شدن پرداخت، فاکتور باز درگاه به‌آهستگی (۵ دقیقه، ۱۵ دقیقه، سپس ساعتی) پیگیری می‌شود تا تأیید دیرهنگام بدون وبهوک هم دیده شود. بین ۱ تا ۷۲۰ ساعت.',
   'web.late_credit_window_invalid': 'یک عدد صحیح بین ۱ تا ۷۲۰ بنویسید.',
   'web.late_credit_window_save': 'ذخیرهٔ مدت پیگیری',
+  'web.card_switch_title': 'محدودیت تغییر شماره کارت',
+  'web.card_switch_hint':
+    'مشتری روی فاکتور کارت‌به‌کارت می‌تواند دکمهٔ «🔄 تغییر شماره کارت» را بزند تا کارت دیگری را ببیند. اینجا مشخص می‌کنید چقدر و چند بار.',
+  'web.card_switch_cooldown': 'فاصلهٔ بین دو تغییر کارت',
+  'web.card_switch_cooldown_hint':
+    'مشتری پس از هر تغییر کارت باید این مدت صبر کند. اگر زودتر بزند، تعداد ثانیه‌های باقی‌مانده را می‌بیند و چیزی تغییر نمی‌کند. صفر یعنی بدون فاصله.',
+  'web.card_switch_cooldown_invalid': 'یک عدد صحیح بین ۰ تا ۳۶۰۰ بنویسید.',
+  'web.card_switch_max': 'حداکثر تعداد تغییر کارت در هر پرداخت',
+  'web.card_switch_max_hint':
+    'پس از رسیدن به این تعداد، دکمهٔ «تغییر شماره کارت» دیگر نمایش داده نمی‌شود و درخواست جدید رد می‌شود. صفر یعنی دکمه هرگز نمایش داده نمی‌شود. مبلغ، کد پیگیری و خود پرداخت تغییر نمی‌کند؛ هر تغییر در تاریخچهٔ پرداخت ثبت می‌شود.',
+  'web.card_switch_max_invalid': 'یک عدد صحیح بین ۰ تا ۲۰ بنویسید.',
+  'web.card_switch_distinct': 'حداکثر تعداد کارت‌های متفاوتِ نمایش‌داده‌شده',
+  'web.card_switch_distinct_hint':
+    'تعداد کارت‌های متفاوتی که مشتری در یک پرداخت می‌بیند، همراه با کارت اول. پس از پر شدن این سقف فقط می‌تواند به کارت‌هایی برگردد که قبلاً دیده است. عدد ۱ یعنی فقط کارت اول.',
+  'web.card_switch_distinct_invalid': 'یک عدد صحیح بین ۱ تا ۲۰ بنویسید.',
+  'web.card_switch_save': 'ذخیرهٔ محدودیت‌ها',
   'web.late_credit_read_only': 'برای تغییر این گزینه‌ها دسترسی ویرایش تنظیمات لازم است.',
   'web.backup_schedule_daily': 'ساعت بکاپ روزانه',
   'web.backup_schedule_daily_hint':
@@ -4531,6 +4548,7 @@ export const WEB_FA = {
   'web.ib_button_service_renew': 'تمدید سرویس',
   'web.ib_button_service_renew_option': 'گزینه‌های تمدید',
   'web.ib_button_service_add_traffic': 'افزایش حجم',
+  'web.ib_button_service_add_time': 'افزایش زمان',
   'web.ib_button_service_addon_option': 'بسته‌های افزایش حجم و زمان',
   'web.ib_button_service_add_devices': 'افزایش کاربر',
   'web.ib_button_service_devices_option': 'تعداد کاربر اضافه',
@@ -10296,6 +10314,8 @@ export const WEB_FA = {
   'web.pay_notice_wallet_admin_credited': 'افزایش دستی موجودی',
   'web.pay_notice_wallet_admin_debited': 'کسر دستی موجودی',
   'web.pay_notice_account_unblocked': 'رفع مسدودی حساب',
+  'web.pay_notice_service_traffic_added': 'خرید حجم اضافه',
+  'web.pay_notice_service_time_added': 'خرید زمان اضافه',
   'web.pay_provider_pending': 'در انتظار',
   'web.pay_provider_processing': 'در حال پردازش',
   'web.pay_provider_completed': 'تکمیل‌شده',

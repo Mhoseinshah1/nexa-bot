@@ -555,6 +555,13 @@ export const tenants = pgTable(
     displayTimezone: text('display_timezone').notNull().default('Asia/Tehran'),
     calendar: text('calendar').notNull().default('jalali'),
     currency: text('currency').notNull().default('IRT'),
+    /**
+     * When the terms and rules first became ENFORCED here (the `terms_enforcement` flag on
+     * AND a published version), or NULL while they never have. Written once, by whichever
+     * write made that true first, in that write's transaction, and never moved: a customer
+     * created before it, or imported, is treated as having accepted (R5C-1 item 1).
+     */
+    rulesFirstEnforcedAt: timestamptz('rules_first_enforced_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },

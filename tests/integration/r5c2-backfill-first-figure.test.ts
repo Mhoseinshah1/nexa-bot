@@ -207,7 +207,7 @@ describe('Round 5C-2 A: the first usage figure after the backfill is silent', ()
     expect(await kindsSent()).toEqual([]);
   }, 120_000);
 
-  it('migration 0269: a stale backfill baseline is reset, its PENDING usage notice is SUPERSEDED with an audit row, and a sync-written baseline is left alone', async () => {
+  it('migration 0271: a stale backfill baseline is reset, its PENDING usage notice is SUPERSEDED with an audit row, and a sync-written baseline is left alone', async () => {
     const leaked = await importOne(4, pct(30n));
     const synced = await importOne(5, pct(30n));
     // What the OLD backfill left: one instant, a stale figure, and its batch audit row.
@@ -269,7 +269,7 @@ describe('Round 5C-2 A: the first usage figure after the backfill is silent', ()
     ]);
 
     const migration = readFileSync(
-      join(__dirname, '../../apps/api/drizzle/0269_backfill_baselines_unmeasured.sql'),
+      join(__dirname, '../../apps/api/drizzle/0271_backfill_baselines_unmeasured.sql'),
       'utf8',
     );
     for (const statement of migration.split('--> statement-breakpoint')) {

@@ -290,6 +290,9 @@ describe('the feature flag registry', () => {
     // Every registered key must be one this phase actually implements. A switch
     // that turns nothing on is worse than an absent feature.
     expect([...FEATURE_FLAGS].map((f) => f.key).sort()).toEqual([
+      // R5C-1 item 4. On by default: the renewal menu lists the time packages as it always
+      // did; off hides them from that menu only, and they keep their own button.
+      'addon_time_in_renew_menu',
       // Package FX (round P). Off by default; the refresh lane, the central-rate pricing of
       // the Stars route and the FX section it switches on are reachable, and every
       // existing route keeps pricing exactly as before until an operator switches a mode.

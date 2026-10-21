@@ -1047,9 +1047,266 @@ describe('the wizard is one message, edited in place', () => {
     calls = [];
     await ctx.container.customerNotificationLoop.tick();
     expect(methods()).toEqual(['editMessageText']);
-    expect(edited(quoteId)[0]?.body['text']).toBe(
-      plain(CATALOGUE_FA['bot.service.action_succeeded']),
+    // R5C-1: a paid package ends with its receipt, edited onto the same payment message.
+    expect(String(edited(quoteId)[0]?.body['text'])).toContain('✅ حجم اضافه خریداری شد');
+    expect(await notice('SERVICE_TRAFFIC_ADDED')).toMatchObject({ state: 'DELIVERED' });
+    expect(await notice('SERVICE_ACTION_SUCCEEDED')).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------------------
+  // R5C-1 item 4: extra traffic / extra time on ONE edited message, and its receipt
+  // -------------------------------------------------------------------------------------
+
+  async function addon(kind: 'ADD_TRAFFIC' | 'ADD_TIME', key: string): Promise<string> {
+    const created = await ctx.container.serviceAddons.create(tenantA, owner, {
+      idempotencyKey: `${key}-addon`,
+      draft: {
+        kind,
+        title: kind === 'ADD_TRAFFIC' ? 'بسته ۱۰ گیگ' : 'بسته ۱۵ روز',
+        sortOrder: 10,
+        specification: {
+          kind,
+          trafficBytes: kind === 'ADD_TRAFFIC' ? 10_737_418_240n : null,
+          durationDays: kind === 'ADD_TIME' ? 15 : null,
+        },
+        price: money(50_000n, 'IRT'),
+      },
+    });
+    await ctx.container.serviceAddons.activate(tenantA, owner, {
+      idempotencyKey: `${key}-addon-on`,
+      addonId: created.id,
+    });
+    return created.id;
+  }
+
+  /** The service card drawn onto message `messageId`: the callbacks it offers. */
+  async function cardButtons(serviceId: string, messageId: number): Promise<string[]> {
+    await tapOn(messageId, `s:${serviceId}`);
+    const drawn = calls.find(
+      (call) => call.method === 'editMessageText' || call.method === 'sendMessage',
     );
-    expect(await notice('SERVICE_ACTION_SUCCEEDED')).toMatchObject({ state: 'DELIVERED' });
+    return buttonsOf(drawn);
+  }
+
+  async function setRenewMenuFlag(enabled: boolean): Promise<void> {
+    const flags = await ctx.container.featureFlags.list(tenantA, owner);
+    const current = flags.find((flag) => flag.key === 'addon_time_in_renew_menu');
+    await ctx.container.featureFlags.set(tenantA, owner, {
+      key: 'addon_time_in_renew_menu',
+      enabled,
+      expectedVersion: current?.version ?? null,
+      idempotencyKey: `renew-menu-flag-${String(updateSeq)}-${String(enabled)}`,
+      confirmKey: 'addon_time_in_renew_menu',
+      reason: 'R5C-1 integration.',
+    });
+  }
+
+  it('draws «خرید زمان اضافه» only while a time package is on offer (R5C-1)', async () => {
+    const service = await activeService('time-button');
+    // No package at all: neither add-on button is drawn.
+    expect(await cardButtons(service.id, 800)).not.toContain(`h:${service.id}`);
+    await addon('ADD_TRAFFIC', 'time-button-t');
+    const traffic = await cardButtons(service.id, 801);
+    expect(traffic).toContain(`v:${service.id}`);
+    expect(traffic, 'a traffic package alone does not draw the time button').not.toContain(
+      `h:${service.id}`,
+    );
+    await addon('ADD_TIME', 'time-button-h');
+    const both = await cardButtons(service.id, 802);
+    expect(both).toContain(`v:${service.id}`);
+    expect(both).toContain(`h:${service.id}`);
+    const label = JSON.stringify(
+      calls.find((call) => call.method === 'editMessageText' || call.method === 'sendMessage')
+        ?.body['reply_markup'],
+    );
+    expect(label).toContain('⏳ خرید زمان اضافه');
+  });
+
+  it('keeps the time packages in the renewal menu only while the owner’s switch is on (R5C-1)', async () => {
+    const service = await activeService('renew-switch');
+    const timeId = await addon('ADD_TIME', 'renew-switch-h');
+    const inRenewMenu = async (messageId: number) => {
+      await tapOn(messageId, `n:${service.id}`);
+      const drawn = calls.find(
+        (call) => call.method === 'editMessageText' || call.method === 'sendMessage',
+      );
+      return buttonsOf(drawn).includes(`b:${encodeIdPair(service.id, timeId)}`);
+    };
+    expect(await inRenewMenu(810), 'on by default, as the menu always was').toBe(true);
+    await setRenewMenuFlag(false);
+    expect(await inRenewMenu(811)).toBe(false);
+    // They are still bought from their own button.
+    expect(await cardButtons(service.id, 812)).toContain(`h:${service.id}`);
+    await setRenewMenuFlag(true);
+    expect(await inRenewMenu(813)).toBe(true);
+  });
+
+  it('buys a package on ONE message, and the receipt carries every figure (R5C-1)', async () => {
+    const service = await activeService('addon-one');
+    const before = await services.findById(tenantA, service.id);
+    const addonId = await addon('ADD_TRAFFIC', 'addon-one');
+    const walletBefore = await ctx.container.wallet.balance(tenantA, owner, maryam);
+
+    // 1. The card message becomes the package list: an edit, not a new message.
+    await tapOn(820, `v:${service.id}`);
+    expect(methods().filter((method) => method !== 'answerCallbackQuery')).toEqual([
+      'editMessageText',
+    ]);
+    expect(edited(820)).toHaveLength(1);
+
+    // 2. The package tap quotes ON THE SAME MESSAGE.
+    await tapOn(820, `a:${encodeIdPair(service.id, addonId)}`);
+    expect(methods().filter((method) => method !== 'answerCallbackQuery')).toEqual([
+      'editMessageText',
+    ]);
+    const pay = buttonsOf(edited(820)[0]).find((data) => data.startsWith('w:'));
+    if (pay === undefined) throw new Error('no wallet button on the quote');
+
+    // 3. The wallet button: the same message says the package is being applied.
+    await tapOn(820, pay);
+    expect(methods().filter((method) => method !== 'answerCallbackQuery')).toEqual([
+      'editMessageText',
+    ]);
+    expect(edited(820)[0]?.body['text']).toBe(plain(CATALOGUE_FA['bot.service.addon_paid']));
+    expect(buttonsOf(edited(820)[0])).toEqual([]);
+
+    // 4. The provisioner finishes; the lane edits that message into the receipt.
+    await ctx.container.provisionerLoop.tick();
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods(), 'one edit, no new message').toEqual(['editMessageText']);
+    const text = String(edited(820)[0]?.body['text'] ?? '');
+    expect(text).toContain('✅ حجم اضافه خریداری شد');
+    expect(text).toContain('📊 بسته: بسته ۱۰ گیگ');
+    expect(text).toContain('📊 حجم اضافه: 10 گیگابایت');
+    expect(text).toContain('💵 مبلغ پرداختی: 50,000 تومان');
+    // The wallet BEFORE → AFTER the purchase debit: 2 000 000 funded, 250 000 spent on the
+    // service, 50 000 on the package.
+    expect(text).toContain('💰 موجودی کیف پول: 1,750,000 تومان ← 1,700,000 تومان');
+    expect(text).toContain(`👤 نام کاربری: ${service.username}`);
+    expect(text).toContain('📊 حجم کل جدید: 60 گیگابایت');
+    const walletAfter = await ctx.container.wallet.balance(tenantA, owner, maryam);
+    expect(walletBefore.amountMinor - walletAfter.amountMinor).toBe(50_000n);
+    const [order] = await rows<{ code: string }>(
+      sql`SELECT code FROM orders WHERE purpose = 'ADD_TRAFFIC' AND tenant_id = ${tenantA.tenantId}`,
+    );
+    expect(text).toContain(`🧾 کد پیگیری سفارش: ${order!.code}`);
+    expect(text, 'a wallet payment shows the balances, not a code').not.toContain(
+      'کد پیگیری پرداخت',
+    );
+    const after = await services.findById(tenantA, service.id);
+    expect(after?.trafficLimitBytes).toBe((before?.trafficLimitBytes ?? 0n) + 10_737_418_240n);
+    expect(buttonsOf(edited(820)[0])).toEqual([`s:${service.id}`]);
+    expect(await notice('SERVICE_TRAFFIC_ADDED')).toMatchObject({ state: 'DELIVERED' });
+    expect(await notice('SERVICE_ACTION_SUCCEEDED')).toBeUndefined();
+
+    // Exactly once.
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual([]);
+
+    // Buying again from that very message (the receipt's button opened the card; the card
+    // opened the list) is not a dead end: its wizard is closed, so the quote goes out as a NEW
+    // message, exactly as before the package flow was edited in place.
+    await tapOn(820, `s:${service.id}`);
+    await tapOn(820, `v:${service.id}`);
+    await tapOn(820, `a:${encodeIdPair(service.id, addonId)}`);
+    expect(methods()).toContain('sendMessage');
+    expect(calls.find((call) => call.method === 'sendMessage')?.body['text']).toContain('50,000');
+  });
+
+  it('two rapid taps on a package make ONE draft order and ONE quote (R5C-1)', async () => {
+    const service = await activeService('addon-double');
+    const addonId = await addon('ADD_TRAFFIC', 'addon-double');
+    await tapOn(840, `v:${service.id}`);
+    const tap = `a:${encodeIdPair(service.id, addonId)}`;
+    const sent: string[] = [];
+    const both = await Promise.all([tapOn(840, tap), tapOn(840, tap)]);
+    expect(both).toHaveLength(2);
+    sent.push(...methods());
+    const [{ n } = { n: '0' }] = await rows<{ n: string }>(
+      sql`SELECT count(*)::text AS n FROM orders
+           WHERE purpose = 'ADD_TRAFFIC' AND tenant_id = ${tenantA.tenantId}`,
+    );
+    expect(n, 'one draft order, not two').toBe('1');
+    expect(
+      sent.filter((method) => method === 'editMessageText' || method === 'sendMessage'),
+      'one quote on the screen',
+    ).toHaveLength(1);
+  });
+
+  it('shows the payment code, not the wallet, for a package paid by bank transfer (R5C-1)', async () => {
+    const service = await activeService('addon-xfer');
+    const addonId = await addon('ADD_TIME', 'addon-xfer');
+    const { order } = await ctx.container.commercialActions.draft(
+      tenantA,
+      systemActor('xfer'),
+      maryam,
+      {
+        serviceId: service.id,
+        kind: 'ADD_TIME',
+        addonId,
+        idempotencyKey: 'xfer-quote',
+      },
+    );
+    await ctx.container.commercialActions.confirm(tenantA, systemActor('xfer'), maryam, {
+      orderId: order.id,
+      idempotencyKey: 'xfer-confirm',
+    });
+    const { payment } = await ctx.container.payments.requestManualTransfer(
+      tenantA,
+      systemActor('xfer'),
+      maryam,
+      { idempotencyKey: 'xfer-manual', orderId: order.id },
+    );
+    await ctx.container.payments.confirmManualTransfer(tenantA, owner, payment.id, {
+      idempotencyKey: 'xfer-manual-confirm',
+      note: 'کارت به کارت',
+    });
+    await ctx.container.provisionerLoop.tick();
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    const sent = calls.find((call) => call.method === 'sendMessage');
+    const text = String(sent?.body['text'] ?? '');
+    expect(text).toContain('✅ زمان اضافه خریداری شد');
+    expect(text).toContain('⏳ زمان اضافه: 15 روز');
+    const [paid] = await rows<{ reference: string; code: string | null }>(
+      sql`SELECT reference, code FROM payments WHERE order_id = ${order.id}
+          AND state = 'CONFIRMED'`,
+    );
+    expect(text).toContain(`🧾 کد پیگیری پرداخت: ${paymentTrackingCode(paid!)}`);
+    expect(text, 'no wallet line for a payment that did not come from the wallet').not.toContain(
+      'موجودی کیف پول',
+    );
+    // The new expiry in the tenant's calendar (Jalali), from the operation's frozen target.
+    expect(text).toMatch(/تاریخ انقضای جدید: 14\d\d\/\d\d\/\d\d/u);
+  });
+
+  it('falls back to ONE new message when the package message can no longer be edited (R5C-1)', async () => {
+    const service = await activeService('addon-gone');
+    const addonId = await addon('ADD_TIME', 'addon-gone');
+    await tapOn(830, `h:${service.id}`);
+    await tapOn(830, `b:${encodeIdPair(service.id, addonId)}`);
+    const pay = buttonsOf(edited(830)[0]).find((data) => data.startsWith('w:'));
+    if (pay === undefined) throw new Error('no wallet button on the quote');
+    await tapOn(830, pay);
+    // The same message says the package is being applied (a time package, as the traffic one).
+    expect(edited(830)[0]?.body['text']).toBe(plain(CATALOGUE_FA['bot.service.addon_paid']));
+    await ctx.container.provisionerLoop.tick();
+    uneditable.add(830);
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods()).toEqual(['editMessageText', 'sendMessage']);
+    const text = String(calls[1]?.body['text'] ?? '');
+    expect(text).toContain('✅ زمان اضافه خریداری شد');
+    expect(await notice('SERVICE_TIME_ADDED')).toMatchObject({ state: 'DELIVERED' });
+    await settleScreens();
+    calls = [];
+    await ctx.container.customerNotificationLoop.tick();
+    expect(methods(), 'never a second receipt').toEqual([]);
   });
 });

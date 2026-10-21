@@ -8,6 +8,7 @@ import { GatewayHealthPanel, PROVIDER_LABELS } from './gateway-health';
 import { CardAccountsSection } from './payment-accounts';
 import { PaymentGatewaysPage } from './payment-gateways';
 import { LateCreditCard } from './late-credit-card';
+import { CardSwitchLimitsCard } from './card-switch-limits-card';
 
 /**
  * One payment method's own view, at `/payment-gateways/<slug>` (UX Batch 01, items 7 and 8).
@@ -77,7 +78,12 @@ export function PaymentMethodPage({
    * they may see nothing here at all — so a reader with neither key gets the ordinary
    * refusal rather than an empty page.
    */
-  const routeSection = mayViewGateways || !cards;
+  /*
+   * R5C-1: the card-switch limits are registry settings, charged on `settings.view`/`edit`,
+   * not on the cards' keys — a settings-only administrator reaches them here too.
+   */
+  const limits = provider === 'MANUAL_TRANSFER' && maySettingsView;
+  const routeSection = mayViewGateways || !(cards || limits);
 
   return (
     <>
@@ -106,6 +112,13 @@ export function PaymentMethodPage({
       )}
       {mayViewGateways && (
         <LateCreditCard
+          provider={provider}
+          maySettingsView={maySettingsView}
+          maySettingsEdit={maySettingsEdit}
+        />
+      )}
+      {provider === 'MANUAL_TRANSFER' && (
+        <CardSwitchLimitsCard
           provider={provider}
           maySettingsView={maySettingsView}
           maySettingsEdit={maySettingsEdit}

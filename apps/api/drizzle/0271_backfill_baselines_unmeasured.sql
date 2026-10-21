@@ -29,12 +29,12 @@ INSERT INTO "audit_logs" ("id", "tenant_id", "occurred_at", "actor_type", "actor
                           "action", "entity_type", "entity_id", "before", "after", "reason",
                           "correlation_id", "source_surface", "result")
 SELECT gen_random_uuid(), x."tenant_id", now(), 'SYSTEM_JOB', NULL,
-       'migration:0269_backfill_baselines_unmeasured',
+       'migration:0271_backfill_baselines_unmeasured',
        'service_reminder.backfill_baselines_reset_to_unmeasured', 'Service', NULL,
        jsonb_build_object('baselinesWithFigure', x."n"),
        jsonb_build_object('baselinesWithFigure', 0),
        'the R5A-2 backfill recorded a stale pre-takeover figure as the baseline; the first sync after the takeover must be the silent one',
-       'migration-0269-backfill-baselines-unmeasured', 'WORKER', 'SUCCESS'
+       'migration-0271-backfill-baselines-unmeasured', 'WORKER', 'SUCCESS'
   FROM (
     SELECT b."tenant_id", count(*) AS n
       FROM "service_reminder_baselines" b

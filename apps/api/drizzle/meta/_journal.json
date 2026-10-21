@@ -1888,15 +1888,29 @@
     {
       "idx": 269,
       "version": "7",
-      "when": 1792594022690,
-      "tag": "0269_backfill_baselines_unmeasured",
+      "when": 1792592082995,
+      "tag": "0269_rules_first_enforced_at",
       "breakpoints": true
     },
     {
       "idx": 270,
       "version": "7",
-      "when": 1792601760939,
-      "tag": "0270_crypto_invoice_figures",
+      "when": 1792599512314,
+      "tag": "0270_addon_receipt_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 271,
+      "version": "7",
+      "when": 1792604390829,
+      "tag": "0271_backfill_baselines_unmeasured",
+      "breakpoints": true
+    },
+    {
+      "idx": 272,
+      "version": "7",
+      "when": 1792604429229,
+      "tag": "0272_crypto_invoice_figures",
       "breakpoints": true
     }
   ]

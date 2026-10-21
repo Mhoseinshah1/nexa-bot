@@ -31,6 +31,13 @@ export function isPublished(record: TermsVersionRecord): record is PublishedTerm
   );
 }
 
+/**
+ * Why a customer is treated as having accepted the rules without ever being shown them
+ * (R5C-1 item 1): the legacy import brought them, or they existed before the rules were
+ * first enforced here. Null: neither, so the customer is asked once.
+ */
+export type TermsExemptionReason = 'IMPORTED' | 'PREDATES_RULES';
+
 export interface TermsAcceptanceRecord {
   readonly termsVersionId: string;
   readonly versionNumber: number;
@@ -132,4 +139,22 @@ export interface TermsRepository {
     },
     tx: unknown,
   ): Promise<boolean>;
+  /**
+   * R5C-1 item 1: whether this customer is treated as having accepted — imported by the
+   * legacy import (`legacy_import_map`, IMPORTED CUSTOMER), or created before the tenant's
+   * `rules_first_enforced_at`. Read-side only; no customer row is ever backfilled.
+   */
+  exemption(
+    scope: ScopeContext,
+    customerId: string,
+    tx?: unknown,
+  ): Promise<TermsExemptionReason | null>;
+  /**
+   * Records the moment the rules first became enforced, ONCE: a conditional UPDATE that
+   * writes only while the column is NULL, and only when the enforcement flag is on AND a
+   * version is published (judged in the statement, in the caller's transaction). TRUE when
+   * this call wrote the stamp. Called by the write that can make enforcement true — the
+   * flag turning on, a version being published — and never moves an existing stamp.
+   */
+  stampFirstEnforced(scope: ScopeContext, now: Date, tx: unknown): Promise<boolean>;
 }
