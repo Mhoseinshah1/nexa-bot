@@ -291,11 +291,14 @@ describe('Round 5A-2: imported services and reseller periods are not announced',
     // And again: nothing more.
     expect(await drain(T2 + 60_000)).toBe(0);
 
-    // A usage crossing observed after the baseline: 10 % -> 85 % is told once.
+    // Round 5C-2: the FIRST figure recorded after the backfill (10 % at the import, 85 % now) is
+    // the baseline - silent. A crossing observed by the NEXT sync (85 % -> 92 %) is told once.
     await exec(sql`DELETE FROM customer_notifications`);
     await sync([{ id: usageOne ?? '', usedBytes: (LIMIT * 85n) / 100n }], T2 + 120_000);
-    expect(await drain(T2 + 180_000)).toBe(1);
-    expect(await kindsSent()).toEqual(['SERVICE_USAGE_FIRST']);
+    expect(await drain(T2 + 180_000)).toBe(0);
+    await sync([{ id: usageOne ?? '', usedBytes: (LIMIT * 92n) / 100n }], T2 + 240_000);
+    expect(await drain(T2 + 300_000)).toBe(1);
+    expect(await kindsSent()).toEqual(['SERVICE_USAGE_SECOND']);
     // The dispatcher's precondition holds for the legitimate ones.
     const reader = new DrizzleNotificationSubjectReader(ctx.container.database.db);
     const owed = (
@@ -304,7 +307,7 @@ describe('Round 5A-2: imported services and reseller periods are not announced',
       }[]
     )[0]?.subject_id;
     expect(
-      await reader.stillHolds(tenantA, 'SERVICE_USAGE_FIRST', owed ?? '', new Date(T2 + 240_000)),
+      await reader.stillHolds(tenantA, 'SERVICE_USAGE_SECOND', owed ?? '', new Date(T2 + 360_000)),
     ).toBe(true);
   }, 600_000);
 

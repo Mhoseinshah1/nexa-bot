@@ -1297,7 +1297,10 @@ export class DrizzleServiceRepository implements ServiceRepository {
    *   - No baseline row (an earlier release's adoption, or a package import that seeded none):
    *     one is written for the service's current period, from the figure the import left when
    *     that was a measurement (`usage_synced_at <= created_at`), otherwise from THIS read.
-   *   - A row with no figure, for the period the service is still in: the figure is set. A row
+   *   - A row with no figure, for the period the service is still in (the backfill's, or an
+   *     unmeasured import's): the figure of THIS read is set — silent, and every threshold it has
+   *     reached is recorded as passed by the sweep (round 5C-2: it used to take the row's own,
+   *     weeks-old figure when that looked like the import's). A row
    *     for an earlier period (a renewal or added traffic since) says nothing about this one
    *     and is left alone, as is a row that already holds a figure — the import measured it.
    * Never a message, never a panel call.
@@ -1326,7 +1329,11 @@ export class DrizzleServiceRepository implements ServiceRepository {
              ${usage.syncedAt}
       FROM s
       ON CONFLICT (tenant_id, service_id) DO UPDATE
-        SET used_bytes = EXCLUDED.used_bytes
+        -- Round 5C-2: the figure THIS read returned, never EXCLUDED's. EXCLUDED carries the
+        -- INSERT's choice (the row's own figure when it looks like the import's), and a row
+        -- that already exists without a figure is exactly the one the backfill left: taking the
+        -- stale import figure there made the first read after the takeover look like a crossing.
+        SET used_bytes = ${usage.usedBytes}
         WHERE service_reminder_baselines.used_bytes IS NULL
           AND service_reminder_baselines.basis_expires_at IS NOT DISTINCT FROM EXCLUDED.basis_expires_at
           AND service_reminder_baselines.basis_traffic_limit_bytes = EXCLUDED.basis_traffic_limit_bytes
