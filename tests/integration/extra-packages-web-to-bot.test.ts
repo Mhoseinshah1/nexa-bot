@@ -349,9 +349,7 @@ describe('extra traffic and time: configured on the web, bought in the bot', () 
       ...packageBody({ ...base, title: 'خاموش ویرایش', active: true }),
     });
     expect(edited.statusCode, edited.body).toBe(201);
-    expect(serviceAddonResponseSchema.parse(JSON.parse(edited.body)).addon.status).toBe(
-      'INACTIVE',
-    );
+    expect(serviceAddonResponseSchema.parse(JSON.parse(edited.body)).addon.status).toBe('INACTIVE');
   });
 
   it('refuses a scope or a maximum on a package: only the user rate has them', async () => {

@@ -70,10 +70,20 @@ describe('the import report per old invoice', () => {
   });
 
   it('lists each invoice with its group and reason, pages by keyset and searches by invoice id', async () => {
-    const first = [candidate(1, 'ADOPTED'), candidate(2, 'PROVIDER_MISSING'), candidate(3, 'ORPHAN')];
+    const first = [
+      candidate(1, 'ADOPTED'),
+      candidate(2, 'PROVIDER_MISSING'),
+      candidate(3, 'ORPHAN'),
+    ];
     const api = stubApi([
-      { url: '/legacy-services?invoiceId=INV-3', body: { candidates: [first[2]], nextCursor: null } },
-      { url: '/legacy-services?after=', body: { candidates: [candidate(4, 'ADOPTED')], nextCursor: null } },
+      {
+        url: '/legacy-services?invoiceId=INV-3',
+        body: { candidates: [first[2]], nextCursor: null },
+      },
+      {
+        url: '/legacy-services?after=',
+        body: { candidates: [candidate(4, 'ADOPTED')], nextCursor: null },
+      },
       { url: '/legacy-services', body: { candidates: first, nextCursor: first[2]!.id } },
     ]);
     renderPage(<LegacyInvoiceOutcomes />);
