@@ -86,6 +86,8 @@ import {
   PermissionDeniedState,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { insertTable } from '../table-text';
+import { TextWithTables } from '../ui/text-with-tables';
 import { CheckField, FormSection, SaveBar } from './editor-layout';
 import { messageFor } from './settings';
 import {
@@ -624,6 +626,20 @@ function Composer({
     });
   };
 
+  // R5C-2 B2: a table skeleton at the caret, on lines of its own.
+  const insertTableBlock = () => {
+    const area = bodyRef.current;
+    const at = area?.selectionStart ?? state.body.length;
+    const end = area?.selectionEnd ?? at;
+    const inserted = insertTable(state.body, at, end, t('web.table_block_skeleton'), max);
+    if (inserted === null) return;
+    set({ body: inserted.next });
+    requestAnimationFrame(() => {
+      area?.focus();
+      area?.setSelectionRange(inserted.caret, inserted.caret);
+    });
+  };
+
   const save = useMutation({
     mutationFn: () => {
       const sourced = isSourcedBroadcastKind(state.contentKind);
@@ -817,6 +833,12 @@ function Composer({
                     </button>
                   ))}
                 </div>
+                <div className="bc-chips" role="group" aria-label={t('web.table_block_insert')}>
+                  <button type="button" className="chip bc-chip" onClick={insertTableBlock}>
+                    {t('web.table_block_insert')}
+                  </button>
+                </div>
+                <p className="muted small">{t('web.table_block_hint')}</p>
                 <p className="muted small">{t('web.bc_placeholders_safe_hint')}</p>
               </>
             )}
@@ -841,9 +863,9 @@ function Composer({
                 ) : presentation.data === undefined ? (
                   <span className="faint">{t('web.loading')}</span>
                 ) : (
-                  <pre className="preview-text">
-                    {renderBroadcastPreview(state.body, presentation.data, sample)}
-                  </pre>
+                  <TextWithTables
+                    text={renderBroadcastPreview(state.body, presentation.data, sample)}
+                  />
                 )}
               </div>
               {state.buttons
@@ -2029,9 +2051,7 @@ function BroadcastSummary({ record }: { record: BroadcastResponseItem }) {
               {presentation.data === undefined ? (
                 <span className="faint">{t('web.loading')}</span>
               ) : (
-                <pre className="preview-text">
-                  {renderBroadcastPreview(record.body, presentation.data)}
-                </pre>
+                <TextWithTables text={renderBroadcastPreview(record.body, presentation.data)} />
               )}
             </div>
           </div>

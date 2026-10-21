@@ -85,6 +85,7 @@ import {
   richMessageBody,
   richTableBlock,
   type RichBlock,
+  plainTableText,
 } from '../../../../infrastructure/telegram/rich-message.js';
 import type { InlineButtonStyleReader } from '../application/inline-buttons.js';
 import {
@@ -534,7 +535,10 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       return { outcome: 'REFUSED' };
     }
 
-    const text = await this.templates.render(scope, message.templateKey, message.values);
+    // R5C-2 B2: a hand-written table reads as plain lines wherever it is not sent as a rich table.
+    const text = plainTableText(
+      await this.templates.render(scope, message.templateKey, message.values),
+    );
     /*
      * The FORMAT is a property of the key, read from the frozen catalogue.
      *
@@ -1226,7 +1230,9 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
   async edit(scope: TenantContext, message: CustomerEditMessage): Promise<CustomerSendResult> {
     const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
     if (token === null) return { outcome: 'REFUSED' };
-    const rendered = await this.templates.render(scope, message.templateKey, message.values);
+    const rendered = plainTableText(
+      await this.templates.render(scope, message.templateKey, message.values),
+    );
     const format = templateDefinition(message.templateKey).format;
     const html = format === 'TELEGRAM_HTML';
     /*

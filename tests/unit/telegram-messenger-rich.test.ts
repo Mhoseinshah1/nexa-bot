@@ -440,6 +440,36 @@ describe('with «دکمه‌های داخل پیام» on', () => {
     expect(plain.calls[0]?.method).toBe('sendMessage');
   });
 
+  /**
+   * R5C-2 B2. The plan-list header is the tenant's template, not a string in the sender: an
+   * edited title, a description under it and a hand-written table all reach the message, and
+   * the same text without rich messages is plain lines.
+   */
+  it('R5C-2 B2: the header, a description and a hand-written table come from the template', async () => {
+    const text = 'عنوان ویرایش‌شده\nتوضیح یک\n| سرویس | قیمت |\n| --- | --- |\n| طلایی | ۲۵۰ |';
+    const rendered = { ...RENDERED, [PLAIN_KEY]: text };
+    const rich = harness({ mode: ON, rendered });
+    rich.respondWith([OK]);
+    await rich.messenger.send(scope, SCREENS[0]?.message as CustomerMessage);
+    const blocks = (rich.calls[0]?.body.rich_message as { blocks: Record<string, unknown>[] })
+      .blocks;
+    expect(blocks.slice(0, 3).map((block) => block['type'])).toEqual([
+      'heading',
+      'paragraph',
+      'table',
+    ]);
+    expect(blocks[0]?.['text']).toBe('عنوان ویرایش‌شده');
+    expect(blocks[1]?.['text']).toBe('توضیح یک');
+
+    const plain = harness({ mode: 'ABSENT', rendered });
+    plain.respondWith([OK]);
+    await plain.messenger.send(scope, SCREENS[0]?.message as CustomerMessage);
+    expect(plain.calls[0]?.method).toBe('sendMessage');
+    expect(plain.calls[0]?.body['text']).toBe(
+      'عنوان ویرایش‌شده\nتوضیح یک\nسرویس | قیمت\nطلایی | ۲۵۰',
+    );
+  });
+
   it('collapses the rules into a details block', async () => {
     const on = await sendAll(ON);
     const blocks = (on[2]?.[0]?.body.rich_message as { blocks: Record<string, unknown>[] }).blocks;
@@ -583,6 +613,19 @@ describe('premium emoji in rich messages (F3)', () => {
       expect(JSON.stringify(sent[0])).not.toContain('custom_emoji');
       expect(JSON.stringify(sent[0])).toContain('✅ یکی را انتخاب کنید');
     }
+  });
+
+  it('R5C-2 B2: a premium emoji written in the TITLE of the screen is drawn in the heading', async () => {
+    const rendered = { ...RENDERED, [PLAIN_KEY]: '{icon:success} عنوان با ایموجی\nتوضیح' };
+    const { messenger, calls, respondWith } = harness({ mode: PREMIUM, rendered, eligible: true });
+    respondWith([OK]);
+    await messenger.send(scope, SCREENS[0]?.message as CustomerMessage);
+    const blocks = (calls[0]?.body.rich_message as { blocks: Record<string, unknown>[] }).blocks;
+    expect(blocks[0]?.['type']).toBe('heading');
+    expect(JSON.stringify(blocks[0])).toContain(
+      `{"type":"custom_emoji","custom_emoji_id":"${ELIGIBLE_EMOJI}","alternative_text":"✅"}`,
+    );
+    expect(blocks[1]).toEqual({ type: 'paragraph', text: 'توضیح' });
   });
 
   it('never fails the screen: a refused premium rich message is sent the ordinary way', async () => {

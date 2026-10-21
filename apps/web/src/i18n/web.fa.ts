@@ -7075,6 +7075,11 @@ export const WEB_FA = {
   'web.bc_body': 'متن پیام',
   'web.bc_caption': 'توضیح زیر فایل (اختیاری)',
   'web.bc_placeholders_hint': 'پیام بدون قالب‌بندی HTML فرستاده می‌شود.',
+  // R5C-2 B2: the table block of a hand-written text (a broadcast, a template in «متن‌ها»).
+  'web.table_block_insert': 'افزودن جدول',
+  'web.table_block_skeleton': '| ستون اول | ستون دوم |\n| --- | --- |\n| مقدار | مقدار |',
+  'web.table_block_hint':
+    'جدول با خط‌هایی نوشته می‌شود که با | شروع و با | تمام می‌شوند؛ ردیف اول سرستون است و خط | --- | --- | اختیاری است. با «دکمه‌های داخل پیام» روشن، جدول واقعی فرستاده می‌شود؛ در غیر این صورت هر ردیف یک خط ساده است.',
   'web.bc_placeholders': 'جای‌گذاری‌های مجاز',
   'web.bc_ph_first_name': 'نام کوچک کاربر',
   'web.bc_ph_username': 'نام کاربری تلگرام',
