@@ -775,7 +775,12 @@ export function resolve(
           route={route}
           denied={!may('payments.gateways.view')}
           mayEdit={may('payments.gateways.edit')}
-          mayViewCards={may('payments.accounts.view') || may('payments.accounts.edit')}
+          mayViewCards={
+            may('payments.accounts.view') ||
+            may('payments.accounts.edit') ||
+            // R5C-1: the card-switch limits on that view are settings, charged on these.
+            may('settings.view')
+          }
         />
       ),
       crumbs: [{ label: t('web.payment_gateways_title') }],

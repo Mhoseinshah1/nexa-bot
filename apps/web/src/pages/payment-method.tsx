@@ -78,7 +78,12 @@ export function PaymentMethodPage({
    * they may see nothing here at all — so a reader with neither key gets the ordinary
    * refusal rather than an empty page.
    */
-  const routeSection = mayViewGateways || !cards;
+  /*
+   * R5C-1: the card-switch limits are registry settings, charged on `settings.view`/`edit`,
+   * not on the cards' keys — a settings-only administrator reaches them here too.
+   */
+  const limits = provider === 'MANUAL_TRANSFER' && maySettingsView;
+  const routeSection = mayViewGateways || !(cards || limits);
 
   return (
     <>
@@ -112,7 +117,7 @@ export function PaymentMethodPage({
           maySettingsEdit={maySettingsEdit}
         />
       )}
-      {cards && (
+      {provider === 'MANUAL_TRANSFER' && (
         <CardSwitchLimitsCard
           provider={provider}
           maySettingsView={maySettingsView}

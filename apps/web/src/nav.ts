@@ -381,7 +381,9 @@ export const NAV: readonly NavEntry[] = [
      * role straight on to the card-to-card view (`PaymentGatewaysTabbedPage`
      * `mayViewCards`), and `PaymentAccountService.list` still charges the accounts key.
      */
-    permission: ['payments.gateways.view', 'payments.accounts.view'],
+    // R5C-1: `settings.view` too — the card-switch limits on the card-to-card view are registry
+    // settings charged on the settings keys, so a settings-only role reaches them through here.
+    permission: ['payments.gateways.view', 'payments.accounts.view', 'settings.view'],
     group: 'web.navgroup_finance',
   },
   {

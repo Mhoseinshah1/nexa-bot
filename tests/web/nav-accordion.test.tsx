@@ -101,7 +101,7 @@ const BEFORE: readonly [
     '/payment-gateways',
     'web.nav_payment_gateways',
     'wallet',
-    ['payments.gateways.view', 'payments.accounts.view'],
+    ['payments.gateways.view', 'payments.accounts.view', 'settings.view'],
     false,
   ],
   ['payments', '/payments', 'web.nav_payments', 'payments', 'payments.view', false],
