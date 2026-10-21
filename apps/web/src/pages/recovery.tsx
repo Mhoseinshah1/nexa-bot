@@ -1063,7 +1063,8 @@ function RestoreConfirmation({
 /** How long each stage of a run took, one line per stage the run reached. */
 function PhaseDurations({ run }: { run: BackupRunSummary }) {
   const rows = phaseRows(run);
-  if (rows.length === 0) return <span className="muted small">{t('web.recovery_phases_none')}</span>;
+  if (rows.length === 0)
+    return <span className="muted small">{t('web.recovery_phases_none')}</span>;
   return (
     <div className="stack small">
       {rows.map((row) => (

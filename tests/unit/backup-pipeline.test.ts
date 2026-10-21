@@ -1822,17 +1822,21 @@ describe('Round 5B: phase durations, memory failures and the lease heartbeat', (
         }).effective();
 
       // A new install: nothing stored, the template's 04:00 governs.
-      expect(await settings({ enabled: null, intervalMinutes: null, dailyTime: null })).toMatchObject(
-        { dailyTime: '04:00', intervalMs: DAY_MS, source: { dailyTime: 'ENVIRONMENT' } },
-      );
+      expect(
+        await settings({ enabled: null, intervalMinutes: null, dailyTime: null }),
+      ).toMatchObject({
+        dailyTime: '04:00',
+        intervalMs: DAY_MS,
+        source: { dailyTime: 'ENVIRONMENT' },
+      });
       // An owner who stored every 6 hours keeps it: the environment's time does not override.
-      expect(await settings({ enabled: null, intervalMinutes: 360, dailyTime: null })).toMatchObject(
-        { dailyTime: null, intervalMs: 360 * 60_000 },
-      );
+      expect(
+        await settings({ enabled: null, intervalMinutes: 360, dailyTime: null }),
+      ).toMatchObject({ dailyTime: null, intervalMs: 360 * 60_000 });
       // A time the owner stored wins over everything.
-      expect(await settings({ enabled: null, intervalMinutes: 360, dailyTime: '02:15' })).toMatchObject(
-        { dailyTime: '02:15', source: { dailyTime: 'SETTING' } },
-      );
+      expect(
+        await settings({ enabled: null, intervalMinutes: 360, dailyTime: '02:15' }),
+      ).toMatchObject({ dailyTime: '02:15', source: { dailyTime: 'SETTING' } });
     });
 
     it('leaves an existing installation alone: no environment time, no stored one', async () => {

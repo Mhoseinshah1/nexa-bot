@@ -713,19 +713,9 @@ export const configSchema = z
      * measured peak fits this AND the host's free memory (less the headroom) is used; when
      * none does the run is refused before 7-Zip starts.
      */
-    BACKUP_SEVEN_ZIP_MEMORY_MB: z.coerce
-      .number()
-      .int()
-      .min(64)
-      .max(32_768)
-      .default(600),
+    BACKUP_SEVEN_ZIP_MEMORY_MB: z.coerce.number().int().min(64).max(32_768).default(600),
     /** Memory the rest of the host keeps free beside 7-Zip, MiB. */
-    BACKUP_SEVEN_ZIP_HEADROOM_MB: z.coerce
-      .number()
-      .int()
-      .min(0)
-      .max(8_192)
-      .default(256),
+    BACKUP_SEVEN_ZIP_HEADROOM_MB: z.coerce.number().int().min(0).max(8_192).default(256),
 
     /**
      * Disaster recovery.

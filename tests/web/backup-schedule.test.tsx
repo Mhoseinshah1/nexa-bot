@@ -74,7 +74,10 @@ function routes(
     },
     {
       url: `${API_PREFIX}${CONTROL_ROUTES.setting(BACKUP_SCHEDULE_SETTING_KEYS.dailyTime)}`,
-      body: { setting: settingRow(BACKUP_SCHEDULE_SETTING_KEYS.dailyTime, '04:00', 1), changed: true },
+      body: {
+        setting: settingRow(BACKUP_SCHEDULE_SETTING_KEYS.dailyTime, '04:00', 1),
+        changed: true,
+      },
     },
     {
       url: `${API_PREFIX}${CONTROL_ROUTES.setting(BACKUP_SCHEDULE_SETTING_KEYS.intervalMinutes)}`,

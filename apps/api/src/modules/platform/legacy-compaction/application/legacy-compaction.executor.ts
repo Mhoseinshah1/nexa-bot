@@ -218,7 +218,9 @@ export class LegacyCompactionExecutor {
               outcome.run.failureCode === 'backup.memory_insufficient';
             await this.fail(
               run,
-              memory ? 'legacy_compaction.archive_out_of_memory' : 'legacy_compaction.archive_failed',
+              memory
+                ? 'legacy_compaction.archive_out_of_memory'
+                : 'legacy_compaction.archive_failed',
               backupId,
             );
             return 'NEXT';

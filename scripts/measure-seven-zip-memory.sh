@@ -3,11 +3,13 @@
 #
 #   scripts/measure-seven-zip-memory.sh [size_mb] [mx:md:mmt ...]
 #
-# LZMA2 hands each thread a block of its own (4x the dictionary by default), so a dump smaller
-# than threads x blocks would run on fewer threads than asked for and under-report the memory.
-# The script therefore sets the block size small (CHUNK, default 8m): the encoder state per
-# thread, which is what the dictionary and the thread count decide, is unchanged by it, and
-# every requested thread is busy on a modest input.
+# SIZE MATTERS, and is the usual way to under-measure. 7-Zip shrinks the dictionary to the input
+# when the input is smaller, and LZMA2 only runs a second thread once there is a second block
+# of 4x the dictionary to give it. So a level is measured on an input of at least
+# max(2 x dict, threads x 4 x dict) - 150 MB for the 64m one-thread level, 600 MB for the 64m
+# two-thread level - and a smaller input prints a figure that is TOO LOW for the real thing.
+# (A first attempt that forced small blocks measured 96 MB for a 64m dictionary: the encoder
+# had clamped the dictionary to the block. Do not do that.)
 #
 # The levels in apps/api/src/modules/platform/backup/infrastructure/seven-zip-levels.ts carry an
 # `estimatedPeakMb` per level. That number is a measurement, not a guess: run this script on a
@@ -18,12 +20,11 @@
 # the archive (a few percent of it). Peak RSS is read from GNU time (`/usr/bin/time -v`).
 set -euo pipefail
 
-SIZE_MB="${1:-200}"
-CHUNK="${CHUNK:-8m}"
+SIZE_MB="${1:-150}"
 shift || true
 LEVELS=("$@")
 if [ "${#LEVELS[@]}" -eq 0 ]; then
-  LEVELS=("9:64m:4" "9:64m:2" "9:64m:1" "7:32m:1" "5:16m:1" "3:4m:1")
+  LEVELS=("9:64m:1" "7:32m:1" "5:16m:1" "3:4m:1")
 fi
 
 if ! command -v 7z >/dev/null 2>&1; then
@@ -67,7 +68,7 @@ for level in "${LEVELS[@]}"; do
   IFS=: read -r mx md mmt <<<"$level"
   rm -f "$WORK/out.7z"
   /usr/bin/time -v -o "$WORK/time.txt" \
-    7z a -t7z "-m0=lzma2:c=$CHUNK" "-mx=$mx" "-md=$md" "-mmt=$mmt" -ms=off -mhe=on -pmeasure -bd -y -- \
+    7z a -t7z -m0=lzma2 "-mx=$mx" "-md=$md" "-mmt=$mmt" -ms=off -mhe=on -pmeasure -bd -y -- \
     "$WORK/out.7z" "$WORK/dump.sql" >/dev/null
   rss_kb="$(awk -F': ' '/Maximum resident set size/ {print $2}' "$WORK/time.txt")"
   wall="$(awk -F': ' '/Elapsed \(wall clock\)/ {print $2}' "$WORK/time.txt")"

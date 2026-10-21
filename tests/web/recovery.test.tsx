@@ -1045,8 +1045,9 @@ describe('Round 5B: the backup run detail', () => {
     renderPage(<RecoveryPage route={route} permissions={ALL} />);
 
     // The labels are the catalogue's, the figures the run's own (rounded to the second).
-    expect((await screen.findAllByText(/تهیهٔ دامپ/)).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/فشرده‌سازی و رمزنگاری/).length).toBeGreaterThan(0);
+    // Twice: on the last-success card and on that run's row of the history.
+    expect(await screen.findAllByText(/تهیهٔ دامپ/)).toHaveLength(2);
+    expect(screen.getAllByText(/فشرده‌سازی و رمزنگاری/)).toHaveLength(2);
     expect(screen.getAllByText(/راستی‌آزمایی:/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/ارسال:/).length).toBeGreaterThan(0);
   });

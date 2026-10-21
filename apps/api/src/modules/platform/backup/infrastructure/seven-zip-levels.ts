@@ -11,8 +11,8 @@ import { readFile } from 'node:fs/promises';
  * the peak is a property of the level and not of whatever the tool decides on this host.
  *
  * `estimatedPeakMb` is MEASURED, not computed: `scripts/measure-seven-zip-memory.sh` runs
- * each row over a synthetic dump and reports the peak resident set. Update the figures
- * there first, here second.
+ * each row over a synthetic dump and reports the peak resident set (figures below). Update
+ * the script's output first, this table second.
  *
  * ORDER: strongest compression first. Selection takes the first row that fits.
  */
@@ -29,11 +29,16 @@ export interface SevenZipLevel {
 }
 
 export const SEVEN_ZIP_LEVELS: readonly SevenZipLevel[] = [
-  { name: 'max', mx: 9, md: '64m', mmt: 2, estimatedPeakMb: 1300 },
-  { name: 'high', mx: 9, md: '64m', mmt: 1, estimatedPeakMb: 700 },
-  { name: 'balanced', mx: 7, md: '32m', mmt: 1, estimatedPeakMb: 400 },
-  { name: 'light', mx: 5, md: '16m', mmt: 1, estimatedPeakMb: 200 },
-  { name: 'minimal', mx: 3, md: '4m', mmt: 1, estimatedPeakMb: 80 },
+  // Measured 2026-10-21, 7-Zip 23.01, peak RSS over a synthetic dump (scripts/measure-seven-zip-memory.sh),
+  // rounded UP to the next 5 MiB: 687, 680, 376, 192 and 38 MiB. With -mmt=2 LZMA2 runs the match
+  // finder and the coder on two threads over ONE dictionary, so two threads cost the same
+  // memory as one; it is only from -mmt=3 that each block thread brings a dictionary of its
+  // own, which is how the unbounded default reached 2.4 GB on four cores.
+  { name: 'max', mx: 9, md: '64m', mmt: 2, estimatedPeakMb: 690 },
+  { name: 'high', mx: 9, md: '64m', mmt: 1, estimatedPeakMb: 685 },
+  { name: 'balanced', mx: 7, md: '32m', mmt: 1, estimatedPeakMb: 380 },
+  { name: 'light', mx: 5, md: '16m', mmt: 1, estimatedPeakMb: 195 },
+  { name: 'minimal', mx: 3, md: '4m', mmt: 1, estimatedPeakMb: 40 },
 ];
 
 /** The budget a backup's 7-Zip may use unless `BACKUP_SEVEN_ZIP_MEMORY_MB` says otherwise. */

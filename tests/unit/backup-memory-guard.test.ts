@@ -98,9 +98,7 @@ describe('choosing a level from the memory the host has', () => {
   });
 
   it('is bounded by the budget even when the host has more', async () => {
-    const choice = await chooseSevenZipLevel(
-      policy({ available: 1_000_000, budgetMb: LIGHTEST }),
-    );
+    const choice = await chooseSevenZipLevel(policy({ available: 1_000_000, budgetMb: LIGHTEST }));
     expect(choice.kind === 'LEVEL' && choice.level.estimatedPeakMb).toBe(LIGHTEST);
   });
 
