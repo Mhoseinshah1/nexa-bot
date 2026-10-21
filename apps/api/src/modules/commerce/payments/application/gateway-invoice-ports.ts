@@ -214,6 +214,7 @@ export interface GatewayCryptoFigures {
   readonly requested: string | null;
   readonly paid: string | null;
   readonly received: string | null;
+  readonly receivedCurrency: string | null;
   readonly payAddress: string | null;
 }
 
@@ -447,6 +448,8 @@ export interface GatewayInvoiceRecord {
   readonly cryptoRequested: string | null;
   readonly cryptoPaid: string | null;
   readonly cryptoReceived: string | null;
+  /** The coin `cryptoReceived` is in (`outcome_currency`); null when the provider sent none. */
+  readonly cryptoReceivedCurrency: string | null;
   readonly cryptoPayAddress: string | null;
   /** The customer's integer as sent (CentralPay's `userId`), frozen at open. Null otherwise. */
   readonly providerUserId: string | null;

@@ -136,6 +136,7 @@ function invoice(
     cryptoRequested: null,
     cryptoPaid: null,
     cryptoReceived: null,
+    cryptoReceivedCurrency: null,
     cryptoPayAddress: null,
     createdAt: AT,
     updatedAt: AT,

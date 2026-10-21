@@ -4935,6 +4935,8 @@ export const gatewayInvoices = pgTable(
     cryptoRequested: text('crypto_requested'),
     cryptoPaid: text('crypto_paid'),
     cryptoReceived: text('crypto_received'),
+    /** The coin `outcome_amount` is in (`outcome_currency`), which is not the pay currency. */
+    cryptoReceivedCurrency: text('crypto_received_currency'),
     cryptoPayAddress: text('crypto_pay_address'),
     /**
      * FIX10 (audit P1-b on #268): how many times in a row this row's processing in the
@@ -5001,6 +5003,7 @@ export const gatewayInvoices = pgTable(
           AND (crypto_requested IS NULL OR crypto_requested ~ '^[0-9]{1,24}(\\.[0-9]{1,18})?$')
           AND (crypto_paid IS NULL OR crypto_paid ~ '^[0-9]{1,24}(\\.[0-9]{1,18})?$')
           AND (crypto_received IS NULL OR crypto_received ~ '^[0-9]{1,24}(\\.[0-9]{1,18})?$')
+          AND (crypto_received_currency IS NULL OR length(crypto_received_currency) BETWEEN 1 AND 24)
           AND (crypto_pay_address IS NULL OR length(crypto_pay_address) BETWEEN 1 AND 256)`,
     ),
     uniqueIndex('gateway_invoices_charge_id_key')

@@ -105,6 +105,7 @@ function invoice(overrides: Partial<GatewayInvoiceRecord> = {}): GatewayInvoiceR
     cryptoRequested: null,
     cryptoPaid: null,
     cryptoReceived: null,
+    cryptoReceivedCurrency: null,
     cryptoPayAddress: null,
     createdAt: CREATED_AT,
     updatedAt: CREATED_AT,

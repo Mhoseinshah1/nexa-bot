@@ -137,6 +137,7 @@ function toRecord(row: Row): GatewayInvoiceRecord {
     cryptoRequested: row.cryptoRequested,
     cryptoPaid: row.cryptoPaid,
     cryptoReceived: row.cryptoReceived,
+    cryptoReceivedCurrency: row.cryptoReceivedCurrency,
     cryptoPayAddress: row.cryptoPayAddress,
     providerUserId: row.providerUserId,
     createdAt: row.createdAt,
@@ -1058,6 +1059,9 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
               ...(result.crypto.received === null
                 ? {}
                 : { cryptoReceived: result.crypto.received }),
+              ...(result.crypto.receivedCurrency === null
+                ? {}
+                : { cryptoReceivedCurrency: result.crypto.receivedCurrency }),
               ...(result.crypto.payAddress === null
                 ? {}
                 : { cryptoPayAddress: result.crypto.payAddress }),

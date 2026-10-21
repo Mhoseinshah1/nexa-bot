@@ -420,6 +420,7 @@ describe('the authoritative read', () => {
         requested: '155.38559757',
         paid: '155.38559757',
         received: '1131.7812095',
+        receivedCurrency: 'TRX',
         payAddress: '0xd1cDE08A07cD25adEbEd35c3867a59228C09B606',
       },
     });
@@ -433,6 +434,7 @@ describe('the authoritative read', () => {
     delete bare['actually_paid'];
     delete bare['outcome_amount'];
     delete bare['pay_currency'];
+    delete bare['outcome_currency'];
     bare['pay_address'] = '<script>alert(1)</script>';
     const { adapter } = adapterWith(() => json(200, bare));
     const outcome = await adapter.inquire(

@@ -587,7 +587,11 @@ function cryptoValues(
       values['cryptoPaid'] = `${toPersianDigits(invoice.cryptoPaid)}${coin}`;
     }
     if (invoice.cryptoReceived !== null) {
-      values['cryptoReceived'] = `${toPersianDigits(invoice.cryptoReceived)}${coin}`;
+      // `outcome_amount` is in the provider's OUTCOME currency, which need not be the coin the
+      // payer sent; the pay currency labels it only when the provider named no other.
+      const receivedCoin = invoice.cryptoReceivedCurrency ?? invoice.cryptoPayCurrency;
+      values['cryptoReceived'] =
+        `${toPersianDigits(invoice.cryptoReceived)}${receivedCoin === null ? '' : ` ${receivedCoin}`}`;
     }
     if (invoice.cryptoPayAddress !== null) values['walletAddress'] = invoice.cryptoPayAddress;
     if (invoice.providerStatus !== null) values['providerStatus'] = invoice.providerStatus;

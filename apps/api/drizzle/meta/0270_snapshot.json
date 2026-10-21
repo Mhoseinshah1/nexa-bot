@@ -1,5 +1,5 @@
 {
-  "id": "0eca555b-9316-410f-aedf-a6fae8a3b8b2",
+  "id": "d6ad9540-18bd-4094-b854-48c56b927901",
   "prevId": "8c5c576a-4b1d-42f3-983f-d8bc5a8fbdda",
   "version": "7",
   "dialect": "postgresql",
@@ -12143,6 +12143,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "crypto_received_currency": {
+          "name": "crypto_received_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "crypto_pay_address": {
           "name": "crypto_pay_address",
           "type": "text",
@@ -12389,7 +12395,7 @@
         },
         "gateway_invoices_crypto_figures_check": {
           "name": "gateway_invoices_crypto_figures_check",
-          "value": "(crypto_pay_currency IS NULL OR length(crypto_pay_currency) BETWEEN 1 AND 24)\n          AND (crypto_requested IS NULL OR crypto_requested ~ '^[0-9]{1,24}(\\.[0-9]{1,18})?$')\n          AND (crypto_paid IS NULL OR crypto_paid ~ '^[0-9]{1,24}(\\.[0-9]{1,18})?$')\n          AND (crypto_received IS NULL OR crypto_received ~ '^[0-9]{1,24}(\\.[0-9]{1,18})?$')\n          AND (crypto_pay_address IS NULL OR length(crypto_pay_address) BETWEEN 1 AND 256)"
+          "value": "(crypto_pay_currency IS NULL OR length(crypto_pay_currency) BETWEEN 1 AND 24)\n          AND (crypto_requested IS NULL OR crypto_requested ~ '^[0-9]{1,24}(\\.[0-9]{1,18})?$')\n          AND (crypto_paid IS NULL OR crypto_paid ~ '^[0-9]{1,24}(\\.[0-9]{1,18})?$')\n          AND (crypto_received IS NULL OR crypto_received ~ '^[0-9]{1,24}(\\.[0-9]{1,18})?$')\n          AND (crypto_received_currency IS NULL OR length(crypto_received_currency) BETWEEN 1 AND 24)\n          AND (crypto_pay_address IS NULL OR length(crypto_pay_address) BETWEEN 1 AND 256)"
         },
         "gateway_invoices_provider_check": {
           "name": "gateway_invoices_provider_check",

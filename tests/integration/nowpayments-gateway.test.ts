@@ -96,6 +96,7 @@ interface FakePayment {
   pay_amount: number;
   actually_paid: number;
   outcome_amount: number;
+  outcome_currency: string;
   pay_address: string;
   updated_at: string;
 }
@@ -168,6 +169,7 @@ class FakeNowPayments {
       pay_amount: 10.05,
       actually_paid: 10.05,
       outcome_amount: 9.99,
+      outcome_currency: 'usdterc20',
       pay_address: 'TXyzABCDEFGHJKLMNPQRSTUVWXYZ123456',
       updated_at: new Date().toISOString(),
     };
@@ -538,6 +540,7 @@ describe('NOWPayments, through the one settlement path', () => {
         crypto_requested: '10.05',
         crypto_paid: '10.05',
         crypto_received: '9.99',
+        crypto_received_currency: 'USDTERC20',
         crypto_pay_address: 'TXyzABCDEFGHJKLMNPQRSTUVWXYZ123456',
       });
       expect(fake.reads).toEqual(['5077125051']);

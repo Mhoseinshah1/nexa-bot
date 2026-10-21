@@ -209,6 +209,8 @@ export interface NowPaymentsCryptoFigures {
   readonly requested: string | null;
   readonly paid: string | null;
   readonly received: string | null;
+  /** The coin `received` is in (`outcome_currency`); NOT the pay currency. */
+  readonly receivedCurrency: string | null;
   readonly payAddress: string | null;
 }
 
@@ -222,12 +224,12 @@ export function cryptoFiguresOf(record: {
   readonly pay_amount?: unknown;
   readonly actually_paid?: unknown;
   readonly outcome_amount?: unknown;
+  readonly outcome_currency?: unknown;
   readonly pay_address?: unknown;
 }): NowPaymentsCryptoFigures | null {
-  const currency =
-    typeof record.pay_currency === 'string' && /^[A-Za-z0-9_-]{1,24}$/u.test(record.pay_currency)
-      ? record.pay_currency.toUpperCase()
-      : null;
+  const coinOf = (value: unknown): string | null =>
+    typeof value === 'string' && /^[A-Za-z0-9_-]{1,24}$/u.test(value) ? value.toUpperCase() : null;
+  const currency = coinOf(record.pay_currency);
   const address =
     typeof record.pay_address === 'string' && /^[A-Za-z0-9:_.-]{10,256}$/u.test(record.pay_address)
       ? record.pay_address
@@ -237,6 +239,7 @@ export function cryptoFiguresOf(record: {
     requested: cryptoDecimalOf(record.pay_amount),
     paid: cryptoDecimalOf(record.actually_paid),
     received: cryptoDecimalOf(record.outcome_amount),
+    receivedCurrency: coinOf(record.outcome_currency),
     payAddress: address,
   };
   return Object.values(figures).every((one) => one === null) ? null : figures;

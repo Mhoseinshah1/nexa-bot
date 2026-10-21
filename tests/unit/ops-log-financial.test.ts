@@ -373,6 +373,7 @@ describe('L3 — the crypto figures the provider reported (R5C-2 C4)', () => {
     cryptoRequested: '155.38559757',
     cryptoPaid: '155.38559757',
     cryptoReceived: '1131.7812095',
+    cryptoReceivedCurrency: 'TRX',
     cryptoPayAddress: '0xd1cDE08A07cD25adEbEd35c3867a59228C09B606',
     ...overrides,
   });
@@ -394,10 +395,15 @@ describe('L3 — the crypto figures the provider reported (R5C-2 C4)', () => {
     const text = await paidCrypto(invoice());
     expect(text).toContain('🔢 مبلغ درخواستی: ۱۵۵٫۳۸۵۵۹۷۵۷ MANA');
     expect(text).toContain('💸 مبلغ پرداخت‌شده: ۱۵۵٫۳۸۵۵۹۷۵۷ MANA');
-    expect(text).toContain('📥 مبلغ دریافتی نهایی: ۱۱۳۱٫۷۸۱۲۰۹۵ MANA');
+    expect(text).toContain('📥 مبلغ دریافتی نهایی: ۱۱۳۱٫۷۸۱۲۰۹۵ TRX');
     // The address is a token, never converted to Persian digits.
     expect(text).toContain('🏦 آدرس کیف پول: 0xd1cDE08A07cD25adEbEd35c3867a59228C09B606');
     expect(text).not.toMatch(/\{[a-zA-Z]+\}|NaN|undefined/);
+  });
+
+  it('labels the received figure with the pay currency only when the provider sent no outcome currency', async () => {
+    const text = await paidCrypto(invoice({ cryptoReceivedCurrency: null }));
+    expect(text).toContain('📥 مبلغ دریافتی نهایی: ۱۱۳۱٫۷۸۱۲۰۹۵ MANA');
   });
 
   it('drops a line the provider reported nothing for', async () => {

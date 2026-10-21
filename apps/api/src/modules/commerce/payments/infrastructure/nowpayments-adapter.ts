@@ -108,6 +108,7 @@ const paymentSchema = z.object({
   pay_amount: z.unknown().optional(),
   actually_paid: z.unknown().optional(),
   outcome_amount: z.unknown().optional(),
+  outcome_currency: z.unknown().optional(),
   pay_address: z.unknown().optional(),
 });
 
