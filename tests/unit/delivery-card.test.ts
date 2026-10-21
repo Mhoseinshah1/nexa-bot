@@ -67,7 +67,11 @@ interface Script {
   readonly texts: CustomerSendResult[];
 }
 
-function harness(script: Script, mode: PanelDeliveryMode = 'CARD_WITH_QR') {
+function harness(
+  script: Script,
+  mode: PanelDeliveryMode = 'CARD_WITH_QR',
+  inBubble: boolean | undefined = undefined,
+) {
   const encoded: string[] = [];
   const files: CustomerFileMessage[] = [];
   const texts: CustomerMessage[] = [];
@@ -98,6 +102,7 @@ function harness(script: Script, mode: PanelDeliveryMode = 'CARD_WITH_QR') {
         return script.files.shift() ?? { outcome: 'DELIVERED' };
       },
       acknowledge: async () => undefined,
+      ...(inBubble === undefined ? {} : { buttonsInBubble: async () => inBubble }),
     },
     qr: {
       render: async (_s, source) => {
@@ -150,6 +155,47 @@ describe('the delivery card', () => {
     expect(file.buttons).toEqual(deliveryCardButtons('service-1'));
     expect(h.texts).toHaveLength(0);
     expect(h.recorded).toEqual([{ from: 'PENDING', to: 'DELIVERED', sentUrl: URL }]);
+  });
+
+  /**
+   * R5C-2 B3. With «دکمه‌های داخل پیام» on, a photo's caption cannot hold the buttons inside
+   * the bubble, so «مشاهده آموزش استفاده», «مشکل دارم» and «وصل شدم» stayed below the message.
+   * The card is then a text message (rich, through the shared sender) and the QR is a bare
+   * photo before it. MUTATION: dropping the `qrThenCard` call in `sendCard` fails the first
+   * test; always taking the in-bubble path fails the second.
+   */
+  it('R5C-2 B3: with buttons in the bubble the QR goes first bare and the card is a message carrying the buttons', async () => {
+    const h = harness({ files: [], texts: [] }, 'CARD_WITH_QR', true);
+    await h.delivery.deliver(scope, service(), '5150', BOT);
+    expect(h.encoded).toEqual([URL]);
+    expect(h.files).toHaveLength(1);
+    expect(h.files[0]?.caption?.templateKey).toBe('bot.service.delivered_qr_caption');
+    expect(h.files[0]?.buttons).toBeUndefined();
+    expect(h.texts).toHaveLength(1);
+    expect(h.texts[0]?.templateKey).toBe('bot.service.delivered');
+    expect(h.texts[0]?.buttons).toEqual(deliveryCardButtons('service-1'));
+    expect(h.texts[0]?.values['subscriptionUrl']).toBe(URL);
+    expect(h.recorded.map((r) => r.to)).toEqual(['DELIVERED']);
+  });
+
+  it('R5C-2 B3: with the switch off (or a messenger that cannot say) the photo keeps its caption and buttons', async () => {
+    for (const inBubble of [false, undefined]) {
+      const h = harness({ files: [], texts: [] }, 'CARD_WITH_QR', inBubble);
+      await h.delivery.deliver(scope, service(), '5150', BOT);
+      expect(h.files).toHaveLength(1);
+      expect(h.files[0]?.caption?.templateKey).toBe('bot.service.delivered');
+      expect(h.files[0]?.buttons).toEqual(deliveryCardButtons('service-1'));
+      expect(h.texts).toHaveLength(0);
+    }
+  });
+
+  it('R5C-2 B3: a refused QR does not lose the card, an ambiguous one stops before it', async () => {
+    const refused = harness({ files: [{ outcome: 'REFUSED' }], texts: [] }, 'CARD_WITH_QR', true);
+    await refused.delivery.deliver(scope, service(), '5150', BOT);
+    expect(refused.texts).toHaveLength(1);
+    const unknown = harness({ files: [{ outcome: 'UNKNOWN' }], texts: [] }, 'CARD_WITH_QR', true);
+    await unknown.delivery.deliver(scope, service(), '5150', BOT);
+    expect(unknown.texts).toHaveLength(0);
   });
 
   it('draws the three approved buttons in their order and rows', () => {

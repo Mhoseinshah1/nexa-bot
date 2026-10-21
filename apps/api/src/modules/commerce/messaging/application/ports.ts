@@ -490,6 +490,14 @@ export interface CustomerMessenger {
    */
   editCaption?(scope: TenantContext, message: CustomerEditMessage): Promise<CustomerSendResult>;
 
+  /**
+   * R5C-2 B3: whether this tenant has «دکمه‌های داخل پیام» on, so a one-part screen's inline
+   * buttons sit INSIDE its message. A caller that would otherwise put a screen's buttons under
+   * a photo's caption asks, and sends the picture bare followed by the screen — a photo
+   * caption cannot hold buttons inside the bubble. Optional; absent is `false`, today's shape.
+   */
+  buttonsInBubble?(scope: TenantContext): Promise<boolean>;
+
   /** R2: takes every button off a message this bot sent; its text stays. */
   clearButtons?(scope: TenantContext, message: CustomerMessageRef): Promise<CustomerSendResult>;
 

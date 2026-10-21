@@ -1514,6 +1514,11 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     };
   }
 
+  /** R5C-2 B3: whether inline buttons sit inside the bubble for this tenant. */
+  async buttonsInBubble(scope: TenantContext): Promise<boolean> {
+    return (await this.richModeFor(scope)).enabled;
+  }
+
   /** R4 PR-F: the tenant's rich-message switches; unreadable is off, today's behaviour. */
   private async richModeFor(scope: TenantContext): Promise<RichMessageMode> {
     const rich = this.rich;
