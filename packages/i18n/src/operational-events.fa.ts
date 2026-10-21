@@ -115,6 +115,8 @@ export const OPERATIONAL_EVENT_LABELS_FA: Readonly<Record<string, string>> = {
   'payments.receipt_push_ok': 'ارسال رسید به گروه برگشت',
   'payments.refund_request_push_failed': 'ارسال درخواست بازپرداخت به گروه انجام نشد',
   'payments.refund_request_push_ok': 'ارسال درخواست بازپرداخت به گروه برگشت',
+  'customer_notices.paused': 'ارسال خودکار پیام به مشتریان متوقف شد',
+  'customer_notices.resumed': 'ارسال خودکار پیام به مشتریان دوباره فعال شد',
   'provisioning.delivered': 'سرویس تحویل شد',
   'provisioning.stalled': 'ساخت سرویس متوقف مانده است',
   'recovery.run_failed': 'بازیابی شکست خورد',

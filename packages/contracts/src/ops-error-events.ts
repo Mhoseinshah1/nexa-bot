@@ -1,4 +1,5 @@
 import type { OperationalSeverity } from './ports.js';
+import { CUSTOMER_NOTICES_PAUSED_CODE, CUSTOMER_NOTICES_RESUMED_CODE } from './customer-notifications.js';
 
 /**
  * FIX-04 / FIX-05 (2026-10-09) — the ONE taxonomy of reportable operational events.
@@ -468,6 +469,10 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
   fact('notification.sweep_withdrawn', 'NOTIFICATIONS', 'PER_SUBJECT'),
   failure(REMINDER_BURST_CODE, 'NOTIFICATIONS', 'CONDITION'),
   recovery(REMINDER_BURST_CLEARED_CODE, 'NOTIFICATIONS', REMINDER_BURST_CODE),
+  // R5A-2 item 5: the owner's emergency switch for automated customer messages. One condition
+  // per tenant, open while the switch is on; turning it off is the recovery.
+  failure(CUSTOMER_NOTICES_PAUSED_CODE, 'NOTIFICATIONS', 'CONDITION'),
+  recovery(CUSTOMER_NOTICES_RESUMED_CODE, 'NOTIFICATIONS', CUSTOMER_NOTICES_PAUSED_CODE),
   fact('ops_group.topic_recreated', 'NOTIFICATIONS', 'PER_OCCURRENCE'),
 
   // --- Jobs and the worker ----------------------------------------------------------------
