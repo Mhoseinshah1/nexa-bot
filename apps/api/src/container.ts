@@ -5284,7 +5284,7 @@ export function createContainer(
     },
     // Roadmap D4: best-effort bookkeeping around a send is logged, never thrown.
     logger,
-    // R4 PR-F: «دکمه‌های داخل پیام» and «ایموجی پریمیوم», the tenant's two feature flags.
+    // R4 PR-F: «دکمه‌های داخل پیام» and «ایموجی پریمیوم» (+ R5C-2 B2's «نمایش پلن‌ها به‌صورت جدول»), the tenant's feature flags.
     {
       modeFor: async (scope) => {
         // The second switch is inert without the first, so it is read only behind it.
@@ -5293,6 +5293,8 @@ export function createContainer(
           enabled,
           premiumEmoji:
             enabled && (await featureFlagResolver.isEnabled(scope, 'rich_premium_emoji')),
+          // R5C-2 B2: the plan table is its own switch, inert without the first.
+          planTable: enabled && (await featureFlagResolver.isEnabled(scope, 'rich_plan_table')),
         };
       },
       now: () => clock.now(),

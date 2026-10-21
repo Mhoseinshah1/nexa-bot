@@ -141,6 +141,8 @@ afterEach(() => {
 
 const ON: RichMessageMode = { enabled: true, premiumEmoji: false };
 const PREMIUM: RichMessageMode = { enabled: true, premiumEmoji: true };
+/** R5C-2 B2: «نمایش پلن‌ها به‌صورت جدول» on, beside the rich-message switch. */
+const TABLE: RichMessageMode = { enabled: true, premiumEmoji: false, planTable: true };
 
 const PRICE = money(250_000n, 'IRT');
 
@@ -342,7 +344,7 @@ function routesOf(body: unknown): string[] {
 
 describe('with «دکمه‌های داخل پیام» on', () => {
   it('sends an inline-button screen as a rich message with its buttons inside it', async () => {
-    const { messenger, calls, respondWith } = harness({ mode: ON, rendered: RENDERED });
+    const { messenger, calls, respondWith } = harness({ mode: TABLE, rendered: RENDERED });
     respondWith([OK]);
     const result = await messenger.send(scope, SCREENS[0]?.message as CustomerMessage);
     expect(result).toEqual({ outcome: 'DELIVERED', messageId: 11 });
@@ -390,7 +392,7 @@ describe('with «دکمه‌های داخل پیام» on', () => {
   });
 
   it('draws the plan table — name, traffic, days, price — compact', async () => {
-    const { messenger, calls, respondWith } = harness({ mode: ON, rendered: RENDERED });
+    const { messenger, calls, respondWith } = harness({ mode: TABLE, rendered: RENDERED });
     respondWith([OK]);
     await messenger.send(scope, SCREENS[0]?.message as CustomerMessage);
     const blocks = (calls[0]?.body.rich_message as { blocks: Record<string, unknown>[] }).blocks;
@@ -409,6 +411,33 @@ describe('with «دکمه‌های داخل پیام» on', () => {
       // The stand-in renderer returns each cell template's raw default body.
       ['پلن طلایی', '{traffic}', '{durationDays}', formatMoney(PRICE)],
     ]);
+  });
+
+  /**
+   * R5C-2 B2. The owner does not want the plan list as a table automatically. With the rich
+   * switch on and «نمایش پلن‌ها به‌صورت جدول» off, the plan list is the table-less blocks.
+   * MUTATION: drawing the table whenever rich messages are on fails this test.
+   */
+  it('R5C-2 B2: draws NO table with the table switch off, and is otherwise the same screen', async () => {
+    const send = async (mode: RichMessageMode) => {
+      const { messenger, calls, respondWith } = harness({ mode, rendered: RENDERED });
+      respondWith([OK]);
+      await messenger.send(scope, SCREENS[0]?.message as CustomerMessage);
+      return (calls[0]?.body.rich_message as { blocks: { type: string }[] }).blocks;
+    };
+    const off = await send(ON);
+    const on = await send(TABLE);
+    expect(off.map((block) => block.type)).not.toContain('table');
+    expect(on.map((block) => block.type)).toContain('table');
+    expect(off).toEqual(on.filter((block) => block.type !== 'table'));
+    // Inert without the rich switch: the ordinary message is untouched by the table switch.
+    const plain = harness({
+      mode: { enabled: false, premiumEmoji: false, planTable: true },
+      rendered: RENDERED,
+    });
+    plain.respondWith([OK]);
+    await plain.messenger.send(scope, SCREENS[0]?.message as CustomerMessage);
+    expect(plain.calls[0]?.method).toBe('sendMessage');
   });
 
   it('collapses the rules into a details block', async () => {

@@ -17,10 +17,20 @@ export interface RichMessageMode {
    * emoji and no inline button carries an icon.
    */
   readonly premiumEmoji: boolean;
+  /**
+   * `rich_plan_table` («نمایش پلن‌ها به‌صورت جدول», R5C-2 B2): the plan list also carries a
+   * table. Inert without `enabled` — a table is a rich-message block — and absent is `false`:
+   * the plan list is then the same blocks a tenant that never heard of tables sees.
+   */
+  readonly planTable?: boolean;
 }
 
 /** The mode a tenant is in when nothing can be read: today's behaviour. */
-export const RICH_MESSAGES_OFF: RichMessageMode = { enabled: false, premiumEmoji: false };
+export const RICH_MESSAGES_OFF: RichMessageMode = {
+  enabled: false,
+  premiumEmoji: false,
+  planTable: false,
+};
 
 export interface RichMessageSupport {
   modeFor(scope: TenantContext): Promise<RichMessageMode>;

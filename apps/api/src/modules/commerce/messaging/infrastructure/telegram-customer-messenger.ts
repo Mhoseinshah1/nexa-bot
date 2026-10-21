@@ -1593,7 +1593,9 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       layout: RICH_SCREEN_LAYOUTS[message.templateKey] ?? {},
     });
     if (text === null) return null;
-    const table = await this.planTable(scope, message.buttons ?? []);
+    // R5C-2 B2: a table only when «نمایش پلن‌ها به‌صورت جدول» is on; off is the plain list.
+    const table =
+      mode.planTable === true ? await this.planTable(scope, message.buttons ?? []) : null;
     const layout = richButtonLayout(premium ? labelled : withoutButtonIcons(labelled));
     return {
       blocks: [...text, ...(table === null ? [] : [table]), ...layout.blocks],
