@@ -646,6 +646,8 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
 > = {
   // B1: the product's own description, the one customer-facing text on the pre-invoice.
   'bot.order.preinvoice': { description: 'توضیح محصول برای مشتری' },
+  // R6 item 4: on the card-to-card invoice the total is what must be TRANSFERRED.
+  'bot.payment.transfer_instructions': { total: 'مبلغ قابل پرداخت (اصل + کارمزد)' },
   'bot.channels.join_private_button': { number: 'شمارهٔ کانال در فهرست' },
   'bot.terms.required': { title: 'عنوان قوانین', body: 'متن قوانین' },
   'bot.service.delivery_tutorial': { text: 'متن آموزش پنل، همان‌طور که در پنل نوشته شده' },
@@ -1361,7 +1363,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.payment.transfer_instructions': [
     'فاکتور کارت‌به‌کارت',
-    'فاکتور پرداخت: کد پیگیری پرداخت، مبلغ قابل پرداخت، اطلاعات حساب مقصد و راهنمای پرداخت.',
+    'فاکتور پرداخت: کد پیگیری پرداخت، مبلغ بدون کارمزد و کارمزد (فقط اگر کارمزد مشتری فعال باشد)، مبلغ قابل پرداخت، اطلاعات حساب مقصد و راهنمای پرداخت.',
   ],
   'bot.payment.destination.bank': [
     'خط نام بانک در فاکتور',

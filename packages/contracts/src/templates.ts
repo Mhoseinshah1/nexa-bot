@@ -5162,7 +5162,9 @@ export const TEMPLATES = [
     description:
       'The invoice: heading, invoice id, payable amount, the destination lines, then ' +
       'the tenant-editable instructions. Carries the destination the payment was ' +
-      'ISSUED against. ' +
+      'ISSUED against. R6 item 4: when the card-to-card route charges a customer fee, the ' +
+      'amount without the fee and the fee are shown apart, and `{total}` is the PAYABLE — ' +
+      'what must be transferred. ' +
       'Supersedes bot.payment.manual_instructions, which is kept for payments created ' +
       'before a destination existed. {destination} is composed from the payment\u2019s ' +
       'frozen snapshot through the four bot.payment.destination.* keys, so a line whose ' +
@@ -5181,8 +5183,25 @@ export const TEMPLATES = [
       {
         token: 'total',
         type: 'MONEY',
-        description: 'The amount to transfer.',
+        description:
+          'The amount to TRANSFER: the payment\u2019s payable \u2014 the principal plus the customer fee when the route charges one, else the principal.',
         required: true,
+        repeatable: false,
+      },
+      {
+        token: 'principal',
+        type: 'MONEY',
+        description:
+          'R6 item 4: the order or top-up amount without the customer fee, shown only when a fee applies. A line holding only it is dropped otherwise.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'fee',
+        type: 'MONEY',
+        description:
+          'R6 item 4: the customer fee snapshotted on this payment, shown only when above zero. A line holding only it is dropped otherwise.',
+        required: false,
         repeatable: false,
       },
       {
