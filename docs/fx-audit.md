@@ -352,3 +352,41 @@ Not covered by mutation, stated rather than hidden:
 4. **The operator's ratio**: `stars.per_usdt` is the operator's own terms (`OQ-FX-01`);
    the acceptance is the owner setting it against Telegram's current Star pricing and
    reading the Toman per Star the card shows.
+
+## 7. Round 6 (2026-10-23): decompression, agreement, switches, the six-hour window
+
+**Cause of "the central rate is never stored".** (a) Nobitex answers 403 to the foreign
+address — not fixable in code. (b) Wallex answers 200 with `content-encoding: gzip` even to
+a request that did not ask for it, and `safe-http.ts` read the raw bytes as UTF-8, so the
+adapter reported `wallex.not_json`; this hit every provider that compresses. (c) The old
+rule needed a second source to confirm an outlier, and only two sources exist.
+
+**What changed.**
+
+1. `safe-http.ts` sends `accept-encoding: gzip, deflate, br` and streams the body through
+   `node:zlib` (a chain is undone in reverse order). The response cap applies twice: to the
+   wire bytes and to the DECOMPRESSED bytes (a zip bomb is a few kilobytes of gzip). An
+   unknown coding, or a body that is not what its header claims, is `MALFORMED_RESPONSE`.
+2. **The agreement rule** (`decideQuote`, `domain/fx-quote.ts`): every ENABLED source not in
+   backoff is read each refresh. A source is healthy when its figure is positive and inside the
+   sanity rails. A quote is stored when at least `fx.min_agreeing_sources` (default 2, range
+   2-5) healthy sources are within `FX_SOURCE_AGREEMENT_BPS` (3 %) of each other; the stored
+   figure is the first of them in preference order (`fx.primary_source`, then
+   `fx.fallback_source`, then the rest). Agreement overrides the 15 % outlier test, as before.
+   Healthy sources that DISAGREE store nothing: nobody can say which is right.
+3. **One healthy source** is stored only if `fx.accept_single_source` is on (default OFF), and
+   even then not when its figure is an outlier against the last good rate. Exactly one healthy
+   source raises one operational condition, `fx.single_source` («فقط یک منبع نرخ فعال است»),
+   closed when two are healthy again.
+4. **Per-source switches** `fx.source_nobitex_enabled` / `fx.source_wallex_enabled` (default
+   on): a disabled source is not in the list the service iterates, so no adapter is called.
+   `fx.primary_source` / `fx.fallback_source` now only order the preference; they no longer
+   decide who is dialled. The Web Admin table lists every source with its switch, last
+   success, consecutive errors and last error in Persian.
+5. **Fallback when every source is down.** `fx.max_stale_seconds` defaults to 21 600 (six
+   hours; a stored override is untouched). The last stored rate prices new invoices as
+   `STALE_ALLOWED` and its age is shown; past the window `quoteFor` answers `TOO_STALE` and
+   Stars / USDT-priced routes refuse with the existing `FX_UNAVAILABLE` message. No rate is
+   ever invented. The R5B backoff and the one-alert-per-outage dedupe are unchanged.
+
+**Not built:** Bitpin, Tabdeal and Ramzinex adapters (`OQ-FX-04`: official docs unreachable).
