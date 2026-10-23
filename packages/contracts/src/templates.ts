@@ -9452,7 +9452,7 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.gateway_receipt_prompt',
     description:
-      'TonPays Telegram: asks for ONE photo of the transfer receipt (a photo only — no file, PDF or video — at most five megabytes), until the stated time. The next photo the customer sends in this bot goes to TonPays for this payment.',
+      'TonPays Telegram: asks for ONE image of the transfer receipt (a photo, or an image in JPEG, PNG, WebP or GIF — no video or other document — at most ten megabytes), until the stated time. The next image the customer sends in this bot goes to TonPays for this payment.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
@@ -9474,14 +9474,664 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.gateway_receipt_photo_only',
     description:
-      'TonPays Telegram: the customer sent something other than a photo while a receipt was requested. Asks for the receipt as a photo; nothing was stored or sent.',
+      'TonPays Telegram: the customer sent something other than a photo or a JPEG, PNG, WebP or GIF image while a receipt was requested. Asks for the receipt as an image; nothing was stored or sent.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
   {
     key: 'bot.payment.gateway_receipt_too_large',
     description:
-      'TonPays Telegram: the photo is larger than five megabytes. Asks for a smaller photo; nothing was stored or sent.',
+      'TonPays Telegram: the image is larger than ten megabytes. Asks for a smaller image; nothing was stored or sent.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_card_underpaid',
+    description:
+      'TonPays Telegram: the transfer was LESS than the invoice (`action_required_less`). Shows the remainder, the card to pay it to (tap-to-copy buttons under the message) and the deadline. The invoice is never shown as plain open, and nothing is settled until TonPays approves.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'shortfall',
+        type: 'MONEY',
+        description:
+          'The amount still to be transferred, in Toman, as TonPays reported it (`remaining_amount`). TonPays’ figure for the next transfer — never what Nexa settles or credits.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'cardNumber',
+        type: 'STRING',
+        description:
+          'The payee card TonPays named for this attempt, exactly as it sent it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'cardName',
+        type: 'STRING',
+        description:
+          'The card holder’s name TonPays sent, when it sent one.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description:
+          'The end of the customer’s window to pay and send the receipt (Nexa’s seventy-minute deadline).',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_card_underpaid_receipt_sent',
+    description:
+      'TonPays Telegram: the receipt for the REMAINDER was sent and TonPays has not answered yet. Nothing is approved by this message.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'shortfall',
+        type: 'MONEY',
+        description:
+          'The amount still to be transferred (`remaining_amount`), when TonPays reported one. TonPays’ figure — never what Nexa settles.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description:
+          'The end of the customer’s window to pay and send the receipt (Nexa’s seventy-minute deadline).',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_card_underpaid_unavailable',
+    description:
+      'TonPays Telegram: TonPays reported an underpayment but its answer carried no usable remainder card or invoice, so the customer is told the details are not available yet and asked to check again. Nothing is approved.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description:
+          'The end of the customer’s window to pay and send the receipt (Nexa’s seventy-minute deadline).',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_card_overpaid',
+    description:
+      'TonPays Telegram: the transfer was MORE than the invoice (`action_required_more`). Asks the customer to register the card the extra amount is to be returned to. Nothing is settled until TonPays approves, and the wallet is credited with the order principal only.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'refundAmount',
+        type: 'MONEY',
+        description:
+          'The overpaid amount TonPays says it will return (`refund_amount`), when it reported one. TonPays’ figure — never credited to the wallet.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description:
+          'The end of the customer’s window to pay and send the receipt (Nexa’s seventy-minute deadline).',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_card_overpaid_pending',
+    description:
+      'TonPays Telegram: the refund request for the overpayment is with TonPays (or TonPays reports it pending). The card is not shown. Nothing is approved by this message.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'refundAmount',
+        type: 'MONEY',
+        description:
+          'The overpaid amount TonPays says it will return (`refund_amount`), when it reported one. TonPays’ figure — never credited to the wallet.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'maskedCard',
+        type: 'STRING',
+        description:
+          'The refund card as stored: the first six and last four digits, the rest hidden. The full number is never shown or stored.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description:
+          'The end of the customer’s window to pay and send the receipt (Nexa’s seventy-minute deadline).',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_refund_card_prompt',
+    description:
+      'TonPays Telegram: asks for the refund card number (first line) and the card holder’s name (second line) in ONE message. The reply is validated locally and never stored as typed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_refund_card_invalid',
+    description:
+      'TonPays Telegram: the refund card text was not valid (not a 16-digit card number, or a holder name with anything but letters). Nothing was stored or sent; the customer is asked again.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_refund_requested',
+    description:
+      'TonPays Telegram: the refund card was accepted locally and the request is queued for the gateway worker. Shows the card masked.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'maskedCard',
+        type: 'STRING',
+        description:
+          'The refund card as stored: the first six and last four digits, the rest hidden. The full number is never shown or stored.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_refund_not_allowed',
+    description:
+      'TonPays Telegram (`REFUND_NOT_ALLOWED`): TonPays does not allow a refund for this invoice.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_refund_card_refused',
+    description:
+      'TonPays Telegram (`INVALID_REFUND_CARD`): TonPays did not accept the card number. The customer may register it again.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_refund_holder_refused',
+    description:
+      'TonPays Telegram (`INVALID_REFUND_HOLDER`): TonPays did not accept the card holder’s name. The customer may register it again.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_refund_already_open',
+    description:
+      'TonPays Telegram (`REFUND_ALREADY_OPEN`): a refund is already open for this invoice, so nothing more is sent.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_refund_unknown',
+    description:
+      'TonPays Telegram: the answer to the refund request was lost. It is never sent again automatically; the customer is told to check the status or contact support.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_cancel_confirm',
+    description:
+      'TonPays Telegram: the question before cancelling a PENDING invoice. Cancelling is final for that invoice.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_cancel_requested',
+    description:
+      'TonPays Telegram: the cancel request is with TonPays; the result replaces this message.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_cancelled',
+    description:
+      'TonPays Telegram: the invoice was cancelled at the customer’s request. No amount was recorded.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_cancel_not_allowed_processing',
+    description:
+      'TonPays Telegram (`CANCEL_NOT_ALLOWED_PROCESSING`): the invoice cannot be cancelled because TonPays is checking a receipt.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_cancel_not_allowed_less',
+    description:
+      'TonPays Telegram (`CANCEL_NOT_ALLOWED_NEED_ACTION_LESS`): the invoice cannot be cancelled because it was underpaid and the remainder is due.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_cancel_not_allowed_more',
+    description:
+      'TonPays Telegram (`CANCEL_NOT_ALLOWED_NEED_ACTION_MORE`): the invoice cannot be cancelled because it was overpaid and a refund card is due.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_not_pending',
+    description:
+      'TonPays Telegram (`NOT_PENDING`, `CANCEL_NOT_ALLOWED_*` with no better words): the invoice is no longer waiting for payment, so the request was not applied.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_cancel_unknown',
+    description:
+      'TonPays Telegram: the answer to the cancel request was lost. It is never sent again automatically.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_buyer_pending',
+    description:
+      'TonPays Telegram (`BUYER_HAS_PENDING_INVOICE`): a new invoice could not be made because the customer already holds an open pending invoice that could not be cancelled here. A button opens that invoice when Nexa knows it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_buyer_processing',
+    description:
+      'TonPays Telegram (`BUYER_HAS_PROCESSING_INVOICE`): a new invoice could not be made because the customer’s open invoice is being checked by TonPays.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_buyer_less',
+    description:
+      'TonPays Telegram (`BUYER_HAS_NEED_ACTION_LESS`): a new invoice could not be made because the customer’s open invoice was underpaid and the remainder is due.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_buyer_more',
+    description:
+      'TonPays Telegram (`BUYER_HAS_NEED_ACTION_MORE`): a new invoice could not be made because the customer’s open invoice was overpaid and a refund card is due.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_card_rejected',
+    description:
+      'TonPays Telegram: TonPays rejected the payment and gave reasons (`reject_reasons`), shown to the customer as TonPays worded them after sanitising. Nothing was credited.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reasons',
+        type: 'STRING',
+        description:
+          'The reasons TonPays gave for rejecting the payment (`reject_reasons`), sanitised and joined by line breaks. TonPays’ own words.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_card_receipt_empty',
+    description:
+      'TonPays Telegram (`EMPTY_RECEIPT`): the image reached TonPays empty. The customer is asked to send the receipt again; the card is shown again.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'payable',
+        type: 'MONEY',
+        description:
+          'What the transfer must be: the payment’s own payable (principal plus any fee), from Nexa’s snapshot.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'cardNumber',
+        type: 'STRING',
+        description:
+          'The payee card TonPays named for this attempt, exactly as it sent it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'cardName',
+        type: 'STRING',
+        description:
+          'The card holder’s name TonPays sent, when it sent one.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description:
+          'The end of the customer’s window to pay and send the receipt (Nexa’s seventy-minute deadline).',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_card_receipt_invoice',
+    description:
+      'TonPays Telegram (`INVOICE_ID_MISMATCH`, `REMAINDER_INVOICE_MISSING`): TonPays could not match the receipt to the invoice it was sent for. The customer is told to check the status again.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'payable',
+        type: 'MONEY',
+        description:
+          'What the transfer must be: the payment’s own payable (principal plus any fee), from Nexa’s snapshot.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'cardNumber',
+        type: 'STRING',
+        description:
+          'The payee card TonPays named for this attempt, exactly as it sent it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'cardName',
+        type: 'STRING',
+        description:
+          'The card holder’s name TonPays sent, when it sent one.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description:
+          'The end of the customer’s window to pay and send the receipt (Nexa’s seventy-minute deadline).',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_cancel_button',
+    description:
+      'TonPays Telegram: the button that asks to cancel a pending invoice (a confirmation follows). Drawn only while the invoice is pending.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_cancel_confirm_button',
+    description:
+      'TonPays Telegram: the button that confirms cancelling the invoice; it records a request the gateway worker sends.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_remainder_receipt_button',
+    description:
+      'TonPays Telegram: the button that opens the receipt prompt for the REMAINDER of an underpaid invoice. The receipt goes to TonPays, never to this installation’s manual review.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_refund_card_button',
+    description:
+      'TonPays Telegram: the button that asks for the refund card of an overpaid invoice.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.gateway_open_invoice_button',
+    description:
+      'TonPays Telegram: opens the customer’s other open invoice that stopped a new one from being made.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

@@ -31,6 +31,9 @@ export const TONPAYS_STATUSES = [
   'processing',
   'completed',
   'need_action',
+  // Custom Telegram API (Round 6): the transfer was less / more than the invoice.
+  'action_required_less',
+  'action_required_more',
   'rejected',
   'expired',
   'canceled',

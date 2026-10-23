@@ -167,6 +167,8 @@ export const PROVIDER_STATUS_LABELS: Readonly<Record<string, WebKey>> = {
   processing: 'web.pay_provider_processing',
   completed: 'web.pay_provider_completed',
   need_action: 'web.pay_provider_need_action',
+  action_required_less: 'web.pay_provider_action_required_less',
+  action_required_more: 'web.pay_provider_action_required_more',
   rejected: 'web.pay_provider_rejected',
   expired: 'web.pay_provider_expired',
   canceled: 'web.pay_provider_canceled',

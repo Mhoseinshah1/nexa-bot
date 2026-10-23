@@ -194,6 +194,13 @@ export const INLINE_BUTTONS = [
   button('payment.gateway_card_check', 'PAYMENT', 'bot.payment.gateway_card_check_button'),
   button('payment.gateway_receipt', 'PAYMENT', 'bot.payment.gateway_receipt_button'),
   button('payment.gateway_change_card', 'PAYMENT', 'bot.payment.gateway_change_card_button'),
+  // Round 6 (TonPays Telegram): cancel a pending invoice, the remainder's receipt, the refund
+  // card of an overpayment, and the way to an open invoice that blocked a new one.
+  button('payment.gateway_cancel', 'PAYMENT', 'bot.payment.gateway_cancel_button'),
+  button('payment.gateway_cancel_confirm', 'PAYMENT', 'bot.payment.gateway_cancel_confirm_button'),
+  button('payment.gateway_remainder_receipt', 'PAYMENT', 'bot.payment.gateway_remainder_receipt_button'),
+  button('payment.gateway_refund_card', 'PAYMENT', 'bot.payment.gateway_refund_card_button'),
+  button('payment.gateway_open_invoice', 'PAYMENT', 'bot.payment.gateway_open_invoice_button'),
   // R4 A1: «🔄 تغییر شماره کارت» on the card-to-card invoice — the NEXT enabled receiving
   // card, edited into the same message. Not the TonPays card change above, which asks a
   // provider: this one rotates through the tenant's own accounts.

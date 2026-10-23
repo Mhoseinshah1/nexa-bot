@@ -144,7 +144,7 @@ describe('the TonPays Telegram adapter: create', () => {
     });
   });
 
-  it('TPTG-15 / §11: classifies the nine documented codes deliberately; the merchant configuration is never the customer’s payment', async () => {
+  it('TPTG-15 / §11: classifies the documented codes deliberately; the merchant configuration is never the customer’s payment', async () => {
     const expected: Record<string, unknown> = {
       WRONG_API_KEY_KIND: { kind: 'REFUSED', configuration: true },
       GATEWAY_NOT_APPROVED: { kind: 'REFUSED', configuration: true },
@@ -155,6 +155,27 @@ describe('the TonPays Telegram adapter: create', () => {
       RECEIPT_TOO_LARGE: { kind: 'REFUSED', configuration: false },
       RATE_LIMIT_EXCEEDED: { kind: 'RATE_LIMITED' },
       INVOICE_NOT_FOUND: { kind: 'REFUSED', configuration: false },
+      // Round 6 (document page 20): every other documented code is a readable refusal that
+      // names no merchant fault — a create is never retried on any of them.
+      ...Object.fromEntries(
+        [
+          'INVOICE_ID_MISMATCH',
+          'NOT_PENDING',
+          'REMAINDER_INVOICE_MISSING',
+          'EMPTY_RECEIPT',
+          'CANCEL_NOT_ALLOWED_PROCESSING',
+          'CANCEL_NOT_ALLOWED_NEED_ACTION_LESS',
+          'CANCEL_NOT_ALLOWED_NEED_ACTION_MORE',
+          'BUYER_HAS_PENDING_INVOICE',
+          'BUYER_HAS_PROCESSING_INVOICE',
+          'BUYER_HAS_NEED_ACTION_LESS',
+          'BUYER_HAS_NEED_ACTION_MORE',
+          'REFUND_NOT_ALLOWED',
+          'INVALID_REFUND_CARD',
+          'INVALID_REFUND_HOLDER',
+          'REFUND_ALREADY_OPEN',
+        ].map((code) => [code, { kind: 'REFUSED', configuration: false }]),
+      ),
     };
     expect(Object.keys(expected).sort()).toEqual([...TONPAYS_TELEGRAM_ERROR_CODES].sort());
     for (const code of TONPAYS_TELEGRAM_ERROR_CODES) {

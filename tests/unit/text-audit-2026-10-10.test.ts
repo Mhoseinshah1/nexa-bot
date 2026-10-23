@@ -339,13 +339,21 @@ describe('part 2 pins (brief §C3, §C4, §C5)', () => {
     expect(text).not.toContain('زمان باقی‌ماندهٔ سرویس در این مدت متوقف نمی‌شود');
   });
 
-  it('Codex P2: a receipt must go as a photo, not as a document, and the customer is told so', () => {
-    // `receivePhoto` returns PHOTO_ONLY for an image sent as a Telegram DOCUMENT; «تصویر»
-    // alone describes what the customer already did.
-    expect(body('bot.payment.gateway_receipt_photo_only')).toContain('به‌صورت عکس');
-    expect(body('bot.payment.gateway_receipt_photo_only')).toContain('نه به‌صورت سند');
-    expect(body('bot.payment.gateway_receipt_prompt')).toContain('به‌صورت عکس');
-    expect(body('bot.payment.gateway_receipt_prompt')).toContain('نه به‌صورت سند');
+  it('Round 6: a receipt is a photo or an image in JPEG, PNG, WebP or GIF, and the customer is told so', () => {
+    // `receivePhoto` accepts a PHOTO and a DOCUMENT whose declared type is one of the provider's
+    // four image types (PHOTO_ONLY is now "not an image"). The old rule said documents were
+    // refused; the provider's current document lists WebP and GIF, which Telegram only delivers
+    // as documents, so both texts name the four formats.
+    for (const key of [
+      'bot.payment.gateway_receipt_photo_only',
+      'bot.payment.gateway_receipt_prompt',
+    ] as const) {
+      expect(body(key)).toContain('JPEG');
+      expect(body(key)).toContain('PNG');
+      expect(body(key)).toContain('WebP');
+      expect(body(key)).toContain('GIF');
+    }
+    expect(body('bot.payment.gateway_receipt_prompt')).toContain('۱۰ مگابایت');
   });
 
   it('C3 service card: the username is labelled as one, and no decoration inside a value', () => {
