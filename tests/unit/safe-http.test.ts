@@ -484,12 +484,20 @@ describe('the outbound client — content encoding (Round 6)', () => {
   });
 
   it('refuses an encoding it cannot decode, with a failure and the status', async () => {
-    route = () => ({ status: 200, headers: { 'content-encoding': 'zstd' }, raw: Buffer.from(json) });
+    route = () => ({
+      status: 200,
+      headers: { 'content-encoding': 'zstd' },
+      raw: Buffer.from(json),
+    });
     expect(await get()).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE', status: 200 });
   });
 
   it('refuses a body that claims gzip and is not', async () => {
-    route = () => ({ status: 200, headers: { 'content-encoding': 'gzip' }, raw: Buffer.from(json) });
+    route = () => ({
+      status: 200,
+      headers: { 'content-encoding': 'gzip' },
+      raw: Buffer.from(json),
+    });
     expect(await get()).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
   });
 
