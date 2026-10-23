@@ -15,7 +15,7 @@ import {
   SETTINGS_MANAGED_ELSEWHERE,
   SETTINGS_RETIRED,
 } from '../../apps/web/src/settings-presentation';
-import { t } from '../../apps/web/src/i18n/web.fa';
+import { WEB_FA, t, type WebKey } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, setting, stubApi } from './harness';
 import { openSettingsGroupOf, settingsTabs } from './settings-tabs';
 
@@ -149,7 +149,19 @@ describe('the settings page', () => {
         `English description of ${definition.key} on the page`,
       ).toBe(false);
     }
-    expect(text).not.toContain('منبع');
+    /*
+     * «منبع» is the word of the value-source badge, which must not appear. The exchange-rate
+     * settings legitimately use it for an exchange (the owner's own label «پذیرش نرخ از یک
+     * منبع», Round 6), so their Persian texts are taken out before the check: it still
+     * catches the badge anywhere else on the page.
+     */
+    let withoutFxTexts = text;
+    for (const key of Object.keys(WEB_FA)) {
+      if (key.startsWith('web.setting_fx_')) {
+        withoutFxTexts = withoutFxTexts.split(t(key as WebKey)).join('');
+      }
+    }
+    expect(withoutFxTexts).not.toContain('منبع');
     expect(text).not.toContain('پیش‌فرض');
     expect(text).not.toContain('معنای صفر یا خالی');
     expect(text).not.toContain('صفر یک مقدار عادی است');
