@@ -5101,6 +5101,15 @@ export const gatewayInvoices = pgTable(
       'gateway_invoices_centralpay_check',
       sql`provider <> 'CENTRALPAY' OR (provider_unit = 'IRT' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND provider_user_id IS NOT NULL AND provider_order_id ~ '^[0-9]{10}$')`,
     ),
+    /**
+     * A TetraPay attempt is billed in RIAL with no conversion and no bot (the adapter owns the
+     * exact x10 unit change from the Toman payable), and its order id is the provider's
+     * documented shape: 1-64 characters of `[A-Za-z0-9_.:-]`.
+     */
+    check(
+      'gateway_invoices_tetrapay_check',
+      sql`provider <> 'TETRAPAY' OR (provider_unit = 'IRR' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND provider_order_id ~ '^[A-Za-z0-9_.:-]{1,64}$')`,
+    ),
     check(
       'gateway_invoices_provider_user_id_check',
       sql`provider_user_id IS NULL OR (provider = 'CENTRALPAY' AND provider_user_id ~ '^[0-9]{10}$')`,
@@ -5612,6 +5621,14 @@ export const paymentGateways = pgTable(
      * changing it never alters an invoice already open. There is no FX feed.
      */
     providerUnitRateMinor: bigint('provider_unit_rate_minor', { mode: 'bigint' }),
+    /**
+     * Round 6 item 6: the instant until which the provider's own daily limit hides this route
+     * (TetraPay's `DAILY_LIMIT_REACHED`; the next 00:00 Tehran). NULL: not hidden. The route is
+     * not offered while `hidden_until > now`, and returns by itself — nothing clears it. It is
+     * NOT `status`: DISABLED is the operator's word, this is the provider's, and the operator's
+     * switch is untouched by it.
+     */
+    hiddenUntil: timestamptz('hidden_until'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
