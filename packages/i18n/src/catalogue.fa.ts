@@ -151,9 +151,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // this is that change: `/catalog` answers, so it is named. Payment is NOT mentioned,
   // because a customer cannot pay yet and an instruction they cannot follow is the
   // defect this comment was written about.
+  // R6 item 3: the owner's greetings. Every variable is filled at send time from the receiving
+  // customer's own data; the «🛒 خرید اشتراک» and «🧪 سرویس تست» names are the main-menu buttons'.
   'bot.start.welcome':
-    'خوش آمدید. حساب شما در این ربات ساخته شد. برای دیدن سرویس‌ها دستور /catalog را بفرستید.',
-  'bot.start.welcome_back': 'خوش آمدید. برای دیدن سرویس‌های قابل خرید دستور /catalog را بفرستید.',
+    'ZED PROXY\n━━━━━━━━━━━━\n{firstName} عزیز، خوش آمدید.\n\n✓ اتصال پایدار با لوکیشن‌های متنوع\n✓ کار با همه اپ‌های داخلی بدون خاموش کردن فیلترشکن\n✓ سرویس تست رایگان قبل از خرید\n✓ پشتیبانی از داخل همین ربات\n\nبرای شروع از منوی پایین «🛒 خرید اشتراک» یا «🧪 سرویس تست» را بزنید.',
+  'bot.start.welcome_back':
+    '👋 سلام {firstName}، خوش برگشتی\n\n📱 {activeServices} سرویس فعال داری\n{icon:time} نزدیک‌ترین انقضا: {nearestExpiry}\n\nاگه سرویست داره تموم می‌شه، از «📱 سرویس‌های من» همین الان تمدیدش کن تا وسط کار قطع نشی 🔄',
   'bot.blocked': 'دسترسی این حساب به ربات بسته شده است.',
   // Package B: mandatory channel membership.
   'bot.channels.join_required':
@@ -768,6 +771,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.switch_card_cooldown': 'لطفاً {seconds} ثانیه دیگر دوباره امتحان کنید',
   'bot.payment.switch_card_refused': 'امکان تغییر کارت دیگری برای این پرداخت وجود ندارد',
   'bot.payment.copy_amount_button': '💵 کپی مبلغ',
+  'bot.payment.copy_transfer_amount_button': '📋 کپی مبلغ دقیق',
   'bot.payment.wallet_button': '💰 پرداخت از کیف پول',
   'bot.payment.manual_button': '🧾 ثبت پرداخت',
   /*
@@ -1271,13 +1275,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_closed':
     'این فاکتور دیگر قابل پرداخت نیست (مهلت آن تمام شده یا بسته شده است). برای پرداخت می‌توانید دوباره اقدام کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_invoice':
-    '{icon:invoice} فاکتور پرداخت کارت‌به‌کارت تون‌پی\n\n{icon:amount} مبلغ بدون کارمزد: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n🔢 مبلغ دقیق واریز اعلام‌شده توسط تون‌پی: {transferAmount}\n\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nمبلغ را به این کارت واریز کنید و سپس با دکمهٔ «📤 ارسال رسید» تصویر رسید را بفرستید. پرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
+    '{icon:invoice} فاکتور پرداخت کارت‌به‌کارت تون‌پی\n\n{icon:amount} مبلغ بدون کارمزد: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n🔢 مبلغ دقیق واریز (با یک لمس کپی می‌شود): <code>{transferAmount}</code> تومان\nتأیید خودکار فقط با واریز همین مبلغ دقیق انجام می‌شود.\n\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nمبلغ دقیق را به این کارت واریز کنید و سپس با دکمهٔ «📤 ارسال رسید» تصویر رسید را بفرستید. پرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_receipt_sent':
-    '📤 رسید واریز شما برای تون‌پی ارسال شده و در انتظار پاسخ است.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت: {expiresAt}\n\nپرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود. برای دیدن آخرین وضعیت، دکمهٔ «🔎 بررسی وضعیت» را بزنید.\n\nکد پیگیری پرداخت: {reference}',
+    '📤 رسید واریز شما برای تون‌پی ارسال شده و در انتظار پاسخ است.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n🔢 مبلغ دقیق واریز: <code>{transferAmount}</code> تومان\n{icon:time} مهلت: {expiresAt}\n\nپرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود. برای دیدن آخرین وضعیت، دکمهٔ «🔎 بررسی وضعیت» را بزنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_receipt_refused':
-    '{icon:warning} تون‌پی آخرین تصویر را به‌عنوان رسید نپذیرفت یا ارسال آن ممکن نشد. لطفاً تصویر واضح رسید واریز را دوباره بفرستید.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
+    '{icon:warning} تون‌پی آخرین تصویر را به‌عنوان رسید نپذیرفت یا ارسال آن ممکن نشد. لطفاً تصویر واضح رسید واریز را دوباره بفرستید.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n🔢 مبلغ دقیق واریز: <code>{transferAmount}</code> تومان\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_changing':
-    '🔄 درخواست کارت جدید برای تون‌پی ارسال شد. کارت جدید به‌محض آماده شدن در همین پیام نمایش داده می‌شود.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
+    '🔄 درخواست کارت جدید برای تون‌پی ارسال شد. کارت جدید به‌محض آماده شدن در همین پیام نمایش داده می‌شود.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n🔢 مبلغ دقیق واریز فعلی: <code>{transferAmount}</code> تومان\nاگر با کارت جدید مبلغ دقیق تغییر کند، همین‌جا به‌روز می‌شود؛ پیش از واریز دوباره آن را ببینید.\n{icon:time} مهلت: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_unconfirmed':
     'پاسخ تون‌پی برای تعویض کارت دریافت نشد، بنابراین شمارهٔ کارتی نمایش داده نمی‌شود.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت: {expiresAt}\n\nاگر پیش‌تر واریز کرده‌اید، تصویر رسید آن را بفرستید؛ در غیر این صورت وضعیت را بررسی کنید یا پس از یک دقیقه دوباره کارت جدید بخواهید. از این پرداخت مبلغی ثبت نشده است.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_missing':

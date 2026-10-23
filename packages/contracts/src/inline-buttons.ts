@@ -181,6 +181,8 @@ export const INLINE_BUTTONS = [
   button('payment.route_gift', 'PAYMENT', 'bot.wallet.topup_method_gift_button'),
   button('payment.copy_card', 'PAYMENT', 'bot.payment.copy_card_button', 'COPY'),
   button('payment.copy_amount', 'PAYMENT', 'bot.payment.copy_amount_button', 'COPY'),
+  // R6 item 2: «📋 کپی مبلغ دقیق» on a TonPays card invoice — the exact odd amount, bare digits.
+  button('payment.copy_transfer_amount', 'PAYMENT', 'bot.payment.copy_transfer_amount_button', 'COPY'),
   button('payment.sent', 'PAYMENT', 'bot.payment.sent_button'),
   button('payment.cancel', 'PAYMENT', 'bot.payment.cancel_button'),
   button('payment.cancel_confirm', 'PAYMENT', 'bot.payment.cancel_confirm_button'),

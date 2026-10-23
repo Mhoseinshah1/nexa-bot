@@ -458,7 +458,12 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   targetLimit: 'تعداد مجاز پس از افزایش',
   telegram: 'اتصال تلگرام',
   telegramId: 'شناسهٔ عددی تلگرام',
-  transferAmount: 'مبلغ واریز اعلام‌شده توسط تون پی',
+  transferAmount: 'مبلغ دقیق واریز (فقط ارقام)',
+  firstName: 'نام کوچک مشتری',
+  weekday: 'نام روز هفته',
+  nearestExpiry: 'نزدیک‌ترین انقضا',
+  date: 'تاریخ امروز (شمسی)',
+  time: 'ساعت (به وقت تهران)',
   telegramIdRandom: 'نشانهٔ انتخاب شناسهٔ تلگرام + تصادفی',
   template: 'الگو',
   tenantId: 'شناسهٔ مستأجر',
@@ -786,7 +791,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.start.welcome_back': [
     'خوش‌آمد به مشتری قدیمی',
-    'پیام شروع برای مشتری‌ای که پیش‌تر از ربات استفاده کرده است.',
+    'پیام شروع برای مشتری‌ای که پیش‌تر از ربات استفاده کرده است. با متغیرهایی مثل {firstName} و {activeServices} که هنگام ارسال از اطلاعات خود همان مشتری پر می‌شوند.',
   ],
   'bot.command.start': [
     'توضیح دستور /start در فهرست دستورها',
@@ -1377,6 +1382,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.payment.copy_card_button': [
     'دکمهٔ کپی شمارهٔ کارت',
     'دکمه‌ای که شمارهٔ کارت را در حافظهٔ گوشی مشتری کپی می‌کند.',
+  ],
+  'bot.payment.copy_transfer_amount_button': [
+    'دکمهٔ کپی مبلغ دقیق',
+    'دکمه‌ای در فاکتور کارت‌به‌کارت تون پی که مبلغ دقیق واریز را فقط با ارقام و بدون جداکننده کپی می‌کند.',
   ],
   'bot.payment.copy_amount_button': [
     'دکمهٔ کپی مبلغ',
