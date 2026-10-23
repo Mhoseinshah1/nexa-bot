@@ -10,16 +10,16 @@ import {
   TETRAPAY_METHODS,
   TETRAPAY_CALL_BUDGET_PER_MINUTE,
   TETRAPAY_CODE_PREFIX,
-  TETRAPAY_CONFIGURATION_ERROR_CODES,
+  TETRAPAY_CONFIGURATION_ERRORS,
   TETRAPAY_CREATE_PATH,
   TETRAPAY_DAILY_LIMIT_STORED,
-  TETRAPAY_ERROR_CODES,
+  TETRAPAY_PROVIDER_ERRORS,
   TETRAPAY_INQUIRY_BUDGET_PER_MINUTE,
   TETRAPAY_AMOUNT_UNIT,
   TETRAPAY_VERIFY_PATH_SUFFIX,
   type Money,
   type ResolvedConversion,
-  type TetraPayErrorCode,
+  type TetraPayProviderError,
 } from '@nexa/contracts';
 import { assertOutsideTransaction } from '../../../../infrastructure/transaction-boundary.js';
 import type {
@@ -142,8 +142,8 @@ function errorCodeOf(body: unknown): string | null {
   return typeof code === 'string' && CODE_TEXT.test(code) ? code : null;
 }
 
-function isDocumentedCode(code: string): code is TetraPayErrorCode {
-  return (TETRAPAY_ERROR_CODES as readonly string[]).includes(code);
+function isDocumentedCode(code: string): code is TetraPayProviderError {
+  return (TETRAPAY_PROVIDER_ERRORS as readonly string[]).includes(code);
 }
 
 /** The Toman figure of a rial bound the provider named, or 0 (unknown / not whole Toman). */
@@ -359,7 +359,7 @@ export class TetraPayAdapter implements ExternalGatewayAdapter {
         return {
           kind: 'REFUSED',
           code: stored,
-          configuration: (TETRAPAY_CONFIGURATION_ERROR_CODES as readonly string[]).includes(code),
+          configuration: (TETRAPAY_CONFIGURATION_ERRORS as readonly string[]).includes(code),
           httpStatus: raw.status,
         };
     }

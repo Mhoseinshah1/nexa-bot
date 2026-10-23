@@ -46,8 +46,12 @@ export const TETRAPAY_EVENT_HEADER = 'x-tetrapay-event';
 export const TETRAPAY_PAID_EVENT = 'payment.paid';
 export const TETRAPAY_ORDER_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/u;
 
-/** The documented error codes (§9), carried as `{ "error": { "code", "message", ... } }`. */
-export const TETRAPAY_ERROR_CODES = [
+/**
+ * The documented provider error codes (§9). Named `..._PROVIDER_ERRORS`, not `..._ERROR_CODES`, on
+ * purpose: these are a PROVIDER's words stored on an attempt, not codes this API raises, so they
+ * are not an API error catalogue the Web Admin's error-text table must cover (it labels them
+ * through `PROVIDER_CODE_LABELS` instead). Carried as `{ "error": { "code", "message", ... } }`. */
+export const TETRAPAY_PROVIDER_ERRORS = [
   'UNAUTHORIZED',
   'GATEWAY_SUSPENDED',
   'NO_METHOD_AVAILABLE',
@@ -64,7 +68,7 @@ export const TETRAPAY_ERROR_CODES = [
   'BAD_JSON',
   'INTERNAL',
 ] as const;
-export type TetraPayErrorCode = (typeof TETRAPAY_ERROR_CODES)[number];
+export type TetraPayProviderError = (typeof TETRAPAY_PROVIDER_ERRORS)[number];
 
 /** The prefix Nexa puts on a TetraPay code it stores, so no code collides with another route's. */
 export const TETRAPAY_CODE_PREFIX = 'tetrapay.';
@@ -74,7 +78,7 @@ export const TETRAPAY_CODE_PREFIX = 'tetrapay.';
  * an operational condition for the operator and the customer is told the method is unavailable.
  * `GATEWAY_SUSPENDED` refuses a CREATE only (§9): the inquiry and verify keep working.
  */
-export const TETRAPAY_CONFIGURATION_ERROR_CODES: readonly TetraPayErrorCode[] = [
+export const TETRAPAY_CONFIGURATION_ERRORS: readonly TetraPayProviderError[] = [
   'UNAUTHORIZED',
   'GATEWAY_SUSPENDED',
   'NO_METHOD_AVAILABLE',
