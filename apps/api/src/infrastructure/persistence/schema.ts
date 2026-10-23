@@ -4929,6 +4929,12 @@ export const gatewayInvoices = pgTable(
      * against what was SENT. Write-once (`nexa_gateway_invoices_provider_user_guard`).
      */
     providerUserId: text('provider_user_id'),
+    /**
+     * Round 6 item 6: how a paid link was paid, as TetraPay's verify reported it (`online` or
+     * `card`). Diagnostic metadata for the operations log; it never decides anything. NULL until
+     * a verify says, and for every other route.
+     */
+    providerMethod: text('provider_method'),
     /*
      * A crypto route's figures (NOWPayments, R5C-2 C4), as the provider's own payment record
      * reported them on an inquiry that already ran: the coin, the amount it asked the payer
@@ -5109,6 +5115,10 @@ export const gatewayInvoices = pgTable(
     check(
       'gateway_invoices_tetrapay_check',
       sql`provider <> 'TETRAPAY' OR (provider_unit = 'IRR' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND provider_order_id ~ '^[A-Za-z0-9_.:-]{1,64}$')`,
+    ),
+    check(
+      'gateway_invoices_provider_method_check',
+      sql`provider_method IS NULL OR (provider = 'TETRAPAY' AND provider_method IN ('online', 'card'))`,
     ),
     check(
       'gateway_invoices_provider_user_id_check',

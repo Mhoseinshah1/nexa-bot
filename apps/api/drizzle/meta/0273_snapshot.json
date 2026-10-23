@@ -1,5 +1,5 @@
 {
-  "id": "cabfe78c-a6c6-47fe-b266-97a3bc291861",
+  "id": "f79ef337-183d-47cd-9a98-cf46010c0aac",
   "prevId": "570cb69d-08c5-4f95-98c3-2756e86a4019",
   "version": "7",
   "dialect": "postgresql",
@@ -12119,6 +12119,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "provider_method": {
+          "name": "provider_method",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "crypto_pay_currency": {
           "name": "crypto_pay_currency",
           "type": "text",
@@ -12460,6 +12466,10 @@
         "gateway_invoices_tetrapay_check": {
           "name": "gateway_invoices_tetrapay_check",
           "value": "provider <> 'TETRAPAY' OR (provider_unit = 'IRR' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND provider_order_id ~ '^[A-Za-z0-9_.:-]{1,64}$')"
+        },
+        "gateway_invoices_provider_method_check": {
+          "name": "gateway_invoices_provider_method_check",
+          "value": "provider_method IS NULL OR (provider = 'TETRAPAY' AND provider_method IN ('online', 'card'))"
         },
         "gateway_invoices_provider_user_id_check": {
           "name": "gateway_invoices_provider_user_id_check",
