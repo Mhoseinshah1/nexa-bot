@@ -628,6 +628,20 @@ describe('TonPays Telegram, through the one settlement path', () => {
       ]);
     });
 
+    it('R6 item 2: a card change that names a new exact amount stores it; one that names none leaves the recorded figure', async () => {
+      const { paymentId } = await createdAttempt();
+      const before = (await invoiceOf(paymentId)) as unknown as { final_amount: string | null };
+      clock.shift(61_000);
+      fake.changeFinalAmount = 300_091;
+      expect(await askCard(paymentId)).toBe(true);
+      await pass();
+      const after = await rows<{ final_amount: string | null }>(
+        sql`SELECT final_amount::text AS final_amount FROM gateway_invoices WHERE payment_id = ${paymentId}`,
+      );
+      expect(after[0]?.final_amount).toBe('300091');
+      expect(before.final_amount).not.toBe('300091');
+    });
+
     it('FIX10 BUG-1: a card change whose processing throws keeps its lease as its back-off, and the request after it is applied in the same pass', async () => {
       const first = await createdAttempt();
       const second = await createdAttempt(300_000n);

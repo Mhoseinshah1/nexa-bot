@@ -7,6 +7,7 @@ import {
   PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MIN,
   formatBasisPointsPercent,
   parsePercentBasisPoints,
+  routeTakesCustomerFee,
   takesFixedRate,
   type PaymentGatewayListResponse,
   type PaymentGatewayProvider,
@@ -262,10 +263,11 @@ export function conversionRateOf(value: string): string | null | undefined {
   return minor === null || /^0+$/u.test(minor) ? undefined : minor;
 }
 
+/** Whether the route's form offers the customer fee: a gateway, and (R6 item 4) card-to-card. */
 export function takesCustomerFee(provider: string): boolean {
   return (
     provider in PAYMENT_GATEWAY_DESCRIPTORS &&
-    PAYMENT_GATEWAY_DESCRIPTORS[provider as PaymentGatewayProvider].settlesVia === 'GATEWAY'
+    routeTakesCustomerFee(provider as PaymentGatewayProvider)
   );
 }
 

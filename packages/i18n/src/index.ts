@@ -346,6 +346,7 @@ const PLACEHOLDER_EXPRESSION = /\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
  * part of correct Persian spelling.
  */
 const UNTRUSTED_STRIP =
+  // eslint-disable-next-line no-control-regex -- stripping control characters is the purpose
   /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B\u200D-\u200F\u2028-\u202E\u2060-\u206F\uFEFF\uE000-\uE002]/gu;
 
 /**
@@ -360,6 +361,7 @@ const UNTRUSTED_STRIP =
  */
 export function sanitizeUntrustedText(raw: string): string {
   const cleaned = raw
+    // eslint-disable-next-line no-control-regex -- line breaks become spaces
     .replace(/[\t\n\r\u000B\u000C\u0085\u2028\u2029]+/gu, ' ')
     .replace(UNTRUSTED_STRIP, '')
     .replace(/[<>]/gu, '')
@@ -447,9 +449,7 @@ export function renderTemplateBody(
   /** Absent: not supplied, or an untrusted value with nothing left once sanitised. */
   const isAbsent = (token: string): boolean => {
     const value = valueOf(token);
-    return (
-      value === undefined || (declared.get(token)?.untrusted === true && value === '')
-    );
+    return value === undefined || (declared.get(token)?.untrusted === true && value === '');
   };
   const absentOptional = (token: string): boolean => {
     const placeholder = declared.get(token);

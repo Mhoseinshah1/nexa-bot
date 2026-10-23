@@ -183,6 +183,7 @@ import type {
 } from '../../modules/commerce/payments/application/wallet-topup-flow.service.js';
 import type { CustomerScreenComposer } from '../../modules/commerce/messaging/application/customer-screens.js';
 import type { StartGreetingKey } from '../../modules/commerce/messaging/application/start-greeting.js';
+import { amountToTransfer } from '../../modules/commerce/payments/domain/amount-to-transfer.js';
 import type { ResellerService } from '../../modules/commerce/resellers/application/reseller.service.js';
 import type { ServiceRecord } from '../../modules/commerce/provisioning/application/ports.js';
 import type { OperatorServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
@@ -6783,7 +6784,8 @@ export class BotRuntime {
         label: {
           kind: 'TEXT' as const,
           text: paymentTrackingCode(item.payment),
-          amount: item.payment.amount,
+          // R6 item 4: what the customer had to transfer, which a receipt is checked against.
+          amount: amountToTransfer(item.payment),
         },
         data: `${ADMIN_RECEIPT_CALLBACK_PREFIX}${item.payment.id}`,
       })),
@@ -6917,7 +6919,7 @@ export class BotRuntime {
         key: 'bot.admin.credit_amount_prompt',
         values: {
           reference: paymentTrackingCode(opened.payment),
-          total: opened.payment.amount,
+          total: amountToTransfer(opened.payment),
           minutes: Math.round(ADMIN_AMOUNT_CAPTURE_TTL_MS / 60_000),
         },
         buttons: [creditCancelButton(opened.capture.id)],
@@ -6975,7 +6977,7 @@ export class BotRuntime {
            */
           return {
             key: 'bot.admin.credit_amount_invalid',
-            values: { total: result.payment.amount },
+            values: { total: amountToTransfer(result.payment) },
             buttons: [],
             orderId: null,
           };
@@ -6990,7 +6992,7 @@ export class BotRuntime {
               amount: result.amount,
               reference: paymentTrackingCode(result.payment),
               customer: result.customer?.telegramUserId ?? result.payment.customerId,
-              total: result.payment.amount,
+              total: amountToTransfer(result.payment),
             },
             buttons: [
               {
@@ -15605,7 +15607,8 @@ export class BotRuntime {
             },
             {
               ...inlineLabel('payment.copy_amount'),
-              copyText: plainAmount(payment.amount),
+              // R6 item 4: what must be TRANSFERRED - the payable, with any customer fee.
+              copyText: plainAmount(amountToTransfer(payment)),
               row: 0,
             },
           ];
@@ -15630,7 +15633,12 @@ export class BotRuntime {
           ? 'bot.payment.manual_instructions'
           : 'bot.payment.transfer_instructions',
       values: {
-        total: payment.amount,
+        // R6 item 4: the PAYABLE (principal plus the customer fee when the route charges
+        // one). The principal and the fee are shown apart, from this payment's own snapshot.
+        total: amountToTransfer(payment),
+        ...(payment.customerFee !== null && payment.customerFee.fee.amountMinor > 0n
+          ? { principal: payment.amount, fee: payment.customerFee.fee }
+          : {}),
         reference: paymentTrackingCode(payment),
         /*
          * Composed behind the application layer, by the renderer this surface is

@@ -828,32 +828,28 @@ export const TEMPLATES = [
       {
         token: 'telegramId',
         type: 'STRING',
-        description:
-          'The receiving customer’s numeric Telegram id.',
+        description: 'The receiving customer’s numeric Telegram id.',
         required: false,
         repeatable: false,
       },
       {
         token: 'date',
         type: 'STRING',
-        description:
-          'Today’s Jalali date in Tehran, e.g. «۲ آبان ۱۴۰۵», computed at send time.',
+        description: 'Today’s Jalali date in Tehran, e.g. «۲ آبان ۱۴۰۵», computed at send time.',
         required: false,
         repeatable: false,
       },
       {
         token: 'time',
         type: 'STRING',
-        description:
-          'The Tehran time of day, e.g. «۱۸:۳۰», computed at send time.',
+        description: 'The Tehran time of day, e.g. «۱۸:۳۰», computed at send time.',
         required: false,
         repeatable: false,
       },
       {
         token: 'weekday',
         type: 'STRING',
-        description:
-          'The Persian weekday name in Tehran, computed at send time.',
+        description: 'The Persian weekday name in Tehran, computed at send time.',
         required: false,
         repeatable: false,
       },
@@ -869,8 +865,7 @@ export const TEMPLATES = [
       {
         token: 'activeServices',
         type: 'NUMBER',
-        description:
-          'How many of the receiving customer’s services are serving now.',
+        description: 'How many of the receiving customer’s services are serving now.',
         required: false,
         repeatable: false,
       },
@@ -913,32 +908,28 @@ export const TEMPLATES = [
       {
         token: 'telegramId',
         type: 'STRING',
-        description:
-          'The receiving customer’s numeric Telegram id.',
+        description: 'The receiving customer’s numeric Telegram id.',
         required: false,
         repeatable: false,
       },
       {
         token: 'date',
         type: 'STRING',
-        description:
-          'Today’s Jalali date in Tehran, e.g. «۲ آبان ۱۴۰۵», computed at send time.',
+        description: 'Today’s Jalali date in Tehran, e.g. «۲ آبان ۱۴۰۵», computed at send time.',
         required: false,
         repeatable: false,
       },
       {
         token: 'time',
         type: 'STRING',
-        description:
-          'The Tehran time of day, e.g. «۱۸:۳۰», computed at send time.',
+        description: 'The Tehran time of day, e.g. «۱۸:۳۰», computed at send time.',
         required: false,
         repeatable: false,
       },
       {
         token: 'weekday',
         type: 'STRING',
-        description:
-          'The Persian weekday name in Tehran, computed at send time.',
+        description: 'The Persian weekday name in Tehran, computed at send time.',
         required: false,
         repeatable: false,
       },
@@ -954,8 +945,7 @@ export const TEMPLATES = [
       {
         token: 'activeServices',
         type: 'NUMBER',
-        description:
-          'How many of the receiving customer’s services are serving now.',
+        description: 'How many of the receiving customer’s services are serving now.',
         required: false,
         repeatable: false,
       },

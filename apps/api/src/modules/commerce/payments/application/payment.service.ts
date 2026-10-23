@@ -215,7 +215,11 @@ export interface PaymentServiceDeps {
    */
   readonly gateways: Pick<
     PaymentGatewayService,
-    'offer' | 'assertAmountAccepted' | 'methodIsOffered' | 'routesFor'
+    | 'offer'
+    | 'assertAmountAccepted'
+    | 'methodIsOffered'
+    | 'routesFor'
+    | 'manualTransferFeeBasisPoints'
   >;
   /** Freezes that destination onto the payment, in the same transaction. */
   readonly destinations: PaymentDestinationRepository;
@@ -712,6 +716,34 @@ export function paymentDeadline(
   const window = new Date(now.getTime() + windowMinutes * 60_000);
   if (orderExpiresAt === null) return window;
   return orderExpiresAt.getTime() < window.getTime() ? orderExpiresAt : window;
+}
+
+/**
+ * The customer's fee on one payment: the rate, the fee it makes on the principal (half-up, on
+ * `bigint`, by the one function in contracts) and the payable the invoice asks for. Used by
+ * the external gateways (WP18) and, since R6 item 4, the manual card-to-card route — one
+ * calculation, so the two cannot disagree about what "10 %" is. The principal stays the
+ * payment's `amount`.
+ *
+ * A payable past the largest amount a money column holds is refused HERE, as a domain answer,
+ * before anything is written (Codex review of #82): the principal and the rate each passed
+ * their own bound, their sum need not, and the database's numeric overflow is not an answer a
+ * customer or an operator can read.
+ */
+function customerFeeSnapshot(principal: Money, basisPoints: number): PaymentCustomerFee {
+  const fee = gatewayCustomerFeeMinor(principal.amountMinor, basisPoints);
+  if (principal.amountMinor > MAX_MONEY_AMOUNT_MINOR - fee) {
+    throw errors.conflict(
+      COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+      'This amount cannot be paid through this route.',
+      { reason: 'AMOUNT_NOT_REPRESENTABLE' },
+    );
+  }
+  return {
+    basisPoints,
+    fee: money(fee, principal.currency),
+    payable: money(principal.amountMinor + fee, principal.currency),
+  };
 }
 
 /** The administrator behind an actor, or null for a flow. `confirmed_by_admin_id` is an FK. */
@@ -1499,6 +1531,16 @@ export class PaymentService {
          */
         const account =
           already === undefined ? await this.deps.accounts.selectDestination(scope, tx) : null;
+        /*
+         * R6 item 4: the card-to-card route's customer fee, read here and snapshotted below,
+         * only when a NEW payment is created — a payment handed back keeps the snapshot it was
+         * issued with. Rate 0 snapshots nothing, so a route with no fee behaves exactly as it
+         * did before this existed.
+         */
+        const manualFeeBasisPoints =
+          already === undefined
+            ? await this.deps.gateways.manualTransferFeeBasisPoints(scope, 'SERVICE_PURCHASE', tx)
+            : 0;
         if (already === undefined && account === null) {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.PAYMENT_DESTINATION_UNCONFIGURED,
@@ -1544,6 +1586,10 @@ export class PaymentService {
                */
               gatewayProvider: 'MANUAL_TRANSFER',
               topupCashbackPercent: null,
+              // The fee beside the principal, frozen by 0124 once written (R6 item 4).
+              ...(manualFeeBasisPoints > 0
+                ? { customerFee: customerFeeSnapshot(order.totals.total, manualFeeBasisPoints) }
+                : {}),
               now,
             },
             tx,
@@ -1944,6 +1990,11 @@ export class PaymentService {
                */
               gatewayProvider: gateway.provider,
               topupCashbackPercent: gateway.topupCashbackPercent,
+              // R6 item 4: the route's customer fee, snapshotted beside the principal. The
+              // wallet is credited `amount` (the principal) and never the fee.
+              ...(gateway.customerFeeBasisPoints > 0
+                ? { customerFee: customerFeeSnapshot(amount, gateway.customerFeeBasisPoints) }
+                : {}),
               now,
             },
             tx,
@@ -5011,25 +5062,7 @@ export class PaymentService {
        * Half-up to the minor unit on `bigint`, by the one function in contracts. The
        * invoice asks for the PAYABLE, principal plus fee; nothing else ever does.
        */
-      const fee = gatewayCustomerFeeMinor(input.amount.amountMinor, input.customerFeeBasisPoints);
-      /*
-       * A payable past the largest amount a money column holds is refused here, as a
-       * domain answer, before anything is built or written (Codex review of #82). The
-       * principal and the rate each passed their own bound; their sum need not, and the
-       * database's numeric overflow is not an answer a customer or an operator can read.
-       */
-      if (input.amount.amountMinor > MAX_MONEY_AMOUNT_MINOR - fee) {
-        throw errors.conflict(
-          COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
-          'This amount cannot be paid through this route.',
-          { reason: 'AMOUNT_NOT_REPRESENTABLE' },
-        );
-      }
-      const customerFee: PaymentCustomerFee = {
-        basisPoints: input.customerFeeBasisPoints,
-        fee: money(fee, input.amount.currency),
-        payable: money(input.amount.amountMinor + fee, input.amount.currency),
-      };
+      const customerFee = customerFeeSnapshot(input.amount, input.customerFeeBasisPoints);
       /*
        * The PAYABLE in the provider's unit, decided BEFORE anything is written. An amount
        * with no exact value there (an IRR figure that is not a whole Toman) is refused

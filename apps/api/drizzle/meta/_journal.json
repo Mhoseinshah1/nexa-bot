@@ -1912,6 +1912,13 @@
       "when": 1792604429229,
       "tag": "0272_crypto_invoice_figures",
       "breakpoints": true
+    },
+    {
+      "idx": 274,
+      "version": "7",
+      "when": 1792786995658,
+      "tag": "0274_manual_transfer_customer_fee",
+      "breakpoints": true
     }
   ]
 }

@@ -465,9 +465,10 @@ describe('R6 item 2: the card screens show the exact amount to transfer', () => 
         definition,
         `${bodyOf(required.filter((token) => token !== 'transferAmount'))} {payable}`,
       );
-      expect(without.map((issue) => [issue.kind, issue.token]), key).toEqual([
-        ['MISSING_REQUIRED_PLACEHOLDER', 'transferAmount'],
-      ]);
+      expect(
+        without.map((issue) => [issue.kind, issue.token]),
+        key,
+      ).toEqual([['MISSING_REQUIRED_PLACEHOLDER', 'transferAmount']]);
     }
   });
 

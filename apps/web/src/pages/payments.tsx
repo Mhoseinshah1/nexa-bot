@@ -2138,6 +2138,25 @@ export function PaymentDetailPage({
                               value={{ amountMinor: row.amount, currency: row.currency }}
                             />,
                           ],
+                          /*
+                           * R6 item 4: what the customer had to TRANSFER, beside the principal,
+                           * when the route charged a fee — the figure a receipt is checked
+                           * against. From the payment's frozen snapshot; the page adds nothing.
+                           */
+                          ...(row.customerFee === null
+                            ? []
+                            : ([
+                                [
+                                  t('web.payment_transfer_payable'),
+                                  <Money
+                                    key="tp"
+                                    value={{
+                                      amountMinor: row.customerFee.payable,
+                                      currency: row.currency,
+                                    }}
+                                  />,
+                                ],
+                              ] as [ReactNode, ReactNode][])),
                           [
                             t('web.payment_customer'),
                             <span key="c" className="nowrap record-ref">

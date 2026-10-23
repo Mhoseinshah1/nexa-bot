@@ -379,7 +379,9 @@ describe('R6: a stored text that lacks a token the key now requires', () => {
     const hint = await screen.findByTestId('override-lacks-token');
     expect(hint.textContent).toContain('این متن {transferAmount} ندارد');
     // Nothing was rewritten: the editor still holds exactly the owner's words.
-    expect(editor(CARD).value).toBe('فاکتور قدیمی مدیر: {payable} {cardNumber} {reference} {expiresAt}');
+    expect(editor(CARD).value).toBe(
+      'فاکتور قدیمی مدیر: {payable} {cardNumber} {reference} {expiresAt}',
+    );
   });
 
   it('is silent for an override that has the token and for the default text', async () => {
@@ -416,9 +418,9 @@ describe('R6: the /start greeting preview is a labelled sample customer', () => 
       ) as HTMLInputElement;
       expect(input.value, placeholder.token).not.toBe('');
     }
-    expect(
-      (document.getElementById(`sample-${WELCOME}-firstName`) as HTMLInputElement).value,
-    ).toBe('علی');
+    expect((document.getElementById(`sample-${WELCOME}-firstName`) as HTMLInputElement).value).toBe(
+      'علی',
+    );
   });
 
   it('other templates have no sample customer', async () => {

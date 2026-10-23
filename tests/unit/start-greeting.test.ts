@@ -144,7 +144,8 @@ describe('a name is neutralised', () => {
     const dirty = 'ع‮لی​\u0007⁦⁩﻿\n\t رضا‌نژاد';
     expect(sanitizeUntrustedText(dirty)).toBe('علی رضا‌نژاد');
     const text = render(WELCOME, WELCOME_BODY, facts({ firstName: dirty }));
-    expect(text).not.toMatch(/[‪-‮⁦-⁩​﻿\u0007]/u);
+    // eslint-disable-next-line no-control-regex -- the point is to assert none of these remain
+    expect(text).not.toMatch(/[\u202A-\u202E\u2066-\u2069\u200B\uFEFF\u0007]/u);
   });
 
   it('the length is capped, never inside a surrogate pair', () => {

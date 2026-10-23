@@ -1634,6 +1634,20 @@ describe('the payment diagnostics (§21)', () => {
     await screen.findAllByText('a1b2c3d4e5f60718');
     expect(manual.container.textContent).not.toContain('نرخ کارمزد مشتری');
   });
+
+  it('R6 item 4: a card-to-card payment with a fee shows what the customer had to transfer, a feeless one does not', async () => {
+    const withFee = renderDetail({
+      method: 'MANUAL_TRANSFER',
+      amount: '200000',
+      customerFee: { basisPoints: 1000, fee: '20000', payable: '220000' },
+    });
+    await screen.findByText(t('web.payment_transfer_payable'));
+    expect(withFee.container.textContent).toContain('220,000');
+    withFee.unmount();
+    const none = renderDetail({ method: 'MANUAL_TRANSFER', customerFee: null });
+    await screen.findAllByText('a1b2c3d4e5f60718');
+    expect(none.container.textContent).not.toContain(t('web.payment_transfer_payable'));
+  });
 });
 
 /**
