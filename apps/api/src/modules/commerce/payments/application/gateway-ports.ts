@@ -62,6 +62,12 @@ export interface PaymentGatewayRecord {
    */
   readonly allowServicePurchase: boolean;
   readonly allowWalletTopup: boolean;
+  /**
+   * Round 6 item 6: until when the PROVIDER's own daily limit hides this route (TetraPay), or
+   * null. Not `status`: the operator's switch is untouched, and the route returns by itself
+   * when the instant passes. A route is not offered while this is after the clock.
+   */
+  readonly hiddenUntil: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -141,6 +147,20 @@ export interface PaymentGatewayRepository {
     now: Date,
     tx: unknown,
   ): Promise<PaymentGatewayRecord | null>;
+
+  /**
+   * Hides a route until `until` because the provider said its daily limit was reached.
+   * Only ever LATER: a hiding already in force until a later instant is not shortened by an
+   * earlier one. `status`, the configuration and `updated_at` are untouched — an operator's
+   * form open on this route still saves. False when there is no such route.
+   */
+  hideUntil(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    until: Date,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
 }
 
 /**

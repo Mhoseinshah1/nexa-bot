@@ -870,6 +870,7 @@ export const WEB_FA = {
     'پرداخت دیرهنگام تون‌پی (وب‌سایت) را خودکار به کیف پول واریز کن',
   'web.late_credit_switch_tonpays_telegram':
     'پرداخت دیرهنگام تون‌پی تلگرام را خودکار به کیف پول واریز کن',
+  'web.late_credit_switch_tetrapay': 'پرداخت دیرهنگام تتراپی را خودکار به کیف پول واریز کن',
   'web.late_credit_switch_hint':
     'روشن: اگر استعلام خود درگاه تأیید کند که پرداخت انجام شده و مبلغ با فاکتور یکی است، همان مبلغ فقط یک بار به کیف پول مشتری واریز می‌شود و به مشتری پیام می‌رود. سفارش دوباره باز نمی‌شود و سرویسی ساخته نمی‌شود. خاموش: مثل قبل فقط ثبت می‌شود و مدیر تصمیم می‌گیرد.',
   'web.late_credit_window': 'مدت پیگیری پرداخت دیرهنگام (ساعت)',
@@ -2606,6 +2607,8 @@ export const WEB_FA = {
   'web.payment_gateways_topup_block_purpose_off': 'افزایش موجودی برای این روش خاموش است',
   'web.payment_gateways_topup_block_no_receiving_account': 'هیچ کارت مقصد فعالی ندارد',
   'web.payment_gateways_topup_block_unpriceable': 'نسبت واحد نرخ مرکزی تنظیم نشده است',
+  'web.payment_gateways_topup_block_hidden':
+    'سقف روزانهٔ درگاه پر شده است و تا ساعت ۰۰:۰۰ به وقت تهران پنهان می‌ماند',
   'web.payment_gateway_provider': 'روش',
   'web.payment_gateway_provider_manual_transfer': 'کارت به کارت',
   'web.payment_gateway_provider_tonpays': 'درگاه پرداخت تون پی وبسایت',
@@ -2613,6 +2616,7 @@ export const WEB_FA = {
   'web.payment_gateway_provider_telegram_stars': 'تلگرام استارز (⭐)',
   'web.payment_gateway_provider_nowpayments': 'درگاه ارز دیجیتال (NOWPayments)',
   'web.payment_gateway_provider_centralpay': 'درگاه CentralPay',
+  'web.payment_gateway_provider_tetrapay': 'درگاه تتراپی',
   // Package A: the Stars route's operator-set rate. No FX feed exists or is implied.
   'web.payment_gateway_rate': 'نرخ هر ستاره (به کوچک‌ترین واحد ارز فروش)',
   'web.payment_gateway_rate_hint':
@@ -2712,6 +2716,20 @@ export const WEB_FA = {
     'اعلان‌های NOWPayments فقط با این کلید امضا و بررسی می‌شوند. کلید ذخیره‌شده هرگز نمایش داده نمی‌شود؛ ابتدا کلید API را تنظیم کنید. بدون کلید IPN، این درگاه قابل فعال‌سازی نیست.',
   'web.payment_gateway_webhook_secret_save': 'ذخیرهٔ کلید IPN',
   'web.payment_gateway_webhook_secret_saved': 'کلید IPN ذخیره شد.',
+  'web.payment_gateway_tetrapay_hint':
+    'مبلغ‌ها در تتراپی به ریال ارسال می‌شود (تومان × ۱۰). مشتری پس از پرداخت با لینک ربات برمی‌گردد و وضعیت را از خود پرداخت می‌بیند؛ بازگشت به‌تنهایی چیزی را تأیید نمی‌کند. پرداخت فقط پس از استعلام مستقیم (verify) با وضعیت «paid» و تطبیق شناسهٔ سفارش و مبلغ به ریال ثبت می‌شود. وب‌هوک اختیاری است و فقط استعلام را جلو می‌اندازد.',
+  'web.payment_gateway_tetrapay_secret_optional': 'رمز وب‌هوک (اختیاری) تنظیم نشده',
+  'web.payment_gateway_tetrapay_secret_input': 'رمز وب‌هوک جدید (whsec_ — اختیاری)',
+  'web.payment_gateway_tetrapay_secret_hint':
+    'رمز امضای وب‌هوک تتراپی که با «whsec_» شروع می‌شود. اگر وارد کنید، هر اعلان با امضای نامعتبر یا قدیمی (بیش از ۵ دقیقه) نادیده گرفته می‌شود؛ اگر وارد نکنید، اعلان‌ها بدون احراز فقط استعلام را جلو می‌اندازند. رمز ذخیره‌شده هرگز نمایش داده نمی‌شود؛ ابتدا کلید API را تنظیم کنید.',
+  'web.payment_gateway_tetrapay_secret_save': 'ذخیرهٔ رمز وب‌هوک',
+  'web.payment_gateway_tetrapay_secret_saved': 'رمز وب‌هوک ذخیره شد.',
+  'web.payment_gateway_webhook_url': 'نشانی وب‌هوک (در پنل تتراپی وارد کنید)',
+  'web.payment_gateway_webhook_url_hint':
+    'این نشانی را در بخش وب‌هوک پنل تتراپی ثبت کنید. فقط استعلام را جلو می‌اندازد و هرگز به‌تنهایی پرداختی را تأیید نمی‌کند.',
+  'web.payment_gateway_bot_username': 'نام کاربری ربات برای لینک بازگشت',
+  'web.payment_gateway_bot_username_none': 'ربات فعالی با نام کاربری ثبت‌شده وجود ندارد',
+  'web.payment_gateway_hidden_until': 'پنهان‌شده تا (سقف روزانهٔ درگاه)',
   'web.payment_gateway_provider_payment_id': 'شناسهٔ پرداخت در درگاه',
   'web.payment_gateway_centralpay_hint':
     'مبلغ به تومان و دقیقاً برابر مبلغ قابل پرداخت ارسال می‌شود. بازگشت مشتری از صفحهٔ پرداخت به‌تنهایی چیزی را تأیید نمی‌کند؛ پرداخت فقط پس از استعلام مستقیم (verify) با کلید تأیید و تطبیق مبلغ، کاربر و شمارهٔ مرجع ثبت می‌شود. این درگاه سرویس سالم‌سنجی ندارد.',
@@ -9669,6 +9687,25 @@ export const WEB_FA = {
   'web.provcode_wallex_no_bids': 'والکس پیشنهاد خریدی نداشت',
   'web.provcode_wallex_no_result': 'والکس نتیجه‌ای نداد',
   'web.provcode_wallex_not_json': 'پاسخ والکس قابل خواندن نبود',
+  'web.provcode_tetrapay_unauthorized': 'کلید API تتراپی پذیرفته نشد',
+  'web.provcode_tetrapay_gateway_suspended':
+    'درگاه تتراپی معلق است؛ ساخت پرداخت جدید ممکن نیست ولی استعلام ادامه دارد',
+  'web.provcode_tetrapay_no_method_available': 'تتراپی هیچ روش پرداختی برای این پرداخت ندارد',
+  'web.provcode_tetrapay_not_found': 'تتراپی این پرداخت را نمی‌شناسد',
+  'web.provcode_tetrapay_order_conflict':
+    'شناسهٔ سفارش در تتراپی تکراری است؛ ممکن است فاکتوری با آن وجود داشته باشد',
+  'web.provcode_tetrapay_amount_out_of_range': 'مبلغ خارج از محدودهٔ مجاز تتراپی است',
+  'web.provcode_tetrapay_invalid_callback': 'نشانی بازگشت (لینک ربات) نزد تتراپی نامعتبر است',
+  'web.provcode_tetrapay_invalid_webhook': 'نشانی وب‌هوک نزد تتراپی نامعتبر است',
+  'web.provcode_tetrapay_webhook_not_configured': 'وب‌هوک در پنل تتراپی تنظیم نشده است',
+  'web.provcode_tetrapay_rate_limited':
+    'سقف تعداد درخواست تتراپی پر شد؛ پس از مهلت اعلام‌شده دوباره تلاش می‌شود',
+  'web.provcode_tetrapay_daily_limit_reached':
+    'سقف روزانهٔ تتراپی پر شد؛ درگاه تا ۰۰:۰۰ به وقت تهران پنهان است',
+  'web.provcode_tetrapay_validation': 'تتراپی درخواست را نامعتبر دانست',
+  'web.provcode_tetrapay_unsupported_media_type': 'تتراپی نوع محتوای درخواست را نپذیرفت',
+  'web.provcode_tetrapay_bad_json': 'تتراپی بدنهٔ درخواست را نخواند',
+  'web.provcode_tetrapay_internal': 'خطای داخلی تتراپی',
   'web.provcode_wallex_not_success': 'والکس پاسخ ناموفق داد',
   'web.provcode_wallex_unreadable': 'پاسخ والکس قابل خواندن نبود',
   'web.inc_detail_step': 'مرحله',

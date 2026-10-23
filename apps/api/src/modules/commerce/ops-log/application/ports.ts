@@ -326,6 +326,8 @@ export interface OpsLogWords {
   readonly none: string;
   methodName(method: string, gatewayProvider: string | null): string;
   gatewayName(provider: string | null): string;
+  /** How a gateway payment was paid, as the provider reported it (`online` | `card`), or null. */
+  providerMethodName(method: string | null): string | null;
   evidenceName(kind: string | null): string;
   paymentFailure(cause: string): string;
   refundChannel(channel: string): string;

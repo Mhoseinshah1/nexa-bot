@@ -58,6 +58,7 @@ export const PAYMENT_GATEWAY_LABELS: Readonly<Record<PaymentGatewayProvider, Web
   TELEGRAM_STARS: 'web.payment_gateway_provider_telegram_stars',
   NOWPAYMENTS: 'web.payment_gateway_provider_nowpayments',
   CENTRALPAY: 'web.payment_gateway_provider_centralpay',
+  TETRAPAY: 'web.payment_gateway_provider_tetrapay',
 };
 
 /** The lane's machine reason for holding a gateway payment UNKNOWN (an open set). */

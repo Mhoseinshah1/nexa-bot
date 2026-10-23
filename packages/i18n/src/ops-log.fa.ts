@@ -152,7 +152,10 @@ export const OPS_LOG_WORDS_FA = {
     TELEGRAM_STARS: 'استارز تلگرام',
     NOWPAYMENTS: 'ارز دیجیتال (NowPayments)',
     CENTRALPAY: 'سنترال‌پی',
+    TETRAPAY: 'تتراپی',
   },
+  /** How a gateway payment was paid, per the provider (TetraPay `method`). */
+  gatewayMethods: { online: 'آنلاین', card: 'کارت' },
   evidence: {
     OPERATOR_REVIEW: 'بررسی اپراتور',
     WALLET_DEBIT: 'کسر از کیف پول',
@@ -358,6 +361,7 @@ export const OPS_LOG_WORDS_FA = {
       TELEGRAM_STARS: 'استارز',
       NOWPAYMENTS: 'ارز',
       CENTRALPAY: 'سنترال‌پی',
+      TETRAPAY: 'تتراپی',
       GATEWAY: 'درگاه',
       WALLET: 'کیف پول',
     },

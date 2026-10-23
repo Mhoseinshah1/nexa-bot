@@ -5088,7 +5088,7 @@ export class PaymentService {
        * collision; and the customer's stable random number, drawn once and kept. Both are in
        * this transaction, so a refused attempt leaves neither behind.
        */
-      let providerOrderId = adapter.newOrderId();
+      let providerOrderId = adapter.newOrderId({ paymentCode: payment.code });
       let providerUserId: string | null = null;
       if (descriptor.numericIdentity) {
         for (let draws = 1; ; draws += 1) {
@@ -5108,7 +5108,7 @@ export class PaymentService {
               { reason: 'ORDER_ID_UNAVAILABLE' },
             );
           }
-          providerOrderId = adapter.newOrderId();
+          providerOrderId = adapter.newOrderId({ paymentCode: payment.code });
         }
         const drawCustomer = adapter.newCustomerNumber?.bind(adapter);
         providerUserId =

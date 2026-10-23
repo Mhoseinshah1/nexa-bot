@@ -103,6 +103,21 @@ export const PROVIDER_CODE_LABELS: Readonly<Record<string, WebKey>> = {
   ok: 'web.provcode_ok',
   'payment.reconcile_confirmed': 'web.provcode_payment_reconcile_confirmed',
   'payment.reconcile_failed': 'web.provcode_payment_reconcile_failed',
+  'tetrapay.UNAUTHORIZED': 'web.provcode_tetrapay_unauthorized',
+  'tetrapay.GATEWAY_SUSPENDED': 'web.provcode_tetrapay_gateway_suspended',
+  'tetrapay.NO_METHOD_AVAILABLE': 'web.provcode_tetrapay_no_method_available',
+  'tetrapay.NOT_FOUND': 'web.provcode_tetrapay_not_found',
+  'tetrapay.ORDER_CONFLICT': 'web.provcode_tetrapay_order_conflict',
+  'tetrapay.AMOUNT_OUT_OF_RANGE': 'web.provcode_tetrapay_amount_out_of_range',
+  'tetrapay.INVALID_CALLBACK': 'web.provcode_tetrapay_invalid_callback',
+  'tetrapay.INVALID_WEBHOOK': 'web.provcode_tetrapay_invalid_webhook',
+  'tetrapay.WEBHOOK_NOT_CONFIGURED': 'web.provcode_tetrapay_webhook_not_configured',
+  'tetrapay.RATE_LIMITED': 'web.provcode_tetrapay_rate_limited',
+  'tetrapay.DAILY_LIMIT_REACHED': 'web.provcode_tetrapay_daily_limit_reached',
+  'tetrapay.VALIDATION': 'web.provcode_tetrapay_validation',
+  'tetrapay.UNSUPPORTED_MEDIA_TYPE': 'web.provcode_tetrapay_unsupported_media_type',
+  'tetrapay.BAD_JSON': 'web.provcode_tetrapay_bad_json',
+  'tetrapay.INTERNAL': 'web.provcode_tetrapay_internal',
   'wallex.no_bids': 'web.provcode_wallex_no_bids',
   'wallex.no_result': 'web.provcode_wallex_no_result',
   'wallex.not_json': 'web.provcode_wallex_not_json',
@@ -147,6 +162,10 @@ export function errorCodeLabel(code: string): string {
     PROVIDER_CODE_LABELS[code] ??
     LEGACY_REASON_LABELS[code];
   if (key !== undefined) return t(key);
+  // TetraPay's AMOUNT_OUT_OF_RANGE carries the provider's bounds in Toman after the code.
+  if (code.startsWith('tetrapay.AMOUNT_OUT_OF_RANGE:')) {
+    return t('web.provcode_tetrapay_amount_out_of_range');
+  }
   const operational = operationalEventLabelFa(code);
   if (operational !== null) return operational;
   if (code.startsWith('telegram.rejected.')) return t('web.dlvcode_telegram_rejected');

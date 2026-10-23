@@ -163,8 +163,12 @@ export class FinancialLogConsumer implements EventConsumer {
         const order =
           payment.orderId === null ? null : await facts.order(scope, payment.orderId, tx);
         const crypto = payment.gatewayProvider === 'NOWPAYMENTS';
+        // Round 6 item 6: a TetraPay payment names how it was paid - «تتراپی (آنلاین)» or «(کارت)».
+        const paidHow = words.providerMethodName(invoice?.providerMethod ?? null);
         const common: Record<string, TemplateValue> = {
-          method: words.methodName(payment.method, payment.gatewayProvider),
+          method:
+            words.methodName(payment.method, payment.gatewayProvider) +
+            (paidHow === null ? '' : ` (${paidHow})`),
           ...who(customer, words),
           reference: paymentTrackingCode(payment),
           ...amounts(payment),
@@ -658,7 +662,12 @@ export function gatewayProviderFacts(invoice: GatewayInvoiceRecord | null): Temp
    * the invoiced one beside it when they differ; and the order id with the bound reference.
    * Nothing verified yet is NONE. The customer's card number is never read.
    */
-  if (invoice.provider === 'CENTRALPAY') {
+  /*
+   * TetraPay (`docs/tetrapay-gateway-audit.md` §5.4) reads the same way: the RIAL its own
+   * verify REPORTED (`request_amount`) beside the invoiced figure when they differ, so a
+   * mismatch is never hidden under the provider's label.
+   */
+  if (invoice.provider === 'CENTRALPAY' || invoice.provider === 'TETRAPAY') {
     const toman = (amount: bigint) => `${amount.toString()} ${invoice.providerUnit}`;
     const reported = invoice.requestAmount;
     const orderId = invoice.providerInvoiceId ?? invoice.providerOrderId;

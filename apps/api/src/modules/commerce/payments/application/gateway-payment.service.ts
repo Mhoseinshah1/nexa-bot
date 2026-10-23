@@ -35,6 +35,7 @@ import {
   TONPAYS_CREATE_RETRY_MS,
 } from '../domain/tonpays.js';
 import { gatewaySettlementDeadline } from '../domain/settlement.js';
+import { nextTehranMidnight, tetrapayCallbackUrl } from '../domain/tetrapay.js';
 import {
   firstInquiryAt,
   hintReservePerMinute,
@@ -431,6 +432,20 @@ export interface GatewayPaymentServiceDeps {
    * null. Absent, the return answers without a link.
    */
   readonly botLinkFor?: (scope: TenantContext) => Promise<string | null>;
+  /**
+   * Round 6 item 6: hides a route until `until` because the PROVIDER said so (TetraPay's
+   * `DAILY_LIMIT_REACHED`). Written in the lane's own transaction beside its audit row. Absent,
+   * a refusal that asks for it is still recorded and the route simply stays offered.
+   */
+  readonly routeVisibility?: {
+    hideUntil(
+      scope: TenantContext,
+      provider: PaymentGatewayProvider,
+      until: Date,
+      now: Date,
+      tx: TransactionScope,
+    ): Promise<boolean>;
+  };
   /** FIX10 R1: `GATEWAY_ROW_BOUND_MS` from the configured timeouts; the default otherwise. */
   readonly rowBoundMs?: number;
   /**
@@ -1172,10 +1187,21 @@ export class GatewayPaymentService {
     const descriptor = PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider];
     // A Stars invoice is a message this bot sends and is paid on the bot's own webhook:
     // no callback URL, and its text from the tenant's templates.
+    /*
+     * A `returnToBot` route (TetraPay) is sent the BOT's start link, where the customer lands
+     * after paying and is shown this payment's status read from the payment (`tp-<payment id>`);
+     * its webhook URL is pasted into the provider's own panel by the operator, so it is never
+     * sent. Every other inquiry route is sent the generated webhook (or return) URL.
+     */
     const callbackUrl =
-      descriptor.approval === 'INQUIRY'
-        ? await this.deps.callbackUrlFor(scope, invoice.provider)
-        : null;
+      descriptor.approval !== 'INQUIRY'
+        ? null
+        : descriptor.returnToBot
+          ? tetrapayCallbackUrl(
+              this.deps.botLinkFor === undefined ? null : await this.deps.botLinkFor(scope),
+              invoice.paymentId,
+            )
+          : await this.deps.callbackUrlFor(scope, invoice.provider);
     const presentation =
       descriptor.invoiceCredential === 'BOT_TOKEN' ? await this.deps.presentation(scope) : null;
 
@@ -1348,7 +1374,8 @@ export class GatewayPaymentService {
               scope,
               invoice.paymentId,
               outcome.code,
-              new Date(at.getTime() + TONPAYS_CREATE_RETRY_MS),
+              // The provider's own `Retry-After` when it sent one (TetraPay), never sooner.
+              new Date(at.getTime() + Math.max(TONPAYS_CREATE_RETRY_MS, outcome.retryAfterMs ?? 0)),
               at,
               tx,
             ),
@@ -1373,6 +1400,9 @@ export class GatewayPaymentService {
           reasonCode: `${invoice.provider.toLowerCase()}:${outcome.code}`,
           notifyCustomer: !outcome.configuration,
         });
+        if (outcome.routeEffect === 'HIDE_UNTIL_TEHRAN_MIDNIGHT') {
+          await this.hideRouteUntilTehranMidnight(scope, actor, invoice, outcome.code);
+        }
         if (outcome.configuration) await this.misconfigured(scope, invoice, outcome.code);
         await this.reportLinkFailure(scope, claimed, linkFailure, {
           elapsedMs,
@@ -1623,7 +1653,12 @@ export class GatewayPaymentService {
     if (outcome.kind !== 'OBSERVED') {
       const retry =
         outcome.kind === 'RATE_LIMITED' && next !== null
-          ? new Date(Math.max(next.getTime(), at.getTime() + INQUIRY_RATE_LIMIT_RETRY_MS))
+          ? new Date(
+              Math.max(
+                next.getTime(),
+                at.getTime() + Math.max(INQUIRY_RATE_LIMIT_RETRY_MS, outcome.retryAfterMs ?? 0),
+              ),
+            )
           : next;
       const scheduled = retry !== null && expiresAt !== null && retry >= expiresAt ? null : retry;
       /*
@@ -1794,6 +1829,7 @@ export class GatewayPaymentService {
           // The payment this identity-checked answer described (NOWPayments): followed next.
           hintedPaymentId: outcome.providerPaymentId ?? null,
           crypto: outcome.crypto ?? null,
+          method: outcome.method ?? null,
           // Unfenced: the claim was checked and locked at the top of this transaction.
         },
         at,
@@ -3213,6 +3249,11 @@ export class GatewayPaymentService {
     deliveryIdHeader: string | undefined,
     /** The provider's signature header, read only for a route whose provider signs (§5.6). */
     signatureHeader?: string,
+    /**
+     * The body's RAW bytes as received (TetraPay signs those, not the parsed JSON). Null or
+     * absent verifies nothing: a route with a stored secret then drops the webhook.
+     */
+    rawBody?: Uint8Array | null,
   ): Promise<GatewayWebhookResult | 'MALFORMED' | 'NO_ADAPTER'> {
     const adapter = this.deps.adapters(provider);
     if (adapter === null) return 'NO_ADAPTER';
@@ -3224,8 +3265,15 @@ export class GatewayPaymentService {
      * dropped. Verified is still only a hint — it never reaches the settlement path.
      */
     if (PAYMENT_GATEWAY_DESCRIPTORS[provider].webhookSecret) {
-      const verified = await this.verifyWebhook(tenantId, provider, adapter, body, signatureHeader);
-      if (verified !== 'VERIFIED') return verified;
+      const verified = await this.verifyWebhook(
+        tenantId,
+        provider,
+        adapter,
+        body,
+        signatureHeader,
+        rawBody ?? null,
+      );
+      if (verified !== 'VERIFIED' && verified !== 'UNSIGNED') return verified;
     }
     // Shape only. TonPays' signature and API-key headers are never read (brief §6).
     const hint = adapter.parseWebhook(body, deliveryIdHeader);
@@ -3239,7 +3287,8 @@ export class GatewayPaymentService {
     adapter: ExternalGatewayAdapter,
     body: unknown,
     signature: string | undefined,
-  ): Promise<'VERIFIED' | 'IGNORED_INACTIVE' | 'IGNORED_UNVERIFIED'> {
+    rawBody: Uint8Array | null,
+  ): Promise<'VERIFIED' | 'UNSIGNED' | 'IGNORED_INACTIVE' | 'IGNORED_UNVERIFIED'> {
     const scope: TenantContext = {
       tenantId: tenantId as TenantContext['tenantId'],
       botInstanceId: null,
@@ -3257,10 +3306,20 @@ export class GatewayPaymentService {
       );
       secret = null;
     }
+    /*
+     * An OPTIONAL secret (TetraPay) that was never stored: the webhook is an UNAUTHENTICATED
+     * hint. That is safe by construction — it only locates the attempt and brings the next
+     * verify forward, and nothing a webhook says can settle — so it is accepted, deduplicated
+     * and scheduled like any hint, and neither raises nor closes the unverified-webhook
+     * condition (there is nothing it could have been verified against).
+     */
+    if (secret === null && PAYMENT_GATEWAY_DESCRIPTORS[provider].webhookSecretOptional) {
+      return 'UNSIGNED';
+    }
     const verified =
       secret !== null &&
       adapter.verifyWebhook !== undefined &&
-      adapter.verifyWebhook(secret, body, signature);
+      adapter.verifyWebhook(secret, body, signature, { rawBody, now: this.deps.clock.now() });
     const dedupeKey = `${GATEWAY_WEBHOOK_UNVERIFIED_CODE}:${provider}`;
     if (!verified) {
       this.deps.logger.warn(
@@ -3272,8 +3331,8 @@ export class GatewayPaymentService {
         severity: 'WARN',
         message:
           'A payment gateway notification arrived whose signature did not verify against the ' +
-          'stored webhook secret. It was ignored; check the IPN secret if this repeats. Payments ' +
-          'are still confirmed by the gateway’s own status read.',
+          'stored webhook secret. It was ignored; check the webhook secret if this repeats. ' +
+          'Payments are still confirmed by the gateway’s own status read.',
         dedupeKey,
         context: { provider, secretStored: secret !== null },
       });
@@ -3305,7 +3364,11 @@ export class GatewayPaymentService {
     if (!(await this.deps.scopeActivity.scopeIsActive(scope))) return 'IGNORED_INACTIVE';
     const invoice = await this.deps.invoices.findByProviderOrderId(scope, provider, hint.orderId);
     if (invoice === null) return 'IGNORED_UNKNOWN';
-    if (invoice.providerInvoiceId !== null && invoice.providerInvoiceId !== hint.invoiceId) {
+    if (
+      hint.invoiceId !== null &&
+      invoice.providerInvoiceId !== null &&
+      invoice.providerInvoiceId !== hint.invoiceId
+    ) {
       await this.identityMismatch(scope, invoice, 'WEBHOOK');
       return 'IGNORED_MISMATCH';
     }
@@ -3577,6 +3640,47 @@ export class GatewayPaymentService {
   }
 
   // ---------------------------------------------------------------------------------------
+
+  /**
+   * The provider's daily limit (TetraPay): the route is hidden until the next 00:00 Tehran, by
+   * the PROVIDER's word and not the operator's — `status` is untouched, and nothing clears the
+   * hiding but the clock. Best effort after the attempt's own outcome committed: a failure here
+   * leaves the route offered and the next refusal tries again.
+   */
+  private async hideRouteUntilTehranMidnight(
+    scope: TenantContext,
+    actor: ActorContext,
+    invoice: GatewayInvoiceRecord,
+    reason: string,
+  ): Promise<void> {
+    const visibility = this.deps.routeVisibility;
+    if (visibility === undefined) return;
+    const now = this.deps.clock.now();
+    const until = nextTehranMidnight(now);
+    try {
+      await this.deps.uow.run(scope, async (tx) => {
+        await visibility.hideUntil(scope, invoice.provider, until, now, tx);
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'payment_gateway.hidden_by_provider',
+            entityType: 'PaymentGateway',
+            entityId: invoice.provider,
+            before: null,
+            after: { provider: invoice.provider, hiddenUntil: until.toISOString(), reason },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+      });
+    } catch (error: unknown) {
+      this.deps.logger.error(
+        { provider: invoice.provider, ...errorFacts(error) },
+        'a provider daily limit could not be recorded on its route',
+      );
+    }
+  }
 
   private async endCreation(
     scope: TenantContext,

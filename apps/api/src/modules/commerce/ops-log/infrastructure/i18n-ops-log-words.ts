@@ -30,6 +30,12 @@ export const i18nOpsLogWords: OpsLogWords = {
     if (provider === null) return W.paymentMethods.GATEWAY;
     return pick(W.gateways, provider, W.paymentMethods.GATEWAY);
   },
+  providerMethodName: (method) =>
+    method === null
+      ? null
+      : Object.hasOwn(W.gatewayMethods, method)
+        ? ((W.gatewayMethods as Record<string, string>)[method] ?? null)
+        : null,
   evidenceName: (kind) =>
     kind === null ? W.none : pick(W.evidence, kind, W.evidence.GATEWAY_INQUIRY),
   paymentFailure: (cause) => pick(W.paymentFailure, cause, W.paymentFailure.GATEWAY_FAILED),

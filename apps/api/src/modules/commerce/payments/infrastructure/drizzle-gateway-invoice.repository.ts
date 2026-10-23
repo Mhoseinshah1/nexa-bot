@@ -140,6 +140,7 @@ function toRecord(row: Row): GatewayInvoiceRecord {
     cryptoReceivedCurrency: row.cryptoReceivedCurrency,
     cryptoPayAddress: row.cryptoPayAddress,
     providerUserId: row.providerUserId,
+    providerMethod: row.providerMethod,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -1021,6 +1022,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly postDeadline: boolean;
       readonly hintedPaymentId?: string | null;
       readonly crypto?: GatewayCryptoFigures | null;
+      readonly method?: string | null;
       readonly claimedUntil?: Date;
     },
     now: Date,
@@ -1066,6 +1068,10 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
                 ? {}
                 : { cryptoPayAddress: result.crypto.payAddress }),
             }),
+        // TetraPay's `method`: a verify that carries none leaves what an earlier one said.
+        ...(result.method === undefined || result.method === null
+          ? {}
+          : { providerMethod: result.method }),
         lastInquiryAt: now,
         lastInquiryErrorCode: result.errorCode,
         inquiryAttempts: sql`${gatewayInvoices.inquiryAttempts} + 1`,

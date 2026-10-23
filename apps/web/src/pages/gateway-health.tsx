@@ -51,6 +51,7 @@ export const PROVIDER_LABELS: Readonly<Record<PaymentGatewayProvider, WebKey>> =
   TELEGRAM_STARS: 'web.payment_gateway_provider_telegram_stars',
   NOWPAYMENTS: 'web.payment_gateway_provider_nowpayments',
   CENTRALPAY: 'web.payment_gateway_provider_centralpay',
+  TETRAPAY: 'web.payment_gateway_provider_tetrapay',
 };
 
 const STATE_LABELS: Readonly<Record<GatewayHealthState, WebKey>> = {
