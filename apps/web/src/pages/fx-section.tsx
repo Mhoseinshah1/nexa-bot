@@ -1,6 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { FxRefreshResponse, FxSource, FxStatusResponse } from '@nexa/contracts';
-import { fetchFxStatus, refreshFx } from '../api/client';
+import {
+  FX_SOURCE_ENABLED_SETTINGS,
+  type FxRefreshResponse,
+  type FxSource,
+  type FxStatusResponse,
+} from '@nexa/contracts';
+import { fetchFxStatus, fetchSettings, refreshFx, saveSetting } from '../api/client';
+import { errorCodeLabel } from '../ops-code-labels';
+import { errorText } from '../error-text';
+import { useSubmissionKey } from '../submission-key';
 import { currencyLabel, formatNumber, formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { messageFor } from './settings';
@@ -14,6 +22,7 @@ import {
   Ltr,
   Stat,
   StateSwitch,
+  Switch,
   useToast,
   type Column,
   Num,
@@ -37,6 +46,14 @@ const SOURCE_LABELS: Readonly<Record<FxSource, WebKey>> = {
   NOBITEX: 'web.fx_source_nobitex',
   WALLEX: 'web.fx_source_wallex',
 };
+
+/** A span of seconds as the coarsest whole unit that holds it: seconds, minutes or hours. */
+export function formatAge(seconds: number): string {
+  if (seconds >= 3_600)
+    return `${formatNumber(Math.round(seconds / 3_600))} ${t('web.unit_hours')}`;
+  if (seconds >= 120) return `${formatNumber(Math.round(seconds / 60))} ${t('web.unit_minutes')}`;
+  return `${formatNumber(seconds)} ${t('web.unit_seconds')}`;
+}
 
 function sourceLabel(source: FxSource | 'NONE'): string {
   return t(source === 'NONE' ? 'web.fx_source_none' : SOURCE_LABELS[source]);
@@ -62,7 +79,96 @@ export function stateTone(state: FxStatusResponse['state']): 'ok' | 'warn' | 'da
   return 'danger';
 }
 
-export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boolean }) {
+/**
+ * A source's last error, in Persian. The service records `<source>.<kind>` for a transport
+ * or parse failure (`nobitex.http_403`, `wallex.timeout`) and a bare verdict for a figure
+ * it refused (`outlier`, `disagrees`); both are named here, and anything else falls back to
+ * the shared code labels, then to the raw code. Never a body, never a URL.
+ */
+const SOURCE_ERROR_LABELS: Readonly<Record<string, WebKey>> = {
+  timeout: 'web.fx_err_timeout',
+  unreachable: 'web.fx_err_unreachable',
+  tls_failed: 'web.fx_err_tls_failed',
+  blocked_target: 'web.fx_err_blocked_target',
+  malformed_response: 'web.fx_err_malformed_response',
+  rate_limited: 'web.fx_err_rate_limited',
+  not_positive: 'web.fx_err_not_positive',
+  out_of_rails: 'web.fx_err_out_of_rails',
+  outlier: 'web.fx_err_outlier',
+  disagrees: 'web.fx_err_disagrees',
+};
+
+export function fxSourceErrorLabel(code: string): string {
+  const kind = code.slice(code.lastIndexOf('.') + 1);
+  const http = /^http_([0-9]{3})$/u.exec(kind);
+  if (http !== null) {
+    return http[1] === '403'
+      ? t('web.fx_err_http_403')
+      : t('web.fx_err_http').replace('{status}', http[1] ?? '');
+  }
+  const known = SOURCE_ERROR_LABELS[kind];
+  return known === undefined ? errorCodeLabel(code) : t(known);
+}
+
+/**
+ * One source's on/off switch: the registry setting `fx.source_<name>_enabled`, written
+ * through the ordinary settings write (version, idempotency key, audit) — so this adds no
+ * write path of its own. A disabled source is never called by the service.
+ */
+function SourceSwitch({ source, mayEdit }: { source: FxSource; mayEdit: boolean }) {
+  const queries = useQueryClient();
+  const submission = useSubmissionKey();
+  const settingKey = FX_SOURCE_ENABLED_SETTINGS[source];
+  const settings = useQuery({ queryKey: ['settings'], queryFn: fetchSettings, enabled: mayEdit });
+  const row = settings.data?.settings.find((entry) => entry.key === settingKey);
+  const save = useMutation({
+    mutationFn: (command: {
+      key: string;
+      value: boolean;
+      expectedVersion: number | null;
+      idempotencyKey: string;
+    }) => saveSetting(command),
+    onSuccess: () => submission.settle(),
+    onError: (error) => submission.settleOn(error),
+    onSettled: () =>
+      Promise.all([
+        queries.invalidateQueries({ queryKey: ['settings'] }),
+        queries.invalidateQueries({ queryKey: ['fx-status'] }),
+      ]),
+  });
+  const checked = row?.value === true;
+  return (
+    <>
+      <Switch
+        checked={checked}
+        label={`${t('web.fx_source_switch')} ${t(SOURCE_LABELS[source])}`}
+        disabled={!mayEdit || row === undefined || save.isPending}
+        onChange={(next) => {
+          if (row === undefined) return;
+          const command = { key: row.key, value: next, expectedVersion: row.version };
+          save.mutate({ ...command, idempotencyKey: submission.current(command) });
+        }}
+      />
+      {save.error !== null && (
+        <Banner tone="danger">
+          {errorText(save.error)}
+          <ErrorRef error={save.error} />
+        </Banner>
+      )}
+    </>
+  );
+}
+
+export function FxSection({
+  denied,
+  mayEdit,
+  maySettingsEdit = false,
+}: {
+  denied: boolean;
+  mayEdit: boolean;
+  /** `settings.view` and `settings.edit`: the per-source switches are registry settings. */
+  maySettingsEdit?: boolean;
+}) {
   const queries = useQueryClient();
   const notify = useToast();
   const status = useQuery({
@@ -85,9 +191,26 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
   const sourceColumns: readonly Column<FxStatusResponse['sources'][number]>[] = [
     { key: 'source', header: t('web.fx_source_column'), render: (row) => sourceLabel(row.source) },
     {
+      key: 'enabled',
+      header: t('web.fx_source_switch'),
+      render: (row) =>
+        maySettingsEdit ? (
+          <SourceSwitch source={row.source} mayEdit />
+        ) : (
+          <Badge tone={row.enabled ? 'ok' : 'neutral'}>
+            {t(row.enabled ? 'web.fx_enabled_on' : 'web.fx_enabled_off')}
+          </Badge>
+        ),
+    },
+    {
       key: 'success',
       header: t('web.fx_source_last_success'),
       render: (row) => (row.lastSuccessAt === null ? '—' : formatTimestamp(row.lastSuccessAt)),
+    },
+    {
+      key: 'failures',
+      header: t('web.fx_source_failures'),
+      render: (row) => formatNumber(row.consecutiveFailures),
     },
     {
       key: 'failure',
@@ -101,6 +224,9 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
             {row.lastFailureCode === null ? null : (
               <>
                 {' '}
+                <span data-testid={`fx-error-${row.source}`}>
+                  {fxSourceErrorLabel(row.lastFailureCode)}
+                </span>{' '}
                 <ErrorCodeLabel code={row.lastFailureCode} />
               </>
             )}
@@ -111,11 +237,6 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
       key: 'retry',
       header: t('web.fx_source_retry_after'),
       render: (row) => (row.retryAfter === null ? '—' : formatTimestamp(row.retryAfter)),
-    },
-    {
-      key: 'failures',
-      header: t('web.fx_source_failures'),
-      render: (row) => formatNumber(row.consecutiveFailures),
     },
   ];
 
@@ -171,8 +292,7 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
             />
             <Stat
               label={t('web.fx_age')}
-              value={status.data.quote === null ? '—' : formatNumber(status.data.quote.ageSeconds)}
-              {...(status.data.quote === null ? {} : { unit: t('web.unit_seconds') })}
+              value={status.data.quote === null ? '—' : formatAge(status.data.quote.ageSeconds)}
             />
             <Stat
               label={t('web.fx_last_refresh')}
@@ -184,6 +304,19 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
             />
           </div>
 
+          {status.data.enabled &&
+            status.data.state === 'STALE_ALLOWED' &&
+            status.data.quote !== null && (
+              <Banner tone="warn">
+                {t('web.fx_stale_banner')
+                  .replace('{age}', formatAge(status.data.quote.ageSeconds))
+                  .replace('{limit}', formatAge(status.data.maxStaleSeconds))}
+              </Banner>
+            )}
+          {status.data.enabled && status.data.state === 'UNAVAILABLE' && (
+            <Banner tone="danger">{t('web.fx_unavailable_banner')}</Banner>
+          )}
+
           <div className="grid-2">
             <div>
               <h3 className="fx-subhead">{t('web.fx_sources_policy_title')}</h3>
@@ -193,6 +326,15 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
                     t('web.fx_enabled'),
                     <Badge key="en" tone={status.data.enabled ? 'ok' : 'neutral'}>
                       {t(status.data.enabled ? 'web.fx_enabled_on' : 'web.fx_enabled_off')}
+                    </Badge>,
+                  ],
+                  [t('web.fx_min_agreeing'), formatNumber(status.data.minAgreeingSources)],
+                  [
+                    t('web.fx_accept_single'),
+                    <Badge key="as" tone={status.data.acceptSingleSource ? 'warn' : 'neutral'}>
+                      {t(
+                        status.data.acceptSingleSource ? 'web.fx_enabled_on' : 'web.fx_enabled_off',
+                      )}
                     </Badge>,
                   ],
                   [t('web.fx_primary_source'), sourceLabel(status.data.primarySource)],
@@ -211,10 +353,7 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
                     t('web.fx_ttl'),
                     `${formatNumber(status.data.freshTtlSeconds)} ${t('web.unit_seconds')}`,
                   ],
-                  [
-                    t('web.fx_max_stale'),
-                    `${formatNumber(status.data.maxStaleSeconds)} ${t('web.unit_seconds')}`,
-                  ],
+                  [t('web.fx_max_stale'), formatAge(status.data.maxStaleSeconds)],
                   [
                     t('web.fx_last_attempt'),
                     status.data.lastAttemptAt === null
@@ -259,18 +398,14 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
           </div>
 
           <h3 className="fx-subhead">{t('web.fx_sources_title')}</h3>
-          {status.data.sources.length === 0 ? (
-            <p className="muted small">{t('web.fx_sources_none')}</p>
-          ) : (
-            <DataTable
-              stack
-              columns={sourceColumns}
-              rows={status.data.sources}
-              rowKey={(row) => row.source}
-              caption={t('web.fx_sources_title')}
-              dense
-            />
-          )}
+          <DataTable
+            stack
+            columns={sourceColumns}
+            rows={status.data.sources}
+            rowKey={(row) => row.source}
+            caption={t('web.fx_sources_title')}
+            dense
+          />
 
           {/*
             The identifiers somebody debugging a price needs, and nobody else: behind a

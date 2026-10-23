@@ -294,6 +294,7 @@ export function minorOf(value: string): string | null {
 export function PaymentGatewaysPage({
   denied,
   mayEdit,
+  maySettingsEdit = false,
   tabs,
   panel,
   provider,
@@ -301,6 +302,8 @@ export function PaymentGatewaysPage({
 }: {
   denied: boolean;
   mayEdit: boolean;
+  /** `settings.view` and `settings.edit`, for the FX section's per-source switches. */
+  maySettingsEdit?: boolean;
   /**
    * UX Batch 01, item 8: set, this is ONE payment method's view — its settings, its
    * actions and the forms they open, directly beneath, on a page of its own. Unset, this is
@@ -1387,7 +1390,9 @@ export function PaymentGatewaysPage({
         Package FX: the central exchange rate beside the routes it prices. Its own query
         and its own card, so a rate source being down never blanks the routes table.
       */}
-        {provider === undefined && <FxSection denied={denied} mayEdit={mayEdit} />}
+        {provider === undefined && (
+          <FxSection denied={denied} mayEdit={mayEdit} maySettingsEdit={maySettingsEdit} />
+        )}
 
         {/*
         The generated callback URL, for diagnostics (WP11A §14), on the route's own view.
