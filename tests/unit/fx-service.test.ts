@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { FX_MAX_STALE_SECONDS_DEFAULT, settingDefinition } from '@nexa/contracts';
 import type {
   ActorContext,
   FxBaseAsset,
@@ -10,6 +11,7 @@ import {
   FX_FALLBACK_IN_USE_CODE,
   FX_QUOTE_REJECTED_CODE,
   FX_QUOTE_UNAVAILABLE_CODE,
+  FX_SINGLE_SOURCE_CODE,
   FX_RATE_LIMIT_COOLDOWN_MS,
   FX_SOURCE_BACKOFF_MS,
   FX_SOURCE_UNAVAILABLE_CODE,
@@ -231,6 +233,10 @@ function world(
       'fx.fallback_source': 'WALLEX',
       'fx.fresh_ttl_seconds': 45,
       'fx.max_stale_seconds': 900,
+      'fx.source_nobitex_enabled': true,
+      'fx.source_wallex_enabled': true,
+      'fx.min_agreeing_sources': 2,
+      'fx.accept_single_source': false,
       'sales.currency': 'IRT',
       'stars.pricing_mode': 'FIXED_RATE',
       'stars.per_usdt': '100',
@@ -278,15 +284,18 @@ function world(
   return state;
 }
 
+/** The owner's opt-in: store a rate from ONE healthy source (Round 6, default off). */
+const SINGLE = { 'fx.accept_single_source': true };
+
 const codes = (w: World) => w.events.map((event) => event.code);
 
 describe('the central rate: refreshing', () => {
   it('primary success: stores the Rial best bid as an exact Toman quote, with the book time', async () => {
     const w = world();
     expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'REFRESHED' });
+    // Every enabled source is read; the two agree and the primary's figure is stored.
     expect(w.nobitex.calls).toBe(1);
-    // The fallback is not dialled when the primary answered and was accepted.
-    expect(w.wallex.calls).toBe(0);
+    expect(w.wallex.calls).toBe(1);
     expect(w.repository.row?.quote).toEqual({
       rate: { mantissa: 103_550n, scale: 0 },
       source: 'NOBITEX',
@@ -305,8 +314,8 @@ describe('the central rate: refreshing', () => {
     });
   });
 
-  it('primary down → fallback prices the pair, and the two conditions are recorded once each', async () => {
-    const w = world({ nobitex: () => down('timeout') });
+  it('primary down + single source accepted → fallback prices the pair; the conditions are recorded once each', async () => {
+    const w = world({ nobitex: () => down('timeout'), settings: SINGLE });
     expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({
       outcome: 'REFRESHED_BY_FALLBACK',
     });
@@ -314,7 +323,11 @@ describe('the central rate: refreshing', () => {
       rate: { mantissa: 103_500n, scale: 0 },
       source: 'WALLEX',
     });
-    expect(codes(w)).toEqual([FX_SOURCE_UNAVAILABLE_CODE, FX_FALLBACK_IN_USE_CODE]);
+    expect(codes(w)).toEqual([
+      FX_SOURCE_UNAVAILABLE_CODE,
+      FX_SINGLE_SOURCE_CODE,
+      FX_FALLBACK_IN_USE_CODE,
+    ]);
     expect(w.events[0]).toMatchObject({
       dedupeKey: `${FX_SOURCE_UNAVAILABLE_CODE}:NOBITEX`,
       context: { source: 'NOBITEX', reason: 'timeout' },
@@ -326,21 +339,25 @@ describe('the central rate: refreshing', () => {
     });
     expect(codes(w)).toEqual([
       FX_SOURCE_UNAVAILABLE_CODE,
+      FX_SINGLE_SOURCE_CODE,
       FX_FALLBACK_IN_USE_CODE,
       FX_SOURCE_UNAVAILABLE_CODE,
+      FX_SINGLE_SOURCE_CODE,
       FX_FALLBACK_IN_USE_CODE,
     ]);
-    expect(new Set(w.events.map((event) => event.dedupeKey)).size).toBe(2);
+    expect(new Set(w.events.map((event) => event.dedupeKey)).size).toBe(3);
   });
 
   it('recovers "source unavailable" and "fallback in use" the moment the primary prices the pair again', async () => {
     let primaryUp = false;
     const w = world({
       nobitex: () => (primaryUp ? reading('NOBITEX', 1_035_500n, 'IRR') : down()),
+      settings: SINGLE,
     });
     await w.service.refreshIfDue(scope, 'USDT');
     expect([...w.open]).toEqual([
       `${FX_SOURCE_UNAVAILABLE_CODE}:NOBITEX`,
+      `${FX_SINGLE_SOURCE_CODE}:USDT-IRT`,
       `${FX_FALLBACK_IN_USE_CODE}:USDT-IRT`,
     ]);
     primaryUp = true;
@@ -349,13 +366,14 @@ describe('the central rate: refreshing', () => {
     const recoveries = w.events.filter((event) => event.recoversCode !== undefined);
     expect(recoveries.map((event) => [event.recoversCode, event.recoversDedupeKey])).toEqual([
       [FX_SOURCE_UNAVAILABLE_CODE, `${FX_SOURCE_UNAVAILABLE_CODE}:NOBITEX`],
+      [FX_SINGLE_SOURCE_CODE, `${FX_SINGLE_SOURCE_CODE}:USDT-IRT`],
       [FX_FALLBACK_IN_USE_CODE, `${FX_FALLBACK_IN_USE_CODE}:USDT-IRT`],
     ]);
     expect(w.open.size).toBe(0);
     // Nothing recovers what was never open: a third healthy pass records no recovery.
     w.clockMs += 60_000;
     await w.service.refreshIfDue(scope, 'USDT');
-    expect(w.events.filter((event) => event.recoversCode !== undefined)).toHaveLength(2);
+    expect(w.events.filter((event) => event.recoversCode !== undefined)).toHaveLength(3);
   });
 
   it('both down + last-known-good inside the stale limit: the quote is STALE_ALLOWED and no "unavailable" is raised', async () => {
@@ -461,7 +479,7 @@ describe('the central rate: refreshing', () => {
   });
 
   it('rejects zero, negative-looking and absurd figures, records the rejection per source, and asks the fallback', async () => {
-    const w = world({ nobitex: () => reading('NOBITEX', 0n, 'IRR') });
+    const w = world({ nobitex: () => reading('NOBITEX', 0n, 'IRR'), settings: SINGLE });
     expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({
       outcome: 'REFRESHED_BY_FALLBACK',
     });
@@ -491,19 +509,21 @@ describe('the central rate: refreshing', () => {
       wallex: () => reading('WALLEX', fallback, 'IRT'),
     });
     await w.service.refreshIfDue(scope, 'USDT');
-    // A ten-fold unit mistake on the primary: refused, the fallback prices the pair.
+    // A ten-fold unit mistake on the primary: the two healthy sources DISAGREE, so nothing
+    // is stored and the last stored rate keeps pricing. Nobody picks a winner.
     primary = 10_355_000n;
     w.clockMs += 60_000;
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({
-      outcome: 'REFRESHED_BY_FALLBACK',
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toEqual({
+      outcome: 'FAILED',
+      reason: 'nobitex:outlier',
     });
     expect(w.repository.row?.quote).toMatchObject({
-      source: 'WALLEX',
-      rate: { mantissa: 103_500n, scale: 0 },
+      source: 'NOBITEX',
+      rate: { mantissa: 103_550n, scale: 0 },
     });
     expect(w.events.map((event) => event.code)).toEqual([
       FX_QUOTE_REJECTED_CODE,
-      FX_FALLBACK_IN_USE_CODE,
+      FX_QUOTE_REJECTED_CODE,
     ]);
     // The market really moved 30 % and both sources say so: the primary's figure is stored.
     primary = 1_346_150n;
@@ -514,16 +534,14 @@ describe('the central rate: refreshing', () => {
       source: 'NOBITEX',
       rate: { mantissa: 134_615n, scale: 0 },
     });
-    // Only one source stands behind a 30 % move: nothing is stored, the previous quote stays.
+    // Only one source stands behind a further 30 % move: nothing is stored, the quote stays.
     primary = 1_750_000n;
     fallback = 134_000n;
     w.clockMs += 60_000;
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({
-      outcome: 'REFRESHED_BY_FALLBACK',
-    });
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'FAILED' });
     expect(w.repository.row?.quote).toMatchObject({
-      source: 'WALLEX',
-      rate: { mantissa: 134_000n, scale: 0 },
+      source: 'NOBITEX',
+      rate: { mantissa: 134_615n, scale: 0 },
     });
   });
 
@@ -555,7 +573,10 @@ describe('the central rate: refreshing', () => {
   });
 
   it('a rate-limited source is left alone for the cooldown, on every replica, and the fallback answers meanwhile', async () => {
-    const w = world({ nobitex: () => ({ kind: 'RATE_LIMITED', code: 'nobitex.rate_limited' }) });
+    const w = world({
+      nobitex: () => ({ kind: 'RATE_LIMITED', code: 'nobitex.rate_limited' }),
+      settings: SINGLE,
+    });
     expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({
       outcome: 'REFRESHED_BY_FALLBACK',
     });
@@ -575,25 +596,11 @@ describe('the central rate: refreshing', () => {
     expect(w.nobitex.calls).toBe(2);
   });
 
-  it('with no fallback (NONE, or the same source), a primary failure keeps the last-known-good and dials nothing else', async () => {
-    let up = true;
-    const w = world({
-      nobitex: () => (up ? reading('NOBITEX', 1_035_500n, 'IRR') : down()),
-      settings: { 'fx.fallback_source': 'NONE' },
-    });
-    await w.service.refreshIfDue(scope, 'USDT');
-    up = false;
-    w.clockMs += 60_000;
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'FAILED' });
-    expect(w.wallex.calls).toBe(0);
-    const same = world({ nobitex: () => down(), settings: { 'fx.fallback_source': 'NOBITEX' } });
-    expect(await same.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'FAILED' });
-    expect(same.wallex.calls).toBe(0);
-    expect(same.nobitex.calls).toBe(1);
-  });
-
   it('a Rial installation keeps Nobitex as is and reads Wallex ten times larger', async () => {
-    const w = world({ nobitex: () => down(), settings: { 'sales.currency': 'IRR' } });
+    const w = world({
+      nobitex: () => down(),
+      settings: { ...SINGLE, 'sales.currency': 'IRR' },
+    });
     await w.service.refreshIfDue(scope, 'USDT');
     expect(w.repository.row).toMatchObject({
       quoteCurrency: 'IRR',
@@ -799,7 +806,7 @@ describe('the central rate: a source that keeps failing', () => {
   const blocked = () => down('nobitex.http_403');
 
   it('is skipped while its backoff runs, and the fallback answers meanwhile', async () => {
-    const w = world({ nobitex: blocked, settings: { 'fx.fresh_ttl_seconds': 10 } });
+    const w = world({ nobitex: blocked, settings: { ...SINGLE, 'fx.fresh_ttl_seconds': 10 } });
     expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({
       outcome: 'REFRESHED_BY_FALLBACK',
     });
@@ -905,5 +912,123 @@ describe('the central rate: a source that keeps failing', () => {
     await limited.service.refreshIfDue(scope, 'USDT');
     await limited.service.refresh(scope, actor, 'USDT');
     expect(limited.nobitex.calls).toBe(1);
+  });
+});
+
+describe('Round 6: sources that agree, switches, single-source mode and the stale window', () => {
+  it('Nobitex at 403: with one other source and no opt-in, nothing is stored and the old rate prices', async () => {
+    let nobitexUp = true;
+    const w = world({
+      nobitex: () => (nobitexUp ? reading('NOBITEX', 1_035_500n, 'IRR') : down('nobitex.http_403')),
+    });
+    await w.service.refreshIfDue(scope, 'USDT');
+    nobitexUp = false;
+    w.clockMs += 60_000;
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toEqual({
+      outcome: 'FAILED',
+      reason: 'nobitex:nobitex.http_403',
+    });
+    // Wallex answered a perfectly good figure and it was NOT stored: one source is not two.
+    expect(w.wallex.calls).toBe(2);
+    expect(w.repository.row?.quote?.source).toBe('NOBITEX');
+    // One source down never stops pricing: the last stored rate is still a usable quote.
+    const answer = await w.service.quoteFor(scope, 'USDT', new Date(w.clockMs + 1_000));
+    expect(answer).toMatchObject({ kind: 'QUOTE', quote: { state: 'STALE_ALLOWED' } });
+    // The healthy source is health, not a failure, and the one-source alert is open.
+    expect(w.repository.states.get('WALLEX')).toMatchObject({ consecutiveFailures: 0 });
+    expect(w.open.has(`${FX_SINGLE_SOURCE_CODE}:USDT-IRT`)).toBe(true);
+  });
+
+  it('single-source mode stores the lone healthy source, raises ONE alert, and recovers it when two agree again', async () => {
+    let nobitexUp = false;
+    const w = world({
+      nobitex: () => (nobitexUp ? reading('NOBITEX', 1_035_500n, 'IRR') : down('nobitex.http_403')),
+      settings: SINGLE,
+    });
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({
+      outcome: 'REFRESHED_BY_FALLBACK',
+    });
+    expect(w.repository.row?.quote).toMatchObject({ source: 'WALLEX' });
+    w.clockMs += 60_000;
+    await w.service.refreshIfDue(scope, 'USDT');
+    const alerts = w.events.filter((event) => event.code === FX_SINGLE_SOURCE_CODE);
+    // Recorded on every pass of the outage, all on ONE deduped subject.
+    expect(new Set(alerts.map((event) => event.dedupeKey))).toEqual(
+      new Set([`${FX_SINGLE_SOURCE_CODE}:USDT-IRT`]),
+    );
+    nobitexUp = true;
+    w.clockMs += 700_000;
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'REFRESHED' });
+    expect(w.open.has(`${FX_SINGLE_SOURCE_CODE}:USDT-IRT`)).toBe(false);
+  });
+
+  it('single-source mode still refuses a lone figure far from the last good one', async () => {
+    let wallex = 103_500n;
+    let nobitexUp = true;
+    const w = world({
+      nobitex: () => (nobitexUp ? reading('NOBITEX', 1_035_500n, 'IRR') : down('nobitex.http_403')),
+      wallex: () => reading('WALLEX', wallex, 'IRT'),
+      settings: SINGLE,
+    });
+    await w.service.refreshIfDue(scope, 'USDT');
+    nobitexUp = false;
+    wallex = 1_035_000n;
+    w.clockMs += 60_000;
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'FAILED' });
+    expect(w.repository.row?.quote).toMatchObject({ rate: { mantissa: 103_550n, scale: 0 } });
+  });
+
+  it('the agreement count is honoured: three required, two agreeing, nothing stored', async () => {
+    const w = world({ settings: { 'fx.min_agreeing_sources': 3 } });
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'FAILED' });
+    expect(w.repository.row?.quote).toBeNull();
+  });
+
+  it('a disabled source is never called, whatever the primary and fallback say', async () => {
+    const w = world({
+      settings: { 'fx.source_nobitex_enabled': false, ...SINGLE },
+    });
+    await w.service.refreshIfDue(scope, 'USDT');
+    await w.service.refresh(scope, actor, 'USDT');
+    expect(w.nobitex.calls).toBe(0);
+    expect(w.wallex.calls).toBeGreaterThan(0);
+    // The owner's switch is not "the primary failed": no fallback alert.
+    expect(codes(w)).not.toContain(FX_FALLBACK_IN_USE_CODE);
+    const off = world({
+      settings: { 'fx.source_nobitex_enabled': false, 'fx.source_wallex_enabled': false },
+    });
+    expect(await off.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'FAILED' });
+    expect(off.nobitex.calls + off.wallex.calls).toBe(0);
+  });
+
+  it('the status lists every source with its switch, health or not', async () => {
+    const w = world({ settings: { 'fx.source_wallex_enabled': false } });
+    const status = await w.service.status(scope, actor, 'USDT');
+    expect(status.sources.map((row) => [row.source, row.enabled])).toEqual([
+      ['NOBITEX', true],
+      ['WALLEX', false],
+    ]);
+    expect(status.settings).toMatchObject({ minAgreeingSources: 2, acceptSingleSource: false });
+  });
+
+  it('the stale window: the last stored rate prices for the window and not a second longer', async () => {
+    const w = world({ settings: { 'fx.max_stale_seconds': 21_600 } });
+    await w.service.refreshIfDue(scope, 'USDT');
+    const at = (seconds: number) => new Date(T0 + seconds * 1_000);
+    expect(await w.service.quoteFor(scope, 'USDT', at(21_600))).toMatchObject({
+      kind: 'QUOTE',
+      quote: { state: 'STALE_ALLOWED', ageSeconds: 21_600 },
+    });
+    const past = await w.service.quoteFor(scope, 'USDT', at(21_601));
+    expect(past).toMatchObject({ kind: 'UNAVAILABLE', reason: 'TOO_STALE' });
+    // The age is still shown to the operator, and no rate is invented.
+    expect(past.kind === 'UNAVAILABLE' && past.stale?.ageSeconds).toBe(21_601);
+  });
+
+  it('the registry default for that window is six hours', () => {
+    expect(FX_MAX_STALE_SECONDS_DEFAULT).toBe(21_600);
+    expect(settingDefinition('fx.max_stale_seconds').defaultValue).toBe(21_600);
+    expect(settingDefinition('fx.min_agreeing_sources').defaultValue).toBe(2);
+    expect(settingDefinition('fx.accept_single_source').defaultValue).toBe(false);
   });
 });
