@@ -104,7 +104,7 @@ const SAME_UNIT_CONVERSION: GatewayConversionSpec = {
  *   `POST /payments/{token}/verify`, asked server to server, can approve: `paid` for this
  *   attempt's `order_id` and exactly the rial amount asked. An optional signed webhook only
  *   brings a verify forward. Needs an API key; a row starts DISABLED and cannot be enabled
- *   without it. Not accepted against the real provider yet (`OQ-TP-01`).
+ *   without it. Not accepted against the real provider yet (`OQ-TP-01`: no sandbox is documented).
  */
 export const PAYMENT_GATEWAY_PROVIDERS = [
   'MANUAL_TRANSFER',

@@ -1,22 +1,15 @@
 /**
- * TetraPay (Tetra98), as the owner's Round 6 brief describes it (`docs/tetrapay-gateway-audit.md`).
+ * TetraPay (Tetra98), as its published API documentation describes it
+ * (`https://tetra98.com/docs`, v1; `docs/tetrapay-gateway-audit.md`).
  *
- * Every value here is either read off the brief's description of the TetraPay API or is a Nexa
- * product decision, and the two are labelled. The brief's source document (`tetra98-api-docs.md`)
- * was NOT available when this was built, so what the brief does not state is NOT invented: the
- * host, the exact JSON field names of the verify and webhook bodies beyond those named below,
- * the error body shape and the payment's lifetime are listed in `docs/open-questions.md`
- * (`OQ-TP-01..`) and the adapter reads them defensively and FAILS CLOSED.
+ * Every value here is either read off that documentation or is a Nexa product decision, and the
+ * two are labelled. What the documentation does NOT say - a sandbox, a fixed link lifetime, the
+ * fee percentage, how a payment made after expiry behaves - is listed in `docs/open-questions.md`
+ * (`OQ-TP-*`) and is not invented.
  */
 
-/**
- * The production host. NULL, deliberately: the brief names the paths and not the host, and a
- * key sent to a host somebody guessed is a key sent to a stranger (`OQ-TP-01`). While it is
- * null the adapter refuses every call as the installation's own configuration
- * (`tetrapay.base_url_missing`) and nothing is sent anywhere. Filling this in is one line,
- * and an adapter test pins that a null host sends nothing.
- */
-export const TETRAPAY_BASE_URL: string | null = null;
+/** Documented (§1). The production API; no sandbox is documented and none is assumed. */
+export const TETRAPAY_BASE_URL = 'https://api.tetra98.com/api/v1';
 
 /** Documented: `POST /payments` creates a payment `{ amount, order_id, callback_url }`. */
 export const TETRAPAY_CREATE_PATH = '/payments';
@@ -35,8 +28,9 @@ export const TETRAPAY_SIGNATURE_HEADER = 'x-tetrapay-signature';
 export const TETRAPAY_EVENT_ID_HEADER = 'x-tetrapay-event-id';
 /** Documented: the largest clock difference, in seconds, between `t` and now. */
 export const TETRAPAY_WEBHOOK_TOLERANCE_SECONDS = 300;
-/** Documented: the prefix of the webhook secret an operator copies from TetraPay. */
-export const TETRAPAY_WEBHOOK_SECRET_PREFIX = 'whsec_';
+/** Documented: the payment method a paid link reports. Metadata for the operations log. */
+export const TETRAPAY_METHODS = ['online', 'card'] as const;
+export type TetraPayMethod = (typeof TETRAPAY_METHODS)[number];
 
 /** Documented: the statuses a payment reports. */
 export const TETRAPAY_STATUSES = ['created', 'pending', 'paid', 'expired'] as const;
@@ -47,9 +41,12 @@ export type TetraPayStatus = (typeof TETRAPAY_STATUSES)[number];
  * Telegram is `https://t.me/<bot_username>?start=<param>`.
  */
 export const TETRAPAY_ORDER_ID_MAX_LENGTH = 64;
+/** Documented: the only webhook event, and the header that names it. */
+export const TETRAPAY_EVENT_HEADER = 'x-tetrapay-event';
+export const TETRAPAY_PAID_EVENT = 'payment.paid';
 export const TETRAPAY_ORDER_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/u;
 
-/** The documented error codes (the brief's list), carried in an error body of undocumented shape. */
+/** The documented error codes (§9), carried as `{ "error": { "code", "message", ... } }`. */
 export const TETRAPAY_ERROR_CODES = [
   'UNAUTHORIZED',
   'GATEWAY_SUSPENDED',
@@ -75,7 +72,7 @@ export const TETRAPAY_CODE_PREFIX = 'tetrapay.';
 /**
  * The codes that describe the MERCHANT'S configuration, never the customer's payment: they open
  * an operational condition for the operator and the customer is told the method is unavailable.
- * `GATEWAY_SUSPENDED` refuses a CREATE only (brief): the inquiry and verify keep working.
+ * `GATEWAY_SUSPENDED` refuses a CREATE only (§9): the inquiry and verify keep working.
  */
 export const TETRAPAY_CONFIGURATION_ERROR_CODES: readonly TetraPayErrorCode[] = [
   'UNAUTHORIZED',
@@ -111,7 +108,7 @@ export const TETRAPAY_INQUIRY_BUDGET_PER_MINUTE = 40;
 /**
  * Nexa decision: an attempt lives seventy minutes from the creation of the internal payment,
  * the rule every inquiry route shares, so a late completion means the same thing on each. How
- * long TetraPay keeps a payment payable is not stated in the brief (`OQ-TP-04`); a verify that
+ * long TetraPay keeps a payment payable is not documented (`OQ-TP-04`); a verify that
  * reports `paid` after this deadline goes through the late-credit decision of the route.
  */
 export const TETRAPAY_ATTEMPT_LIFETIME_MINUTES = 70;
