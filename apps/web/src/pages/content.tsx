@@ -607,7 +607,7 @@ export const TemplateCard = memo(function TemplateCard({
           )
           .map((placeholder) => placeholder.token);
   /** R6 item 3: the two /start greetings are previewed with a clearly labelled sample customer. */
-  const sampleCustomer = SAMPLE_CUSTOMER_FA[template.key] ?? null;
+  const sampleCustomer = sampleCustomerFor(template.key);
   const [sample, setSample] = useState<Record<string, string>>(sampleCustomer ?? {});
   const [showHistory, setShowHistory] = useState(false);
   /**
@@ -1211,20 +1211,20 @@ export const TemplateCard = memo(function TemplateCard({
  * person — never the viewing administrator and never a real customer — so the screen shows
  * the template and the preview is plainly a preview. Money is «minor units and a currency».
  */
-const SAMPLE_CUSTOMER_FA: Readonly<Record<string, Readonly<Record<string, string>>>> = (() => {
-  const sample = {
-    firstName: 'علی',
+function sampleCustomerFor(key: string): Readonly<Record<string, string>> | null {
+  if (key !== 'bot.start.welcome' && key !== 'bot.start.welcome_back') return null;
+  return {
+    firstName: t('web.sample_customer_first_name'),
     username: '@sample_user',
     telegramId: '123456789',
-    date: '۲ آبان ۱۴۰۵',
-    time: '۱۸:۳۰',
-    weekday: 'جمعه',
+    date: t('web.sample_customer_date'),
+    time: t('web.sample_customer_time'),
+    weekday: t('web.sample_customer_weekday'),
     walletBalance: '150000 IRT',
     activeServices: '2',
     nearestExpiry: '5',
   };
-  return { 'bot.start.welcome': sample, 'bot.start.welcome_back': sample };
-})();
+}
 
 /** The text form a sample value has to take, or nothing for a plain string. */
 function hintFor(type: TemplateViewResponse['placeholders'][number]['type']): string | undefined {
