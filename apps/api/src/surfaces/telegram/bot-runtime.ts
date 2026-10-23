@@ -37,6 +37,8 @@ import {
   paymentGatewayProviderSchema,
   telegramChannelJoinUrl,
   PAYMENT_GATEWAY_DESCRIPTORS,
+  TONPAYS_TELEGRAM_STATUS_LESS,
+  TONPAYS_TELEGRAM_STATUS_MORE,
   REFERRAL_MENU_COMMAND,
   TRIAL_MENU_COMMAND,
 } from '@nexa/contracts';
@@ -148,12 +150,21 @@ import type {
   GatewayCardFacts,
   GatewayPaymentService,
 } from '../../modules/commerce/payments/application/gateway-payment.service.js';
-import type { GatewayInvoiceRecord } from '../../modules/commerce/payments/application/gateway-invoice-ports.js';
+import type {
+  GatewayInvoiceRecord,
+  GatewayProviderRequestRecord,
+} from '../../modules/commerce/payments/application/gateway-invoice-ports.js';
 import type { GatewayReceiptCaptureService } from '../../modules/commerce/payments/application/gateway-receipt-capture.service.js';
 import {
+  cancelAvailable,
   cardChangeAvailable,
+  customerMessageKeyOfError,
+  isBuyerConflictCode,
   receiptUploadAvailable,
+  refundCardAvailable,
+  remainderReceiptAvailable,
 } from '../../modules/commerce/payments/domain/tonpays-telegram.js';
+import { gatewaySettlementDeadline } from '../../modules/commerce/payments/domain/settlement.js';
 import type { WalletService } from '../../modules/commerce/wallet/application/wallet.service.js';
 import {
   ProvisioningService,
@@ -304,6 +315,14 @@ export const BOT_INTENTS = [
    */
   'GATEWAY_RECEIPT',
   'GATEWAY_CARD_CHANGE',
+  /*
+   * Round 6 (TonPays Telegram): «❌ لغو فاکتور» asks first and then records a cancel request,
+   * and «💳 ثبت کارت بازگشت وجه» opens the refund-card prompt of an overpaid invoice. Each names
+   * the PAYMENT and nothing else; the provider is called by the worker, never from the tap.
+   */
+  'GATEWAY_CANCEL_ASK',
+  'GATEWAY_CANCEL',
+  'GATEWAY_REFUND_CARD',
   'PAY_CANCEL_ASK',
   'PAY_CANCEL',
   'PAY_SENT',
@@ -878,6 +897,10 @@ export const GATEWAY_CHECK_CALLBACK_PREFIX = 'gc:';
  */
 export const GATEWAY_RECEIPT_CALLBACK_PREFIX = 'gr:';
 export const GATEWAY_CARD_CHANGE_CALLBACK_PREFIX = 'gk:';
+/** Round 6: ask whether to cancel, confirm the cancel, and open the refund-card prompt. */
+export const GATEWAY_CANCEL_ASK_CALLBACK_PREFIX = 'gq:';
+export const GATEWAY_CANCEL_CALLBACK_PREFIX = 'gz:';
+export const GATEWAY_REFUND_CARD_CALLBACK_PREFIX = 'gf:';
 
 /**
  * Paying an order through ONE named external route (Package A): `gp:<order uuid>.<provider>`,
@@ -2880,6 +2903,27 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
         id,
       );
     }
+    if (data.startsWith(GATEWAY_CANCEL_ASK_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'GATEWAY_CANCEL_ASK',
+        data.slice(GATEWAY_CANCEL_ASK_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(GATEWAY_CANCEL_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'GATEWAY_CANCEL',
+        data.slice(GATEWAY_CANCEL_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(GATEWAY_REFUND_CARD_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'GATEWAY_REFUND_CARD',
+        data.slice(GATEWAY_REFUND_CARD_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
     if (data.startsWith(GATEWAY_CHECK_CALLBACK_PREFIX)) {
       return callbackCommand('GATEWAY_CHECK', data.slice(GATEWAY_CHECK_CALLBACK_PREFIX.length), id);
     }
@@ -4359,7 +4403,14 @@ export interface BotRuntimeDeps {
    */
   readonly gatewayReceipts?: Pick<
     GatewayReceiptCaptureService,
-    'openReceiptCapture' | 'requestCardChange' | 'receivePhoto' | 'openCaptureFor'
+    | 'openReceiptCapture'
+    | 'requestCardChange'
+    | 'receivePhoto'
+    | 'openCaptureFor'
+    | 'requestCancel'
+    | 'cancelOffered'
+    | 'refundCardOffered'
+    | 'requestRefund'
   >;
   readonly screens: CustomerScreenComposer;
   readonly counters: CustomerCountersReader;
@@ -10585,6 +10636,30 @@ export class BotRuntime {
         input.idempotencyKey,
       );
     }
+    if (command.intent === 'GATEWAY_CANCEL_ASK' && command.targetId !== null) {
+      return this.gatewayCancelAsk(scope, command.targetId, customer, input.botInstanceId);
+    }
+    if (command.intent === 'GATEWAY_CANCEL' && command.targetId !== null) {
+      return this.gatewayCancel(
+        scope,
+        actor,
+        command.targetId,
+        customer,
+        input.botInstanceId,
+        input.idempotencyKey,
+      );
+    }
+    if (command.intent === 'GATEWAY_REFUND_CARD' && command.targetId !== null) {
+      return this.gatewayRefundCardPrompt(
+        scope,
+        actor,
+        command.targetId,
+        customer,
+        input.botInstanceId,
+        input.idempotencyKey,
+        updateIdOf(input.update),
+      );
+    }
     if (command.intent === 'PAY_CANCEL_ASK' && command.targetId !== null) {
       return this.cancelPaymentAsk(scope, command.targetId, customer);
     }
@@ -12215,6 +12290,9 @@ export class BotRuntime {
         buttons: [...found.map((service) => serviceListButton(service, now)), backToListButton()],
         orderId: null,
       };
+    }
+    if (capture.purpose === 'GATEWAY_REFUND_CARD') {
+      return this.gatewayRefundCardText(scope, actor, customer, capture, text, input);
     }
     if (capture.purpose === 'SERVICE_REFUND_REASON') {
       return this.serviceRefundReason(scope, actor, customer, capture.subjectId, text, input);
@@ -15442,6 +15520,219 @@ export class BotRuntime {
   }
 
   /**
+   * «❌ لغو فاکتور» (Round 6): the question first. Writes nothing. Offered only while the
+   * cancel can be asked for (a `pending` invoice, the customer window, nothing in flight);
+   * otherwise the attempt's current screen is redrawn. The confirm button carries the
+   * destructive prefix; «🔎» is the way back.
+   */
+  private async gatewayCancelAsk(
+    scope: TenantContext,
+    paymentId: string,
+    customer: CustomerRecord,
+    botInstanceId: BotInstanceId,
+  ): Promise<PendingReply> {
+    const view = await this.deps.gateway.attemptFor(scope, customer.id, paymentId);
+    if (
+      view === null ||
+      view.invoice.botInstanceId !== botInstanceId ||
+      this.deps.gatewayReceipts === undefined
+    ) {
+      return {
+        key: 'bot.payment.gateway_closed',
+        values: {},
+        buttons: [mainMenuButton()],
+        orderId: null,
+      };
+    }
+    const offered = await this.deps.gatewayReceipts.cancelOffered(scope, {
+      customerId: customer.id,
+      paymentId: view.payment.id,
+      botInstanceId,
+    });
+    if (!offered) return this.refusedCardTap(scope, view);
+    return {
+      key: 'bot.payment.gateway_cancel_confirm',
+      values: { reference: paymentTrackingCode(view.payment) },
+      buttons: [
+        {
+          ...inlineLabel('payment.gateway_cancel_confirm'),
+          data: `${GATEWAY_CANCEL_CALLBACK_PREFIX}${view.payment.id}`,
+        },
+        cardCheck(view.payment.id),
+      ],
+      orderId: view.payment.orderId,
+      wizard: {
+        kind: view.payment.orderId === null ? 'TOPUP' : 'ORDER',
+        step: 'INVOICE',
+        paymentId: view.payment.id,
+      },
+    };
+  }
+
+  /**
+   * The confirmed cancel (Round 6): a request row the worker sends; the payment message is
+   * redrawn as "cancelling…" and the worker edits the result in. Re-decided against the rows
+   * under the payment's lock; a refusal redraws the attempt as it stands.
+   */
+  private async gatewayCancel(
+    scope: TenantContext,
+    actor: ActorContext,
+    paymentId: string,
+    customer: CustomerRecord,
+    botInstanceId: BotInstanceId,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    const view = await this.deps.gateway.attemptFor(scope, customer.id, paymentId);
+    if (
+      view === null ||
+      view.invoice.botInstanceId !== botInstanceId ||
+      this.deps.gatewayReceipts === undefined
+    ) {
+      return {
+        key: 'bot.payment.gateway_closed',
+        values: {},
+        buttons: [mainMenuButton()],
+        orderId: null,
+      };
+    }
+    const requested = await this.deps.gatewayReceipts.requestCancel(scope, actor, {
+      customerId: customer.id,
+      paymentId: view.payment.id,
+      botInstanceId,
+      idempotencyKey: `${idempotencyKey}:gateway-cancel`,
+    });
+    const fresh = (await this.deps.gateway.attemptFor(scope, customer.id, paymentId)) ?? view;
+    return requested
+      ? this.gatewayAttemptReply({ ...fresh, reissued: true }, fresh.payment.orderId, scope)
+      : this.refusedCardTap(scope, fresh);
+  }
+
+  /**
+   * «💳 ثبت کارت بازگشت وجه» (Round 6): opens the text window that reads the refund card and
+   * asks for it as its own message. Offered only for an overpaid invoice whose refund is not
+   * already pending or in flight.
+   */
+  private async gatewayRefundCardPrompt(
+    scope: TenantContext,
+    actor: ActorContext,
+    paymentId: string,
+    customer: CustomerRecord,
+    botInstanceId: BotInstanceId,
+    idempotencyKey: string,
+    updateId: bigint | undefined,
+  ): Promise<PendingReply> {
+    const view = await this.deps.gateway.attemptFor(scope, customer.id, paymentId);
+    if (
+      view === null ||
+      view.invoice.botInstanceId !== botInstanceId ||
+      this.deps.gatewayReceipts === undefined
+    ) {
+      return {
+        key: 'bot.payment.gateway_closed',
+        values: {},
+        buttons: [mainMenuButton()],
+        orderId: null,
+      };
+    }
+    const offered = await this.deps.gatewayReceipts.refundCardOffered(scope, {
+      customerId: customer.id,
+      paymentId: view.payment.id,
+      botInstanceId,
+    });
+    if (!offered) return this.refusedCardTap(scope, view);
+    await this.deps.captures.open(scope, actor, {
+      idempotencyKey: `${idempotencyKey}:refund-card-open`,
+      botInstanceId,
+      customerId: customer.id,
+      purpose: 'GATEWAY_REFUND_CARD',
+      subjectId: view.payment.id,
+      // The card must be typed after this tap.
+      ...(updateId === undefined ? {} : { openedUpdateId: updateId }),
+    });
+    return {
+      key: 'bot.payment.gateway_refund_card_prompt',
+      values: { reference: paymentTrackingCode(view.payment) },
+      buttons: [cardCheck(view.payment.id), mainMenuButton()],
+      orderId: view.payment.orderId,
+      wizard: {
+        kind: view.payment.orderId === null ? 'TOPUP' : 'ORDER',
+        step: 'INVOICE',
+        paymentId: view.payment.id,
+        placement: 'NEW',
+      },
+    };
+  }
+
+  /**
+   * The customer's answer to the refund-card prompt (Round 6): two lines, validated locally,
+   * sealed and queued. The text is used for exactly that and is never logged, echoed or stored
+   * — the reply shows the card masked. A bad format reopens the window, so the next message is
+   * still read.
+   */
+  private async gatewayRefundCardText(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    capture: { readonly subjectId: string | null },
+    text: string,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update?: unknown;
+    },
+  ): Promise<PendingReply | null> {
+    const paymentId = capture.subjectId;
+    if (paymentId === null || this.deps.gatewayReceipts === undefined) return null;
+    const view = await this.deps.gateway.attemptFor(scope, customer.id, paymentId);
+    if (view === null || view.invoice.botInstanceId !== input.botInstanceId) {
+      return {
+        key: 'bot.payment.gateway_closed',
+        values: {},
+        buttons: [mainMenuButton()],
+        orderId: null,
+      };
+    }
+    const result = await this.deps.gatewayReceipts.requestRefund(scope, actor, {
+      customerId: customer.id,
+      paymentId: view.payment.id,
+      botInstanceId: input.botInstanceId,
+      idempotencyKey: `${input.idempotencyKey}:gateway-refund`,
+      text,
+    });
+    const reference = paymentTrackingCode(view.payment);
+    if (result === 'INVALID') {
+      const updateId = updateIdOf(input.update);
+      await this.deps.captures.open(scope, actor, {
+        idempotencyKey: `${input.idempotencyKey}:refund-card-reopen`,
+        botInstanceId: input.botInstanceId,
+        customerId: customer.id,
+        purpose: 'GATEWAY_REFUND_CARD',
+        subjectId: view.payment.id,
+        ...(updateId === undefined ? {} : { openedUpdateId: updateId }),
+      });
+      return {
+        key: 'bot.payment.gateway_refund_card_invalid',
+        values: {},
+        buttons: [cardCheck(view.payment.id), mainMenuButton()],
+        orderId: view.payment.orderId,
+      };
+    }
+    if (result === 'REFUSED') return this.refusedCardTap(scope, view);
+    const refunds = await this.deps.gateway.cardFactsFor(scope, view.invoice);
+    return {
+      key: 'bot.payment.gateway_refund_requested',
+      values: {
+        reference,
+        ...(refunds?.latestRefund?.refundCardMasked == null
+          ? {}
+          : { maskedCard: refunds.latestRefund.refundCardMasked }),
+      },
+      buttons: [cardCheck(view.payment.id), mainMenuButton()],
+      orderId: view.payment.orderId,
+    };
+  }
+
+  /**
    * A refused `gr:`/`gk:` (TPTG-19): a payment still PENDING (a receipt already on its way, a
    * cooldown) or in review / UNKNOWN is redrawn as it stands — the review screens included;
    * anything else that is no longer payable answers `gateway_closed` and nothing more.
@@ -16962,15 +17253,36 @@ function cardTransferScreen(
     ...inlineLabel('payment.gateway_change_card'),
     data: `${GATEWAY_CARD_CHANGE_CALLBACK_PREFIX}${payment.id}`,
   };
+  const cancelRequest = facts?.latestCancel ?? null;
+  const cancel: CustomerButton = {
+    ...inlineLabel('payment.gateway_cancel'),
+    data: `${GATEWAY_CANCEL_ASK_CALLBACK_PREFIX}${payment.id}`,
+  };
   const actions = [
     ...(facts !== null && windowOpen && receiptUploadAvailable(invoice, submissions)
       ? [receipt]
       : []),
     ...(facts !== null && windowOpen && cardChangeAvailable(invoice, latest, at) ? [change] : []),
+    ...(facts !== null && windowOpen && cancelAvailable(invoice, cancelRequest, submissions)
+      ? [cancel]
+      : []),
     cardCheck(payment.id),
     mainMenuButton(),
   ];
   const brief = { payable, expiresAt, reference };
+  // Round 6: a cancel with the provider, or one it refused / lost and no inquiry has answered since.
+  if (cancelRequest !== null) {
+    const cancelKey = cancelNoticeKey(cancelRequest, invoice);
+    if (cancelKey !== null) {
+      return {
+        key: cancelKey,
+        values: { reference },
+        buttons: [cardCheck(payment.id), mainMenuButton()],
+        orderId,
+        wizard,
+      };
+    }
+  }
   const newest = submissions.at(-1) ?? null;
   // A receipt on its way, accepted without a review, or whose answer was lost: shown as sent.
   if (
@@ -17022,8 +17334,14 @@ function cardTransferScreen(
     ...(invoice.cardName === null ? {} : { cardName: invoice.cardName }),
   };
   if (newest !== null && (newest.state === 'REFUSED' || newest.state === 'ABANDONED')) {
+    // Round 6: the provider's own words for an empty image or a receipt it could not match.
+    const refusedKey = customerMessageKeyOfError(newest.errorCode);
     return {
-      key: 'bot.payment.gateway_card_receipt_refused',
+      key:
+        refusedKey === 'bot.payment.gateway_card_receipt_empty' ||
+        refusedKey === 'bot.payment.gateway_card_receipt_invoice'
+          ? refusedKey
+          : 'bot.payment.gateway_card_receipt_refused',
       values: { ...brief, ...card },
       buttons: actions,
       orderId,
@@ -17068,6 +17386,240 @@ function cardTransferScreen(
  * to pay (the order's method selector, or the top-up's amount), never a retry of THIS
  * attempt: an attempt whose create is unknown is never created again (TonPays rule three).
  */
+/**
+ * The notice a customer's cancel request leaves on the invoice (Round 6): "cancelling…" while
+ * it is with the provider; the provider's refusal or a lost answer until the next inquiry has
+ * answered (that inquiry says what the invoice is now, and replaces the notice). A request that
+ * was applied, rate-limited, or answered before the latest inquiry leaves none.
+ */
+function cancelNoticeKey(
+  request: GatewayProviderRequestRecord,
+  invoice: Pick<GatewayInvoiceRecord, 'lastInquiryAt'>,
+): TemplateKey | null {
+  if (request.state === 'REQUESTED' || request.state === 'SENT') {
+    return 'bot.payment.gateway_cancel_requested';
+  }
+  const answeredSince =
+    request.decidedAt !== null &&
+    invoice.lastInquiryAt !== null &&
+    invoice.lastInquiryAt.getTime() >= request.decidedAt.getTime();
+  if (answeredSince) return null;
+  if (request.state === 'UNKNOWN') return 'bot.payment.gateway_cancel_unknown';
+  if (request.state === 'REFUSED') {
+    const key = customerMessageKeyOfError(request.errorCode);
+    // Only the cancel refusals have a sentence of their own here; others change nothing.
+    return key !== null &&
+      (key.startsWith('bot.payment.gateway_cancel_not_allowed_') ||
+        key === 'bot.payment.gateway_not_pending')
+      ? key
+      : null;
+  }
+  return null;
+}
+
+/**
+ * An under- or overpaid TonPays Telegram invoice (Round 6): `action_required_less` shows the
+ * remainder, the card to pay it to (tap-to-copy buttons for the card and the exact amount) and
+ * «📤 ارسال رسید مابقی»; `action_required_more` asks for the refund card. Null for any other
+ * status — and for one whose settlement deadline has passed. Every figure is TonPays' own
+ * instruction to the customer; none of it is what Nexa settles, credits or refunds.
+ */
+function providerNeedScreen(
+  payment: PaymentRecord,
+  invoice: GatewayInvoiceRecord,
+  orderId: string | null,
+  at: Date,
+  facts: GatewayCardFacts,
+): PendingReply | null {
+  const less = invoice.providerStatus === TONPAYS_TELEGRAM_STATUS_LESS;
+  const more = invoice.providerStatus === TONPAYS_TELEGRAM_STATUS_MORE;
+  if (!less && !more) return null;
+  const deadline = gatewaySettlementDeadline(payment);
+  if (payment.state !== 'PENDING' || deadline === null || at.getTime() >= deadline.getTime()) {
+    return null;
+  }
+  const kind = payment.orderId === null ? ('TOPUP' as const) : ('ORDER' as const);
+  const wizard = { kind, step: 'INVOICE' as const, paymentId: payment.id };
+  const reference = paymentTrackingCode(payment);
+  const provider = facts.providerFacts ?? null;
+  const base = { expiresAt: deadline, reference };
+  const tail = [cardCheck(payment.id), mainMenuButton()];
+  const submissions = facts.submissions;
+  const newest = submissions.at(-1) ?? null;
+  if (less) {
+    const shortfall =
+      provider?.remainingAmount == null
+        ? {}
+        : { shortfall: money(provider.remainingAmount, 'IRT') };
+    const sending =
+      (newest !== null &&
+        (newest.state === 'QUEUED' ||
+          newest.state === 'SENDING' ||
+          newest.state === 'ACCEPTED' ||
+          (newest.state === 'UNKNOWN' && newest.inquiryResolvedAt === null))) ||
+      provider?.remainingReceiptReceived === true;
+    if (sending) {
+      return {
+        key: 'bot.payment.gateway_card_underpaid_receipt_sent',
+        values: { ...base, ...shortfall },
+        buttons: tail,
+        orderId,
+        wizard,
+      };
+    }
+    if (
+      provider === null ||
+      provider.remainingAmount === null ||
+      provider.remainingCardNumber === null ||
+      provider.remainingInvoiceId === null
+    ) {
+      // TonPays said "less" without a usable remainder: nothing is invented.
+      return {
+        key: 'bot.payment.gateway_card_underpaid_unavailable',
+        values: base,
+        buttons: tail,
+        orderId,
+        wizard,
+      };
+    }
+    const amount = money(provider.remainingAmount, 'IRT');
+    const offerReceipt = remainderReceiptAvailable(invoice, provider, submissions);
+    return {
+      key: 'bot.payment.gateway_card_underpaid',
+      values: {
+        ...base,
+        shortfall: amount,
+        cardNumber: provider.remainingCardNumber,
+        ...(provider.remainingCardHolder === null
+          ? {}
+          : { cardName: provider.remainingCardHolder }),
+      },
+      buttons: [
+        { ...inlineLabel('payment.copy_card'), copyText: provider.remainingCardNumber, row: 0 },
+        { ...inlineLabel('payment.copy_amount'), copyText: plainAmount(amount), row: 0 },
+        ...(offerReceipt
+          ? [
+              {
+                ...inlineLabel('payment.gateway_remainder_receipt'),
+                data: `${GATEWAY_RECEIPT_CALLBACK_PREFIX}${payment.id}`,
+              },
+            ]
+          : []),
+        ...tail,
+      ],
+      orderId,
+      wizard,
+    };
+  }
+  // action_required_more
+  const refundAmount =
+    provider?.refundAmount == null ? {} : { refundAmount: money(provider.refundAmount, 'IRT') };
+  const latest = facts.latestRefund ?? null;
+  const masked = latest?.refundCardMasked == null ? {} : { maskedCard: latest.refundCardMasked };
+  const retryCard: CustomerButton = {
+    ...inlineLabel('payment.gateway_refund_card'),
+    data: `${GATEWAY_REFUND_CARD_CALLBACK_PREFIX}${payment.id}`,
+  };
+  if (
+    (latest !== null && (latest.state === 'REQUESTED' || latest.state === 'SENT')) ||
+    provider?.refundPending === true ||
+    latest?.state === 'APPLIED'
+  ) {
+    return {
+      key: 'bot.payment.gateway_card_overpaid_pending',
+      values: { ...base, ...refundAmount, ...masked },
+      buttons: tail,
+      orderId,
+      wizard,
+    };
+  }
+  if (latest !== null && latest.state === 'UNKNOWN') {
+    return {
+      key: 'bot.payment.gateway_refund_unknown',
+      values: { reference },
+      buttons: [retryCard, ...tail],
+      orderId,
+      wizard,
+    };
+  }
+  if (latest !== null && latest.state === 'REFUSED') {
+    const key = customerMessageKeyOfError(latest.errorCode);
+    if (
+      key === 'bot.payment.gateway_refund_not_allowed' ||
+      key === 'bot.payment.gateway_refund_already_open'
+    ) {
+      return { key, values: { reference }, buttons: tail, orderId, wizard };
+    }
+    if (
+      key === 'bot.payment.gateway_refund_card_refused' ||
+      key === 'bot.payment.gateway_refund_holder_refused'
+    ) {
+      return { key, values: { reference }, buttons: [retryCard, ...tail], orderId, wizard };
+    }
+  }
+  return {
+    key: 'bot.payment.gateway_card_overpaid',
+    values: { ...base, ...refundAmount },
+    buttons: [...(refundCardAvailable(invoice, provider, latest) ? [retryCard] : []), ...tail],
+    orderId,
+    wizard,
+  };
+}
+
+/**
+ * A FAILED card-transfer attempt that deserves its own words (Round 6): one the customer
+ * cancelled, one TonPays rejected WITH reasons (shown as TonPays worded them, sanitised), and
+ * a create TonPays refused because the buyer already holds an open invoice (the invoice that
+ * blocks is one tap away when Nexa knows it). Null for everything else.
+ */
+function failedCardScreen(
+  payment: PaymentRecord,
+  invoice: GatewayInvoiceRecord,
+  orderId: string | null,
+  facts: GatewayCardFacts | null,
+  screen: (
+    key: TemplateKey,
+    buttons: readonly CustomerButton[],
+    step: WizardDirective['step'],
+    pending?: boolean,
+  ) => PendingReply,
+): PendingReply | null {
+  if (PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].invoiceForm !== 'CARD_TRANSFER') return null;
+  const retry: CustomerButton =
+    payment.orderId === null ? topupButton() : payMethodsButton(payment.orderId);
+  if (facts?.latestCancel?.state === 'APPLIED') {
+    return screen('bot.payment.gateway_cancelled', [retry], 'NOTICE');
+  }
+  if (invoice.creationState === 'CREATE_FAILED' && isBuyerConflictCode(invoice.creationErrorCode)) {
+    const key = customerMessageKeyOfError(invoice.creationErrorCode);
+    if (key === null) return null;
+    const open = facts?.openElsewherePaymentId ?? null;
+    return screen(
+      key,
+      [
+        ...(open === null
+          ? []
+          : [
+              {
+                ...inlineLabel('payment.gateway_open_invoice'),
+                data: `${GATEWAY_CHECK_CALLBACK_PREFIX}${open}`,
+              },
+            ]),
+        retry,
+      ],
+      'NOTICE',
+    );
+  }
+  const reasons = facts?.providerFacts?.rejectReasons ?? [];
+  if (reasons.length > 0) {
+    return {
+      ...screen('bot.payment.gateway_card_rejected', [retry], 'NOTICE'),
+      values: { reasons: reasons.join('\n'), reference: paymentTrackingCode(payment) },
+    };
+  }
+  return null;
+}
+
 /**
  * The review-window and needs-review sentences per provider, for a route whose own words
  * differ from TonPays Telegram's receipt wording (NOWPayments: coins confirming on chain,
@@ -17169,6 +17721,16 @@ export function gatewayAttemptScreen(
   if (payment.state === 'UNKNOWN') {
     return screen(reviewKeys.unresolved, [], 'INVOICE');
   }
+  /*
+   * Round 6: an under- or overpaid invoice is never shown as plain open (or "in review"): it
+   * has a next step, decided from what the provider's latest inquiry said. Before the review
+   * and closed tests because a review window may be what the invoice is inside when the
+   * provider finds the mismatch.
+   */
+  if (cardFacts !== null && invoice.creationState === 'CREATED') {
+    const needed = providerNeedScreen(payment, invoice, orderId, at, cardFacts);
+    if (needed !== null) return needed;
+  }
   const reviewUntil = payment.providerReviewUntil ?? null;
   if (payment.state === 'PENDING' && reviewUntil !== null) {
     if (reviewUntil.getTime() > at.getTime()) {
@@ -17188,6 +17750,9 @@ export function gatewayAttemptScreen(
     return screen(reviewKeys.unresolved, [], 'INVOICE');
   }
   if (payment.state === 'FAILED') {
+    // Round 6: the customer's own cancel, a rejection with reasons, a buyer with another invoice.
+    const failed = failedCardScreen(payment, invoice, orderId, cardFacts, screen);
+    if (failed !== null) return failed;
     // A create the gateway refused is "unavailable"; an invoice it did not approve failed.
     return screen(
       invoice.creationState === 'CREATE_FAILED'
@@ -17248,6 +17813,8 @@ export function gatewayAttemptScreen(
    * - Only a create whose answer really was lost (`CREATE_UNKNOWN`) is `gateway_unknown`.
    */
   if (invoice.creationState === 'CREATE_FAILED') {
+    const failed = failedCardScreen(payment, invoice, orderId, cardFacts, screen);
+    if (failed !== null) return failed;
     return screen('bot.payment.gateway_unavailable', [retry], 'NOTICE');
   }
   if (

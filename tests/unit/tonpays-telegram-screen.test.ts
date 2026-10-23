@@ -4,6 +4,8 @@ import { gatewayAttemptScreen } from '../../apps/api/src/surfaces/telegram/bot-r
 import type { PaymentRecord } from '../../apps/api/src/modules/commerce/payments/application/ports';
 import type {
   GatewayInvoiceRecord,
+  GatewayProviderFacts,
+  GatewayProviderRequestRecord,
   GatewayReceiptSubmissionRecord,
 } from '../../apps/api/src/modules/commerce/payments/application/gateway-invoice-ports';
 import type { GatewayCardFacts } from '../../apps/api/src/modules/commerce/payments/application/gateway-payment.service';
@@ -116,7 +118,14 @@ function invoice(overrides: Partial<GatewayInvoiceRecord> = {}): GatewayInvoiceR
   };
 }
 
-const NO_FACTS: GatewayCardFacts = { latestChange: null, submissions: [] };
+const NO_FACTS: GatewayCardFacts = {
+  latestChange: null,
+  submissions: [],
+  providerFacts: null,
+  latestCancel: null,
+  latestRefund: null,
+  openElsewherePaymentId: null,
+};
 const AT = new Date('2026-10-02T10:30:00Z');
 
 const submission = (
@@ -165,9 +174,11 @@ describe('the TonPays Telegram payment screen', () => {
       transferAmount: money(250_037n, 'IRT'),
       expiresAt: EXPIRES_AT,
     });
+    // Round 6: «❌ لغو فاکتور» (`gq:`) is the fourth action of a pending invoice.
     expect(data(reply)).toEqual([
       `gr:${PAYMENT_ID}`,
       `gk:${PAYMENT_ID}`,
+      `gq:${PAYMENT_ID}`,
       `gc:${PAYMENT_ID}`,
       'mm:',
     ]);
@@ -314,5 +325,315 @@ describe('the TonPays Telegram payment screen', () => {
       NO_FACTS,
     );
     expect(approvedButPending.key).not.toBe('bot.payment.gateway_confirmed');
+  });
+
+  // -------------------------------------------------------------------------------------
+  // Round 6: under- and overpayment, cancel, a rejection, a buyer who holds an invoice
+  // -------------------------------------------------------------------------------------
+
+  const provider = (over: Partial<GatewayProviderFacts>): GatewayProviderFacts => ({
+    need: null,
+    remainingAmount: null,
+    remainingCardNumber: null,
+    remainingCardHolder: null,
+    remainingInvoiceId: null,
+    remainingReceiptReceived: null,
+    refundAmount: null,
+    refundPending: null,
+    rejectReasons: [],
+    ...over,
+  });
+  // The document's page-17 examples.
+  const LESS = provider({
+    need: 'LESS',
+    remainingAmount: 12_000n,
+    remainingCardNumber: '6219861012345678',
+    remainingCardHolder: 'Shop Card',
+    remainingInvoiceId: 'TP-REM123XYZ0',
+    remainingReceiptReceived: false,
+  });
+  const MORE = provider({ need: 'MORE', refundAmount: 15_000n, refundPending: false });
+  const withFacts = (over: Partial<GatewayCardFacts>): GatewayCardFacts => ({
+    ...NO_FACTS,
+    ...over,
+  });
+  const request = (
+    kind: 'CANCEL' | 'REFUND',
+    state: GatewayProviderRequestRecord['state'],
+    over: Partial<GatewayProviderRequestRecord> = {},
+  ): GatewayProviderRequestRecord => ({
+    id: 'r1',
+    paymentId: PAYMENT_ID,
+    botInstanceId: 'b',
+    customerId: 'c',
+    kind,
+    state,
+    requestedAt: AT,
+    sentAt: null,
+    decidedAt: null,
+    errorCode: null,
+    refundCardMasked: kind === 'REFUND' ? '603799******7890' : null,
+    ...over,
+  });
+  const screenOf = (
+    status: string,
+    facts: GatewayCardFacts,
+    paymentOver: Partial<PaymentRecord> = {},
+    invoiceOver: Partial<GatewayInvoiceRecord> = {},
+    at: Date = AT,
+  ) =>
+    gatewayAttemptScreen(
+      {
+        payment: payment(paymentOver),
+        invoice: invoice({ providerStatus: status, ...invoiceOver }),
+      },
+      'o',
+      at,
+      facts,
+    );
+  const copies = (reply: ReturnType<typeof gatewayAttemptScreen>) =>
+    reply.buttons.flatMap((button) => ('copyText' in button ? [button.copyText] : []));
+
+  it('action_required_less: the remainder, its card and exact amount as tap-to-copy, a remainder-receipt button — and never the plain open invoice', () => {
+    const reply = screenOf('action_required_less', withFacts({ providerFacts: LESS }));
+    expect(reply.key).toBe('bot.payment.gateway_card_underpaid');
+    expect(reply.values).toMatchObject({
+      shortfall: money(12_000n, 'IRT'),
+      cardNumber: '6219861012345678',
+      cardName: 'Shop Card',
+      expiresAt: EXPIRES_AT,
+    });
+    expect(copies(reply)).toEqual(['6219861012345678', '12000']);
+    expect(data(reply)).toContain(`gr:${PAYMENT_ID}`);
+    // The original transfer's card, change and cancel are not offered for an underpaid invoice.
+    expect(data(reply)).not.toContain(`gk:${PAYMENT_ID}`);
+    expect(data(reply)).not.toContain(`gq:${PAYMENT_ID}`);
+    expect(reply.key).not.toBe('bot.payment.gateway_card_invoice');
+  });
+
+  it('action_required_less inside the provider’s review window is still the remainder screen, not "in review"; past the settlement deadline it is closed', () => {
+    const reviewUntil = new Date(AT.getTime() + 24 * 3_600_000);
+    const inReview = screenOf('action_required_less', withFacts({ providerFacts: LESS }), {
+      providerReviewStartedAt: AT,
+      providerReviewUntil: reviewUntil,
+    });
+    expect(inReview.key).toBe('bot.payment.gateway_card_underpaid');
+    expect(inReview.values).toMatchObject({ expiresAt: reviewUntil });
+    const closed = screenOf(
+      'action_required_less',
+      withFacts({ providerFacts: LESS }),
+      {},
+      {},
+      new Date(EXPIRES_AT.getTime() + 1),
+    );
+    expect(closed.key).toBe('bot.payment.gateway_closed');
+  });
+
+  it('action_required_less: a receipt for the remainder on its way (or already held by TonPays) is shown as sent; no usable remainder is "not available"', () => {
+    expect(
+      screenOf(
+        'action_required_less',
+        withFacts({ providerFacts: provider({ ...LESS, remainingReceiptReceived: true }) }),
+      ).key,
+    ).toBe('bot.payment.gateway_card_underpaid_receipt_sent');
+    expect(
+      screenOf(
+        'action_required_less',
+        withFacts({ providerFacts: LESS, submissions: [submission('QUEUED')] }),
+      ).key,
+    ).toBe('bot.payment.gateway_card_underpaid_receipt_sent');
+    for (const missing of [
+      provider({ ...LESS, remainingCardNumber: null }),
+      provider({ ...LESS, remainingInvoiceId: null }),
+      provider({ ...LESS, remainingAmount: null }),
+    ]) {
+      const reply = screenOf('action_required_less', withFacts({ providerFacts: missing }));
+      expect(reply.key).toBe('bot.payment.gateway_card_underpaid_unavailable');
+      expect(copies(reply)).toEqual([]);
+    }
+    expect(screenOf('action_required_less', NO_FACTS).key).toBe(
+      'bot.payment.gateway_card_underpaid_unavailable',
+    );
+  });
+
+  it('action_required_more: asks for the refund card; pending, refused and lost refunds each have their screen', () => {
+    const asks = screenOf('action_required_more', withFacts({ providerFacts: MORE }));
+    expect(asks.key).toBe('bot.payment.gateway_card_overpaid');
+    expect(asks.values).toMatchObject({ refundAmount: money(15_000n, 'IRT') });
+    expect(data(asks)).toContain(`gf:${PAYMENT_ID}`);
+    expect(data(asks)).not.toContain(`gr:${PAYMENT_ID}`);
+
+    const inFlight = screenOf(
+      'action_required_more',
+      withFacts({ providerFacts: MORE, latestRefund: request('REFUND', 'REQUESTED') }),
+    );
+    expect(inFlight.key).toBe('bot.payment.gateway_card_overpaid_pending');
+    expect(inFlight.values).toMatchObject({ maskedCard: '603799******7890' });
+    expect(data(inFlight)).not.toContain(`gf:${PAYMENT_ID}`);
+    expect(
+      screenOf(
+        'action_required_more',
+        withFacts({ providerFacts: provider({ ...MORE, refundPending: true }) }),
+      ).key,
+    ).toBe('bot.payment.gateway_card_overpaid_pending');
+
+    const refused = (code: string) =>
+      screenOf(
+        'action_required_more',
+        withFacts({
+          providerFacts: MORE,
+          latestRefund: request('REFUND', 'REFUSED', { errorCode: code }),
+        }),
+      );
+    expect(refused('INVALID_REFUND_CARD').key).toBe('bot.payment.gateway_refund_card_refused');
+    expect(data(refused('INVALID_REFUND_CARD'))).toContain(`gf:${PAYMENT_ID}`);
+    expect(refused('INVALID_REFUND_HOLDER').key).toBe('bot.payment.gateway_refund_holder_refused');
+    expect(refused('REFUND_NOT_ALLOWED').key).toBe('bot.payment.gateway_refund_not_allowed');
+    expect(data(refused('REFUND_NOT_ALLOWED'))).not.toContain(`gf:${PAYMENT_ID}`);
+    expect(refused('REFUND_ALREADY_OPEN').key).toBe('bot.payment.gateway_refund_already_open');
+    expect(
+      screenOf(
+        'action_required_more',
+        withFacts({ providerFacts: MORE, latestRefund: request('REFUND', 'UNKNOWN') }),
+      ).key,
+    ).toBe('bot.payment.gateway_refund_unknown');
+  });
+
+  it('no screen that carries a refund card shows the whole number — only the masked one reaches a value', () => {
+    for (const latestRefund of [
+      request('REFUND', 'REQUESTED'),
+      request('REFUND', 'APPLIED'),
+      request('REFUND', 'UNKNOWN'),
+    ]) {
+      const reply = screenOf(
+        'action_required_more',
+        withFacts({ providerFacts: MORE, latestRefund }),
+      );
+      const text = JSON.stringify(reply, (_, value: unknown) =>
+        typeof value === 'bigint' ? value.toString() : value,
+      );
+      expect(text).not.toContain('6037991234567890');
+    }
+  });
+
+  it('cancel: drawn on a pending invoice only; the request, a refusal and a lost answer have their sentences; the customer’s applied cancel reads "cancelled"', () => {
+    expect(data(screenOf('pending', NO_FACTS))).toContain(`gq:${PAYMENT_ID}`);
+    for (const status of ['processing', 'action_required_less', 'action_required_more']) {
+      expect(
+        data(screenOf(status, withFacts({ providerFacts: status === 'processing' ? null : LESS }))),
+        status,
+      ).not.toContain(`gq:${PAYMENT_ID}`);
+    }
+    expect(
+      data(screenOf('pending', withFacts({ submissions: [submission('QUEUED')] }))),
+    ).not.toContain(`gq:${PAYMENT_ID}`);
+    expect(screenOf('pending', withFacts({ latestCancel: request('CANCEL', 'SENT') })).key).toBe(
+      'bot.payment.gateway_cancel_requested',
+    );
+    const decidedAt = new Date(AT.getTime() - 1_000);
+    const refused = (code: string, lastInquiryAt: Date | null) =>
+      screenOf(
+        'pending',
+        withFacts({
+          latestCancel: request('CANCEL', 'REFUSED', { errorCode: code, decidedAt }),
+        }),
+        {},
+        { lastInquiryAt },
+      );
+    expect(refused('CANCEL_NOT_ALLOWED_PROCESSING', null).key).toBe(
+      'bot.payment.gateway_cancel_not_allowed_processing',
+    );
+    expect(refused('CANCEL_NOT_ALLOWED_NEED_ACTION_LESS', null).key).toBe(
+      'bot.payment.gateway_cancel_not_allowed_less',
+    );
+    expect(refused('CANCEL_NOT_ALLOWED_NEED_ACTION_MORE', null).key).toBe(
+      'bot.payment.gateway_cancel_not_allowed_more',
+    );
+    expect(refused('NOT_PENDING', null).key).toBe('bot.payment.gateway_not_pending');
+    // An inquiry answered after the refusal replaces the notice with the invoice as it is now.
+    expect(refused('NOT_PENDING', AT).key).toBe('bot.payment.gateway_card_invoice');
+    expect(
+      screenOf('pending', withFacts({ latestCancel: request('CANCEL', 'UNKNOWN', { decidedAt }) }))
+        .key,
+    ).toBe('bot.payment.gateway_cancel_unknown');
+    const cancelled = screenOf(
+      'canceled',
+      withFacts({ latestCancel: request('CANCEL', 'APPLIED', { decidedAt }) }),
+      { state: 'FAILED' },
+    );
+    expect(cancelled.key).toBe('bot.payment.gateway_cancelled');
+  });
+
+  it('reject_reasons are shown to the customer on a rejected payment, and a payment without any keeps the generic sentence', () => {
+    const reasons = ['رسید خوانا نبود', 'نام مطابقت ندارد'];
+    const rejected = screenOf(
+      'rejected',
+      withFacts({ providerFacts: provider({ rejectReasons: reasons }) }),
+      { state: 'FAILED' },
+    );
+    expect(rejected.key).toBe('bot.payment.gateway_card_rejected');
+    expect(rejected.values).toMatchObject({ reasons: reasons.join('\n') });
+    expect(screenOf('rejected', NO_FACTS, { state: 'FAILED' }).key).toBe(
+      'bot.payment.gateway_failed',
+    );
+  });
+
+  it('a buyer who already holds an invoice is shown THAT invoice and its next step, never a generic error', () => {
+    const other = '01a0fa00-0000-7000-8000-0000000000aa';
+    for (const [code, key] of [
+      ['BUYER_HAS_PENDING_INVOICE', 'bot.payment.gateway_buyer_pending'],
+      ['BUYER_HAS_PROCESSING_INVOICE', 'bot.payment.gateway_buyer_processing'],
+      ['BUYER_HAS_NEED_ACTION_LESS', 'bot.payment.gateway_buyer_less'],
+      ['BUYER_HAS_NEED_ACTION_MORE', 'bot.payment.gateway_buyer_more'],
+    ] as const) {
+      const reply = gatewayAttemptScreen(
+        {
+          payment: payment({ state: 'FAILED' }),
+          invoice: invoice({
+            creationState: 'CREATE_FAILED',
+            creationErrorCode: code,
+            providerInvoiceId: null,
+            providerStatus: null,
+          }),
+        },
+        'o',
+        AT,
+        withFacts({ openElsewherePaymentId: other }),
+      );
+      expect(reply.key, code).toBe(key);
+      expect(data(reply), code).toContain(`gc:${other}`);
+    }
+    // Not known to Nexa: the sentence, no button.
+    const unknown = gatewayAttemptScreen(
+      {
+        payment: payment({ state: 'FAILED' }),
+        invoice: invoice({
+          creationState: 'CREATE_FAILED',
+          creationErrorCode: 'BUYER_HAS_PENDING_INVOICE',
+          providerStatus: null,
+        }),
+      },
+      'o',
+      AT,
+      NO_FACTS,
+    );
+    expect(unknown.key).toBe('bot.payment.gateway_buyer_pending');
+    expect(data(unknown).some((one) => one?.startsWith('gc:'))).toBe(false);
+  });
+
+  it('a receipt TonPays called empty, or could not match to the invoice, has its own sentence and keeps the card', () => {
+    for (const [code, key] of [
+      ['EMPTY_RECEIPT', 'bot.payment.gateway_card_receipt_empty'],
+      ['INVOICE_ID_MISMATCH', 'bot.payment.gateway_card_receipt_invoice'],
+      ['REMAINDER_INVOICE_MISSING', 'bot.payment.gateway_card_receipt_invoice'],
+      ['INVALID_RECEIPT_TYPE', 'bot.payment.gateway_card_receipt_refused'],
+    ] as const) {
+      const reply = screenOf(
+        'pending',
+        withFacts({ submissions: [{ ...submission('REFUSED'), errorCode: code }] }),
+      );
+      expect(reply.key, code).toBe(key);
+      expect(reply.values, code).toMatchObject({ cardNumber: '6037-9911-0000-1001' });
+    }
   });
 });

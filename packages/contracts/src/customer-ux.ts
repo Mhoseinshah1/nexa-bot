@@ -57,6 +57,12 @@ export const CUSTOMER_CAPTURE_PURPOSES = [
   'TICKET_NEW_MESSAGE',
   /** WP-A7: a reply to one of the customer's tickets. `subject_id` names the TICKET. */
   'TICKET_REPLY',
+  /**
+   * Round 6 (TonPays Telegram): the card and holder a refund for an OVERPAYMENT is to be sent
+   * to, typed as two lines in one message. `subject_id` names the PAYMENT. The text is never
+   * stored as typed: it is validated, sealed for the gateway worker, and kept masked.
+   */
+  'GATEWAY_REFUND_CARD',
 ] as const;
 export type CustomerCapturePurpose = (typeof CUSTOMER_CAPTURE_PURPOSES)[number];
 export const customerCapturePurposeSchema = z.enum(CUSTOMER_CAPTURE_PURPOSES);

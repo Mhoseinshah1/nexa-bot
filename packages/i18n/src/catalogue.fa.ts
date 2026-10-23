@@ -1300,7 +1300,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_receipt_too_large':
     'حجم این تصویر بیش از ۱۰ مگابایت است. لطفاً تصویر کوچک‌تری از رسید واریز بفرستید.',
   'bot.payment.gateway_card_underpaid':
-    '{icon:warning} {shortfall} کمتر واریز شد؛ مابقی را به این کارت واریز کنید.\n\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:amount} مبلغ مابقی: {shortfall}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nپس از واریز، با دکمهٔ «📤 ارسال رسید مابقی» تصویر رسید را بفرستید. پرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
+    '{icon:warning} {shortfall} کمتر واریز شد؛ مابقی را به این کارت واریز کنید.\n\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nپس از واریز، با دکمهٔ «📤 ارسال رسید مابقی» تصویر رسید را بفرستید. پرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_underpaid_receipt_sent':
     '📤 رسید مابقی شما برای تون‌پی ارسال شد و در انتظار پاسخ است.\n\n{icon:amount} مبلغ مابقی: {shortfall}\n{icon:time} مهلت: {expiresAt}\n\nپرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود. برای دیدن آخرین وضعیت، دکمهٔ «🔎 بررسی وضعیت» را بزنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_underpaid_unavailable':
@@ -1310,7 +1310,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_card_overpaid_pending':
     '🕓 درخواست بازگشت مبلغ اضافه برای تون‌پی ثبت شد و در حال بررسی است.\n{icon:amount} مبلغ قابل بازگشت: {refundAmount}\n{icon:payment} کارت ثبت‌شده: {maskedCard}\n{icon:time} مهلت: {expiresAt}\n\nنتیجه پس از تأیید تون‌پی در همین پیام نمایش داده می‌شود. دوباره پرداخت نکنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_refund_card_prompt':
-    '💳 لطفاً شمارهٔ کارت و نام صاحب کارت خود را در یک پیام و در دو خط بفرستید:\n\nخط اول: شمارهٔ ۱۶ رقمی کارت\nخط دوم: نام و نام خانوادگی صاحب کارت\n\nاین اطلاعات فقط برای بازگرداندن مبلغ اضافه به تون‌پی فرستاده می‌شود و پس از ارسال، شمارهٔ کارت فقط به‌صورت پوشیده نگهداری می‌شود.\n\nکد پیگیری پرداخت: {reference}',
+    '{icon:payment} لطفاً شمارهٔ کارت و نام صاحب کارت خود را در یک پیام و در دو خط بفرستید:\n\nخط اول: شمارهٔ ۱۶ رقمی کارت\nخط دوم: نام و نام خانوادگی صاحب کارت\n\nاین اطلاعات فقط برای بازگرداندن مبلغ اضافه به تون‌پی فرستاده می‌شود و پس از ارسال، شمارهٔ کارت فقط به‌صورت پوشیده نگهداری می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_refund_card_invalid':
     '{icon:warning} اطلاعات کارت معتبر نبود. شمارهٔ کارت باید ۱۶ رقم و صحیح باشد و نام صاحب کارت فقط شامل حروف باشد.\n\nلطفاً شمارهٔ کارت را در خط اول و نام صاحب کارت را در خط دوم، در یک پیام بفرستید.',
   'bot.payment.gateway_refund_requested':

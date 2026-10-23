@@ -4079,7 +4079,12 @@ export class PaymentService {
     scope: TenantContext,
     actor: ActorContext,
     id: string,
-    input: { readonly reasonCode: string; readonly notifyCustomer: boolean },
+    input: {
+      readonly reasonCode: string;
+      readonly notifyCustomer: boolean;
+      /** Round 6: the provider's sanitised `reject_reasons`, recorded in the audit row. */
+      readonly providerReasons?: readonly string[];
+    },
   ): Promise<boolean> {
     const paymentId = this.paymentId(id);
     const denial = { action: GATEWAY_FAIL_ACTION, entityType: 'Payment', entityId: paymentId };
@@ -4121,6 +4126,9 @@ export class PaymentService {
               orderId: payment.orderId,
               gatewayProvider: payment.gatewayProvider,
               reason: note,
+              ...((input.providerReasons ?? []).length === 0
+                ? {}
+                : { providerReasons: [...(input.providerReasons ?? [])] }),
             },
             result: 'SUCCESS',
           },

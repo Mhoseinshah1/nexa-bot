@@ -861,14 +861,15 @@ describe('TonPays Telegram, through the one settlement path', () => {
       expect(windows?.n).toBe(0);
     });
 
-    it('TPTG-09: a document (even image/*), or a photo declared over 10 MB, is refused before any row', async () => {
+    it('TPTG-09: a non-image document, or a photo declared over 10 MB, is refused before any row; an image document of the four documented types is taken', async () => {
       const { paymentId } = await createdAttempt();
       await openWindow(paymentId);
-      expect(
-        await sendPhoto(
-          photo('doc-1', { kind: 'DOCUMENT', mimeType: 'image/jpeg', fileName: 'r.jpg' }),
-        ),
-      ).toBe('PHOTO_ONLY');
+      // Round 6: not a video, a PDF or a type the provider does not list.
+      for (const [index, mimeType] of ['application/pdf', 'video/mp4', 'image/bmp'].entries()) {
+        expect(await sendPhoto(photo(`doc-${String(index)}`, { kind: 'DOCUMENT', mimeType }))).toBe(
+          'PHOTO_ONLY',
+        );
+      }
       expect(
         await sendPhoto(
           photo('big-1', { fileSize: BigInt(TONPAYS_TELEGRAM_RECEIPT_MAX_BYTES) + 1n }),
@@ -879,6 +880,17 @@ describe('TonPays Telegram, through the one settlement path', () => {
       // The window stays open for the photo the customer sends next — one declared at
       // exactly 10,000,000 bytes, which the old 5 MB bound refused.
       expect(await sendPhoto(photo('ok-1', { fileSize: 10_000_000n }))).toBe('QUEUED');
+    });
+
+    it('Round 6: a WebP or GIF sent as a document is queued (its type is sniffed again before the upload)', async () => {
+      for (const [index, mimeType] of ['image/webp', 'image/gif'].entries()) {
+        const { paymentId } = await createdAttempt();
+        await openWindow(paymentId);
+        expect(await sendPhoto(photo(`img-${String(index)}`, { kind: 'DOCUMENT', mimeType }))).toBe(
+          'QUEUED',
+        );
+        expect(await submissions(paymentId)).toHaveLength(1);
+      }
     });
 
     it('TPTG-10: opening a provider window supersedes the manual window in the same bot, and opening a manual one supersedes it', async () => {

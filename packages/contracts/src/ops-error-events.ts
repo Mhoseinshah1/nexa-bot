@@ -360,6 +360,8 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
   failure('payments.gateway_charge_unmatched', 'PAYMENTS', 'PER_SUBJECT'),
   failure('payments.gateway_receipt_unknown', 'PAYMENTS', 'PER_SUBJECT'),
   failure('payments.gateway_card_change_unknown', 'PAYMENTS', 'PER_SUBJECT'),
+  // Round 6: a customer's cancel or refund request whose answer was lost.
+  failure('payments.gateway_request_unknown', 'PAYMENTS', 'PER_SUBJECT'),
   failure('payments.gateway_review_unresolved', 'PAYMENTS', 'CONDITION'),
   recovery('payments.gateway_review_reconciled', 'PAYMENTS', 'payments.gateway_review_unresolved'),
   failure('payments.gateway_webhook_unverified', 'PAYMENTS', 'CONDITION', {

@@ -93,6 +93,7 @@ export const OPERATIONAL_EVENT_LABELS_FA: Readonly<Record<string, string>> = {
   'panel.probe.limited': 'آزمون اتصال پنل محدود شد',
   'panel.probe.ok': 'آزمون اتصال پنل دوباره ممکن است',
   'payments.gateway_card_change_unknown': 'نتیجهٔ تغییر کارت درگاه نامعلوم است',
+  'payments.gateway_request_unknown': 'نتیجهٔ لغو یا بازگشت وجه درگاه نامعلوم است',
   'payments.gateway_charge_unmatched': 'پرداخت درگاه با سفارشی جور نشد',
   'payments.gateway_configured': 'درگاه پرداخت درست تنظیم شد',
   'payments.gateway_create_unknown': 'نتیجهٔ ساخت پرداخت در درگاه نامعلوم است',

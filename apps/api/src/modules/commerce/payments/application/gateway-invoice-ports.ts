@@ -11,6 +11,9 @@ import type {
   GatewayReceiptSubmissionState,
   GatewayInvoiceCreationState,
   GatewayInvoiceOutcome,
+  GatewayProviderNeedKind,
+  GatewayProviderRequestKind,
+  GatewayProviderRequestState,
   GatewayProviderUnit,
   Money,
   PaymentGatewayProvider,
@@ -185,6 +188,57 @@ export type GatewayReceiptOutcome =
   | { readonly kind: 'NOT_FOUND'; readonly code: string }
   | { readonly kind: 'UNKNOWN'; readonly code: string };
 
+/**
+ * A cancel (Round 6, `POST /{id}/cancel`). `CANCELLED` is a 2xx; a refusal is a readable 4xx
+ * code (`CANCEL_NOT_ALLOWED_*`, `NOT_PENDING`, …). The answer's body is read for nothing: the
+ * invoice's state afterwards is the next inquiry's to report.
+ */
+export type GatewayCancelOutcome =
+  | { readonly kind: 'CANCELLED' }
+  | { readonly kind: 'REFUSED'; readonly code: string; readonly configuration: boolean }
+  | { readonly kind: 'RATE_LIMITED'; readonly code: string }
+  | { readonly kind: 'NOT_FOUND'; readonly code: string }
+  | { readonly kind: 'UNKNOWN'; readonly code: string };
+
+/** The refund destination, held in memory for the length of one call and never logged. */
+export interface GatewayRefundCard {
+  readonly cardNumber: string;
+  readonly cardHolder: string;
+}
+
+/**
+ * A refund (Round 6, `POST /{id}/refund` with `invoice_id`, `card_number`, `card_holder` and no
+ * amount). `ACCEPTED` is a 2xx; nothing in its body is relied on. Same five-way vocabulary as
+ * every other write.
+ */
+export type GatewayRefundOutcome =
+  | { readonly kind: 'ACCEPTED' }
+  | { readonly kind: 'REFUSED'; readonly code: string; readonly configuration: boolean }
+  | { readonly kind: 'RATE_LIMITED'; readonly code: string }
+  | { readonly kind: 'NOT_FOUND'; readonly code: string }
+  | { readonly kind: 'UNKNOWN'; readonly code: string };
+
+/**
+ * What an inquiry told Nexa the customer owes next (Round 6): read defensively from the
+ * answer's `action_required_less` / `action_required_more` fields and `reject_reasons`. A field
+ * of an unexpected shape is `null` — no information, never an approval. All amounts are the
+ * provider's own metadata, in Toman: shown to the customer as the provider's instruction and
+ * never used to settle, credit or refund anything.
+ */
+export interface GatewayProviderFacts {
+  readonly need: GatewayProviderNeedKind | null;
+  readonly remainingAmount: bigint | null;
+  readonly remainingCardNumber: string | null;
+  readonly remainingCardHolder: string | null;
+  /** Path-safe (`isSafeInvoiceId`), or null. The invoice a remainder's receipt is sent to. */
+  readonly remainingInvoiceId: string | null;
+  readonly remainingReceiptReceived: boolean | null;
+  readonly refundAmount: bigint | null;
+  readonly refundPending: boolean | null;
+  /** Sanitised (`parseRejectReasons`); empty when the provider named none. */
+  readonly rejectReasons: readonly string[];
+}
+
 /** The receipt image, held only for the length of one upload and never logged. */
 export interface GatewayReceiptFile {
   readonly bytes: Uint8Array;
@@ -206,6 +260,14 @@ export interface CardTransferGatewayAdapter extends ExternalGatewayAdapter {
     invoiceId: string,
     file: GatewayReceiptFile,
   ): Promise<GatewayReceiptOutcome>;
+  /** Round 6: only a `pending` invoice can be cancelled; the provider decides. */
+  cancelInvoice(apiKey: string, invoiceId: string): Promise<GatewayCancelOutcome>;
+  /** Round 6: an overpayment's refund, to the customer's card. No amount is ever sent. */
+  refundInvoice(
+    apiKey: string,
+    invoiceId: string,
+    card: GatewayRefundCard,
+  ): Promise<GatewayRefundOutcome>;
 }
 
 /** The coin side of a crypto payment, as a provider's record reported it (R5C-2 C4). */
@@ -258,6 +320,12 @@ export type GatewayInquiryOutcome =
       readonly providerReference?: string | null;
       /** Why a MISMATCH is one (a machine reason for the audit row and the condition). */
       readonly mismatchReason?: string | null;
+      /**
+       * Round 6 (TonPays Telegram): what the customer owes next and any rejection reasons, read
+       * from the same answer. Metadata for the screen and the history; it never decides
+       * approval — `verdict` does.
+       */
+      readonly facts?: GatewayProviderFacts | null;
     }
   | { readonly kind: 'NOT_FOUND'; readonly code: string }
   | { readonly kind: 'RATE_LIMITED'; readonly code: string }
@@ -1275,4 +1343,161 @@ export interface GatewayCardTransferRepository {
   ): Promise<number | null>;
   /** FIX10 (audit P1-b on #268): as `GatewayInvoiceRepository.clearRowFailures`. */
   clearSubmissionFailures(scope: TenantContext, id: string, tx: unknown): Promise<boolean>;
+}
+
+// ---------------------------------------------------------------------------------------
+// Round 6: provider requests (cancel, refund) and the provider's latest word on what the
+// customer owes next. Same discipline as the card-change requests above: every transition a
+// conditional UPDATE naming its `from` states, every statement tenant-scoped.
+// ---------------------------------------------------------------------------------------
+
+/** A cancel or a refund the customer asked for. Never carries a card, sealed or not. */
+export interface GatewayProviderRequestRecord {
+  readonly id: string;
+  readonly paymentId: PaymentId;
+  readonly botInstanceId: string;
+  readonly customerId: string;
+  readonly kind: GatewayProviderRequestKind;
+  readonly state: GatewayProviderRequestState;
+  readonly requestedAt: Date;
+  readonly sentAt: Date | null;
+  readonly decidedAt: Date | null;
+  readonly errorCode: string | null;
+  /** A refund's card as shown to anyone (`603799******1234`); null for a cancel. */
+  readonly refundCardMasked: string | null;
+}
+
+/** A claimed request, with the sealed card a REQUESTED refund still holds (for the worker only). */
+export interface ClaimedProviderRequest {
+  readonly row: GatewayProviderRequestRecord;
+  readonly sealed: { readonly ciphertext: string; readonly keyId: string } | null;
+  readonly paymentState: string;
+  readonly paymentExpiresAt: Date | null;
+  readonly paymentReviewUntil: Date | null;
+}
+
+/** One of the customer's other open attempts, for the cancel-before-create and a blocked create. */
+export interface GatewaySiblingAttempt {
+  readonly paymentId: PaymentId;
+  readonly botInstanceId: string;
+  readonly customerId: string;
+  readonly providerInvoiceId: string;
+  readonly providerStatus: string | null;
+  /** Whether a cancel has EVER been requested for it (any state): one is never repeated. */
+  readonly cancelRequested: boolean;
+  /** Whether a receipt for it is queued, sending or accepted: a receipt makes it `processing`. */
+  readonly receiptSent: boolean;
+}
+
+export interface GatewayProviderRequestRepository {
+  /**
+   * `REQUESTED`, refused by the partial unique index while one of the kind is in flight (null).
+   * `claimedUntil` lets the worker take a row it is about to send itself (the cancel before a
+   * create), so no other replica claims it in between.
+   */
+  request(
+    scope: TenantContext,
+    input: {
+      readonly id: string;
+      readonly paymentId: PaymentId;
+      readonly botInstanceId: string;
+      readonly customerId: string;
+      readonly kind: GatewayProviderRequestKind;
+      readonly idempotencyKey: string;
+      readonly now: Date;
+      readonly claimedUntil: Date | null;
+      readonly refund: {
+        readonly masked: string;
+        readonly sealed: { readonly ciphertext: string; readonly keyId: string };
+      } | null;
+    },
+    tx: unknown,
+  ): Promise<GatewayProviderRequestRecord | null>;
+  latest(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    kind: GatewayProviderRequestKind,
+    tx?: unknown,
+  ): Promise<GatewayProviderRequestRecord | null>;
+  claim(
+    scope: TenantContext,
+    now: Date,
+    leaseMs: number,
+    limit: number,
+    tx: unknown,
+  ): Promise<readonly ClaimedProviderRequest[]>;
+  /** The row as written, with its sealed card, for a request the caller itself just made. */
+  claimedById(
+    scope: TenantContext,
+    id: string,
+    tx: unknown,
+  ): Promise<ClaimedProviderRequest | null>;
+  /** `REQUESTED -> SENT`, stamped BEFORE the call; the sealed card is wiped in the same statement. */
+  markSent(scope: TenantContext, id: string, now: Date, tx: unknown): Promise<boolean>;
+  /** `REQUESTED | SENT -> APPLIED | REFUSED | RATE_LIMITED | UNKNOWN`; wipes any sealed card. */
+  decide(
+    scope: TenantContext,
+    id: string,
+    to: Exclude<GatewayProviderRequestState, 'REQUESTED' | 'SENT'>,
+    errorCode: string | null,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
+  releaseClaims(
+    scope: TenantContext,
+    ids: readonly string[],
+    leaseUntil: Date,
+    tx: unknown,
+  ): Promise<number>;
+  /**
+   * The customer's other attempts through this provider, in this bot, that are PENDING inside
+   * their customer window with a created invoice — the ones a new invoice would collide with.
+   */
+  siblingAttempts(
+    scope: TenantContext,
+    input: {
+      readonly customerId: string;
+      readonly provider: PaymentGatewayProvider;
+      readonly botInstanceId: string;
+      readonly exceptPaymentId: PaymentId;
+      readonly now: Date;
+    },
+    tx?: unknown,
+  ): Promise<readonly GatewaySiblingAttempt[]>;
+  // --- the provider's latest word -------------------------------------------------------
+  /**
+   * Replaces the payment's facts with these (or removes them for null). Returns whether the
+   * rejection reasons are NEW — a different list than the one stored — so the history records
+   * them once, not once per inquiry, and whether anything the screen shows changed.
+   */
+  recordFacts(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    facts: GatewayProviderFacts | null,
+    now: Date,
+    tx: unknown,
+  ): Promise<{ readonly reasonsChanged: boolean; readonly changed: boolean }>;
+  factsFor(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    tx?: unknown,
+  ): Promise<GatewayProviderFacts | null>;
+}
+
+/**
+ * Seals and opens a refund card (purpose `payment_gateway.refund_card`, bound to the request
+ * row's id). The only place the whole number exists besides the customer's own message and the
+ * provider's request body; `open` is called once, by the worker, immediately before the stamp.
+ */
+export interface RefundCardSealer {
+  seal(
+    scope: TenantContext,
+    requestId: string,
+    card: GatewayRefundCard,
+  ): { readonly ciphertext: string; readonly keyId: string };
+  open(
+    scope: TenantContext,
+    requestId: string,
+    sealed: { readonly ciphertext: string; readonly keyId: string },
+  ): GatewayRefundCard;
 }

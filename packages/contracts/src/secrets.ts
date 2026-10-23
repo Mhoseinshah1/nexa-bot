@@ -45,6 +45,12 @@
  * INQUIRY with a separate credential (CentralPay's verify key, `docs/centralpay-gateway-
  * audit.md`), on the same row, under its own purpose for the same reason.
  *
+ * `payment_gateway.refund_card` is the card number and holder a customer typed for a REFUND
+ * of an overpayment (Round 6, `gateway_provider_requests`), sealed only between the tap and the
+ * gateway worker's send stamp, which wipes it. The entity is the request row's own id, so a
+ * sealed card moved onto another request — or another tenant's — fails authentication. After the
+ * stamp the only stored form is the masked one. Declared in the commit that brings its producer.
+ *
  * `admin.totp_secret` is an administrator's RFC 6238 shared secret (Phase D2,
  * `admin_totp_factors`). The entity is the factor row's own id, so a secret moved onto
  * another administrator's row — or kept across a disable and a re-enrolment, which
@@ -71,6 +77,7 @@ export const SECRET_PURPOSES = [
   'payment_gateway.api_key',
   'payment_gateway.webhook_secret',
   'payment_gateway.verify_key',
+  'payment_gateway.refund_card',
   'admin.totp_secret',
   'support_ai_provider.api_key',
   'legacy_migration.package_key',

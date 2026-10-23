@@ -1304,3 +1304,70 @@ default catalogue says ۱۰.
 The real-provider acceptance (`OQ-WP10-01`) still owes, among its other checks: a photo
 between 5,000,001 and 10,000,000 bytes accepted by the provider, and the website route's
 answer to a Custom Telegram key (`OQ-WP11A-02`).
+
+## 19. Round 6 (PR-3): cancel, refund, remainder, rejection reasons
+
+Built to the provider's API document, custom Telegram section (pages 13-20), which replaced the
+transcription as the source of truth on 2026-10-23. Nothing here relaxes the three TonPays
+rules: **only the inquiry decides** (`completed` AND `paid === true`; `action_required_less`,
+`action_required_more` and a refund answer's own `completed`/`paid: true` are metadata), **the
+deadline is checked under the payment's lock**, and **a create whose answer was lost is never
+retried or re-keyed**. The wallet is credited with the payment's recorded principal and nothing
+the provider says: not `credit_amount`, `final_amount`, `remaining_amount` or `refund_amount`.
+
+### 19.1 Checked against the document
+
+| What                                 | Document                                               | Result                                                                                                                  |
+| ------------------------------------ | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| Header, create, inquiry, change-card | p. 13-14                                               | matched (unchanged)                                                                                                     |
+| Inquiry fields                       | p. 14, 17                                              | matched: `need_action_kind`, `remaining_*`, `refund_amount`, `refund_pending`, `reject_reasons`, read field by field    |
+| Statuses                             | p. 16                                                  | corrected: `action_required_less`, `action_required_more` added (OPEN); `need_action` kept as OPEN                      |
+| `POST /{id}/cancel`                  | p. 15 (pending only, no body)                          | built: no body; success body unspecified (OQ-TPTG-22)                                                                   |
+| `POST /{id}/refund`                  | p. 16 (`invoice_id`, `card_number`, `card_holder`)     | built: exactly those three, no amount; only for `action_required_more`; custom_tg key                                   |
+| Remainder receipt                    | p. 18 (to `remaining_invoice_id`; answer `processing`) | built: sent to `remaining_invoice_id`; the original stays `action_required_less`                                        |
+| Receipt types, size                  | p. 18 (JPEG, PNG, WebP, GIF; 10 MB)                    | corrected: WebP and GIF added; image documents accepted because Telegram delivers those only as documents               |
+| Webhook payload                      | p. 19 (`credit_amount`, headers incl. signature)       | matched: signature still not read; `credit_amount` stored as metadata only                                              |
+| Error codes                          | p. 20 (24 codes)                                       | corrected: 15 added to `TONPAYS_TELEGRAM_ERROR_CODES`; each has a Persian template (`TONPAYS_TELEGRAM_ERROR_TEMPLATES`) |
+| Refund card example                  | p. 16 (`6037991234567890`, `Ali Rezaei`)               | corrected: the example fails Luhn, so no checksum is applied; sixteen digits and a letters-only holder                  |
+
+### 19.2 Decisions
+
+1. **Taps are rows.** `gq:` asks, `gz:` writes a `gateway_provider_requests` row (`CANCEL`),
+   `gf:` opens a text window and the typed card writes a `REFUND` row. The gateway worker sends.
+   The row machine is the card change's: conditional UPDATEs, send stamp committed before the call,
+   a stamped row found later is `UNKNOWN` and never sent, only the provider's own
+   `RATE_LIMIT_EXCEEDED` is `RATE_LIMITED`.
+2. **The refund card is sealed, then masked.** Taps and calls are in different processes, so the
+   card must survive between them. It is sealed (`SecretCipher`, purpose
+   `payment_gateway.refund_card`, bound to the request row) only while the row is `REQUESTED`;
+   the send stamp wipes it in the same UPDATE and a CHECK forbids any other end state. The only
+   stored form afterwards is `603799******7890`. Nothing logs it; the audit rows carry ids and
+   states only; no adapter outcome carries it.
+3. **One message, two lines** carries the card and holder, validated locally; an invalid answer
+   reopens the window and stores nothing.
+4. **Cancel is for `pending` only**, in the customer window, once: a lost answer is not repeated by
+   a tap. An applied cancel FAILS the local payment quietly (the customer asked) and records the
+   outcome, which stops its inquiries.
+5. **A new top-up cancels the old pending invoice first**, in the worker, before the create
+   (`cancelSiblingsBeforeCreate`): at most once per sibling, only while the provider's last word
+   is `pending` and no receipt is on its way. A budget or rate-limit stop defers the create; a
+   refusal or lost answer does not — the provider answers `BUYER_HAS_*` if it must.
+6. **`BUYER_HAS_PENDING_INVOICE` is retried once**, after cancelling the customer's own pending
+   invoice, with the same order id (the refusal is a readable 4xx: no invoice exists). The other
+   three `BUYER_HAS_*` codes show the customer the open invoice and its next step.
+7. **LESS and MORE may arise inside the 24-hour review window** (a receipt was acknowledged and
+   then checked), so the remainder receipt and the refund card are offered until the payment's
+   settlement deadline, not only the 70 minutes. Cancel, card change and the ordinary receipt
+   stay customer-window only. A remainder receipt does not extend the review (OQ-TPTG-25).
+8. **`reject_reasons`** are kept on the payment's provider facts (latest state), shown to the
+   customer as worded (sanitised: control characters and angle brackets removed, at most ten of
+   two hundred characters), and written to the audit log — once as
+   `gateway_invoice.provider_rejection_reasons` when they first appear or change, and in the
+   `payment.gateway_fail` row of the failure they caused. The payment history lists audit rows
+   (action name only; the reasons are in the row's detail behind `audit.view`): the history has no
+   free text by contract, so no new timeline kind was added, and the operator financial-log
+   template is unchanged. A timeline kind carrying token-shaped reasons (`rejectReasonCodes`) and
+   a reasons field on the payment detail card are the follow-up if the owner wants them.
+9. **Nothing here sends a customer message on its own**: the existing notification lane is
+   untouched; every sentence is a screen edit through template keys, and a customer cancel is not
+   announced as a failure.

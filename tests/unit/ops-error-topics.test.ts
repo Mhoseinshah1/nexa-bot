@@ -30,6 +30,7 @@ const EXPECTED: Readonly<Record<string, OpsLogTopicCategory>> = {
   'payments.gateway_charge_unmatched': 'PAYMENTS',
   'payments.gateway_receipt_unknown': 'PAYMENTS',
   'payments.gateway_card_change_unknown': 'PAYMENTS',
+  'payments.gateway_request_unknown': 'PAYMENTS',
   'payments.gateway_review_unresolved': 'PAYMENTS',
   'payments.gateway_review_reconciled': 'PAYMENTS',
   'payments.gateway_settlement_failed': 'PAYMENTS',
