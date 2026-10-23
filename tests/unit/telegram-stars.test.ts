@@ -87,6 +87,9 @@ describe('the conversion (A1)', () => {
       providerReview: false,
       // NOWPayments: only a provider that signs its webhooks takes a second secret.
       webhookSecret: false,
+      // TetraPay: an OPTIONAL secret and a return to the bot's start link are its alone.
+      webhookSecretOptional: false,
+      returnToBot: false,
       // CentralPay: a separate verify key, a browser return and integer ids are its alone.
       verifyKey: false,
       browserReturn: false,

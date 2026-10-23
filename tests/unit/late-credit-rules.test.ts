@@ -144,11 +144,11 @@ describe('the late poll schedule', () => {
 });
 
 describe('which routes may be credited', () => {
-  it('only an inquiry route names a switch — TonPays and TonPays Telegram today', () => {
+  it('only an inquiry route names a switch — TonPays, TonPays Telegram and TetraPay today', () => {
     const named = PAYMENT_GATEWAY_PROVIDERS.filter(
       (provider) => PAYMENT_GATEWAY_DESCRIPTORS[provider].lateCreditSetting !== null,
     );
-    expect(named).toEqual(['TONPAYS', 'TONPAYS_TELEGRAM']);
+    expect(named).toEqual(['TONPAYS', 'TONPAYS_TELEGRAM', 'TETRAPAY']);
     for (const provider of named) {
       expect(PAYMENT_GATEWAY_DESCRIPTORS[provider].approval).toBe('INQUIRY');
     }

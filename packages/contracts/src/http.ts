@@ -5498,6 +5498,13 @@ export const paymentGatewaySchema = z.object({
        * The same rule as the key — a set-at time, never a value, never a masked stand-in.
        */
       webhookSecretRequired: z.boolean().default(false),
+      /**
+       * Whether the route can STORE a webhook secret at all (`webhookSecret` in the descriptor).
+       * True beside `webhookSecretRequired` for NOWPayments, and alone for TetraPay, whose
+       * secret is optional: the route is enabled without one and its webhook is then only an
+       * unauthenticated hint.
+       */
+      webhookSecretSupported: z.boolean().default(false),
       webhookSecretSetAt: z.iso.datetime().nullable().default(null),
       /**
        * The operator's last credential check against the provider (a read-only call made
@@ -5519,6 +5526,7 @@ export const paymentGatewaySchema = z.object({
       required: false,
       setAt: null,
       webhookSecretRequired: false,
+      webhookSecretSupported: false,
       webhookSecretSetAt: null,
       lastCheckAt: null,
       lastCheckResult: null,
@@ -5532,6 +5540,17 @@ export const paymentGatewaySchema = z.object({
    * reconciliation alone decides. Shown for diagnostics only.
    */
   callbackUrl: z.string().nullable().default(null),
+  /**
+   * The username of the bot a `returnToBot` route's `callback_url` points at (TetraPay), read
+   * from the stored bot and never typed here: a second source could disagree with the bot that
+   * actually serves the customer. Null for every other route, or while no active bot has one.
+   */
+  botUsername: z.string().nullable().default(null),
+  /**
+   * `TEMPORARILY_UNAVAILABLE` (TetraPay's daily limit): until when the provider's `DAILY_LIMIT_REACHED`
+   * hides the route (00:00 Tehran), or null. Informational; the route returns by itself.
+   */
+  hiddenUntil: z.iso.datetime().nullable().default(null),
   /**
    * A `FIXED_RATE` route's conversion (Package A): `rateRequired` says the form shows the
    * field and enabling needs it; `rateMinor` is the stored rate — sales-currency minor

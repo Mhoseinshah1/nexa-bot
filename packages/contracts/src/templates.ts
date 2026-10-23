@@ -8601,6 +8601,83 @@ export const TEMPLATES = [
     ],
   },
   /*
+   * TetraPay (`docs/tetrapay-gateway-audit.md`). None of these says paid until the payment is
+   * CONFIRMED by TetraPay's own verify. The pay and check buttons are the generic ones
+   * («💳 پرداخت آنلاین», «🔄 بررسی وضعیت پرداخت»).
+   */
+  {
+    key: 'bot.payment.route_name_tetrapay',
+    description:
+      'The product’s own name for the TetraPay route (`TETRAPAY`), used when the operator set no display name: «درگاه تتراپی».',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.tetrapay_review_unresolved',
+    description:
+      'TetraPay: the payment needs a person — TetraPay’s verify reported a paid payment whose amount or order id does not match this payment. Nothing has failed and nothing was settled; the operator is reconciling it. It must tell the customer not to pay again, and never says failed or closed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
+          'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.tetrapay_daily_limit',
+    description:
+      'TetraPay: the provider refused to create the payment because its daily limit was reached. The route is hidden until 00:00 Tehran time and returns by itself; nothing was charged. It tells the customer to choose another method or try again tomorrow.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
+          'The same code on every screen of this payment.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.tetrapay_amount_out_of_range',
+    description:
+      'TetraPay: the provider refused the amount as outside its range. Shows the provider’s own minimum and maximum converted to Toman (a bound it did not state is dropped with its line). Nothing was charged.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
+          'The same code on every screen of this payment.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'min',
+        type: 'MONEY',
+        description: 'The smallest amount TetraPay accepts, converted from rial to Toman. Optional.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'max',
+        type: 'MONEY',
+        description: 'The largest amount TetraPay accepts, converted from rial to Toman. Optional.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  /*
    * Package A — Telegram Stars (`docs/package-a-telegram-stars-audit.md`). A Star is never
    * shown as the sales currency: the Toman figures are Nexa's snapshot, and the Star
    * figure is the conversion the invoice asks for.
