@@ -218,7 +218,10 @@ describe('the customer Telegram turn', () => {
      * copied, so a wording change moves both sides at once while a WRONG KEY
      * still fails.
      */
-    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.start.welcome']);
+    // R6 item 3: the owner's greeting, with this customer's own first name filled in.
+    expect(sent[0]?.body['text']).toContain('ZED PROXY');
+    expect(sent[0]?.body['text']).toContain('عزیز، خوش آمدید.');
+    expect(sent[0]?.body['text']).not.toContain('{');
 
     // And a domain event exists for the registration, written inside the
     // business transaction.
@@ -615,8 +618,9 @@ describe('the customer Telegram turn', () => {
     // A DIFFERENT greeting, named. This is the only externally visible difference
     // between `FIRST_SEEN` and `RETURNING`, and the reason `created` has to be a
     // fact about the statement rather than a guess.
-    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.start.welcome_back']);
-    expect(sent[0]?.body['text']).not.toBe(CATALOGUE_FA['bot.start.welcome']);
+    expect(sent[0]?.body['text']).toContain('خوش برگشتی');
+    expect(sent[0]?.body['text']).not.toContain('{');
+    expect(sent[0]?.body['text']).not.toContain('ZED PROXY');
     const registrations = await api.container.database.db.execute(
       sql`SELECT count(*)::int AS n FROM outbox_messages WHERE event_type = 'CustomerRegistered'`,
     );
@@ -782,7 +786,7 @@ describe('the customer Telegram turn', () => {
     await start({ update: id });
     const row = (await customers())[0] as Record<string, unknown>;
     expect(sent).toHaveLength(1);
-    expect(sent[0]?.body['text']).toBe(CATALOGUE_FA['bot.start.welcome']);
+    expect(sent[0]?.body['text']).toContain('ZED PROXY');
 
     await api.container.database.db.execute(sql`
       UPDATE customers
@@ -804,8 +808,8 @@ describe('the customer Telegram turn', () => {
     expect(sent[0]?.body['text']).toBe(
       CATALOGUE_FA['bot.blocked_with_reason'].replace('{reason}', 'blocked after the turn'),
     );
-    expect(sent[0]?.body['text']).not.toBe(CATALOGUE_FA['bot.start.welcome']);
-    expect(sent[0]?.body['text']).not.toBe(CATALOGUE_FA['bot.start.welcome_back']);
+    expect(sent[0]?.body['text']).not.toContain('ZED PROXY');
+    expect(sent[0]?.body['text']).not.toContain('خوش برگشتی');
   });
 
   it('does NOT unblock a blocked customer on /start, and replies with the blocked text', async () => {
@@ -850,7 +854,7 @@ describe('the customer Telegram turn', () => {
     expect(sent[0]?.body['text']).toBe(
       CATALOGUE_FA['bot.blocked_with_reason'].replace('{reason}', 'operator note'),
     );
-    expect(sent[0]?.body['text']).not.toBe(CATALOGUE_FA['bot.start.welcome_back']);
+    expect(sent[0]?.body['text']).not.toContain('خوش برگشتی');
   });
 
   // -------------------------------------------------------------------------

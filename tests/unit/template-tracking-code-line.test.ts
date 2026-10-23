@@ -48,6 +48,8 @@ const VALUES: TemplateValues = {
   principal: money(250_000n, 'IRT'),
   fee: money(5_000n, 'IRT'),
   payable: money(255_000n, 'IRT'),
+  // R6 item 2: the exact amount to transfer, required by the TonPays card invoice.
+  transferAmount: '255000',
   stars: 100,
   expiresAt: AT,
   cardNumber: '6037991100001001',

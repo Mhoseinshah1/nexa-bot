@@ -326,7 +326,9 @@ describe('terms and rules (program §6)', () => {
       return (markup?.inline_keyboard ?? []).flat().map((button) => button.callback_data);
     });
 
-  const WELCOME_BACK = CATALOGUE_FA['bot.start.welcome_back'];
+  // R6 item 3: the greeting carries this customer's own name and figures, so the rendered text
+  // is matched by its fixed wording (the raw catalogue body has {placeholders} in it).
+  const WELCOME_BACK = expect.stringContaining('خوش برگشتی');
   const ACCEPTED = CATALOGUE_FA['bot.terms.accepted'].replace('{icon:success}', '✅');
 
   /** Whether these replies are exactly the terms screen for `version`. */

@@ -182,6 +182,7 @@ import type {
   WalletTopupFlowService,
 } from '../../modules/commerce/payments/application/wallet-topup-flow.service.js';
 import type { CustomerScreenComposer } from '../../modules/commerce/messaging/application/customer-screens.js';
+import type { StartGreetingKey } from '../../modules/commerce/messaging/application/start-greeting.js';
 import type { ResellerService } from '../../modules/commerce/resellers/application/reseller.service.js';
 import type { ServiceRecord } from '../../modules/commerce/provisioning/application/ports.js';
 import type { OperatorServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
@@ -10406,8 +10407,7 @@ export class BotRuntime {
     ) {
       if (command.intent !== 'MAIN_MENU') return this.supportScreen(scope, customer);
       return {
-        key: 'bot.start.welcome_back',
-        values: {},
+        ...(await this.startGreeting(scope, actor, customer, 'bot.start.welcome_back')),
         buttons: [],
         orderId: null,
         keyboard: (await this.isAdmin(scope, actor, input)) ? 'MAIN_MENU_ADMIN' : 'MAIN_MENU',
@@ -10545,8 +10545,7 @@ export class BotRuntime {
       const back = await this.paymentMethodsBack(scope, actor, command.targetId, customer);
       if (back !== null) return back;
       return {
-        key: 'bot.start.welcome_back',
-        values: {},
+        ...(await this.startGreeting(scope, actor, customer, 'bot.start.welcome_back')),
         buttons: [],
         orderId: null,
         keyboard: (await this.isAdmin(scope, actor, input)) ? 'MAIN_MENU_ADMIN' : 'MAIN_MENU',
@@ -10938,7 +10937,42 @@ export class BotRuntime {
             keyboard: (await this.isAdmin(scope, actor, input)) ? 'MAIN_MENU_ADMIN' : 'MAIN_MENU',
           } as const)
         : {};
-    return { key, values: {}, buttons: [], orderId: null, ...menu };
+    // R6 item 3: only the two greetings take variables, and only this customer's own.
+    const greeting =
+      key === 'bot.start.welcome' || key === 'bot.start.welcome_back'
+        ? await this.startGreeting(scope, actor, customer, key)
+        : { key, values: {} };
+    return { ...greeting, buttons: [], orderId: null, ...menu };
+  }
+
+  /**
+   * R6 item 3: `/start`'s greeting for the customer whose update this is, as a key and VALUES.
+   *
+   * Every fact is read now, for THIS customer (the row the signed update resolved to), and
+   * handed to the pure `startGreetingValues`; the name is sanitised by the one renderer when
+   * the message is sent. Nothing rendered is stored — the reply carries values, and the text
+   * is composed by the messenger at send time from the tenant's raw template.
+   */
+  private async startGreeting(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    key: StartGreetingKey,
+  ): Promise<{ readonly key: TemplateKey; readonly values: TemplateValues }> {
+    const now = this.deps.clock.now();
+    const [balance, serving] = await Promise.all([
+      this.deps.wallet.balanceForCustomer(scope, actor, customer.id),
+      this.deps.services.greetingFactsForCustomer(scope, customer.id, now),
+    ]);
+    return this.deps.screens.startGreeting(key, {
+      telegramUserId: customer.telegramUserId,
+      username: customer.username,
+      firstName: customer.firstName,
+      balance: money(balance.amountMinor, balance.currency),
+      activeServices: serving.serving,
+      nearestExpiresAt: serving.nearestExpiresAt,
+      now,
+    });
   }
 
   /**
@@ -16962,7 +16996,23 @@ function cardTransferScreen(
     ...inlineLabel('payment.gateway_change_card'),
     data: `${GATEWAY_CARD_CHANGE_CALLBACK_PREFIX}${payment.id}`,
   };
+  /*
+   * R6 item 2: TonPays approves automatically only on the EXACT amount it named (its odd
+   * `final_amount`), so that — never a rounded or separated figure — is what the customer is
+   * told and what the copy button carries: bare ASCII digits. When TonPays named none, the
+   * exact amount IS the payable. It is display and clipboard only: what Nexa settles, credits
+   * and refunds is still the payment's own snapshot.
+   */
+  const transferAmount = plainAmount(
+    invoice.finalAmount !== null ? money(invoice.finalAmount, 'IRT') : payable,
+  );
+  const copyExact: CustomerButton = {
+    ...inlineLabel('payment.copy_transfer_amount'),
+    copyText: transferAmount,
+    row: 0,
+  };
   const actions = [
+    copyExact,
     ...(facts !== null && windowOpen && receiptUploadAvailable(invoice, submissions)
       ? [receipt]
       : []),
@@ -16970,7 +17020,7 @@ function cardTransferScreen(
     cardCheck(payment.id),
     mainMenuButton(),
   ];
-  const brief = { payable, expiresAt, reference };
+  const brief = { payable, transferAmount, expiresAt, reference };
   const newest = submissions.at(-1) ?? null;
   // A receipt on its way, accepted without a review, or whose answer was lost: shown as sent.
   if (
@@ -17002,7 +17052,8 @@ function cardTransferScreen(
     return {
       key: 'bot.payment.gateway_card_changing',
       values: brief,
-      buttons: actions,
+      // Not the copy button: the new card may carry a new exact amount, copied once it shows.
+      buttons: actions.filter((button) => button !== copyExact),
       orderId,
       wizard,
     };
@@ -17012,7 +17063,8 @@ function cardTransferScreen(
     return {
       key: 'bot.payment.gateway_card_unconfirmed',
       values: brief,
-      buttons: actions,
+      // No card is shown, so no exact amount is offered for copying either.
+      buttons: actions.filter((button) => button !== copyExact),
       orderId,
       wizard,
     };
@@ -17037,14 +17089,6 @@ function cardTransferScreen(
       ...card,
       ...(fee !== null && fee.fee.amountMinor > 0n
         ? { principal: payment.amount, fee: fee.fee }
-        : {}),
-      /*
-       * TonPays' own `final_amount` (OQ-TPTG-03), shown only when present and different from
-       * what Nexa asked for: the provider's transfer instruction, never what Nexa settles,
-       * credits or refunds (§12).
-       */
-      ...(invoice.finalAmount !== null && invoice.finalAmount !== invoice.sentAmount
-        ? { transferAmount: money(invoice.finalAmount, 'IRT') }
         : {}),
     },
     buttons: actions,

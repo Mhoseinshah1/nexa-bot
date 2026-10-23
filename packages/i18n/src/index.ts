@@ -3,6 +3,7 @@ import {
   UNLIMITED_DURATION_DAYS,
   UNLIMITED_TRAFFIC_BYTES,
   isMoneyValue,
+  money,
   formatTrafficGb,
   type Calendar,
   placeholderTokensIn,
@@ -17,6 +18,7 @@ import {
   type TemplateValues,
   type Translator,
   TELEGRAM_CAPTION_MAX_LENGTH,
+  UNTRUSTED_VALUE_MAX_LENGTH,
   formatPersianInteger,
   toPersianDigits,
 } from '@nexa/contracts';
@@ -331,7 +333,62 @@ function renderValuePlain(
   return String(value);
 }
 
+/** R6 item 3: the word after a negative balance shown as a debt («۱۲۰۰۰ تومان بدهی»). */
+const DEBT_WORD: Record<Locale, string> = { fa: 'بدهی' };
+
 const PLACEHOLDER_EXPRESSION = /\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
+/*
+ * R6 item 3: what the one renderer does to a value that comes from a THIRD PARTY (a Telegram
+ * display name). Control characters, the bidi controls (LRE..RLO, LRI..PDI, LRM, RLM, ALM),
+ * zero-width space/joiner, the soft hyphen, the BOM, line and paragraph separators and the
+ * private-use marks the instant renderer reserves are removed. U+200C (ZWNJ) is KEPT: it is
+ * part of correct Persian spelling.
+ */
+const UNTRUSTED_STRIP =
+  /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B\u200D-\u200F\u2028-\u202E\u2060-\u206F\uFEFF\uE000-\uE002]/gu;
+
+/**
+ * A third party's text made safe to put inside a message, whatever its format: control and
+ * bidi characters removed, whitespace collapsed to single spaces, markup brackets removed,
+ * `@` and `://` made inert (a name must not mention anybody or become a link), and the length
+ * capped at `UNTRUSTED_VALUE_MAX_LENGTH` characters (never inside a surrogate pair). The
+ * result may be empty, and an empty result is an ABSENT value to the renderer.
+ *
+ * HTML escaping is NOT done here: the renderer applies the key's own escape afterwards, so a
+ * `TELEGRAM_HTML` key escapes what is left and a `PLAIN_TEXT` key has nothing to escape.
+ */
+export function sanitizeUntrustedText(raw: string): string {
+  const cleaned = raw
+    .replace(/[\t\n\r\u000B\u000C\u0085\u2028\u2029]+/gu, ' ')
+    .replace(UNTRUSTED_STRIP, '')
+    .replace(/[<>]/gu, '')
+    .replace(/@/gu, '\uFF20')
+    .replace(/:\/\//gu, '\uFF1A//')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  const characters = Array.from(cleaned);
+  return characters.length <= UNTRUSTED_VALUE_MAX_LENGTH
+    ? cleaned
+    : characters.slice(0, UNTRUSTED_VALUE_MAX_LENGTH).join('').trim();
+}
+
+/**
+ * R6 item 3: closes the gap an absent value leaves in a line that keeps its other words — a
+ * run of spaces becomes one, a space before «، ؛ , ; : . ! ؟ ? )» or after «( «» goes, doubled
+ * commas become one, and punctuation or space at the start of the line is dropped — so
+ * «سلام  عزیز» and «سلام ، خوش» can never be sent. Applied only to a line an absent
+ * `COLLAPSE` value touched; every other line is byte for byte as written.
+ */
+export function closeGaps(line: string): string {
+  return line
+    .replace(/[ \u00A0]{2,}/gu, ' ')
+    .replace(/ +([،؛,;:.!؟?)»])/gu, '$1')
+    .replace(/([(«]) +/gu, '$1')
+    .replace(/([،,])(?:\s*[،,])+/gu, '$1')
+    .replace(/^[\s،؛,;:.\-–—!؟?]+/u, '')
+    .trim();
+}
 
 /**
  * Renders one body against one key's declaration.
@@ -378,34 +435,71 @@ export function renderTemplateBody(
   const escape = definition.format === 'TELEGRAM_HTML' ? escapeTelegramHtml : (s: string) => s;
   const persian = definition.digits === 'PERSIAN';
 
+  /** The value as the renderer will use it: an untrusted one sanitised (R6 item 3). */
+  const valueOf = (token: string): TemplateValue | undefined => {
+    const value = values[token];
+    if (value === undefined) return undefined;
+    const placeholder = declared.get(token);
+    return placeholder?.untrusted === true && typeof value === 'string'
+      ? sanitizeUntrustedText(value)
+      : value;
+  };
+  /** Absent: not supplied, or an untrusted value with nothing left once sanitised. */
+  const isAbsent = (token: string): boolean => {
+    const value = valueOf(token);
+    return (
+      value === undefined || (declared.get(token)?.untrusted === true && value === '')
+    );
+  };
   const absentOptional = (token: string): boolean => {
     const placeholder = declared.get(token);
-    return placeholder !== undefined && !placeholder.required && values[token] === undefined;
+    return placeholder !== undefined && !placeholder.required && isAbsent(token);
   };
+  const collapses = (token: string): boolean => declared.get(token)?.whenEmpty === 'COLLAPSE';
 
   const rendered: string[] = [];
   let dropped = false;
   for (const line of body.split('\n')) {
     const tokens = [...line.matchAll(PLACEHOLDER_EXPRESSION)].map((m) => m[1] as string);
-    if (tokens.length > 0 && tokens.every(absentOptional)) {
+    // A line whose placeholders are ALL absent is dropped — unless one of them COLLAPSEs,
+    // which keeps the line's own words (a greeting without a name is still a greeting).
+    if (tokens.length > 0 && tokens.every(absentOptional) && !tokens.some(collapses)) {
       dropped = true;
       continue;
     }
 
-    rendered.push(
-      line.replace(PLACEHOLDER_EXPRESSION, (match, token: string) => {
-        const placeholder = declared.get(token);
-        if (placeholder === undefined) return match;
-        const value = values[token];
-        if (value === undefined) return placeholder.required ? match : '';
-        const shown = escape(renderValue(value, locale, placeholder.type, presentation, persian));
-        return mark &&
-          value instanceof Date &&
-          (placeholder.type === 'DATETIME' || placeholder.type === 'DATE')
-          ? markInstant(value, shown)
-          : shown;
-      }),
-    );
+    const text = line.replace(PLACEHOLDER_EXPRESSION, (match, token: string) => {
+      const placeholder = declared.get(token);
+      if (placeholder === undefined) return match;
+      const value = valueOf(token);
+      if (value === undefined || isAbsent(token)) return placeholder.required ? match : '';
+      const shown = escape(
+        placeholder.debtWhenNegative === true && isMoneyValue(value) && value.amountMinor < 0n
+          ? `${renderValue(
+              money(-BigInt(value.amountMinor), value.currency),
+              locale,
+              placeholder.type,
+              presentation,
+              persian,
+            )} ${DEBT_WORD[locale]}`
+          : renderValue(value, locale, placeholder.type, presentation, persian),
+      );
+      return mark &&
+        value instanceof Date &&
+        (placeholder.type === 'DATETIME' || placeholder.type === 'DATE')
+        ? markInstant(value, shown)
+        : shown;
+    });
+    if (tokens.some((token) => collapses(token) && absentOptional(token))) {
+      const closed = closeGaps(text);
+      if (closed === '') {
+        dropped = true;
+        continue;
+      }
+      rendered.push(closed);
+      continue;
+    }
+    rendered.push(text);
   }
   /*
    * A paragraph that consisted only of dropped lines leaves its two separators behind
