@@ -105,6 +105,73 @@ export function verdictCode(verdict: FxCandidateVerdict): string {
   }
 }
 
+/** A healthy source left out of one pass by the sanity band. */
+export interface BandExclusion {
+  readonly source: FxSource;
+  /** How far it sat from the median of the others, in whole basis points (floored). */
+  readonly deviationBps: bigint;
+}
+
+/**
+ * THE sanity band (Round 8): with THREE OR MORE healthy sources, a source whose figure is
+ * further than `bandBps` basis points from the MEDIAN OF THE OTHERS is excluded from this
+ * pass. Exact on `bigint`: the median of an even count is the mean of the two middle figures
+ * (carried one more digit of scale, never rounded) and the comparison is a cross-multiplication,
+ * so a figure exactly on the band is kept.
+ *
+ * Each source is judged against the others as they stand, all at once — not by repeatedly
+ * dropping the worst — so the outcome does not depend on the order sources were read in.
+ * With two healthy sources "the others" is one figure and the exclusion would be symmetric
+ * (both leave, nothing is stored where the agreement rule would have stored), so the band
+ * does nothing there: `decideQuote`'s agreement window alone decides.
+ */
+export function applySanityBand(
+  judged: readonly JudgedCandidate[],
+  bandBps: bigint,
+): { readonly kept: readonly JudgedCandidate[]; readonly excluded: readonly BandExclusion[] } {
+  const healthy = judged.filter(isHealthy);
+  if (healthy.length < 3) return { kept: judged, excluded: [] };
+  const excluded: BandExclusion[] = [];
+  const outside = new Set<JudgedCandidate>();
+  for (const entry of healthy) {
+    const others = healthy.filter((other) => other !== entry).map((other) => other.candidate.rate);
+    const median = medianRate(others);
+    const [a, b] = commonScale(entry.candidate.rate, median);
+    const gap = a > b ? a - b : b - a;
+    if (gap * 10_000n > bandBps * b) {
+      outside.add(entry);
+      excluded.push({
+        source: entry.candidate.source,
+        deviationBps: rateDeviationBps(entry.candidate.rate, median) ?? 0n,
+      });
+    }
+  }
+  return { kept: judged.filter((entry) => !outside.has(entry)), excluded };
+}
+
+function isHealthy(entry: JudgedCandidate): boolean {
+  return entry.verdict.kind === 'ACCEPT' || entry.verdict.kind === 'OUTLIER';
+}
+
+function commonScale(a: FxRate, b: FxRate): [bigint, bigint] {
+  const scale = Math.max(a.scale, b.scale);
+  return [a.mantissa * 10n ** BigInt(scale - a.scale), b.mantissa * 10n ** BigInt(scale - b.scale)];
+}
+
+/** The exact median of a non-empty list of positive rates. */
+function medianRate(rates: readonly FxRate[]): FxRate {
+  const sorted = [...rates].sort((x, y) => {
+    const [a, b] = commonScale(x, y);
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[middle]!;
+  const [a, b] = commonScale(sorted[middle - 1]!, sorted[middle]!);
+  const scale = Math.max(sorted[middle - 1]!.scale, sorted[middle]!.scale);
+  // (a + b) / 2 exactly: multiply by 5 and carry one more digit of scale.
+  return { mantissa: (a + b) * 5n, scale: scale + 1 };
+}
+
 /**
  * Why nothing was stored, when sources DID answer (Round 6). Closed, because each is a
  * machine code an operator reads beside the source in Web Admin.

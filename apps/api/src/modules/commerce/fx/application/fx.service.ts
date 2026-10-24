@@ -39,6 +39,7 @@ import type { SettingsResolver } from '../../../control/settings/application/set
 import type { OperationalConditionReader } from '../../../platform/opslog/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import {
+  applySanityBand,
   decideQuote,
   judgeCandidate,
   toCandidate,
@@ -149,6 +150,8 @@ export interface FxSettings extends FxQuoteSettings {
   readonly minAgreeingSources: number;
   /** `fx.accept_single_source`. */
   readonly acceptSingleSource: boolean;
+  /** `fx.sanity_band_bps` (Round 8): the distance from the others' median that excludes a source. */
+  readonly sanityBandBps: number;
 }
 
 /**
@@ -497,7 +500,18 @@ export class FxService {
       }
     }
 
-    const decision = decideQuote(judged, {
+    /*
+     * The sanity band (Round 8). A source too far from the median of the others sits this
+     * pass out: it is recorded as a rejection (`outside_band`, one deduped condition per
+     * source — the log says it once however many passes it repeats) and takes no part in
+     * the agreement below. It did answer, so it is not a transport failure and starts no
+     * backoff.
+     */
+    const band = applySanityBand(judged, BigInt(settings.sanityBandBps));
+    for (const out of band.excluded) {
+      rejected.push({ source: out.source, code: 'outside_band', deviationBps: out.deviationBps });
+    }
+    const decision = decideQuote(band.kept, {
       minAgreeing: settings.minAgreeingSources,
       acceptSingle: settings.acceptSingleSource,
     });
@@ -513,7 +527,7 @@ export class FxService {
      * healthy source OUTSIDE the agreement did not fail to answer, but its figure was not
      * used, and an operator must see that as a rejection, not as health.
      */
-    for (const entry of judged) {
+    for (const entry of band.kept) {
       const source = entry.candidate.source;
       if (agreeing.includes(source)) {
         if (!successes.includes(source)) successes.push(source);
@@ -584,7 +598,8 @@ export class FxService {
             severity: 'WARN',
             message:
               'An exchange-rate source answered a figure this installation refused: not ' +
-              'positive, outside the pair’s sanity rails, or too far from the last-known-good ' +
+              'positive, outside the pair’s sanity rails, too far from the median of the other ' +
+              'sources (the sanity band), or too far from the last-known-good ' +
               'without the other source agreeing.',
             dedupeKey: `${FX_QUOTE_REJECTED_CODE}:${entry.source}`,
             context: {
@@ -837,21 +852,37 @@ export class FxService {
   }
 
   private async settingsFor(scope: TenantContext, tx?: unknown): Promise<FxSettings> {
-    const [quote, primary, fallback, minAgreeingSources, acceptSingleSource, ...switches] =
-      await Promise.all([
-        this.quoteSettingsFor(scope, tx),
-        this.deps.settings.valueOf<FxSource>(scope, 'fx.primary_source', tx),
-        this.deps.settings.valueOf<FxFallbackSource>(scope, 'fx.fallback_source', tx),
-        this.deps.settings.valueOf<number>(scope, 'fx.min_agreeing_sources', tx),
-        this.deps.settings.valueOf<boolean>(scope, 'fx.accept_single_source', tx),
-        ...FX_SOURCES.map((source) =>
-          this.deps.settings.valueOf<boolean>(scope, FX_SOURCE_ENABLED_SETTINGS[source], tx),
-        ),
-      ]);
+    const [
+      quote,
+      primary,
+      fallback,
+      minAgreeingSources,
+      acceptSingleSource,
+      sanityBandBps,
+      ...switches
+    ] = await Promise.all([
+      this.quoteSettingsFor(scope, tx),
+      this.deps.settings.valueOf<FxSource>(scope, 'fx.primary_source', tx),
+      this.deps.settings.valueOf<FxFallbackSource>(scope, 'fx.fallback_source', tx),
+      this.deps.settings.valueOf<number>(scope, 'fx.min_agreeing_sources', tx),
+      this.deps.settings.valueOf<boolean>(scope, 'fx.accept_single_source', tx),
+      this.deps.settings.valueOf<number>(scope, 'fx.sanity_band_bps', tx),
+      ...FX_SOURCES.map((source) =>
+        this.deps.settings.valueOf<boolean>(scope, FX_SOURCE_ENABLED_SETTINGS[source], tx),
+      ),
+    ]);
     const sourceEnabled = Object.fromEntries(
       FX_SOURCES.map((source, index) => [source, switches[index] === true]),
     ) as Record<FxSource, boolean>;
-    return { ...quote, primary, fallback, minAgreeingSources, acceptSingleSource, sourceEnabled };
+    return {
+      ...quote,
+      primary,
+      fallback,
+      minAgreeingSources,
+      acceptSingleSource,
+      sanityBandBps,
+      sourceEnabled,
+    };
   }
 }
 

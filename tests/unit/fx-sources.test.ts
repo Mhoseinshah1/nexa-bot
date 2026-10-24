@@ -8,10 +8,7 @@ import {
   NOBITEX_BASE_URL,
   NobitexFxSource,
 } from '../../apps/api/src/modules/commerce/fx/infrastructure/nobitex-source';
-import {
-  WALLEX_BASE_URL,
-  WallexFxSource,
-} from '../../apps/api/src/modules/commerce/fx/infrastructure/wallex-source';
+import { WallexFxSource } from '../../apps/api/src/modules/commerce/fx/infrastructure/wallex-source';
 import {
   parseExactJson,
   priceOf,
@@ -64,22 +61,6 @@ const NOBITEX_BODY = JSON.stringify({
     ['277960', '119.31'],
     ['271240', '1079.75'],
   ],
-});
-
-/** The shape the Wallex clients read for `GET /v1/depth?symbol=USDTTMN`. Toman. */
-const WALLEX_BODY = JSON.stringify({
-  success: true,
-  message: 'The operation was successful',
-  result: {
-    ask: [
-      { price: '103560', quantity: 12.5, sum: '1294500' },
-      { price: '103570', quantity: 3, sum: '310710' },
-    ],
-    bid: [
-      { price: '103550', quantity: 40.2, sum: '4162710' },
-      { price: '103540', quantity: 8, sum: '828320' },
-    ],
-  },
 });
 
 describe('exact JSON', () => {
@@ -180,54 +161,10 @@ describe('Nobitex (primary)', () => {
   });
 });
 
-describe('Wallex (fallback)', () => {
-  it('reads the best bid of the depth book as a Toman rate with no source time', async () => {
-    const http = client(() => ok(WALLEX_BODY));
-    const outcome = await new WallexFxSource(http).read('USDT');
-    expect(outcome).toEqual({
-      kind: 'READ',
-      reading: {
-        source: 'WALLEX',
-        rate: { mantissa: 103_550n, scale: 0 },
-        currency: 'IRT',
-        sourceAt: null,
-      },
-    });
-    expect(http.requests).toEqual([
-      { method: 'GET', path: '/v1/depth?symbol=USDTTMN', effect: 'READ' },
-    ]);
-    expect(WALLEX_BASE_URL).toBe('https://api.wallex.ir');
-  });
-
-  it('reads a numeric price exactly as written, and refuses an unsuccessful envelope', async () => {
-    const numeric = JSON.stringify({
-      success: true,
-      result: { ask: [], bid: [{ price: 103550.5, quantity: 1 }] },
-    });
-    const outcome = await new WallexFxSource(client(() => ok(numeric))).read('USDT');
-    expect(outcome.kind === 'READ' && outcome.reading.rate).toEqual({
-      mantissa: 1_035_505n,
-      scale: 1,
-    });
-
-    const failed = await new WallexFxSource(client(() => ok('{"success":false,"result":[]}'))).read(
-      'USDT',
-    );
-    expect(failed).toMatchObject({ kind: 'UNAVAILABLE', code: 'wallex.not_success' });
-    const limited = await new WallexFxSource(client(() => ok('', 429))).read('USDT');
-    expect(limited).toMatchObject({ kind: 'RATE_LIMITED', code: 'wallex.rate_limited' });
-    const empty = await new WallexFxSource(
-      client(() => ok('{"success":true,"result":{"ask":[],"bid":[]}}')),
-    ).read('USDT');
-    expect(empty).toMatchObject({ kind: 'UNAVAILABLE', code: 'wallex.no_bids' });
-  });
-});
-
 describe('Wallex over the real outbound client (Round 6)', () => {
   it('reads a gzip body the server sent without being asked, through the whole stack', async () => {
     const body = JSON.stringify({
-      success: true,
-      result: { bid: [{ price: '103500', quantity: '1', sum: '103500' }], ask: [] },
+      result: { markets: [{ symbol: 'USDTTMN', price: '103500' }] },
     });
     const server = createServer((_request, response) => {
       // Wallex answers `content-encoding: gzip` whatever the request offered.

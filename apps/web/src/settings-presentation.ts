@@ -186,6 +186,9 @@ const BALANCING_STRATEGY_OPTIONS: Readonly<Record<PanelBalancingStrategy, WebKey
 const FX_SOURCE_OPTIONS: Readonly<Record<FxSource, WebKey>> = {
   NOBITEX: 'web.fx_source_nobitex',
   WALLEX: 'web.fx_source_wallex',
+  TABDEAL: 'web.fx_source_tabdeal',
+  BITPIN: 'web.fx_source_bitpin',
+  RAMZINEX: 'web.fx_source_ramzinex',
 };
 const FX_FALLBACK_OPTIONS: Readonly<Record<FxFallbackSource, WebKey>> = {
   ...FX_SOURCE_OPTIONS,
@@ -768,6 +771,48 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
         { value: 'false', label: 'web.backup_schedule_off' },
       ],
     },
+  },
+  'fx.source_tabdeal_enabled': {
+    title: 'web.setting_fx_source_tabdeal_enabled',
+    description: 'web.setting_fx_source_tabdeal_enabled_desc',
+    group: 'fx',
+    control: {
+      kind: 'select',
+      options: [
+        { value: 'true', label: 'web.backup_schedule_on' },
+        { value: 'false', label: 'web.backup_schedule_off' },
+      ],
+    },
+  },
+  'fx.source_bitpin_enabled': {
+    title: 'web.setting_fx_source_bitpin_enabled',
+    description: 'web.setting_fx_source_bitpin_enabled_desc',
+    group: 'fx',
+    control: {
+      kind: 'select',
+      options: [
+        { value: 'true', label: 'web.backup_schedule_on' },
+        { value: 'false', label: 'web.backup_schedule_off' },
+      ],
+    },
+  },
+  'fx.source_ramzinex_enabled': {
+    title: 'web.setting_fx_source_ramzinex_enabled',
+    description: 'web.setting_fx_source_ramzinex_enabled_desc',
+    group: 'fx',
+    control: {
+      kind: 'select',
+      options: [
+        { value: 'true', label: 'web.backup_schedule_on' },
+        { value: 'false', label: 'web.backup_schedule_off' },
+      ],
+    },
+  },
+  'fx.sanity_band_bps': {
+    title: 'web.setting_fx_sanity_band_bps',
+    description: 'web.setting_fx_sanity_band_bps_desc',
+    group: 'fx',
+    control: { kind: 'integer', unit: 'web.unit_bps' },
   },
   'fx.min_agreeing_sources': {
     title: 'web.setting_fx_min_agreeing_sources',

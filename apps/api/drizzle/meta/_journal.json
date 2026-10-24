@@ -1933,6 +1933,13 @@
       "when": 1792824413339,
       "tag": "0275_tetrapay_gateway",
       "breakpoints": true
+    },
+    {
+      "idx": 276,
+      "version": "7",
+      "when": 1792847180034,
+      "tag": "0276_fx_sources_tabdeal_bitpin_ramzinex",
+      "breakpoints": true
     }
   ]
 }

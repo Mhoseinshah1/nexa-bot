@@ -259,6 +259,18 @@ export const WEB_FA = {
     'خاموش یعنی نوبیتکس هرگز فراخوانی نمی‌شود. برای وقتی که نوبیتکس به آدرس این سرور خطای ۴۰۳ می‌دهد.',
   'web.setting_fx_source_wallex_enabled': 'خواندن نرخ از والکس',
   'web.setting_fx_source_wallex_enabled_desc': 'خاموش یعنی والکس هرگز فراخوانی نمی‌شود.',
+  'web.setting_fx_source_tabdeal_enabled': 'خواندن نرخ از تبدیل',
+  'web.setting_fx_source_tabdeal_enabled_desc':
+    'میانگین بهترین فروش و بهترین خرید جفت تتر/تومان. خاموش یعنی تبدیل هرگز فراخوانی نمی‌شود.',
+  'web.setting_fx_source_bitpin_enabled': 'خواندن نرخ از بیت‌پین',
+  'web.setting_fx_source_bitpin_enabled_desc':
+    'آخرین قیمت معامله‌شدهٔ تتر/تومان. خاموش یعنی بیت‌پین هرگز فراخوانی نمی‌شود.',
+  'web.setting_fx_source_ramzinex_enabled': 'خواندن نرخ از رمزینکس',
+  'web.setting_fx_source_ramzinex_enabled_desc':
+    'میانگین خرید و فروش به ریال که به تومان تبدیل می‌شود. به‌طور پیش‌فرض خاموش است و منبع جایگزین است. خاموش یعنی رمزینکس هرگز فراخوانی نمی‌شود.',
+  'web.setting_fx_sanity_band_bps': 'حد انحراف مجاز از میانهٔ منبع‌ها',
+  'web.setting_fx_sanity_band_bps_desc':
+    'وقتی دست‌کم سه منبع سالم هست، منبعی که بیش از این مقدار از میانهٔ بقیه فاصله دارد در همان نوبت کنار گذاشته و یک بار در گزارش عملیات ثبت می‌شود. ۲۰۰ یعنی دو درصد. با دو منبع، فقط شرط موافقت سه‌درصدی تصمیم می‌گیرد.',
   'web.setting_fx_min_agreeing_sources': 'حداقل منبع موافق برای ذخیرهٔ نرخ',
   'web.setting_fx_min_agreeing_sources_desc':
     'نرخ وقتی ذخیره می‌شود که دست‌کم این تعداد منبع روشن و سالم، در حدود سه درصد با هم موافق باشند. معمولاً ۲.',
@@ -2676,6 +2688,9 @@ export const WEB_FA = {
   'web.fx_fallback_source': 'منبع پشتیبان',
   'web.fx_source_nobitex': 'نوبیتکس',
   'web.fx_source_wallex': 'والکس',
+  'web.fx_source_tabdeal': 'تبدیل',
+  'web.fx_source_bitpin': 'بیت‌پین',
+  'web.fx_source_ramzinex': 'رمزینکس',
   'web.fx_source_none': 'ندارد',
   'web.fx_current_rate': 'نرخ فعلی (به ازای هر تتر)',
   'web.fx_no_quote': 'هنوز نرخی خوانده نشده است.',
@@ -2723,6 +2738,11 @@ export const WEB_FA = {
   'web.fx_err_out_of_rails': 'عدد خارج از بازهٔ منطقی بود',
   'web.fx_err_outlier': 'عدد از آخرین نرخ بسیار دور بود',
   'web.fx_err_disagrees': 'با منبع دیگر موافق نبود',
+  'web.fx_err_outside_band':
+    'عدد از میانهٔ منبع‌های دیگر بیش از حد مجاز دور بود و در این نوبت کنار گذاشته شد',
+  'web.fx_err_no_market': 'بازار تتر در پاسخ منبع پیدا نشد',
+  'web.fx_err_bad_price': 'قیمت در پاسخ منبع عدد معتبر نبود',
+  'web.fx_err_not_json': 'پاسخ منبع قابل خواندن نبود',
   'web.fx_err_http_403': 'دسترسی رد شد (۴۰۳)؛ منبع آدرس این سرور را قبول نمی‌کند',
   'web.fx_err_http': 'خطای HTTP شمارهٔ {status}',
   'web.fx_stars_title': 'استارز تلگرام',
@@ -4030,6 +4050,7 @@ export const WEB_FA = {
   'web.service_refund_origin_operator': 'حذف و بازگشت وجه توسط مدیر',
 
   // --- Units ---------------------------------------------------------------
+  'web.unit_bps': 'صدم درصد (۱۰۰ = ۱٪)',
   'web.unit_seconds': 'ثانیه',
   'web.unit_minutes': 'دقیقه',
   'web.unit_hours': 'ساعت',

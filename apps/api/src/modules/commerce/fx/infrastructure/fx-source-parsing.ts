@@ -68,6 +68,27 @@ function higher(a: FxRate, b: FxRate): boolean {
   return a.mantissa * 10n ** BigInt(b.scale) > b.mantissa * 10n ** BigInt(a.scale);
 }
 
+/**
+ * The arithmetic mean of positive prices, divided by `unitDivisor`, as WHOLE TOMAN, rounded
+ * half up — the one place a Round 8 adapter converts a unit and rounds. Exact on integers:
+ * every price is brought to a common scale, summed, and divided once, so no float is ever
+ * involved. `unitDivisor` is 1 for a source that quotes Toman and 10 for one that quotes
+ * Rial (one Toman is ten Rial). Null when there is nothing to average or the figure is not
+ * at least one whole Toman: a zero is never a rate.
+ */
+export function wholeTomanMean(prices: readonly FxRate[], unitDivisor: 1n | 10n): FxRate | null {
+  if (prices.length === 0) return null;
+  const scale = prices.reduce((widest, price) => Math.max(widest, price.scale), 0);
+  let sum = 0n;
+  for (const price of prices) {
+    if (price.mantissa <= 0n) return null;
+    sum += price.mantissa * 10n ** BigInt(scale - price.scale);
+  }
+  const denominator = BigInt(prices.length) * unitDivisor * 10n ** BigInt(scale);
+  const whole = (2n * sum + denominator) / (2n * denominator);
+  return whole > 0n ? { mantissa: whole, scale: 0 } : null;
+}
+
 /** A transport failure, in the source vocabulary. A 429 is the one answer that says "later". */
 export function transportOutcome(
   result: ProviderHttpResult,
@@ -96,3 +117,9 @@ function failureCode(kind: ProviderFailureKind): string {
  */
 export const FX_SOURCE_TIMEOUT_MS = 5_000;
 export const FX_SOURCE_MAX_RESPONSE_BYTES = 256 * 1024;
+/**
+ * Bitpin's market list is about 275 KB DECOMPRESSED (owner's curl, 2026-10-24), which the
+ * 256 KiB cap above refuses. It gets its own client at 320 KiB, so the raise covers that one
+ * source and no other; the cap still applies to the decompressed bytes.
+ */
+export const FX_BITPIN_MAX_RESPONSE_BYTES = 320 * 1024;

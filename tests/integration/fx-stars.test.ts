@@ -75,7 +75,7 @@ const OPEN_ROUTE: PaymentGatewayConfig = {
   allowWalletTopup: true,
 };
 
-/** The documented Nobitex book (Rial) and the Wallex depth (Toman), scriptable per case. */
+/** The documented Nobitex book (Rial) and the Wallex market list (Toman), scriptable per case. */
 interface SourceScript {
   nobitex: { status: number; body: unknown };
   wallex: { status: number; body: unknown };
@@ -94,12 +94,13 @@ function nobitexBook(bestBidRial: string) {
   };
 }
 
-function wallexDepth(bestBidToman: string) {
+function wallexMarkets(toman: string) {
   return {
-    success: true,
     result: {
-      ask: [{ price: `${bestBidToman}9`, quantity: 1 }],
-      bid: [{ price: bestBidToman, quantity: 40 }],
+      markets: [
+        { symbol: 'BTCTMN', price: '9876543210' },
+        { symbol: 'USDTTMN', price: toman },
+      ],
     },
   };
 }
@@ -210,7 +211,7 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
     // 1,035,500 Rial per USDT on Nobitex = 103,550 Toman; Wallex says 103,500 Toman.
     script = {
       nobitex: { status: 200, body: nobitexBook('1035500') },
-      wallex: { status: 200, body: wallexDepth('103500') },
+      wallex: { status: 200, body: wallexMarkets('103500') },
     };
     owner = adminActorFor(
       await createAdmin(api.container, tenantA, {
@@ -219,6 +220,19 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
         roleKeys: ['owner'],
       }),
     );
+    // Round 8: Tabdeal and Bitpin are ON by default and have no fake here; this suite is about
+    // the two sources it scripts, so the three newer ones are switched off (their own
+    // behaviour is `tests/unit/fx-sources-r8.test.ts` and `fx-service.test.ts`).
+    for (const key of [
+      'fx.source_tabdeal_enabled',
+      'fx.source_bitpin_enabled',
+      'fx.source_ramzinex_enabled',
+    ] as const) {
+      await setSetting(key, false).catch((error: unknown) => {
+        // Ramzinex is already off by default: an unchanged write is not a failure.
+        if (key !== 'fx.source_ramzinex_enabled') throw error;
+      });
+    }
     maryam = (
       await api.container.customers.resolveFromUpdate(tenantA, systemActor(`r-${String(MARYAM)}`), {
         idempotencyKey: `resolve-${String(MARYAM)}-${BOT_A}`,
@@ -587,7 +601,7 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
     it('snapshots the USDT quote, its source and times, the ratio and the effective figure; stars = ceil(payable / (rate / ratio))', async () => {
       await centralStars();
       // Every enabled source is read; the two agree and the primary's figure is stored.
-      expect(hits).toEqual(['nobitex/v3/orderbook/USDTIRT', 'wallex/v1/depth?symbol=USDTTMN']);
+      expect(hits).toEqual(['nobitex/v3/orderbook/USDTIRT', 'wallex/hector/web/v1/markets']);
       const attempt = await topup(100_000n);
       const invoice = await invoiceOf(attempt.payment.id);
       // 105,000 Toman payable; 103,550 Toman per USDT / 100 Stars per USDT = 1,035.5 Toman
@@ -624,7 +638,7 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
       const before = await invoiceOf(first.payment.id);
       // The market moves ten percent: 1,139,050 Rial. An operator's refresh reads it now.
       script.nobitex = { status: 200, body: nobitexBook('1139050') };
-      script.wallex = { status: 200, body: wallexDepth('113900') };
+      script.wallex = { status: 200, body: wallexMarkets('113900') };
       expect((await api.container.fx.refresh(tenantA, owner, 'USDT')).outcome).toBe('REFRESHED');
       expect(await invoiceOf(first.payment.id)).toEqual(before);
       // The same open attempt is handed back unchanged (its snapshot is its own).
@@ -769,7 +783,7 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
       // behind this one would see. A refresh from here is "older" and must not win.
       await ageQuote(-3_600);
       script.nobitex = { status: 200, body: nobitexBook('1139050') };
-      script.wallex = { status: 200, body: wallexDepth('113900') };
+      script.wallex = { status: 200, body: wallexMarkets('113900') };
       expect((await api.container.fx.refresh(tenantA, owner, 'USDT')).outcome).toBe('REFRESHED');
       const [row] = await rows<{
         rate_mantissa: string;
@@ -860,7 +874,7 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
       expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toMatchObject({
         outcome: 'REFRESHED_BY_FALLBACK',
       });
-      expect(hits).toEqual(['nobitex/v3/orderbook/USDTIRT', 'wallex/v1/depth?symbol=USDTTMN']);
+      expect(hits).toEqual(['nobitex/v3/orderbook/USDTIRT', 'wallex/hector/web/v1/markets']);
       const attempt = await topup(100_000n);
       // 103,500 / 100 = 1,035 per Star; 105,000 / 1,035 = 101.44… → 102.
       expect(await invoiceOf(attempt.payment.id)).toMatchObject({
@@ -912,6 +926,9 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
       ).toEqual([
         ['NOBITEX', true, 0],
         ['WALLEX', true, 0],
+        ['TABDEAL', false, 0],
+        ['BITPIN', false, 0],
+        ['RAMZINEX', false, 0],
       ]);
       expect(view).toMatchObject({ minAgreeingSources: 2, acceptSingleSource: false });
 

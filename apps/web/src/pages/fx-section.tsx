@@ -45,6 +45,9 @@ import { ErrorCodeLabel, ErrorRef } from '../ui/technical-details';
 const SOURCE_LABELS: Readonly<Record<FxSource, WebKey>> = {
   NOBITEX: 'web.fx_source_nobitex',
   WALLEX: 'web.fx_source_wallex',
+  TABDEAL: 'web.fx_source_tabdeal',
+  BITPIN: 'web.fx_source_bitpin',
+  RAMZINEX: 'web.fx_source_ramzinex',
 };
 
 /** A span of seconds as the coarsest whole unit that holds it: seconds, minutes or hours. */
@@ -96,6 +99,10 @@ const SOURCE_ERROR_LABELS: Readonly<Record<string, WebKey>> = {
   out_of_rails: 'web.fx_err_out_of_rails',
   outlier: 'web.fx_err_outlier',
   disagrees: 'web.fx_err_disagrees',
+  outside_band: 'web.fx_err_outside_band',
+  no_market: 'web.fx_err_no_market',
+  bad_price: 'web.fx_err_bad_price',
+  not_json: 'web.fx_err_not_json',
 };
 
 export function fxSourceErrorLabel(code: string): string {

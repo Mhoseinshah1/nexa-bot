@@ -589,11 +589,15 @@ import {
 } from './modules/commerce/fx/application/stars-pricing.guards.js';
 import { DrizzleFxQuoteRepository } from './modules/commerce/fx/infrastructure/drizzle-fx.repository.js';
 import {
+  FX_BITPIN_MAX_RESPONSE_BYTES,
   FX_SOURCE_MAX_RESPONSE_BYTES,
   FX_SOURCE_TIMEOUT_MS,
 } from './modules/commerce/fx/infrastructure/fx-source-parsing.js';
 import { NobitexFxSource } from './modules/commerce/fx/infrastructure/nobitex-source.js';
 import { WallexFxSource } from './modules/commerce/fx/infrastructure/wallex-source.js';
+import { TabdealFxSource } from './modules/commerce/fx/infrastructure/tabdeal-source.js';
+import { BitpinFxSource } from './modules/commerce/fx/infrastructure/bitpin-source.js';
+import { RamzinexFxSource } from './modules/commerce/fx/infrastructure/ramzinex-source.js';
 import { TelegramStarsCheckoutAnswerer } from './modules/commerce/payments/infrastructure/telegram-stars-checkout-answerer.js';
 import { StarsPaymentService } from './modules/commerce/payments/application/telegram-stars-payment.service.js';
 import {
@@ -3933,11 +3937,21 @@ export function createContainer(
     maxResponseBytes: FX_SOURCE_MAX_RESPONSE_BYTES,
     maxRetries: 0,
   });
+  // Bitpin alone answers a ~275 KB market list; its own client carries the raised cap.
+  const bitpinHttp = new SafeHttpClient({
+    ...urlPolicy,
+    totalTimeoutMs: FX_SOURCE_TIMEOUT_MS,
+    maxResponseBytes: FX_BITPIN_MAX_RESPONSE_BYTES,
+    maxRetries: 0,
+  });
   const fxService = new FxService({
     repository: new DrizzleFxQuoteRepository(database.db),
     sources: new Map<FxSource, FxSourceAdapter>([
       ['NOBITEX', new NobitexFxSource(fxHttp.forBase(config.FX_NOBITEX_BASE_URL))],
       ['WALLEX', new WallexFxSource(fxHttp.forBase(config.FX_WALLEX_BASE_URL))],
+      ['TABDEAL', new TabdealFxSource(fxHttp.forBase(config.FX_TABDEAL_BASE_URL))],
+      ['BITPIN', new BitpinFxSource(bitpinHttp.forBase(config.FX_BITPIN_BASE_URL))],
+      ['RAMZINEX', new RamzinexFxSource(fxHttp.forBase(config.FX_RAMZINEX_BASE_URL))],
     ]),
     settings: settingsResolver,
     features: featureFlagResolver,
