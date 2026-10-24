@@ -1,0 +1,21 @@
+ [31m❯[39m tests/unit/wallet.test.ts [2m(3 tests | 1 failed)[22m 9ms
+   [31m×[39m wallet > debit > never overdraws 2ms
+ [31m❯[39m tests/unit/order.test.ts [2m(5 tests | 1 failed)[22m 11ms
+   [31m×[39m order > refund > reverses cashback 4ms
+
+[31m⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m tests/unit/wallet.test.ts > wallet > debit > never overdraws
+[31m[1mAssertionError[22m: expected 1 to be 2[39m
+[36m ❯ [39m tests/unit/wallet.test.ts:42:19
+     40|   const r = debit(w, 5n)
+     41|   expect(r.ok).toBe(true)
+     42|   expect(1).toBe(2)
+
+[41m[1m FAIL [22m[49m tests/unit/order.test.ts > order > refund > reverses cashback
+Error: ledger entry missing
+ ❯ tests/unit/order.test.ts:88:11
+ ❯ node_modules/vitest/dist/runner.js:10:5
+
+[2m Test Files [22m [1m[31m2 failed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[31m2 failed[39m[22m | [32m6 passed[39m[90m (8)[39m

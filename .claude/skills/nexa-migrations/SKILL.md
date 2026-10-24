@@ -1,6 +1,6 @@
 ---
 name: nexa-migrations
-description: How to write, generate and verify a database migration in this repository. Use whenever changing apps/api/src/infrastructure/persistence/schema.ts or adding anything under apps/api/drizzle.
+description: How to write, generate, renumber and verify a database migration in this repository. Use whenever changing apps/api/src/infrastructure/persistence/schema.ts, adding anything under apps/api/drizzle, or resolving a migration-number collision between PRs.
 ---
 
 # Migrations
@@ -60,6 +60,29 @@ consequence lives only in a comment is one somebody relaxes.
 
 If a database has already applied a bad stamp, removing its row from
 `drizzle.__drizzle_migrations` is what lets the corrected entry apply.
+
+## Renumbering when two PRs claim the same number
+
+Multi-PR rounds (`nexa-round-pipeline` §4) and collisions `branch-check.sh`
+reports. Renumber on the branch that merges **second**, after merging
+`origin/main` into it:
+
+1. Save the branch's SQL: `cp apps/api/drizzle/NNNN_name.sql "$SCRATCH/"`.
+2. Generated migration: remove the branch's `NNNN_name.sql`, its
+   `meta/NNNN_snapshot.json` and its `_journal.json` entry (take main's journal
+   and snapshots in the merge), then regenerate with the tooling —
+   `pnpm --filter @nexa/api exec drizzle-kit generate --name name` — so the
+   snapshot chain and journal follow main's head. Hand-written migration: `git mv`
+   it to the next number and register it as § Things drizzle-kit does not model
+   says, with `when` = `Date.now()`.
+3. `diff "$SCRATCH/NNNN_name.sql" apps/api/drizzle/MMMM_name.sql` must be empty:
+   the SQL stays **byte-identical**, and the PR body says so. A non-empty diff
+   means the schemas diverged — stop and read it.
+4. `pnpm db:check`, then the migration integration suites on a fresh private
+   database (`nexa-test-selection`). Fix any doc or test that cites the old number.
+
+Never renumber a generated migration by hand-editing its journal entry or
+snapshot; only a hand-written migration's entry is written by hand.
 
 ## Things drizzle-kit does not model
 

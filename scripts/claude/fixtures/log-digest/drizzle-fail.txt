@@ -1,0 +1,2 @@
+Reading config file '/repo/apps/api/drizzle.config.ts'
+Error: Migrations 0155_a.sql and 0155_b.sql collide: the same snapshot parent is claimed twice

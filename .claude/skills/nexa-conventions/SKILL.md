@@ -1,6 +1,6 @@
 ---
 name: nexa-conventions
-description: The load-bearing rules for writing code in this repository — money, time, tenancy, events, audit, idempotency, text and secrets. Read before adding a table, a service, a handler or a migration, and before changing anything in packages/contracts.
+description: The load-bearing rules for writing code in this repository — money, time, tenancy, events, audit, idempotency, text, secrets, and the domain invariants (gateway inquiry, refunds, UNKNOWN outcomes, pricing, resellers, conditional state changes, capacity, import silence). Read before adding a table, a service, a handler or a migration, and before changing anything in packages/contracts.
 ---
 
 # Nexa Bot conventions
@@ -90,6 +90,37 @@ other's keys.
 - Redact before writing anything durable. `infrastructure/redaction.ts` is the
   one implementation, shared by the logger, the audit log and the ops log — do
   not write a second one, and do not bypass it.
+
+## Domain invariants
+
+The full rules, verbatim, are in `references/domain-invariants.md` — read the
+section for the area you touch before writing code there. The ones most often
+broken by a convenience refactor:
+
+- **Only the inquiry decides** a gateway payment; a webhook is a hint. The
+  attempt's deadline is checked under the payment's lock.
+- **A create whose answer was lost is never retried and never re-keyed**, and
+  **UNKNOWN is never refunded** — a READ decides first.
+- An order has **two terminal outcomes and no third**: FULFILLED or REFUNDED,
+  through the **one credit path**, `RefundService.refundUndeliverable`. A
+  **wallet purchase is refused, never refunded**.
+- **One pricing boundary**, `PricingService.price`; a quote is **honoured, never
+  re-priced**. Cashback and commission are earned once, at delivery.
+- **There is no reseller credit**; a negative wallet blocks every purchase.
+- **Every state change is a conditional UPDATE naming its `from` states.**
+  There is no `setState`.
+- A capacity slot is a **RESERVATION ROW**, not a count; one eligibility
+  evaluator, four callers.
+- A panel credential travels **one way**; never a masked stand-in.
+- A customer is told a fact through the **notification lane**, never a string.
+- An operational-event CODE is part of the schema: never rename or split one.
+- **Import silence:** imported subjects are never notified for state that
+  existed at import, and the first figure observed after import is silent —
+  only a change after that is news (R5A-2, R5C-2: the first usage figure after
+  the backfill is silent on every write path). No customer message from a
+  migration, an import or a backfill.
+
+Adding a payment gateway: `nexa-gateway-integration`.
 
 ## Never
 

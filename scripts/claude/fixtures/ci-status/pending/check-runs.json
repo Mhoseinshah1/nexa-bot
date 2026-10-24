@@ -1,0 +1,7 @@
+{
+  "check_runs": [
+    { "id": 11, "name": "lint", "status": "completed", "conclusion": "success" },
+    { "id": 12, "name": "unit", "status": "in_progress", "conclusion": null },
+    { "id": 13, "name": "e2e", "status": "queued", "conclusion": null }
+  ]
+}
