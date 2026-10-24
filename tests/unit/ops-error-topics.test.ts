@@ -49,6 +49,7 @@ const EXPECTED: Readonly<Record<string, OpsLogTopicCategory>> = {
   'fx.quote_rejected': 'PAYMENTS',
   'fx.source_unavailable': 'PAYMENTS',
   'fx.fallback_in_use': 'PAYMENTS',
+  'fx.single_source': 'PAYMENTS',
   'fx.stale_quote_used': 'PAYMENTS',
   'order.refunded_undeliverable': 'PAYMENTS',
   'provisioning.stalled': 'SERVICES',

@@ -732,6 +732,48 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'fx',
     control: { kind: 'integer', unit: 'web.unit_seconds' },
   },
+  'fx.source_nobitex_enabled': {
+    title: 'web.setting_fx_source_nobitex_enabled',
+    description: 'web.setting_fx_source_nobitex_enabled_desc',
+    group: 'fx',
+    control: {
+      kind: 'select',
+      options: [
+        { value: 'true', label: 'web.backup_schedule_on' },
+        { value: 'false', label: 'web.backup_schedule_off' },
+      ],
+    },
+  },
+  'fx.source_wallex_enabled': {
+    title: 'web.setting_fx_source_wallex_enabled',
+    description: 'web.setting_fx_source_wallex_enabled_desc',
+    group: 'fx',
+    control: {
+      kind: 'select',
+      options: [
+        { value: 'true', label: 'web.backup_schedule_on' },
+        { value: 'false', label: 'web.backup_schedule_off' },
+      ],
+    },
+  },
+  'fx.min_agreeing_sources': {
+    title: 'web.setting_fx_min_agreeing_sources',
+    description: 'web.setting_fx_min_agreeing_sources_desc',
+    group: 'fx',
+    control: { kind: 'integer' },
+  },
+  'fx.accept_single_source': {
+    title: 'web.setting_fx_accept_single_source',
+    description: 'web.setting_fx_accept_single_source_desc',
+    group: 'fx',
+    control: {
+      kind: 'select',
+      options: [
+        { value: 'true', label: 'web.backup_schedule_on' },
+        { value: 'false', label: 'web.backup_schedule_off' },
+      ],
+    },
+  },
   'stars.pricing_mode': {
     title: 'web.setting_stars_pricing_mode',
     description: 'web.setting_stars_pricing_mode_desc',

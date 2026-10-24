@@ -2869,6 +2869,49 @@ both are address blocks, the answer is egress from an Iranian-reachable address,
 Until then both sources failing is handled as an outage: per-source and loop backoff, and
 one operational alert per source with a recovery.
 
+RESOLVED IN PART (Round 6, 2026-10-23) — the `wallex.not_json` cause. Wallex answers 200 with
+`content-encoding: gzip` even to a request that never asked for it, and the outbound client
+read the raw gzip bytes as UTF-8. `safe-http.ts` now sends `accept-encoding: gzip, deflate, br`
+and decodes all three (the size cap applies to the DECOMPRESSED size). `nobitex.http_403`
+stays what the issue list says: Nobitex refuses the foreign address, which code cannot fix;
+the new per-source switch (`fx.source_nobitex_enabled`) takes it out of the rotation.
+
+## OQ-FX-04 — more USDT/IRT sources: Bitpin, Tabdeal, Ramzinex, Exir, OMPFinex, Tetherland (Round 6, 2026-10-23)
+
+The owner confirmed from the server that Wallex, Bitpin (`api.bitpin.ir`, `api.bitpin.org`), Ramzinex, Tabdeal, Exir, OMPFinex and Tetherland answer HTTP 200 (Nobitex 403). Reachability is not a verified best-bid shape, so none of the six is built. Exir, OMPFinex and Tetherland have the same question as below: official docs URL, public USDT/IRT order-book or ticker path, field names, unit, and one recorded body.
+
+NOT BUILT. Round 6 asked for new USDT/IRT adapters "from the official API docs only". The
+build session could not reach any of the three documentation sites (`docs.bitpin.ir`,
+`docs.tabdeal.org`, `docs.ramzinex.com`: DNS does not resolve from here), and a web search
+returned only unofficial clients (python-bitpin, unofficial-tabdeal-api, a Ramzinex MCP
+server and PHP wrapper) — evidence, not specification. Nothing in them states a public
+order-book response with enough certainty to write a parser, and a parser written from a
+guess is the exact failure `docs/real-panel-acceptance.md` records. So no adapter was added.
+The exact questions, one per exchange, each answered by one raw response and the docs page:
+
+1. **Bitpin.** What is the official public order-book (or ticker) endpoint for the Tether /
+   Toman market, on which host (`api.bitpin.ir` or `api.bitpin.org`)? The unofficial clients
+   suggest `GET /api/v1/mth/orderbooks/USDT_IRT/` and `GET /api/v1/mkt/tickers/`, unverified.
+   Is the symbol `USDT_IRT`; are prices number-strings or numbers; are they Toman or Rial;
+   is the book `{bids: [{price, amount, value}], asks: [...]}` or arrays? Is a timestamp given?
+2. **Tabdeal.** Which host (`api1.tabdeal.org` for the API, `api-web.tabdeal.org` for the
+   website backend) serves a PUBLIC order-book/depth for the Tether market without a key, at
+   what path, with which symbol spelling (`USDTIRT` or `USDT_IRT`)? Unit (Rial or Toman) and
+   whether `bids` are `[price, quantity]` pairs of strings.
+3. **Ramzinex.** The unofficial wrapper names `https://publicapi.ramzinex.com`. What is the
+   public order-book path for the USDT/IRR pair (it is addressed by a numeric pair id), what is
+   the pair id, and is the unit Rial? What are the field names of the buy and sell sides?
+
+For each: the official documentation URL, one recorded 200 body from the production server's
+address, and whether the response is compressed (the client now decodes gzip, deflate and br).
+An adapter needs only `read(baseAsset) -> best bid, currency, sourceAt` and a fixture copied
+from the docs; `FX_SOURCES`, `FX_SOURCE_ENABLED_SETTINGS` and the web labels are total over
+the source list, so adding one cannot skip its switch.
+
+Until then only two sources exist, so with the default agreement count of 2 a rate is stored
+only while BOTH answer and agree; with Nobitex blocked, the owner either enables
+`fx.accept_single_source` (Wallex alone) or the last stored rate prices for six hours.
+
 ## OQ-T-API-01 — `KeyboardButton.style`: its exact values
 
 Round T, button builder. The build session could not reach `core.telegram.org` (egress

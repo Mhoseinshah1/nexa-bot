@@ -610,6 +610,8 @@ export const OPS_A: readonly ShotFixture[] = [
     fallbackSource: 'WALLEX',
     freshTtlSeconds: 300,
     maxStaleSeconds: 3600,
+    minAgreeingSources: 2,
+    acceptSingleSource: false,
     state: 'FRESH',
     quote: {
       quoteId: '01a0f1c2-0000-7000-8000-00000000f001',
@@ -627,6 +629,7 @@ export const OPS_A: readonly ShotFixture[] = [
     sources: [
       {
         source: 'NOBITEX',
+        enabled: true,
         lastSuccessAt: ago(2),
         lastFailureAt: null,
         lastFailureCode: null,
@@ -635,6 +638,7 @@ export const OPS_A: readonly ShotFixture[] = [
       },
       {
         source: 'WALLEX',
+        enabled: true,
         lastSuccessAt: ago(60 * 3),
         lastFailureAt: ago(40),
         lastFailureCode: 'rate_limited',

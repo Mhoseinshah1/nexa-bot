@@ -1,5 +1,7 @@
 import {
   FX_POLICY_VERSION,
+  FX_SOURCES,
+  FX_SOURCE_ENABLED_SETTINGS,
   FX_QUOTE_SIDE,
   PAYMENT_GATEWAY_DESCRIPTORS,
   PAYMENT_GATEWAY_PROVIDERS,
@@ -37,9 +39,8 @@ import type { SettingsResolver } from '../../../control/settings/application/set
 import type { OperationalConditionReader } from '../../../platform/opslog/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import {
-  chooseQuote,
+  decideQuote,
   judgeCandidate,
-  sourcesBehind,
   toCandidate,
   verdictCode,
   type FxCandidate,
@@ -76,6 +77,7 @@ export const FX_FALLBACK_IN_USE_CODE = 'fx.fallback_in_use';
 export const FX_QUOTE_UNAVAILABLE_CODE = 'fx.quote_unavailable';
 /** A NEW invoice was priced by a quote past its TTL. Per pair; recovered by the next stored quote. */
 export const FX_STALE_QUOTE_USED_CODE = 'fx.stale_quote_used';
+export const FX_SINGLE_SOURCE_CODE = 'fx.single_source';
 
 /** A source that answered "rate limited" is left alone for this long, on every replica. */
 export const FX_RATE_LIMIT_COOLDOWN_MS = 60_000;
@@ -129,13 +131,24 @@ export interface FxRefreshResult {
 }
 
 /** The settings the service reads, resolved once per call inside the caller's transaction. */
-interface FxSettings {
+/** What reading a stored quote needs. Cheap: `quoteFor` runs inside a payment transaction. */
+interface FxQuoteSettings {
   readonly enabled: boolean;
-  readonly primary: FxSource;
-  readonly fallback: FxFallbackSource;
   readonly freshTtlSeconds: number;
   readonly maxStaleSeconds: number;
   readonly quoteCurrency: SalesCurrencyCode;
+}
+
+/** Everything a refresh or the status page needs: the quote settings plus the source policy. */
+export interface FxSettings extends FxQuoteSettings {
+  readonly primary: FxSource;
+  readonly fallback: FxFallbackSource;
+  /** Per-source switch (Round 6). A source that is `false` is never called. */
+  readonly sourceEnabled: Readonly<Record<FxSource, boolean>>;
+  /** `fx.min_agreeing_sources`. */
+  readonly minAgreeingSources: number;
+  /** `fx.accept_single_source`. */
+  readonly acceptSingleSource: boolean;
 }
 
 /**
@@ -154,13 +167,18 @@ export interface FxRouteStatus {
 }
 
 /** The FX section's facts, as the service hands them to the controller. */
+export interface FxSourceHealth extends FxSourceStateRow {
+  readonly enabled: boolean;
+}
+
 export interface FxStatus {
   readonly settings: FxSettings;
   readonly pair: FxPair;
   readonly state: FxQuoteState;
   readonly quote: FxQuote | null;
   readonly row: FxQuoteRow | null;
-  readonly sources: readonly FxSourceStateRow[];
+  /** EVERY known source, in `FX_SOURCES` order, with its switch; one never dialled has empty health. */
+  readonly sources: readonly FxSourceHealth[];
   readonly routes: readonly FxRouteStatus[];
   readonly policyVersion: number;
 }
@@ -200,7 +218,7 @@ export class FxService {
     now: Date,
     tx?: unknown,
   ): Promise<FxQuoteAnswer> {
-    const settings = await this.settingsFor(scope, tx);
+    const settings = await this.quoteSettingsFor(scope, tx);
     const pair: FxPair = { baseAsset, quoteCurrency: settings.quoteCurrency };
     const row = await this.deps.repository.find(scope, pair, tx);
     return this.answerFrom(settings, pair, row, now);
@@ -366,7 +384,17 @@ export class FxService {
       state: usable?.state ?? 'UNAVAILABLE',
       quote: answer.kind === 'QUOTE' ? answer.quote : answer.stale,
       row,
-      sources,
+      sources: FX_SOURCES.map((source) => ({
+        enabled: settings.sourceEnabled[source],
+        ...(sources.find((entry) => entry.source === source) ?? {
+          source,
+          lastSuccessAt: null,
+          lastFailureAt: null,
+          lastFailureCode: null,
+          retryAfter: null,
+          consecutiveFailures: 0,
+        }),
+      })),
       routes,
       policyVersion: FX_POLICY_VERSION,
     };
@@ -381,10 +409,13 @@ export class FxService {
     /** An operator pressed refresh: a failure backoff is not honoured (a rate-limit cooldown still is). */
     ignoreFailureBackoff: boolean,
   ): Promise<FxRefreshResult> {
-    const order: FxSource[] = [settings.primary];
-    if (settings.fallback !== 'NONE' && settings.fallback !== settings.primary) {
-      order.push(settings.fallback);
-    }
+    // Preference order, ENABLED sources only: a switched-off source is never in the list,
+    // so nothing below can dial it. Every enabled source is read; the order only decides
+    // whose figure is stored when several agree.
+    const preferred: FxSource[] = [settings.primary];
+    if (settings.fallback !== 'NONE') preferred.push(settings.fallback);
+    for (const source of FX_SOURCES) preferred.push(source);
+    const order = [...new Set(preferred)].filter((source) => settings.sourceEnabled[source]);
     const startedAt = this.deps.clock.now();
     const [row, states] = await Promise.all([
       this.deps.repository.find(scope, pair),
@@ -457,26 +488,39 @@ export class FxService {
       const candidate = toCandidate(outcome.reading, pair.quoteCurrency);
       const verdict = judgeCandidate(candidate, pair.baseAsset, pair.quoteCurrency, lastKnownGood);
       judged.push({ candidate, verdict });
-      if (verdict.kind === 'ACCEPT') {
-        successes.push(source);
-        // The primary answered and was accepted: the fallback is not dialled.
-        break;
+      if (verdict.kind !== 'ACCEPT') {
+        rejected.push({
+          source,
+          code: verdictCode(verdict),
+          deviationBps: verdict.kind === 'OUTLIER' ? verdict.deviationBps : null,
+        });
       }
-      rejected.push({
-        source,
-        code: verdictCode(verdict),
-        deviationBps: verdict.kind === 'OUTLIER' ? verdict.deviationBps : null,
-      });
     }
 
-    const chosen = chooseQuote(judged);
+    const decision = decideQuote(judged, {
+      minAgreeing: settings.minAgreeingSources,
+      acceptSingle: settings.acceptSingleSource,
+    });
+    const chosen = decision.kind === 'STORE' ? decision.chosen : null;
+    const agreeing = decision.kind === 'STORE' ? decision.agreeing : [];
+    const notStored = decision.kind === 'NONE' ? decision.reason : null;
     const fetchedAt = this.deps.clock.now();
     /*
-     * A quote chosen because outliers agreed is every agreeing source's success: the one
-     * that corroborated the move was right too, and stays out of the rejections below.
+     * Who was right. Every source that agreed with the stored figure succeeded — including
+     * one that was an outlier against the old rate but corroborated the move. A healthy
+     * source that could not be used because it stood alone (`too_few_sources`) also
+     * succeeded: it answered correctly, there was just nobody to check it against. A
+     * healthy source OUTSIDE the agreement did not fail to answer, but its figure was not
+     * used, and an operator must see that as a rejection, not as health.
      */
-    for (const source of sourcesBehind(judged, chosen)) {
-      if (!successes.includes(source)) successes.push(source);
+    for (const entry of judged) {
+      const source = entry.candidate.source;
+      if (agreeing.includes(source)) {
+        if (!successes.includes(source)) successes.push(source);
+      } else if (entry.verdict.kind === 'ACCEPT') {
+        if (notStored === 'too_few_sources') successes.push(source);
+        else rejected.push({ source, code: 'disagrees', deviationBps: null });
+      }
     }
     const stillRejected = rejected.filter((entry) => !successes.includes(entry.source));
 
@@ -486,7 +530,9 @@ export class FxService {
         ? refreshErrorCode(failures, rejected)
         : coolingDown.length > 0
           ? refreshErrorCode(coolingDown, [])
-          : null;
+          : notStored === null
+            ? null
+            : `fx.${notStored}`;
 
     return this.deps.uow.run(scope, async (tx) => {
       if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
@@ -563,6 +609,7 @@ export class FxService {
             `${FX_FALLBACK_IN_USE_CODE}:${pairKey(pair)}`,
             `${FX_QUOTE_UNAVAILABLE_CODE}:${pairKey(pair)}`,
             `${FX_STALE_QUOTE_USED_CODE}:${pairKey(pair)}`,
+            `${FX_SINGLE_SOURCE_CODE}:${pairKey(pair)}`,
           ],
           tx,
         ),
@@ -570,6 +617,29 @@ export class FxService {
       for (const source of successes) {
         await this.recoverIfOpen(scope, open, FX_SOURCE_UNAVAILABLE_CODE, source, tx);
         await this.recoverIfOpen(scope, open, FX_QUOTE_REJECTED_CODE, source, tx);
+      }
+
+      // ONE alert while exactly one source is healthy, stored or not; closed once two are
+      // again. The key is the pair, so every pass of the same outage lands on one condition.
+      if (decision.healthy.length === 1) {
+        await this.deps.opsLog.record(
+          scope,
+          {
+            code: FX_SINGLE_SOURCE_CODE,
+            severity: 'WARN',
+            message:
+              'Only one exchange-rate source is healthy. ' +
+              (chosen === null
+                ? 'Its rate was not stored (fx.accept_single_source is off or the figure is an ' +
+                  'outlier); the last stored rate keeps pricing inside its stale window.'
+                : 'Its rate was stored because fx.accept_single_source is on.'),
+            dedupeKey: `${FX_SINGLE_SOURCE_CODE}:${pairKey(pair)}`,
+            context: { pair: pairKey(pair), source: decision.healthy[0], stored: chosen !== null },
+          },
+          tx,
+        );
+      } else if (decision.healthy.length >= 2) {
+        await this.recoverIfOpen(scope, open, FX_SINGLE_SOURCE_CODE, pairKey(pair), tx);
       }
 
       if (chosen === null) {
@@ -631,7 +701,9 @@ export class FxService {
       }
       await this.recoverIfOpen(scope, open, FX_QUOTE_UNAVAILABLE_CODE, pairKey(pair), tx);
       await this.recoverIfOpen(scope, open, FX_STALE_QUOTE_USED_CODE, pairKey(pair), tx);
-      if (chosen.source === settings.primary) {
+      // The first ENABLED source in preference order is "the primary" for this alert: an
+      // operator who switched the configured primary off has not asked to be warned forever.
+      if (chosen.source === order[0]) {
         await this.recoverIfOpen(scope, open, FX_FALLBACK_IN_USE_CODE, pairKey(pair), tx);
         this.deps.logger.info({ pair: pairKey(pair), source: chosen.source }, 'fx quote refreshed');
         return { outcome: 'REFRESHED', reason };
@@ -715,7 +787,7 @@ export class FxService {
   }
 
   private answerFrom(
-    settings: FxSettings,
+    settings: FxQuoteSettings,
     pair: FxPair,
     row: FxQuoteRow | null,
     now: Date,
@@ -754,21 +826,35 @@ export class FxService {
     return { kind: 'QUOTE', quote };
   }
 
+  private async quoteSettingsFor(scope: TenantContext, tx?: unknown): Promise<FxQuoteSettings> {
+    const [enabled, freshTtlSeconds, maxStaleSeconds, quoteCurrency] = await Promise.all([
+      this.deps.features.isEnabled(scope, CENTRAL_FX_FLAG, tx),
+      this.deps.settings.valueOf<number>(scope, 'fx.fresh_ttl_seconds', tx),
+      this.deps.settings.valueOf<number>(scope, 'fx.max_stale_seconds', tx),
+      this.deps.settings.valueOf<SalesCurrencyCode>(scope, 'sales.currency', tx),
+    ]);
+    return { enabled, freshTtlSeconds, maxStaleSeconds, quoteCurrency };
+  }
+
   private async settingsFor(scope: TenantContext, tx?: unknown): Promise<FxSettings> {
-    const [enabled, primary, fallback, freshTtlSeconds, maxStaleSeconds, quoteCurrency] =
+    const [quote, primary, fallback, minAgreeingSources, acceptSingleSource, ...switches] =
       await Promise.all([
-        this.deps.features.isEnabled(scope, CENTRAL_FX_FLAG, tx),
+        this.quoteSettingsFor(scope, tx),
         this.deps.settings.valueOf<FxSource>(scope, 'fx.primary_source', tx),
         this.deps.settings.valueOf<FxFallbackSource>(scope, 'fx.fallback_source', tx),
-        this.deps.settings.valueOf<number>(scope, 'fx.fresh_ttl_seconds', tx),
-        this.deps.settings.valueOf<number>(scope, 'fx.max_stale_seconds', tx),
-        this.deps.settings.valueOf<SalesCurrencyCode>(scope, 'sales.currency', tx),
+        this.deps.settings.valueOf<number>(scope, 'fx.min_agreeing_sources', tx),
+        this.deps.settings.valueOf<boolean>(scope, 'fx.accept_single_source', tx),
+        ...FX_SOURCES.map((source) =>
+          this.deps.settings.valueOf<boolean>(scope, FX_SOURCE_ENABLED_SETTINGS[source], tx),
+        ),
       ]);
-    return { enabled, primary, fallback, freshTtlSeconds, maxStaleSeconds, quoteCurrency };
+    const sourceEnabled = Object.fromEntries(
+      FX_SOURCES.map((source, index) => [source, switches[index] === true]),
+    ) as Record<FxSource, boolean>;
+    return { ...quote, primary, fallback, minAgreeingSources, acceptSingleSource, sourceEnabled };
   }
 }
 
-/** Whole seconds since `fetchedAt`, never negative (a clock that stepped back reads as zero). */
 export function ageSeconds(fetchedAt: Date, now: Date): number {
   return Math.max(0, Math.floor((now.getTime() - fetchedAt.getTime()) / 1_000));
 }

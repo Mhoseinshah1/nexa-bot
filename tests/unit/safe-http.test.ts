@@ -1,5 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { once } from 'node:events';
+import { brotliCompressSync, deflateSync, gzipSync } from 'node:zlib';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
 
@@ -21,6 +22,8 @@ interface Route {
     status: number;
     headers?: Record<string, string>;
     body?: string;
+    /** Sent as-is (already encoded), instead of `body`. */
+    raw?: Buffer;
     /** Hold the socket open without answering, to exercise the deadline. */
     hang?: boolean;
     /** Write forever, to exercise the size cap. */
@@ -56,7 +59,7 @@ beforeAll(async () => {
       return;
     }
     response.writeHead(plan.status, { 'content-type': 'application/json', ...plan.headers });
-    response.end(plan.body ?? '');
+    response.end(plan.raw ?? plan.body ?? '');
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -417,5 +420,89 @@ describe('what the client tells its caller', () => {
     if (result.ok) return;
     expect(Object.keys(result).sort()).toEqual(['failure', 'ok', 'status']);
     expect(JSON.stringify(result)).not.toContain('hunter2');
+  });
+});
+
+describe('the outbound client — content encoding (Round 6)', () => {
+  const json = '{"ok":true,"price":"1035500"}';
+  const get = (overrides: Partial<ConstructorParameters<typeof SafeHttpClient>[0]> = {}) =>
+    client(overrides).forBase(base).send({ method: 'GET', path: '/x' });
+
+  it('offers gzip, deflate and br', async () => {
+    let offered = '';
+    const original = server.listeners('request')[0] as (...args: unknown[]) => void;
+    server.removeAllListeners('request');
+    server.on('request', (request, response) => {
+      offered = String(request.headers['accept-encoding']);
+      response.end('{}');
+    });
+    try {
+      await get();
+    } finally {
+      server.removeAllListeners('request');
+      server.on('request', original);
+    }
+    expect(offered).toBe('gzip, deflate, br');
+  });
+
+  it('parses a gzip body even though the content type says nothing of it', async () => {
+    route = () => ({ status: 200, headers: { 'content-encoding': 'gzip' }, raw: gzipSync(json) });
+    const result = await get();
+    expect(result).toMatchObject({ ok: true, bodyText: json });
+  });
+
+  it('parses a br body', async () => {
+    route = () => ({
+      status: 200,
+      headers: { 'content-encoding': 'br' },
+      raw: brotliCompressSync(json),
+    });
+    expect(await get()).toMatchObject({ ok: true, bodyText: json });
+  });
+
+  it('parses a deflate body, and a chain applied in order', async () => {
+    route = () => ({
+      status: 200,
+      headers: { 'content-encoding': 'deflate' },
+      raw: deflateSync(json),
+    });
+    expect(await get()).toMatchObject({ ok: true, bodyText: json });
+    route = () => ({
+      status: 200,
+      headers: { 'content-encoding': 'deflate, gzip' },
+      raw: gzipSync(deflateSync(json)),
+    });
+    expect(await get()).toMatchObject({ ok: true, bodyText: json });
+  });
+
+  it('refuses a body whose DECOMPRESSED size passes the cap, though the wire size is tiny', async () => {
+    const bomb = gzipSync(Buffer.alloc(8 * 1024 * 1024, 0x61));
+    expect(bomb.length).toBeLessThan(64 * 1024);
+    route = () => ({ status: 200, headers: { 'content-encoding': 'gzip' }, raw: bomb });
+    const result = await get({ maxResponseBytes: 256 * 1024 });
+    expect(result).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE', status: 200 });
+  });
+
+  it('refuses an encoding it cannot decode, with a failure and the status', async () => {
+    route = () => ({
+      status: 200,
+      headers: { 'content-encoding': 'zstd' },
+      raw: Buffer.from(json),
+    });
+    expect(await get()).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE', status: 200 });
+  });
+
+  it('refuses a body that claims gzip and is not', async () => {
+    route = () => ({
+      status: 200,
+      headers: { 'content-encoding': 'gzip' },
+      raw: Buffer.from(json),
+    });
+    expect(await get()).toMatchObject({ ok: false, failure: 'MALFORMED_RESPONSE' });
+  });
+
+  it('still reads an uncompressed body', async () => {
+    route = () => ({ status: 200, body: json });
+    expect(await get()).toMatchObject({ ok: true, bodyText: json });
   });
 });

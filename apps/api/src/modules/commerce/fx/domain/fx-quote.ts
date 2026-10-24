@@ -54,7 +54,7 @@ export interface LastKnownGood {
 /**
  * Why a candidate was not accepted. `NOT_POSITIVE` and `OUT_OF_RAILS` are parse or unit
  * errors and are never accepted; `OUTLIER` is a figure too far from the last-known-good,
- * which another source may confirm (`chooseQuote`).
+ * which another source may confirm (`decideQuote`).
  */
 export type FxCandidateVerdict =
   | { readonly kind: 'ACCEPT' }
@@ -91,31 +91,6 @@ export interface JudgedCandidate {
   readonly verdict: FxCandidateVerdict;
 }
 
-/**
- * The quote to store, from the candidates in source order (primary first), or null.
- *
- * The first ACCEPTED candidate wins: the primary is preferred by construction, and the
- * fallback only prices anything when the primary did not answer or was refused. When
- * no candidate is accepted but two OUTLIERS agree with each other within
- * `FX_SOURCE_AGREEMENT_BPS`, the market moved and the last-known-good is what is wrong:
- * the first of the agreeing pair wins. Two outliers that disagree, or one alone, are
- * refused — nothing prices an invoice on a figure only one source stands behind.
- */
-export function chooseQuote(judged: readonly JudgedCandidate[]): FxCandidate | null {
-  const accepted = judged.find((entry) => entry.verdict.kind === 'ACCEPT');
-  if (accepted !== undefined) return accepted.candidate;
-  const outliers = judged.filter((entry) => entry.verdict.kind === 'OUTLIER');
-  for (let i = 0; i < outliers.length; i += 1) {
-    for (let j = i + 1; j < outliers.length; j += 1) {
-      const a = outliers[i]!.candidate;
-      const b = outliers[j]!.candidate;
-      const apart = rateDeviationBps(b.rate, a.rate);
-      if (apart !== null && apart <= FX_SOURCE_AGREEMENT_BPS) return a;
-    }
-  }
-  return null;
-}
-
 /** The machine code a refusal is recorded under. Never a body, never a URL. */
 export function verdictCode(verdict: FxCandidateVerdict): string {
   switch (verdict.kind) {
@@ -131,22 +106,93 @@ export function verdictCode(verdict: FxCandidateVerdict): string {
 }
 
 /**
- * Every source whose figure stands behind the chosen quote: the chosen source itself and,
- * when it was chosen because outliers AGREED, each outlier within the agreement bound of
- * it. A corroborating source was right about the move too; recording it as an outlier
- * failure would open a condition against the source that confirmed the market
- * (Codex review of #122). Empty when nothing was chosen.
+ * Why nothing was stored, when sources DID answer (Round 6). Closed, because each is a
+ * machine code an operator reads beside the source in Web Admin.
+ *
+ * - `sources_disagree` — healthy sources answered and not enough of them are within
+ *   `FX_SOURCE_AGREEMENT_BPS` of each other. Nobody can say which is right, so none is
+ *   stored; the last stored rate keeps pricing inside its stale window.
+ * - `too_few_sources` — one healthy source, and the owner has not accepted a single one.
+ * - `single_source_outlier` — one healthy source, accepted, but its figure is too far
+ *   from the last good one for a lone source to move it.
  */
-export function sourcesBehind(
+export type NotStoredReason = 'sources_disagree' | 'too_few_sources' | 'single_source_outlier';
+
+export type QuoteDecision =
+  | {
+      readonly kind: 'STORE';
+      readonly chosen: FxCandidate;
+      /** Every source that agreed with the chosen figure (including it). */
+      readonly agreeing: readonly FxSource[];
+      /** True when one source alone was stored under `fx.accept_single_source`. */
+      readonly single: boolean;
+      /** Healthy sources that answered, whether or not they agreed. */
+      readonly healthy: readonly FxSource[];
+    }
+  | {
+      readonly kind: 'NONE';
+      readonly reason: NotStoredReason | null;
+      /** Healthy sources that answered, whether or not they could be used. */
+      readonly healthy: readonly FxSource[];
+    };
+
+/**
+ * THE agreement rule (Round 6): which figure, if any, is stored.
+ *
+ * `judged` is in the operator's preference order. A source is HEALTHY when it answered a
+ * positive figure inside the pair's sanity rails (`ACCEPT` or `OUTLIER` against the
+ * last-known-good — an outlier is a figure that may be a market move, not a broken source).
+ *
+ * - At least `minAgreeing` healthy sources within `FX_SOURCE_AGREEMENT_BPS` of one another:
+ *   store the first of them in preference order. Agreement overrides the outlier test, as it
+ *   always has: two independent books moving together are a market, not a mistake.
+ * - Exactly one healthy source: stored only when `acceptSingle`, and only if it is not an
+ *   outlier — a lone source has nobody to confirm a 15 % jump.
+ * - Anything else stores nothing, and never a figure picked from disagreeing sources.
+ */
+export function decideQuote(
   judged: readonly JudgedCandidate[],
-  chosen: FxCandidate | null,
-): readonly FxSource[] {
-  if (chosen === null) return [];
-  const behind: FxSource[] = [chosen.source];
-  for (const entry of judged) {
-    if (entry.verdict.kind !== 'OUTLIER' || entry.candidate.source === chosen.source) continue;
-    const apart = rateDeviationBps(entry.candidate.rate, chosen.rate);
-    if (apart !== null && apart <= FX_SOURCE_AGREEMENT_BPS) behind.push(entry.candidate.source);
+  options: { readonly minAgreeing: number; readonly acceptSingle: boolean },
+): QuoteDecision {
+  const healthy = judged.filter(
+    (entry) => entry.verdict.kind === 'ACCEPT' || entry.verdict.kind === 'OUTLIER',
+  );
+  const healthySources = healthy.map((entry) => entry.candidate.source);
+  let best: JudgedCandidate[] = [];
+  for (const anchor of healthy) {
+    const cluster = healthy.filter((entry) => {
+      const apart = rateDeviationBps(entry.candidate.rate, anchor.candidate.rate);
+      return apart !== null && apart <= FX_SOURCE_AGREEMENT_BPS;
+    });
+    if (cluster.length > best.length) best = cluster;
   }
-  return behind;
+  if (best.length >= Math.max(2, options.minAgreeing)) {
+    return {
+      kind: 'STORE',
+      chosen: best[0]!.candidate,
+      agreeing: best.map((entry) => entry.candidate.source),
+      single: false,
+      healthy: healthySources,
+    };
+  }
+  if (healthy.length === 1) {
+    const only = healthy[0]!;
+    if (!options.acceptSingle) {
+      return { kind: 'NONE', reason: 'too_few_sources', healthy: healthySources };
+    }
+    if (only.verdict.kind !== 'ACCEPT') {
+      return { kind: 'NONE', reason: 'single_source_outlier', healthy: healthySources };
+    }
+    return {
+      kind: 'STORE',
+      chosen: only.candidate,
+      agreeing: [only.candidate.source],
+      single: true,
+      healthy: healthySources,
+    };
+  }
+  if (healthy.length >= 2) {
+    return { kind: 'NONE', reason: 'sources_disagree', healthy: healthySources };
+  }
+  return { kind: 'NONE', reason: null, healthy: healthySources };
 }

@@ -52,6 +52,7 @@ export const OPERATIONAL_EVENT_LABELS_FA: Readonly<Record<string, string>> = {
   'fx.fallback_in_use': 'نرخ ارز جایگزین استفاده شد',
   'fx.quote_rejected': 'نرخ ارز پذیرفته نشد',
   'fx.quote_unavailable': 'نرخ ارز در دسترس نیست',
+  'fx.single_source': 'فقط یک منبع نرخ فعال است',
   'fx.source_unavailable': 'منبع نرخ ارز در دسترس نیست',
   'fx.stale_quote_used': 'نرخ ارز قدیمی استفاده شد',
   'http.error': 'درخواست HTTP رد شد',

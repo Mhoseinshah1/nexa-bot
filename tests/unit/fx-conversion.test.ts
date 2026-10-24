@@ -22,7 +22,7 @@ import {
   starsPerUsdtSchema,
 } from '@nexa/contracts';
 import {
-  chooseQuote,
+  decideQuote,
   judgeCandidate,
   toCandidate,
   type FxCandidate,
@@ -341,38 +341,98 @@ describe('judging a candidate against the last-known-good', () => {
     ).toEqual({ mantissa: 1_035_505n, scale: 1 });
   });
 
-  it('chooses the first accepted candidate, or two agreeing outliers, and otherwise nothing', () => {
+  describe('the agreement rule (Round 6)', () => {
     const accept = { kind: 'ACCEPT' as const };
     const outlier = (bps: bigint) => ({ kind: 'OUTLIER' as const, deviationBps: bps });
-    expect(chooseQuote([{ candidate: candidate(101_000n), verdict: accept }])?.rate.mantissa).toBe(
-      101_000n,
-    );
-    // The primary is preferred whenever it is accepted, whatever the fallback says.
-    expect(
-      chooseQuote([
+    const both = { minAgreeing: 2, acceptSingle: false };
+
+    it('stores the first of two sources that agree, whatever the order they answered in', () => {
+      const decision = decideQuote(
+        [
+          { candidate: candidate(101_000n, 'NOBITEX'), verdict: accept },
+          { candidate: candidate(100_500n, 'WALLEX'), verdict: accept },
+        ],
+        both,
+      );
+      expect(decision).toMatchObject({ kind: 'STORE', single: false });
+      expect(decision.kind === 'STORE' && decision.chosen.source).toBe('NOBITEX');
+      expect(decision.kind === 'STORE' && decision.agreeing).toEqual(['NOBITEX', 'WALLEX']);
+    });
+
+    it('stores nothing from two healthy sources that disagree: nobody can say which is right', () => {
+      expect(
+        decideQuote(
+          [
+            { candidate: candidate(101_000n, 'NOBITEX'), verdict: accept },
+            { candidate: candidate(110_000n, 'WALLEX'), verdict: accept },
+          ],
+          both,
+        ),
+      ).toMatchObject({ kind: 'NONE', reason: 'sources_disagree' });
+    });
+
+    it('lets two agreeing outliers move the rate: the market moved, the last good is stale', () => {
+      const decision = decideQuote(
+        [
+          { candidate: candidate(130_000n, 'NOBITEX'), verdict: outlier(3_000n) },
+          { candidate: candidate(131_000n, 'WALLEX'), verdict: outlier(3_100n) },
+        ],
+        both,
+      );
+      expect(decision.kind === 'STORE' && decision.chosen.source).toBe('NOBITEX');
+    });
+
+    it('stores nothing from two outliers that disagree', () => {
+      expect(
+        decideQuote(
+          [
+            { candidate: candidate(130_000n, 'NOBITEX'), verdict: outlier(3_000n) },
+            { candidate: candidate(150_000n, 'WALLEX'), verdict: outlier(5_000n) },
+          ],
+          both,
+        ),
+      ).toMatchObject({ kind: 'NONE', reason: 'sources_disagree' });
+    });
+
+    it('stores one healthy source only when the owner accepted a single source', () => {
+      const one = [{ candidate: candidate(101_000n, 'WALLEX'), verdict: accept }];
+      expect(decideQuote(one, both)).toMatchObject({ kind: 'NONE', reason: 'too_few_sources' });
+      const accepted = decideQuote(one, { minAgreeing: 2, acceptSingle: true });
+      expect(accepted).toMatchObject({ kind: 'STORE', single: true });
+    });
+
+    it('never lets a lone outlier move the rate, even when single sources are accepted', () => {
+      expect(
+        decideQuote([{ candidate: candidate(130_000n), verdict: outlier(3_000n) }], {
+          minAgreeing: 2,
+          acceptSingle: true,
+        }),
+      ).toMatchObject({ kind: 'NONE', reason: 'single_source_outlier' });
+    });
+
+    it('does not count a refused figure as a healthy source', () => {
+      const refused = { kind: 'OUT_OF_RAILS' as const };
+      const decision = decideQuote(
+        [
+          { candidate: candidate(10n, 'NOBITEX'), verdict: refused },
+          { candidate: candidate(101_000n, 'WALLEX'), verdict: accept },
+        ],
+        both,
+      );
+      expect(decision).toMatchObject({ kind: 'NONE', reason: 'too_few_sources' });
+      expect(decideQuote([{ candidate: candidate(10n), verdict: refused }], both)).toMatchObject({
+        kind: 'NONE',
+        reason: null,
+      });
+      expect(decideQuote([], both)).toMatchObject({ kind: 'NONE', reason: null });
+    });
+
+    it('honours a higher agreement count', () => {
+      const two = [
         { candidate: candidate(101_000n, 'NOBITEX'), verdict: accept },
         { candidate: candidate(100_500n, 'WALLEX'), verdict: accept },
-      ])?.source,
-    ).toBe('NOBITEX');
-    // The market moved: both sources say 130,000 ± 3 %, the last-known-good is what is stale.
-    expect(
-      chooseQuote([
-        { candidate: candidate(130_000n, 'NOBITEX'), verdict: outlier(3_000n) },
-        { candidate: candidate(131_000n, 'WALLEX'), verdict: outlier(3_100n) },
-      ])?.source,
-    ).toBe('NOBITEX');
-    // Two outliers that disagree with each other: nobody is trusted.
-    expect(
-      chooseQuote([
-        { candidate: candidate(130_000n, 'NOBITEX'), verdict: outlier(3_000n) },
-        { candidate: candidate(150_000n, 'WALLEX'), verdict: outlier(5_000n) },
-      ]),
-    ).toBeNull();
-    // One outlier alone, or a refused figure, prices nothing.
-    expect(chooseQuote([{ candidate: candidate(130_000n), verdict: outlier(3_000n) }])).toBeNull();
-    expect(
-      chooseQuote([{ candidate: candidate(10n), verdict: { kind: 'OUT_OF_RAILS' } }]),
-    ).toBeNull();
-    expect(chooseQuote([])).toBeNull();
+      ];
+      expect(decideQuote(two, { minAgreeing: 3, acceptSingle: false }).kind).toBe('NONE');
+    });
   });
 });
