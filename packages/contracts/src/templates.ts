@@ -176,6 +176,15 @@ export interface TemplateDefinition {
    * never converted: it may be an id, a username or a code that must stay copyable.
    */
   readonly digits?: 'PERSIAN';
+  /**
+   * R8 A2: this key was `PLAIN_TEXT` before it became `TELEGRAM_HTML`, so a tenant override
+   * saved before the change is plain text that Telegram's HTML parser would choke on (a bare
+   * `&` or `<` is a parse error, and the message would not be sent). An override of such a
+   * key that carries no Telegram HTML tag at all is rendered AS PLAIN TEXT — its `&`, `<` and
+   * `>` escaped — exactly as it read before; one that uses a tag was written for HTML and is
+   * rendered as HTML. Never set on a key that was always HTML.
+   */
+  readonly legacyPlainOverrides?: true;
 }
 
 /**
@@ -5151,7 +5160,11 @@ export const TEMPLATES = [
     key: 'bot.payment.transfer_instructions',
     description:
       'The invoice: heading, invoice id, payable amount, the destination lines, then ' +
-      'the tenant-editable instructions. Carries the destination the payment was ' +
+      'the tenant-editable instructions. R8 A2: the default body is the owner-approved card ' +
+      'invoice — the amount to transfer in RIAL (`{amountRial}`), Toman beside it, the ' +
+      'destination, the deadline\u2019s time, the tracking code, and no fee breakdown; ' +
+      'TELEGRAM_HTML since R8 so the amount is bold (`legacyPlainOverrides`: an override saved ' +
+      'as plain text still renders as plain text). Carries the destination the payment was ' +
       'ISSUED against. R6 item 4: when the card-to-card route charges a customer fee, the ' +
       'amount without the fee and the fee are shown apart, and `{total}` is the PAYABLE — ' +
       'what must be transferred. ' +
@@ -5161,7 +5174,8 @@ export const TEMPLATES = [
       'field the tenant never configured is not composed at all \u2014 an optional ' +
       'placeholder could not do that, because an absent one renders as a literal ' +
       '{token}.',
-    format: 'PLAIN_TEXT',
+    format: 'TELEGRAM_HTML',
+    legacyPlainOverrides: true,
     placeholders: [
       {
         token: 'destination',
@@ -5175,7 +5189,7 @@ export const TEMPLATES = [
         type: 'MONEY',
         description:
           'The amount to TRANSFER: the payment\u2019s payable \u2014 the principal plus the customer fee when the route charges one, else the principal.',
-        required: true,
+        required: false,
         repeatable: false,
       },
       {
@@ -5199,6 +5213,30 @@ export const TEMPLATES = [
         type: 'STRING',
         description: 'The reference the customer must quote.',
         required: true,
+        repeatable: false,
+      },
+      {
+        token: 'amountRial',
+        type: 'STRING',
+        description:
+          'R8 A2: the amount to TRANSFER (the payable: the principal plus the customer fee when the route charges one) in RIAL, in Persian digits grouped by thousands (`۲۵۰٬۹۹۰`) and with no unit, which the body writes. The copy button carries the same figure as bare ASCII digits.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'amountToman',
+        type: 'STRING',
+        description:
+          'R8 A2: the same amount in TOMAN, Persian digits grouped by thousands, no unit. A line holding only it is dropped when the amount is not a whole toman.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'expiresTime',
+        type: 'TIME',
+        description:
+          'R8 A2: the time of day of the payment’s deadline, in the tenant’s zone (`11:10`). A line holding only it is dropped for a payment with no deadline.',
+        required: false,
         repeatable: false,
       },
     ],
@@ -5297,7 +5335,8 @@ export const TEMPLATES = [
     key: 'bot.payment.copy_transfer_amount_button',
     description:
       'R6 item 2: label on the TonPays card invoice button that copies the EXACT amount to ' +
-      'transfer, as bare digits with no separators and no unit. A CopyTextButton: it reaches no ' +
+      'transfer, as bare digits with no separators and no unit. R8 A2: the digits are RIAL, and ' +
+      'the manual card-to-card invoice uses the same button. A CopyTextButton: it reaches no ' +
       'handler and performs no action on the server.',
     format: 'PLAIN_TEXT',
     placeholders: [],
@@ -9435,7 +9474,7 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.gateway_card_invoice',
     description:
-      'The TonPays Telegram card-to-card invoice (`docs/tonpays-telegram-gateway-audit.md` §8.1): the payable from Nexa’s snapshot, the EXACT transfer amount (R6 item 2: required, in <code>), the payee card and the deadline, with the receipt, change-card and check buttons beneath. It must say a payment counts only once TonPays has confirmed it, and never that anything was paid.',
+      'The TonPays Telegram card-to-card invoice (`docs/tonpays-telegram-gateway-audit.md` §8.1). R8 A2 (owner-approved layout): the EXACT amount to transfer in RIAL (`{amountRial}`, required) with the same amount in Toman beside it, the payee card grouped four by four, the holder, the deadline’s time and the tracking code — and no fee breakdown: the fee is already inside the exact amount, and the word for it is not on this screen. Beneath: copy the amount (rial digits), copy the card (sixteen digits), change the card when allowed, send the receipt, cancel, main menu. It must say the payment is confirmed automatically only on the exact amount, and never that anything was paid. `{principal}`, `{fee}`, `{payable}`, `{transferAmount}`, `{cardNumber}` and `{expiresAt}` stay declared and supplied so an override written for the earlier layout still renders.',
     format: 'TELEGRAM_HTML',
     placeholders: [
       {
@@ -9475,14 +9514,14 @@ export const TEMPLATES = [
         type: 'STRING',
         description:
           'R6 item 2: the EXACT amount to transfer, as bare ASCII digits with no separators and no unit (a banking app and TonPays\u2019 automatic approval take only that figure). TonPays\u2019 `final_amount` when it sent one, else the payable. The default bodies show it in <code> so it copies on tap. Provider metadata for display: it is never what Nexa settles or credits.',
-        required: true,
+        required: false,
         repeatable: false,
       },
       {
         token: 'cardNumber',
         type: 'STRING',
         description: 'The payee card TonPays named for this attempt, exactly as it sent it.',
-        required: true,
+        required: false,
         repeatable: false,
       },
       {
@@ -9497,6 +9536,38 @@ export const TEMPLATES = [
         type: 'DATETIME',
         description:
           'The end of the customer’s window to pay and send the receipt (Nexa’s seventy-minute deadline).',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'amountRial',
+        type: 'STRING',
+        description:
+          'R8 A2: the EXACT amount to transfer, in RIAL: TonPays’ `final_amount` (the payable in Toman when it named none) times ten, in Persian digits grouped by thousands (`۲۵۰٬۹۹۰`) and with no unit, which the body writes. The copy button carries the same figure as bare ASCII digits. Display only: never what Nexa settles, credits or refunds.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'amountToman',
+        type: 'STRING',
+        description:
+          'R8 A2: the same exact amount in TOMAN, Persian digits grouped by thousands, no unit. A line holding only it is dropped when there is none.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'cardGrouped',
+        type: 'STRING',
+        description:
+          'R8 A2: the payee card as sixteen Latin digits in four groups of four (`5859 8318 8743 8546`), or exactly as TonPays sent it when it is not sixteen digits. The copy button carries the digits without spaces.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'expiresTime',
+        type: 'TIME',
+        description:
+          'R8 A2: the time of day of the customer’s deadline to pay and send the receipt (Nexa’s seventy-minute deadline), in the tenant’s zone (`11:10`).',
         required: true,
         repeatable: false,
       },
@@ -9530,7 +9601,7 @@ export const TEMPLATES = [
         type: 'STRING',
         description:
           'R6 item 2: the EXACT amount to transfer, as bare ASCII digits with no separators and no unit (a banking app and TonPays\u2019 automatic approval take only that figure). TonPays\u2019 `final_amount` when it sent one, else the payable. The default bodies show it in <code> so it copies on tap. Provider metadata for display: it is never what Nexa settles or credits.',
-        required: true,
+        required: false,
         repeatable: false,
       },
       {
@@ -9538,6 +9609,30 @@ export const TEMPLATES = [
         type: 'DATETIME',
         description:
           'The end of the customer’s window to pay and send the receipt (Nexa’s seventy-minute deadline).',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'amountRial',
+        type: 'STRING',
+        description:
+          'R8 A2: the EXACT amount to transfer, in RIAL: TonPays’ `final_amount` (the payable in Toman when it named none) times ten, in Persian digits grouped by thousands (`۲۵۰٬۹۹۰`) and with no unit, which the body writes. The copy button carries the same figure as bare ASCII digits. Display only: never what Nexa settles, credits or refunds.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'amountToman',
+        type: 'STRING',
+        description:
+          'R8 A2: the same exact amount in TOMAN, Persian digits grouped by thousands, no unit. A line holding only it is dropped when there is none.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'expiresTime',
+        type: 'TIME',
+        description:
+          'R8 A2: the time of day of the customer’s deadline to pay and send the receipt (Nexa’s seventy-minute deadline), in the tenant’s zone (`11:10`).',
         required: true,
         repeatable: false,
       },
@@ -9571,14 +9666,14 @@ export const TEMPLATES = [
         type: 'STRING',
         description:
           'R6 item 2: the EXACT amount to transfer, as bare ASCII digits with no separators and no unit (a banking app and TonPays\u2019 automatic approval take only that figure). TonPays\u2019 `final_amount` when it sent one, else the payable. The default bodies show it in <code> so it copies on tap. Provider metadata for display: it is never what Nexa settles or credits.',
-        required: true,
+        required: false,
         repeatable: false,
       },
       {
         token: 'cardNumber',
         type: 'STRING',
         description: 'The payee card TonPays named for this attempt, exactly as it sent it.',
-        required: true,
+        required: false,
         repeatable: false,
       },
       {
@@ -9593,6 +9688,38 @@ export const TEMPLATES = [
         type: 'DATETIME',
         description:
           'The end of the customer’s window to pay and send the receipt (Nexa’s seventy-minute deadline).',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'amountRial',
+        type: 'STRING',
+        description:
+          'R8 A2: the EXACT amount to transfer, in RIAL: TonPays’ `final_amount` (the payable in Toman when it named none) times ten, in Persian digits grouped by thousands (`۲۵۰٬۹۹۰`) and with no unit, which the body writes. The copy button carries the same figure as bare ASCII digits. Display only: never what Nexa settles, credits or refunds.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'amountToman',
+        type: 'STRING',
+        description:
+          'R8 A2: the same exact amount in TOMAN, Persian digits grouped by thousands, no unit. A line holding only it is dropped when there is none.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'cardGrouped',
+        type: 'STRING',
+        description:
+          'R8 A2: the payee card as sixteen Latin digits in four groups of four (`5859 8318 8743 8546`), or exactly as TonPays sent it when it is not sixteen digits. The copy button carries the digits without spaces.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'expiresTime',
+        type: 'TIME',
+        description:
+          'R8 A2: the time of day of the customer’s deadline to pay and send the receipt (Nexa’s seventy-minute deadline), in the tenant’s zone (`11:10`).',
         required: true,
         repeatable: false,
       },
@@ -9626,7 +9753,7 @@ export const TEMPLATES = [
         type: 'STRING',
         description:
           'R6 item 2: the EXACT amount to transfer, as bare ASCII digits with no separators and no unit (a banking app and TonPays\u2019 automatic approval take only that figure). TonPays\u2019 `final_amount` when it sent one, else the payable. The default bodies show it in <code> so it copies on tap. Provider metadata for display: it is never what Nexa settles or credits.',
-        required: true,
+        required: false,
         repeatable: false,
       },
       {
@@ -9634,6 +9761,30 @@ export const TEMPLATES = [
         type: 'DATETIME',
         description:
           'The end of the customer’s window to pay and send the receipt (Nexa’s seventy-minute deadline).',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'amountRial',
+        type: 'STRING',
+        description:
+          'R8 A2: the EXACT amount to transfer for the card shown until the new one arrives, in RIAL: TonPays’ `final_amount` (the payable in Toman when it named none) times ten, in Persian digits grouped by thousands (`۲۵۰٬۹۹۰`) and with no unit, which the body writes. The copy button carries the same figure as bare ASCII digits. Display only: never what Nexa settles, credits or refunds.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'amountToman',
+        type: 'STRING',
+        description:
+          'R8 A2: the same exact amount in TOMAN, Persian digits grouped by thousands, no unit. A line holding only it is dropped when there is none.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'expiresTime',
+        type: 'TIME',
+        description:
+          'R8 A2: the time of day of the customer’s deadline to pay and send the receipt (Nexa’s seventy-minute deadline), in the tenant’s zone (`11:10`).',
         required: true,
         repeatable: false,
       },
@@ -10324,14 +10475,14 @@ export const TEMPLATES = [
         type: 'MONEY',
         description:
           'What the transfer must be: the payment’s own payable (principal plus any fee), from Nexa’s snapshot.',
-        required: true,
+        required: false,
         repeatable: false,
       },
       {
         token: 'cardNumber',
         type: 'STRING',
         description: 'The payee card TonPays named for this attempt, exactly as it sent it.',
-        required: true,
+        required: false,
         repeatable: false,
       },
       {
@@ -10346,7 +10497,7 @@ export const TEMPLATES = [
         type: 'DATETIME',
         description:
           'The end of the customer’s window to pay and send the receipt (Nexa’s seventy-minute deadline).',
-        required: true,
+        required: false,
         repeatable: false,
       },
       {
@@ -10355,6 +10506,38 @@ export const TEMPLATES = [
         description:
           'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
         required: false,
+        repeatable: false,
+      },
+      {
+        token: 'amountRial',
+        type: 'STRING',
+        description:
+          'R8 A2: the EXACT amount to transfer, in RIAL: TonPays’ `final_amount` (the payable in Toman when it named none) times ten, in Persian digits grouped by thousands (`۲۵۰٬۹۹۰`) and with no unit, which the body writes. The copy button carries the same figure as bare ASCII digits. Display only: never what Nexa settles, credits or refunds.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'amountToman',
+        type: 'STRING',
+        description:
+          'R8 A2: the same exact amount in TOMAN, Persian digits grouped by thousands, no unit. A line holding only it is dropped when there is none.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'cardGrouped',
+        type: 'STRING',
+        description:
+          'R8 A2: the payee card as sixteen Latin digits in four groups of four (`5859 8318 8743 8546`), or exactly as TonPays sent it when it is not sixteen digits. The copy button carries the digits without spaces.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'expiresTime',
+        type: 'TIME',
+        description:
+          'R8 A2: the time of day of the customer’s deadline to pay and send the receipt (Nexa’s seventy-minute deadline), in the tenant’s zone (`11:10`).',
+        required: true,
         repeatable: false,
       },
     ],
@@ -10370,14 +10553,14 @@ export const TEMPLATES = [
         type: 'MONEY',
         description:
           'What the transfer must be: the payment’s own payable (principal plus any fee), from Nexa’s snapshot.',
-        required: true,
+        required: false,
         repeatable: false,
       },
       {
         token: 'cardNumber',
         type: 'STRING',
         description: 'The payee card TonPays named for this attempt, exactly as it sent it.',
-        required: true,
+        required: false,
         repeatable: false,
       },
       {
@@ -10392,7 +10575,7 @@ export const TEMPLATES = [
         type: 'DATETIME',
         description:
           'The end of the customer’s window to pay and send the receipt (Nexa’s seventy-minute deadline).',
-        required: true,
+        required: false,
         repeatable: false,
       },
       {
@@ -10401,6 +10584,38 @@ export const TEMPLATES = [
         description:
           'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
         required: false,
+        repeatable: false,
+      },
+      {
+        token: 'amountRial',
+        type: 'STRING',
+        description:
+          'R8 A2: the EXACT amount to transfer, in RIAL: TonPays’ `final_amount` (the payable in Toman when it named none) times ten, in Persian digits grouped by thousands (`۲۵۰٬۹۹۰`) and with no unit, which the body writes. The copy button carries the same figure as bare ASCII digits. Display only: never what Nexa settles, credits or refunds.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'amountToman',
+        type: 'STRING',
+        description:
+          'R8 A2: the same exact amount in TOMAN, Persian digits grouped by thousands, no unit. A line holding only it is dropped when there is none.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'cardGrouped',
+        type: 'STRING',
+        description:
+          'R8 A2: the payee card as sixteen Latin digits in four groups of four (`5859 8318 8743 8546`), or exactly as TonPays sent it when it is not sixteen digits. The copy button carries the digits without spaces.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'expiresTime',
+        type: 'TIME',
+        description:
+          'R8 A2: the time of day of the customer’s deadline to pay and send the receipt (Nexa’s seventy-minute deadline), in the tenant’s zone (`11:10`).',
+        required: true,
         repeatable: false,
       },
     ],
@@ -13087,6 +13302,29 @@ export interface TemplateBodyIssue {
   /** The offending token, where the issue is about one. */
   readonly token?: string;
   readonly detail: string;
+}
+
+/**
+ * The tags Telegram's HTML parse mode understands (Bot API, "HTML style"). Used only to tell
+ * an override written for HTML from one written as plain text (`legacyPlainOverrides`).
+ */
+const TELEGRAM_HTML_TAG =
+  /<\/?(?:b|strong|i|em|u|ins|s|strike|del|span|tg-spoiler|a|tg-emoji|code|pre|blockquote)(?:\s[^>]*)?>/iu;
+
+/**
+ * R8 A2: a tenant override's body as it must reach the renderer of a key that was plain text
+ * before it became `TELEGRAM_HTML` (`TemplateDefinition.legacyPlainOverrides`). An override
+ * with no Telegram HTML tag was written as plain text, so its `&`, `<` and `>` are escaped
+ * and it reads exactly as it did; an override that uses a tag was written for HTML and is
+ * returned unchanged. Any other key's body is returned unchanged. Placeholders and icon
+ * markers carry none of the three characters, so they survive the escape as written.
+ */
+export function overrideBodyForFormat(definition: TemplateDefinition, body: string): string {
+  if (definition.legacyPlainOverrides !== true || definition.format !== 'TELEGRAM_HTML') {
+    return body;
+  }
+  if (TELEGRAM_HTML_TAG.test(body)) return body;
+  return body.replace(/&/gu, '&amp;').replace(/</gu, '&lt;').replace(/>/gu, '&gt;');
 }
 
 /**

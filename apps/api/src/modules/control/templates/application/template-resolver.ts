@@ -3,6 +3,7 @@ import {
   errors,
   ORDER_CODE_LINE_KEY,
   ORDER_CODE_LINE_KEYS,
+  overrideBodyForFormat,
   placeholderTokensIn,
   templateDefinition,
   TRACKING_CODE_LINE_KEY,
@@ -173,7 +174,12 @@ export class TemplateResolver {
       );
     }
 
-    const resolved = this.compatible(definition, await this.resolve(scope, key, locale, tx));
+    const compatible = this.compatible(definition, await this.resolve(scope, key, locale, tx));
+    // R8 A2: an override of a key that became HTML, saved as plain text, still reads as plain text.
+    const resolved: ResolvedTemplate =
+      compatible.source === 'TENANT'
+        ? { ...compatible, body: overrideBodyForFormat(definition, compatible.body) }
+        : compatible;
     const body = await this.withOrderCodeLine(
       scope,
       key,

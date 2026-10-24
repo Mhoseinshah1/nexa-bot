@@ -30,6 +30,7 @@ import {
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
+import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
 import {
   INQUIRY_MIN_SPACING_MS,
@@ -58,6 +59,7 @@ import {
   receiptFileName,
   reviewInquiryNextAt,
   sniffReceiptImage,
+  type CardChangeAllowance,
 } from '../domain/tonpays-telegram.js';
 import type {
   CardTransferGatewayAdapter,
@@ -94,6 +96,7 @@ import {
   sanitizedErrorCode,
 } from '../../../platform/opslog/application/error-events.js';
 import { GatewayInquiryHealth } from './gateway-inquiry-health.js';
+import { readCardSwitchLimits } from './card-switch-limits.js';
 import {
   lateCreditPollAt,
   lateCreditPollingOpen,
@@ -517,6 +520,12 @@ export interface GatewayPaymentServiceDeps {
    * `payments.gateway_inquiry_failing`. Absent, the defaults (`GatewayInquiryHealth`).
    */
   readonly inquiryHealth?: GatewayInquiryHealth;
+  /**
+   * R8 A2: the owner's R5C-1 card-switch limits, read for the card screen's «🔄 تعویض کارت»
+   * (a courtesy: the tap decides again under the payment's lock). Absent, the screen applies
+   * the provider's rules alone.
+   */
+  readonly cardSwitchSettings?: Pick<SettingsResolver, 'valueOf'>;
 }
 
 /** What one pass did, for the loop's log and for a test. Counts only; no identifiers. */
@@ -611,6 +620,11 @@ export interface GatewayCardFacts {
    * a new one from being made — so the screen can point at it. Null when there is none.
    */
   readonly openElsewherePaymentId?: string | null;
+  /**
+   * R8 A2: the owner's card-switch limits and what this payment has used of them, for the
+   * card-change button; null (or absent) when they could not be read here.
+   */
+  readonly changeAllowance?: CardChangeAllowance | null;
 }
 
 /**
@@ -3798,7 +3812,40 @@ export class GatewayPaymentService {
       latestCancel,
       latestRefund,
       openElsewherePaymentId,
+      changeAllowance: await this.changeAllowanceFor(scope, invoice.paymentId),
     };
+  }
+
+  /**
+   * R8 A2: the owner's card-switch limits with this payment's use of them, for drawing the
+   * card-change button. A courtesy read outside any transaction: the tap re-reads both under
+   * the payment's lock. A settings read that fails hides the button (null + no limits would
+   * offer one the owner may have switched off), so it answers "used up" rather than throw.
+   */
+  private async changeAllowanceFor(
+    scope: TenantContext,
+    paymentId: PaymentId,
+  ): Promise<CardChangeAllowance | null> {
+    const settings = this.deps.cardSwitchSettings;
+    const cards = this.deps.cardTransfer;
+    if (settings === undefined || cards === undefined) return null;
+    try {
+      return {
+        limits: await readCardSwitchLimits(settings, scope),
+        ...(await cards.cardChangeUsage(scope, paymentId)),
+      };
+    } catch (error: unknown) {
+      this.deps.logger.error(
+        { paymentId, ...errorFacts(error) },
+        'the card-switch limits could not be read; the card-change button is not drawn',
+      );
+      return {
+        limits: { maxSwitches: 0, cooldownSeconds: 0, maxDistinctCards: 1 },
+        switches: 0,
+        lastSwitchAt: null,
+        distinctCards: 1,
+      };
+    }
   }
 
   /** The attempt, if it is this customer's GATEWAY payment. Null otherwise — never another's. */

@@ -4579,7 +4579,7 @@ export const WEB_FA = {
   'web.ib_button_payment_route_gift': 'روش‌های پرداخت با شارژ هدیه',
   'web.ib_button_payment_copy_card': 'کپی شماره کارت',
   'web.ib_button_payment_copy_amount': 'کپی مبلغ',
-  'web.ib_button_payment_copy_transfer_amount': 'کپی مبلغ دقیق',
+  'web.ib_button_payment_copy_transfer_amount': 'کپی مبلغ (ریال)',
   'web.ib_button_payment_sent': 'پرداخت را انجام دادم | ارسال رسید',
   'web.ib_button_payment_cancel': 'انصراف از پرداخت',
   'web.ib_button_payment_cancel_confirm': 'تأیید انصراف از پرداخت',

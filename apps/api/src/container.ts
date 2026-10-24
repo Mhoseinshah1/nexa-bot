@@ -3645,6 +3645,8 @@ export function createContainer(
     credentials: gatewayCredentialStore,
     // TonPays Telegram: the card-change and receipt lanes, and the window sweep.
     cardTransfer: gatewayCardTransferRepository,
+    // R8 A2: the owner's card-switch limits, for the card-change button.
+    cardSwitchSettings: settingsResolver,
     providerRequests: gatewayProviderRequestRepository,
     refundCards: refundCardSealer,
     cardAdapters: cardTransferAdapters,
@@ -3735,6 +3737,7 @@ export function createContainer(
     cardTransfer: gatewayCardTransferRepository,
     providerRequests: gatewayProviderRequestRepository,
     refundCards: refundCardSealer,
+    settings: settingsResolver,
   });
   const starsPayments = new StarsPaymentService({
     invoices: gatewayInvoiceRepository,

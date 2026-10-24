@@ -679,7 +679,9 @@ describe('the customer payment flow over Telegram', () => {
     expect(payment?.['evidence_kind']).toBeNull();
 
     const text = String(lastMessage()?.body['text']);
-    expect(text).toContain(formatMoney(money(250_000n, 'IRT')));
+    // R8 A2: the amount to transfer in RIAL, bold, with the Toman figure beside it.
+    expect(text).toContain('<b>۲٬۵۰۰٬۰۰۰ ریال</b>');
+    expect(text).toContain('(معادل ۲۵۰٬۰۰۰ تومان)');
     // FIX-02: the invoice carries the public code under the exact label, and no suffix.
     const reference = String(payment?.['reference'] ?? '');
     expect(reference).toMatch(/^[0-9a-f]{16}:manual$/u);
@@ -1159,15 +1161,19 @@ describe('the customer payment flow over Telegram', () => {
      * second: it is what most customers returning to this message want, and the
      * destructive one should not be the nearest thumb.
      */
-    expect(rows.map((row) => row.length)).toEqual([2, 1, 1]);
+    /*
+     * R8 A2 (owner-approved card invoice): [copy amount in RIAL] [copy card] / [send the
+     * receipt] [cancel] / [main menu] — the switch row is absent with one receiving card.
+     */
+    expect(rows.map((row) => row.length)).toEqual([2, 2, 1]);
     const copies = rows[0] as unknown as { text: string; copy_text?: { text: string } }[];
-    expect(copies.map((b) => b.copy_text?.text)).toEqual(['6037991234567893', '250000']);
+    expect(copies.map((b) => b.copy_text?.text)).toEqual(['2500000', '6037991234567893']);
     // A copy button carries no route. If one ever did, it could carry a destructive one.
     expect(copies.every((b) => !('callback_data' in b))).toBe(true);
 
     expect(
       buttons.filter((b) => b.callback_data !== undefined).map((b) => b.callback_data),
-    ).toEqual([`i:${String(payment?.['id'])}`, `x:${String(payment?.['id'])}`]);
+    ).toEqual([`i:${String(payment?.['id'])}`, `x:${String(payment?.['id'])}`, 'mm:']);
     // Both name the PAYMENT, not the order — the only id that identifies what either
     // one is about, since an order can have had several payments over its life.
     const cancelButton = buttons[3];
