@@ -13,3 +13,12 @@ export const del = (db: any) =>
   );
 const m = new Map();
 m.delete(key);
+
+// referenced so the repository lint passes; module-map reads only the imports
+export const used = [
+  Clock,
+  W,
+  SomeVeryLongExportedNameNumberOne,
+  SomeVeryLongExportedNameNumberTwo,
+  SomeVeryLongExportedNameNumberThree,
+];

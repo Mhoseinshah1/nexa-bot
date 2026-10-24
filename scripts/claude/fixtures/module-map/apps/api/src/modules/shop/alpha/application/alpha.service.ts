@@ -6,3 +6,7 @@ export class AlphaService {
     return tx.update(gadgets).set({});
   }
 }
+
+// referenced so the repository lint passes; module-map reads only the imports
+export const used = [Money, ALPHA_CODES];
+export type Used = WidgetId;
