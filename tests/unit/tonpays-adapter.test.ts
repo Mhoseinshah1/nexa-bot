@@ -594,11 +594,17 @@ describe('the TonPays webhook body', () => {
     expect(hint).not.toHaveProperty('paid');
   });
 
-  it('prefers the X-TonPays-Delivery-Id header and refuses a body without the two ids', () => {
+  it('takes the X-TonPays-Delivery-Id header, refuses one that differs from the body and a body without the two ids', () => {
     expect(
-      adapter.parseWebhook({ invoice_id: 'a', order_id: 'b', delivery_id: 'body' }, 'header')
+      adapter.parseWebhook({ invoice_id: 'a', order_id: 'b', delivery_id: 'same' }, 'same')
         ?.deliveryId,
-    ).toBe('header');
+    ).toBe('same');
+    expect(adapter.parseWebhook({ invoice_id: 'a', order_id: 'b' }, 'header')?.deliveryId).toBe(
+      'header',
+    );
+    expect(
+      adapter.parseWebhook({ invoice_id: 'a', order_id: 'b', delivery_id: 'body' }, 'header'),
+    ).toBeNull();
     expect(adapter.parseWebhook({ order_id: 'b' }, undefined)).toBeNull();
     expect(adapter.parseWebhook('not json', undefined)).toBeNull();
   });
