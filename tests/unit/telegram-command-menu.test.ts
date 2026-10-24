@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { ADMIN_MENU_COMMAND, ADMIN_ONLY_COMMANDS, BOT_COMMANDS, TEMPLATES } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
@@ -22,8 +22,16 @@ describe('the Telegram command menu', () => {
      * the thing that drifts. The runtime parses commands with `command === '/x'`, so
      * that is what is matched.
      */
-    const runtime = new URL('../../apps/api/src/surfaces/telegram/bot-runtime.ts', import.meta.url);
-    const source = readFileSync(runtime, 'utf8');
+    // `intentOf` moved to `runtime/intent-of.ts` (R9 split); every runtime module is read.
+    const telegram = new URL('../../apps/api/src/surfaces/telegram/', import.meta.url);
+    const source = [
+      'bot-runtime.ts',
+      ...readdirSync(new URL('runtime/', telegram))
+        .filter((file) => file.endsWith('.ts'))
+        .map((file) => `runtime/${file}`),
+    ]
+      .map((file) => readFileSync(new URL(file, telegram), 'utf8'))
+      .join('\n');
     const parsed = [...source.matchAll(/command === '\/([a-z_]+)'/g)].map((m) => m[1] ?? '');
     /*
      * The management panel's commands are parsed and deliberately NOT registered

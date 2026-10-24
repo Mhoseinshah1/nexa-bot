@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { INLINE_BUTTONS, TEMPLATES } from '@nexa/contracts';
@@ -15,6 +15,10 @@ import { INLINE_BUTTONS, TEMPLATES } from '@nexa/contracts';
 const ROOT = resolve(import.meta.dirname, '../..');
 const FILES = [
   'apps/api/src/surfaces/telegram/bot-runtime.ts',
+  // R9: the declarations moved out of `bot-runtime.ts` into `runtime/`.
+  ...readdirSync(resolve(ROOT, 'apps/api/src/surfaces/telegram/runtime'))
+    .filter((file) => file.endsWith('.ts'))
+    .map((file) => `apps/api/src/surfaces/telegram/runtime/${file}`),
   'apps/api/src/modules/commerce/provisioning/application/delivery.service.ts',
 ];
 

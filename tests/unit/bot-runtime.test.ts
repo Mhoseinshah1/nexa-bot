@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -539,6 +539,10 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'admin-tutorial-video.ts',
       // R8 A2: the card-to-card invoice's copy buttons, shared by the TonPays and manual screens.
       'card-invoice.ts',
+      // R9: the declarations moved out of `bot-runtime.ts` into `runtime/`.
+      ...readdirSync(resolve(import.meta.dirname, '../../apps/api/src/surfaces/telegram/runtime'))
+        .filter((file) => file.endsWith('.ts'))
+        .map((file) => `runtime/${file}`),
     ]
       .map((file) =>
         readFileSync(

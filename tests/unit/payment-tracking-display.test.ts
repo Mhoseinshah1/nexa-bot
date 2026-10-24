@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -307,6 +307,10 @@ describe('FIX-02: no surface renders a raw stored reference', () => {
   const ROOT = join(__dirname, '..', '..');
   const DISPLAY_SOURCES = [
     'apps/api/src/surfaces/telegram/bot-runtime.ts',
+    // R9: the declarations moved out of `bot-runtime.ts` into `runtime/`.
+    ...readdirSync(join(ROOT, 'apps/api/src/surfaces/telegram/runtime'))
+      .filter((file) => file.endsWith('.ts'))
+      .map((file) => `apps/api/src/surfaces/telegram/runtime/${file}`),
     'apps/api/src/modules/commerce/payments/application/receipt-review-caption.ts',
     'apps/api/src/modules/commerce/payments/application/financial-log.consumer.ts',
     'apps/api/src/modules/commerce/messaging/infrastructure/drizzle-customer-reminder-facts.reader.ts',
