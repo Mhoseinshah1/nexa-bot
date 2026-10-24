@@ -292,8 +292,8 @@ export class RecoveryExecutor {
         code: 'recovery.run_failed',
         severity: 'CRITICAL',
         message:
-          `Recovery ${row.id} was abandoned by a process that stopped reporting and has been ` +
-          `closed as failed at ${row.state}.`,
+          `بازیابی ${row.id} را فرایندی رها کرد که دیگر گزارشی نمی‌داد و در مرحلهٔ ` +
+          `${row.state} ناموفق بسته شد.`,
         context: {
           recoveryId: row.id,
           state: row.state,
@@ -384,8 +384,8 @@ export class RecoveryExecutor {
           code: 'recovery.run_failed',
           severity: 'CRITICAL',
           message:
-            `Recovery ${id} began a cutover and this installation holds no record of the outcome. ` +
-            `Check whether ${entry.displacedDatabase} and ${entry.candidateDatabase} exist.`,
+            `بازیابی ${id} جابه‌جایی پایگاه داده را آغاز کرد و نتیجهٔ آن ثبت نشده است. ` +
+            `بررسی کنید ${entry.displacedDatabase} و ${entry.candidateDatabase} وجود دارند یا نه.`,
           context: {
             recoveryId: id,
             phase: entry.phase,
@@ -481,10 +481,10 @@ export class RecoveryExecutor {
         severity: 'CRITICAL',
         message:
           entry.phase === 'RENAMED'
-            ? `Recovery ${id} completed its cutover and the executor stopped before recording it. ` +
-              `The previous database is ${entry.displacedDatabase}.`
-            : `Recovery ${id} renamed the outgoing database and did not complete. ` +
-              `The previous database is ${entry.displacedDatabase} and nothing holds the live name.`,
+            ? `بازیابی ${id} جابه‌جایی را کامل کرد اما اجراکننده پیش از ثبت آن متوقف شد. ` +
+              `پایگاه داده قبلی ${entry.displacedDatabase} است.`
+            : `بازیابی ${id} پایگاه داده قبلی را تغییر نام داد و کامل نشد. ` +
+              `پایگاه داده قبلی ${entry.displacedDatabase} است و نام اصلی را هیچ پایگاهی ندارد.`,
         context: {
           recoveryId: id,
           phase: entry.phase,
@@ -580,7 +580,7 @@ export class RecoveryExecutor {
           await this.report({
             code: 'recovery.run_ok',
             severity: 'INFO',
-            message: `Recovery ${row.id} completed after its executor restarted, and the installation reports ready.`,
+            message: `بازیابی ${row.id} پس از راه‌اندازی دوبارهٔ اجراکننده کامل شد و سامانه آماده گزارش می‌شود.`,
             context: { recoveryId: row.id, backupId: row.backupId, resumed: true },
             recoversCode: 'recovery.run_failed',
             recoversDedupeKey: `recovery.${row.id}`,
@@ -608,8 +608,8 @@ export class RecoveryExecutor {
           code: 'recovery.run_failed',
           severity: 'CRITICAL',
           message:
-            `Recovery ${row.id} cut over before its executor restarted, and the installation ` +
-            `did not report ready afterwards (recovery.readiness_failed).`,
+            `بازیابی ${row.id} پیش از راه‌اندازی دوبارهٔ اجراکننده جابه‌جا شد و سامانه پس از آن ` +
+            `آماده گزارش نشد (recovery.readiness_failed).`,
           context: { ...facts, code: 'recovery.readiness_failed', resumed: true },
           dedupeKey: `recovery.${row.id}`,
         });
@@ -690,7 +690,7 @@ export class RecoveryExecutor {
       await this.report({
         code: 'recovery.run_ok',
         severity: 'INFO',
-        message: `Recovery ${request.id} completed, and the installation reports ready.`,
+        message: `بازیابی ${request.id} کامل شد و سامانه آماده گزارش می‌شود.`,
         context: { recoveryId: request.id, backupId: request.backupId },
         recoversCode: 'recovery.run_failed',
         recoversDedupeKey: `recovery.${request.id}`,
@@ -793,7 +793,7 @@ export class RecoveryExecutor {
         // Author-controlled. The stage and the code are closed vocabularies and
         // are what make the alert actionable; nothing interpolated here comes
         // from an exception.
-        message: `Recovery ${request.id} failed at ${current?.stage ?? 'UNKNOWN'} (${code}).`,
+        message: `بازیابی ${request.id} در مرحلهٔ ${current?.stage ?? 'UNKNOWN'} ناموفق بود (${code}).`,
         context: {
           recoveryId: request.id,
           code,

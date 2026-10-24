@@ -21,6 +21,8 @@ import {
   DATA_RETENTION_SETTING_KEYS,
   IDEMPOTENCY_INTERACTIVE_RETENTION_DAYS_DEFAULT,
   OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT,
+  BACKUP_CPU_LIMIT_DEFAULT,
+  BACKUP_CPU_LIMIT_SETTING_KEY,
   BACKUP_LOCAL_COPIES_DEFAULT,
   BACKUP_LOCAL_COPIES_SETTING_KEY,
   BACKUP_SCHEDULE_SETTING_KEYS,
@@ -211,7 +213,10 @@ import { DiagnosticsService } from './modules/platform/system/application/diagno
 import { DrizzleDiagnosticsReader } from './modules/platform/system/infrastructure/drizzle-diagnostics.reader.js';
 import { BackupService } from './modules/platform/backup/application/backup.service.js';
 import { BackupScheduler } from './modules/platform/backup/application/backup-scheduler.js';
-import { BackupHousekeeping } from './modules/platform/backup/application/backup-housekeeping.js';
+import {
+  BackupHousekeeping,
+  requiredFreeBytes,
+} from './modules/platform/backup/application/backup-housekeeping.js';
 import { DrizzleBackupRunRepository } from './modules/platform/backup/infrastructure/drizzle-backup-run.repository.js';
 import { DrizzleRecoveryRequestRepository } from './modules/platform/recovery/infrastructure/drizzle-recovery-request.repository.js';
 import { FilesystemRecoveryWorkspaces } from './modules/platform/recovery/infrastructure/recovery-workspace.js';
@@ -7077,8 +7082,23 @@ export function createContainer(
     { intervalMs: 3_600_000, initialDelayMs: 240_000, batchSize: 5_000, maxBatchesPerTick: 200 },
   );
 
+  /*
+   * Round 8 B5: the CPU share (percent of one core) the backup's 7-Zip and the verification's
+   * pg_restore may use, read from the settings registry at EACH spawn so an operator's change
+   * applies to the next tool, not the next deploy. Before a tenant is provisioned the registry
+   * default applies; a read that throws falls back to it too (`resolveCpuLimit`).
+   */
+  const backupCpuLimit = async (): Promise<number> =>
+    installationTenantId === null
+      ? BACKUP_CPU_LIMIT_DEFAULT
+      : settingsResolver.valueOf<number>(
+          { tenantId: installationTenantId, botInstanceId: null },
+          BACKUP_CPU_LIMIT_SETTING_KEY,
+        );
+
   const backupTools = new PostgresDatabaseTools({
     databaseUrl: config.DATABASE_URL,
+    cpuLimit: backupCpuLimit,
     dumpTimeoutMs: config.BACKUP_DUMP_TIMEOUT_MS,
     restoreTimeoutMs: config.BACKUP_RESTORE_TIMEOUT_MS,
     binDir: config.BACKUP_PG_BIN_DIR === '' ? undefined : config.BACKUP_PG_BIN_DIR,
@@ -7114,6 +7134,7 @@ export function createContainer(
       binary: config.BACKUP_SEVEN_ZIP_BIN,
       level: config.BACKUP_SEVEN_ZIP_LEVEL,
       threads: config.BACKUP_SEVEN_ZIP_THREADS,
+      cpuLimit: backupCpuLimit,
       memoryBudgetMb: config.BACKUP_SEVEN_ZIP_MEMORY_MB,
       memoryHeadroomMb: config.BACKUP_SEVEN_ZIP_HEADROOM_MB,
       readAvailableMb: readMemAvailableMb,
@@ -7163,7 +7184,36 @@ export function createContainer(
       dailyTime: config.BACKUP_DAILY_TIME,
     },
   });
+  /*
+   * Round 8 B3: ONE view of the backup volume for the three who ask about it — the run's
+   * preflight (refuse before the dump), the housekeeping pass (warn) and the Web Admin card.
+   * The requirement is `requiredFreeBytes` (the last verified run's dump plus archive, times
+   * 1.5), so a refusal, a warning and a card can never quote different figures.
+   */
+  const backupVolume = new FilesystemBackupDebris(config.BACKUP_WORK_DIR);
+  const BACKUP_DISK_FLOOR_BYTES = 1024 * 1024 * 1024;
+  const backupDiskState = async () => {
+    const volume = await backupVolume.volume();
+    if (volume === null) return null;
+    const requiredBytes = requiredFreeBytes(
+      await backupRuns.latestVerified(),
+      BACKUP_DISK_FLOOR_BYTES,
+    );
+    return { ...volume, requiredBytes, low: volume.freeBytes < requiredBytes };
+  };
   const backup = new BackupService({
+    diskPreflight: async () => {
+      const state = await backupDiskState();
+      return state === null
+        ? null
+        : { freeBytes: state.freeBytes, requiredBytes: state.requiredBytes };
+    },
+    afterSuccess: async () => {
+      // Like the housekeeping pass: no file is deleted beside a recovery.
+      if (await recoveryQuiesced()) return;
+      await backupHousekeeping.pruneArchives();
+      await backupHousekeeping.pruneDeliveredCopies();
+    },
     // Round 4 PR-D (L31): the caption is the operator's template, short and in Persian, with
     // the time of the next automatic backup when one is scheduled.
     renderCaption: backupCaptionRenderer({
@@ -7394,6 +7444,7 @@ export function createContainer(
     clock,
     workRoot: config.BACKUP_WORK_DIR,
     schedule: () => backupSchedule.effective(),
+    disk: backupDiskState,
   });
 
   const recoveryExecutor = new RecoveryExecutor({
@@ -7602,7 +7653,7 @@ export function createContainer(
    */
   const backupHousekeeping = new BackupHousekeeping({
     runs: backupRuns,
-    debris: new FilesystemBackupDebris(config.BACKUP_WORK_DIR),
+    debris: backupVolume,
     clock,
     opsLog,
     scope: () =>
@@ -7663,7 +7714,7 @@ export function createContainer(
         config.BACKUP_RESTORE_TIMEOUT_MS +
         BACKUP_LEASE_STALE_AFTER_MS,
     ),
-    diskFloorBytes: 1024 * 1024 * 1024,
+    diskFloorBytes: BACKUP_DISK_FLOOR_BYTES,
     tickIntervalMs: 15 * 60_000,
     initialDelayMs: 90_000,
     logger,

@@ -112,6 +112,20 @@ export class FilesystemBackupDebris implements BackupDebrisStore {
     return { removed, survived, pending };
   }
 
+  /** Free and total bytes of the backup volume, or null when the root does not exist. */
+  async volume(): Promise<{ readonly freeBytes: number; readonly totalBytes: number } | null> {
+    try {
+      const info = await statfs(this.root);
+      return {
+        freeBytes: Number(info.bavail) * Number(info.bsize),
+        totalBytes: Number(info.blocks) * Number(info.bsize),
+      };
+    } catch (error) {
+      if (isAbsent(error)) return null;
+      throw error;
+    }
+  }
+
   async freeBytes(): Promise<number | null> {
     try {
       const info = await statfs(this.root);

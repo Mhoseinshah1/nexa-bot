@@ -332,6 +332,12 @@ interface Harness {
     delays: { dump: number; encrypt: number; verify: number; deliver: number };
     /** Thrown by the archiver's `preflight` before the dump, when set (Round 5B). */
     preflightError: Error | null;
+    /** Round 8 B3: the volume as the disk preflight sees it; null is "unknown". */
+    disk: { freeBytes: number; requiredBytes: number } | null;
+    /** Round 8 B2: how many times retention ran after a success, and whether it throws. */
+    pruneCalls: number;
+    pruneThrows: boolean;
+    runStatesAtPrune: string[];
     /** The number of times `dump` ran: a refused preflight must leave it at zero. */
     dumps: number;
     /** Thrown by `seal`, when set, instead of the generic `sealFails` Error. */
@@ -383,6 +389,10 @@ function harness(
     open: new Set<string>(),
     delays: { dump: 0, encrypt: 0, verify: 0, deliver: 0 },
     preflightError: null,
+    disk: null,
+    pruneCalls: 0,
+    pruneThrows: false,
+    runStatesAtPrune: [],
     dumps: 0,
     sealError: null,
     dumpRealMs: 0,
@@ -546,6 +556,12 @@ function harness(
     logger: options.logger ?? { info() {}, warn() {}, error() {} },
     ...(options.heartbeat === undefined ? {} : { heartbeat: options.heartbeat }),
     leaseOwner: 'worker:1:aaaa',
+    diskPreflight: async () => state.disk,
+    afterSuccess: async () => {
+      state.pruneCalls += 1;
+      state.runStatesAtPrune = [...runs.rows.values()].map((row) => row.state);
+      if (state.pruneThrows) throw new Error('the volume is read-only');
+    },
     // The planner's arithmetic, without a file: ranges of `archiveBytes` at `partBytes`.
     parts: {
       async plan(input) {
@@ -870,7 +886,7 @@ describe('the backup pipeline', () => {
       ]);
       expect(parts.map((part) => part.telegramMessageId)).toEqual([21n, null, null]);
       const partial = h.state.recorded.find((event) => event.code === 'backup.delivery_partial');
-      expect(partial?.message).toContain('1 of 3');
+      expect(partial?.message).toContain('۱ از ۳ بخش');
       expect(partial?.dedupeKey).toBe('backup.delivery_partial');
       // The verified archive stays: only the plaintext went.
       expect(h.state.everythingRemoved).toBe(false);
@@ -1618,7 +1634,7 @@ describe('the backup conditions beside the run (E5)', () => {
     expect(failed?.dedupeKey).toBe('backup.cleanup');
     // `message` is projected to Telegram: the paths name plaintext dumps.
     expect(failed?.message).not.toContain('/w/');
-    expect(failed?.message).toContain('left 1 artifact');
+    expect(failed?.message).toContain('۱ فایل روی این سرور باقی گذاشت');
   });
 
   it('opens backup.cleanup_failed when a FAILED run leaves its workspace or a scratch database', async () => {
@@ -1637,6 +1653,65 @@ describe('the backup conditions beside the run (E5)', () => {
     const h = harness();
     await completed(h);
     expect(h.state.recorded.map((event) => event.code)).not.toContain('backup.cleanup_failed');
+  });
+});
+
+describe('Round 8: disk preflight and retention after a run', () => {
+  const GIB = 1024 ** 3;
+
+  it('refuses a run the volume cannot hold BEFORE the dump, with the Persian reason, in ONE message', async () => {
+    const h = harness();
+    h.state.disk = { freeBytes: Math.round(1.5 * GIB), requiredBytes: 6 * GIB };
+    const run = await completed(h);
+
+    expect(run.state).toBe('FAILED');
+    expect(run.failureCode).toBe('backup.disk_insufficient');
+    expect(run.failureMessage).toBe('فضای دیسک کافی نیست (آزاد: ۱٫۵ گیگابایت، لازم: ۶ گیگابایت)');
+    // Nothing was dumped for nothing, and nothing was left to clean up.
+    expect(h.state.dumps).toBe(0);
+    expect(h.state.pruneCalls).toBe(0);
+    // One condition, on the key housekeeping's disk check shares — not a second alert beside it.
+    expect(h.state.recorded.map((event) => event.code)).toEqual(['backup.disk_threshold_exceeded']);
+    expect(h.state.recorded[0]).toMatchObject({
+      severity: 'WARN',
+      dedupeKey: 'backup.disk',
+      context: { freeBytes: Math.round(1.5 * GIB), requiredBytes: 6 * GIB },
+    });
+    expect(h.state.recorded[0]?.message).toContain('فضای دیسک کافی نیست');
+  });
+
+  it('runs when the volume has room, or when its size cannot be read', async () => {
+    const roomy = harness();
+    roomy.state.disk = { freeBytes: 6 * GIB, requiredBytes: 6 * GIB };
+    expect((await completed(roomy)).state).toBe('SUCCEEDED');
+    const unknown = harness();
+    unknown.state.disk = null;
+    expect((await completed(unknown)).state).toBe('SUCCEEDED');
+  });
+
+  it('prunes once after a SUCCESS, and not after a failure', async () => {
+    const ok = harness();
+    expect((await completed(ok)).state).toBe('SUCCEEDED');
+    expect(ok.state.pruneCalls).toBe(1);
+
+    const failed = harness();
+    failed.state.dumpFails = true;
+    expect((await completed(failed)).state).toBe('FAILED');
+    expect(failed.state.pruneCalls).toBe(0);
+  });
+
+  it('prunes only after the run is recorded SUCCEEDED, so the newest archive is this one', async () => {
+    const h = harness();
+    await completed(h);
+    expect(h.state.runStatesAtPrune).toEqual(['SUCCEEDED']);
+  });
+
+  it('keeps a successful backup successful when retention throws', async () => {
+    const h = harness();
+    h.state.pruneThrows = true;
+    const run = await completed(h);
+    expect(run.state).toBe('SUCCEEDED');
+    expect(h.state.recorded.map((event) => event.code)).not.toContain('backup.run_failed');
   });
 });
 

@@ -387,13 +387,33 @@ The worker runs a housekeeping pass every 15 minutes (first pass 90 seconds afte
 start), beside the scheduler. It does nothing while a recovery holds the
 installation — it asks the same quiesce predicate as every backup trigger.
 
+**After every successful run** the same retention runs at once (Round 8), not only on
+the 15-minute tick, so the volume holds the policy plus the run in flight. A failure
+there is logged and never changes the run's outcome.
+
+**Disk preflight (Round 8).** Before the dump starts the run compares the volume's free
+space with the last verified run's dump plus archive, times 1.5. Short of it, the run is
+refused as `backup.disk_insufficient` with «فضای دیسک کافی نیست (آزاد: X گیگابایت، لازم:
+Y گیگابایت)» and ONE `backup.disk_threshold_exceeded` event (the housekeeping pass's own
+condition, key `backup.disk`), not a second `backup.run_failed`. The Web Admin backup card
+shows free, total and required space and warns when free is below required.
+
+**CPU quota (Round 8).** `backup.cpu_limit_percent` (default 70, 10–100) is a share of
+ONE core for 7-Zip and the verification's `pg_restore` together (they run one after the
+other). The production container has no systemd, a read-only cgroup tree and no
+`cpulimit`, so the limit is the one `cpulimit` implements: a 100 ms duty cycle of
+SIGSTOP/SIGCONT on the child (`infrastructure/cpu-quota.ts`), read at each spawn. 7-Zip
+also runs with `-mmt=1` by default (`BACKUP_SEVEN_ZIP_THREADS=1`). The cost is wall time,
+about 100/percent times the unlimited time; memory is not reduced, and the PostgreSQL
+server's own work for the restore is bounded by `VERIFY_RESTORE_PGOPTIONS`, not by this.
+
 **Archive files.** Two settings, on the generic settings page under the
 operations group:
 
 | Key                         | Default | Range  | Meaning                                                            |
 | --------------------------- | ------- | ------ | ------------------------------------------------------------------ |
-| `backup.archive_keep_count` | 14      | 1–1000 | the newest N **verified** archives always stay                     |
-| `backup.archive_keep_days`  | 30      | 1–3650 | every archive stays at least this many days after its run finished |
+| `backup.archive_keep_count` | 3       | 1–1000 | the newest N **verified** archives always stay                     |
+| `backup.archive_keep_days`  | 3       | 1–3650 | every archive stays at least this many days after its run finished |
 
 A run's directory is removed only when it fails BOTH — outside the newest N
 verified AND older than the days. Whatever the settings say, these are never
