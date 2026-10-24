@@ -5,6 +5,7 @@ import {
   toPersianDigits,
   type CurrencyCode,
   type DomainEvent,
+  type GatewayProviderRequestState,
   type EventType,
   type Money,
   type NotificationDestination,
@@ -21,10 +22,15 @@ import {
 import type { EventConsumer } from '../../../platform/eventing/application/event-consumer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { CustomerRecord, CustomerRepository } from '../../customers/application/ports.js';
-import { identityOf } from '../../ops-log/application/presenters.js';
+import { identityOf, oneLine } from '../../ops-log/application/presenters.js';
 import type { CustomerFact, OpsLogFacts, OpsLogWords } from '../../ops-log/application/ports.js';
-import type { GatewayInvoiceRecord, GatewayInvoiceRepository } from './gateway-invoice-ports.js';
+import type {
+  GatewayInvoiceRecord,
+  GatewayInvoiceRepository,
+  GatewayProviderRequestRepository,
+} from './gateway-invoice-ports.js';
 import { gatewaySettlementDeadline } from '../domain/settlement.js';
+import { failureStatusOf, paymentFailureOutcome } from '../domain/payment-failure-outcome.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
 import type { ServiceRefundRequestRepository } from './service-refund-request-ports.js';
 
@@ -47,6 +53,16 @@ export interface FinancialLogLane {
     tx?: unknown,
   ): Promise<unknown>;
 }
+
+/** A cancel request that reached the provider (or may have): the ones that can explain a `canceled`. */
+const SENT_CANCEL_STATES: ReadonlySet<GatewayProviderRequestState> = new Set([
+  'SENT',
+  'APPLIED',
+  'UNKNOWN',
+] as GatewayProviderRequestState[]);
+
+/** How much of one gateway rejection reason the log quotes. */
+const REJECT_REASON_MAX = 120;
 
 /** Every ledger reason a payment's wallet credit is written under. */
 const PAYMENT_CREDIT_REASONS = [
@@ -111,6 +127,11 @@ export class FinancialLogConsumer implements EventConsumer {
       readonly words: OpsLogWords;
       /** WP19: the request an outcome names, read as it stands. */
       readonly refundRequests: Pick<ServiceRefundRequestRepository, 'findById'>;
+      /**
+       * R8 A3: a payment's cancel request (who cancelled) and the gateway's rejection reasons.
+       * Absent: a bare `canceled` reads as cancelled in the gateway, and no reasons are listed.
+       */
+      readonly providerRequests?: Pick<GatewayProviderRequestRepository, 'latest' | 'factsFor'>;
     },
   ) {}
 
@@ -139,6 +160,66 @@ export class FinancialLogConsumer implements EventConsumer {
       },
       tx,
     );
+  }
+
+  /**
+   * R8 A3: which of the four L4 headlines a `PaymentFailed` is, and the line under it — who
+   * cancelled, the rejection's reasons, or the real cause — written into `values`.
+   */
+  private async failureHeadline(
+    scope: TenantContext,
+    payment: PaymentRecord,
+    cause: 'REJECTED' | 'GATEWAY_FAILED',
+    values: Record<string, TemplateValue>,
+    tx: TransactionScope,
+  ): Promise<TemplateKey> {
+    const { words } = this.deps;
+    const requests = this.deps.providerRequests;
+    const note = payment.resolutionNote ?? null;
+    const status = failureStatusOf(note);
+    const bareCancel =
+      cause === 'GATEWAY_FAILED' && (status === 'canceled' || status === 'cancelled');
+    const request =
+      bareCancel && requests !== undefined
+        ? await requests.latest(scope, payment.id, 'CANCEL', tx)
+        : null;
+    const outcome = paymentFailureOutcome({
+      cause,
+      resolutionNote: note,
+      // Only a cancel that was SENT can have been what the provider then reported.
+      cancelRequest:
+        request !== null && SENT_CANCEL_STATES.has(request.state)
+          ? { byNexa: request.requestedByNexa === true }
+          : null,
+    });
+    switch (outcome.kind) {
+      case 'CANCELLED':
+        values['cancelledBy'] = words.cancelledBy(outcome.by);
+        return 'ops.financial.invoice_cancelled' as TemplateKey;
+      case 'EXPIRED':
+        return 'ops.financial.payment_expired' as TemplateKey;
+      case 'RECEIPT_REJECTED': {
+        let reasons: readonly string[] = [];
+        if (outcome.by === 'OPERATOR') {
+          // The operator's reason — mandatory, and already sent to the customer word for word.
+          const reason = oneLine(note);
+          reasons = reason === null ? [] : [reason];
+        } else if (requests !== undefined) {
+          const facts = await requests.factsFor(scope, payment.id, tx);
+          reasons = (facts?.rejectReasons ?? [])
+            .map((one) => oneLine(one, REJECT_REASON_MAX))
+            .filter((one): one is string => one !== null);
+        }
+        values['rejectReasons'] = words.rejectReasons(outcome.by, reasons);
+        return 'ops.financial.receipt_rejected' as TemplateKey;
+      }
+      case 'FAILED':
+        values['cause'] =
+          cause === 'REJECTED'
+            ? words.paymentFailure(cause)
+            : words.gatewayFailureCause(outcome.code);
+        return 'ops.financial.payment_failed' as TemplateKey;
+    }
   }
 
   private async render(
@@ -268,7 +349,6 @@ export class FinancialLogConsumer implements EventConsumer {
         if (found === null || found.payment.source !== 'NEXA') return null;
         const { payment, customer } = found;
         const values: Record<string, TemplateValue> = {
-          cause: words.paymentFailure(payload.cause),
           method: words.methodName(payment.method, payment.gatewayProvider),
           ...who(customer, words),
           reference: paymentTrackingCode(payment),
@@ -276,8 +356,10 @@ export class FinancialLogConsumer implements EventConsumer {
           at: payment.resolvedAt ?? new Date(event.occurredAt),
         };
         await this.withOrderCode(scope, payment, values, tx);
+        // R8 A3: one headline per outcome, derived from the payment row (`paymentFailureOutcome`).
+        const templateKey = await this.failureHeadline(scope, payment, payload.cause, values, tx);
         return {
-          templateKey: 'ops.financial.payment_failed' as TemplateKey,
+          templateKey,
           values,
           logType: 'PAYMENT_FAILED',
           buttons: [

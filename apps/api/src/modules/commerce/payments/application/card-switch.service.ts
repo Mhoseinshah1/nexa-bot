@@ -34,6 +34,7 @@ import {
   nextReceivingCard,
   type CardSwitchLimits,
 } from './card-switch-policy.js';
+import { readCardSwitchLimits } from './card-switch-limits.js';
 import type { ManualTransferInstruction } from './payment.service.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
 
@@ -432,15 +433,8 @@ export class CardSwitchService {
     );
   }
 
-  private async limits(scope: TenantContext, tx?: TransactionScope): Promise<CardSwitchLimits> {
-    const read = (
-      key: (typeof CARD_SWITCH_SETTING_KEYS)[keyof typeof CARD_SWITCH_SETTING_KEYS],
-    ): Promise<number> => this.deps.settings.valueOf<number>(scope, key, tx);
-    return {
-      maxSwitches: await read(CARD_SWITCH_SETTING_KEYS.MAX_SWITCHES),
-      cooldownSeconds: await read(CARD_SWITCH_SETTING_KEYS.COOLDOWN_SECONDS),
-      maxDistinctCards: await read(CARD_SWITCH_SETTING_KEYS.MAX_DISTINCT_CARDS),
-    };
+  private limits(scope: TenantContext, tx?: TransactionScope): Promise<CardSwitchLimits> {
+    return readCardSwitchLimits(this.deps.settings, scope, tx);
   }
 
   private paymentId(raw: string): PaymentId {

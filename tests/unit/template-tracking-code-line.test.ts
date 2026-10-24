@@ -54,6 +54,11 @@ const VALUES: TemplateValues = {
   expiresAt: AT,
   cardNumber: '6037991100001001',
   cardName: 'علی رضایی',
+  // R8 A2: the card invoice's rial amount, grouped card and deadline time, all required.
+  amountRial: '۲٬۵۵۰٬۰۰۰',
+  amountToman: '۲۵۵٬۰۰۰',
+  cardGrouped: '6037 9911 0000 1001',
+  expiresTime: AT,
 };
 
 const count = (text: string) => text.split(LINE).length - 1;

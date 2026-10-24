@@ -374,10 +374,15 @@ describe('R6: a stored text that lacks a token the key now requires', () => {
     await screen.findByRole('heading', { name: nameOf(CARD) });
   };
 
-  it('says «این متن {transferAmount} ندارد» and leaves the text as it is', async () => {
+  it('says «این متن {amountRial} ندارد» (R8 A2) and leaves the text as it is', async () => {
     await render('فاکتور قدیمی مدیر: {payable} {cardNumber} {reference} {expiresAt}');
-    const hint = await screen.findByTestId('override-lacks-token');
-    expect(hint.textContent).toContain('این متن {transferAmount} ندارد');
+    const hints = (await screen.findAllByTestId('override-lacks-token')).map(
+      (hint) => hint.textContent ?? '',
+    );
+    // R8 A2: the rial amount, the grouped card and the deadline's time are what the key now
+    // requires; {transferAmount} no longer is.
+    expect(hints.some((text) => text.includes('این متن {amountRial} ندارد'))).toBe(true);
+    expect(hints.some((text) => text.includes('{transferAmount}'))).toBe(false);
     // Nothing was rewritten: the editor still holds exactly the owner's words.
     expect(editor(CARD).value).toBe(
       'فاکتور قدیمی مدیر: {payable} {cardNumber} {reference} {expiresAt}',

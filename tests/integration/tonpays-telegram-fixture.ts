@@ -84,6 +84,11 @@ export class FakeTonPaysTelegram {
   changeMode: FakeWrite | 'NO_CARD' = 'OK';
   /** R6 item 2: when set, a card change answers with this new exact amount (`final_amount`). */
   changeFinalAmount: number | null = null;
+  /**
+   * R8 A1: TonPays' own exact figure for a create, from the requested amount. Unset, the
+   * requested amount plus 37 (a unique tail).
+   */
+  createFinalAmount: ((requested: number) => number) | null = null;
   /** What the status check answers: the invoice (`OK`), a timeout, a 5xx or a refusal. */
   checkMode: FakeWrite = 'OK';
   /**
@@ -152,7 +157,8 @@ export class FakeTonPaysTelegram {
         status: 'pending',
         paid: false,
         // The documented shape: TonPays' own figure may differ from the requested amount.
-        finalAmount: Number(request['amount']) + 37,
+        finalAmount:
+          this.createFinalAmount?.(Number(request['amount'])) ?? Number(request['amount']) + 37,
         cards: mode === 'NO_CARD' ? [] : [this.nextCard()],
         buyer: Number(request['buyer_chat_id']),
         remainingAmount: null,

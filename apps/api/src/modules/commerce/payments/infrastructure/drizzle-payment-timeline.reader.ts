@@ -38,7 +38,10 @@ import {
   walletEntries,
 } from '../../../../infrastructure/persistence/schema.js';
 import { PURCHASED_AS } from '../../provisioning/application/provisioner.service.js';
-import { PAYMENT_LOSE_TRACK_ACTION } from '../application/gateway-payment.service.js';
+import {
+  PAYMENT_LOSE_TRACK_ACTION,
+  PROVIDER_REJECTION_REASONS_ACTION,
+} from '../application/gateway-payment.service.js';
 import { RECONCILE_INQUIRY_ACTION } from '../application/payment.service.js';
 import type {
   PaymentTimelineFacts,
@@ -48,6 +51,7 @@ import type {
   TimelineNotificationFacts,
   TimelineOrderFacts,
   TimelineReinquireFacts,
+  TimelineRejectReasonsFacts,
 } from '../domain/payment-timeline.js';
 import type {
   PaymentTimelineReader,
@@ -250,6 +254,7 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
     const gateway = await this.gateway(q, tenantId, paymentId);
     const loseTrack = await this.loseTrack(q, tenantId, paymentId, limit);
     const reinquireRequests = await this.reinquireRequests(q, tenantId, paymentId, limit);
+    const rejectReasons = await this.rejectReasons(q, tenantId, paymentId, limit);
     const order =
       include.order && payment.orderId !== null && payment.state === 'CONFIRMED'
         ? await this.order(q, tenantId, payment.orderId, limit)
@@ -260,6 +265,7 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
       gateway,
       loseTrack,
       reinquireRequests,
+      rejectReasons,
       order,
       audit,
       payment: {
@@ -366,6 +372,47 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
    * provider status it recorded, and nothing else of `after`. Under `payments.view`: it is
    * the payment's own state change, which the detail already shows as UNKNOWN.
    */
+  /**
+   * R8 A6: the gateway's rejection reasons, from the `gateway_invoice.provider_rejection_reasons`
+   * audit rows `GatewayPaymentService` writes once per change — until now only in the audit
+   * section. Under `payments.view`, like `loseTrack`: they are the gateway's verdict on this
+   * payment. The assembler keeps the tokens and counts the rest; nothing else of `after`.
+   */
+  private async rejectReasons(
+    q: Executor,
+    tenantId: string,
+    paymentId: PaymentId,
+    limit: number,
+  ): Promise<TimelineRejectReasonsFacts[]> {
+    const rows = await q
+      .select({ id: auditLogs.id, at: auditLogs.occurredAt, after: auditLogs.after })
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.tenantId, tenantId),
+          eq(auditLogs.entityType, 'Payment'),
+          eq(auditLogs.entityId, paymentId),
+          eq(auditLogs.action, PROVIDER_REJECTION_REASONS_ACTION),
+          eq(auditLogs.result, 'SUCCESS'),
+        ),
+      )
+      .orderBy(asc(auditLogs.occurredAt), asc(auditLogs.id))
+      .limit(limit);
+    return rows.map((row) => {
+      const after = (row.after ?? {}) as Record<string, unknown>;
+      const reasons = Array.isArray(after['reasons'])
+        ? (after['reasons'] as unknown[]).filter((one): one is string => typeof one === 'string')
+        : [];
+      return {
+        id: row.id,
+        at: row.at,
+        providerStatus:
+          typeof after['providerStatus'] === 'string' ? after['providerStatus'] : null,
+        reasons,
+      };
+    });
+  }
+
   private async loseTrack(
     q: Executor,
     tenantId: string,

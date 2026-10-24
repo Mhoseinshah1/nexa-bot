@@ -95,6 +95,18 @@ export interface TimelineReinquireFacts {
   readonly at: Date;
 }
 
+/**
+ * R8 A6: one `gateway_invoice.provider_rejection_reasons` audit row — the gateway's reasons as
+ * they were when first seen or changed. Read under `payments.view`, like `loseTrack`.
+ */
+export interface TimelineRejectReasonsFacts {
+  readonly id: string;
+  readonly at: Date;
+  readonly providerStatus: string | null;
+  /** The reasons as the audit recorded them (sanitised provider text or tokens). */
+  readonly reasons: readonly string[];
+}
+
 /** The order this payment settled, behind `orders.view`. */
 export interface TimelineOrderFacts {
   readonly id: string;
@@ -186,6 +198,8 @@ export interface PaymentTimelineFacts {
   readonly gateway?: TimelineGatewayFacts | null;
   readonly loseTrack?: readonly TimelineLoseTrackFacts[];
   readonly reinquireRequests?: readonly TimelineReinquireFacts[];
+  /** R8 A6: the gateway's rejection reasons, once per change. */
+  readonly rejectReasons?: readonly TimelineRejectReasonsFacts[];
   /** Null when the payment settles no order, or the section is withheld. */
   readonly order?: TimelineOrderFacts | null;
   readonly audit?: readonly TimelineAuditFacts[];
@@ -323,6 +337,22 @@ export function assemblePaymentTimeline(
     );
   }
   for (const w of facts.walletEntries) {
+    /*
+     * R8 A6: a late gateway approval credited to the wallet is its own item, not one more
+     * wallet movement among the others — it is the one credit a closed payment can still make.
+     */
+    if (w.reason === 'GATEWAY_LATE_CREDIT' && w.direction === 'CREDIT') {
+      all.push(
+        sortable(w.createdAt, w.id, {
+          kind: 'GATEWAY_LATE_CREDITED',
+          at: w.createdAt.toISOString(),
+          entryId: w.id,
+          amountMinor: w.amountMinor.toString(),
+          currency: w.currency,
+        }),
+      );
+      continue;
+    }
     all.push(
       sortable(w.createdAt, w.id, {
         kind: 'WALLET_ENTRY',
@@ -455,6 +485,26 @@ export function assemblePaymentTimeline(
       sortable(r.at, r.id, {
         kind: 'GATEWAY_REINQUIRE_REQUESTED',
         at: r.at.toISOString(),
+      }),
+    );
+  }
+  for (const r of facts.rejectReasons ?? []) {
+    /*
+     * Tokens only: the timeline holds no free text, and a provider's prose reason is the
+     * provider's words about a customer's transfer. What is not a token is COUNTED, so an
+     * entry with no token still says reasons were given (the detail and the audit show them).
+     */
+    const tokens = r.reasons
+      .map((one) => machineCode(one))
+      .filter((one): one is string => one !== null)
+      .slice(0, 20);
+    all.push(
+      sortable(r.at, r.id, {
+        kind: 'GATEWAY_REJECT_REASONS',
+        at: r.at.toISOString(),
+        providerStatus: machineCode(r.providerStatus),
+        reasons: tokens,
+        withheldCount: r.reasons.length - tokens.length,
       }),
     );
   }

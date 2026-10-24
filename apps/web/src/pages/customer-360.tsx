@@ -199,9 +199,15 @@ export function UserDetailPage({
   mayViewPayments = false,
   mayViewTickets = false,
   mayViewBusinessChats = false,
+  initialTab = null,
   denied,
 }: {
   id: string;
+  /**
+   * R8 A4: the tab a link opens on (`?tab=financial`, the ops group's «🧾 تراکنش» button).
+   * A value that is not one of the tabs this viewer has opens «نمای کلی».
+   */
+  initialTab?: string | null;
   mayBlock: boolean;
   /** `users.trial.edit`: set or remove this customer's custom trial limit (WP6-B). */
   mayEditTrial: boolean;
@@ -385,10 +391,10 @@ export function UserDetailPage({
    * card and flashes it.
    */
   const tabs = customerTabs(mayViewMessages || mayMessage);
-  const [tabState, setTabState] = useState<{ id: string; tab: CustomerTab }>({
+  const [tabState, setTabState] = useState<{ id: string; tab: CustomerTab }>(() => ({
     id,
-    tab: 'overview',
-  });
+    tab: tabs.find((item) => item.id === initialTab)?.id ?? 'overview',
+  }));
   const chosen = tabState.id === id ? tabState.tab : 'overview';
   const tab = tabs.some((item) => item.id === chosen) ? chosen : 'overview';
   const selectTab = (next: CustomerTab) => setTabState({ id, tab: next });
