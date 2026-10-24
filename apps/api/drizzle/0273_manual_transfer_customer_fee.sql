@@ -1,0 +1,2 @@
+ALTER TABLE "payments" DROP CONSTRAINT "payments_customer_fee_check";--> statement-breakpoint
+ALTER TABLE "payments" ADD CONSTRAINT "payments_customer_fee_check" CHECK ((customer_fee_basis_points IS NULL AND customer_fee_amount IS NULL AND payable_amount IS NULL) OR (method IN ('GATEWAY', 'MANUAL_TRANSFER') AND customer_fee_basis_points BETWEEN 0 AND 10000 AND customer_fee_amount >= 0 AND payable_amount = amount + customer_fee_amount));

@@ -264,7 +264,9 @@ export const WIZARD_GATES: ReadonlyMap<string, WizardGate> = new Map<string, Wiz
     {
       kind: null,
       adoptAs: 'ORDER',
-      from: ['INVOICE_PENDING', 'INVOICE', 'INVOICE_LOADING'],
+      // Round 6: `NOTICE` too — a create refused because the buyer already holds an open
+      // invoice ends on a notice whose «🧾 مشاهدهٔ فاکتور باز» is this very tap.
+      from: ['INVOICE_PENDING', 'INVOICE', 'INVOICE_LOADING', 'NOTICE'],
     },
   ],
   /*
@@ -280,6 +282,10 @@ export const WIZARD_GATES: ReadonlyMap<string, WizardGate> = new Map<string, Wiz
    */
   ['PAY_SENT', { kind: null, adoptAs: 'ORDER', from: ['INVOICE'] }],
   ['GATEWAY_CARD_CHANGE', { kind: null, adoptAs: 'ORDER', from: ['INVOICE'] }],
+  // Round 6: cancel (ask, then confirm) and the refund-card prompt are drawn on the card invoice.
+  ['GATEWAY_CANCEL_ASK', { kind: null, adoptAs: 'ORDER', from: ['INVOICE'] }],
+  ['GATEWAY_CANCEL', { kind: null, adoptAs: 'ORDER', from: ['INVOICE'] }],
+  ['GATEWAY_REFUND_CARD', { kind: null, adoptAs: 'ORDER', from: ['INVOICE'] }],
   /*
    * R4 A1: «🔄 تغییر شماره کارت» is drawn only on the manual transfer invoice, and its answer
    * is that invoice again — edited in place, still `INVOICE` — with the next card.

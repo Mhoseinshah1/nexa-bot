@@ -603,9 +603,10 @@ export const topupCashbackPercentSchema = z
  *
  * An integer, never a float — the rate is money arithmetic's input. `0` is "no fee", and it
  * is every existing route's value. The ceiling is 100.00 %. A fee is only meaningful on a
- * route that settles through `GATEWAY`: a card-to-card transfer, a wallet settlement and an
- * operator's credit are never charged one, and `PaymentGatewayService.configure` refuses a
- * non-zero rate on any other route rather than storing a number nothing reads.
+ * route that settles through `GATEWAY` — or, since R6 item 4, through the manual card-to-card
+ * transfer (`routeTakesCustomerFee`): a wallet settlement and an operator's credit are never
+ * charged one, and `PaymentGatewayService.configure` refuses a non-zero rate on any other
+ * route rather than storing a number nothing reads.
  *
  * SNAPSHOTTED onto the payment when the attempt is created (`payments.customer_fee_*`),
  * like the top-up gift above, so changing the rate later cannot change what an open
@@ -618,6 +619,18 @@ export const customerFeeBasisPointsSchema = z
   .int()
   .min(CUSTOMER_FEE_BASIS_POINTS_MIN)
   .max(CUSTOMER_FEE_BASIS_POINTS_MAX);
+
+/**
+ * R6 item 4: whether a route may carry a customer fee. An external gateway always could
+ * (WP18). The manual card-to-card route can too: the same snapshot columns on the payment,
+ * the same `gatewayCustomerFeeMinor`, the same rule that the principal stays the payment's
+ * `amount` — what the wallet receives, what a refund returns and what the report books as
+ * revenue — and the fee sits beside it. Its rate defaults to 0, which behaves as before.
+ */
+export function routeTakesCustomerFee(provider: PaymentGatewayProvider): boolean {
+  const via = PAYMENT_GATEWAY_DESCRIPTORS[provider].settlesVia;
+  return via === 'GATEWAY' || via === 'MANUAL_TRANSFER';
+}
 
 /**
  * The fee on a principal, in the principal's own minor units: `principal × bps / 10000`,

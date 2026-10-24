@@ -3,6 +3,7 @@ import {
   PAYMENT_GATEWAY_DESCRIPTORS,
   errors,
   paymentGatewayProviderSchema,
+  routeTakesCustomerFee,
   type ActorContext,
   type AuditWriter,
   type Clock,
@@ -833,18 +834,16 @@ export class PaymentGatewayService {
           );
         }
         /*
-         * A customer fee exists only on a route that settles through `GATEWAY` (WP18,
-         * owner decision). A card-to-card transfer, a wallet settlement and an operator's
-         * credit are never charged one, so a non-zero rate anywhere else is a number
-         * nothing reads — refused, rather than stored for an operator to believe.
+         * A customer fee exists only on a route that settles through `GATEWAY` (WP18, owner
+         * decision) or, since R6 item 4, through the manual card-to-card transfer. A wallet
+         * settlement and an operator's credit are never charged one, so a non-zero rate
+         * anywhere else is a number nothing reads — refused, rather than stored for an
+         * operator to believe.
          */
-        if (
-          config.customerFeeBasisPoints !== 0 &&
-          PAYMENT_GATEWAY_DESCRIPTORS[provider].settlesVia !== 'GATEWAY'
-        ) {
+        if (config.customerFeeBasisPoints !== 0 && !routeTakesCustomerFee(provider)) {
           throw errors.validation(
             COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
-            'A customer fee applies only to an external gateway route.',
+            'A customer fee applies only to an external gateway or a card-to-card route.',
             { field: 'customerFeeBasisPoints' },
           );
         }
@@ -1273,6 +1272,27 @@ export class PaymentGatewayService {
         allowsPurpose(gateway, purpose) &&
         this.settlementMethodFor(gateway.provider) === method,
     );
+  }
+
+  /**
+   * R6 item 4: the customer fee, in basis points, the ACTIVE card-to-card route charges for
+   * this purpose — 0 when none is set or no such route is offered. Read inside the issuing
+   * transaction and SNAPSHOTTED onto the payment, exactly like the gateway fee; a payment
+   * already issued is never re-priced, so this is asked only when a NEW one is created.
+   */
+  async manualTransferFeeBasisPoints(
+    scope: TenantContext,
+    purpose: PaymentPurpose,
+    tx?: unknown,
+  ): Promise<number> {
+    const gateways = await this.deps.repository.list(scope, tx);
+    const route = gateways.find(
+      (gateway) =>
+        gateway.status === 'ACTIVE' &&
+        allowsPurpose(gateway, purpose) &&
+        this.settlementMethodFor(gateway.provider) === 'MANUAL_TRANSFER',
+    );
+    return route?.customerFeeBasisPoints ?? 0;
   }
 
   /** How the chosen route settles, from the descriptor rather than from its name. */

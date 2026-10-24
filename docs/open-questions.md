@@ -2869,6 +2869,49 @@ both are address blocks, the answer is egress from an Iranian-reachable address,
 Until then both sources failing is handled as an outage: per-source and loop backoff, and
 one operational alert per source with a recovery.
 
+RESOLVED IN PART (Round 6, 2026-10-23) — the `wallex.not_json` cause. Wallex answers 200 with
+`content-encoding: gzip` even to a request that never asked for it, and the outbound client
+read the raw gzip bytes as UTF-8. `safe-http.ts` now sends `accept-encoding: gzip, deflate, br`
+and decodes all three (the size cap applies to the DECOMPRESSED size). `nobitex.http_403`
+stays what the issue list says: Nobitex refuses the foreign address, which code cannot fix;
+the new per-source switch (`fx.source_nobitex_enabled`) takes it out of the rotation.
+
+## OQ-FX-04 — more USDT/IRT sources: Bitpin, Tabdeal, Ramzinex, Exir, OMPFinex, Tetherland (Round 6, 2026-10-23)
+
+The owner confirmed from the server that Wallex, Bitpin (`api.bitpin.ir`, `api.bitpin.org`), Ramzinex, Tabdeal, Exir, OMPFinex and Tetherland answer HTTP 200 (Nobitex 403). Reachability is not a verified best-bid shape, so none of the six is built. Exir, OMPFinex and Tetherland have the same question as below: official docs URL, public USDT/IRT order-book or ticker path, field names, unit, and one recorded body.
+
+NOT BUILT. Round 6 asked for new USDT/IRT adapters "from the official API docs only". The
+build session could not reach any of the three documentation sites (`docs.bitpin.ir`,
+`docs.tabdeal.org`, `docs.ramzinex.com`: DNS does not resolve from here), and a web search
+returned only unofficial clients (python-bitpin, unofficial-tabdeal-api, a Ramzinex MCP
+server and PHP wrapper) — evidence, not specification. Nothing in them states a public
+order-book response with enough certainty to write a parser, and a parser written from a
+guess is the exact failure `docs/real-panel-acceptance.md` records. So no adapter was added.
+The exact questions, one per exchange, each answered by one raw response and the docs page:
+
+1. **Bitpin.** What is the official public order-book (or ticker) endpoint for the Tether /
+   Toman market, on which host (`api.bitpin.ir` or `api.bitpin.org`)? The unofficial clients
+   suggest `GET /api/v1/mth/orderbooks/USDT_IRT/` and `GET /api/v1/mkt/tickers/`, unverified.
+   Is the symbol `USDT_IRT`; are prices number-strings or numbers; are they Toman or Rial;
+   is the book `{bids: [{price, amount, value}], asks: [...]}` or arrays? Is a timestamp given?
+2. **Tabdeal.** Which host (`api1.tabdeal.org` for the API, `api-web.tabdeal.org` for the
+   website backend) serves a PUBLIC order-book/depth for the Tether market without a key, at
+   what path, with which symbol spelling (`USDTIRT` or `USDT_IRT`)? Unit (Rial or Toman) and
+   whether `bids` are `[price, quantity]` pairs of strings.
+3. **Ramzinex.** The unofficial wrapper names `https://publicapi.ramzinex.com`. What is the
+   public order-book path for the USDT/IRR pair (it is addressed by a numeric pair id), what is
+   the pair id, and is the unit Rial? What are the field names of the buy and sell sides?
+
+For each: the official documentation URL, one recorded 200 body from the production server's
+address, and whether the response is compressed (the client now decodes gzip, deflate and br).
+An adapter needs only `read(baseAsset) -> best bid, currency, sourceAt` and a fixture copied
+from the docs; `FX_SOURCES`, `FX_SOURCE_ENABLED_SETTINGS` and the web labels are total over
+the source list, so adding one cannot skip its switch.
+
+Until then only two sources exist, so with the default agreement count of 2 a rate is stored
+only while BOTH answer and agree; with Nobitex blocked, the owner either enables
+`fx.accept_single_source` (Wallex alone) or the last stored rate prices for six hours.
+
 ## OQ-T-API-01 — `KeyboardButton.style`: its exact values
 
 Round T, button builder. The build session could not reach `core.telegram.org` (egress
@@ -4269,3 +4312,41 @@ header, status, error code and the signature formula; what follows is only what 
   (the documentation accepts it only when a webhook key exists in the panel). The operator pastes
   the page's webhook URL and the `whsec_` secret into TetraPay's panel; a webhook with no secret
   stored is accepted as an unauthenticated hint that only brings a verify forward.
+
+## Round 6 PR-3 — TonPays Telegram: cancel, refund, remainder (`docs/tonpays-telegram-gateway-audit.md` §19)
+
+Everything the TonPays API document (custom Telegram section, pages 13-20) states was built to
+it and is NOT listed here: the endpoints, the inquiry's `need_action_kind`, `remaining_*`,
+`refund_amount`, `refund_pending`, `reject_reasons` fields, the eight statuses, the refund body
+(`invoice_id`, `card_number`, `card_holder`, no amount), the remainder receipt going to
+`remaining_invoice_id` and answering `processing` on that invoice, and the 24 error codes. What
+the document does not say is below; each is read defensively (unknown is "no information",
+never an approval) until the real-provider acceptance (`OQ-WP10-01`) answers it.
+
+- **OQ-TPTG-21 — the shape of a `reject_reasons` element.** The document's examples show only
+  `[]`. Nexa reads an array of strings, an array of objects with a `message`/`text`/`reason`/
+  `code` string, or one string; anything else is no reason. The reasons are shown to the customer
+  as TonPays worded them (sanitised, at most ten of two hundred characters). Whether they are
+  Persian text or machine codes, and so whether a Persian mapping table is needed, is unknown.
+  The payment history therefore carries only token-shaped reasons (it holds no free text).
+- **OQ-TPTG-22 — the success body of `/cancel`.** The document gives the request and no
+  response. A 2xx with any JSON body is read as "cancelled"; a 2xx with an empty or non-JSON
+  body is `UNKNOWN` (never sent again), and the next inquiry — `canceled` — closes the payment.
+  If the real provider answers 204, the cancel will show as a lost answer until that inquiry.
+- **OQ-TPTG-23 — the unit of `remaining_amount` and `refund_amount`.** The document's example
+  (`request_amount` 50000, `remaining_amount` 12000) is consistent with Toman, the unit of
+  `amount`; they are shown as Toman and never used by settlement, credit or refund.
+- **OQ-TPTG-24 — what happens to an under- or overpaid invoice after Nexa's own deadline.**
+  Nexa offers the remainder receipt and the refund card until the payment's settlement deadline
+  (the review deadline once a receipt was acknowledged, else the 70 minutes); an approval after
+  it is `LATE_COMPLETION` and settles nothing, as before. Whether TonPays refunds or expires an
+  overpaid or short invoice on its own, and when it expires an unpaid `pending` one (which
+  decides whether a new top-up can ever hit `BUYER_HAS_PENDING_INVOICE` for an invoice Nexa has
+  already given up on), is unknown.
+- **OQ-TPTG-25 — whether a remainder receipt's acknowledgement should extend the review
+  window.** It does not: `recordProviderReview` is write-once, so the deadline stays the first
+  acknowledgement's plus 24 hours. The conservative reading; a longer window is the owner's call.
+- **OQ-TPTG-26 — which holder names the provider accepts.** The example is Latin ("Ali
+  Rezaei"); Nexa accepts letters and spaces in any script (three to sixty-four characters) and
+  the provider's `INVALID_REFUND_HOLDER` is shown if it disagrees. The example card
+  `6037991234567890` fails Luhn, so no checksum is applied locally.

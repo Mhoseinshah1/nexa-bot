@@ -614,6 +614,8 @@ describe('the TonPays rules', () => {
       processing: 'OPEN',
       completed: 'APPROVED',
       need_action: 'OPEN',
+      action_required_less: 'OPEN',
+      action_required_more: 'OPEN',
       rejected: 'UNSUCCESSFUL',
       expired: 'UNSUCCESSFUL',
       canceled: 'UNSUCCESSFUL',

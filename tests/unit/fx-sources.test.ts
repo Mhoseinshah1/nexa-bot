@@ -1,4 +1,8 @@
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import { gzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
+import { SafeHttpClient } from '../../apps/api/src/infrastructure/net/safe-http';
 import type { ProviderHttpClient, ProviderHttpRequest, ProviderHttpResult } from '@nexa/contracts';
 import {
   NOBITEX_BASE_URL,
@@ -216,5 +220,39 @@ describe('Wallex (fallback)', () => {
       client(() => ok('{"success":true,"result":{"ask":[],"bid":[]}}')),
     ).read('USDT');
     expect(empty).toMatchObject({ kind: 'UNAVAILABLE', code: 'wallex.no_bids' });
+  });
+});
+
+describe('Wallex over the real outbound client (Round 6)', () => {
+  it('reads a gzip body the server sent without being asked, through the whole stack', async () => {
+    const body = JSON.stringify({
+      success: true,
+      result: { bid: [{ price: '103500', quantity: '1', sum: '103500' }], ask: [] },
+    });
+    const server = createServer((_request, response) => {
+      // Wallex answers `content-encoding: gzip` whatever the request offered.
+      response.writeHead(200, { 'content-type': 'application/json', 'content-encoding': 'gzip' });
+      response.end(gzipSync(body));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('no port');
+    try {
+      const http = new SafeHttpClient({
+        allowLoopback: true,
+        totalTimeoutMs: 2_000,
+        maxResponseBytes: 256 * 1024,
+        maxRetries: 0,
+      }).forBase(`http://127.0.0.1:${String(address.port)}`);
+      const outcome = await new WallexFxSource(http).read('USDT');
+      expect(outcome).toMatchObject({
+        kind: 'READ',
+        reading: { source: 'WALLEX', rate: { mantissa: 103_500n, scale: 0 }, currency: 'IRT' },
+      });
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
   });
 });

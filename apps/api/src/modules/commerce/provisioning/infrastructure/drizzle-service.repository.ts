@@ -1093,7 +1093,11 @@ export class DrizzleServiceRepository implements ServiceRepository {
     scope: TenantContext,
     customerId: string,
     now: Date,
-  ): Promise<{ readonly listed: number; readonly serving: number }> {
+  ): Promise<{
+    readonly listed: number;
+    readonly serving: number;
+    readonly nearestExpiresAt: Date | null;
+  }> {
     const tenantId = requireTenantId(scope);
     const [row] = await this.db
       .select({
@@ -1103,6 +1107,13 @@ export class DrizzleServiceRepository implements ServiceRepository {
           AND NOT (${services.usageSyncedAt} IS NOT NULL
                    AND ${services.trafficLimitBytes} <> 0
                    AND ${services.trafficUsedBytes} >= ${services.trafficLimitBytes}))::int`,
+        // R6 item 3: the soonest deadline among the SERVING services (the same predicate), for
+        // the /start greeting's «نزدیک‌ترین انقضا». Null when none serves or none has a deadline.
+        nearestExpiresAt: sql<Date | null>`min(${services.expiresAt}) FILTER (WHERE ${services.state} = 'ACTIVE'
+          AND ${services.expiresAt} IS NOT NULL AND ${services.expiresAt} > ${now}
+          AND NOT (${services.usageSyncedAt} IS NOT NULL
+                   AND ${services.trafficLimitBytes} <> 0
+                   AND ${services.trafficUsedBytes} >= ${services.trafficLimitBytes}))`,
       })
       .from(services)
       .where(
@@ -1112,7 +1123,12 @@ export class DrizzleServiceRepository implements ServiceRepository {
           listedForCustomer(),
         ),
       );
-    return { listed: Number(row?.listed ?? 0), serving: Number(row?.serving ?? 0) };
+    const nearest = row?.nearestExpiresAt ?? null;
+    return {
+      listed: Number(row?.listed ?? 0),
+      serving: Number(row?.serving ?? 0),
+      nearestExpiresAt: nearest === null ? null : new Date(nearest),
+    };
   }
 
   async supportServicesForCustomer(

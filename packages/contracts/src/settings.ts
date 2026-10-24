@@ -103,6 +103,9 @@ import {
   FX_MAX_STALE_SECONDS_DEFAULT,
   FX_MAX_STALE_SECONDS_MAX,
   FX_MAX_STALE_SECONDS_MIN,
+  FX_MIN_AGREEING_SOURCES_DEFAULT,
+  FX_MIN_AGREEING_SOURCES_MAX,
+  FX_MIN_AGREEING_SOURCES_MIN,
   fxFallbackSourceSchema,
   fxSourceSchema,
   starsPerUsdtSchema,
@@ -1764,10 +1767,11 @@ export const SETTINGS = [
   {
     key: 'fx.primary_source',
     description:
-      'The public exchange this installation reads the USDT rate from first. Both sources ' +
-      'quote the best BID of their USDT order book (the price a buyer pays the merchant), ' +
-      'which is the side that never undercharges. Nobitex quotes Rial and Wallex Toman; ' +
-      'the service converts to the sales currency exactly (one Toman is ten Rial).',
+      'The source whose figure is STORED when several enabled sources agree. Every enabled ' +
+      'source is read (Round 6); this one only wins the tie. All sources quote the best BID ' +
+      'of their USDT order book (the price a buyer pays the merchant), which is the side ' +
+      'that never undercharges. Nobitex quotes Rial and Wallex Toman; the service converts ' +
+      'to the sales currency exactly (one Toman is ten Rial).',
     schema: fxSourceSchema,
     defaultValue: 'NOBITEX',
     configures: 'central_fx',
@@ -1779,11 +1783,65 @@ export const SETTINGS = [
   {
     key: 'fx.fallback_source',
     description:
-      'The source asked when the primary fails, rate-limits, or answers with an outlier. ' +
-      'NONE means primary only. The same source as the primary is accepted and means the ' +
-      'same thing as NONE.',
+      'The source whose figure is stored when the primary is not among the agreeing ' +
+      'sources. NONE, or the same source as the primary, means no second preference. It ' +
+      'does NOT switch a source off: that is the per-source `fx.source_*_enabled` keys.',
     schema: fxFallbackSourceSchema,
     defaultValue: 'WALLEX',
+    configures: 'central_fx',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'fx.source_nobitex_enabled',
+    description:
+      'Whether Nobitex is read at all. Off — the source is never called, whatever the ' +
+      'primary and fallback say. For a source that answers 403 to this server’s address.',
+    schema: z.boolean(),
+    defaultValue: true,
+    configures: 'central_fx',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'fx.source_wallex_enabled',
+    description: 'Whether Wallex is read at all. Off — the source is never called.',
+    schema: z.boolean(),
+    defaultValue: true,
+    configures: 'central_fx',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'fx.min_agreeing_sources',
+    description:
+      'How many enabled, healthy sources must agree with each other (within three percent) ' +
+      'before a rate is stored. Two by default: one source can be wrong, two independent ' +
+      'ones rarely are in the same way. Fewer healthy sources than this store nothing unless ' +
+      '`fx.accept_single_source` is on.',
+    schema: z.number().int().min(FX_MIN_AGREEING_SOURCES_MIN).max(FX_MIN_AGREEING_SOURCES_MAX),
+    defaultValue: FX_MIN_AGREEING_SOURCES_DEFAULT,
+    configures: 'central_fx',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'fx.accept_single_source',
+    description:
+      'When exactly ONE source is healthy, store its rate anyway. Off — the default — the ' +
+      'last stored rate keeps pricing until it is too old. On, a rate from one source is ' +
+      'still refused when it is more than fifteen percent from the last good one, and an ' +
+      'alert says only one source is active.',
+    schema: z.boolean(),
+    defaultValue: false,
     configures: 'central_fx',
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
@@ -1809,7 +1867,7 @@ export const SETTINGS = [
     key: 'fx.max_stale_seconds',
     description:
       'How old the last-known-good quote may be and still price a NEW foreign-denominated ' +
-      'invoice while every source is down (recorded as stale use). Past it, new invoices ' +
+      'invoice while every source is down (recorded as stale use). Six hours by default. Past it, new invoices ' +
       'through a central-rate route are refused with a customer message; invoices already ' +
       'issued keep their own snapshot. Floored at fx.fresh_ttl_seconds at read time.',
     schema: z.number().int().min(FX_MAX_STALE_SECONDS_MIN).max(FX_MAX_STALE_SECONDS_MAX),

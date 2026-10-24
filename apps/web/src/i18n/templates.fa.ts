@@ -293,6 +293,8 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   caption: 'توضیح فایل',
   cardName: 'نام صاحب کارت مقصد',
   cardNumber: 'شماره کارت مقصد',
+  maskedCard: 'کارت ثبت‌شده (پوشیده)',
+  reasons: 'دلیل‌های ردشدن (اعلام تون پی)',
   cashback: 'مبلغ کش‌بک',
   cashbackLine: 'خط کش‌بک',
   category: 'نام دسته',
@@ -458,7 +460,12 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   targetLimit: 'تعداد مجاز پس از افزایش',
   telegram: 'اتصال تلگرام',
   telegramId: 'شناسهٔ عددی تلگرام',
-  transferAmount: 'مبلغ واریز اعلام‌شده توسط تون پی',
+  transferAmount: 'مبلغ دقیق واریز (فقط ارقام)',
+  firstName: 'نام کوچک مشتری',
+  weekday: 'نام روز هفته',
+  nearestExpiry: 'نزدیک‌ترین انقضا',
+  date: 'تاریخ امروز (شمسی)',
+  time: 'ساعت (به وقت تهران)',
   telegramIdRandom: 'نشانهٔ انتخاب شناسهٔ تلگرام + تصادفی',
   template: 'الگو',
   tenantId: 'شناسهٔ مستأجر',
@@ -641,6 +648,8 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
 > = {
   // B1: the product's own description, the one customer-facing text on the pre-invoice.
   'bot.order.preinvoice': { description: 'توضیح محصول برای مشتری' },
+  // R6 item 4: on the card-to-card invoice the total is what must be TRANSFERRED.
+  'bot.payment.transfer_instructions': { total: 'مبلغ قابل پرداخت (اصل + کارمزد)' },
   'bot.channels.join_private_button': { number: 'شمارهٔ کانال در فهرست' },
   'bot.terms.required': { title: 'عنوان قوانین', body: 'متن قوانین' },
   'bot.service.delivery_tutorial': { text: 'متن آموزش پنل، همان‌طور که در پنل نوشته شده' },
@@ -786,7 +795,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.start.welcome_back': [
     'خوش‌آمد به مشتری قدیمی',
-    'پیام شروع برای مشتری‌ای که پیش‌تر از ربات استفاده کرده است.',
+    'پیام شروع برای مشتری‌ای که پیش‌تر از ربات استفاده کرده است. با متغیرهایی مثل {firstName} و {activeServices} که هنگام ارسال از اطلاعات خود همان مشتری پر می‌شوند.',
   ],
   'bot.command.start': [
     'توضیح دستور /start در فهرست دستورها',
@@ -1356,7 +1365,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.payment.transfer_instructions': [
     'فاکتور کارت‌به‌کارت',
-    'فاکتور پرداخت: کد پیگیری پرداخت، مبلغ قابل پرداخت، اطلاعات حساب مقصد و راهنمای پرداخت.',
+    'فاکتور پرداخت: کد پیگیری پرداخت، مبلغ بدون کارمزد و کارمزد (فقط اگر کارمزد مشتری فعال باشد)، مبلغ قابل پرداخت، اطلاعات حساب مقصد و راهنمای پرداخت.',
   ],
   'bot.payment.destination.bank': [
     'خط نام بانک در فاکتور',
@@ -1377,6 +1386,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.payment.copy_card_button': [
     'دکمهٔ کپی شمارهٔ کارت',
     'دکمه‌ای که شمارهٔ کارت را در حافظهٔ گوشی مشتری کپی می‌کند.',
+  ],
+  'bot.payment.copy_transfer_amount_button': [
+    'دکمهٔ کپی مبلغ دقیق',
+    'دکمه‌ای در فاکتور کارت‌به‌کارت تون پی که مبلغ دقیق واریز را فقط با ارقام و بدون جداکننده کپی می‌کند.',
   ],
   'bot.payment.copy_amount_button': [
     'دکمهٔ کپی مبلغ',
@@ -1707,6 +1720,138 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.payment.gateway_receipt_too_large': [
     'عکس فیش بزرگ‌تر از ۱۰ مگابایت',
     'وقتی عکس فیش از ۱۰ مگابایت بزرگ‌تر است؛ از مشتری عکس کوچک‌تری می‌خواهد.',
+  ],
+  'bot.payment.gateway_card_underpaid': [
+    'فاکتور کم‌پرداخت‌شده تون پی',
+    'مبلغ واریزی کمتر از فاکتور بوده؛ مبلغ و کارت مابقی، دکمه‌های کپی و ارسال رسید مابقی نمایش داده می‌شود.',
+  ],
+  'bot.payment.gateway_card_underpaid_receipt_sent': [
+    'رسید مابقی برای تون پی ارسال شد',
+    'رسید مابقی در حال ارسال است یا تون پی آن را دریافت کرده؛ هنوز چیزی تأیید نشده است.',
+  ],
+  'bot.payment.gateway_card_underpaid_unavailable': [
+    'اطلاعات مابقی در دسترس نیست',
+    'تون پی کم‌پرداختی را اعلام کرده اما کارت یا شناسهٔ مابقی را نفرستاده؛ از مشتری می‌خواهد وضعیت را دوباره بررسی کند.',
+  ],
+  'bot.payment.gateway_card_overpaid': [
+    'فاکتور بیش‌پرداخت‌شده تون پی',
+    'مبلغ واریزی بیشتر از فاکتور بوده؛ از مشتری می‌خواهد کارت بازگشت وجه را ثبت کند.',
+  ],
+  'bot.payment.gateway_card_overpaid_pending': [
+    'بازگشت مبلغ اضافه در حال بررسی',
+    'درخواست بازگشت وجه برای تون پی ثبت شده؛ کارت فقط به‌صورت پوشیده نمایش داده می‌شود.',
+  ],
+  'bot.payment.gateway_refund_card_prompt': [
+    'درخواست کارت بازگشت وجه',
+    'از مشتری شمارهٔ کارت و نام صاحب کارت را در دو خط می‌خواهد.',
+  ],
+  'bot.payment.gateway_refund_card_invalid': [
+    'اطلاعات کارت بازگشت وجه نامعتبر است',
+    'قالب شمارهٔ کارت یا نام صاحب کارت درست نبود؛ چیزی ذخیره یا ارسال نشد.',
+  ],
+  'bot.payment.gateway_refund_requested': [
+    'کارت بازگشت وجه ثبت شد',
+    'کارت بازگشت وجه پذیرفته شد و درخواست برای ارسال به تون پی صف شد؛ کارت پوشیده نمایش داده می‌شود.',
+  ],
+  'bot.payment.gateway_refund_not_allowed': [
+    'بازگشت وجه مجاز نیست',
+    'تون پی بازگشت وجه را برای این فاکتور نپذیرفته است.',
+  ],
+  'bot.payment.gateway_refund_card_refused': [
+    'شمارهٔ کارت بازگشت وجه پذیرفته نشد',
+    'تون پی شمارهٔ کارت را نپذیرفته؛ مشتری می‌تواند دوباره ثبت کند.',
+  ],
+  'bot.payment.gateway_refund_holder_refused': [
+    'نام صاحب کارت بازگشت وجه پذیرفته نشد',
+    'تون پی نام صاحب کارت را نپذیرفته؛ مشتری می‌تواند دوباره ثبت کند.',
+  ],
+  'bot.payment.gateway_refund_already_open': [
+    'درخواست بازگشت وجه از قبل باز است',
+    'برای این فاکتور بازگشت وجه ثبت شده؛ درخواست دوباره‌ای فرستاده نمی‌شود.',
+  ],
+  'bot.payment.gateway_refund_unknown': [
+    'پاسخ درخواست بازگشت وجه گم شد',
+    'نتیجهٔ درخواست بازگشت وجه نامعلوم است؛ درخواست دوباره خودکار فرستاده نمی‌شود.',
+  ],
+  'bot.payment.gateway_cancel_confirm': [
+    'پرسش لغو فاکتور',
+    'پیش از لغو فاکتور در انتظار پرداخت از مشتری تأیید می‌گیرد.',
+  ],
+  'bot.payment.gateway_cancel_requested': [
+    'در حال لغو فاکتور',
+    'درخواست لغو برای تون پی صف یا ارسال شده و نتیجه در همین پیام می‌آید.',
+  ],
+  'bot.payment.gateway_cancelled': [
+    'فاکتور لغو شد',
+    'فاکتور به درخواست مشتری لغو شد و مبلغی ثبت نشد.',
+  ],
+  'bot.payment.gateway_cancel_not_allowed_processing': [
+    'لغو در حال بررسی مجاز نیست',
+    'فاکتور در حال بررسی رسید است و تون پی لغو را نمی‌پذیرد.',
+  ],
+  'bot.payment.gateway_cancel_not_allowed_less': [
+    'لغو فاکتور کم‌پرداخت مجاز نیست',
+    'فاکتور کم‌پرداخت شده و تا پرداخت مابقی لغو نمی‌شود.',
+  ],
+  'bot.payment.gateway_cancel_not_allowed_more': [
+    'لغو فاکتور بیش‌پرداخت مجاز نیست',
+    'فاکتور بیش‌پرداخت شده و تا ثبت کارت بازگشت وجه لغو نمی‌شود.',
+  ],
+  'bot.payment.gateway_not_pending': [
+    'فاکتور دیگر در انتظار پرداخت نیست',
+    'تون پی اعلام کرده فاکتور در وضعیت انتظار پرداخت نیست؛ درخواست انجام نشد.',
+  ],
+  'bot.payment.gateway_cancel_unknown': [
+    'پاسخ درخواست لغو گم شد',
+    'نتیجهٔ لغو نامعلوم است؛ درخواست دوباره خودکار فرستاده نمی‌شود.',
+  ],
+  'bot.payment.gateway_buyer_pending': [
+    'فاکتور باز در انتظار پرداخت',
+    'مشتری فاکتور باز دارد و فاکتور تازه ساخته نشد؛ دکمه‌ای فاکتور باز را نشان می‌دهد.',
+  ],
+  'bot.payment.gateway_buyer_processing': [
+    'فاکتور باز در حال بررسی',
+    'فاکتور باز مشتری در حال بررسی است و فاکتور تازه ساخته نشد.',
+  ],
+  'bot.payment.gateway_buyer_less': [
+    'فاکتور باز کم‌پرداخت‌شده',
+    'فاکتور باز مشتری کم‌پرداخت شده؛ فاکتور تازه ساخته نشد و مشتری به فاکتور باز هدایت می‌شود.',
+  ],
+  'bot.payment.gateway_buyer_more': [
+    'فاکتور باز بیش‌پرداخت‌شده',
+    'فاکتور باز مشتری بیش‌پرداخت شده؛ فاکتور تازه ساخته نشد و مشتری به فاکتور باز هدایت می‌شود.',
+  ],
+  'bot.payment.gateway_card_rejected': [
+    'پرداخت توسط تون پی رد شد',
+    'تون پی پرداخت را رد کرده و دلیل‌های اعلام‌شده را نشان می‌دهد؛ مبلغی ثبت نشده است.',
+  ],
+  'bot.payment.gateway_card_receipt_empty': [
+    'تصویر رسید خالی بود',
+    'تون پی تصویر خالی را نپذیرفته؛ کارت دوباره نشان داده می‌شود.',
+  ],
+  'bot.payment.gateway_card_receipt_invoice': [
+    'رسید با فاکتور مطابقت نداشت',
+    'تون پی رسید را به فاکتور مربوط نکرد؛ مشتری وضعیت را بررسی می‌کند.',
+  ],
+  'bot.payment.gateway_cancel_button': [
+    'دکمهٔ لغو فاکتور تون پی',
+    'فاکتور در انتظار پرداخت را پس از یک پرسش لغو می‌کند؛ فقط برای فاکتور pending نمایش داده می‌شود.',
+  ],
+  'bot.payment.gateway_cancel_confirm_button': [
+    'دکمهٔ تأیید لغو فاکتور',
+    'لغو را برای تون پی ثبت می‌کند.',
+  ],
+  'bot.payment.gateway_remainder_receipt_button': [
+    'دکمهٔ ارسال رسید مابقی',
+    'رسید واریز مابقی را برای تون پی می‌فرستد؛ فقط برای فاکتور کم‌پرداخت‌شده نمایش داده می‌شود.',
+  ],
+  'bot.payment.gateway_refund_card_button': [
+    'دکمهٔ ثبت کارت بازگشت وجه',
+    'شمارهٔ کارت و نام صاحب کارت را برای بازگرداندن مبلغ اضافه می‌گیرد؛ فقط برای فاکتور بیش‌پرداخت‌شده نمایش داده می‌شود.',
+  ],
+  'bot.payment.gateway_open_invoice_button': [
+    'دکمهٔ مشاهدهٔ فاکتور باز',
+    'فاکتور بازی را که مانع ساخت فاکتور تازه شده نشان می‌دهد.',
   ],
 
   // --- My services ------------------------------------------------------------------

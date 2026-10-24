@@ -77,6 +77,8 @@ function toView(status: FxStatus): FxStatusResponse {
     fallbackSource: status.settings.fallback,
     freshTtlSeconds: status.settings.freshTtlSeconds,
     maxStaleSeconds: status.settings.maxStaleSeconds,
+    minAgreeingSources: status.settings.minAgreeingSources,
+    acceptSingleSource: status.settings.acceptSingleSource,
     state: status.state,
     quote:
       status.quote === null
@@ -96,6 +98,7 @@ function toView(status: FxStatus): FxStatusResponse {
     lastErrorCode: status.row?.lastErrorCode ?? null,
     sources: status.sources.map((source) => ({
       source: source.source,
+      enabled: source.enabled,
       lastSuccessAt: iso(source.lastSuccessAt),
       lastFailureAt: iso(source.lastFailureAt),
       lastFailureCode: source.lastFailureCode,

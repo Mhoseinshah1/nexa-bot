@@ -7,6 +7,7 @@ import {
   PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MIN,
   formatBasisPointsPercent,
   parsePercentBasisPoints,
+  routeTakesCustomerFee,
   takesFixedRate,
   type PaymentGatewayListResponse,
   type PaymentGatewayProvider,
@@ -265,10 +266,11 @@ export function conversionRateOf(value: string): string | null | undefined {
   return minor === null || /^0+$/u.test(minor) ? undefined : minor;
 }
 
+/** Whether the route's form offers the customer fee: a gateway, and (R6 item 4) card-to-card. */
 export function takesCustomerFee(provider: string): boolean {
   return (
     provider in PAYMENT_GATEWAY_DESCRIPTORS &&
-    PAYMENT_GATEWAY_DESCRIPTORS[provider as PaymentGatewayProvider].settlesVia === 'GATEWAY'
+    routeTakesCustomerFee(provider as PaymentGatewayProvider)
   );
 }
 
@@ -297,6 +299,7 @@ export function minorOf(value: string): string | null {
 export function PaymentGatewaysPage({
   denied,
   mayEdit,
+  maySettingsEdit = false,
   tabs,
   panel,
   provider,
@@ -304,6 +307,8 @@ export function PaymentGatewaysPage({
 }: {
   denied: boolean;
   mayEdit: boolean;
+  /** `settings.view` and `settings.edit`, for the FX section's per-source switches. */
+  maySettingsEdit?: boolean;
   /**
    * UX Batch 01, item 8: set, this is ONE payment method's view — its settings, its
    * actions and the forms they open, directly beneath, on a page of its own. Unset, this is
@@ -1419,7 +1424,9 @@ export function PaymentGatewaysPage({
         Package FX: the central exchange rate beside the routes it prices. Its own query
         and its own card, so a rate source being down never blanks the routes table.
       */}
-        {provider === undefined && <FxSection denied={denied} mayEdit={mayEdit} />}
+        {provider === undefined && (
+          <FxSection denied={denied} mayEdit={mayEdit} maySettingsEdit={maySettingsEdit} />
+        )}
 
         {/*
         The generated callback URL, for diagnostics (WP11A §14), on the route's own view.

@@ -22,6 +22,22 @@ export const TONPAYS_TELEGRAM_CHECK_PATH_PREFIX = '/api/custom/v1/invoices/check
 export const TONPAYS_TELEGRAM_INVOICE_PATH_PREFIX = '/api/custom/v1/invoices/';
 export const TONPAYS_TELEGRAM_CHANGE_CARD_SUFFIX = '/change-card';
 export const TONPAYS_TELEGRAM_RECEIPT_SUFFIX = '/receipt';
+/** Documented (Round 6): `POST /api/custom/v1/invoices/{invoice_id}/cancel`, no body. */
+export const TONPAYS_TELEGRAM_CANCEL_SUFFIX = '/cancel';
+/**
+ * Documented (Round 6): `POST /api/custom/v1/invoices/{invoice_id}/refund` with the JSON body
+ * `{ invoice_id, card_number, card_holder }` — and NO amount: the provider knows what it owes.
+ */
+export const TONPAYS_TELEGRAM_REFUND_SUFFIX = '/refund';
+
+/**
+ * Documented (Round 6): the two statuses an inquiry reports when the customer's transfer did
+ * not match the invoice. Neither is an approval — only `completed` with `paid === true` is
+ * (`tonpaysVerdict`) — so each is an OPEN status that carries a next step for the customer.
+ * `need_action` (the older transcription) stays an open status too.
+ */
+export const TONPAYS_TELEGRAM_STATUS_LESS = 'action_required_less';
+export const TONPAYS_TELEGRAM_STATUS_MORE = 'action_required_more';
 /** Documented: the multipart field the receipt image travels in. */
 export const TONPAYS_TELEGRAM_RECEIPT_FIELD = 'file';
 
@@ -40,13 +56,27 @@ export const TONPAYS_TELEGRAM_INVOICE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/u;
 export const TONPAYS_TELEGRAM_RECEIPT_MAX_BYTES = 10_000_000;
 
 /**
- * NEXA (`OQ-TPTG-07`): "image" is all the documentation says. Telegram re-encodes a photo
- * to JPEG; a receipt is sent only when its magic bytes are JPEG or PNG.
+ * Documented (Round 6): the receipt types the provider accepts — JPEG, PNG, WebP and GIF.
+ * NEXA: the type is decided by the file's MAGIC BYTES, never by Telegram's declared type or a
+ * file name. Telegram re-encodes a photo to JPEG, so WebP and GIF can only arrive as an image
+ * sent as a document; those are accepted when the declared type is one of these, and sniffed
+ * again before anything is uploaded.
  */
-export const TONPAYS_TELEGRAM_RECEIPT_MIME_TYPES = ['image/jpeg', 'image/png'] as const;
+export const TONPAYS_TELEGRAM_RECEIPT_MIME_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+] as const;
 export type TonPaysTelegramReceiptMimeType = (typeof TONPAYS_TELEGRAM_RECEIPT_MIME_TYPES)[number];
 
-/** Documented: the nine error codes of the custom API. */
+/**
+ * Documented (TonPays API document, custom Telegram error table, page 20): the error codes of
+ * the custom API. The first nine are the original transcription; the rest are the Round 6
+ * additions for cancel, refund, a buyer who already holds an open invoice, and the
+ * receipt/remainder checks — the table in full, 24 codes. A code outside it is `REFUSED` and
+ * stored verbatim.
+ */
 export const TONPAYS_TELEGRAM_ERROR_CODES = [
   'WRONG_API_KEY_KIND',
   'GATEWAY_NOT_APPROVED',
@@ -57,6 +87,21 @@ export const TONPAYS_TELEGRAM_ERROR_CODES = [
   'RECEIPT_TOO_LARGE',
   'RATE_LIMIT_EXCEEDED',
   'INVOICE_NOT_FOUND',
+  'INVOICE_ID_MISMATCH',
+  'NOT_PENDING',
+  'REMAINDER_INVOICE_MISSING',
+  'EMPTY_RECEIPT',
+  'CANCEL_NOT_ALLOWED_PROCESSING',
+  'CANCEL_NOT_ALLOWED_NEED_ACTION_LESS',
+  'CANCEL_NOT_ALLOWED_NEED_ACTION_MORE',
+  'BUYER_HAS_PENDING_INVOICE',
+  'BUYER_HAS_PROCESSING_INVOICE',
+  'BUYER_HAS_NEED_ACTION_LESS',
+  'BUYER_HAS_NEED_ACTION_MORE',
+  'REFUND_NOT_ALLOWED',
+  'INVALID_REFUND_CARD',
+  'INVALID_REFUND_HOLDER',
+  'REFUND_ALREADY_OPEN',
 ] as const;
 export type TonPaysTelegramErrorCode = (typeof TONPAYS_TELEGRAM_ERROR_CODES)[number];
 
@@ -77,7 +122,48 @@ export const TONPAYS_TELEGRAM_CONFIGURATION_ERROR_CODES: readonly TonPaysTelegra
 export const TONPAYS_TELEGRAM_RECEIPT_ERROR_CODES: readonly TonPaysTelegramErrorCode[] = [
   'INVALID_RECEIPT_TYPE',
   'RECEIPT_TOO_LARGE',
+  'EMPTY_RECEIPT',
 ];
+
+/**
+ * Round 6: the buyer already holds an open invoice with the provider, so a create is refused —
+ * definitely not processed. `PENDING` is the one Nexa may resolve itself (cancel the customer's
+ * OWN pending invoice and retry the create once); the other three name an invoice that cannot
+ * be cancelled, so the customer is shown that invoice and its next step instead.
+ */
+export const TONPAYS_TELEGRAM_BUYER_CONFLICT_ERROR_CODES: readonly TonPaysTelegramErrorCode[] = [
+  'BUYER_HAS_PENDING_INVOICE',
+  'BUYER_HAS_PROCESSING_INVOICE',
+  'BUYER_HAS_NEED_ACTION_LESS',
+  'BUYER_HAS_NEED_ACTION_MORE',
+];
+
+/** Round 6: a cancel the provider refused because the invoice is no longer `pending`. */
+export const TONPAYS_TELEGRAM_CANCEL_REFUSAL_ERROR_CODES: readonly TonPaysTelegramErrorCode[] = [
+  'CANCEL_NOT_ALLOWED_PROCESSING',
+  'CANCEL_NOT_ALLOWED_NEED_ACTION_LESS',
+  'CANCEL_NOT_ALLOWED_NEED_ACTION_MORE',
+  'NOT_PENDING',
+];
+
+/** Round 6: a refund the provider refused. */
+export const TONPAYS_TELEGRAM_REFUND_REFUSAL_ERROR_CODES: readonly TonPaysTelegramErrorCode[] = [
+  'REFUND_NOT_ALLOWED',
+  'INVALID_REFUND_CARD',
+  'INVALID_REFUND_HOLDER',
+  'REFUND_ALREADY_OPEN',
+];
+
+/**
+ * Round 6: a create is retried ONCE after the customer's own pending invoice was cancelled
+ * to make room (`BUYER_HAS_PENDING_INVOICE`). The refusal is a readable 4xx — no invoice was
+ * made — so the same order id may be sent again; a second such refusal is final.
+ */
+export const TONPAYS_TELEGRAM_BUYER_CONFLICT_RETRY_MAX = 1;
+
+/** Round 6: the most `reject_reasons` kept and the longest one, after sanitising. */
+export const TONPAYS_TELEGRAM_REJECT_REASONS_MAX = 10;
+export const TONPAYS_TELEGRAM_REJECT_REASON_MAX_LENGTH = 200;
 
 /**
  * NEXA (audit §9.5, `OQ-TPTG-10`): the custom API's rate limit is undocumented. Every call
@@ -203,3 +289,47 @@ export const GATEWAY_RECEIPT_CAPTURE_CLOSE_REASONS = [
 ] as const;
 export type GatewayReceiptCaptureCloseReason =
   (typeof GATEWAY_RECEIPT_CAPTURE_CLOSE_REASONS)[number];
+
+/**
+ * Round 6: what the customer asked the PROVIDER to do for an invoice, as a request row the
+ * gateway worker sends (never while Telegram waits).
+ *
+ * - `CANCEL` — `POST /{id}/cancel`; only a `pending` invoice can be cancelled.
+ * - `REFUND` — `POST /{id}/refund` for an overpayment (`action_required_more`), with the
+ *   customer's refund card; the provider decides the amount, Nexa sends none.
+ */
+export const GATEWAY_PROVIDER_REQUEST_KINDS = ['CANCEL', 'REFUND'] as const;
+export type GatewayProviderRequestKind = (typeof GATEWAY_PROVIDER_REQUEST_KINDS)[number];
+
+/**
+ * The same six states, and the same rules, as `GATEWAY_CARD_CHANGE_STATES`: `SENT` is stamped
+ * and committed BEFORE the call, a row reclaimed with the stamp set is `UNKNOWN` and is never
+ * sent again, and only the provider's own `RATE_LIMIT_EXCEEDED` is `RATE_LIMITED`.
+ */
+export const GATEWAY_PROVIDER_REQUEST_STATES = [
+  'REQUESTED',
+  'SENT',
+  'APPLIED',
+  'REFUSED',
+  'RATE_LIMITED',
+  'UNKNOWN',
+] as const;
+export type GatewayProviderRequestState = (typeof GATEWAY_PROVIDER_REQUEST_STATES)[number];
+
+/** Which next step an inquiry told the customer they owe: the rest of the money, or a refund card. */
+export const GATEWAY_PROVIDER_NEED_KINDS = ['LESS', 'MORE'] as const;
+export type GatewayProviderNeedKind = (typeof GATEWAY_PROVIDER_NEED_KINDS)[number];
+
+/**
+ * Round 6 (refund card, validated locally BEFORE anything is stored or sent): sixteen digits
+ * (the provider's document shows `6037991234567890`, which does not pass Luhn, so no checksum
+ * is applied) and a holder name of letters and spaces (`Ali Rezaei` in the document). The
+ * provider validates again (`INVALID_REFUND_CARD`, `INVALID_REFUND_HOLDER`).
+ */
+export const REFUND_CARD_DIGITS = 16;
+export const REFUND_HOLDER_MIN_LENGTH = 3;
+export const REFUND_HOLDER_MAX_LENGTH = 64;
+
+/** The ciphertext of a refund request's card and holder is wiped when its send is stamped. */
+export const GATEWAY_REFUND_CARD_MASK_PREFIX_DIGITS = 6;
+export const GATEWAY_REFUND_CARD_MASK_SUFFIX_DIGITS = 4;

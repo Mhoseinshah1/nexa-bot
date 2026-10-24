@@ -572,6 +572,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     policy: GatewayCardChangePolicy | null,
     now: Date,
     tx: unknown,
+    finalAmount: bigint | null = null,
   ): Promise<number> {
     const tenantId = requireTenantId(scope);
     // The invoice row's lock first: two writers of one attempt's cards are serialised here.
@@ -611,6 +612,8 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         cardChangeShown: policy?.showChangeCard ?? null,
         cardChangeCooldownUntil: cooldownUntil(policy, now),
         cardChangeExhausted: policy?.exhausted ?? null,
+        // R6 item 2: the new exact amount, when the change answer carried one.
+        ...(finalAmount === null ? {} : { finalAmount }),
         updatedAt: now,
       })
       .where(and(eq(gatewayInvoices.tenantId, tenantId), eq(gatewayInvoices.paymentId, paymentId)));

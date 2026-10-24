@@ -168,7 +168,12 @@ describe('the templates carry no id line and no English enum (global rules 1 and
       expect(templateDefinition(key).digits, key).toBe('PERSIAN');
     }
     const customerFacing = TEMPLATES.filter((template) => template.key.startsWith('bot.'));
-    expect(customerFacing.some((template) => 'digits' in template)).toBe(false);
+    // Latin digits everywhere a customer reads, with ONE decision of the owner's: R6 item 3,
+    // the two /start greetings, whose «۲ آبان ۱۴۰۵», «۱۸:۳۰» and «۵ روز» are written in Persian
+    // digits. Pinned to exactly those two, so a third customer text cannot join unreviewed.
+    expect(
+      customerFacing.filter((template) => 'digits' in template).map((template) => template.key),
+    ).toEqual(['bot.start.welcome', 'bot.start.welcome_back']);
   });
 });
 

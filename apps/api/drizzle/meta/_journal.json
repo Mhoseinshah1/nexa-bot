@@ -1914,10 +1914,24 @@
       "breakpoints": true
     },
     {
-      "idx": 276,
+      "idx": 273,
       "version": "7",
-      "when": 1792787190683,
-      "tag": "0276_tetrapay_gateway",
+      "when": 1792786995658,
+      "tag": "0273_manual_transfer_customer_fee",
+      "breakpoints": true
+    },
+    {
+      "idx": 274,
+      "version": "7",
+      "when": 1792816491586,
+      "tag": "0274_tonpays_telegram_cancel_refund",
+      "breakpoints": true
+    },
+    {
+      "idx": 275,
+      "version": "7",
+      "when": 1792821527376,
+      "tag": "0275_tetrapay_gateway",
       "breakpoints": true
     }
   ]

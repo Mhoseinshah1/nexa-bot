@@ -3,6 +3,8 @@ import type { TenantContext } from '@nexa/contracts';
 import { DrizzleCustomerRepository } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer.repository';
 import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
 import { DrizzleGatewayInvoiceRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-invoice.repository';
+import { DrizzleGatewayProviderRequestRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-provider-request.repository';
+import { SecretCipherRefundCardSealer } from '../../apps/api/src/modules/commerce/payments/infrastructure/refund-card-sealer';
 import { DrizzleGatewayCardTransferRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-card-transfer.repository';
 import {
   DrizzleGatewayCallBudget,
@@ -38,6 +40,17 @@ export interface FakeTelegramInvoice {
   paid: unknown;
   finalAmount: number;
   cards: string[];
+  /** The buyer this invoice was created for (`buyer_chat_id`), for the one-open-invoice rule. */
+  buyer: number;
+  /** The document's `action_required_*` fields (page 17), as the inquiry answers them. */
+  remainingAmount: number | null;
+  remainingInvoiceId: string | null;
+  remainingCardNumber: string | null;
+  remainingCardHolder: string | null;
+  remainingReceiptReceived: boolean;
+  refundAmount: number | null;
+  refundPending: boolean;
+  rejectReasons: unknown[];
 }
 
 export type FakeWrite =
@@ -56,8 +69,21 @@ export class FakeTonPaysTelegram {
   readonly checks: string[] = [];
   readonly changes: RecordedCall[] = [];
   readonly receipts: RecordedCall[] = [];
+  readonly cancels: RecordedCall[] = [];
+  readonly refunds: RecordedCall[] = [];
+  /**
+   * The document's one-open-invoice rule (`BUYER_HAS_*`, page 20). Off by default: most cases
+   * here create several attempts for one buyer and are not about that rule.
+   */
+  enforceOneOpenInvoice = false;
+  /** What `/cancel` answers: success, or a failure / documented refusal. */
+  cancelMode: FakeWrite = 'OK';
+  /** What `/refund` answers: the document's success body, or a failure / documented refusal. */
+  refundMode: FakeWrite = 'OK';
   createMode: FakeWrite | 'NO_CARD' | 'TIMEOUT_AFTER_CREATING' = 'OK';
   changeMode: FakeWrite | 'NO_CARD' = 'OK';
+  /** R6 item 2: when set, a card change answers with this new exact amount (`final_amount`). */
+  changeFinalAmount: number | null = null;
   /** What the status check answers: the invoice (`OK`), a timeout, a 5xx or a refusal. */
   checkMode: FakeWrite = 'OK';
   /**
@@ -97,6 +123,26 @@ export class FakeTonPaysTelegram {
       if (mode === 'SERVER_ERROR') return json(502, { error: 'bad gateway' });
       if (mode === 'TIMEOUT') throw new Error('socket hang up');
       const request = JSON.parse(body) as Record<string, unknown>;
+      /*
+       * The document's one-open-invoice rule: a buyer with an invoice that is not final is
+       * refused with the code naming that invoice's state (`BUYER_HAS_*`, page 20).
+       */
+      const open = (this.enforceOneOpenInvoice ? [...this.invoices.values()] : []).find(
+        (one) =>
+          one.buyer === Number(request['buyer_chat_id']) &&
+          ['pending', 'processing', 'action_required_less', 'action_required_more'].includes(
+            one.status,
+          ),
+      );
+      if (open !== undefined) {
+        const code = {
+          pending: 'BUYER_HAS_PENDING_INVOICE',
+          processing: 'BUYER_HAS_PROCESSING_INVOICE',
+          action_required_less: 'BUYER_HAS_NEED_ACTION_LESS',
+          action_required_more: 'BUYER_HAS_NEED_ACTION_MORE',
+        }[open.status]!;
+        return json(409, { detail: { code, message: 'buyer has an open invoice' } });
+      }
       this.seq += 1;
       const invoiceId = `TPT-${String(this.seq).padStart(6, '0')}`;
       const invoice: FakeTelegramInvoice = {
@@ -108,6 +154,15 @@ export class FakeTonPaysTelegram {
         // The documented shape: TonPays' own figure may differ from the requested amount.
         finalAmount: Number(request['amount']) + 37,
         cards: mode === 'NO_CARD' ? [] : [this.nextCard()],
+        buyer: Number(request['buyer_chat_id']),
+        remainingAmount: null,
+        remainingInvoiceId: null,
+        remainingCardNumber: null,
+        remainingCardHolder: null,
+        remainingReceiptReceived: false,
+        refundAmount: null,
+        refundPending: false,
+        rejectReasons: [],
       };
       this.invoices.set(invoiceId, invoice);
       if (mode === 'TIMEOUT_AFTER_CREATING') throw new Error('socket hang up');
@@ -135,6 +190,7 @@ export class FakeTonPaysTelegram {
       if (checkMode === 'TIMEOUT') throw new Error('socket hang up');
       const invoice = this.invoices.get(invoiceId);
       if (invoice === undefined) return json(404, { detail: { code: 'INVOICE_NOT_FOUND' } });
+      // The document's inquiry answer (page 14 / 17), every field it lists.
       return json(200, {
         invoice_id: invoice.invoiceId,
         order_id: invoice.orderId,
@@ -142,6 +198,25 @@ export class FakeTonPaysTelegram {
         final_amount: invoice.finalAmount,
         status: invoice.status,
         paid: invoice.paid,
+        buyer_username: null,
+        show_change_card: false,
+        change_card_cooldown_seconds: 0,
+        change_card_exhausted: false,
+        status_label: invoice.status,
+        need_action_kind:
+          invoice.status === 'action_required_less'
+            ? 'less'
+            : invoice.status === 'action_required_more'
+              ? 'more'
+              : null,
+        remaining_amount: invoice.remainingAmount,
+        remaining_invoice_id: invoice.remainingInvoiceId,
+        remaining_card_number: invoice.remainingCardNumber,
+        remaining_card_holder: invoice.remainingCardHolder,
+        remaining_receipt_received: invoice.remainingReceiptReceived,
+        refund_amount: invoice.refundAmount,
+        reject_reasons: invoice.rejectReasons,
+        refund_pending: invoice.refundPending,
       });
     }
 
@@ -157,11 +232,13 @@ export class FakeTonPaysTelegram {
       if (invoice === undefined) return json(404, { detail: { code: 'INVOICE_NOT_FOUND' } });
       const card = this.nextCard();
       invoice.cards.push(card);
+      if (this.changeFinalAmount !== null) invoice.finalAmount = this.changeFinalAmount;
       if (mode === 'TIMEOUT') throw new Error('socket hang up');
       if (mode === 'NO_CARD') return json(200, { show_change_card: true });
       return json(200, {
         card_number: card,
         card_name: 'مریم احمدی',
+        ...(this.changeFinalAmount === null ? {} : { final_amount: this.changeFinalAmount }),
         show_change_card: true,
         change_card_cooldown_seconds: 60,
         change_card_exhausted: false,
@@ -171,8 +248,25 @@ export class FakeTonPaysTelegram {
     const receipt = /^\/api\/custom\/v1\/invoices\/([^/]+)\/receipt$/u.exec(path);
     if (receipt !== null && method === 'POST') {
       this.receipts.push(call);
-      const invoice = this.invoices.get(decodeURIComponent(receipt[1]!));
+      const target = decodeURIComponent(receipt[1]!);
+      const invoice =
+        this.invoices.get(target) ??
+        [...this.invoices.values()].find((one) => one.remainingInvoiceId === target);
       if (this.duringReceipt !== null) await this.duringReceipt();
+      // Page 18: a receipt for the remainder answers `processing` on the REMAINDER invoice, and
+      // the original stays `action_required_less` with `remaining_receipt_received: true`.
+      if (invoice !== undefined && invoice.remainingInvoiceId === target) {
+        invoice.remainingReceiptReceived = true;
+        return json(200, {
+          invoice_id: target,
+          order_id: '',
+          request_amount: invoice.remainingAmount,
+          final_amount: invoice.remainingAmount,
+          status: 'processing',
+          paid: false,
+          receipt_received: true,
+        });
+      }
       const mode = this.receiptMode;
       if (typeof mode === 'object') {
         return json(mode.status, { detail: { code: mode.code, message: 'refused' } });
@@ -197,8 +291,91 @@ export class FakeTonPaysTelegram {
           return json(200, { status: 'processing', paid: false, receipt_received: true });
       }
     }
+    const cancel = /^\/api\/custom\/v1\/invoices\/([^/]+)\/cancel$/u.exec(path);
+    if (cancel !== null && method === 'POST') {
+      this.cancels.push(call);
+      const invoice = this.invoices.get(decodeURIComponent(cancel[1]!));
+      const mode = this.cancelMode;
+      if (typeof mode === 'object') {
+        return json(mode.status, { detail: { code: mode.code, message: 'refused' } });
+      }
+      if (mode === 'SERVER_ERROR') return json(502, { error: 'bad gateway' });
+      if (mode === 'TIMEOUT') throw new Error('socket hang up');
+      if (invoice === undefined) return json(404, { detail: { code: 'INVOICE_NOT_FOUND' } });
+      // Only a `pending` invoice can be cancelled (page 15).
+      const refusal = {
+        processing: 'CANCEL_NOT_ALLOWED_PROCESSING',
+        action_required_less: 'CANCEL_NOT_ALLOWED_NEED_ACTION_LESS',
+        action_required_more: 'CANCEL_NOT_ALLOWED_NEED_ACTION_MORE',
+      }[invoice.status];
+      if (refusal !== undefined) return json(409, { detail: { code: refusal, message: 'no' } });
+      if (invoice.status !== 'pending') {
+        return json(409, { detail: { code: 'NOT_PENDING', message: 'no' } });
+      }
+      invoice.status = 'canceled';
+      return json(200, { invoice_id: invoice.invoiceId, status: 'canceled', paid: false });
+    }
+
+    const refund = /^\/api\/custom\/v1\/invoices\/([^/]+)\/refund$/u.exec(path);
+    if (refund !== null && method === 'POST') {
+      this.refunds.push(call);
+      const invoice = this.invoices.get(decodeURIComponent(refund[1]!));
+      const mode = this.refundMode;
+      if (typeof mode === 'object') {
+        return json(mode.status, { detail: { code: mode.code, message: 'refused' } });
+      }
+      if (mode === 'SERVER_ERROR') return json(502, { error: 'bad gateway' });
+      if (mode === 'TIMEOUT') throw new Error('socket hang up');
+      if (invoice === undefined) return json(404, { detail: { code: 'INVOICE_NOT_FOUND' } });
+      const request = JSON.parse(body) as Record<string, unknown>;
+      if (request['invoice_id'] !== invoice.invoiceId) {
+        return json(400, { detail: { code: 'INVOICE_ID_MISMATCH', message: 'no' } });
+      }
+      if (invoice.status !== 'action_required_more') {
+        return json(409, { detail: { code: 'REFUND_NOT_ALLOWED', message: 'no' } });
+      }
+      if (invoice.refundPending) {
+        return json(409, { detail: { code: 'REFUND_ALREADY_OPEN', message: 'no' } });
+      }
+      invoice.refundPending = true;
+      // The document's refund answer (page 16): `completed` and `paid: true` — which is
+      // metadata. The invoice's own status moves only when the provider's check says so.
+      return json(200, {
+        invoice_id: invoice.invoiceId,
+        order_id: invoice.orderId,
+        status: 'completed',
+        paid: true,
+        status_label: 'Approved',
+        need_action_kind: null,
+        refund_amount: invoice.refundAmount,
+        refund_pending: true,
+      });
+    }
     return json(404, { detail: { code: 'NOT_FOUND' } });
   };
+
+  /** The provider finds the transfer SHORT: the document's `action_required_less` (page 17). */
+  underpay(invoiceId: string, remaining: number): void {
+    const invoice = this.invoices.get(invoiceId);
+    if (invoice === undefined) throw new Error(`no fake invoice ${invoiceId}`);
+    invoice.status = 'action_required_less';
+    invoice.paid = false;
+    invoice.remainingAmount = remaining;
+    invoice.remainingInvoiceId = 'TP-REM123XYZ0';
+    invoice.remainingCardNumber = '6219861012345678';
+    invoice.remainingCardHolder = 'Shop Card';
+    invoice.remainingReceiptReceived = false;
+  }
+
+  /** The provider finds the transfer OVER: the document's `action_required_more` (page 17). */
+  overpay(invoiceId: string, refund: number): void {
+    const invoice = this.invoices.get(invoiceId);
+    if (invoice === undefined) throw new Error(`no fake invoice ${invoiceId}`);
+    invoice.status = 'action_required_more';
+    invoice.paid = false;
+    invoice.refundAmount = refund;
+    invoice.refundPending = false;
+  }
 
   set(invoiceId: string, status: string, paid: unknown): void {
     const invoice = this.invoices.get(invoiceId);
@@ -316,6 +493,17 @@ export function telegramLaneWith(
     readonly invoices?: (real: DrizzleGatewayInvoiceRepository) => DrizzleGatewayInvoiceRepository;
     /** FIX10: the receipt downloader, so a case can make one submission's download throw. */
     readonly receiptFiles?: GatewayPaymentServiceDeps['receiptFiles'];
+    /**
+     * Round 6: the lane's cancel/refund machinery. Absent, the lane has none — as every case
+     * written before it assumes (a second attempt for a customer would otherwise cancel the
+     * first). `true` is the production lane; a function wraps the repository so a case can
+     * stage a race.
+     */
+    readonly providerRequests?:
+      | true
+      | ((
+          real: DrizzleGatewayProviderRequestRepository,
+        ) => DrizzleGatewayProviderRequestRepository);
     /** R5A item 4: the late-credit collaborator the production lane is given; absent, none. */
     readonly lateCredit?: GatewayPaymentServiceDeps['lateCredit'];
   } = {},
@@ -341,6 +529,15 @@ export function telegramLaneWith(
     adapters: (provider) =>
       provider === 'TONPAYS_TELEGRAM' ? telegram : provider === 'TONPAYS' ? website : null,
     cardTransfer: new DrizzleGatewayCardTransferRepository(db),
+    ...(overrides.providerRequests === undefined
+      ? {}
+      : {
+          providerRequests:
+            overrides.providerRequests === true
+              ? new DrizzleGatewayProviderRequestRepository(db)
+              : overrides.providerRequests(new DrizzleGatewayProviderRequestRepository(db)),
+          refundCards: new SecretCipherRefundCardSealer(ctx.container.cipher),
+        }),
     cardAdapters: (provider) => (provider === 'TONPAYS_TELEGRAM' ? telegram : null),
     receiptFiles: overrides.receiptFiles ?? {
       download: (scope, binding, options) =>

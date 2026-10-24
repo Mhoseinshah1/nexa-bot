@@ -1,14 +1,30 @@
 import {
+  GATEWAY_REFUND_CARD_MASK_PREFIX_DIGITS,
+  GATEWAY_REFUND_CARD_MASK_SUFFIX_DIGITS,
+  REFUND_CARD_DIGITS,
+  REFUND_HOLDER_MAX_LENGTH,
+  REFUND_HOLDER_MIN_LENGTH,
+  TONPAYS_TELEGRAM_BUYER_CONFLICT_ERROR_CODES,
+  TONPAYS_TELEGRAM_CANCEL_REFUSAL_ERROR_CODES,
   TONPAYS_TELEGRAM_CARD_CHANGE_COOLDOWN_SECONDS,
   TONPAYS_TELEGRAM_CONFIGURATION_ERROR_CODES,
   TONPAYS_TELEGRAM_INVOICE_ID_PATTERN,
   TONPAYS_TELEGRAM_RECEIPT_ERROR_CODES,
+  TONPAYS_TELEGRAM_REJECT_REASONS_MAX,
+  TONPAYS_TELEGRAM_REJECT_REASON_MAX_LENGTH,
   TONPAYS_TELEGRAM_REVIEW_INQUIRY_CADENCE,
+  TONPAYS_TELEGRAM_STATUS_LESS,
+  TONPAYS_TELEGRAM_STATUS_MORE,
+  type GatewayProviderNeedKind,
+  type TemplateKey,
+  type TonPaysTelegramErrorCode,
   type TonPaysTelegramReceiptMimeType,
 } from '@nexa/contracts';
 import type {
   GatewayCardChangeRecord,
   GatewayInvoiceRecord,
+  GatewayProviderFacts,
+  GatewayProviderRequestRecord,
   GatewayReceiptOutcome,
   GatewayReceiptSubmissionRecord,
 } from '../application/gateway-invoice-ports.js';
@@ -81,8 +97,9 @@ export function isSafeInvoiceId(invoiceId: string): boolean {
 }
 
 /**
- * The image type a receipt's MAGIC BYTES say it is (`OQ-TPTG-07`): JPEG or PNG, or null.
- * Never Telegram's declared type and never a file name — both are claims.
+ * The image type a receipt's MAGIC BYTES say it is (`OQ-TPTG-07`): JPEG, PNG, WebP or GIF —
+ * the four the provider's current document lists — or null. Never Telegram's declared type and
+ * never a file name — both are claims.
  */
 export function sniffReceiptImage(bytes: Uint8Array): TonPaysTelegramReceiptMimeType | null {
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
@@ -92,7 +109,28 @@ export function sniffReceiptImage(bytes: Uint8Array): TonPaysTelegramReceiptMime
   if (bytes.length >= png.length && png.every((byte, index) => bytes[index] === byte)) {
     return 'image/png';
   }
+  // WebP: `RIFF` <4-byte size> `WEBP`.
+  const ascii = (from: number, text: string): boolean =>
+    bytes.length >= from + text.length &&
+    [...text].every((char, index) => bytes[from + index] === char.charCodeAt(0));
+  if (ascii(0, 'RIFF') && ascii(8, 'WEBP')) return 'image/webp';
+  // GIF: `GIF87a` or `GIF89a`.
+  if (ascii(0, 'GIF87a') || ascii(0, 'GIF89a')) return 'image/gif';
   return null;
+}
+
+/** The file name a sniffed type travels under in the multipart part. */
+export function receiptFileName(mimeType: TonPaysTelegramReceiptMimeType): string {
+  switch (mimeType) {
+    case 'image/png':
+      return 'receipt.png';
+    case 'image/webp':
+      return 'receipt.webp';
+    case 'image/gif':
+      return 'receipt.gif';
+    case 'image/jpeg':
+      return 'receipt.jpg';
+  }
 }
 
 /**
@@ -134,11 +172,15 @@ export function cardChangeAvailable(
     | 'cardChangeCooldownUntil'
     | 'cardReceivedAt'
     | 'creationState'
-  >,
+  > & { readonly providerStatus?: string | null },
   latest: Pick<GatewayCardChangeRecord, 'state' | 'requestedAt' | 'decidedAt'> | null,
   now: Date,
 ): boolean {
   if (invoice.creationState !== 'CREATED') return false;
+  // Round 6: an invoice that was under- or overpaid has a next step of its own; another card
+  // for the ORIGINAL transfer is not it.
+  if (invoice.providerStatus === TONPAYS_TELEGRAM_STATUS_LESS) return false;
+  if (invoice.providerStatus === TONPAYS_TELEGRAM_STATUS_MORE) return false;
   if (invoice.cardChangeShown === false || invoice.cardChangeExhausted === true) return false;
   if (latest !== null && (latest.state === 'REQUESTED' || latest.state === 'SENT')) return false;
   if (invoice.cardChangeCooldownUntil !== null && now < invoice.cardChangeCooldownUntil) {
@@ -175,4 +217,275 @@ export function receiptUploadAvailable(
       one.state === 'SENDING' ||
       (one.state === 'UNKNOWN' && one.inquiryResolvedAt === null),
   );
+}
+
+// ---------------------------------------------------------------------------------------
+// Round 6: underpayment, overpayment, cancel, refund, a buyer who already holds an invoice.
+// Every function below is pure, and none of them decides whether money counts — only the
+// inquiry's `completed` + `paid === true` does (`tonpaysVerdict`).
+// ---------------------------------------------------------------------------------------
+
+/** The next step an inquiry's STATUS names, or null for any other status (including unknown). */
+export function providerNeedOfStatus(status: string): GatewayProviderNeedKind | null {
+  if (status === TONPAYS_TELEGRAM_STATUS_LESS) return 'LESS';
+  if (status === TONPAYS_TELEGRAM_STATUS_MORE) return 'MORE';
+  return null;
+}
+
+/** Whether a create refusal is the provider saying the buyer already holds an open invoice. */
+export function isBuyerConflictCode(code: string | null): boolean {
+  return (
+    code !== null &&
+    (TONPAYS_TELEGRAM_BUYER_CONFLICT_ERROR_CODES as readonly string[]).includes(code)
+  );
+}
+
+/**
+ * Whether a create that the provider refused with `BUYER_HAS_PENDING_INVOICE` may be tried
+ * once more after the customer's own pending invoice was cancelled. Only that code, and only
+ * when the attempt's previous refusal was not already that code — `TONPAYS_TELEGRAM_BUYER_
+ * CONFLICT_RETRY_MAX` is one. The refusal is a readable 4xx saying no invoice was made, so
+ * the same order id is sent again; any other refusal, and a second of this one, is final.
+ */
+export function buyerConflictRetryAllowed(
+  code: string,
+  previousCreationErrorCode: string | null,
+): boolean {
+  return code === 'BUYER_HAS_PENDING_INVOICE' && previousCreationErrorCode !== code;
+}
+
+/** Whether a cancel refusal is one of the provider's "not pending any more" answers. */
+export function isCancelRefusalCode(code: string | null): boolean {
+  return (
+    code !== null &&
+    (TONPAYS_TELEGRAM_CANCEL_REFUSAL_ERROR_CODES as readonly string[]).includes(code)
+  );
+}
+
+/**
+ * The customer-facing template for each documented error code (Round 6 item 4): every code in
+ * `TONPAYS_TELEGRAM_ERROR_CODES` has a Persian message, and a unit test pins that none is
+ * missing. A configuration code is the MERCHANT's problem and says the method is unavailable;
+ * the rest say what the customer can do. A code the documentation does not name has no entry
+ * and is shown the generic "unavailable" sentence by the caller — never its raw text.
+ */
+export const TONPAYS_TELEGRAM_ERROR_TEMPLATES: Readonly<
+  Record<TonPaysTelegramErrorCode, TemplateKey>
+> = {
+  WRONG_API_KEY_KIND: 'bot.payment.gateway_unavailable',
+  GATEWAY_NOT_APPROVED: 'bot.payment.gateway_unavailable',
+  MISSING_API_KEY: 'bot.payment.gateway_unavailable',
+  INVALID_API_KEY: 'bot.payment.gateway_unavailable',
+  DUPLICATE_ORDER_ID: 'bot.payment.gateway_unknown',
+  INVALID_RECEIPT_TYPE: 'bot.payment.gateway_card_receipt_refused',
+  RECEIPT_TOO_LARGE: 'bot.payment.gateway_receipt_too_large',
+  RATE_LIMIT_EXCEEDED: 'bot.payment.gateway_unavailable',
+  INVOICE_NOT_FOUND: 'bot.payment.gateway_closed',
+  INVOICE_ID_MISMATCH: 'bot.payment.gateway_card_receipt_invoice',
+  NOT_PENDING: 'bot.payment.gateway_not_pending',
+  REMAINDER_INVOICE_MISSING: 'bot.payment.gateway_card_receipt_invoice',
+  EMPTY_RECEIPT: 'bot.payment.gateway_card_receipt_empty',
+  CANCEL_NOT_ALLOWED_PROCESSING: 'bot.payment.gateway_cancel_not_allowed_processing',
+  CANCEL_NOT_ALLOWED_NEED_ACTION_LESS: 'bot.payment.gateway_cancel_not_allowed_less',
+  CANCEL_NOT_ALLOWED_NEED_ACTION_MORE: 'bot.payment.gateway_cancel_not_allowed_more',
+  BUYER_HAS_PENDING_INVOICE: 'bot.payment.gateway_buyer_pending',
+  BUYER_HAS_PROCESSING_INVOICE: 'bot.payment.gateway_buyer_processing',
+  BUYER_HAS_NEED_ACTION_LESS: 'bot.payment.gateway_buyer_less',
+  BUYER_HAS_NEED_ACTION_MORE: 'bot.payment.gateway_buyer_more',
+  REFUND_NOT_ALLOWED: 'bot.payment.gateway_refund_not_allowed',
+  INVALID_REFUND_CARD: 'bot.payment.gateway_refund_card_refused',
+  INVALID_REFUND_HOLDER: 'bot.payment.gateway_refund_holder_refused',
+  REFUND_ALREADY_OPEN: 'bot.payment.gateway_refund_already_open',
+};
+
+/** The Persian message for a stored provider error code, or null when it is not a documented one. */
+export function customerMessageKeyOfError(code: string | null): TemplateKey | null {
+  if (code === null) return null;
+  return (TONPAYS_TELEGRAM_ERROR_TEMPLATES as Readonly<Record<string, TemplateKey>>)[code] ?? null;
+}
+
+// --- reject reasons -----------------------------------------------------------------------
+
+/**
+ * `reject_reasons` as the provider sent them, made safe to store and to show. The shape is not
+ * in the supplied documentation (`OQ-TPTG-21`), so this reads the three it plausibly is — an
+ * array of strings, an array of objects carrying a text field, or one string — and treats
+ * anything else as NO INFORMATION (an empty list), never as a reason and never as an error.
+ * Each reason has control characters and markup brackets removed, whitespace collapsed, and is
+ * cut at the bound; the list is deduplicated and capped.
+ */
+export function parseRejectReasons(raw: unknown): readonly string[] {
+  const items: unknown[] = Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : [];
+  const out: string[] = [];
+  for (const item of items.slice(0, TONPAYS_TELEGRAM_REJECT_REASONS_MAX * 2)) {
+    let text: unknown = item;
+    if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
+      const record = item as Record<string, unknown>;
+      text = record['message'] ?? record['text'] ?? record['reason'] ?? record['code'];
+    }
+    if (typeof text !== 'string') continue;
+    const clean = text
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029<>]/gu, ' ')
+      .replace(/\s+/gu, ' ')
+      .trim();
+    if (clean.length === 0) continue;
+    const bounded = Array.from(clean).slice(0, TONPAYS_TELEGRAM_REJECT_REASON_MAX_LENGTH).join('');
+    if (!out.includes(bounded)) out.push(bounded);
+    if (out.length >= TONPAYS_TELEGRAM_REJECT_REASONS_MAX) break;
+  }
+  return out;
+}
+
+/**
+ * A reason that is a MACHINE token (`low_balance`, `RECEIPT_UNREADABLE`) and not prose: the
+ * only kind the payment history may carry, because its entries hold no free text.
+ */
+export function rejectReasonCodes(reasons: readonly string[]): readonly string[] {
+  return reasons.filter((one) => /^[A-Za-z0-9_.:-]{1,64}$/u.test(one));
+}
+
+// --- the refund card ----------------------------------------------------------------------
+
+const PERSIAN_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
+const ARABIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
+
+/** ASCII digits for a Persian or Arabic-Indic digit, every other character unchanged. */
+export function asciiDigits(text: string): string {
+  return Array.from(text)
+    .map((char) => {
+      const persian = PERSIAN_DIGITS.indexOf(char);
+      if (persian >= 0) return String(persian);
+      const arabic = ARABIC_DIGITS.indexOf(char);
+      return arabic >= 0 ? String(arabic) : char;
+    })
+    .join('');
+}
+
+export interface RefundCardInput {
+  /** Sixteen ASCII digits. Held in memory for one sealing and never logged. */
+  readonly cardNumber: string;
+  readonly cardHolder: string;
+}
+
+/**
+ * The customer's two-line answer — the card number, then the holder — validated locally
+ * (Round 6 item 2). Null when it is not exactly that: two non-empty lines, a sixteen-digit
+ * number (spaces and hyphens inside it tolerated, Persian digits read) and a
+ * holder of three to sixty-four letters and spaces with no digit in it.
+ */
+export function parseRefundCardInput(text: string): RefundCardInput | null {
+  const lines = text
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.length !== 2) return null;
+  const numberText = asciiDigits(lines[0]!).replace(/[\s-]/gu, '');
+  if (!/^\d{16}$/u.test(numberText) || numberText.length !== REFUND_CARD_DIGITS) return null;
+  const holder = lines[1]!.replace(/\s+/gu, ' ');
+  const length = Array.from(holder).length;
+  if (length < REFUND_HOLDER_MIN_LENGTH || length > REFUND_HOLDER_MAX_LENGTH) return null;
+  if (!/^[\p{L}\p{M}‌ ]+$/u.test(holder)) return null;
+  if (Array.from(holder).filter((char) => /\p{L}/u.test(char)).length < 2) return null;
+  return { cardNumber: numberText, cardHolder: holder };
+}
+
+/**
+ * The only form of a refund card that is ever stored or shown: the first six and last four
+ * digits, the rest hidden. A number of any other length is hidden whole.
+ */
+export function maskRefundCard(cardNumber: string): string {
+  if (!/^\d+$/u.test(cardNumber) || cardNumber.length !== REFUND_CARD_DIGITS) return '****';
+  const hidden =
+    cardNumber.length -
+    GATEWAY_REFUND_CARD_MASK_PREFIX_DIGITS -
+    GATEWAY_REFUND_CARD_MASK_SUFFIX_DIGITS;
+  return (
+    cardNumber.slice(0, GATEWAY_REFUND_CARD_MASK_PREFIX_DIGITS) +
+    '*'.repeat(hidden) +
+    cardNumber.slice(-GATEWAY_REFUND_CARD_MASK_SUFFIX_DIGITS)
+  );
+}
+
+// --- what the customer may do now ---------------------------------------------------------
+
+const inFlight = (state: string): boolean => state === 'REQUESTED' || state === 'SENT';
+
+/** A receipt submission still on its way, or lost and not yet resolved by an inquiry. */
+function receiptBusy(
+  submissions: readonly Pick<GatewayReceiptSubmissionRecord, 'state' | 'inquiryResolvedAt'>[],
+): boolean {
+  return submissions.some(
+    (one) =>
+      one.state === 'QUEUED' ||
+      one.state === 'SENDING' ||
+      (one.state === 'UNKNOWN' && one.inquiryResolvedAt === null),
+  );
+}
+
+/**
+ * Whether «❌ لغو فاکتور» may be drawn and accepted NOW. Only a `pending` invoice can be
+ * cancelled (the provider says so, and Nexa does not ask for what it knows will be refused):
+ * created, the provider's last word `pending` or none, no review started, no cancel in
+ * flight, no receipt on its way — a receipt moves the invoice to `processing`, where a cancel
+ * is refused. The customer window itself is checked by the caller under the payment's lock.
+ */
+export function cancelAvailable(
+  invoice: Pick<GatewayInvoiceRecord, 'providerStatus' | 'creationState' | 'providerInvoiceId'>,
+  latestCancel: Pick<GatewayProviderRequestRecord, 'state'> | null,
+  submissions: readonly Pick<GatewayReceiptSubmissionRecord, 'state' | 'inquiryResolvedAt'>[],
+): boolean {
+  if (invoice.creationState !== 'CREATED' || invoice.providerInvoiceId === null) return false;
+  if (invoice.providerStatus !== null && invoice.providerStatus !== 'pending') return false;
+  if (latestCancel !== null && inFlight(latestCancel.state)) return false;
+  // A cancel whose answer was lost is never repeated by a tap: an inquiry says what became of it.
+  if (latestCancel !== null && latestCancel.state === 'UNKNOWN') return false;
+  return !receiptBusy(submissions) && !submissions.some((one) => one.state === 'ACCEPTED');
+}
+
+/**
+ * Whether a receipt for the REMAINDER may be sent NOW: the provider reports an underpayment
+ * and a remainder invoice, has not said it already has the remainder's receipt, and no upload
+ * is on its way. (The ordinary receipt button is for a `pending` invoice only.)
+ */
+export function remainderReceiptAvailable(
+  invoice: Pick<GatewayInvoiceRecord, 'providerStatus' | 'creationState'>,
+  facts: Pick<
+    GatewayProviderFacts,
+    'need' | 'remainingInvoiceId' | 'remainingReceiptReceived'
+  > | null,
+  submissions: readonly Pick<GatewayReceiptSubmissionRecord, 'state' | 'inquiryResolvedAt'>[],
+): boolean {
+  if (invoice.creationState !== 'CREATED') return false;
+  if (invoice.providerStatus !== TONPAYS_TELEGRAM_STATUS_LESS) return false;
+  if (facts === null || facts.need !== 'LESS' || facts.remainingInvoiceId === null) return false;
+  if (facts.remainingReceiptReceived === true) return false;
+  return !receiptBusy(submissions);
+}
+
+/**
+ * Whether the refund-card button may be drawn and accepted NOW: the provider reports an
+ * overpayment, a refund is not already pending, and none of ours is in flight. After a
+ * refusal or a lost answer the customer may register again — a new, explicit request, never
+ * an automatic one; the provider's `REFUND_ALREADY_OPEN` guards a double.
+ */
+export function refundCardAvailable(
+  invoice: Pick<GatewayInvoiceRecord, 'providerStatus' | 'creationState'>,
+  facts: Pick<GatewayProviderFacts, 'need' | 'refundPending'> | null,
+  latestRefund: Pick<GatewayProviderRequestRecord, 'state' | 'errorCode'> | null,
+): boolean {
+  if (invoice.creationState !== 'CREATED') return false;
+  if (invoice.providerStatus !== TONPAYS_TELEGRAM_STATUS_MORE) return false;
+  if (facts === null || facts.need !== 'MORE' || facts.refundPending === true) return false;
+  if (latestRefund === null) return true;
+  if (inFlight(latestRefund.state)) return false;
+  // A refund the provider already holds, or one it will not make, is not asked for again.
+  if (latestRefund.state === 'APPLIED') return false;
+  if (
+    latestRefund.errorCode === 'REFUND_ALREADY_OPEN' ||
+    latestRefund.errorCode === 'REFUND_NOT_ALLOWED'
+  ) {
+    return false;
+  }
+  return true;
 }

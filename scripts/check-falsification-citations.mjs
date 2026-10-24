@@ -172,8 +172,9 @@ const RECORDS = [
  * `docs/phase2/category-icons-falsification.md` — 30 rows, 41 citations.
  * 2751 → 2762: its PR #217 review — 40 rows and 52 citations in all (+11).
  * 2762 → 2761: B1 retired UX22's integration case (the pre-invoice no longer splits) (-1).
+ * 2761 → 2785: Round 6 PR-3 adds 24 rows (R6-01..R6-20 and the four Codex fixes F-01..F-04) (+24).
  */
-const EXPECTED = 2761;
+const EXPECTED = 2785;
 /**
  * A table whose last column is one of these is making citations.
  *

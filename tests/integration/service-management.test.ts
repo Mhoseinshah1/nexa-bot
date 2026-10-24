@@ -622,9 +622,16 @@ describe('a customer manages the service they bought', () => {
     ).toEqual([kept.id]);
     expect(page.count, 'not counted').toBe(1);
     // R4 A6: a broadcast's {servicesTotal}/{servicesActive} read the SAME list predicate.
-    expect(
-      await services.listedCountsForCustomer(tenantA, customerA, ctx.container.clock.now()),
-    ).toEqual({ listed: 1, serving: 1 });
+    const counts = await services.listedCountsForCustomer(
+      tenantA,
+      customerA,
+      ctx.container.clock.now(),
+    );
+    expect(counts).toMatchObject({ listed: 1, serving: 1 });
+    // R6 item 3: the nearest deadline is the serving service's own, never the missing one's.
+    expect((await services.findById(tenantA, kept.id))?.expiresAt?.getTime()).toBe(
+      counts.nearestExpiresAt?.getTime(),
+    );
     const paged = await services.pageForCustomer(tenantA, customerA, { number: 2, size: 1 });
     expect(paged.items, 'no page holds it').toEqual([]);
     expect((await services.findById(tenantA, gone.id))?.state, 'its state is untouched').toBe(

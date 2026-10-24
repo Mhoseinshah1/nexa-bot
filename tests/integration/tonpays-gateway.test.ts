@@ -2486,7 +2486,7 @@ describe('TonPays, through the one settlement path', () => {
         ctx.container.database.db.execute(
           sql`INSERT INTO payments (id, tenant_id, customer_id, method, amount, currency, reference,
                                     customer_fee_basis_points, customer_fee_amount, payable_amount)
-              SELECT gen_random_uuid(), tenant_id, customer_id, 'MANUAL_TRANSFER', 1000, currency, 'bad-method',
+              SELECT gen_random_uuid(), tenant_id, customer_id, 'WALLET', 1000, currency, 'bad-method',
                      500, 50, 1050
               FROM payments WHERE id = ${paymentId}`,
         ),
@@ -2495,17 +2495,15 @@ describe('TonPays, through the one settlement path', () => {
       );
     });
 
-    it('refuses a non-zero fee on a route that does not settle through a gateway', async () => {
-      await expect(
-        ctx.container.paymentGateways.configure(tenantA, owner, {
-          idempotencyKey: 'manual-fee',
-          provider: 'MANUAL_TRANSFER',
-          config: { ...OPEN_ROUTE, customerFeeBasisPoints: 100 },
-        }),
-      ).rejects.toSatisfy(
-        (error: unknown) =>
-          isNexaError(error) && error.code === COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
-      );
+    it('accepts a customer fee on card-to-card since R6 item 4, and a save that omits the fee keeps the stored rate', async () => {
+      // Card-to-card takes a fee exactly as a gateway does; the descriptor decides which
+      // routes can (`routeTakesCustomerFee`, pinned in manual-transfer-customer-fee.test.ts).
+      const manual = await ctx.container.paymentGateways.configure(tenantA, owner, {
+        idempotencyKey: 'manual-fee',
+        provider: 'MANUAL_TRANSFER',
+        config: { ...OPEN_ROUTE, customerFeeBasisPoints: 100 },
+      });
+      expect(manual.customerFeeBasisPoints).toBe(100);
       // A save that does not mention the fee keeps the stored rate.
       await enableTonPays({ customerFeeBasisPoints: FIVE_PERCENT });
       const { customerFeeBasisPoints: _omitted, ...withoutFee } = {

@@ -4,6 +4,7 @@ import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import type { Database, Executor } from '../persistence/database.js';
 import {
   adminTotpFactors,
+  gatewayProviderRequests,
   backupArchivePasswords,
   botInstances,
   legacyNxpkgImports,
@@ -463,6 +464,82 @@ const paymentGatewayVerifyKey: SecretColumn = {
 };
 
 /**
+ * A refund card sealed for the gateway worker (Round 6, `gateway_provider_requests`). NULLABLE
+ * and short-lived: it exists only while a refund request is REQUESTED, and the worker's send
+ * stamp wipes it (a CHECK says so), so most rows hold none and a row without it is never
+ * counted as a stored secret. The entity in the AEAD context is the request row's own id.
+ */
+const paymentGatewayRefundCard: SecretColumn = {
+  purpose: 'payment_gateway.refund_card',
+  table: 'gateway_provider_requests',
+  ciphertextColumn: 'refund_card_ciphertext',
+  keyIdColumn: 'refund_card_key_id',
+
+  async all(db) {
+    const rows = await db
+      .select({
+        ciphertext: gatewayProviderRequests.refundCardCiphertext,
+        keyId: gatewayProviderRequests.refundCardKeyId,
+      })
+      .from(gatewayProviderRequests)
+      .where(isNotNull(gatewayProviderRequests.refundCardCiphertext));
+    return rows.flatMap((row) =>
+      typeof row.ciphertext === 'string' && typeof row.keyId === 'string'
+        ? [{ ciphertext: row.ciphertext, keyId: row.keyId }]
+        : [],
+    );
+  },
+
+  async page(db, cursor, limit) {
+    const rows = await db
+      .select({ id: gatewayProviderRequests.id })
+      .from(gatewayProviderRequests)
+      .where(
+        cursor === null
+          ? isNotNull(gatewayProviderRequests.refundCardCiphertext)
+          : and(
+              isNotNull(gatewayProviderRequests.refundCardCiphertext),
+              gt(gatewayProviderRequests.id, cursor),
+            ),
+      )
+      .orderBy(asc(gatewayProviderRequests.id))
+      .limit(limit);
+    return rows.map((row) => row.id);
+  },
+
+  async lock(tx, id) {
+    const [row] = await tx
+      .select({
+        id: gatewayProviderRequests.id,
+        tenantId: gatewayProviderRequests.tenantId,
+        ciphertext: gatewayProviderRequests.refundCardCiphertext,
+        keyId: gatewayProviderRequests.refundCardKeyId,
+      })
+      .from(gatewayProviderRequests)
+      .where(eq(gatewayProviderRequests.id, id))
+      .for('update')
+      .limit(1);
+    if (row === undefined) return null;
+    if (typeof row.ciphertext !== 'string' || typeof row.keyId !== 'string') return null;
+    return { id: row.id, tenantId: row.tenantId, ciphertext: row.ciphertext, keyId: row.keyId };
+  },
+
+  async replace(tx, id, expectedCiphertext, next) {
+    const updated = await tx
+      .update(gatewayProviderRequests)
+      .set({ refundCardCiphertext: next.ciphertext, refundCardKeyId: next.keyId })
+      .where(
+        and(
+          eq(gatewayProviderRequests.id, id),
+          eq(gatewayProviderRequests.refundCardCiphertext, expectedCiphertext),
+        ),
+      )
+      .returning({ id: gatewayProviderRequests.id });
+    return updated.length > 0;
+  },
+};
+
+/**
  * An administrator's TOTP shared secret (Phase D2). One row per administrator; the
  * entity in the AEAD context is the factor row's own id. NOT NULL: a row exists only
  * while a factor is pending or active, and disabling deletes it.
@@ -706,6 +783,7 @@ export const SECRET_COLUMNS: readonly SecretColumn[] = [
   paymentGatewayApiKey,
   paymentGatewayWebhookSecret,
   paymentGatewayVerifyKey,
+  paymentGatewayRefundCard,
   adminTotpSecret,
   supportAiProviderApiKey,
   legacyNxpkgPackageKey,

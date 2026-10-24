@@ -381,11 +381,14 @@ export function PaymentGatewaysTabbedPage({
   route,
   denied,
   mayEdit,
+  maySettingsEdit = false,
   mayViewCards = false,
 }: {
   route: Route;
   denied: boolean;
   mayEdit: boolean;
+  /** Round 6: the FX section's per-source switches are registry settings. */
+  maySettingsEdit?: boolean;
   /**
    * Item 7: the card-to-card cards live on that method's own view, and an operator who may
    * read or manage the cards but not the routes (`payments.accounts.*` without
@@ -435,6 +438,7 @@ export function PaymentGatewaysTabbedPage({
       <PaymentGatewaysPage
         denied={denied}
         mayEdit={mayEdit}
+        maySettingsEdit={maySettingsEdit}
         tabs={tabs}
         panel={{ id: 'gateways-panel', labelledBy: 'gateways-panel-tab-config' }}
       />

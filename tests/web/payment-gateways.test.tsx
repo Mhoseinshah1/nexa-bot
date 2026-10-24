@@ -7,6 +7,7 @@ import {
   minorOf,
   PaymentGatewaysPage,
   percentOf,
+  takesCustomerFee,
   takesConversionRate,
 } from '../../apps/web/src/pages/payment-gateways';
 import { t } from '../../apps/web/src/i18n/web.fa';
@@ -124,6 +125,7 @@ describe('the gateway form’s top-up gift', () => {
     },
     sortOrder: 0,
     topupCashbackPercent: 5,
+    customerFeeBasisPoints: 0,
     allowServicePurchase: true,
     allowWalletTopup: true,
     createdAt: '2026-09-10T12:30:00.000Z',
@@ -161,6 +163,22 @@ describe('the gateway form’s top-up gift', () => {
     });
     const saved = api.calls.find((call) => call.method === 'POST');
     expect((saved?.body as { topupCashbackPercent?: unknown }).topupCashbackPercent).toBe(12);
+  });
+
+  it('R6 item 4: card-to-card takes a customer fee (default 0), saved as basis points', async () => {
+    expect(takesCustomerFee('MANUAL_TRANSFER')).toBe(true);
+    expect(takesCustomerFee('TONPAYS')).toBe(true);
+    expect(takesCustomerFee('NOT_A_ROUTE')).toBe(false);
+    const { api } = await open();
+    const fee = (await screen.findByLabelText('کارمزد مشتری (%)')) as HTMLInputElement;
+    expect(fee.value).toBe('0');
+    fireEvent.change(fee, { target: { value: '10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    const saved = api.calls.find((call) => call.method === 'POST');
+    expect((saved?.body as { customerFeeBasisPoints?: unknown }).customerFeeBasisPoints).toBe(1000);
   });
 
   it('refuses a figure outside 0–100 at the field, and will not save it', async () => {
@@ -795,16 +813,17 @@ describe('the customer gateway fee', () => {
     expect(api.calls.some((call) => call.method === 'POST')).toBe(false);
   });
 
-  it('draws no fee field for card-to-card, and sends no fee from that form', async () => {
+  it('R6 item 4: card-to-card now draws the fee field, defaulting to 0, and sends it as typed', async () => {
     const api = await openRoute(route('MANUAL_TRANSFER', 0));
-    await screen.findByLabelText('هدیهٔ شارژ (درصد)');
-    expect(screen.queryByLabelText('کارمزد مشتری (%)')).toBeNull();
+    const field = (await screen.findByLabelText('کارمزد مشتری (%)')) as HTMLInputElement;
+    expect(field.value).toBe('0');
+    fireEvent.change(field, { target: { value: '10' } });
     fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
     await waitFor(() => {
       expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
     });
     const saved = api.calls.find((call) => call.method === 'POST');
-    expect(saved?.body as Record<string, unknown>).not.toHaveProperty('customerFeeBasisPoints');
+    expect((saved?.body as Record<string, unknown>)['customerFeeBasisPoints']).toBe(1000);
   });
 });
 

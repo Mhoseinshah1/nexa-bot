@@ -1,6 +1,6 @@
 {
-  "id": "f79ef337-183d-47cd-9a98-cf46010c0aac",
-  "prevId": "570cb69d-08c5-4f95-98c3-2756e86a4019",
+  "id": "1bc189c9-922f-4e0a-b031-ea9916ed98ab",
+  "prevId": "d1fb6aa7-184b-4a15-a7e7-4f0d4877df09",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -9263,7 +9263,7 @@
       "checkConstraints": {
         "customer_text_captures_purpose_check": {
           "name": "customer_text_captures_purpose_check",
-          "value": "purpose IN ('TOPUP_AMOUNT', 'SERVICE_SEARCH', 'SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT', 'TICKET_NEW_MESSAGE', 'TICKET_REPLY')"
+          "value": "purpose IN ('TOPUP_AMOUNT', 'SERVICE_SEARCH', 'SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT', 'TICKET_NEW_MESSAGE', 'TICKET_REPLY', 'GATEWAY_REFUND_CARD')"
         },
         "customer_text_captures_state_check": {
           "name": "customer_text_captures_state_check",
@@ -9295,7 +9295,7 @@
         },
         "customer_text_captures_subject_check": {
           "name": "customer_text_captures_subject_check",
-          "value": "(purpose IN ('SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT', 'TICKET_NEW_MESSAGE', 'TICKET_REPLY')) = (subject_id IS NOT NULL)"
+          "value": "(purpose IN ('SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT', 'TICKET_NEW_MESSAGE', 'TICKET_REPLY', 'GATEWAY_REFUND_CARD')) = (subject_id IS NOT NULL)"
         },
         "customer_text_captures_custom_volume_check": {
           "name": "customer_text_captures_custom_volume_check",
@@ -11607,7 +11607,7 @@
       "checkConstraints": {
         "gateway_customer_numbers_provider_check": {
           "name": "gateway_customer_numbers_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY')"
         },
         "gateway_customer_numbers_number_check": {
           "name": "gateway_customer_numbers_number_check",
@@ -11714,6 +11714,142 @@
         "gateway_invoice_cards_bounds_check": {
           "name": "gateway_invoice_cards_bounds_check",
           "value": "seq >= 1 AND length(card_number) BETWEEN 1 AND 64 AND (card_name IS NULL OR length(card_name) BETWEEN 1 AND 128)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.gateway_invoice_provider_facts": {
+      "name": "gateway_invoice_provider_facts",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payment_id": {
+          "name": "payment_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "need": {
+          "name": "need",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "remaining_amount": {
+          "name": "remaining_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "remaining_card_number": {
+          "name": "remaining_card_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "remaining_card_holder": {
+          "name": "remaining_card_holder",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "remaining_invoice_id": {
+          "name": "remaining_invoice_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "remaining_receipt_received": {
+          "name": "remaining_receipt_received",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "refund_amount": {
+          "name": "refund_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "refund_pending": {
+          "name": "refund_pending",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reject_reasons": {
+          "name": "reject_reasons",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "observed_at": {
+          "name": "observed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "gateway_invoice_provider_facts_tenant_id_tenants_id_fk": {
+          "name": "gateway_invoice_provider_facts_tenant_id_tenants_id_fk",
+          "tableFrom": "gateway_invoice_provider_facts",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "gateway_invoice_provider_facts_payment_fk": {
+          "name": "gateway_invoice_provider_facts_payment_fk",
+          "tableFrom": "gateway_invoice_provider_facts",
+          "tableTo": "payments",
+          "columnsFrom": [
+            "tenant_id",
+            "payment_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "gateway_invoice_provider_facts_tenant_id_payment_id_pk": {
+          "name": "gateway_invoice_provider_facts_tenant_id_payment_id_pk",
+          "columns": [
+            "tenant_id",
+            "payment_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "gateway_invoice_provider_facts_need_check": {
+          "name": "gateway_invoice_provider_facts_need_check",
+          "value": "need IS NULL OR need IN ('LESS', 'MORE')"
+        },
+        "gateway_invoice_provider_facts_shape_check": {
+          "name": "gateway_invoice_provider_facts_shape_check",
+          "value": "(need = 'LESS' OR (remaining_amount IS NULL AND remaining_card_number IS NULL AND remaining_card_holder IS NULL AND remaining_invoice_id IS NULL AND remaining_receipt_received IS NULL))\n          AND (need = 'MORE' OR (refund_amount IS NULL AND refund_pending IS NULL))\n          AND (remaining_amount IS NULL OR remaining_amount > 0)\n          AND (refund_amount IS NULL OR refund_amount > 0)\n          AND (remaining_invoice_id IS NULL OR remaining_invoice_id ~ '^[A-Za-z0-9_-]{1,64}$')\n          AND (remaining_card_number IS NULL OR length(remaining_card_number) BETWEEN 1 AND 64)\n          AND (remaining_card_holder IS NULL OR length(remaining_card_holder) BETWEEN 1 AND 128)"
+        },
+        "gateway_invoice_provider_facts_reasons_check": {
+          "name": "gateway_invoice_provider_facts_reasons_check",
+          "value": "jsonb_typeof(reject_reasons) = 'array' AND jsonb_array_length(reject_reasons) <= 10"
         }
       },
       "isRLSEnabled": false
@@ -12119,12 +12255,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "provider_method": {
-          "name": "provider_method",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "crypto_pay_currency": {
           "name": "crypto_pay_currency",
           "type": "text",
@@ -12405,7 +12535,7 @@
         },
         "gateway_invoices_provider_check": {
           "name": "gateway_invoices_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY')"
         },
         "gateway_invoices_creation_state_check": {
           "name": "gateway_invoices_creation_state_check",
@@ -12463,14 +12593,6 @@
           "name": "gateway_invoices_centralpay_check",
           "value": "provider <> 'CENTRALPAY' OR (provider_unit = 'IRT' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND provider_user_id IS NOT NULL AND provider_order_id ~ '^[0-9]{10}$')"
         },
-        "gateway_invoices_tetrapay_check": {
-          "name": "gateway_invoices_tetrapay_check",
-          "value": "provider <> 'TETRAPAY' OR (provider_unit = 'IRR' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND provider_order_id ~ '^[A-Za-z0-9_.:-]{1,64}$')"
-        },
-        "gateway_invoices_provider_method_check": {
-          "name": "gateway_invoices_provider_method_check",
-          "value": "provider_method IS NULL OR (provider = 'TETRAPAY' AND provider_method IN ('online', 'card'))"
-        },
         "gateway_invoices_provider_user_id_check": {
           "name": "gateway_invoices_provider_user_id_check",
           "value": "provider_user_id IS NULL OR (provider = 'CENTRALPAY' AND provider_user_id ~ '^[0-9]{10}$')"
@@ -12478,6 +12600,302 @@
         "gateway_invoices_card_check": {
           "name": "gateway_invoices_card_check",
           "value": "(card_seq IS NULL) = (card_number IS NULL)\n          AND (card_seq IS NULL) = (card_received_at IS NULL)\n          AND (card_name IS NULL OR card_number IS NOT NULL)\n          AND (card_number IS NULL OR provider = 'TONPAYS_TELEGRAM')\n          AND (card_seq IS NULL OR card_seq >= 1)\n          AND (card_number IS NULL OR length(card_number) BETWEEN 1 AND 64)\n          AND (card_name IS NULL OR length(card_name) BETWEEN 1 AND 128)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.gateway_provider_requests": {
+      "name": "gateway_provider_requests",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payment_id": {
+          "name": "payment_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bot_instance_id": {
+          "name": "bot_instance_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "requested_at": {
+          "name": "requested_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "claimed_until": {
+          "name": "claimed_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sent_at": {
+          "name": "sent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "decided_at": {
+          "name": "decided_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error_code": {
+          "name": "error_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "refund_card_masked": {
+          "name": "refund_card_masked",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "refund_card_ciphertext": {
+          "name": "refund_card_ciphertext",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "refund_card_key_id": {
+          "name": "refund_card_key_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "gateway_provider_requests_in_flight_key": {
+          "name": "gateway_provider_requests_in_flight_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "payment_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "state IN ('REQUESTED', 'SENT')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "gateway_provider_requests_idempotency_key": {
+          "name": "gateway_provider_requests_idempotency_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "idempotency_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "gateway_provider_requests_due_idx": {
+          "name": "gateway_provider_requests_due_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "requested_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "state IN ('REQUESTED', 'SENT')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "gateway_provider_requests_payment_idx": {
+          "name": "gateway_provider_requests_payment_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "payment_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "requested_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "gateway_provider_requests_tenant_id_tenants_id_fk": {
+          "name": "gateway_provider_requests_tenant_id_tenants_id_fk",
+          "tableFrom": "gateway_provider_requests",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "gateway_provider_requests_bot_instance_id_bot_instances_id_fk": {
+          "name": "gateway_provider_requests_bot_instance_id_bot_instances_id_fk",
+          "tableFrom": "gateway_provider_requests",
+          "tableTo": "bot_instances",
+          "columnsFrom": [
+            "bot_instance_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "gateway_provider_requests_payment_fk": {
+          "name": "gateway_provider_requests_payment_fk",
+          "tableFrom": "gateway_provider_requests",
+          "tableTo": "payments",
+          "columnsFrom": [
+            "tenant_id",
+            "payment_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "gateway_provider_requests_customer_fk": {
+          "name": "gateway_provider_requests_customer_fk",
+          "tableFrom": "gateway_provider_requests",
+          "tableTo": "customers",
+          "columnsFrom": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "gateway_provider_requests_kind_check": {
+          "name": "gateway_provider_requests_kind_check",
+          "value": "kind IN ('CANCEL', 'REFUND')"
+        },
+        "gateway_provider_requests_state_check": {
+          "name": "gateway_provider_requests_state_check",
+          "value": "state IN ('REQUESTED', 'SENT', 'APPLIED', 'REFUSED', 'RATE_LIMITED', 'UNKNOWN')"
+        },
+        "gateway_provider_requests_decided_check": {
+          "name": "gateway_provider_requests_decided_check",
+          "value": "(state IN ('REQUESTED', 'SENT')) = (decided_at IS NULL) AND (state <> 'SENT' OR sent_at IS NOT NULL) AND (state <> 'REQUESTED' OR sent_at IS NULL)"
+        },
+        "gateway_provider_requests_error_code_check": {
+          "name": "gateway_provider_requests_error_code_check",
+          "value": "error_code IS NULL OR length(error_code) BETWEEN 1 AND 64"
+        },
+        "gateway_provider_requests_refund_card_check": {
+          "name": "gateway_provider_requests_refund_card_check",
+          "value": "(kind = 'REFUND') = (refund_card_masked IS NOT NULL)\n          AND (refund_card_masked IS NULL OR refund_card_masked ~ '^[0-9]{6}[*]{6}[0-9]{4}$')"
+        },
+        "gateway_provider_requests_sealed_card_check": {
+          "name": "gateway_provider_requests_sealed_card_check",
+          "value": "((kind = 'REFUND' AND state = 'REQUESTED') = (refund_card_ciphertext IS NOT NULL))\n          AND ((refund_card_ciphertext IS NULL) = (refund_card_key_id IS NULL))"
         }
       },
       "isRLSEnabled": false
@@ -23812,7 +24230,7 @@
       "checkConstraints": {
         "payment_gateway_call_budgets_provider_check": {
           "name": "payment_gateway_call_budgets_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY')"
         },
         "payment_gateway_call_budgets_used_check": {
           "name": "payment_gateway_call_budgets_used_check",
@@ -23995,7 +24413,7 @@
         },
         "payment_gateway_credentials_provider_check": {
           "name": "payment_gateway_credentials_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY')"
         }
       },
       "isRLSEnabled": false
@@ -24116,12 +24534,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "hidden_until": {
-          "name": "hidden_until",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -24195,7 +24607,7 @@
       "checkConstraints": {
         "payment_gateways_provider_check": {
           "name": "payment_gateways_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY')"
         },
         "payment_gateways_status_check": {
           "name": "payment_gateways_status_check",
@@ -25057,7 +25469,7 @@
         },
         "payments_gateway_provider_check": {
           "name": "payments_gateway_provider_check",
-          "value": "gateway_provider IS NULL OR gateway_provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY')"
+          "value": "gateway_provider IS NULL OR gateway_provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY')"
         },
         "payments_topup_cashback_percent_check": {
           "name": "payments_topup_cashback_percent_check",
@@ -25065,7 +25477,7 @@
         },
         "payments_customer_fee_check": {
           "name": "payments_customer_fee_check",
-          "value": "(customer_fee_basis_points IS NULL AND customer_fee_amount IS NULL AND payable_amount IS NULL) OR (method = 'GATEWAY' AND customer_fee_basis_points BETWEEN 0 AND 10000 AND customer_fee_amount >= 0 AND payable_amount = amount + customer_fee_amount)"
+          "value": "(customer_fee_basis_points IS NULL AND customer_fee_amount IS NULL AND payable_amount IS NULL) OR (method IN ('GATEWAY', 'MANUAL_TRANSFER') AND customer_fee_basis_points BETWEEN 0 AND 10000 AND customer_fee_amount >= 0 AND payable_amount = amount + customer_fee_amount)"
         },
         "payments_provider_review_check": {
           "name": "payments_provider_review_check",

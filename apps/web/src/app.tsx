@@ -775,6 +775,7 @@ export function resolve(
           route={route}
           denied={!may('payments.gateways.view')}
           mayEdit={may('payments.gateways.edit')}
+          maySettingsEdit={may('settings.view') && may('settings.edit')}
           mayViewCards={
             may('payments.accounts.view') ||
             may('payments.accounts.edit') ||

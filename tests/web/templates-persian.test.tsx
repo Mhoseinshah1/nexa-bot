@@ -351,3 +351,80 @@ describe('a refusal on the template screen', () => {
     expect(screen.queryByText(/is declared MONEY/)).toBeNull();
   });
 });
+
+describe('R6: a stored text that lacks a token the key now requires', () => {
+  const CARD = 'bot.payment.gateway_card_invoice';
+  const render = async (overrideBody: string | null) => {
+    stubApi([
+      {
+        url: '/templates',
+        body: {
+          templates: [
+            view(CARD, 'پیش‌فرض {transferAmount}', {
+              overrideBody,
+              body: overrideBody ?? 'پیش‌فرض {transferAmount}',
+            }),
+          ],
+        },
+      },
+    ]);
+    renderPage(<ContentPage mayEdit denied={false} />);
+    await screen.findByRole('button', { name: new RegExp(nameOf(CARD)) });
+    open(CARD);
+    await screen.findByRole('heading', { name: nameOf(CARD) });
+  };
+
+  it('says «این متن {transferAmount} ندارد» and leaves the text as it is', async () => {
+    await render('فاکتور قدیمی مدیر: {payable} {cardNumber} {reference} {expiresAt}');
+    const hint = await screen.findByTestId('override-lacks-token');
+    expect(hint.textContent).toContain('این متن {transferAmount} ندارد');
+    // Nothing was rewritten: the editor still holds exactly the owner's words.
+    expect(editor(CARD).value).toBe(
+      'فاکتور قدیمی مدیر: {payable} {cardNumber} {reference} {expiresAt}',
+    );
+  });
+
+  it('is silent for an override that has the token and for the default text', async () => {
+    await render(
+      templateDefinition(CARD)
+        .placeholders.filter((placeholder) => placeholder.required)
+        .map((placeholder) => `{${placeholder.token}}`)
+        .join(' '),
+    );
+    expect(screen.queryByTestId('override-lacks-token')).toBeNull();
+  });
+
+  it('is silent for the default text', async () => {
+    await render(null);
+    expect(screen.queryByTestId('override-lacks-token')).toBeNull();
+  });
+});
+
+describe('R6: the /start greeting preview is a labelled sample customer', () => {
+  const WELCOME = 'bot.start.welcome';
+  it('prefills a sample customer and says plainly it is a preview', async () => {
+    const definition = templateDefinition(WELCOME);
+    stubApi([{ url: '/templates', body: { templates: [view(WELCOME, '{firstName} عزیز')] } }]);
+    renderPage(<ContentPage mayEdit denied={false} />);
+    await screen.findByRole('button', { name: new RegExp(nameOf(WELCOME)) });
+    open(WELCOME);
+    await screen.findByRole('heading', { name: nameOf(WELCOME) });
+    expect(screen.getByTestId('preview-sample-customer').textContent).toContain(
+      t('web.preview_sample_badge'),
+    );
+    for (const placeholder of definition.placeholders) {
+      const input = document.getElementById(
+        `sample-${WELCOME}-${placeholder.token}`,
+      ) as HTMLInputElement;
+      expect(input.value, placeholder.token).not.toBe('');
+    }
+    expect((document.getElementById(`sample-${WELCOME}-firstName`) as HTMLInputElement).value).toBe(
+      'علی',
+    );
+  });
+
+  it('other templates have no sample customer', async () => {
+    await renderAll();
+    expect(screen.queryByTestId('preview-sample-customer')).toBeNull();
+  });
+});
