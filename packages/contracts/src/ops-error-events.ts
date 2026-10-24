@@ -155,6 +155,9 @@ export const OPS_ERROR_PRESENTATION_TEMPLATES = {
  * One row per gateway and failure kind per aggregation window.
  */
 export const PAYMENT_LINK_CREATE_FAILED_CODE = 'payments.gateway_link_create_failed';
+/** R7: a TonPays webhook refused for its signature, and the verified one that closes it. */
+export const TONPAYS_SIGNATURE_REJECTED_CODE = 'tonpays.webhook.signature_rejected';
+export const TONPAYS_SIGNATURE_VERIFIED_CODE = 'tonpays.webhook.signature_verified';
 
 /** The phase the FIX-04 events name. A closed list, so a group filter can rely on it. */
 export const OPS_ERROR_PHASES = ['PAYMENT_LINK_CREATE'] as const;
@@ -368,6 +371,10 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
     eventClass: 'SECURITY',
   }),
   recovery('payments.gateway_webhook_verified', 'PAYMENTS', 'payments.gateway_webhook_unverified'),
+  // R7: a TonPays webhook whose signature did not verify against the stored secret. One
+  // condition per route (rolled up, not one per request), closed by the next verified one.
+  failure(TONPAYS_SIGNATURE_REJECTED_CODE, 'PAYMENTS', 'CONDITION'),
+  recovery(TONPAYS_SIGNATURE_VERIFIED_CODE, 'PAYMENTS', TONPAYS_SIGNATURE_REJECTED_CODE),
   // FIX-03 (batch 2026-10-10): the provider approved and the settlement transaction refused
   // (nothing moved; asked again inside the deadline). One condition per payment, closed by
   // `payments.gateway_settlement_decided` once the lane decides that payment (settled,

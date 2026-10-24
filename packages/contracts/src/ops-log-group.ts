@@ -124,6 +124,8 @@ export const OPS_LOG_TOPIC_ROUTES: readonly {
   // it was presented as SECURITY and posted to PAYMENTS, which made the class policy's
   // "the prefix routes it to the SECURITY topic" false for exactly this code.
   { prefix: 'payments.gateway_webhook_', category: 'SECURITY' },
+  // R7: a TonPays webhook refused for its signature is an error report (ERRORS), not a payment.
+  { prefix: 'tonpays.webhook.', category: 'ERRORS' },
   // Money. Listed first, and `order.refunded_undeliverable` before the `order.` prefix
   // below: a refund is the payments log's even though its code names the order.
   { prefix: 'payments.', category: 'PAYMENTS' },
