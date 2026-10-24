@@ -25,6 +25,8 @@ run green 315
 check "all green exits 0 with counts" 0 "abcdef01 green=2 pending=0 red=0 skipped=1" "$rc" "$out"
 run pending 315
 check "pending exits 2" 2 "green=1 pending=2 red=0 skipped=0" "$rc" "$out"
+run nochecks 315
+check "no check run yet is pending, never green" 2 "green=0 pending=0 red=0 skipped=0" "$rc" "$out"
 run red 315
 check "red beats pending: exit 1, names listed" 1 "red=2 skipped=0 [red: unit, build]" "$rc" "$out"
 : >"$FAKE_LOG"

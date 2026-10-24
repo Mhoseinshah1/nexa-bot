@@ -136,7 +136,8 @@ summary_line() { # sha -> sets checks_json, prints the line, returns the exit co
     reds=" [red: $(printf '%s, ' "${names[@]}" | sed 's/, $//')]"
   fi
   echo "${sha:0:8} green=$g pending=$p red=$r skipped=$s$reds"
-  if ((r > 0)); then return 1; elif ((p > 0)); then return 2; fi
+  # No check run yet (just pushed) is pending, never "all green".
+  if ((r > 0)); then return 1; elif ((p > 0 || g + s == 0)); then return 2; fi
   return 0
 }
 
