@@ -354,6 +354,13 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'ops',
     control: { kind: 'integer', unit: 'web.unit_days' },
   },
+  // Round 8 B5: CPU share of one core the backup's heavy tools may use.
+  'backup.cpu_limit_percent': {
+    title: 'web.setting_backup_cpu_limit',
+    description: 'web.setting_backup_cpu_limit_desc',
+    group: 'ops',
+    control: { kind: 'integer', unit: 'web.unit_percent' },
+  },
   // E4: fully delivered backups' local copies (0 keeps none).
   'backup.local_copies_keep': {
     title: 'web.setting_backup_local_copies',

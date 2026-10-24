@@ -429,7 +429,10 @@ describe('L4 / L5 — a failed payment, a late approval', () => {
     );
     const failed = h.queued[0]!;
     expect(failed.logType).toBe('PAYMENT_FAILED');
-    expect(render(failed)).toContain('رسید توسط اپراتور رد شد');
+    // R8 A3: an operator's rejection is «رسید رد شد», naming the operator.
+    expect(failed.templateKey).toBe('ops.financial.receipt_rejected');
+    expect(render(failed)).toContain('🧾 رسید رد شد');
+    expect(render(failed)).toContain('دلیل رد: اپراتور');
     expect(render(failed).match(/کارت به کارت/gu)).toHaveLength(1);
 
     await h.consumer.handle(

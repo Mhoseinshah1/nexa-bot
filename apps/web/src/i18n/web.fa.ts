@@ -178,6 +178,14 @@ export const WEB_FA = {
   'web.setting_backup_keep_count': 'تعداد آرشیوهای بکاپ نگه‌داشته‌شده',
   'web.setting_backup_keep_count_desc':
     'این تعداد از تازه‌ترین بکاپ‌های تأییدشده همیشه روی سرور می‌مانند. آرشیوی فقط وقتی پاک می‌شود که هم بیرون از این تعداد باشد و هم از مدت نگهداری قدیمی‌تر. تازه‌ترین بکاپ تأییدشده هرگز پاک نمی‌شود.',
+  'web.setting_backup_cpu_limit': 'حداکثر مصرف پردازنده‌ی بکاپ',
+  'web.setting_backup_cpu_limit_desc':
+    'بیشترین سهم پردازنده که فشرده‌سازی، رمزگذاری و تأیید بکاپ می‌گیرند، به درصدِ یک هسته. با ۷۰ درصد یک هسته از سرور دوهسته‌ای همیشه برای ربات آزاد می‌ماند؛ عدد کمتر بکاپ را کندتر می‌کند، سنگین‌تر نه.',
+  'web.recovery_disk_free': 'فضای آزاد پوشهٔ بکاپ',
+  'web.recovery_disk_total': 'ظرفیت دیسک',
+  'web.recovery_disk_required': 'فضای لازم برای بکاپ بعدی',
+  'web.recovery_disk_low_hint':
+    'فضای آزاد از فضای لازم برای بکاپ بعدی کمتر است؛ بکاپ بعدی به‌جای شکستن وسط کار، شروع نمی‌شود. آرشیوهای قدیمی را کم کنید یا دیسک را بزرگ‌تر کنید.',
   'web.setting_backup_keep_days': 'مدت نگهداری آرشیوهای بکاپ',
   'web.setting_backup_keep_days_desc':
     'هر آرشیو بکاپ دست‌کم این تعداد روز پس از پایان روی سرور می‌ماند. آرشیوی که بازیابیِ در جریان به آن نیاز دارد یا ارسالش نامعلوم مانده هرگز پاک نمی‌شود.',
@@ -3300,6 +3308,12 @@ export const WEB_FA = {
   'web.payment_timeline_review_lapsed': 'بررسی درگاه بدون پاسخ قطعی تمام شد',
   'web.payment_timeline_gateway_outcome': 'نتیجهٔ نهایی درگاه ثبت شد',
   'web.payment_timeline_late_completion': 'تأیید دیرهنگام درگاه',
+  // R8 A6.
+  'web.payment_timeline_late_credited': 'واریز تأیید دیرهنگام به کیف پول',
+  'web.payment_timeline_late_credited_to_wallet': 'به کیف پول مشتری؛ سفارش باز نشد',
+  'web.payment_timeline_reject_reasons': 'دلیل‌های رد درگاه',
+  'web.payment_timeline_reject_reasons_withheld': '{n} دلیل متنی (در گزارش ممیزی پرداخت)',
+  'web.payment_timeline_reject_reasons_none': 'درگاه دلیلی اعلام نکرد',
   'web.payment_timeline_order_settled': 'سفارش تسویه شد',
   'web.payment_timeline_order_fulfilment': 'تحویل سفارش',
   'web.payment_timeline_order_refunded': 'سفارش بازپرداخت شد',
@@ -4599,7 +4613,7 @@ export const WEB_FA = {
   'web.ib_button_payment_route_gift': 'روش‌های پرداخت با شارژ هدیه',
   'web.ib_button_payment_copy_card': 'کپی شماره کارت',
   'web.ib_button_payment_copy_amount': 'کپی مبلغ',
-  'web.ib_button_payment_copy_transfer_amount': 'کپی مبلغ دقیق',
+  'web.ib_button_payment_copy_transfer_amount': 'کپی مبلغ (ریال)',
   'web.ib_button_payment_sent': 'پرداخت را انجام دادم | ارسال رسید',
   'web.ib_button_payment_cancel': 'انصراف از پرداخت',
   'web.ib_button_payment_cancel_confirm': 'تأیید انصراف از پرداخت',
@@ -9875,6 +9889,7 @@ export const WEB_FA = {
   'web.err_backup_tool_oom_killed': 'حافظهٔ سرور کافی نبود.',
   'web.err_backup_memory_insufficient':
     'حافظهٔ آزاد سرور برای فشرده‌سازی بکاپ کافی نیست؛ بکاپ شروع نشد.',
+  'web.err_backup_disk_insufficient': 'فضای دیسک برای بکاپ کافی نیست؛ بکاپ شروع نشد.',
   'web.err_backup_unsafe_restore_target': 'بازیابی روی پایگاه‌دادهٔ در حال کار مجاز نیست.',
   'web.err_backup_verification_failed': 'آزمون بازیابی پشتیبان شکست خورد.',
   'web.err_bootstrap_already_completed': 'راه‌اندازی اولیه قبلاً انجام شده است.',

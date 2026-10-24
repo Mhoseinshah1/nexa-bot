@@ -160,8 +160,30 @@ export interface TicketFact {
  * transaction, and answers null for a row that is gone — a log never fails a transaction
  * for want of a fact.
  */
+/**
+ * R8 A4: one mass wallet credit as its summary message states it — the per-customer amount,
+ * the operation's own note and notify switch, and what the LEDGER says it credited (the
+ * `MASS_CREDIT` entries its items name), never the planned audience size.
+ */
+export interface MassCreditFact {
+  readonly id: string;
+  readonly amount: Money;
+  readonly note: string;
+  readonly notify: boolean;
+  readonly createdByAdminId: string;
+  readonly credited: number;
+  readonly skipped: number;
+  readonly total: Money;
+}
+
 export interface OpsLogFacts {
   customer(scope: TenantContext, id: string, tx: TransactionScope): Promise<CustomerFact | null>;
+  /** R8 A4: a WALLET_CREDIT bulk operation's summary; null for any other kind or none credited. */
+  massCredit(
+    scope: TenantContext,
+    operationId: string,
+    tx: TransactionScope,
+  ): Promise<MassCreditFact | null>;
   admin(scope: TenantContext, id: string, tx: TransactionScope): Promise<AdminFact | null>;
   /** The display names of roles, by their keys. A key with no role is absent from the map. */
   roleNames(
@@ -330,6 +352,18 @@ export interface OpsLogWords {
   providerMethodName(method: string | null): string | null;
   evidenceName(kind: string | null): string;
   paymentFailure(cause: string): string;
+  /**
+   * R8 A3: the real cause of a gateway failure, from the provider's status or the machine code
+   * the payment was closed with; an unknown code is the generic sentence with the code beside it.
+   */
+  gatewayFailureCause(code: string | null): string;
+  /** R8 A3: who cancelled an invoice. */
+  cancelledBy(by: 'CUSTOMER' | 'NEXA' | 'PROVIDER'): string;
+  /** R8 A3: a rejected receipt's reasons, prefixed by who rejected it. */
+  rejectReasons(by: 'OPERATOR' | 'PROVIDER', reasons: readonly string[]): string;
+  /** R8 A4: whether the customer is sent a message about an administrator's change. */
+  customerNotified(yes: boolean): string;
+  customerNotifiedBulk(yes: boolean): string;
   refundChannel(channel: string): string;
   refundFailure(cause: string): string;
   refundRequestOutcome(outcome: string): string;
@@ -369,6 +403,8 @@ export interface OpsLogWords {
   resellerOrdinary: string;
   stormHeading: string;
   eventTitle(code: string): string;
+  /** The Persian sentence of an event's English log message, or null where the message already reads. */
+  eventMessage?(code: string): string | null;
   /** The Persian title of a stalled NON-PROVISION operation; null for an unknown type. */
   stalledOperationTitle(operationType: string): string | null;
   severity(klass: string): string;

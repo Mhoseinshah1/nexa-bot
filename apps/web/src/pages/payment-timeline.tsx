@@ -104,6 +104,8 @@ const KIND_LABELS: Readonly<Record<PaymentTimelineKind, WebKey>> = {
   PAYMENT_OUTCOME_UNKNOWN: 'web.payment_timeline_outcome_unknown',
   GATEWAY_OUTCOME: 'web.payment_timeline_gateway_outcome',
   GATEWAY_LATE_COMPLETION: 'web.payment_timeline_late_completion',
+  GATEWAY_LATE_CREDITED: 'web.payment_timeline_late_credited',
+  GATEWAY_REJECT_REASONS: 'web.payment_timeline_reject_reasons',
   ORDER_SETTLED: 'web.payment_timeline_order_settled',
   ORDER_FULFILMENT: 'web.payment_timeline_order_fulfilment',
   ORDER_REFUNDED: 'web.payment_timeline_order_refunded',
@@ -137,6 +139,9 @@ const KIND_TONES: Readonly<Record<PaymentTimelineKind, Tone>> = {
   PAYMENT_OUTCOME_UNKNOWN: 'warn',
   GATEWAY_OUTCOME: 'neutral',
   GATEWAY_LATE_COMPLETION: 'warn',
+  // R8 A6: money did arrive — into the wallet, not the order.
+  GATEWAY_LATE_CREDITED: 'ok',
+  GATEWAY_REJECT_REASONS: 'warn',
   ORDER_SETTLED: 'ok',
   ORDER_FULFILMENT: 'violet',
   ORDER_REFUNDED: 'warn',
@@ -365,6 +370,47 @@ function detail(entry: PaymentTimelineEntry): ReactNode {
       return <CodeName value={entry.outcome} labels={GATEWAY_OUTCOME_LABELS} />;
     case 'GATEWAY_LATE_COMPLETION':
       return null;
+    // R8 A6: the late approval's credit, as its own item: the amount and where it went.
+    case 'GATEWAY_LATE_CREDITED':
+      return (
+        <>
+          <Money value={{ amountMinor: entry.amountMinor, currency: entry.currency }} /> ·{' '}
+          <span className="muted small">{t('web.payment_timeline_late_credited_to_wallet')}</span>
+        </>
+      );
+    /*
+     * R8 A6: the gateway's reasons, as the tokens it sent — the timeline holds no free text, so
+     * a prose reason is counted, not quoted (the payment's audit row has it).
+     */
+    case 'GATEWAY_REJECT_REASONS':
+      return (
+        <>
+          {entry.reasons.length === 0 ? null : (
+            <span>
+              {entry.reasons.map((reason, index) => (
+                <span key={reason}>
+                  {index === 0 ? null : ' · '}
+                  {code(reason)}
+                </span>
+              ))}
+            </span>
+          )}
+          {entry.withheldCount === 0 ? null : (
+            <>
+              {entry.reasons.length === 0 ? null : ' · '}
+              <span className="muted small">
+                {t('web.payment_timeline_reject_reasons_withheld').replace(
+                  '{n}',
+                  formatNumber(entry.withheldCount),
+                )}
+              </span>
+            </>
+          )}
+          {entry.reasons.length === 0 && entry.withheldCount === 0 ? (
+            <span className="muted small">{t('web.payment_timeline_reject_reasons_none')}</span>
+          ) : null}
+        </>
+      );
     case 'ORDER_SETTLED':
     case 'ORDER_REFUNDED':
       return <OrderLink orderId={entry.orderId} />;

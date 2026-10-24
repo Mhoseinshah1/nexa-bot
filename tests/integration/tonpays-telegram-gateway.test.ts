@@ -608,6 +608,125 @@ describe('TonPays Telegram, through the one settlement path', () => {
     });
   });
 
+  /*
+   * R8 A1: the owner's screenshots, reproduced. Nexa's customer fee is 10%, so a 470,000
+   * purchase sends TonPays 517,000 (`sent_amount`, the payable) and TonPays answers with its
+   * OWN exact figure, 569,574 (`final_amount`: its markup and a unique tail on top of the
+   * payable). A 20,000 top-up sends 22,000 and TonPays asks 25,099. The customer is told to
+   * transfer TonPays' figure — in rial — because TonPays approves automatically only on it;
+   * what settles, what the wallet is credited and what a refund would return is the
+   * principal, never the payable and never TonPays' figure.
+   */
+  describe('R8 A1: the screenshot figures', () => {
+    async function withFee(basisPoints: number) {
+      await ctx.container.paymentGateways.configure(tenantA, owner, {
+        idempotencyKey: key(),
+        provider: 'TONPAYS_TELEGRAM',
+        config: { ...OPEN_ROUTE, customerFeeBasisPoints: basisPoints },
+      });
+      await enable();
+    }
+
+    const lastScreen = () => {
+      const body = telegram.sent.at(-1);
+      return {
+        text: String(body?.['text'] ?? ''),
+        markup: JSON.stringify(body?.['reply_markup'] ?? {}),
+      };
+    };
+
+    it('purchase: 470,000 + 47,000 = 517,000 sent, TonPays asks 569,574; shown as 5,695,740 rial; the order settles 470,000 and no credit exceeds it', async () => {
+      fake.createFinalAmount = (requested) => (requested === 517_000 ? 569_574 : requested + 37);
+      await withFee(1000);
+      const orderId = await draftOrder(470_000n);
+      const paymentId = await payTelegram(orderId);
+      if (paymentId === null) throw new Error('no attempt');
+      await pass();
+      expect(JSON.parse(fake.creates.at(-1)!.body)).toMatchObject({ amount: 517_000 });
+      const [recorded] = await rows<{
+        sent: string;
+        final: string;
+        amount: string;
+        fee: string;
+        payable: string;
+      }>(
+        sql`SELECT i.sent_amount::text AS sent, i.final_amount::text AS final, p.amount::text AS amount,
+                   p.customer_fee_amount::text AS fee, p.payable_amount::text AS payable
+              FROM gateway_invoices i JOIN payments p ON p.id = i.payment_id
+             WHERE i.payment_id = ${paymentId}`,
+      );
+      expect(recorded).toEqual({
+        sent: '517000',
+        final: '569574',
+        amount: '470000',
+        fee: '47000',
+        payable: '517000',
+      });
+
+      // The screen: TonPays' figure in rial, copied as bare rial digits; no fee breakdown.
+      await tap(`gc:${paymentId}`);
+      const screen = lastScreen();
+      expect(screen.text).toContain('<b>۵٬۶۹۵٬۷۴۰ ریال</b>');
+      expect(screen.text).toContain('(معادل ۵۶۹٬۵۷۴ تومان)');
+      expect(screen.text).not.toContain('کارمزد');
+      expect(screen.markup).toContain('"copy_text":{"text":"5695740"}');
+
+      const created = await invoiceOf(paymentId);
+      if (created.provider_invoice_id === null) throw new Error('not created');
+      fake.set(created.provider_invoice_id, 'completed', true);
+      clock.shift(6 * 60_000);
+      await pass();
+      expect((await paymentOf(paymentId)).state).toBe('CONFIRMED');
+      const [order] = await rows<{ state: string; total_amount: string }>(
+        sql`SELECT state, total_amount::text AS total_amount FROM orders WHERE id = ${orderId}`,
+      );
+      expect(order).toEqual({ state: 'PAID', total_amount: '470000' });
+      const credits = await rows<{ amount: string }>(
+        sql`SELECT amount::text AS amount FROM wallet_entries
+             WHERE customer_id = ${maryam} AND direction = 'CREDIT'`,
+      );
+      for (const credit of credits) expect(BigInt(credit.amount)).toBeLessThanOrEqual(470_000n);
+    });
+
+    it('top-up: 20,000 + 2,000 = 22,000 sent, TonPays asks 25,099; shown as 250,990 rial; the wallet is credited 20,000 exactly', async () => {
+      fake.createFinalAmount = (requested) => (requested === 22_000 ? 25_099 : requested + 37);
+      await withFee(1000);
+      const attempt = await ctx.container.payments.requestGatewayTopup(
+        { tenantId: tenantA.tenantId, botInstanceId: BOT_A },
+        systemActor(key()),
+        maryam,
+        { idempotencyKey: key(), amount: money(20_000n, 'IRT'), provider: 'TONPAYS_TELEGRAM' },
+      );
+      await pass();
+      const invoice = await invoiceOf(attempt.payment.id);
+      if (invoice.provider_invoice_id === null) throw new Error('not created');
+      expect(JSON.parse(fake.creates.at(-1)!.body)).toMatchObject({ amount: 22_000 });
+      const [recorded] = await rows<{ sent: string; final: string }>(
+        sql`SELECT sent_amount::text AS sent, final_amount::text AS final FROM gateway_invoices
+             WHERE payment_id = ${attempt.payment.id}`,
+      );
+      expect(recorded).toEqual({ sent: '22000', final: '25099' });
+
+      await tap(`gc:${attempt.payment.id}`);
+      const screen = lastScreen();
+      expect(screen.text).toContain('<b>۲۵۰٬۹۹۰ ریال</b>');
+      expect(screen.text).toContain('(معادل ۲۵٬۰۹۹ تومان)');
+      expect(screen.text).not.toContain('فاکتور داخلی');
+      expect(screen.markup).toContain('"copy_text":{"text":"250990"}');
+
+      fake.set(invoice.provider_invoice_id, 'completed', true);
+      clock.shift(6 * 60_000);
+      await pass();
+      expect((await paymentOf(attempt.payment.id)).state).toBe('CONFIRMED');
+      const credited = await rows<{ amount: string; reason: string }>(
+        sql`SELECT amount::text AS amount, reason FROM wallet_entries
+             WHERE customer_id = ${maryam} AND direction = 'CREDIT' ORDER BY created_at`,
+      );
+      // The principal, once: never the 22,000 payable and never TonPays' 25,099.
+      expect(credited).toEqual([{ amount: '20000', reason: 'TOPUP_GATEWAY' }]);
+    });
+  });
+
   describe('the card', () => {
     it('applies a new card: appended to the history, made current, the provider’s cooldown copied', async () => {
       const { paymentId } = await createdAttempt();
@@ -696,6 +815,54 @@ describe('TonPays Telegram, through the one settlement path', () => {
       );
       expect(await askCard(paymentId)).toBe(false);
       expect(await cardChanges(paymentId)).toHaveLength(1);
+    });
+
+    it('R8 A2: «🔄 تعویض کارت» pressed inside the first minute answers the seconds left and asks for nothing; after it, the change is requested', async () => {
+      const { paymentId } = await createdAttempt();
+      const before = telegram.requests.length;
+      await tap(`gk:${paymentId}`);
+      const answers = telegram.requests
+        .slice(before)
+        .filter((one) => one.url.includes('/answerCallbackQuery'));
+      expect(answers.map((one) => one.raw).join('\n')).toMatch(/ثانیه دیگر دوباره امتحان کنید/u);
+      expect(await cardChanges(paymentId)).toEqual([]);
+      clock.shift(61_000);
+      await tap(`gk:${paymentId}`);
+      expect(await cardChanges(paymentId)).toEqual([{ state: 'REQUESTED', error_code: null }]);
+    });
+
+    it('R8 A2 (R5C-1): the tap honours the owner’s card-switch limits under the payment’s lock — zero switches, the distinct-card cap, the owner’s cooldown', async () => {
+      const setLimit = async (settingKey: string, value: number): Promise<void> => {
+        await ctx.container.database.db.execute(sql`
+          INSERT INTO setting_values (id, tenant_id, setting_key, value, version, updated_at)
+          VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${settingKey}, ${String(value)}::jsonb, 1, now())
+          ON CONFLICT (tenant_id, setting_key) DO UPDATE SET value = EXCLUDED.value`);
+      };
+      // `clock.shift` sets the offset from real time; it does not add to it.
+      // Zero: never, whatever TonPays allows.
+      await setLimit('payments.card_switch_limit', 0);
+      const off = await createdAttempt();
+      clock.shift(61_000);
+      expect(await askCard(off.paymentId)).toBe(false);
+      expect(await cardChanges(off.paymentId)).toEqual([]);
+
+      // The defaults (two switches, two distinct cards): one change shows the second card, and
+      // TonPays — not Nexa — picks the next one, so a third card is never asked for.
+      await setLimit('payments.card_switch_limit', 2);
+      const capped = await createdAttempt(300_000n);
+      clock.shift(122_000);
+      expect(await askCard(capped.paymentId)).toBe(true);
+      await pass();
+      clock.shift(260_000);
+      expect(await askCard(capped.paymentId)).toBe(false);
+      expect(await cardChanges(capped.paymentId)).toEqual([{ state: 'APPLIED', error_code: null }]);
+
+      // The owner's cooldown runs from the last change, beyond TonPays' own sixty seconds.
+      await setLimit('payments.card_switch_max_distinct_cards', 5);
+      await setLimit('payments.card_switch_cooldown_seconds', 600);
+      expect(await askCard(capped.paymentId)).toBe(false);
+      clock.shift(730_000);
+      expect(await askCard(capped.paymentId)).toBe(true);
     });
 
     it('TPTG-04: a change whose send was stamped and never answered is UNKNOWN, never re-sent, and the current card is hidden', async () => {

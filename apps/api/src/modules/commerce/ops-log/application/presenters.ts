@@ -15,6 +15,7 @@ import type {
   BalanceAround,
   CustomerFact,
   LedgerEntryFact,
+  MassCreditFact,
   OperationFact,
   OpsLogWords,
   OrderFact,
@@ -124,6 +125,8 @@ export function walletAdjusted(input: {
   readonly admin: AdminFact | null;
   readonly at: Date;
   readonly words: OpsLogWords;
+  /** R8 A4: whether the customer is sent a message about it; absent when not known. */
+  readonly customerNotified?: boolean;
 }): Built {
   const { entry, balance, customer, admin, at, words } = input;
   const values: Mutable = {
@@ -142,11 +145,49 @@ export function walletAdjusted(input: {
     values['adminUsername'] = `@${admin.username}`;
     values['adminTelegramId'] = admin.telegramUserId ?? words.noTelegram;
   }
+  if (input.customerNotified !== undefined) {
+    values['customerNotified'] = words.customerNotified(input.customerNotified);
+  }
   return {
     logType: 'ADMIN_WALLET',
     templateKey: 'ops.log.wallet_adjusted' as TemplateKey,
     values,
-    buttons: [userButton(entry.customerId)],
+    // R8 A4: «پروفایل کاربر» and «تراکنش» (the customer's wallet).
+    buttons: [userButton(entry.customerId), { kind: 'WALLET', ref: entry.customerId }],
+  };
+}
+
+/**
+ * R8 A4 — a mass wallet credit, as ONE message for the whole operation. A message per customer
+ * would be a hundred thousand lines for a hundred-thousand-customer audience; the per-customer
+ * movements are on each customer's wallet, behind the operation's own page.
+ */
+export function massCredited(input: {
+  readonly fact: MassCreditFact;
+  readonly admin: AdminFact | null;
+  readonly at: Date;
+  readonly words: OpsLogWords;
+}): Built {
+  const { fact, admin, at, words } = input;
+  const values: Mutable = {
+    amount: fact.amount,
+    recipients: fact.credited,
+    total: fact.total,
+    reason: oneLine(fact.note) ?? words.none,
+    customerNotified: words.customerNotifiedBulk(fact.notify),
+    at,
+  };
+  if (fact.skipped > 0) values['skipped'] = fact.skipped;
+  if (admin !== null) {
+    values['adminName'] = admin.displayName;
+    values['adminUsername'] = `@${admin.username}`;
+    values['adminTelegramId'] = admin.telegramUserId ?? words.noTelegram;
+  }
+  return {
+    logType: 'ADMIN_WALLET',
+    templateKey: 'ops.log.wallet_mass_credited' as TemplateKey,
+    values,
+    buttons: [{ kind: 'BULK_OPERATION', ref: fact.id }],
   };
 }
 

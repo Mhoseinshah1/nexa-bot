@@ -23,10 +23,10 @@ export const CLI_SCRATCH_PREFIX = '.cli-';
  * The plaintext files a run directory can hold. Never the archive. `manifest.json` is the
  * 7-Zip seal's staging copy of the manifest (E4) — metadata, but plaintext of the dump's kind.
  */
-const PLAINTEXT_FILES = ['dump.pgcustom', 'verify.pgcustom', 'manifest.json'] as const;
+export const PLAINTEXT_FILES = ['dump.pgcustom', 'verify.pgcustom', 'manifest.json'] as const;
 
 /** A run directory is named by its UUID backup id; anything else is not a run's. */
-const RUN_DIRECTORY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const RUN_DIRECTORY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Creates a fresh 0700 directory under the backup root for one CLI command.
@@ -110,6 +110,20 @@ export class FilesystemBackupDebris implements BackupDebrisStore {
       }
     }
     return { removed, survived, pending };
+  }
+
+  /** Free and total bytes of the backup volume, or null when the root does not exist. */
+  async volume(): Promise<{ readonly freeBytes: number; readonly totalBytes: number } | null> {
+    try {
+      const info = await statfs(this.root);
+      return {
+        freeBytes: Number(info.bavail) * Number(info.bsize),
+        totalBytes: Number(info.blocks) * Number(info.bsize),
+      };
+    } catch (error) {
+      if (isAbsent(error)) return null;
+      throw error;
+    }
   }
 
   async freeBytes(): Promise<number | null> {

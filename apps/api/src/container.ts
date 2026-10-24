@@ -21,6 +21,8 @@ import {
   DATA_RETENTION_SETTING_KEYS,
   IDEMPOTENCY_INTERACTIVE_RETENTION_DAYS_DEFAULT,
   OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT,
+  BACKUP_CPU_LIMIT_DEFAULT,
+  BACKUP_CPU_LIMIT_SETTING_KEY,
   BACKUP_LOCAL_COPIES_DEFAULT,
   BACKUP_LOCAL_COPIES_SETTING_KEY,
   BACKUP_SCHEDULE_SETTING_KEYS,
@@ -211,8 +213,13 @@ import { DiagnosticsService } from './modules/platform/system/application/diagno
 import { DrizzleDiagnosticsReader } from './modules/platform/system/infrastructure/drizzle-diagnostics.reader.js';
 import { BackupService } from './modules/platform/backup/application/backup.service.js';
 import { BackupScheduler } from './modules/platform/backup/application/backup-scheduler.js';
-import { BackupHousekeeping } from './modules/platform/backup/application/backup-housekeeping.js';
+import {
+  BackupHousekeeping,
+  requiredFreeBytes,
+} from './modules/platform/backup/application/backup-housekeeping.js';
 import { DrizzleBackupRunRepository } from './modules/platform/backup/infrastructure/drizzle-backup-run.repository.js';
+import { BackupOrphanSweep } from './modules/platform/backup/application/backup-orphan-sweep.js';
+import { FilesystemBackupRunDirectories } from './modules/platform/backup/infrastructure/run-directories.js';
 import { DrizzleRecoveryRequestRepository } from './modules/platform/recovery/infrastructure/drizzle-recovery-request.repository.js';
 import { FilesystemRecoveryWorkspaces } from './modules/platform/recovery/infrastructure/recovery-workspace.js';
 import { FileCutoverJournal } from './modules/platform/recovery/infrastructure/cutover-journal.js';
@@ -479,7 +486,10 @@ import { ReceiptService } from './modules/commerce/payments/application/receipt.
 import { TelegramReceiptFiles } from './modules/commerce/payments/infrastructure/telegram-receipt-files.js';
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
 import { CardSwitchService } from './modules/commerce/payments/application/card-switch.service.js';
-import { CustomerFactNoticeConsumer } from './modules/commerce/messaging/application/customer-fact-notice.consumer.js';
+import {
+  CustomerFactNoticeConsumer,
+  WALLET_ADMIN_NOTICE,
+} from './modules/commerce/messaging/application/customer-fact-notice.consumer.js';
 import { RefundService } from './modules/commerce/payments/application/refund.service.js';
 import { ServiceRefundRequestService } from './modules/commerce/payments/application/service-refund-request.service.js';
 import { ServiceRefundDecisionService } from './modules/commerce/payments/application/service-refund-decision.service.js';
@@ -973,6 +983,11 @@ export interface Container {
    * overdue conditions (E5). Constructed in every role, started in the worker.
    */
   readonly backupHousekeeping: BackupHousekeeping;
+  /**
+   * Round 8 (B1): removes what killed backup runs left in their directories. Inside every
+   * run, and once at worker start.
+   */
+  readonly backupOrphanSweep: BackupOrphanSweep;
   readonly recoveryRequestSweeper: RetentionSweeper;
   /** E3: published outbox history and interactive idempotency keys. */
   readonly outboxRetentionSweeper: RetentionSweeper;
@@ -2092,6 +2107,8 @@ export function createContainer(
         facts: opsLogFacts,
         words: i18nOpsLogWords,
         refundRequests: new DrizzleServiceRefundRequestRepository(database.db),
+        // R8 A3: who cancelled an invoice, and the gateway's reasons for a rejected receipt.
+        providerRequests: new DrizzleGatewayProviderRequestRepository(database.db),
       }),
       /*
        * WP-A7: a new ticket or a customer's reply → a support notification in the operator
@@ -2105,7 +2122,18 @@ export function createContainer(
        * work. Imports are excluded twice: by the events they do not emit, and by the
        * provenance each consumer checks.
        */
-      new LedgerLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
+      new LedgerLogConsumer({
+        lane: opsLogLane,
+        facts: opsLogFacts,
+        words: i18nOpsLogWords,
+        // R8 A4: the same switch `CustomerFactNoticeConsumer` reads for the customer's message.
+        customerNotified: (scope, reason, tx) => {
+          const notice = WALLET_ADMIN_NOTICE[reason];
+          return notice === undefined
+            ? Promise.resolve(false)
+            : featureFlagResolver.isEnabled(scope, notice.flag, tx);
+        },
+      }),
       new CustomerLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
       new ServiceLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
       new AdminLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
@@ -3629,6 +3657,8 @@ export function createContainer(
     credentials: gatewayCredentialStore,
     // TonPays Telegram: the card-change and receipt lanes, and the window sweep.
     cardTransfer: gatewayCardTransferRepository,
+    // R8 A2: the owner's card-switch limits, for the card-change button.
+    cardSwitchSettings: settingsResolver,
     providerRequests: gatewayProviderRequestRepository,
     refundCards: refundCardSealer,
     cardAdapters: cardTransferAdapters,
@@ -3719,6 +3749,7 @@ export function createContainer(
     cardTransfer: gatewayCardTransferRepository,
     providerRequests: gatewayProviderRequestRepository,
     refundCards: refundCardSealer,
+    settings: settingsResolver,
   });
   const starsPayments = new StarsPaymentService({
     invoices: gatewayInvoiceRepository,
@@ -7077,8 +7108,23 @@ export function createContainer(
     { intervalMs: 3_600_000, initialDelayMs: 240_000, batchSize: 5_000, maxBatchesPerTick: 200 },
   );
 
+  /*
+   * Round 8 B5: the CPU share (percent of one core) the backup's 7-Zip and the verification's
+   * pg_restore may use, read from the settings registry at EACH spawn so an operator's change
+   * applies to the next tool, not the next deploy. Before a tenant is provisioned the registry
+   * default applies; a read that throws falls back to it too (`resolveCpuLimit`).
+   */
+  const backupCpuLimit = async (): Promise<number> =>
+    installationTenantId === null
+      ? BACKUP_CPU_LIMIT_DEFAULT
+      : settingsResolver.valueOf<number>(
+          { tenantId: installationTenantId, botInstanceId: null },
+          BACKUP_CPU_LIMIT_SETTING_KEY,
+        );
+
   const backupTools = new PostgresDatabaseTools({
     databaseUrl: config.DATABASE_URL,
+    cpuLimit: backupCpuLimit,
     dumpTimeoutMs: config.BACKUP_DUMP_TIMEOUT_MS,
     restoreTimeoutMs: config.BACKUP_RESTORE_TIMEOUT_MS,
     binDir: config.BACKUP_PG_BIN_DIR === '' ? undefined : config.BACKUP_PG_BIN_DIR,
@@ -7114,6 +7160,7 @@ export function createContainer(
       binary: config.BACKUP_SEVEN_ZIP_BIN,
       level: config.BACKUP_SEVEN_ZIP_LEVEL,
       threads: config.BACKUP_SEVEN_ZIP_THREADS,
+      cpuLimit: backupCpuLimit,
       memoryBudgetMb: config.BACKUP_SEVEN_ZIP_MEMORY_MB,
       memoryHeadroomMb: config.BACKUP_SEVEN_ZIP_HEADROOM_MB,
       readAvailableMb: readMemAvailableMb,
@@ -7163,7 +7210,45 @@ export function createContainer(
       dailyTime: config.BACKUP_DAILY_TIME,
     },
   });
+  /*
+   * Round 8 B3: ONE view of the backup volume for the three who ask about it — the run's
+   * preflight (refuse before the dump), the housekeeping pass (warn) and the Web Admin card.
+   * The requirement is `requiredFreeBytes` (the last verified run's dump plus archive, times
+   * 1.5), so a refusal, a warning and a card can never quote different figures.
+   */
+  const backupVolume = new FilesystemBackupDebris(config.BACKUP_WORK_DIR);
+  const BACKUP_DISK_FLOOR_BYTES = 1024 * 1024 * 1024;
+  const backupDiskState = async () => {
+    const volume = await backupVolume.volume();
+    if (volume === null) return null;
+    const requiredBytes = requiredFreeBytes(
+      await backupRuns.latestVerified(),
+      BACKUP_DISK_FLOOR_BYTES,
+    );
+    return { ...volume, requiredBytes, low: volume.freeBytes < requiredBytes };
+  };
+  const backupOrphanSweep = new BackupOrphanSweep({
+    directories: new FilesystemBackupRunDirectories(config.BACKUP_WORK_DIR),
+    runs: backupRuns,
+    clock,
+    // A run an unfinished recovery names (its pre-restore backup, a local archive it is
+    // restoring) is never touched.
+    protectedByRecovery: () => recoveryRequests.backupIdsInUse(),
+    logger,
+  });
   const backup = new BackupService({
+    diskPreflight: async () => {
+      const state = await backupDiskState();
+      return state === null
+        ? null
+        : { freeBytes: state.freeBytes, requiredBytes: state.requiredBytes };
+    },
+    afterSuccess: async () => {
+      // Like the housekeeping pass: no file is deleted beside a recovery.
+      if (await recoveryQuiesced()) return;
+      await backupHousekeeping.pruneArchives();
+      await backupHousekeeping.pruneDeliveredCopies();
+    },
     // Round 4 PR-D (L31): the caption is the operator's template, short and in Persian, with
     // the time of the next automatic backup when one is scheduled.
     renderCaption: backupCaptionRenderer({
@@ -7238,6 +7323,7 @@ export function createContainer(
     restoreCommand: 'botctl restore --target <empty-db> <part.001> [<part.002> …]',
     formatTakenAt: (at) => formatDateTime(at, DEFAULT_TEMPLATE_PRESENTATION),
     conditionOpen: backupConditionOpen,
+    orphanSweep: backupOrphanSweep,
   });
   /*
    * The recovery graph.
@@ -7394,6 +7480,7 @@ export function createContainer(
     clock,
     workRoot: config.BACKUP_WORK_DIR,
     schedule: () => backupSchedule.effective(),
+    disk: backupDiskState,
   });
 
   const recoveryExecutor = new RecoveryExecutor({
@@ -7602,7 +7689,7 @@ export function createContainer(
    */
   const backupHousekeeping = new BackupHousekeeping({
     runs: backupRuns,
-    debris: new FilesystemBackupDebris(config.BACKUP_WORK_DIR),
+    debris: backupVolume,
     clock,
     opsLog,
     scope: () =>
@@ -7663,7 +7750,7 @@ export function createContainer(
         config.BACKUP_RESTORE_TIMEOUT_MS +
         BACKUP_LEASE_STALE_AFTER_MS,
     ),
-    diskFloorBytes: 1024 * 1024 * 1024,
+    diskFloorBytes: BACKUP_DISK_FLOOR_BYTES,
     tickIntervalMs: 15 * 60_000,
     initialDelayMs: 90_000,
     logger,
@@ -8309,6 +8396,7 @@ export function createContainer(
     backup,
     backupScheduler,
     backupHousekeeping,
+    backupOrphanSweep,
     recoveryQuiesced,
     backupRuns,
     backupArchiver,
@@ -8374,6 +8462,19 @@ export function createContainer(
     },
     async shutdown() {
       installationKeyLoader.stop();
+      // Round 8 (B1): the in-flight backup dies with this process; its plaintext goes now
+      // rather than waiting for a sweep to find the run abandoned. Never its archive.
+      await backup.discardInFlightPlaintext().then(
+        (left) => {
+          if (left.length > 0)
+            logger.error({ left }, 'in-flight backup plaintext survived shutdown');
+        },
+        (error: unknown) =>
+          logger.error(
+            { reason: error instanceof Error ? error.message : String(error) },
+            'could not remove the in-flight backup plaintext at shutdown',
+          ),
+      );
       backupScheduler.stop();
       backupHousekeeping.stop();
       legacyCompactionExecutor.stop();

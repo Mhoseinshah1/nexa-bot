@@ -159,8 +159,9 @@ import type {
 import type { GatewayReceiptCaptureService } from '../../modules/commerce/payments/application/gateway-receipt-capture.service.js';
 import {
   cancelAvailable,
-  cardChangeAvailable,
+  cardChangeOffered,
   customerMessageKeyOfError,
+  decideCardChange,
   isBuyerConflictCode,
   receiptUploadAvailable,
   refundCardAvailable,
@@ -198,6 +199,13 @@ import type {
 import type { CustomerScreenComposer } from '../../modules/commerce/messaging/application/customer-screens.js';
 import type { StartGreetingKey } from '../../modules/commerce/messaging/application/start-greeting.js';
 import { amountToTransfer } from '../../modules/commerce/payments/domain/amount-to-transfer.js';
+import {
+  CARD_INVOICE_ROW,
+  cardInvoiceAmountValues,
+  cardInvoiceCardValues,
+  copyCardNumberButton,
+  copyRialAmountButton,
+} from './card-invoice.js';
 import type { ResellerService } from '../../modules/commerce/resellers/application/reseller.service.js';
 import type { ServiceRecord } from '../../modules/commerce/provisioning/application/ports.js';
 import type { OperatorServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
@@ -15586,9 +15594,36 @@ export class BotRuntime {
       idempotencyKey: `${idempotencyKey}:card-change`,
     });
     const fresh = (await this.deps.gateway.attemptFor(scope, customer.id, paymentId)) ?? view;
-    return requested
-      ? this.gatewayAttemptReply({ ...fresh, reissued: true }, fresh.payment.orderId, scope)
-      : this.refusedCardTap(scope, fresh);
+    if (requested) {
+      return this.gatewayAttemptReply({ ...fresh, reissued: true }, fresh.payment.orderId, scope);
+    }
+    /*
+     * R8 A2: the button is drawn during a cooldown, so a press inside one is answered with the
+     * seconds left and the invoice stays exactly as it is — the manual switch's answer
+     * (R5C-1). The refusal itself was decided under the payment's lock; this only explains it.
+     */
+    if (fresh.payment.state === 'PENDING') {
+      const facts = await this.deps.gateway.cardFactsFor(scope, fresh.invoice);
+      const decision = decideCardChange(
+        fresh.invoice,
+        facts?.latestChange ?? null,
+        this.deps.clock.now(),
+        facts?.changeAllowance ?? null,
+      );
+      if (decision.kind === 'COOLDOWN') {
+        return {
+          key: null,
+          values: {},
+          buttons: [],
+          orderId: null,
+          toast: {
+            key: 'bot.payment.switch_card_cooldown',
+            values: { seconds: decision.retryAfterSeconds },
+          },
+        };
+      }
+    }
+    return this.refusedCardTap(scope, fresh);
   }
 
   /**
@@ -15923,21 +15958,17 @@ export class BotRuntime {
      * `row: 0` puts them side by side above the actions, which is the layout the owner
      * specified after staging acceptance.
      */
+    /*
+     * R8 A2: the owner-approved card invoice's first row — the amount in RIAL digits (what
+     * must be TRANSFERRED: the payable, with any customer fee, R6 item 4) and the card's
+     * sixteen digits without spaces.
+     */
     const copies: CustomerButton[] =
       destination === null
         ? []
         : [
-            {
-              ...inlineLabel('payment.copy_card'),
-              copyText: destination.cardNumber,
-              row: 0,
-            },
-            {
-              ...inlineLabel('payment.copy_amount'),
-              // R6 item 4: what must be TRANSFERRED - the payable, with any customer fee.
-              copyText: plainAmount(amountToTransfer(payment)),
-              row: 0,
-            },
+            copyRialAmountButton(amountToTransfer(payment)),
+            copyCardNumberButton(destination.cardNumber),
           ];
 
     const switchOffer =
@@ -15951,6 +15982,7 @@ export class BotRuntime {
             {
               ...inlineLabel('payment.switch_card'),
               data: `${PAY_SWITCH_CARD_CALLBACK_PREFIX}${payment.id}.${String(switchOffer.sequence)}`,
+              row: CARD_INVOICE_ROW.SWITCH,
             },
           ];
 
@@ -15967,6 +15999,9 @@ export class BotRuntime {
           ? { principal: payment.amount, fee: payment.customerFee.fee }
           : {}),
         reference: paymentTrackingCode(payment),
+        // R8 A2: the amount in rial (Toman beside it) and the deadline's time of day.
+        ...cardInvoiceAmountValues(amountToTransfer(payment)),
+        ...(payment.expiresAt === null ? {} : { expiresTime: payment.expiresAt }),
         /*
          * Composed behind the application layer, by the renderer this surface is
          * handed. A surface may not resolve the catalogue — `check-boundaries.sh`
@@ -16018,11 +16053,15 @@ export class BotRuntime {
         {
           ...inlineLabel('payment.sent'),
           data: `${PAY_SENT_CALLBACK_PREFIX}${payment.id}`,
+          ...(destination === null ? {} : { row: CARD_INVOICE_ROW.ACTIONS }),
         },
         {
           ...inlineLabel('payment.cancel'),
           data: `${CANCEL_PAY_ASK_CALLBACK_PREFIX}${payment.id}`,
+          ...(destination === null ? {} : { row: CARD_INVOICE_ROW.ACTIONS }),
         },
+        // R8 A2: the way home, on its own last row.
+        ...(destination === null ? [] : [mainMenuButton()]),
       ],
       orderId,
       // R2: the invoice screen of the order's (or the top-up's) wizard.
@@ -17323,49 +17362,72 @@ function cardTransferScreen(
     (payment.providerReviewUntil ?? null) === null &&
     payment.expiresAt !== null &&
     at.getTime() < payment.expiresAt.getTime();
+  // R8 A2: the owner-approved rows — copies, the card switch, receipt and cancel, main menu.
   const receipt: CustomerButton = {
     ...inlineLabel('payment.gateway_receipt'),
     data: `${GATEWAY_RECEIPT_CALLBACK_PREFIX}${payment.id}`,
+    row: CARD_INVOICE_ROW.ACTIONS,
   };
   const change: CustomerButton = {
     ...inlineLabel('payment.gateway_change_card'),
     data: `${GATEWAY_CARD_CHANGE_CALLBACK_PREFIX}${payment.id}`,
+    row: CARD_INVOICE_ROW.SWITCH,
   };
   const cancelRequest = facts?.latestCancel ?? null;
   const cancel: CustomerButton = {
     ...inlineLabel('payment.gateway_cancel'),
     data: `${GATEWAY_CANCEL_ASK_CALLBACK_PREFIX}${payment.id}`,
+    row: CARD_INVOICE_ROW.ACTIONS,
   };
   /*
    * R6 item 2: TonPays approves automatically only on the EXACT amount it named (its odd
-   * `final_amount`), so that — never a rounded or separated figure — is what the customer is
-   * told and what the copy button carries: bare ASCII digits. When TonPays named none, the
-   * exact amount IS what Nexa asked for - `sentAmount`, the payable in the provider's own
-   * unit (Toman), never the payment-currency payable (an IRR payment would show rial as
-   * Toman). It is display and clipboard only: what Nexa settles, credits and refunds is
-   * still the payment's own snapshot.
+   * `final_amount`), so that is what the customer is told and what the copy button carries.
+   * When TonPays named none, the exact amount IS what Nexa asked for - `sentAmount`, the
+   * payable in the provider's own unit (Toman), never the payment-currency payable (an IRR
+   * payment would show rial as Toman). R8 A2: shown in RIAL (Toman beside it) and copied as
+   * bare rial digits. It is display and clipboard only: what Nexa settles, credits and
+   * refunds is still the payment's own principal.
    */
-  const transferAmount = plainAmount(
-    money(invoice.finalAmount !== null ? invoice.finalAmount : invoice.sentAmount, 'IRT'),
+  const exact = money(
+    invoice.finalAmount !== null ? invoice.finalAmount : invoice.sentAmount,
+    invoice.providerUnit === 'IRR' ? 'IRR' : 'IRT',
   );
-  const copyExact: CustomerButton = {
-    ...inlineLabel('payment.copy_transfer_amount'),
-    copyText: transferAmount,
-    row: 0,
-  };
+  const transferAmount = plainAmount(exact);
+  const copyExact = copyRialAmountButton(exact);
+  const copyCard = invoice.cardNumber === null ? null : copyCardNumberButton(invoice.cardNumber);
+  /*
+   * R8 A2: «🔄 تعویض کارت» is drawn while a change is allowed now OR after a cooldown — the
+   * invoice is drawn the moment its card arrives, inside the first minute, so a button that
+   * waited for the cooldown to pass was never on the screen. The tap decides again under the
+   * payment's lock and answers a cooldown with the seconds left. The owner's R5C-1 limits
+   * (`changeAllowance`) bound it like the manual switch.
+   */
+  const menu = mainMenuButton();
   const actions = [
     copyExact,
+    ...(copyCard === null ? [] : [copyCard]),
+    ...(facts !== null &&
+    windowOpen &&
+    cardChangeOffered(invoice, latest, at, facts.changeAllowance ?? null)
+      ? [change]
+      : []),
     ...(facts !== null && windowOpen && receiptUploadAvailable(invoice, submissions)
       ? [receipt]
       : []),
-    ...(facts !== null && windowOpen && cardChangeAvailable(invoice, latest, at) ? [change] : []),
     ...(facts !== null && windowOpen && cancelAvailable(invoice, cancelRequest, submissions)
       ? [cancel]
       : []),
-    cardCheck(payment.id),
-    mainMenuButton(),
+    menu,
   ];
-  const brief = { payable, transferAmount, expiresAt, reference };
+  const copies = (button: CustomerButton): boolean => button !== copyExact && button !== copyCard;
+  const brief = {
+    payable,
+    transferAmount,
+    expiresAt,
+    expiresTime: expiresAt,
+    reference,
+    ...cardInvoiceAmountValues(exact),
+  };
   // Round 6: a cancel with the provider, or one it refused / lost and no inquiry has answered since.
   if (cancelRequest !== null) {
     const cancelKey = cancelNoticeKey(cancelRequest, invoice);
@@ -17410,8 +17472,8 @@ function cardTransferScreen(
     return {
       key: 'bot.payment.gateway_card_changing',
       values: brief,
-      // Not the copy button: the new card may carry a new exact amount, copied once it shows.
-      buttons: actions.filter((button) => button !== copyExact),
+      // No copy buttons: the new card may carry a new exact amount, copied once it shows.
+      buttons: actions.filter(copies),
       orderId,
       wizard,
     };
@@ -17421,14 +17483,20 @@ function cardTransferScreen(
     return {
       key: 'bot.payment.gateway_card_unconfirmed',
       values: brief,
-      // No card is shown, so no exact amount is offered for copying either.
-      buttons: actions.filter((button) => button !== copyExact),
+      // No card is shown, so no exact amount is offered for copying either. Its text offers a
+      // status check, so the check stays on this one screen.
+      buttons: [
+        ...actions.filter((button) => copies(button) && button !== menu),
+        cardCheck(payment.id),
+        menu,
+      ],
       orderId,
       wizard,
     };
   }
   const card = {
     cardNumber: invoice.cardNumber,
+    ...cardInvoiceCardValues(invoice.cardNumber),
     ...(invoice.cardName === null ? {} : { cardName: invoice.cardName }),
   };
   if (newest !== null && (newest.state === 'REFUSED' || newest.state === 'ABANDONED')) {

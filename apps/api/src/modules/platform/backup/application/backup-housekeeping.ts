@@ -1,9 +1,11 @@
 import {
   BACKUP_OVERDUE_TOLERANCE,
+  toPersianDigits,
   type Clock,
   type OperationalEventRecorder,
   type ScopeContext,
 } from '@nexa/contracts';
+import { persianByteSize } from './backup-disk.js';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type {
   BackupArchiveRetentionStore,
@@ -260,7 +262,7 @@ export class BackupHousekeeping {
       await this.record({
         code: 'backup.cleanup_failed',
         severity: 'ERROR',
-        message: `${String(survivedDirectories)} backup directory(ies) archive retention selected could not be removed.`,
+        message: `${toPersianDigits(String(survivedDirectories))} پوشهٔ بکاپ که نگه‌داری آرشیو برای حذف انتخاب کرده بود پاک نشد.`,
         context: { retentionSurvivors: survivedDirectories },
         dedupeKey: KEYS.cleanup,
       });
@@ -315,7 +317,7 @@ export class BackupHousekeeping {
       await this.record({
         code: 'backup.cleanup_failed',
         severity: 'ERROR',
-        message: `${String(survivedDirectories)} local copy(ies) of a delivered backup could not be removed.`,
+        message: `${toPersianDigits(String(survivedDirectories))} نسخهٔ محلیِ بکاپ ارسال‌شده پاک نشد.`,
         context: { deliveredCopySurvivors: survivedDirectories },
         dedupeKey: KEYS.cleanup,
       });
@@ -345,8 +347,8 @@ export class BackupHousekeeping {
         code: 'backup.cleanup_failed',
         severity: 'ERROR',
         message:
-          `${String(sweep.survived.length)} plaintext backup artifact(s) on this host could ` +
-          'not be removed by the debris sweep.',
+          `${toPersianDigits(String(sweep.survived.length))} فایل رمزنشدهٔ بکاپ روی این سرور ` +
+          'توسط پاک‌سازی حذف نشد.',
         context: { survived: sweep.survived.length },
         dedupeKey: KEYS.cleanup,
       });
@@ -378,7 +380,7 @@ export class BackupHousekeeping {
         await this.record({
           code: 'backup.cleanup_ok',
           severity: 'INFO',
-          message: 'No plaintext backup artifact remains on this host.',
+          message: 'هیچ فایل رمزنشدهٔ بکاپ روی این سرور باقی نمانده است.',
           context: { removed: sweep.removed.length },
           recoversCode: 'backup.cleanup_failed',
           recoversDedupeKey: KEYS.cleanup,
@@ -403,8 +405,8 @@ export class BackupHousekeeping {
         code: 'backup.disk_threshold_exceeded',
         severity: 'WARN',
         message:
-          `The backup volume has ${String(free)} bytes free and the next backup needs about ` +
-          `${String(required)}.`,
+          `فضای آزاد پوشهٔ بکاپ ${persianByteSize(free)} است و بکاپ بعدی حدود ` +
+          `${persianByteSize(required)} لازم دارد.`,
         context: { freeBytes: free, requiredBytes: required },
         dedupeKey: KEYS.disk,
       });
@@ -414,7 +416,7 @@ export class BackupHousekeeping {
       await this.record({
         code: 'backup.disk_threshold_ok',
         severity: 'INFO',
-        message: 'The backup volume has room for the next backup again.',
+        message: 'فضای پوشهٔ بکاپ دوباره برای بکاپ بعدی کافی است.',
         context: { freeBytes: free, requiredBytes: required },
         recoversCode: 'backup.disk_threshold_exceeded',
         recoversDedupeKey: KEYS.disk,
@@ -438,10 +440,9 @@ export class BackupHousekeeping {
         severity: 'ERROR',
         message:
           last === null
-            ? 'Automatic backups are on and no verified backup has completed since this worker ' +
-              'started watching.'
-            : `Automatic backups are on and the last verified backup completed at ` +
-              `${last.toISOString()}, more than ${String(BACKUP_OVERDUE_TOLERANCE)} intervals ago.`,
+            ? 'بکاپ خودکار روشن است و از زمان شروع پایش، هیچ بکاپ تأییدشده‌ای کامل نشده است.'
+            : `بکاپ خودکار روشن است و آخرین بکاپ تأییدشده در ${last.toISOString()} کامل شده، ` +
+              `بیش از ${toPersianDigits(String(BACKUP_OVERDUE_TOLERANCE))} برابر فاصلهٔ برنامه پیش.`,
         context: {
           lastVerifiedAt: last === null ? null : last.toISOString(),
           intervalMs: schedule.intervalMs,
@@ -456,8 +457,8 @@ export class BackupHousekeeping {
         code: 'backup.interval_ok',
         severity: 'INFO',
         message: schedule.enabled
-          ? 'A verified backup has landed within the schedule again.'
-          : 'Automatic backups were switched off, so none is overdue.',
+          ? 'یک بکاپ تأییدشده دوباره در زمان برنامه کامل شد.'
+          : 'بکاپ خودکار خاموش شد، پس بکاپ عقب‌افتاده‌ای وجود ندارد.',
         context: { lastVerifiedAt: last === null ? null : last.toISOString() },
         recoversCode: 'backup.interval_exceeded',
         recoversDedupeKey: KEYS.interval,

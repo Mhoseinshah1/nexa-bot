@@ -233,6 +233,14 @@ describe('the inline URL buttons', () => {
   it('addresses each button to its Web Admin page, and refuses an unsafe record id', () => {
     expect(opsLogButtonPath({ kind: 'USER', ref: 'abc-123' })).toBe('/users/abc-123');
     expect(opsLogButtonPath({ kind: 'PAYMENT', ref: 'abc-123' })).toBe('/payments/abc-123');
+    // R8 A4: «تراکنش» opens the customer's financial tab; a mass credit its operation.
+    expect(opsLogButtonPath({ kind: 'WALLET', ref: 'abc-123' })).toBe(
+      '/users/abc-123?tab=financial',
+    );
+    expect(opsLogButtonPath({ kind: 'BULK_OPERATION', ref: 'abc-123' })).toBe(
+      '/bulk-operations/abc-123',
+    );
+    expect(opsLogButtonPath({ kind: 'WALLET', ref: '../x' })).toBeNull();
     expect(opsLogButtonPath({ kind: 'SERVICE', ref: 'abc-123' })).toBe('/services/abc-123');
     expect(opsLogButtonPath({ kind: 'PANEL', ref: 'abc-123' })).toBe('/panels/abc-123');
     // The provider KEY maps to the Web Admin's slug route, the same table the admin routes by.

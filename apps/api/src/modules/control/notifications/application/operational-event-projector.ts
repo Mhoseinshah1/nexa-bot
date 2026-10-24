@@ -241,6 +241,8 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
         return;
       }
       const details = operationalEventDetails(event.context);
+      // Round 8 B6: the group reads Persian; the stored English message stays the log's.
+      const shownMessage = this.presenter?.messageOf?.(recorded.code) ?? recorded.message;
       await this.notifications.queue(
         scope,
         {
@@ -258,10 +260,13 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
             // Round 4 PR-D: titled in Persian from the code; the code itself and the server's
             // own English message are the one short technical line beneath.
             heading: this.presenter?.title(recorded.code) ?? recorded.code,
+            // The technical line keeps the server's own message: it carries the identifying
+            // detail (which loop stalled, which setting was invalid) the code-keyed Persian
+            // sentence cannot (Codex on #319).
             technical: technicalOf(recorded.code, recorded.message),
             // Declared for the overrides written before Round 4; the default body prints neither.
             code: recorded.code,
-            message: cleanMessageOf(recorded.message),
+            message: cleanMessageOf(shownMessage),
             occurrences: recorded.occurrenceCount,
             firstSeenAt: recorded.firstSeenAt,
             lastSeenAt: recorded.lastSeenAt,

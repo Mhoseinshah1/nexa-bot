@@ -1215,6 +1215,21 @@ export interface GatewayCardTransferRepository {
     paymentId: PaymentId,
     tx?: unknown,
   ): Promise<GatewayCardChangeRecord | null>;
+  /**
+   * R8 A2 (R5C-1): what this payment has used of the owner's card-switch limits — the changes
+   * that may have changed the card (REQUESTED, SENT, APPLIED, UNKNOWN; never a REFUSED or
+   * RATE_LIMITED one), when the latest of them was requested, and how many DISTINCT card
+   * numbers the payment has shown.
+   */
+  cardChangeUsage(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    tx?: unknown,
+  ): Promise<{
+    readonly switches: number;
+    readonly lastSwitchAt: Date | null;
+    readonly distinctCards: number;
+  }>;
   claimCardChanges(
     scope: TenantContext,
     now: Date,
@@ -1415,7 +1430,16 @@ export interface GatewayProviderRequestRecord {
   readonly errorCode: string | null;
   /** A refund's card as shown to anyone (`603799******1234`); null for a cancel. */
   readonly refundCardMasked: string | null;
+  /**
+   * R8 A3: a cancel Nexa asked for itself (a new invoice replaced this one, or the provider
+   * refused a create because of it), not the customer's «لغو فاکتور». Read from the row's
+   * idempotency key, which `GatewayProviderRequestLane.cancelNow` prefixes; absent in a fixture.
+   */
+  readonly requestedByNexa?: boolean;
 }
+
+/** The idempotency-key prefix of a cancel Nexa asks for itself (`cancelNow`). */
+export const NEXA_CANCEL_KEY_PREFIX = 'sibling-cancel:';
 
 /** A claimed request, with the sealed card a REQUESTED refund still holds (for the worker only). */
 export interface ClaimedProviderRequest {

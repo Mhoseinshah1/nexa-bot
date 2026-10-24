@@ -16,6 +16,7 @@ import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
 import { messageFor } from './settings';
+import { operationalEventMessageFa } from '@nexa/i18n';
 import { Icon } from '../ui/icons';
 import {
   Badge,
@@ -444,7 +445,10 @@ function InboxItem({
               t('web.nc_code'),
               <CodeLabel key="c" label={opsCodeLabel(row.code)} code={row.code} />,
             ],
-            [t('web.nc_message'), <TechnicalDetails key="m" lines={[row.message]} />],
+            [
+              t('web.nc_message'),
+              <TechnicalDetails key="m" lines={notificationMessageLines(row.code, row.message)} />,
+            ],
           ]}
         />
       </Disclosure>
@@ -458,4 +462,13 @@ function InboxItem({
       </div>
     </li>
   );
+}
+
+/**
+ * The Persian sentence for the code, and beneath it the server's own message, which carries
+ * the identifying detail (a loop's name, a setting's key) a code-keyed sentence cannot.
+ */
+export function notificationMessageLines(code: string, message: string): readonly string[] {
+  const persian = operationalEventMessageFa(code);
+  return persian === null || persian === message ? [message] : [persian, message];
 }

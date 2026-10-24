@@ -311,8 +311,13 @@ describe('the customer messenger never sends one message twice', () => {
   const BOT = '01900000-0000-7000-8000-0000000000aa' as BotInstanceId;
   const PLAIN_KEY = 'bot.admin.receipt' as const;
 
-  function messenger(decorated: boolean) {
-    const events: { code: string; dedupeKey?: string; context?: Record<string, unknown> }[] = [];
+  function messenger(decorated: boolean, conditionOpen = false) {
+    const events: {
+      code: string;
+      message?: string;
+      dedupeKey?: string;
+      context?: Record<string, unknown>;
+    }[] = [];
     const appearance: AppearanceReader = {
       decorationFor: async () => ({
         customEmoji: decorated ? new Map([['payment', '5368324170671202286']]) : new Map(),
@@ -324,7 +329,7 @@ describe('the customer messenger never sends one message twice', () => {
       { render: async () => 'پرداخت {icon:payment} انجام شد' } as never,
       { tokenForBotInstance: async () => 'test-token' } as never,
       { record: async (_scope: unknown, event: { code: string }) => events.push(event) } as never,
-      { conditionIsOpen: async () => false } as never,
+      { conditionIsOpen: async () => conditionOpen } as never,
       'https://telegram.invalid',
       50,
       undefined,
@@ -360,6 +365,15 @@ describe('the customer messenger never sends one message twice', () => {
       expect(events.map((event) => event.code)).not.toContain(APPEARANCE_DECORATION_FAILED_CODE);
     },
   );
+
+  it('Round 8 B6: the recovery line is Persian, not English', async () => {
+    const { send, events } = messenger(false, true);
+    stubFetch([{ status: 200, body: { ok: true, result: { message_id: 1 } } }]);
+    expect((await send()).outcome).toBe('DELIVERED');
+    const recovery = events.find((event) => event.code === 'telegram.customer_send_ok');
+    expect(recovery?.message).toBe('پاسخ‌های مشتریان از طریق این ربات دوباره به تلگرام می‌رسد.');
+    expect(recovery?.message).not.toMatch(/[A-Za-z]/);
+  });
 
   it('a 429 hands the caller Telegram’s wait, and an undefinable one none', async () => {
     const { send } = messenger(false);
