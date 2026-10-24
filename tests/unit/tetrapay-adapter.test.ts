@@ -337,8 +337,20 @@ describe('verify (POST /payments/{token}/verify) - the only settlement authority
     const order = await adapterWith(() =>
       json(200, { ...VERIFY_PAID, order_id: 'SOMEONE-ELSE' }),
     ).adapter.inquire(KEY, TOKEN, context);
-    // The orchestrator's identity check refuses an answer about another order outright.
-    expect(order).toMatchObject({ kind: 'OBSERVED', orderId: 'SOMEONE-ELSE', verdict: 'MISMATCH' });
+    // Reported under OUR order id (the token we asked is ours), so the lane's identity gate does
+    // not swallow it and the hold workflow runs; the foreign id is never evidence.
+    expect(order).toMatchObject({
+      kind: 'OBSERVED',
+      orderId: ORDER,
+      verdict: 'MISMATCH',
+      paid: false,
+      mismatchReason: 'PROVIDER_ORDER_ID_MISMATCH',
+    });
+    // A NON-paid answer for a foreign id stays as it was: the identity gate refuses it.
+    const foreignPending = await adapterWith(() =>
+      json(200, { ...VERIFY_PAID, status: 'pending', order_id: 'SOMEONE-ELSE' }),
+    ).adapter.inquire(KEY, TOKEN, context);
+    expect(foreignPending).toMatchObject({ orderId: 'SOMEONE-ELSE', verdict: 'OPEN' });
     const pending = await adapterWith(() =>
       json(200, {
         ...VERIFY_PAID,

@@ -139,9 +139,15 @@ export function tetrapayJudgement(
       }
       const received = parseRialAmount(observation.receivedAmount);
       const payable = parseRialAmount(observation.payableAmount);
-      // The payer must have paid at least what the link asked of them (the order, plus the fee
-      // share when the provider states one); a short or unstated receipt is held, not credited.
-      if (received === null || received < (payable ?? amount) || received < amount) {
+      // `payable_amount` is always present in a verify answer (§3.3). Absent or unreadable is
+      // FAIL-CLOSED: falling back to the principal would lower the receipt threshold below what
+      // the payer was asked for, so it is held for a person, never approved.
+      if (payable === null) {
+        return { verdict: 'MISMATCH', mismatchReason: 'PROVIDER_PAYABLE_UNREADABLE' };
+      }
+      // The payer must have paid at least what the link asked of them (the order plus the fee
+      // share); a short or unstated receipt is held, not credited.
+      if (received === null || received < payable || received < amount) {
         return { verdict: 'MISMATCH', mismatchReason: 'PROVIDER_RECEIVED_SHORT' };
       }
       return { verdict: 'APPROVED', mismatchReason: null };

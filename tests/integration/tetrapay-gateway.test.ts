@@ -99,6 +99,10 @@ class FakeTetraPay {
   readonly links: Link[] = [];
   readonly verifies: string[] = [];
   readonly auth = new Set<string | null>();
+  /** The next verify answers this instead (a rate limit with Retry-After, say). */
+  verifyError: { status: number; body: unknown; headers?: Record<string, string> } | null = null;
+  /** Verify reports this order id instead of the link's own. */
+  reportOrderId: string | null = null;
   /** The next create answers this error instead. */
   createError: { status: number; body: unknown; headers?: Record<string, string> } | null = null;
 
@@ -135,6 +139,10 @@ class FakeTetraPay {
     if (verify !== null && init.method === 'POST') {
       const token = decodeURIComponent(verify[1] ?? '');
       this.verifies.push(token);
+      if (this.verifyError !== null) {
+        const failure = this.verifyError;
+        return json(failure.status, failure.body, failure.headers);
+      }
       const link = this.links.find((one) => one.token === token);
       if (link === undefined) {
         return json(404, { error: { code: 'NOT_FOUND', message: 'x' } });
@@ -143,7 +151,7 @@ class FakeTetraPay {
       return json(200, {
         token: link.token,
         status: link.status,
-        order_id: link.orderId,
+        order_id: this.reportOrderId ?? link.orderId,
         amount: paid ? (link.reportAmount ?? link.amount) : link.amount,
         payable_amount: String(BigInt(link.amount) + 1_000n),
         received_amount: link.receivedAmount,
@@ -581,6 +589,62 @@ describe('TetraPay, through the one settlement path', () => {
       expect(await ledger()).toEqual([]);
     });
 
+    it('holds a paid answer for ANOTHER order id as UNKNOWN for an operator, crediting nothing', async () => {
+      await enableTetraPay();
+      const { paymentId, orderId } = await createdAttempt();
+      fake.pay(orderId);
+      fake.reportOrderId = 'SOMEONE-ELSE-1';
+      await inquireNow();
+      expect((await paymentOf(paymentId)).state).toBe('UNKNOWN');
+      expect(await ledger()).toEqual([]);
+      expect(await openConditions()).toContain('payments.gateway_review_unresolved');
+      const [audit] = await rows<{ after: { reason: string } }>(
+        sql`SELECT after FROM audit_logs WHERE action = 'payment.lose_track' AND entity_id = ${paymentId}`,
+      );
+      expect(audit?.after.reason).toBe('PROVIDER_ORDER_ID_MISMATCH');
+    });
+
+    it('a provider Retry-After on a verify binds the customer check, a webhook hint and the worker', async () => {
+      await enableTetraPay();
+      const link = await createdAttempt();
+      fake.verifyError = {
+        status: 429,
+        body: { error: { code: 'RATE_LIMITED', message: 'x', retryAfter: 600 } },
+        headers: { 'retry-after': '600' },
+      };
+      await inquireNow();
+      const verifies = fake.verifies.length;
+      const stored = await invoiceOf(link.paymentId);
+      const notBefore = Date.now() + offsetMs + 590_000;
+      // The customer taps «بررسی وضعیت» and the bot's /start tp- return does the same.
+      const view = await lane.attemptFor(tenantA, maryam, link.paymentId);
+      if (view === null) throw new Error('no attempt');
+      const nextOf = async () =>
+        new Date(String((await invoiceOf(link.paymentId)).next_inquiry_at)).getTime();
+      await lane.requestCheck(tenantA, view);
+      expect(await nextOf()).toBeGreaterThanOrEqual(notBefore);
+      // A webhook (no secret stored) tries to bring the verify forward too - on its own.
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = now() + interval '1 hour' WHERE payment_id = ${link.paymentId}`,
+      );
+      await receive(webhookBody(link), undefined, 'evt-backoff');
+      expect(await nextOf()).toBeGreaterThanOrEqual(notBefore);
+      expect(stored.next_inquiry_at).not.toBeNull();
+      // Whatever else wrote the schedule, the worker itself does not claim a row inside it.
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = now() WHERE payment_id = ${link.paymentId}`,
+      );
+      // Four minutes on, still inside Retry-After: the worker does not ask.
+      offsetMs += 4 * 60_000;
+      await pass();
+      expect(fake.verifies.length).toBe(verifies);
+      // Past it, it asks again.
+      fake.verifyError = null;
+      offsetMs += 8 * 60_000;
+      await pass();
+      expect(fake.verifies.length).toBe(verifies + 1);
+    });
+
     it('honours Retry-After on a rate-limited create: the same order id again, not before it', async () => {
       await enableTetraPay();
       fake.createError = {
@@ -707,6 +771,20 @@ describe('TetraPay, through the one settlement path', () => {
       await pass();
       expect((await paymentOf(link.paymentId)).state).toBe('PENDING');
       expect(await ledger()).toEqual([]);
+    });
+
+    it('a stored secret that cannot be decrypted fails closed: the webhook is dropped and the alert is raised', async () => {
+      await enableTetraPay();
+      await setSecret();
+      const link = await createdAttempt();
+      await ctx.container.database.db.execute(
+        sql`UPDATE payment_gateway_credentials SET webhook_secret_ciphertext = 'damaged'
+            WHERE provider = 'TETRAPAY' AND tenant_id = ${tenantA.tenantId}`,
+      );
+      const raw = webhookBody(link);
+      expect(await receive(raw, undefined, 'evt-damaged')).toBe('IGNORED_UNVERIFIED');
+      expect(await openConditions()).toContain('payments.gateway_webhook_unverified');
+      expect((await invoiceOf(link.paymentId)).webhook_count).toBe(0);
     });
 
     it('with no secret configured, a webhook only triggers an early verify', async () => {

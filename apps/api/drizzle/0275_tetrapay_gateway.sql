@@ -19,6 +19,7 @@ ALTER TABLE "payment_gateway_credentials" DROP CONSTRAINT "payment_gateway_crede
 ALTER TABLE "payment_gateways" DROP CONSTRAINT "payment_gateways_provider_check";--> statement-breakpoint
 ALTER TABLE "payments" DROP CONSTRAINT "payments_gateway_provider_check";--> statement-breakpoint
 ALTER TABLE "gateway_invoices" ADD COLUMN "provider_method" text;--> statement-breakpoint
+ALTER TABLE "gateway_invoices" ADD COLUMN "inquiry_not_before" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "payment_gateways" ADD COLUMN "hidden_until" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "gateway_customer_numbers" ADD CONSTRAINT "gateway_customer_numbers_provider_check" CHECK (provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY'));--> statement-breakpoint
 ALTER TABLE "gateway_invoices" ADD CONSTRAINT "gateway_invoices_tetrapay_check" CHECK (provider <> 'TETRAPAY' OR (provider_unit = 'IRR' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND provider_order_id ~ '^[A-Za-z0-9_.:-]{1,64}$'));--> statement-breakpoint

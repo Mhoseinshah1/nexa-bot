@@ -1,5 +1,5 @@
 {
-  "id": "201c6163-2b3d-4351-8892-54bf8e673bc4",
+  "id": "872cb965-e82c-4272-a926-b91d7f161555",
   "prevId": "1bc189c9-922f-4e0a-b031-ea9916ed98ab",
   "version": "7",
   "dialect": "postgresql",
@@ -12258,6 +12258,12 @@
         "provider_method": {
           "name": "provider_method",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "inquiry_not_before": {
+          "name": "inquiry_not_before",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },

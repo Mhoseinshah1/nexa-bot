@@ -95,6 +95,19 @@ describe('what a verify answer means', () => {
     expect(tetrapayJudgement({ ...paid, receivedAmount: null }, expected).verdict).toBe('MISMATCH');
   });
 
+  it('holds a paid answer whose payable_amount is absent or unreadable instead of lowering the receipt bar to the principal', () => {
+    const lowered = { ...paid, payableAmount: '101000.5', receivedAmount: '12500000' };
+    expect(tetrapayJudgement(lowered, expected)).toEqual({
+      verdict: 'MISMATCH',
+      mismatchReason: 'PROVIDER_PAYABLE_UNREADABLE',
+    });
+    for (const payableAmount of [undefined, null, 'lots']) {
+      expect(tetrapayJudgement({ ...paid, payableAmount }, expected).mismatchReason).toBe(
+        'PROVIDER_PAYABLE_UNREADABLE',
+      );
+    }
+  });
+
   it('keeps created and pending open, expired unsuccessful, and an unknown status open', () => {
     for (const status of ['created', 'pending', 'processing', 7, undefined]) {
       expect(tetrapayJudgement({ ...paid, status }, expected).verdict).toBe('OPEN');

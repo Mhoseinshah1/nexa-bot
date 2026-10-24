@@ -4939,6 +4939,14 @@ export const gatewayInvoices = pgTable(
      * a verify says, and for every other route.
      */
     providerMethod: text('provider_method'),
+    /**
+     * The provider's own "not before" (TetraPay's `Retry-After` on a rate-limited verify): no
+     * inquiry of this attempt is claimed, and no customer check or webhook hint may bring one
+     * forward, before this instant. NULL: no backoff in force. Written by the inquiry that met
+     * the rate limit and cleared by the next answer; it only ever delays a question, so it can
+     * never settle or fail a payment.
+     */
+    inquiryNotBefore: timestamptz('inquiry_not_before'),
     /*
      * A crypto route's figures (NOWPayments, R5C-2 C4), as the provider's own payment record
      * reported them on an inquiry that already ran: the coin, the amount it asked the payer

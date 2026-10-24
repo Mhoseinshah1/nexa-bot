@@ -1826,6 +1826,11 @@ export class GatewayPaymentService {
             adoptInvoiceId: null,
             nextInquiryAt,
             postDeadline,
+            // A provider's Retry-After binds EVERY path that could ask again (customer check,
+            // webhook hint, the worker), not only this row's next scheduled time.
+            ...(outcome.kind === 'RATE_LIMITED' && outcome.retryAfterMs !== undefined
+              ? { notBefore: new Date(at.getTime() + outcome.retryAfterMs) }
+              : {}),
             claimedUntil: leaseUntil,
           },
           at,
@@ -3515,9 +3520,12 @@ export class GatewayPaymentService {
     // An unknown or stopped tenant is answered like every other ignored webhook.
     if (!(await this.deps.scopeActivity.scopeIsActive(scope))) return 'IGNORED_INACTIVE';
     let secret: string | null;
+    // True only when the read FAILED (a missing key, a damaged ciphertext): that is not "no secret".
+    let readFailed = false;
     try {
       secret = await this.deps.credentials.readWebhookSecret(scope, provider);
     } catch (error: unknown) {
+      readFailed = true;
       // A secret that will not decrypt verifies nothing. Never logged beyond its class.
       this.deps.logger.error(
         { provider, error: error instanceof Error ? error.name : 'unknown' },
@@ -3532,7 +3540,11 @@ export class GatewayPaymentService {
      * and scheduled like any hint, and neither raises nor closes the unverified-webhook
      * condition (there is nothing it could have been verified against).
      */
-    if (secret === null && PAYMENT_GATEWAY_DESCRIPTORS[provider].webhookSecretOptional) {
+    if (
+      secret === null &&
+      !readFailed &&
+      PAYMENT_GATEWAY_DESCRIPTORS[provider].webhookSecretOptional
+    ) {
       return 'UNSIGNED';
     }
     const verified =

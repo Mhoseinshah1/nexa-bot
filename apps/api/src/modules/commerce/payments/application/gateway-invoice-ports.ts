@@ -883,6 +883,8 @@ export interface GatewayInvoiceRepository {
       /** R5C-2 C4: the coin side of that payment, when the record carried one. Diagnostic. */
       readonly crypto?: GatewayCryptoFigures | null;
       readonly method?: string | null;
+      /** The provider's "not before" for the next inquiry (its Retry-After); cleared when absent. */
+      readonly notBefore?: Date | null;
       /**
        * FIX10 R1: the claim's lease this answer was asked under. When given, the answer is
        * recorded only while `inquiry_claimed_until` still carries it — a replica whose lease

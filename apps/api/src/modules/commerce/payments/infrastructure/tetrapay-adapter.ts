@@ -411,7 +411,14 @@ export class TetraPayAdapter implements ExternalGatewayAdapter {
         // The ids the PROVIDER returned; the orchestrator compares them with the attempt's.
         // An order id the answer omits is bound by the token we asked about.
         invoiceId: returnedToken ?? invoiceId,
-        orderId: typeof orderId === 'string' ? orderId : context.providerOrderId,
+        // A `paid` answer for ANOTHER order id about the token we asked is a MISMATCH to hold for a
+        // person (the verdict says so): it is reported under OUR order id so the lane's identity
+        // gate does not swallow it, and the foreign id is never evidence of anything. A non-paid
+        // answer for a foreign id is returned as is and stays an identity mismatch.
+        orderId:
+          typeof orderId === 'string' && judgement.mismatchReason !== 'PROVIDER_ORDER_ID_MISMATCH'
+            ? orderId
+            : context.providerOrderId,
         status,
         paid: judgement.verdict === 'APPROVED',
         verdict: judgement.verdict,
