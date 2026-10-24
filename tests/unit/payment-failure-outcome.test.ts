@@ -6,7 +6,7 @@ import {
 
 /** R8 A3 — the outcome a `PaymentFailed` was, from the payment's resolution note. */
 describe('paymentFailureOutcome', () => {
-  const gateway = (note: string | null, cancelRequest?: { byNexa: boolean } | null) =>
+  const gateway = (note: string | null, cancelRequest: { byNexa: boolean } | null = null) =>
     paymentFailureOutcome({ cause: 'GATEWAY_FAILED', resolutionNote: note, cancelRequest });
 
   it('reads the status part of `<provider>:<status>[:…]`', () => {
