@@ -218,6 +218,8 @@ import {
   requiredFreeBytes,
 } from './modules/platform/backup/application/backup-housekeeping.js';
 import { DrizzleBackupRunRepository } from './modules/platform/backup/infrastructure/drizzle-backup-run.repository.js';
+import { BackupOrphanSweep } from './modules/platform/backup/application/backup-orphan-sweep.js';
+import { FilesystemBackupRunDirectories } from './modules/platform/backup/infrastructure/run-directories.js';
 import { DrizzleRecoveryRequestRepository } from './modules/platform/recovery/infrastructure/drizzle-recovery-request.repository.js';
 import { FilesystemRecoveryWorkspaces } from './modules/platform/recovery/infrastructure/recovery-workspace.js';
 import { FileCutoverJournal } from './modules/platform/recovery/infrastructure/cutover-journal.js';
@@ -978,6 +980,11 @@ export interface Container {
    * overdue conditions (E5). Constructed in every role, started in the worker.
    */
   readonly backupHousekeeping: BackupHousekeeping;
+  /**
+   * Round 8 (B1): removes what killed backup runs left in their directories. Inside every
+   * run, and once at worker start.
+   */
+  readonly backupOrphanSweep: BackupOrphanSweep;
   readonly recoveryRequestSweeper: RetentionSweeper;
   /** E3: published outbox history and interactive idempotency keys. */
   readonly outboxRetentionSweeper: RetentionSweeper;
@@ -7201,6 +7208,15 @@ export function createContainer(
     );
     return { ...volume, requiredBytes, low: volume.freeBytes < requiredBytes };
   };
+  const backupOrphanSweep = new BackupOrphanSweep({
+    directories: new FilesystemBackupRunDirectories(config.BACKUP_WORK_DIR),
+    runs: backupRuns,
+    clock,
+    // A run an unfinished recovery names (its pre-restore backup, a local archive it is
+    // restoring) is never touched.
+    protectedByRecovery: () => recoveryRequests.backupIdsInUse(),
+    logger,
+  });
   const backup = new BackupService({
     diskPreflight: async () => {
       const state = await backupDiskState();
@@ -7288,6 +7304,7 @@ export function createContainer(
     restoreCommand: 'botctl restore --target <empty-db> <part.001> [<part.002> …]',
     formatTakenAt: (at) => formatDateTime(at, DEFAULT_TEMPLATE_PRESENTATION),
     conditionOpen: backupConditionOpen,
+    orphanSweep: backupOrphanSweep,
   });
   /*
    * The recovery graph.
@@ -8357,6 +8374,7 @@ export function createContainer(
     backup,
     backupScheduler,
     backupHousekeeping,
+    backupOrphanSweep,
     recoveryQuiesced,
     backupRuns,
     backupArchiver,
@@ -8422,6 +8440,19 @@ export function createContainer(
     },
     async shutdown() {
       installationKeyLoader.stop();
+      // Round 8 (B1): the in-flight backup dies with this process; its plaintext goes now
+      // rather than waiting for a sweep to find the run abandoned. Never its archive.
+      await backup.discardInFlightPlaintext().then(
+        (left) => {
+          if (left.length > 0)
+            logger.error({ left }, 'in-flight backup plaintext survived shutdown');
+        },
+        (error: unknown) =>
+          logger.error(
+            { reason: error instanceof Error ? error.message : String(error) },
+            'could not remove the in-flight backup plaintext at shutdown',
+          ),
+      );
       backupScheduler.stop();
       backupHousekeeping.stop();
       legacyCompactionExecutor.stop();

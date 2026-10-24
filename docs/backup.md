@@ -228,6 +228,44 @@ and needs no restart. That is also why the scheduler is always started now: with
 schedule off, a tick decides nothing is due. `botctl status` reads the configuration,
 not the database, so it reports the environment default only, and says so.
 
+### After a failed scheduled run: backoff, not a retry every tick (Round 8)
+
+"Due" is measured from the last **verified** backup, and a failure does not move it. Before
+Round 8 the only pause after a failed scheduled run was the tick itself, so every
+`BACKUP_TICK_MS` (five minutes) found the backup still due and dumped again — on a full
+disk, a failed run every five minutes, each one more debris. Only a memory failure waited
+(an hour). Now (`backup-retry-policy.ts`), counting the SCHEDULED runs that failed since the
+last verified backup:
+
+| Failures in the chain | Next scheduled attempt                                             |
+| --------------------- | ------------------------------------------------------------------ |
+| 1                     | 30 minutes after it finished                                       |
+| 2                     | 1 hour                                                             |
+| 3                     | 2 hours                                                            |
+| 4 and more            | the next slot of the schedule, and never sooner than 2 hours after |
+
+A memory failure keeps its hour when that is longer. A run reclaimed as abandoned counts
+like any other failure. A manual backup is never held back and does not change the chain;
+any verified backup ends it. The failure is ONE `backup.run_failed` condition for the whole
+outage (its occurrence count rises; it is announced once, and closed by the next success).
+
+### What a killed run leaves behind
+
+A run that fails removes its whole workspace (in its `catch`, and again in `finally` if the
+`catch` could not). A run whose **process** died cannot, so:
+
+- on SIGTERM the process removes its in-flight run's plaintext (never the archive);
+- at worker start, and inside every run once it holds the one-backup lock, the orphan sweep
+  removes a run directory whose row is terminal, whose lease heartbeat is older than
+  `BACKUP_LEASE_STALE_AFTER_MS`, whose files nobody has written for that long, and that no
+  unfinished recovery names. The whole directory goes only for a FAILED run its own process
+  failed before verification passed; for any other terminal run — a SUCCEEDED one, one that
+  had verified, and one reclaimed as abandoned (a restored database always holds such a row,
+  for the run whose dump it is) — only the plaintext goes, so a good archive, the newest above
+  all, is never this sweep's to remove. A run that fails AFTER verification keeps its archive
+  too. A RUNNING row, a live
+  lease, a fresh write and a directory with no row in this database are never touched.
+
 ## Scheduler health
 
 The worker's health check includes the backup scheduler. Before this release the

@@ -324,6 +324,20 @@ async function main(): Promise<void> {
   // BACKUP_INTERVAL_MS are the default when the Web Admin has set nothing. A
   // worker booted with the environment saying "off" still starts backing up the
   // tick after an operator switches it on, with no restart.
+  //
+  // Round 8 (B1): FIRST, what a killed run left in its directory — the worker that ran it
+  // may be the process this one replaces. Only terminal runs whose lease is stale and whose
+  // files nobody has written for the lease window; never during a recovery. Awaited so the
+  // first tick does not meet the disk the last run left full; a sweep that fails is logged
+  // and the scheduler starts anyway.
+  try {
+    if (!(await container.recoveryQuiesced())) await container.backupOrphanSweep.sweep();
+  } catch (error) {
+    container.logger.error(
+      { reason: error instanceof Error ? error.message : String(error) },
+      'the start-up sweep of killed backup runs failed',
+    );
+  }
   container.backupScheduler.start();
   // And its housekeeping (E5): archive-file retention coherent with the run table's,
   // the plaintext an abandoned run or a killed CLI command left, and the disk-space

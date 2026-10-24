@@ -31,6 +31,7 @@ import {
 } from './ports.js';
 import { diskInsufficientReason } from './backup-disk.js';
 import { backupPartCaption, backupSummaryMessage } from './backup-caption.js';
+import type { BackupOrphanSweepResult } from './backup-orphan-sweep.js';
 
 /**
  * The backup pipeline.
@@ -175,6 +176,13 @@ export interface BackupServiceDeps {
     readonly archiveBytes: number;
     readonly checksum: string;
   }) => Promise<string | null>;
+  /**
+   * Round 8 (B1): removes what KILLED runs left in their directories, once this run holds
+   * the one-backup lock and before it dumps (`BackupOrphanSweep`). Absent: not swept here.
+   */
+  readonly orphanSweep?: {
+    sweep(input: { readonly exceptId: string }): Promise<BackupOrphanSweepResult>;
+  };
 }
 
 /**
@@ -226,6 +234,14 @@ function archiveFilename(id: string, startedAt: Date, format: BackupArchiveForma
   return `nexa-backup-${stamp}-${short}.${format === 'SEVEN_ZIP' ? '7z' : 'nxb'}`;
 }
 
+/** A failed run's workspace: all of it, unless its archive had verified (Round 8, B4). */
+function discardFailed(
+  workspace: BackupWorkspace,
+  verifiedAt: Date | null,
+): Promise<readonly string[]> {
+  return verifiedAt === null ? workspace.discardAll() : workspace.discardPlaintext();
+}
+
 export type BackupOutcome =
   | { readonly kind: 'BUSY'; readonly holder: BackupRunRow }
   | { readonly kind: 'COMPLETED'; readonly run: BackupRunRow };
@@ -242,11 +258,30 @@ export class BackupService {
   private leaseRefreshedAt: number | null = null;
   /** Which run `leaseRefreshedAt` is about, so a late heartbeat of a finished run is ignored. */
   private leaseRunId: string | null = null;
+  /** The workspace of the run this process is executing, for `discardInFlightPlaintext`. */
+  private activeWorkspace: BackupWorkspace | null = null;
 
   constructor(private readonly deps: BackupServiceDeps) {}
 
   leaseHeartbeatAt(): number | null {
     return this.leaseRefreshedAt;
+  }
+
+  /**
+   * On SIGTERM (Round 8, B1): removes the PLAINTEXT of the run this process is executing,
+   * never its archive.
+   *
+   * The process is about to exit and its run with it, so the 2 GB dump would otherwise stay
+   * until a sweep finds the run abandoned. Only the plaintext: if the run nonetheless reaches
+   * its end before the exit, a verified archive is still a verified archive, and deleting it
+   * would be deleting the newest good backup. A stage that still needed the plaintext reads
+   * it through a descriptor it already holds, or fails for a missing file — a failed run,
+   * never a false verification. Returns what could not be removed.
+   */
+  async discardInFlightPlaintext(): Promise<readonly string[]> {
+    const workspace = this.activeWorkspace;
+    if (workspace === null) return [];
+    return workspace.discardPlaintext();
   }
 
   /**
@@ -375,8 +410,20 @@ export class BackupService {
     let partCount: number | null = null;
     let archiveSealId: string | null = null;
     let summaryDeliveryState: BackupDeliveryState | null = null;
+    /*
+     * Round 8 (B1): whether the run's own cleanup has run. The `finally` removes the whole
+     * workspace of a run that did not succeed and whose `catch` never reached its removal —
+     * a logger or a scope lookup that throws at the top of the `catch` used to leave a full
+     * dump behind with nothing to report it.
+     */
+    let succeeded = false;
+    let discarded = false;
 
     try {
+      // Holding the lock: no other run of this installation is in flight, so what killed
+      // runs left is swept now, before this one needs the disk (Round 8, B1).
+      await this.sweepOrphans(id, quiet);
+
       // ---- DUMP ------------------------------------------------------------
       await this.deps.runs.progress({
         id,
@@ -385,6 +432,7 @@ export class BackupService {
         now: this.deps.clock.now(),
       });
       workspace = await this.deps.workspaces.create(id);
+      this.activeWorkspace = workspace;
       // E4: a 7-Zip archive compresses the dump itself, so the dump is written uncompressed.
       const plannedFormat = (await this.deps.archiver.nextFormat?.()) ?? 'NXB';
       // A host that cannot compress is refused now, before an hour of dumping (Round 5B).
@@ -598,6 +646,7 @@ export class BackupService {
         archiveSealId,
         summaryDeliveryState,
       });
+      succeeded = true;
       await this.pruneAfterSuccess(id);
     } catch (error) {
       const failureCode = error instanceof NexaError ? error.code : 'backup.failed';
@@ -651,14 +700,21 @@ export class BackupService {
       // Everything goes, archive included. An archive from a run that failed
       // before verification is unproven, and an unproven archive on disk is
       // the thing that stops somebody looking for a real one.
+      //
+      // EXCEPT an archive that verified (Round 8, B4): a failure after VERIFY_RESTORE —
+      // at DELIVER, or `finish` itself throwing — leaves a PROVEN archive, possibly one
+      // Telegram holds parts of, and possibly the newest good one: a `finish(SUCCEEDED)`
+      // whose answer was lost after it committed reaches this `catch` with a SUCCEEDED row.
+      // Only its plaintext goes; retention decides the archive like any other.
       // `workspace` is null when the failure was the workspace itself. The
       // subprocess leak list is still read: a dump cannot have run without a
       // workspace, but reading it unconditionally means this line does not become
       // wrong the day something before the workspace spawns one.
       const leftovers = [
-        ...(workspace === null ? [] : await workspace.discardAll()),
+        ...(workspace === null ? [] : await discardFailed(workspace, verifiedAt)),
         ...this.deps.tools.leaked,
       ];
+      discarded = true;
       if (leftovers.length > 0) await this.reportCleanup(id, 'FAILED', leftovers.length, quiet);
       // The stage that failed is timed up to the failure; stages after it are absent.
       lap(stage);
@@ -689,6 +745,18 @@ export class BackupService {
       heartbeat.stop();
       this.leaseRunId = null;
       this.leaseRefreshedAt = null;
+      this.activeWorkspace = null;
+      if (!succeeded && !discarded && workspace !== null) {
+        const left = await discardFailed(workspace, verifiedAt).catch((reason: unknown) => [
+          String(reason),
+        ]);
+        if (left.length > 0) {
+          this.deps.logger.error(
+            { backupId: id, left },
+            'a failed backup run could not remove its workspace',
+          );
+        }
+      }
     }
 
     const run = await this.deps.runs.byId(id);
@@ -1109,6 +1177,35 @@ export class BackupService {
       this.deps.logger.error(
         { backupId: id, err: error instanceof Error ? error.message : String(error) },
         'archive retention after a successful backup failed',
+      );
+    }
+  }
+
+  /**
+   * The orphan sweep, inside the run (Round 8, B1). Never fails the run: a sweep that cannot
+   * read the root is logged, and what it could not remove opens the cleanup condition under
+   * its one installation key, like any other plaintext left on this host.
+   */
+  private async sweepOrphans(id: string, quiet: boolean): Promise<void> {
+    if (this.deps.orphanSweep === undefined) return;
+    try {
+      const swept = await this.deps.orphanSweep.sweep({ exceptId: id });
+      if (swept.survived.length > 0) {
+        await this.report(
+          {
+            code: 'backup.cleanup_failed',
+            severity: 'ERROR',
+            message: `${toPersianDigits(String(swept.survived.length))} فایل که اجراهای متوقف‌شدهٔ بکاپ روی این سرور باقی گذاشته بودند پاک نشد.`,
+            context: { backupId: id, survived: swept.survived.length },
+            dedupeKey: CLEANUP_CONDITION_KEY,
+          },
+          quiet,
+        );
+      }
+    } catch (error) {
+      this.deps.logger.error(
+        { backupId: id, reason: error instanceof Error ? error.message : String(error) },
+        'the sweep of killed backup runs failed; this run continues',
       );
     }
   }
