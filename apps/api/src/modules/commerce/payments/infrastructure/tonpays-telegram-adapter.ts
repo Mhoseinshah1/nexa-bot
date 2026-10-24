@@ -571,6 +571,16 @@ export class TonPaysTelegramAdapter implements CardTransferGatewayAdapter {
     return outcome.kind === 'AMBIGUOUS' ? { kind: 'UNKNOWN', code: outcome.code } : outcome;
   }
 
+  /** The same signature as the website route (one TonPays scheme). */
+  verifyWebhook(
+    secret: string,
+    body: unknown,
+    signature: string | undefined,
+    context?: { readonly rawBody: Uint8Array | null; readonly now: Date },
+  ): boolean {
+    return this.website.verifyWebhook(secret, body, signature, context);
+  }
+
   /** The website's documented webhook body; a hint, and nothing secret is read. */
   parseWebhook(body: unknown, deliveryIdHeader: string | undefined): GatewayWebhookHint | null {
     return this.website.parseWebhook(body, deliveryIdHeader);

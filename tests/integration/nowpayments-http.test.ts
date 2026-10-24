@@ -160,11 +160,11 @@ describe('NOWPayments over HTTP', () => {
     expect(nowpayments?.status).toBe('ACTIVE');
 
     // A route that signs nothing takes no secret.
-    const tonpays = await post(PAYMENT_GATEWAY_ROUTES.webhookSecret('TONPAYS'), {
+    const unsigned = await post(PAYMENT_GATEWAY_ROUTES.webhookSecret('CENTRALPAY'), {
       idempotencyKey: idempotencyKey(),
       secret: IPN_SECRET,
     });
-    expect(tonpays.statusCode).toBe(400);
+    expect(unsigned.statusCode).toBe(400);
   });
 
   it('refuses a credential check for a route that offers none, or has no key, before any call', async () => {

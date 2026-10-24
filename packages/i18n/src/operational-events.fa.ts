@@ -112,6 +112,8 @@ export const OPERATIONAL_EVENT_LABELS_FA: Readonly<Record<string, string>> = {
   'payments.gateway_settlement_decided': 'تسویهٔ پرداخت درگاه تعیین شد',
   'payments.gateway_settlement_failed': 'تسویهٔ پرداخت درگاه انجام نشد',
   'payments.gateway_webhook_unverified': 'اعلان درگاه تأیید نشد',
+  'tonpays.webhook.signature_rejected': 'امضای وب‌هوک تون‌پیز تأیید نشد',
+  'tonpays.webhook.signature_verified': 'امضای وب‌هوک تون‌پیز دوباره تأیید شد',
   'payments.gateway_webhook_verified': 'اعلان درگاه دوباره تأیید شد',
   'payments.receipt_push_failed': 'ارسال رسید به گروه انجام نشد',
   'payments.receipt_push_ok': 'ارسال رسید به گروه برگشت',

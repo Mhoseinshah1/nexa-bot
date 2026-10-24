@@ -41,6 +41,8 @@ const EXPECTED: Readonly<Record<string, OpsLogTopicCategory>> = {
   'payments.gateway_row_recovered': 'PAYMENTS',
   'payments.gateway_webhook_unverified': 'SECURITY',
   'payments.gateway_webhook_verified': 'SECURITY',
+  'tonpays.webhook.signature_rejected': 'ERRORS',
+  'tonpays.webhook.signature_verified': 'ERRORS',
   'payments.receipt_push_failed': 'PAYMENTS',
   'payments.receipt_push_ok': 'PAYMENTS',
   'payments.refund_request_push_failed': 'PAYMENTS',

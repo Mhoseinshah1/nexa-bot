@@ -22,6 +22,16 @@ export const TONPAYS_API_KEY_HEADER = 'X-API-Key';
 /** Documented: the webhook's delivery id header, used only to deduplicate. */
 export const TONPAYS_DELIVERY_ID_HEADER = 'x-tonpays-delivery-id';
 
+/**
+ * Documented by TonPays support (2026-10-24): `X-TonPays-Signature: t=<unix seconds>,v1=<hex>`,
+ * `v1 = hex(HMAC-SHA256(secret, "{t}." + raw_body))`. `t` is the SEND time of that delivery
+ * attempt, so it bounds clock skew only; it is never a replay key. Sent only when a webhook
+ * secret exists for the gateway in TonPays.
+ */
+export const TONPAYS_SIGNATURE_HEADER = 'x-tonpays-signature';
+/** Documented: the largest clock difference, in seconds, between `t` and now. */
+export const TONPAYS_WEBHOOK_TOLERANCE_SECONDS = 300;
+
 /** Documented: `order_id` is at most twenty characters and unique for the account. */
 export const TONPAYS_ORDER_ID_MAX_LENGTH = 20;
 

@@ -4,6 +4,8 @@ import {
   GATEWAY_ROW_FAILURE_ALERT_AFTER,
   GATEWAY_ROW_RECOVERED_CODE,
   PAYMENT_GATEWAY_DESCRIPTORS,
+  TONPAYS_SIGNATURE_REJECTED_CODE,
+  TONPAYS_SIGNATURE_VERIFIED_CODE,
   TONPAYS_TELEGRAM_RECEIPT_MAX_ATTEMPTS,
   TONPAYS_TELEGRAM_STATUS_LESS,
   TONPAYS_TELEGRAM_REVIEW_CHECK_SPACING_MS,
@@ -157,6 +159,38 @@ export const PAYMENT_LOSE_TRACK_ACTION = 'payment.lose_track';
  */
 export const GATEWAY_WEBHOOK_UNVERIFIED_CODE = 'payments.gateway_webhook_unverified';
 export const GATEWAY_WEBHOOK_VERIFIED_CODE = 'payments.gateway_webhook_verified';
+
+/**
+ * The condition a refused webhook raises, and the one that closes it. TonPays' routes have their
+ * own pair (R7: ERRORS topic, Persian text) because their refusal is also answered 401; every
+ * other signed route keeps the SECURITY pair above.
+ */
+function webhookConditionCodesOf(provider: PaymentGatewayProvider): {
+  readonly rejected: string;
+  readonly verified: string;
+  readonly severity: 'WARN' | 'ERROR';
+  readonly rejectedMessage: string;
+} {
+  if (provider === 'TONPAYS' || provider === 'TONPAYS_TELEGRAM') {
+    return {
+      rejected: TONPAYS_SIGNATURE_REJECTED_CODE,
+      verified: TONPAYS_SIGNATURE_VERIFIED_CODE,
+      severity: 'ERROR',
+      rejectedMessage:
+        'امضای وب‌هوک تون‌پیز تأیید نشد و درخواست رد شد. سکرت وب‌هوک را در نکسا و پنل تون‌پیز ' +
+        'یکسان کنید؛ پرداخت‌ها همچنان با استعلام درگاه تأیید می‌شوند.',
+    };
+  }
+  return {
+    rejected: GATEWAY_WEBHOOK_UNVERIFIED_CODE,
+    verified: GATEWAY_WEBHOOK_VERIFIED_CODE,
+    severity: 'WARN',
+    rejectedMessage:
+      'A payment gateway notification arrived whose signature did not verify against the ' +
+      'stored webhook secret. It was ignored; check the webhook secret if this repeats. ' +
+      'Payments are still confirmed by the gateway’s own status read.',
+  };
+}
 /**
  * FIX-03 (batch 2026-10-10), declared beside their producer and part of the schema once
  * shipped:
@@ -3551,19 +3585,17 @@ export class GatewayPaymentService {
       secret !== null &&
       adapter.verifyWebhook !== undefined &&
       adapter.verifyWebhook(secret, body, signature, { rawBody, now: this.deps.clock.now() });
-    const dedupeKey = `${GATEWAY_WEBHOOK_UNVERIFIED_CODE}:${provider}`;
+    const codes = webhookConditionCodesOf(provider);
+    const dedupeKey = `${codes.rejected}:${provider}`;
     if (!verified) {
       this.deps.logger.warn(
         { provider, secretStored: secret !== null, signaturePresent: signature !== undefined },
         'gateway webhook dropped: signature not verified',
       );
       await this.deps.opsLog.record(scope, {
-        code: GATEWAY_WEBHOOK_UNVERIFIED_CODE,
-        severity: 'WARN',
-        message:
-          'A payment gateway notification arrived whose signature did not verify against the ' +
-          'stored webhook secret. It was ignored; check the webhook secret if this repeats. ' +
-          'Payments are still confirmed by the gateway’s own status read.',
+        code: codes.rejected,
+        severity: codes.severity,
+        message: codes.rejectedMessage,
         dedupeKey,
         context: { provider, secretStored: secret !== null },
       });
@@ -3571,11 +3603,11 @@ export class GatewayPaymentService {
     }
     if (await this.deps.conditions.conditionIsOpen(scope, dedupeKey)) {
       await this.deps.opsLog.record(scope, {
-        code: GATEWAY_WEBHOOK_VERIFIED_CODE,
+        code: codes.verified,
         severity: 'INFO',
         message: 'A payment gateway notification verified against the stored webhook secret.',
         context: { provider },
-        recoversCode: GATEWAY_WEBHOOK_UNVERIFIED_CODE,
+        recoversCode: codes.rejected,
         recoversDedupeKey: dedupeKey,
       });
     }

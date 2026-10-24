@@ -102,7 +102,7 @@ the setting.
 
 | Gap                                                                  | What Nexa does instead                                                                                                                                                                |
 | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| How to verify `X-TonPays-Signature`                                  | Never verified, never logged, never trusted. The webhook only schedules an inquiry.                                                                                                   |
+| How to verify `X-TonPays-Signature`                                  | RESOLVED by TonPays support, 2026-10-24 (§5.6.1): HMAC-SHA256 over `t.raw_body`. Verified when a secret is stored; the webhook still only schedules an inquiry.                       |
 | What `X-API-Key` on a webhook contains                               | Ignored and never logged.                                                                                                                                                             |
 | Webhook retry schedule                                               | Nothing depends on it. A background inquiry with bounded backoff covers a lost webhook.                                                                                               |
 | Refund API                                                           | None. No provider refund, no partial refund, no claim that TonPays refunded. An undeliverable order is refunded to the **wallet** by the existing one credit path, as for every rail. |
@@ -230,13 +230,40 @@ notification subject key. The webhook dedupe and inquiry leases only reduce work
 order_id)` and never globally; checks a known `invoice_id` agrees; dedupes on the
 delivery id; records the hint; and moves `next_inquiry_at` to now (no sooner than 5 s
 after the last inquiry). An unknown tenant, attempt or mismatch writes nothing that could
-cause work. Headers other than the delivery id and event are not read. Caddy gains a
+cause work. Headers other than the delivery id, event and signature are not read (the signature: see §5.6.1). Caddy gains a
 `/payments/webhook/*` route.
 
 The URL is `<origin>/payments/webhook/tonpays/<tenantId>`, the origin taken from the
 tenant's registered Telegram webhook (the one public origin the installation already
 proved). No registered webhook means no `callback_url` is sent and reconciliation alone
 decides.
+
+### 5.6.1 Webhook signature (R7, from TonPays support, 2026-10-24)
+
+`X-TonPays-Signature: t=<unix seconds>,v1=<hex>`, with `v1 = hex(HMAC-SHA256(secret, "{t}." +
+raw_body_bytes))`. The scheme is TetraPay's, so both gateways share one verifier core
+(`timestamped-webhook-signature.ts`); TonPays' wrapper only fixes the 300 s tolerance.
+
+- `t` is the SEND time of this delivery attempt, not the event time (`occurred_at` in the body).
+  Every retry rebuilds the body and is re-signed with a fresh `t`. The 300 s window is for clock
+  skew only; `t` is never a replay or dedupe key.
+- The signature is checked over the exact raw bytes received. The body is compact JSON with
+  unescaped Persian; a re-serialised body does not verify.
+- Any non-2xx (including 401) is retried by TonPays: final states 3 attempts (now, ~30 s, ~60 s);
+  intermediate states every ~30 s for up to 24 h; an operator force-confirm opens a new 24 h window.
+- `X-TonPays-Delivery-Id` equals the body `delivery_id`, `{invoice_id}:{status}:{occurred_at}`,
+  constant across retries of one state and new for a new state: it is the dedupe key. A header
+  that differs from the body's id is a 400.
+- Secret rotation has NO overlap: after a rotate only the new secret is valid, queued retries
+  included. Set the new secret in Nexa first, then rotate in TonPays.
+- The header is sent only when a webhook secret exists for that gateway in TonPays.
+
+Policy in Nexa: with a secret stored (Web Admin, write-only) the signature is REQUIRED - a
+missing, bad, stale or (secret unreadable) unverifiable webhook is answered **401**, records only
+the one rolled-up `tonpays.webhook.signature_rejected` condition (ERRORS topic), and triggers
+nothing. With no secret stored the webhook is accepted as before and Web Admin shows
+«امضای وب‌هوک تون‌پیز فعال نیست؛ سکرت وب‌هوک را تنظیم کنید». A verified webhook is STILL only a
+hint: only the inquiry decides, and nothing a webhook says marks a payment paid.
 
 ### 5.7 Reconciliation
 

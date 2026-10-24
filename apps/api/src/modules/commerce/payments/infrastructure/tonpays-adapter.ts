@@ -31,6 +31,7 @@ import {
   tonpaysOrderId,
   tonpaysVerdict,
 } from '../domain/tonpays.js';
+import { verifyTonPaysWebhook } from './tonpays-signature.js';
 
 /**
  * TonPays over HTTP, and the only code in the installation that speaks it (WP11A).
@@ -456,6 +457,18 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
     }
   }
 
+  verifyWebhook(
+    secret: string,
+    _body: unknown,
+    signature: string | undefined,
+    context?: { readonly rawBody: Uint8Array | null; readonly now: Date },
+  ): boolean {
+    // Over the RAW bytes and the injected clock's `now`: with no context there is nothing to
+    // verify against, and the signature is refused (never `Date.now()` here).
+    if (context === undefined) return false;
+    return verifyTonPaysWebhook(secret, context.rawBody, signature, context.now);
+  }
+
   parseWebhook(body: unknown, deliveryIdHeader: string | undefined): GatewayWebhookHint | null {
     const parsed = webhookBodySchema.safeParse(body);
     if (!parsed.success) return null;
@@ -469,6 +482,9 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
       (typeof bodyDelivery === 'number' && Number.isSafeInteger(bodyDelivery))
         ? String(bodyDelivery).slice(0, 128)
         : null;
+    // Documented: the header equals the body's `delivery_id`. Two different ids for one
+    // delivery are not a notification TonPays sent, so it is refused, not guessed between.
+    if (header !== null && deliveryFromBody !== null && header !== deliveryFromBody) return null;
     return {
       orderId: parsed.data.order_id,
       invoiceId: parsed.data.invoice_id,
