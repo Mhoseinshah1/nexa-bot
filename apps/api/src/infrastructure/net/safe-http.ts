@@ -1,6 +1,8 @@
 import { lookup as dnsLookup } from 'node:dns';
 import { readFileSync } from 'node:fs';
 import { rootCertificates } from 'node:tls';
+import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib';
+import type { Readable, Transform } from 'node:stream';
 import { request as httpRequest, type ClientRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { LookupAddress } from 'node:dns';
@@ -373,6 +375,9 @@ export class SafeHttpClient {
     const body = encodeBody(request);
     const headers: Record<string, string> = {
       accept: 'application/json, text/plain;q=0.5, */*;q=0.1',
+      // Declared, because the decoder below exists: a server that compresses without being
+      // asked (Wallex does) is read the same as one that was asked.
+      'accept-encoding': ACCEPT_ENCODING,
       'user-agent': 'nexa-bot',
       ...(request.headers ?? {}),
     };
@@ -533,20 +538,57 @@ export class SafeHttpClient {
             let size = 0;
             let overflowed = false;
 
-            response.on('data', (chunk: Buffer) => {
+            /*
+             * Content-Encoding (Round 6). A provider may answer compressed whether or not it
+             * was asked (Wallex answers `gzip` to a request that never offered it), and a body
+             * read as UTF-8 without inflating it is not JSON. The chain is decoded here, once,
+             * for every provider this client serves.
+             *
+             * TWO caps, because they guard different things. The wire cap (the `data` listener
+             * on `response`) bounds what the peer may send; the decoded cap (the listener on
+             * `source`) bounds what that expands to, which is the zip bomb: a few kilobytes of
+             * gzip inflate to gigabytes. Both stop WHILE reading.
+             */
+            const decoders = decodersFor(response.headers['content-encoding']);
+            if (decoders === null) {
+              response.resume();
+              finish({ ok: false, failure: 'MALFORMED_RESPONSE', status: code });
+              return;
+            }
+            let source: Readable = response;
+            for (const decoder of decoders) {
+              decoder.on('error', () => {
+                response.destroy();
+                finish({ ok: false, failure: 'MALFORMED_RESPONSE', status: code });
+              });
+              source = source.pipe(decoder);
+            }
+            const overflow = (): void => {
+              overflowed = true;
+              response.destroy();
+              source.destroy();
+              finish({ ok: false, failure: 'MALFORMED_RESPONSE', status: code });
+            };
+
+            if (decoders.length > 0) {
+              let wire = 0;
+              response.on('data', (chunk: Buffer) => {
+                wire += chunk.length;
+                if (wire > this.options.maxResponseBytes) overflow();
+              });
+            }
+            source.on('data', (chunk: Buffer) => {
               size += chunk.length;
               if (size > this.options.maxResponseBytes) {
                 // Stopped WHILE reading, not after. A cap applied to a
                 // completed buffer has already spent the memory it was meant
                 // to protect.
-                overflowed = true;
-                response.destroy();
-                finish({ ok: false, failure: 'MALFORMED_RESPONSE', status: code });
+                overflow();
                 return;
               }
               chunks.push(chunk);
             });
-            response.on('end', () => {
+            source.on('end', () => {
               if (overflowed) return;
               const collected: Record<string, string> = {};
               for (const [key, value] of Object.entries(response.headers)) {
@@ -597,6 +639,34 @@ export class SafeHttpClient {
       outgoing.end();
     });
   }
+}
+
+/** What this client offers. */
+const ACCEPT_ENCODING = 'gzip, deflate, br';
+
+/**
+ * The decoders for a `Content-Encoding` header, in the order they must be applied, or null
+ * when any named coding is one this client cannot decode. `identity` and an absent header
+ * are no decoders. The header lists codings in the order they were APPLIED, so they are
+ * undone in reverse.
+ */
+function decodersFor(header: string | string[] | undefined): Transform[] | null {
+  const value = Array.isArray(header) ? header.join(',') : (header ?? '');
+  const codings = value
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry !== '' && entry !== 'identity');
+  const decoders: Transform[] = [];
+  for (const coding of codings.reverse()) {
+    if (coding === 'gzip' || coding === 'x-gzip') decoders.push(createGunzip());
+    else if (coding === 'deflate') decoders.push(createInflate());
+    else if (coding === 'br') decoders.push(createBrotliDecompress());
+    else {
+      for (const made of decoders) made.destroy();
+      return null;
+    }
+  }
+  return decoders;
 }
 
 /** READ or WRITE: what the adapter declared, else GET is a read and anything else a write. */

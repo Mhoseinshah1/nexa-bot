@@ -324,6 +324,8 @@ const GATEWAYS: readonly ShotFixture[] = [
     fallbackSource: 'WALLEX',
     freshTtlSeconds: 300,
     maxStaleSeconds: 1800,
+    minAgreeingSources: 2,
+    acceptSingleSource: false,
     state: 'FRESH',
     quote: {
       quoteId: '01a0f1c2-0000-7000-8000-00000000f002',
@@ -341,6 +343,7 @@ const GATEWAYS: readonly ShotFixture[] = [
     sources: [
       {
         source: 'NOBITEX',
+        enabled: true,
         lastSuccessAt: ago(1),
         lastFailureAt: ago(60 * 24 + 60 * 11),
         lastFailureCode: 'fx.source_unavailable',
@@ -349,6 +352,7 @@ const GATEWAYS: readonly ShotFixture[] = [
       },
       {
         source: 'WALLEX',
+        enabled: true,
         lastSuccessAt: ago(60 * 5),
         lastFailureAt: ago(33),
         lastFailureCode: 'fx.quote_rejected',
