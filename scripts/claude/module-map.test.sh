@@ -18,16 +18,17 @@ cp "$script" "$tmp/scripts/claude/module-map.sh"
 git -C "$tmp" init -q
 run() { (cd "$tmp" && MODULE_MAP_ROOT="$tmp" bash scripts/claude/module-map.sh "$@"); }
 
+PAD=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 out="$(run --all)"
 m=apps/api/src/modules/shop
-has "$out" "$m/alpha services=1 writes=gadget_rows,sprocket_rows,widget_rows tests=1" "--all alpha line (sql names, tests by import)"
-has "$out" "$m/beta services=1 writes=widget_rows tests=1" "--all beta line (tests by file name)"
+has "$out" "$m/alpha services=1 writes=gadget_rows,sprocket_rows_$PAD,widget_rows_$PAD tests=1" "--all alpha line (sql names, tests by import)"
+has "$out" "$m/beta services=1 writes=widget_rows_$PAD tests=1" "--all beta line (tests by file name)"
 [[ "$(wc -l <<<"$out")" == 2 ]] && ok "--all has one line per module" || bad "--all line count"
 
 one="$(run alpha)"
 has "$one" "services: alpha.service.ts" "single: services"
-has "$one" "writes: gadget_rows, sprocket_rows, widget_rows" "single: writes mapped; Map.delete dropped; multi-line delete found"
-has "$one" "contracts: @nexa/contracts/errors, ALPHA_CODES, Clock, Money, WidgetId" "single: contracts (sorted, subpath, type/as stripped)"
+has "$one" "writes: gadget_rows, sprocket_rows_$PAD, widget_rows_$PAD" "single: writes mapped; Map.delete dropped; multi-line delete found"
+has "$one" "contracts: @nexa/contracts/errors, ALPHA_CODES, Clock, Money, SomeVeryLongExportedNameNumberOne, SomeVeryLongExportedNameNumberThree, SomeVeryLongExportedNameNumberTwo, WidgetId" "single: contracts (sorted, subpath, type/as stripped)"
 has "$one" "tests (1):" "single: test count"
 has "$one" "  tests/unit/wiring.test.ts" "single: test path"
 has "$(run shop/beta)" "  tests/unit/beta.test.ts" "full key resolves; filename match"
@@ -36,12 +37,12 @@ if grep -q unrelated <<<"$(run beta)$one"; then bad "unrelated test leaked in"; 
 set +e; run nope >/dev/null 2>&1; rc=$?; set -e
 [[ "$rc" == 2 ]] && ok "unknown module exits 2" || bad "unknown module exits $rc"
 
-ww="$(run --who-writes widget_rows)"
+ww="$(run --who-writes widget_rows_$PAD)"
 has "$ww" "$m/alpha/application/alpha.service.ts" "who-writes finds alpha by SQL name"
 has "$ww" "$m/beta/application/beta.service.ts" "who-writes finds beta"
 if grep -q repository <<<"$ww"; then bad "who-writes matched a non-writer"; else ok "who-writes skips non-writers"; fi
 has "$(run --who-writes sprockets)" "$m/alpha/infrastructure/alpha.repository.ts" "who-writes by identifier, schema.-qualified multi-line"
-has "$(run --who-calls run)" "$m/beta/application/beta.service.ts:1:export class BetaService { run(db: any) { db.insert(widgets); } }" "who-calls lists call/def lines"
+has "$(run --who-calls run)" "$m/beta/application/beta.service.ts:2:  run(db: any) {" "who-calls lists call/def lines"
 
 # The line cap: 12 tests -> 8 listed plus the overflow line.
 for i in $(seq 1 11); do echo "export {};" >"$tmp/tests/unit/alpha-extra-$i.test.ts"; done

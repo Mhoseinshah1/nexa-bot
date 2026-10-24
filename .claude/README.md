@@ -22,36 +22,57 @@ stops prompting for the same fifteen. **`permissions.deny`** blocks pushing to
 
 **`env`** points at the local development services.
 
+`CLAUDE.md` is now short; the long-form owner decisions (money, pricing,
+referral, reseller, gateway and recovery rules) live in `docs/project-status.md`.
+
 ### `skills/`
 
 - **`nexa-conventions`** — the money, time, tenancy, event, audit, idempotency,
-  text and secret rules in the form Claude applies while writing code. This is
-  what stops the twelfth session from inventing a `balance` float column.
-- **`nexa-migrations`** — how to write and verify a migration here, including
-  the things `drizzle-kit` does not model.
-- **`nexa-code-navigation`** — the layer map and `scripts/trace.sh <term>`,
-  which lists the files behind a feature, layer by layer, in one call, so a
-  session searches instead of reading directories.
+  text, secret and domain-invariant rules Claude applies while writing code.
+- **`nexa-migrations`** — write, renumber and verify a migration, including what
+  `drizzle-kit` does not model.
+- **`nexa-code-navigation`** — layer map, `scripts/claude/module-map.sh` and
+  `scripts/trace.sh <term>`: find the files behind a feature without reading
+  directories, and which files never to read whole.
 - **`nexa-test-selection`** — which tests to run while iterating, which guard
-  suites (money, migration, security, legacy import, deploy) are never
-  narrowed, and when the full gate runs. `scripts/select-tests.sh` prints the
-  commands; it never skips or removes a test.
-- **`nexa-pr-workflow`** — branch → PR → CI → review → merge, with
-  `scripts/branch-check.sh` for conflicts, contract changes and
-  migration-number collisions. Merging, tagging and releasing stay the owner's
-  explicit call.
+  suites are never narrowed, and when the full gate runs.
+- **`nexa-pr-workflow`** — branch → PR → CI → review → merge, conflict and
+  migration-collision checks; merging stays the owner's explicit call.
 - **`nexa-handoff`** — a short structured handoff between sessions;
   `scripts/handoff-facts.sh` generates the git half.
 - **`nexa-web-design`** — Web Admin rules (RTL, Vazirmatn, tokens, CSP, touch,
-  accessibility, permissions, no demo data). The visual redesign is paused;
-  `references/redesign-status.md` records that and is where an approved
-  reference will be registered.
+  accessibility, permissions, no demo data); the visual redesign is paused.
+- **`nexa-round-pipeline`** — the owner's standing rules for a multi-agent work
+  round: worktrees, 25-line reports, push → CI → Codex → fix → merge-commit.
+- **`nexa-ci-watch`** — read and wait for CI and the Codex review cheaply with
+  `scripts/claude/ci-status.sh` (REST only; GraphQL is blocked).
+- **`nexa-log-digest`** — shrink test, typecheck, lint and `pnpm verify` output
+  to the failures with `scripts/claude/log-digest.sh` before reading it.
+- **`nexa-gateway-integration`** — checklist and required tests for adding or
+  changing a payment gateway (inquiry-only approval, UNKNOWN, late credit).
 
 Skills load progressively: only each `description` is in context until a task
 matches it; the body and any `references/` file are read on demand. Keep
 descriptions specific and bodies short, and point at `docs/` rather than
-copying it. The scripts are read-only helpers; each has a `*.test.sh` beside it
-(run by hand — they are not part of `pnpm verify`).
+copying it. The scripts under `skills/*/scripts/` (`trace.sh`,
+`select-tests.sh`, `branch-check.sh`, `handoff-facts.sh`) are read-only helpers;
+each has a `*.test.sh` beside it (run by hand — not part of `pnpm verify`).
+
+### `scripts/claude/`
+
+Repository-level helpers the skills call (outside `.claude/`):
+
+- **`ci-status.sh`** — one line per PR head (green/pending/red), trimmed failure
+  logs and Codex findings, over the REST API.
+- **`log-digest.sh`** — filters tool output down to failures, at most 40 lines.
+- **`module-map.sh`** — a module's services, tables it writes, contracts and
+  tests; also `--who-writes` and `--who-calls`.
+- **`check-claude-md-moves.mjs`** — checks that every heading and bold span of the old
+  `CLAUDE.md` still exists in the new one, `docs/project-status.md` or a skill.
+
+Tests: `bash scripts/claude/<name>.test.sh` for the three shell scripts and
+`node --test scripts/claude/check-claude-md-moves.test.mjs`. Run by hand — not
+part of `pnpm verify`.
 
 ### `agents/`
 
