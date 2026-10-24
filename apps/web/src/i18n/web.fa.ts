@@ -3300,6 +3300,12 @@ export const WEB_FA = {
   'web.payment_timeline_review_lapsed': 'بررسی درگاه بدون پاسخ قطعی تمام شد',
   'web.payment_timeline_gateway_outcome': 'نتیجهٔ نهایی درگاه ثبت شد',
   'web.payment_timeline_late_completion': 'تأیید دیرهنگام درگاه',
+  // R8 A6.
+  'web.payment_timeline_late_credited': 'واریز تأیید دیرهنگام به کیف پول',
+  'web.payment_timeline_late_credited_to_wallet': 'به کیف پول مشتری؛ سفارش باز نشد',
+  'web.payment_timeline_reject_reasons': 'دلیل‌های رد درگاه',
+  'web.payment_timeline_reject_reasons_withheld': '{n} دلیل متنی (در گزارش ممیزی پرداخت)',
+  'web.payment_timeline_reject_reasons_none': 'درگاه دلیلی اعلام نکرد',
   'web.payment_timeline_order_settled': 'سفارش تسویه شد',
   'web.payment_timeline_order_fulfilment': 'تحویل سفارش',
   'web.payment_timeline_order_refunded': 'سفارش بازپرداخت شد',

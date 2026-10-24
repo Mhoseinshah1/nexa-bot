@@ -143,6 +143,8 @@ export const GATEWAY_REVIEW_RECONCILED_CODE = 'payments.gateway_review_reconcile
  * name is a constant both sides import rather than a string each one spells.
  */
 export const PAYMENT_LOSE_TRACK_ACTION = 'payment.lose_track';
+/** R8 A6: the audit row of the gateway's rejection reasons, read by the payment timeline. */
+export const PROVIDER_REJECTION_REASONS_ACTION = 'gateway_invoice.provider_rejection_reasons';
 /**
  * NOWPayments (`docs/nowpayments-gateway-audit.md` §5.6), declared beside their producer and
  * part of the schema once shipped:
@@ -2030,7 +2032,7 @@ export class GatewayPaymentService {
             scope,
             actor,
             {
-              action: 'gateway_invoice.provider_rejection_reasons',
+              action: PROVIDER_REJECTION_REASONS_ACTION,
               entityType: 'Payment',
               entityId: invoice.paymentId,
               before: null,
