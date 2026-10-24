@@ -447,10 +447,7 @@ function InboxItem({
             ],
             [
               t('web.nc_message'),
-              <TechnicalDetails
-                key="m"
-                lines={[operationalEventMessageFa(row.code) ?? row.message]}
-              />,
+              <TechnicalDetails key="m" lines={notificationMessageLines(row.code, row.message)} />,
             ],
           ]}
         />
@@ -465,4 +462,13 @@ function InboxItem({
       </div>
     </li>
   );
+}
+
+/**
+ * The Persian sentence for the code, and beneath it the server's own message, which carries
+ * the identifying detail (a loop's name, a setting's key) a code-keyed sentence cannot.
+ */
+export function notificationMessageLines(code: string, message: string): readonly string[] {
+  const persian = operationalEventMessageFa(code);
+  return persian === null || persian === message ? [message] : [persian, message];
 }

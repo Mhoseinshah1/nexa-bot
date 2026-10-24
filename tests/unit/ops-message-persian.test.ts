@@ -79,7 +79,7 @@ describe('operational messages read in Persian', () => {
 });
 
 describe('the operations group prints the Persian sentence, not the English log line', () => {
-  it('shows fx.single_source in Persian in both the technical line and the message', async () => {
+  it('shows fx.single_source in Persian as the message, the server message kept on the technical line', async () => {
     const { OperationalEventPresenter } =
       await import('../../apps/api/src/modules/commerce/ops-log/application/event-presenter');
     const { i18nOpsLogWords } =
@@ -116,7 +116,8 @@ describe('the operations group prints the Persian sentence, not the English log 
     );
     const values = queued[0]?.values ?? {};
     expect(String(values['technical'])).toContain('fx.single_source');
-    expect(String(values['technical'])).not.toContain('exchange-rate');
+    // Codex on #319: the identifying detail of the server's own message is not lost.
+    expect(String(values['technical'])).toContain('exchange-rate');
     expect(ENGLISH_RUN.test(String(values['message']))).toBe(false);
     expect(values['message']).toBe(operationalEventMessageFa('fx.single_source'));
   });

@@ -252,3 +252,14 @@ describe('a real process under the quota', () => {
     expect(limitedShare).toBeLessThan(freeShare * 0.75);
   }, 30_000);
 });
+
+describe('a CPU quota forces one 7-Zip thread (Codex on #319)', () => {
+  it('rewrites every -mmt to 1 while a quota is in force, and leaves argv alone at 100', async () => {
+    const { cappedThreadArgs } =
+      await import('../../apps/api/src/modules/platform/backup/infrastructure/seven-zip');
+    const argv = ['a', '-mx9', '-md64m', '-mmt=2', '-p', 'x.7z'];
+    expect(cappedThreadArgs(argv, 70)).toEqual(['a', '-mx9', '-md64m', '-mmt=1', '-p', 'x.7z']);
+    expect(cappedThreadArgs(argv, 99)).toContain('-mmt=1');
+    expect(cappedThreadArgs(argv, 100)).toEqual(argv);
+  });
+});
