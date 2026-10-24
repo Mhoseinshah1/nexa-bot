@@ -389,7 +389,7 @@ function detail(entry: PaymentTimelineEntry): ReactNode {
             <span>
               {entry.reasons.map((reason, index) => (
                 <span key={reason}>
-                  {index === 0 ? null : '، '}
+                  {index === 0 ? null : ' · '}
                   {code(reason)}
                 </span>
               ))}
