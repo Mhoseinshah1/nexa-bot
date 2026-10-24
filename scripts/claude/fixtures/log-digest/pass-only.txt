@@ -1,0 +1,5 @@
+> nexa@ typecheck
+> tsc -b
+
+Checking formatting...
+All matched files use Prettier code style!
