@@ -39,6 +39,21 @@ export const i18nOpsLogWords: OpsLogWords = {
   evidenceName: (kind) =>
     kind === null ? W.none : pick(W.evidence, kind, W.evidence.GATEWAY_INQUIRY),
   paymentFailure: (cause) => pick(W.paymentFailure, cause, W.paymentFailure.GATEWAY_FAILED),
+  gatewayFailureCause(code) {
+    if (code === null || code === '') return W.paymentFailure.GATEWAY_FAILED;
+    if (Object.hasOwn(W.gatewayFailureCauses, code)) {
+      return (W.gatewayFailureCauses as Record<string, string>)[code] as string;
+    }
+    return `${W.paymentFailure.GATEWAY_FAILED} (${W.failureCodeLabel}: ${code})`;
+  },
+  cancelledBy: (by) => W.cancelledBy[by],
+  rejectReasons(by, reasons) {
+    const who = W.rejectedBy[by];
+    if (reasons.length === 0) return by === 'PROVIDER' ? `${who}: ${W.noRejectReason}` : who;
+    return `${who}: ${reasons.join('، ')}`;
+  },
+  customerNotified: (yes) => (yes ? W.customerNotified.yes : W.customerNotified.no),
+  customerNotifiedBulk: (yes) => (yes ? W.customerNotifiedBulk.yes : W.customerNotifiedBulk.no),
   refundChannel: (channel) => pick(W.refundChannels, channel, W.refundChannels.PROVIDER),
   refundFailure: (cause) => pick(W.refundFailure, cause, W.refundFailure.OPERATOR_FAILED),
   refundRequestOutcome: (outcome) =>

@@ -479,7 +479,10 @@ import { ReceiptService } from './modules/commerce/payments/application/receipt.
 import { TelegramReceiptFiles } from './modules/commerce/payments/infrastructure/telegram-receipt-files.js';
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
 import { CardSwitchService } from './modules/commerce/payments/application/card-switch.service.js';
-import { CustomerFactNoticeConsumer } from './modules/commerce/messaging/application/customer-fact-notice.consumer.js';
+import {
+  CustomerFactNoticeConsumer,
+  WALLET_ADMIN_NOTICE,
+} from './modules/commerce/messaging/application/customer-fact-notice.consumer.js';
 import { RefundService } from './modules/commerce/payments/application/refund.service.js';
 import { ServiceRefundRequestService } from './modules/commerce/payments/application/service-refund-request.service.js';
 import { ServiceRefundDecisionService } from './modules/commerce/payments/application/service-refund-decision.service.js';
@@ -2105,7 +2108,18 @@ export function createContainer(
        * work. Imports are excluded twice: by the events they do not emit, and by the
        * provenance each consumer checks.
        */
-      new LedgerLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
+      new LedgerLogConsumer({
+        lane: opsLogLane,
+        facts: opsLogFacts,
+        words: i18nOpsLogWords,
+        // R8 A4: the same switch `CustomerFactNoticeConsumer` reads for the customer's message.
+        customerNotified: (scope, reason, tx) => {
+          const notice = WALLET_ADMIN_NOTICE[reason];
+          return notice === undefined
+            ? Promise.resolve(false)
+            : featureFlagResolver.isEnabled(scope, notice.flag, tx);
+        },
+      }),
       new CustomerLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
       new ServiceLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
       new AdminLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
