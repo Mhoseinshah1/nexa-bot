@@ -565,8 +565,9 @@ describe('payment accounts and the destination a payment freezes', () => {
         label: 'ملی',
       });
       expect(withoutSheba.split('\n')).toHaveLength(4);
-      // The failure this whole composition exists to prevent.
-      expect(withoutSheba).not.toContain('{');
+      // The failure this whole composition exists to prevent: a literal {token}. (An icon
+      // marker such as {icon:payment} is drawn at send time, like every body's.)
+      expect(withoutSheba).not.toMatch(/\{[A-Za-z_][A-Za-z0-9_]*\}/u);
       expect(withoutSheba).not.toContain('شبا');
     });
 
