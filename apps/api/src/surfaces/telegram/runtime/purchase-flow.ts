@@ -34,6 +34,7 @@ import { mainMenuButton } from './keyboards.js';
 import { refusal } from './refusals.js';
 import type { PendingReply } from './replies.js';
 import { payMethodsButton } from './payment-screens.js';
+import { awaitingPaymentReply, orderRouteButtons } from './checkout-flow.js';
 import type { BotRuntime } from '../bot-runtime.js';
 
 /**
@@ -499,7 +500,7 @@ export async function preinvoice(
     description: display?.description ?? null,
     walletBalance: money(balance.amountMinor, balance.currency),
   });
-  const routes = await rt.orderRouteButtons(scope, customer.id, order.id, order.totals.total);
+  const routes = await orderRouteButtons(rt, scope, customer.id, order.id, order.totals.total);
   return {
     key: screen.key,
     values: screen.values,
@@ -897,7 +898,7 @@ export async function confirm(
       customerId: customer.id,
       orderId,
     });
-    return rt.awaitingPaymentReply(scope, customer, order);
+    return awaitingPaymentReply(rt, scope, customer, order);
   } catch (error) {
     return refusal(error);
   }
