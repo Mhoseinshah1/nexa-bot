@@ -27,7 +27,7 @@ export const fxBaseAssetSchema = z.enum(FX_BASE_ASSETS);
  * published documentation in `docs/fx-audit.md` §2; a member here has a parser behind
  * it and nothing else may be named as a source.
  */
-export const FX_SOURCES = ['NOBITEX', 'WALLEX'] as const;
+export const FX_SOURCES = ['NOBITEX', 'WALLEX', 'TABDEAL', 'BITPIN', 'RAMZINEX'] as const;
 export type FxSource = (typeof FX_SOURCES)[number];
 export const fxSourceSchema = z.enum(FX_SOURCES);
 
@@ -40,6 +40,9 @@ export const fxSourceSchema = z.enum(FX_SOURCES);
 export const FX_SOURCE_ENABLED_SETTINGS = {
   NOBITEX: 'fx.source_nobitex_enabled',
   WALLEX: 'fx.source_wallex_enabled',
+  TABDEAL: 'fx.source_tabdeal_enabled',
+  BITPIN: 'fx.source_bitpin_enabled',
+  RAMZINEX: 'fx.source_ramzinex_enabled',
 } as const satisfies Record<FxSource, string>;
 
 /**
@@ -50,6 +53,17 @@ export const FX_SOURCE_ENABLED_SETTINGS = {
 export const FX_MIN_AGREEING_SOURCES_MIN = 2;
 export const FX_MIN_AGREEING_SOURCES_MAX = 5;
 export const FX_MIN_AGREEING_SOURCES_DEFAULT = 2;
+
+/**
+ * The sanity band (Round 8): with three or more healthy sources, one that sits further
+ * than this many basis points from the MEDIAN OF THE OTHERS is left out of that pass.
+ * Two percent by default; the owner's setting `fx.sanity_band_bps` moves it. With only two
+ * healthy sources "the others" is a single figure and the exclusion would be symmetric,
+ * so the agreement rule (`FX_SOURCE_AGREEMENT_BPS`) alone decides there.
+ */
+export const FX_SANITY_BAND_BPS_MIN = 50;
+export const FX_SANITY_BAND_BPS_MAX = 1_000;
+export const FX_SANITY_BAND_BPS_DEFAULT = 200;
 
 /** A fallback may be none. `NONE` is the operator saying "primary only". */
 export const FX_FALLBACK_SOURCES = [...FX_SOURCES, 'NONE'] as const;

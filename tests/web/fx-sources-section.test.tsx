@@ -105,6 +105,9 @@ describe('the sources table', () => {
   it('names every error kind a source can report, and falls back to the raw code', () => {
     expect(fxSourceErrorLabel('wallex.timeout')).toBe(t('web.fx_err_timeout'));
     expect(fxSourceErrorLabel('outlier')).toBe(t('web.fx_err_outlier'));
+    expect(fxSourceErrorLabel('outside_band')).toBe(t('web.fx_err_outside_band'));
+    expect(fxSourceErrorLabel('tabdeal.bad_price')).toBe(t('web.fx_err_bad_price'));
+    expect(fxSourceErrorLabel('bitpin.no_market')).toBe(t('web.fx_err_no_market'));
     expect(fxSourceErrorLabel('wallex.rate_limited')).toBe(t('web.fx_err_rate_limited'));
     expect(fxSourceErrorLabel('wallex.malformed_response')).toBe(
       t('web.fx_err_malformed_response'),

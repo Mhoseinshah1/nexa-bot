@@ -370,7 +370,7 @@ export const FEATURE_FLAGS = [
   {
     key: 'central_fx',
     description:
-      'Read the USDT rate from the public exchanges (Nobitex and Wallex; a rate is stored when ' +
+      'Read the USDT rate from the public exchanges (Nobitex, Wallex, Tabdeal, Bitpin and Ramzinex; a rate is stored when ' +
       'enough of them agree) and ' +
       'keep it fresh for the routes priced by it (package FX). The Telegram Stars route is ' +
       'priced by this rate and stars.per_usdt only (spec §8): while it is off no new Stars ' +
@@ -388,6 +388,10 @@ export const FEATURE_FLAGS = [
       'fx.max_stale_seconds',
       'fx.source_nobitex_enabled',
       'fx.source_wallex_enabled',
+      'fx.source_tabdeal_enabled',
+      'fx.source_bitpin_enabled',
+      'fx.source_ramzinex_enabled',
+      'fx.sanity_band_bps',
       'fx.min_agreeing_sources',
       'fx.accept_single_source',
       'stars.per_usdt',

@@ -199,6 +199,9 @@ interface World {
   readonly events: OperationalEventInput[];
   readonly nobitex: FxSourceAdapter & { calls: number };
   readonly wallex: FxSourceAdapter & { calls: number };
+  readonly tabdeal: FxSourceAdapter & { calls: number };
+  readonly bitpin: FxSourceAdapter & { calls: number };
+  readonly ramzinex: FxSourceAdapter & { calls: number };
   clockMs: number;
   settings: Record<string, unknown>;
   enabled: boolean;
@@ -210,6 +213,9 @@ function world(
   options: {
     nobitex?: () => FxSourceOutcome;
     wallex?: () => FxSourceOutcome;
+    tabdeal?: () => FxSourceOutcome;
+    bitpin?: () => FxSourceOutcome;
+    ramzinex?: () => FxSourceOutcome;
     settings?: Record<string, unknown>;
     enabled?: boolean;
   } = {},
@@ -221,12 +227,24 @@ function world(
     options.nobitex ?? (() => reading('NOBITEX', 1_035_500n, 'IRR', new Date(T0 - 500))),
   );
   const wallex = scripted('WALLEX', options.wallex ?? (() => reading('WALLEX', 103_500n, 'IRT')));
+  const tabdeal = scripted(
+    'TABDEAL',
+    options.tabdeal ?? (() => reading('TABDEAL', 103_500n, 'IRT')),
+  );
+  const bitpin = scripted('BITPIN', options.bitpin ?? (() => reading('BITPIN', 103_500n, 'IRT')));
+  const ramzinex = scripted(
+    'RAMZINEX',
+    options.ramzinex ?? (() => reading('RAMZINEX', 103_500n, 'IRT')),
+  );
   const state: World = {
     service: null as unknown as FxService,
     repository,
     events,
     nobitex,
     wallex,
+    tabdeal,
+    bitpin,
+    ramzinex,
     clockMs: T0,
     settings: {
       'fx.primary_source': 'NOBITEX',
@@ -235,6 +253,11 @@ function world(
       'fx.max_stale_seconds': 900,
       'fx.source_nobitex_enabled': true,
       'fx.source_wallex_enabled': true,
+      // The Round 8 sources are off here so the two-source cases above stay two-source.
+      'fx.source_tabdeal_enabled': false,
+      'fx.source_bitpin_enabled': false,
+      'fx.source_ramzinex_enabled': false,
+      'fx.sanity_band_bps': 200,
       'fx.min_agreeing_sources': 2,
       'fx.accept_single_source': false,
       'sales.currency': 'IRT',
@@ -251,6 +274,9 @@ function world(
     sources: new Map<FxSource, FxSourceAdapter>([
       ['NOBITEX', nobitex],
       ['WALLEX', wallex],
+      ['TABDEAL', tabdeal],
+      ['BITPIN', bitpin],
+      ['RAMZINEX', ramzinex],
     ]),
     settings: {
       valueOf: (_s: unknown, key: string) => Promise.resolve(state.settings[key]),
@@ -1007,6 +1033,9 @@ describe('Round 6: sources that agree, switches, single-source mode and the stal
     expect(status.sources.map((row) => [row.source, row.enabled])).toEqual([
       ['NOBITEX', true],
       ['WALLEX', false],
+      ['TABDEAL', false],
+      ['BITPIN', false],
+      ['RAMZINEX', false],
     ]);
     expect(status.settings).toMatchObject({ minAgreeingSources: 2, acceptSingleSource: false });
   });
@@ -1030,5 +1059,161 @@ describe('Round 6: sources that agree, switches, single-source mode and the stal
     expect(settingDefinition('fx.max_stale_seconds').defaultValue).toBe(21_600);
     expect(settingDefinition('fx.min_agreeing_sources').defaultValue).toBe(2);
     expect(settingDefinition('fx.accept_single_source').defaultValue).toBe(false);
+  });
+});
+
+/** Every `fx.*` key at the registry's own default: what an installation has before an owner touches it. */
+function registryDefaults(): Record<string, unknown> {
+  const keys = [
+    'fx.primary_source',
+    'fx.fallback_source',
+    'fx.fresh_ttl_seconds',
+    'fx.max_stale_seconds',
+    'fx.source_nobitex_enabled',
+    'fx.source_wallex_enabled',
+    'fx.source_tabdeal_enabled',
+    'fx.source_bitpin_enabled',
+    'fx.source_ramzinex_enabled',
+    'fx.sanity_band_bps',
+    'fx.min_agreeing_sources',
+    'fx.accept_single_source',
+  ] as const;
+  return Object.fromEntries(keys.map((key) => [key, settingDefinition(key).defaultValue]));
+}
+
+describe('Round 8: Tabdeal, Bitpin, Ramzinex and the sanity band', () => {
+  it('the registry defaults: Tabdeal and Bitpin on, Ramzinex off, two agreeing sources, a two percent band', () => {
+    const defaults = registryDefaults();
+    expect(defaults['fx.source_tabdeal_enabled']).toBe(true);
+    expect(defaults['fx.source_bitpin_enabled']).toBe(true);
+    expect(defaults['fx.source_ramzinex_enabled']).toBe(false);
+    expect(defaults['fx.min_agreeing_sources']).toBe(2);
+    expect(defaults['fx.accept_single_source']).toBe(false);
+    expect(defaults['fx.sanity_band_bps']).toBe(200);
+  });
+
+  it('two agreeing sources store a rate on the registry defaults, with no single-source mode', async () => {
+    // Nobitex is the owner's 403; take it out and leave Wallex out too: Tabdeal + Bitpin only.
+    const w = world({
+      settings: {
+        ...registryDefaults(),
+        'fx.source_nobitex_enabled': false,
+        'fx.source_wallex_enabled': false,
+      },
+      tabdeal: () => reading('TABDEAL', 268_671n, 'IRT'),
+      bitpin: () => reading('BITPIN', 268_450n, 'IRT'),
+    });
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'REFRESHED' });
+    expect(w.repository.row?.quote).toMatchObject({ rate: { mantissa: 268_671n, scale: 0 } });
+    // The two agree (under 0.1 percent) and nothing was stored under the single-source opt-in.
+    expect(codes(w)).not.toContain(FX_SINGLE_SOURCE_CODE);
+  });
+
+  it('Nobitex stays ON and is merely skipped at 403: Tabdeal + Bitpin store the rate on the defaults', async () => {
+    // The owner's server: Nobitex (still the default primary, still enabled) answers 403 and
+    // Wallex is down too. Two OTHER agreeing sources are two: a rate is stored with no
+    // single-source mode, and Nobitex is dialled, recorded as a failure, never removed.
+    const w = world({
+      settings: registryDefaults(),
+      nobitex: () => down('nobitex.http_403'),
+      wallex: () => down('wallex.unreadable'),
+      tabdeal: () => reading('TABDEAL', 268_671n, 'IRT'),
+      bitpin: () => reading('BITPIN', 268_450n, 'IRT'),
+    });
+    expect(registryDefaults()['fx.source_nobitex_enabled']).toBe(true);
+    expect(registryDefaults()['fx.primary_source']).toBe('NOBITEX');
+    const result = await w.service.refreshIfDue(scope, 'USDT');
+    expect(result.outcome).toMatch(/^REFRESHED/);
+    expect(['TABDEAL', 'BITPIN']).toContain(w.repository.row?.quote?.source);
+    expect(w.nobitex.calls).toBe(1);
+    expect(w.repository.states.get('NOBITEX')).toMatchObject({ consecutiveFailures: 1 });
+    expect(codes(w)).not.toContain(FX_SINGLE_SOURCE_CODE);
+  });
+
+  it('a disabled source is never called: Ramzinex is off by default, and a switched-off Bitpin too', async () => {
+    const w = world({
+      settings: {
+        ...registryDefaults(),
+        'fx.source_nobitex_enabled': false,
+        'fx.source_wallex_enabled': false,
+      },
+    });
+    await w.service.refreshIfDue(scope, 'USDT');
+    await w.service.refresh(scope, actor, 'USDT');
+    expect(w.ramzinex.calls).toBe(0);
+    expect(w.nobitex.calls + w.wallex.calls).toBe(0);
+    expect(w.tabdeal.calls).toBeGreaterThan(0);
+    expect(w.bitpin.calls).toBeGreaterThan(0);
+    const off = world({
+      settings: { ...registryDefaults(), 'fx.source_bitpin_enabled': false },
+    });
+    await off.service.refresh(scope, actor, 'USDT');
+    expect(off.bitpin.calls).toBe(0);
+    expect(off.ramzinex.calls).toBe(0);
+  });
+
+  /** Three sources inside the 3 percent agreement window; the primary is the one furthest out. */
+  const THREE = {
+    settings: {
+      'fx.source_tabdeal_enabled': true,
+      'fx.source_bitpin_enabled': true,
+      'fx.source_nobitex_enabled': false,
+      'fx.primary_source': 'TABDEAL',
+    },
+    wallex: () => reading('WALLEX', 100_000n, 'IRT'),
+    bitpin: () => reading('BITPIN', 101_000n, 'IRT'),
+    tabdeal: () => reading('TABDEAL', 103_000n, 'IRT'),
+  };
+
+  it('the sanity band leaves out a source further than the band from the median of the others, and says so once', async () => {
+    const w = world(THREE);
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({
+      outcome: 'REFRESHED_BY_FALLBACK',
+    });
+    // Tabdeal (103,000) is 2.49 percent from the median of the others (100,500): out.
+    // Without the band it is the primary AND inside the 3 percent window, so it would win.
+    expect(w.repository.row?.quote).toMatchObject({
+      source: 'WALLEX',
+      rate: { mantissa: 100_000n, scale: 0 },
+    });
+    const rejected = w.events.filter((event) => event.code === FX_QUOTE_REJECTED_CODE);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]).toMatchObject({
+      dedupeKey: `${FX_QUOTE_REJECTED_CODE}:TABDEAL`,
+      context: { source: 'TABDEAL', reason: 'outside_band' },
+    });
+    expect(w.repository.states.get('TABDEAL')).toMatchObject({
+      lastFailureCode: 'outside_band',
+      consecutiveFailures: 0,
+      retryAfter: null,
+    });
+    // A later pass repeats it on the SAME deduped subject: one condition, not a flood.
+    w.clockMs += 60_000;
+    await w.service.refreshIfDue(scope, 'USDT');
+    const subjects = new Set(
+      w.events.filter((event) => event.code === FX_QUOTE_REJECTED_CODE).map((e) => e.dedupeKey),
+    );
+    expect(subjects).toEqual(new Set([`${FX_QUOTE_REJECTED_CODE}:TABDEAL`]));
+  });
+
+  it('the band is the owner’s: a wider one keeps the source, and a source exactly on the band stays', async () => {
+    const wide = world({ ...THREE, settings: { ...THREE.settings, 'fx.sanity_band_bps': 300 } });
+    await wide.service.refreshIfDue(scope, 'USDT');
+    expect(wide.repository.row?.quote).toMatchObject({ source: 'TABDEAL' });
+    expect(wide.events.map((event) => event.code)).not.toContain(FX_QUOTE_REJECTED_CODE);
+    // 102,510 against the others' median 100,500 is 2.0 percent to the cent: on the band, kept.
+    const edge = world({ ...THREE, tabdeal: () => reading('TABDEAL', 102_510n, 'IRT') });
+    await edge.service.refreshIfDue(scope, 'USDT');
+    expect(edge.repository.row?.quote).toMatchObject({ source: 'TABDEAL' });
+  });
+
+  it('with two healthy sources the band does nothing: the agreement window alone decides', async () => {
+    // 2.5 percent apart: more than the band, inside the 3 percent window. Both stay.
+    const w = world({
+      wallex: () => reading('WALLEX', 100_000n, 'IRT'),
+      nobitex: () => reading('NOBITEX', 1_025_000n, 'IRR'),
+    });
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'REFRESHED' });
+    expect(w.events.map((event) => event.code)).not.toContain(FX_QUOTE_REJECTED_CODE);
   });
 });

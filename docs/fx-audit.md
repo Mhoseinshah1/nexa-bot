@@ -390,3 +390,56 @@ rule needed a second source to confirm an outlier, and only two sources exist.
    ever invented. The R5B backoff and the one-alert-per-outage dedupe are unchanged.
 
 **Not built:** Bitpin, Tabdeal and Ramzinex adapters (`OQ-FX-04`: official docs unreachable).
+
+## 8. Round 8 (2026-10-24): Tabdeal, Bitpin, Ramzinex, Wallex on `/hector/web/v1/markets`
+
+**Evidence.** The owner's curl from the production (Hetzner) server, 2026-10-24: all four
+endpoints below answered HTTP 200 with JSON; Nobitex answered 403. The build session could not
+reach any of them (the egress proxy answers 403 on CONNECT), so the fixtures in
+`tests/unit/fx-sources-r8.test.ts` are the shapes quoted in the round prompt — the live
+acceptance is still the owner's.
+
+| Source   | Endpoint                                                             | Figure                                                                         | Unit                    |
+| -------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ----------------------- |
+| Tabdeal  | `GET api1.tabdeal.org/r/api/v1/depth?tabdealSymbol=USDT_IRT&limit=1` | mid of `asks[0][0]`, `bids[0][0]`                                              | Toman (strings)         |
+| Bitpin   | `GET api.bitpin.ir/v1/mkt/markets/`                                  | `results[]` item `code == USDT_IRT`, `price`                                   | Toman (string), ~275 KB |
+| Ramzinex | `GET api.ramzinex.com/exchange/api/v1.0/exchange/pairs`              | `data[]` item `pair_id == 11` (`name.en == tether/rial`), mid of `buy`, `sell` | Rial (numbers), ÷10     |
+| Wallex   | `GET api.wallex.ir/hector/web/v1/markets`                            | `result.markets[]` item `symbol == USDTTMN`, `price`                           | Toman                   |
+
+**Parsing rules (adapter only).** The unit is converted in the adapter and nowhere else: every
+new adapter returns whole Toman (`currency: 'IRT'`). A price is a decimal STRING (a JSON number
+is read as its source text, `parseExactJson`), turned into a mantissa and a scale, averaged and
+divided on `bigint` (`wholeTomanMean`), and rounded half up to a whole Toman. A missing
+symbol or pair, a non-positive or non-numeric value, an empty book side, or a result under one
+Toman is that source's failure (`<source>.no_market` / `.bad_price` / `.not_json`), never a zero.
+Tabdeal and Ramzinex quote a MID, the owner's rule for these two; Nobitex's best bid is unchanged.
+
+**Switches and defaults.** `fx.source_tabdeal_enabled` and `fx.source_bitpin_enabled` default ON,
+`fx.source_ramzinex_enabled` defaults OFF (the fallback). `fx.min_agreeing_sources` stays 2 and
+`fx.accept_single_source` stays off, so two agreeing sources store a rate with no single-source
+opt-in. Health is the existing `fx_source_states` row per source (last success, last failure and
+code, consecutive failures, retry-after); the R5B per-source backoff applies to the new sources
+unchanged. Migration `0276_fx_sources_tabdeal_bitpin_ramzinex` widens the three `source` CHECK
+constraints (`fx_quotes`, `fx_source_states`, `gateway_invoices.fx_source`).
+
+**The sanity band** (`applySanityBand`, `fx.sanity_band_bps`, default 200 = 2 %, 50–1000). With
+THREE or more healthy sources, a source further than the band from the exact median of the
+others is excluded from that pass, recorded as the rejection `outside_band` (one deduped
+`fx.quote_rejected` condition per source, recovered by its next accepted figure) and takes no
+part in the agreement. With two healthy sources the exclusion would be symmetric, so the band
+does nothing and the 3 % agreement window alone decides. Each source is judged against the others
+as they stand, all at once, so the result does not depend on the order sources were read in.
+
+**Response cap.** Bitpin's list is ~275 KB decompressed, over the 256 KiB general cap. Bitpin
+alone has its own client at 320 KiB (`FX_BITPIN_MAX_RESPONSE_BYTES`); the other sources keep
+256 KiB, and the cap still applies to the DECOMPRESSED bytes (and to the wire bytes).
+
+**The old `wallex.not_json`.** Two causes are on record and neither can be re-observed from the
+build session. (1) Documented in Round 6 (§7): Wallex answers `content-encoding: gzip` even to a
+request that never offered it and `safe-http.ts` read the raw bytes as UTF-8; fixed by commit
+`05f9aa16` (`accept-encoding` at `safe-http.ts:380`, decoders at `:552`). (2) The adapter read
+`GET /v1/depth?symbol=USDTTMN` (`WALLEX_DEPTH_PATH`, `wallex-source.ts:36`, request at `:49`;
+the `not_json` exit at `:56`), a path taken from two open-source clients and never confirmed
+against the live host (`OQ-FX-02`; the file's own comment, line 33: "still to be confirmed").
+The owner's curl shows `/hector/web/v1/markets` answers 200 JSON, so Round 8 reads that path and
+the `/v1/depth` code is removed.

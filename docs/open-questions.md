@@ -2877,7 +2877,7 @@ and decodes all three (the size cap applies to the DECOMPRESSED size). `nobitex.
 stays what the issue list says: Nobitex refuses the foreign address, which code cannot fix;
 the new per-source switch (`fx.source_nobitex_enabled`) takes it out of the rotation.
 
-## OQ-FX-04 — more USDT/IRT sources: Bitpin, Tabdeal, Ramzinex, Exir, OMPFinex, Tetherland (Round 6, 2026-10-23)
+## OQ-FX-04 — more USDT/IRT sources (Tabdeal, Bitpin and Ramzinex BUILT in Round 8, `docs/fx-audit.md` §8; Exir, OMPFinex, Tetherland still open): Bitpin, Tabdeal, Ramzinex, Exir, OMPFinex, Tetherland (Round 6, 2026-10-23)
 
 The owner confirmed from the server that Wallex, Bitpin (`api.bitpin.ir`, `api.bitpin.org`), Ramzinex, Tabdeal, Exir, OMPFinex and Tetherland answer HTTP 200 (Nobitex 403). Reachability is not a verified best-bid shape, so none of the six is built. Exir, OMPFinex and Tetherland have the same question as below: official docs URL, public USDT/IRT order-book or ticker path, field names, unit, and one recorded body.
 

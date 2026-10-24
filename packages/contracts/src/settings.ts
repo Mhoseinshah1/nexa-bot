@@ -109,6 +109,9 @@ import {
   FX_MAX_STALE_SECONDS_MAX,
   FX_MAX_STALE_SECONDS_MIN,
   FX_MIN_AGREEING_SOURCES_DEFAULT,
+  FX_SANITY_BAND_BPS_DEFAULT,
+  FX_SANITY_BAND_BPS_MAX,
+  FX_SANITY_BAND_BPS_MIN,
   FX_MIN_AGREEING_SOURCES_MAX,
   FX_MIN_AGREEING_SOURCES_MIN,
   fxFallbackSourceSchema,
@@ -1815,7 +1818,7 @@ export const SETTINGS = [
       'The source whose figure is STORED when several enabled sources agree. Every enabled ' +
       'source is read (Round 6); this one only wins the tie. All sources quote the best BID ' +
       'of their USDT order book (the price a buyer pays the merchant), which is the side ' +
-      'that never undercharges. Nobitex quotes Rial and Wallex Toman; the service converts ' +
+      'that never undercharges. Nobitex quotes Rial and the others Toman; the service converts ' +
       'to the sales currency exactly (one Toman is ten Rial).',
     schema: fxSourceSchema,
     defaultValue: 'NOBITEX',
@@ -1857,6 +1860,56 @@ export const SETTINGS = [
     description: 'Whether Wallex is read at all. Off — the source is never called.',
     schema: z.boolean(),
     defaultValue: true,
+    configures: 'central_fx',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'fx.source_tabdeal_enabled',
+    description:
+      'Whether Tabdeal is read at all (mid of the best ask and best bid of USDT_IRT, Toman). Off — the source is never called.',
+    schema: z.boolean(),
+    defaultValue: true,
+    configures: 'central_fx',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'fx.source_bitpin_enabled',
+    description:
+      'Whether Bitpin is read at all (last price of USDT_IRT, Toman). Off — the source is never called.',
+    schema: z.boolean(),
+    defaultValue: true,
+    configures: 'central_fx',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'fx.source_ramzinex_enabled',
+    description:
+      'Whether Ramzinex is read at all (mid of buy and sell of pair 11, Rial, converted to Toman). Off by default: it is the fallback an operator switches on. Off — the source is never called.',
+    schema: z.boolean(),
+    defaultValue: false,
+    configures: 'central_fx',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'fx.sanity_band_bps',
+    description:
+      'With three or more healthy sources, one further than this from the median of the ' +
+      'others is left out of that refresh and logged once. Basis points: 200 is two percent. ' +
+      'With only two healthy sources the three-percent agreement rule alone decides.',
+    schema: z.number().int().min(FX_SANITY_BAND_BPS_MIN).max(FX_SANITY_BAND_BPS_MAX),
+    defaultValue: FX_SANITY_BAND_BPS_DEFAULT,
     configures: 'central_fx',
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
