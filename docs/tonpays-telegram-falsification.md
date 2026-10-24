@@ -178,3 +178,33 @@ falsified by the row named beside it.
 A real-provider acceptance is still owed (`OQ-WP10-01`, OQ-TPTG-16). Everything here proves
 that this repository's adapter agrees with this repository's fake, which was written from the
 owner's transcription of the provider's documentation.
+
+## Round 6 (PR-3): remainder, refund, cancel
+
+Each row was reverted ALONE in the working tree (the file restored with `git checkout`
+afterwards) and only the named suites run. All twenty were killed. R6-16's rule is pinned by a
+case in `tonpays-telegram-gateway.test.ts`; the first run of the driver used only the new file
+and reported it surviving, which is why that row names the right suite.
+
+| Row   | Rule reverted                                                    | Killed by                                                 |
+| ----- | ---------------------------------------------------------------- | --------------------------------------------------------- |
+| R6-01 | `/refund` body gains an `amount`                                 | unit `tonpays-telegram-round6` (refund body)              |
+| R6-02 | `action_required_more` approves                                  | unit `tonpays-adapter`, `tonpays-telegram-round6`         |
+| R6-03 | the refund card mask shows the whole number                      | unit `tonpays-telegram-round6`                            |
+| R6-04 | cancel offered on any provider status                            | unit `tonpays-telegram-round6`, screen                    |
+| R6-05 | refund card offered without an overpayment                       | unit `tonpays-telegram-round6`                            |
+| R6-06 | `BUYER_HAS_PENDING_INVOICE` retried without limit                | unit `tonpays-telegram-round6`                            |
+| R6-07 | WebP no longer recognised by magic bytes                         | unit `tonpays-telegram-round6`                            |
+| R6-08 | a documented error code loses its Persian message                | unit `tonpays-telegram-round6`                            |
+| R6-09 | the remainder screen decided after the review test               | unit `tonpays-telegram-screen`                            |
+| R6-10 | the remainder card has no tap-to-copy button                     | unit `tonpays-telegram-screen`                            |
+| R6-11 | cancel offered with a receipt on its way                         | unit `tonpays-telegram-round6`, screen                    |
+| R6-12 | the send stamp keeps the sealed refund card                      | integration `tonpays-telegram-round6` (CHECK + wipe)      |
+| R6-13 | a stamped request found later is sent again                      | integration `tonpays-telegram-round6`                     |
+| R6-14 | no cancel of the old pending invoice before a new create         | integration `tonpays-telegram-round6`                     |
+| R6-15 | the remainder receipt goes to the original invoice id            | integration `tonpays-telegram-round6`                     |
+| R6-16 | an image document is refused again                               | integration `tonpays-telegram-gateway` (WebP or GIF case) |
+| R6-17 | an applied cancel leaves the local payment open                  | integration `tonpays-telegram-round6`                     |
+| R6-18 | a customer's own cancel notifies them their payment failed       | integration `tonpays-telegram-round6`                     |
+| R6-19 | rejection reasons not written into the failure's audit row       | integration `tonpays-telegram-round6`                     |
+| R6-20 | the wallet credited the fee-inclusive payable, not the principal | integration `tonpays-telegram-round6` (10% fee top-up)    |
