@@ -78,11 +78,6 @@ import type { CommercialActionService } from '../../modules/commerce/commercial/
 import { displayedServiceLocation } from '../../modules/commerce/locations/application/location-change-policy.js';
 import type { OrderRecord } from '../../modules/commerce/orders/application/ports.js';
 import {
-  type GatewayAttempt,
-  type ManualTransferInstruction,
-} from '../../modules/commerce/payments/application/payment.service.js';
-import type { GatewayAttemptView } from '../../modules/commerce/payments/application/gateway-payment.service.js';
-import {
   ProvisioningService,
   operationHasEnded,
 } from '../../modules/commerce/provisioning/application/provisioning.service.js';
@@ -95,10 +90,7 @@ import {
 import type { CustomerCaptureRecord } from '../../modules/commerce/customers/application/customer-capture-ports.js';
 import type { ServiceLiveCheckResult } from '../../modules/commerce/provisioning/application/service-refresh.service.js';
 import type { CardMessageRef } from '../../modules/commerce/provisioning/application/operation-card.js';
-import type {
-  TopupRoute,
-  WalletTopupFlowService,
-} from '../../modules/commerce/payments/application/wallet-topup-flow.service.js';
+import type { WalletTopupFlowService } from '../../modules/commerce/payments/application/wallet-topup-flow.service.js';
 import type { StartGreetingKey } from '../../modules/commerce/messaging/application/start-greeting.js';
 import { amountToTransfer } from '../../modules/commerce/payments/domain/amount-to-transfer.js';
 import type { ServiceRecord } from '../../modules/commerce/provisioning/application/ports.js';
@@ -119,7 +111,6 @@ import {
   typedMessageOf,
   type CallbackOrigin,
   type ReviewDirective,
-  type WizardDirective,
 } from './wizard-state.js';
 import {
   TICKET_ATTACHMENT_MAX_BYTES,
@@ -245,10 +236,6 @@ import {
   TICKET_NEW_CALLBACK_DATA,
   TICKET_REPLY_CALLBACK_PREFIX,
   TICKET_VIEW_CALLBACK_PREFIX,
-  TOPUP_CLOSE_CALLBACK_PREFIX,
-  TOPUP_MENU_CALLBACK_PREFIX,
-  TOPUP_PICK_CALLBACK_PREFIX,
-  TOPUP_ROUTE_CALLBACK_PREFIX,
   TRIAL_PANEL_CALLBACK_PREFIX,
   TUTORIAL_PLATFORM_CALLBACK_PREFIX,
   USERNAME_STRATEGY_CODES,
@@ -292,6 +279,7 @@ import {
 import * as purchaseFlow from './runtime/purchase-flow.js';
 import * as checkoutFlow from './runtime/checkout-flow.js';
 import * as cardReceiptFlow from './runtime/card-receipt-flow.js';
+import * as topupFlow from './runtime/topup-flow.js';
 
 export { BOT_INTENTS } from './runtime/intents.js';
 export type { BotIntent, BotCommand } from './runtime/intents.js';
@@ -8389,155 +8377,31 @@ export class BotRuntime {
     }
   }
 
-  /** The answer to a recorded (or refused) top-up amount: the route chooser, or why not. */
-  async topupAmountReply(
+  topupAmountReply(
     scope: TenantContext,
     result: Awaited<ReturnType<WalletTopupFlowService['recordAmountText']>>,
     captureId: string,
   ): Promise<PendingReply> {
-    const reply = await this.topupAmountScreen(scope, result, captureId);
-    /*
-     * R2: a TYPED amount continues the wizard that asked for it — anchored on the amount
-     * screen of this capture. A tapped preset has its claim and ignores the anchor.
-     */
-    return {
-      ...reply,
-      wizard: {
-        ...(reply.wizard ?? { kind: 'TOPUP', step: 'NOTICE' }),
-        anchor: { steps: ['AMOUNT'], subjectId: captureId },
-      },
-    };
+    return topupFlow.topupAmountReply(this, scope, result, captureId);
   }
 
-  async topupAmountScreen(
-    scope: TenantContext,
-    result: Awaited<ReturnType<WalletTopupFlowService['recordAmountText']>>,
-    captureId: string,
-  ): Promise<PendingReply> {
-    const amountStep: WizardDirective = { kind: 'TOPUP', step: 'AMOUNT', subjectId: captureId };
-    const close = {
-      ...inlineLabel('list.close'),
-      data: `${TOPUP_CLOSE_CALLBACK_PREFIX}${captureId}`,
-    };
-    if (result.outcome === 'GONE') {
-      return { key: 'bot.wallet.topup_expired', values: {}, buttons: [], orderId: null };
-    }
-    if (result.outcome === 'INVALID') {
-      return {
-        key: 'bot.wallet.topup_amount_invalid',
-        values: {},
-        buttons: [close],
-        orderId: null,
-        wizard: amountStep,
-      };
-    }
-    if (result.outcome === 'BELOW_MINIMUM') {
-      return {
-        key: 'bot.wallet.topup_below_minimum',
-        values: { minimum: result.minimum },
-        buttons: [close],
-        orderId: null,
-        wizard: amountStep,
-      };
-    }
-    if (result.outcome === 'ABOVE_MAXIMUM') {
-      return {
-        key: 'bot.wallet.topup_above_maximum',
-        values: { maximum: result.maximum },
-        buttons: [close],
-        orderId: null,
-        wizard: amountStep,
-      };
-    }
-    return this.topupChooser(scope, captureId, result.routes);
-  }
-
-  /**
-   * «💳 روش پرداخت خود را انتخاب نمایید»: one button per route the amount may be paid
-   * through, in the operator's order, with the route's gift when it has one. The buttons
-   * carry the capture id and the provider — identifiers, never the amount.
-   */
-  async topupChooser(
-    scope: TenantContext,
-    captureId: string,
-    routes: readonly TopupRoute[],
-  ): Promise<PendingReply> {
-    const close = {
-      ...inlineLabel('list.close'),
-      data: `${TOPUP_CLOSE_CALLBACK_PREFIX}${captureId}`,
-    };
-    const methods: WizardDirective = { kind: 'TOPUP', step: 'METHODS', subjectId: captureId };
-    if (routes.length === 0) {
-      return {
-        key: 'bot.wallet.topup_none_available',
-        values: {},
-        buttons: [close],
-        orderId: null,
-        wizard: methods,
-      };
-    }
-    const buttons: CustomerButton[] = [];
-    for (const route of routes) {
-      const name = await this.deps.screens.routeName(scope, route);
-      buttons.push({
-        ...(route.topupCashbackPercent > 0
-          ? inlineLabel('payment.route_gift', { name, percent: route.topupCashbackPercent })
-          : inlineLabel('payment.route', { name })),
-        data: `${TOPUP_ROUTE_CALLBACK_PREFIX}${captureId}.${route.provider}`,
-      });
-    }
-    buttons.push(close);
-    return {
-      key: 'bot.wallet.topup_method_prompt',
-      values: {},
-      buttons,
-      orderId: null,
-      wizard: methods,
-    };
-  }
-
-  async topupRoute(
+  topupRoute(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     captureId: string,
     provider: PaymentGatewayProvider,
   ): Promise<PendingReply> {
-    try {
-      const chosen = await this.deps.topup.choose(scope, actor, {
-        customerId: customer.id,
-        captureId,
-        provider,
-      });
-      if (chosen.outcome === 'GONE') {
-        return { key: 'bot.wallet.topup_expired', values: {}, buttons: [], orderId: null };
-      }
-      if (chosen.outcome === 'NOT_OFFERED') {
-        return this.topupChooser(scope, captureId, chosen.routes);
-      }
-      if (chosen.outcome === 'GATEWAY_REQUESTED') {
-        return await this.gatewayAttemptReply(chosen.attempt, null, scope);
-      }
-      return this.transferInstruction(scope, chosen.instruction, null);
-    } catch (error) {
-      return refusal(error);
-    }
+    return topupFlow.topupRoute(this, scope, actor, customer, captureId, provider);
   }
 
-  async topupClose(
+  topupClose(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     captureId: string,
   ): Promise<PendingReply> {
-    await this.deps.topup.close(scope, actor, { customerId: customer.id, captureId });
-    return {
-      key: 'bot.wallet.topup_closed',
-      values: {},
-      buttons: [mainMenuButton()],
-      orderId: null,
-      wizard: { kind: 'TOPUP', step: 'CLOSED' },
-    };
+    return topupFlow.topupClose(this, scope, actor, customer, captureId);
   }
 
   async servicesSearchBegin(
@@ -10095,68 +9959,12 @@ export class BotRuntime {
     return checkoutFlow.awaitingPaymentReply(this, scope, customer, order);
   }
 
-  /**
-   * The customer's own balance, derived from the ledger every time it is asked for.
-   *
-   * There is no balance column to read and no cache to go stale — `balanceOf` sums the
-   * entries. `bot.wallet.balance` declares exactly one placeholder and this supplies
-   * exactly that.
-   */
-  async walletBalance(
+  walletBalance(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
   ): Promise<PendingReply> {
-    const balance = await this.deps.wallet.balanceForCustomer(scope, actor, customer.id);
-    const counters = await this.deps.counters.counters(scope, customer.id);
-    /*
-     * The referral COUNT stays on the account summary: it is a fact about this customer
-     * that Mirza's /wallet shows too (the one referral surface its research VERIFIED). The
-     * referral BUTTON does not (F5): the wallet carries wallet operations only, and the
-     * program is reached from its own main-menu button and `/referral`.
-     */
-    const referralCount =
-      this.deps.referralGifts === undefined
-        ? 0
-        : (await this.deps.referralGifts.stats(scope, customer.id)).referralCount;
-    const reseller =
-      this.deps.resellers === undefined
-        ? null
-        : await this.deps.resellers.standing(scope, customer.id, undefined);
-    const fundable =
-      (await this.deps.routes.routesFor(scope, customer.id, 'WALLET_TOPUP', null)).length > 0;
-    const summary = await this.deps.screens.walletSummary(scope, {
-      telegramId: customer.telegramUserId,
-      displayName: displayNameOf(customer),
-      registeredAt: customer.createdAt,
-      balance: money(balance.amountMinor, balance.currency),
-      serviceCount: counters.services,
-      paidInvoiceCount: counters.paidInvoices,
-      referralCount,
-      group: reseller === null ? 'CUSTOMER' : 'RESELLER',
-      // Owner spec §3: when the screen was drawn, not when anything happened.
-      now: this.deps.clock.now(),
-    });
-    return {
-      key: summary.key,
-      values: summary.values,
-      buttons: [
-        /*
-         * R8-C2: no separate «کپی شناسه» button. The numeric id is in <code> in the summary
-         * (`bot.wallet.summary` is TELEGRAM_HTML), so a tap on the text copies it.
-         */
-        ...(fundable
-          ? [
-              {
-                ...inlineLabel('wallet.topup'),
-                data: TOPUP_MENU_CALLBACK_PREFIX,
-              },
-            ]
-          : []),
-        mainMenuButton(),
-      ],
-      orderId: null,
-    };
+    return topupFlow.walletBalance(this, scope, actor, customer);
   }
 
   /**
@@ -10271,69 +10079,17 @@ export class BotRuntime {
     };
   }
 
-  /**
-   * The offered amounts, one button each, read when the tap arrives.
-   *
-   * No amount is baked into the message that drew this: a customer scrolling back to an
-   * old balance and tapping gets today's presets, not the ones that were configured when
-   * it was sent. The refusal when nothing is offered is the same one the service gives,
-   * so a customer who taps a button that has since become unfundable is told the same
-   * thing either way.
-   */
-  async topupBegin(
+  topupBegin(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     botInstanceId: BotInstanceId,
     idempotencyKey: string,
   ): Promise<PendingReply> {
-    const offered = await this.deps.routes.routesFor(scope, customer.id, 'WALLET_TOPUP', null);
-    if (offered.length === 0) {
-      return {
-        key: 'bot.wallet.topup_unavailable',
-        values: {},
-        buttons: [mainMenuButton()],
-        orderId: null,
-      };
-    }
-    const begun = await this.deps.topup.begin(scope, actor, {
-      customerId: customer.id,
-      botInstanceId,
-      idempotencyKey: `${idempotencyKey}:topup-begin`,
-    });
-    // The presets, when configured, are shortcuts that record the figure on the same
-    // capture the typed path uses; they are not a second flow.
-    const presets = await this.deps.payments.topupPresets(scope);
-    return {
-      key: 'bot.wallet.topup_amount_prompt',
-      values: {
-        ...(begun.minimum === null ? {} : { minimum: begun.minimum }),
-        ...(begun.maximum === null ? {} : { maximum: begun.maximum }),
-      },
-      buttons: [
-        ...presets.map((preset) => ({
-          ...inlineDataLabel('wallet.topup_amount', { kind: 'AMOUNT', amount: preset }),
-          data: `${TOPUP_PICK_CALLBACK_PREFIX}${preset.amountMinor.toString()}`,
-        })),
-        {
-          ...inlineLabel('list.close'),
-          data: `${TOPUP_CLOSE_CALLBACK_PREFIX}${begun.capture.id}`,
-        },
-      ],
-      orderId: null,
-      wizard: { kind: 'TOPUP', step: 'AMOUNT', subjectId: begun.capture.id },
-    };
+    return topupFlow.topupBegin(this, scope, actor, customer, botInstanceId, idempotencyKey);
   }
 
-  /**
-   * A chosen amount becomes an invoice — the SAME invoice an order's transfer produces.
-   *
-   * `renderTransferInstruction` is shared, so the customer gets the structured
-   * card-to-card destination, the two copy buttons and the combined
-   * «پرداخت را انجام دادم | ارسال رسید» button that 5A and 5R built. A top-up has no
-   * order, so nothing here names one.
-   */
-  async topupPick(
+  topupPick(
     scope: TenantContext,
     actor: ActorContext,
     amountMinor: string,
@@ -10341,28 +10097,15 @@ export class BotRuntime {
     idempotencyKey: string,
     botInstanceId: BotInstanceId,
   ): Promise<PendingReply> {
-    const presets = await this.deps.payments.topupPresets(scope);
-    const preset = presets.find((candidate) => candidate.amountMinor.toString() === amountMinor);
-    if (preset === undefined) {
-      return {
-        key: 'bot.wallet.topup_refused',
-        values: {},
-        buttons: [],
-        orderId: null,
-        wizard: { kind: 'TOPUP', step: 'NOTICE' },
-      };
-    }
-    const begun = await this.deps.topup.begin(scope, actor, {
-      customerId: customer.id,
+    return topupFlow.topupPick(
+      this,
+      scope,
+      actor,
+      amountMinor,
+      customer,
+      idempotencyKey,
       botInstanceId,
-      idempotencyKey: `${idempotencyKey}:topup-pick`,
-    });
-    const result = await this.deps.topup.recordAmount(scope, {
-      customerId: customer.id,
-      captureId: begun.capture.id,
-      amount: preset,
-    });
-    return this.topupAmountReply(scope, result, begun.capture.id);
+    );
   }
 
   walletPayment(
@@ -10428,14 +10171,6 @@ export class BotRuntime {
     customer: CustomerRecord,
   ): Promise<PendingReply> {
     return checkoutFlow.gatewayCheck(this, scope, paymentId, customer);
-  }
-
-  gatewayAttemptReply(
-    attempt: GatewayAttempt | GatewayAttemptView,
-    orderId: string | null,
-    scope: TenantContext,
-  ): Promise<PendingReply> {
-    return checkoutFlow.gatewayAttemptReply(this, attempt, orderId, scope);
   }
 
   gatewayReceipt(
@@ -10547,14 +10282,6 @@ export class BotRuntime {
     file: InboundReceiptFile,
   ): Promise<PendingReply | null> {
     return cardReceiptFlow.gatewayReceiptPhoto(this, scope, actor, customer, botInstanceId, file);
-  }
-
-  transferInstruction(
-    scope: TenantContext,
-    manualTransferInstruction: ManualTransferInstruction,
-    orderId: string | null,
-  ): Promise<PendingReply> {
-    return cardReceiptFlow.transferInstruction(this, scope, manualTransferInstruction, orderId);
   }
 
   cancelPaymentAsk(
@@ -11406,17 +11133,6 @@ function lastSeenOf(service: ServiceRecord): ProviderLastSeen {
   }
   if (service.lastSeenState === 'NEVER') return { kind: 'NEVER' };
   return { kind: 'UNSUPPORTED' };
-}
-
-/** First and last name, else the username, else the numeric id — never blank. */
-function displayNameOf(customer: CustomerRecord): string {
-  const name = [customer.firstName, customer.lastName]
-    .filter((part): part is string => typeof part === 'string' && part.trim().length > 0)
-    .join(' ')
-    .trim();
-  if (name.length > 0) return name;
-  if (customer.username !== null && customer.username.trim().length > 0) return customer.username;
-  return customer.telegramUserId;
 }
 
 /** Each platform's button on the choice screen. `OTHER` has a button and no guide of its own. */
