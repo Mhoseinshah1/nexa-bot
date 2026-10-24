@@ -102,6 +102,10 @@ export class OperationalEventPresenter implements OpsEventPresenter {
     return this.deps.words.eventTitle(code);
   }
 
+  messageOf(code: string): string | null {
+    return this.deps.words.eventMessage?.(code) ?? null;
+  }
+
   severity(klass: string): string {
     return this.deps.words.severity(klass);
   }

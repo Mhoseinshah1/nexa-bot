@@ -2,6 +2,7 @@ import {
   CUSTOMER_NOTIFICATION_KIND_NAMES_FA,
   OPS_LOG_WORDS_FA as W,
   operationalEventLabelFa,
+  operationalEventMessageFa,
 } from '@nexa/i18n';
 import { toPersianDigits } from '@nexa/contracts';
 import type { OpsLogWords } from '../application/ports.js';
@@ -108,6 +109,7 @@ export const i18nOpsLogWords: OpsLogWords = {
   // A code the map does not know is still not shown raw as the title: the code is the
   // technical line beneath it.
   eventTitle: (code) => operationalEventLabelFa(code) ?? W.unknownEvent,
+  eventMessage: (code) => operationalEventMessageFa(code),
   stalledOperationTitle: (type) =>
     Object.prototype.hasOwnProperty.call(W.stalledOperation, type)
       ? (W.stalledOperation as Record<string, string>)[type]!

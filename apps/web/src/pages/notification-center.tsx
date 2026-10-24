@@ -16,6 +16,7 @@ import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
 import { messageFor } from './settings';
+import { operationalEventMessageFa } from '@nexa/i18n';
 import { Icon } from '../ui/icons';
 import {
   Badge,
@@ -444,7 +445,13 @@ function InboxItem({
               t('web.nc_code'),
               <CodeLabel key="c" label={opsCodeLabel(row.code)} code={row.code} />,
             ],
-            [t('web.nc_message'), <TechnicalDetails key="m" lines={[row.message]} />],
+            [
+              t('web.nc_message'),
+              <TechnicalDetails
+                key="m"
+                lines={[operationalEventMessageFa(row.code) ?? row.message]}
+              />,
+            ],
           ]}
         />
       </Disclosure>
