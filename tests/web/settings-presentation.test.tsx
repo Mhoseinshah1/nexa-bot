@@ -353,9 +353,7 @@ describe('the settings page', () => {
     for (const key of FX_KEYS) {
       for (const target of [true, false]) {
         it(`${key}: saving ${target ? 'ON' : 'OFF'} sends a boolean and shows the label`, async () => {
-          const title = t(
-            (SETTING_PRESENTATION[key] as { title: WebKey }).title,
-          );
+          const title = t((SETTING_PRESENTATION[key] as { title: WebKey }).title);
           const api = stubApi([
             {
               url: '/settings',
