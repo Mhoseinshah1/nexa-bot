@@ -3165,12 +3165,15 @@ describe('TonPays, through the one settlement path', () => {
     it('allows 299 s of skew in both directions and refuses 301 s', async () => {
       const { invoice } = await createdAttempt();
       await setSecret(WHSEC);
-      const raw = rawOf(invoice, 'completed', 'inv:completed:1');
       const now = Math.floor((Date.now() + offsetMs) / 1000);
-      expect(await deliver(raw, sign(raw, WHSEC, now - 299), 'a-1')).toBe('SCHEDULED');
-      expect(await deliver(raw, sign(raw, WHSEC, now + 299), 'a-2')).toBe('SCHEDULED');
-      expect(await deliver(raw, sign(raw, WHSEC, now - 301), 'a-3')).toBe('IGNORED_UNVERIFIED');
-      expect(await deliver(raw, sign(raw, WHSEC, now + 301), 'a-4')).toBe('IGNORED_UNVERIFIED');
+      const attempt = async (id: string, t: number) => {
+        const raw = rawOf(invoice, 'completed', id);
+        return deliver(raw, sign(raw, WHSEC, t), id);
+      };
+      expect(await attempt('a-1', now - 299)).toBe('SCHEDULED');
+      expect(await attempt('a-2', now + 299)).toBe('SCHEDULED');
+      expect(await attempt('a-3', now - 301)).toBe('IGNORED_UNVERIFIED');
+      expect(await attempt('a-4', now + 301)).toBe('IGNORED_UNVERIFIED');
     });
 
     it('with a secret set, a bad, short, v1-less or absent signature brings nothing forward and raises ONE rolled-up event', async () => {
