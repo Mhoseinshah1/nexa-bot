@@ -363,3 +363,19 @@ describe("Bitpin's ~275 KB list over the real outbound client", () => {
     }
   });
 });
+
+describe('the refresh lease covers every source (Round 8, Codex on #318)', () => {
+  it('outlasts every source read in turn at its whole timeout, with slack', async () => {
+    const { FX_SOURCES } = await import('@nexa/contracts');
+    const { FX_REFRESH_LEASE_MS, FX_REFRESH_PER_SOURCE_MS } =
+      await import('../../apps/api/src/modules/commerce/fx/application/fx.service');
+    const { FX_SOURCE_TIMEOUT_MS } =
+      await import('../../apps/api/src/modules/commerce/fx/infrastructure/fx-source-parsing');
+    // The per-source budget the lease is sized from IS the client's timeout.
+    expect(FX_REFRESH_PER_SOURCE_MS).toBe(FX_SOURCE_TIMEOUT_MS);
+    // Sequential reads of all five, each at its timeout, still leave slack for the store.
+    expect(FX_REFRESH_LEASE_MS).toBeGreaterThanOrEqual(
+      FX_SOURCES.length * FX_SOURCE_TIMEOUT_MS + 5_000,
+    );
+  });
+});

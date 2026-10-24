@@ -90,8 +90,18 @@ export const FX_RATE_LIMIT_COOLDOWN_MS = 60_000;
  * above, and a rejected figure (an outlier) is not a transport failure and never waits.
  */
 export const FX_SOURCE_BACKOFF_MS: readonly number[] = [30_000, 60_000, 300_000, 600_000];
-/** The lease one refresh holds: two sources, each allowed its whole timeout, and slack. */
-export const FX_REFRESH_LEASE_MS = 20_000;
+/**
+ * The time one source read may take inside a refresh: the outbound client's whole timeout
+ * (`FX_SOURCE_TIMEOUT_MS`, pinned equal by `fx-sources-r8.test.ts`).
+ */
+export const FX_REFRESH_PER_SOURCE_MS = 5_000;
+/**
+ * The lease one refresh holds: EVERY source, read one after another and each allowed its
+ * whole timeout, plus slack for the settings reads and the store. Sized from the source list
+ * (Round 8 added three sources to two), so a slow pass can never outlive its lease and have a
+ * valid quote discarded because another replica took the row meanwhile.
+ */
+export const FX_REFRESH_LEASE_MS = FX_SOURCES.length * FX_REFRESH_PER_SOURCE_MS + 10_000;
 
 export interface FxServiceDeps {
   readonly repository: FxQuoteRepository;
