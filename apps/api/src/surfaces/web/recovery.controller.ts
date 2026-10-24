@@ -109,6 +109,15 @@ export class RecoveryController {
         configured: status.archivePassword.configured,
         setAt: status.archivePassword.setAt?.toISOString() ?? null,
       },
+      disk:
+        status.disk === null
+          ? null
+          : {
+              freeBytes: String(Math.floor(status.disk.freeBytes)),
+              totalBytes: String(Math.floor(status.disk.totalBytes)),
+              requiredBytes: String(Math.floor(status.disk.requiredBytes)),
+              low: status.disk.low,
+            },
     };
   }
 

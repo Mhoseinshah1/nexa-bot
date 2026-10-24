@@ -44,6 +44,10 @@ import {
   BACKUP_LOCAL_COPIES_MAX,
   BACKUP_LOCAL_COPIES_MIN,
   BACKUP_LOCAL_COPIES_SETTING_KEY,
+  BACKUP_CPU_LIMIT_DEFAULT,
+  BACKUP_CPU_LIMIT_MAX,
+  BACKUP_CPU_LIMIT_MIN,
+  BACKUP_CPU_LIMIT_SETTING_KEY,
 } from './backup.js';
 import {
   DATA_RETENTION_SETTING_KEYS,
@@ -649,6 +653,22 @@ export const SETTINGS = [
       'backup.archive_keep_count.',
     schema: z.number().int().min(BACKUP_ARCHIVE_KEEP_DAYS_MIN).max(BACKUP_ARCHIVE_KEEP_DAYS_MAX),
     defaultValue: BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  /** Round 8 B5: the share of one core the backup's heavy tools may use together. */
+  {
+    key: BACKUP_CPU_LIMIT_SETTING_KEY,
+    description:
+      'The most CPU the backup may use while it compresses, encrypts and verifies, as a ' +
+      `percentage of ONE core, between ${String(BACKUP_CPU_LIMIT_MIN)} and ` +
+      `${String(BACKUP_CPU_LIMIT_MAX)}. The default 70 keeps a whole core of a 2-vCPU server ` +
+      'free for the bot; a lower value makes the backup slower, not heavier.',
+    schema: z.number().int().min(BACKUP_CPU_LIMIT_MIN).max(BACKUP_CPU_LIMIT_MAX),
+    defaultValue: BACKUP_CPU_LIMIT_DEFAULT,
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',

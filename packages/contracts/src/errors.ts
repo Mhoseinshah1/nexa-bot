@@ -324,6 +324,13 @@ export const PLATFORM_ERROR_CODES = {
    */
   BACKUP_MEMORY_INSUFFICIENT: 'backup.memory_insufficient',
   /**
+   * The backup volume had less free space than the run's estimate (dump plus archive plus the
+   * verification's copy, plus headroom), so the run was refused BEFORE the dump started. A
+   * dump started on a nearly full disk fails 30 seconds in and leaves a multi-gigabyte
+   * fragment behind, which is how a full volume stayed full (Round 8, B3).
+   */
+  BACKUP_DISK_INSUFFICIENT: 'backup.disk_insufficient',
+  /**
    * A restore was aimed at the database this installation is running on.
    *
    * The one refusal here that exists to prevent a catastrophe rather than to

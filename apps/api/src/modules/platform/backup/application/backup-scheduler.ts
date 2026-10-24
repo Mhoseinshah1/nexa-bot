@@ -1,8 +1,12 @@
-import { PLATFORM_ERROR_CODES, type Clock } from '@nexa/contracts';
+import type { Clock } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import { latestDailySlot } from './backup-schedule.js';
+import { BACKUP_RETRY_LOOKBACK, backupRetryHold } from './backup-retry-policy.js';
 import type { BackupRunRepository } from './ports.js';
 import type { BackupService } from './backup.service.js';
+
+/** Re-exported from the retry policy, where the hour is now one rule among the backoff's. */
+export { BACKUP_MEMORY_FAILURE_COOLDOWN_MS } from './backup-retry-policy.js';
 
 /**
  * Takes a backup on a schedule, in the worker role.
@@ -19,7 +23,9 @@ import type { BackupService } from './backup.service.js';
  * every twenty minutes, and a failing run would reset the clock as though it
  * had worked. The state is in the table, so a restart resumes rather than
  * restarts, and two replicas ticking at once contend on the lock rather than on
- * a decision either of them made.
+ * a decision either of them made. Because a failure does not move it, a failed
+ * scheduled run is followed by the backoff in `backup-retry-policy.ts` (30 m, 1 h,
+ * 2 h, then the next slot), never by the next tick (Round 8, B4).
  *
  * WHETHER AND HOW OFTEN are asked on every tick (spec §13.2), of the settings
  * registry with the environment as the default — so the Web Admin's switch takes
@@ -28,20 +34,6 @@ import type { BackupService } from './backup.service.js';
  * is always started: a disabled schedule is a tick that decides nothing is due,
  * not a loop that does not exist.
  */
-/**
- * After a run failed for MEMORY (a tool the kernel killed, or a refusal because the host had
- * too little free), the scheduler starts no other for this long. The failure is a property of
- * the host's load, not a transient fault: an immediate retry five minutes later meets the same
- * memory, is killed the same way, and takes another process's memory with it for the dump.
- * A manual backup is not held back — an operator who has freed memory should be able to try.
- */
-export const BACKUP_MEMORY_FAILURE_COOLDOWN_MS = 60 * 60_000;
-
-const MEMORY_FAILURE_CODES: ReadonlySet<string> = new Set([
-  PLATFORM_ERROR_CODES.BACKUP_TOOL_OOM_KILLED,
-  PLATFORM_ERROR_CODES.BACKUP_MEMORY_INSUFFICIENT,
-]);
-
 export interface BackupSchedulerDeps {
   readonly service: BackupService;
   readonly runs: BackupRunRepository;
@@ -116,6 +108,8 @@ export class BackupScheduler {
   private readonly progress: LoopProgress;
   /** When the backup run this process is waiting on began, or null when none is. */
   private runStartedAt: number | null = null;
+  /** The failed run the last "held back" line was about, so a hold is logged once. */
+  private lastHeldFor: string | null = null;
 
   constructor(private readonly deps: BackupSchedulerDeps) {
     this.progress = new LoopProgress(deps.tickIntervalMs);
@@ -186,23 +180,34 @@ export class BackupScheduler {
       }
 
       /*
-       * NOT RIGHT AFTER A MEMORY FAILURE (Round 5B). The newest run is what a failed
-       * attempt leaves behind (a failure never resets the due clock, so without this the
-       * next tick, five minutes on, would dump and compress again into the same wall).
+       * NOT IN A RETRY STORM (Round 8, B4). A failure never resets the due clock, so
+       * without this every tick after a failed run — five minutes, `BACKUP_TICK_MS` —
+       * found the backup still due and dumped again into the same wall: the full disk
+       * that failed it, the memory that killed it. The policy and its reasons are in
+       * `backup-retry-policy.ts`; the scheduler only obeys it.
        */
-      const [newest] = await this.deps.runs.latest(1);
-      if (
-        newest !== undefined &&
-        newest.state === 'FAILED' &&
-        newest.failureCode !== null &&
-        MEMORY_FAILURE_CODES.has(newest.failureCode) &&
-        newest.finishedAt !== null &&
-        now.getTime() - newest.finishedAt.getTime() < BACKUP_MEMORY_FAILURE_COOLDOWN_MS
-      ) {
-        this.deps.logger.info(
-          { backupId: newest.id, code: newest.failureCode },
-          'scheduled backup skipped; the last run failed for memory less than an hour ago',
-        );
+      const hold = backupRetryHold({
+        now,
+        rows: await this.deps.runs.latest(BACKUP_RETRY_LOOKBACK),
+        lastSucceededAt: last,
+        intervalMs: schedule.intervalMs,
+        dailyTime: schedule.dailyTime ?? null,
+      });
+      if (hold !== null) {
+        // Said once per failure, not once per tick: a two-hour hold is 24 ticks.
+        if (this.lastHeldFor !== hold.newest.id) {
+          this.lastHeldFor = hold.newest.id;
+          this.deps.logger.info(
+            {
+              backupId: hold.newest.id,
+              code: hold.newest.failureCode,
+              failures: hold.failures,
+              reason: hold.reason,
+              notBefore: hold.notBefore.toISOString(),
+            },
+            'scheduled backup held back after a failed run',
+          );
+        }
         this.progress.record(now.getTime());
         return;
       }

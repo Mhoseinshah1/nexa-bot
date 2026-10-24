@@ -704,10 +704,11 @@ export const configSchema = z
      * E4: the CEILINGS on LZMA2 effort and threads. Since Round 5B the level is chosen from
      * a table of measured memory peaks (`seven-zip-levels.ts`), strongest first, and these
      * only cap it: `-mx=9` with every core measured about 2.4 GB on a 4 GB / 2 vCPU host
-     * and was killed by the kernel. Lower them to force a lighter archive.
+     * and was killed by the kernel. Lower them to force a lighter archive. Threads default to 1
+     * (Round 8): at 2 the compress step held both vCPUs of a 2-core host for 13 minutes.
      */
     BACKUP_SEVEN_ZIP_LEVEL: z.coerce.number().int().min(1).max(9).default(9),
-    BACKUP_SEVEN_ZIP_THREADS: z.coerce.number().int().min(1).max(16).default(2),
+    BACKUP_SEVEN_ZIP_THREADS: z.coerce.number().int().min(1).max(16).default(1),
     /**
      * The most memory 7-Zip may use while sealing a backup, MiB. The strongest level whose
      * measured peak fits this AND the host's free memory (less the headroom) is used; when

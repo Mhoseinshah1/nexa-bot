@@ -327,6 +327,50 @@ describe('the recovery page', () => {
     expect(screen.queryByRole('link', { name: 'دریافت آرشیو رمزشده' })).toBeNull();
   });
 
+  it('Round 8 B7: the archive size column carries its unit, never a bare number', async () => {
+    const big = String(182 * 1024 * 1024);
+    stubApi(routes({ runs: [run({ archiveBytes: big })] }));
+    renderPage(<RecoveryPage route={route} permissions={ALL} />);
+    const unit = (await screen.findAllByText('مگابایت'))[0]!;
+    expect(unit.parentElement?.textContent).toBe('182 مگابایت');
+  });
+
+  it('Round 8 B3: shows the backup volume, and warns only when it is below what a run needs', async () => {
+    const gib = 1024 ** 3;
+    stubApi(
+      routes({
+        status: status({
+          disk: {
+            freeBytes: String(Math.round(1.5 * gib)),
+            totalBytes: String(38 * gib),
+            requiredBytes: String(6 * gib),
+            low: true,
+          },
+        }),
+      }),
+    );
+    const low = renderPage(<RecoveryPage route={route} permissions={ALL} />);
+    expect(await screen.findByText('فضای آزاد پوشهٔ بکاپ')).toBeInTheDocument();
+    expect(screen.getByText(/فضای آزاد از فضای لازم برای بکاپ بعدی کمتر است/)).toBeInTheDocument();
+    low.unmount();
+
+    stubApi(
+      routes({
+        status: status({
+          disk: {
+            freeBytes: String(20 * gib),
+            totalBytes: String(38 * gib),
+            requiredBytes: String(6 * gib),
+            low: false,
+          },
+        }),
+      }),
+    );
+    renderPage(<RecoveryPage route={route} permissions={ALL} />);
+    expect(await screen.findByText('فضای آزاد پوشهٔ بکاپ')).toBeInTheDocument();
+    expect(screen.queryByText(/فضای آزاد از فضای لازم برای بکاپ بعدی کمتر است/)).toBeNull();
+  });
+
   it('warns when the schedule is off, because a green history then means nothing', async () => {
     stubApi(routes({ status: status({ scheduleEnabled: false }) }));
     renderPage(<RecoveryPage route={route} permissions={ALL} />);

@@ -6,6 +6,7 @@ import { basename, dirname, join } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import {
+  BACKUP_CPU_LIMIT_DEFAULT,
   backupManifestSchema,
   NexaError,
   PLATFORM_ERROR_CODES,
@@ -17,6 +18,12 @@ import {
   type AvailableMemoryReader,
   type SevenZipLevel,
 } from './seven-zip-levels.js';
+import {
+  CPU_QUOTA_UNLIMITED,
+  resolveCpuLimit,
+  startCpuThrottle,
+  type CpuLimitProvider,
+} from './cpu-quota.js';
 import { killedBySignal, toolOomKilled, wrapLowPriority } from './tool-process.js';
 
 /**
@@ -75,6 +82,11 @@ export interface SevenZipOptions {
    * process (`defaultLowPriorityPrefix`). `[]`: none.
    */
   readonly lowPriorityPrefix?: readonly string[];
+  /**
+   * The CPU quota, percent of ONE core, read at each spawn (`backup.cpu_limit_percent`).
+   * Absent: unlimited (CLI and tests). See `cpu-quota.ts`.
+   */
+  readonly cpuLimit?: CpuLimitProvider;
   readonly sealTimeoutMs: number;
   readonly openTimeoutMs: number;
 }
@@ -127,7 +139,7 @@ interface ChildResult {
  * `stdoutSink`, when given, receives stdout as a stream (the dump); otherwise stdout is
  * captured up to `maxStdout` bytes (a listing, the manifest) and an overflow is a failure.
  */
-function run7z(input: {
+async function run7z(input: {
   readonly binary: string;
   readonly args: readonly string[];
   readonly cwd?: string;
@@ -136,16 +148,20 @@ function run7z(input: {
   readonly stdoutSink?: NodeJS.WritableStream;
   readonly maxStdout?: number;
   readonly lowPriorityPrefix?: readonly string[] | undefined;
+  readonly cpuLimit?: CpuLimitProvider | undefined;
 }): Promise<ChildResult> {
   assertOutsideTransaction('The 7-Zip subprocess');
+  const cpuPercent = await resolveCpuLimit(input.cpuLimit, BACKUP_CPU_LIMIT_DEFAULT);
+  const args = cappedThreadArgs(input.args, cpuPercent);
   return new Promise((resolve, reject) => {
-    const wrapped = wrapLowPriority(input.binary, input.args, input.lowPriorityPrefix);
+    const wrapped = wrapLowPriority(input.binary, args, input.lowPriorityPrefix);
     const child = spawn(wrapped.command, [...wrapped.args], {
       cwd: input.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       // A locale 7-Zip can print paths in; nothing from the parent's environment is needed.
       env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin', LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' },
     });
+    const throttle = startCpuThrottle(child, cpuPercent);
     let stderr = '';
     const chunks: Buffer[] = [];
     let captured = 0;
@@ -154,6 +170,7 @@ function run7z(input: {
     let sinkError: unknown = null;
     const timer = setTimeout(() => {
       timedOut = true;
+      throttle.release();
       child.kill('SIGTERM');
       setTimeout(() => child.kill('SIGKILL'), 5_000).unref();
     }, input.timeoutMs);
@@ -189,6 +206,7 @@ function run7z(input: {
     }
     child.on('error', (error) => {
       clearTimeout(timer);
+      throttle.release();
       reject(
         new NexaError({
           kind: 'CONFIGURATION',
@@ -200,6 +218,7 @@ function run7z(input: {
     });
     child.on('close', (code, signal) => {
       clearTimeout(timer);
+      throttle.release();
       if (timedOut) {
         reject(
           new NexaError({
@@ -256,6 +275,17 @@ export function sealArgs(
     MANIFEST_ENTRY,
     dumpName,
   ];
+}
+
+/**
+ * The duty cycle bounds WALL time, so it bounds CPU to `percent` of ONE core only while 7-Zip
+ * runs one thread: two threads in each run slice would be twice the promise (Codex on #319).
+ * Whenever a quota is in force, every `-mmt=N` is therefore rewritten to `-mmt=1` here, at
+ * the one spawn site, whatever level or `BACKUP_SEVEN_ZIP_THREADS` override chose N.
+ */
+export function cappedThreadArgs(args: readonly string[], cpuPercent: number): readonly string[] {
+  if (!(cpuPercent < CPU_QUOTA_UNLIMITED)) return args;
+  return args.map((arg) => (arg.startsWith('-mmt=') ? '-mmt=1' : arg));
 }
 
 /** Chooses the level for this host right now, or refuses with `backup.memory_insufficient`. */
@@ -321,6 +351,7 @@ export async function sealSevenZip(input: {
       password: input.password,
       timeoutMs: input.options.sealTimeoutMs,
       lowPriorityPrefix: input.options.lowPriorityPrefix,
+      cpuLimit: input.options.cpuLimit,
       args: sealArgs(level, input.archivePath, dumpName),
     });
     if (killedBySignal(result.code, result.signal)) {
@@ -356,6 +387,7 @@ async function list(
     password,
     timeoutMs: options.openTimeoutMs,
     lowPriorityPrefix: options.lowPriorityPrefix,
+    cpuLimit: options.cpuLimit,
     args: ['l', '-slt', '-bd', typeSwitch(archivePath), '--', archivePath],
   });
   const text = result.stdout.toString('utf8');
@@ -429,10 +461,12 @@ export async function openSevenZip(input: {
     timeoutMs: input.options.openTimeoutMs,
     maxStdout: MAX_MANIFEST_BYTES,
     lowPriorityPrefix: input.options.lowPriorityPrefix,
+    cpuLimit: input.options.cpuLimit,
     args: [
       'x',
       '-so',
       '-bd',
+      '-mmt=1',
       typeSwitch(input.archivePath),
       '--',
       input.archivePath,
@@ -471,7 +505,17 @@ export async function openSevenZip(input: {
     timeoutMs: input.options.openTimeoutMs,
     stdoutSink: counter,
     lowPriorityPrefix: input.options.lowPriorityPrefix,
-    args: ['x', '-so', '-bd', typeSwitch(input.archivePath), '--', input.archivePath, dumpEntry],
+    cpuLimit: input.options.cpuLimit,
+    args: [
+      'x',
+      '-so',
+      '-bd',
+      '-mmt=1',
+      typeSwitch(input.archivePath),
+      '--',
+      input.archivePath,
+      dumpEntry,
+    ],
   });
   await sinkDone;
   if (killedBySignal(dumpRun.code, dumpRun.signal)) {

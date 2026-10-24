@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { open, type FileHandle } from 'node:fs/promises';
-import { NexaError, PLATFORM_ERROR_CODES } from '@nexa/contracts';
+import { BACKUP_CPU_LIMIT_DEFAULT, NexaError, PLATFORM_ERROR_CODES } from '@nexa/contracts';
 import type {
   DatabaseTools,
   DumpOutcome,
@@ -11,6 +11,12 @@ import type {
 import type { DatabaseInspection, RestoreEngine } from '../../recovery/application/ports.js';
 import type { AppliedMigration } from '../../../../infrastructure/persistence/migration-state.js';
 import { assertOutsideTransaction } from '../../../../infrastructure/transaction-boundary.js';
+import {
+  CPU_QUOTA_UNLIMITED,
+  resolveCpuLimit,
+  startCpuThrottle,
+  type CpuLimitProvider,
+} from './cpu-quota.js';
 import {
   defaultLowPriorityPrefix,
   killedBySignal,
@@ -115,13 +121,13 @@ const MAX_CAPTURED_OUTPUT = 16 * 1024;
  */
 const MAX_STDOUT_BYTES = 8 * 1024 * 1024;
 
-function run(
+async function run(
   command: string,
   args: readonly string[],
   env: NodeJS.ProcessEnv,
   timeoutMs: number,
   /** `prefix` set: the tool runs under nice/ionice (`tool-process.ts`). */
-  lowPriority?: { readonly prefix: readonly string[] },
+  lowPriority?: { readonly prefix: readonly string[]; readonly cpuLimit?: CpuLimitProvider },
 ): Promise<RunResult> {
   // `pg_dump` and `pg_restore` open their OWN connections to the database, and
   // a dump runs for as long as the database is large. Inside a transaction that
@@ -129,6 +135,10 @@ function run(
   // waiting on the same database — the deadlock-shaped version of the rule in
   // `transaction-boundary.ts`, not merely the slow one.
   assertOutsideTransaction(`The ${command} subprocess`);
+  const cpuPercent =
+    lowPriority?.cpuLimit === undefined
+      ? CPU_QUOTA_UNLIMITED
+      : await resolveCpuLimit(lowPriority.cpuLimit, BACKUP_CPU_LIMIT_DEFAULT);
 
   return new Promise((resolve, reject) => {
     const wrapped =
@@ -146,8 +156,10 @@ function run(
     let stderr = '';
     let timedOut = false;
 
+    const throttle = startCpuThrottle(child, cpuPercent);
     const timer = setTimeout(() => {
       timedOut = true;
+      throttle.release();
       child.kill('SIGTERM');
       // A dump that ignores SIGTERM still has to stop, or the lease it holds
       // outlives the run that took it.
@@ -172,6 +184,7 @@ function run(
 
     child.on('error', (error) => {
       clearTimeout(timer);
+      throttle.release();
       reject(
         new NexaError({
           kind: 'CONFIGURATION',
@@ -186,6 +199,7 @@ function run(
 
     child.on('close', (code, signal) => {
       clearTimeout(timer);
+      throttle.release();
       if (timedOut) {
         reject(
           new NexaError({
@@ -234,6 +248,8 @@ export interface PgToolsOptions {
    * Absent: detected once per process. `[]`: none. A test seam as much as a setting.
    */
   readonly lowPriorityPrefix?: readonly string[] | undefined;
+  /** The CPU quota, percent of one core, read at each spawn. Absent: unlimited. */
+  readonly cpuLimit?: CpuLimitProvider | undefined;
 }
 
 /**
@@ -326,8 +342,14 @@ export class PostgresDatabaseTools implements DatabaseTools, RestoreEngine {
     return env;
   }
 
-  private lowPriority(): { readonly prefix: readonly string[] } {
-    return { prefix: this.options.lowPriorityPrefix ?? defaultLowPriorityPrefix() };
+  private lowPriority(): {
+    readonly prefix: readonly string[];
+    readonly cpuLimit?: CpuLimitProvider;
+  } {
+    return {
+      prefix: this.options.lowPriorityPrefix ?? defaultLowPriorityPrefix(),
+      ...(this.options.cpuLimit === undefined ? {} : { cpuLimit: this.options.cpuLimit }),
+    };
   }
 
   private async version(command: string): Promise<string> {

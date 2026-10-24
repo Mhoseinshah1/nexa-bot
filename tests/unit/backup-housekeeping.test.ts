@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from 'node:fs/pr
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { BackupManifest, OperationalEventInput } from '@nexa/contracts';
+import { SETTINGS, type BackupManifest, type OperationalEventInput } from '@nexa/contracts';
 import {
   BackupHousekeeping,
   requiredFreeBytes,
@@ -336,6 +336,17 @@ describe('backup housekeeping: delivered local copies (E4)', () => {
   });
 });
 
+describe('backup housekeeping: the retention defaults (Round 8 B2)', () => {
+  it('keeps the newest 3 archives for at least 3 days unless the owner says otherwise', () => {
+    const count = SETTINGS.find((one) => one.key === 'backup.archive_keep_count');
+    const days = SETTINGS.find((one) => one.key === 'backup.archive_keep_days');
+    expect(count?.defaultValue).toBe(3);
+    expect(days?.defaultValue).toBe(3);
+    // The prune can never be configured to keep nothing.
+    expect(count?.schema.safeParse(0).success).toBe(false);
+  });
+});
+
 describe('backup housekeeping: disk space', () => {
   it('estimates the next run from the last verified one, with a floor', () => {
     expect(requiredFreeBytes(null, GIB)).toBe(GIB);
@@ -369,11 +380,44 @@ describe('backup housekeeping: disk space', () => {
     expect(w.recorded[0]?.recoversCode).toBe('backup.disk_threshold_exceeded');
   });
 
+  it('Round 8 B6: says it in Persian, in human units, never as a raw byte count', async () => {
+    const w = world();
+    w.latestVerified = row({ dumpBytes: BigInt(2 * GIB), archiveBytes: BigInt(2 * GIB) });
+    w.free = Math.round(1.5 * GIB);
+    await housekeeping(w).checkDisk();
+    const exceeded = w.recorded[0]?.message ?? '';
+    expect(exceeded).toBe(
+      'فضای آزاد پوشهٔ بکاپ ۱٫۵ گیگابایت است و بکاپ بعدی حدود ۶ گیگابایت لازم دارد.',
+    );
+    expect(exceeded).not.toMatch(/[A-Za-z0-9]/);
+
+    w.recorded = [];
+    w.free = 7 * GIB;
+    w.open.add('backup.disk_threshold_exceeded');
+    await housekeeping(w).checkDisk();
+    expect(w.recorded[0]?.message).toBe('فضای پوشهٔ بکاپ دوباره برای بکاپ بعدی کافی است.');
+  });
+
   it('says nothing when the backup root does not exist yet', async () => {
     const w = world();
     w.free = null;
     await housekeeping(w).checkDisk();
     expect(w.recorded).toEqual([]);
+  });
+});
+
+describe('backup housekeeping: Persian text (Round 8 B6)', () => {
+  it('words the overdue conditions in Persian', async () => {
+    const w = world();
+    w.lastSucceededAt = new Date(NOW.getTime() - 2 * DAY - 1);
+    await housekeeping(w).checkOverdue();
+    expect(w.recorded[0]?.message).toContain('بکاپ خودکار روشن است');
+    expect(w.recorded[0]?.message).not.toMatch(/Automatic|verified backup/);
+    w.recorded = [];
+    w.lastSucceededAt = NOW;
+    w.open.add('backup.interval_exceeded');
+    await housekeeping(w).checkOverdue();
+    expect(w.recorded[0]?.message).toBe('یک بکاپ تأییدشده دوباره در زمان برنامه کامل شد.');
   });
 });
 
