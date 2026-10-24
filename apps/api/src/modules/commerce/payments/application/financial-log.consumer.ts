@@ -175,7 +175,8 @@ export class FinancialLogConsumer implements EventConsumer {
   ): Promise<TemplateKey> {
     const { words } = this.deps;
     const requests = this.deps.providerRequests;
-    const status = failureStatusOf(payment.resolutionNote);
+    const note = payment.resolutionNote ?? null;
+    const status = failureStatusOf(note);
     const bareCancel =
       cause === 'GATEWAY_FAILED' && (status === 'canceled' || status === 'cancelled');
     const request =
@@ -184,7 +185,7 @@ export class FinancialLogConsumer implements EventConsumer {
         : null;
     const outcome = paymentFailureOutcome({
       cause,
-      resolutionNote: payment.resolutionNote,
+      resolutionNote: note,
       // Only a cancel that was SENT can have been what the provider then reported.
       cancelRequest:
         request !== null && SENT_CANCEL_STATES.has(request.state)
@@ -201,8 +202,8 @@ export class FinancialLogConsumer implements EventConsumer {
         let reasons: readonly string[] = [];
         if (outcome.by === 'OPERATOR') {
           // The operator's reason — mandatory, and already sent to the customer word for word.
-          const note = oneLine(payment.resolutionNote);
-          reasons = note === null ? [] : [note];
+          const reason = oneLine(note);
+          reasons = reason === null ? [] : [reason];
         } else if (requests !== undefined) {
           const facts = await requests.factsFor(scope, payment.id, tx);
           reasons = (facts?.rejectReasons ?? [])
