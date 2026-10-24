@@ -325,6 +325,8 @@ export class ReceiptDispositionService {
               // What the payment asked for and what the reviewer credited: the
               // difference, when there is one, is the reason this disposition exists.
               paymentAmountMinor: payment.amount.amountMinor.toString(),
+              // R6 item 4: what the customer was asked to transfer (principal plus any fee).
+              payableMinor: (payment.customerFee?.payable ?? payment.amount).amountMinor.toString(),
               creditedMinor: amount.amountMinor.toString(),
               currency: amount.currency,
               walletEntryId: entry.id,

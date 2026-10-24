@@ -460,7 +460,12 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   targetLimit: 'تعداد مجاز پس از افزایش',
   telegram: 'اتصال تلگرام',
   telegramId: 'شناسهٔ عددی تلگرام',
-  transferAmount: 'مبلغ واریز اعلام‌شده توسط تون پی',
+  transferAmount: 'مبلغ دقیق واریز (فقط ارقام)',
+  firstName: 'نام کوچک مشتری',
+  weekday: 'نام روز هفته',
+  nearestExpiry: 'نزدیک‌ترین انقضا',
+  date: 'تاریخ امروز (شمسی)',
+  time: 'ساعت (به وقت تهران)',
   telegramIdRandom: 'نشانهٔ انتخاب شناسهٔ تلگرام + تصادفی',
   template: 'الگو',
   tenantId: 'شناسهٔ مستأجر',
@@ -643,6 +648,8 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
 > = {
   // B1: the product's own description, the one customer-facing text on the pre-invoice.
   'bot.order.preinvoice': { description: 'توضیح محصول برای مشتری' },
+  // R6 item 4: on the card-to-card invoice the total is what must be TRANSFERRED.
+  'bot.payment.transfer_instructions': { total: 'مبلغ قابل پرداخت (اصل + کارمزد)' },
   'bot.channels.join_private_button': { number: 'شمارهٔ کانال در فهرست' },
   'bot.terms.required': { title: 'عنوان قوانین', body: 'متن قوانین' },
   'bot.service.delivery_tutorial': { text: 'متن آموزش پنل، همان‌طور که در پنل نوشته شده' },
@@ -788,7 +795,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.start.welcome_back': [
     'خوش‌آمد به مشتری قدیمی',
-    'پیام شروع برای مشتری‌ای که پیش‌تر از ربات استفاده کرده است.',
+    'پیام شروع برای مشتری‌ای که پیش‌تر از ربات استفاده کرده است. با متغیرهایی مثل {firstName} و {activeServices} که هنگام ارسال از اطلاعات خود همان مشتری پر می‌شوند.',
   ],
   'bot.command.start': [
     'توضیح دستور /start در فهرست دستورها',
@@ -1358,7 +1365,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.payment.transfer_instructions': [
     'فاکتور کارت‌به‌کارت',
-    'فاکتور پرداخت: کد پیگیری پرداخت، مبلغ قابل پرداخت، اطلاعات حساب مقصد و راهنمای پرداخت.',
+    'فاکتور پرداخت: کد پیگیری پرداخت، مبلغ بدون کارمزد و کارمزد (فقط اگر کارمزد مشتری فعال باشد)، مبلغ قابل پرداخت، اطلاعات حساب مقصد و راهنمای پرداخت.',
   ],
   'bot.payment.destination.bank': [
     'خط نام بانک در فاکتور',
@@ -1379,6 +1386,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.payment.copy_card_button': [
     'دکمهٔ کپی شمارهٔ کارت',
     'دکمه‌ای که شمارهٔ کارت را در حافظهٔ گوشی مشتری کپی می‌کند.',
+  ],
+  'bot.payment.copy_transfer_amount_button': [
+    'دکمهٔ کپی مبلغ دقیق',
+    'دکمه‌ای در فاکتور کارت‌به‌کارت تون پی که مبلغ دقیق واریز را فقط با ارقام و بدون جداکننده کپی می‌کند.',
   ],
   'bot.payment.copy_amount_button': [
     'دکمهٔ کپی مبلغ',

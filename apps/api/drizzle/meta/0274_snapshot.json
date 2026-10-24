@@ -1,6 +1,6 @@
 {
-  "id": "dc9154a2-3845-4508-a1ed-3d8c3dc4f7d1",
-  "prevId": "570cb69d-08c5-4f95-98c3-2756e86a4019",
+  "id": "1bc189c9-922f-4e0a-b031-ea9916ed98ab",
+  "prevId": "d1fb6aa7-184b-4a15-a7e7-4f0d4877df09",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -25477,7 +25477,7 @@
         },
         "payments_customer_fee_check": {
           "name": "payments_customer_fee_check",
-          "value": "(customer_fee_basis_points IS NULL AND customer_fee_amount IS NULL AND payable_amount IS NULL) OR (method = 'GATEWAY' AND customer_fee_basis_points BETWEEN 0 AND 10000 AND customer_fee_amount >= 0 AND payable_amount = amount + customer_fee_amount)"
+          "value": "(customer_fee_basis_points IS NULL AND customer_fee_amount IS NULL AND payable_amount IS NULL) OR (method IN ('GATEWAY', 'MANUAL_TRANSFER') AND customer_fee_basis_points BETWEEN 0 AND 10000 AND customer_fee_amount >= 0 AND payable_amount = amount + customer_fee_amount)"
         },
         "payments_provider_review_check": {
           "name": "payments_provider_review_check",

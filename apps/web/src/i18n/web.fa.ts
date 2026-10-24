@@ -424,6 +424,15 @@ export const WEB_FA = {
   'web.required': 'الزامی',
   'web.preview': 'پیش‌نمایش',
   'web.preview_values': 'مقادیر نمونه برای پیش‌نمایش',
+  'web.template_override_lacks':
+    'این متن {token} ندارد. متن شما همچنان کار می‌کند و تغییری نکرده است؛ برای اینکه مشتری آن را ببیند، متغیر را به متن اضافه کنید.',
+  'web.preview_sample_customer':
+    'این فقط پیش‌نمایش با «مشتری نمونه» است. در ربات، هر مشتری نام و اطلاعات خودش را می‌بیند و متن ساخته‌شده در هیچ‌جا ذخیره نمی‌شود.',
+  'web.sample_customer_first_name': 'علی',
+  'web.sample_customer_date': '۲ آبان ۱۴۰۵',
+  'web.sample_customer_time': '۱۸:۳۰',
+  'web.sample_customer_weekday': 'جمعه',
+  'web.preview_sample_badge': 'پیش‌نمایش با مشتری نمونه',
   'web.preview_note': 'پیش‌نمایش هیچ چیزی را ذخیره نمی‌کند و مقادیر آن از حساب شما گرفته نمی‌شود.',
   'web.preview_unresolved': 'متغیرهایی که مقداری برایشان داده نشده و دست‌نخورده مانده‌اند',
   'web.revert': 'بازگرداندن به پیش‌فرض',
@@ -2240,6 +2249,7 @@ export const WEB_FA = {
   'web.payment_customer_fee_rate': 'نرخ کارمزد مشتری',
   'web.payment_customer_fee_amount': 'کارمزد درگاه',
   'web.payment_customer_fee_payable': 'مبلغ قابل پرداخت',
+  'web.payment_transfer_payable': 'مبلغ قابل واریز مشتری',
   'web.payment_customer_fee_hint':
     'مبلغ پرداخت بالا اصل سفارش یا شارژ است. کارمزد جداگانه ثبت شده، جزو درآمد یا شارژ کیف پول نیست و قابل بازگشت نیست.',
   'web.payment_topup_gift': 'هدیهٔ شارژ این پرداخت',
@@ -2779,7 +2789,7 @@ export const WEB_FA = {
   'web.payment_gateway_topup_invalid': 'درصد هدیهٔ شارژ باید عددی صحیح از ۰ تا ۱۰۰ باشد.',
   'web.payment_gateway_customer_fee': 'کارمزد مشتری (%)',
   'web.payment_gateway_customer_fee_hint':
-    'درصدی از مبلغ سفارش یا شارژ که به‌عنوان کارمزد درگاه به مبلغ قابل پرداخت مشتری اضافه می‌شود؛ حداکثر دو رقم اعشار، ۰ یعنی بدون کارمزد. کارمزد جزو مبلغ سفارش یا شارژ کیف پول نیست و بازگردانده نمی‌شود. هر پرداخت کارمزد زمان ایجاد خود را نگه می‌دارد.',
+    'درصدی از مبلغ سفارش یا شارژ که به‌عنوان کارمزد (درگاه آنلاین یا کارت‌به‌کارت) به مبلغ قابل پرداخت مشتری اضافه می‌شود؛ حداکثر دو رقم اعشار، ۰ یعنی بدون کارمزد. کارمزد جزو مبلغ سفارش یا شارژ کیف پول نیست و بازگردانده نمی‌شود. هر پرداخت کارمزد زمان ایجاد خود را نگه می‌دارد.',
   'web.payment_gateway_customer_fee_invalid':
     'کارمزد مشتری باید عددی از ۰ تا ۱۰۰ با حداکثر دو رقم اعشار باشد.',
   'web.payment_gateway_unbounded': 'بدون محدودیت',
@@ -4538,6 +4548,7 @@ export const WEB_FA = {
   'web.ib_button_payment_route_gift': 'روش‌های پرداخت با شارژ هدیه',
   'web.ib_button_payment_copy_card': 'کپی شماره کارت',
   'web.ib_button_payment_copy_amount': 'کپی مبلغ',
+  'web.ib_button_payment_copy_transfer_amount': 'کپی مبلغ دقیق',
   'web.ib_button_payment_sent': 'پرداخت را انجام دادم | ارسال رسید',
   'web.ib_button_payment_cancel': 'انصراف از پرداخت',
   'web.ib_button_payment_cancel_confirm': 'تأیید انصراف از پرداخت',

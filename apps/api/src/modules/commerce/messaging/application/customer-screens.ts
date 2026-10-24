@@ -11,6 +11,11 @@ import {
 } from '@nexa/contracts';
 import type { TemplateResolver } from '../../../control/templates/application/template-resolver.js';
 import {
+  startGreetingValues,
+  type StartGreetingFacts,
+  type StartGreetingKey,
+} from './start-greeting.js';
+import {
   SERVICE_STATUS_PRESENTATION,
   serviceDisplayStatus,
   type ServiceStatusFacts,
@@ -280,6 +285,15 @@ export class CustomerScreenComposer {
       walletBalance: facts.walletBalance,
     };
     return { key: 'bot.order.preinvoice', values };
+  }
+
+  /**
+   * R6 item 3: `/start`'s greeting for ONE customer, as `{ key, values }`. A pure function of
+   * the receiving customer's own facts and the clock (`startGreetingValues`): the rendered text
+   * is made by the one renderer when the message is sent and is persisted nowhere.
+   */
+  startGreeting(key: StartGreetingKey, facts: StartGreetingFacts): ComposedScreen {
+    return { key, values: startGreetingValues(facts) };
   }
 
   async walletSummary(scope: ScopeContext, facts: WalletSummaryFacts): Promise<ComposedScreen> {

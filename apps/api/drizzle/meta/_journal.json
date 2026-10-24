@@ -1914,9 +1914,16 @@
       "breakpoints": true
     },
     {
+      "idx": 273,
+      "version": "7",
+      "when": 1792786995658,
+      "tag": "0273_manual_transfer_customer_fee",
+      "breakpoints": true
+    },
+    {
       "idx": 274,
       "version": "7",
-      "when": 1792786513207,
+      "when": 1792816491586,
       "tag": "0274_tonpays_telegram_cancel_refund",
       "breakpoints": true
     }

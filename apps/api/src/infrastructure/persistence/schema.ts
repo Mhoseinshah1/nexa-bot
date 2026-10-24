@@ -4740,13 +4740,13 @@ export const payments = pgTable(
       sql`topup_cashback_percent IS NULL OR topup_cashback_percent BETWEEN ${sql.raw(String(PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MIN))} AND ${sql.raw(String(PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MAX))}`,
     ),
     /*
-     * WP18: the fee snapshot is all-or-nothing, only on a gateway payment, and its
-     * arithmetic is the database's too — a payable that is not principal plus fee is a
-     * figure nobody quoted.
+     * WP18: the fee snapshot is all-or-nothing, only on a gateway payment (and, since R6
+     * item 4, a manual card-to-card one), and its arithmetic is the database's too — a
+     * payable that is not principal plus fee is a figure nobody quoted.
      */
     check(
       'payments_customer_fee_check',
-      sql`(customer_fee_basis_points IS NULL AND customer_fee_amount IS NULL AND payable_amount IS NULL) OR (method = 'GATEWAY' AND customer_fee_basis_points BETWEEN ${sql.raw(String(CUSTOMER_FEE_BASIS_POINTS_MIN))} AND ${sql.raw(String(CUSTOMER_FEE_BASIS_POINTS_MAX))} AND customer_fee_amount >= 0 AND payable_amount = amount + customer_fee_amount)`,
+      sql`(customer_fee_basis_points IS NULL AND customer_fee_amount IS NULL AND payable_amount IS NULL) OR (method IN ('GATEWAY', 'MANUAL_TRANSFER') AND customer_fee_basis_points BETWEEN ${sql.raw(String(CUSTOMER_FEE_BASIS_POINTS_MIN))} AND ${sql.raw(String(CUSTOMER_FEE_BASIS_POINTS_MAX))} AND customer_fee_amount >= 0 AND payable_amount = amount + customer_fee_amount)`,
     ),
     /*
      * The provider review window (§7.0), row-local and generated from the contract: both

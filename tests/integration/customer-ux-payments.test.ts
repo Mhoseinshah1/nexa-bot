@@ -668,6 +668,35 @@ describe('a customer pays through the approved screens', () => {
       expect((rows.rows[0] as { close_reason: string }).close_reason).toBe('EXPIRED');
     });
 
+    it('R6 item 4: with a 10 % card-to-card fee the invoice shows principal, fee and payable, copies the payable, and the wallet gets the principal', async () => {
+      await ctx.container.database.db.execute(
+        sql`UPDATE payment_gateways SET customer_fee_basis_points = 1000
+             WHERE tenant_id = ${tenantA.tenantId} AND provider = 'MANUAL_TRANSFER'`,
+      );
+      await handle(tap('o:'));
+      await handle(text('100000'));
+      const route = buttonsOf(lastMarkup()).find((b) => b.startsWith('tp:')) ?? '';
+      await handle(tap(route));
+      const body = lastText();
+      expect(body).toContain('100,000');
+      expect(body).toContain('10,000');
+      expect(body).toContain('110,000');
+      // The «کپی مبلغ» button carries the payable as bare digits, never the principal.
+      expect(lastMarkup()).toContain('"copy_text":{"text":"110000"}');
+      expect(lastMarkup()).not.toContain('"copy_text":{"text":"100000"}');
+      const paymentRow = await ctx.container.database.db.execute(
+        sql`SELECT id FROM payments WHERE tenant_id = ${tenantA.tenantId}`,
+      );
+      const paymentId = (paymentRow.rows[0] as { id: string }).id;
+      await ctx.container.payments.confirmManualTransfer(tenantA, owner, paymentId, {
+        idempotencyKey: `confirm-${paymentId}`,
+        note: 'seen',
+      });
+      expect((await ledger(maryam)).map((e) => [e.reason, e.amount])).toEqual([
+        ['TOPUP_RECEIPT', '100000'],
+      ]);
+    });
+
     it('the principal and the gift are separate entries, written once across a repeated confirmation', async () => {
       await ctx.container.database.db.execute(
         sql`UPDATE payment_gateways SET topup_cashback_percent = 10 WHERE tenant_id = ${tenantA.tenantId}`,

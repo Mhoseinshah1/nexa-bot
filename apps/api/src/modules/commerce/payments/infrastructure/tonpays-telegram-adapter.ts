@@ -439,7 +439,14 @@ export class TonPaysTelegramAdapter implements CardTransferGatewayAdapter {
         code: `http.${String(answer.status)}.unexpected_body:card_number`,
       };
     }
-    return { kind: 'CHANGED', instructions: card, policy: policyOf(parsed.data) };
+    return {
+      kind: 'CHANGED',
+      instructions: card,
+      policy: policyOf(parsed.data),
+      // R6 item 2: a card change may come with a new exact amount; absent, none is invented
+      // and the next inquiry brings the current one.
+      finalAmount: metadataAmount(parsed.data['final_amount']),
+    };
   }
 
   async uploadReceipt(

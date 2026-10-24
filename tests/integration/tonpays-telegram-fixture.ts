@@ -82,6 +82,8 @@ export class FakeTonPaysTelegram {
   refundMode: FakeWrite = 'OK';
   createMode: FakeWrite | 'NO_CARD' | 'TIMEOUT_AFTER_CREATING' = 'OK';
   changeMode: FakeWrite | 'NO_CARD' = 'OK';
+  /** R6 item 2: when set, a card change answers with this new exact amount (`final_amount`). */
+  changeFinalAmount: number | null = null;
   /** What the status check answers: the invoice (`OK`), a timeout, a 5xx or a refusal. */
   checkMode: FakeWrite = 'OK';
   /**
@@ -230,11 +232,13 @@ export class FakeTonPaysTelegram {
       if (invoice === undefined) return json(404, { detail: { code: 'INVOICE_NOT_FOUND' } });
       const card = this.nextCard();
       invoice.cards.push(card);
+      if (this.changeFinalAmount !== null) invoice.finalAmount = this.changeFinalAmount;
       if (mode === 'TIMEOUT') throw new Error('socket hang up');
       if (mode === 'NO_CARD') return json(200, { show_change_card: true });
       return json(200, {
         card_number: card,
         card_name: 'مریم احمدی',
+        ...(this.changeFinalAmount === null ? {} : { final_amount: this.changeFinalAmount }),
         show_change_card: true,
         change_card_cooldown_seconds: 60,
         change_card_exhausted: false,

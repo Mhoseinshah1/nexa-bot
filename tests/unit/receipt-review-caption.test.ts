@@ -135,6 +135,30 @@ describe('the reviewer’s caption (File 01 §4)', () => {
     });
   });
 
+  it('R6 item 4: quotes the PAYABLE the customer had to transfer, not the principal, when a fee applies', async () => {
+    const { caption } = builder(['users.view']);
+    const withFee = {
+      ...paymentOf('order-1'),
+      customerFee: {
+        basisPoints: 1_000,
+        fee: money(25_000n, 'IRT'),
+        payable: money(275_000n, 'IRT'),
+      },
+    } as unknown as PaymentRecord;
+    const values = await caption.valuesFor({} as never, viewer, withFee, customer, []);
+    expect(values['total']).toEqual(money(275_000n, 'IRT'));
+    const final = await caption.finalValuesFor({} as never, viewer, withFee, customer, {
+      outcome: 'APPROVED',
+      outcomeLabel: 'bot.admin.review_approved' as never,
+      wallet: false,
+    });
+    expect(final['total']).toEqual(money(275_000n, 'IRT'));
+    // No fee snapshot: the principal, exactly as before.
+    expect(
+      (await caption.valuesFor({} as never, viewer, paymentOf('order-1'), customer, []))['total'],
+    ).toEqual(money(250_000n, 'IRT'));
+  });
+
   it('names a wallet top-up as one, with a dash where there is no product', async () => {
     const { caption } = builder([]);
     const values = await caption.valuesFor({} as never, viewer, paymentOf(null), null, []);

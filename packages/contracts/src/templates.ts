@@ -123,7 +123,31 @@ export interface PlaceholderDefinition {
   readonly required: boolean;
   /** Whether the token may appear more than once in one body. */
   readonly repeatable: boolean;
+  /**
+   * R6 item 3. The value comes from a THIRD PARTY (a Telegram display name). The one renderer
+   * strips control, bidi-override and zero-width characters from it, collapses its whitespace,
+   * caps its length (`UNTRUSTED_VALUE_MAX_LENGTH`) and neutralises markup and mention
+   * characters, whatever the key's format. A value that is empty after that counts as absent.
+   * Only a STRING placeholder may be untrusted.
+   */
+  readonly untrusted?: boolean;
+  /**
+   * R6 item 3. What an ABSENT optional value does to its line. `DROP_LINE` (the default, and
+   * the behaviour of every other key) drops a line whose placeholders are all absent;
+   * `COLLAPSE` keeps the line's fixed words and closes the gap the value left — spaces and
+   * punctuation — so a greeting without a name is «عزیز، خوش آمدید» and never «  عزیز، ».
+   */
+  readonly whenEmpty?: 'DROP_LINE' | 'COLLAPSE';
+  /**
+   * R6 item 3. A MONEY placeholder that renders a negative amount as «X تومان بدهی» (the
+   * amount without its minus sign, then the debt word) instead of «-X تومان». The wallet
+   * balance of a customer in debt; the renderer owns the word.
+   */
+  readonly debtWhenNegative?: boolean;
 }
+
+/** R6 item 3: the longest an untrusted value may be, in characters, after sanitising. */
+export const UNTRUSTED_VALUE_MAX_LENGTH = 64;
 
 export interface TemplateDefinition {
   /** Stable machine key. Never a display string. */
@@ -766,17 +790,174 @@ export const TEMPLATES = [
   // hazard is real: a name placeholder is a placeholder whose value comes from a
   // third party and is rendered into a message sent to someone else. Greetings here
   // are name-free by design, and that is cheaper than an escaping rule.
+  //
+  // R6 item 3 relaxes that for the two /start greetings ONLY, on the owner's decision, and
+  // replaces "no name" with the rules that make a name safe: the value is filled at SEND time
+  // from the RECEIVING customer's own row (never an administrator's, never a stored echo);
+  // the rendered text is returned to the sender and persisted nowhere; the name is an
+  // `untrusted` placeholder, which the ONE renderer sanitises; and an empty value closes its
+  // own gap. The Web Admin edits and previews the RAW body with a labelled sample customer.
   {
     key: 'bot.start.welcome',
-    description: 'Greeting for a customer the installation has not seen before.',
+    description:
+      'Greeting for a customer the installation has not seen before. R6 item 3: it may use the ' +
+      'variables below, every one filled at SEND time from the RECEIVING customer’s own data ' +
+      'and never stored — a rendered greeting is not persisted anywhere (see the MirzaBot ' +
+      'note above).',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    digits: 'PERSIAN',
+    placeholders: [
+      {
+        token: 'firstName',
+        type: 'STRING',
+        description:
+          'The receiving customer’s own first name from Telegram, sanitised by the renderer (control and bidi characters stripped, capped, markup neutralised). Empty when Telegram sent none: the greeting then closes the gap and keeps its other words.',
+        required: false,
+        repeatable: false,
+        untrusted: true,
+        whenEmpty: 'COLLAPSE',
+      },
+      {
+        token: 'username',
+        type: 'STRING',
+        description:
+          'The receiving customer’s @username, or absent. A line holding only it is dropped when there is none.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'telegramId',
+        type: 'STRING',
+        description: 'The receiving customer’s numeric Telegram id.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'date',
+        type: 'STRING',
+        description: 'Today’s Jalali date in Tehran, e.g. «۲ آبان ۱۴۰۵», computed at send time.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'time',
+        type: 'STRING',
+        description: 'The Tehran time of day, e.g. «۱۸:۳۰», computed at send time.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'weekday',
+        type: 'STRING',
+        description: 'The Persian weekday name in Tehran, computed at send time.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'walletBalance',
+        type: 'MONEY',
+        description:
+          'The receiving customer’s wallet balance in Toman, derived from the ledger at send time; a negative balance reads «X تومان بدهی».',
+        required: false,
+        repeatable: false,
+        debtWhenNegative: true,
+      },
+      {
+        token: 'activeServices',
+        type: 'NUMBER',
+        description: 'How many of the receiving customer’s services are serving now.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'nearestExpiry',
+        type: 'DURATION_DAYS',
+        description:
+          'How long until the nearest expiry among the customer’s serving services as whole days, rounded up (e.g. «۵ روز»), or absent. A line holding only it is dropped when the customer has no such service.',
+        required: false,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.start.welcome_back',
-    description: 'Greeting for a returning customer.',
+    description:
+      'Greeting for a returning customer, and the main-menu reply. The same variables as ' +
+      '`bot.start.welcome`, filled at send time from the receiving customer’s own data.',
     format: 'PLAIN_TEXT',
-    placeholders: [],
+    digits: 'PERSIAN',
+    placeholders: [
+      {
+        token: 'firstName',
+        type: 'STRING',
+        description:
+          'The receiving customer’s own first name from Telegram, sanitised by the renderer (control and bidi characters stripped, capped, markup neutralised). Empty when Telegram sent none: the greeting then closes the gap and keeps its other words.',
+        required: false,
+        repeatable: false,
+        untrusted: true,
+        whenEmpty: 'COLLAPSE',
+      },
+      {
+        token: 'username',
+        type: 'STRING',
+        description:
+          'The receiving customer’s @username, or absent. A line holding only it is dropped when there is none.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'telegramId',
+        type: 'STRING',
+        description: 'The receiving customer’s numeric Telegram id.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'date',
+        type: 'STRING',
+        description: 'Today’s Jalali date in Tehran, e.g. «۲ آبان ۱۴۰۵», computed at send time.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'time',
+        type: 'STRING',
+        description: 'The Tehran time of day, e.g. «۱۸:۳۰», computed at send time.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'weekday',
+        type: 'STRING',
+        description: 'The Persian weekday name in Tehran, computed at send time.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'walletBalance',
+        type: 'MONEY',
+        description:
+          'The receiving customer’s wallet balance in Toman, derived from the ledger at send time; a negative balance reads «X تومان بدهی».',
+        required: false,
+        repeatable: false,
+        debtWhenNegative: true,
+      },
+      {
+        token: 'activeServices',
+        type: 'NUMBER',
+        description: 'How many of the receiving customer’s services are serving now.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'nearestExpiry',
+        type: 'DURATION_DAYS',
+        description:
+          'How long until the nearest expiry among the customer’s serving services as whole days, rounded up (e.g. «۵ روز»), or absent. A line holding only it is dropped when the customer has no such service.',
+        required: false,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.channels.join_required',
@@ -4971,7 +5152,9 @@ export const TEMPLATES = [
     description:
       'The invoice: heading, invoice id, payable amount, the destination lines, then ' +
       'the tenant-editable instructions. Carries the destination the payment was ' +
-      'ISSUED against. ' +
+      'ISSUED against. R6 item 4: when the card-to-card route charges a customer fee, the ' +
+      'amount without the fee and the fee are shown apart, and `{total}` is the PAYABLE — ' +
+      'what must be transferred. ' +
       'Supersedes bot.payment.manual_instructions, which is kept for payments created ' +
       'before a destination existed. {destination} is composed from the payment\u2019s ' +
       'frozen snapshot through the four bot.payment.destination.* keys, so a line whose ' +
@@ -4990,8 +5173,25 @@ export const TEMPLATES = [
       {
         token: 'total',
         type: 'MONEY',
-        description: 'The amount to transfer.',
+        description:
+          'The amount to TRANSFER: the payment\u2019s payable \u2014 the principal plus the customer fee when the route charges one, else the principal.',
         required: true,
+        repeatable: false,
+      },
+      {
+        token: 'principal',
+        type: 'MONEY',
+        description:
+          'R6 item 4: the order or top-up amount without the customer fee, shown only when a fee applies. A line holding only it is dropped otherwise.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'fee',
+        type: 'MONEY',
+        description:
+          'R6 item 4: the customer fee snapshotted on this payment, shown only when above zero. A line holding only it is dropped otherwise.',
+        required: false,
         repeatable: false,
       },
       {
@@ -5090,6 +5290,15 @@ export const TEMPLATES = [
     description:
       'Label on the button that copies the amount, as bare digits with no separators ' +
       'and no currency word, so it pastes into a banking app. Also a CopyTextButton.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.copy_transfer_amount_button',
+    description:
+      'R6 item 2: label on the TonPays card invoice button that copies the EXACT amount to ' +
+      'transfer, as bare digits with no separators and no unit. A CopyTextButton: it reaches no ' +
+      'handler and performs no action on the server.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -9148,8 +9357,8 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.gateway_card_invoice',
     description:
-      'The TonPays Telegram card-to-card invoice (`docs/tonpays-telegram-gateway-audit.md` §8.1): the payable from Nexa’s snapshot, the provider’s transfer figure when it differs, the payee card and the deadline, with the receipt, change-card and check buttons beneath. It must say a payment counts only once TonPays has confirmed it, and never that anything was paid.',
-    format: 'PLAIN_TEXT',
+      'The TonPays Telegram card-to-card invoice (`docs/tonpays-telegram-gateway-audit.md` §8.1): the payable from Nexa’s snapshot, the EXACT transfer amount (R6 item 2: required, in <code>), the payee card and the deadline, with the receipt, change-card and check buttons beneath. It must say a payment counts only once TonPays has confirmed it, and never that anything was paid.',
+    format: 'TELEGRAM_HTML',
     placeholders: [
       {
         token: 'reference',
@@ -9179,16 +9388,16 @@ export const TEMPLATES = [
         token: 'payable',
         type: 'MONEY',
         description:
-          'What the transfer must be: the payment’s own payable (principal plus any fee), from Nexa’s snapshot.',
-        required: true,
+          'What the payment is for: the payment’s own payable (principal plus any fee), from Nexa’s snapshot. Not required since R6 item 2 — the exact amount to transfer is `{transferAmount}` — but always supplied.',
+        required: false,
         repeatable: false,
       },
       {
         token: 'transferAmount',
-        type: 'MONEY',
+        type: 'STRING',
         description:
-          'The amount TonPays itself asked to be transferred (its `final_amount`), shown only when present and different from the payable. Provider metadata: it is never what Nexa settles or credits.',
-        required: false,
+          'R6 item 2: the EXACT amount to transfer, as bare ASCII digits with no separators and no unit (a banking app and TonPays\u2019 automatic approval take only that figure). TonPays\u2019 `final_amount` when it sent one, else the payable. The default bodies show it in <code> so it copies on tap. Provider metadata for display: it is never what Nexa settles or credits.',
+        required: true,
         repeatable: false,
       },
       {
@@ -9219,7 +9428,7 @@ export const TEMPLATES = [
     key: 'bot.payment.gateway_card_receipt_sent',
     description:
       'TonPays Telegram: the customer’s receipt is on its way to TonPays, or TonPays received it without opening a review. Nothing is confirmed; the check button reads the stored state. Never says paid.',
-    format: 'PLAIN_TEXT',
+    format: 'TELEGRAM_HTML',
     placeholders: [
       {
         token: 'reference',
@@ -9234,7 +9443,15 @@ export const TEMPLATES = [
         token: 'payable',
         type: 'MONEY',
         description:
-          'What the transfer must be: the payment’s own payable (principal plus any fee), from Nexa’s snapshot.',
+          'What the payment is for: the payment’s own payable (principal plus any fee), from Nexa’s snapshot. Not required since R6 item 2 — the exact amount to transfer is `{transferAmount}` — but always supplied.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'transferAmount',
+        type: 'STRING',
+        description:
+          'R6 item 2: the EXACT amount to transfer, as bare ASCII digits with no separators and no unit (a banking app and TonPays\u2019 automatic approval take only that figure). TonPays\u2019 `final_amount` when it sent one, else the payable. The default bodies show it in <code> so it copies on tap. Provider metadata for display: it is never what Nexa settles or credits.',
         required: true,
         repeatable: false,
       },
@@ -9252,7 +9469,7 @@ export const TEMPLATES = [
     key: 'bot.payment.gateway_card_receipt_refused',
     description:
       'TonPays Telegram: TonPays did not accept the last image as a receipt (or it could not be sent), so the customer is asked to send a clear photo again before the deadline. The card is shown again.',
-    format: 'PLAIN_TEXT',
+    format: 'TELEGRAM_HTML',
     placeholders: [
       {
         token: 'reference',
@@ -9267,7 +9484,15 @@ export const TEMPLATES = [
         token: 'payable',
         type: 'MONEY',
         description:
-          'What the transfer must be: the payment’s own payable (principal plus any fee), from Nexa’s snapshot.',
+          'What the payment is for: the payment’s own payable (principal plus any fee), from Nexa’s snapshot. Not required since R6 item 2 — the exact amount to transfer is `{transferAmount}` — but always supplied.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'transferAmount',
+        type: 'STRING',
+        description:
+          'R6 item 2: the EXACT amount to transfer, as bare ASCII digits with no separators and no unit (a banking app and TonPays\u2019 automatic approval take only that figure). TonPays\u2019 `final_amount` when it sent one, else the payable. The default bodies show it in <code> so it copies on tap. Provider metadata for display: it is never what Nexa settles or credits.',
         required: true,
         repeatable: false,
       },
@@ -9299,7 +9524,7 @@ export const TEMPLATES = [
     key: 'bot.payment.gateway_card_changing',
     description:
       'TonPays Telegram: the customer asked for another card and the request is with TonPays; the new card replaces this message when it arrives. Says nothing was paid.',
-    format: 'PLAIN_TEXT',
+    format: 'TELEGRAM_HTML',
     placeholders: [
       {
         token: 'reference',
@@ -9314,7 +9539,15 @@ export const TEMPLATES = [
         token: 'payable',
         type: 'MONEY',
         description:
-          'What the transfer must be: the payment’s own payable (principal plus any fee), from Nexa’s snapshot.',
+          'What the payment is for: the payment’s own payable (principal plus any fee), from Nexa’s snapshot. Not required since R6 item 2 — the exact amount to transfer is `{transferAmount}` — but always supplied.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'transferAmount',
+        type: 'STRING',
+        description:
+          'R6 item 2: the EXACT amount to transfer, as bare ASCII digits with no separators and no unit (a banking app and TonPays\u2019 automatic approval take only that figure). TonPays\u2019 `final_amount` when it sent one, else the payable. The default bodies show it in <code> so it copies on tap. Provider metadata for display: it is never what Nexa settles or credits.',
         required: true,
         repeatable: false,
       },

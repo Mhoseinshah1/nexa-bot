@@ -270,6 +270,15 @@ describe('the TonPays Telegram adapter: inquiry, card change and receipt', () =>
       kind: 'CHANGED',
       instructions: { cardNumber: '5022-2910-0000-1111', cardName: 'مریم' },
       policy: { showChangeCard: true, cooldownSeconds: 60, exhausted: false },
+      finalAmount: null,
+    });
+    // R6 item 2: a change answer that names a new exact amount carries it; none is invented.
+    const withAmount = fakeFetch(() =>
+      json(200, { card_number: '5022-2910-0000-1111', card_name: 'مریم', final_amount: 250091 }),
+    );
+    expect(await adapterWith(withAmount.fetch).changeCard(API_KEY, 'TPT-1001')).toMatchObject({
+      kind: 'CHANGED',
+      finalAmount: 250_091n,
     });
     const empty = fakeFetch(() => json(200, { show_change_card: false }));
     expect((await adapterWith(empty.fetch).changeCard(API_KEY, 'TPT-1001')).kind).toBe('UNKNOWN');
