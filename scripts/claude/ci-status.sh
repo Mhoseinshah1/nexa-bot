@@ -147,11 +147,11 @@ fail_logs() {
   while IFS=$'\t' read -r _ id nm; do
     echo "--- $nm ($id)"
     if log="$(api "repos/$R/actions/jobs/$id/logs" 2>&1)" && [[ -n "${log//[[:space:]]/}" ]] \
-      && ! head -n 3 <<<"$log" | grep -Eiq 'redirect|blob|302|blob\.core\.windows\.net'; then
+      && [[ "$(sed -n '1,3p' <<<"$log" | grep -Eic 'redirect|blob|302' || true)" == 0 ]]; then
       n="$(grep -nEm1 '##\[error\]|FAIL|Error:|✗|AssertionError' <<<"$log" | cut -d: -f1 || true)"
       if [[ -n "$n" ]]; then
         start=$((n > 5 ? n - 5 : 1))
-        sed -n "${start},$((start + 19))p" <<<"$log" | head -n 20
+        sed -n "${start},$((start + 19))p" <<<"$log"
       else
         tail -n 20 <<<"$log"
       fi

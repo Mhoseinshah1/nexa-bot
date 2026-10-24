@@ -121,7 +121,7 @@ resolve() { # name -> key, exit 2 when unknown/ambiguous
   if [[ "$count" == 0 ]]; then echo "module-map: unknown module '$want' (try --all)" >&2; exit 2; fi
   if [[ "$count" -gt 1 ]]; then
     # an exact key wins even when its bare name also matches others
-    if printf '%s\n' "$hit" | grep -qxF "$want"; then printf '%s\n' "$want"; return; fi
+    if [[ "$(printf '%s\n' "$hit" | grep -cxF "$want" || true)" != 0 ]]; then printf '%s\n' "$want"; return; fi
     echo "module-map: '$want' is ambiguous: $(printf '%s' "$hit" | paste -sd' ' -)" >&2; exit 2
   fi
   printf '%s\n' "$hit"
@@ -169,7 +169,7 @@ who_writes() {
   local f hits=0
   while IFS= read -r f; do
     [[ -f "$f" ]] || continue
-    if tr '\n' ' ' <"$f" | grep -qE "\.(insert|update|delete)\( *([A-Za-z_]+\.)?${ident}[ ,)]"; then
+    if [[ "$(tr '\n' ' ' <"$f" | grep -cE "\.(insert|update|delete)\( *([A-Za-z_]+\.)?${ident}[ ,)]" || true)" != 0 ]]; then
       printf '%s\n' "$f"; hits=$((hits + 1))
     fi
   done < <(trace_files "$ident")
