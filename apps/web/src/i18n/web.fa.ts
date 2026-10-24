@@ -2761,6 +2761,13 @@ export const WEB_FA = {
   'web.payment_gateway_tetrapay_secret_input': 'رمز وب‌هوک جدید (whsec_ — اختیاری)',
   'web.payment_gateway_tetrapay_secret_hint':
     'رمز امضای وب‌هوک تتراپی که با «whsec_» شروع می‌شود. اگر وارد کنید، هر اعلان با امضای نامعتبر یا قدیمی (بیش از ۵ دقیقه) نادیده گرفته می‌شود؛ اگر وارد نکنید، اعلان‌ها بدون احراز فقط استعلام را جلو می‌اندازند. رمز ذخیره‌شده هرگز نمایش داده نمی‌شود؛ ابتدا کلید API را تنظیم کنید.',
+  'web.payment_gateway_tonpays_signature_off':
+    'امضای وب‌هوک تون‌پیز فعال نیست؛ سکرت وب‌هوک را تنظیم کنید',
+  'web.payment_gateway_tonpays_secret_set_at': 'آخرین تنظیم:',
+  'web.payment_gateway_tonpays_secret_input': 'سکرت وب‌هوک تون‌پیز',
+  'web.payment_gateway_tonpays_secret_hint':
+    'اول سکرت جدید را اینجا ذخیره کنید، بعد در پنل تون‌پیز rotate کنید؛ دورهٔ هم‌پوشانی وجود ندارد. با ذخیرهٔ سکرت، هر اعلان بدون امضای معتبر (یا با زمان ارسال بیش از ۵ دقیقه اختلاف) رد می‌شود؛ بدون سکرت، اعلان‌ها فقط استعلام را جلو می‌اندازند. سکرت ذخیره‌شده هرگز نمایش داده نمی‌شود.',
+  'web.payment_gateway_tonpays_secret_save': 'ذخیرهٔ سکرت وب‌هوک',
   'web.payment_gateway_tetrapay_secret_save': 'ذخیرهٔ رمز وب‌هوک',
   'web.payment_gateway_tetrapay_secret_saved': 'رمز وب‌هوک ذخیره شد.',
   'web.payment_gateway_webhook_url': 'نشانی وب‌هوک (در پنل تتراپی وارد کنید)',

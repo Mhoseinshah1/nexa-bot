@@ -32,6 +32,7 @@ import {
   DrizzleGatewayCredentialStore,
   DrizzlePublicOriginReader,
 } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-credentials';
+import { tonpaysSignatureOf } from '../../apps/api/src/modules/commerce/payments/infrastructure/tonpays-signature';
 import {
   TonPaysAdapter,
   type FetchLike,
@@ -3070,6 +3071,199 @@ describe('TonPays, through the one settlement path', () => {
           sql`SELECT coalesce(string_agg(t::text, ' '), '') AS text FROM ${sql.raw(table)} t`,
         );
         expect(dump!.text, table).not.toContain(API_KEY);
+      }
+    });
+  });
+
+  // =====================================================================================
+  // R7 - X-TonPays-Signature (docs/tonpays-gateway-audit.md section 5.6)
+  // =====================================================================================
+
+  describe('the webhook signature', () => {
+    const WHSEC = 'tp_whsec_synthetic_rotation_secret_0001';
+    const NEW_WHSEC = 'tp_whsec_synthetic_rotation_secret_0002';
+    let secretCounter = 0;
+
+    async function setSecret(secret: string) {
+      await ctx.container.paymentGateways.setWebhookSecret(tenantA, owner, {
+        idempotencyKey: `tp-whsec-${(secretCounter += 1)}`,
+        provider: 'TONPAYS',
+        secret,
+      });
+    }
+
+    /** Compact JSON with unescaped Persian, as TonPays sends it: the exact bytes that are signed. */
+    function rawOf(
+      invoice: { provider_order_id: string; provider_invoice_id: string | null },
+      status: string,
+      deliveryId: string,
+    ): string {
+      return JSON.stringify({
+        invoice_id: invoice.provider_invoice_id,
+        order_id: invoice.provider_order_id,
+        request_amount: 250000,
+        final_amount: 250037,
+        credit_amount: 250037,
+        status,
+        paid: status === 'completed',
+        delivery_id: deliveryId,
+        event: `invoice.${status}`,
+        occurred_at: 1727200000,
+        description: 'پرداخت سفارش ۱۲۳',
+        api_version: 1,
+      });
+    }
+
+    const sign = (raw: string, secret = WHSEC, t = Math.floor((Date.now() + offsetMs) / 1000)) =>
+      `t=${String(t)},v1=${tonpaysSignatureOf(secret, String(t), Buffer.from(raw, 'utf8'))}`;
+
+    const deliver = (
+      raw: string,
+      signature: string | undefined,
+      deliveryId: string,
+      bodyRaw = raw,
+    ) =>
+      lane.receiveWebhook(
+        String(tenantA.tenantId),
+        'TONPAYS',
+        JSON.parse(bodyRaw) as unknown,
+        deliveryId,
+        signature,
+        Buffer.from(raw, 'utf8'),
+      );
+
+    const rejectedConditions = async () =>
+      (
+        await rows<{ code: string }>(
+          sql`SELECT code FROM operational_events WHERE tenant_id = ${tenantA.tenantId}
+              AND code = 'tonpays.webhook.signature_rejected'`,
+        )
+      ).length;
+
+    it('accepts a valid signature over raw bytes containing Persian text, and only the inquiry decides', async () => {
+      const { paymentId, invoice } = await createdAttempt();
+      await setSecret(WHSEC);
+      const raw = rawOf(invoice, 'completed', 'inv:completed:1');
+      expect(await deliver(raw, sign(raw), 'inv:completed:1')).toBe('SCHEDULED');
+      expect((await invoiceOf(paymentId)).webhook_count).toBe(1);
+      expect((await paymentOf(paymentId)).state).toBe('PENDING');
+    });
+
+    it('rejects the same body re-serialised (spaces, \\u escapes) under the original signature', async () => {
+      const { paymentId, invoice } = await createdAttempt();
+      await setSecret(WHSEC);
+      const raw = rawOf(invoice, 'completed', 'inv:completed:1');
+      const signature = sign(raw);
+      const spaced = JSON.stringify(JSON.parse(raw), null, 1);
+      const escaped = raw.replace('پرداخت', '\\u067e\\u0631\\u062f\\u0627\\u062e\\u062a');
+      expect(escaped).not.toBe(raw);
+      expect(await deliver(spaced, signature, 'inv:completed:1', raw)).toBe('IGNORED_UNVERIFIED');
+      expect(await deliver(escaped, signature, 'inv:completed:1', raw)).toBe('IGNORED_UNVERIFIED');
+      expect((await invoiceOf(paymentId)).webhook_count).toBe(0);
+    });
+
+    it('allows 299 s of skew in both directions and refuses 301 s', async () => {
+      const { invoice } = await createdAttempt();
+      await setSecret(WHSEC);
+      const raw = rawOf(invoice, 'completed', 'inv:completed:1');
+      const now = Math.floor((Date.now() + offsetMs) / 1000);
+      expect(await deliver(raw, sign(raw, WHSEC, now - 299), 'a-1')).toBe('SCHEDULED');
+      expect(await deliver(raw, sign(raw, WHSEC, now + 299), 'a-2')).toBe('SCHEDULED');
+      expect(await deliver(raw, sign(raw, WHSEC, now - 301), 'a-3')).toBe('IGNORED_UNVERIFIED');
+      expect(await deliver(raw, sign(raw, WHSEC, now + 301), 'a-4')).toBe('IGNORED_UNVERIFIED');
+    });
+
+    it('with a secret set, a bad, short, v1-less or absent signature brings nothing forward and raises ONE rolled-up event', async () => {
+      const { paymentId, invoice } = await createdAttempt();
+      await setSecret(WHSEC);
+      const raw = rawOf(invoice, 'completed', 'inv:completed:1');
+      const before = (await invoiceOf(paymentId)).next_inquiry_at;
+      const t = Math.floor((Date.now() + offsetMs) / 1000);
+      for (const header of [
+        `t=${String(t)},v1=${'zz'.repeat(32)}`,
+        `t=${String(t)},v1=${'a'.repeat(62)}`,
+        `t=${String(t)}`,
+        `v1=${'a'.repeat(64)}`,
+        undefined,
+      ]) {
+        expect(await deliver(raw, header, 'inv:completed:1')).toBe('IGNORED_UNVERIFIED');
+      }
+      expect(await rejectedConditions()).toBe(1);
+      const after = await invoiceOf(paymentId);
+      expect(after.webhook_count).toBe(0);
+      expect(after.next_inquiry_at).toEqual(before);
+      expect(tonpays.checks).toHaveLength(0);
+    });
+
+    it('fails closed when the stored secret cannot be read', async () => {
+      const { paymentId, invoice } = await createdAttempt();
+      await setSecret(WHSEC);
+      await ctx.container.database.db.execute(
+        sql`UPDATE payment_gateway_credentials SET webhook_secret_ciphertext = 'damaged'
+            WHERE provider = 'TONPAYS' AND tenant_id = ${tenantA.tenantId}`,
+      );
+      const raw = rawOf(invoice, 'completed', 'inv:completed:1');
+      expect(await deliver(raw, sign(raw), 'inv:completed:1')).toBe('IGNORED_UNVERIFIED');
+      expect(await rejectedConditions()).toBe(1);
+      expect((await invoiceOf(paymentId)).webhook_count).toBe(0);
+    });
+
+    it('with no secret set, accepts an unsigned webhook exactly as before', async () => {
+      const { invoice } = await createdAttempt();
+      const raw = rawOf(invoice, 'completed', 'inv:completed:1');
+      expect(await deliver(raw, undefined, 'inv:completed:1')).toBe('SCHEDULED');
+      expect(await rejectedConditions()).toBe(0);
+    });
+
+    it('a retry with the same delivery id and a fresh t is deduped; a new status is processed', async () => {
+      const { paymentId, invoice } = await createdAttempt();
+      await setSecret(WHSEC);
+      const raw = rawOf(invoice, 'pending', 'inv:pending:1');
+      const now = Math.floor((Date.now() + offsetMs) / 1000);
+      expect(await deliver(raw, sign(raw, WHSEC, now), 'inv:pending:1')).toBe('SCHEDULED');
+      expect(await deliver(raw, sign(raw, WHSEC, now + 30), 'inv:pending:1')).toBe('DUPLICATE');
+      expect((await invoiceOf(paymentId)).webhook_count).toBe(1);
+      const next = rawOf(invoice, 'completed', 'inv:completed:2');
+      expect(await deliver(next, sign(next, WHSEC, now + 31), 'inv:completed:2')).toBe('SCHEDULED');
+      expect((await invoiceOf(paymentId)).webhook_count).toBe(2);
+    });
+
+    it('answers a header that is not the body delivery_id as malformed', async () => {
+      const { paymentId, invoice } = await createdAttempt();
+      await setSecret(WHSEC);
+      const raw = rawOf(invoice, 'completed', 'inv:completed:1');
+      expect(await deliver(raw, sign(raw), 'inv:completed:OTHER')).toBe('MALFORMED');
+      expect((await invoiceOf(paymentId)).webhook_count).toBe(0);
+    });
+
+    it('rotation has no overlap: after replacing the secret the old signature is refused and the new one accepted', async () => {
+      const { invoice } = await createdAttempt();
+      await setSecret(WHSEC);
+      await setSecret(NEW_WHSEC);
+      const raw = rawOf(invoice, 'completed', 'inv:completed:1');
+      expect(await deliver(raw, sign(raw, WHSEC), 'inv:completed:1')).toBe('IGNORED_UNVERIFIED');
+      expect(await deliver(raw, sign(raw, NEW_WHSEC), 'inv:completed:1')).toBe('SCHEDULED');
+    });
+
+    it('never lets the secret reach a listing, an audit row, an event or an idempotency record', async () => {
+      const { invoice } = await createdAttempt();
+      await setSecret(WHSEC);
+      const raw = rawOf(invoice, 'completed', 'inv:completed:1');
+      await deliver(raw, sign(raw, NEW_WHSEC), 'inv:completed:1');
+      const listed = await ctx.container.paymentGateways.list(tenantA, owner);
+      expect(
+        JSON.stringify(listed, (_k, v: unknown) => (typeof v === 'bigint' ? v.toString() : v)),
+      ).not.toContain(WHSEC);
+      for (const table of [
+        'audit_logs',
+        'operational_events',
+        'outbox_messages',
+        'request_idempotency',
+      ]) {
+        const [dump] = await rows<{ text: string }>(
+          sql`SELECT coalesce(string_agg(t::text, ' '), '') AS text FROM ${sql.raw(table)} t`,
+        );
+        expect(dump!.text, table).not.toContain(WHSEC);
       }
     });
   });

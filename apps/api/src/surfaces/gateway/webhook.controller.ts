@@ -1,4 +1,14 @@
-import { Body, Controller, Headers, HttpCode, Inject, Param, Post, Req } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Headers,
+  HttpCode,
+  Inject,
+  Param,
+  Post,
+  Req,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { z } from 'zod';
 import {
   COMMERCE_ERROR_CODES,
@@ -7,6 +17,7 @@ import {
   PAYMENT_GATEWAY_PROVIDERS,
   TETRAPAY_EVENT_ID_HEADER,
   TETRAPAY_SIGNATURE_HEADER,
+  TONPAYS_SIGNATURE_HEADER,
   TONPAYS_DELIVERY_ID_HEADER,
   errors,
   type PaymentGatewayProvider,
@@ -64,6 +75,16 @@ const tenantIdSchema = z.uuid();
  * alert; with none stored, the webhook is an unauthenticated hint. Either way it is deduplicated
  * on `X-TetraPay-Event-Id` and STILL only brings the verify forward - the verify decides.
  *
+ * ## An optionally signed route that REFUSES (TonPays, R7)
+ *
+ * `X-TonPays-Signature: t=<unix>,v1=<hex>` is the same scheme over the raw bytes
+ * (`docs/tonpays-gateway-audit.md` §5.6, from TonPays support 2026-10-24). With a webhook secret
+ * stored in Nexa the signature is REQUIRED: a missing, bad, stale or unreadable-secret webhook is
+ * answered 401 (TonPays retries any non-2xx), records only the one rolled-up
+ * `tonpays.webhook.signature_rejected` condition and triggers no inquiry. With none stored it is
+ * accepted as before, a hint that only brings the inquiry forward. `t` is the send time of the
+ * attempt, so it bounds clock skew and is never a dedupe key: that is `X-TonPays-Delivery-Id`.
+ *
  * No external call is made here, and no money moves here.
  */
 @Controller()
@@ -86,6 +107,8 @@ export class GatewayWebhookController {
     // a route whose descriptor says its provider signs.
     @Headers(TETRAPAY_SIGNATURE_HEADER) tetrapaySignature: string | undefined,
     @Headers(TETRAPAY_EVENT_ID_HEADER) tetrapayEventId: string | undefined,
+    // TonPays' signature (same rule: read only for a route whose descriptor says it signs).
+    @Headers(TONPAYS_SIGNATURE_HEADER) tonpaysSignature: string | undefined,
     @Req() request: unknown,
     @Body() body: unknown,
   ): Promise<{ ok: true }> {
@@ -104,10 +127,20 @@ export class GatewayWebhookController {
       PAYMENT_GATEWAY_DESCRIPTORS[provider].webhookSecret
         ? provider === 'TETRAPAY'
           ? tetrapaySignature
-          : signature
+          : provider === 'TONPAYS' || provider === 'TONPAYS_TELEGRAM'
+            ? tonpaysSignature
+            : signature
         : undefined,
       rawBodyOf(request),
     );
+    // TonPays asks for a refusal it can see (and retries any non-2xx); the other signed routes
+    // keep answering `{ ok: true }` to an unverified webhook.
+    if (
+      result === 'IGNORED_UNVERIFIED' &&
+      (provider === 'TONPAYS' || provider === 'TONPAYS_TELEGRAM')
+    ) {
+      throw new UnauthorizedException('Webhook signature not verified.');
+    }
     if (result === 'MALFORMED') {
       throw errors.validation(
         COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,

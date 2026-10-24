@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   API_PREFIX,
@@ -9,6 +10,7 @@ import {
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { DrizzleGatewayCredentialStore } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-credentials';
+import { tonpaysSignatureOf } from '../../apps/api/src/modules/commerce/payments/infrastructure/tonpays-signature';
 import { GATEWAY_WEBHOOK_BODY_LIMIT_BYTES } from '../../apps/api/src/surfaces/gateway/webhook.controller';
 import { createAdmin, migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
 
@@ -175,5 +177,57 @@ describe('TonPays over HTTP', () => {
       payload: JSON.stringify({ ...body, padding: 'x'.repeat(GATEWAY_WEBHOOK_BODY_LIMIT_BYTES) }),
     });
     expect(huge.statusCode).toBe(413);
+  });
+
+  it('R7: with a webhook secret stored the route answers 401 to an unsigned, bad or stale webhook and 200 to a signed one', async () => {
+    const WHSEC = 'tp_whsec_http_secret_never_echoed_91c4';
+    await post(PAYMENT_GATEWAY_ROUTES.credential('TONPAYS'), {
+      idempotencyKey: idempotencyKey(),
+      apiKey: API_KEY,
+    });
+    const stored = await post(PAYMENT_GATEWAY_ROUTES.webhookSecret('TONPAYS'), {
+      idempotencyKey: idempotencyKey(),
+      secret: WHSEC,
+    });
+    expect(stored.statusCode).toBe(201);
+    expect(stored.body).not.toContain(WHSEC);
+    const listed = await get(PAYMENT_GATEWAY_ROUTES.list);
+    expect(listed.body).not.toContain(WHSEC);
+    const tonpays = paymentGatewayListResponseSchema
+      .parse(listed.json())
+      .gateways.find((gateway) => gateway.provider === 'TONPAYS');
+    expect(tonpays?.credential.webhookSecretSupported).toBe(true);
+    expect(tonpays?.credential.webhookSecretSetAt).not.toBeNull();
+
+    const raw =
+      '{"invoice_id":"TP-UNKNOWN","order_id":"NXUNKNOWNUNKNOWNUNKN","status":"completed","paid":true,"delivery_id":"TP-UNKNOWN:completed:1","description":"پرداخت"}';
+    const url = `/payments/webhook/tonpays/${String(tenantA.tenantId)}`;
+    const t = Math.floor(Date.now() / 1000);
+    const signed = (at: number) =>
+      `t=${String(at)},v1=${tonpaysSignatureOf(WHSEC, String(at), Buffer.from(raw, 'utf8'))}`;
+    const send = (signature: string | undefined) =>
+      inject({
+        method: 'POST',
+        url,
+        headers: {
+          'content-type': 'application/json',
+          'x-tonpays-delivery-id': 'TP-UNKNOWN:completed:1',
+          ...(signature === undefined ? {} : { 'x-tonpays-signature': signature }),
+        },
+        payload: raw,
+      });
+    expect((await send(undefined)).statusCode).toBe(401);
+    expect((await send(`t=${String(t)},v1=${'a'.repeat(64)}`)).statusCode).toBe(401);
+    expect((await send(signed(t - 301))).statusCode).toBe(401);
+    expect((await send(signed(t - 299))).statusCode).toBe(200);
+    expect((await send(signed(t))).json()).toEqual({ ok: true });
+
+    const [rejected] = (
+      await api.container.database.db.execute(
+        sql`SELECT count(*)::int AS n FROM operational_events
+            WHERE code = 'tonpays.webhook.signature_rejected'`,
+      )
+    ).rows as { n: number }[];
+    expect(rejected?.n).toBe(1);
   });
 });

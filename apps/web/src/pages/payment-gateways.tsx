@@ -56,6 +56,30 @@ import {
 } from '../ui/kit';
 import { ErrorRef } from '../ui/technical-details';
 
+/** TonPays' two routes share one signature scheme and one set of texts (R7). */
+function isTonPaysRoute(provider: string | null | undefined): boolean {
+  return provider === 'TONPAYS' || provider === 'TONPAYS_TELEGRAM';
+}
+
+/** The text key of the webhook-secret field: TetraPay and TonPays each have their own words. */
+function secretKeyOf(
+  keying: string | null,
+  part: 'input' | 'hint' | 'save',
+):
+  | 'web.payment_gateway_tetrapay_secret_input'
+  | 'web.payment_gateway_tetrapay_secret_hint'
+  | 'web.payment_gateway_tetrapay_secret_save'
+  | 'web.payment_gateway_tonpays_secret_input'
+  | 'web.payment_gateway_tonpays_secret_hint'
+  | 'web.payment_gateway_tonpays_secret_save'
+  | 'web.payment_gateway_webhook_secret_input'
+  | 'web.payment_gateway_webhook_secret_hint'
+  | 'web.payment_gateway_webhook_secret_save' {
+  if (keying === 'TETRAPAY') return `web.payment_gateway_tetrapay_secret_${part}`;
+  if (isTonPaysRoute(keying)) return `web.payment_gateway_tonpays_secret_${part}`;
+  return `web.payment_gateway_webhook_secret_${part}`;
+}
+
 /**
  * Payment routes — which ways a customer may pay, and under what conditions.
  *
@@ -820,18 +844,28 @@ export function PaymentGatewaysPage({
               <span className="gateways-stack">
                 {row.credential.webhookSecretSetAt === null ? (
                   // Optional (TetraPay): not having one is a choice, not a gap.
-                  <Badge tone={row.credential.webhookSecretRequired ? 'warn' : 'neutral'}>
+                  <Badge
+                    tone={
+                      row.credential.webhookSecretRequired || isTonPaysRoute(row.provider)
+                        ? 'warn'
+                        : 'neutral'
+                    }
+                  >
                     {t(
                       row.credential.webhookSecretRequired
                         ? 'web.payment_gateway_webhook_secret_missing'
-                        : 'web.payment_gateway_tetrapay_secret_optional',
+                        : isTonPaysRoute(row.provider)
+                          ? 'web.payment_gateway_tonpays_signature_off'
+                          : 'web.payment_gateway_tetrapay_secret_optional',
                     )}
                   </Badge>
                 ) : (
                   <>
                     <Badge tone="ok">{t('web.payment_gateway_webhook_secret_configured')}</Badge>
                     <span className="muted small">
-                      {formatTimestamp(row.credential.webhookSecretSetAt)}
+                      {isTonPaysRoute(row.provider)
+                        ? `${t('web.payment_gateway_tonpays_secret_set_at')} ${formatTimestamp(row.credential.webhookSecretSetAt)}`
+                        : formatTimestamp(row.credential.webhookSecretSetAt)}
                     </span>
                   </>
                 )}
@@ -1035,17 +1069,9 @@ export function PaymentGatewaysPage({
               ?.webhookSecret === true && (
               <>
                 <Field
-                  label={t(
-                    keying === 'TETRAPAY'
-                      ? 'web.payment_gateway_tetrapay_secret_input'
-                      : 'web.payment_gateway_webhook_secret_input',
-                  )}
+                  label={t(secretKeyOf(keying, 'input'))}
                   htmlFor="pg-webhook-secret"
-                  hint={t(
-                    keying === 'TETRAPAY'
-                      ? 'web.payment_gateway_tetrapay_secret_hint'
-                      : 'web.payment_gateway_webhook_secret_hint',
-                  )}
+                  hint={t(secretKeyOf(keying, 'hint'))}
                 >
                   <input
                     id="pg-webhook-secret"
@@ -1065,11 +1091,7 @@ export function PaymentGatewaysPage({
                     disabled={busy || webhookSecret.trim() === ''}
                     onClick={() => secret.mutate()}
                   >
-                    {t(
-                      keying === 'TETRAPAY'
-                        ? 'web.payment_gateway_tetrapay_secret_save'
-                        : 'web.payment_gateway_webhook_secret_save',
-                    )}
+                    {t(secretKeyOf(keying, 'save'))}
                   </button>
                 </div>
                 {secret.error != null && (
