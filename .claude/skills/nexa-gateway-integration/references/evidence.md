@@ -16,9 +16,9 @@ id, provider review (`docs/tonpays-telegram-gateway-audit.md`).
 - TonPays: `PAY/domain/tonpays.ts` `tomanAmountOf` — IRT as is, IRR only when
   divisible by 10, otherwise refused. CentralPay the same rule
   (`packages/contracts/src/centralpay.ts`).
-- TetraPay is rial on the wire: `PAY/domain/tetrapay.ts` `RIAL_PER_TOMAN`,
-  `rialOfToman`, `tomanOfRial`, `providerRialOf` (the only place the factor
-  appears), `parseRialAmount`.
+- TetraPay is rial on the wire: `PAY/domain/tetrapay.ts` — `RIAL_PER_TOMAN`
+  (used nowhere else), `rialOfToman` (applies the factor for the wire),
+  `tomanOfRial`, `parseRialAmount`.
 - NOWPayments: USDT through central FX (descriptor `conversion: CENTRAL_FX`).
 - Port: `ExternalGatewayAdapter.providerAmountOf` in
   `PAY/application/gateway-invoice-ports.ts`.
@@ -168,8 +168,9 @@ and logs never carry a body, header, URL or key (`docs/tonpays-gateway-audit.md`
 
 - Unit: `tests/unit/<name>-adapter.test.ts`, `<name>-signature.test.ts`,
   `<name>-screen.test.ts`, rules/domain tests (`tetrapay-rules`, `late-credit-rules`).
-- Integration: `tests/integration/<name>-gateway.test.ts`, `<name>-http.test.ts`
-  (HTTP against a local fake), plus the shared `gateway-inquiry-schedule`,
+- Integration: `tests/integration/<name>-gateway.test.ts`; an `<name>-http.test.ts`
+  (HTTP against a local fake) exists for TonPays, NOWPayments and CentralPay,
+  not TetraPay; plus the shared `gateway-inquiry-schedule`,
   `gateway-payment-ops-events`, `late-gateway-credit`, `payment-gateways`.
 - Web: `tests/web/payment-gateways.test.tsx`, `tests/web/gateway-health.test.tsx`.
 - Falsification: `docs/<name>-falsification.md` (e.g. `docs/tonpays-falsification.md`).
