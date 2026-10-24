@@ -1,9 +1,6 @@
 import {
-  appearanceMarker,
   ADMIN_AMOUNT_CAPTURE_TTL_MS,
   COMMERCE_ERROR_CODES,
-  SERVICE_REFUND_REASON_MAX_LENGTH,
-  SERVICE_REFUND_REASON_MIN_LENGTH,
   PANEL_ERROR_CODES,
   PLATFORM_ERROR_CODES,
   providerDescriptor,
@@ -15,10 +12,7 @@ import {
   plainAmount,
   providerUsernameLookupSchema,
   telegramUserIdSchema,
-  serviceTransferRecipientRefusalSchema,
   uuidV7Schema,
-  DEVICE_ADDON_MAX_QUANTITY,
-  SERVICE_LOCATIONS_PER_PANEL_MAX,
   CONNECTION_GUIDE_PLATFORMS,
   SERVICE_NOTE_CLEAR_TOKEN,
   SERVICE_NOTE_MAX_LENGTH,
@@ -33,12 +27,10 @@ import type {
   ClientAppPlatform,
   ConnectionGuidePlatform,
   PaymentGatewayProvider,
-  ProviderLastSeen,
   ActorContext,
   BotInstanceId,
   CustomerArrival,
   Money,
-  OperationState,
   OrderPurpose,
   PaymentId,
   PermissionKey,
@@ -46,7 +38,6 @@ import type {
   ServiceActionAvailability,
   ServiceOperatorAction,
   ServiceReminderThresholds,
-  ServiceTransferRecipientRefusal,
   TemplateKey,
   TemplateValues,
   TenantContext,
@@ -57,7 +48,6 @@ import type { PanelUsernamePolicy } from '../../modules/platform/panels/applicat
 import type { InboundReceiptFile } from '../../modules/commerce/payments/application/receipt-ports.js';
 import type { PaymentRecord } from '../../modules/commerce/payments/application/ports.js';
 import { mayBePushedRefundRequests } from '../../modules/commerce/payments/application/service-refund-push.consumer.js';
-import { normaliseRefundReason } from '../../modules/commerce/payments/application/service-refund-request.service.js';
 import type { ReasonAskResult } from '../../modules/commerce/payments/application/receipt-reason-capture.service.js';
 import {
   RECEIPT_REVIEW_NOTE_MAX,
@@ -81,8 +71,6 @@ import type {
   ProductCategoryListing,
   ProductRecord,
 } from '../../modules/commerce/catalog/application/ports.js';
-import type { CommercialActionService } from '../../modules/commerce/commercial/application/commercial-action.service.js';
-import { displayedServiceLocation } from '../../modules/commerce/locations/application/location-change-policy.js';
 import type { OrderRecord } from '../../modules/commerce/orders/application/ports.js';
 import {
   FX_UNAVAILABLE_REASON,
@@ -108,18 +96,12 @@ import {
   remainderReceiptAvailable,
 } from '../../modules/commerce/payments/domain/tonpays-telegram.js';
 import { gatewaySettlementDeadline } from '../../modules/commerce/payments/domain/settlement.js';
-import {
-  ProvisioningService,
-  operationHasEnded,
-} from '../../modules/commerce/provisioning/application/provisioning.service.js';
 import type { CustomerServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
 import {
   SERVICE_CARD_CALLBACK_PREFIX,
-  SUPPORT_CALLBACK_DATA,
   TUTORIAL_CALLBACK_DATA,
 } from '../../modules/commerce/provisioning/application/delivery.service.js';
 import type { CustomerCaptureRecord } from '../../modules/commerce/customers/application/customer-capture-ports.js';
-import type { ServiceLiveCheckResult } from '../../modules/commerce/provisioning/application/service-refresh.service.js';
 import type { CardMessageRef } from '../../modules/commerce/provisioning/application/operation-card.js';
 import type {
   TopupRoute,
@@ -141,7 +123,6 @@ import type {
   ServiceOperationHistory,
 } from '../../modules/commerce/provisioning/application/service-admin.service.js';
 import { encodeKeysetToken, type KeysetToken } from './keyset-token.js';
-import { applyServiceCardLayout } from './service-card-layout.js';
 import type { TelegramWizardRecord } from '../../modules/commerce/messaging/application/telegram-message-state.js';
 import type { TelegramReviewOutcome } from '@nexa/contracts';
 import {
@@ -172,10 +153,6 @@ import {
 } from './admin-tutorial-video.js';
 
 import { readHealth } from '../../modules/platform/panels/application/panel-health-view.js';
-import {
-  SERVICE_STATUS_PRESENTATION,
-  serviceDisplayStatus,
-} from '../../modules/commerce/provisioning/domain/service-display-status.js';
 import {
   ADMIN_ADMIN_CALLBACK_PREFIX,
   ADMIN_ADMIN_STATUS_CALLBACK_PREFIX,
@@ -255,7 +232,6 @@ import {
   GATEWAY_RECEIPT_CALLBACK_PREFIX,
   GATEWAY_REFUND_CARD_CALLBACK_PREFIX,
   GATEWAY_ROUTE_PAY_CALLBACK_PREFIX,
-  MAIN_MENU_CALLBACK_DATA,
   MANUAL_PAY_CALLBACK_PREFIX,
   ORDER_CALLBACK_PREFIX,
   PAY_METHODS_CALLBACK_PREFIX,
@@ -266,31 +242,8 @@ import {
   REMINDER_SETTING_CODES,
   type ReminderSettingCode,
   SERVICES_LIST_PAGE_CALLBACK_PREFIX,
-  SERVICES_SEARCH_CALLBACK_DATA,
-  SERVICE_ADD_DEVICES_CALLBACK_PREFIX,
-  SERVICE_ADD_TIME_CALLBACK_PREFIX,
-  SERVICE_ADD_TRAFFIC_CALLBACK_PREFIX,
-  SERVICE_BUY_TIME_CALLBACK_PREFIX,
-  SERVICE_BUY_TRAFFIC_CALLBACK_PREFIX,
-  SERVICE_CHANGE_LOCATION_CALLBACK_PREFIX,
   SERVICE_FILES_CALLBACK_PREFIX,
-  SERVICE_LOCATION_CONFIRM_CALLBACK_PREFIX,
-  SERVICE_LOCATION_TARGET_CALLBACK_PREFIX,
-  SERVICE_NOTE_CALLBACK_PREFIX,
-  SERVICE_REFRESH_CALLBACK_PREFIX,
-  SERVICE_REFUND_ASK_CALLBACK_PREFIX,
-  SERVICE_REFUND_CONFIRM_CALLBACK_PREFIX,
-  SERVICE_RENEW_CALLBACK_PREFIX,
-  SERVICE_RENEW_PLAN_CALLBACK_PREFIX,
-  SERVICE_RENEW_QUOTE_CALLBACK_PREFIX,
   SERVICE_RESEND_CALLBACK_PREFIX,
-  SERVICE_RESUME_CALLBACK_PREFIX,
-  SERVICE_RESUME_CONFIRM_CALLBACK_PREFIX,
-  SERVICE_ROTATE_ASK_CALLBACK_PREFIX,
-  SERVICE_ROTATE_CALLBACK_PREFIX,
-  SERVICE_SUSPEND_CALLBACK_PREFIX,
-  SERVICE_SUSPEND_CONFIRM_CALLBACK_PREFIX,
-  SERVICE_TRANSFER_ASK_CALLBACK_PREFIX,
   TICKETS_CALLBACK_DATA,
   TICKET_CATEGORY_CALLBACK_PREFIX,
   TICKET_CLOSE_ASK_CALLBACK_PREFIX,
@@ -311,10 +264,8 @@ import {
   type UsernameStrategyCode,
   type UsernameToggleField,
   WALLET_PAY_CALLBACK_PREFIX,
-  encodeDeviceQuantity,
   encodeIdPair,
   rotationStamp,
-  transferConfirmData,
 } from './runtime/callbacks.js';
 import type { AdminRosterEntry, BotRuntimeDeps, TicketDeskPort } from './runtime/deps.js';
 import {
@@ -327,22 +278,15 @@ import {
 } from './runtime/intent-of.js';
 import { BOT_INTENTS, type BotCommand, type BotIntent } from './runtime/intents.js';
 import { mainMenuButton } from './runtime/keyboards.js';
-import {
-  REFUSAL_REPLIES,
-  hasRefusalReply,
-  isExpectedRefreshRefusal,
-  refusal,
-} from './runtime/refusals.js';
+import { hasRefusalReply, refusal } from './runtime/refusals.js';
 import {
   type BotTurnResult,
   type PendingReply,
   type ReplyMedia,
   blockedReply,
   editSent,
-  plainReply,
   replyFor,
   staleCallbackReply,
-  toastReply,
   withBlockedSupportButton,
 } from './runtime/replies.js';
 import * as startMenuFlow from './runtime/start-menu-flow.js';
@@ -354,6 +298,19 @@ import {
   termsStaleReply,
   marketingPreferenceButton,
 } from './runtime/start-menu-flow.js';
+import * as serviceCardFlow from './runtime/service-card-flow.js';
+import * as serviceRequestsFlow from './runtime/service-requests-flow.js';
+import * as serviceActionsFlow from './runtime/service-actions-flow.js';
+import {
+  serviceListButton,
+  backToListButton,
+  cardMessageOf,
+  backToServiceButton,
+  inCard,
+} from './runtime/service-card-flow.js';
+export { serviceListButton, cardMessageOf } from './runtime/service-card-flow.js';
+export { LOCATION_TARGETS_SHOWN } from './runtime/service-actions-flow.js';
+
 export {
   termsAcceptedReply,
   termsStaleReply,
@@ -550,13 +507,6 @@ export {
 export type { BotTurnResult, PendingReply, LeadMessage } from './runtime/replies.js';
 export { REFUSAL_REPLIES, refusalValuesFor } from './runtime/refusals.js';
 export { notificationButtons } from './runtime/keyboards.js';
-
-/**
- * How many targets one choice screen draws: every one a panel may hold. The admin refuses a
- * panel's 21st location (`SERVICE_LOCATIONS_PER_PANEL_MAX`), so no configured target is
- * ever cut off this screen; the slice is the bound restated, not a second quota.
- */
-export const LOCATION_TARGETS_SHOWN = SERVICE_LOCATIONS_PER_PANEL_MAX;
 
 /**
  * `sv:<service id>` — R3: the service card, edited into the message the tap came from.
@@ -7106,520 +7056,73 @@ export class BotRuntime {
     return startMenuFlow.startGreeting(this, scope, actor, customer, key);
   }
 
-  /**
-   * The customer's own services: a heading and one button each.
-   *
-   * The same shape as the catalogue and for the same reason — `bot.service.list_heading`
-   * declares no placeholders and a template is not a list renderer — so the services are
-   * BUTTONS whose `callback_data` is the id. The empty case is a different KEY rather
-   * than the heading with nothing under it, because an empty list reads as a failure
-   * and `bot.service.list_empty` says what it actually is.
-   *
-   * `listForCustomer` takes the customer id from the RESOLVED customer row, never from
-   * anything the update carried, so there is no id here for a modified client to change.
-   */
-  async services(
+  services(
     scope: TenantContext,
     customer: CustomerRecord,
     pageNumber: number,
   ): Promise<PendingReply> {
-    const page = await this.deps.services.pageForCustomer(scope, customer.id, pageNumber);
-    if (page.count === 0) {
-      return {
-        key: 'bot.service.list_empty',
-        values: {},
-        buttons: [mainMenuButton()],
-        orderId: null,
-      };
-    }
-    const now = this.deps.clock.now();
-    const buttons: CustomerButton[] = page.items.map((service) => serviceListButton(service, now));
-    buttons.push(...servicesListControls(page.page, page.pages));
-    return {
-      key: 'bot.service.list',
-      values: { page: page.page, pages: page.pages, total: page.count },
-      buttons,
-      orderId: null,
-    };
+    return serviceCardFlow.services(this, scope, customer, pageNumber);
   }
 
-  /**
-   * R3 item 10: the customer's own service card, exactly as `serviceDetail` draws it, for
-   * the provisioner to edit into the card a disable or enable was asked from. Null when
-   * the service is not theirs to see any more (the same answer the tap would get), so
-   * nothing is drawn for somebody else's service.
-   */
-  async serviceCardFor(
+  /** Public: the provisioner edits the card through this (`container.ts`). */
+  serviceCardFor(
     scope: TenantContext,
     actor: ActorContext,
     customerId: UserId,
     serviceId: string,
-    /** Round N (F4): the one-line notice the card carries, e.g. a change that did not happen. */
     notice?: TemplateKey,
   ): Promise<{
     readonly key: TemplateKey;
     readonly values: TemplateValues;
     readonly buttons: readonly CustomerButton[];
   } | null> {
-    const reply = await this.serviceDetail(
-      scope,
-      actor,
-      { id: customerId },
-      serviceId,
-      notice === undefined ? {} : { notice },
-    );
-    if (reply.key === null || reply.key === 'bot.service.not_found') return null;
-    return { key: reply.key, values: reply.values, buttons: reply.buttons };
+    return serviceCardFlow.serviceCardFor(this, scope, actor, customerId, serviceId, notice);
   }
 
-  /**
-   * One service, as its owner sees it.
-   *
-   * `getForCustomer` asks for the service by id AND owner in one query, so an id that is
-   * not theirs, an id that does not exist, and a service a completed refund request took
-   * out of their view (WP19) all arrive here as `SERVICE_NOT_FOUND` — and all answer
-   * `bot.service.not_found`. Keeping them the same
-   * answer is what stops this being an oracle for guessing service ids.
-   *
-   * The usage figure is reported WITH the moment it was read. A figure with no `asOf` is
-   * a figure a customer reads as live, and `usage_synced_at` is null until the first
-   * `SYNC_USAGE` succeeds — so the template gets an absent `syncedAt` rather than a
-   * fabricated one, which is the whole reason that placeholder is not required.
-   */
-  async serviceDetail(
+  serviceDetail(
     scope: TenantContext,
     actor: ActorContext,
     customer: Pick<CustomerRecord, 'id'>,
     serviceId: string,
-    /**
-     * Round N (F4): `working` draws the card as «working» before the change it is about is
-     * even planned — the tap's own answer, put on the card first so no later edit can
-     * overwrite a final one — and `notice` adds one line under the status.
-     */
-    options: {
+    options?: {
       readonly working?: boolean;
       readonly notice?: TemplateKey;
       /** Track 3 §1: drawn from stored figures; the status names when they were read. */
       readonly lastUpdatedAt?: Date;
-    } = {},
-  ): Promise<PendingReply> {
-    const service = await this.ownedService(scope, customer, serviceId);
-    const cardExtra = {
-      ...(options.notice === undefined ? {} : { notice: options.notice }),
-      ...(options.lastUpdatedAt === undefined ? {} : { lastUpdatedAt: options.lastUpdatedAt }),
-    };
-    if (service === null) {
-      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-    }
-    const title = await this.deps.purchaseTitle(scope, service.orderId);
-    if (title === null) {
-      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-    }
-    /*
-     * Round N (F4): a change still being applied — a disable, an enable, a new link or a
-     * location move, planned, in flight or being reconciled — makes the card «working»,
-     * from the operation rows, whichever message draws it. Its state is not final, so it
-     * offers no action until the change has its answer; only the refresh (which redraws
-     * it) and the way back to the list.
-     */
-    const working =
-      options.working === true || (await this.deps.services.changeInProgress(scope, service));
-    if (working) {
-      const buttons: CustomerButton[] = [];
-      if (await this.deps.services.customerSyncOffered(scope, service)) {
-        buttons.push({
-          ...inlineLabel('service.refresh'),
-          data: `${SERVICE_REFRESH_CALLBACK_PREFIX}${service.id}`,
-          row: 0,
-        });
-      }
-      buttons.push({
-        ...inlineLabel('service.back_to_list'),
-        data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}1`,
-        row: 5,
-      });
-      const card = await this.serviceCardScreen(scope, service, title, false, {
-        working: true,
-        ...cardExtra,
-      });
-      return { key: card.key, values: card.values, buttons, orderId: null };
-    }
-
-    /*
-     * Every button below is a server-side decision re-decided on the tap; drawing one is
-     * never the authorization. Rows: refresh alone; link beside rotate; note beside
-     * add-traffic; renew beside the on/off switch; the terminate ask; back to the list.
-     */
-    const buttons: CustomerButton[] = [];
-    if (await this.deps.services.customerSyncOffered(scope, service)) {
-      buttons.push({
-        ...inlineLabel('service.refresh'),
-        data: `${SERVICE_REFRESH_CALLBACK_PREFIX}${service.id}`,
-        row: 0,
-      });
-    }
-    // Package E: only where the panel's adapter can fetch its files.
-    if (
-      this.deps.subscriptionFiles !== undefined &&
-      (await this.deps.subscriptionFiles.offered(scope, service))
-    ) {
-      buttons.push({
-        ...inlineLabel('service.files'),
-        data: `${SERVICE_FILES_CALLBACK_PREFIX}${service.id}`,
-        row: 0,
-      });
-    }
-    if (ProvisioningService.isDeliverable(service)) {
-      buttons.push({
-        ...inlineLabel('service.link'),
-        data: `${SERVICE_RESEND_CALLBACK_PREFIX}${service.id}`,
-        row: 1,
-      });
-    }
-    const rotation = await this.deps.services.customerRotationFor(scope, service);
-    if (rotation.offered) {
-      buttons.push({
-        ...inlineLabel('service.rotate'),
-        data: `${SERVICE_ROTATE_ASK_CALLBACK_PREFIX}${service.id}`,
-        row: 1,
-      });
-    }
-    buttons.push({
-      ...inlineLabel('service.note'),
-      data: `${SERVICE_NOTE_CALLBACK_PREFIX}${service.id}`,
-      row: 2,
-    });
-    const commercial = await this.deps.commercial.availableFor(scope, actor, service);
-    if (commercial.includes('ADD_TRAFFIC')) {
-      buttons.push({
-        ...inlineLabel('service.add_traffic'),
-        data: `${SERVICE_ADD_TRAFFIC_CALLBACK_PREFIX}${service.id}`,
-        row: 2,
-      });
-    }
-    /*
-     * R5C-1 item 4: «⏳ خرید زمان اضافه», beside «➕ خرید حجم اضافه». `availableFor` includes
-     * ADD_TIME only when the service, the panel and its policy allow one AND at least one
-     * priced time package is on offer (`offerableAddons`), so the tap always has a list.
-     */
-    if (commercial.includes('ADD_TIME')) {
-      buttons.push({
-        ...inlineLabel('service.add_time'),
-        data: `${SERVICE_ADD_TIME_CALLBACK_PREFIX}${service.id}`,
-        row: 2,
-      });
-    }
-    /*
-     * The renewal menu is for renewing. With the time packages no longer a reason to open it
-     * on their own (they have their button), a service whose only commercial action is time
-     * is renewed from nowhere: «💊 تمدید سرویس» is drawn when a renewal is available, or when
-     * the owner keeps time packages in that menu (`addon_time_in_renew_menu`, default ON).
-     */
-    if (
-      commercial.includes('RENEW') ||
-      (commercial.includes('ADD_TIME') && (await this.renewMenuShowsTime(scope)))
-    ) {
-      buttons.push({
-        ...inlineLabel('service.renew'),
-        data: `${SERVICE_RENEW_CALLBACK_PREFIX}${service.id}`,
-        row: 3,
-      });
-    }
-    /*
-     * WP-A5: extra users, on a row of their own, only where `availableFor` found every
-     * condition true — a recorded limit, a panel whose adapter declares and implements
-     * DEVICE_LIMIT_ADJUSTMENT, a rate that applies, and room left under its maximum. No
-     * provider-name test anywhere: the capability decides.
-     */
-    if (commercial.includes('ADD_DEVICES')) {
-      buttons.push({
-        ...inlineLabel('service.add_devices'),
-        data: `${SERVICE_ADD_DEVICES_CALLBACK_PREFIX}${service.id}`,
-        // Its own row, drawn just below renew: an unused number is a new row where it
-        // first appears, and 3 already holds renew and the on/off switch.
-        row: 7,
-      });
-    }
-    /*
-     * WP-A6: «🌍 تغییر لوکیشن», on a row of its own, only where `availableFor` found every
-     * condition true — an ACTIVE service, a panel whose adapter declares and implements
-     * LOCATION_CHANGE, a known current location, and a configured target other than it.
-     * The capability decides; no provider is named.
-     */
-    if (commercial.includes('CHANGE_LOCATION')) {
-      buttons.push({
-        ...inlineLabel('service.change_location'),
-        data: `${SERVICE_CHANGE_LOCATION_CALLBACK_PREFIX}${service.id}`,
-        row: 8,
-      });
-    }
-    const actions = await this.deps.services.customerActionsFor(scope, service);
-    if (actions.includes('SUSPEND')) {
-      buttons.push({
-        ...inlineLabel('service.suspend'),
-        data: `${SERVICE_SUSPEND_CALLBACK_PREFIX}${service.id}`,
-        row: 3,
-      });
-    }
-    if (actions.includes('RESUME')) {
-      buttons.push({
-        ...inlineLabel('service.resume'),
-        data: `${SERVICE_RESUME_CALLBACK_PREFIX}${service.id}`,
-        row: 3,
-      });
-    }
-    // WP19: the refund request, alone on its row — it deletes the service, so it sits
-    // apart from the everyday actions above it.
-    if ((await this.deps.serviceRefunds?.offeredFor(scope, service)) === true) {
-      buttons.push({
-        ...inlineLabel('service.refund_request'),
-        data: `${SERVICE_REFUND_ASK_CALLBACK_PREFIX}${service.id}`,
-        row: 4,
-      });
-    }
-    // Package F: beside the refund request — both hand the service away for good.
-    if ((await this.deps.serviceTransfers?.offered(scope, service)) === true) {
-      buttons.push({
-        ...inlineLabel('service.transfer'),
-        data: `${SERVICE_TRANSFER_ASK_CALLBACK_PREFIX}${service.id}`,
-        row: 4,
-      });
-    }
-    buttons.push({
-      ...inlineLabel('service.back_to_list'),
-      data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}1`,
-      row: 5,
-    });
-
-    const card = await this.serviceCardScreen(scope, service, title, rotation.offered, cardExtra);
-    // R8-C3: the owner's order, rows and switches, over the buttons decided above.
-    const layout = (await this.deps.serviceCardLayout?.(scope)) ?? null;
-    return {
-      key: card.key,
-      values: card.values,
-      buttons: [...applyServiceCardLayout(buttons, layout)],
-      orderId: null,
-    };
-  }
-
-  /** The card's text: one composition for the ordinary card and the «working» one. */
-  async serviceCardScreen(
-    scope: TenantContext,
-    service: ServiceRecord,
-    title: string,
-    rotateOffered: boolean,
-    extra: {
-      readonly working?: boolean;
-      readonly notice?: TemplateKey;
-      readonly lastUpdatedAt?: Date;
     },
-  ): Promise<{ readonly key: TemplateKey; readonly values: TemplateValues }> {
-    const display = await this.deps.productDisplay.displayFor(scope, service.productId);
-    return this.deps.screens.serviceCard(scope, {
-      state: service.state,
-      serviceUsername: service.providerUsername,
-      // Pre-support A6: moved label, then the CURRENT panel's initial location, then the
-      // product's label — one precedence, shared with the delivery card.
-      serviceLocation: displayedServiceLocation(
-        service.locationLabel,
-        service.locationLabel !== null
-          ? null
-          : ((await this.deps.panelLocations?.initialLabelFor(scope, service.panelId)) ?? null),
-        display?.serviceLocationLabel ?? null,
-      ),
-      productName: title,
-      trafficLimitBytes: service.trafficLimitBytes,
-      trafficUsedBytes: service.trafficUsedBytes,
-      usageSyncedAt: service.usageSyncedAt,
-      expiresAt: service.expiresAt,
-      now: this.deps.clock.now(),
-      lastSeen: lastSeenOf(service),
-      note: service.customerNote,
-      rotateOffered,
-      ...extra,
-    });
+  ): Promise<PendingReply> {
+    return serviceCardFlow.serviceDetail(this, scope, actor, customer, serviceId, options);
   }
 
-  /**
-   * A customer asking for their configuration again.
-   *
-   * The remedy `UNCONFIRMED` and `FAILED` were designed around: an announcement whose
-   * outcome was never observed leaves a customer with nothing, and until now they had
-   * no way to recover it themselves. `DeliveryService.redeliver` is what sends it —
-   * through the SAME `markSendStarted` stamp and the same delivery accounting the
-   * automatic lane uses, so a customer-requested send and a swept one cannot race each
-   * other into two messages.
-   *
-   * This returns `key: null`, which `handle` reads as "nothing further to send". The
-   * delivery service has already sent the subscription; a second message here would be
-   * the runtime and the delivery lane both answering the same tap.
-   */
-  /**
-   * The packages a customer may buy for one service, as buttons.
-   *
-   * A read and nothing else — no order, no row, no money. Each button carries the
-   * service AND the package, because with no conversation state there is nowhere to
-   * keep the first while the customer chooses the second, and neither can be inferred
-   * from the other: they OWN the service and CHOOSE the package.
-   *
-   * The amount and the price are rendered from the row the operator configured, and
-   * neither travels in the callback. What comes back is two identifiers.
-   */
-  async addonChoice(
+  addonChoice(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     serviceId: string,
     kind: 'ADD_TRAFFIC' | 'ADD_TIME',
   ): Promise<PendingReply> {
-    let offer;
-    try {
-      offer = await this.deps.commercial.offer(scope, actor, customer.id, serviceId, kind);
-    } catch (error) {
-      return refusal(error);
-    }
-
-    const prefix =
-      kind === 'ADD_TRAFFIC'
-        ? SERVICE_BUY_TRAFFIC_CALLBACK_PREFIX
-        : SERVICE_BUY_TIME_CALLBACK_PREFIX;
-    return {
-      key: 'bot.service.addon_choice',
-      values: {},
-      /*
-       * Unpriced rows are dropped rather than rendered at zero.
-       *
-       * `listOfferable` already filters them out in SQL, so this cannot fire — and it
-       * is a filter rather than a `?? zero` because `catalog.ts` says an absent price
-       * means unsellable and never free. A zero here would offer a customer a package
-       * for nothing, which is the one way to be wrong that money cannot be taken back
-       * from.
-       */
-      buttons: [
-        ...offer.addons
-          .filter((addon): addon is typeof addon & { price: Money } => addon.price !== null)
-          .map((addon) => ({
-            // The VALUES the key declares. Before the customer UX completion they were
-            // put on a label that carried none, so the resolver threw and the screen
-            // never sent; the label type carries values now and the messenger renders
-            // them. A MONEY value, so the currency is the catalogue's, never typed.
-            ...inlineLabel('service.addon_option', { title: addon.title, price: addon.price }),
-            data: `${prefix}${encodeIdPair(serviceId, addon.id)}`,
-          })),
-        backToServiceButton(serviceId),
-      ],
-      orderId: null,
-    };
+    return serviceActionsFlow.addonChoice(this, scope, actor, customer, serviceId, kind);
   }
 
-  /**
-   * The extra users / devices offer for one service, as quantity buttons (WP-A5).
-   *
-   * A read and nothing else — no order, no row, no money. The current limit, the price of
-   * one and how many more may be bought all come from `CommercialActionService.offer`,
-   * which refuses for every reason the purchase would. Each button carries the service,
-   * the rate and a count within what the server said remains; its label shows that
-   * count's list price, and the quote screen the next tap produces states the final one.
-   */
-  async devicesChoice(
+  devicesChoice(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     serviceId: string,
   ): Promise<PendingReply> {
-    let offer;
-    try {
-      offer = await this.deps.commercial.offer(scope, actor, customer.id, serviceId, 'ADD_DEVICES');
-    } catch (error) {
-      return refusal(error);
-    }
-    const devices = offer.devices;
-    if (devices === null) {
-      return { key: 'bot.service.action_unavailable', values: {}, buttons: [], orderId: null };
-    }
-    const shown = Math.min(devices.remaining, DEVICE_ADDON_MAX_QUANTITY);
-    const unit = devices.addon.price;
-    const buttons: CustomerButton[] = [];
-    for (let quantity = 1; quantity <= shown; quantity += 1) {
-      buttons.push({
-        ...inlineLabel('service.devices_option', {
-          quantity,
-          price: money(unit.amountMinor * BigInt(quantity), unit.currency),
-        }),
-        data: encodeDeviceQuantity(serviceId, devices.addon.id, quantity),
-        // Two to a row, so a maximum of twenty stays a readable keyboard.
-        row: Math.floor((quantity - 1) / 2),
-      });
-    }
-    buttons.push({ ...backToServiceButton(serviceId), row: Math.ceil(shown / 2) });
-    return {
-      key: 'bot.service.devices_choice',
-      values: {
-        currentLimit: devices.currentLimit,
-        unitPrice: unit,
-        remaining: devices.remaining,
-      },
-      buttons,
-      orderId: null,
-    };
+    return serviceActionsFlow.devicesChoice(this, scope, actor, customer, serviceId);
   }
 
-  /**
-   * Where the service is and where it may be moved (WP-A6), as one button per target.
-   *
-   * A read and nothing else. The current location, the targets and their list prices all
-   * come from `CommercialActionService.offer`, which refuses for every reason a move
-   * would; each button carries the service and the configured location, never a price.
-   */
-  async locationChoice(
+  locationChoice(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     serviceId: string,
   ): Promise<PendingReply> {
-    let offer;
-    try {
-      offer = await this.deps.commercial.offer(
-        scope,
-        actor,
-        customer.id,
-        serviceId,
-        'CHANGE_LOCATION',
-      );
-    } catch (error) {
-      return refusal(error);
-    }
-    const locations = offer.locations ?? null;
-    if (locations === null) {
-      return { key: 'bot.service.action_unavailable', values: {}, buttons: [], orderId: null };
-    }
-    const shown = locations.targets.slice(0, LOCATION_TARGETS_SHOWN);
-    const buttons: CustomerButton[] = shown.map((target, index) => ({
-      ...(target.price.amountMinor === 0n
-        ? inlineLabel('service.location_option_free', { location: target.label })
-        : inlineLabel('service.location_option', { location: target.label, price: target.price })),
-      data: `${SERVICE_LOCATION_TARGET_CALLBACK_PREFIX}${encodeIdPair(serviceId, target.id)}`,
-      row: index,
-    }));
-    buttons.push({ ...backToServiceButton(serviceId), row: shown.length });
-    return {
-      key: 'bot.service.location_choice',
-      values: { currentLocation: locations.current.label },
-      buttons,
-      orderId: null,
-    };
+    return serviceActionsFlow.locationChoice(this, scope, actor, customer, serviceId);
   }
 
-  /**
-   * A target tapped (WP-A6): its impact and price, and the way to confirm.
-   *
-   * Decided on the server first — not offered, already there, cooldown, limit and the
-   * panel are each refused with their own sentence before anything is shown. A FREE move
-   * then asks for an explicit confirmation (`lf:`) and writes nothing yet; a PRICED one
-   * becomes the ordinary quote — the pre-invoice with its from / to block and the same
-   * confirmation and payment buttons every commercial order uses.
-   */
-  async locationTarget(
+  locationTarget(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -7627,62 +7130,18 @@ export class BotRuntime {
     locationId: string,
     input: { readonly idempotencyKey: string },
   ): Promise<PendingReply> {
-    let decided;
-    try {
-      decided = await this.deps.commercial.locationTarget(
-        scope,
-        actor,
-        customer.id,
-        serviceId,
-        locationId,
-      );
-    } catch (error) {
-      return refusal(error);
-    }
-    if (decided.target.price.amountMinor !== 0n) {
-      return this.commercialQuote(
-        scope,
-        actor,
-        customer,
-        serviceId,
-        'CHANGE_LOCATION',
-        null,
-        input,
-        undefined,
-        locationId,
-      );
-    }
-    return {
-      key: 'bot.service.location_confirm_free',
-      values: { fromLocation: decided.current.label, toLocation: decided.target.label },
-      buttons: [
-        {
-          ...inlineLabel('service.location_confirm'),
-          data: `${SERVICE_LOCATION_CONFIRM_CALLBACK_PREFIX}${encodeIdPair(serviceId, locationId)}`,
-          row: 0,
-        },
-        { ...backToServiceButton(serviceId), row: 1 },
-      ],
-      orderId: null,
-    };
+    return serviceActionsFlow.locationTarget(
+      this,
+      scope,
+      actor,
+      customer,
+      serviceId,
+      locationId,
+      input,
+    );
   }
 
-  /**
-   * A free move, confirmed (WP-A6). `LocationChangeService.requestFree` decides everything
-   * again in its own transaction and plans the operation.
-   *
-   * FIX-08: confirmed on the service card, it is answered ON that card, the way a disable is
-   * (`serviceAction`): the card turns «working» on the tap, the move is planned with the card
-   * recorded beside it, and `OperationCardEditor` edits the same card to the service as it
-   * now is — the new location — or back as it was with the failure line. No «ثبت شد» now and
-   * no separate «انجام شد» later. Without a card (a client that sent no message) the customer
-   * is told it was recorded, and its outcome later through the notification lane, as before.
-   *
-   * `idempotencyKey` is the update's, so Telegram redelivering the tap requests it once — and
-   * a redelivery is recognised BEFORE the card is touched, so it never turns a card that
-   * already shows the outcome back to «working».
-   */
-  async locationRequest(
+  locationRequest(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -7694,75 +7153,18 @@ export class BotRuntime {
       readonly botInstanceId?: BotInstanceId;
     },
   ): Promise<PendingReply> {
-    const changes = this.deps.locationChanges;
-    if (changes === undefined) {
-      return { key: 'bot.service.action_unavailable', values: {}, buttons: [], orderId: null };
-    }
-    const request = {
+    return serviceActionsFlow.locationRequest(
+      this,
+      scope,
+      actor,
+      customer,
       serviceId,
       locationId,
-      idempotencyKey: `${input.idempotencyKey}:change_location`,
-    };
-    const card =
-      input.botInstanceId === undefined || changes.freeRequestRecorded === undefined
-        ? null
-        : cardMessageOf(input.update, input.botInstanceId);
-    if (card !== null) {
-      if (await changes.freeRequestRecorded?.(scope, customer.id, request)) {
-        return { key: null, values: {}, buttons: [], orderId: null };
-      }
-      const service = await this.ownedService(scope, customer, serviceId);
-      if (service === null) return toastReply('bot.service.not_found');
-      await this.showWorking(scope, actor, customer, serviceId, card);
-    }
-    let requested;
-    try {
-      requested = await changes.requestFree(scope, actor, customer.id, {
-        ...request,
-        ...(card === null ? {} : { card }),
-      });
-    } catch (error) {
-      return refusal(error);
-    }
-    /*
-     * Codex review of #257, as `serviceAction`: a concurrent redelivery can pass the check
-     * above before the first delivery recorded the move, and its «working» edit can land
-     * after the move ENDED and was drawn on the card. Its request replays the first one's,
-     * so the move's operation is read back by its change and, once ended, the card is drawn
-     * as it now is rather than left «working».
-     */
-    if (card !== null) {
-      const operation = await this.deps.services.findLocationChange(
-        scope,
-        serviceId,
-        requested.changeId,
-      );
-      if (operation !== null && operationHasEnded(operation)) {
-        return this.cardAfterEnded(scope, actor, customer, serviceId, operation.state);
-      }
-    }
-    // FIX-08: the card reads «working» and is answered when the move ends.
-    if (card !== null) return { key: null, values: {}, buttons: [], orderId: null };
-    return {
-      key: 'bot.service.location_requested',
-      values: {},
-      buttons: [backToServiceButton(serviceId)],
-      orderId: null,
-    };
+      input,
+    );
   }
 
-  /**
-   * The quote a customer answers: what this action buys, and what it costs.
-   *
-   * It writes a DRAFT order and its invoice line — both in one transaction — and
-   * commits the customer to nothing. The number shown is the number the order was
-   * written with, and it is never re-taken: confirming re-checks that the service and
-   * the package are still eligible and leaves the price exactly as the customer saw it.
-   *
-   * `idempotencyKey` is the update's, so Telegram redelivering the same tap produces
-   * the same draft rather than a second one.
-   */
-  async commercialQuote(
+  commercialQuote(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -7770,62 +7172,36 @@ export class BotRuntime {
     kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | 'ADD_DEVICES' | 'CHANGE_LOCATION',
     addonId: string | null,
     input: { readonly idempotencyKey: string },
-    /** WP-A5: the extra-users count a `dq:` tap chose; absent for every other kind. */
     quantity?: number,
-    /** WP-A6: the configured location an `lt:` tap chose; absent for every other kind. */
     locationId?: string,
-    /** Owner rule 2026-10-18: the panel plan an `rq:` tap chose; absent for every other kind. */
     planId?: string,
   ): Promise<PendingReply> {
-    try {
-      const service = await this.ownedService(scope, customer, serviceId);
-      if (service === null) {
-        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-      }
-      const { order } = await this.deps.commercial.draft(scope, actor, customer.id, {
-        serviceId,
-        kind,
-        ...(addonId === null ? {} : { addonId }),
-        ...(quantity === undefined ? {} : { quantity }),
-        ...(locationId === undefined ? {} : { locationId }),
-        ...(planId === undefined ? {} : { productId: planId }),
-        idempotencyKey: `${input.idempotencyKey}:${kind.toLowerCase()}`,
-      });
-      // The same pre-invoice and the same payment buttons as a new purchase (§H5, §H6):
-      // one payment UX, and the username shown is the service's own.
-      return this.preinvoice(scope, actor, order, customer, service.providerUsername);
-    } catch (error) {
-      return refusal(error);
-    }
+    return serviceActionsFlow.commercialQuote(
+      this,
+      scope,
+      actor,
+      customer,
+      serviceId,
+      kind,
+      addonId,
+      input,
+      quantity,
+      locationId,
+      planId,
+    );
   }
 
-  /**
-   * The customer answering the quote: DRAFT to AWAITING_PAYMENT, then the payment
-   * buttons.
-   *
-   * The same two steps a product purchase takes, and deliberately the same screen after
-   * them — `paymentButtons` is shared, so wallet and manual transfer work on a
-   * commercial order without knowing it is one.
-   */
-  async commercialConfirm(
+  commercialConfirm(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     orderId: string,
     input: { readonly idempotencyKey: string },
   ): Promise<PendingReply> {
-    try {
-      const order = await this.deps.commercial.confirm(scope, actor, customer.id, {
-        orderId,
-        idempotencyKey: `${input.idempotencyKey}:action_confirm`,
-      });
-      return this.awaitingPaymentReply(scope, customer, order);
-    } catch (error) {
-      return refusal(error);
-    }
+    return serviceActionsFlow.commercialConfirm(this, scope, actor, customer, orderId, input);
   }
 
-  async serviceResend(
+  serviceResend(
     scope: TenantContext,
     customer: CustomerRecord,
     serviceId: string,
@@ -7835,139 +7211,20 @@ export class BotRuntime {
       readonly update: unknown;
     },
   ): Promise<PendingReply> {
-    const service = await this.ownedService(scope, customer, serviceId);
-    if (service === null) {
-      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-    }
-    const chatId = privateChatIdOf(input.update);
-    if (chatId === null) {
-      /*
-       * A tap from somewhere that is not a private chat.
-       *
-       * Refused with the same answer as an unknown service rather than sent to the
-       * chat the service was FIRST delivered to: a subscription link is a bearer
-       * capability, and delivering it anywhere other than where it was asked for is
-       * how one lands in a group.
-       */
-      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-    }
-    /*
-     * Round N (F4): «🔗 لینک اشتراک» turns the card the tap came from into the link, with a
-     * way back to the card — no separate link message (`DeliveryService.showLinkOnCard`).
-     * Without a card (a client that sent no message) the delivery card is sent, as before.
-     */
-    const card = cardMessageOf(input.update, input.botInstanceId);
-    try {
-      await this.deps.delivery.redeliver(
-        scope,
-        service,
-        customer.id,
-        chatId,
-        input.botInstanceId,
-        // Pre-support A9: the update's key claims the QR photo under the link view, so a
-        // redelivered tap shows the link again and never sends a second QR.
-        card === null ? {} : { card, linkQrKey: input.idempotencyKey },
-      );
-      return { key: null, values: {}, buttons: [], orderId: null };
-    } catch {
-      // Round N (F4): with a card, the card stays as it is and the tap gets the notice.
-      if (card !== null) return toastReply('bot.service.not_found');
-      /*
-       * Every refusal `deliver` can produce, as one customer-facing answer.
-       *
-       * `SERVICE_NOT_DELIVERABLE` carries a `reason` — NO_SUBSCRIPTION, SCOPE_INACTIVE,
-       * SEND_IN_PROGRESS — and its own docblock says a surface maps them to a template
-       * key. They are mapped to ONE here because a customer can act on none of them
-       * and because the third is a race whose honest description is "try again in a
-       * moment", which is what a service that answers nothing already tells them.
-       * `bot.service.provisioning` is the closest true sentence for a service that has
-       * no link yet and it is NOT used, because it would be wrong for the other two.
-       */
-      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-    }
+    return serviceCardFlow.serviceResend(this, scope, customer, serviceId, input);
   }
 
-  /**
-   * A customer asking for their service's connection files (Package E).
-   *
-   * Sent only to the private chat the tap came from, for the reason `serviceResend`
-   * gives: these are credentials. Ownership, state and the panel are decided again by
-   * `SubscriptionFileService.send`, which sends the files itself — this handler sees a
-   * count, never a file — and the one answer after them is a template key.
-   */
-  async serviceFiles(
+  serviceFiles(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     serviceId: string,
     input: { readonly botInstanceId: BotInstanceId; readonly update: unknown },
   ): Promise<PendingReply> {
-    const files = this.deps.subscriptionFiles;
-    const chatId = privateChatIdOf(input.update);
-    if (files === undefined || chatId === null) {
-      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-    }
-    const result = await files.send(scope, actor, {
-      customerId: customer.id,
-      serviceId,
-      chatId,
-      botInstanceId: input.botInstanceId,
-    });
-    switch (result.outcome) {
-      case 'NOT_FOUND':
-        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-      case 'RATE_LIMITED':
-        return {
-          key: 'bot.service.files_rate_limited',
-          values: { seconds: result.retryAfterSeconds },
-          buttons: [],
-          orderId: null,
-        };
-      case 'UNAVAILABLE':
-        return { key: 'bot.service.files_unavailable', values: {}, buttons: [], orderId: null };
-      case 'SENT':
-        return result.failed === 0
-          ? { key: null, values: {}, buttons: [], orderId: null }
-          : {
-              key: 'bot.service.files_partial',
-              values: { failed: result.failed },
-              buttons: [],
-              orderId: null,
-            };
-      case 'STOPPED':
-        // Telegram declined a send part-way; a further message would meet the same answer.
-        return { key: null, values: {}, buttons: [], orderId: null };
-    }
+    return serviceCardFlow.serviceFiles(this, scope, actor, customer, serviceId, input);
   }
 
-  /**
-   * A customer asking for one of the two management actions on their own service.
-   *
-   * The TYPE is a literal chosen by which callback prefix matched, never parsed out of
-   * the payload. That is the property worth stating: nothing a client sends can turn a
-   * tap on "pause" into a terminate, because the only thing that crosses the boundary
-   * is a service id.
-   *
-   * What this does is PLAN an operation. The provisioner claims it on its next tick and
-   * calls the panel; this surface never touches a provider, which is why the reply says
-   * the request was recorded rather than that it is done. Saying "your service is
-   * paused" here would be a claim about somebody else's machine, made before anything
-   * was asked of it.
-   *
-   * Every refusal `requestFromCustomer` can produce is answered BY NAME, and the
-   * mapping is a closed list rather than a catch-all. `SERVICE_NOT_FOUND` is the same
-   * answer an id that is not theirs gets. The other three — a state the action is not
-   * legal from, a panel that cannot perform it, a tenant that has stopped — are one
-   * sentence, because that sentence is true for all of them, none is the customer's to
-   * fix, and telling them apart would describe an operator's panel to a customer.
-   *
-   * Anything ELSE is re-thrown, and that is the part worth stating. A catch-all here
-   * would answer a database failure with "this action is not available for your
-   * service" — a false statement about the customer's panel, made to hide an outage,
-   * and indistinguishable from the three real refusals in every log this installation
-   * keeps. The runtime's own error path exists for the unknown case.
-   */
-  async serviceAction(
+  serviceAction(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -7976,355 +7233,53 @@ export class BotRuntime {
     idempotencyKey: string,
     card: CardMessageRef | null,
   ): Promise<PendingReply> {
-    /*
-     * Round N (F4): the card turns «working» on the tap — BEFORE the operation exists, so the
-     * provisioner's answer (`OperationCardEditor`), which can only follow the operation, can
-     * never be overwritten by this turn's loading edit. The switch is re-offered first, so a
-     * tap from a keyboard that is already out of date (a second tap after the change landed)
-     * redraws the card as it is, with a notice, and never flashes «working».
-     */
-    if (card !== null) {
-      const service = await this.ownedService(scope, customer, serviceId);
-      if (service === null) return toastReply('bot.service.not_found');
-      /*
-       * Codex review of #116: a REDELIVERY of this very tap is decided before the card is
-       * touched. Its operation already exists: open, the card already reads «working» and is
-       * answered when it ends; ended, the card was answered (or the sweep answers it) — and a
-       * «working» edit now would overwrite that answer with a state nothing ever clears.
-       */
-      if (
-        (await this.deps.services.findCustomerRequest(scope, serviceId, type, idempotencyKey)) !==
-        null
-      ) {
-        return { key: null, values: {}, buttons: [], orderId: null };
-      }
-      if (!(await this.deps.services.customerActionsFor(scope, service)).includes(type)) {
-        return this.cardWithToast(
-          scope,
-          actor,
-          customer,
-          serviceId,
-          'bot.service.capability_unsupported',
-        );
-      }
-      await this.showWorking(scope, actor, customer, serviceId, card);
-    }
-    let planned;
-    try {
-      planned = await this.deps.services.requestFromCustomer(
-        scope,
-        actor,
-        customer.id,
-        serviceId,
-        type,
-        {
-          idempotencyKey,
-          ...(card === null ? {} : { card }),
-        },
-      );
-    } catch (error) {
-      const code = (error as { code?: unknown } | null)?.code;
-      if (code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
-        return card === null
-          ? plainReply('bot.service.not_found')
-          : this.cardWithToast(scope, actor, customer, serviceId, 'bot.service.not_found');
-      }
-      const refusals: readonly unknown[] = [
-        COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
-        COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
-        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
-      ];
-      if (!refusals.includes(code)) throw error;
-      // The card was turned «working» above: it is put back as it is, with the notice.
-      return card === null
-        ? plainReply('bot.service.capability_unsupported')
-        : this.cardWithToast(
-            scope,
-            actor,
-            customer,
-            serviceId,
-            'bot.service.capability_unsupported',
-          );
-    }
-    /*
-     * R3 item 10: nothing more is sent now. The provisioner performs the disable or enable
-     * and then edits THIS card — «working» since the tap — to the state it left
-     * (`OperationCardEditor`); round N: a failure is answered on the card too, as the service
-     * still is with the failure line. A tap with no card to edit (a client that sent no
-     * message) is answered as before.
-     *
-     * Codex review of #116: a concurrent redelivery can pass the check above before the
-     * first turn planned, then get the first turn's operation back ENDED — answered on the
-     * card before this turn's «working» edit landed. The card is drawn as it now is.
-     */
-    if (card !== null && operationHasEnded(planned)) {
-      return this.cardAfterEnded(scope, actor, customer, serviceId, planned.state);
-    }
-    if (card !== null) return { key: null, values: {}, buttons: [], orderId: null };
-    return { key: 'bot.service.action_requested', values: {}, buttons: [], orderId: null };
+    return serviceCardFlow.serviceAction(
+      this,
+      scope,
+      actor,
+      customer,
+      serviceId,
+      type,
+      idempotencyKey,
+      card,
+    );
   }
 
-  /**
-   * B8: the question between a customer and their service's switch, in both directions.
-   *
-   * Plans nothing and writes nothing: it only asks, IN the card (`edit`), with the confirm
-   * (`uq:` / `eq:`, the only taps that plan the operation) and a cancel that redraws the card
-   * (`sv:`, which changes nothing and is safe to repeat). The switch is re-offered first, as
-   * `serviceAction` re-offers it: a tap from an out-of-date keyboard gets the card as it is
-   * now, with the notice, rather than a question it could not act on.
-   */
-  async serviceToggleAsk(
+  serviceToggleAsk(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     serviceId: string,
     type: 'SUSPEND' | 'RESUME',
   ): Promise<PendingReply> {
-    const service = await this.ownedService(scope, customer, serviceId);
-    // The same notice on the button an unknown id gets from the switch itself: another
-    // customer's service is indistinguishable from none.
-    if (service === null) return toastReply('bot.service.not_found');
-    if (!(await this.deps.services.customerActionsFor(scope, service)).includes(type)) {
-      return this.cardWithToast(
-        scope,
-        actor,
-        customer,
-        serviceId,
-        'bot.service.capability_unsupported',
-      );
-    }
-    const suspend = type === 'SUSPEND';
-    return {
-      key: suspend ? 'bot.service.suspend_confirm' : 'bot.service.resume_confirm',
-      values: { serviceUsername: service.providerUsername },
-      buttons: [
-        {
-          ...inlineLabel(suspend ? 'service.suspend_confirm' : 'service.resume_confirm'),
-          data: `${
-            suspend
-              ? SERVICE_SUSPEND_CONFIRM_CALLBACK_PREFIX
-              : SERVICE_RESUME_CONFIRM_CALLBACK_PREFIX
-          }${service.id}`,
-          row: 0,
-        },
-        {
-          ...inlineLabel('service.toggle_cancel'),
-          data: `${SERVICE_CARD_CALLBACK_PREFIX}${service.id}`,
-          row: 0,
-        },
-      ],
-      orderId: null,
-      edit: true,
-    };
+    return serviceCardFlow.serviceToggleAsk(this, scope, actor, customer, serviceId, type);
   }
 
-  /**
-   * The screen between a customer and a new subscription link (WP6-C).
-   *
-   * Plans nothing and writes nothing: it only asks. The offer is re-read
-   * rather than trusted from the message that was tapped, and the cooldown shown is the
-   * setting as it stands now. The sentence says a new link will be issued and has to be
-   * put into the customer's apps; it says nothing about the old one (OQ-RP-07).
-   */
-  async serviceRotateAsk(
+  serviceRotateAsk(
     scope: TenantContext,
     customer: CustomerRecord,
     serviceId: string,
   ): Promise<PendingReply> {
-    const service = await this.ownedService(scope, customer, serviceId);
-    if (service === null) {
-      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-    }
-    const offer = await this.deps.services.customerRotationFor(scope, service);
-    if (!offer.offered) {
-      return { key: 'bot.service.capability_unsupported', values: {}, buttons: [], orderId: null };
-    }
-    /*
-     * R3 item 9: the question replaces the card in place, with a way back to it; the
-     * confirmation then puts the card back (`serviceRotate`), so the change of link is
-     * one message throughout rather than a new one per step.
-     */
-    return {
-      key: 'bot.service.rotate_ask',
-      values: { cooldownHours: offer.cooldownHours },
-      buttons: [
-        {
-          ...inlineLabel('service.rotate_confirm'),
-          data: `${SERVICE_ROTATE_CALLBACK_PREFIX}${service.id}`,
-          row: 0,
-        },
-        { ...backToCardButton(service.id), row: 1 },
-      ],
-      orderId: null,
-      edit: true,
-    };
+    return serviceActionsFlow.serviceRotateAsk(this, scope, customer, serviceId);
   }
 
-  /**
-   * A customer confirms a new subscription link for their own service (WP6-C).
-   *
-   * `requestRotation` decides everything, inside its transaction; this answers each of
-   * its refusals BY NAME from a closed list and re-throws anything else, for the reason
-   * `serviceAction` gives. The cooldown is the one refusal with a value in it: the
-   * instant another rotation will be accepted, read from the refusal rather than
-   * computed here, so the sentence is the server's answer.
-   */
-  async serviceRotate(
+  serviceRotate(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     serviceId: string,
     idempotencyKey: string,
-    /** Round N (F4): the card the confirmation was tapped on — answered on it. */
-    card: CardMessageRef | null = null,
+    card?: CardMessageRef | null,
   ): Promise<PendingReply> {
-    /*
-     * Round N (F4): the card reads «working» from the confirmation until the panel has
-     * answered — put there BEFORE the rotation is planned, for the reason `serviceAction`
-     * gives. The new link then lands on this same card (`DeliveryService.sendRotated`), a
-     * failure puts the card back with its notice (`OperationCardEditor`), and a refusal
-     * below is edited over it.
-     */
-    if (card !== null) {
-      const service = await this.ownedService(scope, customer, serviceId);
-      // Codex review of #116: a redelivered confirmation leaves the card to its answer.
-      if (
-        service !== null &&
-        (await this.deps.services.findCustomerRequest(
-          scope,
-          serviceId,
-          'ROTATE_SUBSCRIPTION',
-          idempotencyKey,
-        )) !== null
-      ) {
-        return { key: null, values: {}, buttons: [], orderId: null };
-      }
-      if (
-        service !== null &&
-        (await this.deps.services.customerRotationFor(scope, service)).offered
-      ) {
-        await this.showWorking(scope, actor, customer, serviceId, card);
-      }
-    }
-    let planned;
-    try {
-      planned = await this.deps.services.requestRotation(scope, actor, customer.id, serviceId, {
-        idempotencyKey,
-        ...(card === null ? {} : { card }),
-      });
-    } catch (error) {
-      const code = (error as { code?: unknown } | null)?.code;
-      if (code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
-        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null, edit: true };
-      }
-      if (code === COMMERCE_ERROR_CODES.SERVICE_ROTATION_COOLDOWN) {
-        const at = (error as { details?: Readonly<Record<string, unknown>> }).details?.[
-          'availableAt'
-        ];
-        if (typeof at === 'string') {
-          return {
-            key: 'bot.service.rotate_cooldown',
-            values: { availableAt: new Date(at) },
-            buttons: [backToCardButton(serviceId)],
-            orderId: null,
-            edit: true,
-          };
-        }
-        throw error;
-      }
-      if (code === COMMERCE_ERROR_CODES.CUSTOMER_BLOCKED) {
-        return { key: 'bot.blocked', values: {}, buttons: [], orderId: null, edit: true };
-      }
-      const refusals: readonly unknown[] = [
-        COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
-        COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
-        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
-        COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
-        // WP-A6: a location move in flight refuses a rotation; the card is put back.
-        COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS,
-      ];
-      if (!refusals.includes(code)) throw error;
-      return {
-        key: 'bot.service.capability_unsupported',
-        values: {},
-        buttons: [backToCardButton(serviceId)],
-        orderId: null,
-        edit: true,
-      };
-    }
-    /*
-     * R3 item 9: no «request registered» message, and never «service created». Round N
-     * (F4): with a card, it already reads «working» and nothing more is sent now — the new
-     * link lands on it (then the files, as an album), or it comes back with the failure
-     * notice. Without one (a client that sent no message), the card is drawn as before.
-     * A concurrent redelivery that got the operation back ENDED draws the card as it is
-     * (Codex review of #116, as `serviceAction`).
-     */
-    if (card !== null && operationHasEnded(planned)) {
-      return this.cardAfterEnded(scope, actor, customer, serviceId, planned.state);
-    }
-    if (card !== null) return { key: null, values: {}, buttons: [], orderId: null };
-    return { ...(await this.serviceDetail(scope, actor, customer, serviceId)), edit: true };
-  }
-
-  /**
-   * Round N (F4): the service card, as «working», edited into the message a change was asked
-   * from. Best effort: a card Telegram cannot edit is answered by the provisioner's own
-   * fallback (the final card, sent once), so nothing here needs one.
-   */
-  async showWorking(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: Pick<CustomerRecord, 'id'>,
-    serviceId: string,
-    card: CardMessageRef,
-  ): Promise<void> {
-    const edit = this.deps.messenger.edit;
-    if (edit === undefined) return;
-    const working = await this.serviceDetail(scope, actor, customer, serviceId, { working: true });
-    if (working.key === null || working.key === 'bot.service.not_found') return;
-    await edit.call(this.deps.messenger, scope, {
-      ...card,
-      templateKey: working.key,
-      values: working.values,
-      buttons: working.buttons,
-    });
-  }
-
-  /**
-   * Codex review of #116: the card as it now is, edited in place, after a request whose
-   * operation had already ENDED — with the failure line when it ended without happening.
-   */
-  async cardAfterEnded(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: Pick<CustomerRecord, 'id'>,
-    serviceId: string,
-    state: OperationState,
-  ): Promise<PendingReply> {
-    return {
-      ...(await this.serviceDetail(
-        scope,
-        actor,
-        customer,
-        serviceId,
-        state === 'SUCCEEDED' ? {} : { notice: 'bot.service.notice_action_failed' },
-      )),
-      edit: true,
-    };
-  }
-
-  /** Round N (F4): the card as it now is, edited in place, with a short notice on the tap. */
-  async cardWithToast(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: Pick<CustomerRecord, 'id'>,
-    serviceId: string,
-    toast: TemplateKey,
-  ): Promise<PendingReply> {
-    const card = await this.serviceDetail(scope, actor, customer, serviceId);
-    if (card.key === 'bot.service.not_found') return toastReply(toast);
-    return { ...card, edit: true, toast: { key: toast, values: {} } };
+    return serviceActionsFlow.serviceRotate(
+      this,
+      scope,
+      actor,
+      customer,
+      serviceId,
+      idempotencyKey,
+      card,
+    );
   }
 
   /**
@@ -8591,186 +7546,51 @@ export class BotRuntime {
     };
   }
 
-  async servicesSearchBegin(
+  servicesSearchBegin(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     botInstanceId: BotInstanceId,
     idempotencyKey: string,
   ): Promise<PendingReply> {
-    await this.deps.captures.open(scope, actor, {
-      idempotencyKey: `${idempotencyKey}:search-open`,
+    return serviceCardFlow.servicesSearchBegin(
+      this,
+      scope,
+      actor,
+      customer,
       botInstanceId,
-      customerId: customer.id,
-      purpose: 'SERVICE_SEARCH',
-      subjectId: null,
-    });
-    return {
-      key: 'bot.service.search_prompt',
-      values: {},
-      buttons: [backToListButton()],
-      orderId: null,
-    };
+      idempotencyKey,
+    );
   }
 
-  /**
-   * Opening a card (`s:` and `sv:`) checks the panel live before the card is drawn
-   * (Track 3 §1; before it, Pre-support A2's opportunistic usage read), through
-   * `ServiceRefreshService.liveCheck` — hard-bounded, cached for a short window, inside the
-   * tenant's one outbound budget above the background floor. Three answers, kept apart:
-   *
-   * - **FRESH** (read now, or within the window): the card, as the database now holds it;
-   * - **MISSING_ON_PANEL** (the panel said twice the account does not exist): NOT the card —
-   *   `bot.service.panel_missing`, with support and the way back to the list, and no link,
-   *   files or renewal. The tap changed nothing about the service; an operator was told;
-   * - **STALE** (timeout, the panel's 429, panel down, budget spent, no proven read): the
-   *   stored card with `bot.service.last_updated` naming when it was last read. Never an
-   *   error, and never a toast: the failure notice belongs to the «♻️» button.
-   *
-   * `NOT_FOUND` is the card's own not-found answer; `NOT_READ` (a suspended service, reads
-   * not offered) draws the stored card as it stands. Anything the check throws draws the
-   * stored card too: an expected refusal (`isExpectedRefreshRefusal`) silently, anything
-   * else reported through `logger`.
-   *
-   * Not for the «working» card: a service with a change still being applied is drawn
-   * «working» from its operation rows, and the check is skipped.
-   */
-  async openServiceCard(
+  openServiceCard(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     serviceId: string,
   ): Promise<PendingReply> {
-    const refresh = this.deps.serviceRefresh;
-    const service = await this.ownedService(scope, customer, serviceId);
-    if (
-      refresh === undefined ||
-      service === null ||
-      (await this.deps.services.changeInProgress(scope, service))
-    ) {
-      return this.serviceDetail(scope, actor, customer, serviceId);
-    }
-    let checked: ServiceLiveCheckResult | null;
-    try {
-      checked = await refresh.liveCheck(scope, actor, { customerId: customer.id, serviceId });
-    } catch (error) {
-      /*
-       * A live check never costs the customer the card: whatever it threw, the stored card
-       * is drawn below. An expected refusal is silent; anything else is a defect somebody
-       * must see (an unreadable credential, say), so it is reported.
-       */
-      if (!isExpectedRefreshRefusal(error)) {
-        this.deps.logger?.error(
-          { err: error, serviceId, tenantId: scope.tenantId },
-          'the live read on opening a service card failed; the stored card was drawn',
-        );
-      }
-      checked = null;
-    }
-    if (checked?.outcome === 'NOT_FOUND') {
-      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-    }
-    if (checked?.outcome === 'MISSING_ON_PANEL') return panelMissingReply();
-    if (checked?.outcome === 'STALE' || checked === null) {
-      // Re-read: the row as it stands now is what the card draws, and what it was read at.
-      const stored = await this.ownedService(scope, customer, serviceId);
-      const at = stored?.usageSyncedAt ?? null;
-      return this.serviceDetail(
-        scope,
-        actor,
-        customer,
-        serviceId,
-        at === null ? {} : { lastUpdatedAt: at },
-      );
-    }
-    return this.serviceDetail(scope, actor, customer, serviceId);
+    return serviceCardFlow.openServiceCard(this, scope, actor, customer, serviceId);
   }
 
-  async serviceRefresh(
+  serviceRefresh(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     serviceId: string,
     idempotencyKey: string,
   ): Promise<PendingReply> {
-    /*
-     * R3 item 7: read the panel now and redraw the SAME card, or leave it untouched with a
-     * short notice on the button. No «request registered», no «result later».
-     */
-    const refresh = this.deps.serviceRefresh;
-    if (refresh !== undefined) {
-      const result = await refresh.refresh(scope, actor, { customerId: customer.id, serviceId });
-      if (result.outcome === 'NOT_FOUND') return toastReply('bot.service.not_found');
-      if (result.outcome === 'FAILED') return toastReply('bot.service.refresh_failed');
-      return { ...(await this.serviceDetail(scope, actor, customer, serviceId)), edit: true };
-    }
-    try {
-      await this.deps.services.requestSyncFromCustomer(scope, actor, customer.id, serviceId, {
-        idempotencyKey: `${idempotencyKey}:refresh`,
-      });
-      return {
-        key: 'bot.service.refresh_requested',
-        values: {},
-        buttons: [backToServiceButton(serviceId)],
-        orderId: null,
-      };
-    } catch (error) {
-      const code = (error as { code?: unknown } | null)?.code;
-      if (code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
-        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-      }
-      if (
-        code === COMMERCE_ERROR_CODES.ORDER_STATE_INVALID ||
-        code === COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE
-      ) {
-        return {
-          key: 'bot.service.capability_unsupported',
-          values: {},
-          buttons: [backToServiceButton(serviceId)],
-          orderId: null,
-        };
-      }
-      return refusal(error);
-    }
+    return serviceCardFlow.serviceRefresh(this, scope, actor, customer, serviceId, idempotencyKey);
   }
 
-  /**
-   * «درخواست بازگشت وجه» (WP19, brief §2.2): what would happen, and one confirm button.
-   * Writes nothing. The offer is re-read here rather than trusted from the drawn button, so
-   * a stale or forged tap on a service that is no longer eligible is told so.
-   */
-  async serviceRefundAsk(
+  serviceRefundAsk(
     scope: TenantContext,
     customer: CustomerRecord,
     serviceId: string,
   ): Promise<PendingReply> {
-    const service = await this.ownedService(scope, customer, serviceId);
-    if (service === null) {
-      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-    }
-    const offer = await this.refundOffer(scope, service);
-    if (offer !== 'OFFERED') return refundOfferReply(offer, service.id);
-    const title = await this.deps.purchaseTitle(scope, service.orderId);
-    return {
-      key: 'bot.service.refund_request_ask',
-      values: { service: service.providerUsername, product: title ?? '—' },
-      buttons: [
-        {
-          ...inlineLabel('service.refund_request_confirm'),
-          data: `${SERVICE_REFUND_CONFIRM_CALLBACK_PREFIX}${service.id}`,
-          row: 0,
-        },
-        { ...backToServiceButton(service.id), row: 1 },
-      ],
-      orderId: null,
-    };
+    return serviceRequestsFlow.serviceRefundAsk(this, scope, customer, serviceId);
   }
 
-  /**
-   * «✅ تأیید درخواست بازگشت وجه»: opens the reason window. Still files nothing — the reason
-   * files the request, so a confirmation never followed by a reason leaves no row.
-   */
-  async serviceRefundConfirm(
+  serviceRefundConfirm(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -8779,35 +7599,19 @@ export class BotRuntime {
     idempotencyKey: string,
     updateId: bigint | undefined,
   ): Promise<PendingReply> {
-    const service = await this.ownedService(scope, customer, serviceId);
-    if (service === null) {
-      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-    }
-    const offer = await this.refundOffer(scope, service);
-    if (offer !== 'OFFERED') return refundOfferReply(offer, service.id);
-    await this.deps.captures.open(scope, actor, {
-      idempotencyKey: `${idempotencyKey}:refund-reason-open`,
+    return serviceRequestsFlow.serviceRefundConfirm(
+      this,
+      scope,
+      actor,
+      customer,
+      serviceId,
       botInstanceId,
-      customerId: customer.id,
-      purpose: 'SERVICE_REFUND_REASON',
-      subjectId: service.id,
-      // The reason must be typed after this tap (Codex review of #83, round 8).
-      ...(updateId === undefined ? {} : { openedUpdateId: updateId }),
-    });
-    return {
-      key: 'bot.service.refund_request_reason_prompt',
-      values: {},
-      buttons: [backToServiceButton(service.id)],
-      orderId: null,
-    };
+      idempotencyKey,
+      updateId,
+    );
   }
 
-  /**
-   * The customer's reason, which files the request exactly once (brief §2.2). An invalid
-   * reason is told so and the window is opened again; everything else is decided by
-   * `ServiceRefundRequestService.file`, inside its transaction.
-   */
-  async serviceRefundReason(
+  serviceRefundReason(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -8819,96 +7623,18 @@ export class BotRuntime {
       readonly update?: unknown;
     },
   ): Promise<PendingReply | null> {
-    const refunds = this.deps.serviceRefunds;
-    if (serviceId === null) return null;
-    if (refunds === undefined) return refundOfferReply('UNAVAILABLE', serviceId);
-    const updateId = updateIdOf(input.update);
-    // A window this message reopens reads only messages sent after it (round 8).
-    const reopen = (suffix: string) =>
-      this.deps.captures.open(scope, actor, {
-        idempotencyKey: `${input.idempotencyKey}:${suffix}`,
-        botInstanceId: input.botInstanceId,
-        customerId: customer.id,
-        purpose: 'SERVICE_REFUND_REASON',
-        subjectId: serviceId,
-        ...(updateId === undefined ? {} : { openedUpdateId: updateId }),
-      });
-    if (normaliseRefundReason(text) === null) {
-      await reopen('refund-reason-reopen');
-      return {
-        key: 'bot.service.refund_request_reason_invalid',
-        values: { min: SERVICE_REFUND_REASON_MIN_LENGTH, max: SERVICE_REFUND_REASON_MAX_LENGTH },
-        buttons: [backToServiceButton(serviceId)],
-        orderId: null,
-      };
-    }
-    try {
-      const result = await refunds.file(scope, actor, {
-        customerId: customer.id,
-        serviceId,
-        botInstanceId: input.botInstanceId,
-        reason: text,
-        // The update that carried the reason: a redelivery files nothing new, whatever
-        // became of the request in between.
-        idempotencyKey: `${input.idempotencyKey}:refund-file`,
-      });
-      if (result.outcome === 'ALREADY_OPEN') {
-        // The slot held by an operator's delete-and-refund (item 11) is not a request the
-        // customer filed: no "being reviewed" sentence for it.
-        return refundOfferReply(
-          result.request.origin === 'CUSTOMER' ? 'PENDING' : 'UNAVAILABLE',
-          serviceId,
-        );
-      }
-      /*
-       * A redelivered reason is answered with its own request, whatever became of it
-       * (round 3) — so "registered, awaiting review" is said only while that is still true
-       * (Codex review of #83, round 6). An approved request still deleting is pending; a
-       * decided one was told through the lane, and the customer is shown the service as it
-       * now stands (or `not_found`, once a completed request has hidden it).
-       */
-      if (result.request.state === 'EXECUTING') return refundOfferReply('PENDING', serviceId);
-      if (result.request.state !== 'OPEN') {
-        return this.serviceDetail(scope, actor, customer, serviceId);
-      }
-      return {
-        key: 'bot.service.refund_request_registered',
-        values: {},
-        buttons: [backToServiceButton(serviceId)],
-        orderId: null,
-        // A registration the customer never saw is repeated through the lane, once.
-        fallback: { kind: 'SERVICE_REFUND_REQUEST_REGISTERED', subjectId: result.request.id },
-      };
-    } catch (error) {
-      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_REFUND_NOT_ELIGIBLE) {
-        return refundOfferReply('UNAVAILABLE', serviceId);
-      }
-      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
-        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-      }
-      /*
-       * A failure nobody answers — the database, a timeout, or a typed error with no reply
-       * sentence such as the outbox's own — filed nothing, but reading the reason already
-       * closed its window, and the webhook answers 2xx, so Telegram will not redeliver
-       * (Codex review of #83, rounds 8 and 9). The window is reopened, so the customer's next
-       * message files the request. A refusal that HAS a sentence is an answer, and keeps
-       * the window shut: a window reopened under "not available" would swallow whatever the
-       * customer typed next. Best effort: if the reopen fails too, the original failure is
-       * the one reported.
-       */
-      if (!hasRefusalReply(error)) {
-        await reopen('refund-reason-retry').catch(() => undefined);
-      }
-      return refusal(error);
-    }
+    return serviceRequestsFlow.serviceRefundReason(
+      this,
+      scope,
+      actor,
+      customer,
+      serviceId,
+      text,
+      input,
+    );
   }
 
-  /**
-   * «🔄 انتقال سرویس» (Package F): opens the window that reads the recipient's numeric id and
-   * asks for it. Moves nothing; the service's eligibility is read again here rather than
-   * trusted from the drawn button.
-   */
-  async serviceTransferAsk(
+  serviceTransferAsk(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -8919,35 +7645,10 @@ export class BotRuntime {
       readonly update?: unknown;
     },
   ): Promise<PendingReply> {
-    const transfers = this.deps.serviceTransfers;
-    if (transfers === undefined) return transferUnavailableReply(serviceId);
-    const updateId = updateIdOf(input.update);
-    const begun = await transfers.begin(scope, actor, {
-      customerId: customer.id,
-      serviceId,
-      botInstanceId: input.botInstanceId,
-      idempotencyKey: `${input.idempotencyKey}:transfer-open`,
-      // The id must be typed after this tap, as a refund reason must (WP19 round 8).
-      ...(updateId === undefined ? {} : { openedUpdateId: updateId }),
-    });
-    if (begun.outcome === 'NOT_FOUND') {
-      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-    }
-    if (begun.outcome === 'NOT_TRANSFERABLE') return transferUnavailableReply(serviceId);
-    return {
-      key: 'bot.service.transfer_prompt',
-      values: {},
-      buttons: [backToServiceButton(serviceId)],
-      orderId: null,
-    };
+    return serviceRequestsFlow.serviceTransferAsk(this, scope, actor, customer, serviceId, input);
   }
 
-  /**
-   * The recipient's id, typed into the transfer window: the confirmation screen, or the
-   * refusal. A refusal about the recipient opens the window again, because its sentence asks
-   * for the id once more; a service that cannot be transferred, or is not theirs, does not.
-   */
-  async serviceTransferRecipient(
+  serviceTransferRecipient(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -8959,64 +7660,18 @@ export class BotRuntime {
       readonly update?: unknown;
     },
   ): Promise<PendingReply | null> {
-    if (serviceId === null) return null;
-    const transfers = this.deps.serviceTransfers;
-    if (transfers === undefined) return transferUnavailableReply(serviceId);
-    const preview = await transfers.preview(scope, actor, {
-      customerId: customer.id,
+    return serviceRequestsFlow.serviceTransferRecipient(
+      this,
+      scope,
+      actor,
+      customer,
       serviceId,
       text,
-    });
-    if (preview.outcome === 'NOT_FOUND') {
-      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-    }
-    if (preview.outcome === 'NOT_TRANSFERABLE') return transferUnavailableReply(serviceId);
-    if (preview.outcome === 'REFUSED') {
-      const updateId = updateIdOf(input.update);
-      await this.deps.captures.open(scope, actor, {
-        idempotencyKey: `${input.idempotencyKey}:transfer-reopen`,
-        botInstanceId: input.botInstanceId,
-        customerId: customer.id,
-        purpose: 'SERVICE_TRANSFER_RECIPIENT',
-        subjectId: serviceId,
-        ...(updateId === undefined ? {} : { openedUpdateId: updateId }),
-      });
-      return {
-        key: TRANSFER_RECIPIENT_REPLIES[preview.refusal],
-        values: {},
-        buttons: [backToServiceButton(serviceId)],
-        orderId: null,
-      };
-    }
-    const confirm = transferConfirmData(
-      preview.serviceId,
-      preview.recipientTelegramUserId,
-      preview.ownershipVersion,
+      input,
     );
-    // Past the version a callback can carry, no confirmation is drawn rather than one
-    // Telegram would refuse (`TRANSFER_CONFIRM_VERSION_MAX`).
-    if (confirm === null) return transferUnavailableReply(serviceId);
-    return {
-      key: 'bot.service.transfer_confirm',
-      values: preview.values,
-      buttons: [
-        {
-          ...inlineLabel('service.transfer_confirm'),
-          data: confirm,
-          row: 0,
-        },
-        { ...backToServiceButton(serviceId), row: 1 },
-      ],
-      orderId: null,
-    };
   }
 
-  /**
-   * «✅ تأیید انتقال سرویس»: the transfer. Keyed by THIS update, so a redelivery answers with
-   * the transfer it made; a second tap is a new update, and is answered with the transfer
-   * already made rather than told it failed.
-   */
-  async serviceTransferConfirm(
+  serviceTransferConfirm(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -9024,62 +7679,18 @@ export class BotRuntime {
     confirmed: { readonly recipientTelegramUserId: string; readonly ownershipVersion: number },
     input: { readonly idempotencyKey: string; readonly botInstanceId: BotInstanceId },
   ): Promise<PendingReply> {
-    const transfers = this.deps.serviceTransfers;
-    if (transfers === undefined) return transferUnavailableReply(serviceId);
-    try {
-      await transfers.transfer(scope, actor, {
-        customerId: customer.id,
-        serviceId,
-        recipientTelegramUserId: confirmed.recipientTelegramUserId,
-        ownershipVersion: confirmed.ownershipVersion,
-        botInstanceId: input.botInstanceId,
-        // Suffixed: the bare update key is already spent by `resolveFromUpdate` this turn.
-        idempotencyKey: `${input.idempotencyKey}:transfer`,
-      });
-      return {
-        key: 'bot.service.transfer_done',
-        values: {},
-        // The service is not theirs any more: back to the list, not to it.
-        buttons: [
-          {
-            ...inlineLabel('service.back_to_list'),
-            data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}1`,
-          },
-        ],
-        orderId: null,
-      };
-    } catch (error) {
-      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
-        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-      }
-      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_NOT_TRANSFERABLE) {
-        return transferUnavailableReply(serviceId);
-      }
-      if (
-        isNexaError(error) &&
-        error.code === COMMERCE_ERROR_CODES.SERVICE_TRANSFER_RECIPIENT_REFUSED
-      ) {
-        const refusal = serviceTransferRecipientRefusalSchema.safeParse(error.details['refusal']);
-        return {
-          key: TRANSFER_RECIPIENT_REPLIES[refusal.success ? refusal.data : 'RECIPIENT_UNKNOWN'],
-          values: {},
-          buttons: [backToServiceButton(serviceId)],
-          orderId: null,
-        };
-      }
-      return refusal(error);
-    }
+    return serviceRequestsFlow.serviceTransferConfirm(
+      this,
+      scope,
+      actor,
+      customer,
+      serviceId,
+      confirmed,
+      input,
+    );
   }
 
-  async refundOffer(
-    scope: TenantContext,
-    service: ServiceRecord,
-  ): Promise<'OFFERED' | 'PENDING' | 'UNAVAILABLE'> {
-    const refunds = this.deps.serviceRefunds;
-    return refunds === undefined ? 'UNAVAILABLE' : refunds.customerOffer(scope, service);
-  }
-
-  async serviceNoteBegin(
+  serviceNoteBegin(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -9087,113 +7698,24 @@ export class BotRuntime {
     botInstanceId: BotInstanceId,
     idempotencyKey: string,
   ): Promise<PendingReply> {
-    const service = await this.ownedService(scope, customer, serviceId);
-    if (service === null) {
-      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-    }
-    await this.deps.captures.open(scope, actor, {
-      idempotencyKey: `${idempotencyKey}:note-open`,
+    return serviceCardFlow.serviceNoteBegin(
+      this,
+      scope,
+      actor,
+      customer,
+      serviceId,
       botInstanceId,
-      customerId: customer.id,
-      purpose: 'SERVICE_NOTE',
-      subjectId: service.id,
-    });
-    return {
-      key: 'bot.service.note_prompt',
-      values: { max: SERVICE_NOTE_MAX_LENGTH },
-      buttons: [backToServiceButton(service.id)],
-      orderId: null,
-    };
+      idempotencyKey,
+    );
   }
 
-  /**
-   * «💊 تمدید سرویس»: the renewal (the product re-priced at its current terms) and the
-   * add-time packages, on one screen. Each option is re-decided by the quote it opens.
-   */
-  async renewMenu(
+  renewMenu(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     serviceId: string,
   ): Promise<PendingReply> {
-    const service = await this.ownedService(scope, customer, serviceId);
-    if (service === null) {
-      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
-    }
-    const offered = await this.deps.commercial.availableFor(scope, actor, service);
-    const buttons: CustomerButton[] = [];
-    // Owner rule 2026-10-18: an imported service renews from its panel's current plans.
-    let panelPlans: number | null = null;
-    if (offered.includes('RENEW')) {
-      const renewal = await this.offerOrNull(scope, actor, customer, service.id, 'RENEW');
-      const product = renewal?.product ?? null;
-      if (product !== null && product.price !== null) {
-        buttons.push({
-          ...inlineLabel('service.renew_option', { title: product.title, price: product.price }),
-          data: `${SERVICE_RENEW_QUOTE_CALLBACK_PREFIX}${service.id}`,
-        });
-      }
-      if (renewal?.plans !== undefined) {
-        panelPlans = 0;
-        for (const plan of renewal.plans) {
-          if (plan.price === null) continue;
-          panelPlans += 1;
-          buttons.push({
-            ...inlineLabel('service.renew_option', { title: plan.title, price: plan.price }),
-            data: `${SERVICE_RENEW_PLAN_CALLBACK_PREFIX}${encodeIdPair(service.id, plan.id)}`,
-          });
-        }
-      }
-    }
-    // R5C-1 item 4: the owner may keep the time packages out of this menu (`addon_time_in_renew_menu`).
-    if (offered.includes('ADD_TIME') && (await this.renewMenuShowsTime(scope))) {
-      const packages = await this.offerOrNull(scope, actor, customer, service.id, 'ADD_TIME');
-      for (const addon of packages?.addons ?? []) {
-        if (addon.price === null) continue;
-        buttons.push({
-          ...inlineLabel('service.addon_option', { title: addon.title, price: addon.price }),
-          data: `${SERVICE_BUY_TIME_CALLBACK_PREFIX}${encodeIdPair(service.id, addon.id)}`,
-        });
-      }
-    }
-    if (buttons.length === 0) {
-      return {
-        // An imported service whose panel sells no plan right now is told exactly that, in
-        // a sentence — never an error (owner rule 2026-10-18).
-        key: panelPlans === 0 ? 'bot.service.renew_no_plan' : 'bot.service.renew_unavailable',
-        values: {},
-        buttons: [backToServiceButton(service.id)],
-        orderId: null,
-      };
-    }
-    buttons.push(backToServiceButton(service.id));
-    return {
-      key: 'bot.service.renew_choose',
-      values: {},
-      buttons,
-      orderId: null,
-    };
-  }
-
-  /** The flag read once per screen; absent (a fixture without it) is on, as the menu always was. */
-  async renewMenuShowsTime(scope: TenantContext): Promise<boolean> {
-    return (await this.deps.renewMenuShowsTime?.(scope)) ?? true;
-  }
-
-  /** `commercial.offer`, with "nothing offered" as null rather than a throw: the menu decides. */
-  async offerOrNull(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    serviceId: string,
-    kind: 'RENEW' | 'ADD_TIME',
-  ): Promise<Awaited<ReturnType<CommercialActionService['offer']>> | null> {
-    try {
-      return await this.deps.commercial.offer(scope, actor, customer.id, serviceId, kind);
-    } catch (error) {
-      if (isNexaError(error) && error.code in REFUSAL_REPLIES) return null;
-      throw error;
-    }
+    return serviceActionsFlow.renewMenu(this, scope, actor, customer, serviceId);
   }
 
   async referralGift(
@@ -9838,19 +8360,12 @@ export class BotRuntime {
     };
   }
 
-  /** One of the customer's own services, or null. Never anybody else's, never a throw. */
-  async ownedService(
+  ownedService(
     scope: TenantContext,
     customer: Pick<CustomerRecord, 'id'>,
     serviceId: string,
   ): Promise<ServiceRecord | null> {
-    try {
-      return await this.deps.services.getForCustomer(scope, customer.id, serviceId);
-    } catch {
-      // `SERVICE_NOT_FOUND` for an id that is not theirs and one that does not exist
-      // alike. Caught rather than propagated because a surface answers a customer.
-      return null;
-    }
+    return serviceCardFlow.ownedService(this, scope, customer, serviceId);
   }
 
   /**
@@ -13204,28 +11719,6 @@ function ticketsButton(): CustomerButton {
   };
 }
 
-/**
- * Track 3 §1: the answer to opening a card whose account the panel said, twice, it does not
- * have — support, and the way back to the list. Deliberately no link, files, renew or any
- * other service action: there is nothing on the panel for them to act on, and what happens
- * to the service is an operator's decision.
- */
-function panelMissingReply(): PendingReply {
-  return {
-    key: 'bot.service.panel_missing',
-    values: {},
-    buttons: [
-      { ...inlineLabel('service.support'), data: SUPPORT_CALLBACK_DATA, row: 0 },
-      {
-        ...inlineLabel('service.back_to_list'),
-        data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}1`,
-        row: 1,
-      },
-    ],
-    orderId: null,
-  };
-}
-
 /** WP-A7: the support screen's (and /paysupport's) way into the ticket desk. */
 function ticketDeskButton(): CustomerButton {
   return {
@@ -14100,201 +12593,11 @@ function trialUnavailable(): PendingReply {
   return { key: 'bot.trial.unavailable', values: {}, buttons: [mainMenuButton()], orderId: null };
 }
 
-/**
- * One service's button in «سرویس‌های من» and in its search results (Batch 01 item 3).
- *
- * The label is the REAL username on the panel, as the approved list shows it (never the
- * title), after the marker of the service's DERIVED status; the colour is that status's
- * button style. Both come from the one table, `SERVICE_STATUS_PRESENTATION`, over
- * `serviceDisplayStatus` — the state, the deadline and the read usage at `now` — so the
- * list is redrawn in the right colour on every open, page turn and search, and after a
- * refresh has read new usage, with nothing stored. Owner spec §2.3: the card opens IN
- * PLACE of the list (`sv:`); its back (`sl:`) is the list again.
- */
-export function serviceListButton(
-  service: Pick<
-    ServiceRecord,
-    | 'id'
-    | 'providerUsername'
-    | 'state'
-    | 'expiresAt'
-    | 'trafficLimitBytes'
-    | 'trafficUsedBytes'
-    | 'usageSyncedAt'
-  >,
-  now: Date,
-): CustomerButton {
-  const shown = SERVICE_STATUS_PRESENTATION[serviceDisplayStatus({ ...service, now })];
-  return {
-    ...inlineLabel('services.item', {
-      username: service.providerUsername,
-      marker: appearanceMarker(shown.slot),
-    }),
-    data: `${SERVICE_CARD_CALLBACK_PREFIX}${service.id}`,
-    ...(shown.buttonStyle === null ? {} : { derivedStyle: shown.buttonStyle }),
-  };
-}
-
 function topupButton(): CustomerButton {
   return {
     ...inlineLabel('wallet.topup'),
     data: TOPUP_MENU_CALLBACK_PREFIX,
   };
-}
-
-function backToListButton(): CustomerButton {
-  return {
-    ...inlineLabel('service.back_to_list'),
-    data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}1`,
-  };
-}
-
-/** The answer to a refund request the service cannot take right now (WP19). */
-function refundOfferReply(offer: 'PENDING' | 'UNAVAILABLE', serviceId: string): PendingReply {
-  return {
-    key:
-      offer === 'PENDING'
-        ? 'bot.service.refund_request_pending'
-        : 'bot.service.refund_request_unavailable',
-    values: {},
-    buttons: [backToServiceButton(serviceId)],
-    orderId: null,
-  };
-}
-
-/**
- * The sentence for each recipient refusal (Package F). Unknown and blocked are ONE
- * sentence: telling them apart would tell a stranger which accounts an operator blocked.
- */
-const TRANSFER_RECIPIENT_REPLIES: Readonly<Record<ServiceTransferRecipientRefusal, TemplateKey>> = {
-  RECIPIENT_INVALID: 'bot.service.transfer_recipient_invalid',
-  RECIPIENT_UNKNOWN: 'bot.service.transfer_recipient_unavailable',
-  RECIPIENT_BLOCKED: 'bot.service.transfer_recipient_unavailable',
-  RECIPIENT_SELF: 'bot.service.transfer_recipient_self',
-};
-
-/** One sentence for every reason a service cannot be transferred now, and the way back. */
-function transferUnavailableReply(serviceId: string): PendingReply {
-  return {
-    key: 'bot.service.transfer_unavailable',
-    values: {},
-    buttons: [backToServiceButton(serviceId)],
-    orderId: null,
-  };
-}
-
-/** R3: back to the service card, drawn IN PLACE (`sv:`). */
-function backToCardButton(serviceId: string): CustomerButton {
-  return {
-    ...inlineLabel('service.back_to_card'),
-    data: `${SERVICE_CARD_CALLBACK_PREFIX}${serviceId}`,
-  };
-}
-
-/**
- * R3: the service card a tap came from — the private chat, the message's own id, and the
- * bot that drew it — or null when the update carries no such message.
- */
-export function cardMessageOf(
-  update: unknown,
-  botInstanceId: BotInstanceId,
-): CardMessageRef | null {
-  const chatId = privateChatIdOf(update);
-  const messageId = (update as { callback_query?: { message?: { message_id?: unknown } } } | null)
-    ?.callback_query?.message?.message_id;
-  if (chatId === null || typeof messageId !== 'number' || !Number.isSafeInteger(messageId)) {
-    return null;
-  }
-  if (messageId <= 0) return null;
-  /*
-   * A4: a FILE message — a client app's tutorial video with the guide as its caption — has no
-   * text for `editMessageText` to replace; Telegram answers 400 "there is no text in the
-   * message to edit". No card there: the screen goes out as a new message, without spending
-   * a request on an edit that cannot succeed.
-   */
-  if (callbackOriginOf(update)?.media === true) return null;
-  return { botInstanceId, chatId, messageId };
-}
-
-/**
- * The way back from a screen about one service. Round N (F4): the service card drawn IN
- * PLACE (`sv:`) — every screen a card's button opens is the card's own message, so «back»
- * restores that same card rather than sending a second one. On a screen that is a message
- * of its own (the answer to a typed step), it turns that message into the card.
- */
-function backToServiceButton(serviceId: string): CustomerButton {
-  return backToCardButton(serviceId);
-}
-
-/**
- * Round N (F4): a screen a service card's button opened, edited INTO the card's message
- * (`PendingReply.edit`) — the renew menu, the add-traffic and extra-users offers, the
- * location move, the note, refund and transfer prompts and their answers. A screen that
- * would be left without a single button gets the way back to the card, so the card is
- * never lost in its own message.
- *
- * A WIZARD screen is left as its own message: a quote opens the payment wizard, whose
- * message identity and step gate are R2's (`telegram_wizards`), and a card message already
- * tracked there could not be given a fresh quote in place without rewinding that state.
- */
-function inCard(serviceId: string, reply: PendingReply): PendingReply {
-  if (reply.key === null || reply.wizard !== undefined) return reply;
-  const lost = reply.buttons.length === 0 && reply.key !== 'bot.service.not_found';
-  return { ...reply, ...(lost ? { buttons: [backToCardButton(serviceId)] } : {}), edit: true };
-}
-
-/**
- * The list's bottom controls (§G): the search pair, the pager, back to the menu. The
- * page indicator is a real button — a tap re-renders the page — and the arrows appear
- * only where there is a page to go to.
- */
-function servicesListControls(page: number, pages: number): readonly CustomerButton[] {
-  const controls: CustomerButton[] = [
-    {
-      ...inlineLabel('services.search_label'),
-      data: SERVICES_SEARCH_CALLBACK_DATA,
-      row: 100,
-    },
-    {
-      ...inlineLabel('services.search'),
-      data: SERVICES_SEARCH_CALLBACK_DATA,
-      row: 100,
-    },
-  ];
-  if (page > 1) {
-    controls.push({
-      ...inlineLabel('services.previous_page'),
-      data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}${page - 1}`,
-      row: 101,
-    });
-  }
-  controls.push({
-    ...inlineLabel('services.page', { page, pages }),
-    data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}${page}`,
-    row: 101,
-  });
-  if (page < pages) {
-    controls.push({
-      ...inlineLabel('services.next_page'),
-      data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}${page + 1}`,
-      row: 101,
-    });
-  }
-  controls.push({
-    ...inlineLabel('services.back_to_menu'),
-    data: MAIN_MENU_CALLBACK_DATA,
-    row: 102,
-  });
-  return controls;
-}
-
-/** The stored last-seen columns as the tri-state the composer renders. NULL is UNSUPPORTED. */
-function lastSeenOf(service: ServiceRecord): ProviderLastSeen {
-  if (service.lastSeenState === 'AT' && service.lastSeenAt !== null) {
-    return { kind: 'AT', at: service.lastSeenAt };
-  }
-  if (service.lastSeenState === 'NEVER') return { kind: 'NEVER' };
-  return { kind: 'UNSUPPORTED' };
 }
 
 /** First and last name, else the username, else the numeric id — never blank. */
