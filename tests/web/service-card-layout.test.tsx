@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import {
   DEFAULT_SERVICE_CARD_ROWS,
@@ -6,6 +6,9 @@ import {
   SERVICE_CARD_BUTTONS,
   SERVICE_CARD_ROW_MAX,
   serviceCardLayoutSchema,
+  templateDefinition,
+  templateViewSchema,
+  type TemplateKey,
 } from '@nexa/contracts';
 import { ServiceCardLayoutSection } from '../../apps/web/src/pages/bot-buttons/service-card-layout';
 import { INLINE_BUTTON_NAME } from '../../apps/web/src/pages/bot-buttons/inline-buttons';
@@ -183,5 +186,119 @@ describe('«چیدمان صفحهٔ سرویس»', () => {
     expect(
       screen.getByRole('switch', { name: `${t('web.scl_show')} ${nameOf('service.link')}` }),
     ).toBeDisabled();
+  });
+});
+
+const noteLabel = INLINE_BUTTONS.find((entry) => entry.key === 'service.note')
+  ?.label as TemplateKey;
+const noteView = (() => {
+  const definition = templateDefinition(noteLabel);
+  return templateViewSchema.parse({
+    key: noteLabel,
+    locale: 'fa',
+    description: definition.description,
+    format: definition.format,
+    maxLength: definition.maxLength ?? 4096,
+    body: 'یادداشت',
+    defaultBody: 'یادداشت',
+    overrideBody: null,
+    source: 'DEFAULT',
+    overrideSuppressed: false,
+    version: null,
+    revision: null,
+    updatedAt: null,
+    updatedByAdminId: null,
+    placeholders: definition.placeholders.map((placeholder) => ({ ...placeholder })),
+  });
+})();
+
+describe('«چیدمان صفحهٔ سرویس» — review fixes', () => {
+  it('after a failed save whose version moved on, offers to adopt the fresh value and saves with it', async () => {
+    api({ rows: [] }, 4);
+    renderPage(section());
+    await loaded();
+    fireEvent.click(
+      screen.getByRole('button', { name: `${t('web.scl_later')}: ${nameOf('service.refresh')}` }),
+    );
+    // Somebody else saved: the next read is version 5, and this save is refused.
+    stubApi([
+      {
+        url: `/settings/${KEY}`,
+        method: 'POST',
+        status: 409,
+        body: {
+          error: { kind: 'conflict', code: 'VERSION_CONFLICT', message: 'x', correlationId: 'c' },
+        },
+      },
+      {
+        url: '/settings',
+        method: 'GET',
+        body: {
+          settings: [setting({ key: KEY, value: { rows: [] }, version: 5, configures: null })],
+        },
+      },
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: t('web.scl_save') }));
+    const reload = await screen.findByRole('button', { name: t('web.ib_reload') });
+    expect(screen.getByRole('button', { name: t('web.scl_save') })).toBeDisabled();
+    const a = api({ rows: [] }, 5);
+    fireEvent.click(reload);
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: t('web.ib_reload') })).toBeNull(),
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: `${t('web.scl_later')}: ${nameOf('service.refresh')}` }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: t('web.scl_save') }));
+    await waitFor(() => {
+      const write = a.calls.find((call) => call.method === 'POST');
+      expect((write?.body as { expectedVersion: number }).expectedVersion).toBe(5);
+    });
+  });
+
+  it('locks every control while a save is in flight', async () => {
+    api({ rows: [] }, 1);
+    const real = globalThis.fetch;
+    vi.stubGlobal('fetch', (input: unknown, init?: RequestInit) =>
+      init?.method === 'POST'
+        ? new Promise<Response>(() => undefined)
+        : real(input as string, init),
+    );
+    renderPage(section());
+    await loaded();
+    const later = `${t('web.scl_later')}: ${nameOf('service.refresh')}`;
+    fireEvent.click(screen.getByRole('button', { name: later }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.scl_save') }));
+    await waitFor(() => expect(screen.getByRole('button', { name: later })).toBeDisabled());
+    expect(
+      screen.getByRole('switch', { name: `${t('web.scl_show')} ${nameOf('service.link')}` }),
+    ).toBeDisabled();
+    expect(screen.getByRole('button', { name: t('web.scl_reset') })).toBeDisabled();
+  });
+
+  it('keeps an unsaved label text when its sheet is closed', async () => {
+    api({ rows: [] }, 1);
+    renderPage(
+      <ServiceCardLayoutSection
+        mayEdit
+        denied={false}
+        mayViewTemplates
+        mayEditTemplates
+        templates={[noteView]}
+        onLabelChanged={() => undefined}
+      />,
+    );
+    await loaded();
+    fireEvent.click(
+      screen.getByRole('button', { name: `${t('web.scl_edit_label')}: ${nameOf('service.note')}` }),
+    );
+    const area = await waitFor(() => {
+      const found = document.querySelector('textarea');
+      if (found === null) throw new Error('no body');
+      return found;
+    });
+    fireEvent.change(area, { target: { value: 'متن نیمه‌کاره' } });
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect((document.querySelector('textarea') as HTMLTextAreaElement).value).toBe('متن نیمه‌کاره');
   });
 });

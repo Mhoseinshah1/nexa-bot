@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   INLINE_BUTTONS,
+  SERVICE_CARD_BUTTONS,
   serviceCardLayoutSchema,
   type ServiceCardButton,
   type TemplateViewResponse,
@@ -123,6 +124,12 @@ export function ServiceCardLayoutSection({
     },
   });
 
+  // Editing waits while a save is in flight: its success clears the draft, which would
+  // otherwise discard an edit made after the snapshot.
+  const locked = !mayEdit || save.isPending;
+  const changedElsewhere =
+    draft !== null && setting !== undefined && setting.version !== draft.basisVersion;
+
   const saveNow = () => {
     const command = {
       value: { rows: storedServiceCardRows(rows) },
@@ -140,13 +147,20 @@ export function ServiceCardLayoutSection({
     return body !== undefined && body !== '' ? body : t(INLINE_BUTTON_NAME[slot]);
   };
   const templateOf = (key: string) => templates?.find((one) => one.key === key);
-  const openKeys = open === null ? [] : labelKeysOf(open);
 
   return (
     <Card title={t('web.scl_title')} hint={t('web.scl_hint')} id="service-card-layout">
       <StateSwitch query={settings} denied={denied} isEmpty={false}>
         {invalid && <Banner tone="warn">{t('web.scl_stored_invalid')}</Banner>}
         {!mayEdit && <Banner tone="info">{t('web.scl_denied_edit')}</Banner>}
+        {changedElsewhere && (
+          <Banner tone="warn">
+            {t('web.ib_changed_elsewhere')}{' '}
+            <Button variant="ghost" size="sm" onClick={() => setDraft(null)}>
+              {t('web.ib_reload')}
+            </Button>
+          </Banner>
+        )}
         <div data-testid="service-card-layout">
           {rows.map((row, rowIndex) => (
             <div
@@ -161,7 +175,7 @@ export function ServiceCardLayoutSection({
                 <Button
                   size="sm"
                   variant="ghost"
-                  disabled={!mayEdit || rowIndex === 0}
+                  disabled={locked || rowIndex === 0}
                   aria-label={`${t('web.scl_move_row_up')} ${String(rowIndex + 1)}`}
                   onClick={() => edit(moveServiceCardRow(rows, rowIndex, -1))}
                 >
@@ -170,7 +184,7 @@ export function ServiceCardLayoutSection({
                 <Button
                   size="sm"
                   variant="ghost"
-                  disabled={!mayEdit || rowIndex === rows.length - 1}
+                  disabled={locked || rowIndex === rows.length - 1}
                   aria-label={`${t('web.scl_move_row_down')} ${String(rowIndex + 1)}`}
                   onClick={() => edit(moveServiceCardRow(rows, rowIndex, 1))}
                 >
@@ -191,13 +205,13 @@ export function ServiceCardLayoutSection({
                     <Switch
                       checked={entry.enabled}
                       label={`${t('web.scl_show')} ${name}`}
-                      disabled={!mayEdit}
+                      disabled={locked}
                       onChange={(next) => edit(setServiceCardEnabled(rows, entry.button, next))}
                     />
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={!mayEdit || column === 0}
+                      disabled={locked || column === 0}
                       aria-label={`${t('web.scl_earlier')}: ${name}`}
                       onClick={() => edit(moveServiceCardWithinRow(rows, entry.button, -1))}
                     >
@@ -206,7 +220,7 @@ export function ServiceCardLayoutSection({
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={!mayEdit || column === row.length - 1}
+                      disabled={locked || column === row.length - 1}
                       aria-label={`${t('web.scl_later')}: ${name}`}
                       onClick={() => edit(moveServiceCardWithinRow(rows, entry.button, 1))}
                     >
@@ -215,7 +229,7 @@ export function ServiceCardLayoutSection({
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={!mayEdit}
+                      disabled={locked}
                       aria-label={`${t('web.scl_row_up')}: ${name}`}
                       onClick={() => edit(moveServiceCardAcrossRows(rows, entry.button, -1))}
                     >
@@ -224,7 +238,7 @@ export function ServiceCardLayoutSection({
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={!mayEdit}
+                      disabled={locked}
                       aria-label={`${t('web.scl_row_down')}: ${name}`}
                       onClick={() => edit(moveServiceCardAcrossRows(rows, entry.button, 1))}
                     >
@@ -233,7 +247,7 @@ export function ServiceCardLayoutSection({
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={!mayEdit || row.length === 1}
+                      disabled={locked || row.length === 1}
                       aria-label={`${t('web.scl_split')}: ${name}`}
                       onClick={() => edit(splitServiceCardButton(rows, entry.button))}
                     >
@@ -265,7 +279,7 @@ export function ServiceCardLayoutSection({
           <Button
             variant="ghost"
             size="sm"
-            disabled={!mayEdit || save.isPending}
+            disabled={locked || save.isPending}
             onClick={() => edit(defaultServiceCardRows())}
           >
             {t('web.scl_reset')}
@@ -273,7 +287,7 @@ export function ServiceCardLayoutSection({
           <Button
             variant="primary"
             size="sm"
-            disabled={!mayEdit || !(unsaved || invalid) || save.isPending || setting === undefined}
+            disabled={locked || changedElsewhere || !(unsaved || invalid) || setting === undefined}
             onClick={saveNow}
           >
             {t('web.scl_save')}
@@ -281,27 +295,29 @@ export function ServiceCardLayoutSection({
         </div>
         {save.isError && <ErrorReport error={save.error} />}
       </StateSwitch>
-      {mayViewTemplates && open !== null && (
-        <KeptSheet
-          open
-          onClose={() => setOpen(null)}
-          title={nameOf(open)}
-          hint={open === 'service.suspend' ? t('web.scl_resume_note') : undefined}
-          wide
-        >
-          {openKeys.map((key) => {
-            const template = templateOf(key);
-            return template === undefined ? null : (
-              <TemplateCard
-                key={key}
-                template={template}
-                mayEdit={mayEditTemplates}
-                onChanged={onLabelChanged}
-              />
-            );
-          })}
-        </KeptSheet>
-      )}
+      {mayViewTemplates &&
+        SERVICE_CARD_BUTTONS.map((slot) => (
+          <KeptSheet
+            key={slot}
+            open={open === slot}
+            onClose={() => setOpen(null)}
+            title={nameOf(slot)}
+            hint={slot === 'service.suspend' ? t('web.scl_resume_note') : undefined}
+            wide
+          >
+            {labelKeysOf(slot).map((key) => {
+              const template = templateOf(key);
+              return template === undefined ? null : (
+                <TemplateCard
+                  key={key}
+                  template={template}
+                  mayEdit={mayEditTemplates}
+                  onChanged={onLabelChanged}
+                />
+              );
+            })}
+          </KeptSheet>
+        ))}
     </Card>
   );
 }
