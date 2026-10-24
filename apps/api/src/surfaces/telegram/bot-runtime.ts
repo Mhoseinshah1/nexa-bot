@@ -17008,11 +17008,13 @@ function cardTransferScreen(
    * R6 item 2: TonPays approves automatically only on the EXACT amount it named (its odd
    * `final_amount`), so that — never a rounded or separated figure — is what the customer is
    * told and what the copy button carries: bare ASCII digits. When TonPays named none, the
-   * exact amount IS the payable. It is display and clipboard only: what Nexa settles, credits
-   * and refunds is still the payment's own snapshot.
+   * exact amount IS what Nexa asked for - `sentAmount`, the payable in the provider's own
+   * unit (Toman), never the payment-currency payable (an IRR payment would show rial as
+   * Toman). It is display and clipboard only: what Nexa settles, credits and refunds is
+   * still the payment's own snapshot.
    */
   const transferAmount = plainAmount(
-    invoice.finalAmount !== null ? money(invoice.finalAmount, 'IRT') : payable,
+    money(invoice.finalAmount !== null ? invoice.finalAmount : invoice.sentAmount, 'IRT'),
   );
   const copyExact: CustomerButton = {
     ...inlineLabel('payment.copy_transfer_amount'),

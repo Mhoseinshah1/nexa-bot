@@ -401,13 +401,26 @@ describe('R6 item 2: the card screens show the exact amount to transfer', () => 
             payable: money(275_000n, 'IRT'),
           },
         }),
-        invoice: invoice({ finalAmount: null }),
+        // What Nexa sent is the payable in the provider's unit.
+        invoice: invoice({ finalAmount: null, sentAmount: 275_000n }),
       },
       'o',
       AT,
       NO_FACTS,
     );
     expect(fee.values).toMatchObject({ transferAmount: '275000' });
+    // An IRR payment: the payable is rial, the provider's figure is Toman. The customer is
+    // told the Toman figure, never 2,500,000 "Toman" (Codex review of #312).
+    const rial = gatewayAttemptScreen(
+      {
+        payment: payment({ amount: money(2_500_000n, 'IRR') }),
+        invoice: invoice({ finalAmount: null, sentAmount: 250_000n }),
+      },
+      'o',
+      AT,
+      NO_FACTS,
+    );
+    expect(rial.values).toMatchObject({ transferAmount: '250000' });
   });
 
   it('after a card change the screen shows the NEW exact amount the invoice now holds', () => {
