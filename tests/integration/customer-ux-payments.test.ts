@@ -507,14 +507,10 @@ describe('a customer pays through the approved screens', () => {
       expect(body).toMatch(
         /🔖 گروه کاربری: کاربر عادی\n\n📅 تاریخ: 14\d\d\/\d\d\/\d\d\n🕒 ساعت: \d\d:\d\d$/u,
       );
-      // R4 A3: first the copy button, whose `copy_text` is the customer's own Telegram id.
-      expect(labelsOf(lastMarkup())).toEqual([
-        '📋 کپی شناسه',
-        MARYAM,
-        '💰 افزایش موجودی',
-        '🏠 بازگشت به منوی اصلی',
-      ]);
-      expect(lastMarkup()).toContain(`"copy_text":{"text":"${MARYAM}"}`);
+      // R8-C2: no separate «کپی شناسه» button — the id is tap-to-copy in the text above.
+      expect(labelsOf(lastMarkup())).toEqual(['💰 افزایش موجودی', '🏠 بازگشت به منوی اصلی']);
+      expect(lastMarkup()).not.toContain('copy_text');
+      expect(lastMarkup()).not.toContain('کپی شناسه');
     });
 
     it('counts services and paid invoices from the rows', async () => {

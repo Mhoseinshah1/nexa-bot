@@ -14857,11 +14857,9 @@ export class BotRuntime {
       values: summary.values,
       buttons: [
         /*
-         * R4 A3: «📋 کپی شناسه» — Telegram's own clipboard button with the numeric id. The id is
-         * also in <code> in the summary (`bot.wallet.summary` is TELEGRAM_HTML), so a tap on
-         * the text copies it too; nothing reaches this server either way.
+         * R8-C2: no separate «کپی شناسه» button. The numeric id is in <code> in the summary
+         * (`bot.wallet.summary` is TELEGRAM_HTML), so a tap on the text copies it.
          */
-        { ...inlineLabel('account.copy_id'), copyText: customer.telegramUserId },
         ...(fundable
           ? [
               {

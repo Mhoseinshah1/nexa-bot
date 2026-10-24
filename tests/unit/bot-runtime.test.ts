@@ -1207,7 +1207,6 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.username.stale',
       'bot.username.taken',
       'bot.username.unavailable',
-      'bot.wallet.copy_id_button',
       'bot.wallet.insufficient',
       'bot.wallet.negative_balance',
       // Owner spec §2.2: a button label under a wallet credit, opening the wallet screen.
