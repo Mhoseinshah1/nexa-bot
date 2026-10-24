@@ -5598,14 +5598,14 @@ export function creditRefusal(error: unknown): PendingReply {
  * failed reply is an unbounded loop that bumps `last_seen_at` for ever.
  */
 export class BotRuntime {
-  constructor(private readonly deps: BotRuntimeDeps) {}
+  constructor(readonly deps: BotRuntimeDeps) {}
 
   /**
    * The route table for this update (R1): the shared defaults, then this tenant's current
    * labels over them. Read only for a TEXT message — a keyboard tap is text, and nothing
    * else consults the table, so a callback or a file pays for no template rendering.
    */
-  private async menuFor(scope: TenantContext, update: unknown): Promise<MainMenuRoutes> {
+  async menuFor(scope: TenantContext, update: unknown): Promise<MainMenuRoutes> {
     const text = (update as { message?: { text?: unknown } } | null)?.message?.text;
     if (typeof text !== 'string' || this.deps.menuRoutes === undefined) return this.deps.mainMenu;
     return new Map([...this.deps.mainMenu, ...(await this.deps.menuRoutes.routesFor(scope))]);
@@ -6260,7 +6260,7 @@ export class BotRuntime {
    * with their administrator id — so the audit row names the person and not the bot, and
    * the guard resolves their real permissions. The turn's `SYSTEM_JOB` actor stops here.
    */
-  private async adminTurn(
+  async adminTurn(
     scope: TenantContext,
     actor: ActorContext,
     command: BotCommand,
@@ -6829,7 +6829,7 @@ export class BotRuntime {
    * would refuse. It answers false for every case `adminTurn` treats as "not an
    * administrator", including an ACTIVE administrator holding neither panel permission.
    */
-  private async isAdmin(
+  async isAdmin(
     scope: TenantContext,
     actor: ActorContext,
     input: { readonly telegramUserId: string },
@@ -6857,7 +6857,7 @@ export class BotRuntime {
    * amount rather than a payment id: the reference is what the customer quoted to their
    * bank and what a reviewer matches against a statement.
    */
-  private async adminReceipts(scope: TenantContext, actor: ActorContext): Promise<PendingReply> {
+  async adminReceipts(scope: TenantContext, actor: ActorContext): Promise<PendingReply> {
     const items = await this.deps.receipts.reviewQueue(scope, actor, ADMIN_QUEUE_LIMIT);
     if (items.length === 0) {
       return { key: 'bot.admin.receipts_none', values: {}, buttons: [], orderId: null };
@@ -6891,7 +6891,7 @@ export class BotRuntime {
    * caption through the template (plain text, so no markup it contains is interpreted) and
    * is never logged.
    */
-  private async adminReceipt(
+  async adminReceipt(
     scope: TenantContext,
     actor: ActorContext,
     paymentId: string,
@@ -6927,7 +6927,7 @@ export class BotRuntime {
    * amount, and never read as a rejection. `receipt_gone` for everything that is not a
    * receipt disposition. Nothing moves here.
    */
-  private async decidedReply(
+  async decidedReply(
     scope: TenantContext,
     actor: ActorContext,
     paymentId: string,
@@ -6967,7 +6967,7 @@ export class BotRuntime {
   }
 
   /** The decisions a receipt's message carries, for THIS administrator. */
-  private receiptDecisionButtons(
+  receiptDecisionButtons(
     paymentId: string,
     permissions: ReadonlySet<PermissionKey>,
   ): CustomerButton[] {
@@ -6984,7 +6984,7 @@ export class BotRuntime {
    * the reviewer must type is on the screen; a cancel button beside it abandons the
    * capture rather than leaving it to expire.
    */
-  private async adminCreditOpen(
+  async adminCreditOpen(
     scope: TenantContext,
     actor: ActorContext,
     paymentId: string,
@@ -7031,7 +7031,7 @@ export class BotRuntime {
    * it took before this existed. The lookup is by the SENDER's own administrator id, so
    * another administrator's message, and every customer's, cannot reach this capture.
    */
-  private async adminCreditAmount(
+  async adminCreditAmount(
     scope: TenantContext,
     actor: ActorContext,
     text: string,
@@ -7097,7 +7097,7 @@ export class BotRuntime {
   }
 
   /** The confirm button: the stated amount, credited once, through the one credit path. */
-  private async adminCreditConfirm(
+  async adminCreditConfirm(
     scope: TenantContext,
     actor: ActorContext,
     captureId: string,
@@ -7132,7 +7132,7 @@ export class BotRuntime {
   }
 
   /** The cancel button. A capture already confirmed is past cancelling, and says so. */
-  private async adminCreditCancel(
+  async adminCreditCancel(
     scope: TenantContext,
     actor: ActorContext,
     captureId: string,
@@ -7159,7 +7159,7 @@ export class BotRuntime {
    * `CustomerService`; a denial reaches `adminTurn`'s one refusal. Nothing here touches the
    * payment: the receipt stays in the queue for any reviewer to decide.
    */
-  private async adminBlockTurn(
+  async adminBlockTurn(
     scope: TenantContext,
     actor: ActorContext,
     intent: BotIntent,
@@ -7268,7 +7268,7 @@ export class BotRuntime {
    * index covers both purposes — so at most one of them answers; `null` for everything else,
    * and the message then routes exactly as it did before either existed.
    */
-  private async adminCaptureText(
+  async adminCaptureText(
     scope: TenantContext,
     actor: ActorContext,
     text: string,
@@ -7295,7 +7295,7 @@ export class BotRuntime {
    * reject open a prompt and decide nothing; the confirmation names the amount CAPTURE and
    * is the only tap that approves. Every refusal is a sentence from the closed list below.
    */
-  private async adminRefundRequestTurn(
+  async adminRefundRequestTurn(
     scope: TenantContext,
     actor: ActorContext,
     intent: BotIntent,
@@ -7389,7 +7389,7 @@ export class BotRuntime {
    * amount restated with one destructive confirmation, or a reason that rejects at once.
    * `null` when they have no such prompt waiting — the answer for almost every message.
    */
-  private async adminRefundRequestText(
+  async adminRefundRequestText(
     scope: TenantContext,
     actor: ActorContext,
     text: string,
@@ -7474,7 +7474,7 @@ export class BotRuntime {
    * nothing is blocked until the confirm. The same shape as `adminBlockReason`, for the same
    * purpose-keyed capture, so at most one of the three reason paths answers a message.
    */
-  private async adminCustomerBlockReason(
+  async adminCustomerBlockReason(
     scope: TenantContext,
     actor: ActorContext,
     text: string,
@@ -7535,7 +7535,7 @@ export class BotRuntime {
   }
 
   /** The typed rejection reason, recorded and restated; nothing is rejected until the confirm. */
-  private async adminRejectReason(
+  async adminRejectReason(
     scope: TenantContext,
     actor: ActorContext,
     text: string,
@@ -7595,7 +7595,7 @@ export class BotRuntime {
   }
 
   /** The typed reason, recorded and restated; nothing is blocked until the confirm. */
-  private async adminBlockReason(
+  async adminBlockReason(
     scope: TenantContext,
     actor: ActorContext,
     text: string,
@@ -7669,7 +7669,7 @@ export class BotRuntime {
    * Rejection is NOT here any more: File 01 §7 makes its reason mandatory, so the reject
    * button opens a reason capture (`adminRejectTurn`) and there is no one-tap rejection.
    */
-  private async adminApprove(
+  async adminApprove(
     scope: TenantContext,
     actor: ActorContext,
     paymentId: string,
@@ -7708,7 +7708,7 @@ export class BotRuntime {
    * told WHICH decision won, not a generic refusal. Nothing moved — the service's own
    * transaction refused. Every other error is `adminTurn`'s one refusal.
    */
-  private async lostDecision(
+  async lostDecision(
     scope: TenantContext,
     actor: ActorContext,
     paymentId: string,
@@ -7731,7 +7731,7 @@ export class BotRuntime {
    * rejects through `rejectManualTransfer` — the one conditional PENDING→FAILED edge approve
    * and credit race on — and the customer's `PAYMENT_REJECTED` sentence carries the reason.
    */
-  private async adminRejectTurn(
+  async adminRejectTurn(
     scope: TenantContext,
     actor: ActorContext,
     intent: BotIntent,
@@ -7826,7 +7826,7 @@ export class BotRuntime {
    * are ten decisions. An installation with more than ten of either has a bigger
    * question than the eleventh row, and the Web Admin pages properly.
    */
-  private async adminServices(
+  async adminServices(
     scope: TenantContext,
     actor: ActorContext,
     permissions: ReadonlySet<PermissionKey>,
@@ -7910,7 +7910,7 @@ export class BotRuntime {
    * `list` charges `services.view` itself, so an administrator who reached this through
    * a crafted callback without it is refused there rather than here.
    */
-  private async adminServicesBrowse(
+  async adminServicesBrowse(
     scope: TenantContext,
     actor: ActorContext,
     cursor: KeysetToken | null,
@@ -7988,7 +7988,7 @@ export class BotRuntime {
    * not drawing a button is never the control, because a callback can be replayed from
    * an old message after a role change.
    */
-  private async adminReminders(scope: TenantContext, actor: ActorContext): Promise<PendingReply> {
+  async adminReminders(scope: TenantContext, actor: ActorContext): Promise<PendingReply> {
     const config = await this.deps.reminderConfig.read(scope, actor);
     return {
       key: 'bot.admin.reminders_section',
@@ -8011,7 +8011,7 @@ export class BotRuntime {
   }
 
   /** One setting, its current value, and the values a tap may replace it with. */
-  private async adminReminderEdit(
+  async adminReminderEdit(
     scope: TenantContext,
     actor: ActorContext,
     code: ReminderSettingCode,
@@ -8049,7 +8049,7 @@ export class BotRuntime {
    * would replace that with a shrug, which is the legacy `⭕️ ورودی نا معتبر` this whole
    * section is written against.
    */
-  private async adminReminderSet(
+  async adminReminderSet(
     scope: TenantContext,
     actor: ActorContext,
     code: ReminderSettingCode,
@@ -8090,7 +8090,7 @@ export class BotRuntime {
     };
   }
 
-  private async adminPanels(
+  async adminPanels(
     scope: TenantContext,
     actor: ActorContext,
     cursor: KeysetToken | null,
@@ -8145,7 +8145,7 @@ export class BotRuntime {
    * because a provider's own error text can carry a hostname, a path or a token
    * fragment — and the Web Admin is where a probe is read in full.
    */
-  private async adminPanelDetail(
+  async adminPanelDetail(
     scope: TenantContext,
     actor: ActorContext,
     panelId: string,
@@ -8272,7 +8272,7 @@ export class BotRuntime {
    * `USERNAME_PREVIEW_VALUES`, so looking at this screen cannot consume randomness a
    * customer would have got or take a name out of the namespace.
    */
-  private async adminUsername(
+  async adminUsername(
     scope: TenantContext,
     actor: ActorContext,
     panelId: string,
@@ -8299,7 +8299,7 @@ export class BotRuntime {
    * leaving them to go and look: the screen they are left on shows what is stored NOW,
    * which is the only way a save can be checked without a second round trip.
    */
-  private usernameSection(
+  usernameSection(
     panelId: string,
     panelName: string,
     policy: PanelUsernamePolicy,
@@ -8367,7 +8367,7 @@ export class BotRuntime {
    * written — the service refuses the whole update, so the operator is looking at the
    * policy that is still stored.
    */
-  private async adminUsernameWrite(
+  async adminUsernameWrite(
     scope: TenantContext,
     actor: ActorContext,
     panelId: string,
@@ -8426,7 +8426,7 @@ export class BotRuntime {
    * `bot.admin.panel_gone` by the status check below rather than by a button that
    * cannot work.
    */
-  private async adminPanelArchiveAsk(
+  async adminPanelArchiveAsk(
     scope: TenantContext,
     actor: ActorContext,
     panelId: string,
@@ -8471,7 +8471,7 @@ export class BotRuntime {
    * write — and for the test that is the difference between one probe of somebody's
    * panel and two.
    */
-  private async adminPanelAct(
+  async adminPanelAct(
     scope: TenantContext,
     actor: ActorContext,
     intent: BotIntent,
@@ -8548,7 +8548,7 @@ export class BotRuntime {
    * `detail` charges `services.view` itself, so an administrator who reached this
    * through a crafted callback without it is refused there rather than here.
    */
-  private async adminService(
+  async adminService(
     scope: TenantContext,
     actor: ActorContext,
     needle: string,
@@ -8721,7 +8721,7 @@ export class BotRuntime {
    * conversation is almost always about. Stated rather than hidden: the list ordering
    * is newest-first and that is what decides it.
    */
-  private async resolveAdminService(
+  async resolveAdminService(
     scope: TenantContext,
     actor: ActorContext,
     needle: string,
@@ -8780,7 +8780,7 @@ export class BotRuntime {
    * `users.view` through the guard and a denial is an operational event, so asking
    * anyway would manufacture a denial per service screen an operator opens.
    */
-  private async adminServiceCustomer(
+  async adminServiceCustomer(
     scope: TenantContext,
     actor: ActorContext,
     customerId: string,
@@ -8811,7 +8811,7 @@ export class BotRuntime {
    * The permission is checked again here: an administrator who reached the asking
    * callback without the action's permission is not shown a button they cannot press.
    */
-  private async adminServiceAsk(
+  async adminServiceAsk(
     scope: TenantContext,
     actor: ActorContext,
     serviceId: string,
@@ -8866,7 +8866,7 @@ export class BotRuntime {
    * The read goes through `serviceAdmin.detail`, which charges `services.view`; the
    * write charges `services.edit` in `requestFromOperator`, as every action does.
    */
-  private async adminServiceRotateConfirm(
+  async adminServiceRotateConfirm(
     scope: TenantContext,
     actor: ActorContext,
     serviceId: string,
@@ -8905,7 +8905,7 @@ export class BotRuntime {
    * sentence: which of the four refusals it was belongs to the operational log and the
    * audit row, and an administrator's next step is the Web Admin either way.
    */
-  private async adminServiceAct(
+  async adminServiceAct(
     scope: TenantContext,
     actor: ActorContext,
     intent: BotIntent,
@@ -8982,7 +8982,7 @@ export class BotRuntime {
    * would otherwise be silent. This one has a next-page button instead, which is the
    * same honesty by a different means.
    */
-  private async adminCustomers(
+  async adminCustomers(
     scope: TenantContext,
     actor: ActorContext,
     cursor: KeysetToken | null,
@@ -9042,7 +9042,7 @@ export class BotRuntime {
    * validates the id, so an administrator without the permission cannot even learn
    * whether an id is well-formed.
    */
-  private async adminCustomer(
+  async adminCustomer(
     scope: TenantContext,
     actor: ActorContext,
     customerId: string,
@@ -9076,7 +9076,7 @@ export class BotRuntime {
    * message (INCIDENT-FIN-001). An id that matches nobody gets `customer_gone`, the
    * same single answer the row path gives.
    */
-  private async adminCustomerFind(
+  async adminCustomerFind(
     scope: TenantContext,
     actor: ActorContext,
     telegramUserId: string,
@@ -9144,7 +9144,7 @@ export class BotRuntime {
    * sees are the ones the state actually offers, and a redelivered update reads as the state it
    * found rather than claiming a second change.
    */
-  private async adminCustomerStatusTurn(
+  async adminCustomerStatusTurn(
     scope: TenantContext,
     actor: ActorContext,
     intent: BotIntent,
@@ -9295,7 +9295,7 @@ export class BotRuntime {
    * The idempotency key is the TURN's, suffixed by the action, the shape `adminPanelAct`
    * uses: a redelivered update is the same command twice and replays.
    */
-  private async adminCategoryTurn(
+  async adminCategoryTurn(
     scope: TenantContext,
     actor: ActorContext,
     command: BotCommand,
@@ -9394,7 +9394,7 @@ export class BotRuntime {
    * A page past the end — a delete shrank the list since the button was drawn — shows the
    * LAST page rather than an empty one: the list exists, it is just shorter now.
    */
-  private adminCategoryList(
+  adminCategoryList(
     list: readonly ProductCategoryListing[],
     requested: number,
     mayEdit: boolean,
@@ -9440,7 +9440,7 @@ export class BotRuntime {
    * POSITION, which decides whether up and down are drawn. Both are read now, so a stale
    * tap lands on the state that is true rather than on the one the old screen showed.
    */
-  private async adminCategoryDetail(
+  async adminCategoryDetail(
     scope: TenantContext,
     actor: ActorContext,
     categoryId: string,
@@ -9468,7 +9468,7 @@ export class BotRuntime {
    * is answered with the list as it now stands rather than with a refusal for a move
    * that happened.
    */
-  private async adminCategoryMove(
+  async adminCategoryMove(
     scope: TenantContext,
     actor: ActorContext,
     categoryId: string,
@@ -9538,7 +9538,7 @@ export class BotRuntime {
    * when the screen is drawn; `ProductCategoryService.remove` counts again under the
    * category's lock and refuses on that number, not this one.
    */
-  private async adminCategoryDeleteAsk(
+  async adminCategoryDeleteAsk(
     scope: TenantContext,
     actor: ActorContext,
     categoryId: string,
@@ -9585,7 +9585,7 @@ export class BotRuntime {
    * from. A redelivered confirm finds no row to read, and `remove` replays its first
    * answer; the reply then names nothing rather than inventing a name.
    */
-  private async adminCategoryDelete(
+  async adminCategoryDelete(
     scope: TenantContext,
     actor: ActorContext,
     categoryId: string,
@@ -9644,7 +9644,7 @@ export class BotRuntime {
    * computes it from a list that now includes the category it created — a payload
    * mismatch meaning "this already ran", answered with the list that shows it.
    */
-  private async adminCategoryNew(
+  async adminCategoryNew(
     scope: TenantContext,
     actor: ActorContext,
     args: readonly string[],
@@ -9696,7 +9696,7 @@ export class BotRuntime {
    * and the service is what decided it. An id that is well-formed and names nothing here
    * is `category_gone`, the section's one answer for that.
    */
-  private async adminCategoryEdit(
+  async adminCategoryEdit(
     scope: TenantContext,
     actor: ActorContext,
     field: 'name' | 'emoji',
@@ -9742,7 +9742,7 @@ export class BotRuntime {
    * one no customer can buy, is on it. Keyset-paged by `(created_at, id)`, which no
    * operator action changes, so the next page is stable.
    */
-  private async adminCategoryProducts(
+  async adminCategoryProducts(
     scope: TenantContext,
     actor: ActorContext,
     cursor: KeysetToken | null,
@@ -9785,7 +9785,7 @@ export class BotRuntime {
    * operator choice — staging a category before showing it — and the customer-facing
    * rules decide separately whether anybody can buy it there.
    */
-  private async adminCategoryPick(
+  async adminCategoryPick(
     scope: TenantContext,
     actor: ActorContext,
     productId: string,
@@ -9840,7 +9840,7 @@ export class BotRuntime {
    * The names in the reply are read AFTER the move, so they are the ones that are true
    * now — a rename between the pick and the tap shows the new name, not the button's.
    */
-  private async adminCategoryAssign(
+  async adminCategoryAssign(
     scope: TenantContext,
     actor: ActorContext,
     productId: string,
@@ -9878,7 +9878,7 @@ export class BotRuntime {
   }
 
   /** The categories service, which `adminCategoryTurn` has already proven present. */
-  private requireCategories(): NonNullable<BotRuntimeDeps['productCategories']> {
+  requireCategories(): NonNullable<BotRuntimeDeps['productCategories']> {
     const categories = this.deps.productCategories;
     if (categories === undefined) throw new Error('The categories section is not configured.');
     return categories;
@@ -9892,7 +9892,7 @@ export class BotRuntime {
    * username plus their Telegram id, because identity here is the numeric id and a
    * reviewer needs to see which account they are removing.
    */
-  private async adminSection(scope: TenantContext, actor: ActorContext): Promise<PendingReply> {
+  async adminSection(scope: TenantContext, actor: ActorContext): Promise<PendingReply> {
     const roster = await this.deps.telegramAdmins?.listAll(scope, actor);
     if (roster === undefined || roster.length === 0) {
       return { key: 'bot.admin.admins_none', values: {}, buttons: [], orderId: null };
@@ -9955,7 +9955,7 @@ export class BotRuntime {
    * `bot.admin.panel_gone` states — so nobody holding an id can learn whether it names
    * anything.
    */
-  private async adminAdmin(
+  async adminAdmin(
     scope: TenantContext,
     actor: ActorContext,
     adminId: string,
@@ -9984,7 +9984,7 @@ export class BotRuntime {
    * claiming a second change, which is the same property the target-valued callback
    * gives the tap itself.
    */
-  private async adminAdminStatus(
+  async adminAdminStatus(
     scope: TenantContext,
     actor: ActorContext,
     adminId: string,
@@ -10024,7 +10024,7 @@ export class BotRuntime {
    * outright, so a button there could only ever record a refusal. That is a courtesy,
    * not the enforcement — the service refuses it whether or not the button exists.
    */
-  private adminAdminReply(
+  adminAdminReply(
     entry: AdminRosterEntry,
     actor: ActorContext,
     permissions: ReadonlySet<PermissionKey>,
@@ -10070,7 +10070,7 @@ export class BotRuntime {
   }
 
   /** Removes one administrator's Telegram access, by the button beside their row. */
-  private async adminRevokeAccess(
+  async adminRevokeAccess(
     scope: TenantContext,
     actor: ActorContext,
     targetId: string,
@@ -10104,7 +10104,7 @@ export class BotRuntime {
    * worked around: a Telegram-only administrator would need a row with no usable
    * password hash, and this identity model has no such shape.
    */
-  private async adminLink(
+  async adminLink(
     scope: TenantContext,
     actor: ActorContext,
     args: readonly string[],
@@ -10139,7 +10139,7 @@ export class BotRuntime {
    * ONE role, because a keyboard-free command that took a list would be a list a
    * reviewer cannot see; the Web Admin is where a multi-role composition is edited.
    */
-  private async adminRole(
+  async adminRole(
     scope: TenantContext,
     actor: ActorContext,
     args: readonly string[],
@@ -10181,7 +10181,7 @@ export class BotRuntime {
    * first asked for: a purchase, a payment or a termination is not something a membership
    * check may run.
    */
-  private async guardedAct(
+  async guardedAct(
     scope: TenantContext,
     actor: ActorContext,
     command: BotCommand,
@@ -10248,7 +10248,7 @@ export class BotRuntime {
    * message is edited into the accepted text with the way to the main menu (Batch 01 item
    * 1) — never a replay of what they first asked for, and never a second message.
    */
-  private async termsGatedAct(
+  async termsGatedAct(
     scope: TenantContext,
     actor: ActorContext,
     command: BotCommand,
@@ -10283,7 +10283,7 @@ export class BotRuntime {
     return termsRequired('bot.terms.required', required);
   }
 
-  private async acceptTerms(
+  async acceptTerms(
     scope: TenantContext,
     actor: ActorContext,
     command: BotCommand,
@@ -10339,7 +10339,7 @@ export class BotRuntime {
    * Every branch returns; there is no fallthrough that leaves a customer unanswered,
    * which is the failure mode the legacy bot has for anything it does not recognise.
    */
-  private async act(
+  async act(
     scope: TenantContext,
     actor: ActorContext,
     command: BotCommand,
@@ -11069,7 +11069,7 @@ export class BotRuntime {
    * the message is sent. Nothing rendered is stored — the reply carries values, and the text
    * is composed by the messenger at send time from the tenant's raw template.
    */
-  private async startGreeting(
+  async startGreeting(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -11103,7 +11103,7 @@ export class BotRuntime {
    * `listForCustomer` takes the customer id from the RESOLVED customer row, never from
    * anything the update carried, so there is no id here for a modified client to change.
    */
-  private async services(
+  async services(
     scope: TenantContext,
     customer: CustomerRecord,
     pageNumber: number,
@@ -11171,7 +11171,7 @@ export class BotRuntime {
    * `SYNC_USAGE` succeeds — so the template gets an absent `syncedAt` rather than a
    * fabricated one, which is the whole reason that placeholder is not required.
    */
-  private async serviceDetail(
+  async serviceDetail(
     scope: TenantContext,
     actor: ActorContext,
     customer: Pick<CustomerRecord, 'id'>,
@@ -11388,7 +11388,7 @@ export class BotRuntime {
   }
 
   /** The card's text: one composition for the ordinary card and the «working» one. */
-  private async serviceCardScreen(
+  async serviceCardScreen(
     scope: TenantContext,
     service: ServiceRecord,
     title: string,
@@ -11450,7 +11450,7 @@ export class BotRuntime {
    * The amount and the price are rendered from the row the operator configured, and
    * neither travels in the callback. What comes back is two identifiers.
    */
-  private async addonChoice(
+  async addonChoice(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -11506,7 +11506,7 @@ export class BotRuntime {
    * the rate and a count within what the server said remains; its label shows that
    * count's list price, and the quote screen the next tap produces states the final one.
    */
-  private async devicesChoice(
+  async devicesChoice(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -11556,7 +11556,7 @@ export class BotRuntime {
    * come from `CommercialActionService.offer`, which refuses for every reason a move
    * would; each button carries the service and the configured location, never a price.
    */
-  private async locationChoice(
+  async locationChoice(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -11604,7 +11604,7 @@ export class BotRuntime {
    * becomes the ordinary quote — the pre-invoice with its from / to block and the same
    * confirmation and payment buttons every commercial order uses.
    */
-  private async locationTarget(
+  async locationTarget(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -11667,7 +11667,7 @@ export class BotRuntime {
    * a redelivery is recognised BEFORE the card is touched, so it never turns a card that
    * already shows the outcome back to «working».
    */
-  private async locationRequest(
+  async locationRequest(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -11747,7 +11747,7 @@ export class BotRuntime {
    * `idempotencyKey` is the update's, so Telegram redelivering the same tap produces
    * the same draft rather than a second one.
    */
-  private async commercialQuote(
+  async commercialQuote(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -11792,7 +11792,7 @@ export class BotRuntime {
    * them — `paymentButtons` is shared, so wallet and manual transfer work on a
    * commercial order without knowing it is one.
    */
-  private async commercialConfirm(
+  async commercialConfirm(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -11810,7 +11810,7 @@ export class BotRuntime {
     }
   }
 
-  private async serviceResend(
+  async serviceResend(
     scope: TenantContext,
     customer: CustomerRecord,
     serviceId: string,
@@ -11880,7 +11880,7 @@ export class BotRuntime {
    * `SubscriptionFileService.send`, which sends the files itself — this handler sees a
    * count, never a file — and the one answer after them is a template key.
    */
-  private async serviceFiles(
+  async serviceFiles(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -11952,7 +11952,7 @@ export class BotRuntime {
    * and indistinguishable from the three real refusals in every log this installation
    * keeps. The runtime's own error path exists for the unknown case.
    */
-  private async serviceAction(
+  async serviceAction(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -12058,7 +12058,7 @@ export class BotRuntime {
    * `serviceAction` re-offers it: a tap from an out-of-date keyboard gets the card as it is
    * now, with the notice, rather than a question it could not act on.
    */
-  private async serviceToggleAsk(
+  async serviceToggleAsk(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -12111,7 +12111,7 @@ export class BotRuntime {
    * setting as it stands now. The sentence says a new link will be issued and has to be
    * put into the customer's apps; it says nothing about the old one (OQ-RP-07).
    */
-  private async serviceRotateAsk(
+  async serviceRotateAsk(
     scope: TenantContext,
     customer: CustomerRecord,
     serviceId: string,
@@ -12154,7 +12154,7 @@ export class BotRuntime {
    * instant another rotation will be accepted, read from the refusal rather than
    * computed here, so the sentence is the server's answer.
    */
-  private async serviceRotate(
+  async serviceRotate(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -12257,7 +12257,7 @@ export class BotRuntime {
    * from. Best effort: a card Telegram cannot edit is answered by the provisioner's own
    * fallback (the final card, sent once), so nothing here needs one.
    */
-  private async showWorking(
+  async showWorking(
     scope: TenantContext,
     actor: ActorContext,
     customer: Pick<CustomerRecord, 'id'>,
@@ -12280,7 +12280,7 @@ export class BotRuntime {
    * Codex review of #116: the card as it now is, edited in place, after a request whose
    * operation had already ENDED — with the failure line when it ended without happening.
    */
-  private async cardAfterEnded(
+  async cardAfterEnded(
     scope: TenantContext,
     actor: ActorContext,
     customer: Pick<CustomerRecord, 'id'>,
@@ -12300,7 +12300,7 @@ export class BotRuntime {
   }
 
   /** Round N (F4): the card as it now is, edited in place, with a short notice on the tap. */
-  private async cardWithToast(
+  async cardWithToast(
     scope: TenantContext,
     actor: ActorContext,
     customer: Pick<CustomerRecord, 'id'>,
@@ -12317,7 +12317,7 @@ export class BotRuntime {
    * amount, a search term or a note, by the window's PURPOSE. Null means no window read
    * it and the message goes on to the order windows.
    */
-  private async capturedText(
+  async capturedText(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -12426,7 +12426,7 @@ export class BotRuntime {
   }
 
   /** The answer to a recorded (or refused) top-up amount: the route chooser, or why not. */
-  private async topupAmountReply(
+  async topupAmountReply(
     scope: TenantContext,
     result: Awaited<ReturnType<WalletTopupFlowService['recordAmountText']>>,
     captureId: string,
@@ -12445,7 +12445,7 @@ export class BotRuntime {
     };
   }
 
-  private async topupAmountScreen(
+  async topupAmountScreen(
     scope: TenantContext,
     result: Awaited<ReturnType<WalletTopupFlowService['recordAmountText']>>,
     captureId: string,
@@ -12493,7 +12493,7 @@ export class BotRuntime {
    * through, in the operator's order, with the route's gift when it has one. The buttons
    * carry the capture id and the provider — identifiers, never the amount.
    */
-  private async topupChooser(
+  async topupChooser(
     scope: TenantContext,
     captureId: string,
     routes: readonly TopupRoute[],
@@ -12532,7 +12532,7 @@ export class BotRuntime {
     };
   }
 
-  private async topupRoute(
+  async topupRoute(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -12560,7 +12560,7 @@ export class BotRuntime {
     }
   }
 
-  private async topupClose(
+  async topupClose(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -12576,7 +12576,7 @@ export class BotRuntime {
     };
   }
 
-  private async servicesSearchBegin(
+  async servicesSearchBegin(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -12620,7 +12620,7 @@ export class BotRuntime {
    * Not for the «working» card: a service with a change still being applied is drawn
    * «working» from its operation rows, and the check is skipped.
    */
-  private async openServiceCard(
+  async openServiceCard(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -12671,7 +12671,7 @@ export class BotRuntime {
     return this.serviceDetail(scope, actor, customer, serviceId);
   }
 
-  private async serviceRefresh(
+  async serviceRefresh(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -12724,7 +12724,7 @@ export class BotRuntime {
    * Writes nothing. The offer is re-read here rather than trusted from the drawn button, so
    * a stale or forged tap on a service that is no longer eligible is told so.
    */
-  private async serviceRefundAsk(
+  async serviceRefundAsk(
     scope: TenantContext,
     customer: CustomerRecord,
     serviceId: string,
@@ -12755,7 +12755,7 @@ export class BotRuntime {
    * «✅ تأیید درخواست بازگشت وجه»: opens the reason window. Still files nothing — the reason
    * files the request, so a confirmation never followed by a reason leaves no row.
    */
-  private async serviceRefundConfirm(
+  async serviceRefundConfirm(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -12792,7 +12792,7 @@ export class BotRuntime {
    * reason is told so and the window is opened again; everything else is decided by
    * `ServiceRefundRequestService.file`, inside its transaction.
    */
-  private async serviceRefundReason(
+  async serviceRefundReason(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -12893,7 +12893,7 @@ export class BotRuntime {
    * asks for it. Moves nothing; the service's eligibility is read again here rather than
    * trusted from the drawn button.
    */
-  private async serviceTransferAsk(
+  async serviceTransferAsk(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -12932,7 +12932,7 @@ export class BotRuntime {
    * refusal. A refusal about the recipient opens the window again, because its sentence asks
    * for the id once more; a service that cannot be transferred, or is not theirs, does not.
    */
-  private async serviceTransferRecipient(
+  async serviceTransferRecipient(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -13001,7 +13001,7 @@ export class BotRuntime {
    * the transfer it made; a second tap is a new update, and is answered with the transfer
    * already made rather than told it failed.
    */
-  private async serviceTransferConfirm(
+  async serviceTransferConfirm(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -13056,7 +13056,7 @@ export class BotRuntime {
     }
   }
 
-  private async refundOffer(
+  async refundOffer(
     scope: TenantContext,
     service: ServiceRecord,
   ): Promise<'OFFERED' | 'PENDING' | 'UNAVAILABLE'> {
@@ -13064,7 +13064,7 @@ export class BotRuntime {
     return refunds === undefined ? 'UNAVAILABLE' : refunds.customerOffer(scope, service);
   }
 
-  private async serviceNoteBegin(
+  async serviceNoteBegin(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -13095,7 +13095,7 @@ export class BotRuntime {
    * «💊 تمدید سرویس»: the renewal (the product re-priced at its current terms) and the
    * add-time packages, on one screen. Each option is re-decided by the quote it opens.
    */
-  private async renewMenu(
+  async renewMenu(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -13161,12 +13161,12 @@ export class BotRuntime {
   }
 
   /** The flag read once per screen; absent (a fixture without it) is on, as the menu always was. */
-  private async renewMenuShowsTime(scope: TenantContext): Promise<boolean> {
+  async renewMenuShowsTime(scope: TenantContext): Promise<boolean> {
     return (await this.deps.renewMenuShowsTime?.(scope)) ?? true;
   }
 
   /** `commercial.offer`, with "nothing offered" as null rather than a throw: the menu decides. */
-  private async offerOrNull(
+  async offerOrNull(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -13181,7 +13181,7 @@ export class BotRuntime {
     }
   }
 
-  private async referralGift(
+  async referralGift(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -13220,7 +13220,7 @@ export class BotRuntime {
    * the desk is not wired). Nothing here decides a fact: every write is `TicketService`'s,
    * which re-reads the ticket and its owner inside its transaction; the screens only draw.
    */
-  private async ticketTurn(
+  async ticketTurn(
     scope: TenantContext,
     actor: ActorContext,
     command: BotCommand,
@@ -13259,7 +13259,7 @@ export class BotRuntime {
   }
 
   /** The ticket desk's list: the customer's tickets, active first, and a new one. */
-  private async ticketList(
+  async ticketList(
     scope: TenantContext,
     desk: TicketDeskPort,
     customer: CustomerRecord,
@@ -13287,7 +13287,7 @@ export class BotRuntime {
   }
 
   /** A new ticket: the active categories. A courtesy check of the open-ticket rail first. */
-  private async ticketNew(
+  async ticketNew(
     scope: TenantContext,
     desk: TicketDeskPort,
     customer: CustomerRecord,
@@ -13328,7 +13328,7 @@ export class BotRuntime {
   }
 
   /** A category was chosen: open the window that reads the new ticket's first message. */
-  private async ticketCategory(
+  async ticketCategory(
     scope: TenantContext,
     actor: ActorContext,
     desk: TicketDeskPort,
@@ -13368,7 +13368,7 @@ export class BotRuntime {
   }
 
   /** One of the customer's own tickets: its heading and its latest messages. */
-  private async ticketView(
+  async ticketView(
     scope: TenantContext,
     desk: TicketDeskPort,
     customer: CustomerRecord,
@@ -13420,7 +13420,7 @@ export class BotRuntime {
   }
 
   /** The reply button: open the window that reads the customer's reply to this ticket. */
-  private async ticketReplyOpen(
+  async ticketReplyOpen(
     scope: TenantContext,
     actor: ActorContext,
     desk: TicketDeskPort,
@@ -13463,7 +13463,7 @@ export class BotRuntime {
   }
 
   /** The close button: the question. Writes nothing; its one button is the close. */
-  private async ticketCloseAsk(
+  async ticketCloseAsk(
     scope: TenantContext,
     desk: TicketDeskPort,
     customer: CustomerRecord,
@@ -13488,7 +13488,7 @@ export class BotRuntime {
   }
 
   /** The close itself. Closing a ticket already closed answers the same sentence. */
-  private async ticketClose(
+  async ticketClose(
     scope: TenantContext,
     actor: ActorContext,
     desk: TicketDeskPort,
@@ -13527,7 +13527,7 @@ export class BotRuntime {
    * window was the newer one at that instant; a ticket window opened afterwards is newer
    * than this file, and — as with `openedUpdateId` — not what it answered.
    */
-  private async ticketFile(
+  async ticketFile(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -13575,7 +13575,7 @@ export class BotRuntime {
    * again reopens it, reading only messages sent after this one, and a refusal that is an
    * answer ("closed", "too many open") leaves it shut.
    */
-  private async ticketSubmit(
+  async ticketSubmit(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -13706,7 +13706,7 @@ export class BotRuntime {
    * key. The reply names what changed and carries the way back; a repeated tap is answered
    * with the same reply, because the preference already holds.
    */
-  private async marketingPreference(
+  async marketingPreference(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -13746,10 +13746,7 @@ export class BotRuntime {
     };
   }
 
-  private async supportScreen(
-    scope: TenantContext,
-    customer: CustomerRecord,
-  ): Promise<PendingReply> {
+  async supportScreen(scope: TenantContext, customer: CustomerRecord): Promise<PendingReply> {
     const screen = await this.deps.support.partsFor(scope);
     const buttons: CustomerButton[] = [
       // WP-A7: the ticket desk, from the support screen and from /paysupport alike.
@@ -13802,10 +13799,7 @@ export class BotRuntime {
    * The five with a guide of their own always, and «🧩 سایر» only while the tenant files
    * an app there that this customer may see — decided by the catalogue, per tap.
    */
-  private async tutorialChoice(
-    scope: TenantContext,
-    customer: CustomerRecord,
-  ): Promise<PendingReply> {
+  async tutorialChoice(scope: TenantContext, customer: CustomerRecord): Promise<PendingReply> {
     const platforms =
       this.deps.clientApps === undefined
         ? CONNECTION_GUIDE_PLATFORMS
@@ -13818,7 +13812,7 @@ export class BotRuntime {
    * this customer may see — the platform's own `bot.tutorial.<platform>` guide, which is
    * exactly the screen a `to:<platform>` button opened before WP-A10.
    */
-  private async tutorialPlatform(
+  async tutorialPlatform(
     scope: TenantContext,
     customer: CustomerRecord,
     platform: ClientAppPlatform,
@@ -13831,7 +13825,7 @@ export class BotRuntime {
   }
 
   /** One app: its guide, its download links, and the customer's own service actions. */
-  private async clientApp(
+  async clientApp(
     scope: TenantContext,
     customer: CustomerRecord,
     appId: string,
@@ -13864,7 +13858,7 @@ export class BotRuntime {
   }
 
   /** One of the customer's own services, or null. Never anybody else's, never a throw. */
-  private async ownedService(
+  async ownedService(
     scope: TenantContext,
     customer: Pick<CustomerRecord, 'id'>,
     serviceId: string,
@@ -13905,7 +13899,7 @@ export class BotRuntime {
    * the first page rather than showing an empty list with a Previous button. That is a
    * navigation recovery and selects nothing: the customer taps again from what exists.
    */
-  private async catalogue(
+  async catalogue(
     scope: TenantContext,
     actor: ActorContext,
     page: number,
@@ -13982,7 +13976,7 @@ export class BotRuntime {
   }
 
   /** Whether to draw the custom-service button (Package D): some location prices this customer. */
-  private async customServiceOffered(
+  async customServiceOffered(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -13992,7 +13986,7 @@ export class BotRuntime {
   }
 
   /** The custom-service button: the locations, each by the label the operator wrote. */
-  private async customServiceMenu(
+  async customServiceMenu(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -14016,7 +14010,7 @@ export class BotRuntime {
   }
 
   /** A location was tapped: re-decided, then the volume question and its window. */
-  private async customServiceLocation(
+  async customServiceLocation(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -14047,7 +14041,7 @@ export class BotRuntime {
    * A figure a custom-service window read (Package D): the volume, then the days, then
    * the draft and the ordinary username step and pre-invoice.
    */
-  private async customServiceFigure(
+  async customServiceFigure(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -14143,7 +14137,7 @@ export class BotRuntime {
    * customer's, which there is nothing of ours to edit, and the choice is the one step
    * between the tap and the result.
    */
-  private async beginTrial(
+  async beginTrial(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -14196,7 +14190,7 @@ export class BotRuntime {
    * customer's lock, finds the allowance spent and is refused, so a double tap never
    * issues two trials a limit of one does not allow.
    */
-  private async claimTrial(
+  async claimTrial(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -14231,7 +14225,7 @@ export class BotRuntime {
    * sentence rather than honoured, and nothing a position in this page could mean is
    * ever looked up.
    */
-  private async categoryPage(
+  async categoryPage(
     scope: TenantContext,
     actor: ActorContext,
     categoryId: string,
@@ -14313,7 +14307,7 @@ export class BotRuntime {
    * is optional, so a body that renders it simply does not, and a body a tenant
    * overrode before this step existed is unaffected.
    */
-  private async preinvoice(
+  async preinvoice(
     scope: TenantContext,
     actor: ActorContext,
     order: OrderRecord,
@@ -14413,7 +14407,7 @@ export class BotRuntime {
    * The username is read back rather than carried, because the code turn does not know
    * it: the window that brought the code names only the order.
    */
-  private async repricedSummary(
+  async repricedSummary(
     scope: TenantContext,
     actor: ActorContext,
     order: OrderRecord,
@@ -14427,7 +14421,7 @@ export class BotRuntime {
   }
 
   /** Opens the code window for one draft and asks for the code. */
-  private async enterDiscountCode(
+  async enterDiscountCode(
     scope: TenantContext,
     actor: ActorContext,
     orderId: string,
@@ -14455,7 +14449,7 @@ export class BotRuntime {
   }
 
   /** Takes the code off a draft: the draft is re-quoted from its own snapshot. */
-  private async removeDiscountCode(
+  async removeDiscountCode(
     scope: TenantContext,
     actor: ActorContext,
     orderId: string,
@@ -14479,7 +14473,7 @@ export class BotRuntime {
    * An ordinary message the username window did not claim. A code only if the code
    * window says so; otherwise the fallback every unrecognised message has always had.
    */
-  private async typedDiscountCode(
+  async typedDiscountCode(
     scope: TenantContext,
     actor: ActorContext,
     text: string,
@@ -14540,7 +14534,7 @@ export class BotRuntime {
    * one the customer did not ask for is the half of INCIDENT-FIN-001 that is about
    * surprise rather than duration.
    */
-  private async afterDraft(
+  async afterDraft(
     scope: TenantContext,
     actor: ActorContext,
     order: OrderRecord,
@@ -14599,7 +14593,7 @@ export class BotRuntime {
   }
 
   /** The installation draws a name, and the summary shows the one it drew. */
-  private async automaticUsername(
+  async automaticUsername(
     scope: TenantContext,
     actor: ActorContext,
     orderId: string,
@@ -14636,7 +14630,7 @@ export class BotRuntime {
    * would add nothing they were not already told and would turn each attempt into a
    * probe of the validator.
    */
-  private async customUsername(
+  async customUsername(
     scope: TenantContext,
     actor: ActorContext,
     orderId: string,
@@ -14672,7 +14666,7 @@ export class BotRuntime {
    * default is unchanged, and nothing about this path can reach anything but one draft
    * order of one customer.
    */
-  private async typedUsername(
+  async typedUsername(
     scope: TenantContext,
     actor: ActorContext,
     text: string,
@@ -14747,7 +14741,7 @@ export class BotRuntime {
   }
 
   /** The summary a customer confirms. Every figure comes from the ORDER, never the tap. */
-  private async draft(
+  async draft(
     scope: TenantContext,
     actor: ActorContext,
     productId: string,
@@ -14773,7 +14767,7 @@ export class BotRuntime {
   }
 
   /** DRAFT to AWAITING_PAYMENT, and the message that says what that means. */
-  private async confirm(
+  async confirm(
     scope: TenantContext,
     actor: ActorContext,
     orderId: string,
@@ -14797,7 +14791,7 @@ export class BotRuntime {
    * One builder for a confirmed purchase, a confirmed commercial action and the selector's
    * «❌ بستن لیست», so the three can never draw different buttons for the same order.
    */
-  private async awaitingPaymentReply(
+  async awaitingPaymentReply(
     scope: TenantContext,
     customer: CustomerRecord,
     order: OrderRecord,
@@ -14838,7 +14832,7 @@ export class BotRuntime {
    * entries. `bot.wallet.balance` declares exactly one placeholder and this supplies
    * exactly that.
    */
-  private async walletBalance(
+  async walletBalance(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -14910,7 +14904,7 @@ export class BotRuntime {
    * unconfigured sentence. Reached from the main menu's «👥 زیرمجموعه‌گیری», `/referral`
    * and — from a wallet message drawn before F5 — the wallet's old referral button alike.
    */
-  private async referralInvite(
+  async referralInvite(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -15016,7 +15010,7 @@ export class BotRuntime {
    * so a customer who taps a button that has since become unfundable is told the same
    * thing either way.
    */
-  private async topupBegin(
+  async topupBegin(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -15069,7 +15063,7 @@ export class BotRuntime {
    * «پرداخت را انجام دادم | ارسال رسید» button that 5A and 5R built. A top-up has no
    * order, so nothing here names one.
    */
-  private async topupPick(
+  async topupPick(
     scope: TenantContext,
     actor: ActorContext,
     amountMinor: string,
@@ -15114,7 +15108,7 @@ export class BotRuntime {
    * the order is paid. It does NOT say a service is being prepared, because nothing in
    * this release prepares one.
    */
-  private async walletPayment(
+  async walletPayment(
     scope: TenantContext,
     actor: ActorContext,
     orderId: string,
@@ -15209,7 +15203,7 @@ export class BotRuntime {
    * service through `OrderService.confirm`, a renewal or a package through
    * `CommercialActionService.confirm`. Both are exactly-once under the update's key.
    */
-  private async confirmDraft(
+  async confirmDraft(
     scope: TenantContext,
     actor: ActorContext,
     order: OrderRecord,
@@ -15248,7 +15242,7 @@ export class BotRuntime {
    * not a lesser rendering of the same thing: it is the only thing this installation can
    * truthfully say about a payment whose destination was never recorded.
    */
-  private async manualPayment(
+  async manualPayment(
     scope: TenantContext,
     actor: ActorContext,
     orderId: string,
@@ -15292,7 +15286,7 @@ export class BotRuntime {
    *
    * Every button carries identifiers only. Each tap re-decides its route on the server.
    */
-  private async orderRouteButtons(
+  async orderRouteButtons(
     scope: TenantContext,
     customerId: UserId,
     orderId: string,
@@ -15335,7 +15329,7 @@ export class BotRuntime {
    * answers the refusal, and an order no longer payable (paid, cancelled, expired) answers
    * `bot.order.not_awaiting_payment`. No payment attempt exists until a route is tapped.
    */
-  private async paymentMethods(
+  async paymentMethods(
     scope: TenantContext,
     actor: ActorContext,
     orderId: string,
@@ -15388,7 +15382,7 @@ export class BotRuntime {
    * still in DRAFT answers its pre-invoice again. Anything else — a commercial draft, an
    * order that was paid, cancelled or expired meanwhile — answers the main menu.
    */
-  private async paymentMethodsBack(
+  async paymentMethodsBack(
     scope: TenantContext,
     actor: ActorContext,
     orderId: string,
@@ -15426,7 +15420,7 @@ export class BotRuntime {
    * A route that cannot be used right now is answered as unavailable, never as the
    * customer's payment failing (brief §19).
    */
-  private async gatewayPayment(
+  async gatewayPayment(
     scope: TenantContext,
     actor: ActorContext,
     orderId: string,
@@ -15478,7 +15472,7 @@ export class BotRuntime {
    * Another customer's payment, or one that is not a gateway attempt, is answered as a
    * closed attempt — never with anything about it.
    */
-  private async gatewayCheck(
+  async gatewayCheck(
     scope: TenantContext,
     paymentId: string,
     customer: CustomerRecord,
@@ -15497,7 +15491,7 @@ export class BotRuntime {
   }
 
   /** An external-gateway attempt, as the customer sees it: `gatewayAttemptScreen`, now. */
-  private async gatewayAttemptReply(
+  async gatewayAttemptReply(
     attempt: GatewayAttempt | GatewayAttemptView,
     orderId: string | null,
     scope: TenantContext,
@@ -15512,7 +15506,7 @@ export class BotRuntime {
    * (re-decided against the rows) with the attempt's current screen: closed, in review, a
    * receipt already on its way. The tap extends nothing.
    */
-  private async gatewayReceipt(
+  async gatewayReceipt(
     scope: TenantContext,
     actor: ActorContext,
     paymentId: string,
@@ -15562,7 +15556,7 @@ export class BotRuntime {
    * Refused locally while one is in flight, during the cooldown or once exhausted — the
    * current screen is redrawn, which no longer carries the button.
    */
-  private async gatewayCardChange(
+  async gatewayCardChange(
     scope: TenantContext,
     actor: ActorContext,
     paymentId: string,
@@ -15632,7 +15626,7 @@ export class BotRuntime {
    * otherwise the attempt's current screen is redrawn. The confirm button carries the
    * destructive prefix; «🔎» is the way back.
    */
-  private async gatewayCancelAsk(
+  async gatewayCancelAsk(
     scope: TenantContext,
     paymentId: string,
     customer: CustomerRecord,
@@ -15681,7 +15675,7 @@ export class BotRuntime {
    * redrawn as "cancelling…" and the worker edits the result in. Re-decided against the rows
    * under the payment's lock; a refusal redraws the attempt as it stands.
    */
-  private async gatewayCancel(
+  async gatewayCancel(
     scope: TenantContext,
     actor: ActorContext,
     paymentId: string,
@@ -15719,7 +15713,7 @@ export class BotRuntime {
    * asks for it as its own message. Offered only for an overpaid invoice whose refund is not
    * already pending or in flight.
    */
-  private async gatewayRefundCardPrompt(
+  async gatewayRefundCardPrompt(
     scope: TenantContext,
     actor: ActorContext,
     paymentId: string,
@@ -15776,7 +15770,7 @@ export class BotRuntime {
    * — the reply shows the card masked. A bad format reopens the window, so the next message is
    * still read.
    */
-  private async gatewayRefundCardText(
+  async gatewayRefundCardText(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -15844,7 +15838,7 @@ export class BotRuntime {
    * cooldown) or in review / UNKNOWN is redrawn as it stands — the review screens included;
    * anything else that is no longer payable answers `gateway_closed` and nothing more.
    */
-  private refusedCardTap(
+  refusedCardTap(
     scope: TenantContext,
     view: GatewayAttemptView,
   ): Promise<PendingReply> | PendingReply {
@@ -15863,7 +15857,7 @@ export class BotRuntime {
    * A photo for an open provider receipt window in THIS bot (§8.3), or null when none is
    * open — the caller then runs the manual flow exactly as before.
    */
-  private async gatewayReceiptPhoto(
+  async gatewayReceiptPhoto(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -15917,7 +15911,7 @@ export class BotRuntime {
    * ownership check `attemptFor` makes — else `{}`, whose optional line is then dropped. A
    * payment that is not theirs is never named (TPTG-19).
    */
-  private async ownedTrackingCode(
+  async ownedTrackingCode(
     scope: TenantContext,
     customer: CustomerRecord,
     botInstanceId: BotInstanceId,
@@ -15942,7 +15936,7 @@ export class BotRuntime {
    * the payment because the messenger uses it for correlation, and a top-up correlates
    * to no order.
    */
-  private async transferInstruction(
+  async transferInstruction(
     scope: TenantContext,
     { payment, destination }: ManualTransferInstruction,
     orderId: string | null,
@@ -16099,7 +16093,7 @@ export class BotRuntime {
    * is told it is no longer pending instead of being shown a question whose answer
    * would be refused.
    */
-  private async cancelPaymentAsk(
+  async cancelPaymentAsk(
     scope: TenantContext,
     paymentId: string,
     customer: CustomerRecord,
@@ -16126,7 +16120,7 @@ export class BotRuntime {
     };
   }
 
-  private async cancelPayment(
+  async cancelPayment(
     scope: TenantContext,
     actor: ActorContext,
     paymentId: string,
@@ -16174,7 +16168,7 @@ export class BotRuntime {
    * the limit reached). The payment, its amount and its tracking code are the invoice's own.
    * A payment no longer an open card-to-card invoice is answered as a stale payment tap is.
    */
-  private async switchCard(
+  async switchCard(
     scope: TenantContext,
     actor: ActorContext,
     paymentId: string,
@@ -16228,7 +16222,7 @@ export class BotRuntime {
     }
   }
 
-  private async signalTransferSent(
+  async signalTransferSent(
     scope: TenantContext,
     actor: ActorContext,
     paymentId: string,
@@ -16337,7 +16331,7 @@ export class BotRuntime {
    * there is no frozen kind that means "your receipt arrived" — inventing one to cover
    * a failed interactive send is what ADR-0030 §1 refuses.
    */
-  private async submitReceipt(
+  async submitReceipt(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
@@ -16402,7 +16396,7 @@ export class BotRuntime {
    * moved on — nothing is edited, and the new message alone answers the receipt. A refused
    * edit is not re-sent as a new message: the new message is the one the customer is owed.
    */
-  private async finaliseReceiptInvoice(
+  async finaliseReceiptInvoice(
     scope: TenantContext,
     actor: ActorContext,
     botInstanceId: BotInstanceId,
@@ -16452,7 +16446,7 @@ export class BotRuntime {
    * it is edited. An unreadable code drops the line (the template's optional token), never
    * the edit.
    */
-  private async receiptInvoiceFinalValues(
+  async receiptInvoiceFinalValues(
     scope: TenantContext,
     actor: ActorContext,
     customerId: UserId,
@@ -16500,7 +16494,7 @@ export class BotRuntime {
    * exist. The cancellation re-checks both inside its own transaction; this check is
    * about not drawing a question, not about authorization.
    */
-  private async cancelOrderAsk(
+  async cancelOrderAsk(
     scope: TenantContext,
     orderId: string,
     customer: CustomerRecord,
@@ -16540,7 +16534,7 @@ export class BotRuntime {
    * stop using is noise. The refusal when they HAVE claimed to pay is the case where
    * the payment matters, and it has its own key.
    */
-  private async cancelOrder(
+  async cancelOrder(
     scope: TenantContext,
     actor: ActorContext,
     orderId: string,
@@ -16569,7 +16563,7 @@ export class BotRuntime {
 
   /** Best effort, after the answer, and never allowed to fail the turn. */
   /** R2: the tapped message, by its identity. */
-  private refOf(
+  refOf(
     botInstanceId: BotInstanceId,
     origin: CallbackOrigin,
   ): { botInstanceId: BotInstanceId; chatId: string; messageId: number } {
@@ -16593,7 +16587,7 @@ export class BotRuntime {
    * onto it. A landing overtaken by the gateway worker — which has the fresher invoice —
    * answers nothing: the worker's edit is the one the message keeps.
    */
-  private async editWizard(
+  async editWizard(
     scope: TenantContext,
     actor: ActorContext,
     reply: PendingReply,
@@ -16728,7 +16722,7 @@ export class BotRuntime {
    * ends the invoice in its final state. It sends no new message: that is the receipt
    * turn's, keyed on the receipt being the payment's first.
    */
-  private async settleReceiptPrompt(
+  async settleReceiptPrompt(
     scope: TenantContext,
     actor: ActorContext,
     target: TelegramWizardRecord,
@@ -16783,7 +16777,7 @@ export class BotRuntime {
    * An edit Telegram definitely did not apply has its stamp cleared, so a later tap can
    * finish it. Null when no payment could be named: the reply goes out as before.
    */
-  private async finaliseReview(
+  async finaliseReview(
     scope: TenantContext,
     actor: ActorContext,
     reply: PendingReply,
@@ -16911,7 +16905,7 @@ export class BotRuntime {
    * `finaliseReviews` stamped in THIS call, and a finalised message is never stamped again,
    * so a repeated tap never sends the reply a second time.
    */
-  private async editReviewRecord(
+  async editReviewRecord(
     scope: TenantContext,
     message: CustomerMessageRef,
     record: { readonly key: TemplateKey; readonly values: TemplateValues },
@@ -16959,7 +16953,7 @@ export class BotRuntime {
    * receipts read charges `receipts.view`, and the wallet lines `users.view`). `GONE`, or a
    * record that cannot be read, is the outcome's own one line: still true, and never blank.
    */
-  private async finalReviewRecord(
+  async finalReviewRecord(
     scope: TenantContext,
     actor: ActorContext,
     telegramUserId: string,
@@ -16988,7 +16982,7 @@ export class BotRuntime {
   }
 
   /** The administrator behind a review tap, or null when there is none. */
-  private async reviewerActor(
+  async reviewerActor(
     scope: TenantContext,
     actor: ActorContext,
     telegramUserId: string,
@@ -17006,7 +17000,7 @@ export class BotRuntime {
    * (the one decision that leaves it in the queue). Nothing is decided, credited, sent or
    * edited here. A read that cannot be made answers without a notice, as before.
    */
-  private async repeatedReviewToast(
+  async repeatedReviewToast(
     scope: TenantContext,
     actor: ActorContext,
     telegramUserId: string,
@@ -17038,7 +17032,7 @@ export class BotRuntime {
     }
   }
 
-  private async stopSpinner(
+  async stopSpinner(
     scope: TenantContext,
     command: BotCommand,
     botInstanceId: BotInstanceId,
@@ -17058,7 +17052,7 @@ export class BotRuntime {
    * `UNKNOWN` and `RATE_LIMITED` are not followed by a send: the edit may have landed, or
    * a send would meet the same refusal.
    */
-  private async editOrSend(
+  async editOrSend(
     scope: TenantContext,
     target: CardMessageRef,
     reply: PendingReply,
