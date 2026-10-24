@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Fake `gh` for ci-status.test.sh: serves fixtures by endpoint, logs every call.
+# FAKE_DIR = fixture scenario dir, FAKE_LOG = invocation log, FAKE_STATE = counters.
+echo "$*" >>"$FAKE_LOG"
+[[ "${1:-}" == api ]] || { echo "fake gh: only 'api' is served" >&2; exit 1; }
+ep=""; for a in "${@:2}"; do [[ "$a" == -* ]] || { ep="$a"; break; }; done
+ep="${ep%%\?*}"; ep="${ep#repos/*/*/}"        # drop query and repos/o/r/
+name="${ep//\//_}"; [[ "$ep" == commits/*/check-runs ]] && name=check-runs
+n=$(($(cat "$FAKE_STATE/$name" 2>/dev/null || echo 0) + 1)); echo "$n" >"$FAKE_STATE/$name"
+for f in "$FAKE_DIR/$name.$n.json" "$FAKE_DIR/$name.json" "$FAKE_DIR/$name.txt"; do
+  [[ -f "$f" ]] && { cat "$f"; exit 0; }
+done
+echo "fake gh: HTTP 404 $ep" >&2; exit 1
