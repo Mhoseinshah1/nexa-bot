@@ -1300,7 +1300,7 @@ function Bytes({ value }: { value: string | null }) {
   return <ByteSize bytes={BigInt(value)} />;
 }
 
-/** A size with its unit («۱۸۲ مگابایت»): a bare number in a size column reads as nothing. */
+/** A size with its unit: a bare number in a size column reads as nothing. */
 export function ByteSize({ bytes }: { bytes: bigint }) {
   const { value, unit } = splitBytes(bytes);
   return (
