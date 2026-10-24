@@ -38,7 +38,7 @@ import {
 
 export const SERVICE_CARD_LAYOUT_SETTING = 'bot.service_card_layout';
 
-/** The templates a slot's label comes from: «خاموش کردن» and «روشن کردن» share one slot. */
+/** The templates a slot label comes from: switch-off and switch-on share one slot. */
 function labelKeysOf(slot: ServiceCardButton): string[] {
   const keys = [slot, ...(slot === 'service.suspend' ? ['service.resume'] : [])];
   return keys.flatMap((key) => {

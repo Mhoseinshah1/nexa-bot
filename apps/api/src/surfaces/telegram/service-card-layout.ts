@@ -1,6 +1,6 @@
 import { serviceCardLayoutSchema, serviceCardSlotOf } from '@nexa/contracts';
 
-/** The button «بازگشت»: not a slot, always drawn, always last. */
+/** The back button: not a slot, always drawn, always last. */
 const BACK_KEY = 'service.back_to_list';
 
 /** Layout rows are numbered from here, above every row the runtime numbers by hand. */
