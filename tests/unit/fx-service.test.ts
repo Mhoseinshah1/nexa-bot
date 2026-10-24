@@ -1109,6 +1109,27 @@ describe('Round 8: Tabdeal, Bitpin, Ramzinex and the sanity band', () => {
     expect(codes(w)).not.toContain(FX_SINGLE_SOURCE_CODE);
   });
 
+  it('Nobitex stays ON and is merely skipped at 403: Tabdeal + Bitpin store the rate on the defaults', async () => {
+    // The owner's server: Nobitex (still the default primary, still enabled) answers 403 and
+    // Wallex is down too. Two OTHER agreeing sources are two: a rate is stored with no
+    // single-source mode, and Nobitex is dialled, recorded as a failure, never removed.
+    const w = world({
+      settings: registryDefaults(),
+      nobitex: () => down('nobitex.http_403'),
+      wallex: () => down('wallex.unreadable'),
+      tabdeal: () => reading('TABDEAL', 268_671n, 'IRT'),
+      bitpin: () => reading('BITPIN', 268_450n, 'IRT'),
+    });
+    expect(registryDefaults()['fx.source_nobitex_enabled']).toBe(true);
+    expect(registryDefaults()['fx.primary_source']).toBe('NOBITEX');
+    const result = await w.service.refreshIfDue(scope, 'USDT');
+    expect(result.outcome).toMatch(/^REFRESHED/);
+    expect(['TABDEAL', 'BITPIN']).toContain(w.repository.row?.quote?.source);
+    expect(w.nobitex.calls).toBe(1);
+    expect(w.repository.states.get('NOBITEX')).toMatchObject({ consecutiveFailures: 1 });
+    expect(codes(w)).not.toContain(FX_SINGLE_SOURCE_CODE);
+  });
+
   it('a disabled source is never called: Ramzinex is off by default, and a switched-off Bitpin too', async () => {
     const w = world({
       settings: {
