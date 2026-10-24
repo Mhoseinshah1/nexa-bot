@@ -84,9 +84,12 @@ export interface SelectOption {
  *   money (amount and currency), and a list of money, of Telegram handles and of channels.
  *   (The product picker went with `trial.product_id`'s retirement, F5.)
  *
- * There is no boolean and no secret control because the registry holds neither: a
- * switch is a feature flag, not a setting, and a credential is never a setting
- * (`holds no credential` in the registry test).
+ * - `boolean`: a setting whose schema is `z.boolean()` (R8-C1). It sends a real boolean.
+ *   A boolean-schema key must use it, never a `select` of `'true'`/`'false'` strings —
+ *   the registry test iterates every boolean key to hold that.
+ *
+ * There is no secret control: a credential is never a setting (`holds no credential`
+ * in the registry test).
  */
 export type SettingControl =
   | { readonly kind: 'integer'; readonly unit?: WebKey; readonly optional?: true }
@@ -98,6 +101,11 @@ export type SettingControl =
    */
   | { readonly kind: 'decimal' }
   | { readonly kind: 'select'; readonly options: readonly SelectOption[] }
+  /**
+   * A setting whose schema is `z.boolean()` (R8-C1). The control sends a real boolean,
+   * never the string a select would; `on`/`off` are the two Persian labels.
+   */
+  | { readonly kind: 'boolean'; readonly on: WebKey; readonly off: WebKey }
   | { readonly kind: 'currency' }
   | { readonly kind: 'money' }
   | { readonly kind: 'money_list' }
@@ -246,37 +254,19 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     title: 'web.late_credit_switch_tonpays',
     description: 'web.late_credit_switch_hint',
     group: 'sales',
-    control: {
-      kind: 'select',
-      options: [
-        { value: 'true', label: 'web.backup_schedule_on' },
-        { value: 'false', label: 'web.backup_schedule_off' },
-      ],
-    },
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
   },
   [LATE_CREDIT_SETTING_KEYS.TONPAYS_TELEGRAM]: {
     title: 'web.late_credit_switch_tonpays_telegram',
     description: 'web.late_credit_switch_hint',
     group: 'sales',
-    control: {
-      kind: 'select',
-      options: [
-        { value: 'true', label: 'web.backup_schedule_on' },
-        { value: 'false', label: 'web.backup_schedule_off' },
-      ],
-    },
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
   },
   [LATE_CREDIT_SETTING_KEYS.TETRAPAY]: {
     title: 'web.late_credit_switch_tetrapay',
     description: 'web.late_credit_switch_hint',
     group: 'sales',
-    control: {
-      kind: 'select',
-      options: [
-        { value: 'true', label: 'web.backup_schedule_on' },
-        { value: 'false', label: 'web.backup_schedule_off' },
-      ],
-    },
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
   },
   [LATE_CREDIT_WINDOW_SETTING_KEY]: {
     title: 'web.late_credit_window',
@@ -289,25 +279,13 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     title: 'web.cn_pause_title',
     description: 'web.cn_pause_hint',
     group: 'customer_notices',
-    control: {
-      kind: 'select',
-      options: [
-        { value: 'true', label: 'web.cn_pause_on' },
-        { value: 'false', label: 'web.cn_pause_off' },
-      ],
-    },
+    control: { kind: 'boolean', on: 'web.cn_pause_on', off: 'web.cn_pause_off' },
   },
   'ops.log.storm_rollup_enabled': {
     title: 'web.opslog_storm_enabled',
     description: 'web.opslog_storm_enabled_hint',
     group: 'ops',
-    control: {
-      kind: 'select',
-      options: [
-        { value: 'true', label: 'web.backup_schedule_on' },
-        { value: 'false', label: 'web.backup_schedule_off' },
-      ],
-    },
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
   },
   'ops.log.storm_threshold': {
     title: 'web.opslog_storm_threshold',
@@ -347,13 +325,7 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     title: 'web.backup_schedule_auto',
     description: 'web.backup_schedule_hint',
     group: 'ops',
-    control: {
-      kind: 'select',
-      options: [
-        { value: 'true', label: 'web.backup_schedule_on' },
-        { value: 'false', label: 'web.backup_schedule_off' },
-      ],
-    },
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
   },
   'backup.interval_minutes': {
     title: 'web.backup_schedule_interval',
@@ -749,25 +721,13 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     title: 'web.setting_fx_source_nobitex_enabled',
     description: 'web.setting_fx_source_nobitex_enabled_desc',
     group: 'fx',
-    control: {
-      kind: 'select',
-      options: [
-        { value: 'true', label: 'web.backup_schedule_on' },
-        { value: 'false', label: 'web.backup_schedule_off' },
-      ],
-    },
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
   },
   'fx.source_wallex_enabled': {
     title: 'web.setting_fx_source_wallex_enabled',
     description: 'web.setting_fx_source_wallex_enabled_desc',
     group: 'fx',
-    control: {
-      kind: 'select',
-      options: [
-        { value: 'true', label: 'web.backup_schedule_on' },
-        { value: 'false', label: 'web.backup_schedule_off' },
-      ],
-    },
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
   },
   'fx.min_agreeing_sources': {
     title: 'web.setting_fx_min_agreeing_sources',
@@ -779,13 +739,7 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     title: 'web.setting_fx_accept_single_source',
     description: 'web.setting_fx_accept_single_source_desc',
     group: 'fx',
-    control: {
-      kind: 'select',
-      options: [
-        { value: 'true', label: 'web.backup_schedule_on' },
-        { value: 'false', label: 'web.backup_schedule_off' },
-      ],
-    },
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
   },
   'stars.pricing_mode': {
     title: 'web.setting_stars_pricing_mode',

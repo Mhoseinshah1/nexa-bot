@@ -312,6 +312,76 @@ describe('the settings page', () => {
     });
   });
 
+  /**
+   * R8-C1. A boolean-schema setting must be drawn with the boolean control, which sends a
+   * real boolean. A select of 'true'/'false' strings sends text the schema refuses
+   * («این مقدار پذیرفته نشد») and shows «تنظیم نشده» for a stored boolean.
+   */
+  describe('boolean settings (R8-C1)', () => {
+    const BOOLEAN_KEYS = SETTINGS.filter(
+      (definition) =>
+        definition.schema.safeParse(true).success &&
+        definition.schema.safeParse(false).success &&
+        !definition.schema.safeParse('true').success,
+    ).map((definition) => definition.key);
+
+    it('finds the boolean keys it is meant to hold (the iteration is not vacuously empty)', () => {
+      expect(BOOLEAN_KEYS.length).toBeGreaterThanOrEqual(9);
+      for (const key of [
+        'fx.source_nobitex_enabled',
+        'fx.source_wallex_enabled',
+        'fx.accept_single_source',
+      ]) {
+        expect(BOOLEAN_KEYS).toContain(key);
+      }
+    });
+
+    it('draws EVERY boolean-schema key with the boolean control, never a string select', () => {
+      for (const key of BOOLEAN_KEYS) {
+        const presentation = SETTING_PRESENTATION[key];
+        expect(presentation, key).toBeDefined();
+        expect(presentation?.control.kind, key).toBe('boolean');
+      }
+    });
+
+    const FX_KEYS = [
+      'fx.source_nobitex_enabled',
+      'fx.source_wallex_enabled',
+      'fx.accept_single_source',
+    ] as const;
+
+    for (const key of FX_KEYS) {
+      for (const target of [true, false]) {
+        it(`${key}: saving ${target ? 'ON' : 'OFF'} sends a boolean and shows the label`, async () => {
+          const title = t(
+            (SETTING_PRESENTATION[key] as { title: WebKey }).title,
+          );
+          const api = stubApi([
+            {
+              url: '/settings',
+              body: { settings: [setting({ key, value: !target, configures: 'fx' })] },
+            },
+            {
+              url: `/settings/${key}`,
+              body: { setting: setting({ key, value: target }), changed: true },
+            },
+          ]);
+          renderPage(<SettingsPage mayEdit denied={false} />);
+          const select = (await screen.findByLabelText(title)) as HTMLSelectElement;
+          // The stored boolean is shown, not «تنظیم نشده».
+          expect(select.value).toBe(target ? 'off' : 'on');
+          fireEvent.change(select, { target: { value: target ? 'on' : 'off' } });
+          fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+          await waitFor(() => {
+            const write = api.calls.find((call) => call.method === 'POST');
+            expect(write?.body).toMatchObject({ value: target });
+            expect(typeof (write?.body as { value: unknown }).value).toBe('boolean');
+          });
+        });
+      }
+    }
+  });
+
   it('edits a closed set with a select of Persian options', async () => {
     const api = stubApi([
       {
