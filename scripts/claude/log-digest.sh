@@ -13,7 +13,9 @@ set -euo pipefail
 export LC_ALL=C
 MAX=40
 
-sed -e $'s/\r//g' -e $'s/\x1b\\[[0-9;?]*[A-Za-z]//g' | awk -v max="$MAX" '
+# Vitest prints a named project's label before the file: "FAIL  |unit| tests/...".
+sed -e $'s/\r//g' -e $'s/\x1b\\[[0-9;?]*[A-Za-z]//g' \
+  | sed -E 's/^([[:space:]]*(FAIL|FAILED|❯|>|✓|√|×|✗|✘)[[:space:]]+)\|[A-Za-z0-9_.-]+\|[[:space:]]+/\1/' | awk -v max="$MAX" '
 function addrec(k, istest) {
   if (!(k in seen)) { seen[k] = 1; order[++n] = k; if (istest) tests++; else others++ }
 }

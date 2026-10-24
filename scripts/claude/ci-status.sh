@@ -14,7 +14,8 @@ usage: ci-status.sh <pr-number|sha> [--fail-logs] [--gate]
 
 Prints: <sha8> green=N pending=N red=N skipped=N [red: job1, job2]
 Exit:   0 all green, 1 any red, 2 any pending (red wins over pending), 3 error.
-Env:    CI_STATUS_REPO=owner/repo   CI_STATUS_GATE_NAME=<regex, default gate>
+Env:    CI_STATUS_REPO=owner/repo   CI_STATUS_GATE_NAME=<regex; default: this repo's aggregate
+        check 'Unit and integration tests' (ci.yml job test), or a name containing gate>
 USAGE
 }
 
@@ -39,7 +40,7 @@ else if (mode === 'summary') {
   for (const r of reds) console.log(`RED\t${r.id}\t${r.name}`);
 } else if (mode === "run-id") { const j = read(); if (j && j.run_id != null) console.log(j.run_id); }
 else if (mode === "gate") {
-  const re = new RegExp(args[0] || 'gate', 'i'); const runs = runsOf(read());
+  const re = new RegExp(args[0] || '^(unit and integration tests|.*gate.*)$', 'i'); const runs = runsOf(read());
   const gates = runs.filter((r) => classify(r) === 'red' && re.test(r.name));
   const others = runs.filter((r) => !gates.includes(r));
   if (gates.length && others.every((r) => ['green', 'skipped'].includes(classify(r)))) console.log(gates[0].id);
@@ -163,7 +164,7 @@ fail_logs() {
 
 gate_check() {
   local id run
-  id="$(jx gate "${CI_STATUS_GATE_NAME:-gate}" <<<"$checks_json")"
+  id="$(jx gate "${CI_STATUS_GATE_NAME:-}" <<<"$checks_json")"
   if [[ -z "$id" ]]; then echo "gate-only-red: no"; return; fi
   run="$(api "repos/$R/actions/jobs/$id" | jx run-id 2>/dev/null || true)"
   [[ -n "$run" ]] || { echo "gate-only-red: yes, but run id unavailable for job $id"; return; }

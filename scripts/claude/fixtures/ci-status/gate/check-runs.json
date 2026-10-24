@@ -2,6 +2,11 @@
   "check_runs": [
     { "id": 11, "name": "lint", "status": "completed", "conclusion": "success" },
     { "id": 12, "name": "unit", "status": "completed", "conclusion": "success" },
-    { "id": 13, "name": "CI gate", "status": "completed", "conclusion": "failure" }
+    {
+      "id": 13,
+      "name": "Unit and integration tests",
+      "status": "completed",
+      "conclusion": "failure"
+    }
   ]
 }

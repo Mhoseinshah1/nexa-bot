@@ -27,6 +27,11 @@ has "vitest: assertion message" vitest-fail.txt "  AssertionError: expected 1 to
 has "vitest: plain Error message" vitest-fail.txt "  Error: ledger entry missing"
 has "vitest: location" vitest-fail.txt "  tests/unit/wallet.test.ts:42"
 last_is "vitest: summary" vitest-fail.txt "failed=2 passed=6"
+has "vitest project label: failing test" vitest-project-fail.txt "tests/unit/delivery-qr-template.test.ts › composing the QR on a background > draws every module as an exact block"
+has "vitest project label: second project" vitest-project-fail.txt "tests/web/payment-gateways.test.tsx › payment gateways > hides the secret field"
+has "vitest project label: message" vitest-project-fail.txt "  AssertionError: expected 3 to be 4"
+has "vitest project label: location" vitest-project-fail.txt "  tests/web/payment-gateways.test.tsx:64"
+last_is "vitest project label: summary" vitest-project-fail.txt "failed=2 passed=20"
 out="$(run vitest-fail.txt)"
 [[ "$(grep -c '›' <<<"$out")" -eq 2 ]] && ok "vitest: each test once (x mark and FAIL deduped)" || bad "vitest: each test once" "$out"
 if grep -q $'\033' <<<"$out"; then bad "no ANSI left in output" "$out"; else ok "no ANSI left in output"; fi

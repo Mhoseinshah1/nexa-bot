@@ -1,0 +1,20 @@
+ RUN  v3.2.4 /repo
+
+ ✓ |unit| tests/unit/money.test.ts (12 tests) 8ms
+ ❯ |unit| tests/unit/delivery-qr-template.test.ts (46 tests | 1 failed | 45 skipped) 180ms
+   × composing the QR on a background > draws every module as an exact block 173ms
+ ❯ |web| tests/web/payment-gateways.test.tsx (9 tests | 1 failed) 412ms
+   × payment gateways > hides the secret field 30ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| tests/unit/delivery-qr-template.test.ts > composing the QR on a background > draws every module as an exact block
+AssertionError: expected 3 to be 4
+ ❯ tests/unit/delivery-qr-template.test.ts:118:21
+
+ FAIL  |web| tests/web/payment-gateways.test.tsx > payment gateways > hides the secret field
+Error: Unable to find an element with the role "textbox"
+ ❯ tests/web/payment-gateways.test.tsx:64:9
+
+ Test Files  2 failed | 1 passed (3)
+      Tests  2 failed | 20 passed | 45 skipped (67)

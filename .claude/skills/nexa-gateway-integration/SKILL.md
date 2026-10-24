@@ -32,8 +32,12 @@ Domain invariants (Payments, Money) first. Paths: `PAY` =
 - [ ] Settlement under the payment's lock, scope checked in the transaction,
       the 70-minute `*_ATTEMPT_LIFETIME_MINUTES` deadline checked there; a later
       approval is `LATE_COMPLETION` and settles nothing.
-- [ ] Signed webhooks use the shared timestamped HMAC core (300 s window), raw
-      bytes from `raw-body.ts`; the timestamp is not a dedupe key. Dedupe is
+- [ ] Verify the webhook exactly as the provider signs it. A provider with a
+      `t=<unix>,v1=<hex>` header over the raw body (TonPays, TetraPay) uses the
+      shared timestamped HMAC core (300 s window, raw bytes from `raw-body.ts`);
+      one with another scheme keeps its own verifier (NOWPayments: HMAC-SHA512
+      over key-sorted JSON, `nowpayments-signature.ts`) — never force it onto
+      the shared core. A timestamp is never a dedupe key. Dedupe is
       `gateway_invoices.last_webhook_delivery_id`, and settlement is
       exactly-once without it. Secret required or optional is a descriptor field.
 - [ ] Provider idempotency is a unique per-attempt provider order id; a retry by
