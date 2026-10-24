@@ -65,6 +65,7 @@ export * from './bot-menu.js';
 export * from './bot-menu-builder.js';
 // Owner spec §6: the customer's inline («شیشه‌ای») buttons — keys, labels, styles.
 export * from './inline-buttons.js';
+export * from './service-card-layout.js';
 export * from './bot-management.js';
 // Premium UI: appearance slots and custom emoji.
 export * from './appearance.js';
