@@ -45,6 +45,10 @@ pnpm test:deploy`, `pnpm check:i18n`).
    database. CI runs both on the PR head; a green local gate is not a
    substitute for green CI on the exact head.
 
+Pipe every run through the digest (`nexa-log-digest`), e.g.
+`pnpm verify 2>&1 | bash scripts/claude/log-digest.sh`; read the full output
+only for the section the digest names.
+
 ## Guard classes the selector never narrows
 
 | Change touches                                                                               | Always keep                                                                               |
@@ -74,6 +78,14 @@ Integration suites truncate tables. Start services with
 `bash scripts/dev-services.sh`; run one integration process per database at a
 time; never run two agents' suites against the same database (CLAUDE.md,
 "Reviewing with agents").
+
+- Check Postgres and Redis are up first; an unreachable service is not a test
+  result.
+- A shared test database with a **stale migration history** (applied rows from
+  another branch's journal, e.g. after a renumber) fails in ways that look like
+  real bugs. Do not repair it in place: create a fresh private database
+  (`createdb -h 127.0.0.1 -U nexa nexa_test_<you>`), point `TEST_DATABASE_URL`
+  at it, run, and drop it at the end of the round.
 
 ## A failure is information
 

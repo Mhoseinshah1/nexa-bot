@@ -7,7 +7,8 @@ description: Write or read a short, structured NEXA session handoff — branch a
 
 Cloud containers are reclaimed; the conversation is not available to the next
 session. A handoff is the minimum the next session needs to act correctly,
-not a transcript. Target: under ~40 lines.
+not a transcript. Target: under ~40 lines. `nexa-round-pipeline` requires one at
+the end of every round, and as soon as the session budget runs low.
 
 ## Writing one
 
@@ -19,7 +20,8 @@ not a transcript. Target: under ~40 lines.
    ```
 
 2. Fill the judgement sections yourself, from verified state — look up the PR
-   and CI with the GitHub tools rather than recalling them:
+   and CI rather than recalling them, with `bash scripts/claude/ci-status.sh
+<pr>` and `--codex <pr>` (`nexa-ci-watch`; REST only, GraphQL is blocked):
 
    ```markdown
    # Handoff — <task in one line>
@@ -75,6 +77,6 @@ not a transcript. Target: under ~40 lines.
 ## Reading one
 
 Re-verify before acting: `git fetch`, compare the handoff's SHAs to the remote,
-re-read the PR's CI and threads. A handoff is a snapshot; the remote is the
+re-read the PR's CI and threads (`ci-status.sh <pr>`, `--codex <pr>`). A handoff is a snapshot; the remote is the
 truth. If they disagree, the remote wins and the discrepancy goes in your own
 handoff.

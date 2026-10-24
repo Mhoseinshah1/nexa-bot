@@ -1,5 +1,28 @@
 [
- {"user":{"login":"chatgpt-codex-connector[bot]"},"path":"src/a.ts","line":42,"original_line":40,"commit_id":"1111111122222222","created_at":"2026-01-01T00:00:00Z","body":"**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Refund twice on retry**\n\nThe second call credits again. Add a guard."},
- {"user":{"login":"chatgpt-codex-connector[bot]"},"path":"src/b.ts","line":null,"original_line":7,"commit_id":"abcdef0123456789","created_at":"2026-01-02T00:00:00Z","body":"**P2** Missing await on the lookup. Callers race."},
- {"user":{"login":"human"},"path":"src/c.ts","line":1,"commit_id":"zzzzzzzzzz","created_at":"2026-01-03T00:00:00Z","body":"P1 not codex"}
+  {
+    "user": { "login": "chatgpt-codex-connector[bot]" },
+    "path": "src/a.ts",
+    "line": 42,
+    "original_line": 40,
+    "commit_id": "1111111122222222",
+    "created_at": "2026-01-01T00:00:00Z",
+    "body": "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Refund twice on retry**\n\nThe second call credits again. Add a guard."
+  },
+  {
+    "user": { "login": "chatgpt-codex-connector[bot]" },
+    "path": "src/b.ts",
+    "line": null,
+    "original_line": 7,
+    "commit_id": "abcdef0123456789",
+    "created_at": "2026-01-02T00:00:00Z",
+    "body": "**P2** Missing await on the lookup. Callers race."
+  },
+  {
+    "user": { "login": "human" },
+    "path": "src/c.ts",
+    "line": 1,
+    "commit_id": "zzzzzzzzzz",
+    "created_at": "2026-01-03T00:00:00Z",
+    "body": "P1 not codex"
+  }
 ]

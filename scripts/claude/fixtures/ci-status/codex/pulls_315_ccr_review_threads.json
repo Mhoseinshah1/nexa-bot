@@ -1,1 +1,5 @@
-[{"isResolved":false,"comments":[{"user":{"login":"chatgpt-codex-connector[bot]"}}]},{"isResolved":true,"comments":[{"user":{"login":"chatgpt-codex-connector[bot]"}}]},{"isResolved":false,"comments":[{"user":{"login":"human"}}]}]
+[
+  { "isResolved": false, "comments": [{ "user": { "login": "chatgpt-codex-connector[bot]" } }] },
+  { "isResolved": true, "comments": [{ "user": { "login": "chatgpt-codex-connector[bot]" } }] },
+  { "isResolved": false, "comments": [{ "user": { "login": "human" } }] }
+]

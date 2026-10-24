@@ -64,7 +64,9 @@ test('bold present only in a SKILL.md or references -> OK', () => {
 });
 
 test('bold missing -> 1 naming it', () => {
-  const r = run({ 'CLAUDE.md': FULL.replace('**First rule is important.**', 'First rule is important.') });
+  const r = run({
+    'CLAUDE.md': FULL.replace('**First rule is important.**', 'First rule is important.'),
+  });
   assert.equal(r.code, 1);
   assert.match(r.err, /MISSING bold: First rule is important\./);
 });

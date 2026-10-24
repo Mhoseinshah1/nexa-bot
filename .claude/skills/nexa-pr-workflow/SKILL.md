@@ -48,12 +48,24 @@ second: renumber, regenerate the journal and snapshot with the tooling
   run — cite commands, never discarded probes), what is **not** in the PR,
   open owner decisions, overlaps/stacking ("stacked on #N", "carries #N").
 - No model names in commits, PR titles or bodies.
-- Do not create a PR unless asked; when you do, say it is ready and stop.
+- Do not create a PR unless asked; when you do, say it is ready and stop. A
+  round prompt that says to push and open a PR is that ask
+  (`nexa-round-pipeline`).
+- A citation or falsification pin count (`pnpm check:citations`) rises only by
+  exactly the number of citations this PR adds. Never raise it to hide a
+  missing reference.
 
 ## 4. CI and reviews
 
 - CI runs on the PR's merge ref (`docs/ci.md`); pushes to non-main branches do
   not run CI. Read the failing job's log before touching code.
+- Read CI with `nexa-ci-watch` (`bash scripts/claude/ci-status.sh <pr>`,
+  `--fail-logs`, `--gate`, `--codex`). GraphQL is blocked here, so `gh pr view`,
+  `gh pr checks` and `gh run …` fail with 403: use `gh api repos/{owner}/{repo}/…`
+  REST (`pulls/{n}`, `commits/{sha}/check-runs`, `actions/jobs/{id}/logs`,
+  `actions/runs/{id}/rerun-failed-jobs`, `pulls/{n}/ccr/review_threads`).
+- Codex reviews automatically when the PR opens; read that one review, never
+  request another.
 - Diagnose every red: this PR's bug, or red on `main` too (then port the fix
   that exists, and say so once on the PR). "Flake" is not a root cause; at most
   one re-run, only to confirm.
@@ -72,7 +84,10 @@ second: renumber, regenerate the journal and snapshot with the tooling
 
 ## 6. Preparing a merge (only on explicit approval)
 
-When the owner explicitly says to merge a specific PR:
+When the owner explicitly says to merge a specific PR — or a round prompt
+pre-approves "merge on green" for its PRs, which is the same explicit approval
+(`nexa-round-pipeline` §3), valid only once CI is fully green on the exact head
+and the Codex findings are fixed:
 
 1. Re-fetch; confirm the head SHA is the one reviewed and CI is green on it.
 2. `branch-check.sh` is clean (no conflict, no migration collision).

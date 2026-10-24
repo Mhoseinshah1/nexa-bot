@@ -1,1 +1,6 @@
-{"check_runs":[{"id":11,"name":"lint","status":"completed","conclusion":"success"},{"id":12,"name":"unit","status":"in_progress","conclusion":null}]}
+{
+  "check_runs": [
+    { "id": 11, "name": "lint", "status": "completed", "conclusion": "success" },
+    { "id": 12, "name": "unit", "status": "in_progress", "conclusion": null }
+  ]
+}
