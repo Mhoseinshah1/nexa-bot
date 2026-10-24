@@ -661,6 +661,22 @@ export interface ServiceRepository {
     tx?: unknown,
   ): Promise<readonly ServiceRecord[]>;
 
+  /**
+   * R6 item 3: how many of the customer's listed services serve at `now` and the soonest
+   * deadline among those — the figures the /start greeting is filled from. The same
+   * `listedForCustomer` predicate as the page and its count; the customer id in the WHERE is
+   * the authorisation.
+   */
+  listedCountsForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    now: Date,
+  ): Promise<{
+    readonly listed: number;
+    readonly serving: number;
+    readonly nearestExpiresAt: Date | null;
+  }>;
+
   countForCustomer(scope: TenantContext, customerId: UserId, tx?: unknown): Promise<number>;
 
   /**

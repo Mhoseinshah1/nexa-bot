@@ -240,7 +240,9 @@ describe('mandatory channel membership (Package B)', () => {
 
   const JOIN = CATALOGUE_FA['bot.channels.join_required'];
   const STILL = CATALOGUE_FA['bot.channels.still_missing'];
-  const WELCOME_BACK = CATALOGUE_FA['bot.start.welcome_back'];
+  // R6 item 3: the greeting carries this customer's own name and figures, so the rendered text
+  // is matched by its fixed wording (the raw catalogue body has {placeholders} in it).
+  const WELCOME_BACK = expect.stringContaining('خوش برگشتی');
 
   async function rows<T>(query: ReturnType<typeof sql>): Promise<T[]> {
     return (await api.container.database.db.execute(query)).rows as T[];

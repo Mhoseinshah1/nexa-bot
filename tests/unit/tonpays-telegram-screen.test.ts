@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { money, type PaymentId, type UserId } from '@nexa/contracts';
+import {
+  money,
+  templateDefinition,
+  validateTemplateBody,
+  type PaymentId,
+  type ScopeContext,
+  type TemplateKey,
+  type UserId,
+} from '@nexa/contracts';
+import { CATALOGUE_FA, renderTemplateBody } from '@nexa/i18n';
+import { TemplateResolver } from '../../apps/api/src/modules/control/templates/application/template-resolver';
+import { I18nTemplateCatalogue } from '../../apps/api/src/modules/control/templates/infrastructure/i18n-template-catalogue';
+import type { TemplateRepository } from '../../apps/api/src/modules/control/templates/application/ports';
+import type { FeatureFlagResolver } from '../../apps/api/src/modules/control/features/application/feature-flags.service';
 import { gatewayAttemptScreen } from '../../apps/api/src/surfaces/telegram/bot-runtime';
 import type { PaymentRecord } from '../../apps/api/src/modules/commerce/payments/application/ports';
 import type {
@@ -162,10 +175,12 @@ describe('the TonPays Telegram payment screen', () => {
       cardNumber: '6037-9911-0000-1001',
       cardName: 'علی رضایی',
       payable: money(250_000n, 'IRT'),
-      transferAmount: money(250_037n, 'IRT'),
+      // R6 item 2: the exact amount as bare digits (it copies as-is), never a Money.
+      transferAmount: '250037',
       expiresAt: EXPIRES_AT,
     });
     expect(data(reply)).toEqual([
+      null, // «📋 کپی مبلغ دقیق» (copy_text, no callback)
       `gr:${PAYMENT_ID}`,
       `gk:${PAYMENT_ID}`,
       `gc:${PAYMENT_ID}`,
@@ -314,5 +329,190 @@ describe('the TonPays Telegram payment screen', () => {
       NO_FACTS,
     );
     expect(approvedButPending.key).not.toBe('bot.payment.gateway_confirmed');
+  });
+});
+
+/**
+ * R6 item 2. TonPays approves automatically only on the EXACT (odd) amount it named, so the
+ * card screens name that amount — and only that — as the thing to transfer, as bare digits in
+ * <code>, with a copy button carrying the same digits.
+ */
+describe('R6 item 2: the card screens show the exact amount to transfer', () => {
+  const CARD_KEYS = [
+    'bot.payment.gateway_card_invoice',
+    'bot.payment.gateway_card_receipt_sent',
+    'bot.payment.gateway_card_receipt_refused',
+    'bot.payment.gateway_card_changing',
+  ] as const satisfies readonly TemplateKey[];
+
+  const screens = () => ({
+    invoice: gatewayAttemptScreen({ payment: payment(), invoice: invoice() }, 'o', AT, NO_FACTS),
+    sent: gatewayAttemptScreen(
+      { payment: payment(), invoice: invoice({ providerStatus: 'processing' }) },
+      'o',
+      AT,
+      NO_FACTS,
+    ),
+    refused: gatewayAttemptScreen({ payment: payment(), invoice: invoice() }, 'o', AT, {
+      latestChange: null,
+      submissions: [submission('REFUSED')],
+    }),
+    changing: gatewayAttemptScreen({ payment: payment(), invoice: invoice() }, 'o', AT, {
+      latestChange: {
+        id: 'c',
+        paymentId: PAYMENT_ID,
+        botInstanceId: 'b',
+        customerId: 'c',
+        state: 'SENT',
+        requestedAt: AT,
+        sentAt: AT,
+        decidedAt: null,
+        errorCode: null,
+      },
+      submissions: [],
+    }),
+  });
+
+  it('the invoice and all three follow-ups render the exact amount in <code>', () => {
+    const all = screens();
+    for (const [name, reply] of Object.entries(all)) {
+      const key = reply.key as (typeof CARD_KEYS)[number];
+      expect(CARD_KEYS, name).toContain(key);
+      const text = renderTemplateBody(templateDefinition(key), CATALOGUE_FA[key], reply.values);
+      expect(text, name).toContain('<code>250037</code>');
+    }
+  });
+
+  it('with no figure from TonPays the exact amount is the payable, so a body that needs it can always render', () => {
+    const reply = gatewayAttemptScreen(
+      { payment: payment(), invoice: invoice({ finalAmount: null }) },
+      'o',
+      AT,
+      NO_FACTS,
+    );
+    expect(reply.values).toMatchObject({ transferAmount: '250000' });
+    // With a 10% customer fee the payable (not the principal) is what must be transferred.
+    const fee = gatewayAttemptScreen(
+      {
+        payment: payment({
+          customerFee: {
+            basisPoints: 1000,
+            fee: money(25_000n, 'IRT'),
+            payable: money(275_000n, 'IRT'),
+          },
+        }),
+        // What Nexa sent is the payable in the provider's unit.
+        invoice: invoice({ finalAmount: null, sentAmount: 275_000n }),
+      },
+      'o',
+      AT,
+      NO_FACTS,
+    );
+    expect(fee.values).toMatchObject({ transferAmount: '275000' });
+    // An IRR payment: the payable is rial, the provider's figure is Toman. The customer is
+    // told the Toman figure, never 2,500,000 "Toman" (Codex review of #312).
+    const rial = gatewayAttemptScreen(
+      {
+        payment: payment({ amount: money(2_500_000n, 'IRR') }),
+        invoice: invoice({ finalAmount: null, sentAmount: 250_000n }),
+      },
+      'o',
+      AT,
+      NO_FACTS,
+    );
+    expect(rial.values).toMatchObject({ transferAmount: '250000' });
+  });
+
+  it('after a card change the screen shows the NEW exact amount the invoice now holds', () => {
+    const before = gatewayAttemptScreen(
+      { payment: payment(), invoice: invoice({ finalAmount: 250_037n }) },
+      'o',
+      AT,
+      NO_FACTS,
+    );
+    const after = gatewayAttemptScreen(
+      { payment: payment(), invoice: invoice({ finalAmount: 250_091n, cardSeq: 2 }) },
+      'o',
+      AT,
+      NO_FACTS,
+    );
+    expect(before.values).toMatchObject({ transferAmount: '250037' });
+    expect(after.values).toMatchObject({ transferAmount: '250091' });
+  });
+
+  it('the copy button carries digits only — no separators, no unit — and matches the text', () => {
+    for (const [name, reply] of Object.entries(screens())) {
+      const copy = reply.buttons.filter((button) => 'copyText' in button);
+      if (name === 'changing') {
+        expect(copy, name).toHaveLength(0);
+        continue;
+      }
+      expect(copy, name).toHaveLength(1);
+      const value = (copy[0] as { copyText: string }).copyText;
+      expect(value, name).toMatch(/^[0-9]+$/u);
+      expect(value, name).toBe('250037');
+    }
+    // The copy value of a larger amount still has no grouping.
+    const big = gatewayAttemptScreen(
+      { payment: payment(), invoice: invoice({ finalAmount: 12_345_678n }) },
+      'o',
+      AT,
+      NO_FACTS,
+    );
+    expect(big.buttons.find((button) => 'copyText' in button)).toMatchObject({
+      copyText: '12345678',
+    });
+  });
+
+  it('{transferAmount} is required and {payable} is not, on all four card templates', () => {
+    for (const key of CARD_KEYS) {
+      const definition = templateDefinition(key);
+      const required = definition.placeholders.filter((p) => p.required).map((p) => p.token);
+      expect(required, key).toContain('transferAmount');
+      expect(required, key).not.toContain('payable');
+      const bodyOf = (tokens: readonly string[]) => tokens.map((token) => `{${token}}`).join(' ');
+      // Every required token and NO {payable}: saves.
+      expect(validateTemplateBody(definition, bodyOf(required)), key).toEqual([]);
+      // The same without {transferAmount}: refused for exactly that token.
+      const without = validateTemplateBody(
+        definition,
+        `${bodyOf(required.filter((token) => token !== 'transferAmount'))} {payable}`,
+      );
+      expect(
+        without.map((issue) => [issue.kind, issue.token]),
+        key,
+      ).toEqual([['MISSING_REQUIRED_PLACEHOLDER', 'transferAmount']]);
+    }
+  });
+
+  it('an existing override that lacks {transferAmount} keeps rendering exactly as written', async () => {
+    const key = 'bot.payment.gateway_card_invoice' as TemplateKey;
+    const stored = 'متن قدیمی مدیر: {payable} به {cardNumber} تا {expiresAt}';
+    const at = new Date('2026-10-09T10:00:00Z');
+    const repository = {
+      findOverride: async () => ({
+        key,
+        locale: 'fa',
+        body: stored,
+        version: 1,
+        revision: 1,
+        updatedAt: at,
+      }),
+    } as unknown as TemplateRepository;
+    const resolver = new TemplateResolver(
+      repository,
+      { isEnabled: async () => true } as unknown as FeatureFlagResolver,
+      new I18nTemplateCatalogue(),
+      { presentationFor: async () => ({ timezone: 'UTC', calendar: 'gregorian' }) as never },
+    );
+    const reply = screens().invoice;
+    const text = await resolver.render(
+      { tenantId: 't-1', botInstanceId: null } as unknown as ScopeContext,
+      key,
+      reply.values,
+    );
+    expect(text).toContain('متن قدیمی مدیر:');
+    expect(text).toContain('250,000');
+    expect(text).not.toContain('{');
   });
 });

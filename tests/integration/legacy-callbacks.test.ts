@@ -376,7 +376,8 @@ describe('Item 12: an old MirzaBot button, through the webhook', () => {
 
   it('leaves a current callback exactly as it was: the main menu and a real draft', async () => {
     await tap('mm:');
-    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.start.welcome_back']));
+    // R6 item 3: personalised, so matched by its fixed wording.
+    expect(lastMessage()?.body['text']).toContain('خوش برگشتی');
     expect(lastMessage()?.body['text']).not.toBe(STALE);
 
     const sellable = await sellableProduct(tenantA, panelA);

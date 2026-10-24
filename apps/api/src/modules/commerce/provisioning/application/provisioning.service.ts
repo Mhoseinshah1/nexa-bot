@@ -819,6 +819,20 @@ export class ProvisioningService {
   }
 
   /**
+   * R6 item 3: the receiving customer's own serving count and nearest deadline, for the
+   * /start greeting. Read at send time for the customer the update came from — never for
+   * anybody else — and never stored.
+   */
+  async greetingFactsForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    now: Date,
+  ): Promise<{ readonly serving: number; readonly nearestExpiresAt: Date | null }> {
+    const counts = await this.deps.services.listedCountsForCustomer(scope, customerId, now);
+    return { serving: counts.serving, nearestExpiresAt: counts.nearestExpiresAt };
+  }
+
+  /**
    * TB3: the customer's services for the support agent's context — the same scoping as
    * `pageForCustomer` (tenant, customer, not refunded away; the customer id IS the
    * authorisation), but every non-terminated service first, so a bounded read keeps the

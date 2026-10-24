@@ -122,6 +122,7 @@ export const INLINE_BUTTON_NAME: Readonly<Record<InlineButtonKey, WebKey>> = {
   'payment.route_gift': 'web.ib_button_payment_route_gift',
   'payment.copy_card': 'web.ib_button_payment_copy_card',
   'payment.copy_amount': 'web.ib_button_payment_copy_amount',
+  'payment.copy_transfer_amount': 'web.ib_button_payment_copy_transfer_amount',
   'payment.sent': 'web.ib_button_payment_sent',
   'payment.cancel': 'web.ib_button_payment_cancel',
   'payment.cancel_confirm': 'web.ib_button_payment_cancel_confirm',

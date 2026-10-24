@@ -155,6 +155,8 @@ export type GatewayCardChangeOutcome =
       readonly kind: 'CHANGED';
       readonly instructions: GatewayCardInstructions;
       readonly policy: GatewayCardChangePolicy;
+      /** R6 item 2: the new exact amount to transfer, when the answer carried one. */
+      readonly finalAmount?: bigint | null;
     }
   | { readonly kind: 'REFUSED'; readonly code: string; readonly configuration: boolean }
   | { readonly kind: 'RATE_LIMITED'; readonly code: string }
@@ -809,6 +811,12 @@ export interface GatewayInvoiceRepository {
     policy: GatewayCardChangePolicy | null,
     now: Date,
     tx: unknown,
+    /**
+     * R6 item 2: the exact amount the provider now asks to be transferred, when the answer
+     * carried one; null leaves the recorded figure for the next inquiry to refresh. Display
+     * metadata only — never what Nexa settles.
+     */
+    finalAmount?: bigint | null,
   ): Promise<number>;
 
   /** The current card is no longer shown (a card change whose answer was lost). History stays. */

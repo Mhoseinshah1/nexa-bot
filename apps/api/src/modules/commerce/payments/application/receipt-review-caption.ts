@@ -13,6 +13,7 @@ import type {
 } from '@nexa/contracts';
 import { money, paymentTrackingCode } from '@nexa/contracts';
 import type { CustomerRecord } from '../../customers/application/ports.js';
+import { amountToTransfer } from '../domain/amount-to-transfer.js';
 import type { PaymentRecord } from './ports.js';
 import type { PaymentReceiptRecord } from './receipt-ports.js';
 
@@ -190,7 +191,9 @@ export class ReceiptReviewCaption {
 
     return {
       reference: paymentTrackingCode(payment),
-      total: payment.amount,
+      // R6 item 4: what the customer had to TRANSFER (the payable, any customer fee included),
+      // so the reviewer compares the receipt against the figure the customer was asked for.
+      total: amountToTransfer(payment),
       // The customer's Telegram id, which is the identity this installation holds for them,
       // and the username beside it when they have one — a name is chosen by the person it
       // names, so it is shown and never relied on.
@@ -251,7 +254,7 @@ export class ReceiptReviewCaption {
       outcome: label,
       operation,
       customer: customer?.telegramUserId ?? payment.customerId,
-      total: payment.amount,
+      total: amountToTransfer(payment),
       reference: paymentTrackingCode(payment),
     };
     if (facts.productTitle !== null) values['order'] = facts.productTitle;

@@ -4,6 +4,7 @@ import {
   CONTROL_ERROR_CODES,
   TEMPLATE_CATEGORIES,
   coerceTemplateValue,
+  placeholderTokensIn,
   templateCategoryOf,
   type TemplateCategory,
   type PlaceholderDefinition,
@@ -587,7 +588,27 @@ export const TemplateCard = memo(function TemplateCard({
       area?.setSelectionRange(inserted.caret, inserted.caret);
     });
   };
-  const [sample, setSample] = useState<Record<string, string>>({});
+  /*
+   * R6 item 2. A stored override that lacks a token the key now REQUIRES keeps working — the
+   * rule is checked on save, never at send time, and nothing rewrites an owner's text — so this
+   * only SAYS so. The tracking and order codes are appended to an override by the resolver, so
+   * they are not "missing" to a customer.
+   */
+  const lackingRequired =
+    template.overrideBody === null || template.overrideBody === undefined
+      ? []
+      : template.placeholders
+          .filter(
+            (placeholder) =>
+              placeholder.required &&
+              placeholder.token !== 'reference' &&
+              placeholder.token !== 'orderCode' &&
+              !placeholderTokensIn(template.overrideBody ?? '').includes(placeholder.token),
+          )
+          .map((placeholder) => placeholder.token);
+  /** R6 item 3: the two /start greetings are previewed with a clearly labelled sample customer. */
+  const sampleCustomer = sampleCustomerFor(template.key);
+  const [sample, setSample] = useState<Record<string, string>>(sampleCustomer ?? {});
   const [showHistory, setShowHistory] = useState(false);
   /**
    * The INPUT the last preview was rendered from — the body and the sample
@@ -855,6 +876,11 @@ export const TemplateCard = memo(function TemplateCard({
         </p>
 
         {template.overrideSuppressed && <p className="error">{t('web.override_suppressed')}</p>}
+        {lackingRequired.map((token) => (
+          <p key={token} className="notice" data-testid="override-lacks-token">
+            {fill(t('web.template_override_lacks'), { token: `{${token}}` })}
+          </p>
+        ))}
 
         <label htmlFor={`body-${template.key}`}>{t('web.template_body')}</label>
         <textarea
@@ -979,6 +1005,12 @@ export const TemplateCard = memo(function TemplateCard({
 
         <Disclosure variant="boxed" size="sm" summary={t('web.preview')}>
           <p className="notice">{t('web.preview_note')}</p>
+          {sampleCustomer !== null && (
+            <p className="notice" data-testid="preview-sample-customer">
+              <Badge tone="warn">{t('web.preview_sample_badge')}</Badge>{' '}
+              {t('web.preview_sample_customer')}
+            </p>
+          )}
           {template.placeholders.length > 0 && <h4>{t('web.preview_values')}</h4>}
           {template.placeholders.map((placeholder) => (
             <div key={placeholder.token}>
@@ -1173,6 +1205,26 @@ export const TemplateCard = memo(function TemplateCard({
     </Card>
   );
 });
+
+/**
+ * R6 item 3: the sample customer the /start greetings are previewed with. A fixed, invented
+ * person — never the viewing administrator and never a real customer — so the screen shows
+ * the template and the preview is plainly a preview. Money is «minor units and a currency».
+ */
+function sampleCustomerFor(key: string): Readonly<Record<string, string>> | null {
+  if (key !== 'bot.start.welcome' && key !== 'bot.start.welcome_back') return null;
+  return {
+    firstName: t('web.sample_customer_first_name'),
+    username: '@sample_user',
+    telegramId: '123456789',
+    date: t('web.sample_customer_date'),
+    time: t('web.sample_customer_time'),
+    weekday: t('web.sample_customer_weekday'),
+    walletBalance: '150000 IRT',
+    activeServices: '2',
+    nearestExpiry: '5',
+  };
+}
 
 /** The text form a sample value has to take, or nothing for a plain string. */
 function hintFor(type: TemplateViewResponse['placeholders'][number]['type']): string | undefined {

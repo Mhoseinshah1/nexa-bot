@@ -845,6 +845,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.checkout_in_progress',
       'bot.payment.copy_amount_button',
       'bot.payment.copy_card_button',
+      // R6 item 2: «📋 کپی مبلغ دقیق» on a TonPays card invoice.
+      'bot.payment.copy_transfer_amount_button',
       /*
        * Package A: `bot.payment.gateway_button` is gone from the runtime — every external
        * route now draws its own named button (`bot.wallet.topup_method_button`), so Stars
@@ -1571,6 +1573,10 @@ describe('profile metadata, normalised before it is ever stored', () => {
     const menuButtons: ReadonlySet<TemplateKey> = new Set<TemplateKey>([
       'bot.menu.main_button',
       'bot.service.back_to_menu_button',
+      // R6 item 3: the owner's welcome points at the persistent bottom menu AND names its
+      // real buttons («🛒 خرید اشتراک», «🧪 سرویس تست»), which is the menu that exists — not
+      // the prose "use the menu" this rule refuses. Pinned to this one key.
+      'bot.start.welcome',
     ]);
     for (const key of new Set([...reachable, ...sent])) {
       const body = CATALOGUE_FA[key];

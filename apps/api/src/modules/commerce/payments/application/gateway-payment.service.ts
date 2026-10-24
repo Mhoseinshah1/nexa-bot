@@ -2769,6 +2769,7 @@ export class GatewayPaymentService {
             outcome.policy,
             at,
             tx,
+            outcome.finalAmount ?? null,
           );
         });
         await this.configured(scope, invoice.provider);
