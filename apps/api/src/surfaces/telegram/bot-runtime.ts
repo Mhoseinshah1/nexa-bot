@@ -13,7 +13,6 @@ import {
   providerUsernameLookupSchema,
   telegramUserIdSchema,
   uuidV7Schema,
-  CONNECTION_GUIDE_PLATFORMS,
   SERVICE_NOTE_CLEAR_TOKEN,
   SERVICE_NOTE_MAX_LENGTH,
   SERVICE_SEARCH_MAX_LENGTH,
@@ -25,7 +24,6 @@ import {
 } from '@nexa/contracts';
 import type {
   ClientAppPlatform,
-  ConnectionGuidePlatform,
   PaymentGatewayProvider,
   ActorContext,
   BotInstanceId,
@@ -97,10 +95,7 @@ import {
 } from '../../modules/commerce/payments/domain/tonpays-telegram.js';
 import { gatewaySettlementDeadline } from '../../modules/commerce/payments/domain/settlement.js';
 import type { CustomerServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
-import {
-  SERVICE_CARD_CALLBACK_PREFIX,
-  TUTORIAL_CALLBACK_DATA,
-} from '../../modules/commerce/provisioning/application/delivery.service.js';
+import { SERVICE_CARD_CALLBACK_PREFIX } from '../../modules/commerce/provisioning/application/delivery.service.js';
 import type { CustomerCaptureRecord } from '../../modules/commerce/customers/application/customer-capture-ports.js';
 import type { CardMessageRef } from '../../modules/commerce/provisioning/application/operation-card.js';
 import type {
@@ -136,7 +131,6 @@ import {
   type WizardDirective,
 } from './wizard-state.js';
 import type { InboundTicketFile } from '../../modules/commerce/tickets/application/ticket.service.js';
-import type { ClientAppCatalog } from '../../modules/control/client-apps/application/client-app-catalog.js';
 import { CLIENT_APP_VIEW_PERMISSION } from '../../modules/control/client-apps/application/client-app.service.js';
 import {
   adminTutorialTurn,
@@ -213,7 +207,6 @@ import {
   CATALOG_BROWSE_MAX_PAGE,
   CATALOG_PAGE_CALLBACK_PREFIX,
   CATEGORY_CALLBACK_PREFIX,
-  CLIENT_APP_CALLBACK_PREFIX,
   CUSTOM_SERVICE_CALLBACK_DATA,
   CUSTOM_SERVICE_LOCATION_CALLBACK_PREFIX,
   DISCOUNT_CODE_ENTER_CALLBACK_PREFIX,
@@ -231,18 +224,12 @@ import {
   PAY_METHODS_CLOSE_CALLBACK_PREFIX,
   PAY_SENT_CALLBACK_PREFIX,
   PAY_SWITCH_CARD_CALLBACK_PREFIX,
-  REFERRAL_GIFT_CALLBACK_DATA,
   REMINDER_SETTING_CODES,
   type ReminderSettingCode,
-  SERVICES_LIST_PAGE_CALLBACK_PREFIX,
-  SERVICE_FILES_CALLBACK_PREFIX,
-  SERVICE_RESEND_CALLBACK_PREFIX,
   TOPUP_CLOSE_CALLBACK_PREFIX,
   TOPUP_MENU_CALLBACK_PREFIX,
   TOPUP_PICK_CALLBACK_PREFIX,
   TOPUP_ROUTE_CALLBACK_PREFIX,
-  TRIAL_PANEL_CALLBACK_PREFIX,
-  TUTORIAL_PLATFORM_CALLBACK_PREFIX,
   USERNAME_AUTOMATIC_CALLBACK_PREFIX,
   USERNAME_CUSTOM_CALLBACK_PREFIX,
   USERNAME_STRATEGY_CODES,
@@ -294,6 +281,14 @@ import {
   inCard,
 } from './runtime/service-card-flow.js';
 import * as supportFlow from './runtime/support-flow.js';
+import * as trialFlow from './runtime/trial-flow.js';
+import * as referralFlow from './runtime/referral-flow.js';
+import * as tutorialFlow from './runtime/tutorial-flow.js';
+export {
+  tutorialChoice,
+  clientAppPlatformScreen,
+  clientAppScreen,
+} from './runtime/tutorial-flow.js';
 
 export { serviceListButton, cardMessageOf } from './runtime/service-card-flow.js';
 export { LOCATION_TARGETS_SHOWN } from './runtime/service-actions-flow.js';
@@ -7705,36 +7700,13 @@ export class BotRuntime {
     return serviceActionsFlow.renewMenu(this, scope, actor, customer, serviceId);
   }
 
-  async referralGift(
+  referralGift(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     idempotencyKey: string,
   ): Promise<PendingReply> {
-    if (this.deps.referralGifts === undefined) {
-      return { key: 'bot.referral.gift_disabled', values: {}, buttons: [], orderId: null };
-    }
-    try {
-      const claimed = await this.deps.referralGifts.claim(scope, actor, customer.id, {
-        idempotencyKey: `${idempotencyKey}:signup-gift`,
-      });
-      if (claimed.claimedCount === 0 || claimed.credited.amountMinor === 0n) {
-        return {
-          key: 'bot.referral.gift_nothing',
-          values: {},
-          buttons: [mainMenuButton()],
-          orderId: null,
-        };
-      }
-      return {
-        key: 'bot.referral.gift_claimed',
-        values: { amount: claimed.credited },
-        buttons: [mainMenuButton()],
-        orderId: null,
-      };
-    } catch (error) {
-      return refusal(error);
-    }
+    return referralFlow.referralGift(this, scope, actor, customer, idempotencyKey);
   }
 
   ticketTurn(
@@ -7802,68 +7774,25 @@ export class BotRuntime {
     return supportFlow.supportScreen(this, scope, customer);
   }
 
-  /**
-   * The connection guide's first screen: the platforms (WP-A10).
-   *
-   * The five with a guide of their own always, and «🧩 سایر» only while the tenant files
-   * an app there that this customer may see — decided by the catalogue, per tap.
-   */
-  async tutorialChoice(scope: TenantContext, customer: CustomerRecord): Promise<PendingReply> {
-    const platforms =
-      this.deps.clientApps === undefined
-        ? CONNECTION_GUIDE_PLATFORMS
-        : await this.deps.clientApps.platformsFor(scope, customer.id);
-    return tutorialChoice(platforms);
+  tutorialChoice(scope: TenantContext, customer: CustomerRecord): Promise<PendingReply> {
+    return tutorialFlow.tutorialChoiceReply(this, scope, customer);
   }
 
-  /**
-   * One platform: its recommended apps as buttons, or — when the tenant configured none
-   * this customer may see — the platform's own `bot.tutorial.<platform>` guide, which is
-   * exactly the screen a `to:<platform>` button opened before WP-A10.
-   */
-  async tutorialPlatform(
+  tutorialPlatform(
     scope: TenantContext,
     customer: CustomerRecord,
     platform: ClientAppPlatform,
   ): Promise<PendingReply> {
-    const apps =
-      this.deps.clientApps === undefined
-        ? []
-        : await this.deps.clientApps.appsFor(scope, customer.id, platform);
-    return clientAppPlatformScreen(platform, apps);
+    return tutorialFlow.tutorialPlatform(this, scope, customer, platform);
   }
 
-  /** One app: its guide, its download links, and the customer's own service actions. */
-  async clientApp(
+  clientApp(
     scope: TenantContext,
     customer: CustomerRecord,
     appId: string,
     botInstanceId: BotInstanceId,
   ): Promise<PendingReply> {
-    const detail =
-      this.deps.clientApps === undefined
-        ? null
-        : await this.deps.clientApps.appFor(scope, customer.id, appId);
-    const screen = clientAppScreen(detail);
-    /*
-     * Spec §7: the app's tutorial video, when an administrator set one through THIS bot — a
-     * `file_id` is valid only for the bot that received it. Sent by reference, nothing
-     * downloaded.
-     *
-     * A4 (delta a): the video IS the screen's message — the guide its caption, the buttons on
-     * it — when the rendered guide fits a caption whole (`ReplyMedia.captionWhole`). Longer,
-     * the video goes bare and the guide follows as today's text. A video Telegram refuses is
-     * dropped and the guide still goes out as text, with its buttons.
-     */
-    const video =
-      detail === null || this.deps.clientAppVideos === undefined
-        ? null
-        : await this.deps.clientAppVideos.videoFor(scope, appId, botInstanceId);
-    if (video === null) return screen;
-    return {
-      ...screen,
-      media: { botInstanceId, kind: 'VIDEO', fileId: video.fileId, captionWhole: true },
-    };
+    return tutorialFlow.clientApp(this, scope, customer, appId, botInstanceId);
   }
 
   ownedService(
@@ -8124,91 +8053,23 @@ export class BotRuntime {
     }
   }
 
-  /**
-   * A customer asked for a trial — the main menu's «🧪 دریافت سرویس تست», `/trial`, or a
-   * pre-F5 catalogue message's trial button (R1).
-   *
-   * Which panels offer one is `TrialService.claim`'s answer, decided with no panel named —
-   * enabled, eligible by the one evaluator, able to name the account — and never this
-   * surface's. Exactly
-   * one: the trial is taken on it at once. Several: the customer chooses, from buttons
-   * carrying only the panel's id. None, or a customer who may not take one: the one
-   * unavailable sentence. Every refusal says the same thing; the reason is the service's.
-   *
-   * A NEW message rather than an edit: the main-menu tap is a text message of the
-   * customer's, which there is nothing of ours to edit, and the choice is the one step
-   * between the tap and the result.
-   */
-  async beginTrial(
+  beginTrial(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     idempotencyKey: string,
   ): Promise<PendingReply> {
-    if (this.deps.trials === undefined) return trialUnavailable();
-    /*
-     * The claim decides — not an availability read ahead of it. It answers a redelivered
-     * update from the record the first delivery left, BEFORE it looks at what is offered
-     * now: a trial already issued for this update is issued again (not "unavailable"
-     * because the allowance is now spent), and a refusal stays a refusal even if a panel
-     * came on in between. Codex, PR #111.
-     */
-    const result = await this.deps.trials.claim(scope, actor, customer.id, {
-      idempotencyKey: `${idempotencyKey}:trial`,
-    });
-    if (result.outcome === 'ISSUED') {
-      return { key: 'bot.trial.issued', values: {}, buttons: [], orderId: null };
-    }
-    if (result.outcome === 'REFUSED') return trialUnavailable();
-    return {
-      key: 'bot.trial.choose_panel',
-      values: {},
-      buttons: [
-        ...result.offers.map((offer) => ({
-          ...inlineLabel('trial.panel', {
-            label: offer.label,
-            traffic: offer.trafficBytes,
-            hours: offer.durationHours,
-          }),
-          data: `${TRIAL_PANEL_CALLBACK_PREFIX}${offer.panelId}`,
-        })),
-        mainMenuButton(),
-      ],
-      orderId: null,
-    };
+    return trialFlow.beginTrial(this, scope, actor, customer, idempotencyKey);
   }
 
-  /**
-   * The customer takes the trial on one panel: the only one offered, or the one they
-   * chose.
-   *
-   * One sentence either way. `bot.trial.issued` says the service is being created — the
-   * link then arrives through the ordinary delivery lane, as a purchase's does, once the
-   * panel has answered. Every refusal says `bot.trial.unavailable`: the reason (limit
-   * reached, blocked, panel no longer offering one) is in the audit row for an operator.
-   *
-   * Idempotent by the UPDATE: a redelivered tap is answered from the claim's record with
-   * the same trial, and a second tap — a new update — is decided afresh under the
-   * customer's lock, finds the allowance spent and is refused, so a double tap never
-   * issues two trials a limit of one does not allow.
-   */
-  async claimTrial(
+  claimTrial(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     panelId: string,
     idempotencyKey: string,
   ): Promise<PendingReply> {
-    if (this.deps.trials === undefined) return trialUnavailable();
-    // Suffixed, as every other write this update makes: `resolveFromUpdate` has already
-    // spent the bare key in the same namespace.
-    const result = await this.deps.trials.claim(scope, actor, customer.id, {
-      idempotencyKey: `${idempotencyKey}:trial`,
-      panelId,
-    });
-    return result.outcome === 'ISSUED'
-      ? { key: 'bot.trial.issued', values: {}, buttons: [], orderId: null }
-      : trialUnavailable();
+    return trialFlow.claimTrial(this, scope, actor, customer, panelId, idempotencyKey);
   }
 
   /**
@@ -8891,116 +8752,14 @@ export class BotRuntime {
     };
   }
 
-  /**
-   * The referral program, in EXACTLY two messages (R1).
-   *
-   * 1. The invite — the one a customer forwards to a friend: the banner, the program's
-   *    introduction and the customer's link, as ONE message (the banner's caption when
-   *    there is a banner, text otherwise). It carries no figure about the customer.
-   * 2. The dashboard — theirs alone: the gift terms, the commission, its scope and
-   *    minimum, and their figures, under the share, claim-gift and back buttons.
-   *
-   * Every figure is `ReferralProgram.terms`' and `ReferralSignupGiftService.stats`' —
-   * nothing is calculated here. Asking records the customer's code the first time, which
-   * is why it carries the turn's idempotency key; every other answer is the one
-   * unconfigured sentence. Reached from the main menu's «👥 زیرمجموعه‌گیری», `/referral`
-   * and — from a wallet message drawn before F5 — the wallet's old referral button alike.
-   */
-  async referralInvite(
+  referralInvite(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     botInstanceId: BotInstanceId,
     idempotencyKey: string,
   ): Promise<PendingReply> {
-    const unconfigured: PendingReply = {
-      key: 'bot.referral.unconfigured',
-      values: {},
-      buttons: [mainMenuButton()],
-      orderId: null,
-    };
-    if (this.deps.referrals === undefined || this.deps.referralGifts === undefined) {
-      return unconfigured;
-    }
-    const terms = await this.deps.referrals.terms(scope);
-    if (!terms.active || terms.percent === null) return unconfigured;
-    const invite = await this.deps.referrals.invite(scope, actor, {
-      // Suffixed, as every other write that shares a turn with `resolveFromUpdate` is:
-      // the bare key was consumed there.
-      idempotencyKey: `${idempotencyKey}:referral`,
-      customerId: customer.id,
-      botInstanceId,
-    });
-    if (invite.outcome !== 'READY') return unconfigured;
-    const gift = await this.deps.referralGifts.terms(scope);
-    const stats = await this.deps.referralGifts.stats(scope, customer.id);
-    /*
-     * The claim button only when there is something to claim — the gift on AND a share
-     * owed to this customer now (`claimableFor`, the service's own answer). A button that
-     * can only say "nothing to claim" is a promise the keyboard broke.
-     */
-    const claimable =
-      gift.active &&
-      (this.deps.referralGifts.claimableFor === undefined ||
-        (await this.deps.referralGifts.claimableFor(scope, customer.id)).length > 0);
-    const card = this.deps.screens.referralInviteCard({
-      commissionPercent: terms.percent,
-      referralLink: invite.link,
-    });
-    const dashboard = await this.deps.screens.referralDashboard(scope, {
-      commissionPercent: terms.percent,
-      commissionScope: terms.scope,
-      minimumOrder: terms.minimum,
-      gift: gift.active
-        ? {
-            total: gift.total,
-            referrerPercent: gift.referrerPercent,
-            referredPercent: gift.referredPercent,
-          }
-        : null,
-      referralCount: stats.referralCount,
-      referredPurchaseCount: stats.referredPurchaseCount,
-      referredPurchaseTotal: stats.referredPurchaseTotal,
-      commissionReceivedTotal: stats.commissionReceivedTotal,
-    });
-    const banner =
-      this.deps.media === undefined
-        ? null
-        : await this.deps.media.bytesFor(scope, 'REFERRAL_BANNER');
-    return {
-      key: dashboard.key,
-      values: dashboard.values,
-      buttons: [
-        {
-          ...inlineLabel('referral.share'),
-          // Telegram's own share sheet, with the customer's link as the payload.
-          url: `https://t.me/share/url?url=${encodeURIComponent(invite.link)}`,
-        },
-        ...(claimable
-          ? [
-              {
-                ...inlineLabel('referral.gift'),
-                data: REFERRAL_GIFT_CALLBACK_DATA,
-              },
-            ]
-          : []),
-        mainMenuButton(),
-      ],
-      orderId: null,
-      // Message 1, ahead of the dashboard: the banner WITH the invite as its caption, so
-      // forwarding it forwards the picture, the words and the link together.
-      lead: [
-        banner === null
-          ? { kind: 'TEXT' as const, key: card.key, values: card.values }
-          : {
-              kind: 'PHOTO_BYTES' as const,
-              bytes: banner.bytes,
-              mimeType: banner.mimeType,
-              fileName: banner.mimeType === 'image/png' ? 'banner.png' : 'banner.jpg',
-              caption: { key: card.key, values: card.values },
-            },
-      ],
-    };
+    return referralFlow.referralInvite(this, scope, actor, customer, botInstanceId, idempotencyKey);
   }
 
   /**
@@ -12048,10 +11807,6 @@ export function daysRangeValues(range: { readonly min: bigint; readonly max: big
   return { minDays: range.min.toString(), maxDays: range.max.toString() };
 }
 
-function trialUnavailable(): PendingReply {
-  return { key: 'bot.trial.unavailable', values: {}, buttons: [mainMenuButton()], orderId: null };
-}
-
 function topupButton(): CustomerButton {
   return {
     ...inlineLabel('wallet.topup'),
@@ -12068,191 +11823,6 @@ function displayNameOf(customer: CustomerRecord): string {
   if (name.length > 0) return name;
   if (customer.username !== null && customer.username.trim().length > 0) return customer.username;
   return customer.telegramUserId;
-}
-
-/** Each platform's button on the choice screen. `OTHER` has a button and no guide of its own. */
-const PLATFORM_BUTTONS: Readonly<Record<ClientAppPlatform, InlineButtonKey>> = {
-  ANDROID: 'apps.platform_android',
-  IOS: 'apps.platform_ios',
-  WINDOWS: 'apps.platform_windows',
-  MACOS: 'apps.platform_macos',
-  LINUX: 'apps.platform_linux',
-  OTHER: 'apps.platform_other',
-};
-
-/** The guide a platform shows when no client app is configured for it — the pre-WP-A10 screen. */
-const TUTORIAL_BODY_KEYS: Readonly<Record<ConnectionGuidePlatform, TemplateKey>> = {
-  ANDROID: 'bot.tutorial.android',
-  IOS: 'bot.tutorial.ios',
-  WINDOWS: 'bot.tutorial.windows',
-  MACOS: 'bot.tutorial.macos',
-  LINUX: 'bot.tutorial.linux',
-};
-
-/**
- * The connection guide's first screen: the platform choice, two to a row. The platforms
- * are decided by the caller — the catalogue adds `OTHER` only when it holds something.
- */
-export function tutorialChoice(platforms: readonly ClientAppPlatform[]): PendingReply {
-  return {
-    key: 'bot.tutorial.choose',
-    values: {},
-    buttons: [
-      ...platforms.map((platform, index) => ({
-        ...inlineLabel(PLATFORM_BUTTONS[platform]),
-        data: `${TUTORIAL_PLATFORM_CALLBACK_PREFIX}${platform}`,
-        row: Math.floor(index / 2),
-      })),
-      mainMenuButton(),
-    ],
-    orderId: null,
-  };
-}
-
-/**
- * One platform's screen (WP-A10).
- *
- * The apps are BUTTONS whose labels are the operator's own data, for the reason the
- * catalogue gives: a template is not a list renderer. With none to show, a platform that
- * has a guide of its own answers it with EXACTLY the pre-WP-A10 screen — same key, same two
- * buttons — so an installation that configures nothing sees no change at all; `OTHER`,
- * which has no guide, says there is nothing here yet.
- */
-export function clientAppPlatformScreen(
-  platform: ClientAppPlatform,
-  apps: readonly { readonly id: string; readonly label: string }[],
-): PendingReply {
-  if (apps.length === 0) {
-    if (platform === 'OTHER') {
-      return {
-        key: 'bot.apps.platform_empty',
-        values: {},
-        buttons: [platformsButton(), mainMenuButton()],
-        orderId: null,
-      };
-    }
-    return {
-      key: TUTORIAL_BODY_KEYS[platform],
-      values: {},
-      buttons: [
-        {
-          ...inlineLabel('service.tutorial'),
-          data: TUTORIAL_CALLBACK_DATA,
-        },
-        mainMenuButton(),
-      ],
-      orderId: null,
-    };
-  }
-  return {
-    key: 'bot.apps.platform',
-    values: {},
-    buttons: [
-      ...apps.map((app) => ({
-        ...inlineDataLabel('apps.app', { kind: 'TEXT', text: app.label }),
-        data: `${CLIENT_APP_CALLBACK_PREFIX}${app.id}`,
-      })),
-      platformsButton(),
-      mainMenuButton(),
-    ],
-    orderId: null,
-  };
-}
-
-/**
- * One app's screen (WP-A10): the operator's description and rendered guide, a URL button
- * per link, and the customer's own service actions where they are safe.
- *
- * The service actions are the EXISTING flows, reached by their existing callbacks —
- * `r:<service>` re-sends the delivery card through the redelivery path, `sf:<service>`
- * opens Package E's files — so each is re-decided on its own tap exactly as it is from the
- * service card, and this screen never carries a subscription URL itself. With more than
- * one live service the customer is sent to «سرویس‌های من» to pick one.
- *
- * HF-A10: an entry with a picture sends it FIRST, as a bare photo lead — the referral
- * banner's arrangement, because the guide can outgrow a photo caption (1,024 characters)
- * and the text must never be cut. The lead is decorative: the composer drops a photo
- * Telegram refuses and sends the screen regardless, so the fallback is the emoji-and-text
- * screen an entry without a picture always gets.
- */
-export function clientAppScreen(
-  detail: Awaited<ReturnType<ClientAppCatalog['appFor']>>,
-): PendingReply {
-  if (detail === null) {
-    return {
-      key: 'bot.apps.not_found',
-      values: {},
-      buttons: [platformsButton(), mainMenuButton()],
-      orderId: null,
-    };
-  }
-  const buttons: CustomerButton[] = [];
-  if (detail.officialUrl !== null) {
-    buttons.push({
-      ...inlineLabel('apps.download'),
-      url: detail.officialUrl,
-    });
-  }
-  if (detail.alternativeUrl !== null) {
-    buttons.push({
-      ...inlineLabel('apps.alternative'),
-      url: detail.alternativeUrl,
-    });
-  }
-  if (detail.helpUrl !== null) {
-    buttons.push({ ...inlineLabel('apps.help'), url: detail.helpUrl });
-  }
-  if (detail.service !== null) {
-    if (detail.service.link) {
-      buttons.push({
-        ...inlineLabel('service.link'),
-        data: `${SERVICE_RESEND_CALLBACK_PREFIX}${detail.service.id}`,
-      });
-    }
-    if (detail.service.files) {
-      buttons.push({
-        ...inlineLabel('service.files'),
-        data: `${SERVICE_FILES_CALLBACK_PREFIX}${detail.service.id}`,
-      });
-    }
-  } else if (detail.manyServices) {
-    buttons.push({
-      ...inlineLabel('apps.services'),
-      data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}1`,
-    });
-  }
-  buttons.push(
-    {
-      ...inlineLabel('apps.back'),
-      data: `${TUTORIAL_PLATFORM_CALLBACK_PREFIX}${detail.platform}`,
-    },
-    mainMenuButton(),
-  );
-  return {
-    key: detail.filesNote ? 'bot.apps.detail_files' : 'bot.apps.detail',
-    values: { app: detail.title, description: detail.description, guide: detail.guide },
-    buttons,
-    orderId: null,
-    ...(detail.image === null
-      ? {}
-      : {
-          lead: [
-            {
-              kind: 'PHOTO_BYTES' as const,
-              bytes: detail.image.bytes,
-              mimeType: detail.image.mimeType,
-              fileName: detail.image.mimeType === 'image/png' ? 'app.png' : 'app.jpg',
-            },
-          ],
-        }),
-  };
-}
-
-function platformsButton(): CustomerButton {
-  return {
-    ...inlineLabel('apps.platforms'),
-    data: TUTORIAL_CALLBACK_DATA,
-  };
 }
 
 function paymentButtons(orderId: string, routesOffered: boolean): readonly CustomerButton[] {
