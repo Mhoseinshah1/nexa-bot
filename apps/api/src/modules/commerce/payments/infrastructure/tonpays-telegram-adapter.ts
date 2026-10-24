@@ -8,6 +8,7 @@ import {
   TONPAYS_ATTEMPT_LIFETIME_MINUTES,
   TONPAYS_TELEGRAM_BASE_URL,
   TONPAYS_TELEGRAM_CALL_BUDGET_PER_MINUTE,
+  TONPAYS_TELEGRAM_CANCEL_SUFFIX,
   TONPAYS_TELEGRAM_CHANGE_CARD_SUFFIX,
   TONPAYS_TELEGRAM_CHECK_PATH_PREFIX,
   TONPAYS_TELEGRAM_CREATE_PATH,
@@ -17,6 +18,7 @@ import {
   TONPAYS_TELEGRAM_RECEIPT_FIELD,
   TONPAYS_TELEGRAM_RECEIPT_MAX_BYTES,
   TONPAYS_TELEGRAM_RECEIPT_SUFFIX,
+  TONPAYS_TELEGRAM_REFUND_SUFFIX,
   type Money,
   type ResolvedConversion,
 } from '@nexa/contracts';
@@ -24,14 +26,18 @@ import { assertOutsideTransaction } from '../../../../infrastructure/transaction
 import { encodeMultipart } from '../../../../infrastructure/telegram/multipart.js';
 import type {
   CardTransferGatewayAdapter,
+  GatewayCancelOutcome,
   GatewayCardChangeOutcome,
   GatewayCardChangePolicy,
   GatewayCardInstructions,
   GatewayCreateOutcome,
   GatewayCreateRequest,
   GatewayInquiryOutcome,
+  GatewayProviderFacts,
   GatewayReceiptFile,
   GatewayReceiptOutcome,
+  GatewayRefundCard,
+  GatewayRefundOutcome,
   GatewayWebhookHint,
 } from '../application/gateway-invoice-ports.js';
 import {
@@ -40,7 +46,12 @@ import {
   tonpaysOrderId,
   tonpaysVerdict,
 } from '../domain/tonpays.js';
-import { classifyTonPaysTelegramError, isSafeInvoiceId } from '../domain/tonpays-telegram.js';
+import {
+  classifyTonPaysTelegramError,
+  isSafeInvoiceId,
+  parseRejectReasons,
+  providerNeedOfStatus,
+} from '../domain/tonpays-telegram.js';
 import {
   TonPaysAdapter,
   boundedCode,
@@ -91,6 +102,10 @@ const REQUEST_FIELDS: ReadonlySet<string> = new Set([
   'buyer_chat_id',
   'callback_url',
   'file',
+  // Round 6: the refund body's fields.
+  'invoice_id',
+  'card_number',
+  'card_holder',
 ]);
 
 /** The response fields the schemas below declare. */
@@ -107,6 +122,15 @@ const RESPONSE_FIELDS: ReadonlySet<string> = new Set([
   'change_card_cooldown_seconds',
   'change_card_exhausted',
   'receipt_received',
+  // Round 6: the under/overpayment fields and the rejection reasons of an inquiry.
+  'remaining_amount',
+  'remaining_card_number',
+  'remaining_card_holder',
+  'remaining_invoice_id',
+  'remaining_receipt_received',
+  'refund_amount',
+  'refund_pending',
+  'reject_reasons',
 ]);
 
 const createResponseSchema = z.object({
@@ -172,6 +196,51 @@ function policyOf(body: Record<string, unknown>): GatewayCardChangePolicy {
         : null,
     exhausted:
       typeof body['change_card_exhausted'] === 'boolean' ? body['change_card_exhausted'] : null,
+  };
+}
+
+/**
+ * What an inquiry answer says the customer owes next (Round 6), read FIELD BY FIELD from the
+ * names the supplied specification gives and nothing else. A field that is absent or of an
+ * unexpected JSON type is `null` — no information. Nothing here is an approval: this runs
+ * beside `tonpaysVerdict`, never instead of it.
+ */
+export function providerFactsOf(
+  status: string,
+  body: Record<string, unknown>,
+): GatewayProviderFacts | null {
+  const need = providerNeedOfStatus(status);
+  const rejectReasons = parseRejectReasons(body['reject_reasons']);
+  if (need === null && rejectReasons.length === 0) return null;
+  const positive = (value: unknown): bigint | null => {
+    const amount = metadataAmount(value);
+    return amount !== null && amount > 0n ? amount : null;
+  };
+  const flag = (value: unknown): boolean | null => (typeof value === 'boolean' ? value : null);
+  const remainderId = body['remaining_invoice_id'];
+  const remainingInvoiceId =
+    need !== 'LESS'
+      ? null
+      : typeof remainderId === 'string' && isSafeInvoiceId(remainderId)
+        ? remainderId
+        : typeof remainderId === 'number' &&
+            Number.isSafeInteger(remainderId) &&
+            remainderId >= 0 &&
+            isSafeInvoiceId(String(remainderId))
+          ? String(remainderId)
+          : null;
+  const card =
+    need === 'LESS' ? cardOf(body['remaining_card_number'], body['remaining_card_holder']) : null;
+  return {
+    need,
+    remainingAmount: need === 'LESS' ? positive(body['remaining_amount']) : null,
+    remainingCardNumber: card?.cardNumber ?? null,
+    remainingCardHolder: card?.cardName ?? null,
+    remainingInvoiceId,
+    remainingReceiptReceived: need === 'LESS' ? flag(body['remaining_receipt_received']) : null,
+    refundAmount: need === 'MORE' ? positive(body['refund_amount']) : null,
+    refundPending: need === 'MORE' ? flag(body['refund_pending']) : null,
+    rejectReasons,
   };
 }
 
@@ -306,6 +375,12 @@ export class TonPaysTelegramAdapter implements CardTransferGatewayAdapter {
         verdict: tonpaysVerdict(parsed.data.status, parsed.data.paid),
         requestAmount: metadataAmount(parsed.data.request_amount),
         finalAmount: metadataAmount(parsed.data.final_amount),
+        facts: providerFactsOf(
+          parsed.data.status,
+          typeof raw.body === 'object' && raw.body !== null && !Array.isArray(raw.body)
+            ? (raw.body as Record<string, unknown>)
+            : {},
+        ),
       };
     }
     // An inquiry did no work: a 5xx or an unreadable code is transient, never an answer.
@@ -438,6 +513,62 @@ export class TonPaysTelegramAdapter implements CardTransferGatewayAdapter {
       paid: parsed.data['paid'],
       receiptReceived: parsed.data['receipt_received'],
     };
+  }
+
+  /**
+   * `POST /{invoice_id}/cancel` (Round 6). Only a `pending` invoice can be cancelled; the
+   * provider refuses the rest with a documented code. The request may have done work, so it is
+   * classified in the write vocabulary: a 5xx, an unreadable answer and a 4xx with no readable
+   * code are UNKNOWN, and nothing is sent again by this adapter.
+   */
+  async cancelInvoice(apiKey: string, invoiceId: string): Promise<GatewayCancelOutcome> {
+    assertOutsideTransaction('A TonPays Telegram call');
+    if (!isSafeInvoiceId(invoiceId)) {
+      return { kind: 'REFUSED', code: 'nexa.invoice_id_unsafe', configuration: false };
+    }
+    const raw = await this.call(
+      'POST',
+      `${TONPAYS_TELEGRAM_INVOICE_PATH_PREFIX}${encodeURIComponent(invoiceId)}${TONPAYS_TELEGRAM_CANCEL_SUFFIX}`,
+      apiKey,
+      { kind: 'NONE' },
+    );
+    const answer = this.writeOutcome(raw);
+    if (answer.kind === 'BODY') return { kind: 'CANCELLED' };
+    const outcome = answer.outcome;
+    return outcome.kind === 'AMBIGUOUS' ? { kind: 'UNKNOWN', code: outcome.code } : outcome;
+  }
+
+  /**
+   * `POST /{invoice_id}/refund` with `{ invoice_id, card_number, card_holder }` (Round 6) and
+   * NO amount: the provider knows what it holds. The card travels in the body to the provider
+   * and appears in no code, outcome or log line — a refusal is a documented code only.
+   */
+  async refundInvoice(
+    apiKey: string,
+    invoiceId: string,
+    card: GatewayRefundCard,
+  ): Promise<GatewayRefundOutcome> {
+    assertOutsideTransaction('A TonPays Telegram call');
+    if (!isSafeInvoiceId(invoiceId)) {
+      return { kind: 'REFUSED', code: 'nexa.invoice_id_unsafe', configuration: false };
+    }
+    const raw = await this.call(
+      'POST',
+      `${TONPAYS_TELEGRAM_INVOICE_PATH_PREFIX}${encodeURIComponent(invoiceId)}${TONPAYS_TELEGRAM_REFUND_SUFFIX}`,
+      apiKey,
+      {
+        kind: 'JSON',
+        value: {
+          invoice_id: invoiceId,
+          card_number: card.cardNumber,
+          card_holder: card.cardHolder,
+        },
+      },
+    );
+    const answer = this.writeOutcome(raw);
+    if (answer.kind === 'BODY') return { kind: 'ACCEPTED' };
+    const outcome = answer.outcome;
+    return outcome.kind === 'AMBIGUOUS' ? { kind: 'UNKNOWN', code: outcome.code } : outcome;
   }
 
   /** The website's documented webhook body; a hint, and nothing secret is read. */

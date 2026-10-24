@@ -99,6 +99,10 @@ import {
   GATEWAY_CARD_NUMBER_MAX_LENGTH,
   GATEWAY_CARD_SOURCES,
   GATEWAY_CARD_CHANGE_STATES,
+  GATEWAY_PROVIDER_NEED_KINDS,
+  TONPAYS_TELEGRAM_REJECT_REASONS_MAX,
+  GATEWAY_PROVIDER_REQUEST_KINDS,
+  GATEWAY_PROVIDER_REQUEST_STATES,
   GATEWAY_RECEIPT_CAPTURE_CLOSE_REASONS,
   GATEWAY_RECEIPT_SUBMISSION_STATES,
   GATEWAY_INVOICE_CREATION_STATES,
@@ -5217,6 +5221,161 @@ export const gatewayCardChanges = pgTable(
     check(
       'gateway_card_changes_error_code_check',
       sql`error_code IS NULL OR length(error_code) BETWEEN 1 AND 64`,
+    ),
+  ],
+);
+
+/**
+ * A customer's request that the PROVIDER cancel an invoice, or refund an overpayment
+ * (Round 6, `docs/tonpays-telegram-gateway-audit.md` §19): written by the tap, sent by the
+ * gateway worker, never while Telegram waits. The state machine is `gateway_card_changes`':
+ * every transition is a conditional UPDATE naming its `from` states, `sent_at` is stamped and
+ * committed BEFORE the call, and a row reclaimed with it set is UNKNOWN and never sent again.
+ *
+ * A refund holds the customer's card only SEALED (`refund_card_ciphertext`, purpose
+ * `payment_gateway.refund_card`, bound to this row) and only while REQUESTED: the stamp that
+ * precedes the call wipes it, so the stored form afterwards is `refund_card_masked` — the
+ * first six and last four digits. The constraint says the same thing, for a writer that
+ * forgets: a ciphertext exists exactly while a refund is REQUESTED.
+ */
+export const gatewayProviderRequests = pgTable(
+  'gateway_provider_requests',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    paymentId: uuid('payment_id').notNull(),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    customerId: uuid('customer_id').notNull(),
+    kind: text('kind').notNull(),
+    state: text('state').notNull(),
+    requestedAt: timestamptz('requested_at').notNull(),
+    claimedUntil: timestamptz('claimed_until'),
+    sentAt: timestamptz('sent_at'),
+    decidedAt: timestamptz('decided_at'),
+    errorCode: text('error_code'),
+    idempotencyKey: text('idempotency_key').notNull(),
+    /** A refund's card as shown to anyone: `603799******1234`. Never the whole number. */
+    refundCardMasked: text('refund_card_masked'),
+    /** The sealed `{ cardNumber, cardHolder }`, only while a refund is REQUESTED. */
+    refundCardCiphertext: text('refund_card_ciphertext'),
+    refundCardKeyId: text('refund_card_key_id'),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+      name: 'gateway_provider_requests_payment_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'gateway_provider_requests_customer_fk',
+    }),
+    /** At most ONE request of a kind in flight per payment, decided by the database. */
+    uniqueIndex('gateway_provider_requests_in_flight_key')
+      .on(table.tenantId, table.paymentId, table.kind)
+      .where(sql`state IN ('REQUESTED', 'SENT')`),
+    uniqueIndex('gateway_provider_requests_idempotency_key').on(
+      table.tenantId,
+      table.idempotencyKey,
+    ),
+    index('gateway_provider_requests_due_idx')
+      .on(table.tenantId, table.requestedAt)
+      .where(sql`state IN ('REQUESTED', 'SENT')`),
+    index('gateway_provider_requests_payment_idx').on(
+      table.tenantId,
+      table.paymentId,
+      table.kind,
+      table.requestedAt,
+    ),
+    check(
+      'gateway_provider_requests_kind_check',
+      enumCheck('kind', GATEWAY_PROVIDER_REQUEST_KINDS),
+    ),
+    check(
+      'gateway_provider_requests_state_check',
+      enumCheck('state', GATEWAY_PROVIDER_REQUEST_STATES),
+    ),
+    check(
+      'gateway_provider_requests_decided_check',
+      sql`(state IN ('REQUESTED', 'SENT')) = (decided_at IS NULL) AND (state <> 'SENT' OR sent_at IS NOT NULL) AND (state <> 'REQUESTED' OR sent_at IS NULL)`,
+    ),
+    check(
+      'gateway_provider_requests_error_code_check',
+      sql`error_code IS NULL OR length(error_code) BETWEEN 1 AND 64`,
+    ),
+    /** Only a refund names a card, and only in its masked form. */
+    check(
+      'gateway_provider_requests_refund_card_check',
+      sql`(kind = 'REFUND') = (refund_card_masked IS NOT NULL)
+          AND (refund_card_masked IS NULL OR refund_card_masked ~ '^[0-9]{6}[*]{6}[0-9]{4}$')`,
+    ),
+    /** The sealed card exists exactly while a refund is REQUESTED: the send stamp wipes it. */
+    check(
+      'gateway_provider_requests_sealed_card_check',
+      sql`((kind = 'REFUND' AND state = 'REQUESTED') = (refund_card_ciphertext IS NOT NULL))
+          AND ((refund_card_ciphertext IS NULL) = (refund_card_key_id IS NULL))`,
+    ),
+  ],
+);
+
+/**
+ * What the provider's LATEST inquiry said the customer owes next (Round 6): an underpayment's
+ * remainder or an overpayment's refund, and any rejection reasons. One row per payment, replaced
+ * by each inquiry that carries something and removed by one that carries nothing — latest state
+ * only, like gateway health. The amounts are the provider's own METADATA, in Toman: shown to
+ * the customer as the provider's instruction, never read by settlement, credit or refund. The
+ * payee card is the MERCHANT's, as `gateway_invoices.card_number` is.
+ */
+export const gatewayInvoiceProviderFacts = pgTable(
+  'gateway_invoice_provider_facts',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    paymentId: uuid('payment_id').notNull(),
+    need: text('need'),
+    remainingAmount: bigint('remaining_amount', { mode: 'bigint' }),
+    remainingCardNumber: text('remaining_card_number'),
+    remainingCardHolder: text('remaining_card_holder'),
+    remainingInvoiceId: text('remaining_invoice_id'),
+    remainingReceiptReceived: boolean('remaining_receipt_received'),
+    refundAmount: bigint('refund_amount', { mode: 'bigint' }),
+    refundPending: boolean('refund_pending'),
+    rejectReasons: jsonb('reject_reasons')
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    observedAt: timestamptz('observed_at').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.paymentId] }),
+    foreignKey({
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+      name: 'gateway_invoice_provider_facts_payment_fk',
+    }),
+    check(
+      'gateway_invoice_provider_facts_need_check',
+      nullableEnumCheck('need', GATEWAY_PROVIDER_NEED_KINDS),
+    ),
+    /** A remainder is a LESS fact and a refund a MORE one; nothing else carries either. */
+    check(
+      'gateway_invoice_provider_facts_shape_check',
+      sql`(need = 'LESS' OR (remaining_amount IS NULL AND remaining_card_number IS NULL AND remaining_card_holder IS NULL AND remaining_invoice_id IS NULL AND remaining_receipt_received IS NULL))
+          AND (need = 'MORE' OR (refund_amount IS NULL AND refund_pending IS NULL))
+          AND (remaining_amount IS NULL OR remaining_amount > 0)
+          AND (refund_amount IS NULL OR refund_amount > 0)
+          AND (remaining_invoice_id IS NULL OR remaining_invoice_id ~ '^[A-Za-z0-9_-]{1,64}$')
+          AND (remaining_card_number IS NULL OR length(remaining_card_number) BETWEEN 1 AND ${sql.raw(String(GATEWAY_CARD_NUMBER_MAX_LENGTH))})
+          AND (remaining_card_holder IS NULL OR length(remaining_card_holder) BETWEEN 1 AND ${sql.raw(String(GATEWAY_CARD_NAME_MAX_LENGTH))})`,
+    ),
+    check(
+      'gateway_invoice_provider_facts_reasons_check',
+      sql`jsonb_typeof(reject_reasons) = 'array' AND jsonb_array_length(reject_reasons) <= ${sql.raw(String(TONPAYS_TELEGRAM_REJECT_REASONS_MAX))}`,
     ),
   ],
 );
@@ -10439,11 +10598,12 @@ export const customerTextCaptures = pgTable(
     /**
      * A note, a refund reason (WP19) and a transfer's recipient (Package F) name their
      * service, the two custom-service windows (Package D) their panel, and the two ticket
-     * windows (WP-A7) their category or their ticket; the other purposes name nothing.
+     * windows (WP-A7) their category or their ticket, a refund card (Round 6) its payment; the
+     * other purposes name nothing.
      */
     check(
       'customer_text_captures_subject_check',
-      sql`(purpose IN ('SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT', 'TICKET_NEW_MESSAGE', 'TICKET_REPLY')) = (subject_id IS NOT NULL)`,
+      sql`(purpose IN ('SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT', 'TICKET_NEW_MESSAGE', 'TICKET_REPLY', 'GATEWAY_REFUND_CARD')) = (subject_id IS NOT NULL)`,
     ),
     /** Only the days window carries a volume, and it always does (Package D). */
     check(

@@ -1294,15 +1294,76 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_change_card_button': '🔄 تعویض کارت',
   'bot.payment.gateway_card_check_button': '🔎 بررسی وضعیت',
   'bot.payment.gateway_receipt_prompt':
-    '📤 لطفاً تصویر رسید واریز را همین‌جا به‌صورت عکس بفرستید، نه به‌صورت سند.\n\nحجم تصویر حداکثر ۱۰ مگابایت است. این درخواست تا {closesAt} باز است.',
+    '📤 لطفاً تصویر رسید واریز را همین‌جا بفرستید؛ به‌صورت عکس یا تصویری با قالب JPEG، PNG، WebP یا GIF.\n\nحجم تصویر حداکثر ۱۰ مگابایت است. این درخواست تا {closesAt} باز است.',
   'bot.payment.gateway_receipt_queued':
     '{icon:time} رسید شما دریافت شد و در حال ارسال برای تون‌پی است. نتیجه در پیام پرداخت نمایش داده می‌شود.',
   'bot.payment.gateway_receipt_photo_only':
-    'رسید فقط به‌صورت عکس پذیرفته می‌شود، نه به‌صورت سند یا ویدیو. لطفاً تصویر رسید واریز را از گالری و به‌صورت عکس دوباره بفرستید.',
+    'فقط تصویر رسید پذیرفته می‌شود: عکس، یا تصویری با قالب JPEG، PNG، WebP یا GIF؛ نه ویدیو یا سند دیگر. لطفاً تصویر رسید واریز را دوباره بفرستید.',
   'bot.payment.gateway_receipt_already_sent':
     'این تصویر پیش‌تر برای همین پرداخت فرستاده شده است و دوباره ارسال نمی‌شود. اگر رسید دیگری دارید، تصویر آن را بفرستید.',
   'bot.payment.gateway_receipt_too_large':
     'حجم این تصویر بیش از ۱۰ مگابایت است. لطفاً تصویر کوچک‌تری از رسید واریز بفرستید.',
+  'bot.payment.gateway_card_underpaid':
+    '{icon:warning} {shortfall} کمتر واریز شد؛ مابقی را به این کارت واریز کنید.\n\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nپس از واریز، با دکمهٔ «📤 ارسال رسید مابقی» تصویر رسید را بفرستید. پرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_card_underpaid_receipt_sent':
+    '📤 رسید مابقی شما برای تون‌پی ارسال شد و در انتظار پاسخ است.\n\n{icon:amount} مبلغ مابقی: {shortfall}\n{icon:time} مهلت: {expiresAt}\n\nپرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود. برای دیدن آخرین وضعیت، دکمهٔ «🔎 بررسی وضعیت» را بزنید.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_card_underpaid_unavailable':
+    '{icon:warning} تون‌پی اعلام کرده مبلغ واریزی شما کمتر از مبلغ فاکتور بوده، اما اطلاعات کارت مابقی را هنوز نفرستاده است.\n\n{icon:time} مهلت: {expiresAt}\n\nچند لحظه بعد دکمهٔ «🔎 بررسی وضعیت» را بزنید. تا زمانی که تون‌پی تأیید نکند، مبلغی به کیف پول شما اضافه نمی‌شود.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_card_overpaid':
+    '{icon:warning} مبلغی بیشتر از مبلغ فاکتور واریز کرده‌اید.\n{icon:amount} مبلغ قابل بازگشت: {refundAmount}\n\nبرای بازگرداندن مبلغ اضافه، با دکمهٔ «💳 ثبت کارت بازگشت وجه» شمارهٔ کارت و نام صاحب کارت خود را ثبت کنید. تا زمانی که تون‌پی تأیید نکند، پرداخت شما ثبت نمی‌شود.\n\n{icon:time} مهلت: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_card_overpaid_pending':
+    '🕓 درخواست بازگشت مبلغ اضافه برای تون‌پی ثبت شد و در حال بررسی است.\n{icon:amount} مبلغ قابل بازگشت: {refundAmount}\n{icon:payment} کارت ثبت‌شده: {maskedCard}\n{icon:time} مهلت: {expiresAt}\n\nنتیجه پس از تأیید تون‌پی در همین پیام نمایش داده می‌شود. دوباره پرداخت نکنید.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_refund_card_prompt':
+    '{icon:payment} لطفاً شمارهٔ کارت و نام صاحب کارت خود را در یک پیام و در دو خط بفرستید:\n\nخط اول: شمارهٔ ۱۶ رقمی کارت\nخط دوم: نام و نام خانوادگی صاحب کارت\n\nاین اطلاعات فقط برای بازگرداندن مبلغ اضافه به تون‌پی فرستاده می‌شود و پس از ارسال، شمارهٔ کارت فقط به‌صورت پوشیده نگهداری می‌شود.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_refund_card_invalid':
+    '{icon:warning} اطلاعات کارت معتبر نبود. شمارهٔ کارت باید ۱۶ رقم و صحیح باشد و نام صاحب کارت فقط شامل حروف باشد.\n\nلطفاً شمارهٔ کارت را در خط اول و نام صاحب کارت را در خط دوم، در یک پیام بفرستید.',
+  'bot.payment.gateway_refund_requested':
+    '{icon:success} اطلاعات کارت دریافت شد و درخواست بازگشت مبلغ اضافه برای تون‌پی در حال ارسال است.\n{icon:payment} کارت ثبت‌شده: {maskedCard}\n\nنتیجه در پیام پرداخت نمایش داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_refund_not_allowed':
+    '{icon:warning} تون‌پی بازگشت مبلغ را برای این فاکتور مجاز ندانست. اگر مبلغ اضافه‌ای واریز کرده‌اید، با پشتیبانی تماس بگیرید و کد پیگیری را اعلام کنید.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_refund_card_refused':
+    '{icon:warning} تون‌پی شمارهٔ کارت را نپذیرفت. لطفاً شمارهٔ کارت را بررسی کنید و با دکمهٔ «💳 ثبت کارت بازگشت وجه» دوباره ثبت کنید.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_refund_holder_refused':
+    '{icon:warning} تون‌پی نام صاحب کارت را نپذیرفت. لطفاً نام را دقیقاً مطابق کارت بنویسید و با دکمهٔ «💳 ثبت کارت بازگشت وجه» دوباره ثبت کنید.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_refund_already_open':
+    '🕓 برای این فاکتور پیش‌تر درخواست بازگشت مبلغ ثبت شده و در حال بررسی است. لازم نیست دوباره ثبت کنید. نتیجه در پیام پرداخت نمایش داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_refund_unknown':
+    '{icon:warning} پاسخ تون‌پی به درخواست بازگشت مبلغ دریافت نشد و درخواست دوباره به‌صورت خودکار ارسال نمی‌شود. وضعیت را بررسی کنید یا با پشتیبانی تماس بگیرید.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_cancel_confirm':
+    '❓ آیا فاکتور لغو شود؟\n\nاگر مبلغی واریز کرده‌اید، فاکتور را لغو نکنید و رسید را بفرستید. پس از لغو، این فاکتور دیگر قابل پرداخت نیست.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_cancel_requested':
+    '🔄 درخواست لغو فاکتور برای تون‌پی ارسال شد. نتیجه به‌زودی در همین پیام نمایش داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_cancelled':
+    '{icon:success} فاکتور لغو شد و مبلغی از شما ثبت نشد. برای پرداخت می‌توانید دوباره اقدام کنید.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_cancel_not_allowed_processing':
+    '{icon:warning} این فاکتور دیگر قابل لغو نیست، چون رسید شما در حال بررسی تون‌پی است. وضعیت را بررسی کنید.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_cancel_not_allowed_less':
+    '{icon:warning} این فاکتور دیگر قابل لغو نیست، چون مبلغ کمتری واریز شده و مابقی باید پرداخت شود. وضعیت را بررسی کنید.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_cancel_not_allowed_more':
+    '{icon:warning} این فاکتور دیگر قابل لغو نیست، چون مبلغ بیشتری واریز شده و باید کارت بازگشت وجه را ثبت کنید. وضعیت را بررسی کنید.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_not_pending':
+    '{icon:warning} این فاکتور دیگر در انتظار پرداخت نیست و این درخواست انجام نشد. وضعیت را بررسی کنید.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_cancel_unknown':
+    '{icon:warning} پاسخ تون‌پی به درخواست لغو دریافت نشد و درخواست دوباره به‌صورت خودکار ارسال نمی‌شود. وضعیت را بررسی کنید.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_buyer_pending':
+    '{icon:warning} شما هم‌اکنون یک فاکتور باز در تون‌پی دارید و فاکتور تازه ساخته نشد. فاکتور باز را کامل یا لغو کنید و سپس دوباره اقدام کنید.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_buyer_processing':
+    '{icon:warning} فاکتور باز شما در تون‌پی در حال بررسی است و تا روشن شدن نتیجه فاکتور تازه ساخته نمی‌شود. وضعیت فاکتور باز را ببینید.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_buyer_less':
+    '{icon:warning} مبلغ فاکتور باز شما کمتر واریز شده و فاکتور تازه ساخته نمی‌شود. فاکتور باز را ببینید و مابقی را واریز کنید.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_buyer_more':
+    '{icon:warning} مبلغ فاکتور باز شما بیشتر واریز شده و فاکتور تازه ساخته نمی‌شود. فاکتور باز را ببینید و کارت بازگشت وجه را ثبت کنید.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_card_rejected':
+    '{icon:error} تون‌پی این پرداخت را نپذیرفت و مبلغی ثبت نشد.\n\nدلیل:\n{reasons}\n\nبرای پرداخت می‌توانید دوباره اقدام کنید.\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_card_receipt_empty':
+    '{icon:warning} تصویر ارسالی خالی بود و تون‌پی آن را نپذیرفت. لطفاً دوباره تصویر رسید واریز را بفرستید.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_card_receipt_invoice':
+    '{icon:warning} تون‌پی رسید را برای این فاکتور نپذیرفت (شناسهٔ فاکتور مطابقت نداشت یا فاکتور مابقی پیدا نشد). وضعیت را بررسی کنید و اگر مشکل ادامه داشت با پشتیبانی تماس بگیرید.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
+  'bot.payment.gateway_cancel_button': '❌ لغو فاکتور',
+  'bot.payment.gateway_cancel_confirm_button': '✅ بله، لغو شود',
+  'bot.payment.gateway_remainder_receipt_button': '📤 ارسال رسید مابقی',
+  'bot.payment.gateway_refund_card_button': '💳 ثبت کارت بازگشت وجه',
+  'bot.payment.gateway_open_invoice_button': '🧾 مشاهدهٔ فاکتور باز',
   'bot.wallet.summary':
     '{icon:account} اطلاعات حساب کاربری شما:\n\n{icon:identity} شناسه کاربری: <code>{telegramId}</code>\n{icon:user} نام: {displayName}\n{icon:phone} شماره تماس: {phoneState}\n{icon:time} زمان ثبت‌نام: {registeredAt}\n{icon:wallet} موجودی: {balance}\n{icon:purchase} تعداد سرویس‌های خریداری‌شده: {serviceCount} عدد\n{icon:invoice} تعداد فاکتورهای پرداخت‌شده: {paidInvoiceCount} عدد\n{icon:referral} تعداد زیرمجموعه‌های شما: {referralCount} نفر\n{icon:group} گروه کاربری: {customerGroup}\n\n{icon:date} تاریخ: {nowDate}\n{icon:clock} ساعت: {nowTime}',
   'bot.wallet.phone_missing': '🔴 ارسال نشده است',

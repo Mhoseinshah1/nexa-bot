@@ -561,6 +561,9 @@ import type {
 } from './modules/commerce/payments/application/gateway-invoice-ports.js';
 import { GatewayReceiptCaptureService } from './modules/commerce/payments/application/gateway-receipt-capture.service.js';
 import { DrizzleGatewayCardTransferRepository } from './modules/commerce/payments/infrastructure/drizzle-gateway-card-transfer.repository.js';
+import { GATEWAY_PROVIDER_REQUEST_BATCH } from './modules/commerce/payments/application/gateway-provider-request.lane.js';
+import { DrizzleGatewayProviderRequestRepository } from './modules/commerce/payments/infrastructure/drizzle-gateway-provider-request.repository.js';
+import { SecretCipherRefundCardSealer } from './modules/commerce/payments/infrastructure/refund-card-sealer.js';
 import { TonPaysTelegramAdapter } from './modules/commerce/payments/infrastructure/tonpays-telegram-adapter.js';
 import { NowPaymentsAdapter } from './modules/commerce/payments/infrastructure/nowpayments-adapter.js';
 import { CentralPayAdapter } from './modules/commerce/payments/infrastructure/centralpay-adapter.js';
@@ -3179,6 +3182,9 @@ export function createContainer(
       ? tonpaysTelegramAdapter
       : null;
   const gatewayCardTransferRepository = new DrizzleGatewayCardTransferRepository(database.db);
+  // Round 6: cancels, refunds and the provider's latest word on what the customer owes.
+  const gatewayProviderRequestRepository = new DrizzleGatewayProviderRequestRepository(database.db);
+  const refundCardSealer = new SecretCipherRefundCardSealer(cipher);
   const gatewayInvoiceRepository = new DrizzleGatewayInvoiceRepository(database.db);
   const gatewayCredentialStore = new DrizzleGatewayCredentialStore(database.db, cipher, () =>
     ids.uuid(),
@@ -3611,6 +3617,8 @@ export function createContainer(
     credentials: gatewayCredentialStore,
     // TonPays Telegram: the card-change and receipt lanes, and the window sweep.
     cardTransfer: gatewayCardTransferRepository,
+    providerRequests: gatewayProviderRequestRepository,
+    refundCards: refundCardSealer,
     cardAdapters: cardTransferAdapters,
     /*
      * A receipt's bytes, with the token of the bot the photo was sent to, bounded at the
@@ -3694,6 +3702,8 @@ export function createContainer(
     payments: paymentRepository,
     invoices: gatewayInvoiceRepository,
     cardTransfer: gatewayCardTransferRepository,
+    providerRequests: gatewayProviderRequestRepository,
+    refundCards: refundCardSealer,
   });
   const starsPayments = new StarsPaymentService({
     invoices: gatewayInvoiceRepository,
@@ -3730,6 +3740,7 @@ export function createContainer(
       (GATEWAY_CREATE_BATCH +
         GATEWAY_INQUIRY_BATCH +
         GATEWAY_CARD_CHANGE_BATCH +
+        GATEWAY_PROVIDER_REQUEST_BATCH +
         GATEWAY_RECEIPT_BATCH) *
         (TONPAYS_TIMEOUT_MS + config.NOTIFICATION_SEND_TIMEOUT_MS) +
       // TonPays Telegram: each receipt is first fetched from Telegram (getFile, then the file).

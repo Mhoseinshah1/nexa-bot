@@ -3,6 +3,8 @@ import {
   PAYMENT_GATEWAY_DESCRIPTORS,
   TONPAYS_TELEGRAM_RECEIPT_CAPTURE_MINUTES,
   TONPAYS_TELEGRAM_RECEIPT_MAX_BYTES,
+  TONPAYS_TELEGRAM_RECEIPT_MIME_TYPES,
+  TONPAYS_TELEGRAM_STATUS_LESS,
   errors,
   type ActorContext,
   type AuditWriter,
@@ -19,12 +21,23 @@ import { runAuthorizedMutation } from '../../../platform/access/application/auth
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
-import { cardChangeAvailable, receiptUploadAvailable } from '../domain/tonpays-telegram.js';
+import { gatewaySettlementDeadline } from '../domain/settlement.js';
+import {
+  cancelAvailable,
+  cardChangeAvailable,
+  maskRefundCard,
+  parseRefundCardInput,
+  receiptUploadAvailable,
+  refundCardAvailable,
+  remainderReceiptAvailable,
+} from '../domain/tonpays-telegram.js';
 import type {
   GatewayCardTransferRepository,
   GatewayInvoiceRecord,
   GatewayInvoiceRepository,
+  GatewayProviderRequestRepository,
   GatewayReceiptCaptureRecord,
+  RefundCardSealer,
 } from './gateway-invoice-ports.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
 import { PAYMENT_PLACE_PERMISSION } from './payment.service.js';
@@ -46,6 +59,15 @@ export type GatewayReceiptPhotoResult =
   | 'TOO_LARGE'
   /** The payment can no longer take a receipt: the window was closed. */
   | 'CLOSED';
+
+/** What a customer's typed refund card became (Round 6). */
+export type GatewayRefundCardResult =
+  /** Not two lines, not a 16-digit number, or a holder with more than letters: nothing stored. */
+  | 'INVALID'
+  /** Sealed, masked and queued for the gateway worker. */
+  | 'REQUESTED'
+  /** The invoice is not (or no longer) an overpayment that can be refunded: nothing stored. */
+  | 'REFUSED';
 
 /**
  * The customer's three TonPays Telegram commands (`docs/tonpays-telegram-gateway-audit.md`
@@ -78,10 +100,14 @@ export class GatewayReceiptCaptureService {
       readonly ids: IdGenerator;
       readonly payments: Pick<
         PaymentRepository,
-        'findByIdForUpdate' | 'hasOtherLivePaymentForOrder'
+        'findById' | 'findByIdForUpdate' | 'hasOtherLivePaymentForOrder'
       >;
       readonly invoices: Pick<GatewayInvoiceRepository, 'findByPayment'>;
       readonly cardTransfer: GatewayCardTransferRepository;
+      /** Round 6: cancel and refund requests, and the provider's latest word. */
+      readonly providerRequests?: GatewayProviderRequestRepository;
+      /** Round 6: seals a refund card between the customer's turn and the worker's send. */
+      readonly refundCards?: RefundCardSealer;
     },
   ) {}
 
@@ -162,16 +188,37 @@ export class GatewayReceiptCaptureService {
       entityId: input.paymentId,
     };
     return this.mutate(scope, actor, denial, async (tx, now) => {
-      const open = await this.openAttempt(scope, input, now, tx);
+      const open = await this.openAttempt(scope, input, now, tx, 'SETTLEMENT');
       if (open === null || open.payment.expiresAt === null) return null;
-      const providerInvoiceId = open.invoice.providerInvoiceId;
-      if (providerInvoiceId === null) return null;
+      const invoiceId = open.invoice.providerInvoiceId;
+      if (invoiceId === null) return null;
       const submissions = await this.deps.cardTransfer.submissionsFor(scope, open.payment.id, tx);
-      if (!receiptUploadAvailable(open.invoice, submissions)) return null;
+      /*
+       * Round 6: an UNDERPAID invoice takes the receipt of its remainder, sent to the invoice
+       * the provider named (`remaining_invoice_id`), and may do so inside the provider's review
+       * window. Any other invoice takes the ordinary receipt: pending, customer window only.
+       */
+      const facts =
+        open.invoice.providerStatus === TONPAYS_TELEGRAM_STATUS_LESS
+          ? ((await this.deps.providerRequests?.factsFor(scope, open.payment.id, tx)) ?? null)
+          : null;
+      let providerInvoiceId: string;
+      let deadline: Date;
+      if (facts !== null && facts.need === 'LESS') {
+        if (!remainderReceiptAvailable(open.invoice, facts, submissions)) return null;
+        if (facts.remainingInvoiceId === null) return null;
+        providerInvoiceId = facts.remainingInvoiceId;
+        deadline = gatewaySettlementDeadline(open.payment) ?? open.payment.expiresAt;
+      } else {
+        if (open.payment.providerReviewUntil !== null) return null;
+        if (!receiptUploadAvailable(open.invoice, submissions)) return null;
+        providerInvoiceId = invoiceId;
+        deadline = open.payment.expiresAt;
+      }
       const expiresAt = new Date(
         Math.min(
           now.getTime() + TONPAYS_TELEGRAM_RECEIPT_CAPTURE_MINUTES * 60_000,
-          open.payment.expiresAt.getTime(),
+          deadline.getTime(),
         ),
       );
       const capture = await this.deps.cardTransfer.openCapture(
@@ -235,8 +282,19 @@ export class GatewayReceiptCaptureService {
       input.customerId,
     );
     if (capture === null) return 'NO_WINDOW';
-    // TPTG-09: a document (even image/*), a video or anything but a photo stores nothing.
-    if (input.file.kind !== 'PHOTO') return 'PHOTO_ONLY';
+    /*
+     * Round 6: a photo, or a document whose declared type is one of the provider's four image
+     * types (JPEG, PNG, WebP, GIF — Telegram only delivers WebP and GIF as documents). A video,
+     * a PDF or any other document stores nothing. The declared type is a claim: the worker
+     * sniffs the bytes before anything is uploaded.
+     */
+    const acceptedDocument =
+      input.file.kind === 'DOCUMENT' &&
+      input.file.mimeType !== null &&
+      (TONPAYS_TELEGRAM_RECEIPT_MIME_TYPES as readonly string[]).includes(
+        input.file.mimeType.toLowerCase(),
+      );
+    if (input.file.kind !== 'PHOTO' && !acceptedDocument) return 'PHOTO_ONLY';
     if (
       input.file.fileSize !== null &&
       input.file.fileSize > BigInt(TONPAYS_TELEGRAM_RECEIPT_MAX_BYTES)
@@ -288,18 +346,41 @@ export class GatewayReceiptCaptureService {
           tx,
         ));
       const invoice = await this.deps.invoices.findByPayment(scope, capture.paymentId, tx);
+      const submissions = await this.deps.cardTransfer.submissionsFor(scope, capture.paymentId, tx);
+      /*
+       * The window's target is the invoice's own id, or — for a remainder — the id the provider
+       * named, re-read now: a remainder window is usable only while the provider still reports
+       * the underpayment, and only inside the settlement deadline (the review window included).
+       */
+      const facts =
+        invoice !== null && invoice.providerStatus === TONPAYS_TELEGRAM_STATUS_LESS
+          ? ((await this.deps.providerRequests?.factsFor(scope, capture.paymentId, tx)) ?? null)
+          : null;
+      const remainder =
+        invoice !== null &&
+        invoice.providerInvoiceId !== capture.providerInvoiceId &&
+        facts !== null &&
+        facts.need === 'LESS' &&
+        facts.remainingInvoiceId === capture.providerInvoiceId;
+      const deadline =
+        payment === null
+          ? null
+          : remainder
+            ? gatewaySettlementDeadline(payment)
+            : payment.providerReviewUntil === null
+              ? payment.expiresAt
+              : null;
       const usable =
         !otherLive &&
         payment !== null &&
         payment.customerId === input.customerId &&
         payment.state === 'PENDING' &&
-        payment.providerReviewUntil === null &&
-        payment.expiresAt !== null &&
-        now.getTime() < payment.expiresAt.getTime() &&
+        deadline !== null &&
+        now.getTime() < deadline.getTime() &&
         now.getTime() < capture.expiresAt.getTime() &&
         invoice !== null &&
         invoice.creationState === 'CREATED' &&
-        invoice.providerInvoiceId === capture.providerInvoiceId &&
+        (remainder || invoice.providerInvoiceId === capture.providerInvoiceId) &&
         invoice.botInstanceId === capture.botInstanceId &&
         capture.botInstanceId === input.botInstanceId;
       if (!usable) {
@@ -312,8 +393,13 @@ export class GatewayReceiptCaptureService {
         );
         return 'CLOSED';
       }
-      const submissions = await this.deps.cardTransfer.submissionsFor(scope, capture.paymentId, tx);
-      if (!receiptUploadAvailable(invoice, submissions)) return 'DUPLICATE';
+      if (
+        remainder
+          ? !remainderReceiptAvailable(invoice, facts, submissions)
+          : !receiptUploadAvailable(invoice, submissions)
+      ) {
+        return 'DUPLICATE';
+      }
       /*
        * The very photo of a submission that has ENDED (Codex review of #136): the (payment,
        * file) key refuses a second row, so nothing would be queued — the customer is asked
@@ -366,6 +452,213 @@ export class GatewayReceiptCaptureService {
     });
   }
 
+  /**
+   * «❌ لغو فاکتور» (Round 6): a `gateway_provider_requests` row `CANCEL / REQUESTED`, which the
+   * gateway worker sends. Re-decided under the payment's lock: this customer's PENDING payment
+   * inside the CUSTOMER window (a review means a receipt, and a receipt means `processing`), a
+   * created invoice whose provider status is `pending`, no cancel in flight or lost, no receipt
+   * on its way. Returns whether a request was written.
+   */
+  async requestCancel(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly customerId: UserId;
+      readonly paymentId: string;
+      readonly botInstanceId: string;
+      readonly idempotencyKey: string;
+    },
+  ): Promise<boolean> {
+    const requests = this.deps.providerRequests;
+    if (requests === undefined) return false;
+    const denial = {
+      action: 'gateway_invoice.cancel_requested',
+      entityType: 'Payment',
+      entityId: input.paymentId,
+    };
+    return this.mutate(scope, actor, denial, async (tx, now) => {
+      const open = await this.openAttempt(scope, input, now, tx);
+      if (open === null) return false;
+      const latest = await requests.latest(scope, open.payment.id, 'CANCEL', tx);
+      const submissions = await this.deps.cardTransfer.submissionsFor(scope, open.payment.id, tx);
+      if (!cancelAvailable(open.invoice, latest, submissions)) return false;
+      const requested = await requests.request(
+        scope,
+        {
+          id: this.deps.ids.uuid(),
+          paymentId: open.payment.id,
+          botInstanceId: input.botInstanceId,
+          customerId: input.customerId,
+          kind: 'CANCEL',
+          idempotencyKey: input.idempotencyKey,
+          now,
+          claimedUntil: null,
+          refund: null,
+        },
+        tx,
+      );
+      if (requested === null) return false;
+      await this.deps.audit.record(
+        scope,
+        actor,
+        {
+          action: 'gateway_invoice.cancel_requested',
+          entityType: 'Payment',
+          entityId: open.payment.id,
+          before: null,
+          after: { requestId: requested.id, state: requested.state, reason: 'CUSTOMER' },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+      return true;
+    });
+  }
+
+  /** Whether the cancel question may be asked NOW (a read; the write re-decides under the lock). */
+  async cancelOffered(
+    scope: TenantContext,
+    input: {
+      readonly customerId: UserId;
+      readonly paymentId: string;
+      readonly botInstanceId: string;
+    },
+  ): Promise<boolean> {
+    const requests = this.deps.providerRequests;
+    if (requests === undefined || !/^[0-9a-f-]{36}$/u.test(input.paymentId)) return false;
+    const now = this.deps.clock.now();
+    const payment = await this.deps.payments.findById(scope, input.paymentId as PaymentId);
+    if (
+      payment === null ||
+      payment.customerId !== input.customerId ||
+      payment.state !== 'PENDING' ||
+      payment.providerReviewUntil !== null ||
+      payment.expiresAt === null ||
+      now.getTime() >= payment.expiresAt.getTime()
+    ) {
+      return false;
+    }
+    const invoice = await this.deps.invoices.findByPayment(scope, payment.id);
+    if (invoice === null || invoice.botInstanceId !== input.botInstanceId) return false;
+    const [latest, submissions] = await Promise.all([
+      requests.latest(scope, payment.id, 'CANCEL'),
+      this.deps.cardTransfer.submissionsFor(scope, payment.id),
+    ]);
+    return cancelAvailable(invoice, latest, submissions);
+  }
+
+  /** Whether the refund-card prompt may be opened NOW (a read; the write re-decides). */
+  async refundCardOffered(
+    scope: TenantContext,
+    input: {
+      readonly customerId: UserId;
+      readonly paymentId: string;
+      readonly botInstanceId: string;
+    },
+  ): Promise<boolean> {
+    const requests = this.deps.providerRequests;
+    if (
+      requests === undefined ||
+      this.deps.refundCards === undefined ||
+      !/^[0-9a-f-]{36}$/u.test(input.paymentId)
+    ) {
+      return false;
+    }
+    const now = this.deps.clock.now();
+    const payment = await this.deps.payments.findById(scope, input.paymentId as PaymentId);
+    if (
+      payment === null ||
+      payment.customerId !== input.customerId ||
+      payment.state !== 'PENDING' ||
+      payment.expiresAt === null ||
+      now.getTime() >= (gatewaySettlementDeadline(payment) ?? payment.expiresAt).getTime()
+    ) {
+      return false;
+    }
+    const invoice = await this.deps.invoices.findByPayment(scope, payment.id);
+    if (invoice === null || invoice.botInstanceId !== input.botInstanceId) return false;
+    const [facts, latest] = await Promise.all([
+      requests.factsFor(scope, payment.id),
+      requests.latest(scope, payment.id, 'REFUND'),
+    ]);
+    return refundCardAvailable(invoice, facts, latest);
+  }
+
+  /**
+   * The customer's typed refund card (Round 6): validated locally, then — under the payment's
+   * lock, with the overpayment re-decided — sealed and queued for the worker. The number
+   * exists in this method's memory only; the row keeps the masked form and the sealed form
+   * until the worker's send stamp wipes it. Nothing here is logged or audited but ids and
+   * states. Returns `INVALID` for a bad format and `REFUSED` when the invoice cannot take a
+   * refund now; neither stores anything.
+   */
+  async requestRefund(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly customerId: UserId;
+      readonly paymentId: string;
+      readonly botInstanceId: string;
+      readonly idempotencyKey: string;
+      readonly text: string;
+    },
+  ): Promise<GatewayRefundCardResult> {
+    const requests = this.deps.providerRequests;
+    const sealer = this.deps.refundCards;
+    const card = parseRefundCardInput(input.text);
+    if (card === null) return 'INVALID';
+    if (requests === undefined || sealer === undefined) return 'REFUSED';
+    const denial = {
+      action: 'gateway_invoice.refund_requested',
+      entityType: 'Payment',
+      entityId: input.paymentId,
+    };
+    return this.mutate(scope, actor, denial, async (tx, now) => {
+      const open = await this.openAttempt(scope, input, now, tx, 'SETTLEMENT');
+      if (open === null) return 'REFUSED' as const;
+      const [facts, latest] = await Promise.all([
+        requests.factsFor(scope, open.payment.id, tx),
+        requests.latest(scope, open.payment.id, 'REFUND', tx),
+      ]);
+      if (!refundCardAvailable(open.invoice, facts, latest)) return 'REFUSED' as const;
+      const id = this.deps.ids.uuid();
+      const requested = await requests.request(
+        scope,
+        {
+          id,
+          paymentId: open.payment.id,
+          botInstanceId: input.botInstanceId,
+          customerId: input.customerId,
+          kind: 'REFUND',
+          idempotencyKey: input.idempotencyKey,
+          now,
+          claimedUntil: null,
+          refund: {
+            masked: maskRefundCard(card.cardNumber),
+            sealed: sealer.seal(scope, id, card),
+          },
+        },
+        tx,
+      );
+      if (requested === null) return 'REFUSED' as const;
+      await this.deps.audit.record(
+        scope,
+        actor,
+        {
+          action: 'gateway_invoice.refund_requested',
+          entityType: 'Payment',
+          entityId: open.payment.id,
+          before: null,
+          // The request's id and state only: not the card, not the holder, not the mask.
+          after: { requestId: requested.id, state: requested.state },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+      return 'REQUESTED' as const;
+    });
+  }
+
   // ---------------------------------------------------------------------------------------
 
   /**
@@ -382,6 +675,12 @@ export class GatewayReceiptCaptureService {
     },
     now: Date,
     tx: TransactionScope,
+    /**
+     * `CUSTOMER` (default): the seventy-minute window with no review started. `SETTLEMENT`
+     * (Round 6): the payment's settlement deadline — the review window included — for the
+     * actions an under- or overpayment makes possible; the caller narrows it again.
+     */
+    window: 'CUSTOMER' | 'SETTLEMENT' = 'CUSTOMER',
   ): Promise<{ readonly payment: PaymentRecord; readonly invoice: GatewayInvoiceRecord } | null> {
     if (!/^[0-9a-f-]{36}$/u.test(input.paymentId)) return null;
     const payment = await this.deps.payments.findByIdForUpdate(
@@ -396,9 +695,11 @@ export class GatewayReceiptCaptureService {
       payment.gatewayProvider === null ||
       PAYMENT_GATEWAY_DESCRIPTORS[payment.gatewayProvider].invoiceForm !== 'CARD_TRANSFER' ||
       payment.state !== 'PENDING' ||
-      payment.providerReviewUntil !== null ||
+      (window === 'CUSTOMER' && payment.providerReviewUntil !== null) ||
       payment.expiresAt === null ||
-      now.getTime() >= payment.expiresAt.getTime()
+      (window === 'CUSTOMER' && now.getTime() >= payment.expiresAt.getTime()) ||
+      (window === 'SETTLEMENT' &&
+        now.getTime() >= (gatewaySettlementDeadline(payment) ?? payment.expiresAt).getTime())
     ) {
       return null;
     }

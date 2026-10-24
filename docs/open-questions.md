@@ -4281,3 +4281,41 @@ acceptance with `rich_messages` on for a test tenant.
 - **OQ-R4F-10 — the source itself.** Re-read `core.telegram.org/bots/api` and the changelog
   directly when egress allows, and correct `docs/r4-telegram-rich-audit.md` §1 in the commit that
   does.
+
+## Round 6 PR-3 — TonPays Telegram: cancel, refund, remainder (`docs/tonpays-telegram-gateway-audit.md` §19)
+
+Everything the TonPays API document (custom Telegram section, pages 13-20) states was built to
+it and is NOT listed here: the endpoints, the inquiry's `need_action_kind`, `remaining_*`,
+`refund_amount`, `refund_pending`, `reject_reasons` fields, the eight statuses, the refund body
+(`invoice_id`, `card_number`, `card_holder`, no amount), the remainder receipt going to
+`remaining_invoice_id` and answering `processing` on that invoice, and the 24 error codes. What
+the document does not say is below; each is read defensively (unknown is "no information",
+never an approval) until the real-provider acceptance (`OQ-WP10-01`) answers it.
+
+- **OQ-TPTG-21 — the shape of a `reject_reasons` element.** The document's examples show only
+  `[]`. Nexa reads an array of strings, an array of objects with a `message`/`text`/`reason`/
+  `code` string, or one string; anything else is no reason. The reasons are shown to the customer
+  as TonPays worded them (sanitised, at most ten of two hundred characters). Whether they are
+  Persian text or machine codes, and so whether a Persian mapping table is needed, is unknown.
+  The payment history therefore carries only token-shaped reasons (it holds no free text).
+- **OQ-TPTG-22 — the success body of `/cancel`.** The document gives the request and no
+  response. A 2xx with any JSON body is read as "cancelled"; a 2xx with an empty or non-JSON
+  body is `UNKNOWN` (never sent again), and the next inquiry — `canceled` — closes the payment.
+  If the real provider answers 204, the cancel will show as a lost answer until that inquiry.
+- **OQ-TPTG-23 — the unit of `remaining_amount` and `refund_amount`.** The document's example
+  (`request_amount` 50000, `remaining_amount` 12000) is consistent with Toman, the unit of
+  `amount`; they are shown as Toman and never used by settlement, credit or refund.
+- **OQ-TPTG-24 — what happens to an under- or overpaid invoice after Nexa's own deadline.**
+  Nexa offers the remainder receipt and the refund card until the payment's settlement deadline
+  (the review deadline once a receipt was acknowledged, else the 70 minutes); an approval after
+  it is `LATE_COMPLETION` and settles nothing, as before. Whether TonPays refunds or expires an
+  overpaid or short invoice on its own, and when it expires an unpaid `pending` one (which
+  decides whether a new top-up can ever hit `BUYER_HAS_PENDING_INVOICE` for an invoice Nexa has
+  already given up on), is unknown.
+- **OQ-TPTG-25 — whether a remainder receipt's acknowledgement should extend the review
+  window.** It does not: `recordProviderReview` is write-once, so the deadline stays the first
+  acknowledgement's plus 24 hours. The conservative reading; a longer window is the owner's call.
+- **OQ-TPTG-26 — which holder names the provider accepts.** The example is Latin ("Ali
+  Rezaei"); Nexa accepts letters and spaces in any script (three to sixty-four characters) and
+  the provider's `INVALID_REFUND_HOLDER` is shown if it disagrees. The example card
+  `6037991234567890` fails Luhn, so no checksum is applied locally.

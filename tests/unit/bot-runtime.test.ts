@@ -864,13 +864,32 @@ describe('profile metadata, normalised before it is ever stored', () => {
        * each promises only what this head does — the worker sends the receipt and the card
        * change, the review is TonPays', and none of them ever says paid.
        */
+      /*
+       * TonPays Telegram, Round 6: cancel, underpayment, overpayment (refund card) and
+       * receipt-empty screens. Reviewed: the worker performs every provider call (cancel,
+       * refund card, remainder receipt) and none of these says paid.
+       */
+      'bot.payment.gateway_cancel_button',
+      'bot.payment.gateway_cancel_confirm',
+      'bot.payment.gateway_cancel_confirm_button',
+      'bot.payment.gateway_cancel_requested',
+      'bot.payment.gateway_cancel_unknown',
+      'bot.payment.gateway_cancelled',
       'bot.payment.gateway_card_changing',
       'bot.payment.gateway_card_check_button',
       'bot.payment.gateway_card_invoice',
       'bot.payment.gateway_card_missing',
+      'bot.payment.gateway_card_overpaid',
+      'bot.payment.gateway_card_overpaid_pending',
+      'bot.payment.gateway_card_receipt_empty',
+      'bot.payment.gateway_card_receipt_invoice',
       'bot.payment.gateway_card_receipt_refused',
       'bot.payment.gateway_card_receipt_sent',
+      'bot.payment.gateway_card_rejected',
       'bot.payment.gateway_card_unconfirmed',
+      'bot.payment.gateway_card_underpaid',
+      'bot.payment.gateway_card_underpaid_receipt_sent',
+      'bot.payment.gateway_card_underpaid_unavailable',
       'bot.payment.gateway_change_card_button',
       'bot.payment.gateway_check_button',
       'bot.payment.gateway_closed',
@@ -893,6 +912,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
        * start again — which opens a new attempt; it promises no link that is coming.
        */
       'bot.payment.gateway_no_link',
+      'bot.payment.gateway_not_pending',
+      'bot.payment.gateway_open_invoice_button',
       'bot.payment.gateway_pay_button',
       'bot.payment.gateway_preparing',
       'bot.payment.gateway_receipt_already_sent',
@@ -901,6 +922,16 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.gateway_receipt_prompt',
       'bot.payment.gateway_receipt_queued',
       'bot.payment.gateway_receipt_too_large',
+      'bot.payment.gateway_refund_already_open',
+      'bot.payment.gateway_refund_card_button',
+      'bot.payment.gateway_refund_card_invalid',
+      'bot.payment.gateway_refund_card_prompt',
+      'bot.payment.gateway_refund_card_refused',
+      'bot.payment.gateway_refund_holder_refused',
+      'bot.payment.gateway_refund_not_allowed',
+      'bot.payment.gateway_refund_requested',
+      'bot.payment.gateway_refund_unknown',
+      'bot.payment.gateway_remainder_receipt_button',
       'bot.payment.gateway_review_unresolved',
       'bot.payment.gateway_unavailable',
       'bot.payment.gateway_unknown',

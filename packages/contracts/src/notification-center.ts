@@ -167,6 +167,12 @@ export const NOTIFICATION_RULES: readonly NotificationRule[] = [
     link: 'PAYMENT',
     minSeverity: 'WARN',
   },
+  {
+    code: 'payments.gateway_request_unknown',
+    category: 'PAYMENTS',
+    link: 'PAYMENT',
+    minSeverity: 'WARN',
+  },
   // FIX10 (audit P1-b on #268): one payment's row keeps throwing in the worker, isolated
   // from the rest of the pass; it may be an approval that is not being settled.
   {

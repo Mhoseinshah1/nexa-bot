@@ -5,6 +5,7 @@ import {
   GATEWAY_ROW_RECOVERED_CODE,
   PAYMENT_GATEWAY_DESCRIPTORS,
   TONPAYS_TELEGRAM_RECEIPT_MAX_ATTEMPTS,
+  TONPAYS_TELEGRAM_STATUS_LESS,
   TONPAYS_TELEGRAM_REVIEW_CHECK_SPACING_MS,
   TONPAYS_TELEGRAM_REVIEW_WINDOW_MS,
   paymentTrackingCode,
@@ -48,7 +49,10 @@ import {
   type InquiryDiscoveryTrigger,
 } from '../domain/inquiry-discovery.js';
 import {
+  buyerConflictRetryAllowed,
+  isBuyerConflictCode,
   receiptAcknowledged,
+  receiptFileName,
   reviewInquiryNextAt,
   sniffReceiptImage,
 } from '../domain/tonpays-telegram.js';
@@ -65,8 +69,13 @@ import type {
   GatewayInvoicePresentation,
   GatewayInvoiceRecord,
   GatewayInvoiceRepository,
+  GatewayProviderFacts,
+  GatewayProviderRequestRecord,
+  GatewayProviderRequestRepository,
   GatewayWebhookHint,
+  RefundCardSealer,
 } from './gateway-invoice-ports.js';
+import { GatewayProviderRequestLane } from './gateway-provider-request.lane.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
 import type { GatewayConfirmation, PaymentService } from './payment.service.js';
 import {
@@ -362,6 +371,14 @@ export interface GatewayPaymentServiceDeps {
    * Absent in a lane that serves no card-transfer route; their passes then do nothing.
    */
   readonly cardTransfer?: GatewayCardTransferRepository;
+  /**
+   * Round 6 (TonPays Telegram): cancel and refund requests, and the provider's latest word on
+   * what the customer owes next. Absent, those passes do nothing and an inquiry records no
+   * facts.
+   */
+  readonly providerRequests?: GatewayProviderRequestRepository;
+  /** Opens a refund card sealed by the customer's turn (purpose `payment_gateway.refund_card`). */
+  readonly refundCards?: RefundCardSealer;
   /** The card-transfer capability, resolved by descriptor (`invoiceForm`), or null. */
   readonly cardAdapters?: (provider: PaymentGatewayProvider) => CardTransferGatewayAdapter | null;
   /**
@@ -467,6 +484,8 @@ export interface GatewayPassReport {
   /** TonPays Telegram: payments whose review lapsed (UNKNOWN), card changes, receipts. */
   readonly reviewsLapsed: number;
   readonly cardChanges: number;
+  /** Round 6: cancels and refunds sent to the provider. */
+  readonly providerRequests: number;
   readonly receipts: number;
   /** NOWPayments: attempts whose coins were seen (review opened) or held for a MISMATCH. */
   readonly reviewsOpened: number;
@@ -531,6 +550,16 @@ export interface GatewayAttemptView {
 export interface GatewayCardFacts {
   readonly latestChange: GatewayCardChangeRecord | null;
   readonly submissions: readonly GatewayReceiptSubmissionRecord[];
+  /** Round 6: what the provider's latest inquiry said the customer owes next, if anything. */
+  readonly providerFacts?: GatewayProviderFacts | null;
+  /** Round 6: the customer's latest cancel and refund requests for this attempt. */
+  readonly latestCancel?: GatewayProviderRequestRecord | null;
+  readonly latestRefund?: GatewayProviderRequestRecord | null;
+  /**
+   * Round 6: another attempt of this customer's that is still open — the invoice that stopped
+   * a new one from being made — so the screen can point at it. Null when there is none.
+   */
+  readonly openElsewherePaymentId?: string | null;
 }
 
 /**
@@ -556,9 +585,44 @@ export interface GatewayCardFacts {
  */
 export class GatewayPaymentService {
   private readonly inquiryHealth: GatewayInquiryHealth;
+  /** Round 6: cancels and refunds, and the cancel a new invoice makes room with. */
+  private readonly providerRequestLane: GatewayProviderRequestLane | null;
 
   constructor(private readonly deps: GatewayPaymentServiceDeps) {
     this.inquiryHealth = deps.inquiryHealth ?? new GatewayInquiryHealth();
+    const requests = deps.providerRequests;
+    const cardAdapters = deps.cardAdapters;
+    this.providerRequestLane =
+      requests === undefined || cardAdapters === undefined
+        ? null
+        : new GatewayProviderRequestLane({
+            requests,
+            invoices: deps.invoices,
+            paymentRecords: deps.paymentRecords,
+            payments: deps.payments,
+            cardAdapters,
+            credentials: deps.credentials,
+            budget: deps.budget,
+            ...(deps.refundCards === undefined ? {} : { refundCards: deps.refundCards }),
+            uow: deps.uow,
+            audit: deps.audit,
+            opsLog: deps.opsLog,
+            clock: deps.clock,
+            ids: deps.ids,
+            logger: deps.logger,
+            hooks: {
+              leaseMs: () => this.leaseMs(),
+              rowFitsLease: (leaseUntil) => this.rowFitsLease(leaseUntil),
+              misconfigured: (scope, invoice, code) => this.misconfigured(scope, invoice, code),
+              identityMismatch: (scope, invoice) =>
+                this.identityMismatch(scope, invoice, 'INQUIRY'),
+              refreshScreens: (scope, paymentId) => this.refreshScreens(scope, paymentId),
+              rowFailed: (scope, paymentId, provider, error) =>
+                this.rowFailed(scope, 'PROVIDER_REQUEST', paymentId, provider, error, () =>
+                  Promise.resolve(false),
+                ),
+            },
+          });
   }
 
   private rowBoundMs(): number {
@@ -596,6 +660,7 @@ export class GatewayPaymentService {
       budgetExhausted: false,
       reviewsLapsed: 0,
       cardChanges: 0,
+      providerRequests: 0,
       receipts: 0,
       reviewsOpened: 0,
       held: 0,
@@ -667,6 +732,14 @@ export class GatewayPaymentService {
         report.cardChanges = cards.done;
         callBudgetSpent = cards.budgetExhausted;
         report.budgetExhausted ||= cards.budgetExhausted;
+      });
+    }
+    if (!callBudgetSpent) {
+      await this.isolatedLane(scope, report, 'PROVIDER_REQUEST', async () => {
+        const requests = await this.providerRequestLane?.run(scope, actor, report);
+        report.providerRequests = requests?.done ?? 0;
+        callBudgetSpent = requests?.budgetExhausted ?? false;
+        report.budgetExhausted ||= requests?.budgetExhausted ?? false;
       });
     }
     if (!callBudgetSpent) {
@@ -883,7 +956,8 @@ export class GatewayPaymentService {
         // R5A item 4: a credited approval ends the attempt; its message must stop saying "unresolved".
         result === 'CREDITED' ||
         result === 'REVIEW' ||
-        result === 'HELD'
+        result === 'HELD' ||
+        result === 'CHANGED'
       ) {
         await this.refreshScreens(scope, claimed.invoice.paymentId);
       }
@@ -908,7 +982,14 @@ export class GatewayPaymentService {
   private async isolatedLane(
     scope: TenantContext,
     report: { laneFailures: number },
-    lane: 'CREATION' | 'INQUIRY' | 'REVIEW_SWEEP' | 'CAPTURE_SWEEP' | 'CARD_CHANGE' | 'RECEIPT',
+    lane:
+      | 'CREATION'
+      | 'INQUIRY'
+      | 'REVIEW_SWEEP'
+      | 'CAPTURE_SWEEP'
+      | 'CARD_CHANGE'
+      | 'PROVIDER_REQUEST'
+      | 'RECEIPT',
     run: () => Promise<void>,
   ): Promise<void> {
     try {
@@ -933,7 +1014,7 @@ export class GatewayPaymentService {
    */
   private async rowFailed(
     scope: TenantContext,
-    lane: 'CREATION' | 'INQUIRY' | 'CARD_CHANGE' | 'RECEIPT',
+    lane: 'CREATION' | 'INQUIRY' | 'CARD_CHANGE' | 'PROVIDER_REQUEST' | 'RECEIPT',
     paymentId: string,
     provider: PaymentGatewayProvider | null,
     error: unknown,
@@ -1149,6 +1230,36 @@ export class GatewayPaymentService {
         paymentLinkConfigurationFailure('nexa.credential_missing'),
       );
       return 'createFailed';
+    }
+
+    /*
+     * Round 6 item 3: a customer who starts a new top-up while an own `pending` TonPays Telegram
+     * invoice exists has that one cancelled FIRST, then the new one created. Done here, in the
+     * worker, so Telegram never waits for it. A cancel that could not be sent (budget, the
+     * provider's rate limit) defers the create; one the provider refused or lost does not —
+     * the provider answers `BUYER_HAS_*` if it must, and the customer is shown that invoice.
+     */
+    if (
+      this.providerRequestLane !== null &&
+      PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].invoiceForm === 'CARD_TRANSFER' &&
+      (await this.providerRequestLane.cancelSiblingsBeforeCreate(
+        scope,
+        actor,
+        invoice,
+        claimed.customerId,
+      )) === 'DEFER'
+    ) {
+      await this.deps.uow.run(scope, (tx) =>
+        this.deps.invoices.deferCreation(
+          scope,
+          invoice.paymentId,
+          'nexa.budget',
+          new Date(this.deps.clock.now().getTime() + 5_000),
+          this.deps.clock.now(),
+          tx,
+        ),
+      );
+      return 'createDeferred';
     }
 
     if (!(await this.deps.budget.take(scope, invoice.provider, adapter.callBudgetPerMinute, now))) {
@@ -1368,10 +1479,31 @@ export class GatewayPaymentService {
         return 'createFailed';
       }
       case 'REFUSED': {
+        /*
+         * Round 6 item 3: `BUYER_HAS_PENDING_INVOICE` is a readable refusal — no invoice was
+         * made — so, once, the customer's OWN pending invoice is cancelled and the same create
+         * is sent again. A second such refusal, and any invoice Nexa cannot cancel, is final.
+         */
+        if (
+          this.providerRequestLane !== null &&
+          buyerConflictRetryAllowed(outcome.code, invoice.creationErrorCode) &&
+          (await this.providerRequestLane.cancelOwnPendingForBuyerConflict(
+            scope,
+            actor,
+            invoice,
+            claimed.customerId,
+          )) === 'RETRY'
+        ) {
+          await this.deps.uow.run(scope, (tx) =>
+            this.deps.invoices.deferCreation(scope, invoice.paymentId, outcome.code, at, at, tx),
+          );
+          return 'createDeferred';
+        }
         await this.endCreation(scope, actor, invoice, 'CREATE_FAILED', outcome.code);
         await this.deps.payments.failGatewayPayment(scope, actor, invoice.paymentId, {
           reasonCode: `${invoice.provider.toLowerCase()}:${outcome.code}`,
-          notifyCustomer: !outcome.configuration,
+          // A buyer who already holds an invoice is shown THAT invoice on the edited screen.
+          notifyCustomer: !outcome.configuration && !isBuyerConflictCode(outcome.code),
         });
         if (outcome.configuration) await this.misconfigured(scope, invoice, outcome.code);
         await this.reportLinkFailure(scope, claimed, linkFailure, {
@@ -1406,6 +1538,8 @@ export class GatewayPaymentService {
     leaseUntil: Date,
   ): Promise<
     | 'OPEN'
+    /** Round 6: still open, but what the customer should do next changed — redraw the screen. */
+    | 'CHANGED'
     | 'SETTLED'
     | 'UNSUCCESSFUL'
     | 'LATE'
@@ -1715,6 +1849,7 @@ export class GatewayPaymentService {
     let verdict = outcome.verdict;
     let mismatchReason = outcome.mismatchReason ?? null;
     const reference = outcome.providerReference ?? null;
+    let screenChanged = false;
     const kept = await this.deps.uow.run(scope, async (tx) => {
       /*
        * FIX10 R1: first, that the claim is still this pass's — locked, so it cannot change
@@ -1799,6 +1934,38 @@ export class GatewayPaymentService {
         at,
         tx,
       );
+      /*
+       * Round 6: what the customer owes next (a remainder, a refund card) and any rejection
+       * reasons, from the same answer — metadata for the screen and the history. They never
+       * reach the verdict above. The reasons are written to the payment's audit once, when
+       * they first appear or change, not once per inquiry.
+       */
+      if (this.deps.providerRequests !== undefined && outcome.facts !== undefined) {
+        const recorded = await this.deps.providerRequests.recordFacts(
+          scope,
+          invoice.paymentId,
+          outcome.facts,
+          at,
+          tx,
+        );
+        // The status moved to or from a next step too (a remainder with no usable details).
+        screenChanged = recorded.changed || invoice.providerStatus !== outcome.status;
+        if (recorded.reasonsChanged && outcome.facts !== null) {
+          await this.deps.audit.record(
+            scope,
+            actor,
+            {
+              action: 'gateway_invoice.provider_rejection_reasons',
+              entityType: 'Payment',
+              entityId: invoice.paymentId,
+              before: null,
+              after: { providerStatus: outcome.status, reasons: [...outcome.facts.rejectReasons] },
+              result: 'SUCCESS',
+            },
+            tx,
+          );
+        }
+      }
       return true;
     });
     if (!kept) return 'LOST';
@@ -1835,7 +2002,7 @@ export class GatewayPaymentService {
           );
         }
       }
-      return 'OPEN';
+      return screenChanged ? 'CHANGED' : 'OPEN';
     }
 
     if (verdict === 'MISMATCH') {
@@ -1863,6 +2030,8 @@ export class GatewayPaymentService {
         await this.deps.payments.failGatewayPayment(scope, actor, invoice.paymentId, {
           reasonCode: `${invoice.provider.toLowerCase()}:${outcome.status}`,
           notifyCustomer: true,
+          // Round 6: the provider's own reasons go into the payment's audit with the failure.
+          providerReasons: outcome.facts?.rejectReasons ?? [],
         });
       }
       await this.deps.invoices.recordOutcome(scope, invoice.paymentId, 'UNSUCCESSFUL', at);
@@ -2794,6 +2963,35 @@ export class GatewayPaymentService {
     }
   }
 
+  /** The invoice's own provider id for a submission's payment, or null when it has none. */
+  private async invoiceIdOf(
+    scope: TenantContext,
+    submission: { readonly paymentId: PaymentId },
+  ): Promise<string | null> {
+    const invoice = await this.deps.invoices.findByPayment(scope, submission.paymentId);
+    return invoice?.providerInvoiceId ?? null;
+  }
+
+  /**
+   * Whether a receipt's target is this invoice: its own provider id, or — only while the
+   * provider reports an underpayment — the `remaining_invoice_id` it named. Anything else is
+   * not this attempt's, whatever the submission row says.
+   */
+  private async receiptTargetMatches(
+    scope: TenantContext,
+    invoice: GatewayInvoiceRecord,
+    target: string,
+    tx?: TransactionScope,
+  ): Promise<boolean> {
+    if (invoice.providerInvoiceId === target) return true;
+    const requests = this.deps.providerRequests;
+    if (requests === undefined || invoice.providerStatus !== TONPAYS_TELEGRAM_STATUS_LESS) {
+      return false;
+    }
+    const facts = await requests.factsFor(scope, invoice.paymentId, tx);
+    return facts?.need === 'LESS' && facts.remainingInvoiceId === target;
+  }
+
   /** A card change whose answer was lost: the card is hidden and the operator told. */
   private async cardUnknown(
     scope: TenantContext,
@@ -2981,15 +3179,32 @@ export class GatewayPaymentService {
       await lost('nexa.send_interrupted');
       return 'DONE';
     }
+    /*
+     * Round 6: a receipt for the REMAINDER of an underpaid invoice (its target is the
+     * provider's `remaining_invoice_id`, not the invoice's own id) may be sent while the
+     * provider's review is open — the underpayment is found by checking the first receipt.
+     * Every other receipt is the customer window's, exactly as before.
+     */
+    const remainder = submission.providerInvoiceId !== (await this.invoiceIdOf(scope, submission));
     const windowOpen = (payment: {
       readonly state: string;
       readonly expiresAt: Date | null;
       readonly reviewUntil: Date | null;
-    }): boolean =>
-      payment.state === 'PENDING' &&
-      payment.reviewUntil === null &&
-      payment.expiresAt !== null &&
-      this.deps.clock.now().getTime() < payment.expiresAt.getTime();
+    }): boolean => {
+      const deadline = remainder
+        ? gatewaySettlementDeadline({
+            expiresAt: payment.expiresAt,
+            providerReviewUntil: payment.reviewUntil,
+          })
+        : payment.reviewUntil === null
+          ? payment.expiresAt
+          : null;
+      return (
+        payment.state === 'PENDING' &&
+        deadline !== null &&
+        this.deps.clock.now().getTime() < deadline.getTime()
+      );
+    };
     /*
      * TPTG-33: once the customer window has closed nothing is uploaded — a receipt sent
      * after the deadline could not open a review, and must never reopen an expired payment.
@@ -3008,7 +3223,8 @@ export class GatewayPaymentService {
     if (
       invoice === null ||
       invoice.creationState !== 'CREATED' ||
-      invoice.providerInvoiceId !== submission.providerInvoiceId ||
+      invoice.providerInvoiceId === null ||
+      !(await this.receiptTargetMatches(scope, invoice, submission.providerInvoiceId)) ||
       invoice.botInstanceId !== submission.botInstanceId
     ) {
       await decide('ABANDONED', { errorCode: 'nexa.identity_mismatch' });
@@ -3083,7 +3299,8 @@ export class GatewayPaymentService {
         }) ||
         current === null ||
         current.creationState !== 'CREATED' ||
-        current.providerInvoiceId !== submission.providerInvoiceId
+        current.providerInvoiceId === null ||
+        !(await this.receiptTargetMatches(scope, current, submission.providerInvoiceId, tx))
       ) {
         return 'CLOSED' as const;
       }
@@ -3102,10 +3319,11 @@ export class GatewayPaymentService {
       return 'DONE';
     }
     if (stamped === 'LOST') return 'DONE';
-    const outcome = await adapter.uploadReceipt(apiKey, invoice.providerInvoiceId, {
+    // The submission's own target: the invoice, or an underpayment's remainder invoice.
+    const outcome = await adapter.uploadReceipt(apiKey, submission.providerInvoiceId, {
       bytes: file.bytes,
       mimeType,
-      fileName: mimeType === 'image/png' ? 'receipt.png' : 'receipt.jpg',
+      fileName: receiptFileName(mimeType),
     });
     // The clock AFTER the answer: the earliest moment Nexa knows (§9.6.3 c).
     const at = this.deps.clock.now();
@@ -3418,7 +3636,10 @@ export class GatewayPaymentService {
    */
   async cardFactsFor(
     scope: TenantContext,
-    invoice: Pick<GatewayInvoiceRecord, 'paymentId' | 'provider'>,
+    invoice: Pick<
+      GatewayInvoiceRecord,
+      'paymentId' | 'provider' | 'botInstanceId' | 'creationState' | 'creationErrorCode'
+    >,
   ): Promise<GatewayCardFacts | null> {
     const cards = this.deps.cardTransfer;
     if (
@@ -3427,11 +3648,48 @@ export class GatewayPaymentService {
     ) {
       return null;
     }
-    const [latestChange, submissions] = await Promise.all([
-      cards.latestCardChange(scope, invoice.paymentId),
-      cards.submissionsFor(scope, invoice.paymentId),
-    ]);
-    return { latestChange, submissions };
+    const requests = this.deps.providerRequests;
+    const [latestChange, submissions, providerFacts, latestCancel, latestRefund] =
+      await Promise.all([
+        cards.latestCardChange(scope, invoice.paymentId),
+        cards.submissionsFor(scope, invoice.paymentId),
+        requests?.factsFor(scope, invoice.paymentId) ?? Promise.resolve(null),
+        requests?.latest(scope, invoice.paymentId, 'CANCEL') ?? Promise.resolve(null),
+        requests?.latest(scope, invoice.paymentId, 'REFUND') ?? Promise.resolve(null),
+      ]);
+    /*
+     * A create the provider refused because the buyer already holds an open invoice: point at
+     * the customer's OTHER open attempt, if Nexa knows of one, so the screen can open it.
+     */
+    let openElsewherePaymentId: string | null = null;
+    if (
+      requests !== undefined &&
+      invoice.creationState === 'CREATE_FAILED' &&
+      isBuyerConflictCode(invoice.creationErrorCode) &&
+      invoice.botInstanceId !== null
+    ) {
+      const payment = await this.deps.paymentRecords.findById(scope, invoice.paymentId);
+      if (payment !== null) {
+        const siblings = await requests.siblingAttempts(scope, {
+          customerId: payment.customerId,
+          provider: invoice.provider,
+          botInstanceId: invoice.botInstanceId,
+          exceptPaymentId: invoice.paymentId,
+          now: this.deps.clock.now(),
+          // The invoice that blocked the create may be inside its review window.
+          includeReview: true,
+        });
+        openElsewherePaymentId = siblings[0]?.paymentId ?? null;
+      }
+    }
+    return {
+      latestChange,
+      submissions,
+      providerFacts,
+      latestCancel,
+      latestRefund,
+      openElsewherePaymentId,
+    };
   }
 
   /** The attempt, if it is this customer's GATEWAY payment. Null otherwise — never another's. */
