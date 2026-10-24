@@ -5765,6 +5765,8 @@ export const PAYMENT_GATEWAY_ROUTES = {
 /** One source's recent history, for the operator's diagnostics. Never a body or a URL. */
 export const fxSourceStatusSchema = z.object({
   source: fxSourceSchema,
+  /** The per-source switch (`fx.source_*_enabled`). A disabled source is never called. */
+  enabled: z.boolean(),
   lastSuccessAt: z.iso.datetime().nullable(),
   lastFailureAt: z.iso.datetime().nullable(),
   /** The machine code of the last failure: a failure kind, `rate_limited`, `outlier`, ... */
@@ -5805,6 +5807,10 @@ export const fxStatusResponseSchema = z.object({
   fallbackSource: fxFallbackSourceSchema,
   freshTtlSeconds: z.number().int(),
   maxStaleSeconds: z.number().int(),
+  /** `fx.min_agreeing_sources`. */
+  minAgreeingSources: z.number().int(),
+  /** `fx.accept_single_source`. */
+  acceptSingleSource: z.boolean(),
   state: fxQuoteStateSchema,
   quote: fxQuoteViewSchema.nullable(),
   lastAttemptAt: z.iso.datetime().nullable(),

@@ -390,6 +390,7 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
   failure('fx.quote_rejected', 'PAYMENTS', 'CONDITION'),
   failure('fx.source_unavailable', 'PAYMENTS', 'CONDITION'),
   failure('fx.fallback_in_use', 'PAYMENTS', 'CONDITION'),
+  failure('fx.single_source', 'PAYMENTS', 'CONDITION'),
   failure('fx.stale_quote_used', 'PAYMENTS', 'CONDITION'),
 
   // --- Wallet and refunds -----------------------------------------------------------------

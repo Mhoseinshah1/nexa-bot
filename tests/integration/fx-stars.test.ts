@@ -586,7 +586,8 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
   describe('the central rate prices a Stars attempt', () => {
     it('snapshots the USDT quote, its source and times, the ratio and the effective figure; stars = ceil(payable / (rate / ratio))', async () => {
       await centralStars();
-      expect(hits).toEqual(['nobitex/v3/orderbook/USDTIRT']);
+      // Every enabled source is read; the two agree and the primary's figure is stored.
+      expect(hits).toEqual(['nobitex/v3/orderbook/USDTIRT', 'wallex/v1/depth?symbol=USDTTMN']);
       const attempt = await topup(100_000n);
       const invoice = await invoiceOf(attempt.payment.id);
       // 105,000 Toman payable; 103,550 Toman per USDT / 100 Stars per USDT = 1,035.5 Toman
@@ -623,6 +624,7 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
       const before = await invoiceOf(first.payment.id);
       // The market moves ten percent: 1,139,050 Rial. An operator's refresh reads it now.
       script.nobitex = { status: 200, body: nobitexBook('1139050') };
+      script.wallex = { status: 200, body: wallexDepth('113900') };
       expect((await api.container.fx.refresh(tenantA, owner, 'USDT')).outcome).toBe('REFRESHED');
       expect(await invoiceOf(first.payment.id)).toEqual(before);
       // The same open attempt is handed back unchanged (its snapshot is its own).
@@ -683,7 +685,8 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
       await centralStars();
       const first = await topup(100_000n);
       const before = await invoiceOf(first.payment.id);
-      await ageQuote(1_000);
+      // Past the six-hour default window.
+      await ageQuote(22_000);
       const refused = await topup(200_000n).catch((error: unknown) => error);
       expect(isNexaError(refused) && refused.code).toBe(
         COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
@@ -737,17 +740,17 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
 
     it('the worker lane refreshes only when the quote is older than the TTL: one conditional claim, nothing dialled otherwise', async () => {
       await centralStars();
-      expect(hits).toHaveLength(1);
+      expect(hits).toHaveLength(2);
       expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toMatchObject({
         outcome: 'NOT_DUE',
       });
-      expect(hits).toHaveLength(1);
-      // Past the TTL (the default is 45 s) the same call claims the row and dials the primary.
+      expect(hits).toHaveLength(2);
+      // Past the TTL (the default is 45 s) the same call claims the row and dials every source.
       await ageQuote(60);
       expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toMatchObject({
         outcome: 'REFRESHED',
       });
-      expect(hits).toHaveLength(2);
+      expect(hits).toHaveLength(4);
       // A lease another replica holds is honoured: nothing is dialled until it lapses.
       await ageQuote(60);
       await api.container.database.db.execute(
@@ -757,7 +760,7 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
         outcome: 'NOT_DUE',
       });
       expect((await api.container.fx.refresh(tenantA, owner, 'USDT')).outcome).toBe('BUSY');
-      expect(hits).toHaveLength(2);
+      expect(hits).toHaveLength(4);
     });
 
     it('the stored quote never moves backwards: a replica whose clock is behind cannot replace a newer quote', async () => {
@@ -766,6 +769,7 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
       // behind this one would see. A refresh from here is "older" and must not win.
       await ageQuote(-3_600);
       script.nobitex = { status: 200, body: nobitexBook('1139050') };
+      script.wallex = { status: 200, body: wallexDepth('113900') };
       expect((await api.container.fx.refresh(tenantA, owner, 'USDT')).outcome).toBe('REFRESHED');
       const [row] = await rows<{
         rate_mantissa: string;
@@ -850,6 +854,8 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
 
     it('primary down: the fallback prices the attempt from Toman as read, and the conditions are recorded', async () => {
       await enableStars({ customerFeeBasisPoints: 500 });
+      // The owner's opt-in: one healthy source is enough (default OFF).
+      await setSetting('fx.accept_single_source', true);
       script.nobitex = { status: 502, body: 'bad gateway' };
       expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toMatchObject({
         outcome: 'REFRESHED_BY_FALLBACK',
@@ -863,7 +869,11 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
         fx_rate_mantissa: '103500',
         fx_source_at: null,
       });
-      expect(await opsCodes()).toEqual(['fx.source_unavailable×1', `${FX_FALLBACK_IN_USE_CODE}×1`]);
+      expect(await opsCodes()).toEqual([
+        'fx.source_unavailable×1',
+        'fx.single_source×1',
+        `${FX_FALLBACK_IN_USE_CODE}×1`,
+      ]);
     });
   });
 
@@ -896,10 +906,16 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
         },
         policyVersion: 1,
       });
-      expect(view.sources.map((source) => [source.source, source.consecutiveFailures])).toEqual([
-        ['NOBITEX', 0],
+      // Every source is listed with its switch, dialled or not.
+      expect(
+        view.sources.map((source) => [source.source, source.enabled, source.consecutiveFailures]),
+      ).toEqual([
+        ['NOBITEX', true, 0],
+        ['WALLEX', true, 0],
       ]);
+      expect(view).toMatchObject({ minAgreeingSources: 2, acceptSingleSource: false });
 
+      await setSetting('fx.accept_single_source', true);
       script.nobitex = { status: 429, body: '' };
       const refreshed = await inject({
         method: 'POST',

@@ -31,6 +31,26 @@ export const FX_SOURCES = ['NOBITEX', 'WALLEX'] as const;
 export type FxSource = (typeof FX_SOURCES)[number];
 export const fxSourceSchema = z.enum(FX_SOURCES);
 
+/**
+ * The registry key that switches each source on or off (Round 6). A disabled source is
+ * never dialled: the service filters on these before it asks any adapter anything, so an
+ * operator can take a source out (Nobitex answers 403 to a foreign address) without a
+ * deploy. Total over `FxSource` — adding a source without its switch is a compile error.
+ */
+export const FX_SOURCE_ENABLED_SETTINGS = {
+  NOBITEX: 'fx.source_nobitex_enabled',
+  WALLEX: 'fx.source_wallex_enabled',
+} as const satisfies Record<FxSource, string>;
+
+/**
+ * How many healthy sources must agree (within `FX_SOURCE_AGREEMENT_BPS`) before a quote
+ * is stored. Two is the floor: one source is the operator's explicit opt-in
+ * (`fx.accept_single_source`), never a value of this setting.
+ */
+export const FX_MIN_AGREEING_SOURCES_MIN = 2;
+export const FX_MIN_AGREEING_SOURCES_MAX = 5;
+export const FX_MIN_AGREEING_SOURCES_DEFAULT = 2;
+
 /** A fallback may be none. `NONE` is the operator saying "primary only". */
 export const FX_FALLBACK_SOURCES = [...FX_SOURCES, 'NONE'] as const;
 export type FxFallbackSource = (typeof FX_FALLBACK_SOURCES)[number];
@@ -349,7 +369,7 @@ export const FX_FRESH_TTL_SECONDS_DEFAULT = 45;
 /** `fx.max_stale_seconds`: how long past the TTL the last-known-good may still price a NEW invoice. */
 export const FX_MAX_STALE_SECONDS_MIN = 60;
 export const FX_MAX_STALE_SECONDS_MAX = 86_400;
-export const FX_MAX_STALE_SECONDS_DEFAULT = 900;
+export const FX_MAX_STALE_SECONDS_DEFAULT = 21_600;
 
 /**
  * The state of a quote of this age. The stale limit is floored at the TTL so a
