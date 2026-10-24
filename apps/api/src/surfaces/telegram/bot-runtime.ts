@@ -23,7 +23,6 @@ import {
   SERVICE_NOTE_CLEAR_TOKEN,
   SERVICE_NOTE_MAX_LENGTH,
   SERVICE_SEARCH_MAX_LENGTH,
-  telegramChannelJoinUrl,
   PAYMENT_GATEWAY_DESCRIPTORS,
   TONPAYS_TELEGRAM_STATUS_LESS,
   TONPAYS_TELEGRAM_STATUS_MORE,
@@ -49,14 +48,12 @@ import type {
   ServiceReminderThresholds,
   ServiceTransferRecipientRefusal,
   TemplateKey,
-  TelegramChannel,
   TemplateValues,
   TenantContext,
   UserId,
 } from '@nexa/contracts';
 import { DEFAULT_USERNAME_PREFIX, previewUsername, validateUsernamePolicy } from '@nexa/contracts';
 import type { PanelUsernamePolicy } from '../../modules/platform/panels/application/ports.js';
-import { MARKETING_OPT_OUT_DISABLED_REASON } from '../../modules/commerce/customers/application/customer.service.js';
 import type { InboundReceiptFile } from '../../modules/commerce/payments/application/receipt-ports.js';
 import type { PaymentRecord } from '../../modules/commerce/payments/application/ports.js';
 import { mayBePushedRefundRequests } from '../../modules/commerce/payments/application/service-refund-push.consumer.js';
@@ -260,9 +257,6 @@ import {
   GATEWAY_ROUTE_PAY_CALLBACK_PREFIX,
   MAIN_MENU_CALLBACK_DATA,
   MANUAL_PAY_CALLBACK_PREFIX,
-  MARKETING_OPT_IN_CALLBACK_DATA,
-  MARKETING_OPT_OUT_CALLBACK_DATA,
-  MEMBERSHIP_CHECK_CALLBACK_DATA,
   ORDER_CALLBACK_PREFIX,
   PAY_METHODS_CALLBACK_PREFIX,
   PAY_METHODS_CLOSE_CALLBACK_PREFIX,
@@ -297,7 +291,6 @@ import {
   SERVICE_SUSPEND_CALLBACK_PREFIX,
   SERVICE_SUSPEND_CONFIRM_CALLBACK_PREFIX,
   SERVICE_TRANSFER_ASK_CALLBACK_PREFIX,
-  TERMS_ACCEPT_CALLBACK_PREFIX,
   TICKETS_CALLBACK_DATA,
   TICKET_CATEGORY_CALLBACK_PREFIX,
   TICKET_CLOSE_ASK_CALLBACK_PREFIX,
@@ -352,6 +345,20 @@ import {
   toastReply,
   withBlockedSupportButton,
 } from './runtime/replies.js';
+import * as startMenuFlow from './runtime/start-menu-flow.js';
+import {
+  MEMBERSHIP_EXEMPT_INTENTS,
+  membershipRequired,
+  termsRequired,
+  termsAcceptedReply,
+  termsStaleReply,
+  marketingPreferenceButton,
+} from './runtime/start-menu-flow.js';
+export {
+  termsAcceptedReply,
+  termsStaleReply,
+  marketingPreferenceButton,
+} from './runtime/start-menu-flow.js';
 
 export { BOT_INTENTS } from './runtime/intents.js';
 export type { BotIntent, BotCommand } from './runtime/intents.js';
@@ -743,115 +750,6 @@ function hasAnyPanelSection(permissions: ReadonlySet<PermissionKey>): boolean {
 const ADMIN_INTENTS: ReadonlySet<BotIntent> = new Set<BotIntent>(
   BOT_INTENTS.filter((intent) => intent.startsWith('ADMIN_')),
 );
-
-/**
- * The intents the membership guard lets through (Package B, brief B3): support and help —
- * the minimal support path, which `/paysupport` opens too. The check button and the
- * management panel are let through by `guardedAct` itself.
- */
-const MEMBERSHIP_EXEMPT_INTENTS: ReadonlySet<BotIntent> = new Set<BotIntent>([
-  'SUPPORT',
-  'HELP',
-  'MARKETING_OPT_OUT',
-  'MARKETING_OPT_IN',
-]);
-
-/**
- * The join screen (brief B4): one message, a URL button per missing REQUIRED channel, and
- * the check button. A public channel's button is its `@handle`; a private one is numbered.
- * A channel with no join link cannot be configured as required, so every one has a button.
- */
-function membershipRequired(
-  key: 'bot.channels.join_required' | 'bot.channels.still_missing',
-  missing: readonly TelegramChannel[],
-): PendingReply {
-  const buttons: CustomerButton[] = [];
-  missing.forEach((channel, index) => {
-    const url = telegramChannelJoinUrl(channel);
-    if (url === null) return;
-    buttons.push({
-      ...(channel.handle !== undefined
-        ? inlineDataLabel('channels.join_public', { kind: 'TEXT', text: channel.handle })
-        : inlineLabel('channels.join_private', { number: index + 1 })),
-      url,
-    });
-  });
-  buttons.push({
-    ...inlineLabel('channels.check'),
-    data: MEMBERSHIP_CHECK_CALLBACK_DATA,
-  });
-  return {
-    key,
-    values: {},
-    buttons,
-    orderId: null,
-    /*
-     * R2: a gate, not a step — its own message, so the screen the customer tapped stays
-     * behind it and works again once they have joined.
-     */
-    wizard: { kind: 'ORDER', step: 'NOTICE', placement: 'NEW' },
-  };
-}
-
-/**
- * The terms screen (program §6): the current version's title and text, as the operator
- * wrote them, and one accept button that names THAT version. A gate like the join screen —
- * its own message, so the screen the customer tapped stays behind it.
- */
-function termsRequired(
-  key: 'bot.terms.required' | 'bot.terms.updated',
-  version: { readonly id: string; readonly title: string; readonly body: string },
-): PendingReply {
-  return {
-    key,
-    values: { title: version.title, body: version.body },
-    buttons: [
-      {
-        ...inlineLabel('terms.accept'),
-        data: `${TERMS_ACCEPT_CALLBACK_PREFIX}${version.id}`,
-      },
-    ],
-    orderId: null,
-    wizard: { kind: 'ORDER', step: 'NOTICE', placement: 'NEW' },
-  };
-}
-
-/**
- * Batch 01 item 1: the answer to an accept button once the acceptance is recorded (now or
- * by an earlier tap). It EDITS the terms message the button sits on (`edit`), so the
- * customer is left with one message that says the rules were accepted, and no new one.
- *
- * The accept button goes with the edit (the keyboard is always replaced), and the way to
- * the main menu takes its place: a customer stopped at their very first `/start` has
- * never been sent the persistent menu keyboard, and the tap on «منوی اصلی» is the
- * customer's own request for it. Pure, so the shape is pinned without a database.
- *
- * When Telegram cannot edit the message (deleted, or a photo) the SAME reply goes out once
- * as a new message — `editOrSend`'s one fallback; "not modified" is success, never a
- * fallback, so a repeated tap can never become a second message.
- */
-export function termsAcceptedReply(): PendingReply {
-  return {
-    key: 'bot.terms.accepted',
-    values: {},
-    buttons: [mainMenuButton()],
-    orderId: null,
-    edit: true,
-  };
-}
-
-/**
- * Batch 01 item 1: an accept button whose version is no longer current. The SAME message is
- * edited into the version that replaced it, with that version's own button — the customer
- * never has two terms prompts on screen, one of them dead.
- */
-export function termsStaleReply(version: {
-  readonly id: string;
-  readonly title: string;
-  readonly body: string;
-}): PendingReply {
-  return { ...termsRequired('bot.terms.updated', version), edit: true };
-}
 
 /**
  * The four administrator callbacks' intents: the buttons of a review card that is PUSHED,
@@ -7199,34 +7097,13 @@ export class BotRuntime {
     return { ...greeting, buttons: [], orderId: null, ...menu };
   }
 
-  /**
-   * R6 item 3: `/start`'s greeting for the customer whose update this is, as a key and VALUES.
-   *
-   * Every fact is read now, for THIS customer (the row the signed update resolved to), and
-   * handed to the pure `startGreetingValues`; the name is sanitised by the one renderer when
-   * the message is sent. Nothing rendered is stored — the reply carries values, and the text
-   * is composed by the messenger at send time from the tenant's raw template.
-   */
-  async startGreeting(
+  startGreeting(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     key: StartGreetingKey,
   ): Promise<{ readonly key: TemplateKey; readonly values: TemplateValues }> {
-    const now = this.deps.clock.now();
-    const [balance, serving] = await Promise.all([
-      this.deps.wallet.balanceForCustomer(scope, actor, customer.id),
-      this.deps.services.greetingFactsForCustomer(scope, customer.id, now),
-    ]);
-    return this.deps.screens.startGreeting(key, {
-      telegramUserId: customer.telegramUserId,
-      username: customer.username,
-      firstName: customer.firstName,
-      balance: money(balance.amountMinor, balance.currency),
-      activeServices: serving.serving,
-      nearestExpiresAt: serving.nearestExpiresAt,
-      now,
-    });
+    return startMenuFlow.startGreeting(this, scope, actor, customer, key);
   }
 
   /**
@@ -9833,55 +9710,21 @@ export class BotRuntime {
     }
   }
 
-  /**
-   * The FAQ/support screen (§J): the tenant's active entries in parts split at item
-   * boundaries, the earlier parts as leads and the last carrying the keyboard; with no
-   * active entry, the contact action alone. The contact button opens the FIRST configured
-   * support account and is not drawn when none is configured.
-   */
-  /**
-   * Round N close (§D): the customer's own promotional opt-out or opt-in, under the update's
-   * key. The reply names what changed and carries the way back; a repeated tap is answered
-   * with the same reply, because the preference already holds.
-   */
-  async marketingPreference(
+  marketingPreference(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     optedOut: boolean,
     idempotencyKey: string,
   ): Promise<PendingReply> {
-    /*
-     * Spec §9: while the installation does not let customers stop promotions, /stop and an
-     * old opt-out / opt-in button are answered and change nothing. The service decides
-     * again inside its transaction; its refusal (the switch moved between the two reads) is
-     * answered the same way.
-     */
-    const unavailable: PendingReply = {
-      key: 'bot.marketing.unavailable',
-      values: {},
-      buttons: [mainMenuButton()],
-      orderId: null,
-    };
-    if (!(await this.deps.customers.marketingOptOutAllowed(scope))) return unavailable;
-    // The update's key is already spent by `resolveFromUpdate` under this surface: the
-    // preference is a second command of the same turn, so it takes the turn's sub-key.
-    try {
-      await this.deps.customers.setMarketingOptOut(scope, actor, {
-        idempotencyKey: `${idempotencyKey}:marketing`,
-        customerId: customer.id,
-        optedOut,
-      });
-    } catch (error) {
-      if (isMarketingOptOutDisabled(error)) return unavailable;
-      throw error;
-    }
-    return {
-      key: optedOut ? 'bot.marketing.opted_out' : 'bot.marketing.opted_in',
-      values: {},
-      buttons: [marketingPreferenceButton(!optedOut), mainMenuButton()],
-      orderId: null,
-    };
+    return startMenuFlow.marketingPreference(
+      this,
+      scope,
+      actor,
+      customer,
+      optedOut,
+      idempotencyKey,
+    );
   }
 
   async supportScreen(scope: TenantContext, customer: CustomerRecord): Promise<PendingReply> {
@@ -14290,28 +14133,6 @@ export function serviceListButton(
     data: `${SERVICE_CARD_CALLBACK_PREFIX}${service.id}`,
     ...(shown.buttonStyle === null ? {} : { derivedStyle: shown.buttonStyle }),
   };
-}
-
-/**
- * Round N close (§D): the opt-in button when the customer has opted out of promotions, the
- * opt-out button otherwise. One button, the reverse of the state, so the screen never shows
- * a choice that is already the case.
- */
-/** Spec §9: the service's refusal while customers may not change their preference. */
-function isMarketingOptOutDisabled(error: unknown): boolean {
-  return isNexaError(error) && error.details['reason'] === MARKETING_OPT_OUT_DISABLED_REASON;
-}
-
-export function marketingPreferenceButton(optedOut: boolean): CustomerButton {
-  return optedOut
-    ? {
-        ...inlineLabel('marketing.opt_in'),
-        data: MARKETING_OPT_IN_CALLBACK_DATA,
-      }
-    : {
-        ...inlineLabel('marketing.opt_out'),
-        data: MARKETING_OPT_OUT_CALLBACK_DATA,
-      };
 }
 
 function topupButton(): CustomerButton {
