@@ -172,7 +172,7 @@ const data = (reply: ReturnType<typeof gatewayAttemptScreen>) =>
   reply.buttons.map((button) => ('data' in button ? button.data : null));
 
 describe('the TonPays Telegram payment screen', () => {
-  it('shows the card, the payable, TonPays’ own figure apart, and the three actions in the customer window', () => {
+  it('shows the card, the payable, TonPays’ own figure apart, and the R8 A2 rows in the customer window', () => {
     const reply = gatewayAttemptScreen(
       { payment: payment(), invoice: invoice() },
       'o',
@@ -188,13 +188,16 @@ describe('the TonPays Telegram payment screen', () => {
       transferAmount: '250037',
       expiresAt: EXPIRES_AT,
     });
-    // Round 6: «❌ لغو فاکتور» (`gq:`) is the fourth action of a pending invoice.
+    /*
+     * R8 A2: [copy amount (rial)] [copy card] / [change card] / [receipt] [cancel] / [main
+     * menu]. No «🔎 بررسی وضعیت»: the inquiry polling and the webhook decide.
+     */
     expect(data(reply)).toEqual([
-      null, // «📋 کپی مبلغ دقیق» (copy_text, no callback)
-      `gr:${PAYMENT_ID}`,
+      null, // «📋 کپی مبلغ (ریال)» (copy_text, no callback)
+      null, // «💳 کپی شماره کارت»
       `gk:${PAYMENT_ID}`,
+      `gr:${PAYMENT_ID}`,
       `gq:${PAYMENT_ID}`,
-      `gc:${PAYMENT_ID}`,
       'mm:',
     ]);
     expect(reply.wizard).toMatchObject({ step: 'INVOICE', paymentId: PAYMENT_ID });
@@ -705,13 +708,18 @@ describe('R6 item 2: the card screens show the exact amount to transfer', () => 
     }),
   });
 
-  it('the invoice and all three follow-ups render the exact amount in <code>', () => {
+  it('R8 A2: the invoice and all three follow-ups show the exact amount in RIAL, bold, with Toman beside it', () => {
     const all = screens();
     for (const [name, reply] of Object.entries(all)) {
       const key = reply.key as (typeof CARD_KEYS)[number];
       expect(CARD_KEYS, name).toContain(key);
       const text = renderTemplateBody(templateDefinition(key), CATALOGUE_FA[key], reply.values);
-      expect(text, name).toContain('<code>250037</code>');
+      // 250,037 Toman (TonPays' exact figure) is 2,500,370 rial.
+      expect(text, name).toContain('<b>۲٬۵۰۰٬۳۷۰ ریال</b>');
+      expect(text, name).toContain('(معادل ۲۵۰٬۰۳۷ تومان)');
+      // Never the fee word, never the bare Toman digits as the instruction.
+      expect(text, name).not.toContain('کارمزد');
+      expect(text, name).not.toContain('250037');
     }
   });
 
@@ -772,19 +780,18 @@ describe('R6 item 2: the card screens show the exact amount to transfer', () => 
     expect(after.values).toMatchObject({ transferAmount: '250091' });
   });
 
-  it('the copy button carries digits only — no separators, no unit — and matches the text', () => {
+  it('R8 A2: the copy buttons carry rial digits and the sixteen card digits — no separators, no unit', () => {
     for (const [name, reply] of Object.entries(screens())) {
-      const copy = reply.buttons.filter((button) => 'copyText' in button);
+      const copy = reply.buttons.flatMap((button) =>
+        'copyText' in button ? [button.copyText] : [],
+      );
       if (name === 'changing') {
-        expect(copy, name).toHaveLength(0);
+        expect(copy, name).toEqual([]);
         continue;
       }
-      expect(copy, name).toHaveLength(1);
-      const value = (copy[0] as { copyText: string }).copyText;
-      expect(value, name).toMatch(/^[0-9]+$/u);
-      expect(value, name).toBe('250037');
+      expect(copy, name).toEqual(['2500370', '6037991100001001']);
     }
-    // The copy value of a larger amount still has no grouping.
+    // The copy value of a larger amount still has no grouping, and is rial.
     const big = gatewayAttemptScreen(
       { payment: payment(), invoice: invoice({ finalAmount: 12_345_678n }) },
       'o',
@@ -792,28 +799,29 @@ describe('R6 item 2: the card screens show the exact amount to transfer', () => 
       NO_FACTS,
     );
     expect(big.buttons.find((button) => 'copyText' in button)).toMatchObject({
-      copyText: '12345678',
+      copyText: '123456780',
     });
   });
 
-  it('{transferAmount} is required and {payable} is not, on all four card templates', () => {
+  it('R8 A2: {amountRial} is required and {transferAmount} and {payable} are not, on all four card templates', () => {
     for (const key of CARD_KEYS) {
       const definition = templateDefinition(key);
       const required = definition.placeholders.filter((p) => p.required).map((p) => p.token);
-      expect(required, key).toContain('transferAmount');
+      expect(required, key).toContain('amountRial');
+      expect(required, key).not.toContain('transferAmount');
       expect(required, key).not.toContain('payable');
       const bodyOf = (tokens: readonly string[]) => tokens.map((token) => `{${token}}`).join(' ');
       // Every required token and NO {payable}: saves.
       expect(validateTemplateBody(definition, bodyOf(required)), key).toEqual([]);
-      // The same without {transferAmount}: refused for exactly that token.
+      // The same without {amountRial}: refused for exactly that token.
       const without = validateTemplateBody(
         definition,
-        `${bodyOf(required.filter((token) => token !== 'transferAmount'))} {payable}`,
+        `${bodyOf(required.filter((token) => token !== 'amountRial'))} {payable}`,
       );
       expect(
         without.map((issue) => [issue.kind, issue.token]),
         key,
-      ).toEqual([['MISSING_REQUIRED_PLACEHOLDER', 'transferAmount']]);
+      ).toEqual([['MISSING_REQUIRED_PLACEHOLDER', 'amountRial']]);
     }
   });
 

@@ -21,10 +21,12 @@ import { runAuthorizedMutation } from '../../../platform/access/application/auth
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
+import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import { gatewaySettlementDeadline } from '../domain/settlement.js';
 import {
   cancelAvailable,
   cardChangeAvailable,
+  type CardChangeAllowance,
   maskRefundCard,
   parseRefundCardInput,
   receiptUploadAvailable,
@@ -42,6 +44,7 @@ import type {
 import type { PaymentRecord, PaymentRepository } from './ports.js';
 import { PAYMENT_PLACE_PERMISSION } from './payment.service.js';
 import type { InboundReceiptFile } from './receipt-ports.js';
+import { readCardSwitchLimits } from './card-switch-limits.js';
 
 /** What a customer's receipt photo became. Never anything a caller could turn into money. */
 export type GatewayReceiptPhotoResult =
@@ -108,6 +111,8 @@ export class GatewayReceiptCaptureService {
       readonly providerRequests?: GatewayProviderRequestRepository;
       /** Round 6: seals a refund card between the customer's turn and the worker's send. */
       readonly refundCards?: RefundCardSealer;
+      /** R8 A2: the owner's R5C-1 card-switch limits, which bound a TonPays card change too. */
+      readonly settings: Pick<SettingsResolver, 'valueOf'>;
     },
   ) {}
 
@@ -135,7 +140,12 @@ export class GatewayReceiptCaptureService {
       const open = await this.openAttempt(scope, input, now, tx);
       if (open === null) return false;
       const latest = await this.deps.cardTransfer.latestCardChange(scope, open.payment.id, tx);
-      if (!cardChangeAvailable(open.invoice, latest, now)) return false;
+      // R8 A2: the owner's limits are read under the payment's lock, with what it has used.
+      const allowance: CardChangeAllowance = {
+        limits: await readCardSwitchLimits(this.deps.settings, scope, tx),
+        ...(await this.deps.cardTransfer.cardChangeUsage(scope, open.payment.id, tx)),
+      };
+      if (!cardChangeAvailable(open.invoice, latest, now, allowance)) return false;
       const requested = await this.deps.cardTransfer.requestCardChange(
         scope,
         {

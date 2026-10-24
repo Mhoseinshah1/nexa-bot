@@ -698,6 +698,54 @@ describe('TonPays Telegram, through the one settlement path', () => {
       expect(await cardChanges(paymentId)).toHaveLength(1);
     });
 
+    it('R8 A2: «🔄 تعویض کارت» pressed inside the first minute answers the seconds left and asks for nothing; after it, the change is requested', async () => {
+      const { paymentId } = await createdAttempt();
+      const before = telegram.requests.length;
+      await tap(`gk:${paymentId}`);
+      const answers = telegram.requests
+        .slice(before)
+        .filter((one) => one.url.includes('/answerCallbackQuery'));
+      expect(answers.map((one) => one.raw).join('\n')).toMatch(/ثانیه دیگر دوباره امتحان کنید/u);
+      expect(await cardChanges(paymentId)).toEqual([]);
+      clock.shift(61_000);
+      await tap(`gk:${paymentId}`);
+      expect(await cardChanges(paymentId)).toEqual([{ state: 'REQUESTED', error_code: null }]);
+    });
+
+    it('R8 A2 (R5C-1): the tap honours the owner’s card-switch limits under the payment’s lock — zero switches, the distinct-card cap, the owner’s cooldown', async () => {
+      const setLimit = async (settingKey: string, value: number): Promise<void> => {
+        await ctx.container.database.db.execute(sql`
+          INSERT INTO setting_values (id, tenant_id, setting_key, value, version, updated_at)
+          VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${settingKey}, ${String(value)}::jsonb, 1, now())
+          ON CONFLICT (tenant_id, setting_key) DO UPDATE SET value = EXCLUDED.value`);
+      };
+      // `clock.shift` sets the offset from real time; it does not add to it.
+      // Zero: never, whatever TonPays allows.
+      await setLimit('payments.card_switch_limit', 0);
+      const off = await createdAttempt();
+      clock.shift(61_000);
+      expect(await askCard(off.paymentId)).toBe(false);
+      expect(await cardChanges(off.paymentId)).toEqual([]);
+
+      // The defaults (two switches, two distinct cards): one change shows the second card, and
+      // TonPays — not Nexa — picks the next one, so a third card is never asked for.
+      await setLimit('payments.card_switch_limit', 2);
+      const capped = await createdAttempt(300_000n);
+      clock.shift(122_000);
+      expect(await askCard(capped.paymentId)).toBe(true);
+      await pass();
+      clock.shift(260_000);
+      expect(await askCard(capped.paymentId)).toBe(false);
+      expect(await cardChanges(capped.paymentId)).toEqual([{ state: 'APPLIED', error_code: null }]);
+
+      // The owner's cooldown runs from the last change, beyond TonPays' own sixty seconds.
+      await setLimit('payments.card_switch_max_distinct_cards', 5);
+      await setLimit('payments.card_switch_cooldown_seconds', 600);
+      expect(await askCard(capped.paymentId)).toBe(false);
+      clock.shift(730_000);
+      expect(await askCard(capped.paymentId)).toBe(true);
+    });
+
     it('TPTG-04: a change whose send was stamped and never answered is UNKNOWN, never re-sent, and the current card is hidden', async () => {
       const { paymentId } = await createdAttempt();
       clock.shift(61_000);

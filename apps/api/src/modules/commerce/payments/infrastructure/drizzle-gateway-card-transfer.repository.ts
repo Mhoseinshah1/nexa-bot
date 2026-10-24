@@ -13,6 +13,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   gatewayCardChanges,
+  gatewayInvoiceCards,
   gatewayReceiptCaptures,
   gatewayReceiptSubmissions,
   payments,
@@ -156,6 +157,49 @@ export class DrizzleGatewayCardTransferRepository implements GatewayCardTransfer
       .orderBy(desc(gatewayCardChanges.requestedAt), desc(gatewayCardChanges.id))
       .limit(1);
     return row === undefined ? null : changeOf(row);
+  }
+
+  async cardChangeUsage(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    tx?: unknown,
+  ): Promise<{
+    readonly switches: number;
+    readonly lastSwitchAt: Date | null;
+    readonly distinctCards: number;
+  }> {
+    const tenantId = requireTenantId(scope);
+    const [changes] = await this.exec(tx)
+      .select({
+        switches: sql<number>`count(*)::int`,
+        lastSwitchAt: sql<Date | null>`max(${gatewayCardChanges.requestedAt})`.mapWith(
+          gatewayCardChanges.requestedAt,
+        ),
+      })
+      .from(gatewayCardChanges)
+      .where(
+        and(
+          eq(gatewayCardChanges.tenantId, tenantId),
+          eq(gatewayCardChanges.paymentId, paymentId),
+          inArray(gatewayCardChanges.state, ['REQUESTED', 'SENT', 'APPLIED', 'UNKNOWN']),
+        ),
+      );
+    const [cards] = await this.exec(tx)
+      .select({
+        distinctCards: sql<number>`count(DISTINCT ${gatewayInvoiceCards.cardNumber})::int`,
+      })
+      .from(gatewayInvoiceCards)
+      .where(
+        and(
+          eq(gatewayInvoiceCards.tenantId, tenantId),
+          eq(gatewayInvoiceCards.paymentId, paymentId),
+        ),
+      );
+    return {
+      switches: changes?.switches ?? 0,
+      lastSwitchAt: changes?.lastSwitchAt ?? null,
+      distinctCards: cards?.distinctCards ?? 0,
+    };
   }
 
   async claimCardChanges(
