@@ -171,6 +171,8 @@ describe('the Payment Operations Center', () => {
     };
     if (provider === 'CENTRALPAY') base.provider_user_id = String(2_000_000_000 + seq);
     if (provider === 'TONPAYS_TELEGRAM') base.bot_instance_id = BOT_A;
+    // A TetraPay attempt is billed in RIAL with no bot (`gateway_invoices_tetrapay_check`).
+    if (provider === 'TETRAPAY') base.provider_unit = 'IRR';
     if (provider === 'NOWPAYMENTS') {
       Object.assign(base, {
         provider_unit: 'USD',

@@ -140,6 +140,7 @@ function toRecord(row: Row): GatewayInvoiceRecord {
     cryptoReceivedCurrency: row.cryptoReceivedCurrency,
     cryptoPayAddress: row.cryptoPayAddress,
     providerUserId: row.providerUserId,
+    providerMethod: row.providerMethod,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -684,7 +685,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       .update(gatewayInvoices)
       .set({
         reconcileInquiryRequestedAt: at,
-        nextInquiryAt: sql`LEAST(COALESCE(${gatewayInvoices.nextInquiryAt}, ${at}::timestamptz), ${at}::timestamptz)`,
+        nextInquiryAt: sql`GREATEST(LEAST(COALESCE(${gatewayInvoices.nextInquiryAt}, ${at}::timestamptz), ${at}::timestamptz), COALESCE(${gatewayInvoices.inquiryNotBefore}, '-infinity'::timestamptz))`,
         updatedAt: at,
       })
       .where(
@@ -779,6 +780,8 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       inArray(gatewayInvoices.provider, [...PAYMENT_GATEWAY_PROVIDERS]),
       isNotNull(gatewayInvoices.nextInquiryAt),
       lte(gatewayInvoices.nextInquiryAt, now),
+      // The provider's backoff (`Retry-After`) holds the row whatever scheduled it.
+      or(isNull(gatewayInvoices.inquiryNotBefore), lte(gatewayInvoices.inquiryNotBefore, now)),
       or(
         isNull(gatewayInvoices.inquiryClaimedUntil),
         lte(gatewayInvoices.inquiryClaimedUntil, now),
@@ -1024,6 +1027,8 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly postDeadline: boolean;
       readonly hintedPaymentId?: string | null;
       readonly crypto?: GatewayCryptoFigures | null;
+      readonly method?: string | null;
+      readonly notBefore?: Date | null;
       readonly claimedUntil?: Date;
     },
     now: Date,
@@ -1069,6 +1074,12 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
                 ? {}
                 : { cryptoPayAddress: result.crypto.payAddress }),
             }),
+        // TetraPay's `method`: a verify that carries none leaves what an earlier one said.
+        ...(result.method === undefined || result.method === null
+          ? {}
+          : { providerMethod: result.method }),
+        // The provider's backoff: set by a rate-limited answer, cleared by any other.
+        inquiryNotBefore: result.notBefore ?? null,
         lastInquiryAt: now,
         lastInquiryErrorCode: result.errorCode,
         inquiryAttempts: sql`${gatewayInvoices.inquiryAttempts} + 1`,
@@ -1202,7 +1213,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         ...(hint.inquireAt === null
           ? {}
           : {
-              nextInquiryAt: sql`LEAST(COALESCE(${gatewayInvoices.nextInquiryAt}, ${hint.inquireAt}::timestamptz), ${hint.inquireAt}::timestamptz)`,
+              nextInquiryAt: sql`GREATEST(LEAST(COALESCE(${gatewayInvoices.nextInquiryAt}, ${hint.inquireAt}::timestamptz), ${hint.inquireAt}::timestamptz), COALESCE(${gatewayInvoices.inquiryNotBefore}, '-infinity'::timestamptz))`,
             }),
         updatedAt: now,
       })
@@ -1233,7 +1244,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     const rows = await this.exec(tx)
       .update(gatewayInvoices)
       .set({
-        nextInquiryAt: sql`LEAST(COALESCE(${gatewayInvoices.nextInquiryAt}, ${at}::timestamptz), ${at}::timestamptz)`,
+        nextInquiryAt: sql`GREATEST(LEAST(COALESCE(${gatewayInvoices.nextInquiryAt}, ${at}::timestamptz), ${at}::timestamptz), COALESCE(${gatewayInvoices.inquiryNotBefore}, '-infinity'::timestamptz))`,
         updatedAt: at,
       })
       .where(

@@ -663,6 +663,90 @@ describe('the CentralPay API key and verify key', () => {
 });
 
 /**
+ * TetraPay (`docs/tetrapay-gateway-audit.md`): the API key, an OPTIONAL webhook secret (a state
+ * and never a value), the webhook URL to paste into TetraPay's panel - with a copy button -, the
+ * bot username the customer is returned to (read from the stored bot, never typed), and the
+ * provider's daily-limit hiding.
+ */
+describe('the TetraPay page', () => {
+  const TETRAPAY = {
+    provider: 'TETRAPAY',
+    status: 'ACTIVE',
+    displayName: null,
+    instructions: null,
+    minAmountMinor: '0',
+    maxAmountMinor: '0',
+    currency: 'IRT',
+    eligibility: {
+      activateAfterPayments: 0,
+      deactivateAfterPayments: 0,
+      activateAfterAccountDays: 0,
+    },
+    sortOrder: 0,
+    topupCashbackPercent: 0,
+    customerFeeBasisPoints: 250,
+    allowServicePurchase: true,
+    allowWalletTopup: true,
+    credential: {
+      required: true,
+      setAt: '2026-09-20T08:00:00.000Z',
+      webhookSecretRequired: false,
+      webhookSecretSupported: true,
+      webhookSecretSetAt: null,
+      lastCheckAt: null,
+      lastCheckResult: null,
+      verifyKeyRequired: false,
+      verifyKeySetAt: null,
+    },
+    callbackUrl: 'https://bot.example.com/payments/webhook/tetrapay/t-1',
+    botUsername: 'nexa_test_bot',
+    hiddenUntil: '2026-10-23T20:30:00.000Z',
+    createdAt: '2026-09-10T12:30:00.000Z',
+    updatedAt: '2026-09-10T12:30:00.000Z',
+  };
+
+  it('shows the webhook secret as optional (not a gap), the webhook URL with copy, the bot username and the hiding', async () => {
+    stubApi([{ url: '/payment-gateways', body: { gateways: [TETRAPAY] } }]);
+    const view = renderPage(<PaymentGatewaysPage provider="TETRAPAY" denied={false} mayEdit />);
+    expect(await screen.findByText('رمز وب‌هوک (اختیاری) تنظیم نشده')).toBeInTheDocument();
+    expect(screen.queryByText('کلید IPN تنظیم نشده')).toBeNull();
+    expect(
+      await screen.findByText('https://bot.example.com/payments/webhook/tetrapay/t-1'),
+    ).toBeInTheDocument();
+    expect(
+      view.container.querySelector(
+        '[data-copy-value="https://bot.example.com/payments/webhook/tetrapay/t-1"]',
+      ),
+    ).not.toBeNull();
+    expect(screen.getByText('@nexa_test_bot')).toBeInTheDocument();
+    expect(screen.getByText('پنهان‌شده تا (سقف روزانهٔ درگاه)')).toBeInTheDocument();
+  });
+
+  it('saves the webhook secret through its own empty write-only field, with TetraPay wording', async () => {
+    const api = stubApi([
+      { url: '/payment-gateways', body: { gateways: [TETRAPAY] } },
+      { url: '/payment-gateways/TETRAPAY/webhook-secret', body: { gateway: TETRAPAY } },
+    ]);
+    renderPage(<PaymentGatewaysPage provider="TETRAPAY" denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: 'تنظیم کلید API' }));
+    expect(screen.queryByLabelText('کلید IPN جدید (IPN Secret)')).toBeNull();
+    const input = (await screen.findByLabelText(
+      'رمز وب‌هوک جدید (whsec_ — اختیاری)',
+    )) as HTMLInputElement;
+    expect(input.value).toBe('');
+    expect(input.type).toBe('password');
+    fireEvent.change(input, { target: { value: 'whsec_abc123' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیرهٔ رمز وب‌هوک' }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    const posted = api.calls.filter((call) => call.method === 'POST');
+    expect(posted[0]!.url).toContain('/payment-gateways/TETRAPAY/webhook-secret');
+    expect((posted[0]!.body as Record<string, unknown>)['secret']).toBe('whsec_abc123');
+  });
+});
+
+/**
  * WP18 — the customer gateway fee field. Only a route that settles through `GATEWAY` draws
  * it; a typed `5.25` travels as 525 basis points, and 525 reopens as `5.25`.
  */

@@ -1,4 +1,4 @@
-import { and, asc, count, eq, inArray } from 'drizzle-orm';
+import { and, asc, count, eq, inArray, sql } from 'drizzle-orm';
 import {
   PAYMENT_GATEWAY_DESCRIPTORS,
   PAYMENT_GATEWAY_PROVIDERS,
@@ -44,6 +44,7 @@ const COLUMNS = {
   providerUnitRateMinor: paymentGateways.providerUnitRateMinor,
   allowServicePurchase: paymentGateways.allowServicePurchase,
   allowWalletTopup: paymentGateways.allowWalletTopup,
+  hiddenUntil: paymentGateways.hiddenUntil,
   createdAt: paymentGateways.createdAt,
   updatedAt: paymentGateways.updatedAt,
 } as const;
@@ -66,6 +67,7 @@ interface Row {
   readonly providerUnitRateMinor: bigint | null;
   readonly allowServicePurchase: boolean;
   readonly allowWalletTopup: boolean;
+  readonly hiddenUntil: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -95,6 +97,7 @@ function toRecord(row: Row): PaymentGatewayRecord {
     providerUnitRateMinor: row.providerUnitRateMinor,
     allowServicePurchase: row.allowServicePurchase,
     allowWalletTopup: row.allowWalletTopup,
+    hiddenUntil: row.hiddenUntil,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -306,6 +309,25 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
       .returning(COLUMNS);
     const row = rows[0];
     return row === undefined ? null : toRecord(row);
+  }
+
+  /** Only LATER: `hidden_until` never moves backwards. `updated_at` is deliberately not touched. */
+  async hideUntil(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    until: Date,
+    _now: Date,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(paymentGateways)
+      .set({
+        hiddenUntil: sql`GREATEST(${paymentGateways.hiddenUntil}, ${until.toISOString()}::timestamptz)`,
+      })
+      .where(and(eq(paymentGateways.tenantId, tenantId), eq(paymentGateways.provider, provider)))
+      .returning({ provider: paymentGateways.provider });
+    return rows.length > 0;
   }
 }
 

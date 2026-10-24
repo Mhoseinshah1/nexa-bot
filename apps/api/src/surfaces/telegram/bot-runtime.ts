@@ -40,6 +40,8 @@ import {
   TONPAYS_TELEGRAM_STATUS_LESS,
   TONPAYS_TELEGRAM_STATUS_MORE,
   REFERRAL_MENU_COMMAND,
+  TETRAPAY_AMOUNT_OUT_OF_RANGE_STORED,
+  TETRAPAY_DAILY_LIMIT_STORED,
   TRIAL_MENU_COMMAND,
 } from '@nexa/contracts';
 import type { AntiSpamService } from '../../modules/commerce/customers/application/anti-spam.service.js';
@@ -164,6 +166,7 @@ import {
   refundCardAvailable,
   remainderReceiptAvailable,
 } from '../../modules/commerce/payments/domain/tonpays-telegram.js';
+import { paymentIdOfTetrapayStart } from '../../modules/commerce/payments/domain/tetrapay.js';
 import { gatewaySettlementDeadline } from '../../modules/commerce/payments/domain/settlement.js';
 import type { WalletService } from '../../modules/commerce/wallet/application/wallet.service.js';
 import {
@@ -311,6 +314,12 @@ export const BOT_INTENTS = [
   'PAY_METHODS_CLOSE',
   /* WP11A: the customer asks what became of an external-gateway attempt. Names the payment. */
   'GATEWAY_CHECK',
+  /*
+   * Round 6 item 6: the customer returns from TetraPay's page through the bot's own
+   * `/start tp-<payment id>` link. Names the payment and nothing else - the status shown is
+   * always read from the payment, never from anything the link carried (`?status=` is not read).
+   */
+  'GATEWAY_RETURN',
   /*
    * TonPays Telegram (§8.1): «📤 ارسال فیش واریزی» opens the payment-scoped receipt window,
    * «🔄 تعویض کارت» asks for another card. Each names the PAYMENT and nothing else.
@@ -3515,7 +3524,18 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
   // `/start@somebot` is what Telegram sends in a group. Stripped, because the bot it
   // names is the bot that received it.
   const command = first?.split('@')[0];
-  if (command === '/start') return { intent: 'START', targetId: null, callbackQueryId: null };
+  if (command === '/start') {
+    /*
+     * TetraPay's `callback_url` is `https://t.me/<bot>?start=tp-<payment id>`. The payload is
+     * parsed STRICTLY (`tp-` and a UUID) and names a payment only: ownership is decided on the
+     * server when the screen is drawn, and an unknown or foreign one is answered as closed.
+     */
+    const returned = paymentIdOfTetrapayStart(startPayloadOf(update) ?? '');
+    if (returned !== null) {
+      return { intent: 'GATEWAY_RETURN', targetId: returned, callbackQueryId: null };
+    }
+    return { intent: 'START', targetId: null, callbackQueryId: null };
+  }
   if (command === '/catalog') return { intent: 'CATALOG', targetId: null, callbackQueryId: null };
   if (command === '/wallet') return { intent: 'WALLET', targetId: null, callbackQueryId: null };
   if (command === '/services') {
@@ -10621,7 +10641,12 @@ export class BotRuntime {
         (command.secondaryId as PaymentGatewayProvider | undefined) ?? null,
       );
     }
-    if (command.intent === 'GATEWAY_CHECK' && command.targetId !== null) {
+    if (
+      (command.intent === 'GATEWAY_CHECK' || command.intent === 'GATEWAY_RETURN') &&
+      command.targetId !== null
+    ) {
+      // A return is the same question as a tap on «بررسی وضعیت»: the payment's own state, read
+      // now, with a verify brought forward - and answered as closed for anyone else's payment.
       return this.gatewayCheck(scope, command.targetId, customer);
     }
     if (command.intent === 'GATEWAY_RECEIPT' && command.targetId !== null) {
@@ -17704,6 +17729,14 @@ const PROVIDER_REVIEW_SCREEN_KEYS: Partial<
     inReview: 'bot.payment.gateway_in_review',
     unresolved: 'bot.payment.centralpay_review_unresolved',
   },
+  /*
+   * TetraPay has no review window either: it reaches UNKNOWN only when a verify said `paid` for
+   * an amount, order id or receipt that does not match the payment, which its own sentence says.
+   */
+  TETRAPAY: {
+    inReview: 'bot.payment.gateway_in_review',
+    unresolved: 'bot.payment.tetrapay_review_unresolved',
+  },
 };
 
 /**
@@ -17716,6 +17749,51 @@ const PROVIDER_PAY_BUTTON_KEYS: Partial<Record<PaymentGatewayProvider, InlineBut
   NOWPAYMENTS: 'payment.nowpayments_open',
   CENTRALPAY: 'payment.centralpay_open',
 };
+
+/**
+ * The screen for a TetraPay create refusal the customer can act on, or null for any other code.
+ * Pure: the code is what the attempt recorded (`tetrapay.DAILY_LIMIT_REACHED`, or
+ * `tetrapay.AMOUNT_OUT_OF_RANGE:<min Toman>:<max Toman>` with 0 for a bound not stated).
+ */
+export function tetrapayRefusalScreen(
+  code: string | null,
+  reference: string,
+  retry: CustomerButton,
+  orderId: string | null,
+  kind: 'ORDER' | 'TOPUP',
+  paymentId: string,
+): PendingReply | null {
+  if (code === null) return null;
+  const wizard = { kind, step: 'NOTICE' as const, paymentId };
+  if (code === TETRAPAY_DAILY_LIMIT_STORED) {
+    return {
+      key: 'bot.payment.tetrapay_daily_limit',
+      values: { reference },
+      buttons: [retry, mainMenuButton()],
+      orderId,
+      wizard,
+    };
+  }
+  const range = new RegExp(
+    `^${TETRAPAY_AMOUNT_OUT_OF_RANGE_STORED.replace('.', '\\.')}:(\\d{1,18}):(\\d{1,18})$`,
+    'u',
+  ).exec(code);
+  if (range === null) return null;
+  const min = BigInt(range[1] ?? '0');
+  const max = BigInt(range[2] ?? '0');
+  return {
+    key: 'bot.payment.tetrapay_amount_out_of_range',
+    // A bound the provider did not state (0) is left out, and its line is dropped with it.
+    values: {
+      reference,
+      ...(min > 0n ? { min: money(min, 'IRT') } : {}),
+      ...(max > 0n ? { max: money(max, 'IRT') } : {}),
+    },
+    buttons: [retry, mainMenuButton()],
+    orderId,
+    wizard,
+  };
+}
 
 export function gatewayAttemptScreen(
   attempt: GatewayAttempt | GatewayAttemptView,
@@ -17809,6 +17887,25 @@ export function gatewayAttemptScreen(
     }
     // Lapsed and not yet swept: the same truth the sweep is about to record.
     return screen(reviewKeys.unresolved, [], 'INVOICE');
+  }
+  /*
+   * TetraPay's two create refusals a customer can act on: the daily limit (the route is hidden
+   * until 00:00 Tehran) and an amount outside the provider's range (its own bounds, in Toman).
+   * Read from the code the attempt recorded; every other refusal keeps the generic sentence.
+   */
+  const refusal =
+    invoice.creationState === 'CREATE_FAILED'
+      ? tetrapayRefusalScreen(
+          invoice.creationErrorCode,
+          reference,
+          retry,
+          orderId,
+          kind,
+          payment.id,
+        )
+      : null;
+  if (refusal !== null && (payment.state === 'FAILED' || payment.state === 'PENDING')) {
+    return refusal;
   }
   if (payment.state === 'FAILED') {
     // Round 6: the customer's own cancel, a rejection with reasons, a buyer with another invoice.

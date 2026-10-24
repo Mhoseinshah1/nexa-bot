@@ -964,6 +964,15 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.switch_card_button',
       'bot.payment.switch_card_cooldown',
       'bot.payment.switch_card_refused',
+      /*
+       * TetraPay (`docs/tetrapay-gateway-audit.md`): the needs-review sentence for a paid answer
+       * that did not match, and the two create refusals (the daily limit; an amount outside the
+       * provider's range). Reviewed: each says nothing was charged or settled and offers another
+       * way - and none ever says paid.
+       */
+      'bot.payment.tetrapay_amount_out_of_range',
+      'bot.payment.tetrapay_daily_limit',
+      'bot.payment.tetrapay_review_unresolved',
       'bot.payment.transfer_instructions',
       'bot.payment.transfer_under_review',
       'bot.payment.unconfigured',

@@ -567,6 +567,7 @@ import { SecretCipherRefundCardSealer } from './modules/commerce/payments/infras
 import { TonPaysTelegramAdapter } from './modules/commerce/payments/infrastructure/tonpays-telegram-adapter.js';
 import { NowPaymentsAdapter } from './modules/commerce/payments/infrastructure/nowpayments-adapter.js';
 import { CentralPayAdapter } from './modules/commerce/payments/infrastructure/centralpay-adapter.js';
+import { TetraPayAdapter } from './modules/commerce/payments/infrastructure/tetrapay-adapter.js';
 import { TelegramStarsAdapter } from './modules/commerce/payments/infrastructure/telegram-stars-adapter.js';
 import { FxService } from './modules/commerce/fx/application/fx.service.js';
 import type { FxSourceAdapter } from './modules/commerce/fx/application/ports.js';
@@ -3143,6 +3144,13 @@ export function createContainer(
    */
   const centralpayAdapter = new CentralPayAdapter();
   /*
+   * TetraPay (`docs/tetrapay-gateway-audit.md`): create in rial, settle ONLY by
+   * `POST /payments/{token}/verify`. Its own adapter, the only code that speaks its HTTP. Its
+   * host is not yet known (`OQ-TP-01`), so until the contract constant names it every call is
+   * refused as configuration and nothing is sent. Not accepted against the real provider yet.
+   */
+  const tetrapayAdapter = new TetraPayAdapter();
+  /*
    * Package A — Telegram Stars. The invoice is sent with the ATTEMPT's bot token through
    * the one Telegram call module, bounded by the same send timeout every customer message
    * uses.
@@ -3163,6 +3171,8 @@ export function createContainer(
         return nowpaymentsAdapter;
       case 'CENTRALPAY':
         return centralpayAdapter;
+      case 'TETRAPAY':
+        return tetrapayAdapter;
       case 'MANUAL_TRANSFER':
         return null;
       default:
@@ -3218,6 +3228,8 @@ export function createContainer(
     credentials: gatewayCredentialStore,
     adapters: gatewayAdapters,
     callbackUrlFor: gatewayCallbackUrlFor,
+    // A `returnToBot` route's page shows the bot username the customer is returned to.
+    botLinkFor: (scope) => publicOrigins.botLinkFor(scope),
     // Spec §8: a route priced only by the central rate cannot be enabled while it is off.
     features: featureFlagResolver,
   });
@@ -3668,8 +3680,11 @@ export function createContainer(
     invoiceScreens: {
       refresh: (scope, paymentId): Promise<void> => wizardScreens.refresh(scope, paymentId),
     },
-    // CentralPay's browser return goes back to the tenant's bot (stored username, no call).
+    // CentralPay's browser return goes back to the tenant's bot (stored username, no call);
+    // TetraPay's `callback_url` is the same bot's start link.
     botLinkFor: (scope) => publicOrigins.botLinkFor(scope),
+    // TetraPay's `DAILY_LIMIT_REACHED` hides the route until 00:00 Tehran (the provider's word).
+    routeVisibility: paymentGatewayRepository,
     /*
      * FIX10 R1: the longest one row may take — a provider call at its timeout (every
      * provider's is TONPAYS_TIMEOUT_MS) and up to three Telegram calls around it (a

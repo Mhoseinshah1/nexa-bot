@@ -72,7 +72,10 @@ export const TONPAYS_INQUIRY_SCHEDULE: InquirySchedule = {
  * contract's `TONPAYS_TELEGRAM_REVIEW_INQUIRY_CADENCE`). NOWPAYMENTS keeps it (unpublished
  * limit OQ-NP-04; chain confirmations take minutes and its verified IPN is the fast path).
  * CENTRALPAY keeps it (undocumented limit OQ-CP-05; the browser return, routed since batch
- * 2026-10-10, is the fast path). TELEGRAM_STARS is never asked; a recorded charge is retried on
+ * 2026-10-10, is the fast path). TETRAPAY keeps it (60 requests a minute per key are documented,
+ * but the customer's return to the bot's start link and the optional signed webhook are the fast
+ * paths, and a slower background schedule spends less of that shared minute). TELEGRAM_STARS is
+ * never asked; a recorded charge is retried on
  * this schedule only if its settlement did not commit.
  */
 export function inquiryScheduleFor(provider: PaymentGatewayProvider): InquirySchedule {

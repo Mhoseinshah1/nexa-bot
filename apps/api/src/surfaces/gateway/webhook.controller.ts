@@ -1,16 +1,19 @@
-import { Body, Controller, Headers, HttpCode, Inject, Param, Post } from '@nestjs/common';
+import { Body, Controller, Headers, HttpCode, Inject, Param, Post, Req } from '@nestjs/common';
 import { z } from 'zod';
 import {
   COMMERCE_ERROR_CODES,
   NOWPAYMENTS_SIGNATURE_HEADER,
   PAYMENT_GATEWAY_DESCRIPTORS,
   PAYMENT_GATEWAY_PROVIDERS,
+  TETRAPAY_EVENT_ID_HEADER,
+  TETRAPAY_SIGNATURE_HEADER,
   TONPAYS_DELIVERY_ID_HEADER,
   errors,
   type PaymentGatewayProvider,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { GATEWAY_WEBHOOK_PATH_PREFIX } from '../../modules/commerce/payments/application/gateway-payment.service.js';
+import { rawBodyOf } from './raw-body.js';
 
 /**
  * The largest body a gateway webhook may carry. The documented TonPays body is a few
@@ -53,6 +56,14 @@ const tenantIdSchema = z.uuid();
  * IPN secret before any field is read, and an unverified one is answered `{ ok: true }`
  * like any other ignored webhook — and dropped. A verified one is STILL only a hint.
  *
+ * ## An optionally signed route (TetraPay)
+ *
+ * `X-TetraPay-Signature: t=<unix>,v1=<hex>` is an HMAC-SHA256 of `t + "." + raw_body`, so the
+ * RAW bytes are handed on (`raw-body.ts` keeps them for this route). With a secret stored, a
+ * bad, stale (>300 s) or unsigned webhook is dropped unread and raises the one unverified
+ * alert; with none stored, the webhook is an unauthenticated hint. Either way it is deduplicated
+ * on `X-TetraPay-Event-Id` and STILL only brings the verify forward - the verify decides.
+ *
  * No external call is made here, and no money moves here.
  */
 @Controller()
@@ -71,6 +82,11 @@ export class GatewayWebhookController {
      * tenant's stored secret before any field of the body is read. Never logged.
      */
     @Headers(NOWPAYMENTS_SIGNATURE_HEADER) signature: string | undefined,
+    // TetraPay's signature and its stable event id (the dedupe key). Same rule: read only for
+    // a route whose descriptor says its provider signs.
+    @Headers(TETRAPAY_SIGNATURE_HEADER) tetrapaySignature: string | undefined,
+    @Headers(TETRAPAY_EVENT_ID_HEADER) tetrapayEventId: string | undefined,
+    @Req() request: unknown,
     @Body() body: unknown,
   ): Promise<{ ok: true }> {
     const provider = externalProviderOf(providerParam);
@@ -84,8 +100,13 @@ export class GatewayWebhookController {
       tenant.data,
       provider,
       body,
-      deliveryId,
-      PAYMENT_GATEWAY_DESCRIPTORS[provider].webhookSecret ? signature : undefined,
+      deliveryId ?? (provider === 'TETRAPAY' ? tetrapayEventId : undefined),
+      PAYMENT_GATEWAY_DESCRIPTORS[provider].webhookSecret
+        ? provider === 'TETRAPAY'
+          ? tetrapaySignature
+          : signature
+        : undefined,
+      rawBodyOf(request),
     );
     if (result === 'MALFORMED') {
       throw errors.validation(

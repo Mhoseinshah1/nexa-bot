@@ -313,6 +313,7 @@ const NO_FACTS: GatewayOperatorFacts = {
   webhookSecretSetAt: null,
   lastCheck: null,
   verifyKeySetAt: null,
+  botUsername: null,
 };
 
 function toView(
@@ -344,7 +345,11 @@ function toView(
     credential: {
       required: PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].requiresCredentials,
       setAt: facts.credentialSetAt?.toISOString() ?? null,
-      webhookSecretRequired: PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].webhookSecret,
+      // Required only where the route cannot work without it; TetraPay's is optional.
+      webhookSecretRequired:
+        PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].webhookSecret &&
+        !PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].webhookSecretOptional,
+      webhookSecretSupported: PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].webhookSecret,
       webhookSecretSetAt: facts.webhookSecretSetAt?.toISOString() ?? null,
       lastCheckAt: facts.lastCheck?.at.toISOString() ?? null,
       lastCheckResult: facts.lastCheck?.result ?? null,
@@ -352,6 +357,8 @@ function toView(
       verifyKeySetAt: facts.verifyKeySetAt?.toISOString() ?? null,
     },
     callbackUrl: facts.callbackUrl,
+    botUsername: facts.botUsername,
+    hiddenUntil: gateway.hiddenUntil?.toISOString() ?? null,
     conversion: {
       rateRequired: takesFixedRate(PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].conversion),
       rateMinor: gateway.providerUnitRateMinor?.toString() ?? null,

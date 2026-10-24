@@ -4933,6 +4933,20 @@ export const gatewayInvoices = pgTable(
      * against what was SENT. Write-once (`nexa_gateway_invoices_provider_user_guard`).
      */
     providerUserId: text('provider_user_id'),
+    /**
+     * Round 6 item 6: how a paid link was paid, as TetraPay's verify reported it (`online` or
+     * `card`). Diagnostic metadata for the operations log; it never decides anything. NULL until
+     * a verify says, and for every other route.
+     */
+    providerMethod: text('provider_method'),
+    /**
+     * The provider's own "not before" (TetraPay's `Retry-After` on a rate-limited verify): no
+     * inquiry of this attempt is claimed, and no customer check or webhook hint may bring one
+     * forward, before this instant. NULL: no backoff in force. Written by the inquiry that met
+     * the rate limit and cleared by the next answer; it only ever delays a question, so it can
+     * never settle or fail a payment.
+     */
+    inquiryNotBefore: timestamptz('inquiry_not_before'),
     /*
      * A crypto route's figures (NOWPayments, R5C-2 C4), as the provider's own payment record
      * reported them on an inquiry that already ran: the coin, the amount it asked the payer
@@ -5104,6 +5118,19 @@ export const gatewayInvoices = pgTable(
     check(
       'gateway_invoices_centralpay_check',
       sql`provider <> 'CENTRALPAY' OR (provider_unit = 'IRT' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND provider_user_id IS NOT NULL AND provider_order_id ~ '^[0-9]{10}$')`,
+    ),
+    /**
+     * A TetraPay attempt is billed in RIAL with no conversion and no bot (the adapter owns the
+     * exact x10 unit change from the Toman payable), and its order id is the provider's
+     * documented shape: 1-64 characters of `[A-Za-z0-9_.:-]`.
+     */
+    check(
+      'gateway_invoices_tetrapay_check',
+      sql`provider <> 'TETRAPAY' OR (provider_unit = 'IRR' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND provider_order_id ~ '^[A-Za-z0-9_.:-]{1,64}$')`,
+    ),
+    check(
+      'gateway_invoices_provider_method_check',
+      sql`provider_method IS NULL OR (provider = 'TETRAPAY' AND provider_method IN ('online', 'card'))`,
     ),
     check(
       'gateway_invoices_provider_user_id_check',
@@ -5771,6 +5798,14 @@ export const paymentGateways = pgTable(
      * changing it never alters an invoice already open. There is no FX feed.
      */
     providerUnitRateMinor: bigint('provider_unit_rate_minor', { mode: 'bigint' }),
+    /**
+     * Round 6 item 6: the instant until which the provider's own daily limit hides this route
+     * (TetraPay's `DAILY_LIMIT_REACHED`; the next 00:00 Tehran). NULL: not hidden. The route is
+     * not offered while `hidden_until > now`, and returns by itself — nothing clears it. It is
+     * NOT `status`: DISABLED is the operator's word, this is the provider's, and the operator's
+     * switch is untouched by it.
+     */
+    hiddenUntil: timestamptz('hidden_until'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },

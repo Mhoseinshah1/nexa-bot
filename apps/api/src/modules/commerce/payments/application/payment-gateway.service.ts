@@ -116,6 +116,11 @@ export interface PaymentGatewayServiceDeps {
   readonly adapters: (
     provider: PaymentGatewayProvider,
   ) => Pick<ExternalGatewayAdapter, 'providerAmountOf' | 'checkCredential'> | null;
+  /**
+   * The active bot's `https://t.me/<username>` link, from the stored username (no Telegram
+   * call), for a `returnToBot` route's page. Absent: the page shows no username.
+   */
+  readonly botLinkFor?: (scope: TenantContext) => Promise<string | null>;
   /** The GENERATED callback URL a route's provider is sent, for the operator to see. */
   readonly callbackUrlFor: (
     scope: TenantContext,
@@ -181,6 +186,8 @@ export interface GatewayOperatorFacts {
   readonly lastCheck: { readonly at: Date; readonly result: string } | null;
   /** A route's separate verify key (CentralPay): when it was last replaced. Never the key. */
   readonly verifyKeySetAt: Date | null;
+  /** A `returnToBot` route's bot username (TetraPay), from the stored bot. Null otherwise. */
+  readonly botUsername: string | null;
 }
 
 /**
@@ -316,9 +323,10 @@ export class PaymentGatewayService {
         webhookSecretSetAt: null,
         lastCheck: null,
         verifyKeySetAt: null,
+        botUsername: null,
       };
     }
-    const [credentialSetAt, callbackUrl, webhookSecretSetAt, lastCheck, verifyKeySetAt] =
+    const [credentialSetAt, callbackUrl, webhookSecretSetAt, lastCheck, verifyKeySetAt, botLink] =
       await Promise.all([
         this.deps.credentials.setAt(scope, provider),
         this.deps.callbackUrlFor(scope, provider),
@@ -329,8 +337,19 @@ export class PaymentGatewayService {
         descriptor.verifyKey
           ? this.deps.credentials.verifyKeySetAt(scope, provider)
           : Promise.resolve(null),
+        descriptor.returnToBot && this.deps.botLinkFor !== undefined
+          ? this.deps.botLinkFor(scope)
+          : Promise.resolve(null),
       ]);
-    return { credentialSetAt, callbackUrl, webhookSecretSetAt, lastCheck, verifyKeySetAt };
+    return {
+      credentialSetAt,
+      callbackUrl,
+      webhookSecretSetAt,
+      lastCheck,
+      verifyKeySetAt,
+      // `https://t.me/<username>` -> `<username>`: the link is built only from a stored username.
+      botUsername: botLink === null ? null : botLink.replace(/^https:\/\/t\.me\//u, ''),
+    };
   }
 
   /**
@@ -352,7 +371,8 @@ export class PaymentGatewayService {
         descriptor.requiresCredentials
           ? this.deps.credentials.setAt(scope, gateway.provider).then((at) => at !== null)
           : Promise.resolve(true),
-        descriptor.webhookSecret
+        // An OPTIONAL secret (TetraPay) is never a gap: the route works, unauthenticated, without.
+        descriptor.webhookSecret && !descriptor.webhookSecretOptional
           ? this.deps.credentials
               .webhookSecretSetAt(scope, gateway.provider)
               .then((at) => at !== null)
@@ -919,6 +939,7 @@ export class PaymentGatewayService {
         if (
           input.status === 'ACTIVE' &&
           PAYMENT_GATEWAY_DESCRIPTORS[provider].webhookSecret &&
+          !PAYMENT_GATEWAY_DESCRIPTORS[provider].webhookSecretOptional &&
           (await this.deps.credentials.webhookSecretSetAt(scope, provider, tx)) === null
         ) {
           throw errors.conflict(
@@ -1243,9 +1264,11 @@ export class PaymentGatewayService {
     purpose: PaymentPurpose = 'SERVICE_PURCHASE',
   ): Promise<boolean> {
     const gateways = await this.deps.repository.list(scope, tx);
+    const now = this.deps.clock.now();
     return gateways.some(
       (gateway) =>
         gateway.status === 'ACTIVE' &&
+        (gateway.hiddenUntil === null || gateway.hiddenUntil.getTime() <= now.getTime()) &&
         allowsPurpose(gateway, purpose) &&
         this.settlementMethodFor(gateway.provider) === method,
     );
@@ -1368,11 +1391,15 @@ export class PaymentGatewayService {
         unpriceable.add(gateway.provider);
       }
     }
+    const now = this.deps.clock.now();
     return (gateway) =>
       routeOfferabilityBlockers(gateway, purpose, {
         settlesVia: PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].settlesVia,
         hasReceivingAccount: destination,
         priceable: !unpriceable.has(gateway.provider),
+        // The provider's daily limit (TetraPay): hidden until 00:00 Tehran, then back by itself.
+        temporarilyHidden:
+          gateway.hiddenUntil !== null && gateway.hiddenUntil.getTime() > now.getTime(),
       });
   }
 

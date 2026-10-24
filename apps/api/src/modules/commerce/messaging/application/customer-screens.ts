@@ -196,6 +196,7 @@ export const ROUTE_NAME_KEYS: Readonly<Record<PaymentGatewayProvider, TemplateKe
   TONPAYS_TELEGRAM: 'bot.payment.route_name_tonpays_telegram',
   NOWPAYMENTS: 'bot.payment.route_name_nowpayments',
   CENTRALPAY: 'bot.payment.route_name_centralpay',
+  TETRAPAY: 'bot.payment.route_name_tetrapay',
 };
 
 export class CustomerScreenComposer {

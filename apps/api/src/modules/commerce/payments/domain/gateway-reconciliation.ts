@@ -59,6 +59,17 @@ const RECONCILIATION_EVIDENCE: Readonly<
     failed: ['unverified'],
     failsUnpaidApproval: true,
   },
+  /*
+   * TetraPay (`docs/tetrapay-gateway-audit.md` §5.5): `paid` with `paid` recorded is the only
+   * confirmation — recorded only when verify named this attempt's order id and exactly the
+   * rial amount asked. A `paid` recorded UNPAID (a MISMATCH: another amount or order id) is
+   * not a payment of this order and may be failed; `expired` is the provider's own "no".
+   */
+  TETRAPAY: {
+    confirmed: ['paid'],
+    failed: ['expired'],
+    failsUnpaidApproval: true,
+  },
 };
 
 /**

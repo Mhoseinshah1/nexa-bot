@@ -51,6 +51,11 @@ export interface RouteOfferabilityFacts {
   readonly hasReceivingAccount: boolean;
   /** False only for an ACTIVE route priced by the central rate whose unit ratio is unset. */
   readonly priceable: boolean;
+  /**
+   * True while the PROVIDER's own daily limit hides the route (`hidden_until` after the clock,
+   * TetraPay's `DAILY_LIMIT_REACHED`). Optional so a caller with no such route reads false.
+   */
+  readonly temporarilyHidden?: boolean;
 }
 
 /**
@@ -74,6 +79,7 @@ export function routeOfferabilityBlockers(
     blockers.push('NO_RECEIVING_ACCOUNT');
   }
   if (!facts.priceable) blockers.push('UNPRICEABLE');
+  if (facts.temporarilyHidden === true) blockers.push('TEMPORARILY_UNAVAILABLE');
   return blockers;
 }
 

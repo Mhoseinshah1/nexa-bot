@@ -40,6 +40,7 @@ import {
   CellMain,
   DataTable,
   Empty,
+  CopyButton,
   Field,
   KV,
   Ltr,
@@ -160,6 +161,8 @@ function nameOf(gateway: PaymentGatewayView): string {
       return t('web.payment_gateway_provider_nowpayments');
     case 'CENTRALPAY':
       return t('web.payment_gateway_provider_centralpay');
+    case 'TETRAPAY':
+      return t('web.payment_gateway_provider_tetrapay');
   }
 }
 
@@ -501,7 +504,14 @@ export function PaymentGatewaysPage({
     onSuccess: () => {
       secretKeyed.settle();
       setWebhookSecret('');
-      notify({ tone: 'ok', message: t('web.payment_gateway_webhook_secret_saved') });
+      notify({
+        tone: 'ok',
+        message: t(
+          keying === 'TETRAPAY'
+            ? 'web.payment_gateway_tetrapay_secret_saved'
+            : 'web.payment_gateway_webhook_secret_saved',
+        ),
+      });
       refresh();
     },
     onError: (error) => secretKeyed.settleOn(error),
@@ -806,10 +816,17 @@ export function PaymentGatewaysPage({
               <span className="muted small">{formatTimestamp(row.credential.setAt)}</span>
             </span>
             {/* A signed route's IPN secret: its state alone, never a value. */}
-            {row.credential.webhookSecretRequired && (
+            {(row.credential.webhookSecretSupported || row.credential.webhookSecretRequired) && (
               <span className="gateways-stack">
                 {row.credential.webhookSecretSetAt === null ? (
-                  <Badge tone="warn">{t('web.payment_gateway_webhook_secret_missing')}</Badge>
+                  // Optional (TetraPay): not having one is a choice, not a gap.
+                  <Badge tone={row.credential.webhookSecretRequired ? 'warn' : 'neutral'}>
+                    {t(
+                      row.credential.webhookSecretRequired
+                        ? 'web.payment_gateway_webhook_secret_missing'
+                        : 'web.payment_gateway_tetrapay_secret_optional',
+                    )}
+                  </Badge>
                 ) : (
                   <>
                     <Badge tone="ok">{t('web.payment_gateway_webhook_secret_configured')}</Badge>
@@ -976,6 +993,9 @@ export function PaymentGatewaysPage({
             {keying === 'CENTRALPAY' && (
               <Banner tone="info">{t('web.payment_gateway_centralpay_hint')}</Banner>
             )}
+            {keying === 'TETRAPAY' && (
+              <Banner tone="info">{t('web.payment_gateway_tetrapay_hint')}</Banner>
+            )}
             <Field label={t('web.payment_gateway_credential_input')} htmlFor="pg-api-key">
               <input
                 id="pg-api-key"
@@ -1015,9 +1035,17 @@ export function PaymentGatewaysPage({
               ?.webhookSecret === true && (
               <>
                 <Field
-                  label={t('web.payment_gateway_webhook_secret_input')}
+                  label={t(
+                    keying === 'TETRAPAY'
+                      ? 'web.payment_gateway_tetrapay_secret_input'
+                      : 'web.payment_gateway_webhook_secret_input',
+                  )}
                   htmlFor="pg-webhook-secret"
-                  hint={t('web.payment_gateway_webhook_secret_hint')}
+                  hint={t(
+                    keying === 'TETRAPAY'
+                      ? 'web.payment_gateway_tetrapay_secret_hint'
+                      : 'web.payment_gateway_webhook_secret_hint',
+                  )}
                 >
                   <input
                     id="pg-webhook-secret"
@@ -1037,7 +1065,11 @@ export function PaymentGatewaysPage({
                     disabled={busy || webhookSecret.trim() === ''}
                     onClick={() => secret.mutate()}
                   >
-                    {t('web.payment_gateway_webhook_secret_save')}
+                    {t(
+                      keying === 'TETRAPAY'
+                        ? 'web.payment_gateway_tetrapay_secret_save'
+                        : 'web.payment_gateway_webhook_secret_save',
+                    )}
                   </button>
                 </div>
                 {secret.error != null && (
@@ -1402,8 +1434,16 @@ export function PaymentGatewaysPage({
       */}
         {only !== undefined && only.credential.required && (
           <Card
-            title={t('web.payment_gateway_callback_url')}
-            hint={t('web.payment_gateway_callback_url_hint')}
+            title={t(
+              only.provider === 'TETRAPAY'
+                ? 'web.payment_gateway_webhook_url'
+                : 'web.payment_gateway_callback_url',
+            )}
+            hint={t(
+              only.provider === 'TETRAPAY'
+                ? 'web.payment_gateway_webhook_url_hint'
+                : 'web.payment_gateway_callback_url_hint',
+            )}
           >
             {/* A label/value row, whose value wraps: a URL never widens the page at 390px. */}
             <KV
@@ -1417,9 +1457,36 @@ export function PaymentGatewaysPage({
                       {t('web.payment_gateway_callback_url_none')}
                     </span>
                   ) : (
-                    <Ltr key="u">{only.callbackUrl}</Ltr>
+                    <span key="u">
+                      <Ltr>{only.callbackUrl}</Ltr> <CopyButton value={only.callbackUrl} />
+                    </span>
                   ),
                 ],
+                // A route that returns the customer to the bot (TetraPay): the username read
+                // from the stored bot - shown, never typed here.
+                ...(only.provider === 'TETRAPAY'
+                  ? [
+                      [
+                        t('web.payment_gateway_bot_username'),
+                        only.botUsername === null ? (
+                          <span key="b" className="muted small">
+                            {t('web.payment_gateway_bot_username_none')}
+                          </span>
+                        ) : (
+                          <Ltr key="b">@{only.botUsername}</Ltr>
+                        ),
+                      ] as [ReactNode, ReactNode],
+                    ]
+                  : []),
+                // The provider's daily limit, while it hides the route (back by itself at 00:00).
+                ...(only.hiddenUntil === null
+                  ? []
+                  : [
+                      [
+                        t('web.payment_gateway_hidden_until'),
+                        <span key="h">{formatTimestamp(only.hiddenUntil)}</span>,
+                      ] as [ReactNode, ReactNode],
+                    ]),
               ]}
             />
           </Card>
@@ -1480,6 +1547,8 @@ function blockerText(blocker: PaymentRouteUnofferableReason, row: PaymentGateway
       return t('web.payment_gateways_topup_block_no_receiving_account');
     case 'UNPRICEABLE':
       return t('web.payment_gateways_topup_block_unpriceable');
+    case 'TEMPORARILY_UNAVAILABLE':
+      return t('web.payment_gateways_topup_block_hidden');
   }
 }
 

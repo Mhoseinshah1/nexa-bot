@@ -98,6 +98,13 @@ const SAME_UNIT_CONVERSION: GatewayConversionSpec = {
  *   other payment has consumed. No webhook exists. Needs both keys; a row starts DISABLED
  *   and cannot be enabled without them. Not accepted against the real provider yet
  *   (`OQ-CP-01`).
+ * - `TETRAPAY` — TetraPay (Tetra98) (`docs/tetrapay-gateway-audit.md`). Nexa creates a payment
+ *   in RIAL (its Toman payable x10, one helper) and the customer pays on TetraPay's page, then
+ *   returns to the bot through a `t.me` start link that is NOT proof of anything. Only
+ *   `POST /payments/{token}/verify`, asked server to server, can approve: `paid` for this
+ *   attempt's `order_id` and exactly the rial amount asked. An optional signed webhook only
+ *   brings a verify forward. Needs an API key; a row starts DISABLED and cannot be enabled
+ *   without it. Not accepted against the real provider yet (`OQ-TP-01`: no sandbox is documented).
  */
 export const PAYMENT_GATEWAY_PROVIDERS = [
   'MANUAL_TRANSFER',
@@ -106,6 +113,7 @@ export const PAYMENT_GATEWAY_PROVIDERS = [
   'TONPAYS_TELEGRAM',
   'NOWPAYMENTS',
   'CENTRALPAY',
+  'TETRAPAY',
 ] as const;
 export type PaymentGatewayProvider = (typeof PAYMENT_GATEWAY_PROVIDERS)[number];
 export const paymentGatewayProviderSchema = z.enum(PAYMENT_GATEWAY_PROVIDERS);
@@ -128,6 +136,7 @@ export const PAYMENT_METHOD_SLUGS: Readonly<Record<PaymentGatewayProvider, strin
   TELEGRAM_STARS: 'telegram-stars',
   NOWPAYMENTS: 'nowpayments',
   CENTRALPAY: 'centralpay',
+  TETRAPAY: 'tetrapay',
 };
 
 /** The slug of a provider key, or null for a string that names no provider this release has. */
@@ -150,6 +159,7 @@ export function paymentMethodSlugOf(provider: string): string | null {
 export const LATE_CREDIT_SETTING_KEYS = {
   TONPAYS: 'payments.late_credit.tonpays_enabled',
   TONPAYS_TELEGRAM: 'payments.late_credit.tonpays_telegram_enabled',
+  TETRAPAY: 'payments.late_credit.tetrapay_enabled',
 } as const;
 export const LATE_CREDIT_WINDOW_SETTING_KEY = 'payments.late_credit.window_hours' as const;
 export const LATE_CREDIT_WINDOW_HOURS_MIN = 1;
@@ -251,6 +261,22 @@ export interface PaymentGatewayDescriptor {
    */
   readonly webhookSecret: boolean;
   /**
+   * Whether that secret is OPTIONAL (TetraPay): the route is enabled without it, and a webhook
+   * is then accepted UNAUTHENTICATED as a hint that only brings a verify forward, which is
+   * harmless because nothing a webhook says can settle. With a secret stored, a webhook whose
+   * signature does not verify is dropped exactly as for a required one. False wherever
+   * `webhookSecret` is false.
+   */
+  readonly webhookSecretOptional: boolean;
+  /**
+   * Whether the `callback_url` sent with an invoice is the BOT's own `t.me` start link
+   * (`https://t.me/<bot>?start=tp-<payment>`), where the customer lands after paying and is
+   * shown the payment's status (TetraPay). The page reads nothing from the link's query; the
+   * status shown is always read from the payment. False for every other route, whose callback
+   * is the generated webhook URL (or, for a browser-return route, the return URL).
+   */
+  readonly returnToBot: boolean;
+  /**
    * Whether the provider's INQUIRY is authorised by a SECOND key, separate from the one
    * that creates the invoice (CentralPay: `getLink`'s static key and `verify`'s MD5 key —
    * never assumed to be the same credential). Such a route stores it write-only beside the
@@ -297,6 +323,8 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     requiresBuyerChatId: false,
     providerReview: false,
     webhookSecret: false,
+    webhookSecretOptional: false,
+    returnToBot: false,
     verifyKey: false,
     browserReturn: false,
     numericIdentity: false,
@@ -314,6 +342,8 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     requiresBuyerChatId: false,
     providerReview: false,
     webhookSecret: false,
+    webhookSecretOptional: false,
+    returnToBot: false,
     verifyKey: false,
     browserReturn: false,
     numericIdentity: false,
@@ -346,6 +376,8 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     requiresBuyerChatId: false,
     providerReview: false,
     webhookSecret: false,
+    webhookSecretOptional: false,
+    returnToBot: false,
     verifyKey: false,
     browserReturn: false,
     numericIdentity: false,
@@ -364,6 +396,8 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     requiresBuyerChatId: true,
     providerReview: true,
     webhookSecret: false,
+    webhookSecretOptional: false,
+    returnToBot: false,
     verifyKey: false,
     browserReturn: false,
     numericIdentity: false,
@@ -399,6 +433,8 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
      */
     providerReview: true,
     webhookSecret: true,
+    webhookSecretOptional: false,
+    returnToBot: false,
     verifyKey: false,
     browserReturn: false,
     numericIdentity: false,
@@ -418,10 +454,37 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     // Nothing the provider says before verify means the money is with it: no review window.
     providerReview: false,
     webhookSecret: false,
+    webhookSecretOptional: false,
+    returnToBot: false,
     verifyKey: true,
     browserReturn: true,
     numericIdentity: true,
     lateCreditSetting: null,
+  },
+  TETRAPAY: {
+    provider: 'TETRAPAY',
+    settlesVia: 'GATEWAY',
+    requiresCredentials: true,
+    invoiceCredential: 'GATEWAY_KEY',
+    approval: 'INQUIRY',
+    /*
+     * Billed in the sales currency with no conversion: the provider's unit is the RIAL and the
+     * adapter owns the (exact, x10) unit change; a payable that has no whole-rial value there is
+     * refused rather than rounded, exactly as TonPays' Toman rule.
+     */
+    conversion: SAME_UNIT_CONVERSION,
+    invoiceForm: 'LINK',
+    boundToBot: false,
+    requiresBuyerChatId: false,
+    // Nothing the provider says before verify means the money is with it: no review window.
+    providerReview: false,
+    webhookSecret: true,
+    webhookSecretOptional: true,
+    returnToBot: true,
+    verifyKey: false,
+    browserReturn: false,
+    numericIdentity: false,
+    lateCreditSetting: LATE_CREDIT_SETTING_KEYS.TETRAPAY,
   },
 };
 
@@ -690,6 +753,12 @@ export const PAYMENT_ROUTE_UNOFFERABLE_REASONS = [
   'NO_RECEIVING_ACCOUNT',
   /** It is priced only by the central rate, and that rate's unit ratio is unset. */
   'UNPRICEABLE',
+  /**
+   * The provider said its daily limit was reached (TetraPay's `DAILY_LIMIT_REACHED`), so the
+   * route is hidden until 00:00 Tehran. Not the operator's doing and not a fact about the
+   * customer: the route comes back by itself.
+   */
+  'TEMPORARILY_UNAVAILABLE',
 ] as const;
 export type PaymentRouteUnofferableReason = (typeof PAYMENT_ROUTE_UNOFFERABLE_REASONS)[number];
 

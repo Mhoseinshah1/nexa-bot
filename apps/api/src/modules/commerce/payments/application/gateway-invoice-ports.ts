@@ -130,10 +130,25 @@ export type GatewayCreateOutcome =
       readonly code: string;
       readonly configuration: boolean;
       readonly httpStatus?: number;
+      /**
+       * Round 6 item 6: what the refusal means for the ROUTE, beyond this attempt. The
+       * provider's daily limit (`HIDE_UNTIL_TEHRAN_MIDNIGHT`) hides the route until the next
+       * 00:00 Tehran; the lane computes the instant from its own clock. Absent: nothing.
+       */
+      readonly routeEffect?: GatewayRouteEffect;
     }
-  | { readonly kind: 'RATE_LIMITED'; readonly code: string; readonly httpStatus?: number }
+  | {
+      readonly kind: 'RATE_LIMITED';
+      readonly code: string;
+      readonly httpStatus?: number;
+      /** The provider's `Retry-After`, in ms, when it sent a readable one. Honoured, bounded. */
+      readonly retryAfterMs?: number;
+    }
   | { readonly kind: 'AMBIGUOUS'; readonly code: string; readonly httpStatus?: number }
   | { readonly kind: 'UNKNOWN'; readonly code: string; readonly httpStatus?: number };
+
+/** What a refusal does to the route as a whole (see `GatewayCreateOutcome`). */
+export type GatewayRouteEffect = 'HIDE_UNTIL_TEHRAN_MIDNIGHT';
 
 /** A payee card, exactly as the provider sent it (format undocumented, `OQ-TPTG-06`). */
 export interface GatewayCardInstructions {
@@ -308,6 +323,8 @@ export type GatewayInquiryOutcome =
        * shown to an operator and never decides anything.
        */
       readonly crypto?: GatewayCryptoFigures | null;
+      /** How the payment was paid (TetraPay: `online` | `card`), diagnostic metadata only. */
+      readonly method?: string | null;
       /**
        * Whether the provider reports the customer's money as already on its way (coins seen
        * on chain) — the trigger, on a route whose descriptor says `providerReview`, that opens
@@ -330,7 +347,12 @@ export type GatewayInquiryOutcome =
       readonly facts?: GatewayProviderFacts | null;
     }
   | { readonly kind: 'NOT_FOUND'; readonly code: string }
-  | { readonly kind: 'RATE_LIMITED'; readonly code: string }
+  | {
+      readonly kind: 'RATE_LIMITED';
+      readonly code: string;
+      /** The provider's `Retry-After`, in ms, when it sent a readable one. Honoured, bounded. */
+      readonly retryAfterMs?: number;
+    }
   | { readonly kind: 'CONFIGURATION'; readonly code: string }
   | { readonly kind: 'FAILED'; readonly code: string };
 
@@ -339,7 +361,8 @@ export type GatewayInquiryOutcome =
  */
 export interface GatewayWebhookHint {
   readonly orderId: string;
-  readonly invoiceId: string;
+  /** Null when the body named only the order (TetraPay may): nothing is then cross-checked. */
+  readonly invoiceId: string | null;
   readonly status: string | null;
   readonly deliveryId: string | null;
   readonly creditAmount: bigint | null;
@@ -398,8 +421,12 @@ export interface ExternalGatewayAdapter {
    * each policy is the contract's, so no adapter derives a rate of its own.
    */
   providerAmountOf(amount: Money, conversion: ResolvedConversion): bigint | null;
-  /** A fresh provider order id for one attempt. Never reused, never re-keyed. */
-  newOrderId(): string;
+  /**
+   * A fresh provider order id for one attempt. Never reused, never re-keyed. `hint` carries
+   * what a provider that wants it in the id may use (TetraPay: the payment's 8-character
+   * public code); an adapter that does not, ignores it.
+   */
+  newOrderId(hint?: { readonly paymentCode: string | null }): string;
   /**
    * A fresh candidate for a customer's stable provider number, for a route whose descriptor
    * says `numericIdentity` (CentralPay's `userId`). Drawn once per customer and stored.
@@ -422,7 +449,17 @@ export interface ExternalGatewayAdapter {
    * secret's signature of `body`, compared in constant time. Called BEFORE `parseWebhook`,
    * so nothing in an unverified body is ever read. Absent for every other adapter.
    */
-  verifyWebhook?(secret: string, body: unknown, signature: string | undefined): boolean;
+  verifyWebhook?(
+    secret: string,
+    body: unknown,
+    signature: string | undefined,
+    /**
+     * What a signature over the RAW bytes needs (TetraPay): the bytes as received (null when
+     * the route kept none, which verifies nothing) and the moment, for the freshness window.
+     * NOWPayments' signature is over the parsed body and ignores it.
+     */
+    context?: { readonly rawBody: Uint8Array | null; readonly now: Date },
+  ): boolean;
   /**
    * For a provider whose invoice can carry several payments (NOWPayments): how strongly a
    * webhook status says the money is with the provider. A verified webhook moves the hint to
@@ -523,6 +560,8 @@ export interface GatewayInvoiceRecord {
   readonly cryptoPayAddress: string | null;
   /** The customer's integer as sent (CentralPay's `userId`), frozen at open. Null otherwise. */
   readonly providerUserId: string | null;
+  /** How a paid link was paid, per TetraPay's verify (`online` | `card`). Diagnostic. */
+  readonly providerMethod?: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -843,6 +882,9 @@ export interface GatewayInvoiceRepository {
       readonly hintedPaymentId?: string | null;
       /** R5C-2 C4: the coin side of that payment, when the record carried one. Diagnostic. */
       readonly crypto?: GatewayCryptoFigures | null;
+      readonly method?: string | null;
+      /** The provider's "not before" for the next inquiry (its Retry-After); cleared when absent. */
+      readonly notBefore?: Date | null;
       /**
        * FIX10 R1: the claim's lease this answer was asked under. When given, the answer is
        * recorded only while `inquiry_claimed_until` still carries it — a replica whose lease

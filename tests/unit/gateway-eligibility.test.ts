@@ -176,7 +176,8 @@ describe('the provider catalogue', () => {
     // Stars with its own (`TelegramStarsAdapter`), and TonPays Telegram its own
     // (`TonPaysTelegramAdapter`, `docs/tonpays-telegram-gateway-audit.md`), and NOWPayments its
     // own (`NowPaymentsAdapter`, `docs/nowpayments-gateway-audit.md`), and CentralPay its own
-    // (`CentralPayAdapter`, `docs/centralpay-gateway-audit.md`); that is what this pins.
+    // (`CentralPayAdapter`, `docs/centralpay-gateway-audit.md`), and TetraPay its own
+    // (`TetraPayAdapter`, `docs/tetrapay-gateway-audit.md`); that is what this pins.
     expect([...PAYMENT_GATEWAY_PROVIDERS]).toEqual([
       'MANUAL_TRANSFER',
       'TONPAYS',
@@ -184,6 +185,7 @@ describe('the provider catalogue', () => {
       'TONPAYS_TELEGRAM',
       'NOWPAYMENTS',
       'CENTRALPAY',
+      'TETRAPAY',
     ]);
   });
 
@@ -225,14 +227,52 @@ describe('the invoice-form descriptor fields (TonPays Telegram, audit §5.3)', (
             d.verifyKey,
             d.browserReturn,
             d.numericIdentity,
+            d.webhookSecretOptional,
+            d.returnToBot,
           ],
         ];
       }),
     );
     expect(table).toEqual({
-      MANUAL_TRANSFER: ['NONE', false, false, false, 'NONE', false, false, false, false],
-      TONPAYS: ['LINK', false, false, false, 'GATEWAY_KEY', false, false, false, false],
-      TELEGRAM_STARS: ['BOT_INVOICE', true, false, false, 'BOT_TOKEN', false, false, false, false],
+      MANUAL_TRANSFER: [
+        'NONE',
+        false,
+        false,
+        false,
+        'NONE',
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+      ],
+      TONPAYS: [
+        'LINK',
+        false,
+        false,
+        false,
+        'GATEWAY_KEY',
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+      ],
+      TELEGRAM_STARS: [
+        'BOT_INVOICE',
+        true,
+        false,
+        false,
+        'BOT_TOKEN',
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+      ],
       TONPAYS_TELEGRAM: [
         'CARD_TRANSFER',
         true,
@@ -243,11 +283,39 @@ describe('the invoice-form descriptor fields (TonPays Telegram, audit §5.3)', (
         false,
         false,
         false,
+        false,
+        false,
       ],
       // NOWPayments: a link, its coins-on-chain review, and the only signed webhook.
-      NOWPAYMENTS: ['LINK', false, false, true, 'GATEWAY_KEY', true, false, false, false],
+      NOWPAYMENTS: [
+        'LINK',
+        false,
+        false,
+        true,
+        'GATEWAY_KEY',
+        true,
+        false,
+        false,
+        false,
+        false,
+        false,
+      ],
       // CentralPay: a link, a separate verify key, a browser return and integer identities.
-      CENTRALPAY: ['LINK', false, false, false, 'GATEWAY_KEY', false, true, true, true],
+      CENTRALPAY: [
+        'LINK',
+        false,
+        false,
+        false,
+        'GATEWAY_KEY',
+        false,
+        true,
+        true,
+        true,
+        false,
+        false,
+      ],
+      // TetraPay: a link, an OPTIONAL signed webhook secret, and a return to the bot's t.me link.
+      TETRAPAY: ['LINK', false, false, false, 'GATEWAY_KEY', true, false, false, false, true, true],
     });
     // Only the routes that review may carry the review columns: the list generates the CHECK.
     expect([...PROVIDER_REVIEW_GATEWAY_PROVIDERS]).toEqual(['TONPAYS_TELEGRAM', 'NOWPAYMENTS']);

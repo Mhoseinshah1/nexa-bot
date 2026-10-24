@@ -4282,6 +4282,37 @@ acceptance with `rich_messages` on for a test tenant.
   directly when egress allows, and correct `docs/r4-telegram-rich-audit.md` §1 in the commit that
   does.
 
+## TetraPay (Round 6 item 6)
+
+The published API documentation (`https://tetra98.com/docs`, v1) answers the shape of every call,
+header, status, error code and the signature formula; what follows is only what it does NOT say
+(`docs/tetrapay-gateway-audit.md` §6).
+
+- **OQ-TP-01 — live acceptance with real credentials; no sandbox.** UNRESOLVED. The
+  documentation names no sandbox. Owed on staging with a real merchant: the API key set, one
+  10,000-Toman top-up paid, the customer returning through the bot's `tp-` start link, the
+  wallet rising by exactly 10,000 and the operations-log line naming «تتراپی» and the method.
+  Record any real shape that differs from the documentation and correct the fake server in
+  `tests/integration/tetrapay-gateway.test.ts` in the same commit. Until then the route ships
+  `DISABLED` and is not claimed as accepted.
+- **OQ-TP-02 — the fixed lifetime of a payment link.** The documentation says only that
+  `expires_at` comes with the create answer (the example is under ten minutes) and that a link
+  then becomes `expired`. Nexa's own attempt deadline is 70 minutes like every inquiry route; a
+  link the provider expired earlier is closed by the verify answering `expired`.
+- **OQ-TP-03 — the fee percentage.** `payable_amount` is the order plus the payer's share of
+  TetraPay's fee, but the percentage is not documented. Nexa compares `amount` (never
+  `payable_amount`) with what it asked for, credits only its own recorded principal, and shows the
+  customer Nexa's own fee, not TetraPay's.
+- **OQ-TP-04 — a payment made after the link expired.** The documentation says an expired link
+  sends no webhook and does not say whether the payer's money can still arrive. If a verify ever
+  answers `paid` after Nexa's deadline, the route's late-credit switch
+  (`payments.late_credit.tetrapay_enabled`, OFF by default) decides: ON credits the wallet once,
+  OFF records a late completion for an operator.
+- **OQ-TP-05 — the operator's webhook registration.** Nexa does not send `webhook_url`
+  (the documentation accepts it only when a webhook key exists in the panel). The operator pastes
+  the page's webhook URL and the `whsec_` secret into TetraPay's panel; a webhook with no secret
+  stored is accepted as an unauthenticated hint that only brings a verify forward.
+
 ## Round 6 PR-3 — TonPays Telegram: cancel, refund, remainder (`docs/tonpays-telegram-gateway-audit.md` §19)
 
 Everything the TonPays API document (custom Telegram section, pages 13-20) states was built to

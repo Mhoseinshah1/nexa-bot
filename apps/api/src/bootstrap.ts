@@ -15,6 +15,7 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import { AppModule } from './app.module.js';
+import { installRawBodyCapture } from './surfaces/gateway/raw-body.js';
 import {
   TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES,
   TELEGRAM_WEBHOOK_ROUTE_PREFIX,
@@ -252,6 +253,12 @@ export async function createApiApp(config: AppConfig = loadConfig()): Promise<Ap
       done(null, undefined);
     },
   );
+
+  /*
+   * The raw bytes of a gateway webhook, kept for the one provider that signs them (TetraPay).
+   * Registered here, before `app.init()`, with the route's own body limit.
+   */
+  installRawBodyCapture(fastify, GATEWAY_WEBHOOK_ROUTE_PREFIX, GATEWAY_WEBHOOK_BODY_LIMIT_BYTES);
 
   fastify.addHook('onRoute', (route) => {
     if (route.url.startsWith(TELEGRAM_WEBHOOK_ROUTE_PREFIX)) {

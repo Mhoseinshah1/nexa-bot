@@ -114,6 +114,7 @@ export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = [
   // that gateway's own page («پرداخت دیرهنگام»), beside the route they govern.
   LATE_CREDIT_SETTING_KEYS.TONPAYS,
   LATE_CREDIT_SETTING_KEYS.TONPAYS_TELEGRAM,
+  LATE_CREDIT_SETTING_KEYS.TETRAPAY,
   LATE_CREDIT_WINDOW_SETTING_KEY,
   // R5C-1 item 2: the three «تغییر شماره کارت» limits, on the card-to-card method's page.
   CARD_SWITCH_SETTING_KEYS.MAX_SWITCHES,
@@ -255,6 +256,18 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
   },
   [LATE_CREDIT_SETTING_KEYS.TONPAYS_TELEGRAM]: {
     title: 'web.late_credit_switch_tonpays_telegram',
+    description: 'web.late_credit_switch_hint',
+    group: 'sales',
+    control: {
+      kind: 'select',
+      options: [
+        { value: 'true', label: 'web.backup_schedule_on' },
+        { value: 'false', label: 'web.backup_schedule_off' },
+      ],
+    },
+  },
+  [LATE_CREDIT_SETTING_KEYS.TETRAPAY]: {
+    title: 'web.late_credit_switch_tetrapay',
     description: 'web.late_credit_switch_hint',
     group: 'sales',
     control: {
