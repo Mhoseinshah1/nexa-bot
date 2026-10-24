@@ -432,15 +432,15 @@ describe('NOWPayments, through the one settlement path', () => {
       expect(isNexaError(refused) && refused.details).toMatchObject({
         reason: 'WEBHOOK_SECRET_MISSING',
       });
-      // TonPays takes no webhook secret.
-      const tonpays = await ctx.container.paymentGateways
+      // CentralPay signs nothing, so it takes no webhook secret.
+      const unsigned = await ctx.container.paymentGateways
         .setWebhookSecret(tenantA, owner, {
           idempotencyKey: key(),
-          provider: 'TONPAYS',
+          provider: 'CENTRALPAY',
           secret: 'x',
         })
         .catch((error: unknown) => error);
-      expect(isNexaError(tonpays)).toBe(true);
+      expect(isNexaError(unsigned)).toBe(true);
     });
 
     it('never returns, audits or logs the key or the IPN secret, and stores both encrypted', async () => {
