@@ -29,7 +29,7 @@ has "$one" "services: alpha.service.ts" "single: services"
 has "$one" "writes: gadget_rows, sprocket_rows, widget_rows" "single: writes mapped; Map.delete dropped; multi-line delete found"
 has "$one" "contracts: @nexa/contracts/errors, ALPHA_CODES, Clock, Money, WidgetId" "single: contracts (sorted, subpath, type/as stripped)"
 has "$one" "tests (1):" "single: test count"
-has "$one" "  tests/unit/imports-alpha.test.ts" "single: test path"
+has "$one" "  tests/unit/wiring.test.ts" "single: test path"
 has "$(run shop/beta)" "  tests/unit/beta.test.ts" "full key resolves; filename match"
 if grep -q unrelated <<<"$(run beta)$one"; then bad "unrelated test leaked in"; else ok "unrelated test excluded"; fi
 
