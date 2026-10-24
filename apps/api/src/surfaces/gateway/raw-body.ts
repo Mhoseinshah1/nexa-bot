@@ -1,4 +1,5 @@
 import { Readable } from 'node:stream';
+import { PayloadTooLargeException } from '@nestjs/common';
 import type { FastifyInstance } from 'fastify';
 
 /**
@@ -41,9 +42,9 @@ export function installRawBodyCapture(
       const piece = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
       size += piece.length;
       if (size > limitBytes) {
-        const error = new Error('Request body is too large') as Error & { statusCode: number };
-        error.statusCode = 413;
-        throw error;
+        // An HttpException, because the application's exception filter maps those to their own
+        // status; a bare Error with a `statusCode` field is "unhandled" there and answers 500.
+        throw new PayloadTooLargeException('Request body is too large');
       }
       chunks.push(piece);
     }
