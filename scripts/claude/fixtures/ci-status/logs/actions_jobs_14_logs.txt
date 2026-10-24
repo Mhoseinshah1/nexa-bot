@@ -1,0 +1,1 @@
+<html>302 Found: redirect to https://x.blob.core.windows.net/logs
