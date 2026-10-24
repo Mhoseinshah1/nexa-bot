@@ -36,8 +36,15 @@ export const OPS_LOG_BODIES_FA = {
     '✅ پرداخت سفارش تأیید شد{badges}\n\n💠 روش: {method}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n📦 سفارش: {orderCode}\n🏷 محصول: {productTitle}\n🔧 عملیات: {operation}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🔎 منبع تأیید: {evidence}\n👛 موجودی کیف پول: {balanceBefore} ← {balanceAfter}\n🕒 زمان: {at}',
   'ops.log.payment_crypto':
     '🪙 {kindTitle} — {principal}\n\n👤 {displayName} · {username} · {telegramId}\n💠 روش: {method}\n📦 سفارش: {orderCode}\n🧾 فاکتور درگاه: {providerInvoiceId}\n🆔 شناسهٔ پرداخت درگاه: {providerPaymentId}\n💱 معادل ارزی سفارش: {fiatEquivalent}\n🔢 مبلغ درخواستی: {cryptoRequested}\n💸 مبلغ پرداخت‌شده: {cryptoPaid}\n📥 مبلغ دریافتی نهایی: {cryptoReceived}\n📍 وضعیت پرداخت: {providerStatus}\n🏦 آدرس کیف پول: {walletAddress}\n👛 موجودی کیف پول: {balanceBefore} ← {balanceAfter}\n🔖 کد پیگیری: {reference}\n🕒 {at}',
+  // R8 A3: one headline per outcome; the lines under it are the same four messages' own.
   'ops.financial.payment_failed':
-    '❌ پرداخت ناموفق/رد شد\n\n⚠️ علت: {cause}\n💠 روش: {method}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n📦 سفارش: {orderCode}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🕒 زمان: {at}',
+    '❌ پرداخت ناموفق\n\n⚠️ علت: {cause}\n💠 روش: {method}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n📦 سفارش: {orderCode}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🕒 زمان: {at}',
+  'ops.financial.invoice_cancelled':
+    '🚫 فاکتور لغو شد\n\n🙋 لغوکننده: {cancelledBy}\n💠 روش: {method}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n📦 سفارش: {orderCode}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🕒 زمان: {at}',
+  'ops.financial.receipt_rejected':
+    '🧾 رسید رد شد\n\n📝 دلیل رد: {rejectReasons}\n💠 روش: {method}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n📦 سفارش: {orderCode}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🕒 زمان: {at}',
+  'ops.financial.payment_expired':
+    '⌛ پرداخت منقضی شد\n\n⚠️ درگاه مهلت پرداخت را تمام‌شده اعلام کرد و پولی دریافت نشد.\n💠 روش: {method}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n📦 سفارش: {orderCode}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🕒 زمان: {at}',
   'ops.financial.late_completion':
     '⚠️ تأیید دیرهنگام درگاه پس از بسته‌شدن پرداخت\n\nاین پرداخت در Nexa بسته شده بود و هیچ مبلغی ثبت نشد؛ نیاز به بررسی دستی دارد.\n\n💠 درگاه: {gateway}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 کد پیگیری پرداخت: {reference}\n📦 سفارش: {orderCode}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🕒 زمان: {at}',
   'ops.financial.late_credit':
@@ -51,7 +58,9 @@ export const OPS_LOG_BODIES_FA = {
   'ops.financial.service_refund_request':
     '📝 نتیجهٔ درخواست بازگشت وجه سرویس\n\nوضعیت: {outcome}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🧩 کد سرویس: {serviceCode}\n🔖 کد پیگیری پرداخت: {reference}\n💰 مبلغ تأییدشده: {amount}\n👮 تصمیم‌گیرنده: {adminName}\n🕒 زمان: {at}',
   'ops.log.wallet_adjusted':
-    '{heading} — {amount}\n\n👤 کاربر: {displayName} · {username} · {telegramId}\n👛 موجودی: {balanceBefore} ← {balanceAfter}\n👮 ادمین: {adminName} · {adminUsername} · {adminTelegramId}\n📝 دلیل: {reason}\n🕒 {at}',
+    '{heading} — {amount}\n\n👤 کاربر: {displayName} · {username} · {telegramId}\n👛 موجودی: {balanceBefore} ← {balanceAfter}\n👮 ادمین: {adminName} · {adminUsername} · {adminTelegramId}\n📝 دلیل: {reason}\n🔔 اطلاع به کاربر: {customerNotified}\n🕒 {at}',
+  'ops.log.wallet_mass_credited':
+    '💰 شارژ گروهی کیف پول — {amount} برای هر کاربر\n\n👥 شارژشده: {recipients} کاربر\n⏭ ردشده: {skipped} کاربر\n💵 جمع واریز: {total}\n👮 ادمین: {adminName} · {adminUsername} · {adminTelegramId}\n📝 دلیل: {reason}\n🔔 اطلاع به کاربران: {customerNotified}\n🕒 {at}',
   'ops.log.referral_commission':
     '🤝 پرداخت پورسانت معرف — {amount}\n\n👤 دریافت‌کنندهٔ پورسانت (معرف): {referrerName} · {referrerUsername} · {referrerTelegramId}\n📞 شمارهٔ معرف: {referrerPhone}\n🛒 کاربر خریدار (زیرمجموعه): {buyerName} · {buyerUsername} · {buyerTelegramId}\n📞 شمارهٔ خریدار: {buyerPhone}\n📦 بابت: {productTitle}\n💵 مبلغ خرید: {orderTotal}\n📐 سهم پورسانت: {percent}\n👛 موجودی معرف: {balanceBefore} ← {balanceAfter}\n🔖 کد سفارش: {orderCode}\n🔖 کد پرداخت: {reference}\n🕒 {at}',
   'ops.log.signup_gift':
@@ -168,6 +177,38 @@ export const OPS_LOG_WORDS_FA = {
     REJECTED: 'رسید توسط اپراتور رد شد',
     GATEWAY_FAILED: 'درگاه پرداخت را ناموفق اعلام کرد',
   },
+  /*
+   * R8 A3: the real cause of a gateway failure, by the provider's status or the machine code
+   * the payment was closed with (`<provider>:<code>`). A code this table lacks is the generic
+   * sentence above with the code beside it, never a guess.
+   */
+  gatewayFailureCauses: {
+    failed: 'درگاه پرداخت را ناموفق اعلام کرد',
+    refunded: 'درگاه پول را به پرداخت‌کننده برگرداند',
+    partially_paid: 'کمتر از مبلغ فاکتور پرداخت شد و درگاه پرداخت را ناموفق بست',
+    unverified: 'درگاه پرداخت را تأیید نکرد',
+    'nexa.credential_missing': 'کلید API درگاه تنظیم نشده است؛ فاکتوری ساخته نشد',
+    RATE_LIMIT_EXCEEDED: 'درگاه به‌دلیل محدودیت تعداد درخواست فاکتور نساخت',
+    BUYER_HAS_PENDING_INVOICE: 'مشتری در درگاه فاکتور پرداخت‌نشدهٔ دیگری داشت',
+    BUYER_HAS_PROCESSING_INVOICE: 'مشتری در درگاه فاکتور در حال بررسی دیگری داشت',
+    BUYER_HAS_NEED_ACTION_LESS: 'مشتری در درگاه فاکتوری با کسری پرداخت داشت',
+    BUYER_HAS_NEED_ACTION_MORE: 'مشتری در درگاه فاکتوری با اضافه‌پرداخت داشت',
+  },
+  /** The code beside a cause the table above does not know. */
+  failureCodeLabel: 'کد',
+  /** R8 A3: who cancelled an invoice. */
+  cancelledBy: {
+    CUSTOMER: 'مشتری (دکمهٔ «لغو فاکتور»)',
+    NEXA: 'Nexa (فاکتور تازه‌ای جای آن را گرفت)',
+    PROVIDER: 'در خود درگاه (نه از ربات)',
+  },
+  /** R8 A3: who rejected a receipt, before their reasons. */
+  rejectedBy: { OPERATOR: 'اپراتور', PROVIDER: 'درگاه' },
+  /** R8 A3: a gateway that rejected a receipt and gave no reason. */
+  noRejectReason: 'درگاه دلیلی اعلام نکرد',
+  /** R8 A4: whether the customer is sent a message about an administrator's change. */
+  customerNotified: { yes: 'بله', no: 'خیر (اعلان این تغییر خاموش است)' },
+  customerNotifiedBulk: { yes: 'بله', no: 'خیر' },
   refundChannels: {
     WALLET_CREDIT: 'کیف پول',
     EXTERNAL_MANUAL: 'بازگشت دستی بیرون از ربات',
@@ -378,6 +419,8 @@ export const OPS_LOG_BUTTON_LABELS_FA: Readonly<Record<OpsLogButtonKind, string>
   GATEWAY: '⚙️ تنظیمات درگاه',
   TICKET: '💬 پاسخ در پنل',
   MANUAL_CREDIT: '✅ شارژ دستی کیف پول',
+  WALLET: '🧾 تراکنش',
+  BULK_OPERATION: '📋 عملیات گروهی',
   DASHBOARD: '📈 داشبورد',
   NOTIFICATIONS: '📋 فهرست کامل در پنل',
 };
