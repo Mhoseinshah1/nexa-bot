@@ -39,6 +39,7 @@ import { ErrorReport } from './settings';
 import { BUILDER_QUERY_KEY, MenuBuilder } from './bot-buttons/builder';
 import { labelOf } from './bot-buttons/canvas';
 import { InlineButtonsSection } from './bot-buttons/inline-buttons';
+import { ServiceCardLayoutSection } from './bot-buttons/service-card-layout';
 
 const SYNC_STATE_LABEL: Readonly<Record<BotCommandSyncState, WebKey>> = {
   CURRENT: 'web.bot_menu_state_current',
@@ -91,7 +92,7 @@ export function syncErrorHint(code: string): WebKey {
  * is declared for, and the schema refuses anything else, so two buttons cannot do one
  * thing and no button can carry an arbitrary payload.
  */
-type BotButtonsTab = 'layout' | 'inline' | 'labels' | 'commands';
+type BotButtonsTab = 'layout' | 'inline' | 'service' | 'labels' | 'commands';
 
 export function BotButtonsPage({
   mayEdit,
@@ -140,7 +141,9 @@ export function BotButtonsPage({
    * The builder and the glass buttons guard their own drafts with their own question; the
    * text cards report here, and leaving the page with one of them unsaved asks too.
    */
-  const textKeys = [...dirty].filter((key) => key !== 'builder' && key !== 'inline');
+  const textKeys = [...dirty].filter(
+    (key) => key !== 'builder' && key !== 'inline' && key !== 'service-card',
+  );
   useUnsavedChanges(mayEditTemplates && textKeys.length > 0);
 
   /**
@@ -186,6 +189,11 @@ export function BotButtonsPage({
           },
           { id: 'inline', label: t('web.ib_title'), dot: dirty.has('inline') ? 'warn' : null },
           {
+            id: 'service',
+            label: t('web.scl_title'),
+            dot: dirty.has('service-card') ? 'warn' : null,
+          },
+          {
             id: 'labels',
             label: t('web.bot_buttons_labels_title'),
             dot: textKeys.length > 0 ? 'warn' : null,
@@ -220,6 +228,16 @@ export function BotButtonsPage({
             templates={templates.data?.templates}
             // Codex 4170910525: a glass label can be a main-menu template (`bot.menu.services`),
             // so a label save re-reads both menu read models, as the texts cards do.
+            onLabelChanged={refreshMenu}
+          />
+        </div>
+        <div hidden={tab !== 'service'}>
+          <ServiceCardLayoutSection
+            mayEdit={mayEdit}
+            denied={denied}
+            mayViewTemplates={mayViewTemplates}
+            mayEditTemplates={mayEditTemplates}
+            templates={templates.data?.templates}
             onLabelChanged={refreshMenu}
           />
         </div>

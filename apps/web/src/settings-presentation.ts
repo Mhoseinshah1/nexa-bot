@@ -129,6 +129,8 @@ export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = [
   CARD_SWITCH_SETTING_KEYS.COOLDOWN_SECONDS,
   CARD_SWITCH_SETTING_KEYS.MAX_DISTINCT_CARDS,
   'bot.main_menu',
+  // R8-C3: the service screen's button layout, on the same page («چیدمان صفحهٔ سرویس»).
+  'bot.service_card_layout',
   // Owner spec §6: the inline buttons' styles, on the same page («دکمه‌های شیشه‌ای ربات»).
   'bot.inline_buttons',
   // Phase 2 Item 3: the inline buttons' optional premium icons, beside their styles.
@@ -535,6 +537,12 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
    * Owner spec §6: the inline buttons' styles. Edited on the «دکمه‌های ربات» page, never
    * here (`SETTINGS_MANAGED_ELSEWHERE`); the entry exists because this map is total.
    */
+  'bot.service_card_layout': {
+    title: 'web.scl_title',
+    description: 'web.scl_hint',
+    group: 'support',
+    control: { kind: 'text' },
+  },
   'bot.inline_buttons': {
     title: 'web.setting_bot_inline_buttons',
     description: 'web.setting_bot_inline_buttons_desc',
