@@ -6779,6 +6779,20 @@ export const backupStatusResponseSchema = z.object({
     configured: z.boolean(),
     setAt: z.iso.datetime().nullable(),
   }),
+  /**
+   * The backup volume (Round 8, B3): free and total bytes, what the next run needs, and
+   * whether free space is below that. Null where the directory does not exist yet. Bytes are
+   * strings because the wire carries no bigint.
+   */
+  disk: z
+    .object({
+      freeBytes: z.string(),
+      totalBytes: z.string().nullable(),
+      requiredBytes: z.string(),
+      low: z.boolean(),
+    })
+    .nullable()
+    .optional(),
 });
 export type BackupStatusResponse = z.infer<typeof backupStatusResponseSchema>;
 
