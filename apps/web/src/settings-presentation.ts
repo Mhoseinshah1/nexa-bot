@@ -751,37 +751,19 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     title: 'web.setting_fx_source_tabdeal_enabled',
     description: 'web.setting_fx_source_tabdeal_enabled_desc',
     group: 'fx',
-    control: {
-      kind: 'select',
-      options: [
-        { value: 'true', label: 'web.backup_schedule_on' },
-        { value: 'false', label: 'web.backup_schedule_off' },
-      ],
-    },
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
   },
   'fx.source_bitpin_enabled': {
     title: 'web.setting_fx_source_bitpin_enabled',
     description: 'web.setting_fx_source_bitpin_enabled_desc',
     group: 'fx',
-    control: {
-      kind: 'select',
-      options: [
-        { value: 'true', label: 'web.backup_schedule_on' },
-        { value: 'false', label: 'web.backup_schedule_off' },
-      ],
-    },
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
   },
   'fx.source_ramzinex_enabled': {
     title: 'web.setting_fx_source_ramzinex_enabled',
     description: 'web.setting_fx_source_ramzinex_enabled_desc',
     group: 'fx',
-    control: {
-      kind: 'select',
-      options: [
-        { value: 'true', label: 'web.backup_schedule_on' },
-        { value: 'false', label: 'web.backup_schedule_off' },
-      ],
-    },
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
   },
   'fx.sanity_band_bps': {
     title: 'web.setting_fx_sanity_band_bps',
