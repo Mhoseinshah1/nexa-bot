@@ -9735,16 +9735,14 @@ export const TEMPLATES = [
       {
         token: 'cardNumber',
         type: 'STRING',
-        description:
-          'The payee card TonPays named for this attempt, exactly as it sent it.',
+        description: 'The payee card TonPays named for this attempt, exactly as it sent it.',
         required: true,
         repeatable: false,
       },
       {
         token: 'cardName',
         type: 'STRING',
-        description:
-          'The card holder’s name TonPays sent, when it sent one.',
+        description: 'The card holder’s name TonPays sent, when it sent one.',
         required: false,
         repeatable: false,
       },
@@ -10254,16 +10252,14 @@ export const TEMPLATES = [
       {
         token: 'cardNumber',
         type: 'STRING',
-        description:
-          'The payee card TonPays named for this attempt, exactly as it sent it.',
+        description: 'The payee card TonPays named for this attempt, exactly as it sent it.',
         required: true,
         repeatable: false,
       },
       {
         token: 'cardName',
         type: 'STRING',
-        description:
-          'The card holder’s name TonPays sent, when it sent one.',
+        description: 'The card holder’s name TonPays sent, when it sent one.',
         required: false,
         repeatable: false,
       },
@@ -10302,16 +10298,14 @@ export const TEMPLATES = [
       {
         token: 'cardNumber',
         type: 'STRING',
-        description:
-          'The payee card TonPays named for this attempt, exactly as it sent it.',
+        description: 'The payee card TonPays named for this attempt, exactly as it sent it.',
         required: true,
         repeatable: false,
       },
       {
         token: 'cardName',
         type: 'STRING',
-        description:
-          'The card holder’s name TonPays sent, when it sent one.',
+        description: 'The card holder’s name TonPays sent, when it sent one.',
         required: false,
         repeatable: false,
       },

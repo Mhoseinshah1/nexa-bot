@@ -1392,7 +1392,7 @@ export interface GatewaySiblingAttempt {
   readonly providerInvoiceId: string;
   readonly providerStatus: string | null;
   /** Whether a cancel has EVER been requested for it (any state): one is never repeated. */
-  readonly cancelRequested: boolean;
+  readonly latestCancelState: GatewayProviderRequestState | null;
   /** Whether a receipt for it is queued, sending or accepted: a receipt makes it `processing`. */
   readonly receiptSent: boolean;
 }
@@ -1469,6 +1469,12 @@ export interface GatewayProviderRequestRepository {
       readonly botInstanceId: string;
       readonly exceptPaymentId: PaymentId;
       readonly now: Date;
+      /**
+       * Include attempts inside the provider's review window (settlement deadline in the
+       * future) — the open-conflict lookup. Default false: the cancellable lookup, which is
+       * the customer window of a `pending` invoice only.
+       */
+      readonly includeReview?: boolean;
     },
     tx?: unknown,
   ): Promise<readonly GatewaySiblingAttempt[]>;

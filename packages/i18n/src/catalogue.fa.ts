@@ -1359,16 +1359,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '{icon:warning} تصویر ارسالی خالی بود و تون‌پی آن را نپذیرفت. لطفاً دوباره تصویر رسید واریز را بفرستید.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_receipt_invoice':
     '{icon:warning} تون‌پی رسید را برای این فاکتور نپذیرفت (شناسهٔ فاکتور مطابقت نداشت یا فاکتور مابقی پیدا نشد). وضعیت را بررسی کنید و اگر مشکل ادامه داشت با پشتیبانی تماس بگیرید.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
-  'bot.payment.gateway_cancel_button':
-    '❌ لغو فاکتور',
-  'bot.payment.gateway_cancel_confirm_button':
-    '✅ بله، لغو شود',
-  'bot.payment.gateway_remainder_receipt_button':
-    '📤 ارسال رسید مابقی',
-  'bot.payment.gateway_refund_card_button':
-    '💳 ثبت کارت بازگشت وجه',
-  'bot.payment.gateway_open_invoice_button':
-    '🧾 مشاهدهٔ فاکتور باز',
+  'bot.payment.gateway_cancel_button': '❌ لغو فاکتور',
+  'bot.payment.gateway_cancel_confirm_button': '✅ بله، لغو شود',
+  'bot.payment.gateway_remainder_receipt_button': '📤 ارسال رسید مابقی',
+  'bot.payment.gateway_refund_card_button': '💳 ثبت کارت بازگشت وجه',
+  'bot.payment.gateway_open_invoice_button': '🧾 مشاهدهٔ فاکتور باز',
   'bot.wallet.summary':
     '{icon:account} اطلاعات حساب کاربری شما:\n\n{icon:identity} شناسه کاربری: <code>{telegramId}</code>\n{icon:user} نام: {displayName}\n{icon:phone} شماره تماس: {phoneState}\n{icon:time} زمان ثبت‌نام: {registeredAt}\n{icon:wallet} موجودی: {balance}\n{icon:purchase} تعداد سرویس‌های خریداری‌شده: {serviceCount} عدد\n{icon:invoice} تعداد فاکتورهای پرداخت‌شده: {paidInvoiceCount} عدد\n{icon:referral} تعداد زیرمجموعه‌های شما: {referralCount} نفر\n{icon:group} گروه کاربری: {customerGroup}\n\n{icon:date} تاریخ: {nowDate}\n{icon:clock} ساعت: {nowTime}',
   'bot.wallet.phone_missing': '🔴 ارسال نشده است',

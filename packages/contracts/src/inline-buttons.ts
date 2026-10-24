@@ -205,7 +205,11 @@ export const INLINE_BUTTONS = [
   // card of an overpayment, and the way to an open invoice that blocked a new one.
   button('payment.gateway_cancel', 'PAYMENT', 'bot.payment.gateway_cancel_button'),
   button('payment.gateway_cancel_confirm', 'PAYMENT', 'bot.payment.gateway_cancel_confirm_button'),
-  button('payment.gateway_remainder_receipt', 'PAYMENT', 'bot.payment.gateway_remainder_receipt_button'),
+  button(
+    'payment.gateway_remainder_receipt',
+    'PAYMENT',
+    'bot.payment.gateway_remainder_receipt_button',
+  ),
   button('payment.gateway_refund_card', 'PAYMENT', 'bot.payment.gateway_refund_card_button'),
   button('payment.gateway_open_invoice', 'PAYMENT', 'bot.payment.gateway_open_invoice_button'),
   // R4 A1: «🔄 تغییر شماره کارت» on the card-to-card invoice — the NEXT enabled receiving

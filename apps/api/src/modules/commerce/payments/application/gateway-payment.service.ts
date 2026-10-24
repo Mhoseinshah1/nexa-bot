@@ -1259,7 +1259,7 @@ export class GatewayPaymentService {
           tx,
         ),
       );
-      return 'BUDGET';
+      return 'createDeferred';
     }
 
     if (!(await this.deps.budget.take(scope, invoice.provider, adapter.callBudgetPerMinute, now))) {
@@ -3676,6 +3676,8 @@ export class GatewayPaymentService {
           botInstanceId: invoice.botInstanceId,
           exceptPaymentId: invoice.paymentId,
           now: this.deps.clock.now(),
+          // The invoice that blocked the create may be inside its review window.
+          includeReview: true,
         });
         openElsewherePaymentId = siblings[0]?.paymentId ?? null;
       }

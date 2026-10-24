@@ -255,6 +255,7 @@ export class DrizzleGatewayProviderRequestRepository implements GatewayProviderR
       readonly botInstanceId: string;
       readonly exceptPaymentId: PaymentId;
       readonly now: Date;
+      readonly includeReview?: boolean;
     },
     tx?: unknown,
   ): Promise<readonly GatewaySiblingAttempt[]> {
@@ -284,8 +285,9 @@ export class DrizzleGatewayProviderRequestRepository implements GatewayProviderR
           eq(payments.customerId, input.customerId),
           eq(payments.method, 'GATEWAY'),
           eq(payments.state, 'PENDING'),
-          isNull(payments.providerReviewUntil),
-          sql`${payments.expiresAt} > ${input.now}`,
+          ...(input.includeReview === true
+            ? [sql`COALESCE(${payments.providerReviewUntil}, ${payments.expiresAt}) > ${input.now}`]
+            : [isNull(payments.providerReviewUntil), sql`${payments.expiresAt} > ${input.now}`]),
           ne(gatewayInvoices.paymentId, input.exceptPaymentId),
           sql`${gatewayInvoices.providerInvoiceId} IS NOT NULL`,
         ),
@@ -295,7 +297,7 @@ export class DrizzleGatewayProviderRequestRepository implements GatewayProviderR
     for (const row of rows) {
       if (row.providerInvoiceId === null || row.botInstanceId === null) continue;
       const [cancel] = await this.exec(tx)
-        .select({ id: gatewayProviderRequests.id })
+        .select({ state: gatewayProviderRequests.state })
         .from(gatewayProviderRequests)
         .where(
           and(
@@ -304,6 +306,7 @@ export class DrizzleGatewayProviderRequestRepository implements GatewayProviderR
             eq(gatewayProviderRequests.kind, 'CANCEL'),
           ),
         )
+        .orderBy(desc(gatewayProviderRequests.requestedAt), desc(gatewayProviderRequests.id))
         .limit(1);
       const [receipt] = await this.exec(tx)
         .select({ id: gatewayReceiptSubmissions.id })
@@ -322,7 +325,7 @@ export class DrizzleGatewayProviderRequestRepository implements GatewayProviderR
         customerId: row.customerId,
         providerInvoiceId: row.providerInvoiceId,
         providerStatus: row.providerStatus,
-        cancelRequested: cancel !== undefined,
+        latestCancelState: (cancel?.state as GatewayProviderRequestState | undefined) ?? null,
         receiptSent: receipt !== undefined,
       });
     }

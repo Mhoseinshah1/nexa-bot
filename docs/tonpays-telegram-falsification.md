@@ -182,29 +182,33 @@ owner's transcription of the provider's documentation.
 ## Round 6 (PR-3): remainder, refund, cancel
 
 Each row was reverted ALONE in the working tree (the file restored with `git checkout`
-afterwards) and only the named suites run. All twenty were killed. R6-16's rule is pinned by a
+afterwards) and only the named suites run. All were killed (R6-01..R6-20 and the four Codex fixes F-01..F-04). R6-16's rule is pinned by a
 case in `tonpays-telegram-gateway.test.ts`; the first run of the driver used only the new file
 and reported it surviving, which is why that row names the right suite.
 
-| Row   | Rule reverted                                                    | Killed by                                                 |
-| ----- | ---------------------------------------------------------------- | --------------------------------------------------------- |
-| R6-01 | `/refund` body gains an `amount`                                 | unit `tonpays-telegram-round6` (refund body)              |
-| R6-02 | `action_required_more` approves                                  | unit `tonpays-adapter`, `tonpays-telegram-round6`         |
-| R6-03 | the refund card mask shows the whole number                      | unit `tonpays-telegram-round6`                            |
-| R6-04 | cancel offered on any provider status                            | unit `tonpays-telegram-round6`, screen                    |
-| R6-05 | refund card offered without an overpayment                       | unit `tonpays-telegram-round6`                            |
-| R6-06 | `BUYER_HAS_PENDING_INVOICE` retried without limit                | unit `tonpays-telegram-round6`                            |
-| R6-07 | WebP no longer recognised by magic bytes                         | unit `tonpays-telegram-round6`                            |
-| R6-08 | a documented error code loses its Persian message                | unit `tonpays-telegram-round6`                            |
-| R6-09 | the remainder screen decided after the review test               | unit `tonpays-telegram-screen`                            |
-| R6-10 | the remainder card has no tap-to-copy button                     | unit `tonpays-telegram-screen`                            |
-| R6-11 | cancel offered with a receipt on its way                         | unit `tonpays-telegram-round6`, screen                    |
-| R6-12 | the send stamp keeps the sealed refund card                      | integration `tonpays-telegram-round6` (CHECK + wipe)      |
-| R6-13 | a stamped request found later is sent again                      | integration `tonpays-telegram-round6`                     |
-| R6-14 | no cancel of the old pending invoice before a new create         | integration `tonpays-telegram-round6`                     |
-| R6-15 | the remainder receipt goes to the original invoice id            | integration `tonpays-telegram-round6`                     |
-| R6-16 | an image document is refused again                               | integration `tonpays-telegram-gateway` (WebP or GIF case) |
-| R6-17 | an applied cancel leaves the local payment open                  | integration `tonpays-telegram-round6`                     |
-| R6-18 | a customer's own cancel notifies them their payment failed       | integration `tonpays-telegram-round6`                     |
-| R6-19 | rejection reasons not written into the failure's audit row       | integration `tonpays-telegram-round6`                     |
-| R6-20 | the wallet credited the fee-inclusive payable, not the principal | integration `tonpays-telegram-round6` (10% fee top-up)    |
+| Row   | Rule reverted                                                | Test that dies                                                                                      |
+| ----- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| R6-01 | `/refund` body gains an `amount`                             | `tonpays-telegram-round6.test.ts` › refund: exactly invoice_id, card_number and card_holder         |
+| R6-02 | `action_required_more` approves                              | `tonpays-adapter.test.ts` › maps every documented status                                            |
+| R6-03 | the refund card mask shows the whole number                  | `tonpays-telegram-round6.test.ts` › masks to the first six and last four digits                     |
+| R6-04 | cancel offered on any provider status                        | `tonpays-telegram-round6.test.ts` › cancel: only a pending invoice, once                            |
+| R6-05 | refund card offered without an overpayment                   | `tonpays-telegram-round6.test.ts` › refund card: only on an overpayment                             |
+| R6-06 | `BUYER_HAS_PENDING_INVOICE` retried without limit            | `tonpays-telegram-round6.test.ts` › a create refused with BUYER_HAS_PENDING_INVOICE is retried once |
+| R6-07 | WebP no longer recognised by magic bytes                     | `tonpays-telegram-round6.test.ts` › sniffs JPEG, PNG, WebP and GIF by magic bytes                   |
+| R6-08 | a documented error code loses its Persian message            | `tonpays-telegram-round6.test.ts` › maps each of the document                                       |
+| R6-09 | the remainder screen decided after the review test           | `tonpays-telegram-screen.test.ts` › action_required_less inside the provider                        |
+| R6-10 | the remainder card has no tap-to-copy button                 | `tonpays-telegram-screen.test.ts` › action_required_less: the remainder, its card and exact amount  |
+| R6-11 | cancel offered with a receipt on its way                     | `tonpays-telegram-round6.test.ts` › cancel: only a pending invoice, once                            |
+| R6-12 | the send stamp keeps the sealed refund card                  | `tonpays-telegram-round6.test.ts` › overpay: the refund card is collected                           |
+| R6-13 | a stamped request found later is sent again                  | `tonpays-telegram-round6.test.ts` › a cancel or a refund whose send was stamped                     |
+| R6-14 | no cancel of the old pending invoice before a new create     | `tonpays-telegram-round6.test.ts` › a new top-up while an own pending invoice exists                |
+| R6-15 | the remainder receipt goes to the original invoice id        | `tonpays-telegram-round6.test.ts` › underpay: the remainder receipt goes to the REMAINDER invoice   |
+| R6-16 | an image document is refused again                           | `tonpays-telegram-gateway.test.ts` › Round 6: a WebP or GIF sent as a document is queued            |
+| R6-17 | an applied cancel leaves the local payment open              | `tonpays-telegram-round6.test.ts` › cancel: ask, confirm                                            |
+| R6-18 | a customer cancel notifies them their payment failed         | `tonpays-telegram-round6.test.ts` › cancel: ask, confirm                                            |
+| R6-19 | rejection reasons not written into the failure audit row     | `tonpays-telegram-round6.test.ts` › reject_reasons: shown to the customer                           |
+| R6-20 | the wallet credited the fee-inclusive payable                | `tonpays-telegram-round6.test.ts` › with a 10% customer fee                                         |
+| F-01  | Codex P1: remainder state read from the original receipt     | `tonpays-telegram-screen.test.ts` › action_required_less: a receipt for the remainder on its way    |
+| F-02  | Codex P2: blocking-invoice lookup excludes the review window | `tonpays-telegram-round6.test.ts` › a blocking invoice inside its review window                     |
+| F-03  | Codex P2: an outstanding cancel no longer defers the create  | `tonpays-telegram-round6.test.ts` › a cancel still in flight keeps the create waiting               |
+| F-04  | Codex P2: a rate-limited cancel counted as done              | `tonpays-telegram-round6.test.ts` › a sibling is cancelled at most once                             |

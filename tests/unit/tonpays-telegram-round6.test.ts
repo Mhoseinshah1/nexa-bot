@@ -22,7 +22,10 @@ import {
   sniffReceiptImage,
 } from '../../apps/api/src/modules/commerce/payments/domain/tonpays-telegram';
 import { WIZARD_GATES } from '../../apps/api/src/surfaces/telegram/wizard-state';
-import { cancellable } from '../../apps/api/src/modules/commerce/payments/application/gateway-provider-request.lane';
+import {
+  cancelOutstanding,
+  cancellable,
+} from '../../apps/api/src/modules/commerce/payments/application/gateway-provider-request.lane';
 import type { GatewayProviderFacts } from '../../apps/api/src/modules/commerce/payments/application/gateway-invoice-ports';
 
 /**
@@ -458,12 +461,21 @@ describe('what the customer may do now', () => {
       customerId: 'c',
       providerInvoiceId: 'TP-1',
       providerStatus: 'pending' as string | null,
-      cancelRequested: false,
+      latestCancelState: null as GatewayProviderRequestState | null,
       receiptSent: false,
     };
     expect(cancellable(base)).toBe(true);
     expect(cancellable({ ...base, providerStatus: null })).toBe(true);
-    expect(cancellable({ ...base, cancelRequested: true })).toBe(false);
+    for (const state of ['REQUESTED', 'SENT', 'APPLIED', 'REFUSED', 'UNKNOWN'] as const) {
+      expect(cancellable({ ...base, latestCancelState: state }), state).toBe(false);
+    }
+    // The provider's own rate limit means "not processed": asked again.
+    expect(cancellable({ ...base, latestCancelState: 'RATE_LIMITED' })).toBe(true);
+    // A cancel still with the provider is the create's prerequisite.
+    expect(cancelOutstanding({ ...base, latestCancelState: 'REQUESTED' })).toBe(true);
+    expect(cancelOutstanding({ ...base, latestCancelState: 'SENT' })).toBe(true);
+    expect(cancelOutstanding({ ...base, latestCancelState: 'RATE_LIMITED' })).toBe(false);
+    expect(cancelOutstanding({ ...base, latestCancelState: null })).toBe(false);
     expect(cancellable({ ...base, receiptSent: true })).toBe(false);
     expect(cancellable({ ...base, providerStatus: 'processing' })).toBe(false);
     expect(cancellable({ ...base, providerStatus: 'action_required_more' })).toBe(false);

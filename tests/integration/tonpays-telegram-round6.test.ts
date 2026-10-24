@@ -697,6 +697,56 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     }
   });
 
+  it('a blocking invoice inside its review window is still the one shown, with its action', async () => {
+    const { paymentId: open, message } = await cardOnScreen();
+    // A receipt the provider acknowledged opens the review window; then it finds the shortfall.
+    await tapOn(message, `gr:${open}`);
+    await sendPhoto('rev-1');
+    await lane.runOnce(tenantA);
+    expect((await paymentOf(open)).provider_review_until).not.toBeNull();
+    fake.underpay(firstInvoice().invoiceId, 12_000);
+    await inquireNow();
+    const second = await topupIn(100_000n);
+    await lane.runOnce(tenantA);
+    await tapOn(null, `gc:${second.payment.id}`);
+    expect(markupOf(telegram.sent.at(-1))).toContain(`gc:${open}`);
+    expect(String(telegram.sent.at(-1)?.['text'])).toContain('کمتر واریز شده');
+  });
+
+  it('a pre-create cancel the provider rate-limited keeps the new create waiting, is asked again, and only then is the create sent', async () => {
+    await cardOnScreen();
+    fake.cancelMode = { code: 'RATE_LIMIT_EXCEEDED', status: 429 };
+    const second = await topupIn(100_000n);
+    await lane.runOnce(tenantA);
+    expect(fake.creates).toHaveLength(1);
+    const state = () =>
+      rows<{ creation_state: string }>(
+        sql`SELECT creation_state FROM gateway_invoices WHERE payment_id = ${second.payment.id}`,
+      );
+    expect(await state()).toEqual([{ creation_state: 'CREATING' }]);
+    fake.cancelMode = 'OK';
+    clock.shift(10_000);
+    await lane.runOnce(tenantA);
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+    expect(fake.creates).toHaveLength(2);
+    expect(await state()).toEqual([{ creation_state: 'CREATED' }]);
+  });
+
+  it('a cancel still in flight keeps the create waiting; the create is never sent past it', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    await tapOn(message, `gz:${paymentId}`);
+    const second = await topupIn(100_000n);
+    // Creations run before the request lane: the customer's own cancel is not yet sent.
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(1);
+    expect(fake.creates).toHaveLength(1);
+    const [row] = await rows<{ creation_state: string }>(
+      sql`SELECT creation_state FROM gateway_invoices WHERE payment_id = ${second.payment.id}`,
+    );
+    expect(row?.creation_state).toBe('CREATING');
+  });
+
   it('BUYER_HAS_PENDING_INVOICE: the customer’s own pending invoice is cancelled and the create retried ONCE, with the same order id', async () => {
     const { paymentId: first } = await cardOnScreen();
     // Race: the pre-create look finds no sibling; the provider then refuses the create.

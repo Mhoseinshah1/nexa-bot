@@ -393,6 +393,8 @@ export class GatewayProviderRequestLane {
       exceptPaymentId: invoice.paymentId,
       now: this.deps.clock.now(),
     });
+    // A cancel still with the provider (or on its way) is the create's prerequisite: wait for it.
+    if (siblings.some(cancelOutstanding)) return 'DEFER';
     for (const sibling of siblings) {
       if (!cancellable(sibling)) continue;
       const result = await this.cancelNow(scope, actor, sibling, invoice.paymentId, 'NEW_INVOICE');
@@ -458,7 +460,8 @@ export class GatewayProviderRequestLane {
           botInstanceId: sibling.botInstanceId,
           customerId: sibling.customerId,
           kind: 'CANCEL' satisfies GatewayProviderRequestKind,
-          idempotencyKey: `sibling-cancel:${sibling.paymentId}:${forPaymentId}`,
+          // A rate-limited cancel is asked again as a new row; the in-flight index keeps one.
+          idempotencyKey: `sibling-cancel:${id}`,
           now,
           claimedUntil: new Date(now.getTime() + this.deps.hooks.leaseMs()),
           refund: null,
@@ -493,8 +496,14 @@ export class GatewayProviderRequestLane {
 /** Whether Nexa may ask for this sibling's cancel: never asked, not receipt-bearing, `pending`. */
 export function cancellable(sibling: GatewaySiblingAttempt): boolean {
   return (
-    !sibling.cancelRequested &&
+    // Never asked, or asked and definitively NOT processed (the provider's own rate limit).
+    (sibling.latestCancelState === null || sibling.latestCancelState === 'RATE_LIMITED') &&
     !sibling.receiptSent &&
     (sibling.providerStatus === null || sibling.providerStatus === 'pending')
   );
+}
+
+/** A cancel row that is still with the provider or waiting to be sent. */
+export function cancelOutstanding(sibling: GatewaySiblingAttempt): boolean {
+  return sibling.latestCancelState === 'REQUESTED' || sibling.latestCancelState === 'SENT';
 }

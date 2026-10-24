@@ -17499,18 +17499,25 @@ function providerNeedScreen(
   const base = { expiresAt: deadline, reference };
   const tail = [cardCheck(payment.id), mainMenuButton()];
   const submissions = facts.submissions;
-  const newest = submissions.at(-1) ?? null;
   if (less) {
     const shortfall =
       provider?.remainingAmount == null
         ? {}
         : { shortfall: money(provider.remainingAmount, 'IRT') };
+    // Only a receipt aimed at the REMAINDER invoice says the remainder was paid: the original's
+    // accepted receipt is how the shortfall was found, not an answer to it.
+    const remainderNewest =
+      provider?.remainingInvoiceId == null
+        ? null
+        : (submissions
+            .filter((one) => one.providerInvoiceId === provider.remainingInvoiceId)
+            .at(-1) ?? null);
     const sending =
-      (newest !== null &&
-        (newest.state === 'QUEUED' ||
-          newest.state === 'SENDING' ||
-          newest.state === 'ACCEPTED' ||
-          (newest.state === 'UNKNOWN' && newest.inquiryResolvedAt === null))) ||
+      (remainderNewest !== null &&
+        (remainderNewest.state === 'QUEUED' ||
+          remainderNewest.state === 'SENDING' ||
+          remainderNewest.state === 'ACCEPTED' ||
+          (remainderNewest.state === 'UNKNOWN' && remainderNewest.inquiryResolvedAt === null))) ||
       provider?.remainingReceiptReceived === true;
     if (sending) {
       return {

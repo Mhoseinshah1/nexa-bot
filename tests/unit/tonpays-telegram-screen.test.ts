@@ -454,9 +454,20 @@ describe('the TonPays Telegram payment screen', () => {
     expect(
       screenOf(
         'action_required_less',
-        withFacts({ providerFacts: LESS, submissions: [submission('QUEUED')] }),
+        withFacts({
+          providerFacts: LESS,
+          submissions: [{ ...submission('QUEUED'), providerInvoiceId: 'TP-REM123XYZ0' }],
+        }),
       ).key,
     ).toBe('bot.payment.gateway_card_underpaid_receipt_sent');
+    // The ORIGINAL receipt (accepted: that is how the shortfall was found) is not the
+    // remainder's: the remainder's card and button stay.
+    const original = screenOf(
+      'action_required_less',
+      withFacts({ providerFacts: LESS, submissions: [submission('ACCEPTED')] }),
+    );
+    expect(original.key).toBe('bot.payment.gateway_card_underpaid');
+    expect(data(original)).toContain(`gr:${PAYMENT_ID}`);
     for (const missing of [
       provider({ ...LESS, remainingCardNumber: null }),
       provider({ ...LESS, remainingInvoiceId: null }),
