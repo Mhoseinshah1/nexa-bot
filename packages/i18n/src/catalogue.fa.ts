@@ -693,7 +693,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.refused':
     'این درخواست انجام نشد. دسترسی یا اطلاعات وارد‌شده اجازهٔ این کار را نمی‌دهد.',
   'bot.admin.receipt_awaiting':
-    'رسید تازه‌ای برای بررسی ثبت شد.\nکد پیگیری: {reference}\nمبلغ: {total}\nاز بخش «رسید های تایید نشده» در پنل مدیریت آن را بررسی کنید.',
+    'رسید تازه‌ای برای بررسی ثبت شد.\nکد پیگیری پرداخت: {reference}\nمبلغ: {total}\nاز بخش «رسید های تایید نشده» در پنل مدیریت آن را بررسی کنید.',
 
   'bot.wallet.balance': 'موجودی کیف پول شما: {balance}',
   'bot.wallet.insufficient': '{icon:warning} موجودی کیف پول کافی نیست. کمبود: {shortfall}',
@@ -760,18 +760,18 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * account afterwards does not change what this customer was told.
    */
   'bot.payment.transfer_instructions':
-    '{icon:invoice} جزئیات فاکتور پرداخت شما\n\nکد پیگیری پرداخت: {reference}\nمبلغ بدون کارمزد: {principal}\nکارمزد: {fee}\nمبلغ قابل پرداخت: {total}\n{destination}\n\nپس از واریز، دکمهٔ پایین را بزنید و تصویر رسید را ارسال کنید. پرداخت شما پس از بررسی پشتیبانی تأیید می‌شود.',
+    '{icon:invoice} فاکتور کارت‌به‌کارت\nمبلغ قابل واریز:\n<b>{amountRial} ریال</b>\n(معادل {amountToman} تومان)\n{icon:warning} دقیقاً همین مبلغ را واریز کنید، سپس تصویر رسید را ارسال کنید؛ پرداخت شما پس از بررسی رسید تأیید می‌شود.\n{destination}\n{icon:time} مهلت واریز: ساعت {expiresTime}\nکد پیگیری پرداخت: {reference}',
   'bot.payment.destination.bank': 'بانک: {value}',
-  'bot.payment.destination.holder': 'به نام: {value}',
-  'bot.payment.destination.card': 'شماره کارت: {value}',
+  'bot.payment.destination.holder': '{icon:user} {value}',
+  'bot.payment.destination.card': '{icon:payment} کارت مقصد:\n{value}',
   'bot.payment.destination.sheba': 'شبا: {value}',
-  'bot.payment.copy_card_button': '📋 کپی شماره کارت',
+  'bot.payment.copy_card_button': '💳 کپی شماره کارت',
   // R4 A1: rotate the receiving card on the same invoice.
-  'bot.payment.switch_card_button': '🔄 تغییر شماره کارت',
+  'bot.payment.switch_card_button': '🔄 تعویض کارت',
   'bot.payment.switch_card_cooldown': 'لطفاً {seconds} ثانیه دیگر دوباره امتحان کنید',
   'bot.payment.switch_card_refused': 'امکان تغییر کارت دیگری برای این پرداخت وجود ندارد',
   'bot.payment.copy_amount_button': '💵 کپی مبلغ',
-  'bot.payment.copy_transfer_amount_button': '📋 کپی مبلغ دقیق',
+  'bot.payment.copy_transfer_amount_button': '📋 کپی مبلغ (ریال)',
   'bot.payment.wallet_button': '💰 پرداخت از کیف پول',
   'bot.payment.manual_button': '🧾 ثبت پرداخت',
   /*
@@ -791,7 +791,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * would be two ways to reach one action — and a customer who pressed only the first
    * would have a window open and no idea it was there.
    */
-  'bot.payment.sent_button': '📤 ارسال رسید واریز',
+  'bot.payment.sent_button': '📤 ارسال رسید',
   /*
    * Whose claim this repeats is the whole of the wording.
    *
@@ -829,7 +829,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'برای این پرداخت {limit} رسید ثبت شده است و بیش از این پذیرفته نمی‌شود. همین رسیدها بررسی می‌شوند.',
   'bot.payment.window_too_short':
     'مهلت این سفارش برای پرداخت کارت به کارت کافی نیست. لطفاً دوباره سفارش دهید.',
-  'bot.payment.cancel_button': 'انصراف از پرداخت',
+  'bot.payment.cancel_button': '❌ لغو فاکتور',
   'bot.payment.cancel_confirm':
     'آیا از انصراف این پرداخت مطمئن هستید؟ کد پیگیری فعلی باطل می‌شود و اگر پس از آن مبلغی واریز کنید، قابل پیگیری نخواهد بود. این کار برگشت‌پذیر نیست.\n\nکد پیگیری پرداخت: {reference}',
   /* FIX-02: appended to an old tenant override of an invoice that lacks {reference}. */
@@ -1282,13 +1282,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_closed':
     'این فاکتور دیگر قابل پرداخت نیست (مهلت آن تمام شده یا بسته شده است). برای پرداخت می‌توانید دوباره اقدام کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_invoice':
-    '{icon:invoice} فاکتور پرداخت کارت‌به‌کارت تون‌پی\n\n{icon:amount} مبلغ بدون کارمزد: {principal}\n{icon:payment} کارمزد درگاه: {fee}\n{icon:amount} مبلغ قابل پرداخت: {payable}\n🔢 مبلغ دقیق واریز (با یک لمس کپی می‌شود): <code>{transferAmount}</code> تومان\nتأیید خودکار فقط با واریز همین مبلغ دقیق انجام می‌شود.\n\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nمبلغ دقیق را به این کارت واریز کنید و سپس با دکمهٔ «📤 ارسال رسید» تصویر رسید را بفرستید. پرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
+    '{icon:invoice} فاکتور کارت‌به‌کارت تون‌پی\nمبلغ قابل واریز:\n<b>{amountRial} ریال</b>\n(معادل {amountToman} تومان)\n{icon:warning} این مبلغ مخصوص پرداخت شماست؛ دقیقاً همین را واریز کنید تا خودکار تأیید شود.\n{icon:payment} کارت مقصد:\n{cardGrouped}\n{icon:user} {cardName}\n{icon:time} مهلت واریز: ساعت {expiresTime}\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_receipt_sent':
-    '📤 رسید واریز شما برای تون‌پی ارسال شده و در انتظار پاسخ است.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n🔢 مبلغ دقیق واریز: <code>{transferAmount}</code> تومان\n{icon:time} مهلت: {expiresAt}\n\nپرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود. برای دیدن آخرین وضعیت، دکمهٔ «🔎 بررسی وضعیت» را بزنید.\n\nکد پیگیری پرداخت: {reference}',
+    '📤 رسید واریز شما برای تون‌پی ارسال شده و در انتظار پاسخ است.\n\nمبلغ قابل واریز:\n<b>{amountRial} ریال</b>\n(معادل {amountToman} تومان)\n{icon:time} مهلت: ساعت {expiresTime}\n\nپرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود و نتیجه در همین پیام نمایش داده می‌شود.\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_receipt_refused':
-    '{icon:warning} تون‌پی آخرین تصویر را به‌عنوان رسید نپذیرفت یا ارسال آن ممکن نشد. لطفاً تصویر واضح رسید واریز را دوباره بفرستید.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n🔢 مبلغ دقیق واریز: <code>{transferAmount}</code> تومان\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
+    '{icon:warning} تون‌پی آخرین تصویر را به‌عنوان رسید نپذیرفت یا ارسال آن ممکن نشد. لطفاً تصویر واضح رسید واریز را دوباره بفرستید.\n\nمبلغ قابل واریز:\n<b>{amountRial} ریال</b>\n(معادل {amountToman} تومان)\n{icon:payment} کارت مقصد:\n{cardGrouped}\n{icon:user} {cardName}\n{icon:time} مهلت واریز: ساعت {expiresTime}\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_changing':
-    '🔄 درخواست کارت جدید برای تون‌پی ارسال شد. کارت جدید به‌محض آماده شدن در همین پیام نمایش داده می‌شود.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n🔢 مبلغ دقیق واریز فعلی: <code>{transferAmount}</code> تومان\nاگر با کارت جدید مبلغ دقیق تغییر کند، همین‌جا به‌روز می‌شود؛ پیش از واریز دوباره آن را ببینید.\n{icon:time} مهلت: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
+    '🔄 درخواست کارت جدید برای تون‌پی ارسال شد. کارت جدید به‌محض آماده شدن در همین پیام نمایش داده می‌شود.\n\nمبلغ قابل واریز فعلی:\n<b>{amountRial} ریال</b>\n(معادل {amountToman} تومان)\nاگر با کارت جدید مبلغ تغییر کند، همین‌جا به‌روز می‌شود؛ پیش از واریز دوباره آن را ببینید.\n{icon:time} مهلت: ساعت {expiresTime}\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_unconfirmed':
     'پاسخ تون‌پی برای تعویض کارت دریافت نشد، بنابراین شمارهٔ کارتی نمایش داده نمی‌شود.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت: {expiresAt}\n\nاگر پیش‌تر واریز کرده‌اید، تصویر رسید آن را بفرستید؛ در غیر این صورت وضعیت را بررسی کنید یا پس از یک دقیقه دوباره کارت جدید بخواهید. از این پرداخت مبلغی ثبت نشده است.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_missing':
@@ -1363,9 +1363,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_card_rejected':
     '{icon:error} تون‌پی این پرداخت را نپذیرفت و مبلغی ثبت نشد.\n\nدلیل:\n{reasons}\n\nبرای پرداخت می‌توانید دوباره اقدام کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_receipt_empty':
-    '{icon:warning} تصویر ارسالی خالی بود و تون‌پی آن را نپذیرفت. لطفاً دوباره تصویر رسید واریز را بفرستید.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
+    '{icon:warning} تصویر ارسالی خالی بود و تون‌پی آن را نپذیرفت. لطفاً دوباره تصویر رسید واریز را بفرستید.\n\nمبلغ قابل واریز: {amountRial} ریال\n(معادل {amountToman} تومان)\n{icon:payment} کارت مقصد:\n{cardGrouped}\n{icon:user} {cardName}\n{icon:time} مهلت واریز: ساعت {expiresTime}\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_receipt_invoice':
-    '{icon:warning} تون‌پی رسید را برای این فاکتور نپذیرفت (شناسهٔ فاکتور مطابقت نداشت یا فاکتور مابقی پیدا نشد). وضعیت را بررسی کنید و اگر مشکل ادامه داشت با پشتیبانی تماس بگیرید.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
+    '{icon:warning} تون‌پی رسید را برای این فاکتور نپذیرفت (شناسهٔ فاکتور مطابقت نداشت یا فاکتور مابقی پیدا نشد). اگر مشکل ادامه داشت با پشتیبانی تماس بگیرید.\n\nمبلغ قابل واریز: {amountRial} ریال\n(معادل {amountToman} تومان)\n{icon:payment} کارت مقصد:\n{cardGrouped}\n{icon:user} {cardName}\n{icon:time} مهلت واریز: ساعت {expiresTime}\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_cancel_button': '❌ لغو فاکتور',
   'bot.payment.gateway_cancel_confirm_button': '✅ بله، لغو شود',
   'bot.payment.gateway_remainder_receipt_button': '📤 ارسال رسید مابقی',

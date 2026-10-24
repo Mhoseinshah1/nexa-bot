@@ -317,8 +317,9 @@ describe('part 2 pins (brief §C3, §C4, §C5)', () => {
     ] as const) {
       expect(body(key), key).not.toContain('{icon:wallet}');
     }
-    // One key serves an order and a top-up here, so the principal is named for what it is.
-    expect(body('bot.payment.gateway_card_invoice')).toContain('مبلغ بدون کارمزد: {principal}');
+    // R8 A2 (owner-approved layout): the card invoice draws no principal line at all — one
+    // amount, the exact transfer in rial — so it names neither an order nor a top-up.
+    expect(body('bot.payment.gateway_card_invoice')).not.toContain('{principal}');
     expect(body('bot.payment.gateway_card_invoice')).not.toContain('مبلغ اصلی');
   });
 
@@ -327,8 +328,11 @@ describe('part 2 pins (brief §C3, §C4, §C5)', () => {
     // (payment.orderId === null) alike, so neither the cart nor the wallet icon is true of
     // both; the order-only and top-up-only keys keep theirs.
     const text = body('bot.payment.gateway_card_invoice');
-    expect(text).toContain('{icon:amount} مبلغ بدون کارمزد: {principal}');
+    // R8 A2: no principal line, so no icon beside one — and never the fee word.
+    expect(text).not.toContain('{principal}');
+    expect(text).not.toContain('کارمزد');
     expect(text).not.toContain('{icon:purchase}');
+    expect(text).not.toContain('{icon:wallet}');
   });
 
   it('Codex P2: switching off promises nothing about a deadline an unlimited service lacks', () => {

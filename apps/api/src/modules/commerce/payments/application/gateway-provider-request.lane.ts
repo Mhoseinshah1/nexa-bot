@@ -13,6 +13,11 @@ import {
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { gatewaySettlementDeadline } from '../domain/settlement.js';
+import {
+  CANCELLED_BY_CUSTOMER_STATUS,
+  CANCELLED_BY_NEXA_STATUS,
+} from '../domain/payment-failure-outcome.js';
+import { NEXA_CANCEL_KEY_PREFIX } from './gateway-invoice-ports.js';
 import type {
   CardTransferGatewayAdapter,
   ClaimedProviderRequest,
@@ -305,7 +310,7 @@ export class GatewayProviderRequestLane {
     switch (outcome.kind) {
       case 'CANCELLED':
         await decide('APPLIED', null);
-        await this.cancelled(scope, actor, invoice, at);
+        await this.cancelled(scope, actor, invoice, at, request.requestedByNexa === true);
         return 'DONE';
       case 'ACCEPTED':
         // The invoice is read again: the refund is the provider's, the approval still is not ours.
@@ -346,10 +351,14 @@ export class GatewayProviderRequestLane {
     actor: ActorContext,
     invoice: GatewayInvoiceRecord,
     at: Date,
+    byNexa: boolean,
   ): Promise<void> {
     try {
       await this.deps.payments.failGatewayPayment(scope, actor, invoice.paymentId, {
-        reasonCode: `${invoice.provider.toLowerCase()}:canceled_by_customer`,
+        // R8 A3: who cancelled is in the note, so the operations log can say so.
+        reasonCode: `${invoice.provider.toLowerCase()}:${
+          byNexa ? CANCELLED_BY_NEXA_STATUS : CANCELLED_BY_CUSTOMER_STATUS
+        }`,
         notifyCustomer: false,
       });
       await this.deps.invoices.recordOutcome(scope, invoice.paymentId, 'UNSUCCESSFUL', at);
@@ -461,7 +470,7 @@ export class GatewayProviderRequestLane {
           customerId: sibling.customerId,
           kind: 'CANCEL' satisfies GatewayProviderRequestKind,
           // A rate-limited cancel is asked again as a new row; the in-flight index keeps one.
-          idempotencyKey: `sibling-cancel:${id}`,
+          idempotencyKey: `${NEXA_CANCEL_KEY_PREFIX}${id}`,
           now,
           claimedUntil: new Date(now.getTime() + this.deps.hooks.leaseMs()),
           refund: null,

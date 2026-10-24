@@ -181,7 +181,8 @@ export const INLINE_BUTTONS = [
   button('payment.route_gift', 'PAYMENT', 'bot.wallet.topup_method_gift_button'),
   button('payment.copy_card', 'PAYMENT', 'bot.payment.copy_card_button', 'COPY'),
   button('payment.copy_amount', 'PAYMENT', 'bot.payment.copy_amount_button', 'COPY'),
-  // R6 item 2: «📋 کپی مبلغ دقیق» on a TonPays card invoice — the exact odd amount, bare digits.
+  // R6 item 2: on a TonPays card invoice — the exact odd amount, bare digits. R8 A2: «📋 کپی مبلغ
+  // (ریال)», RIAL digits, on the manual card-to-card invoice too.
   button(
     'payment.copy_transfer_amount',
     'PAYMENT',

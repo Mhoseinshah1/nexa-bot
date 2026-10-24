@@ -343,6 +343,41 @@ describe('payment timeline', () => {
     );
   });
 
+  it('R8 A6: the gateway’s rejection reasons and a late wallet credit are each their own item', async () => {
+    const payment = await manualPayment('a6');
+    // The audit row `GatewayPaymentService` writes when the gateway's reasons first appear.
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO audit_logs (id, tenant_id, actor_type, actor_id, action, entity_type, entity_id,
+                              before, after, result, occurred_at, correlation_id, source_surface)
+      VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, 'SYSTEM_JOB', NULL,
+              'gateway_invoice.provider_rejection_reasons', 'Payment', ${payment.id}, NULL,
+              ${JSON.stringify({ providerStatus: 'rejected', reasons: ['low_balance', 'رسید ناخوانا'] })}::jsonb,
+              'SUCCESS', now(), 'r8-a6', 'WORKER')`);
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO wallet_entries (id, tenant_id, customer_id, direction, reason, amount, currency,
+                                  reference, payment_id, created_at)
+      SELECT ${ctx.container.ids.uuid()}, tenant_id, customer_id, 'CREDIT', 'GATEWAY_LATE_CREDIT',
+             amount, currency, ${`late-${String(payment.id)}`}, id, now()
+        FROM payments WHERE id = ${payment.id}`);
+
+    const view = await timeline(owner, payment.id);
+    expect(view.entries.filter((e) => e.kind === 'GATEWAY_REJECT_REASONS')).toEqual([
+      expect.objectContaining({
+        providerStatus: 'rejected',
+        reasons: ['low_balance'],
+        withheldCount: 1,
+      }),
+    ]);
+    expect(view.entries.filter((e) => e.kind === 'GATEWAY_LATE_CREDITED')).toHaveLength(1);
+    expect(
+      view.entries.some((e) => e.kind === 'WALLET_ENTRY' && e.reason === 'GATEWAY_LATE_CREDIT'),
+    ).toBe(false);
+    // The reasons are a payments.view fact; the late credit stays behind users.view.
+    const narrow = await timeline(reviewer, payment.id);
+    expect(narrow.entries.some((e) => e.kind === 'GATEWAY_REJECT_REASONS')).toBe(true);
+    expect(narrow.entries.some((e) => e.kind === 'GATEWAY_LATE_CREDITED')).toBe(false);
+  });
+
   it("finds an old payment's movements through its own index, not the customer's later ledger (Codex review of #81)", async () => {
     const payment = await walletPayment('indexed');
     /*

@@ -479,7 +479,10 @@ import { ReceiptService } from './modules/commerce/payments/application/receipt.
 import { TelegramReceiptFiles } from './modules/commerce/payments/infrastructure/telegram-receipt-files.js';
 import { PaymentService } from './modules/commerce/payments/application/payment.service.js';
 import { CardSwitchService } from './modules/commerce/payments/application/card-switch.service.js';
-import { CustomerFactNoticeConsumer } from './modules/commerce/messaging/application/customer-fact-notice.consumer.js';
+import {
+  CustomerFactNoticeConsumer,
+  WALLET_ADMIN_NOTICE,
+} from './modules/commerce/messaging/application/customer-fact-notice.consumer.js';
 import { RefundService } from './modules/commerce/payments/application/refund.service.js';
 import { ServiceRefundRequestService } from './modules/commerce/payments/application/service-refund-request.service.js';
 import { ServiceRefundDecisionService } from './modules/commerce/payments/application/service-refund-decision.service.js';
@@ -2092,6 +2095,8 @@ export function createContainer(
         facts: opsLogFacts,
         words: i18nOpsLogWords,
         refundRequests: new DrizzleServiceRefundRequestRepository(database.db),
+        // R8 A3: who cancelled an invoice, and the gateway's reasons for a rejected receipt.
+        providerRequests: new DrizzleGatewayProviderRequestRepository(database.db),
       }),
       /*
        * WP-A7: a new ticket or a customer's reply → a support notification in the operator
@@ -2105,7 +2110,18 @@ export function createContainer(
        * work. Imports are excluded twice: by the events they do not emit, and by the
        * provenance each consumer checks.
        */
-      new LedgerLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
+      new LedgerLogConsumer({
+        lane: opsLogLane,
+        facts: opsLogFacts,
+        words: i18nOpsLogWords,
+        // R8 A4: the same switch `CustomerFactNoticeConsumer` reads for the customer's message.
+        customerNotified: (scope, reason, tx) => {
+          const notice = WALLET_ADMIN_NOTICE[reason];
+          return notice === undefined
+            ? Promise.resolve(false)
+            : featureFlagResolver.isEnabled(scope, notice.flag, tx);
+        },
+      }),
       new CustomerLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
       new ServiceLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
       new AdminLogConsumer({ lane: opsLogLane, facts: opsLogFacts, words: i18nOpsLogWords }),
@@ -3629,6 +3645,8 @@ export function createContainer(
     credentials: gatewayCredentialStore,
     // TonPays Telegram: the card-change and receipt lanes, and the window sweep.
     cardTransfer: gatewayCardTransferRepository,
+    // R8 A2: the owner's card-switch limits, for the card-change button.
+    cardSwitchSettings: settingsResolver,
     providerRequests: gatewayProviderRequestRepository,
     refundCards: refundCardSealer,
     cardAdapters: cardTransferAdapters,
@@ -3719,6 +3737,7 @@ export function createContainer(
     cardTransfer: gatewayCardTransferRepository,
     providerRequests: gatewayProviderRequestRepository,
     refundCards: refundCardSealer,
+    settings: settingsResolver,
   });
   const starsPayments = new StarsPaymentService({
     invoices: gatewayInvoiceRepository,

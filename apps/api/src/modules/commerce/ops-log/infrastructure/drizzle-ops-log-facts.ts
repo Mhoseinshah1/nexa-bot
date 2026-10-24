@@ -7,6 +7,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { balanceInCommitOrder } from '../../wallet/infrastructure/balance-in-commit-order.js';
 import type {
+  MassCreditFact,
   AdminFact,
   BalanceAround,
   CustomerFact,
@@ -83,6 +84,45 @@ export class DrizzleOpsLogFacts implements OpsLogFacts {
       source: String(row['source']),
       status: String(row['status']),
       blockedReason: str(row['blocked_reason']),
+    };
+  }
+
+  async massCredit(
+    scope: TenantContext,
+    operationId: string,
+    tx: TransactionScope,
+  ): Promise<MassCreditFact | null> {
+    const tenantId = requireTenantId(scope);
+    // The total is the ledger's: the MASS_CREDIT entries the operation's items point at.
+    const [row] = await this.rows(
+      tx,
+      sql`SELECT o.id, o.amount_minor::text AS amount, o.currency, o.note, o.notify,
+                 o.created_by_admin_id,
+                 count(i.id) FILTER (WHERE i.state = 'CREDITED')::int AS credited,
+                 count(i.id) FILTER (WHERE i.state = 'SKIPPED')::int AS skipped,
+                 COALESCE(SUM(w.amount) FILTER (WHERE w.reason = 'MASS_CREDIT'
+                                                 AND w.direction = 'CREDIT'), 0)::text AS total
+            FROM bulk_operations o
+            LEFT JOIN bulk_operation_items i
+              ON i.tenant_id = o.tenant_id AND i.bulk_operation_id = o.id
+            LEFT JOIN wallet_entries w
+              ON w.tenant_id = i.tenant_id AND w.id = i.wallet_entry_id
+           WHERE o.tenant_id = ${tenantId} AND o.id = ${operationId} AND o.kind = 'WALLET_CREDIT'
+           GROUP BY o.id`,
+    );
+    if (row === undefined || row['amount'] === null || row['currency'] === null) return null;
+    const credited = Number(row['credited']);
+    if (credited === 0) return null;
+    const currency = String(row['currency']) as CurrencyCode;
+    return {
+      id: String(row['id']),
+      amount: money(big(row['amount']), currency),
+      note: String(row['note']),
+      notify: row['notify'] === true,
+      createdByAdminId: String(row['created_by_admin_id']),
+      credited,
+      skipped: Number(row['skipped']),
+      total: money(big(row['total']), currency),
     };
   }
 

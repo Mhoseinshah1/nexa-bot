@@ -4,6 +4,7 @@ import type {
   TemplateKey,
   TemplateValues,
 } from '@nexa/contracts';
+import { groupedCardNumber } from '../domain/card-number.js';
 
 /**
  * The tenant's rendered text for one key. `TemplateResolver.render`'s signature exactly.
@@ -33,7 +34,8 @@ const LINES: readonly {
   readonly key: TemplateKey;
   readonly of: (snapshot: PaymentDestinationSnapshot) => string | null;
 }[] = [
-  { key: 'bot.payment.destination.card', of: (s) => s.cardNumber },
+  // R8 A2: shown four by four; the copy button carries the bare digits.
+  { key: 'bot.payment.destination.card', of: (s) => groupedCardNumber(s.cardNumber) },
   { key: 'bot.payment.destination.holder', of: (s) => s.holderName },
   { key: 'bot.payment.destination.bank', of: (s) => s.bankName },
   { key: 'bot.payment.destination.sheba', of: (s) => s.iban },

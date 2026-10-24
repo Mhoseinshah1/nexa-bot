@@ -209,3 +209,78 @@ describe('assemblePaymentTimeline', () => {
     });
   });
 });
+
+describe('R8 A6: the gateway’s rejection reasons and a late wallet credit, each its own item', () => {
+  it('a GATEWAY_LATE_CREDIT entry is a GATEWAY_LATE_CREDITED item, not a plain wallet entry', () => {
+    const { entries } = assemblePaymentTimeline(
+      facts({
+        walletEntries: [
+          {
+            id: 'w-late',
+            direction: 'CREDIT',
+            reason: 'GATEWAY_LATE_CREDIT',
+            amountMinor: 180_000n,
+            currency: 'IRT',
+            createdAt: at(10),
+          },
+          {
+            id: 'w-topup',
+            direction: 'CREDIT',
+            reason: 'TOPUP_GATEWAY',
+            amountMinor: 5_000n,
+            currency: 'IRT',
+            createdAt: at(5),
+          },
+        ],
+      }),
+    );
+    const late = entries.filter((one) => one.kind === 'GATEWAY_LATE_CREDITED');
+    expect(late).toEqual([
+      {
+        kind: 'GATEWAY_LATE_CREDITED',
+        at: at(10).toISOString(),
+        entryId: 'w-late',
+        amountMinor: '180000',
+        currency: 'IRT',
+      },
+    ]);
+    // Every other movement stays a wallet entry.
+    expect(entries.filter((one) => one.kind === 'WALLET_ENTRY').map((one) => one.entryId)).toEqual([
+      'w-topup',
+    ]);
+  });
+
+  it('reject reasons carry tokens only and COUNT the prose ones, once per recorded change', () => {
+    const { entries } = assemblePaymentTimeline(
+      facts({
+        rejectReasons: [
+          {
+            id: 'a-1',
+            at: at(20),
+            providerStatus: 'rejected',
+            reasons: ['low_balance', 'مبلغ رسید با فاکتور برابر نیست', 'RECEIPT_UNREADABLE'],
+          },
+          { id: 'a-2', at: at(30), providerStatus: null, reasons: ['نام صاحب کارت'] },
+        ],
+      }),
+    );
+    expect(entries.filter((one) => one.kind === 'GATEWAY_REJECT_REASONS')).toEqual([
+      {
+        kind: 'GATEWAY_REJECT_REASONS',
+        at: at(20).toISOString(),
+        providerStatus: 'rejected',
+        reasons: ['low_balance', 'RECEIPT_UNREADABLE'],
+        withheldCount: 1,
+      },
+      {
+        kind: 'GATEWAY_REJECT_REASONS',
+        at: at(30).toISOString(),
+        providerStatus: null,
+        reasons: [],
+        withheldCount: 1,
+      },
+    ]);
+    // No free text anywhere in the timeline.
+    expect(JSON.stringify(entries)).not.toMatch(/[؀-ۿ]/u);
+  });
+});

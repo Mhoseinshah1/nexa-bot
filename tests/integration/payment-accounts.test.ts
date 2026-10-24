@@ -552,8 +552,9 @@ describe('payment accounts and the destination a payment freezes', () => {
         iban: SHEBA,
         label: 'ملی',
       });
-      expect(withSheba.split('\n')).toHaveLength(4);
-      expect(withSheba).toContain(CARD_ONE);
+      // R8 A2: the card line is two lines (its heading, then the card four by four).
+      expect(withSheba.split('\n')).toHaveLength(5);
+      expect(withSheba).toContain('6037 9912 3456 7893');
       expect(withSheba).toContain(SHEBA);
 
       const withoutSheba = await renderer.render(tenantA, {
@@ -563,9 +564,10 @@ describe('payment accounts and the destination a payment freezes', () => {
         iban: null,
         label: 'ملی',
       });
-      expect(withoutSheba.split('\n')).toHaveLength(3);
-      // The failure this whole composition exists to prevent.
-      expect(withoutSheba).not.toContain('{');
+      expect(withoutSheba.split('\n')).toHaveLength(4);
+      // The failure this whole composition exists to prevent: a literal {token}. (An icon
+      // marker such as {icon:payment} is drawn at send time, like every body's.)
+      expect(withoutSheba).not.toMatch(/\{[A-Za-z_][A-Za-z0-9_]*\}/u);
       expect(withoutSheba).not.toContain('شبا');
     });
 

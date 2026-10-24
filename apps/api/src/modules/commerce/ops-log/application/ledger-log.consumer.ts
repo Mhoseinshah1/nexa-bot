@@ -7,7 +7,13 @@ import {
 import type { EventConsumer } from '../../../platform/eventing/application/event-consumer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { isAdminActor, publish, scopeOf } from './publish.js';
-import { referralCommission, signupGift, walletAdjusted, type Built } from './presenters.js';
+import {
+  massCredited,
+  referralCommission,
+  signupGift,
+  walletAdjusted,
+  type Built,
+} from './presenters.js';
 import type { LedgerEntryFact, OpsLogFacts, OpsLogLane, OpsLogWords } from './ports.js';
 
 const SIGNUP_GIFT_REFERENCE = /^([0-9a-f-]{36}):signup-gift:(REFEREE|REFERRER)$/;
@@ -25,24 +31,52 @@ const SIGNUP_GIFT_REFERENCE = /^([0-9a-f-]{36}):signup-gift:(REFEREE|REFERRER)$/
  * the unchanged number the previous bot printed.
  *
  * Every other reason is ignored — a purchase has its own message, an opening balance
- * written by the import has none at all. A customer the import wrote is never logged: a
- * migration that mints a hundred thousand rows must not post a hundred thousand lines.
+ * written by the import has none at all. A customer the import wrote is never logged for a
+ * commission or a gift: a migration that mints a hundred thousand rows must not post a hundred
+ * thousand lines.
+ *
+ * R8 A4: an ADMINISTRATOR's adjustment is logged whoever the customer is. Only
+ * `WalletService.adjust` writes `ADMIN_CREDIT`/`ADMIN_DEBIT` — the import writes
+ * `MIGRATION_OPENING_BALANCE` — so the entry is always an operator's act made after the
+ * import, and an installation migrated from the previous bot (every customer imported) had
+ * its every adjustment silently missing from the group. The message also says whether the
+ * customer is told (the owner's two switches, read when the event is handled — the same
+ * read `CustomerFactNoticeConsumer` makes) and carries «تراکنش» beside «پروفایل کاربر».
+ *
+ * A mass credit (`BulkOperationStateChanged` to COMPLETED or CANCELLED, kind WALLET_CREDIT)
+ * is ONE summary message per operation, from the ledger entries its items name.
  */
 export class LedgerLogConsumer implements EventConsumer {
   readonly name = 'ops-log.ledger';
-  readonly subscribesTo: readonly EventType[] = ['WalletEntryRecorded'];
+  readonly subscribesTo: readonly EventType[] = [
+    'WalletEntryRecorded',
+    'BulkOperationStateChanged',
+  ];
 
   constructor(
     private readonly deps: {
       readonly lane: OpsLogLane;
       readonly facts: OpsLogFacts;
       readonly words: OpsLogWords;
+      /**
+       * R8 A4: whether an administrator's adjustment of this reason is told to the customer
+       * (the `wallet_admin_*_notice` switch). Absent: the line is left out, never guessed.
+       */
+      readonly customerNotified?: (
+        scope: TenantContext,
+        reason: 'ADMIN_CREDIT' | 'ADMIN_DEBIT',
+        tx: TransactionScope,
+      ) => Promise<boolean>;
     },
   ) {}
 
   async handle(event: DomainEvent, tx: TransactionScope): Promise<void> {
     const scope = scopeOf(event);
     if (scope === null) return;
+    if (event.eventType === 'BulkOperationStateChanged') {
+      await this.massCredit(scope, event, tx);
+      return;
+    }
     const payload = EVENT_PAYLOAD_SCHEMAS.WalletEntryRecorded.parse(event.payload);
     // Cheap exit before any read: most wallet movements are none of these three.
     if (
@@ -79,8 +113,9 @@ export class LedgerLogConsumer implements EventConsumer {
     at: Date,
     tx: TransactionScope,
   ): Promise<Built | null> {
+    // Imported customers included (see the class comment): only an operator writes this reason.
     const customer = await this.deps.facts.customer(scope, entry.customerId, tx);
-    if (customer === null || customer.source !== 'NEXA') return null;
+    if (customer === null) return null;
     const balance = await this.deps.facts.balanceAround(
       scope,
       entry.customerId,
@@ -91,7 +126,47 @@ export class LedgerLogConsumer implements EventConsumer {
     if (balance === null) return null;
     const adminId = entry.actorAdminId ?? (isAdminActor(event.actor.type) ? event.actor.id : null);
     const admin = adminId === null ? null : await this.deps.facts.admin(scope, adminId, tx);
-    return walletAdjusted({ entry, balance, customer, admin, at, words: this.deps.words });
+    const customerNotified =
+      this.deps.customerNotified === undefined
+        ? undefined
+        : await this.deps.customerNotified(
+            scope,
+            entry.reason === 'ADMIN_DEBIT' ? 'ADMIN_DEBIT' : 'ADMIN_CREDIT',
+            tx,
+          );
+    return walletAdjusted({
+      entry,
+      balance,
+      customer,
+      admin,
+      at,
+      words: this.deps.words,
+      ...(customerNotified === undefined ? {} : { customerNotified }),
+    });
+  }
+
+  private async massCredit(
+    scope: TenantContext,
+    event: DomainEvent,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const payload = EVENT_PAYLOAD_SCHEMAS.BulkOperationStateChanged.parse(event.payload);
+    if (payload.kind !== 'WALLET_CREDIT') return;
+    if (payload.to !== 'COMPLETED' && payload.to !== 'CANCELLED') return;
+    const fact = await this.deps.facts.massCredit(scope, payload.operationId, tx);
+    if (fact === null) return;
+    const admin = await this.deps.facts.admin(scope, fact.createdByAdminId, tx);
+    const built = massCredited({
+      fact,
+      admin,
+      at: new Date(event.occurredAt),
+      words: this.deps.words,
+    });
+    await publish(this.deps.lane, scope, tx, built, {
+      // One message per operation, whichever of its terminal events arrives.
+      dedupeKey: `oplog:mass-credit:${fact.id}`,
+      correlationId: event.correlationId,
+    });
   }
 
   private async commission(

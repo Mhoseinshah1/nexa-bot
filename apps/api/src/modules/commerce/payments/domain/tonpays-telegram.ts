@@ -159,44 +159,126 @@ export function reviewInquiryNextAt(
 }
 
 /**
- * Whether the customer may ask for another card NOW (audit §8.1, §8.2): the provider has not
- * said no or exhausted, no request is in flight, and the cooldown has passed — the
- * provider's own when it stated one, else sixty seconds from the card last shown (or from
- * the last lost change, whose card is hidden). The tap re-decides this against the row.
+ * R8 A2 (R5C-1): the owner's three limits on a card switch, as the TonPays card change reads
+ * them — the same settings, and the same meaning, as the manual card-to-card switch
+ * (`CARD_SWITCH_SETTING_KEYS`), with what this payment has already used of them.
  */
-export function cardChangeAvailable(
-  invoice: Pick<
-    GatewayInvoiceRecord,
-    | 'cardChangeShown'
-    | 'cardChangeExhausted'
-    | 'cardChangeCooldownUntil'
-    | 'cardReceivedAt'
-    | 'creationState'
-  > & { readonly providerStatus?: string | null },
-  latest: Pick<GatewayCardChangeRecord, 'state' | 'requestedAt' | 'decidedAt'> | null,
+export interface CardChangeAllowance {
+  readonly limits: {
+    /** Most changes one payment may have. Zero: the button is never offered. */
+    readonly maxSwitches: number;
+    /** Seconds to wait after the last change. Zero: none. */
+    readonly cooldownSeconds: number;
+    /** Most DISTINCT cards one payment may show, the first included. */
+    readonly maxDistinctCards: number;
+  };
+  /** Changes that may have changed the card: requested, sent, applied, or lost (UNKNOWN). */
+  readonly switches: number;
+  /** When the latest of those was requested; null when there is none. */
+  readonly lastSwitchAt: Date | null;
+  /** Distinct card numbers this payment has shown (`gateway_invoice_cards`). */
+  readonly distinctCards: number;
+}
+
+/**
+ * Whether the customer may ask for another card (audit §8.1, §8.2), and if not, whether only
+ * for now.
+ *
+ * - `UNAVAILABLE`: not now and not by waiting — the provider has not said yes (`show_change_card`
+ *   false, exhausted, an under- or overpaid invoice, an invoice not created), a request is
+ *   already in flight, or the owner's switch or distinct-card limit is used up. TonPays picks
+ *   the next card itself, so a change once the distinct-card limit is reached could show a
+ *   card the owner did not allow: refused.
+ * - `COOLDOWN`: allowed, after `retryAfterSeconds` — the provider's stated cooldown, else sixty
+ *   seconds from the card last shown (or from the last lost change, whose card is hidden), and
+ *   the owner's cooldown from the last change, whichever ends last.
+ * - `AVAILABLE`: now.
+ *
+ * The button is DRAWN for `COOLDOWN` as well as `AVAILABLE` (R8 A2: the invoice is drawn the
+ * moment its card arrives, so a button hidden for the first minute was never seen); the tap
+ * re-decides this under the payment's lock and answers a cooldown with the seconds left.
+ * `allowance` null applies the provider's rules alone.
+ */
+export type CardChangeDecision =
+  | { readonly kind: 'AVAILABLE' }
+  | { readonly kind: 'COOLDOWN'; readonly retryAfterSeconds: number }
+  | { readonly kind: 'UNAVAILABLE' };
+
+type CardChangeInvoiceFacts = Pick<
+  GatewayInvoiceRecord,
+  | 'cardChangeShown'
+  | 'cardChangeExhausted'
+  | 'cardChangeCooldownUntil'
+  | 'cardReceivedAt'
+  | 'creationState'
+> & { readonly providerStatus?: string | null };
+
+type CardChangeLatest = Pick<GatewayCardChangeRecord, 'state' | 'requestedAt' | 'decidedAt'> | null;
+
+export function decideCardChange(
+  invoice: CardChangeInvoiceFacts,
+  latest: CardChangeLatest,
   now: Date,
-): boolean {
-  if (invoice.creationState !== 'CREATED') return false;
+  allowance: CardChangeAllowance | null = null,
+): CardChangeDecision {
+  const unavailable = { kind: 'UNAVAILABLE' } as const;
+  if (invoice.creationState !== 'CREATED') return unavailable;
   // Round 6: an invoice that was under- or overpaid has a next step of its own; another card
   // for the ORIGINAL transfer is not it.
-  if (invoice.providerStatus === TONPAYS_TELEGRAM_STATUS_LESS) return false;
-  if (invoice.providerStatus === TONPAYS_TELEGRAM_STATUS_MORE) return false;
-  if (invoice.cardChangeShown === false || invoice.cardChangeExhausted === true) return false;
-  if (latest !== null && (latest.state === 'REQUESTED' || latest.state === 'SENT')) return false;
-  if (invoice.cardChangeCooldownUntil !== null && now < invoice.cardChangeCooldownUntil) {
-    return false;
+  if (invoice.providerStatus === TONPAYS_TELEGRAM_STATUS_LESS) return unavailable;
+  if (invoice.providerStatus === TONPAYS_TELEGRAM_STATUS_MORE) return unavailable;
+  if (invoice.cardChangeShown === false || invoice.cardChangeExhausted === true) {
+    return unavailable;
+  }
+  if (latest !== null && (latest.state === 'REQUESTED' || latest.state === 'SENT')) {
+    return unavailable;
+  }
+  if (allowance !== null) {
+    if (allowance.switches >= allowance.limits.maxSwitches) return unavailable;
+    if (allowance.distinctCards >= allowance.limits.maxDistinctCards) return unavailable;
+  }
+  const readyAt: number[] = [];
+  if (invoice.cardChangeCooldownUntil !== null) {
+    readyAt.push(invoice.cardChangeCooldownUntil.getTime());
   }
   const localFrom =
     latest !== null && latest.state === 'UNKNOWN'
       ? (latest.decidedAt ?? latest.requestedAt)
       : invoice.cardReceivedAt;
-  if (
-    localFrom !== null &&
-    now.getTime() < localFrom.getTime() + TONPAYS_TELEGRAM_CARD_CHANGE_COOLDOWN_SECONDS * 1000
-  ) {
-    return false;
+  if (localFrom !== null) {
+    readyAt.push(localFrom.getTime() + TONPAYS_TELEGRAM_CARD_CHANGE_COOLDOWN_SECONDS * 1000);
   }
-  return true;
+  if (
+    allowance !== null &&
+    allowance.lastSwitchAt !== null &&
+    allowance.limits.cooldownSeconds > 0
+  ) {
+    readyAt.push(allowance.lastSwitchAt.getTime() + allowance.limits.cooldownSeconds * 1000);
+  }
+  const remainingMs = Math.max(0, ...readyAt.map((at) => at - now.getTime()));
+  return remainingMs > 0
+    ? { kind: 'COOLDOWN', retryAfterSeconds: Math.ceil(remainingMs / 1000) }
+    : { kind: 'AVAILABLE' };
+}
+
+/** Whether the customer may ask for another card NOW (`decideCardChange` is `AVAILABLE`). */
+export function cardChangeAvailable(
+  invoice: CardChangeInvoiceFacts,
+  latest: CardChangeLatest,
+  now: Date,
+  allowance: CardChangeAllowance | null = null,
+): boolean {
+  return decideCardChange(invoice, latest, now, allowance).kind === 'AVAILABLE';
+}
+
+/** Whether «🔄 تعویض کارت» is DRAWN: available now, or after a cooldown the tap explains. */
+export function cardChangeOffered(
+  invoice: CardChangeInvoiceFacts,
+  latest: CardChangeLatest,
+  now: Date,
+  allowance: CardChangeAllowance | null = null,
+): boolean {
+  return decideCardChange(invoice, latest, now, allowance).kind !== 'UNAVAILABLE';
 }
 
 /**

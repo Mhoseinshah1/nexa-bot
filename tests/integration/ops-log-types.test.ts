@@ -278,7 +278,11 @@ describe('the ops log: wallet figures, imports, switches and the storm roll-up',
       balanceBefore: money(140_000n, 'IRT'),
       balanceAfter: money(110_000n, 'IRT'),
     });
-    expect(creditMsg!.buttons).toEqual([{ kind: 'USER', ref: c }]);
+    // R8 A4: «پروفایل کاربر» and «تراکنش».
+    expect(creditMsg!.buttons).toEqual([
+      { kind: 'USER', ref: c },
+      { kind: 'WALLET', ref: c },
+    ]);
     const text = render(creditMsg!.templateKey, creditMsg!.values as never);
     expect(text).toContain('۴۰٬۰۰۰ تومان ← ۱۴۰٬۰۰۰ تومان');
     expect(text).not.toMatch(/NaN|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/);
@@ -422,10 +426,17 @@ describe('the ops log: wallet figures, imports, switches and the storm roll-up',
     await run((tx) =>
       ledger.handle(recorded(imported, opening, 'MIGRATION_OPENING_BALANCE', 'CREDIT'), tx),
     );
-    await run((tx) => ledger.handle(recorded(imported, credit, 'ADMIN_CREDIT', 'CREDIT'), tx));
     await run((tx) => customers.handle(event('CustomerRegistered', imported, {}), tx));
     await run((tx) => customers.handle(event('CustomerBlocked', imported, {}), tx));
     expect(queued).toEqual([]);
+
+    /*
+     * R8 A4: an OPERATOR's adjustment of that customer, made after the import, is not import
+     * state — only `WalletService.adjust` writes ADMIN_CREDIT — and is logged like any other.
+     */
+    await run((tx) => ledger.handle(recorded(imported, credit, 'ADMIN_CREDIT', 'CREDIT'), tx));
+    expect(queued.map((one) => one.input.logType)).toEqual(['ADMIN_WALLET']);
+    queued = [];
 
     // The same customer as a native one DOES say something, so the silence above is the rule.
     await ctx.container.database.db.execute(

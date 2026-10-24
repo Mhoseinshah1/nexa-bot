@@ -24,6 +24,7 @@ import {
   trialCreated,
   userBlocked,
   userNew,
+  massCredited,
   walletAdjusted,
   type Built,
 } from '../../apps/api/src/modules/commerce/ops-log/application/presenters';
@@ -205,7 +206,14 @@ describe('L7 — an administrator raised or lowered a wallet', () => {
     expect(text).toContain('۴۰٬۰۰۰');
     expect(text).toContain('۱۴۰٬۰۰۰');
     expect(text).toContain('جبران نارضایتی');
-    expect(credit.buttons).toEqual([{ kind: 'USER', ref: 'cust-a' }]);
+    // R8 A4: «پروفایل کاربر» and «تراکنش», the time in Jalali, and no notice line unless known.
+    expect(credit.buttons).toEqual([
+      { kind: 'USER', ref: 'cust-a' },
+      { kind: 'WALLET', ref: 'cust-a' },
+    ]);
+    expect(text).toContain('افزایش');
+    expect(text).toContain('۱۴۰۵');
+    expect(text).not.toContain('اطلاع به کاربر');
 
     const debit = walletAdjusted({
       entry: entry({ direction: 'DEBIT', reason: 'ADMIN_DEBIT', amount: irt(30_000) }),
@@ -219,6 +227,65 @@ describe('L7 — an administrator raised or lowered a wallet', () => {
     expect(debitText).toContain('۱۴۰٬۰۰۰');
     expect(debitText).toContain('۱۱۰٬۰۰۰');
     expect(debitText).not.toEqual(text);
+    expect(debitText).toContain('کاهش');
+  });
+
+  it('R8 A4: says whether the customer is told, both ways', () => {
+    const told = render(
+      'L7 told',
+      walletAdjusted({
+        entry: entry(),
+        balance: { before: irt(0), after: irt(100_000) },
+        customer: customer({ source: 'MIRZA' }),
+        admin: admin(),
+        at: AT,
+        words,
+        customerNotified: true,
+      }),
+    );
+    expect(told).toContain('🔔 اطلاع به کاربر: بله');
+    const silent = render(
+      'L7 silent',
+      walletAdjusted({
+        entry: entry(),
+        balance: { before: irt(0), after: irt(100_000) },
+        customer: customer(),
+        admin: admin(),
+        at: AT,
+        words,
+        customerNotified: false,
+      }),
+    );
+    expect(silent).toContain('🔔 اطلاع به کاربر: خیر');
+  });
+
+  it('R8 A4: a mass credit is one summary — amount each, credited, skipped, the ledger total', () => {
+    const built = massCredited({
+      fact: {
+        id: 'bulk-a',
+        amount: irt(20_000),
+        note: 'هدیهٔ نوروزی',
+        notify: true,
+        createdByAdminId: 'adm-a',
+        credited: 3,
+        skipped: 1,
+        total: irt(60_000),
+      },
+      admin: admin(),
+      at: AT,
+      words,
+    });
+    const text = render('L7 mass credit', built);
+    expect(built.templateKey).toBe('ops.log.wallet_mass_credited');
+    expect(built.logType).toBe('ADMIN_WALLET');
+    expect(text).toContain('۲۰٬۰۰۰');
+    expect(text).toContain('۶۰٬۰۰۰');
+    expect(text).toContain('👥 شارژشده: ۳ کاربر');
+    expect(text).toContain('⏭ ردشده: ۱ کاربر');
+    expect(text).toContain('هدیهٔ نوروزی');
+    expect(text).toContain('@ops_lead');
+    expect(text).toContain('🔔 اطلاع به کاربران: بله');
+    expect(built.buttons).toEqual([{ kind: 'BULK_OPERATION', ref: 'bulk-a' }]);
   });
 });
 

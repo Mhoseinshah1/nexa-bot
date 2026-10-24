@@ -89,7 +89,20 @@ export const OPS_LOG_TYPES = {
   PAYMENT_TOPUP: { l: 'L1', topic: 'PAYMENTS', templates: ['ops.financial.topup_credited'] },
   PAYMENT_ORDER: { l: 'L2', topic: 'PAYMENTS', templates: ['ops.financial.order_paid'] },
   PAYMENT_CRYPTO: { l: 'L3', topic: 'PAYMENTS', templates: ['ops.log.payment_crypto'] },
-  PAYMENT_FAILED: { l: 'L4', topic: 'PAYMENTS', templates: ['ops.financial.payment_failed'] },
+  /*
+   * R8 A3: one headline per outcome — a failure, a cancelled invoice, a rejected receipt, an
+   * expired payment. Four templates of ONE type: one switch, one topic, as before.
+   */
+  PAYMENT_FAILED: {
+    l: 'L4',
+    topic: 'PAYMENTS',
+    templates: [
+      'ops.financial.payment_failed',
+      'ops.financial.invoice_cancelled',
+      'ops.financial.receipt_rejected',
+      'ops.financial.payment_expired',
+    ],
+  },
   PAYMENT_LATE: {
     l: 'L5',
     topic: 'PAYMENTS',
@@ -108,7 +121,12 @@ export const OPS_LOG_TYPES = {
       'ops.financial.service_refund_request',
     ],
   },
-  ADMIN_WALLET: { l: 'L7', topic: 'PAYMENTS', templates: ['ops.log.wallet_adjusted'] },
+  ADMIN_WALLET: {
+    l: 'L7',
+    topic: 'PAYMENTS',
+    // R8 A4: a mass credit is one summary message per operation, never one per customer.
+    templates: ['ops.log.wallet_adjusted', 'ops.log.wallet_mass_credited'],
+  },
   REFERRAL_COMMISSION: {
     l: 'L8',
     topic: 'PAYMENTS',
@@ -210,6 +228,10 @@ export const OPS_LOG_BUTTON_KINDS = [
   'GATEWAY',
   'TICKET',
   'MANUAL_CREDIT',
+  // R8 A4: «🧾 تراکنش» — the customer's wallet (the financial tab of their page).
+  'WALLET',
+  // R8 A4: one bulk operation's page (a mass credit).
+  'BULK_OPERATION',
   'DASHBOARD',
   'NOTIFICATIONS',
 ] as const;
@@ -238,6 +260,14 @@ export function opsLogButtonPath(button: OpsLogButton): string | null {
     case 'MANUAL_CREDIT': {
       const id = needsRef();
       return id === null ? null : `/users/${id}`;
+    }
+    case 'WALLET': {
+      const id = needsRef();
+      return id === null ? null : `/users/${id}?tab=financial`;
+    }
+    case 'BULK_OPERATION': {
+      const id = needsRef();
+      return id === null ? null : `/bulk-operations/${id}`;
     }
     case 'PAYMENT': {
       const id = needsRef();
@@ -373,6 +403,21 @@ const TOKENS = {
   adminUsername: ['STRING', 'The administrator’s username.'],
   adminTelegramId: ['STRING', 'The administrator’s Telegram id, or a Persian word for none.'],
   reason: ['STRING', 'The operator’s stated reason, bounded.'],
+  customerNotified: [
+    'STRING',
+    'R8 A4: whether the customer is sent a message about the change, in Persian.',
+  ],
+  recipients: ['NUMBER', 'R8 A4: how many customers a mass credit credited.'],
+  skipped: ['NUMBER', 'R8 A4: how many customers of a mass credit were skipped.'],
+  total: ['MONEY', 'R8 A4: the sum a mass credit credited, read from the ledger.'],
+  cancelledBy: [
+    'STRING',
+    'R8 A3: who cancelled the invoice (the customer, Nexa, an operator or the gateway), in Persian.',
+  ],
+  rejectReasons: [
+    'STRING',
+    'R8 A3: why the receipt was rejected — the operator’s reason, or the gateway’s reasons as it worded them (sanitised, bounded), one line.',
+  ],
   targetName: ['STRING', 'The administrator the change is about.'],
   targetUsername: ['STRING', 'The username of the administrator the change is about.'],
   targetTelegramId: ['STRING', 'Their Telegram id, or a Persian word for none.'],
@@ -539,9 +584,36 @@ export const OPS_LOG_TEMPLATES = [
   ),
   logTemplate(
     'ops.financial.payment_failed',
-    'Log L4: a payment failed or a receipt was rejected — the cause, the method and the amounts.',
+    'Log L4: a payment failed — the cause in Persian, the method and the amounts. Since R8 A3 a cancelled invoice, a rejected receipt and an expired payment each have their own template.',
     [
       ...req('cause', 'method', 'reference', 'principal', 'fee', 'payable', 'at'),
+      ...WHO(),
+      ...opt('orderCode'),
+    ],
+  ),
+  logTemplate(
+    'ops.financial.invoice_cancelled',
+    'Log L4 (R8 A3): an invoice was cancelled before it was paid — by whom, the method and the amounts. Nothing was received.',
+    [
+      ...req('cancelledBy', 'method', 'reference', 'principal', 'fee', 'payable', 'at'),
+      ...WHO(),
+      ...opt('orderCode'),
+    ],
+  ),
+  logTemplate(
+    'ops.financial.receipt_rejected',
+    'Log L4 (R8 A3): a receipt was rejected — by the operator or by the gateway — with the reasons, the method and the amounts. Nothing was credited.',
+    [
+      ...req('method', 'reference', 'principal', 'fee', 'payable', 'at'),
+      ...WHO(),
+      ...opt('rejectReasons', 'orderCode'),
+    ],
+  ),
+  logTemplate(
+    'ops.financial.payment_expired',
+    'Log L4 (R8 A3): the gateway reported the payment expired before it was paid — the method and the amounts. Nothing was received.',
+    [
+      ...req('method', 'reference', 'principal', 'fee', 'payable', 'at'),
       ...WHO(),
       ...opt('orderCode'),
     ],
@@ -630,7 +702,15 @@ export const OPS_LOG_TEMPLATES = [
     [
       ...req('heading', 'amount', 'balanceBefore', 'balanceAfter', 'reason', 'at'),
       ...WHO(),
-      ...opt('adminName', 'adminUsername', 'adminTelegramId'),
+      ...opt('adminName', 'adminUsername', 'adminTelegramId', 'customerNotified'),
+    ],
+  ),
+  logTemplate(
+    'ops.log.wallet_mass_credited',
+    'Log L7 (R8 A4): an administrator’s mass wallet credit finished — who, the amount each customer received, how many were credited and skipped, the total, the reason and whether customers were told. One message per operation.',
+    [
+      ...req('amount', 'recipients', 'total', 'reason', 'at'),
+      ...opt('skipped', 'adminName', 'adminUsername', 'adminTelegramId', 'customerNotified'),
     ],
   ),
   logTemplate(
