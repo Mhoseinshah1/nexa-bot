@@ -206,6 +206,7 @@ import type {
   ServiceOperationHistory,
 } from '../../modules/commerce/provisioning/application/service-admin.service.js';
 import { decodeKeysetToken, encodeKeysetToken, type KeysetToken } from './keyset-token.js';
+import { applyServiceCardLayout } from './service-card-layout.js';
 import type { TelegramWizardRecord } from '../../modules/commerce/messaging/application/telegram-message-state.js';
 import type { TelegramReviewOutcome } from '@nexa/contracts';
 import {
@@ -4361,6 +4362,11 @@ export interface BotRuntimeDeps {
    * re-decides its own eligibility. Absent means on, which is how the menu always was.
    */
   readonly renewMenuShowsTime?: (scope: TenantContext) => Promise<boolean>;
+  /**
+   * R8-C3: the tenant's `bot.service_card_layout`, the order, rows and switches of the
+   * service screen's buttons. Optional so a stand-in without it draws the screen as always.
+   */
+  readonly serviceCardLayout?: (scope: TenantContext) => Promise<unknown>;
   /**
    * R1: this tenant's CURRENT main-menu labels and their commands (`MainMenuLayout`), the
    * same object the messenger draws the keyboard from. Matched over `mainMenu`'s shared
@@ -11363,7 +11369,14 @@ export class BotRuntime {
     });
 
     const card = await this.serviceCardScreen(scope, service, title, rotation.offered, cardExtra);
-    return { key: card.key, values: card.values, buttons, orderId: null };
+    // R8-C3: the owner's order, rows and switches, over the buttons decided above.
+    const layout = (await this.deps.serviceCardLayout?.(scope)) ?? null;
+    return {
+      key: card.key,
+      values: card.values,
+      buttons: [...applyServiceCardLayout(buttons, layout)],
+      orderId: null,
+    };
   }
 
   /** The card's text: one composition for the ordinary card and the «working» one. */
