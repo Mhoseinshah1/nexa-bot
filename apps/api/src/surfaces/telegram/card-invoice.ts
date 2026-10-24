@@ -50,7 +50,7 @@ export function cardInvoiceCardValues(cardNumber: string): { readonly cardGroupe
   return { cardGrouped: groupedCardNumber(cardNumber) };
 }
 
-/** «📋 کپی مبلغ (ریال)»: the amount in RIAL, bare ASCII digits, no separators. */
+/** The copy-amount button: the amount in RIAL, bare ASCII digits, no separators. */
 export function copyRialAmountButton(amount: Money): CustomerButton {
   return {
     ...inlineLabel('payment.copy_transfer_amount'),
@@ -59,7 +59,7 @@ export function copyRialAmountButton(amount: Money): CustomerButton {
   };
 }
 
-/** «💳 کپی شماره کارت»: the sixteen digits without spaces (the card as sent otherwise). */
+/** The copy-card button: the sixteen digits without spaces (the card as sent otherwise). */
 export function copyCardNumberButton(cardNumber: string): CustomerButton {
   return {
     ...inlineLabel('payment.copy_card'),
