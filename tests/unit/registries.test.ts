@@ -72,6 +72,8 @@ const ZERO_STATES: readonly unknown[] = [
   [],
   // An empty map: `bot.inline_buttons` (owner spec §6), where no override is every default.
   {},
+  // An empty layout: `bot.service_card_layout` (R8-C3), where no rows is the screen as always.
+  { rows: [] },
   { amountMinor: '0', currency: 'IRT' },
   { amountMinor: '0', currency: 'IRR' },
 ];
