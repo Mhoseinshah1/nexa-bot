@@ -555,6 +555,8 @@ export interface OpsEventPresenter {
   suppresses?(input: OperationalEventInput): boolean;
   /** The Persian title of an event code; never the raw code. */
   title(code: string): string;
+  /** Persian wording of the event's English log message, or null to keep the message. */
+  messageOf?(code: string): string | null;
   /** The Persian name of a severity class. */
   severity(klass: string): string;
 }

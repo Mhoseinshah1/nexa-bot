@@ -22,7 +22,7 @@ import {
   uploadRecoveryArchive,
   verifyRecovery,
 } from '../api/client';
-import { formatTimestamp } from '../format';
+import { formatTimestamp, splitBytes } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { CopyIdButton } from '../ui/record-ref';
 import { pollUnlessFinal } from '../polling';
@@ -350,6 +350,15 @@ function BackupStatus({
         running: BackupRunSummary | null;
         unknownDeliveries: number;
         quiesced: boolean;
+        disk?:
+          | {
+              freeBytes: string;
+              totalBytes: string | null;
+              requiredBytes: string;
+              low: boolean;
+            }
+          | null
+          | undefined;
       }
     | undefined;
   mayRun: boolean;
@@ -408,6 +417,35 @@ function BackupStatus({
       )}
       {status.unknownDeliveries > 0 && (
         <Banner tone="warn">{t('web.recovery_unknown_deliveries_hint')}</Banner>
+      )}
+      {status.disk !== undefined && status.disk !== null && (
+        <>
+          <div className="stat-grid recovery-stats">
+            <StatCard
+              label={t('web.recovery_disk_free')}
+              icon="database"
+              value={<ByteSize bytes={BigInt(status.disk.freeBytes)} />}
+              {...(status.disk.low ? { tone: 'alert' as const } : {})}
+            />
+            <StatCard
+              label={t('web.recovery_disk_total')}
+              icon="database"
+              value={
+                status.disk.totalBytes === null ? (
+                  <>—</>
+                ) : (
+                  <ByteSize bytes={BigInt(status.disk.totalBytes)} />
+                )
+              }
+            />
+            <StatCard
+              label={t('web.recovery_disk_required')}
+              icon="database"
+              value={<ByteSize bytes={BigInt(status.disk.requiredBytes)} />}
+            />
+          </div>
+          {status.disk.low && <Banner tone="warn">{t('web.recovery_disk_low_hint')}</Banner>}
+        </>
       )}
       {status.running !== null && (
         <Banner tone="info" title={t('web.recovery_running')}>
@@ -1258,9 +1296,18 @@ function DeliveryBadge({ outcome }: { outcome: BackupRunSummary['deliveryState']
 /** Bytes as a string, because the wire carries a `bigint` as one. */
 function Bytes({ value }: { value: string | null }) {
   if (value === null) return <>—</>;
-  const bytes = Number(value);
-  if (!Number.isFinite(bytes)) return <Ltr>{value}</Ltr>;
-  return <Num value={Math.round(bytes / 1024)} />;
+  if (!/^\d+$/.test(value)) return <Ltr>{value}</Ltr>;
+  return <ByteSize bytes={BigInt(value)} />;
+}
+
+/** A size with its unit: a bare number in a size column reads as nothing. */
+export function ByteSize({ bytes }: { bytes: bigint }) {
+  const { value, unit } = splitBytes(bytes);
+  return (
+    <span className="nowrap">
+      <Num value={value} /> {t(unit)}
+    </span>
+  );
 }
 
 function triggerLabel(trigger: BackupRunSummary['trigger']): string {

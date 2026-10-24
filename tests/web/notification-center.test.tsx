@@ -204,3 +204,15 @@ describe('the titles', () => {
     );
   });
 });
+
+describe('the notification centre keeps the server message beside the Persian sentence (Codex on #319)', () => {
+  it('shows the sentence and, beneath it, the detail-carrying original', async () => {
+    const { notificationMessageLines } =
+      await import('../../apps/web/src/pages/notification-center');
+    const { operationalEventMessageFa } = await import('@nexa/i18n');
+    const original = 'The job loop "reminders" has not completed a pass for 15 minutes.';
+    const lines = notificationMessageLines('job.loop_stalled', original);
+    expect(lines).toEqual([operationalEventMessageFa('job.loop_stalled'), original]);
+    expect(notificationMessageLines('no.such_code', original)).toEqual([original]);
+  });
+});

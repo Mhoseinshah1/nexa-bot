@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lt, sql } from 'drizzle-orm';
 import type {
   BackupArchiveFormat,
   BackupDeliveryState,
@@ -12,6 +12,10 @@ import type { Database } from '../../../../infrastructure/persistence/database.j
 import { backupRunParts, backupRuns } from '../../../../infrastructure/persistence/schema.js';
 import { isUniqueViolation } from '../../../../infrastructure/persistence/sqlstate.js';
 import { redactStoredText } from '../../../../infrastructure/redaction.js';
+import type {
+  BackupOrphanRunFacts,
+  BackupOrphanRunReader,
+} from '../application/backup-orphan-sweep.js';
 import type {
   BackupArchivePart,
   BackupArchiveRetentionStore,
@@ -71,7 +75,11 @@ function toRow(row: Row): BackupRunRow {
 }
 
 export class DrizzleBackupRunRepository
-  implements BackupRunRepository, BackupArchiveRetentionStore, BackupRunPartStore
+  implements
+    BackupRunRepository,
+    BackupArchiveRetentionStore,
+    BackupRunPartStore,
+    BackupOrphanRunReader
 {
   constructor(private readonly db: Database) {}
 
@@ -683,5 +691,29 @@ export class DrizzleBackupRunRepository
       .orderBy(desc(backupRuns.startedAt))
       .limit(1);
     return row === undefined ? null : row.startedAt;
+  }
+
+  /** The orphan sweep's facts about the run directories it found (Round 8, B1). */
+  async orphanRunFacts(ids: readonly string[]): Promise<readonly BackupOrphanRunFacts[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.db
+      .select({
+        id: backupRuns.id,
+        state: backupRuns.state,
+        stage: backupRuns.stage,
+        leaseHeartbeatAt: backupRuns.leaseHeartbeatAt,
+        verifiedAt: backupRuns.verifiedAt,
+        failureCode: backupRuns.failureCode,
+      })
+      .from(backupRuns)
+      .where(inArray(backupRuns.id, [...ids]));
+    return rows.map((row) => ({
+      id: row.id,
+      state: row.state as BackupRunState,
+      stage: row.stage as BackupStage,
+      leaseHeartbeatAt: row.leaseHeartbeatAt,
+      verifiedAt: row.verifiedAt,
+      failureCode: row.failureCode,
+    }));
   }
 }

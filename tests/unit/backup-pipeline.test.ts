@@ -332,6 +332,12 @@ interface Harness {
     delays: { dump: number; encrypt: number; verify: number; deliver: number };
     /** Thrown by the archiver's `preflight` before the dump, when set (Round 5B). */
     preflightError: Error | null;
+    /** Round 8 B3: the volume as the disk preflight sees it; null is "unknown". */
+    disk: { freeBytes: number; requiredBytes: number } | null;
+    /** Round 8 B2: how many times retention ran after a success, and whether it throws. */
+    pruneCalls: number;
+    pruneThrows: boolean;
+    runStatesAtPrune: string[];
     /** The number of times `dump` ran: a refused preflight must leave it at zero. */
     dumps: number;
     /** Thrown by `seal`, when set, instead of the generic `sealFails` Error. */
@@ -354,6 +360,7 @@ function harness(
     renderCaption?: ConstructorParameters<typeof BackupService>[0]['renderCaption'];
     heartbeat?: ConstructorParameters<typeof BackupService>[0]['heartbeat'];
     logger?: ConstructorParameters<typeof BackupService>[0]['logger'];
+    orphanSweep?: ConstructorParameters<typeof BackupService>[0]['orphanSweep'];
   } = {},
 ): Harness {
   const clock = new FakeClock();
@@ -383,6 +390,10 @@ function harness(
     open: new Set<string>(),
     delays: { dump: 0, encrypt: 0, verify: 0, deliver: 0 },
     preflightError: null,
+    disk: null,
+    pruneCalls: 0,
+    pruneThrows: false,
+    runStatesAtPrune: [],
     dumps: 0,
     sealError: null,
     dumpRealMs: 0,
@@ -545,7 +556,14 @@ function harness(
     scope: () => (state.scoped ? { tenantId: 't1' as never, botInstanceId: null } : null),
     logger: options.logger ?? { info() {}, warn() {}, error() {} },
     ...(options.heartbeat === undefined ? {} : { heartbeat: options.heartbeat }),
+    ...(options.orphanSweep === undefined ? {} : { orphanSweep: options.orphanSweep }),
     leaseOwner: 'worker:1:aaaa',
+    diskPreflight: async () => state.disk,
+    afterSuccess: async () => {
+      state.pruneCalls += 1;
+      state.runStatesAtPrune = [...runs.rows.values()].map((row) => row.state);
+      if (state.pruneThrows) throw new Error('the volume is read-only');
+    },
     // The planner's arithmetic, without a file: ranges of `archiveBytes` at `partBytes`.
     parts: {
       async plan(input) {
@@ -870,7 +888,7 @@ describe('the backup pipeline', () => {
       ]);
       expect(parts.map((part) => part.telegramMessageId)).toEqual([21n, null, null]);
       const partial = h.state.recorded.find((event) => event.code === 'backup.delivery_partial');
-      expect(partial?.message).toContain('1 of 3');
+      expect(partial?.message).toContain('۱ از ۳ بخش');
       expect(partial?.dedupeKey).toBe('backup.delivery_partial');
       // The verified archive stays: only the plaintext went.
       expect(h.state.everythingRemoved).toBe(false);
@@ -1618,7 +1636,7 @@ describe('the backup conditions beside the run (E5)', () => {
     expect(failed?.dedupeKey).toBe('backup.cleanup');
     // `message` is projected to Telegram: the paths name plaintext dumps.
     expect(failed?.message).not.toContain('/w/');
-    expect(failed?.message).toContain('left 1 artifact');
+    expect(failed?.message).toContain('۱ فایل روی این سرور باقی گذاشت');
   });
 
   it('opens backup.cleanup_failed when a FAILED run leaves its workspace or a scratch database', async () => {
@@ -1637,6 +1655,65 @@ describe('the backup conditions beside the run (E5)', () => {
     const h = harness();
     await completed(h);
     expect(h.state.recorded.map((event) => event.code)).not.toContain('backup.cleanup_failed');
+  });
+});
+
+describe('Round 8: disk preflight and retention after a run', () => {
+  const GIB = 1024 ** 3;
+
+  it('refuses a run the volume cannot hold BEFORE the dump, with the Persian reason, in ONE message', async () => {
+    const h = harness();
+    h.state.disk = { freeBytes: Math.round(1.5 * GIB), requiredBytes: 6 * GIB };
+    const run = await completed(h);
+
+    expect(run.state).toBe('FAILED');
+    expect(run.failureCode).toBe('backup.disk_insufficient');
+    expect(run.failureMessage).toBe('فضای دیسک کافی نیست (آزاد: ۱٫۵ گیگابایت، لازم: ۶ گیگابایت)');
+    // Nothing was dumped for nothing, and nothing was left to clean up.
+    expect(h.state.dumps).toBe(0);
+    expect(h.state.pruneCalls).toBe(0);
+    // One condition, on the key housekeeping's disk check shares — not a second alert beside it.
+    expect(h.state.recorded.map((event) => event.code)).toEqual(['backup.disk_threshold_exceeded']);
+    expect(h.state.recorded[0]).toMatchObject({
+      severity: 'WARN',
+      dedupeKey: 'backup.disk',
+      context: { freeBytes: Math.round(1.5 * GIB), requiredBytes: 6 * GIB },
+    });
+    expect(h.state.recorded[0]?.message).toContain('فضای دیسک کافی نیست');
+  });
+
+  it('runs when the volume has room, or when its size cannot be read', async () => {
+    const roomy = harness();
+    roomy.state.disk = { freeBytes: 6 * GIB, requiredBytes: 6 * GIB };
+    expect((await completed(roomy)).state).toBe('SUCCEEDED');
+    const unknown = harness();
+    unknown.state.disk = null;
+    expect((await completed(unknown)).state).toBe('SUCCEEDED');
+  });
+
+  it('prunes once after a SUCCESS, and not after a failure', async () => {
+    const ok = harness();
+    expect((await completed(ok)).state).toBe('SUCCEEDED');
+    expect(ok.state.pruneCalls).toBe(1);
+
+    const failed = harness();
+    failed.state.dumpFails = true;
+    expect((await completed(failed)).state).toBe('FAILED');
+    expect(failed.state.pruneCalls).toBe(0);
+  });
+
+  it('prunes only after the run is recorded SUCCEEDED, so the newest archive is this one', async () => {
+    const h = harness();
+    await completed(h);
+    expect(h.state.runStatesAtPrune).toEqual(['SUCCEEDED']);
+  });
+
+  it('keeps a successful backup successful when retention throws', async () => {
+    const h = harness();
+    h.state.pruneThrows = true;
+    const run = await completed(h);
+    expect(run.state).toBe('SUCCEEDED');
+    expect(h.state.recorded.map((event) => event.code)).not.toContain('backup.run_failed');
   });
 });
 
@@ -1743,7 +1820,7 @@ describe('Round 5B: phase durations, memory failures and the lease heartbeat', (
       expect(h.runs.rows.size).toBe(2);
     });
 
-    it('holds back after a refusal for memory too, but NOT after an ordinary tool failure', async () => {
+    it('holds back after a refusal for memory for an hour, and after an ordinary failure for the 30-minute backoff only', async () => {
       const refused = harness();
       refused.state.preflightError = new NexaError({
         kind: 'INTERNAL',
@@ -1756,7 +1833,8 @@ describe('Round 5B: phase durations, memory failures and the lease heartbeat', (
       await a.tick();
       expect(refused.runs.rows.size).toBe(1);
 
-      // The positive control: the same fixture with an ordinary failure retries next tick.
+      // Round 8 (B4): an ordinary failure no longer retries on the next tick either — it
+      // waits the first backoff step, thirty minutes, and not the memory failure's hour.
       const ordinary = harness();
       ordinary.state.sealError = new NexaError({
         kind: 'INTERNAL',
@@ -1767,7 +1845,14 @@ describe('Round 5B: phase durations, memory failures and the lease heartbeat', (
       await b.tick();
       ordinary.clock.advance(10 * 60_000);
       await b.tick();
+      expect(ordinary.runs.rows.size).toBe(1);
+      ordinary.clock.advance(21 * 60_000);
+      await b.tick();
       expect(ordinary.runs.rows.size).toBe(2);
+      // The memory refusal at the same 31 minutes is still held.
+      refused.clock.advance(21 * 60_000);
+      await a.tick();
+      expect(refused.runs.rows.size).toBe(1);
     });
 
     it('does not hold back a MANUAL run', async () => {
@@ -1930,5 +2015,213 @@ describe('Round 5B: phase durations, memory failures and the lease heartbeat', (
       expect(h.runs.heartbeatCalls).toBeGreaterThanOrEqual(3);
       expect(warnings).not.toContain('backup lease heartbeat failed');
     });
+  });
+});
+
+describe('Round 8 B4: no retry storm after a failed scheduled run', () => {
+  const MINUTE = 60_000;
+
+  /** Ticks every five minutes (the production default) for `forMs`, returning run offsets. */
+  async function storm(
+    h: Harness,
+    scheduler: BackupScheduler,
+    forMs: number,
+  ): Promise<readonly number[]> {
+    const start = h.clock.now().getTime();
+    for (let at = 0; at < forMs; at += TICK_MS) {
+      await scheduler.tick();
+      h.clock.advance(TICK_MS);
+    }
+    return [...h.runs.rows.values()].map((row) => row.startedAt.getTime() - start);
+  }
+
+  function schedulerFor(h: Harness, dailyTime: string | null): BackupScheduler {
+    return new BackupScheduler({
+      service: h.service,
+      runs: h.runs,
+      quiesced: async () => false,
+      clock: h.clock,
+      schedule: async () => ({ enabled: true, intervalMs: DAY_MS, dailyTime }),
+      tickIntervalMs: TICK_MS,
+      runHeartbeatAt: () => null,
+      runStaleAfterMs: RUN_STALE_MS,
+      logger: { info() {}, warn() {}, error() {} },
+    });
+  }
+
+  it('backs off 30 m, 1 h, 2 h, then waits for the next interval slot — never every tick', async () => {
+    const h = harness();
+    h.state.dumpFails = true;
+    // Last verified backup 25 hours ago on a 24-hour interval: due now, and the next slot
+    // after this one is 23 hours away.
+    h.runs.lastSuccess = new Date(NOW.getTime() - 25 * 3_600_000);
+    const scheduler = schedulerFor(h, null);
+
+    const offsets = await storm(h, scheduler, 23 * 3_600_000);
+    expect(offsets).toEqual([0, 30 * MINUTE, 90 * MINUTE, 210 * MINUTE]);
+    for (let i = 1; i < offsets.length; i += 1) {
+      expect((offsets[i] ?? 0) - (offsets[i - 1] ?? 0)).toBeGreaterThanOrEqual(30 * MINUTE);
+    }
+
+    // The next slot (last success + 48 h) is the next attempt, and only one.
+    await scheduler.tick();
+    expect(h.runs.rows.size).toBe(5);
+    await storm(h, scheduler, 6 * 3_600_000);
+    expect(h.runs.rows.size).toBe(5);
+  });
+
+  it('with a daily time, an exhausted chain waits for tomorrow’s slot', async () => {
+    // 09:00Z is 12:30 Tehran; today's 04:00 slot was 00:30Z, tomorrow's is 15 h 30 m away.
+    const h = harness();
+    h.state.dumpFails = true;
+    h.runs.lastSuccess = new Date('2026-02-28T01:00:00Z');
+    const scheduler = schedulerFor(h, '04:00');
+
+    const offsets = await storm(h, scheduler, 15 * 3_600_000 + 30 * MINUTE);
+    expect(offsets).toEqual([0, 30 * MINUTE, 90 * MINUTE, 210 * MINUTE]);
+    // 15:30 after the start is exactly tomorrow's slot.
+    await scheduler.tick();
+    expect(h.runs.rows.size).toBe(5);
+  });
+
+  it('a failure that is not the scheduler’s does not hold a scheduled run back', async () => {
+    const h = harness();
+    h.state.dumpFails = true;
+    await completed(h, 'MANUAL');
+    h.state.dumpFails = false;
+    const scheduler = schedulerFor(h, null);
+    h.clock.advance(TICK_MS);
+    await scheduler.tick();
+    expect([...h.runs.rows.values()].map((row) => row.state)).toEqual(['FAILED', 'SUCCEEDED']);
+  });
+
+  it('logs a hold once per failure, not once per tick', async () => {
+    const h = harness();
+    h.state.dumpFails = true;
+    const lines: string[] = [];
+    const scheduler = new BackupScheduler({
+      service: h.service,
+      runs: h.runs,
+      quiesced: async () => false,
+      clock: h.clock,
+      schedule: async () => ({ enabled: true, intervalMs: DAY_MS }),
+      tickIntervalMs: TICK_MS,
+      runHeartbeatAt: () => null,
+      runStaleAfterMs: RUN_STALE_MS,
+      logger: { info: (_c, m) => void lines.push(m), warn() {}, error() {} },
+    });
+    await storm(h, scheduler, 25 * MINUTE);
+    expect(lines.filter((line) => line.includes('held back'))).toHaveLength(1);
+  });
+});
+
+describe('Round 8 B1: a run always cleans up after itself', () => {
+  it('removes the whole workspace in `finally` when the failure path itself throws', async () => {
+    // The `catch` begins with a log line; a logger that throws there used to skip the
+    // workspace removal entirely and leave a full dump behind.
+    const h = harness({
+      logger: {
+        info() {},
+        warn() {},
+        error(_context, message) {
+          if (message === 'backup run failed') throw new Error('the log transport is down');
+        },
+      },
+    });
+    h.state.dumpFails = true;
+    await expect(h.service.run('SCHEDULED')).rejects.toThrow('the log transport is down');
+    expect(h.state.everythingRemoved).toBe(true);
+  });
+
+  it('keeps a VERIFIED archive when the run fails after verification, e.g. finish throwing', async () => {
+    // A `finish(SUCCEEDED)` whose answer was lost after it committed reaches the `catch`
+    // with a SUCCEEDED row; removing the archive there removed the newest good backup.
+    const h = harness();
+    const finish = h.runs.finish.bind(h.runs);
+    let thrown = false;
+    h.runs.finish = async (input) => {
+      if (input.state === 'SUCCEEDED' && !thrown) {
+        thrown = true;
+        await finish(input);
+        throw new Error('the connection died after the commit');
+      }
+      await finish(input);
+    };
+    await h.service.run('SCHEDULED');
+    expect(h.state.plaintextRemoved).toBe(true);
+    expect(h.state.everythingRemoved).toBe(false);
+
+    // The control: a failure BEFORE verification still removes everything.
+    const before = harness();
+    before.state.sealFails = true;
+    await before.service.run('SCHEDULED');
+    expect(before.state.everythingRemoved).toBe(true);
+  });
+
+  it('does not remove a SUCCEEDED run’s archive in `finally`', async () => {
+    const h = harness();
+    const run = await completed(h, 'SCHEDULED');
+    expect(run.state).toBe('SUCCEEDED');
+    expect(h.state.plaintextRemoved).toBe(true);
+    expect(h.state.everythingRemoved).toBe(false);
+  });
+
+  it('on shutdown, removes the in-flight run’s plaintext and never its archive', async () => {
+    const h = harness();
+    let discarded: Promise<readonly string[]> | null = null;
+    h.state.onDump = () => {
+      discarded = h.service.discardInFlightPlaintext();
+    };
+    const run = await completed(h, 'SCHEDULED');
+    expect(discarded).not.toBeNull();
+    expect(await discarded).toEqual([]);
+    expect(h.state.plaintextRemoved).toBe(true);
+    // The run reached its end anyway: its verified archive is kept.
+    expect(run.state).toBe('SUCCEEDED');
+    expect(h.state.everythingRemoved).toBe(false);
+
+    // And once no run is in flight, a shutdown touches nothing.
+    h.state.plaintextRemoved = false;
+    expect(await h.service.discardInFlightPlaintext()).toEqual([]);
+    expect(h.state.plaintextRemoved).toBe(false);
+  });
+
+  it('sweeps killed runs once it holds the lock, before the dump, never its own directory', async () => {
+    const calls: { exceptId: string; dumpsSoFar: number }[] = [];
+    let h: Harness | null = null;
+    h = harness({
+      orphanSweep: {
+        async sweep(input) {
+          calls.push({ exceptId: input.exceptId, dumpsSoFar: h?.state.dumps ?? -1 });
+          return { directories: [], files: [], survived: ['/w/old/dump.pgcustom'] };
+        },
+      },
+    });
+    const run = await completed(h, 'SCHEDULED');
+    expect(calls).toEqual([{ exceptId: run.id, dumpsSoFar: 0 }]);
+    // What it could not remove is the cleanup condition, under its one key.
+    const cleanup = h.state.recorded.filter((event) => event.code === 'backup.cleanup_failed');
+    expect(cleanup).toHaveLength(1);
+    expect(cleanup[0]?.dedupeKey).toBe('backup.cleanup');
+    expect(run.state).toBe('SUCCEEDED');
+  });
+
+  it('a BUSY caller does not sweep, and a sweep that throws does not fail the run', async () => {
+    let swept = 0;
+    const h = harness({
+      orphanSweep: {
+        async sweep() {
+          swept += 1;
+          throw new Error('the backup root is unreadable');
+        },
+      },
+    });
+    const run = await completed(h, 'SCHEDULED');
+    expect(run.state).toBe('SUCCEEDED');
+    expect(swept).toBe(1);
+    h.runs.busyWith = run;
+    const busy = await h.service.run('SCHEDULED');
+    expect(busy.kind).toBe('BUSY');
+    expect(swept).toBe(1);
   });
 });

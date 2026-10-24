@@ -26,6 +26,7 @@ import type {
   GatewayProviderRequestRepository,
   GatewaySiblingAttempt,
 } from '../application/gateway-invoice-ports.js';
+import { NEXA_CANCEL_KEY_PREFIX } from '../application/gateway-invoice-ports.js';
 
 type RequestRow = typeof gatewayProviderRequests.$inferSelect;
 
@@ -43,6 +44,7 @@ function recordOf(row: RequestRow): GatewayProviderRequestRecord {
     decidedAt: row.decidedAt,
     errorCode: row.errorCode,
     refundCardMasked: row.refundCardMasked,
+    requestedByNexa: row.idempotencyKey.startsWith(NEXA_CANCEL_KEY_PREFIX),
   };
 }
 

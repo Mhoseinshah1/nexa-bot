@@ -334,6 +334,7 @@ export function resolve(
         <UserDetailPage
           key={user['id'] ?? ''}
           id={user['id'] ?? ''}
+          initialTab={route.query.get('tab')}
           mayBlock={may('users.block')}
           mayViewWallet={may('users.view')}
           mayCredit={may('users.wallet.credit')}

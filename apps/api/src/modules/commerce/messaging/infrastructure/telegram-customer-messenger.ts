@@ -1911,7 +1911,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     await this.opsLog.record(scope, {
       code: CUSTOMER_SEND_OK_CODE,
       severity: 'INFO',
-      message: 'Customer replies through this bot are reaching Telegram again.',
+      message: 'پاسخ‌های مشتریان از طریق این ربات دوباره به تلگرام می‌رسد.',
       context: { botInstanceId },
       recoversCode: CUSTOMER_SEND_FAILED_CODE,
       // Named, so recovering ONE bot does not mark every other bot's open

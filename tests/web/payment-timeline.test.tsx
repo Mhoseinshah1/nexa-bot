@@ -721,3 +721,40 @@ describe('the history does not keep an answer that has moved', () => {
     await waitFor(() => expect(timelineReads(api.calls)).toBe(2));
   });
 });
+
+describe('R8 A6: reject reasons and a late wallet credit on the timeline', () => {
+  it('draws each as its own row: the reasons as codes plus a count, the credit with its amount', async () => {
+    stubApi(
+      timeline({
+        entries: [
+          timelineCreated,
+          {
+            kind: 'GATEWAY_REJECT_REASONS',
+            at: '2026-09-10T12:40:00.000Z',
+            providerStatus: 'rejected',
+            reasons: ['low_balance'],
+            withheldCount: 2,
+          },
+          {
+            kind: 'GATEWAY_LATE_CREDITED',
+            at: '2026-09-10T14:00:00.000Z',
+            entryId: '019260ab-cdef-7012-8345-6789abcdef01',
+            amountMinor: '180000',
+            currency: 'IRT',
+          },
+        ],
+      }),
+    );
+    renderPage(<PaymentTimelineCard paymentId={PAYMENT_ID} paymentState="FAILED" />);
+    await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
+    expect(rows()).toEqual([
+      t('web.payment_timeline_created'),
+      t('web.payment_timeline_reject_reasons'),
+      t('web.payment_timeline_late_credited'),
+    ]);
+    expect(screen.getByText('low_balance')).toBeInTheDocument();
+    // The prose reasons are counted, never quoted.
+    expect(screen.getByText(/دلیل متنی/u).textContent).toMatch(/[2۲]/u);
+    expect(screen.getByText(t('web.payment_timeline_late_credited_to_wallet'))).toBeInTheDocument();
+  });
+});

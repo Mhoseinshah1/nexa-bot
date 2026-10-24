@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  DEFAULT_SERVICE_CARD_ROWS,
   EMPTY_PRODUCT_DISPLAY,
   NexaError,
   PANEL_UNHEALTHY_AFTER_FAILURES,
@@ -553,6 +554,114 @@ describe('a customer looks after the services they bought', () => {
         expect(markup, label).toContain(label);
       }
       expect(markup).not.toContain('➕ خرید حجم اضافه');
+    });
+
+    /*
+     * R8-C3: the service screen's layout (`bot.service_card_layout`). Rows of callback data,
+     * top to bottom, so a test sees grouping and order and not only the set of buttons.
+     */
+    describe('the owner’s layout', () => {
+      const rowsOf = (): string[][] =>
+        (
+          (JSON.parse(lastMarkup()) as { inline_keyboard?: { callback_data?: string }[][] })
+            .inline_keyboard ?? []
+        ).map((row) => row.map((cell) => String(cell.callback_data)));
+      const layoutOf = (rows: [string, boolean?][][]) => ({
+        rows: rows.map((row) =>
+          row.map(([button, enabled]) => ({ button, enabled: enabled ?? true })),
+        ),
+      });
+      const setLayout = async (value: unknown): Promise<void> => {
+        await ctx.container.database.db.execute(sql`
+          INSERT INTO setting_values (id, tenant_id, setting_key, value, version, updated_at)
+          VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, 'bot.service_card_layout',
+                  ${JSON.stringify(value)}::jsonb, 1, now())
+          ON CONFLICT (tenant_id, setting_key)
+            DO UPDATE SET value = ${JSON.stringify(value)}::jsonb, version = setting_values.version + 1`);
+      };
+      const stripIds = (rows: string[][], id: string) =>
+        rows.map((row) => row.map((data) => data.replace(`:${id}`, '')));
+
+      it('a default layout draws a keyboard byte-identical to no layout', async () => {
+        const service = await activeService('layout-default');
+        await handle(tap(`s:${service.id}`));
+        const before = lastMarkup();
+        expect(stripIds(rowsOf(), service.id)).toEqual([
+          ['rs'],
+          ['r'],
+          ['nt'],
+          ['n', 'u'],
+          ['ta'],
+          ['sl:1'],
+        ]);
+        await setLayout({
+          rows: DEFAULT_SERVICE_CARD_ROWS.map((row) =>
+            row.map((button) => ({ button, enabled: true })),
+          ),
+        });
+        await handle(tap(`s:${service.id}`));
+        expect(lastMarkup()).toBe(before);
+        // And an empty one, which is what an operator's «بازنشانی» saves.
+        await setLayout({ rows: [] });
+        await handle(tap(`s:${service.id}`));
+        expect(lastMarkup()).toBe(before);
+      });
+
+      it('applies a custom order and rows, with «بازگشت» last', async () => {
+        const service = await activeService('layout-custom');
+        await setLayout(
+          layoutOf([
+            [['service.transfer'], ['service.note'], ['service.refresh']],
+            [['service.suspend'], ['service.renew']],
+          ]),
+        );
+        await handle(tap(`s:${service.id}`));
+        expect(stripIds(rowsOf(), service.id)).toEqual([
+          ['ta', 'nt', 'rs'],
+          ['u', 'n'],
+          // Not named by the layout: drawn after the named rows, in its usual place.
+          ['r'],
+          ['sl:1'],
+        ]);
+      });
+
+      it('does not draw a button the layout hides', async () => {
+        const service = await activeService('layout-hidden');
+        await setLayout(
+          layoutOf([
+            [['service.refresh'], ['service.link', false]],
+            [['service.note'], ['service.suspend', false]],
+          ]),
+        );
+        await handle(tap(`s:${service.id}`));
+        const data = rowsOf().flat();
+        expect(data).not.toContain(`r:${service.id}`);
+        expect(data).not.toContain(`u:${service.id}`);
+        expect(data).toContain(`rs:${service.id}`);
+        expect(data).toContain(`nt:${service.id}`);
+        expect(rowsOf().at(-1)).toEqual(['sl:1']);
+      });
+
+      it('never draws a button the service is ineligible for, even when the layout enables it', async () => {
+        const service = await activeService('layout-ineligible');
+        // The same fixture's default card has no add-traffic, add-time, rotate, files,
+        // devices or location button: their conditions are not met.
+        await setLayout(
+          layoutOf([
+            [['service.add_traffic'], ['service.add_time'], ['service.rotate']],
+            [['service.files'], ['service.add_devices'], ['service.change_location']],
+            [['service.note']],
+          ]),
+        );
+        await handle(tap(`s:${service.id}`));
+        const rows = stripIds(rowsOf(), service.id);
+        const flat = rows.flat();
+        for (const prefix of ['v', 'h', 'rc', 'sf', 'dv', 'lc']) {
+          expect(flat, prefix).not.toContain(prefix);
+        }
+        expect(rows[0]).toEqual(['nt']);
+        expect(rows.at(-1)).toEqual(['sl:1']);
+      });
     });
 
     it('never shows another customer’s card, by id', async () => {

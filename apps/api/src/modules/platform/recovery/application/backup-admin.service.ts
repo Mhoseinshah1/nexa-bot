@@ -62,6 +62,15 @@ export interface BackupAdminServiceDeps {
    * schedule the worker is not running (spec §13.2).
    */
   readonly schedule: () => Promise<EffectiveBackupSchedule>;
+  /** The backup volume against what the next run needs (Round 8, B3). Null: no directory yet. */
+  readonly disk?: () => Promise<BackupDiskView | null>;
+}
+
+export interface BackupDiskView {
+  readonly freeBytes: number;
+  readonly totalBytes: number;
+  readonly requiredBytes: number;
+  readonly low: boolean;
 }
 
 /** A run, plus whether its encrypted archive is still downloadable. */
@@ -83,6 +92,7 @@ export interface BackupStatusView {
   readonly unknownDeliveries: number;
   readonly quiesced: boolean;
   readonly archivePassword: { readonly configured: boolean; readonly setAt: Date | null };
+  readonly disk: BackupDiskView | null;
 }
 
 export class BackupAdminService {
@@ -102,6 +112,7 @@ export class BackupAdminService {
       schedule,
       deliveryDestination,
       archivePassword,
+      disk,
     ] = await Promise.all([
       this.deps.runs.lastSucceededAt(),
       this.deps.runs.active(),
@@ -110,6 +121,7 @@ export class BackupAdminService {
       this.deps.schedule(),
       this.deps.backup.deliveryDestination(),
       this.deps.archivePassword(scope),
+      this.deps.disk === undefined ? Promise.resolve(null) : this.deps.disk().catch(() => null),
     ]);
     return {
       scheduleEnabled: schedule.enabled,
@@ -125,6 +137,7 @@ export class BackupAdminService {
       // first. One read, from the same predicate the write gate uses.
       quiesced: lock !== null && lock.quiescing,
       archivePassword,
+      disk,
     };
   }
 

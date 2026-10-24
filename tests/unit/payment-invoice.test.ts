@@ -7,6 +7,7 @@ import {
 } from '@nexa/contracts';
 import { createTranslator } from '@nexa/i18n';
 import { PaymentDestinationRenderer } from '../../apps/api/src/modules/commerce/payments/infrastructure/destination-renderer';
+import { cardInvoiceAmountValues } from '../../apps/api/src/surfaces/telegram/card-invoice';
 import { appearanceFallbackText } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
 
 /**
@@ -37,11 +38,14 @@ describe('the manual-transfer invoice', () => {
         destination: await renderer.render(scope, snapshot(over)),
         total,
         reference: 'NX-7781',
+        // R8 A2: what the surface supplies beside `total`.
+        ...cardInvoiceAmountValues(total),
+        expiresTime: new Date('2026-10-20T09:10:00Z'),
       }),
     );
   }
 
-  it('renders the owner layout in order: heading, tracking code, amount, card, holder', async () => {
+  it('renders the R8 A2 owner layout in order: heading, amount in rial, card, holder, deadline, tracking code', async () => {
     const body = await invoice();
     const at = (needle: string): number => {
       const index = body.indexOf(needle);
@@ -51,11 +55,14 @@ describe('the manual-transfer invoice', () => {
 
     expect(body.startsWith('🧾')).toBe(true);
     const order = [
-      at('جزئیات فاکتور پرداخت شما'),
+      at('فاکتور کارت‌به‌کارت'),
+      at('مبلغ قابل واریز:'),
+      at('۲٬۵۰۰٬۰۰۰ ریال'),
+      at('(معادل ۲۵۰٬۰۰۰ تومان)'),
+      at('کارت مقصد:'),
+      at('علی رضایی'),
+      at('مهلت واریز: ساعت'),
       at('کد پیگیری پرداخت: '),
-      at('مبلغ قابل پرداخت'),
-      at('شماره کارت'),
-      at('به نام'),
     ];
     expect(order).toStrictEqual([...order].sort((a, b) => a - b));
   });
@@ -64,10 +71,10 @@ describe('the manual-transfer invoice', () => {
     expect(await invoice()).not.toMatch(/\{[A-Za-z_][A-Za-z0-9_]*\}/u);
   });
 
-  it('carries the reference and the card digits exactly as the snapshot froze them', async () => {
+  it('carries the reference, and the card digits the snapshot froze — four by four (R8 A2)', async () => {
     const body = await invoice();
     expect(body).toContain('NX-7781');
-    expect(body).toContain('6037991234567893');
+    expect(body).toContain('6037 9912 3456 7893');
   });
 
   // An absent Sheba is not composed at all — the reason the block is built from per-line

@@ -537,6 +537,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot-runtime.ts',
       // Spec §7: the client apps section's screens live beside the runtime, routed by it.
       'admin-tutorial-video.ts',
+      // R8 A2: the card-to-card invoice's copy buttons, shared by the TonPays and manual screens.
+      'card-invoice.ts',
     ]
       .map((file) =>
         readFileSync(
@@ -845,7 +847,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.checkout_in_progress',
       'bot.payment.copy_amount_button',
       'bot.payment.copy_card_button',
-      // R6 item 2: «📋 کپی مبلغ دقیق» on a TonPays card invoice.
+      // R6 item 2: «📋 کپی مبلغ دقیق» on a TonPays card invoice; R8 A2: «📋 کپی مبلغ (ریال)»
+      // on the manual card-to-card invoice too.
       'bot.payment.copy_transfer_amount_button',
       /*
        * Package A: `bot.payment.gateway_button` is gone from the runtime — every external
@@ -1207,7 +1210,6 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.username.stale',
       'bot.username.taken',
       'bot.username.unavailable',
-      'bot.wallet.copy_id_button',
       'bot.wallet.insufficient',
       'bot.wallet.negative_balance',
       // Owner spec §2.2: a button label under a wallet credit, opening the wallet screen.

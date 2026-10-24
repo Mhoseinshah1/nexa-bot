@@ -151,6 +151,7 @@ export const ERROR_TEXT = {
   'backup.tool_failed': 'web.err_backup_tool_failed',
   'backup.tool_oom_killed': 'web.err_backup_tool_oom_killed',
   'backup.memory_insufficient': 'web.err_backup_memory_insufficient',
+  'backup.disk_insufficient': 'web.err_backup_disk_insufficient',
   'backup.unsafe_restore_target': 'web.err_backup_unsafe_restore_target',
   'backup.verification_failed': 'web.err_backup_verification_failed',
   'bootstrap.already_completed': 'web.err_bootstrap_already_completed',

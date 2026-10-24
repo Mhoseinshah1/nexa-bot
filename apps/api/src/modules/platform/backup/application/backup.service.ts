@@ -1,4 +1,5 @@
 import {
+  toPersianDigits,
   BACKUP_LEASE_HEARTBEAT_MS,
   BACKUP_LEASE_STALE_AFTER_MS,
   BACKUP_SEVEN_ZIP_RESTORE_INSTRUCTION,
@@ -28,7 +29,9 @@ import {
   type BackupWorkspaceFactory,
   type DatabaseTools,
 } from './ports.js';
+import { diskInsufficientReason } from './backup-disk.js';
 import { backupPartCaption, backupSummaryMessage } from './backup-caption.js';
+import type { BackupOrphanSweepResult } from './backup-orphan-sweep.js';
 
 /**
  * The backup pipeline.
@@ -125,6 +128,21 @@ export interface BackupServiceDeps {
    */
   readonly opsLog: OperationalEventRecorder;
   /**
+   * Round 8 B3: free space on the backup volume against what this run needs (the last
+   * verified run's dump plus archive, with headroom). Null: no directory yet, or unknown.
+   * Absent: no preflight. A run that does not fit is refused BEFORE the dump starts.
+   */
+  readonly diskPreflight?: () => Promise<{
+    readonly freeBytes: number;
+    readonly requiredBytes: number;
+  } | null>;
+  /**
+   * Round 8 B2: runs after a run finished SUCCEEDED (and only then), to prune archives. Its
+   * failure is logged and never changes the run's outcome. The retention rules themselves —
+   * the newest verified archive is never removed — live in the run repository's query.
+   */
+  readonly afterSuccess?: () => Promise<void>;
+  /**
    * Phase 7 (review M2): the RECORDER ALONE, without the projection to Telegram — the raw
    * operational-event writer. A `deliver: false` run (the Mirza restore's backups: "a restore
    * sends nothing to Telegram") records its events here, so its conditions open and close as
@@ -158,6 +176,13 @@ export interface BackupServiceDeps {
     readonly archiveBytes: number;
     readonly checksum: string;
   }) => Promise<string | null>;
+  /**
+   * Round 8 (B1): removes what KILLED runs left in their directories, once this run holds
+   * the one-backup lock and before it dumps (`BackupOrphanSweep`). Absent: not swept here.
+   */
+  readonly orphanSweep?: {
+    sweep(input: { readonly exceptId: string }): Promise<BackupOrphanSweepResult>;
+  };
 }
 
 /**
@@ -186,6 +211,8 @@ const BACKUP_CONDITION_KEY = 'backup.run';
 const DELIVERY_CONDITION_KEY = 'backup.delivery';
 /** The cleanup condition's key, shared with the debris sweep that also opens it. */
 const CLEANUP_CONDITION_KEY = 'backup.cleanup';
+/** The disk-space condition's key, shared with the housekeeping pass that also opens it. */
+const DISK_CONDITION_KEY = 'backup.disk';
 /** A split archive that reached Telegram only in part (E4): one installation condition. */
 const PARTIAL_CONDITION_KEY = 'backup.delivery_partial';
 
@@ -207,6 +234,14 @@ function archiveFilename(id: string, startedAt: Date, format: BackupArchiveForma
   return `nexa-backup-${stamp}-${short}.${format === 'SEVEN_ZIP' ? '7z' : 'nxb'}`;
 }
 
+/** A failed run's workspace: all of it, unless its archive had verified (Round 8, B4). */
+function discardFailed(
+  workspace: BackupWorkspace,
+  verifiedAt: Date | null,
+): Promise<readonly string[]> {
+  return verifiedAt === null ? workspace.discardAll() : workspace.discardPlaintext();
+}
+
 export type BackupOutcome =
   | { readonly kind: 'BUSY'; readonly holder: BackupRunRow }
   | { readonly kind: 'COMPLETED'; readonly run: BackupRunRow };
@@ -223,11 +258,30 @@ export class BackupService {
   private leaseRefreshedAt: number | null = null;
   /** Which run `leaseRefreshedAt` is about, so a late heartbeat of a finished run is ignored. */
   private leaseRunId: string | null = null;
+  /** The workspace of the run this process is executing, for `discardInFlightPlaintext`. */
+  private activeWorkspace: BackupWorkspace | null = null;
 
   constructor(private readonly deps: BackupServiceDeps) {}
 
   leaseHeartbeatAt(): number | null {
     return this.leaseRefreshedAt;
+  }
+
+  /**
+   * On SIGTERM (Round 8, B1): removes the PLAINTEXT of the run this process is executing,
+   * never its archive.
+   *
+   * The process is about to exit and its run with it, so the 2 GB dump would otherwise stay
+   * until a sweep finds the run abandoned. Only the plaintext: if the run nonetheless reaches
+   * its end before the exit, a verified archive is still a verified archive, and deleting it
+   * would be deleting the newest good backup. A stage that still needed the plaintext reads
+   * it through a descriptor it already holds, or fails for a missing file — a failed run,
+   * never a false verification. Returns what could not be removed.
+   */
+  async discardInFlightPlaintext(): Promise<readonly string[]> {
+    const workspace = this.activeWorkspace;
+    if (workspace === null) return [];
+    return workspace.discardPlaintext();
   }
 
   /**
@@ -288,8 +342,8 @@ export class BackupService {
         code: 'backup.run_failed',
         severity: 'ERROR',
         message:
-          `${String(reclaimed)} backup run(s) were abandoned by a process that stopped ` +
-          'reporting, and have been closed as failed. Those backups did not complete.',
+          `${toPersianDigits(String(reclaimed))} اجرای بکاپ را فرایندی رها کرد که دیگر گزارشی نمی‌داد؛ ` +
+          'ناموفق بسته شد و آن بکاپ‌ها کامل نشدند.',
         context: { reclaimed },
         dedupeKey: BACKUP_CONDITION_KEY,
       });
@@ -356,8 +410,20 @@ export class BackupService {
     let partCount: number | null = null;
     let archiveSealId: string | null = null;
     let summaryDeliveryState: BackupDeliveryState | null = null;
+    /*
+     * Round 8 (B1): whether the run's own cleanup has run. The `finally` removes the whole
+     * workspace of a run that did not succeed and whose `catch` never reached its removal —
+     * a logger or a scope lookup that throws at the top of the `catch` used to leave a full
+     * dump behind with nothing to report it.
+     */
+    let succeeded = false;
+    let discarded = false;
 
     try {
+      // Holding the lock: no other run of this installation is in flight, so what killed
+      // runs left is swept now, before this one needs the disk (Round 8, B1).
+      await this.sweepOrphans(id, quiet);
+
       // ---- DUMP ------------------------------------------------------------
       await this.deps.runs.progress({
         id,
@@ -366,10 +432,12 @@ export class BackupService {
         now: this.deps.clock.now(),
       });
       workspace = await this.deps.workspaces.create(id);
+      this.activeWorkspace = workspace;
       // E4: a 7-Zip archive compresses the dump itself, so the dump is written uncompressed.
       const plannedFormat = (await this.deps.archiver.nextFormat?.()) ?? 'NXB';
       // A host that cannot compress is refused now, before an hour of dumping (Round 5B).
       await this.deps.archiver.preflight?.();
+      await this.assertDiskRoom();
       const dump = await this.deps.tools.dump(workspace.dumpPath, {
         uncompressed: plannedFormat === 'SEVEN_ZIP',
       });
@@ -537,7 +605,7 @@ export class BackupService {
         {
           code: 'backup.run_ok',
           severity: 'INFO',
-          message: `Backup ${id} completed and was verified against a real restore.`,
+          message: `بکاپ ${id} کامل شد و با یک بازیابی واقعی تأیید شد.`,
           context: { backupId: id, trigger, delivery: deliveryState },
           recoversCode: 'backup.run_failed',
           recoversDedupeKey: BACKUP_CONDITION_KEY,
@@ -578,6 +646,8 @@ export class BackupService {
         archiveSealId,
         summaryDeliveryState,
       });
+      succeeded = true;
+      await this.pruneAfterSuccess(id);
     } catch (error) {
       const failureCode = error instanceof NexaError ? error.code : 'backup.failed';
       const failureMessage = error instanceof Error ? error.message : String(error);
@@ -607,27 +677,44 @@ export class BackupService {
        * the alert actionable; `context` is redacted and is not projected.
        */
       await this.report(
-        {
-          code: 'backup.run_failed',
-          severity: 'ERROR',
-          message: `Backup ${id} failed at ${stage} (${failureCode}).`,
-          context: { backupId: id, trigger, stage, failureCode, failureMessage },
-          dedupeKey: BACKUP_CONDITION_KEY,
-        },
+        error instanceof NexaError && error.code === PLATFORM_ERROR_CODES.BACKUP_DISK_INSUFFICIENT
+          ? // ONE message, in Persian, on the disk condition housekeeping also owns
+            // (`backup.disk`): the same fact must not open two conditions.
+            {
+              code: 'backup.disk_threshold_exceeded',
+              severity: 'WARN',
+              message: `${failureMessage}؛ بکاپ شروع نشد.`,
+              context: { backupId: id, trigger, ...error.details },
+              dedupeKey: DISK_CONDITION_KEY,
+            }
+          : {
+              code: 'backup.run_failed',
+              severity: 'ERROR',
+              message: `بکاپ ${id} در مرحلهٔ ${stage} ناموفق بود (${failureCode}).`,
+              context: { backupId: id, trigger, stage, failureCode, failureMessage },
+              dedupeKey: BACKUP_CONDITION_KEY,
+            },
         quiet,
       );
 
       // Everything goes, archive included. An archive from a run that failed
       // before verification is unproven, and an unproven archive on disk is
       // the thing that stops somebody looking for a real one.
+      //
+      // EXCEPT an archive that verified (Round 8, B4): a failure after VERIFY_RESTORE —
+      // at DELIVER, or `finish` itself throwing — leaves a PROVEN archive, possibly one
+      // Telegram holds parts of, and possibly the newest good one: a `finish(SUCCEEDED)`
+      // whose answer was lost after it committed reaches this `catch` with a SUCCEEDED row.
+      // Only its plaintext goes; retention decides the archive like any other.
       // `workspace` is null when the failure was the workspace itself. The
       // subprocess leak list is still read: a dump cannot have run without a
       // workspace, but reading it unconditionally means this line does not become
       // wrong the day something before the workspace spawns one.
       const leftovers = [
-        ...(workspace === null ? [] : await workspace.discardAll()),
+        ...(workspace === null ? [] : await discardFailed(workspace, verifiedAt)),
         ...this.deps.tools.leaked,
       ];
+      discarded = true;
       if (leftovers.length > 0) await this.reportCleanup(id, 'FAILED', leftovers.length, quiet);
       // The stage that failed is timed up to the failure; stages after it are absent.
       lap(stage);
@@ -658,6 +745,18 @@ export class BackupService {
       heartbeat.stop();
       this.leaseRunId = null;
       this.leaseRefreshedAt = null;
+      this.activeWorkspace = null;
+      if (!succeeded && !discarded && workspace !== null) {
+        const left = await discardFailed(workspace, verifiedAt).catch((reason: unknown) => [
+          String(reason),
+        ]);
+        if (left.length > 0) {
+          this.deps.logger.error(
+            { backupId: id, left },
+            'a failed backup run could not remove its workspace',
+          );
+        }
+      }
     }
 
     const run = await this.deps.runs.byId(id);
@@ -994,9 +1093,10 @@ export class BackupService {
         code: 'backup.delivery_partial',
         severity: 'WARN',
         message:
-          `Backup ${id} reached Telegram only in part: ${String(delivered)} of ` +
-          `${String(partCount)} part(s) delivered (delivery ${state}). The parts in the ` +
-          'group cannot be restored on their own; the archive is retained on this server.',
+          `بکاپ ${id} فقط بخشی از فایل‌ها را به تلگرام رساند: ` +
+          `${toPersianDigits(String(delivered))} از ${toPersianDigits(String(partCount))} بخش ` +
+          `(وضعیت ${state}). بخش‌های داخل گروه به‌تنهایی قابل بازیابی نیستند؛ ` +
+          'آرشیو روی سرور نگه داشته شد.',
         context: { backupId: id, delivery: state, delivered, partCount },
         dedupeKey: PARTIAL_CONDITION_KEY,
       });
@@ -1006,7 +1106,7 @@ export class BackupService {
       await this.report({
         code: 'backup.delivery_partial_ok',
         severity: 'INFO',
-        message: `Backup ${id} was delivered in full (${String(partCount)} part(s)).`,
+        message: `بکاپ ${id} کامل به تلگرام رسید (${toPersianDigits(String(partCount))} بخش).`,
         context: { backupId: id, partCount },
         recoversCode: 'backup.delivery_partial',
         recoversDedupeKey: PARTIAL_CONDITION_KEY,
@@ -1017,8 +1117,8 @@ export class BackupService {
         code: 'backup.delivery_failed',
         severity: 'WARN',
         message:
-          `Backup ${id} was verified and its archive did not leave this server ` +
-          `(delivery ${state}). It is retained here.`,
+          `بکاپ ${id} تأیید شد اما آرشیو آن از سرور خارج نشد (وضعیت ${state}). ` +
+          'آرشیو روی سرور نگه داشته شد.',
         context: { backupId: id, delivery: state },
         dedupeKey: DELIVERY_CONDITION_KEY,
       });
@@ -1028,7 +1128,7 @@ export class BackupService {
       await this.report({
         code: 'backup.delivery_ok',
         severity: 'INFO',
-        message: `Backup ${id} delivery ${state === 'SUCCEEDED' ? 'succeeded' : 'was not configured'}.`,
+        message: `ارسال بکاپ ${id} ${state === 'SUCCEEDED' ? 'انجام شد' : 'تنظیم نشده است'}.`,
         context: { backupId: id, delivery: state },
         recoversCode: 'backup.delivery_failed',
         recoversDedupeKey: DELIVERY_CONDITION_KEY,
@@ -1055,12 +1155,75 @@ export class BackupService {
       {
         code: 'backup.cleanup_failed',
         severity: 'ERROR',
-        message: `Backup ${id} (${state}) left ${String(left)} artifact(s) on this host after cleanup.`,
+        message: `بکاپ ${id} (${state}) پس از پاک‌سازی ${toPersianDigits(String(left))} فایل روی این سرور باقی گذاشت.`,
         context: { backupId: id, state, leftovers: left },
         dedupeKey: CLEANUP_CONDITION_KEY,
       },
       quiet,
     );
+  }
+
+  /**
+   * Round 8 B2: retention runs the moment a backup has landed, not only on the housekeeping
+   * tick, so the volume never holds more than the policy keeps plus the run in flight. The
+   * run is already recorded SUCCEEDED, so the newest verified archive is this one and the
+   * repository's query protects it; a failure here is logged and nothing else.
+   */
+  private async pruneAfterSuccess(id: string): Promise<void> {
+    if (this.deps.afterSuccess === undefined) return;
+    try {
+      await this.deps.afterSuccess();
+    } catch (error) {
+      this.deps.logger.error(
+        { backupId: id, err: error instanceof Error ? error.message : String(error) },
+        'archive retention after a successful backup failed',
+      );
+    }
+  }
+
+  /**
+   * The orphan sweep, inside the run (Round 8, B1). Never fails the run: a sweep that cannot
+   * read the root is logged, and what it could not remove opens the cleanup condition under
+   * its one installation key, like any other plaintext left on this host.
+   */
+  private async sweepOrphans(id: string, quiet: boolean): Promise<void> {
+    if (this.deps.orphanSweep === undefined) return;
+    try {
+      const swept = await this.deps.orphanSweep.sweep({ exceptId: id });
+      if (swept.survived.length > 0) {
+        await this.report(
+          {
+            code: 'backup.cleanup_failed',
+            severity: 'ERROR',
+            message: `${toPersianDigits(String(swept.survived.length))} فایل که اجراهای متوقف‌شدهٔ بکاپ روی این سرور باقی گذاشته بودند پاک نشد.`,
+            context: { backupId: id, survived: swept.survived.length },
+            dedupeKey: CLEANUP_CONDITION_KEY,
+          },
+          quiet,
+        );
+      }
+    } catch (error) {
+      this.deps.logger.error(
+        { backupId: id, reason: error instanceof Error ? error.message : String(error) },
+        'the sweep of killed backup runs failed; this run continues',
+      );
+    }
+  }
+
+  /**
+   * Round 8 B3. Refuses the run, with the owner's Persian reason, when the volume cannot hold
+   * it. A dump started on a nearly full disk dies about 30 seconds in and leaves gigabytes
+   * behind, which is how every later backup failed too. Unknown space is not a refusal.
+   */
+  private async assertDiskRoom(): Promise<void> {
+    const state = await this.deps.diskPreflight?.();
+    if (state === null || state === undefined || state.freeBytes >= state.requiredBytes) return;
+    throw new NexaError({
+      kind: 'INTERNAL',
+      code: PLATFORM_ERROR_CODES.BACKUP_DISK_INSUFFICIENT,
+      message: diskInsufficientReason(state.freeBytes, state.requiredBytes),
+      details: { freeBytes: state.freeBytes, requiredBytes: state.requiredBytes },
+    });
   }
 
   private async isOpen(code: string): Promise<boolean> {

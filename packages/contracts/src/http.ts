@@ -4888,6 +4888,11 @@ export const PAYMENT_TIMELINE_KINDS = [
   'RECEIPT_SUBMITTED',
   'GATEWAY_WEBHOOK_HINT',
   'GATEWAY_INQUIRY',
+  /**
+   * R8 A6: the gateway's rejection reasons, once per change (the
+   * `gateway_invoice.provider_rejection_reasons` audit row, under `payments.view`). Tokens only.
+   */
+  'GATEWAY_REJECT_REASONS',
   'GATEWAY_REINQUIRE_REQUESTED',
   'PROVIDER_REVIEW_OPENED',
   'PAYMENT_OUTCOME_UNKNOWN',
@@ -4895,6 +4900,12 @@ export const PAYMENT_TIMELINE_KINDS = [
   'PAYMENT_RESOLVED',
   'GATEWAY_OUTCOME',
   'GATEWAY_LATE_COMPLETION',
+  /**
+   * R8 A6: a late gateway approval credited to the wallet — the `GATEWAY_LATE_CREDIT` ledger
+   * entry, behind `users.view` with the rest of the WALLET section, in place of a plain
+   * `WALLET_ENTRY` for that entry.
+   */
+  'GATEWAY_LATE_CREDITED',
   'RECEIPT_CREDITED',
   'ORDER_SETTLED',
   'ORDER_FULFILMENT',
@@ -5057,6 +5068,25 @@ export const paymentTimelineEntrySchema = z.discriminatedUnion('kind', [
     outcome: z.enum(GATEWAY_INVOICE_OUTCOMES),
   }),
   z.object({ kind: z.literal('GATEWAY_LATE_COMPLETION'), ...timelineAt }),
+  z.object({
+    kind: z.literal('GATEWAY_LATE_CREDITED'),
+    ...timelineAt,
+    entryId: z.string(),
+    ...timelineMoney,
+  }),
+  z.object({
+    kind: z.literal('GATEWAY_REJECT_REASONS'),
+    /** When the gateway's reasons were first observed (or changed). */
+    ...timelineAt,
+    providerStatus: z.string().nullable(),
+    /** The reasons that are machine tokens (`low_balance`), in the provider's order. */
+    reasons: z.array(z.string().regex(/^[A-Za-z0-9_.:-]{1,64}$/u)).max(20),
+    /**
+     * How many reasons were prose rather than a token, and so are not carried: the timeline
+     * holds no free text. The payment's detail and its audit row show them.
+     */
+    withheldCount: z.number().int().nonnegative(),
+  }),
   z.object({ kind: z.literal('ORDER_SETTLED'), ...timelineAt, orderId: z.string() }),
   z.object({
     kind: z.literal('ORDER_FULFILMENT'),
@@ -6779,6 +6809,20 @@ export const backupStatusResponseSchema = z.object({
     configured: z.boolean(),
     setAt: z.iso.datetime().nullable(),
   }),
+  /**
+   * The backup volume (Round 8, B3): free and total bytes, what the next run needs, and
+   * whether free space is below that. Null where the directory does not exist yet. Bytes are
+   * strings because the wire carries no bigint.
+   */
+  disk: z
+    .object({
+      freeBytes: z.string(),
+      totalBytes: z.string().nullable(),
+      requiredBytes: z.string(),
+      low: z.boolean(),
+    })
+    .nullable()
+    .optional(),
 });
 export type BackupStatusResponse = z.infer<typeof backupStatusResponseSchema>;
 

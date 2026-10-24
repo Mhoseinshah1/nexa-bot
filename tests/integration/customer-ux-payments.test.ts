@@ -507,14 +507,10 @@ describe('a customer pays through the approved screens', () => {
       expect(body).toMatch(
         /🔖 گروه کاربری: کاربر عادی\n\n📅 تاریخ: 14\d\d\/\d\d\/\d\d\n🕒 ساعت: \d\d:\d\d$/u,
       );
-      // R4 A3: first the copy button, whose `copy_text` is the customer's own Telegram id.
-      expect(labelsOf(lastMarkup())).toEqual([
-        '📋 کپی شناسه',
-        MARYAM,
-        '💰 افزایش موجودی',
-        '🏠 بازگشت به منوی اصلی',
-      ]);
-      expect(lastMarkup()).toContain(`"copy_text":{"text":"${MARYAM}"}`);
+      // R8-C2: no separate «کپی شناسه» button — the id is tap-to-copy in the text above.
+      expect(labelsOf(lastMarkup())).toEqual(['💰 افزایش موجودی', '🏠 بازگشت به منوی اصلی']);
+      expect(lastMarkup()).not.toContain('copy_text');
+      expect(lastMarkup()).not.toContain('کپی شناسه');
     });
 
     it('counts services and paid invoices from the rows', async () => {
@@ -668,7 +664,7 @@ describe('a customer pays through the approved screens', () => {
       expect((rows.rows[0] as { close_reason: string }).close_reason).toBe('EXPIRED');
     });
 
-    it('R6 item 4: with a 10 % card-to-card fee the invoice shows principal, fee and payable, copies the payable, and the wallet gets the principal', async () => {
+    it('R6 item 4 / R8 A2: with a 10 % card-to-card fee the invoice shows the payable in rial, copies it, and the wallet gets the principal', async () => {
       await ctx.container.database.db.execute(
         sql`UPDATE payment_gateways SET customer_fee_basis_points = 1000
              WHERE tenant_id = ${tenantA.tenantId} AND provider = 'MANUAL_TRANSFER'`,
@@ -678,12 +674,13 @@ describe('a customer pays through the approved screens', () => {
       const route = buttonsOf(lastMarkup()).find((b) => b.startsWith('tp:')) ?? '';
       await handle(tap(route));
       const body = lastText();
-      expect(body).toContain('100,000');
-      expect(body).toContain('10,000');
-      expect(body).toContain('110,000');
-      // The «کپی مبلغ» button carries the payable as bare digits, never the principal.
-      expect(lastMarkup()).toContain('"copy_text":{"text":"110000"}');
-      expect(lastMarkup()).not.toContain('"copy_text":{"text":"100000"}');
+      // R8 A2: one amount — the payable, in rial with Toman beside it — and no fee breakdown.
+      expect(body).toContain('<b>۱٬۱۰۰٬۰۰۰ ریال</b>');
+      expect(body).toContain('(معادل ۱۱۰٬۰۰۰ تومان)');
+      expect(body).not.toContain('کارمزد');
+      // The «کپی مبلغ (ریال)» button carries the payable as bare RIAL digits.
+      expect(lastMarkup()).toContain('"copy_text":{"text":"1100000"}');
+      expect(lastMarkup()).not.toContain('"copy_text":{"text":"1000000"}');
       const paymentRow = await ctx.container.database.db.execute(
         sql`SELECT id FROM payments WHERE tenant_id = ${tenantA.tenantId}`,
       );

@@ -44,6 +44,10 @@ import {
   BACKUP_LOCAL_COPIES_MAX,
   BACKUP_LOCAL_COPIES_MIN,
   BACKUP_LOCAL_COPIES_SETTING_KEY,
+  BACKUP_CPU_LIMIT_DEFAULT,
+  BACKUP_CPU_LIMIT_MAX,
+  BACKUP_CPU_LIMIT_MIN,
+  BACKUP_CPU_LIMIT_SETTING_KEY,
 } from './backup.js';
 import {
   DATA_RETENTION_SETTING_KEYS,
@@ -90,6 +94,7 @@ import {
 import { referralSignupGiftShareSchema } from './customer-ux.js';
 import { qrTemplateSettingSchema } from './delivery-qr.js';
 import { DEFAULT_MAIN_MENU_LAYOUT, mainMenuLayoutSchema } from './bot-commands.js';
+import { serviceCardLayoutSchema } from './service-card-layout.js';
 import {
   categoryColorsSchema,
   categoryIconsSchema,
@@ -652,6 +657,22 @@ export const SETTINGS = [
       'backup.archive_keep_count.',
     schema: z.number().int().min(BACKUP_ARCHIVE_KEEP_DAYS_MIN).max(BACKUP_ARCHIVE_KEEP_DAYS_MAX),
     defaultValue: BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  /** Round 8 B5: the share of one core the backup's heavy tools may use together. */
+  {
+    key: BACKUP_CPU_LIMIT_SETTING_KEY,
+    description:
+      'The most CPU the backup may use while it compresses, encrypts and verifies, as a ' +
+      `percentage of ONE core, between ${String(BACKUP_CPU_LIMIT_MIN)} and ` +
+      `${String(BACKUP_CPU_LIMIT_MAX)}. The default 70 keeps a whole core of a 2-vCPU server ` +
+      'free for the bot; a lower value makes the backup slower, not heavier.',
+    schema: z.number().int().min(BACKUP_CPU_LIMIT_MIN).max(BACKUP_CPU_LIMIT_MAX),
+    defaultValue: BACKUP_CPU_LIMIT_DEFAULT,
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
@@ -1409,6 +1430,30 @@ export const SETTINGS = [
     defaultValue: [...DEFAULT_MAIN_MENU_LAYOUT],
     configures: null,
     // An empty list is not "no keyboard": every button is then drawn in its default place.
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * R8-C3: the order, rows and visibility of the buttons on a customer's service screen,
+   * edited on the Web Admin's «دکمه‌های ربات» page and nowhere else. The labels are the
+   * buttons' own templates. The layout only orders and groups: eligibility still decides at
+   * render time which buttons exist, and «بازگشت» is always drawn, last.
+   */
+  {
+    key: 'bot.service_card_layout',
+    description:
+      'The buttons of a customer\u2019s service screen: the rows they are drawn in (one to ' +
+      'three buttons each, top to bottom) and a switch per button. It only orders, groups ' +
+      'and hides: a button the service, the panel or the customer is not eligible for is ' +
+      'never drawn, whatever this says, and the back button is always drawn last. A button ' +
+      'this value does not name is drawn after the named rows, in its usual grouping. An ' +
+      'empty list of rows draws the screen exactly as it always was.',
+    schema: serviceCardLayoutSchema,
+    defaultValue: { rows: [] },
+    configures: null,
+    // Empty is not "no buttons": the screen is then drawn in its default arrangement.
     zeroMeaning: 'LITERAL',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',

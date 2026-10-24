@@ -248,13 +248,15 @@ describe('«دکمه‌های ربات»', () => {
     await waitFor(() => expect(reads('/bot-menu/builder')).toBeGreaterThan(builderReads));
   });
 
-  it('splits the page into four tabs, the builder first, each section mounted once', async () => {
+  it('splits the page into five tabs, the builder first, each section mounted once', async () => {
     api();
     renderPage(page());
     await waitFor(() => expect(chip('wallet')).not.toBeNull());
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
       t('web.bx_bb_tab_layout'),
       t('web.ib_title'),
+      // R8-C3: the service screen's layout editor.
+      t('web.scl_title'),
       t('web.bot_buttons_labels_title'),
       t('web.bot_buttons_commands_title'),
     ]);
@@ -368,7 +370,7 @@ describe('«دکمه‌های ربات»', () => {
       ],
     });
     renderPage(page());
-    await waitFor(() => expect(screen.getAllByRole('tab').length).toBe(4));
+    await waitFor(() => expect(screen.getAllByRole('tab').length).toBe(5));
     openTab(t('web.bot_buttons_commands_title'));
     const status = await screen.findByTestId('bot-menu-sync');
     expect(within(status).getByText('4')).toBeInTheDocument();

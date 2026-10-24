@@ -256,26 +256,28 @@ describe('TonPays Telegram in the bot', () => {
     telegram.sent.filter((body) => body['message_id'] === message).at(-1);
   const markupOf = (body: Record<string, unknown> | undefined) =>
     JSON.stringify(body?.['reply_markup'] ?? {});
+  // R8 A2: the card is shown four by four (the fake's cards are `6037-9911-0000-100N`).
+  const grouped = (card: string) => card.replaceAll('-', ' ');
 
-  it('edits the tapped message into the card invoice with the three actions, and never says paid', async () => {
+  it('edits the tapped message into the R8 A2 card invoice with its actions, and never says paid', async () => {
     const { paymentId, message } = await cardOnScreen();
     const screen = lastOn(message);
     const card = fake.invoices.values().next().value!.cards[0]!;
-    expect(String(screen?.['text'])).toContain(card);
-    expect(String(screen?.['text'])).toContain('250,000');
+    expect(String(screen?.['text'])).toContain(grouped(card));
+    // TonPays' exact figure (the fake's 250,000 + 37), in rial.
+    expect(String(screen?.['text'])).toContain('<b>۲٬۵۰۰٬۳۷۰ ریال</b>');
     expect(String(screen?.['text'])).not.toContain('تأیید و ثبت شد');
     const markup = markupOf(screen);
     expect(markup).toContain(`gr:${paymentId}`);
-    expect(markup).toContain(`gc:${paymentId}`);
     expect(markup).toContain('📤 ارسال رسید');
-    expect(markup).toContain('بررسی وضعیت');
-    // The card was just shown: no change is offered inside its sixty seconds.
-    expect(markup).not.toContain(`gk:${paymentId}`);
-    clock.shift(61_000);
-    await tapOn(message, `gc:${paymentId}`);
-    const later = markupOf(lastOn(message));
-    expect(later).toContain(`gk:${paymentId}`);
-    expect(later).toContain('تعویض کارت');
+    expect(markup).toContain('"copy_text":{"text":"2500370"}');
+    expect(markup).toContain(`"copy_text":{"text":"${card.replaceAll('-', '')}"}`);
+    // R8 A2: no status check — the inquiry polling and the webhook decide.
+    expect(markup).not.toContain(`gc:${paymentId}`);
+    expect(markup).not.toContain('بررسی وضعیت');
+    // R8 A2: drawn although the card was just shown; a press inside the minute is told to wait.
+    expect(markup).toContain(`gk:${paymentId}`);
+    expect(markup).toContain('تعویض کارت');
   });
 
   it('the receipt: gr: asks for a photo as its own message, the photo goes to TonPays, and the worker edits the payment message into the review', async () => {
@@ -286,7 +288,7 @@ describe('TonPays Telegram in the bot', () => {
     // Its own message: the payment message still shows the card.
     const promptBody = telegram.sent.slice(before).find((body) => body['message_id'] === undefined);
     expect(String(promptBody?.['text'])).toContain('۱۰ مگابایت');
-    expect(String(lastOn(message)?.['text'])).toContain('شماره کارت');
+    expect(String(lastOn(message)?.['text'])).toContain('کارت مقصد');
 
     const photo = await sendPhoto('ph-1');
     expect(photo.replyKey).toBe('bot.payment.gateway_receipt_queued');
@@ -334,8 +336,8 @@ describe('TonPays Telegram in the bot', () => {
     const cards = fake.invoices.values().next().value!.cards;
     expect(cards).toHaveLength(2);
     const text = String(lastOn(message)?.['text']);
-    expect(text).toContain(cards[1]!);
-    expect(text).not.toContain(first);
+    expect(text).toContain(grouped(cards[1]!));
+    expect(text).not.toContain(grouped(first));
   });
 
   /** The tenant's second bot, running: a customer may talk to both. */

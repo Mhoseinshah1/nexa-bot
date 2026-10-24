@@ -443,3 +443,20 @@ describe('Customer 360 workspace — the route', () => {
     }
   });
 });
+
+describe('R8 A4: a link may open Customer 360 on a tab', () => {
+  it('opens «مالی» for ?tab=financial (the ops group’s «تراکنش» button), and «نمای کلی» for anything else', async () => {
+    stubApi(routes());
+    const first = renderPage(
+      <UserDetailPage id={ID} {...OFF} initialTab="financial" denied={false} />,
+    );
+    expect(
+      await screen.findByRole('tab', { name: t('web.c360_tab_financial'), selected: true }),
+    ).toBeTruthy();
+    first.unmount();
+    renderPage(<UserDetailPage id={ID} {...OFF} initialTab="no-such-tab" denied={false} />);
+    expect(
+      await screen.findByRole('tab', { name: t('web.c360_tab_overview'), selected: true }),
+    ).toBeTruthy();
+  });
+});

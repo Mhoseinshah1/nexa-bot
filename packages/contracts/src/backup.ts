@@ -321,10 +321,21 @@ export const BACKUP_ARCHIVE_RETENTION_SETTING_KEYS = {
 } as const;
 export const BACKUP_ARCHIVE_KEEP_COUNT_MIN = 1;
 export const BACKUP_ARCHIVE_KEEP_COUNT_MAX = 1000;
-export const BACKUP_ARCHIVE_KEEP_COUNT_DEFAULT = 14;
+export const BACKUP_ARCHIVE_KEEP_COUNT_DEFAULT = 3;
 export const BACKUP_ARCHIVE_KEEP_DAYS_MIN = 1;
 export const BACKUP_ARCHIVE_KEEP_DAYS_MAX = 3650;
-export const BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT = 30;
+export const BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT = 3;
+
+/**
+ * The CPU the backup's compress, encrypt and verify tools may use together, as a percentage
+ * of ONE core (Round 8, B5). On a 2-vCPU host the bot shares the machine with the backup, and
+ * a 7-Zip at `-mmt=2` held both cores for 13 minutes despite `nice`. 70 leaves a whole core
+ * free for the bot. 100 is "no limit beyond one thread".
+ */
+export const BACKUP_CPU_LIMIT_SETTING_KEY = 'backup.cpu_limit_percent';
+export const BACKUP_CPU_LIMIT_MIN = 10;
+export const BACKUP_CPU_LIMIT_MAX = 100;
+export const BACKUP_CPU_LIMIT_DEFAULT = 70;
 
 /**
  * How late a scheduled backup may be before `backup.interval_exceeded` opens.
