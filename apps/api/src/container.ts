@@ -8083,6 +8083,9 @@ export function createContainer(
       // R5C-1 item 4: «نمایش زمان اضافه داخل تمدید هم» (flag `addon_time_in_renew_menu`).
       renewMenuShowsTime: (scope) =>
         featureFlagResolver.isEnabled(scope, 'addon_time_in_renew_menu'),
+      // R8-C3: the service screen's button arrangement, the tenant's `bot.service_card_layout`.
+      serviceCardLayout: (scope) =>
+        settingsResolver.valueOf<unknown>(scope, 'bot.service_card_layout'),
       // Best-effort steps are logged here: a card's live read on open that failed
       // unexpectedly (pre-support A2), and a receipt's invoice finalisation that failed
       // after its turn's durable write (A10).

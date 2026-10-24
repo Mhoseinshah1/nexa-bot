@@ -94,6 +94,7 @@ import {
 import { referralSignupGiftShareSchema } from './customer-ux.js';
 import { qrTemplateSettingSchema } from './delivery-qr.js';
 import { DEFAULT_MAIN_MENU_LAYOUT, mainMenuLayoutSchema } from './bot-commands.js';
+import { serviceCardLayoutSchema } from './service-card-layout.js';
 import {
   categoryColorsSchema,
   categoryIconsSchema,
@@ -1426,6 +1427,30 @@ export const SETTINGS = [
     defaultValue: [...DEFAULT_MAIN_MENU_LAYOUT],
     configures: null,
     // An empty list is not "no keyboard": every button is then drawn in its default place.
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * R8-C3: the order, rows and visibility of the buttons on a customer's service screen,
+   * edited on the Web Admin's «دکمه‌های ربات» page and nowhere else. The labels are the
+   * buttons' own templates. The layout only orders and groups: eligibility still decides at
+   * render time which buttons exist, and «بازگشت» is always drawn, last.
+   */
+  {
+    key: 'bot.service_card_layout',
+    description:
+      'The buttons of a customer\u2019s service screen: the rows they are drawn in (one to ' +
+      'three buttons each, top to bottom) and a switch per button. It only orders, groups ' +
+      'and hides: a button the service, the panel or the customer is not eligible for is ' +
+      'never drawn, whatever this says, and the back button is always drawn last. A button ' +
+      'this value does not name is drawn after the named rows, in its usual grouping. An ' +
+      'empty list of rows draws the screen exactly as it always was.',
+    schema: serviceCardLayoutSchema,
+    defaultValue: { rows: [] },
+    configures: null,
+    // Empty is not "no buttons": the screen is then drawn in its default arrangement.
     zeroMeaning: 'LITERAL',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',

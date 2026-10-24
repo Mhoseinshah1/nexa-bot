@@ -661,6 +661,8 @@ function CurrentValue({ control, value }: { control: SettingControl | null; valu
       if (option !== undefined) return <>{t(option.label)}</>;
       return typeof value === 'string' ? <Ltr>{value}</Ltr> : unset;
     }
+    case 'boolean':
+      return typeof value === 'boolean' ? <>{t(value ? control.on : control.off)}</> : unset;
     case 'currency':
       return typeof value === 'string' && (CURRENCY_CODES as readonly string[]).includes(value) ? (
         <>{currencyLabel(value as CurrencyCode)}</>
@@ -797,6 +799,18 @@ function SettingEditor({
           id={id}
           title={title}
           options={control.options}
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+        />
+      );
+    case 'boolean':
+      return (
+        <BooleanEditor
+          id={id}
+          title={title}
+          on={control.on}
+          off={control.off}
           value={value}
           onChange={onChange}
           disabled={disabled}
@@ -1040,6 +1054,47 @@ function SelectEditor({
             {t(option.label)}
           </option>
         ))}
+      </select>
+    </div>
+  );
+}
+
+/**
+ * A boolean-schema setting (R8-C1). The control shows the two labels and sends a real
+ * boolean — the registry's schema is `z.boolean()`, and the string `'true'` is refused.
+ * A stored value that is not a boolean (an unset nullable) shows an empty first option.
+ */
+function BooleanEditor({
+  id,
+  title,
+  on,
+  off,
+  value,
+  onChange,
+  disabled,
+}: {
+  id: string;
+  title: string;
+  on: WebKey;
+  off: WebKey;
+  value: unknown;
+  onChange: (next: unknown) => void;
+  disabled: boolean;
+}) {
+  const current = value === true ? 'on' : value === false ? 'off' : '';
+  return (
+    <div className="field">
+      <HiddenLabel htmlFor={id}>{title}</HiddenLabel>
+      <select
+        id={id}
+        className="input"
+        value={current}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value === 'on')}
+      >
+        {current === '' ? <option value="" /> : null}
+        <option value="on">{t(on)}</option>
+        <option value="off">{t(off)}</option>
       </select>
     </div>
   );
