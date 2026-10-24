@@ -2765,15 +2765,16 @@ describe('TonPays, through the one settlement path', () => {
       await relayAll();
 
       const keys = (await logs()).map((log) => log.template_key).sort();
-      expect(keys).toEqual(['ops.financial.late_completion', 'ops.financial.payment_failed']);
+      // R8 A3: a `rejected` invoice is a rejected receipt, not a generic failure.
+      expect(keys).toEqual(['ops.financial.late_completion', 'ops.financial.receipt_rejected']);
       expect(new Set((await logs()).map((log) => log.kind))).toEqual(
         new Set(['OPERATIONAL_EVENT']),
       );
       // The provider's verdict, never an operator's rejection: the log names who said no.
       const failure = (await logs()).find(
-        (log) => log.template_key === 'ops.financial.payment_failed',
+        (log) => log.template_key === 'ops.financial.receipt_rejected',
       );
-      expect(failure!.payload).toMatchObject({ cause: 'درگاه پرداخت را ناموفق اعلام کرد' });
+      expect(failure!.payload).toMatchObject({ rejectReasons: 'درگاه: دلیلی اعلام نشد' });
       expect(failure!.payload['__buttons']).toContainEqual({
         kind: 'PAYMENT',
         ref: failed.paymentId,

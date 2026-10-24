@@ -2095,6 +2095,8 @@ export function createContainer(
         facts: opsLogFacts,
         words: i18nOpsLogWords,
         refundRequests: new DrizzleServiceRefundRequestRepository(database.db),
+        // R8 A3: who cancelled an invoice, and the gateway's reasons for a rejected receipt.
+        providerRequests: new DrizzleGatewayProviderRequestRepository(database.db),
       }),
       /*
        * WP-A7: a new ticket or a customer's reply → a support notification in the operator

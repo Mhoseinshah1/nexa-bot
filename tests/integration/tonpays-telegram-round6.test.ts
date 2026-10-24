@@ -564,6 +564,10 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     expect(fake.cancels[0]!.body).toBe('');
     expect(await requests(paymentId, 'CANCEL')).toMatchObject([{ state: 'APPLIED' }]);
     expect((await paymentOf(paymentId)).state).toBe('FAILED');
+    // R8 A3: who cancelled is on the row, so the operations log says «لغوکننده: مشتری».
+    expect(await rows(sql`SELECT resolution_note FROM payments WHERE id = ${paymentId}`)).toEqual([
+      { resolution_note: 'tonpays_telegram:canceled_by_customer' },
+    ]);
     expect(String(lastOn(message)?.['text'])).toContain('فاکتور لغو شد');
     // The customer asked: no "your payment failed" notification.
     expect(
@@ -653,6 +657,10 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     expect(calls.map((call) => call.at)).toEqual(['cancel', 'create', 'create']);
     expect(fake.cancels[0]!.url).toContain(`/${[...fake.invoices.keys()][0]!}/cancel`);
     expect((await paymentOf(first)).state).toBe('FAILED');
+    // R8 A3: Nexa cancelled it, not the customer — and the note says so.
+    expect(await rows(sql`SELECT resolution_note FROM payments WHERE id = ${first}`)).toEqual([
+      { resolution_note: 'tonpays_telegram:canceled_by_nexa' },
+    ]);
     expect(fake.creates).toHaveLength(2);
     const [created] = await rows<{ creation_state: string }>(
       sql`SELECT creation_state FROM gateway_invoices WHERE payment_id = ${second.payment.id}`,

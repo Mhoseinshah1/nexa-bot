@@ -205,7 +205,7 @@ export const OPS_LOG_WORDS_FA = {
   /** R8 A3: who rejected a receipt, before their reasons. */
   rejectedBy: { OPERATOR: 'اپراتور', PROVIDER: 'درگاه' },
   /** R8 A3: a gateway that rejected a receipt and gave no reason. */
-  noRejectReason: 'درگاه دلیلی اعلام نکرد',
+  noRejectReason: 'دلیلی اعلام نشد',
   /** R8 A4: whether the customer is sent a message about an administrator's change. */
   customerNotified: { yes: 'بله', no: 'خیر (اعلان این تغییر خاموش است)' },
   customerNotifiedBulk: { yes: 'بله', no: 'خیر' },
