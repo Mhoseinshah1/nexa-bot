@@ -1940,6 +1940,13 @@
       "when": 1792847180034,
       "tag": "0276_fx_sources_tabdeal_bitpin_ramzinex",
       "breakpoints": true
+    },
+    {
+      "idx": 277,
+      "version": "7",
+      "when": 1792896835002,
+      "tag": "0277_miniapp_sessions_and_source_surface",
+      "breakpoints": true
     }
   ]
 }
