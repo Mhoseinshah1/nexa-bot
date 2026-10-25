@@ -40,6 +40,9 @@ describe('the mini app menu button', () => {
   beforeAll(async () => {
     telegram = await startFakeTelegramBotApi();
     const config = testConfig({
+      // The installer's reconcile refuses an installation that does not serve the webhook.
+      TELEGRAM_WEBHOOK_ENABLED: 'true',
+      TELEGRAM_WEBHOOK_SECRET: 'menu-button-webhook-secret-0123456789',
       TELEGRAM_API_BASE_URL: telegram.url,
       NOTIFICATION_SEND_TIMEOUT_MS: '2000',
     });
@@ -128,6 +131,37 @@ describe('the mini app menu button', () => {
     await setFlag(false);
     expect((await lane().syncNow(scopeA, BOT_A1)).outcome).toBe('SYNCED');
     expect(telegram.menuButton(7300000002)).toEqual({ type: 'default' });
+    expect(await revisionOf(BOT_A1)).not.toMatch(/^m/u);
+  });
+
+  it('a bootstrap reconcile between switching off and the lane leaves the reset owed', async () => {
+    // Codex on #326: the installer registers commands only; storing their plain digest
+    // here would erase the `m` the lane needs to know this bot has a button to reset.
+    await bind(BOT_A1, 7300000005, 'nexa_menu_e1_bot');
+    await setFlag(true);
+    expect((await lane().syncNow(scopeA, BOT_A1)).outcome).toBe('SYNCED');
+    expect(telegram.menuButton(7300000005)).toMatchObject({ type: 'web_app' });
+    const withButton = await revisionOf(BOT_A1);
+    expect(withButton).toMatch(/^m/u);
+
+    await setFlag(false);
+    telegram.calls.length = 0;
+    const result = await api.container.bootstrapBot.execute(
+      { tenantId: tenantA.tenantId, botInstanceId: null } as TenantContext,
+      { token: null, publicBaseUrl: ORIGIN },
+    );
+    expect(result.botInstanceId).toBe(BOT_A1);
+    expect(telegram.calls.map((call) => call.method)).toContain('setMyCommands');
+    expect(menuCalls(), 'the installer never touches the button').toEqual([]);
+    expect(await revisionOf(BOT_A1), 'the pending reset survives the installer').toBe(withButton);
+    const view = (await lane().statusFor(scopeA)).find((row) => row.botInstanceId === BOT_A1);
+    expect(view?.syncedHash, 'the lane still sees the bot owed a sync').not.toBe(view?.desiredHash);
+
+    expect((await lane().syncNow(scopeA, BOT_A1)).outcome).toBe('SYNCED');
+    expect(telegram.menuButton(7300000005)).toEqual({ type: 'default' });
+    expect(await revisionOf(BOT_A1)).toBe(
+      (await api.container.commandMenu.desiredFor(scopeA)).hash,
+    );
     expect(await revisionOf(BOT_A1)).not.toMatch(/^m/u);
   });
 

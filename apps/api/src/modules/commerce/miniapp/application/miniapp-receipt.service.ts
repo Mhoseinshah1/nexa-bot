@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import {
+  COMMERCE_ERROR_CODES,
   MINIAPP_ERROR_CODES,
   MINIAPP_RECEIPT_MAX_BYTES,
   errors,
+  isNexaError,
   type ActorContext,
   type IdempotencyStore,
   type PaymentId,
@@ -75,7 +77,9 @@ export interface MiniAppReceiptResult {
  * then the window is (re)opened FOR THIS payment through `signalTransferSent` — the bot's
  * «پرداخت را انجام دادم», which records the claim and opens the window in one step — so the
  * receipt cannot land on another payment the window happened to name; only then is anything
- * uploaded.
+ * uploaded. The upload is network time in which another tap can move the window, so the
+ * submission names the payment too and the receipt service refuses, under its capture lock,
+ * a window that no longer names it (`WINDOW_MOVED`) instead of filing the image elsewhere.
  */
 export class MiniAppReceiptService {
   constructor(private readonly deps: MiniAppReceiptServiceDeps) {}
@@ -131,12 +135,31 @@ export class MiniAppReceiptService {
       );
     }
 
+    // The upload's message is deleted inside `telegramFile` whatever happens next, so a
+    // refusal below leaves nothing behind in the customer's chat.
     const file = await this.telegramFile(context, input, verdict.mimeType);
-    const submitted = await this.deps.receipts.submit(scope, actor, customer.id, {
-      idempotencyKey: `${input.idempotencyKey}:receipt`,
-      botInstanceId: context.botInstanceId,
-      file,
-    });
+    let submitted: ReceiptSubmissionResult;
+    try {
+      submitted = await this.deps.receipts.submit(scope, actor, customer.id, {
+        idempotencyKey: `${input.idempotencyKey}:receipt`,
+        botInstanceId: context.botInstanceId,
+        file,
+        // The window was opened for this payment above, but the upload sat between that
+        // commit and this call, and another tap (in the bot, or a second upload here) can
+        // have moved it. The receipt service re-checks under its capture lock and refuses a
+        // window that now names another payment; it never files this image there.
+        expectedPaymentId: payment.id,
+      });
+    } catch (error) {
+      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.RECEIPT_NOT_EXPECTED) {
+        throw errors.conflict(
+          MINIAPP_ERROR_CODES.MINIAPP_RECEIPT_REFUSED,
+          'No receipt is expected for this payment.',
+          { reason: error.details['reason'] === 'WINDOW_MOVED' ? 'WINDOW_MOVED' : 'NOT_EXPECTED' },
+        );
+      }
+      throw error;
+    }
     return { paymentId: submitted.paymentId, filed: submitted.filed, first: submitted.first };
   }
 

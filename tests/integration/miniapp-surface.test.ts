@@ -105,6 +105,8 @@ describe('the mini-app surface', () => {
   let telegram: Server;
   let sent: { url: string; body: Record<string, unknown> }[];
   let photoSeq = 0;
+  /** Runs while Telegram "holds" a sendPhoto, before it answers: the upload's network time. */
+  let duringPhoto: (() => Promise<void>) | null = null;
   let panel: FakeMarzban | undefined;
   let owner: ActorContext;
   let keySeq = 0;
@@ -123,7 +125,8 @@ describe('the mini-app surface', () => {
     telegram = createServer((request: IncomingMessage, response: ServerResponse) => {
       const chunks: Buffer[] = [];
       request.on('data', (chunk: Buffer) => chunks.push(chunk));
-      request.on('end', () => {
+      request.on('end', () => void answer());
+      const answer = async () => {
         const raw = Buffer.concat(chunks);
         let body: Record<string, unknown>;
         try {
@@ -136,6 +139,7 @@ describe('the mini-app surface', () => {
         response.writeHead(200, { 'content-type': 'application/json' });
         if (url.endsWith('/sendPhoto')) {
           photoSeq += 1;
+          if (duringPhoto !== null) await duringPhoto();
           response.end(
             JSON.stringify({
               ok: true,
@@ -154,7 +158,7 @@ describe('the mini-app surface', () => {
           return;
         }
         response.end(JSON.stringify({ ok: true, result: { message_id: 11 } }));
-      });
+      };
     });
     await new Promise<void>((resolve) => telegram.listen(0, '127.0.0.1', resolve));
     const address = telegram.address();
@@ -190,6 +194,7 @@ describe('the mini-app surface', () => {
     api.container.setInstallationTenant(tenantA.tenantId);
     sent = [];
     photoSeq = 0;
+    duringPhoto = null;
     owner = adminActorFor(
       await createAdmin(ctx.container, tenantA, { username: 'mini-owner', roleKeys: ['owner'] }),
     );
@@ -1013,6 +1018,65 @@ describe('the mini-app surface', () => {
       expect(sent.filter((one) => one.url.endsWith('/sendPhoto'))).toHaveLength(0);
       const count = await ctx.container.database.db.execute(sql`SELECT 1 FROM payment_receipts`);
       expect(count.rows).toHaveLength(0);
+    });
+
+    it('refuses — never redirects — an upload whose window moved to another payment mid-upload', async () => {
+      const token = await sessionFor(700310);
+      const topup = async (amountMinor: string) => {
+        const response = await call(
+          token,
+          'POST',
+          MINIAPP_ROUTES.walletTopup,
+          {},
+          { amount: { amountMinor, currency: 'IRT' }, provider: 'MANUAL_TRANSFER' },
+        );
+        expect(response.statusCode, response.body).toBe(201);
+        return (JSON.parse(response.body) as { instruction: { paymentId: string } }).instruction
+          .paymentId;
+      };
+      const paymentA = (await cardInstruction(token)).paymentId;
+      const paymentB = await topup('120000');
+      expect(paymentB).not.toBe(paymentA);
+
+      // While Telegram holds the upload for A, the same customer taps «I paid» for B: the
+      // receipt window is re-opened for B before A's file reaches the receipt service.
+      let moved = 0;
+      duringPhoto = async () => {
+        duringPhoto = null;
+        const tap = await call(token, 'POST', MINIAPP_ROUTES.paymentTransferSent, {
+          paymentId: paymentB,
+        });
+        expect(tap.statusCode, tap.body).toBeLessThan(300);
+        moved += 1;
+      };
+      const refused = await upload(token, paymentA, PNG, 'image/png');
+      expect(moved, 'the window really moved during the upload').toBe(1);
+      expect(refused.statusCode, refused.body).toBe(409);
+      expect(JSON.parse(refused.body)).toMatchObject({
+        error: { code: 'miniapp.receipt_refused', details: { reason: 'WINDOW_MOVED' } },
+      });
+
+      // Nothing was filed — not against A, and above all not against B.
+      const receipts = await ctx.container.database.db.execute(
+        sql`SELECT payment_id FROM payment_receipts`,
+      );
+      expect(receipts.rows).toEqual([]);
+      const submitted = await ctx.container.database.db.execute(
+        sql`SELECT 1 FROM outbox_messages WHERE event_type = 'PaymentReceiptSubmitted'`,
+      );
+      expect(submitted.rows).toHaveLength(0);
+      // The upload's message was still removed from the customer's chat.
+      const removed = sent.filter((one) => one.url.endsWith('/deleteMessage'));
+      expect(removed).toHaveLength(1);
+      expect(removed[0]?.body).toMatchObject({ chat_id: '700310' });
+
+      // The customer's retry for A (a new request) re-opens the window for A and files there.
+      const retried = await upload(token, paymentA, PNG, 'image/png');
+      expect(retried.statusCode, retried.body).toBe(201);
+      const filed = await ctx.container.database.db.execute<{ payment_id: string }>(
+        sql`SELECT payment_id FROM payment_receipts`,
+      );
+      expect(filed.rows).toEqual([{ payment_id: paymentA }]);
     });
 
     it("refuses a receipt for another customer's payment, and never asks Telegram", async () => {

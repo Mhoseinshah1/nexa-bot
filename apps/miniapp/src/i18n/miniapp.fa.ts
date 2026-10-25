@@ -117,6 +117,8 @@ export const MINIAPP_FA = {
   'miniapp.card_receipt_refused_TYPE_MISMATCH': 'نوع این فایل با محتوای آن نمی‌خواند.',
   'miniapp.card_receipt_refused_EMPTY': 'فایل خالی است.',
   'miniapp.card_receipt_refused_NOT_EXPECTED': 'برای این پرداخت رسید دیگری لازم نیست.',
+  'miniapp.card_receipt_refused_WINDOW_MOVED':
+    'در همین لحظه ارسال رسید برای پرداخت دیگری باز شد و این تصویر ثبت نشد. لطفاً دوباره رسید همین پرداخت را بفرستید.',
   'miniapp.card_receipt_upload_failed':
     'ارسال تصویر به تلگرام انجام نشد. اگر ربات را تا حالا استارت نکرده‌اید، یک بار ربات را باز کنید و دوباره تلاش کنید.',
 
