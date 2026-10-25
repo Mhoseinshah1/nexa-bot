@@ -1,7 +1,12 @@
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { NexaError, PLATFORM_ERROR_CODES } from '@nexa/contracts';
 import { createDatabase } from './database.js';
-import { migrationsFolder } from './migration-state.js';
+import {
+  compareMigrations,
+  expectedMigrations,
+  migrationsFolder,
+  type MigrationVerdict,
+} from './migration-state.js';
 import { ensureOnlineIndexes } from './online-indexes.js';
 import { MigrationPreflightError, preflightMigrations } from './preflight.js';
 import { backfillPublicCodes } from './public-code-backfill.js';
@@ -48,6 +53,33 @@ export async function runMigrations(databaseUrl: string): Promise<void> {
   }
 }
 
+/**
+ * `migrate.js --check` — READ ONLY: is every migration this release ships applied?
+ *
+ * One word on stdout (`current`, `ahead`, `behind`, `none`, `diverged`), the counts on
+ * stderr. The same comparison readiness makes (`compareMigrations` over the release's own
+ * journal and the applied ledger), asked from the command line so `botctl cutover preflight`
+ * can print it as its own line instead of folding it into "not ready". It applies nothing
+ * and runs no preflight: a cutover check that migrated would be a deploy step.
+ */
+export async function checkMigrations(
+  databaseUrl: string,
+  folder: string = migrationsFolder(),
+): Promise<MigrationVerdict> {
+  const handle = createDatabase(databaseUrl, 1);
+  try {
+    const applied = await handle.appliedMigrations(Date.now() + 30_000);
+    return compareMigrations(applied, expectedMigrations(folder));
+  } finally {
+    await handle.close();
+  }
+}
+
+/** `current` and `ahead` (a rollback's shape, ADR-0022) are the schema this code needs. */
+export function migrationCheckExitCode(verdict: MigrationVerdict): 0 | 1 {
+  return verdict.state === 'current' || verdict.state === 'ahead' ? 0 : 1;
+}
+
 function requireDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   const url = env.DATABASE_URL;
   if (!url || !url.startsWith('postgres')) {
@@ -62,6 +94,13 @@ function requireDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string {
 
 async function main(): Promise<void> {
   const databaseUrl = requireDatabaseUrl();
+  if (process.argv.includes('--check')) {
+    const verdict = await checkMigrations(databaseUrl);
+    process.stdout.write(`${verdict.state}\n`);
+    console.warn(`migration check: ${JSON.stringify(verdict)}`);
+    process.exitCode = migrationCheckExitCode(verdict);
+    return;
+  }
   if (process.argv.includes('--preflight')) {
     // The check alone. `botctl update` runs this between the backup and the
     // migration so a refusal is reported as "the update stopped before
