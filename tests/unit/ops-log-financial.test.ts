@@ -287,6 +287,59 @@ describe('L2 — an order paid', () => {
     ]);
   });
 
+  /*
+   * Hotfix v0.8.2-e (the owner's request): a wallet payment goes through no gateway and is
+   * evidenced by its own debit, so «کارمزد درگاه: ۰» and «منبع تأیید: کسر از کیف پول» are noise;
+   * a card or gateway payment keeps both. MUTATION: the WALLET branch that deletes them removed
+   * -> the wallet row fails; the deletion made unconditional -> the card and gateway rows fail.
+   */
+  it.each([
+    ['WALLET', null, 'WALLET_DEBIT', false],
+    ['MANUAL_TRANSFER', null, 'OPERATOR_REVIEW', true],
+    ['GATEWAY', 'TONPAYS', 'GATEWAY_INQUIRY', true],
+  ] as const)(
+    'a %s order payment (provider %s, evidence %s) prints the fee and evidence lines: %s',
+    async (method, provider, evidenceKind, shown) => {
+      const h = harness({ method, orderId: 'ord-1', provider });
+      if (method === 'WALLET') {
+        h.ledger.push(
+          {
+            id: 'e0',
+            paymentId: null,
+            orderId: null,
+            signed: 600_000n,
+            reason: 'ADMIN_CREDIT',
+            at: 1,
+          },
+          {
+            id: 'e1',
+            paymentId: 'pay-1',
+            orderId: 'ord-1',
+            signed: -250_000n,
+            reason: 'PURCHASE',
+            at: 2,
+          },
+        );
+      }
+      await h.consumer.handle(
+        h.event('PaymentConfirmed', confirmed(method, 'ord-1', evidenceKind)),
+        TX,
+      );
+      const message = h.queued[0]!;
+      expect(message.templateKey).toBe('ops.financial.order_paid');
+      const text = render(message);
+      expect(text.includes('💳 کارمزد درگاه:'), 'the fee line').toBe(shown);
+      expect(text.includes('🔎 منبع تأیید:'), 'the evidence line').toBe(shown);
+      // Everything else of the message stays: the amounts, and the wallet line for a wallet.
+      expect(text).toContain('💰 مبلغ اصل: ۲۵۰٬۰۰۰ تومان');
+      expect(text).toContain('💵 مبلغ قابل پرداخت: ۲۵۰٬۰۰۰ تومان');
+      expect(text.includes('👛 موجودی کیف پول: ۶۰۰٬۰۰۰ تومان ← ۳۵۰٬۰۰۰ تومان')).toBe(
+        method === 'WALLET',
+      );
+      expect(text).not.toMatch(/\{[a-zA-Z]+\}|NaN|undefined/);
+    },
+  );
+
   it('a bank-transfer order carries no wallet line: no wallet moved', async () => {
     const h = harness({ method: 'MANUAL_TRANSFER', orderId: 'ord-1' });
     await h.consumer.handle(h.event('PaymentConfirmed', confirmed('MANUAL_TRANSFER', 'ord-1')), TX);

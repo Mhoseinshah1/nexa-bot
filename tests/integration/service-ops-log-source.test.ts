@@ -66,6 +66,8 @@ import {
  *    («a redelivery posts nothing»).
  *  - `serviceCreated`: the first-purchase line set unconditionally -> every "wallet purchase"
  *    case (its second purchase).
+ *  - `FinancialLogConsumer`: the WALLET branch that drops `fee` / `evidence` removed -> every
+ *    "wallet purchase" case (its payment log).
  */
 
 const BOT_A1 = SEED_IDS.botA1 as BotInstanceId;
@@ -108,6 +110,7 @@ const HEADLINE = {
 } as const;
 const SOURCE = { bot: '📲 منبع: ربات', miniapp: '📲 منبع: مینی‌اپ' } as const;
 const FIRST_PURCHASE = '🥇 خرید اول کاربر: بله';
+const PAID_HEADLINE = '✅ پرداخت سفارش تأیید شد';
 
 describe('hotfix v0.8.2-e: one service log per purchase and per service action, with its source', () => {
   let ctx: TestContext;
@@ -530,6 +533,12 @@ describe('hotfix v0.8.2-e: one service log per purchase and per service action, 
       expect(firstLogs[0]).toContain('👛 کیف پول:');
       const firstCode = await codeOf(first);
       expect(firstLogs[0]).toContain(firstCode);
+      // The wallet payment's own log (L2), in the same chat, prints no fee and no evidence line.
+      const paidLogs = logsSince(from, PAID_HEADLINE);
+      expect(paidLogs, 'exactly one payment log').toHaveLength(1);
+      expect(paidLogs[0]).toContain('💠 روش: کیف پول');
+      expect(paidLogs[0]).not.toContain('کارمزد درگاه');
+      expect(paidLogs[0]).not.toContain('منبع تأیید');
 
       // Retried: a second provisioner pass and a redelivered event post nothing new.
       from = opsTexts().length;
