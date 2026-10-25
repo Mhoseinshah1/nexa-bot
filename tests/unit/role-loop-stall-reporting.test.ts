@@ -85,6 +85,10 @@ function reporterFor(role: 'provisioner' | 'monitor' | 'recovery', clock: { now:
     clock: { now: () => new Date(clock.now) },
     logger: { warn: vi.fn() },
     role,
+    // These cases test the reporter's other rules; the boot grace and the recovery
+    // confirmation have their own file (loop-stall-noise.test.ts).
+    bootGraceMs: 0,
+    recoveryConfirmMs: 0,
   });
   return { reporter, events };
 }
@@ -256,6 +260,10 @@ describe('the startup grace is UNKNOWN, never fresh', () => {
       clock: { now: () => new Date(clock.now) },
       logger: { warn: vi.fn() },
       role,
+      // These cases test the reporter's other rules; the boot grace and the recovery
+      // confirmation have their own file (loop-stall-noise.test.ts).
+      bootGraceMs: 0,
+      recoveryConfirmMs: 0,
     });
     return { reporter, events };
   }

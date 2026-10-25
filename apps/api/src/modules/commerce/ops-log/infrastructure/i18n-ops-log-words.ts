@@ -1,6 +1,11 @@
 import {
   CUSTOMER_NOTIFICATION_KIND_NAMES_FA,
   OPS_LOG_WORDS_FA as W,
+  PROCESS_ROLE_LINE_LABEL_FA,
+  UNKNOWN_LOOP_LABEL_FA,
+  UNKNOWN_PROCESS_ROLE_LABEL_FA,
+  loopLabelFa,
+  processRoleLabelFa,
   operationalEventLabelFa,
   operationalEventMessageFa,
   rejectReasonFa,
@@ -134,6 +139,11 @@ export const i18nOpsLogWords: OpsLogWords = {
     Object.prototype.hasOwnProperty.call(W.stalledOperation, type)
       ? (W.stalledOperation as Record<string, string>)[type]!
       : null,
+  loopStall: {
+    loopName: (loop) => loopLabelFa(loop) ?? UNKNOWN_LOOP_LABEL_FA,
+    roleName: (role) => processRoleLabelFa(role) ?? UNKNOWN_PROCESS_ROLE_LABEL_FA,
+    roleLabel: PROCESS_ROLE_LINE_LABEL_FA,
+  },
   severity: (klass) =>
     ({
       SECURITY: '🛡 امنیتی',

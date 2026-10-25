@@ -836,6 +836,10 @@ describe('a stalled worker loop is a condition in the operations log', () => {
       clock: { now: () => new Date(now) },
       logger: { warn: vi.fn() },
       role: 'worker',
+      // These cases test the reporter's other rules; the boot grace and the recovery
+      // confirmation have their own file (loop-stall-noise.test.ts).
+      bootGraceMs: 0,
+      recoveryConfirmMs: 0,
     });
     return { reporter, events, advance: (ms: number) => (now += ms) };
   }
@@ -899,6 +903,10 @@ describe('a stalled worker loop is a condition in the operations log', () => {
       clock: { now: () => AT },
       logger: { warn: vi.fn() },
       role: 'worker',
+      // These cases test the reporter's other rules; the boot grace and the recovery
+      // confirmation have their own file (loop-stall-noise.test.ts).
+      bootGraceMs: 0,
+      recoveryConfirmMs: 0,
     });
     await reporter.observe([{ name: 'fx-refresh', stalled: false }]);
     expect(events).toEqual([]);
@@ -946,6 +954,10 @@ describe('a stalled worker loop is a condition in the operations log', () => {
       clock: { now: () => AT },
       logger: { warn: vi.fn() },
       role: 'worker',
+      // These cases test the reporter's other rules; the boot grace and the recovery
+      // confirmation have their own file (loop-stall-noise.test.ts).
+      bootGraceMs: 0,
+      recoveryConfirmMs: 0,
     });
     await expect(
       reporter.observe([
