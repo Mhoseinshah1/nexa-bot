@@ -101,6 +101,13 @@ export const OPS_LOG_TYPES = {
       'ops.financial.invoice_cancelled',
       'ops.financial.receipt_rejected',
       'ops.financial.payment_expired',
+      /*
+       * R9 C1: an OPEN attempt the gateway reported paid LESS (a remainder is owed) or MORE (a
+       * refund card is owed) than the invoice. Not a failure — nothing ended — but the same
+       * switch: the operator reads "this payment did not go as invoiced" in one place.
+       */
+      'ops.financial.payment_underpaid',
+      'ops.financial.payment_overpaid',
     ],
   },
   PAYMENT_LATE: {
@@ -110,6 +117,8 @@ export const OPS_LOG_TYPES = {
       'ops.financial.late_completion',
       'ops.financial.outcome_unknown',
       'ops.financial.late_credit',
+      // R9 C1: the provider's webhook `credit_amount` differs from what Nexa invoiced.
+      'ops.financial.credit_amount_mismatch',
     ],
   },
   REFUND: {
@@ -349,6 +358,23 @@ const TOKENS = {
   channel: ['STRING', 'Where a refund went, in Persian.'],
   providerInvoiceId: ['STRING', 'The provider’s invoice id, or absent.'],
   providerFinalAmount: ['STRING', 'The provider’s own final figure, diagnostic only.'],
+  remainingAmount: [
+    'STRING',
+    'R9 C1: the remainder the gateway asks the customer to pay, in its own unit — diagnostic only, never settled.',
+  ],
+  remainderInvoiceId: ['STRING', 'R9 C1: the gateway’s invoice id for the remainder, or absent.'],
+  refundAmount: [
+    'STRING',
+    'R9 C1: the surplus the gateway says it will return, in its own unit — diagnostic only, never credited.',
+  ],
+  creditAmount: [
+    'STRING',
+    'R9 C1: the `credit_amount` the gateway’s webhook reported, in its own unit — never credited.',
+  ],
+  invoicedAmount: [
+    'STRING',
+    'R9 C1: what Nexa asked the gateway for, in the gateway’s unit (the principal, and the payable when a fee was added).',
+  ],
   providerStatus: ['STRING', 'The provider’s own status word for the payment.'],
   providerPaymentId: ['STRING', 'The provider’s payment id, or absent.'],
   fiatEquivalent: ['STRING', 'The dollar amount the invoice was priced at.'],
@@ -640,6 +666,24 @@ export const OPS_LOG_TEMPLATES = [
     ],
   ),
   logTemplate(
+    'ops.financial.payment_underpaid',
+    'Log L4 (R9 C1): the gateway reported the customer paid LESS than the invoice and is waiting for the remainder. Nothing was settled or credited; only the gateway’s approval after the remainder settles it, at the principal.',
+    [
+      ...req('method', 'reference', 'principal', 'fee', 'payable', 'at'),
+      ...WHO(),
+      ...opt('orderCode', 'providerInvoiceId', 'remainingAmount', 'remainderInvoiceId'),
+    ],
+  ),
+  logTemplate(
+    'ops.financial.payment_overpaid',
+    'Log L4 (R9 C1): the gateway reported the customer paid MORE than the invoice and is waiting for the card the surplus is returned to. The surplus is never credited to the wallet; the payment settles at its principal only.',
+    [
+      ...req('method', 'reference', 'principal', 'fee', 'payable', 'at'),
+      ...WHO(),
+      ...opt('orderCode', 'providerInvoiceId', 'refundAmount'),
+    ],
+  ),
+  logTemplate(
     'ops.financial.late_completion',
     'Log L5: a gateway approved a payment after Nexa had closed it. Nothing was credited; it needs a manual check.',
     [
@@ -664,6 +708,15 @@ export const OPS_LOG_TEMPLATES = [
       ...req('gateway', 'reference', 'principal', 'fee', 'payable', 'at'),
       ...WHO(),
       ...opt('orderCode', 'providerInvoiceId', 'providerFinalAmount'),
+    ],
+  ),
+  logTemplate(
+    'ops.financial.credit_amount_mismatch',
+    'Log L5 (R9 C1): the gateway’s webhook reported a `credit_amount` that is neither the principal nor what Nexa invoiced. Nothing was credited on it — the payment settles only by the inquiry, at its principal; an operator should compare it with the gateway’s records.',
+    [
+      ...req('gateway', 'reference', 'principal', 'fee', 'payable', 'creditAmount', 'at'),
+      ...WHO(),
+      ...opt('orderCode', 'providerInvoiceId', 'invoicedAmount'),
     ],
   ),
   logTemplate(

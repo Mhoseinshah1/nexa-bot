@@ -1778,6 +1778,105 @@ describe('a TonPays Telegram payment on the detail', () => {
     }
   });
 
+  it('R9 C1: an underpaid invoice shows the next step, the remainder, its invoice and receipt flag, and the cancel request by who asked — never the payee card', async () => {
+    render(
+      {
+        state: 'PENDING',
+        gatewayInvoice: {
+          ...INVOICE,
+          providerStatus: 'action_required_less',
+          providerPaid: false,
+          providerNeed: {
+            need: 'LESS',
+            remainingAmount: '12000',
+            remainingInvoiceId: 'TP-REM123XYZ0',
+            remainingReceiptReceived: false,
+            refundAmount: null,
+            refundPending: null,
+          },
+          latestRefund: null,
+          latestCancel: {
+            state: 'REFUSED',
+            errorCode: 'CANCEL_NOT_ALLOWED_NEED_ACTION_LESS',
+            byNexa: false,
+            requestedAt: '2026-09-10T13:10:00.000Z',
+            decidedAt: '2026-09-10T13:10:02.000Z',
+          },
+          creditAmountDiffers: false,
+        },
+      },
+      false,
+    );
+    expect(await screen.findByText(t('web.payment_gateway_need_less'))).toBeInTheDocument();
+    expect(screen.getByText('12000 IRT')).toBeInTheDocument();
+    expect(screen.getByText('TP-REM123XYZ0')).toBeInTheDocument();
+    expect(
+      screen.getByText(t('web.payment_gateway_remaining_receipt_missing')),
+    ).toBeInTheDocument();
+    expect(screen.getByText(t('web.gw_request_refused'))).toHaveAttribute('title', 'REFUSED');
+    expect(
+      screen.getByText(t('web.payment_gateway_cancel_by_customer'), { exact: false }),
+    ).toBeInTheDocument();
+    // The provider's refusal code reads in Persian (the code beside it is the technical detail).
+    expect(
+      screen.getByText(t('web.err_tonpays_cancel_not_allowed_less'), { exact: false }),
+    ).toBeInTheDocument();
+    // The remainder's payee card is the provider's: the detail does not carry it.
+    expect(document.body.textContent).not.toContain('6219861012345678');
+  });
+
+  it('R9 C1: an overpaid invoice shows the surplus, the masked refund card and its request; a credit_amount that matches nothing is flagged', async () => {
+    render(
+      {
+        state: 'PENDING',
+        gatewayInvoice: {
+          ...INVOICE,
+          providerStatus: 'action_required_more',
+          providerPaid: false,
+          creditAmount: '99000',
+          creditAmountDiffers: true,
+          providerNeed: {
+            need: 'MORE',
+            remainingAmount: null,
+            remainingInvoiceId: null,
+            remainingReceiptReceived: null,
+            refundAmount: '15000',
+            refundPending: true,
+          },
+          latestRefund: {
+            state: 'APPLIED',
+            errorCode: null,
+            refundCardMasked: '603799******7890',
+            requestedAt: '2026-09-10T13:20:00.000Z',
+            decidedAt: '2026-09-10T13:20:03.000Z',
+          },
+          latestCancel: null,
+        },
+      },
+      false,
+    );
+    expect(await screen.findByText(t('web.payment_gateway_need_more'))).toBeInTheDocument();
+    expect(screen.getByText('15000 IRT')).toBeInTheDocument();
+    expect(screen.getByText(t('web.payment_gateway_refund_pending'))).toBeInTheDocument();
+    expect(screen.getByText('603799******7890')).toBeInTheDocument();
+    expect(screen.getByText(t('web.gw_request_applied'))).toHaveAttribute('title', 'APPLIED');
+    expect(screen.getByText('99000 IRT')).toBeInTheDocument();
+    expect(screen.getByText(t('web.payment_gateway_credit_amount_differs'))).toBeInTheDocument();
+  });
+
+  it('R9 C1: a credit_amount that matches is shown without a flag, and no next step is drawn when the provider named none', async () => {
+    render(
+      {
+        state: 'PENDING',
+        gatewayInvoice: { ...INVOICE, creditAmount: '250000', creditAmountDiffers: false },
+      },
+      false,
+    );
+    expect(await screen.findByText(t('web.payment_gateway_credit_amount'))).toBeInTheDocument();
+    expect(screen.queryByText(t('web.payment_gateway_credit_amount_differs'))).toBeNull();
+    expect(screen.queryByText(t('web.payment_gateway_next_step'))).toBeNull();
+  });
+
   it('UNKNOWN with payments.reconcile: the recorded answer, then confirm sends the evidence-bound command', async () => {
     const api = render({ state: 'UNKNOWN', ...REVIEW }, true, [
       {

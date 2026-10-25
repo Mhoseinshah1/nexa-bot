@@ -406,6 +406,11 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   quantity: 'تعداد',
   provider: 'نوع پنل',
   providerFinalAmount: 'مبلغ نهایی گزارش‌شده توسط درگاه',
+  // R9 C1: the gateway's own figures for an under/overpaid invoice, diagnostic only.
+  remainingAmount: 'مابقی اعلام‌شدهٔ درگاه',
+  remainderInvoiceId: 'شناسهٔ فاکتور مابقی',
+  creditAmount: 'مبلغ اعلام‌شدهٔ وب‌هوک درگاه',
+  invoicedAmount: 'مبلغ درخواستی Nexa از درگاه',
   providerInvoiceId: 'شناسهٔ فاکتور درگاه',
   query: 'عبارت جست‌وجو',
   question: 'پرسش',
@@ -3809,6 +3814,14 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'گزارش مالی: پرداخت منقضی شد',
     'وقتی درگاه مهلت پرداخت را تمام‌شده اعلام می‌کند و پولی دریافت نشده است.',
   ],
+  'ops.financial.payment_underpaid': [
+    'گزارش مالی: پرداخت ناقص — منتظر مابقی',
+    'وقتی درگاه اعلام می‌کند مشتری کمتر از مبلغ فاکتور واریز کرده است؛ چیزی تسویه یا واریز نمی‌شود تا درگاه پس از مابقی تأیید کند.',
+  ],
+  'ops.financial.payment_overpaid': [
+    'گزارش مالی: پرداخت بیش از مبلغ — منتظر کارت بازگشت',
+    'وقتی درگاه اعلام می‌کند مشتری بیشتر از مبلغ فاکتور واریز کرده است؛ مازاد هرگز به کیف پول واریز نمی‌شود.',
+  ],
   'ops.financial.late_completion': [
     'گزارش مالی: تأیید دیرهنگام درگاه',
     'درگاه پرداختی را پس از بسته شدن آن تأیید کرده است؛ چیزی تسویه نشده و مدیر باید آن را بررسی کند.',
@@ -3820,6 +3833,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'ops.financial.outcome_unknown': [
     'گزارش مالی: نتیجهٔ پرداخت درگاه نامعلوم',
     'مهلت بررسی درگاه بدون پاسخ قطعی تمام شده و پرداخت در وضعیت نامعلوم است؛ چیزی تسویه یا رد نشده و مدیر باید آن را تطبیق دهد.',
+  ],
+  'ops.financial.credit_amount_mismatch': [
+    'گزارش مالی: مبلغ اعلام‌شدهٔ درگاه با فاکتور نمی‌خواند',
+    'وقتی وب‌هوک درگاه credit_amount متفاوت با مبلغ اصل و مبلغ درخواستی گزارش می‌کند؛ هیچ مبلغی بر اساس آن واریز نمی‌شود.',
   ],
   'ops.financial.refund_completed': [
     'گزارش مالی: بازگشت وجه انجام‌شده',

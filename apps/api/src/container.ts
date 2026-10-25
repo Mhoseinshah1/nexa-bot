@@ -70,6 +70,7 @@ import {
   createTranslator,
   DEFAULT_TEMPLATE_PRESENTATION,
   formatDateTime,
+  rejectReasonFa,
 } from '@nexa/i18n';
 import type {
   OperationType,
@@ -571,7 +572,10 @@ import type {
 } from './modules/commerce/payments/application/gateway-invoice-ports.js';
 import { GatewayReceiptCaptureService } from './modules/commerce/payments/application/gateway-receipt-capture.service.js';
 import { DrizzleGatewayCardTransferRepository } from './modules/commerce/payments/infrastructure/drizzle-gateway-card-transfer.repository.js';
-import { GATEWAY_PROVIDER_REQUEST_BATCH } from './modules/commerce/payments/application/gateway-provider-request.lane.js';
+import {
+  GATEWAY_PROVIDER_REQUEST_BATCH,
+  GatewayExpiryCancels,
+} from './modules/commerce/payments/application/gateway-provider-request.lane.js';
 import { DrizzleGatewayProviderRequestRepository } from './modules/commerce/payments/infrastructure/drizzle-gateway-provider-request.repository.js';
 import { SecretCipherRefundCardSealer } from './modules/commerce/payments/infrastructure/refund-card-sealer.js';
 import { TonPaysTelegramAdapter } from './modules/commerce/payments/infrastructure/tonpays-telegram-adapter.js';
@@ -3713,7 +3717,11 @@ export function createContainer(
      */
     invoiceScreens: {
       refresh: (scope, paymentId): Promise<void> => wizardScreens.refresh(scope, paymentId),
+      // R9 C1: a next step the customer owes (a remainder, a refund card) — a new message.
+      announce: (scope, paymentId): Promise<void> => wizardScreens.announce(scope, paymentId),
     },
+    // R9 C1: a provider rejection reason that is a documented code, in Persian.
+    rejectReasonText: rejectReasonFa,
     // CentralPay's browser return goes back to the tenant's bot (stored username, no call);
     // TetraPay's `callback_url` is the same bot's start link.
     botLinkFor: (scope) => publicOrigins.botLinkFor(scope),
@@ -3870,6 +3878,12 @@ export function createContainer(
     scopeActivity: tenants,
     clock,
     ids,
+    // R9 C1: an expired TonPays Telegram attempt asks the provider to cancel its open invoice.
+    gatewayCancels: new GatewayExpiryCancels({
+      requests: gatewayProviderRequestRepository,
+      audit,
+      ids,
+    }),
   });
   const paymentExpiryLoop = new PaymentExpiryLoop(paymentExpirySweep, {
     // Resolved per pass: the installation's tenant is a row, so it is not known
@@ -5421,6 +5435,11 @@ export function createContainer(
     messenger: customerMessenger,
     clock,
     actor: () => systemJobActor('telegram-wizard-screens', newCorrelationId(ids.uuid())),
+    // R9 C1: the customer's chat for a next step told in a new message. Declared below, read
+    // at call time (the worker's first pass is long after this object graph is built).
+    contacts: {
+      contactFor: (scope, customerId, tx) => customerContacts.contactFor(scope, customerId, tx),
+    },
   });
 
   /**
