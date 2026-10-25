@@ -52,6 +52,7 @@ export const PROVIDER_LABELS: Readonly<Record<PaymentGatewayProvider, WebKey>> =
   NOWPAYMENTS: 'web.payment_gateway_provider_nowpayments',
   CENTRALPAY: 'web.payment_gateway_provider_centralpay',
   TETRAPAY: 'web.payment_gateway_provider_tetrapay',
+  RIALIT: 'web.payment_gateway_provider_rialit',
 };
 
 const STATE_LABELS: Readonly<Record<GatewayHealthState, WebKey>> = {

@@ -747,6 +747,120 @@ describe('the TetraPay page', () => {
 });
 
 /**
+ * Round 9 C4: a refused enable says in Persian exactly what is missing (the server's
+ * `details.reason`), never only the generic «درگاه پرداخت اکنون در دسترس نیست».
+ *
+ * MUTATION: `gatewayEnableRefusalText` dropped from the toggle's banner -> the first test
+ * failed (the generic sentence came back); restored.
+ */
+describe('the enable refusal names the missing piece', () => {
+  const route = (provider: string) => ({
+    provider,
+    status: 'DISABLED',
+    displayName: null,
+    instructions: null,
+    minAmountMinor: '0',
+    maxAmountMinor: '0',
+    currency: 'IRT',
+    eligibility: {
+      activateAfterPayments: 0,
+      deactivateAfterPayments: 0,
+      activateAfterAccountDays: 0,
+    },
+    sortOrder: 0,
+    topupCashbackPercent: 0,
+    customerFeeBasisPoints: 0,
+    allowServicePurchase: true,
+    allowWalletTopup: true,
+    credential: { required: true, setAt: null },
+    callbackUrl: `https://bot.example.com/payments/webhook/${provider.toLowerCase()}/t-1`,
+    createdAt: '2026-09-10T12:30:00.000Z',
+    updatedAt: '2026-09-10T12:30:00.000Z',
+  });
+  const refusal = (reason: string) => ({
+    error: {
+      kind: 'conflict',
+      code: 'commerce.payment_gateway_unavailable',
+      message: 'This payment route needs its API key before it can be switched on.',
+      correlationId: 'test',
+      details: { reason },
+    },
+  });
+
+  for (const provider of ['TETRAPAY', 'RIALIT']) {
+    it(`${provider}: a missing API key is said in Persian, not the generic sentence`, async () => {
+      stubApi([
+        { url: '/payment-gateways', body: { gateways: [route(provider)] } },
+        {
+          url: `/payment-gateways/${provider}/status`,
+          method: 'POST',
+          status: 409,
+          body: refusal('CREDENTIAL_MISSING'),
+        },
+      ]);
+      renderPage(<PaymentGatewaysPage provider={provider} denied={false} mayEdit />);
+      fireEvent.click(await screen.findByRole('button', { name: 'فعال کردن' }));
+      expect(
+        await screen.findByText(/این درگاه روشن نشد: کلید API آن ثبت نشده است/u),
+      ).toBeInTheDocument();
+      expect(screen.queryByText('درگاه پرداخت اکنون در دسترس نیست.')).toBeNull();
+    });
+  }
+
+  it('each other gap has its own sentence; an unknown reason keeps the generic one', async () => {
+    const { gatewayEnableRefusalText } = await import('../../apps/web/src/error-text');
+    const { ApiError } = await import('../../apps/web/src/api/client');
+    const of = (reason: string) =>
+      gatewayEnableRefusalText(
+        new ApiError(409, 'commerce.payment_gateway_unavailable', 'x', { reason }),
+      );
+    expect(of('WEBHOOK_SECRET_MISSING')).toContain('کلید وب‌هوک');
+    expect(of('VERIFY_KEY_MISSING')).toContain('کلید تأیید');
+    expect(of('RATE_MISSING')).toContain('نرخ تبدیل');
+    expect(of('FX_UNAVAILABLE')).toContain('نرخ مرکزی');
+    expect(of('STATUS_RACE')).toBeUndefined();
+    expect(gatewayEnableRefusalText(new Error('x'))).toBeUndefined();
+  });
+});
+
+describe('the Rialit page', () => {
+  it('names the route, explains the one-fee rule, and shows the webhook URL to paste into Rialit', async () => {
+    const rialit = {
+      provider: 'RIALIT',
+      status: 'DISABLED',
+      displayName: null,
+      instructions: null,
+      minAmountMinor: '0',
+      maxAmountMinor: '0',
+      currency: 'IRT',
+      eligibility: {
+        activateAfterPayments: 0,
+        deactivateAfterPayments: 0,
+        activateAfterAccountDays: 0,
+      },
+      sortOrder: 0,
+      topupCashbackPercent: 0,
+      customerFeeBasisPoints: 0,
+      allowServicePurchase: true,
+      allowWalletTopup: true,
+      credential: { required: true, setAt: null },
+      callbackUrl: 'https://bot.example.com/payments/webhook/rialit/t-1',
+      createdAt: '2026-09-10T12:30:00.000Z',
+      updatedAt: '2026-09-10T12:30:00.000Z',
+    };
+    stubApi([{ url: '/payment-gateways', body: { gateways: [rialit] } }]);
+    const view = renderPage(<PaymentGatewaysPage provider="RIALIT" denied={false} mayEdit />);
+    expect(await screen.findByText('نشانی وب‌هوک (در پنل ریالیت وارد کنید)')).toBeInTheDocument();
+    expect(view.container.textContent).toContain(
+      'https://bot.example.com/payments/webhook/rialit/t-1',
+    );
+    expect(view.container.textContent).toContain('درگاه ریالیت');
+    fireEvent.click(screen.getByRole('button', { name: 'تنظیم کلید API' }));
+    expect(await screen.findByText(/فقط یک طرف کارمزد بگیرد/u)).toBeInTheDocument();
+  });
+});
+
+/**
  * WP18 — the customer gateway fee field. Only a route that settles through `GATEWAY` draws
  * it; a typed `5.25` travels as 525 basis points, and 525 reopens as `5.25`.
  */

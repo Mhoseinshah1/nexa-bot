@@ -123,6 +123,7 @@ export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = [
   LATE_CREDIT_SETTING_KEYS.TONPAYS,
   LATE_CREDIT_SETTING_KEYS.TONPAYS_TELEGRAM,
   LATE_CREDIT_SETTING_KEYS.TETRAPAY,
+  LATE_CREDIT_SETTING_KEYS.RIALIT,
   LATE_CREDIT_WINDOW_SETTING_KEY,
   // R5C-1 item 2: the three «تغییر شماره کارت» limits, on the card-to-card method's page.
   CARD_SWITCH_SETTING_KEYS.MAX_SWITCHES,
@@ -269,6 +270,12 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
   },
   [LATE_CREDIT_SETTING_KEYS.TETRAPAY]: {
     title: 'web.late_credit_switch_tetrapay',
+    description: 'web.late_credit_switch_hint',
+    group: 'sales',
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
+  },
+  [LATE_CREDIT_SETTING_KEYS.RIALIT]: {
+    title: 'web.late_credit_switch_rialit',
     description: 'web.late_credit_switch_hint',
     group: 'sales',
     control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },

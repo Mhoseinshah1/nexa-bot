@@ -670,6 +670,32 @@ export function errorText(error: unknown, options: ErrorTextOptions = {}): strin
   return finalAnswer(error) ? t('web.rejected') : t('web.error');
 }
 
+/**
+ * Round 9 C4: why a payment route refused to be switched ON, by the `details.reason` the
+ * server's `PAYMENT_GATEWAY_UNAVAILABLE` carries — so the operator is told in Persian exactly
+ * what is missing (the API key, the webhook secret, ...) instead of the generic «درگاه پرداخت
+ * اکنون در دسترس نیست». Undefined for any other error, which then reads as before.
+ */
+const GATEWAY_ENABLE_REFUSAL_TEXT: Readonly<Record<string, WebKey>> = {
+  CREDENTIAL_MISSING: 'web.payment_gateway_enable_refused_credential_missing',
+  WEBHOOK_SECRET_MISSING: 'web.payment_gateway_enable_refused_webhook_secret_missing',
+  VERIFY_KEY_MISSING: 'web.payment_gateway_enable_refused_verify_key_missing',
+  RATE_MISSING: 'web.payment_gateway_enable_refused_rate_missing',
+  FX_UNAVAILABLE: 'web.payment_gateway_enable_refused_fx_unavailable',
+};
+
+export function gatewayEnableRefusalText(error: unknown): string | undefined {
+  if (!(error instanceof ApiError) || error.code !== 'commerce.payment_gateway_unavailable') {
+    return undefined;
+  }
+  const reason = (error.details as { reason?: unknown } | undefined)?.reason;
+  if (typeof reason !== 'string' || !Object.hasOwn(GATEWAY_ENABLE_REFUSAL_TEXT, reason)) {
+    return undefined;
+  }
+  const key = GATEWAY_ENABLE_REFUSAL_TEXT[reason];
+  return key === undefined ? undefined : t(key);
+}
+
 /** Whether a code has a sentence of its own (for tests and for pages that branch on it). */
 export function hasErrorText(code: string): boolean {
   return ERROR_TEXT_LOOKUP[code] !== undefined;

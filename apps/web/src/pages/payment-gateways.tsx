@@ -31,6 +31,7 @@ import { t } from '../i18n/web.fa';
 import { paymentMethodPath } from '../payment-method-routes';
 import { useLinkHandler } from '../router';
 import { messageFor } from './settings';
+import { gatewayEnableRefusalText } from '../error-text';
 import { FxSection } from './fx-section';
 import {
   Disclosure,
@@ -187,6 +188,8 @@ function nameOf(gateway: PaymentGatewayView): string {
       return t('web.payment_gateway_provider_centralpay');
     case 'TETRAPAY':
       return t('web.payment_gateway_provider_tetrapay');
+    case 'RIALIT':
+      return t('web.payment_gateway_provider_rialit');
   }
 }
 
@@ -1030,6 +1033,9 @@ export function PaymentGatewaysPage({
             {keying === 'TETRAPAY' && (
               <Banner tone="info">{t('web.payment_gateway_tetrapay_hint')}</Banner>
             )}
+            {keying === 'RIALIT' && (
+              <Banner tone="info">{t('web.payment_gateway_rialit_hint')}</Banner>
+            )}
             <Field label={t('web.payment_gateway_credential_input')} htmlFor="pg-api-key">
               <input
                 id="pg-api-key"
@@ -1160,7 +1166,7 @@ export function PaymentGatewaysPage({
       */}
         {editing === null && toggle.error != null && (
           <Banner tone="danger">
-            {messageFor(toggle.error)}
+            {gatewayEnableRefusalText(toggle.error) ?? messageFor(toggle.error)}
             <ErrorRef error={toggle.error} />
           </Banner>
         )}
@@ -1412,7 +1418,7 @@ export function PaymentGatewaysPage({
             */}
                 {failure != null && (
                   <Banner tone="danger">
-                    {messageFor(failure)}
+                    {gatewayEnableRefusalText(failure) ?? messageFor(failure)}
                     <ErrorRef error={failure} />
                   </Banner>
                 )}
@@ -1459,12 +1465,16 @@ export function PaymentGatewaysPage({
             title={t(
               only.provider === 'TETRAPAY'
                 ? 'web.payment_gateway_webhook_url'
-                : 'web.payment_gateway_callback_url',
+                : only.provider === 'RIALIT'
+                  ? 'web.payment_gateway_rialit_webhook_url'
+                  : 'web.payment_gateway_callback_url',
             )}
             hint={t(
               only.provider === 'TETRAPAY'
                 ? 'web.payment_gateway_webhook_url_hint'
-                : 'web.payment_gateway_callback_url_hint',
+                : only.provider === 'RIALIT'
+                  ? 'web.payment_gateway_rialit_webhook_url_hint'
+                  : 'web.payment_gateway_callback_url_hint',
             )}
           >
             {/* A label/value row, whose value wraps: a URL never widens the page at 390px. */}

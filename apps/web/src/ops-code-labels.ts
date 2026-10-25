@@ -118,6 +118,20 @@ export const PROVIDER_CODE_LABELS: Readonly<Record<string, WebKey>> = {
   'tetrapay.UNSUPPORTED_MEDIA_TYPE': 'web.provcode_tetrapay_unsupported_media_type',
   'tetrapay.BAD_JSON': 'web.provcode_tetrapay_bad_json',
   'tetrapay.INTERNAL': 'web.provcode_tetrapay_internal',
+  'rialit.UNAUTHORIZED': 'web.provcode_rialit_unauthorized',
+  'rialit.IP_NOT_ALLOWED': 'web.provcode_rialit_ip_not_allowed',
+  'rialit.MERCHANT_INACTIVE': 'web.provcode_rialit_merchant_inactive',
+  'rialit.FORBIDDEN': 'web.provcode_rialit_forbidden',
+  'rialit.BAD_REQUEST': 'web.provcode_rialit_bad_request',
+  'rialit.AMOUNT_OUT_OF_RANGE': 'web.provcode_rialit_amount_out_of_range',
+  'rialit.INVALID_ORDER_ID': 'web.provcode_rialit_invalid_order_id',
+  'rialit.INVALID_PAYER_ID': 'web.provcode_rialit_invalid_payer_id',
+  'rialit.NOT_FOUND': 'web.provcode_rialit_not_found',
+  'rialit.ORDER_CONFLICT': 'web.provcode_rialit_order_conflict',
+  'rialit.RATE_LIMITED': 'web.provcode_rialit_rate_limited',
+  'rialit.DOUBLE_FEE': 'web.provcode_rialit_double_fee',
+  'rialit.PAYER_AMOUNT_MISMATCH': 'web.provcode_rialit_payer_amount_mismatch',
+  'rialit.PAYER_AMOUNT_UNREADABLE': 'web.provcode_rialit_payer_amount_unreadable',
   'wallex.no_bids': 'web.provcode_wallex_no_bids',
   'wallex.no_result': 'web.provcode_wallex_no_result',
   'wallex.not_json': 'web.provcode_wallex_not_json',
@@ -165,6 +179,10 @@ export function errorCodeLabel(code: string): string {
   // TetraPay's AMOUNT_OUT_OF_RANGE carries the provider's bounds in Toman after the code.
   if (code.startsWith('tetrapay.AMOUNT_OUT_OF_RANGE:')) {
     return t('web.provcode_tetrapay_amount_out_of_range');
+  }
+  // Rialit's the same way: `rialit.AMOUNT_OUT_OF_RANGE:<min>:<max>`.
+  if (code.startsWith('rialit.AMOUNT_OUT_OF_RANGE:')) {
+    return t('web.provcode_rialit_amount_out_of_range');
   }
   const operational = operationalEventLabelFa(code);
   if (operational !== null) return operational;
