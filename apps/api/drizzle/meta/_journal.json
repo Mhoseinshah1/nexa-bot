@@ -1940,6 +1940,20 @@
       "when": 1792847180034,
       "tag": "0276_fx_sources_tabdeal_bitpin_ramzinex",
       "breakpoints": true
+    },
+    {
+      "idx": 277,
+      "version": "7",
+      "when": 1792896370779,
+      "tag": "0277_data_compaction_runs",
+      "breakpoints": true
+    },
+    {
+      "idx": 278,
+      "version": "7",
+      "when": 1792896396688,
+      "tag": "0278_notification_evidence_compaction_guard",
+      "breakpoints": true
     }
   ]
 }
