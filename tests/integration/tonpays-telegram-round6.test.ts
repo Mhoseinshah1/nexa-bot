@@ -1188,6 +1188,41 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     ]);
   });
 
+  it('R9 C1: a tenant stopped between the provider’s answer and its recording raises nothing (the check is inside the transaction)', async () => {
+    const { paymentId } = await cardOnScreen();
+    fake.underpay(firstInvoice().invoiceId, 12_000);
+    const asked = fake.checks.length;
+    let stopped = false;
+    const racing = telegramLaneWith(ctx, fake, {
+      invoiceScreens: ctx.container.wizardScreens,
+      providerRequests: true,
+      paymentRecords: (real) => {
+        const read = real.findById.bind(real);
+        real.findById = async (scope, id, tx) => {
+          const seen = await read(scope, id, tx);
+          // The re-read right after TonPays answered: the operator stops the tenant now.
+          if (!stopped && id === paymentId && fake.checks.length > asked) {
+            stopped = true;
+            await ctx.container.database.db.execute(
+              sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}`,
+            );
+          }
+          return seen;
+        };
+        return real;
+      },
+    });
+    const before = newMessages().length;
+    await ctx.container.database.db.execute(
+      sql`UPDATE gateway_invoices SET next_inquiry_at = now() - interval '1 second', inquiry_claimed_until = NULL
+           WHERE payment_id = ${paymentId}`,
+    );
+    await racing.runOnce(tenantA);
+    expect(stopped).toBe(true);
+    expect(await attention(paymentId)).toEqual([]);
+    expect(newMessages().length).toBe(before);
+  });
+
   it('R9 C1 race: the provider approves while the customer’s cancel waits — the inquiry settles it and the cancel is never sent', async () => {
     const { paymentId, message } = await cardOnScreen();
     await tapOn(message, `gq:${paymentId}`);
