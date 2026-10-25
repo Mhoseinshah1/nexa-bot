@@ -1037,6 +1037,16 @@ describe('the mini-app surface', () => {
         sql`SELECT source_surface, order_id FROM payments WHERE customer_id = ${await customerIdOf(700308)}`,
       );
       expect(rows.rows).toEqual([{ source_surface: 'MINI_APP', order_id: null }]);
+      // A top-up has no order whose own read could refuse an intruder: the payment's own
+      // ownership check is the only thing between another customer and its status.
+      const paymentId = (JSON.parse(topup.body) as { instruction: { paymentId: string } })
+        .instruction.paymentId;
+      const intruder = await sessionFor(700309);
+      const peek = await call(intruder, 'GET', MINIAPP_ROUTES.payment, { paymentId });
+      expect(peek.statusCode, peek.body).toBe(404);
+      expect((await call(token, 'GET', MINIAPP_ROUTES.payment, { paymentId })).statusCode).toBe(
+        200,
+      );
     });
   });
 
