@@ -705,6 +705,18 @@ describe('the mini-app surface', () => {
         'TELEGRAM',
         'TELEGRAM',
       ]);
+      // The audit rows of the mini app's purchase and renewal carry MINI_APP — the column the
+      // operations log's «منبع: مینی‌اپ» line is derived from (C2) — and the bot's do not.
+      const audited = async (customerId: UserId) =>
+        (
+          await ctx.container.database.db.execute<{ surface: string }>(
+            sql`SELECT DISTINCT a.source_surface AS surface FROM audit_logs a
+                  JOIN orders o ON a.entity_id = o.id::text
+                 WHERE o.customer_id = ${customerId}`,
+          )
+        ).rows.map((row) => row.surface);
+      expect(await audited(miniCustomer)).toEqual(['MINI_APP']);
+      expect(await audited(botCustomer)).toEqual(['TELEGRAM']);
     }, 60_000);
 
     it('refuses a wallet payment the balance does not cover, before confirming anything', async () => {
