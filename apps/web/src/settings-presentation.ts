@@ -6,6 +6,7 @@ import {
   PANEL_SETTING_KEYS,
   isSettingKey,
   settingIntegerRange,
+  type DataCompactionMode,
   type FxFallbackSource,
   type FxSource,
   type OperationalSeverity,
@@ -181,6 +182,12 @@ const SEVERITY_LABELS: Readonly<Record<OperationalSeverity, WebKey>> = {
 const COMMISSION_SCOPE_OPTIONS: Readonly<Record<ReferralCommissionScope, WebKey>> = {
   FIRST_PAID_ORDER: 'web.referral_trigger_first_paid_order',
   EVERY_PAID_ORDER: 'web.referral_trigger_every_paid_order',
+};
+
+/** Round 9 C3: the data compaction's two modes; DRY_RUN is the default. */
+const COMPACTION_MODE_OPTIONS: Readonly<Record<DataCompactionMode, WebKey>> = {
+  DRY_RUN: 'web.dcp_mode_dry_run',
+  APPLY: 'web.dcp_mode_apply',
 };
 
 function options(labels: Readonly<Record<string, WebKey>>): readonly SelectOption[] {
@@ -388,6 +395,31 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
   'retention.idempotency_interactive_days': {
     title: 'web.setting_retention_idempotency',
     description: 'web.setting_retention_idempotency_desc',
+    group: 'ops',
+    control: { kind: 'integer', unit: 'web.unit_days' },
+  },
+  // Round 9 C3: the data compaction — the mode (dry run by default) and the three retentions.
+  'retention.compaction_mode': {
+    title: 'web.setting_compaction_mode',
+    description: 'web.setting_compaction_mode_desc',
+    group: 'ops',
+    control: { kind: 'select', options: options(COMPACTION_MODE_OPTIONS) },
+  },
+  'retention.ops_notifications_days': {
+    title: 'web.setting_compaction_ops_days',
+    description: 'web.setting_compaction_ops_days_desc',
+    group: 'ops',
+    control: { kind: 'integer', unit: 'web.unit_days' },
+  },
+  'retention.customer_notifications_days': {
+    title: 'web.setting_compaction_customer_days',
+    description: 'web.setting_compaction_customer_days_desc',
+    group: 'ops',
+    control: { kind: 'integer', unit: 'web.unit_days' },
+  },
+  'retention.receipt_windows_days': {
+    title: 'web.setting_compaction_receipt_days',
+    description: 'web.setting_compaction_receipt_days_desc',
     group: 'ops',
     control: { kind: 'integer', unit: 'web.unit_days' },
   },

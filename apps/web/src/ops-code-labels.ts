@@ -66,7 +66,13 @@ export const PROVIDER_CODE_LABELS: Readonly<Record<string, WebKey>> = {
   'gateway_invoice.reconcile_inquiry_requested':
     'web.provcode_gateway_invoice_reconcile_inquiry_requested',
   'nexa.amount_out_of_range': 'web.provcode_nexa_amount_out_of_range',
+  'nexa.amount_mismatch': 'web.provcode_nexa_amount_mismatch',
   'nexa.attempt_closed': 'web.provcode_nexa_attempt_closed',
+  // R9 C1: the cancel/refund lane's own refusals were shown as the raw English code.
+  'nexa.card_unavailable': 'web.provcode_nexa_card_unavailable',
+  'nexa.card_unreadable': 'web.provcode_nexa_card_unreadable',
+  'nexa.not_overpaid': 'web.provcode_nexa_not_overpaid',
+  'nexa.not_pending': 'web.provcode_nexa_not_pending',
   'nexa.bot_token_unavailable': 'web.provcode_nexa_bot_token_unavailable',
   'nexa.budget': 'web.provcode_nexa_budget',
   'nexa.buyer_chat_id_missing': 'web.provcode_nexa_buyer_chat_id_missing',

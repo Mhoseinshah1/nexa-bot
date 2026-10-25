@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { money } from '@nexa/contracts';
+import { DrizzleOpsLogFacts } from '../../apps/api/src/modules/commerce/ops-log/infrastructure/drizzle-ops-log-facts';
 import { DrizzleNightlyReportReader } from '../../apps/api/src/modules/commerce/ops-log/infrastructure/drizzle-nightly-report.reader';
 import {
   grossOf,
@@ -87,19 +88,23 @@ describe('the nightly report reader', () => {
     tenantId?: string;
     panelId?: string;
     productId?: string;
+    state?: 'PAID' | 'REFUNDED';
+    origin?: 'STANDARD' | 'LEGACY_ADOPTION';
+    id?: string;
   }): Promise<string> {
-    const id = uuid();
+    const id = o.id ?? uuid();
     n += 1;
     await run(sql`INSERT INTO orders (id, tenant_id, customer_id, state, purpose, product_id, panel_id,
         line_title, line_duration_days, line_traffic_bytes, line_quantity, line_unit_price_amount,
         line_category_name, subtotal_amount, discount_amount, total_amount, currency, quote,
-        confirmed_at, settled_at, created_at, source, source_ref)
-      VALUES (${id}, ${o.tenantId ?? tenantA.tenantId}, ${o.customerId}, 'PAID', ${o.purpose},
+        confirmed_at, settled_at, created_at, source, source_ref, origin, refunded_at)
+      VALUES (${id}, ${o.tenantId ?? tenantA.tenantId}, ${o.customerId}, ${o.state ?? 'PAID'}, ${o.purpose},
         ${o.productId ?? productA}, ${o.panelId ?? panelA}, 'Plan',
         ${o.purpose === 'ADD_TRAFFIC' ? 0 : 30}, ${o.purpose === 'ADD_TIME' ? 0 : 1073741824}, 1, ${o.total},
         'دسته', ${o.total}, 0, ${o.total}, ${o.currency ?? 'IRT'}, '{}'::jsonb,
         ${o.settledAt}::timestamptz, ${o.settledAt}::timestamptz, ${o.settledAt}::timestamptz,
-        ${o.imported === true ? 'MIRZA' : 'NEXA'}, ${o.imported === true ? `legacy-${String(n)}` : null})`);
+        ${o.imported === true ? 'MIRZA' : 'NEXA'}, ${o.imported === true ? `legacy-${String(n)}` : null},
+        ${o.origin ?? 'STANDARD'}, ${o.state === 'REFUNDED' ? o.settledAt : null}::timestamptz)`);
     return id;
   }
 
@@ -445,6 +450,336 @@ describe('the nightly report reader', () => {
       orders: 2,
       sum: 130_000n,
       soldBytes: 2n * 1073741824n,
+    });
+  });
+
+  describe('R9 C2 item 4 — the first paid purchase, one definition', () => {
+    const firstOf = async (): Promise<number> => (await read()).firstPurchases;
+    const facts = () => new DrizzleOpsLogFacts(ctx.container.database.db);
+    const isFirst = async (orderId: string): Promise<boolean> =>
+      (await facts().order(tenantA, orderId, { tx: undefined } as never))!.isFirstPurchase;
+
+    it('the first settled catalogue purchase is the first; the second is not', async () => {
+      const first = await order({
+        customerId: customerA,
+        purpose: 'NEW_SERVICE',
+        total: 100_000,
+        settledAt: at(60),
+      });
+      const second = await order({
+        customerId: customerA,
+        purpose: 'NEW_SERVICE',
+        total: 90_000,
+        settledAt: at(120),
+      });
+      expect(await isFirst(first)).toBe(true);
+      expect(await isFirst(second)).toBe(false);
+      expect(await firstOf()).toBe(1);
+    });
+
+    it('a trial, a renewal, extra traffic and extra time before it do not make it a second purchase', async () => {
+      await order({ customerId: customerA, purpose: 'TRIAL', total: 0, settledAt: at(10) });
+      await order({ customerId: customerA, purpose: 'RENEW', total: 50_000, settledAt: at(20) });
+      await order({
+        customerId: customerA,
+        purpose: 'ADD_TRAFFIC',
+        total: 5_000,
+        settledAt: at(30),
+      });
+      await order({ customerId: customerA, purpose: 'ADD_TIME', total: 5_000, settledAt: at(40) });
+      const purchase = await order({
+        customerId: customerA,
+        purpose: 'NEW_SERVICE',
+        total: 100_000,
+        settledAt: at(60),
+      });
+      expect(await isFirst(purchase)).toBe(true);
+      expect(await firstOf()).toBe(1);
+    });
+
+    it('a renewal, extra traffic or extra time is never a first purchase itself', async () => {
+      for (const purpose of ['RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'TRIAL'] as const) {
+        const id = await order({
+          customerId: customerB,
+          purpose,
+          total: purpose === 'TRIAL' ? 0 : 1_000,
+          settledAt: at(70),
+        });
+        expect(await isFirst(id), purpose).toBe(false);
+      }
+      expect(await firstOf()).toBe(0);
+    });
+
+    it('a purchase that was refunded is not a live order: the next one is still the first', async () => {
+      const given = await order({
+        customerId: customerA,
+        purpose: 'NEW_SERVICE',
+        total: 100_000,
+        settledAt: at(60),
+        state: 'REFUNDED',
+      });
+      const next = await order({
+        customerId: customerA,
+        purpose: 'NEW_SERVICE',
+        total: 100_000,
+        settledAt: at(120),
+      });
+      expect(await isFirst(next)).toBe(true);
+      // The refunded order was itself the customer's first when it was made.
+      expect(await isFirst(given)).toBe(true);
+    });
+
+    it('a service the legacy import adopted is no purchase of this installation: the first real purchase is still the first', async () => {
+      await order({
+        customerId: customerA,
+        purpose: 'NEW_SERVICE',
+        total: 0,
+        settledAt: at(5),
+        origin: 'LEGACY_ADOPTION',
+      });
+      const purchase = await order({
+        customerId: customerA,
+        purpose: 'NEW_SERVICE',
+        total: 100_000,
+        settledAt: at(60),
+      });
+      expect(await isFirst(purchase)).toBe(true);
+    });
+
+    it('two purchases settled in the same instant have exactly one first, by id', async () => {
+      const a = await order({
+        customerId: customerA,
+        purpose: 'NEW_SERVICE',
+        total: 1_000,
+        settledAt: at(60),
+      });
+      const b = await order({
+        customerId: customerA,
+        purpose: 'NEW_SERVICE',
+        total: 1_000,
+        settledAt: at(60),
+      });
+      const [low, high] = a < b ? [a, b] : [b, a];
+      expect(await isFirst(low)).toBe(true);
+      expect(await isFirst(high)).toBe(false);
+      expect(await firstOf()).toBe(1);
+    });
+
+    it('is decided per customer: another customer’s earlier purchase does not count', async () => {
+      await order({
+        customerId: customerB,
+        purpose: 'NEW_SERVICE',
+        total: 1_000,
+        settledAt: at(10),
+      });
+      const mine = await order({
+        customerId: customerA,
+        purpose: 'NEW_SERVICE',
+        total: 1_000,
+        settledAt: at(60),
+      });
+      expect(await isFirst(mine)).toBe(true);
+      expect(await firstOf()).toBe(2);
+    });
+
+    it('the nightly count and the message line are the same rule: they agree on every order of the day', async () => {
+      const ids = [
+        await order({
+          customerId: customerA,
+          purpose: 'NEW_SERVICE',
+          total: 1_000,
+          settledAt: at(10),
+        }),
+        await order({
+          customerId: customerA,
+          purpose: 'NEW_SERVICE',
+          total: 1_000,
+          settledAt: at(20),
+        }),
+        await order({
+          customerId: customerB,
+          purpose: 'NEW_SERVICE',
+          total: 1_000,
+          settledAt: at(30),
+        }),
+        await order({ customerId: customerB, purpose: 'RENEW', total: 1_000, settledAt: at(40) }),
+      ];
+      const flags = await Promise.all(ids.map(isFirst));
+      expect(flags).toEqual([true, false, true, false]);
+      expect(await firstOf()).toBe(flags.filter(Boolean).length);
+    });
+  });
+
+  describe('R9 C2 item 5 — active and inactive customers', () => {
+    async function service(customerId: string, state: string, source = 'NEXA'): Promise<void> {
+      n += 1;
+      const orderId = await order({
+        customerId,
+        purpose: 'NEW_SERVICE',
+        total: 1_000,
+        settledAt: at(-300),
+      });
+      await run(sql`INSERT INTO services (id, tenant_id, customer_id, order_id, panel_id, product_id, state,
+          provider_username, traffic_limit_bytes, provisioned_at, expires_at, created_at, source, source_ref,
+          terminated_at)
+        VALUES (${uuid()}, ${tenantA.tenantId}, ${customerId}, ${orderId}, ${panelA}, ${productA}, ${state},
+          ${`nxc2${String(n)}`}, 1073741824, ${at(-300)}::timestamptz, ${at(60 * 24 * 30)}::timestamptz,
+          ${at(-300)}::timestamptz, ${source}, ${source === 'NEXA' ? null : `legacy-svc-${String(n)}`},
+          ${state === 'TERMINATED' ? at(-100) : null}::timestamptz)`);
+    }
+
+    it('a customer with at least one ACTIVE service is active; all the others are inactive; the two add up to every NEXA customer', async () => {
+      const both = customerA; // an expired service AND an active one: active
+      const none = customerB; // no service at all: inactive
+      const expiredOnly = await customer(String(tenantA.tenantId), at(-600));
+      const suspendedOnly = await customer(String(tenantA.tenantId), at(-600));
+      const terminatedOnly = await customer(String(tenantA.tenantId), at(-600));
+      const importedOnly = await customer(String(tenantA.tenantId), at(-600));
+      await service(both, 'EXPIRED');
+      await service(both, 'ACTIVE');
+      await service(both, 'ACTIVE');
+      await service(expiredOnly, 'EXPIRED');
+      await service(suspendedOnly, 'SUSPENDED');
+      await service(terminatedOnly, 'TERMINATED');
+      // An imported (legacy) service is history, not an active service of this installation.
+      await service(importedOnly, 'ACTIVE', 'MIRZA');
+      void none;
+
+      const data = await read();
+      // customerA, plus nobody else: 1 active of 6 customers.
+      expect(data.customersWithService).toBe(1);
+      expect(data.customersWithoutService).toBe(5);
+      expect(data.customersWithService + data.customersWithoutService).toBe(6);
+    });
+
+    it('does not count an imported customer, another tenant’s customer or another tenant’s service', async () => {
+      await run(sql`INSERT INTO customers (id, tenant_id, telegram_user_id, first_name, created_at, first_seen_at, source, source_ref)
+        VALUES (${uuid()}, ${tenantA.tenantId}, '79999999', 'Legacy', ${at(-600)}::timestamptz,
+                ${at(-600)}::timestamptz, 'MIRZA', 'legacy-cust-1')`);
+      await customer(String(tenantB.tenantId), at(-600));
+      const data = await read();
+      expect(data.customersWithService).toBe(0);
+      expect(data.customersWithoutService).toBe(2);
+    });
+
+    it('is the same on a quiet day as on a busy one: it is "now", not "in the day"', async () => {
+      await service(customerA, 'ACTIVE');
+      const data = await reader.read(
+        tenantA,
+        {
+          ...WINDOW,
+          start: new Date('2020-01-01T00:00:00Z'),
+          end: new Date('2020-01-02T00:00:00Z'),
+        },
+        { tx: undefined } as never,
+      );
+      expect(data.customersWithService).toBe(1);
+      expect(data.customersWithoutService).toBe(1);
+    });
+  });
+
+  describe('R9 C2 item 3 — the top resellers of the day', () => {
+    let tier = '';
+    async function resellerOrder(
+      customerId: string,
+      total: number,
+      settledAt: string,
+      overrides: { currency?: string; purpose?: 'NEW_SERVICE' | 'TRIAL' } = {},
+    ): Promise<void> {
+      const id = await order({
+        customerId,
+        purpose: overrides.purpose ?? 'NEW_SERVICE',
+        total,
+        settledAt,
+        ...(overrides.currency === undefined ? {} : { currency: overrides.currency }),
+      });
+      await run(sql`INSERT INTO order_reseller_terms (tenant_id, order_id, reseller_customer_id, tier_id,
+          tier_name, layer, list_amount, cost_amount, promotion_amount, sale_amount, margin_amount, currency)
+        VALUES (${tenantA.tenantId}, ${id}, ${customerId}, ${tier}, 'سطح ۱', 'LIST', ${total}, ${total},
+          0, ${total}, 0, ${overrides.currency ?? 'IRT'})`);
+    }
+    async function reseller(name: string): Promise<string> {
+      const id = await customer(String(tenantA.tenantId), at(-600));
+      await run(
+        sql`UPDATE customers SET first_name = ${name}, username = ${`u_${name}`} WHERE id = ${id}`,
+      );
+      return id;
+    }
+
+    beforeEach(async () => {
+      tier = uuid();
+      await run(sql`INSERT INTO reseller_tiers (id, tenant_id, name, pricing_mode, credit_limit_currency)
+        VALUES (${tier}, ${tenantA.tenantId}, 'سطح ۱', 'LIST_PRICE', 'IRT')`);
+    });
+
+    it('returns at most five, best first, each with its id, username, total and order count', async () => {
+      const sellers: { id: string; name: string }[] = [];
+      for (const name of ['r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7']) {
+        sellers.push({ id: await reseller(name), name });
+      }
+      // r1..r7 sell 100 000 + index * 10 000; r3 sells in two orders.
+      for (const [index, seller] of sellers.entries()) {
+        await resellerOrder(seller.id, 100_000 + index * 10_000, at(60 + index));
+      }
+      await resellerOrder(sellers[2]!.id, 5_000, at(200));
+
+      const data = await read();
+      expect(data.resellers.topList).toHaveLength(5);
+      expect(data.resellers.topList.map((one) => one.username)).toEqual([
+        'u_r7',
+        'u_r6',
+        'u_r5',
+        'u_r4',
+        'u_r3',
+      ]);
+      expect(data.resellers.topList[0]).toMatchObject({
+        username: 'u_r7',
+        sum: 160_000n,
+        count: 1,
+      });
+      expect(data.resellers.topList[4]).toMatchObject({ sum: 125_000n, count: 2 });
+      expect(data.resellers.topList[0]!.telegramId).toMatch(/^79000\d+$/);
+      // The single «top» of the summary line is the first of the list.
+      expect(data.resellers.top).toMatchObject({ username: 'u_r7', sum: 160_000n });
+    });
+
+    it('counts the tenant’s day [start, end): one at the first instant is in, one at the end is out', async () => {
+      const early = await reseller('early');
+      const edge = await reseller('edge');
+      const before = await reseller('before');
+      await resellerOrder(early, 10_000, START.toISOString());
+      await resellerOrder(edge, 20_000, END.toISOString());
+      await resellerOrder(before, 30_000, new Date(START.getTime() - 1).toISOString());
+      const data = await read();
+      expect(data.resellers.topList.map((one) => one.username)).toEqual(['u_early']);
+    });
+
+    it('leaves out a trial, another currency, an ordinary customer and an imported order', async () => {
+      const r = await reseller('r');
+      await resellerOrder(r, 0, at(60), { purpose: 'TRIAL' });
+      await resellerOrder(r, 9_000, at(61), { currency: 'IRR' });
+      // An ordinary customer's order has no reseller terms.
+      await order({
+        customerId: customerA,
+        purpose: 'NEW_SERVICE',
+        total: 77_000,
+        settledAt: at(62),
+      });
+      const data = await read();
+      expect(data.resellers.topList).toEqual([]);
+      expect(data.resellers.top).toBeNull();
+    });
+
+    it('the block is left out of the L29 message when no reseller sold, and present when one did', async () => {
+      const quiet = await read();
+      const [, , quietPanels] = nightlyReports({ ...quiet, day: START }, i18nOpsLogWords);
+      expect(quietPanels!.values).not.toHaveProperty('topResellers');
+      const r = await reseller('seller');
+      await resellerOrder(r, 120_000, at(60));
+      const busy = await read();
+      const [, , busyPanels] = nightlyReports({ ...busy, day: START }, i18nOpsLogWords);
+      expect(String(busyPanels!.values['topResellers'])).toContain('@u_seller');
+      expect(String(busyPanels!.values['topResellers'])).toContain('۱۲۰٬۰۰۰ تومان');
     });
   });
 

@@ -4,7 +4,10 @@ import {
   formatPersianPercent,
   money,
   toPersianDigits,
+  DATA_COMPACTION_CLASS_TABLES,
+  DATA_COMPACTION_CLASSES,
   type CurrencyCode,
+  type DataCompactionClass,
   type OpsLogButton,
   type TemplateKey,
   type TemplateValue,
@@ -48,6 +51,18 @@ export interface PanelDayFact {
   readonly capacity: number | null;
 }
 
+export interface TopReseller {
+  /** The reseller's numeric Telegram id: the «id» of the line. */
+  readonly telegramId: string;
+  readonly username: string | null;
+  readonly name: string;
+  readonly sum: bigint;
+  /** Distinct orders of the day. */
+  readonly count: number;
+}
+
+export const TOP_RESELLERS_MAX = 5;
+
 export interface NightlyReportData {
   readonly day: Date;
   readonly currency: CurrencyCode;
@@ -66,11 +81,20 @@ export interface NightlyReportData {
   readonly activeCustomers: number;
   readonly trials: number;
   readonly activeServices: number;
+  /** R9 C2: customers with at least one ACTIVE service when the report is made. */
+  readonly customersWithService: number;
+  /** R9 C2: every other NEXA customer; the two add up to all of them. */
+  readonly customersWithoutService: number;
   readonly errors: number;
   readonly failedPayments: number;
   readonly openTickets: number;
   /** Unfinished payments that expired in the day: the automatic cleanup's one line (L30). */
   readonly expiredPayments: number;
+  /**
+   * Round 9 C3: the data compaction's passes of the day, summed per class — part of the same
+   * cleanup line (L30), never a message of its own. Absent or null: nothing to say.
+   */
+  readonly compaction?: CompactionDaySummary | null;
   readonly refunds: Tally;
   readonly commissions: Tally;
   readonly giftSum: bigint;
@@ -85,7 +109,73 @@ export interface NightlyReportData {
       readonly name: string;
       readonly sum: bigint;
     } | null;
+    /** R9 C2: the day's top resellers by sales, best first, at most five; empty when none sold. */
+    readonly topList: readonly TopReseller[];
   };
+}
+
+/**
+ * What the data compaction did on a day: the rows its APPLY passes removed, per class; or, when
+ * none removed anything, what the day's last DRY_RUN pass counted (`applied: false`) — the
+ * owner's prompt that APPLY would act. Null when both are nothing.
+ */
+export interface CompactionDaySummary {
+  readonly applied: boolean;
+  readonly classes: Readonly<Record<DataCompactionClass, number>>;
+}
+
+/** One recorded pass, as the reader hands it over: its mode and rows per table. */
+export interface CompactionDayRun {
+  readonly mode: 'DRY_RUN' | 'APPLY';
+  readonly counts: Readonly<Record<string, number>>;
+}
+
+function perClass(counts: Readonly<Record<string, number>>): Record<DataCompactionClass, number> {
+  const out = {} as Record<DataCompactionClass, number>;
+  for (const cls of DATA_COMPACTION_CLASSES) {
+    out[cls] = DATA_COMPACTION_CLASS_TABLES[cls].reduce(
+      (sum, table) => sum + Math.max(0, Number(counts[table] ?? 0)),
+      0,
+    );
+  }
+  return out;
+}
+
+function totalOfClasses(classes: Readonly<Record<DataCompactionClass, number>>): number {
+  return DATA_COMPACTION_CLASSES.reduce((sum, cls) => sum + classes[cls], 0);
+}
+
+/** The day's passes, oldest first, folded into the one summary the line prints. */
+export function summarizeCompactionDay(
+  runs: readonly CompactionDayRun[],
+): CompactionDaySummary | null {
+  const applied = {} as Record<DataCompactionClass, number>;
+  for (const cls of DATA_COMPACTION_CLASSES) applied[cls] = 0;
+  let lastDry: Record<DataCompactionClass, number> | null = null;
+  for (const run of runs) {
+    const classes = perClass(run.counts);
+    if (run.mode === 'APPLY') {
+      for (const cls of DATA_COMPACTION_CLASSES) applied[cls] += classes[cls];
+    } else {
+      lastDry = classes;
+    }
+  }
+  if (totalOfClasses(applied) > 0) return { applied: true, classes: applied };
+  if (lastDry !== null && totalOfClasses(lastDry) > 0) return { applied: false, classes: lastDry };
+  return null;
+}
+
+/** `اعلان‌های عملیات ۱۲۰ · …`, classes with nothing omitted; null for nothing at all. */
+export function compactionLine(
+  summary: CompactionDaySummary | null | undefined,
+  words: OpsLogWords,
+): string | null {
+  if (summary === null || summary === undefined) return null;
+  const parts = DATA_COMPACTION_CLASSES.filter((cls) => summary.classes[cls] > 0).map(
+    (cls) => `${words.compactionClass(cls)} ${formatPersianInteger(summary.classes[cls])}`,
+  );
+  if (parts.length === 0) return null;
+  return words.compactionLine(summary.applied, parts.join(' · '));
 }
 
 const DASHBOARD: readonly OpsLogButton[] = [{ kind: 'DASHBOARD' }];
@@ -160,6 +250,20 @@ function resellersBlock(data: NightlyReportData, words: OpsLogWords): string {
   return `${head}\n   برترین: ${who} — ${formatMoneyText(money(resellers.top.sum, data.currency))}`;
 }
 
+/**
+ * R9 C2: the day's top resellers — a heading and up to five lines, `۱. @user · 123 · ۵۰٬۰۰۰ تومان
+ * · ۳ سفارش` — or null when no reseller sold, so the block is left out of the message.
+ */
+export function topResellersBlock(data: NightlyReportData, words: OpsLogWords): string | null {
+  const top = data.resellers.topList.slice(0, TOP_RESELLERS_MAX);
+  if (top.length === 0) return null;
+  const lines = top.map((reseller, index) => {
+    const who = reseller.username === null ? reseller.name : `@${reseller.username}`;
+    return `${formatPersianInteger(index + 1)}. ${who} · ${reseller.telegramId} · ${formatMoneyText(money(reseller.sum, data.currency))} · ${formatPersianInteger(reseller.count)} ${words.reportUnit('orders')}`;
+  });
+  return `${words.reportTopResellers}\n${lines.join('\n')}`;
+}
+
 /** The three nightly messages, from one day's data. */
 export function nightlyReports(data: NightlyReportData, words: OpsLogWords): readonly Built[] {
   const gross = grossOf(data);
@@ -173,6 +277,8 @@ export function nightlyReports(data: NightlyReportData, words: OpsLogWords): rea
     renewals: data.renewals.count,
     newCustomers: data.newCustomers,
     activeCustomers: data.activeCustomers,
+    customersWithService: data.customersWithService,
+    customersWithoutService: data.customersWithoutService,
     trials: data.trials,
     activeServices: data.activeServices,
     errors: data.errors,
@@ -185,10 +291,13 @@ export function nightlyReports(data: NightlyReportData, words: OpsLogWords): rea
   if (change !== null) summary['salesChange'] = `(${change} نسبت به روز قبل)`;
   const hour = bestHourText(data.bestHour);
   if (hour !== null) summary['bestHour'] = hour;
-  // L30: the automatic cleanup is never a message of its own, only this line.
-  if (data.expiredPayments > 0) {
-    summary['cleanup'] = words.cleanupLine(formatPersianInteger(data.expiredPayments));
-  }
+  // L30: the automatic cleanup is never a message of its own, only this line — the expired
+  // payments and (Round 9 C3) the data compaction, each on its own row of the one value.
+  const cleanup = [
+    data.expiredPayments > 0 ? words.cleanupLine(formatPersianInteger(data.expiredPayments)) : null,
+    compactionLine(data.compaction, words),
+  ].filter((line): line is string => line !== null);
+  if (cleanup.length > 0) summary['cleanup'] = cleanup.join('\n');
 
   const financial: Record<string, TemplateValue> = {
     day: data.day,
@@ -218,6 +327,8 @@ export function nightlyReports(data: NightlyReportData, words: OpsLogWords): rea
     panelsBlock: panelsBlock(data, words),
     resellersBlock: resellersBlock(data, words),
   };
+  const topBlock = topResellersBlock(data, words);
+  if (topBlock !== null) panels['topResellers'] = topBlock;
 
   return [
     {

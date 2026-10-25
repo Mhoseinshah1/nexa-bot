@@ -1,4 +1,5 @@
 import {
+  PAYMENT_GATEWAY_DESCRIPTORS,
   TONPAYS_TELEGRAM_STATUS_MORE,
   type ActorContext,
   type AuditWriter,
@@ -235,11 +236,22 @@ export class GatewayProviderRequestLane {
       expiresAt: claimed.paymentExpiresAt,
       providerReviewUntil: claimed.paymentReviewUntil,
     });
-    const windowOpen =
-      claimed.paymentState === 'PENDING' &&
-      deadline !== null &&
-      now.getTime() < deadline.getTime() &&
-      (request.kind === 'REFUND' || claimed.paymentReviewUntil === null);
+    /*
+     * R9 C1: the cancel the expiry sweep asked for is the one request made for a CLOSED
+     * attempt — Nexa's own deadline expired it, and the provider's invoice is still open. It is
+     * sent only while the payment is still EXPIRED (an operator's reconciliation since then
+     * wins), and only for an invoice still undecided and not reported paid.
+     */
+    const onExpiry = request.kind === 'CANCEL' && request.requestedOnExpiry === true;
+    const windowOpen = onExpiry
+      ? claimed.paymentState === 'EXPIRED' &&
+        invoice !== null &&
+        invoice.outcome === null &&
+        invoice.providerPaid !== true
+      : claimed.paymentState === 'PENDING' &&
+        deadline !== null &&
+        now.getTime() < deadline.getTime() &&
+        (request.kind === 'REFUND' || claimed.paymentReviewUntil === null);
     if (
       !windowOpen ||
       invoice === null ||
@@ -309,6 +321,16 @@ export class GatewayProviderRequestLane {
     );
     switch (outcome.kind) {
       case 'CANCELLED':
+        if (onExpiry) {
+          /*
+           * The payment is already EXPIRED: nothing to fail, and the customer was told so by
+           * the expiry. The invoice is read again; its `canceled` records the outcome.
+           */
+          await decide('APPLIED', null, async (tx) => {
+            await bringInquiryForward(tx);
+          });
+          return 'DONE';
+        }
         await decide('APPLIED', null);
         await this.cancelled(scope, actor, invoice, at, request.requestedByNexa === true);
         return 'DONE';
@@ -499,6 +521,63 @@ export class GatewayProviderRequestLane {
     await this.deps.hooks.refreshScreens(scope, sibling.paymentId);
     if (result === 'BUDGET' || after?.state === 'RATE_LIMITED') return 'DEFER';
     return after?.state === 'APPLIED' ? 'CANCELLED' : 'NOT_CANCELLED';
+  }
+}
+
+/**
+ * R9 C1: the cancel Nexa asks for when ITS deadline expires a card-transfer attempt whose
+ * provider invoice is still open (`docs/tonpays-telegram-gateway-audit.md` §20). Written in the
+ * expiry sweep's transaction, by ONE conditional statement (`requestExpiryCancel`), and sent
+ * later by the lane above, the send stamped before the call like every other request — so a
+ * lost answer is UNKNOWN and never repeated. Without it an expired attempt left a `pending`
+ * invoice behind, and the customer's next top-up met `BUYER_HAS_PENDING_INVOICE`.
+ */
+export class GatewayExpiryCancels {
+  constructor(
+    private readonly deps: {
+      readonly requests: Pick<GatewayProviderRequestRepository, 'requestExpiryCancel'>;
+      readonly audit: AuditWriter;
+      readonly ids: IdGenerator;
+    },
+  ) {}
+
+  /** In the caller's transaction. True when a cancel request was written. */
+  async requestOnExpiry(
+    scope: TenantContext,
+    actor: ActorContext,
+    payment: { readonly id: PaymentId; readonly gatewayProvider: PaymentGatewayProvider | null },
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const provider = payment.gatewayProvider;
+    // Only a route with the provider cancel endpoint (a card-transfer route) has one to ask.
+    if (
+      provider === null ||
+      PAYMENT_GATEWAY_DESCRIPTORS[provider].invoiceForm !== 'CARD_TRANSFER'
+    ) {
+      return false;
+    }
+    const id = this.deps.ids.uuid();
+    const row = await this.deps.requests.requestExpiryCancel(
+      scope,
+      { id, paymentId: payment.id, now },
+      tx,
+    );
+    if (row === null) return false;
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: 'gateway_invoice.cancel_requested',
+        entityType: 'Payment',
+        entityId: payment.id,
+        before: null,
+        after: { requestId: id, state: row.state, reason: 'NEXA_EXPIRY' },
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+    return true;
   }
 }
 

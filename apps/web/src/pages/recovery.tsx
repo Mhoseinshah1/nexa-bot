@@ -51,6 +51,7 @@ import { Icon } from '../ui/icons';
 import { BackupScheduleCard } from './backup-schedule';
 import { BackupPasswordCard } from './backup-password';
 import { LegacyCompactionCard } from './legacy-compaction';
+import { DataCompactionCard } from './data-compaction';
 import { assembleParts } from '../backup-parts';
 import { phaseRows } from '../backup-phases';
 import { CodeName } from './code-name';
@@ -116,6 +117,7 @@ export function RecoveryPage({
   const mayRun = permissions.includes('backup.run');
   const mayDownload = permissions.includes('backup.download');
   const mayRestore = permissions.includes('recovery.restore');
+  const mayCompact = permissions.includes('maintenance.run');
   const mirza = mirzaAccess(permissions);
 
   const cursor = route.query.get('cursor') ?? undefined;
@@ -309,6 +311,13 @@ export function RecoveryPage({
       {mirza.mayView && (
         <Card title={t('web.lcp_title')}>
           <LegacyCompactionCard mayApply={mirza.mayApply} />
+        </Card>
+      )}
+
+      {/* Round 9 C3: the data compaction's dry run, for the owner (`maintenance.run`). */}
+      {mayCompact && (
+        <Card title={t('web.dcp_title')}>
+          <DataCompactionCard />
         </Card>
       )}
 

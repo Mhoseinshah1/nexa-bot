@@ -14,7 +14,7 @@ not accepted** against the real provider (`OQ-RL-01`). The route starts `DISABLE
 enabled without its API key.
 
 Code: `packages/contracts/src/rialit.ts` (constants), `PAY/domain/rialit.ts` (the rules, pure),
-`PAY/infrastructure/rialit-adapter.ts` (the only code that speaks Rialit), migration `0277`
+`PAY/infrastructure/rialit-adapter.ts` (the only code that speaks Rialit), migration `0280`
 (the provider roster and `gateway_invoices_rialit_check`). `PAY` =
 `apps/api/src/modules/commerce/payments`.
 
@@ -122,7 +122,7 @@ Error mapping (create / status read):
 
 `packages/contracts`: `PAYMENT_GATEWAY_PROVIDERS`, `PAYMENT_METHOD_SLUGS` (`rialit`),
 `LATE_CREDIT_SETTING_KEYS.RIALIT` and its `settings.ts` entry, the descriptor, `rialit.ts`, four
-template keys and their place in `payment-situations.ts`. Migration `0277` (six provider CHECKs +
+template keys and their place in `payment-situations.ts`. Migration `0280` (six provider CHECKs +
 `gateway_invoices_rialit_check`). `container.ts` (adapter + switch case),
 `surfaces/gateway/webhook.controller.ts` (`X-Rialit-Delivery`), the lane's `isWebhookProbe`
 answer and `customerFeeCharged` fact, `gateway-reconciliation.ts`, `financial-log.consumer.ts`,

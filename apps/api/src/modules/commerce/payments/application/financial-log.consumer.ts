@@ -111,6 +111,8 @@ export class FinancialLogConsumer implements EventConsumer {
     'PaymentLateCredited',
     // TonPays Telegram (§9.6.4): a provider review that lapsed with no trustworthy answer.
     'PaymentOutcomeUnknown',
+    // R9 C1: an open attempt paid less or more than invoiced, or a credit_amount that differs.
+    'GatewayPaymentAttentionRaised',
     'RefundCompleted',
     'RefundFailed',
     'ServiceRefundRequestResolved',
@@ -399,6 +401,67 @@ export class FinancialLogConsumer implements EventConsumer {
           ],
         };
       }
+      case 'GatewayPaymentAttentionRaised': {
+        const payload = EVENT_PAYLOAD_SCHEMAS.GatewayPaymentAttentionRaised.parse(event.payload);
+        const found = await this.facts(scope, event.aggregateId as PaymentId, tx);
+        if (found === null || found.payment.source !== 'NEXA') return null;
+        const { payment, customer, invoice } = found;
+        const unit = invoice === null ? null : providerUnitWord(invoice.providerUnit);
+        const providerFigure = (amount: bigint | null | undefined): string | null =>
+          amount === null || amount === undefined || unit === null
+            ? null
+            : toPersianDigits(`${amount.toString()} ${unit}`);
+        const values: Record<string, TemplateValue> = {
+          ...who(customer, words),
+          reference: paymentTrackingCode(payment),
+          ...amounts(payment),
+          at: new Date(event.occurredAt),
+        };
+        if (invoice?.providerInvoiceId != null) {
+          values['providerInvoiceId'] = invoice.providerInvoiceId;
+        }
+        await this.withOrderCode(scope, payment, values, tx);
+        const buttons: OpsLogButton[] = [
+          { kind: 'USER', ref: payment.customerId },
+          { kind: 'PAYMENT', ref: payment.id },
+        ];
+        if (payload.reason === 'CREDIT_AMOUNT_MISMATCH') {
+          const credit = providerFigure(invoice?.creditAmount);
+          // The figure is what this message is about: without it there is nothing to say.
+          if (credit === null || invoice === null) return null;
+          values['gateway'] = words.gatewayName(payment.gatewayProvider);
+          values['creditAmount'] = credit;
+          const invoiced = providerFigure(invoice.sentAmount);
+          if (invoiced !== null) values['invoicedAmount'] = invoiced;
+          return {
+            templateKey: 'ops.financial.credit_amount_mismatch' as TemplateKey,
+            values,
+            logType: 'PAYMENT_LATE',
+            buttons,
+          };
+        }
+        values['method'] = words.methodName(payment.method, payment.gatewayProvider);
+        // What the provider asked for, as it said it now: diagnostic lines, never settled.
+        const need = await this.deps.providerRequests?.factsFor(scope, payment.id, tx);
+        if (payload.reason === 'UNDERPAID') {
+          const remaining = providerFigure(need?.remainingAmount);
+          if (remaining !== null) values['remainingAmount'] = remaining;
+          if (need?.remainingInvoiceId != null) {
+            values['remainderInvoiceId'] = need.remainingInvoiceId;
+          }
+        } else {
+          const refund = providerFigure(need?.refundAmount);
+          if (refund !== null) values['refundAmount'] = refund;
+        }
+        return {
+          templateKey: (payload.reason === 'UNDERPAID'
+            ? 'ops.financial.payment_underpaid'
+            : 'ops.financial.payment_overpaid') as TemplateKey,
+          values,
+          logType: 'PAYMENT_FAILED',
+          buttons,
+        };
+      }
       case 'PaymentLateCredited': {
         const payload = EVENT_PAYLOAD_SCHEMAS.PaymentLateCredited.parse(event.payload);
         const found = await this.facts(scope, event.aggregateId as PaymentId, tx);
@@ -616,6 +679,11 @@ const UNIT_WORDS: Readonly<Record<string, string>> = {
   USD: 'دلار',
   XTR: 'استارز',
 };
+
+/** A provider's unit in Persian (`تومان`), or its code when the log has no word for it. */
+function providerUnitWord(unit: string): string {
+  return UNIT_WORDS[unit] ?? unit;
+}
 
 /**
  * The provider's side of a gateway payment, for the group: its invoice id, and the final

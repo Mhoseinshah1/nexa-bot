@@ -39,6 +39,7 @@ import {
   TONPAYS_CREATE_RETRY_MS,
 } from '../domain/tonpays.js';
 import { gatewaySettlementDeadline } from '../domain/settlement.js';
+import { creditAmountDiffers, principalInProviderUnit } from '../domain/credit-amount.js';
 import { nextTehranMidnight, tetrapayCallbackUrl } from '../domain/tetrapay.js';
 import {
   firstInquiryAt,
@@ -481,6 +482,13 @@ export interface GatewayPaymentServiceDeps {
    */
   readonly invoiceScreens?: {
     refresh(scope: TenantContext, paymentId: string): Promise<void>;
+    /**
+     * R9 C1: the customer now owes a NEXT STEP (the remainder of an underpaid invoice, a refund
+     * card for an overpaid one): told in a NEW message, which notifies them, rather than only an
+     * edit of a message they may no longer be looking at — or that no longer exists. Falls back
+     * to `refresh` when there is nothing to tell or nowhere to send it. Absent: `refresh`.
+     */
+    announce?(scope: TenantContext, paymentId: string): Promise<void>;
   };
   /**
    * CentralPay's browser return (§5.6): the tenant's bot as a `https://t.me/<username>` link
@@ -526,6 +534,12 @@ export interface GatewayPaymentServiceDeps {
    * the provider's rules alone.
    */
   readonly cardSwitchSettings?: Pick<SettingsResolver, 'valueOf'>;
+  /**
+   * R9 C1: one provider rejection reason as the customer reads it (`rejectReasonFa`, bound
+   * from `@nexa/i18n` by the container: this layer may not import the catalogue). Absent:
+   * the reasons as worded.
+   */
+  readonly rejectReasonText?: (reason: string) => string;
 }
 
 /** What one pass did, for the loop's log and for a test. Counts only; no identifiers. */
@@ -614,6 +628,12 @@ export interface GatewayCardFacts {
   readonly submissions: readonly GatewayReceiptSubmissionRecord[];
   /** Round 6: what the provider's latest inquiry said the customer owes next, if anything. */
   readonly providerFacts?: GatewayProviderFacts | null;
+  /**
+   * R9 C1: the provider's rejection reasons as the customer is shown them — a reason that is
+   * one of the provider's documented codes in Persian, every other one as worded. Absent: the
+   * reasons as worded (`providerFacts.rejectReasons`).
+   */
+  readonly rejectReasonsShown?: readonly string[];
   /** Round 6: the customer's latest cancel and refund requests for this attempt. */
   readonly latestCancel?: GatewayProviderRequestRecord | null;
   readonly latestRefund?: GatewayProviderRequestRecord | null;
@@ -1028,6 +1048,8 @@ export class GatewayPaymentService {
       ) {
         await this.refreshScreens(scope, claimed.invoice.paymentId);
       }
+      // R9 C1: a new next step for the customer — a new message, not only an edit.
+      if (result === 'ANNOUNCE') await this.announceScreens(scope, claimed.invoice.paymentId);
       // Audit P2-b on #260: a decision closes this payment's "settlement refused" alarm.
       if (
         result === 'SETTLED' ||
@@ -1221,6 +1243,24 @@ export class GatewayPaymentService {
       this.deps.logger.warn(
         { paymentId, error: error instanceof Error ? error.name : 'unknown' },
         'gateway invoice screen refresh failed',
+      );
+    }
+  }
+
+  /** R9 C1: best effort, like `refreshScreens`; a screen without `announce` is refreshed. */
+  private async announceScreens(scope: TenantContext, paymentId: string): Promise<void> {
+    const screens = this.deps.invoiceScreens;
+    if (screens === undefined) return;
+    if (screens.announce === undefined) {
+      await this.refreshScreens(scope, paymentId);
+      return;
+    }
+    try {
+      await screens.announce(scope, paymentId);
+    } catch (error: unknown) {
+      this.deps.logger.warn(
+        { paymentId, error: error instanceof Error ? error.name : 'unknown' },
+        'gateway invoice next-step announcement failed',
       );
     }
   }
@@ -1644,6 +1684,8 @@ export class GatewayPaymentService {
     | 'OPEN'
     /** Round 6: still open, but what the customer should do next changed — redraw the screen. */
     | 'CHANGED'
+    /** R9 C1: still open, and the customer now owes a next step — tell them in a new message. */
+    | 'ANNOUNCE'
     | 'SETTLED'
     | 'UNSUCCESSFUL'
     | 'LATE'
@@ -1964,6 +2006,8 @@ export class GatewayPaymentService {
     let mismatchReason = outcome.mismatchReason ?? null;
     const reference = outcome.providerReference ?? null;
     let screenChanged = false;
+    /** R9 C1: the next step the provider newly asks the customer for, if this answer is one. */
+    let announced: 'LESS' | 'MORE' | null = null;
     const kept = await this.deps.uow.run(scope, async (tx) => {
       /*
        * FIX10 R1: first, that the claim is still this pass's — locked, so it cannot change
@@ -2065,6 +2109,40 @@ export class GatewayPaymentService {
         );
         // The status moved to or from a next step too (a remainder with no usable details).
         screenChanged = recorded.changed || invoice.providerStatus !== outcome.status;
+        /*
+         * R9 C1: a NEW ask — the provider moved to a next step it had not named, or named a new
+         * remainder invoice (the remainder itself fell short). Once per ask, decided under the
+         * facts row's lock and this pass's claim, so a repeated inquiry, a second replica or a
+         * repeated webhook never asks twice. The operations log hears of it in THIS transaction
+         * (its own headline, never a failure); the customer is told after it commits. Nothing
+         * here settles, fails or credits: the verdict above is the inquiry's, and it is OPEN.
+         */
+        const need = outcome.facts?.need ?? null;
+        const newAsk =
+          need !== null &&
+          (recorded.needBefore !== need ||
+            (need === 'LESS' &&
+              outcome.facts?.remainingInvoiceId != null &&
+              recorded.remainingInvoiceIdBefore !== outcome.facts.remainingInvoiceId));
+        // A stopped scope's ask is recorded (the facts row) but raises nothing new.
+        if (
+          newAsk &&
+          current !== null &&
+          (await this.deps.scopeActivity.scopeIsActive(scope, tx))
+        ) {
+          announced = need;
+          await this.deps.outbox.write(tx, actor, {
+            eventType: 'GatewayPaymentAttentionRaised',
+            aggregateType: 'Payment',
+            aggregateId: invoice.paymentId,
+            payload: {
+              customerId: current.customerId,
+              orderId: current.orderId,
+              provider: invoice.provider,
+              reason: need === 'LESS' ? 'UNDERPAID' : 'OVERPAID',
+            },
+          });
+        }
         if (recorded.reasonsChanged && outcome.facts !== null) {
           await this.deps.audit.record(
             scope,
@@ -2117,6 +2195,7 @@ export class GatewayPaymentService {
           );
         }
       }
+      if (announced !== null) return 'ANNOUNCE';
       return screenChanged ? 'CHANGED' : 'OPEN';
     }
 
@@ -3739,8 +3818,34 @@ export class GatewayPaymentService {
       hint.paymentId === invoice.hintedPaymentId ||
       rank === undefined ||
       rank(hint.status) >= Math.max(rank(invoice.providerStatus), rank(invoice.webhookStatusHint));
-    const recorded = await this.deps.uow.run(scope, (tx) =>
-      this.deps.invoices.recordWebhook(
+    /*
+     * R9 C1: a `credit_amount` that is neither the principal nor what Nexa invoiced is raised to
+     * the operations log — once per new figure, in the transaction that records it, so a
+     * repeated delivery (deduped by its id) or the same figure again raises nothing. It is
+     * NEVER credited: the wallet is credited with the principal, by the inquiry
+     * (`domain/credit-amount.ts` records why).
+     */
+    const creditDiffers =
+      hint.creditAmount !== null &&
+      creditAmountDiffers({
+        creditAmount: hint.creditAmount,
+        sentAmount: invoice.sentAmount,
+        principalInProviderUnit: principalInProviderUnit(payment.amount, invoice.providerUnit),
+        providerFinalAmount: invoice.finalAmount,
+      });
+    const recorded = await this.deps.uow.run(scope, async (tx) => {
+      /*
+       * The stored figure read under the invoice row's lock, BEFORE this delivery writes its
+       * own: two deliveries carrying the same new figure at once are serialised here, and the
+       * second sees the first's figure — one alert, not two.
+       */
+      const locked =
+        creditDiffers && this.deps.invoices.creditAmountForUpdate !== undefined
+          ? await this.deps.invoices.creditAmountForUpdate(scope, invoice.paymentId, tx)
+          : undefined;
+      const storedCredit = locked === undefined ? invoice.creditAmount : locked;
+      const raiseCredit = creditDiffers && storedCredit !== hint.creditAmount;
+      const kept = await this.deps.invoices.recordWebhook(
         scope,
         invoice.paymentId,
         {
@@ -3757,8 +3862,23 @@ export class GatewayPaymentService {
         },
         now,
         tx,
-      ),
-    );
+      );
+      // A stopped scope accepts no new work: the figure is recorded, the alert is not raised.
+      if (kept && raiseCredit && (await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
+        await this.deps.outbox.write(tx, this.actor(), {
+          eventType: 'GatewayPaymentAttentionRaised',
+          aggregateType: 'Payment',
+          aggregateId: invoice.paymentId,
+          payload: {
+            customerId: payment.customerId,
+            orderId: payment.orderId,
+            provider: invoice.provider,
+            reason: 'CREDIT_AMOUNT_MISMATCH',
+          },
+        });
+      }
+      return kept;
+    });
     if (!recorded) return 'DUPLICATE';
     this.deps.logger.info(
       { paymentId: invoice.paymentId, provider, scheduled: inquireAt !== null },
@@ -3839,6 +3959,9 @@ export class GatewayPaymentService {
       latestChange,
       submissions,
       providerFacts,
+      ...(providerFacts === null || this.deps.rejectReasonText === undefined
+        ? {}
+        : { rejectReasonsShown: providerFacts.rejectReasons.map(this.deps.rejectReasonText) }),
       latestCancel,
       latestRefund,
       openElsewherePaymentId,

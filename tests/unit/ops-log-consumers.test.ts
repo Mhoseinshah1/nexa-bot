@@ -12,6 +12,8 @@ import {
 import { CATALOGUE_FA, DEFAULT_TEMPLATE_PRESENTATION, renderTemplateBody } from '@nexa/i18n';
 import { i18nOpsLogWords as words } from '../../apps/api/src/modules/commerce/ops-log/infrastructure/i18n-ops-log-words';
 import { ServiceLogConsumer } from '../../apps/api/src/modules/commerce/ops-log/application/service-log.consumer';
+import { OperationOutcomeAnnouncer } from '../../apps/api/src/modules/commerce/messaging/application/operation-outcome-announcer';
+import { ticket } from '../../apps/api/src/modules/commerce/ops-log/application/presenters';
 import { OperationLog } from '../../apps/api/src/modules/commerce/ops-log/application/operation-log';
 import { FailureLogConsumer } from '../../apps/api/src/modules/commerce/ops-log/application/failure-log.consumer';
 import { AdminLogConsumer } from '../../apps/api/src/modules/commerce/ops-log/application/admin-log.consumer';
@@ -36,6 +38,7 @@ import type {
   OpsLogFacts,
   OpsLogLane,
   OrderFact,
+  OrderOriginFact,
   PaymentFact,
   ServiceBeforeImage,
   ServiceFact,
@@ -73,6 +76,7 @@ class FakeFacts {
   operations = new Map<string, OperationFact>();
   payments = new Map<string, PaymentFact>();
   admins = new Map<string, AdminFact>();
+  origins = new Map<string, OrderOriginFact>();
   before: ServiceBeforeImage | null = null;
   ledger: Row[] = [];
   rotations = 1;
@@ -84,6 +88,7 @@ class FakeFacts {
   customer = async (_s: unknown, id: string) => this.customers.get(id) ?? null;
   admin = async (_s: unknown, id: string) => this.admins.get(id) ?? null;
   order = async (_s: unknown, id: string) => this.orders.get(id) ?? null;
+  orderOrigin = async (_s: unknown, id: string) => this.origins.get(id) ?? null;
   service = async (_s: unknown, id: string) => this.services.get(id) ?? null;
   operation = async (_s: unknown, id: string) => this.operations.get(id) ?? null;
   paymentOfOrder = async (_s: unknown, orderId: string) => this.payments.get(orderId) ?? null;
@@ -745,6 +750,8 @@ function reportData(overrides: Partial<NightlyReportData> = {}): NightlyReportDa
     activeCustomers: 9,
     trials: 2,
     activeServices: 120,
+    customersWithService: 90,
+    customersWithoutService: 30,
     errors: 1,
     failedPayments: 2,
     openTickets: 3,
@@ -780,6 +787,7 @@ function reportData(overrides: Partial<NightlyReportData> = {}): NightlyReportDa
       active: 2,
       salesSum: 500_000n,
       top: { username: 'agent1', name: 'نماینده', sum: 400_000n },
+      topList: [],
     },
     ...overrides,
   };
@@ -836,7 +844,7 @@ describe('L27 / L28 / L29 / L30 — the figures of the nightly reports', () => {
       methods: [],
       panels: [],
       expiredPayments: 0,
-      resellers: { active: 0, salesSum: 0n, top: null },
+      resellers: { active: 0, salesSum: 0n, top: null, topList: [] },
     });
     for (const built of nightlyReports(quiet, words)) {
       const text = render(built as never);
@@ -967,5 +975,479 @@ describe('the nightly report’s time and day', () => {
       {},
     );
     expect(await late.reporter.runOnce(SCOPE)).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// Round 9 C2 — the ops-log additions
+// ---------------------------------------------------------------------------------------
+
+const origin = (overrides: Partial<OrderOriginFact> = {}): OrderOriginFact => ({
+  surface: 'TELEGRAM',
+  actorType: 'CUSTOMER',
+  actorId: null,
+  actorLabel: null,
+  ...overrides,
+});
+
+const SOURCE_BOT = 'منبع: ربات';
+const SOURCE_MINI_APP = 'منبع: مینی‌اپ';
+
+describe('R9 C2 item 6 — the source line of a purchase, a renewal, extra traffic, extra time and a ticket', () => {
+  const op = (type: string): OperationFact => ({
+    id: 'op-1',
+    type,
+    state: 'SUCCEEDED',
+    serviceId: 'svc-1',
+    orderId: 'ord-1',
+    requestedByCustomerId: 'cust-1',
+    panelId: 'pan-1',
+    failureKind: null,
+    failureMessage: null,
+    targetExpiresAt: new Date('2026-12-11T00:00:00Z'),
+    targetTrafficLimitBytes: 60n * GIB,
+    completedAt: AT,
+  });
+  const clock: Clock = { now: () => AT };
+
+  async function textsOf(surface: string | null): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    // L10: a service created.
+    {
+      const { facts, queued, lane, ofFacts } = setup();
+      facts.payments.set('ord-1', paymentFact('MANUAL_TRANSFER'));
+      if (surface !== null) facts.origins.set('ord-1', origin({ surface }));
+      await new ServiceLogConsumer({ lane, facts: ofFacts, words }).handle(
+        event('ServiceProvisioned', 'svc-1'),
+        TX,
+      );
+      out['L10'] = render(queued[0]!);
+    }
+    // L12 / L13 / L14: a renewal, extra traffic, extra time.
+    for (const [key, purpose] of [
+      ['L12', 'RENEW'],
+      ['L13', 'ADD_TRAFFIC'],
+      ['L14', 'ADD_TIME'],
+    ] as const) {
+      const { facts, queued, lane, ofFacts } = setup();
+      facts.orders.set('ord-1', orderFact({ purpose }));
+      facts.operations.set('op-1', op(purpose));
+      facts.payments.set('ord-1', paymentFact('MANUAL_TRANSFER'));
+      if (surface !== null) facts.origins.set('ord-1', origin({ surface }));
+      await new OperationLog({ lane, facts: ofFacts, words, clock }).operationSucceeded(
+        SCOPE,
+        'op-1',
+        TX,
+      );
+      out[key] = render(queued[0]!);
+    }
+    // L26: a ticket opened, and a reply.
+    for (const [key, reply] of [
+      ['L26 opened', false],
+      ['L26 replied', true],
+    ] as const) {
+      const built = ticket({
+        ticket: {
+          id: 'tk-1',
+          number: '1042',
+          code: null,
+          customerId: 'cust-1',
+          categoryTitle: 'مشکل اتصال',
+          snippetSource: 'سلام',
+          surface,
+        },
+        customer: customerFact(),
+        reply,
+        at: AT,
+        words,
+      });
+      out[key] = render({
+        templateKey: built.templateKey,
+        values: built.values,
+      } as never);
+    }
+    return out;
+  }
+
+  it('says the mini app wherever the recorded source surface is the mini app', async () => {
+    const texts = await textsOf('MINI_APP');
+    expect(Object.keys(texts)).toHaveLength(6);
+    for (const [name, text] of Object.entries(texts)) {
+      expect(text, name).toContain(SOURCE_MINI_APP);
+      expect(text, name).not.toContain(SOURCE_BOT);
+    }
+  });
+
+  it('says the bot for a bot surface, for any other surface and for no recorded source at all', async () => {
+    for (const surface of ['TELEGRAM', 'WEB', null]) {
+      const texts = await textsOf(surface);
+      for (const [name, text] of Object.entries(texts)) {
+        expect(text, `${name} / ${String(surface)}`).toContain(SOURCE_BOT);
+        expect(text, `${name} / ${String(surface)}`).not.toContain(SOURCE_MINI_APP);
+      }
+    }
+  });
+
+  it('puts the source line before the time line, one line, and no raw enum', async () => {
+    const text = (await textsOf('MINI_APP'))['L10']!;
+    const lines = text.split('\n');
+    const at = lines.findIndex((line) => line.includes(SOURCE_MINI_APP));
+    expect(at).toBeGreaterThan(0);
+    expect(lines[at + 1]).toMatch(/^🕒/u);
+    expect(text).not.toContain('MINI_APP');
+  });
+});
+
+describe('R9 C2 item 4 — the «خرید اول کاربر» line of L10 / L11', () => {
+  const FIRST = 'خرید اول کاربر';
+
+  it('is printed on L10 and on L11 for a first paid purchase, and only then', async () => {
+    for (const method of ['MANUAL_TRANSFER', 'WALLET'] as const) {
+      const { facts, queued, lane, ofFacts } = setup();
+      facts.payments.set('ord-1', paymentFact(method));
+      if (method === 'WALLET') {
+        facts.ledger = [
+          {
+            id: 'l1',
+            customerId: 'cust-1',
+            signed: 600_000n,
+            reason: 'ADMIN_CREDIT',
+            orderId: null,
+            at: 1,
+          },
+          {
+            id: 'l2',
+            customerId: 'cust-1',
+            signed: -250_000n,
+            reason: 'PURCHASE',
+            orderId: 'ord-1',
+            at: 2,
+          },
+        ];
+      }
+      const consumer = new ServiceLogConsumer({ lane, facts: ofFacts, words });
+      facts.orders.set('ord-1', orderFact({ isFirstPurchase: true }));
+      await consumer.handle(event('ServiceProvisioned', 'svc-1'), TX);
+      facts.orders.set('ord-1', orderFact({ isFirstPurchase: false }));
+      await consumer.handle(event('ServiceProvisioned', 'svc-1'), TX);
+
+      const [first, later] = queued;
+      expect(first!.logType).toBe(
+        method === 'WALLET' ? 'SERVICE_CREATED_WALLET' : 'SERVICE_CREATED',
+      );
+      expect(render(first!), method).toContain(`🥇 ${FIRST}: ${words.firstPurchaseYes}`);
+      expect(render(later!), method).not.toContain(FIRST);
+      expect(later!.values).not.toHaveProperty('firstPurchase');
+    }
+  });
+
+  it('is never on a renewal, extra traffic or extra time', async () => {
+    const { facts, queued, lane, ofFacts } = setup();
+    facts.orders.set('ord-1', orderFact({ purpose: 'RENEW', isFirstPurchase: true }));
+    facts.operations.set('op-1', {
+      id: 'op-1',
+      type: 'RENEW',
+      state: 'SUCCEEDED',
+      serviceId: 'svc-1',
+      orderId: 'ord-1',
+      requestedByCustomerId: 'cust-1',
+      panelId: 'pan-1',
+      failureKind: null,
+      failureMessage: null,
+      targetExpiresAt: new Date('2026-12-11T00:00:00Z'),
+      targetTrafficLimitBytes: null,
+      completedAt: AT,
+    });
+    facts.payments.set('ord-1', paymentFact('MANUAL_TRANSFER'));
+    await new OperationLog({
+      lane,
+      facts: ofFacts,
+      words,
+      clock: { now: () => AT },
+    }).operationSucceeded(SCOPE, 'op-1', TX);
+    expect(render(queued[0]!)).not.toContain(FIRST);
+  });
+});
+
+describe('R9 C2 item 1 — a service an administrator created from the Web Admin that failed on the panel', () => {
+  const adminActor = origin({
+    surface: 'WEB',
+    actorType: 'WEB_ADMIN',
+    actorId: 'adm-1',
+    actorLabel: 'مدیر برچسب',
+  });
+  const admin1: AdminFact = {
+    id: 'adm-1',
+    username: 'ops_lead',
+    displayName: 'مدیر آزمایشی',
+    telegramUserId: '700900100',
+    roleNames: [],
+    roleKeys: [],
+    permissionCount: 0,
+  };
+  const refunded = (): DomainEvent =>
+    event('OrderRefunded', 'ord-1', {
+      customerId: 'cust-1',
+      amountMinor: '250000',
+      currency: 'IRT',
+      reason: AUTOMATIC_REFUND_REASON,
+    });
+
+  it('has its own L23 message naming the administrator, the customer, the panel and the cause', async () => {
+    const { facts, queued, lane, ofFacts } = setup();
+    facts.payments.set('ord-1', paymentFact('WALLET'));
+    facts.origins.set('ord-1', adminActor);
+    facts.admins.set('adm-1', admin1);
+    await new FailureLogConsumer({ lane, facts: ofFacts, words }).handle(refunded(), TX);
+
+    expect(queued).toHaveLength(1);
+    expect(queued[0]!.templateKey).toBe('ops.log.error_provision_admin');
+    // The same ERRORS-topic type and switch as the customer's own L23.
+    expect(queued[0]!.logType).toBe('ERROR_PROVISION');
+    const text = render(queued[0]!);
+    expect(text).toContain('ادمین: مدیر آزمایشی · @ops_lead · 700900100');
+    expect(text).toContain('مشتری: نیما · @nima_t · 700100200');
+    expect(text).toContain('🖥 پنل: پنل آزمایشی');
+    expect(text).toContain(`❗ علت: ${words.refundReason('PANEL_REJECTED', null)}`);
+    expect(text).not.toMatch(UUID);
+  });
+
+  it('falls back to the label the audit row captured when the administrator row is gone', async () => {
+    const { facts, queued, lane, ofFacts } = setup();
+    facts.payments.set('ord-1', paymentFact('WALLET'));
+    facts.origins.set('ord-1', adminActor);
+    await new FailureLogConsumer({ lane, facts: ofFacts, words }).handle(refunded(), TX);
+    expect(queued[0]!.templateKey).toBe('ops.log.error_provision_admin');
+    expect(render(queued[0]!)).toContain(
+      `ادمین: مدیر برچسب · ${words.noUsername} · ${words.noTelegram}`,
+    );
+  });
+
+  it('is still the customer’s own L23 message for a purchase the customer made, and for an order with no audit row', async () => {
+    for (const recorded of [origin(), origin({ surface: 'MINI_APP' }), null]) {
+      const { facts, queued, lane, ofFacts } = setup();
+      facts.payments.set('ord-1', paymentFact('WALLET'));
+      if (recorded !== null) facts.origins.set('ord-1', recorded);
+      facts.admins.set('adm-1', admin1);
+      await new FailureLogConsumer({ lane, facts: ofFacts, words }).handle(refunded(), TX);
+      expect(queued[0]!.templateKey).toBe('ops.log.error_provision');
+      expect(render(queued[0]!)).not.toContain('ادمین:');
+    }
+  });
+
+  it('an UNKNOWN outcome of an administrator’s service is the admin message too, and still refunds nothing', async () => {
+    const { facts, queued, lane, ofFacts } = setup();
+    facts.payments.set('ord-1', paymentFact('WALLET'));
+    facts.origins.set('ord-1', adminActor);
+    facts.admins.set('adm-1', admin1);
+    await new FailureLogConsumer({ lane, facts: ofFacts, words }).handle(
+      event('ProvisioningOutcomeUnknown', 'svc-1', {
+        serviceId: 'svc-1',
+        panelId: 'pan-1',
+        operationType: 'PROVISION',
+        failureKind: 'TIMEOUT',
+      }),
+      TX,
+    );
+    expect(queued[0]!.templateKey).toBe('ops.log.error_provision_admin');
+    expect(render(queued[0]!)).toContain(words.impact('pending'));
+  });
+});
+
+describe('R9 C2 item 2 — an extra-volume gift that failed on the panel (L24)', () => {
+  const giftOp = (overrides: Partial<OperationFact> = {}): OperationFact => ({
+    id: 'op-gift',
+    type: 'ADD_TRAFFIC',
+    state: 'FAILED',
+    serviceId: 'svc-1',
+    orderId: null,
+    requestedByCustomerId: null,
+    panelId: 'pan-1',
+    failureKind: 'TIMEOUT',
+    failureMessage: 'HTTP 504 gateway timeout',
+    targetExpiresAt: null,
+    targetTrafficLimitBytes: 60n * GIB,
+    completedAt: AT,
+    ...overrides,
+  });
+  const clock: Clock = { now: () => AT };
+
+  it('is an L24 report with the panel, the service username and the cause — and nothing refunded', async () => {
+    const { facts, queued, lane, ofFacts } = setup();
+    facts.operations.set('op-gift', giftOp());
+    await new OperationLog({ lane, facts: ofFacts, words, clock }).operationFailed(
+      SCOPE,
+      'op-gift',
+      TX,
+    );
+    expect(queued).toHaveLength(1);
+    expect(queued[0]!.logType).toBe('ERROR_OPERATION');
+    expect(queued[0]!.templateKey).toBe('ops.log.error_operation');
+    expect(queued[0]!.dedupeKey).toBe('oplog:op-failed:op-gift');
+    const text = render(queued[0]!);
+    expect(text).toContain('افزودن حجم هدیه انجام نشد');
+    expect(text).toContain('🔑 نام سرویس: nxtest01');
+    expect(text).toContain('🖥 پنل: پنل آزمایشی');
+    expect(text).toContain(`❗ علت: ${words.providerFailure('TIMEOUT')}`);
+    expect(text).toContain('🔧 کد: TIMEOUT · HTTP 504');
+    expect(text).toContain(words.impact('giftNotApplied'));
+    expect(text).not.toContain('💰');
+    expect(queued[0]!.storm).toMatchObject({ customer: '700100200' });
+  });
+
+  it('an abandoned gift is reported like a failed one', async () => {
+    const { facts, queued, lane, ofFacts } = setup();
+    facts.operations.set('op-gift', giftOp({ state: 'ABANDONED', failureKind: null }));
+    await new OperationLog({ lane, facts: ofFacts, words, clock }).operationFailed(
+      SCOPE,
+      'op-gift',
+      TX,
+    );
+    expect(queued).toHaveLength(1);
+    expect(render(queued[0]!)).toContain(words.providerFailure(null));
+  });
+
+  it('is silent for everything that is not a free gift', async () => {
+    const cases: [string, OperationFact][] = [
+      [
+        'a PURCHASED extra volume (it has an order: the refund report owns it)',
+        giftOp({ orderId: 'ord-1' }),
+      ],
+      ['a gift of time', giftOp({ type: 'ADD_TIME' })],
+      ['a renewal with no order', giftOp({ type: 'RENEW' })],
+      ['an operation that is not terminal', giftOp({ state: 'IN_FLIGHT' })],
+      ['a gift that succeeded', giftOp({ state: 'SUCCEEDED' })],
+    ];
+    for (const [name, operation] of cases) {
+      const { facts, queued, lane, ofFacts } = setup();
+      facts.operations.set('op-gift', operation);
+      await new OperationLog({ lane, facts: ofFacts, words, clock }).operationFailed(
+        SCOPE,
+        'op-gift',
+        TX,
+      );
+      expect(queued, name).toEqual([]);
+    }
+    // An imported service or customer is history: nobody is told.
+    for (const mutate of [
+      (f: FakeFacts) => f.services.set('svc-1', serviceFact({ source: 'MIRZA' })),
+      (f: FakeFacts) => f.customers.set('cust-1', customerFact({ source: 'MIRZA' })),
+    ]) {
+      const { facts, queued, lane, ofFacts } = setup();
+      facts.operations.set('op-gift', giftOp());
+      mutate(facts);
+      await new OperationLog({ lane, facts: ofFacts, words, clock }).operationFailed(
+        SCOPE,
+        'op-gift',
+        TX,
+      );
+      expect(queued).toEqual([]);
+    }
+  });
+
+  it('the outcome announcer reports a TERMINAL failure to the log and not a failure that will be retried', async () => {
+    const calls: string[] = [];
+    const hook = {
+      operationSucceeded: async (_s: unknown, id: string) => void calls.push(`ok:${id}`),
+      operationFailed: async (_s: unknown, id: string) => void calls.push(`failed:${id}`),
+    };
+    const uow = {
+      run: async <T>(_scope: unknown, fn: (tx: unknown) => Promise<T>): Promise<T> => fn({}),
+      runNested: async <T>(
+        _scope: unknown,
+        tx: unknown,
+        fn: (tx: unknown) => Promise<T>,
+      ): Promise<T> => fn(tx),
+    };
+    const subject = (state: string, nextAttemptAt: Date | null) => ({
+      type: 'ADD_TRAFFIC',
+      state,
+      serviceId: 'svc-1',
+      customerId: 'cust-1',
+      requestedByCustomerId: null,
+      nextAttemptAt,
+    });
+    for (const [state, next, expected] of [
+      ['FAILED', null, ['failed:op-1']],
+      ['ABANDONED', null, ['failed:op-1']],
+      ['SUCCEEDED', null, ['ok:op-1']],
+      ['FAILED', new Date('2026-10-12T10:00:00Z'), []],
+    ] as const) {
+      calls.length = 0;
+      const announcer = new OperationOutcomeAnnouncer({
+        reader: {
+          subjectFor: async () => subject(state, next),
+          dueForAnnouncement: async () => [],
+        } as never,
+        announcements: { markAnnounced: async () => undefined },
+        notifier: { notify: async () => true } as never,
+        uow: uow as never,
+        clock: { now: () => AT },
+        opsLog: hook as never,
+      });
+      await announcer.announce(SCOPE, 'op-1');
+      expect(calls, `${state} / ${String(next)}`).toEqual(expected);
+    }
+  });
+});
+
+describe('R9 C2 items 3 and 5 — the nightly reports', () => {
+  const reseller = (index: number) => ({
+    telegramId: `7000${String(index)}`,
+    username: index % 2 === 0 ? null : `shop${String(index)}`,
+    name: `فروشگاه ${['صفر', 'یک', 'دو', 'سه', 'چهار', 'پنج', 'شش', 'هفت'][index]!}`,
+    sum: BigInt(1_000_000 - index * 100_000),
+    count: index,
+  });
+  const panelsText = (data: NightlyReportData): string => {
+    const panels = nightlyReports(data, words).find((one) => one.logType === 'REPORT_PANELS')!;
+    return render(panels as never);
+  };
+  const summaryText = (data: NightlyReportData): string => {
+    const summary = nightlyReports(data, words).find((one) => one.logType === 'REPORT_SUMMARY')!;
+    return render(summary as never);
+  };
+  const withTop = (list: ReturnType<typeof reseller>[]): NightlyReportData =>
+    reportData({
+      resellers: { active: 3, salesSum: 900_000n, top: list[0] ?? null, topList: list },
+    });
+
+  it('L29 lists up to five resellers — id, username, total, order count — best first', () => {
+    const text = panelsText(withTop([1, 2, 3, 4, 5].map(reseller)));
+    expect(text).toContain(words.reportTopResellers);
+    const lines = text.split('\n').filter((line) => /^[۱-۹]\./u.test(line));
+    expect(lines).toHaveLength(5);
+    expect(lines[0]).toBe('۱. @shop1 · 70001 · ۹۰۰٬۰۰۰ تومان · ۱ سفارش');
+    // No username: the name stands, the id still follows it.
+    expect(lines[1]).toBe('۲. فروشگاه دو · 70002 · ۸۰۰٬۰۰۰ تومان · ۲ سفارش');
+  });
+
+  it('L29 never prints a sixth reseller, whatever it is handed', () => {
+    const text = panelsText(withTop([1, 2, 3, 4, 5, 6, 7].map(reseller)));
+    expect(text.split('\n').filter((line) => /^[۱-۹]\./u.test(line))).toHaveLength(5);
+    expect(text).not.toContain('70006');
+  });
+
+  it('L29 leaves the block out entirely when no reseller sold — no heading, no empty line', () => {
+    const built = nightlyReports(withTop([]), words).find(
+      (one) => one.logType === 'REPORT_PANELS',
+    )!;
+    expect(built.values).not.toHaveProperty('topResellers');
+    const text = render(built as never);
+    expect(text).not.toContain(words.reportTopResellers);
+    expect(text).not.toMatch(/\n\n\n/u);
+    expect(text.trimEnd().split('\n').at(-1)).toContain(words.reportResellers);
+  });
+
+  it('L27 states the customers with and without an active service', () => {
+    const text = summaryText(reportData());
+    expect(text).toContain('🟢 مشتری دارای سرویس فعال: ۹۰');
+    expect(text).toContain('⚪️ مشتری بدون سرویس فعال: ۳۰');
+  });
+
+  it('the L27 template description records the definition of an active customer', () => {
+    const description = templateDefinition('ops.log.report_summary' as TemplateKey).description;
+    expect(description).toMatch(/at least one service in the ACTIVE state now/);
+    expect(description).toMatch(/INACTIVE is every other customer/);
   });
 });

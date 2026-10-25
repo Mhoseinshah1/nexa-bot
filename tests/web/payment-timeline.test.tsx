@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { TONPAYS_REJECT_REASONS_FA } from '@nexa/i18n';
 import type { PermissionKey } from '@nexa/contracts';
 import type { ReactElement } from 'react';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
@@ -756,5 +757,44 @@ describe('R8 A6: reject reasons and a late wallet credit on the timeline', () =>
     // The prose reasons are counted, never quoted.
     expect(screen.getByText(/دلیل متنی/u).textContent).toMatch(/[2۲]/u);
     expect(screen.getByText(t('web.payment_timeline_late_credited_to_wallet'))).toBeInTheDocument();
+  });
+});
+
+describe('R9 C1: credit_amount and Persian reject reasons on the timeline', () => {
+  it('the webhook row shows the credit_amount and flags one that matches nothing; a documented reason code reads in Persian', async () => {
+    stubApi(
+      timeline({
+        entries: [
+          timelineCreated,
+          {
+            kind: 'GATEWAY_WEBHOOK_HINT',
+            at: '2026-09-10T12:35:00.000Z',
+            provider: 'TONPAYS_TELEGRAM',
+            statusHint: 'processing',
+            webhookCount: 2,
+            creditAmount: '99000',
+            providerUnit: 'IRT',
+            creditAmountDiffers: true,
+          },
+          {
+            kind: 'GATEWAY_REJECT_REASONS',
+            at: '2026-09-10T12:40:00.000Z',
+            providerStatus: 'rejected',
+            reasons: ['EMPTY_RECEIPT', 'low_balance'],
+            withheldCount: 0,
+          },
+        ],
+      }),
+    );
+    renderPage(<PaymentTimelineCard paymentId={PAYMENT_ID} paymentState="FAILED" />);
+    await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
+    expect(screen.getByText('99000 IRT')).toBeInTheDocument();
+    expect(screen.getByText(t('web.payment_gateway_credit_amount_differs'))).toBeInTheDocument();
+    expect(
+      screen.getByText(TONPAYS_REJECT_REASONS_FA.EMPTY_RECEIPT!, { exact: false }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('EMPTY_RECEIPT')).toBeNull();
+    // An undocumented token stays as the provider sent it.
+    expect(screen.getByText('low_balance')).toBeInTheDocument();
   });
 });

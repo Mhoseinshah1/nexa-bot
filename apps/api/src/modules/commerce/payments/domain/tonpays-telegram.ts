@@ -314,6 +314,24 @@ export function providerNeedOfStatus(status: string): GatewayProviderNeedKind | 
   return null;
 }
 
+/**
+ * R9 C1: whether the inquiry's `need_action_kind` (document p. 14/17: `less` / `more`) agrees
+ * with the next step its STATUS names. The status decides which next step it is — it is the
+ * documented field the rest of the route keys on — and the kind is read as a CROSS-CHECK:
+ * absent or null says nothing; any other value (a different kind, a word nobody documented,
+ * a non-string) means the answer contradicts itself, and none of its remainder or refund
+ * details is trusted (no card, no amount, no remainder invoice). Nothing here approves.
+ *
+ * `status: need_action` (the older transcription) with a kind is NOT read as a next step:
+ * the current document names `action_required_less` / `_more` for that, and what the
+ * combination would mean is undocumented (`OQ-TPTG-27`). It stays an open status.
+ */
+export function needActionKindAgrees(need: GatewayProviderNeedKind | null, kind: unknown): boolean {
+  if (need === null || kind === undefined || kind === null) return true;
+  if (typeof kind !== 'string') return false;
+  return kind.trim().toLowerCase() === (need === 'LESS' ? 'less' : 'more');
+}
+
 /** Whether a create refusal is the provider saying the buyer already holds an open invoice. */
 export function isBuyerConflictCode(code: string | null): boolean {
   return (

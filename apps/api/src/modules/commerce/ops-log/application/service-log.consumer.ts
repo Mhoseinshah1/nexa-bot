@@ -118,6 +118,8 @@ export class ServiceLogConsumer implements EventConsumer {
       customer,
       payment,
       walletBalance,
+      // R9 C2: the source line reads where the order was created from.
+      origin: await this.deps.facts.orderOrigin(scope, order.id, tx),
       at,
       words: this.deps.words,
     });

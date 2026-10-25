@@ -127,6 +127,7 @@ async function main(): Promise<void> {
         // pass reads the lane's own flag and the report switches inside and does nothing
         // while they are off, so a stalled lane is visible whatever an operator switched.
         ['nightly-reports', true, () => container.nightlyReportLoop.isFresh(now)],
+        ['data-compaction', true, () => container.dataCompactionLoop.isFresh(now)],
         // WP-A9: pending-payment and wallet low-balance reminders. Always running — each
         // sweep reads its own flag inside its transaction and does nothing when it is off —
         // so a stalled loop is visible whatever an operator has switched on.
@@ -261,6 +262,7 @@ async function main(): Promise<void> {
   // Round 4 PR-D: and the nightly reports, from the ledger and the orders, at the configured
   // Tehran time.
   container.nightlyReportLoop.start();
+  container.dataCompactionLoop.start();
   // WP-A9: and the reminders that are not about a service — a payment about to lapse, a
   // wallet below its threshold. Both only enqueue; the lane below sends.
   container.customerReminderLoop.start();
