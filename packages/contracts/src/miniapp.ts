@@ -328,6 +328,14 @@ export const miniAppCardInstructionSchema = z.object({
   amount: moneySchema,
   /** That amount as the digits a banking app takes — rial, no separators — the bot's copy button. */
   copyAmount: z.string(),
+  /**
+   * v0.8.2 hotfix: that amount as the bot's card invoice shows it (R8 A2) — RIAL, Persian
+   * digits grouped by thousands, no unit (`۲٬۵۰۰٬۰۰۰`) — and the same amount in Toman for the
+   * bracket beside it (null when the rial figure is not a whole toman). Both null for an
+   * amount in neither currency. Display only: what Nexa settles is the payment's principal.
+   */
+  amountRial: z.string().nullable(),
+  amountToman: z.string().nullable(),
   /** The principal and the fee apart, when the route charges a customer fee. */
   principal: moneySchema.nullable(),
   fee: moneySchema.nullable(),
