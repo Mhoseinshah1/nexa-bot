@@ -39,6 +39,7 @@ export default tseslint.config(
       'docs/research/**',
       'apps/api/drizzle/**',
       'apps/web/dist/**',
+      'apps/miniapp/dist/**',
     ],
   },
 
@@ -222,6 +223,40 @@ export default tseslint.config(
       'no-restricted-syntax': 'off',
       'no-restricted-imports': 'off',
       '@typescript-eslint/no-explicit-any': 'off',
+    },
+  },
+
+  // Round 9, C5: the customer mini app has the Web Admin's boundary — it talks to the API
+  // over HTTP and may import @nexa/contracts and @nexa/i18n only, never server code.
+  {
+    files: ['apps/miniapp/**/*.{ts,tsx}'],
+    languageOptions: {
+      globals: {
+        window: 'readonly',
+        document: 'readonly',
+        fetch: 'readonly',
+        console: 'readonly',
+        navigator: 'readonly',
+        sessionStorage: 'readonly',
+        crypto: 'readonly',
+        URL: 'readonly',
+        FileReader: 'readonly',
+        DOMException: 'readonly',
+      },
+    },
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@nexa/api', '@nexa/api/*', '**/apps/api/**', '**/apps/web/**', 'zod'],
+              message:
+                'The mini app talks to the API over HTTP. It may import @nexa/contracts and @nexa/i18n only.',
+            },
+          ],
+        },
+      ],
     },
   },
 

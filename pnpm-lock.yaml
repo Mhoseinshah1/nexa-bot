@@ -159,6 +159,37 @@ importers:
         specifier: 6.0.2
         version: 6.0.2
 
+  apps/miniapp:
+    dependencies:
+      '@nexa/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@nexa/i18n':
+        specifier: workspace:*
+        version: link:../../packages/i18n
+      react:
+        specifier: 19.2.8
+        version: 19.2.8
+      react-dom:
+        specifier: 19.2.8
+        version: 19.2.8(react@19.2.8)
+    devDependencies:
+      '@types/react':
+        specifier: 19.2.7
+        version: 19.2.7
+      '@types/react-dom':
+        specifier: 19.2.5
+        version: 19.2.5(@types/react@19.2.7)
+      '@vitejs/plugin-react':
+        specifier: 6.1.1
+        version: 6.1.1(vite@8.2.2(@types/node@22.20.1)(esbuild@0.28.2)(tsx@4.23.13)(yaml@2.9.0))
+      typescript:
+        specifier: 6.0.2
+        version: 6.0.2
+      vite:
+        specifier: 8.2.2
+        version: 8.2.2(@types/node@22.20.1)(esbuild@0.28.2)(tsx@4.23.13)(yaml@2.9.0)
+
   apps/web:
     dependencies:
       '@nexa/contracts':

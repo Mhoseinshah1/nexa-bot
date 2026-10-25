@@ -65,7 +65,7 @@ const offenders = [];
  * catalogues themselves are the only files allowed to contain Persian, since
  * holding it is their entire job.
  */
-const SURFACE_DIRS = ['apps/api/src/surfaces', 'apps/web/src'];
+const SURFACE_DIRS = ['apps/api/src/surfaces', 'apps/web/src', 'apps/miniapp/src'];
 /*
  * `templates.fa.ts` is the Persian name, description and placeholder helper of every
  * bot message template — web chrome, like `web.fa.ts`, but keyed by template key rather
@@ -75,6 +75,8 @@ const SURFACE_DIRS = ['apps/api/src/surfaces', 'apps/web/src'];
 const CATALOGUE_FILES = new Set([
   'apps/web/src/i18n/web.fa.ts',
   'apps/web/src/i18n/templates.fa.ts',
+  // Round 9, C5: the customer mini app's own chrome.
+  'apps/miniapp/src/i18n/miniapp.fa.ts',
 ]);
 
 for (const dir of SURFACE_DIRS) {
@@ -114,6 +116,28 @@ if (unusedWebKeys.length > 0) {
   fail('Web catalogue keys nothing renders', unusedWebKeys);
 } else {
   console.log(`ok    all ${declaredWebKeys.length} web.* keys are rendered somewhere`);
+}
+
+// --- every miniapp.* key is used (Round 9, C5) --------------------------------
+// The same rule for the mini app's catalogue. A key family the app builds from a closed
+// enum (`miniapp.service_state_${state}`) counts as rendered when its prefix is built so.
+const miniCatalogue = readFileSync('apps/miniapp/src/i18n/miniapp.fa.ts', 'utf8');
+const declaredMiniKeys = [...miniCatalogue.matchAll(/'(miniapp\.[a-z0-9_A-Z]+)':/g)].map(
+  (m) => m[1],
+);
+const miniUsage = walk('apps/miniapp/src')
+  .filter((file) => !CATALOGUE_FILES.has(file))
+  .map((file) => readFileSync(file, 'utf8'))
+  .join('\n');
+const builtPrefixes = [...miniUsage.matchAll(/`(miniapp\.[a-z0-9_]+_)\$\{/g)].map((m) => m[1]);
+const unusedMiniKeys = declaredMiniKeys.filter(
+  (key) =>
+    !miniUsage.includes(`'${key}'`) && !builtPrefixes.some((prefix) => key.startsWith(prefix)),
+);
+if (unusedMiniKeys.length > 0) {
+  fail('Mini-app catalogue keys nothing renders', unusedMiniKeys);
+} else {
+  console.log(`ok    all ${declaredMiniKeys.length} miniapp.* keys are rendered somewhere`);
 }
 
 console.log();

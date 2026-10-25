@@ -1,0 +1,77 @@
+/*
+ * The mini app's tokens — the Web Admin's Liquid Glass «mono» values (apps/web/src/styles/
+ * tokens.css), the one place a colour or a size is decided here too. Dark is the primary;
+ * light follows the customer's Telegram theme: `telegram-web-app.js` sets `--tg-theme-*`
+ * on the root and the light tokens read them, with the design's light values beneath.
+ * `data-theme` is always written (theme from Telegram's `colorScheme`), so there is no
+ * `prefers-color-scheme` block.
+ */
+
+@font-face {
+  font-family: 'Vazirmatn';
+  src: url('/fonts/Vazirmatn-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg-0: #0a0a0b;
+  --fg: #f4f4f5;
+  --fg-2: #b8b8bd;
+  --fg-3: #a2a2a9;
+  --accent: #f4f4f5;
+  --accent-fg: #0a0a0b;
+  --warn: #f5c56b;
+  --warn-soft: rgba(245, 197, 107, 0.16);
+  --danger: #f8848c;
+  --ok: #6ee7a8;
+  --usage: #60a5fa;
+  --glass: rgba(255, 255, 255, 0.075);
+  --glass-2: rgba(255, 255, 255, 0.11);
+  --edge: rgba(255, 255, 255, 0.14);
+  --spec: rgba(255, 255, 255, 0.32);
+  --track: rgba(255, 255, 255, 0.1);
+  --tabbar: rgba(24, 24, 27, 0.72);
+  --mesh:
+    radial-gradient(75% 45% at 90% -8%, rgba(255, 255, 255, 0.08), transparent 68%),
+    linear-gradient(180deg, #0e0e10, #0a0a0b 70%);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg-0: var(--tg-theme-bg-color, #f2f2f4);
+  --fg: var(--tg-theme-text-color, #0a0a0b);
+  --fg-2: var(--tg-theme-subtitle-text-color, #3f3f46);
+  --fg-3: var(--tg-theme-hint-color, #5c5c66);
+  --accent: var(--tg-theme-button-color, #0a0a0b);
+  --accent-fg: var(--tg-theme-button-text-color, #ffffff);
+  --warn: #8c5300;
+  --warn-soft: rgba(190, 120, 0, 0.12);
+  --danger: var(--tg-theme-destructive-text-color, #ba2932);
+  --ok: #137236;
+  --usage: var(--tg-theme-link-color, #2563eb);
+  --glass: rgba(255, 255, 255, 0.62);
+  --glass-2: rgba(255, 255, 255, 0.8);
+  --edge: rgba(255, 255, 255, 0.9);
+  --spec: rgba(255, 255, 255, 1);
+  --track: rgba(30, 40, 90, 0.09);
+  --tabbar: rgba(255, 255, 255, 0.72);
+  --mesh: linear-gradient(180deg, var(--tg-theme-secondary-bg-color, #ececee), var(--bg-0));
+}
+
+:root {
+  --font-ui: 'Vazirmatn', 'IRANSans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --fs-body: 14px;
+  --fs-sm: 12.5px;
+  --fs-title: 20px;
+  --radius-card: 20px;
+  --radius-pill: 999px;
+  --glass-blur: blur(26px) saturate(1.7);
+  /* A finger's target (WCAG 2.5.5): the design's 44px. */
+  --ctl-h: 44px;
+  --gap: 12px;
+  --gutter: 16px;
+  --tabbar-h: 62px;
+}
