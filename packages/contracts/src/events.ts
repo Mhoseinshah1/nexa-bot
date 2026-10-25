@@ -147,6 +147,15 @@ export const EVENT_TYPES = [
   'PaymentLateCompletionObserved',
   // R5A item 4: a late gateway approval credited to the wallet (the log's L5 line).
   'PaymentLateCredited',
+  /*
+   * R9 C1: a gateway said something about an OPEN attempt that an operator must see — the
+   * customer paid LESS than the invoice (a remainder is owed), MORE (a refund card is owed),
+   * or the provider's webhook `credit_amount` differs from what Nexa invoiced. Nothing
+   * settles, fails or is credited on it: only the inquiry's `completed` + `paid` approves,
+   * at the payment's own principal. It exists so the financial log can say so, with its own
+   * headline, in the transaction that recorded the provider's word.
+   */
+  'GatewayPaymentAttentionRaised',
   'RefundCompleted',
   'RefundFailed',
   // WP19. A customer filed a service refund request (what the administrators' review-card
@@ -474,6 +483,16 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     entryId: z.string(),
     amountMinor: z.string(),
     currency: z.string(),
+  }),
+  /*
+   * R9 C1. Ids and closed vocabularies only — never an amount the provider reported, a card
+   * number or a holder: the consumer re-reads the invoice and the provider facts it renders.
+   */
+  GatewayPaymentAttentionRaised: z.object({
+    customerId: z.string(),
+    orderId: z.string().nullable(),
+    provider: z.string(),
+    reason: z.enum(['UNDERPAID', 'OVERPAID', 'CREDIT_AMOUNT_MISMATCH']),
   }),
   RefundCompleted: z.object({
     /** Aggregate is the PAYMENT the refund returns money from; this names the refund. */

@@ -10857,6 +10857,7 @@ export const WEB_FA = {
   'web.outbox_event_payment_failed': 'پرداخت ناموفق',
   'web.outbox_event_payment_late_completion_observed': 'تأیید دیرهنگام پرداخت',
   'web.outbox_event_payment_late_credited': 'واریز پرداخت دیرهنگام به کیف پول',
+  'web.outbox_event_gateway_payment_attention_raised': 'هشدار درگاه برای پرداخت باز',
   'web.outbox_event_refund_completed': 'بازپرداخت انجام شد',
   'web.outbox_event_refund_failed': 'بازپرداخت ناموفق',
   'web.outbox_event_service_refund_requested': 'درخواست بازپرداخت سرویس',
