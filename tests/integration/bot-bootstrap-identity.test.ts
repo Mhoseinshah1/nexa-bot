@@ -101,7 +101,7 @@ describe('a Telegram bot belongs to one tenant', () => {
       // Round P: constant — nothing here is about the menu, and a fresh bootstrap
       // registers it once whatever this answers.
       commandMenu: {
-        desiredFor: async () => ({ entries: [], hash: 'integration-revision' }),
+        desiredFor: async () => ({ entries: [], hash: 'integration-revision', menuButton: null }),
       },
       // A value of Telegram's own alphabet and past the schema's minimum. The test
       // config does not set one, and the service refuses a short secret on purpose.
