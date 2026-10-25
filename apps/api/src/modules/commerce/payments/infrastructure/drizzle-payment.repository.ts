@@ -36,6 +36,7 @@ import type {
   PaymentState,
   ReceiptDisposition,
   RecordSource,
+  SourceSurface,
   TenantContext,
   UserId,
 } from '@nexa/contracts';
@@ -124,6 +125,8 @@ export class DrizzlePaymentRepository implements PaymentRepository {
         customerFeeBasisPoints: draft.customerFee?.basisPoints ?? null,
         customerFeeAmount: draft.customerFee?.fee.amountMinor ?? null,
         payableAmount: draft.customerFee?.payable.amountMinor ?? null,
+        // Round 9, C5: who created it, by surface; null when the caller did not say.
+        sourceSurface: draft.sourceSurface ?? null,
         createdAt: draft.now,
         updatedAt: draft.now,
       })
@@ -1193,6 +1196,8 @@ function noReceiptFiled(): SQL {
 type Row = {
   id: string;
   source: string;
+  /** Absent from a projection that does not select it. */
+  sourceSurface?: string | null;
   customerId: string;
   orderId: string | null;
   state: string;
@@ -1227,6 +1232,7 @@ function toRecord(row: Row): PaymentRecord {
   return {
     id: row.id as PaymentId,
     source: row.source as RecordSource,
+    sourceSurface: (row.sourceSurface ?? null) as SourceSurface | null,
     customerId: row.customerId as UserId,
     orderId: row.orderId as OrderId | null,
     state: row.state as PaymentState,

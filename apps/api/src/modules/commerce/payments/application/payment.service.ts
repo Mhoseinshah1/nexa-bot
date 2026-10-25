@@ -1139,6 +1139,7 @@ export class PaymentService {
           {
             id: paymentId,
             customerId,
+            sourceSurface: actor.surface,
             orderId,
             method: 'WALLET',
             amount: total,
@@ -1555,6 +1556,7 @@ export class PaymentService {
             {
               id: paymentId,
               customerId,
+              sourceSurface: actor.surface,
               orderId,
               method: 'MANUAL_TRANSFER',
               // The order's frozen total, never a figure the request carried.
@@ -1973,6 +1975,7 @@ export class PaymentService {
             {
               id: paymentId,
               customerId,
+              sourceSurface: actor.surface,
               // NO ORDER. The column is nullable for exactly this, and it is what
               // `confirmManualTransfer` dispatches on.
               orderId: null,
@@ -5107,6 +5110,7 @@ export class PaymentService {
         {
           id: input.paymentId,
           customerId: input.customerId,
+          sourceSurface: actor.surface,
           orderId: input.orderId,
           method: 'GATEWAY',
           // The order's frozen total, or the top-up amount `typedTopupAmount` accepted.

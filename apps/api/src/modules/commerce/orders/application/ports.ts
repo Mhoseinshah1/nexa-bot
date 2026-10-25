@@ -14,6 +14,7 @@ import type {
   ProductSpecification,
   TenantContext,
   UserId,
+  SourceSurface,
 } from '@nexa/contracts';
 
 /**
@@ -80,6 +81,11 @@ export interface OrderRecord {
   readonly state: OrderState;
   /** Provenance (owner decision 2026-10-17): `MIRZA` marks a row the one-time import wrote. */
   readonly source: RecordSource;
+  /**
+   * Round 9, C5: the surface whose actor created the row (`SOURCE_SURFACES`); null for a row
+   * written before the column existed. The operations log prints «منبع: مینی‌اپ» from it.
+   */
+  readonly sourceSurface?: SourceSurface | null;
   /**
    * What this order is FOR, and the column settlement dispatches on.
    *
@@ -171,6 +177,8 @@ export interface OrderCustomerIdentity {
 export interface OrderDraft {
   readonly id: OrderId;
   readonly customerId: UserId;
+  /** Round 9, C5: the creating actor's surface. Absent writes null (unknown). */
+  readonly sourceSurface?: SourceSurface;
   /**
    * Optional, and absent means `NEW_SERVICE`.
    *

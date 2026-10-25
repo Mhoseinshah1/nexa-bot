@@ -16,6 +16,7 @@ import type {
   TicketOrigin,
   BusinessHandoffReason,
   UserId,
+  SourceSurface,
 } from '@nexa/contracts';
 
 /**
@@ -44,6 +45,11 @@ export interface TicketRecord {
   readonly code: string | null;
   /** Provenance (owner decision 2026-10-17): `MIRZA` marks a row the one-time import wrote. */
   readonly source: RecordSource;
+  /**
+   * Round 9, C5: the surface whose actor created the row (`SOURCE_SURFACES`); null for a row
+   * written before the column existed. The operations log prints «منبع: مینی‌اپ» from it.
+   */
+  readonly sourceSurface?: SourceSurface | null;
   readonly number: number;
   readonly customerId: UserId;
   readonly botInstanceId: BotInstanceId;
@@ -222,6 +228,8 @@ export interface TicketRepository {
       readonly openingKey: string;
       /** Defaults to `BOT`. */
       readonly origin?: TicketOrigin;
+      /** Round 9, C5: the creating actor's surface; absent writes null (unknown). */
+      readonly sourceSurface?: SourceSurface;
       readonly now: Date;
     },
     tx: unknown,
