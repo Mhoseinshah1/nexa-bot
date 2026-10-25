@@ -92,7 +92,7 @@ export interface CutoverReconciliationInput {
   /** Legacy user id → its map row, for every `user` map row that is not IMPORTED. */
   readonly heldUsers: ReadonlyMap<string, NexaHeldUser>;
   readonly resellers: readonly NexaResellerRow[];
-  /** Rows of the retired `legacy_wallet_debts` side record for the tenant. */
+  /** Rows of the retired legacy wallet-debt side record for the tenant (a count, never an amount). */
   readonly legacyDebtRows: number;
 }
 
