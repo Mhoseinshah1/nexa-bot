@@ -28,6 +28,8 @@ scripts/visual/node_modules
 # demand; 14 MB of PNGs that would be stale the moment a style changed, and
 # whose verdict lives in the falsification record rather than in the images.
 screens/
+# The mini app's screens are source, not visual output.
+!apps/miniapp/src/screens/
 
 # Screenshots from `pnpm web:shots` (scripts/web-shots). Regenerated on demand
 # against controlled fixtures; never committed.
