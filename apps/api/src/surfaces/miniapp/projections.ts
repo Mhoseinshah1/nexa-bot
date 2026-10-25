@@ -1,6 +1,7 @@
 import {
   orderCodeOf,
   paymentTrackingCode,
+  plainAmount,
   toWire,
   type MiniAppCardInstruction,
   type MiniAppGatewayAttempt,
@@ -21,7 +22,9 @@ import type {
 import type { GatewayAttemptView } from '../../modules/commerce/payments/application/gateway-payment.service.js';
 import {
   amountToTransfer,
+  cardNumberToCopy,
   paysInChat,
+  transferFigures,
 } from '../../modules/commerce/miniapp/application/miniapp-checkout.js';
 
 /**
@@ -106,6 +109,9 @@ export function instructionWire(instruction: ManualTransferInstruction): MiniApp
     paymentId: payment.id,
     orderId: payment.orderId,
     amount: wire(amountToTransfer(payment)),
+    copyAmount:
+      transferFigures(amountToTransfer(payment))?.copyRial ??
+      plainAmount(amountToTransfer(payment)),
     principal: fee ? wire(payment.amount) : null,
     fee: fee && payment.customerFee !== null ? wire(payment.customerFee.fee) : null,
     reference: paymentTrackingCode(payment),
@@ -115,6 +121,7 @@ export function instructionWire(instruction: ManualTransferInstruction): MiniApp
         ? null
         : {
             cardNumber: destination.cardNumber,
+            copyCardNumber: cardNumberToCopy(destination.cardNumber),
             holderName: destination.holderName === '' ? null : destination.holderName,
             bankName: destination.bankName === '' ? null : destination.bankName,
           },

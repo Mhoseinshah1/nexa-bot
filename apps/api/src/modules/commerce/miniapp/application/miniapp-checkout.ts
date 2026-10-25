@@ -202,3 +202,5 @@ export function walletCoverage(
 }
 
 export { amountToTransfer } from '../../payments/domain/amount-to-transfer.js';
+export { transferFigures } from '../../payments/domain/transfer-figures.js';
+export { cardNumberToCopy } from '../../payments/domain/card-number.js';
