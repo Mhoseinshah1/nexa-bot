@@ -105,12 +105,17 @@ export const RIALIT_CODE_PREFIX = 'rialit.';
  * like TetraPay's: a provider's words stored on an attempt, labelled through
  * `PROVIDER_CODE_LABELS`, not codes this API raises.
  *
- * - `PAYER_FEE_NONZERO` — Nexa's own: the create answered a payer fee (or a payer amount
- *   other than the amount sent). The customer would pay Rialit's fee on top of Nexa's quote,
- *   so the link is never shown; the owner sets the payer fee to zero in Rialit's dashboard.
- * - `PAYER_AMOUNT_UNREADABLE` — Nexa's own: the create's `payer_fee` / `payer_amount` could
- *   not be read, so whether the customer would pay more than the quote is unknown; the same
- *   refusal.
+ * The fee rule (owner decision, Round 9): only ONE side may charge the customer a fee, never
+ * both — Nexa's gateway customer fee on the route, or Rialit's payer fee from its dashboard.
+ *
+ * - `DOUBLE_FEE` — Nexa's own: Nexa's fee on this attempt is above zero AND the create
+ *   answered a payer fee above zero. The customer would pay two fees, so the link is never
+ *   shown; the owner zeroes one of them.
+ * - `PAYER_AMOUNT_MISMATCH` — Nexa's own: the create's `payer_amount` is not `amount +
+ *   payer_fee`, or its `amount` is not what Nexa sent: what the customer would pay is not a
+ *   figure Nexa can show. The same refusal.
+ * - `PAYER_AMOUNT_UNREADABLE` — Nexa's own: `payer_fee` / `payer_amount` could not be read.
+ *   The same refusal.
  */
 export const RIALIT_PROVIDER_ERRORS = [
   'UNAUTHORIZED',
@@ -124,7 +129,8 @@ export const RIALIT_PROVIDER_ERRORS = [
   'NOT_FOUND',
   'ORDER_CONFLICT',
   'RATE_LIMITED',
-  'PAYER_FEE_NONZERO',
+  'DOUBLE_FEE',
+  'PAYER_AMOUNT_MISMATCH',
   'PAYER_AMOUNT_UNREADABLE',
 ] as const;
 export type RialitProviderError = (typeof RIALIT_PROVIDER_ERRORS)[number];
@@ -143,7 +149,8 @@ export const RIALIT_CONFIGURATION_ERRORS: readonly RialitProviderError[] = [
   'BAD_REQUEST',
   'INVALID_ORDER_ID',
   'NOT_FOUND',
-  'PAYER_FEE_NONZERO',
+  'DOUBLE_FEE',
+  'PAYER_AMOUNT_MISMATCH',
   'PAYER_AMOUNT_UNREADABLE',
 ];
 
@@ -152,7 +159,9 @@ export const RIALIT_CONFIGURATION_ERRORS: readonly RialitProviderError[] = [
  * `rialit.AMOUNT_OUT_OF_RANGE:<min>:<max>` (TetraPay's shape, so one screen reads both).
  */
 export const RIALIT_AMOUNT_OUT_OF_RANGE_STORED = `${RIALIT_CODE_PREFIX}AMOUNT_OUT_OF_RANGE`;
-/** The code stored when the create answered a payer fee: the link is never shown. */
-export const RIALIT_PAYER_FEE_STORED = `${RIALIT_CODE_PREFIX}PAYER_FEE_NONZERO`;
+/** The code stored when both Nexa and Rialit would charge a fee: the link is never shown. */
+export const RIALIT_DOUBLE_FEE_STORED = `${RIALIT_CODE_PREFIX}DOUBLE_FEE`;
+/** The code stored when the create's payer figures do not add up: the same refusal. */
+export const RIALIT_PAYER_AMOUNT_MISMATCH_STORED = `${RIALIT_CODE_PREFIX}PAYER_AMOUNT_MISMATCH`;
 /** The code stored when the create's payer figures could not be read: the same refusal. */
 export const RIALIT_PAYER_AMOUNT_UNREADABLE_STORED = `${RIALIT_CODE_PREFIX}PAYER_AMOUNT_UNREADABLE`;

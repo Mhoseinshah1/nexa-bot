@@ -8989,7 +8989,7 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.rialit_misconfigured',
     description:
-      'Rialit: the gateway would have charged the customer its own payer fee on top of the amount this bot quoted, so the payment link was NOT shown and nothing can be paid through it. The method is unavailable until the operator fixes the gateway’s settings; nothing was charged. It asks the customer to choose another method.',
+      'Rialit: the gateway is misconfigured — both this bot’s gateway fee and Rialit’s own payer fee would have been charged (only one side may charge), or Rialit’s payer figures did not add up — so the payment link was NOT shown and nothing can be paid through it. The method is unavailable until the operator fixes the settings; nothing was charged. It asks the customer to choose another method.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
