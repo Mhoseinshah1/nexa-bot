@@ -68,10 +68,26 @@ export function CardPay({ instruction }: { instruction: MiniAppCardInstruction }
         <li className="step">{t('miniapp.card_step_review')}</li>
       </ol>
       <Card>
+        {/*
+         * v0.8.2 hotfix: the amount in RIAL with Toman in brackets, as the bot's card invoice
+         * (R8 A2) — the figure a banking app takes, and the one the copy button carries. An
+         * amount in neither currency (none is a sales currency) keeps its own figure.
+         */}
         <Row
           label={t('miniapp.card_amount')}
-          value={<strong>{money(instruction.amount)}</strong>}
+          value={
+            <strong>
+              {instruction.amountRial === null
+                ? money(instruction.amount)
+                : t('miniapp.card_amount_rial', { amount: instruction.amountRial })}
+            </strong>
+          }
         />
+        {instruction.amountRial !== null && instruction.amountToman !== null && (
+          <p className="muted">
+            {t('miniapp.card_amount_toman', { amount: instruction.amountToman })}
+          </p>
+        )}
         {instruction.principal !== null && instruction.fee !== null && (
           <p className="muted">
             {t('miniapp.card_principal_fee', {
@@ -81,7 +97,11 @@ export function CardPay({ instruction }: { instruction: MiniAppCardInstruction }
           </p>
         )}
         <Button onClick={() => copy('amount', instruction.copyAmount)}>
-          {copied === 'amount' ? t('miniapp.copied') : t('miniapp.card_copy')}
+          {copied === 'amount'
+            ? t('miniapp.copied')
+            : instruction.amountRial === null
+              ? t('miniapp.card_copy')
+              : t('miniapp.card_copy_rial')}
         </Button>
       </Card>
       {destination === null ? (

@@ -100,6 +100,10 @@ export const MINIAPP_FA = {
   'miniapp.card_step_receipt': 'ارسال رسید',
   'miniapp.card_step_review': 'تأیید و فعال‌سازی',
   'miniapp.card_amount': 'مبلغ دقیق واریز',
+  // v0.8.2 hotfix: the amount in rial, Toman in brackets, as the bot's card invoice writes it.
+  'miniapp.card_amount_rial': '{amount} ریال',
+  'miniapp.card_amount_toman': '(معادل {amount} تومان)',
+  'miniapp.card_copy_rial': 'کپی مبلغ (ریال)',
   'miniapp.card_principal_fee': 'مبلغ {principal} + کارمزد {fee}',
   'miniapp.card_number': 'شماره کارت',
   'miniapp.card_holder': 'به نام {holder}',
