@@ -140,8 +140,11 @@ describe('a stalled provisioner lane in the operations log', () => {
     expect(queued).toHaveLength(1);
     expect(queued[0]?.destination.opsTopic).toBe('SYSTEM');
     const payload = JSON.stringify(queued[0]?.payload);
-    expect(payload).toContain('processRole: provisioner');
-    expect(payload).toContain('kind: provisioner-service-refunds');
+    // Persian throughout: the lane and the role by name, the lane's key on the technical line.
+    expect(payload).toContain('بازگشت وجه سرویس‌ها');
+    expect(payload).toContain('فرایند: سازندهٔ سرویس');
+    expect(payload).toContain('job.loop_stalled · provisioner-service-refunds');
+    expect(payload).not.toContain('processRole');
 
     refundsFail = false;
     await loop.tick();

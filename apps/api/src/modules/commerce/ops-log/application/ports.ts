@@ -442,6 +442,16 @@ export interface OpsLogWords {
   eventMessage?(code: string): string | null;
   /** The Persian title of a stalled NON-PROVISION operation; null for an unknown type. */
   stalledOperationTitle(operationType: string): string | null;
+  /**
+   * The words of a stalled / recovered background loop (`job.loop_stalled`, `job.loop_recovered`):
+   * the Persian name of the loop and of the process role, each falling back to a Persian
+   * «unknown» phrase, and the label of the line that names the role.
+   */
+  loopStall: {
+    loopName(loop: string): string;
+    roleName(role: string): string;
+    roleLabel: string;
+  };
   severity(klass: string): string;
   cleanupLine(countText: string): string;
   /** Round 9 C3: the data compaction's part of the cleanup line; `parts` is already worded. */

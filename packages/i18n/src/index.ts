@@ -32,6 +32,15 @@ export {
   OPERATIONAL_EVENT_MESSAGES_FA,
   operationalEventMessageFa,
 } from './operational-event-messages.fa.js';
+export {
+  LOOP_LABELS_FA,
+  PROCESS_ROLE_LABELS_FA,
+  PROCESS_ROLE_LINE_LABEL_FA,
+  UNKNOWN_LOOP_LABEL_FA,
+  UNKNOWN_PROCESS_ROLE_LABEL_FA,
+  loopLabelFa,
+  processRoleLabelFa,
+} from './loop-labels.fa.js';
 export { CUSTOMER_NOTIFICATION_KIND_NAMES_FA } from './customer-notification-kinds.fa.js';
 export { TONPAYS_REJECT_REASONS_FA, rejectReasonFa } from './gateway-reject-reasons.fa.js';
 import { clipEntities, parseCaptionMarkup, type CaptionMarkup } from './caption-markup.js';
