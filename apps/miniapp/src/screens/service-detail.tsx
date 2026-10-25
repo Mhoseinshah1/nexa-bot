@@ -50,9 +50,7 @@ function Detail({ service }: { service: MiniAppServiceDetail }) {
     <>
       <ServiceCard service={service} now={new Date()} />
       <Card>
-        {left !== null && left >= 0n && (
-          <p>{t('miniapp.service_left', { left: traffic(left) })}</p>
-        )}
+        {left !== null && left >= 0n && <p>{t('miniapp.service_left', { left: traffic(left) })}</p>}
         <p className="muted">
           {service.usageSyncedAt === null
             ? t('miniapp.service_not_synced')
@@ -130,12 +128,11 @@ function Offer({ serviceId, kind }: { serviceId: string; kind: MiniAppServiceAct
   const quote = async (option: { addonId: string | null; planId: string | null }) => {
     setError(null);
     try {
-      const order = await api.post(
-        MINIAPP_ROUTES.serviceQuote,
-        { serviceId },
-        miniAppOrderSchema,
-        { kind, addonId: option.addonId, planId: option.planId },
-      );
+      const order = await api.post(MINIAPP_ROUTES.serviceQuote, { serviceId }, miniAppOrderSchema, {
+        kind,
+        addonId: option.addonId,
+        planId: option.planId,
+      });
       navigate({ name: 'checkout', orderId: order.id });
     } catch (failure) {
       setError(errorText(failure));
@@ -145,7 +142,9 @@ function Offer({ serviceId, kind }: { serviceId: string; kind: MiniAppServiceAct
     <Loading loaded={loaded} reload={reload}>
       {(offer) => (
         <div className="options">
-          {offer.options.length === 0 && <p className="muted">{t('miniapp.service_offer_empty')}</p>}
+          {offer.options.length === 0 && (
+            <p className="muted">{t('miniapp.service_offer_empty')}</p>
+          )}
           {offer.options.map((option) => (
             <button
               key={`${option.addonId ?? ''}:${option.planId ?? ''}`}

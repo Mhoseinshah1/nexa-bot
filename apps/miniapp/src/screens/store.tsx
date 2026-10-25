@@ -34,7 +34,8 @@ export function Store() {
       <h1 className="title">{t('miniapp.store_title')}</h1>
       <Loading loaded={loaded} reload={reload}>
         {(categories) => {
-          if (categories.items.length === 0) return <p className="muted">{t('miniapp.store_empty')}</p>;
+          if (categories.items.length === 0)
+            return <p className="muted">{t('miniapp.store_empty')}</p>;
           const current = chosen ?? categories.items[0]?.id ?? null;
           return (
             <>
@@ -96,7 +97,9 @@ function Category({ categoryId }: { categoryId: string }) {
     <Loading loaded={loaded} reload={reload}>
       {(result) => (
         <section className="section">
-          {result.items.length === 0 && <p className="muted">{t('miniapp.store_category_empty')}</p>}
+          {result.items.length === 0 && (
+            <p className="muted">{t('miniapp.store_category_empty')}</p>
+          )}
           {result.items.map((product) => (
             <Card key={product.id} className="plan">
               <div className="card-head">
@@ -110,7 +113,9 @@ function Category({ categoryId }: { categoryId: string }) {
                   <span>{t('miniapp.service_devices', { count: product.deviceLimit })}</span>
                 )}
               </div>
-              {product.locations.length > 0 && <p className="muted">{product.locations.join(t('miniapp.list_separator'))}</p>}
+              {product.locations.length > 0 && (
+                <p className="muted">{product.locations.join(t('miniapp.list_separator'))}</p>
+              )}
               {product.features.length > 0 && (
                 <ul className="features">
                   {product.features.map((feature) => (

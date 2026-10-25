@@ -21,7 +21,8 @@ export function ServiceCard({
   const share = usedShare(service.trafficUsedBytes, service.trafficLimitBytes);
   const days = service.expiresAt === null ? null : daysUntil(service.expiresAt, now);
   const ending =
-    service.state === 'ACTIVE' && ((share !== null && share >= 0.9) || (days !== null && days <= 3));
+    service.state === 'ACTIVE' &&
+    ((share !== null && share >= 0.9) || (days !== null && days <= 3));
   const body = (
     <>
       <div className="card-head">
