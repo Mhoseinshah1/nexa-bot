@@ -107,15 +107,18 @@ export class FxRefreshLoop {
     // At most one warning per backoff step; the operational log carries the outage itself.
     if (this.warnedDelayMs === delayMs) return;
     this.warnedDelayMs = delayMs;
-    (this.options.logger.warn ?? this.options.logger.info)(
-      {
-        outcome: 'FAILED',
-        reason,
-        consecutiveFailures: this.failureStreak,
-        nextAttemptInMs: delayMs,
-      },
-      'fx refresh failing; backing off',
-    );
+    // Called ON the logger, never detached from it: `(logger.warn ?? logger.info)(…)` called
+    // the method with no `this`, PinoLogger's `this.emit` threw, and v0.8.2's worker
+    // crash-looped on the first failed pass (tests/unit/fx-refresh-loop-real-logger.test.ts).
+    const context = {
+      outcome: 'FAILED',
+      reason,
+      consecutiveFailures: this.failureStreak,
+      nextAttemptInMs: delayMs,
+    };
+    const { logger } = this.options;
+    if (logger.warn !== undefined) logger.warn(context, 'fx refresh failing; backing off');
+    else logger.info(context, 'fx refresh failing; backing off');
   }
 
   /** One pass. Re-entrancy is refused rather than queued. Public so a test can drive it. */
