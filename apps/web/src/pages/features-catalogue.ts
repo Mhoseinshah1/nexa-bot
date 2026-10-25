@@ -259,6 +259,13 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: null,
     confirmEnable: null,
   },
+  // Round 9, C5: the customer mini app. Off withdraws the menu button and ends new sessions.
+  mini_app: {
+    title: 'web.feature_mini_app_title',
+    summary: 'web.feature_mini_app_summary',
+    disableEffect: 'web.feature_mini_app_off_effect',
+    confirmEnable: null,
+  },
 };
 
 /**
