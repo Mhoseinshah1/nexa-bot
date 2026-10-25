@@ -12321,6 +12321,15 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.menu.miniapp_button',
+    description:
+      'Round 9, C5: the text of the chat menu button that opens the Telegram Mini App, set on ' +
+      'every ACTIVE bot by the command-menu sync while the mini_app flag is on. Plain text: ' +
+      'Telegram draws it beside the message field.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.support.tickets_button',
     description:
       "WP-A7: the support screen's button (also /paysupport's) that opens the customer's tickets.",

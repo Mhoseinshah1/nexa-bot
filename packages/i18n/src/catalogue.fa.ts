@@ -1481,6 +1481,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.marketing.unavailable':
     '{icon:info} در حال حاضر امکان قطع یا وصل پیام‌های تبلیغاتی در این ربات فعال نیست.\nاطلاع‌رسانی‌های مربوط به پرداخت، سرویس و پشتیبانی شما مثل همیشه ارسال می‌شود.',
   'bot.menu.tickets': '🎫 پشتیبانی / تیکت‌ها',
+  'bot.menu.miniapp_button': '📱 مینی‌اپ',
   'bot.support.tickets_button': '🎫 تیکت‌های پشتیبانی',
   'bot.ticket.list':
     '{icon:ticket} تیکت‌های پشتیبانی\n\nتیکت‌های شما در زیر آمده است؛ برای دیدن گفتگو روی هر تیکت بزنید. برای طرح موضوعی تازه «➕ تیکت جدید» را بزنید.',

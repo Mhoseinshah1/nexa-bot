@@ -29,6 +29,12 @@ import {
 } from './customer-reminders.js';
 import { moneySchema, salesCurrencyCodeSchema } from './money.js';
 import {
+  MINIAPP_INIT_DATA_MAX_AGE_SECONDS_MAX,
+  MINIAPP_INIT_DATA_MAX_AGE_SECONDS_MIN,
+  MINIAPP_SESSION_TTL_MINUTES_MAX,
+  MINIAPP_SESSION_TTL_MINUTES_MIN,
+} from './miniapp.js';
+import {
   BACKUP_ARCHIVE_KEEP_COUNT_DEFAULT,
   BACKUP_ARCHIVE_KEEP_COUNT_MAX,
   BACKUP_ARCHIVE_KEEP_COUNT_MIN,
@@ -1626,6 +1632,45 @@ export const SETTINGS = [
     // F5: the `trials` flag it configured is retired; a panel's own trial is the switch.
     configures: null,
     zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'miniapp.init_data_max_age_seconds',
+    description:
+      'Round 9, C5: how old a Telegram Mini App launch (its initData auth_date) may be when it ' +
+      'is exchanged for a mini-app session, in seconds. Telegram signs initData once, when the ' +
+      'customer opens the mini app; a signed launch older than this is refused and the ' +
+      'customer reopens the mini app. Inert while the mini_app flag is off.',
+    schema: z
+      .number()
+      .int()
+      .min(MINIAPP_INIT_DATA_MAX_AGE_SECONDS_MIN)
+      .max(MINIAPP_INIT_DATA_MAX_AGE_SECONDS_MAX),
+    // An hour: long enough for a customer who opened the mini app and came back to it, short
+    // enough that a copied launch is useless the same afternoon. At most a day.
+    defaultValue: 3600,
+    configures: 'mini_app',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'miniapp.session_ttl_minutes',
+    description:
+      'Round 9, C5: how long one mini-app session lasts after it is minted, in minutes. One ' +
+      'Telegram launch mints at most one session; when it lapses the customer reopens the mini ' +
+      'app. Inert while the mini_app flag is off.',
+    schema: z
+      .number()
+      .int()
+      .min(MINIAPP_SESSION_TTL_MINUTES_MIN)
+      .max(MINIAPP_SESSION_TTL_MINUTES_MAX),
+    defaultValue: 60,
+    configures: 'mini_app',
+    zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     consumer: 'ACTIVE',

@@ -499,6 +499,20 @@ export const FEATURE_FLAGS = [
     blastRadius: 'LOCAL',
     configuredBy: [],
   },
+  {
+    key: 'mini_app',
+    description:
+      'Round 9, C5: the customer Telegram Mini App. On, every ACTIVE bot of the tenant gets a ' +
+      'menu button that opens the mini app (applied by the command-menu sync), and the mini ' +
+      'app\u2019s endpoints accept sessions. Off by default: the endpoints answer as if they did ' +
+      'not exist, no menu button is set, and nothing in the bot changes \u2014 no keyboard, no ' +
+      'message, no extra Telegram call. The mini app exposes only what the bot already offers, ' +
+      'through the same services, gates and permissions.',
+    defaultEnabled: false,
+    // TENANT_WIDE: turning it on offers a second way in to every customer of the tenant.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: ['miniapp.init_data_max_age_seconds', 'miniapp.session_ttl_minutes'],
+  },
 ] as const satisfies readonly FeatureFlagDefinition[];
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[number]['key'];
