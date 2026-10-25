@@ -31,7 +31,7 @@ import { creditAmountDiffers, principalInProviderUnit } from './credit-amount.js
  * it is neither the principal nor what Nexa invoiced. Absent figure: none, and no flag.
  */
 function creditAmountOf(
-  g: Pick<TimelineGatewayFacts, 'creditAmount' | 'sentAmount' | 'providerUnit'>,
+  g: Pick<TimelineGatewayFacts, 'creditAmount' | 'sentAmount' | 'providerUnit' | 'finalAmount'>,
   principalMinor: bigint,
   currency: CurrencyCode,
 ): {
@@ -53,6 +53,7 @@ function creditAmountOf(
         money(principalMinor, currency),
         g.providerUnit,
       ),
+      providerFinalAmount: g.finalAmount ?? null,
     }),
   };
 }
@@ -106,6 +107,8 @@ export interface TimelineGatewayFacts {
   readonly creditAmount?: bigint | null;
   readonly sentAmount?: bigint;
   readonly providerUnit?: string;
+  /** The provider's own exact transfer figure (`final_amount`), a match too. */
+  readonly finalAmount?: bigint | null;
   readonly lastInquiryAt: Date | null;
   readonly providerStatus: string | null;
   readonly providerPaid: boolean | null;

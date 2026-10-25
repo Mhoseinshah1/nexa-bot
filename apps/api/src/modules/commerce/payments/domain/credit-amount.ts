@@ -31,18 +31,21 @@ export function principalInProviderUnit(principal: Money, providerUnit: string):
 }
 
 /**
- * Whether a reported `credit_amount` is neither the principal nor what Nexa asked the provider
- * for (`sentAmount`: the payable, which includes a customer fee when one was added). False
- * when nothing was reported. Both comparisons are in the provider's own unit.
+ * Whether a reported `credit_amount` matches NOTHING this attempt was invoiced for: not the
+ * principal, not what Nexa asked the provider for (`sentAmount`: the payable, which includes a
+ * customer fee when one was added), and not the exact figure the provider itself had the
+ * customer transfer (`final_amount`, the requested amount plus TonPays' unique tail — R8 A1),
+ * which is what the website route's webhook reports as `credit_amount` in the ordinary case.
+ * False when nothing was reported. Every comparison is in the provider's own unit.
  */
 export function creditAmountDiffers(input: {
   readonly creditAmount: bigint | null;
   readonly sentAmount: bigint;
   readonly principalInProviderUnit: bigint | null;
+  readonly providerFinalAmount?: bigint | null;
 }): boolean {
-  if (input.creditAmount === null) return false;
-  if (input.creditAmount === input.sentAmount) return false;
-  return input.principalInProviderUnit === null
-    ? true
-    : input.creditAmount !== input.principalInProviderUnit;
+  const credit = input.creditAmount;
+  if (credit === null) return false;
+  const matches = [input.sentAmount, input.principalInProviderUnit, input.providerFinalAmount];
+  return !matches.some((one) => one !== null && one !== undefined && one === credit);
 }

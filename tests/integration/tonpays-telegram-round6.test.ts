@@ -1157,6 +1157,37 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     ]);
   });
 
+  it('R9 C1 webhook: two deliveries carrying the same new credit_amount at once raise ONE alert; the provider’s own final amount raises none', async () => {
+    const attempt = await topupIn(100_000n);
+    await lane.runOnce(tenantA);
+    const [invoice] = await rows<{ provider_invoice_id: string; provider_order_id: string }>(
+      sql`SELECT provider_invoice_id, provider_order_id FROM gateway_invoices WHERE payment_id = ${attempt.payment.id}`,
+    );
+    const hook = (deliveryId: string, credit: number) =>
+      lane.receiveWebhook(
+        String(tenantA.tenantId),
+        'TONPAYS_TELEGRAM',
+        {
+          invoice_id: invoice!.provider_invoice_id,
+          order_id: invoice!.provider_order_id,
+          credit_amount: credit,
+          status: 'processing',
+          paid: false,
+          delivery_id: deliveryId,
+        },
+        deliveryId,
+      );
+    // The figure TonPays itself asked the customer to transfer (request + its unique tail).
+    const fakeInvoice = fake.invoices.get(invoice!.provider_invoice_id)!;
+    await inquireNow();
+    await hook('same-0', fakeInvoice.finalAmount);
+    expect(await attention(attempt.payment.id)).toEqual([]);
+    await Promise.all([hook('same-1', 77_000), hook('same-2', 77_000), hook('same-3', 77_000)]);
+    expect((await attention(attempt.payment.id)).map((one) => one.payload.reason)).toEqual([
+      'CREDIT_AMOUNT_MISMATCH',
+    ]);
+  });
+
   it('R9 C1 race: the provider approves while the customer’s cancel waits — the inquiry settles it and the cancel is never sent', async () => {
     const { paymentId, message } = await cardOnScreen();
     await tapOn(message, `gq:${paymentId}`);

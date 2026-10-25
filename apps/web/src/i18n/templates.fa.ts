@@ -406,6 +406,11 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   quantity: 'تعداد',
   provider: 'نوع پنل',
   providerFinalAmount: 'مبلغ نهایی گزارش‌شده توسط درگاه',
+  // R9 C1: the gateway's own figures for an under/overpaid invoice, diagnostic only.
+  remainingAmount: 'مابقی اعلام‌شدهٔ درگاه',
+  remainderInvoiceId: 'شناسهٔ فاکتور مابقی',
+  creditAmount: 'مبلغ اعلام‌شدهٔ وب‌هوک درگاه',
+  invoicedAmount: 'مبلغ درخواستی Nexa از درگاه',
   providerInvoiceId: 'شناسهٔ فاکتور درگاه',
   query: 'عبارت جست‌وجو',
   question: 'پرسش',

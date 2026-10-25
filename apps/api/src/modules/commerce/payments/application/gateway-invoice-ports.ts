@@ -974,6 +974,16 @@ export interface GatewayInvoiceRepository {
    * A webhook's hint: bookkeeping only, and an inquiry brought forward when one may be.
    * Returns whether the delivery was new (false: a duplicate delivery id).
    */
+  /**
+   * R9 C1: the stored webhook `credit_amount`, read `FOR UPDATE` in the caller's transaction —
+   * so a delivery compares its figure with the one a concurrent delivery may just have written.
+   * Optional: a repository without it is compared with the figure read before the transaction.
+   */
+  creditAmountForUpdate?(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    tx: unknown,
+  ): Promise<bigint | null>;
   recordWebhook(
     scope: TenantContext,
     paymentId: PaymentId,

@@ -350,6 +350,7 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
         creditAmount: gatewayInvoices.creditAmount,
         sentAmount: gatewayInvoices.sentAmount,
         providerUnit: gatewayInvoices.providerUnit,
+        finalAmount: gatewayInvoices.finalAmount,
         lastInquiryAt: gatewayInvoices.lastInquiryAt,
         providerStatus: gatewayInvoices.providerStatus,
         providerPaid: gatewayInvoices.providerPaid,

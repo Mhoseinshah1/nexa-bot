@@ -685,6 +685,7 @@ function toGatewayInvoiceView(
       sentAmount: invoice.sentAmount,
       principalInProviderUnit:
         principal === null ? null : principalInProviderUnit(principal, invoice.providerUnit),
+      providerFinalAmount: invoice.finalAmount,
     }),
   };
 }

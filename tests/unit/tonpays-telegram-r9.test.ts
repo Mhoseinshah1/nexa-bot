@@ -136,6 +136,13 @@ describe('credit_amount: shown and flagged, never credited', () => {
     expect(creditAmountDiffers({ ...base, creditAmount: 100_000n })).toBe(false);
     expect(creditAmountDiffers({ ...base, creditAmount: 99_000n })).toBe(true);
     expect(creditAmountDiffers({ ...base, creditAmount: 0n })).toBe(true);
+    // The provider's own exact transfer figure (request + its unique tail) is a match too.
+    expect(
+      creditAmountDiffers({ ...base, providerFinalAmount: 110_037n, creditAmount: 110_037n }),
+    ).toBe(false);
+    expect(
+      creditAmountDiffers({ ...base, providerFinalAmount: null, creditAmount: 110_037n }),
+    ).toBe(true);
     // No exact principal in the provider's unit: only what was invoiced counts as a match.
     expect(
       creditAmountDiffers({

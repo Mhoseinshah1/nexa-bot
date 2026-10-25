@@ -2100,7 +2100,12 @@ export class GatewayPaymentService {
             (need === 'LESS' &&
               outcome.facts?.remainingInvoiceId != null &&
               recorded.remainingInvoiceIdBefore !== outcome.facts.remainingInvoiceId));
-        if (newAsk && current !== null) {
+        // A stopped scope's ask is recorded (the facts row) but raises nothing new.
+        if (
+          newAsk &&
+          current !== null &&
+          (await this.deps.scopeActivity.scopeIsActive(scope, tx))
+        ) {
           announced = need;
           await this.deps.outbox.write(tx, actor, {
             eventType: 'GatewayPaymentAttentionRaised',
@@ -3790,15 +3795,26 @@ export class GatewayPaymentService {
      * NEVER credited: the wallet is credited with the principal, by the inquiry
      * (`domain/credit-amount.ts` records why).
      */
-    const raiseCredit =
+    const creditDiffers =
       hint.creditAmount !== null &&
-      hint.creditAmount !== invoice.creditAmount &&
       creditAmountDiffers({
         creditAmount: hint.creditAmount,
         sentAmount: invoice.sentAmount,
         principalInProviderUnit: principalInProviderUnit(payment.amount, invoice.providerUnit),
+        providerFinalAmount: invoice.finalAmount,
       });
     const recorded = await this.deps.uow.run(scope, async (tx) => {
+      /*
+       * The stored figure read under the invoice row's lock, BEFORE this delivery writes its
+       * own: two deliveries carrying the same new figure at once are serialised here, and the
+       * second sees the first's figure — one alert, not two.
+       */
+      const locked =
+        creditDiffers && this.deps.invoices.creditAmountForUpdate !== undefined
+          ? await this.deps.invoices.creditAmountForUpdate(scope, invoice.paymentId, tx)
+          : undefined;
+      const storedCredit = locked === undefined ? invoice.creditAmount : locked;
+      const raiseCredit = creditDiffers && storedCredit !== hint.creditAmount;
       const kept = await this.deps.invoices.recordWebhook(
         scope,
         invoice.paymentId,
@@ -3817,7 +3833,8 @@ export class GatewayPaymentService {
         now,
         tx,
       );
-      if (kept && raiseCredit) {
+      // A stopped scope accepts no new work: the figure is recorded, the alert is not raised.
+      if (kept && raiseCredit && (await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
         await this.deps.outbox.write(tx, this.actor(), {
           eventType: 'GatewayPaymentAttentionRaised',
           aggregateType: 'Payment',
