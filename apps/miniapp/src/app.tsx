@@ -16,6 +16,10 @@ import { Checkout } from './screens/checkout.js';
 import { CardPay } from './screens/card-pay.js';
 import { PayStatus } from './screens/pay-status.js';
 import { ServiceDetail } from './screens/service-detail.js';
+import { Wallet } from './screens/wallet.js';
+import { Profile } from './screens/profile.js';
+import { Referral } from './screens/referral.js';
+import { Trial } from './screens/trial.js';
 import { Message, TabBar } from './ui.js';
 
 /**
@@ -31,9 +35,13 @@ export type Route =
   | { readonly name: 'checkout'; readonly orderId: string }
   | { readonly name: 'card'; readonly instruction: MiniAppCardInstruction }
   | { readonly name: 'pay'; readonly paymentId: string }
-  | { readonly name: 'service'; readonly serviceId: string };
+  | { readonly name: 'service'; readonly serviceId: string }
+  | { readonly name: 'wallet' }
+  | { readonly name: 'profile' }
+  | { readonly name: 'referral' }
+  | { readonly name: 'trial' };
 
-export type Tab = 'home' | 'store' | 'services';
+export type Tab = 'home' | 'store' | 'services' | 'wallet' | 'profile';
 
 interface AppContextValue {
   readonly api: MiniAppApi;
@@ -158,7 +166,11 @@ export function App() {
 
   const route = stack[stack.length - 1] ?? { name: 'home' };
   const tab: Tab | null =
-    route.name === 'home' || route.name === 'store' || route.name === 'services'
+    route.name === 'home' ||
+    route.name === 'store' ||
+    route.name === 'services' ||
+    route.name === 'wallet' ||
+    route.name === 'profile'
       ? route.name
       : null;
 
@@ -175,6 +187,10 @@ export function App() {
           {route.name === 'card' && <CardPay instruction={route.instruction} />}
           {route.name === 'pay' && <PayStatus paymentId={route.paymentId} />}
           {route.name === 'service' && <ServiceDetail serviceId={route.serviceId} />}
+          {route.name === 'wallet' && <Wallet />}
+          {route.name === 'profile' && <Profile />}
+          {route.name === 'referral' && <Referral />}
+          {route.name === 'trial' && <Trial />}
           {tab !== null && <TabBar current={tab} onSelect={(next) => setStack([{ name: next }])} />}
         </div>
       )}

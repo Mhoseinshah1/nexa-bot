@@ -92,6 +92,8 @@ const TABS: readonly { readonly tab: Tab; readonly label: MiniAppKey }[] = [
   { tab: 'home', label: 'miniapp.tab_home' },
   { tab: 'store', label: 'miniapp.tab_store' },
   { tab: 'services', label: 'miniapp.tab_services' },
+  { tab: 'wallet', label: 'miniapp.tab_wallet' },
+  { tab: 'profile', label: 'miniapp.tab_profile' },
 ];
 
 export function TabBar({ current, onSelect }: { current: Tab; onSelect: (tab: Tab) => void }) {

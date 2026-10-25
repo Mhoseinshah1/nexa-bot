@@ -4,6 +4,7 @@ import { t } from '../i18n/t.js';
 import { money } from '../format.js';
 import { Button, Card, Loading, useLoad } from '../ui.js';
 import { ServiceCard } from './service-card.js';
+import { useTrialOffers } from './entry-points.js';
 
 /**
  * خانه: the greeting, the wallet balance, «خرید سرویس», and the customer's services.
@@ -11,7 +12,8 @@ import { ServiceCard } from './service-card.js';
  * Not drawn, because nothing backs them: the cashback-earned chip (no customer-own cashback
  * total), the outage strip with its compensation extension (no such feature; the incident
  * banner is the operators'), and the bell (there is no in-app notification store). The
- * top-up, trial, referral and support tiles arrive with their screens.
+ * support tile arrives with its screen. The top-up button and the trial shortcut (drawn only
+ * while a panel offers a trial) are here; the referral entry lives in the profile.
  */
 export function Home() {
   const { api, me, navigate } = useApp();
@@ -19,6 +21,7 @@ export function Home() {
     () => api.get(MINIAPP_ROUTES.services, {}, miniAppServicesResponseSchema, 'page=0'),
     [api],
   );
+  const trial = useTrialOffers();
   const name = me.customer.firstName;
   const now = new Date();
   return (
@@ -28,7 +31,9 @@ export function Home() {
           {name === null ? t('miniapp.home_greeting_plain') : t('miniapp.home_greeting', { name })}
         </h1>
         {me.reseller !== null && (
-          <span className="badge">{t('miniapp.home_reseller', { tier: me.reseller.tierName })}</span>
+          <span className="badge">
+            {t('miniapp.home_reseller', { tier: me.reseller.tierName })}
+          </span>
         )}
       </header>
       <Card className="balance">
@@ -37,14 +42,24 @@ export function Home() {
         <Button primary onClick={() => navigate({ name: 'store' })}>
           {t('miniapp.home_buy')}
         </Button>
+        <Button onClick={() => navigate({ name: 'wallet' })}>{t('miniapp.home_topup')}</Button>
       </Card>
+      {trial.loaded.state === 'ready' && trial.loaded.data.offers.length > 0 && (
+        <Button onClick={() => navigate({ name: 'trial' })}>
+          {t('miniapp.home_shortcut_trial')}
+        </Button>
+      )}
       <Loading loaded={loaded} reload={reload}>
         {(page) => (
           <section className="section">
             <div className="section-head">
               <h2>{t('miniapp.home_my_services')}</h2>
               {page.total > page.items.length && (
-                <button type="button" className="link" onClick={() => navigate({ name: 'services' })}>
+                <button
+                  type="button"
+                  className="link"
+                  onClick={() => navigate({ name: 'services' })}
+                >
                   {t('miniapp.home_all_services', { count: page.total })}
                 </button>
               )}
