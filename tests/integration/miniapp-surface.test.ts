@@ -1159,6 +1159,8 @@ describe('the mini-app surface', () => {
         ['GET', MINIAPP_ROUTES.serviceQr, { serviceId }],
         ['GET', MINIAPP_ROUTES.serviceOffer, { serviceId, kind: 'RENEW' }],
         ['POST', MINIAPP_ROUTES.serviceQuote, { serviceId }, { kind: 'RENEW' }],
+        ['GET', MINIAPP_ROUTES.serviceLocations, { serviceId }],
+        ['POST', MINIAPP_ROUTES.serviceLocation, { serviceId }, { locationId: serviceId }],
       ];
       for (const [method, route, params, body] of serviceRoutes) {
         const refused = await call(bob, method, route, params, body);
