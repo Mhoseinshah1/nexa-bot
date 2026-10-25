@@ -4,11 +4,16 @@ import {
   MINIAPP_API_PREFIX,
   MINIAPP_ROUTES,
   MINIAPP_SERVICE_ACTIONS,
+  COMMERCE_ERROR_CODES,
+  errors,
   miniAppPageQuerySchema,
+  miniAppServiceLocationRequestSchema,
   miniAppServiceQuoteRequestSchema,
   type MiniAppOrder,
   type MiniAppServiceAction,
   type MiniAppServiceDetail,
+  type MiniAppServiceLocationResult,
+  type MiniAppServiceLocations,
   type MiniAppServiceOffer,
   type MiniAppServicesResponse,
 } from '@nexa/contracts';
@@ -81,6 +86,7 @@ export class MiniAppServicesController {
       working,
       actions: MINIAPP_SERVICE_ACTIONS.filter((kind) => offered.includes(kind)),
       qr: deliverable,
+      canChangeLocation: offered.includes('CHANGE_LOCATION'),
     };
   }
 
@@ -190,6 +196,99 @@ export class MiniAppServicesController {
       display,
       serviceId: service.id,
     });
+  }
+
+  /**
+   * The location sheet's read: where the service is and what it may be moved to, priced.
+   * `CommercialActionService.offer` is the bot's own read and refuses for every reason a
+   * move would (state, panel, policy, nothing configured); the cooldown and the rolling
+   * limit have already removed the targets they refuse. Nothing else is exposed.
+   */
+  @Get(MINIAPP_ROUTES.serviceLocations)
+  async locations(
+    @Req() request: FastifyRequest,
+    @Param('serviceId') serviceId: string,
+  ): Promise<MiniAppServiceLocations> {
+    const call = await miniAppCall(this.container, request, { gated: true });
+    const service = await this.ownService(call, serviceId);
+    const offer = await this.container.commercialActions.offer(
+      call.context.scope,
+      call.actor,
+      call.context.customer.id,
+      service.id,
+      'CHANGE_LOCATION',
+    );
+    const locations = offer.locations ?? null;
+    if (locations === null) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+        'This service cannot be moved right now.',
+      );
+    }
+    return {
+      current: { label: locations.current.label },
+      targets: locations.targets.map((target) => ({
+        id: target.id,
+        label: target.label,
+        price: wire(target.price),
+      })),
+    };
+  }
+
+  /**
+   * A move asked for, as the bot's target tap and confirm are: `locationTarget` decides
+   * first (not offered, already there, cooldown, limit, the panel: each refused with its own
+   * code, passed through). A PRICED target becomes the ordinary DRAFT quote, paid through
+   * the same checkout; a FREE one is requested through `LocationChangeService.requestFree`,
+   * which decides everything again in its own transaction. The page asks the customer to
+   * confirm a free move before it calls this.
+   */
+  @Post(MINIAPP_ROUTES.serviceLocation)
+  async location(
+    @Req() request: FastifyRequest,
+    @Param('serviceId') serviceId: string,
+    @Body() body: unknown,
+  ): Promise<MiniAppServiceLocationResult> {
+    const call = await miniAppCall(this.container, request, { gated: true });
+    const input = parseWith(miniAppServiceLocationRequestSchema, body);
+    const service = await this.ownService(call, serviceId);
+    const decided = await this.container.commercialActions.locationTarget(
+      call.context.scope,
+      call.actor,
+      call.context.customer.id,
+      service.id,
+      input.locationId,
+    );
+    const idempotencyKey = `${miniAppKey(request, call, 'location')}:change_location`;
+    if (decided.target.price.amountMinor !== 0n) {
+      const { order } = await this.container.commercialActions.draft(
+        call.context.scope,
+        call.actor,
+        call.context.customer.id,
+        {
+          serviceId: service.id,
+          kind: 'CHANGE_LOCATION',
+          locationId: input.locationId,
+          idempotencyKey,
+        },
+      );
+      return {
+        outcome: 'ORDER',
+        order: orderWire(order, {
+          username: service.providerUsername,
+          usernameModes: [],
+          display: null,
+          serviceId: service.id,
+        }),
+      };
+    }
+    await this.container.locationChanges.requestFree(
+      call.context.scope,
+      call.actor,
+      call.context.customer.id,
+      { serviceId: service.id, locationId: input.locationId, idempotencyKey },
+    );
+    return { outcome: 'REQUESTED' };
   }
 
   private ownService(call: MiniAppCall, serviceId: string): Promise<ServiceRecord> {

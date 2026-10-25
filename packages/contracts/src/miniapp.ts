@@ -110,6 +110,8 @@ export const MINIAPP_ROUTES = {
   serviceQr: '/services/:serviceId/qr',
   serviceOffer: '/services/:serviceId/offers/:kind',
   serviceQuote: '/services/:serviceId/quotes',
+  serviceLocations: '/services/:serviceId/locations',
+  serviceLocation: '/services/:serviceId/location',
   wallet: '/wallet',
   walletEntries: '/wallet/entries',
   walletTopupQuote: '/wallet/topup/quote',
@@ -465,6 +467,8 @@ export const miniAppServiceDetailSchema = miniAppServiceSummarySchema.extend({
   actions: z.array(z.enum(MINIAPP_SERVICE_ACTIONS)),
   /** Whether a QR of the link can be fetched (`MINIAPP_ROUTES.serviceQr`). */
   qr: z.boolean(),
+  /** Whether the location sheet has anything to offer now (`CHANGE_LOCATION` is available). */
+  canChangeLocation: z.boolean(),
 });
 export type MiniAppServiceDetail = z.infer<typeof miniAppServiceDetailSchema>;
 
@@ -487,6 +491,31 @@ export const miniAppServiceQuoteRequestSchema = z.object({
   addonId: idSchema.nullable().default(null),
   planId: idSchema.nullable().default(null),
 });
+
+/**
+ * The location sheet's read: where the service is and the configured targets it may be moved
+ * to, each with its price (zero is free). The server's offer already leaves out every target
+ * the cooldown and the rolling limit refuse; it exposes no remaining count, no
+ * recommendation and no per-target capacity, and neither does this.
+ */
+export const miniAppServiceLocationsSchema = z.object({
+  current: z.object({ label: z.string() }),
+  targets: z.array(z.object({ id: idSchema, label: z.string(), price: moneySchema })),
+});
+export type MiniAppServiceLocations = z.infer<typeof miniAppServiceLocationsSchema>;
+
+export const miniAppServiceLocationRequestSchema = z.object({ locationId: idSchema });
+
+/**
+ * A move asked for. A FREE target is requested at once (`REQUESTED`: the move is planned and
+ * its outcome arrives through the bot's notification lane, as for the bot's confirm); a PRICED
+ * target becomes the ordinary DRAFT order (`ORDER`) paid through the same checkout.
+ */
+export const miniAppServiceLocationResultSchema = z.discriminatedUnion('outcome', [
+  z.object({ outcome: z.literal('REQUESTED') }),
+  z.object({ outcome: z.literal('ORDER'), order: miniAppOrderSchema }),
+]);
+export type MiniAppServiceLocationResult = z.infer<typeof miniAppServiceLocationResultSchema>;
 
 // ---------------------------------------------------------------------------
 // Wallet

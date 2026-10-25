@@ -59,6 +59,12 @@ export function Profile() {
             {t('miniapp.profile_trial')}
           </button>
         )}
+        <button type="button" className="menu-row" onClick={() => navigate({ name: 'support' })}>
+          {t('miniapp.support_title')}
+        </button>
+        <button type="button" className="menu-row" onClick={() => navigate({ name: 'apps' })}>
+          {t('miniapp.apps_title')}
+        </button>
       </Card>
     </main>
   );

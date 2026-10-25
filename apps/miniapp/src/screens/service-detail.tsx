@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   MINIAPP_ROUTES,
   miniAppOrderSchema,
@@ -12,6 +12,8 @@ import { t } from '../i18n/t.js';
 import { dateTime, money, traffic } from '../format.js';
 import { Button, Card, Loading, Ltr, errorText, useLoad } from '../ui.js';
 import { ServiceCard } from './service-card.js';
+import { QrSheet } from './qr-sheet.js';
+import { LocationSheet } from './location-sheet.js';
 
 /**
  * جزئیات سرویس: the same facts the bot's service card shows — usage with the moment it was
@@ -22,7 +24,8 @@ import { ServiceCard } from './service-card.js';
  * Not drawn: the seven-day usage chart and a connected-device count (only the stored usage
  * and the device LIMIT exist), «افزودن خودکار به برنامه» (client apps carry no import
  * link), and «حذف سرویس» (a customer can suspend or resume, never delete). Suspend, rotate,
- * change location, transfer, files, note and refund request arrive with their screens.
+ * transfer, files, note and refund request arrive with their screens; the QR and the
+ * location change are sheets over this page, and the connection guide and support are links.
  */
 export function ServiceDetail({ serviceId }: { serviceId: string }) {
   const { api } = useApp();
@@ -40,7 +43,9 @@ export function ServiceDetail({ serviceId }: { serviceId: string }) {
 }
 
 function Detail({ service }: { service: MiniAppServiceDetail }) {
+  const { navigate } = useApp();
   const [copied, setCopied] = useState(false);
+  const [sheet, setSheet] = useState<'qr' | 'location' | null>(null);
   const [action, setAction] = useState<MiniAppServiceAction | null>(null);
   const left =
     BigInt(service.trafficLimitBytes) > 0n
@@ -71,7 +76,9 @@ function Detail({ service }: { service: MiniAppServiceDetail }) {
           >
             {copied ? t('miniapp.service_copied') : t('miniapp.service_copy_link')}
           </Button>
-          {service.qr && <Qr serviceId={service.id} />}
+          {service.qr && (
+            <Button onClick={() => setSheet('qr')}>{t('miniapp.service_show_qr')}</Button>
+          )}
         </Card>
       )}
       {service.working && <p className="muted">{t('miniapp.service_working')}</p>}
@@ -88,34 +95,29 @@ function Detail({ service }: { service: MiniAppServiceDetail }) {
           {action !== null && <Offer key={action} serviceId={service.id} kind={action} />}
         </Card>
       )}
+      <Card>
+        <div className="actions">
+          {service.canChangeLocation && (
+            <Button onClick={() => setSheet('location')}>{t('miniapp.location_open')}</Button>
+          )}
+          <Button onClick={() => navigate({ name: 'apps' })}>{t('miniapp.service_guide')}</Button>
+          <Button onClick={() => navigate({ name: 'support' })}>
+            {t('miniapp.service_support')}
+          </Button>
+        </div>
+      </Card>
+      {sheet === 'qr' && service.subscriptionUrl !== null && (
+        <QrSheet
+          serviceId={service.id}
+          link={service.subscriptionUrl}
+          onClose={() => setSheet(null)}
+        />
+      )}
+      {sheet === 'location' && (
+        <LocationSheet serviceId={service.id} onClose={() => setSheet(null)} />
+      )}
     </>
   );
-}
-
-/** The link's QR, drawn by the server's one QR renderer; shown on request. */
-function Qr({ serviceId }: { serviceId: string }) {
-  const { api } = useApp();
-  const [shown, setShown] = useState(false);
-  const [src, setSrc] = useState<string | null>(null);
-  useEffect(() => {
-    if (!shown) return;
-    let url: string | null = null;
-    let live = true;
-    api.blob(MINIAPP_ROUTES.serviceQr, { serviceId }).then(
-      (made) => {
-        url = made;
-        if (live) setSrc(made);
-        else URL.revokeObjectURL(made);
-      },
-      () => live && setSrc(null),
-    );
-    return () => {
-      live = false;
-      if (url !== null) URL.revokeObjectURL(url);
-    };
-  }, [api, serviceId, shown]);
-  if (!shown) return <Button onClick={() => setShown(true)}>{t('miniapp.service_show_qr')}</Button>;
-  return src === null ? null : <img className="qr" src={src} alt={t('miniapp.service_qr_alt')} />;
 }
 
 function Offer({ serviceId, kind }: { serviceId: string; kind: MiniAppServiceAction }) {

@@ -20,6 +20,9 @@ import { Wallet } from './screens/wallet.js';
 import { Profile } from './screens/profile.js';
 import { Referral } from './screens/referral.js';
 import { Trial } from './screens/trial.js';
+import { Support } from './screens/support.js';
+import { NewTicket, Ticket } from './screens/ticket.js';
+import { Apps } from './screens/apps.js';
 import { Message, TabBar } from './ui.js';
 
 /**
@@ -39,7 +42,11 @@ export type Route =
   | { readonly name: 'wallet' }
   | { readonly name: 'profile' }
   | { readonly name: 'referral' }
-  | { readonly name: 'trial' };
+  | { readonly name: 'trial' }
+  | { readonly name: 'support' }
+  | { readonly name: 'ticket-new' }
+  | { readonly name: 'ticket'; readonly ticketId: string }
+  | { readonly name: 'apps' };
 
 export type Tab = 'home' | 'store' | 'services' | 'wallet' | 'profile';
 
@@ -191,6 +198,10 @@ export function App() {
           {route.name === 'profile' && <Profile />}
           {route.name === 'referral' && <Referral />}
           {route.name === 'trial' && <Trial />}
+          {route.name === 'support' && <Support />}
+          {route.name === 'ticket-new' && <NewTicket />}
+          {route.name === 'ticket' && <Ticket ticketId={route.ticketId} />}
+          {route.name === 'apps' && <Apps />}
           {tab !== null && <TabBar current={tab} onSelect={(next) => setStack([{ name: next }])} />}
         </div>
       )}
