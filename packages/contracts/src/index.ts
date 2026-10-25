@@ -122,6 +122,7 @@ export * from './ops-log-types.js';
 export * from './persian-digits.js';
 export * from './backup.js';
 export * from './data-retention.js';
+export * from './data-compaction.js';
 export * from './legacy-compaction.js';
 export * from './recovery.js';
 export * from './recovery-kit.js';
