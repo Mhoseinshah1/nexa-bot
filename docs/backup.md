@@ -138,6 +138,41 @@ installation:
 
 Audit logs are never deleted by any job.
 
+### Data compaction (Round 9 C3)
+
+The round prompt calls this "R5D"; no earlier R5D record exists in the repository, so it is
+built from the prompt's description, beside E3 above and the legacy compaction
+(`docs/legacy-migration/compaction.md`) and repeating neither. Code:
+`apps/api/src/modules/platform/data-compaction/`; the allow-list with the reason per table and
+the protected tables is `application/allow-list.ts`, held by
+`tests/unit/data-compaction-allow-list.test.ts` and `tests/integration/data-compaction.test.ts`.
+
+**Dry run is the default.** `retention.compaction_mode` starts at `DRY_RUN`: the worker's daily
+pass (SYSTEM_JOB, `maintenance.run`) records what it WOULD remove and removes nothing until the
+owner sets `APPLY` on the settings page. The Web Admin («بکاپ و بازیابی» → «فشرده‌سازی داده‌های
+قدیمی») shows the same dry run on request; the owner's CLI applies with a counted confirmation:
+
+```bash
+pnpm data-compaction                               # dry run: counts per table, records the run
+pnpm data-compaction --apply --confirm-rows <n>    # n = the total the dry run reports NOW
+```
+
+| Setting                                 | Default | Removes (strictly older than the cutoff)                                                                                                                 | Never removes                                                                                       |
+| --------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `retention.ops_notifications_days`      | 90      | a SENT or FAILED operations-lane notification, WITH its delivery attempts and released claims (0278 lets the delete through only in an APPLY pass)       | a PENDING notification or its evidence                                                              |
+| `retention.customer_notifications_days` | 180     | a DELIVERED/FAILED/SUPERSEDED customer notification of a reminder, low-balance or reseller-minimum kind, or of an operation already stamped announced_at | PENDING and UNCONFIRMED; every payment, order, refund, wallet, ticket, direct-message and bulk kind |
+| `retention.receipt_windows_days`        | 90      | a CLOSED `receipt_captures` window; a CLOSED `gateway_receipt_captures` window that no provider receipt names                                            | an open window; `payment_receipts`; `gateway_receipt_submissions`                                   |
+
+Every days setting is 30 to 3650. A pass runs in keyset batches of 5000, each its own
+unit-of-work transaction (so the recovery quiesce refuses it) that re-checks scope activity,
+removes one batch with its children, adds its counts to the `data_compaction_runs` row and
+writes one `data.compaction.batch` audit row. Nothing starts while a recovery is in any active
+state or a backup is running. There is no gateway webhook delivery table to compact: the only
+webhook record is `gateway_invoices.last_webhook_delivery_id`, a settlement's dedupe, which is
+protected, as are `processed_messages` and every ledger, payment, order, service, receipt,
+refund, audit and legacy row. The nightly summary's cleanup line (L30) carries one more row:
+what the day's APPLY passes removed per class, or what its dry run would remove.
+
 ## Configuration
 
 Most of it is environment configuration in `/etc/nexa/nexa.env`: a dump is of the
