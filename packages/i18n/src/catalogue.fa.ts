@@ -1318,9 +1318,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_receipt_too_large':
     'حجم این تصویر بیش از ۱۰ مگابایت است. لطفاً تصویر کوچک‌تری از رسید واریز بفرستید.',
   'bot.payment.gateway_card_underpaid':
-    '{icon:warning} {shortfall} کمتر واریز شد؛ مابقی را به این کارت واریز کنید.\n\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nپس از واریز، با دکمهٔ «📤 ارسال رسید مابقی» تصویر رسید را بفرستید. پرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
+    '{icon:warning} مبلغ واریزی شما کمتر از مبلغ فاکتور بود؛ مابقی را به این کارت واریز کنید.\n\n{icon:amount} مبلغ مابقی قابل واریز: {amountRial} ریال\n(معادل {amountToman} تومان)\n{icon:payment} شماره کارت مقصد: {cardNumber}\n{icon:user} به نام: {cardName}\n{icon:time} مهلت واریز و ارسال رسید: {expiresAt}\n\nپس از واریز، با دکمهٔ «📤 ارسال رسید مابقی» تصویر رسید را بفرستید. پرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_underpaid_receipt_sent':
-    '📤 رسید مابقی شما برای تون‌پی ارسال شد و در انتظار پاسخ است.\n\n{icon:amount} مبلغ مابقی: {shortfall}\n{icon:time} مهلت: {expiresAt}\n\nپرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود. برای دیدن آخرین وضعیت، دکمهٔ «🔎 بررسی وضعیت» را بزنید.\n\nکد پیگیری پرداخت: {reference}',
+    '📤 رسید مابقی شما برای تون‌پی ارسال شد و در انتظار پاسخ است.\n\n{icon:amount} مبلغ مابقی: {amountRial} ریال\n(معادل {amountToman} تومان)\n{icon:time} مهلت: {expiresAt}\n\nپرداخت شما فقط پس از تأیید تون‌پی ثبت می‌شود. برای دیدن آخرین وضعیت، دکمهٔ «🔎 بررسی وضعیت» را بزنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_underpaid_unavailable':
     '{icon:warning} تون‌پی اعلام کرده مبلغ واریزی شما کمتر از مبلغ فاکتور بوده، اما اطلاعات کارت مابقی را هنوز نفرستاده است.\n\n{icon:time} مهلت: {expiresAt}\n\nچند لحظه بعد دکمهٔ «🔎 بررسی وضعیت» را بزنید. تا زمانی که تون‌پی تأیید نکند، مبلغی به کیف پول شما اضافه نمی‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_overpaid':
