@@ -102,6 +102,8 @@ describe('the nightly compaction line', () => {
       bestHour: null,
       newCustomers: 0,
       activeCustomers: 0,
+      customersWithService: 0,
+      customersWithoutService: 0,
       trials: 0,
       activeServices: 0,
       errors: 0,
@@ -117,7 +119,7 @@ describe('the nightly compaction line', () => {
       giftSum: 0n,
       methods: [],
       panels: [],
-      resellers: { active: 0, salesSum: 0n, top: null },
+      resellers: { active: 0, salesSum: 0n, top: null, topList: [] },
     } satisfies NightlyReportData;
     const [summary] = nightlyReports(data, i18nOpsLogWords);
     expect(summary?.values['cleanup']).toBe(
