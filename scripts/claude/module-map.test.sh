@@ -51,6 +51,24 @@ has "$cap" "tests (12):" "cap: total reported"
 has "$cap" "  … 4 more" "cap: overflow line"
 [[ "$(wc -l <<<"$cap")" -le 15 ]] && ok "single-module output is at most 15 lines" || bad "single-module output exceeds 15 lines"
 
+tg=apps/api/src/surfaces/telegram
+bot="$(run --bot)"
+has "$bot" "$tg/bot-runtime.ts lines=7 functions=0" "--bot: the router first"
+has "$bot" "$tg/runtime/card-flow.ts lines=6 functions=2" "--bot: a flow with its exported functions"
+has "$bot" "$tg/runtime/pay-flow.ts lines=7 functions=1" "--bot: a private function is not counted"
+[[ "$(head -1 <<<"$bot")" == "$tg/bot-runtime.ts lines=7 functions=0" ]] && ok "--bot: router on line one" || bad "--bot: router not first"
+h="$(run --bot cardScreen)"
+has "$h" "  $tg/runtime/card-flow.ts:1:export function cardScreen(rt: unknown, command: string) {" "--bot <handler>: definition"
+has "$h" "  $tg/runtime/pay-flow.ts:3:  return cardScreen(rt, command);" "--bot <handler>: a flow caller"
+has "$h" "  $tg/runtime/card-flow.ts:5:  return cardScreen(rt, 'back');" "--bot <handler>: a caller in the same file"
+[[ "$(grep -c "card-flow.ts:1:" <<<"$h")" == 1 ]] && ok "--bot <handler>: the definition is not listed as a caller" || bad "--bot <handler>: definition listed as a caller"
+has "$(run --bot walletPay)" "  $tg/bot-runtime.ts:4:    if (command === 'PAY') return payFlow.walletPay(this, command);" "--bot <handler>: the router's namespaced call"
+has "$(run --bot act)" "  $tg/bot-runtime.ts:3:  async act(command: string) {" "--bot <handler>: a router method"
+set +e; run --bot nothingHere >/dev/null 2>&1; rc=$?; set -e
+[[ "$rc" == 2 ]] && ok "--bot unknown handler exits 2" || bad "--bot unknown handler exits $rc"
+set +e; run --bot 'a(b' >/dev/null 2>&1; rc=$?; set -e
+[[ "$rc" == 2 ]] && ok "--bot non-identifier exits 2" || bad "--bot non-identifier exits $rc"
+
 run -h >/dev/null && ok "-h exits 0" || bad "-h"
 set +e; run >/dev/null 2>&1; rc=$?; set -e
 [[ "$rc" == 2 ]] && ok "no argument exits 2" || bad "no argument exits $rc"

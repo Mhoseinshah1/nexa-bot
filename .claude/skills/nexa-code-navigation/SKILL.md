@@ -1,6 +1,6 @@
 ---
 name: nexa-code-navigation
-description: How to find the files behind a NEXA feature without reading the repository — scripts/claude/module-map.sh (a module's services, tables it writes, contracts, tests), the layer map (web page → controller → application → domain → schema → migration), a trace script that lists them in one call, and the files never to read whole (bot-runtime.ts, schema.ts, templates.ts). Use when you need to locate where something is implemented, follow a request path, or decide which file to open next.
+description: How to find the files behind a NEXA feature without reading the repository — scripts/claude/module-map.sh (a module's services, tables it writes, contracts, tests), the layer map (web page → controller → application → domain → schema → migration), a trace script that lists them in one call, and the files never to read whole (schema.ts, templates.ts, the Telegram router bot-runtime.ts and its runtime/ flows), and where a bot handler lives (module-map.sh --bot). Use when you need to locate where something is implemented, follow a request path, or decide which file to open next.
 ---
 
 # Finding code in NEXA
@@ -11,12 +11,17 @@ is the most expensive thing a session does. Search first, then open the one
 file the search names, at the lines it names.
 
 **Never read these whole** — `grep -n`, then `Read` with `offset`/`limit`:
-`apps/api/src/surfaces/telegram/bot-runtime.ts` (~18.7k lines),
-`apps/api/src/infrastructure/persistence/schema.ts` (~16.9k),
-`packages/contracts/src/templates.ts` (~13.3k).
+`apps/api/src/infrastructure/persistence/schema.ts` (~16.9k lines),
+`packages/contracts/src/templates.ts` (~13.3k),
+`apps/api/src/surfaces/telegram/bot-runtime.ts` (~2.5k, the router since R9)
+and the flows under `apps/api/src/surfaces/telegram/runtime/` (up to ~1.7k each).
 
-`bot-runtime.ts` must stop growing: a new bot screen goes in its own file under
-`apps/api/src/surfaces/telegram/` and is only **wired** in `bot-runtime.ts`.
+`bot-runtime.ts` must stop growing: a new bot screen is a free function
+`fn(rt: BotRuntime, …)` in `apps/api/src/surfaces/telegram/runtime/<flow>-flow.ts`
+and is only **wired** in `bot-runtime.ts` (one line in `act`, or `adminTurn` for
+an `ADMIN_*` intent). No forwarding method on `BotRuntime`; a flow imports
+another flow's function, and imports `bot-runtime.ts` type-only. The map, the
+pattern and the business logic still in the surface: `docs/telegram-runtime.md`.
 
 ## Step 0 — the module map
 
@@ -25,6 +30,8 @@ bash scripts/claude/module-map.sh --all               # one line per module
 bash scripts/claude/module-map.sh <module>            # services, tables written, contracts, tests
 bash scripts/claude/module-map.sh --who-writes <table>
 bash scripts/claude/module-map.sh --who-calls <symbol>
+bash scripts/claude/module-map.sh --bot               # the Telegram router and runtime/ files, sizes
+bash scripts/claude/module-map.sh --bot <handler>     # where a bot handler is defined, who calls it
 ```
 
 Pure shell, read-only, nothing generated is committed. `<module>` is a key like
@@ -49,7 +56,7 @@ key, an error code. A generic word (`payment`) returns noise — narrow it.
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | What does the admin see / which permission hides it       | `apps/web/src/pages/<page>.tsx`, `apps/web/src/nav.ts`, `router.ts`                              |
 | Which HTTP route, which guard                             | `apps/api/src/surfaces/web/<area>.controller.ts`                                                 |
-| What a bot button or command does                         | `apps/api/src/surfaces/telegram/` (`bot-runtime.ts`, `wizard-*.ts`)                              |
+| What a bot button or command does                         | `module-map.sh --bot <handler>`; `apps/api/src/surfaces/telegram/runtime/*-flow.ts`              |
 | Gateway callbacks / webhooks                              | `apps/api/src/surfaces/gateway/`                                                                 |
 | The business rule, the transaction, the lock order        | `apps/api/src/modules/<plane>/<context>/application/*.service.ts`                                |
 | A pure decision (pricing, eligibility, state machine)     | `.../domain/*.ts`                                                                                |
