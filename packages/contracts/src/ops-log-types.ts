@@ -613,11 +613,14 @@ export const OPS_LOG_TEMPLATES = [
   ),
   logTemplate(
     'ops.financial.order_paid',
-    'Log L2: an order payment was confirmed, by any method — the order, the product, the operation (purchase, renewal, traffic, time), the first-purchase and reseller badges, the amounts and, for a wallet payment, the wallet before and after.',
+    'Log L2: an order payment was confirmed, by any method — the order, the product, the operation (purchase, renewal, traffic, time), the first-purchase and reseller badges, the amounts and, for a wallet payment, the wallet before and after. A wallet payment has no gateway fee and its evidence is the debit itself, so it prints neither line (hotfix v0.8.2-e).',
     [
-      ...req('method', 'reference', 'principal', 'fee', 'payable', 'evidence', 'at'),
+      ...req('method', 'reference', 'principal', 'payable', 'at'),
       ...WHO(),
       ...opt(
+        // Optional since hotfix v0.8.2-e: omitted for a wallet payment, present for every other.
+        'fee',
+        'evidence',
         'orderCode',
         'productTitle',
         'operation',

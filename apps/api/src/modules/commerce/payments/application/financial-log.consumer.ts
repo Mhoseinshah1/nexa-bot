@@ -329,6 +329,16 @@ export class FinancialLogConsumer implements EventConsumer {
         // always present (empty when none applies): the title line is made of its words and
         // this token, and the renderer drops a line whose tokens are ALL absent.
         const paidValues: Record<string, TemplateValue> = { ...common };
+        /*
+         * Hotfix v0.8.2-e (the owner's request): a WALLET payment prints no «کارمزد درگاه: ۰»
+         * and no «منبع تأیید: کسر از کیف پول». It goes through no gateway, so it has no fee,
+         * and its evidence is the debit the wallet's before → after line already shows. Every
+         * other method keeps both lines; the renderer drops a line whose tokens are absent.
+         */
+        if (payment.method === 'WALLET') {
+          delete paidValues['fee'];
+          delete paidValues['evidence'];
+        }
         if (order !== null) {
           paidValues['productTitle'] = order.title;
           paidValues['operation'] = words.paidOperation(order.purpose);
