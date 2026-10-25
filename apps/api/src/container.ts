@@ -2003,6 +2003,28 @@ export function createContainer(
    */
   const templateResolverRef: { current: TemplateResolver | null } = { current: null };
   const commandMenu = new CommandMenu({
+    /*
+     * Round 9, C5: the mini app's chat menu button — wanted while `mini_app` is on and the
+     * tenant has a public origin (its registered webhook's). Late-bound like the templates:
+     * the flag resolver and the origin reader are built further down.
+     */
+    miniApp: {
+      buttonFor: async (scope, tx) => {
+        if (isSystemContext(scope)) return null;
+        const tenantScope: TenantContext = { tenantId: scope.tenantId, botInstanceId: null };
+        if (!(await featureFlagResolver.isEnabled(tenantScope, 'mini_app', tx))) return null;
+        const origin = await publicOrigins.originFor(tenantScope);
+        if (origin === null) return null;
+        const resolver = templateResolverRef.current;
+        if (resolver === null) {
+          throw new Error('CommandMenu was read before the container finished composing.');
+        }
+        const text = (
+          await resolver.render(scope, 'bot.menu.miniapp_button', {}, DEFAULT_TEMPLATE_LOCALE, tx)
+        ).trim();
+        return text === '' ? null : { text, origin };
+      },
+    },
     templates: {
       render: (scope, key, values, tx) => {
         if (templateResolverRef.current === null) {

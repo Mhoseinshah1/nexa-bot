@@ -139,4 +139,12 @@ export interface BotCommandSyncTelegram {
     readonly commands: readonly BotCommandEntry[];
   }): Promise<BotCommandsRegistration>;
   readCommands(token: string): Promise<BotCommandsRead>;
+  /**
+   * Round 9, C5: the chat menu button (the mini app's, or `null` for Telegram's default).
+   * Optional, so a lane built without it (a test double, an older wiring) never sets one.
+   */
+  setMenuButton?(input: {
+    readonly token: string;
+    readonly button: { readonly text: string; readonly url: string } | null;
+  }): Promise<BotCommandsRegistration>;
 }

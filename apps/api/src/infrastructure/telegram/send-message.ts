@@ -1046,6 +1046,32 @@ export async function telegramSetMyCommands(
   return { outcome: 'SUCCEEDED', messageId: null };
 }
 
+/**
+ * Round 9, C5: the bot's chat menu button (`setChatMenuButton`, no `chat_id`: the bot's
+ * default for every private chat). A `web_app` button opening the mini app, or — `null` —
+ * Telegram's own default (the command list), which is what a bot that never had one shows.
+ */
+export async function telegramSetChatMenuButton(
+  request: Omit<TelegramSendRequest, 'body' | 'method'> & {
+    readonly button: { readonly text: string; readonly url: string } | null;
+  },
+): Promise<TelegramSendOutcome> {
+  assertOutsideTransaction('A Telegram setChatMenuButton');
+  const { button, ...rest } = request;
+  const call = await telegramCall({
+    ...rest,
+    method: 'setChatMenuButton',
+    body: {
+      menu_button:
+        button === null
+          ? { type: 'default' }
+          : { type: 'web_app', text: button.text, web_app: { url: button.url } },
+    },
+  });
+  if (call.outcome !== 'SUCCEEDED') return call;
+  return { outcome: 'SUCCEEDED', messageId: null };
+}
+
 /** One command as Telegram reports it (`BotCommand`): the two documented fields. */
 export interface TelegramBotCommand {
   readonly command: string;

@@ -67,6 +67,13 @@ interface BotState {
    */
   commands: { readonly command: string; readonly description: string }[];
   /**
+   * Round 9, C5 — the bot's default chat menu button, as `setChatMenuButton` (no chat id)
+   * last set it: Telegram's `default` until then.
+   */
+  menuButton:
+    | { readonly type: 'default' }
+    | { readonly type: 'web_app'; readonly text: string; readonly url: string };
+  /**
    * Round T (T2): whether this bot may use custom emoji — an `icon_custom_emoji_id` on a
    * keyboard button, or a `custom_emoji` entity. `ACCEPT`, or `REFUSE` with the description
    * the test states (Telegram's exact sentence for an ineligible bot is undocumented).
@@ -182,6 +189,8 @@ export interface FakeTelegramBotApi {
   registration(botId: number): BotState['webhook'];
   /** Round P: the command list Telegram holds for this bot. For assertions only. */
   registeredCommands(botId: number): readonly { command: string; description: string }[];
+  /** Round 9, C5: the bot's default chat menu button. For assertions only. */
+  menuButton(botId: number): BotState['menuButton'];
   setPending(botId: number, pending: number, lastError?: string): void;
   /** Round T (T2): how this bot's custom emoji are answered from now on. */
   setCustomEmoji(botId: number, answer: FakeCustomEmojiAnswer): void;
@@ -569,6 +578,36 @@ export async function startFakeTelegramBotApi(): Promise<FakeTelegramBotApi> {
           },
         };
       }
+      case 'setChatMenuButton': {
+        /*
+         * Round 9, C5. Documented: `menu_button` is a MenuButton — `default`, `commands`, or
+         * `web_app` with a 1-64 character `text` and a `web_app.url` that must be HTTPS. With
+         * no `chat_id` it is the bot's default for every private chat.
+         */
+        const button = (body.menu_button ?? null) as Record<string, unknown> | null;
+        const bad = {
+          status: 400,
+          payload: { ok: false, error_code: 400, description: 'Bad Request: invalid menu button' },
+        };
+        if (button === null || typeof button !== 'object') return bad;
+        if (button.type === 'default' || button.type === 'commands') {
+          bot.menuButton = { type: 'default' };
+          return { status: 200, payload: { ok: true, result: true } };
+        }
+        const webApp = button.web_app as Record<string, unknown> | undefined;
+        if (
+          button.type !== 'web_app' ||
+          typeof button.text !== 'string' ||
+          button.text.length === 0 ||
+          button.text.length > 64 ||
+          typeof webApp?.url !== 'string' ||
+          !webApp.url.startsWith('https://')
+        ) {
+          return bad;
+        }
+        bot.menuButton = { type: 'web_app', text: button.text, url: webApp.url };
+        return { status: 200, payload: { ok: true, result: true } };
+      }
       case 'getMyCommands':
         return {
           status: 200,
@@ -666,6 +705,7 @@ export async function startFakeTelegramBotApi(): Promise<FakeTelegramBotApi> {
         pendingUpdateCount: 0,
         lastError: null,
         commands: [],
+        menuButton: { type: 'default' },
         customEmoji: { kind: 'ACCEPT' },
         delivered: [],
         files: new Set(),
@@ -698,6 +738,9 @@ export async function startFakeTelegramBotApi(): Promise<FakeTelegramBotApi> {
     },
     registeredCommands(botId) {
       return require(botId).commands.map((entry) => ({ ...entry }));
+    },
+    menuButton(botId) {
+      return { ...require(botId).menuButton };
     },
     setPending(botId, pending, lastError) {
       const bot = require(botId);

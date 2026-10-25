@@ -7,7 +7,21 @@ import {
   type TemplateValues,
 } from '@nexa/contracts';
 
+/**
+ * Round 9, C5: the mini app's chat menu button a tenant wants — its text and the public
+ * origin it is served from — or null: the `mini_app` flag is off, or no public origin is
+ * known yet. Read per tenant; the URL adds the bot (`<origin>/miniapp/<botId>/`).
+ */
+export interface MiniAppButtonSource {
+  buttonFor(
+    scope: ScopeContext,
+    tx?: unknown,
+  ): Promise<{ readonly text: string; readonly origin: string } | null>;
+}
+
 export interface CommandMenuDeps {
+  /** Round 9, C5. Absent: no menu button is ever wanted (the lane as it always was). */
+  readonly miniApp?: MiniAppButtonSource;
   /**
    * The tenant's own rendering — the resolver every customer message goes through, in the
    * default locale, through the caller's transaction when it has one.
@@ -25,8 +39,26 @@ export interface CommandMenuDeps {
 /** The menu a tenant wants registered, and its digest. */
 export interface DesiredCommandMenu {
   readonly entries: readonly BotCommandEntry[];
-  /** SHA-256 of the entries as sent, truncated to 32 hex characters. A change detector. */
+  /**
+   * SHA-256 of the entries as sent, truncated to 32 hex characters. A change detector.
+   * With the mini app's button wanted it is `m` + 31 hex of the entries AND the button, so a
+   * stored revision says whether a button was set — which is what lets switching the flag
+   * off reset it, and only then. With no button it is exactly the old digest: a tenant with
+   * the flag off re-registers nothing on upgrade, and Telegram is asked nothing new.
+   */
   readonly hash: string;
+  /** The mini app's button, or null for none (and Telegram's default). */
+  readonly menuButton: { readonly text: string; readonly origin: string } | null;
+}
+
+/** Whether a stored `commands_revision` was registered WITH the mini app's menu button. */
+export function revisionHasMiniAppButton(revision: string | null): boolean {
+  return revision !== null && revision.startsWith('m');
+}
+
+/** The mini app's address for one bot, under the tenant's public origin. */
+export function miniAppUrl(origin: string, botId: string): string {
+  return `${origin}/miniapp/${botId}/`;
 }
 
 /** Telegram's cap on a command description (Bot API, `BotCommand.description`: 1-256 chars). */
@@ -60,7 +92,14 @@ export class CommandMenu {
         ),
       })),
     );
-    return { entries, hash: commandMenuHash(entries) };
+    const base = commandMenuHash(entries);
+    const menuButton = (await this.deps.miniApp?.buttonFor(scope, tx)) ?? null;
+    if (menuButton === null) return { entries, hash: base, menuButton: null };
+    const hash = `m${createHash('sha256')
+      .update(`${base}|miniapp|${menuButton.origin}|${menuButton.text}`)
+      .digest('hex')
+      .slice(0, 31)}`;
+    return { entries, hash, menuButton };
   }
 }
 
