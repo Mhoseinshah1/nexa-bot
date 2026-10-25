@@ -28,7 +28,9 @@ export function Home() {
           {name === null ? t('miniapp.home_greeting_plain') : t('miniapp.home_greeting', { name })}
         </h1>
         {me.reseller !== null && (
-          <span className="badge">{t('miniapp.home_reseller', { tier: me.reseller.tierName })}</span>
+          <span className="badge">
+            {t('miniapp.home_reseller', { tier: me.reseller.tierName })}
+          </span>
         )}
       </header>
       <Card className="balance">
@@ -44,7 +46,11 @@ export function Home() {
             <div className="section-head">
               <h2>{t('miniapp.home_my_services')}</h2>
               {page.total > page.items.length && (
-                <button type="button" className="link" onClick={() => navigate({ name: 'services' })}>
+                <button
+                  type="button"
+                  className="link"
+                  onClick={() => navigate({ name: 'services' })}
+                >
                   {t('miniapp.home_all_services', { count: page.total })}
                 </button>
               )}
