@@ -1794,4 +1794,12 @@ export const MINIAPP_ERROR_CODES = {
   MINIAPP_NOT_FOUND: 'miniapp.not_found',
   /** The payment route asked for is not offered for this order or amount right now. */
   MINIAPP_ROUTE_UNAVAILABLE: 'miniapp.route_unavailable',
+  /**
+   * A receipt image is refused before anything is written: empty, larger than
+   * `MINIAPP_RECEIPT_MAX_BYTES`, not a JPEG/PNG/WebP by its bytes, a declared type the bytes
+   * contradict, or no receipt is expected for the payment. The `reason` detail says which.
+   */
+  MINIAPP_RECEIPT_REFUSED: 'miniapp.receipt_refused',
+  /** Telegram did not take the image from the bot (e.g. the customer never started the bot). */
+  MINIAPP_RECEIPT_UPLOAD_FAILED: 'miniapp.receipt_upload_failed',
 } as const;

@@ -6,6 +6,7 @@ import { PAYMENT_GATEWAY_PROVIDERS } from './payment-gateways.js';
 import { PAYMENT_METHODS, PAYMENT_STATES } from './payment.js';
 import { TICKET_MESSAGE_MAX_LENGTH, TICKET_STATUSES } from './tickets.js';
 import { CLIENT_APP_PLATFORMS } from './client-apps.js';
+import { LEDGER_DIRECTIONS, LEDGER_REASONS } from './ledger.js';
 
 /**
  * The customer's Telegram Mini App (Round 9, C5): its paths, its wire shapes and its bounds.
@@ -68,6 +69,19 @@ export const MINIAPP_SESSION_RATE_LIMIT_REQUESTS = 30;
 /** The largest request body a mini-app route reads, in bytes. */
 export const MINIAPP_BODY_LIMIT_BYTES = 16 * 1024;
 
+/**
+ * The largest receipt image the mini app accepts, in bytes (owner correction 2026-10-25:
+ * receipts are uploaded in the mini app). Five megabytes: above any phone screenshot or
+ * banking-app capture, half of Telegram's own 10 MB photo limit, and a quarter of
+ * `PAYMENT_RECEIPT_MAX_BYTES`, the bound a reviewer's download is held to.
+ */
+export const MINIAPP_RECEIPT_MAX_BYTES = 5 * 1024 * 1024;
+/** The receipt route's body limit: the image as base64 plus the JSON around it. */
+export const MINIAPP_RECEIPT_BODY_LIMIT_BYTES =
+  Math.ceil((MINIAPP_RECEIPT_MAX_BYTES * 4) / 3) + 4096;
+/** The image types a receipt may be, decided from the bytes and matched against the declared type. */
+export const MINIAPP_RECEIPT_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+
 /** Every route, relative to `MINIAPP_API_PREFIX`. */
 export const MINIAPP_ROUTES = {
   session: '/bots/:botInstanceId/session',
@@ -89,12 +103,15 @@ export const MINIAPP_ROUTES = {
   payment: '/payments/:paymentId',
   paymentTransferSent: '/payments/:paymentId/transfer-sent',
   paymentCheck: '/payments/:paymentId/check',
+  paymentReceipt: '/payments/:paymentId/receipt',
+  payments: '/payments',
   services: '/services',
   service: '/services/:serviceId',
   serviceQr: '/services/:serviceId/qr',
   serviceOffer: '/services/:serviceId/offers/:kind',
   serviceQuote: '/services/:serviceId/quotes',
   wallet: '/wallet',
+  walletEntries: '/wallet/entries',
   walletTopupQuote: '/wallet/topup/quote',
   walletTopup: '/wallet/topup',
   referral: '/referral',
@@ -325,11 +342,25 @@ export const miniAppCardInstructionSchema = z.object({
 export type MiniAppCardInstruction = z.infer<typeof miniAppCardInstructionSchema>;
 
 export const miniAppTransferSentResponseSchema = z.object({
-  /** The receipt is sent IN THE BOT's chat: receipts are Telegram files. */
-  botLink: z.string().nullable(),
-  /** Minutes the bot's receipt window stays open; null when no receipt is asked for. */
+  /** Minutes a receipt may be sent in; null when no receipt is asked for (full, or under review). */
   receiptWindowMinutes: z.number().int().nullable(),
   reference: z.string(),
+});
+
+/** A receipt image: its declared type and its bytes, base64. The bytes decide the type. */
+export const miniAppReceiptRequestSchema = z.object({
+  mimeType: z.string().min(1).max(64),
+  imageBase64: z
+    .string()
+    .min(1)
+    .max(Math.ceil((MINIAPP_RECEIPT_MAX_BYTES * 4) / 3) + 4),
+});
+export const miniAppReceiptResponseSchema = z.object({
+  paymentId: idSchema,
+  /** False when this exact file was already on the payment. */
+  filed: z.boolean(),
+  /** True for the payment's first receipt. */
+  first: z.boolean(),
 });
 
 export const miniAppGatewayAttemptSchema = z.object({
@@ -364,6 +395,30 @@ export const miniAppPaymentStatusSchema = z.object({
     .nullable(),
 });
 export type MiniAppPaymentStatus = z.infer<typeof miniAppPaymentStatusSchema>;
+
+/** The customer's own payments, newest first (a keyset page). */
+export const miniAppPaymentListSchema = z.object({
+  items: z.array(
+    z.object({
+      id: idSchema,
+      code: z.string().nullable(),
+      method: z.enum(PAYMENT_METHODS),
+      state: z.enum(PAYMENT_STATES),
+      amount: moneySchema,
+      /** The route a gateway or card-to-card payment took; null for a wallet settlement. */
+      provider: z.enum(PAYMENT_GATEWAY_PROVIDERS).nullable(),
+      /** True for a wallet top-up (no order). */
+      topup: z.boolean(),
+      createdAt: isoSchema,
+    }),
+  ),
+  nextCursor: z.string().nullable(),
+});
+export type MiniAppPaymentList = z.infer<typeof miniAppPaymentListSchema>;
+
+export const miniAppCursorQuerySchema = z.object({
+  cursor: z.string().min(1).max(200).optional(),
+});
 
 // ---------------------------------------------------------------------------
 // Services
@@ -440,6 +495,22 @@ export const miniAppWalletResponseSchema = z.object({
   maximum: moneySchema.nullable(),
 });
 export type MiniAppWalletResponse = z.infer<typeof miniAppWalletResponseSchema>;
+
+/** The customer's own ledger, newest first (a keyset page). Read-only. */
+export const miniAppWalletEntriesSchema = z.object({
+  items: z.array(
+    z.object({
+      id: idSchema,
+      direction: z.enum(LEDGER_DIRECTIONS),
+      reason: z.enum(LEDGER_REASONS),
+      /** Positive; the sign is the direction. */
+      amount: moneySchema,
+      createdAt: isoSchema,
+    }),
+  ),
+  nextCursor: z.string().nullable(),
+});
+export type MiniAppWalletEntries = z.infer<typeof miniAppWalletEntriesSchema>;
 
 export const miniAppTopupQuoteRequestSchema = z.object({ amount: moneySchema });
 export const miniAppTopupQuoteResponseSchema = z.discriminatedUnion('outcome', [
