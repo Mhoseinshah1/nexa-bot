@@ -91,6 +91,7 @@ describe('data compaction (Round 9 C3)', () => {
       readonly maxBatches?: number;
       readonly inFlight?: () => Promise<DataCompactionStopReason | null>;
       readonly uow?: DrizzleUnitOfWork;
+      readonly scopeIsActive?: (scope: never, tx?: unknown) => Promise<boolean>;
     } = {},
   ): DataCompactionService {
     const c = ctx.container;
@@ -100,7 +101,10 @@ describe('data compaction (Round 9 C3)', () => {
       guard: c.guard,
       audit: c.audit,
       opsLog: c.opsLog,
-      scopeActivity: c.tenants,
+      scopeActivity:
+        options.scopeIsActive === undefined
+          ? c.tenants
+          : { scopeIsActive: options.scopeIsActive as never },
       settings: c.settingsResolver,
       clock: { now: () => NOW },
       ids: c.ids,
@@ -514,6 +518,35 @@ describe('data compaction (Round 9 C3)', () => {
     });
     expect(outcome.kind).toBe('RAN');
     expect(await left()).toBe(2);
+  });
+
+  it('reads scope activity inside its transactions: a stopped tenant stops the pass', async () => {
+    for (let n = 0; n < 3; n += 1) await opsNotification({ status: 'SENT', completed: ago(100) });
+    await setMode('APPLY');
+    // Stopped before the pass: nothing starts.
+    await db().execute(
+      sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${SEED_IDS.tenantA}::uuid`,
+    );
+    expect(await service().run(tenantA, job(), { trigger: 'WORKER', mode: 'SETTING' })).toEqual({
+      kind: 'BLOCKED',
+      reason: 'SCOPE_INACTIVE',
+    });
+    await db().execute(
+      sql`UPDATE tenants SET status = 'ACTIVE' WHERE id = ${SEED_IDS.tenantA}::uuid`,
+    );
+    // Stopped after the first batch committed: the next batch's own read refuses it.
+    let reads = 0;
+    const outcome = await service({
+      batchSize: 1,
+      scopeIsActive: async (scope, tx) => {
+        reads += 1;
+        return reads <= 2 && (await ctx.container.tenants.scopeIsActive(scope, tx));
+      },
+    }).run(tenantA, job(), { trigger: 'WORKER', mode: 'SETTING' });
+    if (outcome.kind !== 'RAN') throw new Error(outcome.kind);
+    expect(outcome.run.state).toBe('STOPPED');
+    expect(outcome.run.stopReason).toBe('SCOPE_INACTIVE');
+    expect(outcome.run.counts['notifications']).toBe(1);
   });
 
   it('starts nothing while a recovery holds the installation (the container probe)', async () => {
