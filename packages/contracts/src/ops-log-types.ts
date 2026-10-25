@@ -167,7 +167,8 @@ export const OPS_LOG_TYPES = {
   ERROR_PROVISION: {
     l: 'L23',
     topic: 'ERRORS',
-    templates: ['ops.log.error_provision'],
+    // R9 C2: a service an administrator created from the Web Admin has a message of its own.
+    templates: ['ops.log.error_provision', 'ops.log.error_provision_admin'],
     storm: true,
   },
   ERROR_OPERATION: {
@@ -390,6 +391,14 @@ const TOKENS = {
     'The server’s own short English message, for a template written before Round 4.',
   ],
   badges: ['STRING', 'The title badges (first purchase, reseller), already separated; or absent.'],
+  source: [
+    'STRING',
+    'R9 C2: where the request came from, in Persian — the bot or the mini app. The bot unless the recorded source surface is the mini app.',
+  ],
+  firstPurchase: [
+    'STRING',
+    'R9 C2: a Persian «yes» when this is the customer’s first paid purchase (a catalogue or custom service; a trial, a renewal, an add-on and an adopted legacy service are none); absent otherwise.',
+  ],
   // Orders and services.
   productTitle: ['STRING', 'The product or order line title.'],
   location: ['STRING', 'The service location label; absent when the product has none.'],
@@ -527,6 +536,18 @@ const TOKENS = {
   methods: ['STRING', 'The split by payment method, formatted.'],
   panelsBlock: ['STRING', 'One block per panel, formatted.'],
   resellersBlock: ['STRING', 'The reseller summary, formatted.'],
+  topResellers: [
+    'STRING',
+    'R9 C2: the day’s top resellers by sales, one line each (Telegram id, username, total, order count), at most five; absent when no reseller sold.',
+  ],
+  customersWithService: [
+    'NUMBER',
+    'R9 C2: customers with at least one active service now (active = a service in the ACTIVE state at the time the report is made).',
+  ],
+  customersWithoutService: [
+    'NUMBER',
+    'R9 C2: customers with no active service now: every customer that is not counted as having one.',
+  ],
 } as const satisfies Record<string, readonly [PlaceholderType, string]>;
 
 type TokenName = keyof typeof TOKENS;
@@ -719,13 +740,13 @@ export const OPS_LOG_TEMPLATES = [
   ),
   logTemplate(
     'ops.support.ticket_opened',
-    'Log L26: a customer opened a support ticket — its number, its topic and the first two lines of the message.',
-    [...req('ticketNumber', 'category', 'at'), ...WHO(), ...opt('snippet')],
+    'Log L26: a customer opened a support ticket — its number, its topic and the first two lines of the message, and (R9 C2) the source: bot or mini app.',
+    [...req('ticketNumber', 'category', 'at'), ...WHO(), ...opt('snippet', 'source')],
   ),
   logTemplate(
     'ops.support.customer_replied',
-    'Log L26: a customer wrote in an existing support ticket — its number, its topic and the first two lines of the message.',
-    [...req('ticketNumber', 'category', 'at'), ...WHO(), ...opt('snippet')],
+    'Log L26: a customer wrote in an existing support ticket — its number, its topic and the first two lines of the message, and (R9 C2) the source: bot or mini app.',
+    [...req('ticketNumber', 'category', 'at'), ...WHO(), ...opt('snippet', 'source')],
   ),
   // --- New log types -----------------------------------------------------------------------
   logTemplate(
@@ -809,11 +830,13 @@ export const OPS_LOG_TEMPLATES = [
   ),
   logTemplate(
     'ops.log.service_created',
-    'Log L10: a service was created after a purchase paid by card, a gateway, Stars or crypto.',
+    'Log L10: a service was created after a purchase paid by card, a gateway, Stars or crypto. R9 C2: a «first purchase of the customer» line when it is their first paid purchase, and the source line (bot or mini app).',
     [
       ...req('price', 'method', 'at'),
       ...WHO(),
       ...opt(
+        'firstPurchase',
+        'source',
         'badges',
         'phone',
         'productTitle',
@@ -831,11 +854,13 @@ export const OPS_LOG_TEMPLATES = [
   ),
   logTemplate(
     'ops.log.service_created_wallet',
-    'Log L11: a service was created after a purchase paid from the wallet — the wallet before and after.',
+    'Log L11: a service was created after a purchase paid from the wallet — the wallet before and after. R9 C2: a «first purchase of the customer» line when it is their first paid purchase, and the source line (bot or mini app).',
     [
       ...req('price', 'balanceBefore', 'balanceAfter', 'at'),
       ...WHO(),
       ...opt(
+        'firstPurchase',
+        'source',
         'badges',
         'phone',
         'productTitle',
@@ -853,11 +878,12 @@ export const OPS_LOG_TEMPLATES = [
   ),
   logTemplate(
     'ops.log.service_renewed',
-    'Log L12: a service was renewed — the used volume before, the expiry before and after.',
+    'Log L12: a service was renewed — the used volume before, the expiry before and after, and (R9 C2) the source: bot or mini app.',
     [
       ...req('price', 'method', 'at'),
       ...WHO(),
       ...opt(
+        'source',
         'badges',
         'phone',
         'productTitle',
@@ -878,11 +904,12 @@ export const OPS_LOG_TEMPLATES = [
   ),
   logTemplate(
     'ops.log.traffic_added',
-    'Log L13: extra traffic was bought — the amount added and the allowance before and after.',
+    'Log L13: extra traffic was bought — the amount added and the allowance before and after, and (R9 C2) the source: bot or mini app.',
     [
       ...req('addedBytes', 'price', 'method', 'at'),
       ...WHO(),
       ...opt(
+        'source',
         'badges',
         'phone',
         'panelName',
@@ -900,11 +927,12 @@ export const OPS_LOG_TEMPLATES = [
   ),
   logTemplate(
     'ops.log.time_added',
-    'Log L14: extra time was bought — the days added and the expiry before and after.',
+    'Log L14: extra time was bought — the days added and the expiry before and after, and (R9 C2) the source: bot or mini app.',
     [
       ...req('addedDays', 'price', 'method', 'at'),
       ...WHO(),
       ...opt(
+        'source',
         'badges',
         'phone',
         'panelName',
@@ -987,8 +1015,26 @@ export const OPS_LOG_TEMPLATES = [
     ],
   ),
   logTemplate(
+    'ops.log.error_provision_admin',
+    'Log L23 (R9 C2): a service an ADMINISTRATOR created for a customer from the Web Admin could not be created on the panel — who created it (name, username, Telegram id), the customer, the panel, the cause, a short technical line and what happened to the customer.',
+    [
+      ...req('cause', 'technical', 'impact', 'at'),
+      ...WHO(),
+      ...opt(
+        'adminName',
+        'adminUsername',
+        'adminTelegramId',
+        'productTitle',
+        'panelName',
+        'amount',
+        'orderCode',
+        'reference',
+      ),
+    ],
+  ),
+  logTemplate(
     'ops.log.error_operation',
-    'Log L24: a renewal, extra traffic, extra time or a trial could not be completed — the operation, the service, the cause, whether the outcome is failed or unknown, and what happened to the customer.',
+    'Log L24: a renewal, extra traffic, extra time, a trial or (R9 C2) a free extra-volume gift could not be completed — the operation, the service and its panel, the cause, whether the outcome is failed or unknown, and what happened to the customer.',
     [
       ...req('operation', 'state', 'cause', 'technical', 'impact', 'at'),
       ...WHO(),
@@ -1012,7 +1058,7 @@ export const OPS_LOG_TEMPLATES = [
   ),
   logTemplate(
     'ops.log.report_summary',
-    'Log L27: the nightly summary — sales, purchases, renewals, customers, trials, the change against yesterday and the best hour; with the cleanup line (L30).',
+    'Log L27: the nightly summary — sales, purchases, renewals, customers, trials, the change against yesterday and the best hour; with the cleanup line (L30). R9 C2: «active» and «inactive» customers — ACTIVE means the customer has at least one service in the ACTIVE state now (a trial service counts, a suspended, expired or terminated one does not); INACTIVE is every other customer (a row the legacy import wrote is history and is counted in neither). They are counted when the report is made and add up to all the installation’s own customers.',
     [
       ...req(
         'day',
@@ -1026,6 +1072,8 @@ export const OPS_LOG_TEMPLATES = [
       ...opt(
         'salesChange',
         'activeCustomers',
+        'customersWithService',
+        'customersWithoutService',
         'activeServices',
         'bestHour',
         'errors',
@@ -1060,8 +1108,8 @@ export const OPS_LOG_TEMPLATES = [
   ),
   logTemplate(
     'ops.log.report_panels',
-    'Log L29: the nightly panel and reseller report — orders, sales and gigabytes sold per panel, health and capacity, and the resellers’ summary.',
-    [...req('day'), ...opt('panelsBlock', 'resellersBlock')],
+    'Log L29: the nightly panel and reseller report — orders, sales and gigabytes sold per panel, health and capacity, and the resellers’ summary. R9 C2: the day’s top five resellers by sales (Telegram id, username, total, order count); the block is left out when no reseller sold.',
+    [...req('day'), ...opt('panelsBlock', 'resellersBlock', 'topResellers')],
   ),
   logTemplate(
     'ops.log.backup_caption',

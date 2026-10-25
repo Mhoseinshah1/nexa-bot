@@ -6570,7 +6570,7 @@ export const WEB_FA = {
   'web.opslog_type_service_alert': 'هشدار حجم یا زمان هر سرویس',
   'web.opslog_type_error_payment_link': 'خطای ساخت لینک پرداخت',
   'web.opslog_type_error_provision': 'خطای ساخت سرویس روی پنل',
-  'web.opslog_type_error_operation': 'خطای تمدید، حجم، زمان اضافه یا اکانت تست',
+  'web.opslog_type_error_operation': 'خطای تمدید، حجم، زمان اضافه، اکانت تست یا هدیهٔ حجم',
   'web.opslog_type_panel_state': 'قطع و وصل شدن پنل',
   'web.opslog_type_ticket_new': 'تیکت جدید یا پیام تازهٔ کاربر',
   'web.opslog_type_report_summary': 'گزارش شبانه — خلاصه',
