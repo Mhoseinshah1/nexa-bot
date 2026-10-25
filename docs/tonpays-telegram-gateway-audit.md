@@ -555,7 +555,10 @@ input.botInstanceId, customer)` takes the file. A window in another bot is invis
   file id, caption, card number or key in a log line, an audit row or an operational context;
   audit rows carry the submission id, state and error code.
 - Windows expire by a sweep (the `receipt_captures` precedent) and are closed
-  `PAYMENT_CLOSED` when the payment leaves `PENDING`.
+  `PAYMENT_CLOSED` when the payment leaves `PENDING` or its provider review opens — except a
+  REMAINDER window (aimed at the provider's `remaining_invoice_id`, §19 item 7), which the
+  review does not close: it lasts to its own `expires_at` (v0.8.2 hotfix; the sweep had
+  closed it on the worker's next pass, `capture-lanes-e2e.test.ts`).
 
 ## 9. Ambiguity, retries, webhook and inquiry
 
