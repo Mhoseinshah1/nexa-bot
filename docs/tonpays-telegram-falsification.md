@@ -212,3 +212,28 @@ and reported it surviving, which is why that row names the right suite.
 | F-02  | Codex P2: blocking-invoice lookup excludes the review window | `tonpays-telegram-round6.test.ts` › a blocking invoice inside its review window                     |
 | F-03  | Codex P2: an outstanding cancel no longer defers the create  | `tonpays-telegram-round6.test.ts` › a cancel still in flight keeps the create waiting               |
 | F-04  | Codex P2: a rate-limited cancel counted as done              | `tonpays-telegram-round6.test.ts` › a sibling is cancelled at most once                             |
+
+## Round 9 (C1) — under/overpayment, expiry cancel, `credit_amount` (audit §20)
+
+Each rule was broken on purpose, the named test failed (KILLED), and the file was restored with
+`git checkout`. `@nexa/i18n` mutations were rebuilt into its `dist` before the run (the tests
+resolve the package, not its source).
+
+| #     | Mutation                                                         | Killed by                                                                                       |
+| ----- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| R9-01 | an underpayment raised as `OVERPAID`                             | `tonpays-telegram-round6.test.ts` › R9 C1: the operations log gets «پرداخت ناقص…»               |
+| R9-02 | a new ask returns `CHANGED` (edit only, no new message)          | `tonpays-telegram-round6.test.ts` › R9 C1 underpay: told in a NEW message                       |
+| R9-03 | only `LESS` counts as a new ask (`MORE` dropped)                 | › R9 C1: the old invoice message loses its buttons; › R9 C1: the operations log gets            |
+| R9-04 | the expiry sweep does not ask for the cancel                     | › R9 C1 expiry: Nexa expiring a pending attempt asks the provider to cancel                     |
+| R9-05 | the expiry cancel ignores the invoice's last status              | › R9 C1 expiry: never a cancel for a create whose answer was lost, nor … paid or in progress    |
+| R9-06 | the expiry cancel ignores `CREATED` / the provider invoice id    | › R9 C1 expiry: never a cancel for a create whose answer was lost                               |
+| R9-07 | the lane's expiry window reads `PENDING` instead of `EXPIRED`    | › R9 C1 expiry: Nexa expiring a pending attempt                                                 |
+| R9-08 | the `credit_amount` alert is never written                       | › R9 C1 webhook: credit_amount is never credited; one that matches nothing raises ONE alert     |
+| R9-09 | the alert is raised for the same figure again                    | › R9 C1 webhook: credit_amount is never credited                                                |
+| R9-10 | a blocked customer is sent the new message anyway                | › R9 C1: a blocked customer is not sent a new message                                           |
+| R9-11 | the old invoice message keeps its buttons                        | › R9 C1: the old invoice message loses its buttons                                              |
+| R9-12 | the send no longer re-checks that the invoice is still `pending` | › R9 C1 expiry: the send re-checks the invoice                                                  |
+| R9-13 | `needActionKindAgrees` always true                               | `tonpays-telegram-r9.test.ts` › disagrees …; › a kind that contradicts the status               |
+| R9-14 | a contradicting kind keeps the remainder details                 | `tonpays-telegram-r9.test.ts` › a kind that contradicts the status keeps the step               |
+| R9-15 | `creditAmountDiffers` ignores the invoiced payable               | `tonpays-telegram-r9.test.ts` › credit_amount equal to the payable or to the principal          |
+| R9-16 | `rejectReasonFa` returns every reason unchanged                  | `tonpays-telegram-r9.test.ts` › a documented code reads in Persian; › the operations log quotes |
