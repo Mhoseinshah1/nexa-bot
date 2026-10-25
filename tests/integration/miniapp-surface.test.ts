@@ -1,4 +1,7 @@
 import { createHmac } from 'node:crypto';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -27,6 +30,7 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import { MINIAPP_DOCUMENT_CSP } from '../../apps/api/src/surfaces/miniapp/static.controller';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
@@ -104,6 +108,8 @@ describe('the mini-app surface', () => {
   let panel: FakeMarzban | undefined;
   let owner: ActorContext;
   let keySeq = 0;
+  /** A stand-in build of apps/miniapp: the API serves whatever `MINIAPP_DIST_DIR` holds. */
+  const distDir = mkdtempSync(join(tmpdir(), 'nexa-miniapp-dist-'));
 
   const inject = (options: Record<string, unknown>) =>
     api.app
@@ -153,7 +159,12 @@ describe('the mini-app surface', () => {
     await new Promise<void>((resolve) => telegram.listen(0, '127.0.0.1', resolve));
     const address = telegram.address();
     if (address === null || typeof address === 'string') throw new Error('no address');
+    mkdirSync(join(distDir, 'assets'));
+    writeFileSync(join(distDir, 'index.html'), '<!doctype html><title>mini</title>');
+    writeFileSync(join(distDir, 'assets', 'index-abc123.js'), 'console.log(1);');
+    writeFileSync(join(distDir, 'assets', 'index-abc123.js.map'), '{}');
     const env = {
+      MINIAPP_DIST_DIR: distDir,
       PANEL_HTTP_ALLOW_LOOPBACK: 'true',
       TELEGRAM_API_BASE_URL: `http://127.0.0.1:${String(address.port)}`,
     };
@@ -165,6 +176,7 @@ describe('the mini-app surface', () => {
     await api?.close();
     await ctx?.close();
     await new Promise<void>((resolve) => telegram.close(() => resolve()));
+    rmSync(distDir, { recursive: true, force: true });
   });
 
   afterEach(async () => {
@@ -390,6 +402,45 @@ describe('the mini-app surface', () => {
       // A session minted while it was on ends with the flag.
       expect((await call(token, 'GET', MINIAPP_ROUTES.me)).statusCode).toBe(401);
       expect((await inject({ method: 'GET', url: `/miniapp/${BOT_A1}/` })).statusCode).toBe(404);
+    });
+  });
+
+  describe('the document', () => {
+    it("is served for a live bot under the mini app's own CSP, framable only by Telegram", async () => {
+      for (const path of [
+        `/miniapp/${BOT_A1}`,
+        `/miniapp/${BOT_A1}/`,
+        `/miniapp/${BOT_A1}/store`,
+      ]) {
+        const page = await inject({ method: 'GET', url: path });
+        expect(page.statusCode, path).toBe(200);
+        expect(page.body).toContain('<title>mini</title>');
+        expect(page.headers['content-security-policy']).toBe(MINIAPP_DOCUMENT_CSP);
+        expect(
+          page.headers['x-frame-options'],
+          'the API default would forbid Telegram',
+        ).toBeUndefined();
+        expect(page.headers['cache-control']).toBe('no-store');
+      }
+      expect(MINIAPP_DOCUMENT_CSP).toContain("script-src 'self' https://telegram.org");
+      expect(MINIAPP_DOCUMENT_CSP).toContain("style-src 'self'");
+      expect(MINIAPP_DOCUMENT_CSP).not.toContain('unsafe');
+    });
+
+    it('serves the build and nothing else: no source map, no path outside it, no unknown bot', async () => {
+      const asset = await inject({ method: 'GET', url: '/miniapp/assets/index-abc123.js' });
+      expect(asset.statusCode).toBe(200);
+      expect(asset.headers['content-type']).toContain('text/javascript');
+      expect(asset.headers['cache-control']).toContain('immutable');
+      for (const url of [
+        '/miniapp/assets/index-abc123.js.map',
+        '/miniapp/assets/..%2Findex.html',
+        '/miniapp/assets/%2E%2E%2F%2E%2E%2Fpackage.json',
+        `/miniapp/${ctx.container.ids.uuid()}/`,
+        '/miniapp/not-a-bot/',
+      ]) {
+        expect((await inject({ method: 'GET', url })).statusCode, url).toBe(404);
+      }
     });
   });
 
