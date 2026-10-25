@@ -12,6 +12,7 @@ import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { DrizzleSupportAiJobRepository } from '../infrastructure/drizzle-support-ai-job.repository.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 /** The one open row of the condition: an installation has one assistant role. */
 export const SUPPORT_ASSISTANT_STALLED_DEDUPE_KEY = `${SUPPORT_ASSISTANT_STALLED_CODE}:watch`;
@@ -157,7 +158,10 @@ export class SupportAssistantWatchLoop {
   start(): void {
     if (this.timer !== null) return;
     this.progress.begin(this.options.now());
-    this.timer = setInterval(() => void this.tick(), this.options.intervalMs);
+    this.timer = setInterval(
+      guardedTick('support-assistant-watch', () => this.tick(), this.options.logger),
+      this.options.intervalMs,
+    );
     this.timer.unref?.();
   }
 

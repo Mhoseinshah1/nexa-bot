@@ -401,10 +401,18 @@ function providerNeedScreen(
   const tail = [cardCheck(payment.id), mainMenuButton()];
   const submissions = facts.submissions;
   if (less) {
+    /*
+     * v0.8.2 hotfix: TonPays reports the remainder in Toman (`remaining_amount`, OQ-TPTG-23),
+     * and a customer types what they read or copy into a banking app, which takes RIAL. So it
+     * is shown in rial with Toman beside it and copied as bare rial digits — the R8 A2 card
+     * invoice's own helpers — never as the Toman figure, which was transferred ten times too
+     * little. `{shortfall}` stays supplied for an override written for the earlier text.
+     * Display and clipboard only: nothing Nexa settles, credits or refunds reads it.
+     */
+    const remainder =
+      provider?.remainingAmount == null ? null : money(provider.remainingAmount, 'IRT');
     const shortfall =
-      provider?.remainingAmount == null
-        ? {}
-        : { shortfall: money(provider.remainingAmount, 'IRT') };
+      remainder === null ? {} : { shortfall: remainder, ...cardInvoiceAmountValues(remainder) };
     // Only a receipt aimed at the REMAINDER invoice says the remainder was paid: the original's
     // accepted receipt is how the shortfall was found, not an answer to it.
     const remainderNewest =
@@ -451,14 +459,16 @@ function providerNeedScreen(
       values: {
         ...base,
         shortfall: amount,
+        ...cardInvoiceAmountValues(amount),
         cardNumber: provider.remainingCardNumber,
         ...(provider.remainingCardHolder === null
           ? {}
           : { cardName: provider.remainingCardHolder }),
       },
       buttons: [
-        { ...inlineLabel('payment.copy_card'), copyText: provider.remainingCardNumber, row: 0 },
-        { ...inlineLabel('payment.copy_amount'), copyText: plainAmount(amount), row: 0 },
+        // The card invoice's first row: the remainder in rial digits, then the card's digits.
+        copyRialAmountButton(amount),
+        copyCardNumberButton(provider.remainingCardNumber),
         ...(offerReceipt
           ? [
               {

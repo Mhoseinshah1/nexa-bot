@@ -3,6 +3,7 @@ import type { DeliveryService } from './delivery.service.js';
 import type { OperationOutcomeAnnouncer } from '../../messaging/application/operation-outcome-announcer.js';
 import type { ProvisionerService } from './provisioner.service.js';
 import type { OperationCardEditor } from './operation-card.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 /**
  * The loop that drives the executor, and the readiness signal it earns.
@@ -127,7 +128,10 @@ export class ProvisionerLoop {
   start(): void {
     if (this.timer !== null) return;
     this.startedAt ??= this.options.now();
-    this.timer = setInterval(() => void this.tick(), this.options.tickMs);
+    this.timer = setInterval(
+      guardedTick('provisioner', () => this.tick(), this.options.logger),
+      this.options.tickMs,
+    );
     // Node keeps the event loop alive for a timer; this one should not stop a
     // shutdown that has already begun draining.
     this.timer.unref();

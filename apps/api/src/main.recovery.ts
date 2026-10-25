@@ -5,6 +5,7 @@ import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
 import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
+import { installProcessBackstop } from './infrastructure/lifecycle/process-backstop.js';
 import { stalledAfterGrace } from './modules/platform/opslog/application/loop-stall-reporter.js';
 
 /** The executor's name in the operations log: `job.loop_stalled:recovery-executor`. */
@@ -52,6 +53,12 @@ const RECOVERY_EXECUTOR_LOOP = 'recovery-executor';
 async function main(): Promise<void> {
   const config = loadConfig();
   const container = createContainer(config, 'recovery');
+  // A dropped promise is logged and survived; an uncaught exception is logged and exits.
+  installProcessBackstop({
+    role: 'recovery',
+    logger: container.logger,
+    exit: (code) => process.exit(code),
+  });
   // The installation's tenant, for the same reason the worker and the monitor
   // need it: without it every operational event this role records takes the "no
   // tenant provisioned" branch and is silently dropped — and the events this

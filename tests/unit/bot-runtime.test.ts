@@ -849,10 +849,10 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.centralpay_pay_button',
       'bot.payment.centralpay_review_unresolved',
       'bot.payment.checkout_in_progress',
-      'bot.payment.copy_amount_button',
       'bot.payment.copy_card_button',
       // R6 item 2: «📋 کپی مبلغ دقیق» on a TonPays card invoice; R8 A2: «📋 کپی مبلغ (ریال)»
-      // on the manual card-to-card invoice too.
+      // on the manual card-to-card invoice too. v0.8.2 hotfix: and on the TonPays remainder,
+      // whose «💵 کپی مبلغ» (`bot.payment.copy_amount_button`, no longer drawn) copied Toman.
       'bot.payment.copy_transfer_amount_button',
       /*
        * Package A: `bot.payment.gateway_button` is gone from the runtime — every external

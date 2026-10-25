@@ -4,6 +4,7 @@ import {
   BOT_COMMAND_SYNC_RECONCILE_INTERVAL_MS,
 } from '../domain/bot-command-sync.js';
 import type { BotCommandSyncService, CommandSyncTickResult } from './bot-command-sync.service.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 /**
  * The command-sync lane's timer, in the WORKER (round P).
@@ -48,7 +49,7 @@ export class BotCommandSyncLoop {
     if (this.timer !== null) return;
     this.progress.begin(this.options.now().getTime());
     this.timer = setInterval(
-      () => void this.tick(),
+      guardedTick('bot-command-sync', () => this.tick(), this.options.logger),
       this.options.intervalMs ?? BOT_COMMAND_SYNC_INTERVAL_MS,
     );
     this.timer.unref?.();

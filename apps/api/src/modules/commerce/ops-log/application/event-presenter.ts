@@ -1,4 +1,6 @@
 import {
+  JOB_LOOP_RECOVERED_CODE,
+  JOB_LOOP_STALLED_CODE,
   PAYMENT_LINK_FAILURE_KINDS,
   PAYMENT_LINK_CREATE_FAILED_CODE,
   money,
@@ -129,6 +131,9 @@ export class OperationalEventPresenter implements OpsEventPresenter {
     if (recorded.code === CUSTOMER_SEND_FAILED) {
       return this.customerSendFailed(scope, input, recorded, scoped);
     }
+    if (recorded.code === JOB_LOOP_STALLED_CODE || recorded.code === JOB_LOOP_RECOVERED_CODE) {
+      return this.loopStall(input, recorded);
+    }
     if (recorded.code === 'panel.health.recovered') {
       return this.panelUp(scope, input, recorded, scoped);
     }
@@ -217,6 +222,43 @@ export class OperationalEventPresenter implements OpsEventPresenter {
         key: `ERROR_PAYMENT_LINK:${provider}:${kind}`,
         customer: telegramId,
         rollup: { heading: words.stormHeading, cause, technical },
+      },
+    };
+  }
+
+  // --- v0.8.2 hotfix: the watchdog's messages ----------------------------------------------
+
+  /**
+   * `job.loop_stalled` / `job.loop_recovered` in Persian from the first line to the last.
+   * The recorded message is an English log line and the generic layout printed it, with
+   * `kind` / `processRole` / `state` beneath. The loop and the role are named from the event's
+   * context through the shared label tables; the loop's own key stays on the one technical
+   * line, as every other event's code does. A context that does not name a loop keeps the
+   * generic layout.
+   */
+  private loopStall(
+    input: OperationalEventInput,
+    recorded: RecordedOperationalEvent,
+  ): PresentedOpsEvent | null {
+    const { words } = this.deps;
+    const loop = input.context?.['kind'];
+    const role = input.context?.['processRole'];
+    if (typeof loop !== 'string' || !/^[a-z0-9-]{1,64}$/.test(loop)) return null;
+    const heading = `${words.eventTitle(recorded.code)} — ${words.loopStall.loopName(loop)}`;
+    return {
+      templateKey: 'ops.notification.operational_event' as TemplateKey,
+      values: {
+        severity: words.severity(opsErrorClassOf(recorded.code, recorded.severity)),
+        heading,
+        technical: technicalLine(recorded.code, loop),
+        code: recorded.code,
+        message: heading,
+        occurrences: recorded.occurrenceCount,
+        firstSeenAt: recorded.firstSeenAt,
+        lastSeenAt: recorded.lastSeenAt,
+        ...(typeof role === 'string'
+          ? { details: `${words.loopStall.roleLabel}: ${words.loopStall.roleName(role)}` }
+          : {}),
       },
     };
   }

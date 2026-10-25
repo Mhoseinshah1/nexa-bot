@@ -5,6 +5,7 @@ import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
 import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
+import { installProcessBackstop } from './infrastructure/lifecycle/process-backstop.js';
 import { stalledAfterGrace } from './modules/platform/opslog/application/loop-stall-reporter.js';
 
 /** The monitor's name in the operations log: `job.loop_stalled:panel-monitor`. */
@@ -40,6 +41,12 @@ const PANEL_MONITOR_LOOP = 'panel-monitor';
 async function main(): Promise<void> {
   const config = loadConfig();
   const container = createContainer(config, 'monitor');
+  // A dropped promise is logged and survived; an uncaught exception is logged and exits.
+  installProcessBackstop({
+    role: 'monitor',
+    logger: container.logger,
+    exit: (code) => process.exit(code),
+  });
   // The installation's tenant, for the same reason the worker needs it: the
   // container resolves settings for the installation at boot.
   await resolveInstallationTenant(container);

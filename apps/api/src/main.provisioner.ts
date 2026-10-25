@@ -5,6 +5,7 @@ import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
 import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
+import { installProcessBackstop } from './infrastructure/lifecycle/process-backstop.js';
 
 /**
  * Process role: `provisioner`.
@@ -39,6 +40,12 @@ import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.j
 async function main(): Promise<void> {
   const config = loadConfig();
   const container = createContainer(config, 'provisioner');
+  // A dropped promise is logged and survived; an uncaught exception is logged and exits.
+  installProcessBackstop({
+    role: 'provisioner',
+    logger: container.logger,
+    exit: (code) => process.exit(code),
+  });
   // The installation's tenant, for the same reason the worker and the monitor need it:
   // the container resolves settings for the installation at boot, and the loop refuses
   // to invent a tenant id when there is none.

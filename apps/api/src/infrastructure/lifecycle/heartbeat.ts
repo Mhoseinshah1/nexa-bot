@@ -1,6 +1,7 @@
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Logger } from '@nexa/contracts';
+import { runGuardedTick } from './loop-guard.js';
 
 /**
  * The worker's liveness, as something outside the process can read.
@@ -60,12 +61,12 @@ export function startHeartbeat(options: HeartbeatOptions): Heartbeat {
   const schedule = (): void => {
     if (stopped) return;
     timer = setTimeout(() => {
-      void beat().finally(schedule);
+      void runGuardedTick('heartbeat', beat, options.logger).finally(schedule);
     }, options.intervalMs);
     timer.unref?.();
   };
 
-  void beat().finally(schedule);
+  void runGuardedTick('heartbeat', beat, options.logger).finally(schedule);
 
   return {
     beat,

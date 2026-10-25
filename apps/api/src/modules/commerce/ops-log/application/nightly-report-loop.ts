@@ -1,6 +1,7 @@
 import type { TenantContext } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { NightlyReportService } from './nightly-report.service.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 /**
  * How often the nightly report pass runs. A minute: a pass that finds nothing due costs the
@@ -48,7 +49,10 @@ export class NightlyReportLoop {
   start(): void {
     if (this.timer !== null) return;
     this.progress.begin(this.options.now());
-    this.timer = setInterval(() => void this.tick(), this.options.intervalMs);
+    this.timer = setInterval(
+      guardedTick('nightly-reports', () => this.tick(), this.options.logger),
+      this.options.intervalMs,
+    );
     this.timer.unref?.();
   }
 

@@ -19,6 +19,15 @@ import type { OpsLogFacts, OpsLogLane, OpsLogWords } from './ports.js';
  * delivered is the error report's (L23), never a "new purchase" line. A service the import
  * adopted (`ServiceAdopted`) is not subscribed to, and an order that is not a STANDARD one
  * is refused again here: an import produces no group message.
+ *
+ * Hotfix v0.8.2-e: the customer's and the service's own provenance is NOT a reason for
+ * silence. Both events are written only by this installation's provisioner, after a create
+ * or a rotation it performed — never by the import — and the purchase's provenance is its
+ * ORDER (STANDARD and NEXA, checked in `provisioned`). Refusing a `MIRZA` customer silenced
+ * every purchase, trial and link change of every customer an installation migrated from the
+ * previous bot (the one-click `.nxpkg` import marks them all), while the payment log, which
+ * reads the payment's own provenance, still arrived. R8 A4 made the same correction for an
+ * administrator's wallet adjustment (`LedgerLogConsumer`).
  */
 export class ServiceLogConsumer implements EventConsumer {
   readonly name = 'ops-log.services';
@@ -39,9 +48,9 @@ export class ServiceLogConsumer implements EventConsumer {
     const scope = scopeOf(event);
     if (scope === null) return;
     const service = await this.deps.facts.service(scope, event.aggregateId, tx);
-    if (service === null || service.source !== 'NEXA') return;
+    if (service === null) return;
     const customer = await this.deps.facts.customer(scope, service.customerId, tx);
-    if (customer === null || customer.source !== 'NEXA') return;
+    if (customer === null) return;
     const at = new Date(event.occurredAt);
 
     let built: Built | null;

@@ -1,6 +1,7 @@
 import type { FxBaseAsset, TenantContext } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { FxService } from './fx.service.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 /**
  * How often the worker asks whether the central rate is due a refresh. The POLICY knob
@@ -85,7 +86,10 @@ export class FxRefreshLoop {
   start(): void {
     if (this.timer !== null) return;
     this.progress.begin(this.options.now());
-    this.timer = setInterval(() => void this.tick(), this.options.intervalMs);
+    this.timer = setInterval(
+      guardedTick('fx-refresh', () => this.tick(), this.options.logger),
+      this.options.intervalMs,
+    );
     this.timer.unref?.();
   }
 
@@ -107,15 +111,18 @@ export class FxRefreshLoop {
     // At most one warning per backoff step; the operational log carries the outage itself.
     if (this.warnedDelayMs === delayMs) return;
     this.warnedDelayMs = delayMs;
-    (this.options.logger.warn ?? this.options.logger.info)(
-      {
-        outcome: 'FAILED',
-        reason,
-        consecutiveFailures: this.failureStreak,
-        nextAttemptInMs: delayMs,
-      },
-      'fx refresh failing; backing off',
-    );
+    // Called ON the logger, never detached from it: `(logger.warn ?? logger.info)(…)` called
+    // the method with no `this`, PinoLogger's `this.emit` threw, and v0.8.2's worker
+    // crash-looped on the first failed pass (tests/unit/fx-refresh-loop-real-logger.test.ts).
+    const context = {
+      outcome: 'FAILED',
+      reason,
+      consecutiveFailures: this.failureStreak,
+      nextAttemptInMs: delayMs,
+    };
+    const { logger } = this.options;
+    if (logger.warn !== undefined) logger.warn(context, 'fx refresh failing; backing off');
+    else logger.info(context, 'fx refresh failing; backing off');
   }
 
   /** One pass. Re-entrancy is refused rather than queued. Public so a test can drive it. */

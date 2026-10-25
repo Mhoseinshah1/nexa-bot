@@ -2,6 +2,7 @@ import { systemJobActor, type CorrelationId, type TenantContext } from '@nexa/co
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { DataCompactionService } from './data-compaction.service.js';
 import type { DataCompactionRepository } from './ports.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 /** How often the loop wakes. A pass is daily (`DATA_COMPACTION_DAILY_MS`); the hour is a retry. */
 export const DATA_COMPACTION_INTERVAL_MS = 3_600_000;
@@ -54,8 +55,9 @@ export class DataCompactionLoop {
   start(): void {
     if (this.timer !== null) return;
     this.progress.begin(this.options.now());
-    this.firstRun = setTimeout(() => void this.tick(), this.options.initialDelayMs);
-    this.timer = setInterval(() => void this.tick(), this.options.intervalMs);
+    const tick = guardedTick('data-compaction', () => this.tick(), this.options.logger);
+    this.firstRun = setTimeout(tick, this.options.initialDelayMs);
+    this.timer = setInterval(tick, this.options.intervalMs);
     this.firstRun.unref?.();
     this.timer.unref?.();
   }

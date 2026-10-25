@@ -416,17 +416,78 @@ describe('the TonPays Telegram payment screen', () => {
     const reply = screenOf('action_required_less', withFacts({ providerFacts: LESS }));
     expect(reply.key).toBe('bot.payment.gateway_card_underpaid');
     expect(reply.values).toMatchObject({
+      // v0.8.2 hotfix: TonPays' 12,000 Toman is shown as 120,000 rial; {shortfall} stays.
+      amountRial: '۱۲۰٬۰۰۰',
+      amountToman: '۱۲٬۰۰۰',
       shortfall: money(12_000n, 'IRT'),
       cardNumber: '6219861012345678',
       cardName: 'Shop Card',
       expiresAt: EXPIRES_AT,
     });
-    expect(copies(reply)).toEqual(['6219861012345678', '12000']);
+    // The R8 A2 first row: the remainder in rial digits, then the card's sixteen digits.
+    expect(copies(reply)).toEqual(['120000', '6219861012345678']);
     expect(data(reply)).toContain(`gr:${PAYMENT_ID}`);
     // The original transfer's card, change and cancel are not offered for an underpaid invoice.
     expect(data(reply)).not.toContain(`gk:${PAYMENT_ID}`);
     expect(data(reply)).not.toContain(`gq:${PAYMENT_ID}`);
     expect(reply.key).not.toBe('bot.payment.gateway_card_invoice');
+  });
+
+  /*
+   * v0.8.2 hotfix, the owner's case: an invoice of 553,680 rial (55,368 Toman), 500,000 rial
+   * paid, so TonPays' `remaining_amount` is 5,368 — TOMAN. The screen said «5,368 تومان کمتر
+   * واریز شد» and «💵 کپی مبلغ» copied 5368, which the customer typed into the banking app as
+   * rial: ten times too little. The remainder is 53,680 rial, shown and copied as such.
+   */
+  const OWNER_LESS = provider({ ...LESS, remainingAmount: 5_368n });
+  const renderedText = (reply: ReturnType<typeof gatewayAttemptScreen>): string => {
+    const key = reply.key as TemplateKey;
+    return renderTemplateBody(templateDefinition(key), CATALOGUE_FA[key], reply.values);
+  };
+
+  it('v0.8.2: the remainder of the owner’s invoice (553,680 rial, 500,000 paid) is shown as 53,680 RIAL, Toman only in brackets, and copied as 53680', () => {
+    const reply = screenOf('action_required_less', withFacts({ providerFacts: OWNER_LESS }));
+    expect(reply.key).toBe('bot.payment.gateway_card_underpaid');
+    expect(copies(reply)).toEqual(['53680', '6219861012345678']);
+    // The copy-amount button is the card invoice's own, labelled as rial.
+    expect(reply.buttons.find((button) => 'copyText' in button)).toMatchObject({
+      inline: 'payment.copy_transfer_amount',
+      copyText: '53680',
+    });
+    const text = renderedText(reply);
+    expect(text).toContain('مبلغ مابقی قابل واریز: ۵۳٬۶۸۰ ریال\n(معادل ۵٬۳۶۸ تومان)');
+    // The Toman figure appears ONLY as the bracketed equivalent.
+    expect(text.split('تومان').length - 1).toBe(1);
+    expect(text).not.toContain('5,368');
+    expect(text).not.toContain('5368');
+    expect(text).not.toMatch(/\{[A-Za-z]+\}/u);
+  });
+
+  it('v0.8.2: the remainder receipt on its way restates the remainder in RIAL with Toman in brackets; with none reported, no amount line', () => {
+    const sent = screenOf(
+      'action_required_less',
+      withFacts({ providerFacts: provider({ ...OWNER_LESS, remainingReceiptReceived: true }) }),
+    );
+    expect(sent.key).toBe('bot.payment.gateway_card_underpaid_receipt_sent');
+    const text = renderedText(sent);
+    expect(text).toContain('مبلغ مابقی: ۵۳٬۶۸۰ ریال\n(معادل ۵٬۳۶۸ تومان)');
+    expect(text.split('تومان').length - 1).toBe(1);
+    expect(text).not.toContain('5,368');
+    const none = screenOf(
+      'action_required_less',
+      withFacts({
+        providerFacts: provider({
+          ...OWNER_LESS,
+          remainingAmount: null,
+          remainingReceiptReceived: true,
+        }),
+      }),
+    );
+    expect(none.key).toBe('bot.payment.gateway_card_underpaid_receipt_sent');
+    const bare = renderedText(none);
+    expect(bare).not.toContain('مبلغ مابقی');
+    expect(bare).not.toContain('تومان');
+    expect(bare).not.toMatch(/\{[A-Za-z]+\}/u);
   });
 
   it('action_required_less inside the provider’s review window is still the remainder screen, not "in review"; past the settlement deadline it is closed', () => {

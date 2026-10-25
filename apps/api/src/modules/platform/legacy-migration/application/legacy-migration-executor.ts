@@ -55,6 +55,7 @@ import {
   type PackageSecret,
   type PackageVerifier,
 } from './ports.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 export interface LegacyMigrationExecutorDeps {
   readonly repository: LegacyNxpkgImportRepository;
@@ -188,12 +189,13 @@ export class LegacyMigrationExecutor {
 
   start(): void {
     if (this.timer !== null) return;
-    this.timer = setInterval(() => void this.tick(), this.deps.tickIntervalMs);
+    const tick = guardedTick('legacy-migration-executor', () => this.tick(), this.deps.logger);
+    this.timer = setInterval(tick, this.deps.tickIntervalMs);
     this.timer.unref();
     // A tick at once (its housekeeping included): decrypted directories a crashed process left
     // are not kept until the first interval, and the role's heartbeat — which requires this
     // loop fresh — is fresh from the start rather than after an interval.
-    void this.tick();
+    tick();
   }
 
   stop(): void {
@@ -346,9 +348,9 @@ export class LegacyMigrationExecutor {
   /** Runs the claimed import's step under a heartbeated lease. */
   private async run(row: LegacyNxpkgImportRow): Promise<void> {
     const abort = new AbortController();
-    const heartbeat = setInterval(() => {
+    const beat = (): Promise<void> => {
       const now = this.deps.clock.now();
-      void this.deps.repository
+      return this.deps.repository
         .heartbeat({
           id: row.id,
           leaseOwner: this.deps.leaseOwner,
@@ -364,7 +366,11 @@ export class LegacyMigrationExecutor {
             'a legacy migration lease heartbeat failed',
           );
         });
-    }, this.deps.heartbeatMs ?? LEGACY_MIGRATION_LEASE_HEARTBEAT_MS);
+    };
+    const heartbeat = setInterval(
+      guardedTick('legacy-migration-heartbeat', beat, this.deps.logger),
+      this.deps.heartbeatMs ?? LEGACY_MIGRATION_LEASE_HEARTBEAT_MS,
+    );
     heartbeat.unref();
 
     try {

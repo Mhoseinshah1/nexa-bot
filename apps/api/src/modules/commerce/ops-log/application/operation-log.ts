@@ -59,12 +59,17 @@ export class OperationLog implements OperationLogHook {
     const kind = CHANGES[operation.type];
     if (kind === undefined) return;
 
+    // The ORDER is the purchase's provenance (hotfix v0.8.2-e): a renewal, extra traffic or
+    // extra time an imported customer bought after the import — of a service the import
+    // adopted, or of one this installation created — is this installation's sale, logged like
+    // any other. Only `operationSucceeded` of a paid operation reaches here, and the import
+    // performs no operation.
     const order = await this.deps.facts.order(scope, operation.orderId, tx);
     if (order === null || order.origin !== 'STANDARD' || order.source !== 'NEXA') return;
     const service = await this.deps.facts.service(scope, operation.serviceId, tx);
-    if (service === null || service.source !== 'NEXA') return;
+    if (service === null) return;
     const customer = await this.deps.facts.customer(scope, order.customerId, tx);
-    if (customer === null || customer.source !== 'NEXA') return;
+    if (customer === null) return;
     const payment = await this.deps.facts.paymentOfOrder(scope, order.id, tx);
     const before = await this.deps.facts.serviceBefore(
       scope,
