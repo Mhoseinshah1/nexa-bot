@@ -957,6 +957,7 @@ export const WEB_FA = {
   'web.late_credit_switch_tonpays_telegram':
     'پرداخت دیرهنگام تون‌پی تلگرام را خودکار به کیف پول واریز کن',
   'web.late_credit_switch_tetrapay': 'پرداخت دیرهنگام تتراپی را خودکار به کیف پول واریز کن',
+  'web.late_credit_switch_rialit': 'پرداخت دیرهنگام ریالیت را خودکار به کیف پول واریز کن',
   'web.late_credit_switch_hint':
     'روشن: اگر استعلام خود درگاه تأیید کند که پرداخت انجام شده و مبلغ با فاکتور یکی است، همان مبلغ فقط یک بار به کیف پول مشتری واریز می‌شود و به مشتری پیام می‌رود. سفارش دوباره باز نمی‌شود و سرویسی ساخته نمی‌شود. خاموش: مثل قبل فقط ثبت می‌شود و مدیر تصمیم می‌گیرد.',
   'web.late_credit_window': 'مدت پیگیری پرداخت دیرهنگام (ساعت)',
@@ -2704,6 +2705,7 @@ export const WEB_FA = {
   'web.payment_gateway_provider_nowpayments': 'درگاه ارز دیجیتال (NOWPayments)',
   'web.payment_gateway_provider_centralpay': 'درگاه CentralPay',
   'web.payment_gateway_provider_tetrapay': 'درگاه تتراپی',
+  'web.payment_gateway_provider_rialit': 'درگاه ریالیت',
   // Package A: the Stars route's operator-set rate. No FX feed exists or is implied.
   'web.payment_gateway_rate': 'نرخ هر ستاره (به کوچک‌ترین واحد ارز فروش)',
   'web.payment_gateway_rate_hint':
@@ -2847,6 +2849,11 @@ export const WEB_FA = {
   'web.payment_gateway_webhook_url': 'نشانی وب‌هوک (در پنل تتراپی وارد کنید)',
   'web.payment_gateway_webhook_url_hint':
     'این نشانی را در بخش وب‌هوک پنل تتراپی ثبت کنید. فقط استعلام را جلو می‌اندازد و هرگز به‌تنهایی پرداختی را تأیید نمی‌کند.',
+  'web.payment_gateway_rialit_webhook_url': 'نشانی وب‌هوک (در پنل ریالیت وارد کنید)',
+  'web.payment_gateway_rialit_webhook_url_hint':
+    'این نشانی را در پنل ریالیت، تنظیمات ← «تنظیمات Webhook» ثبت کنید و یک رویداد آزمایشی بفرستید. وب‌هوک ریالیت امضا ندارد: فقط استعلام وضعیت را جلو می‌اندازد و هرگز به‌تنهایی پرداختی را تأیید نمی‌کند.',
+  'web.payment_gateway_rialit_hint':
+    'مبلغ‌ها در ریالیت به تومان ارسال می‌شود (۵۰٬۰۰۰ تا ۱۰٬۰۰۰٬۰۰۰ تومان، همراه با کارمزد درگاه همین‌جا). فقط یک طرف کارمزد بگیرد: اگر کارمزد این درگاه را در ربات تنظیم کرده‌اید، کارمزد پرداخت‌کننده را در پنل ریالیت (تنظیمات پذیرنده) صفر کنید، یا برعکس؛ اگر هر دو روشن باشد لینک به مشتری داده نمی‌شود. وقتی فقط ریالیت کارمزد می‌گیرد، مبلغ نهایی ریالیت به مشتری نشان داده می‌شود و به کیف پول فقط اصل مبلغ واریز می‌شود. اگر فهرست «IPهای مجاز» را پر کرده‌اید، IP این سرور را اضافه کنید. پرداخت فقط پس از استعلام مستقیم (GET /status) با وضعیت «paid» و تطبیق شناسهٔ سفارش و مبلغ ثبت می‌شود. لینک پرداخت ۳۰ دقیقه باز است.',
   'web.payment_gateway_bot_username': 'نام کاربری ربات برای لینک بازگشت',
   'web.payment_gateway_bot_username_none': 'ربات فعالی با نام کاربری ثبت‌شده وجود ندارد',
   'web.payment_gateway_hidden_until': 'پنهان‌شده تا (سقف روزانهٔ درگاه)',
@@ -9898,6 +9905,30 @@ export const WEB_FA = {
   'web.provcode_tetrapay_unsupported_media_type': 'تتراپی نوع محتوای درخواست را نپذیرفت',
   'web.provcode_tetrapay_bad_json': 'تتراپی بدنهٔ درخواست را نخواند',
   'web.provcode_tetrapay_internal': 'خطای داخلی تتراپی',
+  'web.provcode_rialit_unauthorized':
+    'کلید API ریالیت پذیرفته نشد (نادرست، ناقص یا باطل‌شده)؛ کلید تازه‌ای در پنل ریالیت بسازید و اینجا ثبت کنید',
+  'web.provcode_rialit_ip_not_allowed':
+    'نشانی IP سرور در فهرست «IPهای مجاز» پنل ریالیت نیست؛ آن را اضافه کنید',
+  'web.provcode_rialit_merchant_inactive':
+    'حساب پذیرندهٔ ریالیت غیرفعال است و پرداخت تازه نمی‌سازد؛ با پشتیبانی ریالیت تماس بگیرید (پرداخت‌های باز همچنان استعلام می‌شوند)',
+  'web.provcode_rialit_forbidden': 'ریالیت این درخواست را مجاز ندانست (۴۰۳)',
+  'web.provcode_rialit_bad_request':
+    'ریالیت درخواست را نامعتبر دانست؛ همان درخواست دوباره فرستاده نمی‌شود',
+  'web.provcode_rialit_amount_out_of_range':
+    'مبلغ قابل پرداخت خارج از محدودهٔ ۵۰٬۰۰۰ تا ۱۰٬۰۰۰٬۰۰۰ تومان ریالیت است',
+  'web.provcode_rialit_invalid_order_id': 'ریالیت شناسهٔ سفارش را نپذیرفت',
+  'web.provcode_rialit_invalid_payer_id': 'ریالیت شناسهٔ تلگرام پرداخت‌کننده را نپذیرفت',
+  'web.provcode_rialit_not_found': 'ریالیت این پرداخت (یا این مسیر) را نمی‌شناسد',
+  'web.provcode_rialit_order_conflict':
+    'این شناسهٔ سفارش در ریالیت با مبلغ یا پرداخت‌کنندهٔ دیگری ثبت شده است؛ دوباره فرستاده نمی‌شود',
+  'web.provcode_rialit_rate_limited':
+    'ریالیت به‌دلیل محدودیت تعداد درخواست موقتاً پاسخ نداد؛ دوباره تلاش می‌شود',
+  'web.provcode_rialit_double_fee':
+    'هم کارمزد درگاه همین ربات و هم کارمزد پرداخت‌کنندهٔ ریالیت روشن است؛ لینک به مشتری داده نشد تا دو بار کارمزد نپردازد. فقط یکی را نگه دارید: کارمزد این درگاه را در ربات صفر کنید یا کارمزد پرداخت‌کننده را در پنل ریالیت (تنظیمات پذیرنده)',
+  'web.provcode_rialit_payer_amount_mismatch':
+    'مبلغ پرداخت‌کننده در پاسخ ریالیت با «مبلغ + کارمزد» برابر نبود؛ لینک به مشتری داده نشد',
+  'web.provcode_rialit_payer_amount_unreadable':
+    'مبلغ قابل پرداخت مشتری در پاسخ ریالیت خوانا نبود؛ لینک به مشتری داده نشد',
   'web.provcode_wallex_not_success': 'والکس پاسخ ناموفق داد',
   'web.provcode_wallex_unreadable': 'پاسخ والکس قابل خواندن نبود',
   'web.inc_detail_step': 'مرحله',
@@ -10108,6 +10139,16 @@ export const WEB_FA = {
   'web.err_commerce_payment_gateway_amount_rejected': 'درگاه پرداخت این مبلغ را نپذیرفت.',
   'web.err_commerce_payment_gateway_not_found': 'درگاه پرداخت پیدا نشد.',
   'web.err_commerce_payment_gateway_unavailable': 'درگاه پرداخت اکنون در دسترس نیست.',
+  'web.payment_gateway_enable_refused_credential_missing':
+    'این درگاه روشن نشد: کلید API آن ثبت نشده است. ابتدا از «تنظیم کلید» کلید API درگاه را ثبت کنید، سپس دوباره روشن کنید.',
+  'web.payment_gateway_enable_refused_webhook_secret_missing':
+    'این درگاه روشن نشد: کلید وب‌هوک (IPN) آن ثبت نشده است. ابتدا کلید وب‌هوک را ثبت کنید، سپس دوباره روشن کنید.',
+  'web.payment_gateway_enable_refused_verify_key_missing':
+    'این درگاه روشن نشد: کلید تأیید (verify) آن ثبت نشده است. ابتدا کلید تأیید را ثبت کنید، سپس دوباره روشن کنید.',
+  'web.payment_gateway_enable_refused_rate_missing':
+    'این درگاه روشن نشد: نرخ تبدیل آن ثبت نشده است. ابتدا نرخ را در فرم درگاه ثبت کنید، سپس دوباره روشن کنید.',
+  'web.payment_gateway_enable_refused_fx_unavailable':
+    'این درگاه روشن نشد: نرخ مرکزی ارز خاموش است یا نسبت واحد آن ثبت نشده است.',
   'web.err_commerce_payment_method_unavailable': 'این روش پرداخت اکنون در دسترس نیست.',
   'web.err_commerce_payment_not_found': 'پرداخت پیدا نشد.',
   'web.err_commerce_payment_state_invalid':

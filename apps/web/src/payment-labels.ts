@@ -60,6 +60,7 @@ export const PAYMENT_GATEWAY_LABELS: Readonly<Record<PaymentGatewayProvider, Web
   NOWPAYMENTS: 'web.payment_gateway_provider_nowpayments',
   CENTRALPAY: 'web.payment_gateway_provider_centralpay',
   TETRAPAY: 'web.payment_gateway_provider_tetrapay',
+  RIALIT: 'web.payment_gateway_provider_rialit',
 };
 
 /** The lane's machine reason for holding a gateway payment UNKNOWN (an open set). */

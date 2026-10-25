@@ -594,7 +594,9 @@ export type GatewayWebhookResult =
   | 'IGNORED_MISMATCH'
   | 'IGNORED_INACTIVE'
   /** A signed route's webhook whose signature did not verify: dropped before it was read. */
-  | 'IGNORED_UNVERIFIED';
+  | 'IGNORED_UNVERIFIED'
+  /** Round 9 C4: the provider's own test delivery (Rialit `webhook.test`): answered, nothing else. */
+  | 'IGNORED_TEST';
 
 /**
  * What a browser return found (CentralPay), for the result page: the payment is CONFIRMED,
@@ -1405,6 +1407,13 @@ export class GatewayPaymentService {
           : await this.deps.callbackUrlFor(scope, invoice.provider);
     const presentation =
       descriptor.invoiceCredential === 'BOT_TOKEN' ? await this.deps.presentation(scope) : null;
+    /*
+     * Round 9 C4: whether Nexa's own fee is charged on this attempt (its frozen snapshot), for
+     * the owner's rule that only one side charges (Rialit). A payment that cannot be read is
+     * left unknown, which the adapter reads as charged — the refusing side.
+     */
+    const customerFee = (await this.deps.paymentRecords.findById(scope, invoice.paymentId))
+      ?.customerFee;
 
     /*
      * FIX10 R1: the stamp is fenced on this pass's lease, and it HOLDS the row for the row
@@ -1442,6 +1451,9 @@ export class GatewayPaymentService {
       amount: invoice.sentAmount,
       callbackUrl,
       buyerChatId,
+      ...(customerFee === undefined
+        ? {}
+        : { customerFeeCharged: customerFee !== null && customerFee.fee.amountMinor > 0n }),
       presentation,
       // A `numericIdentity` route's customer number, frozen on the attempt (CentralPay).
       providerUserId: invoice.providerUserId,
@@ -1616,7 +1628,19 @@ export class GatewayPaymentService {
           );
           return 'createDeferred';
         }
-        await this.endCreation(scope, actor, invoice, 'CREATE_FAILED', outcome.code);
+        /*
+         * Round 9 C4: a refusal of a payment the provider DID make (Rialit: both sides would
+         * charge a fee) keeps that payment's id on the audit row, so an operator can find it at
+         * the provider. Its link is never shown, so nobody can pay it.
+         */
+        await this.endCreation(
+          scope,
+          actor,
+          invoice,
+          'CREATE_FAILED',
+          outcome.code,
+          outcome.providerInvoiceId ?? null,
+        );
         await this.deps.payments.failGatewayPayment(scope, actor, invoice.paymentId, {
           reasonCode: `${invoice.provider.toLowerCase()}:${outcome.code}`,
           // A buyer who already holds an invoice is shown THAT invoice on the edited screen.
@@ -3628,6 +3652,12 @@ export class GatewayPaymentService {
       );
       if (verified !== 'VERIFIED' && verified !== 'UNSIGNED') return verified;
     }
+    /*
+     * Round 9 C4: a provider's dashboard TEST delivery (Rialit's `webhook.test`) names no
+     * payment. It is answered like any accepted webhook and nothing else happens — no lookup,
+     * no record, no inquiry — so the operator's "send a test" sees a 2xx.
+     */
+    if (adapter.isWebhookProbe?.(body) === true) return 'IGNORED_TEST';
     // Shape only. TonPays' signature and API-key headers are never read (brief §6).
     const hint = adapter.parseWebhook(body, deliveryIdHeader);
     if (hint === null) return 'MALFORMED';
@@ -4163,6 +4193,8 @@ export class GatewayPaymentService {
     invoice: GatewayInvoiceRecord,
     to: 'CREATE_FAILED' | 'CREATE_UNKNOWN',
     code: string,
+    /** A payment the provider made and Nexa refused to present (Rialit's double fee), or null. */
+    refusedProviderInvoiceId: string | null = null,
   ): Promise<void> {
     const now = this.deps.clock.now();
     await this.deps.uow.run(scope, async (tx) => {
@@ -4191,6 +4223,9 @@ export class GatewayPaymentService {
             provider: invoice.provider,
             providerOrderId: invoice.providerOrderId,
             reason: code,
+            ...(refusedProviderInvoiceId === null
+              ? {}
+              : { refusedProviderInvoiceId, paymentLinkShown: false }),
           },
           result: 'SUCCESS',
         },

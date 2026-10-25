@@ -817,7 +817,12 @@ export function gatewayProviderFacts(invoice: GatewayInvoiceRecord | null): Temp
    * verify REPORTED (`request_amount`) beside the invoiced figure when they differ, so a
    * mismatch is never hidden under the provider's label.
    */
-  if (invoice.provider === 'CENTRALPAY' || invoice.provider === 'TETRAPAY') {
+  // Rialit (Round 9): the TOMAN its own status read REPORTED, the same way.
+  if (
+    invoice.provider === 'CENTRALPAY' ||
+    invoice.provider === 'TETRAPAY' ||
+    invoice.provider === 'RIALIT'
+  ) {
     const toman = (amount: bigint) => `${amount.toString()} ${invoice.providerUnit}`;
     const reported = invoice.requestAmount;
     const orderId = invoice.providerInvoiceId ?? invoice.providerOrderId;

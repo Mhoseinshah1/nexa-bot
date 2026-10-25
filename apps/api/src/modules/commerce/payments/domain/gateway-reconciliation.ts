@@ -70,6 +70,19 @@ const RECONCILIATION_EVIDENCE: Readonly<
     failed: ['expired'],
     failsUnpaidApproval: true,
   },
+  /*
+   * Rialit (`docs/rialit-gateway-audit.md`): `paid` with `paid` recorded is the only
+   * confirmation — recorded only when the status read named this attempt's order id, exactly
+   * the Toman asked and no payer fee. The lane never fails a payment on `expired` or
+   * `cancelled` (Rialit may still mark either paid); an OPERATOR reconciling an UNKNOWN payment
+   * may, since Rialit's own words are that both "end the payment" — the operator's explicit,
+   * audited decision, which moves no money. A `paid` recorded UNPAID (a MISMATCH) may be failed.
+   */
+  RIALIT: {
+    confirmed: ['paid'],
+    failed: ['expired', 'cancelled'],
+    failsUnpaidApproval: true,
+  },
 };
 
 /**

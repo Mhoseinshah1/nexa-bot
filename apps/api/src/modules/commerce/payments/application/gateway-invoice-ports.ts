@@ -64,6 +64,12 @@ export interface GatewayCreateRequest {
   /** Null when this customer's Telegram id is not known; the field is then omitted. */
   readonly buyerChatId: string | null;
   /**
+   * Round 9 C4: whether NEXA's own gateway customer fee on this attempt is above zero (the
+   * payment's frozen fee snapshot). Rialit reads it for the owner's rule that only one side
+   * charges a fee; every other adapter ignores it. Absent: unknown.
+   */
+  readonly customerFeeCharged?: boolean;
+  /**
    * The integer the provider knows the customer by, for a `numericIdentity` route
    * (CentralPay's `userId`): the number frozen on the attempt. Null for every other route.
    */
@@ -136,6 +142,13 @@ export type GatewayCreateOutcome =
        * 00:00 Tehran; the lane computes the instant from its own clock. Absent: nothing.
        */
       readonly routeEffect?: GatewayRouteEffect;
+      /**
+       * Round 9 C4: the provider DID create a payment, and Nexa refuses to present it (Rialit
+       * answered a payer fee while Nexa's own fee is on — the customer would pay two fees — or
+       * payer figures that do not add up). Its id is recorded on the attempt's audit row so an operator can find it at the
+       * provider; the link is never shown, so nobody can pay it. Absent for every other refusal.
+       */
+      readonly providerInvoiceId?: string;
     }
   | {
       readonly kind: 'RATE_LIMITED';
@@ -469,6 +482,12 @@ export interface ExternalGatewayAdapter {
   hintRank?(status: string | null): number;
   /** The operator's read-only credential check, for a provider that offers a safe read. */
   checkCredential?(apiKey: string): Promise<GatewayCredentialCheck>;
+  /**
+   * Round 9 C4: whether a webhook body is the provider's own TEST delivery, which names no
+   * payment (Rialit's `webhook.test`, sent from its dashboard). Such a body is answered 2xx and
+   * nothing else happens: no lookup, no record, no inquiry. Absent: no such event.
+   */
+  isWebhookProbe?(body: unknown): boolean;
 }
 
 // ---------------------------------------------------------------------------------------
