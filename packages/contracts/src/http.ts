@@ -5027,6 +5027,16 @@ export const paymentTimelineEntrySchema = z.discriminatedUnion('kind', [
     provider: paymentGatewayProviderSchema,
     statusHint: z.string().nullable(),
     webhookCount: z.number().int(),
+    /**
+     * R9 C1: the `credit_amount` the LAST webhook reported, a decimal string in the provider's
+     * own unit (`providerUnit`), or null when none was. Provider metadata: the wallet is
+     * credited with the payment's principal by the inquiry, never with this. Defaulted so an
+     * entry from the previous release reads "none".
+     */
+    creditAmount: z.string().nullable().default(null),
+    providerUnit: z.string().nullable().default(null),
+    /** True when `creditAmount` is neither the principal nor what Nexa invoiced (an alert). */
+    creditAmountDiffers: z.boolean().default(false),
   }),
   z.object({
     kind: z.literal('GATEWAY_INQUIRY'),

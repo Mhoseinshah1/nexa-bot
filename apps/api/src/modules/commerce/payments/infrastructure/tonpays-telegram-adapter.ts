@@ -49,6 +49,7 @@ import {
 import {
   classifyTonPaysTelegramError,
   isSafeInvoiceId,
+  needActionKindAgrees,
   parseRejectReasons,
   providerNeedOfStatus,
 } from '../domain/tonpays-telegram.js';
@@ -212,34 +213,39 @@ export function providerFactsOf(
   const need = providerNeedOfStatus(status);
   const rejectReasons = parseRejectReasons(body['reject_reasons']);
   if (need === null && rejectReasons.length === 0) return null;
+  /*
+   * R9 C1: a `need_action_kind` that contradicts the status leaves the next step (the status
+   * decides it) with NO details: an answer that disagrees with itself is no card and no amount.
+   */
+  const detailed = needActionKindAgrees(need, body['need_action_kind']);
+  const less = need === 'LESS' && detailed;
+  const more = need === 'MORE' && detailed;
   const positive = (value: unknown): bigint | null => {
     const amount = metadataAmount(value);
     return amount !== null && amount > 0n ? amount : null;
   };
   const flag = (value: unknown): boolean | null => (typeof value === 'boolean' ? value : null);
   const remainderId = body['remaining_invoice_id'];
-  const remainingInvoiceId =
-    need !== 'LESS'
-      ? null
-      : typeof remainderId === 'string' && isSafeInvoiceId(remainderId)
-        ? remainderId
-        : typeof remainderId === 'number' &&
-            Number.isSafeInteger(remainderId) &&
-            remainderId >= 0 &&
-            isSafeInvoiceId(String(remainderId))
-          ? String(remainderId)
-          : null;
-  const card =
-    need === 'LESS' ? cardOf(body['remaining_card_number'], body['remaining_card_holder']) : null;
+  const remainingInvoiceId = !less
+    ? null
+    : typeof remainderId === 'string' && isSafeInvoiceId(remainderId)
+      ? remainderId
+      : typeof remainderId === 'number' &&
+          Number.isSafeInteger(remainderId) &&
+          remainderId >= 0 &&
+          isSafeInvoiceId(String(remainderId))
+        ? String(remainderId)
+        : null;
+  const card = less ? cardOf(body['remaining_card_number'], body['remaining_card_holder']) : null;
   return {
     need,
-    remainingAmount: need === 'LESS' ? positive(body['remaining_amount']) : null,
+    remainingAmount: less ? positive(body['remaining_amount']) : null,
     remainingCardNumber: card?.cardNumber ?? null,
     remainingCardHolder: card?.cardName ?? null,
     remainingInvoiceId,
-    remainingReceiptReceived: need === 'LESS' ? flag(body['remaining_receipt_received']) : null,
-    refundAmount: need === 'MORE' ? positive(body['refund_amount']) : null,
-    refundPending: need === 'MORE' ? flag(body['refund_pending']) : null,
+    remainingReceiptReceived: less ? flag(body['remaining_receipt_received']) : null,
+    refundAmount: more ? positive(body['refund_amount']) : null,
+    refundPending: more ? flag(body['refund_pending']) : null,
     rejectReasons,
   };
 }

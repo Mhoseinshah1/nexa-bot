@@ -4351,3 +4351,22 @@ never an approval) until the real-provider acceptance (`OQ-WP10-01`) answers it.
   Rezaei"); Nexa accepts letters and spaces in any script (three to sixty-four characters) and
   the provider's `INVALID_REFUND_HOLDER` is shown if it disagrees. The example card
   `6037991234567890` fails Luhn, so no checksum is applied locally.
+
+## Round 9 C1 — TonPays Telegram under/overpayment (`docs/tonpays-telegram-gateway-audit.md` §20)
+
+- **OQ-TPTG-27 — `status: need_action` with a `need_action_kind`.** The current document names
+  `action_required_less` / `_more` for an under/overpayment and lists `need_action_kind` as a field;
+  what `need_action` (the older transcription's status) with `need_action_kind: less|more` would
+  mean is not said. Nexa reads it as an OPEN status with NO next step (no remainder, no refund
+  card, no announcement); the operator sees the raw status on the payment. A kind that contradicts
+  an `action_required_*` status keeps the step and drops its details. If the real provider sends
+  `need_action` + kind for an underpayment, the owner decides whether to read it as the same step.
+- **OQ-TPTG-28 — what `credit_amount` is.** The webhook's `credit_amount` is not in the inquiry's
+  answer, so no inquiry confirms it; whether it is the principal, the payable, the amount after the
+  provider's fee, or what was actually transferred is undocumented. Nexa never credits it (lead
+  decision, round 9): it is shown, and flagged to the operator when it is neither the principal nor
+  the invoiced amount. Crediting by it would need the owner's decision AND an inquiry that reports it.
+- **OQ-TPTG-29 — the provider's own handling of an invoice Nexa expired and cancelled.** Nexa asks
+  `/cancel` once when its deadline expires a `pending` attempt; a customer who transferred but never
+  sent the receipt before the deadline has money on the card and no invoice. That case was already
+  stranded before (Nexa's receipt window had closed); it needs an operator either way.

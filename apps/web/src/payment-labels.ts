@@ -4,6 +4,7 @@ import {
   TONPAYS_STATUSES,
   type CustomerNotificationKind,
   type GatewayCardChangeState,
+  type GatewayProviderRequestState,
   type GatewayInvoiceCreationState,
   type GatewayInvoiceOutcome,
   type GatewayReceiptSubmissionState,
@@ -193,6 +194,18 @@ export const GATEWAY_CARD_CHANGE_STATE_LABELS: Readonly<Record<GatewayCardChange
   REFUSED: 'web.gw_card_change_refused',
   RATE_LIMITED: 'web.gw_card_change_rate_limited',
   UNKNOWN: 'web.gw_card_change_unknown',
+};
+
+/** R9 C1: a cancel or refund-card request sent to the provider, by state (audit §19). */
+export const GATEWAY_PROVIDER_REQUEST_STATE_LABELS: Readonly<
+  Record<GatewayProviderRequestState, WebKey>
+> = {
+  REQUESTED: 'web.gw_request_requested',
+  SENT: 'web.gw_request_sent',
+  APPLIED: 'web.gw_request_applied',
+  REFUSED: 'web.gw_request_refused',
+  RATE_LIMITED: 'web.gw_request_rate_limited',
+  UNKNOWN: 'web.gw_request_unknown',
 };
 
 /** A receipt the customer sent the provider, by state (TonPays Telegram §7.5). */

@@ -3,6 +3,8 @@ import { CURRENCY_CODES, salesCurrencyCodeSchema } from './money.js';
 import { TELEGRAM_STARS_CURRENCY } from './telegram-stars.js';
 import {
   GATEWAY_CARD_CHANGE_STATES,
+  GATEWAY_PROVIDER_NEED_KINDS,
+  GATEWAY_PROVIDER_REQUEST_STATES,
   GATEWAY_RECEIPT_SUBMISSION_STATES,
 } from './tonpays-telegram.js';
 import {
@@ -338,6 +340,56 @@ const gatewayInvoiceViewShape = z.object({
       }),
     )
     .default([]),
+  /*
+   * R9 C1: what the provider's LATEST inquiry said the customer owes next — the remainder of
+   * an underpaid invoice (`LESS`) or a refund card for an overpaid one (`MORE`) — as the
+   * provider worded it, in its own unit, and never what Nexa settles, credits or refunds. The
+   * payee card of a remainder is the provider's and is not carried, as for `cardSeq`. Null
+   * when the provider named no next step. Defaulted so a previous release's response reads
+   * "none".
+   */
+  providerNeed: z
+    .object({
+      need: z.enum(GATEWAY_PROVIDER_NEED_KINDS).nullable(),
+      remainingAmount: z.string().nullable(),
+      remainingInvoiceId: z.string().nullable(),
+      remainingReceiptReceived: z.boolean().nullable(),
+      refundAmount: z.string().nullable(),
+      refundPending: z.boolean().nullable(),
+    })
+    .nullable()
+    .default(null),
+  /**
+   * R9 C1: the latest refund-card request (an overpayment) and the latest cancel request, by
+   * state and code only. The refund card is carried masked (`603799******7890`), the form
+   * the request row keeps once its send was stamped; never the number or the holder.
+   */
+  latestRefund: z
+    .object({
+      state: z.enum(GATEWAY_PROVIDER_REQUEST_STATES),
+      errorCode: z.string().nullable(),
+      refundCardMasked: z.string().nullable(),
+      requestedAt: z.iso.datetime(),
+      decidedAt: z.iso.datetime().nullable(),
+    })
+    .nullable()
+    .default(null),
+  latestCancel: z
+    .object({
+      state: z.enum(GATEWAY_PROVIDER_REQUEST_STATES),
+      errorCode: z.string().nullable(),
+      /** Asked by Nexa itself (a new invoice, or the attempt expired) rather than the customer. */
+      byNexa: z.boolean(),
+      requestedAt: z.iso.datetime(),
+      decidedAt: z.iso.datetime().nullable(),
+    })
+    .nullable()
+    .default(null),
+  /**
+   * R9 C1: `creditAmount` is neither the principal nor what Nexa invoiced, in the provider's
+   * unit. A flag for an operator; nothing is credited on it.
+   */
+  creditAmountDiffers: z.boolean().default(false),
 });
 /**
  * The view with its policy always present: what the previous release sent without one is

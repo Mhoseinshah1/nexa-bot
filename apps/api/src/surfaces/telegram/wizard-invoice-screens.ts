@@ -23,6 +23,7 @@ import type { TelegramMessageStateService } from '../../modules/commerce/messagi
 import type { GatewayInvoiceRecord } from '../../modules/commerce/payments/application/gateway-invoice-ports.js';
 import type { GatewayCardFacts } from '../../modules/commerce/payments/application/gateway-payment.service.js';
 import type { PaymentRecord } from '../../modules/commerce/payments/application/ports.js';
+import type { CustomerContactReader } from '../../modules/commerce/provisioning/application/ports.js';
 import { editSent, gatewayAttemptScreen } from './bot-runtime.js';
 import type { InvoiceScreensPort } from './wizard-state.js';
 
@@ -67,7 +68,7 @@ export class WizardInvoiceScreens implements InvoiceScreensPort {
     private readonly deps: {
       readonly state: Pick<
         TelegramMessageStateService,
-        'moveAll' | 'moveBack' | 'latestForSubject'
+        'moveAll' | 'moveBack' | 'latestForSubject' | 'register'
       >;
       readonly payments: {
         findById(scope: TenantContext, id: PaymentId): Promise<PaymentRecord | null>;
@@ -87,8 +88,97 @@ export class WizardInvoiceScreens implements InvoiceScreensPort {
       readonly clock: Clock;
       /** `SYSTEM_JOB`: this is background presentation work on the customer's behalf. */
       readonly actor: () => ActorContext;
+      /**
+       * R9 C1: where a NEW message to the customer goes — their chat, and only while they are
+       * ACTIVE. Absent: `announce` is `refresh`.
+       */
+      readonly contacts?: CustomerContactReader;
     },
   ) {}
+
+  /**
+   * R9 C1 (the owner's real test: an underpayment produced NO message at all): the customer now
+   * owes a NEXT STEP — the remainder of an underpaid invoice, or a refund card for an overpaid
+   * one. `refresh` only EDITS the message that still shows the invoice, and an edit is silent;
+   * a message the customer navigated away from, or whose wizard moved on, was not edited at all.
+   * So the next step goes out as a NEW message (it notifies them), drawn by the same
+   * `gatewayAttemptScreen` from the committed attempt, and becomes the payment's invoice screen:
+   * the older invoice messages lose their buttons (their text stays as the record), so exactly
+   * one message offers the next step, and later edits land on it.
+   *
+   * Called by the gateway worker once per new ask (the inquiry decided that under the facts row's
+   * lock). Nothing about money is decided here, and the screen's figures are the provider's
+   * instructions, never what Nexa settles. When there is nothing to announce (the attempt has
+   * moved on, its deadline passed), nowhere to send it (no chat, a blocked customer), or the
+   * send did not go out, it falls back to `refresh`: the old behaviour, never less.
+   */
+  async announce(scope: TenantContext, paymentId: string): Promise<void> {
+    const payment = await this.deps.payments.findById(scope, paymentId as PaymentId);
+    if (payment === null || payment.method !== 'GATEWAY' || this.deps.contacts === undefined) {
+      return this.refresh(scope, paymentId);
+    }
+    const invoice = await this.deps.invoices.invoiceForPayment(scope, payment.id);
+    if (invoice === null) return;
+    const facts = (await this.deps.invoices.cardFactsFor?.(scope, invoice)) ?? null;
+    const screen = gatewayAttemptScreen(
+      { payment, invoice },
+      payment.orderId,
+      this.deps.clock.now(),
+      facts,
+    );
+    if (screen.key === null || !NEXT_STEP_SCREEN_KEYS.has(screen.key)) {
+      return this.refresh(scope, paymentId);
+    }
+    const lookup = await this.deps.contacts.contactFor(scope, payment.customerId);
+    if (lookup.kind !== 'CONTACT') return this.refresh(scope, paymentId);
+    const botInstanceId = (invoice.botInstanceId ?? lookup.contact.botInstanceId) as BotInstanceId;
+    const sent = await this.deps.messenger.send(scope, {
+      chatId: lookup.contact.chatId,
+      botInstanceId,
+      templateKey: screen.key,
+      values: screen.values,
+      buttons: screen.buttons,
+    });
+    if (sent.outcome !== 'DELIVERED' || sent.messageId === undefined) {
+      // Not sent (a rate limit, a refusal, a lost answer): the invoice message is edited instead.
+      return this.refresh(scope, paymentId);
+    }
+    // The older screens of this payment stop offering buttons; the new message is the screen.
+    await this.retire(scope, payment.id);
+    await this.deps.state.register(scope, this.deps.actor(), {
+      ref: { chatId: lookup.contact.chatId, messageId: sent.messageId, botInstanceId },
+      landing: {
+        kind: payment.orderId === null ? 'TOPUP' : 'ORDER',
+        step: 'INVOICE',
+        subjectId: payment.orderId,
+        paymentId: payment.id,
+      },
+    });
+  }
+
+  /** The payment's invoice messages lose their buttons, best effort; their text stays. */
+  private async retire(scope: TenantContext, paymentId: PaymentId): Promise<void> {
+    const moved = await this.deps.state.moveAll(
+      scope,
+      this.deps.actor(),
+      { paymentId },
+      ['INVOICE_PENDING', 'INVOICE'],
+      'CLOSED',
+    );
+    const clear = this.deps.messenger.clearButtons;
+    if (clear === undefined) return;
+    for (const wizard of moved) {
+      try {
+        await clear.call(this.deps.messenger, scope, {
+          chatId: wizard.chatId,
+          messageId: wizard.messageId,
+          botInstanceId: wizard.botInstanceId,
+        });
+      } catch {
+        // Its buttons stay; each re-checks the payment on a tap, and the wizard is CLOSED.
+      }
+    }
+  }
 
   async refresh(scope: TenantContext, paymentId: string): Promise<void> {
     const payment = await this.deps.payments.findById(scope, paymentId as PaymentId);
@@ -266,6 +356,18 @@ export class WizardInvoiceScreens implements InvoiceScreensPort {
     }
   }
 }
+
+/**
+ * R9 C1: the screens `gatewayAttemptScreen` draws for a next step the customer owes — what
+ * `announce` sends as a new message. Any other screen is only ever an edit.
+ */
+const NEXT_STEP_SCREEN_KEYS: ReadonlySet<TemplateKey> = new Set<TemplateKey>([
+  'bot.payment.gateway_card_underpaid',
+  'bot.payment.gateway_card_underpaid_unavailable',
+  'bot.payment.gateway_card_underpaid_receipt_sent',
+  'bot.payment.gateway_card_overpaid',
+  'bot.payment.gateway_card_overpaid_pending',
+]);
 
 /** The screens of an order's wizard that still carry buttons. */
 const OPEN_ORDER_STEPS: readonly TelegramWizardStep[] = [

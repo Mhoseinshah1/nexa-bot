@@ -32,6 +32,7 @@ import {
   type PaymentSituationView,
   type GatewayRateAuthority,
   type GatewayRateProvenance,
+  type GatewayProviderRequestState,
   paymentTrackingCode,
 } from '@nexa/contracts';
 import {
@@ -103,6 +104,7 @@ import {
   PROVIDER_STATUS_LABELS,
   GATEWAY_CREATION_STATE_LABELS,
   GATEWAY_CARD_CHANGE_STATE_LABELS,
+  GATEWAY_PROVIDER_REQUEST_STATE_LABELS,
   GATEWAY_RECEIPT_SUBMISSION_STATE_LABELS,
   providerPaidKey,
   PAYMENT_METHOD_LABELS as METHOD_LABELS,
@@ -2485,6 +2487,7 @@ export function PaymentDetailPage({
                             {`${row.gatewayInvoice.sentAmount} / ${row.gatewayInvoice.requestAmount ?? '—'} / ${row.gatewayInvoice.finalAmount ?? '—'} / ${row.gatewayInvoice.creditAmount ?? '—'} ${row.gatewayInvoice.providerUnit}`}
                           </Ltr>,
                         ],
+                        ...creditAmountFacts(row.gatewayInvoice),
                         /*
                          * Package FX: how the provider figure was derived, and — for the central
                          * rate — the snapshot it was derived from: the quote, its source and
@@ -2521,6 +2524,7 @@ export function PaymentDetailPage({
                         ],
                         ...reviewFacts(row),
                         ...cardTransferFacts(row.gatewayInvoice),
+                        ...providerNextStepFacts(row.gatewayInvoice),
                       ]}
                     />
                   </Disclosure>
@@ -2660,6 +2664,149 @@ function cardTransferFacts(invoice: GatewayInvoiceDetail): [string, ReactNode][]
       ),
     ],
   ];
+}
+
+/**
+ * R9 C1: the webhook's `credit_amount` on its own line, labelled, with a flag when it is
+ * neither the principal nor what Nexa invoiced (the server decides). Metadata: never credited.
+ */
+function creditAmountFacts(invoice: GatewayInvoiceDetail): [string, ReactNode][] {
+  if (invoice.creditAmount === null) return [];
+  return [
+    [
+      t('web.payment_gateway_credit_amount'),
+      <span key="ca">
+        <Ltr>{`${invoice.creditAmount} ${invoice.providerUnit}`}</Ltr>
+        {invoice.creditAmountDiffers ? (
+          <>
+            {' '}
+            <Badge tone="warn">{t('web.payment_gateway_credit_amount_differs')}</Badge>
+          </>
+        ) : null}
+        <div className="muted small">{t('web.payment_gateway_credit_amount_note')}</div>
+      </span>,
+    ],
+  ];
+}
+
+/** A provider cancel or refund request: its state, its code, when it was asked. */
+function providerRequestLine(request: {
+  readonly state: GatewayProviderRequestState;
+  readonly errorCode: string | null;
+  readonly requestedAt: string;
+}): ReactNode {
+  return (
+    <>
+      <CodeName value={request.state} labels={GATEWAY_PROVIDER_REQUEST_STATE_LABELS} />
+      {request.errorCode === null ? null : (
+        <>
+          {' · '}
+          <ErrorCodeLabel code={request.errorCode} />
+        </>
+      )}
+      {` · ${formatTimestamp(request.requestedAt)}`}
+    </>
+  );
+}
+
+/**
+ * R9 C1: what TonPays last said the customer owes next — the remainder of an underpaid invoice
+ * or a refund card for an overpaid one — as the provider worded it (never what Nexa settles),
+ * and the customer's refund-card and cancel requests. Nothing is drawn for a fact not reported.
+ */
+function providerNextStepFacts(invoice: GatewayInvoiceDetail): [string, ReactNode][] {
+  const rows: [string, ReactNode][] = [];
+  const need = invoice.providerNeed;
+  if (need !== null && need.need !== null) {
+    rows.push([
+      t('web.payment_gateway_next_step'),
+      <Badge key="ns" tone="warn">
+        {t(
+          need.need === 'LESS' ? 'web.payment_gateway_need_less' : 'web.payment_gateway_need_more',
+        )}
+      </Badge>,
+    ]);
+    if (need.need === 'LESS') {
+      rows.push([
+        t('web.payment_gateway_remaining'),
+        need.remainingAmount === null ? (
+          <Dash key="ra" />
+        ) : (
+          <Ltr key="ra">{`${need.remainingAmount} ${invoice.providerUnit}`}</Ltr>
+        ),
+      ]);
+      rows.push([
+        t('web.payment_gateway_remaining_invoice'),
+        need.remainingInvoiceId === null ? (
+          <Dash key="ri" />
+        ) : (
+          <Copyable key="ri" value={need.remainingInvoiceId} />
+        ),
+      ]);
+      rows.push([
+        t('web.payment_gateway_remaining_receipt'),
+        need.remainingReceiptReceived === null ? (
+          <Dash key="rr" />
+        ) : (
+          <span key="rr">
+            {t(
+              need.remainingReceiptReceived
+                ? 'web.payment_gateway_remaining_receipt_received'
+                : 'web.payment_gateway_remaining_receipt_missing',
+            )}
+          </span>
+        ),
+      ]);
+    } else {
+      rows.push([
+        t('web.payment_gateway_refund_amount'),
+        need.refundAmount === null ? (
+          <Dash key="fa" />
+        ) : (
+          <span key="fa">
+            <Ltr>{`${need.refundAmount} ${invoice.providerUnit}`}</Ltr>
+            {need.refundPending === true ? (
+              <>
+                {' '}
+                <Badge tone="info">{t('web.payment_gateway_refund_pending')}</Badge>
+              </>
+            ) : null}
+          </span>
+        ),
+      ]);
+    }
+  }
+  const refund = invoice.latestRefund;
+  if (refund !== null) {
+    rows.push([
+      t('web.payment_gateway_refund_request'),
+      <span key="rq">
+        {refund.refundCardMasked === null ? null : (
+          <>
+            <Ltr>{refund.refundCardMasked}</Ltr>
+            {' · '}
+          </>
+        )}
+        {providerRequestLine(refund)}
+      </span>,
+    ]);
+  }
+  const cancel = invoice.latestCancel;
+  if (cancel !== null) {
+    rows.push([
+      t('web.payment_gateway_cancel_request'),
+      <span key="cq">
+        {providerRequestLine(cancel)}
+        {' · '}
+        {t(
+          cancel.byNexa
+            ? 'web.payment_gateway_cancel_by_nexa'
+            : 'web.payment_gateway_cancel_by_customer',
+        )}
+      </span>,
+    ]);
+  }
+  return rows;
 }
 
 /**
