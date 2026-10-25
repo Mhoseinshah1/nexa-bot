@@ -4,6 +4,7 @@ import {
   RECEIPT_PUSH_SWEEP_LIMIT,
   type ReceiptReviewPushService,
 } from './receipt-review-push.service.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 /**
  * How often the receipt push lane looks for work. Shorter than the customer lane's minute: a
@@ -54,7 +55,10 @@ export class ReceiptReviewPushLoop {
   start(): void {
     if (this.timer !== null) return;
     this.progress.begin(this.options.now());
-    this.timer = setInterval(() => void this.tick(), this.options.intervalMs);
+    this.timer = setInterval(
+      guardedTick('receipt-review-push', () => this.tick(), this.options.logger),
+      this.options.intervalMs,
+    );
     this.timer.unref?.();
   }
 

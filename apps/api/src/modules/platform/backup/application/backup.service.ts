@@ -32,6 +32,7 @@ import {
 import { diskInsufficientReason } from './backup-disk.js';
 import { backupPartCaption, backupSummaryMessage } from './backup-caption.js';
 import type { BackupOrphanSweepResult } from './backup-orphan-sweep.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 /**
  * The backup pipeline.
@@ -1336,7 +1337,7 @@ export class BackupService {
           );
         } else if (!stopped) {
           // A transient failure is retried soon, not after a whole interval.
-          retryTimer = setTimeout(() => void attempt(), retryMs);
+          retryTimer = setTimeout(beat, retryMs);
           retryTimer.unref();
         }
       } finally {
@@ -1345,7 +1346,10 @@ export class BackupService {
       }
     };
 
-    const timer = setInterval(() => void attempt(), timing.intervalMs ?? BACKUP_LEASE_HEARTBEAT_MS);
+    // Guarded: a throw out of `attempt`'s own `catch` (its logger) must not reject a promise
+    // nothing awaits — an unhandled rejection exits the process mid-backup.
+    const beat = guardedTick('backup-lease-heartbeat', attempt, this.deps.logger);
+    const timer = setInterval(beat, timing.intervalMs ?? BACKUP_LEASE_HEARTBEAT_MS);
     timer.unref();
     return {
       stop: () => {

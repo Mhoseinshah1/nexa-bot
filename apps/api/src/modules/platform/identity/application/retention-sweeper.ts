@@ -1,5 +1,6 @@
 import type { Clock, Logger } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 /**
  * Worker-side housekeeping for identity tables that grow on their own.
@@ -84,8 +85,9 @@ export class RetentionSweeper {
   start(): void {
     if (this.timer !== null) return;
     this.progress.begin(this.clock.now().getTime());
-    this.firstRun = setTimeout(() => void this.tick(), this.options.initialDelayMs);
-    this.timer = setInterval(() => void this.tick(), this.options.intervalMs);
+    const tick = guardedTick(`retention:${this.task.name}`, () => this.tick(), this.logger);
+    this.firstRun = setTimeout(tick, this.options.initialDelayMs);
+    this.timer = setInterval(tick, this.options.intervalMs);
     // Never hold the process open for a housekeeping timer.
     this.firstRun.unref?.();
     this.timer.unref?.();

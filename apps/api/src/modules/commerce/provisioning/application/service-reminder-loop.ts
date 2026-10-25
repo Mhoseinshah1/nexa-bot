@@ -1,6 +1,7 @@
 import type { TenantContext } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { ServiceReminderService } from './service-reminder.service.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 /**
  * How often the reminder sweep runs.
@@ -79,7 +80,10 @@ export class ServiceReminderLoop {
   start(): void {
     if (this.timer !== null) return;
     this.progress.begin(this.options.now());
-    this.timer = setInterval(() => void this.tick(), this.options.intervalMs);
+    this.timer = setInterval(
+      guardedTick('service-reminders', () => this.tick(), this.options.logger),
+      this.options.intervalMs,
+    );
     // Never hold the event loop open for a housekeeping timer.
     this.timer.unref?.();
     this.stopping = false;

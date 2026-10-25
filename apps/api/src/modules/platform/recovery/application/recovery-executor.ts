@@ -24,6 +24,7 @@ import type {
 } from './ports.js';
 import type { RecoveryService } from './recovery.service.js';
 import type { RecoveryKeyCoverage } from './installation-key.ports.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 /**
  * The destructive half of a recovery, in its own process.
@@ -166,7 +167,10 @@ export class RecoveryExecutor {
 
   start(): void {
     if (this.timer !== null) return;
-    this.timer = setInterval(() => void this.tick(), this.deps.tickIntervalMs);
+    this.timer = setInterval(
+      guardedTick('recovery-executor', () => this.tick(), this.deps.logger),
+      this.deps.tickIntervalMs,
+    );
     this.timer.unref();
   }
 
@@ -1363,16 +1367,22 @@ export class RecoveryExecutor {
    * quiesced it.
    */
   private startHeartbeat(id: string): { stop(): void } {
-    const timer = setInterval(() => {
-      void this.deps.requests
-        .heartbeat({ id, leaseOwner: this.deps.leaseOwner, now: this.deps.clock.now() })
-        .catch((error: unknown) => {
-          this.deps.logger.warn(
-            { recoveryId: id, reason: error instanceof Error ? error.message : String(error) },
-            'recovery lease heartbeat failed',
-          );
-        });
-    }, RECOVERY_LEASE_HEARTBEAT_MS);
+    const timer = setInterval(
+      guardedTick(
+        'recovery-lease-heartbeat',
+        () =>
+          this.deps.requests
+            .heartbeat({ id, leaseOwner: this.deps.leaseOwner, now: this.deps.clock.now() })
+            .catch((error: unknown) => {
+              this.deps.logger.warn(
+                { recoveryId: id, reason: error instanceof Error ? error.message : String(error) },
+                'recovery lease heartbeat failed',
+              );
+            }),
+        this.deps.logger,
+      ),
+      RECOVERY_LEASE_HEARTBEAT_MS,
+    );
     timer.unref();
     return { stop: () => clearInterval(timer) };
   }

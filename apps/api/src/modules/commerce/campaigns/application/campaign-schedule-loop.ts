@@ -8,6 +8,7 @@ import {
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { CampaignRepository } from './ports.js';
 import type { CampaignService } from './campaign.service.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 /**
  * The campaign lane (`docs/round-n-campaigns-audit.md` D11), in the WORKER.
@@ -60,7 +61,10 @@ export class CampaignScheduleLoop {
   start(): void {
     if (this.timer !== null) return;
     this.progress.begin(this.options.now().getTime());
-    this.timer = setInterval(() => void this.tick(), this.options.intervalMs);
+    this.timer = setInterval(
+      guardedTick('campaign-schedule', () => this.tick(), this.options.logger),
+      this.options.intervalMs,
+    );
     this.timer.unref?.();
   }
 

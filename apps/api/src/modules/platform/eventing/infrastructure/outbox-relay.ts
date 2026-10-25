@@ -19,6 +19,7 @@ import type {
 } from '../../../../infrastructure/persistence/database.js';
 import { withinTransaction } from '../../../../infrastructure/transaction-boundary.js';
 import { redactStoredText } from '../../../../infrastructure/redaction.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 import {
   UNGATED,
   type InstallationWriteGate,
@@ -186,9 +187,10 @@ export class OutboxRelay {
 
   private scheduleNext(delayMs: number): void {
     if (!this.running) return;
-    this.timer = setTimeout(() => {
-      void this.tick();
-    }, delayMs);
+    this.timer = setTimeout(
+      guardedTick('relay', () => this.tick(), this.logger),
+      delayMs,
+    );
     this.timer.unref?.();
   }
 
@@ -199,9 +201,12 @@ export class OutboxRelay {
       result = await this.processBatch();
     } catch (error) {
       this.logger.error({ err: String(error) }, 'Outbox relay batch failed');
+    } finally {
+      // Drain quickly while batches make progress; idle politely when they do not. In a
+      // `finally`, because this loop re-arms itself: a throw out of the `catch` (the logger
+      // itself failing) used to end the relay for good. The guard logs and counts it.
+      this.scheduleNext(nextRelayDelayMs(result, this.options.pollIntervalMs));
     }
-    // Drain quickly while batches make progress; idle politely when they do not.
-    this.scheduleNext(nextRelayDelayMs(result, this.options.pollIntervalMs));
   }
 
   /**

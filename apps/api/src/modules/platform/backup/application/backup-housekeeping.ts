@@ -12,6 +12,7 @@ import type {
   BackupDebrisStore,
   BackupRunRepository,
 } from './ports.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 /**
  * The backup pipeline's housekeeping, in the worker (Program E5).
@@ -152,8 +153,9 @@ export class BackupHousekeeping {
   start(): void {
     if (this.timer !== null) return;
     this.progress.begin(this.deps.clock.now().getTime());
-    this.firstRun = setTimeout(() => void this.tick(), this.deps.initialDelayMs);
-    this.timer = setInterval(() => void this.tick(), this.deps.tickIntervalMs);
+    const tick = guardedTick('backup-housekeeping', () => this.tick(), this.deps.logger);
+    this.firstRun = setTimeout(tick, this.deps.initialDelayMs);
+    this.timer = setInterval(tick, this.deps.tickIntervalMs);
     this.firstRun.unref?.();
     this.timer.unref?.();
   }

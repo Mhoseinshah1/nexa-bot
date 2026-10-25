@@ -4,6 +4,7 @@ import { latestDailySlot } from './backup-schedule.js';
 import { BACKUP_RETRY_LOOKBACK, backupRetryHold } from './backup-retry-policy.js';
 import type { BackupRunRepository } from './ports.js';
 import type { BackupService } from './backup.service.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 /** Re-exported from the retry policy, where the hour is now one rule among the backoff's. */
 export { BACKUP_MEMORY_FAILURE_COOLDOWN_MS } from './backup-retry-policy.js';
@@ -118,13 +119,14 @@ export class BackupScheduler {
   start(): void {
     if (this.timer !== null) return;
     this.progress.begin(this.deps.clock.now().getTime());
-    this.timer = setInterval(() => void this.tick(), this.deps.tickIntervalMs);
+    const tick = guardedTick('backup-scheduler', () => this.tick(), this.deps.logger);
+    this.timer = setInterval(tick, this.deps.tickIntervalMs);
     this.timer.unref();
     // The immediate, safe initial check (spec §14): asks the table whether a backup is
     // due rather than waiting a whole tick interval to find out. Safe to fire beside the
     // timer — `ticking` makes the second one return — and beside another replica — the
     // partial unique index makes the second one BUSY.
-    void this.tick();
+    tick();
   }
 
   stop(): void {

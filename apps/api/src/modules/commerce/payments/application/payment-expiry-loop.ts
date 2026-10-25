@@ -1,6 +1,7 @@
 import type { TenantContext } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { PaymentExpiryService } from './payment-expiry.service.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 /**
  * The timer that drives the payment and order expiry sweep, and the readiness it earns.
@@ -70,7 +71,10 @@ export class PaymentExpiryLoop {
   start(): void {
     if (this.timer !== null) return;
     this.progress.begin(this.options.now());
-    this.timer = setInterval(() => void this.tick(), this.options.intervalMs);
+    this.timer = setInterval(
+      guardedTick('payment-expiry', () => this.tick(), this.options.logger),
+      this.options.intervalMs,
+    );
     // Never hold the event loop open for a housekeeping timer.
     this.timer.unref?.();
   }

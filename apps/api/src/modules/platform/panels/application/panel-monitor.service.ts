@@ -44,6 +44,7 @@ import {
 import type { DuePanel, PanelHealthRecord, PanelMonitorRepository, PanelView } from './ports.js';
 import type { PanelCapacityRepository } from './capacity-ports.js';
 import { CAPACITY_CODES, capacityAlertFor, capacityConditionKey } from './panel-capacity-alerts.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 /**
  * The permission the monitor acts under.
@@ -353,8 +354,9 @@ export class PanelMonitorService {
     // The first tick runs immediately rather than one interval later. A monitor
     // that restarts more often than its interval — a crash loop, a day of
     // deploys — would otherwise never probe anything at all.
-    void this.tick();
-    this.timer = setInterval(() => void this.tick(), this.intervalMs);
+    const tick = guardedTick('panel-monitor', () => this.tick(), this.deps.logger);
+    tick();
+    this.timer = setInterval(tick, this.intervalMs);
     this.timer.unref?.();
   }
 
