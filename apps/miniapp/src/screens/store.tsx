@@ -4,9 +4,11 @@ import {
   miniAppCategoriesResponseSchema,
   miniAppCategoryResponseSchema,
   miniAppOrderSchema,
+  type MiniAppCategoriesResponse,
   type MiniAppProduct,
 } from '@nexa/contracts';
 import { formatDurationDays } from '@nexa/i18n';
+import type { MiniAppApi } from '../api.js';
 import { useApp } from '../app.js';
 import { t } from '../i18n/t.js';
 import { money, trafficLimit } from '../format.js';
@@ -24,10 +26,7 @@ import { Button, Card, Loading, errorText, useLoad } from '../ui.js';
  */
 export function Store() {
   const { api } = useApp();
-  const { loaded, reload } = useLoad(
-    () => api.get(MINIAPP_ROUTES.categories, {}, miniAppCategoriesResponseSchema, 'page=0'),
-    [api],
-  );
+  const { loaded, reload } = useLoad(() => allCategories(api), [api]);
   const [chosen, setChosen] = useState<string | null>(null);
   return (
     <main className="page">
@@ -60,6 +59,28 @@ export function Store() {
       </Loading>
     </main>
   );
+}
+
+/**
+ * Every category, page after page: they are the store's tabs, so a tenant with more than one
+ * page of them must see all of them, not the first page's. Bounded, so a server that kept
+ * answering `hasMore` could not keep the store loading forever.
+ */
+const CATEGORY_PAGES_MAX = 50;
+
+async function allCategories(api: MiniAppApi) {
+  const items: MiniAppCategoriesResponse['items'][number][] = [];
+  for (let page = 0; page < CATEGORY_PAGES_MAX; page += 1) {
+    const result = await api.get(
+      MINIAPP_ROUTES.categories,
+      {},
+      miniAppCategoriesResponseSchema,
+      `page=${String(page)}`,
+    );
+    items.push(...result.items);
+    if (!result.hasMore) break;
+  }
+  return { items };
 }
 
 function Category({ categoryId }: { categoryId: string }) {

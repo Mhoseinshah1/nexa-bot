@@ -67,6 +67,18 @@ export interface ReceiptSubmission {
    */
   readonly botInstanceId: BotInstanceId;
   readonly file: InboundReceiptFile;
+  /**
+   * The payment the caller means the file for, when it names one. The bot's path does not:
+   * a photo sent to the bot is for whatever its window names, so the bot passes nothing and
+   * nothing about its behaviour changes. The mini app does — the customer uploaded for ONE
+   * payment — and between its `signalTransferSent` and this call (the Telegram upload sits
+   * in between) another tap can move the window to a different payment. Given, a window
+   * that names any other payment is REFUSED (`RECEIPT_NOT_EXPECTED`, reason
+   * `WINDOW_MOVED`), decided under the capture lock that guards the insert. Never
+   * redirected: a receipt filed against a payment the customer did not upload it for is
+   * evidence for the wrong transfer.
+   */
+  readonly expectedPaymentId?: PaymentId;
 }
 
 /**
@@ -228,6 +240,12 @@ export class ReceiptService {
       requestHash,
     );
     if (replayed !== null) {
+      if (
+        submission.expectedPaymentId !== undefined &&
+        replayed.result.paymentId !== submission.expectedPaymentId
+      ) {
+        throw windowMoved();
+      }
       return {
         paymentId: replayed.result.paymentId as PaymentId,
         filed: replayed.result.filed,
@@ -268,6 +286,13 @@ export class ReceiptService {
             COMMERCE_ERROR_CODES.RECEIPT_NOT_EXPECTED,
             'No receipt was expected from this customer.',
           );
+        }
+        // Before anything else the window says, and under the lock: see `expectedPaymentId`.
+        if (
+          submission.expectedPaymentId !== undefined &&
+          open.paymentId !== submission.expectedPaymentId
+        ) {
+          throw windowMoved();
         }
         if (open.expiresAt.getTime() <= now.getTime()) {
           /*
@@ -700,4 +725,13 @@ interface ReceiptReplay {
   readonly paymentId: string;
   readonly filed: boolean;
   readonly held: number;
+}
+
+/** The open window names another payment than the one the caller filed the file for. */
+function windowMoved() {
+  return errors.conflict(
+    COMMERCE_ERROR_CODES.RECEIPT_NOT_EXPECTED,
+    'The receipt window is open for another payment.',
+    { reason: 'WINDOW_MOVED' },
+  );
 }

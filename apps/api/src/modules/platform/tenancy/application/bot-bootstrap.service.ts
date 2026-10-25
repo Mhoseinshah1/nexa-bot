@@ -31,7 +31,7 @@ import type {
 } from './ports.js';
 import type { BotWebhookRead } from './bot-management-ports.js';
 import { webhookSecretFingerprint } from './webhook-fingerprint.js';
-import { commandMenuHash, type CommandMenu } from './command-menu.js';
+import { commandMenuHash, revisionHasMiniAppButton, type CommandMenu } from './command-menu.js';
 import { tokenReplacementLeaseMs } from '../domain/token-replacement-lease.js';
 import { liveProblems } from '../domain/bot-readiness.js';
 import {
@@ -1280,6 +1280,17 @@ export class BotBootstrapService {
     const registered =
       (await this.deps.telegram.registerCommands({ token, commands: desired.entries })).outcome ===
       'REGISTERED';
+    /*
+     * Round 9, C5 (Codex on #326): a button set earlier and no longer wanted (the mini app
+     * switched off) is reset by the sync lane, and the lane's only sign that this bot HAS a
+     * button is the `m` on its stored revision. Recording the commands' digest here would
+     * erase that sign: the lane would then see the bot current, never reset the button, and
+     * the customers would keep a button to a mini app that is off. So the commands are
+     * registered and the stored revision is left as it is; the lane records its own after
+     * the reset.
+     */
+    const resetPending = (desired.menuButton ?? null) === null && revisionHasMiniAppButton(stored);
+    const record = registered && !resetPending;
 
     /*
      * Recorded as an AUDIT row rather than thrown or logged into the void.
@@ -1309,7 +1320,7 @@ export class BotBootstrapService {
        */
       await this.deps.bots.lockTenantForBotChange(scope, tx);
       await this.requireActiveScope(scope, tx);
-      if (registered) {
+      if (record) {
         // Written only on success. A digest stored after a FAILED call would
         // make the next reconcile skip it, and the menu would stay wrong until
         // the list changed again.
@@ -1329,8 +1340,9 @@ export class BotBootstrapService {
           entityId: id,
           before: { commandsRevision: stored },
           after: {
-            commandsRevision: registered ? revision : stored,
+            commandsRevision: record ? revision : stored,
             commands: desired.entries.length,
+            ...(resetPending ? { menuButtonResetPending: true } : {}),
           },
           result: registered ? 'SUCCESS' : 'FAILED',
         },

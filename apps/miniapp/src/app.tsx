@@ -152,11 +152,14 @@ export function App() {
     return () => app.BackButton.offClick(back);
   }, [stack.length, back]);
 
+  // Stable for the session (it depends on the client, not on `me`), so a screen can refresh
+  // on mount without the refreshed `me` re-running its effect.
+  const api = boot.state === 'ready' ? boot.api : null;
   const refreshMe = useCallback(async () => {
-    if (boot.state !== 'ready') return;
-    const me = await boot.api.get(MINIAPP_ROUTES.me, {}, miniAppMeResponseSchema);
-    setBoot({ ...boot, me });
-  }, [boot]);
+    if (api === null) return;
+    const me = await api.get(MINIAPP_ROUTES.me, {}, miniAppMeResponseSchema);
+    setBoot((current) => (current.state === 'ready' ? { ...current, me } : current));
+  }, [api]);
 
   const context = useMemo<AppContextValue | null>(
     () =>

@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { MINIAPP_ROUTES, miniAppServicesResponseSchema } from '@nexa/contracts';
 import { useApp } from '../app.js';
 import { t } from '../i18n/t.js';
@@ -16,7 +17,14 @@ import { useTrialOffers } from './entry-points.js';
  * while a panel offers a trial) are here; the referral entry lives in the profile.
  */
 export function Home() {
-  const { api, me, navigate } = useApp();
+  const { api, me, navigate, refreshMe } = useApp();
+  // The balance is `me`'s, and `me` is otherwise the sign-in snapshot: a top-up settled or a
+  // purchase paid on another screen must show when the customer comes back here. Home is
+  // mounted afresh every time it becomes the screen, so this runs on each return. A failed
+  // refresh keeps the figure already drawn rather than replacing the screen with an error.
+  useEffect(() => {
+    refreshMe().catch(() => undefined);
+  }, [refreshMe]);
   const { loaded, reload } = useLoad(
     () => api.get(MINIAPP_ROUTES.services, {}, miniAppServicesResponseSchema, 'page=0'),
     [api],

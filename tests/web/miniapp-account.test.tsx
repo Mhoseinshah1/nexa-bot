@@ -743,3 +743,49 @@ describe('trial', () => {
     );
   });
 });
+
+describe('the store and home after the first screen', () => {
+  it('draws every category tab, not only the first page of twenty', async () => {
+    // 45 categories: the server pages them twenty at a time (`hasMore`), as the shop does.
+    const all = Array.from({ length: 45 }, (_, index) => ({
+      id: `cat-${String(index)}`,
+      name: `دسته ${String(index)}`,
+      emoji: null,
+    }));
+    const calls = serve({
+      'GET /catalogue/categories': (url) => {
+        const page = Number(url.searchParams.get('page') ?? '0');
+        const items = all.slice(page * 20, page * 20 + 20);
+        return { items, page, hasMore: (page + 1) * 20 < all.length };
+      },
+      'GET /catalogue/categories/cat-0': () => ({ items: [], page: 0, hasMore: false }),
+    });
+    await mount();
+    tab(text('miniapp.tab_store'));
+    await screen.findByRole('tab', { name: 'دسته 44' });
+    expect(screen.getAllByRole('tab')).toHaveLength(45);
+    expect(screen.getByRole('tab', { name: 'دسته 20' })).toBeTruthy();
+    expect(
+      calls.filter((one) => one.route === '/catalogue/categories').map((one) => one.query),
+    ).toEqual(['?page=0', '?page=1', '?page=2']);
+  });
+
+  it('shows the balance as it is now when the customer comes back home, not the sign-in one', async () => {
+    let balance = 1_250_000;
+    const calls = serve({
+      'GET /me': () => baseMe({ wallet: { balance: IRT(balance) } }),
+      'GET /wallet': () => wallet({ balance: IRT(balance) }),
+      'GET /wallet/entries': () => entries,
+    });
+    await mount();
+    await screen.findByText(money(IRT(1_250_000)));
+    // A card-to-card top-up of 100,000 is confirmed while the customer is on the wallet tab.
+    tabWallet();
+    balance = 1_350_000;
+    await screen.findByText(text('miniapp.wallet_reason_referral'));
+    tab(text('miniapp.tab_home'));
+    await screen.findByText(money(IRT(1_350_000)));
+    expect(screen.queryByText(money(IRT(1_250_000)))).toBeNull();
+    expect(calls.filter((one) => one.route === '/me').length).toBeGreaterThanOrEqual(2);
+  });
+});
