@@ -1006,6 +1006,25 @@ export const SETTINGS = [
     consumer: 'ACTIVE',
   },
   {
+    key: LATE_CREDIT_SETTING_KEYS.RIALIT,
+    description:
+      'Round 9 item C4: the same switch for Rialit, whose document says an expired or ' +
+      'cancelled payment can still become paid when its support approves a late payment. A ' +
+      'payment Rialit\u2019s own status read reports as paid AFTER the attempt closed (deadline ' +
+      'passed, EXPIRED, or UNKNOWN) is credited to the customer\u2019s wallet once and never ' +
+      'settles the order, and only when that read re-confirms it (status paid, this ' +
+      'attempt\u2019s order id, exactly the Toman asked and no payer fee). OFF by default: a ' +
+      'new route moves no money that its owner has not chosen to move. Off: recorded as a late ' +
+      'completion for an operator.',
+    schema: z.boolean(),
+    defaultValue: false,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
     key: LATE_CREDIT_WINDOW_SETTING_KEY,
     description:
       'R5A item 4: how long after a gateway payment closed its still-open invoice keeps being ' +
