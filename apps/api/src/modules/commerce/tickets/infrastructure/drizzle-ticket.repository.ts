@@ -26,6 +26,7 @@ import {
   type TicketPriority,
   type TicketReplyFileMimeType,
   type RecordSource,
+  type SourceSurface,
   type TicketStatus,
   type TicketSystemEvent,
   type TicketOrigin,
@@ -124,6 +125,7 @@ function toTicket(row: TicketRow): TicketRecord {
     id: row.id as TicketId,
     code: row.code,
     source: row.source as RecordSource,
+    sourceSurface: row.sourceSurface as SourceSurface | null,
     // An identity bounded far below 2^53 in any installation's lifetime.
     number: Number(row.number),
     customerId: row.customerId as UserId,
@@ -241,6 +243,8 @@ export class DrizzleTicketRepository implements TicketRepository {
       readonly subject: string | null;
       readonly openingKey: string;
       readonly origin?: TicketOrigin;
+      /** Round 9, C5: the creating actor's surface; absent writes null (unknown). */
+      readonly sourceSurface?: SourceSurface;
       readonly now: Date;
     },
     tx: unknown,
@@ -260,6 +264,7 @@ export class DrizzleTicketRepository implements TicketRepository {
         priority: 'NORMAL',
         openingKey: input.openingKey,
         origin: input.origin ?? 'BOT',
+        sourceSurface: input.sourceSurface ?? null,
         createdAt: input.now,
         updatedAt: input.now,
         lastMessageAt: input.now,

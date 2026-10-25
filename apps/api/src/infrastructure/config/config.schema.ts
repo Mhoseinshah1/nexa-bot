@@ -246,6 +246,10 @@ export const configSchema = z
     DEV_SYSTEM_ENDPOINT_ENABLED: booleanish.default(false),
 
     TELEGRAM_WEBHOOK_ENABLED: booleanish.default(false),
+    // Round 9, C5: where the built mini app (`apps/miniapp/dist`) is read from at boot. Empty
+    // (the default outside the image) means the API serves no mini-app document; the image
+    // sets it to the copy it carries. Read once, as files: nothing under it is executed.
+    MINIAPP_DIST_DIR: z.string().default(''),
     // The route itself is fixed at /telegram/webhook. A configurable path was
     // validated here and never read by the controller, so setting it produced a
     // registered URL that 404s while the real endpoint stayed on the default.

@@ -6,6 +6,7 @@ import {
   PANEL_SETTING_KEYS,
   isSettingKey,
   settingIntegerRange,
+  type DataCompactionMode,
   type FxFallbackSource,
   type FxSource,
   type OperationalSeverity,
@@ -123,6 +124,7 @@ export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = [
   LATE_CREDIT_SETTING_KEYS.TONPAYS,
   LATE_CREDIT_SETTING_KEYS.TONPAYS_TELEGRAM,
   LATE_CREDIT_SETTING_KEYS.TETRAPAY,
+  LATE_CREDIT_SETTING_KEYS.RIALIT,
   LATE_CREDIT_WINDOW_SETTING_KEY,
   // R5C-1 item 2: the three «تغییر شماره کارت» limits, on the card-to-card method's page.
   CARD_SWITCH_SETTING_KEYS.MAX_SWITCHES,
@@ -180,6 +182,12 @@ const SEVERITY_LABELS: Readonly<Record<OperationalSeverity, WebKey>> = {
 const COMMISSION_SCOPE_OPTIONS: Readonly<Record<ReferralCommissionScope, WebKey>> = {
   FIRST_PAID_ORDER: 'web.referral_trigger_first_paid_order',
   EVERY_PAID_ORDER: 'web.referral_trigger_every_paid_order',
+};
+
+/** Round 9 C3: the data compaction's two modes; DRY_RUN is the default. */
+const COMPACTION_MODE_OPTIONS: Readonly<Record<DataCompactionMode, WebKey>> = {
+  DRY_RUN: 'web.dcp_mode_dry_run',
+  APPLY: 'web.dcp_mode_apply',
 };
 
 function options(labels: Readonly<Record<string, WebKey>>): readonly SelectOption[] {
@@ -269,6 +277,12 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
   },
   [LATE_CREDIT_SETTING_KEYS.TETRAPAY]: {
     title: 'web.late_credit_switch_tetrapay',
+    description: 'web.late_credit_switch_hint',
+    group: 'sales',
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
+  },
+  [LATE_CREDIT_SETTING_KEYS.RIALIT]: {
+    title: 'web.late_credit_switch_rialit',
     description: 'web.late_credit_switch_hint',
     group: 'sales',
     control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
@@ -381,6 +395,31 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
   'retention.idempotency_interactive_days': {
     title: 'web.setting_retention_idempotency',
     description: 'web.setting_retention_idempotency_desc',
+    group: 'ops',
+    control: { kind: 'integer', unit: 'web.unit_days' },
+  },
+  // Round 9 C3: the data compaction — the mode (dry run by default) and the three retentions.
+  'retention.compaction_mode': {
+    title: 'web.setting_compaction_mode',
+    description: 'web.setting_compaction_mode_desc',
+    group: 'ops',
+    control: { kind: 'select', options: options(COMPACTION_MODE_OPTIONS) },
+  },
+  'retention.ops_notifications_days': {
+    title: 'web.setting_compaction_ops_days',
+    description: 'web.setting_compaction_ops_days_desc',
+    group: 'ops',
+    control: { kind: 'integer', unit: 'web.unit_days' },
+  },
+  'retention.customer_notifications_days': {
+    title: 'web.setting_compaction_customer_days',
+    description: 'web.setting_compaction_customer_days_desc',
+    group: 'ops',
+    control: { kind: 'integer', unit: 'web.unit_days' },
+  },
+  'retention.receipt_windows_days': {
+    title: 'web.setting_compaction_receipt_days',
+    description: 'web.setting_compaction_receipt_days_desc',
     group: 'ops',
     control: { kind: 'integer', unit: 'web.unit_days' },
   },
@@ -657,6 +696,18 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
         EVERY_FILE: 'web.connection_files_placement_every',
       }),
     },
+  },
+  'miniapp.init_data_max_age_seconds': {
+    title: 'web.setting_miniapp_init_data_max_age_seconds',
+    description: 'web.setting_miniapp_init_data_max_age_seconds_desc',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_seconds' },
+  },
+  'miniapp.session_ttl_minutes': {
+    title: 'web.setting_miniapp_session_ttl_minutes',
+    description: 'web.setting_miniapp_session_ttl_minutes_desc',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_minutes' },
   },
   'services.link_rotation_cooldown_hours': {
     title: 'web.setting_link_rotation_cooldown_hours',

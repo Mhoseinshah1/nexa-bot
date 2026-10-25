@@ -421,6 +421,7 @@ export async function startFakeTelegram(): Promise<{
   const requests: { url: string; raw: string; at: number }[] = [];
   const files = new Map<string, Buffer>();
   const downloads: string[] = [];
+  let nextMessageId = 700_000;
   const server: Server = createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -453,11 +454,17 @@ export async function startFakeTelegram(): Promise<{
         response.end(bytes ?? Buffer.alloc(0));
         return;
       }
-      if (body !== null && (url.includes('/sendMessage') || url.includes('/editMessageText'))) {
-        sent.push(body);
+      /*
+       * R9 C1: a NEW message gets its own id (as Telegram's would), recorded on the body as
+       * `sentMessageId`, so a test can tap the message the worker sent. An edit answers 11.
+       */
+      const fresh = url.includes('/sendMessage');
+      const messageId = fresh ? (nextMessageId += 1) : 11;
+      if (body !== null && (fresh || url.includes('/editMessageText'))) {
+        sent.push(fresh ? { ...body, sentMessageId: messageId } : body);
       }
       response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ ok: true, result: { message_id: 11 } }));
+      response.end(JSON.stringify({ ok: true, result: { message_id: messageId } }));
     });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));

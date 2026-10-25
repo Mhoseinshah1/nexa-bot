@@ -1173,6 +1173,25 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     return rows.length > 0;
   }
 
+  async creditAmountForUpdate(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    tx: unknown,
+  ): Promise<bigint | null> {
+    const [row] = await this.exec(tx)
+      .select({ creditAmount: gatewayInvoices.creditAmount })
+      .from(gatewayInvoices)
+      .where(
+        and(
+          eq(gatewayInvoices.tenantId, requireTenantId(scope)),
+          eq(gatewayInvoices.paymentId, paymentId),
+        ),
+      )
+      .for('update')
+      .limit(1);
+    return row?.creditAmount ?? null;
+  }
+
   async recordWebhook(
     scope: TenantContext,
     paymentId: PaymentId,

@@ -958,6 +958,15 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.receipt_prompt',
       'bot.payment.receipt_received',
       'bot.payment.received_for_review',
+      /*
+       * Rialit (`docs/rialit-gateway-audit.md`): the two create refusals (the payable outside
+       * Rialit's range, refused before any call; a misconfiguration — both sides charging a fee
+       * — whose link was never shown) and the needs-review sentence. Reviewed: each says
+       * nothing was charged or settled, and none ever says paid.
+       */
+      'bot.payment.rialit_amount_out_of_range',
+      'bot.payment.rialit_misconfigured',
+      'bot.payment.rialit_review_unresolved',
       'bot.payment.sent_button',
       /*
        * Package A: the Telegram Stars summaries — principal, fee, payable and the Stars the

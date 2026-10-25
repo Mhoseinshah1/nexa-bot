@@ -86,6 +86,18 @@
 		reverse_proxy api:3000
 	}
 
+	# --- The customer Mini App (Round 9, C5) ----------------------------------
+	#
+	# `/miniapp/<botInstanceId>/` (the document), `/miniapp/assets/*`, `/miniapp/fonts/*`
+	# and `/miniapp/api/v1/*`, all answered by the API: it serves the mini app's build and
+	# sets that document's own CSP (Telegram's script, framing by Telegram's web client),
+	# which the Web Admin's catch-all below would replace with `frame-ancestors 'none'`.
+	# Without this block the paths fall to the SPA handler and Telegram is shown the admin.
+	@miniapp path /miniapp /miniapp/*
+	handle @miniapp {
+		reverse_proxy api:3000
+	}
+
 	# --- The Web Admin -------------------------------------------------------
 
 	# Hashed filenames, so a year is safe and a new release busts the cache by

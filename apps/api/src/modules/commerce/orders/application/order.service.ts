@@ -526,6 +526,8 @@ export class OrderService {
           {
             id,
             customerId,
+            // Round 9, C5: the surface that placed it («منبع: مینی‌اپ» in the ops log).
+            sourceSurface: actor.surface,
             line: {
               productId: product.id,
               panelId,
@@ -716,6 +718,7 @@ export class OrderService {
           {
             id,
             customerId,
+            sourceSurface: actor.surface,
             purpose: 'CUSTOM_SERVICE',
             line: {
               productId: null,

@@ -18,6 +18,7 @@ import {
   BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT,
   BACKUP_ARCHIVE_RETENTION_SETTING_KEYS,
   BACKUP_PART_MAX_BYTES,
+  DATA_COMPACTION_BATCH_SIZE,
   DATA_RETENTION_SETTING_KEYS,
   IDEMPOTENCY_INTERACTIVE_RETENTION_DAYS_DEFAULT,
   OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT,
@@ -52,6 +53,9 @@ import {
 } from '@nexa/contracts';
 import type {
   AdminId,
+  OrderId,
+  TemplateKey,
+  ProductDisplay,
   AuditWriter,
   TelegramChannel,
   Clock,
@@ -70,6 +74,7 @@ import {
   createTranslator,
   DEFAULT_TEMPLATE_PRESENTATION,
   formatDateTime,
+  rejectReasonFa,
 } from '@nexa/i18n';
 import type {
   OperationType,
@@ -257,6 +262,13 @@ import {
 import { planArchiveParts } from './modules/platform/backup/infrastructure/archive-parts.js';
 import { purgePublishedOutboxBefore } from './modules/platform/eventing/infrastructure/outbox-retention.js';
 import { purgeExpiredIdempotencyBefore } from './modules/platform/idempotency/infrastructure/idempotency-retention.js';
+import { DataCompactionService } from './modules/platform/data-compaction/application/data-compaction.service.js';
+import {
+  DATA_COMPACTION_INITIAL_DELAY_MS,
+  DATA_COMPACTION_INTERVAL_MS,
+  DataCompactionLoop,
+} from './modules/platform/data-compaction/application/data-compaction-loop.js';
+import { DrizzleDataCompactionRepository } from './modules/platform/data-compaction/infrastructure/drizzle-data-compaction.repository.js';
 import { BackupPasswordService } from './modules/platform/backup/application/backup-password.service.js';
 import { LegacyCompactionService } from './modules/platform/legacy-compaction/application/legacy-compaction.service.js';
 import { LegacyCompactionExecutor } from './modules/platform/legacy-compaction/application/legacy-compaction.executor.js';
@@ -571,13 +583,17 @@ import type {
 } from './modules/commerce/payments/application/gateway-invoice-ports.js';
 import { GatewayReceiptCaptureService } from './modules/commerce/payments/application/gateway-receipt-capture.service.js';
 import { DrizzleGatewayCardTransferRepository } from './modules/commerce/payments/infrastructure/drizzle-gateway-card-transfer.repository.js';
-import { GATEWAY_PROVIDER_REQUEST_BATCH } from './modules/commerce/payments/application/gateway-provider-request.lane.js';
+import {
+  GATEWAY_PROVIDER_REQUEST_BATCH,
+  GatewayExpiryCancels,
+} from './modules/commerce/payments/application/gateway-provider-request.lane.js';
 import { DrizzleGatewayProviderRequestRepository } from './modules/commerce/payments/infrastructure/drizzle-gateway-provider-request.repository.js';
 import { SecretCipherRefundCardSealer } from './modules/commerce/payments/infrastructure/refund-card-sealer.js';
 import { TonPaysTelegramAdapter } from './modules/commerce/payments/infrastructure/tonpays-telegram-adapter.js';
 import { NowPaymentsAdapter } from './modules/commerce/payments/infrastructure/nowpayments-adapter.js';
 import { CentralPayAdapter } from './modules/commerce/payments/infrastructure/centralpay-adapter.js';
 import { TetraPayAdapter } from './modules/commerce/payments/infrastructure/tetrapay-adapter.js';
+import { RialitAdapter } from './modules/commerce/payments/infrastructure/rialit-adapter.js';
 import { TelegramStarsAdapter } from './modules/commerce/payments/infrastructure/telegram-stars-adapter.js';
 import { FxService } from './modules/commerce/fx/application/fx.service.js';
 import type { FxSourceAdapter } from './modules/commerce/fx/application/ports.js';
@@ -867,6 +883,12 @@ import {
 import { TelegramNotificationTransport } from './modules/control/notifications/infrastructure/telegram-transport.js';
 import { RecordingTransport } from './modules/control/notifications/infrastructure/recording-transport.js';
 import type { NotificationTransport } from './modules/control/notifications/application/ports.js';
+import { MiniAppSessionService } from './modules/commerce/miniapp/application/miniapp-session.service.js';
+import { MiniAppReceiptService } from './modules/commerce/miniapp/application/miniapp-receipt.service.js';
+import { MiniAppRateLimiter } from './modules/commerce/miniapp/application/miniapp-rate-limiter.js';
+import { MiniAppCheckout } from './modules/commerce/miniapp/application/miniapp-checkout.js';
+import { DrizzleMiniAppSessionRepository } from './modules/commerce/miniapp/infrastructure/drizzle-miniapp-session.repository.js';
+import { TelegramReceiptUploader } from './modules/commerce/miniapp/infrastructure/telegram-receipt-uploader.js';
 
 /**
  * The composition root.
@@ -931,6 +953,28 @@ export interface LegacyInventoryOptions {
    * selling): the Web Admin's `.nxpkg` importer only. Absent: the read is exactly as before.
    */
   readonly inventoryTargeted?: boolean;
+}
+
+/** What the mini-app surface is handed beyond the shared services (Round 9, C5). */
+export interface MiniAppSurfaceDeps {
+  readonly sessions: MiniAppSessionService;
+  readonly rateLimit: MiniAppRateLimiter;
+  readonly receipts: MiniAppReceiptService;
+  readonly checkout: MiniAppCheckout;
+  readonly topup: WalletTopupFlowService;
+  readonly productDisplay: {
+    displayFor(
+      scope: TenantContext,
+      productId: ProductId | null,
+    ): Promise<(ProductDisplay & { readonly description: string | null }) | null>;
+  };
+  readonly purchaseTitle: (scope: TenantContext, orderId: OrderId) => Promise<string | null>;
+  /**
+   * A platform's own connection guide (`bot.tutorial.<platform>`), the tenant's template, for
+   * a platform with no app configured — what the bot shows then. Rendered here, the composition
+   * root, as the bot's guide is rendered by the messenger: a surface holds no resolver.
+   */
+  readonly tutorialText: (scope: TenantContext, key: TemplateKey) => Promise<string>;
 }
 
 export interface Container {
@@ -1394,6 +1438,13 @@ export interface Container {
   /** PR-C: what a row prints for an id it links to — codes and names, never a uuid. */
   readonly publicLabels: PublicLabelService;
   readonly botRuntime: BotRuntime;
+  /**
+   * Round 9, C5: the customer's Telegram Mini App. Its sessions and gates, its receipt
+   * upload, its request budget and the checkout decisions it shares with the bot; the
+   * surface reaches every other service through the same container fields the Web Admin
+   * and the bot's runtime hold, so there is one instance of each.
+   */
+  readonly miniApp: MiniAppSurfaceDeps;
   /** WP20: counts every Telegram interaction, including the `/ping` the runtime never sees. */
   readonly antiSpam: Pick<AntiSpamService, 'observe'>;
 
@@ -1573,6 +1624,13 @@ export interface Container {
   /** E1: the owner's compaction of the imported legacy data, and the worker that runs it. */
   readonly legacyCompaction: LegacyCompactionService;
   readonly legacyCompactionExecutor: LegacyCompactionExecutor;
+  /**
+   * Round 9 C3: the data compaction — the allow-listed finished notifications and closed
+   * receipt windows past their retention. The service serves the CLI and the Web Admin's
+   * preview; the loop runs in the worker. DRY_RUN until the owner sets APPLY.
+   */
+  readonly dataCompaction: DataCompactionService;
+  readonly dataCompactionLoop: DataCompactionLoop;
   readonly backupTools: PostgresDatabaseTools;
   /**
    * The Recovery Kit (ADR-0032): the keyring every cipher in this process reads
@@ -1754,6 +1812,8 @@ export function createContainer(
    * anti-spam fails open.
    */
   const interactionCounter = new RedisInteractionCounter(config.REDIS_URL);
+  // Round 9, C5: the mini app's request budget, in the same store under its own prefix.
+  const miniAppCounter = new RedisInteractionCounter(config.REDIS_URL, 'nexa:miniapp-rate');
 
   /*
    * The recovery repository is built HERE, above the unit of work, because the
@@ -1963,6 +2023,28 @@ export function createContainer(
    */
   const templateResolverRef: { current: TemplateResolver | null } = { current: null };
   const commandMenu = new CommandMenu({
+    /*
+     * Round 9, C5: the mini app's chat menu button — wanted while `mini_app` is on and the
+     * tenant has a public origin (its registered webhook's). Late-bound like the templates:
+     * the flag resolver and the origin reader are built further down.
+     */
+    miniApp: {
+      buttonFor: async (scope, tx) => {
+        if (isSystemContext(scope)) return null;
+        const tenantScope: TenantContext = { tenantId: scope.tenantId, botInstanceId: null };
+        if (!(await featureFlagResolver.isEnabled(tenantScope, 'mini_app', tx))) return null;
+        const origin = await publicOrigins.originFor(tenantScope);
+        if (origin === null) return null;
+        const resolver = templateResolverRef.current;
+        if (resolver === null) {
+          throw new Error('CommandMenu was read before the container finished composing.');
+        }
+        const text = (
+          await resolver.render(scope, 'bot.menu.miniapp_button', {}, DEFAULT_TEMPLATE_LOCALE, tx)
+        ).trim();
+        return text === '' ? null : { text, origin };
+      },
+    },
     templates: {
       render: (scope, key, values, tx) => {
         if (templateResolverRef.current === null) {
@@ -3183,6 +3265,12 @@ export function createContainer(
    */
   const tetrapayAdapter = new TetraPayAdapter();
   /*
+   * Rialit (`docs/rialit-gateway-audit.md`): create in Toman with the customer's Telegram id,
+   * settle ONLY by `GET /status/{token}`; its unsigned webhook is a hint. Not accepted against
+   * the real provider yet (`OQ-RL-01`); the route starts DISABLED.
+   */
+  const rialitAdapter = new RialitAdapter();
+  /*
    * Package A — Telegram Stars. The invoice is sent with the ATTEMPT's bot token through
    * the one Telegram call module, bounded by the same send timeout every customer message
    * uses.
@@ -3205,6 +3293,8 @@ export function createContainer(
         return centralpayAdapter;
       case 'TETRAPAY':
         return tetrapayAdapter;
+      case 'RIALIT':
+        return rialitAdapter;
       case 'MANUAL_TRANSFER':
         return null;
       default:
@@ -3713,7 +3803,11 @@ export function createContainer(
      */
     invoiceScreens: {
       refresh: (scope, paymentId): Promise<void> => wizardScreens.refresh(scope, paymentId),
+      // R9 C1: a next step the customer owes (a remainder, a refund card) — a new message.
+      announce: (scope, paymentId): Promise<void> => wizardScreens.announce(scope, paymentId),
     },
+    // R9 C1: a provider rejection reason that is a documented code, in Persian.
+    rejectReasonText: rejectReasonFa,
     // CentralPay's browser return goes back to the tenant's bot (stored username, no call);
     // TetraPay's `callback_url` is the same bot's start link.
     botLinkFor: (scope) => publicOrigins.botLinkFor(scope),
@@ -3870,6 +3964,12 @@ export function createContainer(
     scopeActivity: tenants,
     clock,
     ids,
+    // R9 C1: an expired TonPays Telegram attempt asks the provider to cancel its open invoice.
+    gatewayCancels: new GatewayExpiryCancels({
+      requests: gatewayProviderRequestRepository,
+      audit,
+      ids,
+    }),
   });
   const paymentExpiryLoop = new PaymentExpiryLoop(paymentExpirySweep, {
     // Resolved per pass: the installation's tenant is a row, so it is not known
@@ -5421,6 +5521,11 @@ export function createContainer(
     messenger: customerMessenger,
     clock,
     actor: () => systemJobActor('telegram-wizard-screens', newCorrelationId(ids.uuid())),
+    // R9 C1: the customer's chat for a next step told in a new message. Declared below, read
+    // at call time (the worker's first pass is long after this object graph is built).
+    contacts: {
+      contactFor: (scope, customerId, tx) => customerContacts.contactFor(scope, customerId, tx),
+    },
   });
 
   /**
@@ -7483,6 +7588,41 @@ export function createContainer(
     tickIntervalMs: 60_000,
     logger,
   });
+  /*
+   * Round 9 C3: the data compaction. Nothing starts while a recovery holds the installation
+   * (any active state, not only the quiesce window: the pre-restore backup is a backup) or a
+   * backup is running; each batch also passes the unit of work's quiesce gate.
+   */
+  const dataCompactionRepository = new DrizzleDataCompactionRepository(database.db);
+  const dataCompaction = new DataCompactionService({
+    repository: dataCompactionRepository,
+    uow,
+    guard,
+    audit,
+    opsLog,
+    scopeActivity: tenants,
+    settings: settingsResolver,
+    clock,
+    ids,
+    inFlight: async () => {
+      if ((await recoveryRequests.installationLock()) !== null) return 'RECOVERY_IN_FLIGHT';
+      if ((await backupRuns.active()) !== null) return 'BACKUP_IN_FLIGHT';
+      return null;
+    },
+    batchSize: DATA_COMPACTION_BATCH_SIZE,
+    maxBatchesPerPass: 200,
+  });
+  const dataCompactionLoop = new DataCompactionLoop(dataCompaction, dataCompactionRepository, {
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    intervalMs: DATA_COMPACTION_INTERVAL_MS,
+    initialDelayMs: DATA_COMPACTION_INITIAL_DELAY_MS,
+    now: () => clock.now().getTime(),
+    correlationId: () => newCorrelationId(ids.uuid()),
+    logger,
+  });
   const backupAdmin = new BackupAdminService({
     runs: backupRuns,
     archivePassword: (scope) => backupPasswords.status(scope),
@@ -7896,6 +8036,65 @@ export function createContainer(
       () => clock.now(),
     );
 
+  /*
+   * Round 9, C5: the mini app. Every service it calls is an instance built above for the
+   * bot and the Web Admin; what is new is only its sessions, its receipt upload and its
+   * request budget.
+   */
+  const miniAppProductDisplay = {
+    displayFor: async (scope: TenantContext, productId: ProductId | null) => {
+      if (productId === null) return null;
+      const product = await productRepository.findById(scope, productId);
+      return product === null ? null : { ...product.display, description: product.description };
+    },
+  };
+  const miniAppSessions = new MiniAppSessionService({
+    bots: botInstances,
+    tenants,
+    features: featureFlagResolver,
+    settings: settingsResolver,
+    customers: customerService,
+    customerRecords: customerRepository,
+    sessions: new DrizzleMiniAppSessionRepository(database.db),
+    membership: channelMembership,
+    terms: termsAcceptanceService,
+    telegramAdmins,
+    uow,
+    scopeActivity: tenants,
+    audit,
+    clock,
+    ids,
+  });
+  const miniApp: MiniAppSurfaceDeps = {
+    sessions: miniAppSessions,
+    rateLimit: new MiniAppRateLimiter({ counter: miniAppCounter, clock, ids }),
+    receipts: new MiniAppReceiptService({
+      payments: paymentService,
+      receipts: receiptService,
+      uploader: new TelegramReceiptUploader({
+        bots: botInstances,
+        apiBaseUrl: config.TELEGRAM_API_BASE_URL,
+        timeoutMs: config.NOTIFICATION_SEND_TIMEOUT_MS,
+        logger,
+      }),
+      idempotency,
+    }),
+    checkout: new MiniAppCheckout({
+      orders: orderService,
+      commercial: commercialActionService,
+      routes: paymentGatewayService,
+      payments: paymentService,
+      screens: customerScreens,
+    }),
+    topup: walletTopupFlow,
+    productDisplay: miniAppProductDisplay,
+    purchaseTitle: async (scope, orderId) => {
+      const order = await orderRepository.findById(scope, orderId);
+      return order?.line.title ?? null;
+    },
+    tutorialText: (scope, key) => templateResolver.render(scope, key, {}),
+  };
+
   const container: Container = {
     config,
     logger,
@@ -8093,6 +8292,7 @@ export function createContainer(
       reader: new DrizzlePublicLabelReader(database.db),
     }),
     antiSpam,
+    miniApp,
     botRuntime: new BotRuntime({
       // R5C-1 item 4: «نمایش زمان اضافه داخل تمدید هم» (flag `addon_time_in_renew_menu`).
       renewMenuShowsTime: (scope) =>
@@ -8417,6 +8617,8 @@ export function createContainer(
     backupPasswords,
     legacyCompaction,
     legacyCompactionExecutor,
+    dataCompaction,
+    dataCompactionLoop,
     backupTools,
     recoveryService,
     backupAdmin,
@@ -8509,6 +8711,7 @@ export function createContainer(
       await gatewayPaymentLoop.stop();
       await serviceReminderLoop.stop();
       await nightlyReportLoop.stop();
+      await dataCompactionLoop.stop();
       await customerReminderLoop.stop();
       await campaignScheduleLoop.stop();
       await telegramMessageRetentionLoop.stop();
@@ -8525,6 +8728,7 @@ export function createContainer(
       await receiptReviewPushLoop.stop();
       await opsGroupMaintainer.stop();
       await interactionCounter.close();
+      await miniAppCounter.close();
       await redis.close();
       await database.close();
     },

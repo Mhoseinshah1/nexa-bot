@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="fa">
+<head>
+<meta charset="utf-8">
+<title>نکسا — پنل نمایندگی</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#f4f4f5;text-decoration:none}a:hover{color:#ffffff}
+.g{background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.11);border-radius:22px;-webkit-backdrop-filter:blur(20px) saturate(140%);backdrop-filter:blur(20px) saturate(140%);box-shadow:inset 0 1px 0 rgba(255,255,255,.08)}
+.kp{padding:14px;display:flex;flex-direction:column;gap:2px}
+.kp span{font-size:11.5px;color:#a1a1aa}.kp b{font-size:19px}
+.cu{display:flex;align-items:center;gap:12px;padding:11px 14px;border-top:1px solid rgba(255,255,255,.07)}
+.cu:first-child{border-top:0}
+.cu b{font-size:13.5px;display:block}.cu small{font-size:11.5px;color:#a1a1aa}
+.mini{width:64px;height:6px;border-radius:99px;background:rgba(255,255,255,.1);overflow:hidden}
+/* web-panel skin */
+div[dir="rtl"][style*="width: 390px"]{background:radial-gradient(75% 45% at 90% -8%,rgba(255,255,255,.08),transparent 68%),linear-gradient(180deg,#0e0e10,#0a0a0b 70%) !important}
+.g{background:rgba(255,255,255,.075) !important;border:0 !important;border-radius:20px !important;position:relative;box-shadow:inset 0 1px 0 rgba(255,255,255,.32),inset 0 0 0 1px rgba(255,255,255,.06),0 30px 60px -30px rgba(0,0,0,.85),0 2px 8px -2px rgba(0,0,0,.4) !important;-webkit-backdrop-filter:blur(26px) saturate(1.7);backdrop-filter:blur(26px) saturate(1.7)}
+.g::after{content:'';position:absolute;inset:0;border-radius:inherit;padding:1px;pointer-events:none;background:linear-gradient(150deg,rgba(255,255,255,.16),transparent 40%,transparent 62%,rgba(255,255,255,.06));-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}
+div:has(> a[aria-label="بازگشت"]){padding:6px 8px;border-radius:24px;background:rgba(255,255,255,.075);box-shadow:inset 0 1px 0 rgba(255,255,255,.32),inset 0 0 0 1px rgba(255,255,255,.06),0 20px 40px -24px rgba(0,0,0,.8);-webkit-backdrop-filter:blur(26px) saturate(1.7);backdrop-filter:blur(26px) saturate(1.7)}
+a[aria-label="بازگشت"]{width:44px !important;height:44px !important;border-radius:50% !important;border:0 !important;background:rgba(255,255,255,.11) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.32),inset 0 0 0 1px rgba(255,255,255,.06)}
+a[style*="background: #f4f4f5"]{border-radius:999px !important;box-shadow:inset 0 1px 0 #fff,0 14px 30px -12px rgba(0,0,0,.7)}
+a[style*="background: rgba(255,255,255,.06)"]{border:0 !important;border-radius:999px !important;background:rgba(255,255,255,.1) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.28),inset 0 0 0 1px rgba(255,255,255,.07)}
+</style>
+</helmet>
+<div dir="rtl" style="width: 390px; height: 844px; box-sizing: border-box; background: #0a0a0b; color: #f4f4f5; font-family: Vazirmatn, system-ui, sans-serif; position: relative; overflow: hidden">
+<div style="padding: 20px 16px 28px; display: flex; flex-direction: column; gap: 12px">
+
+<div style="display: flex; align-items: center; gap: 10px">
+<a href="Profile.dc.html" aria-label="بازگشت" style="width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></a>
+<div style="font-size: 20px; font-weight: 800; flex: 1">پنل نمایندگی</div>
+<span style="font-size: 11.5px; padding: 5px 12px; border-radius: 99px; background: rgba(79,140,255,.16); color: #9ec0ff">[سطح نمایندگی]</span>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+<div class="g kp"><span>اعتبار</span><b>۴٬۸۰۰٬۰۰۰</b></div>
+<div class="g kp"><span>تخفیف شما</span><b>[٪]</b></div>
+<div class="g kp"><span>مشتری فعال</span><b>۳۴</b></div>
+<div class="g kp"><span>فروش این ماه</span><b style="color: #9ec0ff">۱۲٬۴۰۰٬۰۰۰</b></div>
+</div>
+
+<div class="g" style="padding: 14px 16px">
+<div style="display: flex; justify-content: space-between; font-size: 12px; color: #a1a1aa; margin-bottom: 10px"><span>فروش ۶ ماه اخیر</span><span>میلیون تومان</span></div>
+<div style="display: flex; align-items: flex-end; gap: 10px; height: 74px" role="img" aria-label="نمودار فروش ۶ ماه">
+<div style="flex: 1; height: 35%; border-radius: 6px; background: rgba(79,140,255,.5)"></div>
+<div style="flex: 1; height: 48%; border-radius: 6px; background: rgba(79,140,255,.5)"></div>
+<div style="flex: 1; height: 42%; border-radius: 6px; background: rgba(79,140,255,.5)"></div>
+<div style="flex: 1; height: 66%; border-radius: 6px; background: rgba(79,140,255,.5)"></div>
+<div style="flex: 1; height: 78%; border-radius: 6px; background: rgba(79,140,255,.5)"></div>
+<div style="flex: 1; height: 100%; border-radius: 6px; background: #4f8cff"></div>
+</div>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px">
+<a href="Store.dc.html" style="height: 48px; border-radius: 15px; background: #f4f4f5; color: #0a0a0b; font-weight: 800; display: flex; align-items: center; justify-content: center">+ ساخت سرویس مشتری</a>
+<a href="Wallet.dc.html" style="height: 48px; border-radius: 15px; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.06); font-weight: 600; display: flex; align-items: center; justify-content: center">شارژ اعتبار</a>
+</div>
+
+<div style="display: flex; justify-content: space-between; align-items: center; margin: 2px 2px 0">
+<div style="font-size: 13px; font-weight: 800; color: #a1a1aa">مشتری‌ها</div>
+<span style="font-size: 12px; color: #a1a1aa">جستجو</span>
+</div>
+<div class="g" style="padding: 2px 0">
+<div class="cu"><span style="flex: 1"><b>customer_01</b><small>۲۰ گیگ · ۱۲ روز</small></span><span class="mini"><span style="display: block; width: 40%; height: 100%; background: #4f8cff"></span></span></div>
+<div class="cu"><span style="flex: 1"><b>customer_02</b><small>۵۰ گیگ · ۲ روز</small></span><span class="mini"><span style="display: block; width: 88%; height: 100%; background: #ff9f43"></span></span></div>
+<div class="cu"><span style="flex: 1"><b>customer_03</b><small>۱۰۰ گیگ · ۲۸ روز</small></span><span class="mini"><span style="display: block; width: 12%; height: 100%; background: #4f8cff"></span></span></div>
+</div>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

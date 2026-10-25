@@ -11,6 +11,9 @@ import {
   TICKET_REPLY_FILE_MAX_BYTES,
   DIRECT_MESSAGE_TEXT_MAX_LENGTH,
   BROADCAST_MEDIA_MAX_BYTES,
+  MINIAPP_API_PREFIX,
+  MINIAPP_BODY_LIMIT_BYTES,
+  MINIAPP_RECEIPT_BODY_LIMIT_BYTES,
   type SalesCurrencyCode,
   type TenantContext,
 } from '@nexa/contracts';
@@ -317,6 +320,16 @@ export async function createApiApp(config: AppConfig = loadConfig()): Promise<Ap
     // Phase A2: a direct message's file, bounded by the schema and the service.
     if (methods.includes('POST') && DIRECT_MESSAGE_ROUTE.test(route.url)) {
       route.bodyLimit = DIRECT_MESSAGE_BODY_LIMIT_BYTES;
+    }
+    /*
+     * Round 9, C5: the mini app is reachable by anyone with a Telegram account, so its
+     * routes read far less than the authenticated admin's megabyte — 16 KiB — except the
+     * receipt upload, which carries one image (at most 5 MB, base64).
+     */
+    if (route.url.startsWith(MINIAPP_API_PREFIX)) {
+      route.bodyLimit = route.url.endsWith('/receipt')
+        ? MINIAPP_RECEIPT_BODY_LIMIT_BYTES
+        : MINIAPP_BODY_LIMIT_BYTES;
     }
   });
 

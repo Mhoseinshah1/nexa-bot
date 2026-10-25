@@ -510,6 +510,8 @@ describe('the feature presentation catalogue', () => {
       'central_fx',
       // Spec §9: off sends promotions to customers who had opted out (their choice is kept).
       'customer_marketing_opt_out',
+      // Round 9, C5: off takes the menu button away and closes the mini app mid-checkout.
+      'mini_app',
       'ops_notifications',
       // WP-A9: a reminder the customer relies on stops silently, like the families below.
       'payment_pending_reminders',

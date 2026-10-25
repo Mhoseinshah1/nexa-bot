@@ -646,6 +646,8 @@ export class CommercialActionService {
           {
             id: orderId,
             customerId,
+            // Round 9, C5: the surface that asked («منبع: مینی‌اپ» in the ops log).
+            sourceSurface: actor.surface,
             purpose: input.kind,
             line: priced.line,
             totals: priced.totals,

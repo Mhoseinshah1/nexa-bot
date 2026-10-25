@@ -8927,6 +8927,83 @@ export const TEMPLATES = [
     ],
   },
   /*
+   * Rialit (`docs/rialit-gateway-audit.md`). None of these says paid until the payment is
+   * CONFIRMED by Rialit's own status read. The pay and check buttons are the generic ones
+   * («💳 پرداخت آنلاین», «🔄 بررسی وضعیت پرداخت»).
+   */
+  {
+    key: 'bot.payment.route_name_rialit',
+    description:
+      'The product’s own name for the Rialit route (`RIALIT`), used when the operator set no display name: «درگاه ریالیت».',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.rialit_review_unresolved',
+    description:
+      'Rialit: the payment needs a person — Rialit’s status read reported a paid payment whose amount, payer amount or order id does not match this payment. Nothing has failed and nothing was settled; the operator is reconciling it. It must tell the customer not to pay again, and never says failed or closed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
+          'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.rialit_amount_out_of_range',
+    description:
+      'Rialit: the amount to pay (the order or top-up plus any gateway fee) is outside the range Rialit accepts, so no payment was asked for and nothing was charged. Shows Rialit’s minimum and maximum in Toman and asks for another amount or another method.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
+          'The same code on every screen of this payment.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'min',
+        type: 'MONEY',
+        description: 'The smallest amount Rialit accepts, in Toman.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'max',
+        type: 'MONEY',
+        description: 'The largest amount Rialit accepts, in Toman.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.rialit_misconfigured',
+    description:
+      'Rialit: the gateway is misconfigured — both this bot’s gateway fee and Rialit’s own payer fee would have been charged (only one side may charge), or Rialit’s payer figures did not add up — so the payment link was NOT shown and nothing can be paid through it. The method is unavailable until the operator fixes the settings; nothing was charged. It asks the customer to choose another method.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
+          'The same code on every screen of this payment.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  /*
    * Package A — Telegram Stars (`docs/package-a-telegram-stars-audit.md`). A Star is never
    * shown as the sales currency: the Toman figures are Nexa's snapshot, and the Star
    * figure is the conversion the invoice asks for.
@@ -12317,6 +12394,15 @@ export const TEMPLATES = [
     key: 'bot.menu.tickets',
     description:
       "WP-A7: the main-menu button that opens the customer's support tickets. Routes exactly as /tickets.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.menu.miniapp_button',
+    description:
+      'Round 9, C5: the text of the chat menu button that opens the Telegram Mini App, set on ' +
+      'every ACTIVE bot by the command-menu sync while the mini_app flag is on. Plain text: ' +
+      'Telegram draws it beside the message field.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

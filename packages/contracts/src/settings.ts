@@ -29,6 +29,12 @@ import {
 } from './customer-reminders.js';
 import { moneySchema, salesCurrencyCodeSchema } from './money.js';
 import {
+  MINIAPP_INIT_DATA_MAX_AGE_SECONDS_MAX,
+  MINIAPP_INIT_DATA_MAX_AGE_SECONDS_MIN,
+  MINIAPP_SESSION_TTL_MINUTES_MAX,
+  MINIAPP_SESSION_TTL_MINUTES_MIN,
+} from './miniapp.js';
+import {
   BACKUP_ARCHIVE_KEEP_COUNT_DEFAULT,
   BACKUP_ARCHIVE_KEEP_COUNT_MAX,
   BACKUP_ARCHIVE_KEEP_COUNT_MIN,
@@ -58,6 +64,16 @@ import {
   OUTBOX_PUBLISHED_RETENTION_DAYS_MAX,
   OUTBOX_PUBLISHED_RETENTION_DAYS_MIN,
 } from './data-retention.js';
+import {
+  CUSTOMER_NOTIFICATIONS_RETENTION_DAYS_DEFAULT,
+  DATA_COMPACTION_DAYS_MAX,
+  DATA_COMPACTION_DAYS_MIN,
+  DATA_COMPACTION_MODES,
+  DATA_COMPACTION_MODE_DEFAULT,
+  DATA_COMPACTION_SETTING_KEYS,
+  OPS_NOTIFICATIONS_RETENTION_DAYS_DEFAULT,
+  RECEIPT_WINDOWS_RETENTION_DAYS_DEFAULT,
+} from './data-compaction.js';
 import { uuidV7Schema } from './ids.js';
 import {
   LATE_CREDIT_SETTING_KEYS,
@@ -741,6 +757,67 @@ export const SETTINGS = [
     configures: null,
     consumer: 'ACTIVE',
   },
+  /*
+   * Round 9 C3: data compaction (`data-compaction.ts`). The mode first: DRY_RUN until the
+   * owner says otherwise, so a fresh installation counts and removes nothing.
+   */
+  {
+    key: DATA_COMPACTION_SETTING_KEYS.mode,
+    description:
+      'Whether the nightly data compaction only COUNTS what it would remove (DRY_RUN, the ' +
+      'default) or removes it (APPLY). It removes only the closed allow-list of finished ' +
+      'notifications and closed receipt windows older than their retention days, never a ' +
+      'ledger entry, payment, order, service, receipt, refund or audit row.',
+    schema: z.enum(DATA_COMPACTION_MODES),
+    defaultValue: DATA_COMPACTION_MODE_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: DATA_COMPACTION_SETTING_KEYS.opsNotificationsDays,
+    description:
+      'How many days a SENT or FAILED operations-log notification, with its delivery attempts, is kept after it finished, before the data compaction removes it, ' +
+      `between ${String(DATA_COMPACTION_DAYS_MIN)} and ${String(DATA_COMPACTION_DAYS_MAX)}. ` +
+      'A notification still pending is never removed.',
+    schema: z.number().int().min(DATA_COMPACTION_DAYS_MIN).max(DATA_COMPACTION_DAYS_MAX),
+    defaultValue: OPS_NOTIFICATIONS_RETENTION_DAYS_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: DATA_COMPACTION_SETTING_KEYS.customerNotificationsDays,
+    description:
+      'How many days a resolved customer notification of a kind its producer can never raise again (service reminders, low balance, reseller minimums, operation outcomes already announced) is kept before the data compaction removes it, ' +
+      `between ${String(DATA_COMPACTION_DAYS_MIN)} and ${String(DATA_COMPACTION_DAYS_MAX)}. ` +
+      'A pending or unconfirmed one, and every kind about a payment, order, refund, wallet entry, ticket or direct message, is never removed.',
+    schema: z.number().int().min(DATA_COMPACTION_DAYS_MIN).max(DATA_COMPACTION_DAYS_MAX),
+    defaultValue: CUSTOMER_NOTIFICATIONS_RETENTION_DAYS_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: DATA_COMPACTION_SETTING_KEYS.receiptWindowsDays,
+    description:
+      'How many days a CLOSED receipt window of a payment (the bot waiting for a transfer photo) is kept before the data compaction removes it, ' +
+      `between ${String(DATA_COMPACTION_DAYS_MIN)} and ${String(DATA_COMPACTION_DAYS_MAX)}. ` +
+      'An open window, a receipt itself and a provider receipt submission are never removed.',
+    schema: z.number().int().min(DATA_COMPACTION_DAYS_MIN).max(DATA_COMPACTION_DAYS_MAX),
+    defaultValue: RECEIPT_WINDOWS_RETENTION_DAYS_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
   {
     key: 'sales.currency',
     description:
@@ -997,6 +1074,25 @@ export const SETTINGS = [
       'TetraPay\u2019s own verify re-confirms it (status paid, this attempt\u2019s order id and ' +
       'exactly the rial amount asked). OFF by default: a new route moves no money that its ' +
       'owner has not chosen to move. Off: recorded as a late completion for an operator.',
+    schema: z.boolean(),
+    defaultValue: false,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: LATE_CREDIT_SETTING_KEYS.RIALIT,
+    description:
+      'Round 9 item C4: the same switch for Rialit, whose document says an expired or ' +
+      'cancelled payment can still become paid when its support approves a late payment. A ' +
+      'payment Rialit\u2019s own status read reports as paid AFTER the attempt closed (deadline ' +
+      'passed, EXPIRED, or UNKNOWN) is credited to the customer\u2019s wallet once and never ' +
+      'settles the order, and only when that read re-confirms it (status paid, this ' +
+      'attempt\u2019s order id, exactly the Toman asked and no payer fee). OFF by default: a ' +
+      'new route moves no money that its owner has not chosen to move. Off: recorded as a late ' +
+      'completion for an operator.',
     schema: z.boolean(),
     defaultValue: false,
     zeroMeaning: 'NOT_APPLICABLE',
@@ -1626,6 +1722,45 @@ export const SETTINGS = [
     // F5: the `trials` flag it configured is retired; a panel's own trial is the switch.
     configures: null,
     zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'miniapp.init_data_max_age_seconds',
+    description:
+      'Round 9, C5: how old a Telegram Mini App launch (its initData auth_date) may be when it ' +
+      'is exchanged for a mini-app session, in seconds. Telegram signs initData once, when the ' +
+      'customer opens the mini app; a signed launch older than this is refused and the ' +
+      'customer reopens the mini app. Inert while the mini_app flag is off.',
+    schema: z
+      .number()
+      .int()
+      .min(MINIAPP_INIT_DATA_MAX_AGE_SECONDS_MIN)
+      .max(MINIAPP_INIT_DATA_MAX_AGE_SECONDS_MAX),
+    // An hour: long enough for a customer who opened the mini app and came back to it, short
+    // enough that a copied launch is useless the same afternoon. At most a day.
+    defaultValue: 3600,
+    configures: 'mini_app',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'miniapp.session_ttl_minutes',
+    description:
+      'Round 9, C5: how long one mini-app session lasts after it is minted, in minutes. One ' +
+      'Telegram launch mints at most one session; when it lapses the customer reopens the mini ' +
+      'app. Inert while the mini_app flag is off.',
+    schema: z
+      .number()
+      .int()
+      .min(MINIAPP_SESSION_TTL_MINUTES_MIN)
+      .max(MINIAPP_SESSION_TTL_MINUTES_MAX),
+    defaultValue: 60,
+    configures: 'mini_app',
+    zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     consumer: 'ACTIVE',

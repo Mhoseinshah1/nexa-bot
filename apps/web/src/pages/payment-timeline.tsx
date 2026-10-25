@@ -11,11 +11,13 @@ import type {
   PaymentTimelineSection,
   RefundChannel,
 } from '@nexa/contracts';
+import { rejectReasonFa } from '@nexa/i18n';
 import { fetchPaymentReceipts, fetchPaymentTimeline } from '../api/client';
 import { formatNumber, formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { RecordLink, recordHref } from '../ui/record-ref';
 import {
+  Badge,
   Banner,
   Button,
   Card,
@@ -326,6 +328,20 @@ function detail(entry: PaymentTimelineEntry): ReactNode {
         <>
           <CodeName value={entry.statusHint} labels={PROVIDER_STATUS_LABELS} /> ·{' '}
           {t('web.payment_timeline_webhook_count')} <Ltr>{String(entry.webhookCount)}</Ltr>
+          {/* R9 C1: the provider's credit_amount — shown, flagged when it differs, never credited. */}
+          {entry.creditAmount === null ? null : (
+            <>
+              {' · '}
+              {t('web.payment_timeline_credit_amount')}{' '}
+              <Ltr>{`${entry.creditAmount} ${entry.providerUnit ?? ''}`.trim()}</Ltr>
+              {entry.creditAmountDiffers ? (
+                <>
+                  {' '}
+                  <Badge tone="warn">{t('web.payment_gateway_credit_amount_differs')}</Badge>
+                </>
+              ) : null}
+            </>
+          )}
         </>
       );
     case 'GATEWAY_INQUIRY':
@@ -390,7 +406,8 @@ function detail(entry: PaymentTimelineEntry): ReactNode {
               {entry.reasons.map((reason, index) => (
                 <span key={reason}>
                   {index === 0 ? null : ' · '}
-                  {code(reason)}
+                  {/* R9 C1: a reason that is the gateway's documented code reads in Persian. */}
+                  {rejectReasonFa(reason) === reason ? code(reason) : rejectReasonFa(reason)}
                 </span>
               ))}
             </span>

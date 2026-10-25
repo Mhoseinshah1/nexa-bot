@@ -26,7 +26,10 @@ import type {
   GatewayProviderRequestRepository,
   GatewaySiblingAttempt,
 } from '../application/gateway-invoice-ports.js';
-import { NEXA_CANCEL_KEY_PREFIX } from '../application/gateway-invoice-ports.js';
+import {
+  NEXA_CANCEL_KEY_PREFIX,
+  NEXA_EXPIRY_CANCEL_KEY_PREFIX,
+} from '../application/gateway-invoice-ports.js';
 
 type RequestRow = typeof gatewayProviderRequests.$inferSelect;
 
@@ -44,7 +47,10 @@ function recordOf(row: RequestRow): GatewayProviderRequestRecord {
     decidedAt: row.decidedAt,
     errorCode: row.errorCode,
     refundCardMasked: row.refundCardMasked,
-    requestedByNexa: row.idempotencyKey.startsWith(NEXA_CANCEL_KEY_PREFIX),
+    requestedByNexa:
+      row.idempotencyKey.startsWith(NEXA_CANCEL_KEY_PREFIX) ||
+      row.idempotencyKey.startsWith(NEXA_EXPIRY_CANCEL_KEY_PREFIX),
+    requestedOnExpiry: row.idempotencyKey.startsWith(NEXA_EXPIRY_CANCEL_KEY_PREFIX),
   };
 }
 
@@ -94,6 +100,76 @@ export class DrizzleGatewayProviderRequestRepository implements GatewayProviderR
       .onConflictDoNothing()
       .returning();
     const row = rows[0];
+    return row === undefined ? null : recordOf(row);
+  }
+
+  async requestExpiryCancel(
+    scope: TenantContext,
+    input: { readonly id: string; readonly paymentId: PaymentId; readonly now: Date },
+    tx: unknown,
+  ): Promise<GatewayProviderRequestRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const r = gatewayProviderRequests;
+    const gi = gatewayInvoices;
+    const p = payments;
+    const s = gatewayReceiptSubmissions;
+    const key = `${NEXA_EXPIRY_CANCEL_KEY_PREFIX}${input.paymentId}`;
+    /*
+     * Every condition in the one statement, restated against the rows as they stand: a create
+     * whose answer was lost (`CREATE_UNKNOWN`), an invoice the inquiry reported paid or anything
+     * but `pending`, an attempt already decided, a cancel already asked (and not definitively
+     * unprocessed), a receipt on its way — each writes nothing.
+     */
+    const result = await this.exec(tx).execute(sql`
+      INSERT INTO ${r} (id, tenant_id, payment_id, bot_instance_id, customer_id, kind, state,
+                        requested_at, claimed_until, idempotency_key)
+      SELECT ${input.id}::uuid, ${gi.tenantId}, ${gi.paymentId}, ${gi.botInstanceId},
+             ${p.customerId}, 'CANCEL'::text, 'REQUESTED'::text, ${input.now}::timestamptz,
+             NULL::timestamptz, ${key}::text
+        FROM ${gi}
+        JOIN ${p} ON ${p.tenantId} = ${gi.tenantId} AND ${p.id} = ${gi.paymentId}
+       WHERE ${gi.tenantId} = ${tenantId}
+         AND ${gi.paymentId} = ${input.paymentId}
+         AND ${p.state} = 'EXPIRED'
+         AND ${p.method} = 'GATEWAY'
+         AND ${gi.creationState} = 'CREATED'
+         AND ${gi.providerInvoiceId} IS NOT NULL
+         AND ${gi.botInstanceId} IS NOT NULL
+         AND ${gi.outcome} IS NULL
+         AND ${gi.providerPaid} IS NOT TRUE
+         AND (${gi.providerStatus} IS NULL OR ${gi.providerStatus} = 'pending')
+         AND NOT EXISTS (
+               SELECT 1 FROM ${r} AS asked
+                WHERE asked.tenant_id = ${gi.tenantId}
+                  AND asked.payment_id = ${gi.paymentId}
+                  AND asked.kind = 'CANCEL'
+                  AND asked.state <> 'RATE_LIMITED')
+         AND NOT EXISTS (
+               SELECT 1 FROM ${s}
+                WHERE ${s.tenantId} = ${gi.tenantId}
+                  AND ${s.paymentId} = ${gi.paymentId}
+                  AND ${s.state} IN ('QUEUED', 'SENDING', 'ACCEPTED', 'UNKNOWN'))
+      ON CONFLICT DO NOTHING
+      RETURNING id`);
+    if (result.rows.length === 0) return null;
+    return this.findOne(scope, input.id, tx);
+  }
+
+  private async findOne(
+    scope: TenantContext,
+    id: string,
+    tx: unknown,
+  ): Promise<GatewayProviderRequestRecord | null> {
+    const [row] = await this.exec(tx)
+      .select()
+      .from(gatewayProviderRequests)
+      .where(
+        and(
+          eq(gatewayProviderRequests.tenantId, requireTenantId(scope)),
+          eq(gatewayProviderRequests.id, id),
+        ),
+      )
+      .limit(1);
     return row === undefined ? null : recordOf(row);
   }
 
@@ -340,7 +416,12 @@ export class DrizzleGatewayProviderRequestRepository implements GatewayProviderR
     facts: GatewayProviderFacts | null,
     now: Date,
     tx: unknown,
-  ): Promise<{ readonly reasonsChanged: boolean; readonly changed: boolean }> {
+  ): Promise<{
+    readonly reasonsChanged: boolean;
+    readonly changed: boolean;
+    readonly needBefore: GatewayProviderNeedKind | null;
+    readonly remainingInvoiceIdBefore: string | null;
+  }> {
     const tenantId = requireTenantId(scope);
     const executor = this.exec(tx);
     const [existing] = await executor
@@ -357,6 +438,8 @@ export class DrizzleGatewayProviderRequestRepository implements GatewayProviderR
     const before = Array.isArray(existing?.rejectReasons)
       ? (existing.rejectReasons as unknown[]).map(String)
       : [];
+    const needBefore = (existing?.need ?? null) as GatewayProviderNeedKind | null;
+    const remainingInvoiceIdBefore = existing?.remainingInvoiceId ?? null;
     if (facts === null) {
       if (existing !== undefined) {
         await executor
@@ -368,7 +451,12 @@ export class DrizzleGatewayProviderRequestRepository implements GatewayProviderR
             ),
           );
       }
-      return { reasonsChanged: false, changed: existing !== undefined };
+      return {
+        reasonsChanged: false,
+        changed: existing !== undefined,
+        needBefore,
+        remainingInvoiceIdBefore,
+      };
     }
     const values = {
       need: facts.need,
@@ -412,7 +500,7 @@ export class DrizzleGatewayProviderRequestRepository implements GatewayProviderR
       existing.refundPending !== facts.refundPending ||
       before.length !== facts.rejectReasons.length ||
       before.some((reason, index) => reason !== facts.rejectReasons[index]);
-    return { reasonsChanged, changed };
+    return { reasonsChanged, changed, needBefore, remainingInvoiceIdBefore };
   }
 
   async factsFor(

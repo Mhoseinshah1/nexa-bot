@@ -62,6 +62,8 @@
     "cutover-reconcile:dev": "pnpm --filter @nexa/api cutover-reconcile:dev",
     "customers-link-bot": "pnpm --filter @nexa/api customers-link-bot",
     "customers-link-bot:dev": "pnpm --filter @nexa/api customers-link-bot:dev",
+    "data-compaction": "pnpm --filter @nexa/api data-compaction",
+    "data-compaction:dev": "pnpm --filter @nexa/api data-compaction:dev",
     "dev:services": "bash scripts/dev-services.sh",
     "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm check:boundaries && pnpm check:i18n && pnpm check:citations && pnpm check:shell && pnpm test && pnpm test:web && pnpm test:deploy && pnpm build"
   },

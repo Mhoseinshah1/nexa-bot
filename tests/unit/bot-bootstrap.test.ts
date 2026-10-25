@@ -433,6 +433,7 @@ function build(overrides: Partial<BotBootstrapDeps> = {}): {
       desiredFor: async () => ({
         entries: [{ command: 'start', description: 'شروع' }],
         hash: telegram.revision,
+        menuButton: null,
       }),
     },
     webhookSecret: () => SECRET,

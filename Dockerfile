@@ -43,6 +43,7 @@ WORKDIR /src
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
+COPY apps/miniapp/package.json apps/miniapp/
 COPY packages/contracts/package.json packages/contracts/
 COPY packages/i18n/package.json packages/i18n/
 RUN pnpm install --frozen-lockfile
@@ -112,6 +113,11 @@ COPY --from=builder --chown=node:node /deploy/package.json ./package.json
 
 # The Web Admin bundle. Copied out to a volume at start-up; see deploy/compose.
 COPY --from=builder --chown=node:node /src/apps/web/dist ./web
+
+# Round 9, C5: the customer mini app, served by the API itself from this copy
+# (`MINIAPP_DIST_DIR`), read once into memory at boot.
+COPY --from=builder --chown=node:node /src/apps/miniapp/dist ./miniapp
+ENV MINIAPP_DIST_DIR=/app/miniapp
 
 # The host-side operational assets this release ships with.
 #

@@ -285,6 +285,7 @@ describe('L10 — a service created after a purchase, with every field', () => {
       customer,
       payment,
       walletBalance: null,
+      origin: null,
       at: AT,
       words: i18nOpsLogWords,
     });

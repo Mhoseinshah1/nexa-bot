@@ -51,6 +51,8 @@ const ALLOWED_KEYBOARD_BUILDERS: Readonly<Record<string, string>> = {
     'the shared sender of every customer screen',
   'modules/commerce/broadcasts/infrastructure/telegram-broadcast.transport.ts':
     'broadcasts: TEXT through the rich blocks when the switch is on; media and copies cannot be rich',
+  'modules/commerce/miniapp/infrastructure/telegram-receipt-uploader.ts':
+    "the mini app's receipt image, uploaded for its file_id and deleted (no keyboard)",
   'modules/control/notifications/infrastructure/telegram-transport.ts':
     'operations-group log lines (operator-facing, URL buttons in a forum topic)',
   'modules/control/ops-group/infrastructure/telegram-ops-group.ts':

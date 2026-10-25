@@ -15,6 +15,7 @@ import type { OrderRepository } from '../../orders/application/ports.js';
 import type { OrderUsernameLane } from '../../provisioning/application/username-lane.js';
 import type { CustomerNotifier } from '../../messaging/application/customer-notifier.js';
 import type { PaymentRepository } from './ports.js';
+import type { GatewayExpiryCancels } from './gateway-provider-request.lane.js';
 
 /**
  * How many rows one pass moves, per kind.
@@ -64,6 +65,12 @@ export interface PaymentExpiryServiceDeps {
   readonly usernames: OrderUsernameLane;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /**
+   * R9 C1: for an expired card-transfer gateway attempt (TonPays Telegram), the provider cancel
+   * request, written in THIS transaction so an expiry and its cancel commit together and the
+   * lane sends it later. Absent (a test double, an older wiring): nothing is asked.
+   */
+  readonly gatewayCancels?: Pick<GatewayExpiryCancels, 'requestOnExpiry'>;
 }
 
 /**
@@ -230,6 +237,10 @@ export class PaymentExpiryService {
           now,
           tx,
         );
+        // R9 C1: the provider's invoice is still open; ask the provider to cancel it.
+        if (payment.method === 'GATEWAY' && this.deps.gatewayCancels !== undefined) {
+          await this.deps.gatewayCancels.requestOnExpiry(scope, actor, payment, now, tx);
+        }
       }
 
       let heldNames = 0;

@@ -315,6 +315,90 @@ export class WalletTopupFlowService {
     return result;
   }
 
+  /** Round 9, C5: the floor and ceiling a typed top-up is held to (null: none), for a screen. */
+  async limits(
+    scope: TenantContext,
+  ): Promise<{ readonly minimum: Money | null; readonly maximum: Money | null }> {
+    return this.bounds(scope);
+  }
+
+  /**
+   * Round 9, C5: the mini app's amount step. The SAME bounds `recordAmount` applies and the
+   * same routes `recorded` offers, for an amount the mini app holds itself — it has no chat
+   * whose next message could be a typed amount, so no capture is opened. Writes nothing.
+   */
+  async quoteAmount(
+    scope: TenantContext,
+    customerId: UserId,
+    amount: Money,
+  ): Promise<
+    | { readonly outcome: 'BELOW_MINIMUM'; readonly minimum: Money }
+    | { readonly outcome: 'ABOVE_MAXIMUM'; readonly maximum: Money }
+    | { readonly outcome: 'ROUTES'; readonly amount: Money; readonly routes: readonly TopupRoute[] }
+  > {
+    const { minimum, maximum } = await this.bounds(scope);
+    if (minimum !== null && amount.amountMinor < minimum.amountMinor) {
+      return { outcome: 'BELOW_MINIMUM', minimum };
+    }
+    if (maximum !== null && amount.amountMinor > maximum.amountMinor) {
+      return { outcome: 'ABOVE_MAXIMUM', maximum };
+    }
+    const routes = await this.deps.routes.routesFor(scope, customerId, 'WALLET_TOPUP', amount);
+    return { outcome: 'ROUTES', amount, routes };
+  }
+
+  /**
+   * Round 9, C5: the mini app's route step — `choose` without a capture. The bounds and the
+   * route are re-decided now (a stale screen is answered with the routes as they stand), and
+   * the request is the same one `choose` makes, by the same descriptor rule: a gateway
+   * attempt, or a card-to-card instruction. The payments re-decide the route again inside
+   * their own transactions.
+   */
+  async requestDirect(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly customerId: UserId;
+      readonly amount: Money;
+      readonly provider: PaymentGatewayProvider;
+      readonly idempotencyKey: string;
+    },
+  ): Promise<
+    | Exclude<TopupChoiceResult, { readonly outcome: 'GONE' } | { readonly outcome: 'NOT_OFFERED' }>
+    | { readonly outcome: 'NOT_OFFERED'; readonly routes: readonly TopupRoute[] }
+    | { readonly outcome: 'BELOW_MINIMUM'; readonly minimum: Money }
+    | { readonly outcome: 'ABOVE_MAXIMUM'; readonly maximum: Money }
+  > {
+    const quoted = await this.quoteAmount(scope, input.customerId, input.amount);
+    if (quoted.outcome !== 'ROUTES') return quoted;
+    const chosen = quoted.routes.find((route) => route.provider === input.provider);
+    if (chosen === undefined) return { outcome: 'NOT_OFFERED', routes: quoted.routes };
+    const request = {
+      amount: input.amount,
+      provider: input.provider,
+      idempotencyKey: input.idempotencyKey,
+    };
+    return chosen.descriptor.settlesVia === 'GATEWAY'
+      ? {
+          outcome: 'GATEWAY_REQUESTED',
+          attempt: await this.deps.payments.requestGatewayTopup(
+            scope,
+            actor,
+            input.customerId,
+            request,
+          ),
+        }
+      : {
+          outcome: 'REQUESTED',
+          instruction: await this.deps.payments.requestWalletTopupTyped(
+            scope,
+            actor,
+            input.customerId,
+            request,
+          ),
+        };
+  }
+
   async close(
     scope: TenantContext,
     actor: ActorContext,

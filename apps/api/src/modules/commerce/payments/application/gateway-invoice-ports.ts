@@ -64,6 +64,12 @@ export interface GatewayCreateRequest {
   /** Null when this customer's Telegram id is not known; the field is then omitted. */
   readonly buyerChatId: string | null;
   /**
+   * Round 9 C4: whether NEXA's own gateway customer fee on this attempt is above zero (the
+   * payment's frozen fee snapshot). Rialit reads it for the owner's rule that only one side
+   * charges a fee; every other adapter ignores it. Absent: unknown.
+   */
+  readonly customerFeeCharged?: boolean;
+  /**
    * The integer the provider knows the customer by, for a `numericIdentity` route
    * (CentralPay's `userId`): the number frozen on the attempt. Null for every other route.
    */
@@ -136,6 +142,13 @@ export type GatewayCreateOutcome =
        * 00:00 Tehran; the lane computes the instant from its own clock. Absent: nothing.
        */
       readonly routeEffect?: GatewayRouteEffect;
+      /**
+       * Round 9 C4: the provider DID create a payment, and Nexa refuses to present it (Rialit
+       * answered a payer fee while Nexa's own fee is on — the customer would pay two fees — or
+       * payer figures that do not add up). Its id is recorded on the attempt's audit row so an operator can find it at the
+       * provider; the link is never shown, so nobody can pay it. Absent for every other refusal.
+       */
+      readonly providerInvoiceId?: string;
     }
   | {
       readonly kind: 'RATE_LIMITED';
@@ -469,6 +482,12 @@ export interface ExternalGatewayAdapter {
   hintRank?(status: string | null): number;
   /** The operator's read-only credential check, for a provider that offers a safe read. */
   checkCredential?(apiKey: string): Promise<GatewayCredentialCheck>;
+  /**
+   * Round 9 C4: whether a webhook body is the provider's own TEST delivery, which names no
+   * payment (Rialit's `webhook.test`, sent from its dashboard). Such a body is answered 2xx and
+   * nothing else happens: no lookup, no record, no inquiry. Absent: no such event.
+   */
+  isWebhookProbe?(body: unknown): boolean;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -974,6 +993,16 @@ export interface GatewayInvoiceRepository {
    * A webhook's hint: bookkeeping only, and an inquiry brought forward when one may be.
    * Returns whether the delivery was new (false: a duplicate delivery id).
    */
+  /**
+   * R9 C1: the stored webhook `credit_amount`, read `FOR UPDATE` in the caller's transaction —
+   * so a delivery compares its figure with the one a concurrent delivery may just have written.
+   * Optional: a repository without it is compared with the figure read before the transaction.
+   */
+  creditAmountForUpdate?(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    tx: unknown,
+  ): Promise<bigint | null>;
   recordWebhook(
     scope: TenantContext,
     paymentId: PaymentId,
@@ -1436,10 +1465,21 @@ export interface GatewayProviderRequestRecord {
    * idempotency key, which `GatewayProviderRequestLane.cancelNow` prefixes; absent in a fixture.
    */
   readonly requestedByNexa?: boolean;
+  /**
+   * R9 C1: a cancel Nexa asked for because ITS OWN deadline expired the attempt
+   * (`requestExpiryCancel`). It is sent for an EXPIRED payment — the one request that is —
+   * and its success fails nothing locally: the payment is already closed.
+   */
+  readonly requestedOnExpiry?: boolean;
 }
 
 /** The idempotency-key prefix of a cancel Nexa asks for itself (`cancelNow`). */
 export const NEXA_CANCEL_KEY_PREFIX = 'sibling-cancel:';
+/**
+ * R9 C1: the idempotency-key prefix of the cancel the expiry sweep asks for, followed by the
+ * PAYMENT id — so each expired attempt is asked to be cancelled at most once, ever.
+ */
+export const NEXA_EXPIRY_CANCEL_KEY_PREFIX = 'expiry-cancel:';
 
 /** A claimed request, with the sealed card a REQUESTED refund still holds (for the worker only). */
 export interface ClaimedProviderRequest {
@@ -1485,6 +1525,20 @@ export interface GatewayProviderRequestRepository {
         readonly sealed: { readonly ciphertext: string; readonly keyId: string };
       } | null;
     },
+    tx: unknown,
+  ): Promise<GatewayProviderRequestRecord | null>;
+  /**
+   * R9 C1: the cancel request the expiry sweep writes for an attempt Nexa has just EXPIRED, in
+   * the sweep's own transaction — ONE conditional `INSERT … SELECT`, so every condition is
+   * decided by the database against the rows as they are: the payment EXPIRED; its invoice
+   * CREATED with a provider invoice id (never a create whose answer was lost), undecided, not
+   * reported paid, and last reported `pending` (or never asked); no cancel ever asked for it
+   * except one the provider rate-limited; no receipt on its way or accepted. Idempotent on
+   * `expiry-cancel:<paymentId>`. Null when nothing was written.
+   */
+  requestExpiryCancel(
+    scope: TenantContext,
+    input: { readonly id: string; readonly paymentId: PaymentId; readonly now: Date },
     tx: unknown,
   ): Promise<GatewayProviderRequestRecord | null>;
   latest(
@@ -1556,7 +1610,16 @@ export interface GatewayProviderRequestRepository {
     facts: GatewayProviderFacts | null,
     now: Date,
     tx: unknown,
-  ): Promise<{ readonly reasonsChanged: boolean; readonly changed: boolean }>;
+  ): Promise<{
+    readonly reasonsChanged: boolean;
+    readonly changed: boolean;
+    /**
+     * R9 C1: the next step and the remainder invoice the STORED facts named before this write
+     * (null when there were none), so the caller can tell a new ask from a repeated one.
+     */
+    readonly needBefore?: GatewayProviderNeedKind | null;
+    readonly remainingInvoiceIdBefore?: string | null;
+  }>;
   factsFor(
     scope: TenantContext,
     paymentId: PaymentId,

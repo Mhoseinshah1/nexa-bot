@@ -24,6 +24,10 @@ import {
   BACKUP_ARCHIVE_FORMATS,
   LEGACY_COMPACTION_FAILURE_CODES,
   LEGACY_COMPACTION_STATES,
+  DATA_COMPACTION_MODES,
+  DATA_COMPACTION_RUN_STATES,
+  DATA_COMPACTION_STOP_REASONS,
+  DATA_COMPACTION_TRIGGERS,
   BACKUP_DELIVERY_STATES,
   BACKUP_RUN_STATES,
   BACKUP_STAGES,
@@ -4247,12 +4251,22 @@ export const orders = pgTable(
     refundedAt: timestamptz('refunded_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    /**
+     * Round 9, C5: the surface whose actor created this row (`SOURCE_SURFACES`), so the
+     * operations log can say «منبع: مینی‌اپ» for what the Mini App created. Null for every row
+     * written before the column existed: unknown, never guessed — not backfilled.
+     */
+    sourceSurface: text('source_surface'),
     ...recordSourceColumns(),
     ...publicCodeColumns(),
   },
   (table) => [
     ...recordSourceChecks('orders', table),
     ...publicCodeChecks('orders'),
+    check(
+      'orders_source_surface_check',
+      sql`source_surface IS NULL OR ${enumCheck('source_surface', SOURCE_SURFACES)}`,
+    ),
     /** A child row may not name a customer of another tenant. */
     foreignKey({
       columns: [table.tenantId, table.customerId],
@@ -4570,12 +4584,22 @@ export const payments = pgTable(
     providerReviewUntil: timestamptz('provider_review_until'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    /**
+     * Round 9, C5: the surface whose actor created this row (`SOURCE_SURFACES`), so the
+     * operations log can say «منبع: مینی‌اپ» for what the Mini App created. Null for every row
+     * written before the column existed: unknown, never guessed — not backfilled.
+     */
+    sourceSurface: text('source_surface'),
     ...recordSourceColumns(),
     ...publicCodeColumns(),
   },
   (table) => [
     ...recordSourceChecks('payments', table),
     ...publicCodeChecks('payments'),
+    check(
+      'payments_source_surface_check',
+      sql`source_surface IS NULL OR ${enumCheck('source_surface', SOURCE_SURFACES)}`,
+    ),
     foreignKey({
       columns: [table.tenantId, table.customerId],
       foreignColumns: [customers.tenantId, customers.id],
@@ -5127,6 +5151,15 @@ export const gatewayInvoices = pgTable(
     check(
       'gateway_invoices_tetrapay_check',
       sql`provider <> 'TETRAPAY' OR (provider_unit = 'IRR' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND provider_order_id ~ '^[A-Za-z0-9_.:-]{1,64}$')`,
+    ),
+    /**
+     * Round 9 C4: a Rialit attempt is billed in TOMAN with no conversion and no bot, and its
+     * order id is the strict subset of Rialit's documented rules Nexa generates: 1-64 bytes of
+     * `[A-Za-z0-9_.:-]` (one byte each, so the length is also the documented 64-byte bound).
+     */
+    check(
+      'gateway_invoices_rialit_check',
+      sql`provider <> 'RIALIT' OR (provider_unit = 'IRT' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND octet_length(provider_order_id) <= 64 AND provider_order_id ~ '^[A-Za-z0-9_.:-]{1,64}$')`,
     ),
     check(
       'gateway_invoices_provider_method_check',
@@ -11923,12 +11956,22 @@ export const tickets = pgTable(
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     lastMessageAt: timestamptz('last_message_at').notNull().defaultNow(),
     closedAt: timestamptz('closed_at'),
+    /**
+     * Round 9, C5: the surface whose actor created this row (`SOURCE_SURFACES`), so the
+     * operations log can say «منبع: مینی‌اپ» for what the Mini App created. Null for every row
+     * written before the column existed: unknown, never guessed — not backfilled.
+     */
+    sourceSurface: text('source_surface'),
     ...recordSourceColumns(),
     ...publicCodeColumns(),
   },
   (table) => [
     ...recordSourceChecks('tickets', table),
     ...publicCodeChecks('tickets'),
+    check(
+      'tickets_source_surface_check',
+      sql`source_surface IS NULL OR ${enumCheck('source_surface', SOURCE_SURFACES)}`,
+    ),
     unique('tickets_tenant_id_key').on(table.tenantId, table.id),
     unique('tickets_opening_key').on(table.tenantId, table.openingKey),
     /** The inbox: newest first, under a keyset on the immutable `(created_at, id)`. */
@@ -15322,6 +15365,58 @@ export const legacyCompactionRuns = pgTable(
 );
 
 /**
+ * Round 9 C3: one pass of the data compaction (`@nexa/contracts` `data-compaction.ts`) — the
+ * RECORDED RESULT of every dry run and every applied pass, worker or CLI. `counts` is rows per
+ * table (what would go in a DRY_RUN, what went in an APPLY), advanced inside each batch's own
+ * transaction so a crash loses at most the batch in flight; `cutoffs` is the instant per class
+ * the pass was bounded by, fixed when it began. The nightly report sums the APPLY passes of
+ * its day.
+ *
+ * ONE RUNNING pass per tenant is a partial unique index, not a process: two worker replicas
+ * are normal on every rolling update. A RUNNING row whose heartbeat went stale is FAILED by the
+ * next pass (`ABANDONED`), never adopted. Every state change is a conditional UPDATE naming
+ * `RUNNING` as its `from`.
+ */
+export const dataCompactionRuns = pgTable(
+  'data_compaction_runs',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    trigger: text('trigger').notNull(),
+    mode: text('mode').notNull(),
+    state: text('state').notNull(),
+    startedAt: timestamptz('started_at').notNull(),
+    heartbeatAt: timestamptz('heartbeat_at').notNull(),
+    finishedAt: timestamptz('finished_at'),
+    cutoffs: jsonb('cutoffs').notNull(),
+    counts: jsonb('counts')
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    stopReason: text('stop_reason'),
+  },
+  (table) => [
+    check('data_compaction_runs_trigger_check', enumCheck('trigger', DATA_COMPACTION_TRIGGERS)),
+    check('data_compaction_runs_mode_check', enumCheck('mode', DATA_COMPACTION_MODES)),
+    check('data_compaction_runs_state_check', enumCheck('state', DATA_COMPACTION_RUN_STATES)),
+    check(
+      'data_compaction_runs_stop_reason_check',
+      nullableEnumCheck('stop_reason', DATA_COMPACTION_STOP_REASONS),
+    ),
+    check('data_compaction_runs_finished_check', sql`(state = 'RUNNING') = (finished_at IS NULL)`),
+    check(
+      'data_compaction_runs_counts_check',
+      sql`jsonb_typeof(counts) = 'object' AND jsonb_typeof(cutoffs) = 'object'`,
+    ),
+    uniqueIndex('data_compaction_runs_one_running_idx')
+      .on(table.tenantId)
+      .where(sql`state = 'RUNNING'`),
+    index('data_compaction_runs_tenant_started_idx').on(table.tenantId, table.startedAt),
+  ],
+);
+
+/**
  * TB1 — one Telegram Business connection of one of this tenant's bots (ADR-0033 §2).
  *
  * Telegram creates the connection when a Business account owner connects the bot, and
@@ -16860,5 +16955,66 @@ export const supportKnowledgeBuildProposals = pgTable(
       'support_knowledge_build_proposals_text_check',
       sql`length(btrim(title)) BETWEEN 1 AND ${KNOWLEDGE_TITLE_MAX} AND length(btrim(body)) BETWEEN 1 AND ${KNOWLEDGE_BODY_MAX}`,
     ),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Round 9, C5 — the customer's Telegram Mini App
+// ---------------------------------------------------------------------------
+
+/**
+ * One mini-app session: what ONE verified Telegram launch (`initData`) was exchanged for.
+ *
+ * The replay rule is a unique index, not a check in a process: `(tenant, bot, init_data_hash)`
+ * is unique, so a launch mints at most one session whatever two replicas are asked at once,
+ * and a launch copied out of a customer's device is worth nothing once it has been used.
+ * The token itself is never stored — `token_hash` is its SHA-256 — so a read of this table
+ * cannot act as anybody. A session belongs to one tenant, one bot and one customer; the
+ * surface derives the scope from the row, never from the request.
+ *
+ * Expired rows are kept: they are what makes a replayed launch refused for as long as it
+ * could still verify, and they are small. Nothing customer-facing is written here.
+ */
+export const miniAppSessions = pgTable(
+  'miniapp_sessions',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    customerId: uuid('customer_id').notNull(),
+    /** Telegram's numeric id, as text: the gates (channels, bound administrators) ask by it. */
+    telegramUserId: text('telegram_user_id').notNull(),
+    /** The launch's own `hash` field (64 hex). The replay key. */
+    initDataHash: text('init_data_hash').notNull(),
+    /** SHA-256 of the bearer secret, hex. Compared in constant time. */
+    tokenHash: text('token_hash').notNull(),
+    /** The launch's `auth_date`. */
+    authDate: timestamptz('auth_date').notNull(),
+    createdAt: timestamptz('created_at').notNull(),
+    expiresAt: timestamptz('expires_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('miniapp_sessions_launch_key').on(
+      table.tenantId,
+      table.botInstanceId,
+      table.initDataHash,
+    ),
+    index('miniapp_sessions_tenant_customer_idx').on(
+      table.tenantId,
+      table.customerId,
+      table.createdAt,
+    ),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'miniapp_sessions_customer_fk',
+    }),
+    check('miniapp_sessions_init_hash_check', sql`init_data_hash ~ '^[0-9a-f]{64}$'`),
+    check('miniapp_sessions_token_hash_check', sql`token_hash ~ '^[0-9a-f]{64}$'`),
+    check('miniapp_sessions_window_check', sql`expires_at > created_at`),
   ],
 );

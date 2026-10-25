@@ -80,6 +80,7 @@ export * from './tonpays-telegram.js';
 export * from './nowpayments.js';
 export * from './centralpay.js';
 export * from './tetrapay.js';
+export * from './rialit.js';
 export * from './telegram-stars.js';
 export * from './fx.js';
 export * from './refunds.js';
@@ -89,6 +90,7 @@ export * from './service-refund-requests.js';
 export * from './service-transfer.js';
 // WP-A7: the support ticket system.
 export * from './tickets.js';
+export * from './miniapp.js';
 // Round N, C1: campaigns composing the pricing rules, the audience and the mass actions.
 export * from './campaigns.js';
 export * from './payment-receipts.js';
@@ -122,6 +124,7 @@ export * from './ops-log-types.js';
 export * from './persian-digits.js';
 export * from './backup.js';
 export * from './data-retention.js';
+export * from './data-compaction.js';
 export * from './legacy-compaction.js';
 export * from './recovery.js';
 export * from './recovery-kit.js';

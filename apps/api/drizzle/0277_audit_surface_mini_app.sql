@@ -1,0 +1,2 @@
+ALTER TABLE "audit_logs" DROP CONSTRAINT "audit_logs_surface_check";--> statement-breakpoint
+ALTER TABLE "audit_logs" ADD CONSTRAINT "audit_logs_surface_check" CHECK (source_surface IN ('TELEGRAM', 'WEB', 'WORKER', 'SCHEDULER', 'API', 'MINI_APP'));

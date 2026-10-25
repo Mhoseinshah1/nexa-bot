@@ -201,6 +201,31 @@ export class WalletService {
     return this.deps.repository.balanceOf(scope, customerId, await this.sellingCurrency(scope));
   }
 
+  /**
+   * Round 9, C5 (owner correction 2026-10-25): the customer's OWN movements, newest first,
+   * for the mini app's wallet screen. The same projection, the same selling currency and the
+   * same keyset page as the operator's `history` — and the same customer-own permission as
+   * `balanceForCustomer` (`maintenance.run`), never `users.view`. As with the balance, the id
+   * is the one the caller authenticated, never one a client chose; there is no id to point
+   * at somebody else.
+   */
+  async historyForCustomer(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    query: WalletHistoryQuery,
+  ): Promise<WalletEntryPage> {
+    await this.deps.guard.check(scope, actor, WALLET_OWN_VIEW_PERMISSION);
+    const limit = Math.min(Math.max(query.limit ?? WALLET_PAGE_DEFAULT, 1), WALLET_PAGE_MAX);
+    return this.deps.repository.list(
+      scope,
+      customerId,
+      await this.sellingCurrency(scope),
+      limit,
+      query.cursor ?? null,
+    );
+  }
+
   /** A page of movements, newest first. Reading history is reading the customer. */
   async history(
     scope: TenantContext,

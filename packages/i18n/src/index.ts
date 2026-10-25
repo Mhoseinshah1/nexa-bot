@@ -33,6 +33,7 @@ export {
   operationalEventMessageFa,
 } from './operational-event-messages.fa.js';
 export { CUSTOMER_NOTIFICATION_KIND_NAMES_FA } from './customer-notification-kinds.fa.js';
+export { TONPAYS_REJECT_REASONS_FA, rejectReasonFa } from './gateway-reject-reasons.fa.js';
 import { clipEntities, parseCaptionMarkup, type CaptionMarkup } from './caption-markup.js';
 
 /**

@@ -66,6 +66,7 @@ for dir in \
   apps/api/drizzle \
   apps/api/src/modules/platform/providers \
   apps/web/src \
+  apps/miniapp/src \
   docs/research; do
   require_dir "$dir" || true
 done
@@ -396,7 +397,7 @@ fi
 # --- No silent failure ------------------------------------------------------
 # Three unrelated legacy subsystems report success for writes that changed
 # nothing. An empty catch is how that becomes a habit.
-EMPTY_CATCH=$(grep -rnE "catch\s*(\([^)]*\))?\s*\{\s*\}" packages/*/src apps/api/src apps/web/src 2>/dev/null \
+EMPTY_CATCH=$(grep -rnE "catch\s*(\([^)]*\))?\s*\{\s*\}" packages/*/src apps/api/src apps/web/src apps/miniapp/src 2>/dev/null \
   | grep -vE ":[0-9]+: *(\*|//)" || true)
 if [ -n "$EMPTY_CATCH" ]; then
   fail "An empty catch block swallows a failure" "$EMPTY_CATCH"
@@ -415,6 +416,47 @@ if node -e "
 else
   fail "The web admin depends on a server package" \
        "It may import @nexa/contracts and @nexa/i18n only, and talks to the API over HTTP."
+fi
+
+# --- The mini app carries no server code (Round 9, C5) ----------------------
+# The customer's mini app has the Web Admin's boundary: its package may depend on
+# @nexa/contracts and @nexa/i18n among the workspace packages and on nothing else of
+# ours, and no source file may import a path inside another app.
+if node -e "
+  const pkg = require('./apps/miniapp/package.json');
+  const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+  const ours = Object.keys(deps).filter((name) => name.startsWith('@nexa/'));
+  const allowed = ['@nexa/contracts', '@nexa/i18n'];
+  const found = ours.filter((name) => !allowed.includes(name));
+  if (found.length) { console.error(found.join(', ')); process.exit(1); }
+" 2>/dev/null; then
+  pass "the mini app depends on no workspace package but contracts and i18n"
+else
+  fail "The mini app depends on a server package" \
+       "It may import @nexa/contracts and @nexa/i18n only, and talks to the API over HTTP."
+fi
+# Every specifier is RESOLVED, so a relative path that climbs out of apps/miniapp
+# (`../../api/src/...`) is caught as surely as one that names the package.
+MINIAPP_IMPORTS=$(node -e "
+  const fs = require('fs');
+  const path = require('path');
+  const root = path.resolve('apps/miniapp');
+  const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+    entry.isDirectory() ? walk(path.join(dir, entry.name)) : [path.join(dir, entry.name)]);
+  const bad = [];
+  for (const file of walk(path.join(root, 'src')).filter((f) => /\.tsx?$/.test(f))) {
+    for (const match of fs.readFileSync(file, 'utf8').matchAll(/(?:from|import)\s*\(?\s*'([^']+)'/g)) {
+      const spec = match[1];
+      const escapes = spec.startsWith('.') && !path.resolve(path.dirname(file), spec).startsWith(root + path.sep);
+      if (escapes || spec.startsWith('@nexa/api')) bad.push(path.relative(process.cwd(), file) + ': ' + spec);
+    }
+  }
+  process.stdout.write(bad.join('\n'));
+" 2>&1 || true)
+if [ -n "$MINIAPP_IMPORTS" ]; then
+  fail "The mini app imports another app's source" "$MINIAPP_IMPORTS"
+else
+  pass "the mini app imports no other app's source"
 fi
 
 # --- Research is committed sanitized ---------------------------------------
@@ -673,6 +715,7 @@ apps/api/src/modules/commerce/payments/infrastructure/tonpays-telegram-adapter.t
 apps/api/src/modules/commerce/payments/infrastructure/nowpayments-adapter.ts
 apps/api/src/modules/commerce/payments/infrastructure/centralpay-adapter.ts
 apps/api/src/modules/commerce/payments/infrastructure/tetrapay-adapter.ts
+apps/api/src/modules/commerce/payments/infrastructure/rialit-adapter.ts
 apps/api/src/modules/platform/legacy-importer/infrastructure/mysql-legacy-source.ts
 apps/api/src/infrastructure/ai/ai-http.ts
 apps/api/src/legacy-import-cutover.ts

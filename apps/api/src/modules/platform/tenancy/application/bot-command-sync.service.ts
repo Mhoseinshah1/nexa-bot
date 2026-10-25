@@ -34,8 +34,13 @@ import type {
   BotCommandSyncTelegram,
   ClaimedCommandSync,
 } from './bot-command-sync-ports.js';
-import { sameCommandMenu, type CommandMenu } from './command-menu.js';
-import type { BotBootstrapRepository } from './ports.js';
+import {
+  miniAppUrl,
+  revisionHasMiniAppButton,
+  sameCommandMenu,
+  type CommandMenu,
+} from './command-menu.js';
+import type { BotBootstrapRepository, BotCommandsRegistration } from './ports.js';
 
 export interface BotCommandSyncServiceDeps {
   readonly repository: BotCommandSyncRepository;
@@ -285,10 +290,16 @@ export class BotCommandSyncService {
       // Rendered NOW, not from the row: a description edited since the row was queued is
       // what should reach Telegram, and the digest stored is of what was sent.
       const desired = await this.deps.menu.desiredFor(scope);
-      const registration = await this.deps.telegram.registerCommands({
+      const commands = await this.deps.telegram.registerCommands({
         token,
         commands: desired.entries,
       });
+      // Round 9, C5: the mini app's menu button, after the commands and on the same terms:
+      // a refusal is this attempt's failure, retried with the same back-off.
+      const registration =
+        commands.outcome === 'REGISTERED'
+          ? ((await this.menuButton(scope, row.botInstanceId, token, desired)) ?? commands)
+          : commands;
       const now = this.deps.clock.now();
       if (registration.outcome === 'REGISTERED') {
         await this.deps.uow.run(scope, async (tx) => {
@@ -367,6 +378,33 @@ export class BotCommandSyncService {
       );
       return { botInstanceId: row.botInstanceId, outcome: 'FAILED', errorCode: 'sync.unexpected' };
     }
+  }
+
+  /**
+   * Round 9, C5: the chat menu button this attempt owes, or null when it owes none.
+   *
+   * With the button wanted: set it, to `<origin>/miniapp/<bot>/`. With none wanted, reset it
+   * to Telegram's default ONLY when this bot's stored revision says a button was set — so a
+   * tenant that never switched the mini app on is never asked anything new, and switching it
+   * off removes the button from every bot that has it.
+   */
+  private async menuButton(
+    scope: TenantContext,
+    botId: BotInstanceId,
+    token: string,
+    desired: Awaited<ReturnType<CommandMenu['desiredFor']>>,
+  ): Promise<BotCommandsRegistration | null> {
+    const set = this.deps.telegram.setMenuButton?.bind(this.deps.telegram);
+    if (set === undefined) return null;
+    const wanted = desired.menuButton ?? null;
+    if (wanted !== null) {
+      return set({ token, button: { text: wanted.text, url: miniAppUrl(wanted.origin, botId) } });
+    }
+    const current = (await this.deps.repository.listForTenant(scope)).find(
+      (record) => record.bot.id === botId,
+    );
+    if (!revisionHasMiniAppButton(current?.bot.syncedHash ?? null)) return null;
+    return set({ token, button: null });
   }
 
   private async recordFailure(

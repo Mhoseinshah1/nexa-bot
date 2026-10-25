@@ -22,6 +22,7 @@ import type {
   LEGACY_SERVICE_REVIEW_ERROR_CODES,
   LEGACY_WALLET_DEBT_ERROR_CODES,
   MESSAGING_ERROR_CODES,
+  MINIAPP_ERROR_CODES,
   NOTIFICATION_CENTER_ERROR_CODES,
   OPS_GROUP_ERROR_CODES,
   PANEL_ERROR_CODES,
@@ -75,6 +76,7 @@ export type ContractErrorCode =
   | CodesOf<typeof LEGACY_SERVICE_REVIEW_ERROR_CODES>
   | CodesOf<typeof LEGACY_WALLET_DEBT_ERROR_CODES>
   | CodesOf<typeof MESSAGING_ERROR_CODES>
+  | CodesOf<typeof MINIAPP_ERROR_CODES>
   | CodesOf<typeof NOTIFICATION_CENTER_ERROR_CODES>
   | CodesOf<typeof OPS_GROUP_ERROR_CODES>
   | CodesOf<typeof PANEL_ERROR_CODES>
@@ -419,6 +421,18 @@ export const ERROR_TEXT = {
   'messaging.button_url_invalid': 'web.err_messaging_button_url_invalid',
   'messaging.button_url_scheme': 'web.err_messaging_button_url_scheme',
   'messaging.split_bound_invalid': 'web.err_messaging_split_bound_invalid',
+  'miniapp.gate_required': 'web.err_miniapp_gate_required',
+  'miniapp.init_data_expired': 'web.err_miniapp_init_data_expired',
+  'miniapp.init_data_invalid': 'web.err_miniapp_init_data_invalid',
+  'miniapp.init_data_replayed': 'web.err_miniapp_init_data_replayed',
+  'miniapp.not_found': 'web.err_miniapp_not_found',
+  'miniapp.rate_limited': 'web.err_miniapp_rate_limited',
+  'miniapp.receipt_refused': 'web.err_miniapp_receipt_refused',
+  'miniapp.receipt_upload_failed': 'web.err_miniapp_receipt_upload_failed',
+  'miniapp.request_invalid': 'web.err_miniapp_request_invalid',
+  'miniapp.route_unavailable': 'web.err_miniapp_route_unavailable',
+  'miniapp.session_invalid': 'web.err_miniapp_session_invalid',
+  'miniapp.unavailable': 'web.err_miniapp_unavailable',
   'notification_center.not_found': 'web.err_notification_center_not_found',
   'ops_group.bot_not_available': 'web.err_ops_group_bot_not_available',
   'ops_group.not_connected': 'web.err_ops_group_not_connected',
@@ -668,6 +682,32 @@ export function errorText(error: unknown, options: ErrorTextOptions = {}): strin
     return error.status >= 400 && error.status < 500 ? t('web.rejected') : t('web.error');
   }
   return finalAnswer(error) ? t('web.rejected') : t('web.error');
+}
+
+/**
+ * Round 9 C4: why a payment route refused to be switched ON, by the `details.reason` the
+ * server's `PAYMENT_GATEWAY_UNAVAILABLE` carries — so the operator is told in Persian exactly
+ * what is missing (the API key, the webhook secret, ...) instead of the generic «درگاه پرداخت
+ * اکنون در دسترس نیست». Undefined for any other error, which then reads as before.
+ */
+const GATEWAY_ENABLE_REFUSAL_TEXT: Readonly<Record<string, WebKey>> = {
+  CREDENTIAL_MISSING: 'web.payment_gateway_enable_refused_credential_missing',
+  WEBHOOK_SECRET_MISSING: 'web.payment_gateway_enable_refused_webhook_secret_missing',
+  VERIFY_KEY_MISSING: 'web.payment_gateway_enable_refused_verify_key_missing',
+  RATE_MISSING: 'web.payment_gateway_enable_refused_rate_missing',
+  FX_UNAVAILABLE: 'web.payment_gateway_enable_refused_fx_unavailable',
+};
+
+export function gatewayEnableRefusalText(error: unknown): string | undefined {
+  if (!(error instanceof ApiError) || error.code !== 'commerce.payment_gateway_unavailable') {
+    return undefined;
+  }
+  const reason = (error.details as { reason?: unknown } | undefined)?.reason;
+  if (typeof reason !== 'string' || !Object.hasOwn(GATEWAY_ENABLE_REFUSAL_TEXT, reason)) {
+    return undefined;
+  }
+  const key = GATEWAY_ENABLE_REFUSAL_TEXT[reason];
+  return key === undefined ? undefined : t(key);
 }
 
 /** Whether a code has a sentence of its own (for tests and for pages that branch on it). */

@@ -31,7 +31,7 @@ import type {
 } from './ports.js';
 import type { BotWebhookRead } from './bot-management-ports.js';
 import { webhookSecretFingerprint } from './webhook-fingerprint.js';
-import type { CommandMenu } from './command-menu.js';
+import { commandMenuHash, type CommandMenu } from './command-menu.js';
 import { tokenReplacementLeaseMs } from '../domain/token-replacement-lease.js';
 import { liveProblems } from '../domain/bot-readiness.js';
 import {
@@ -1267,7 +1267,11 @@ export class BotBootstrapService {
     // the Web Admin's menu state read too. Three readers of one answer, so "current" means
     // the same thing to the installer, the lane and the page.
     const desired = await this.deps.commandMenu.desiredFor(scope);
-    const revision = desired.hash;
+    // Round 9, C5: the installer registers the COMMANDS only. With the mini app's menu
+    // button wanted, it records the commands' own digest, so the sync lane still sees the
+    // bot short of the desired revision and sets the button itself.
+    const revision =
+      (desired.menuButton ?? null) === null ? desired.hash : commandMenuHash(desired.entries);
     // NULL is "unknown", never "matches" — the same rule the webhook secret
     // fingerprint states, and for the same reason: one unnecessary call is a
     // far cheaper mistake than a silent claim.

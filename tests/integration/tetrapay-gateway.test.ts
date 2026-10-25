@@ -6,6 +6,7 @@ import {
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
+  type DomainEvent,
   type PaymentGatewayConfig,
   type PaymentId,
   type TenantContext,
@@ -29,6 +30,11 @@ import {
 } from '../../apps/api/src/modules/commerce/payments/application/gateway-payment.service';
 import { settingsLateCreditPolicy } from '../../apps/api/src/modules/commerce/payments/application/late-credit-policy';
 import { DrizzleOperationalConditionReader } from '../../apps/api/src/modules/platform/opslog/infrastructure/drizzle-operational-event.reader';
+import { DrizzleOpsLogFacts } from '../../apps/api/src/modules/commerce/ops-log/infrastructure/drizzle-ops-log-facts';
+import { i18nOpsLogWords as words } from '../../apps/api/src/modules/commerce/ops-log/infrastructure/i18n-ops-log-words';
+import { FinancialLogConsumer } from '../../apps/api/src/modules/commerce/payments/application/financial-log.consumer';
+import { DrizzleGatewayProviderRequestRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-provider-request.repository';
+import { DrizzleServiceRefundRequestRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-service-refund-request.repository';
 import {
   adminActorFor,
   createAdmin,
@@ -808,6 +814,117 @@ describe('TetraPay, through the one settlement path', () => {
         'IGNORED_UNKNOWN',
       );
       expect(await receive('{"nothing":true}', undefined)).toBe('MALFORMED');
+    });
+  });
+
+  describe('Round 9 C4: the missing end-to-end cases', () => {
+    const notified = async (paymentId: string) =>
+      (
+        await rows<{ kind: string }>(
+          sql`SELECT kind FROM customer_notifications WHERE subject_id = ${paymentId} ORDER BY kind`,
+        )
+      ).map((row) => row.kind);
+
+    /** The operations-log headline the real consumer writes for this payment's PaymentFailed. */
+    async function failureHeadline(paymentId: string): Promise<string> {
+      const db = ctx.container.database.db;
+      const [event] = await rows<{ payload: Record<string, unknown> }>(
+        sql`SELECT payload FROM outbox_messages WHERE event_type = 'PaymentFailed'
+            AND aggregate_id = ${paymentId}`,
+      );
+      if (event === undefined) throw new Error('no PaymentFailed in the outbox');
+      const queued: string[] = [];
+      const consumer = new FinancialLogConsumer({
+        lane: {
+          financialDestination: async () =>
+            ({ transport: 'TELEGRAM', chatId: '-1001', topicId: null }) as never,
+          queue: async (_scope, input) => {
+            queued.push(input.templateKey);
+            return undefined;
+          },
+        },
+        payments: new DrizzlePaymentRepository(db),
+        customers: new DrizzleCustomerRepository(db),
+        invoices: new DrizzleGatewayInvoiceRepository(db),
+        facts: new DrizzleOpsLogFacts(db),
+        words,
+        refundRequests: new DrizzleServiceRefundRequestRepository(db),
+        providerRequests: new DrizzleGatewayProviderRequestRepository(db),
+      });
+      await ctx.container.uow.run(tenantA, (tx) =>
+        consumer.handle(
+          {
+            eventId: ctx.container.ids.uuid(),
+            eventType: 'PaymentFailed',
+            eventVersion: 1,
+            tenantId: String(tenantA.tenantId),
+            aggregateType: 'Payment',
+            aggregateId: paymentId,
+            sequence: 1,
+            correlationId: 'r9-c4',
+            causationId: null,
+            actor: { type: 'SYSTEM_JOB', id: null },
+            occurredAt: new Date().toISOString(),
+            payload: event.payload,
+          } as unknown as DomainEvent,
+          tx as never,
+        ),
+      );
+      expect(queued).toHaveLength(1);
+      return queued[0] ?? '';
+    }
+
+    it('fail: verify says expired -> the payment FAILED, the customer told once, the L4 headline «expired»', async () => {
+      await enableTetraPay();
+      const { paymentId, orderId } = await createdAttempt();
+      const link = fake.links.find((one) => one.orderId === orderId);
+      if (link === undefined) throw new Error('no link');
+      link.status = 'expired';
+      await inquireNow();
+      expect(await paymentOf(paymentId)).toMatchObject({ state: 'FAILED' });
+      expect((await invoiceOf(paymentId)).provider_status).toBe('expired');
+      expect(await notified(paymentId)).toEqual(['GATEWAY_PAYMENT_FAILED']);
+      expect(await ledger()).toEqual([]);
+      expect(await failureHeadline(paymentId)).toBe('ops.financial.payment_expired');
+      // Asked again, nothing changes and nobody is told twice.
+      await inquireNow();
+      expect(await notified(paymentId)).toEqual(['GATEWAY_PAYMENT_FAILED']);
+    });
+
+    it('a late verify after that expiry settles nothing (the switch is OFF)', async () => {
+      await enableTetraPay();
+      const { paymentId, orderId } = await createdAttempt();
+      const link = fake.links.find((one) => one.orderId === orderId);
+      if (link === undefined) throw new Error('no link');
+      link.status = 'expired';
+      await inquireNow();
+      fake.pay(orderId);
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = now() WHERE payment_id = ${paymentId}`,
+      );
+      await inquireNow();
+      expect((await paymentOf(paymentId)).state).toBe('FAILED');
+      expect(await ledger()).toEqual([]);
+    });
+
+    it('the customer fee end to end: the PAYABLE is sent in rial, the wallet gets the principal', async () => {
+      await ctx.container.paymentGateways.configure(tenantA, owner, {
+        idempotencyKey: key(),
+        provider: 'TETRAPAY',
+        config: { ...OPEN_ROUTE, customerFeeBasisPoints: 500 },
+      });
+      await enableTetraPay();
+      // `enableTetraPay` re-saves the route without a fee figure: absent keeps the stored 5 %.
+      const { paymentId, orderId } = await createdAttempt();
+      // 10,000 Toman + 5 % = 10,500 Toman = "105000" rial.
+      expect(fake.links[0]?.body['amount']).toBe('105000');
+      expect(String((await invoiceOf(paymentId)).sent_amount)).toBe('105000');
+      fake.pay(orderId);
+      await inquireNow();
+      expect((await paymentOf(paymentId)).state).toBe('CONFIRMED');
+      expect(await ledger()).toEqual([
+        { reason: 'TOPUP_GATEWAY', amount: '10000', payment_id: paymentId },
+      ]);
     });
   });
 
