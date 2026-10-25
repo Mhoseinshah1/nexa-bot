@@ -16,7 +16,6 @@ import type {
   TenantContext,
   UserId,
 } from '@nexa/contracts';
-import type { InboundReceiptFile } from '../../modules/commerce/payments/application/receipt-ports.js';
 import {
   RECEIPT_REVIEW_NOTE_MAX,
   reviewNoteOf,
@@ -27,14 +26,8 @@ import type {
   CustomerSendResult,
 } from '../../modules/commerce/messaging/application/ports.js';
 import type { CustomerRecord } from '../../modules/commerce/customers/application/ports.js';
-import type { OrderRecord } from '../../modules/commerce/orders/application/ports.js';
-import type { CustomerServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
 import { SERVICE_CARD_CALLBACK_PREFIX } from '../../modules/commerce/provisioning/application/delivery.service.js';
-import type { CustomerCaptureRecord } from '../../modules/commerce/customers/application/customer-capture-ports.js';
 import type { CardMessageRef } from '../../modules/commerce/provisioning/application/operation-card.js';
-import type { WalletTopupFlowService } from '../../modules/commerce/payments/application/wallet-topup-flow.service.js';
-import type { StartGreetingKey } from '../../modules/commerce/messaging/application/start-greeting.js';
-import type { ServiceRecord } from '../../modules/commerce/provisioning/application/ports.js';
 import type { TelegramWizardRecord } from '../../modules/commerce/messaging/application/telegram-message-state.js';
 import {
   REVIEW_TAP_INTENTS,
@@ -43,7 +36,6 @@ import {
   typedMessageOf,
   type CallbackOrigin,
 } from './wizard-state.js';
-import type { InboundTicketFile } from '../../modules/commerce/tickets/application/ticket.service.js';
 import type { BotRuntimeDeps } from './runtime/deps.js';
 import {
   type MainMenuRoutes,
@@ -510,7 +502,7 @@ export class BotRuntime {
      */
     const blockedAdminText =
       arrival === 'BLOCKED' && command.intent === 'USERNAME_TEXT' && command.args?.[0] !== undefined
-        ? await this.adminCaptureText(scope, actor, command.args[0], input)
+        ? await adminFlow.adminCaptureText(this, scope, actor, command.args[0], input)
         : null;
     /*
      * R2 (items 3 and 5): the two gates a tap passes BEFORE any work runs.
@@ -567,7 +559,13 @@ export class BotRuntime {
      */
     const repeatToast =
       repeatedReview && reviewRecord !== null
-        ? await this.repeatedReviewToast(scope, actor, input.telegramUserId, reviewRecord.paymentId)
+        ? await adminReviewFlow.repeatedReviewToast(
+            this,
+            scope,
+            actor,
+            input.telegramUserId,
+            reviewRecord.paymentId,
+          )
         : {};
     let answered: PendingReply;
     try {
@@ -577,13 +575,14 @@ export class BotRuntime {
           : arrival === 'BLOCKED'
             ? (blockedAdminText ??
               (ADMIN_INTENTS.has(command.intent)
-                ? await this.adminTurn(scope, actor, command, input)
+                ? await adminFlow.adminTurn(this, scope, actor, command, input)
                 : null) ??
               // Round N close (§D): a blocked customer's /stop is still their preference.
               // Blocking stops what they can BUY; it does not make a promotion welcome, and
               // a MARKETING send to an audience that admits blocked customers reads this row.
               (command.intent === 'MARKETING_OPT_OUT' || command.intent === 'MARKETING_OPT_IN'
-                ? await this.marketingPreference(
+                ? await startMenuFlow.marketingPreference(
+                    this,
                     scope,
                     actor,
                     customer,
@@ -673,7 +672,8 @@ export class BotRuntime {
      * out as it always did.
      */
     if (state !== undefined && origin !== null && reply.review?.outcome !== undefined) {
-      const reviewed = await this.finaliseReview(
+      const reviewed = await adminReviewFlow.finaliseReview(
+        this,
         scope,
         actor,
         reply,
@@ -1010,21 +1010,6 @@ export class BotRuntime {
     };
   }
 
-  /** Forwarder: the body lives in `runtime/admin-flow.ts` (R9 split). */
-  adminTurn(
-    scope: TenantContext,
-    actor: ActorContext,
-    command: BotCommand,
-    input: {
-      readonly idempotencyKey: string;
-      readonly botInstanceId: BotInstanceId;
-      readonly update: unknown;
-      readonly telegramUserId: string;
-    },
-  ): Promise<PendingReply | null> {
-    return adminFlow.adminTurn(this, scope, actor, command, input);
-  }
-
   /**
    * Whether this turn's Telegram account is an administrator with a panel.
    *
@@ -1051,21 +1036,6 @@ export class BotRuntime {
      * section — see `PANEL_SECTION_PERMISSIONS` for what that cost.
      */
     return hasAnyPanelSection(identity.permissions);
-  }
-
-  /** Forwarder: the body lives in `runtime/admin-flow.ts` (R9 split). */
-  adminCaptureText(
-    scope: TenantContext,
-    actor: ActorContext,
-    text: string,
-    input: {
-      readonly idempotencyKey: string;
-      readonly botInstanceId: BotInstanceId;
-      readonly telegramUserId: string;
-      readonly update?: unknown;
-    },
-  ): Promise<PendingReply | null> {
-    return adminFlow.adminCaptureText(this, scope, actor, text, input);
   }
 
   /**
@@ -1272,30 +1242,46 @@ export class BotRuntime {
     if (command.intent === 'UNSUPPORTED' && isCallbackQueryUpdate(input.update)) {
       return staleCallbackReply();
     }
-    if (command.intent === 'CATALOG') return this.catalogue(scope, actor, 0, customer);
+    if (command.intent === 'CATALOG')
+      return purchaseFlow.catalogue(this, scope, actor, 0, customer);
     if (command.intent === 'CATALOG_PAGE') {
-      return this.catalogue(scope, actor, command.page ?? 0, customer);
+      return purchaseFlow.catalogue(this, scope, actor, command.page ?? 0, customer);
     }
     if (command.intent === 'TRIAL_CLAIM') {
-      return this.beginTrial(scope, actor, customer, input.idempotencyKey);
+      return trialFlow.beginTrial(this, scope, actor, customer, input.idempotencyKey);
     }
     if (command.intent === 'TRIAL_PANEL' && command.targetId !== null) {
-      return this.claimTrial(scope, actor, customer, command.targetId, input.idempotencyKey);
+      return trialFlow.claimTrial(
+        this,
+        scope,
+        actor,
+        customer,
+        command.targetId,
+        input.idempotencyKey,
+      );
     }
     if (command.intent === 'CUSTOM_SERVICE_MENU') {
-      return this.customServiceMenu(scope, actor, customer);
+      return purchaseFlow.customServiceMenu(this, scope, actor, customer);
     }
     if (command.intent === 'CUSTOM_SERVICE_LOCATION' && command.targetId !== null) {
-      return this.customServiceLocation(scope, actor, customer, command.targetId, {
+      return purchaseFlow.customServiceLocation(this, scope, actor, customer, command.targetId, {
         idempotencyKey: input.idempotencyKey,
         botInstanceId: input.botInstanceId,
       });
     }
     if (command.intent === 'CATEGORY' && command.targetId !== null) {
-      return this.categoryPage(scope, actor, command.targetId, command.page ?? 0, customer.id);
+      return purchaseFlow.categoryPage(
+        this,
+        scope,
+        actor,
+        command.targetId,
+        command.page ?? 0,
+        customer.id,
+      );
     }
     if (command.intent === 'ORDER' && command.targetId !== null) {
-      return this.draft(
+      return purchaseFlow.draft(
+        this,
         scope,
         actor,
         command.targetId,
@@ -1305,10 +1291,18 @@ export class BotRuntime {
       );
     }
     if (command.intent === 'CONFIRM' && command.targetId !== null) {
-      return this.confirm(scope, actor, command.targetId, customer, input.idempotencyKey);
+      return purchaseFlow.confirm(
+        this,
+        scope,
+        actor,
+        command.targetId,
+        customer,
+        input.idempotencyKey,
+      );
     }
     if (command.intent === 'USERNAME_CUSTOM' && command.targetId !== null) {
-      return this.customUsername(
+      return purchaseFlow.customUsername(
+        this,
         scope,
         actor,
         command.targetId,
@@ -1318,10 +1312,18 @@ export class BotRuntime {
       );
     }
     if (command.intent === 'USERNAME_AUTOMATIC' && command.targetId !== null) {
-      return this.automaticUsername(scope, actor, command.targetId, customer, input.idempotencyKey);
+      return purchaseFlow.automaticUsername(
+        this,
+        scope,
+        actor,
+        command.targetId,
+        customer,
+        input.idempotencyKey,
+      );
     }
     if (command.intent === 'DISCOUNT_CODE_ENTER' && command.targetId !== null) {
-      return this.enterDiscountCode(
+      return purchaseFlow.enterDiscountCode(
+        this,
         scope,
         actor,
         command.targetId,
@@ -1331,7 +1333,8 @@ export class BotRuntime {
       );
     }
     if (command.intent === 'DISCOUNT_CODE_REMOVE' && command.targetId !== null) {
-      return this.removeDiscountCode(
+      return purchaseFlow.removeDiscountCode(
+        this,
         scope,
         actor,
         command.targetId,
@@ -1357,7 +1360,9 @@ export class BotRuntime {
        * that answers returns here and one that does not falls through untouched.
        */
       const amount =
-        text === undefined ? null : await this.adminCaptureText(scope, actor, text, input);
+        text === undefined
+          ? null
+          : await adminFlow.adminCaptureText(this, scope, actor, text, input);
       if (amount !== null) return amount;
       /*
        * The customer's own text window next (customer UX completion §N): an amount, a
@@ -1368,7 +1373,8 @@ export class BotRuntime {
         text === undefined ? null : await this.capturedText(scope, actor, customer, text, input);
       if (captured !== null) return captured;
       if (text !== undefined) {
-        return this.typedUsername(
+        return purchaseFlow.typedUsername(
+          this,
           scope,
           actor,
           text,
@@ -1378,9 +1384,10 @@ export class BotRuntime {
         );
       }
     }
-    if (command.intent === 'WALLET') return this.walletBalance(scope, actor, customer);
+    if (command.intent === 'WALLET') return topupFlow.walletBalance(this, scope, actor, customer);
     if (command.intent === 'MARKETING_OPT_OUT' || command.intent === 'MARKETING_OPT_IN') {
-      return this.marketingPreference(
+      return startMenuFlow.marketingPreference(
+        this,
         scope,
         actor,
         customer,
@@ -1393,28 +1400,40 @@ export class BotRuntime {
       command.intent === 'HELP' ||
       command.intent === 'SUPPORT'
     ) {
-      if (command.intent !== 'MAIN_MENU') return this.supportScreen(scope, customer);
+      if (command.intent !== 'MAIN_MENU') return supportFlow.supportScreen(this, scope, customer);
       return {
-        ...(await this.startGreeting(scope, actor, customer, 'bot.start.welcome_back')),
+        ...(await startMenuFlow.startGreeting(
+          this,
+          scope,
+          actor,
+          customer,
+          'bot.start.welcome_back',
+        )),
         buttons: [],
         orderId: null,
         keyboard: (await this.isAdmin(scope, actor, input)) ? 'MAIN_MENU_ADMIN' : 'MAIN_MENU',
       };
     }
     // WP-A7: the customer's support tickets.
-    const ticketed = await this.ticketTurn(scope, actor, command, customer, input);
+    const ticketed = await supportFlow.ticketTurn(this, scope, actor, command, customer, input);
     if (ticketed !== null) return ticketed;
-    if (command.intent === 'TUTORIAL') return this.tutorialChoice(scope, customer);
+    if (command.intent === 'TUTORIAL')
+      return tutorialFlow.tutorialChoiceReply(this, scope, customer);
     if (command.intent === 'TUTORIAL_PLATFORM' && command.targetId !== null) {
-      return this.tutorialPlatform(scope, customer, command.targetId as ClientAppPlatform);
+      return tutorialFlow.tutorialPlatform(
+        this,
+        scope,
+        customer,
+        command.targetId as ClientAppPlatform,
+      );
     }
     if (command.intent === 'CLIENT_APP' && command.targetId !== null) {
-      return this.clientApp(scope, customer, command.targetId, input.botInstanceId);
+      return tutorialFlow.clientApp(this, scope, customer, command.targetId, input.botInstanceId);
     }
     if (command.intent === 'SERVICE_CONNECTED' && command.targetId !== null) {
       // Acknowledged, and NOTHING is written: the customer told us a fact about their
       // own device, and a row saying so would be a claim this installation cannot check.
-      const owned = await this.ownedService(scope, customer, command.targetId);
+      const owned = await serviceCardFlow.ownedService(this, scope, customer, command.targetId);
       return {
         key: owned === null ? 'bot.service.not_found' : 'bot.service.connected_ack',
         values: {},
@@ -1423,14 +1442,22 @@ export class BotRuntime {
       };
     }
     if (command.intent === 'TOPUP_MENU') {
-      return this.topupBegin(scope, actor, customer, input.botInstanceId, input.idempotencyKey);
+      return topupFlow.topupBegin(
+        this,
+        scope,
+        actor,
+        customer,
+        input.botInstanceId,
+        input.idempotencyKey,
+      );
     }
     if (
       command.intent === 'TOPUP_ROUTE' &&
       command.targetId !== null &&
       command.secondaryId != null
     ) {
-      return this.topupRoute(
+      return topupFlow.topupRoute(
+        this,
         scope,
         actor,
         customer,
@@ -1439,10 +1466,11 @@ export class BotRuntime {
       );
     }
     if (command.intent === 'TOPUP_CLOSE' && command.targetId !== null) {
-      return this.topupClose(scope, actor, customer, command.targetId);
+      return topupFlow.topupClose(this, scope, actor, customer, command.targetId);
     }
     if (command.intent === 'SERVICES_SEARCH') {
-      return this.servicesSearchBegin(
+      return serviceCardFlow.servicesSearchBegin(
+        this,
         scope,
         actor,
         customer,
@@ -1451,10 +1479,23 @@ export class BotRuntime {
       );
     }
     if (command.intent === 'SERVICE_REFRESH' && command.targetId !== null) {
-      return this.serviceRefresh(scope, actor, customer, command.targetId, input.idempotencyKey);
+      return serviceCardFlow.serviceRefresh(
+        this,
+        scope,
+        actor,
+        customer,
+        command.targetId,
+        input.idempotencyKey,
+      );
     }
     if (command.intent === 'SERVICE_CARD' && command.targetId !== null) {
-      const card = await this.openServiceCard(scope, actor, customer, command.targetId);
+      const card = await serviceCardFlow.openServiceCard(
+        this,
+        scope,
+        actor,
+        customer,
+        command.targetId,
+      );
       /*
        * Owner spec §2.3: a stale tap — a service transferred, refunded or never theirs —
        * still edits the list's message, and keeps the way back to the list on it, so the
@@ -1471,7 +1512,8 @@ export class BotRuntime {
     if (command.intent === 'SERVICE_NOTE' && command.targetId !== null) {
       return inCard(
         command.targetId,
-        await this.serviceNoteBegin(
+        await serviceCardFlow.serviceNoteBegin(
+          this,
           scope,
           actor,
           customer,
@@ -1483,7 +1525,16 @@ export class BotRuntime {
     }
     if (command.intent === 'SERVICE_RENEW_QUOTE' && command.targetId !== null) {
       // The quote opens the payment wizard, which is its own message (R2).
-      return this.commercialQuote(scope, actor, customer, command.targetId, 'RENEW', null, input);
+      return serviceActionsFlow.commercialQuote(
+        this,
+        scope,
+        actor,
+        customer,
+        command.targetId,
+        'RENEW',
+        null,
+        input,
+      );
     }
     if (
       command.intent === 'SERVICE_RENEW_PLAN' &&
@@ -1491,7 +1542,8 @@ export class BotRuntime {
       command.secondaryId != null
     ) {
       // An imported service's chosen plan; the draft re-decides it against the panel's plans.
-      return this.commercialQuote(
+      return serviceActionsFlow.commercialQuote(
+        this,
         scope,
         actor,
         customer,
@@ -1505,13 +1557,21 @@ export class BotRuntime {
       );
     }
     if (command.intent === 'REFERRAL_GIFT') {
-      return this.referralGift(scope, actor, customer, input.idempotencyKey);
+      return referralFlow.referralGift(this, scope, actor, customer, input.idempotencyKey);
     }
     if (command.intent === 'REFERRAL_INVITE') {
-      return this.referralInvite(scope, actor, customer, input.botInstanceId, input.idempotencyKey);
+      return referralFlow.referralInvite(
+        this,
+        scope,
+        actor,
+        customer,
+        input.botInstanceId,
+        input.idempotencyKey,
+      );
     }
     if (command.intent === 'TOPUP_PICK' && command.targetId !== null) {
-      return this.topupPick(
+      return topupFlow.topupPick(
+        this,
         scope,
         actor,
         command.targetId,
@@ -1521,19 +1581,45 @@ export class BotRuntime {
       );
     }
     if (command.intent === 'PAY_WALLET' && command.targetId !== null) {
-      return this.walletPayment(scope, actor, command.targetId, customer, input.idempotencyKey);
+      return checkoutFlow.walletPayment(
+        this,
+        scope,
+        actor,
+        command.targetId,
+        customer,
+        input.idempotencyKey,
+      );
     }
     if (command.intent === 'PAY_MANUAL' && command.targetId !== null) {
-      return this.manualPayment(scope, actor, command.targetId, customer, input.idempotencyKey);
+      return cardReceiptFlow.manualPayment(
+        this,
+        scope,
+        actor,
+        command.targetId,
+        customer,
+        input.idempotencyKey,
+      );
     }
     if (command.intent === 'PAY_METHODS' && command.targetId !== null) {
-      return this.paymentMethods(scope, actor, command.targetId, customer);
+      return checkoutFlow.paymentMethods(this, scope, actor, command.targetId, customer);
     }
     if (command.intent === 'PAY_METHODS_CLOSE' && command.targetId !== null) {
-      const back = await this.paymentMethodsBack(scope, actor, command.targetId, customer);
+      const back = await checkoutFlow.paymentMethodsBack(
+        this,
+        scope,
+        actor,
+        command.targetId,
+        customer,
+      );
       if (back !== null) return back;
       return {
-        ...(await this.startGreeting(scope, actor, customer, 'bot.start.welcome_back')),
+        ...(await startMenuFlow.startGreeting(
+          this,
+          scope,
+          actor,
+          customer,
+          'bot.start.welcome_back',
+        )),
         buttons: [],
         orderId: null,
         keyboard: (await this.isAdmin(scope, actor, input)) ? 'MAIN_MENU_ADMIN' : 'MAIN_MENU',
@@ -1547,7 +1633,8 @@ export class BotRuntime {
      * answer is produced. Nothing here pretends money moved.
      */
     if (command.intent === 'PAY_GATEWAY' && command.targetId !== null) {
-      return this.gatewayPayment(
+      return checkoutFlow.gatewayPayment(
+        this,
         scope,
         actor,
         command.targetId,
@@ -1562,13 +1649,21 @@ export class BotRuntime {
     ) {
       // A return is the same question as a tap on «بررسی وضعیت»: the payment's own state, read
       // now, with a verify brought forward - and answered as closed for anyone else's payment.
-      return this.gatewayCheck(scope, command.targetId, customer);
+      return checkoutFlow.gatewayCheck(this, scope, command.targetId, customer);
     }
     if (command.intent === 'GATEWAY_RECEIPT' && command.targetId !== null) {
-      return this.gatewayReceipt(scope, actor, command.targetId, customer, input.botInstanceId);
+      return cardReceiptFlow.gatewayReceipt(
+        this,
+        scope,
+        actor,
+        command.targetId,
+        customer,
+        input.botInstanceId,
+      );
     }
     if (command.intent === 'GATEWAY_CARD_CHANGE' && command.targetId !== null) {
-      return this.gatewayCardChange(
+      return cardReceiptFlow.gatewayCardChange(
+        this,
         scope,
         actor,
         command.targetId,
@@ -1578,10 +1673,17 @@ export class BotRuntime {
       );
     }
     if (command.intent === 'GATEWAY_CANCEL_ASK' && command.targetId !== null) {
-      return this.gatewayCancelAsk(scope, command.targetId, customer, input.botInstanceId);
+      return cardReceiptFlow.gatewayCancelAsk(
+        this,
+        scope,
+        command.targetId,
+        customer,
+        input.botInstanceId,
+      );
     }
     if (command.intent === 'GATEWAY_CANCEL' && command.targetId !== null) {
-      return this.gatewayCancel(
+      return cardReceiptFlow.gatewayCancel(
+        this,
         scope,
         actor,
         command.targetId,
@@ -1591,7 +1693,8 @@ export class BotRuntime {
       );
     }
     if (command.intent === 'GATEWAY_REFUND_CARD' && command.targetId !== null) {
-      return this.gatewayRefundCardPrompt(
+      return cardReceiptFlow.gatewayRefundCardPrompt(
+        this,
         scope,
         actor,
         command.targetId,
@@ -1602,24 +1705,39 @@ export class BotRuntime {
       );
     }
     if (command.intent === 'PAY_CANCEL_ASK' && command.targetId !== null) {
-      return this.cancelPaymentAsk(scope, command.targetId, customer);
+      return cardReceiptFlow.cancelPaymentAsk(this, scope, command.targetId, customer);
     }
     if (command.intent === 'PAY_CANCEL' && command.targetId !== null) {
-      return this.cancelPayment(scope, actor, command.targetId, customer, input.idempotencyKey);
+      return cardReceiptFlow.cancelPayment(
+        this,
+        scope,
+        actor,
+        command.targetId,
+        customer,
+        input.idempotencyKey,
+      );
     }
     if (command.intent === 'RECEIPT_UPLOAD' && command.file != null) {
       /*
        * WP-A7: a file answers a ticket window when that is the prompt the customer saw last;
        * otherwise it is a receipt, exactly as before.
        */
-      const ticketFile = await this.ticketFile(scope, actor, customer, command.file, input);
+      const ticketFile = await supportFlow.ticketFile(
+        this,
+        scope,
+        actor,
+        customer,
+        command.file,
+        input,
+      );
       if (ticketFile !== null) return ticketFile;
       /*
        * TonPays Telegram (§8.3): a provider receipt window open for this customer IN THIS
        * BOT takes the file; its payment, provider and invoice come from the window's row.
        * Never the manual review queue. No window: the manual flow, exactly as before.
        */
-      const providerReceipt = await this.gatewayReceiptPhoto(
+      const providerReceipt = await cardReceiptFlow.gatewayReceiptPhoto(
+        this,
         scope,
         actor,
         customer,
@@ -1627,7 +1745,8 @@ export class BotRuntime {
         command.file,
       );
       if (providerReceipt !== null) return providerReceipt;
-      return this.submitReceipt(
+      return cardReceiptFlow.submitReceipt(
+        this,
         scope,
         actor,
         customer,
@@ -1642,7 +1761,8 @@ export class BotRuntime {
       command.targetId !== null &&
       command.secondaryId != null
     ) {
-      return this.switchCard(
+      return cardReceiptFlow.switchCard(
+        this,
         scope,
         actor,
         command.targetId,
@@ -1652,7 +1772,8 @@ export class BotRuntime {
       );
     }
     if (command.intent === 'PAY_SENT' && command.targetId !== null) {
-      return this.signalTransferSent(
+      return cardReceiptFlow.signalTransferSent(
+        this,
         scope,
         actor,
         command.targetId,
@@ -1662,27 +1783,48 @@ export class BotRuntime {
       );
     }
     if (command.intent === 'ORDER_CANCEL_ASK' && command.targetId !== null) {
-      return this.cancelOrderAsk(scope, command.targetId, customer);
+      return purchaseFlow.cancelOrderAsk(this, scope, command.targetId, customer);
     }
     if (command.intent === 'ORDER_CANCEL' && command.targetId !== null) {
-      return this.cancelOrder(scope, actor, command.targetId, customer, input.idempotencyKey);
+      return purchaseFlow.cancelOrder(
+        this,
+        scope,
+        actor,
+        command.targetId,
+        customer,
+        input.idempotencyKey,
+      );
     }
     if (command.intent === 'SERVICE_RENEW' && command.targetId !== null) {
       return inCard(
         command.targetId,
-        await this.renewMenu(scope, actor, customer, command.targetId),
+        await serviceActionsFlow.renewMenu(this, scope, actor, customer, command.targetId),
       );
     }
     if (command.intent === 'SERVICE_ADD_TRAFFIC' && command.targetId !== null) {
       return inCard(
         command.targetId,
-        await this.addonChoice(scope, actor, customer, command.targetId, 'ADD_TRAFFIC'),
+        await serviceActionsFlow.addonChoice(
+          this,
+          scope,
+          actor,
+          customer,
+          command.targetId,
+          'ADD_TRAFFIC',
+        ),
       );
     }
     if (command.intent === 'SERVICE_ADD_TIME' && command.targetId !== null) {
       return inCard(
         command.targetId,
-        await this.addonChoice(scope, actor, customer, command.targetId, 'ADD_TIME'),
+        await serviceActionsFlow.addonChoice(
+          this,
+          scope,
+          actor,
+          customer,
+          command.targetId,
+          'ADD_TIME',
+        ),
       );
     }
     if (
@@ -1690,7 +1832,8 @@ export class BotRuntime {
       command.targetId !== null &&
       command.secondaryId != null
     ) {
-      return this.commercialQuote(
+      return serviceActionsFlow.commercialQuote(
+        this,
         scope,
         actor,
         customer,
@@ -1705,7 +1848,8 @@ export class BotRuntime {
       command.targetId !== null &&
       command.secondaryId != null
     ) {
-      return this.commercialQuote(
+      return serviceActionsFlow.commercialQuote(
+        this,
         scope,
         actor,
         customer,
@@ -1718,7 +1862,7 @@ export class BotRuntime {
     if (command.intent === 'SERVICE_ADD_DEVICES' && command.targetId !== null) {
       return inCard(
         command.targetId,
-        await this.devicesChoice(scope, actor, customer, command.targetId),
+        await serviceActionsFlow.devicesChoice(this, scope, actor, customer, command.targetId),
       );
     }
     if (
@@ -1727,7 +1871,8 @@ export class BotRuntime {
       command.secondaryId != null &&
       command.quantity !== undefined
     ) {
-      return this.commercialQuote(
+      return serviceActionsFlow.commercialQuote(
+        this,
         scope,
         actor,
         customer,
@@ -1741,7 +1886,7 @@ export class BotRuntime {
     if (command.intent === 'SERVICE_CHANGE_LOCATION' && command.targetId !== null) {
       return inCard(
         command.targetId,
-        await this.locationChoice(scope, actor, customer, command.targetId),
+        await serviceActionsFlow.locationChoice(this, scope, actor, customer, command.targetId),
       );
     }
     if (
@@ -1751,7 +1896,8 @@ export class BotRuntime {
     ) {
       return inCard(
         command.targetId,
-        await this.locationTarget(
+        await serviceActionsFlow.locationTarget(
+          this,
           scope,
           actor,
           customer,
@@ -1768,7 +1914,8 @@ export class BotRuntime {
     ) {
       return inCard(
         command.targetId,
-        await this.locationRequest(
+        await serviceActionsFlow.locationRequest(
+          this,
           scope,
           actor,
           customer,
@@ -1779,37 +1926,62 @@ export class BotRuntime {
       );
     }
     if (command.intent === 'SERVICE_ACTION_CONFIRM' && command.targetId !== null) {
-      return this.commercialConfirm(scope, actor, customer, command.targetId, input);
+      return serviceActionsFlow.commercialConfirm(
+        this,
+        scope,
+        actor,
+        customer,
+        command.targetId,
+        input,
+      );
     }
-    if (command.intent === 'SERVICES') return this.services(scope, customer, 1);
+    if (command.intent === 'SERVICES') return serviceCardFlow.services(this, scope, customer, 1);
     if (command.intent === 'SERVICES_PAGE') {
       // A keyset token from a message older than the paged list lands on page 1: the
       // token names a position in an ordering this list no longer uses.
       // Owner spec §2.3: a page, and «back to the list» from a card, EDIT the tapped
       // message — the list, the card and the list again are one message.
-      return { ...(await this.services(scope, customer, command.page ?? 1)), edit: true };
+      return {
+        ...(await serviceCardFlow.services(this, scope, customer, command.page ?? 1)),
+        edit: true,
+      };
     }
     if (command.intent === 'SERVICE' && command.targetId !== null) {
-      return this.openServiceCard(scope, actor, customer, command.targetId);
+      return serviceCardFlow.openServiceCard(this, scope, actor, customer, command.targetId);
     }
     if (command.intent === 'SERVICE_RESEND' && command.targetId !== null) {
-      return this.serviceResend(scope, customer, command.targetId, input);
+      return serviceCardFlow.serviceResend(this, scope, customer, command.targetId, input);
     }
     if (command.intent === 'SERVICE_FILES' && command.targetId !== null) {
-      return this.serviceFiles(scope, actor, customer, command.targetId, input);
+      return serviceCardFlow.serviceFiles(this, scope, actor, customer, command.targetId, input);
     }
     /*
      * B8: the switch's first tap draws the question IN the card and plans nothing — on any
      * card, so an old message's `u:` / `e:` can no longer act on one tap either.
      */
     if (command.intent === 'SERVICE_SUSPEND' && command.targetId !== null) {
-      return this.serviceToggleAsk(scope, actor, customer, command.targetId, 'SUSPEND');
+      return serviceCardFlow.serviceToggleAsk(
+        this,
+        scope,
+        actor,
+        customer,
+        command.targetId,
+        'SUSPEND',
+      );
     }
     if (command.intent === 'SERVICE_RESUME' && command.targetId !== null) {
-      return this.serviceToggleAsk(scope, actor, customer, command.targetId, 'RESUME');
+      return serviceCardFlow.serviceToggleAsk(
+        this,
+        scope,
+        actor,
+        customer,
+        command.targetId,
+        'RESUME',
+      );
     }
     if (command.intent === 'SERVICE_SUSPEND_CONFIRM' && command.targetId !== null) {
-      return this.serviceAction(
+      return serviceCardFlow.serviceAction(
+        this,
         scope,
         actor,
         customer,
@@ -1820,7 +1992,8 @@ export class BotRuntime {
       );
     }
     if (command.intent === 'SERVICE_RESUME_CONFIRM' && command.targetId !== null) {
-      return this.serviceAction(
+      return serviceCardFlow.serviceAction(
+        this,
         scope,
         actor,
         customer,
@@ -1841,18 +2014,19 @@ export class BotRuntime {
       return { key: 'bot.service.capability_unsupported', values: {}, buttons: [], orderId: null };
     }
     if (command.intent === 'SERVICE_ROTATE_ASK' && command.targetId !== null) {
-      return this.serviceRotateAsk(scope, customer, command.targetId);
+      return serviceActionsFlow.serviceRotateAsk(this, scope, customer, command.targetId);
     }
     if (command.intent === 'SERVICE_REFUND_ASK' && command.targetId !== null) {
       return inCard(
         command.targetId,
-        await this.serviceRefundAsk(scope, customer, command.targetId),
+        await serviceRequestsFlow.serviceRefundAsk(this, scope, customer, command.targetId),
       );
     }
     if (command.intent === 'SERVICE_REFUND_CONFIRM' && command.targetId !== null) {
       return inCard(
         command.targetId,
-        await this.serviceRefundConfirm(
+        await serviceRequestsFlow.serviceRefundConfirm(
+          this,
           scope,
           actor,
           customer,
@@ -1866,7 +2040,14 @@ export class BotRuntime {
     if (command.intent === 'SERVICE_TRANSFER_ASK' && command.targetId !== null) {
       return inCard(
         command.targetId,
-        await this.serviceTransferAsk(scope, actor, customer, command.targetId, input),
+        await serviceRequestsFlow.serviceTransferAsk(
+          this,
+          scope,
+          actor,
+          customer,
+          command.targetId,
+          input,
+        ),
       );
     }
     if (
@@ -1877,7 +2058,8 @@ export class BotRuntime {
     ) {
       return inCard(
         command.targetId,
-        await this.serviceTransferConfirm(
+        await serviceRequestsFlow.serviceTransferConfirm(
+          this,
           scope,
           actor,
           customer,
@@ -1895,7 +2077,8 @@ export class BotRuntime {
        * Suffixed, as every other write that shares a turn with `resolveFromUpdate` is
        * (`docs/wp6-audit.md` §4): the bare update key is already spent in that turn.
        */
-      return this.serviceRotate(
+      return serviceActionsFlow.serviceRotate(
+        this,
         scope,
         actor,
         customer,
@@ -1927,7 +2110,7 @@ export class BotRuntime {
      * the same unsupported-input reply below that any other unrecognised string gets.
      */
     if (ADMIN_INTENTS.has(command.intent)) {
-      const reply = await this.adminTurn(scope, actor, command, input);
+      const reply = await adminFlow.adminTurn(this, scope, actor, command, input);
       if (reply !== null) return reply;
     }
 
@@ -1957,26 +2140,9 @@ export class BotRuntime {
     // R6 item 3: only the two greetings take variables, and only this customer's own.
     const greeting =
       key === 'bot.start.welcome' || key === 'bot.start.welcome_back'
-        ? await this.startGreeting(scope, actor, customer, key)
+        ? await startMenuFlow.startGreeting(this, scope, actor, customer, key)
         : { key, values: {} };
     return { ...greeting, buttons: [], orderId: null, ...menu };
-  }
-
-  startGreeting(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    key: StartGreetingKey,
-  ): Promise<{ readonly key: TemplateKey; readonly values: TemplateValues }> {
-    return startMenuFlow.startGreeting(this, scope, actor, customer, key);
-  }
-
-  services(
-    scope: TenantContext,
-    customer: CustomerRecord,
-    pageNumber: number,
-  ): Promise<PendingReply> {
-    return serviceCardFlow.services(this, scope, customer, pageNumber);
   }
 
   /** Public: the provisioner edits the card through this (`container.ts`). */
@@ -1992,209 +2158,6 @@ export class BotRuntime {
     readonly buttons: readonly CustomerButton[];
   } | null> {
     return serviceCardFlow.serviceCardFor(this, scope, actor, customerId, serviceId, notice);
-  }
-
-  serviceDetail(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: Pick<CustomerRecord, 'id'>,
-    serviceId: string,
-    options?: {
-      readonly working?: boolean;
-      readonly notice?: TemplateKey;
-      /** Track 3 §1: drawn from stored figures; the status names when they were read. */
-      readonly lastUpdatedAt?: Date;
-    },
-  ): Promise<PendingReply> {
-    return serviceCardFlow.serviceDetail(this, scope, actor, customer, serviceId, options);
-  }
-
-  addonChoice(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    serviceId: string,
-    kind: 'ADD_TRAFFIC' | 'ADD_TIME',
-  ): Promise<PendingReply> {
-    return serviceActionsFlow.addonChoice(this, scope, actor, customer, serviceId, kind);
-  }
-
-  devicesChoice(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    serviceId: string,
-  ): Promise<PendingReply> {
-    return serviceActionsFlow.devicesChoice(this, scope, actor, customer, serviceId);
-  }
-
-  locationChoice(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    serviceId: string,
-  ): Promise<PendingReply> {
-    return serviceActionsFlow.locationChoice(this, scope, actor, customer, serviceId);
-  }
-
-  locationTarget(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    serviceId: string,
-    locationId: string,
-    input: { readonly idempotencyKey: string },
-  ): Promise<PendingReply> {
-    return serviceActionsFlow.locationTarget(
-      this,
-      scope,
-      actor,
-      customer,
-      serviceId,
-      locationId,
-      input,
-    );
-  }
-
-  locationRequest(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    serviceId: string,
-    locationId: string,
-    input: {
-      readonly idempotencyKey: string;
-      readonly update?: unknown;
-      readonly botInstanceId?: BotInstanceId;
-    },
-  ): Promise<PendingReply> {
-    return serviceActionsFlow.locationRequest(
-      this,
-      scope,
-      actor,
-      customer,
-      serviceId,
-      locationId,
-      input,
-    );
-  }
-
-  commercialQuote(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    serviceId: string,
-    kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | 'ADD_DEVICES' | 'CHANGE_LOCATION',
-    addonId: string | null,
-    input: { readonly idempotencyKey: string },
-    quantity?: number,
-    locationId?: string,
-    planId?: string,
-  ): Promise<PendingReply> {
-    return serviceActionsFlow.commercialQuote(
-      this,
-      scope,
-      actor,
-      customer,
-      serviceId,
-      kind,
-      addonId,
-      input,
-      quantity,
-      locationId,
-      planId,
-    );
-  }
-
-  commercialConfirm(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    orderId: string,
-    input: { readonly idempotencyKey: string },
-  ): Promise<PendingReply> {
-    return serviceActionsFlow.commercialConfirm(this, scope, actor, customer, orderId, input);
-  }
-
-  serviceResend(
-    scope: TenantContext,
-    customer: CustomerRecord,
-    serviceId: string,
-    input: {
-      readonly idempotencyKey: string;
-      readonly botInstanceId: BotInstanceId;
-      readonly update: unknown;
-    },
-  ): Promise<PendingReply> {
-    return serviceCardFlow.serviceResend(this, scope, customer, serviceId, input);
-  }
-
-  serviceFiles(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    serviceId: string,
-    input: { readonly botInstanceId: BotInstanceId; readonly update: unknown },
-  ): Promise<PendingReply> {
-    return serviceCardFlow.serviceFiles(this, scope, actor, customer, serviceId, input);
-  }
-
-  serviceAction(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    serviceId: string,
-    type: CustomerServiceOperation,
-    idempotencyKey: string,
-    card: CardMessageRef | null,
-  ): Promise<PendingReply> {
-    return serviceCardFlow.serviceAction(
-      this,
-      scope,
-      actor,
-      customer,
-      serviceId,
-      type,
-      idempotencyKey,
-      card,
-    );
-  }
-
-  serviceToggleAsk(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    serviceId: string,
-    type: 'SUSPEND' | 'RESUME',
-  ): Promise<PendingReply> {
-    return serviceCardFlow.serviceToggleAsk(this, scope, actor, customer, serviceId, type);
-  }
-
-  serviceRotateAsk(
-    scope: TenantContext,
-    customer: CustomerRecord,
-    serviceId: string,
-  ): Promise<PendingReply> {
-    return serviceActionsFlow.serviceRotateAsk(this, scope, customer, serviceId);
-  }
-
-  serviceRotate(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    serviceId: string,
-    idempotencyKey: string,
-    card?: CardMessageRef | null,
-  ): Promise<PendingReply> {
-    return serviceActionsFlow.serviceRotate(
-      this,
-      scope,
-      actor,
-      customer,
-      serviceId,
-      idempotencyKey,
-      card,
-    );
   }
 
   /**
@@ -2229,7 +2192,7 @@ export class BotRuntime {
         captureId: capture.id,
         text,
       });
-      return this.topupAmountReply(scope, result, capture.id);
+      return topupFlow.topupAmountReply(this, scope, result, capture.id);
     }
     if (capture.purpose === 'SERVICE_SEARCH') {
       const query = text.trim();
@@ -2259,20 +2222,44 @@ export class BotRuntime {
       };
     }
     if (capture.purpose === 'GATEWAY_REFUND_CARD') {
-      return this.gatewayRefundCardText(scope, actor, customer, capture, text, input);
+      return cardReceiptFlow.gatewayRefundCardText(
+        this,
+        scope,
+        actor,
+        customer,
+        capture,
+        text,
+        input,
+      );
     }
     if (capture.purpose === 'SERVICE_REFUND_REASON') {
-      return this.serviceRefundReason(scope, actor, customer, capture.subjectId, text, input);
+      return serviceRequestsFlow.serviceRefundReason(
+        this,
+        scope,
+        actor,
+        customer,
+        capture.subjectId,
+        text,
+        input,
+      );
     }
     if (capture.purpose === 'SERVICE_TRANSFER_RECIPIENT') {
-      return this.serviceTransferRecipient(scope, actor, customer, capture.subjectId, text, input);
+      return serviceRequestsFlow.serviceTransferRecipient(
+        this,
+        scope,
+        actor,
+        customer,
+        capture.subjectId,
+        text,
+        input,
+      );
     }
     // WP-A7: a new ticket's first message, or a reply to one.
     if (capture.purpose === 'TICKET_NEW_MESSAGE' || capture.purpose === 'TICKET_REPLY') {
-      return this.ticketSubmit(scope, actor, customer, capture, text, null, input);
+      return supportFlow.ticketSubmit(this, scope, actor, customer, capture, text, null, input);
     }
     if (capture.purpose === 'CUSTOM_SERVICE_VOLUME' || capture.purpose === 'CUSTOM_SERVICE_DAYS') {
-      return this.customServiceFigure(scope, actor, customer, capture, text, input);
+      return purchaseFlow.customServiceFigure(this, scope, actor, customer, capture, text, input);
     }
     // SERVICE_NOTE: the window names the service; the write re-checks ownership.
     if (capture.subjectId === null) return null;
@@ -2291,7 +2278,7 @@ export class BotRuntime {
        * and a button back to it. A new message, because a typed answer carries no reference
        * to the card that asked for it (the smallest fallback for a typed step).
        */
-      return this.serviceDetail(scope, actor, customer, capture.subjectId, {
+      return serviceCardFlow.serviceDetail(this, scope, actor, customer, capture.subjectId, {
         notice: saved.note === null ? 'bot.service.note_cleared' : 'bot.service.note_saved',
       });
     } catch (error) {
@@ -2308,817 +2295,6 @@ export class BotRuntime {
       }
       return refusal(error);
     }
-  }
-
-  topupAmountReply(
-    scope: TenantContext,
-    result: Awaited<ReturnType<WalletTopupFlowService['recordAmountText']>>,
-    captureId: string,
-  ): Promise<PendingReply> {
-    return topupFlow.topupAmountReply(this, scope, result, captureId);
-  }
-
-  topupRoute(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    captureId: string,
-    provider: PaymentGatewayProvider,
-  ): Promise<PendingReply> {
-    return topupFlow.topupRoute(this, scope, actor, customer, captureId, provider);
-  }
-
-  topupClose(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    captureId: string,
-  ): Promise<PendingReply> {
-    return topupFlow.topupClose(this, scope, actor, customer, captureId);
-  }
-
-  servicesSearchBegin(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    botInstanceId: BotInstanceId,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return serviceCardFlow.servicesSearchBegin(
-      this,
-      scope,
-      actor,
-      customer,
-      botInstanceId,
-      idempotencyKey,
-    );
-  }
-
-  openServiceCard(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    serviceId: string,
-  ): Promise<PendingReply> {
-    return serviceCardFlow.openServiceCard(this, scope, actor, customer, serviceId);
-  }
-
-  serviceRefresh(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    serviceId: string,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return serviceCardFlow.serviceRefresh(this, scope, actor, customer, serviceId, idempotencyKey);
-  }
-
-  serviceRefundAsk(
-    scope: TenantContext,
-    customer: CustomerRecord,
-    serviceId: string,
-  ): Promise<PendingReply> {
-    return serviceRequestsFlow.serviceRefundAsk(this, scope, customer, serviceId);
-  }
-
-  serviceRefundConfirm(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    serviceId: string,
-    botInstanceId: BotInstanceId,
-    idempotencyKey: string,
-    updateId: bigint | undefined,
-  ): Promise<PendingReply> {
-    return serviceRequestsFlow.serviceRefundConfirm(
-      this,
-      scope,
-      actor,
-      customer,
-      serviceId,
-      botInstanceId,
-      idempotencyKey,
-      updateId,
-    );
-  }
-
-  serviceRefundReason(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    serviceId: string | null,
-    text: string,
-    input: {
-      readonly idempotencyKey: string;
-      readonly botInstanceId: BotInstanceId;
-      readonly update?: unknown;
-    },
-  ): Promise<PendingReply | null> {
-    return serviceRequestsFlow.serviceRefundReason(
-      this,
-      scope,
-      actor,
-      customer,
-      serviceId,
-      text,
-      input,
-    );
-  }
-
-  serviceTransferAsk(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    serviceId: string,
-    input: {
-      readonly idempotencyKey: string;
-      readonly botInstanceId: BotInstanceId;
-      readonly update?: unknown;
-    },
-  ): Promise<PendingReply> {
-    return serviceRequestsFlow.serviceTransferAsk(this, scope, actor, customer, serviceId, input);
-  }
-
-  serviceTransferRecipient(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    serviceId: string | null,
-    text: string,
-    input: {
-      readonly idempotencyKey: string;
-      readonly botInstanceId: BotInstanceId;
-      readonly update?: unknown;
-    },
-  ): Promise<PendingReply | null> {
-    return serviceRequestsFlow.serviceTransferRecipient(
-      this,
-      scope,
-      actor,
-      customer,
-      serviceId,
-      text,
-      input,
-    );
-  }
-
-  serviceTransferConfirm(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    serviceId: string,
-    confirmed: { readonly recipientTelegramUserId: string; readonly ownershipVersion: number },
-    input: { readonly idempotencyKey: string; readonly botInstanceId: BotInstanceId },
-  ): Promise<PendingReply> {
-    return serviceRequestsFlow.serviceTransferConfirm(
-      this,
-      scope,
-      actor,
-      customer,
-      serviceId,
-      confirmed,
-      input,
-    );
-  }
-
-  serviceNoteBegin(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    serviceId: string,
-    botInstanceId: BotInstanceId,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return serviceCardFlow.serviceNoteBegin(
-      this,
-      scope,
-      actor,
-      customer,
-      serviceId,
-      botInstanceId,
-      idempotencyKey,
-    );
-  }
-
-  renewMenu(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    serviceId: string,
-  ): Promise<PendingReply> {
-    return serviceActionsFlow.renewMenu(this, scope, actor, customer, serviceId);
-  }
-
-  referralGift(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return referralFlow.referralGift(this, scope, actor, customer, idempotencyKey);
-  }
-
-  ticketTurn(
-    scope: TenantContext,
-    actor: ActorContext,
-    command: BotCommand,
-    customer: CustomerRecord,
-    input: {
-      readonly idempotencyKey: string;
-      readonly botInstanceId: BotInstanceId;
-      readonly update?: unknown;
-    },
-  ): Promise<PendingReply | null> {
-    return supportFlow.ticketTurn(this, scope, actor, command, customer, input);
-  }
-
-  ticketFile(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    file: InboundReceiptFile,
-    input: {
-      readonly idempotencyKey: string;
-      readonly botInstanceId: BotInstanceId;
-      readonly update?: unknown;
-    },
-  ): Promise<PendingReply | null> {
-    return supportFlow.ticketFile(this, scope, actor, customer, file, input);
-  }
-
-  ticketSubmit(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    capture: CustomerCaptureRecord,
-    text: string | null,
-    file: InboundTicketFile | null,
-    input: {
-      readonly idempotencyKey: string;
-      readonly botInstanceId: BotInstanceId;
-      readonly update?: unknown;
-    },
-  ): Promise<PendingReply | null> {
-    return supportFlow.ticketSubmit(this, scope, actor, customer, capture, text, file, input);
-  }
-
-  marketingPreference(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    optedOut: boolean,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return startMenuFlow.marketingPreference(
-      this,
-      scope,
-      actor,
-      customer,
-      optedOut,
-      idempotencyKey,
-    );
-  }
-
-  supportScreen(scope: TenantContext, customer: CustomerRecord): Promise<PendingReply> {
-    return supportFlow.supportScreen(this, scope, customer);
-  }
-
-  tutorialChoice(scope: TenantContext, customer: CustomerRecord): Promise<PendingReply> {
-    return tutorialFlow.tutorialChoiceReply(this, scope, customer);
-  }
-
-  tutorialPlatform(
-    scope: TenantContext,
-    customer: CustomerRecord,
-    platform: ClientAppPlatform,
-  ): Promise<PendingReply> {
-    return tutorialFlow.tutorialPlatform(this, scope, customer, platform);
-  }
-
-  clientApp(
-    scope: TenantContext,
-    customer: CustomerRecord,
-    appId: string,
-    botInstanceId: BotInstanceId,
-  ): Promise<PendingReply> {
-    return tutorialFlow.clientApp(this, scope, customer, appId, botInstanceId);
-  }
-
-  ownedService(
-    scope: TenantContext,
-    customer: Pick<CustomerRecord, 'id'>,
-    serviceId: string,
-  ): Promise<ServiceRecord | null> {
-    return serviceCardFlow.ownedService(this, scope, customer, serviceId);
-  }
-
-  catalogue(
-    scope: TenantContext,
-    actor: ActorContext,
-    page: number,
-    customer: CustomerRecord,
-  ): Promise<PendingReply> {
-    return purchaseFlow.catalogue(this, scope, actor, page, customer);
-  }
-
-  customServiceMenu(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-  ): Promise<PendingReply> {
-    return purchaseFlow.customServiceMenu(this, scope, actor, customer);
-  }
-
-  customServiceLocation(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    panelId: string,
-    input: { readonly idempotencyKey: string; readonly botInstanceId: BotInstanceId },
-  ): Promise<PendingReply> {
-    return purchaseFlow.customServiceLocation(this, scope, actor, customer, panelId, input);
-  }
-
-  customServiceFigure(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    capture: CustomerCaptureRecord,
-    text: string,
-    input: { readonly idempotencyKey: string; readonly botInstanceId: BotInstanceId },
-  ): Promise<PendingReply> {
-    return purchaseFlow.customServiceFigure(this, scope, actor, customer, capture, text, input);
-  }
-
-  beginTrial(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return trialFlow.beginTrial(this, scope, actor, customer, idempotencyKey);
-  }
-
-  claimTrial(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    panelId: string,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return trialFlow.claimTrial(this, scope, actor, customer, panelId, idempotencyKey);
-  }
-
-  categoryPage(
-    scope: TenantContext,
-    actor: ActorContext,
-    categoryId: string,
-    page: number,
-    customerId: string,
-  ): Promise<PendingReply> {
-    return purchaseFlow.categoryPage(this, scope, actor, categoryId, page, customerId);
-  }
-
-  preinvoice(
-    scope: TenantContext,
-    actor: ActorContext,
-    order: OrderRecord,
-    customer: CustomerRecord,
-    username: string | null,
-  ): Promise<PendingReply> {
-    return purchaseFlow.preinvoice(this, scope, actor, order, customer, username);
-  }
-
-  enterDiscountCode(
-    scope: TenantContext,
-    actor: ActorContext,
-    orderId: string,
-    customer: CustomerRecord,
-    botInstanceId: string,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return purchaseFlow.enterDiscountCode(
-      this,
-      scope,
-      actor,
-      orderId,
-      customer,
-      botInstanceId,
-      idempotencyKey,
-    );
-  }
-
-  removeDiscountCode(
-    scope: TenantContext,
-    actor: ActorContext,
-    orderId: string,
-    customer: CustomerRecord,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return purchaseFlow.removeDiscountCode(this, scope, actor, orderId, customer, idempotencyKey);
-  }
-
-  automaticUsername(
-    scope: TenantContext,
-    actor: ActorContext,
-    orderId: string,
-    customer: CustomerRecord,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return purchaseFlow.automaticUsername(this, scope, actor, orderId, customer, idempotencyKey);
-  }
-
-  customUsername(
-    scope: TenantContext,
-    actor: ActorContext,
-    orderId: string,
-    customer: CustomerRecord,
-    botInstanceId: string,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return purchaseFlow.customUsername(
-      this,
-      scope,
-      actor,
-      orderId,
-      customer,
-      botInstanceId,
-      idempotencyKey,
-    );
-  }
-
-  typedUsername(
-    scope: TenantContext,
-    actor: ActorContext,
-    text: string,
-    customer: CustomerRecord,
-    botInstanceId: string,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return purchaseFlow.typedUsername(
-      this,
-      scope,
-      actor,
-      text,
-      customer,
-      botInstanceId,
-      idempotencyKey,
-    );
-  }
-
-  draft(
-    scope: TenantContext,
-    actor: ActorContext,
-    productId: string,
-    customer: CustomerRecord,
-    botInstanceId: string,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return purchaseFlow.draft(
-      this,
-      scope,
-      actor,
-      productId,
-      customer,
-      botInstanceId,
-      idempotencyKey,
-    );
-  }
-
-  confirm(
-    scope: TenantContext,
-    actor: ActorContext,
-    orderId: string,
-    customer: CustomerRecord,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return purchaseFlow.confirm(this, scope, actor, orderId, customer, idempotencyKey);
-  }
-
-  awaitingPaymentReply(
-    scope: TenantContext,
-    customer: CustomerRecord,
-    order: OrderRecord,
-  ): Promise<PendingReply> {
-    return checkoutFlow.awaitingPaymentReply(this, scope, customer, order);
-  }
-
-  walletBalance(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-  ): Promise<PendingReply> {
-    return topupFlow.walletBalance(this, scope, actor, customer);
-  }
-
-  referralInvite(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    botInstanceId: BotInstanceId,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return referralFlow.referralInvite(this, scope, actor, customer, botInstanceId, idempotencyKey);
-  }
-
-  topupBegin(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    botInstanceId: BotInstanceId,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return topupFlow.topupBegin(this, scope, actor, customer, botInstanceId, idempotencyKey);
-  }
-
-  topupPick(
-    scope: TenantContext,
-    actor: ActorContext,
-    amountMinor: string,
-    customer: CustomerRecord,
-    idempotencyKey: string,
-    botInstanceId: BotInstanceId,
-  ): Promise<PendingReply> {
-    return topupFlow.topupPick(
-      this,
-      scope,
-      actor,
-      amountMinor,
-      customer,
-      idempotencyKey,
-      botInstanceId,
-    );
-  }
-
-  walletPayment(
-    scope: TenantContext,
-    actor: ActorContext,
-    orderId: string,
-    customer: CustomerRecord,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return checkoutFlow.walletPayment(this, scope, actor, orderId, customer, idempotencyKey);
-  }
-
-  manualPayment(
-    scope: TenantContext,
-    actor: ActorContext,
-    orderId: string,
-    customer: CustomerRecord,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return cardReceiptFlow.manualPayment(this, scope, actor, orderId, customer, idempotencyKey);
-  }
-
-  paymentMethods(
-    scope: TenantContext,
-    actor: ActorContext,
-    orderId: string,
-    customer: CustomerRecord,
-  ): Promise<PendingReply> {
-    return checkoutFlow.paymentMethods(this, scope, actor, orderId, customer);
-  }
-
-  paymentMethodsBack(
-    scope: TenantContext,
-    actor: ActorContext,
-    orderId: string,
-    customer: CustomerRecord,
-  ): Promise<PendingReply | null> {
-    return checkoutFlow.paymentMethodsBack(this, scope, actor, orderId, customer);
-  }
-
-  gatewayPayment(
-    scope: TenantContext,
-    actor: ActorContext,
-    orderId: string,
-    customer: CustomerRecord,
-    idempotencyKey: string,
-    provider: PaymentGatewayProvider | null,
-  ): Promise<PendingReply> {
-    return checkoutFlow.gatewayPayment(
-      this,
-      scope,
-      actor,
-      orderId,
-      customer,
-      idempotencyKey,
-      provider,
-    );
-  }
-
-  gatewayCheck(
-    scope: TenantContext,
-    paymentId: string,
-    customer: CustomerRecord,
-  ): Promise<PendingReply> {
-    return checkoutFlow.gatewayCheck(this, scope, paymentId, customer);
-  }
-
-  gatewayReceipt(
-    scope: TenantContext,
-    actor: ActorContext,
-    paymentId: string,
-    customer: CustomerRecord,
-    botInstanceId: BotInstanceId,
-  ): Promise<PendingReply> {
-    return cardReceiptFlow.gatewayReceipt(this, scope, actor, paymentId, customer, botInstanceId);
-  }
-
-  gatewayCardChange(
-    scope: TenantContext,
-    actor: ActorContext,
-    paymentId: string,
-    customer: CustomerRecord,
-    botInstanceId: BotInstanceId,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return cardReceiptFlow.gatewayCardChange(
-      this,
-      scope,
-      actor,
-      paymentId,
-      customer,
-      botInstanceId,
-      idempotencyKey,
-    );
-  }
-
-  gatewayCancelAsk(
-    scope: TenantContext,
-    paymentId: string,
-    customer: CustomerRecord,
-    botInstanceId: BotInstanceId,
-  ): Promise<PendingReply> {
-    return cardReceiptFlow.gatewayCancelAsk(this, scope, paymentId, customer, botInstanceId);
-  }
-
-  gatewayCancel(
-    scope: TenantContext,
-    actor: ActorContext,
-    paymentId: string,
-    customer: CustomerRecord,
-    botInstanceId: BotInstanceId,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return cardReceiptFlow.gatewayCancel(
-      this,
-      scope,
-      actor,
-      paymentId,
-      customer,
-      botInstanceId,
-      idempotencyKey,
-    );
-  }
-
-  gatewayRefundCardPrompt(
-    scope: TenantContext,
-    actor: ActorContext,
-    paymentId: string,
-    customer: CustomerRecord,
-    botInstanceId: BotInstanceId,
-    idempotencyKey: string,
-    updateId: bigint | undefined,
-  ): Promise<PendingReply> {
-    return cardReceiptFlow.gatewayRefundCardPrompt(
-      this,
-      scope,
-      actor,
-      paymentId,
-      customer,
-      botInstanceId,
-      idempotencyKey,
-      updateId,
-    );
-  }
-
-  gatewayRefundCardText(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    capture: { readonly subjectId: string | null },
-    text: string,
-    input: {
-      readonly idempotencyKey: string;
-      readonly botInstanceId: BotInstanceId;
-      readonly update?: unknown;
-    },
-  ): Promise<PendingReply | null> {
-    return cardReceiptFlow.gatewayRefundCardText(
-      this,
-      scope,
-      actor,
-      customer,
-      capture,
-      text,
-      input,
-    );
-  }
-
-  gatewayReceiptPhoto(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    botInstanceId: BotInstanceId,
-    file: InboundReceiptFile,
-  ): Promise<PendingReply | null> {
-    return cardReceiptFlow.gatewayReceiptPhoto(this, scope, actor, customer, botInstanceId, file);
-  }
-
-  cancelPaymentAsk(
-    scope: TenantContext,
-    paymentId: string,
-    customer: CustomerRecord,
-  ): Promise<PendingReply> {
-    return cardReceiptFlow.cancelPaymentAsk(this, scope, paymentId, customer);
-  }
-
-  cancelPayment(
-    scope: TenantContext,
-    actor: ActorContext,
-    paymentId: string,
-    customer: CustomerRecord,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return cardReceiptFlow.cancelPayment(this, scope, actor, paymentId, customer, idempotencyKey);
-  }
-
-  switchCard(
-    scope: TenantContext,
-    actor: ActorContext,
-    paymentId: string,
-    expectedSequence: number,
-    customer: CustomerRecord,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return cardReceiptFlow.switchCard(
-      this,
-      scope,
-      actor,
-      paymentId,
-      expectedSequence,
-      customer,
-      idempotencyKey,
-    );
-  }
-
-  signalTransferSent(
-    scope: TenantContext,
-    actor: ActorContext,
-    paymentId: string,
-    customer: CustomerRecord,
-    botInstanceId: BotInstanceId,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return cardReceiptFlow.signalTransferSent(
-      this,
-      scope,
-      actor,
-      paymentId,
-      customer,
-      botInstanceId,
-      idempotencyKey,
-    );
-  }
-
-  submitReceipt(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-    botInstanceId: BotInstanceId,
-    chatId: string | null,
-    file: InboundReceiptFile,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return cardReceiptFlow.submitReceipt(
-      this,
-      scope,
-      actor,
-      customer,
-      botInstanceId,
-      chatId,
-      file,
-      idempotencyKey,
-    );
-  }
-
-  cancelOrderAsk(
-    scope: TenantContext,
-    orderId: string,
-    customer: CustomerRecord,
-  ): Promise<PendingReply> {
-    return purchaseFlow.cancelOrderAsk(this, scope, orderId, customer);
-  }
-
-  cancelOrder(
-    scope: TenantContext,
-    actor: ActorContext,
-    orderId: string,
-    customer: CustomerRecord,
-    idempotencyKey: string,
-  ): Promise<PendingReply> {
-    return purchaseFlow.cancelOrder(this, scope, actor, orderId, customer, idempotencyKey);
   }
 
   /** Best effort, after the answer, and never allowed to fail the turn. */
@@ -3258,7 +2434,8 @@ export class BotRuntime {
      * of this turn and the worker moves the mark first edits the message into the invoice or
      * the attempt's end, so neither waits for a status-check tap.
      */
-    if (prompt !== null) await this.settleReceiptPrompt(scope, actor, target, prompt);
+    if (prompt !== null)
+      await cardReceiptFlow.settleReceiptPrompt(this, scope, actor, target, prompt);
     if (loading && directive.paymentId != null) {
       await state.moveAll(
         scope,
@@ -3270,45 +2447,6 @@ export class BotRuntime {
       await this.deps.invoiceScreens?.refresh(scope, directive.paymentId);
     }
     return edited.outcome;
-  }
-
-  settleReceiptPrompt(
-    scope: TenantContext,
-    actor: ActorContext,
-    target: TelegramWizardRecord,
-    prompt: { readonly customerId: string; readonly paymentId: string },
-  ): Promise<void> {
-    return cardReceiptFlow.settleReceiptPrompt(this, scope, actor, target, prompt);
-  }
-
-  /** Forwarder: the body lives in `runtime/admin-review-flow.ts` (R9 split). */
-  finaliseReview(
-    scope: TenantContext,
-    actor: ActorContext,
-    reply: PendingReply,
-    origin: CallbackOrigin,
-    botInstanceId: BotInstanceId,
-    telegramUserId: string,
-  ): Promise<CustomerSendOutcome | 'NOT_ATTEMPTED' | null> {
-    return adminReviewFlow.finaliseReview(
-      this,
-      scope,
-      actor,
-      reply,
-      origin,
-      botInstanceId,
-      telegramUserId,
-    );
-  }
-
-  /** Forwarder: the body lives in `runtime/admin-review-flow.ts` (R9 split). */
-  repeatedReviewToast(
-    scope: TenantContext,
-    actor: ActorContext,
-    telegramUserId: string,
-    paymentId: string,
-  ): Promise<Pick<PendingReply, 'toast'>> {
-    return adminReviewFlow.repeatedReviewToast(this, scope, actor, telegramUserId, paymentId);
   }
 
   async stopSpinner(

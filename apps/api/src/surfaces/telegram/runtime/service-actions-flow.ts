@@ -42,6 +42,8 @@ import type { CustomerButton } from '../../../modules/commerce/messaging/applica
 import { operationHasEnded } from '../../../modules/commerce/provisioning/application/provisioning.service.js';
 import type { CardMessageRef } from '../../../modules/commerce/provisioning/application/operation-card.js';
 import type { CommercialActionService } from '../../../modules/commerce/commercial/application/commercial-action.service.js';
+import { preinvoice } from './purchase-flow.js';
+import { awaitingPaymentReply } from './checkout-flow.js';
 import type { BotRuntime } from '../bot-runtime.js';
 
 /**
@@ -403,7 +405,7 @@ export async function commercialQuote(
     });
     // The same pre-invoice and the same payment buttons as a new purchase (§H5, §H6):
     // one payment UX, and the username shown is the service's own.
-    return rt.preinvoice(scope, actor, order, customer, service.providerUsername);
+    return preinvoice(rt, scope, actor, order, customer, service.providerUsername);
   } catch (error) {
     return refusal(error);
   }
@@ -430,7 +432,7 @@ export async function commercialConfirm(
       orderId,
       idempotencyKey: `${input.idempotencyKey}:action_confirm`,
     });
-    return rt.awaitingPaymentReply(scope, customer, order);
+    return awaitingPaymentReply(rt, scope, customer, order);
   } catch (error) {
     return refusal(error);
   }
