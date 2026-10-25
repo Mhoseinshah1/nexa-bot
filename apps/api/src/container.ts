@@ -578,6 +578,7 @@ import { TonPaysTelegramAdapter } from './modules/commerce/payments/infrastructu
 import { NowPaymentsAdapter } from './modules/commerce/payments/infrastructure/nowpayments-adapter.js';
 import { CentralPayAdapter } from './modules/commerce/payments/infrastructure/centralpay-adapter.js';
 import { TetraPayAdapter } from './modules/commerce/payments/infrastructure/tetrapay-adapter.js';
+import { RialitAdapter } from './modules/commerce/payments/infrastructure/rialit-adapter.js';
 import { TelegramStarsAdapter } from './modules/commerce/payments/infrastructure/telegram-stars-adapter.js';
 import { FxService } from './modules/commerce/fx/application/fx.service.js';
 import type { FxSourceAdapter } from './modules/commerce/fx/application/ports.js';
@@ -3183,6 +3184,12 @@ export function createContainer(
    */
   const tetrapayAdapter = new TetraPayAdapter();
   /*
+   * Rialit (`docs/rialit-gateway-audit.md`): create in Toman with the customer's Telegram id,
+   * settle ONLY by `GET /status/{token}`; its unsigned webhook is a hint. Not accepted against
+   * the real provider yet (`OQ-RL-01`); the route starts DISABLED.
+   */
+  const rialitAdapter = new RialitAdapter();
+  /*
    * Package A — Telegram Stars. The invoice is sent with the ATTEMPT's bot token through
    * the one Telegram call module, bounded by the same send timeout every customer message
    * uses.
@@ -3205,6 +3212,8 @@ export function createContainer(
         return centralpayAdapter;
       case 'TETRAPAY':
         return tetrapayAdapter;
+      case 'RIALIT':
+        return rialitAdapter;
       case 'MANUAL_TRANSFER':
         return null;
       default:

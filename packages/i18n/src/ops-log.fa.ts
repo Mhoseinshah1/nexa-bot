@@ -162,6 +162,7 @@ export const OPS_LOG_WORDS_FA = {
     NOWPAYMENTS: 'ارز دیجیتال (NowPayments)',
     CENTRALPAY: 'سنترال‌پی',
     TETRAPAY: 'تتراپی',
+    RIALIT: 'ریالیت',
   },
   /** How a gateway payment was paid, per the provider (TetraPay `method`). */
   gatewayMethods: { online: 'آنلاین', card: 'کارت' },
@@ -193,6 +194,18 @@ export const OPS_LOG_WORDS_FA = {
     BUYER_HAS_PROCESSING_INVOICE: 'مشتری در درگاه فاکتور در حال بررسی دیگری داشت',
     BUYER_HAS_NEED_ACTION_LESS: 'مشتری در درگاه فاکتوری با کسری پرداخت داشت',
     BUYER_HAS_NEED_ACTION_MORE: 'مشتری در درگاه فاکتوری با اضافه‌پرداخت داشت',
+    // Round 9 C4: Rialit's create refusals, by the code the payment was closed with.
+    'rialit.DOUBLE_FEE':
+      'هم کارمزد درگاه ربات و هم کارمزد پرداخت‌کنندهٔ ریالیت روشن است؛ لینک به مشتری داده نشد (یکی از دو کارمزد را صفر کنید)',
+    'rialit.PAYER_AMOUNT_MISMATCH':
+      'ارقام پاسخ ریالیت (مبلغ، کارمزد و مبلغ پرداخت‌کننده) با هم جور نبود؛ لینک به مشتری داده نشد',
+    'rialit.PAYER_AMOUNT_UNREADABLE':
+      'مبلغ پرداخت‌کننده در پاسخ ریالیت خوانا نبود؛ لینک به مشتری داده نشد',
+    'rialit.UNAUTHORIZED': 'کلید API ریالیت پذیرفته نشد؛ فاکتوری ساخته نشد',
+    'rialit.IP_NOT_ALLOWED': 'نشانی IP سرور در فهرست مجاز ریالیت نیست؛ فاکتوری ساخته نشد',
+    'rialit.MERCHANT_INACTIVE': 'حساب پذیرندهٔ ریالیت غیرفعال است؛ فاکتوری ساخته نشد',
+    'rialit.AMOUNT_OUT_OF_RANGE':
+      'مبلغ قابل پرداخت خارج از محدودهٔ ۵۰٬۰۰۰ تا ۱۰٬۰۰۰٬۰۰۰ تومان ریالیت بود؛ درخواستی به ریالیت فرستاده نشد',
   },
   /** The code beside a cause the table above does not know. */
   failureCodeLabel: 'کد',

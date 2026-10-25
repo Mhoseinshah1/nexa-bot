@@ -7,6 +7,10 @@ import {
   type PaymentGatewayProvider,
   paymentTrackingCode,
   plainAmount,
+  RIALIT_AMOUNT_OUT_OF_RANGE_STORED,
+  RIALIT_DOUBLE_FEE_STORED,
+  RIALIT_PAYER_AMOUNT_MISMATCH_STORED,
+  RIALIT_PAYER_AMOUNT_UNREADABLE_STORED,
   type TemplateKey,
   TETRAPAY_AMOUNT_OUT_OF_RANGE_STORED,
   TETRAPAY_DAILY_LIMIT_STORED,
@@ -35,6 +39,7 @@ import {
   remainderReceiptAvailable,
 } from '../../../modules/commerce/payments/domain/tonpays-telegram.js';
 import { gatewaySettlementDeadline } from '../../../modules/commerce/payments/domain/settlement.js';
+import { rialitLinkDeadline } from '../../../modules/commerce/payments/domain/rialit.js';
 import {
   CARD_INVOICE_ROW,
   cardInvoiceAmountValues,
@@ -608,6 +613,14 @@ const PROVIDER_REVIEW_SCREEN_KEYS: Partial<
     inReview: 'bot.payment.gateway_in_review',
     unresolved: 'bot.payment.tetrapay_review_unresolved',
   },
+  /*
+   * Rialit has no review window: it reaches UNKNOWN only when its status read said `paid` for an
+   * amount, payer amount or order id that does not match the payment.
+   */
+  RIALIT: {
+    inReview: 'bot.payment.gateway_in_review',
+    unresolved: 'bot.payment.rialit_review_unresolved',
+  },
 };
 
 /**
@@ -659,6 +672,53 @@ export function tetrapayRefusalScreen(
       reference,
       ...(min > 0n ? { min: money(min, 'IRT') } : {}),
       ...(max > 0n ? { max: money(max, 'IRT') } : {}),
+    },
+    buttons: [retry, mainMenuButton()],
+    orderId,
+    wizard,
+  };
+}
+
+/**
+ * The screen for a Rialit create refusal the customer can act on, or null for any other code.
+ * Pure: the code is what the attempt recorded — `rialit.AMOUNT_OUT_OF_RANGE:<min>:<max>` (the
+ * payable outside Rialit's range, refused before any call) or a misconfiguration (both Nexa and
+ * Rialit would charge a fee, or Rialit's payer figures did not add up), whose link was never shown.
+ */
+export function rialitRefusalScreen(
+  code: string | null,
+  reference: string,
+  retry: CustomerButton,
+  orderId: string | null,
+  kind: 'ORDER' | 'TOPUP',
+  paymentId: string,
+): PendingReply | null {
+  if (code === null) return null;
+  const wizard = { kind, step: 'NOTICE' as const, paymentId };
+  if (
+    code === RIALIT_DOUBLE_FEE_STORED ||
+    code === RIALIT_PAYER_AMOUNT_MISMATCH_STORED ||
+    code === RIALIT_PAYER_AMOUNT_UNREADABLE_STORED
+  ) {
+    return {
+      key: 'bot.payment.rialit_misconfigured',
+      values: { reference },
+      buttons: [retry, mainMenuButton()],
+      orderId,
+      wizard,
+    };
+  }
+  const range = new RegExp(
+    `^${RIALIT_AMOUNT_OUT_OF_RANGE_STORED.replace('.', '\\.')}:(\\d{1,18}):(\\d{1,18})$`,
+    'u',
+  ).exec(code);
+  if (range === null) return null;
+  return {
+    key: 'bot.payment.rialit_amount_out_of_range',
+    values: {
+      reference,
+      min: money(BigInt(range[1] ?? '0'), 'IRT'),
+      max: money(BigInt(range[2] ?? '0'), 'IRT'),
     },
     buttons: [retry, mainMenuButton()],
     orderId,
@@ -766,14 +826,15 @@ export function gatewayAttemptScreen(
    */
   const refusal =
     invoice.creationState === 'CREATE_FAILED'
-      ? tetrapayRefusalScreen(
+      ? (tetrapayRefusalScreen(
           invoice.creationErrorCode,
           reference,
           retry,
           orderId,
           kind,
           payment.id,
-        )
+        ) ??
+        rialitRefusalScreen(invoice.creationErrorCode, reference, retry, orderId, kind, payment.id))
       : null;
   if (refusal !== null && (payment.state === 'FAILED' || payment.state === 'PENDING')) {
     return refusal;
@@ -866,32 +927,73 @@ export function gatewayAttemptScreen(
    * current rate. With no fee the single amount is already all three.
    */
   const fee = payment.customerFee;
+  /*
+   * Rialit's link lives thirty minutes while the attempt lives seventy (owner rule): the
+   * customer is shown the LINK's deadline, and once it has passed the pay button is no longer
+   * offered — the check button stays, since Rialit can still report a payment made in time.
+   */
+  const payBy =
+    invoice.provider === 'RIALIT'
+      ? rialitLinkDeadline(invoice.createdInvoiceAt ?? invoice.createdAt, payment.expiresAt)
+      : payment.expiresAt;
+  const linkOpen = payBy.getTime() > at.getTime();
+  /*
+   * Rialit, with Nexa's own fee off and Rialit's payer fee on (owner rule: only ONE side
+   * charges): the customer pays Rialit's `payer_amount`, so that is the figure shown — the
+   * order (or top-up) as sent, Rialit's fee, and what the page will ask for, all in Rialit's
+   * Toman. Display only: the payment settles and credits its principal as on every route.
+   */
+  const rialitPayerFee =
+    invoice.provider === 'RIALIT' &&
+    (fee === null || fee.fee.amountMinor === 0n) &&
+    invoice.finalAmount !== null &&
+    invoice.finalAmount > invoice.sentAmount
+      ? invoice.finalAmount - invoice.sentAmount
+      : null;
   const invoiceBody: Pick<PendingReply, 'key' | 'values'> =
-    fee !== null && fee.fee.amountMinor > 0n
+    rialitPayerFee !== null && invoice.finalAmount !== null
       ? {
           key:
             payment.orderId === null
               ? 'bot.payment.gateway_invoice_topup_fee'
               : 'bot.payment.gateway_invoice_order_fee',
           values: {
-            principal: payment.amount,
-            fee: fee.fee,
-            payable: fee.payable,
-            expiresAt: payment.expiresAt,
+            principal: money(invoice.sentAmount, 'IRT'),
+            fee: money(rialitPayerFee, 'IRT'),
+            payable: money(invoice.finalAmount, 'IRT'),
+            expiresAt: payBy,
             reference,
           },
         }
-      : {
-          key: 'bot.payment.gateway_invoice',
-          values: { total: payment.amount, expiresAt: payment.expiresAt, reference },
-        };
+      : fee !== null && fee.fee.amountMinor > 0n
+        ? {
+            key:
+              payment.orderId === null
+                ? 'bot.payment.gateway_invoice_topup_fee'
+                : 'bot.payment.gateway_invoice_order_fee',
+            values: {
+              principal: payment.amount,
+              fee: fee.fee,
+              payable: fee.payable,
+              expiresAt: payBy,
+              reference,
+            },
+          }
+        : {
+            key: 'bot.payment.gateway_invoice',
+            values: { total: payment.amount, expiresAt: payBy, reference },
+          };
   return {
     ...invoiceBody,
     buttons: [
-      {
-        ...inlineLabel(PROVIDER_PAY_BUTTON_KEYS[invoice.provider] ?? 'payment.gateway_pay'),
-        url: link,
-      },
+      ...(linkOpen
+        ? [
+            {
+              ...inlineLabel(PROVIDER_PAY_BUTTON_KEYS[invoice.provider] ?? 'payment.gateway_pay'),
+              url: link,
+            },
+          ]
+        : []),
       check,
       mainMenuButton(),
     ],
