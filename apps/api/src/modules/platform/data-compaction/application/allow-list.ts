@@ -138,7 +138,6 @@ export const COMPACTION_PROTECTED_TABLES: Readonly<Record<string, string>> = {
   recovery_requests: 'A recovery; a CUTOVER row is the only record of the displaced database.',
   legacy_history_records: 'The legacy money history; compacted only by the legacy compaction.',
   legacy_invoice_archive: 'Every legacy invoice reader reads it.',
-  legacy_wallet_debts: 'Legacy money.',
   legacy_import_map: "The importer's identity map; a re-run reads it.",
 };
 
