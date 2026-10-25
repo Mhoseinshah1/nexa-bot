@@ -377,21 +377,29 @@ describe('L10 / L11 / L16 / L15 — the services log', () => {
     ]);
   });
 
-  it('an imported service, an imported customer and an adopted order are all silent', async () => {
+  it('an adopted or imported ORDER is silent; an imported customer or service buying now is not', async () => {
     const { facts, queued, lane, ofFacts } = setup();
     facts.payments.set('ord-1', paymentFact('WALLET'));
     const consumer = new ServiceLogConsumer({ lane, facts: ofFacts, words });
-    facts.services.set('svc-1', serviceFact({ source: 'MIRZA' }));
-    await consumer.handle(event('ServiceProvisioned', 'svc-1'), TX);
-    facts.services.set('svc-1', serviceFact());
-    facts.customers.set('cust-1', customerFact({ source: 'MIRZA' }));
-    await consumer.handle(event('ServiceProvisioned', 'svc-1'), TX);
-    facts.customers.set('cust-1', customerFact());
     facts.orders.set('ord-1', orderFact({ origin: 'ADOPTED' }));
     await consumer.handle(event('ServiceProvisioned', 'svc-1'), TX);
     facts.orders.set('ord-1', orderFact({ source: 'MIRZA' }));
     await consumer.handle(event('ServiceProvisioned', 'svc-1'), TX);
     expect(queued).toEqual([]);
+
+    /*
+     * Hotfix v0.8.2-e: the order is the purchase's provenance. A customer (or a service) the
+     * import wrote who buys through this installation is this installation's sale — every
+     * customer of an installation migrated by the one-click import is `MIRZA`, and refusing
+     * them silenced every purchase while the payment log still arrived.
+     */
+    facts.orders.set('ord-1', orderFact());
+    facts.customers.set('cust-1', customerFact({ source: 'MIRZA' }));
+    await consumer.handle(event('ServiceProvisioned', 'svc-1'), TX);
+    facts.services.set('svc-1', serviceFact({ source: 'MIRZA' }));
+    await consumer.handle(event('ServiceProvisioned', 'svc-1'), TX);
+    // (No ledger in this fixture, so the wallet figures are unknown and the plain L10 is built.)
+    expect(queued.map((one) => one.logType)).toEqual(['SERVICE_CREATED', 'SERVICE_CREATED']);
   });
 });
 
