@@ -1,14 +1,17 @@
 import { sql } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SEED_IDS } from './harness';
 import { makePin, viewOf, type View } from './r9-char-support';
 import {
   TG,
   bindNewAdmin,
   lastReply,
+  paymentState,
   pendingWithReceipt,
   receiptFixture,
+  rows,
   say,
+  signalledTransfer,
   tap,
   type ReceiptFixture,
 } from './receipt-review-fixture';
@@ -273,6 +276,47 @@ describe('the administrator surface of the Telegram bot, as it answers today', (
     pin('category.activate_again', await press(`kb:a:${category}`));
     pin('category.activate_unknown', await press(`kb:a:${unknownId()}`));
     pin('category.deactivate', await press(`kb:d:${category}`));
+  });
+
+  // =========================================================================
+  // The approve button's own receipt requirement (`adminApprove`)
+  // =========================================================================
+
+  it('approves from the review button only a transfer that carries a receipt, whatever the review read said', async () => {
+    /*
+     * `adminApprove` asks `confirmManualTransfer` for `requireReceipt: true`: the settling
+     * transaction itself refuses a transfer with no stored receipt. The review read
+     * already answers null for one, so the requirement is the second line, and this case
+     * removes the first: the read is made to answer an item for a signalled transfer that
+     * has no receipt filed. The approval must still move nothing.
+     *
+     * MUTATION: `requireReceipt: true` -> `false` in `adminApprove` confirms the payment
+     * and answers `bot.admin.approved`, and this case fails.
+     */
+    const payment = await signalledTransfer(f, 'r9-no-receipt');
+    const receipts = f.ctx.container.receipts;
+    const reviewItem = vi.spyOn(receipts, 'reviewItem').mockImplementation(async () => {
+      const [row] = await rows<{ customer_id: string }>(
+        f,
+        sql`SELECT customer_id FROM payments WHERE id = ${payment}`,
+      );
+      expect(row, 'the signalled transfer').toBeDefined();
+      return {
+        payment: { id: payment, state: 'PENDING', method: 'MANUAL_TRANSFER' },
+        customer: null,
+        receipts: [],
+        caption: {},
+      } as unknown as Awaited<ReturnType<typeof receipts.reviewItem>>;
+    });
+    try {
+      const turn = await tap(f, `D:${payment}`, OWNER);
+      expect(reviewItem).toHaveBeenCalled();
+      expect(turn.intent).toBe('ADMIN_APPROVE');
+      expect(turn.replyKey).not.toBe('bot.admin.approved');
+      expect(await paymentState(f, payment)).toBe('PENDING');
+    } finally {
+      reviewItem.mockRestore();
+    }
   });
 });
 

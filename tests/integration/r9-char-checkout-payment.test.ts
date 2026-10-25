@@ -1,4 +1,6 @@
+import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { parseCustomServiceVolume } from '@nexa/contracts';
 import { makePin, makeRig, maskIds, viewOf, type View } from './r9-char-support';
 import { systemActor } from './r9-char-support';
 import { tenantA } from './harness';
@@ -107,6 +109,84 @@ describe('the checkout-payment flow of the Telegram bot, as it answers today', (
     const plain = await turn(rig.text('/start tp-nonsense', CUSTOMER));
     expect(plain.intent).toBe('START');
     expect(maskIds(plain.text)).not.toContain('<id>');
+  });
+
+  it('confirms a custom-service draft through the new-service lane when the customer picks a method', async () => {
+    /*
+     * `confirmDraft` sends a CUSTOM_SERVICE draft to `OrderService.confirm`, the lane of a
+     * new service, and not to `CommercialActionService.confirm`, which owns renewals and
+     * packages of an EXISTING service and has none to act on here.
+     *
+     * MUTATION: dropping `|| order.purpose === 'CUSTOM_SERVICE'` from `confirmDraft` sends
+     * the draft to the commercial lane, which refuses it: the customer is answered
+     * `bot.order.not_awaiting_payment`, no transfer is issued, and this case fails.
+     */
+    const c = rig.ctx().container;
+    const owner = await rig.owner();
+    const panel = await rig.panelId();
+    await rig.resolveCustomer(CUSTOMER);
+    const flag = (await c.featureFlags.list(tenantA, owner)).find(
+      (one) => one.key === 'custom_service',
+    );
+    if (flag === undefined) throw new Error('no custom_service flag');
+    await c.featureFlags.set(tenantA, owner, {
+      idempotencyKey: 'r9-custom-flag',
+      key: 'custom_service',
+      enabled: true,
+      expectedVersion: flag.version,
+      confirmKey: 'custom_service',
+      reason: 'r9 characterization',
+    });
+    await c.customServiceAdmin.saveLocation(tenantA, owner, {
+      idempotencyKey: 'r9-custom-location',
+      panelId: panel,
+      label: 'آلمان',
+      enabled: true,
+    });
+    const rule = {
+      label: null,
+      customerId: null,
+      resellerTierId: null,
+      panelId: null,
+      enabled: true,
+      unitPriceMinor: 1000n,
+    } as const;
+    const gigabyte = parseCustomServiceVolume('1');
+    const hundred = parseCustomServiceVolume('100');
+    if (gigabyte === null || hundred === null) throw new Error('volume');
+    await c.customServiceAdmin.createRule(tenantA, owner, {
+      idempotencyKey: 'r9-custom-volume',
+      rule: { ...rule, dimension: 'VOLUME', minUnits: gigabyte, maxUnits: hundred },
+    });
+    await c.customServiceAdmin.createRule(tenantA, owner, {
+      idempotencyKey: 'r9-custom-time',
+      rule: { ...rule, dimension: 'TIME', minUnits: 7n, maxUnits: 90n },
+    });
+
+    await rig.handle(rig.tap('cu:', CUSTOMER));
+    await rig.handle(rig.tap(`cv:${panel}`, CUSTOMER));
+    await rig.handle(rig.text('10', CUSTOMER));
+    const orderOf = async () =>
+      (
+        await c.database.db.execute(
+          sql`SELECT id, state FROM orders WHERE purpose = 'CUSTOM_SERVICE'`,
+        )
+      ).rows as { id: string; state: string }[];
+    // The panel offers both kinds of name, so the draft asks first; an automatic one.
+    expect((await rig.handle(rig.text('30', CUSTOMER))).replyKey).toBe('bot.username.choose');
+    const [draft] = await orderOf();
+    const preinvoice = await rig.handle(rig.tap(`Z:${draft?.id ?? ''}`, CUSTOMER));
+    expect(preinvoice.replyKey).toBe('bot.order.preinvoice');
+    expect(draft?.state).toBe('DRAFT');
+
+    const paid = await rig.handle(rig.tap(`m:${draft?.id ?? ''}`, CUSTOMER));
+    expect(paid.intent).toBe('PAY_MANUAL');
+    expect(paid.replyKey).toBe('bot.payment.transfer_instructions');
+    expect(await orderOf()).toEqual([{ id: draft?.id, state: 'AWAITING_PAYMENT' }]);
+    const payments = await c.database.db.execute(
+      sql`SELECT method, state FROM payments WHERE order_id = ${draft?.id ?? null}`,
+    );
+    expect(payments.rows).toEqual([{ method: 'MANUAL_TRANSFER', state: 'PENDING' }]);
   });
 });
 
