@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="fa">
+<head>
+<meta charset="utf-8">
+<title>نکسا — فروشگاه</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#f4f4f5;text-decoration:none}a:hover{color:#ffffff}
+.g{background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.11);border-radius:22px;-webkit-backdrop-filter:blur(20px) saturate(140%);backdrop-filter:blur(20px) saturate(140%);box-shadow:inset 0 1px 0 rgba(255,255,255,.08)}
+.seg{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;padding:4px;border-radius:16px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1)}
+.seg button{height:38px;border:0;border-radius:12px;background:transparent;color:#a1a1aa;font:inherit;font-size:13px;font-weight:600}
+.seg button.on{background:#f4f4f5;color:#0a0a0b}
+.chip{height:34px;padding:0 14px;border-radius:99px;border:1px solid rgba(255,255,255,.14);background:transparent;color:#d4d4d8;font:inherit;font-size:12.5px;white-space:nowrap}
+.chip.on{background:rgba(255,255,255,.14);color:#fff;border-color:rgba(255,255,255,.3)}
+.plan{padding:16px;display:flex;flex-direction:column;gap:10px;color:#f4f4f5}
+.plan.on{border:1.5px solid #f4f4f5;background:rgba(255,255,255,.09)}
+.ft{display:flex;gap:14px;font-size:12px;color:#a1a1aa}
+.mb{position:absolute;left:16px;right:16px;bottom:16px;height:54px;border-radius:16px;background:#f4f4f5;color:#0a0a0b;font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center;gap:10px}
+.mb:hover{color:#0a0a0b}
+/* web-panel skin */
+div[dir="rtl"][style*="width: 390px"]{background:radial-gradient(75% 45% at 90% -8%,rgba(255,255,255,.08),transparent 68%),linear-gradient(180deg,#0e0e10,#0a0a0b 70%) !important}
+.g{background:rgba(255,255,255,.075) !important;border:0 !important;border-radius:20px !important;position:relative;box-shadow:inset 0 1px 0 rgba(255,255,255,.32),inset 0 0 0 1px rgba(255,255,255,.06),0 30px 60px -30px rgba(0,0,0,.85),0 2px 8px -2px rgba(0,0,0,.4) !important;-webkit-backdrop-filter:blur(26px) saturate(1.7);backdrop-filter:blur(26px) saturate(1.7)}
+.g::after{content:'';position:absolute;inset:0;border-radius:inherit;padding:1px;pointer-events:none;background:linear-gradient(150deg,rgba(255,255,255,.16),transparent 40%,transparent 62%,rgba(255,255,255,.06));-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}
+.g[style*="dashed"]{box-shadow:none !important;border:1.5px dashed rgba(255,255,255,.22) !important}
+.g.on{box-shadow:inset 0 1px 0 rgba(255,255,255,.32),inset 0 0 0 1.5px #f4f4f5,0 30px 60px -30px rgba(0,0,0,.85) !important}
+div:has(> a[aria-label="بازگشت"]),div:has(> a.ib){padding:6px 8px;border-radius:24px;background:rgba(255,255,255,.075);box-shadow:inset 0 1px 0 rgba(255,255,255,.32),inset 0 0 0 1px rgba(255,255,255,.06),0 20px 40px -24px rgba(0,0,0,.8);-webkit-backdrop-filter:blur(26px) saturate(1.7);backdrop-filter:blur(26px) saturate(1.7)}
+div:has(> a[aria-label="بازگشت"]) > button,div:has(> a[aria-label="بازگشت"]) > span{border-radius:999px !important}
+a[aria-label="بازگشت"],.ib{width:44px !important;height:44px !important;border-radius:50% !important;border:0 !important;background:rgba(255,255,255,.11) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.32),inset 0 0 0 1px rgba(255,255,255,.06)}
+.tb{height:70px !important;border:0 !important;border-radius:28px !important;padding:6px !important;gap:4px;background:rgba(255,255,255,.075) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.32),inset 0 0 0 1px rgba(255,255,255,.06),0 30px 60px -30px rgba(0,0,0,.85),0 2px 8px -2px rgba(0,0,0,.4)}
+.tb a{border-radius:22px}
+.tb a.on{background:rgba(255,255,255,.16);box-shadow:inset 0 1px 0 rgba(255,255,255,.32),0 6px 16px -10px rgba(0,0,0,.5)}
+.mb,[style*="background: #f4f4f5"]:not([style*="50%"]){border-radius:999px !important}
+.mb{box-shadow:inset 0 1px 0 #fff,0 14px 30px -12px rgba(0,0,0,.7)}
+.btn,.cp,.dl,.jn,.am,.chip,.dz{border-radius:999px !important}
+.btn:not(.pri),.cp:not([style*="#f4f4f5"]),.dl,.am:not(.on),.dz{border:0 !important;background:rgba(255,255,255,.1) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.28),inset 0 0 0 1px rgba(255,255,255,.07)}
+.act{border:0 !important;border-radius:20px !important;background:rgba(255,255,255,.075) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.28),inset 0 0 0 1px rgba(255,255,255,.06)}
+.seg{border-radius:999px !important;border:0 !important;background:rgba(255,255,255,.075) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.22),inset 0 0 0 1px rgba(255,255,255,.06)}
+.seg button{border-radius:999px !important}
+.seg button.on,.chip.on{background:rgba(255,255,255,.16) !important;color:#f4f4f5 !important;border-color:transparent !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.32),0 6px 16px -10px rgba(0,0,0,.5)}
+input:not([type=checkbox]){border-radius:14px !important;border:0 !important;background:rgba(255,255,255,.06) !important;box-shadow:inset 0 0 0 1px rgba(255,255,255,.1)}
+</style>
+</helmet>
+<div dir="rtl" style="width: 390px; height: 844px; box-sizing: border-box; background: #0a0a0b; color: #f4f4f5; font-family: Vazirmatn, system-ui, sans-serif; position: relative; overflow: hidden">
+<div style="padding: 20px 16px 96px; display: flex; flex-direction: column; gap: 14px">
+
+<div style="display: flex; align-items: center; gap: 10px">
+<a href="Main.dc.html" aria-label="بازگشت" style="width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></a>
+<div style="font-size: 20px; font-weight: 800; flex: 1">خرید سرویس</div>
+</div>
+
+<div class="seg" role="tablist" aria-label="نوع پلن">
+<button class="on" role="tab" aria-selected="true">ماهانه</button>
+<button role="tab" aria-selected="false">سه‌ماهه</button>
+<button role="tab" aria-selected="false">حجمی</button>
+<button role="tab" aria-selected="false">دلخواه</button>
+</div>
+
+<div style="display: flex; gap: 8px; overflow: hidden" aria-label="لوکیشن">
+<button class="chip on">همه</button><button class="chip">آلمان</button><button class="chip">هلند</button><button class="chip">فنلاند</button><button class="chip">ترکیه</button>
+</div>
+
+<button class="g plan" style="text-align: start; font: inherit">
+<div style="display: flex; justify-content: space-between; align-items: center; width: 100%">
+<b style="font-size: 15px">نکسا لایت</b><span style="font-size: 16px; font-weight: 800">۱۴۹٬۰۰۰ <span style="font-size: 11px; font-weight: 500; color: #a1a1aa">تومان</span></span>
+</div>
+<div class="ft"><span>۲۰ گیگ</span><span>۳۰ روز</span><span>۱ دستگاه</span></div>
+</button>
+
+<button class="g plan on" style="text-align: start; font: inherit; position: relative">
+<span style="position: absolute; top: -10px; left: 16px; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 99px; background: #4f8cff; color: #fff">پرفروش</span>
+<div style="display: flex; justify-content: space-between; align-items: center; width: 100%">
+<b style="font-size: 15px">نکسا پلاس</b><span style="font-size: 16px; font-weight: 800">۲۹۰٬۰۰۰ <span style="font-size: 11px; font-weight: 500; color: #a1a1aa">تومان</span></span>
+</div>
+<div class="ft"><span>۵۰ گیگ</span><span>۳۰ روز</span><span>۳ دستگاه</span></div>
+<div style="display: flex; gap: 6px; flex-wrap: wrap">
+<span style="font-size: 11px; padding: 3px 9px; border-radius: 99px; background: rgba(255,255,255,.1)">۵٪ کش‌بک</span>
+<span style="font-size: 11px; padding: 3px 9px; border-radius: 99px; background: rgba(255,255,255,.1)">تغییر لوکیشن رایگان</span>
+</div>
+</button>
+
+<button class="g plan" style="text-align: start; font: inherit">
+<div style="display: flex; justify-content: space-between; align-items: center; width: 100%">
+<b style="font-size: 15px">نکسا پرو</b><span style="font-size: 16px; font-weight: 800">۴۹۰٬۰۰۰ <span style="font-size: 11px; font-weight: 500; color: #a1a1aa">تومان</span></span>
+</div>
+<div class="ft"><span>۱۲۰ گیگ</span><span>۳۰ روز</span><span>۵ دستگاه</span></div>
+</button>
+
+<div class="g" style="padding: 14px; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; justify-content: space-between; align-items: center"><b style="font-size: 14px">سرویس دلخواه</b><span style="font-size: 12px; color: #a1a1aa">حجم و زمان را خودت بساز</span></div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; justify-content: space-between; font-size: 12px"><label for="vol">حجم</label><b>۷۰ گیگ</b></div>
+<div style="height: 6px; border-radius: 99px; background: rgba(255,255,255,.1); position: relative"><div style="position: absolute; inset-inline-start: 0; top: 0; bottom: 0; width: 46%; border-radius: 99px; background: #4f8cff"></div><div style="position: absolute; inset-inline-start: 46%; top: 50%; width: 20px; height: 20px; margin: -10px -10px 0 0; border-radius: 50%; background: #fff"></div></div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; justify-content: space-between; font-size: 12px"><label for="days">مدت</label><b>۴۵ روز</b></div>
+<div style="height: 6px; border-radius: 99px; background: rgba(255,255,255,.1); position: relative"><div style="position: absolute; inset-inline-start: 0; top: 0; bottom: 0; width: 38%; border-radius: 99px; background: #ff9f43"></div><div style="position: absolute; inset-inline-start: 38%; top: 50%; width: 20px; height: 20px; margin: -10px -10px 0 0; border-radius: 50%; background: #fff"></div></div>
+</div>
+</div>
+
+</div>
+
+<a class="mb" href="Checkout.dc.html">ادامه و پیش‌فاکتور<span style="opacity: .55">·</span>۲۹۰٬۰۰۰ تومان</a>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

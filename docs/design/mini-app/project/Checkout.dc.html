@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="fa">
+<head>
+<meta charset="utf-8">
+<title>نکسا — پیش‌فاکتور</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#f4f4f5;text-decoration:none}a:hover{color:#ffffff}
+.g{background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.11);border-radius:22px;-webkit-backdrop-filter:blur(20px) saturate(140%);backdrop-filter:blur(20px) saturate(140%);box-shadow:inset 0 1px 0 rgba(255,255,255,.08)}
+.ln{display:flex;justify-content:space-between;font-size:13px;padding:7px 0}
+.ln span:first-child{color:#a1a1aa}
+.pm{display:flex;align-items:center;gap:12px;padding:11px 14px;border-top:1px solid rgba(255,255,255,.08);font-size:13.5px}
+.pm:first-child{border-top:0}
+.pm .r{width:20px;height:20px;border-radius:50%;border:2px solid rgba(255,255,255,.3);flex:none;box-sizing:border-box}
+.pm.on .r{border:6px solid #f4f4f5}
+.pm small{color:#a1a1aa;font-size:11.5px;display:block}
+.mb{position:absolute;left:16px;right:16px;bottom:16px;height:54px;border-radius:16px;background:#f4f4f5;color:#0a0a0b;font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center;gap:10px}
+.mb:hover{color:#0a0a0b}
+/* web-panel skin */
+div[dir="rtl"][style*="width: 390px"]{background:radial-gradient(75% 45% at 90% -8%,rgba(255,255,255,.08),transparent 68%),linear-gradient(180deg,#0e0e10,#0a0a0b 70%) !important}
+.g{background:rgba(255,255,255,.075) !important;border:0 !important;border-radius:20px !important;position:relative;box-shadow:inset 0 1px 0 rgba(255,255,255,.32),inset 0 0 0 1px rgba(255,255,255,.06),0 30px 60px -30px rgba(0,0,0,.85),0 2px 8px -2px rgba(0,0,0,.4) !important;-webkit-backdrop-filter:blur(26px) saturate(1.7);backdrop-filter:blur(26px) saturate(1.7)}
+.g::after{content:'';position:absolute;inset:0;border-radius:inherit;padding:1px;pointer-events:none;background:linear-gradient(150deg,rgba(255,255,255,.16),transparent 40%,transparent 62%,rgba(255,255,255,.06));-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}
+.g[style*="dashed"]{box-shadow:none !important;border:1.5px dashed rgba(255,255,255,.22) !important}
+.g.on{box-shadow:inset 0 1px 0 rgba(255,255,255,.32),inset 0 0 0 1.5px #f4f4f5,0 30px 60px -30px rgba(0,0,0,.85) !important}
+div:has(> a[aria-label="بازگشت"]),div:has(> a.ib){padding:6px 8px;border-radius:24px;background:rgba(255,255,255,.075);box-shadow:inset 0 1px 0 rgba(255,255,255,.32),inset 0 0 0 1px rgba(255,255,255,.06),0 20px 40px -24px rgba(0,0,0,.8);-webkit-backdrop-filter:blur(26px) saturate(1.7);backdrop-filter:blur(26px) saturate(1.7)}
+div:has(> a[aria-label="بازگشت"]) > button,div:has(> a[aria-label="بازگشت"]) > span{border-radius:999px !important}
+a[aria-label="بازگشت"],.ib{width:44px !important;height:44px !important;border-radius:50% !important;border:0 !important;background:rgba(255,255,255,.11) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.32),inset 0 0 0 1px rgba(255,255,255,.06)}
+.tb{height:70px !important;border:0 !important;border-radius:28px !important;padding:6px !important;gap:4px;background:rgba(255,255,255,.075) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.32),inset 0 0 0 1px rgba(255,255,255,.06),0 30px 60px -30px rgba(0,0,0,.85),0 2px 8px -2px rgba(0,0,0,.4)}
+.tb a{border-radius:22px}
+.tb a.on{background:rgba(255,255,255,.16);box-shadow:inset 0 1px 0 rgba(255,255,255,.32),0 6px 16px -10px rgba(0,0,0,.5)}
+.mb,[style*="background: #f4f4f5"]:not([style*="50%"]){border-radius:999px !important}
+.mb{box-shadow:inset 0 1px 0 #fff,0 14px 30px -12px rgba(0,0,0,.7)}
+.btn,.cp,.dl,.jn,.am,.chip,.dz{border-radius:999px !important}
+.btn:not(.pri),.cp:not([style*="#f4f4f5"]),.dl,.am:not(.on),.dz{border:0 !important;background:rgba(255,255,255,.1) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.28),inset 0 0 0 1px rgba(255,255,255,.07)}
+.act{border:0 !important;border-radius:20px !important;background:rgba(255,255,255,.075) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.28),inset 0 0 0 1px rgba(255,255,255,.06)}
+.seg{border-radius:999px !important;border:0 !important;background:rgba(255,255,255,.075) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.22),inset 0 0 0 1px rgba(255,255,255,.06)}
+.seg button{border-radius:999px !important}
+.seg button.on,.chip.on{background:rgba(255,255,255,.16) !important;color:#f4f4f5 !important;border-color:transparent !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.32),0 6px 16px -10px rgba(0,0,0,.5)}
+input:not([type=checkbox]){border-radius:14px !important;border:0 !important;background:rgba(255,255,255,.06) !important;box-shadow:inset 0 0 0 1px rgba(255,255,255,.1)}
+</style>
+</helmet>
+<div dir="rtl" style="width: 390px; height: 844px; box-sizing: border-box; background: #0a0a0b; color: #f4f4f5; font-family: Vazirmatn, system-ui, sans-serif; position: relative; overflow: hidden">
+<div style="padding: 20px 16px 96px; display: flex; flex-direction: column; gap: 12px">
+
+<div style="display: flex; align-items: center; gap: 10px">
+<a href="Store.dc.html" aria-label="بازگشت" style="width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></a>
+<div style="font-size: 20px; font-weight: 800; flex: 1">پیش‌فاکتور</div>
+</div>
+
+<div class="g" style="padding: 10px 16px">
+<div class="ln"><span>نکسا پلاس · ۵۰ گیگ · ۳۰ روز</span><b>۲۹۰٬۰۰۰</b></div>
+<div class="ln"><span>دستگاه اضافه (۱)</span><b>۴۰٬۰۰۰</b></div>
+<div class="ln"><span>لوکیشن</span><b>آلمان</b></div>
+<div class="ln"><span>کد تخفیف NEXA20</span><b style="color: #9ec0ff">−۶۶٬۰۰۰</b></div>
+<div style="height: 1px; background: rgba(255,255,255,.1); margin: 4px 0"></div>
+<div class="ln" style="font-size: 15px"><span style="color: #f4f4f5; font-weight: 700">مبلغ قابل پرداخت</span><b style="font-size: 18px">۲۶۴٬۰۰۰ تومان</b></div>
+<div class="ln" style="padding-top: 0"><span>کش‌بک به کیف پول</span><b style="color: #ffc48a">+۱۳٬۲۰۰</b></div>
+</div>
+
+<div style="display: flex; gap: 8px">
+<label for="code" style="position: absolute; width: 1px; height: 1px; overflow: hidden">کد تخفیف</label>
+<input id="code" value="NEXA20" dir="ltr" style="flex: 1; height: 46px; border-radius: 14px; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.05); color: #f4f4f5; font: inherit; font-size: 14px; padding: 0 14px; text-align: right">
+<button style="height: 46px; padding: 0 16px; border-radius: 14px; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.08); color: #f4f4f5; font: inherit; font-weight: 600">حذف کد</button>
+</div>
+
+<div style="font-size: 13px; font-weight: 700; color: #a1a1aa; margin-top: 2px">روش پرداخت</div>
+<div class="g" style="padding: 2px 0" role="radiogroup" aria-label="روش پرداخت">
+<button class="pm on" role="radio" aria-checked="true" style="width: 100%; background: none; border: 0; color: inherit; font: inherit; text-align: start"><span class="r"></span><span style="flex: 1">کارت به کارت<small>تأیید پس از بررسی رسید</small></span></button>
+<button class="pm" role="radio" aria-checked="false" style="width: 100%; background: none; border: 0; border-top: 1px solid rgba(255,255,255,.08); color: inherit; font: inherit; text-align: start"><span class="r"></span><span style="flex: 1">کیف پول<small>موجودی: ۱٬۲۵۰٬۰۰۰ تومان</small></span><span style="font-size: 11px; color: #9ec0ff">فوری</span></button>
+<button class="pm" role="radio" aria-checked="false" style="width: 100%; background: none; border: 0; border-top: 1px solid rgba(255,255,255,.08); color: inherit; font: inherit; text-align: start"><span class="r"></span><span style="flex: 1">درگاه پرداخت<small>کارت‌های شتاب</small></span></button>
+<button class="pm" role="radio" aria-checked="false" style="width: 100%; background: none; border: 0; border-top: 1px solid rgba(255,255,255,.08); color: inherit; font: inherit; text-align: start"><span class="r"></span><span style="flex: 1">ارز دیجیتال<small>USDT، TON و …</small></span></button>
+<button class="pm" role="radio" aria-checked="false" style="width: 100%; background: none; border: 0; border-top: 1px solid rgba(255,255,255,.08); color: inherit; font: inherit; text-align: start"><span class="r"></span><span style="flex: 1">تلگرام استارز<small>پرداخت داخل تلگرام</small></span></button>
+</div>
+
+<label style="display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: #d4d4d8"><input type="checkbox" checked="" style="width: 18px; height: 18px; accent-color: #f4f4f5"> <span>قوانین و شرایط استفاده را می‌پذیرم</span></label>
+
+</div>
+
+<a class="mb" href="CardPay.dc.html">پرداخت<span style="opacity: .55">·</span>۲۶۴٬۰۰۰ تومان</a>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

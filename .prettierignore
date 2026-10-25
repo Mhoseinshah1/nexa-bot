@@ -7,3 +7,5 @@ apps/api/drizzle
 # The owner's demo-parity reference pack, kept verbatim (Track 2, 2026-10-18)
 docs/web-redesign/demo-parity/reference
 docs/web-redesign/demo-parity/DIFFS.md
+# The owner's mini-app design, kept verbatim (Round 9, C5)
+docs/design/mini-app/project

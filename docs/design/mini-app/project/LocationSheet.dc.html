@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="fa">
+<head>
+<meta charset="utf-8">
+<title>نکسا — تغییر لوکیشن</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#f4f4f5;text-decoration:none}a:hover{color:#ffffff}
+.loc{display:flex;align-items:center;gap:12px;width:100%;min-height:58px;padding:0 14px;border-radius:16px;border:1px solid rgba(255,255,255,.11);background:rgba(255,255,255,.05);color:#f4f4f5;font:inherit;text-align:start;box-sizing:border-box}
+.loc.on{border:1.5px solid #f4f4f5;background:rgba(255,255,255,.1)}
+.loc.dis{opacity:.45}
+.loc .cc{width:36px;height:36px;border-radius:11px;background:rgba(255,255,255,.1);display:grid;place-items:center;font-size:12px;font-weight:800;flex:none}
+.loc b{font-size:14px;display:block}.loc small{font-size:11.5px;color:#a1a1aa}
+.bar{display:flex;gap:2px;align-items:flex-end;height:16px}
+.bar i{width:4px;border-radius:2px;background:rgba(255,255,255,.2)}
+/* web-panel skin */
+div[dir="rtl"][style*="width: 390px"]{background:radial-gradient(75% 45% at 90% -8%,rgba(255,255,255,.08),transparent 68%),linear-gradient(180deg,#0e0e10,#0a0a0b 70%) !important}
+div[role="dialog"]{background:rgba(18,18,19,.72) !important;border:0 !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.32),inset 0 0 0 1px rgba(255,255,255,.06),0 -20px 50px -20px rgba(0,0,0,.8);-webkit-backdrop-filter:blur(26px) saturate(1.7) !important;backdrop-filter:blur(26px) saturate(1.7) !important}
+.loc{border:0 !important;border-radius:20px !important;background:rgba(255,255,255,.075) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.28),inset 0 0 0 1px rgba(255,255,255,.06)}
+.loc.on{background:rgba(255,255,255,.14) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.32),inset 0 0 0 1.5px #f4f4f5}
+div[role="dialog"] a{border-radius:999px !important}
+div[role="dialog"] a:not([style*="#f4f4f5"]){border:0 !important;background:rgba(255,255,255,.1);box-shadow:inset 0 1px 0 rgba(255,255,255,.28),inset 0 0 0 1px rgba(255,255,255,.07)}
+</style>
+</helmet>
+<div dir="rtl" style="width: 390px; height: 844px; box-sizing: border-box; background: #0a0a0b; color: #f4f4f5; font-family: Vazirmatn, system-ui, sans-serif; position: relative; overflow: hidden">
+<div aria-hidden="true" style="padding: 20px 16px; display: flex; flex-direction: column; gap: 12px; opacity: .35">
+<div style="font-size: 18px; font-weight: 800">نکسا پلاس ۵۰ گیگ</div>
+<div style="height: 160px; border-radius: 22px; background: rgba(255,255,255,.06)"></div>
+<div style="height: 110px; border-radius: 22px; background: rgba(255,255,255,.06)"></div>
+</div>
+<div style="position: absolute; inset: 0; background: rgba(0,0,0,.55)"></div>
+
+<div role="dialog" aria-label="تغییر لوکیشن" style="position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 16px 20px; border-radius: 28px 28px 0 0; background: rgba(28,28,31,.92); border-top: 1px solid rgba(255,255,255,.14); -webkit-backdrop-filter: blur(28px); backdrop-filter: blur(28px); display: flex; flex-direction: column; gap: 10px">
+<div style="width: 40px; height: 5px; border-radius: 99px; background: rgba(255,255,255,.25); align-self: center; margin-bottom: 6px"></div>
+<div style="display: flex; justify-content: space-between; align-items: center">
+<div style="font-size: 17px; font-weight: 800">تغییر لوکیشن</div>
+<span style="font-size: 11.5px; padding: 4px 10px; border-radius: 99px; background: rgba(255,159,67,.16); color: #ffc48a">۱ تغییر دیگر این ماه</span>
+</div>
+<div style="font-size: 12px; color: #a1a1aa; line-height: 1.7">حجم و زمان سرویس حفظ می‌شود؛ بعد از تغییر، لینک را در برنامه به‌روز کنید.</div>
+
+<button class="loc on"><span class="cc">DE</span><span style="flex: 1"><b>آلمان</b><small>فعلی</small></span><span class="bar" aria-label="کیفیت خوب"><i style="height: 6px; background: #4f8cff"></i><i style="height: 10px; background: #4f8cff"></i><i style="height: 16px; background: #4f8cff"></i></span></button>
+<button class="loc"><span class="cc">NL</span><span style="flex: 1"><b>هلند</b><small>پیشنهادی</small></span><span class="bar" aria-label="کیفیت خوب"><i style="height: 6px; background: #4f8cff"></i><i style="height: 10px; background: #4f8cff"></i><i style="height: 16px; background: #4f8cff"></i></span></button>
+<button class="loc"><span class="cc">FI</span><span style="flex: 1"><b>فنلاند</b><small>رایگان</small></span><span class="bar" aria-label="کیفیت متوسط"><i style="height: 6px; background: #4f8cff"></i><i style="height: 10px; background: #4f8cff"></i><i style="height: 16px"></i></span></button>
+<button class="loc dis" disabled=""><span class="cc">TR</span><span style="flex: 1"><b>ترکیه</b><small>ظرفیت تکمیل</small></span></button>
+
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 4px">
+<a href="Service.dc.html" style="height: 50px; border-radius: 15px; border: 1px solid rgba(255,255,255,.14); display: flex; align-items: center; justify-content: center; font-weight: 600">انصراف</a>
+<a href="Service.dc.html" style="height: 50px; border-radius: 15px; background: #f4f4f5; color: #0a0a0b; font-weight: 800; display: flex; align-items: center; justify-content: center">انتقال به هلند</a>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
