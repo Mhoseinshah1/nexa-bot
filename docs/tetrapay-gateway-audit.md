@@ -50,6 +50,24 @@ a payment that closed.
 `tests/integration/tetrapay-gateway.test.ts` (create and verify, duplicate webhook, mismatch,
 signature cases, no-secret webhook, daily limit, `Retry-After`, `GATEWAY_SUSPENDED`, late credit).
 
+Round 9 C4 added the end-to-end cases that were missing: verify `expired` → the payment FAILED,
+the customer told once (`GATEWAY_PAYMENT_FAILED`) and the L4 headline «پرداخت منقضی شد»
+(`ops.financial.payment_expired`); a late verify after that expiry settles nothing; the customer
+fee end to end (the payable sent in rial, the wallet credited the principal); and
+`tests/integration/tetrapay-bot-return.test.ts`, the bot's `/start tp-<payment>` through a real
+API app (the invoice again with its link, the preparing screen, a stranger answered as closed,
+a malformed payload read as a plain `/start`).
+
+## 3a. Readiness in Web Admin (Round 9 C4)
+
+The route is fully configured from Web Admin (key, optional webhook secret, fee, min/max, the
+late-credit switch on the route's page) and starts DISABLED. Switching it on without its key is
+refused with `PAYMENT_GATEWAY_UNAVAILABLE` and `details.reason = CREDENTIAL_MISSING`; the page now
+reads that reason (`gatewayEnableRefusalText`, `apps/web/src/error-text.ts`) and says in Persian
+exactly what is missing — «این درگاه روشن نشد: کلید API آن ثبت نشده است…» — instead of the
+generic «درگاه پرداخت اکنون در دسترس نیست». The same mapping covers every route's other gaps
+(webhook secret, verify key, rate, central FX).
+
 ## 4. Open questions
 
 `docs/open-questions.md`, "TetraPay": OQ-TP-01..05 - only what the documentation does not say.

@@ -4351,3 +4351,34 @@ never an approval) until the real-provider acceptance (`OQ-WP10-01`) answers it.
   Rezaei"); Nexa accepts letters and spaces in any script (three to sixty-four characters) and
   the provider's `INVALID_REFUND_HOLDER` is shown if it disagrees. The example card
   `6037991234567890` fails Luhn, so no checksum is applied locally.
+
+## Rialit (Round 9 item C4, `docs/rialit-gateway-audit.md`)
+
+The owner-provided Rialit API doc (version 1) answers the shape of every call, status, event and
+error text; what follows is only what it does not settle.
+
+- **OQ-RL-01 — live acceptance with real credentials; no sandbox.** UNRESOLVED. Owed on staging
+  with a real merchant: the API key set, the payer fee in Rialit's dashboard at zero while Nexa's
+  fee is set (or the reverse), one 50,000-Toman top-up paid on the page, the wallet rising by
+  exactly the principal, the dashboard's test webhook answered 2xx. Any real shape that differs
+  from the document corrects the fake in `tests/integration/rialit-gateway.test.ts` in the same
+  commit. Until then the route ships `DISABLED` and is not claimed as accepted.
+- **OQ-RL-02 — the webhook sender addresses.** The document says to accept webhooks only from the
+  addresses its dashboard shows; they are not published, and Nexa has no per-route client-address
+  filter. None is enforced: a forged webhook can only bring a rate-limited status read forward. A
+  follow-up setting (a CIDR list per route, read against `request.ip` behind `TRUSTED_PROXY_IPS`)
+  is the owner's call.
+- **OQ-RL-03 — whether a 5xx or a timeout on `POST /send` can have created a payment, and whether
+  the documented "same body is safe" holds.** Nexa never re-sends a lost create (CREATE_UNKNOWN,
+  reconciled by READ). If the real provider proves the idempotency, an operator-driven re-send of
+  the identical body could become the READ that resolves an UNKNOWN; not built.
+- **OQ-RL-04 — whether `expired` / `cancelled` really turn `paid`, and how late.** Read as OPEN
+  (Nexa's 70-minute deadline closes the attempt); a later `paid` is a late completion, credited only
+  with `payments.late_credit.rialit_enabled` (OFF). The document's "stop polling after one day" is
+  longer than the default late-credit window (48 h is the window for asking; polling past the
+  attempt is bounded by it).
+- **OQ-RL-05 — a Mini App (`web_app`) pay button.** The document recommends it; the bot has no
+  `web_app` button kind yet (the Mini App is Round 9 C5). v1 uses a URL button.
+- **OQ-RL-06 — whether Rialit's payer fee can be forced to zero per payment.** It is a merchant
+  setting only. The one-fee rule refuses a create where both Nexa and Rialit charge; whether the
+  owner prefers Nexa's fee or Rialit's is a configuration choice, not a code one.
