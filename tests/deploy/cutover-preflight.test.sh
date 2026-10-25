@@ -46,8 +46,31 @@ green_installation() {
   fake_set backup_list "$(backup_line '1 hour ago')"
   fake_set migrate_check current
   fake_set owner_state none
-  mkdir -p "${NEXA_ROOT}/var/lib/docker"
-  export NEXA_DOCKER_DATA_DIR="${NEXA_ROOT}/var/lib/docker"
+  mkdir -p "${NEXA_ROOT}/var/lib/docker/volumes"
+  fake_set docker_root_dir "${NEXA_ROOT}/var/lib/docker"
+  setup_fake_df
+}
+
+# A fake `df`, so the disk line is decided by what a test says each filesystem holds rather
+# than by the free space of whatever machine runs the suite. Every directory reads 100 GiB
+# free; `df_small` names one that reads 1 MiB, `df_unreadable` one df cannot answer for.
+# Each call is logged, so a test can see WHICH directories were measured.
+setup_fake_df() {
+  : >"${FAKE_DIR}/df.log"
+  cat >"${FAKE_DIR}/bin/df" <<'FAKE'
+#!/usr/bin/env bash
+set -uo pipefail
+read_state() { cat "${FAKE_DIR}/$1" 2>/dev/null || printf '%s' "$2"; }
+dir="${*: -1}"
+printf '%s\n' "$dir" >>"${FAKE_DIR}/df.log"
+[ "$dir" != "$(read_state df_unreadable '')" ] || exit 1
+avail=104857600
+[ "$dir" != "$(read_state df_small '')" ] || avail=1024
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n'
+printf 'fake 209715200 0 %s 1%% /\n' "$avail"
+FAKE
+  chmod +x "${FAKE_DIR}/bin/df"
+  hash -r
 }
 
 preflight() { run_botctl cutover preflight --min-free-gib 0 "$@"; }
@@ -100,6 +123,15 @@ test_case 'cutover preflight: release — not the approved version'
 green_installation
 preflight --expect-version v9.9.9
 expect_fail release 'the approved release is v9.9.9'
+teardown_root
+
+test_case 'cutover preflight: release — the recorded release has no manifest'
+green_installation
+rm -f "${NEXA_STATE_DIR}/releases/v1.0.0.json"
+preflight --expect-version v1.0.0
+expect_fail release 'cannot be confirmed against source'
+assert_contains 'the diagnostic was suppressed' "$BOTCTL_OUTPUT" 'no release manifest for v1.0.0'
+assert_contains 'the diagnostic does not say how to settle it' "$BOTCTL_OUTPUT" "'botctl update v1.0.0' records one"
 teardown_root
 
 test_case 'cutover preflight: release — deploy.env would start another image'
@@ -204,6 +236,53 @@ test_case 'cutover preflight: disk — less free than required'
 green_installation
 run_botctl cutover preflight --min-free-gib 100000000
 expect_fail disk 'need 100000000 GiB'
+teardown_root
+
+test_case 'cutover preflight: disk — the Docker data root moved to another filesystem'
+green_installation
+rm -rf "${NEXA_ROOT}/var/lib/docker"
+mkdir -p "${NEXA_ROOT}/mnt/docker-data/volumes"
+fake_set docker_root_dir "${NEXA_ROOT}/mnt/docker-data"
+preflight
+assert_equals 'a moved data root failed the preflight' 0 "$BOTCTL_STATUS"
+assert_contains 'the disk line does not name the moved root' "$(check_line disk)" "${NEXA_ROOT}/mnt/docker-data/volumes"
+assert_contains 'the data root was not asked of the daemon' "$(docker_log)" "info --format {{.DockerRootDir}}"
+# The moved root is what is measured: short there is a FAIL, whatever the state directory holds.
+fake_set df_small "${NEXA_ROOT}/mnt/docker-data"
+run_botctl cutover preflight --min-free-gib 1
+expect_fail disk "${NEXA_ROOT}/mnt/docker-data has 0 GiB free"
+teardown_root
+
+test_case 'cutover preflight: disk — the volumes directory, on its own filesystem, is short'
+green_installation
+fake_set df_small "${NEXA_ROOT}/var/lib/docker/volumes"
+run_botctl cutover preflight --min-free-gib 1
+expect_fail disk "${NEXA_ROOT}/var/lib/docker/volumes has 0 GiB free"
+teardown_root
+
+test_case 'cutover preflight: disk — the daemon does not name its data root'
+green_installation
+fake_set info_exit 1
+preflight
+expect_fail disk "data root could not be determined"
+fake_set info_exit 0
+fake_set docker_root_dir ''
+preflight
+expect_fail disk "data root could not be determined"
+teardown_root
+
+test_case 'cutover preflight: disk — the data root the daemon names does not exist'
+green_installation
+fake_set docker_root_dir "${NEXA_ROOT}/srv/gone"
+preflight
+expect_fail disk "${NEXA_ROOT}/srv/gone does not exist"
+teardown_root
+
+test_case 'cutover preflight: disk — free space on the data root cannot be read'
+green_installation
+fake_set df_unreadable "${NEXA_ROOT}/var/lib/docker"
+preflight
+expect_fail disk "${NEXA_ROOT}/var/lib/docker free space unreadable"
 teardown_root
 
 test_case 'cutover preflight: telegram — a bot already receives updates before the handover'

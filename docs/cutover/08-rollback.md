@@ -93,8 +93,9 @@ crons and `read_only = OFF` per R0, then confirm a button answers.
 **`read-only`**
 
 Run the snapshot query of [`07-background-roles.md`](07-background-roles.md) with `since` =
-H3's time. Expected: payments, non-opening wallet entries, orders and provisioning
-operations all 0. Any non-zero: settle by hand in Mirza
+H3's time. Expected: payments, non-opening wallet entries, orders (`orders_since` and
+`orders_changed_since`), services (`services_since`, and `services_changed_since` while the
+provisioner is off) and provisioning operations all 0. Any non-zero: settle by hand in Mirza
 (**`OWNER ONLY — separate explicit approval`**).
 
 ## R2 — after provisioner / monitor on

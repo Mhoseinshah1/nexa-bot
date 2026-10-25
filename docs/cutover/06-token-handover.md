@@ -113,7 +113,10 @@ old Mirza button in that chat → «این دکمه قدیمی است…» and t
 
 Verification: as described; and `orders`, `payments`, `wallet_entries`, `services` and
 `provisioning_operations` are unchanged — read with the snapshot query of
-[`07-background-roles.md`](07-background-roles.md) (B1) using `since` = H3's time.
+[`07-background-roles.md`](07-background-roles.md) using `since` = H3's time: no
+`provisioning_ops_since`, `payments_since`, `wallet_entries_since`, `orders_since`,
+`orders_changed_since`, `services_since` or `services_changed_since` line (the provisioner is
+still off, so not even a usage sync may touch a service).
 
 Rollback: R1.
 
@@ -152,7 +155,7 @@ OQ-CUT-01 است و پیش از GO-4 مالک آن را می‌پذیرد.
 - **H3** (فقط مالک — تلگرام تولید): اجرای دوبارهٔ نصب‌کننده بدون `--skip-telegram`؛ توکن بدون echo
   پرسیده می‌شود. بازگشت: R1.
 - **H4** (فقط خواندنی): `botctl telegram status` و پیش‌پرواز با `--expect-telegram ready`.
-- **H5** (فقط مالک): فقط از حساب شخصی مالک: `/start` و یک دکمهٔ قدیمی؛ هیچ سفارش، پرداخت یا
-  ورودی کیف پول نباید تغییر کند.
+- **H5** (فقط مالک): فقط از حساب شخصی مالک: `/start` و یک دکمهٔ قدیمی؛ هیچ سفارش، سرویس، پرداخت،
+  ورودی کیف پول یا عملیات provisioning نباید ساخته یا تغییر داده شود (کوئری اسنپ‌شات از زمان H3).
 - **H6** (فقط خواندنی): شناسهٔ نمونهٔ ربات را برای B6/B7 ثبت کنید.
 - **H7**: اطلاع‌رسانی دستیِ مالک، اختیاری تا باز شدن فروش.

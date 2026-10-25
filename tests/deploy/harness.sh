@@ -615,6 +615,20 @@ case "${1:-}" in
   ps)
     exit 0
     ;;
+  info)
+    # `docker info --format '{{.DockerRootDir}}'`: where the daemon keeps its data, and so
+    # the named volumes (`botctl cutover preflight`'s disk line). `docker_root_dir` is what
+    # a test says the daemon answers; `info_exit` is a daemon that does not answer at all.
+    [ "$(read_state info_exit 0)" = 0 ] || exit 1
+    case "$*" in
+      *'{{.DockerRootDir}}'*) printf '%s\n' "$(read_state docker_root_dir '')" ;;
+      *)
+        printf 'fake docker: unmodelled info call: %s\n' "$*" >&2
+        exit 1
+        ;;
+    esac
+    exit 0
+    ;;
   inspect)
     # The environment a running container was CREATED with, which is a different
     # fact from the file on the host — `nexa_running_edge_config` and

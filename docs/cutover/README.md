@@ -40,8 +40,11 @@ except through the same read-only CLIs `botctl status` already runs.
 - **`sudo botctl cutover preflight [--expect-version V] [--expect-telegram none|ready]
 [--max-backup-age-hours N] [--min-free-gib N]`** — eight checks (release, readiness,
   recovery role, provisioner and monitor off, migrations, a fresh verified backup, disk, the
-  Telegram webhook), `PASS`/`FAIL` each; exit 0 only when all pass. It takes no lock and
-  starts or stops nothing. Tests: `tests/deploy/cutover-preflight.test.sh`.
+  Telegram webhook), `PASS`/`FAIL` each; exit 0 only when all pass. A release with no
+  manifest cannot be confirmed and FAILs; the disk line measures Docker's data root as
+  `docker info` reports it (where the database and backup volumes live) and FAILs when it
+  cannot. It takes no lock and starts or stops nothing. Tests:
+  `tests/deploy/cutover-preflight.test.sh`.
 - **`migrate.js --check`** — one word (`current`, `ahead`, `behind`, `none`, `diverged`);
   applies nothing. The preflight's `migrations` line.
 - **`cutover-reconcile`** (`node dist/cutover-reconcile.cli.js` in the image,

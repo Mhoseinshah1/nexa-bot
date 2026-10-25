@@ -38,22 +38,48 @@ date -u +%FT%TZ | tee t0-start.txt
 
 Used by B1, B3, B5 and B8 (and by H5 and the loss lists in [`08-rollback.md`](08-rollback.md)).
 `:since` is a UTC time in single quotes inside the double quotes. psql interpolates `:since`
-only in a script read with `-f`, never in `-c`, hence the heredoc.
+only in a script read with `-f`, never in `-c`, hence the heredoc. It runs in a `READ ONLY`
+transaction, so a mistyped edit of it cannot write.
 
 ```bash
-sudo $DC exec -T postgres psql -U nexa -d nexa -X -At -v since="'<UTC time>'" -f - <<'SQL'
-
+sudo $DC exec -T postgres psql -U nexa -d nexa -X -q -At -v ON_ERROR_STOP=1 -v since="'<UTC time>'" -f - <<'SQL'
+BEGIN READ ONLY;
   SELECT 'provisioning_ops_since', type || ':' || state, count(*) FROM provisioning_operations
      WHERE created_at >= :since GROUP BY 2
   UNION ALL SELECT 'customer_notifications_since', state, count(*) FROM customer_notifications
      WHERE created_at >= :since GROUP BY 2
   UNION ALL SELECT 'payments_since', state, count(*) FROM payments WHERE created_at >= :since GROUP BY 2
   UNION ALL SELECT 'wallet_entries_since', reason, count(*) FROM wallet_entries WHERE created_at >= :since GROUP BY 2
+  UNION ALL SELECT 'orders_since', state, count(*) FROM orders WHERE created_at >= :since GROUP BY 2
+  UNION ALL SELECT 'orders_changed_since', state, count(*) FROM orders
+     WHERE created_at < :since AND updated_at >= :since GROUP BY 2
+  UNION ALL SELECT 'services_since', state, count(*) FROM services WHERE created_at >= :since GROUP BY 2
+  UNION ALL SELECT 'services_changed_since', state, count(*) FROM services
+     WHERE created_at < :since AND updated_at >= :since GROUP BY 2
+  UNION ALL SELECT 'orders_fingerprint', coalesce(md5(string_agg(id::text || ':' || state, ',' ORDER BY id)), '-'),
+     count(*) FROM orders
+  UNION ALL SELECT 'services_fingerprint', coalesce(md5(string_agg(id::text || ':' || state || ':'
+       || coalesce(expires_at::text, '-') || ':' || coalesce(traffic_limit_bytes::text, '-') || ':'
+       || coalesce(device_limit::text, '-') || ':' || panel_id::text || ':' || customer_id::text, ','
+       ORDER BY id)), '-'), count(*) FROM services
   UNION ALL SELECT 'ops_events_open', code, count(*) FROM operational_events WHERE resolved_at IS NULL GROUP BY 2
   UNION ALL SELECT 'panel_health', p.name || ':' || coalesce(h.state, 'UNCHECKED'), 1
      FROM panels p LEFT JOIN panel_health h ON h.panel_id = p.id;
+ROLLBACK;
 SQL
 ```
+
+Reading it: a `_since` line that is absent means 0. `orders_since` counts every order
+created — a DRAFT included, because `OrderService.createDraft` stores the order before any
+payment; `orders_changed_since` counts older orders whose state moved. `services_since` counts
+services created. `services_changed_since` also counts the usage sync's own touches (it
+updates `updated_at`), so once the provisioner is on it is not the test: the two
+**fingerprints** are — a hash over every order's state and every service's state, expiry,
+traffic and device limit, panel and customer (usage counters excluded), with the row count
+beside it. An unchanged fingerprint means no order or service was created, renewed,
+suspended, moved or removed since the earlier snapshot. Tests:
+`tests/integration/cutover-snapshot-query.test.ts` runs this block, as written here, against
+the real schema.
 
 ## B1 — Baseline
 
@@ -107,6 +133,8 @@ Verification:
 - `customer_notifications` since b1 = 0; no `notification.reminder_burst`; no new
   provisioner lane event;
 - payments and wallet entries since b1 = 0;
+- `orders_since`, `orders_changed_since` and `services_since` = 0, and `orders_fingerprint`
+  and `services_fingerprint` equal `b1.tsv`'s (no order or service created or changed);
 - RickPanel's own access log shows GETs and the token exchange only.
 
 Rollback: B2's rollback. If a write reached RickPanel: P0 incident, R2.
@@ -136,7 +164,8 @@ sudo botctl roles disable monitor
 Precondition: B4. Wait one monitor interval plus margin. Run the snapshot query → `b5.tsv`.
 
 Verification: every RickPanel health is HEALTHY (or its reason is shown); no new open ops
-event; RickPanel's log shows GETs only.
+event; RickPanel's log shows GETs only; `orders_fingerprint` and `services_fingerprint` still
+equal `b1.tsv`'s.
 
 Rollback: B4's rollback.
 
@@ -230,9 +259,12 @@ b1.txt and the four `.tsv` snapshots; B7's linked count; B9's time.
   اجرا می‌شود.
 - **B1** (فقط خواندنی): خط پایه. **B2** (فقط مالک — با تأیید صریح جداگانه): فعال‌سازی provisioner.
 - **B3** (فقط خواندنی): ۱۵ تا ۳۰ دقیقه صبر؛ هیچ `CREATE`/`RENEW`/`SUSPEND`/`TERMINATE`، هیچ
-  `customer_notifications`، پرداخت یا ورودی کیف پول، و در لاگ RickPanel فقط GET. نوشتن روی
-  RickPanel یعنی رخداد P0 و R2.
-- **B4** (فقط مالک): فعال‌سازی monitor. **B5** (فقط خواندنی): سلامت همهٔ پنل‌ها.
+  `customer_notifications`، پرداخت یا ورودی کیف پول، هیچ سفارش یا سرویس تازه یا تغییرکرده
+  (`orders_since`، `orders_changed_since`، `services_since` صفر و دو اثرانگشت
+  `orders_fingerprint` و `services_fingerprint` برابر `b1.tsv`)، و در لاگ RickPanel فقط GET.
+  نوشتن روی RickPanel یعنی رخداد P0 و R2.
+- **B4** (فقط مالک): فعال‌سازی monitor. **B5** (فقط خواندنی): سلامت همهٔ پنل‌ها؛ دو اثرانگشت
+  همچنان برابر `b1.tsv`.
 - **B6** (فقط خواندنی): اجرای آزمایشی اتصال مشتریان. **B7** (فقط مالک): `--apply` با
   `CUSTOMER_FIRST_BOT_BACKFILL_CONFIRM=yes`؛ **یادآورها برای همهٔ مشتریان روشن می‌شوند** و پس‌گرفتنی
   نیستند (فقط خاموش‌کردن پرچم‌های یادآور). OQ-CUT-04 نامعلوم است.

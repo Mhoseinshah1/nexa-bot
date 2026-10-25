@@ -2475,17 +2475,27 @@ cmd_cutover_preflight() {
   printf 'cutover preflight — read only; nothing here changes the installation\n\n'
 
   # 1. The release: recorded, agreeing with deploy.env, and the one the owner approved.
-  local version divergence=0
+  # Every non-zero answer of `nexa_check_divergence` is a FAIL here, not only 1. Its 2 means
+  # the recorded release has no manifest, so what this installation runs cannot be confirmed
+  # against source; `status` and `restart` treat that as a warning, but a cutover cannot
+  # start on a release nobody can confirm — `--expect-version` compared a name only, and a
+  # deleted manifest still read `PASS release`. Its diagnostic is printed under the line.
+  local version divergence=0 divergence_report=""
   version="$(nexa_current_version 2>/dev/null || true)"
-  nexa_check_divergence >/dev/null 2>&1 || divergence=$?
+  divergence_report="$(nexa_check_divergence 2>&1 >/dev/null)" || divergence=$?
   if [ -z "$version" ]; then
     cutover_line FAIL release "no current release is recorded"
   elif [ "$divergence" -eq 1 ]; then
     cutover_line FAIL release "${version}: deploy.env would start a different image (botctl version says which)"
+  elif [ "$divergence" -ne 0 ]; then
+    cutover_line FAIL release "${version}: no release manifest, so the recorded release cannot be confirmed against source"
   elif [ -n "$expect_version" ] && [ "$version" != "$expect_version" ]; then
     cutover_line FAIL release "${version} is installed; the approved release is ${expect_version}"
   else
     cutover_line PASS release "${version}${expect_version:+ (the approved release)}"
+  fi
+  if [ -n "$version" ] && [ "$divergence" -ne 0 ] && [ -n "$divergence_report" ]; then
+    printf '%s\n' "$divergence_report" | sed 's/^/      /'
   fi
 
   # 2. Readiness, the same five-second probe `botctl status` makes.
@@ -2568,19 +2578,41 @@ recovery
     fi
   fi
 
-  # 7. Disk: the backup directory, the state directory and Docker's data root.
-  local dir avail short="" checked=""
-  for dir in "$NEXA_BACKUP_DIR" "$NEXA_STATE_DIR" "${NEXA_DOCKER_DATA_DIR:-/var/lib/docker}"; do
-    [ -d "$dir" ] || continue
-    avail="$(df -Pk "$dir" 2>/dev/null | awk 'NR == 2 { print $4 }')"
+  # 7. Disk: the backup directory, the state directory, and the storage behind the named
+  # volumes compose.yml declares (pgdata, backups, recovery, legacymigration). Those are
+  # local-driver volumes, so they live under Docker's data root — wherever the DAEMON says
+  # it is, not where it usually is: a root moved to another filesystem (`data-root` in
+  # daemon.json) left `/var/lib/docker` absent, the check skipped it, and the state
+  # directory's free space alone produced PASS. The root and its `volumes` directory are
+  # REQUIRED: a root the daemon will not name, or free space df cannot read, is a FAIL.
+  local dir avail short="" checked="" docker_root=""
+  docker_root="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null)" || docker_root=""
+  docker_root="$(printf '%s' "$docker_root" | tr -d '\r\n')"
+  case "$docker_root" in
+    /*) ;;
+    *)
+      docker_root=""
+      short="Docker's data root could not be determined (docker info)"
+      ;;
+  esac
+  for dir in "$NEXA_BACKUP_DIR" "$NEXA_STATE_DIR" ${docker_root:+"$docker_root" "${docker_root%/}/volumes"}; do
+    if [ ! -d "$dir" ]; then
+      # The host directories may legitimately be absent; Docker's storage may not.
+      case "$dir" in
+        "$NEXA_BACKUP_DIR" | "$NEXA_STATE_DIR") ;;
+        *) short="${short:+${short}; }${dir} does not exist" ;;
+      esac
+      continue
+    fi
+    avail="$(df -Pk "$dir" 2>/dev/null | awk 'NR == 2 { print $4 }')" || avail=""
     checked="${checked:+${checked}, }${dir}"
     case "$avail" in
-      '' | *[!0-9]*) short="${short:+${short}; }${dir} unreadable" ;;
+      '' | *[!0-9]*) short="${short:+${short}; }${dir} free space unreadable" ;;
       *) [ "$avail" -ge $((min_free_gib * 1024 * 1024)) ] ||
         short="${short:+${short}; }${dir} has $((avail / 1024 / 1024)) GiB free" ;;
     esac
   done
-  if [ -z "$checked" ]; then
+  if [ -z "$checked" ] && [ -z "$short" ]; then
     cutover_line FAIL disk "none of the directories exists"
   elif [ -z "$short" ]; then
     cutover_line PASS disk "at least ${min_free_gib} GiB free on ${checked}"
