@@ -1,5 +1,6 @@
 import type { TenantContext } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 /**
  * How often the loop wakes.
@@ -72,7 +73,10 @@ export class CustomerReminderLoop {
   start(): void {
     if (this.timer !== null) return;
     this.progress.begin(this.options.now());
-    this.timer = setInterval(() => void this.tick(), this.options.intervalMs);
+    this.timer = setInterval(
+      guardedTick('customer-reminders', () => this.tick(), this.options.logger),
+      this.options.intervalMs,
+    );
     this.timer.unref?.();
   }
 

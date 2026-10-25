@@ -32,15 +32,23 @@ export function currentCorrelationId(): CorrelationId | undefined {
   return storage.getStore()?.correlationId;
 }
 
+/**
+ * Every method is an arrow-function field, bound to its instance, so a method may be
+ * detached and still work: `(logger.warn ?? logger.info)(…)`, `.catch(logger.error)`,
+ * `{ warn } = logger`. A prototype method read off its object loses `this`, and
+ * `this.emit` then throws a TypeError out of the log call itself — which is how v0.8.2's
+ * worker crash-looped: the FX loop's back-off warning threw inside its `try`, the `catch`
+ * logged again and threw again, and the unhandled rejection exited the process.
+ * `tests/unit/logger-detached-methods.test.ts` pins it.
+ */
 class PinoLogger implements Logger {
   constructor(private readonly inner: pino.Logger) {}
 
-  child(bindings: Record<string, unknown>): Logger {
-    // A child's bindings are serialised once, here, and never pass through the
-    // `logMethod` hook below — nor through pino's `formatters.bindings`, which a
-    // child resets. So they are redacted on the way in (FIX-04).
-    return new PinoLogger(this.inner.child(redactForLog(bindings)));
-  }
+  // A child's bindings are serialised once, here, and never pass through the
+  // `logMethod` hook below — nor through pino's `formatters.bindings`, which a
+  // child resets. So they are redacted on the way in (FIX-04).
+  readonly child = (bindings: Record<string, unknown>): Logger =>
+    new PinoLogger(this.inner.child(redactForLog(bindings)));
 
   private emit(
     level: 'trace' | 'debug' | 'info' | 'warn' | 'error',
@@ -51,21 +59,21 @@ class PinoLogger implements Logger {
     this.inner[level](correlationId ? { ...context, correlationId } : context, message);
   }
 
-  trace(context: Record<string, unknown>, message: string): void {
+  readonly trace = (context: Record<string, unknown>, message: string): void => {
     this.emit('trace', context, message);
-  }
-  debug(context: Record<string, unknown>, message: string): void {
+  };
+  readonly debug = (context: Record<string, unknown>, message: string): void => {
     this.emit('debug', context, message);
-  }
-  info(context: Record<string, unknown>, message: string): void {
+  };
+  readonly info = (context: Record<string, unknown>, message: string): void => {
     this.emit('info', context, message);
-  }
-  warn(context: Record<string, unknown>, message: string): void {
+  };
+  readonly warn = (context: Record<string, unknown>, message: string): void => {
     this.emit('warn', context, message);
-  }
-  error(context: Record<string, unknown>, message: string): void {
+  };
+  readonly error = (context: Record<string, unknown>, message: string): void => {
     this.emit('error', context, message);
-  }
+  };
 }
 
 /**

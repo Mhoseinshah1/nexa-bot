@@ -10,6 +10,7 @@ import {
 } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { TelegramMessageStateService } from './telegram-message-state.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 /** Hourly, like the identity and ticket-file sweepers: the rows it removes are long dead. */
 export const TELEGRAM_MESSAGE_RETENTION_INTERVAL_MS = 3_600_000;
@@ -91,8 +92,9 @@ export class TelegramMessageRetentionLoop {
   start(): void {
     if (this.timer !== null) return;
     this.progress.begin(this.options.now());
-    this.firstRun = setTimeout(() => void this.tick(), this.options.initialDelayMs);
-    this.timer = setInterval(() => void this.tick(), this.options.intervalMs);
+    const tick = guardedTick('telegram-message-retention', () => this.tick(), this.options.logger);
+    this.firstRun = setTimeout(tick, this.options.initialDelayMs);
+    this.timer = setInterval(tick, this.options.intervalMs);
     this.firstRun.unref?.();
     this.timer.unref?.();
   }

@@ -4,6 +4,7 @@ import { Client } from 'pg';
 import { readArchiveHeader } from '../../backup/infrastructure/archive.js';
 import { assertNotLiveTarget } from '../../backup/infrastructure/pg-tools.js';
 import { SECRET_COLUMNS } from '../../../../infrastructure/crypto/secret-registry.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 import {
   resolveStoredKeys,
   type InstallationKeyring,
@@ -355,7 +356,10 @@ export class InstallationKeyLoader {
 
   start(intervalMs: number): void {
     if (this.timer !== null) return;
-    this.timer = setInterval(() => void this.refreshQuietly(), intervalMs);
+    this.timer = setInterval(
+      guardedTick('installation-key-refresh', () => this.refreshQuietly(), this.logger),
+      intervalMs,
+    );
     this.timer.unref();
   }
 

@@ -13,6 +13,7 @@ import {
   SUPPORT_ASSISTANT_WATCH_INTERVAL_MS,
   type SupportAssistantLiveness,
 } from './assistant-watch.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 export const ASSISTANT_INTERVAL_MS = 2_000;
 /** The bounds a job's worst case is derived from. */
@@ -115,7 +116,10 @@ export class AssistantLoop {
   start(): void {
     if (this.timer !== null) return;
     this.progress.begin(this.options.now().getTime());
-    this.timer = setInterval(() => void this.tick(), this.options.intervalMs);
+    this.timer = setInterval(
+      guardedTick('assistant', () => this.tick(), this.options.logger),
+      this.options.intervalMs,
+    );
     this.timer.unref?.();
   }
 

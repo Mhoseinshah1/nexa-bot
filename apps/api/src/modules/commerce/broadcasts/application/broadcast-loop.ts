@@ -1,6 +1,7 @@
 import type { TenantContext } from '@nexa/contracts';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { BroadcastDispatcher } from './broadcast-dispatcher.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 /**
  * How often the broadcast lane runs: every second, because its pacing is per second
@@ -45,7 +46,10 @@ export class BroadcastLoop {
   start(): void {
     if (this.timer !== null) return;
     this.progress.begin(this.options.now());
-    this.timer = setInterval(() => void this.tick(), this.options.intervalMs);
+    this.timer = setInterval(
+      guardedTick('broadcasts', () => this.tick(), this.options.logger),
+      this.options.intervalMs,
+    );
     this.timer.unref?.();
   }
 

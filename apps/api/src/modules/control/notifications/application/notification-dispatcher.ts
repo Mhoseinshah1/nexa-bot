@@ -35,6 +35,7 @@ import type {
   TransportResult,
 } from './ports.js';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
+import { runGuardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 export interface DispatcherOptions {
   readonly pollIntervalMs: number;
@@ -322,17 +323,22 @@ export class NotificationDispatcher {
         // Held so `stop` can wait for it. A tick that is mid-send owns a
         // claimed row, and the outcome of that send has nowhere to go once the
         // pool is closed.
-        const running = this.tick()
-          .catch((error: unknown) => {
-            this.logger.error(
-              { err: error instanceof Error ? error.message : String(error) },
-              'Notification dispatcher tick failed',
-            );
-          })
-          .finally(() => {
-            this.inFlight = null;
-            loop();
-          });
+        // Guarded: the `catch` below logging through a logger that throws used to reject
+        // `running` with nothing left to catch it, and an unhandled rejection exits Node.
+        const running = runGuardedTick(
+          'notification-dispatcher',
+          () =>
+            this.tick().catch((error: unknown) => {
+              this.logger.error(
+                { err: error instanceof Error ? error.message : String(error) },
+                'Notification dispatcher tick failed',
+              );
+            }),
+          this.logger,
+        ).finally(() => {
+          this.inFlight = null;
+          loop();
+        });
         this.inFlight = running;
         void running;
       }, this.options.pollIntervalMs);

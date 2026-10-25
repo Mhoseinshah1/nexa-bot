@@ -6,6 +6,7 @@ import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
 import { stalledLoops, type LoopHealth } from './infrastructure/lifecycle/loop-health.js';
 import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
+import { installProcessBackstop } from './infrastructure/lifecycle/process-backstop.js';
 import { loopStatusesForReporting } from './modules/platform/opslog/application/loop-stall-reporter.js';
 
 /**
@@ -23,6 +24,12 @@ import { loopStatusesForReporting } from './modules/platform/opslog/application/
 async function main(): Promise<void> {
   const config = loadConfig();
   const container = createContainer(config, 'worker');
+  // A dropped promise is logged and survived; an uncaught exception is logged and exits.
+  installProcessBackstop({
+    role: 'worker',
+    logger: container.logger,
+    exit: (code) => process.exit(code),
+  });
   // The worker needs the installation's tenant for the same reason the API does,
   // and for one more: the notification dispatcher runs for the installation
   // while its rate ceiling is a tenant setting.

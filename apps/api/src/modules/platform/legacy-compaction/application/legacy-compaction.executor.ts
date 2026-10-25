@@ -13,6 +13,7 @@ import type { BackupOutcome } from '../../backup/application/backup.service.js';
 import type { BackupRunPartRow } from '../../backup/application/ports.js';
 import type { LegacyCompactionRepository, LegacyCompactionRow } from './ports.js';
 import { COMPACTION_STRIP_KEYS, compactionDropTypes } from './read-map.js';
+import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
 // ---------------------------------------------------------------------------
 // The executor: the worker's half (its own file: the service has no loop)
@@ -72,7 +73,10 @@ export class LegacyCompactionExecutor {
   start(): void {
     if (this.timer !== null) return;
     this.lastTickAt = this.deps.clock.now().getTime();
-    this.timer = setInterval(() => void this.tick(), this.deps.tickIntervalMs);
+    this.timer = setInterval(
+      guardedTick('legacy-compaction-executor', () => this.tick(), this.deps.logger),
+      this.deps.tickIntervalMs,
+    );
     this.timer.unref();
   }
 
@@ -165,16 +169,25 @@ export class LegacyCompactionExecutor {
 
   /** A long stage, with the lease refreshed while it runs so no replica takes it over. */
   private async heartbeating<T>(run: LegacyCompactionRow, work: () => Promise<T>): Promise<T> {
-    const beat = setInterval(() => {
-      void this.deps.repository
-        .heartbeat({ id: run.id, leaseOwner: this.deps.leaseOwner, now: this.deps.clock.now() })
-        .catch((error: unknown) => {
-          this.deps.logger.warn(
-            { compactionId: run.id, err: error instanceof Error ? error.message : String(error) },
-            'a legacy compaction heartbeat failed',
-          );
-        });
-    }, this.deps.heartbeatIntervalMs ?? HEARTBEAT_MS);
+    const beat = setInterval(
+      guardedTick(
+        'legacy-compaction-heartbeat',
+        () =>
+          this.deps.repository
+            .heartbeat({ id: run.id, leaseOwner: this.deps.leaseOwner, now: this.deps.clock.now() })
+            .catch((error: unknown) => {
+              this.deps.logger.warn(
+                {
+                  compactionId: run.id,
+                  err: error instanceof Error ? error.message : String(error),
+                },
+                'a legacy compaction heartbeat failed',
+              );
+            }),
+        this.deps.logger,
+      ),
+      this.deps.heartbeatIntervalMs ?? HEARTBEAT_MS,
+    );
     beat.unref();
     try {
       return await work();
