@@ -10027,15 +10027,31 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.gateway_card_underpaid',
     description:
-      'TonPays Telegram: the transfer was LESS than the invoice (`action_required_less`). Shows the remainder, the card to pay it to (tap-to-copy buttons under the message) and the deadline. The invoice is never shown as plain open, and nothing is settled until TonPays approves.',
+      'TonPays Telegram: the transfer was LESS than the invoice (`action_required_less`). Shows the remainder, the card to pay it to (tap-to-copy buttons under the message) and the deadline. The invoice is never shown as plain open, and nothing is settled until TonPays approves. v0.8.2 hotfix: the remainder is shown in RIAL (`{amountRial}`, required) with Toman beside it, and its copy button carries the rial digits, exactly as the R8 A2 card invoice does — a remainder shown and copied in Toman was typed into a banking app as rial, ten times too little. `{shortfall}` stays declared and supplied so an override written for the earlier text still renders.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
         token: 'shortfall',
         type: 'MONEY',
         description:
-          'The amount still to be transferred, in Toman, as TonPays reported it (`remaining_amount`). TonPays’ figure for the next transfer — never what Nexa settles or credits.',
+          'The amount still to be transferred, in Toman, as TonPays reported it (`remaining_amount`). TonPays’ figure for the next transfer — never what Nexa settles or credits. Since the v0.8.2 hotfix the default text shows `{amountRial}` instead; this stays supplied for an override written for the earlier text.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'amountRial',
+        type: 'STRING',
+        description:
+          'v0.8.2 hotfix: the remainder still to be transferred, in RIAL: TonPays’ `remaining_amount` (Toman) times ten, in Persian digits grouped by thousands (`۵۳٬۶۸۰`) and with no unit, which the body writes. The copy button carries the same figure as bare ASCII digits (`53680`). TonPays’ figure for the next transfer — display only, never what Nexa settles, credits or refunds.',
         required: true,
+        repeatable: false,
+      },
+      {
+        token: 'amountToman',
+        type: 'STRING',
+        description:
+          'v0.8.2 hotfix: the same remainder in TOMAN, Persian digits grouped by thousands, no unit. A line holding only it is dropped when there is none.',
+        required: false,
         repeatable: false,
       },
       {
@@ -10073,14 +10089,30 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.gateway_card_underpaid_receipt_sent',
     description:
-      'TonPays Telegram: the receipt for the REMAINDER was sent and TonPays has not answered yet. Nothing is approved by this message.',
+      'TonPays Telegram: the receipt for the REMAINDER was sent and TonPays has not answered yet. Nothing is approved by this message. v0.8.2 hotfix: the remainder, when TonPays reported one, is shown in RIAL with Toman beside it, as on the remainder screen.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
         token: 'shortfall',
         type: 'MONEY',
         description:
-          'The amount still to be transferred (`remaining_amount`), when TonPays reported one. TonPays’ figure — never what Nexa settles.',
+          'The amount still to be transferred (`remaining_amount`), when TonPays reported one. TonPays’ figure — never what Nexa settles. Since the v0.8.2 hotfix the default text shows `{amountRial}` instead; this stays supplied for an override written for the earlier text.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'amountRial',
+        type: 'STRING',
+        description:
+          'v0.8.2 hotfix: the remainder still to be transferred, in RIAL: TonPays’ `remaining_amount` (Toman) times ten, in Persian digits grouped by thousands (`۵۳٬۶۸۰`) and with no unit, which the body writes. The copy button carries the same figure as bare ASCII digits (`53680`). TonPays’ figure for the next transfer — display only, never what Nexa settles, credits or refunds.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'amountToman',
+        type: 'STRING',
+        description:
+          'v0.8.2 hotfix: the same remainder in TOMAN, Persian digits grouped by thousands, no unit. A line holding only it is dropped when there is none.',
         required: false,
         repeatable: false,
       },

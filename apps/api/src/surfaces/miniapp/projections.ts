@@ -105,13 +105,16 @@ export function orderWire(
 export function instructionWire(instruction: ManualTransferInstruction): MiniAppCardInstruction {
   const { payment, destination } = instruction;
   const fee = payment.customerFee !== null && payment.customerFee.fee.amountMinor > 0n;
+  // v0.8.2 hotfix: shown as the bot's R8 A2 invoice shows it — rial, Toman in brackets — and
+  // copied as the same rial digits, so what the customer reads is what they paste.
+  const figures = transferFigures(amountToTransfer(payment));
   return {
     paymentId: payment.id,
     orderId: payment.orderId,
     amount: wire(amountToTransfer(payment)),
-    copyAmount:
-      transferFigures(amountToTransfer(payment))?.copyRial ??
-      plainAmount(amountToTransfer(payment)),
+    copyAmount: figures?.copyRial ?? plainAmount(amountToTransfer(payment)),
+    amountRial: figures?.amountRial ?? null,
+    amountToman: figures?.amountToman ?? null,
     principal: fee ? wire(payment.amount) : null,
     fee: fee && payment.customerFee !== null ? wire(payment.customerFee.fee) : null,
     reference: paymentTrackingCode(payment),

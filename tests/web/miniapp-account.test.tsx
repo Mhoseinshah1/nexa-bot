@@ -362,6 +362,8 @@ describe('wallet', () => {
           orderId: null,
           amount: IRT(250_000),
           copyAmount: '2500000',
+          amountRial: '۲٬۵۰۰٬۰۰۰',
+          amountToman: '۲۵۰٬۰۰۰',
           principal: null,
           fee: null,
           reference: 'TRK1',
@@ -382,6 +384,22 @@ describe('wallet', () => {
     expect(quote?.body).toEqual({ amount: IRT(250_000) });
     const topup = calls.find((call) => call.route === '/wallet/topup');
     expect(topup?.body).toEqual({ amount: IRT(250_000), provider: 'MANUAL_TRANSFER' });
+    /*
+     * v0.8.2 hotfix: the amount to transfer reads in RIAL with Toman only in brackets, as the
+     * bot's card invoice — never «۲۵۰٬۰۰۰ تومان» beside a button that copies 2500000.
+     */
+    expect(
+      screen.getByText(text('miniapp.card_amount_rial', { amount: '۲٬۵۰۰٬۰۰۰' })),
+    ).toBeTruthy();
+    expect(screen.getByText(text('miniapp.card_amount_toman', { amount: '۲۵۰٬۰۰۰' }))).toBeTruthy();
+    expect(screen.queryByText(money(IRT(250_000)))).toBeNull();
+    const write = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: write },
+      configurable: true,
+    });
+    fireEvent.click(screen.getByRole('button', { name: text('miniapp.card_copy_rial') }));
+    await waitFor(() => expect(write).toHaveBeenCalledWith('2500000'));
   });
 
   it('opens the provider page for a gateway top-up and follows the payment', async () => {

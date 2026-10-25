@@ -827,6 +827,13 @@ describe('the mini-app surface', () => {
       const token = await sessionFor(700301);
       const instruction = await cardInstruction(token);
       expect(instruction.amount).toEqual({ amountMinor: '250000', currency: 'IRT' });
+      // v0.8.2 hotfix: shown as the bot's card invoice shows it — rial, Toman in brackets —
+      // and copied as the same rial digits.
+      expect(instruction).toMatchObject({
+        amountRial: '۲٬۵۰۰٬۰۰۰',
+        amountToman: '۲۵۰٬۰۰۰',
+        copyAmount: '2500000',
+      });
       expect(instruction.destination?.cardNumber).toMatch(/^\d{16}$/u);
 
       const filed = await upload(token, instruction.paymentId, PNG, 'image/png');

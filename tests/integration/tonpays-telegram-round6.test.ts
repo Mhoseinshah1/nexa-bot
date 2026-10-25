@@ -362,13 +362,16 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     const step = nextStepMessage();
     const screen = lastOn(step);
     const text = String(screen?.['text']);
-    expect(text).toContain('کمتر واریز شد');
+    expect(text).toContain('کمتر از مبلغ فاکتور بود');
     expect(text).toContain('6219861012345678');
     expect(text).toContain('Shop Card');
-    expect(text).toContain('12,000');
+    // v0.8.2 hotfix: TonPays' 12,000 Toman is shown as 120,000 RIAL, Toman only in brackets.
+    expect(text).toContain('مبلغ مابقی قابل واریز: ۱۲۰٬۰۰۰ ریال\n(معادل ۱۲٬۰۰۰ تومان)');
+    expect(text).not.toContain('12,000');
     const markup = markupOf(screen);
-    expect(markup).toContain('6219861012345678'); // copy_text: the card
-    expect(markup).toContain('"copy_text":{"text":"12000"}'); // copy_text: the exact amount
+    expect(markup).toContain('"copy_text":{"text":"6219861012345678"}'); // the card
+    expect(markup).toContain('"copy_text":{"text":"120000"}'); // the remainder, in rial digits
+    expect(markup).not.toContain('"copy_text":{"text":"12000"}');
     expect(markup).toContain(`gr:${paymentId}`);
     expect(markup).toContain('ارسال رسید مابقی');
     // Never plain "open", never "paid".
@@ -394,6 +397,7 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     const text = String(lastOn(step)?.['text']);
     expect(text).toContain('رسید مابقی');
     expect(text).toContain('در انتظار پاسخ');
+    expect(text).toContain('مبلغ مابقی: ۱۲۰٬۰۰۰ ریال\n(معادل ۱۲٬۰۰۰ تومان)');
     expect(firstInvoice().status).toBe('action_required_less');
     expect((await paymentOf(paymentId)).state).toBe('PENDING');
 
@@ -1015,9 +1019,9 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     const sent = newMessages().slice(before);
     expect(sent).toHaveLength(1);
     const text = String(sent[0]!['text']);
-    expect(text).toContain('کمتر واریز شد');
+    expect(text).toContain('کمتر از مبلغ فاکتور بود');
     expect(text).toContain('6219861012345678');
-    expect(text).toContain('12,000');
+    expect(text).toContain('۱۲۰٬۰۰۰ ریال');
     expect(markupOf(sent[0])).toContain(`gr:${paymentId}`);
     // The provider says the same again (a second inquiry, a second replica): never asked twice.
     await inquireNow();
@@ -1082,7 +1086,7 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     firstInvoice().remainingAmount = 3_000;
     await inquireNow();
     expect(newMessages().length).toBe(first + 1);
-    expect(String(newMessages().at(-1)!['text'])).toContain('3,000');
+    expect(String(newMessages().at(-1)!['text'])).toContain('۳۰٬۰۰۰ ریال'); // 3,000 Toman
     expect((await attention(paymentId)).map((one) => one.payload.reason)).toEqual([
       'UNDERPAID',
       'UNDERPAID',
@@ -1098,7 +1102,7 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     fake.underpay(firstInvoice().invoiceId, 12_000);
     await inquireNow();
     expect(newMessages().length).toBe(before);
-    expect(String(lastOn(message)?.['text'])).toContain('کمتر واریز شد');
+    expect(String(lastOn(message)?.['text'])).toContain('کمتر از مبلغ فاکتور بود');
     // The operator still hears of it.
     expect((await attention(paymentId)).map((one) => one.payload.reason)).toEqual(['UNDERPAID']);
   });
