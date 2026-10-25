@@ -119,8 +119,7 @@ explicit decision, after the loss list exists.
    payments, wallet entries, orders, services created or renewed, panel accounts touched.
    Take it from the live database — or, if the owner chooses a restore, from the displaced
    database afterwards. Aggregate counts: the snapshot query with `since` = H3's time.
-   The per-customer query: **TBD** — no command is specified for it yet (not covered by any
-   OQ-CUT entry; flagged in the pull request).
+   The per-customer query: **TBD — see OQ-CUT-07** (no command produces it yet).
 3. **`OWNER ONLY — separate explicit approval`** — settle each item by hand in Mirza
    (balances, service expiry).
 4. RickPanel accounts Nexa created stay on the panel; list them for Mirza to take over or

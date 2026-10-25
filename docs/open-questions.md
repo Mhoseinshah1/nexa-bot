@@ -3656,6 +3656,13 @@ owner's, or settled from the real staging copy (NOT RUN) — never by guessing.
   unreadable balance) is never a match: the verdict is `RECONCILED_WITH_HELD` (exit 2) and the
   owner signs each held class off by name.
 
+- **OQ-CUT-07 — OPEN: the per-customer loss list for a stage-R3 rollback.** Rolling back after
+  Nexa has taken customer writes (`docs/cutover/08-rollback.md`, R3) means every purchase, top-up,
+  receipt and ticket written in Nexa since the handover must be listed per customer for the owner
+  to re-enter in Mirza or refund by hand. No command produces that list today; the runbook marks
+  it TBD. A read-only report (writes since a timestamp, per customer, from the ledger, orders and
+  tickets) is the expected shape; it is not built and must not be guessed at cutover.
+
 ## OQ-TB — Intelligent Support Agent (TB0): what the evidence does not settle
 
 Evidence and designs: `docs/support-agent/tb0-audit.md`, ADR-0033, ADR-0034, ADR-0035.
