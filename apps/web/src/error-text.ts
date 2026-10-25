@@ -22,6 +22,7 @@ import type {
   LEGACY_SERVICE_REVIEW_ERROR_CODES,
   LEGACY_WALLET_DEBT_ERROR_CODES,
   MESSAGING_ERROR_CODES,
+  MINIAPP_ERROR_CODES,
   NOTIFICATION_CENTER_ERROR_CODES,
   OPS_GROUP_ERROR_CODES,
   PANEL_ERROR_CODES,
@@ -75,6 +76,7 @@ export type ContractErrorCode =
   | CodesOf<typeof LEGACY_SERVICE_REVIEW_ERROR_CODES>
   | CodesOf<typeof LEGACY_WALLET_DEBT_ERROR_CODES>
   | CodesOf<typeof MESSAGING_ERROR_CODES>
+  | CodesOf<typeof MINIAPP_ERROR_CODES>
   | CodesOf<typeof NOTIFICATION_CENTER_ERROR_CODES>
   | CodesOf<typeof OPS_GROUP_ERROR_CODES>
   | CodesOf<typeof PANEL_ERROR_CODES>
@@ -419,6 +421,18 @@ export const ERROR_TEXT = {
   'messaging.button_url_invalid': 'web.err_messaging_button_url_invalid',
   'messaging.button_url_scheme': 'web.err_messaging_button_url_scheme',
   'messaging.split_bound_invalid': 'web.err_messaging_split_bound_invalid',
+  'miniapp.gate_required': 'web.err_miniapp_gate_required',
+  'miniapp.init_data_expired': 'web.err_miniapp_init_data_expired',
+  'miniapp.init_data_invalid': 'web.err_miniapp_init_data_invalid',
+  'miniapp.init_data_replayed': 'web.err_miniapp_init_data_replayed',
+  'miniapp.not_found': 'web.err_miniapp_not_found',
+  'miniapp.rate_limited': 'web.err_miniapp_rate_limited',
+  'miniapp.receipt_refused': 'web.err_miniapp_receipt_refused',
+  'miniapp.receipt_upload_failed': 'web.err_miniapp_receipt_upload_failed',
+  'miniapp.request_invalid': 'web.err_miniapp_request_invalid',
+  'miniapp.route_unavailable': 'web.err_miniapp_route_unavailable',
+  'miniapp.session_invalid': 'web.err_miniapp_session_invalid',
+  'miniapp.unavailable': 'web.err_miniapp_unavailable',
   'notification_center.not_found': 'web.err_notification_center_not_found',
   'ops_group.bot_not_available': 'web.err_ops_group_bot_not_available',
   'ops_group.not_connected': 'web.err_ops_group_not_connected',
