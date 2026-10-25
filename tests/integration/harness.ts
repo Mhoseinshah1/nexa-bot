@@ -102,12 +102,15 @@ export async function resetAntiSpamWindows(): Promise<void> {
   });
   antiSpamRedis.on('error', () => undefined);
   if (antiSpamRedis.status === 'wait') await antiSpamRedis.connect();
-  let cursor = '0';
-  do {
-    const [next, keys] = await antiSpamRedis.scan(cursor, 'MATCH', 'nexa:antispam:*', 'COUNT', 500);
-    if (keys.length > 0) await antiSpamRedis.del(...keys);
-    cursor = next;
-  } while (cursor !== '0');
+  // Round 9, C5: the mini app's request budget lives in the same store, under its own prefix.
+  for (const pattern of ['nexa:antispam:*', 'nexa:miniapp-rate:*']) {
+    let cursor = '0';
+    do {
+      const [next, keys] = await antiSpamRedis.scan(cursor, 'MATCH', pattern, 'COUNT', 500);
+      if (keys.length > 0) await antiSpamRedis.del(...keys);
+      cursor = next;
+    } while (cursor !== '0');
+  }
 }
 
 export async function resetDatabase(db: Database): Promise<void> {
@@ -127,6 +130,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        bot_appearance_slots,
        -- Round P: the command-sync rows, before the bots they name.
        bot_command_syncs,
+       -- Round 9, C5: mini-app sessions, before the bots and customers they name.
+       miniapp_sessions,
        -- Round T: the button builder's draft/published heads and revisions, before the
        -- tenants and admins they name.
        main_menu_layouts, main_menu_revisions,

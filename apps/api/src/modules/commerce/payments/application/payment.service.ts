@@ -792,6 +792,42 @@ export class PaymentService {
   }
 
   /**
+   * Round 9, C5: one of the customer's OWN payments, or null — the same null for another
+   * customer's payment and one that does not exist, so an id is no oracle. Under the
+   * customer's own permission; a read, as `ReceiptService.filedForCustomer` reads it.
+   */
+  async paymentForCustomer(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    id: string,
+  ): Promise<PaymentRecord | null> {
+    await this.deps.guard.check(scope, actor, PAYMENT_PLACE_PERMISSION);
+    const parsed = paymentIdSchema.safeParse(id);
+    if (!parsed.success) return null;
+    const payment = await this.deps.repository.findById(scope, parsed.data);
+    return payment === null || payment.customerId !== customerId ? null : payment;
+  }
+
+  /**
+   * Round 9, C5 (owner correction 2026-10-25): the customer's OWN payments, newest first,
+   * for the mini app. The operator list's repository read, narrowed to this one customer by
+   * the search it already supports, under the customer's own permission
+   * (`PAYMENT_PLACE_PERMISSION`, `maintenance.run`) — never `payments.view`. The id is the
+   * authenticated customer's, never a client's.
+   */
+  async historyForCustomer(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    query: { readonly limit?: number; readonly cursor?: PaymentCursor | null },
+  ): Promise<PaymentPage> {
+    await this.deps.guard.check(scope, actor, PAYMENT_PLACE_PERMISSION);
+    const limit = Math.min(Math.max(query.limit ?? PAYMENT_PAGE_DEFAULT, 1), PAYMENT_PAGE_MAX);
+    return this.deps.repository.list(scope, { customerId }, limit, query.cursor ?? null);
+  }
+
+  /**
    * Who a page of payments' customers are on Telegram, for the Web Admin's list and
    * detail (Payment File 02 §21, D7). Reading payments is `payments.view`, and this is
    * part of reading them.
@@ -1139,6 +1175,7 @@ export class PaymentService {
           {
             id: paymentId,
             customerId,
+            sourceSurface: actor.surface,
             orderId,
             method: 'WALLET',
             amount: total,
@@ -1555,6 +1592,7 @@ export class PaymentService {
             {
               id: paymentId,
               customerId,
+              sourceSurface: actor.surface,
               orderId,
               method: 'MANUAL_TRANSFER',
               // The order's frozen total, never a figure the request carried.
@@ -1973,6 +2011,7 @@ export class PaymentService {
             {
               id: paymentId,
               customerId,
+              sourceSurface: actor.surface,
               // NO ORDER. The column is nullable for exactly this, and it is what
               // `confirmManualTransfer` dispatches on.
               orderId: null,
@@ -5107,6 +5146,7 @@ export class PaymentService {
         {
           id: input.paymentId,
           customerId: input.customerId,
+          sourceSurface: actor.surface,
           orderId: input.orderId,
           method: 'GATEWAY',
           // The order's frozen total, or the top-up amount `typedTopupAmount` accepted.

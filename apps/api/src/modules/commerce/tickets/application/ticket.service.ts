@@ -455,6 +455,8 @@ export class TicketService {
             categoryTitle: category.title,
             subject: ticketSubjectOf(content.body),
             openingKey: input.idempotencyKey,
+            // Round 9, C5: «منبع: مینی‌اپ» for a ticket the mini app opened.
+            sourceSurface: actor.surface,
             now,
           },
           tx,

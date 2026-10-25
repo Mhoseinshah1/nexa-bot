@@ -697,6 +697,18 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
       }),
     },
   },
+  'miniapp.init_data_max_age_seconds': {
+    title: 'web.setting_miniapp_init_data_max_age_seconds',
+    description: 'web.setting_miniapp_init_data_max_age_seconds_desc',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_seconds' },
+  },
+  'miniapp.session_ttl_minutes': {
+    title: 'web.setting_miniapp_session_ttl_minutes',
+    description: 'web.setting_miniapp_session_ttl_minutes_desc',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_minutes' },
+  },
   'services.link_rotation_cooldown_hours': {
     title: 'web.setting_link_rotation_cooldown_hours',
     description: 'web.setting_link_rotation_cooldown_hours_desc',

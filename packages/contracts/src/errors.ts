@@ -1756,3 +1756,50 @@ export const TICKET_ERROR_CODES = {
    */
   TICKET_ATTACHMENT_STORAGE_FULL: 'ticket.attachment_storage_full',
 } as const;
+
+/**
+ * Round 9, C5 — the customer's Telegram Mini App surface (`apps/api/src/surfaces/miniapp`).
+ *
+ * The authentication codes answer a request that carried no usable identity. They are
+ * deliberately coarse: `MINIAPP_INIT_DATA_INVALID` covers a tampered hash, a hash made with
+ * another bot's token, a missing field and a malformed user alike, so the answer is not an
+ * oracle for which part of a forged `initData` was wrong. Expiry and a replay are their own
+ * codes because the remedy differs — reopen the mini app from Telegram — and neither says
+ * anything an attacker did not already know.
+ */
+export const MINIAPP_ERROR_CODES = {
+  /** The mini app is switched off for this tenant (feature `mini_app`), or the bot is unknown. */
+  MINIAPP_UNAVAILABLE: 'miniapp.unavailable',
+  /** `initData` failed verification: bad or missing hash, wrong bot, malformed fields. */
+  MINIAPP_INIT_DATA_INVALID: 'miniapp.init_data_invalid',
+  /** `initData`'s `auth_date` is outside `miniapp.init_data_max_age_seconds` (or in the future). */
+  MINIAPP_INIT_DATA_EXPIRED: 'miniapp.init_data_expired',
+  /** This `initData` already minted a session: one `initData`, one session, never a second. */
+  MINIAPP_INIT_DATA_REPLAYED: 'miniapp.init_data_replayed',
+  /** No bearer token, an unknown one, an expired one, or one whose bot or tenant stopped. */
+  MINIAPP_SESSION_INVALID: 'miniapp.session_invalid',
+  /**
+   * A gate the bot applies before any action applies here too. The `gate` detail is
+   * `BLOCKED`, `CHANNELS` or `TERMS`; the customer's `/me` says what to show.
+   */
+  MINIAPP_GATE_REQUIRED: 'miniapp.gate_required',
+  /** Too many requests from this customer (or, before a session exists, this address). */
+  MINIAPP_RATE_LIMITED: 'miniapp.rate_limited',
+  /** The request does not match its contract schema, or names an id that is not one. */
+  MINIAPP_REQUEST_INVALID: 'miniapp.request_invalid',
+  /**
+   * The thing asked about is not this customer's, or does not exist — one answer for both,
+   * so an id is not an oracle. The services' own not-found codes are answered as they are.
+   */
+  MINIAPP_NOT_FOUND: 'miniapp.not_found',
+  /** The payment route asked for is not offered for this order or amount right now. */
+  MINIAPP_ROUTE_UNAVAILABLE: 'miniapp.route_unavailable',
+  /**
+   * A receipt image is refused before anything is written: empty, larger than
+   * `MINIAPP_RECEIPT_MAX_BYTES`, not a JPEG/PNG/WebP by its bytes, a declared type the bytes
+   * contradict, or no receipt is expected for the payment. The `reason` detail says which.
+   */
+  MINIAPP_RECEIPT_REFUSED: 'miniapp.receipt_refused',
+  /** Telegram did not take the image from the bot (e.g. the customer never started the bot). */
+  MINIAPP_RECEIPT_UPLOAD_FAILED: 'miniapp.receipt_upload_failed',
+} as const;

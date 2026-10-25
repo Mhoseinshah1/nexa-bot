@@ -31,7 +31,7 @@ import type {
 } from './ports.js';
 import type { BotWebhookRead } from './bot-management-ports.js';
 import { webhookSecretFingerprint } from './webhook-fingerprint.js';
-import type { CommandMenu } from './command-menu.js';
+import { commandMenuHash, revisionHasMiniAppButton, type CommandMenu } from './command-menu.js';
 import { tokenReplacementLeaseMs } from '../domain/token-replacement-lease.js';
 import { liveProblems } from '../domain/bot-readiness.js';
 import {
@@ -1267,7 +1267,11 @@ export class BotBootstrapService {
     // the Web Admin's menu state read too. Three readers of one answer, so "current" means
     // the same thing to the installer, the lane and the page.
     const desired = await this.deps.commandMenu.desiredFor(scope);
-    const revision = desired.hash;
+    // Round 9, C5: the installer registers the COMMANDS only. With the mini app's menu
+    // button wanted, it records the commands' own digest, so the sync lane still sees the
+    // bot short of the desired revision and sets the button itself.
+    const revision =
+      (desired.menuButton ?? null) === null ? desired.hash : commandMenuHash(desired.entries);
     // NULL is "unknown", never "matches" — the same rule the webhook secret
     // fingerprint states, and for the same reason: one unnecessary call is a
     // far cheaper mistake than a silent claim.
@@ -1276,6 +1280,17 @@ export class BotBootstrapService {
     const registered =
       (await this.deps.telegram.registerCommands({ token, commands: desired.entries })).outcome ===
       'REGISTERED';
+    /*
+     * Round 9, C5 (Codex on #326): a button set earlier and no longer wanted (the mini app
+     * switched off) is reset by the sync lane, and the lane's only sign that this bot HAS a
+     * button is the `m` on its stored revision. Recording the commands' digest here would
+     * erase that sign: the lane would then see the bot current, never reset the button, and
+     * the customers would keep a button to a mini app that is off. So the commands are
+     * registered and the stored revision is left as it is; the lane records its own after
+     * the reset.
+     */
+    const resetPending = (desired.menuButton ?? null) === null && revisionHasMiniAppButton(stored);
+    const record = registered && !resetPending;
 
     /*
      * Recorded as an AUDIT row rather than thrown or logged into the void.
@@ -1305,7 +1320,7 @@ export class BotBootstrapService {
        */
       await this.deps.bots.lockTenantForBotChange(scope, tx);
       await this.requireActiveScope(scope, tx);
-      if (registered) {
+      if (record) {
         // Written only on success. A digest stored after a FAILED call would
         // make the next reconcile skip it, and the menu would stay wrong until
         // the list changed again.
@@ -1325,8 +1340,9 @@ export class BotBootstrapService {
           entityId: id,
           before: { commandsRevision: stored },
           after: {
-            commandsRevision: registered ? revision : stored,
+            commandsRevision: record ? revision : stored,
             commands: desired.entries.length,
+            ...(resetPending ? { menuButtonResetPending: true } : {}),
           },
           result: registered ? 'SUCCESS' : 'FAILED',
         },

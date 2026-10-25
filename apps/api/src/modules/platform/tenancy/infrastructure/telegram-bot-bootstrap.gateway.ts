@@ -5,6 +5,7 @@ import {
   telegramGetWebhookInfo,
   telegramSetWebhook,
   telegramSetMyCommands,
+  telegramSetChatMenuButton,
 } from '../../../../infrastructure/telegram/send-message.js';
 import type { BotCommandEntry } from '@nexa/contracts';
 import type {
@@ -213,6 +214,34 @@ export class TelegramBotBootstrapGateway
           outcome: 'UNREACHABLE',
           code: outcome.errorCode,
           // A 429's hold, in ms, when Telegram named one. The lane's back-off honours it.
+          ...(outcome.retryAfterMs === undefined ? {} : { retryAfterMs: outcome.retryAfterMs }),
+        };
+    }
+  }
+
+  /**
+   * Round 9, C5: the chat menu button — the mini app's, or Telegram's default. The same
+   * outcome split as `registerCommands`, and the same reason to keep only the code.
+   */
+  async setMenuButton(input: {
+    readonly token: string;
+    readonly button: { readonly text: string; readonly url: string } | null;
+  }): Promise<BotCommandsRegistration> {
+    const outcome = await telegramSetChatMenuButton({
+      token: input.token,
+      apiBaseUrl: this.apiBaseUrl,
+      timeoutMs: this.timeoutMs,
+      button: input.button,
+    });
+    switch (outcome.outcome) {
+      case 'SUCCEEDED':
+        return { outcome: 'REGISTERED' };
+      case 'FAILED_PERMANENT':
+        return { outcome: 'REFUSED', code: outcome.errorCode };
+      default:
+        return {
+          outcome: 'UNREACHABLE',
+          code: outcome.errorCode,
           ...(outcome.retryAfterMs === undefined ? {} : { retryAfterMs: outcome.retryAfterMs }),
         };
     }

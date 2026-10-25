@@ -17,6 +17,7 @@ import {
   type ListSearchTerm,
   type PriceQuote,
   type RecordSource,
+  type SourceSurface,
 } from '@nexa/contracts';
 import { priceQuoteToWire } from '../application/order-pricing.js';
 import type {
@@ -119,6 +120,8 @@ export class DrizzleOrderRepository implements OrderRepository {
         currency: draft.totals.currency,
         quote: priceQuoteToWire(draft.totals.quote),
         expiresAt: draft.expiresAt,
+        // Round 9, C5: who created it, by surface; null when the caller did not say.
+        sourceSurface: draft.sourceSurface ?? null,
         createdAt: draft.now,
         updatedAt: draft.now,
       })
@@ -509,6 +512,7 @@ function toRecord(row: typeof orders.$inferSelect): OrderRecord {
     state: row.state as OrderState,
     code: row.code,
     source: row.source as RecordSource,
+    sourceSurface: row.sourceSurface as SourceSurface | null,
     purpose: row.purpose as OrderPurpose,
     origin: row.origin as OrderOrigin,
     line: {

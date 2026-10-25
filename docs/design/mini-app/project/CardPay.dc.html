@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="fa">
+<head>
+<meta charset="utf-8">
+<title>نکسا — کارت به کارت</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;800&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#f4f4f5;text-decoration:none}a:hover{color:#ffffff}
+.g{background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.11);border-radius:22px;-webkit-backdrop-filter:blur(20px) saturate(140%);backdrop-filter:blur(20px) saturate(140%);box-shadow:inset 0 1px 0 rgba(255,255,255,.08)}
+.cp{height:36px;padding:0 12px;border-radius:11px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:#f4f4f5;font:inherit;font-size:12px;font-weight:600;display:inline-flex;align-items:center;gap:6px}
+.st{display:flex;flex-direction:column;align-items:center;gap:6px;font-size:11.5px;color:#a1a1aa;flex:1}
+.st i{font-style:normal;width:28px;height:28px;border-radius:50%;display:grid;place-items:center;border:1.5px solid rgba(255,255,255,.25);font-weight:700;font-size:12px}
+.st.on{color:#f4f4f5}.st.on i{background:#f4f4f5;color:#0a0a0b;border-color:#f4f4f5}
+.mb{position:absolute;left:16px;right:16px;bottom:16px;height:54px;border-radius:16px;background:#f4f4f5;color:#0a0a0b;font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center;gap:10px}
+.mb:hover{color:#0a0a0b}
+/* web-panel skin */
+div[dir="rtl"][style*="width: 390px"]{background:radial-gradient(75% 45% at 90% -8%,rgba(255,255,255,.08),transparent 68%),linear-gradient(180deg,#0e0e10,#0a0a0b 70%) !important}
+.g{background:rgba(255,255,255,.075) !important;border:0 !important;border-radius:20px !important;position:relative;box-shadow:inset 0 1px 0 rgba(255,255,255,.32),inset 0 0 0 1px rgba(255,255,255,.06),0 30px 60px -30px rgba(0,0,0,.85),0 2px 8px -2px rgba(0,0,0,.4) !important;-webkit-backdrop-filter:blur(26px) saturate(1.7);backdrop-filter:blur(26px) saturate(1.7)}
+.g::after{content:'';position:absolute;inset:0;border-radius:inherit;padding:1px;pointer-events:none;background:linear-gradient(150deg,rgba(255,255,255,.16),transparent 40%,transparent 62%,rgba(255,255,255,.06));-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}
+.g[style*="dashed"]{box-shadow:none !important;border:1.5px dashed rgba(255,255,255,.22) !important}
+.g.on{box-shadow:inset 0 1px 0 rgba(255,255,255,.32),inset 0 0 0 1.5px #f4f4f5,0 30px 60px -30px rgba(0,0,0,.85) !important}
+div:has(> a[aria-label="بازگشت"]),div:has(> a.ib){padding:6px 8px;border-radius:24px;background:rgba(255,255,255,.075);box-shadow:inset 0 1px 0 rgba(255,255,255,.32),inset 0 0 0 1px rgba(255,255,255,.06),0 20px 40px -24px rgba(0,0,0,.8);-webkit-backdrop-filter:blur(26px) saturate(1.7);backdrop-filter:blur(26px) saturate(1.7)}
+div:has(> a[aria-label="بازگشت"]) > button,div:has(> a[aria-label="بازگشت"]) > span{border-radius:999px !important}
+a[aria-label="بازگشت"],.ib{width:44px !important;height:44px !important;border-radius:50% !important;border:0 !important;background:rgba(255,255,255,.11) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.32),inset 0 0 0 1px rgba(255,255,255,.06)}
+.tb{height:70px !important;border:0 !important;border-radius:28px !important;padding:6px !important;gap:4px;background:rgba(255,255,255,.075) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.32),inset 0 0 0 1px rgba(255,255,255,.06),0 30px 60px -30px rgba(0,0,0,.85),0 2px 8px -2px rgba(0,0,0,.4)}
+.tb a{border-radius:22px}
+.tb a.on{background:rgba(255,255,255,.16);box-shadow:inset 0 1px 0 rgba(255,255,255,.32),0 6px 16px -10px rgba(0,0,0,.5)}
+.mb,[style*="background: #f4f4f5"]:not([style*="50%"]){border-radius:999px !important}
+.mb{box-shadow:inset 0 1px 0 #fff,0 14px 30px -12px rgba(0,0,0,.7)}
+.btn,.cp,.dl,.jn,.am,.chip,.dz{border-radius:999px !important}
+.btn:not(.pri),.cp:not([style*="#f4f4f5"]),.dl,.am:not(.on),.dz{border:0 !important;background:rgba(255,255,255,.1) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.28),inset 0 0 0 1px rgba(255,255,255,.07)}
+.act{border:0 !important;border-radius:20px !important;background:rgba(255,255,255,.075) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.28),inset 0 0 0 1px rgba(255,255,255,.06)}
+.seg{border-radius:999px !important;border:0 !important;background:rgba(255,255,255,.075) !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.22),inset 0 0 0 1px rgba(255,255,255,.06)}
+.seg button{border-radius:999px !important}
+.seg button.on,.chip.on{background:rgba(255,255,255,.16) !important;color:#f4f4f5 !important;border-color:transparent !important;box-shadow:inset 0 1px 0 rgba(255,255,255,.32),0 6px 16px -10px rgba(0,0,0,.5)}
+input:not([type=checkbox]){border-radius:14px !important;border:0 !important;background:rgba(255,255,255,.06) !important;box-shadow:inset 0 0 0 1px rgba(255,255,255,.1)}
+</style>
+</helmet>
+<div dir="rtl" style="width: 390px; height: 844px; box-sizing: border-box; background: #0a0a0b; color: #f4f4f5; font-family: Vazirmatn, system-ui, sans-serif; position: relative; overflow: hidden">
+<div style="padding: 20px 16px 96px; display: flex; flex-direction: column; gap: 12px">
+
+<div style="display: flex; align-items: center; gap: 10px">
+<a href="Checkout.dc.html" aria-label="بازگشت" style="width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></a>
+<div style="font-size: 20px; font-weight: 800; flex: 1">کارت به کارت</div>
+<span style="font-size: 12px; padding: 6px 12px; border-radius: 99px; background: rgba(255,159,67,.16); color: #ffc48a" dir="ltr">۲۸:۴۱</span>
+</div>
+
+<div style="display: flex; align-items: flex-start; gap: 4px; padding: 4px 0">
+<div class="st on"><i>۱</i>واریز</div>
+<div style="flex: 1; height: 1.5px; background: rgba(255,255,255,.4); margin-top: 14px"></div>
+<div class="st on"><i>۲</i>ارسال رسید</div>
+<div style="flex: 1; height: 1.5px; background: rgba(255,255,255,.15); margin-top: 14px"></div>
+<div class="st"><i>۳</i>تأیید و فعال‌سازی</div>
+</div>
+
+<div class="g" style="padding: 18px; display: flex; flex-direction: column; gap: 14px">
+<div style="font-size: 12px; color: #a1a1aa">شماره کارت مقصد</div>
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px">
+<b dir="ltr" style="font-size: 20px; letter-spacing: 1px">[۶۰۳۷ ···· ···· ۱۲۳۴]</b>
+<button class="cp"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"></path></svg>کپی</button>
+</div>
+<div style="font-size: 12.5px; color: #d4d4d8">به نام [نام صاحب کارت] · [نام بانک]</div>
+<div style="height: 1px; background: rgba(255,255,255,.1)"></div>
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px">
+<div><div style="font-size: 12px; color: #a1a1aa">مبلغ دقیق</div><b style="font-size: 20px">۲۶۴٬۰۰۰ تومان</b></div>
+<button class="cp">کپی مبلغ</button>
+</div>
+<div style="font-size: 12px; color: #ffc48a; line-height: 1.7">دقیقاً همین مبلغ را واریز کنید تا بررسی سریع‌تر انجام شود.</div>
+</div>
+
+<button class="g" style="padding: 14px; display: flex; align-items: center; gap: 12px; color: inherit; font: inherit; text-align: start; border-style: dashed; border-color: rgba(255,255,255,.25)">
+<span style="width: 52px; height: 52px; border-radius: 14px; background: rgba(79,140,255,.16); color: #9ec0ff; display: grid; place-items: center; flex: none"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"></rect><circle cx="9" cy="10" r="2"></circle><path d="M21 16l-5-5-9 9"></path></svg></span>
+<span style="flex: 1"><b style="font-size: 14px; display: block">تصویر رسید را انتخاب کنید</b><span style="font-size: 12px; color: #a1a1aa">عکس از گالری یا اسکرین‌شات پرداخت</span></span>
+</button>
+
+<div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #a1a1aa">
+<span>پس از تأیید، سرویس خودکار فعال می‌شود.</span>
+<a href="Checkout.dc.html" style="color: #d4d4d8; text-decoration: underline">کارت دیگر</a>
+</div>
+
+</div>
+
+<a class="mb" href="PayStatus.dc.html">ارسال رسید</a>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

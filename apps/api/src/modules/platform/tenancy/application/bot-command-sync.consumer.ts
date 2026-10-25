@@ -45,7 +45,13 @@ export class BotCommandSyncConsumer implements EventConsumer {
     switch (event.eventType) {
       case 'TemplateOverrideChanged':
       case 'TemplateOverrideReverted':
-        if (typeof payload.key !== 'string' || !payload.key.startsWith('bot.command.')) return;
+        // Round 9, C5: the mini app's menu-button text is part of the registered menu too.
+        if (
+          typeof payload.key !== 'string' ||
+          !(payload.key.startsWith('bot.command.') || payload.key === 'bot.menu.miniapp_button')
+        ) {
+          return;
+        }
         await this.sync.requestSync(scope, null, { due: false }, tx);
         return;
       case 'SettingChanged':

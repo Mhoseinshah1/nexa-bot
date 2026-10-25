@@ -1,0 +1,163 @@
+import {
+  orderCodeOf,
+  paymentTrackingCode,
+  plainAmount,
+  toWire,
+  type MiniAppCardInstruction,
+  type MiniAppGatewayAttempt,
+  type MiniAppOrder,
+  type MiniAppProduct,
+  type MiniAppServiceSummary,
+  type Money,
+  type MoneyWire,
+  type ProductDisplay,
+} from '@nexa/contracts';
+import type { OrderRecord } from '../../modules/commerce/orders/application/ports.js';
+import type { ProductRecord } from '../../modules/commerce/catalog/application/ports.js';
+import type { ServiceRecord } from '../../modules/commerce/provisioning/application/ports.js';
+import type {
+  GatewayAttempt,
+  ManualTransferInstruction,
+} from '../../modules/commerce/payments/application/payment.service.js';
+import type { GatewayAttemptView } from '../../modules/commerce/payments/application/gateway-payment.service.js';
+import {
+  amountToTransfer,
+  cardNumberToCopy,
+  paysInChat,
+  transferFigures,
+} from '../../modules/commerce/miniapp/application/miniapp-checkout.js';
+
+/**
+ * Records to the mini app's wire (`@nexa/contracts` miniapp.ts). Projection only: every
+ * figure is the record's own — the order's frozen totals, the payment's own payable, the
+ * service's stored usage — and nothing is computed that the bot would not show.
+ */
+
+export function wire(value: Money): MoneyWire {
+  return toWire(value);
+}
+
+export function productWire(product: ProductRecord): MiniAppProduct | null {
+  // The SQL returns only priced products; one without a price is not something a customer can consent to.
+  if (product.price === null) return null;
+  return {
+    id: product.id,
+    title: product.title,
+    price: wire(product.price),
+    trafficBytes: product.specification.trafficBytes.toString(),
+    durationDays: product.specification.durationDays,
+    deviceLimit: product.specification.deviceLimit,
+    locations: [...product.display.displayLocations],
+    features: [...product.display.displayFeatures],
+  };
+}
+
+/**
+ * The pre-invoice, with the bot's `preinvoice` rules for which figures a purpose shows: a
+ * purchase its allowance, an extra-traffic package only the traffic it adds, a time package
+ * only its days.
+ */
+export function orderWire(
+  order: OrderRecord,
+  extra: {
+    readonly username: string | null;
+    readonly usernameModes: readonly ('CUSTOM' | 'AUTOMATIC')[];
+    readonly display: (ProductDisplay & { readonly description?: string | null }) | null;
+    readonly serviceId: string | null;
+  },
+): MiniAppOrder {
+  const purchase = order.purpose === 'NEW_SERVICE' || order.purpose === 'CUSTOM_SERVICE';
+  const traffic =
+    purchase || order.purpose === 'ADD_TRAFFIC'
+      ? order.line.specification.trafficBytes.toString()
+      : null;
+  const days =
+    order.purpose === 'ADD_TRAFFIC' ||
+    order.purpose === 'ADD_DEVICES' ||
+    order.purpose === 'CHANGE_LOCATION'
+      ? null
+      : order.line.specification.durationDays;
+  const cashback = order.totals.quote.cashback;
+  return {
+    id: order.id,
+    code: orderCodeOf(order) ?? '',
+    state: order.state,
+    purpose: order.purpose,
+    title: order.line.title,
+    trafficBytes: traffic,
+    durationDays: days,
+    subtotal: wire(order.totals.subtotal),
+    discount: wire(order.totals.discount),
+    total: wire(order.totals.total),
+    discountApplied: order.discountCode !== null,
+    discountEditable: order.state === 'DRAFT' && purchase,
+    cashback: cashback === undefined ? null : wire(cashback.amount),
+    expiresAt: order.expiresAt?.toISOString() ?? null,
+    serviceId: extra.serviceId,
+    username: extra.username,
+    usernameModes: [...extra.usernameModes],
+    locations: [...(extra.display?.displayLocations ?? [])],
+    features: [...(extra.display?.displayFeatures ?? [])],
+    description: extra.display?.description ?? null,
+  };
+}
+
+export function instructionWire(instruction: ManualTransferInstruction): MiniAppCardInstruction {
+  const { payment, destination } = instruction;
+  const fee = payment.customerFee !== null && payment.customerFee.fee.amountMinor > 0n;
+  return {
+    paymentId: payment.id,
+    orderId: payment.orderId,
+    amount: wire(amountToTransfer(payment)),
+    copyAmount:
+      transferFigures(amountToTransfer(payment))?.copyRial ??
+      plainAmount(amountToTransfer(payment)),
+    principal: fee ? wire(payment.amount) : null,
+    fee: fee && payment.customerFee !== null ? wire(payment.customerFee.fee) : null,
+    reference: paymentTrackingCode(payment),
+    expiresAt: payment.expiresAt?.toISOString() ?? null,
+    destination:
+      destination === null
+        ? null
+        : {
+            cardNumber: destination.cardNumber,
+            copyCardNumber: cardNumberToCopy(destination.cardNumber),
+            holderName: destination.holderName === '' ? null : destination.holderName,
+            bankName: destination.bankName === '' ? null : destination.bankName,
+          },
+  };
+}
+
+export function attemptWire(attempt: GatewayAttempt | GatewayAttemptView): MiniAppGatewayAttempt {
+  const inChat = paysInChat(attempt.invoice.provider);
+  const ready = attempt.invoice.creationState === 'CREATED';
+  return {
+    paymentId: attempt.payment.id,
+    orderId: attempt.payment.orderId,
+    provider: attempt.invoice.provider,
+    invoiceReady: ready,
+    payUrl:
+      inChat || !ready
+        ? null
+        : (attempt.invoice.webInvoiceUrl ?? attempt.invoice.invoiceUrl ?? null),
+    paysInChat: inChat,
+    expiresAt: attempt.payment.expiresAt?.toISOString() ?? null,
+  };
+}
+
+export function serviceSummaryWire(service: ServiceRecord, title: string): MiniAppServiceSummary {
+  return {
+    id: service.id,
+    code: service.code,
+    title,
+    state: service.state,
+    username: service.providerUsername,
+    trafficUsedBytes: service.trafficUsedBytes.toString(),
+    trafficLimitBytes: service.trafficLimitBytes.toString(),
+    expiresAt: service.expiresAt?.toISOString() ?? null,
+    usageSyncedAt: service.usageSyncedAt?.toISOString() ?? null,
+    deviceLimit: service.deviceLimit,
+    locationLabel: service.locationLabel,
+    isTrial: service.isTrial,
+  };
+}
