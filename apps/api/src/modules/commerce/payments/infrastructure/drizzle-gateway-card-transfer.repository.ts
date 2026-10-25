@@ -14,6 +14,7 @@ import {
 import {
   gatewayCardChanges,
   gatewayInvoiceCards,
+  gatewayInvoices,
   gatewayReceiptCaptures,
   gatewayReceiptSubmissions,
   payments,
@@ -464,11 +465,29 @@ export class DrizzleGatewayCardTransferRepository implements GatewayCardTransfer
   ): Promise<number> {
     const tenantId = requireTenantId(scope);
     if (limit <= 0) return 0;
+    /*
+     * A window aimed at another invoice than the payment's own is a REMAINDER window (Round 6):
+     * the receipt of an underpaid invoice's remainder, which the provider finds while checking
+     * the first receipt — so it is opened, and meant to stay open, INSIDE the provider's review.
+     * The review closes an ordinary window only. A remainder window lasts until its own
+     * `expires_at` (capped at the settlement deadline when it was opened) or until the payment
+     * leaves PENDING; `receivePhoto` re-decides everything under the payment's lock anyway.
+     *
+     * v0.8.2 hotfix: this sweep closed every window of a payment in review, so a remainder
+     * window lived only until the worker's next pass and the customer's photo was answered
+     * «منتظر رسیدی از شما نیستیم».
+     */
+    const remainderWindow = sql`EXISTS (
+      SELECT 1 FROM ${gatewayInvoices}
+       WHERE ${gatewayInvoices.tenantId} = ${gatewayReceiptCaptures.tenantId}
+         AND ${gatewayInvoices.paymentId} = ${gatewayReceiptCaptures.paymentId}
+         AND ${gatewayInvoices.providerInvoiceId} IS DISTINCT FROM ${gatewayReceiptCaptures.providerInvoiceId})`;
     const paymentClosed = sql`EXISTS (
       SELECT 1 FROM ${payments}
        WHERE ${payments.tenantId} = ${gatewayReceiptCaptures.tenantId}
          AND ${payments.id} = ${gatewayReceiptCaptures.paymentId}
-         AND (${payments.state} <> 'PENDING' OR ${payments.providerReviewUntil} IS NOT NULL))`;
+         AND (${payments.state} <> 'PENDING'
+              OR (${payments.providerReviewUntil} IS NOT NULL AND NOT ${remainderWindow})))`;
     const due = this.exec(tx)
       .select({ id: gatewayReceiptCaptures.id })
       .from(gatewayReceiptCaptures)
