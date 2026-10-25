@@ -310,6 +310,9 @@ describe('the feature flag registry', () => {
       // WP19. Off by default; the customer's refund-request path it switches on is
       // reachable, and requests already filed stay decidable when it is turned off.
       'customer_refund_requests',
+      // Round 9, C5. Off by default; the mini app's surface, its document and the bot's
+      // menu button it switches on are reachable, and with it off the bot is unchanged.
+      'mini_app',
       'ops_notifications',
       // Phase C3. Off by default; draft placement over a panel's balancing group is
       // reachable, and a panel in no group is routed exactly as before while it is on.
