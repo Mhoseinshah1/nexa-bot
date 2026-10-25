@@ -5128,6 +5128,15 @@ export const gatewayInvoices = pgTable(
       'gateway_invoices_tetrapay_check',
       sql`provider <> 'TETRAPAY' OR (provider_unit = 'IRR' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND provider_order_id ~ '^[A-Za-z0-9_.:-]{1,64}$')`,
     ),
+    /**
+     * Round 9 C4: a Rialit attempt is billed in TOMAN with no conversion and no bot, and its
+     * order id is the strict subset of Rialit's documented rules Nexa generates: 1-64 bytes of
+     * `[A-Za-z0-9_.:-]` (one byte each, so the length is also the documented 64-byte bound).
+     */
+    check(
+      'gateway_invoices_rialit_check',
+      sql`provider <> 'RIALIT' OR (provider_unit = 'IRT' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND octet_length(provider_order_id) <= 64 AND provider_order_id ~ '^[A-Za-z0-9_.:-]{1,64}$')`,
+    ),
     check(
       'gateway_invoices_provider_method_check',
       sql`provider_method IS NULL OR (provider = 'TETRAPAY' AND provider_method IN ('online', 'card'))`,
