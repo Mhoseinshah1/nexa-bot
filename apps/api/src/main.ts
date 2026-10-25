@@ -3,6 +3,7 @@ import { isNexaError } from '@nexa/contracts';
 import { createApiApp } from './bootstrap.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
+import { installProcessBackstop } from './infrastructure/lifecycle/process-backstop.js';
 
 /**
  * Process role: `api`.
@@ -15,6 +16,12 @@ import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.j
 async function main(): Promise<void> {
   const config = loadConfig();
   const { app, container } = await createApiApp(config);
+  // A dropped promise is logged and survived; an uncaught exception is logged and exits.
+  installProcessBackstop({
+    role: 'api',
+    logger: container.logger,
+    exit: (code) => process.exit(code),
+  });
 
   const { shutdown } = createShutdownCoordinator({
     name: 'api',

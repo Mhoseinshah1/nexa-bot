@@ -5,6 +5,7 @@ import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
 import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
+import { installProcessBackstop } from './infrastructure/lifecycle/process-backstop.js';
 
 /**
  * TB5 — the `assistant` process role (ADR-0034 §7): the ONLY role that calls an AI provider in
@@ -17,6 +18,12 @@ import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.j
 async function main(): Promise<void> {
   const config = loadConfig();
   const container = createContainer(config, 'assistant');
+  // A dropped promise is logged and survived; an uncaught exception is logged and exits.
+  installProcessBackstop({
+    role: 'assistant',
+    logger: container.logger,
+    exit: (code) => process.exit(code),
+  });
   await resolveInstallationTenant(container);
 
   const heartbeat = startHeartbeat({
