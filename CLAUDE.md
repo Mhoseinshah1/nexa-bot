@@ -26,9 +26,12 @@ history to skim.**
 | Backup and restore                                                                                                        | `docs/backup.md`, ADR-0025, ADR-0028                                      |
 | Open owner questions                                                                                                      | `docs/open-questions.md`                                                  |
 
-Never read `apps/api/src/surfaces/telegram/bot-runtime.ts`,
-`apps/api/src/infrastructure/persistence/schema.ts` or
-`packages/contracts/src/templates.ts` whole: `grep -n`, then read a range.
+Never read `apps/api/src/infrastructure/persistence/schema.ts`,
+`packages/contracts/src/templates.ts`, the Telegram router
+`apps/api/src/surfaces/telegram/bot-runtime.ts` (~2.5k lines) or a flow under
+`apps/api/src/surfaces/telegram/runtime/` whole: `grep -n`, then read a range.
+`bash scripts/claude/module-map.sh --bot <handler>` names a bot handler's file;
+the map and how to add a screen are in `docs/telegram-runtime.md`.
 
 ## Before you change anything
 

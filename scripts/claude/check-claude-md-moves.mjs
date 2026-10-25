@@ -18,6 +18,12 @@
  * break in the old file still matches when it sits on one line in the new one
  * (and the reverse). Bold markup is kept when text moves verbatim, so a bold
  * span must be found as `**text**`.
+ *
+ * Second check: every repository path written in backticks in the files that
+ * say where code lives (PATH_FILES) must exist under --root. A file split or
+ * renamed (bot-runtime.ts into surfaces/telegram/runtime/, R9) must not leave
+ * the map pointing at nothing. A token with a placeholder or glob character
+ * (`<module>`, `*.ts`, `${x}`) is a pattern, not a path, and is skipped.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
@@ -113,6 +119,36 @@ function buildCorpus(files) {
   return parts.join('\n');
 }
 
+/** The files that map where code lives; each backticked path in them must exist. */
+export const PATH_FILES = ['CLAUDE.md', '.claude/skills/nexa-code-navigation/SKILL.md'];
+
+const PATH_ROOT = /^(apps|packages|docs|scripts|tests|deploy|\.claude)\//;
+
+/** Backticked repository paths in a markdown text, in order, without duplicates. */
+export function namedPaths(markdown) {
+  const out = [];
+  for (const m of markdown.matchAll(/`([^`\s]+)`/g)) {
+    const p = m[1];
+    if (!PATH_ROOT.test(p) || /[*<>{}$]/.test(p) || out.includes(p)) continue;
+    out.push(p);
+  }
+  return out;
+}
+
+export function danglingPaths(root) {
+  const dangling = [];
+  let named = 0;
+  for (const rel of PATH_FILES) {
+    const file = join(root, rel);
+    if (!existsSync(file)) continue;
+    for (const p of namedPaths(readFileSync(file, 'utf8'))) {
+      named += 1;
+      if (!existsSync(join(root, p))) dangling.push(`DANGLING path in ${rel}: ${p}`);
+    }
+  }
+  return { named, dangling };
+}
+
 export function check(oldText, corpus) {
   const { headings, bold } = extract(oldText);
   const missing = [];
@@ -143,12 +179,18 @@ function main() {
     return 2;
   }
   const r = check(oldText, buildCorpus(corpusFiles(root)));
-  if (r.missing.length) {
+  const paths = danglingPaths(root);
+  if (r.missing.length || paths.dangling.length) {
     for (const m of r.missing) console.error(m);
-    console.error(`claude-md-moves: FAIL (${r.missing.length} missing)`);
+    for (const d of paths.dangling) console.error(d);
+    console.error(
+      `claude-md-moves: FAIL (${r.missing.length} missing, ${paths.dangling.length} dangling)`,
+    );
     return 1;
   }
-  console.log(`claude-md-moves: OK (${r.headings} headings, ${r.bold} bold spans checked)`);
+  console.log(
+    `claude-md-moves: OK (${r.headings} headings, ${r.bold} bold spans checked) (${paths.named} named paths exist)`,
+  );
   return 0;
 }
 

@@ -70,3 +70,25 @@ test('bold missing -> 1 naming it', () => {
   assert.equal(r.code, 1);
   assert.match(r.err, /MISSING bold: First rule is important\./);
 });
+
+test('a backticked path named in CLAUDE.md that exists -> OK', () => {
+  const r = run({
+    'CLAUDE.md': `${FULL}\nNever read \`apps/api/src/router.ts\` whole; \`<module>\` is a pattern.\n`,
+    'apps/api/src/router.ts': '// router\n',
+  });
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /\(1 named paths exist\)/);
+});
+
+test('a path named in CLAUDE.md or the navigation skill that is gone -> 1 naming it', () => {
+  const r = run({
+    'CLAUDE.md': `${FULL}\nSee \`apps/api/src/surfaces/telegram/gone.ts\`.\n`,
+    '.claude/skills/nexa-code-navigation/SKILL.md': 'Open `docs/moved-away.md`.\n',
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.err, /DANGLING path in CLAUDE\.md: apps\/api\/src\/surfaces\/telegram\/gone\.ts/);
+  assert.match(
+    r.err,
+    /DANGLING path in \.claude\/skills\/nexa-code-navigation\/SKILL\.md: docs\/moved-away\.md/,
+  );
+});

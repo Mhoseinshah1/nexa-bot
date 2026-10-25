@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# module-map.sh --all | <module> | --who-writes <table> | --who-calls <symbol> | -h
+# module-map.sh --all | <module> | --who-writes <table> | --who-calls <symbol>
+#               | --bot [<handler>] | -h
 #
 # A compact map of apps/api/src/modules, built from grep/find/awk alone (no
 # LLM, no node), so "what does this module own" costs tens of lines, not a tree
@@ -18,6 +19,12 @@
 # tests    = files under tests/ that import modules/<key>/..., or whose file
 #            name contains the module name as a whole -/./_-delimited word.
 #
+# --bot    = the Telegram surface since the R9 split: the router
+#            (surfaces/telegram/bot-runtime.ts) and every surfaces/telegram/runtime/
+#            file with its line count and exported functions. With a handler name,
+#            the file:line that defines it and the lines that call it, so a bot
+#            screen is found without opening the router.
+#
 # Root: git toplevel, or $MODULE_MAP_ROOT. Exit 2: usage error, unknown module.
 set -euo pipefail
 export LC_ALL=C
@@ -32,6 +39,8 @@ usage: module-map.sh --all
        module-map.sh <module>            (commerce/orders, or just orders)
        module-map.sh --who-writes <table> (SQL name or schema identifier)
        module-map.sh --who-calls <symbol>
+       module-map.sh --bot               (the Telegram router and runtime/ files)
+       module-map.sh --bot <handler>     (where a bot handler is defined, who calls it)
        module-map.sh -h
 env:   MODULE_MAP_ROOT  repository root (default: git toplevel)
 USAGE
@@ -184,8 +193,42 @@ who_calls() {
   done < <(trace_files "$sym") | sed -n '1,40p'
 }
 
+tg=apps/api/src/surfaces/telegram
+
+bot_files() { # the router first, then runtime/ in name order
+  [[ -f "$tg/bot-runtime.ts" ]] && printf '%s\n' "$tg/bot-runtime.ts"
+  find "$tg/runtime" -maxdepth 1 -type f -name '*.ts' 2>/dev/null | sort
+}
+
+bot_map() {
+  [[ -d "$tg/runtime" ]] || { echo "module-map: no $tg/runtime under $root" >&2; exit 2; }
+  local f lines fns
+  while IFS= read -r f; do
+    lines="$(wc -l <"$f" | tr -d ' ')"
+    fns="$(grep -cE '^export (async )?function ' "$f" || true)"
+    printf '%s lines=%s functions=%s\n' "$f" "$lines" "$fns"
+  done < <(bot_files)
+}
+
+bot_handler() {
+  local sym="$1"
+  [[ "$sym" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { usage >&2; exit 2; }
+  [[ -d "$tg/runtime" ]] || { echo "module-map: no $tg/runtime under $root" >&2; exit 2; }
+  local files; files="$(bot_files)"
+  local defs
+  # a flow's free function, or one of the router's own methods
+  defs="$(xargs grep -nE "^(export )?(async )?function ${sym}\(|^  (async )?${sym}\(" <<<"$files" || true)"
+  if [[ -z "$defs" ]]; then echo "module-map: no bot handler '$sym'" >&2; exit 2; fi
+  printf 'defined:\n%s\n' "$(sed 's/^/  /' <<<"$defs" | cut -c1-160)"
+  printf 'called from:\n'
+  xargs grep -nE "(^|[^A-Za-z0-9_])${sym}\(" <<<"$files" \
+    | grep -vE "^[^:]+:[0-9]+:((export )?(async )?function ${sym}\(|  (async )?${sym}\()" \
+    | sed -n '1,12p' | cut -c1-160 | sed 's/^/  /' || true
+}
+
 case "$1" in
   --all) all ;;
+  --bot) if [[ $# -ge 2 ]]; then bot_handler "$2"; else bot_map; fi ;;
   --who-writes) [[ $# -ge 2 && -n "$2" ]] || { usage >&2; exit 2; }; who_writes "$2" ;;
   --who-calls)  [[ $# -ge 2 && -n "$2" ]] || { usage >&2; exit 2; }; who_calls "$2" ;;
   -*) usage >&2; exit 2 ;;
