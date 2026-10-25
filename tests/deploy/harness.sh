@@ -615,6 +615,20 @@ case "${1:-}" in
   ps)
     exit 0
     ;;
+  info)
+    # `docker info --format '{{.DockerRootDir}}'`: where the daemon keeps its data, and so
+    # the named volumes (`botctl cutover preflight`'s disk line). `docker_root_dir` is what
+    # a test says the daemon answers; `info_exit` is a daemon that does not answer at all.
+    [ "$(read_state info_exit 0)" = 0 ] || exit 1
+    case "$*" in
+      *'{{.DockerRootDir}}'*) printf '%s\n' "$(read_state docker_root_dir '')" ;;
+      *)
+        printf 'fake docker: unmodelled info call: %s\n' "$*" >&2
+        exit 1
+        ;;
+    esac
+    exit 0
+    ;;
   inspect)
     # The environment a running container was CREATED with, which is a different
     # fact from the file on the host — `nexa_running_edge_config` and
@@ -850,6 +864,22 @@ print(json.dumps({"services": {"api": {"environment": env}}}))
                 esac
                 ;;
             esac
+            # The recovery role, the same way (`botctl cutover preflight` requires it: it runs
+            # the import's executor and the rollback restore). Listed only for a topology that
+            # defines one.
+            case " $(read_state compose_services 'api worker monitor postgres redis caddy') " in
+              *' recovery '*)
+                _rec_state="$(read_state recovery_state running)"
+                case "$_rec_state" in
+                  running)
+                    printf '{"Service":"recovery","State":"running","Health":"%s"}\n' \
+                      "$(read_state recovery_health healthy)"
+                    ;;
+                  absent) ;;
+                  *) printf '{"Service":"recovery","State":"%s"}\n' "$_rec_state" ;;
+                esac
+                ;;
+            esac
             # And the EDGE, modelled the same way. It is the only container
             # that publishes a port, so an installation whose api, worker and
             # monitor are all healthy behind an edge that never started is one
@@ -937,6 +967,18 @@ print(json.dumps({"services": {"api": {"environment": env}}}))
         # installer's own `owner_state` — the pipeline included — is what the
         # tests exercise.
         case "$*" in
+          *'migrate.js --check'*)
+            # `botctl cutover preflight`: the read-only migration check, one word on stdout.
+            printf '%s\n' "$(read_state migrate_check current)"
+            exit "$(read_state migrate_check_exit 0)"
+            ;;
+          *'backup.cli.js list'*)
+            # `botctl cutover preflight`: recent backup runs, the CLI's own line format
+            # (`<startedAt> <id> <trigger> <state> <verified|unverified> <delivery> [CLEANUP-INCOMPLETE]`).
+            read_state backup_list 'No backup has ever run on this installation.'
+            printf '\n'
+            exit "$(read_state backup_list_exit 0)"
+            ;;
           *--status*)
             [ "$(read_state owner_state_exit 0)" = "0" ] || exit 1
             printf '%s\n' "$(read_state owner_state none)"

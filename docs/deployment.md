@@ -460,6 +460,7 @@ botctl rollback            return to the previous release
 botctl logs [service]      follow logs
 botctl restart             restart the stack
 botctl restart background  restart worker, monitor and provisioner (after an import or a restore)
+botctl cutover preflight   the MirzaBot cutover's read-only checklist (docs/cutover/): PASS/FAIL per check
 botctl admin check-2fa --username NAME
                            whether an administrator has two-step sign-in on
 botctl admin reset-2fa --username NAME --reason TEXT

@@ -46,6 +46,10 @@ const ALLOWED = new Set([
   // Mirza `.nxpkg` importer: the fresh-target guard (design §6) counts the tenant's debt rows
   // to refuse a non-empty target. A row count only: no amount, no write, no customer.
   'apps/api/src/modules/platform/legacy-importer/infrastructure/nxpkg-fresh-target.ts',
+  // R9 C6: the cutover's read-only reconciliation (`cutover-reconcile`, a restored copy only)
+  // counts the tenant's debt rows to report them beside the balances. A row count only: no
+  // amount, no write, and it refuses a production database by name.
+  'apps/api/src/modules/platform/legacy-cutover/infrastructure/pg-cutover-reconciliation.reader.ts',
 ]);
 
 describe('the legacy wallet debt boundary (never collected)', () => {

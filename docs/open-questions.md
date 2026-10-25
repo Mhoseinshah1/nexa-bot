@@ -3622,6 +3622,47 @@ owner's, or settled from the real staging copy (NOT RUN) — never by guessing.
   `product` is UNCLASSIFIED until `table-inventory.md` is filled from the real dump and a
   reviewed commit classifies it (OQ-MZ-INV). The cutover refuses until then, by design.
 
+## OQ-CUT — the MirzaBot → Nexa production cutover (`docs/cutover/`, R9 C6): prepared, not run
+
+- **OQ-CUT-01 — DECISION (proposed): Telegram's queued updates are dropped at the handover.**
+  NEXA's FIRST registration of a bot calls `setWebhook` with `drop_pending_updates = true`
+  (`bot-bootstrap.service.ts`: `dropPendingUpdates = ensured.createdNow`). At the cutover the
+  bot is registered on NEXA for the first time, so every update customers sent while MirzaBot
+  was frozen is discarded: nobody answers those messages, and no money moves on them (Mirza
+  processed none, NEXA never saw them). Proposed: accept it (no code change). **Settled by**
+  the owner before go/no-go #4, or by an explicit instruction to keep the queue for a migrated
+  bot — a code change and a decision of its own.
+- **OQ-CUT-02 — UNKNOWN: MirzaBot's freeze, unfreeze and webhook re-registration.** The
+  runbook needs Mirza's endpoint stopped WITHOUT deleting its webhook (so a rollback can
+  return to it), every Mirza cron stopped (they write to RickPanel), and — for a rollback
+  after the handover — Mirza's own way of registering its webhook again without
+  `drop_pending_updates` and without the token on a command line. The legacy host has never
+  been seen by this repository (extends OQ-REH-02). **Settled by** the owner writing the
+  commands into `docs/cutover/02-freeze.md` and `08-rollback.md`.
+- **OQ-CUT-03 — UNKNOWN: how long Telegram keeps updates for a webhook that keeps failing.**
+  Bounds the freeze window only if OQ-CUT-01 is changed; not documented in this repository.
+- **OQ-CUT-04 — UNKNOWN: whether an imported customer's first `/start` after the handover
+  links them to the bot.** Until known, the runbook runs `customers-link-bot` (dry run, then
+  `--apply` with `CUSTOMER_FIRST_BOT_BACKFILL_CONFIRM=yes`) and its counts are the evidence.
+- **OQ-CUT-05 — DECISION (proposed): the two package bindings of the cutover approval.**
+  `finalDumpSha256` = the uploaded `.nxpkg` SHA-256 and `freezeProofSha256` = its payload
+  SHA-256, as the executor records them (`nxpkg-activation.md` §5 item 1). **Settled by** the
+  owner confirming it.
+- **OQ-CUT-06 — DECISION: the reconciliation never reads the live database.** `cutover-reconcile`
+  refuses a database name without a non-production word (the importer's list; `nexa` is
+  refused) and does not consider NODE_ENV (it writes nothing, and the copy it reads lives on
+  the production host). At the cutover it reads the post-import backup restored into
+  `nexa_cutover_scratch`. A held row (manual review, invalid identity, duplicated id,
+  unreadable balance) is never a match: the verdict is `RECONCILED_WITH_HELD` (exit 2) and the
+  owner signs each held class off by name.
+
+- **OQ-CUT-07 — OPEN: the per-customer loss list for a stage-R3 rollback.** Rolling back after
+  Nexa has taken customer writes (`docs/cutover/08-rollback.md`, R3) means every purchase, top-up,
+  receipt and ticket written in Nexa since the handover must be listed per customer for the owner
+  to re-enter in Mirza or refund by hand. No command produces that list today; the runbook marks
+  it TBD. A read-only report (writes since a timestamp, per customer, from the ledger, orders and
+  tickets) is the expected shape; it is not built and must not be guessed at cutover.
+
 ## OQ-TB — Intelligent Support Agent (TB0): what the evidence does not settle
 
 Evidence and designs: `docs/support-agent/tb0-audit.md`, ADR-0033, ADR-0034, ADR-0035.
