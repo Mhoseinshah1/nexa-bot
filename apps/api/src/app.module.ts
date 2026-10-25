@@ -68,6 +68,12 @@ import { BulkOperationsController } from './surfaces/web/bulk-operations.control
 import { TelegramWebhookController } from './surfaces/telegram/webhook.controller.js';
 import { GatewayWebhookController } from './surfaces/gateway/webhook.controller.js';
 import { GatewayReturnController } from './surfaces/gateway/return.controller.js';
+import { MiniAppSessionController } from './surfaces/miniapp/session.controller.js';
+import { MiniAppShopController } from './surfaces/miniapp/shop.controller.js';
+import { MiniAppPaymentsController } from './surfaces/miniapp/payments.controller.js';
+import { MiniAppServicesController } from './surfaces/miniapp/services.controller.js';
+import { MiniAppAccountController } from './surfaces/miniapp/account.controller.js';
+import { MiniAppStaticController } from './surfaces/miniapp/static.controller.js';
 import { CorrelationMiddleware } from './surfaces/web/correlation.middleware.js';
 import { securityHeaders } from './surfaces/web/security-headers.middleware.js';
 import { DomainErrorFilter } from './surfaces/web/error.filter.js';
@@ -201,6 +207,22 @@ export class AppModule implements NestModule {
     controllers.push(GatewayWebhookController as never);
     // A provider's browser return (CentralPay): a GET that only brings a verify forward.
     controllers.push(GatewayReturnController as never);
+
+    /*
+     * Round 9, C5: the customer's Telegram Mini App — its API and its document. Always
+     * registered, and inert while the tenant's `mini_app` flag is off: every route then
+     * answers `miniapp.unavailable` (404), the same answer an unknown bot gets, before
+     * anything is read for the caller. Its own authentication (a session minted from a
+     * verified Telegram launch), never the Web Admin's cookie.
+     */
+    controllers.push(
+      MiniAppSessionController as never,
+      MiniAppShopController as never,
+      MiniAppPaymentsController as never,
+      MiniAppServicesController as never,
+      MiniAppAccountController as never,
+      MiniAppStaticController as never,
+    );
 
     return {
       module: AppModule,

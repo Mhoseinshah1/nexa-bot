@@ -52,6 +52,9 @@ import {
 } from '@nexa/contracts';
 import type {
   AdminId,
+  OrderId,
+  TemplateKey,
+  ProductDisplay,
   AuditWriter,
   TelegramChannel,
   Clock,
@@ -867,6 +870,12 @@ import {
 import { TelegramNotificationTransport } from './modules/control/notifications/infrastructure/telegram-transport.js';
 import { RecordingTransport } from './modules/control/notifications/infrastructure/recording-transport.js';
 import type { NotificationTransport } from './modules/control/notifications/application/ports.js';
+import { MiniAppSessionService } from './modules/commerce/miniapp/application/miniapp-session.service.js';
+import { MiniAppReceiptService } from './modules/commerce/miniapp/application/miniapp-receipt.service.js';
+import { MiniAppRateLimiter } from './modules/commerce/miniapp/application/miniapp-rate-limiter.js';
+import { MiniAppCheckout } from './modules/commerce/miniapp/application/miniapp-checkout.js';
+import { DrizzleMiniAppSessionRepository } from './modules/commerce/miniapp/infrastructure/drizzle-miniapp-session.repository.js';
+import { TelegramReceiptUploader } from './modules/commerce/miniapp/infrastructure/telegram-receipt-uploader.js';
 
 /**
  * The composition root.
@@ -931,6 +940,28 @@ export interface LegacyInventoryOptions {
    * selling): the Web Admin's `.nxpkg` importer only. Absent: the read is exactly as before.
    */
   readonly inventoryTargeted?: boolean;
+}
+
+/** What the mini-app surface is handed beyond the shared services (Round 9, C5). */
+export interface MiniAppSurfaceDeps {
+  readonly sessions: MiniAppSessionService;
+  readonly rateLimit: MiniAppRateLimiter;
+  readonly receipts: MiniAppReceiptService;
+  readonly checkout: MiniAppCheckout;
+  readonly topup: WalletTopupFlowService;
+  readonly productDisplay: {
+    displayFor(
+      scope: TenantContext,
+      productId: ProductId | null,
+    ): Promise<(ProductDisplay & { readonly description: string | null }) | null>;
+  };
+  readonly purchaseTitle: (scope: TenantContext, orderId: OrderId) => Promise<string | null>;
+  /**
+   * A platform's own connection guide (`bot.tutorial.<platform>`), the tenant's template, for
+   * a platform with no app configured — what the bot shows then. Rendered here, the composition
+   * root, as the bot's guide is rendered by the messenger: a surface holds no resolver.
+   */
+  readonly tutorialText: (scope: TenantContext, key: TemplateKey) => Promise<string>;
 }
 
 export interface Container {
@@ -1394,6 +1425,13 @@ export interface Container {
   /** PR-C: what a row prints for an id it links to — codes and names, never a uuid. */
   readonly publicLabels: PublicLabelService;
   readonly botRuntime: BotRuntime;
+  /**
+   * Round 9, C5: the customer's Telegram Mini App. Its sessions and gates, its receipt
+   * upload, its request budget and the checkout decisions it shares with the bot; the
+   * surface reaches every other service through the same container fields the Web Admin
+   * and the bot's runtime hold, so there is one instance of each.
+   */
+  readonly miniApp: MiniAppSurfaceDeps;
   /** WP20: counts every Telegram interaction, including the `/ping` the runtime never sees. */
   readonly antiSpam: Pick<AntiSpamService, 'observe'>;
 
@@ -1754,6 +1792,8 @@ export function createContainer(
    * anti-spam fails open.
    */
   const interactionCounter = new RedisInteractionCounter(config.REDIS_URL);
+  // Round 9, C5: the mini app's request budget, in the same store under its own prefix.
+  const miniAppCounter = new RedisInteractionCounter(config.REDIS_URL, 'nexa:miniapp-rate');
 
   /*
    * The recovery repository is built HERE, above the unit of work, because the
@@ -7896,6 +7936,65 @@ export function createContainer(
       () => clock.now(),
     );
 
+  /*
+   * Round 9, C5: the mini app. Every service it calls is an instance built above for the
+   * bot and the Web Admin; what is new is only its sessions, its receipt upload and its
+   * request budget.
+   */
+  const miniAppProductDisplay = {
+    displayFor: async (scope: TenantContext, productId: ProductId | null) => {
+      if (productId === null) return null;
+      const product = await productRepository.findById(scope, productId);
+      return product === null ? null : { ...product.display, description: product.description };
+    },
+  };
+  const miniAppSessions = new MiniAppSessionService({
+    bots: botInstances,
+    tenants,
+    features: featureFlagResolver,
+    settings: settingsResolver,
+    customers: customerService,
+    customerRecords: customerRepository,
+    sessions: new DrizzleMiniAppSessionRepository(database.db),
+    membership: channelMembership,
+    terms: termsAcceptanceService,
+    telegramAdmins,
+    uow,
+    scopeActivity: tenants,
+    audit,
+    clock,
+    ids,
+  });
+  const miniApp: MiniAppSurfaceDeps = {
+    sessions: miniAppSessions,
+    rateLimit: new MiniAppRateLimiter({ counter: miniAppCounter, clock, ids }),
+    receipts: new MiniAppReceiptService({
+      payments: paymentService,
+      receipts: receiptService,
+      uploader: new TelegramReceiptUploader({
+        bots: botInstances,
+        apiBaseUrl: config.TELEGRAM_API_BASE_URL,
+        timeoutMs: config.NOTIFICATION_SEND_TIMEOUT_MS,
+        logger,
+      }),
+      idempotency,
+    }),
+    checkout: new MiniAppCheckout({
+      orders: orderService,
+      commercial: commercialActionService,
+      routes: paymentGatewayService,
+      payments: paymentService,
+      screens: customerScreens,
+    }),
+    topup: walletTopupFlow,
+    productDisplay: miniAppProductDisplay,
+    purchaseTitle: async (scope, orderId) => {
+      const order = await orderRepository.findById(scope, orderId);
+      return order?.line.title ?? null;
+    },
+    tutorialText: (scope, key) => templateResolver.render(scope, key, {}),
+  };
+
   const container: Container = {
     config,
     logger,
@@ -8093,6 +8192,7 @@ export function createContainer(
       reader: new DrizzlePublicLabelReader(database.db),
     }),
     antiSpam,
+    miniApp,
     botRuntime: new BotRuntime({
       // R5C-1 item 4: «نمایش زمان اضافه داخل تمدید هم» (flag `addon_time_in_renew_menu`).
       renewMenuShowsTime: (scope) =>
@@ -8525,6 +8625,7 @@ export function createContainer(
       await receiptReviewPushLoop.stop();
       await opsGroupMaintainer.stop();
       await interactionCounter.close();
+      await miniAppCounter.close();
       await redis.close();
       await database.close();
     },

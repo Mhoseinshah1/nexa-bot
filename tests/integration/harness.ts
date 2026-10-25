@@ -102,12 +102,15 @@ export async function resetAntiSpamWindows(): Promise<void> {
   });
   antiSpamRedis.on('error', () => undefined);
   if (antiSpamRedis.status === 'wait') await antiSpamRedis.connect();
-  let cursor = '0';
-  do {
-    const [next, keys] = await antiSpamRedis.scan(cursor, 'MATCH', 'nexa:antispam:*', 'COUNT', 500);
-    if (keys.length > 0) await antiSpamRedis.del(...keys);
-    cursor = next;
-  } while (cursor !== '0');
+  // Round 9, C5: the mini app's request budget lives in the same store, under its own prefix.
+  for (const pattern of ['nexa:antispam:*', 'nexa:miniapp-rate:*']) {
+    let cursor = '0';
+    do {
+      const [next, keys] = await antiSpamRedis.scan(cursor, 'MATCH', pattern, 'COUNT', 500);
+      if (keys.length > 0) await antiSpamRedis.del(...keys);
+      cursor = next;
+    } while (cursor !== '0');
+  }
 }
 
 export async function resetDatabase(db: Database): Promise<void> {
