@@ -5,6 +5,7 @@ import {
   TELEGRAM_SECRET_TOKEN_HEADER,
   money,
   type ActorContext,
+  type BotInstanceId,
   type CorrelationId,
   type PaymentGatewayConfig,
   type UserId,
@@ -32,7 +33,7 @@ import {
  */
 
 const WEBHOOK_SECRET = 'a-sufficiently-long-secret-for-the-tetrapay-return';
-const BOT_A = SEED_IDS.botA1;
+const BOT_A = SEED_IDS.botA1 as BotInstanceId;
 const CUSTOMER = 5559998801;
 const STRANGER = 5559998802;
 const CHAT_ID = 9191;

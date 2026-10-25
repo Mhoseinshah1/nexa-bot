@@ -787,7 +787,7 @@ describe('the enable refusal names the missing piece', () => {
     },
   });
 
-  for (const provider of ['TETRAPAY', 'RIALIT']) {
+  for (const provider of ['TETRAPAY', 'RIALIT'] as const) {
     it(`${provider}: a missing API key is said in Persian, not the generic sentence`, async () => {
       stubApi([
         { url: '/payment-gateways', body: { gateways: [route(provider)] } },
