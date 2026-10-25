@@ -567,7 +567,8 @@ function failedCardScreen(
       'NOTICE',
     );
   }
-  const reasons = facts?.providerFacts?.rejectReasons ?? [];
+  // R9 C1: a reason that is one of the provider's documented codes reads in Persian.
+  const reasons = facts?.rejectReasonsShown ?? facts?.providerFacts?.rejectReasons ?? [];
   if (reasons.length > 0) {
     return {
       ...screen('bot.payment.gateway_card_rejected', [retry], 'NOTICE'),
