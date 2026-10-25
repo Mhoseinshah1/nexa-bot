@@ -16,6 +16,9 @@ import { Checkout } from './screens/checkout.js';
 import { CardPay } from './screens/card-pay.js';
 import { PayStatus } from './screens/pay-status.js';
 import { ServiceDetail } from './screens/service-detail.js';
+import { Support } from './screens/support.js';
+import { NewTicket, Ticket } from './screens/ticket.js';
+import { Apps } from './screens/apps.js';
 import { Message, TabBar } from './ui.js';
 
 /**
@@ -31,7 +34,11 @@ export type Route =
   | { readonly name: 'checkout'; readonly orderId: string }
   | { readonly name: 'card'; readonly instruction: MiniAppCardInstruction }
   | { readonly name: 'pay'; readonly paymentId: string }
-  | { readonly name: 'service'; readonly serviceId: string };
+  | { readonly name: 'service'; readonly serviceId: string }
+  | { readonly name: 'support' }
+  | { readonly name: 'ticket-new' }
+  | { readonly name: 'ticket'; readonly ticketId: string }
+  | { readonly name: 'apps' };
 
 export type Tab = 'home' | 'store' | 'services';
 
@@ -175,6 +182,10 @@ export function App() {
           {route.name === 'card' && <CardPay instruction={route.instruction} />}
           {route.name === 'pay' && <PayStatus paymentId={route.paymentId} />}
           {route.name === 'service' && <ServiceDetail serviceId={route.serviceId} />}
+          {route.name === 'support' && <Support />}
+          {route.name === 'ticket-new' && <NewTicket />}
+          {route.name === 'ticket' && <Ticket ticketId={route.ticketId} />}
+          {route.name === 'apps' && <Apps />}
           {tab !== null && <TabBar current={tab} onSelect={(next) => setStack([{ name: next }])} />}
         </div>
       )}

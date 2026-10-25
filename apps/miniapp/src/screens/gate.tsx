@@ -3,13 +3,16 @@ import { MINIAPP_ROUTES, miniAppMeResponseSchema, type MiniAppMeResponse } from 
 import { useApp } from '../app.js';
 import { t } from '../i18n/t.js';
 import { openTelegram } from '../telegram.js';
-import { Button, Card, Message, errorText } from '../ui.js';
+import { Button, Card, Ltr, Message, errorText } from '../ui.js';
 
 /**
  * The bot's three gates, shown where the bot would answer with them: blocked, the required
  * channels (with the fresh re-check), the current terms (with their accept button). Only
  * the channels Telegram says are MISSING are listed: the service returns no per-channel
- * "joined" state, so the design's «۱ از ۲» and its ticks are not drawn.
+ * "joined" state, so the design's «۱ از ۲», its progress bar and its ticks are not drawn, nor
+ * its «عضویت به‌صورت خودکار بررسی می‌شود» line (nothing re-checks by itself; the button does).
+ * The layout is the artboard's: the mark, the title and the sentence centred, the channels in
+ * one glass card (avatar, @handle, join), the full-width check button under it.
  */
 export function Gate({ gate }: { gate: NonNullable<MiniAppMeResponse['gate']> }) {
   const { api, refreshMe } = useApp();
@@ -34,13 +37,37 @@ export function Gate({ gate }: { gate: NonNullable<MiniAppMeResponse['gate']> })
   if (gate.kind === 'CHANNELS') {
     return (
       <main className="page">
-        <Card>
+        <header className="gate-hero">
+          <div className="gate-mark" aria-hidden="true">
+            <svg
+              width="38"
+              height="38"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+            >
+              <path d="M3 11l18-8-8 18-2-8z" />
+            </svg>
+          </div>
+          <h1 className="title">{t('miniapp.gate_title')}</h1>
           <p>{t('miniapp.gate_channels')}</p>
+        </header>
+        <Card>
           <ul className="list">
             {gate.channels.map((channel, index) => (
-              <li key={channel.joinUrl} className="list-row">
-                <span>
-                  {channel.handle ?? t('miniapp.gate_channel_private', { number: index + 1 })}
+              <li key={channel.joinUrl} className="gate-channel">
+                <span className="gate-avatar" aria-hidden="true">
+                  {channel.handle === null
+                    ? index + 1
+                    : (channel.handle.replace(/^@/u, '')[0] ?? '')}
+                </span>
+                <span className="gate-channel-name">
+                  {channel.handle === null ? (
+                    t('miniapp.gate_channel_private', { number: index + 1 })
+                  ) : (
+                    <Ltr>{channel.handle}</Ltr>
+                  )}
                 </span>
                 <Button onClick={() => openTelegram(channel.joinUrl)}>
                   {t('miniapp.gate_join')}
@@ -48,17 +75,16 @@ export function Gate({ gate }: { gate: NonNullable<MiniAppMeResponse['gate']> })
               </li>
             ))}
           </ul>
-          <Button
-            primary
-            disabled={busy}
-            onClick={() =>
-              act(() => api.post(MINIAPP_ROUTES.gateCheck, {}, miniAppMeResponseSchema))
-            }
-          >
-            {t('miniapp.gate_check')}
-          </Button>
-          {error !== null && <p className="error">{error}</p>}
         </Card>
+        <button
+          type="button"
+          className="btn btn-primary btn-wide"
+          disabled={busy}
+          onClick={() => act(() => api.post(MINIAPP_ROUTES.gateCheck, {}, miniAppMeResponseSchema))}
+        >
+          {t('miniapp.gate_check')}
+        </button>
+        {error !== null && <p className="error">{error}</p>}
       </main>
     );
   }
