@@ -324,6 +324,8 @@ export const miniAppCardInstructionSchema = z.object({
   orderId: idSchema.nullable(),
   /** What must be TRANSFERRED: the payable, including any customer fee. */
   amount: moneySchema,
+  /** That amount as the digits a banking app takes — rial, no separators — the bot's copy button. */
+  copyAmount: z.string(),
   /** The principal and the fee apart, when the route charges a customer fee. */
   principal: moneySchema.nullable(),
   fee: moneySchema.nullable(),
@@ -334,6 +336,8 @@ export const miniAppCardInstructionSchema = z.object({
   destination: z
     .object({
       cardNumber: z.string(),
+      /** The sixteen digits without spaces: what the bot's copy-card button copies. */
+      copyCardNumber: z.string(),
       holderName: z.string().nullable(),
       bankName: z.string().nullable(),
     })
