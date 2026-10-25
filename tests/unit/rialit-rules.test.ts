@@ -21,11 +21,12 @@ import {
  * the owner-provided Rialit API document's own examples (amount 250000, order-1042).
  *
  * MUTATION (each reverted alone, the named test failed, restored with git checkout):
- *  - `rialitJudgement` approving any status but `paid` / returning UNSUCCESSFUL for `expired`
- *    -> 'expired and cancelled are OPEN, never a failure';
- *  - `rialitJudgement` approving without the amount check -> 'a paid answer for another amount';
+ *  - `rialitJudgement` returning UNSUCCESSFUL for `expired`/`cancelled` -> 'expired and
+ *    cancelled are OPEN, never a failure' (and the adapter's 'pending, expired and cancelled…');
  *  - the both-charge guard (`nexaFeeCharged && payerFee > 0n`) removed -> 'both sides charging';
- *  - the `payer_amount = amount + payer_fee` check removed -> 'figures that do not add up'.
+ *  - the `payer_amount = amount + payer_fee` check removed -> 'figures that do not add up'
+ *    (and the adapter's 'payer figures that do not add up…');
+ *  - the adapter's local range check removed -> 'refuses out of range BEFORE any call'.
  */
 
 const ORDER = 'order-1042';

@@ -49,11 +49,15 @@ import {
  *
  * MUTATION (each reverted alone, the named test failed, restored with git checkout):
  *  - the both-charge guard in `rialitPayerCheck` -> 'both sides charging a fee';
- *  - `rialitJudgement` returning UNSUCCESSFUL for `expired` -> 'an expired payment stays open';
+ *  - `rialitJudgement` returning UNSUCCESSFUL for `expired`/`cancelled` -> 'an expired or
+ *    cancelled payment stays open', 'a late paid after expired…', 'expired and cancelled
+ *    webhooks…';
  *  - `rialitJudgement` approving `pending` (the webhook's word taken) -> 'a webhook that says
  *    paid settles nothing';
- *  - the delivery-id dedupe (`last_webhook_delivery_id`) bypassed in the repository ->
- *    'the same event id twice is a duplicate'.
+ *  - the adapter's delivery id (X-Rialit-Delivery / `event_id`) dropped, so the dedupe on
+ *    `last_webhook_delivery_id` never applies -> 'the same event id twice is a duplicate';
+ *  - the lane passing `customerFeeCharged: false` always -> 'both sides charging a fee';
+ *  - the lane's `isWebhookProbe` answer removed -> 'webhook.test is answered…'.
  */
 
 const BOT_A = SEED_IDS.botA1 as BotInstanceId;

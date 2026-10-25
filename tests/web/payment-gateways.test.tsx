@@ -750,7 +750,7 @@ describe('the TetraPay page', () => {
  * Round 9 C4: a refused enable says in Persian exactly what is missing (the server's
  * `details.reason`), never only the generic «درگاه پرداخت اکنون در دسترس نیست».
  *
- * MUTATION: `gatewayEnableRefusalText` dropped from the toggle's banner -> the first test
+ * MUTATION: the toggle's banner put the generic sentence first -> both per-route tests
  * failed (the generic sentence came back); restored.
  */
 describe('the enable refusal names the missing piece', () => {
