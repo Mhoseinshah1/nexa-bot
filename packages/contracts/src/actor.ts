@@ -24,7 +24,21 @@ export type ActorType = (typeof ACTOR_TYPES)[number];
 
 export const actorTypeSchema = z.enum(ACTOR_TYPES);
 
-export const SOURCE_SURFACES = ['TELEGRAM', 'WEB', 'WORKER', 'SCHEDULER', 'API'] as const;
+/**
+ * Which surface an action arrived through.
+ *
+ * `MINI_APP` (Round 9, C5) is the customer's Telegram Mini App: an authenticated HTTP surface
+ * of its own, so its audit rows, its idempotency namespace and the purchases, renewals,
+ * top-ups and tickets it creates say so — the operations log prints `منبع: مینی‌اپ` from it.
+ */
+export const SOURCE_SURFACES = [
+  'TELEGRAM',
+  'WEB',
+  'WORKER',
+  'SCHEDULER',
+  'API',
+  'MINI_APP',
+] as const;
 export type SourceSurface = (typeof SOURCE_SURFACES)[number];
 
 export interface ActorContext {
