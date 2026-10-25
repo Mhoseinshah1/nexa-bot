@@ -68,6 +68,8 @@ export const i18nOpsLogWords: OpsLogWords = {
     ];
     return parts.length === 0 ? null : `${W.badges.separator}${parts.join(W.badges.separator)}`;
   },
+  sourceName: (source) => W.sources[source],
+  firstPurchaseYes: W.firstPurchaseYes,
   failedOperation: (type) => pick(W.operations, type, W.operations.OTHER),
   paidOperation: (purpose) => pick(W.paidOperations, purpose, W.paidOperations.OTHER),
   operationState: (state) => W.operationStates[state],
@@ -143,4 +145,5 @@ export const i18nOpsLogWords: OpsLogWords = {
   reportUnit: (kind) => (kind === 'gb' ? W.report.gb : W.report.orders),
   reportNoActivity: W.report.noActivity,
   reportResellers: W.report.resellerLine,
+  reportTopResellers: W.report.topResellers,
 };

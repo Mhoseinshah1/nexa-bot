@@ -11,7 +11,7 @@ import type { EventConsumer } from '../../../platform/eventing/application/event
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { publish, scopeOf } from './publish.js';
 import { operationFailure, provisionFailure, type Built } from './presenters.js';
-import type { OpsLogFacts, OpsLogLane, OpsLogWords } from './ports.js';
+import type { AdminFact, OpsLogFacts, OpsLogLane, OpsLogWords } from './ports.js';
 
 /**
  * The error reports for a paid order that could not be delivered (Round 4 PR-D): a service
@@ -105,6 +105,9 @@ export class FailureLogConsumer implements EventConsumer {
     const refunded = unknown ? null : await this.refundedOf(scope, order, tx);
 
     const createsService = order.purpose === 'NEW_SERVICE' || order.purpose === 'CUSTOM_SERVICE';
+    // R9 C2: a service an administrator created from the Web Admin has a report of its own,
+    // naming the administrator. The order's creating audit row says who acted.
+    const createdBy = createsService ? await this.administratorOf(scope, order.id, tx) : undefined;
     const built: Built = createsService
       ? provisionFailure({
           order,
@@ -114,6 +117,7 @@ export class FailureLogConsumer implements EventConsumer {
           payment,
           refunded,
           unknown,
+          ...(createdBy === undefined ? {} : { createdBy }),
           at,
           words: this.deps.words,
         })
@@ -145,6 +149,22 @@ export class FailureLogConsumer implements EventConsumer {
         },
       },
     });
+  }
+
+  /**
+   * The administrator who created the order from the Web Admin, or undefined for a customer's
+   * own purchase (or an order whose creating audit row is not there).
+   */
+  private async administratorOf(
+    scope: TenantContext,
+    orderId: string,
+    tx: TransactionScope,
+  ): Promise<{ readonly admin: AdminFact | null; readonly label: string | null } | undefined> {
+    const origin = await this.deps.facts.orderOrigin(scope, orderId, tx);
+    if (origin === null || origin.actorType !== 'WEB_ADMIN') return undefined;
+    const admin =
+      origin.actorId === null ? null : await this.deps.facts.admin(scope, origin.actorId, tx);
+    return { admin, label: origin.actorLabel };
   }
 
   /** The sum of the order's REFUND credits in its own currency, or null when there are none. */
