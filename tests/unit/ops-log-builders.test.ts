@@ -374,6 +374,7 @@ describe('L10 / L11 — a service was created', () => {
     }),
     service: service(),
     customer: customer({ phone: '+989120000001' }),
+    origin: null,
     at: AT,
     words,
   };
@@ -447,6 +448,7 @@ describe('L12 / L13 / L14 — renew, extra traffic, extra time', () => {
     customer: customer(),
     payment: payment(),
     walletBalance: { before: irt(500_000), after: irt(250_000) },
+    origin: null,
     at: AT,
     words,
   };
@@ -798,6 +800,7 @@ describe('L26 — a ticket', () => {
         customerId: 'cust-a',
         categoryTitle: 'مشکل اتصال',
         snippetSource: 'سلام\nسرویس وصل نمی‌شود\nخط سوم نباید بیاید',
+        surface: null,
       },
       customer: customer(),
       reply: false,
