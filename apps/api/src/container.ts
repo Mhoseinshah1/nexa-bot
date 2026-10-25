@@ -18,6 +18,7 @@ import {
   BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT,
   BACKUP_ARCHIVE_RETENTION_SETTING_KEYS,
   BACKUP_PART_MAX_BYTES,
+  DATA_COMPACTION_BATCH_SIZE,
   DATA_RETENTION_SETTING_KEYS,
   IDEMPOTENCY_INTERACTIVE_RETENTION_DAYS_DEFAULT,
   OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT,
@@ -258,6 +259,13 @@ import {
 import { planArchiveParts } from './modules/platform/backup/infrastructure/archive-parts.js';
 import { purgePublishedOutboxBefore } from './modules/platform/eventing/infrastructure/outbox-retention.js';
 import { purgeExpiredIdempotencyBefore } from './modules/platform/idempotency/infrastructure/idempotency-retention.js';
+import { DataCompactionService } from './modules/platform/data-compaction/application/data-compaction.service.js';
+import {
+  DATA_COMPACTION_INITIAL_DELAY_MS,
+  DATA_COMPACTION_INTERVAL_MS,
+  DataCompactionLoop,
+} from './modules/platform/data-compaction/application/data-compaction-loop.js';
+import { DrizzleDataCompactionRepository } from './modules/platform/data-compaction/infrastructure/drizzle-data-compaction.repository.js';
 import { BackupPasswordService } from './modules/platform/backup/application/backup-password.service.js';
 import { LegacyCompactionService } from './modules/platform/legacy-compaction/application/legacy-compaction.service.js';
 import { LegacyCompactionExecutor } from './modules/platform/legacy-compaction/application/legacy-compaction.executor.js';
@@ -1577,6 +1585,13 @@ export interface Container {
   /** E1: the owner's compaction of the imported legacy data, and the worker that runs it. */
   readonly legacyCompaction: LegacyCompactionService;
   readonly legacyCompactionExecutor: LegacyCompactionExecutor;
+  /**
+   * Round 9 C3: the data compaction — the allow-listed finished notifications and closed
+   * receipt windows past their retention. The service serves the CLI and the Web Admin's
+   * preview; the loop runs in the worker. DRY_RUN until the owner sets APPLY.
+   */
+  readonly dataCompaction: DataCompactionService;
+  readonly dataCompactionLoop: DataCompactionLoop;
   readonly backupTools: PostgresDatabaseTools;
   /**
    * The Recovery Kit (ADR-0032): the keyring every cipher in this process reads
@@ -7502,6 +7517,41 @@ export function createContainer(
     tickIntervalMs: 60_000,
     logger,
   });
+  /*
+   * Round 9 C3: the data compaction. Nothing starts while a recovery holds the installation
+   * (any active state, not only the quiesce window: the pre-restore backup is a backup) or a
+   * backup is running; each batch also passes the unit of work's quiesce gate.
+   */
+  const dataCompactionRepository = new DrizzleDataCompactionRepository(database.db);
+  const dataCompaction = new DataCompactionService({
+    repository: dataCompactionRepository,
+    uow,
+    guard,
+    audit,
+    opsLog,
+    scopeActivity: tenants,
+    settings: settingsResolver,
+    clock,
+    ids,
+    inFlight: async () => {
+      if ((await recoveryRequests.installationLock()) !== null) return 'RECOVERY_IN_FLIGHT';
+      if ((await backupRuns.active()) !== null) return 'BACKUP_IN_FLIGHT';
+      return null;
+    },
+    batchSize: DATA_COMPACTION_BATCH_SIZE,
+    maxBatchesPerPass: 200,
+  });
+  const dataCompactionLoop = new DataCompactionLoop(dataCompaction, dataCompactionRepository, {
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    intervalMs: DATA_COMPACTION_INTERVAL_MS,
+    initialDelayMs: DATA_COMPACTION_INITIAL_DELAY_MS,
+    now: () => clock.now().getTime(),
+    correlationId: () => newCorrelationId(ids.uuid()),
+    logger,
+  });
   const backupAdmin = new BackupAdminService({
     runs: backupRuns,
     archivePassword: (scope) => backupPasswords.status(scope),
@@ -8436,6 +8486,8 @@ export function createContainer(
     backupPasswords,
     legacyCompaction,
     legacyCompactionExecutor,
+    dataCompaction,
+    dataCompactionLoop,
     backupTools,
     recoveryService,
     backupAdmin,
@@ -8528,6 +8580,7 @@ export function createContainer(
       await gatewayPaymentLoop.stop();
       await serviceReminderLoop.stop();
       await nightlyReportLoop.stop();
+      await dataCompactionLoop.stop();
       await customerReminderLoop.stop();
       await campaignScheduleLoop.stop();
       await telegramMessageRetentionLoop.stop();

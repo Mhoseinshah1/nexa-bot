@@ -5,8 +5,13 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
+import {
+  summarizeCompactionDay,
+  type NightlyReportData,
+  type PanelDayFact,
+  type Tally,
+} from '../application/nightly-report.js';
 import { isFirstPaidPurchase } from './first-purchase-sql.js';
-import type { NightlyReportData, PanelDayFact, Tally } from '../application/nightly-report.js';
 import type { NightlyReportReader, NightlyReportWindow } from '../application/ports.js';
 
 type Row = Record<string, unknown>;
@@ -174,6 +179,20 @@ export class DrizzleNightlyReportReader implements NightlyReportReader {
              AND COALESCE(resolved_at, updated_at) < ${end}`,
     );
 
+    // --- Round 9 C3: the data compaction's passes of the day (part of L30) -------------
+    const compactionRuns = await this.rows(
+      tx,
+      sql`SELECT mode, counts FROM data_compaction_runs
+           WHERE tenant_id = ${tenantId} AND started_at >= ${start} AND started_at < ${end}
+           ORDER BY started_at, id`,
+    );
+    const compaction = summarizeCompactionDay(
+      compactionRuns.map((row) => ({
+        mode: row['mode'] === 'APPLY' ? 'APPLY' : 'DRY_RUN',
+        counts: (row['counts'] ?? {}) as Record<string, number>,
+      })),
+    );
+
     // --- refunds, commissions, gifts -------------------------------------------------
     const ledger = async (reason: string, direction: 'CREDIT' | 'DEBIT'): Promise<Tally> => {
       const [row] = await this.rows(
@@ -327,6 +346,7 @@ export class DrizzleNightlyReportReader implements NightlyReportReader {
       failedPayments: num(failed?.['n']),
       openTickets: num(tickets?.['n']),
       expiredPayments: num(expired?.['n']),
+      compaction,
       refunds,
       commissions,
       giftSum: gifts.sum,

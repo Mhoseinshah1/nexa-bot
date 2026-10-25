@@ -402,6 +402,15 @@ export const OPS_LOG_WORDS_FA = {
   storm: { heading: 'خطاهای تکراری' },
   report: {
     cleanup: (n: string) => `🧹 پاکسازی: ${n} پرداخت ناتمام منقضی شد`,
+    compaction: {
+      applied: (parts: string) => `🗜 فشرده‌سازی داده — حذف شد: ${parts}`,
+      dryRun: (parts: string) => `🗜 فشرده‌سازی داده — فقط شمارش، چیزی حذف نشد: ${parts}`,
+      classes: {
+        OPS_NOTIFICATIONS: 'اعلان‌های عملیات',
+        CUSTOMER_NOTIFICATIONS: 'اعلان‌های کاربران',
+        RECEIPT_WINDOWS: 'پنجره‌های رسید',
+      },
+    },
     noActivity: 'امروز فعالیتی ثبت نشده است.',
     topResellers: '🏆 برترین نمایندگان امروز',
     resellerLine: 'نماینده‌ها',

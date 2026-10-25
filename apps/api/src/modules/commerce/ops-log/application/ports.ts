@@ -444,6 +444,9 @@ export interface OpsLogWords {
   stalledOperationTitle(operationType: string): string | null;
   severity(klass: string): string;
   cleanupLine(countText: string): string;
+  /** Round 9 C3: the data compaction's part of the cleanup line; `parts` is already worded. */
+  compactionLine(applied: boolean, parts: string): string;
+  compactionClass(cls: string): string;
   reportHealth(state: string): string;
   reportMethod(key: string): string;
   reportUnit(kind: 'gb' | 'orders'): string;

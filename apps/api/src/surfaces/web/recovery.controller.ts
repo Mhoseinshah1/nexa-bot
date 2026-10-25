@@ -16,6 +16,8 @@ import {
   recoveryConfirmationSchema,
   recoveryVerifyRequestSchema,
   LEGACY_COMPACTION_ROUTES,
+  DATA_COMPACTION_ROUTES,
+  type DataCompactionPreview,
   requestLegacyCompactionSchema,
   type LegacyCompactionRun,
   type LegacyCompactionStatusResponse,
@@ -269,6 +271,19 @@ export class RecoveryController {
     const command = requestLegacyCompactionSchema.parse(body);
     const run = await this.container.legacyCompaction.request(scope, actor, command);
     return { available: false, run: toCompactionRun(run) };
+  }
+
+  // --- Round 9 C3: the data compaction's dry run ----------------------------
+
+  /**
+   * What the data compaction WOULD remove at today's cutoffs, per class and table, and its
+   * last recorded pass. Read-only: a request never starts a pass (the worker does, in the
+   * mode the settings say, and the owner's CLI). `maintenance.run`, checked by the service.
+   */
+  @Get(DATA_COMPACTION_ROUTES.preview)
+  async dataCompactionPreview(@Req() request: FastifyRequest): Promise<DataCompactionPreview> {
+    const { scope, actor } = await this.authenticate(request);
+    return this.container.dataCompaction.preview(scope, actor);
   }
 
   // --- Recovery ------------------------------------------------------------

@@ -815,6 +815,52 @@ export const WEB_FA = {
   'web.setting_retention_idempotency': 'نگه‌داری کلیدهای تکرارناپذیری',
   'web.setting_retention_idempotency_desc':
     'کلیدهای پنل وب و تلگرام پس از چند روز پاک شوند. کلیدهای کارهای پس‌زمینه و انتقال داده هرگز پاک نمی‌شوند.',
+  // Round 9 C3 — the data compaction (settings and its dry run).
+  'web.setting_compaction_mode': 'حالت فشرده‌سازی داده‌های قدیمی',
+  'web.setting_compaction_mode_desc':
+    'در حالت «فقط شمارش»، که حالت آغازین است، هر شب فقط شمرده می‌شود چه چیزی حذف خواهد شد و هیچ ردیفی حذف نمی‌شود. در حالت «حذف» اعلان‌های تمام‌شده و پنجره‌های بسته‌ی رسید که از مدت نگه‌داری گذشته‌اند حذف می‌شوند. دفتر کیف پول، پرداخت‌ها، سفارش‌ها، سرویس‌ها، رسیدها، بازگشت وجه‌ها و سوابق ممیزی هرگز حذف نمی‌شوند.',
+  'web.setting_compaction_ops_days': 'نگه‌داری اعلان‌های گروه عملیات',
+  'web.setting_compaction_ops_days_desc':
+    'پیام‌های گروه عملیات که ارسال شده یا ناموفق مانده‌اند، همراه با سابقه‌ی تلاش‌های ارسالشان، پس از چند روز حذف شوند. پیامی که هنوز در صف است هرگز حذف نمی‌شود.',
+  'web.setting_compaction_customer_days': 'نگه‌داری اعلان‌های کاربران',
+  'web.setting_compaction_customer_days_desc':
+    'اعلان‌های تمام‌شده‌ی کاربران از نوع یادآوری سرویس، کمبود موجودی، حداقل فروش نماینده و نتیجه‌ی عملیات اعلام‌شده پس از چند روز حذف شوند. اعلان در صف یا نامعلوم، و هر اعلانی درباره‌ی پرداخت، سفارش، بازگشت وجه، کیف پول، تیکت یا پیام مستقیم هرگز حذف نمی‌شود.',
+  'web.setting_compaction_receipt_days': 'نگه‌داری پنجره‌های بسته‌ی رسید',
+  'web.setting_compaction_receipt_days_desc':
+    'پنجره‌های بسته‌ای که ربات در آن منتظر عکس رسید بود پس از چند روز حذف شوند. پنجره‌ی باز، خود رسید و رسید ارسال‌شده به درگاه هرگز حذف نمی‌شوند.',
+  'web.dcp_title': 'فشرده‌سازی داده‌های قدیمی',
+  'web.dcp_hint':
+    'فقط شمارش: این دکمه نشان می‌دهد با تنظیمات فعلی چه تعداد ردیف حذف خواهد شد و هیچ چیزی حذف نمی‌کند. حذف واقعی هر شب در پس‌زمینه انجام می‌شود، و فقط وقتی حالت فشرده‌سازی در تنظیمات روی «حذف» باشد.',
+  'web.dcp_preview': 'شمارش (بدون حذف)',
+  'web.dcp_mode': 'حالت فعلی',
+  'web.dcp_mode_dry_run': 'فقط شمارش',
+  'web.dcp_mode_apply': 'حذف',
+  'web.dcp_counts_caption': 'ردیف‌هایی که اکنون قابل حذف‌اند',
+  'web.dcp_class': 'دسته',
+  'web.dcp_retention': 'مدت نگه‌داری',
+  'web.dcp_days': '{n} روز',
+  'web.dcp_cutoff': 'قدیمی‌تر از',
+  'web.dcp_table': 'جدول',
+  'web.dcp_rows': 'تعداد ردیف',
+  'web.dcp_class_ops_notifications': 'اعلان‌های گروه عملیات',
+  'web.dcp_class_customer_notifications': 'اعلان‌های کاربران',
+  'web.dcp_class_receipt_windows': 'پنجره‌های بسته‌ی رسید',
+  'web.dcp_last_run': 'آخرین اجرا',
+  'web.dcp_last_mode': 'حالت آخرین اجرا',
+  'web.dcp_last_state': 'وضعیت آخرین اجرا',
+  'web.dcp_last_reason': 'علت توقف',
+  'web.dcp_last_total': 'تعداد ردیف‌های آخرین اجرا',
+  'web.dcp_state_running': 'در حال اجرا',
+  'web.dcp_state_completed': 'کامل شد',
+  'web.dcp_state_stopped': 'متوقف شد',
+  'web.dcp_state_failed': 'ناموفق',
+  'web.dcp_reason_recovery': 'یک بازیابی در جریان است؛ فشرده‌سازی تا پایان آن صبر می‌کند.',
+  'web.dcp_reason_backup': 'یک بکاپ در حال گرفته شدن است؛ فشرده‌سازی تا پایان آن صبر می‌کند.',
+  'web.dcp_reason_scope': 'این مجموعه در حال حاضر کاری نمی‌پذیرد.',
+  'web.dcp_reason_ceiling': 'به سقف دسته‌های یک اجرا رسید؛ بقیه در اجرای بعدی حذف می‌شود.',
+  'web.dcp_reason_abandoned': 'اجرا نیمه‌کاره رها شد و اجرای بعدی آن را بست.',
+  'web.dcp_reason_error':
+    'اجرا با خطا متوقف شد؛ دسته‌هایی که پیش از خطا کامل شدند حذف شده‌اند و بقیه در اجرای بعدی بررسی می‌شوند.',
   // Round 4 PR-E (E1) — compacting the imported legacy data.
   'web.lcp_title': 'فشرده‌سازی داده‌های ربات قبلی',
   'web.lcp_hint':
