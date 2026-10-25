@@ -68,7 +68,10 @@ export function CardPay({ instruction }: { instruction: MiniAppCardInstruction }
         <li className="step">{t('miniapp.card_step_review')}</li>
       </ol>
       <Card>
-        <Row label={t('miniapp.card_amount')} value={<strong>{money(instruction.amount)}</strong>} />
+        <Row
+          label={t('miniapp.card_amount')}
+          value={<strong>{money(instruction.amount)}</strong>}
+        />
         {instruction.principal !== null && instruction.fee !== null && (
           <p className="muted">
             {t('miniapp.card_principal_fee', {
@@ -102,7 +105,9 @@ export function CardPay({ instruction }: { instruction: MiniAppCardInstruction }
       <Card>
         <Row label={t('miniapp.card_reference')} value={<Ltr>{instruction.reference}</Ltr>} />
         {instruction.expiresAt !== null && (
-          <p className="muted">{t('miniapp.card_deadline', { at: dateTime(instruction.expiresAt) })}</p>
+          <p className="muted">
+            {t('miniapp.card_deadline', { at: dateTime(instruction.expiresAt) })}
+          </p>
         )}
       </Card>
       <Card>

@@ -10,7 +10,8 @@ export function Services() {
   const { api, navigate } = useApp();
   const [page, setPage] = useState(0);
   const { loaded, reload } = useLoad(
-    () => api.get(MINIAPP_ROUTES.services, {}, miniAppServicesResponseSchema, `page=${String(page)}`),
+    () =>
+      api.get(MINIAPP_ROUTES.services, {}, miniAppServicesResponseSchema, `page=${String(page)}`),
     [api, page],
   );
   const now = new Date();

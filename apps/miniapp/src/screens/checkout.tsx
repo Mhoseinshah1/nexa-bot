@@ -149,7 +149,10 @@ function Invoice({
           <Row label={t('miniapp.checkout_traffic')} value={trafficLimit(order.trafficBytes)} />
         )}
         {order.durationDays !== null && (
-          <Row label={t('miniapp.checkout_duration')} value={formatDurationDays(order.durationDays)} />
+          <Row
+            label={t('miniapp.checkout_duration')}
+            value={formatDurationDays(order.durationDays)}
+          />
         )}
         {order.username !== null && (
           <Row label={t('miniapp.checkout_username')} value={<Ltr>{order.username}</Ltr>} />
@@ -165,7 +168,9 @@ function Invoice({
           <Row label={t('miniapp.checkout_cashback')} value={money(order.cashback)} />
         )}
         {order.expiresAt !== null && payable && (
-          <p className="muted">{t('miniapp.checkout_expires', { at: dateTime(order.expiresAt) })}</p>
+          <p className="muted">
+            {t('miniapp.checkout_expires', { at: dateTime(order.expiresAt) })}
+          </p>
         )}
       </Card>
 

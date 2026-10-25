@@ -1,9 +1,5 @@
 import { useState } from 'react';
-import {
-  MINIAPP_ROUTES,
-  miniAppMeResponseSchema,
-  type MiniAppMeResponse,
-} from '@nexa/contracts';
+import { MINIAPP_ROUTES, miniAppMeResponseSchema, type MiniAppMeResponse } from '@nexa/contracts';
 import { useApp } from '../app.js';
 import { t } from '../i18n/t.js';
 import { openTelegram } from '../telegram.js';
@@ -43,15 +39,21 @@ export function Gate({ gate }: { gate: NonNullable<MiniAppMeResponse['gate']> })
           <ul className="list">
             {gate.channels.map((channel, index) => (
               <li key={channel.joinUrl} className="list-row">
-                <span>{channel.handle ?? t('miniapp.gate_channel_private', { number: index + 1 })}</span>
-                <Button onClick={() => openTelegram(channel.joinUrl)}>{t('miniapp.gate_join')}</Button>
+                <span>
+                  {channel.handle ?? t('miniapp.gate_channel_private', { number: index + 1 })}
+                </span>
+                <Button onClick={() => openTelegram(channel.joinUrl)}>
+                  {t('miniapp.gate_join')}
+                </Button>
               </li>
             ))}
           </ul>
           <Button
             primary
             disabled={busy}
-            onClick={() => act(() => api.post(MINIAPP_ROUTES.gateCheck, {}, miniAppMeResponseSchema))}
+            onClick={() =>
+              act(() => api.post(MINIAPP_ROUTES.gateCheck, {}, miniAppMeResponseSchema))
+            }
           >
             {t('miniapp.gate_check')}
           </Button>
