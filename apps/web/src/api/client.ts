@@ -396,6 +396,9 @@ import {
   setBackupArchivePasswordResponseSchema,
   LEGACY_COMPACTION_ROUTES,
   legacyCompactionStatusResponseSchema,
+  DATA_COMPACTION_ROUTES,
+  dataCompactionPreviewSchema,
+  type DataCompactionPreview,
   type LegacyCompactionStatusResponse,
   type SetBackupArchivePasswordResponse,
   type BackupHistoryResponse,
@@ -2819,6 +2822,11 @@ export function requestLegacyCompaction(input: {
   phrase: string;
 }): Promise<LegacyCompactionStatusResponse> {
   return post(LEGACY_COMPACTION_ROUTES.request, input, legacyCompactionStatusResponseSchema);
+}
+
+/** Round 9 C3: what the data compaction WOULD remove now, per table; removes nothing. */
+export function fetchDataCompactionPreview(): Promise<DataCompactionPreview> {
+  return authedGet(DATA_COMPACTION_ROUTES.preview, dataCompactionPreviewSchema);
 }
 
 /** One part of a split archive (E4), exactly as it was delivered to Telegram. */

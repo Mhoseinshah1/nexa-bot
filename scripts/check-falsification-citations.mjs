@@ -173,8 +173,9 @@ const RECORDS = [
  * 2751 → 2762: its PR #217 review — 40 rows and 52 citations in all (+11).
  * 2762 → 2761: B1 retired UX22's integration case (the pre-invoice no longer splits) (-1).
  * 2761 → 2785: Round 6 PR-3 adds 24 rows (R6-01..R6-20 and the four Codex fixes F-01..F-04) (+24).
+ * 2785 → 2805: Round 9 C1 adds 19 rows R9-01..R9-19 citing 20 tests (R9-16 cites two) (+20).
  */
-const EXPECTED = 2785;
+const EXPECTED = 2805;
 /**
  * A table whose last column is one of these is making citations.
  *

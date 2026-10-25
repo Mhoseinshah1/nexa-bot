@@ -179,6 +179,7 @@ describe('payment routes', () => {
       'CENTRALPAY',
       'MANUAL_TRANSFER',
       'NOWPAYMENTS',
+      'RIALIT',
       'TELEGRAM_STARS',
       'TETRAPAY',
       'TONPAYS',
@@ -190,6 +191,8 @@ describe('payment routes', () => {
     expect(gateways.find((gateway) => gateway.provider === 'CENTRALPAY')?.status).toBe('DISABLED');
     // TetraPay needs a key: seeded DISABLED like TonPays (its webhook secret is optional).
     expect(gateways.find((gateway) => gateway.provider === 'TETRAPAY')?.status).toBe('DISABLED');
+    // Rialit (Round 9) needs a key: seeded DISABLED like TonPays.
+    expect(gateways.find((gateway) => gateway.provider === 'RIALIT')?.status).toBe('DISABLED');
     const route = gateways.find((gateway) => gateway.provider === 'MANUAL_TRANSFER');
     expect(route?.status).toBe('ACTIVE');
     // WP11A: a route that needs a credential is seeded DISABLED, with no key.
@@ -224,8 +227,8 @@ describe('payment routes', () => {
   it('lets a view-only role read and refuses its writes at the guard', async () => {
     const { gateways } = await ctx.container.paymentGateways.list(tenantA, viewerA);
     // The whole roster: TonPays (WP11A), Telegram Stars (Package A), TonPays Telegram,
-    // NOWPayments and CentralPay.
-    expect(gateways).toHaveLength(7);
+    // NOWPayments, CentralPay, TetraPay and Rialit.
+    expect(gateways).toHaveLength(8);
 
     const refused = await ctx.container.paymentGateways
       .setStatus(tenantA, viewerA, {

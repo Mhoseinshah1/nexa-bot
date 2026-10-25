@@ -73,6 +73,8 @@ describe('the nightly panels report names the top reseller’s sum with its unit
       activeCustomers: 0,
       trials: 0,
       activeServices: 0,
+      customersWithService: 0,
+      customersWithoutService: 0,
       errors: 0,
       failedPayments: 0,
       openTickets: 0,
@@ -86,6 +88,7 @@ describe('the nightly panels report names the top reseller’s sum with its unit
         active: 2,
         salesSum: 900_000n,
         top: { username: 'shop1', name: 'فروشگاه', sum: 600_000n },
+        topList: [],
       },
     };
     const panels = nightlyReports(data, words).find((one) => one.logType === 'REPORT_PANELS')!;

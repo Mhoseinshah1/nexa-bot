@@ -18,6 +18,7 @@ import {
   BACKUP_ARCHIVE_KEEP_DAYS_DEFAULT,
   BACKUP_ARCHIVE_RETENTION_SETTING_KEYS,
   BACKUP_PART_MAX_BYTES,
+  DATA_COMPACTION_BATCH_SIZE,
   DATA_RETENTION_SETTING_KEYS,
   IDEMPOTENCY_INTERACTIVE_RETENTION_DAYS_DEFAULT,
   OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT,
@@ -73,6 +74,7 @@ import {
   createTranslator,
   DEFAULT_TEMPLATE_PRESENTATION,
   formatDateTime,
+  rejectReasonFa,
 } from '@nexa/i18n';
 import type {
   OperationType,
@@ -260,6 +262,13 @@ import {
 import { planArchiveParts } from './modules/platform/backup/infrastructure/archive-parts.js';
 import { purgePublishedOutboxBefore } from './modules/platform/eventing/infrastructure/outbox-retention.js';
 import { purgeExpiredIdempotencyBefore } from './modules/platform/idempotency/infrastructure/idempotency-retention.js';
+import { DataCompactionService } from './modules/platform/data-compaction/application/data-compaction.service.js';
+import {
+  DATA_COMPACTION_INITIAL_DELAY_MS,
+  DATA_COMPACTION_INTERVAL_MS,
+  DataCompactionLoop,
+} from './modules/platform/data-compaction/application/data-compaction-loop.js';
+import { DrizzleDataCompactionRepository } from './modules/platform/data-compaction/infrastructure/drizzle-data-compaction.repository.js';
 import { BackupPasswordService } from './modules/platform/backup/application/backup-password.service.js';
 import { LegacyCompactionService } from './modules/platform/legacy-compaction/application/legacy-compaction.service.js';
 import { LegacyCompactionExecutor } from './modules/platform/legacy-compaction/application/legacy-compaction.executor.js';
@@ -574,13 +583,17 @@ import type {
 } from './modules/commerce/payments/application/gateway-invoice-ports.js';
 import { GatewayReceiptCaptureService } from './modules/commerce/payments/application/gateway-receipt-capture.service.js';
 import { DrizzleGatewayCardTransferRepository } from './modules/commerce/payments/infrastructure/drizzle-gateway-card-transfer.repository.js';
-import { GATEWAY_PROVIDER_REQUEST_BATCH } from './modules/commerce/payments/application/gateway-provider-request.lane.js';
+import {
+  GATEWAY_PROVIDER_REQUEST_BATCH,
+  GatewayExpiryCancels,
+} from './modules/commerce/payments/application/gateway-provider-request.lane.js';
 import { DrizzleGatewayProviderRequestRepository } from './modules/commerce/payments/infrastructure/drizzle-gateway-provider-request.repository.js';
 import { SecretCipherRefundCardSealer } from './modules/commerce/payments/infrastructure/refund-card-sealer.js';
 import { TonPaysTelegramAdapter } from './modules/commerce/payments/infrastructure/tonpays-telegram-adapter.js';
 import { NowPaymentsAdapter } from './modules/commerce/payments/infrastructure/nowpayments-adapter.js';
 import { CentralPayAdapter } from './modules/commerce/payments/infrastructure/centralpay-adapter.js';
 import { TetraPayAdapter } from './modules/commerce/payments/infrastructure/tetrapay-adapter.js';
+import { RialitAdapter } from './modules/commerce/payments/infrastructure/rialit-adapter.js';
 import { TelegramStarsAdapter } from './modules/commerce/payments/infrastructure/telegram-stars-adapter.js';
 import { FxService } from './modules/commerce/fx/application/fx.service.js';
 import type { FxSourceAdapter } from './modules/commerce/fx/application/ports.js';
@@ -1611,6 +1624,13 @@ export interface Container {
   /** E1: the owner's compaction of the imported legacy data, and the worker that runs it. */
   readonly legacyCompaction: LegacyCompactionService;
   readonly legacyCompactionExecutor: LegacyCompactionExecutor;
+  /**
+   * Round 9 C3: the data compaction — the allow-listed finished notifications and closed
+   * receipt windows past their retention. The service serves the CLI and the Web Admin's
+   * preview; the loop runs in the worker. DRY_RUN until the owner sets APPLY.
+   */
+  readonly dataCompaction: DataCompactionService;
+  readonly dataCompactionLoop: DataCompactionLoop;
   readonly backupTools: PostgresDatabaseTools;
   /**
    * The Recovery Kit (ADR-0032): the keyring every cipher in this process reads
@@ -3245,6 +3265,12 @@ export function createContainer(
    */
   const tetrapayAdapter = new TetraPayAdapter();
   /*
+   * Rialit (`docs/rialit-gateway-audit.md`): create in Toman with the customer's Telegram id,
+   * settle ONLY by `GET /status/{token}`; its unsigned webhook is a hint. Not accepted against
+   * the real provider yet (`OQ-RL-01`); the route starts DISABLED.
+   */
+  const rialitAdapter = new RialitAdapter();
+  /*
    * Package A — Telegram Stars. The invoice is sent with the ATTEMPT's bot token through
    * the one Telegram call module, bounded by the same send timeout every customer message
    * uses.
@@ -3267,6 +3293,8 @@ export function createContainer(
         return centralpayAdapter;
       case 'TETRAPAY':
         return tetrapayAdapter;
+      case 'RIALIT':
+        return rialitAdapter;
       case 'MANUAL_TRANSFER':
         return null;
       default:
@@ -3775,7 +3803,11 @@ export function createContainer(
      */
     invoiceScreens: {
       refresh: (scope, paymentId): Promise<void> => wizardScreens.refresh(scope, paymentId),
+      // R9 C1: a next step the customer owes (a remainder, a refund card) — a new message.
+      announce: (scope, paymentId): Promise<void> => wizardScreens.announce(scope, paymentId),
     },
+    // R9 C1: a provider rejection reason that is a documented code, in Persian.
+    rejectReasonText: rejectReasonFa,
     // CentralPay's browser return goes back to the tenant's bot (stored username, no call);
     // TetraPay's `callback_url` is the same bot's start link.
     botLinkFor: (scope) => publicOrigins.botLinkFor(scope),
@@ -3932,6 +3964,12 @@ export function createContainer(
     scopeActivity: tenants,
     clock,
     ids,
+    // R9 C1: an expired TonPays Telegram attempt asks the provider to cancel its open invoice.
+    gatewayCancels: new GatewayExpiryCancels({
+      requests: gatewayProviderRequestRepository,
+      audit,
+      ids,
+    }),
   });
   const paymentExpiryLoop = new PaymentExpiryLoop(paymentExpirySweep, {
     // Resolved per pass: the installation's tenant is a row, so it is not known
@@ -5483,6 +5521,11 @@ export function createContainer(
     messenger: customerMessenger,
     clock,
     actor: () => systemJobActor('telegram-wizard-screens', newCorrelationId(ids.uuid())),
+    // R9 C1: the customer's chat for a next step told in a new message. Declared below, read
+    // at call time (the worker's first pass is long after this object graph is built).
+    contacts: {
+      contactFor: (scope, customerId, tx) => customerContacts.contactFor(scope, customerId, tx),
+    },
   });
 
   /**
@@ -7545,6 +7588,41 @@ export function createContainer(
     tickIntervalMs: 60_000,
     logger,
   });
+  /*
+   * Round 9 C3: the data compaction. Nothing starts while a recovery holds the installation
+   * (any active state, not only the quiesce window: the pre-restore backup is a backup) or a
+   * backup is running; each batch also passes the unit of work's quiesce gate.
+   */
+  const dataCompactionRepository = new DrizzleDataCompactionRepository(database.db);
+  const dataCompaction = new DataCompactionService({
+    repository: dataCompactionRepository,
+    uow,
+    guard,
+    audit,
+    opsLog,
+    scopeActivity: tenants,
+    settings: settingsResolver,
+    clock,
+    ids,
+    inFlight: async () => {
+      if ((await recoveryRequests.installationLock()) !== null) return 'RECOVERY_IN_FLIGHT';
+      if ((await backupRuns.active()) !== null) return 'BACKUP_IN_FLIGHT';
+      return null;
+    },
+    batchSize: DATA_COMPACTION_BATCH_SIZE,
+    maxBatchesPerPass: 200,
+  });
+  const dataCompactionLoop = new DataCompactionLoop(dataCompaction, dataCompactionRepository, {
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    intervalMs: DATA_COMPACTION_INTERVAL_MS,
+    initialDelayMs: DATA_COMPACTION_INITIAL_DELAY_MS,
+    now: () => clock.now().getTime(),
+    correlationId: () => newCorrelationId(ids.uuid()),
+    logger,
+  });
   const backupAdmin = new BackupAdminService({
     runs: backupRuns,
     archivePassword: (scope) => backupPasswords.status(scope),
@@ -8539,6 +8617,8 @@ export function createContainer(
     backupPasswords,
     legacyCompaction,
     legacyCompactionExecutor,
+    dataCompaction,
+    dataCompactionLoop,
     backupTools,
     recoveryService,
     backupAdmin,
@@ -8631,6 +8711,7 @@ export function createContainer(
       await gatewayPaymentLoop.stop();
       await serviceReminderLoop.stop();
       await nightlyReportLoop.stop();
+      await dataCompactionLoop.stop();
       await customerReminderLoop.stop();
       await campaignScheduleLoop.stop();
       await telegramMessageRetentionLoop.stop();

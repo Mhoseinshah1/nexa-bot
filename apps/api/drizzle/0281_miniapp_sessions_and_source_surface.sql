@@ -14,7 +14,6 @@ CREATE TABLE "miniapp_sessions" (
 	CONSTRAINT "miniapp_sessions_window_check" CHECK (expires_at > created_at)
 );
 --> statement-breakpoint
-ALTER TABLE "audit_logs" DROP CONSTRAINT "audit_logs_surface_check";--> statement-breakpoint
 ALTER TABLE "orders" ADD COLUMN "source_surface" text;--> statement-breakpoint
 ALTER TABLE "payments" ADD COLUMN "source_surface" text;--> statement-breakpoint
 ALTER TABLE "tickets" ADD COLUMN "source_surface" text;--> statement-breakpoint
@@ -23,7 +22,6 @@ ALTER TABLE "miniapp_sessions" ADD CONSTRAINT "miniapp_sessions_bot_instance_id_
 ALTER TABLE "miniapp_sessions" ADD CONSTRAINT "miniapp_sessions_customer_fk" FOREIGN KEY ("tenant_id","customer_id") REFERENCES "public"."customers"("tenant_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "miniapp_sessions_launch_key" ON "miniapp_sessions" USING btree ("tenant_id","bot_instance_id","init_data_hash");--> statement-breakpoint
 CREATE INDEX "miniapp_sessions_tenant_customer_idx" ON "miniapp_sessions" USING btree ("tenant_id","customer_id","created_at");--> statement-breakpoint
-ALTER TABLE "audit_logs" ADD CONSTRAINT "audit_logs_surface_check" CHECK (source_surface IN ('TELEGRAM', 'WEB', 'WORKER', 'SCHEDULER', 'API', 'MINI_APP'));--> statement-breakpoint
 ALTER TABLE "orders" ADD CONSTRAINT "orders_source_surface_check" CHECK (source_surface IS NULL OR source_surface IN ('TELEGRAM', 'WEB', 'WORKER', 'SCHEDULER', 'API', 'MINI_APP'));--> statement-breakpoint
 ALTER TABLE "payments" ADD CONSTRAINT "payments_source_surface_check" CHECK (source_surface IS NULL OR source_surface IN ('TELEGRAM', 'WEB', 'WORKER', 'SCHEDULER', 'API', 'MINI_APP'));--> statement-breakpoint
 ALTER TABLE "tickets" ADD CONSTRAINT "tickets_source_surface_check" CHECK (source_surface IS NULL OR source_surface IN ('TELEGRAM', 'WEB', 'WORKER', 'SCHEDULER', 'API', 'MINI_APP'));

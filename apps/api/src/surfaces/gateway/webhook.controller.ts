@@ -15,6 +15,7 @@ import {
   NOWPAYMENTS_SIGNATURE_HEADER,
   PAYMENT_GATEWAY_DESCRIPTORS,
   PAYMENT_GATEWAY_PROVIDERS,
+  RIALIT_DELIVERY_HEADER,
   TETRAPAY_EVENT_ID_HEADER,
   TETRAPAY_SIGNATURE_HEADER,
   TONPAYS_SIGNATURE_HEADER,
@@ -85,6 +86,16 @@ const tenantIdSchema = z.uuid();
  * accepted as before, a hint that only brings the inquiry forward. `t` is the send time of the
  * attempt, so it bounds clock skew and is never a dedupe key: that is `X-TonPays-Delivery-Id`.
  *
+ * ## An unsigned route (Rialit, Round 9)
+ *
+ * Rialit signs nothing ("do not trust the body alone"). Its webhook is an unauthenticated hint,
+ * deduplicated on `X-Rialit-Delivery` (the body's `event_id`), answered `{ ok: true }` at once,
+ * and it only brings `GET /status/{token}` forward — that read alone decides. Its dashboard's
+ * `webhook.test` is answered `{ ok: true }` and nothing else happens. Rialit asks for an IP
+ * allow-list of its senders; Nexa has no per-route client-address machinery and the addresses
+ * are shown only in Rialit's dashboard, so none is enforced: a forged webhook can at most bring
+ * a rate-limited read forward (`docs/rialit-gateway-audit.md`, decision D6).
+ *
  * No external call is made here, and no money moves here.
  */
 @Controller()
@@ -107,6 +118,8 @@ export class GatewayWebhookController {
     // a route whose descriptor says its provider signs.
     @Headers(TETRAPAY_SIGNATURE_HEADER) tetrapaySignature: string | undefined,
     @Headers(TETRAPAY_EVENT_ID_HEADER) tetrapayEventId: string | undefined,
+    // Rialit's stable event id (the dedupe key). Rialit signs nothing.
+    @Headers(RIALIT_DELIVERY_HEADER) rialitDeliveryId: string | undefined,
     // TonPays' signature (same rule: read only for a route whose descriptor says it signs).
     @Headers(TONPAYS_SIGNATURE_HEADER) tonpaysSignature: string | undefined,
     @Req() request: unknown,
@@ -123,7 +136,12 @@ export class GatewayWebhookController {
       tenant.data,
       provider,
       body,
-      deliveryId ?? (provider === 'TETRAPAY' ? tetrapayEventId : undefined),
+      deliveryId ??
+        (provider === 'TETRAPAY'
+          ? tetrapayEventId
+          : provider === 'RIALIT'
+            ? rialitDeliveryId
+            : undefined),
       PAYMENT_GATEWAY_DESCRIPTORS[provider].webhookSecret
         ? provider === 'TETRAPAY'
           ? tetrapaySignature

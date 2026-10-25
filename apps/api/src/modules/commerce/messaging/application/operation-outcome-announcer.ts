@@ -267,7 +267,8 @@ export class OperationOutcomeAnnouncer {
       readonly clock: Clock;
       /**
        * Round 4 PR-D (log L12-L14): told once an operation has terminally SUCCEEDED, so the
-       * operations log group hears of a renewal or an addition. It only queues a group
+       * operations log group hears of a renewal or an addition (R9 C2: and of a free gift
+       * that terminally failed). It only queues a group
        * message — the bound this class keeps — and runs in a savepoint: a log that cannot be
        * written never costs a customer their answer.
        */
@@ -371,11 +372,15 @@ export class OperationOutcomeAnnouncer {
       const { serviceId } = subject;
       const outcome = subject.state;
 
-      if (outcome === 'SUCCEEDED' && this.deps.opsLog !== undefined) {
+      if (this.deps.opsLog !== undefined) {
         const hook = this.deps.opsLog;
         try {
+          // R9 C2: a terminal failure is reported too, but only the hook decides which ones are
+          // an error report (a free extra-volume gift); the savepoint bound is the same.
           await this.deps.uow.runNested(scope, tx, (nested) =>
-            hook.operationSucceeded(scope, operationId, nested),
+            outcome === 'SUCCEEDED'
+              ? hook.operationSucceeded(scope, operationId, nested)
+              : hook.operationFailed(scope, operationId, nested),
           );
         } catch (error) {
           // The savepoint rolled the log back and the transaction is intact. Reported, and

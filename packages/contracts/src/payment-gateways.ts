@@ -105,6 +105,14 @@ const SAME_UNIT_CONVERSION: GatewayConversionSpec = {
  *   attempt's `order_id` and exactly the rial amount asked. An optional signed webhook only
  *   brings a verify forward. Needs an API key; a row starts DISABLED and cannot be enabled
  *   without it. Not accepted against the real provider yet (`OQ-TP-01`: no sandbox is documented).
+ * - `RIALIT` — Rialit (`docs/rialit-gateway-audit.md`). Nexa creates a payment in TOMAN with
+ *   the customer's Telegram user id as `payer_id`, and the customer pays on Rialit's page.
+ *   Only `GET /status/{token}`, asked server to server, can approve: `paid` for this
+ *   attempt's `order_id` and exactly the Toman asked, with no payer fee on top. Its webhooks
+ *   are unsigned hints that only bring that read forward; `expired` and `cancelled` are not
+ *   final (Rialit support can still mark them paid), so Nexa's own deadline closes the
+ *   attempt. Needs an API key; a row starts DISABLED and cannot be enabled without it. Not
+ *   accepted against the real provider yet (`OQ-RL-01`).
  */
 export const PAYMENT_GATEWAY_PROVIDERS = [
   'MANUAL_TRANSFER',
@@ -114,6 +122,7 @@ export const PAYMENT_GATEWAY_PROVIDERS = [
   'NOWPAYMENTS',
   'CENTRALPAY',
   'TETRAPAY',
+  'RIALIT',
 ] as const;
 export type PaymentGatewayProvider = (typeof PAYMENT_GATEWAY_PROVIDERS)[number];
 export const paymentGatewayProviderSchema = z.enum(PAYMENT_GATEWAY_PROVIDERS);
@@ -137,6 +146,7 @@ export const PAYMENT_METHOD_SLUGS: Readonly<Record<PaymentGatewayProvider, strin
   NOWPAYMENTS: 'nowpayments',
   CENTRALPAY: 'centralpay',
   TETRAPAY: 'tetrapay',
+  RIALIT: 'rialit',
 };
 
 /** The slug of a provider key, or null for a string that names no provider this release has. */
@@ -160,6 +170,7 @@ export const LATE_CREDIT_SETTING_KEYS = {
   TONPAYS: 'payments.late_credit.tonpays_enabled',
   TONPAYS_TELEGRAM: 'payments.late_credit.tonpays_telegram_enabled',
   TETRAPAY: 'payments.late_credit.tetrapay_enabled',
+  RIALIT: 'payments.late_credit.rialit_enabled',
 } as const;
 export const LATE_CREDIT_WINDOW_SETTING_KEY = 'payments.late_credit.window_hours' as const;
 export const LATE_CREDIT_WINDOW_HOURS_MIN = 1;
@@ -485,6 +496,33 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     browserReturn: false,
     numericIdentity: false,
     lateCreditSetting: LATE_CREDIT_SETTING_KEYS.TETRAPAY,
+  },
+  RIALIT: {
+    provider: 'RIALIT',
+    settlesVia: 'GATEWAY',
+    requiresCredentials: true,
+    invoiceCredential: 'GATEWAY_KEY',
+    approval: 'INQUIRY',
+    // Billed in Toman with no conversion: TonPays' unit rule (an IRR payable must divide by ten).
+    conversion: SAME_UNIT_CONVERSION,
+    invoiceForm: 'LINK',
+    boundToBot: false,
+    /*
+     * `payer_id` is REQUIRED: the customer's Telegram user id as a JSON number. An attempt is
+     * refused before any row is written when the customer has none Nexa can name.
+     */
+    requiresBuyerChatId: true,
+    // Nothing the provider says before `paid` means the money is with it: no review window.
+    providerReview: false,
+    // Rialit signs nothing: its webhook is an unauthenticated hint, and the read decides.
+    webhookSecret: false,
+    webhookSecretOptional: false,
+    // No return URL is documented; the customer comes back to the bot by themselves.
+    returnToBot: false,
+    verifyKey: false,
+    browserReturn: false,
+    numericIdentity: false,
+    lateCreditSetting: LATE_CREDIT_SETTING_KEYS.RIALIT,
   },
 };
 

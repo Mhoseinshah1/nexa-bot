@@ -19,6 +19,7 @@ import type {
   OperationFact,
   OpsLogWords,
   OrderFact,
+  OrderOriginFact,
   PaymentFact,
   ServiceBeforeImage,
   ServiceFact,
@@ -110,6 +111,15 @@ export function firstTwoLines(text: string | null, perLine = 160): string | null
     .slice(0, 2)
     .map((line) => (line.length > perLine ? `${line.slice(0, perLine - 1)}…` : line));
   return lines.length === 0 ? null : lines.join('\n');
+}
+
+/**
+ * R9 C2: the value of the source line of a purchase, renewal, extra traffic, extra time or
+ * ticket log — «مینی‌اپ» when the recorded source surface is the mini app, «ربات» for anything
+ * else (a surface that is not the mini app, or no recorded surface at all, is the bot).
+ */
+export function sourceOf(surface: string | null | undefined, words: OpsLogWords): string {
+  return words.sourceName(surface === 'MINI_APP' ? 'MINI_APP' : 'BOT');
 }
 
 const userButton = (customerId: string): OpsLogButton => ({ kind: 'USER', ref: customerId });
@@ -302,10 +312,12 @@ export function serviceCreated(input: {
   readonly payment: PaymentFact | null;
   /** The wallet on either side of THIS order's purchase debit; null when it was not a wallet payment. */
   readonly walletBalance: BalanceAround | null;
+  /** Who created the order and from where (R9 C2); null when no audit row records it. */
+  readonly origin: OrderOriginFact | null;
   readonly at: Date;
   readonly words: OpsLogWords;
 }): Built {
-  const { order, service, customer, payment, walletBalance, at, words } = input;
+  const { order, service, customer, payment, walletBalance, origin, at, words } = input;
   const wallet = payment?.method === 'WALLET' && walletBalance !== null;
   const values: Mutable = {
     ...identityValues(customer, words),
@@ -320,6 +332,10 @@ export function serviceCreated(input: {
   // this token, and the renderer drops a line whose tokens are ALL absent — the title with it.
   values['badges'] =
     words.badges({ firstPurchase: order.isFirstPurchase, reseller: order.reseller }) ?? '';
+  // R9 C2: the «first purchase of the customer» line, only for their first paid purchase
+  // (`OrderFact.isFirstPurchase`, one definition shared with the badge and the nightly count).
+  if (order.isFirstPurchase) values['firstPurchase'] = words.firstPurchaseYes;
+  values['source'] = sourceOf(origin?.surface, words);
   put(values, 'phone', customer?.phone);
   put(values, 'location', order.locationLabel);
   put(values, 'panelName', service.panelName === '' ? null : service.panelName);
@@ -359,11 +375,24 @@ export function serviceChanged(input: {
   readonly customer: CustomerFact | null;
   readonly payment: PaymentFact | null;
   readonly walletBalance: BalanceAround | null;
+  /** Who created the order and from where (R9 C2); null when no audit row records it. */
+  readonly origin: OrderOriginFact | null;
   readonly at: Date;
   readonly words: OpsLogWords;
 }): Built {
-  const { kind, order, service, operation, before, customer, payment, walletBalance, at, words } =
-    input;
+  const {
+    kind,
+    order,
+    service,
+    operation,
+    before,
+    customer,
+    payment,
+    walletBalance,
+    origin,
+    at,
+    words,
+  } = input;
   const values: Mutable = {
     ...identityValues(customer, words),
     price: order.total,
@@ -372,6 +401,7 @@ export function serviceChanged(input: {
   };
   // Always present (see `serviceCreated`): the title line must survive an absent badge.
   values['badges'] = words.badges({ firstPurchase: false, reseller: order.reseller }) ?? '';
+  values['source'] = sourceOf(origin?.surface, words);
   put(values, 'phone', customer?.phone);
   put(values, 'panelName', service.panelName === '' ? null : service.panelName);
   put(values, 'serviceUsername', service.providerUsername);
@@ -710,10 +740,17 @@ export function provisionFailure(input: {
   /** What the ledger says was credited back for this order; null when nothing was. */
   readonly refunded: Money | null;
   readonly unknown: boolean;
+  /**
+   * R9 C2: the administrator who created the order from the Web Admin — `admin` is their row
+   * when it still exists, `label` what the audit row captured; absent for a customer's own
+   * purchase. Present, the report is the admin template of L23.
+   */
+  readonly createdBy?: { readonly admin: AdminFact | null; readonly label: string | null };
   readonly at: Date;
   readonly words: OpsLogWords;
 }): Built {
-  const { order, customer, operation, reason, payment, refunded, unknown, at, words } = input;
+  const { order, customer, operation, reason, payment, refunded, unknown, createdBy, at, words } =
+    input;
   const cause = words.refundReason(reason, operation?.failureKind ?? null);
   const values: Mutable = {
     ...identityValues(customer, words),
@@ -735,11 +772,55 @@ export function provisionFailure(input: {
   put(values, 'panelName', order.panelName === '' ? null : order.panelName);
   put(values, 'orderCode', order.code);
   if (payment !== null) put(values, 'reference', paymentTrackingCode(payment));
+  if (createdBy !== undefined) {
+    const { admin, label } = createdBy;
+    values['adminName'] = admin?.displayName ?? oneLine(label) ?? words.noName;
+    values['adminUsername'] = admin === null ? words.noUsername : `@${admin.username}`;
+    values['adminTelegramId'] = admin?.telegramUserId ?? words.noTelegram;
+  }
   return {
     logType: 'ERROR_PROVISION',
-    templateKey: 'ops.log.error_provision' as TemplateKey,
+    templateKey: (createdBy === undefined
+      ? 'ops.log.error_provision'
+      : 'ops.log.error_provision_admin') as TemplateKey,
     values,
     buttons: [{ kind: 'PANEL', ref: order.panelId }, userButton(order.customerId)],
+  };
+}
+
+/**
+ * R9 C2 (L24): a FREE extra-volume gift — an `ADD_TRAFFIC` operation with no order, planned by
+ * an operator's grant, a mass grant or a campaign — that ended without reaching the panel.
+ * Nothing was paid, so nothing is refunded and the customer line says the gift did not land.
+ * The panel and the service's panel username are the message's point.
+ */
+export function giftFailure(input: {
+  readonly operation: OperationFact;
+  readonly service: ServiceFact;
+  readonly customer: CustomerFact | null;
+  readonly at: Date;
+  readonly words: OpsLogWords;
+}): Built {
+  const { operation, service, customer, at, words } = input;
+  const values: Mutable = {
+    ...identityValues(customer, words),
+    operation: words.failedOperation('ADD_TRAFFIC_GIFT'),
+    state: words.operationState('FAILED'),
+    cause: words.providerFailure(operation.failureKind),
+    technical: technicalLine(operation.failureKind, httpStatusIn(operation.failureMessage)),
+    impact: words.impact('giftNotApplied'),
+    serviceUsername: service.providerUsername,
+    at,
+  };
+  put(values, 'panelName', service.panelName === '' ? null : service.panelName);
+  return {
+    logType: 'ERROR_OPERATION',
+    templateKey: 'ops.log.error_operation' as TemplateKey,
+    values,
+    buttons: [
+      { kind: 'SERVICE', ref: service.id },
+      { kind: 'PANEL', ref: service.panelId },
+    ],
   };
 }
 
@@ -910,6 +991,7 @@ export function ticket(input: {
     ...identityValues(customer, words),
     ticketNumber: toPersianDigits(t.number),
     category: t.categoryTitle,
+    source: sourceOf(t.surface, words),
     at,
   };
   put(values, 'snippet', firstTwoLines(t.snippetSource));

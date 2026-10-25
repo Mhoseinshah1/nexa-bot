@@ -567,7 +567,13 @@ describe('TonPays, through the one settlement path', () => {
         order_id: invoice.provider_order_id,
         request_amount: 250000,
         final_amount: 250037,
-        credit_amount: 250037,
+        /*
+         * R9 C1: as TonPays reports it — the exact figure the customer transferred (the invoice's
+         * final amount). A figure that matches nothing invoiced raises an operator alert, which
+         * the cases that count the financial log's lines are not about.
+         */
+        credit_amount:
+          tonpays.invoices.get(invoice.provider_invoice_id ?? '')?.finalAmount ?? 250037,
         status,
         paid: status === 'completed',
         delivery_id: deliveryId,

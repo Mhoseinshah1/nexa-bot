@@ -41,6 +41,7 @@ import {
   type TenantContext,
   type UserId,
   type GatewayInvoiceView,
+  type Money,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import type { PublicLabels } from '../../modules/commerce/public-codes/application/public-labels.js';
@@ -63,6 +64,10 @@ import type { PaymentDestinationRecord } from '../../modules/commerce/payments/a
 import type { PaymentReceiptRecord } from '../../modules/commerce/payments/application/receipt-ports.js';
 import type { GatewayInvoiceRecord } from '../../modules/commerce/payments/application/gateway-invoice-ports.js';
 import type { GatewayCardFacts } from '../../modules/commerce/payments/application/gateway-payment.service.js';
+import {
+  creditAmountDiffers,
+  principalInProviderUnit,
+} from '../../modules/commerce/payments/domain/credit-amount.js';
 import type { PaymentSituationRead } from '../../modules/commerce/payments/application/payment.service.js';
 
 /**
@@ -533,6 +538,7 @@ function toSummary(
 function toGatewayInvoiceView(
   invoice: GatewayInvoiceRecord,
   cardFacts: GatewayCardFacts | null,
+  principal: Money | null = null,
 ): GatewayInvoiceView {
   const iso = (value: Date | null) => (value === null ? null : value.toISOString());
   const amount = (value: bigint | null) => (value === null ? null : value.toString());
@@ -638,6 +644,49 @@ function toGatewayInvoiceView(
       createdAt: one.createdAt.toISOString(),
       decidedAt: iso(one.decidedAt),
     })),
+    /*
+     * R9 C1: what the provider last said the customer owes next, as it said it — never the
+     * payee card of a remainder (the provider's), and never what Nexa settles.
+     */
+    providerNeed:
+      cardFacts?.providerFacts == null
+        ? null
+        : {
+            need: cardFacts.providerFacts.need,
+            remainingAmount: amount(cardFacts.providerFacts.remainingAmount),
+            remainingInvoiceId: cardFacts.providerFacts.remainingInvoiceId,
+            remainingReceiptReceived: cardFacts.providerFacts.remainingReceiptReceived,
+            refundAmount: amount(cardFacts.providerFacts.refundAmount),
+            refundPending: cardFacts.providerFacts.refundPending,
+          },
+    // The refund card only as the row keeps it after the send: masked.
+    latestRefund:
+      cardFacts?.latestRefund == null
+        ? null
+        : {
+            state: cardFacts.latestRefund.state,
+            errorCode: cardFacts.latestRefund.errorCode,
+            refundCardMasked: cardFacts.latestRefund.refundCardMasked,
+            requestedAt: cardFacts.latestRefund.requestedAt.toISOString(),
+            decidedAt: iso(cardFacts.latestRefund.decidedAt),
+          },
+    latestCancel:
+      cardFacts?.latestCancel == null
+        ? null
+        : {
+            state: cardFacts.latestCancel.state,
+            errorCode: cardFacts.latestCancel.errorCode,
+            byNexa: cardFacts.latestCancel.requestedByNexa === true,
+            requestedAt: cardFacts.latestCancel.requestedAt.toISOString(),
+            decidedAt: iso(cardFacts.latestCancel.decidedAt),
+          },
+    creditAmountDiffers: creditAmountDiffers({
+      creditAmount: invoice.creditAmount,
+      sentAmount: invoice.sentAmount,
+      principalInProviderUnit:
+        principal === null ? null : principalInProviderUnit(principal, invoice.providerUnit),
+      providerFinalAmount: invoice.finalAmount,
+    }),
   };
 }
 
@@ -678,7 +727,8 @@ function toDetail(
     destination: destination === null ? null : toDestinationView(destination),
     receiptCredit: credit === null ? null : toReceiptCreditView(credit),
     topupCashbackPercent: record.topupCashbackPercent,
-    gatewayInvoice: invoice === null ? null : toGatewayInvoiceView(invoice, cardFacts),
+    gatewayInvoice:
+      invoice === null ? null : toGatewayInvoiceView(invoice, cardFacts, record.amount),
     // Roadmap E4: the ONE breakdown, from the snapshot; the browser computes nothing.
     amounts: toAmountsView(record, credit),
     // Beside the principal, never added to it (WP18).

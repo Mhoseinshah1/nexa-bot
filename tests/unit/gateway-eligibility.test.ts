@@ -177,7 +177,8 @@ describe('the provider catalogue', () => {
     // (`TonPaysTelegramAdapter`, `docs/tonpays-telegram-gateway-audit.md`), and NOWPayments its
     // own (`NowPaymentsAdapter`, `docs/nowpayments-gateway-audit.md`), and CentralPay its own
     // (`CentralPayAdapter`, `docs/centralpay-gateway-audit.md`), and TetraPay its own
-    // (`TetraPayAdapter`, `docs/tetrapay-gateway-audit.md`); that is what this pins.
+    // (`TetraPayAdapter`, `docs/tetrapay-gateway-audit.md`), and Rialit its own
+    // (`RialitAdapter`, `docs/rialit-gateway-audit.md`); that is what this pins.
     expect([...PAYMENT_GATEWAY_PROVIDERS]).toEqual([
       'MANUAL_TRANSFER',
       'TONPAYS',
@@ -186,6 +187,7 @@ describe('the provider catalogue', () => {
       'NOWPAYMENTS',
       'CENTRALPAY',
       'TETRAPAY',
+      'RIALIT',
     ]);
   });
 
@@ -305,6 +307,8 @@ describe('the invoice-form descriptor fields (TonPays Telegram, audit §5.3)', (
       ],
       // TetraPay: a link, an OPTIONAL signed webhook secret, and a return to the bot's t.me link.
       TETRAPAY: ['LINK', false, false, false, 'GATEWAY_KEY', true, false, false, false, true, true],
+      // Rialit: a link, the payer's Telegram id REQUIRED (`payer_id`), and an unsigned webhook.
+      RIALIT: ['LINK', false, true, false, 'GATEWAY_KEY', false, false, false, false, false, false],
     });
     // Only the routes that review may carry the review columns: the list generates the CHECK.
     expect([...PROVIDER_REVIEW_GATEWAY_PROVIDERS]).toEqual(['TONPAYS_TELEGRAM', 'NOWPAYMENTS']);

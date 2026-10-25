@@ -715,6 +715,7 @@ apps/api/src/modules/commerce/payments/infrastructure/tonpays-telegram-adapter.t
 apps/api/src/modules/commerce/payments/infrastructure/nowpayments-adapter.ts
 apps/api/src/modules/commerce/payments/infrastructure/centralpay-adapter.ts
 apps/api/src/modules/commerce/payments/infrastructure/tetrapay-adapter.ts
+apps/api/src/modules/commerce/payments/infrastructure/rialit-adapter.ts
 apps/api/src/modules/platform/legacy-importer/infrastructure/mysql-legacy-source.ts
 apps/api/src/infrastructure/ai/ai-http.ts
 apps/api/src/legacy-import-cutover.ts

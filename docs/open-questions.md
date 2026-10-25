@@ -4351,3 +4351,53 @@ never an approval) until the real-provider acceptance (`OQ-WP10-01`) answers it.
   Rezaei"); Nexa accepts letters and spaces in any script (three to sixty-four characters) and
   the provider's `INVALID_REFUND_HOLDER` is shown if it disagrees. The example card
   `6037991234567890` fails Luhn, so no checksum is applied locally.
+
+## Rialit (Round 9 item C4, `docs/rialit-gateway-audit.md`)
+
+The owner-provided Rialit API doc (version 1) answers the shape of every call, status, event and
+error text; what follows is only what it does not settle.
+
+- **OQ-RL-01 — live acceptance with real credentials; no sandbox.** UNRESOLVED. Owed on staging
+  with a real merchant: the API key set, the payer fee in Rialit's dashboard at zero while Nexa's
+  fee is set (or the reverse), one 50,000-Toman top-up paid on the page, the wallet rising by
+  exactly the principal, the dashboard's test webhook answered 2xx. Any real shape that differs
+  from the document corrects the fake in `tests/integration/rialit-gateway.test.ts` in the same
+  commit. Until then the route ships `DISABLED` and is not claimed as accepted.
+- **OQ-RL-02 — the webhook sender addresses.** The document says to accept webhooks only from the
+  addresses its dashboard shows; they are not published, and Nexa has no per-route client-address
+  filter. None is enforced: a forged webhook can only bring a rate-limited status read forward. A
+  follow-up setting (a CIDR list per route, read against `request.ip` behind `TRUSTED_PROXY_IPS`)
+  is the owner's call.
+- **OQ-RL-03 — whether a 5xx or a timeout on `POST /send` can have created a payment, and whether
+  the documented "same body is safe" holds.** Nexa never re-sends a lost create (CREATE_UNKNOWN,
+  reconciled by READ). If the real provider proves the idempotency, an operator-driven re-send of
+  the identical body could become the READ that resolves an UNKNOWN; not built.
+- **OQ-RL-04 — whether `expired` / `cancelled` really turn `paid`, and how late.** Read as OPEN
+  (Nexa's 70-minute deadline closes the attempt); a later `paid` is a late completion, credited only
+  with `payments.late_credit.rialit_enabled` (OFF). The document's "stop polling after one day" is
+  longer than the default late-credit window (48 h is the window for asking; polling past the
+  attempt is bounded by it).
+- **OQ-RL-05 — a Mini App (`web_app`) pay button.** The document recommends it; the bot has no
+  `web_app` button kind yet (the Mini App is Round 9 C5). v1 uses a URL button.
+- **OQ-RL-06 — whether Rialit's payer fee can be forced to zero per payment.** It is a merchant
+  setting only. The one-fee rule refuses a create where both Nexa and Rialit charge; whether the
+  owner prefers Nexa's fee or Rialit's is a configuration choice, not a code one.
+
+## Round 9 C1 — TonPays Telegram under/overpayment (`docs/tonpays-telegram-gateway-audit.md` §20)
+
+- **OQ-TPTG-27 — `status: need_action` with a `need_action_kind`.** The current document names
+  `action_required_less` / `_more` for an under/overpayment and lists `need_action_kind` as a field;
+  what `need_action` (the older transcription's status) with `need_action_kind: less|more` would
+  mean is not said. Nexa reads it as an OPEN status with NO next step (no remainder, no refund
+  card, no announcement); the operator sees the raw status on the payment. A kind that contradicts
+  an `action_required_*` status keeps the step and drops its details. If the real provider sends
+  `need_action` + kind for an underpayment, the owner decides whether to read it as the same step.
+- **OQ-TPTG-28 — what `credit_amount` is.** The webhook's `credit_amount` is not in the inquiry's
+  answer, so no inquiry confirms it; whether it is the principal, the payable, the amount after the
+  provider's fee, or what was actually transferred is undocumented. Nexa never credits it (lead
+  decision, round 9): it is shown, and flagged to the operator when it is neither the principal nor
+  the invoiced amount. Crediting by it would need the owner's decision AND an inquiry that reports it.
+- **OQ-TPTG-29 — the provider's own handling of an invoice Nexa expired and cancelled.** Nexa asks
+  `/cancel` once when its deadline expires a `pending` attempt; a customer who transferred but never
+  sent the receipt before the deadline has money on the card and no invoice. That case was already
+  stranded before (Nexa's receipt window had closed); it needs an operator either way.

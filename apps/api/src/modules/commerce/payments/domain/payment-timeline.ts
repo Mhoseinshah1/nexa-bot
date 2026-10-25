@@ -1,4 +1,5 @@
 import {
+  money,
   PAYMENT_TIMELINE_KINDS,
   PAYMENT_TIMELINE_MAX_ENTRIES,
   type ActorType,
@@ -23,6 +24,39 @@ import {
   type RefundChannel,
   type RefundState,
 } from '@nexa/contracts';
+import { creditAmountDiffers, principalInProviderUnit } from './credit-amount.js';
+
+/**
+ * R9 C1: the webhook entry's `credit_amount` (a provider-unit decimal), its unit, and whether
+ * it is neither the principal nor what Nexa invoiced. Absent figure: none, and no flag.
+ */
+function creditAmountOf(
+  g: Pick<TimelineGatewayFacts, 'creditAmount' | 'sentAmount' | 'providerUnit' | 'finalAmount'>,
+  principalMinor: bigint,
+  currency: CurrencyCode,
+): {
+  readonly creditAmount: string | null;
+  readonly providerUnit: string | null;
+  readonly creditAmountDiffers: boolean;
+} {
+  const credit = g.creditAmount ?? null;
+  if (credit === null || g.sentAmount === undefined || g.providerUnit === undefined) {
+    return { creditAmount: null, providerUnit: g.providerUnit ?? null, creditAmountDiffers: false };
+  }
+  return {
+    creditAmount: credit.toString(),
+    providerUnit: g.providerUnit,
+    creditAmountDiffers: creditAmountDiffers({
+      creditAmount: credit,
+      sentAmount: g.sentAmount,
+      principalInProviderUnit: principalInProviderUnit(
+        money(principalMinor, currency),
+        g.providerUnit,
+      ),
+      providerFinalAmount: g.finalAmount ?? null,
+    }),
+  };
+}
 
 /**
  * One payment's history, assembled from facts other flows have already written (WP17,
@@ -66,6 +100,15 @@ export interface TimelineGatewayFacts {
   readonly lastWebhookAt: Date | null;
   readonly webhookStatusHint: string | null;
   readonly webhookCount: number;
+  /**
+   * R9 C1: the last webhook's `credit_amount`, what Nexa asked the provider for, and the
+   * provider's unit — for the webhook entry's figure and its "differs" flag. Never credited.
+   */
+  readonly creditAmount?: bigint | null;
+  readonly sentAmount?: bigint;
+  readonly providerUnit?: string;
+  /** The provider's own exact transfer figure (`final_amount`), a match too. */
+  readonly finalAmount?: bigint | null;
   readonly lastInquiryAt: Date | null;
   readonly providerStatus: string | null;
   readonly providerPaid: boolean | null;
@@ -440,6 +483,7 @@ export function assemblePaymentTimeline(
           provider: g.provider,
           statusHint: machineCode(g.webhookStatusHint),
           webhookCount: g.webhookCount,
+          ...creditAmountOf(g, p.amountMinor, p.currency),
         }),
       );
     }

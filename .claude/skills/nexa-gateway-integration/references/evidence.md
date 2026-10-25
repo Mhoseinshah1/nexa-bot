@@ -6,7 +6,8 @@
 `PAY/application/payment.service.ts`. Line numbers drift — grep the symbol.
 
 Roster: `TONPAYS` (migration 0122), `TONPAYS_TELEGRAM` (cancel/refund in 0274),
-`NOWPAYMENTS` (0158), `CENTRALPAY` (0164), `TETRAPAY` (0275), plus
+`NOWPAYMENTS` (0158), `CENTRALPAY` (0164), `TETRAPAY` (0275), `RIALIT` (0277,
+unsigned webhook, one-fee rule, `docs/rialit-gateway-audit.md`), plus
 `TELEGRAM_STARS`. TonPays-Telegram is TonPays' Custom Telegram API: own key,
 descriptor `invoiceForm: CARD_TRANSFER`, bound to a bot, needs the buyer chat
 id, provider review (`docs/tonpays-telegram-gateway-audit.md`).

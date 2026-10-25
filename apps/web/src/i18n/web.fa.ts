@@ -824,6 +824,52 @@ export const WEB_FA = {
   'web.setting_retention_idempotency': 'نگه‌داری کلیدهای تکرارناپذیری',
   'web.setting_retention_idempotency_desc':
     'کلیدهای پنل وب و تلگرام پس از چند روز پاک شوند. کلیدهای کارهای پس‌زمینه و انتقال داده هرگز پاک نمی‌شوند.',
+  // Round 9 C3 — the data compaction (settings and its dry run).
+  'web.setting_compaction_mode': 'حالت فشرده‌سازی داده‌های قدیمی',
+  'web.setting_compaction_mode_desc':
+    'در حالت «فقط شمارش»، که حالت آغازین است، هر شب فقط شمرده می‌شود چه چیزی حذف خواهد شد و هیچ ردیفی حذف نمی‌شود. در حالت «حذف» اعلان‌های تمام‌شده و پنجره‌های بسته‌ی رسید که از مدت نگه‌داری گذشته‌اند حذف می‌شوند. دفتر کیف پول، پرداخت‌ها، سفارش‌ها، سرویس‌ها، رسیدها، بازگشت وجه‌ها و سوابق ممیزی هرگز حذف نمی‌شوند.',
+  'web.setting_compaction_ops_days': 'نگه‌داری اعلان‌های گروه عملیات',
+  'web.setting_compaction_ops_days_desc':
+    'پیام‌های گروه عملیات که ارسال شده یا ناموفق مانده‌اند، همراه با سابقه‌ی تلاش‌های ارسالشان، پس از چند روز حذف شوند. پیامی که هنوز در صف است هرگز حذف نمی‌شود.',
+  'web.setting_compaction_customer_days': 'نگه‌داری اعلان‌های کاربران',
+  'web.setting_compaction_customer_days_desc':
+    'اعلان‌های تمام‌شده‌ی کاربران از نوع یادآوری سرویس، کمبود موجودی، حداقل فروش نماینده و نتیجه‌ی عملیات اعلام‌شده پس از چند روز حذف شوند. اعلان در صف یا نامعلوم، و هر اعلانی درباره‌ی پرداخت، سفارش، بازگشت وجه، کیف پول، تیکت یا پیام مستقیم هرگز حذف نمی‌شود.',
+  'web.setting_compaction_receipt_days': 'نگه‌داری پنجره‌های بسته‌ی رسید',
+  'web.setting_compaction_receipt_days_desc':
+    'پنجره‌های بسته‌ای که ربات در آن منتظر عکس رسید بود پس از چند روز حذف شوند. پنجره‌ی باز، خود رسید و رسید ارسال‌شده به درگاه هرگز حذف نمی‌شوند.',
+  'web.dcp_title': 'فشرده‌سازی داده‌های قدیمی',
+  'web.dcp_hint':
+    'فقط شمارش: این دکمه نشان می‌دهد با تنظیمات فعلی چه تعداد ردیف حذف خواهد شد و هیچ چیزی حذف نمی‌کند. حذف واقعی هر شب در پس‌زمینه انجام می‌شود، و فقط وقتی حالت فشرده‌سازی در تنظیمات روی «حذف» باشد.',
+  'web.dcp_preview': 'شمارش (بدون حذف)',
+  'web.dcp_mode': 'حالت فعلی',
+  'web.dcp_mode_dry_run': 'فقط شمارش',
+  'web.dcp_mode_apply': 'حذف',
+  'web.dcp_counts_caption': 'ردیف‌هایی که اکنون قابل حذف‌اند',
+  'web.dcp_class': 'دسته',
+  'web.dcp_retention': 'مدت نگه‌داری',
+  'web.dcp_days': '{n} روز',
+  'web.dcp_cutoff': 'قدیمی‌تر از',
+  'web.dcp_table': 'جدول',
+  'web.dcp_rows': 'تعداد ردیف',
+  'web.dcp_class_ops_notifications': 'اعلان‌های گروه عملیات',
+  'web.dcp_class_customer_notifications': 'اعلان‌های کاربران',
+  'web.dcp_class_receipt_windows': 'پنجره‌های بسته‌ی رسید',
+  'web.dcp_last_run': 'آخرین اجرا',
+  'web.dcp_last_mode': 'حالت آخرین اجرا',
+  'web.dcp_last_state': 'وضعیت آخرین اجرا',
+  'web.dcp_last_reason': 'علت توقف',
+  'web.dcp_last_total': 'تعداد ردیف‌های آخرین اجرا',
+  'web.dcp_state_running': 'در حال اجرا',
+  'web.dcp_state_completed': 'کامل شد',
+  'web.dcp_state_stopped': 'متوقف شد',
+  'web.dcp_state_failed': 'ناموفق',
+  'web.dcp_reason_recovery': 'یک بازیابی در جریان است؛ فشرده‌سازی تا پایان آن صبر می‌کند.',
+  'web.dcp_reason_backup': 'یک بکاپ در حال گرفته شدن است؛ فشرده‌سازی تا پایان آن صبر می‌کند.',
+  'web.dcp_reason_scope': 'این مجموعه در حال حاضر کاری نمی‌پذیرد.',
+  'web.dcp_reason_ceiling': 'به سقف دسته‌های یک اجرا رسید؛ بقیه در اجرای بعدی حذف می‌شود.',
+  'web.dcp_reason_abandoned': 'اجرا نیمه‌کاره رها شد و اجرای بعدی آن را بست.',
+  'web.dcp_reason_error':
+    'اجرا با خطا متوقف شد؛ دسته‌هایی که پیش از خطا کامل شدند حذف شده‌اند و بقیه در اجرای بعدی بررسی می‌شوند.',
   // Round 4 PR-E (E1) — compacting the imported legacy data.
   'web.lcp_title': 'فشرده‌سازی داده‌های ربات قبلی',
   'web.lcp_hint':
@@ -920,6 +966,7 @@ export const WEB_FA = {
   'web.late_credit_switch_tonpays_telegram':
     'پرداخت دیرهنگام تون‌پی تلگرام را خودکار به کیف پول واریز کن',
   'web.late_credit_switch_tetrapay': 'پرداخت دیرهنگام تتراپی را خودکار به کیف پول واریز کن',
+  'web.late_credit_switch_rialit': 'پرداخت دیرهنگام ریالیت را خودکار به کیف پول واریز کن',
   'web.late_credit_switch_hint':
     'روشن: اگر استعلام خود درگاه تأیید کند که پرداخت انجام شده و مبلغ با فاکتور یکی است، همان مبلغ فقط یک بار به کیف پول مشتری واریز می‌شود و به مشتری پیام می‌رود. سفارش دوباره باز نمی‌شود و سرویسی ساخته نمی‌شود. خاموش: مثل قبل فقط ثبت می‌شود و مدیر تصمیم می‌گیرد.',
   'web.late_credit_window': 'مدت پیگیری پرداخت دیرهنگام (ساعت)',
@@ -2667,6 +2714,7 @@ export const WEB_FA = {
   'web.payment_gateway_provider_nowpayments': 'درگاه ارز دیجیتال (NOWPayments)',
   'web.payment_gateway_provider_centralpay': 'درگاه CentralPay',
   'web.payment_gateway_provider_tetrapay': 'درگاه تتراپی',
+  'web.payment_gateway_provider_rialit': 'درگاه ریالیت',
   // Package A: the Stars route's operator-set rate. No FX feed exists or is implied.
   'web.payment_gateway_rate': 'نرخ هر ستاره (به کوچک‌ترین واحد ارز فروش)',
   'web.payment_gateway_rate_hint':
@@ -2810,6 +2858,11 @@ export const WEB_FA = {
   'web.payment_gateway_webhook_url': 'نشانی وب‌هوک (در پنل تتراپی وارد کنید)',
   'web.payment_gateway_webhook_url_hint':
     'این نشانی را در بخش وب‌هوک پنل تتراپی ثبت کنید. فقط استعلام را جلو می‌اندازد و هرگز به‌تنهایی پرداختی را تأیید نمی‌کند.',
+  'web.payment_gateway_rialit_webhook_url': 'نشانی وب‌هوک (در پنل ریالیت وارد کنید)',
+  'web.payment_gateway_rialit_webhook_url_hint':
+    'این نشانی را در پنل ریالیت، تنظیمات ← «تنظیمات Webhook» ثبت کنید و یک رویداد آزمایشی بفرستید. وب‌هوک ریالیت امضا ندارد: فقط استعلام وضعیت را جلو می‌اندازد و هرگز به‌تنهایی پرداختی را تأیید نمی‌کند.',
+  'web.payment_gateway_rialit_hint':
+    'مبلغ‌ها در ریالیت به تومان ارسال می‌شود (۵۰٬۰۰۰ تا ۱۰٬۰۰۰٬۰۰۰ تومان، همراه با کارمزد درگاه همین‌جا). فقط یک طرف کارمزد بگیرد: اگر کارمزد این درگاه را در ربات تنظیم کرده‌اید، کارمزد پرداخت‌کننده را در پنل ریالیت (تنظیمات پذیرنده) صفر کنید، یا برعکس؛ اگر هر دو روشن باشد لینک به مشتری داده نمی‌شود. وقتی فقط ریالیت کارمزد می‌گیرد، مبلغ نهایی ریالیت به مشتری نشان داده می‌شود و به کیف پول فقط اصل مبلغ واریز می‌شود. اگر فهرست «IPهای مجاز» را پر کرده‌اید، IP این سرور را اضافه کنید. پرداخت فقط پس از استعلام مستقیم (GET /status) با وضعیت «paid» و تطبیق شناسهٔ سفارش و مبلغ ثبت می‌شود. لینک پرداخت ۳۰ دقیقه باز است.',
   'web.payment_gateway_bot_username': 'نام کاربری ربات برای لینک بازگشت',
   'web.payment_gateway_bot_username_none': 'ربات فعالی با نام کاربری ثبت‌شده وجود ندارد',
   'web.payment_gateway_hidden_until': 'پنهان‌شده تا (سقف روزانهٔ درگاه)',
@@ -3213,6 +3266,33 @@ export const WEB_FA = {
   'web.payment_gateway_card_change': 'آخرین تعویض کارت',
   'web.payment_gateway_receipts': 'فیش‌های ارسال‌شده به درگاه',
   'web.payment_gateway_receipt_opened_review': 'آغازگر بررسی',
+  // R9 C1: what the gateway says the customer owes next, and the cancel/refund requests.
+  'web.payment_gateway_next_step': 'اقدام بعدی خواسته‌شده از مشتری',
+  'web.payment_gateway_need_less': 'پرداخت ناقص — منتظر مابقی',
+  'web.payment_gateway_need_more': 'پرداخت بیش از مبلغ — منتظر کارت بازگشت',
+  'web.payment_gateway_remaining': 'مابقی اعلام‌شدهٔ درگاه (فقط برای بررسی)',
+  'web.payment_gateway_remaining_invoice': 'فاکتور مابقی',
+  'web.payment_gateway_remaining_receipt': 'رسید مابقی',
+  'web.payment_gateway_remaining_receipt_received': 'درگاه رسید مابقی را دریافت کرده',
+  'web.payment_gateway_remaining_receipt_missing': 'هنوز رسیدی برای مابقی نرسیده',
+  'web.payment_gateway_refund_amount': 'مازاد اعلام‌شدهٔ درگاه (فقط برای بررسی)',
+  'web.payment_gateway_refund_pending': 'بازگشت مازاد در جریان است',
+  'web.payment_gateway_refund_request': 'درخواست کارت بازگشت وجه',
+  'web.payment_gateway_cancel_request': 'درخواست لغو فاکتور',
+  'web.payment_gateway_cancel_by_nexa': 'به درخواست Nexa',
+  'web.payment_gateway_cancel_by_customer': 'به درخواست مشتری',
+  'web.payment_gateway_credit_amount': 'مبلغ اعلام‌شدهٔ وب‌هوک (credit_amount)',
+  'web.payment_timeline_credit_amount': 'مبلغ اعلام‌شده:',
+  'web.payment_gateway_credit_amount_differs':
+    'با مبلغ اصل و مبلغ درخواستی نمی‌خواند — واریز نمی‌شود',
+  'web.payment_gateway_credit_amount_note':
+    'فقط برای بررسی؛ کیف پول فقط با مبلغ اصل و با استعلام درگاه شارژ می‌شود.',
+  'web.gw_request_requested': 'در صف ارسال',
+  'web.gw_request_sent': 'ارسال‌شده، منتظر پاسخ',
+  'web.gw_request_applied': 'انجام شد',
+  'web.gw_request_refused': 'رد شد',
+  'web.gw_request_rate_limited': 'محدودیت درگاه، دوباره باید خواسته شود',
+  'web.gw_request_unknown': 'نتیجه نامعلوم',
   'web.payment_reconcile_title': 'تطبیق با درگاه',
   'web.payment_reconcile_hint':
     'نتیجه فقط از روی آخرین پاسخ ثبت‌شدهٔ استعلام تون پی تعیین می‌شود. تأیید بدون پاسخ «completed» و پرداخت‌شده، و ناموفق بدون پاسخ رد، منقضی یا لغو، پذیرفته نمی‌شود.',
@@ -6554,7 +6634,7 @@ export const WEB_FA = {
   'web.opslog_type_service_alert': 'هشدار حجم یا زمان هر سرویس',
   'web.opslog_type_error_payment_link': 'خطای ساخت لینک پرداخت',
   'web.opslog_type_error_provision': 'خطای ساخت سرویس روی پنل',
-  'web.opslog_type_error_operation': 'خطای تمدید، حجم، زمان اضافه یا اکانت تست',
+  'web.opslog_type_error_operation': 'خطای تمدید، حجم، زمان اضافه، اکانت تست یا هدیهٔ حجم',
   'web.opslog_type_panel_state': 'قطع و وصل شدن پنل',
   'web.opslog_type_ticket_new': 'تیکت جدید یا پیام تازهٔ کاربر',
   'web.opslog_type_report_summary': 'گزارش شبانه — خلاصه',
@@ -9794,7 +9874,12 @@ export const WEB_FA = {
   'web.provcode_creating': 'در حال ساخت',
   'web.provcode_gateway_invoice_reconcile_inquiry_requested': 'استعلام دوباره درخواست شد',
   'web.provcode_nexa_amount_out_of_range': 'مبلغ خارج از محدودهٔ درگاه است',
+  'web.provcode_nexa_amount_mismatch': 'مبلغ پاسخ درگاه با مبلغ درخواستی نمی‌خواند',
   'web.provcode_nexa_attempt_closed': 'مهلت این تلاش پرداخت بسته شده است',
+  'web.provcode_nexa_card_unavailable': 'کارت بازگشت وجه در دسترس نبود؛ چیزی ارسال نشد',
+  'web.provcode_nexa_card_unreadable': 'کارت بازگشت وجه قابل خواندن نبود؛ چیزی ارسال نشد',
+  'web.provcode_nexa_not_overpaid': 'فاکتور دیگر بیش‌پرداخت نیست؛ درخواست بازگشت ارسال نشد',
+  'web.provcode_nexa_not_pending': 'فاکتور دیگر در انتظار پرداخت نیست؛ درخواست لغو ارسال نشد',
   'web.provcode_nexa_bot_token_unavailable': 'توکن ربات در دسترس نیست',
   'web.provcode_nexa_budget': 'سهمیهٔ درخواست به درگاه تمام شد',
   'web.provcode_nexa_buyer_chat_id_missing': 'شناسهٔ تلگرام خریدار موجود نیست',
@@ -9853,6 +9938,30 @@ export const WEB_FA = {
   'web.provcode_tetrapay_unsupported_media_type': 'تتراپی نوع محتوای درخواست را نپذیرفت',
   'web.provcode_tetrapay_bad_json': 'تتراپی بدنهٔ درخواست را نخواند',
   'web.provcode_tetrapay_internal': 'خطای داخلی تتراپی',
+  'web.provcode_rialit_unauthorized':
+    'کلید API ریالیت پذیرفته نشد (نادرست، ناقص یا باطل‌شده)؛ کلید تازه‌ای در پنل ریالیت بسازید و اینجا ثبت کنید',
+  'web.provcode_rialit_ip_not_allowed':
+    'نشانی IP سرور در فهرست «IPهای مجاز» پنل ریالیت نیست؛ آن را اضافه کنید',
+  'web.provcode_rialit_merchant_inactive':
+    'حساب پذیرندهٔ ریالیت غیرفعال است و پرداخت تازه نمی‌سازد؛ با پشتیبانی ریالیت تماس بگیرید (پرداخت‌های باز همچنان استعلام می‌شوند)',
+  'web.provcode_rialit_forbidden': 'ریالیت این درخواست را مجاز ندانست (۴۰۳)',
+  'web.provcode_rialit_bad_request':
+    'ریالیت درخواست را نامعتبر دانست؛ همان درخواست دوباره فرستاده نمی‌شود',
+  'web.provcode_rialit_amount_out_of_range':
+    'مبلغ قابل پرداخت خارج از محدودهٔ ۵۰٬۰۰۰ تا ۱۰٬۰۰۰٬۰۰۰ تومان ریالیت است',
+  'web.provcode_rialit_invalid_order_id': 'ریالیت شناسهٔ سفارش را نپذیرفت',
+  'web.provcode_rialit_invalid_payer_id': 'ریالیت شناسهٔ تلگرام پرداخت‌کننده را نپذیرفت',
+  'web.provcode_rialit_not_found': 'ریالیت این پرداخت (یا این مسیر) را نمی‌شناسد',
+  'web.provcode_rialit_order_conflict':
+    'این شناسهٔ سفارش در ریالیت با مبلغ یا پرداخت‌کنندهٔ دیگری ثبت شده است؛ دوباره فرستاده نمی‌شود',
+  'web.provcode_rialit_rate_limited':
+    'ریالیت به‌دلیل محدودیت تعداد درخواست موقتاً پاسخ نداد؛ دوباره تلاش می‌شود',
+  'web.provcode_rialit_double_fee':
+    'هم کارمزد درگاه همین ربات و هم کارمزد پرداخت‌کنندهٔ ریالیت روشن است؛ لینک به مشتری داده نشد تا دو بار کارمزد نپردازد. فقط یکی را نگه دارید: کارمزد این درگاه را در ربات صفر کنید یا کارمزد پرداخت‌کننده را در پنل ریالیت (تنظیمات پذیرنده)',
+  'web.provcode_rialit_payer_amount_mismatch':
+    'مبلغ پرداخت‌کننده در پاسخ ریالیت با «مبلغ + کارمزد» برابر نبود؛ لینک به مشتری داده نشد',
+  'web.provcode_rialit_payer_amount_unreadable':
+    'مبلغ قابل پرداخت مشتری در پاسخ ریالیت خوانا نبود؛ لینک به مشتری داده نشد',
   'web.provcode_wallex_not_success': 'والکس پاسخ ناموفق داد',
   'web.provcode_wallex_unreadable': 'پاسخ والکس قابل خواندن نبود',
   'web.inc_detail_step': 'مرحله',
@@ -10063,6 +10172,16 @@ export const WEB_FA = {
   'web.err_commerce_payment_gateway_amount_rejected': 'درگاه پرداخت این مبلغ را نپذیرفت.',
   'web.err_commerce_payment_gateway_not_found': 'درگاه پرداخت پیدا نشد.',
   'web.err_commerce_payment_gateway_unavailable': 'درگاه پرداخت اکنون در دسترس نیست.',
+  'web.payment_gateway_enable_refused_credential_missing':
+    'این درگاه روشن نشد: کلید API آن ثبت نشده است. ابتدا از «تنظیم کلید» کلید API درگاه را ثبت کنید، سپس دوباره روشن کنید.',
+  'web.payment_gateway_enable_refused_webhook_secret_missing':
+    'این درگاه روشن نشد: کلید وب‌هوک (IPN) آن ثبت نشده است. ابتدا کلید وب‌هوک را ثبت کنید، سپس دوباره روشن کنید.',
+  'web.payment_gateway_enable_refused_verify_key_missing':
+    'این درگاه روشن نشد: کلید تأیید (verify) آن ثبت نشده است. ابتدا کلید تأیید را ثبت کنید، سپس دوباره روشن کنید.',
+  'web.payment_gateway_enable_refused_rate_missing':
+    'این درگاه روشن نشد: نرخ تبدیل آن ثبت نشده است. ابتدا نرخ را در فرم درگاه ثبت کنید، سپس دوباره روشن کنید.',
+  'web.payment_gateway_enable_refused_fx_unavailable':
+    'این درگاه روشن نشد: نرخ مرکزی ارز خاموش است یا نسبت واحد آن ثبت نشده است.',
   'web.err_commerce_payment_method_unavailable': 'این روش پرداخت اکنون در دسترس نیست.',
   'web.err_commerce_payment_not_found': 'پرداخت پیدا نشد.',
   'web.err_commerce_payment_state_invalid':
@@ -10890,6 +11009,7 @@ export const WEB_FA = {
   'web.outbox_event_payment_failed': 'پرداخت ناموفق',
   'web.outbox_event_payment_late_completion_observed': 'تأیید دیرهنگام پرداخت',
   'web.outbox_event_payment_late_credited': 'واریز پرداخت دیرهنگام به کیف پول',
+  'web.outbox_event_gateway_payment_attention_raised': 'هشدار درگاه برای پرداخت باز',
   'web.outbox_event_refund_completed': 'بازپرداخت انجام شد',
   'web.outbox_event_refund_failed': 'بازپرداخت ناموفق',
   'web.outbox_event_service_refund_requested': 'درخواست بازپرداخت سرویس',

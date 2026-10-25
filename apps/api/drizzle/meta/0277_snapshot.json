@@ -1,5 +1,5 @@
 {
-  "id": "f09cc25a-49ca-49b3-9b2d-a0d08b7fe489",
+  "id": "8e0f4e6d-c022-4c58-8343-1c392de08b2b",
   "prevId": "24d5bcb7-985c-4016-932f-28e254ff087d",
   "version": "7",
   "dialect": "postgresql",
@@ -19074,189 +19074,6 @@
       },
       "isRLSEnabled": false
     },
-    "public.miniapp_sessions": {
-      "name": "miniapp_sessions",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "bot_instance_id": {
-          "name": "bot_instance_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "customer_id": {
-          "name": "customer_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "telegram_user_id": {
-          "name": "telegram_user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "init_data_hash": {
-          "name": "init_data_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "token_hash": {
-          "name": "token_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "auth_date": {
-          "name": "auth_date",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "miniapp_sessions_launch_key": {
-          "name": "miniapp_sessions_launch_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "bot_instance_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "init_data_hash",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "miniapp_sessions_tenant_customer_idx": {
-          "name": "miniapp_sessions_tenant_customer_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "customer_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "miniapp_sessions_tenant_id_tenants_id_fk": {
-          "name": "miniapp_sessions_tenant_id_tenants_id_fk",
-          "tableFrom": "miniapp_sessions",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "miniapp_sessions_bot_instance_id_bot_instances_id_fk": {
-          "name": "miniapp_sessions_bot_instance_id_bot_instances_id_fk",
-          "tableFrom": "miniapp_sessions",
-          "tableTo": "bot_instances",
-          "columnsFrom": [
-            "bot_instance_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "miniapp_sessions_customer_fk": {
-          "name": "miniapp_sessions_customer_fk",
-          "tableFrom": "miniapp_sessions",
-          "tableTo": "customers",
-          "columnsFrom": [
-            "tenant_id",
-            "customer_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "miniapp_sessions_init_hash_check": {
-          "name": "miniapp_sessions_init_hash_check",
-          "value": "init_data_hash ~ '^[0-9a-f]{64}$'"
-        },
-        "miniapp_sessions_token_hash_check": {
-          "name": "miniapp_sessions_token_hash_check",
-          "value": "token_hash ~ '^[0-9a-f]{64}$'"
-        },
-        "miniapp_sessions_window_check": {
-          "name": "miniapp_sessions_window_check",
-          "value": "expires_at > created_at"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.notification_delivery_attempts": {
       "name": "notification_delivery_attempts",
       "schema": "",
@@ -21941,12 +21758,6 @@
           "notNull": true,
           "default": "now()"
         },
-        "source_surface": {
-          "name": "source_surface",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "source": {
           "name": "source",
           "type": "text",
@@ -22160,10 +21971,6 @@
         "orders_code_check": {
           "name": "orders_code_check",
           "value": "code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'"
-        },
-        "orders_source_surface_check": {
-          "name": "orders_source_surface_check",
-          "value": "source_surface IS NULL OR source_surface IN ('TELEGRAM', 'WEB', 'WORKER', 'SCHEDULER', 'API', 'MINI_APP')"
         },
         "orders_state_check": {
           "name": "orders_state_check",
@@ -25296,12 +25103,6 @@
           "notNull": true,
           "default": "now()"
         },
-        "source_surface": {
-          "name": "source_surface",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "source": {
           "name": "source",
           "type": "text",
@@ -25643,10 +25444,6 @@
         "payments_code_check": {
           "name": "payments_code_check",
           "value": "code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'"
-        },
-        "payments_source_surface_check": {
-          "name": "payments_source_surface_check",
-          "value": "source_surface IS NULL OR source_surface IN ('TELEGRAM', 'WEB', 'WORKER', 'SCHEDULER', 'API', 'MINI_APP')"
         },
         "payments_state_check": {
           "name": "payments_state_check",
@@ -39172,12 +38969,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "source_surface": {
-          "name": "source_surface",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "source": {
           "name": "source",
           "type": "text",
@@ -39474,10 +39265,6 @@
         "tickets_code_check": {
           "name": "tickets_code_check",
           "value": "code IS NULL OR code ~ '^[2-9A-HJKMNP-TV-Z]{8}$'"
-        },
-        "tickets_source_surface_check": {
-          "name": "tickets_source_surface_check",
-          "value": "source_surface IS NULL OR source_surface IN ('TELEGRAM', 'WEB', 'WORKER', 'SCHEDULER', 'API', 'MINI_APP')"
         },
         "tickets_status_check": {
           "name": "tickets_status_check",

@@ -24,6 +24,10 @@ import {
   BACKUP_ARCHIVE_FORMATS,
   LEGACY_COMPACTION_FAILURE_CODES,
   LEGACY_COMPACTION_STATES,
+  DATA_COMPACTION_MODES,
+  DATA_COMPACTION_RUN_STATES,
+  DATA_COMPACTION_STOP_REASONS,
+  DATA_COMPACTION_TRIGGERS,
   BACKUP_DELIVERY_STATES,
   BACKUP_RUN_STATES,
   BACKUP_STAGES,
@@ -5147,6 +5151,15 @@ export const gatewayInvoices = pgTable(
     check(
       'gateway_invoices_tetrapay_check',
       sql`provider <> 'TETRAPAY' OR (provider_unit = 'IRR' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND provider_order_id ~ '^[A-Za-z0-9_.:-]{1,64}$')`,
+    ),
+    /**
+     * Round 9 C4: a Rialit attempt is billed in TOMAN with no conversion and no bot, and its
+     * order id is the strict subset of Rialit's documented rules Nexa generates: 1-64 bytes of
+     * `[A-Za-z0-9_.:-]` (one byte each, so the length is also the documented 64-byte bound).
+     */
+    check(
+      'gateway_invoices_rialit_check',
+      sql`provider <> 'RIALIT' OR (provider_unit = 'IRT' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND octet_length(provider_order_id) <= 64 AND provider_order_id ~ '^[A-Za-z0-9_.:-]{1,64}$')`,
     ),
     check(
       'gateway_invoices_provider_method_check',
@@ -15348,6 +15361,58 @@ export const legacyCompactionRuns = pgTable(
       .on(table.tenantId)
       .where(sql`state NOT IN ('COMPLETED', 'FAILED')`),
     index('legacy_compaction_runs_tenant_requested_idx').on(table.tenantId, table.requestedAt),
+  ],
+);
+
+/**
+ * Round 9 C3: one pass of the data compaction (`@nexa/contracts` `data-compaction.ts`) — the
+ * RECORDED RESULT of every dry run and every applied pass, worker or CLI. `counts` is rows per
+ * table (what would go in a DRY_RUN, what went in an APPLY), advanced inside each batch's own
+ * transaction so a crash loses at most the batch in flight; `cutoffs` is the instant per class
+ * the pass was bounded by, fixed when it began. The nightly report sums the APPLY passes of
+ * its day.
+ *
+ * ONE RUNNING pass per tenant is a partial unique index, not a process: two worker replicas
+ * are normal on every rolling update. A RUNNING row whose heartbeat went stale is FAILED by the
+ * next pass (`ABANDONED`), never adopted. Every state change is a conditional UPDATE naming
+ * `RUNNING` as its `from`.
+ */
+export const dataCompactionRuns = pgTable(
+  'data_compaction_runs',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    trigger: text('trigger').notNull(),
+    mode: text('mode').notNull(),
+    state: text('state').notNull(),
+    startedAt: timestamptz('started_at').notNull(),
+    heartbeatAt: timestamptz('heartbeat_at').notNull(),
+    finishedAt: timestamptz('finished_at'),
+    cutoffs: jsonb('cutoffs').notNull(),
+    counts: jsonb('counts')
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    stopReason: text('stop_reason'),
+  },
+  (table) => [
+    check('data_compaction_runs_trigger_check', enumCheck('trigger', DATA_COMPACTION_TRIGGERS)),
+    check('data_compaction_runs_mode_check', enumCheck('mode', DATA_COMPACTION_MODES)),
+    check('data_compaction_runs_state_check', enumCheck('state', DATA_COMPACTION_RUN_STATES)),
+    check(
+      'data_compaction_runs_stop_reason_check',
+      nullableEnumCheck('stop_reason', DATA_COMPACTION_STOP_REASONS),
+    ),
+    check('data_compaction_runs_finished_check', sql`(state = 'RUNNING') = (finished_at IS NULL)`),
+    check(
+      'data_compaction_runs_counts_check',
+      sql`jsonb_typeof(counts) = 'object' AND jsonb_typeof(cutoffs) = 'object'`,
+    ),
+    uniqueIndex('data_compaction_runs_one_running_idx')
+      .on(table.tenantId)
+      .where(sql`state = 'RUNNING'`),
+    index('data_compaction_runs_tenant_started_idx').on(table.tenantId, table.startedAt),
   ],
 );
 
