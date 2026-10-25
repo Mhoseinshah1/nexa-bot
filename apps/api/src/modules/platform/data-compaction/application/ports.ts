@@ -64,7 +64,7 @@ export interface DataCompactionRepository {
       readonly limit: number;
     },
   ): Promise<BatchResult>;
-  /** Names the APPLY pass this transaction deletes for (0278's guard reads it). */
+  /** Names the APPLY pass this transaction deletes for (0279's guard reads it). */
   authorise(tx: Executor, runId: string): Promise<void>;
 
   /** Inserts a RUNNING row; false when one is already RUNNING for the tenant. */

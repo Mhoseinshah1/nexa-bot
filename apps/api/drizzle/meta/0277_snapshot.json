@@ -1,5 +1,5 @@
 {
-  "id": "c3c6404e-0414-4e36-82fb-0f7bb7e49270",
+  "id": "8e0f4e6d-c022-4c58-8343-1c392de08b2b",
   "prevId": "24d5bcb7-985c-4016-932f-28e254ff087d",
   "version": "7",
   "dialect": "postgresql",
@@ -1894,7 +1894,7 @@
         },
         "audit_logs_surface_check": {
           "name": "audit_logs_surface_check",
-          "value": "source_surface IN ('TELEGRAM', 'WEB', 'WORKER', 'SCHEDULER', 'API')"
+          "value": "source_surface IN ('TELEGRAM', 'WEB', 'WORKER', 'SCHEDULER', 'API', 'MINI_APP')"
         }
       },
       "isRLSEnabled": false
@@ -9611,163 +9611,6 @@
         "customers_phone_format_check": {
           "name": "customers_phone_format_check",
           "value": "phone_number IS NULL OR phone_number ~ '^[+][1-9][0-9]{7,14}$'"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.data_compaction_runs": {
-      "name": "data_compaction_runs",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "trigger": {
-          "name": "trigger",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "mode": {
-          "name": "mode",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "state": {
-          "name": "state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "started_at": {
-          "name": "started_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "heartbeat_at": {
-          "name": "heartbeat_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "finished_at": {
-          "name": "finished_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "cutoffs": {
-          "name": "cutoffs",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "counts": {
-          "name": "counts",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::jsonb"
-        },
-        "stop_reason": {
-          "name": "stop_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "data_compaction_runs_one_running_idx": {
-          "name": "data_compaction_runs_one_running_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "state = 'RUNNING'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "data_compaction_runs_tenant_started_idx": {
-          "name": "data_compaction_runs_tenant_started_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "started_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "data_compaction_runs_tenant_id_tenants_id_fk": {
-          "name": "data_compaction_runs_tenant_id_tenants_id_fk",
-          "tableFrom": "data_compaction_runs",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "data_compaction_runs_trigger_check": {
-          "name": "data_compaction_runs_trigger_check",
-          "value": "trigger IN ('WORKER', 'CLI')"
-        },
-        "data_compaction_runs_mode_check": {
-          "name": "data_compaction_runs_mode_check",
-          "value": "mode IN ('DRY_RUN', 'APPLY')"
-        },
-        "data_compaction_runs_state_check": {
-          "name": "data_compaction_runs_state_check",
-          "value": "state IN ('RUNNING', 'COMPLETED', 'STOPPED', 'FAILED')"
-        },
-        "data_compaction_runs_stop_reason_check": {
-          "name": "data_compaction_runs_stop_reason_check",
-          "value": "stop_reason IS NULL OR stop_reason IN ('RECOVERY_IN_FLIGHT', 'BACKUP_IN_FLIGHT', 'SCOPE_INACTIVE', 'BATCH_CEILING', 'ABANDONED', 'ERROR')"
-        },
-        "data_compaction_runs_finished_check": {
-          "name": "data_compaction_runs_finished_check",
-          "value": "(state = 'RUNNING') = (finished_at IS NULL)"
-        },
-        "data_compaction_runs_counts_check": {
-          "name": "data_compaction_runs_counts_check",
-          "value": "jsonb_typeof(counts) = 'object' AND jsonb_typeof(cutoffs) = 'object'"
         }
       },
       "isRLSEnabled": false

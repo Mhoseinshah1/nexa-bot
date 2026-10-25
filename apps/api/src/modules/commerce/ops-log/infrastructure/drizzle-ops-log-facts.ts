@@ -5,6 +5,7 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { isFirstPaidPurchase } from './first-purchase-sql.js';
 import { balanceInCommitOrder } from '../../wallet/infrastructure/balance-in-commit-order.js';
 import type {
   MassCreditFact,
@@ -15,6 +16,7 @@ import type {
   OperationFact,
   OpsLogFacts,
   OrderFact,
+  OrderOriginFact,
   PaymentFact,
   ServiceBeforeImage,
   ServiceFact,
@@ -26,6 +28,7 @@ type Row = Record<string, unknown>;
 const str = (value: unknown): string | null => (typeof value === 'string' ? value : null);
 const date = (value: unknown): Date | null =>
   value instanceof Date ? value : typeof value === 'string' ? new Date(value) : null;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const big = (value: unknown): bigint => BigInt(typeof value === 'string' ? value : String(value));
 
 /**
@@ -346,15 +349,7 @@ export class DrizzleOpsLogFacts implements OpsLogFacts {
                           WHERE t.tenant_id = o.tenant_id AND t.order_id = o.id) AS reseller,
                  (SELECT t.list_amount FROM order_reseller_terms t
                    WHERE t.tenant_id = o.tenant_id AND t.order_id = o.id) AS reseller_list,
-                 (o.purpose IN ('NEW_SERVICE', 'CUSTOM_SERVICE')
-                  AND o.settled_at IS NOT NULL
-                  AND NOT EXISTS (
-                    SELECT 1 FROM orders e
-                     WHERE e.tenant_id = o.tenant_id AND e.customer_id = o.customer_id
-                       AND e.id <> o.id AND e.origin = 'STANDARD'
-                       AND e.purpose IN ('NEW_SERVICE', 'CUSTOM_SERVICE')
-                       AND e.settled_at IS NOT NULL
-                       AND (e.settled_at, e.id) < (o.settled_at, o.id))) AS first_purchase
+                 ${isFirstPaidPurchase('o')} AS first_purchase
             FROM orders o
             LEFT JOIN panels p ON p.tenant_id = o.tenant_id AND p.id = o.panel_id
             LEFT JOIN products pr ON pr.tenant_id = o.tenant_id AND pr.id = o.product_id
@@ -386,6 +381,38 @@ export class DrizzleOpsLogFacts implements OpsLogFacts {
         row['reseller_list'] === null || row['reseller_list'] === undefined
           ? null
           : money(big(row['reseller_list']), currency),
+    };
+  }
+
+  async orderOrigin(
+    scope: TenantContext,
+    orderId: string,
+    tx: TransactionScope,
+  ): Promise<OrderOriginFact | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.rows(
+      tx,
+      sql`SELECT a.source_surface, a.actor_type, a.actor_id, a.actor_label
+            FROM audit_logs a
+           WHERE a.tenant_id = ${tenantId} AND a.result = 'SUCCESS'
+             AND ((a.entity_type = 'Order' AND a.entity_id = ${orderId}
+                   AND a.action = 'order.draft_create')
+               OR (a.entity_type = 'Service'
+                   AND a.action IN ('service.renew_draft', 'service.add_traffic_draft',
+                                    'service.add_time_draft')
+                   AND a.entity_id = (SELECT c.service_id::text FROM service_commercial_actions c
+                                       WHERE c.tenant_id = ${tenantId} AND c.order_id = ${orderId})
+                   AND a.after ->> 'orderId' = ${orderId}))
+           ORDER BY a.occurred_at, a.id
+           LIMIT 1`,
+    );
+    if (row === undefined) return null;
+    const actorId = str(row['actor_id']);
+    return {
+      surface: String(row['source_surface']),
+      actorType: String(row['actor_type']),
+      actorId: actorId !== null && UUID.test(actorId) ? actorId : null,
+      actorLabel: str(row['actor_label']),
     };
   }
 
@@ -595,7 +622,13 @@ export class DrizzleOpsLogFacts implements OpsLogFacts {
       tx,
       sql`SELECT t.id, t.number::text AS number, t.code, t.customer_id, t.category_title,
                  (SELECT m.body FROM ticket_messages m
-                   WHERE m.tenant_id = t.tenant_id AND m.id = ${messageId}) AS body
+                   WHERE m.tenant_id = t.tenant_id AND m.id = ${messageId}) AS body,
+                 (SELECT a.source_surface FROM audit_logs a
+                   WHERE a.tenant_id = t.tenant_id AND a.entity_type = 'Ticket'
+                     AND a.entity_id = t.id::text AND a.result = 'SUCCESS'
+                     AND a.action IN ('ticket.open', 'ticket.customer_message')
+                     AND a.after ->> 'messageId' = ${messageId}
+                   ORDER BY a.occurred_at, a.id LIMIT 1) AS surface
             FROM tickets t WHERE t.tenant_id = ${tenantId} AND t.id = ${id}`,
     );
     if (row === undefined) return null;
@@ -606,6 +639,7 @@ export class DrizzleOpsLogFacts implements OpsLogFacts {
       customerId: String(row['customer_id']),
       categoryTitle: String(row['category_title']),
       snippetSource: str(row['body']),
+      surface: str(row['surface']),
     };
   }
 

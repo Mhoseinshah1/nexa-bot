@@ -1944,15 +1944,22 @@
     {
       "idx": 277,
       "version": "7",
-      "when": 1792896370779,
-      "tag": "0277_data_compaction_runs",
+      "when": 1792895859664,
+      "tag": "0277_audit_surface_mini_app",
       "breakpoints": true
     },
     {
       "idx": 278,
       "version": "7",
-      "when": 1792896396688,
-      "tag": "0278_notification_evidence_compaction_guard",
+      "when": 1792911371073,
+      "tag": "0278_data_compaction_runs",
+      "breakpoints": true
+    },
+    {
+      "idx": 279,
+      "version": "7",
+      "when": 1792911388257,
+      "tag": "0279_notification_evidence_compaction_guard",
       "breakpoints": true
     }
   ]

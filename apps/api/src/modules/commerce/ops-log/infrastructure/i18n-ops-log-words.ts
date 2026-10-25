@@ -3,6 +3,7 @@ import {
   OPS_LOG_WORDS_FA as W,
   operationalEventLabelFa,
   operationalEventMessageFa,
+  rejectReasonFa,
 } from '@nexa/i18n';
 import { toPersianDigits } from '@nexa/contracts';
 import type { OpsLogWords } from '../application/ports.js';
@@ -51,7 +52,9 @@ export const i18nOpsLogWords: OpsLogWords = {
   rejectReasons(by, reasons) {
     const who = W.rejectedBy[by];
     if (reasons.length === 0) return by === 'PROVIDER' ? `${who}: ${W.noRejectReason}` : who;
-    return `${who}: ${reasons.join('، ')}`;
+    // R9 C1: the gateway's reasons that are its own documented codes, in Persian; others as worded.
+    const shown = by === 'PROVIDER' ? reasons.map(rejectReasonFa) : reasons;
+    return `${who}: ${shown.join('، ')}`;
   },
   customerNotified: (yes) => (yes ? W.customerNotified.yes : W.customerNotified.no),
   customerNotifiedBulk: (yes) => (yes ? W.customerNotifiedBulk.yes : W.customerNotifiedBulk.no),
@@ -68,6 +71,8 @@ export const i18nOpsLogWords: OpsLogWords = {
     ];
     return parts.length === 0 ? null : `${W.badges.separator}${parts.join(W.badges.separator)}`;
   },
+  sourceName: (source) => W.sources[source],
+  firstPurchaseYes: W.firstPurchaseYes,
   failedOperation: (type) => pick(W.operations, type, W.operations.OTHER),
   paidOperation: (purpose) => pick(W.paidOperations, purpose, W.paidOperations.OTHER),
   operationState: (state) => W.operationStates[state],
@@ -146,4 +151,5 @@ export const i18nOpsLogWords: OpsLogWords = {
   reportUnit: (kind) => (kind === 'gb' ? W.report.gb : W.report.orders),
   reportNoActivity: W.report.noActivity,
   reportResellers: W.report.resellerLine,
+  reportTopResellers: W.report.topResellers,
 };

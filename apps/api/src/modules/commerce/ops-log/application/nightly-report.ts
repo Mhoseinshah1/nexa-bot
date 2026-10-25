@@ -51,6 +51,18 @@ export interface PanelDayFact {
   readonly capacity: number | null;
 }
 
+export interface TopReseller {
+  /** The reseller's numeric Telegram id: the «id» of the line. */
+  readonly telegramId: string;
+  readonly username: string | null;
+  readonly name: string;
+  readonly sum: bigint;
+  /** Distinct orders of the day. */
+  readonly count: number;
+}
+
+export const TOP_RESELLERS_MAX = 5;
+
 export interface NightlyReportData {
   readonly day: Date;
   readonly currency: CurrencyCode;
@@ -69,6 +81,10 @@ export interface NightlyReportData {
   readonly activeCustomers: number;
   readonly trials: number;
   readonly activeServices: number;
+  /** R9 C2: customers with at least one ACTIVE service when the report is made. */
+  readonly customersWithService: number;
+  /** R9 C2: every other NEXA customer; the two add up to all of them. */
+  readonly customersWithoutService: number;
   readonly errors: number;
   readonly failedPayments: number;
   readonly openTickets: number;
@@ -93,6 +109,8 @@ export interface NightlyReportData {
       readonly name: string;
       readonly sum: bigint;
     } | null;
+    /** R9 C2: the day's top resellers by sales, best first, at most five; empty when none sold. */
+    readonly topList: readonly TopReseller[];
   };
 }
 
@@ -232,6 +250,20 @@ function resellersBlock(data: NightlyReportData, words: OpsLogWords): string {
   return `${head}\n   برترین: ${who} — ${formatMoneyText(money(resellers.top.sum, data.currency))}`;
 }
 
+/**
+ * R9 C2: the day's top resellers — a heading and up to five lines, `۱. @user · 123 · ۵۰٬۰۰۰ تومان
+ * · ۳ سفارش` — or null when no reseller sold, so the block is left out of the message.
+ */
+export function topResellersBlock(data: NightlyReportData, words: OpsLogWords): string | null {
+  const top = data.resellers.topList.slice(0, TOP_RESELLERS_MAX);
+  if (top.length === 0) return null;
+  const lines = top.map((reseller, index) => {
+    const who = reseller.username === null ? reseller.name : `@${reseller.username}`;
+    return `${formatPersianInteger(index + 1)}. ${who} · ${reseller.telegramId} · ${formatMoneyText(money(reseller.sum, data.currency))} · ${formatPersianInteger(reseller.count)} ${words.reportUnit('orders')}`;
+  });
+  return `${words.reportTopResellers}\n${lines.join('\n')}`;
+}
+
 /** The three nightly messages, from one day's data. */
 export function nightlyReports(data: NightlyReportData, words: OpsLogWords): readonly Built[] {
   const gross = grossOf(data);
@@ -245,6 +277,8 @@ export function nightlyReports(data: NightlyReportData, words: OpsLogWords): rea
     renewals: data.renewals.count,
     newCustomers: data.newCustomers,
     activeCustomers: data.activeCustomers,
+    customersWithService: data.customersWithService,
+    customersWithoutService: data.customersWithoutService,
     trials: data.trials,
     activeServices: data.activeServices,
     errors: data.errors,
@@ -293,6 +327,8 @@ export function nightlyReports(data: NightlyReportData, words: OpsLogWords): rea
     panelsBlock: panelsBlock(data, words),
     resellersBlock: resellersBlock(data, words),
   };
+  const topBlock = topResellersBlock(data, words);
+  if (topBlock !== null) panels['topResellers'] = topBlock;
 
   return [
     {

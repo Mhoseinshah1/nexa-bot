@@ -32,7 +32,7 @@ import { i18nOpsLogWords } from '../../apps/api/src/modules/commerce/ops-log/inf
 
 /**
  * Round 9 C3: the data compaction against a real PostgreSQL — the allow-list's predicates,
- * 0278's guard on the operator lane's evidence, the unit of work's quiesce gate and the
+ * 0279's guard on the operator lane's evidence, the unit of work's quiesce gate and the
  * nightly line.
  *
  * Every case names what must SURVIVE, because that is the rule: a PENDING or UNCONFIRMED
@@ -565,7 +565,7 @@ describe('data compaction (Round 9 C3)', () => {
     expect(left.rows).toHaveLength(1);
   });
 
-  it("0278: the operator lane's evidence stays undeletable outside an APPLY pass", async () => {
+  it("0279: the operator lane's evidence stays undeletable outside an APPLY pass", async () => {
     const id = await opsNotification({ status: 'SENT', completed: ago(400) });
     const pending = await opsNotification({ status: 'PENDING', completed: null });
     const deny = /append-only; DELETE is not permitted/;

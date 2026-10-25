@@ -1,7 +1,7 @@
 import type { Clock, TenantContext } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { publish } from './publish.js';
-import { serviceChanged, type ServiceChange } from './presenters.js';
+import { giftFailure, serviceChanged, type ServiceChange } from './presenters.js';
 import type { OpsLogFacts, OpsLogLane, OpsLogWords } from './ports.js';
 
 /** What the outcome announcer calls once an operation has terminally succeeded. */
@@ -11,6 +11,12 @@ export interface OperationLogHook {
     operationId: string,
     tx: TransactionScope,
   ): Promise<void>;
+  /**
+   * R9 C2: called once an operation has terminally FAILED or been ABANDONED. Logs only a free
+   * extra-volume gift (an `ADD_TRAFFIC` with no order); every other operation's failure is
+   * reported by the order's own refund path and is ignored here.
+   */
+  operationFailed(scope: TenantContext, operationId: string, tx: TransactionScope): Promise<void>;
 }
 
 const CHANGES: Readonly<Record<string, ServiceChange>> = {
@@ -87,9 +93,49 @@ export class OperationLog implements OperationLogHook {
       customer,
       payment,
       walletBalance,
+      // R9 C2: the source line reads where the order was created from.
+      origin: await this.deps.facts.orderOrigin(scope, order.id, tx),
       at: operation.completedAt ?? this.deps.clock.now(),
       words: this.deps.words,
     });
     await publish(this.deps.lane, scope, tx, built, { dedupeKey: `oplog:op:${operationId}` });
+  }
+
+  async operationFailed(
+    scope: TenantContext,
+    operationId: string,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const operation = await this.deps.facts.operation(scope, operationId, tx);
+    if (operation === null) return;
+    // A gift: the one operation that is traffic added for free — no order paid for it and no
+    // customer asked for it. A purchased extra volume that failed is the order's refund report.
+    if (operation.type !== 'ADD_TRAFFIC' || operation.orderId !== null) return;
+    if (operation.state !== 'FAILED' && operation.state !== 'ABANDONED') return;
+    const service = await this.deps.facts.service(scope, operation.serviceId, tx);
+    if (service === null || service.source !== 'NEXA') return;
+    const customer = await this.deps.facts.customer(scope, service.customerId, tx);
+    if (customer === null || customer.source !== 'NEXA') return;
+    const built = giftFailure({
+      operation,
+      service,
+      customer,
+      at: operation.completedAt ?? this.deps.clock.now(),
+      words: this.deps.words,
+    });
+    await publish(this.deps.lane, scope, tx, built, {
+      dedupeKey: `oplog:op-failed:${operationId}`,
+      // An identical gift failure is a storm like any other error report.
+      storm: {
+        key: `${built.logType}:${String(built.values['technical'] ?? '')}:${service.panelId}`,
+        customer: customer.telegramUserId,
+        rollup: {
+          heading: this.deps.words.stormHeading,
+          cause: String(built.values['cause'] ?? ''),
+          technical: String(built.values['technical'] ?? ''),
+          ...(service.panelName === '' ? {} : { panelName: service.panelName }),
+        },
+      },
+    });
   }
 }

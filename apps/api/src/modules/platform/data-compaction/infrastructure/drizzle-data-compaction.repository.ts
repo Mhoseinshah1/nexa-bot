@@ -208,7 +208,7 @@ export class DrizzleDataCompactionRepository implements DataCompactionRepository
   }
 
   async authorise(tx: Executor, runId: string): Promise<void> {
-    // `true`: transaction-local, gone at COMMIT or ROLLBACK (0278's guard reads it).
+    // `true`: transaction-local, gone at COMMIT or ROLLBACK (0279's guard reads it).
     await tx.execute(sql`SELECT set_config('nexa.data_compaction_run', ${runId}, true)`);
   }
 

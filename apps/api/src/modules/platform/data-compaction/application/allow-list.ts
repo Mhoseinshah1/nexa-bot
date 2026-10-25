@@ -48,7 +48,7 @@ export const COMPACTION_ALLOW_LIST: Readonly<Record<DataCompactionTable, AllowLi
     reason:
       'The wire record of a finished intent. Removed WITH its intent, never alone, so the ' +
       "dispatcher's invariant (a terminal intent has at least one attempt row) holds for every " +
-      'intent that remains. Migration 0278 lets a DELETE through only inside an APPLY pass and ' +
+      'intent that remains. Migration 0279 lets a DELETE through only inside an APPLY pass and ' +
       'only for a notification that is not PENDING.',
   },
   notification_released_claims: {
@@ -56,7 +56,7 @@ export const COMPACTION_ALLOW_LIST: Readonly<Record<DataCompactionTable, AllowLi
     removes: 'every released claim of a notification removed in the same batch transaction.',
     reason:
       'Spend accounting (`attempt_count` minus releases) matters only while an intent can still ' +
-      'be claimed; a finished intent cannot. Removed with its intent, under the same 0278 guard.',
+      'be claimed; a finished intent cannot. Removed with its intent, under the same 0279 guard.',
   },
   customer_notifications: {
     class: 'CUSTOMER_NOTIFICATIONS',

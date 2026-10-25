@@ -11,6 +11,7 @@ import {
   type PanelDayFact,
   type Tally,
 } from '../application/nightly-report.js';
+import { isFirstPaidPurchase } from './first-purchase-sql.js';
 import type { NightlyReportReader, NightlyReportWindow } from '../application/ports.js';
 
 type Row = Record<string, unknown>;
@@ -91,13 +92,7 @@ export class DrizzleNightlyReportReader implements NightlyReportReader {
              AND o.currency = ${currency}
              AND o.purpose IN ('NEW_SERVICE', 'CUSTOM_SERVICE')
              AND o.settled_at >= ${start} AND o.settled_at < ${end}
-             AND NOT EXISTS (
-               SELECT 1 FROM orders e
-                WHERE e.tenant_id = o.tenant_id AND e.customer_id = o.customer_id
-                  AND e.id <> o.id AND e.origin = 'STANDARD'
-                  AND e.purpose IN ('NEW_SERVICE', 'CUSTOM_SERVICE')
-                  AND e.settled_at IS NOT NULL
-                  AND (e.settled_at, e.id) < (o.settled_at, o.id))`,
+             AND ${isFirstPaidPurchase('o')}`,
     );
     const [previous] = await this.rows(
       tx,
@@ -136,6 +131,22 @@ export class DrizzleNightlyReportReader implements NightlyReportReader {
       sql`SELECT count(*)::int AS n FROM customers
            WHERE tenant_id = ${tenantId} AND source = 'NEXA'
              AND last_seen_at >= ${start} AND last_seen_at < ${end}`,
+    );
+    /*
+     * R9 C2: ACTIVE and INACTIVE customers. Active = at least one service in the ACTIVE state
+     * RIGHT NOW (the moment the report is made; a trial service counts, a suspended, expired
+     * or terminated one does not). Inactive = every other NEXA customer, so the two always add
+     * up to the installation's own customers. One statement, so they cannot disagree.
+     */
+    const [holders] = await this.rows(
+      tx,
+      sql`SELECT count(*)::int AS total,
+                 (count(*) FILTER (WHERE EXISTS (
+                    SELECT 1 FROM services s
+                     WHERE s.tenant_id = c.tenant_id AND s.customer_id = c.id
+                       AND s.source = 'NEXA' AND s.state = 'ACTIVE')))::int AS active
+            FROM customers c
+           WHERE c.tenant_id = ${tenantId} AND c.source = 'NEXA'`,
     );
     const [services] = await this.rows(
       tx,
@@ -284,10 +295,16 @@ export class DrizzleNightlyReportReader implements NightlyReportReader {
              AND o.currency = ${currency} AND o.purpose <> 'TRIAL'
              AND o.settled_at >= ${start} AND o.settled_at < ${end}`,
     );
-    const [topRow] = await this.rows(
+    /*
+     * R9 C2: the day's top FIVE resellers by sales, the same predicate as the total above (the
+     * report's own half-open day, the selling currency, no trial, NEXA orders only). The first
+     * row is the single «برترین» of the summary line.
+     */
+    const topRows = await this.rows(
       tx,
       sql`SELECT c.username AS username, c.first_name AS first_name, c.last_name AS last_name,
-                 c.telegram_user_id AS telegram_id, sum(o.total_amount)::text AS s
+                 c.telegram_user_id AS telegram_id, sum(o.total_amount)::text AS s,
+                 count(DISTINCT o.id)::int AS n
             FROM order_reseller_terms t
             JOIN orders o ON o.tenant_id = t.tenant_id AND o.id = t.order_id
             JOIN customers c ON c.tenant_id = t.tenant_id AND c.id = t.reseller_customer_id
@@ -295,8 +312,18 @@ export class DrizzleNightlyReportReader implements NightlyReportReader {
              AND o.currency = ${currency} AND o.purpose <> 'TRIAL'
              AND o.settled_at >= ${start} AND o.settled_at < ${end}
            GROUP BY c.id, c.username, c.first_name, c.last_name, c.telegram_user_id
-           ORDER BY sum(o.total_amount) DESC, c.telegram_user_id LIMIT 1`,
+           ORDER BY sum(o.total_amount) DESC, c.telegram_user_id LIMIT 5`,
     );
+    const topResellers = topRows.map((row) => ({
+      telegramId: String(row['telegram_id']),
+      username: typeof row['username'] === 'string' ? row['username'] : null,
+      name:
+        [row['first_name'], row['last_name']]
+          .filter((part): part is string => typeof part === 'string' && part !== '')
+          .join(' ') || String(row['telegram_id']),
+      sum: big(row['s']),
+      count: num(row['n']),
+    }));
     const salesSum = big(resellerTotal?.['s']);
 
     return {
@@ -313,6 +340,8 @@ export class DrizzleNightlyReportReader implements NightlyReportReader {
       activeCustomers: num(active?.['n']),
       trials: num(trials?.['n']),
       activeServices: num(services?.['n']),
+      customersWithService: num(holders?.['active']),
+      customersWithoutService: Math.max(0, num(holders?.['total']) - num(holders?.['active'])),
       errors: num(errors?.['n']),
       failedPayments: num(failed?.['n']),
       openTickets: num(tickets?.['n']),
@@ -326,17 +355,8 @@ export class DrizzleNightlyReportReader implements NightlyReportReader {
       resellers: {
         active: num(activeResellers?.['n']),
         salesSum,
-        top:
-          topRow === undefined
-            ? null
-            : {
-                username: typeof topRow['username'] === 'string' ? topRow['username'] : null,
-                name:
-                  [topRow['first_name'], topRow['last_name']]
-                    .filter((part): part is string => typeof part === 'string' && part !== '')
-                    .join(' ') || String(topRow['telegram_id']),
-                sum: big(topRow['s']),
-              },
+        top: topResellers[0] ?? null,
+        topList: topResellers,
       },
     };
   }

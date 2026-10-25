@@ -49,7 +49,7 @@ import {
  *  4. DRY_RUN: the counts are written onto that row and it completes — nothing is deleted;
  *     APPLY: keyset batches, EACH ITS OWN TRANSACTION through the unit of work (so the
  *     recovery quiesce refuses it), each re-checking scope activity inside, naming its pass
- *     for 0278's guard, deleting at most one batch of parents with their children, adding its
+ *     for 0279's guard, deleting at most one batch of parents with their children, adding its
  *     counts to the run row and writing ONE audit row — so a crash loses at most the batch in
  *     flight, and a re-run removes only what is still eligible (idempotent);
  *  5. the run row ends COMPLETED, or STOPPED with the reason it stopped.

@@ -1,9 +1,14 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { CATALOGUE_FA, DEFAULT_TEMPLATE_PRESENTATION, renderTemplateBody } from '@nexa/i18n';
 import {
   EMPTY_PRODUCT_DISPLAY,
   money,
+  templateDefinition,
   type ActorContext,
+  type DomainEvent,
+  type TemplateKey,
+  type TemplateValues,
   type BotInstanceId,
   type CorrelationId,
   type PanelId,
@@ -14,6 +19,14 @@ import {
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import type { GatewayPaymentService } from '../../apps/api/src/modules/commerce/payments/application/gateway-payment.service';
+import { FinancialLogConsumer } from '../../apps/api/src/modules/commerce/payments/application/financial-log.consumer';
+import { DrizzleOpsLogFacts } from '../../apps/api/src/modules/commerce/ops-log/infrastructure/drizzle-ops-log-facts';
+import { i18nOpsLogWords } from '../../apps/api/src/modules/commerce/ops-log/infrastructure/i18n-ops-log-words';
+import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
+import { DrizzleCustomerRepository } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer.repository';
+import { DrizzleGatewayInvoiceRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-invoice.repository';
+import { DrizzleGatewayProviderRequestRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-provider-request.repository';
+import { DrizzleServiceRefundRequestRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-service-refund-request.repository';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
   adminActorFor,
@@ -256,7 +269,18 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
   }
 
   const lastOn = (message: number) =>
-    telegram.sent.filter((body) => body['message_id'] === message).at(-1);
+    telegram.sent
+      .filter((body) => body['message_id'] === message || body['sentMessageId'] === message)
+      .at(-1);
+  /**
+   * R9 C1: a NEW next step (a remainder, a refund card) goes out as a NEW message, which then
+   * IS the payment's invoice screen; the old invoice message loses its buttons.
+   */
+  const nextStepMessage = (): number => {
+    const body = telegram.sent.filter((one) => one['sentMessageId'] !== undefined).at(-1);
+    expect(body, 'the next step was sent as a new message').toBeDefined();
+    return Number(body!['sentMessageId']);
+  };
   const markupOf = (body: Record<string, unknown> | undefined) =>
     JSON.stringify(body?.['reply_markup'] ?? {});
 
@@ -331,11 +355,12 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
   // ------------------------------------------------------------------------------------
 
   it('underpay: the remainder, its card and exact amount (tap to copy) and a remainder-receipt button replace the plain open invoice; nothing settles', async () => {
-    const { paymentId, message } = await cardOnScreen();
+    const { paymentId } = await cardOnScreen();
     firstInvoice().status = 'processing';
     fake.underpay(firstInvoice().invoiceId, 12_000);
     await inquireNow();
-    const screen = lastOn(message);
+    const step = nextStepMessage();
+    const screen = lastOn(step);
     const text = String(screen?.['text']);
     expect(text).toContain('کمتر واریز شد');
     expect(text).toContain('6219861012345678');
@@ -353,10 +378,11 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
   });
 
   it('underpay: the remainder receipt goes to the REMAINDER invoice, the original stays action_required_less, and only completed + paid settles', async () => {
-    const { paymentId, message } = await cardOnScreen();
+    const { paymentId } = await cardOnScreen();
     fake.underpay(firstInvoice().invoiceId, 12_000);
     await inquireNow();
-    const prompt = await tapOn(message, `gr:${paymentId}`);
+    const step = nextStepMessage();
+    const prompt = await tapOn(step, `gr:${paymentId}`);
     expect(prompt.replyKey).toBe('bot.payment.gateway_receipt_prompt');
     expect((await sendPhoto('rem-1')).replyKey).toBe('bot.payment.gateway_receipt_queued');
     await lane.runOnce(tenantA);
@@ -365,7 +391,7 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
       'https://tonpays.online/api/custom/v1/invoices/TP-REM123XYZ0/receipt',
     );
     await inquireNow();
-    const text = String(lastOn(message)?.['text']);
+    const text = String(lastOn(step)?.['text']);
     expect(text).toContain('رسید مابقی');
     expect(text).toContain('در انتظار پاسخ');
     expect(firstInvoice().status).toBe('action_required_less');
@@ -378,13 +404,14 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
   });
 
   it('underpay: a status with no usable remainder is "details not available", not an invented card', async () => {
-    const { message } = await cardOnScreen();
+    await cardOnScreen();
     firstInvoice().status = 'action_required_less';
     firstInvoice().remainingAmount = 12_000; // no card, no remainder invoice id
     await inquireNow();
-    const text = String(lastOn(message)?.['text']);
+    const step = nextStepMessage();
+    const text = String(lastOn(step)?.['text']);
     expect(text).toContain('اطلاعات کارت مابقی را هنوز نفرستاده');
-    expect(markupOf(lastOn(message))).not.toContain('copy_text');
+    expect(markupOf(lastOn(step))).not.toContain('copy_text');
   });
 
   // ------------------------------------------------------------------------------------
@@ -392,13 +419,14 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
   // ------------------------------------------------------------------------------------
 
   it('overpay: the refund card is collected, /refund is called ONCE with the document body and no amount, the card is never stored whole, and the invoice settles once at the principal', async () => {
-    const { paymentId, message } = await cardOnScreen();
+    const { paymentId } = await cardOnScreen();
     fake.overpay(firstInvoice().invoiceId, 15_000);
     await inquireNow();
-    expect(String(lastOn(message)?.['text'])).toContain('بیشتر از مبلغ فاکتور');
-    expect(markupOf(lastOn(message))).toContain(`gf:${paymentId}`);
+    const step = nextStepMessage();
+    expect(String(lastOn(step)?.['text'])).toContain('بیشتر از مبلغ فاکتور');
+    expect(markupOf(lastOn(step))).toContain(`gf:${paymentId}`);
 
-    const prompt = await tapOn(message, `gf:${paymentId}`);
+    const prompt = await tapOn(step, `gf:${paymentId}`);
     expect(prompt.replyKey).toBe('bot.payment.gateway_refund_card_prompt');
     const reply = await sendText(REFUND_TEXT);
     expect(reply.replyKey).toBe('bot.payment.gateway_refund_requested');
@@ -426,7 +454,7 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     expect(await wholeCardAnywhere(CARD)).toBe(false);
     // Still not settled: the refund answer said paid: true, which is metadata.
     expect((await paymentOf(paymentId)).state).toBe('PENDING');
-    expect(String(lastOn(message)?.['text'])).toContain('603799******7890');
+    expect(String(lastOn(step)?.['text'])).toContain('603799******7890');
 
     // The provider finishes: the inquiry — and only it — settles, once.
     firstInvoice().status = 'completed';
@@ -438,10 +466,11 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
   });
 
   it('overpay: an invalid card text stores and sends nothing, reopens the window, and the next message is read', async () => {
-    const { paymentId, message } = await cardOnScreen();
+    const { paymentId } = await cardOnScreen();
     fake.overpay(firstInvoice().invoiceId, 15_000);
     await inquireNow();
-    await tapOn(message, `gf:${paymentId}`);
+    const step = nextStepMessage();
+    await tapOn(step, `gf:${paymentId}`);
     for (const bad of ['hello', `${CARD}`, '12345\nAli Rezaei', `${CARD}\n12345`]) {
       const answer = await sendText(bad);
       expect(answer.replyKey, bad).toBe('bot.payment.gateway_refund_card_invalid');
@@ -463,26 +492,28 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     for (const [code, phrase] of cases) {
       await ctx.reset();
       await beforeEachAgain();
-      const { paymentId, message } = await cardOnScreen();
+      const { paymentId } = await cardOnScreen();
       fake.overpay(firstInvoice().invoiceId, 15_000);
       await inquireNow();
-      await tapOn(message, `gf:${paymentId}`);
+      const step = nextStepMessage();
+      await tapOn(step, `gf:${paymentId}`);
       await sendText(REFUND_TEXT);
       fake.refundMode = { code, status: 400 };
       await lane.runOnce(tenantA);
       const [row] = await requests(paymentId, 'REFUND');
       expect(row, code).toMatchObject({ state: 'REFUSED', error_code: code });
       expect(row!.refund_card_ciphertext, code).toBeNull();
-      expect(String(lastOn(message)?.['text']), code).toContain(phrase);
+      expect(String(lastOn(step)?.['text']), code).toContain(phrase);
       expect(fake.refunds, code).toHaveLength(1);
     }
   });
 
   it('overpay: a refund whose answer is lost is UNKNOWN and is never sent again; a stamped row found later is UNKNOWN too', async () => {
-    const { paymentId, message } = await cardOnScreen();
+    const { paymentId } = await cardOnScreen();
     fake.overpay(firstInvoice().invoiceId, 15_000);
     await inquireNow();
-    await tapOn(message, `gf:${paymentId}`);
+    const step = nextStepMessage();
+    await tapOn(step, `gf:${paymentId}`);
     await sendText(REFUND_TEXT);
     fake.refundMode = 'TIMEOUT';
     await lane.runOnce(tenantA);
@@ -492,7 +523,7 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     await lane.runOnce(tenantA);
     await lane.runOnce(tenantA);
     expect(fake.refunds).toHaveLength(1);
-    expect(String(lastOn(message)?.['text'])).toContain('پاسخ تون‌پی به درخواست بازگشت');
+    expect(String(lastOn(step)?.['text'])).toContain('پاسخ تون‌پی به درخواست بازگشت');
     const [event] = await rows<{ n: number }>(
       sql`SELECT count(*)::int AS n FROM operational_events WHERE code = 'payments.gateway_request_unknown'`,
     );
@@ -500,10 +531,11 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
   });
 
   it('a cancel or a refund whose send was stamped and never answered is UNKNOWN when found, and is never sent', async () => {
-    const { paymentId, message } = await cardOnScreen();
+    const { paymentId } = await cardOnScreen();
     fake.overpay(firstInvoice().invoiceId, 15_000);
     await inquireNow();
-    await tapOn(message, `gf:${paymentId}`);
+    const step = nextStepMessage();
+    await tapOn(step, `gf:${paymentId}`);
     await sendText(REFUND_TEXT);
     // A worker died after stamping the send: the stamp is set, the row is not decided.
     await ctx.container.database.db.execute(
@@ -592,7 +624,8 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     expect(fake.cancels).toHaveLength(0);
     fake.overpay(firstInvoice().invoiceId, 100);
     await inquireNow();
-    expect(markupOf(lastOn(message))).not.toContain(`gq:${paymentId}`);
+    const step = nextStepMessage();
+    expect(markupOf(lastOn(step))).not.toContain(`gq:${paymentId}`);
   });
 
   it('cancel: CANCEL_NOT_ALLOWED_PROCESSING, _NEED_ACTION_LESS, _NEED_ACTION_MORE and NOT_PENDING each get their own message and leave the payment open', async () => {
@@ -895,5 +928,453 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     const entries = await walletEntries(attempt.payment.id);
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ amount: '100000' });
+  });
+
+  // ------------------------------------------------------------------------------------
+  // R9 C1: the customer and the operator are always told; cancel on expiry; credit_amount
+  // ------------------------------------------------------------------------------------
+
+  /** The `GatewayPaymentAttentionRaised` rows this payment's transactions wrote, in order. */
+  const attention = (paymentId: string) =>
+    rows<{ id: string; payload: { reason: string }; occurred_at: Date | string }>(
+      sql`SELECT id, payload, occurred_at FROM outbox_messages
+           WHERE event_type = 'GatewayPaymentAttentionRaised' AND aggregate_id = ${paymentId}
+           ORDER BY sequence`,
+    );
+
+  /** Each of those rows through the REAL financial-log consumer, rendered in Persian. */
+  async function opsMessages(paymentId: string): Promise<{ key: string; text: string }[]> {
+    const db = ctx.container.database.db;
+    const out: { key: string; text: string }[] = [];
+    for (const row of await attention(paymentId)) {
+      const queued: { templateKey: TemplateKey; values: TemplateValues }[] = [];
+      const consumer = new FinancialLogConsumer({
+        lane: {
+          financialDestination: async () =>
+            ({ transport: 'TELEGRAM', chatId: '-1001', topicId: null }) as never,
+          queue: async (_scope, input) => {
+            queued.push({ templateKey: input.templateKey, values: input.values });
+            return undefined;
+          },
+        },
+        payments: new DrizzlePaymentRepository(db),
+        customers: new DrizzleCustomerRepository(db),
+        invoices: new DrizzleGatewayInvoiceRepository(db),
+        facts: new DrizzleOpsLogFacts(db),
+        words: i18nOpsLogWords,
+        refundRequests: new DrizzleServiceRefundRequestRepository(db),
+        providerRequests: new DrizzleGatewayProviderRequestRepository(db),
+      });
+      const event = {
+        eventId: row.id,
+        eventType: 'GatewayPaymentAttentionRaised',
+        eventVersion: 1,
+        tenantId: String(tenantA.tenantId),
+        aggregateType: 'Payment',
+        aggregateId: paymentId,
+        sequence: 1,
+        correlationId: 'r9-c1',
+        causationId: null,
+        actor: { type: 'SYSTEM_JOB', id: null },
+        occurredAt: new Date(row.occurred_at).toISOString(),
+        payload: row.payload,
+      } as unknown as DomainEvent;
+      await ctx.container.uow.run(tenantA, (tx) => consumer.handle(event, tx as never));
+      for (const one of queued) {
+        out.push({
+          key: one.templateKey,
+          text: renderTemplateBody(
+            templateDefinition(one.templateKey),
+            CATALOGUE_FA[one.templateKey as never],
+            one.values,
+            'fa',
+            DEFAULT_TEMPLATE_PRESENTATION,
+          ),
+        });
+      }
+    }
+    return out;
+  }
+
+  /** Every NEW message (not an edit) the bot sent this customer. */
+  const newMessages = () =>
+    telegram.sent.filter(
+      (one) => one['sentMessageId'] !== undefined && String(one['chat_id']) === MARYAM,
+    );
+
+  it('R9 C1 underpay: told in a NEW message even when no message shows the invoice any more, with the remainder, the card and the receipt button; asked once', async () => {
+    const { paymentId } = await cardOnScreen();
+    // The customer moved on (the main menu, another invoice): no wizard shows this invoice.
+    await ctx.container.database.db.execute(
+      sql`UPDATE telegram_wizards SET step = 'CLOSED' WHERE payment_id = ${paymentId}`,
+    );
+    const before = newMessages().length;
+    firstInvoice().status = 'processing';
+    fake.underpay(firstInvoice().invoiceId, 12_000);
+    await inquireNow();
+    const sent = newMessages().slice(before);
+    expect(sent).toHaveLength(1);
+    const text = String(sent[0]!['text']);
+    expect(text).toContain('کمتر واریز شد');
+    expect(text).toContain('6219861012345678');
+    expect(text).toContain('12,000');
+    expect(markupOf(sent[0])).toContain(`gr:${paymentId}`);
+    // The provider says the same again (a second inquiry, a second replica): never asked twice.
+    await inquireNow();
+    await inquireNow();
+    expect(newMessages().slice(before)).toHaveLength(1);
+    expect((await attention(paymentId)).map((one) => one.payload.reason)).toEqual(['UNDERPAID']);
+    // The new message IS the invoice screen: its remainder-receipt button works.
+    const prompt = await tapOn(Number(sent[0]!['sentMessageId']), `gr:${paymentId}`);
+    expect(prompt.replyKey).toBe('bot.payment.gateway_receipt_prompt');
+    // Never a partial credit.
+    expect((await paymentOf(paymentId)).state).toBe('PENDING');
+    expect(await walletEntries(paymentId)).toEqual([]);
+  });
+
+  it('R9 C1: the old invoice message loses its buttons when the next step goes out as a new one', async () => {
+    const { message } = await cardOnScreen();
+    const cleared = () =>
+      telegram.requests.filter(
+        (one) =>
+          one.url.includes('/editMessageReplyMarkup') &&
+          (JSON.parse(one.raw) as Record<string, unknown>)['message_id'] === message,
+      ).length;
+    expect(cleared()).toBe(0);
+    fake.overpay(firstInvoice().invoiceId, 15_000);
+    await inquireNow();
+    expect(cleared()).toBe(1);
+    expect(String(lastOn(nextStepMessage())?.['text'])).toContain('بیشتر از مبلغ فاکتور');
+  });
+
+  it('R9 C1: the operations log gets «پرداخت ناقص — منتظر مابقی» and «پرداخت بیش از مبلغ — منتظر کارت بازگشت», once each, and nothing is credited', async () => {
+    const less = await cardOnScreen();
+    fake.underpay(firstInvoice().invoiceId, 12_000);
+    await inquireNow();
+    await inquireNow();
+    const [underpaid, ...noMore] = await opsMessages(less.paymentId);
+    expect(noMore).toEqual([]);
+    expect(underpaid!.key).toBe('ops.financial.payment_underpaid');
+    expect(underpaid!.text.startsWith('⚠️ پرداخت ناقص — منتظر مابقی')).toBe(true);
+    expect(underpaid!.text).toContain('۱۲۰۰۰ تومان');
+    expect(underpaid!.text).toContain('TP-REM123XYZ0');
+    expect(underpaid!.text).not.toContain('ناموفق');
+
+    await ctx.reset();
+    await beforeEachAgain();
+    const more = await cardOnScreen();
+    fake.overpay(firstInvoice().invoiceId, 15_000);
+    await inquireNow();
+    const [overpaid] = await opsMessages(more.paymentId);
+    expect(overpaid!.key).toBe('ops.financial.payment_overpaid');
+    expect(overpaid!.text.startsWith('⚠️ پرداخت بیش از مبلغ — منتظر کارت بازگشت')).toBe(true);
+    expect(overpaid!.text).toContain('۱۵۰۰۰ تومان');
+    expect((await paymentOf(more.paymentId)).state).toBe('PENDING');
+    expect(await walletEntries(more.paymentId)).toEqual([]);
+  });
+
+  it('R9 C1: a NEW remainder invoice (the remainder fell short too) is a new ask — a new message and a new log line', async () => {
+    const { paymentId } = await cardOnScreen();
+    fake.underpay(firstInvoice().invoiceId, 12_000);
+    await inquireNow();
+    const first = newMessages().length;
+    firstInvoice().remainingInvoiceId = 'TP-REM2NDXYZ';
+    firstInvoice().remainingAmount = 3_000;
+    await inquireNow();
+    expect(newMessages().length).toBe(first + 1);
+    expect(String(newMessages().at(-1)!['text'])).toContain('3,000');
+    expect((await attention(paymentId)).map((one) => one.payload.reason)).toEqual([
+      'UNDERPAID',
+      'UNDERPAID',
+    ]);
+  });
+
+  it('R9 C1: a blocked customer is not sent a new message; the invoice message is edited as before', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    await ctx.container.database.db.execute(
+      sql`UPDATE customers SET status = 'BLOCKED', blocked_at = now() WHERE id = ${maryam}`,
+    );
+    const before = newMessages().length;
+    fake.underpay(firstInvoice().invoiceId, 12_000);
+    await inquireNow();
+    expect(newMessages().length).toBe(before);
+    expect(String(lastOn(message)?.['text'])).toContain('کمتر واریز شد');
+    // The operator still hears of it.
+    expect((await attention(paymentId)).map((one) => one.payload.reason)).toEqual(['UNDERPAID']);
+  });
+
+  it('R9 C1 webhook: credit_amount is never credited; one that matches nothing raises ONE alert per figure; a repeated delivery and the same status twice change nothing', async () => {
+    const attempt = await topupIn(100_000n);
+    await lane.runOnce(tenantA);
+    const [invoice] = await rows<{ provider_invoice_id: string; provider_order_id: string }>(
+      sql`SELECT provider_invoice_id, provider_order_id FROM gateway_invoices WHERE payment_id = ${attempt.payment.id}`,
+    );
+    const hook = (deliveryId: string, credit: number, status = 'processing') =>
+      lane.receiveWebhook(
+        String(tenantA.tenantId),
+        'TONPAYS_TELEGRAM',
+        {
+          invoice_id: invoice!.provider_invoice_id,
+          order_id: invoice!.provider_order_id,
+          credit_amount: credit,
+          status,
+          paid: false,
+          delivery_id: deliveryId,
+        },
+        deliveryId,
+      );
+    // The principal itself: nothing to say.
+    await hook('wh-1', 100_000);
+    expect(await attention(attempt.payment.id)).toEqual([]);
+    // A figure that is neither the principal nor what was invoiced: one alert.
+    await hook('wh-2', 99_000);
+    expect(await hook('wh-2', 99_000)).toBe('DUPLICATE');
+    await hook('wh-3', 99_000);
+    expect((await attention(attempt.payment.id)).map((one) => one.payload.reason)).toEqual([
+      'CREDIT_AMOUNT_MISMATCH',
+    ]);
+    const [alert] = await opsMessages(attempt.payment.id);
+    expect(alert!.key).toBe('ops.financial.credit_amount_mismatch');
+    expect(alert!.text).toContain('۹۹۰۰۰ تومان');
+    expect(alert!.text).toContain('۱۰۰۰۰۰ تومان');
+    // The payment history shows the figure and the flag.
+    const view = await ctx.container.paymentTimeline.timeline(tenantA, owner, attempt.payment.id);
+    expect(view.entries.find((entry) => entry.kind === 'GATEWAY_WEBHOOK_HINT')).toMatchObject({
+      creditAmount: '99000',
+      providerUnit: 'IRT',
+      creditAmountDiffers: true,
+    });
+    // Nothing settles on a webhook; the inquiry's completed + paid credits the PRINCIPAL.
+    expect((await paymentOf(attempt.payment.id)).state).toBe('PENDING');
+    const fakeInvoice = fake.invoices.get(invoice!.provider_invoice_id)!;
+    fakeInvoice.status = 'completed';
+    fakeInvoice.paid = true;
+    await hook('wh-4', 99_000, 'completed');
+    await inquireNow();
+    expect((await paymentOf(attempt.payment.id)).state).toBe('CONFIRMED');
+    expect(await walletEntries(attempt.payment.id)).toEqual([
+      { reason: 'TOPUP_GATEWAY', amount: '100000' },
+    ]);
+  });
+
+  it('R9 C1 webhook: two deliveries carrying the same new credit_amount at once raise ONE alert; the provider’s own final amount raises none', async () => {
+    const attempt = await topupIn(100_000n);
+    await lane.runOnce(tenantA);
+    const [invoice] = await rows<{ provider_invoice_id: string; provider_order_id: string }>(
+      sql`SELECT provider_invoice_id, provider_order_id FROM gateway_invoices WHERE payment_id = ${attempt.payment.id}`,
+    );
+    const hook = (deliveryId: string, credit: number) =>
+      lane.receiveWebhook(
+        String(tenantA.tenantId),
+        'TONPAYS_TELEGRAM',
+        {
+          invoice_id: invoice!.provider_invoice_id,
+          order_id: invoice!.provider_order_id,
+          credit_amount: credit,
+          status: 'processing',
+          paid: false,
+          delivery_id: deliveryId,
+        },
+        deliveryId,
+      );
+    // The figure TonPays itself asked the customer to transfer (request + its unique tail).
+    const fakeInvoice = fake.invoices.get(invoice!.provider_invoice_id)!;
+    await inquireNow();
+    await hook('same-0', fakeInvoice.finalAmount);
+    expect(await attention(attempt.payment.id)).toEqual([]);
+    await Promise.all([hook('same-1', 77_000), hook('same-2', 77_000), hook('same-3', 77_000)]);
+    expect((await attention(attempt.payment.id)).map((one) => one.payload.reason)).toEqual([
+      'CREDIT_AMOUNT_MISMATCH',
+    ]);
+  });
+
+  it('R9 C1: a tenant stopped between the provider’s answer and its recording raises nothing (the check is inside the transaction)', async () => {
+    const { paymentId } = await cardOnScreen();
+    fake.underpay(firstInvoice().invoiceId, 12_000);
+    const asked = fake.checks.length;
+    let stopped = false;
+    const racing = telegramLaneWith(ctx, fake, {
+      invoiceScreens: ctx.container.wizardScreens,
+      providerRequests: true,
+      paymentRecords: (real) => {
+        const read = real.findById.bind(real);
+        real.findById = async (scope, id, tx) => {
+          const seen = await read(scope, id, tx);
+          // The re-read right after TonPays answered: the operator stops the tenant now.
+          if (!stopped && id === paymentId && fake.checks.length > asked) {
+            stopped = true;
+            await ctx.container.database.db.execute(
+              sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}`,
+            );
+          }
+          return seen;
+        };
+        return real;
+      },
+    });
+    const before = newMessages().length;
+    await ctx.container.database.db.execute(
+      sql`UPDATE gateway_invoices SET next_inquiry_at = now() - interval '1 second', inquiry_claimed_until = NULL
+           WHERE payment_id = ${paymentId}`,
+    );
+    await racing.runOnce(tenantA);
+    expect(stopped).toBe(true);
+    expect(await attention(paymentId)).toEqual([]);
+    expect(newMessages().length).toBe(before);
+  });
+
+  it('R9 C1 race: the provider approves while the customer’s cancel waits — the inquiry settles it and the cancel is never sent', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([{ state: 'REQUESTED' }]);
+    // The customer had paid; the provider's webhook says so, and its inquiry agrees.
+    firstInvoice().status = 'completed';
+    firstInvoice().paid = true;
+    const [invoice] = await rows<{ provider_order_id: string }>(
+      sql`SELECT provider_order_id FROM gateway_invoices WHERE payment_id = ${paymentId}`,
+    );
+    await lane.receiveWebhook(
+      String(tenantA.tenantId),
+      'TONPAYS_TELEGRAM',
+      {
+        invoice_id: firstInvoice().invoiceId,
+        order_id: invoice!.provider_order_id,
+        status: 'completed',
+        paid: true,
+        delivery_id: 'race-1',
+      },
+      'race-1',
+    );
+    await inquireNow();
+    expect((await paymentOf(paymentId)).state).toBe('CONFIRMED');
+    expect(fake.cancels).toHaveLength(0);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'REFUSED', error_code: 'nexa.attempt_closed' },
+    ]);
+  });
+
+  it('R9 C1 race: the cancel is applied first — a late "completed" webhook settles nothing, the inquiry reads canceled', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(1);
+    expect((await paymentOf(paymentId)).state).toBe('FAILED');
+    const [invoice] = await rows<{ provider_order_id: string }>(
+      sql`SELECT provider_order_id FROM gateway_invoices WHERE payment_id = ${paymentId}`,
+    );
+    // A stale or forged "completed" hint: it only brings an inquiry forward.
+    await lane.receiveWebhook(
+      String(tenantA.tenantId),
+      'TONPAYS_TELEGRAM',
+      {
+        invoice_id: firstInvoice().invoiceId,
+        order_id: invoice!.provider_order_id,
+        status: 'completed',
+        paid: true,
+        delivery_id: 'race-2',
+      },
+      'race-2',
+    );
+    await inquireNow();
+    expect(firstInvoice().status).toBe('canceled');
+    expect((await paymentOf(paymentId)).state).toBe('FAILED');
+    expect(await walletEntries(paymentId)).toEqual([]);
+  });
+
+  it('R9 C1 expiry: Nexa expiring a pending attempt asks the provider to cancel its invoice ONCE, through the lane, and fails nothing', async () => {
+    const attempt = await topupIn(100_000n);
+    await lane.runOnce(tenantA);
+    expect(firstInvoice().status).toBe('pending');
+    clock.shift(71 * 60_000);
+    await ctx.container.paymentExpirySweep.runOnce(tenantA);
+    expect((await paymentOf(attempt.payment.id)).state).toBe('EXPIRED');
+    expect(await requests(attempt.payment.id, 'CANCEL')).toMatchObject([{ state: 'REQUESTED' }]);
+    // Written by the sweep, sent by the worker — never while the sweep holds its transaction.
+    expect(fake.cancels).toHaveLength(0);
+    await ctx.container.paymentExpirySweep.runOnce(tenantA);
+    expect(await requests(attempt.payment.id, 'CANCEL')).toHaveLength(1);
+    await lane.runOnce(tenantA);
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(1);
+    expect(fake.cancels[0]!.url).toBe(
+      `https://tonpays.online/api/custom/v1/invoices/${firstInvoice().invoiceId}/cancel`,
+    );
+    expect(await requests(attempt.payment.id, 'CANCEL')).toMatchObject([{ state: 'APPLIED' }]);
+    expect(firstInvoice().status).toBe('canceled');
+    // Already EXPIRED (and the customer told so by the expiry): nothing is failed on top.
+    expect((await paymentOf(attempt.payment.id)).state).toBe('EXPIRED');
+    expect(
+      await rows(sql`SELECT id FROM customer_notifications WHERE kind = 'GATEWAY_PAYMENT_FAILED'`),
+    ).toEqual([]);
+    // The audit says Nexa asked, because of the expiry.
+    const [audit] = await rows<{ after: { reason: string } }>(
+      sql`SELECT after FROM audit_logs WHERE action = 'gateway_invoice.cancel_requested'
+           AND entity_id = ${attempt.payment.id}`,
+    );
+    expect(audit?.after.reason).toBe('NEXA_EXPIRY');
+  });
+
+  it('R9 C1 expiry: never a cancel for a create whose answer was lost, nor for an invoice the inquiry saw paid or in progress', async () => {
+    const cases: [string, (paymentId: string) => Promise<void>][] = [
+      // A create whose answer was lost: UNKNOWN, never cancelled (nor retried).
+      ['create unknown', async () => undefined],
+      // The inquiry last saw it paid (the approval is the settlement path's to decide).
+      [
+        'paid',
+        async (paymentId) => {
+          firstInvoice().status = 'completed';
+          firstInvoice().paid = true;
+          await ctx.container.database.db.execute(
+            sql`UPDATE gateway_invoices SET provider_status = 'completed', provider_paid = true
+                 WHERE payment_id = ${paymentId}`,
+          );
+        },
+      ],
+      // The inquiry last saw a receipt being checked.
+      [
+        'processing',
+        async (paymentId) => {
+          firstInvoice().status = 'processing';
+          await ctx.container.database.db.execute(
+            sql`UPDATE gateway_invoices SET provider_status = 'processing' WHERE payment_id = ${paymentId}`,
+          );
+        },
+      ],
+    ];
+    for (const [label, stage] of cases) {
+      await ctx.reset();
+      await beforeEachAgain();
+      if (label === 'create unknown') fake.createMode = 'TIMEOUT';
+      const attempt = await topupIn(100_000n);
+      await lane.runOnce(tenantA);
+      fake.createMode = 'OK';
+      await stage(attempt.payment.id);
+      clock.shift(71 * 60_000);
+      await ctx.container.paymentExpirySweep.runOnce(tenantA);
+      expect((await paymentOf(attempt.payment.id)).state, label).toBe('EXPIRED');
+      expect(await requests(attempt.payment.id, 'CANCEL'), label).toEqual([]);
+      await lane.runOnce(tenantA);
+      expect(fake.cancels, label).toHaveLength(0);
+    }
+  });
+
+  it('R9 C1 expiry: the send re-checks the invoice — one the inquiry saw move on since the expiry is refused, never sent', async () => {
+    const attempt = await topupIn(100_000n);
+    await lane.runOnce(tenantA);
+    clock.shift(71 * 60_000);
+    await ctx.container.paymentExpirySweep.runOnce(tenantA);
+    expect(await requests(attempt.payment.id, 'CANCEL')).toMatchObject([{ state: 'REQUESTED' }]);
+    // Between the sweep and the worker, a late inquiry saw the customer's receipt arrive.
+    firstInvoice().status = 'processing';
+    await ctx.container.database.db.execute(
+      sql`UPDATE gateway_invoices SET provider_status = 'processing' WHERE payment_id = ${attempt.payment.id}`,
+    );
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(0);
+    expect(await requests(attempt.payment.id, 'CANCEL')).toMatchObject([
+      { state: 'REFUSED', error_code: 'nexa.not_pending' },
+    ]);
   });
 });

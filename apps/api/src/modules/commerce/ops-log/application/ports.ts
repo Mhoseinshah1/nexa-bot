@@ -103,6 +103,22 @@ export interface OrderFact {
   readonly resellerListPrice: Money | null;
 }
 
+/**
+ * Who created an order and from where, read from the audit row written in the creating
+ * transaction (R9 C2). The source line of a purchase / renewal / extra traffic / extra time
+ * log is its `surface`; an order an administrator placed from the Web Admin is told apart by
+ * `actorType === 'WEB_ADMIN'`.
+ */
+export interface OrderOriginFact {
+  /** `audit_logs.source_surface`: `TELEGRAM`, `WEB`, `MINI_APP`, … */
+  readonly surface: string;
+  readonly actorType: string;
+  /** The acting administrator's id when `actorType` is `WEB_ADMIN` and the id is a uuid. */
+  readonly actorId: string | null;
+  /** The label captured at action time, so the message survives a deleted administrator. */
+  readonly actorLabel: string | null;
+}
+
 export interface ServiceFact {
   readonly id: string;
   readonly code: string | null;
@@ -149,6 +165,11 @@ export interface TicketFact {
   readonly customerId: string;
   readonly categoryTitle: string;
   readonly snippetSource: string | null;
+  /**
+   * `audit_logs.source_surface` of the audit row written with the message (R9 C2); null when
+   * none is recorded, which the log reads as the bot.
+   */
+  readonly surface: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -249,6 +270,16 @@ export interface OpsLogFacts {
     tx: TransactionScope,
   ): Promise<PaymentFact | null>;
   order(scope: TenantContext, id: string, tx: TransactionScope): Promise<OrderFact | null>;
+  /**
+   * R9 C2: who created the order and from which surface — the `order.draft_create` audit row
+   * of a new service, or the `service.<kind>_draft` row of a renewal / extra traffic / extra
+   * time. Null when no such row exists (an order from before it was audited, or an import).
+   */
+  orderOrigin(
+    scope: TenantContext,
+    orderId: string,
+    tx: TransactionScope,
+  ): Promise<OrderOriginFact | null>;
   service(scope: TenantContext, id: string, tx: TransactionScope): Promise<ServiceFact | null>;
   operation(scope: TenantContext, id: string, tx: TransactionScope): Promise<OperationFact | null>;
   /**
@@ -371,6 +402,10 @@ export interface OpsLogWords {
   walletAdjustHeading(direction: 'CREDIT' | 'DEBIT'): string;
   /** `" · 🥇 اولین خرید · 🧑‍💼 نماینده"`, or null when neither applies. */
   badges(badges: { readonly firstPurchase: boolean; readonly reseller: boolean }): string | null;
+  /** R9 C2: where a request came from, in Persian: `BOT` (ربات) or `MINI_APP` (مینی‌اپ). */
+  sourceName(source: 'BOT' | 'MINI_APP'): string;
+  /** R9 C2: the value of the «first purchase of the customer» line. */
+  readonly firstPurchaseYes: string;
   failedOperation(type: string): string;
   /** What a paid order was for (log L2): خرید / تمدید / حجم / زمان, by the order's purpose. */
   paidOperation(purpose: string): string;
@@ -417,6 +452,8 @@ export interface OpsLogWords {
   reportUnit(kind: 'gb' | 'orders'): string;
   reportNoActivity: string;
   reportResellers: string;
+  /** R9 C2: the heading of the nightly top-resellers block. */
+  reportTopResellers: string;
 }
 
 // ---------------------------------------------------------------------------
