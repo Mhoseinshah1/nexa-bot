@@ -111,6 +111,12 @@ botctl — operate a Nexa installation
   botctl roles disable ROLE...   keep monitor, provisioner or assistant stopped, across update/restart/rollback
   botctl roles enable ROLE...    start them again and stop keeping them off
 
+  botctl cutover preflight [--expect-version V] [--expect-telegram none|ready]
+                           [--max-backup-age-hours N] [--min-free-gib N]
+                             the MirzaBot cutover's read-only checklist: release, readiness,
+                             recovery, provisioner/monitor off, migrations, a fresh backup,
+                             disk, the Telegram webhook. PASS/FAIL per check; changes nothing
+
   botctl telegram status     the local registration AND Telegram's own webhook state
   botctl telegram register   reconcile the webhook with Telegram (keeps queued updates)
 
@@ -2380,6 +2386,242 @@ ${service}
   esac
 }
 
+# ---------------------------------------------------------------------------
+# cutover preflight — the MirzaBot -> Nexa cutover's read-only checklist
+# ---------------------------------------------------------------------------
+#
+# `docs/cutover/` runs this before the freeze, before the import, before the token
+# handover and before each background role is enabled. It READS: it takes no lock, edits no
+# file, and never runs `up`, `stop`, `restart`, `rm` or a migration. The one-off containers it
+# starts (`compose run --rm`) run read-only CLIs — `migrate.js --check`, `backup.cli.js list`
+# and `bootstrap-bot.cli.js --status` — exactly as `botctl status` and `botctl telegram
+# status` already do.
+#
+# One line per check, `PASS` or `FAIL`, then a verdict. Exit 0 only when every check passed;
+# 1 otherwise. A check that cannot be answered is a FAIL, never a PASS: the cutover moves money,
+# and "could not tell" is not a reason to go ahead.
+
+CUTOVER_FAILED=0
+CUTOVER_CHECKS=0
+
+cutover_line() {
+  # $1 PASS|FAIL, $2 check name, $3 detail
+  CUTOVER_CHECKS=$((CUTOVER_CHECKS + 1))
+  [ "$1" = PASS ] || CUTOVER_FAILED=$((CUTOVER_FAILED + 1))
+  printf '%-4s  %-18s %s\n' "$1" "$2" "$3"
+}
+
+# "service state health" per line, for every service compose lists (exited ones included).
+cutover_service_states() {
+  # shellcheck disable=SC2016
+  nexa_compose ps --all --format json 2>/dev/null | python3 -c '
+import json, sys
+raw = sys.stdin.read().strip()
+entries = []
+if raw:
+    try:
+        parsed = json.loads(raw)
+        entries = parsed if isinstance(parsed, list) else [parsed]
+    except json.JSONDecodeError:
+        for line in raw.splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+for e in entries:
+    if isinstance(e, dict):
+        print("%s %s %s" % (e.get("Service", "?"), e.get("State", "?"), e.get("Health", "") or "-"))
+'
+}
+
+cmd_cutover_preflight() {
+  local expect_version="" expect_telegram="none" max_backup_hours=24 min_free_gib=5
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --expect-version)
+        [ $# -ge 2 ] || nexa_die "--expect-version needs a value."
+        nexa_valid_version "$2" || nexa_die "--expect-version is not a release version."
+        expect_version="$2"
+        shift 2
+        ;;
+      --expect-telegram)
+        [ $# -ge 2 ] || nexa_die "--expect-telegram needs a value."
+        case "$2" in none | ready) expect_telegram="$2" ;; *) nexa_die "--expect-telegram is none or ready." ;; esac
+        shift 2
+        ;;
+      --max-backup-age-hours)
+        [ $# -ge 2 ] || nexa_die "--max-backup-age-hours needs a value."
+        case "$2" in '' | *[!0-9]*) nexa_die "--max-backup-age-hours is a whole number of hours." ;; esac
+        max_backup_hours="$2"
+        shift 2
+        ;;
+      --min-free-gib)
+        [ $# -ge 2 ] || nexa_die "--min-free-gib needs a value."
+        case "$2" in '' | *[!0-9]*) nexa_die "--min-free-gib is a whole number of GiB." ;; esac
+        min_free_gib="$2"
+        shift 2
+        ;;
+      *)
+        # Never echoed: whatever was typed here may have been a token.
+        nexa_die "usage: botctl cutover preflight [--expect-version V] [--expect-telegram none|ready] [--max-backup-age-hours N] [--min-free-gib N]"
+        ;;
+    esac
+  done
+  require_installed
+  CUTOVER_FAILED=0
+  CUTOVER_CHECKS=0
+  printf 'cutover preflight — read only; nothing here changes the installation\n\n'
+
+  # 1. The release: recorded, agreeing with deploy.env, and the one the owner approved.
+  local version divergence=0
+  version="$(nexa_current_version 2>/dev/null || true)"
+  nexa_check_divergence >/dev/null 2>&1 || divergence=$?
+  if [ -z "$version" ]; then
+    cutover_line FAIL release "no current release is recorded"
+  elif [ "$divergence" -eq 1 ]; then
+    cutover_line FAIL release "${version}: deploy.env would start a different image (botctl version says which)"
+  elif [ -n "$expect_version" ] && [ "$version" != "$expect_version" ]; then
+    cutover_line FAIL release "${version} is installed; the approved release is ${expect_version}"
+  else
+    cutover_line PASS release "${version}${expect_version:+ (the approved release)}"
+  fi
+
+  # 2. Readiness, the same five-second probe `botctl status` makes.
+  if (nexa_wait_ready 5) >/dev/null 2>&1; then
+    cutover_line PASS readiness "every required role is up and the API answers ready"
+  else
+    cutover_line FAIL readiness "not ready: run 'botctl status'"
+  fi
+
+  # 3. The recovery role: it runs the import's executor and the rollback restore.
+  local states defined
+  states="$(cutover_service_states || true)"
+  defined="$(nexa_compose config --services 2>/dev/null || true)"
+  case "
+${defined}
+" in
+    *"
+recovery
+"*)
+      if printf '%s\n' "$states" | awk '$1 == "recovery" && $2 == "running" && ($3 == "healthy" || $3 == "-") { found = 1 } END { exit found ? 0 : 1 }'; then
+        cutover_line PASS recovery "running"
+      else
+        cutover_line FAIL recovery "defined but not running and healthy"
+      fi
+      ;;
+    *) cutover_line FAIL recovery "this release defines no recovery role" ;;
+  esac
+
+  # 4. provisioner and monitor are kept OFF until the cutover enables them, in that order.
+  local disabled role bad=""
+  if disabled="$(nexa_disabled_roles 2>/dev/null)"; then
+    for role in provisioner monitor; do
+      nexa_in_list "$role" "$disabled" || bad="${bad:+${bad}; }${role} is not disabled"
+      if printf '%s\n' "$states" | awk -v r="$role" '$1 == r && $2 == "running" { found = 1 } END { exit found ? 0 : 1 }'; then
+        bad="${bad:+${bad}; }${role} is running"
+      fi
+    done
+    if [ -z "$bad" ]; then
+      cutover_line PASS background-roles "provisioner and monitor disabled and stopped"
+    else
+      cutover_line FAIL background-roles "${bad} (sudo botctl roles disable provisioner monitor)"
+    fi
+  else
+    cutover_line FAIL background-roles "NEXA_DISABLED_ROLES in nexa.env is not valid"
+  fi
+
+  # 5. Migrations: every migration this release ships is applied (`migrate.js --check`).
+  # The word AND the exit status: `current` from a check that then failed is not a pass.
+  local word rc=0
+  word="$(nexa_compose run --rm --no-deps -T --entrypoint node api \
+    dist/infrastructure/persistence/migrate.js --check 2>/dev/null | tr -d '[:space:]')" || rc=$?
+  if [ -z "$word" ]; then
+    cutover_line FAIL migrations "the check did not answer"
+  elif [ "$rc" -eq 0 ] && { [ "$word" = current ] || [ "$word" = ahead ]; }; then
+    cutover_line PASS migrations "$word"
+  else
+    cutover_line FAIL migrations "$word"
+  fi
+
+  # 6. A fresh, verified backup — the rollback point everything after this relies on.
+  local listing newest="" age
+  listing="$(nexa_compose run --rm --no-deps -T --entrypoint node api \
+    dist/backup.cli.js list --limit 20 2>/dev/null)" || listing=""
+  newest="$(printf '%s\n' "$listing" | awk '$4 == "SUCCEEDED" && $5 == "verified" && $0 !~ /CLEANUP-INCOMPLETE/ { print $1; exit }')"
+  if [ -z "$newest" ]; then
+    cutover_line FAIL backup "no SUCCEEDED, verified backup is listed"
+  else
+    local taken now
+    taken="$(date -u -d "$newest" +%s 2>/dev/null || true)"
+    now="$(date -u +%s)"
+    if [ -z "$taken" ]; then
+      cutover_line FAIL backup "the newest verified backup's time is unreadable"
+    else
+      age=$(((now - taken) / 3600))
+      if [ $((now - taken)) -le $((max_backup_hours * 3600)) ]; then
+        cutover_line PASS backup "verified ${age}h ago (limit ${max_backup_hours}h)"
+      else
+        cutover_line FAIL backup "the newest verified backup is ${age}h old (limit ${max_backup_hours}h)"
+      fi
+    fi
+  fi
+
+  # 7. Disk: the backup directory, the state directory and Docker's data root.
+  local dir avail short="" checked=""
+  for dir in "$NEXA_BACKUP_DIR" "$NEXA_STATE_DIR" "${NEXA_DOCKER_DATA_DIR:-/var/lib/docker}"; do
+    [ -d "$dir" ] || continue
+    avail="$(df -Pk "$dir" 2>/dev/null | awk 'NR == 2 { print $4 }')"
+    checked="${checked:+${checked}, }${dir}"
+    case "$avail" in
+      '' | *[!0-9]*) short="${short:+${short}; }${dir} unreadable" ;;
+      *) [ "$avail" -ge $((min_free_gib * 1024 * 1024)) ] ||
+        short="${short:+${short}; }${dir} has $((avail / 1024 / 1024)) GiB free" ;;
+    esac
+  done
+  if [ -z "$checked" ]; then
+    cutover_line FAIL disk "none of the directories exists"
+  elif [ -z "$short" ]; then
+    cutover_line PASS disk "at least ${min_free_gib} GiB free on ${checked}"
+  else
+    cutover_line FAIL disk "${short} (need ${min_free_gib} GiB)"
+  fi
+
+  # 8. Telegram: who receives the bot's updates. Before the handover NEXA holds no bot
+  # (`none`); after it, `ready`. Anything else is a webhook in an unknown or broken state.
+  local origin telegram=""
+  origin="$(telegram_origin 2>/dev/null || true)"
+  if [ -n "$origin" ]; then
+    telegram="$(nexa_compose run --rm --no-deps -T --entrypoint node api \
+      dist/bootstrap-bot.cli.js --status --public-base-url "$origin" 2>/dev/null | tr -d '[:space:]')" || telegram=""
+  fi
+  if [ -z "$telegram" ]; then
+    cutover_line FAIL telegram "the state could not be read (botctl telegram status)"
+  elif [ "$telegram" = "$expect_telegram" ]; then
+    cutover_line PASS telegram "${telegram}"
+  else
+    cutover_line FAIL telegram "${telegram}, expected ${expect_telegram} (botctl telegram status)"
+  fi
+
+  printf '\n'
+  if [ "$CUTOVER_FAILED" -eq 0 ]; then
+    printf 'preflight: PASS (%d checks)\n' "$CUTOVER_CHECKS"
+    return 0
+  fi
+  printf 'preflight: FAIL (%d of %d checks failed)\n' "$CUTOVER_FAILED" "$CUTOVER_CHECKS"
+  return 1
+}
+
+cmd_cutover() {
+  local action="${1:-}"
+  shift || true
+  case "$action" in
+    preflight) cmd_cutover_preflight "$@" ;;
+    *) nexa_die "usage: botctl cutover preflight [options]" ;;
+  esac
+}
+
 main() {
   local command="${1:-}"
   shift || true
@@ -2391,6 +2633,7 @@ main() {
     update) cmd_update "$@" ;;
     rollback) cmd_rollback "$@" ;;
     roles) cmd_roles "$@" ;;
+    cutover) cmd_cutover "$@" ;;
     secrets) cmd_secrets "$@" ;;
     telegram) cmd_telegram "$@" ;;
     admin) cmd_admin "$@" ;;
