@@ -17,6 +17,8 @@ import type { ProviderRules, ProviderType } from '@nexa/contracts';
  *   - 3X-UI: `reset: 0`; one inbound, `activation.inboundId`, whose own protocol the
  *     client gets; a link built from `activation.subscriptionDomain`; `limitIp` from the
  *     product's device limit.
+ *   - Custom (R10 C2): the order's traffic, expiry and device limit as the signed create
+ *     carries them; protocols, inbounds and the link are the bridge's.
  */
 export const PROVIDER_RULES: Readonly<Record<ProviderType, ProviderRules>> = {
   marzban: {
@@ -38,6 +40,18 @@ export const PROVIDER_RULES: Readonly<Record<ProviderType, ProviderRules>> = {
     protocols: 'INBOUND_DEFINED',
     inbounds: 'OPERATOR_INBOUND_ID',
     subscriptionLink: 'SUBSCRIPTION_DOMAIN',
+    deviceLimitOnCreate: 'FROM_PRODUCT',
+  },
+  /*
+   * R10 C2: the bridge protocol. Nexa sends the order's traffic, expiry and device limit;
+   * the bridge chooses protocols and inbounds and issues the link, and the protocol
+   * forbids it a periodic reset (`docs/protocols/custom-panel.md` §5.2).
+   */
+  custom: {
+    trafficReset: 'NEVER',
+    protocols: 'PANEL_ASSIGNED',
+    inbounds: 'PANEL_ASSIGNED',
+    subscriptionLink: 'PANEL_ISSUED',
     deviceLimitOnCreate: 'FROM_PRODUCT',
   },
 };

@@ -3210,6 +3210,137 @@ describe('the new-panel form', () => {
 });
 
 /**
+ * R10 C2: the custom (bridge protocol) provider on the create form. What the form shows is
+ * read from the provider's descriptor and activation schema, never from its name: the
+ * secret is called what it is (a signing key, with its minimum length), the address hint
+ * says https only, and the optional timeout is offered where — and only where — the
+ * provider's schema takes one.
+ */
+describe('the new-panel form — a custom bridge', () => {
+  const CATALOGUE = {
+    providers: [
+      {
+        key: 'marzban',
+        canonicalName: 'Marzban',
+        credentialShape: 'USERNAME_PASSWORD',
+        capabilities: ['HEALTH_CHECK'],
+        requiredActivationFields: [],
+        capabilityRegistry: capabilityRegistry(),
+      },
+      {
+        key: 'custom',
+        canonicalName: 'Custom (Nexa bridge v1)',
+        credentialShape: 'OPAQUE_TOKEN',
+        capabilities: ['HEALTH_CHECK'],
+        requiredActivationFields: [],
+        capabilityRegistry: capabilityRegistry(),
+      },
+    ],
+  };
+
+  it('names the secret a signing key, says https only, and offers the timeout', async () => {
+    stubApi([{ url: '/providers', body: CATALOGUE }]);
+    renderPage(<NewPanelPage denied={false} mayRotate mayView />);
+    await screen.findByLabelText('ارائه‌دهنده');
+
+    fireEvent.change(screen.getByLabelText('ارائه‌دهنده'), { target: { value: 'marzban' } });
+    expect(screen.queryByLabelText(t('web.panel_request_timeout'))).toBeNull();
+    expect(screen.queryByText(t('web.panel_base_url_https_hint'))).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('ارائه‌دهنده'), { target: { value: 'custom' } });
+    expect(screen.getByLabelText(t('web.api_token_signing'))).toBeInTheDocument();
+    expect(screen.queryByLabelText(t('web.api_token'))).toBeNull();
+    expect(
+      screen.getAllByText((content) => content.startsWith(t('web.api_token_signing_hint'))),
+    ).not.toHaveLength(0);
+    expect(screen.getByText(t('web.panel_base_url_https_hint'))).toBeInTheDocument();
+    expect(screen.getByLabelText(t('web.panel_request_timeout'))).toBeInTheDocument();
+    // The secret is never prefilled.
+    expect((screen.getByLabelText(t('web.api_token_signing')) as HTMLInputElement).value).toBe('');
+  });
+
+  it('sends the secret and the timeout in milliseconds, from Persian digits too', async () => {
+    const api = stubApi([
+      { url: '/providers', body: CATALOGUE },
+      { url: '/panels', body: { panel: panel({ providerType: 'custom' }) } },
+    ]);
+    renderPage(<NewPanelPage denied={false} mayRotate mayView />);
+    await screen.findByLabelText('ارائه‌دهنده');
+    fireEvent.change(screen.getByLabelText('ارائه‌دهنده'), { target: { value: 'custom' } });
+    fireEvent.change(screen.getByLabelText('نام'), { target: { value: 'Bridge' } });
+    fireEvent.change(screen.getByLabelText('نشانی پایه'), {
+      target: { value: 'https://bridge.example/nexa/' },
+    });
+    fireEvent.change(screen.getByLabelText(t('web.api_token_signing')), {
+      target: { value: 'k'.repeat(43) },
+    });
+    // Typed in the body's (Persian) digits, as an operator would.
+    fireEvent.change(screen.getByLabelText(t('web.panel_request_timeout')), {
+      target: { value: '۵' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+
+    await waitFor(() => {
+      const write = api.calls.find((call) => call.method === 'POST');
+      expect(write?.body).toMatchObject({
+        providerType: 'custom',
+        credentials: { apiToken: 'k'.repeat(43) },
+        activation: { requestTimeoutMs: 5_000 },
+      });
+    });
+  });
+
+  it('refuses a timeout that is not a number in Persian, and sends nothing', async () => {
+    const api = stubApi([{ url: '/providers', body: CATALOGUE }]);
+    renderPage(<NewPanelPage denied={false} mayRotate mayView />);
+    await screen.findByLabelText('ارائه‌دهنده');
+    fireEvent.change(screen.getByLabelText('ارائه‌دهنده'), { target: { value: 'custom' } });
+    fireEvent.change(screen.getByLabelText('نام'), { target: { value: 'Bridge' } });
+    fireEvent.change(screen.getByLabelText('نشانی پایه'), {
+      target: { value: 'https://bridge.example/' },
+    });
+    fireEvent.change(screen.getByLabelText(t('web.panel_request_timeout')), {
+      target: { value: 'پنج' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+    expect(await screen.findByText(t('web.err_panel_request_invalid'))).toBeInTheDocument();
+    expect(api.calls.some((call) => call.method === 'POST')).toBe(false);
+  });
+
+  it('shows the server’s refusals in Persian: flag off, secret too short', async () => {
+    stubApi([
+      { url: '/providers', body: CATALOGUE },
+      {
+        url: '/panels',
+        status: 412,
+        body: {
+          error: {
+            kind: 'PRECONDITION_FAILED',
+            code: 'panel.provider_feature_disabled',
+            message: 'This provider type is switched off for this tenant.',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(<NewPanelPage denied={false} mayRotate mayView />);
+    await screen.findByLabelText('ارائه‌دهنده');
+    fireEvent.change(screen.getByLabelText('ارائه‌دهنده'), { target: { value: 'custom' } });
+    fireEvent.change(screen.getByLabelText('نام'), { target: { value: 'Bridge' } });
+    fireEvent.change(screen.getByLabelText('نشانی پایه'), {
+      target: { value: 'https://bridge.example/' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+    expect(
+      await screen.findByText(t('web.err_panel_provider_feature_disabled')),
+    ).toBeInTheDocument();
+    // The server's English is never what the operator reads.
+    expect(screen.queryByText(/switched off for this tenant/)).toBeNull();
+    expect(t('web.err_panel_credential_too_short')).toMatch(/[\u0600-\u06FF]/);
+  });
+});
+
+/**
  * The three states, and the form that lets an operator fix the middle one.
  *
  * Order `01a0c54b` is what these are written against. The panel behind it was
@@ -3423,6 +3554,69 @@ describe('panel activation editing', () => {
     expect(screen.getByLabelText(t('web.panel_subscription_domain'))).toBeTruthy();
     expect(screen.getByLabelText(t('web.panel_inbound_id'))).toBeTruthy();
     expect(screen.queryByLabelText('vless')).toBeNull();
+  });
+});
+
+/** R10 C2: a custom bridge's one activation field, read back and written in milliseconds. */
+describe('panel activation editing — a custom bridge', () => {
+  const PANEL_ID = '01a05e35-c9ad-7e93-bef3-1ed9b55292c8';
+  const custom = (activation: unknown) =>
+    panel({
+      providerType: 'custom',
+      providerName: 'Custom (Nexa bridge v1)',
+      activation,
+      credentials: {
+        username: { configured: false, lastReplacedAt: null },
+        password: { configured: false, lastReplacedAt: null },
+        apiToken: { configured: true, lastReplacedAt: '2026-01-01T00:00:00.000Z' },
+      },
+    });
+
+  it('offers only the timeout, reads it back in seconds, and sends milliseconds', async () => {
+    const api = stubApi([
+      { url: '/panels/', body: { panel: custom({ requestTimeoutMs: 5_000 }) } },
+      { url: `/panels/${PANEL_ID}`, body: { panel: custom({ requestTimeoutMs: 7_000 }) } },
+    ]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+
+    const field = screen.getByLabelText(t('web.panel_request_timeout')) as HTMLInputElement;
+    expect(field.value).toBe('5');
+    expect(screen.queryByLabelText(t('web.panel_subscription_domain'))).toBeNull();
+    expect(screen.queryByLabelText('vless')).toBeNull();
+
+    fireEvent.change(field, { target: { value: '7' } });
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    const write = api.calls.filter((call) => call.method === 'POST').at(-1);
+    expect((write?.body as { activation?: unknown }).activation).toEqual({
+      requestTimeoutMs: 7_000,
+    });
+  });
+
+  it('refuses a timeout outside 1..30 seconds before sending, naming the field', async () => {
+    const api = stubApi([{ url: '/panels/', body: { panel: custom(null) } }]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    fireEvent.change(screen.getByLabelText(t('web.panel_request_timeout')), {
+      target: { value: '45' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    // The refusal names the field in Persian (its label), beside the field itself.
+    expect(
+      (await screen.findAllByText((content) => content.includes(t('web.panel_request_timeout'))))
+        .length,
+    ).toBeGreaterThan(1);
+    expect(api.calls.some((call) => call.method === 'POST')).toBe(false);
+  });
+
+  it('says https only on a custom panel’s address field', async () => {
+    stubApi([{ url: '/panels/', body: { panel: custom(null) } }]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    expect(screen.getByText(t('web.panel_base_url_https_hint'))).toBeInTheDocument();
   });
 });
 

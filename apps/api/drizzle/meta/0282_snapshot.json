@@ -1,5 +1,5 @@
 {
-  "id": "4019dc1b-d764-4254-ba83-7311ae3ca6dc",
+  "id": "73a16c9a-d030-4fce-aa8c-c1bc45cad38a",
   "prevId": "01b8abf4-8dc8-4101-9e98-8f266dfb6cea",
   "version": "7",
   "dialect": "postgresql",
@@ -9426,19 +9426,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "personal_discount_percent": {
-          "name": "personal_discount_percent",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "personal_discount_set_at": {
-          "name": "personal_discount_set_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -9608,10 +9595,6 @@
         "customers_source_ref_check": {
           "name": "customers_source_ref_check",
           "value": "(source = 'NEXA') = (source_ref IS NULL) AND (source_ref IS NULL OR length(source_ref) BETWEEN 1 AND 128)"
-        },
-        "customers_personal_discount_check": {
-          "name": "customers_personal_discount_check",
-          "value": "personal_discount_percent BETWEEN 0 AND 100"
         },
         "customers_status_check": {
           "name": "customers_status_check",
@@ -11781,7 +11764,7 @@
       "checkConstraints": {
         "gateway_customer_numbers_provider_check": {
           "name": "gateway_customer_numbers_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT', 'CUSTOM')"
         },
         "gateway_customer_numbers_number_check": {
           "name": "gateway_customer_numbers_number_check",
@@ -12484,6 +12467,12 @@
           "notNull": true,
           "default": 0
         },
+        "endpoint_base_url": {
+          "name": "endpoint_base_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -12721,7 +12710,7 @@
         },
         "gateway_invoices_provider_check": {
           "name": "gateway_invoices_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT', 'CUSTOM')"
         },
         "gateway_invoices_creation_state_check": {
           "name": "gateway_invoices_creation_state_check",
@@ -12787,13 +12776,21 @@
           "name": "gateway_invoices_rialit_check",
           "value": "provider <> 'RIALIT' OR (provider_unit = 'IRT' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND octet_length(provider_order_id) <= 64 AND provider_order_id ~ '^[A-Za-z0-9_.:-]{1,64}$')"
         },
+        "gateway_invoices_custom_check": {
+          "name": "gateway_invoices_custom_check",
+          "value": "provider <> 'CUSTOM' OR (provider_unit = 'IRR' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND provider_order_id ~ '^cg_[0-9A-HJKMNP-TV-Z]{26}$' AND provider_user_id IS NOT NULL AND endpoint_base_url IS NOT NULL)"
+        },
+        "gateway_invoices_endpoint_base_url_check": {
+          "name": "gateway_invoices_endpoint_base_url_check",
+          "value": "endpoint_base_url IS NULL OR (provider = 'CUSTOM' AND endpoint_base_url ~ '^https://' AND length(endpoint_base_url) <= 512)"
+        },
         "gateway_invoices_provider_method_check": {
           "name": "gateway_invoices_provider_method_check",
           "value": "provider_method IS NULL OR (provider = 'TETRAPAY' AND provider_method IN ('online', 'card'))"
         },
         "gateway_invoices_provider_user_id_check": {
           "name": "gateway_invoices_provider_user_id_check",
-          "value": "provider_user_id IS NULL OR (provider = 'CENTRALPAY' AND provider_user_id ~ '^[0-9]{10}$')"
+          "value": "provider_user_id IS NULL OR (provider IN ('CENTRALPAY', 'CUSTOM') AND provider_user_id ~ '^[0-9]{10}$')"
         },
         "gateway_invoices_card_check": {
           "name": "gateway_invoices_card_check",
@@ -24621,7 +24618,7 @@
       "checkConstraints": {
         "payment_gateway_call_budgets_provider_check": {
           "name": "payment_gateway_call_budgets_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT', 'CUSTOM')"
         },
         "payment_gateway_call_budgets_used_check": {
           "name": "payment_gateway_call_budgets_used_check",
@@ -24804,7 +24801,7 @@
         },
         "payment_gateway_credentials_provider_check": {
           "name": "payment_gateway_credentials_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT', 'CUSTOM')"
         }
       },
       "isRLSEnabled": false
@@ -24931,6 +24928,18 @@
           "primaryKey": false,
           "notNull": false
         },
+        "endpoint_base_url": {
+          "name": "endpoint_base_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "webhook_ip_allowlist": {
+          "name": "webhook_ip_allowlist",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -25004,7 +25013,7 @@
       "checkConstraints": {
         "payment_gateways_provider_check": {
           "name": "payment_gateways_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT', 'CUSTOM')"
         },
         "payment_gateways_status_check": {
           "name": "payment_gateways_status_check",
@@ -25057,6 +25066,10 @@
         "payment_gateways_provider_unit_rate_check": {
           "name": "payment_gateways_provider_unit_rate_check",
           "value": "provider_unit_rate_minor IS NULL OR provider_unit_rate_minor > 0"
+        },
+        "payment_gateways_endpoint_check": {
+          "name": "payment_gateways_endpoint_check",
+          "value": "(provider = 'CUSTOM' OR (endpoint_base_url IS NULL AND webhook_ip_allowlist IS NULL))\n          AND (endpoint_base_url IS NULL OR (endpoint_base_url ~ '^https://[^/?#@[:space:]]+' AND length(endpoint_base_url) <= 512))\n          AND (webhook_ip_allowlist IS NULL OR cardinality(webhook_ip_allowlist) <= 32)"
         }
       },
       "isRLSEnabled": false
@@ -25876,7 +25889,7 @@
         },
         "payments_gateway_provider_check": {
           "name": "payments_gateway_provider_check",
-          "value": "gateway_provider IS NULL OR gateway_provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT')"
+          "value": "gateway_provider IS NULL OR gateway_provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT', 'CUSTOM')"
         },
         "payments_topup_cashback_percent_check": {
           "name": "payments_topup_cashback_percent_check",

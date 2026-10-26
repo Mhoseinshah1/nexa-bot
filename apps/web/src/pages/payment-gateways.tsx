@@ -6,6 +6,8 @@ import {
   PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MAX,
   PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MIN,
   formatBasisPointsPercent,
+  normaliseAllowlistEntry,
+  normaliseCustomGatewayBaseUrl,
   parsePercentBasisPoints,
   routeTakesCustomerFee,
   takesFixedRate,
@@ -19,6 +21,7 @@ import {
   checkPaymentGatewayCredential,
   fetchPaymentGateways,
   setPaymentGatewayCredential,
+  setPaymentGatewayEndpoint,
   setPaymentGatewayWebhookSecret,
   setPaymentGatewayVerifyKey,
   setPaymentGatewayStatus,
@@ -31,7 +34,7 @@ import { t } from '../i18n/web.fa';
 import { paymentMethodPath } from '../payment-method-routes';
 import { useLinkHandler } from '../router';
 import { messageFor } from './settings';
-import { gatewayEnableRefusalText } from '../error-text';
+import { gatewayEnableRefusalText, gatewayRequestRefusalText } from '../error-text';
 import { FxSection } from './fx-section';
 import {
   Disclosure,
@@ -190,6 +193,8 @@ function nameOf(gateway: PaymentGatewayView): string {
       return t('web.payment_gateway_provider_tetrapay');
     case 'RIALIT':
       return t('web.payment_gateway_provider_rialit');
+    case 'CUSTOM':
+      return t('web.payment_gateway_provider_custom');
   }
 }
 
@@ -198,7 +203,26 @@ function nameOf(gateway: PaymentGatewayView): string {
  * (`docs/nowpayments-gateway-audit.md` §5.7). The server refuses any other; the button is
  * simply not drawn for them.
  */
-const CHECKABLE_PROVIDERS: ReadonlySet<string> = new Set(['NOWPAYMENTS']);
+const CHECKABLE_PROVIDERS: ReadonlySet<string> = new Set(['NOWPAYMENTS', 'CUSTOM']);
+
+/**
+ * Round 10 C1: the allow-list as the operator typed it, one entry a line, normalised by the
+ * contract's own parser — or null when a line is not an address or a CIDR (or there are too
+ * many). Refused here rather than rewritten; the server parses the same function again.
+ */
+export function allowlistOf(text: string): string[] | null {
+  const lines = text
+    .split(/[\n,]/u)
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
+  const entries: string[] = [];
+  for (const line of lines) {
+    const entry = normaliseAllowlistEntry(line);
+    if (entry === null) return null;
+    if (!entries.includes(entry)) entries.push(entry);
+  }
+  return entries.length > 32 ? null : entries;
+}
 
 /** A form's title, naming the route it is open on when that route is on screen. */
 function titled(title: string, row: PaymentGatewayView | undefined): string {
@@ -387,6 +411,13 @@ export function PaymentGatewaysPage({
   const [verifyKey, setVerifyKey] = useState('');
   const verifyKeyed = useSubmissionKey();
   const checkKeyed = useSubmissionKey();
+  /*
+   * Round 10 C1: the custom gateway's bridge — its base URL and callback allow-list. Neither is
+   * a secret, so the drawer opens with the stored values to edit.
+   */
+  const [endpointUrl, setEndpointUrl] = useState('');
+  const [endpointAllowlist, setEndpointAllowlist] = useState('');
+  const endpointKeyed = useSubmissionKey();
 
   const reset = () => {
     setEditing(null);
@@ -399,6 +430,8 @@ export function PaymentGatewaysPage({
     setApiKey('');
     setWebhookSecret('');
     setVerifyKey('');
+    setEndpointUrl('');
+    setEndpointAllowlist('');
   };
 
   const refresh = () => {
@@ -562,6 +595,24 @@ export function PaymentGatewaysPage({
     onError: (error) => verifyKeyed.settleOn(error),
   });
 
+  const endpoint = useMutation({
+    mutationFn: () => {
+      if (keying === null) throw new Error('no route is being keyed');
+      const baseUrl = normaliseCustomGatewayBaseUrl(endpointUrl);
+      if (baseUrl === null) throw new Error(t('web.payment_gateway_custom_endpoint_invalid'));
+      const ipAllowlist = allowlistOf(endpointAllowlist);
+      if (ipAllowlist === null) throw new Error(t('web.payment_gateway_custom_allowlist_invalid'));
+      const body = { provider: keying, baseUrl, ipAllowlist };
+      return setPaymentGatewayEndpoint({ ...body, idempotencyKey: endpointKeyed.current(body) });
+    },
+    onSuccess: () => {
+      endpointKeyed.settle();
+      notify({ tone: 'ok', message: t('web.payment_gateway_custom_endpoint_saved') });
+      refresh();
+    },
+    onError: (error) => endpointKeyed.settleOn(error),
+  });
+
   const check = useMutation({
     mutationFn: (provider: string) =>
       checkPaymentGatewayCredential({
@@ -587,6 +638,7 @@ export function PaymentGatewaysPage({
     credential.isPending ||
     secret.isPending ||
     verify.isPending ||
+    endpoint.isPending ||
     check.isPending;
   const failure = save.error ?? toggle.error;
 
@@ -598,10 +650,19 @@ export function PaymentGatewaysPage({
   const editedRow = editing === null ? undefined : rows.find((row) => row.provider === editing);
   const formDirty =
     editedRow !== undefined && JSON.stringify(form) !== JSON.stringify(formOf(editedRow));
+  const keyedRow = keying === null ? undefined : rows.find((row) => row.provider === keying);
+  const endpointDirty =
+    keyedRow?.endpoint != null &&
+    (endpointUrl !== (keyedRow.endpoint.baseUrl ?? '') ||
+      endpointAllowlist !== keyedRow.endpoint.ipAllowlist.join('\n'));
+  const endpointUrlInvalid =
+    endpointUrl.trim() !== '' && normaliseCustomGatewayBaseUrl(endpointUrl) === null;
+  const endpointAllowlistInvalid = allowlistOf(endpointAllowlist) === null;
   useUnsavedChanges(
     mayEdit &&
       (formDirty ||
-        (keying !== null && (apiKey !== '' || webhookSecret !== '' || verifyKey !== ''))),
+        (keying !== null &&
+          (apiKey !== '' || webhookSecret !== '' || verifyKey !== '' || endpointDirty))),
   );
 
   /*
@@ -634,21 +695,35 @@ export function PaymentGatewaysPage({
               setApiKey('');
               setWebhookSecret('');
               setVerifyKey('');
+              // Round 10 C1: the bridge is not a secret; it opens as stored, to edit.
+              setEndpointUrl(row.endpoint?.baseUrl ?? '');
+              setEndpointAllowlist((row.endpoint?.ipAllowlist ?? []).join('\n'));
             }}
           >
-            {t('web.payment_gateway_credential_edit')}
+            {t(
+              row.endpoint === null
+                ? 'web.payment_gateway_credential_edit'
+                : 'web.payment_gateway_custom_configure',
+            )}
           </button>
         )}
-        {CHECKABLE_PROVIDERS.has(row.provider) && row.credential.setAt !== null && (
-          <button
-            type="button"
-            className="btn sm"
-            disabled={busy}
-            onClick={() => check.mutate(row.provider)}
-          >
-            {t('web.payment_gateway_check')}
-          </button>
-        )}
+        {CHECKABLE_PROVIDERS.has(row.provider) &&
+          row.credential.setAt !== null &&
+          (row.endpoint === null || row.endpoint.baseUrl !== null) && (
+            <button
+              type="button"
+              className="btn sm"
+              disabled={busy}
+              onClick={() => check.mutate(row.provider)}
+            >
+              {/* Round 10 C1: the custom gateway's ping is the operator's connection test. */}
+              {t(
+                row.endpoint === null
+                  ? 'web.payment_gateway_check'
+                  : 'web.payment_gateway_test_connection',
+              )}
+            </button>
+          )}
         <button
           type="button"
           className="btn sm"
@@ -874,6 +949,16 @@ export function PaymentGatewaysPage({
                 )}
               </span>
             )}
+            {/* Round 10 C1: the custom gateway's bridge address (not a secret: shown). */}
+            {row.endpoint !== null && (
+              <span className="gateways-stack">
+                {row.endpoint.baseUrl === null ? (
+                  <Badge tone="warn">{t('web.payment_gateway_custom_endpoint_missing')}</Badge>
+                ) : (
+                  <Ltr>{row.endpoint.baseUrl}</Ltr>
+                )}
+              </span>
+            )}
             {/* A route's separate verify key (CentralPay): its state alone, never a value. */}
             {row.credential.verifyKeyRequired && (
               <span className="gateways-stack">
@@ -1036,7 +1121,17 @@ export function PaymentGatewaysPage({
             {keying === 'RIALIT' && (
               <Banner tone="info">{t('web.payment_gateway_rialit_hint')}</Banner>
             )}
-            <Field label={t('web.payment_gateway_credential_input')} htmlFor="pg-api-key">
+            {keyedRow?.endpoint != null && (
+              <Banner tone="info">{t('web.payment_gateway_custom_hint')}</Banner>
+            )}
+            <Field
+              label={t(
+                keyedRow?.endpoint != null
+                  ? 'web.payment_gateway_custom_secret_input'
+                  : 'web.payment_gateway_credential_input',
+              )}
+              htmlFor="pg-api-key"
+            >
               <input
                 id="pg-api-key"
                 className="input ltr mono"
@@ -1063,9 +1158,81 @@ export function PaymentGatewaysPage({
             </div>
             {credential.error != null && (
               <Banner tone="danger">
-                {messageFor(credential.error)}
+                {gatewayRequestRefusalText(credential.error) ?? messageFor(credential.error)}
                 <ErrorRef error={credential.error} />
               </Banner>
+            )}
+            {/*
+            Round 10 C1: the custom gateway's bridge — base URL and callback allow-list. Its own
+            command and audit row; the server refuses it while the route is switched on, and the
+            fields are read-only then, with the reason beside them.
+          */}
+            {keyedRow?.endpoint != null && (
+              <div className="form-section">
+                <h3>{t('web.payment_gateway_custom_endpoint_title')}</h3>
+                <p className="desc">{t('web.payment_gateway_custom_endpoint_hint')}</p>
+                {keyedRow.status === 'ACTIVE' && (
+                  <Banner tone="info">{t('web.payment_gateway_custom_endpoint_active')}</Banner>
+                )}
+                <Field label={t('web.payment_gateway_custom_base_url')} htmlFor="pg-endpoint-url">
+                  <input
+                    id="pg-endpoint-url"
+                    className="input ltr mono"
+                    dir="ltr"
+                    inputMode="url"
+                    spellCheck={false}
+                    value={endpointUrl}
+                    maxLength={512}
+                    readOnly={keyedRow.status === 'ACTIVE'}
+                    onChange={(event) => setEndpointUrl(event.target.value)}
+                  />
+                </Field>
+                <Field
+                  label={t('web.payment_gateway_custom_allowlist')}
+                  htmlFor="pg-endpoint-allowlist"
+                  hint={t('web.payment_gateway_custom_allowlist_hint')}
+                >
+                  <textarea
+                    id="pg-endpoint-allowlist"
+                    className="input ltr mono"
+                    dir="ltr"
+                    rows={3}
+                    spellCheck={false}
+                    value={endpointAllowlist}
+                    readOnly={keyedRow.status === 'ACTIVE'}
+                    onChange={(event) => setEndpointAllowlist(event.target.value)}
+                  />
+                </Field>
+                {/* Refused at the field, by the contract's own parsers: nothing is sent. */}
+                {endpointUrlInvalid && (
+                  <Banner tone="warn">{t('web.payment_gateway_custom_endpoint_invalid')}</Banner>
+                )}
+                {endpointAllowlistInvalid && (
+                  <Banner tone="warn">{t('web.payment_gateway_custom_allowlist_invalid')}</Banner>
+                )}
+                <div className="form-actions">
+                  <button
+                    type="button"
+                    className="btn primary"
+                    disabled={
+                      busy ||
+                      keyedRow.status === 'ACTIVE' ||
+                      endpointUrl.trim() === '' ||
+                      endpointUrlInvalid ||
+                      endpointAllowlistInvalid
+                    }
+                    onClick={() => endpoint.mutate()}
+                  >
+                    {t('web.payment_gateway_custom_endpoint_save')}
+                  </button>
+                </div>
+                {endpoint.error != null && (
+                  <Banner tone="danger">
+                    {gatewayRequestRefusalText(endpoint.error) ?? messageFor(endpoint.error)}
+                    <ErrorRef error={endpoint.error} />
+                  </Banner>
+                )}
+              </div>
             )}
             {/*
             A signed route's IPN secret (NOWPayments): its own write-only field and its own
@@ -1510,6 +1677,31 @@ export function PaymentGatewaysPage({
                       ] as [ReactNode, ReactNode],
                     ]
                   : []),
+                // Round 10 C1: the custom gateway's bridge and its callback allow-list, as stored.
+                ...(only.endpoint === null
+                  ? []
+                  : [
+                      [
+                        t('web.payment_gateway_custom_endpoint_set'),
+                        only.endpoint.baseUrl === null ? (
+                          <Badge key="e" tone="warn">
+                            {t('web.payment_gateway_custom_endpoint_missing')}
+                          </Badge>
+                        ) : (
+                          <Ltr key="e">{only.endpoint.baseUrl}</Ltr>
+                        ),
+                      ] as [ReactNode, ReactNode],
+                      [
+                        t('web.payment_gateway_custom_allowlist_count'),
+                        only.endpoint.ipAllowlist.length === 0 ? (
+                          <span key="a" className="muted small">
+                            {t('web.payment_gateway_custom_allowlist_none')}
+                          </span>
+                        ) : (
+                          <Ltr key="a">{only.endpoint.ipAllowlist.join(', ')}</Ltr>
+                        ),
+                      ] as [ReactNode, ReactNode],
+                    ]),
                 // The provider's daily limit, while it hides the route (back by itself at 00:00).
                 ...(only.hiddenUntil === null
                   ? []

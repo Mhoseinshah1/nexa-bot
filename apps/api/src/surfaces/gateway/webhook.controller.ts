@@ -6,12 +6,14 @@ import {
   Inject,
   Param,
   Post,
+  ForbiddenException,
   Req,
   UnauthorizedException,
 } from '@nestjs/common';
 import { z } from 'zod';
 import {
   COMMERCE_ERROR_CODES,
+  CUSTOM_GATEWAY_HEADERS,
   NOWPAYMENTS_SIGNATURE_HEADER,
   PAYMENT_GATEWAY_DESCRIPTORS,
   PAYMENT_GATEWAY_PROVIDERS,
@@ -96,6 +98,16 @@ const tenantIdSchema = z.uuid();
  * are shown only in Rialit's dashboard, so none is enforced: a forged webhook can at most bring
  * a rate-limited read forward (`docs/rialit-gateway-audit.md`, decision D6).
  *
+ * ## The custom gateway (Round 10 C1)
+ *
+ * Nexa's own protocol (`docs/protocols/custom-gateway.md` §3.3): `X-Nexa-Bridge-Signature`
+ * (`t=,v1=`) over `NEXA-CGW-V1-CALLBACK\n<t>\n` + the raw bytes, keyed by the route's ONE secret,
+ * verified before any field is read; `X-Nexa-Delivery-Id` (equal to the body's `delivery_id`) is
+ * the dedupe key. A bad or stale signature is answered 401 so the bridge retries after fixing its
+ * secret or clock; a sender outside the route's IP allow-list 403, before the signature is even
+ * read (`request.ip`, as the trusted reverse proxy reports it). Still a hint: it only brings the
+ * signed inquiry forward.
+ *
  * No external call is made here, and no money moves here.
  */
 @Controller()
@@ -122,6 +134,9 @@ export class GatewayWebhookController {
     @Headers(RIALIT_DELIVERY_HEADER) rialitDeliveryId: string | undefined,
     // TonPays' signature (same rule: read only for a route whose descriptor says it signs).
     @Headers(TONPAYS_SIGNATURE_HEADER) tonpaysSignature: string | undefined,
+    // Round 10 C1: the custom gateway's bridge signature and delivery id.
+    @Headers(CUSTOM_GATEWAY_HEADERS.bridgeSignature) bridgeSignature: string | undefined,
+    @Headers(CUSTOM_GATEWAY_HEADERS.deliveryId) bridgeDeliveryId: string | undefined,
     @Req() request: unknown,
     @Body() body: unknown,
   ): Promise<{ ok: true }> {
@@ -132,32 +147,44 @@ export class GatewayWebhookController {
     const tenant = tenantIdSchema.safeParse(tenantIdParam);
     if (!tenant.success) return { ok: true };
 
+    const descriptor = PAYMENT_GATEWAY_DESCRIPTORS[provider];
+    const custom = descriptor.webhookSignedByCredential;
     const result = await this.container.gatewayPayments.receiveWebhook(
       tenant.data,
       provider,
       body,
-      deliveryId ??
-        (provider === 'TETRAPAY'
-          ? tetrapayEventId
-          : provider === 'RIALIT'
-            ? rialitDeliveryId
-            : undefined),
-      PAYMENT_GATEWAY_DESCRIPTORS[provider].webhookSecret
-        ? provider === 'TETRAPAY'
-          ? tetrapaySignature
-          : provider === 'TONPAYS' || provider === 'TONPAYS_TELEGRAM'
-            ? tonpaysSignature
-            : signature
-        : undefined,
+      // The custom gateway's dedupe key is ITS header alone, never another provider's.
+      custom
+        ? bridgeDeliveryId
+        : (deliveryId ??
+            (provider === 'TETRAPAY'
+              ? tetrapayEventId
+              : provider === 'RIALIT'
+                ? rialitDeliveryId
+                : undefined)),
+      custom
+        ? bridgeSignature
+        : descriptor.webhookSecret
+          ? provider === 'TETRAPAY'
+            ? tetrapaySignature
+            : provider === 'TONPAYS' || provider === 'TONPAYS_TELEGRAM'
+              ? tonpaysSignature
+              : signature
+          : undefined,
       rawBodyOf(request),
+      // Round 10 C1: the sender, as the trusted reverse proxy reported it, for the allow-list.
+      descriptor.operatorEndpoint ? sourceIpOf(request) : undefined,
     );
-    // TonPays asks for a refusal it can see (and retries any non-2xx); the other signed routes
-    // keep answering `{ ok: true }` to an unverified webhook.
+    // TonPays and the custom gateway ask for a refusal they can see (and retry any non-2xx); the
+    // other signed routes keep answering `{ ok: true }` to an unverified webhook.
     if (
       result === 'IGNORED_UNVERIFIED' &&
-      (provider === 'TONPAYS' || provider === 'TONPAYS_TELEGRAM')
+      (provider === 'TONPAYS' || provider === 'TONPAYS_TELEGRAM' || custom)
     ) {
       throw new UnauthorizedException('Webhook signature not verified.');
+    }
+    if (result === 'IGNORED_SOURCE') {
+      throw new ForbiddenException('Webhook sender not allowed.');
     }
     if (result === 'MALFORMED') {
       throw errors.validation(
@@ -176,4 +203,10 @@ function externalProviderOf(segment: string): PaymentGatewayProvider | null {
   // A browser-return route (CentralPay) documents no webhook: there is nothing to receive.
   const descriptor = PAYMENT_GATEWAY_DESCRIPTORS[found];
   return descriptor.settlesVia === 'GATEWAY' && !descriptor.browserReturn ? found : null;
+}
+
+/** Fastify's `request.ip` (behind the trusted proxies only), or undefined. Never a raw header. */
+function sourceIpOf(request: unknown): string | undefined {
+  const ip = (request as { ip?: unknown } | null | undefined)?.ip;
+  return typeof ip === 'string' && ip.length > 0 ? ip : undefined;
 }

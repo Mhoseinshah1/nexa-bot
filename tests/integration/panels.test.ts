@@ -13,6 +13,7 @@ import {
   PANEL_PAGE_DEFAULT,
   PANEL_PAGE_MAX,
   panelListQuerySchema,
+  providerDescriptor,
   type ActorContext,
   type ProviderConnectionAdapter,
   type ProviderProbeOutcome,
@@ -221,6 +222,7 @@ describe('panels', () => {
       const panelId = view.panel.id;
 
       const service = new PanelService({
+        features: ctx.container.featureFlagResolver,
         capacity: ctx.container.panelCapacity,
         usernameNamespace: ctx.container.usernameNamespace,
         repository: new DrizzlePanelRepository(ctx.container.database.db),
@@ -871,6 +873,28 @@ describe('panels', () => {
     // The positive half: a type the registry resolves is configurable, and the
     // row records the type it was created with.
     for (const providerType of IMPLEMENTED_PROVIDER_TYPES) {
+      /*
+       * R10 C2: a type whose descriptor names a feature flag (`custom`) is refused while
+       * that flag is off — the default — and configurable once it is on.
+       */
+      const feature = providerDescriptor(providerType)?.requiresFeature;
+      if (feature !== undefined) {
+        await expect(
+          create(owner, tenantA, { providerType, name: `Panel ${providerType}` }),
+        ).rejects.toMatchObject({ code: 'panel.provider_feature_disabled' });
+        const actor = adminActorFor(owner);
+        const flag = (await ctx.container.featureFlags.list(tenantA, actor)).find(
+          (one) => one.key === feature,
+        );
+        await ctx.container.featureFlags.set(tenantA, actor, {
+          idempotencyKey: key(),
+          key: feature,
+          enabled: true,
+          expectedVersion: flag?.version ?? null,
+          confirmKey: feature,
+          reason: 'every implemented provider type',
+        });
+      }
       const { view } = await create(owner, tenantA, {
         providerType,
         name: `Panel ${providerType}`,
@@ -1356,6 +1380,7 @@ describe('panels', () => {
     };
 
     const service = new PanelService({
+      features: ctx.container.featureFlagResolver,
       capacity: ctx.container.panelCapacity,
       usernameNamespace: ctx.container.usernameNamespace,
       repository: new DrizzlePanelRepository(ctx.container.database.db),
@@ -1551,6 +1576,7 @@ describe('panels', () => {
     adapterOverrides: Partial<ProviderConnectionAdapter> = {},
   ) {
     const scripted = new PanelService({
+      features: ctx.container.featureFlagResolver,
       capacity: ctx.container.panelCapacity,
       usernameNamespace: ctx.container.usernameNamespace,
       repository: new DrizzlePanelRepository(ctx.container.database.db),

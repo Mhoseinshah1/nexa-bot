@@ -29,6 +29,7 @@ import { toProviderCredentials } from '../../../platform/panels/application/prob
 import type { PanelPolicyGate } from '../../../platform/panels/application/panel-policy.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { SafeHttpClient } from '../../../../infrastructure/net/safe-http.js';
+import { panelClient } from '../../../platform/panels/application/panel-http.js';
 import { checkUrl, type UrlPolicyOptions } from '../../../../infrastructure/net/url-policy.js';
 import type {
   CustomerCaption,
@@ -297,7 +298,7 @@ export class SubscriptionFileService {
 
     const fetched = await adapter.fetchSubscriptionFiles(
       { baseUrl: operable.baseUrl, credentials, activation: operable.activation },
-      this.deps.http.forBase(operable.baseUrl),
+      panelClient(this.deps.http, operable),
       providerRefFor(service),
     );
     if (!fetched.ok) {

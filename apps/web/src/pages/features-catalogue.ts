@@ -266,6 +266,14 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: null,
     confirmEnable: null,
   },
+  // R10 C2: off refuses NEW custom panels only; existing ones keep operating, so nothing is
+  // lost by switching it off and it does not ask first.
+  custom_panel_provider: {
+    title: 'web.feature_custom_panel_provider_title',
+    summary: 'web.feature_custom_panel_provider_summary',
+    disableEffect: null,
+    confirmEnable: null,
+  },
   // Round 9, C5: the customer mini app. Off withdraws the menu button and ends new sessions.
   mini_app: {
     title: 'web.feature_mini_app_title',

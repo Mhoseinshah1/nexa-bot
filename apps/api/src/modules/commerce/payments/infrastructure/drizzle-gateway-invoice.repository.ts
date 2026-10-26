@@ -13,7 +13,7 @@ import type {
   SalesCurrencyCode,
   TenantContext,
 } from '@nexa/contracts';
-import { PAYMENT_GATEWAY_PROVIDERS } from '@nexa/contracts';
+import { PAYMENT_GATEWAY_DESCRIPTORS, PAYMENT_GATEWAY_PROVIDERS } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   requireTenantId,
@@ -37,6 +37,12 @@ import type {
 } from '../application/gateway-invoice-ports.js';
 
 type Row = typeof gatewayInvoices.$inferSelect;
+
+/** Round 10 C1: the routes whose inquiry may be asked by Nexa's own order id. */
+const ORDER_ID_INQUIRY_PROVIDERS: readonly PaymentGatewayProvider[] =
+  PAYMENT_GATEWAY_PROVIDERS.filter(
+    (provider) => PAYMENT_GATEWAY_DESCRIPTORS[provider].inquiresByOrderId,
+  );
 
 /** How many random draws a customer's provider number takes before giving up. */
 const CUSTOMER_NUMBER_DRAWS = 5;
@@ -140,6 +146,7 @@ function toRecord(row: Row): GatewayInvoiceRecord {
     cryptoReceivedCurrency: row.cryptoReceivedCurrency,
     cryptoPayAddress: row.cryptoPayAddress,
     providerUserId: row.providerUserId,
+    endpointBaseUrl: row.endpointBaseUrl,
     providerMethod: row.providerMethod,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -176,6 +183,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly fx: GatewayInvoiceFxSnapshot | null;
       readonly botInstanceId: string | null;
       readonly providerUserId?: string | null;
+      readonly endpointBaseUrl?: string | null;
       readonly now: Date;
     },
     tx: unknown,
@@ -189,6 +197,8 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         provider: input.provider,
         providerOrderId: input.providerOrderId,
         providerUserId: input.providerUserId ?? null,
+        // Round 10 C1: the bridge this attempt is created against, frozen (written once).
+        endpointBaseUrl: input.endpointBaseUrl ?? null,
         creationState: 'CREATING',
         providerUnit: input.providerUnit,
         sentAmount: input.sentAmount,
@@ -695,6 +705,14 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
           or(
             isNotNull(gatewayInvoices.providerInvoiceId),
             isNotNull(gatewayInvoices.hintedInvoiceId),
+            /*
+             * Round 10 C1: a route whose provider can be asked by Nexa's own order id (the
+             * custom gateway) can be asked about a lost create, whose reference is unknown.
+             */
+            and(
+              eq(gatewayInvoices.creationState, 'CREATE_UNKNOWN'),
+              inArray(gatewayInvoices.provider, [...ORDER_ID_INQUIRY_PROVIDERS]),
+            ),
           ),
           // Spaced: one operator request a minute, whatever the button does.
           or(isNull(gatewayInvoices.lastInquiryAt), lte(gatewayInvoices.lastInquiryAt, spaced)),
@@ -792,6 +810,15 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         isNotNull(gatewayInvoices.providerInvoiceId),
         isNotNull(gatewayInvoices.hintedInvoiceId),
         isNotNull(gatewayInvoices.providerChargeId),
+        /*
+         * Round 10 C1: a lost create of a route asked by Nexa's own order id (the custom
+         * gateway) — due only when a verified callback or an operator brought it forward, since
+         * a create that ended clears `next_inquiry_at`. Read, never re-sent.
+         */
+        and(
+          eq(gatewayInvoices.creationState, 'CREATE_UNKNOWN'),
+          inArray(gatewayInvoices.provider, [...ORDER_ID_INQUIRY_PROVIDERS]),
+        ),
       ),
     );
   }
