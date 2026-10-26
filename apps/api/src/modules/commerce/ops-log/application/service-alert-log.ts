@@ -27,6 +27,13 @@ export interface ServiceAlertHook {
  * Posted when the customer was actually told (the reminder row is written once per service
  * and kind), so a sweep that finds the same service again says nothing twice. Remaining
  * traffic is `0 بایت`, never negative and never NaN.
+ *
+ * R10 B5 (the v0.8.2-e rule): the REMINDER is the alert's provenance, and only the sweep
+ * writes one, after it told the customer — never the import. A threshold an imported service
+ * had already crossed when it was imported is the sweep's import baseline
+ * (`service_reminder_baselines`): the customer is not told, so this is never called for it.
+ * A threshold crossed after the import is told to the customer like any other, so neither the
+ * service's nor the customer's `MIRZA` source is a reason for silence here.
  */
 export class ServiceAlertLog implements ServiceAlertHook {
   constructor(
@@ -49,9 +56,9 @@ export class ServiceAlertLog implements ServiceAlertHook {
     tx: TransactionScope,
   ): Promise<void> {
     const service = await this.deps.facts.service(scope, input.serviceId, tx);
-    if (service === null || service.source !== 'NEXA') return;
+    if (service === null) return;
     const customer = await this.deps.facts.customer(scope, service.customerId, tx);
-    if (customer === null || customer.source !== 'NEXA') return;
+    if (customer === null) return;
     const built = serviceAlert({
       kind: input.kind,
       service,

@@ -1670,7 +1670,7 @@ export class ProvisionerService {
          * The create DID happen; only the answer was lost. So the service becomes
          * ACTIVE with what the panel reports, and no second create is ever issued.
          */
-        await this.deps.services.transition(
+        const adopted = await this.deps.services.transition(
           scope,
           serviceId,
           'UNRECONCILED',
@@ -1690,6 +1690,32 @@ export class ProvisionerService {
           now,
           tx,
         );
+        if (adopted) {
+          /*
+           * R10 B5: the create this installation made DID take effect, so the service was
+           * provisioned — the same fact the create path states, in the same transaction as
+           * the move. Without it a purchase whose create answer was lost never reached the
+           * services topic as «🛒 خرید جدید» (L10/L11), only as an English INFO line.
+           *
+           * Exactly once per service: written only when THIS conditional move from
+           * `UNRECONCILED` happened, and `SERVICE_MACHINE` reaches ACTIVE from
+           * `PENDING_PROVISION` or `UNRECONCILED` once — a service the create path already
+           * moved (and announced) is never `UNRECONCILED` again. Its one consumer is the
+           * operations log; no customer is told anything by it. `operationId` is the
+           * reconcile that established the account exists.
+           */
+          await this.deps.outbox.write(tx, actor, {
+            eventType: 'ServiceProvisioned',
+            aggregateType: 'Service',
+            aggregateId: serviceId,
+            payload: {
+              customerId: service.customerId,
+              orderId: service.orderId,
+              panelId: service.panelId,
+              operationId: operation.operationId,
+            },
+          });
+        }
         await this.deps.opsLog.record(
           scope,
           {

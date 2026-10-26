@@ -274,6 +274,9 @@ describe('FIX-02: the manual transfer and custom-instruction invoices', () => {
   it('the custom-instruction invoice (no destination) labels it exactly', () => {
     const text = rendered('bot.payment.manual_instructions', {
       total,
+      // R10 B6: the body states the amount in rial, Toman beside it.
+      amountRial: '۲٬۵۰۰٬۰۰۰',
+      amountToman: '۲۵۰٬۰۰۰',
       reference: paymentTrackingCode({ code: CODE, reference: `${LEGACY}:manual` }),
     });
     expectCodeAndNoSuffix(text, 'manual instructions');

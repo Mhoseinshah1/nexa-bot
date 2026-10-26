@@ -85,8 +85,9 @@ export class OperationalEventPresenter implements OpsEventPresenter {
    *   already posted L23/L24 for it;
    * - `provisioning.delivered` — the INFO line of a service the panel now holds. The purchase
    *   is the services topic's «🛒 خرید جدید» (L10/L11, from `ServiceProvisioned`), so a second
-   *   generic English line under it was a duplicate. A service ADOPTED after a lost answer
-   *   emits no `ServiceProvisioned`, so that one keeps its line.
+   *   generic English line under it was a duplicate. Since R10 B5 a service ADOPTED after a
+   *   lost create answer emits `ServiceProvisioned` too (it was this installation's create),
+   *   so its line is withheld as well; its context still says `adopted`.
    *
    * The event is still RECORDED (it closes the stalled condition); only the message is withheld.
    */
@@ -97,7 +98,7 @@ export class OperationalEventPresenter implements OpsEventPresenter {
         input.context?.['reason'] === 'UNRECONCILED'
       );
     }
-    return input.code === PROVISIONING_DELIVERED_CODE && input.context?.['adopted'] !== true;
+    return input.code === PROVISIONING_DELIVERED_CODE;
   }
 
   title(code: string): string {
@@ -333,10 +334,13 @@ export class OperationalEventPresenter implements OpsEventPresenter {
     const { facts, words } = this.deps;
     const serviceId = safeIdentifier(input.context?.['serviceId']);
     if (serviceId === null) return null;
+    // R10 B5 (the v0.8.2-e rule): a stall is an operation THIS installation performed — the
+    // import performs none — so a customer or a service the import wrote is no reason for the
+    // generic layout. A PROVISION stall still reads its order's provenance below.
     const service = await facts.service(scope, serviceId, tx);
-    if (service === null || service.source !== 'NEXA') return null;
+    if (service === null) return null;
     const customer = await facts.customer(scope, service.customerId, tx);
-    if (customer === null || customer.source !== 'NEXA') return null;
+    if (customer === null) return null;
     // A stall that does not say which operation stalled is NOT a PROVISION: defaulting it
     // read the service's original order and reported its creation as failed, with that
     // order's amount. It keeps the generic layout (every producer now names its type).
