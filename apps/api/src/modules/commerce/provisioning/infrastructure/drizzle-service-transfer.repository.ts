@@ -1,4 +1,4 @@
-import { and, count, desc, eq, isNotNull, ne, notInArray, or } from 'drizzle-orm';
+import { and, count, desc, eq, isNotNull, ne, notInArray, or, sql } from 'drizzle-orm';
 import {
   OPERATION_TERMINAL_STATES,
   type ActorType,
@@ -179,7 +179,18 @@ export class DrizzleServiceTransferRepository implements ServiceTransferReposito
         ),
       )
       .returning({ id: services.id });
-    return rows.length === 1;
+    if (rows.length !== 1) return false;
+    /*
+     * Round 10, D1: the sender's consent to automatic renewal does not travel with the service
+     * either — a new owner is never charged on the strength of somebody else's agreement, and a
+     * service handed back does not revive an old one. Switched off in this same transaction.
+     */
+    await this.exec(tx).execute(sql`
+      UPDATE service_auto_renew_preferences
+         SET enabled = false, consented_total_minor = NULL, consented_currency = NULL,
+             source = 'TRANSFER', updated_at = ${input.now}
+       WHERE tenant_id = ${tenantId} AND service_id = ${input.serviceId} AND enabled`);
+    return true;
   }
 
   async operationUndecided(

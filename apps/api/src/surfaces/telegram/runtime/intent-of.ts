@@ -151,6 +151,9 @@ import {
   SERVICE_TERMINATE_ASK_CALLBACK_PREFIX,
   SERVICE_TERMINATE_CALLBACK_PREFIX,
   SERVICE_TRANSFER_ASK_CALLBACK_PREFIX,
+  SERVICE_AUTO_RENEW_ASK_CALLBACK_PREFIX,
+  SERVICE_AUTO_RENEW_CONFIRM_CALLBACK_PREFIX,
+  SERVICE_AUTO_RENEW_OFF_CALLBACK_PREFIX,
   SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX,
   TERMS_ACCEPT_CALLBACK_PREFIX,
   TICKETS_CALLBACK_DATA,
@@ -171,6 +174,7 @@ import {
   USERNAME_CUSTOM_CALLBACK_PREFIX,
   WALLET_OPEN_CALLBACK_DATA,
   WALLET_PAY_CALLBACK_PREFIX,
+  decodeAutoRenewConfirm,
   decodeDeviceQuantity,
   decodeIdPair,
   decodeServiceLocationPair,
@@ -726,6 +730,31 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
       return callbackCommand(
         'SERVICE_REFUND_CONFIRM',
         data.slice(SERVICE_REFUND_CONFIRM_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    // Round 10, D1: automatic renewal — ask, confirm, off.
+    if (data.startsWith(SERVICE_AUTO_RENEW_ASK_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_AUTO_RENEW_ASK',
+        data.slice(SERVICE_AUTO_RENEW_ASK_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(SERVICE_AUTO_RENEW_CONFIRM_CALLBACK_PREFIX)) {
+      const confirmed = decodeAutoRenewConfirm(data);
+      if (confirmed === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      return {
+        intent: 'SERVICE_AUTO_RENEW_CONFIRM',
+        targetId: confirmed.serviceId,
+        shownTotal: confirmed.shown,
+        callbackQueryId: id,
+      };
+    }
+    if (data.startsWith(SERVICE_AUTO_RENEW_OFF_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_AUTO_RENEW_OFF',
+        data.slice(SERVICE_AUTO_RENEW_OFF_CALLBACK_PREFIX.length),
         id,
       );
     }

@@ -279,7 +279,8 @@ export const OPS_LOG_WORDS_FA = {
 
   badges: { firstPurchase: '🥇 اولین خرید', reseller: '🧑‍💼 نماینده', separator: ' · ' },
   /** R9 C2: the source line of a purchase, renewal, extra traffic, extra time or ticket log. */
-  sources: { BOT: 'ربات', MINI_APP: 'مینی‌اپ' },
+  // Round 10, D1: «منبع: تمدید خودکار» — a renewal the worker made on the customer's consent.
+  sources: { BOT: 'ربات', MINI_APP: 'مینی‌اپ', AUTO_RENEW: 'تمدید خودکار' },
   /** R9 C2: the value of the «first purchase of the customer» line (L10, L11). */
   firstPurchaseYes: 'بله',
   operations: {

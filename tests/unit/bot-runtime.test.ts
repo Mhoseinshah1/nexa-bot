@@ -83,6 +83,9 @@ import {
   SERVICE_REFRESH_CALLBACK_PREFIX,
   SERVICE_FILES_CALLBACK_PREFIX,
   SERVICE_TRANSFER_ASK_CALLBACK_PREFIX,
+  SERVICE_AUTO_RENEW_ASK_CALLBACK_PREFIX,
+  SERVICE_AUTO_RENEW_CONFIRM_CALLBACK_PREFIX,
+  SERVICE_AUTO_RENEW_OFF_CALLBACK_PREFIX,
   SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX,
   decodeTransferConfirm,
   notificationButtons,
@@ -1017,6 +1020,19 @@ describe('profile metadata, normalised before it is ever stored', () => {
       // R5C-1 item 4: what the payment message of a wallet-paid package says until the receipt
       // replaces it. It claims only that the package is being applied, never that it was.
       'bot.service.addon_paid',
+      /*
+       * Round 10, D1: «تمدید خودکار». Reviewed: the ON button and the question ASK and record
+       * nothing — the question names the most it will charge and that a short wallet is told
+       * once and charged nothing; only the confirm button records the consent; OFF acts at
+       * once; the two toasts say what changed; one sentence answers every refusal.
+       */
+      'bot.service.auto_renew_ask',
+      'bot.service.auto_renew_confirm_button',
+      'bot.service.auto_renew_disable_button',
+      'bot.service.auto_renew_disabled',
+      'bot.service.auto_renew_enable_button',
+      'bot.service.auto_renew_enabled',
+      'bot.service.auto_renew_unavailable',
       // R3 item 9: a button label; it puts the service card back in the same message.
       'bot.service.back_to_card_button',
       'bot.service.back_to_list_button',
@@ -1861,6 +1877,10 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
     SERVICE_FILES: SERVICE_FILES_CALLBACK_PREFIX,
     // Package F: `ta:` begins with `t` like `t:`, `to:` and `tp:`; the shadowing case proves it safe.
     SERVICE_TRANSFER_ASK: SERVICE_TRANSFER_ASK_CALLBACK_PREFIX,
+    // Round 10, D1: `ar:`, `ay:` and `an:` begin with `a` like `a:` and `ac:`; proven safe below.
+    SERVICE_AUTO_RENEW_ASK: SERVICE_AUTO_RENEW_ASK_CALLBACK_PREFIX,
+    SERVICE_AUTO_RENEW_CONFIRM: SERVICE_AUTO_RENEW_CONFIRM_CALLBACK_PREFIX,
+    SERVICE_AUTO_RENEW_OFF: SERVICE_AUTO_RENEW_OFF_CALLBACK_PREFIX,
     SERVICE_NOTE: SERVICE_NOTE_CALLBACK_PREFIX,
     SERVICE_RENEW_QUOTE: SERVICE_RENEW_QUOTE_CALLBACK_PREFIX,
     TOPUP_CLOSE: TOPUP_CLOSE_CALLBACK_PREFIX,

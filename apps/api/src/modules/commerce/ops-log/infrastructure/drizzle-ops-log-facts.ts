@@ -408,11 +408,22 @@ export class DrizzleOpsLogFacts implements OpsLogFacts {
     );
     if (row === undefined) return null;
     const actorId = str(row['actor_id']);
+    /*
+     * Round 10, D1: «منبع: تمدید خودکار» is decided by the auto-renew run that NAMES this order
+     * — a RENEWED run, whose `order_id` the settling transaction wrote — never by the surface.
+     */
+    const [auto] = await this.rows(
+      tx,
+      sql`SELECT 1 FROM service_auto_renew_runs r
+           WHERE r.tenant_id = ${tenantId} AND r.order_id = ${orderId} AND r.state = 'RENEWED'
+           LIMIT 1`,
+    );
     return {
       surface: String(row['source_surface']),
       actorType: String(row['actor_type']),
       actorId: actorId !== null && UUID.test(actorId) ? actorId : null,
       actorLabel: str(row['actor_label']),
+      ...(auto === undefined ? {} : { autoRenew: true as const }),
     };
   }
 

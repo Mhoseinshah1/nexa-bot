@@ -185,6 +185,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        legacy_service_candidates,
        -- Mirza PR2: the legacy product review, before the products and admins it names.
        legacy_product_reviews,
+       -- Round 10, D1: automatic renewal, before the services, customers and orders it names.
+       service_auto_renew_runs, service_auto_renew_preferences,
        provisioning_operations, services, payments, orders, discounts, products,
        -- AFTER products, which reference it. Named for the same reason as the rest:
        -- the tenants table above does CASCADE to it today, and a table whose clearing

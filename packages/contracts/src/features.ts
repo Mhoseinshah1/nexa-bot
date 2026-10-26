@@ -529,6 +529,21 @@ export const FEATURE_FLAGS = [
     blastRadius: 'TENANT_WIDE',
     configuredBy: ['miniapp.init_data_max_age_seconds', 'miniapp.session_ttl_minutes'],
   },
+  {
+    key: 'service_auto_renew',
+    description:
+      'Round 10, D1: «تمدید خودکار». On, a customer may switch automatic renewal on for one of ' +
+      'their services from the bot\u2019s service screen or the mini app; auto_renew.lead_hours ' +
+      'before the deadline the worker renews it through the ordinary renewal \u2014 the same ' +
+      'quote, the same wallet debit, the same provisioning \u2014 if the wallet covers it and the ' +
+      'price is not above what the customer agreed to; otherwise the customer is told once. Off ' +
+      'by default. Off stops every new run at once: an opted-in service is simply not renewed, ' +
+      'its consent is kept, and the customer can still switch it off.',
+    defaultEnabled: false,
+    // TENANT_WIDE: it spends customers' wallets without a tap of theirs at the time.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: ['auto_renew.lead_hours'],
+  },
 ] as const satisfies readonly FeatureFlagDefinition[];
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[number]['key'];

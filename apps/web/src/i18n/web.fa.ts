@@ -246,6 +246,8 @@ export const WEB_FA = {
     'هر مشتری در مجموع همهٔ پنل‌ها چند بار می‌تواند سرویس آزمایشی بگیرد. صفر یعنی سرویس آزمایشی به کسی داده نمی‌شود. روشن یا خاموش بودن سرویس تست روی هر پنل جداگانه (صفحهٔ پنل، زبانهٔ «سرویس تست») تعیین می‌شود.',
   'web.setting_miniapp_init_data_max_age_seconds_desc':
     'تلگرام هنگام باز شدن مینی‌اپ یک امضای ورود می‌سازد. امضایی قدیمی‌تر از این مدت پذیرفته نمی‌شود و مشتری باید مینی‌اپ را دوباره باز کند.',
+  'web.setting_auto_renew_lead_hours_desc':
+    'سرویسی که مشتری تمدید خودکار آن را روشن کرده، این تعداد ساعت پیش از پایان اعتبار از کیف پول تمدید می‌شود. اگر موجودی کافی نباشد یک بار به مشتری گفته می‌شود و اگر پیش از پایان اعتبار کیف پول شارژ شود، تمدید انجام می‌شود. بین ۱ تا ۱۶۸ ساعت.',
   'web.setting_miniapp_session_ttl_minutes_desc':
     'هر بار باز شدن مینی‌اپ فقط یک نشست می‌سازد که پس از این مدت تمام می‌شود؛ بعد از آن مشتری مینی‌اپ را دوباره باز می‌کند.',
   'web.setting_link_rotation_cooldown_hours_desc':
@@ -418,6 +420,11 @@ export const WEB_FA = {
     'وقتی ادمین از کیف پول مشتری دستی کسر می‌کند، به مشتری مبلغ و موجودی جدید گفته می‌شود؛ دلیل فقط اگر «نمایش دلیل به مشتری» زده شده باشد.',
   'web.feature_wallet_admin_notice_off_effect':
     'تا وقتی خاموش است، تغییرهای دستی موجودی به مشتری گفته نمی‌شود و روشن کردن دوباره، پیام تغییرهای این مدت را نمی‌فرستد.',
+  'web.feature_service_auto_renew_title': 'تمدید خودکار سرویس',
+  'web.feature_service_auto_renew_summary':
+    'مشتری می‌تواند برای هر سرویس خود از ربات یا مینی‌اپ «تمدید خودکار» را روشن کند. چند ساعت پیش از پایان اعتبار (تنظیم «فاصلهٔ تمدید خودکار تا انقضا»)، سرویس با همان پلن، همان قیمت‌گذاری و از موجودی کیف پول تمدید می‌شود. اگر موجودی کافی نباشد یا مبلغ تمدید از مبلغی که مشتری پذیرفته بیشتر شود، تمدید انجام نمی‌شود و فقط یک بار به مشتری اطلاع داده می‌شود. سرویس‌های منتقل‌شده از ربات قبلی شامل نمی‌شوند. پیش‌فرض خاموش است.',
+  'web.feature_service_auto_renew_off_effect':
+    'با خاموش شدن، هیچ تمدید خودکار تازه‌ای انجام نمی‌شود و سرویس مشتریانی که آن را روشن کرده‌اند خودکار تمدید نمی‌شود؛ انتخاب مشتریان نگه داشته می‌شود و با روشن کردن دوباره، از دورهٔ بعد ادامه پیدا می‌کند.',
   'web.feature_mini_app_title': 'مینی‌اپ تلگرام',
   'web.feature_mini_app_summary':
     'یک دکمهٔ منو کنار کادر پیام ربات، که مینی‌اپ فروشگاه را باز می‌کند. مینی‌اپ فقط همان کارهایی را انجام می‌دهد که ربات انجام می‌دهد — خرید، تمدید، کیف پول، پشتیبانی — با همان قیمت‌ها، همان قوانین و همان گزارش‌ها. پیش‌فرض خاموش است؛ خاموش، ربات دقیقاً مثل قبل است. تنظیم دکمه روی ربات‌ها با همگام‌سازی منوی دستورها انجام می‌شود.',
@@ -4317,6 +4324,7 @@ export const WEB_FA = {
   'web.setting_link_rotation_cooldown_hours': 'فاصلهٔ مجاز بین دو درخواست لینک جدید',
   'web.setting_miniapp_init_data_max_age_seconds': 'اعتبار ورود به مینی‌اپ',
   'web.setting_miniapp_session_ttl_minutes': 'مدت هر نشست مینی‌اپ',
+  'web.setting_auto_renew_lead_hours': 'فاصلهٔ تمدید خودکار تا انقضا',
   'web.flag_referral_signup_gift': 'هدیهٔ عضویت از طریق معرفی',
   'web.setting_referral_signup_gift_total': 'مبلغ کل هدیهٔ عضویت',
   'web.setting_referral_signup_gift_referrer_percent': 'سهم معرف از هدیهٔ عضویت',
@@ -4838,6 +4846,9 @@ export const WEB_FA = {
   'web.ib_button_service_refund_request': 'درخواست بازگشت وجه',
   'web.ib_button_service_refund_request_confirm': 'تأیید درخواست بازگشت وجه',
   'web.ib_button_service_transfer': 'انتقال سرویس',
+  'web.ib_button_service_auto_renew_enable': 'فعال‌سازی تمدید خودکار',
+  'web.ib_button_service_auto_renew_disable': 'لغو تمدید خودکار',
+  'web.ib_button_service_auto_renew_confirm': 'تأیید تمدید خودکار',
   'web.ib_button_service_transfer_confirm': 'تأیید انتقال سرویس',
   'web.ib_button_support_tickets': 'تیکت‌های پشتیبانی',
   'web.ib_button_support_contact': 'ارتباط با پشتیبانی (لینک)',
@@ -10302,6 +10313,8 @@ export const WEB_FA = {
   'web.err_commerce_service_not_deliverable': 'این سرویس قابل تحویل نیست.',
   'web.err_commerce_service_not_found': 'سرویس پیدا نشد.',
   'web.err_commerce_service_not_transferable': 'این سرویس قابل انتقال نیست.',
+  'web.err_commerce_auto_renew_disabled': 'تمدید خودکار در این ربات خاموش است.',
+  'web.err_commerce_auto_renew_not_available': 'تمدید خودکار برای این سرویس در دسترس نیست.',
   'web.err_commerce_service_refund_not_eligible': 'این سرویس شرایط بازپرداخت را ندارد.',
   'web.err_commerce_service_refund_request_not_found': 'درخواست بازپرداخت سرویس پیدا نشد.',
   'web.err_commerce_service_refund_request_state_invalid':
@@ -10727,6 +10740,8 @@ export const WEB_FA = {
   'web.pay_notice_account_unblocked': 'رفع مسدودی حساب',
   'web.pay_notice_service_traffic_added': 'خرید حجم اضافه',
   'web.pay_notice_service_time_added': 'خرید زمان اضافه',
+  'web.pay_notice_service_auto_renew_funds_short': 'کمبود موجودی برای تمدید خودکار',
+  'web.pay_notice_service_auto_renew_price_changed': 'تغییر مبلغ تمدید خودکار',
   'web.pay_provider_pending': 'در انتظار',
   'web.pay_provider_processing': 'در حال پردازش',
   'web.pay_provider_completed': 'تکمیل‌شده',
@@ -11131,6 +11146,8 @@ export const WEB_FA = {
   'web.outbox_event_legacy_import_review_state_changed': 'تغییر بررسی دادهٔ قدیمی',
   'web.outbox_event_service_adopted': 'پذیرش سرویس قدیمی',
   'web.outbox_event_reseller_standing_changed': 'تغییر وضعیت نماینده',
+  'web.outbox_event_service_auto_renew_changed': 'تغییر تمدید خودکار سرویس',
+  'web.outbox_event_service_auto_renew_run_settled': 'نتیجهٔ یک تمدید خودکار',
   'web.outbox_aggregate_admin': 'مدیر',
   'web.outbox_aggregate_bot_instance': 'ربات',
   'web.outbox_aggregate_broadcast': 'پیام همگانی',

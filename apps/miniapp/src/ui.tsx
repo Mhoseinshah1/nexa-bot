@@ -122,6 +122,9 @@ const ERROR_TEXT: Readonly<Record<string, MiniAppKey>> = {
   'miniapp.unavailable': 'miniapp.unavailable',
   'miniapp.receipt_upload_failed': 'miniapp.card_receipt_upload_failed',
   'commerce.discount_code_rejected': 'miniapp.checkout_discount_refused',
+  // Round 10, D1: one Persian sentence for both automatic-renewal refusals.
+  'commerce.auto_renew_disabled': 'miniapp.auto_renew_unavailable',
+  'commerce.auto_renew_not_available': 'miniapp.auto_renew_unavailable',
 };
 
 export function errorText(error: unknown): string {

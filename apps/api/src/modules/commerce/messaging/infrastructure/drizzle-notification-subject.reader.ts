@@ -6,6 +6,7 @@ import {
   INCIDENT_NOTICE_STALE_AFTER_MS,
   EXPIRY_REMINDER_KINDS,
   EXPIRY_REMINDER_STATES,
+  featureFlagDefinition,
   SERVICE_REMINDER_NOTIFICATION_KINDS,
   SERVICE_UNRESOLVED_PROVISION_STATES,
   USAGE_REMINDER_KINDS,
@@ -65,6 +66,9 @@ const ANSWERABLE_KINDS: readonly CustomerNotificationKind[] = [
   'DIRECT_MESSAGE_MEDIA',
   // Phase E3: answered from the notice row and its incident.
   'INCIDENT_NOTICE',
+  // Round 10, D1: answered from the auto-renew run, its service, the consent and the ledger.
+  'SERVICE_AUTO_RENEW_FUNDS_SHORT',
+  'SERVICE_AUTO_RENEW_PRICE_CHANGED',
 ];
 
 /**
@@ -133,6 +137,9 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
     }
     if (kind === 'DIRECT_MESSAGE' || kind === 'DIRECT_MESSAGE_MEDIA') {
       return this.directMessageFresh(tenantId, kind, subjectId, now);
+    }
+    if (kind === 'SERVICE_AUTO_RENEW_FUNDS_SHORT' || kind === 'SERVICE_AUTO_RENEW_PRICE_CHANGED') {
+      return this.autoRenewNoticeHolds(tenantId, kind, subjectId, now);
     }
     /*
      * Phase E3: a notice holds while its incident is still SCHEDULED or ACTIVE and the
@@ -292,6 +299,56 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
    * queued, and releasing both at the window's end would tell the customer the same thing
    * twice; the later one is the one that describes the wallet now.
    */
+  /**
+   * Round 10, D1: an automatic-renewal notice holds while its period is still the service's
+   * period (not renewed since, automatically or by hand — `expires_at` is the run's basis, an
+   * exact `timestamptz` comparison in SQL), the service still belongs to the customer the run
+   * was for and their consent is still on, and the run still states the kind's fact:
+   *
+   *   - FUNDS_SHORT: the run is `FUNDS_SHORT`, the deadline is still ahead (a "top up before
+   *     the deadline" after it is false), the feature is still on, and the wallet still does
+   *     NOT cover the quote — re-derived from the ledger, never a stored balance.
+   *   - PRICE_CHANGED: the run was refused for its price.
+   *
+   * A run that is gone is `false`: nothing is announced about a subject that does not exist.
+   */
+  private async autoRenewNoticeHolds(
+    tenantId: string,
+    kind: 'SERVICE_AUTO_RENEW_FUNDS_SHORT' | 'SERVICE_AUTO_RENEW_PRICE_CHANGED',
+    subjectId: string,
+    now: Date,
+  ): Promise<boolean> {
+    const fact =
+      kind === 'SERVICE_AUTO_RENEW_FUNDS_SHORT'
+        ? sql`r.state = 'FUNDS_SHORT'
+              AND r.basis_expires_at > ${now}
+              AND COALESCE((SELECT f.enabled FROM feature_flag_states f
+                             WHERE f.tenant_id = r.tenant_id AND f.flag_key = 'service_auto_renew'),
+                           ${featureFlagDefinition('service_auto_renew').defaultEnabled})
+              AND r.quoted_total_minor IS NOT NULL
+              AND (SELECT COALESCE(SUM(CASE WHEN e.direction = 'CREDIT' THEN e.amount
+                                            ELSE -e.amount END), 0)
+                     FROM wallet_entries e
+                    WHERE e.tenant_id = r.tenant_id AND e.customer_id = r.customer_id
+                      AND e.currency = r.quoted_currency) < r.quoted_total_minor`
+        : sql`r.state = 'REFUSED' AND r.refusal = 'PRICE_ROSE'`;
+    const result = await this.db.execute(sql`
+      SELECT 1
+        FROM service_auto_renew_runs r
+        JOIN services s
+          ON s.tenant_id = r.tenant_id AND s.id = r.service_id
+         AND s.customer_id = r.customer_id
+         AND s.expires_at = r.basis_expires_at
+        JOIN service_auto_renew_preferences p
+          ON p.tenant_id = r.tenant_id AND p.service_id = r.service_id
+         AND p.customer_id = r.customer_id AND p.enabled
+       WHERE r.tenant_id = ${tenantId}
+         AND r.id = ${subjectId}
+         AND ${fact}
+       LIMIT 1`);
+    return result.rows.length > 0;
+  }
+
   private async walletStillLow(tenantId: string, subjectId: string, now: Date): Promise<boolean> {
     const result = await this.db.execute(sql`
       SELECT 1

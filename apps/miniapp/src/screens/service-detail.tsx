@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import {
   MINIAPP_ROUTES,
+  miniAppAutoRenewSchema,
   miniAppOrderSchema,
   miniAppServiceDetailSchema,
   miniAppServiceOfferSchema,
+  type MiniAppAutoRenew,
   type MiniAppServiceAction,
   type MiniAppServiceDetail,
 } from '@nexa/contracts';
@@ -95,6 +97,9 @@ function Detail({ service }: { service: MiniAppServiceDetail }) {
           {action !== null && <Offer key={action} serviceId={service.id} kind={action} />}
         </Card>
       )}
+      {(service.autoRenew.offered || service.autoRenew.enabled) && (
+        <AutoRenew serviceId={service.id} initial={service.autoRenew} />
+      )}
       <Card>
         <div className="actions">
           {service.canChangeLocation && (
@@ -162,5 +167,62 @@ function Offer({ serviceId, kind }: { serviceId: string; kind: MiniAppServiceAct
         </div>
       )}
     </Loading>
+  );
+}
+
+/**
+ * Round 10, D1: «تمدید خودکار». Switching on asks first, naming the renewal total the server
+ * quoted (the most it will charge); the confirm sends that figure back, and the server quotes
+ * again and records its quote only when it is no higher. A higher one is recorded nowhere: the
+ * answer carries the new price and the question stays open on it, to be confirmed again.
+ * Switching off acts at once. Every refusal is the server's, in Persian.
+ */
+function AutoRenew({ serviceId, initial }: { serviceId: string; initial: MiniAppAutoRenew }) {
+  const { api } = useApp();
+  const [state, setState] = useState<MiniAppAutoRenew>(initial);
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const set = async (enabled: boolean) => {
+    setError(null);
+    setBusy(true);
+    try {
+      const next = await api.post(
+        MINIAPP_ROUTES.serviceAutoRenew,
+        { serviceId },
+        miniAppAutoRenewSchema,
+        enabled && state.price !== null ? { enabled, expected: state.price } : { enabled },
+      );
+      setState(next);
+      // Not recorded because the price moved: still asking, now at the new figure.
+      setAsking(enabled && !next.enabled && next.offered);
+    } catch (failure) {
+      setError(errorText(failure));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const values = { price: money(state.price), hours: String(state.leadHours) };
+  return (
+    <Card>
+      <h2>{t('miniapp.auto_renew_title')}</h2>
+      <p>{t(state.enabled ? 'miniapp.auto_renew_on' : 'miniapp.auto_renew_off', values)}</p>
+      <div className="actions">
+        {state.enabled ? (
+          <Button disabled={busy} onClick={() => void set(false)}>
+            {t('miniapp.auto_renew_disable')}
+          </Button>
+        ) : asking ? (
+          <Button primary disabled={busy} onClick={() => void set(true)}>
+            {t('miniapp.auto_renew_confirm', values)}
+          </Button>
+        ) : (
+          state.offered && (
+            <Button onClick={() => setAsking(true)}>{t('miniapp.auto_renew_enable')}</Button>
+          )
+        )}
+      </div>
+      {error !== null && <p className="error">{error}</p>}
+    </Card>
   );
 }

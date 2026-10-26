@@ -342,6 +342,9 @@ describe('the feature flag registry', () => {
       'rich_messages',
       'rich_plan_table',
       'rich_premium_emoji',
+      // Round 10, D1. Off by default; the customer's «تمدید خودکار» switch and the sweep it
+      // switches on are reachable, and off stops every new run while consents are kept.
+      'service_auto_renew',
       // The three reminder switches. `service_expired_notice` is a flag rather than a
       // sixth threshold because it is not a number: it fires at zero days and what an
       // operator decides about it is whether it is sent at all.

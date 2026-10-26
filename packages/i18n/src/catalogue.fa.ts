@@ -76,6 +76,20 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * Package F. The button, the prompt, the confirmation button, the sender's success
    * sentence, the recipient's heading and its button are the brief's words, verbatim.
    */
+  // Round 10, D1: «تمدید خودکار» on the service screen.
+  'bot.service.auto_renew_enable_button': '🔁 فعال‌سازی تمدید خودکار',
+  'bot.service.auto_renew_disable_button': '⏹ لغو تمدید خودکار',
+  'bot.service.auto_renew_ask':
+    '🔁 تمدید خودکار سرویس «{service}»\n\n' +
+    'با فعال‌سازی، {leadHours} ساعت پیش از پایان اعتبار، سرویس با همین پلن و با مبلغ {price} از موجودی کیف پول شما تمدید می‌شود.\n' +
+    '{icon:wallet} اگر موجودی کافی نباشد، فقط یک بار به شما اطلاع می‌دهیم و مبلغی کسر نمی‌شود.\n' +
+    '{icon:warning} اگر مبلغ تمدید از {price} بیشتر شود، تمدید خودکار انجام نمی‌شود.\n' +
+    'هر زمان بخواهید می‌توانید تمدید خودکار را لغو کنید.\n\n' +
+    'تمدید خودکار فعال شود؟',
+  'bot.service.auto_renew_confirm_button': '✅ فعال‌سازی تمدید خودکار',
+  'bot.service.auto_renew_enabled': '{icon:success} تمدید خودکار این سرویس فعال شد.',
+  'bot.service.auto_renew_disabled': '⏹ تمدید خودکار این سرویس لغو شد.',
+  'bot.service.auto_renew_unavailable': 'در حال حاضر تمدید خودکار برای این سرویس در دسترس نیست.',
   'bot.service.transfer_button': '🔄 انتقال سرویس',
   'bot.service.transfer_prompt':
     'سرویس را به چه کاربری می‌خواهید انتقال دهید؟ شناسه کاربری عددی مقصد را ارسال کنید.',
@@ -965,6 +979,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.expiry_day':
     '{icon:warning} اعتبار سرویس «{service}» به‌زودی، در {expiresAt}، به پایان می‌رسد.\n' +
     'برای جلوگیری از قطع شدن، همین حالا از بخش «سرویس‌های من» تمدید کنید.',
+  /* Round 10, D1: the two notices of automatic renewal. */
+  'bot.service.auto_renew_funds_short':
+    '{icon:warning} تمدید خودکار سرویس «{service}» انجام نشد، چون موجودی کیف پول برای مبلغ تمدید ({price}) کافی نیست.\n' +
+    'مبلغی از حساب شما کسر نشده است. اگر پیش از پایان اعتبار ({expiresAt}) کیف پول را شارژ کنید، سرویس به‌طور خودکار تمدید می‌شود.',
+  'bot.service.auto_renew_price_changed':
+    '{icon:warning} تمدید خودکار سرویس «{service}» انجام نشد، چون مبلغ تمدید ({price}) از مبلغی که هنگام فعال‌سازی پذیرفته بودید ({consented}) بیشتر شده است.\n' +
+    'مبلغی از حساب شما کسر نشده است. می‌توانید از بخش «سرویس‌های من» سرویس را تمدید کنید و تمدید خودکار را دوباره فعال کنید.',
   'bot.service.provision_delayed':
     'ساخت سرویس کامل نشد و موضوع به پشتیبانی اطلاع داده شد. لطفاً منتظر پیگیری بمانید.',
   'bot.service.renew_button': '💊 تمدید سرویس',

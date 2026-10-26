@@ -11,6 +11,7 @@ This file was moved verbatim out of `CLAUDE.md` on 2026-10-24. It holds project 
 - [Pricing, referral and resellers](#pricing-referral-and-resellers)
 - [Money rules](#money-rules)
 - [Phase 4 product rules](#phase-4-product-rules)
+- [Automatic renewal (Round 10, D1)](#automatic-renewal-round-10-d1)
 - [Phase 2 control plane](#phase-2-control-plane)
 - [Phase 6 capacity and usernames](#phase-6-capacity-and-usernames)
 - [Deployment](#deployment)
@@ -293,6 +294,26 @@ Four Phase 4 rules that are easy to break by accident:
   and that is a stated exception with a bound and a test — see
   `docs/conventions.md`. Everything else reads `ScopeActivityReader` inside its
   transaction.
+
+## Automatic renewal (Round 10, D1)
+
+Owner spec, binding: the customer opts in per service («تمدید خودکار», bot service screen
+and mini app); before expiry (`auto_renew.lead_hours`, default 24) a covered wallet renews
+it through the normal renewal service — same pricing, ledger, provisioning, and ops log
+«منبع: تمدید خودکار»; a short wallet gets ONE notice through the reminder lane; idempotent
+per service per period, never double-charged; feature flag `service_auto_renew` OFF by
+default, switchable from the Web Admin. Lead decisions (Round 10): imported (Mirza)
+services are not offered it in v1 (`OQ-R10-D1-01`); a price above the total consented at
+opt-in is not renewed and is told once; a transfer clears the consent; the worker acts as
+`SYSTEM_JOB` (surface and idempotency namespace `SCHEDULER`) with keys derived from the
+unique (service, period) run row; the flag off stops new runs immediately.
+
+- **No second money path.** The sweep runs the customer's own RENEW draft, confirmation
+  and `settleFromWallet`, exactly as the manual order runs an operator's.
+- **A debit commits only with `RENEWED`.** The run's `CLAIMED -> RENEWED` is the
+  settlement's `inTransaction` hook, conditional on the attempt, and it re-reads the flag,
+  the owner's consent and its ceiling where the money moves.
+- **No order for money that is not there.** The wallet is read before any draft.
 
 ## Phase 2 control plane
 

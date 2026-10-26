@@ -51,6 +51,7 @@ import type { CustomerCaptureRecord } from '../../../modules/commerce/customers/
 import type { SubscriptionFileService } from '../../../modules/commerce/provisioning/application/subscription-file.service.js';
 import type { ServiceRefreshService } from '../../../modules/commerce/provisioning/application/service-refresh.service.js';
 import type { ServiceTransferService } from '../../../modules/commerce/provisioning/application/service-transfer.service.js';
+import type { ServiceAutoRenewService } from '../../../modules/commerce/provisioning/application/service-auto-renew.service.js';
 import type { CustomerCountersReader } from '../../../modules/commerce/customers/application/customer-counters-ports.js';
 import type {
   TopupRoute,
@@ -275,6 +276,11 @@ export interface BotRuntimeDeps {
     ServiceTransferService,
     'offered' | 'begin' | 'preview' | 'transfer'
   >;
+  /**
+   * Round 10, D1: «تمدید خودکار». Without it no service shows the switch, and a crafted
+   * `ar:`/`ay:`/`an:` answers that automatic renewal is not available.
+   */
+  readonly autoRenew?: Pick<ServiceAutoRenewService, 'switchFor' | 'stateFor' | 'set'>;
   /**
    * WP19: an administrator's decision prompts behind the review card. Without it the card's
    * approve and reject answer as any unknown admin tap.
