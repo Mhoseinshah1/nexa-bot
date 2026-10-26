@@ -4475,3 +4475,36 @@ Defaults below are the readings that move no money and send no customer message.
 - **OQ-C2-08 — the type's display name.** `canonicalName` is «Custom (Nexa bridge v1)», shown
   Latin in the Persian admin like the other providers' names; the Features page calls the
   switch «پنل اختصاصی (پل Nexa)». Confirm or rename.
+
+## The custom gateway (Round 10 C1, `docs/protocols/custom-gateway.md`, `docs/custom-gateway-audit.md`)
+
+The protocol is Nexa's own, so most questions a provider would leave open are decided by the
+document. What follows is what the owner has not decided; each is built the way that moves no
+money.
+
+- **OQ-CG-01 — acceptance against a real bridge.** UNRESOLVED. Owed on staging with a bridge a
+  third party wrote from the document alone: secret and base URL saved, «تست اتصال» passes, one
+  top-up paid on the bridge's page, the wallet rising by exactly the principal, one callback
+  answered 200 and its replay a duplicate, a forged callback 401. Any disagreement corrects the
+  document or the reference bridge (`tests/support/mock-custom-bridge.ts`) in the same commit.
+  Until then the route ships `DISABLED` and is not claimed as accepted.
+- **OQ-CG-02 — more than one custom bridge per store.** v1 has ONE `CUSTOM` route per tenant: a
+  route's identity is `(tenant, provider)` across six tables (lead decision). Several bridges
+  would need a surrogate route id; the operator's display name is the route's name today.
+- **OQ-CG-03 — OVERPAID (and UNDERPAID) settlement.** Both are held UNKNOWN for an operator; nothing
+  is credited automatically, and the difference is settled with the customer out of band. Whether
+  an OVERPAID should settle the asked amount automatically and hold only the excess is the owner's
+  call.
+- **OQ-CG-04 — calling `cancel`.** The protocol defines it (optional for a bridge); Nexa v1 never
+  calls it, because the existing pipeline cancels on expiry only on the card-transfer route
+  (TonPays Telegram) and no link gateway is cancelled (lead decision). `expires_at` already binds
+  the bridge. Wiring it through `gateway_provider_requests` on expiry is a follow-up.
+- **OQ-CG-05 — who may point the route at a bridge, and where.** Whoever holds
+  `payments.gateways.edit` can set the secret and the base URL, and a bridge that answers PAID
+  decides which payments are approved. Today: the permission, refused while ACTIVE, audited, the
+  installation URL policy (loopback, link-local and Nexa's own networks refused; private networks
+  ALLOWED so a LAN bridge works). No security-topic operational event exists for gateway
+  configuration changes, so none is raised (the audit row is the record). The owner may want this
+  owner-only, a security alert on every change, or public addresses only.
+- **OQ-CG-06 — a return-to-bot link.** The protocol sends no return URL; the customer comes back to
+  the bot by themselves. A `return_url` field is an additive v1 change if wanted.

@@ -847,6 +847,28 @@ export function gatewayProviderFacts(invoice: GatewayInvoiceRecord | null): Temp
             : `${toman(reported)} ≠ ${toman(invoice.sentAmount)}`,
     };
   }
+  /*
+   * Round 10 C1, the custom gateway: the RIAL the bridge's own signed inquiry said it CAPTURED
+   * (`amount_paid`, recorded as the final amount) beside the invoiced figure when they differ —
+   * an underpayment or overpayment is never hidden under the route's label — and our invoice id
+   * with the bridge's reference.
+   */
+  if (invoice.provider === 'CUSTOM') {
+    const rial = (amount: bigint) => `${amount.toString()} ${invoice.providerUnit}`;
+    const captured = invoice.finalAmount;
+    return {
+      providerInvoiceId:
+        invoice.providerInvoiceId === null
+          ? invoice.providerOrderId
+          : `${invoice.providerOrderId}/ref:${invoice.providerInvoiceId}`,
+      providerFinalAmount:
+        captured === null
+          ? NONE
+          : captured === invoice.sentAmount
+            ? rial(captured)
+            : `${rial(captured)} ≠ ${rial(invoice.sentAmount)}`,
+    };
+  }
   return {
     providerInvoiceId: invoice.providerInvoiceId ?? invoice.hintedInvoiceId ?? NONE,
     providerFinalAmount:

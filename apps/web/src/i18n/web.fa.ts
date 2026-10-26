@@ -967,6 +967,7 @@ export const WEB_FA = {
     'پرداخت دیرهنگام تون‌پی تلگرام را خودکار به کیف پول واریز کن',
   'web.late_credit_switch_tetrapay': 'پرداخت دیرهنگام تتراپی را خودکار به کیف پول واریز کن',
   'web.late_credit_switch_rialit': 'پرداخت دیرهنگام ریالیت را خودکار به کیف پول واریز کن',
+  'web.late_credit_switch_custom': 'پرداخت دیرهنگام درگاه سفارشی را خودکار به کیف پول واریز کن',
   'web.late_credit_switch_hint':
     'روشن: اگر استعلام خود درگاه تأیید کند که پرداخت انجام شده و مبلغ با فاکتور یکی است، همان مبلغ فقط یک بار به کیف پول مشتری واریز می‌شود و به مشتری پیام می‌رود. سفارش دوباره باز نمی‌شود و سرویسی ساخته نمی‌شود. خاموش: مثل قبل فقط ثبت می‌شود و مدیر تصمیم می‌گیرد.',
   'web.late_credit_window': 'مدت پیگیری پرداخت دیرهنگام (ساعت)',
@@ -2673,6 +2674,7 @@ export const WEB_FA = {
   'web.gateway_health_gap_central_fx_disabled': 'نرخ مرکزی خاموش است',
   'web.gateway_health_gap_unit_ratio_missing': 'نسبت واحد ثبت نشده',
   'web.gateway_health_gap_no_receiving_account': 'هیچ حساب دریافت فعالی نیست',
+  'web.gateway_health_gap_endpoint_missing': 'نشانی پل درگاه ثبت نشده',
   'web.gateway_health_check': 'بررسی اتصال',
   'web.gateway_health_check_unsupported':
     'این درگاه هیچ فراخوانی فقط‌خواندنی مستند برای بررسی ندارد؛ بررسی‌ای ساخته نشده است.',
@@ -2728,6 +2730,7 @@ export const WEB_FA = {
   'web.payment_gateway_provider_tetrapay': 'درگاه تتراپی',
   'web.payment_gateway_provider_rialit': 'درگاه ریالیت',
   // Package A: the Stars route's operator-set rate. No FX feed exists or is implied.
+  'web.payment_gateway_provider_custom': 'درگاه سفارشی (پل پرداخت)',
   'web.payment_gateway_rate': 'نرخ هر ستاره (به کوچک‌ترین واحد ارز فروش)',
   'web.payment_gateway_rate_hint':
     'مبلغ یک ستارهٔ تلگرام به کوچک‌ترین واحد ارز فروش؛ عدد صحیح مثبت. تعداد ستارهٔ هر پرداخت = سقفِ (مبلغ قابل پرداخت ÷ این نرخ). نرخ روی هر پرداخت ثبت می‌شود و تغییر آن پرداخت‌های قبلی را تغییر نمی‌دهد. بدون نرخ، این روش فعال نمی‌شود. خالی گذاشتن نرخ را پاک می‌کند (فقط وقتی روش غیرفعال است).',
@@ -2875,6 +2878,43 @@ export const WEB_FA = {
     'این نشانی را در پنل ریالیت، تنظیمات ← «تنظیمات Webhook» ثبت کنید و یک رویداد آزمایشی بفرستید. وب‌هوک ریالیت امضا ندارد: فقط استعلام وضعیت را جلو می‌اندازد و هرگز به‌تنهایی پرداختی را تأیید نمی‌کند.',
   'web.payment_gateway_rialit_hint':
     'مبلغ‌ها در ریالیت به تومان ارسال می‌شود (۵۰٬۰۰۰ تا ۱۰٬۰۰۰٬۰۰۰ تومان، همراه با کارمزد درگاه همین‌جا). فقط یک طرف کارمزد بگیرد: اگر کارمزد این درگاه را در ربات تنظیم کرده‌اید، کارمزد پرداخت‌کننده را در پنل ریالیت (تنظیمات پذیرنده) صفر کنید، یا برعکس؛ اگر هر دو روشن باشد لینک به مشتری داده نمی‌شود. وقتی فقط ریالیت کارمزد می‌گیرد، مبلغ نهایی ریالیت به مشتری نشان داده می‌شود و به کیف پول فقط اصل مبلغ واریز می‌شود. اگر فهرست «IPهای مجاز» را پر کرده‌اید، IP این سرور را اضافه کنید. پرداخت فقط پس از استعلام مستقیم (GET /status) با وضعیت «paid» و تطبیق شناسهٔ سفارش و مبلغ ثبت می‌شود. لینک پرداخت ۳۰ دقیقه باز است.',
+  'web.payment_gateway_custom_hint':
+    'درگاه سفارشی پروتکل خود نکساست: سرویس کوچکی به نام «پل» که شخص ثالث می‌نویسد، درخواست‌های نکسا را به یک سرویس پرداخت می‌رساند. یک رمز مشترک (دست‌کم ۳۲ نویسه) همهٔ درخواست‌ها و پاسخ‌ها و اعلان‌ها را در هر دو جهت امضا می‌کند. فقط پاسخ امضاشدهٔ استعلام پل می‌تواند پرداختی را تأیید کند؛ اعلان پل هرگز به‌تنهایی چیزی واریز نمی‌کند. مبلغ همیشه به ریال فرستاده می‌شود. نشانی پل فقط وقتی درگاه خاموش است قابل تغییر است.',
+  'web.payment_gateway_custom_configure': 'تنظیم پل (رمز و نشانی)',
+  'web.payment_gateway_custom_secret_input': 'رمز مشترک پل (۳۲ تا ۵۱۲ نویسه)',
+  'web.payment_gateway_custom_secret_too_short': 'رمز مشترک پل باید دست‌کم ۳۲ نویسه باشد.',
+  'web.payment_gateway_custom_endpoint_title': 'نشانی پل درگاه',
+  'web.payment_gateway_custom_endpoint_hint':
+    'نشانی پایهٔ پل، فقط با https و بدون پارامتر؛ مثلاً https://pay.example.com/nexa. هر پرداخت به همان پلی پرسیده می‌شود که با آن ساخته شده است.',
+  'web.payment_gateway_custom_base_url': 'نشانی پایهٔ پل (https)',
+  'web.payment_gateway_custom_allowlist': 'نشانی‌های مجاز اعلان پل (اختیاری)',
+  'web.payment_gateway_custom_allowlist_hint':
+    'هر خط یک نشانی IP یا محدودهٔ CIDR (حداکثر ۳۲ مورد). خالی یعنی بدون بررسی نشانی؛ امضای اعلان همیشه بررسی می‌شود.',
+  'web.payment_gateway_custom_endpoint_save': 'ذخیرهٔ نشانی پل',
+  'web.payment_gateway_custom_endpoint_saved': 'نشانی پل ذخیره شد.',
+  'web.payment_gateway_custom_endpoint_active':
+    'برای تغییر نشانی پل، اول درگاه را خاموش کنید؛ سپس نشانی را تغییر دهید، اتصال را آزمایش کنید و دوباره روشن کنید.',
+  'web.payment_gateway_custom_endpoint_invalid':
+    'نشانی پل باید با https:// شروع شود و پارامتر یا # نداشته باشد.',
+  'web.payment_gateway_custom_allowlist_invalid':
+    'هر خط فهرست مجاز باید یک نشانی IP یا محدودهٔ CIDR باشد.',
+  'web.payment_gateway_custom_endpoint_missing': 'نشانی پل ثبت نشده',
+  'web.payment_gateway_custom_endpoint_set': 'نشانی پل',
+  'web.payment_gateway_custom_allowlist_count': 'نشانی‌های مجاز اعلان',
+  'web.payment_gateway_custom_allowlist_none': 'بدون بررسی نشانی',
+  'web.payment_gateway_test_connection': 'تست اتصال',
+  'web.payment_gateway_enable_refused_endpoint_missing':
+    'این درگاه بدون نشانی پل روشن نمی‌شود. ابتدا نشانی پل را ثبت کنید.',
+  'web.payment_gateway_endpoint_refused_active':
+    'نشانی پل فقط وقتی درگاه خاموش است قابل تغییر است. ابتدا درگاه را خاموش کنید.',
+  'web.payment_gateway_endpoint_refused_open_attempts':
+    'تا وقتی پرداختی که روی پل فعلی ساخته شده باز است، نشانی پل قابل تغییر نیست. صبر کنید تا آن پرداخت‌ها نتیجه بگیرند (یا موارد در انتظار بررسی را تطبیق دهید)، سپس نشانی را تغییر دهید.',
+  'web.payment_gateway_endpoint_refused_url':
+    'نشانی پل پذیرفته نشد: باید با https:// شروع شود و نام کاربری، پارامتر یا # نداشته باشد.',
+  'web.payment_gateway_endpoint_refused_address':
+    'این نصب به این نشانی درخواست نمی‌فرستد (نشانی محلی، داخلی یا شبکهٔ خود نکسا).',
+  'web.payment_gateway_endpoint_refused_allowlist':
+    'فهرست نشانی‌های مجاز پذیرفته نشد: هر خط یک IP یا CIDR، حداکثر ۳۲ مورد.',
   'web.payment_gateway_bot_username': 'نام کاربری ربات برای لینک بازگشت',
   'web.payment_gateway_bot_username_none': 'ربات فعالی با نام کاربری ثبت‌شده وجود ندارد',
   'web.payment_gateway_hidden_until': 'پنهان‌شده تا (سقف روزانهٔ درگاه)',
@@ -9974,6 +10014,42 @@ export const WEB_FA = {
     'مبلغ پرداخت‌کننده در پاسخ ریالیت با «مبلغ + کارمزد» برابر نبود؛ لینک به مشتری داده نشد',
   'web.provcode_rialit_payer_amount_unreadable':
     'مبلغ قابل پرداخت مشتری در پاسخ ریالیت خوانا نبود؛ لینک به مشتری داده نشد',
+  'web.provcode_custom_bad_request': 'پل درگاه سفارشی درخواست نکسا را نامعتبر دانست (۴۰۰)',
+  'web.provcode_custom_signature_invalid':
+    'پل درگاه سفارشی امضای درخواست نکسا را نپذیرفت؛ رمز مشترک دو طرف یکی نیست',
+  'web.provcode_custom_timestamp_out_of_window':
+    'ساعت سرور نکسا و پل درگاه سفارشی بیش از ۵ دقیقه اختلاف دارد',
+  'web.provcode_custom_nonce_replayed': 'پل درگاه سفارشی این درخواست را تکراری دانست',
+  'web.provcode_custom_forbidden': 'حساب پذیرندهٔ پشت پل درگاه سفارشی غیرفعال است یا اجازه ندارد',
+  'web.provcode_custom_not_found': 'پل درگاه سفارشی این پرداخت را نمی‌شناسد',
+  'web.provcode_custom_invoice_conflict':
+    'پل درگاه سفارشی برای این شناسه قبلاً پرداخت دیگری دارد؛ نتیجه نامعلوم است',
+  'web.provcode_custom_cancel_not_allowed': 'پل درگاه سفارشی لغو این پرداخت را نپذیرفت',
+  'web.provcode_custom_unsupported_currency': 'پل درگاه سفارشی ریال را نمی‌پذیرد',
+  'web.provcode_custom_amount_out_of_range':
+    'مبلغ خارج از محدودهٔ پل درگاه سفارشی بود؛ پرداختی ساخته نشد',
+  'web.provcode_custom_amount_not_payable': 'پل درگاه سفارشی این مبلغ دقیق را نمی‌تواند دریافت کند',
+  'web.provcode_custom_expires_at_invalid': 'پل درگاه سفارشی مهلت پرداخت را نپذیرفت',
+  'web.provcode_custom_callback_url_rejected':
+    'پل درگاه سفارشی نشانی بازگشت (callback) نکسا را نپذیرفت',
+  'web.provcode_custom_rate_limited':
+    'پل درگاه سفارشی درخواست‌های زیادی دریافت کرده است؛ بعداً دوباره پرسیده می‌شود',
+  'web.provcode_custom_internal': 'خطای داخلی در پل درگاه سفارشی',
+  'web.provcode_custom_unavailable': 'سرویس پرداخت پشت پل درگاه سفارشی در دسترس نیست',
+  'web.provcode_custom_unknown_code': 'پل درگاه سفارشی کد خطایی خارج از پروتکل فرستاد',
+  'web.provcode_custom_unsigned': 'پاسخ پل درگاه سفارشی امضای معتبر نداشت و پذیرفته نشد',
+  'web.provcode_custom_unreadable': 'پاسخ پل درگاه سفارشی قالب پروتکل را نداشت',
+  'web.provcode_custom_echo_mismatch':
+    'پل درگاه سفارشی برای شناسه یا مبلغی جز آنچه درخواست شده بود پاسخ داد؛ لینک به مشتری داده نشد',
+  'web.provcode_custom_link_rejected':
+    'لینک پرداختی که پل درگاه سفارشی فرستاد https نبود؛ لینک به مشتری داده نشد',
+  'web.provcode_custom_protocol_mismatch': 'پل درگاه سفارشی پروتکل یا نسخهٔ دیگری را اعلام کرد',
+  'web.provcode_custom_currency_unsupported':
+    'پل درگاه سفارشی ریال (IRR) را در فهرست ارزهایش اعلام نکرد',
+  'web.provcode_custom_endpoint_missing': 'نشانی پل درگاه سفارشی تنظیم نشده است',
+  'web.provcode_custom_clock_skew': 'ساعت پل درگاه سفارشی بیش از یک دقیقه با ساعت نکسا اختلاف دارد',
+  'web.provcode_custom_endpoint_blocked':
+    'این نصب به نشانی پل درگاه سفارشی درخواست نمی‌فرستد (نشانی محلی، داخلی یا شبکهٔ خود نکسا)',
   'web.provcode_wallex_not_success': 'والکس پاسخ ناموفق داد',
   'web.provcode_wallex_unreadable': 'پاسخ والکس قابل خواندن نبود',
   'web.inc_detail_step': 'مرحله',

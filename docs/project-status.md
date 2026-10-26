@@ -71,6 +71,15 @@ each a way to credit money nobody approved:
 - **A create whose answer was lost is never retried and never re-keyed.** The send is
   stamped before the call; only the provider's own `RATE_LIMIT_EXCEEDED` clears it.
 
+**The custom gateway (Round 10 C1) is built and NOT yet accepted against a real bridge**
+(`docs/protocols/custom-gateway.md`, `docs/custom-gateway-audit.md`, `OQ-CG-01`). It is Nexa's
+OWN protocol — one code-backed type, `CUSTOM`, that a third-party bridge implements; an operator
+points the route at a bridge and never defines a provider. The same three rules hold, plus: a
+callback NEVER credits by itself (only the bridge's SIGNED inquiry answer, `PAID` with this
+attempt's invoice id, reference and exact amount, approves); one per-route secret signs every
+direction with its own prefix; the base URL is https-only through the installation's URL policy,
+frozen on each attempt, and changed only while the route is DISABLED. The route ships DISABLED.
+
 ## Providers and panels (Phase 3)
 
 **Marzban is the supported mutable provider.** 3X-UI keeps the five

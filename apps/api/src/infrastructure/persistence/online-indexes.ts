@@ -519,15 +519,22 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
      * query's condition IMPLIES this predicate; a partial status added to
      * `PARTIAL_PAYMENT_STATUSES` that is not listed here makes the arm fall back to the scan —
      * still correct, only slower — and `payment-attention-plan.test.ts` fails on it.
+     *
+     * Codex on #336 (3): the custom bridge's `UNDERPAID` joined the partial statuses, so the
+     * predicate names it too. A NEW name, because the name is the recovery key and
+     * `CREATE ... IF NOT EXISTS` never rebuilds an index that exists under the old one. The
+     * superseded `gateway_invoices_tenant_attention_idx` stays where it was built: never read
+     * once this one exists, harmless, and dropping it belongs to a release that drops indexes on
+     * purpose.
      */
-    name: 'gateway_invoices_tenant_attention_idx',
+    name: 'gateway_invoices_tenant_attention_partial_idx',
     definition:
       'ON "gateway_invoices" USING btree ("tenant_id") ' +
       // Spelled as PostgreSQL renders it, which is what `online-indexes.test.ts` compares.
       "WHERE ((outcome = 'LATE_COMPLETION'::text) OR (late_completion_observed_at IS NOT NULL) " +
       "OR (creation_state = ANY (ARRAY['CREATE_FAILED'::text, 'CREATE_UNKNOWN'::text])) " +
       'OR (last_inquiry_error_code IS NOT NULL) ' +
-      "OR (provider_status = 'partially_paid'::text))",
+      "OR (provider_status = ANY (ARRAY['partially_paid'::text, 'UNDERPAID'::text])))",
   },
   {
     /*
