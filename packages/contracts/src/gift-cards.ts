@@ -110,8 +110,7 @@ export const GIFT_CARD_ROUTES = {
   batches: '/gift-card-batches',
   batch: (id: string) => `/gift-card-batches/${encodeURIComponent(id)}`,
   exportCsv: (id: string) => `/gift-card-batches/${encodeURIComponent(id)}/export`,
-  disablePreview: (id: string) =>
-    `/gift-card-batches/${encodeURIComponent(id)}/disable-preview`,
+  disablePreview: (id: string) => `/gift-card-batches/${encodeURIComponent(id)}/disable-preview`,
   disable: (id: string) => `/gift-card-batches/${encodeURIComponent(id)}/disable`,
 } as const;
 
