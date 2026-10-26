@@ -278,6 +278,7 @@ export const MINIAPP_FA = {
   'miniapp.wallet_reason_referral': 'پاداش دعوت',
   'miniapp.wallet_reason_referral_reversal': 'برگشت پاداش دعوت',
   'miniapp.wallet_reason_signup_gift': 'هدیهٔ عضویت با دعوت',
+  'miniapp.wallet_reason_gift_card': 'کارت هدیه',
   'miniapp.wallet_reason_start_gift': 'هدیهٔ شروع',
   'miniapp.wallet_reason_lottery': 'جایزهٔ قرعه‌کشی',
   'miniapp.wallet_reason_wheel': 'جایزهٔ گردونهٔ شانس',

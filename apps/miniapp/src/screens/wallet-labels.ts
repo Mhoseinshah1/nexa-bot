@@ -20,6 +20,7 @@ export const LEDGER_REASON_KEY: Readonly<Record<LedgerReason, MiniAppKey>> = {
   REFERRAL_COMMISSION: 'miniapp.wallet_reason_referral',
   REFERRAL_COMMISSION_REVERSAL: 'miniapp.wallet_reason_referral_reversal',
   REFERRAL_SIGNUP_GIFT: 'miniapp.wallet_reason_signup_gift',
+  GIFT_CARD_REDEMPTION: 'miniapp.wallet_reason_gift_card',
   START_GIFT: 'miniapp.wallet_reason_start_gift',
   LOTTERY_WIN: 'miniapp.wallet_reason_lottery',
   LUCK_WHEEL_WIN: 'miniapp.wallet_reason_wheel',

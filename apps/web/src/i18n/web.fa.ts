@@ -6320,6 +6320,7 @@ export const WEB_FA = {
   'web.report_wallet_commission': 'پورسانت معرفی',
   'web.report_wallet_commission_reversal': 'برگشت پورسانت',
   'web.report_wallet_gift': 'هدیه',
+  'web.report_wallet_gift_card': 'کارت هدیه',
   'web.report_wallet_title': 'کیف پول',
   'web.report_wallet_hint':
     'به تفکیک علت ثبت‌شده، نه متن توضیح. شارژ، هدیه، کش‌بک و خرج جدا از درآمدند؛ اثر خالص برداشت منفی است.',
@@ -9606,6 +9607,7 @@ export const WEB_FA = {
   'web.ledger_reason_referral_commission': 'پورسانت معرفی',
   'web.ledger_reason_referral_commission_reversal': 'برگشت پورسانت معرفی',
   'web.ledger_reason_referral_signup_gift': 'هدیهٔ عضویت با معرفی',
+  'web.ledger_reason_gift_card_redemption': 'کارت هدیه',
   'web.ledger_reason_start_gift': 'هدیهٔ شروع',
   'web.ledger_reason_lottery_win': 'جایزهٔ قرعه‌کشی',
   'web.ledger_reason_luck_wheel_win': 'جایزهٔ گردونهٔ شانس',
