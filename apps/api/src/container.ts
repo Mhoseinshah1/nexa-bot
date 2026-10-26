@@ -757,6 +757,8 @@ import {
 } from './modules/commerce/provisioning/application/operation-card.js';
 import { DrizzleOperationCardRepository } from './modules/commerce/provisioning/infrastructure/drizzle-operation-card.repository.js';
 import { ServiceTransferService } from './modules/commerce/provisioning/application/service-transfer.service.js';
+import { ServiceAutoRenewService } from './modules/commerce/provisioning/application/service-auto-renew.service.js';
+import { DrizzleServiceAutoRenewRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-auto-renew.repository.js';
 import { DrizzleServiceTransferRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-transfer.repository.js';
 import { ServiceAdminService } from './modules/commerce/provisioning/application/service-admin.service.js';
 import { ServiceGrantService } from './modules/commerce/provisioning/application/service-grant.service.js';
@@ -1254,6 +1256,8 @@ export interface Container {
   readonly subscriptionFiles: SubscriptionFileService;
   /** Package F: a customer hands one of their services to another customer. */
   readonly serviceTransfers: ServiceTransferService;
+  /** Round 10, D1: «تمدید خودکار» — the customer's switch and the worker's sweep. */
+  readonly serviceAutoRenew: ServiceAutoRenewService;
   /** WP-A7: support tickets, for the bot and the Web Admin alike. */
   readonly tickets: TicketService;
   /** WP-A7: the categories a customer files a ticket under. */
@@ -4703,6 +4707,33 @@ export function createContainer(
     ids,
     audit,
   });
+  /*
+   * Round 10, D1: automatic renewal. Not a new money path: the sweep runs the customer's own
+   * RENEW draft, confirmation and wallet settlement as a SYSTEM_JOB in the SCHEDULER
+   * namespace — the same services the bot and the mini app call.
+   */
+  const serviceAutoRenewService = new ServiceAutoRenewService({
+    repository: new DrizzleServiceAutoRenewRepository(database.db),
+    services: serviceRepository,
+    commercial: commercialActionService,
+    orders: orderService,
+    payments: paymentService,
+    wallet: walletRepository,
+    features: featureFlagResolver,
+    settings: settingsResolver,
+    notifier: customerNotifier,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    outbox,
+    scopeActivity: tenants,
+    uow,
+    clock,
+    ids,
+    logger,
+  });
   const customerReminderLoop = new CustomerReminderLoop(
     [
       {
@@ -4724,6 +4755,18 @@ export function createContainer(
         name: 'reseller-monthly-minimum',
         everyMs: SERVICE_REMINDER_INTERVAL_MS,
         runOnce: async (scope) => resellerMinimumService.runOnce(scope),
+      },
+      {
+        /*
+         * Round 10, D1: the service reminder cadence. The lead time is at least an hour, so a
+         * fifteen-minute pass always lands inside it; the flag is read inside the pass.
+         */
+        name: 'service-auto-renew',
+        everyMs: SERVICE_REMINDER_INTERVAL_MS,
+        runOnce: async (scope) => {
+          const report = await serviceAutoRenewService.runOnce(scope);
+          return report.renewed + report.short + report.refused;
+        },
       },
     ],
     {
@@ -5672,6 +5715,8 @@ export function createContainer(
        * — derived from the subject by the surface that owns the callback vocabulary.
        */
       serviceTransfers: serviceTransferService,
+      // Round 10, D1: the two automatic-renewal notices, read from the run row they name.
+      autoRenew: serviceAutoRenewService,
       // WP-A7: support's reply, read from the ticket message the notification names.
       tickets: ticketService,
       // Phase A2: an operator's direct message, read from the message row it names.
@@ -8219,6 +8264,7 @@ export function createContainer(
     customerCaptures: customerCaptureService,
     subscriptionFiles: subscriptionFileService,
     serviceTransfers: serviceTransferService,
+    serviceAutoRenew: serviceAutoRenewService,
     tickets: ticketService,
     ticketCategories: ticketCategoryService,
     pricingRead: pricingReadService,
@@ -8458,6 +8504,8 @@ export function createContainer(
       // Spec §7: the tutorial video — the admin wizard and the customer's app screen.
       clientAppVideos: clientAppVideoService,
       serviceTransfers: serviceTransferService,
+      // Round 10, D1: «تمدید خودکار» on the service screen.
+      autoRenew: serviceAutoRenewService,
       /*
        * WP-A7: the ticket desk. A file answers a ticket window only when that window is open
        * and newer than any open receipt window — the prompt the customer saw last — and the

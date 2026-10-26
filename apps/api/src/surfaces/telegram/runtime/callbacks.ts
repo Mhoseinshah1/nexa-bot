@@ -459,6 +459,15 @@ export const SERVICE_REFUND_CONFIRM_CALLBACK_PREFIX = 'fb:';
  *   recipient and the service again, under the service's locks.
  */
 export const SERVICE_TRANSFER_ASK_CALLBACK_PREFIX = 'ta:';
+/**
+ * Round 10, D1: «تمدید خودکار». `ar:` asks (names the amount, records nothing), `ay:` is the
+ * question's confirm and the only tap that records the consent, `an:` switches it off at once.
+ * `a` then a letter, like `ac:`; none begins, or is begun by, another prefix (pinned in
+ * `bot-runtime.test.ts`). A uuid after three characters is 39 bytes.
+ */
+export const SERVICE_AUTO_RENEW_ASK_CALLBACK_PREFIX = 'ar:';
+export const SERVICE_AUTO_RENEW_CONFIRM_CALLBACK_PREFIX = 'ay:';
+export const SERVICE_AUTO_RENEW_OFF_CALLBACK_PREFIX = 'an:';
 export const SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX = 'tc:';
 export const ADMIN_REFUND_REQUEST_APPROVE_CALLBACK_PREFIX = 'qa:';
 export const ADMIN_REFUND_REQUEST_REJECT_CALLBACK_PREFIX = 'qb:';

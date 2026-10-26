@@ -136,6 +136,13 @@ export const BOT_INTENTS = [
    */
   'SERVICE_TRANSFER_ASK',
   'SERVICE_TRANSFER_CONFIRM',
+  /*
+   * Round 10, D1: «تمدید خودکار». ASK names the amount and records nothing; CONFIRM is the
+   * only tap that records the consent; OFF switches it off at once.
+   */
+  'SERVICE_AUTO_RENEW_ASK',
+  'SERVICE_AUTO_RENEW_CONFIRM',
+  'SERVICE_AUTO_RENEW_OFF',
   'SERVICE_RENEW',
   'SERVICE_ADD_TRAFFIC',
   'SERVICE_ADD_TIME',

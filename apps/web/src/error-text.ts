@@ -206,6 +206,8 @@ export const ERROR_TEXT = {
   'campaign.window_invalid': 'web.err_campaign_window_invalid',
   'commerce.addon_not_found': 'web.err_commerce_addon_not_found',
   'commerce.addon_not_purchasable': 'web.err_commerce_addon_not_purchasable',
+  'commerce.auto_renew_disabled': 'web.err_commerce_auto_renew_disabled',
+  'commerce.auto_renew_not_available': 'web.err_commerce_auto_renew_not_available',
   'commerce.capture_input_invalid': 'web.err_commerce_capture_input_invalid',
   'commerce.capture_not_open': 'web.err_commerce_capture_not_open',
   'commerce.cashback_rule_not_found': 'web.err_commerce_cashback_rule_not_found',
