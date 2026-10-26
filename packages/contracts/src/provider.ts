@@ -984,6 +984,17 @@ export interface ProviderHttpRequest {
   readonly headers?: Readonly<Record<string, string>>;
   readonly body?:
     | { readonly kind: 'json'; readonly value: unknown }
+    /*
+     * JSON the adapter has ALREADY serialised, sent byte for byte (R10 C2).
+     *
+     * For a provider whose request signature covers the body's hash — the `custom`
+     * bridge protocol — the bytes signed and the bytes sent must be the same bytes. A
+     * `json` body is serialised by the client, so an adapter signing it would be signing
+     * its own second `JSON.stringify` and trusting the two to agree. With this the
+     * adapter serialises once, signs that string, and the client sends that string.
+     * Same content type as `json`; the client never re-encodes it.
+     */
+    | { readonly kind: 'json-text'; readonly text: string }
     | { readonly kind: 'form'; readonly value: Readonly<Record<string, string>> };
 }
 
