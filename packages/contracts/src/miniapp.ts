@@ -156,7 +156,12 @@ export const miniAppSessionResponseSchema = z.object({
 });
 export type MiniAppSessionResponse = z.infer<typeof miniAppSessionResponseSchema>;
 
-export const MINIAPP_GATES = ['BLOCKED', 'CHANNELS', 'TERMS'] as const;
+/**
+ * R10 D5: `CAPTCHA` is the bot's `/start` question for a customer who first arrived while
+ * `start_captcha` was on and has not answered it yet. It is answered in the chat, never in
+ * the mini app: the mini app only says so and links to the bot.
+ */
+export const MINIAPP_GATES = ['BLOCKED', 'CAPTCHA', 'CHANNELS', 'TERMS'] as const;
 export type MiniAppGate = (typeof MINIAPP_GATES)[number];
 
 const channelSchema = z.object({
@@ -182,6 +187,7 @@ export const miniAppMeResponseSchema = z.object({
   gate: z
     .discriminatedUnion('kind', [
       z.object({ kind: z.literal('BLOCKED') }),
+      z.object({ kind: z.literal('CAPTCHA') }),
       z.object({ kind: z.literal('CHANNELS'), channels: z.array(channelSchema) }),
       z.object({ kind: z.literal('TERMS'), terms: termsSchema }),
     ])
