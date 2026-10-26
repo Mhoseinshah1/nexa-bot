@@ -506,3 +506,60 @@ describe('the outbound client — content encoding (Round 6)', () => {
     expect(await get()).toMatchObject({ ok: true, bodyText: json });
   });
 });
+
+describe('the outbound client — per-panel binding (R10 C2)', () => {
+  it('honours a SHORTER per-panel deadline than the installation timeout', async () => {
+    route = () => ({ status: 200, hang: true });
+    const started = performance.now();
+    const result = await client({ totalTimeoutMs: 5_000 })
+      .forBase(base, { timeoutMs: 200 })
+      .send({ method: 'GET', path: '/hang' });
+    const elapsed = performance.now() - started;
+    expect(result).toMatchObject({ ok: false, failure: 'TIMEOUT' });
+    expect(elapsed).toBeLessThan(2_000);
+  });
+
+  it('never WIDENS the installation timeout: a longer per-panel value is clamped to it', async () => {
+    route = () => ({ status: 200, hang: true });
+    const started = performance.now();
+    const result = await client({ totalTimeoutMs: 250 })
+      .forBase(base, { timeoutMs: 30_000 })
+      .send({ method: 'GET', path: '/hang' });
+    const elapsed = performance.now() - started;
+    expect(result).toMatchObject({ ok: false, failure: 'TIMEOUT' });
+    // Without the clamp this would wait thirty seconds and the test would time out.
+    expect(elapsed).toBeLessThan(2_000);
+  });
+
+  it('sends a json-text body byte for byte, with a JSON content type', async () => {
+    const seen: { body: string; contentType: string | undefined }[] = [];
+    const echo = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on('data', (chunk: Buffer) => chunks.push(chunk));
+      request.on('end', () => {
+        seen.push({
+          body: Buffer.concat(chunks).toString('utf8'),
+          contentType: request.headers['content-type'],
+        });
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end('{}');
+      });
+    });
+    echo.listen(0, '127.0.0.1');
+    await once(echo, 'listening');
+    const address = echo.address();
+    if (address === null || typeof address === 'string') throw new Error('no port');
+    try {
+      // Key order, spacing and a big number a second JSON.stringify would not reproduce.
+      const text = '{"b":"1","a":  2,"n":"18446744073709551615","fa":"سلام"}';
+      const result = await client()
+        .forBase(`http://127.0.0.1:${address.port}`)
+        .send({ method: 'POST', path: '/x', body: { kind: 'json-text', text } });
+      expect(result.ok).toBe(true);
+      expect(seen).toEqual([{ body: text, contentType: 'application/json; charset=utf-8' }]);
+    } finally {
+      echo.closeAllConnections();
+      echo.close();
+    }
+  });
+});
