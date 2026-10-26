@@ -3693,6 +3693,17 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.admin.panel_username_usage',
+    description:
+      'A `/panel_prefix` or `/panel_template` command was sent without its panel number ' +
+      'or without the value to write. Reprints the syntax of both commands rather than ' +
+      'opening a prompt for what was missing, the way `bot.admin.category_usage` does. ' +
+      'It replaced `bot.admin.panel_gone` here, which says the panel does not exist and ' +
+      'told an administrator who had named a real panel that it was missing.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.admin.panel_test_button',
     description:
       'Runs a connection test against the panel, through the one probe implementation ' +

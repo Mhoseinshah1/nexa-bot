@@ -886,7 +886,7 @@ import type { NotificationTransport } from './modules/control/notifications/appl
 import { MiniAppSessionService } from './modules/commerce/miniapp/application/miniapp-session.service.js';
 import { MiniAppReceiptService } from './modules/commerce/miniapp/application/miniapp-receipt.service.js';
 import { MiniAppRateLimiter } from './modules/commerce/miniapp/application/miniapp-rate-limiter.js';
-import { MiniAppCheckout } from './modules/commerce/miniapp/application/miniapp-checkout.js';
+import { CheckoutService } from './modules/commerce/checkout/application/checkout.service.js';
 import { DrizzleMiniAppSessionRepository } from './modules/commerce/miniapp/infrastructure/drizzle-miniapp-session.repository.js';
 import { TelegramReceiptUploader } from './modules/commerce/miniapp/infrastructure/telegram-receipt-uploader.js';
 
@@ -960,7 +960,7 @@ export interface MiniAppSurfaceDeps {
   readonly sessions: MiniAppSessionService;
   readonly rateLimit: MiniAppRateLimiter;
   readonly receipts: MiniAppReceiptService;
-  readonly checkout: MiniAppCheckout;
+  readonly checkout: CheckoutService;
   readonly topup: WalletTopupFlowService;
   readonly productDisplay: {
     displayFor(
@@ -8065,6 +8065,19 @@ export function createContainer(
     clock,
     ids,
   });
+  /*
+   * R10 B1: the ONE checkout both customer surfaces call — the bot's runtime and the mini
+   * app are handed this same instance — so the confirm lane, the routes an order offers, the
+   * wallet pre-check and the gateway a tap may start cannot drift between them again.
+   */
+  const checkoutService = new CheckoutService({
+    orders: orderService,
+    commercial: commercialActionService,
+    wallet: walletService,
+    routes: paymentGatewayService,
+    payments: paymentService,
+    screens: customerScreens,
+  });
   const miniApp: MiniAppSurfaceDeps = {
     sessions: miniAppSessions,
     rateLimit: new MiniAppRateLimiter({ counter: miniAppCounter, clock, ids }),
@@ -8079,13 +8092,8 @@ export function createContainer(
       }),
       idempotency,
     }),
-    checkout: new MiniAppCheckout({
-      orders: orderService,
-      commercial: commercialActionService,
-      routes: paymentGatewayService,
-      payments: paymentService,
-      screens: customerScreens,
-    }),
+    // R10 B1: the checkout the bot is handed too — one instance, one set of rules.
+    checkout: checkoutService,
     topup: walletTopupFlow,
     productDisplay: miniAppProductDisplay,
     purchaseTitle: async (scope, orderId) => {
@@ -8402,6 +8410,7 @@ export function createContainer(
       },
       customers: customerService,
       payments: paymentService,
+      checkout: checkoutService,
       wallet: walletService,
       referrals: referralProgram,
       // The SAME instances the container exposes, not new ones. Two order services

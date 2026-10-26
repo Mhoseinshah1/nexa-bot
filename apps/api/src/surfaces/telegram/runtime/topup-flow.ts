@@ -121,13 +121,13 @@ export async function topupChooser(
       wizard: methods,
     };
   }
+  // The routes as `CheckoutService.topupRoutes` names them — the mini app's list too.
   const buttons: CustomerButton[] = [];
-  for (const route of routes) {
-    const name = await rt.deps.screens.routeName(scope, route);
+  for (const route of await rt.deps.checkout.topupRoutes(scope, routes)) {
     buttons.push({
-      ...(route.topupCashbackPercent > 0
-        ? inlineLabel('payment.route_gift', { name, percent: route.topupCashbackPercent })
-        : inlineLabel('payment.route', { name })),
+      ...(route.giftPercent > 0
+        ? inlineLabel('payment.route_gift', { name: route.name, percent: route.giftPercent })
+        : inlineLabel('payment.route', { name: route.name })),
       data: `${TOPUP_ROUTE_CALLBACK_PREFIX}${captureId}.${route.provider}`,
     });
   }

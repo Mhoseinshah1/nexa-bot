@@ -113,6 +113,14 @@ export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
   // the same way on purpose, so this does too.
   [COMMERCE_ERROR_CODES.ORDER_NOT_FOUND]: 'bot.order.unavailable',
   /*
+   * A service that does not exist and one that belongs to another customer, from the
+   * actions that read it through the commercial service (extra traffic, time, users,
+   * location). The flows that look the service up themselves already answer
+   * `bot.service.not_found`; these three threw instead, so the same id got two different
+   * answers by action. ONE key for both cases, for the reason the template gives.
+   */
+  [COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND]: 'bot.service.not_found',
+  /*
    * The ORDER, not the product. `bot.order.unavailable` says a PLAN cannot be bought,
    * and the ordinary way to reach this code is a customer tapping the pay button a
    * second time on the message they just paid from — the buttons stay in the chat

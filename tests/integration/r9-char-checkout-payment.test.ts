@@ -97,7 +97,9 @@ describe('the checkout-payment flow of the Telegram bot, as it answers today', (
 
     pin('foreign.methods', await turn(rig.tap(`pm:${order}`, OTHER)));
     pin('foreign.close', await turn(rig.tap(`px:${order}`, OTHER)));
-    pin('unknown.close', await turn(rig.tap(`px:${rig.ctx().container.ids.uuid()}`, CUSTOMER)));
+    const missing = rig.ctx().container.ids.uuid();
+    pin('unknown.methods', await turn(rig.tap(`pm:${missing}`, CUSTOMER)));
+    pin('unknown.close', await turn(rig.tap(`px:${missing}`, CUSTOMER)));
   });
 
   it("answers the TetraPay return deep link for a payment that is not the customer's as a closed attempt", async () => {
@@ -113,7 +115,8 @@ describe('the checkout-payment flow of the Telegram bot, as it answers today', (
 
   it('confirms a custom-service draft through the new-service lane when the customer picks a method', async () => {
     /*
-     * `confirmDraft` sends a CUSTOM_SERVICE draft to `OrderService.confirm`, the lane of a
+     * `CheckoutService.confirmDraft` (R10 B1; the bot's `confirmDraft` until then) sends a
+     * CUSTOM_SERVICE draft to `OrderService.confirm`, the lane of a
      * new service, and not to `CommercialActionService.confirm`, which owns renewals and
      * packages of an EXISTING service and has none to act on here.
      *
@@ -245,21 +248,27 @@ function expectedViews(): Record<string, View> {
     },
     'foreign.methods': {
       intent: 'PAY_METHODS',
-      key: 'bot.order.unavailable',
-      text: '⚠️ این سرویس در حال حاضر قابل خرید نیست.',
-      buttons: [],
+      key: 'bot.order.not_awaiting_payment',
+      text: 'این سفارش دیگر در انتظار پرداخت نیست.',
+      buttons: [[['🏠 بازگشت به منوی اصلی', 'mm:']]],
     },
     'foreign.close': {
       intent: 'PAY_METHODS_CLOSE',
-      key: 'bot.order.unavailable',
-      text: '⚠️ این سرویس در حال حاضر قابل خرید نیست.',
-      buttons: [],
+      key: 'bot.order.not_awaiting_payment',
+      text: 'این سفارش دیگر در انتظار پرداخت نیست.',
+      buttons: [[['🏠 بازگشت به منوی اصلی', 'mm:']]],
     },
     'unknown.close': {
       intent: 'PAY_METHODS_CLOSE',
-      key: 'bot.order.unavailable',
-      text: '⚠️ این سرویس در حال حاضر قابل خرید نیست.',
-      buttons: [],
+      key: 'bot.order.not_awaiting_payment',
+      text: 'این سفارش دیگر در انتظار پرداخت نیست.',
+      buttons: [[['🏠 بازگشت به منوی اصلی', 'mm:']]],
+    },
+    'unknown.methods': {
+      intent: 'PAY_METHODS',
+      key: 'bot.order.not_awaiting_payment',
+      text: 'این سفارش دیگر در انتظار پرداخت نیست.',
+      buttons: [[['🏠 بازگشت به منوی اصلی', 'mm:']]],
     },
     'return.unknown_payment': {
       intent: 'GATEWAY_RETURN',

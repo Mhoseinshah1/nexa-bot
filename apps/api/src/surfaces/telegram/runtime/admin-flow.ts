@@ -525,7 +525,12 @@ export async function adminTurn(
         const [panelId, ...rest] = command.args ?? [];
         const written = rest.join(' ');
         if (panelId === undefined || written === '') {
-          return { key: 'bot.admin.panel_gone', values: {}, buttons: [], orderId: null };
+          /*
+           * The command is incomplete, not the panel missing: the syntax is the answer.
+           * `bot.admin.panel_gone` is for a panel id that names nothing, which
+           * `adminUsernameWrite` still answers below.
+           */
+          return { key: 'bot.admin.panel_username_usage', values: {}, buttons: [], orderId: null };
         }
         const wantsTemplate = command.intent === 'ADMIN_USERNAME_TEMPLATE';
         return await adminUsernameWrite(
