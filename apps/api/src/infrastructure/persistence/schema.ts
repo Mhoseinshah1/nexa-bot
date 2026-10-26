@@ -97,6 +97,8 @@ import {
   PAYMENT_GATEWAY_PROVIDERS,
   PROVIDER_REVIEW_GATEWAY_PROVIDERS,
   CENTRALPAY_INTEGER_MAX,
+  CUSTOM_GATEWAY_BASE_URL_MAX_LENGTH,
+  CUSTOM_GATEWAY_IP_ALLOWLIST_MAX,
   CENTRALPAY_INTEGER_MIN,
   TONPAYS_TELEGRAM_REVIEW_WINDOW_HOURS,
   GATEWAY_CARD_NAME_MAX_LENGTH,
@@ -4995,6 +4997,13 @@ export const gatewayInvoices = pgTable(
      * without throwing. At `GATEWAY_ROW_FAILURE_ALERT_AFTER` an operator condition opens.
      */
     rowFailures: integer('row_failures').notNull().default(0),
+    /**
+     * Round 10 C1: the bridge base URL a custom-gateway attempt was created against, copied from
+     * the route when the attempt opens and written ONCE (trigger
+     * `nexa_gateway_invoices_endpoint_guard`): every inquiry of the attempt goes to the bridge
+     * that created it, whatever the route says later. NULL on every other route.
+     */
+    endpointBaseUrl: text('endpoint_base_url'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -5161,13 +5170,27 @@ export const gatewayInvoices = pgTable(
       'gateway_invoices_rialit_check',
       sql`provider <> 'RIALIT' OR (provider_unit = 'IRT' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND octet_length(provider_order_id) <= 64 AND provider_order_id ~ '^[A-Za-z0-9_.:-]{1,64}$')`,
     ),
+    /**
+     * Round 10 C1: a custom-gateway attempt is billed in RIAL with no conversion and no bot
+     * (the adapter owns the exact x10 from the Toman payable), its `invoice_id` is the shape Nexa
+     * generates, it carries the customer's opaque number (`customer_ref`) and the bridge URL it
+     * was created against, frozen.
+     */
+    check(
+      'gateway_invoices_custom_check',
+      sql`provider <> 'CUSTOM' OR (provider_unit = 'IRR' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND provider_order_id ~ '^cg_[0-9A-HJKMNP-TV-Z]{26}$' AND provider_user_id IS NOT NULL AND endpoint_base_url IS NOT NULL)`,
+    ),
+    check(
+      'gateway_invoices_endpoint_base_url_check',
+      sql`endpoint_base_url IS NULL OR (provider = 'CUSTOM' AND endpoint_base_url ~ '^https://' AND length(endpoint_base_url) <= ${sql.raw(String(CUSTOM_GATEWAY_BASE_URL_MAX_LENGTH))})`,
+    ),
     check(
       'gateway_invoices_provider_method_check',
       sql`provider_method IS NULL OR (provider = 'TETRAPAY' AND provider_method IN ('online', 'card'))`,
     ),
     check(
       'gateway_invoices_provider_user_id_check',
-      sql`provider_user_id IS NULL OR (provider = 'CENTRALPAY' AND provider_user_id ~ '^[0-9]{10}$')`,
+      sql`provider_user_id IS NULL OR (provider IN ('CENTRALPAY', 'CUSTOM') AND provider_user_id ~ '^[0-9]{10}$')`,
     ),
     /*
      * CentralPay's `orderId` is unique across EVERY tenant: tenants that share one merchant
@@ -5839,6 +5862,16 @@ export const paymentGateways = pgTable(
      * switch is untouched by it.
      */
     hiddenUntil: timestamptz('hidden_until'),
+    /**
+     * Round 10 C1: an `operatorEndpoint` route's bridge (the custom gateway,
+     * `docs/protocols/custom-gateway.md` §1): the `https://` base URL the operator configured,
+     * and the CIDRs its callbacks may come from (empty: no address check). Not secrets. NULL on
+     * every other route (CHECK). Changed only while the route is DISABLED, every change
+     * audited; each attempt FREEZES the URL on its own invoice row
+     * (`gateway_invoices.endpoint_base_url`), so changing it redirects only new attempts.
+     */
+    endpointBaseUrl: text('endpoint_base_url'),
+    webhookIpAllowlist: text('webhook_ip_allowlist').array(),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -5910,6 +5943,18 @@ export const paymentGateways = pgTable(
     check(
       'payment_gateways_provider_unit_rate_check',
       sql`provider_unit_rate_minor IS NULL OR provider_unit_rate_minor > 0`,
+    ),
+    /*
+     * Round 10 C1: only the custom route has a bridge, its URL is https and bounded, and its
+     * allow-list is bounded. The full shape rule (no userinfo, query or fragment) is the
+     * contract's `normaliseCustomGatewayBaseUrl`, which every write runs; this is the floor a
+     * hand-written UPDATE cannot go below.
+     */
+    check(
+      'payment_gateways_endpoint_check',
+      sql`(provider = 'CUSTOM' OR (endpoint_base_url IS NULL AND webhook_ip_allowlist IS NULL))
+          AND (endpoint_base_url IS NULL OR (endpoint_base_url ~ '^https://[^/?#@[:space:]]+' AND length(endpoint_base_url) <= ${sql.raw(String(CUSTOM_GATEWAY_BASE_URL_MAX_LENGTH))}))
+          AND (webhook_ip_allowlist IS NULL OR cardinality(webhook_ip_allowlist) <= ${sql.raw(String(CUSTOM_GATEWAY_IP_ALLOWLIST_MAX))})`,
     ),
   ],
 );
