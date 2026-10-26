@@ -117,10 +117,12 @@ export class OperationLog implements OperationLogHook {
     // customer asked for it. A purchased extra volume that failed is the order's refund report.
     if (operation.type !== 'ADD_TRAFFIC' || operation.orderId !== null) return;
     if (operation.state !== 'FAILED' && operation.state !== 'ABANDONED') return;
+    // R10 B5 (the v0.8.2-e rule): the OPERATION is the gift's provenance, and the import
+    // performs none — a gift to a customer or a service the import wrote was granted after it.
     const service = await this.deps.facts.service(scope, operation.serviceId, tx);
-    if (service === null || service.source !== 'NEXA') return;
+    if (service === null) return;
     const customer = await this.deps.facts.customer(scope, service.customerId, tx);
-    if (customer === null || customer.source !== 'NEXA') return;
+    if (customer === null) return;
     const built = giftFailure({
       operation,
       service,

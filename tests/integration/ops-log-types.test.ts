@@ -390,7 +390,7 @@ describe('the ops log: wallet figures, imports, switches and the storm roll-up',
     });
   });
 
-  it('an import produces no group message: an imported customer’s movements, registration and opening balance say nothing', async () => {
+  it('an import produces no group message: an imported customer’s registration and opening balance say nothing; a block after the import does', async () => {
     const imported = await customer('940040', 'قدیمی');
     await ctx.container.database.db.execute(
       sql`UPDATE customers SET source = 'MIRZA', source_ref = 'm-940040' WHERE id = ${imported}`,
@@ -427,8 +427,18 @@ describe('the ops log: wallet figures, imports, switches and the storm roll-up',
       ledger.handle(recorded(imported, opening, 'MIGRATION_OPENING_BALANCE', 'CREDIT'), tx),
     );
     await run((tx) => customers.handle(event('CustomerRegistered', imported, {}), tx));
-    await run((tx) => customers.handle(event('CustomerBlocked', imported, {}), tx));
     expect(queued).toEqual([]);
+
+    /*
+     * R10 B5 (the v0.8.2-e rule): a block is not import state — the importer writes a banned
+     * customer's status directly, with no event; only `CustomerService` writes
+     * `CustomerBlocked` — so a block of that customer after the import is logged like any
+     * other. This line pinned the opposite until R10, which silenced every block of every
+     * customer of an installation migrated with the one-click import.
+     */
+    await run((tx) => customers.handle(event('CustomerBlocked', imported, { reason: null }), tx));
+    expect(queued.map((one) => one.input.logType)).toEqual(['USER_BLOCK']);
+    queued = [];
 
     /*
      * R8 A4: an OPERATOR's adjustment of that customer, made after the import, is not import
