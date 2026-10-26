@@ -178,7 +178,9 @@ describe('the provider catalogue', () => {
     // own (`NowPaymentsAdapter`, `docs/nowpayments-gateway-audit.md`), and CentralPay its own
     // (`CentralPayAdapter`, `docs/centralpay-gateway-audit.md`), and TetraPay its own
     // (`TetraPayAdapter`, `docs/tetrapay-gateway-audit.md`), and Rialit its own
-    // (`RialitAdapter`, `docs/rialit-gateway-audit.md`); that is what this pins.
+    // (`RialitAdapter`, `docs/rialit-gateway-audit.md`), and the custom gateway its own
+    // (`CustomGatewayAdapter`, `docs/protocols/custom-gateway.md`) — ONE code-backed protocol a
+    // bridge speaks, never an operator-defined provider; that is what this pins.
     expect([...PAYMENT_GATEWAY_PROVIDERS]).toEqual([
       'MANUAL_TRANSFER',
       'TONPAYS',
@@ -188,6 +190,7 @@ describe('the provider catalogue', () => {
       'CENTRALPAY',
       'TETRAPAY',
       'RIALIT',
+      'CUSTOM',
     ]);
   });
 
@@ -309,7 +312,23 @@ describe('the invoice-form descriptor fields (TonPays Telegram, audit §5.3)', (
       TETRAPAY: ['LINK', false, false, false, 'GATEWAY_KEY', true, false, false, false, true, true],
       // Rialit: a link, the payer's Telegram id REQUIRED (`payer_id`), and an unsigned webhook.
       RIALIT: ['LINK', false, true, false, 'GATEWAY_KEY', false, false, false, false, false, false],
+      // Custom (R10 C1): a link, an opaque per-customer number, and NO second secret (below).
+      CUSTOM: ['LINK', false, false, false, 'GATEWAY_KEY', false, false, false, true, false, false],
     });
+    /*
+     * Round 10 C1: the three fields only the custom gateway sets — an operator-configured base
+     * URL, an inquiry by Nexa's own order id after a lost create, and webhooks verified against
+     * the route's ONE credential. Every other route keeps all three off.
+     */
+    for (const provider of PAYMENT_GATEWAY_PROVIDERS) {
+      const d = PAYMENT_GATEWAY_DESCRIPTORS[provider];
+      const custom = provider === 'CUSTOM';
+      expect([d.operatorEndpoint, d.inquiresByOrderId, d.webhookSignedByCredential]).toEqual([
+        custom,
+        custom,
+        custom,
+      ]);
+    }
     // Only the routes that review may carry the review columns: the list generates the CHECK.
     expect([...PROVIDER_REVIEW_GATEWAY_PROVIDERS]).toEqual(['TONPAYS_TELEGRAM', 'NOWPAYMENTS']);
     // Its own key, through the same credential store, never the website route's.

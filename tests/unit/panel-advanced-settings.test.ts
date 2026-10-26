@@ -37,6 +37,7 @@ import {
 } from '@nexa/contracts';
 import { MarzbanAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/marzban.adapter';
 import { RickpanelAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/rickpanel.adapter';
+import { CustomPanelAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/custom-panel.adapter';
 import { SanaeiAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/sanaei.adapter';
 import { PROVIDER_RULES } from '../../apps/api/src/modules/platform/providers/infrastructure/provider-rules';
 import {
@@ -127,6 +128,17 @@ describe('the capability registry', () => {
     ]);
     // 3X-UI is frozen at what it has (CLAUDE.md): creation and the usage read.
     expect(supportedRows(new SanaeiAdapter())).toEqual(['CREATE_SERVICE', 'USAGE_READ']);
+    // R10 C2: the bridge protocol has every operation RickPanel has but the files read.
+    expect(supportedRows(new CustomPanelAdapter())).toEqual([
+      'CREATE_SERVICE',
+      'RENEW',
+      'ADD_TRAFFIC',
+      'ADD_TIME',
+      'DISABLE_ENABLE',
+      'ROTATE_SUBSCRIPTION',
+      'USAGE_READ',
+      'TERMINATE',
+    ]);
   });
 
   it('reads location change as unsupported by every provider', () => {
@@ -616,6 +628,8 @@ describe('provider rules, pinned to the create request', () => {
     durationDays: 30,
     expiresAt: new Date('2026-10-28T00:00:00Z'),
     deviceLimit: 2,
+    // Only the custom adapter reads it; the others ignore it (R10 C2).
+    operationId: '0190aaaa-0000-4000-8000-000000000003',
   };
 
   async function createBody(
@@ -626,6 +640,10 @@ describe('provider rules, pinned to the create request', () => {
     const { http, sent } = recordingHttp();
     await adapter.createUser(target, http, input);
     const create = sent.find((request) => !request.path.includes('admin/token'));
+    // The custom adapter signs the bytes it sends, so its body is already serialised.
+    if (create?.body?.kind === 'json-text') {
+      return JSON.parse(create.body.text) as Record<string, unknown>;
+    }
     if (create?.body?.kind !== 'json') throw new Error(`${type} sent no JSON create`);
     return create.body.value as Record<string, unknown>;
   }
@@ -674,5 +692,29 @@ describe('provider rules, pinned to the create request', () => {
     expect(PROVIDER_RULES.sanaei.deviceLimitOnCreate).toBe('FROM_PRODUCT');
     expect(client['limitIp']).toBe(2);
     expect(PROVIDER_RULES.sanaei.subscriptionLink).toBe('SUBSCRIPTION_DOMAIN');
+  });
+
+  it('Custom (R10 C2): sends the order’s traffic, expiry and device limit, and nothing else', async () => {
+    const body = await createBody('custom', {
+      baseUrl: 'https://bridge.example',
+      credentials: { shape: 'OPAQUE_TOKEN', token: 'k'.repeat(40) },
+      activation: {},
+    });
+    expect(Object.keys(body).sort()).toEqual([
+      'deviceLimit',
+      'expiresAt',
+      'nexaRef',
+      'operationId',
+      'trafficLimitBytes',
+      'username',
+    ]);
+    // No reset field: the protocol forbids the bridge one (§5.2).
+    expect(PROVIDER_RULES.custom.trafficReset).toBe('NEVER');
+    // No protocol, inbound or link field: the bridge decides them and issues the link.
+    expect(PROVIDER_RULES.custom.protocols).toBe('PANEL_ASSIGNED');
+    expect(PROVIDER_RULES.custom.inbounds).toBe('PANEL_ASSIGNED');
+    expect(PROVIDER_RULES.custom.subscriptionLink).toBe('PANEL_ISSUED');
+    expect(PROVIDER_RULES.custom.deviceLimitOnCreate).toBe('FROM_PRODUCT');
+    expect(body['deviceLimit']).toBe(2);
   });
 });

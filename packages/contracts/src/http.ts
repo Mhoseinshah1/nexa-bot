@@ -47,6 +47,11 @@ import { paymentSituationViewSchema } from './payment-situations.js';
 import { paymentAmountsViewSchema } from './payment-amounts.js';
 import { NOWPAYMENTS_IPN_SECRET_MAX_LENGTH } from './nowpayments.js';
 import { CENTRALPAY_VERIFY_KEY_MAX_LENGTH } from './centralpay.js';
+import {
+  CUSTOM_GATEWAY_IP_ALLOWLIST_MAX,
+  normaliseAllowlistEntry,
+  normaliseCustomGatewayBaseUrl,
+} from './custom-gateway.js';
 import { CUSTOMER_STATUSES, telegramUserIdSchema } from './customer.js';
 import { listSearchQuerySchema } from './list-search.js';
 import { DEFAULT_RECORD_SOURCE, recordSourceSchema } from './record-source.js';
@@ -5598,6 +5603,18 @@ export const paymentGatewaySchema = z.object({
    */
   hiddenUntil: z.iso.datetime().nullable().default(null),
   /**
+   * Round 10 C1: an `operatorEndpoint` route's bridge (the custom gateway): the `https://` base
+   * URL the operator configured and the callback IP allow-list (empty: no address check). Not a
+   * secret, so shown as stored. Null for every other route, and from the previous release.
+   */
+  endpoint: z
+    .object({
+      baseUrl: z.string().nullable(),
+      ipAllowlist: z.array(z.string()),
+    })
+    .nullable()
+    .default(null),
+  /**
    * A `FIXED_RATE` route's conversion (Package A): `rateRequired` says the form shows the
    * field and enabling needs it; `rateMinor` is the stored rate — sales-currency minor
    * units per provider unit (Stars: Toman per Star) — as a decimal string, or null.
@@ -5814,6 +5831,44 @@ export type CheckPaymentGatewayCredentialRequest = z.infer<
   typeof checkPaymentGatewayCredentialRequestSchema
 >;
 
+/**
+ * Round 10 C1: pointing an `operatorEndpoint` route (the custom gateway) at its bridge
+ * (`docs/protocols/custom-gateway.md` §1). `baseUrl` is `https://` only, with no userinfo, query
+ * or fragment (`normaliseCustomGatewayBaseUrl`); `ipAllowlist` is up to 32 IPv4/IPv6 addresses
+ * or CIDRs the bridge's callbacks may come from, empty for no address check. Refused by the
+ * server while the route is ACTIVE (disable, change, test, enable), and audited. Whether the
+ * HOST may be contacted at all is the installation's URL policy, decided by the server.
+ */
+export const setPaymentGatewayEndpointRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  baseUrl: z.string().transform((value, ctx) => {
+    const normalised = normaliseCustomGatewayBaseUrl(value);
+    if (normalised === null) {
+      ctx.addIssue({ code: 'custom', message: 'must be an https:// URL with no query' });
+      return z.NEVER;
+    }
+    return normalised;
+  }),
+  ipAllowlist: z
+    .array(z.string())
+    .max(CUSTOM_GATEWAY_IP_ALLOWLIST_MAX)
+    .transform((entries, ctx) => {
+      const normalised: string[] = [];
+      for (const entry of entries) {
+        const one = normaliseAllowlistEntry(entry);
+        if (one === null) {
+          ctx.addIssue({ code: 'custom', message: 'must be an IP address or a CIDR' });
+          return z.NEVER;
+        }
+        if (!normalised.includes(one)) normalised.push(one);
+      }
+      return normalised;
+    }),
+});
+export type SetPaymentGatewayEndpointRequest = z.input<
+  typeof setPaymentGatewayEndpointRequestSchema
+>;
+
 export const PAYMENT_GATEWAY_ROUTES = {
   list: '/payment-gateways',
   update: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}`,
@@ -5823,6 +5878,8 @@ export const PAYMENT_GATEWAY_ROUTES = {
     `/payment-gateways/${encodeURIComponent(provider)}/webhook-secret`,
   check: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}/check`,
   verifyKey: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}/verify-key`,
+  /** Round 10 C1: an `operatorEndpoint` route's bridge URL and callback allow-list. */
+  endpoint: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}/endpoint`,
 } as const;
 
 // --- Central exchange rates (package FX) ----------------------------------------------

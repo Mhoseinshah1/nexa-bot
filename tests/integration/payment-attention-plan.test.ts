@@ -10,7 +10,7 @@ import { createTestContext, tenantA, tenantB, type TestContext } from './harness
  * the tenant ever took — 2.5–4 s per request at 400 000 payments, on the dashboard and the
  * payments page. The counts are now driven from the rows that CAN match
  * (`paymentOpsCandidateIds`), and the invoice arm of that set from
- * `gateway_invoices_tenant_attention_idx` (`online-indexes.ts`). No behavioural test can
+ * `gateway_invoices_tenant_attention_partial_idx` (`online-indexes.ts`). No behavioural test can
  * see either — the counts are the same — so this file asks the plan.
  *
  * The statement is the reader's own (`statement`), not a retyped copy. Two tenants of
@@ -121,7 +121,7 @@ describe('the payment attention query plan', () => {
       expect(plan, `the payments heap was walked:\n${plan}`).not.toContain('Seq Scan on payments');
       // …nor its quiet invoices: the invoice arm is the partial index.
       expect(plan, `the invoice arm did not use its index:\n${plan}`).toContain(
-        'gateway_invoices_tenant_attention_idx',
+        'gateway_invoices_tenant_attention_partial_idx',
       );
       expect(plan, `every invoice was read:\n${plan}`).not.toMatch(
         /Seq Scan on gateway_invoices gi\b/,

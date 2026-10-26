@@ -1,5 +1,5 @@
 {
-  "id": "e353c31c-0db6-4cda-bef1-ae044c0ed867",
+  "id": "73a16c9a-d030-4fce-aa8c-c1bc45cad38a",
   "prevId": "01b8abf4-8dc8-4101-9e98-8f266dfb6cea",
   "version": "7",
   "dialect": "postgresql",
@@ -7958,173 +7958,6 @@
       },
       "isRLSEnabled": false
     },
-    "public.customer_captchas": {
-      "name": "customer_captchas",
-      "schema": "",
-      "columns": {
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "customer_id": {
-          "name": "customer_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "state": {
-          "name": "state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'PENDING'"
-        },
-        "challenge_id": {
-          "name": "challenge_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "operand_a": {
-          "name": "operand_a",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "operand_b": {
-          "name": "operand_b",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "options": {
-          "name": "options",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "answer_index": {
-          "name": "answer_index",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "attempts": {
-          "name": "attempts",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "issued_at": {
-          "name": "issued_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "locked_until": {
-          "name": "locked_until",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "passed_at": {
-          "name": "passed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "customer_captchas_tenant_id_tenants_id_fk": {
-          "name": "customer_captchas_tenant_id_tenants_id_fk",
-          "tableFrom": "customer_captchas",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "customer_captchas_customer_fk": {
-          "name": "customer_captchas_customer_fk",
-          "tableFrom": "customer_captchas",
-          "tableTo": "customers",
-          "columnsFrom": [
-            "tenant_id",
-            "customer_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "customer_captchas_pkey": {
-          "name": "customer_captchas_pkey",
-          "columns": [
-            "tenant_id",
-            "customer_id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "customer_captchas_state_check": {
-          "name": "customer_captchas_state_check",
-          "value": "state IN ('PENDING', 'PASSED')"
-        },
-        "customer_captchas_answer_index_check": {
-          "name": "customer_captchas_answer_index_check",
-          "value": "answer_index BETWEEN 0 AND 3"
-        },
-        "customer_captchas_options_check": {
-          "name": "customer_captchas_options_check",
-          "value": "jsonb_typeof(options) = 'array' AND jsonb_array_length(options) = 4"
-        },
-        "customer_captchas_attempts_check": {
-          "name": "customer_captchas_attempts_check",
-          "value": "attempts >= 0"
-        },
-        "customer_captchas_passed_check": {
-          "name": "customer_captchas_passed_check",
-          "value": "(state = 'PASSED') = (passed_at IS NOT NULL)"
-        },
-        "customer_captchas_expiry_check": {
-          "name": "customer_captchas_expiry_check",
-          "value": "expires_at > issued_at"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.customer_direct_messages": {
       "name": "customer_direct_messages",
       "schema": "",
@@ -11931,7 +11764,7 @@
       "checkConstraints": {
         "gateway_customer_numbers_provider_check": {
           "name": "gateway_customer_numbers_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT', 'CUSTOM')"
         },
         "gateway_customer_numbers_number_check": {
           "name": "gateway_customer_numbers_number_check",
@@ -12634,6 +12467,12 @@
           "notNull": true,
           "default": 0
         },
+        "endpoint_base_url": {
+          "name": "endpoint_base_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -12871,7 +12710,7 @@
         },
         "gateway_invoices_provider_check": {
           "name": "gateway_invoices_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT', 'CUSTOM')"
         },
         "gateway_invoices_creation_state_check": {
           "name": "gateway_invoices_creation_state_check",
@@ -12937,13 +12776,21 @@
           "name": "gateway_invoices_rialit_check",
           "value": "provider <> 'RIALIT' OR (provider_unit = 'IRT' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND octet_length(provider_order_id) <= 64 AND provider_order_id ~ '^[A-Za-z0-9_.:-]{1,64}$')"
         },
+        "gateway_invoices_custom_check": {
+          "name": "gateway_invoices_custom_check",
+          "value": "provider <> 'CUSTOM' OR (provider_unit = 'IRR' AND conversion_policy = 'SAME_UNIT' AND bot_instance_id IS NULL AND provider_order_id ~ '^cg_[0-9A-HJKMNP-TV-Z]{26}$' AND provider_user_id IS NOT NULL AND endpoint_base_url IS NOT NULL)"
+        },
+        "gateway_invoices_endpoint_base_url_check": {
+          "name": "gateway_invoices_endpoint_base_url_check",
+          "value": "endpoint_base_url IS NULL OR (provider = 'CUSTOM' AND endpoint_base_url ~ '^https://' AND length(endpoint_base_url) <= 512)"
+        },
         "gateway_invoices_provider_method_check": {
           "name": "gateway_invoices_provider_method_check",
           "value": "provider_method IS NULL OR (provider = 'TETRAPAY' AND provider_method IN ('online', 'card'))"
         },
         "gateway_invoices_provider_user_id_check": {
           "name": "gateway_invoices_provider_user_id_check",
-          "value": "provider_user_id IS NULL OR (provider = 'CENTRALPAY' AND provider_user_id ~ '^[0-9]{10}$')"
+          "value": "provider_user_id IS NULL OR (provider IN ('CENTRALPAY', 'CUSTOM') AND provider_user_id ~ '^[0-9]{10}$')"
         },
         "gateway_invoices_card_check": {
           "name": "gateway_invoices_card_check",
@@ -21581,12 +21428,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "not_before": {
-          "name": "not_before",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -24777,7 +24618,7 @@
       "checkConstraints": {
         "payment_gateway_call_budgets_provider_check": {
           "name": "payment_gateway_call_budgets_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT', 'CUSTOM')"
         },
         "payment_gateway_call_budgets_used_check": {
           "name": "payment_gateway_call_budgets_used_check",
@@ -24960,7 +24801,7 @@
         },
         "payment_gateway_credentials_provider_check": {
           "name": "payment_gateway_credentials_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT', 'CUSTOM')"
         }
       },
       "isRLSEnabled": false
@@ -25087,6 +24928,18 @@
           "primaryKey": false,
           "notNull": false
         },
+        "endpoint_base_url": {
+          "name": "endpoint_base_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "webhook_ip_allowlist": {
+          "name": "webhook_ip_allowlist",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -25160,7 +25013,7 @@
       "checkConstraints": {
         "payment_gateways_provider_check": {
           "name": "payment_gateways_provider_check",
-          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT')"
+          "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT', 'CUSTOM')"
         },
         "payment_gateways_status_check": {
           "name": "payment_gateways_status_check",
@@ -25213,6 +25066,10 @@
         "payment_gateways_provider_unit_rate_check": {
           "name": "payment_gateways_provider_unit_rate_check",
           "value": "provider_unit_rate_minor IS NULL OR provider_unit_rate_minor > 0"
+        },
+        "payment_gateways_endpoint_check": {
+          "name": "payment_gateways_endpoint_check",
+          "value": "(provider = 'CUSTOM' OR (endpoint_base_url IS NULL AND webhook_ip_allowlist IS NULL))\n          AND (endpoint_base_url IS NULL OR (endpoint_base_url ~ '^https://[^/?#@[:space:]]+' AND length(endpoint_base_url) <= 512))\n          AND (webhook_ip_allowlist IS NULL OR cardinality(webhook_ip_allowlist) <= 32)"
         }
       },
       "isRLSEnabled": false
@@ -26032,7 +25889,7 @@
         },
         "payments_gateway_provider_check": {
           "name": "payments_gateway_provider_check",
-          "value": "gateway_provider IS NULL OR gateway_provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT')"
+          "value": "gateway_provider IS NULL OR gateway_provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS', 'TONPAYS_TELEGRAM', 'NOWPAYMENTS', 'CENTRALPAY', 'TETRAPAY', 'RIALIT', 'CUSTOM')"
         },
         "payments_topup_cashback_percent_check": {
           "name": "payments_topup_cashback_percent_check",

@@ -5,6 +5,7 @@ import {
 } from '@nexa/contracts';
 import { t } from '../i18n/web.fa';
 import { Field, Ltr } from '../ui/kit';
+import { latinDigits } from '../ui/jalali';
 
 /**
  * The per-provider activation configuration, as a form.
@@ -48,6 +49,8 @@ export interface ActivationDraft {
   readonly subscriptionDomain: string;
   /** 3X-UI: the inbound a created client joins, as text. */
   readonly inboundId: string;
+  /** Custom bridge (R10 C2): the optional per-panel timeout, in SECONDS, as text. */
+  readonly requestTimeoutSeconds: string;
 }
 
 export const EMPTY_ACTIVATION_DRAFT: ActivationDraft = {
@@ -55,7 +58,25 @@ export const EMPTY_ACTIVATION_DRAFT: ActivationDraft = {
   tags: {},
   subscriptionDomain: '',
   inboundId: '',
+  requestTimeoutSeconds: '',
 };
+
+/**
+ * Whether a provider's activation takes a per-panel request timeout (R10 C2).
+ *
+ * Asked of the provider's OWN schema rather than of its name, so the form offers the
+ * field exactly where the server would accept it.
+ */
+export function acceptsRequestTimeout(providerType: ProviderType): boolean {
+  return PANEL_ACTIVATION_SCHEMAS[providerType].safeParse({ requestTimeoutMs: 5_000 }).success;
+}
+
+/** Seconds as typed, as the milliseconds the schema stores; `NaN` when it is not a number. */
+export function requestTimeoutMsFrom(seconds: string): number {
+  // Persian or Arabic-Indic digits are the body's digits, and typed as such.
+  const trimmed = latinDigits(seconds.trim());
+  return /^\d+(\.\d+)?$/.test(trimmed) ? Math.round(Number(trimmed) * 1000) : Number.NaN;
+}
 
 /**
  * The stored activation, as a draft.
@@ -82,6 +103,8 @@ export function draftFromActivation(activation: unknown): ActivationDraft {
     tags,
     subscriptionDomain: typeof held.subscriptionDomain === 'string' ? held.subscriptionDomain : '',
     inboundId: typeof held.inboundId === 'number' ? String(held.inboundId) : '',
+    requestTimeoutSeconds:
+      typeof held.requestTimeoutMs === 'number' ? String(held.requestTimeoutMs / 1000) : '',
   };
 }
 
@@ -147,6 +170,12 @@ function buildCandidate(
     if (draft.protocols.length === 0 && Object.keys(tags).length === 0) return null;
     return { proxyProtocols: [...draft.protocols], inboundTags: tags };
   }
+  if (acceptsRequestTimeout(providerType)) {
+    // R10 C2: the custom bridge's one optional field. Empty is "no per-panel timeout".
+    if (draft.requestTimeoutSeconds.trim() === '') return null;
+    // `NaN` rather than a guess, so a typo is refused by the schema and named.
+    return { requestTimeoutMs: requestTimeoutMsFrom(draft.requestTimeoutSeconds) };
+  }
   const domain = draft.subscriptionDomain.trim();
   const inbound = draft.inboundId.trim();
   if (domain === '' && inbound === '') return null;
@@ -163,6 +192,7 @@ function buildCandidate(
 export function sameActivationDraft(a: ActivationDraft, b: ActivationDraft): boolean {
   if (a.subscriptionDomain.trim() !== b.subscriptionDomain.trim()) return false;
   if (a.inboundId.trim() !== b.inboundId.trim()) return false;
+  if (a.requestTimeoutSeconds.trim() !== b.requestTimeoutSeconds.trim()) return false;
   if (a.protocols.length !== b.protocols.length) return false;
   if (a.protocols.some((protocol) => !b.protocols.includes(protocol))) return false;
   return a.protocols.every(
@@ -247,6 +277,24 @@ export function ActivationFields({
           </Field>
         ))}
       </>
+    );
+  }
+  if (acceptsRequestTimeout(providerType)) {
+    return (
+      <Field
+        label={t('web.panel_request_timeout')}
+        hint={t('web.panel_request_timeout_hint')}
+        htmlFor="activation-request-timeout"
+      >
+        <input
+          id="activation-request-timeout"
+          className="input"
+          inputMode="decimal"
+          disabled={disabled}
+          value={draft.requestTimeoutSeconds}
+          onChange={(event) => onChange({ ...draft, requestTimeoutSeconds: event.target.value })}
+        />
+      </Field>
     );
   }
   return (

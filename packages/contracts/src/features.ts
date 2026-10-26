@@ -367,6 +367,22 @@ export const FEATURE_FLAGS = [
     configuredBy: ['panels.balancing.strategy'],
   },
   {
+    key: 'custom_panel_provider',
+    description:
+      'Let an operator add a panel of the `custom` provider type: a bridge service that ' +
+      'speaks Nexa\u2019s own signed panel protocol (docs/protocols/custom-panel.md) in front ' +
+      'of a panel Nexa has no adapter for. Off by default, because the protocol has not yet ' +
+      'been accepted against a real bridge. Turning it off refuses creating a NEW custom ' +
+      'panel and hides the type from the panel form; custom panels that already exist keep ' +
+      'operating \u2014 services on them are still delivered, renewed, checked and monitored, ' +
+      'so no customer who already paid is stranded.',
+    defaultEnabled: false,
+    // TENANT_WIDE: it decides which provider types every operator of the tenant may add.
+    // Not to be confused with `custom_service` below, which is an unrelated way to BUY.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
+  {
     key: 'custom_service',
     description:
       'Let a customer buy a custom service: they choose a location, type a ' +

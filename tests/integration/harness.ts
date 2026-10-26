@@ -443,6 +443,8 @@ const SELLABLE_ACTIVATION: Readonly<Record<ProviderType, unknown>> = {
   marzban: { proxyProtocols: ['vless'], inboundTags: { vless: ['VLESS_TCP'] } },
   rickpanel: {},
   sanaei: { subscriptionDomain: 'sub.example.test', inboundId: 1 },
+  // R10 C2: a bridge needs nothing configured; the timeout is optional.
+  custom: {},
 };
 
 /**

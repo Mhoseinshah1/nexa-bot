@@ -68,6 +68,14 @@ export interface PaymentGatewayRecord {
    * when the instant passes. A route is not offered while this is after the clock.
    */
   readonly hiddenUntil: Date | null;
+  /**
+   * Round 10 C1: an `operatorEndpoint` route's bridge (the custom gateway): its `https://` base
+   * URL, or null until an operator sets one (such a route cannot be enabled), and the callback
+   * IP allow-list, empty for no address check. Null / empty on every other route. Optional on
+   * the record so a narrow test fake need not carry them.
+   */
+  readonly endpointBaseUrl?: string | null;
+  readonly webhookIpAllowlist?: readonly string[];
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -161,6 +169,33 @@ export interface PaymentGatewayRepository {
     now: Date,
     tx: unknown,
   ): Promise<boolean>;
+
+  /**
+   * Round 10 C1: points an `operatorEndpoint` route at its bridge — conditional on the route
+   * being DISABLED (named in the WHERE, never checked and then written), so an enable that
+   * commits first makes this a no-op that says so. Null when no DISABLED route matched.
+   */
+  setEndpoint(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    input: { readonly baseUrl: string; readonly ipAllowlist: readonly string[] },
+    now: Date,
+    tx: unknown,
+  ): Promise<PaymentGatewayRecord | null>;
+
+  /**
+   * Codex on #336 (2): how many of this route's attempts frozen to a bridge address OTHER than
+   * `baseUrl` are still open — no outcome recorded, and either the payment is still PENDING or
+   * UNKNOWN (held for review) or Nexa will still ask about it (`next_inquiry_at` set: a
+   * decision retry, a late poll). Each is asked, and its callbacks verified, with the route's
+   * ONE current secret, so the address may not move while any is open.
+   */
+  openAttemptsElsewhere(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    baseUrl: string,
+    tx: unknown,
+  ): Promise<number>;
 }
 
 /**

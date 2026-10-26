@@ -256,6 +256,8 @@ const FLAG_LABELS: Readonly<Record<string, WebKey>> = {
   start_captcha: 'web.flag_start_captcha',
   custom_service: 'web.flag_custom_service',
   panel_auto_balancing: 'web.flag_panel_auto_balancing',
+  // R10 C2.
+  custom_panel_provider: 'web.flag_custom_panel_provider',
 };
 
 /**

@@ -1979,15 +1979,29 @@
     {
       "idx": 282,
       "version": "7",
-      "when": 1793032312556,
-      "tag": "0282_r10_anti_abuse",
+      "when": 1793003776898,
+      "tag": "0282_custom_gateway",
       "breakpoints": true
     },
     {
       "idx": 283,
       "version": "7",
-      "when": 1793032334493,
-      "tag": "0283_referral_commission_deferral_guard",
+      "when": 1793039653981,
+      "tag": "0283_custom_provider_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 284,
+      "version": "7",
+      "when": 1793046436122,
+      "tag": "0284_r10_anti_abuse",
+      "breakpoints": true
+    },
+    {
+      "idx": 285,
+      "version": "7",
+      "when": 1793046436226,
+      "tag": "0285_referral_commission_deferral_guard",
       "breakpoints": true
     }
   ]

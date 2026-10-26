@@ -3670,6 +3670,7 @@ export class PaymentService {
           topupCashbackPercent: null,
           customerFeeBasisPoints: route.gateway.customerFeeBasisPoints,
           resolveConversion: route.resolveConversion,
+          endpointBaseUrl: route.gateway.endpointBaseUrl ?? null,
           paymentId,
           reference,
           now,
@@ -3748,6 +3749,7 @@ export class PaymentService {
           topupCashbackPercent: route.gateway.topupCashbackPercent,
           customerFeeBasisPoints: route.gateway.customerFeeBasisPoints,
           resolveConversion: route.resolveConversion,
+          endpointBaseUrl: route.gateway.endpointBaseUrl ?? null,
           paymentId,
           reference,
           now,
@@ -5040,6 +5042,11 @@ export class PaymentService {
        * quote and the unit ratio. An open attempt handed back is never re-priced.
        */
       readonly resolveConversion: () => Promise<ResolvedConversion>;
+      /**
+       * Round 10 C1: an `operatorEndpoint` route's bridge URL, read with the route in this
+       * transaction and FROZEN onto a new attempt. Null for every other route.
+       */
+      readonly endpointBaseUrl: string | null;
       readonly paymentId: PaymentId;
       readonly reference: string;
       readonly now: Date;
@@ -5169,6 +5176,18 @@ export class PaymentService {
        * collision; and the customer's stable random number, drawn once and kept. Both are in
        * this transaction, so a refused attempt leaves neither behind.
        */
+      /*
+       * Round 10 C1: an `operatorEndpoint` route with no bridge URL cannot be asked anything.
+       * It cannot be ACTIVE without one (`setStatus`), so this is the last line, before any row
+       * an attempt would leave.
+       */
+      if (descriptor.operatorEndpoint && input.endpointBaseUrl === null) {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+          'This payment route cannot open an attempt right now.',
+          { reason: 'ENDPOINT_MISSING' },
+        );
+      }
       let providerOrderId = adapter.newOrderId({ paymentCode: payment.code });
       let providerUserId: string | null = null;
       if (descriptor.numericIdentity) {
@@ -5224,6 +5243,8 @@ export class PaymentService {
           conversionPolicy: conversion.policy,
           fx,
           botInstanceId,
+          // Round 10 C1: the bridge every inquiry of this attempt will ask, frozen here.
+          endpointBaseUrl: descriptor.operatorEndpoint ? input.endpointBaseUrl : null,
           now: input.now,
         },
         tx,

@@ -1112,6 +1112,24 @@ export const SETTINGS = [
     consumer: 'ACTIVE',
   },
   {
+    key: LATE_CREDIT_SETTING_KEYS.CUSTOM,
+    description:
+      'Round 10 item C1: the same switch for the custom gateway (`docs/protocols/custom-gateway.md`). ' +
+      'A payment the bridge\u2019s own signed inquiry reports as PAID AFTER the attempt closed ' +
+      '(deadline passed, EXPIRED, or UNKNOWN) is credited to the customer\u2019s wallet once and ' +
+      'never settles the order, and only when that inquiry re-confirms it (status PAID, this ' +
+      'attempt\u2019s invoice id and the bridge reference, exactly the rial amount asked and paid). ' +
+      'OFF by default: a new route moves no money that its owner has not chosen to move. Off: ' +
+      'recorded as a late completion for an operator.',
+    schema: z.boolean(),
+    defaultValue: false,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
     key: LATE_CREDIT_WINDOW_SETTING_KEY,
     description:
       'R5A item 4: how long after a gateway payment closed its still-open invoice keeps being ' +
