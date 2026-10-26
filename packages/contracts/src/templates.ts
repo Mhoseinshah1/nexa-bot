@@ -13248,6 +13248,64 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.custom_button.text',
+    description:
+      'R10 D2: the message an owner-defined main-menu button of kind text sends when tapped. The text is read at send time from the button row; it goes out as plain text, so no markup the operator typed is interpreted.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'text',
+        type: 'STRING',
+        description: "The operator's text, exactly as stored.",
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.custom_button.caption',
+    description:
+      'R10 D2: the caption on the photo or document an owner-defined main-menu button sends when tapped. Read at send time from the button row; plain text.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'caption',
+        type: 'STRING',
+        description: "The operator's caption, exactly as stored.",
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.custom_button.link',
+    description:
+      'R10 D2: the message an owner-defined main-menu button of kind link answers with; the link itself is the inline button under it. The operator may add a note, and a button without one drops that line.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'text',
+        type: 'STRING',
+        description: "The operator's note, exactly as stored, when there is one.",
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.custom_button.open_link_button',
+    description: "R10 D2: the inline button under a link answer; it opens the operator's link.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.custom_button.unavailable',
+    description:
+      'R10 D2: the answer to a tap on an owner-defined main-menu button that is no longer available: the feature is off, the button was removed or hidden for this bot, or it is not on the published menu. Sent for a keyboard that was drawn before the change.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.ticket.view_button',
     description: "WP-A7: the notification's button that opens the ticket.",
     format: 'PLAIN_TEXT',

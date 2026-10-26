@@ -241,6 +241,12 @@ export const BOT_INTENTS = [
    * id or nothing; the service re-reads the ticket and its owner on every write.
    */
   'TICKETS',
+  /*
+   * R10 D2 — a tap on an owner-defined main-menu button. `targetId` is the button's id, read
+   * from the label map's VALUE (`mb:<id>`), never from the typed text. The route grants
+   * nothing: the handler asks the server again (flag, archive, bot, published layout).
+   */
+  'CUSTOM_MENU_BUTTON',
   'TICKET_NEW',
   'TICKET_CATEGORY',
   'TICKET_VIEW',

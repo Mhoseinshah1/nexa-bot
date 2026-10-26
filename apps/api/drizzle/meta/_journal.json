@@ -1996,6 +1996,20 @@
       "when": 1793043606848,
       "tag": "0284_service_auto_renew",
       "breakpoints": true
+    },
+    {
+      "idx": 285,
+      "version": "7",
+      "when": 1793052463954,
+      "tag": "0285_custom_menu_buttons",
+      "breakpoints": true
+    },
+    {
+      "idx": 286,
+      "version": "7",
+      "when": 1793052464037,
+      "tag": "0286_custom_menu_buttons_no_delete",
+      "breakpoints": true
     }
   ]
 }

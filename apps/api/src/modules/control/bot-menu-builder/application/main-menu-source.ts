@@ -1,8 +1,8 @@
 import {
   BOT_MENU_PUBLISHED_UNREADABLE_CODE,
-  explicitMainMenuSchema,
   normalizeExplicitMainMenu,
-  type ExplicitMainMenu,
+  parseExplicitMainMenu,
+  type AnyExplicitMainMenu,
   type MainMenuLayoutEntry,
   type OperationalEventRecorder,
   type ScopeContext,
@@ -32,13 +32,13 @@ export const PUBLISHED_UNREADABLE_DEDUPE_KEY = `${BOT_MENU_PUBLISHED_UNREADABLE_
 /** What a published head means, decided in one place for the runtime and the builder read. */
 export interface PublishedHeadReading {
   /** The layout, when it parses. */
-  readonly layout: ExplicitMainMenu | null;
+  readonly layout: AnyExplicitMainMenu | null;
   /** `bot.main_menu` was written after this publish (by an older release). */
   readonly superseded: boolean;
 }
 
 export function readPublishedHead(head: PublishedMainMenuHead): PublishedHeadReading {
-  const parsed = explicitMainMenuSchema.safeParse(head.published);
+  const parsed = parseExplicitMainMenu(head.published);
   return {
     layout: parsed.success ? normalizeExplicitMainMenu(parsed.data) : null,
     superseded: head.settingVersion !== head.projectionSettingVersion,

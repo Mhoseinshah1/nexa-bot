@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
-  type ExplicitMainMenu,
+  isCustomMenuRef,
+  type AnyExplicitMainMenu,
+  type CustomMenuButtonView,
   type MainMenuBuilderItem,
   type MainMenuButtonId,
   type MainMenuRevisionView,
@@ -17,13 +19,16 @@ export const REVISIONS_QUERY_KEY = ['bot-menu-builder', 'revisions'] as const;
 
 /** Every placed button of a revision, disabled ones marked — what that revision arranged. */
 function arrangedRows(
-  layout: ExplicitMainMenu,
+  layout: AnyExplicitMainMenu,
   items: ReadonlyMap<MainMenuButtonId, MainMenuBuilderItem>,
+  customs: ReadonlyMap<string, CustomMenuButtonView>,
 ) {
   return layout.rows.map((row) =>
     row.map((id) => {
       const config = configOf(layout, id);
-      const label = labelOf(id, items.get(id));
+      const label = isCustomMenuRef(id)
+        ? labelOf(id, undefined, customs.get(id))
+        : labelOf(id, items.get(id));
       return {
         key: id,
         label: config.enabled ? label : `${label} (${t('web.bb_state_off')})`,
@@ -47,6 +52,7 @@ export function HistoryDrawer({
   onClose,
   publishedRevision,
   items,
+  customs,
   mayEdit,
   onRestore,
 }: {
@@ -54,6 +60,8 @@ export function HistoryDrawer({
   onClose: () => void;
   publishedRevision: number | null;
   items: ReadonlyMap<MainMenuButtonId, MainMenuBuilderItem>;
+  /** R10 D2: a revision may place a custom button; its label is the owner's. */
+  customs: ReadonlyMap<string, CustomMenuButtonView>;
   mayEdit: boolean;
   onRestore: (revision: MainMenuRevisionView) => void;
 }) {
@@ -113,7 +121,7 @@ export function HistoryDrawer({
               ) : (
                 <>
                   <PreviewKeyboard
-                    rows={arrangedRows(revision.layout, items)}
+                    rows={arrangedRows(revision.layout, items, customs)}
                     label={fill(t('web.bb_revision_n'), { n: revision.revision })}
                   />
                   {mayEdit && (

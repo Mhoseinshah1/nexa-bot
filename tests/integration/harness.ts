@@ -135,6 +135,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        -- Round T: the button builder's draft/published heads and revisions, before the
        -- tenants and admins they name.
        main_menu_layouts, main_menu_revisions,
+       -- R10 D2: the owner's custom main-menu buttons, before the bots and tenants they name.
+       custom_menu_button_bots, custom_menu_buttons, custom_menu_button_media,
        -- R2 and its retention: the Telegram message state and the per-chat purge horizons,
        -- before the bots, payments and tenants they name.
        telegram_message_horizons, telegram_review_messages, telegram_wizards,

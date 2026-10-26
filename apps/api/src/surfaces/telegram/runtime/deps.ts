@@ -68,6 +68,7 @@ import type { TicketCategoryService } from '../../../modules/commerce/tickets/ap
 import type { TicketScreenComposer } from '../../../modules/commerce/tickets/application/ticket-screens.js';
 import type { ClientAppCatalog } from '../../../modules/control/client-apps/application/client-app-catalog.js';
 import type { ClientAppVideoService } from '../../../modules/control/client-apps/application/client-app-video.service.js';
+import type { CustomMenuTap } from '../../../modules/control/bot-menu-builder/application/custom-menu-button-runtime.js';
 import type { MainMenuRoutes } from './intent-of.js';
 
 /** What the runtime needs of the custom-service flow (Package D). */
@@ -545,6 +546,13 @@ export interface BotRuntimeDeps {
   readonly resellers?: Pick<ResellerService, 'standing'>;
   readonly referralGifts?: ReferralGiftSource;
   readonly media?: TenantMediaSource;
+  /**
+   * R10 D2: the answer to a tap on an owner-defined main-menu button, decided from state for
+   * the sending bot. Absent, every such tap is answered as unavailable.
+   */
+  readonly customMenuButtons?: {
+    forTap(scope: TenantContext, id: string, botInstanceId: string): Promise<CustomMenuTap>;
+  };
   /** WP-A7: the customer's support tickets. Absent, the desk is not offered. */
   readonly tickets?: TicketDeskPort;
   /**

@@ -11,6 +11,7 @@ import {
   USAGE_REMINDER_PERCENT_MAX,
   USAGE_REMINDER_PERCENT_MIN,
   clientAppPlatformSchema,
+  customMenuIdOfRoute,
   normalizeReceiptCaption,
   paymentGatewayProviderSchema,
   uuidV7Schema,
@@ -1195,6 +1196,17 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
    * the command literally the same path rather than two that agree today.
    */
   const trimmed = text.trim();
+  /*
+   * R10 D2: an owner-defined button. The label map's VALUE is `mb:<id>` and that is all that
+   * routes it: the typed text is looked up as a LABEL and never read as a value, so a customer
+   * who types `mb:<id>` themselves reaches nothing (and a slash command is never a label).
+   * A registry label wins a collision before this is reached, because `routesFor` never maps
+   * a label that is already a registry one to a custom value.
+   */
+  const customId = trimmed.startsWith('/') ? null : customMenuIdOfRoute(menu.get(trimmed));
+  if (customId !== null) {
+    return { intent: 'CUSTOM_MENU_BUTTON', targetId: customId, callbackQueryId: null };
+  }
   /*
    * A slash command is never a menu label (Codex, PR #111). Since R1 a tenant names its
    * buttons, and a button labelled `/start` would otherwise turn every `/start` — the

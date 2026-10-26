@@ -274,6 +274,13 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: 'web.feature_mini_app_off_effect',
     confirmEnable: null,
   },
+  // R10 D2: owner-defined main-menu buttons. Off hides them; nothing is lost, so it does not ask.
+  custom_menu_buttons: {
+    title: 'web.feature_custom_menu_buttons_title',
+    summary: 'web.feature_custom_menu_buttons_summary',
+    disableEffect: null,
+    confirmEnable: null,
+  },
   // Round 10, D1: off stops every automatic renewal at once; customers who opted in are not renewed.
   service_auto_renew: {
     title: 'web.feature_service_auto_renew_title',

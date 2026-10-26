@@ -530,6 +530,19 @@ export const FEATURE_FLAGS = [
     configuredBy: ['miniapp.init_data_max_age_seconds', 'miniapp.session_ttl_minutes'],
   },
   {
+    key: 'custom_menu_buttons',
+    description:
+      'R10 D2: owner-defined buttons on the customer main menu \u2014 a link that opens a URL, or ' +
+      'a stored text, photo or document the bot sends \u2014 placed through the button builder. ' +
+      'Off by default: no custom button is drawn on any keyboard, a tap on one already sitting in ' +
+      'a chat is answered as unavailable, and the registry buttons are exactly as before. Turning ' +
+      'it off keeps every button and its place in the layout; turning it on again draws them.',
+    defaultEnabled: false,
+    // LOCAL: it adds buttons to the keyboard the operator has just arranged, and nothing else.
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
+  {
     key: 'service_auto_renew',
     description:
       'Round 10, D1: «تمدید خودکار». On, a customer may switch automatic renewal on for one of ' +

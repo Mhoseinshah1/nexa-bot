@@ -5,9 +5,12 @@ import {
   MAIN_MENU_BUTTON_STYLES,
   type AppearanceSlot,
   type AppearanceSlotView,
-  type ExplicitMainMenu,
+  isCustomMenuRef,
+  type AnyExplicitMainMenu,
+  type CustomMenuButtonView,
   type MainMenuBuilderItem,
   type MainMenuButtonId,
+  type MainMenuRowItem,
   type MainMenuButtonStyle,
   type MainMenuGate,
   type MainMenuIconEligibility,
@@ -55,12 +58,15 @@ const GATE_CLOSED: Readonly<Record<MainMenuGate, WebKey>> = {
   TRIAL_OFFER: 'web.bot_buttons_trial_not_offered',
 };
 
-type Op = (layout: ExplicitMainMenu) => ExplicitMainMenu;
+type Op = (layout: AnyExplicitMainMenu) => AnyExplicitMainMenu;
 
 export function Inspector({
   layout,
   id,
   item,
+  custom,
+  shadowed,
+  customMenuEnabled,
   editable,
   iconEligibility,
   appearanceSlots,
@@ -69,9 +75,14 @@ export function Inspector({
   onChange,
   onEditLabel,
 }: {
-  layout: ExplicitMainMenu;
-  id: MainMenuButtonId | null;
+  layout: AnyExplicitMainMenu;
+  id: MainMenuRowItem | null;
   item: MainMenuBuilderItem | undefined;
+  /** R10 D2: the owner's button when `id` is a custom reference. */
+  custom: CustomMenuButtonView | undefined;
+  /** The custom button's label is also a registry button's: only the registry button answers it. */
+  shadowed: boolean;
+  customMenuEnabled: boolean;
   editable: boolean;
   /** Which bots may carry the icon (their appearance test answered `SENT`) — the server's. */
   iconEligibility: readonly MainMenuIconEligibility[];
@@ -79,7 +90,7 @@ export function Inspector({
   appearanceSlots: readonly AppearanceSlotView[] | null;
   mayViewTemplates: boolean;
   /** A placement change: announced with the button's new position. */
-  onMove: (id: MainMenuButtonId, op: Op) => void;
+  onMove: (id: MainMenuRowItem, op: Op) => void;
   /** A configuration change: announced with what changed. */
   onChange: (op: Op, announcement: string) => void;
   onEditLabel: (id: MainMenuButtonId) => void;
@@ -97,8 +108,11 @@ export function Inspector({
     );
   }
   const config = configOf(layout, id);
-  const label = labelOf(id, item);
+  const label = labelOf(id, item, custom);
+  const isCustom = isCustomMenuRef(id);
   const at = positionOf(layout, id);
+  // A custom button is configured only where it is placed (the layout schema's rule).
+  const unplacedCustom = isCustom && at === null;
   const moves = movesFor(layout, id);
   const rowCount = layout.rows.length;
   const chosenRow = targetRow === 'new' || Number(targetRow) < rowCount ? targetRow : 'new';
@@ -232,7 +246,7 @@ export function Inspector({
           <h4 id={`${base}-col-look`} className="bb-insp-col-title">
             {t('web.bx_bb_col_look')}
           </h4>
-          <fieldset className="bb-fieldset" disabled={!editable}>
+          <fieldset className="bb-fieldset" disabled={!editable || unplacedCustom}>
             <legend>{t('web.bb_style_title')}</legend>
             <div className="bb-styles">
               {MAIN_MENU_BUTTON_STYLES.map((style) => (
@@ -258,85 +272,92 @@ export function Inspector({
           </fieldset>
 
           {/* Restored by the owner's 2026-10-05 master prompt (Item 3): optional; no icon is the
-          default (`web.bb_icon_none`), and removing it is choosing no icon again. */}
-          <div className="bb-field" data-testid="bb-icon">
-            <label htmlFor={`${base}-icon`}>{t('web.bb_icon_title')}</label>
-            <span className="muted small">{t('web.bb_optional')}</span>
-            <select
-              id={`${base}-icon`}
-              className="input sm"
-              value={config.iconSlot ?? ''}
-              disabled={!editable}
-              onChange={(event) => {
-                const value = event.target.value;
-                const slot = value === '' ? null : (value as AppearanceSlot);
-                onChange(
-                  (l) => setIconSlot(l, id, slot),
-                  fill(t('web.bb_announce_icon'), {
-                    label,
-                    icon: slot === null ? t('web.bb_icon_none') : t(APPEARANCE_SLOT_LABEL[slot]),
-                  }),
-                );
-              }}
-            >
-              <option value="">{t('web.bb_icon_none')}</option>
-              {APPEARANCE_SLOTS.map((slot) => (
-                <option key={slot} value={slot}>
-                  {APPEARANCE_SLOT_FALLBACKS[slot]} {t(APPEARANCE_SLOT_LABEL[slot])}
-                </option>
-              ))}
-            </select>
-            <p className="muted small">{t('web.bb_icon_hint')}</p>
-            {config.iconSlot !== null && startsWithEmoji(label) && (
-              <Banner tone="warn">
-                <span data-testid="bb-icon-doubled">{t('web.bb_icon_label_has_emoji')}</span>
-              </Banner>
-            )}
-            {config.iconSlot !== null && slotView !== undefined && (
-              <p className="muted small" data-testid="bb-icon-slot-state">
-                {t(
-                  slotView.customEmojiId !== null && slotView.enabled
-                    ? 'web.bb_icon_slot_configured'
-                    : 'web.bb_icon_slot_unconfigured',
+          default (`web.bb_icon_none`), and removing it is choosing no icon again. A custom
+          button (R10 D2) has no icon control: none is offered for it. */}
+          {!isCustom && (
+            <div className="bb-field" data-testid="bb-icon">
+              <label htmlFor={`${base}-icon`}>{t('web.bb_icon_title')}</label>
+              <span className="muted small">{t('web.bb_optional')}</span>
+              <select
+                id={`${base}-icon`}
+                className="input sm"
+                value={config.iconSlot ?? ''}
+                disabled={!editable}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  const slot = value === '' ? null : (value as AppearanceSlot);
+                  onChange(
+                    (l) => setIconSlot(l, id, slot),
+                    fill(t('web.bb_announce_icon'), {
+                      label,
+                      icon: slot === null ? t('web.bb_icon_none') : t(APPEARANCE_SLOT_LABEL[slot]),
+                    }),
+                  );
+                }}
+              >
+                <option value="">{t('web.bb_icon_none')}</option>
+                {APPEARANCE_SLOTS.map((slot) => (
+                  <option key={slot} value={slot}>
+                    {APPEARANCE_SLOT_FALLBACKS[slot]} {t(APPEARANCE_SLOT_LABEL[slot])}
+                  </option>
+                ))}
+              </select>
+              <p className="muted small">{t('web.bb_icon_hint')}</p>
+              {config.iconSlot !== null && startsWithEmoji(label) && (
+                <Banner tone="warn">
+                  <span data-testid="bb-icon-doubled">{t('web.bb_icon_label_has_emoji')}</span>
+                </Banner>
+              )}
+              {config.iconSlot !== null && slotView !== undefined && (
+                <p className="muted small" data-testid="bb-icon-slot-state">
+                  {t(
+                    slotView.customEmojiId !== null && slotView.enabled
+                      ? 'web.bb_icon_slot_configured'
+                      : 'web.bb_icon_slot_unconfigured',
+                  )}
+                </p>
+              )}
+              <div className="bb-eligibility" data-testid="bb-eligibility">
+                <p className="small">{t('web.bb_icon_eligibility')}</p>
+                {iconEligibility.length === 0 ? (
+                  <p className="muted small">{t('web.bot_buttons_no_bots')}</p>
+                ) : (
+                  <ul>
+                    {iconEligibility.map((bot) => (
+                      <li key={bot.botInstanceId}>
+                        <Ltr>@{bot.username}</Ltr>{' '}
+                        <Badge tone={bot.eligible ? 'ok' : 'neutral'}>
+                          {t(bot.eligible ? 'web.bb_icon_eligible' : 'web.bb_icon_not_eligible')}
+                        </Badge>
+                      </li>
+                    ))}
+                  </ul>
                 )}
-              </p>
-            )}
-            <div className="bb-eligibility" data-testid="bb-eligibility">
-              <p className="small">{t('web.bb_icon_eligibility')}</p>
-              {iconEligibility.length === 0 ? (
-                <p className="muted small">{t('web.bot_buttons_no_bots')}</p>
-              ) : (
-                <ul>
-                  {iconEligibility.map((bot) => (
-                    <li key={bot.botInstanceId}>
-                      <Ltr>@{bot.username}</Ltr>{' '}
-                      <Badge tone={bot.eligible ? 'ok' : 'neutral'}>
-                        {t(bot.eligible ? 'web.bb_icon_eligible' : 'web.bb_icon_not_eligible')}
-                      </Badge>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {config.iconSlot !== null && eligibleBots.length === 0 && (
-                <Banner tone="info">{t('web.bb_icon_no_eligible_bot')}</Banner>
-              )}
+                {config.iconSlot !== null && eligibleBots.length === 0 && (
+                  <Banner tone="info">{t('web.bb_icon_no_eligible_bot')}</Banner>
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         <div className="bb-insp-col" role="group" aria-labelledby={`${base}-col-show`}>
           <h4 id={`${base}-col-show`} className="bb-insp-col-title">
             {t('web.bx_bb_col_show')}
           </h4>
-          <dl className="kv bb-kv">
-            <dt>{t('web.bot_buttons_target')}</dt>
-            <dd>
-              <Badge tone="neutral" title={t('web.bot_buttons_target_hint')}>
-                <Ltr>/{item?.target ?? id}</Ltr>
-              </Badge>
-            </dd>
-          </dl>
-          <p className="muted small">{t('web.bot_buttons_target_hint')}</p>
+          {!isCustom && (
+            <>
+              <dl className="kv bb-kv">
+                <dt>{t('web.bot_buttons_target')}</dt>
+                <dd>
+                  <Badge tone="neutral" title={t('web.bot_buttons_target_hint')}>
+                    <Ltr>/{item?.target ?? id}</Ltr>
+                  </Badge>
+                </dd>
+              </dl>
+              <p className="muted small">{t('web.bot_buttons_target_hint')}</p>
+            </>
+          )}
 
           <div className="bb-field">
             <div className="bb-switch-row">
@@ -344,7 +365,7 @@ export function Inspector({
               <Switch
                 checked={config.enabled}
                 label={`${t('web.bb_enabled')}: ${label}`}
-                disabled={!editable}
+                disabled={!editable || unplacedCustom}
                 onChange={(next) =>
                   onChange(
                     (l) => setEnabled(l, id, next),
@@ -355,6 +376,22 @@ export function Inspector({
             </div>
             <p className="muted small">{t('web.bb_enabled_hint')}</p>
           </div>
+
+          {isCustom && (
+            <div className="bb-field" data-testid="bb-custom-note">
+              <p className="muted small">{t('web.bb_custom_inspector_note')}</p>
+              {!customMenuEnabled && (
+                <Banner tone="warn">{t('web.bb_custom_hidden_feature')}</Banner>
+              )}
+              {shadowed && <Banner tone="warn">{t('web.bb_custom_shadowed')}</Banner>}
+              {custom !== undefined && custom.botScope === 'SELECTED' && (
+                <p className="muted small">{t('web.bb_custom_hidden_bots')}</p>
+              )}
+              {custom !== undefined && at === null && (
+                <p className="muted small">{t('web.bb_custom_unplaced_note')}</p>
+              )}
+            </div>
+          )}
 
           {item?.gate !== null && item?.gate !== undefined && (
             <div className="bb-field" data-testid="bb-gate">
@@ -370,28 +407,34 @@ export function Inspector({
             </div>
           )}
 
-          <div className="bb-field" data-testid="bb-label">
-            <p className="small strong">{t('web.bb_label_title')}</p>
-            <p>{label}</p>
-            {item?.labelOverridden === true && (
-              <p className="muted small">
-                {t('web.bot_buttons_label_default')} {item.defaultLabel}
-              </p>
-            )}
-            {item?.duplicateLabel === true && (
-              <Banner tone="warn">{t('web.bot_buttons_label_duplicate')}</Banner>
-            )}
-            {item?.slashLabel === true && <Banner tone="warn">{t('web.bb_label_slash')}</Banner>}
-            <p className="muted small">{t('web.bb_label_note')}</p>
-            {mayViewTemplates ? (
-              <button type="button" className="btn sm" onClick={() => onEditLabel(id)}>
-                <Icon name="edit" />
-                {t('web.bb_label_edit')}
-              </button>
-            ) : (
-              <p className="muted small">{t('web.bot_buttons_labels_denied')}</p>
-            )}
-          </div>
+          {!isCustom && (
+            <div className="bb-field" data-testid="bb-label">
+              <p className="small strong">{t('web.bb_label_title')}</p>
+              <p>{label}</p>
+              {item?.labelOverridden === true && (
+                <p className="muted small">
+                  {t('web.bot_buttons_label_default')} {item.defaultLabel}
+                </p>
+              )}
+              {item?.duplicateLabel === true && (
+                <Banner tone="warn">{t('web.bot_buttons_label_duplicate')}</Banner>
+              )}
+              {item?.slashLabel === true && <Banner tone="warn">{t('web.bb_label_slash')}</Banner>}
+              <p className="muted small">{t('web.bb_label_note')}</p>
+              {mayViewTemplates ? (
+                <button
+                  type="button"
+                  className="btn sm"
+                  onClick={() => onEditLabel(id as MainMenuButtonId)}
+                >
+                  <Icon name="edit" />
+                  {t('web.bb_label_edit')}
+                </button>
+              ) : (
+                <p className="muted small">{t('web.bot_buttons_labels_denied')}</p>
+              )}
+            </div>
+          )}
 
           <Disclosure summary={t('web.bb_advanced')} size="sm">
             <p className="muted small">
