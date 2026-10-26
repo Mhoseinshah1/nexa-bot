@@ -8,7 +8,7 @@ import {
   CUSTOM_ERROR_CODE_PATTERN,
   CUSTOM_GATEWAY_CLOCK_WARNING_SECONDS,
   CUSTOM_GATEWAY_CONFIGURATION_ERRORS,
-  CUSTOM_GATEWAY_ERROR_CODES,
+  CUSTOM_GATEWAY_PROVIDER_ERRORS,
   CUSTOM_GATEWAY_HEADERS,
   CUSTOM_GATEWAY_PATHS,
   CUSTOM_GATEWAY_PROTOCOL,
@@ -90,7 +90,7 @@ function errorCodeOf(body: unknown): CustomGatewayErrorCode | null {
   const error = asObject(asObject(body)?.['error']);
   const value = error?.['code'];
   if (typeof value !== 'string' || !CUSTOM_ERROR_CODE_PATTERN.test(value)) return null;
-  return (CUSTOM_GATEWAY_ERROR_CODES as readonly string[]).includes(value)
+  return (CUSTOM_GATEWAY_PROVIDER_ERRORS as readonly string[]).includes(value)
     ? (value as CustomGatewayErrorCode)
     : 'UNKNOWN_CODE';
 }

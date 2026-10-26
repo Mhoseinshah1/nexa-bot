@@ -131,6 +131,8 @@ export const CUSTOM_CODE_PREFIX = 'custom.';
 /**
  * Protocol §8: the error codes a bridge may answer with, and Nexa's own names for what it read
  * (`custom.<NAME>`). Never a bridge's free-text `message`: that is neither stored nor shown.
+ * Named `..._PROVIDER_ERRORS` like TetraPay's and Rialit's: a bridge's words stored on an attempt
+ * and labelled through `PROVIDER_CODE_LABELS`, not error codes this API raises.
  *
  * Nexa's own:
  * - `UNKNOWN_CODE` — an error `code` this list does not name; read by its HTTP status.
@@ -145,7 +147,7 @@ export const CUSTOM_CODE_PREFIX = 'custom.';
  * - `ENDPOINT_MISSING` — the attempt carries no base URL (never sent).
  * - `CLOCK_SKEW` — a ping that passed while the bridge's clock is more than a minute off.
  */
-export const CUSTOM_GATEWAY_ERROR_CODES = [
+export const CUSTOM_GATEWAY_PROVIDER_ERRORS = [
   'BAD_REQUEST',
   'SIGNATURE_INVALID',
   'TIMESTAMP_OUT_OF_WINDOW',
@@ -172,7 +174,7 @@ export const CUSTOM_GATEWAY_ERROR_CODES = [
   'ENDPOINT_MISSING',
   'CLOCK_SKEW',
 ] as const;
-export type CustomGatewayErrorCode = (typeof CUSTOM_GATEWAY_ERROR_CODES)[number];
+export type CustomGatewayErrorCode = (typeof CUSTOM_GATEWAY_PROVIDER_ERRORS)[number];
 
 /**
  * The codes that describe the OPERATOR's configuration (the bridge, its secret, its account),
