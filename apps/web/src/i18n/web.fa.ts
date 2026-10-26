@@ -10275,6 +10275,26 @@ export const WEB_FA = {
   'web.err_control_template_not_overridden': 'این قالب تغییری ندارد که برگردانده شود.',
   'web.err_control_unknown_key': 'این تنظیم شناخته نیست. صفحه را تازه کنید.',
   'web.err_direct_message_body_invalid': 'متن پیام درست نیست.',
+  'web.err_custom_menu_button_archived_in_layout':
+    'چیدمان شامل دکمه‌ای است که پاک‌شده یا وجود ندارد. آن دکمه را از چیدمان بردارید و دوباره ذخیره یا منتشر کنید.',
+  'web.err_custom_menu_button_bot_invalid':
+    'یکی از ربات‌های انتخاب‌شده متعلق به این فروشگاه نیست. فهرست ربات‌ها را دوباره باز کنید.',
+  'web.err_custom_menu_button_content_invalid':
+    'متن یا توضیح دکمه خالی است یا از حد مجاز بلندتر است. متن دکمهٔ متنی تا ۴۰۹۶ نویسه و توضیح عکس یا فایل تا ۱۰۲۴ نویسه است.',
+  'web.err_custom_menu_button_file_refused':
+    'این فایل پذیرفته نشد. عکس باید JPEG یا PNG تا ۵ مگابایت باشد؛ فایل باید PDF تا ۱۰ مگابایت یا متن ساده تا ۱ مگابایت باشد.',
+  'web.err_custom_menu_button_label_invalid':
+    'نام دکمه معتبر نیست. نام باید یک خط، بین ۱ تا ۶۴ نویسه و بدون «/» در ابتدا باشد.',
+  'web.err_custom_menu_button_label_taken':
+    'این نام قبلاً برای یک دکمهٔ دیگر منوی اصلی استفاده شده است. نام دیگری انتخاب کنید.',
+  'web.err_custom_menu_button_limit_reached':
+    'به حداکثر تعداد دکمهٔ دلخواه (۲۰ دکمه) رسیده‌اید. اول یکی از دکمه‌های قدیمی را حذف کنید.',
+  'web.err_custom_menu_button_storage_full':
+    'فضای فایل‌های دکمه‌های دلخواه پر است (۵۰ مگابایت). یک دکمهٔ فایل‌دار را حذف کنید و دوباره امتحان کنید.',
+  'web.err_custom_menu_button_unknown_button':
+    'این دکمه پیدا نشد یا قبلاً حذف شده است. صفحه را دوباره باز کنید.',
+  'web.err_custom_menu_button_url_invalid':
+    'نشانی لینک معتبر نیست. باید با https:// شروع شود و نام یک سایت باشد؛ آدرس IP، نام کاربری و رمز در نشانی و http:// پذیرفته نیست.',
   'web.err_direct_message_file_refused': 'این فایل پذیرفته نشد. نوع و اندازهٔ فایل را بررسی کنید.',
   'web.err_direct_message_file_storage_full': 'فضای ذخیرهٔ فایل پر است.',
   'web.err_direct_message_rate_limited': 'پیام‌ها زیاد شد. کمی بعد دوباره بفرستید.',
