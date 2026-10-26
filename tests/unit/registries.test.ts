@@ -299,6 +299,10 @@ describe('the feature flag registry', () => {
       // the Stars route and the FX section it switches on are reachable, and every
       // existing route keeps pricing exactly as before until an operator switches a mode.
       'central_fx',
+      // R10 C2. Off by default; creating a `custom` (bridge-protocol) panel is refused and
+      // the type is hidden from the panel form while it is off. Custom panels that already
+      // exist keep operating either way.
+      'custom_panel_provider',
       // Package D. Off by default; the custom-service button, the typed volume and days and
       // the draft it switches on are reachable, and confirmation refuses while it is off.
       'custom_service',
