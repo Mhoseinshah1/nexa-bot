@@ -965,6 +965,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.expiry_day':
     '{icon:warning} اعتبار سرویس «{service}» به‌زودی، در {expiresAt}، به پایان می‌رسد.\n' +
     'برای جلوگیری از قطع شدن، همین حالا از بخش «سرویس‌های من» تمدید کنید.',
+  /* Round 10, D1: the two notices of automatic renewal. */
+  'bot.service.auto_renew_funds_short':
+    '{icon:warning} تمدید خودکار سرویس «{service}» انجام نشد، چون موجودی کیف پول برای مبلغ تمدید ({price}) کافی نیست.\n' +
+    'مبلغی از حساب شما کسر نشده است. اگر پیش از پایان اعتبار ({expiresAt}) کیف پول را شارژ کنید، سرویس به‌طور خودکار تمدید می‌شود.',
+  'bot.service.auto_renew_price_changed':
+    '{icon:warning} تمدید خودکار سرویس «{service}» انجام نشد، چون مبلغ تمدید ({price}) از مبلغی که هنگام فعال‌سازی پذیرفته بودید ({consented}) بیشتر شده است.\n' +
+    'مبلغی از حساب شما کسر نشده است. می‌توانید از بخش «سرویس‌های من» سرویس را تمدید کنید و تمدید خودکار را دوباره فعال کنید.',
   'bot.service.provision_delayed':
     'ساخت سرویس کامل نشد و موضوع به پشتیبانی اطلاع داده شد. لطفاً منتظر پیگیری بمانید.',
   'bot.service.renew_button': '💊 تمدید سرویس',

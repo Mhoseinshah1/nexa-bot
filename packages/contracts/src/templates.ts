@@ -6567,6 +6567,75 @@ export const TEMPLATES = [
     ],
   },
   /*
+   * Round 10, D1: the two notices of automatic renewal. Their values are read at send time
+   * from the `service_auto_renew_runs` row the notification names (ADR 0030 \u00a71).
+   */
+  {
+    key: 'bot.service.auto_renew_funds_short',
+    description:
+      'Round 10, D1: sent at most once per service per period when automatic renewal found the ' +
+      'wallet short of the renewal total. Nothing was charged and no order was left waiting; ' +
+      'the service is renewed automatically if the wallet is topped up before the deadline. ' +
+      'Superseded unsent if the period was renewed meanwhile, automatic renewal was switched ' +
+      'off, or the wallet now covers it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'price',
+        type: 'MONEY',
+        description: 'The renewal total quoted when the run was made.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'The deadline the renewal was for.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.auto_renew_price_changed',
+    description:
+      'Round 10, D1: sent once when automatic renewal did not renew a service because its ' +
+      'renewal now costs more than the total the customer agreed to when switching it on. ' +
+      'Nothing was charged; the customer may renew by hand and switch automatic renewal on ' +
+      'again at the new price.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'price',
+        type: 'MONEY',
+        description: 'The renewal total quoted now.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'consented',
+        type: 'MONEY',
+        description: 'The renewal total the customer agreed to when switching it on.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  /*
    * WP-A9: the wallet low-balance alert and the two pending-payment reminders. Their values
    * are read at send time from the subject (a reader, not a payload \u2014 ADR 0030 \u00a71).
    */
