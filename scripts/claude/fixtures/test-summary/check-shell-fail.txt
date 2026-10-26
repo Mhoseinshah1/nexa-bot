@@ -1,0 +1,12 @@
+
+> nexa-bot@0.0.0 check:shell /repo
+> bash scripts/check-shell.sh
+
+ok    9 privileged scripts clean at shellcheck info
+
+In scripts/claude/foo.sh line 4:
+x=$(date)
+^-- SC2034 (warning): x appears unused. Verify use (or export if used externally).
+
+FAIL  a helper script has findings at WARNING or above.
+ ELIFECYCLE  Command failed with exit code 1.

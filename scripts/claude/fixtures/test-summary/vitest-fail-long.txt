@@ -1,0 +1,102 @@
+
+> nexa-bot@0.0.0 test /repo
+> vitest run
+
+
+ RUN  v4.1.11 /repo
+
+ ✓ |unit| tests/unit/money.test.ts (12 tests) 8ms
+ [31m❯[39m |unit| tests/unit/wallet.test.ts [2m(3 tests | 1 failed)[22m 9ms
+       × adds 11ms
+ ❯ |web| tests/web/payment-gateways.test.tsx (9 tests | 1 failed | 1 skipped) 412ms
+       × hides the secret field 30ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ [41m[1m FAIL [22m[49m |unit| tests/unit/wallet.test.ts > wallet > debit > never overdraws
+[31m[1mAssertionError[22m: expected 1n to be 2n // Object.is equality[39m
+
+- Expected
++ Received
+
+- 2n
++ 1n
+
+ ❯ tests/unit/wallet.test.ts:42:19
+     41|   line 1 of the code frame
+     42|   line 2 of the code frame
+     43|   line 3 of the code frame
+     44|   line 4 of the code frame
+     45|   line 5 of the code frame
+     46|   line 6 of the code frame
+     47|   line 7 of the code frame
+ ❯ node_modules/vitest/dist/chunk-1.js:10:5
+ ❯ node_modules/vitest/dist/chunk-2.js:20:5
+ ❯ node_modules/vitest/dist/chunk-3.js:30:5
+ ❯ node_modules/vitest/dist/chunk-4.js:40:5
+ ❯ node_modules/vitest/dist/chunk-5.js:50:5
+ ❯ node_modules/vitest/dist/chunk-6.js:60:5
+ ❯ node_modules/vitest/dist/chunk-7.js:70:5
+ ❯ node_modules/vitest/dist/chunk-8.js:80:5
+ ❯ node_modules/vitest/dist/chunk-9.js:90:5
+ ❯ node_modules/vitest/dist/chunk-10.js:100:5
+ ❯ node_modules/vitest/dist/chunk-11.js:110:5
+ ❯ node_modules/vitest/dist/chunk-12.js:120:5
+ ❯ node_modules/vitest/dist/chunk-13.js:130:5
+ ❯ node_modules/vitest/dist/chunk-14.js:140:5
+ ❯ node_modules/vitest/dist/chunk-15.js:150:5
+ ❯ node_modules/vitest/dist/chunk-16.js:160:5
+ ❯ node_modules/vitest/dist/chunk-17.js:170:5
+ ❯ node_modules/vitest/dist/chunk-18.js:180:5
+ ❯ node_modules/vitest/dist/chunk-19.js:190:5
+ ❯ node_modules/vitest/dist/chunk-20.js:200:5
+ ❯ node_modules/vitest/dist/chunk-21.js:210:5
+ ❯ node_modules/vitest/dist/chunk-22.js:220:5
+ ❯ node_modules/vitest/dist/chunk-23.js:230:5
+ ❯ node_modules/vitest/dist/chunk-24.js:240:5
+ ❯ node_modules/vitest/dist/chunk-25.js:250:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  |web| tests/web/payment-gateways.test.tsx > payment gateways > hides the secret field
+TestingLibraryElementError: Unable to find an element with the role "textbox"
+    stack detail line 1
+    stack detail line 2
+    stack detail line 3
+    stack detail line 4
+    stack detail line 5
+    stack detail line 6
+    stack detail line 7
+    stack detail line 8
+    stack detail line 9
+    stack detail line 10
+    stack detail line 11
+    stack detail line 12
+    stack detail line 13
+    stack detail line 14
+    stack detail line 15
+    stack detail line 16
+    stack detail line 17
+    stack detail line 18
+    stack detail line 19
+    stack detail line 20
+    stack detail line 21
+    stack detail line 22
+    stack detail line 23
+    stack detail line 24
+    stack detail line 25
+    stack detail line 26
+    stack detail line 27
+    stack detail line 28
+    stack detail line 29
+    stack detail line 30
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  2 failed | 1 passed (3)
+      Tests  2 failed | 10 passed | 3 skipped (15)
+   Start at  03:25:14
+   Duration  255ms
+
+ ELIFECYCLE  Command failed with exit code 1.
