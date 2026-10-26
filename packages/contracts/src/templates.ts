@@ -8472,7 +8472,10 @@ export const TEMPLATES = [
       {
         token: 'discountLine',
         type: 'STRING',
-        description: 'Rendered `bot.order.preinvoice_discount_line`, when a discount applies.',
+        description:
+          'Rendered `bot.order.preinvoice_discount_line`, when a discount applies — or ' +
+          '`bot.order.preinvoice_personal_discount_line` when the discount is the customer’s ' +
+          'personal discount (R10 D3).',
         required: false,
         repeatable: false,
       },
@@ -8713,6 +8716,38 @@ export const TEMPLATES = [
         token: 'subtotal',
         type: 'MONEY',
         description: 'The price before the discount.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.order.preinvoice_personal_discount_line',
+    description:
+      'R10 D3: the pre-invoice line when the order is priced with the customer’s personal ' +
+      'discount — its percent, what it took off and the list price it was taken from. ' +
+      'Shown INSTEAD of the generic discount line, never with it: a personal discount is ' +
+      'never combined with another discount.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'percent',
+        type: 'NUMBER',
+        description: 'The personal discount percent, 1 to 100.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'discount',
+        type: 'MONEY',
+        description: 'The amount taken off.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'subtotal',
+        type: 'MONEY',
+        description: 'The list price the percent was taken from.',
         required: true,
         repeatable: false,
       },

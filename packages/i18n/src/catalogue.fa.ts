@@ -1217,6 +1217,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.order.preinvoice_locations': '{icon:location} لوکیشن‌های محصول:\n{lines}',
   'bot.order.preinvoice_features': '{lines}',
   'bot.order.preinvoice_discount_line': '🏷 تخفیف: {discount} (قیمت پیش از تخفیف: {subtotal})',
+  'bot.order.preinvoice_personal_discount_line':
+    '🏷 تخفیف شخصی شما ({percent}٪): {discount} (قیمت پیش از تخفیف: {subtotal})',
   'bot.order.preinvoice_cashback_line': '{icon:referral} کش‌بک این سفارش پس از تحویل: {cashback}',
   'bot.payment.gateway_button': '💳 پرداخت با درگاه',
   'bot.payment.gateway_choose': '{icon:payment} درگاه پرداخت خود را انتخاب کنید:',
