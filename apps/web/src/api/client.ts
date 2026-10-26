@@ -2634,6 +2634,11 @@ export function createPanel(input: {
   providerType: ProviderType;
   baseUrl: string;
   credentials?: PanelCredentialsInput;
+  /**
+   * The provider's own configuration, which the create already accepts (R10 C2: the
+   * custom bridge's optional timeout is offered on the create form).
+   */
+  activation?: Record<string, unknown>;
   /** Absent means the defaults: both modes, and the derived generator. */
   usernamePolicy?: PanelUsernamePolicyInput;
   idempotencyKey: string;

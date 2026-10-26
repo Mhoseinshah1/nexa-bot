@@ -1809,6 +1809,18 @@ export const WEB_FA = {
   'web.panel_credential_shape': 'شکل اعتبارنامه',
   'web.panel_activation_fields': 'فیلدهای لازم برای فعال‌سازی',
   'web.api_token': 'توکن API',
+  // --- Custom panel (R10 C2): the bridge's shared signing secret and its timeout ---
+  'web.api_token_signing': 'کلید مشترک امضا',
+  'web.api_token_signing_hint':
+    'کلیدی که پل و Nexa هر درخواست و پاسخ را با آن امضا می‌کنند. هرگز فرستاده یا دوباره نمایش داده نمی‌شود. کمترین طول (نویسه):',
+  'web.panel_base_url_https_hint': 'فقط نشانی https پذیرفته می‌شود، همراه با مسیر پایه اگر دارد.',
+  'web.panel_request_timeout': 'مهلت پاسخ (ثانیه)',
+  'web.panel_request_timeout_hint':
+    'اختیاری، از ۱ تا ۳۰ ثانیه. هرگز بیشتر از مهلت کلی این نصب منتظر نمی‌ماند؛ کمتر از ۵ ثانیه ممکن است پاسخ‌های کُند را «نامعلوم» کند.',
+  'web.flag_custom_panel_provider': 'پنل اختصاصی (پل Nexa)',
+  'web.feature_custom_panel_provider_title': 'پنل اختصاصی (پل Nexa)',
+  'web.feature_custom_panel_provider_summary':
+    'افزودن پنلی که Nexa مستقیماً پشتیبانی نمی‌کند، از راه یک «پل» که پروتکل امضاشدهٔ Nexa را پیاده می‌کند. هنوز با هیچ پل واقعی آزموده نشده است. خاموش‌کردن فقط افزودن پنل تازه از این نوع را متوقف می‌کند؛ پنل‌های موجود و سرویس‌هایشان به کار ادامه می‌دهند.',
   'web.api_token_hint':
     'برای دسترسی بدون دخالت انسان، توکن بر گذرواژه ترجیح دارد: پنلی که کد دومرحله‌ای می‌خواهد با گذرواژه قابل استفاده نیست.',
   'web.capability': 'قابلیت',
@@ -10445,6 +10457,8 @@ export const WEB_FA = {
   'web.err_panel_capability_unsupported': 'این پنل این کار را پشتیبانی نمی‌کند.',
   'web.err_panel_configuration_changed':
     'پیکربندی پنل در همین فاصله تغییر کرده است. صفحه را تازه کنید.',
+  'web.err_panel_credential_too_short':
+    'کلید وارد‌شده کوتاه‌تر از کمترین طولی است که این نوع پنل می‌پذیرد.',
   'web.err_panel_credential_unsupported': 'این نوع اطلاعات ورود برای این پنل پشتیبانی نمی‌شود.',
   'web.err_panel_credentials_missing': 'اطلاعات ورود پنل وارد نشده است.',
   'web.err_panel_delivery_tutorial_stale':
@@ -10456,6 +10470,8 @@ export const WEB_FA = {
   'web.err_panel_policy_capability_unsupported': 'این پنل از این قابلیت پشتیبانی نمی‌کند.',
   'web.err_panel_policy_stale': 'سیاست پنل در همین فاصله تغییر کرده است. صفحه را تازه کنید.',
   'web.err_panel_probe_limited': 'آزمون‌های اتصال زیاد شد. کمی بعد دوباره تلاش کنید.',
+  'web.err_panel_provider_feature_disabled':
+    'افزودن این نوع پنل خاموش است. نخست قابلیت «پنل اختصاصی (پل Nexa)» را در بخش قابلیت‌ها روشن کنید.',
   'web.err_panel_provider_type_unsupported': 'این نوع پنل پشتیبانی نمی‌شود.',
   'web.err_panel_request_invalid': 'بعضی از مقدارهای پنل درست نیست. فرم را بررسی کنید.',
   'web.err_panel_target_blocked': 'این نشانی برای پنل مجاز نیست.',

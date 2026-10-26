@@ -253,6 +253,8 @@ const FLAG_LABELS: Readonly<Record<string, WebKey>> = {
   referral_signup_gift: 'web.flag_referral_signup_gift',
   custom_service: 'web.flag_custom_service',
   panel_auto_balancing: 'web.flag_panel_auto_balancing',
+  // R10 C2.
+  custom_panel_provider: 'web.flag_custom_panel_provider',
 };
 
 /**

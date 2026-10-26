@@ -299,6 +299,10 @@ describe('the feature flag registry', () => {
       // the Stars route and the FX section it switches on are reachable, and every
       // existing route keeps pricing exactly as before until an operator switches a mode.
       'central_fx',
+      // R10 C2. Off by default; creating a `custom` (bridge-protocol) panel is refused and
+      // the type is hidden from the panel form while it is off. Custom panels that already
+      // exist keep operating either way.
+      'custom_panel_provider',
       // Package D. Off by default; the custom-service button, the typed volume and days and
       // the draft it switches on are reachable, and confirmation refuses while it is off.
       'custom_service',
@@ -384,7 +388,12 @@ describe('the provider registry', () => {
     // when a registration disappears, which is the failure this exists to
     // catch; and it passes when one appears, which should be a deliberate
     // edit here rather than a silent widening of what operators can configure.
-    expect([...IMPLEMENTED_PROVIDER_TYPES].sort()).toEqual(['marzban', 'rickpanel', 'sanaei']);
+    expect([...IMPLEMENTED_PROVIDER_TYPES].sort()).toEqual([
+      'custom',
+      'marzban',
+      'rickpanel',
+      'sanaei',
+    ]);
   });
 
   it('resolves every implemented type to an adapter that declares that type', () => {
@@ -519,6 +528,30 @@ describe('the provider registry', () => {
         'READ_USAGE',
         'DELIVER_SUBSCRIPTION_LINK',
         'LIMIT_DEVICES',
+      ],
+      /*
+       * R10 C2: Nexa's own bridge protocol. The second deliberate exception to the
+       * real-panel rule, recorded as `OQ-C2-02`: what backs these twelve is Nexa's own
+       * specification (`docs/protocols/custom-panel.md`) and a contract test of every
+       * operation and failure mode against a mock bridge that enforces it — not a real
+       * bridge. That is why the type ships behind `custom_panel_provider`, off by default.
+       * `LIMIT_DEVICES` because the create carries the order's device limit and the
+       * protocol requires the bridge to enforce it or refuse; no `SUBSCRIPTION_FILES` and
+       * no `DELIVER_RAW_CONFIGS` (`links` is specified and not yet called, `OQ-C2-06`).
+       */
+      custom: [
+        'HEALTH_CHECK',
+        'CREATE_USER',
+        'READ_USAGE',
+        'DELIVER_SUBSCRIPTION_LINK',
+        'LIMIT_DEVICES',
+        'DISABLE_USER',
+        'ENABLE_USER',
+        'DELETE_USER',
+        'RENEW_USER',
+        'ADD_VOLUME',
+        'ADD_TIME',
+        'ROTATE_SUBSCRIPTION_LINK',
       ],
     };
 

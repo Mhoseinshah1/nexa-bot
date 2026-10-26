@@ -119,6 +119,50 @@ Four more from Phase 3C:
   budget are conditional writes; **two monitor replicas are the normal case**,
   briefly, on every rolling update.
 
+### The custom panel — Nexa's own bridge protocol (R10 C2)
+
+**Built, behind `custom_panel_provider` (OFF by default), and NOT accepted against a real
+bridge.** The specification is `docs/protocols/custom-panel.md` (v1); the adapter is
+`providers/infrastructure/custom-panel.adapter.ts`. Owner's spec: Nexa's OWN protocol (not
+MirzaBot-compatible), JSON over HTTPS, requests signed with a per-panel secret and a
+timestamp; create, get (traffic used/limit, expiry, status, last connection), renew / add
+traffic / add time, change link, enable / disable / delete, connection links, health; a
+`custom` member of `PROVIDER_TYPES` wired into provisioning, the live check, the monitor and
+the capacity and health views like the other three; Web Admin to add one (base URL, secret,
+timeout) and test it; Persian errors only; the existing service-created logs.
+
+Lead decisions (R10 C2), binding:
+
+- **Only a signed answer can say yes, absent or refused.** Every bridge response is signed
+  over its status, the request's nonce and its body hash. An unsigned or wrongly signed 404 is
+  a malformed answer, never "account not found" — a wrong base URL must not license a second
+  create. An unknown error code, or a known one under the wrong status, is `PROVIDER_ERROR`
+  (UNKNOWN for a create), never `PROVIDER_REFUSED` (which refunds).
+- **Idempotency on Nexa's operation id, binding on `nexaRef`.** Every write carries
+  `operationId` (the provisioning operation's id, the same on every attempt) and `nexaRef`
+  (the service's stored `clientId`); the bridge refuses a write on an account bound to
+  another ref. A write without an operation id is refused before it is sent. A lookup whose
+  `nexaRef` is not this service's is a refusal — neither found nor absent.
+- **Absolute allowance targets.** Renew, add traffic and add time are one call carrying the
+  targets; an omitted field is unchanged.
+- **Descriptor-gated, no provider-type branches.** The flag, https-only and the 32-character
+  minimum secret are declared on the descriptor (`requiresFeature`, `transport`,
+  `minimumApiTokenLength`) and enforced generically by the panel service. The secret lives in
+  the existing encrypted API-token column, one way. A per-panel timeout may only LOWER the
+  installation's `PANEL_HTTP_TIMEOUT_MS` (`SafeHttpClient.forBase` takes the minimum).
+- **No auto-adoption after a lost create (C2-b not built).** A create whose answer was lost
+  and whose account a read then finds bound to the service waits for an operator
+  (`provisioning.stalled`, `FOUND_WITHOUT_PROVENANCE`), exactly as on RickPanel. Adopting it
+  by its binding is `OQ-C2-01`, the owner's call.
+- **Turning the flag off blocks creating NEW custom panels only** (and hides the type from
+  the form). Existing custom panels keep being edited, tested, re-keyed, sold onto and
+  operated: their services were paid for.
+- **Declared without a real-bridge acceptance** — the second recorded deviation from
+  declare-after-acceptance (RickPanel's is the first): the capabilities rest on Nexa's own
+  specification and a contract test of every operation and failure mode against a mock
+  bridge that enforces it. The protocol document's §12 is the acceptance run the first real
+  bridge must pass before the flag is turned on in production (`OQ-C2-02`).
+
 ## Pricing, referral and resellers
 
 **Discounts and cashback are built (WP8, `docs/wp8-pricing-audit.md`), and so

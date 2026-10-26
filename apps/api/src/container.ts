@@ -4255,6 +4255,8 @@ export function createContainer(
     serviceAdapterExists: (providerType) =>
       SERVICE_PROVIDER_TYPES.includes(providerType as (typeof SERVICE_PROVIDER_TYPES)[number]),
     cadence: probeCore.cadence,
+    // R10 C2: a provider descriptor's `requiresFeature`, read inside the create.
+    features: featureFlagResolver,
   });
 
   /*

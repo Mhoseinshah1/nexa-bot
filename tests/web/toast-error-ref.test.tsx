@@ -58,7 +58,8 @@ const passesError = (call: string) => /[{,]\s*error(?:\s*[,}]|\s*:)/.test(call);
 const NOT_FROM_AN_API_ERROR: Readonly<Record<string, { count: number; reason: string }>> = {
   'apps/web/src/ui/kit.tsx': { count: 2, reason: 'the browser refused the clipboard' },
   'apps/web/src/pages/panels.tsx': {
-    count: 3,
+    // R10 C2: the fourth is the custom bridge's timeout, refused before the create is sent.
+    count: 4,
     reason: 'a form check that refuses before any request is sent',
   },
   'apps/web/src/pages/service-refund-requests.tsx': {

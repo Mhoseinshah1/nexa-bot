@@ -340,7 +340,9 @@ export class MockCustomBridge {
           ? ''
           : request.body.kind === 'json'
             ? JSON.stringify(request.body.value)
-            : new URLSearchParams(request.body.value).toString();
+            : request.body.kind === 'json-text'
+              ? request.body.text
+              : new URLSearchParams(request.body.value).toString();
       const headers: Record<string, string> = {};
       for (const [key, value] of Object.entries(request.headers ?? {})) {
         headers[key.toLowerCase()] = value;
