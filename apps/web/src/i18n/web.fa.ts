@@ -4699,6 +4699,7 @@ export const WEB_FA = {
   'web.ib_group_apps': 'برنامه‌ها و آموزش اتصال',
   'web.ib_group_channels': 'کانال‌های الزامی',
   'web.ib_group_terms': 'قوانین و مقررات',
+  'web.ib_group_captcha': 'سؤال امنیتی شروع',
   'web.ib_button_main_menu': 'بازگشت به منوی اصلی (همهٔ صفحه‌ها)',
   'web.ib_button_list_close': 'بستن فهرست روش‌های پرداخت و مبلغ شارژ',
   'web.ib_button_wallet_open': 'کیف پول (زیر پیام شارژ کیف پول)',
@@ -4818,6 +4819,7 @@ export const WEB_FA = {
   'web.ib_button_channels_join_private': 'عضویت در کانال خصوصی',
   'web.ib_button_channels_check': 'بررسی عضویت',
   'web.ib_button_terms_accept': 'پذیرش قوانین',
+  'web.ib_button_captcha_option': 'گزینهٔ پاسخ سؤال امنیتی',
   'web.setting_bot_main_menu_desc':
     'ترتیب و نمایش دکمه‌های منوی اصلی ربات؛ در صفحهٔ «دکمه‌های ربات» ویرایش می‌شود.',
   // Round P: target, appearance slot, the Telegram command menu and its sync per bot.

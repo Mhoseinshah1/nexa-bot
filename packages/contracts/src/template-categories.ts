@@ -65,7 +65,16 @@ export function isTemplateCategory(value: string): value is TemplateCategory {
  * `startsWith`; a narrower prefix in another category wins over a wider one here.
  */
 export const TEMPLATE_CATEGORY_PREFIXES: Readonly<Record<TemplateCategory, readonly string[]>> = {
-  general: ['bot.start.', 'bot.menu.', 'bot.command.', 'bot.help', 'bot.ping.', 'bot.appearance.'],
+  general: [
+    'bot.start.',
+    'bot.menu.',
+    'bot.command.',
+    'bot.help',
+    'bot.ping.',
+    'bot.appearance.',
+    // R10 D5: the /start captcha, the first thing a new customer may meet.
+    'bot.captcha.',
+  ],
   purchase: ['bot.catalog.', 'bot.order.', 'bot.username.', 'bot.discount.', 'bot.custom_service.'],
   payment: ['bot.payment.', 'bot.refund.'],
   wallet: ['bot.wallet.'],

@@ -1072,6 +1072,124 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  /*
+   * R10 D5 (a): the `/start` captcha for a NEW customer while `start_captcha` is on. The
+   * question is a sum of two digits; the four answers are the inline buttons under it, and
+   * the right one is known only to the server. No reply here may say the customer is
+   * blocked: a failure costs an attempt and, at the limit, a cooldown, never a block.
+   */
+  {
+    key: 'bot.captcha.challenge',
+    description:
+      'R10 D5: the question a new customer answers before the bot serves them — `first + ' +
+      'second` — with the four answer buttons under it. Sent instead of whatever they asked ' +
+      'for; it must not say that action was performed.',
+    format: 'PLAIN_TEXT',
+    digits: 'PERSIAN',
+    placeholders: [
+      {
+        token: 'first',
+        type: 'NUMBER',
+        description: 'The first number of the sum, 1 to 9.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'second',
+        type: 'NUMBER',
+        description: 'The second number of the sum, 1 to 9.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.captcha.wrong',
+    description:
+      'R10 D5: a wrong answer. The question message is edited into this: how many answers ' +
+      'are left before a cooldown, and a NEW question with its own four buttons.',
+    format: 'PLAIN_TEXT',
+    digits: 'PERSIAN',
+    placeholders: [
+      {
+        token: 'remaining',
+        type: 'NUMBER',
+        description: 'Wrong answers still allowed before the cooldown, at least 1.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'first',
+        type: 'NUMBER',
+        description: 'The new question’s first number.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'second',
+        type: 'NUMBER',
+        description: 'The new question’s second number.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.captcha.expired',
+    description:
+      'R10 D5: an answer to a question whose time ran out. Not counted as a wrong answer; ' +
+      'the message is edited into a NEW question with its own four buttons.',
+    format: 'PLAIN_TEXT',
+    digits: 'PERSIAN',
+    placeholders: [
+      {
+        token: 'first',
+        type: 'NUMBER',
+        description: 'The new question’s first number.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'second',
+        type: 'NUMBER',
+        description: 'The new question’s second number.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.captcha.locked',
+    description:
+      'R10 D5: the answers ran out. The customer waits this many minutes and then sends ' +
+      '/start again for a new question. It must not say the account is blocked: it is not.',
+    format: 'PLAIN_TEXT',
+    digits: 'PERSIAN',
+    placeholders: [
+      {
+        token: 'minutes',
+        type: 'NUMBER',
+        description: 'Whole minutes left in the cooldown, rounded up, at least 1.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.captcha.option_button',
+    description: 'R10 D5: one answer button under the captcha question: the number itself.',
+    format: 'PLAIN_TEXT',
+    digits: 'PERSIAN',
+    placeholders: [
+      {
+        token: 'answer',
+        type: 'NUMBER',
+        description: 'One of the four offered answers.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
   {
     key: 'bot.blocked',
     description:
@@ -11731,6 +11849,26 @@ export const TEMPLATES = [
   {
     key: 'bot.referral.gift_disabled',
     description: 'The signup gift is off or its terms are incomplete.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  /*
+   * R10 D5 (b): the referral-gift guard. Neither is sent on its own initiative: the first is
+   * a line of the dashboard the customer opened, the second answers the claim button.
+   */
+  {
+    key: 'bot.referral.gift_after_purchase',
+    description:
+      'R10 D5: a line under the membership-gift terms on the referral dashboard while the ' +
+      'guard holds the gift until the referred customer’s first paid, delivered purchase.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.referral.gift_daily_cap',
+    description:
+      'R10 D5: the answer to the claim button when the referrer’s daily cap left a share ' +
+      'unpaid. The share is not lost; it can be claimed on a later day.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

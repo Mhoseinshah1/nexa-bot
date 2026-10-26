@@ -56,6 +56,8 @@ export const INLINE_BUTTON_GROUPS = [
   'APPS',
   'CHANNELS',
   'TERMS',
+  // R10 D5: the answers under the /start captcha.
+  'CAPTCHA',
 ] as const;
 export type InlineButtonGroup = (typeof INLINE_BUTTON_GROUPS)[number];
 
@@ -313,6 +315,9 @@ export const INLINE_BUTTONS = [
 
   // Terms and rules (program §6)
   button('terms.accept', 'TERMS', 'bot.terms.accept_button'),
+
+  // The /start captcha's four answers (R10 D5): the label is the offered number.
+  button('captcha.option', 'CAPTCHA', 'bot.captcha.option_button'),
 ] as const satisfies readonly InlineButtonDefinition[];
 
 export type InlineButtonKey = (typeof INLINE_BUTTONS)[number]['key'];

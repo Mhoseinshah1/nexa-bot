@@ -173,6 +173,16 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.terms.accepted':
     '{icon:success} قوانین و مقررات با موفقیت پذیرفته شد.\nاکنون می‌توانید از ربات استفاده کنید.',
   'bot.terms.accept_button': '✅ پذیرش قوانین',
+  // R10 D5 (a): the /start captcha. Never says "blocked": a failure is only a cooldown.
+  'bot.captcha.challenge':
+    '{icon:info} برای شروع، به این سؤال ساده پاسخ دهید:\n\n{first} + {second} = ؟\n\nپاسخ درست را از دکمه‌های زیر انتخاب کنید.',
+  'bot.captcha.wrong':
+    '{icon:warning} پاسخ درست نبود. {remaining} فرصت دیگر دارید.\n\nسؤال تازه:\n{first} + {second} = ؟\n\nپاسخ درست را از دکمه‌های زیر انتخاب کنید.',
+  'bot.captcha.expired':
+    '{icon:info} زمان پاسخ به سؤال قبلی تمام شده بود.\n\nسؤال تازه:\n{first} + {second} = ؟\n\nپاسخ درست را از دکمه‌های زیر انتخاب کنید.',
+  'bot.captcha.locked':
+    '{icon:warning} تعداد پاسخ‌های نادرست به حد مجاز رسید.\nلطفاً {minutes} دقیقهٔ دیگر دوباره /start را بفرستید تا سؤال تازه‌ای برایتان بیاید.',
+  'bot.captcha.option_button': '{answer}',
   // WP20, brief §3.5: the owner's sentence, word for word.
   'bot.blocked_spam':
     'کاربر گرامی، شما به دلیل ارسال پیام‌های سریع و مکرر (اسپم) از ربات مسدود شده‌اید. برای پیگیری با پشتیبانی در ارتباط باشید.',
@@ -1470,6 +1480,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.referral.gift_claimed': '{icon:referral} هدیهٔ عضویت به کیف پول شما واریز شد: {amount}',
   'bot.referral.gift_nothing': 'در حال حاضر هدیهٔ عضویتی برای دریافت ندارید.',
   'bot.referral.gift_disabled': 'هدیهٔ عضویت در حال حاضر فعال نیست.',
+  // R10 D5 (b): the referral-gift guard.
+  'bot.referral.gift_after_purchase':
+    '⏳ هدیهٔ عضویت هر زیرمجموعه پس از نخستین خرید او (و تحویل سرویس) قابل دریافت می‌شود.',
+  'bot.referral.gift_daily_cap':
+    '{icon:info} سقف دریافت هدیهٔ عضویت برای امروز پر شده است. سهم‌های باقی‌مانده محفوظ است و از فردا می‌توانید آن‌ها را دریافت کنید.',
   // R1: the forwardable invite (no figures) and the customer's own dashboard.
   'bot.referral.invite_card':
     '💼 دعوت به ربات\n\nبا لینک زیر وارد ربات شوید و سرویس موردنیاز خود را تهیه کنید.\n\n💸 دعوت‌کننده به ازای خرید کاربرانی که برای نخستین بار با این لینک وارد ربات شوند، طبق شرایط برنامهٔ زیرمجموعه‌گیری {commissionPercent} درصد پورسانت می‌گیرد که پس از تحویل سرویس به کیف پول او در ربات واریز می‌شود.\n\n{icon:link} {referralLink}',
