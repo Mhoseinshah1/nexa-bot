@@ -62,22 +62,6 @@ describe('web disaster recovery', () => {
       .inject(options as never);
 
   /**
-   * The upload ceiling this file runs under, with headroom for the SCHEMA to grow.
-   *
-   * It was 1 MiB, sized against a "~100 KiB dump" — but a custom-format dump stores
-   * the DDL (its TOC) uncompressed, so the archive grows with every migration, data
-   * or not. By R10 the schema-only dump was ~943 KiB and a real archive sat just
-   * under the ceiling; one more migration (R10 D1 and D2 each add one) made it
-   * 1,066,274 bytes, the upload answered 413 instead of a recovery, and every
-   * case that uploads a real backup failed with `recovery: undefined`. Nothing in
-   * the recovery code changed; the fixture had run out of room.
-   *
-   * `takeBackup` now asserts the archive fits, with this explanation, so the next
-   * time the schema outgrows it the failure names the cause instead of a ZodError.
-   */
-  const RECOVERY_UPLOAD_CEILING_BYTES = 8 * 1024 * 1024;
-
-  /**
    * Debris from an INTERRUPTED earlier run, removed once before this file starts.
    *
    * The cleanup case below asserts that no `nexa_rtest_*` database exists
@@ -116,6 +100,16 @@ describe('web disaster recovery', () => {
     }
   }
 
+  /*
+   * The upload ceiling this suite runs under. It was 1 MiB, sized against a ~100 KiB dump; a
+   * pg_dump custom-format archive stores the DDL uncompressed, so every migration adds to it,
+   * and the test database's real archive passed 1 MiB (~1.07 MB) once another migration
+   * landed — every upload of a real archive then answered 413 and fifteen cases failed far
+   * from the cause. Eight MiB leaves room for the schema to grow; `takeBackup` asserts each
+   * real archive still fits, so the next time it outgrows the ceiling the failure says so.
+   */
+  const RECOVERY_UPLOAD_CEILING_BYTES = 8 * 1024 * 1024;
+
   beforeAll(async () => {
     workRoot = await mkdtemp(join(tmpdir(), 'nexa-dr-backups-'));
     recoveryRoot = await mkdtemp(join(tmpdir(), 'nexa-dr-recovery-'));
@@ -123,8 +117,9 @@ describe('web disaster recovery', () => {
       WEB_ADMIN_ORIGINS: ORIGIN,
       BACKUP_WORK_DIR: workRoot,
       RECOVERY_WORK_DIR: recoveryRoot,
-      // See RECOVERY_UPLOAD_CEILING_BYTES: far above a real archive of this
-      // schema, and the oversize case writes a buffer just past it.
+      // Large enough that the test database's real archive fits (asserted in
+      // `takeBackup`). The oversize case writes a buffer bigger than this rather
+      // than a real archive.
       RECOVERY_UPLOAD_MAX_BYTES: String(RECOVERY_UPLOAD_CEILING_BYTES),
     });
     const { resolveKeyring } =
@@ -222,7 +217,7 @@ describe('web disaster recovery', () => {
     const archive = await readFile(join(workRoot, body.run.id, 'archive.nxb'));
     expect(
       archive.length,
-      `a real archive (${archive.length} bytes) must fit RECOVERY_UPLOAD_CEILING_BYTES; the schema outgrew it — raise the ceiling`,
+      `a real archive (${String(archive.length)} bytes) must fit RECOVERY_UPLOAD_CEILING_BYTES; the schema outgrew it — raise the ceiling`,
     ).toBeLessThan(RECOVERY_UPLOAD_CEILING_BYTES);
     return { id: body.run.id, checksum: body.run.checksum ?? '', archive };
   }

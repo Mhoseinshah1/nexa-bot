@@ -159,6 +159,8 @@ export const CUSTOMER_NOTIFICATION_KIND_NAMES: Readonly<Record<CustomerNotificat
     ACCOUNT_UNBLOCKED: 'web.pay_notice_account_unblocked',
     SERVICE_TRAFFIC_ADDED: 'web.pay_notice_service_traffic_added',
     SERVICE_TIME_ADDED: 'web.pay_notice_service_time_added',
+    SERVICE_AUTO_RENEW_FUNDS_SHORT: 'web.pay_notice_service_auto_renew_funds_short',
+    SERVICE_AUTO_RENEW_PRICE_CHANGED: 'web.pay_notice_service_auto_renew_price_changed',
   };
 
 /**

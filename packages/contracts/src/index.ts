@@ -90,6 +90,8 @@ export * from './messaging-reliability.js';
 export * from './channel-membership.js';
 export * from './service-refund-requests.js';
 export * from './service-transfer.js';
+// Round 10, D1: automatic renewal (تمدید خودکار).
+export * from './auto-renew.js';
 // WP-A7: the support ticket system.
 export * from './tickets.js';
 export * from './miniapp.js';

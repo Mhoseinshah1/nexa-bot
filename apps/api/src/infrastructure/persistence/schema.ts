@@ -21,6 +21,9 @@ import { sql, type SQL } from 'drizzle-orm';
 import {
   ACTOR_TYPES,
   ADMIN_STATUSES,
+  AUTO_RENEW_PREFERENCE_SOURCES,
+  AUTO_RENEW_REFUSALS,
+  AUTO_RENEW_RUN_STATES,
   BACKUP_ARCHIVE_FORMATS,
   LEGACY_COMPACTION_FAILURE_CODES,
   LEGACY_COMPACTION_STATES,
@@ -17066,6 +17069,183 @@ export const miniAppSessions = pgTable(
     check('miniapp_sessions_init_hash_check', sql`init_data_hash ~ '^[0-9a-f]{64}$'`),
     check('miniapp_sessions_token_hash_check', sql`token_hash ~ '^[0-9a-f]{64}$'`),
     check('miniapp_sessions_window_check', sql`expires_at > created_at`),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Round 10, D1 — automatic renewal (تمدید خودکار)
+// ---------------------------------------------------------------------------
+
+/**
+ * A customer's consent to renew ONE of their services automatically.
+ *
+ * One row per service. `customer_id` is the customer who GAVE the consent, and every run asks
+ * that it still equals `services.customer_id`: a service that changed hands is never renewed
+ * on the strength of somebody else's consent. A transfer also switches it off in the very
+ * statement's transaction that reassigns the service (`DrizzleServiceTransferRepository.
+ * reassign`), so a service handed back does not silently revive an old consent either.
+ *
+ * `consented_total_minor` / `consented_currency` are the renewal total the customer was shown
+ * when they switched it on: a later quote above it is not renewed (`PRICE_ROSE`). Both are
+ * present exactly while it is enabled — the CHECK below — so "on, for how much" is never
+ * half-answered. Not a balance and not a ledger figure: a ceiling the customer agreed to.
+ */
+export const serviceAutoRenewPreferences = pgTable(
+  'service_auto_renew_preferences',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    serviceId: uuid('service_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    enabled: boolean('enabled').notNull(),
+    consentedTotalMinor: bigint('consented_total_minor', { mode: 'bigint' }),
+    consentedCurrency: text('consented_currency'),
+    /** One of `AUTO_RENEW_PREFERENCE_SOURCES`: where it last changed. */
+    source: text('source').notNull(),
+    createdAt: timestamptz('created_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'service_auto_renew_preferences_pkey',
+      columns: [table.tenantId, table.serviceId],
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+      name: 'service_auto_renew_preferences_service_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'service_auto_renew_preferences_customer_fk',
+    }),
+    /** The sweep reads the enabled consents of one tenant. */
+    index('service_auto_renew_preferences_enabled_idx')
+      .on(table.tenantId, table.serviceId)
+      .where(sql`enabled`),
+    check(
+      'service_auto_renew_preferences_source_check',
+      enumCheck('source', AUTO_RENEW_PREFERENCE_SOURCES),
+    ),
+    check(
+      'service_auto_renew_preferences_currency_check',
+      enumCheck('consented_currency', CURRENCY_CODES),
+    ),
+    check(
+      'service_auto_renew_preferences_consent_check',
+      sql`(enabled AND consented_total_minor IS NOT NULL AND consented_currency IS NOT NULL
+            AND consented_total_minor >= 0)
+          OR (NOT enabled AND consented_total_minor IS NULL AND consented_currency IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * One automatic-renewal PERIOD of one service: "this deadline was (or was not) renewed
+ * automatically, and why".
+ *
+ * UNIQUE on (tenant, service, `basis_expires_at`) — the deadline the run was claimed against —
+ * and that is the exactly-once rule: two worker replicas, or a pass that overran, both reach
+ * the same due service and only one INSERT claims it. Every idempotency key the renewal's own
+ * commands take is derived from this row's id and `attempt`, and the wallet debit's reference
+ * is unique on that key. A pass that takes over a lapsed claim (or re-tries a short wallet)
+ * does so as the NEXT attempt: the earlier attempt debited nothing, because a debit commits
+ * only together with `RENEWED`.
+ *
+ * `RENEWED` is written INSIDE the settling transaction (the wallet settlement's `inTransaction`
+ * hook, with `order_id`), so the debit and this state commit together or not at all — a
+ * renewed period that debited nothing, or a debit with the run still `CLAIMED`, cannot exist.
+ *
+ * The snapshot columns (`service_label`, the consented and quoted totals) are what the two
+ * customer notices render at send time (ADR 0030 §1), and `notified_at` is what makes a period
+ * produce at most ONE notice of either kind.
+ */
+export const serviceAutoRenewRuns = pgTable(
+  'service_auto_renew_runs',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    serviceId: uuid('service_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    /** The deadline this run renews: the period. Copied in SQL from `services.expires_at`. */
+    basisExpiresAt: timestamptz('basis_expires_at').notNull(),
+    /** Starts at 1; a period found short and later re-tried is attempt 2, 3, … */
+    attempt: integer('attempt').notNull(),
+    /** One of `AUTO_RENEW_RUN_STATES`. */
+    state: text('state').notNull(),
+    /** One of `AUTO_RENEW_REFUSALS`; present exactly when `state` is `REFUSED`. */
+    refusal: text('refusal'),
+    /** The account name on the panel when the run was claimed: what a notice names. */
+    serviceLabel: text('service_label').notNull(),
+    consentedTotalMinor: bigint('consented_total_minor', { mode: 'bigint' }).notNull(),
+    consentedCurrency: text('consented_currency').notNull(),
+    /** The renewal total quoted by this attempt, once quoted. */
+    quotedTotalMinor: bigint('quoted_total_minor', { mode: 'bigint' }),
+    quotedCurrency: text('quoted_currency'),
+    /** The renewal order this period paid, when `RENEWED`. */
+    orderId: uuid('order_id'),
+    /** When the one notice of this period was raised; null while none was. */
+    notifiedAt: timestamptz('notified_at'),
+    /** A `CLAIMED` run whose lease lapsed is taken over by a later pass. */
+    leaseUntil: timestamptz('lease_until'),
+    createdAt: timestamptz('created_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    unique('service_auto_renew_runs_period_key').on(
+      table.tenantId,
+      table.serviceId,
+      table.basisExpiresAt,
+    ),
+    /** One period per order: an order renews at most one period. */
+    uniqueIndex('service_auto_renew_runs_order_key')
+      .on(table.tenantId, table.orderId)
+      .where(sql`order_id IS NOT NULL`),
+    index('service_auto_renew_runs_state_idx').on(table.tenantId, table.state, table.leaseUntil),
+    foreignKey({
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+      name: 'service_auto_renew_runs_service_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'service_auto_renew_runs_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.orderId],
+      foreignColumns: [orders.tenantId, orders.id],
+      name: 'service_auto_renew_runs_order_fk',
+    }),
+    check('service_auto_renew_runs_state_check', enumCheck('state', AUTO_RENEW_RUN_STATES)),
+    check('service_auto_renew_runs_refusal_check', enumCheck('refusal', AUTO_RENEW_REFUSALS)),
+    check(
+      'service_auto_renew_runs_refusal_state_check',
+      sql`(state = 'REFUSED') = (refusal IS NOT NULL)`,
+    ),
+    check(
+      'service_auto_renew_runs_renewed_check',
+      sql`(state = 'RENEWED') = (order_id IS NOT NULL)`,
+    ),
+    check('service_auto_renew_runs_attempt_check', sql`attempt >= 1`),
+    check(
+      'service_auto_renew_runs_consented_currency_check',
+      enumCheck('consented_currency', CURRENCY_CODES),
+    ),
+    check(
+      'service_auto_renew_runs_quoted_currency_check',
+      enumCheck('quoted_currency', CURRENCY_CODES),
+    ),
+    check(
+      'service_auto_renew_runs_quote_check',
+      sql`(quoted_total_minor IS NULL) = (quoted_currency IS NULL)
+          AND consented_total_minor >= 0
+          AND (quoted_total_minor IS NULL OR quoted_total_minor >= 0)`,
+    ),
   ],
 );
 

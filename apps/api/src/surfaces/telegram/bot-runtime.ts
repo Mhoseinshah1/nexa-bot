@@ -77,6 +77,7 @@ import {
   inCard,
 } from './runtime/service-card-flow.js';
 import * as serviceRequestsFlow from './runtime/service-requests-flow.js';
+import * as autoRenewFlow from './runtime/auto-renew-flow.js';
 import * as serviceActionsFlow from './runtime/service-actions-flow.js';
 import * as supportFlow from './runtime/support-flow.js';
 import * as trialFlow from './runtime/trial-flow.js';
@@ -190,6 +191,9 @@ export {
   SERVICE_REFUND_CONFIRM_CALLBACK_PREFIX,
   SERVICE_TRANSFER_ASK_CALLBACK_PREFIX,
   SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX,
+  SERVICE_AUTO_RENEW_ASK_CALLBACK_PREFIX,
+  SERVICE_AUTO_RENEW_CONFIRM_CALLBACK_PREFIX,
+  SERVICE_AUTO_RENEW_OFF_CALLBACK_PREFIX,
   ADMIN_REFUND_REQUEST_APPROVE_CALLBACK_PREFIX,
   ADMIN_REFUND_REQUEST_REJECT_CALLBACK_PREFIX,
   ADMIN_REFUND_REQUEST_APPROVE_CONFIRM_CALLBACK_PREFIX,
@@ -2068,6 +2072,26 @@ export class BotRuntime {
           input.idempotencyKey,
           updateIdOf(input.update),
         ),
+      );
+    }
+    // Round 10, D1: «تمدید خودکار» — ask (records nothing), confirm, off.
+    if (command.intent === 'SERVICE_AUTO_RENEW_ASK' && command.targetId !== null) {
+      return autoRenewFlow.autoRenewAsk(this, scope, actor, customer, command.targetId);
+    }
+    if (
+      (command.intent === 'SERVICE_AUTO_RENEW_CONFIRM' ||
+        command.intent === 'SERVICE_AUTO_RENEW_OFF') &&
+      command.targetId !== null
+    ) {
+      return autoRenewFlow.autoRenewSet(
+        this,
+        scope,
+        actor,
+        customer,
+        command.targetId,
+        command.intent === 'SERVICE_AUTO_RENEW_CONFIRM',
+        input.idempotencyKey,
+        command.shownTotal ?? null,
       );
     }
     if (command.intent === 'SERVICE_TRANSFER_ASK' && command.targetId !== null) {

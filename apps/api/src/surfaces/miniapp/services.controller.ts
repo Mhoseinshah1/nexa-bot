@@ -6,9 +6,12 @@ import {
   MINIAPP_SERVICE_ACTIONS,
   COMMERCE_ERROR_CODES,
   errors,
+  fromWire,
+  miniAppAutoRenewRequestSchema,
   miniAppPageQuerySchema,
   miniAppServiceLocationRequestSchema,
   miniAppServiceQuoteRequestSchema,
+  type MiniAppAutoRenew,
   type MiniAppOrder,
   type MiniAppServiceAction,
   type MiniAppServiceDetail,
@@ -87,7 +90,46 @@ export class MiniAppServicesController {
       actions: MINIAPP_SERVICE_ACTIONS.filter((kind) => offered.includes(kind)),
       qr: deliverable,
       canChangeLocation: offered.includes('CHANGE_LOCATION'),
+      autoRenew: await this.autoRenewOf(call, service),
     };
+  }
+
+  /**
+   * Round 10, D1: switch «تمدید خودکار» on (the server quotes the renewal and records that
+   * total as the consent) or off. The bot's own service, the same refusals in Persian.
+   */
+  @Post(MINIAPP_ROUTES.serviceAutoRenew)
+  async autoRenew(
+    @Req() request: FastifyRequest,
+    @Param('serviceId') serviceId: string,
+    @Body() body: unknown,
+  ): Promise<MiniAppAutoRenew> {
+    const call = await miniAppCall(this.container, request, { gated: true });
+    const input = parseWith(miniAppAutoRenewRequestSchema, body);
+    const service = await this.ownService(call, serviceId);
+    const state = await this.container.serviceAutoRenew.set(
+      call.context.scope,
+      call.actor,
+      call.context.customer.id,
+      {
+        serviceId: service.id,
+        enabled: input.enabled,
+        // The total the confirmation showed: the consent is bound to it (Codex, PR 338).
+        expected: input.expected === undefined ? null : fromWire(input.expected),
+        idempotencyKey: `${miniAppKey(request, call, 'auto-renew')}:${input.enabled ? 'on' : 'off'}`,
+      },
+    );
+    return { ...state, price: state.price === null ? null : wire(state.price) };
+  }
+
+  private async autoRenewOf(call: MiniAppCall, service: ServiceRecord): Promise<MiniAppAutoRenew> {
+    const state = await this.container.serviceAutoRenew.stateFor(
+      call.context.scope,
+      call.actor,
+      call.context.customer.id,
+      service,
+    );
+    return { ...state, price: state.price === null ? null : wire(state.price) };
   }
 
   /** The link's QR, drawn by the one renderer every delivered QR goes through. */

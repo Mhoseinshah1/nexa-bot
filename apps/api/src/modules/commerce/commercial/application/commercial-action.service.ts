@@ -19,6 +19,7 @@ import {
   type AuditWriter,
   type Clock,
   type IdGenerator,
+  type IdempotencyNamespace,
   type IdempotencyStore,
   type Money,
   type OperationType,
@@ -106,6 +107,29 @@ export const COMMERCIAL_ACTION_PERMISSION: PermissionKey = 'maintenance.run';
 
 /** The customer namespace, shared with ordering so one key means one command. */
 const COMMERCIAL_NAMESPACE = 'TELEGRAM' as const;
+
+/**
+ * Whose idempotency namespace a draft or a confirmation is recorded in (Round 10, D1).
+ *
+ * A customer's own tap is `CUSTOMER_COMMERCIAL_AUTHORITY`, the default everywhere, so no
+ * customer path changed. The automatic-renewal worker passes `AUTO_RENEW_COMMERCIAL_AUTHORITY`:
+ * the same permission (`maintenance.run`, which a `SYSTEM_JOB` holds) in the `SCHEDULER`
+ * namespace, so its keys and a customer's can never consume each other. Everything else —
+ * the eligibility, the quote, the reseller entitlement, the re-checks at confirmation — is the
+ * same code either way, which is the point: a second renewal path would be a second answer
+ * to "what does this cost".
+ */
+export interface CommercialAuthority {
+  readonly namespace: IdempotencyNamespace;
+}
+
+export const CUSTOMER_COMMERCIAL_AUTHORITY: CommercialAuthority = {
+  namespace: COMMERCIAL_NAMESPACE,
+};
+
+export const AUTO_RENEW_COMMERCIAL_AUTHORITY: CommercialAuthority = {
+  namespace: 'SCHEDULER',
+};
 
 /** How many add-ons of one kind a customer is offered at once. */
 export const ADDON_OFFER_LIMIT = 10;
@@ -537,6 +561,7 @@ export class CommercialActionService {
       readonly productId?: string;
       readonly idempotencyKey: string;
     },
+    authority: CommercialAuthority = CUSTOMER_COMMERCIAL_AUTHORITY,
   ): Promise<{ readonly order: OrderRecord; readonly action: CommercialActionRecord }> {
     const serviceId = this.serviceId(input.serviceId);
     const planId = input.kind === 'RENEW' ? (input.productId ?? null) : null;
@@ -572,7 +597,7 @@ export class CommercialActionService {
 
     const replay = await this.deps.idempotency.find<{ orderId: string }>(
       scope,
-      COMMERCIAL_NAMESPACE,
+      authority.namespace,
       input.idempotencyKey,
       requestHash,
     );
@@ -757,7 +782,7 @@ export class CommercialActionService {
         await rememberOnce(
           this.deps.idempotency,
           scope,
-          COMMERCIAL_NAMESPACE,
+          authority.namespace,
           input.idempotencyKey,
           requestHash,
           { orderId: order.id },
@@ -782,6 +807,7 @@ export class CommercialActionService {
     actor: ActorContext,
     customerId: UserId,
     input: { readonly orderId: string; readonly idempotencyKey: string },
+    authority: CommercialAuthority = CUSTOMER_COMMERCIAL_AUTHORITY,
   ): Promise<OrderRecord> {
     const orderId = this.orderId(input.orderId);
     const requestHash = hashRequest({ customerId, orderId });
@@ -794,7 +820,7 @@ export class CommercialActionService {
 
     const replay = await this.deps.idempotency.find<{ orderId: string }>(
       scope,
-      COMMERCIAL_NAMESPACE,
+      authority.namespace,
       input.idempotencyKey,
       requestHash,
     );
@@ -950,7 +976,7 @@ export class CommercialActionService {
         await rememberOnce(
           this.deps.idempotency,
           scope,
-          COMMERCIAL_NAMESPACE,
+          authority.namespace,
           input.idempotencyKey,
           requestHash,
           { orderId: after.id },
@@ -959,6 +985,54 @@ export class CommercialActionService {
         return after;
       },
     );
+  }
+
+  /**
+   * What renewing this service of its own product would cost right now, without writing
+   * anything (Round 10, D1): the same eligibility `draft` decides — ownership, a product to
+   * renew, the lifecycle, the panel's capability and policy, a reseller tier that grants it —
+   * and the same `quoteRenewal` (`PricingService.price`), inside one read transaction.
+   *
+   * An imported service is refused (`renewsFromPanelPlans`): its renewal is a panel plan the
+   * customer chooses, and nothing here may choose one for them. The figure is a courtesy for
+   * the automatic-renewal consent and pre-check; `draft` quotes again and that quote is the
+   * order's.
+   */
+  async renewalQuote(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    serviceId: string,
+  ): Promise<{ readonly total: Money; readonly productId: ProductId }> {
+    await this.deps.guard.check(scope, actor, COMMERCIAL_ACTION_PERMISSION);
+    const now = this.deps.clock.now();
+    return this.deps.uow.run(scope, async (tx) => {
+      const service = await this.ownedService(scope, customerId, serviceId, tx);
+      assertExtendable(service);
+      if (renewsFromPanelPlans(service)) {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+          'An imported service renews from a plan the customer chooses.',
+        );
+      }
+      this.assertLifecycleAllows('RENEW', service);
+      await this.assertPanelCanPerform(scope, service, 'RENEW', tx);
+      const priced = await this.quoteRenewal(scope, service, null, now, tx);
+      const standing = await this.deps.resellers.standing(scope, customerId, tx);
+      if (standing !== null) {
+        await this.deps.resellers.assertEntitled(
+          scope,
+          standing,
+          {
+            operation: 'RENEW',
+            productId: priced.productId ?? service.productId,
+            panelId: service.panelId,
+          },
+          tx,
+        );
+      }
+      return { total: priced.totals.total, productId: priced.productId ?? service.productId };
+    });
   }
 
   /**

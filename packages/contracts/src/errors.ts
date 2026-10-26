@@ -1581,6 +1581,20 @@ export const COMMERCE_ERROR_CODES = {
    */
   SERVICE_NOT_TRANSFERABLE: 'commerce.service_not_transferable',
 
+  // --- Round 10, D1: automatic renewal (تمدید خودکار) ---------------------------------
+  /**
+   * Automatic renewal is switched off for this installation (`service_auto_renew`), so it
+   * cannot be switched ON for a service. Switching it off is always accepted. Nothing was
+   * written.
+   */
+  AUTO_RENEW_DISABLED: 'commerce.auto_renew_disabled',
+  /**
+   * This service cannot be renewed automatically: it is imported (its renewal is a panel plan
+   * chosen at the time), has no deadline, is a custom service, or cannot be renewed at all
+   * right now. Nothing was written.
+   */
+  AUTO_RENEW_NOT_AVAILABLE: 'commerce.auto_renew_not_available',
+
   // --- WP-A6: service location change ------------------------------------------------
   /**
    * The chosen target is the location the service is already in. Nothing was written, and

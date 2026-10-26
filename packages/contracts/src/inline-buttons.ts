@@ -269,6 +269,10 @@ export const INLINE_BUTTONS = [
     'SERVICE_ACTIONS',
     'bot.service.refund_request_confirm_button',
   ),
+  // Round 10, D1: «تمدید خودکار» — on and off are one slot; the ON tap asks first.
+  button('service.auto_renew_enable', 'SERVICE_ACTIONS', 'bot.service.auto_renew_enable_button'),
+  button('service.auto_renew_disable', 'SERVICE_ACTIONS', 'bot.service.auto_renew_disable_button'),
+  button('service.auto_renew_confirm', 'SERVICE_ACTIONS', 'bot.service.auto_renew_confirm_button'),
   button('service.transfer', 'SERVICE_ACTIONS', 'bot.service.transfer_button'),
   button('service.transfer_confirm', 'SERVICE_ACTIONS', 'bot.service.transfer_confirm_button'),
 

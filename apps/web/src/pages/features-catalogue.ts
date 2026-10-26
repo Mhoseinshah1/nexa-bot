@@ -281,6 +281,13 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: null,
     confirmEnable: null,
   },
+  // Round 10, D1: off stops every automatic renewal at once; customers who opted in are not renewed.
+  service_auto_renew: {
+    title: 'web.feature_service_auto_renew_title',
+    summary: 'web.feature_service_auto_renew_summary',
+    disableEffect: 'web.feature_service_auto_renew_off_effect',
+    confirmEnable: null,
+  },
 };
 
 /**

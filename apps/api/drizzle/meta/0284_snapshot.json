@@ -1,5 +1,5 @@
 {
-  "id": "952dc1f9-4126-43e0-86ee-4df1b1f5f7be",
+  "id": "8f75209e-a60f-4dfb-85a7-0774efd8a76c",
   "prevId": "66e6fd5e-5e42-4bc4-97fd-fa5d47b7a4a8",
   "version": "7",
   "dialect": "postgresql",
@@ -7351,493 +7351,6 @@
       },
       "isRLSEnabled": false
     },
-    "public.custom_menu_button_bots": {
-      "name": "custom_menu_button_bots",
-      "schema": "",
-      "columns": {
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "button_id": {
-          "name": "button_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "bot_instance_id": {
-          "name": "bot_instance_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "custom_menu_button_bots_bot_idx": {
-          "name": "custom_menu_button_bots_bot_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "bot_instance_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "custom_menu_button_bots_tenant_id_tenants_id_fk": {
-          "name": "custom_menu_button_bots_tenant_id_tenants_id_fk",
-          "tableFrom": "custom_menu_button_bots",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "custom_menu_button_bots_bot_instance_id_bot_instances_id_fk": {
-          "name": "custom_menu_button_bots_bot_instance_id_bot_instances_id_fk",
-          "tableFrom": "custom_menu_button_bots",
-          "tableTo": "bot_instances",
-          "columnsFrom": [
-            "bot_instance_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "custom_menu_button_bots_button_fk": {
-          "name": "custom_menu_button_bots_button_fk",
-          "tableFrom": "custom_menu_button_bots",
-          "tableTo": "custom_menu_buttons",
-          "columnsFrom": [
-            "tenant_id",
-            "button_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "custom_menu_button_bots_pk": {
-          "name": "custom_menu_button_bots_pk",
-          "columns": [
-            "tenant_id",
-            "button_id",
-            "bot_instance_id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.custom_menu_button_media": {
-      "name": "custom_menu_button_media",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "kind": {
-          "name": "kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "mime_type": {
-          "name": "mime_type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "file_name": {
-          "name": "file_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "byte_length": {
-          "name": "byte_length",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "sha256": {
-          "name": "sha256",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "content": {
-          "name": "content",
-          "type": "bytea",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "custom_menu_button_media_tenant_idx": {
-          "name": "custom_menu_button_media_tenant_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "custom_menu_button_media_tenant_id_tenants_id_fk": {
-          "name": "custom_menu_button_media_tenant_id_tenants_id_fk",
-          "tableFrom": "custom_menu_button_media",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "custom_menu_button_media_tenant_id_key": {
-          "name": "custom_menu_button_media_tenant_id_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "id"
-          ]
-        },
-        "custom_menu_button_media_tenant_kind_key": {
-          "name": "custom_menu_button_media_tenant_kind_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "id",
-            "kind"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "custom_menu_button_media_kind_check": {
-          "name": "custom_menu_button_media_kind_check",
-          "value": "kind IN ('PHOTO', 'DOCUMENT')"
-        },
-        "custom_menu_button_media_type_check": {
-          "name": "custom_menu_button_media_type_check",
-          "value": "CASE mime_type WHEN 'image/jpeg' THEN kind = 'PHOTO' AND byte_length BETWEEN 1 AND 5242880 WHEN 'image/png' THEN kind = 'PHOTO' AND byte_length BETWEEN 1 AND 5242880 WHEN 'application/pdf' THEN kind = 'DOCUMENT' AND byte_length BETWEEN 1 AND 10485760 WHEN 'text/plain' THEN kind = 'DOCUMENT' AND byte_length BETWEEN 1 AND 1048576 ELSE false END"
-        },
-        "custom_menu_button_media_content_check": {
-          "name": "custom_menu_button_media_content_check",
-          "value": "octet_length(content) = byte_length"
-        },
-        "custom_menu_button_media_sha256_check": {
-          "name": "custom_menu_button_media_sha256_check",
-          "value": "sha256 ~ '^[0-9a-f]{64}$'"
-        },
-        "custom_menu_button_media_file_name_check": {
-          "name": "custom_menu_button_media_file_name_check",
-          "value": "char_length(file_name) BETWEEN 1 AND 255"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.custom_menu_buttons": {
-      "name": "custom_menu_buttons",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "label": {
-          "name": "label",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "kind": {
-          "name": "kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "url": {
-          "name": "url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "body": {
-          "name": "body",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "media_id": {
-          "name": "media_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "bot_scope": {
-          "name": "bot_scope",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'ALL'"
-        },
-        "version": {
-          "name": "version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1
-        },
-        "archived_at": {
-          "name": "archived_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "created_by_admin_id": {
-          "name": "created_by_admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "updated_by_admin_id": {
-          "name": "updated_by_admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "custom_menu_buttons_active_label_key": {
-          "name": "custom_menu_buttons_active_label_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "label",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "archived_at IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "custom_menu_buttons_tenant_idx": {
-          "name": "custom_menu_buttons_tenant_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "custom_menu_buttons_tenant_id_tenants_id_fk": {
-          "name": "custom_menu_buttons_tenant_id_tenants_id_fk",
-          "tableFrom": "custom_menu_buttons",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "custom_menu_buttons_media_fk": {
-          "name": "custom_menu_buttons_media_fk",
-          "tableFrom": "custom_menu_buttons",
-          "tableTo": "custom_menu_button_media",
-          "columnsFrom": [
-            "tenant_id",
-            "media_id",
-            "kind"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id",
-            "kind"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "custom_menu_buttons_created_admin_fk": {
-          "name": "custom_menu_buttons_created_admin_fk",
-          "tableFrom": "custom_menu_buttons",
-          "tableTo": "admins",
-          "columnsFrom": [
-            "tenant_id",
-            "created_by_admin_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "custom_menu_buttons_updated_admin_fk": {
-          "name": "custom_menu_buttons_updated_admin_fk",
-          "tableFrom": "custom_menu_buttons",
-          "tableTo": "admins",
-          "columnsFrom": [
-            "tenant_id",
-            "updated_by_admin_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "custom_menu_buttons_tenant_id_key": {
-          "name": "custom_menu_buttons_tenant_id_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "custom_menu_buttons_kind_check": {
-          "name": "custom_menu_buttons_kind_check",
-          "value": "kind IN ('LINK', 'TEXT', 'PHOTO', 'DOCUMENT')"
-        },
-        "custom_menu_buttons_scope_check": {
-          "name": "custom_menu_buttons_scope_check",
-          "value": "bot_scope IN ('ALL', 'SELECTED')"
-        },
-        "custom_menu_buttons_version_check": {
-          "name": "custom_menu_buttons_version_check",
-          "value": "version >= 1"
-        },
-        "custom_menu_buttons_label_check": {
-          "name": "custom_menu_buttons_label_check",
-          "value": "char_length(label) BETWEEN 1 AND 64\n          AND label !~ '[[:cntrl:]]' AND left(label, 1) <> '/' AND label = btrim(label)"
-        },
-        "custom_menu_buttons_url_check": {
-          "name": "custom_menu_buttons_url_check",
-          "value": "url IS NULL OR (url ~ '^https://' AND char_length(url) <= 2048)"
-        },
-        "custom_menu_buttons_shape_check": {
-          "name": "custom_menu_buttons_shape_check",
-          "value": "CASE kind\n            WHEN 'LINK' THEN url IS NOT NULL AND media_id IS NULL\n              AND (body IS NULL OR char_length(body) BETWEEN 1 AND 4096)\n            WHEN 'TEXT' THEN url IS NULL AND media_id IS NULL AND body IS NOT NULL\n              AND char_length(body) BETWEEN 1 AND 4096\n            WHEN 'PHOTO' THEN url IS NULL AND (media_id IS NOT NULL OR archived_at IS NOT NULL)\n              AND (body IS NULL OR char_length(body) BETWEEN 1 AND 1024)\n            WHEN 'DOCUMENT' THEN url IS NULL AND (media_id IS NOT NULL OR archived_at IS NOT NULL)\n              AND (body IS NULL OR char_length(body) BETWEEN 1 AND 1024)\n            ELSE false\n          END"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.custom_service_locations": {
       "name": "custom_service_locations",
       "schema": "",
@@ -9239,7 +8752,7 @@
       "checkConstraints": {
         "customer_notifications_kind_check": {
           "name": "customer_notifications_kind_check",
-          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'GATEWAY_LATE_PAYMENT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'TICKET_REPLY', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER', 'TICKET_REPLY_ATTACHMENT', 'SERVICE_RENEWED', 'RESELLER_MINIMUM_REMINDER', 'RESELLER_MINIMUM_ACHIEVED', 'WALLET_MASS_CREDITED', 'SERVICE_GIFT_APPLIED', 'DIRECT_MESSAGE', 'DIRECT_MESSAGE_MEDIA', 'INCIDENT_NOTICE', 'WALLET_ADMIN_CREDITED', 'WALLET_ADMIN_DEBITED', 'ACCOUNT_UNBLOCKED', 'SERVICE_TRAFFIC_ADDED', 'SERVICE_TIME_ADDED')"
+          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'GATEWAY_LATE_PAYMENT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'TICKET_REPLY', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER', 'TICKET_REPLY_ATTACHMENT', 'SERVICE_RENEWED', 'RESELLER_MINIMUM_REMINDER', 'RESELLER_MINIMUM_ACHIEVED', 'WALLET_MASS_CREDITED', 'SERVICE_GIFT_APPLIED', 'DIRECT_MESSAGE', 'DIRECT_MESSAGE_MEDIA', 'INCIDENT_NOTICE', 'WALLET_ADMIN_CREDITED', 'WALLET_ADMIN_DEBITED', 'ACCOUNT_UNBLOCKED', 'SERVICE_TRAFFIC_ADDED', 'SERVICE_TIME_ADDED', 'SERVICE_AUTO_RENEW_FUNDS_SHORT', 'SERVICE_AUTO_RENEW_PRICE_CHANGED')"
         },
         "customer_notifications_state_check": {
           "name": "customer_notifications_state_check",
@@ -31125,6 +30638,434 @@
         "service_addons_duration_bound_check": {
           "name": "service_addons_duration_bound_check",
           "value": "duration_days IS NULL OR duration_days <= 3650"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.service_auto_renew_preferences": {
+      "name": "service_auto_renew_preferences",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "service_id": {
+          "name": "service_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consented_total_minor": {
+          "name": "consented_total_minor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "consented_currency": {
+          "name": "consented_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "service_auto_renew_preferences_enabled_idx": {
+          "name": "service_auto_renew_preferences_enabled_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "service_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "enabled",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "service_auto_renew_preferences_tenant_id_tenants_id_fk": {
+          "name": "service_auto_renew_preferences_tenant_id_tenants_id_fk",
+          "tableFrom": "service_auto_renew_preferences",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_auto_renew_preferences_service_fk": {
+          "name": "service_auto_renew_preferences_service_fk",
+          "tableFrom": "service_auto_renew_preferences",
+          "tableTo": "services",
+          "columnsFrom": [
+            "tenant_id",
+            "service_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_auto_renew_preferences_customer_fk": {
+          "name": "service_auto_renew_preferences_customer_fk",
+          "tableFrom": "service_auto_renew_preferences",
+          "tableTo": "customers",
+          "columnsFrom": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "service_auto_renew_preferences_pkey": {
+          "name": "service_auto_renew_preferences_pkey",
+          "columns": [
+            "tenant_id",
+            "service_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "service_auto_renew_preferences_source_check": {
+          "name": "service_auto_renew_preferences_source_check",
+          "value": "source IN ('TELEGRAM', 'MINI_APP', 'TRANSFER')"
+        },
+        "service_auto_renew_preferences_currency_check": {
+          "name": "service_auto_renew_preferences_currency_check",
+          "value": "consented_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
+        "service_auto_renew_preferences_consent_check": {
+          "name": "service_auto_renew_preferences_consent_check",
+          "value": "(enabled AND consented_total_minor IS NOT NULL AND consented_currency IS NOT NULL\n            AND consented_total_minor >= 0)\n          OR (NOT enabled AND consented_total_minor IS NULL AND consented_currency IS NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.service_auto_renew_runs": {
+      "name": "service_auto_renew_runs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "service_id": {
+          "name": "service_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "basis_expires_at": {
+          "name": "basis_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attempt": {
+          "name": "attempt",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "refusal": {
+          "name": "refusal",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "service_label": {
+          "name": "service_label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consented_total_minor": {
+          "name": "consented_total_minor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consented_currency": {
+          "name": "consented_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "quoted_total_minor": {
+          "name": "quoted_total_minor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "quoted_currency": {
+          "name": "quoted_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "order_id": {
+          "name": "order_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "notified_at": {
+          "name": "notified_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lease_until": {
+          "name": "lease_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "service_auto_renew_runs_order_key": {
+          "name": "service_auto_renew_runs_order_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "order_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "order_id IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "service_auto_renew_runs_state_idx": {
+          "name": "service_auto_renew_runs_state_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lease_until",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "service_auto_renew_runs_tenant_id_tenants_id_fk": {
+          "name": "service_auto_renew_runs_tenant_id_tenants_id_fk",
+          "tableFrom": "service_auto_renew_runs",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_auto_renew_runs_service_fk": {
+          "name": "service_auto_renew_runs_service_fk",
+          "tableFrom": "service_auto_renew_runs",
+          "tableTo": "services",
+          "columnsFrom": [
+            "tenant_id",
+            "service_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_auto_renew_runs_customer_fk": {
+          "name": "service_auto_renew_runs_customer_fk",
+          "tableFrom": "service_auto_renew_runs",
+          "tableTo": "customers",
+          "columnsFrom": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_auto_renew_runs_order_fk": {
+          "name": "service_auto_renew_runs_order_fk",
+          "tableFrom": "service_auto_renew_runs",
+          "tableTo": "orders",
+          "columnsFrom": [
+            "tenant_id",
+            "order_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "service_auto_renew_runs_period_key": {
+          "name": "service_auto_renew_runs_period_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "service_id",
+            "basis_expires_at"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "service_auto_renew_runs_state_check": {
+          "name": "service_auto_renew_runs_state_check",
+          "value": "state IN ('CLAIMED', 'RENEWED', 'FUNDS_SHORT', 'REFUSED')"
+        },
+        "service_auto_renew_runs_refusal_check": {
+          "name": "service_auto_renew_runs_refusal_check",
+          "value": "refusal IN ('PRICE_ROSE', 'CONSENT_WITHDRAWN', 'NOT_RENEWABLE')"
+        },
+        "service_auto_renew_runs_refusal_state_check": {
+          "name": "service_auto_renew_runs_refusal_state_check",
+          "value": "(state = 'REFUSED') = (refusal IS NOT NULL)"
+        },
+        "service_auto_renew_runs_renewed_check": {
+          "name": "service_auto_renew_runs_renewed_check",
+          "value": "(state = 'RENEWED') = (order_id IS NOT NULL)"
+        },
+        "service_auto_renew_runs_attempt_check": {
+          "name": "service_auto_renew_runs_attempt_check",
+          "value": "attempt >= 1"
+        },
+        "service_auto_renew_runs_consented_currency_check": {
+          "name": "service_auto_renew_runs_consented_currency_check",
+          "value": "consented_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
+        "service_auto_renew_runs_quoted_currency_check": {
+          "name": "service_auto_renew_runs_quoted_currency_check",
+          "value": "quoted_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
+        "service_auto_renew_runs_quote_check": {
+          "name": "service_auto_renew_runs_quote_check",
+          "value": "(quoted_total_minor IS NULL) = (quoted_currency IS NULL)\n          AND consented_total_minor >= 0\n          AND (quoted_total_minor IS NULL OR quoted_total_minor >= 0)"
         }
       },
       "isRLSEnabled": false

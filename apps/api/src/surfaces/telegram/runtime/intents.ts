@@ -1,5 +1,6 @@
 // The closed intent vocabulary and the command shape the runtime dispatches on.
 // Moved verbatim out of bot-runtime.ts, which still re-exports every name it exported.
+import type { Money } from '@nexa/contracts';
 import type { InboundReceiptFile } from '../../../modules/commerce/payments/application/receipt-ports.js';
 import type { KeysetToken } from '../keyset-token.js';
 import type { InboundTutorialVideo } from '../../../modules/control/client-apps/application/client-app-video.service.js';
@@ -136,6 +137,13 @@ export const BOT_INTENTS = [
    */
   'SERVICE_TRANSFER_ASK',
   'SERVICE_TRANSFER_CONFIRM',
+  /*
+   * Round 10, D1: «تمدید خودکار». ASK names the amount and records nothing; CONFIRM is the
+   * only tap that records the consent; OFF switches it off at once.
+   */
+  'SERVICE_AUTO_RENEW_ASK',
+  'SERVICE_AUTO_RENEW_CONFIRM',
+  'SERVICE_AUTO_RENEW_OFF',
   'SERVICE_RENEW',
   'SERVICE_ADD_TRAFFIC',
   'SERVICE_ADD_TIME',
@@ -520,6 +528,13 @@ export interface BotCommand {
    * tapped, and pays that count's price. Decoded at the boundary as a bounded integer.
    */
   readonly quantity?: number;
+  /**
+   * Round 10, D1: the renewal total an `ay:` confirm's question SHOWED (Codex review of PR
+   * 338); null for a bare `ay:` drawn before it was carried, absent on every other command.
+   * A ceiling the customer agreed to, never a price: the consent recorded is the server's own
+   * quote, and only when that quote is at or below this.
+   */
+  readonly shownTotal?: Money | null;
   /**
    * The words after a slash command, for the two the management panel accepts.
    *

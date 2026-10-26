@@ -24,6 +24,8 @@ import {
   SERVICE_ADD_DEVICES_CALLBACK_PREFIX,
   SERVICE_CHANGE_LOCATION_CALLBACK_PREFIX,
   SERVICE_SUSPEND_CALLBACK_PREFIX,
+  SERVICE_AUTO_RENEW_ASK_CALLBACK_PREFIX,
+  SERVICE_AUTO_RENEW_OFF_CALLBACK_PREFIX,
   SERVICE_RESUME_CALLBACK_PREFIX,
   SERVICE_REFUND_ASK_CALLBACK_PREFIX,
   SERVICE_TRANSFER_ASK_CALLBACK_PREFIX,
@@ -524,6 +526,30 @@ export async function serviceDetail(
       ...inlineLabel('service.transfer'),
       data: `${SERVICE_TRANSFER_ASK_CALLBACK_PREFIX}${service.id}`,
       row: 4,
+    });
+  }
+  /*
+   * Round 10, D1: «تمدید خودکار», on a row of its own below the hand-away pair: OFF while the
+   * customer's consent is on, ON (which asks first) while the feature is on and the service
+   * can be renewed automatically — a native service with a deadline whose renewal is on offer.
+   */
+  const autoRenew = await rt.deps.autoRenew?.switchFor(
+    scope,
+    customer.id,
+    service,
+    commercial.includes('RENEW'),
+  );
+  if (autoRenew === 'ENABLE' || autoRenew === 'DISABLE') {
+    buttons.push({
+      ...inlineLabel(
+        autoRenew === 'ENABLE' ? 'service.auto_renew_enable' : 'service.auto_renew_disable',
+      ),
+      data: `${
+        autoRenew === 'ENABLE'
+          ? SERVICE_AUTO_RENEW_ASK_CALLBACK_PREFIX
+          : SERVICE_AUTO_RENEW_OFF_CALLBACK_PREFIX
+      }${service.id}`,
+      row: 9,
     });
   }
   buttons.push({

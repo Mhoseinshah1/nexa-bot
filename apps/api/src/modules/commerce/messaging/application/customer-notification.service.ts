@@ -375,6 +375,19 @@ export interface CustomerNotificationDeps {
     ): Promise<{ readonly values: TemplateValues; readonly serviceId: string } | null>;
   };
   /**
+   * Round 10, D1: what the two automatic-renewal notices render — the service's account name,
+   * the quoted (and for a price change, the consented) total and the deadline — read at send
+   * time from the run row the notification names (ADR 0030 §1). Null when the run does not
+   * state the kind's fact, which sends nothing.
+   */
+  readonly autoRenew?: {
+    noticeFacts(
+      scope: TenantContext,
+      kind: CustomerNotificationKind,
+      runId: string,
+    ): Promise<{ readonly values: TemplateValues; readonly serviceId: string } | null>;
+  };
+  /**
    * The inline buttons a kind carries, derived from what its subject names — never stored,
    * so the lane still carries no payload. Supplied by the composition root, because the
    * callback vocabulary is the Telegram surface's and this application service must not
@@ -972,6 +985,18 @@ export class CustomerNotificationService {
       if (this.deps.incidents === undefined) return null;
       const facts = await this.deps.incidents.noticeFacts(scope, row.subjectId);
       return facts === null ? null : { values: facts.values, buttons: [] };
+    }
+    if (
+      row.kind === 'SERVICE_AUTO_RENEW_FUNDS_SHORT' ||
+      row.kind === 'SERVICE_AUTO_RENEW_PRICE_CHANGED'
+    ) {
+      if (this.deps.autoRenew === undefined) return null;
+      const facts = await this.deps.autoRenew.noticeFacts(scope, row.kind, row.subjectId);
+      if (facts === null) return null;
+      return {
+        values: facts.values,
+        buttons: this.deps.buttonsFor?.(row.kind, { serviceId: facts.serviceId }) ?? [],
+      };
     }
     if (row.kind === 'SERVICE_TRANSFER_RECEIVED') {
       if (this.deps.serviceTransfers === undefined) return null;
