@@ -113,7 +113,8 @@ describe('the checkout-payment flow of the Telegram bot, as it answers today', (
 
   it('confirms a custom-service draft through the new-service lane when the customer picks a method', async () => {
     /*
-     * `confirmDraft` sends a CUSTOM_SERVICE draft to `OrderService.confirm`, the lane of a
+     * `CheckoutService.confirmDraft` (R10 B1; the bot's `confirmDraft` until then) sends a
+     * CUSTOM_SERVICE draft to `OrderService.confirm`, the lane of a
      * new service, and not to `CommercialActionService.confirm`, which owns renewals and
      * packages of an EXISTING service and has none to act on here.
      *
