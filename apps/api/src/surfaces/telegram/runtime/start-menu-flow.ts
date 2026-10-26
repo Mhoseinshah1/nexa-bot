@@ -237,10 +237,16 @@ export async function marketingPreference(
     if (isMarketingOptOutDisabled(error)) return unavailable;
     throw error;
   }
+  /*
+   * The way back, never the thing just done: `marketingPreferenceButton` takes "is the
+   * customer opted out now", and answers the opt-in button for a customer who is. It was
+   * passed `!optedOut`, so «promotions are off — tap below to turn them back on» carried
+   * the OPT-OUT button, and the reply to turning them back on carried the opt-in one.
+   */
   return {
     key: optedOut ? 'bot.marketing.opted_out' : 'bot.marketing.opted_in',
     values: {},
-    buttons: [marketingPreferenceButton(!optedOut), mainMenuButton()],
+    buttons: [marketingPreferenceButton(optedOut), mainMenuButton()],
     orderId: null,
   };
 }

@@ -41,7 +41,6 @@ import { mainMenuButton } from './keyboards.js';
 import { refusal } from './refusals.js';
 import { editSent, type PendingReply, staleCallbackReply } from './replies.js';
 import { cardCheck } from './payment-screens.js';
-import { confirmDraft } from './purchase-flow.js';
 import { gatewayAttemptReply } from './checkout-flow.js';
 import type { BotRuntime } from '../bot-runtime.js';
 
@@ -131,13 +130,13 @@ export async function manualPayment(
       customerId: customer.id,
       orderId,
     });
-    if (before.state === 'DRAFT') {
-      await confirmDraft(rt, scope, actor, before, customer, idempotencyKey);
-    }
-    const instruction = await rt.deps.payments.requestManualTransfer(scope, actor, customer.id, {
-      idempotencyKey: `${idempotencyKey}:manual-pay`,
-      orderId,
-    });
+    const instruction = await rt.deps.checkout.payByCard(
+      scope,
+      actor,
+      customer.id,
+      before,
+      idempotencyKey,
+    );
     return transferInstruction(rt, scope, instruction, orderId);
   } catch (error) {
     return refusal(error);

@@ -1443,6 +1443,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.panel_test_replayed',
       'bot.admin.panel_tested',
       'bot.admin.panel_unavailable',
+      'bot.admin.panel_username_usage',
       'bot.admin.panels_button',
       'bot.admin.panels_more_button',
       'bot.admin.panels_none',

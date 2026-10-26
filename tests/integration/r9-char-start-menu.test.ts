@@ -63,11 +63,11 @@ describe('the start and menu flow of the Telegram bot, as it answers today', () 
     pin('unknown.callback', await turn(rig.tap('zz:whatever', CUSTOMER)));
   });
 
-  it('opts out on /stop and back in from the opt-in button, each answered idempotently', async () => {
+  it('opts out on /stop and back in from the opt-in button, each answered idempotently with the button that undoes it', async () => {
     await rig.resolveCustomer(CUSTOMER);
-    // NOTE (pinned as it is): the reply that says "tap below to turn promotions back on"
-    // carries the OPT-OUT button (`mk:out`), not the opt-in one. `marketingPreference`
-    // passes `!optedOut` to `marketingPreferenceButton`, which takes "is opted out".
+    // Each reply carries the way back: after /stop the opt-in button, after the opt-in the
+    // opt-out button, and the same again for a repeated tap (Round 10 B2; Round 9 pinned
+    // the reverse, the button for what had just been done).
     pin('marketing.opted_out', await turn(rig.text('/stop', CUSTOMER)));
     pin('marketing.opted_out_again', await turn(rig.text('/stop', CUSTOMER)));
     pin('marketing.opted_in', await turn(rig.tap('mk:in', CUSTOMER)));
@@ -186,37 +186,40 @@ function expectedViews(): Record<string, View> {
       intent: 'MARKETING_OPT_OUT',
       key: 'bot.marketing.opted_out',
       text: '🔕 پیام\u200cهای تبلیغاتی برای شما قطع شد.\nاطلاع\u200cرسانی\u200cهای مربوط به پرداخت، سرویس و پشتیبانی شما همچنان ارسال می\u200cشود. هر وقت خواستید، با دکمهٔ زیر دوباره فعال کنید.',
-      buttons: [[['🔕 قطع پیام\u200cهای تبلیغاتی', 'mk:out']], [['🏠 بازگشت به منوی اصلی', 'mm:']]],
+      buttons: [
+        [['🔔 دریافت پیام\u200cهای تبلیغاتی', 'mk:in']],
+        [['🏠 بازگشت به منوی اصلی', 'mm:']],
+      ],
     },
     'marketing.opted_out_again': {
       intent: 'MARKETING_OPT_OUT',
       key: 'bot.marketing.opted_out',
       text: '🔕 پیام\u200cهای تبلیغاتی برای شما قطع شد.\nاطلاع\u200cرسانی\u200cهای مربوط به پرداخت، سرویس و پشتیبانی شما همچنان ارسال می\u200cشود. هر وقت خواستید، با دکمهٔ زیر دوباره فعال کنید.',
-      buttons: [[['🔕 قطع پیام\u200cهای تبلیغاتی', 'mk:out']], [['🏠 بازگشت به منوی اصلی', 'mm:']]],
+      buttons: [
+        [['🔔 دریافت پیام\u200cهای تبلیغاتی', 'mk:in']],
+        [['🏠 بازگشت به منوی اصلی', 'mm:']],
+      ],
     },
     'marketing.opted_in': {
       intent: 'MARKETING_OPT_IN',
       key: 'bot.marketing.opted_in',
       text: '🔔 پیام\u200cهای تبلیغاتی دوباره برای شما فعال شد.',
-      buttons: [
-        [['🔔 دریافت پیام\u200cهای تبلیغاتی', 'mk:in']],
-        [['🏠 بازگشت به منوی اصلی', 'mm:']],
-      ],
+      buttons: [[['🔕 قطع پیام\u200cهای تبلیغاتی', 'mk:out']], [['🏠 بازگشت به منوی اصلی', 'mm:']]],
     },
     'marketing.opted_in_again': {
       intent: 'MARKETING_OPT_IN',
       key: 'bot.marketing.opted_in',
       text: '🔔 پیام\u200cهای تبلیغاتی دوباره برای شما فعال شد.',
-      buttons: [
-        [['🔔 دریافت پیام\u200cهای تبلیغاتی', 'mk:in']],
-        [['🏠 بازگشت به منوی اصلی', 'mm:']],
-      ],
+      buttons: [[['🔕 قطع پیام\u200cهای تبلیغاتی', 'mk:out']], [['🏠 بازگشت به منوی اصلی', 'mm:']]],
     },
     'marketing.opt_out_button': {
       intent: 'MARKETING_OPT_OUT',
       key: 'bot.marketing.opted_out',
       text: '🔕 پیام\u200cهای تبلیغاتی برای شما قطع شد.\nاطلاع\u200cرسانی\u200cهای مربوط به پرداخت، سرویس و پشتیبانی شما همچنان ارسال می\u200cشود. هر وقت خواستید، با دکمهٔ زیر دوباره فعال کنید.',
-      buttons: [[['🔕 قطع پیام\u200cهای تبلیغاتی', 'mk:out']], [['🏠 بازگشت به منوی اصلی', 'mm:']]],
+      buttons: [
+        [['🔔 دریافت پیام\u200cهای تبلیغاتی', 'mk:in']],
+        [['🏠 بازگشت به منوی اصلی', 'mm:']],
+      ],
     },
     'marketing.unavailable': {
       intent: 'MARKETING_OPT_OUT',
