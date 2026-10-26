@@ -142,8 +142,13 @@ const stable = (view: View): View => ({
     .replace(/(نام کاربری: )[a-z0-9]+/gu, '$1<username>'),
 });
 
+/*
+ * Soft, so a run reports EVERY side that diverges rather than stopping at the first: a rule
+ * broken in the shared checkout must show red on the bot's screens and on the mini app's
+ * answers alike, and a hard assertion would hide the second behind the first.
+ */
 const pin = makePin(expectedViews(), (actual, expected, label) =>
-  expect(actual, label).toEqual(expected),
+  expect.soft(actual, label).toEqual(expected),
 );
 
 describe('one checkout: the bot and the mini app, for the same cart', () => {
@@ -402,7 +407,7 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
       url: `${MINIAPP_API_PREFIX}${miniAppPath(MINIAPP_ROUTES.session, { botInstanceId: BOT_A1 })}`,
       payload: { initData: initDataFor({ id: MINI_USER, first_name: 'مینی' }) },
     });
-    expect(minted.statusCode, minted.body).toBe(201);
+    expect.soft(minted.statusCode, minted.body).toBe(201);
     const [row] = await rows<{ id: string }>(
       sql`SELECT id FROM customers WHERE tenant_id = ${tenantA.tenantId}
             AND telegram_user_id = ${String(MINI_USER)}`,
@@ -434,7 +439,7 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
   /** A draft and its username, the way the mini app makes one: an automatic name. */
   async function miniDraft(token: string, productId: ProductId) {
     const created = await call(token, 'POST', MINIAPP_ROUTES.orders, {}, { productId });
-    expect(created.statusCode, created.body).toBe(201);
+    expect.soft(created.statusCode, created.body).toBe(201);
     const { id } = miniAppOrderSchema.parse(JSON.parse(created.body));
     const named = await call(
       token,
@@ -443,13 +448,13 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
       { orderId: id },
       { mode: 'AUTOMATIC' },
     );
-    expect(named.statusCode, named.body).toBe(201);
+    expect.soft(named.statusCode, named.body).toBe(201);
     return miniAppOrderSchema.parse(JSON.parse(named.body));
   }
 
   async function miniRoutes(token: string, orderId: string) {
     const response = await call(token, 'GET', MINIAPP_ROUTES.orderRoutes, { orderId });
-    expect(response.statusCode, response.body).toBe(200);
+    expect.soft(response.statusCode, response.body).toBe(200);
     return miniAppPaymentRoutesResponseSchema.parse(JSON.parse(response.body));
   }
 
@@ -498,19 +503,21 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
       if (data.startsWith('m:')) return [{ kind: 'CARD_TO_CARD', provider: '', text }];
       return [];
     });
-    expect(
-      drawn.map(({ kind, provider }) => ({ kind, provider })),
-      `${label}: the same routes, in the same order`,
-    ).toEqual(
-      routes.map((one) => ({
-        kind: one.kind,
-        provider: one.kind === 'CARD_TO_CARD' ? '' : one.provider,
-      })),
-    );
-    drawn.forEach((button, index) => {
-      expect(button.text, `${label}: route ${String(index)} is named alike`).toContain(
-        routes[index]?.name ?? '<missing>',
+    expect
+      .soft(
+        drawn.map(({ kind, provider }) => ({ kind, provider })),
+        `${label}: the same routes, in the same order`,
+      )
+      .toEqual(
+        routes.map((one) => ({
+          kind: one.kind,
+          provider: one.kind === 'CARD_TO_CARD' ? '' : one.provider,
+        })),
       );
+    drawn.forEach((button, index) => {
+      expect
+        .soft(button.text, `${label}: route ${String(index)} is named alike`)
+        .toContain(routes[index]?.name ?? '<missing>');
     });
   }
 
@@ -532,8 +539,8 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
 
       const [botRow] = (await ordersOf(botId)).filter((row) => row.state === 'DRAFT').slice(-1);
       const [miniRow] = (await ordersOf(mini.customerId)).slice(-1);
-      expect(miniRow, `${label}: the same quote`).toEqual(botRow);
-      expect(miniOrder.total).toEqual({
+      expect.soft(miniRow, `${label}: the same quote`).toEqual(botRow);
+      expect.soft(miniOrder.total).toEqual({
         amountMinor: String(productId === small ? SMALL : LARGE),
         currency: 'IRT',
       });
@@ -542,7 +549,7 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
       pin(`${label}.methods`, methods);
       const listed = await miniRoutes(mini.token, miniOrder.id);
       expectSameRoutes(methods, listed.routes, label);
-      expect(listed.routes.map((one) => [one.provider, one.paysInChat])).toEqual(
+      expect.soft(listed.routes.map((one) => [one.provider, one.paysInChat])).toEqual(
         label === 'small'
           ? [
               ['TONPAYS', false],
@@ -590,28 +597,28 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
     const refused = await call(mini.token, 'POST', MINIAPP_ROUTES.orderPayWallet, {
       orderId: miniOrder.id,
     });
-    expect(refused.statusCode).toBe(409);
-    expect(JSON.parse(refused.body)).toMatchObject({
+    expect.soft(refused.statusCode).toBe(409);
+    expect.soft(JSON.parse(refused.body)).toMatchObject({
       error: {
         code: 'commerce.wallet_insufficient_funds',
         details: { shortfallMinor: '150000', currency: 'IRT' },
       },
     });
-    expect((await miniRoutes(mini.token, miniOrder.id)).wallet).toEqual({
+    expect.soft((await miniRoutes(mini.token, miniOrder.id)).wallet).toEqual({
       balance: { amountMinor: '100000', currency: 'IRT' },
       sufficient: false,
       shortfall: { amountMinor: '150000', currency: 'IRT' },
     });
     // Neither path confirmed the draft (no reservation for money that is not there).
-    expect(await ordersOf(botId)).toEqual(await ordersOf(mini.customerId));
-    expect((await ordersOf(botId)).map((row) => row.state)).toEqual(['DRAFT']);
-    expect(await paymentsOf(botId)).toEqual([]);
-    expect(await paymentsOf(mini.customerId)).toEqual([]);
+    expect.soft(await ordersOf(botId)).toEqual(await ordersOf(mini.customerId));
+    expect.soft((await ordersOf(botId)).map((row) => row.state)).toEqual(['DRAFT']);
+    expect.soft(await paymentsOf(botId)).toEqual([]);
+    expect.soft(await paymentsOf(mini.customerId)).toEqual([]);
 
     // The exact total is enough: the coverage rule is "not below", not "above".
     await credit(botId, 150_000n);
     await credit(mini.customerId, 150_000n);
-    expect((await miniRoutes(mini.token, miniOrder.id)).wallet).toEqual({
+    expect.soft((await miniRoutes(mini.token, miniOrder.id)).wallet).toEqual({
       balance: { amountMinor: '250000', currency: 'IRT' },
       sufficient: true,
       shortfall: null,
@@ -620,15 +627,15 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
     const paid = await call(mini.token, 'POST', MINIAPP_ROUTES.orderPayWallet, {
       orderId: miniOrder.id,
     });
-    expect(paid.statusCode, paid.body).toBe(201);
+    expect.soft(paid.statusCode, paid.body).toBe(201);
 
-    expect(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
-    expect((await ordersOf(botId)).map((row) => row.state)).toEqual(['PAID']);
-    expect(await paymentsOf(mini.customerId)).toEqual(await paymentsOf(botId));
-    expect(await ledgerOf(mini.customerId)).toEqual(await ledgerOf(botId));
-    expect(await ledgerOf(botId)).toEqual([
-      { direction: 'DEBIT', reason: 'PURCHASE', amount: '250000' },
-    ]);
+    expect.soft(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
+    expect.soft((await ordersOf(botId)).map((row) => row.state)).toEqual(['PAID']);
+    expect.soft(await paymentsOf(mini.customerId)).toEqual(await paymentsOf(botId));
+    expect.soft(await ledgerOf(mini.customerId)).toEqual(await ledgerOf(botId));
+    expect
+      .soft(await ledgerOf(botId))
+      .toEqual([{ direction: 'DEBIT', reason: 'PURCHASE', amount: '250000' }]);
   }, 60_000);
 
   it('opens the same gateway attempt with the same fee, and refuses a route out of bounds or switched off before confirming', async () => {
@@ -649,15 +656,15 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
         { orderId: miniSmall.id },
         { provider },
       );
-      expect(refused.statusCode, refused.body).toBe(409);
-      expect(JSON.parse(refused.body)).toMatchObject({
+      expect.soft(refused.statusCode, refused.body).toBe(409);
+      expect.soft(JSON.parse(refused.body)).toMatchObject({
         error: { code: 'miniapp.route_unavailable' },
       });
     }
-    expect((await ordersOf(botId)).map((row) => row.state)).toEqual(['DRAFT']);
-    expect(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
-    expect(await paymentsOf(botId)).toEqual([]);
-    expect(await paymentsOf(mini.customerId)).toEqual([]);
+    expect.soft((await ordersOf(botId)).map((row) => row.state)).toEqual(['DRAFT']);
+    expect.soft(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
+    expect.soft(await paymentsOf(botId)).toEqual([]);
+    expect.soft(await paymentsOf(mini.customerId)).toEqual([]);
 
     const { id: botLarge } = await botDraftOf(botId, large);
     const miniLarge = await miniDraft(mini.token, large);
@@ -670,7 +677,7 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
       { orderId: miniLarge.id },
       { provider: 'TETRAPAY' },
     );
-    expect(ceiling.statusCode).toBe(409);
+    expect.soft(ceiling.statusCode).toBe(409);
 
     // The offered route, with its 5 % fee, on the small cart.
     pin('gateway.opened.TONPAYS', await tap(`gp:${botSmall}.TONPAYS`));
@@ -681,8 +688,8 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
       { orderId: miniSmall.id },
       { provider: 'TONPAYS' },
     );
-    expect(opened.statusCode, opened.body).toBe(201);
-    expect(miniAppGatewayAttemptSchema.parse(JSON.parse(opened.body))).toMatchObject({
+    expect.soft(opened.statusCode, opened.body).toBe(201);
+    expect.soft(miniAppGatewayAttemptSchema.parse(JSON.parse(opened.body))).toMatchObject({
       provider: 'TONPAYS',
       paysInChat: false,
     });
@@ -695,15 +702,14 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
       { orderId: miniLarge.id },
       { provider: 'RIALIT' },
     );
-    expect(rialit.statusCode, rialit.body).toBe(201);
+    expect.soft(rialit.statusCode, rialit.body).toBe(201);
 
-    expect(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
-    expect((await ordersOf(botId)).map((row) => row.state)).toEqual([
-      'AWAITING_PAYMENT',
-      'AWAITING_PAYMENT',
-    ]);
-    expect(await paymentsOf(mini.customerId)).toEqual(await paymentsOf(botId));
-    expect(await paymentsOf(botId)).toEqual([
+    expect.soft(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
+    expect
+      .soft((await ordersOf(botId)).map((row) => row.state))
+      .toEqual(['AWAITING_PAYMENT', 'AWAITING_PAYMENT']);
+    expect.soft(await paymentsOf(mini.customerId)).toEqual(await paymentsOf(botId));
+    expect.soft(await paymentsOf(botId)).toEqual([
       {
         method: 'GATEWAY',
         state: 'PENDING',
@@ -743,18 +749,20 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
     const card = await call(mini.token, 'POST', MINIAPP_ROUTES.orderPayCard, {
       orderId: miniOrder.id,
     });
-    expect(card.statusCode, card.body).toBe(201);
-    expect(miniAppCardInstructionSchema.parse(JSON.parse(card.body)).amount).toEqual({
+    expect.soft(card.statusCode, card.body).toBe(201);
+    expect.soft(miniAppCardInstructionSchema.parse(JSON.parse(card.body)).amount).toEqual({
       amountMinor: '275000',
       currency: 'IRT',
     });
 
-    expect(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
-    expect((await ordersOf(botId)).map((row) => row.state)).toEqual(['AWAITING_PAYMENT']);
-    expect(await paymentsOf(mini.customerId)).toEqual(await paymentsOf(botId));
-    expect(await paymentsOf(botId)).toMatchObject([
-      { method: 'MANUAL_TRANSFER', state: 'PENDING', amount: '250000', payable: '275000' },
-    ]);
+    expect.soft(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
+    expect.soft((await ordersOf(botId)).map((row) => row.state)).toEqual(['AWAITING_PAYMENT']);
+    expect.soft(await paymentsOf(mini.customerId)).toEqual(await paymentsOf(botId));
+    expect
+      .soft(await paymentsOf(botId))
+      .toMatchObject([
+        { method: 'MANUAL_TRANSFER', state: 'PENDING', amount: '250000', payable: '275000' },
+      ]);
   }, 60_000);
 
   it('re-quotes a draft under a code the same way, and the wallet pays the discounted total', async () => {
@@ -784,27 +792,27 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
       { orderId: miniOrder.id },
       { code: ' r10off ' },
     );
-    expect(coded.statusCode, coded.body).toBe(200);
-    expect(miniAppOrderSchema.parse(JSON.parse(coded.body))).toMatchObject({
+    expect.soft(coded.statusCode, coded.body).toBe(200);
+    expect.soft(miniAppOrderSchema.parse(JSON.parse(coded.body))).toMatchObject({
       subtotal: { amountMinor: '250000', currency: 'IRT' },
       discount: { amountMinor: '50000', currency: 'IRT' },
       total: { amountMinor: '200000', currency: 'IRT' },
       discountApplied: true,
     });
-    expect(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
+    expect.soft(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
 
     // 200,000 covers the discounted total exactly, and not the list price.
-    expect((await miniRoutes(mini.token, miniOrder.id)).wallet.sufficient).toBe(true);
+    expect.soft((await miniRoutes(mini.token, miniOrder.id)).wallet.sufficient).toBe(true);
     pin('discount.settled', await tap(`w:${botDraft}`));
     const paid = await call(mini.token, 'POST', MINIAPP_ROUTES.orderPayWallet, {
       orderId: miniOrder.id,
     });
-    expect(paid.statusCode, paid.body).toBe(201);
-    expect(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
-    expect(await ledgerOf(mini.customerId)).toEqual(await ledgerOf(botId));
-    expect(await ledgerOf(botId)).toEqual([
-      { direction: 'DEBIT', reason: 'PURCHASE', amount: '200000' },
-    ]);
+    expect.soft(paid.statusCode, paid.body).toBe(201);
+    expect.soft(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
+    expect.soft(await ledgerOf(mini.customerId)).toEqual(await ledgerOf(botId));
+    expect
+      .soft(await ledgerOf(botId))
+      .toEqual([{ direction: 'DEBIT', reason: 'PURCHASE', amount: '200000' }]);
   }, 60_000);
 
   it('confirms a renewal through the commercial lane on both, short wallet first, then the same gateway attempt', async () => {
@@ -818,10 +826,12 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
     // Buy on each path from the wallet, and let the provisioner deliver both.
     await tap(`w:${(await botDraftOf(botId, small)).id}`);
     const bought = await miniDraft(mini.token, small);
-    expect(
-      (await call(mini.token, 'POST', MINIAPP_ROUTES.orderPayWallet, { orderId: bought.id }))
-        .statusCode,
-    ).toBe(201);
+    expect
+      .soft(
+        (await call(mini.token, 'POST', MINIAPP_ROUTES.orderPayWallet, { orderId: bought.id }))
+          .statusCode,
+      )
+      .toBe(201);
     await ctx.container.provisionerLoop.tick();
     const [botService] = await rows<{ id: string }>(
       sql`SELECT id FROM services WHERE customer_id = ${botId}`,
@@ -830,8 +840,8 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
       JSON.parse((await call(mini.token, 'GET', MINIAPP_ROUTES.services)).body),
     );
     const miniServiceId = miniServices.items[0]?.id ?? '';
-    expect(botService).toBeDefined();
-    expect(miniServiceId).not.toBe('');
+    expect.soft(botService).toBeDefined();
+    expect.soft(miniServiceId).not.toBe('');
 
     // The renewal quote on each path.
     pin('renew.preinvoice', await tap(`nr:${botService?.id ?? ''}`));
@@ -843,7 +853,7 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
       { serviceId: miniServiceId },
       { kind: 'RENEW' },
     );
-    expect(quoted.statusCode, quoted.body).toBe(201);
+    expect.soft(quoted.statusCode, quoted.body).toBe(201);
     const miniRenew = miniAppOrderSchema.parse(JSON.parse(quoted.body));
 
     // The wallet is empty now: refused before the commercial confirm, on both.
@@ -851,17 +861,17 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
     const short = await call(mini.token, 'POST', MINIAPP_ROUTES.orderPayWallet, {
       orderId: miniRenew.id,
     });
-    expect(short.statusCode).toBe(409);
-    expect(JSON.parse(short.body)).toMatchObject({
+    expect.soft(short.statusCode).toBe(409);
+    expect.soft(JSON.parse(short.body)).toMatchObject({
       error: {
         code: 'commerce.wallet_insufficient_funds',
         details: { shortfallMinor: '250000', currency: 'IRT' },
       },
     });
-    expect(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
-    expect(
-      (await ordersOf(botId)).map((row) => `${String(row.purpose)}:${String(row.state)}`),
-    ).toEqual(['NEW_SERVICE:PAID', 'RENEW:DRAFT']);
+    expect.soft(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
+    expect
+      .soft((await ordersOf(botId)).map((row) => `${String(row.purpose)}:${String(row.state)}`))
+      .toEqual(['NEW_SERVICE:PAID', 'RENEW:DRAFT']);
 
     // A gateway: the renewal is confirmed through the commercial lane, then the attempt.
     pin('renew.gateway', await tap(`gp:${botRenew}.TONPAYS`));
@@ -872,12 +882,12 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
       { orderId: miniRenew.id },
       { provider: 'TONPAYS' },
     );
-    expect(opened.statusCode, opened.body).toBe(201);
-    expect(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
-    expect(
-      (await ordersOf(botId)).map((row) => `${String(row.purpose)}:${String(row.state)}`),
-    ).toEqual(['NEW_SERVICE:PAID', 'RENEW:AWAITING_PAYMENT']);
-    expect(await paymentsOf(mini.customerId)).toEqual(await paymentsOf(botId));
+    expect.soft(opened.statusCode, opened.body).toBe(201);
+    expect.soft(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
+    expect
+      .soft((await ordersOf(botId)).map((row) => `${String(row.purpose)}:${String(row.state)}`))
+      .toEqual(['NEW_SERVICE:PAID', 'RENEW:AWAITING_PAYMENT']);
+    expect.soft(await paymentsOf(mini.customerId)).toEqual(await paymentsOf(botId));
     // The commercial lane wrote its own record of the confirmation on both paths.
     const confirmedBy = async (customerId: UserId) =>
       (
@@ -886,7 +896,7 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
                WHERE o.customer_id = ${customerId} AND o.purpose = 'RENEW' ORDER BY a.action`,
         )
       ).map((row) => row.action);
-    expect(await confirmedBy(mini.customerId)).toEqual(await confirmedBy(botId));
+    expect.soft(await confirmedBy(mini.customerId)).toEqual(await confirmedBy(botId));
   }, 90_000);
 
   it('offers a top-up the same routes, names and gifts', async () => {
@@ -909,22 +919,22 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
       {},
       { amount: { amountMinor: '50000', currency: 'IRT' } },
     );
-    expect(quoted.statusCode, quoted.body).toBe(201);
+    expect.soft(quoted.statusCode, quoted.body).toBe(201);
     const parsed = miniAppTopupQuoteResponseSchema.parse(JSON.parse(quoted.body));
     if (parsed.outcome !== 'ROUTES') throw new Error(parsed.outcome);
     const drawn = chooser.buttons.flat().filter(([, data]) => data.startsWith('tp:'));
-    expect(parsed.routes.map((one) => one.provider)).toEqual(
-      drawn.map(([, data]) => data.split('.').pop()),
-    );
-    expect(parsed.routes.map((one) => [one.provider, one.kind, one.giftPercent])).toEqual([
+    expect
+      .soft(parsed.routes.map((one) => one.provider))
+      .toEqual(drawn.map(([, data]) => data.split('.').pop()));
+    expect.soft(parsed.routes.map((one) => [one.provider, one.kind, one.giftPercent])).toEqual([
       ['TONPAYS', 'GATEWAY', 10],
       ['MANUAL_TRANSFER', 'CARD_TO_CARD', 0],
     ]);
     parsed.routes.forEach((one, index) => {
       const label = drawn[index]?.[0] ?? '<missing>';
-      expect(label, `top-up route ${String(index)} is named alike`).toContain(one.name);
+      expect.soft(label, `top-up route ${String(index)} is named alike`).toContain(one.name);
       // The gift is in the bot's label exactly when the mini app shows one.
-      expect(label.includes(`+${String(one.giftPercent)}٪`)).toBe(one.giftPercent > 0);
+      expect.soft(label.includes(`+${String(one.giftPercent)}٪`)).toBe(one.giftPercent > 0);
     });
   }, 60_000);
 });
