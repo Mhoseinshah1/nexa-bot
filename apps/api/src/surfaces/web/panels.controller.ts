@@ -78,16 +78,10 @@ export class PanelsController {
      * descriptor, never by type name. Existing panels of the type are unaffected; their
      * pages read the contract's descriptor, not this list.
      */
-    const offered: (typeof IMPLEMENTED_PROVIDER_TYPES)[number][] = [];
-    for (const type of IMPLEMENTED_PROVIDER_TYPES) {
-      const feature = providerDescriptor(type)?.requiresFeature;
-      if (
-        feature === undefined ||
-        (await this.container.featureFlagResolver.isEnabled(scope, feature))
-      ) {
-        offered.push(type);
-      }
-    }
+    const offered = await this.container.panels.offeredProviderTypes(
+      scope,
+      IMPLEMENTED_PROVIDER_TYPES,
+    );
     return {
       providers: offered.map((type) => {
         const adapter = providerAdapter(type);

@@ -779,6 +779,28 @@ export class PanelService {
     }
   }
 
+  /**
+   * The provider types the panel form may OFFER this tenant (R10 C2): every type in
+   * `types` whose descriptor declares no `requiresFeature`, or whose feature is on.
+   *
+   * A courtesy for `GET /providers`, which authenticates and checks no permission — it
+   * is a catalogue of code — so this reads flags and nothing else. It is NOT the
+   * enforcement: `create` re-reads the flag inside its own transaction.
+   */
+  async offeredProviderTypes(
+    scope: TenantContext,
+    types: readonly ProviderType[],
+  ): Promise<ProviderType[]> {
+    const offered: ProviderType[] = [];
+    for (const type of types) {
+      const feature = providerDescriptor(type)?.requiresFeature;
+      if (feature === undefined || (await this.deps.features.isEnabled(scope, feature))) {
+        offered.push(type);
+      }
+    }
+    return offered;
+  }
+
   async create(
     scope: ScopeContext,
     actor: ActorContext,
