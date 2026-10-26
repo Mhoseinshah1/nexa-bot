@@ -227,7 +227,7 @@ export const createCustomMenuButtonRequestSchema = z
   .strict();
 export type CreateCustomMenuButtonRequest = z.input<typeof createCustomMenuButtonRequestSchema>;
 
-/** `PATCH /bot-menu/custom-buttons/:id`. Only what is given changes; the kind never does. */
+/** `PUT /bot-menu/custom-buttons/:id`. Only what is given changes; the kind never does. */
 export const updateCustomMenuButtonRequestSchema = z
   .object({
     idempotencyKey,
