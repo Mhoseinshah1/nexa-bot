@@ -929,6 +929,78 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
     expect.soft(await confirmedBy(mini.customerId)).toEqual(['service.action_confirm']);
   }, 90_000);
 
+  it("confirms a renewal from the bot's confirm tap through the commercial lane, as the mini app's confirm does", async () => {
+    /*
+     * R10 B1 divergence. The bot's CONFIRM intent (`c:<order>`, drawn by no screen today but
+     * still decoded) sent EVERY order to `OrderService.confirm`, the lane of a new service:
+     * a renewal draft confirmed there skips `CommercialActionService.confirm`'s re-check of
+     * the service and of what was quoted. The mini app's confirm chose the lane by the
+     * order's purpose. The stricter reading is the mini app's, and the bot now takes it.
+     *
+     * MUTATION: routing `purchase-flow` `confirm` back to `orders.confirm` audits
+     * `order.confirm` for the bot's renewal and this case fails.
+     */
+    const panelId = await marzbanPanel();
+    const small = await product(SMALL, panelId);
+    const botId = await botCustomer();
+    const mini = await miniSession();
+    await credit(botId, SMALL);
+    await credit(mini.customerId, SMALL);
+    await tap(`w:${(await botDraftOf(botId, small)).id}`);
+    const bought = await miniDraft(mini.token, small);
+    expect
+      .soft(
+        (await call(mini.token, 'POST', MINIAPP_ROUTES.orderPayWallet, { orderId: bought.id }))
+          .statusCode,
+      )
+      .toBe(201);
+    await ctx.container.provisionerLoop.tick();
+    const [botService] = await rows<{ id: string }>(
+      sql`SELECT id FROM services WHERE customer_id = ${botId}`,
+    );
+    const miniServiceId =
+      miniAppServicesResponseSchema.parse(
+        JSON.parse((await call(mini.token, 'GET', MINIAPP_ROUTES.services)).body),
+      ).items[0]?.id ?? '';
+
+    await tap(`nr:${botService?.id ?? ''}`);
+    const botRenew = await botOrder(botId, 'RENEW');
+    const quoted = await call(
+      mini.token,
+      'POST',
+      MINIAPP_ROUTES.serviceQuote,
+      { serviceId: miniServiceId },
+      { kind: 'RENEW' },
+    );
+    const miniRenew = miniAppOrderSchema.parse(JSON.parse(quoted.body));
+
+    pin('renew.confirm-tap', await tap(`c:${botRenew}`));
+    const confirmed = await call(mini.token, 'POST', MINIAPP_ROUTES.orderConfirm, {
+      orderId: miniRenew.id,
+    });
+    expect.soft(confirmed.statusCode, confirmed.body).toBe(201);
+
+    for (const customerId of [botId, mini.customerId]) {
+      expect
+        .soft(
+          (await ordersOf(customerId)).map((row) => `${String(row.purpose)}:${String(row.state)}`),
+        )
+        .toEqual(['NEW_SERVICE:PAID', 'RENEW:AWAITING_PAYMENT']);
+      const actions = (
+        await rows<{ action: string }>(
+          sql`SELECT DISTINCT a.action FROM audit_logs a JOIN orders o ON a.entity_id = o.id::text
+               WHERE o.customer_id = ${customerId} AND o.purpose = 'RENEW' ORDER BY a.action`,
+        )
+      ).map((row) => row.action);
+      expect
+        .soft(actions, 'the commercial lane confirmed the renewal')
+        .toEqual(['service.action_confirm']);
+    }
+
+    // Another customer's order through the same tap: the same refusal as before the change.
+    pin('confirm-tap.foreign', await tap(`c:${miniRenew.id}`));
+  }, 90_000);
+
   it('offers a top-up the same routes, names and gifts', async () => {
     const mini = await miniSession();
     await botCustomer();
@@ -1142,6 +1214,22 @@ function expectedViews(): Record<string, View> {
         [['پرداخت با کارت به کارت', 'tp:<id>.MANUAL_TRANSFER']],
         [['❌ بستن لیست', 'tx:<id>']],
       ],
+    },
+    'renew.confirm-tap': {
+      intent: 'CONFIRM',
+      key: 'bot.order.awaiting_payment',
+      text: 'سفارش ثبت شد و در انتظار پرداخت است.\nمبلغ: 250,000 تومان\nاعتبار تا: <time>',
+      buttons: [
+        [['💰 پرداخت از کیف پول', 'w:<id>']],
+        [['🧾 ثبت پرداخت', 'pm:<id>']],
+        [['لغو سفارش', 'd:<id>']],
+      ],
+    },
+    'confirm-tap.foreign': {
+      intent: 'CONFIRM',
+      key: 'bot.order.unavailable',
+      text: '⚠️ این سرویس در حال حاضر قابل خرید نیست.',
+      buttons: [],
     },
   };
 }
