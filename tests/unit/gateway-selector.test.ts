@@ -48,7 +48,7 @@ describe('externalRoutes', () => {
     expect(externalRoutes([])).toEqual([]);
   });
 
-  it('answers TonPays, Telegram Stars, TonPays Telegram, NOWPayments, CentralPay, TetraPay and Rialit, and only those, among the providers this release has', () => {
+  it('answers TonPays, Telegram Stars, TonPays Telegram, NOWPayments, CentralPay, TetraPay, Rialit and the custom gateway, and only those, among the providers this release has', () => {
     const real = PAYMENT_GATEWAY_PROVIDERS.map((provider) =>
       route(provider, PAYMENT_GATEWAY_DESCRIPTORS[provider]),
     );
@@ -61,6 +61,7 @@ describe('externalRoutes', () => {
       'CENTRALPAY',
       'TETRAPAY',
       'RIALIT',
+      'CUSTOM',
     ]);
   });
 

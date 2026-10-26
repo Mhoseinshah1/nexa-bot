@@ -2376,6 +2376,20 @@ export function setPaymentGatewayVerifyKey(input: {
   return post(PAYMENT_GATEWAY_ROUTES.verifyKey(provider), body, paymentGatewayResponseSchema);
 }
 
+/**
+ * Round 10 C1: points the custom gateway at its bridge — the https base URL and the callback IP
+ * allow-list. Refused by the server while the route is switched on.
+ */
+export function setPaymentGatewayEndpoint(input: {
+  provider: string;
+  idempotencyKey: string;
+  baseUrl: string;
+  ipAllowlist: readonly string[];
+}): Promise<PaymentGatewayResponse> {
+  const { provider, ...body } = input;
+  return post(PAYMENT_GATEWAY_ROUTES.endpoint(provider), body, paymentGatewayResponseSchema);
+}
+
 /** The operator's read-only credential check; the answer carries the route's last check. */
 export function checkPaymentGatewayCredential(input: {
   provider: string;
@@ -2620,6 +2634,11 @@ export function createPanel(input: {
   providerType: ProviderType;
   baseUrl: string;
   credentials?: PanelCredentialsInput;
+  /**
+   * The provider's own configuration, which the create already accepts (R10 C2: the
+   * custom bridge's optional timeout is offered on the create form).
+   */
+  activation?: Record<string, unknown>;
   /** Absent means the defaults: both modes, and the derived generator. */
   usernamePolicy?: PanelUsernamePolicyInput;
   idempotencyKey: string;

@@ -441,6 +441,7 @@ export const ERROR_TEXT = {
   'panel.archived': 'web.err_panel_archived',
   'panel.capability_unsupported': 'web.err_panel_capability_unsupported',
   'panel.configuration_changed': 'web.err_panel_configuration_changed',
+  'panel.credential_too_short': 'web.err_panel_credential_too_short',
   'panel.credential_unsupported': 'web.err_panel_credential_unsupported',
   'panel.credentials_missing': 'web.err_panel_credentials_missing',
   'panel.delivery_tutorial_stale': 'web.err_panel_delivery_tutorial_stale',
@@ -451,6 +452,7 @@ export const ERROR_TEXT = {
   'panel.policy_capability_unsupported': 'web.err_panel_policy_capability_unsupported',
   'panel.policy_stale': 'web.err_panel_policy_stale',
   'panel.probe_limited': 'web.err_panel_probe_limited',
+  'panel.provider_feature_disabled': 'web.err_panel_provider_feature_disabled',
   'panel.provider_type_unsupported': 'web.err_panel_provider_type_unsupported',
   'panel.request_invalid': 'web.err_panel_request_invalid',
   'panel.target_blocked': 'web.err_panel_target_blocked',
@@ -698,7 +700,35 @@ const GATEWAY_ENABLE_REFUSAL_TEXT: Readonly<Record<string, WebKey>> = {
   VERIFY_KEY_MISSING: 'web.payment_gateway_enable_refused_verify_key_missing',
   RATE_MISSING: 'web.payment_gateway_enable_refused_rate_missing',
   FX_UNAVAILABLE: 'web.payment_gateway_enable_refused_fx_unavailable',
+  // Round 10 C1: the custom gateway's bridge address.
+  ENDPOINT_MISSING: 'web.payment_gateway_enable_refused_endpoint_missing',
+  ENDPOINT_CHANGE_WHILE_ACTIVE: 'web.payment_gateway_endpoint_refused_active',
+  // Codex on #336: attempts opened against the current bridge are still open.
+  ENDPOINT_CHANGE_WITH_OPEN_ATTEMPTS: 'web.payment_gateway_endpoint_refused_open_attempts',
 };
+
+/**
+ * Round 10 C1: why the server refused a custom gateway's bridge address, allow-list or secret
+ * (`commerce.request_invalid` with `details.reason`), in Persian. Undefined for any other error.
+ */
+const GATEWAY_REQUEST_REFUSAL_TEXT: Readonly<Record<string, WebKey>> = {
+  ENDPOINT_URL_INVALID: 'web.payment_gateway_endpoint_refused_url',
+  ENDPOINT_ADDRESS_REFUSED: 'web.payment_gateway_endpoint_refused_address',
+  ALLOWLIST_INVALID: 'web.payment_gateway_endpoint_refused_allowlist',
+  SECRET_TOO_SHORT: 'web.payment_gateway_custom_secret_too_short',
+};
+
+export function gatewayRequestRefusalText(error: unknown): string | undefined {
+  if (!(error instanceof ApiError)) return undefined;
+  if (error.code === 'commerce.payment_gateway_unavailable') return gatewayEnableRefusalText(error);
+  if (error.code !== 'commerce.request_invalid') return undefined;
+  const reason = (error.details as { reason?: unknown } | undefined)?.reason;
+  if (typeof reason !== 'string' || !Object.hasOwn(GATEWAY_REQUEST_REFUSAL_TEXT, reason)) {
+    return undefined;
+  }
+  const key = GATEWAY_REQUEST_REFUSAL_TEXT[reason];
+  return key === undefined ? undefined : t(key);
+}
 
 export function gatewayEnableRefusalText(error: unknown): string | undefined {
   if (!(error instanceof ApiError) || error.code !== 'commerce.payment_gateway_unavailable') {

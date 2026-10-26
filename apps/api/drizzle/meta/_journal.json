@@ -1979,8 +1979,22 @@
     {
       "idx": 282,
       "version": "7",
-      "when": 1793024473611,
-      "tag": "0282_service_auto_renew",
+      "when": 1793003776898,
+      "tag": "0282_custom_gateway",
+      "breakpoints": true
+    },
+    {
+      "idx": 283,
+      "version": "7",
+      "when": 1793039653981,
+      "tag": "0283_custom_provider_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 284,
+      "version": "7",
+      "when": 1793043606848,
+      "tag": "0284_service_auto_renew",
       "breakpoints": true
     }
   ]

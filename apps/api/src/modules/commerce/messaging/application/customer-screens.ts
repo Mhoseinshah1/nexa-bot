@@ -198,6 +198,7 @@ export const ROUTE_NAME_KEYS: Readonly<Record<PaymentGatewayProvider, TemplateKe
   CENTRALPAY: 'bot.payment.route_name_centralpay',
   TETRAPAY: 'bot.payment.route_name_tetrapay',
   RIALIT: 'bot.payment.route_name_rialit',
+  CUSTOM: 'bot.payment.route_name_custom',
 };
 
 export class CustomerScreenComposer {

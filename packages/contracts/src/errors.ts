@@ -793,6 +793,26 @@ export const PANEL_ERROR_CODES = {
    * message says it: run the connection test again.
    */
   PANEL_NOT_VALIDATED: 'panel.not_validated',
+  /**
+   * The provider type is gated behind a feature flag that is off for this tenant (R10 C2).
+   *
+   * Raised only when a NEW panel of that type is created. A flag switched off after
+   * panels of the type exist does not stop them operating: the services on them were
+   * paid for, and stranding them is worse than the risk the flag guards. The `custom`
+   * provider is the first gated type (`custom_panel_provider`, off by default until its
+   * protocol is accepted against a real bridge). Which flag gates which type is declared
+   * on the descriptor (`requiresFeature`), never branched on by name.
+   */
+  PROVIDER_FEATURE_DISABLED: 'panel.provider_feature_disabled',
+  /**
+   * The API token is shorter than the provider's declared minimum (R10 C2).
+   *
+   * The `custom` provider's API token is the HMAC key every request is signed with and
+   * every answer is verified against, so a short one is a guessable signature. Refused at
+   * the save, where the operator can fix it, rather than discovered as a forged answer.
+   * The minimum is the descriptor's `minimumApiTokenLength`.
+   */
+  PANEL_CREDENTIAL_TOO_SHORT: 'panel.credential_too_short',
 } as const;
 
 /**

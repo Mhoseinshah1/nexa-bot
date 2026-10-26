@@ -31,6 +31,7 @@ import { isConfirmedUnusable } from '../../../platform/panels/application/panel-
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { SafeHttpClient } from '../../../../infrastructure/net/safe-http.js';
+import { panelClient } from '../../../platform/panels/application/panel-http.js';
 import { checkUrl, type UrlPolicyOptions } from '../../../../infrastructure/net/url-policy.js';
 import { decideOperability } from './panel-operability.js';
 import { OPERATION_LEGAL_FROM, providerRefFor, usageSyncCall } from './provision-executor.js';
@@ -339,7 +340,10 @@ export class ServiceRefreshService {
       const read = await usageSyncCall(
         prepared.adapter,
         prepared.target,
-        this.deps.http.forBase(prepared.baseUrl),
+        panelClient(this.deps.http, {
+          baseUrl: prepared.baseUrl,
+          activation: prepared.target.activation,
+        }),
         providerRefFor(service),
       );
       if (!read.ok) return { outcome: 'FAILED' };
@@ -445,7 +449,10 @@ export class ServiceRefreshService {
     if (admission === 'HELD') return { outcome: 'STALE', reason: 'IN_FLIGHT' };
 
     const timeoutMs = this.deps.liveCheckTimeoutMs ?? SERVICE_LIVE_CHECK_TIMEOUT_MS;
-    const client = http.forBase(prepared.baseUrl);
+    const client = panelClient(http, {
+      baseUrl: prepared.baseUrl,
+      activation: prepared.target.activation,
+    });
     const ref = providerRefFor(service);
     const lookup = async (): Promise<ProviderLookupOutcome | typeof DEADLINE_PASSED> => {
       // Decided BEFORE the request exists (Codex on #291): a first read that spent the

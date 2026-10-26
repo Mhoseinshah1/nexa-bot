@@ -173,6 +173,16 @@ describe('the Payment Operations Center', () => {
     if (provider === 'TONPAYS_TELEGRAM') base.bot_instance_id = BOT_A;
     // A TetraPay attempt is billed in RIAL with no bot (`gateway_invoices_tetrapay_check`).
     if (provider === 'TETRAPAY') base.provider_unit = 'IRR';
+    // A custom attempt is billed in RIAL to the bridge it was created against, under Nexa's own
+    // `cg_` invoice id and the customer's opaque number (`gateway_invoices_custom_check`).
+    if (provider === 'CUSTOM') {
+      Object.assign(base, {
+        provider_unit: 'IRR',
+        provider_order_id: `cg_${String(seq).padStart(26, '0')}`,
+        provider_user_id: String(2_000_000_000 + seq),
+        endpoint_base_url: 'https://bridge.example.test',
+      });
+    }
     if (provider === 'NOWPAYMENTS') {
       Object.assign(base, {
         provider_unit: 'USD',
@@ -329,6 +339,12 @@ describe('the Payment Operations Center', () => {
       provider_status: 'partially_paid',
       provider_paid: false,
     });
+    // Codex on #336 (3): the custom bridge's `UNDERPAID` is part of the money, too…
+    const underpaid = await payment({ provider: 'CUSTOM', state: 'UNKNOWN' });
+    await invoice(underpaid, 'CUSTOM', { provider_status: 'UNDERPAID', provider_paid: false });
+    // …and its `OVERPAID` is not a partial payment (more arrived, not part).
+    const overpaid = await payment({ provider: 'CUSTOM', state: 'UNKNOWN' });
+    await invoice(overpaid, 'CUSTOM', { provider_status: 'OVERPAID', provider_paid: false });
     // TonPays has no partial status; one spelled like NOWPayments' is not a partial there.
     const notPartial = await payment({ provider: 'TONPAYS', state: 'UNKNOWN' });
     await invoice(notPartial, 'TONPAYS', { provider_status: 'partially_paid' });
@@ -349,7 +365,7 @@ describe('the Payment Operations Center', () => {
       [createFailed, createUnknown, inquiryError].sort(),
     );
     expect(await listed('LATE_COMPLETION')).toEqual([late]);
-    expect(await listed('PARTIAL')).toEqual([partial]);
+    expect(await listed('PARTIAL')).toEqual([partial, underpaid].sort());
     expect(await listed('REFUND_RELATED')).toEqual([refunded]);
     // None of these was a mismatch HOLD — only the lane's audited hold is.
     expect(await listed('MISMATCH')).toEqual([]);
@@ -646,6 +662,13 @@ describe('the Payment Operations Center', () => {
         await invoice(partial, 'NOWPAYMENTS', {
           tenant_id,
           provider_status: 'partially_paid',
+          provider_paid: false,
+        });
+        // Codex on #336 (3): the custom bridge's UNDERPAID counts as a partial payment.
+        const underpaid = await payment({ ...at, provider: 'CUSTOM', state: 'CONFIRMED' });
+        await invoice(underpaid, 'CUSTOM', {
+          tenant_id,
+          provider_status: 'UNDERPAID',
           provider_paid: false,
         });
         // A quiet invoice and a status spelled like a partial on a provider without one.

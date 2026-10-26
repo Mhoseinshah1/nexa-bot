@@ -173,6 +173,7 @@ export const OPS_LOG_WORDS_FA = {
     CENTRALPAY: 'سنترال‌پی',
     TETRAPAY: 'تتراپی',
     RIALIT: 'ریالیت',
+    CUSTOM: 'درگاه سفارشی',
   },
   /** How a gateway payment was paid, per the provider (TetraPay `method`). */
   gatewayMethods: { online: 'آنلاین', card: 'کارت' },
@@ -214,6 +215,21 @@ export const OPS_LOG_WORDS_FA = {
     'rialit.UNAUTHORIZED': 'کلید API ریالیت پذیرفته نشد؛ فاکتوری ساخته نشد',
     'rialit.IP_NOT_ALLOWED': 'نشانی IP سرور در فهرست مجاز ریالیت نیست؛ فاکتوری ساخته نشد',
     'rialit.MERCHANT_INACTIVE': 'حساب پذیرندهٔ ریالیت غیرفعال است؛ فاکتوری ساخته نشد',
+    // Round 10 C1: the custom gateway's refusals, by the code the payment was closed with.
+    'custom.ENDPOINT_MISSING': 'نشانی پل درگاه سفارشی تنظیم نشده است؛ درخواستی فرستاده نشد',
+    'custom.ECHO_MISMATCH':
+      'پل درگاه سفارشی برای شناسه یا مبلغی جز آنچه درخواست شده بود پاسخ داد؛ لینک به مشتری داده نشد',
+    'custom.LINK_REJECTED': 'لینک پرداختی که پل فرستاد https نبود؛ لینک به مشتری داده نشد',
+    'custom.SIGNATURE_INVALID':
+      'پل درگاه سفارشی امضای درخواست نکسا را نپذیرفت (کلید را بررسی کنید)',
+    'custom.TIMESTAMP_OUT_OF_WINDOW': 'ساعت سرور نکسا و پل درگاه سفارشی بیش از ۵ دقیقه اختلاف دارد',
+    'custom.FORBIDDEN': 'حساب پذیرندهٔ پشت پل درگاه سفارشی غیرفعال است یا اجازه ندارد',
+    'custom.AMOUNT_OUT_OF_RANGE': 'مبلغ خارج از محدودهٔ پل درگاه سفارشی بود؛ پرداختی ساخته نشد',
+    'custom.AMOUNT_NOT_PAYABLE':
+      'پل درگاه سفارشی این مبلغ دقیق را نمی‌تواند دریافت کند؛ پرداختی ساخته نشد',
+    'custom.UNSUPPORTED_CURRENCY': 'پل درگاه سفارشی ریال را نمی‌پذیرد؛ پرداختی ساخته نشد',
+    'nexa.endpoint_blocked':
+      'نشانی پل درگاه سفارشی در فهرست نشانی‌های مجاز این نصب نیست؛ درخواستی فرستاده نشد',
     'rialit.AMOUNT_OUT_OF_RANGE':
       'مبلغ قابل پرداخت خارج از محدودهٔ ۵۰٬۰۰۰ تا ۱۰٬۰۰۰٬۰۰۰ تومان ریالیت بود؛ درخواستی به ریالیت فرستاده نشد',
   },
