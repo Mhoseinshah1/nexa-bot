@@ -1,0 +1,28 @@
+
+> nexa-bot@0.0.0 test:web /repo
+> vitest run --project web
+
+
+ RUN  v4.1.11 /repo
+
+ ✓ |web| tests/web/login.test.tsx (6 tests) 90ms
+ ❯ |web| tests/web/terms.test.tsx (0 test)
+ ❯ |web| tests/web/support-faq.test.tsx (0 test)
+
+⎯⎯⎯⎯⎯ Failed Suites 3 ⎯⎯⎯⎯⎯⎯
+
+ FAIL  |web| tests/web/terms.test.tsx [ tests/web/terms.test.tsx ]
+ FAIL  |web| tests/web/support-faq.test.tsx [ tests/web/support-faq.test.tsx ]
+ FAIL  |web| tests/web/audit-log.test.tsx [ tests/web/audit-log.test.tsx ]
+Error: Failed to resolve import "@nexa/contracts" from "apps/web/src/app.tsx". Does the file exist?
+  Plugin: vite:import-analysis
+  File: /repo/apps/web/src/app.tsx:4:74
+ ❯ TransformPluginContext._formatLog node_modules/vite/dist/node/chunks/node.js:31147:39
+
+
+ Test Files  3 failed | 1 passed (4)
+      Tests  6 passed (6)
+   Start at  03:30:03
+   Duration  7.54s
+
+ ELIFECYCLE  Command failed with exit code 1.

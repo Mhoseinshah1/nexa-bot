@@ -1,0 +1,47 @@
+
+ RUN  v4.1.11 /repo
+
+ ❯ |unit| tests/unit/zz-tmp.test.ts (4 tests | 2 failed | 1 skipped) 16ms
+       × adds 11ms
+       × throws 1ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| tests/unit/zz-tmp.test.ts > alpha > beta > adds
+AssertionError: expected 2 to be 3 // Object.is equality
+
+- Expected
++ Received
+
+- 3
++ 2
+
+ ❯ tests/unit/zz-tmp.test.ts:4:38
+      2| describe('alpha', () => {
+      3|   describe('beta', () => {
+      4|     it('adds', () => { expect(1 + 1).toBe(3); });
+       |                                      ^
+      5|     it('throws', () => { throw new Error('boom\nsecond line'); });
+      6|     it('ok', () => { expect(1).toBe(1); });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  |unit| tests/unit/zz-tmp.test.ts > alpha > beta > throws
+Error: boom
+second line
+ ❯ tests/unit/zz-tmp.test.ts:5:32
+      3|   describe('beta', () => {
+      4|     it('adds', () => { expect(1 + 1).toBe(3); });
+      5|     it('throws', () => { throw new Error('boom\nsecond line'); });
+       |                                ^
+      6|     it('ok', () => { expect(1).toBe(1); });
+      7|     it.skip('skipped', () => {});
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  2 failed | 6 passed | 1 skipped (9)
+   Start at  03:25:14
+   Duration  255ms (transform 59ms, setup 0ms, import 96ms, tests 25ms, environment 0ms)
+
