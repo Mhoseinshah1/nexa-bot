@@ -156,6 +156,33 @@ Three referral rules, each a way to pay a commission that was never owed:
   one, by the same cumulative target, never below zero; the shortfall is
   recorded, never collected.
 
+The membership (signup) gift and its R10 D5 amendment:
+
+- The recorded owner rule (`docs/customer-ux-completion-audit.md` §I) is
+  "eligibility is the accepted attribution, and nothing else": both sides may
+  claim from the attribution on, with no purchase. **R10 D5 (b) amends it,
+  behind `referral_abuse_guard` (default OFF)**: with the guard on and
+  `referral.abuse.gift_unlock = ON_FIRST_PAID_PURCHASE`, neither side is payable
+  before the referee's first paid, DELIVERED order (the commission earner's own
+  "delivered"; never a trial, never a Mirza referral), read both by the claim
+  button and inside the claim's locked set. `referral.abuse.referrer_daily_gift_cap`
+  pays a referrer at most that many shares per local day (the rest waits for the
+  next day; the referee's share is never capped), and
+  `referral.abuse.referrer_daily_commission_cap` DEFERS a commission over the
+  cap to the next local day (`not_before`, migration 0283), never voids it. No
+  new grant path: the claim is still the only payer. Turning the guard on or off
+  never changes a stamped side or a balance — no clawback, no retroactive grant;
+  off is the old rule with nothing to undo. Open points: `open-questions.md`
+  OQ-D5-01..04.
+
+The `/start` captcha (R10 D5 (a), `start_captcha`, default OFF): only a
+customer CREATED while it is on is asked (the row is written in the
+registration transaction); existing and imported customers never are,
+administrators never are, and turning it off frees everybody waiting. A wrong
+answer costs an attempt and, at the limit, a cooldown — never a block, never a
+status change. It is the first check of the bot's gate chain and a mini-app
+gate (`CAPTCHA`). Open points: OQ-D5-05..07.
+
 Four reseller rules, each a way to sell below cost or on credit nobody granted:
 
 - A reseller is a customer with an **ACTIVE** reseller row; SUSPENDED is an

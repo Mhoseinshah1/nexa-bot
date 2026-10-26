@@ -64,6 +64,7 @@ function commission(overrides: Record<string, unknown> = {}): Record<string, unk
     createdAt: '2026-09-10T12:30:00.000Z',
     earnedAt: '2026-09-11T12:30:00.000Z',
     voidedAt: null,
+    notBefore: null,
     ...overrides,
   };
 }
@@ -190,6 +191,37 @@ describe('the commission ledger', () => {
     const detail = row.nextElementSibling as HTMLElement;
     expect(detail).toHaveClass('tbl-detail');
     expect(within(detail).getAllByText('—')).toHaveLength(1);
+  });
+
+  it('says until when the daily cap holds a pending commission, and only while it is pending (R10 D5)', async () => {
+    stubApi(
+      lists({
+        commissions: [
+          commission({
+            state: 'PENDING',
+            earnedAmount: null,
+            earnedAt: null,
+            notBefore: '2026-09-12T20:30:00.000Z',
+          }),
+        ],
+      }),
+    );
+    render();
+    const table = await waitFor(commissionTable);
+    const row = within(table).getByText('Sara Referrer').closest('tr') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: t('web.referral_row_detail') }));
+    const detail = row.nextElementSibling as HTMLElement;
+    expect(within(detail).getByText(t('web.referral_not_before'))).toBeInTheDocument();
+  });
+
+  it('draws no hold for a commission that was earned', async () => {
+    stubApi(lists({ commissions: [commission({ notBefore: '2026-09-12T20:30:00.000Z' })] }));
+    render();
+    const table = await waitFor(commissionTable);
+    const row = within(table).getByText('Sara Referrer').closest('tr') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: t('web.referral_row_detail') }));
+    const detail = row.nextElementSibling as HTMLElement;
+    expect(within(detail).queryByText(t('web.referral_not_before'))).toBeNull();
   });
 
   it('says out loud when a reversal went unrecovered', async () => {

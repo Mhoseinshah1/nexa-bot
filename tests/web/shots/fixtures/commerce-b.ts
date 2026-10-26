@@ -786,6 +786,7 @@ const COMMISSIONS: readonly Json[] = COMMISSION_STATES.map((state, index) => ({
   createdAt: ago(60 * 24 * (index * 2 + 1)),
   earnedAt: state === 'EARNED' ? ago(60 * 24 * index * 2) : null,
   voidedAt: state === 'VOID' ? ago(60 * 24 * index * 2) : null,
+  notBefore: null,
 }));
 
 /* --------------------------------------------------------------- resellers --- */
