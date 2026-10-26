@@ -861,6 +861,147 @@ describe('the Rialit page', () => {
 });
 
 /**
+ * Round 10 C1 — the custom gateway (`docs/protocols/custom-gateway.md`): one secret, a bridge
+ * address and an optional callback allow-list, a «تست اتصال», disabled by default, and every
+ * refusal said in Persian.
+ */
+describe('the custom gateway page', () => {
+  const custom = (overrides: Record<string, unknown> = {}) => ({
+    provider: 'CUSTOM',
+    status: 'DISABLED',
+    displayName: null,
+    instructions: null,
+    minAmountMinor: '0',
+    maxAmountMinor: '0',
+    currency: 'IRT',
+    eligibility: {
+      activateAfterPayments: 0,
+      deactivateAfterPayments: 0,
+      activateAfterAccountDays: 0,
+    },
+    sortOrder: 0,
+    topupCashbackPercent: 0,
+    customerFeeBasisPoints: 0,
+    allowServicePurchase: true,
+    allowWalletTopup: true,
+    credential: { required: true, setAt: null },
+    callbackUrl: 'https://bot.example.com/payments/webhook/custom/t-1',
+    endpoint: { baseUrl: null, ipAllowlist: [] },
+    createdAt: '2026-10-26T09:00:00.000Z',
+    updatedAt: '2026-10-26T09:00:00.000Z',
+    ...overrides,
+  });
+
+  it('names the route, shows the missing bridge address, and offers no test before a secret and an address', async () => {
+    stubApi([{ url: '/payment-gateways', body: { gateways: [custom()] } }]);
+    const view = renderPage(<PaymentGatewaysPage provider="CUSTOM" denied={false} mayEdit />);
+    expect(await screen.findAllByText('نشانی پل ثبت نشده')).not.toHaveLength(0);
+    expect(view.container.textContent).toContain('درگاه سفارشی (پل پرداخت)');
+    expect(screen.queryByRole('button', { name: 'تست اتصال' })).toBeNull();
+  });
+
+  it('saves the bridge address and the allow-list through their own route, normalised', async () => {
+    const api = stubApi([
+      { url: '/payment-gateways', body: { gateways: [custom()] } },
+      { url: '/payment-gateways/CUSTOM/endpoint', method: 'POST', body: { gateway: custom() } },
+    ]);
+    renderPage(<PaymentGatewaysPage provider="CUSTOM" denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: 'تنظیم پل (رمز و نشانی)' }));
+    expect(await screen.findByText(/فقط پاسخ امضاشدهٔ استعلام پل/u)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('نشانی پایهٔ پل (https)'), {
+      target: { value: 'https://Pay.Example.com/nexa/' },
+    });
+    fireEvent.change(screen.getByLabelText('نشانی‌های مجاز اعلان پل (اختیاری)'), {
+      target: { value: '203.0.113.0/24\n198.51.100.7' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیرهٔ نشانی پل' }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.url.includes('/CUSTOM/endpoint'))).toBe(true);
+    });
+    const sent = api.calls.find((call) => call.url.includes('/CUSTOM/endpoint'))?.body as Record<
+      string,
+      unknown
+    >;
+    expect(sent).toMatchObject({
+      baseUrl: 'https://pay.example.com/nexa',
+      ipAllowlist: ['203.0.113.0/24', '198.51.100.7'],
+    });
+  });
+
+  it('refuses an http address at the field, sending nothing', async () => {
+    const api = stubApi([{ url: '/payment-gateways', body: { gateways: [custom()] } }]);
+    renderPage(<PaymentGatewaysPage provider="CUSTOM" denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: 'تنظیم پل (رمز و نشانی)' }));
+    fireEvent.change(await screen.findByLabelText('نشانی پایهٔ پل (https)'), {
+      target: { value: 'http://pay.example.com' },
+    });
+    expect(await screen.findByText(/نشانی پل باید با https/u)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'ذخیرهٔ نشانی پل' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('نشانی‌های مجاز اعلان پل (اختیاری)'), {
+      target: { value: '0.0.0.0/0' },
+    });
+    expect(await screen.findByText(/هر خط فهرست مجاز/u)).toBeInTheDocument();
+    expect(api.calls.some((call) => call.url.includes('/CUSTOM/endpoint'))).toBe(false);
+  });
+
+  it('while the route is on, the address is read-only and the reason is said', async () => {
+    stubApi([
+      {
+        url: '/payment-gateways',
+        body: {
+          gateways: [
+            custom({
+              status: 'ACTIVE',
+              credential: { required: true, setAt: '2026-10-26T09:10:00.000Z' },
+              endpoint: { baseUrl: 'https://pay.example.com/nexa', ipAllowlist: [] },
+            }),
+          ],
+        },
+      },
+    ]);
+    renderPage(<PaymentGatewaysPage provider="CUSTOM" denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: 'تنظیم پل (رمز و نشانی)' }));
+    expect(await screen.findByText(/اول درگاه را خاموش کنید/u)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'ذخیرهٔ نشانی پل' })).toBeDisabled();
+  });
+
+  it('offers «تست اتصال» once the secret and the address are set, through the check route', async () => {
+    const ready = custom({
+      credential: { required: true, setAt: '2026-10-26T09:10:00.000Z' },
+      endpoint: { baseUrl: 'https://pay.example.com/nexa', ipAllowlist: ['203.0.113.0/24'] },
+    });
+    const api = stubApi([
+      { url: '/payment-gateways', body: { gateways: [ready] } },
+      { url: '/payment-gateways/CUSTOM/check', method: 'POST', body: { gateway: ready } },
+    ]);
+    const view = renderPage(<PaymentGatewaysPage provider="CUSTOM" denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: 'تست اتصال' }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.url.includes('/CUSTOM/check'))).toBe(true);
+    });
+    expect(view.container.textContent).toContain('203.0.113.0/24');
+  });
+
+  it('says each refusal in Persian: no address on enable, change while on, a refused address, a short secret', async () => {
+    const { gatewayRequestRefusalText } = await import('../../apps/web/src/error-text');
+    const { ApiError } = await import('../../apps/web/src/api/client');
+    const conflict = (reason: string) =>
+      gatewayRequestRefusalText(
+        new ApiError(409, 'commerce.payment_gateway_unavailable', 'x', { reason }),
+      );
+    const invalid = (reason: string) =>
+      gatewayRequestRefusalText(new ApiError(400, 'commerce.request_invalid', 'x', { reason }));
+    expect(conflict('ENDPOINT_MISSING')).toContain('نشانی پل');
+    expect(conflict('ENDPOINT_CHANGE_WHILE_ACTIVE')).toContain('خاموش');
+    expect(invalid('ENDPOINT_ADDRESS_REFUSED')).toContain('نشانی');
+    expect(invalid('ENDPOINT_URL_INVALID')).toContain('https://');
+    expect(invalid('ALLOWLIST_INVALID')).toContain('CIDR');
+    expect(invalid('SECRET_TOO_SHORT')).toContain('۳۲');
+    expect(invalid('SOMETHING_ELSE')).toBeUndefined();
+  });
+});
+
+/**
  * WP18 — the customer gateway fee field. Only a route that settles through `GATEWAY` draws
  * it; a typed `5.25` travels as 525 basis points, and 525 reopens as `5.25`.
  */
