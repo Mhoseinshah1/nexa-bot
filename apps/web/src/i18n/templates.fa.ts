@@ -670,6 +670,15 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.order.preinvoice': { description: 'توضیح محصول برای مشتری' },
   // R6 item 4: on the card-to-card invoice the total is what must be TRANSFERRED.
   'bot.payment.transfer_instructions': { total: 'مبلغ قابل پرداخت (اصل + کارمزد)' },
+  // R10 B6: on the overpaid screens the rial figure is the amount TonPays returns.
+  'bot.payment.gateway_card_overpaid': {
+    amountRial: 'مبلغ بازگشتی به ریال (ارقام فارسی)',
+    amountToman: 'همان مبلغ بازگشتی به تومان (ارقام فارسی)',
+  },
+  'bot.payment.gateway_card_overpaid_pending': {
+    amountRial: 'مبلغ بازگشتی به ریال (ارقام فارسی)',
+    amountToman: 'همان مبلغ بازگشتی به تومان (ارقام فارسی)',
+  },
   'bot.channels.join_private_button': { number: 'شمارهٔ کانال در فهرست' },
   'bot.terms.required': { title: 'عنوان قوانین', body: 'متن قوانین' },
   'bot.service.delivery_tutorial': { text: 'متن آموزش پنل، همان‌طور که در پنل نوشته شده' },
