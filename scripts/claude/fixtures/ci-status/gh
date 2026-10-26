@@ -7,6 +7,13 @@ ep=""; for a in "${@:2}"; do [[ "$a" == -* ]] || { ep="$a"; break; }; done
 ep="${ep%%\?*}"; ep="${ep#repos/*/*/}"        # drop query and repos/o/r/
 name="${ep//\//_}"; [[ "$ep" == commits/*/check-runs ]] && name=check-runs
 n=$(($(cat "$FAKE_STATE/$name" 2>/dev/null || echo 0) + 1)); echo "$n" >"$FAKE_STATE/$name"
+# Paged fixtures: <name>.page1.json, <name>.page2.json, ... Without --paginate only page 1 is
+# served (what a script that forgets to page sees); with it, every page back to back, as
+# the real gh prints them ("[..][..]").
+if [[ -f "$FAKE_DIR/$name.page1.json" ]]; then
+  if [[ " $* " == *" --paginate "* ]]; then cat "$FAKE_DIR/$name".page*.json; else cat "$FAKE_DIR/$name.page1.json"; fi
+  exit 0
+fi
 for f in "$FAKE_DIR/$name.$n.json" "$FAKE_DIR/$name.json" "$FAKE_DIR/$name.txt"; do
   [[ -f "$f" ]] && { cat "$f"; exit 0; }
 done

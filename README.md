@@ -1,88 +1,119 @@
 # Nexa Bot
 
-A tenant-aware Telegram service-sales and management platform.
+A tenant-aware Telegram platform for selling and managing VPN/proxy services.
 
-Nexa Bot is a from-scratch replacement for MirzaBot, a PHP system whose product
-behaviour was reverse-engineered in detail. The research informs the domain
-model; the implementation is new. See `docs/research/README.md` for how to read
-that evidence, and `docs/adr/` for the decisions taken from it.
+Customers browse, buy, renew and manage services in a Telegram bot or in a
+Telegram Mini App. Operators run the business from a Persian right-to-left Web
+Admin. Paid orders are provisioned automatically on the operator's own panels.
+Nexa is a from-scratch replacement for MirzaBot, a PHP system whose behaviour
+was reverse-engineered; the research is in `docs/research/` and the decisions
+taken from it are in `docs/adr/`.
 
-## Status: Phases 0, 1 and 2 — foundation, identity, control plane
+Stack: TypeScript, NestJS, PostgreSQL 16, Redis, React. One codebase, several
+process roles (`api`, `worker`, `monitor`, `provisioner`, `recovery`).
 
-There are still **no product features**. Nothing here sells, charges, provisions
-or delivers anything to a customer.
+## Features
 
-**Phase 0 — foundation.** A frozen contracts package: branded ids, `Money`,
-half-open time periods, actor and tenant contexts, the permission catalog, the
-ledger reason vocabulary, the event catalog, the error taxonomy, the metric
-registry, the provider adapter interface, the price quote shape and template
-keys. Tenancy primitives with a repository guard and a two-tenant isolation
-suite. A transactional outbox with a relay, per-aggregate ordering,
-at-least-once delivery and effectively-once consumer effects. Durable
-idempotency, an append-only audit log, and operational events with
-deduplication. Envelope-encrypted secrets and the canonical seven-step write
-path composed end to end. Health endpoints that distinguish liveness from
-readiness, a Telegram webhook receiver, and a React admin shell.
+- **Telegram bot.** Catalogue, orders, wallet, renewals, extra traffic or time,
+  trials, referrals, support tickets, broadcasts. All customer text is Persian
+  and comes from editable message templates. See `docs/telegram-runtime.md`.
+- **Web Admin.** Customers, catalogue and pricing, discounts and cashback,
+  resellers, payments and refunds, panels, templates, settings, feature flags,
+  audit log, backups and recovery. Sign-in uses argon2id passwords, server-side
+  sessions and per-admin permissions, denied by default.
+- **Telegram Mini App.** A customer surface served by the API under `/miniapp`,
+  authenticated with Telegram `initData`: store, checkout, wallet, services,
+  referral and support.
+- **Payment gateways.** TonPays, TonPays (Telegram), TetraPay, NOWPayments,
+  CentralPay, Rialit and Telegram Stars, plus card-to-card receipts reviewed by
+  an operator. A gateway callback only prompts a check; the provider's own
+  inquiry decides whether money is credited. Balances are derived from an
+  append-only ledger; money is `bigint` minor units with a currency. TonPays is
+  built but not yet accepted against the real provider (`docs/project-status.md`).
+- **Panels.** Marzban, 3x-ui (MHSanaei) and RickPanel adapters, encrypted
+  credentials, a background health monitor and automatic provisioning of paid
+  orders. An order that cannot be delivered is refunded, not queued.
+- **Operations group and logs.** A Telegram forum group with one topic per
+  concern (payments, panels, errors, backups, security, ...) that receives
+  operational events. See `docs/ops-log-topics.md`.
+- **Backups and disaster recovery.** Scheduled, encrypted database backups that
+  are restore-tested before delivery to Telegram, and a Web Admin recovery lane
+  that restores one. See `docs/backup.md`, ADR-0025 and ADR-0028.
+- **MirzaBot cutover tooling.** A `.nxpkg` import with balance reconciliation
+  and a staged runbook, with rollback, for moving an existing MirzaBot
+  installation. See `docs/cutover/` and `docs/legacy-migration/`. The runbook is
+  prepared but has not been run in production; read its status page first.
 
-**Phase 1 — identity and authorization.** Authentication and authorization are
-real. Web Admin sign-in with argon2id password hashing, server-side sessions,
-login throttling and session revocation on credential rotation. Roles,
-per-admin permission overrides and a deny-by-default permission guard that
-resolves authority on every call rather than caching it into a session.
-Administrator management — create, disable, re-enable, change roles, rotate
-credentials — with the authoritative permission check inside the mutation
-transaction. `pnpm admin:bootstrap` creates an installation's first owner from
-the command line, running compiled output (`admin:bootstrap:dev` runs the
-source); there is no self-service registration.
+## Requirements
 
-**Phase 2 — the control plane.** Message templates stored **raw** and rendered
-nowhere near where they are edited, with an append-only revision history and a
-revert that removes the override rather than copying today's default. A settings
-registry where a key is declared or it does not exist, and unknown keys fail
-closed at the schema, the service and the surface. Feature flags as booleans
-whose parameters are settings, with confirmation proportional to blast radius.
-Operational events projected into notifications, delivered by a dispatcher with
-leases, bounded attempts, rate limiting and redacted failure evidence. A read
-model over the operational log. Web Admin screens for all of it, with optimistic
-concurrency and idempotent writes.
+From `docs/deployment.md` and `deploy/install.sh`; the installer checks these
+before it changes anything:
 
-What does **not** exist: purchases, orders, payments, wallet, receipts, refunds,
-cashback, discounts, pricing, catalog, provider and panel adapters, resellers,
-broadcasts, reporting and backups.
+- Ubuntu 22.04 LTS or 24.04 LTS, on `x86_64` or `aarch64`.
+- At least 8 GB free on `/var`. No CPU or memory minimum is documented.
+- Ports 80, 443/tcp and 443/udp free and reachable.
+- A DNS name already pointing at the host.
+- Docker Engine with Compose v2. The installer adds it from Docker's apt
+  repository if missing; an incompatible existing Docker is reported, not
+  replaced.
+- A Telegram bot token and the numeric Telegram id of the first owner.
 
-**This is not deployable yet.** There is no Dockerfile, no reverse-proxy or TLS
-topology, no release wiring, no `botctl` and no installer. That is the
-Deployment MVP checkpoint, which comes before Phase 3 — see
-`docs/open-questions.md`. A second prerequisite is recorded there too: the
-secret envelope is v1, and binding ciphertext to its context plus a practical
-multi-key rotation path must land before Phase 3 introduces provider
-credentials.
+## Install
 
-## Getting started
+Never pipe a remote script into a shell (`curl | sh`). A release publishes a
+container image, pinned by digest, with build provenance and an SBOM. It does
+not publish a signature or checksum for `install.sh`: the installer comes from
+this repository at the release tag. Check out the tag and compare its commit
+with the one in the release workflow's job summary before running it:
+
+```bash
+git clone https://github.com/Mhoseinshah1/nexa-bot && cd nexa-bot
+git checkout vX.Y.Z && git rev-parse HEAD   # compare with the release job summary
+sudo ./deploy/install.sh --domain admin.example.com --acme-email ops@example.com --version vX.Y.Z
+```
+
+Use the release you are installing instead of `vX.Y.Z`. The installer prompts
+for the first owner's password and the bot token (hidden input; neither is ever
+a command-line argument), generates secrets once, migrates, starts the stack and
+registers the Telegram webhook. It is safe to rerun after a failure. Unattended
+installs are covered in `docs/deployment.md`, which also lists image signature
+verification as outstanding hardening.
+
+## Operating with `botctl`
+
+`botctl` is installed at `/usr/local/bin/botctl`; `botctl --help` lists
+everything.
+
+```bash
+botctl status            # what is running, and whether it is ready
+botctl version           # installed version, source commit, image digest
+botctl backup            # a consistent PostgreSQL dump
+botctl update v1.0.1     # update to a release, by digest
+botctl rollback          # previous release's image (never restores data)
+botctl logs [SERVICE]    # follow logs
+botctl telegram status   # local and Telegram-side webhook state
+botctl cutover preflight # read-only MirzaBot cutover checklist
+```
+
+It also has `restore`, `restart`, background `roles`, `secrets` (rewrap,
+retire-check, key migration) and `admin` two-step sign-in recovery.
+
+## Development
 
 Requires Node 22 and pnpm 10. PostgreSQL 16 and Redis 7 come from Docker, or
 natively if no Docker daemon is available.
 
 ```bash
 pnpm install
-cp .env.example .env
-# generate a key-encryption key and paste it into SECRETS_KEK:
-node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
-
+cp .env.example .env     # replace the SECRETS_KEYS placeholder, see the file
 bash scripts/dev-services.sh
-pnpm db:migrate:dev
-pnpm db:seed:dev
+pnpm db:migrate:dev && pnpm db:seed:dev
+pnpm admin:bootstrap:dev               # first owner
+pnpm build                             # the start scripts run compiled output
+pnpm --filter @nexa/api start:api      # API, health, Telegram webhook
+pnpm --filter @nexa/api start:worker   # outbox relay and notifications
+pnpm --filter @nexa/web dev            # Web Admin on :5173
 ```
-
-Run the processes:
-
-```bash
-pnpm --filter @nexa/api start:api      # HTTP API, health, Telegram webhook
-pnpm --filter @nexa/api start:worker   # outbox relay
-pnpm --filter @nexa/web dev            # admin shell on :5173
-```
-
-## Verification
 
 ```bash
 pnpm verify              # typecheck, lint, boundary checks, i18n, unit tests, build
@@ -90,24 +121,20 @@ pnpm test:integration    # against real PostgreSQL and Redis
 pnpm db:check            # schema and migrations agree
 ```
 
-`pnpm check:boundaries` enforces the rules a type system cannot: dependency
-direction, money never typed as `number`, no mutable balance column, no empty
-catch blocks, no server code in the web bundle, and no identifiers in the
-committed research.
-
 ## Documentation
 
-| File                      | What it covers                                              |
-| ------------------------- | ----------------------------------------------------------- |
-| `CLAUDE.md`               | Working notes and the non-negotiables                       |
-| `docs/architecture.md`    | Module structure, process roles, the write path, phase plan |
-| `docs/conventions.md`     | Every convention, and the failure it prevents               |
-| `docs/domain-glossary.md` | The vocabulary, including the boundaries that must not blur |
-| `docs/open-questions.md`  | Unresolved product decisions, carried not guessed           |
-| `docs/deployment.md`      | Installing, operating, updating and rolling back            |
-| `docs/vps-acceptance.md`  | The checklist for the first real staging VPS                |
-| `docs/adr/`               | Decisions, with reasons and rejected alternatives           |
-| `docs/research/`          | Sanitized reverse-engineering evidence                      |
+| Document                   | Covers                                        |
+| -------------------------- | --------------------------------------------- |
+| `docs/project-status.md`   | Phase status and the standing owner decisions |
+| `docs/architecture.md`     | Modules, process roles, the write path        |
+| `docs/conventions.md`      | Coding rules and the failures they prevent    |
+| `docs/deployment.md`       | Installing, operating, updating, rolling back |
+| `docs/vps-acceptance.md`   | Checklist for the first real staging server   |
+| `docs/backup.md`           | Backups, restore and retention                |
+| `docs/telegram-runtime.md` | How the bot is structured                     |
+| `docs/cutover/`            | MirzaBot to Nexa production cutover runbook   |
+| `docs/open-questions.md`   | Unresolved product decisions                  |
+| `docs/adr/`                | Architecture decisions and rejected options   |
 
 ## Licence
 
