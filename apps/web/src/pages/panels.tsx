@@ -34,12 +34,14 @@ import {
   testPanel,
   updatePanel,
 } from '../api/client';
-import { formatTimestamp, splitDuration } from '../format';
+import { formatNumber, formatTimestamp, splitDuration } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState, shownData } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import {
   ActivationFields,
+  acceptsRequestTimeout,
+  requestTimeoutMsFrom,
   activationFromDraft,
   draftFromActivation,
   sameActivationDraft,
@@ -1702,7 +1704,7 @@ function OverviewTab({
                   </Field>
                   <Field
                     label={t('web.panel_base_url')}
-                    hint={t('web.panel_base_url_hint')}
+                    hint={baseUrlHint(panel.providerType)}
                     htmlFor={`url-${panel.id}`}
                   >
                     <input
@@ -2643,8 +2645,8 @@ function CredentialsTab({
               )}
               {accepts('apiToken') && (
                 <Field
-                  label={t('web.api_token')}
-                  hint={t('web.api_token_hint')}
+                  label={apiTokenCopy(panel.providerType).label}
+                  hint={apiTokenCopy(panel.providerType).hint}
                   htmlFor={`ct-${panel.id}`}
                 >
                   <input
@@ -2800,6 +2802,29 @@ function WorkloadTab({ panel }: { panel: PanelSummaryResponse }) {
 // ---------------------------------------------------------------------------
 
 /**
+ * The API-token field's label and hint, read from the provider descriptor's own gates
+ * (R10 C2) — never from its name. A provider whose token is a SIGNING key declares a
+ * minimum length (the custom bridge), and the field says what it is and how long.
+ */
+function apiTokenCopy(providerType: ProviderType | null): { label: string; hint: string } {
+  const minimum =
+    providerType === null ? undefined : providerDescriptor(providerType)?.minimumApiTokenLength;
+  return minimum === undefined
+    ? { label: t('web.api_token'), hint: t('web.api_token_hint') }
+    : {
+        label: t('web.api_token_signing'),
+        hint: `${t('web.api_token_signing_hint')} ${formatNumber(minimum)}`,
+      };
+}
+
+/** The address hint: a provider called over HTTPS only says so (R10 C2). */
+function baseUrlHint(providerType: ProviderType | null): string {
+  return providerType !== null && providerDescriptor(providerType)?.transport === 'HTTPS_ONLY'
+    ? t('web.panel_base_url_https_hint')
+    : t('web.panel_base_url_hint');
+}
+
+/**
  * Adding a panel.
  *
  * The provider list comes from the server's catalogue, so the picker cannot
@@ -2847,6 +2872,8 @@ export function NewPanelPage({
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [apiToken, setApiToken] = useState('');
+  /** R10 C2: the per-panel timeout, in seconds, for a provider whose activation takes one. */
+  const [timeoutSeconds, setTimeoutSeconds] = useState('');
   /** The name of a panel created by an actor who cannot open its detail page. */
   const [created, setCreated] = useState<string | null>(null);
   const submission = useSubmissionKey();
@@ -2861,6 +2888,8 @@ export function NewPanelPage({
    */
   const accepts = (field: 'username' | 'password' | 'apiToken'): boolean =>
     mayRotate && chosen !== undefined && shapeAcceptsCredential(chosen.credentialShape, field);
+  /** Asked of the provider's own activation schema, so it appears exactly where it is accepted. */
+  const takesTimeout = chosen !== undefined && acceptsRequestTimeout(chosen.key);
 
   const create = useMutation({
     mutationFn: (command: {
@@ -2869,6 +2898,7 @@ export function NewPanelPage({
       providerType: ProviderType;
       baseUrl: string;
       credentials?: { username?: string; password?: string; apiToken?: string };
+      activation?: Record<string, unknown>;
     }) => createPanel(command),
     onSuccess: async (result) => {
       submission.settle();
@@ -2898,6 +2928,7 @@ export function NewPanelPage({
       setUsername('');
       setPassword('');
       setApiToken('');
+      setTimeoutSeconds('');
     },
     onError: (error: unknown) => {
       submission.settleOn(error);
@@ -2916,11 +2947,20 @@ export function NewPanelPage({
       ...(password === '' || !accepts('password') ? {} : { password }),
       ...(apiToken === '' || !accepts('apiToken') ? {} : { apiToken }),
     };
+    // R10 C2: an empty timeout is "none"; one that is not a number is refused here,
+    // in Persian, rather than sent as a value the server would refuse anyway.
+    const requestTimeoutMs =
+      takesTimeout && timeoutSeconds.trim() !== '' ? requestTimeoutMsFrom(timeoutSeconds) : null;
+    if (requestTimeoutMs !== null && Number.isNaN(requestTimeoutMs)) {
+      toast({ tone: 'danger', message: t('web.err_panel_request_invalid') });
+      return;
+    }
     const command = {
       name,
       providerType,
       baseUrl,
       ...(Object.keys(credentials).length === 0 ? {} : { credentials }),
+      ...(requestTimeoutMs === null ? {} : { activation: { requestTimeoutMs } }),
     };
     create.mutate({ ...command, idempotencyKey: submission.current(command) });
   };
@@ -2992,7 +3032,7 @@ export function NewPanelPage({
                     <div className="full">
                       <Field
                         label={t('web.panel_base_url')}
-                        hint={t('web.panel_base_url_hint')}
+                        hint={baseUrlHint(chosen?.key ?? null)}
                         htmlFor="new-url"
                         required
                       >
@@ -3005,6 +3045,21 @@ export function NewPanelPage({
                         />
                       </Field>
                     </div>
+                    {takesTimeout && (
+                      <Field
+                        label={t('web.panel_request_timeout')}
+                        hint={t('web.panel_request_timeout_hint')}
+                        htmlFor="new-timeout"
+                      >
+                        <input
+                          id="new-timeout"
+                          className="input"
+                          inputMode="decimal"
+                          value={timeoutSeconds}
+                          onChange={(event) => setTimeoutSeconds(event.target.value)}
+                        />
+                      </Field>
+                    )}
                   </div>
                 </div>
 
@@ -3038,8 +3093,8 @@ export function NewPanelPage({
                       )}
                       {accepts('apiToken') && (
                         <Field
-                          label={t('web.api_token')}
-                          hint={t('web.api_token_hint')}
+                          label={apiTokenCopy(chosen?.key ?? null).label}
+                          hint={apiTokenCopy(chosen?.key ?? null).hint}
                           htmlFor="new-token"
                         >
                           <input

@@ -9035,6 +9035,18 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  /*
+   * The custom gateway (Round 10 C1, `docs/protocols/custom-gateway.md`). Only its fallback name
+   * is its own: its invoice, review and refusal screens are the generic `bot.payment.gateway_*`
+   * ones, because what a bridge says is Nexa's protocol, not a provider's own words.
+   */
+  {
+    key: 'bot.payment.route_name_custom',
+    description:
+      'The product’s own name for the custom-gateway route (`CUSTOM`), used when the operator set no display name: «درگاه پرداخت». The operator is expected to name the route after the payment service behind their bridge.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.payment.rialit_review_unresolved',
     description:

@@ -93,6 +93,13 @@ export interface SafeHttpOptions extends UrlPolicyOptions {
   readonly resolve?: (hostname: string) => Promise<readonly LookupAddress[] | null>;
 }
 
+/**
+ * What one panel's binding may narrow (R10 C2). Only a SHORTER deadline: see `forBase`.
+ */
+export interface SafeHttpBinding {
+  readonly timeoutMs?: number;
+}
+
 export const DEFAULT_SAFE_HTTP: Omit<SafeHttpOptions, 'allowLoopback'> = {
   totalTimeoutMs: 10_000,
   maxResponseBytes: 512 * 1024,
@@ -261,13 +268,30 @@ export class SafeHttpClient {
    * change the base, and cannot address another host: `send` resolves the
    * adapter's PATH against the base and refuses anything absolute.
    */
-  forBase(baseUrl: string): ProviderHttpClient {
+  forBase(baseUrl: string, binding: SafeHttpBinding = {}): ProviderHttpClient {
+    /*
+     * The per-panel deadline may only be SHORTER than the installation's (R10 C2).
+     *
+     * A panel's own timeout (the `custom` provider's `requestTimeoutMs`) is an operator
+     * value on a panel row, and the installation's `PANEL_HTTP_TIMEOUT_MS` is what every
+     * lease, cooldown floor and tick budget in this codebase was sized against. Taking
+     * the smaller of the two keeps that true: one panel can be made to give up sooner,
+     * never to hold a worker longer than any panel may.
+     */
+    const totalTimeoutMs =
+      binding.timeoutMs === undefined
+        ? this.options.totalTimeoutMs
+        : Math.min(binding.timeoutMs, this.options.totalTimeoutMs);
     return {
-      send: (request: ProviderHttpRequest) => this.send(baseUrl, request),
+      send: (request: ProviderHttpRequest) => this.send(baseUrl, request, totalTimeoutMs),
     };
   }
 
-  async send(baseUrl: string, request: ProviderHttpRequest): Promise<ProviderHttpResult> {
+  async send(
+    baseUrl: string,
+    request: ProviderHttpRequest,
+    totalTimeoutMs: number = this.options.totalTimeoutMs,
+  ): Promise<ProviderHttpResult> {
     // Every outbound call to a panel passes through here, which is why the
     // transaction guard is here and not at each of the callers. See
     // `transaction-boundary.ts`: a probe inside a transaction would hold a
@@ -328,7 +352,7 @@ export class SafeHttpClient {
      */
     const budget = requestEffect(request) === 'READ' ? this.options.maxRetries : 0;
     for (let attempt = 0; attempt <= budget; attempt += 1) {
-      const outcome = await this.attempt(verdict.url, request);
+      const outcome = await this.attempt(verdict.url, request, totalTimeoutMs);
       if (outcome.ok) return outcome;
       last = outcome;
       if (!isTransient(outcome.failure)) break;
@@ -343,8 +367,12 @@ export class SafeHttpClient {
    * it. `dial`'s own result wins if it arrives first; otherwise the deadline
    * settles the attempt as TIMEOUT and aborts whatever `dial` had open.
    */
-  private async attempt(url: URL, request: ProviderHttpRequest): Promise<ProviderHttpResult> {
-    const deadline = startDeadline(this.options.totalTimeoutMs);
+  private async attempt(
+    url: URL,
+    request: ProviderHttpRequest,
+    totalTimeoutMs: number,
+  ): Promise<ProviderHttpResult> {
+    const deadline = startDeadline(totalTimeoutMs);
     try {
       return await deadline.race(this.dial(url, request, deadline));
     } finally {
@@ -680,6 +708,10 @@ function encodeBody(
   if (request.body === undefined) return null;
   if (request.body.kind === 'json') {
     return { payload: JSON.stringify(request.body.value), contentType: 'application/json' };
+  }
+  if (request.body.kind === 'json-text') {
+    // Verbatim: these are the bytes the adapter signed (R10 C2). Never re-encoded.
+    return { payload: request.body.text, contentType: 'application/json; charset=utf-8' };
   }
   const form = new URLSearchParams();
   for (const [key, value] of Object.entries(request.body.value)) form.append(key, value);

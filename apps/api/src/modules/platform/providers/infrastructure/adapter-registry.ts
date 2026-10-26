@@ -8,6 +8,7 @@ import {
   type ProviderConnectionAdapter,
   type ProviderType,
 } from '@nexa/contracts';
+import { CustomPanelAdapter } from './custom-panel.adapter.js';
 import { MarzbanAdapter } from './marzban.adapter.js';
 import { RickpanelAdapter } from './rickpanel.adapter.js';
 import { SanaeiAdapter } from './sanaei.adapter.js';
@@ -45,6 +46,14 @@ const ADAPTERS: Partial<Record<ProviderType, () => ProviderConnectionAdapter>> =
    */
   rickpanel: () => new RickpanelAdapter(),
   sanaei: () => new SanaeiAdapter(),
+  /*
+   * R10 C2: Nexa's own bridge protocol (`docs/protocols/custom-panel.md`). Registered like
+   * the other three — provisioning, the live check, the monitor and the capacity and
+   * health views all reach it through this map and nothing else. Whether a tenant may
+   * CREATE one is the descriptor's `requiresFeature`, enforced by the panel service; an
+   * existing custom panel is operated whatever that flag says.
+   */
+  custom: () => new CustomPanelAdapter(),
 };
 
 /** The provider types this release can CONNECT to, as opposed to name. */

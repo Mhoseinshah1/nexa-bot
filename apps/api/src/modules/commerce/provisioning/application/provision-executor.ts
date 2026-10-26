@@ -17,6 +17,7 @@ import {
   type ProviderServiceTarget,
   type ProviderAllowancePlan,
   type ProviderUserRef,
+  type ProviderWriteContext,
   type ServiceState,
 } from '@nexa/contracts';
 import type { PanelOperabilityRefusal } from './ports.js';
@@ -468,6 +469,13 @@ export async function provisionCall(
     readonly durationDays: number | null;
     readonly expiresAt: Date | null;
     readonly deviceLimit: number | null;
+    /**
+     * The PROVISION operation's id: the same on every attempt of this create (R10 C2).
+     * A provider that keys idempotency on the caller's id (the `custom` bridge) is sent
+     * it; the others ignore it. Nothing here retries a lost create — that rule is the
+     * provisioner's and is unchanged.
+     */
+    readonly operationId: string;
   },
 ): ReturnType<ProviderAdapter['createUser']> {
   return adapter.createUser(target, http, {
@@ -479,6 +487,7 @@ export async function provisionCall(
     durationDays: input.durationDays,
     expiresAt: input.expiresAt,
     deviceLimit: input.deviceLimit,
+    operationId: input.operationId,
   });
 }
 
@@ -518,14 +527,20 @@ export async function usageSyncCall(
  * `canDisableUser` and its siblings are the only way to produce those types, and each
  * requires the declared capability as well as the method, so a caller cannot reach
  * these functions with an adapter that does not advertise the operation.
+ *
+ * Each takes the operation's `ProviderWriteContext` (R10 C2) and passes it through: the
+ * operation id is the same on every attempt, so a provider that keys idempotency on it
+ * (the `custom` bridge) recognises a retried write as the same write. Required here, not
+ * optional as it is on the port, so no call site can forget it.
  */
 export async function suspendCall(
   adapter: CanDisableUser,
   target: ProviderServiceTarget,
   http: Parameters<CanDisableUser['suspendUser']>[1],
   ref: ProviderUserRef,
+  context: ProviderWriteContext,
 ): ReturnType<CanDisableUser['suspendUser']> {
-  return adapter.suspendUser(target, http, ref);
+  return adapter.suspendUser(target, http, ref, context);
 }
 
 export async function resumeCall(
@@ -533,8 +548,9 @@ export async function resumeCall(
   target: ProviderServiceTarget,
   http: Parameters<CanEnableUser['resumeUser']>[1],
   ref: ProviderUserRef,
+  context: ProviderWriteContext,
 ): ReturnType<CanEnableUser['resumeUser']> {
-  return adapter.resumeUser(target, http, ref);
+  return adapter.resumeUser(target, http, ref, context);
 }
 
 /**
@@ -548,8 +564,9 @@ export async function rotateCall(
   http: Parameters<CanRotateSubscription['rotateSubscription']>[1],
   ref: ProviderUserRef,
   previousUrl: string | null,
+  context: ProviderWriteContext,
 ): ReturnType<CanRotateSubscription['rotateSubscription']> {
-  return adapter.rotateSubscription(target, http, ref, previousUrl);
+  return adapter.rotateSubscription(target, http, ref, previousUrl, context);
 }
 
 /**
@@ -576,8 +593,9 @@ export async function allowanceCall(
   http: Parameters<CanApplyAllowance['applyAllowance']>[1],
   ref: ProviderUserRef,
   plan: ProviderAllowancePlan,
+  context: ProviderWriteContext,
 ): ReturnType<CanApplyAllowance['applyAllowance']> {
-  return adapter.applyAllowance(target, http, ref, plan);
+  return adapter.applyAllowance(target, http, ref, plan, context);
 }
 
 /**
@@ -637,8 +655,9 @@ export async function terminateCall(
   target: ProviderServiceTarget,
   http: Parameters<CanDeleteUser['terminateUser']>[1],
   ref: ProviderUserRef,
+  context: ProviderWriteContext,
 ): ReturnType<CanDeleteUser['terminateUser']> {
-  return adapter.terminateUser(target, http, ref);
+  return adapter.terminateUser(target, http, ref, context);
 }
 
 /**

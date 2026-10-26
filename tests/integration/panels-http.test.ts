@@ -195,6 +195,53 @@ describe('panel HTTP surface', () => {
     ]);
   });
 
+  /*
+   * R10 C2: the `custom` provider is in the registry and offered only to a tenant whose
+   * `custom_panel_provider` flag is on — off by default. The list is a courtesy; the
+   * create is refused by the service either way.
+   */
+  it('offers the custom provider only while custom_panel_provider is on', async () => {
+    const before = providerListResponseSchema.parse(
+      (await get(PANEL_ROUTES.providers, ownerCookie)).json(),
+    );
+    expect(before.providers.map((provider) => provider.key)).not.toContain('custom');
+    const refused = await createPanel(ownerCookie, {
+      providerType: 'custom',
+      baseUrl: 'https://bridge.example.test/nexa/',
+    });
+    expect(refused.statusCode).toBe(412);
+    expect(refused.json()).toMatchObject({ error: { code: 'panel.provider_feature_disabled' } });
+
+    const flagOwner = adminActorFor(
+      await createAdmin(api.container, tenantA, { username: 'flag-owner', roleKeys: ['owner'] }),
+    );
+    const flag = (await api.container.featureFlags.list(tenantA, flagOwner)).find(
+      (one) => one.key === 'custom_panel_provider',
+    );
+    expect(flag?.enabled).toBe(false);
+    await api.container.featureFlags.set(tenantA, flagOwner, {
+      idempotencyKey: idempotencyKey(),
+      key: 'custom_panel_provider',
+      enabled: true,
+      expectedVersion: flag?.version ?? null,
+      confirmKey: 'custom_panel_provider',
+      reason: 'panels-http custom provider case',
+    });
+
+    const after = providerListResponseSchema.parse(
+      (await get(PANEL_ROUTES.providers, ownerCookie)).json(),
+    );
+    const custom = after.providers.find((provider) => provider.key === 'custom');
+    expect(custom).toMatchObject({ credentialShape: 'OPAQUE_TOKEN', requiredActivationFields: [] });
+    const accepted = await createPanel(ownerCookie, {
+      providerType: 'custom',
+      baseUrl: 'https://bridge.example.test/nexa/',
+      credentials: { apiToken: 'k'.repeat(43) },
+    });
+    expect(accepted.statusCode, accepted.body).toBe(201);
+    expect(accepted.body).not.toContain('k'.repeat(43));
+  });
+
   it('publishes for EVERY provider only what this release can execute', () => {
     // The catalogue is where a capability becomes a public claim. Written over
     // the whole response rather than per provider, so a provider added later

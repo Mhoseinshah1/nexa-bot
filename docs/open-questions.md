@@ -4464,3 +4464,69 @@ Each is a default that moves no money; the owner decides whether to change it.
 - **OQ-GC-04 — the limits.** 5000 codes per batch, 5 refused codes per customer per rolling hour,
   an expiry between one hour and five years, `gift_cards.create`/`.export` CRITICAL and
   `gift_cards.view` MEDIUM (owner role only by default): defaults pending the owner's review.
+
+## R10 C2 — the custom panel (Nexa's own bridge protocol, `docs/protocols/custom-panel.md`)
+
+Defaults below are the readings that move no money and send no customer message.
+
+- **OQ-C2-01 — adopt an account after a lost create by its binding (C2-b).** After a create
+  whose answer was lost, the bridge can PROVE an account is this service's (`nexaRef`
+  matches). Today the provisioner adopts only with a recorded 2xx create answer (WP15 G7), so
+  the service waits UNRECONCILED for an operator, never refunded. Proposal: also adopt when
+  the signed read shows the matching `nexaRef` (a `binding` field on the lookup outcome, a
+  contract change, plus a provisioner change). **Not built; the owner decides.**
+- **OQ-C2-02 — declare-after-acceptance.** The `custom` capabilities are declared on Nexa's
+  own specification and a mock bridge, not a real one. Recommended: run §12 of the protocol
+  document (Nexa's shipped adapter, env-configured URL and secret, failing rather than
+  skipping) against the first real bridge before `custom_panel_provider` is turned on for a
+  production tenant. Until then the flag stays OFF.
+- **OQ-C2-03 — the flag turned off while custom panels exist.** Built: it stops new custom
+  panels only; existing ones keep operating and selling. Alternative, if the owner wants the
+  switch to stop SALES too: an eligibility reason for gated types (a contract change).
+- **OQ-C2-04 — `http://` bridges on a private network.** Refused everywhere (create, address
+  change, the adapter itself): a subscription link is a bearer secret. Allowing plain HTTP on
+  a private range is the owner's call.
+- **OQ-C2-05 — `lastConnection`.** Read and stored like Marzban's `online_at` and shown where
+  that is shown (the service card, the admin's customer view); nothing notifies on it. Whether a bridge's "never"
+  should ever trigger a customer message is not decided.
+- **OQ-C2-06 — `GET …/links` raw configs.** Specified and implemented by bridges, not called by
+  Nexa v1 (`DELIVER_RAW_CONFIGS` is not declared). Delivering raw configs needs a consumer and
+  the owner's decision on how they are shown.
+- **OQ-C2-07 — accounts not created through the protocol (`nexaRef: null`).** Never managed
+  or adopted in v1; importing an existing panel's customers through a bridge is not designed.
+- **OQ-C2-08 — the type's display name.** `canonicalName` is «Custom (Nexa bridge v1)», shown
+  Latin in the Persian admin like the other providers' names; the Features page calls the
+  switch «پنل اختصاصی (پل Nexa)». Confirm or rename.
+
+## The custom gateway (Round 10 C1, `docs/protocols/custom-gateway.md`, `docs/custom-gateway-audit.md`)
+
+The protocol is Nexa's own, so most questions a provider would leave open are decided by the
+document. What follows is what the owner has not decided; each is built the way that moves no
+money.
+
+- **OQ-CG-01 — acceptance against a real bridge.** UNRESOLVED. Owed on staging with a bridge a
+  third party wrote from the document alone: secret and base URL saved, «تست اتصال» passes, one
+  top-up paid on the bridge's page, the wallet rising by exactly the principal, one callback
+  answered 200 and its replay a duplicate, a forged callback 401. Any disagreement corrects the
+  document or the reference bridge (`tests/support/mock-custom-bridge.ts`) in the same commit.
+  Until then the route ships `DISABLED` and is not claimed as accepted.
+- **OQ-CG-02 — more than one custom bridge per store.** v1 has ONE `CUSTOM` route per tenant: a
+  route's identity is `(tenant, provider)` across six tables (lead decision). Several bridges
+  would need a surrogate route id; the operator's display name is the route's name today.
+- **OQ-CG-03 — OVERPAID (and UNDERPAID) settlement.** Both are held UNKNOWN for an operator; nothing
+  is credited automatically, and the difference is settled with the customer out of band. Whether
+  an OVERPAID should settle the asked amount automatically and hold only the excess is the owner's
+  call.
+- **OQ-CG-04 — calling `cancel`.** The protocol defines it (optional for a bridge); Nexa v1 never
+  calls it, because the existing pipeline cancels on expiry only on the card-transfer route
+  (TonPays Telegram) and no link gateway is cancelled (lead decision). `expires_at` already binds
+  the bridge. Wiring it through `gateway_provider_requests` on expiry is a follow-up.
+- **OQ-CG-05 — who may point the route at a bridge, and where.** Whoever holds
+  `payments.gateways.edit` can set the secret and the base URL, and a bridge that answers PAID
+  decides which payments are approved. Today: the permission, refused while ACTIVE, audited, the
+  installation URL policy (loopback, link-local and Nexa's own networks refused; private networks
+  ALLOWED so a LAN bridge works). No security-topic operational event exists for gateway
+  configuration changes, so none is raised (the audit row is the record). The owner may want this
+  owner-only, a security alert on every change, or public addresses only.
+- **OQ-CG-06 — a return-to-bot link.** The protocol sends no return URL; the customer comes back to
+  the bot by themselves. A `return_url` field is an additive v1 change if wanted.

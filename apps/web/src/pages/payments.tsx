@@ -326,6 +326,7 @@ function GatewayName({ provider }: { provider: string | null }) {
   if (provider === 'CENTRALPAY') return <>{t('web.payment_gateway_provider_centralpay')}</>;
   if (provider === 'TETRAPAY') return <>{t('web.payment_gateway_provider_tetrapay')}</>;
   if (provider === 'RIALIT') return <>{t('web.payment_gateway_provider_rialit')}</>;
+  if (provider === 'CUSTOM') return <>{t('web.payment_gateway_provider_custom')}</>;
   return <Ltr>{provider}</Ltr>;
 }
 
