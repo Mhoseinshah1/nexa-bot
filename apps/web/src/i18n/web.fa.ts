@@ -7970,6 +7970,7 @@ export const WEB_FA = {
   'web.perm_users_phone_verify': 'ثبت یا لغو تأیید دستی شمارهٔ مشتری',
   'web.perm_users_location_edit': 'تنظیم سقف اختصاصی تغییر لوکیشن مشتری',
   'web.perm_users_notifications_edit': 'تغییر ترجیح اعلان‌های تبلیغاتی مشتری',
+  'web.perm_users_discount_edit': 'تعیین یا حذف تخفیف شخصی مشتری',
   'web.perm_users_transfer': 'انتقال حساب مشتری به هویت تلگرامی دیگر',
   'web.perm_users_tier_change': 'تغییر سطح مشتری',
   'web.perm_users_wallet_credit': 'افزایش موجودی کیف پول مشتری',
