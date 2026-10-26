@@ -32,7 +32,9 @@ import { NotifyingOperationalEventRecorder } from '../../apps/api/src/modules/co
  * - L10 renders every field of a purchase from a synthetic fixture.
  *
  * MUTATION: dropping the `provisioning.delivered` branch of `suppresses` fails the first two
- * tests; routing a PROVISION stall back to the generic layout fails the L23 test.
+ * tests; routing a PROVISION stall back to the generic layout fails the L23 test. R10 B5:
+ * `customer.source !== 'NEXA'` put back in `provisioningReport` fails both "R10 B5 — a stall
+ * of an imported ..." cases, `service.source !== 'NEXA'` the imported-service one.
  */
 
 const tenant = {
@@ -142,9 +144,10 @@ const render = (templateKey: string, values: unknown) =>
   );
 
 describe('provisioning.delivered posts no generic line (the purchase message covers it)', () => {
-  it('is suppressed for a created service, and kept for an adopted one', () => {
+  it('is suppressed for a created service, and (R10 B5) for one adopted after a lost answer', () => {
     expect(presenter.suppresses(delivered({ serviceId: 'svc-1' }))).toBe(true);
-    expect(presenter.suppresses(delivered({ serviceId: 'svc-1', adopted: true }))).toBe(false);
+    // The adoption now emits `ServiceProvisioned`, so its «🛒 خرید جدید» covers it too.
+    expect(presenter.suppresses(delivered({ serviceId: 'svc-1', adopted: true }))).toBe(true);
   });
 
   it('queues nothing through the projector, while the event is still recorded', async () => {
@@ -165,11 +168,67 @@ describe('provisioning.delivered posts no generic line (the purchase message cov
       presenter,
     );
     await projector.record(tenant, delivered({ serviceId: 'svc-1' }), {});
-    expect(recordedInputs).toHaveLength(1);
-    expect(queued).toEqual([]);
-    // The generic layout still serves an event nothing else covers.
     await projector.record(tenant, delivered({ serviceId: 'svc-1', adopted: true }), {});
-    expect(queued).toHaveLength(1);
+    expect(recordedInputs).toHaveLength(2);
+    expect(queued).toEqual([]);
+  });
+});
+
+describe('R10 B5 — a stall of an imported customer’s or service’s operation is still the error report', () => {
+  /*
+   * A stall is an operation THIS installation performed; the import performs none. Refusing a
+   * `MIRZA` customer or service sent the owner's error report back to the generic English
+   * layout for every migrated customer.
+   */
+  const importedFacts = (who: 'customer' | 'service') =>
+    ({
+      service: async () => (who === 'service' ? { ...service, source: 'MIRZA' } : service),
+      customer: async () => ({ ...customer, source: 'MIRZA' }),
+      order: async () => order,
+      paymentOfOrder: async () => payment,
+    }) as unknown as OpsLogFacts;
+
+  it.each(['customer', 'service'] as const)(
+    'an imported %s: a PROVISION stall is L23 and a RENEW stall L24',
+    async (who) => {
+      const imported = new OperationalEventPresenter({
+        facts: importedFacts(who),
+        words: i18nOpsLogWords,
+      });
+      const provision = await imported.present(
+        tenant,
+        stalled({ reason: 'ATTEMPTS_SPENT', operationType: 'PROVISION' }),
+        recorded,
+        {},
+      );
+      expect(provision?.logType).toBe('ERROR_PROVISION');
+      const renew = await imported.present(
+        tenant,
+        stalled({ reason: 'ATTEMPTS_SPENT', operationType: 'RENEW' }),
+        recorded,
+        {},
+      );
+      expect(renew?.logType).toBe('ERROR_OPERATION');
+    },
+  );
+
+  it('a PROVISION stall of an order the import wrote keeps the generic layout', async () => {
+    const imported = new OperationalEventPresenter({
+      facts: {
+        service: async () => service,
+        customer: async () => customer,
+        order: async () => ({ ...order, source: 'MIRZA' }),
+        paymentOfOrder: async () => payment,
+      } as unknown as OpsLogFacts,
+      words: i18nOpsLogWords,
+    });
+    const presented = await imported.present(
+      tenant,
+      stalled({ reason: 'ATTEMPTS_SPENT', operationType: 'PROVISION' }),
+      recorded,
+      {},
+    );
+    expect(presented?.logType).toBeUndefined();
   });
 });
 

@@ -56,7 +56,7 @@ export class FailureLogConsumer implements EventConsumer {
     }
     const payload = EVENT_PAYLOAD_SCHEMAS.ProvisioningOutcomeUnknown.parse(event.payload);
     const service = await this.deps.facts.service(scope, payload.serviceId, tx);
-    if (service === null || service.source !== 'NEXA') return;
+    if (service === null) return;
     await this.report(scope, event, service.orderId, payload, true, at, tx);
   }
 
@@ -69,10 +69,14 @@ export class FailureLogConsumer implements EventConsumer {
     at: Date,
     tx: TransactionScope,
   ): Promise<void> {
+    // The ORDER is the purchase's provenance (hotfix v0.8.2-e, extended by R10 B5): an
+    // adopted or imported order is history and stays silent; an order this installation took
+    // from a customer the import wrote — or for a service the import adopted — is this
+    // installation's sale, and its failure is reported like any other.
     const order = await this.deps.facts.order(scope, orderId, tx);
     if (order === null || order.origin !== 'STANDARD' || order.source !== 'NEXA') return;
     const customer = await this.deps.facts.customer(scope, order.customerId, tx);
-    if (customer === null || customer.source !== 'NEXA') return;
+    if (customer === null) return;
     const payment = await this.deps.facts.paymentOfOrder(scope, order.id, tx);
     const recorded = await this.deps.facts.failedOperationOfOrder(scope, order.id, tx);
     // The operation row when there is one; for an unknown outcome the event names the kind

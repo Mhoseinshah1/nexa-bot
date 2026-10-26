@@ -120,9 +120,18 @@ export class TicketSupportNotifyConsumer implements EventConsumer {
     const message = await this.deps.tickets.findMessageById(scope, messageId, tx);
     const fact = await this.deps.facts.ticket(scope, ticketId, messageId, tx);
     if (fact === null) return;
+    /*
+     * A ticket the import wrote is history: nobody is told about it. The TICKET is that
+     * record's provenance (the v0.8.2-e rule, as the order is a purchase's), read only for the
+     * opening — the import writes its tickets and messages directly, with no event, so a
+     * customer's reply is always one written here, after the import, even in a ticket it
+     * brought over. The CUSTOMER's provenance is not a reason for silence (R10 B5): every
+     * customer of an installation migrated with the one-click import is `MIRZA`, and refusing
+     * them hid every ticket they opened afterwards.
+     */
+    if (!reply && ticket.source !== 'NEXA') return;
     const customerFact = await this.deps.facts.customer(scope, ticket.customerId, tx);
-    // A ticket an import wrote is history: nobody is told about it.
-    if (customerFact?.source !== 'NEXA') return;
+    if (customerFact === null) return;
     const built = ticketMessage({
       ticket: fact,
       customer: customerFact,
