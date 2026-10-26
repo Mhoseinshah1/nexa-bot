@@ -258,6 +258,18 @@ export function MenuBuilder({
       setConflict(null);
     }
   }, [serverMoved, dirty, view.draft, view.customButtons]);
+  // The custom-button LIST can change while the draft does not (an archive from the panel
+  // below, Codex #337-2): the reseed above never runs then, and a reference to a button that
+  // is no longer usable would stay in the rows until the server refused the next save or
+  // publish. Prune just those references from what the page holds, keeping every other
+  // unsaved edit; the draft then reads as changed, ready to save. `withoutUnusableCustom`
+  // returns the same object when nothing is pruned, so this settles after one pass.
+  useEffect(() => {
+    setSeed((current) => {
+      const pruned = withoutUnusableCustom(current.layout, view.customButtons);
+      return pruned === current.layout ? current : { ...current, layout: pruned };
+    });
+  }, [view.customButtons]);
 
   useUnsavedChanges(mayEdit && dirty, t('web.bb_unsaved_leave'));
   // The page's tab strip marks the builder's tab while the draft holds unsaved edits.

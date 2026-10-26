@@ -236,6 +236,15 @@ function CustomButtonModal({
   const creating = button === null;
   const submission = useSubmissionKey();
   const mediaSubmission = useSubmissionKey();
+  /**
+   * What an edit is measured against: the button as last SAVED, not as opened. An edit that
+   * changes the details and the file is two writes; when the details commit and the file is
+   * refused (the storage quota, say), the details' answer becomes the basis, so the retry
+   * sends only what is still unsaved — the file — at the version that answer carries.
+   * Measured against the button as opened, the retry re-sent the details with the version
+   * they had already replaced and was refused as a conflict on every press (Codex #337-1).
+   */
+  const saved = useRef(button);
   const [label, setLabel] = useState(button?.label ?? '');
   const [kind, setKind] = useState<CustomMenuButtonKind>(button?.kind ?? 'LINK');
   const [url, setUrl] = useState(button?.url ?? '');
@@ -286,7 +295,8 @@ function CustomButtonModal({
     mutationFn: async () => {
       const bodyValue = body.trim() === '' ? null : body;
       const selected = scope === 'SELECTED' ? [...botIds] : [];
-      if (button === null) {
+      const basis = saved.current;
+      if (basis === null) {
         const file = picked.kind === 'READY' ? picked.attachment : null;
         const payload = {
           label,
@@ -304,30 +314,31 @@ function CustomButtonModal({
       }
       // An edit sends only what the operator changed; a new file is its own write, after it.
       const changes = {
-        ...(label.trim() !== button.label ? { label } : {}),
-        ...(kind === 'LINK' && url.trim() !== (button.url ?? '') ? { url } : {}),
-        ...(bodyValue !== button.body ? { body: bodyValue } : {}),
-        ...(scope !== button.botScope ||
-        JSON.stringify([...selected].sort()) !== JSON.stringify([...button.botInstanceIds].sort())
+        ...(label.trim() !== basis.label ? { label } : {}),
+        ...(kind === 'LINK' && url.trim() !== (basis.url ?? '') ? { url } : {}),
+        ...(bodyValue !== basis.body ? { body: bodyValue } : {}),
+        ...(scope !== basis.botScope ||
+        JSON.stringify([...selected].sort()) !== JSON.stringify([...basis.botInstanceIds].sort())
           ? { botScope: scope, botInstanceIds: selected }
           : {}),
       };
-      let version = button.version;
+      let version = basis.version;
       let last: Awaited<ReturnType<typeof updateCustomMenuButton>> | null = null;
       if (Object.keys(changes).length > 0) {
-        last = await updateCustomMenuButton(button.id, {
+        last = await updateCustomMenuButton(basis.id, {
           ...changes,
           expectedVersion: version,
-          idempotencyKey: submission.current({ id: button.id, version, changes }),
+          idempotencyKey: submission.current({ id: basis.id, version, changes }),
         });
+        saved.current = last.button;
         version = last.button.version;
       }
       if (picked.kind === 'READY') {
-        last = await setCustomMenuButtonMedia(button.id, {
+        last = await setCustomMenuButtonMedia(basis.id, {
           file: picked.attachment,
           expectedVersion: version,
           idempotencyKey: mediaSubmission.current({
-            id: button.id,
+            id: basis.id,
             version,
             size: picked.attachment.contentBase64.length,
           }),

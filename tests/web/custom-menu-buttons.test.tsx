@@ -218,6 +218,75 @@ describe('custom buttons in the builder', () => {
     expect(state()).toBe('unsaved');
   });
 
+  /*
+   * Codex #337-2: archiving a PLACED button from the panel below changes the builder's
+   * `customButtons` but not its draft, so the draft-moved reseed never ran and the archived
+   * reference stayed in the rows — and the server refuses any save or publish of a layout
+   * that places it. The page prunes it as soon as the list changes, and keeps every other
+   * unsaved edit.
+   */
+  it('drops a placed button archived from the panel at once, and keeps the other unsaved edits', async () => {
+    let archived = false;
+    const active = custom(ID_LINK, 'کانال ما');
+    const gone = custom(ID_LINK, 'کانال ما', {
+      version: 2,
+      archivedAt: '2026-10-02T00:00:00.000Z',
+    });
+    const draft = draftView({ version: 2, layout: placedLayout() });
+    const before = builderView({ customButtons: [active], draft });
+    const after = builderView({ customButtons: [gone], draft });
+    builderApi(before, [
+      {
+        url: '/bot-menu/builder',
+        method: 'GET',
+        get body() {
+          return archived ? after : before;
+        },
+      },
+      {
+        url: '/bot-menu/custom-buttons',
+        method: 'GET',
+        get body() {
+          return {
+            featureEnabled: false,
+            buttons: [archived ? gone : active],
+            storage: { usedBytes: 0, maxBytes: CUSTOM_MENU_STORAGE_MAX_BYTES },
+          };
+        },
+      },
+      {
+        url: `/bot-menu/custom-buttons/${ID_LINK}/archive`,
+        method: 'POST',
+        get body() {
+          archived = true;
+          return { changed: true, button: gone };
+        },
+      },
+    ]);
+    renderPage(page());
+    await ready();
+    expect(drawnRows()).toContainEqual([REF_LINK]);
+    // An unrelated unsaved edit, made before the archive.
+    fireEvent.click(chipButton('services'));
+    fireEvent.click(
+      screen
+        .getByTestId('bb-inspector')
+        .querySelector('[data-move="web.bb_move_own_row"]') as HTMLElement,
+    );
+    expect(drawnRows()).toContainEqual(['services']);
+    expect(state()).toBe('unsaved');
+
+    const item = await screen.findByTestId(`cmb-item-${ID_LINK}`);
+    fireEvent.click(within(item).getByRole('button', { name: t('web.cmb_archive') }));
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: t('web.cmb_archive') }),
+    );
+    await waitFor(() => expect(drawnRows().flat()).not.toContain(REF_LINK));
+    expect(pooled()).not.toContain(REF_LINK);
+    expect(drawnRows()).toContainEqual(['services']);
+    expect(state()).toBe('unsaved');
+  });
+
   it('a custom button’s Inspector has no icon and no template label, and says it is the owner’s own', async () => {
     builderApi(
       builderView({
@@ -354,6 +423,80 @@ describe('the panel that defines the buttons', () => {
       file: null,
     });
     expect(String(body['idempotencyKey']).length).toBeGreaterThanOrEqual(8);
+  });
+
+  /*
+   * Codex #337-1: an edit that changes the details AND the file is two writes. When the
+   * details commit and the file is refused (the storage quota, say), the modal must keep the
+   * saved details as its basis — otherwise the retry re-sends them with the version they
+   * already replaced and is refused as a conflict on every press.
+   */
+  it('resumes at the file when only the file was refused, against the version the details saved', async () => {
+    const original = custom(ID_TEXT, 'راهنما', {
+      kind: 'DOCUMENT',
+      url: null,
+      body: null,
+      media: { fileName: 'old.txt', mimeType: 'text/plain', byteLength: 3 },
+    });
+    const renamed = { ...original, label: 'راهنمای نو', version: 2 };
+    let mediaTries = 0;
+    const api = builderApi(builderView({ customButtons: [original] }), [
+      {
+        url: `/bot-menu/custom-buttons/${ID_TEXT}`,
+        method: 'PUT',
+        body: { changed: true, button: renamed },
+      },
+      {
+        url: `/bot-menu/custom-buttons/${ID_TEXT}/media`,
+        method: 'PUT',
+        // `body` is read before `status` for each answer.
+        get body() {
+          mediaTries += 1;
+          return mediaTries === 1
+            ? refusal(CUSTOM_MENU_BUTTON_ERROR_CODES.STORAGE_FULL, 'validation')
+            : {
+                changed: true,
+                button: {
+                  ...renamed,
+                  version: 3,
+                  media: { fileName: 'new.txt', mimeType: 'text/plain', byteLength: 5 },
+                },
+              };
+        },
+        get status() {
+          return mediaTries === 1 ? 400 : 200;
+        },
+      },
+    ]);
+    const detailPuts = () =>
+      api.calls.filter(
+        (call) => call.method === 'PUT' && call.url.endsWith(`/bot-menu/custom-buttons/${ID_TEXT}`),
+      );
+    const mediaPuts = () =>
+      api.calls.filter((call) => call.method === 'PUT' && call.url.endsWith('/media'));
+    renderPage(page());
+    const item = await screen.findByTestId(`cmb-item-${ID_TEXT}`);
+    fireEvent.click(within(item).getByRole('button', { name: t('web.cmb_edit') }));
+    fireEvent.change(screen.getByLabelText(t('web.cmb_label_label')), {
+      target: { value: 'راهنمای نو' },
+    });
+    fireEvent.change(screen.getByLabelText(t('web.cmb_file_label')), {
+      target: { files: [new File(['hello'], 'new.txt', { type: 'text/plain' })] },
+    });
+    const save = screen.getByRole('button', { name: t('web.cmb_save') }) as HTMLButtonElement;
+    await waitFor(() => expect(save.disabled).toBe(false));
+    fireEvent.click(save);
+    await waitFor(() => expect(mediaPuts()).toHaveLength(1));
+    await waitFor(() => expect(save.disabled).toBe(false));
+    expect(detailPuts()).toHaveLength(1);
+    expect((detailPuts()[0]?.body as { expectedVersion: number }).expectedVersion).toBe(1);
+    expect((mediaPuts()[0]?.body as { expectedVersion: number }).expectedVersion).toBe(2);
+
+    fireEvent.click(save);
+    await waitFor(() => expect(mediaPuts()).toHaveLength(2));
+    // The details are not sent again: they are already saved, at version 2.
+    expect(detailPuts()).toHaveLength(1);
+    expect((mediaPuts()[1]?.body as { expectedVersion: number }).expectedVersion).toBe(2);
   });
 
   it('blocks a save that is certain to be refused, and shows the server’s refusal in Persian', async () => {
