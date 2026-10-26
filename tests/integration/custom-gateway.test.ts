@@ -303,7 +303,8 @@ describe('the custom gateway, through the one settlement path', () => {
   /** A bridge callback, delivered to the lane as the webhook controller would hand it on. */
   const deliver = (
     signed: { body: string; headers: Record<string, string> },
-    sourceIp: string | undefined = '203.0.113.10',
+    /** The sender as the trusted proxy reported it; `null`: Nexa does not know it. */
+    sourceIp: string | null = '203.0.113.10',
   ) =>
     lane.receiveWebhook(
       String(tenantA.tenantId),
@@ -312,7 +313,7 @@ describe('the custom gateway, through the one settlement path', () => {
       signed.headers['x-nexa-delivery-id'],
       signed.headers['x-nexa-bridge-signature'],
       Buffer.from(signed.body, 'utf8'),
-      sourceIp,
+      sourceIp ?? undefined,
     );
 
   const pastDeadline = (paymentId: string) =>
@@ -353,6 +354,20 @@ describe('the custom gateway, through the one settlement path', () => {
       expect(facts.endpointSet).toBe(false);
       await setEndpoint();
       expect((await setStatus('ACTIVE')).status).toBe('ACTIVE');
+    });
+
+    it('provisioning creates the route DISABLED for a tenant that has none (the boot-time reconcile)', async () => {
+      await ctx.container.database.db.execute(
+        sql`DELETE FROM payment_gateways WHERE tenant_id = ${tenantA.tenantId} AND provider = 'CUSTOM'`,
+      );
+      await ctx.container.uow.run(tenantA, (tx) =>
+        ctx.container.paymentGatewayProvisioning.ensureDefaults(tenantA, 'IRT', new Date(), tx),
+      );
+      const [row] = await rows<{ status: string; endpoint_base_url: string | null }>(
+        sql`SELECT status, endpoint_base_url FROM payment_gateways
+            WHERE tenant_id = ${tenantA.tenantId} AND provider = 'CUSTOM'`,
+      );
+      expect(row).toEqual({ status: 'DISABLED', endpoint_base_url: null });
     });
 
     it('refuses a secret shorter than 32 characters', async () => {
@@ -642,7 +657,7 @@ describe('the custom gateway, through the one settlement path', () => {
   });
 
   describe('callbacks — signed hints, deduplicated, never deciding (the contract)', () => {
-    it('a verified callback brings the inquiry forward; the same delivery id twice is a replay', async () => {
+    it('a verified callback brings the inquiry forward, and the same delivery id twice is a replay', async () => {
       await enableCustom();
       const link = await createdAttempt();
       bridge.set(link.orderId, 'PAID', RIAL);
@@ -717,7 +732,8 @@ describe('the custom gateway, through the one settlement path', () => {
       const link = await createdAttempt();
       const signed = bridge.callback(link.orderId, { deliveryId: 'dlv-ip' });
       expect(await deliver(signed, '203.0.113.10')).toBe('IGNORED_SOURCE');
-      expect(await deliver(signed, undefined)).toBe('IGNORED_SOURCE');
+      // A list is set and the sender is unknown: fail closed.
+      expect(await deliver(signed, null)).toBe('IGNORED_SOURCE');
       expect((await invoiceOf(link.paymentId)).webhook_count).toBe(0);
       expect(await deliver(signed, '198.51.100.77')).toBe('SCHEDULED');
     });

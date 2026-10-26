@@ -181,7 +181,7 @@ describe('create (§3.1)', () => {
     });
   });
 
-  it('an echo of another invoice id or amount is REFUSED and never shown; the reference is kept', async () => {
+  it('an echo of another invoice id or amount is REFUSED and never shown, the reference kept', async () => {
     const { bridge, adapter } = rig();
     bridge.nextCreate = {
       kind: 'answer',
@@ -233,7 +233,7 @@ describe('create (§3.1)', () => {
     expect(bridge.payments.size).toBe(1);
   });
 
-  it('429 RATE_LIMITED is the one answer that clears the stamp; a bare 429 is UNKNOWN', async () => {
+  it('429 RATE_LIMITED is the one answer that clears the stamp, and a bare 429 is UNKNOWN', async () => {
     const { bridge, adapter } = rig();
     bridge.nextCreate = {
       kind: 'answer',

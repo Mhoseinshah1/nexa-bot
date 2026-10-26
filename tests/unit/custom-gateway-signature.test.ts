@@ -129,5 +129,12 @@ describe('bridge → Nexa (§5)', () => {
       false,
     );
     expect(verifyBridgeSignature(SECRET, 'response', BODY, header, NOW, null)).toBe(false);
+    // Even a response signed over an EMPTY nonce line never verifies without the request's nonce.
+    const emptyNonce = `t=${T},v1=${hmac(
+      SECRET,
+      Buffer.concat([Buffer.from(`NEXA-CGW-V1-RESPONSE\n${T}\n\n`), BODY]),
+    )}`;
+    expect(verifyBridgeSignature(SECRET, 'response', BODY, emptyNonce, NOW, null)).toBe(false);
+    expect(verifyBridgeSignature(SECRET, 'response', BODY, emptyNonce, NOW, '')).toBe(false);
   });
 });
