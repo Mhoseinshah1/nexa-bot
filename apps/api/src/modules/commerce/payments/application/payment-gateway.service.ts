@@ -1123,22 +1123,6 @@ export class PaymentGatewayService {
         }
 
         /*
-         * Round 10 C1: and an `operatorEndpoint` route (the custom gateway) cannot be switched ON
-         * without its bridge's base URL: no attempt through it could be created or asked about.
-         */
-        if (
-          input.status === 'ACTIVE' &&
-          PAYMENT_GATEWAY_DESCRIPTORS[provider].operatorEndpoint &&
-          (before.endpointBaseUrl ?? null) === null
-        ) {
-          throw errors.conflict(
-            COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
-            'This payment route needs its bridge address before it can be switched on.',
-            { reason: 'ENDPOINT_MISSING' },
-          );
-        }
-
-        /*
          * And a route priced by an operator's rate cannot be switched ON without one
          * (Package A): an attempt could not say how many Stars to ask for.
          */
@@ -1188,6 +1172,23 @@ export class PaymentGatewayService {
               { reason: 'FX_UNAVAILABLE', detail: 'UNIT_RATIO_MISSING' },
             );
           }
+        }
+
+        /*
+         * Round 10 C1: and, last — as `GATEWAY_CONFIGURATION_GAPS` lists it — an `operatorEndpoint`
+         * route (the custom gateway) cannot be switched ON without its bridge's base URL: no
+         * attempt through it could be created or asked about.
+         */
+        if (
+          input.status === 'ACTIVE' &&
+          PAYMENT_GATEWAY_DESCRIPTORS[provider].operatorEndpoint &&
+          (before.endpointBaseUrl ?? null) === null
+        ) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+            'This payment route needs its bridge address before it can be switched on.',
+            { reason: 'ENDPOINT_MISSING' },
+          );
         }
 
         const after = await this.deps.repository.setStatus(

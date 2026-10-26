@@ -94,6 +94,8 @@ describe('configurationGaps', () => {
         centralFxOn: false,
         unitRatioSet: false,
         receivingAccountEnabled: false,
+        // Round 10 C1: the custom gateway's bridge address, checked last by `setStatus`.
+        endpointSet: false,
       }),
     ).toEqual([...GATEWAY_CONFIGURATION_GAPS]);
     expect(configurationGaps({ ...ready, verifyKeySet: false, credentialSet: false })).toEqual([
