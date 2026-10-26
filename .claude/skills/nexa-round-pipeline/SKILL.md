@@ -85,6 +85,8 @@ Nothing else is approval.
   `sudo botctl roles disable provisioner monitor`.
 - Before integration tests, `bash scripts/dev-services.sh`: an unreachable
   Postgres or Redis is not a test result.
+- Trap: `pnpm test:integration -- <files>` ignores the file list and runs the
+  WHOLE suite. Selected files: `pnpm exec vitest run --project integration <files>`.
 - Repo-wide checks (lint, boundaries) run from a clean checkout; stale
   `.claude/worktrees/*` copies break them.
 

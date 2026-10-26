@@ -9,7 +9,7 @@ description: Read NEXA test and gate runs through scripts/claude/test-summary.sh
 
 ```bash
 bash scripts/claude/test-summary.sh pnpm verify
-bash scripts/claude/test-summary.sh pnpm test:integration <files>
+bash scripts/claude/test-summary.sh pnpm exec vitest run --project integration <files>
 bash scripts/claude/test-summary.sh --from "$SCRATCH/int.log"
 ```
 
@@ -18,6 +18,10 @@ Runs the command (or reads a saved log) and prints only
 stages, the first 20 lines of each failure, `exit=N` and the raw log's path. Its
 exit code mirrors the command's, so no `pipefail` is needed. Use it instead of
 reading raw test output; open the raw log only at a failure it names.
+
+Trap: `pnpm test:integration -- <files>` ignores the file list and runs the
+WHOLE integration suite; pass selected files to `pnpm exec vitest run --project
+integration <files>` instead.
 
 ## Any other long output: log-digest.sh
 
