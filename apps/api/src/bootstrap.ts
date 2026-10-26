@@ -9,6 +9,7 @@ import {
   TENANT_MEDIA_MAX_BYTES,
   TICKET_MESSAGE_MAX_LENGTH,
   TICKET_REPLY_FILE_MAX_BYTES,
+  CUSTOM_MENU_TEXT_MAX,
   DIRECT_MESSAGE_TEXT_MAX_LENGTH,
   BROADCAST_MEDIA_MAX_BYTES,
   MINIAPP_API_PREFIX,
@@ -66,6 +67,14 @@ const DIRECT_MESSAGE_BODY_LIMIT_BYTES =
   Math.ceil((TICKET_REPLY_FILE_MAX_BYTES * 4) / 3) +
   DIRECT_MESSAGE_TEXT_MAX_LENGTH * 4 * 6 +
   16 * 1024;
+/**
+ * R10 D2: an owner-defined main-menu button, created with (POST) or given (PUT .../media) a
+ * photo or document as base64 inside JSON — the direct message's shape, bounded by the same
+ * schema and the same allow-list.
+ */
+const CUSTOM_MENU_BUTTON_ROUTE = /\/bot-menu\/custom-buttons(?:\/[^/]+\/media)?$/u;
+const CUSTOM_MENU_BUTTON_BODY_LIMIT_BYTES =
+  Math.ceil((TICKET_REPLY_FILE_MAX_BYTES * 4) / 3) + CUSTOM_MENU_TEXT_MAX * 4 * 6 + 16 * 1024;
 
 /**
  * Resolves the primary tenant this installation serves.
@@ -316,6 +325,12 @@ export async function createApiApp(config: AppConfig = loadConfig()): Promise<Ap
     // Round N: a broadcast's photo, video or document, bounded by the schema and the service.
     if (methods.includes('POST') && BROADCAST_MEDIA_ROUTE.test(route.url)) {
       route.bodyLimit = BROADCAST_MEDIA_BODY_LIMIT_BYTES;
+    }
+    if (
+      (methods.includes('POST') || methods.includes('PUT')) &&
+      CUSTOM_MENU_BUTTON_ROUTE.test(route.url)
+    ) {
+      route.bodyLimit = CUSTOM_MENU_BUTTON_BODY_LIMIT_BYTES;
     }
     // Phase A2: a direct message's file, bounded by the schema and the service.
     if (methods.includes('POST') && DIRECT_MESSAGE_ROUTE.test(route.url)) {

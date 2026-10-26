@@ -195,8 +195,11 @@ import { BotCommandSyncConsumer } from './modules/platform/tenancy/application/b
 import { BotCommandSyncLoop } from './modules/platform/tenancy/application/bot-command-sync-loop.js';
 import { BotMenuService } from './modules/platform/tenancy/application/bot-menu.service.js';
 import { BotMenuBuilderService } from './modules/control/bot-menu-builder/application/bot-menu-builder.service.js';
+import { CustomMenuButtonRuntime } from './modules/control/bot-menu-builder/application/custom-menu-button-runtime.js';
+import { CustomMenuButtonService } from './modules/control/bot-menu-builder/application/custom-menu-button.service.js';
 import { MainMenuSettingGuard } from './modules/control/bot-menu-builder/application/main-menu-setting-guard.js';
 import { PublishedMainMenuSource } from './modules/control/bot-menu-builder/application/main-menu-source.js';
+import { DrizzleCustomMenuButtonRepository } from './modules/control/bot-menu-builder/infrastructure/drizzle-custom-menu-button.repository.js';
 import { DrizzleMainMenuBuilderRepository } from './modules/control/bot-menu-builder/infrastructure/drizzle-main-menu-builder.repository.js';
 import { CommandMenu } from './modules/platform/tenancy/application/command-menu.js';
 import { DrizzleBotCommandSyncRepository } from './modules/platform/tenancy/infrastructure/drizzle-bot-command-sync.repository.js';
@@ -1354,6 +1357,10 @@ export interface Container {
    * its compatibility projection, and the append-only revisions.
    */
   readonly botMenuBuilder: BotMenuBuilderService;
+  /** R10 D2: the owner's custom main-menu buttons (define; the builder places them). */
+  readonly customMenuButtons: CustomMenuButtonService;
+  /** R10 D2: what a tap on one answers, and which are drawn for a bot — read by the bot. */
+  readonly customMenuRuntime: CustomMenuButtonRuntime;
   /**
    * The customer main menu's ONE evaluator (R1), read by the messenger and the runtime:
    * `keyboardFor` (round T, structured buttons), `rowsFor`, `routesFor`, `describeFor`.
@@ -2347,6 +2354,8 @@ export function createContainer(
    * and the builder service.
    */
   const mainMenuBuilderRepository = new DrizzleMainMenuBuilderRepository(database.db);
+  // R10 D2: the owner's custom main-menu buttons, their bot filter and their media.
+  const customMenuButtonRepository = new DrizzleCustomMenuButtonRepository(database.db);
   /*
    * Package B — mandatory channel membership. `getChatMember` through the receiving bot's
    * own token, bounded well under the send timeout because a customer's turn waits on it,
@@ -5352,8 +5361,19 @@ export function createContainer(
     settingsResolver,
     opsLog,
   );
+  /*
+   * R10 D2: what the customer side reads of the owner's custom buttons — which are drawn on a
+   * bot's keyboard, which labels route a tap, and the answer to a tap. Decided from state
+   * (flag, archive, bot, the PUBLISHED layout), never from the route.
+   */
+  const customMenuRuntime = new CustomMenuButtonRuntime({
+    repository: customMenuButtonRepository,
+    features: featureFlagResolver,
+    source: mainMenuSource,
+  });
   const mainMenuLayout = new MainMenuLayout({
     source: mainMenuSource,
+    customButtons: customMenuRuntime,
     settings: settingsResolver,
     features: featureFlagResolver,
     templates: templateResolver,
@@ -5431,6 +5451,34 @@ export function createContainer(
     templates: templateResolver,
     defaultLabel: (key) => templateCatalogue.defaultBody(key, DEFAULT_TEMPLATE_LOCALE),
     bots: appearanceRepository,
+    customButtons: customMenuButtonRepository,
+    features: featureFlagResolver,
+  });
+  /*
+   * R10 D2: the Web Admin's custom main-menu buttons. A custom label may not take a label the
+   * keyboard already routes: the registry buttons as this tenant renders them, their shared
+   * default labels (a keyboard drawn before a rename still routes by them) and the management
+   * panel's.
+   */
+  const customMenuButtons = new CustomMenuButtonService({
+    repository: customMenuButtonRepository,
+    guard,
+    uow,
+    audit,
+    opsLog: opsLogWriter,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+    features: featureFlagResolver,
+    reservedLabels: async (scope) => {
+      const keys = [...MAIN_MENU_BUTTONS.map((button) => button.label), ADMIN_MENU_BUTTON.label];
+      const rendered = await Promise.all(
+        keys.map((key) => templateResolver.render(scope, key, {})),
+      );
+      return [...rendered, ...keys.map((key) => CATALOGUE_FA[key])].map((label) => label.trim());
+    },
   });
   const botCommandSyncLoop = new BotCommandSyncLoop(botCommandSync, {
     now: () => clock.now(),
@@ -8266,6 +8314,8 @@ export function createContainer(
     botManagement,
     botMenu,
     botMenuBuilder,
+    customMenuButtons,
+    customMenuRuntime,
     mainMenu: mainMenuLayout,
     botCommandSync,
     botCommandSyncLoop,
@@ -8350,6 +8400,8 @@ export function createContainer(
       // R1: this tenant's own labels, matched BEFORE the shared ones above so a renamed
       // button routes under its new name — the same object the messenger draws from.
       menuRoutes: mainMenuLayout,
+      // R10 D2: the answer to a tap on an owner-defined main-menu button.
+      customMenuButtons: customMenuRuntime,
       destinations: paymentDestinationRenderer,
       // R4 A1: «🔄 تغییر شماره کارت» on the card-to-card invoice.
       cardSwitch: cardSwitchService,

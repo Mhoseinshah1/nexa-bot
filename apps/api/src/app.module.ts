@@ -36,6 +36,7 @@ import { PaymentAccountsController } from './surfaces/web/payment-accounts.contr
 import { BotsController } from './surfaces/web/bots.controller.js';
 import { BotMenuController } from './surfaces/web/bot-menu.controller.js';
 import { BotMenuBuilderController } from './surfaces/web/bot-menu-builder.controller.js';
+import { CustomMenuButtonsController } from './surfaces/web/custom-menu-buttons.controller.js';
 import { OpsGroupController } from './surfaces/web/ops-group.controller.js';
 // Premium UI: «ظاهر ربات».
 import { AppearanceController } from './surfaces/web/appearance.controller.js';
@@ -150,6 +151,7 @@ export class AppModule implements NestModule {
         // Round P: the bot's menu and its command-menu sync.
         BotMenuController as never,
         BotMenuBuilderController as never,
+        CustomMenuButtonsController as never,
         OpsGroupController as never,
         AppearanceController as never,
         PaymentGatewaysController as never,

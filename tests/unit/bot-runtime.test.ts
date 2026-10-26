@@ -789,6 +789,21 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.channels.join_private_button',
       'bot.channels.join_required',
       'bot.channels.still_missing',
+      /*
+       * R10 D2: a tap on an owner-defined main-menu button. Reviewed against this rule:
+       *   `bot.custom_button.text` / `.caption`   the owner's own words, sent as plain text.
+       *   `bot.custom_button.link`                "press the button below", sent WITH the
+       *                                           inline URL button, so it never promises
+       *                                           a control that is not there.
+       *   `bot.custom_button.open_link_button`    that button's label.
+       *   `bot.custom_button.unavailable`         the answer to a stale or switched-off
+       *                                           button; it names /start, which answers.
+       */
+      'bot.custom_button.caption',
+      'bot.custom_button.link',
+      'bot.custom_button.open_link_button',
+      'bot.custom_button.text',
+      'bot.custom_button.unavailable',
       // Package D: the custom-service flow, from the catalogue button to its refusals.
       'bot.custom_service.ask_days',
       'bot.custom_service.ask_volume',

@@ -127,6 +127,14 @@ export interface PendingReply {
    */
   readonly media?: ReplyMedia;
   /**
+   * R10 D2: send this reply AS a file the installation holds as BYTES — an owner-defined
+   * main-menu button's photo or document — uploaded as multipart (a Telegram `file_id` belongs
+   * to one bot, and the bytes are the source of truth). `key`/`values` are its caption when
+   * `captioned`, else the text it falls back to. When Telegram REFUSES the upload the same
+   * `key`/`values` go out as text, so the customer is never left unanswered.
+   */
+  readonly mediaBytes?: ReplyMediaBytes;
+  /**
    * Further files, sent bare after the reply: a payment's second and later receipts. Best
    * effort and not the turn's outcome, like `followUpKey`.
    */
@@ -173,6 +181,16 @@ export type LeadMessage =
        */
       readonly caption?: { readonly key: TemplateKey; readonly values: TemplateValues };
     };
+
+/** A file this installation holds as bytes (R10 D2). */
+export interface ReplyMediaBytes {
+  readonly kind: 'PHOTO' | 'DOCUMENT';
+  readonly bytes: Uint8Array;
+  readonly mimeType: 'image/png' | 'image/jpeg' | 'application/pdf' | 'text/plain';
+  readonly fileName: string;
+  /** Whether `key`/`values` are the file's caption (true), or only the refusal's text fallback. */
+  readonly captioned: boolean;
+}
 
 /** One file this installation already holds, and the bot that holds it. */
 export interface ReplyMedia {

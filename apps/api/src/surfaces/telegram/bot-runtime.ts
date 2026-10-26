@@ -1,5 +1,6 @@
 import {
   COMMERCE_ERROR_CODES,
+  customMenuIdOfRoute,
   isNexaError,
   SERVICE_NOTE_CLEAR_TOKEN,
   SERVICE_NOTE_MAX_LENGTH,
@@ -51,12 +52,14 @@ import { refusal } from './runtime/refusals.js';
 import {
   type BotTurnResult,
   type PendingReply,
+  type ReplyMediaBytes,
   blockedReply,
   editSent,
   replyFor,
   staleCallbackReply,
   withBlockedSupportButton,
 } from './runtime/replies.js';
+import * as customButtonFlow from './runtime/custom-button-flow.js';
 import * as startMenuFlow from './runtime/start-menu-flow.js';
 import {
   MEMBERSHIP_EXEMPT_INTENTS,
@@ -363,7 +366,19 @@ export class BotRuntime {
   async menuFor(scope: TenantContext, update: unknown): Promise<MainMenuRoutes> {
     const text = (update as { message?: { text?: unknown } } | null)?.message?.text;
     if (typeof text !== 'string' || this.deps.menuRoutes === undefined) return this.deps.mainMenu;
-    return new Map([...this.deps.mainMenu, ...(await this.deps.menuRoutes.routesFor(scope))]);
+    const tenantRoutes = await this.deps.menuRoutes.routesFor(scope);
+    const merged = new Map([...this.deps.mainMenu, ...tenantRoutes]);
+    /*
+     * R10 D2: an owner's label never takes over a label the shared table already routes (a
+     * button's older default label, the management panel's): the tenant's routes are laid
+     * over the shared ones so a RENAMED registry button wins, but a custom value (`mb:<id>`)
+     * does not.
+     */
+    for (const [label, value] of tenantRoutes) {
+      const shared = this.deps.mainMenu.get(label);
+      if (shared !== undefined && customMenuIdOfRoute(value) !== null) merged.set(label, shared);
+    }
+    return merged;
   }
 
   async handle(
@@ -868,17 +883,32 @@ export class BotRuntime {
     let sent =
       editTarget !== null
         ? await this.editOrSend(scope, editTarget, reply, asText)
-        : reply.media === undefined
-          ? await asText()
-          : await this.deps.messenger.sendFile(scope, {
+        : reply.mediaBytes !== undefined
+          ? /*
+             * R10 D2: an owner-defined button's file, uploaded from the bytes the installation
+             * holds. A definite refusal (a broken image, a caption over the bound) falls back
+             * to the same reply as text, so the tap is always answered; UNKNOWN and rate
+             * limits are not retried as text (the file may have arrived).
+             */
+            await this.sendMediaBytes(
+              scope,
               chatId,
-              botInstanceId: reply.media.botInstanceId,
-              kind: reply.media.kind,
-              source: { kind: 'FILE_ID', fileId: reply.media.fileId },
-              caption: { templateKey: reply.key, values: reply.values },
-              ...(reply.media.captionWhole === true ? { captionWhole: true as const } : {}),
-              ...(reply.buttons.length === 0 ? {} : { buttons: reply.buttons }),
-            });
+              input.botInstanceId,
+              reply,
+              reply.mediaBytes,
+              asText,
+            )
+          : reply.media === undefined
+            ? await asText()
+            : await this.deps.messenger.sendFile(scope, {
+                chatId,
+                botInstanceId: reply.media.botInstanceId,
+                kind: reply.media.kind,
+                source: { kind: 'FILE_ID', fileId: reply.media.fileId },
+                caption: { templateKey: reply.key, values: reply.values },
+                ...(reply.media.captionWhole === true ? { captionWhole: true as const } : {}),
+                ...(reply.buttons.length === 0 ? {} : { buttons: reply.buttons }),
+              });
     /*
      * A4: a whole-or-nothing caption over the bound — a long tutorial guide. The file goes
      * bare, decorative again, so its own outcome is ignored; the reply then goes as text below.
@@ -1241,6 +1271,9 @@ export class BotRuntime {
      */
     if (command.intent === 'UNSUPPORTED' && isCallbackQueryUpdate(input.update)) {
       return staleCallbackReply();
+    }
+    if (command.intent === 'CUSTOM_MENU_BUTTON' && command.targetId !== null) {
+      return customButtonFlow.customButtonTap(this, scope, input.botInstanceId, command.targetId);
     }
     if (command.intent === 'CATALOG')
       return purchaseFlow.catalogue(this, scope, actor, 0, customer);
@@ -2461,6 +2494,61 @@ export class BotRuntime {
       botInstanceId,
       ...(toast === undefined ? {} : { toast: { templateKey: toast.key, values: toast.values } }),
     });
+  }
+
+  /**
+   * R10 D2: sends an owner-defined button's file from the bytes this installation holds, with
+   * the reply as its caption when it is one. A definite REFUSAL — a structurally broken image,
+   * a caption over Telegram's bound — falls back to the same reply as text, so the tap is never
+   * left unanswered; `UNKNOWN` and `RATE_LIMITED` are returned as they are (the file may have
+   * arrived, and a text would meet the same refusal).
+   */
+  async sendMediaBytes(
+    scope: TenantContext,
+    chatId: string,
+    botInstanceId: BotInstanceId,
+    reply: PendingReply,
+    media: ReplyMediaBytes,
+    asText: () => Promise<CustomerSendResult>,
+  ): Promise<CustomerSendResult> {
+    const sent = await this.deps.messenger.sendFile(scope, {
+      chatId,
+      botInstanceId,
+      kind: media.kind,
+      source: {
+        kind: 'BYTES',
+        bytes: media.bytes,
+        fileName: media.fileName,
+        mimeType: media.mimeType,
+      },
+      ...(media.captioned && reply.key !== null
+        ? {
+            caption: { templateKey: reply.key, values: reply.values },
+            // Whole or not at all: a cut caption is a different message.
+            captionWhole: true as const,
+          }
+        : {}),
+      ...(reply.buttons.length === 0 ? {} : { buttons: reply.buttons }),
+    });
+    if (sent.outcome !== 'REFUSED') return sent;
+    /*
+     * Over the caption bound the file goes bare and the words follow as their own text; any
+     * other refusal sends the words alone. A bare file's own outcome is decorative here.
+     */
+    if (media.captioned && sent.reason === 'CAPTION_OVER_BOUND') {
+      await this.deps.messenger.sendFile(scope, {
+        chatId,
+        botInstanceId,
+        kind: media.kind,
+        source: {
+          kind: 'BYTES',
+          bytes: media.bytes,
+          fileName: media.fileName,
+          mimeType: media.mimeType,
+        },
+      });
+    }
+    return asText();
   }
 
   /**
