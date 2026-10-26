@@ -612,6 +612,7 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
     // Neither path confirmed the draft (no reservation for money that is not there).
     expect.soft(await ordersOf(botId)).toEqual(await ordersOf(mini.customerId));
     expect.soft((await ordersOf(botId)).map((row) => row.state)).toEqual(['DRAFT']);
+    expect.soft((await ordersOf(mini.customerId)).map((row) => row.state)).toEqual(['DRAFT']);
     expect.soft(await paymentsOf(botId)).toEqual([]);
     expect.soft(await paymentsOf(mini.customerId)).toEqual([]);
 
@@ -631,6 +632,7 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
 
     expect.soft(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
     expect.soft((await ordersOf(botId)).map((row) => row.state)).toEqual(['PAID']);
+    expect.soft((await ordersOf(mini.customerId)).map((row) => row.state)).toEqual(['PAID']);
     expect.soft(await paymentsOf(mini.customerId)).toEqual(await paymentsOf(botId));
     expect.soft(await ledgerOf(mini.customerId)).toEqual(await ledgerOf(botId));
     expect
@@ -662,6 +664,7 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
       });
     }
     expect.soft((await ordersOf(botId)).map((row) => row.state)).toEqual(['DRAFT']);
+    expect.soft((await ordersOf(mini.customerId)).map((row) => row.state)).toEqual(['DRAFT']);
     expect.soft(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
     expect.soft(await paymentsOf(botId)).toEqual([]);
     expect.soft(await paymentsOf(mini.customerId)).toEqual([]);
@@ -707,6 +710,9 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
     expect.soft(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
     expect
       .soft((await ordersOf(botId)).map((row) => row.state))
+      .toEqual(['AWAITING_PAYMENT', 'AWAITING_PAYMENT']);
+    expect
+      .soft((await ordersOf(mini.customerId)).map((row) => row.state))
       .toEqual(['AWAITING_PAYMENT', 'AWAITING_PAYMENT']);
     expect.soft(await paymentsOf(mini.customerId)).toEqual(await paymentsOf(botId));
     expect.soft(await paymentsOf(botId)).toEqual([
@@ -757,6 +763,9 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
 
     expect.soft(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
     expect.soft((await ordersOf(botId)).map((row) => row.state)).toEqual(['AWAITING_PAYMENT']);
+    expect
+      .soft((await ordersOf(mini.customerId)).map((row) => row.state))
+      .toEqual(['AWAITING_PAYMENT']);
     expect.soft(await paymentsOf(mini.customerId)).toEqual(await paymentsOf(botId));
     expect
       .soft(await paymentsOf(botId))
@@ -872,6 +881,13 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
     expect
       .soft((await ordersOf(botId)).map((row) => `${String(row.purpose)}:${String(row.state)}`))
       .toEqual(['NEW_SERVICE:PAID', 'RENEW:DRAFT']);
+    expect
+      .soft(
+        (await ordersOf(mini.customerId)).map(
+          (row) => `${String(row.purpose)}:${String(row.state)}`,
+        ),
+      )
+      .toEqual(['NEW_SERVICE:PAID', 'RENEW:DRAFT']);
 
     // A gateway: the renewal is confirmed through the commercial lane, then the attempt.
     pin('renew.gateway', await tap(`gp:${botRenew}.TONPAYS`));
@@ -886,6 +902,13 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
     expect.soft(await ordersOf(mini.customerId)).toEqual(await ordersOf(botId));
     expect
       .soft((await ordersOf(botId)).map((row) => `${String(row.purpose)}:${String(row.state)}`))
+      .toEqual(['NEW_SERVICE:PAID', 'RENEW:AWAITING_PAYMENT']);
+    expect
+      .soft(
+        (await ordersOf(mini.customerId)).map(
+          (row) => `${String(row.purpose)}:${String(row.state)}`,
+        ),
+      )
       .toEqual(['NEW_SERVICE:PAID', 'RENEW:AWAITING_PAYMENT']);
     expect.soft(await paymentsOf(mini.customerId)).toEqual(await paymentsOf(botId));
     // The commercial lane wrote its own record of the confirmation on both paths.
