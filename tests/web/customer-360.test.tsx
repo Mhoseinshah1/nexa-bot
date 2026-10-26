@@ -40,6 +40,7 @@ const overview = (overrides: Record<string, unknown> = {}) => ({
     phone: null,
     locationOverride: null,
     marketingOptOutAt: null,
+    personalDiscount: { percent: 0, setAt: null, enabled: false },
     terms: { available: false },
     ...overrides,
   },
