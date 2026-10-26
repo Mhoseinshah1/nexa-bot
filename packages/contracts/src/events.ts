@@ -747,8 +747,9 @@ export const EVENT_PAYLOAD_SCHEMAS = {
   }),
   /*
    * Round 10, D1. `consentedTotalMinor`/`currency` are the renewal total the customer agreed
-   * to when switching it on (null when switched off). `source` is where it changed: the bot,
-   * the mini app, or a transfer of the service, which always clears it.
+   * to when switching it on (null when switched off). `source` is the customer's surface. A
+   * transfer of the service also clears the consent, in the reassigning statement's
+   * transaction; that fact is `ServiceOwnershipTransferred`, not a second event.
    */
   ServiceAutoRenewChanged: z.object({
     serviceId: z.string(),
@@ -756,7 +757,7 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     enabled: z.boolean(),
     consentedTotalMinor: z.string().nullable(),
     currency: z.string().nullable(),
-    source: z.enum(['TELEGRAM', 'MINI_APP', 'TRANSFER']),
+    source: z.enum(['TELEGRAM', 'MINI_APP']),
   }),
   /*
    * Round 10, D1: one period's outcome. `orderId` is the renewal order when one was paid
