@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPageWhileTurning } from '../ui/paging';
 import {
   GIFT_CARD_BATCH_MAX_CODES,
   GIFT_CARD_LABEL_MAX_LENGTH,
@@ -81,11 +82,13 @@ export function GiftCardsPage({
 }) {
   const [cursors, setCursors] = useState<readonly string[]>([]);
   const cursor = cursors.length > 0 ? cursors[cursors.length - 1] : undefined;
-  const list = useQuery({
-    queryKey: [QUERY_KEY, cursor ?? null],
-    queryFn: () => fetchGiftCardBatches(cursor),
-    enabled: !denied,
-  });
+  const list = useQuery(
+    keepPageWhileTurning({
+      queryKey: [QUERY_KEY, cursor ?? null],
+      queryFn: () => fetchGiftCardBatches(cursor),
+      enabled: !denied,
+    }),
+  );
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<GiftCardBatchWire | null>(null);
   const [disabling, setDisabling] = useState<GiftCardBatchWire | null>(null);

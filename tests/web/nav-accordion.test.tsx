@@ -66,6 +66,8 @@ const BEFORE: readonly [
     false,
   ],
   ['features', '/features', 'web.nav_features', 'toggle', 'settings.view', false],
+  // R10 D4: added after the redesign.
+  ['gift-cards', '/gift-cards', 'web.nav_gift_cards', 'gift', 'gift_cards.view', false],
   ['inbox', '/notification-center', 'web.nav_inbox', 'bell', null, false],
   ['incidents', '/incidents', 'web.nav_incidents', 'alert', 'incidents.view', false],
   [
@@ -226,6 +228,8 @@ const GROUPS: readonly [string, readonly string[]][] = [
       'discounts',
       'campaigns',
       'referrals',
+      // R10 D4: gift cards (wallet top-up codes), beside the other sales programmes.
+      'gift-cards',
       'reports',
     ],
   ],
@@ -311,10 +315,11 @@ const drawnHrefs = () =>
 const head = (group: string) => navGroupHeader(group) as HTMLButtonElement;
 
 describe('the navigation’s information architecture', () => {
-  it('keeps all 50 entries exactly once, each with its path, label, icon and permission', () => {
-    expect(NAV).toHaveLength(50);
-    expect(new Set(NAV.map((entry) => entry.id)).size).toBe(50);
-    expect(new Set(NAV.map((entry) => entry.path)).size).toBe(50);
+  it('keeps all 51 entries exactly once, each with its path, label, icon and permission', () => {
+    // 50 after the redesign, and R10 D4's «کارت‌های هدیه».
+    expect(NAV).toHaveLength(51);
+    expect(new Set(NAV.map((entry) => entry.id)).size).toBe(51);
+    expect(new Set(NAV.map((entry) => entry.path)).size).toBe(51);
     const now = [...NAV]
       .sort((a, b) => a.id.localeCompare(b.id))
       .map((entry) => [
@@ -511,7 +516,7 @@ describe('the single-open accordion', () => {
   it('keeps every icon in the collapsed rail, where a header has no room for its label', () => {
     sidebar('/', ALL, OWNER, { collapsed: true });
     expect(document.querySelectorAll('.nav-group-head')).toHaveLength(0);
-    expect(drawnHrefs()).toHaveLength(50);
+    expect(drawnHrefs()).toHaveLength(51);
   });
 });
 
