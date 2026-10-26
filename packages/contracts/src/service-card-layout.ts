@@ -11,7 +11,7 @@ import { z } from 'zod';
  *
  * A slot is the inline-button registry key of its button. «خاموش کردن» and «روشن کردن» are
  * one slot (`service.suspend`) because a service is only ever offered one of them, and so are
- * the two switches of automatic renewal (`service.auto_renew`, Round 10 D1).
+ * the two switches of automatic renewal (`service.auto_renew_enable`, Round 10 D1).
  */
 export const SERVICE_CARD_BUTTONS = [
   'service.refresh',
@@ -27,8 +27,8 @@ export const SERVICE_CARD_BUTTONS = [
   'service.suspend',
   'service.refund_request',
   'service.transfer',
-  // Round 10, D1: «تمدید خودکار», its switch on or off.
-  'service.auto_renew',
+  // Round 10, D1: «تمدید خودکار», its switch on or off (one slot, named by its ON button).
+  'service.auto_renew_enable',
 ] as const;
 export type ServiceCardButton = (typeof SERVICE_CARD_BUTTONS)[number];
 
@@ -74,7 +74,7 @@ export const DEFAULT_SERVICE_CARD_ROWS: readonly (readonly ServiceCardButton[])[
   ['service.add_devices'],
   ['service.change_location'],
   ['service.refund_request', 'service.transfer'],
-  ['service.auto_renew'],
+  ['service.auto_renew_enable'],
 ];
 
 /** The slot a drawn button belongs to, or null for «بازگشت» and anything unlisted. */
@@ -82,8 +82,8 @@ export function serviceCardSlotOf(inlineKey: string): ServiceCardButton | null {
   const slot =
     inlineKey === 'service.resume'
       ? 'service.suspend'
-      : inlineKey === 'service.auto_renew_enable' || inlineKey === 'service.auto_renew_disable'
-        ? 'service.auto_renew'
+      : inlineKey === 'service.auto_renew_disable'
+        ? 'service.auto_renew_enable'
         : inlineKey;
   return (SERVICE_CARD_BUTTONS as readonly string[]).includes(slot)
     ? (slot as ServiceCardButton)
