@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { ProviderLastSeen } from './customer-ux.js';
+import type { FeatureFlagKey } from './features.js';
 import type { ServiceId } from './ids.js';
 
 /**
@@ -177,7 +178,7 @@ export function shapeIsSatisfiedBy(
  * there would let an operator name a provider with no code behind it, and the
  * first thing that happens next is a panel pointing at it.
  */
-export const PROVIDER_TYPES = ['marzban', 'rickpanel', 'sanaei'] as const;
+export const PROVIDER_TYPES = ['marzban', 'rickpanel', 'sanaei', 'custom'] as const;
 export type ProviderType = (typeof PROVIDER_TYPES)[number];
 
 export function isProviderType(value: string): value is ProviderType {
@@ -313,22 +314,61 @@ export type SanaeiActivation = z.infer<typeof sanaeiActivationSchema>;
 export const rickpanelActivationSchema = z.object({}).strict();
 export type RickpanelActivation = z.infer<typeof rickpanelActivationSchema>;
 
+/**
+ * A custom-protocol bridge needs nothing configured to create an account — and MAY
+ * carry one thing: its own request timeout (R10 C2, `docs/protocols/custom-panel.md` §8).
+ *
+ * The bridge decides protocols, inbounds and the link itself and reports them in its
+ * signed answer, so there is no protocol, inbound or link domain to choose here, and
+ * `{}` is a complete configuration — the same statement `rickpanelActivationSchema`
+ * makes about its panel.
+ *
+ * `requestTimeoutMs` is optional and may only LOWER the installation's panel timeout
+ * (`PANEL_HTTP_TIMEOUT_MS`): `SafeHttpClient.forBase` takes the smaller of the two, so an
+ * operator cannot make one bridge hold a worker longer than every other panel may. The
+ * floor is one second, because a timeout below a TLS handshake turns every success into
+ * an UNKNOWN outcome; the ceiling is the protocol's thirty seconds.
+ *
+ * `.strict()`, for `rickpanelActivationSchema`'s reason: a copied Marzban payload here
+ * would let an operator believe they had configured something.
+ */
+export const CUSTOM_REQUEST_TIMEOUT_MS_MIN = 1_000;
+export const CUSTOM_REQUEST_TIMEOUT_MS_MAX = 30_000;
+export const customActivationSchema = z
+  .object({
+    requestTimeoutMs: z
+      .number()
+      .int()
+      .min(CUSTOM_REQUEST_TIMEOUT_MS_MIN)
+      .max(CUSTOM_REQUEST_TIMEOUT_MS_MAX)
+      .optional(),
+  })
+  .strict();
+export type CustomActivation = z.infer<typeof customActivationSchema>;
+
 export const panelActivationSchema = z.union([
   marzbanActivationSchema,
   rickpanelActivationSchema,
   sanaeiActivationSchema,
+  customActivationSchema,
 ]);
-export type PanelActivation = MarzbanActivation | RickpanelActivation | SanaeiActivation;
+export type PanelActivation =
+  | MarzbanActivation
+  | RickpanelActivation
+  | SanaeiActivation
+  | CustomActivation;
 
 /** The schema a panel's activation must satisfy, by provider type. Exhaustive. */
 export const PANEL_ACTIVATION_SCHEMAS: Readonly<{
   marzban: typeof marzbanActivationSchema;
   rickpanel: typeof rickpanelActivationSchema;
   sanaei: typeof sanaeiActivationSchema;
+  custom: typeof customActivationSchema;
 }> = {
   marzban: marzbanActivationSchema,
   rickpanel: rickpanelActivationSchema,
   sanaei: sanaeiActivationSchema,
+  custom: customActivationSchema,
 };
 
 /**
@@ -432,6 +472,32 @@ export interface ProviderDescriptor {
    * all. 3X-UI needs a subscription-link domain; Marzban does not.
    */
   readonly requiredActivationFields: readonly string[];
+  /*
+   * The three gates below are DATA on the descriptor and are enforced generically by the
+   * panel service (R10 C2) — never by an `if (type === …)` outside the adapter registry.
+   * Each is optional, and absent means "no gate": the three providers that predate them
+   * declare none and behave exactly as before.
+   */
+  /**
+   * A feature flag that must be ON for the tenant before a NEW panel of this type may be
+   * created, and before the type is offered in the panel form.
+   *
+   * Creation only. A flag switched off after panels of the type exist does not stop them
+   * operating — their services were paid for (`docs/project-status.md`, R10 C2).
+   */
+  readonly requiresFeature?: FeatureFlagKey;
+  /**
+   * `HTTPS_ONLY` refuses a base URL that is not `https:` at create and at every address
+   * change, and the adapter refuses to dial one. For a provider whose answers carry
+   * bearer links and whose integrity rests on a shared secret, plain HTTP on any network
+   * is a link anybody on the path can copy.
+   */
+  readonly transport?: 'HTTPS_ONLY';
+  /**
+   * The shortest API token this provider will accept, in characters. For a token that is
+   * an HMAC key rather than a bearer value, a short one is a guessable signature.
+   */
+  readonly minimumApiTokenLength?: number;
 }
 
 /**
@@ -1886,7 +1952,72 @@ const SANAEI: ProviderDescriptor = {
   requiredActivationFields: ['subscriptionDomain', 'inboundId'],
 };
 
-export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [MARZBAN, RICKPANEL, SANAEI];
+/**
+ * Custom — Nexa's OWN bridge protocol (R10 C2, `docs/protocols/custom-panel.md`).
+ *
+ * Not a panel product. A third party who wants Nexa to sell accounts on a panel Nexa has
+ * no adapter for writes a small HTTPS service, the BRIDGE, that speaks this one fixed,
+ * signed JSON protocol towards Nexa and their panel's API behind it. The operator gives
+ * Nexa a base URL, a shared secret and optionally a timeout; they cannot describe a new
+ * protocol, add an endpoint or change a field.
+ *
+ * **On the capabilities below.** Like RickPanel's, they are declared WITHOUT a real-bridge
+ * acceptance, a recorded deviation from the declare-after-acceptance rule (`OQ-C2-02`).
+ * What backs them is Nexa's own specification and a contract test of every operation
+ * and every failure mode against a mock bridge that enforces the specification
+ * (`tests/support/fake-custom-bridge.ts`) — which proves the adapter and the document
+ * agree, not that any particular bridge does. That is why the type is behind
+ * `custom_panel_provider`, off by default, and why the protocol document asks for an
+ * acceptance run against the first real bridge before the flag is turned on in
+ * production.
+ *
+ *   - `LIMIT_DEVICES`: the create carries the order's device limit and the protocol
+ *     REQUIRES the bridge to enforce it or refuse the create (`422 RULE_REFUSED`).
+ *   - `RENEW_USER`, `ADD_VOLUME`, `ADD_TIME`: one `allowance` call carrying ABSOLUTE
+ *     targets, so a replay changes nothing — `IDEMPOTENT_MUTATIONS`' precondition.
+ *   - `ROTATE_SUBSCRIPTION_LINK`: proven per call by reading the account back, as
+ *     RickPanel's is.
+ *
+ * Undeclared: `SUBSCRIPTION_FILES`, `DELIVER_RAW_CONFIGS` (`links` is specified and not
+ * yet called, `OQ-C2-06`), `RESET_USAGE`, `DEVICE_LIMIT_ADJUSTMENT`, `LOCATION_CHANGE` —
+ * the protocol has no operation for any of them.
+ */
+const CUSTOM: ProviderDescriptor = {
+  key: 'custom',
+  canonicalName: 'Custom (Nexa bridge v1)',
+  /*
+   * ONE secret, held in the existing encrypted API-token column. It is never sent: it is
+   * the HMAC key every request is signed with and every answer verified against.
+   */
+  credentialShape: 'OPAQUE_TOKEN',
+  capabilities: [
+    'HEALTH_CHECK',
+    'CREATE_USER',
+    'READ_USAGE',
+    'DELIVER_SUBSCRIPTION_LINK',
+    'LIMIT_DEVICES',
+    'DISABLE_USER',
+    'ENABLE_USER',
+    'DELETE_USER',
+    'RENEW_USER',
+    'ADD_VOLUME',
+    'ADD_TIME',
+    'ROTATE_SUBSCRIPTION_LINK',
+  ],
+  // One signed `GET v1/health`; there is no session to open.
+  maxRequestsPerProbe: 1,
+  requiredActivationFields: [],
+  requiresFeature: 'custom_panel_provider',
+  transport: 'HTTPS_ONLY',
+  minimumApiTokenLength: 32,
+};
+
+export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
+  MARZBAN,
+  RICKPANEL,
+  SANAEI,
+  CUSTOM,
+];
 
 /**
  * The most requests any registered provider's probe can make.
