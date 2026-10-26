@@ -5148,14 +5148,31 @@ export const TEMPLATES = [
     description:
       'How to pay out of band, and how to submit the evidence. The instructions ' +
       'themselves are tenant copy — this installation ships no bank details and ' +
-      'invents none.',
+      'invents none. R10 B6: the amount to transfer is shown in RIAL (`{amountRial}`, required) with Toman beside it, as the card-to-card invoice (`transfer_instructions`, R8 A2) shows it; `{total}` stays declared and supplied so an override written for the earlier text still renders.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
         token: 'total',
         type: 'MONEY',
-        description: 'The amount to transfer.',
+        description:
+          'The amount to transfer (the payable). Since R10 B6 the default text shows `{amountRial}` instead; this stays supplied for an override written for the earlier text.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'amountRial',
+        type: 'STRING',
+        description:
+          'R10 B6: the amount to TRANSFER (the payable: the principal plus the customer fee when the route charges one) in RIAL, in Persian digits grouped by thousands (`۲٬۵۰۰٬۰۰۰`) and with no unit, which the body writes — the figure the card-to-card invoice shows. Display only.',
         required: true,
+        repeatable: false,
+      },
+      {
+        token: 'amountToman',
+        type: 'STRING',
+        description:
+          'R10 B6: the same amount in TOMAN, Persian digits grouped by thousands, no unit. A line holding only it is dropped when the amount is not a whole toman.',
+        required: false,
         repeatable: false,
       },
       {
@@ -9893,7 +9910,7 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.gateway_card_unconfirmed',
     description:
-      'TonPays Telegram: TonPays’ answer to a card change was lost, so no card is shown (the previous one may have been retired). The customer may send the receipt of a transfer already made, check the status, or ask for a card again after a minute. Never says paid or failed.',
+      'TonPays Telegram: TonPays’ answer to a card change was lost, so no card is shown (the previous one may have been retired). The customer may send the receipt of a transfer already made, check the status, or ask for a card again after a minute. Never says paid or failed. R10 B6: the amount is shown in RIAL (`{amountRial}`, required) with Toman beside it, as the R8 A2 card invoice and every other card screen of the attempt show it; `{payable}` stays declared and supplied so an override written for the earlier text still renders.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
@@ -9909,8 +9926,24 @@ export const TEMPLATES = [
         token: 'payable',
         type: 'MONEY',
         description:
-          'What the transfer must be: the payment’s own payable (principal plus any fee), from Nexa’s snapshot.',
+          'What the transfer must be: the payment’s own payable (principal plus any fee), from Nexa’s snapshot. Since R10 B6 the default text shows `{amountRial}` instead; this stays supplied for an override written for the earlier text.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'amountRial',
+        type: 'STRING',
+        description:
+          'R10 B6: the amount the customer was told to TRANSFER, in RIAL: on a card-transfer route (TonPays Telegram) TonPays’ exact figure for the card (`final_amount`, else what Nexa sent), the same figure the card invoice showed; on any other route the payment’s payable. Persian digits grouped by thousands (`۲٬۵۰۰٬۳۷۰`), no unit, which the body writes. Display only — never what Nexa settles, credits or refunds.',
         required: true,
+        repeatable: false,
+      },
+      {
+        token: 'amountToman',
+        type: 'STRING',
+        description:
+          'R10 B6: the same amount in TOMAN, Persian digits grouped by thousands, no unit. A line holding only it is dropped when the amount is not a whole toman.',
+        required: false,
         repeatable: false,
       },
       {
@@ -9943,7 +9976,7 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.gateway_in_review',
     description:
-      'TonPays Telegram, owner decision of 2026-10-01: TonPays acknowledged the customer’s receipt before the deadline and is reviewing it. Shows the payable and the end of the review window. It invites no new payment, no new receipt and no card change, and never says paid, failed or closed.',
+      'TonPays Telegram, owner decision of 2026-10-01: TonPays acknowledged the customer’s receipt before the deadline and is reviewing it. Shows the payable and the end of the review window. It invites no new payment, no new receipt and no card change, and never says paid, failed or closed. R10 B6: the amount is shown in RIAL (`{amountRial}`, required) with Toman beside it — the figure the card invoice and its receipt-sent screen showed, not the payment’s payable when TonPays named an exact amount; `{payable}` stays declared and supplied so an override written for the earlier text still renders.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
@@ -9959,8 +9992,24 @@ export const TEMPLATES = [
         token: 'payable',
         type: 'MONEY',
         description:
-          'What the transfer must be: the payment’s own payable (principal plus any fee), from Nexa’s snapshot.',
+          'What the transfer must be: the payment’s own payable (principal plus any fee), from Nexa’s snapshot. Since R10 B6 the default text shows `{amountRial}` instead; this stays supplied for an override written for the earlier text.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'amountRial',
+        type: 'STRING',
+        description:
+          'R10 B6: the amount the customer was told to TRANSFER, in RIAL: on a card-transfer route (TonPays Telegram) TonPays’ exact figure for the card (`final_amount`, else what Nexa sent), the same figure the card invoice showed; on any other route the payment’s payable. Persian digits grouped by thousands (`۲٬۵۰۰٬۳۷۰`), no unit, which the body writes. Display only — never what Nexa settles, credits or refunds.',
         required: true,
+        repeatable: false,
+      },
+      {
+        token: 'amountToman',
+        type: 'STRING',
+        description:
+          'R10 B6: the same amount in TOMAN, Persian digits grouped by thousands, no unit. A line holding only it is dropped when the amount is not a whole toman.',
+        required: false,
         repeatable: false,
       },
       {
@@ -10184,7 +10233,7 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.gateway_card_overpaid',
     description:
-      'TonPays Telegram: the transfer was MORE than the invoice (`action_required_more`). Asks the customer to register the card the extra amount is to be returned to. Nothing is settled until TonPays approves, and the wallet is credited with the order principal only.',
+      'TonPays Telegram: the transfer was MORE than the invoice (`action_required_more`). Asks the customer to register the card the extra amount is to be returned to. Nothing is settled until TonPays approves, and the wallet is credited with the order principal only. R10 B6: the amount to be returned, when TonPays reported one, is shown in RIAL with Toman beside it, as every other card screen of the attempt shows an amount; `{refundAmount}` stays declared and supplied so an override written for the earlier text still renders.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
@@ -10192,6 +10241,22 @@ export const TEMPLATES = [
         type: 'MONEY',
         description:
           'The overpaid amount TonPays says it will return (`refund_amount`), when it reported one. TonPays’ figure — never credited to the wallet.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'amountRial',
+        type: 'STRING',
+        description:
+          'R10 B6: the overpaid amount TonPays says it will return (`refund_amount`, Toman) in RIAL — times ten — in Persian digits grouped by thousands, no unit, which the body writes. A line holding only it is dropped when TonPays reported none. TonPays’ figure — display only, never credited to the wallet.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'amountToman',
+        type: 'STRING',
+        description:
+          'R10 B6: the same amount in TOMAN, Persian digits grouped by thousands, no unit. A line holding only it is dropped when the amount is not a whole toman.',
         required: false,
         repeatable: false,
       },
@@ -10216,7 +10281,7 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.gateway_card_overpaid_pending',
     description:
-      'TonPays Telegram: the refund request for the overpayment is with TonPays (or TonPays reports it pending). The card is not shown. Nothing is approved by this message.',
+      'TonPays Telegram: the refund request for the overpayment is with TonPays (or TonPays reports it pending). The card is not shown. Nothing is approved by this message. R10 B6: the amount to be returned, when TonPays reported one, is shown in RIAL with Toman beside it, as every other card screen of the attempt shows an amount; `{refundAmount}` stays declared and supplied so an override written for the earlier text still renders.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
@@ -10224,6 +10289,22 @@ export const TEMPLATES = [
         type: 'MONEY',
         description:
           'The overpaid amount TonPays says it will return (`refund_amount`), when it reported one. TonPays’ figure — never credited to the wallet.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'amountRial',
+        type: 'STRING',
+        description:
+          'R10 B6: the overpaid amount TonPays says it will return (`refund_amount`, Toman) in RIAL — times ten — in Persian digits grouped by thousands, no unit, which the body writes. A line holding only it is dropped when TonPays reported none. TonPays’ figure — display only, never credited to the wallet.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'amountToman',
+        type: 'STRING',
+        description:
+          'R10 B6: the same amount in TOMAN, Persian digits grouped by thousands, no unit. A line holding only it is dropped when the amount is not a whole toman.',
         required: false,
         repeatable: false,
       },

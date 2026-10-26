@@ -14,9 +14,19 @@ import type { OpsLogFacts, OpsLogLane, OpsLogWords } from './ports.js';
  * The customers' log (Round 4 PR-D): a new customer (L17), a block or an unblock (L18) and
  * a reseller's change of standing (L20), all in the USERS topic.
  *
- * `CustomerImported` is deliberately not subscribed, and a row the import wrote is refused
- * again by its provenance below: an import produces NO group message, so a migration of two
- * hundred thousand customers posts nothing.
+ * `CustomerImported` is deliberately not subscribed: an import produces NO group message, so a
+ * migration of two hundred thousand customers posts nothing. A registration is the customer
+ * ROW itself, so it is the one message that reads the customer's provenance — a row the
+ * import wrote is not a new customer (the importer writes no `CustomerRegistered`; the check
+ * is the hotfix's "the record is its own provenance", kept for the record the event is about).
+ *
+ * R10 B5 (the v0.8.2-e rule, extended): a block, an unblock and a reseller's change of
+ * standing are NOT the customer row. They are written only by this installation —
+ * `CustomerService` for an operator's or anti-spam's block, the reseller administration for a
+ * standing change — never by the import, which writes a blocked customer's status directly
+ * with no event. So a customer the import wrote who is blocked, unblocked or promoted AFTER
+ * the import is logged like any other; refusing a `MIRZA` customer here silenced every one of
+ * them on an installation migrated with the one-click import.
  */
 export class CustomerLogConsumer implements EventConsumer {
   readonly name = 'ops-log.customers';
@@ -39,12 +49,13 @@ export class CustomerLogConsumer implements EventConsumer {
     const scope = scopeOf(event);
     if (scope === null) return;
     const customer = await this.deps.facts.customer(scope, event.aggregateId, tx);
-    // Gone, or written by the import: nothing is said.
-    if (customer === null || customer.source !== 'NEXA') return;
+    if (customer === null) return;
     const at = new Date(event.occurredAt);
     let built: Built;
 
     if (event.eventType === 'CustomerRegistered') {
+      // A customer row the import wrote is history, not a new customer: nothing is said.
+      if (customer.source !== 'NEXA') return;
       const referrerId = await this.deps.facts.referrerOf(scope, customer.id, tx);
       const referrer =
         referrerId === null ? null : await this.deps.facts.customer(scope, referrerId, tx);

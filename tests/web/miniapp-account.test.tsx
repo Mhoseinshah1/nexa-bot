@@ -364,8 +364,6 @@ describe('wallet', () => {
           copyAmount: '2500000',
           amountRial: '۲٬۵۰۰٬۰۰۰',
           amountToman: '۲۵۰٬۰۰۰',
-          principal: null,
-          fee: null,
           reference: 'TRK1',
           expiresAt: null,
           destination: null,
@@ -400,6 +398,68 @@ describe('wallet', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: text('miniapp.card_copy_rial') }));
     await waitFor(() => expect(write).toHaveBeenCalledWith('2500000'));
+  });
+
+  /*
+   * R10 B6: the bot's card invoice (R8 A2) states ONE amount — the one to transfer, fee
+   * included — and never breaks it into principal and «کارمزد». The mini app's card screen is
+   * the same invoice. Served here with the principal and fee an earlier server sent beside it:
+   * neither the wire schema nor the screen lets them through.
+   */
+  it('R10 B6: a card top-up with a customer fee shows one rial amount, Toman in brackets, and no «کارمزد»', async () => {
+    serve({
+      'GET /wallet': () => wallet(),
+      'GET /wallet/entries': () => entries,
+      'POST /wallet/topup/quote': () => ({
+        outcome: 'ROUTES',
+        amount: IRT(470_000),
+        routes: [
+          {
+            provider: 'MANUAL_TRANSFER',
+            kind: 'CARD_TO_CARD',
+            name: 'x',
+            paysInChat: false,
+            giftPercent: 0,
+          },
+        ],
+      }),
+      'POST /wallet/topup': () => ({
+        kind: 'CARD_TO_CARD',
+        instruction: {
+          paymentId: 'pay-fee',
+          orderId: null,
+          amount: IRT(517_000),
+          copyAmount: '5170000',
+          amountRial: '۵٬۱۷۰٬۰۰۰',
+          amountToman: '۵۱۷٬۰۰۰',
+          principal: IRT(470_000),
+          fee: IRT(47_000),
+          reference: 'TRK2',
+          expiresAt: null,
+          destination: null,
+        },
+      }),
+    });
+    await mount();
+    tabWallet();
+    fireEvent.change(await screen.findByLabelText(text('miniapp.wallet_custom_label')), {
+      target: { value: '470000' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: text('miniapp.wallet_continue') }));
+    fireEvent.click(await screen.findByRole('button', { name: text('miniapp.checkout_card') }));
+    await screen.findByText(text('miniapp.card_title'));
+    expect(screen.getByText('۵٬۱۷۰٬۰۰۰ ریال')).toBeTruthy();
+    expect(screen.getByText('(معادل ۵۱۷٬۰۰۰ تومان)')).toBeTruthy();
+    const page = document.body.textContent ?? '';
+    expect(page).not.toContain('کارمزد');
+    expect(page).not.toContain(money(IRT(470_000)));
+    expect(page).not.toContain(money(IRT(47_000)));
+    // No mini-app string can name the fee on a card screen.
+    expect(
+      Object.entries(MINIAPP_FA).filter(
+        ([key, value]) => key.startsWith('miniapp.card_') && value.includes('کارمزد'),
+      ),
+    ).toEqual([]);
   });
 
   it('opens the provider page for a gateway top-up and follows the payment', async () => {

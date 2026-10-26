@@ -3,6 +3,7 @@
 import {
   type InlineButtonKey,
   money,
+  type Money,
   PAYMENT_GATEWAY_DESCRIPTORS,
   type PaymentGatewayProvider,
   paymentTrackingCode,
@@ -120,6 +121,21 @@ export function cardCheck(paymentId: string): CustomerButton {
 }
 
 /**
+ * R6 item 2: the amount a card-transfer invoice tells the customer to transfer. TonPays
+ * approves automatically only on the EXACT amount it named (its odd `final_amount`); when it
+ * named none, what Nexa asked for (`sentAmount`, the payable in the provider's own unit).
+ * Display and clipboard only — what Nexa settles, credits and refunds is the payment's own
+ * principal. One function, so the invoice, its follow-ups and the review screen (R10 B6)
+ * cannot state two different figures.
+ */
+function cardTransferAmount(invoice: GatewayInvoiceRecord): Money {
+  return money(
+    invoice.finalAmount !== null ? invoice.finalAmount : invoice.sentAmount,
+    invoice.providerUnit === 'IRR' ? 'IRR' : 'IRT',
+  );
+}
+
+/**
  * A created TonPays Telegram attempt in its customer window (`docs/tonpays-telegram-gateway-
  * audit.md` §8.1): the payable from the payment's own snapshot, TonPays' transfer figure when
  * it differs (labelled as TonPays', never what Nexa settles), the CURRENT card, the deadline,
@@ -185,10 +201,7 @@ function cardTransferScreen(
    * bare rial digits. It is display and clipboard only: what Nexa settles, credits and
    * refunds is still the payment's own principal.
    */
-  const exact = money(
-    invoice.finalAmount !== null ? invoice.finalAmount : invoice.sentAmount,
-    invoice.providerUnit === 'IRR' ? 'IRR' : 'IRT',
-  );
+  const exact = cardTransferAmount(invoice);
   const transferAmount = plainAmount(exact);
   const copyExact = copyRialAmountButton(exact);
   const copyCard = invoice.cardNumber === null ? null : copyCardNumberButton(invoice.cardNumber);
@@ -484,8 +497,18 @@ function providerNeedScreen(
     };
   }
   // action_required_more
+  /*
+   * R10 B6: TonPays' `refund_amount` is Toman, like its remainder; shown in RIAL with Toman
+   * beside it, as every other amount of this attempt is. `{refundAmount}` stays supplied for an
+   * override written for the earlier text. Display only: nothing Nexa credits reads it.
+   */
   const refundAmount =
-    provider?.refundAmount == null ? {} : { refundAmount: money(provider.refundAmount, 'IRT') };
+    provider?.refundAmount == null
+      ? {}
+      : {
+          refundAmount: money(provider.refundAmount, 'IRT'),
+          ...cardInvoiceAmountValues(money(provider.refundAmount, 'IRT')),
+        };
   const latest = facts.latestRefund ?? null;
   const masked = latest?.refundCardMasked == null ? {} : { maskedCard: latest.refundCardMasked };
   const retryCard: CustomerButton = {
@@ -815,10 +838,22 @@ export function gatewayAttemptScreen(
   const reviewUntil = payment.providerReviewUntil ?? null;
   if (payment.state === 'PENDING' && reviewUntil !== null) {
     if (reviewUntil.getTime() > at.getTime()) {
+      /*
+       * R10 B6: the amount in RIAL, Toman beside it, as the card invoice states it. On a
+       * card-transfer route that is the exact figure the invoice and its receipt-sent screen
+       * told the customer to transfer (TonPays' `final_amount`), not the payable it differs
+       * from by TonPays' marker; elsewhere the payable. `{payable}` stays for an old override.
+       */
+      const payable = payment.customerFee?.payable ?? payment.amount;
+      const shown =
+        PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].invoiceForm === 'CARD_TRANSFER'
+          ? cardTransferAmount(invoice)
+          : payable;
       return {
         key: reviewKeys.inReview,
         values: {
-          payable: payment.customerFee?.payable ?? payment.amount,
+          payable,
+          ...cardInvoiceAmountValues(shown),
           reviewUntil,
           reference,
         },
