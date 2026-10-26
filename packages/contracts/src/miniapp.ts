@@ -336,9 +336,11 @@ export const miniAppCardInstructionSchema = z.object({
    */
   amountRial: z.string().nullable(),
   amountToman: z.string().nullable(),
-  /** The principal and the fee apart, when the route charges a customer fee. */
-  principal: moneySchema.nullable(),
-  fee: moneySchema.nullable(),
+  /*
+   * R10 B6: no principal and fee apart. The bot's card invoice (R8 A2) states ONE amount —
+   * the one to transfer — and never a fee breakdown or the word «کارمزد»; the mini app's
+   * card screen is that invoice, so the wire no longer carries the figures to break it down.
+   */
   /** The tracking code the customer quotes. */
   reference: z.string(),
   expiresAt: isoSchema.nullable(),

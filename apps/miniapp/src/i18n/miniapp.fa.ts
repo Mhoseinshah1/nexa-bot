@@ -104,7 +104,6 @@ export const MINIAPP_FA = {
   'miniapp.card_amount_rial': '{amount} ریال',
   'miniapp.card_amount_toman': '(معادل {amount} تومان)',
   'miniapp.card_copy_rial': 'کپی مبلغ (ریال)',
-  'miniapp.card_principal_fee': 'مبلغ {principal} + کارمزد {fee}',
   'miniapp.card_number': 'شماره کارت',
   'miniapp.card_holder': 'به نام {holder}',
   'miniapp.card_bank': '{bank}',

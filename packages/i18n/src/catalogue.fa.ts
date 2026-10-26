@@ -749,7 +749,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * attempt for ever without anything happening. 4H gives them the step that exists.
    */
   'bot.payment.manual_instructions':
-    'برای پرداخت مبلغ {total} طبق راهنمای فروشنده اقدام کنید و سپس دکمهٔ «پرداخت را انجام دادم» را بزنید.\nکد پیگیری پرداخت: {reference}',
+    'برای پرداخت مبلغ زیر طبق راهنمای فروشنده اقدام کنید و سپس دکمهٔ «پرداخت را انجام دادم» را بزنید.\nمبلغ قابل واریز: {amountRial} ریال\n(معادل {amountToman} تومان)\nکد پیگیری پرداخت: {reference}',
   /*
    * The invoice layout the owner specified: heading, invoice id, payable amount, then
    * the destination lines, then the instructions.
@@ -1299,11 +1299,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_card_changing':
     '🔄 درخواست کارت جدید برای تون‌پی ارسال شد. کارت جدید به‌محض آماده شدن در همین پیام نمایش داده می‌شود.\n\nمبلغ قابل واریز فعلی:\n<b>{amountRial} ریال</b>\n(معادل {amountToman} تومان)\nاگر با کارت جدید مبلغ تغییر کند، همین‌جا به‌روز می‌شود؛ پیش از واریز دوباره آن را ببینید.\n{icon:time} مهلت: ساعت {expiresTime}\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_unconfirmed':
-    'پاسخ تون‌پی برای تعویض کارت دریافت نشد، بنابراین شمارهٔ کارتی نمایش داده نمی‌شود.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} مهلت: {expiresAt}\n\nاگر پیش‌تر واریز کرده‌اید، تصویر رسید آن را بفرستید؛ در غیر این صورت وضعیت را بررسی کنید یا پس از یک دقیقه دوباره کارت جدید بخواهید. از این پرداخت مبلغی ثبت نشده است.\n\nکد پیگیری پرداخت: {reference}',
+    'پاسخ تون‌پی برای تعویض کارت دریافت نشد، بنابراین شمارهٔ کارتی نمایش داده نمی‌شود.\n\n{icon:amount} مبلغ قابل پرداخت: {amountRial} ریال\n(معادل {amountToman} تومان)\n{icon:time} مهلت: {expiresAt}\n\nاگر پیش‌تر واریز کرده‌اید، تصویر رسید آن را بفرستید؛ در غیر این صورت وضعیت را بررسی کنید یا پس از یک دقیقه دوباره کارت جدید بخواهید. از این پرداخت مبلغی ثبت نشده است.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_missing':
     'تون‌پی ساخت این فاکتور را اعلام کرد اما شماره کارتی برای واریز نفرستاد، بنابراین از اینجا قابل پرداخت نیست. از این فاکتور مبلغی ثبت نشده است؛ می‌توانید دوباره پرداخت را آغاز کنید یا روش دیگری انتخاب کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_in_review':
-    '🕓 تون‌پی رسید واریز شما را دریافت کرده و در حال بررسی آن است.\n\n{icon:amount} مبلغ قابل پرداخت: {payable}\n{icon:time} پایان مهلت بررسی: {reviewUntil}\n\nلطفاً دوباره پرداخت نکنید. نتیجه پس از تأیید تون‌پی در همین پیام نمایش داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
+    '🕓 تون‌پی رسید واریز شما را دریافت کرده و در حال بررسی آن است.\n\n{icon:amount} مبلغ قابل پرداخت: {amountRial} ریال\n(معادل {amountToman} تومان)\n{icon:time} پایان مهلت بررسی: {reviewUntil}\n\nلطفاً دوباره پرداخت نکنید. نتیجه پس از تأیید تون‌پی در همین پیام نمایش داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_review_unresolved':
     'نتیجهٔ بررسی تون‌پی هنوز قطعی نشده است. پرداخت شما ناموفق اعلام نشده و در حال پیگیری است.\nتا روشن شدن نتیجه، از این پرداخت مبلغی به کیف پول شما واریز نشده و سفارشی با آن پرداخت نشده است.\n\nلطفاً دوباره پرداخت نکنید؛ پس از روشن شدن نتیجه به شما اطلاع داده می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_receipt_button': '📤 ارسال رسید',
@@ -1326,9 +1326,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_card_underpaid_unavailable':
     '{icon:warning} تون‌پی اعلام کرده مبلغ واریزی شما کمتر از مبلغ فاکتور بوده، اما اطلاعات کارت مابقی را هنوز نفرستاده است.\n\n{icon:time} مهلت: {expiresAt}\n\nچند لحظه بعد دکمهٔ «🔎 بررسی وضعیت» را بزنید. تا زمانی که تون‌پی تأیید نکند، مبلغی به کیف پول شما اضافه نمی‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_overpaid':
-    '{icon:warning} مبلغی بیشتر از مبلغ فاکتور واریز کرده‌اید.\n{icon:amount} مبلغ قابل بازگشت: {refundAmount}\n\nبرای بازگرداندن مبلغ اضافه، با دکمهٔ «💳 ثبت کارت بازگشت وجه» شمارهٔ کارت و نام صاحب کارت خود را ثبت کنید. تا زمانی که تون‌پی تأیید نکند، پرداخت شما ثبت نمی‌شود.\n\n{icon:time} مهلت: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
+    '{icon:warning} مبلغی بیشتر از مبلغ فاکتور واریز کرده‌اید.\n{icon:amount} مبلغ قابل بازگشت: {amountRial} ریال\n(معادل {amountToman} تومان)\n\nبرای بازگرداندن مبلغ اضافه، با دکمهٔ «💳 ثبت کارت بازگشت وجه» شمارهٔ کارت و نام صاحب کارت خود را ثبت کنید. تا زمانی که تون‌پی تأیید نکند، پرداخت شما ثبت نمی‌شود.\n\n{icon:time} مهلت: {expiresAt}\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_card_overpaid_pending':
-    '🕓 درخواست بازگشت مبلغ اضافه برای تون‌پی ثبت شد و در حال بررسی است.\n{icon:amount} مبلغ قابل بازگشت: {refundAmount}\n{icon:payment} کارت ثبت‌شده: {maskedCard}\n{icon:time} مهلت: {expiresAt}\n\nنتیجه پس از تأیید تون‌پی در همین پیام نمایش داده می‌شود. دوباره پرداخت نکنید.\n\nکد پیگیری پرداخت: {reference}',
+    '🕓 درخواست بازگشت مبلغ اضافه برای تون‌پی ثبت شد و در حال بررسی است.\n{icon:amount} مبلغ قابل بازگشت: {amountRial} ریال\n(معادل {amountToman} تومان)\n{icon:payment} کارت ثبت‌شده: {maskedCard}\n{icon:time} مهلت: {expiresAt}\n\nنتیجه پس از تأیید تون‌پی در همین پیام نمایش داده می‌شود. دوباره پرداخت نکنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_refund_card_prompt':
     '{icon:payment} لطفاً شمارهٔ کارت و نام صاحب کارت خود را در یک پیام و در دو خط بفرستید:\n\nخط اول: شمارهٔ ۱۶ رقمی کارت\nخط دوم: نام و نام خانوادگی صاحب کارت\n\nاین اطلاعات فقط برای بازگرداندن مبلغ اضافه به تون‌پی فرستاده می‌شود و پس از ارسال، شمارهٔ کارت فقط به‌صورت پوشیده نگهداری می‌شود.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_refund_card_invalid':
