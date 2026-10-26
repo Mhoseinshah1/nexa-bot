@@ -170,6 +170,8 @@ import {
   REFERRAL_COMMISSION_PERCENT_MIN,
   REFERRAL_COMMISSION_SCOPES,
   REFERRAL_COMMISSION_STATES,
+  START_CAPTCHA_OPTION_COUNT,
+  START_CAPTCHA_STATES,
   REFERRAL_TRIGGERS,
   RESELLER_STATUSES,
   RESELLER_PRICING_MODES,
@@ -9422,6 +9424,12 @@ export const orderReferralCommissions = pgTable(
     earnedEntryId: uuid('earned_entry_id'),
     earnedAt: timestamptz('earned_at'),
     voidedAt: timestamptz('voided_at'),
+    /**
+     * R10 D5 (b): a PENDING commission the referrer's daily cap held back is not earned before
+     * this instant (the start of the next local day). Null for every other row. The earner's
+     * discovery skips a row until it passes, so a held row never blocks the queue behind it.
+     */
+    notBefore: timestamptz('not_before'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -13456,6 +13464,67 @@ export const termsAcceptances = pgTable(
       foreignColumns: [termsVersions.tenantId, termsVersions.id],
     }),
     check('terms_acceptances_source_check', enumCheck('source', TERMS_ACCEPTANCE_SOURCES)),
+  ],
+);
+
+/**
+ * R10 D5 (a): the `/start` captcha of ONE customer.
+ *
+ * A row exists only for a customer CREATED while `start_captcha` was on: it is inserted in the
+ * transaction that creates the customer row, and nowhere else, so every customer created
+ * before the switch, every imported one and every one created while it was off has none and
+ * is never asked. `PENDING` holds the customer at the gate while the flag is on; turning the
+ * flag off frees every PENDING row at once without touching it.
+ *
+ * The right answer is `options[answer_index]` and never leaves the server: the buttons carry
+ * only the `challenge_id` and an index. Every change is a conditional UPDATE naming the state
+ * and the `challenge_id` it read, so a stale or replayed tap changes nothing. There is no
+ * failed state and no link to the customer's status: a failure is a cooldown (`locked_until`),
+ * never a block.
+ */
+export const customerCaptchas = pgTable(
+  'customer_captchas',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    state: text('state').notNull().default('PENDING'),
+    /** The current question's id; a new question gets a new one. */
+    challengeId: uuid('challenge_id').notNull(),
+    operandA: integer('operand_a').notNull(),
+    operandB: integer('operand_b').notNull(),
+    /** The four offered answers, in button order. */
+    options: jsonb('options').$type<number[]>().notNull(),
+    answerIndex: integer('answer_index').notNull(),
+    /** Wrong answers since the last cooldown. */
+    attempts: integer('attempts').notNull().default(0),
+    issuedAt: timestamptz('issued_at').notNull(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    lockedUntil: timestamptz('locked_until'),
+    passedAt: timestamptz('passed_at'),
+    createdAt: timestamptz('created_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    primaryKey({ name: 'customer_captchas_pkey', columns: [table.tenantId, table.customerId] }),
+    foreignKey({
+      name: 'customer_captchas_customer_fk',
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+    }),
+    check('customer_captchas_state_check', enumCheck('state', START_CAPTCHA_STATES)),
+    check(
+      'customer_captchas_answer_index_check',
+      sql`answer_index BETWEEN 0 AND ${sql.raw(String(START_CAPTCHA_OPTION_COUNT - 1))}`,
+    ),
+    check(
+      'customer_captchas_options_check',
+      sql`jsonb_typeof(options) = 'array' AND jsonb_array_length(options) = ${sql.raw(String(START_CAPTCHA_OPTION_COUNT))}`,
+    ),
+    check('customer_captchas_attempts_check', sql`attempts >= 0`),
+    check('customer_captchas_passed_check', sql`(state = 'PASSED') = (passed_at IS NOT NULL)`),
+    check('customer_captchas_expiry_check', sql`expires_at > issued_at`),
   ],
 );
 

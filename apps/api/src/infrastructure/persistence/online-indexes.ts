@@ -678,6 +678,24 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
     definition: 'ON "products" USING btree ("tenant_id","code_number")',
     unique: true,
   },
+  /*
+   * R10 D5 (b): the referral guard's two daily caps. Each counts ONE referrer's paid
+   * shares or earned commissions inside one local day, under that referrer's locks; both
+   * tables already hold rows on an upgraded installation, so the indexes are built here,
+   * concurrently, rather than under the migrator's SHARE lock.
+   */
+  {
+    name: 'referral_signup_gifts_referrer_claimed_idx',
+    definition:
+      'ON "referral_signup_gifts" USING btree ("tenant_id","referrer_id","referrer_claimed_at") ' +
+      'WHERE referrer_claimed_at IS NOT NULL',
+  },
+  {
+    name: 'order_referral_commissions_referrer_earned_idx',
+    definition:
+      'ON "order_referral_commissions" USING btree ("tenant_id","referrer_id","earned_at") ' +
+      "WHERE state = 'EARNED'",
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */
