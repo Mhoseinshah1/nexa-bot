@@ -22,8 +22,9 @@ import { z } from 'zod';
  * - A wallet that does not cover the renewal is told ONCE per period
  *   (`SERVICE_AUTO_RENEW_FUNDS_SHORT`); no order is created for money that is not there.
  * - One run per (service, period): a period is the deadline the run was claimed against, and
- *   `service_auto_renew_runs` is unique on it. The run's id derives every idempotency key the
- *   renewal's commands take, so a retried or concurrent pass replays rather than repeats.
+ *   `service_auto_renew_runs` is unique on it. The run's id and attempt derive every
+ *   idempotency key the renewal's commands take, and the run is marked `RENEWED` in the very
+ *   transaction that debits the wallet, so a period is debited at most once.
  * - Imported (Mirza) services are not offered it in this release: their renewal is a panel plan
  *   the customer chooses at the time (`OQ-R10-D1-01`).
  */
@@ -37,7 +38,8 @@ export const AUTO_RENEW_LEAD_HOURS_DEFAULT = 24;
  * Where one run of one period is.
  *
  * - `CLAIMED` — a pass has claimed the period and is renewing it. A claim whose lease lapsed
- *   (the worker stopped mid-run) is taken over by a later pass, which replays the SAME keys.
+ *   (the worker stopped mid-run) is taken over by a later pass as the next attempt; the
+ *   lapsed attempt debited nothing, since a debit commits only together with `RENEWED`.
  * - `RENEWED` — the renewal order was paid from the wallet. Written in the settling
  *   transaction itself, so a debit and this state commit together or not at all. Final.
  * - `FUNDS_SHORT` — the wallet did not cover the quote. The customer was told once; a later
