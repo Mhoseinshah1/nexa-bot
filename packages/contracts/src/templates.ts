@@ -12043,6 +12043,87 @@ export const TEMPLATES = [
     placeholders: [],
   },
   /*
+   * Round 10, D1: «تمدید خودکار» on a customer's service screen. The switch ON asks first and
+   * names the amount; only its confirm button records the consent. The switch OFF acts at once.
+   */
+  {
+    key: 'bot.service.auto_renew_enable_button',
+    description:
+      'Round 10, D1: the button on a service screen that starts switching automatic renewal ON. ' +
+      'Drawn only while the feature is on and the service can be renewed automatically; it ' +
+      'asks first and records nothing.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.auto_renew_disable_button',
+    description:
+      'Round 10, D1: the button on a service screen that switches automatic renewal OFF, drawn ' +
+      'while it is on for this service. Acts at once.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.auto_renew_ask',
+    description:
+      'Round 10, D1: asks the customer to confirm automatic renewal for one service, naming the ' +
+      'renewal total quoted now (the most it will ever charge) and how long before the deadline ' +
+      'it runs. Records nothing; only its confirm button does.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'price',
+        type: 'MONEY',
+        description: 'The renewal total quoted now, through the ordinary renewal pricing.',
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'leadHours',
+        type: 'NUMBER',
+        description: 'How many hours before the deadline the renewal is attempted.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.auto_renew_confirm_button',
+    description: 'Round 10, D1: the confirm button of the automatic-renewal question.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.auto_renew_enabled',
+    description:
+      'Round 10, D1: the line on the service screen once automatic renewal was switched on.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.auto_renew_disabled',
+    description:
+      'Round 10, D1: the line on the service screen once automatic renewal was switched off.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.auto_renew_unavailable',
+    description:
+      'Round 10, D1: the one answer when automatic renewal cannot be switched on for this ' +
+      'service now — the feature is off, the service is imported or has no deadline, or it ' +
+      'cannot be renewed. Nothing was recorded.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  /*
    * Package F: a customer hands a service to another customer of the tenant
    * (`docs/package-f-service-transfer-audit.md`). The button, the prompt, the confirmation
    * button, the success sentence and the recipient's heading are the brief's own words.

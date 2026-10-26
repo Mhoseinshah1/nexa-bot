@@ -112,6 +112,8 @@ export const MINIAPP_ROUTES = {
   serviceQuote: '/services/:serviceId/quotes',
   serviceLocations: '/services/:serviceId/locations',
   serviceLocation: '/services/:serviceId/location',
+  // Round 10, D1: switch automatic renewal on or off for one service.
+  serviceAutoRenew: '/services/:serviceId/auto-renew',
   wallet: '/wallet',
   walletEntries: '/wallet/entries',
   walletTopupQuote: '/wallet/topup/quote',
@@ -468,6 +470,28 @@ export const miniAppServicesResponseSchema = z.object({
 });
 export type MiniAppServicesResponse = z.infer<typeof miniAppServicesResponseSchema>;
 
+/**
+ * Round 10, D1: automatic renewal of one service, as the customer may act on it now.
+ *
+ * - `offered` — the switch can be turned ON: the feature is on and this service can be renewed
+ *   automatically (not imported, has a deadline, renewable now). A service already opted in is
+ *   always shown, so it can be turned off whatever else changed.
+ * - `enabled` — the customer's consent is recorded for this service.
+ * - `price` — the renewal total quoted now when `offered` (what switching on agrees to), the
+ *   consented total when `enabled`, else null. Never a client-supplied figure.
+ * - `leadHours` — how long before the deadline the renewal runs.
+ */
+export const miniAppAutoRenewSchema = z.object({
+  offered: z.boolean(),
+  enabled: z.boolean(),
+  price: moneySchema.nullable(),
+  leadHours: z.number().int(),
+});
+export type MiniAppAutoRenew = z.infer<typeof miniAppAutoRenewSchema>;
+
+/** Switch it on (the server quotes and records that total as the consent) or off. */
+export const miniAppAutoRenewRequestSchema = z.object({ enabled: z.boolean() });
+
 export const miniAppServiceDetailSchema = miniAppServiceSummarySchema.extend({
   /** The subscription link, only while the service is deliverable. A secret: never logged. */
   subscriptionUrl: z.string().nullable(),
@@ -479,6 +503,8 @@ export const miniAppServiceDetailSchema = miniAppServiceSummarySchema.extend({
   qr: z.boolean(),
   /** Whether the location sheet has anything to offer now (`CHANGE_LOCATION` is available). */
   canChangeLocation: z.boolean(),
+  /** Round 10, D1: «تمدید خودکار» for this service (`MINIAPP_ROUTES.serviceAutoRenew`). */
+  autoRenew: miniAppAutoRenewSchema,
 });
 export type MiniAppServiceDetail = z.infer<typeof miniAppServiceDetailSchema>;
 

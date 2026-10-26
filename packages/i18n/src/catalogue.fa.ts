@@ -76,6 +76,20 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * Package F. The button, the prompt, the confirmation button, the sender's success
    * sentence, the recipient's heading and its button are the brief's words, verbatim.
    */
+  // Round 10, D1: «تمدید خودکار» on the service screen.
+  'bot.service.auto_renew_enable_button': '🔁 فعال‌سازی تمدید خودکار',
+  'bot.service.auto_renew_disable_button': '⏹ لغو تمدید خودکار',
+  'bot.service.auto_renew_ask':
+    '🔁 تمدید خودکار سرویس «{service}»\n\n' +
+    'با فعال‌سازی، {leadHours} ساعت پیش از پایان اعتبار، سرویس با همین پلن و با مبلغ {price} از موجودی کیف پول شما تمدید می‌شود.\n' +
+    '{icon:wallet} اگر موجودی کافی نباشد، فقط یک بار به شما اطلاع می‌دهیم و مبلغی کسر نمی‌شود.\n' +
+    '{icon:warning} اگر مبلغ تمدید از {price} بیشتر شود، تمدید خودکار انجام نمی‌شود.\n' +
+    'هر زمان بخواهید می‌توانید تمدید خودکار را لغو کنید.\n\n' +
+    'تمدید خودکار فعال شود؟',
+  'bot.service.auto_renew_confirm_button': '✅ فعال‌سازی تمدید خودکار',
+  'bot.service.auto_renew_enabled': '✅ تمدید خودکار این سرویس فعال شد.',
+  'bot.service.auto_renew_disabled': '⏹ تمدید خودکار این سرویس لغو شد.',
+  'bot.service.auto_renew_unavailable': 'در حال حاضر تمدید خودکار برای این سرویس در دسترس نیست.',
   'bot.service.transfer_button': '🔄 انتقال سرویس',
   'bot.service.transfer_prompt':
     'سرویس را به چه کاربری می‌خواهید انتقال دهید؟ شناسه کاربری عددی مقصد را ارسال کنید.',
