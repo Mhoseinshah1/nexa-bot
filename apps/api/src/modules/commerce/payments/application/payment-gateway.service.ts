@@ -659,8 +659,8 @@ export class PaymentGatewayService {
    * policy; the allow-list is up to 32 addresses or CIDRs. Refused while the route is ACTIVE —
    * disable, change, test, enable — and the refusal is decided by the UPDATE's own WHERE, so an
    * enable committing in between cannot slip past it. Every attempt already open keeps the URL
-   * it froze when it opened. Audited with the host and the list size before and after, never
-   * anything secret (there is none here).
+   * it froze when it opened. Audited with the base URL and the allow-list before and after
+   * (neither is a secret).
    */
   async setEndpoint(
     scope: TenantContext,

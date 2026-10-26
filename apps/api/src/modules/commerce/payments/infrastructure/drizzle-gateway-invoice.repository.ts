@@ -709,7 +709,10 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
              * Round 10 C1: a route whose provider can be asked by Nexa's own order id (the
              * custom gateway) can be asked about a lost create, whose reference is unknown.
              */
-            inArray(gatewayInvoices.provider, [...ORDER_ID_INQUIRY_PROVIDERS]),
+            and(
+              eq(gatewayInvoices.creationState, 'CREATE_UNKNOWN'),
+              inArray(gatewayInvoices.provider, [...ORDER_ID_INQUIRY_PROVIDERS]),
+            ),
           ),
           // Spaced: one operator request a minute, whatever the button does.
           or(isNull(gatewayInvoices.lastInquiryAt), lte(gatewayInvoices.lastInquiryAt, spaced)),
