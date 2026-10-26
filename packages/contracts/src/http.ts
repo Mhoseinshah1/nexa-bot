@@ -3234,6 +3234,12 @@ export const referralCommissionSummarySchema = z.object({
   createdAt: z.iso.datetime(),
   earnedAt: z.iso.datetime().nullable(),
   voidedAt: z.iso.datetime().nullable(),
+  /**
+   * R10 D5: a PENDING commission the referrer's daily cap held back is not earned before
+   * this instant (the start of the next local day). Null for every other commission. It is
+   * never voided by the cap; it is earned later by the ordinary rule.
+   */
+  notBefore: z.iso.datetime().nullable(),
 });
 export type ReferralCommissionSummaryResponse = z.infer<typeof referralCommissionSummarySchema>;
 
