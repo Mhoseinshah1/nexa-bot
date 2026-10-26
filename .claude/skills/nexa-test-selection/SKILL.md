@@ -45,9 +45,26 @@ pnpm test:deploy`, `pnpm check:i18n`).
    database. CI runs both on the PR head; a green local gate is not a
    substitute for green CI on the exact head.
 
-Pipe every run through the digest (`nexa-log-digest`), e.g.
-`pnpm verify 2>&1 | bash scripts/claude/log-digest.sh`; read the full output
-only for the section the digest names.
+Run every tier through the summary instead of reading raw output:
+
+```bash
+bash scripts/claude/test-summary.sh pnpm verify
+bash scripts/claude/test-summary.sh pnpm test:integration <files>
+bash scripts/claude/test-summary.sh --from "$SCRATCH/int.log"   # an existing log
+```
+
+It prints `passed=N failed=N skipped=N`, the failing test names or failed
+`pnpm verify` stages, the first 20 lines of each failure, `exit=N` and the raw
+log's path; its exit code is the command's. Open the raw log only at the
+failure it names (`grep -n`, then a range). `log-digest.sh` (`nexa-log-digest`)
+stays for other long output.
+
+**Non-merchandise shortcut.** A PR that touches no money, ledger, payment,
+gateway, pricing, provisioning or migration code may use tiers 1–2 (typecheck,
+the selected suites with their guard suites, the class checks) as its local
+gate instead of tier 3; CI still runs the full suite on the exact head and
+Codex still reviews (`nexa-round-pipeline` §3). A PR that touches any of those
+keeps tier 3 locally. When unsure, it is a money PR.
 
 ## Guard classes the selector never narrows
 
@@ -63,14 +80,32 @@ only for the section the digest names.
 
 ## Heavy suites — run on purpose, not by reflex
 
-- `pnpm test:exhaustive` — nightly in CI; run locally only when changing the
-  notification dispatcher/announcer ordering.
+- `pnpm test:exhaustive` — 1341 notification orderings, ~4 min; nightly in CI;
+  run locally only when changing the notification dispatcher/announcer
+  ordering. It is off the pull-request path on purpose — it is the search, not
+  the safety net, and every shape it has found has a named regression in
+  `tests/integration/notification-invariants.test.ts`.
 - `pnpm test:migration-scale`, `pnpm rehearsal:synthetic`, `pnpm test:legacy-mysql`
   — only for the Mirza importer and only when its apply path changes.
 - `pnpm test:acceptance` — needs a disposable real panel and fails without one;
   never in the PR path.
+- With a Docker daemon (the Ubuntu CI job; cloud sessions usually have no
+  registry egress for base images): `bash scripts/deployment-smoke.sh` (build,
+  up, migrate, serve, back up) and `bash scripts/deployment-update-smoke.sh`
+  (A -> B -> failed health -> rollback).
 - Do not re-run a suite that already passed on the same tree; re-run after the
   tree changes.
+
+## Other commands (moved from CLAUDE.md § Commands)
+
+```bash
+pnpm provision                 # the primary tenant (dev: provision:dev)
+pnpm admin:bootstrap           # first owner, from dist (dev: admin:bootstrap:dev)
+pnpm backup run|list|verify|restore   # the DR pipeline (dev: backup:dev)
+pnpm check:runtime             # dist CLI runs without devDeps; web ships no source maps
+pnpm check:shell               # shellcheck; deploy/ at info, scripts/ at warning
+pnpm test:deploy               # botctl update/rollback logic against a fake docker
+```
 
 ## Running integration safely
 

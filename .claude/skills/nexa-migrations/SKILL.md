@@ -65,7 +65,24 @@ If a database has already applied a bad stamp, removing its row from
 
 Multi-PR rounds (`nexa-round-pipeline` §4) and collisions `branch-check.sh`
 reports. Renumber on the branch that merges **second**, after merging
-`origin/main` into it:
+`origin/main` into it, with the script:
+
+```bash
+git merge origin/main
+bash scripts/claude/renumber-migration.sh --dry-run        # the plan, nothing changed
+bash scripts/claude/renumber-migration.sh [--base <ref>]   # renumber, regenerate, verify
+```
+
+It finds the branch's migrations that are not on the base and does steps 1–3
+below for each: a generated one is regenerated with `drizzle-kit`, a
+hand-written one is `git mv`ed and registered with `when` = `Date.now()`; it
+proves the SQL **byte-identical** (otherwise it exits non-zero and prints the
+diff — the schemas diverged: stop and read it), and updates references to the
+old number outside `apps/api/drizzle/`. Its last line is
+`renumbered=N identical=yes|no`. Step 4 is still yours: `pnpm db:check` and the
+migration suites. The PR body says the SQL is byte-identical.
+
+The manual steps — what the script does, and the fallback when it cannot run:
 
 1. Save the branch's SQL: `cp apps/api/drizzle/NNNN_name.sql "$SCRATCH/"`.
 2. Generated migration: remove the branch's `NNNN_name.sql`, its
