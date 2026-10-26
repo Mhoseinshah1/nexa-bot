@@ -21,8 +21,8 @@ they cannot describe a new protocol, add an endpoint or change a field.
 
 **Configuring one in Nexa** (Web Admin → Panels → new panel, provider «Custom (Nexa bridge
 v1)»): the base URL (`https://` only — anything else is refused), the shared secret (at least
-32 characters; stored encrypted, never shown again) and, optionally, on the panel's
-activation card, a request timeout in seconds (§8). Then «test connection» (§5.1) — a panel
+32 characters; stored encrypted, never shown again) and, optionally, a request timeout in
+seconds (§8) — on the new-panel form or later on the panel's activation card. Then «test connection» (§5.1) — a panel
 is enabled only after a test that vouches for its current address and secret. Creating a
 custom panel is refused while the tenant's `custom_panel_provider` flag is off; turning the
 flag off later does **not** stop custom panels that already exist.
