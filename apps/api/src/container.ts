@@ -335,6 +335,7 @@ import { DrizzleCustomerAccountTransferRepository } from './modules/commerce/cus
 import { ManualOrderService } from './modules/commerce/orders/application/manual-order.service.js';
 import { CustomerServicesToggleService } from './modules/commerce/provisioning/application/customer-services-toggle.service.js';
 import { DrizzleCustomerRepository } from './modules/commerce/customers/infrastructure/drizzle-customer.repository.js';
+import { DrizzlePersonalDiscountRepository } from './modules/commerce/customers/infrastructure/drizzle-personal-discount.repository.js';
 import { DrizzleCustomerLocationOverrideRepository } from './modules/commerce/locations/infrastructure/drizzle-customer-location-override.repository.js';
 import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastructure/telegram-customer-messenger.js';
 import type { RichMessageSupport } from './modules/commerce/messaging/application/rich-messages.js';
@@ -2317,6 +2318,7 @@ export function createContainer(
    * their own idempotency view, and a replay handled by one would not be seen by the
    * other.
    */
+  const personalDiscountRepository = new DrizzlePersonalDiscountRepository(database.db);
   const customerRepository = new DrizzleCustomerRepository(database.db, {
     fillFirstBotOnContact: config.CUSTOMER_FIRST_BOT_FILL_ON_CONTACT,
   });
@@ -2885,6 +2887,9 @@ export function createContainer(
     orderCashback: orderCashbackRepository,
     outbox,
     ids,
+    // R10 D3: the customer's personal discount, behind `personal_discount`.
+    personalDiscounts: personalDiscountRepository,
+    featureFlags: featureFlagResolver,
   });
   /*
    * The operator's half of pricing (P12): the two rule catalogues and the read-only
@@ -4982,6 +4987,8 @@ export function createContainer(
   });
   const customerControlService = new CustomerControlService({
     customers: customerRepository,
+    personalDiscounts: personalDiscountRepository,
+    featureFlags: featureFlagResolver,
     locationOverrides: customerLocationOverrides,
     guard,
     audit,

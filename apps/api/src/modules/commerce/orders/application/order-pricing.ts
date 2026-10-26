@@ -359,5 +359,19 @@ export function priceQuoteToWire(quote: PriceQuote): PriceQuoteWire {
             },
           },
         }),
+    // R10 D3: likewise only when present, so a quote it took no part in is unchanged.
+    ...(quote.personalDiscount === undefined
+      ? {}
+      : {
+          personalDiscount: {
+            percent: quote.personalDiscount.percent,
+            outcome: quote.personalDiscount.outcome,
+            competingTotal: {
+              amountMinor: quote.personalDiscount.competingTotal.amountMinor.toString(),
+              currency: quote.personalDiscount.competingTotal.currency,
+            },
+            rule: quote.personalDiscount.rule,
+          },
+        }),
   };
 }

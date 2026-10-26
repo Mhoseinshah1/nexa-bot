@@ -370,6 +370,42 @@ export class ResellerService {
     const base = order.totals.quote.trace.find((s) => s.step === 'BASE_PRICE');
     if (base === undefined) throw termsChanged();
     const list = base.amountAfter.amountMinor;
+
+    /*
+     * R10 D3: the quote was priced with the customer's PERSONAL discount, which won over
+     * the reseller price (`LARGER_SINGLE_WINS`, never stacked). The reseller layer took no
+     * part in what is charged, so there is no layer to compare and nothing has "changed":
+     * the order is recorded at LIST terms — cost = list, margin 0 — and the personal
+     * discount is the promotion, so a discount is never recorded as a margin. Entitlement
+     * (above) and the catalogue (`termsFor`) were still decided, authoritatively. Whether
+     * the personal discount still holds is `PricingService.confirmPersonal`'s decision.
+     */
+    if (quoted === null && order.totals.quote.trace.some((s) => s.step === 'PERSONAL_DISCOUNT')) {
+      if (order.totals.subtotal.amountMinor !== list) throw termsChanged();
+      await this.deps.resellers.recordTerms(
+        scope,
+        {
+          orderId: order.id,
+          resellerCustomerId: order.customerId,
+          tierId: terms.tierId,
+          tierName: terms.tierName,
+          layer: 'LIST',
+          percent: null,
+          fixedPrice: false,
+          listAmount: list,
+          costAmount: list,
+          promotionAmount: order.totals.discount.amountMinor,
+          saleAmount: order.totals.total.amountMinor,
+          marginAmount: 0n,
+          currency: order.totals.currency,
+          botInstanceId: scope.botInstanceId,
+          now,
+        },
+        tx,
+      );
+      return;
+    }
+
     const cost = resellerCostMinor(list, terms);
     const quotedCost = quoted?.cost ?? list;
     const expectedStep =

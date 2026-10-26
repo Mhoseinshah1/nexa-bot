@@ -1,5 +1,7 @@
 import {
   COMMERCE_ERROR_CODES,
+  PERSONAL_DISCOUNT_PERCENT_MAX,
+  PERSONAL_DISCOUNT_PERCENT_MIN,
   errors,
   normalisePhoneNumber,
   userIdSchema,
@@ -7,6 +9,7 @@ import {
   type AuditWriter,
   type Clock,
   type IdempotencyStore,
+  type FeatureFlagKey,
   type LocationChangeLimits,
   type OperationalEventRecorder,
   type PermissionKey,
@@ -37,6 +40,18 @@ export const CHANNEL_EXEMPTION_PERMISSION: PermissionKey = 'users.channel_member
 export const PHONE_VERIFY_PERMISSION: PermissionKey = 'users.phone.verify';
 export const LOCATION_OVERRIDE_PERMISSION: PermissionKey = 'users.location.edit';
 export const NOTIFICATIONS_PERMISSION: PermissionKey = 'users.notifications.edit';
+/** R10 D3: a customer's personal discount percent (`permissions.ts` says why its own key). */
+export const PERSONAL_DISCOUNT_PERMISSION: PermissionKey = 'users.discount.edit';
+const PERSONAL_DISCOUNT_FLAG: FeatureFlagKey = 'personal_discount';
+
+/** R10 D3: a customer's personal discount, as the page shows it. */
+export interface CustomerPersonalDiscount {
+  /** 0 when none. */
+  readonly percent: number;
+  readonly setAt: Date | null;
+  /** Whether `personal_discount` is on now; a stored percent applies to nothing while off. */
+  readonly enabled: boolean;
+}
 
 /** Everything the Customer 360 page shows about one customer's controls. */
 export interface CustomerOverview {
@@ -44,6 +59,8 @@ export interface CustomerOverview {
   readonly locationOverride: CustomerLocationOverrideRecord | null;
   /** Program §6: the customer's terms standing; null when no terms domain is wired. */
   readonly terms: CustomerTermsStanding | null;
+  /** R10 D3. */
+  readonly personalDiscount: CustomerPersonalDiscount;
 }
 
 export interface CustomerControlDeps {
@@ -52,6 +69,25 @@ export interface CustomerControlDeps {
     'findById' | 'setChannelMembershipExemption' | 'setVerifiedPhone' | 'setMarketingOptOut'
   >;
   readonly locationOverrides: CustomerLocationOverrideRepository;
+  /** R10 D3: `customers.personal_discount_percent`, read and conditionally written. */
+  readonly personalDiscounts: {
+    find(
+      scope: TenantContext,
+      customerId: UserId,
+      tx?: unknown,
+    ): Promise<{ readonly percent: number; readonly setAt: Date | null } | null>;
+    set(
+      scope: TenantContext,
+      customerId: UserId,
+      percent: number,
+      now: Date,
+      tx: unknown,
+    ): Promise<boolean>;
+  };
+  /** R10 D3: whether `personal_discount` is on, for the page's "not in force" line. */
+  readonly featureFlags: {
+    isEnabled(scope: TenantContext, key: FeatureFlagKey, tx?: unknown): Promise<boolean>;
+  };
   readonly guard: PermissionGuard;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
@@ -310,6 +346,66 @@ export class CustomerControlService {
     });
   }
 
+  /**
+   * R10 D3: set a customer's personal discount percent (0 removes it).
+   *
+   * Through the same skeleton as every control: `users.discount.edit` through the guard (a
+   * denial audited), a reason, the idempotency key under the actor's surface, and one
+   * transaction holding the scope-activity read, the conditional UPDATE, the audit row with
+   * the before and after percent, and `CustomerPersonalDiscountChanged` when it changed.
+   *
+   * Settable while the flag is off — the percent is stored and applies once it is on; the
+   * page says so. An order already quoted with the old percent is refused at confirmation
+   * (`PricingService.confirmPersonal`), never re-priced.
+   */
+  async setPersonalDiscount(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly customerId: string;
+      readonly percent: number;
+      readonly reason: string;
+    },
+  ): Promise<{ readonly overview: CustomerOverview; readonly changed: boolean }> {
+    const percent = input.percent;
+    if (
+      !Number.isInteger(percent) ||
+      percent < PERSONAL_DISCOUNT_PERCENT_MIN ||
+      percent > PERSONAL_DISCOUNT_PERCENT_MAX
+    ) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'A personal discount is a whole percent from 0 to 100.',
+      );
+    }
+    return this.run(scope, actor, {
+      permission: PERSONAL_DISCOUNT_PERMISSION,
+      action: 'customer.personal_discount.set',
+      idempotencyKey: input.idempotencyKey,
+      customerId: input.customerId,
+      reason: input.reason,
+      command: { percent },
+      write: async (customerId, _before, now, tx) => {
+        const previous = await this.deps.personalDiscounts.find(scope, customerId, tx);
+        const percentBefore = previous?.percent ?? 0;
+        const changed = await this.deps.personalDiscounts.set(scope, customerId, percent, now, tx);
+        return {
+          changed,
+          before: { percent: percentBefore },
+          after: { percent },
+          emit: (tx) =>
+            this.deps.outbox.write(tx, actor, {
+              eventType: 'CustomerPersonalDiscountChanged',
+              aggregateType: 'Customer',
+              aggregateId: customerId,
+              payload: { percentBefore, percentAfter: percent },
+            }),
+        };
+      },
+    });
+  }
+
   // --- the skeleton ------------------------------------------------------------------------
 
   private async run(
@@ -421,10 +517,16 @@ export class CustomerControlService {
     if (customer === null) {
       throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
     }
+    const personal = await this.deps.personalDiscounts.find(scope, customerId);
     return {
       customer,
       locationOverride: await this.deps.locationOverrides.find(scope, customerId),
       terms: (await this.deps.terms?.standing(scope, customerId)) ?? null,
+      personalDiscount: {
+        percent: personal?.percent ?? 0,
+        setAt: personal?.setAt ?? null,
+        enabled: await this.deps.featureFlags.isEnabled(scope, PERSONAL_DISCOUNT_FLAG),
+      },
     };
   }
 

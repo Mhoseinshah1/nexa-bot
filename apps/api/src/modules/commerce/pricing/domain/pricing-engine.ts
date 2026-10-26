@@ -1,4 +1,5 @@
 import {
+  PERSONAL_DISCOUNT_STACKING,
   PRICING_PRECEDENCE,
   cashbackAmountMinor,
   clampDiscount,
@@ -12,7 +13,9 @@ import {
   type DiscountType,
   type DiscountablePurpose,
   type OrderPurpose,
+  type PriceQuote,
   type PriceQuoteCashback,
+  type PriceQuotePersonalDiscount,
   type PriceQuoteStep,
 } from '@nexa/contracts';
 import type { OrderTotalsRecord } from '../../orders/application/ports.js';
@@ -127,6 +130,19 @@ export interface PricingInput {
   readonly coded?: DiscountRule | null;
   readonly usage: ReadonlyMap<string, DiscountUsage>;
   readonly cashbackRules: readonly CashbackRule[];
+  /**
+   * R10 D3: the customer's personal discount, or absent/null when none takes part — no
+   * customer, a zero percent, the `personal_discount` flag off, or a purpose outside
+   * `PERSONAL_DISCOUNT_PURPOSES`. The caller decides all four; the engine only compares.
+   *
+   * `list` is the LIST-price base, BEFORE the reseller layer (`base` above may be the
+   * reseller-layered one): the personal percent is taken off the list price, never off a
+   * reseller's price — that would be the two stacked.
+   */
+  readonly personal?: {
+    readonly percent: number;
+    readonly list: OrderTotalsRecord;
+  } | null;
 }
 
 export interface PricingResult {
@@ -232,6 +248,32 @@ export function byPrecedence(a: DiscountRule, b: DiscountRule): number {
 
 const NO_USAGE: DiscountUsage = { live: 0, liveForCustomer: 0 };
 
+function personalStep(): (typeof PRICING_PRECEDENCE)[number] {
+  const step = PRICING_PRECEDENCE.find((s) => s.step === 'PERSONAL_DISCOUNT');
+  if (step === undefined) {
+    // Frozen data, as `discountStep` says: a table that stopped naming the step is a table
+    // this engine no longer understands, and a silent fallback would mint prices.
+    throw new Error('PRICING_PRECEDENCE no longer declares PERSONAL_DISCOUNT.');
+  }
+  return step;
+}
+
+/**
+ * The personal discount percent an order's frozen quote was PRICED with (R10 D3), or null.
+ *
+ * Read from the quote's own decision and trace — never from the customer's percent today,
+ * which may have changed since — so every surface that shows the invoice names the same
+ * figure the order is charged.
+ */
+export function personalDiscountPercentOf(quote: PriceQuote): number | null {
+  const decision = quote.personalDiscount;
+  if (decision === undefined || decision.outcome !== 'APPLIED') return null;
+  return quote.trace.some((step) => step.step === 'PERSONAL_DISCOUNT') ? decision.percent : null;
+}
+
+/** The label a `PERSONAL_DISCOUNT` step carries: a constant, like the base step's. */
+export const PERSONAL_DISCOUNT_RULE_LABEL = "The customer's personal discount";
+
 function discountStep(): (typeof PRICING_PRECEDENCE)[number] {
   const step = PRICING_PRECEDENCE.find((s) => s.step === 'PROMOTIONAL_DISCOUNT');
   if (step === undefined) {
@@ -262,6 +304,129 @@ function discountStep(): (typeof PRICING_PRECEDENCE)[number] {
  * changed nothing reads later as a discount somebody granted.
  */
 export function applyAdjustments(input: PricingInput): PricingResult {
+  const ordinary = applyOrdinary(input);
+  const personal = input.personal;
+  if (personal === undefined || personal === null || personal.percent <= 0) return ordinary;
+  return choosePersonal(input, ordinary, personal);
+}
+
+/**
+ * The personal discount against the ordinary quote (R10 D3, owner spec; the lead's rule).
+ *
+ * `LARGER_SINGLE_WINS`, never stacked:
+ * 1. The ordinary quote is what `applyOrdinary` produced — the reseller layer and every
+ *    promotion, exactly as before this existed.
+ * 2. The personal candidate is the LIST total minus the percent, rounded in the
+ *    customer's favour like a percentage rule (`discountAmountMinor`) and floored at one
+ *    minor unit payable like every discount (`clampDiscount`, D4: no zero total exists).
+ *    One `PERSONAL_DISCOUNT` step on the list base; no reseller step, no promotion.
+ * 3. The candidate wins only when its total is STRICTLY lower. A tie keeps the ordinary
+ *    quote: it is what the customer would have paid anyway, and the ordinary quote is the
+ *    one with the reseller's terms and the promotions' redemptions on the record.
+ *
+ * Either way the decision is recorded on the quote (`personalDiscount`): the percent, who
+ * won, and the OTHER candidate's total, so both figures are on the order for good.
+ *
+ * When the personal price wins, every promotion that would have applied is reported
+ * `SKIPPED` / `NOT_COMBINABLE`, and an entered code is refused with that reason: the
+ * customer sees the one sentence every code refusal gets (a code's reason is an oracle).
+ * Cashback is chosen again on the personal total — its basis is always the final payable.
+ */
+function choosePersonal(
+  input: PricingInput,
+  ordinary: PricingResult,
+  personal: { readonly percent: number; readonly list: OrderTotalsRecord },
+): PricingResult {
+  const list = personal.list;
+  const currency = list.currency;
+  if (currency !== ordinary.totals.currency) {
+    // The reseller layer and the promotions never change the currency; reaching here is a
+    // caller that handed the engine two different orders.
+    throw new Error('A personal discount is compared only within one currency.');
+  }
+  const listTotal = list.total.amountMinor;
+  const off = clampDiscount(
+    listTotal,
+    discountAmountMinor('PERCENTAGE', listTotal, BigInt(personal.percent)),
+  );
+  const ordinaryTotal = ordinary.totals.total;
+
+  const decision = (
+    outcome: PriceQuotePersonalDiscount['outcome'],
+    competingTotal: bigint,
+  ): PriceQuotePersonalDiscount => ({
+    percent: personal.percent,
+    outcome,
+    competingTotal: money(competingTotal, currency),
+    rule: PERSONAL_DISCOUNT_STACKING,
+  });
+
+  if (off <= 0n) {
+    // A one-unit price: nothing to take off, so nothing competed. Still recorded.
+    return withPersonal(ordinary, decision('NOT_APPLICABLE', listTotal));
+  }
+  const personalTotal = listTotal - off;
+  if (personalTotal >= ordinaryTotal.amountMinor) {
+    return withPersonal(ordinary, decision('NOT_LARGER', personalTotal));
+  }
+
+  const step = personalStep();
+  const total = money(personalTotal, currency);
+  const cashback = chooseCashback(input.cashbackRules, input.subject, personalTotal, currency);
+  const outcomes = ordinary.outcomes.map((o) =>
+    o.outcome === 'APPLIED'
+      ? { ...o, outcome: 'SKIPPED' as const, reason: 'NOT_COMBINABLE' as const, amount: 0n }
+      : o,
+  );
+  const code =
+    ordinary.code === null
+      ? null
+      : ordinary.code.accepted
+        ? { accepted: false, reason: 'NOT_COMBINABLE' as const }
+        : ordinary.code;
+  return {
+    totals: {
+      subtotal: list.subtotal,
+      discount: money(list.subtotal.amountMinor - personalTotal, currency),
+      total,
+      currency,
+      quote: {
+        productId: list.quote.productId,
+        quotedAt: list.quote.quotedAt,
+        currency,
+        finalAmount: total,
+        trace: [
+          ...list.quote.trace,
+          {
+            step: step.step,
+            effect: step.effect,
+            ruleId: null,
+            ruleLabel: PERSONAL_DISCOUNT_RULE_LABEL,
+            amountBefore: list.total,
+            amountAfter: total,
+          },
+        ],
+        ...(cashback === null ? {} : { cashback }),
+        personalDiscount: decision('APPLIED', ordinaryTotal.amountMinor),
+      },
+    },
+    outcomes,
+    code,
+  };
+}
+
+function withPersonal(result: PricingResult, personal: PriceQuotePersonalDiscount): PricingResult {
+  return {
+    ...result,
+    totals: {
+      ...result.totals,
+      quote: { ...result.totals.quote, personalDiscount: personal },
+    },
+  };
+}
+
+/** The quote as it was before R10 D3: the reseller-layered base, then the promotions. */
+function applyOrdinary(input: PricingInput): PricingResult {
   const { base, subject } = input;
   const currency = base.currency;
   const subtotal = base.subtotal.amountMinor;

@@ -1,5 +1,6 @@
 import {
   COMMERCE_ERROR_CODES,
+  PERSONAL_DISCOUNT_PURPOSES,
   errors,
   isDiscountablePurpose,
   money,
@@ -7,6 +8,7 @@ import {
   type ActorContext,
   type CurrencyCode,
   type DiscountablePurpose,
+  type FeatureFlagKey,
   type IdGenerator,
   type TenantContext,
 } from '@nexa/contracts';
@@ -23,6 +25,7 @@ import type {
   CashbackRuleRepository,
   DiscountRepository,
   OrderCashbackRepository,
+  PersonalDiscountReader,
 } from './ports.js';
 import {
   applyResellerLayer,
@@ -71,6 +74,23 @@ export interface PricingServiceDeps {
   };
   readonly outbox: OutboxWriter;
   readonly ids: IdGenerator;
+  /** R10 D3: the customer's stored personal discount percent. */
+  readonly personalDiscounts: PersonalDiscountReader;
+  /** R10 D3: whether `personal_discount` is on, read inside the pricing transaction. */
+  readonly featureFlags: {
+    isEnabled(scope: TenantContext, key: FeatureFlagKey, tx?: unknown): Promise<boolean>;
+  };
+}
+
+/** The flag behind the personal discount (R10 D3). */
+export const PERSONAL_DISCOUNT_FEATURE: FeatureFlagKey = 'personal_discount';
+
+/**
+ * Whether a purpose is one a personal discount applies to: a purchase or a renewal, never
+ * a top-up (which never reaches pricing), an add-on, a custom service or a location change.
+ */
+export function personalDiscountApplies(purpose: string): boolean {
+  return (PERSONAL_DISCOUNT_PURPOSES as readonly string[]).includes(purpose);
 }
 
 /**
@@ -167,6 +187,7 @@ export class PricingService {
           : false;
     }
     const cashbackRules = await this.deps.cashbackRules.listLive(scope, tx);
+    const personal = await this.personalCandidate(scope, request, tx);
 
     return applyAdjustments({
       base,
@@ -182,7 +203,76 @@ export class PricingService {
       ...(coded === undefined ? {} : { coded }),
       usage,
       cashbackRules,
+      personal,
     });
+  }
+
+  /**
+   * The personal discount that takes part in this price (R10 D3), or null.
+   *
+   * Only for a customer (the operator's preview without one prices no customer's percent),
+   * only for `PERSONAL_DISCOUNT_PURPOSES`, only while the flag is on, and only for a
+   * non-zero percent. The list base handed over is `request.base` — the list price, before
+   * the reseller layer — because the percent is never taken off a reseller's price.
+   */
+  private async personalCandidate(
+    scope: TenantContext,
+    request: PriceRequest,
+    tx?: unknown,
+  ): Promise<{ readonly percent: number; readonly list: OrderTotalsRecord } | null> {
+    if (request.customerId === null || !personalDiscountApplies(request.purpose)) return null;
+    if (!(await this.deps.featureFlags.isEnabled(scope, PERSONAL_DISCOUNT_FEATURE, tx))) {
+      return null;
+    }
+    const percent = await this.deps.personalDiscounts.percentOf(
+      scope,
+      request.customerId,
+      { lock: false },
+      tx,
+    );
+    if (percent === null || percent <= 0) return null;
+    return { percent, list: request.base };
+  }
+
+  /**
+   * Confirmation's re-decision of a personal discount the quote APPLIED (R10 D3).
+   *
+   * The same status re-decision a promotional rule gets (`redemptionRefusal`), never a
+   * re-price: the flag must still be on and the customer's percent must still be the one
+   * the quote was made with, read under the customer row's lock. Otherwise the order is
+   * refused with `DISCOUNT_NO_LONGER_VALID` and the customer starts again — the figure they
+   * were shown is never charged at a different percent, and a percent withdrawn after the
+   * summary is not honoured past its withdrawal.
+   *
+   * A quote where the personal discount took part and LOST (`NOT_LARGER`) is not
+   * re-decided: its price is the ordinary one, honoured like any other quote.
+   */
+  private async confirmPersonal(
+    scope: TenantContext,
+    order: OrderRecord,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const quoted = order.totals.quote.personalDiscount;
+    const applied = order.totals.quote.trace.some((step) => step.step === 'PERSONAL_DISCOUNT');
+    if (!applied) return;
+    const refuse = (reason: string) =>
+      errors.conflict(
+        COMMERCE_ERROR_CODES.DISCOUNT_NO_LONGER_VALID,
+        'A discount on this order is no longer available. Start the order again.',
+        { discount: 'PERSONAL', reason },
+      );
+    // A trace step with no recorded decision is a quote that cannot be believed.
+    if (quoted === undefined || quoted.outcome !== 'APPLIED') throw refuse('NOT_RECORDED');
+    const percent = await this.deps.personalDiscounts.percentOf(
+      scope,
+      order.customerId,
+      { lock: true },
+      tx,
+    );
+    if (!(await this.deps.featureFlags.isEnabled(scope, PERSONAL_DISCOUNT_FEATURE, tx))) {
+      throw refuse('FEATURE_OFF');
+    }
+    if (percent !== quoted.percent) throw refuse('PERCENT_CHANGED');
   }
 
   /**
@@ -213,6 +303,12 @@ export class PricingService {
      * quote is refused here and this transaction takes nothing with it.
      */
     await this.deps.resellers.recordPurchase(scope, order, now, tx);
+
+    /*
+     * R10 D3: a personal discount the quote applied is re-decided — flag still on, percent
+     * unchanged — before anything is redeemed, under the customer row's lock.
+     */
+    await this.confirmPersonal(scope, order, tx);
 
     const applied = order.totals.quote.trace.filter(
       (step) => step.step === 'PROMOTIONAL_DISCOUNT' && step.ruleId !== null,
