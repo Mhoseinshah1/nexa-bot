@@ -75,6 +75,17 @@ export interface GatewayCreateRequest {
    */
   readonly providerUserId?: string | null;
   /**
+   * Round 10 C1: an `operatorEndpoint` route's bridge base URL, FROZEN on the attempt when it
+   * opened (`gateway_invoices.endpoint_base_url`). Absent or null for every other route; the
+   * custom adapter refuses to call without one.
+   */
+  readonly endpoint?: string | null;
+  /**
+   * Round 10 C1: the attempt's own deadline (the payment's `expires_at`), sent to a provider
+   * that takes one (the custom gateway's `expires_at`). Absent for every other route.
+   */
+  readonly expiresAt?: Date | null;
+  /**
    * The invoice's own customer-facing text, rendered from templates by the caller, for a
    * provider whose invoice is a message this installation sends (Telegram Stars). Null
    * for a provider that draws its own page.
@@ -395,6 +406,14 @@ export interface GatewayInquiryContext {
   readonly hintedPaymentId: string | null;
   /** The customer's integer as sent, for a `numericIdentity` route; null otherwise. */
   readonly providerUserId?: string | null;
+  /** Round 10 C1: the attempt's FROZEN bridge base URL, for an `operatorEndpoint` route. */
+  readonly endpoint?: string | null;
+  /**
+   * Round 10 C1: true when the provider's own id is not known (a create whose answer was lost)
+   * and an `inquiresByOrderId` route is asked by Nexa's order id alone. The `invoiceId` argument
+   * is then the order id, and the answer's own reference is what the lane adopts.
+   */
+  readonly byOrderId?: boolean;
 }
 
 /**
@@ -480,8 +499,14 @@ export interface ExternalGatewayAdapter {
    * so a later weaker notification never displaces a stronger one. Absent: always moves.
    */
   hintRank?(status: string | null): number;
-  /** The operator's read-only credential check, for a provider that offers a safe read. */
-  checkCredential?(apiKey: string): Promise<GatewayCredentialCheck>;
+  /**
+   * The operator's read-only credential check, for a provider that offers a safe read. An
+   * `operatorEndpoint` route (the custom gateway's ping) is handed the route's base URL.
+   */
+  checkCredential?(
+    apiKey: string,
+    context?: { readonly endpoint: string | null },
+  ): Promise<GatewayCredentialCheck>;
   /**
    * Round 9 C4: whether a webhook body is the provider's own TEST delivery, which names no
    * payment (Rialit's `webhook.test`, sent from its dashboard). Such a body is answered 2xx and
@@ -579,6 +604,12 @@ export interface GatewayInvoiceRecord {
   readonly cryptoPayAddress: string | null;
   /** The customer's integer as sent (CentralPay's `userId`), frozen at open. Null otherwise. */
   readonly providerUserId: string | null;
+  /**
+   * Round 10 C1: the bridge base URL an `operatorEndpoint` attempt was created against, frozen at
+   * open; every inquiry of the attempt goes there. Null for every other route. Optional on the
+   * record so a narrow test fake need not carry it.
+   */
+  readonly endpointBaseUrl?: string | null;
   /** How a paid link was paid, per TetraPay's verify (`online` | `card`). Diagnostic. */
   readonly providerMethod?: string | null;
   readonly createdAt: Date;
@@ -611,6 +642,8 @@ export interface GatewayInvoiceRepository {
       readonly botInstanceId: string | null;
       /** A `numericIdentity` route's customer number as sent; null for every other route. */
       readonly providerUserId?: string | null;
+      /** Round 10 C1: an `operatorEndpoint` route's bridge URL, frozen here; null otherwise. */
+      readonly endpointBaseUrl?: string | null;
       readonly now: Date;
     },
     tx: unknown,

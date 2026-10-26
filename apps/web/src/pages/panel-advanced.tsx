@@ -133,6 +133,8 @@ export const ACTIVATION_FIELD_LABELS: Readonly<Record<string, WebKey>> = {
   inboundTags: 'web.panel_inbound_tags',
   subscriptionDomain: 'web.panel_subscription_domain',
   inboundId: 'web.panel_inbound_id',
+  // R10 C2: the custom bridge's optional timeout.
+  requestTimeoutMs: 'web.panel_request_timeout',
 };
 
 const CHECK_LABELS: Readonly<Record<PanelDiagnosticCheck, WebKey>> = {

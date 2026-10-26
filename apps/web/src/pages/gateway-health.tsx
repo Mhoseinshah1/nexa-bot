@@ -53,6 +53,7 @@ export const PROVIDER_LABELS: Readonly<Record<PaymentGatewayProvider, WebKey>> =
   CENTRALPAY: 'web.payment_gateway_provider_centralpay',
   TETRAPAY: 'web.payment_gateway_provider_tetrapay',
   RIALIT: 'web.payment_gateway_provider_rialit',
+  CUSTOM: 'web.payment_gateway_provider_custom',
 };
 
 const STATE_LABELS: Readonly<Record<GatewayHealthState, WebKey>> = {
@@ -74,6 +75,7 @@ const STATE_TONES: Readonly<Record<GatewayHealthState, Tone>> = {
 const GAP_LABELS: Readonly<Record<GatewayConfigurationGap, WebKey>> = {
   CREDENTIAL_MISSING: 'web.gateway_health_gap_credential_missing',
   WEBHOOK_SECRET_MISSING: 'web.gateway_health_gap_webhook_secret_missing',
+  ENDPOINT_MISSING: 'web.gateway_health_gap_endpoint_missing',
   VERIFY_KEY_MISSING: 'web.gateway_health_gap_verify_key_missing',
   RATE_MISSING: 'web.gateway_health_gap_rate_missing',
   CENTRAL_FX_DISABLED: 'web.gateway_health_gap_central_fx_disabled',

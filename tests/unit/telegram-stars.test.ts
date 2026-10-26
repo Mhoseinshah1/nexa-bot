@@ -94,6 +94,10 @@ describe('the conversion (A1)', () => {
       verifyKey: false,
       browserReturn: false,
       numericIdentity: false,
+      // Round 10 C1: an operator-set base URL, an order-id inquiry and a one-secret webhook are custom's.
+      operatorEndpoint: false,
+      inquiresByOrderId: false,
+      webhookSignedByCredential: false,
       // R5A item 4: only an inquiry route can credit a late approval; a pushed payment never does.
       lateCreditSetting: null,
     });

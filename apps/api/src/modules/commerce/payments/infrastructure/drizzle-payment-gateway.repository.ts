@@ -16,6 +16,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   customers,
+  gatewayInvoices,
   paymentGateways,
   payments,
 } from '../../../../infrastructure/persistence/schema.js';
@@ -45,6 +46,8 @@ const COLUMNS = {
   allowServicePurchase: paymentGateways.allowServicePurchase,
   allowWalletTopup: paymentGateways.allowWalletTopup,
   hiddenUntil: paymentGateways.hiddenUntil,
+  endpointBaseUrl: paymentGateways.endpointBaseUrl,
+  webhookIpAllowlist: paymentGateways.webhookIpAllowlist,
   createdAt: paymentGateways.createdAt,
   updatedAt: paymentGateways.updatedAt,
 } as const;
@@ -68,6 +71,8 @@ interface Row {
   readonly allowServicePurchase: boolean;
   readonly allowWalletTopup: boolean;
   readonly hiddenUntil: Date | null;
+  readonly endpointBaseUrl: string | null;
+  readonly webhookIpAllowlist: string[] | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -98,6 +103,8 @@ function toRecord(row: Row): PaymentGatewayRecord {
     allowServicePurchase: row.allowServicePurchase,
     allowWalletTopup: row.allowWalletTopup,
     hiddenUntil: row.hiddenUntil,
+    endpointBaseUrl: row.endpointBaseUrl,
+    webhookIpAllowlist: row.webhookIpAllowlist ?? [],
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -309,6 +316,64 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
       .returning(COLUMNS);
     const row = rows[0];
     return row === undefined ? null : toRecord(row);
+  }
+
+  /** Round 10 C1: only while DISABLED — the status is in the WHERE, never checked then written. */
+  async setEndpoint(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    input: { readonly baseUrl: string; readonly ipAllowlist: readonly string[] },
+    now: Date,
+    tx: unknown,
+  ): Promise<PaymentGatewayRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(paymentGateways)
+      .set({
+        endpointBaseUrl: input.baseUrl,
+        webhookIpAllowlist: [...input.ipAllowlist],
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(paymentGateways.tenantId, tenantId),
+          eq(paymentGateways.provider, provider),
+          eq(paymentGateways.status, 'DISABLED'),
+        ),
+      )
+      .returning(COLUMNS);
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
+  }
+
+  /** Codex on #336 (2): the open attempts a move to `baseUrl` would strand (see the port). */
+  async openAttemptsElsewhere(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    baseUrl: string,
+    tx: unknown,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ open: count() })
+      .from(gatewayInvoices)
+      .innerJoin(
+        payments,
+        and(
+          eq(payments.tenantId, gatewayInvoices.tenantId),
+          eq(payments.id, gatewayInvoices.paymentId),
+        ),
+      )
+      .where(
+        and(
+          eq(gatewayInvoices.tenantId, tenantId),
+          eq(gatewayInvoices.provider, provider),
+          sql`${gatewayInvoices.endpointBaseUrl} IS DISTINCT FROM ${baseUrl}`,
+          sql`${gatewayInvoices.outcome} IS NULL`,
+          sql`(${payments.state} IN ('PENDING', 'UNKNOWN') OR ${gatewayInvoices.nextInquiryAt} IS NOT NULL)`,
+        ),
+      );
+    return Number(rows[0]?.open ?? 0);
   }
 
   /** Only LATER: `hidden_until` never moves backwards. `updated_at` is deliberately not touched. */

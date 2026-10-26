@@ -26,6 +26,7 @@ import {
 } from '../../apps/api/src/modules/commerce/payments/application/payment-operations.service';
 import type { PaymentService } from '../../apps/api/src/modules/commerce/payments/application/payment.service';
 import { PermissionGuard } from '../../apps/api/src/modules/platform/access/application/permission-guard';
+import { ONLINE_INDEXES } from '../../apps/api/src/infrastructure/persistence/online-indexes';
 
 /**
  * The Payment Operations Center's pure parts (program §10): the evidence rule the
@@ -123,7 +124,24 @@ describe('the NEEDS_RECONCILIATION rule', () => {
   });
 
   it('names a partial status only for a provider whose vocabulary has one', () => {
-    expect(PARTIAL_PAYMENT_STATUSES).toEqual({ NOWPAYMENTS: ['partially_paid'] });
+    expect(PARTIAL_PAYMENT_STATUSES).toEqual({
+      NOWPAYMENTS: ['partially_paid'],
+      CUSTOM: ['UNDERPAID'],
+    });
+  });
+
+  /*
+   * Codex on #336 (3): the PARTIAL arm of the attention counts is served by a partial index
+   * only while its predicate names every partial status. The plan test's fixture has no
+   * custom-gateway volume, so it cannot see a status the predicate misses; this does.
+   */
+  it('lists every partial status in the attention index’s predicate', () => {
+    const index = ONLINE_INDEXES.find(
+      (one) => one.name === 'gateway_invoices_tenant_attention_partial_idx',
+    );
+    for (const status of Object.values(PARTIAL_PAYMENT_STATUSES).flat()) {
+      expect(index?.definition).toContain(`'${status}'::text`);
+    }
   });
 });
 

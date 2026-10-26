@@ -113,6 +113,17 @@ const SAME_UNIT_CONVERSION: GatewayConversionSpec = {
  *   final (Rialit support can still mark them paid), so Nexa's own deadline closes the
  *   attempt. Needs an API key; a row starts DISABLED and cannot be enabled without it. Not
  *   accepted against the real provider yet (`OQ-RL-01`).
+ * - `CUSTOM` — Nexa's OWN custom-gateway protocol (`docs/protocols/custom-gateway.md`, Round 10
+ *   C1). ONE code-backed route type that speaks only that protocol; a third party writes a
+ *   bridge between it and a payment service Nexa has no adapter for. The operator points the
+ *   route at the bridge (an `https://` base URL, `operatorEndpoint`) — it never defines a
+ *   provider. Billed in RIAL (the adapter owns the exact x10 from Toman). One per-route secret
+ *   signs Nexa's requests and verifies the bridge's responses and callbacks, with a different
+ *   signed-string prefix per direction. Only the bridge's signed INQUIRY answer can approve:
+ *   `PAID` for this attempt's `invoice_id`, the bridge's own reference and exactly the amount
+ *   asked; UNDERPAID, OVERPAID and every mismatch are held for an operator. A signed callback is
+ *   a hint that brings that read forward. A row starts DISABLED and cannot be enabled without
+ *   its secret and base URL. Not accepted against a real bridge yet (`OQ-CG-01`).
  */
 export const PAYMENT_GATEWAY_PROVIDERS = [
   'MANUAL_TRANSFER',
@@ -123,6 +134,7 @@ export const PAYMENT_GATEWAY_PROVIDERS = [
   'CENTRALPAY',
   'TETRAPAY',
   'RIALIT',
+  'CUSTOM',
 ] as const;
 export type PaymentGatewayProvider = (typeof PAYMENT_GATEWAY_PROVIDERS)[number];
 export const paymentGatewayProviderSchema = z.enum(PAYMENT_GATEWAY_PROVIDERS);
@@ -147,6 +159,7 @@ export const PAYMENT_METHOD_SLUGS: Readonly<Record<PaymentGatewayProvider, strin
   CENTRALPAY: 'centralpay',
   TETRAPAY: 'tetrapay',
   RIALIT: 'rialit',
+  CUSTOM: 'custom',
 };
 
 /** The slug of a provider key, or null for a string that names no provider this release has. */
@@ -171,6 +184,7 @@ export const LATE_CREDIT_SETTING_KEYS = {
   TONPAYS_TELEGRAM: 'payments.late_credit.tonpays_telegram_enabled',
   TETRAPAY: 'payments.late_credit.tetrapay_enabled',
   RIALIT: 'payments.late_credit.rialit_enabled',
+  CUSTOM: 'payments.late_credit.custom_enabled',
 } as const;
 export const LATE_CREDIT_WINDOW_SETTING_KEY = 'payments.late_credit.window_hours' as const;
 export const LATE_CREDIT_WINDOW_HOURS_MIN = 1;
@@ -302,12 +316,39 @@ export interface PaymentGatewayDescriptor {
    */
   readonly browserReturn: boolean;
   /**
-   * Whether the provider identifies the order and the customer by INTEGERS (CentralPay's
-   * `orderId` and `userId`). Such an attempt carries a random per-attempt integer order id
-   * and the customer's stable random integer number, both unique across the installation
-   * (`docs/centralpay-gateway-audit.md` §3).
+   * Whether the provider knows the customer by a stable, random, per-customer NUMBER that
+   * reveals nothing about them (CentralPay's integer `userId`; the custom gateway's
+   * `customer_ref`), and the order id must be unique across the WHOLE installation (tenants may
+   * share one merchant account, or one bridge). Such an attempt draws its order id until no
+   * other attempt of the provider holds it, and carries the customer's number, drawn once and
+   * kept (`docs/centralpay-gateway-audit.md` §3). The order id itself need not be an integer.
    */
   readonly numericIdentity: boolean;
+  /**
+   * Round 10 C1: whether the route's provider is reached at a base URL the OPERATOR configures
+   * (the custom gateway's bridge) rather than a documented constant. Such a route stores its
+   * `https://` base URL (and an optional callback IP allow-list) on the route row, cannot be
+   * enabled without one, and FREEZES the URL on every attempt it opens, so each inquiry of an
+   * attempt goes to the bridge that created it. Every call goes through the installation's URL
+   * policy (`SafeHttpClient`): DNS pinned, no redirect, no loopback or own-network target.
+   */
+  readonly operatorEndpoint: boolean;
+  /**
+   * Round 10 C1: whether the provider's inquiry can be asked by Nexa's OWN order id when its
+   * reference is unknown (the custom gateway's `invoice_id`). A create whose answer was lost
+   * (`CREATE_UNKNOWN`) is then read, never re-sent: the signed answer that names this attempt's
+   * order id hands Nexa the reference, which is adopted. False everywhere the provider is asked
+   * only by its own id.
+   */
+  readonly inquiresByOrderId: boolean;
+  /**
+   * Round 10 C1: whether the route's ONE stored credential (`payment_gateway.api_key`) also
+   * verifies its webhooks — the custom gateway's single per-route secret, used for both
+   * directions with a different signed-string prefix each (the owner's "a per-gateway secret").
+   * Such a route stores no second webhook secret (`webhookSecret` is false), and a webhook whose
+   * signature does not verify against that credential is dropped before any field is read.
+   */
+  readonly webhookSignedByCredential: boolean;
   /**
    * R5A item 4: the setting that switches on crediting this route's verified LATE approval
    * (after the deadline, or on an EXPIRED / UNKNOWN payment) to the customer's wallet, or null
@@ -339,6 +380,9 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     verifyKey: false,
     browserReturn: false,
     numericIdentity: false,
+    operatorEndpoint: false,
+    inquiresByOrderId: false,
+    webhookSignedByCredential: false,
     lateCreditSetting: null,
   },
   TONPAYS: {
@@ -358,6 +402,9 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     verifyKey: false,
     browserReturn: false,
     numericIdentity: false,
+    operatorEndpoint: false,
+    inquiresByOrderId: false,
+    webhookSignedByCredential: false,
     lateCreditSetting: LATE_CREDIT_SETTING_KEYS.TONPAYS,
   },
   TELEGRAM_STARS: {
@@ -392,6 +439,9 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     verifyKey: false,
     browserReturn: false,
     numericIdentity: false,
+    operatorEndpoint: false,
+    inquiresByOrderId: false,
+    webhookSignedByCredential: false,
     lateCreditSetting: null,
   },
   TONPAYS_TELEGRAM: {
@@ -412,6 +462,9 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     verifyKey: false,
     browserReturn: false,
     numericIdentity: false,
+    operatorEndpoint: false,
+    inquiresByOrderId: false,
+    webhookSignedByCredential: false,
     lateCreditSetting: LATE_CREDIT_SETTING_KEYS.TONPAYS_TELEGRAM,
   },
   NOWPAYMENTS: {
@@ -449,6 +502,9 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     verifyKey: false,
     browserReturn: false,
     numericIdentity: false,
+    operatorEndpoint: false,
+    inquiresByOrderId: false,
+    webhookSignedByCredential: false,
     lateCreditSetting: null,
   },
   CENTRALPAY: {
@@ -470,6 +526,9 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     verifyKey: true,
     browserReturn: true,
     numericIdentity: true,
+    operatorEndpoint: false,
+    inquiresByOrderId: false,
+    webhookSignedByCredential: false,
     lateCreditSetting: null,
   },
   TETRAPAY: {
@@ -495,6 +554,9 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     verifyKey: false,
     browserReturn: false,
     numericIdentity: false,
+    operatorEndpoint: false,
+    inquiresByOrderId: false,
+    webhookSignedByCredential: false,
     lateCreditSetting: LATE_CREDIT_SETTING_KEYS.TETRAPAY,
   },
   RIALIT: {
@@ -522,7 +584,41 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     verifyKey: false,
     browserReturn: false,
     numericIdentity: false,
+    operatorEndpoint: false,
+    inquiresByOrderId: false,
+    webhookSignedByCredential: false,
     lateCreditSetting: LATE_CREDIT_SETTING_KEYS.RIALIT,
+  },
+  CUSTOM: {
+    provider: 'CUSTOM',
+    settlesVia: 'GATEWAY',
+    // The ONE per-route secret, in the API-key slot: enabling already requires it.
+    requiresCredentials: true,
+    invoiceCredential: 'GATEWAY_KEY',
+    approval: 'INQUIRY',
+    /*
+     * Billed in the sales currency with no conversion: the wire unit is the RIAL and the adapter
+     * owns the exact x10 from Toman (one helper), exactly as TetraPay.
+     */
+    conversion: SAME_UNIT_CONVERSION,
+    invoiceForm: 'LINK',
+    boundToBot: false,
+    // The customer is named by an opaque per-customer number (`customer_ref`), never a Telegram id.
+    requiresBuyerChatId: false,
+    // Nothing a bridge says before `PAID` means the money is with it: no review window.
+    providerReview: false,
+    // No SECOND secret: the one credential signs both directions (`webhookSignedByCredential`).
+    webhookSecret: false,
+    webhookSecretOptional: false,
+    returnToBot: false,
+    verifyKey: false,
+    browserReturn: false,
+    // `customer_ref`: the stable random per-customer number; order ids unique installation-wide.
+    numericIdentity: true,
+    operatorEndpoint: true,
+    inquiresByOrderId: true,
+    webhookSignedByCredential: true,
+    lateCreditSetting: LATE_CREDIT_SETTING_KEYS.CUSTOM,
   },
 };
 

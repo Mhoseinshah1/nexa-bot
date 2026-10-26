@@ -28,6 +28,8 @@ import {
   BACKUP_LOCAL_COPIES_SETTING_KEY,
   BACKUP_SCHEDULE_SETTING_KEYS,
   REMINDER_RATE_SETTING_KEYS,
+  CUSTOM_GATEWAY_MAX_RESPONSE_BYTES,
+  CUSTOM_GATEWAY_TIMEOUT_MS,
   PAYMENT_GATEWAY_DESCRIPTORS,
   CAMPAIGN_SCHEDULE_INTERVAL_MS,
   CHANNEL_MEMBERSHIP_TIMEOUT_MS,
@@ -92,6 +94,8 @@ import { readFileSync } from 'node:fs';
 import { rename, stat } from 'node:fs/promises';
 import { panelUrlPolicy } from './infrastructure/net/installation-policy.js';
 import { SafeHttpClient } from './infrastructure/net/safe-http.js';
+import { checkUrl } from './infrastructure/net/url-policy.js';
+import { matchesTrustedEntry } from './infrastructure/trusted-proxy.js';
 import {
   DrizzlePanelMonitorRepository,
   DrizzlePanelRepository,
@@ -597,6 +601,7 @@ import { NowPaymentsAdapter } from './modules/commerce/payments/infrastructure/n
 import { CentralPayAdapter } from './modules/commerce/payments/infrastructure/centralpay-adapter.js';
 import { TetraPayAdapter } from './modules/commerce/payments/infrastructure/tetrapay-adapter.js';
 import { RialitAdapter } from './modules/commerce/payments/infrastructure/rialit-adapter.js';
+import { CustomGatewayAdapter } from './modules/commerce/payments/infrastructure/custom-gateway-adapter.js';
 import { TelegramStarsAdapter } from './modules/commerce/payments/infrastructure/telegram-stars-adapter.js';
 import { FxService } from './modules/commerce/fx/application/fx.service.js';
 import type { FxSourceAdapter } from './modules/commerce/fx/application/ports.js';
@@ -3280,6 +3285,25 @@ export function createContainer(
    */
   const rialitAdapter = new RialitAdapter();
   /*
+   * Round 10 C1 — the custom gateway (`docs/protocols/custom-gateway.md`): Nexa's OWN bridge
+   * protocol, at a base URL the OPERATOR typed. So never `fetch`: every call goes through a
+   * `SafeHttpClient` under the installation's URL policy (the panels' one — DNS pinned, no
+   * redirect, no loopback, link-local or own-network target, https enforced by the adapter), the
+   * same CA bundle as the panel calls, the protocol's 15 s budget and 64 KiB cap, and no retry
+   * (a create is never re-sent; an inquiry is re-asked by the lane's own schedule).
+   */
+  const customGatewayUrlPolicy = panelUrlPolicy(config);
+  const customGatewayHttp = new SafeHttpClient({
+    ...customGatewayUrlPolicy,
+    ...(config.PANEL_HTTP_CA_FILE === undefined
+      ? {}
+      : { caCertificates: [readFileSync(config.PANEL_HTTP_CA_FILE, 'utf8')] }),
+    totalTimeoutMs: CUSTOM_GATEWAY_TIMEOUT_MS,
+    maxResponseBytes: CUSTOM_GATEWAY_MAX_RESPONSE_BYTES,
+    maxRetries: 0,
+  });
+  const customGatewayAdapter = new CustomGatewayAdapter({ http: customGatewayHttp });
+  /*
    * Package A — Telegram Stars. The invoice is sent with the ATTEMPT's bot token through
    * the one Telegram call module, bounded by the same send timeout every customer message
    * uses.
@@ -3304,6 +3328,8 @@ export function createContainer(
         return tetrapayAdapter;
       case 'RIALIT':
         return rialitAdapter;
+      case 'CUSTOM':
+        return customGatewayAdapter;
       case 'MANUAL_TRANSFER':
         return null;
       default:
@@ -3363,6 +3389,11 @@ export function createContainer(
     botLinkFor: (scope) => publicOrigins.botLinkFor(scope),
     // Spec §8: a route priced only by the central rate cannot be enabled while it is off.
     features: featureFlagResolver,
+    // Round 10 C1: a bridge URL the installation's URL policy refuses is refused when SET.
+    endpointRefusal: (baseUrl) => {
+      const verdict = checkUrl(baseUrl, customGatewayUrlPolicy);
+      return verdict.allowed ? null : verdict.refusal;
+    },
   });
 
   /**
@@ -3822,6 +3853,12 @@ export function createContainer(
     botLinkFor: (scope) => publicOrigins.botLinkFor(scope),
     // TetraPay's `DAILY_LIMIT_REACHED` hides the route until 00:00 Tehran (the provider's word).
     routeVisibility: paymentGatewayRepository,
+    // Round 10 C1: the custom route's callback IP allow-list, matched exact or CIDR bit by bit.
+    webhookSources: {
+      allowlistFor: async (scope, provider) =>
+        (await paymentGatewayRepository.find(scope, provider))?.webhookIpAllowlist ?? null,
+      matches: matchesTrustedEntry,
+    },
     /*
      * FIX10 R1: the longest one row may take — a provider call at its timeout (every
      * provider's is TONPAYS_TIMEOUT_MS) and up to three Telegram calls around it (a
@@ -4227,6 +4264,8 @@ export function createContainer(
     serviceAdapterExists: (providerType) =>
       SERVICE_PROVIDER_TYPES.includes(providerType as (typeof SERVICE_PROVIDER_TYPES)[number]),
     cadence: probeCore.cadence,
+    // R10 C2: a provider descriptor's `requiresFeature`, read inside the create.
+    features: featureFlagResolver,
   });
 
   /*

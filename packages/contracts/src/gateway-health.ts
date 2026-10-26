@@ -30,6 +30,8 @@ export const GATEWAY_CONFIGURATION_GAPS = [
   'CENTRAL_FX_DISABLED',
   'UNIT_RATIO_MISSING',
   'NO_RECEIVING_ACCOUNT',
+  /** Round 10 C1: an `operatorEndpoint` route (the custom gateway) with no bridge base URL. */
+  'ENDPOINT_MISSING',
 ] as const;
 export type GatewayConfigurationGap = (typeof GATEWAY_CONFIGURATION_GAPS)[number];
 

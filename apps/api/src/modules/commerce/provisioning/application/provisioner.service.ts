@@ -48,6 +48,7 @@ import type { AuditWriter } from '@nexa/contracts';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { SafeHttpClient } from '../../../../infrastructure/net/safe-http.js';
+import { panelClient } from '../../../platform/panels/application/panel-http.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import { checkUrl, type UrlPolicyOptions } from '../../../../infrastructure/net/url-policy.js';
 import type {
@@ -794,7 +795,7 @@ export class ProvisionerService {
 
     const target = { baseUrl: operable.baseUrl, credentials, activation: operable.activation };
     const ref = providerRefFor(service);
-    const http = this.deps.http.forBase(operable.baseUrl);
+    const http = panelClient(this.deps.http, operable);
 
     /*
      * The stamp that makes a crash recoverable, in a transaction of its OWN before
@@ -904,7 +905,7 @@ export class ProvisionerService {
           operation,
           service,
           'SUSPEND',
-          await suspendCall(adapter, target, http, ref),
+          await suspendCall(adapter, target, http, ref, { operationId: operation.id }),
         );
       }
       case 'RESUME': {
@@ -917,7 +918,7 @@ export class ProvisionerService {
           operation,
           service,
           'RESUME',
-          await resumeCall(adapter, target, http, ref),
+          await resumeCall(adapter, target, http, ref, { operationId: operation.id }),
         );
       }
       case 'TERMINATE': {
@@ -929,7 +930,7 @@ export class ProvisionerService {
           scope,
           operation,
           service,
-          await terminateCall(adapter, target, http, ref),
+          await terminateCall(adapter, target, http, ref, { operationId: operation.id }),
         );
       }
       /*
@@ -946,7 +947,9 @@ export class ProvisionerService {
           scope,
           operation,
           service,
-          await rotateCall(adapter, target, http, ref, service.subscriptionUrl),
+          await rotateCall(adapter, target, http, ref, service.subscriptionUrl, {
+            operationId: operation.id,
+          }),
         );
       }
       /*
@@ -975,7 +978,9 @@ export class ProvisionerService {
           operation,
           service,
           operation.target,
-          await allowanceCall(adapter, target, http, ref, operation.target),
+          await allowanceCall(adapter, target, http, ref, operation.target, {
+            operationId: operation.id,
+          }),
         );
       }
       case 'ADD_TRAFFIC': {
@@ -988,7 +993,9 @@ export class ProvisionerService {
           operation,
           service,
           operation.target,
-          await allowanceCall(adapter, target, http, ref, operation.target),
+          await allowanceCall(adapter, target, http, ref, operation.target, {
+            operationId: operation.id,
+          }),
         );
       }
       case 'ADD_TIME': {
@@ -1001,7 +1008,9 @@ export class ProvisionerService {
           operation,
           service,
           operation.target,
-          await allowanceCall(adapter, target, http, ref, operation.target),
+          await allowanceCall(adapter, target, http, ref, operation.target, {
+            operationId: operation.id,
+          }),
         );
       }
       /*
@@ -1118,6 +1127,8 @@ export class ProvisionerService {
       durationDays: bought.durationDays,
       expiresAt: expiryFor(now, bought.durationDays, bought.durationHours),
       deviceLimit: bought.deviceLimit,
+      // The same id on every attempt of this create (R10 C2): the bridge's idempotency key.
+      operationId: operation.id,
     });
     const finishedAt = this.deps.clock.now();
 
@@ -2875,7 +2886,7 @@ export class ProvisionerService {
       credentials,
       activation: operable.activation,
     };
-    const http = this.deps.http.forBase(operable.baseUrl);
+    const http = panelClient(this.deps.http, operable);
     /*
      * The READ that settles the write, and for extra users it is the device-limit read
      * (WP-A5): `lookupUser` answers whether the account exists and what its allowance is,
