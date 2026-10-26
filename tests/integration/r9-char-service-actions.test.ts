@@ -230,13 +230,16 @@ describe('the service-actions flow of the Telegram bot, as it answers today', ()
     pin('devices.none_configured', await turn(rig.tap(`dv:${service.id}`, CUSTOMER)));
   });
 
-  it("answers a service that is not the customer's exactly as one that does not exist", async () => {
+  it("answers a service that is not the customer's exactly as one that does not exist, whichever action asks", async () => {
     await offer('traffic', 'ADD_TRAFFIC');
     const unknown = rig.ctx().container.ids.uuid();
     pin('foreign.renew', await turn(rig.tap(`n:${service.id}`, OTHER)));
     pin('foreign.traffic', await turn(rig.tap(`v:${service.id}`, OTHER)));
+    pin('foreign.time', await turn(rig.tap(`h:${service.id}`, OTHER)));
+    pin('foreign.devices', await turn(rig.tap(`dv:${service.id}`, OTHER)));
     pin('unknown.renew', await turn(rig.tap(`n:${unknown}`, CUSTOMER)));
     pin('unknown.traffic', await turn(rig.tap(`v:${unknown}`, CUSTOMER)));
+    pin('unknown.time', await turn(rig.tap(`h:${unknown}`, CUSTOMER)));
     pin('unknown.devices', await turn(rig.tap(`dv:${unknown}`, CUSTOMER)));
     pin('unknown.rotate_ask', await turn(rig.tap(`rc:${unknown}`, CUSTOMER)));
   });
@@ -342,9 +345,21 @@ function expectedViews(): Record<string, View> {
       buttons: [],
     },
     'foreign.traffic': {
-      intent: 'THROWN',
-      key: null,
-      text: 'NOT_FOUND commerce.service_not_found',
+      intent: 'SERVICE_ADD_TRAFFIC',
+      key: 'bot.service.not_found',
+      text: 'این سرویس در دسترس شما نیست.',
+      buttons: [],
+    },
+    'foreign.time': {
+      intent: 'SERVICE_ADD_TIME',
+      key: 'bot.service.not_found',
+      text: 'این سرویس در دسترس شما نیست.',
+      buttons: [],
+    },
+    'foreign.devices': {
+      intent: 'SERVICE_ADD_DEVICES',
+      key: 'bot.service.not_found',
+      text: 'این سرویس در دسترس شما نیست.',
       buttons: [],
     },
     'unknown.renew': {
@@ -354,15 +369,21 @@ function expectedViews(): Record<string, View> {
       buttons: [],
     },
     'unknown.traffic': {
-      intent: 'THROWN',
-      key: null,
-      text: 'NOT_FOUND commerce.service_not_found',
+      intent: 'SERVICE_ADD_TRAFFIC',
+      key: 'bot.service.not_found',
+      text: 'این سرویس در دسترس شما نیست.',
+      buttons: [],
+    },
+    'unknown.time': {
+      intent: 'SERVICE_ADD_TIME',
+      key: 'bot.service.not_found',
+      text: 'این سرویس در دسترس شما نیست.',
       buttons: [],
     },
     'unknown.devices': {
-      intent: 'THROWN',
-      key: null,
-      text: 'NOT_FOUND commerce.service_not_found',
+      intent: 'SERVICE_ADD_DEVICES',
+      key: 'bot.service.not_found',
+      text: 'این سرویس در دسترس شما نیست.',
       buttons: [],
     },
     'unknown.rotate_ask': {

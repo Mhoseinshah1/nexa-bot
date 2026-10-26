@@ -517,6 +517,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.panel_detail':
     'پنل: {name}\nارائه‌دهنده: {provider}\nوضعیت: {status}\nسلامت: {health}\nآخرین بررسی: {checkedAt}\nخطای آخرین بررسی: {failure}\n\nسرویس‌های فعال: {services}\nرزرو جاری: {reservations}\nسقف سرویس: {cap}\n\nیوزرنیم دلخواه: {usernameCustom}\nیوزرنیم خودکار: {usernameAutomatic}\nپیشوند: {usernamePrefix}\nالگوی یوزرنیم: {usernameTemplate}',
   'bot.admin.panel_gone': 'این پنل پیدا نشد.',
+  'bot.admin.panel_username_usage':
+    'دستور ناقص یا نامعتبر است.\n\n/panel_prefix <شمارهٔ پنل> <پیشوند>\n/panel_template <شمارهٔ پنل> <الگو>',
   'bot.admin.panel_test_button': '🔌 تست اتصال',
   'bot.admin.panel_tested': 'تست اتصال انجام شد و سلامت پنل به‌روز شد.',
   'bot.admin.panel_test_replayed':
