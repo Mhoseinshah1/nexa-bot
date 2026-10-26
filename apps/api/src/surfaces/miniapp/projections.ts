@@ -20,12 +20,10 @@ import type {
   ManualTransferInstruction,
 } from '../../modules/commerce/payments/application/payment.service.js';
 import type { GatewayAttemptView } from '../../modules/commerce/payments/application/gateway-payment.service.js';
-import {
-  amountToTransfer,
-  cardNumberToCopy,
-  paysInChat,
-  transferFigures,
-} from '../../modules/commerce/miniapp/application/miniapp-checkout.js';
+import { paysInChat } from '../../modules/commerce/checkout/application/checkout.service.js';
+import { amountToTransfer } from '../../modules/commerce/payments/domain/amount-to-transfer.js';
+import { cardNumberToCopy } from '../../modules/commerce/payments/domain/card-number.js';
+import { transferFigures } from '../../modules/commerce/payments/domain/transfer-figures.js';
 
 /**
  * Records to the mini app's wire (`@nexa/contracts` miniapp.ts). Projection only: every

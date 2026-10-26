@@ -905,32 +905,6 @@ export async function confirm(
 }
 
 /**
- * DRAFT → AWAITING_PAYMENT through the lane that owns the order's purpose: a new
- * service through `OrderService.confirm`, a renewal or a package through
- * `CommercialActionService.confirm`. Both are exactly-once under the update's key.
- */
-export async function confirmDraft(
-  rt: BotRuntime,
-  scope: TenantContext,
-  actor: ActorContext,
-  order: OrderRecord,
-  customer: CustomerRecord,
-  idempotencyKey: string,
-): Promise<OrderRecord> {
-  if (order.purpose === 'NEW_SERVICE' || order.purpose === 'CUSTOM_SERVICE') {
-    return rt.deps.orders.confirm(scope, actor, {
-      idempotencyKey: `${idempotencyKey}:confirm`,
-      customerId: customer.id,
-      orderId: order.id,
-    });
-  }
-  return rt.deps.commercial.confirm(scope, actor, customer.id, {
-    orderId: order.id,
-    idempotencyKey: `${idempotencyKey}:action_confirm`,
-  });
-}
-
-/**
  * The question between the cancel-order button and the cancellation.
  *
  * `cancelPaymentAsk` one aggregate over is the same shape and states the reasons: it
