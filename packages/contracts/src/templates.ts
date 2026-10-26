@@ -1077,6 +1077,8 @@ export const TEMPLATES = [
    * question is a sum of two digits; the four answers are the inline buttons under it, and
    * the right one is known only to the server. No reply here may say the customer is
    * blocked: a failure costs an attempt and, at the limit, a cooldown, never a block.
+   * Latin digits, like every customer text but the two greetings (the owner's R6 decision,
+   * pinned in `ops-log-types.test.ts`).
    */
   {
     key: 'bot.captcha.challenge',
@@ -1085,7 +1087,6 @@ export const TEMPLATES = [
       'second` — with the four answer buttons under it. Sent instead of whatever they asked ' +
       'for; it must not say that action was performed.',
     format: 'PLAIN_TEXT',
-    digits: 'PERSIAN',
     placeholders: [
       {
         token: 'first',
@@ -1109,7 +1110,6 @@ export const TEMPLATES = [
       'R10 D5: a wrong answer. The question message is edited into this: how many answers ' +
       'are left before a cooldown, and a NEW question with its own four buttons.',
     format: 'PLAIN_TEXT',
-    digits: 'PERSIAN',
     placeholders: [
       {
         token: 'remaining',
@@ -1140,7 +1140,6 @@ export const TEMPLATES = [
       'R10 D5: an answer to a question whose time ran out. Not counted as a wrong answer; ' +
       'the message is edited into a NEW question with its own four buttons.',
     format: 'PLAIN_TEXT',
-    digits: 'PERSIAN',
     placeholders: [
       {
         token: 'first',
@@ -1164,7 +1163,6 @@ export const TEMPLATES = [
       'R10 D5: the answers ran out. The customer waits this many minutes and then sends ' +
       '/start again for a new question. It must not say the account is blocked: it is not.',
     format: 'PLAIN_TEXT',
-    digits: 'PERSIAN',
     placeholders: [
       {
         token: 'minutes',
@@ -1179,7 +1177,6 @@ export const TEMPLATES = [
     key: 'bot.captcha.option_button',
     description: 'R10 D5: one answer button under the captcha question: the number itself.',
     format: 'PLAIN_TEXT',
-    digits: 'PERSIAN',
     placeholders: [
       {
         token: 'answer',

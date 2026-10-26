@@ -1482,7 +1482,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.referral.gift_disabled': 'هدیهٔ عضویت در حال حاضر فعال نیست.',
   // R10 D5 (b): the referral-gift guard.
   'bot.referral.gift_after_purchase':
-    '⏳ هدیهٔ عضویت هر زیرمجموعه پس از نخستین خرید او (و تحویل سرویس) قابل دریافت می‌شود.',
+    '{icon:time} هدیهٔ عضویت هر زیرمجموعه پس از نخستین خرید او (و تحویل سرویس) قابل دریافت می‌شود.',
   'bot.referral.gift_daily_cap':
     '{icon:info} سقف دریافت هدیهٔ عضویت برای امروز پر شده است. سهم‌های باقی‌مانده محفوظ است و از فردا می‌توانید آن‌ها را دریافت کنید.',
   // R1: the forwardable invite (no figures) and the customer's own dashboard.
