@@ -2895,6 +2895,8 @@ export const WEB_FA = {
     'این درگاه بدون نشانی پل روشن نمی‌شود. ابتدا نشانی پل را ثبت کنید.',
   'web.payment_gateway_endpoint_refused_active':
     'نشانی پل فقط وقتی درگاه خاموش است قابل تغییر است. ابتدا درگاه را خاموش کنید.',
+  'web.payment_gateway_endpoint_refused_open_attempts':
+    'تا وقتی پرداختی که روی پل فعلی ساخته شده باز است، نشانی پل قابل تغییر نیست. صبر کنید تا آن پرداخت‌ها نتیجه بگیرند (یا موارد در انتظار بررسی را تطبیق دهید)، سپس نشانی را تغییر دهید.',
   'web.payment_gateway_endpoint_refused_url':
     'نشانی پل پذیرفته نشد: باید با https:// شروع شود و نام کاربری، پارامتر یا # نداشته باشد.',
   'web.payment_gateway_endpoint_refused_address':

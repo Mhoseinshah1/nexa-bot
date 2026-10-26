@@ -185,11 +185,15 @@ export function reconcilableNow(
 /**
  * The provider statuses that mean "part of the money arrived" — the `PARTIAL` queue. Only
  * a provider whose own vocabulary has one is listed: NOWPayments' `partially_paid`
- * (`domain/nowpayments.ts`, a MISMATCH that never fulfils). No other route reports a
- * partial payment, so none is invented for them.
+ * (`domain/nowpayments.ts`, a MISMATCH that never fulfils) and the custom bridge's
+ * `UNDERPAID` (`docs/protocols/custom-gateway.md` §6: 0 < `amount_paid` < `amount`, held for an
+ * operator — Codex on #336). `OVERPAID` is not part of the money and is not listed. No other
+ * route reports a partial payment, so none is invented for them. A status added here is added
+ * to `gateway_invoices_tenant_attention_partial_idx` (`online-indexes.ts`) too.
  */
 export const PARTIAL_PAYMENT_STATUSES: Readonly<
   Partial<Record<PaymentGatewayProvider, readonly string[]>>
 > = {
   NOWPAYMENTS: ['partially_paid'],
+  CUSTOM: ['UNDERPAID'],
 };

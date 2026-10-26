@@ -757,6 +757,31 @@ export class PaymentGatewayService {
             { reason: 'ENDPOINT_CHANGE_WHILE_ACTIVE' },
           );
         }
+        /*
+         * Codex on #336 (2): an open attempt keeps the bridge address it was created with, but
+         * Nexa holds ONE secret per route — so moving the route to another bridge (whose own
+         * secret the operator then saves) left those attempts asked with a secret their bridge
+         * refuses, and their callbacks unverifiable: a customer who paid was never credited.
+         * Keeping the old secret for them instead would keep trusting a secret the operator
+         * replaced, perhaps because it leaked. So the address does not move while any attempt
+         * frozen to another address is open (`docs/protocols/custom-gateway.md` §9.3); the same
+         * address (a new allow-list) is not a move. Counted AFTER the conditional UPDATE: the
+         * row lock it took waits for every attempt that read the route FOR SHARE, so none that
+         * committed first can be missed by this statement's snapshot. The throw rolls it back.
+         */
+        const openAttempts = await this.deps.repository.openAttemptsElsewhere(
+          scope,
+          provider,
+          baseUrl,
+          tx,
+        );
+        if (openAttempts > 0) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+            'Payments opened against the current bridge are still open; the address cannot move yet.',
+            { reason: 'ENDPOINT_CHANGE_WITH_OPEN_ATTEMPTS', openAttempts },
+          );
+        }
         await this.record(scope, actor, tx, {
           action: 'payment_gateway.set_endpoint',
           entityId: provider,

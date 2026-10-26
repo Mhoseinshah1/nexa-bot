@@ -699,6 +699,8 @@ const GATEWAY_ENABLE_REFUSAL_TEXT: Readonly<Record<string, WebKey>> = {
   // Round 10 C1: the custom gateway's bridge address.
   ENDPOINT_MISSING: 'web.payment_gateway_enable_refused_endpoint_missing',
   ENDPOINT_CHANGE_WHILE_ACTIVE: 'web.payment_gateway_endpoint_refused_active',
+  // Codex on #336: attempts opened against the current bridge are still open.
+  ENDPOINT_CHANGE_WITH_OPEN_ATTEMPTS: 'web.payment_gateway_endpoint_refused_open_attempts',
 };
 
 /**

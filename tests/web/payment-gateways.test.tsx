@@ -993,6 +993,7 @@ describe('the custom gateway page', () => {
       gatewayRequestRefusalText(new ApiError(400, 'commerce.request_invalid', 'x', { reason }));
     expect(conflict('ENDPOINT_MISSING')).toContain('نشانی پل');
     expect(conflict('ENDPOINT_CHANGE_WHILE_ACTIVE')).toContain('خاموش');
+    expect(conflict('ENDPOINT_CHANGE_WITH_OPEN_ATTEMPTS')).toContain('پرداخت');
     expect(invalid('ENDPOINT_ADDRESS_REFUSED')).toContain('نشانی');
     expect(invalid('ENDPOINT_URL_INVALID')).toContain('https://');
     expect(invalid('ALLOWLIST_INVALID')).toContain('CIDR');

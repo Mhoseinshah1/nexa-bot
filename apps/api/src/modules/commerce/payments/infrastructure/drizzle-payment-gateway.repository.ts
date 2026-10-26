@@ -16,6 +16,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   customers,
+  gatewayInvoices,
   paymentGateways,
   payments,
 } from '../../../../infrastructure/persistence/schema.js';
@@ -343,6 +344,36 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
       .returning(COLUMNS);
     const row = rows[0];
     return row === undefined ? null : toRecord(row);
+  }
+
+  /** Codex on #336 (2): the open attempts a move to `baseUrl` would strand (see the port). */
+  async openAttemptsElsewhere(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    baseUrl: string,
+    tx: unknown,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ open: count() })
+      .from(gatewayInvoices)
+      .innerJoin(
+        payments,
+        and(
+          eq(payments.tenantId, gatewayInvoices.tenantId),
+          eq(payments.id, gatewayInvoices.paymentId),
+        ),
+      )
+      .where(
+        and(
+          eq(gatewayInvoices.tenantId, tenantId),
+          eq(gatewayInvoices.provider, provider),
+          sql`${gatewayInvoices.endpointBaseUrl} IS DISTINCT FROM ${baseUrl}`,
+          sql`${gatewayInvoices.outcome} IS NULL`,
+          sql`(${payments.state} IN ('PENDING', 'UNKNOWN') OR ${gatewayInvoices.nextInquiryAt} IS NOT NULL)`,
+        ),
+      );
+    return Number(rows[0]?.open ?? 0);
   }
 
   /** Only LATER: `hidden_until` never moves backwards. `updated_at` is deliberately not touched. */

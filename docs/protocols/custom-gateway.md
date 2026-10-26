@@ -39,9 +39,10 @@ shown again after saving.
 
 A Nexa store has ONE custom route in v1 (`OQ-CG-02`). The route starts **disabled**; it cannot be
 switched on without its secret and its base URL. Its base URL can be changed only while the route
-is switched off (switch off, change, test, switch on); every change is audited. Each payment
-attempt FREEZES the base URL it was created with: every inquiry of that attempt goes to that
-bridge, whatever the route says later.
+is switched off (switch off, change, test, switch on), and only once no attempt opened against
+the current address is still open (§9.3); every change is audited. Each payment attempt FREEZES
+the base URL it was created with: every inquiry of that attempt goes to that bridge, whatever
+the route says later.
 
 ## 2. Conventions
 
@@ -432,6 +433,13 @@ to pay again, nothing is credited, and an operator reconciles it from Nexa's Pay
 Center (they may confirm a `PAID` or fail it; the difference of an under- or overpayment is settled
 with the customer outside the protocol, `OQ-CG-03`).
 
+A signed inquiry answer that names another `invoice_id` or `reference` than the attempt Nexa asked
+about is never an approval. When it reports money captured (`PAID`, `UNDERPAID`, `OVERPAID`, or a
+`FAILED`/`EXPIRED` whose `amount_paid` is above zero) it is held for an operator like any other
+mismatch — the signature binds it to Nexa's own request, so it is the bridge's word that money is
+held — and nothing in it is adopted as the attempt's reference. Any other status naming another
+payment is recorded and ignored: it never fails the attempt.
+
 A `PAID` answer that arrives after Nexa's deadline is a **late payment**: by default Nexa records
 it for an operator and moves nothing; if the operator turned on late credit for this route
 (`payments.late_credit.custom_enabled`, OFF by default), Nexa credits the customer's wallet once,
@@ -526,6 +534,24 @@ One secret, both directions, rotated in one window:
 
 No request, response or callback fails during the switch. Saving the secret in Nexa is audited
 (who, when — never the value). A route cannot be switched on without its secret and a base URL.
+
+**Rotating the secret while attempts are open.** Nexa holds ONE secret per route — the one saved
+last — and keeps no earlier one. Every open attempt is asked, and every callback verified, with
+it; an answer or callback signed only with a replaced secret is never accepted again, whatever
+attempt it is about (an operator who replaces a leaked secret has revoked it at once). Following
+the three steps above in order, open attempts are never left unanswered. A secret saved before the
+bridge accepts it makes each inquiry fail with an operator alert (`payments.gateway_misconfigured`)
+and approves, fails or credits nothing; the attempts resume as soon as the bridge accepts the new
+secret, and one whose deadline passes meanwhile is a late payment (§6).
+
+**Moving to another bridge.** An attempt's inquiries go to the bridge it was created at (§1), but
+they are signed with the route's current secret — so the base URL cannot be changed while any
+attempt opened against the current address is still open: its payment is pending or held for
+review, or Nexa will still ask about it (a decision retry or a late poll). The change is refused
+(`ENDPOINT_CHANGE_WITH_OPEN_ATTEMPTS`, with the count of such attempts); switch the route off, let
+those attempts reach their outcome (or reconcile the held ones), then change the address and save
+the new bridge's secret. Saving the same address again (a new IP allow-list) is not a move and is
+always allowed.
 
 ### 9.4 What a compromised party can and cannot do
 

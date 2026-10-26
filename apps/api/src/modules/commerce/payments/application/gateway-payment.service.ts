@@ -2013,10 +2013,24 @@ export class GatewayPaymentService {
      * Asked by order id (Round 10 C1), the answer's own reference is not known to Nexa: what
      * identifies it is this attempt's order id, which must match exactly like every other.
      */
-    if (
-      (byOrderId ? false : outcome.invoiceId !== invoiceId) ||
-      outcome.orderId !== invoice.providerOrderId
-    ) {
+    const otherOrder = outcome.orderId !== invoice.providerOrderId;
+    const identityMismatch = otherOrder || (byOrderId ? false : outcome.invoiceId !== invoiceId);
+    /*
+     * Codex on #336 (1): a custom bridge's answer is SIGNED over this request's nonce
+     * (`docs/protocols/custom-gateway.md` §5), so it is the bridge's own word about the
+     * attempt Nexa asked about — and one that reports money captured (its verdict a MISMATCH
+     * or an approval) under another invoice id or reference must not be ignored: ignored, the
+     * payment stayed PENDING to expire and the customer could pay again. It is HELD like every
+     * other mismatch — never settled (the verdict is forced to MISMATCH), never failed, and
+     * nothing in it is adopted or bound. A status that reports no money (PENDING, a FAILED with
+     * nothing paid) still takes the ignored path below: an answer naming another payment never
+     * fails this one.
+     */
+    const heldIdentity =
+      identityMismatch &&
+      invoice.provider === 'CUSTOM' &&
+      (outcome.verdict === 'MISMATCH' || outcome.verdict === 'APPROVED');
+    if (identityMismatch && !heldIdentity) {
       const kept = await this.deps.uow.run(scope, (tx) =>
         this.deps.invoices.recordInquiry(
           scope,
@@ -2049,9 +2063,13 @@ export class GatewayPaymentService {
      * the payment held for an operator. A repeated verify of a settled payment never gets
      * here: its outcome is recorded and nothing more is asked.
      */
-    let verdict = outcome.verdict;
-    let mismatchReason = outcome.mismatchReason ?? null;
-    const reference = outcome.providerReference ?? null;
+    let verdict = heldIdentity ? 'MISMATCH' : outcome.verdict;
+    let mismatchReason = heldIdentity
+      ? otherOrder
+        ? 'PROVIDER_ORDER_ID_MISMATCH'
+        : 'PROVIDER_REFERENCE_MISMATCH'
+      : (outcome.mismatchReason ?? null);
+    const reference = heldIdentity ? null : (outcome.providerReference ?? null);
     let screenChanged = false;
     /** R9 C1: the next step the provider newly asks the customer for, if this answer is one. */
     let announced: 'LESS' | 'MORE' | null = null;
@@ -2106,8 +2124,11 @@ export class GatewayPaymentService {
           // A webhook's hinted id for a lost create, now VERIFIED by the provider's own
           // order id: adopted. Nothing else is ever adopted.
           // Round 10 C1: asked by order id, the reference the signed answer named is adopted.
+          // Never from an answer that named another payment (Codex on #336).
           adoptInvoiceId:
-            invoice.providerInvoiceId === null ? (invoiceId ?? outcome.invoiceId) : null,
+            invoice.providerInvoiceId === null && !heldIdentity
+              ? (invoiceId ?? outcome.invoiceId)
+              : null,
           /*
            * A terminal verdict keeps the next inquiry scheduled until its outcome is
            * recorded — `recordOutcome` is what clears it. A crash, or a failed transaction,

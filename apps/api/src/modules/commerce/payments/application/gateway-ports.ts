@@ -182,6 +182,20 @@ export interface PaymentGatewayRepository {
     now: Date,
     tx: unknown,
   ): Promise<PaymentGatewayRecord | null>;
+
+  /**
+   * Codex on #336 (2): how many of this route's attempts frozen to a bridge address OTHER than
+   * `baseUrl` are still open — no outcome recorded, and either the payment is still PENDING or
+   * UNKNOWN (held for review) or Nexa will still ask about it (`next_inquiry_at` set: a
+   * decision retry, a late poll). Each is asked, and its callbacks verified, with the route's
+   * ONE current secret, so the address may not move while any is open.
+   */
+  openAttemptsElsewhere(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    baseUrl: string,
+    tx: unknown,
+  ): Promise<number>;
 }
 
 /**

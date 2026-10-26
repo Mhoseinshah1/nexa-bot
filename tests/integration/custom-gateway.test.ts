@@ -537,6 +537,93 @@ describe('the custom gateway, through the one settlement path', () => {
       expect(await ledger()).toEqual([]);
     });
 
+    /*
+     * Codex on #336 (1): a SIGNED answer is bound to this request's nonce, so one that reports
+     * captured money under another `invoice_id` or `reference` is the bridge's own word that
+     * money is held — the hold, never the "about another attempt, ignored" path that left the
+     * payment PENDING to expire (and the customer free to pay again).
+     */
+    const signedAnswerNaming = (
+      orderId: string,
+      status: string,
+      identity: Record<string, unknown>,
+    ) => {
+      const payment = bridge.payments.get(orderId);
+      if (payment === undefined) throw new Error('no bridge payment');
+      bridge.nextInquiry = {
+        kind: 'answer',
+        status: 200,
+        body: {
+          ...bridge.inquiryAnswer(payment),
+          status,
+          amount: { value: RIAL.toString(), currency: 'IRR' },
+          amount_paid: status === 'PAID' ? { value: RIAL.toString(), currency: 'IRR' } : null,
+          ...identity,
+        },
+      };
+    };
+    const holdReasons = (paymentId: string) =>
+      rows<{ reason: string | null }>(
+        sql`SELECT after->>'reason' AS reason FROM audit_logs
+            WHERE action = 'payment.lose_track' AND entity_id = ${paymentId}`,
+      );
+    const OTHER_ORDER_ID = `cg_${'Z'.repeat(26)}`;
+
+    it('a signed PAID naming another reference is held UNKNOWN, credits nothing, binds nothing', async () => {
+      await enableCustom();
+      const { paymentId, orderId, reference } = await createdAttempt();
+      signedAnswerNaming(orderId, 'PAID', { reference: 'brg-999999' });
+      await inquireNow();
+      expect((await paymentOf(paymentId)).state).toBe('UNKNOWN');
+      expect(await ledger()).toEqual([]);
+      expect(await openConditions()).toContain('payments.gateway_review_unresolved');
+      expect(await holdReasons(paymentId)).toEqual([{ reason: 'PROVIDER_REFERENCE_MISMATCH' }]);
+      const invoice = await invoiceOf(paymentId);
+      expect(invoice.provider_invoice_id).toBe(reference);
+      expect(invoice.provider_paid).toBe(false);
+    });
+
+    it('a signed PAID naming another invoice id is held UNKNOWN, and a lost create adopts nothing from it', async () => {
+      await enableCustom();
+      bridge.nextCreate = { kind: 'drop' };
+      bridge.createBeforeOverride = true;
+      const attempt = await topup();
+      await pass();
+      const lost = await invoiceOf(attempt.payment.id);
+      expect(lost.creation_state).toBe('CREATE_UNKNOWN');
+      // Asked BY invoice id (reference null); the signed answer names another invoice id.
+      await deliver(
+        bridge.callback(lost.provider_order_id, { reference: null, deliveryId: 'dlv-other' }),
+      );
+      signedAnswerNaming(lost.provider_order_id, 'PAID', { invoice_id: OTHER_ORDER_ID });
+      await pass();
+      expect((await paymentOf(attempt.payment.id)).state).toBe('UNKNOWN');
+      expect(await ledger()).toEqual([]);
+      expect(await holdReasons(attempt.payment.id)).toEqual([
+        { reason: 'PROVIDER_ORDER_ID_MISMATCH' },
+      ]);
+      expect((await invoiceOf(attempt.payment.id)).provider_invoice_id).toBeNull();
+    });
+
+    it('a signed FAILED or PENDING naming another invoice id neither fails nor holds the attempt', async () => {
+      await enableCustom();
+      const { paymentId, orderId } = await createdAttempt();
+      for (const status of ['FAILED', 'PENDING']) {
+        signedAnswerNaming(orderId, status, { invoice_id: OTHER_ORDER_ID });
+        await askNow(paymentId);
+        await inquireNow();
+        expect((await paymentOf(paymentId)).state).toBe('PENDING');
+        expect(
+          await rows<{ code: string | null }>(
+            sql`SELECT last_inquiry_error_code AS code FROM gateway_invoices
+                WHERE payment_id = ${paymentId}`,
+          ),
+        ).toEqual([{ code: 'nexa.identity_mismatch' }]);
+      }
+      expect(await holdReasons(paymentId)).toEqual([]);
+      expect(await ledger()).toEqual([]);
+    });
+
     it('an unsigned inquiry answer saying PAID approves nothing', async () => {
       await enableCustom();
       const { paymentId, orderId } = await createdAttempt();
@@ -600,12 +687,51 @@ describe('the custom gateway, through the one settlement path', () => {
       expect(sends()).toBe(1);
     });
 
-    it('an open attempt keeps asking the bridge that created it after the route’s URL changes', async () => {
+    /*
+     * Codex on #336 (2): Nexa holds ONE secret per route — the current bridge's. An attempt
+     * frozen to bridge A, asked with bridge B's secret, is refused by A, and A's callbacks fail
+     * verification: a customer who paid A's link is never credited. Keeping A's old secret for
+     * those attempts would keep trusting a secret the operator replaced (perhaps because it
+     * leaked), so the address cannot move while an attempt opened against the old one is open.
+     */
+    it('refuses to move the bridge address while an attempt opened against the old one is open', async () => {
       await enableCustom();
       const { paymentId, orderId } = await createdAttempt();
       await setStatus('DISABLED');
-      await setEndpoint('https://new-bridge.example/v2');
+      const refused = await setEndpoint('https://new-bridge.example/v2').catch(
+        (error: unknown) => error,
+      );
+      expect(isNexaError(refused) && refused.details).toMatchObject({
+        reason: 'ENDPOINT_CHANGE_WITH_OPEN_ATTEMPTS',
+        openAttempts: 1,
+      });
+      const route = async () =>
+        (await ctx.container.paymentGateways.list(tenantA, owner)).gateways.find(
+          (one) => one.provider === 'CUSTOM',
+        );
+      expect((await route())?.endpointBaseUrl).toBe(BASE);
+      // The same bridge (a new allow-list) is not a move: allowed.
+      expect((await setEndpoint(BASE, ['203.0.113.0/24'])).webhookIpAllowlist).toEqual([
+        '203.0.113.0/24',
+      ]);
+      // Decided (settled at A, with A's secret): the address may move.
       await setStatus('ACTIVE');
+      bridge.set(orderId, 'PAID', RIAL);
+      await inquireNow();
+      expect((await paymentOf(paymentId)).state).toBe('CONFIRMED');
+      await setStatus('DISABLED');
+      await setEndpoint('https://new-bridge.example/v2');
+      expect((await route())?.endpointBaseUrl).toBe('https://new-bridge.example/v2');
+    });
+
+    it('an open attempt keeps asking the bridge that created it after the route’s URL changes', async () => {
+      await enableCustom();
+      const { paymentId, orderId } = await createdAttempt();
+      // A route moved underneath an open attempt (written directly: the service refuses it now).
+      await ctx.container.database.db.execute(
+        sql`UPDATE payment_gateways SET endpoint_base_url = 'https://new-bridge.example/v2'
+            WHERE tenant_id = ${tenantA.tenantId} AND provider = 'CUSTOM'`,
+      );
       expect((await invoiceOf(paymentId)).endpoint_base_url).toBe(BASE);
       // The reference bridge serves only `/nexa`: an inquiry sent to the new URL would 404.
       bridge.set(orderId, 'PAID', RIAL);
