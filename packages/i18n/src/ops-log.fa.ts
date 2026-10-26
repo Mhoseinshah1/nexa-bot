@@ -75,6 +75,10 @@ export const OPS_LOG_BODIES_FA = {
   'ops.log.signup_gift':
     '🎁 هدیهٔ عضویت\n\n🆕 زیرمجموعه (کاربر جدید): {refereeName} · {refereeUsername} · {refereeTelegramId}\n   👛 {refereeBefore} ← {refereeAfter}\n👤 معرف: {referrerName} · {referrerUsername} · {referrerTelegramId}\n   👛 {referrerBefore} ← {referrerAfter}\n🕒 {at}',
 
+  'ops.log.gift_card_redeemed':
+    '🎁 استفاده از کارت هدیه — {amount}\n\n👤 کاربر: {displayName} · {username} · {telegramId}\n🗂 دسته: {batchLabel}\n🔢 چهار حرف آخر کد: {codeLast4}\n👛 موجودی: {balanceBefore} ← {balanceAfter}\n📲 منبع: {source}\n🕒 {at}',
+  'ops.log.gift_card_batch_created':
+    '🎁 ساخت دستهٔ کارت هدیه — {codeCount} کد × {amount}\n\n🗂 دسته: {batchLabel}\n💵 جمع ارزش اسمی: {faceTotal}\n📅 انقضا: {expiry}\n👮 ادمین: {adminName} · {adminUsername} · {adminTelegramId}\n📝 دلیل: {reason}\n🕒 {at}',
   // --- Orders and services (SERVICES topic) -----------------------------------------------
   'ops.log.service_created':
     '🛒 خرید جدید{badges}\n\n👤 {displayName} · {username} · {telegramId}\n🥇 خرید اول کاربر: {firstPurchase}\n📞 شماره: {phone}\n📦 {productTitle}\n📍 لوکیشن: {location}\n📊 حجم: {traffic}\n⏳ مدت: {duration}\n🖥 پنل: {panelName}\n🔑 نام سرویس: {serviceUsername}\n💵 قیمت محصول: {listPrice}\n💵 قیمت نهایی: {price}\n💠 پرداخت: {method} — کیف پول استفاده نشد\n🔖 کد سفارش: {orderCode}\n🔖 کد پرداخت: {reference}\n🧩 کد سرویس: {serviceCode}\n📲 منبع: {source}\n🕒 {at}',

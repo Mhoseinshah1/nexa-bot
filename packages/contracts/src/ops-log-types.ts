@@ -66,6 +66,8 @@ export const OPS_LOG_TYPE_IDS = [
   'REPORT_PANELS', // L29
   // BACKUPS
   'BACKUP_FILE', // L31
+  // PAYMENTS — added after the Appendix L review
+  'GIFT_CARD', // R10 D4
 ] as const;
 export type OpsLogTypeId = (typeof OPS_LOG_TYPE_IDS)[number];
 
@@ -191,6 +193,15 @@ export const OPS_LOG_TYPES = {
   REPORT_FINANCIAL: { l: 'L28', topic: 'REPORTS', templates: ['ops.log.report_financial'] },
   REPORT_PANELS: { l: 'L29', topic: 'REPORTS', templates: ['ops.log.report_panels'] },
   BACKUP_FILE: { l: 'L31', topic: 'BACKUPS', templates: ['ops.log.backup_caption'] },
+  /*
+   * R10 D4: gift cards. A redemption (a wallet credit through the ledger) and a batch minted (a
+   * liability created in one act). One switch, the PAYMENTS topic, beside the signup gift.
+   */
+  GIFT_CARD: {
+    l: 'R10-D4',
+    topic: 'PAYMENTS',
+    templates: ['ops.log.gift_card_redeemed', 'ops.log.gift_card_batch_created'],
+  },
 } as const satisfies Record<OpsLogTypeId, OpsLogTypeDefinition>;
 
 export function opsLogTypeTopic(id: OpsLogTypeId): OpsLogTopicCategory {
@@ -518,6 +529,15 @@ const TOKENS = {
   failedPayments: ['NUMBER', 'Failed payments in the day.'],
   openTickets: ['NUMBER', 'Open tickets now.'],
   cleanup: ['STRING', 'The one cleanup line (L30), or absent when nothing was cleaned.'],
+  // Gift cards (R10 D4).
+  batchLabel: ['STRING', 'R10 D4: the gift card batch’s label, as the operator typed it.'],
+  codeLast4: [
+    'STRING',
+    'R10 D4: the last four symbols of the redeemed code — enough to find it with the holder, never the code.',
+  ],
+  codeCount: ['NUMBER', 'R10 D4: how many codes the batch minted.'],
+  faceTotal: ['MONEY', 'R10 D4: the face value of every code of the batch together.'],
+  expiry: ['DATETIME', 'R10 D4: when the batch’s codes stop being redeemable.'],
   newOrdersSum: ['MONEY', 'The new purchases’ total.'],
   renewalsSum: ['MONEY', 'The renewals’ total.'],
   trafficCount: ['NUMBER', 'Extra-traffic purchases.'],
@@ -1118,5 +1138,22 @@ export const OPS_LOG_TEMPLATES = [
     'ops.log.backup_caption',
     'Log L31: the caption of a backup archive sent to the backups topic.',
     [...req('at', 'fileName', 'size'), ...opt('nextAt', 'checksum')],
+  ),
+  logTemplate(
+    'ops.log.gift_card_redeemed',
+    'R10 D4: a customer redeemed a gift card — who, the amount credited, the batch, the code’s last four symbols, the wallet before and after (from the ledger) and where it was redeemed (the bot or the mini app).',
+    [
+      ...req('amount', 'balanceBefore', 'balanceAfter', 'at'),
+      ...WHO(),
+      ...opt('batchLabel', 'codeLast4', 'source'),
+    ],
+  ),
+  logTemplate(
+    'ops.log.gift_card_batch_created',
+    'R10 D4: an administrator minted a batch of gift cards — how many codes, the face value of each and of all together, the expiry, who and why.',
+    [
+      ...req('codeCount', 'amount', 'faceTotal', 'expiry', 'at'),
+      ...opt('batchLabel', 'adminName', 'adminUsername', 'adminTelegramId', 'reason'),
+    ],
   ),
 ] as const;

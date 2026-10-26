@@ -46,8 +46,12 @@ const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
 describe('the log types registry', () => {
   it('implements every Appendix L item exactly once: L1-L31, with L30 folded into the report', () => {
-    const items = OPS_LOG_TYPE_IDS.map((id) => OPS_LOG_TYPES[id].l);
-    expect(new Set(items).size).toBe(items.length);
+    const all = OPS_LOG_TYPE_IDS.map((id) => OPS_LOG_TYPES[id].l);
+    expect(new Set(all).size).toBe(all.length);
+    // Types added after the owner's Appendix L review name the item that brought them.
+    const later = all.filter((item) => !/^L[0-9]+$/u.test(item));
+    expect(later).toEqual(['R10-D4']);
+    const items = all.filter((item) => /^L[0-9]+$/u.test(item));
     const wanted = Array.from({ length: 31 }, (_, index) => `L${String(index + 1)}`).filter(
       (item) => item !== 'L30',
     );

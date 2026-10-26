@@ -154,6 +154,8 @@ export const INLINE_BUTTONS = [
   button('wallet.open', 'WALLET', 'bot.wallet.open_button'),
   button('wallet.topup', 'WALLET', 'bot.wallet.topup_button'),
   button('wallet.topup_amount', 'WALLET', null),
+  // R10 D4: «🎁 کارت هدیه» under the balance, while the gift_cards feature is on.
+  button('wallet.gift_card', 'WALLET', 'bot.wallet.gift_card_button'),
   // R4 A3: «📋 کپی شناسه» on the account summary — a CopyTextButton with the Telegram id.
   button('account.copy_id', 'WALLET', 'bot.wallet.copy_id_button', 'COPY'),
 

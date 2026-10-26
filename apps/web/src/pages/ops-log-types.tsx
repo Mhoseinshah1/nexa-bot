@@ -51,6 +51,7 @@ export const OPS_LOG_TYPE_LABEL: Readonly<Record<OpsLogTypeId, WebKey>> = {
   ADMIN_WALLET: 'web.opslog_type_admin_wallet',
   REFERRAL_COMMISSION: 'web.opslog_type_referral_commission',
   SIGNUP_GIFT: 'web.opslog_type_signup_gift',
+  GIFT_CARD: 'web.opslog_type_gift_card',
   SERVICE_CREATED: 'web.opslog_type_service_created',
   SERVICE_CREATED_WALLET: 'web.opslog_type_service_created_wallet',
   SERVICE_RENEWED: 'web.opslog_type_service_renewed',
