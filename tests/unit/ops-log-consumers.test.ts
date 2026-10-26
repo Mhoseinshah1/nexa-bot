@@ -18,6 +18,8 @@ import { OperationLog } from '../../apps/api/src/modules/commerce/ops-log/applic
 import { FailureLogConsumer } from '../../apps/api/src/modules/commerce/ops-log/application/failure-log.consumer';
 import { AdminLogConsumer } from '../../apps/api/src/modules/commerce/ops-log/application/admin-log.consumer';
 import { ServiceAlertLog } from '../../apps/api/src/modules/commerce/ops-log/application/service-alert-log';
+import { CustomerLogConsumer } from '../../apps/api/src/modules/commerce/ops-log/application/customer-log.consumer';
+import { TicketSupportNotifyConsumer } from '../../apps/api/src/modules/commerce/tickets/application/ticket-support-notify.consumer';
 import {
   NightlyReportService,
   NIGHTLY_REPORT_CATCH_UP_MS,
@@ -621,6 +623,41 @@ describe('L23 / L24 — each error is its own message, and an unknown outcome is
     expect(queued[0]!.values).toHaveProperty('retry');
   });
 
+  it('an imported customer’s purchase that failed, or whose outcome is unknown, is reported (R10 B5)', async () => {
+    /*
+     * The ORDER is the purchase's provenance (hotfix v0.8.2-e): an order this installation
+     * took from a customer the import wrote is this installation's sale, so its failure is
+     * an error report like any other. Every customer of an installation migrated with the
+     * one-click import is `MIRZA`.
+     */
+    const { facts, queued, lane, ofFacts } = setup();
+    facts.customers.set('cust-1', customerFact({ source: 'MIRZA' }));
+    facts.failed = failure();
+    const consumer = new FailureLogConsumer({ lane, facts: ofFacts, words });
+    await consumer.handle(
+      event('OrderRefunded', 'ord-1', {
+        customerId: 'cust-1',
+        amountMinor: '250000',
+        currency: 'IRT',
+        reason: AUTOMATIC_REFUND_REASON,
+      }),
+      TX,
+    );
+    // A create whose answer was lost, of a service whose customer the import wrote.
+    await consumer.handle(
+      event('ProvisioningOutcomeUnknown', 'svc-1', {
+        serviceId: 'svc-1',
+        panelId: 'pan-1',
+        operationType: 'PROVISION',
+        failureKind: 'TIMEOUT',
+      }),
+      TX,
+    );
+    expect(queued.map((one) => one.logType)).toEqual(['ERROR_PROVISION', 'ERROR_PROVISION']);
+    expect(render(queued[0]!)).toContain('@nima_t');
+    expect(render(queued[1]!)).toContain(words.impact('pending'));
+  });
+
   it('an operator’s refund of a delivered order, and an imported order, are not error reports', async () => {
     const { facts, queued, lane, ofFacts } = setup();
     const consumer = new FailureLogConsumer({ lane, facts: ofFacts, words });
@@ -643,6 +680,20 @@ describe('L23 / L24 — each error is its own message, and an unknown outcome is
       }),
       TX,
     );
+    // An order the import wrote stays silent, whatever the customer's own provenance.
+    facts.orders.set('ord-1', orderFact({ source: 'MIRZA' }));
+    for (const source of ['MIRZA', 'NEXA']) {
+      facts.customers.set('cust-1', customerFact({ source }));
+      await consumer.handle(
+        event('OrderRefunded', 'ord-1', {
+          customerId: 'cust-1',
+          amountMinor: '1',
+          currency: 'IRT',
+          reason: AUTOMATIC_REFUND_REASON,
+        }),
+        TX,
+      );
+    }
     expect(queued).toEqual([]);
   });
 });
@@ -719,7 +770,7 @@ describe('L19 / L21 — administrators and a service alert', () => {
     expect(disabled).toContain('۳۰ مجوز');
   });
 
-  it('one alert per reminder, with the customer’s service; an imported service is silent', async () => {
+  it('one alert per reminder, with the customer’s service — an imported customer’s and service’s too (R10 B5)', async () => {
     const { facts, queued, lane, ofFacts } = setup();
     const hook = new ServiceAlertLog({ lane, facts: ofFacts, words, clock: { now: () => AT } });
     const input = {
@@ -731,9 +782,26 @@ describe('L19 / L21 — administrators and a service alert', () => {
     await hook.serviceAlerted(SCOPE, input, TX);
     expect(queued).toHaveLength(1);
     expect(queued[0]!.dedupeKey).toBe('oplog:alert:rem-1');
-    facts.services.set('svc-1', serviceFact({ source: 'MIRZA' }));
+    /*
+     * The reminder is the alert's provenance: only the sweep writes one, after it told the
+     * customer, so a threshold an imported customer's service crossed after the import is
+     * logged like any other. (What the service had already crossed at the import is the
+     * sweep's silent baseline: the customer is not told and this hook is never called.)
+     */
+    facts.customers.set('cust-1', customerFact({ source: 'MIRZA' }));
     await hook.serviceAlerted(SCOPE, { ...input, reminderId: 'rem-2' }, TX);
-    expect(queued).toHaveLength(1);
+    facts.services.set('svc-1', serviceFact({ source: 'MIRZA' }));
+    await hook.serviceAlerted(SCOPE, { ...input, reminderId: 'rem-3' }, TX);
+    expect(queued.map((one) => one.dedupeKey)).toEqual([
+      'oplog:alert:rem-1',
+      'oplog:alert:rem-2',
+      'oplog:alert:rem-3',
+    ]);
+    expect(queued.map((one) => one.logType)).toEqual([
+      'SERVICE_ALERT',
+      'SERVICE_ALERT',
+      'SERVICE_ALERT',
+    ]);
   });
 });
 
@@ -1336,11 +1404,24 @@ describe('R9 C2 item 2 — an extra-volume gift that failed on the panel (L24)',
       );
       expect(queued, name).toEqual([]);
     }
-    // An imported service or customer is history: nobody is told.
-    for (const mutate of [
-      (f: FakeFacts) => f.services.set('svc-1', serviceFact({ source: 'MIRZA' })),
-      (f: FakeFacts) => f.customers.set('cust-1', customerFact({ source: 'MIRZA' })),
-    ]) {
+  });
+
+  it('a gift to an imported customer’s or service’s that failed is reported (R10 B5)', async () => {
+    /*
+     * The OPERATION is the gift's provenance, and the import performs none: a gift granted to
+     * a customer (or on a service) the import wrote was granted after it, by an operator, a
+     * mass grant or a campaign of this installation.
+     */
+    for (const [name, mutate] of [
+      [
+        'an imported customer',
+        (f: FakeFacts) => f.customers.set('cust-1', customerFact({ source: 'MIRZA' })),
+      ],
+      [
+        'an imported service',
+        (f: FakeFacts) => f.services.set('svc-1', serviceFact({ source: 'MIRZA' })),
+      ],
+    ] as const) {
       const { facts, queued, lane, ofFacts } = setup();
       facts.operations.set('op-gift', giftOp());
       mutate(facts);
@@ -1349,7 +1430,11 @@ describe('R9 C2 item 2 — an extra-volume gift that failed on the panel (L24)',
         'op-gift',
         TX,
       );
-      expect(queued).toEqual([]);
+      expect(
+        queued.map((one) => one.logType),
+        name,
+      ).toEqual(['ERROR_OPERATION']);
+      expect(render(queued[0]!), name).toContain(words.impact('giftNotApplied'));
     }
   });
 
@@ -1457,5 +1542,126 @@ describe('R9 C2 items 3 and 5 — the nightly reports', () => {
     const description = templateDefinition('ops.log.report_summary' as TemplateKey).description;
     expect(description).toMatch(/at least one service in the ACTIVE state now/);
     expect(description).toMatch(/INACTIVE is every other customer/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// R10 B5 — the v0.8.2-e rule for the customers' log and the tickets' log
+// ---------------------------------------------------------------------------------------
+
+describe('R10 B5 — a customer the import wrote: what happens after the import is logged', () => {
+  /*
+   * Only the records the import itself created stay silent. The import writes a customer (a
+   * blocked one with its status directly) and its tickets with NO event, so every
+   * `CustomerBlocked`, `CustomerUnblocked`, `ResellerStandingChanged`, `TicketOpened` and
+   * `TicketMessagePosted` is something this installation did after the import. The record an
+   * event is ABOUT keeps its provenance check: a registration is the customer row, an opening
+   * is the ticket row.
+   *
+   * MUTATION: the registration's provenance check removed -> the L17 case red; the customer's
+   * `source` refusal put back in either consumer -> the MIRZA cases red.
+   */
+  const standing = {
+    customerId: 'cust-1',
+    change: 'PROMOTED',
+    fromStatus: null,
+    toStatus: 'ACTIVE',
+    fromTierName: null,
+    toTierName: 'نقره‌ای',
+  };
+
+  it.each(['MIRZA', 'NEXA'])(
+    'a block, an unblock and a reseller’s change of standing of a %s customer are logged (L18, L20)',
+    async (source) => {
+      const { facts, queued, lane, ofFacts } = setup();
+      facts.customers.set('cust-1', customerFact({ source }));
+      const consumer = new CustomerLogConsumer({ lane, facts: ofFacts, words });
+      await consumer.handle(event('CustomerBlocked', 'cust-1', { reason: 'spam' }), TX);
+      await consumer.handle(event('CustomerUnblocked', 'cust-1', { reason: null }), TX);
+      await consumer.handle(event('ResellerStandingChanged', 'cust-1', standing), TX);
+      expect(queued.map((one) => one.logType)).toEqual([
+        'USER_BLOCK',
+        'USER_BLOCK',
+        'RESELLER_CHANGED',
+      ]);
+      expect(render(queued[0]!)).toContain('@nima_t');
+      expect(queued[0]!.dedupeKey).toBe('oplog:customer:evt-CustomerBlocked-cust-1');
+    },
+  );
+
+  it('a registration of a customer row the import wrote is silent; a native one is logged (L17)', async () => {
+    const { facts, queued, lane, ofFacts } = setup();
+    facts.customers.set('cust-1', customerFact({ source: 'MIRZA' }));
+    facts.referrerOf = async () => null;
+    const consumer = new CustomerLogConsumer({ lane, facts: ofFacts, words });
+    await consumer.handle(event('CustomerRegistered', 'cust-1'), TX);
+    expect(queued).toEqual([]);
+    facts.customers.set('cust-1', customerFact());
+    await consumer.handle(event('CustomerRegistered', 'cust-1'), TX);
+    expect(queued.map((one) => one.logType)).toEqual(['USER_NEW']);
+  });
+
+  function ticketSetup(ticketSource: string, customerSource: string) {
+    const { facts, queued, lane, ofFacts } = setup();
+    facts.customers.set('cust-1', customerFact({ source: customerSource }));
+    facts.ticket = async () => ({
+      id: 'tkt-1',
+      number: '12',
+      code: 'TK4N8P2Q',
+      customerId: 'cust-1',
+      categoryTitle: 'فنی',
+      snippetSource: 'سرویسم وصل نمی‌شود',
+      surface: null,
+    });
+    const consumer = new TicketSupportNotifyConsumer({
+      lane: lane as never,
+      tickets: {
+        findById: async () =>
+          ({
+            id: 'tkt-1',
+            customerId: 'cust-1',
+            source: ticketSource,
+            assignedAdminId: null,
+          }) as never,
+        findMessageById: async () => null,
+      },
+      reviewers: { reviewers: async () => [] },
+      facts: ofFacts,
+      words,
+    });
+    return { queued, consumer };
+  }
+  const opened = event('TicketOpened', 'tkt-1', {
+    ticketId: 'tkt-1',
+    customerId: 'cust-1',
+    categoryId: 'cat-1',
+    messageId: 'msg-1',
+  });
+  const replied = event('TicketMessagePosted', 'tkt-1', {
+    ticketId: 'tkt-1',
+    messageId: 'msg-2',
+    senderType: 'CUSTOMER',
+  });
+
+  it.each(['MIRZA', 'NEXA'])(
+    'a ticket a %s customer opens, and their reply, reach the operations group (L26)',
+    async (source) => {
+      const { queued, consumer } = ticketSetup('NEXA', source);
+      await consumer.handle(opened, TX);
+      await consumer.handle(replied, TX);
+      expect(queued.map((one) => [one.logType, one.templateKey])).toEqual([
+        ['TICKET_NEW', 'ops.support.ticket_opened'],
+        ['TICKET_NEW', 'ops.support.customer_replied'],
+      ]);
+      expect(render(queued[0]!)).toContain('سرویسم وصل نمی‌شود');
+    },
+  );
+
+  it('a ticket the import wrote is silent; a reply written in it after the import is not (L26)', async () => {
+    const { queued, consumer } = ticketSetup('MIRZA', 'MIRZA');
+    await consumer.handle(opened, TX);
+    expect(queued).toEqual([]);
+    await consumer.handle(replied, TX);
+    expect(queued.map((one) => one.templateKey)).toEqual(['ops.support.customer_replied']);
   });
 });

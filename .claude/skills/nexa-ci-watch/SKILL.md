@@ -13,7 +13,7 @@ S=scripts/claude/ci-status.sh
 bash $S <pr|sha>                 # one line; exit 0 green, 1 red, 2 pending
 bash $S <pr> --fail-logs         # ≤20 lines around the first error, per red job
 bash $S <pr> --gate              # gate red while every job it needs is green?
-bash $S --codex <pr>             # Codex comment count, unresolved threads, findings
+bash $S --codex <pr>             # Codex comments, threads, findings; reviewed=/findings=none read its issue-comment marker
 bash $S --wait <pr> --every 300 --max 5400   # bounded loop; returns on completion
 ```
 
