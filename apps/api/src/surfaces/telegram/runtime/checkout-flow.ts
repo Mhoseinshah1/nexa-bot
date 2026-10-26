@@ -277,11 +277,34 @@ export async function orderRouteButtons(
 }
 
 /**
+ * The refusal of the payment-method selector (`pm:`) and of its «❌ بستن لیست» (`px:`).
+ *
+ * An order that does not exist and one that belongs to another customer arrive as the
+ * same `ORDER_NOT_FOUND`, and both are answered as an order that is not awaiting payment:
+ * the sentence a tap on this very button already gets for the customer's own cancelled or
+ * paid order, so the answer neither says whether the id exists nor claims — as
+ * `bot.order.unavailable` does — that a PRODUCT can no longer be bought. With the main
+ * menu under it, because the message the customer tapped is the one that is stale. Every
+ * other refusal goes through the shared table, as before.
+ */
+function orderListRefusal(error: unknown): PendingReply {
+  if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.ORDER_NOT_FOUND) {
+    return {
+      key: 'bot.order.not_awaiting_payment',
+      values: {},
+      buttons: [mainMenuButton()],
+      orderId: null,
+    };
+  }
+  return refusal(error);
+}
+
+/**
  * «💰 روش پرداخت خود را انتخاب نمایید» for one order: the routes `orderRouteButtons`
  * offers, then «❌ بستن لیست».
  *
  * Writes nothing. The order is read as THIS customer's, so another customer's id
- * answers the refusal, and an order no longer payable (paid, cancelled, expired) answers
+ * answers `orderListRefusal`, and an order no longer payable (paid, cancelled, expired) answers
  * `bot.order.not_awaiting_payment`. No payment attempt exists until a route is tapped.
  */
 export async function paymentMethods(
@@ -326,7 +349,7 @@ export async function paymentMethods(
       wizard: { kind: 'ORDER', step: 'METHODS', subjectId: order.id },
     };
   } catch (error) {
-    return refusal(error);
+    return orderListRefusal(error);
   }
 }
 
@@ -361,7 +384,7 @@ export async function paymentMethodsBack(
     }
     return null;
   } catch (error) {
-    return refusal(error);
+    return orderListRefusal(error);
   }
 }
 

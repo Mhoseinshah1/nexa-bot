@@ -33,14 +33,17 @@ import {
  *   - a category's activate button (`kb:a:`)          -> ADMIN_CATEGORY_ACTIVATE
  *
  * Each case pins what the code answers TODAY - intent, template key, rendered text, and the
- * buttons with their callback data in order - including refusals that read oddly (a
- * `/panel_prefix` with no prefix answers `bot.admin.panel_gone`). The split must not change
- * any of it. The expected views are the table at the bottom of the file.
+ * buttons with their callback data in order - including refusals that read oddly. The split
+ * must not change any of it. (Round 10 B2 changed one: a `/panel_prefix` or `/panel_template`
+ * without its panel number or value answers the syntax, `bot.admin.panel_username_usage`,
+ * where it had answered `bot.admin.panel_gone`.) The expected views are the table at the bottom of the file.
  */
 
 const OWNER = TG.owner;
 /** An administrator who holds `panels.view` and nothing that edits. */
 const PANEL_VIEWER = '750881';
+/** A well-formed panel id that names no panel of this tenant. */
+const UNKNOWN_PANEL = '00000000-0000-4000-8000-00000000a0a0';
 /** An administrator who holds `admins.view` only. */
 const ADMINS_VIEWER = '750882';
 /** An administrator who holds `admins.view` and `admins.edit`. */
@@ -224,6 +227,9 @@ describe('the administrator surface of the Telegram bot, as it answers today', (
   it('writes a prefix or a template by command, which also selects the preset', async () => {
     pin('prefix.set', await send(`/panel_prefix ${f.panelA} abc`));
     pin('prefix.missing_value', await send(`/panel_prefix ${f.panelA}`));
+    pin('prefix.missing_panel', await send('/panel_prefix'));
+    pin('template.missing_value', await send(`/panel_template ${f.panelA}`));
+    pin('prefix.unknown_panel', await send(`/panel_prefix ${UNKNOWN_PANEL} abc`));
     pin('template.set', await send(`/panel_template ${f.panelA} bot_{random6}`));
     pin('template.invalid', await send(`/panel_template ${f.panelA} !!`));
     // After a template, tapping the prefix preset clears the template and restores `nx`.
@@ -664,6 +670,24 @@ function expectedViews(): Record<string, View> {
       ],
     },
     'prefix.missing_value': {
+      intent: 'ADMIN_USERNAME_PREFIX',
+      key: 'bot.admin.panel_username_usage',
+      text: 'دستور ناقص یا نامعتبر است.\n\n/panel_prefix <شمارهٔ پنل> <پیشوند>\n/panel_template <شمارهٔ پنل> <الگو>',
+      buttons: [],
+    },
+    'prefix.missing_panel': {
+      intent: 'ADMIN_USERNAME_PREFIX',
+      key: 'bot.admin.panel_username_usage',
+      text: 'دستور ناقص یا نامعتبر است.\n\n/panel_prefix <شمارهٔ پنل> <پیشوند>\n/panel_template <شمارهٔ پنل> <الگو>',
+      buttons: [],
+    },
+    'template.missing_value': {
+      intent: 'ADMIN_USERNAME_TEMPLATE',
+      key: 'bot.admin.panel_username_usage',
+      text: 'دستور ناقص یا نامعتبر است.\n\n/panel_prefix <شمارهٔ پنل> <پیشوند>\n/panel_template <شمارهٔ پنل> <الگو>',
+      buttons: [],
+    },
+    'prefix.unknown_panel': {
       intent: 'ADMIN_USERNAME_PREFIX',
       key: 'bot.admin.panel_gone',
       text: 'این پنل پیدا نشد.',
