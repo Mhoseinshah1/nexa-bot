@@ -1,7 +1,11 @@
 import {
   COMMERCE_ERROR_CODES,
+  CUSTOM_GATEWAY_IP_ALLOWLIST_MAX,
+  CUSTOM_GATEWAY_SECRET_MIN_LENGTH,
   PAYMENT_GATEWAY_DESCRIPTORS,
   errors,
+  normaliseAllowlistEntry,
+  normaliseCustomGatewayBaseUrl,
   paymentGatewayProviderSchema,
   routeTakesCustomerFee,
   type ActorContext,
@@ -134,6 +138,14 @@ export interface PaymentGatewayServiceDeps {
   readonly features?: {
     isEnabled(scope: TenantContext, key: 'central_fx', tx?: unknown): Promise<boolean>;
   };
+  /**
+   * Round 10 C1: whether the installation's URL policy (`checkUrl`, the one every panel and
+   * gateway call obeys) refuses a bridge base URL — a literal loopback, link-local or own-network
+   * address, a denied host. Null: allowed. Asked when the URL is SET, so the operator is told at
+   * once; `SafeHttpClient` still decides every call after resolving the name. Absent: only the
+   * contract's shape rule applies here.
+   */
+  readonly endpointRefusal?: (baseUrl: string) => string | null;
 }
 
 /**
@@ -158,6 +170,8 @@ export interface GatewayReadinessFacts {
   readonly unitRatioSet: boolean;
   /** A manual-transfer route is payable only while a receiving account is enabled. */
   readonly receivingAccountEnabled: boolean;
+  /** Round 10 C1: an `operatorEndpoint` route's bridge base URL is set. Optional: true. */
+  readonly endpointSet?: boolean;
 }
 
 /**
@@ -173,6 +187,7 @@ export function configurationGaps(facts: GatewayReadinessFacts): GatewayConfigur
   if (!facts.centralFxOn) gaps.push('CENTRAL_FX_DISABLED');
   if (!facts.unitRatioSet) gaps.push('UNIT_RATIO_MISSING');
   if (!facts.receivingAccountEnabled) gaps.push('NO_RECEIVING_ACCOUNT');
+  if (facts.endpointSet === false) gaps.push('ENDPOINT_MISSING');
   return gaps;
 }
 
@@ -399,6 +414,7 @@ export class PaymentGatewayService {
       centralFxOn,
       unitRatioSet,
       receivingAccountEnabled: accounts,
+      endpointSet: !descriptor.operatorEndpoint || (gateway.endpointBaseUrl ?? null) !== null,
     };
   }
 
@@ -601,7 +617,15 @@ export class PaymentGatewayService {
         { reason: 'CREDENTIAL_MISSING' },
       );
     }
-    const check = await adapter.checkCredential(apiKey);
+    /*
+     * Round 10 C1: an `operatorEndpoint` route is checked against the bridge the ROUTE names
+     * now — the «تست اتصال» an operator presses after setting a URL and before enabling it.
+     */
+    const check = PAYMENT_GATEWAY_DESCRIPTORS[provider].operatorEndpoint
+      ? await adapter.checkCredential(apiKey, {
+          endpoint: (await this.deps.repository.find(scope, provider))?.endpointBaseUrl ?? null,
+        })
+      : await adapter.checkCredential(apiKey);
     const result = check.kind === 'OK' ? 'ok' : `${check.kind.toLowerCase()}:${check.code}`;
     const now = this.deps.clock.now();
     return runAuthorizedMutation(
@@ -622,6 +646,125 @@ export class PaymentGatewayService {
         });
         await this.remember(scope, input.idempotencyKey, requestHash, provider, tx);
         return gateway;
+      },
+    );
+  }
+
+  /**
+   * Round 10 C1: points an `operatorEndpoint` route (the custom gateway) at its bridge
+   * (`docs/protocols/custom-gateway.md` §1, §9).
+   *
+   * The seven-step write path. Charges `payments.gateways.edit`. The base URL is `https://` only
+   * in the contract's shape (no userinfo, query or fragment) AND passes the installation's URL
+   * policy; the allow-list is up to 32 addresses or CIDRs. Refused while the route is ACTIVE —
+   * disable, change, test, enable — and the refusal is decided by the UPDATE's own WHERE, so an
+   * enable committing in between cannot slip past it. Every attempt already open keeps the URL
+   * it froze when it opened. Audited with the host and the list size before and after, never
+   * anything secret (there is none here).
+   */
+  async setEndpoint(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly provider: string;
+      readonly baseUrl: string;
+      readonly ipAllowlist: readonly string[];
+    },
+  ): Promise<PaymentGatewayRecord> {
+    const provider = this.provider(input.provider);
+    const denial = {
+      action: 'payment_gateway.set_endpoint',
+      entityType: 'PaymentGateway',
+      entityId: provider,
+    };
+    await this.authorize(scope, actor, denial);
+    if (!PAYMENT_GATEWAY_DESCRIPTORS[provider].operatorEndpoint) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'This payment route takes no bridge address.',
+      );
+    }
+    const baseUrl = normaliseCustomGatewayBaseUrl(input.baseUrl);
+    if (baseUrl === null) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'The bridge address must be an https:// URL with no query or fragment.',
+        { field: 'baseUrl', reason: 'ENDPOINT_URL_INVALID' },
+      );
+    }
+    const policyRefusal = this.deps.endpointRefusal?.(baseUrl) ?? null;
+    if (policyRefusal !== null) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'This installation does not call that address.',
+        { field: 'baseUrl', reason: 'ENDPOINT_ADDRESS_REFUSED', detail: policyRefusal },
+      );
+    }
+    if (input.ipAllowlist.length > CUSTOM_GATEWAY_IP_ALLOWLIST_MAX) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'Too many addresses in the allow-list.',
+        { field: 'ipAllowlist', reason: 'ALLOWLIST_INVALID' },
+      );
+    }
+    const ipAllowlist: string[] = [];
+    for (const entry of input.ipAllowlist) {
+      const normalised = normaliseAllowlistEntry(entry);
+      if (normalised === null) {
+        throw errors.validation(
+          COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+          'An allow-list entry is not an IP address or a CIDR.',
+          { field: 'ipAllowlist', reason: 'ALLOWLIST_INVALID' },
+        );
+      }
+      if (!ipAllowlist.includes(normalised)) ipAllowlist.push(normalised);
+    }
+    const requestHash = hashRequest({ provider, endpoint: baseUrl, ipAllowlist });
+    const replayed = await this.replay(scope, input.idempotencyKey, requestHash);
+    if (replayed !== null) return replayed;
+
+    const now = this.deps.clock.now();
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PAYMENT_GATEWAY_EDIT_PERMISSION,
+      denial,
+      async (tx) => {
+        // In the transaction (CLAUDE.md): a stop that committed after the request arrived wins.
+        await this.assertScopeActive(scope, tx);
+        const before = await this.require(scope, provider, tx);
+        if (before.status !== 'DISABLED') {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+            'Switch this payment route off before changing its bridge address.',
+            { reason: 'ENDPOINT_CHANGE_WHILE_ACTIVE' },
+          );
+        }
+        const after = await this.deps.repository.setEndpoint(
+          scope,
+          provider,
+          { baseUrl, ipAllowlist },
+          now,
+          tx,
+        );
+        if (after === null) {
+          // Enabled between the read and the write: the conditional UPDATE refused it.
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+            'Switch this payment route off before changing its bridge address.',
+            { reason: 'ENDPOINT_CHANGE_WHILE_ACTIVE' },
+          );
+        }
+        await this.record(scope, actor, tx, {
+          action: 'payment_gateway.set_endpoint',
+          entityId: provider,
+          before: endpointAuditView(before),
+          after: endpointAuditView(after),
+        });
+        await this.remember(scope, input.idempotencyKey, requestHash, provider, tx);
+        return after;
       },
     );
   }
@@ -659,6 +802,20 @@ export class PaymentGatewayService {
       throw errors.validation(
         COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
         'This payment route takes no credential.',
+      );
+    }
+    /*
+     * Round 10 C1: the custom gateway's ONE secret signs every request and verifies every
+     * answer and callback, so it must carry real entropy (protocol §1: 32-512 characters).
+     */
+    if (
+      PAYMENT_GATEWAY_DESCRIPTORS[provider].webhookSignedByCredential &&
+      input.apiKey.length < CUSTOM_GATEWAY_SECRET_MIN_LENGTH
+    ) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        `This payment route's secret must be at least ${String(CUSTOM_GATEWAY_SECRET_MIN_LENGTH)} characters.`,
+        { field: 'apiKey', reason: 'SECRET_TOO_SHORT' },
       );
     }
     const requestHash = hashRequest({ provider, credential: 'API_KEY' });
@@ -962,6 +1119,22 @@ export class PaymentGatewayService {
             COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
             'This payment route needs its verify key before it can be switched on.',
             { reason: 'VERIFY_KEY_MISSING' },
+          );
+        }
+
+        /*
+         * Round 10 C1: and an `operatorEndpoint` route (the custom gateway) cannot be switched ON
+         * without its bridge's base URL: no attempt through it could be created or asked about.
+         */
+        if (
+          input.status === 'ACTIVE' &&
+          PAYMENT_GATEWAY_DESCRIPTORS[provider].operatorEndpoint &&
+          (before.endpointBaseUrl ?? null) === null
+        ) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+            'This payment route needs its bridge address before it can be switched on.',
+            { reason: 'ENDPOINT_MISSING' },
           );
         }
 
@@ -1617,5 +1790,18 @@ function auditView(gateway: PaymentGatewayRecord): Record<string, unknown> {
     providerUnitRateMinor: gateway.providerUnitRateMinor?.toString() ?? null,
     allowServicePurchase: gateway.allowServicePurchase,
     allowWalletTopup: gateway.allowWalletTopup,
+  };
+}
+
+/**
+ * Round 10 C1: a route's bridge for an audit row — the base URL (not a secret: an operator
+ * typed it and the Web Admin shows it) and the allow-list, as stored.
+ */
+function endpointAuditView(gateway: PaymentGatewayRecord): Record<string, unknown> {
+  return {
+    provider: gateway.provider,
+    status: gateway.status,
+    endpointBaseUrl: gateway.endpointBaseUrl ?? null,
+    webhookIpAllowlist: [...(gateway.webhookIpAllowlist ?? [])],
   };
 }

@@ -83,6 +83,20 @@ const RECONCILIATION_EVIDENCE: Readonly<
     failed: ['expired', 'cancelled'],
     failsUnpaidApproval: true,
   },
+  /*
+   * The custom gateway (Round 10 C1, `docs/protocols/custom-gateway.md` §6): `PAID` with `paid`
+   * recorded is the only confirmation — recorded only when the signed inquiry named this
+   * attempt's invoice id and reference and exactly the rial amount asked and captured.
+   * `FAILED` and `EXPIRED` are the bridge's final "no". `UNDERPAID` and `OVERPAID` — money the
+   * bridge holds that is not what was asked — and a `PAID` recorded UNPAID (a mismatch) are not a
+   * payment of this order and may be failed by an OPERATOR, whose audited decision moves no
+   * money: the difference is settled with the customer out of band (`OQ-CG-03`).
+   */
+  CUSTOM: {
+    confirmed: ['PAID'],
+    failed: ['FAILED', 'EXPIRED', 'UNDERPAID', 'OVERPAID'],
+    failsUnpaidApproval: true,
+  },
 };
 
 /**

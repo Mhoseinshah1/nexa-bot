@@ -45,6 +45,8 @@ const COLUMNS = {
   allowServicePurchase: paymentGateways.allowServicePurchase,
   allowWalletTopup: paymentGateways.allowWalletTopup,
   hiddenUntil: paymentGateways.hiddenUntil,
+  endpointBaseUrl: paymentGateways.endpointBaseUrl,
+  webhookIpAllowlist: paymentGateways.webhookIpAllowlist,
   createdAt: paymentGateways.createdAt,
   updatedAt: paymentGateways.updatedAt,
 } as const;
@@ -68,6 +70,8 @@ interface Row {
   readonly allowServicePurchase: boolean;
   readonly allowWalletTopup: boolean;
   readonly hiddenUntil: Date | null;
+  readonly endpointBaseUrl: string | null;
+  readonly webhookIpAllowlist: string[] | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -98,6 +102,8 @@ function toRecord(row: Row): PaymentGatewayRecord {
     allowServicePurchase: row.allowServicePurchase,
     allowWalletTopup: row.allowWalletTopup,
     hiddenUntil: row.hiddenUntil,
+    endpointBaseUrl: row.endpointBaseUrl,
+    webhookIpAllowlist: row.webhookIpAllowlist ?? [],
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -304,6 +310,34 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
           eq(paymentGateways.tenantId, tenantId),
           eq(paymentGateways.provider, provider),
           eq(paymentGateways.status, input.from),
+        ),
+      )
+      .returning(COLUMNS);
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
+  }
+
+  /** Round 10 C1: only while DISABLED — the status is in the WHERE, never checked then written. */
+  async setEndpoint(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    input: { readonly baseUrl: string; readonly ipAllowlist: readonly string[] },
+    now: Date,
+    tx: unknown,
+  ): Promise<PaymentGatewayRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(paymentGateways)
+      .set({
+        endpointBaseUrl: input.baseUrl,
+        webhookIpAllowlist: [...input.ipAllowlist],
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(paymentGateways.tenantId, tenantId),
+          eq(paymentGateways.provider, provider),
+          eq(paymentGateways.status, 'DISABLED'),
         ),
       )
       .returning(COLUMNS);

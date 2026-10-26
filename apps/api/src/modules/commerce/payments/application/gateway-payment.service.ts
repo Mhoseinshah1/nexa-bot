@@ -540,6 +540,19 @@ export interface GatewayPaymentServiceDeps {
    * the reasons as worded.
    */
   readonly rejectReasonText?: (reason: string) => string;
+  /**
+   * Round 10 C1: an `operatorEndpoint` route's callback IP allow-list (the custom gateway,
+   * protocol §9.2) and the one address matcher (`matchesTrustedEntry`, exact or CIDR bit by bit,
+   * bound by the container). An empty or absent list is no address check. Absent dependency:
+   * no check — the signature is the authentication, the list defence in depth.
+   */
+  readonly webhookSources?: {
+    allowlistFor(
+      scope: TenantContext,
+      provider: PaymentGatewayProvider,
+    ): Promise<readonly string[] | null>;
+    matches(address: string, entry: string): boolean;
+  };
 }
 
 /** What one pass did, for the loop's log and for a test. Counts only; no identifiers. */
@@ -596,7 +609,12 @@ export type GatewayWebhookResult =
   /** A signed route's webhook whose signature did not verify: dropped before it was read. */
   | 'IGNORED_UNVERIFIED'
   /** Round 9 C4: the provider's own test delivery (Rialit `webhook.test`): answered, nothing else. */
-  | 'IGNORED_TEST';
+  | 'IGNORED_TEST'
+  /**
+   * Round 10 C1: an `operatorEndpoint` route with a callback IP allow-list, and a sender outside
+   * it: refused before its signature or a single field of its body was read.
+   */
+  | 'IGNORED_SOURCE';
 
 /**
  * What a browser return found (CentralPay), for the result page: the payment is CONFIRMED,
@@ -1457,6 +1475,14 @@ export class GatewayPaymentService {
       presentation,
       // A `numericIdentity` route's customer number, frozen on the attempt (CentralPay).
       providerUserId: invoice.providerUserId,
+      /*
+       * Round 10 C1: an `operatorEndpoint` route (the custom gateway) is sent to the bridge URL
+       * FROZEN on this attempt when it opened, with the attempt's own deadline. Every other
+       * adapter ignores both.
+       */
+      ...(descriptor.operatorEndpoint
+        ? { endpoint: invoice.endpointBaseUrl ?? null, expiresAt: claimed.paymentExpiresAt }
+        : {}),
     });
     const at = this.deps.clock.now();
     /*
@@ -1766,8 +1792,18 @@ export class GatewayPaymentService {
         : PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].verifyKey
           ? await this.deps.credentials.readVerifyKey(scope, invoice.provider)
           : await this.deps.credentials.read(scope, invoice.provider);
+    /*
+     * Round 10 C1: an `inquiresByOrderId` route (the custom gateway) whose create's answer was
+     * lost — no reference, no verified hint — is READ by Nexa's own order id instead of being
+     * left unasked. Never re-sent: this is the inquiry, and only its signed answer naming this
+     * attempt's order id hands the reference over (adopted below). Off for every other route.
+     */
+    const byOrderId =
+      invoiceId === null &&
+      invoice.creationState === 'CREATE_UNKNOWN' &&
+      PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].inquiresByOrderId;
     if (
-      invoiceId === null ||
+      (invoiceId === null && !byOrderId) ||
       adapter === null ||
       apiKey === null ||
       (postDeadline &&
@@ -1843,12 +1879,16 @@ export class GatewayPaymentService {
      * Nexa sent (an approval for another figure is a MISMATCH, never a settlement), and the
      * payment a verified webhook last named (NOWPayments).
      */
-    const outcome = await adapter.inquire(apiKey, invoiceId, {
+    const outcome = await adapter.inquire(apiKey, invoiceId ?? invoice.providerOrderId, {
       providerOrderId: invoice.providerOrderId,
       sentAmount: invoice.sentAmount,
       hintedPaymentId: invoice.hintedPaymentId,
       // CentralPay: the customer's number as SENT — a verify naming another never approves.
       providerUserId: invoice.providerUserId,
+      // Round 10 C1: the bridge THIS attempt was created against, whatever the route says now.
+      ...(PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].operatorEndpoint
+        ? { endpoint: invoice.endpointBaseUrl ?? null, byOrderId }
+        : {}),
     });
     const at = this.deps.clock.now();
     /*
@@ -1969,7 +2009,14 @@ export class GatewayPaymentService {
      * An answer about ANOTHER invoice or another order is not an answer about this
      * attempt, whatever it says. It is recorded and never acted on.
      */
-    if (outcome.invoiceId !== invoiceId || outcome.orderId !== invoice.providerOrderId) {
+    /*
+     * Asked by order id (Round 10 C1), the answer's own reference is not known to Nexa: what
+     * identifies it is this attempt's order id, which must match exactly like every other.
+     */
+    if (
+      (byOrderId ? false : outcome.invoiceId !== invoiceId) ||
+      outcome.orderId !== invoice.providerOrderId
+    ) {
       const kept = await this.deps.uow.run(scope, (tx) =>
         this.deps.invoices.recordInquiry(
           scope,
@@ -2058,7 +2105,9 @@ export class GatewayPaymentService {
           errorCode: null,
           // A webhook's hinted id for a lost create, now VERIFIED by the provider's own
           // order id: adopted. Nothing else is ever adopted.
-          adoptInvoiceId: invoice.providerInvoiceId === null ? invoiceId : null,
+          // Round 10 C1: asked by order id, the reference the signed answer named is adopted.
+          adoptInvoiceId:
+            invoice.providerInvoiceId === null ? (invoiceId ?? outcome.invoiceId) : null,
           /*
            * A terminal verdict keeps the next inquiry scheduled until its outcome is
            * recorded — `recordOutcome` is what clears it. A crash, or a failed transaction,
@@ -3631,17 +3680,34 @@ export class GatewayPaymentService {
      * absent verifies nothing: a route with a stored secret then drops the webhook.
      */
     rawBody?: Uint8Array | null,
+    /**
+     * Round 10 C1: the sender's address as the trusted reverse proxy reported it (Fastify's
+     * `request.ip`, never a client-supplied header), for an allow-listed route. Absent: unknown.
+     */
+    sourceIp?: string,
   ): Promise<GatewayWebhookResult | 'MALFORMED' | 'NO_ADAPTER'> {
     const adapter = this.deps.adapters(provider);
     if (adapter === null) return 'NO_ADAPTER';
+    const descriptor = PAYMENT_GATEWAY_DESCRIPTORS[provider];
     // A browser-return route documents no webhook (CentralPay): nothing posted is read.
-    if (PAYMENT_GATEWAY_DESCRIPTORS[provider].browserReturn) return 'NO_ADAPTER';
+    if (descriptor.browserReturn) return 'NO_ADAPTER';
+    /*
+     * Round 10 C1: an allow-listed route's sender is checked FIRST, before its signature or any
+     * field (protocol §9.2). Defence in depth: the signature below is still the authentication.
+     */
+    if (
+      descriptor.operatorEndpoint &&
+      !(await this.webhookSourceAllowed(tenantId, provider, sourceIp))
+    ) {
+      return 'IGNORED_SOURCE';
+    }
     /*
      * A route whose provider SIGNS its webhooks (NOWPayments): verified against the stored
      * secret, in constant time, BEFORE a single field of the body is read. Unverified is
-     * dropped. Verified is still only a hint — it never reaches the settlement path.
+     * dropped. Verified is still only a hint — it never reaches the settlement path. The custom
+     * gateway signs with its ONE credential instead (`webhookSignedByCredential`).
      */
-    if (PAYMENT_GATEWAY_DESCRIPTORS[provider].webhookSecret) {
+    if (descriptor.webhookSecret || descriptor.webhookSignedByCredential) {
       const verified = await this.verifyWebhook(
         tenantId,
         provider,
@@ -3664,6 +3730,41 @@ export class GatewayPaymentService {
     return this.applyWebhookHint(tenantId, provider, hint, adapter);
   }
 
+  /**
+   * Round 10 C1: whether a callback's sender is on the route's allow-list. No list (or an empty
+   * one), or no matcher wired: allowed. A list and no known address: refused, fail closed. A
+   * refusal is recorded on the unverified-webhook condition with its own reason, never the address.
+   */
+  private async webhookSourceAllowed(
+    tenantId: string,
+    provider: PaymentGatewayProvider,
+    sourceIp: string | undefined,
+  ): Promise<boolean> {
+    const sources = this.deps.webhookSources;
+    if (sources === undefined) return true;
+    const scope: TenantContext = {
+      tenantId: tenantId as TenantContext['tenantId'],
+      botInstanceId: null,
+    };
+    // An unknown or stopped tenant is answered like every other ignored webhook, later.
+    if (!(await this.deps.scopeActivity.scopeIsActive(scope))) return true;
+    const list = await sources.allowlistFor(scope, provider);
+    if (list === null || list.length === 0) return true;
+    if (sourceIp !== undefined && list.some((entry) => sources.matches(sourceIp, entry))) {
+      return true;
+    }
+    const codes = webhookConditionCodesOf(provider);
+    this.deps.logger.warn({ provider }, 'gateway webhook refused: sender not on the allow-list');
+    await this.deps.opsLog.record(scope, {
+      code: codes.rejected,
+      severity: codes.severity,
+      message: codes.rejectedMessage,
+      dedupeKey: `${codes.rejected}:${provider}`,
+      context: { provider, reason: 'SOURCE_NOT_ALLOWED' },
+    });
+    return false;
+  }
+
   private async verifyWebhook(
     tenantId: string,
     provider: PaymentGatewayProvider,
@@ -3682,7 +3783,10 @@ export class GatewayPaymentService {
     // True only when the read FAILED (a missing key, a damaged ciphertext): that is not "no secret".
     let readFailed = false;
     try {
-      secret = await this.deps.credentials.readWebhookSecret(scope, provider);
+      // Round 10 C1: the custom gateway's ONE credential signs its callbacks too.
+      secret = PAYMENT_GATEWAY_DESCRIPTORS[provider].webhookSignedByCredential
+        ? await this.deps.credentials.read(scope, provider)
+        : await this.deps.credentials.readWebhookSecret(scope, provider);
     } catch (error: unknown) {
       readFailed = true;
       // A secret that will not decrypt verifies nothing. Never logged beyond its class.

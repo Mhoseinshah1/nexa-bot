@@ -14,6 +14,7 @@ import {
   paymentGatewayConfigSchema,
   routePattern,
   setPaymentGatewayCredentialRequestSchema,
+  setPaymentGatewayEndpointRequestSchema,
   setPaymentGatewayStatusRequestSchema,
   updatePaymentGatewayRequestSchema,
   type PaymentGatewayListResponse,
@@ -248,6 +249,28 @@ export class PaymentGatewaysController {
   }
 
   /**
+   * Round 10 C1: points an `operatorEndpoint` route (the custom gateway) at its bridge — the
+   * base URL and the callback IP allow-list. Refused while the route is ACTIVE. The answer is the
+   * route view, which shows the URL and list (neither is a secret).
+   */
+  @Post(routePattern(PAYMENT_GATEWAY_ROUTES.endpoint, 'provider'))
+  async setEndpoint(
+    @Req() request: FastifyRequest,
+    @Param('provider') provider: string,
+    @Body() body: unknown,
+  ): Promise<PaymentGatewayResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const input = setPaymentGatewayEndpointRequestSchema.parse(body);
+    const gateway = await this.container.paymentGateways.setEndpoint(scope, actor, {
+      idempotencyKey: input.idempotencyKey,
+      provider,
+      baseUrl: input.baseUrl,
+      ipAllowlist: input.ipAllowlist,
+    });
+    return this.respond(scope, gateway);
+  }
+
+  /**
    * The operator's credential check: one read-only provider call with the stored key,
    * recorded as the route's last check. The answer is the route view.
    */
@@ -359,6 +382,13 @@ function toView(
     callbackUrl: facts.callbackUrl,
     botUsername: facts.botUsername,
     hiddenUntil: gateway.hiddenUntil?.toISOString() ?? null,
+    // Round 10 C1: the bridge of an `operatorEndpoint` route; null for every other route.
+    endpoint: PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].operatorEndpoint
+      ? {
+          baseUrl: gateway.endpointBaseUrl ?? null,
+          ipAllowlist: [...(gateway.webhookIpAllowlist ?? [])],
+        }
+      : null,
     conversion: {
       rateRequired: takesFixedRate(PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].conversion),
       rateMinor: gateway.providerUnitRateMinor?.toString() ?? null,
