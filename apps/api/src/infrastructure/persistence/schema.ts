@@ -3688,10 +3688,7 @@ export const customers = pgTable(
   },
   (table) => [
     ...recordSourceChecks('customers', table),
-    check(
-      'customers_personal_discount_check',
-      sql`personal_discount_percent BETWEEN 0 AND 100`,
-    ),
+    check('customers_personal_discount_check', sql`personal_discount_percent BETWEEN 0 AND 100`),
     /** The identity. Per tenant, so the same human may be a customer of two. */
     uniqueIndex('customers_tenant_telegram_key').on(table.tenantId, table.telegramUserId),
     /** The list's deterministic keyset: created_at then id, never a mutable column. */

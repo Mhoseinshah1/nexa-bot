@@ -320,6 +320,10 @@ describe('the feature flag registry', () => {
       // WP-A9. On by default; the pending payment/order reminder lane it switches on is
       // reachable, and every reminder is re-checked against the attempt at send time.
       'payment_pending_reminders',
+      // R10 D3. Off by default; with it on the pricing engine compares each purchase and
+      // renewal with the customer's personal percent (larger single discount wins), and a
+      // stored percent changes no price while it is off.
+      'personal_discount',
       // Customer UX completion §I. Off by default; the claim path it switches on is
       // reachable, and it refuses to turn on until the two shares total 100.
       'referral_signup_gift',
