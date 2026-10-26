@@ -398,6 +398,7 @@ const service = (overrides: Record<string, unknown> = {}) => ({
   actions: [],
   qr: true,
   canChangeLocation: true,
+  autoRenew: { offered: false, enabled: false, price: null, leadHours: 24 },
   ...overrides,
 });
 
@@ -454,6 +455,54 @@ describe('the QR and link sheet', () => {
     render(<ServiceDetail serviceId="s1" />);
     await screen.findByText('پلن پایه');
     expect(screen.queryByText(fa('miniapp.service_show_qr'))).toBeNull();
+  });
+});
+
+/**
+ * Round 10, D1: «تمدید خودکار». ON asks first and names the server's quote; only the confirm
+ * posts; OFF acts at once; a refusal is the server's, in Persian; nothing is drawn for a
+ * service that is neither offered it nor opted in.
+ */
+describe('automatic renewal', () => {
+  const offered = { offered: true, enabled: false, price: money('120000'), leadHours: 24 };
+  const confirmText = /^تأیید: تمدید خودکار با مبلغ/u;
+
+  it('is not drawn for a service neither offered it nor opted in', async () => {
+    routes['GET /services/s1'] = () => ({ body: service() });
+    render(<ServiceDetail serviceId="s1" />);
+    await screen.findByText('پلن پایه');
+    expect(screen.queryByText(fa('miniapp.auto_renew_title'))).toBeNull();
+  });
+
+  it('asks before switching on, and only the confirmation posts', async () => {
+    routes['GET /services/s1'] = () => ({ body: service({ autoRenew: offered }) });
+    routes['POST /services/s1/auto-renew'] = () => ({
+      body: { offered: false, enabled: true, price: money('120000'), leadHours: 24 },
+    });
+    render(<ServiceDetail serviceId="s1" />);
+    fireEvent.click(await screen.findByText(fa('miniapp.auto_renew_enable')));
+    expect(calls.some((call) => call.key === 'POST /services/s1/auto-renew')).toBe(false);
+    fireEvent.click(await screen.findByText(confirmText));
+    expect(await screen.findByText(fa('miniapp.auto_renew_disable'))).toBeTruthy();
+    const post = calls.find((call) => call.key === 'POST /services/s1/auto-renew');
+    expect(post?.body).toEqual({ enabled: true });
+    expect(post?.headers['idempotency-key']).toMatch(/^[0-9a-f-]{36}$/u);
+  });
+
+  it('switches off at once, and answers a refusal in Persian', async () => {
+    routes['GET /services/s1'] = () => ({
+      body: service({
+        autoRenew: { offered: false, enabled: true, price: money('120000'), leadHours: 24 },
+      }),
+    });
+    routes['POST /services/s1/auto-renew'] = () =>
+      refusal(409, 'commerce.auto_renew_not_available');
+    render(<ServiceDetail serviceId="s1" />);
+    fireEvent.click(await screen.findByText(fa('miniapp.auto_renew_disable')));
+    expect(await screen.findByText(fa('miniapp.auto_renew_unavailable'))).toBeTruthy();
+    expect(calls.find((call) => call.key === 'POST /services/s1/auto-renew')?.body).toEqual({
+      enabled: false,
+    });
   });
 });
 
