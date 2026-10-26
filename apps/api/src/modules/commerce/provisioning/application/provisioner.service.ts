@@ -904,7 +904,7 @@ export class ProvisionerService {
           operation,
           service,
           'SUSPEND',
-          await suspendCall(adapter, target, http, ref),
+          await suspendCall(adapter, target, http, ref, { operationId: operation.id }),
         );
       }
       case 'RESUME': {
@@ -917,7 +917,7 @@ export class ProvisionerService {
           operation,
           service,
           'RESUME',
-          await resumeCall(adapter, target, http, ref),
+          await resumeCall(adapter, target, http, ref, { operationId: operation.id }),
         );
       }
       case 'TERMINATE': {
@@ -929,7 +929,7 @@ export class ProvisionerService {
           scope,
           operation,
           service,
-          await terminateCall(adapter, target, http, ref),
+          await terminateCall(adapter, target, http, ref, { operationId: operation.id }),
         );
       }
       /*
@@ -946,7 +946,9 @@ export class ProvisionerService {
           scope,
           operation,
           service,
-          await rotateCall(adapter, target, http, ref, service.subscriptionUrl),
+          await rotateCall(adapter, target, http, ref, service.subscriptionUrl, {
+            operationId: operation.id,
+          }),
         );
       }
       /*
@@ -975,7 +977,9 @@ export class ProvisionerService {
           operation,
           service,
           operation.target,
-          await allowanceCall(adapter, target, http, ref, operation.target),
+          await allowanceCall(adapter, target, http, ref, operation.target, {
+            operationId: operation.id,
+          }),
         );
       }
       case 'ADD_TRAFFIC': {
@@ -988,7 +992,9 @@ export class ProvisionerService {
           operation,
           service,
           operation.target,
-          await allowanceCall(adapter, target, http, ref, operation.target),
+          await allowanceCall(adapter, target, http, ref, operation.target, {
+            operationId: operation.id,
+          }),
         );
       }
       case 'ADD_TIME': {
@@ -1001,7 +1007,9 @@ export class ProvisionerService {
           operation,
           service,
           operation.target,
-          await allowanceCall(adapter, target, http, ref, operation.target),
+          await allowanceCall(adapter, target, http, ref, operation.target, {
+            operationId: operation.id,
+          }),
         );
       }
       /*
@@ -1118,6 +1126,8 @@ export class ProvisionerService {
       durationDays: bought.durationDays,
       expiresAt: expiryFor(now, bought.durationDays, bought.durationHours),
       deviceLimit: bought.deviceLimit,
+      // The same id on every attempt of this create (R10 C2): the bridge's idempotency key.
+      operationId: operation.id,
     });
     const finishedAt = this.deps.clock.now();
 
