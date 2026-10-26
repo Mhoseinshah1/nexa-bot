@@ -7,6 +7,7 @@ import {
   gatewayProviderRequests,
   backupArchivePasswords,
   botInstances,
+  giftCardBatches,
   legacyNxpkgImports,
   panelCredentials,
   paymentGatewayCredentials,
@@ -775,6 +776,73 @@ const backupArchivePassword: SecretColumn = {
   },
 };
 
+/**
+ * R10 D4: a gift card batch's sealed export — the batch's plaintext codes, kept for 24 hours
+ * so the operator can download them. NULLABLE and short-lived: the worker's sweep sets both
+ * columns to NULL once the window passes (a CHECK keeps them NULL together), so a row without
+ * it is never counted as a stored secret. The entity in the AEAD context is the batch row's id.
+ */
+const giftCardBatchExport: SecretColumn = {
+  purpose: 'gift_card.batch_export',
+  table: 'gift_card_batches',
+  ciphertextColumn: 'export_ciphertext',
+  keyIdColumn: 'export_key_id',
+
+  async all(db) {
+    const rows = await db
+      .select({ ciphertext: giftCardBatches.exportCiphertext, keyId: giftCardBatches.exportKeyId })
+      .from(giftCardBatches)
+      .where(isNotNull(giftCardBatches.exportCiphertext));
+    return rows.flatMap((row) =>
+      typeof row.ciphertext === 'string' && typeof row.keyId === 'string'
+        ? [{ ciphertext: row.ciphertext, keyId: row.keyId }]
+        : [],
+    );
+  },
+
+  async page(db, cursor, limit) {
+    const rows = await db
+      .select({ id: giftCardBatches.id })
+      .from(giftCardBatches)
+      .where(
+        cursor === null
+          ? isNotNull(giftCardBatches.exportCiphertext)
+          : and(isNotNull(giftCardBatches.exportCiphertext), gt(giftCardBatches.id, cursor)),
+      )
+      .orderBy(asc(giftCardBatches.id))
+      .limit(limit);
+    return rows.map((row) => row.id);
+  },
+
+  async lock(tx, id) {
+    const [row] = await tx
+      .select({
+        id: giftCardBatches.id,
+        tenantId: giftCardBatches.tenantId,
+        ciphertext: giftCardBatches.exportCiphertext,
+        keyId: giftCardBatches.exportKeyId,
+      })
+      .from(giftCardBatches)
+      .where(eq(giftCardBatches.id, id))
+      .for('update')
+      .limit(1);
+    if (row === undefined) return null;
+    if (typeof row.ciphertext !== 'string' || typeof row.keyId !== 'string') return null;
+    return { id: row.id, tenantId: row.tenantId, ciphertext: row.ciphertext, keyId: row.keyId };
+  },
+
+  async replace(tx, id, expectedCiphertext, next) {
+    const updated = await tx
+      .update(giftCardBatches)
+      .set({ exportCiphertext: next.ciphertext, exportKeyId: next.keyId })
+      .where(
+        and(eq(giftCardBatches.id, id), eq(giftCardBatches.exportCiphertext, expectedCiphertext)),
+      )
+      .returning({ id: giftCardBatches.id });
+    return updated.length > 0;
+  },
+};
+
 export const SECRET_COLUMNS: readonly SecretColumn[] = [
   botInstanceToken,
   panelUsername,
@@ -788,4 +856,5 @@ export const SECRET_COLUMNS: readonly SecretColumn[] = [
   supportAiProviderApiKey,
   legacyNxpkgPackageKey,
   backupArchivePassword,
+  giftCardBatchExport,
 ];

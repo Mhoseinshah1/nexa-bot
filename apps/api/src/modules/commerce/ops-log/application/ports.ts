@@ -197,8 +197,39 @@ export interface MassCreditFact {
   readonly total: Money;
 }
 
+/** R10 D4: what a gift card redemption's log names besides the money: the batch, the code, the surface. */
+export interface GiftCardRedemptionFact {
+  readonly batchLabel: string;
+  readonly last4: string;
+  /** `audit_logs.source_surface` of the redemption's audit row; null when there is none. */
+  readonly surface: string | null;
+}
+
+/** R10 D4: a gift card batch, as its creation log prints it. */
+export interface GiftCardBatchFact {
+  readonly id: string;
+  readonly label: string;
+  readonly amount: Money;
+  readonly codeCount: number;
+  readonly expiresAt: Date;
+  readonly reason: string;
+  readonly createdByAdminId: string | null;
+}
+
 export interface OpsLogFacts {
   customer(scope: TenantContext, id: string, tx: TransactionScope): Promise<CustomerFact | null>;
+  /** R10 D4: the redeemed code's batch label, last four symbols and surface; null for none. */
+  giftCardRedemption(
+    scope: TenantContext,
+    codeId: string,
+    tx: TransactionScope,
+  ): Promise<GiftCardRedemptionFact | null>;
+  /** R10 D4: one gift card batch, or null. */
+  giftCardBatch(
+    scope: TenantContext,
+    batchId: string,
+    tx: TransactionScope,
+  ): Promise<GiftCardBatchFact | null>;
   /** R8 A4: a WALLET_CREDIT bulk operation's summary; null for any other kind or none credited. */
   massCredit(
     scope: TenantContext,

@@ -1,6 +1,8 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import {
+  GIFT_CARD_CODE_INPUT_MAX_LENGTH,
   MINIAPP_ROUTES,
+  miniAppGiftCardResponseSchema,
   miniAppPaymentListSchema,
   miniAppTopupQuoteResponseSchema,
   miniAppTopupResponseSchema,
@@ -46,11 +48,91 @@ export function Wallet() {
               <strong className="figure">{money(wallet.balance)}</strong>
             </Card>
             <TopUp wallet={wallet} />
+            {wallet.giftCards && <GiftCard onRedeemed={reload} />}
             <History />
           </>
         )}
       </Loading>
     </main>
+  );
+}
+
+/**
+ * R10 D4: «کارت هدیه» — a code typed here is redeemed by the bot's own service. Drawn only while
+ * the feature is on (`wallet.giftCards`). Three answers: the credit and the balance after it,
+ * one sentence for every refusal (the server says nothing about which codes exist), and «too
+ * many tries». The code is never kept: the field is cleared once an answer arrives.
+ */
+function GiftCard({ onRedeemed }: { onRedeemed: () => void }) {
+  const { api } = useApp();
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (code.trim() === '' || busy) return;
+    setBusy(true);
+    setDone(null);
+    setError(null);
+    void (async () => {
+      try {
+        const answer = await api.post(
+          MINIAPP_ROUTES.walletGiftCard,
+          {},
+          miniAppGiftCardResponseSchema,
+          { code },
+        );
+        setCode('');
+        if (answer.outcome === 'REDEEMED') {
+          setDone(
+            t('miniapp.wallet_gift_redeemed', {
+              amount: money(answer.amount),
+              balance: money(answer.balance),
+            }),
+          );
+          onRedeemed();
+        } else if (answer.outcome === 'RATE_LIMITED') {
+          setError(t('miniapp.wallet_gift_rate_limited'));
+        } else {
+          setError(t('miniapp.wallet_gift_rejected'));
+        }
+      } catch (failure) {
+        setError(errorText(failure));
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
+
+  return (
+    <Card>
+      <h2>{t('miniapp.wallet_gift_title')}</h2>
+      <form className="inline-form" onSubmit={submit}>
+        <label className="field">
+          <span>{t('miniapp.wallet_gift_label')}</span>
+          <input
+            dir="ltr"
+            value={code}
+            maxLength={GIFT_CARD_CODE_INPUT_MAX_LENGTH}
+            onChange={(event) => setCode(event.target.value)}
+            autoComplete="off"
+            autoCapitalize="characters"
+            spellCheck={false}
+          />
+        </label>
+        <Button type="submit" primary disabled={busy || code.trim() === ''}>
+          {t('miniapp.wallet_gift_submit')}
+        </Button>
+      </form>
+      {done !== null && (
+        <p className="ok" role="status">
+          {done}
+        </p>
+      )}
+      {error !== null && <p className="error">{error}</p>}
+    </Card>
   );
 }
 

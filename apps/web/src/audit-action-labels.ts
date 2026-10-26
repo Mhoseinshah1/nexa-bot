@@ -68,6 +68,8 @@ export const AUDIT_SUBJECT_LABELS: Readonly<Record<string, WebKey>> = {
   business_connection: 'web.audit_subj_business_connection',
   bot_menu: 'web.audit_subj_bot_menu',
   audit: 'web.audit_subj_audit',
+  // R10 D4: gift cards (`gift_card.batch.create`, `gift_card.redeem`, …).
+  gift_card: 'web.audit_subj_gift_card',
 };
 
 export const AUDIT_VERB_LABELS: Readonly<Record<string, WebKey>> = {
@@ -95,6 +97,7 @@ export const AUDIT_VERB_LABELS: Readonly<Record<string, WebKey>> = {
   created: 'web.audit_verb_created',
   delete: 'web.audit_verb_delete',
   delete_with_refund: 'web.audit_verb_delete_with_refund',
+  disable: 'web.audit_verb_disable',
   disconnect: 'web.audit_verb_disconnect',
   discard: 'web.audit_verb_discard',
   download: 'web.audit_verb_download',
@@ -118,6 +121,7 @@ export const AUDIT_VERB_LABELS: Readonly<Record<string, WebKey>> = {
   priority: 'web.audit_verb_priority',
   probe: 'web.audit_verb_probe',
   propose: 'web.audit_verb_propose',
+  redeem: 'web.audit_verb_redeem',
   provision: 'web.audit_verb_provision',
   publish: 'web.audit_verb_publish',
   read: 'web.audit_verb_read',

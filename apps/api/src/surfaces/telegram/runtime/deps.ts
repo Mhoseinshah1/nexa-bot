@@ -36,6 +36,7 @@ import type { ProductService } from '../../../modules/commerce/catalog/applicati
 import type { ProductCategoryService } from '../../../modules/commerce/catalog/application/product-category.service.js';
 import type { CommercialActionService } from '../../../modules/commerce/commercial/application/commercial-action.service.js';
 import type { CheckoutService } from '../../../modules/commerce/checkout/application/checkout.service.js';
+import type { GiftCardRedemptionService } from '../../../modules/commerce/gift-cards/application/gift-card-redemption.service.js';
 import type { LocationChangeService } from '../../../modules/commerce/locations/application/location-change.service.js';
 import type { TrialService } from '../../../modules/commerce/trials/application/trial.service.js';
 import type { OrderService } from '../../../modules/commerce/orders/application/order.service.js';
@@ -538,6 +539,8 @@ export interface BotRuntimeDeps {
   readonly panelLocations?: PanelLocationLabelSource;
   readonly resellers?: Pick<ResellerService, 'standing'>;
   readonly referralGifts?: ReferralGiftSource;
+  /** R10 D4: gift card redemption. Absent, the wallet draws no gift-card button. */
+  readonly giftCards?: Pick<GiftCardRedemptionService, 'isEnabled' | 'redeem'>;
   readonly media?: TenantMediaSource;
   /** WP-A7: the customer's support tickets. Absent, the desk is not offered. */
   readonly tickets?: TicketDeskPort;

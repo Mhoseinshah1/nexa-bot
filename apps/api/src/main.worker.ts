@@ -150,6 +150,9 @@ async function main(): Promise<void> {
           true,
           () => container.telegramMessageRetentionLoop.isFresh(now),
         ],
+        // R10 D4: the gift-card sweep. No flag: an expired export must be purged whether or not
+        // the feature is on now, because the plaintext codes inside it outlive the switch.
+        ['gift-card-sweep', true, () => container.giftCardSweepLoop.isFresh(now)],
         // Round P: the command-menu sync lane. No flag: a menu nobody registers is a bot
         // whose customers type what they should be able to tap, and silence is what a
         // stalled lane looks like. The menu is a convenience, so it is watched, not trusted.
@@ -278,6 +281,8 @@ async function main(): Promise<void> {
   // And the retention of the Telegram messages edited in place (docs/telegram-retention.md):
   // presentation rows nothing live names any more, never business truth.
   container.telegramMessageRetentionLoop.start();
+  // R10 D4: and the gift-card sweep — expired exports purged, old refused attempts deleted.
+  container.giftCardSweepLoop.start();
   // Round P: and the command-menu sync lane — per bot, by digest, with back-off.
   container.botCommandSyncLoop.start();
   // And the customer notification lane. `docs/phase4h-audit.md` §1 measured what it

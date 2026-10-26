@@ -8,6 +8,7 @@ import {
   errors,
   fromWire,
   miniAppCursorQuerySchema,
+  miniAppGiftCardRequestSchema,
   miniAppTicketCreateRequestSchema,
   miniAppTicketReplyRequestSchema,
   miniAppTopupQuoteRequestSchema,
@@ -16,6 +17,7 @@ import {
   money,
   ticketCodeOf,
   type ClientAppPlatform,
+  type MiniAppGiftCardResponse,
   type MiniAppGuidePlatformResponse,
   type MiniAppReferralResponse,
   type MiniAppTicketDetail,
@@ -64,17 +66,43 @@ export class MiniAppAccountController {
   async wallet(@Req() request: FastifyRequest): Promise<MiniAppWalletResponse> {
     const call = await miniAppCall(this.container, request, { gated: true });
     const { scope, customer } = call.context;
-    const [balance, presets, limits] = await Promise.all([
+    const [balance, presets, limits, giftCards] = await Promise.all([
       this.container.wallet.balanceForCustomer(scope, call.actor, customer.id),
       this.container.payments.topupPresets(scope),
       this.container.miniApp.topup.limits(scope),
+      this.container.giftCardRedemption.isEnabled(scope),
     ]);
     return {
       balance: wire(money(balance.amountMinor, balance.currency)),
       presets: presets.map(wire),
       minimum: limits.minimum === null ? null : wire(limits.minimum),
       maximum: limits.maximum === null ? null : wire(limits.maximum),
+      giftCards,
     };
+  }
+
+  /**
+   * R10 D4: a gift card typed into the wallet screen — the bot's own redemption service, so
+   * the two surfaces cannot disagree. Behind the mini app's per-customer request budget as a
+   * courtesy; the failed-attempt limit that matters is the service's own, counted in the
+   * database. One answer for every refusal, so the endpoint is no oracle for which codes exist.
+   */
+  @Post(MINIAPP_ROUTES.walletGiftCard)
+  async giftCard(
+    @Req() request: FastifyRequest,
+    @Body() body: unknown,
+  ): Promise<MiniAppGiftCardResponse> {
+    const call = await miniAppCall(this.container, request, { gated: true });
+    const input = parseWith(miniAppGiftCardRequestSchema, body);
+    const result = await this.container.giftCardRedemption.redeem(call.context.scope, call.actor, {
+      customerId: call.context.customer.id,
+      code: input.code,
+      idempotencyKey: miniAppKey(request, call, 'gift-card'),
+    });
+    if (result.outcome === 'REDEEMED') {
+      return { outcome: 'REDEEMED', amount: wire(result.amount), balance: wire(result.balance) };
+    }
+    return { outcome: result.outcome };
   }
 
   /** The customer's own ledger, newest first. Read-only: there is no write here. */

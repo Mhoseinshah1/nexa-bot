@@ -122,6 +122,7 @@ const ERROR_TEXT: Readonly<Record<string, MiniAppKey>> = {
   'miniapp.unavailable': 'miniapp.unavailable',
   'miniapp.receipt_upload_failed': 'miniapp.card_receipt_upload_failed',
   'commerce.discount_code_rejected': 'miniapp.checkout_discount_refused',
+  'commerce.gift_cards_disabled': 'miniapp.wallet_gift_unavailable',
 };
 
 export function errorText(error: unknown): string {

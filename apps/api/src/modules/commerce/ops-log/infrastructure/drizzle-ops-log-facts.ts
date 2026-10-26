@@ -12,6 +12,8 @@ import type {
   AdminFact,
   BalanceAround,
   CustomerFact,
+  GiftCardBatchFact,
+  GiftCardRedemptionFact,
   LedgerEntryFact,
   OperationFact,
   OpsLogFacts,
@@ -87,6 +89,58 @@ export class DrizzleOpsLogFacts implements OpsLogFacts {
       source: String(row['source']),
       status: String(row['status']),
       blockedReason: str(row['blocked_reason']),
+    };
+  }
+
+  async giftCardRedemption(
+    scope: TenantContext,
+    codeId: string,
+    tx: TransactionScope,
+  ): Promise<GiftCardRedemptionFact | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.rows(
+      tx,
+      sql`SELECT b.label, c.last4,
+                 (SELECT a.source_surface FROM audit_logs a
+                   WHERE a.tenant_id = ${tenantId} AND a.result = 'SUCCESS'
+                     AND a.action = 'gift_card.redeem' AND a.entity_type = 'GiftCardCode'
+                     AND a.entity_id = ${codeId}
+                   ORDER BY a.occurred_at, a.id LIMIT 1) AS surface
+            FROM gift_card_codes c
+            JOIN gift_card_batches b ON b.tenant_id = c.tenant_id AND b.id = c.batch_id
+           WHERE c.tenant_id = ${tenantId} AND c.id = ${codeId}`,
+    );
+    if (row === undefined) return null;
+    return {
+      batchLabel: String(row['label']),
+      last4: String(row['last4']),
+      surface: str(row['surface']),
+    };
+  }
+
+  async giftCardBatch(
+    scope: TenantContext,
+    batchId: string,
+    tx: TransactionScope,
+  ): Promise<GiftCardBatchFact | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.rows(
+      tx,
+      sql`SELECT id, label, amount_minor, currency, code_count, expires_at, reason,
+                 created_by_admin_id
+            FROM gift_card_batches WHERE tenant_id = ${tenantId} AND id = ${batchId}`,
+    );
+    if (row === undefined) return null;
+    const expiresAt = date(row['expires_at']);
+    if (expiresAt === null) return null;
+    return {
+      id: String(row['id']),
+      label: String(row['label']),
+      amount: money(big(row['amount_minor']), String(row['currency']) as CurrencyCode),
+      codeCount: Number(row['code_count']),
+      expiresAt,
+      reason: String(row['reason']),
+      createdByAdminId: str(row['created_by_admin_id']),
     };
   }
 

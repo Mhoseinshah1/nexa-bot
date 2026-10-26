@@ -467,6 +467,17 @@ const BARE_JWT = /\beyJ[A-Za-z0-9_-]{8,4096}\.[A-Za-z0-9_-]{8,8192}\.[A-Za-z0-9_
  */
 const URL_IN_TEXT = /\b([a-z][a-z0-9+.-]{1,16}):\/\/([^\s"'<>/?#\\]{0,512})([^\s"'<>]{0,4096})/gi;
 
+/**
+ * R10 D4: a gift card code, typed by a customer or printed in an export — a bearer
+ * instrument worth money, with no label around it. Twenty symbols of the public-code
+ * alphabet, bare or in five groups of four joined by a dash or a space, in either case (a
+ * customer types it lower-case). The alphabet has no 0, 1, I, L, O or U, so a hex digest, a
+ * uuid or an ordinary word does not match, and `\b` on both sides keeps a longer token
+ * whole. A false positive costs a log line; a false negative is a spendable code in a log.
+ */
+const GIFT_CARD_CODE_TEXT =
+  /\b(?:[2-9A-HJKMNP-TV-Z]{4}(?:[- ][2-9A-HJKMNP-TV-Z]{4}){4}|[2-9A-HJKMNP-TV-Z]{20})\b/gi;
+
 /** A path segment that is a word, not a value: lowercase letters joined by `-`/`_`, or `v1`. */
 const SAFE_URL_SEGMENT = /^(?:[a-z]{1,32}(?:[-_][a-z]{1,32}){0,4}|v[0-9]{1,2})$/;
 
@@ -753,6 +764,7 @@ function applyTextRules(text: string): string {
     text
       .replace(TELEGRAM_BOT_TOKEN, REDACTED)
       .replace(BARE_JWT, REDACTED)
+      .replace(GIFT_CARD_CODE_TEXT, REDACTED)
       .replace(
         SUBSCRIPTION_URL_VALUE,
         (_match, open: string, name: string, close: string, separator: string, quote: string) =>

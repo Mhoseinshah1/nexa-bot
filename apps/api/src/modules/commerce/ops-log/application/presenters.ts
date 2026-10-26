@@ -1,6 +1,7 @@
 import {
   CURRENCY_EXPONENT,
   formatPersianInteger,
+  money,
   paymentTrackingCode,
   toPersianDigits,
   type Money,
@@ -14,6 +15,8 @@ import type {
   AdminFact,
   BalanceAround,
   CustomerFact,
+  GiftCardBatchFact,
+  GiftCardRedemptionFact,
   LedgerEntryFact,
   MassCreditFact,
   OperationFact,
@@ -290,6 +293,70 @@ export function signupGift(input: {
       ...(referee.customer === null ? [] : [userButton(referee.customer.id)]),
       ...(referrer.customer === null ? [] : [userButton(referrer.customer.id)]),
     ],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// R10 D4 — gift cards
+// ---------------------------------------------------------------------------
+
+/** A customer redeemed a gift card: the money from the ledger, the batch and the code's last four. */
+export function giftCardRedeemed(input: {
+  readonly entry: LedgerEntryFact;
+  readonly balance: BalanceAround;
+  readonly customer: CustomerFact | null;
+  readonly redemption: GiftCardRedemptionFact | null;
+  readonly at: Date;
+  readonly words: OpsLogWords;
+}): Built {
+  const { entry, balance, customer, redemption, at, words } = input;
+  const values: Mutable = {
+    ...identityValues(customer, words),
+    amount: entry.amount,
+    balanceBefore: balance.before,
+    balanceAfter: balance.after,
+    at,
+  };
+  if (redemption !== null) {
+    values['batchLabel'] = oneLine(redemption.batchLabel) ?? words.none;
+    values['codeLast4'] = redemption.last4;
+    values['source'] = sourceOf(redemption.surface, words);
+  }
+  return {
+    logType: 'GIFT_CARD',
+    templateKey: 'ops.log.gift_card_redeemed' as TemplateKey,
+    values,
+    buttons: [userButton(entry.customerId), { kind: 'WALLET', ref: entry.customerId }],
+  };
+}
+
+/** An administrator minted a batch: how many codes, each worth what, all worth what, until when. */
+export function giftCardBatchCreated(input: {
+  readonly batch: GiftCardBatchFact;
+  readonly admin: AdminFact | null;
+  readonly at: Date;
+  readonly words: OpsLogWords;
+}): Built {
+  const { batch, admin, at, words } = input;
+  const values: Mutable = {
+    codeCount: batch.codeCount,
+    amount: batch.amount,
+    faceTotal: money(batch.amount.amountMinor * BigInt(batch.codeCount), batch.amount.currency),
+    expiry: batch.expiresAt,
+    batchLabel: oneLine(batch.label) ?? words.none,
+    reason: oneLine(batch.reason) ?? words.none,
+    at,
+  };
+  if (admin !== null) {
+    values['adminName'] = admin.displayName;
+    values['adminUsername'] = `@${admin.username}`;
+    values['adminTelegramId'] = admin.telegramUserId ?? words.noTelegram;
+  }
+  return {
+    logType: 'GIFT_CARD',
+    templateKey: 'ops.log.gift_card_batch_created' as TemplateKey,
+    values,
+    buttons: [],
   };
 }
 

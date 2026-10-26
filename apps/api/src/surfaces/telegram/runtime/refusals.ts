@@ -338,6 +338,8 @@ export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
   // maximum) are answered by their handlers, which have the figure.
   [COMMERCE_ERROR_CODES.SERVICE_SYNC_TOO_SOON]: 'bot.service.refresh_too_soon',
   [COMMERCE_ERROR_CODES.REFERRAL_GIFT_DISABLED]: 'bot.referral.gift_disabled',
+  // R10 D4: gift cards switched off between the button and the code.
+  [COMMERCE_ERROR_CODES.GIFT_CARDS_DISABLED]: 'bot.wallet.gift_card_unavailable',
   [COMMERCE_ERROR_CODES.CAPTURE_NOT_OPEN]: 'bot.wallet.topup_expired',
 };
 

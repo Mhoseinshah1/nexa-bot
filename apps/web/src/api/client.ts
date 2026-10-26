@@ -5514,3 +5514,57 @@ export function savePanelSetting(
   const { key, ...body } = input;
   return post(PANEL_ROUTES.setting(panelId, key), body, panelSettingWriteResponseSchema);
 }
+
+// R10 D4: gift cards (wallet top-up codes). `gift_cards.view` / `.create` / `.export` /
+// `.disable`, each charged on the server.
+import {
+  GIFT_CARD_ROUTES,
+  giftCardBatchListResponseSchema,
+  giftCardBatchResponseSchema,
+  giftCardDisablePreviewResponseSchema,
+  giftCardDisableResponseSchema,
+  type GiftCardBatchCreateRequest,
+  type GiftCardBatchListResponse,
+  type GiftCardBatchResponse,
+  type GiftCardDisablePreviewResponse,
+  type GiftCardDisableRequest,
+  type GiftCardDisableResponse,
+} from '@nexa/contracts';
+
+/** One page of batches, newest first, with the wallet currency and the feature's state. */
+export function fetchGiftCardBatches(cursor?: string): Promise<GiftCardBatchListResponse> {
+  const path =
+    cursor === undefined
+      ? GIFT_CARD_ROUTES.batches
+      : `${GIFT_CARD_ROUTES.batches}?cursor=${encodeURIComponent(cursor)}`;
+  return authedGet(path, giftCardBatchListResponseSchema);
+}
+
+/** Mints a batch. The answer is the batch, never its codes: those are downloaded. */
+export function createGiftCardBatch(
+  body: GiftCardBatchCreateRequest,
+): Promise<GiftCardBatchResponse> {
+  return post(GIFT_CARD_ROUTES.batches, body, giftCardBatchResponseSchema);
+}
+
+/**
+ * The CSV of a batch's codes, as a URL rather than a fetch — the browser downloads it with the
+ * session cookie, as `auditLogExportUrl` does. Available for 24 hours after the batch is made.
+ */
+export function giftCardExportUrl(batchId: string): string {
+  return `${API_PREFIX}${GIFT_CARD_ROUTES.exportCsv(batchId)}`;
+}
+
+/** The dry run of a disable: how many unredeemed codes it would stop, counted now. */
+export function fetchGiftCardDisablePreview(
+  batchId: string,
+): Promise<GiftCardDisablePreviewResponse> {
+  return authedGet(GIFT_CARD_ROUTES.disablePreview(batchId), giftCardDisablePreviewResponseSchema);
+}
+
+export function disableGiftCardBatch(
+  batchId: string,
+  body: GiftCardDisableRequest,
+): Promise<GiftCardDisableResponse> {
+  return post(GIFT_CARD_ROUTES.disable(batchId), body, giftCardDisableResponseSchema);
+}

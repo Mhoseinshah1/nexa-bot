@@ -576,7 +576,6 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   codeLast4: 'چهار حرف آخر کد کارت هدیه',
   codeCount: 'تعداد کدهای دسته',
   faceTotal: 'جمع ارزش اسمی کدهای دسته',
-  expiry: 'زمان انقضای کدهای دسته',
   referrerBefore: 'موجودی معرف پیش از واریز',
   referrerAfter: 'موجودی معرف پس از واریز',
   badges: 'برچسب‌های عنوان (اولین خرید، نماینده)',
@@ -673,6 +672,8 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
 > = {
   // B1: the product's own description, the one customer-facing text on the pre-invoice.
   'bot.order.preinvoice': { description: 'توضیح محصول برای مشتری' },
+  // R10 D4: on the batch-created log, `expiry` is when the batch's codes stop being redeemable.
+  'ops.log.gift_card_batch_created': { expiry: 'زمان انقضای کدهای دسته' },
   // R6 item 4: on the card-to-card invoice the total is what must be TRANSFERRED.
   'bot.payment.transfer_instructions': { total: 'مبلغ قابل پرداخت (اصل + کارمزد)' },
   // R10 B6: on the overpaid screens the rial figure is the amount TonPays returns.
