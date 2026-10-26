@@ -13,8 +13,8 @@ import { Button, Card, Ltr, Row, errorText } from '../ui.js';
 
 /**
  * کارت به کارت و رسید: the card and the EXACT amount the payment was issued for (its
- * payable, fee included), the tracking code and the deadline — from the payment's own
- * destination snapshot — then the receipt image, uploaded here and filed by the bot's own
+ * payable, fee included, shown as one figure with no fee breakdown), the tracking code and
+ * the deadline — from the payment's own destination snapshot — then the receipt image, uploaded here and filed by the bot's own
  * receipt service (owner correction 2026-10-25).
  *
  * The design's «کارت دیگر» (switch card) arrives with its own endpoint; it is not drawn.
@@ -72,6 +72,8 @@ export function CardPay({ instruction }: { instruction: MiniAppCardInstruction }
          * v0.8.2 hotfix: the amount in RIAL with Toman in brackets, as the bot's card invoice
          * (R8 A2) — the figure a banking app takes, and the one the copy button carries. An
          * amount in neither currency (none is a sales currency) keeps its own figure.
+         * R10 B6: and, as on that invoice, ONE amount — no principal and fee apart and never
+         * «کارمزد», even on a route that charges a customer fee.
          */}
         <Row
           label={t('miniapp.card_amount')}
@@ -86,14 +88,6 @@ export function CardPay({ instruction }: { instruction: MiniAppCardInstruction }
         {instruction.amountRial !== null && instruction.amountToman !== null && (
           <p className="muted">
             {t('miniapp.card_amount_toman', { amount: instruction.amountToman })}
-          </p>
-        )}
-        {instruction.principal !== null && instruction.fee !== null && (
-          <p className="muted">
-            {t('miniapp.card_principal_fee', {
-              principal: money(instruction.principal),
-              fee: money(instruction.fee),
-            })}
           </p>
         )}
         <Button onClick={() => copy('amount', instruction.copyAmount)}>
