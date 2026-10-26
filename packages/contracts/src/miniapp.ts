@@ -254,6 +254,12 @@ export const miniAppOrderSchema = z.object({
   total: moneySchema,
   /** Whether a code is applied. The code itself is not echoed. */
   discountApplied: z.boolean(),
+  /**
+   * R10 D3: the customer's personal discount percent when the order's frozen quote was
+   * priced with it (it won over every other discount); null otherwise. The invoice names
+   * it on the discount line. Defaulted so a client meeting an older server reads "none".
+   */
+  personalDiscountPercent: z.number().int().min(1).max(100).nullable().default(null),
   /** Whether a code may be applied or removed now (a DRAFT purchase only). */
   discountEditable: z.boolean(),
   /** The cashback this order promises, earned at delivery; null when none. */
