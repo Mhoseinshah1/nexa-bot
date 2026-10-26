@@ -34,7 +34,7 @@ import { mainMenuButton } from './keyboards.js';
 import { refusal } from './refusals.js';
 import type { PendingReply } from './replies.js';
 import { gatewayAttemptScreen, payMethodsButton, topupButton } from './payment-screens.js';
-import { confirmDraft, repricedSummary } from './purchase-flow.js';
+import { repricedSummary } from './purchase-flow.js';
 import type { BotRuntime } from '../bot-runtime.js';
 
 /** The external gateway cannot be used right now (WP11A): never the customer's failure. */
@@ -146,47 +146,34 @@ export async function walletPayment(
 ): Promise<PendingReply> {
   try {
     /*
-     * From the pre-invoice a DRAFT is paid in one tap: the balance is read FIRST, and a
-     * shortfall answers without confirming anything — a reservation held for money
-     * that is not there is a slot nobody can buy until it lapses. Then the confirm
-     * (which reserves and redeems) and the settlement, each under its own key, each
-     * exactly-once on replay.
+     * From the pre-invoice a DRAFT is paid in one tap. `CheckoutService.payFromWallet`
+     * reads the balance FIRST and answers a shortfall without confirming anything, then
+     * confirms and settles, each step under its own suffix of the update's key: the bare
+     * key was consumed by `resolveFromUpdate`, and a REDELIVERED update recomputes the
+     * same suffixes, which is what makes the replay produce one debit.
      */
     const before = await rt.deps.orders.orderForCustomer(scope, actor, {
       customerId: customer.id,
       orderId,
     });
-    if (before.state === 'DRAFT') {
-      const balance = await rt.deps.wallet.balanceForCustomer(scope, actor, customer.id);
-      if (
-        balance.currency !== before.totals.total.currency ||
-        balance.amountMinor < before.totals.total.amountMinor
-      ) {
-        const shortfall = money(
-          balance.currency === before.totals.total.currency
-            ? before.totals.total.amountMinor - balance.amountMinor
-            : before.totals.total.amountMinor,
-          before.totals.total.currency,
-        );
-        return {
-          key: 'bot.wallet.insufficient',
-          values: { shortfall },
-          buttons: [topupButton(), mainMenuButton()],
-          orderId,
-          // R2: its own message, so the pre-invoice stays payable after a top-up.
-          wizard: WALLET_SHORT,
-        };
-      }
-      await confirmDraft(rt, scope, actor, before, customer, idempotencyKey);
+    const paid = await rt.deps.checkout.payFromWallet(
+      scope,
+      actor,
+      customer.id,
+      before,
+      idempotencyKey,
+    );
+    if (paid.outcome === 'SHORT') {
+      return {
+        key: 'bot.wallet.insufficient',
+        values: { shortfall: paid.shortfall },
+        buttons: [topupButton(), mainMenuButton()],
+        orderId,
+        // R2: its own message, so the pre-invoice stays payable after a top-up.
+        wizard: WALLET_SHORT,
+      };
     }
-    const { order } = await rt.deps.payments.settleFromWallet(scope, actor, customer.id, {
-      // Suffixed within the update's own key, the shape `draft` and `confirm` use: the
-      // bare key was consumed by `resolveFromUpdate`, and presenting it again with a
-      // different payload is an idempotency payload mismatch. A REDELIVERED update
-      // recomputes this same suffix, which is what makes the replay produce one debit.
-      idempotencyKey: `${idempotencyKey}:wallet-pay`,
-      orderId,
-    });
+    const { order } = paid;
     /*
      * R2 (items 5 and 11): the wizard is CLOSED here, in place and with no buttons, and
      * what follows is a NEW message — the delivery of a new service, or the renewal's own
@@ -231,16 +218,10 @@ export async function walletPayment(
  * One button per payment route offered for paying this order, in the operator's order —
  * what «🧾 ثبت پرداخت» opens, and whether it is drawn at all.
  *
- * Built from the routes rather than from a list of providers, so a route added later
- * appears here without a change: each is dispatched by what its DESCRIPTOR says it
- * settles through. `GATEWAY` taps `gp:<order>.<provider>` (TonPays, Stars, any external
- * route); `MANUAL_TRANSFER` taps `m:<order>`, the card-to-card instruction and then the
- * receipt flow. A route that settles any other way has no order tap and is not drawn.
- *
- * Card-to-card keeps the offer rule it always had: `manualTransferOffered` (the route
- * switched on for purchases AND an enabled account to pay into), not the per-customer
- * thresholds — whether those apply to an order payment is `OQ-5C-01`. So it is drawn
- * where the operator ordered it when `routesFor` lists it, and last otherwise.
+ * Which routes, and in what order, is `CheckoutService.orderRoutes` — the same list the
+ * mini app shows. Drawn here by kind: a `GATEWAY` route taps `gp:<order>.<provider>`
+ * (TonPays, Stars, any external route); card to card taps `m:<order>`, the card-to-card
+ * instruction and then the receipt flow.
  *
  * Every button carries identifiers only. Each tap re-decides its route on the server.
  */
@@ -251,29 +232,15 @@ export async function orderRouteButtons(
   orderId: string,
   amount: Money,
 ): Promise<readonly CustomerButton[]> {
-  const routes = await rt.deps.routes.routesFor(scope, customerId, 'SERVICE_PURCHASE', amount);
-  const manualOffered = await rt.deps.payments.manualTransferOffered(scope);
-  const buttons: CustomerButton[] = [];
-  let manualDrawn = false;
-  for (const route of routes) {
-    let data: string | null = null;
-    if (route.descriptor.settlesVia === 'GATEWAY') {
-      data = `${GATEWAY_ROUTE_PAY_CALLBACK_PREFIX}${orderId}.${route.provider}`;
-    } else if (route.descriptor.settlesVia === 'MANUAL_TRANSFER' && manualOffered && !manualDrawn) {
-      data = `${MANUAL_PAY_CALLBACK_PREFIX}${orderId}`;
-      manualDrawn = true;
-    }
-    if (data === null) continue;
-    buttons.push(routeButton(await rt.deps.screens.routeName(scope, route), data));
-  }
-  if (manualOffered && !manualDrawn) {
-    const name = await rt.deps.screens.routeName(scope, {
-      provider: 'MANUAL_TRANSFER',
-      displayName: null,
-    });
-    buttons.push(routeButton(name, `${MANUAL_PAY_CALLBACK_PREFIX}${orderId}`));
-  }
-  return buttons;
+  const routes = await rt.deps.checkout.orderRoutes(scope, customerId, amount);
+  return routes.map((route) =>
+    routeButton(
+      route.name,
+      route.kind === 'GATEWAY'
+        ? `${GATEWAY_ROUTE_PAY_CALLBACK_PREFIX}${orderId}.${route.provider}`
+        : `${MANUAL_PAY_CALLBACK_PREFIX}${orderId}`,
+    ),
+  );
 }
 
 /**
@@ -391,11 +358,12 @@ export async function paymentMethodsBack(
 /**
  * Paying an order through an external gateway (WP11A). The tap carries the ORDER ID.
  *
- * The route is the first external route offered for this order, in the operator's
- * order — decided BEFORE a draft is confirmed, so a customer shown a stale button does
- * not reserve a slot for a payment they cannot make. Then the service opens (or hands
- * back) the attempt; the provider invoice is created by the worker, never while
- * Telegram waits, so the first answer is usually "being prepared" with a check button.
+ * `CheckoutService.payByGateway`: the route is the tapped one (or the first external route
+ * offered, for the older `g:`) among those offered for this order — decided BEFORE a draft
+ * is confirmed, so a customer shown a stale button does not reserve a slot for a payment
+ * they cannot make. Then the service opens (or hands back) the attempt; the provider
+ * invoice is created by the worker, never while Telegram waits, so the first answer is
+ * usually "being prepared" with a check button.
  *
  * A route that cannot be used right now is answered as unavailable, never as the
  * customer's payment failing (brief §19).
@@ -415,26 +383,19 @@ export async function gatewayPayment(
       customerId: customer.id,
       orderId,
     });
-    const route = (
-      await rt.deps.routes.routesFor(scope, customer.id, 'SERVICE_PURCHASE', before.totals.total)
-    ).find(
-      (candidate) =>
-        candidate.descriptor.settlesVia === 'GATEWAY' &&
-        (provider === null || candidate.provider === provider),
+    const paid = await rt.deps.checkout.payByGateway(
+      scope,
+      actor,
+      customer.id,
+      before,
+      idempotencyKey,
+      provider,
     );
     // R2: in the wizard, a way back to the other methods rather than a dead end.
-    if (route === undefined) {
+    if (paid.outcome === 'NOT_OFFERED') {
       return { ...gatewayUnavailable(), buttons: [payMethodsButton(orderId), mainMenuButton()] };
     }
-    if (before.state === 'DRAFT') {
-      await confirmDraft(rt, scope, actor, before, customer, idempotencyKey);
-    }
-    const attempt = await rt.deps.payments.requestGatewayPayment(scope, actor, customer.id, {
-      idempotencyKey: `${idempotencyKey}:gateway-pay`,
-      orderId,
-      provider: route.provider,
-    });
-    return await gatewayAttemptReply(rt, attempt, orderId, scope);
+    return await gatewayAttemptReply(rt, paid.attempt, orderId, scope);
   } catch (error) {
     const refused = gatewayRefusal(error);
     return refused.key === 'bot.payment.gateway_unavailable'

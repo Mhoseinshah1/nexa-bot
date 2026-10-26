@@ -883,7 +883,15 @@ export async function draft(
   }
 }
 
-/** DRAFT to AWAITING_PAYMENT, and the message that says what that means. */
+/**
+ * DRAFT to AWAITING_PAYMENT, and the message that says what that means.
+ *
+ * Through the lane of the order's PURPOSE (`CheckoutService.confirmDraft`), as the mini
+ * app's confirm: a renewal or a package confirmed by this tap goes through
+ * `CommercialActionService.confirm` and its re-check of the service, never through the
+ * new-service lane (R10 B1). A new or custom service keeps `OrderService.confirm` under the
+ * same `:confirm` key as before.
+ */
 export async function confirm(
   rt: BotRuntime,
   scope: TenantContext,
@@ -893,41 +901,21 @@ export async function confirm(
   idempotencyKey: string,
 ): Promise<PendingReply> {
   try {
-    const order = await rt.deps.orders.confirm(scope, actor, {
-      idempotencyKey: `${idempotencyKey}:confirm`,
+    const before = await rt.deps.orders.orderForCustomer(scope, actor, {
       customerId: customer.id,
       orderId,
     });
+    const order = await rt.deps.checkout.confirmDraft(
+      scope,
+      actor,
+      customer.id,
+      before,
+      idempotencyKey,
+    );
     return awaitingPaymentReply(rt, scope, customer, order);
   } catch (error) {
     return refusal(error);
   }
-}
-
-/**
- * DRAFT → AWAITING_PAYMENT through the lane that owns the order's purpose: a new
- * service through `OrderService.confirm`, a renewal or a package through
- * `CommercialActionService.confirm`. Both are exactly-once under the update's key.
- */
-export async function confirmDraft(
-  rt: BotRuntime,
-  scope: TenantContext,
-  actor: ActorContext,
-  order: OrderRecord,
-  customer: CustomerRecord,
-  idempotencyKey: string,
-): Promise<OrderRecord> {
-  if (order.purpose === 'NEW_SERVICE' || order.purpose === 'CUSTOM_SERVICE') {
-    return rt.deps.orders.confirm(scope, actor, {
-      idempotencyKey: `${idempotencyKey}:confirm`,
-      customerId: customer.id,
-      orderId: order.id,
-    });
-  }
-  return rt.deps.commercial.confirm(scope, actor, customer.id, {
-    orderId: order.id,
-    idempotencyKey: `${idempotencyKey}:action_confirm`,
-  });
 }
 
 /**

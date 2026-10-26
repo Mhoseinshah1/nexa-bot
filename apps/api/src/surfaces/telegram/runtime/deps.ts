@@ -35,6 +35,7 @@ import type { CustomerMessenger } from '../../../modules/commerce/messaging/appl
 import type { ProductService } from '../../../modules/commerce/catalog/application/product.service.js';
 import type { ProductCategoryService } from '../../../modules/commerce/catalog/application/product-category.service.js';
 import type { CommercialActionService } from '../../../modules/commerce/commercial/application/commercial-action.service.js';
+import type { CheckoutService } from '../../../modules/commerce/checkout/application/checkout.service.js';
 import type { LocationChangeService } from '../../../modules/commerce/locations/application/location-change.service.js';
 import type { TrialService } from '../../../modules/commerce/trials/application/trial.service.js';
 import type { OrderService } from '../../../modules/commerce/orders/application/order.service.js';
@@ -210,6 +211,12 @@ export interface BotRuntimeDeps {
   readonly referrals?: Pick<ReferralProgram, 'terms' | 'invite'>;
   readonly orders: OrderService;
   readonly payments: PaymentService;
+  /**
+   * R10 B1: the checkout both customer surfaces share — the confirm lane, the routes an order
+   * offers, the wallet pre-check and which gateway a tap may start. The SAME instance the mini
+   * app is handed; the bot keeps only how each answer is drawn.
+   */
+  readonly checkout: CheckoutService;
   /**
    * Composes the destination block for a manual-transfer instruction.
    *

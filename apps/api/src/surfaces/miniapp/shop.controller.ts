@@ -11,7 +11,6 @@ import {
   miniAppGatewayPayRequestSchema,
   miniAppPageQuerySchema,
   miniAppUsernameRequestSchema,
-  money,
   toWire,
   type MiniAppCardInstruction,
   type MiniAppCategoriesResponse,
@@ -23,7 +22,6 @@ import {
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import type { OrderRecord } from '../../modules/commerce/orders/application/ports.js';
-import { walletCoverage } from '../../modules/commerce/miniapp/application/miniapp-checkout.js';
 import { miniAppCall, miniAppKey, owned, parseWith, type MiniAppCall } from './miniapp-request.js';
 import { attemptWire, instructionWire, orderWire, productWire } from './projections.js';
 
@@ -207,13 +205,10 @@ export class MiniAppShopController {
     if (order.state !== 'DRAFT' && order.state !== 'AWAITING_PAYMENT') {
       throw errors.conflict(COMMERCE_ERROR_CODES.ORDER_STATE_INVALID, 'Not payable.');
     }
-    const balance = await this.container.wallet.balanceForCustomer(
+    const coverage = await this.container.miniApp.checkout.walletCoverageFor(
       call.context.scope,
       call.actor,
       call.context.customer.id,
-    );
-    const coverage = walletCoverage(
-      money(balance.amountMinor, balance.currency),
       order.totals.total,
     );
     const routes = await this.container.miniApp.checkout.orderRoutes(
@@ -223,7 +218,7 @@ export class MiniAppShopController {
     );
     return {
       wallet: {
-        balance: toWire(money(balance.amountMinor, balance.currency)),
+        balance: toWire(coverage.balance),
         sufficient: coverage.sufficient,
         shortfall: coverage.shortfall === null ? null : toWire(coverage.shortfall),
       },
@@ -237,54 +232,37 @@ export class MiniAppShopController {
   }
 
   /**
-   * Pay from the wallet: the bot's `walletPayment`. A DRAFT whose total the balance does not
-   * cover is refused BEFORE it is confirmed (the shortfall travels in the refusal), then
-   * the draft is confirmed through its own lane and `settleFromWallet` decides — the one
-   * authoritative check, with its negative-wallet gate.
+   * Pay from the wallet: `CheckoutService.payFromWallet`, the bot's `walletPayment`. A DRAFT
+   * whose total the balance does not cover is refused BEFORE it is confirmed (the shortfall
+   * travels in the refusal), then the draft is confirmed through its own lane and
+   * `settleFromWallet` decides — the one authoritative check, with its negative-wallet gate.
    */
   @Post(MINIAPP_ROUTES.orderPayWallet)
   async payWallet(@Req() request: FastifyRequest, @Param('orderId') orderId: string) {
     const call = await miniAppCall(this.container, request, { gated: true });
     const key = miniAppKey(request, call, 'pay-wallet');
     const before = await this.ownOrder(call, orderId);
-    if (before.state === 'DRAFT') {
-      const balance = await this.container.wallet.balanceForCustomer(
-        call.context.scope,
-        call.actor,
-        call.context.customer.id,
-      );
-      const coverage = walletCoverage(
-        money(balance.amountMinor, balance.currency),
-        before.totals.total,
-      );
-      if (!coverage.sufficient && coverage.shortfall !== null) {
-        throw errors.conflict(
-          COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS,
-          'Insufficient funds.',
-          {
-            shortfallMinor: coverage.shortfall.amountMinor.toString(),
-            currency: coverage.shortfall.currency,
-          },
-        );
-      }
-      await this.container.miniApp.checkout.confirm(
-        call.context.scope,
-        call.actor,
-        call.context.customer.id,
-        before,
-        key,
-      );
-    }
-    const { order, payment } = await this.container.payments.settleFromWallet(
+    const paid = await this.container.miniApp.checkout.payFromWallet(
       call.context.scope,
       call.actor,
       call.context.customer.id,
-      { idempotencyKey: `${key}:wallet-pay`, orderId: before.id },
+      before,
+      key,
     );
-    return { order: await this.view(call, order), paymentId: payment.id };
+    if (paid.outcome === 'SHORT') {
+      throw errors.conflict(COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS, 'Insufficient funds.', {
+        shortfallMinor: paid.shortfall.amountMinor.toString(),
+        currency: paid.shortfall.currency,
+      });
+    }
+    return { order: await this.view(call, paid.order), paymentId: paid.payment.id };
   }
 
-  /** An online gateway: the route must be one this order is offered now; then the attempt. */
+  /**
+   * An online gateway: `CheckoutService.payByGateway`, the bot's `gatewayPayment`. The route
+   * must be one this order is offered now — decided before a DRAFT is confirmed — then the
+   * attempt.
+   */
   @Post(MINIAPP_ROUTES.orderPayGateway)
   async payGateway(
     @Req() request: FastifyRequest,
@@ -295,33 +273,24 @@ export class MiniAppShopController {
     const input = parseWith(miniAppGatewayPayRequestSchema, body);
     const key = miniAppKey(request, call, 'pay-gateway');
     const before = await this.ownOrder(call, orderId);
-    const offered = await this.container.miniApp.checkout.orderRoutes(
-      call.context.scope,
-      call.context.customer.id,
-      before.totals.total,
-    );
-    if (!offered.some((route) => route.kind === 'GATEWAY' && route.provider === input.provider)) {
-      throw errors.conflict(MINIAPP_ERROR_CODES.MINIAPP_ROUTE_UNAVAILABLE, 'Route not offered.');
-    }
-    if (before.state === 'DRAFT') {
-      await this.container.miniApp.checkout.confirm(
-        call.context.scope,
-        call.actor,
-        call.context.customer.id,
-        before,
-        key,
-      );
-    }
-    const attempt = await this.container.payments.requestGatewayPayment(
+    const paid = await this.container.miniApp.checkout.payByGateway(
       call.context.scope,
       call.actor,
       call.context.customer.id,
-      { idempotencyKey: `${key}:gateway-pay`, orderId: before.id, provider: input.provider },
+      before,
+      key,
+      input.provider,
     );
-    return attemptWire(attempt);
+    if (paid.outcome === 'NOT_OFFERED') {
+      throw errors.conflict(MINIAPP_ERROR_CODES.MINIAPP_ROUTE_UNAVAILABLE, 'Route not offered.');
+    }
+    return attemptWire(paid.attempt);
   }
 
-  /** Card to card: the same instruction the bot sends — card and the exact amount to transfer. */
+  /**
+   * Card to card: `CheckoutService.payByCard`, the same instruction the bot sends — card and
+   * the exact amount to transfer.
+   */
   @Post(MINIAPP_ROUTES.orderPayCard)
   async payCard(
     @Req() request: FastifyRequest,
@@ -330,20 +299,12 @@ export class MiniAppShopController {
     const call = await miniAppCall(this.container, request, { gated: true });
     const key = miniAppKey(request, call, 'pay-card');
     const before = await this.ownOrder(call, orderId);
-    if (before.state === 'DRAFT') {
-      await this.container.miniApp.checkout.confirm(
-        call.context.scope,
-        call.actor,
-        call.context.customer.id,
-        before,
-        key,
-      );
-    }
-    const instruction = await this.container.payments.requestManualTransfer(
+    const instruction = await this.container.miniApp.checkout.payByCard(
       call.context.scope,
       call.actor,
       call.context.customer.id,
-      { idempotencyKey: `${key}:manual-pay`, orderId: before.id },
+      before,
+      key,
     );
     return instructionWire(instruction);
   }
@@ -367,7 +328,7 @@ export class MiniAppShopController {
   ): Promise<OrderRecord> {
     const order = await this.ownOrder(call, orderId);
     if (order.state !== 'DRAFT') return order;
-    return this.container.miniApp.checkout.confirm(
+    return this.container.miniApp.checkout.confirmDraft(
       call.context.scope,
       call.actor,
       call.context.customer.id,
