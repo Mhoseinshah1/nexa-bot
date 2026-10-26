@@ -68,11 +68,11 @@ with the one in the release workflow's job summary before running it:
 
 ```bash
 git clone https://github.com/Mhoseinshah1/nexa-bot && cd nexa-bot
-git checkout v1.0.0 && git rev-parse HEAD   # compare with the release job summary
-sudo ./deploy/install.sh --domain admin.example.com --acme-email ops@example.com --version v1.0.0
+git checkout vX.Y.Z && git rev-parse HEAD   # compare with the release job summary
+sudo ./deploy/install.sh --domain admin.example.com --acme-email ops@example.com --version vX.Y.Z
 ```
 
-Use the release you are installing instead of `v1.0.0`. The installer prompts
+Use the release you are installing instead of `vX.Y.Z`. The installer prompts
 for the first owner's password and the bot token (hidden input; neither is ever
 a command-line argument), generates secrets once, migrates, starts the stack and
 registers the Telegram webhook. It is safe to rerun after a failure. Unattended
