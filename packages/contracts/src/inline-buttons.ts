@@ -149,6 +149,8 @@ export const INLINE_BUTTONS = [
   // Navigation
   button('main_menu', 'NAVIGATION', 'bot.menu.main_button'),
   button('list.close', 'NAVIGATION', 'bot.wallet.topup_close_button'),
+  // R10 D2: the URL button under a custom main-menu link button's answer.
+  button('custom.link_open', 'NAVIGATION', 'bot.custom_button.open_link_button', 'URL'),
 
   // Wallet
   button('wallet.open', 'WALLET', 'bot.wallet.open_button'),

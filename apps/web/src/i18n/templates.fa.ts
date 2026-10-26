@@ -130,6 +130,8 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
   { id: 'referral', label: 'معرفی دوستان و هدیهٔ عضویت', prefixes: ['bot.referral.'] },
   { id: 'support', label: 'پشتیبانی و پرسش‌های متداول', prefixes: ['bot.faq.', 'bot.support.'] },
   { id: 'tickets', label: 'تیکت‌های پشتیبانی (مشتری)', prefixes: ['bot.ticket.'] },
+  // R10 D2: what an owner-defined main-menu button answers with.
+  { id: 'custom_button', label: 'دکمه‌های دلخواه منوی اصلی', prefixes: ['bot.custom_button.'] },
   // Phase A2: a direct message an operator sends from the customer's page.
   { id: 'direct_message', label: 'پیام مستقیم به مشتری', prefixes: ['bot.direct_message.'] },
   // Phase E3: the incident / maintenance notice.
@@ -786,6 +788,9 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.ticket.support_attachment': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
   'bot.direct_message.text': { text: 'متن پیام اپراتور' },
   'bot.direct_message.media': { caption: 'توضیح عکس یا فایل' },
+  'bot.custom_button.text': { text: 'متن دکمه' },
+  'bot.custom_button.caption': { caption: 'توضیح عکس یا فایل دکمه' },
+  'bot.custom_button.link': { text: 'یادداشت اختیاری کنار لینک' },
   'bot.incident.notice': { message: 'پیام اپراتور به مشتری' },
   'ops.support.ticket_opened': { category: 'موضوع تیکت' },
   'ops.support.customer_replied': { category: 'موضوع تیکت' },
@@ -2854,6 +2859,26 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.direct_message.media': [
     'پیام مستقیم به مشتری (عکس یا فایل)',
     'زیرنویس عکس یا فایلی که اپراتور از صفحهٔ مشتری فرستاده است؛ اگر توضیحی نداشته باشد آن خط حذف می‌شود.',
+  ],
+  'bot.custom_button.text': [
+    'دکمهٔ دلخواه منو (متن)',
+    'پیامی که با زدن یک دکمهٔ متنیِ ساخته‌شده توسط شما به مشتری فرستاده می‌شود؛ متن هنگام ارسال از خود دکمه خوانده می‌شود و فقط به‌صورت متن ساده ارسال می‌شود.',
+  ],
+  'bot.custom_button.caption': [
+    'دکمهٔ دلخواه منو (زیرنویس عکس یا فایل)',
+    'زیرنویس عکس یا فایلی که با زدن یک دکمهٔ دلخواه فرستاده می‌شود؛ هنگام ارسال از خود دکمه خوانده می‌شود.',
+  ],
+  'bot.custom_button.link': [
+    'دکمهٔ دلخواه منو (لینک)',
+    'پیامی که با زدن یک دکمهٔ لینک فرستاده می‌شود؛ خود لینک دکمهٔ زیر پیام است. اگر یادداشتی نداشته باشد آن خط حذف می‌شود.',
+  ],
+  'bot.custom_button.open_link_button': [
+    'دکمهٔ باز کردن لینک',
+    'دکمهٔ زیر پاسخ یک دکمهٔ لینک که نشانی شما را باز می‌کند.',
+  ],
+  'bot.custom_button.unavailable': [
+    'دکمهٔ دلخواه در دسترس نیست',
+    'پاسخ به زدن دکمه‌ای که دیگر در دسترس نیست: قابلیت خاموش شده، دکمه حذف شده یا برای این ربات نمایش داده نمی‌شود. برای کیبوردی که قبل از تغییر ارسال شده بود.',
   ],
   'bot.incident.notice': [
     'اطلاع‌رسانی رخداد یا نگهداری (به مشتری)',

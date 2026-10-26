@@ -1545,6 +1545,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.ticket.view_button': '🎫 مشاهده تیکت',
   'bot.direct_message.text': '{icon:support} پیام پشتیبانی\n\n{text}',
   'bot.direct_message.media': '{icon:support} پیام پشتیبانی\n\n{caption}',
+  'bot.custom_button.text': '{text}',
+  'bot.custom_button.caption': '{caption}',
+  'bot.custom_button.link': 'برای باز کردن لینک، دکمهٔ زیر را بزنید.\n\n{text}',
+  'bot.custom_button.open_link_button': '🔗 باز کردن لینک',
+  'bot.custom_button.unavailable':
+    'این گزینه فعلاً در دسترس نیست. برای دیدن منوی به‌روز /start را بزنید.',
   'bot.incident.notice': '{icon:warning} اطلاع‌رسانی\n\n{message}',
   'bot.ticket.category_default_1': 'مشکل اتصال',
   'bot.ticket.category_default_2': 'خرید و پرداخت',
