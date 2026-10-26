@@ -586,6 +586,31 @@ export interface CreateProviderUserInput extends ProviderUserRef {
    */
   readonly expiresAt: Date | null;
   readonly deviceLimit: number | null;
+  /**
+   * The provisioning operation's id, when the caller has one (R10 C2).
+   *
+   * See `ProviderWriteContext`. On the create it rides in the input rather than a
+   * trailing parameter because the input already IS the create's whole instruction.
+   */
+  readonly operationId?: string;
+}
+
+/**
+ * What a mutating provider call knows about the operation that asked for it (R10 C2).
+ *
+ * `operationId` is `provisioning_operations.id`: one id per operation, reused unchanged
+ * on every attempt of it. An adapter whose provider keys idempotency on the caller's id
+ * — the `custom` bridge protocol, `docs/protocols/custom-panel.md` §6 — sends it, so a
+ * write that is attempted again after a lost answer is recognised as the SAME write and
+ * not applied twice. Providers that do not take one ignore it.
+ *
+ * OPTIONAL, deliberately: the three adapters that predate it ignore it, and an adapter
+ * that REQUIRES it refuses a write without one before sending anything, which is the
+ * fail-closed direction. It never re-keys anything: Nexa's own rule that a lost create is
+ * never retried still holds, and this id only makes the bridge's half of that true too.
+ */
+export interface ProviderWriteContext {
+  readonly operationId: string;
 }
 
 /**
@@ -1212,16 +1237,19 @@ export interface ProviderAdapter extends ProviderConnectionAdapter {
     target: ProviderServiceTarget,
     http: ProviderHttpClient,
     ref: ProviderUserRef,
+    context?: ProviderWriteContext,
   ): Promise<ProviderStateChangeOutcome>;
   resumeUser?(
     target: ProviderServiceTarget,
     http: ProviderHttpClient,
     ref: ProviderUserRef,
+    context?: ProviderWriteContext,
   ): Promise<ProviderStateChangeOutcome>;
   terminateUser?(
     target: ProviderServiceTarget,
     http: ProviderHttpClient,
     ref: ProviderUserRef,
+    context?: ProviderWriteContext,
   ): Promise<ProviderRemovalOutcome>;
 
   /*
@@ -1258,6 +1286,7 @@ export interface ProviderAdapter extends ProviderConnectionAdapter {
     http: ProviderHttpClient,
     ref: ProviderUserRef,
     plan: ProviderAllowancePlan,
+    context?: ProviderWriteContext,
   ): Promise<ProviderStateChangeOutcome>;
 
   /**
@@ -1283,6 +1312,7 @@ export interface ProviderAdapter extends ProviderConnectionAdapter {
     http: ProviderHttpClient,
     ref: ProviderUserRef,
     previousUrl: string | null,
+    context?: ProviderWriteContext,
   ): Promise<ProviderRotationOutcome>;
 
   /**
