@@ -481,6 +481,15 @@ import {
   // Round P: the bot's menu and its command-menu sync.
   BOT_MENU_ROUTES,
   BOT_MENU_BUILDER_ROUTES,
+  CUSTOM_MENU_BUTTON_ROUTES,
+  customMenuButtonListResponseSchema,
+  customMenuButtonMutationResponseSchema,
+  type ArchiveCustomMenuButtonRequest,
+  type CreateCustomMenuButtonRequest,
+  type CustomMenuButtonListResponse,
+  type CustomMenuButtonMutationResponse,
+  type SetCustomMenuButtonMediaRequest,
+  type UpdateCustomMenuButtonRequest,
   botMenuBuilderResponseSchema,
   mainMenuBuilderMutationResponseSchema,
   mainMenuRevisionListResponseSchema,
@@ -4145,6 +4154,44 @@ export function restoreBotMenuRevision(
     body,
     mainMenuBuilderMutationResponseSchema,
   );
+}
+
+// --- Custom main-menu buttons (R10 D2) -----------------------------------------
+
+/** The owner's custom buttons (active, then archived), the feature flag and the storage used. */
+export function fetchCustomMenuButtons(): Promise<CustomMenuButtonListResponse> {
+  return authedGet(CUSTOM_MENU_BUTTON_ROUTES.list, customMenuButtonListResponseSchema);
+}
+
+/** Create a button; a photo or document carries its file as base64. The same key answers the same. */
+export function createCustomMenuButton(
+  input: CreateCustomMenuButtonRequest,
+): Promise<CustomMenuButtonMutationResponse> {
+  return post(CUSTOM_MENU_BUTTON_ROUTES.create, input, customMenuButtonMutationResponseSchema);
+}
+
+/** Change a button's label, link, text or bots, against the version read. The kind never changes. */
+export function updateCustomMenuButton(
+  id: string,
+  input: UpdateCustomMenuButtonRequest,
+): Promise<CustomMenuButtonMutationResponse> {
+  return put(CUSTOM_MENU_BUTTON_ROUTES.update(id), input, customMenuButtonMutationResponseSchema);
+}
+
+/** Replace a photo or document button's file. */
+export function setCustomMenuButtonMedia(
+  id: string,
+  input: SetCustomMenuButtonMediaRequest,
+): Promise<CustomMenuButtonMutationResponse> {
+  return put(CUSTOM_MENU_BUTTON_ROUTES.media(id), input, customMenuButtonMutationResponseSchema);
+}
+
+/** Archive a button: no longer drawn, its label freed, its file removed. */
+export function archiveCustomMenuButton(
+  id: string,
+  input: ArchiveCustomMenuButtonRequest,
+): Promise<CustomMenuButtonMutationResponse> {
+  return post(CUSTOM_MENU_BUTTON_ROUTES.archive(id), input, customMenuButtonMutationResponseSchema);
 }
 
 // --- The operations log group (WP-A4) -----------------------------------------

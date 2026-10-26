@@ -97,6 +97,7 @@ const STYLE_NAME: Readonly<Record<InlineButtonStyle, WebKey>> = {
 export const INLINE_BUTTON_NAME: Readonly<Record<InlineButtonKey, WebKey>> = {
   main_menu: 'web.ib_button_main_menu',
   'list.close': 'web.ib_button_list_close',
+  'custom.link_open': 'web.ib_button_custom_link_open',
   'wallet.open': 'web.ib_button_wallet_open',
   'wallet.topup': 'web.ib_button_wallet_topup',
   'wallet.topup_amount': 'web.ib_button_wallet_topup_amount',
