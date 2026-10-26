@@ -489,8 +489,21 @@ export const miniAppAutoRenewSchema = z.object({
 });
 export type MiniAppAutoRenew = z.infer<typeof miniAppAutoRenewSchema>;
 
-/** Switch it on (the server quotes and records that total as the consent) or off. */
-export const miniAppAutoRenewRequestSchema = z.object({ enabled: z.boolean() });
+/**
+ * Switch it on (the server quotes and records that total as the consent) or off.
+ *
+ * `expected` — switching ON only: the renewal total the confirmation SHOWED (the `price` of the
+ * state the customer confirmed). The server records its own fresh quote, and only when that
+ * quote is at or below `expected` in the same currency; otherwise — or with no `expected` —
+ * nothing is recorded and the answer is the state with the new price, to be confirmed again
+ * (Codex review of PR 338: a price that rose between the screen and the tap must never become
+ * the consent). A client that sends a figure it was not shown only raises its own ceiling, and
+ * the consent is still the server's quote, never this figure. Ignored when switching off.
+ */
+export const miniAppAutoRenewRequestSchema = z.object({
+  enabled: z.boolean(),
+  expected: moneySchema.optional(),
+});
 
 export const miniAppServiceDetailSchema = miniAppServiceSummarySchema.extend({
   /** The subscription link, only while the service is deliverable. A secret: never logged. */
