@@ -68,6 +68,26 @@ check "codex marker: inline findings are still listed" 0 "P1 src/a.ts:42 — Ref
 run codex --codex 315
 assert "no marker: no findings= claim is made" "$(grep -q 'findings=' <<<"$out" && echo 1 || echo 0)" "$out"
 
+# Only the real Codex App speaks for Codex: exact login AND type Bot. codex-clean carries newer
+# markers claiming findings from "codex-fan" (User), "chatgpt-codex-connector" (User),
+# "codex-impostor[bot]" (Bot) and the exact bot login with type User; none may override the
+# real bot's clean verdict.
+run codex-clean --codex 315
+assert "lookalike logins are not Codex: the real bot's verdict stands" "$(grep -q 'reviewed=abcdef01 head=abcdef01 findings=none' <<<"$out" && echo 0 || echo 1)" "$out"
+run codex-findings --codex 315
+assert "a lookalike's inline comment is not a Codex finding" "$(grep -qE 'src/z.ts|forged|comments=3' <<<"$out" && echo 1 || echo 0)" "$out"
+check "inline: only the real bot's comments are counted" 0 "codex comments=2 " "$rc" "$out"
+
+# The summary on page 2 of the issue comments is found: --paginate, every page.
+: >"$FAKE_LOG"
+run codex-pages --codex 315
+check "a summary only on page 2 is read (reviewed + findings=none)" 0 "reviewed=abcdef01 head=abcdef01 findings=none status=completed" "$rc" "$out"
+assert "the issue-comments request is paginated" "$(grep -q -- 'issues/315/comments.*--paginate' "$FAKE_LOG" && echo 0 || echo 1)" "$(cat "$FAKE_LOG")"
+
+# 240 KB of human chatter next to the marker: must not be an env var (E2BIG), must still report.
+run codex-big --codex 315
+check "a huge issue-comment payload does not break --codex" 0 "reviewed=abcdef01 head=abcdef01 findings=none" "$rc" "$out"
+
 run wait --wait 315 --every 0 --max 5
 check "wait polls until nothing is pending, then exits 0" 0 "green=2 pending=0" "$rc" "$out"
 assert "wait printed a summary per poll (2)" "$(((  $(grep -c '^abcdef01' <<<"$out") == 2) ? 0 : 1))" "$out"

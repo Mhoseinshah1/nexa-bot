@@ -24,6 +24,24 @@ NODE_PROG=$(
 const fs = require('fs');
 const [mode, ...args] = process.argv.slice(1);
 const read = () => { try { return JSON.parse(fs.readFileSync(0, 'utf8') || 'null'); } catch { return null; } };
+// `gh api --paginate` prints one JSON array per page back to back ("[..][..]"), or a single
+// merged array; accept both, and flatten them into one array. null when nothing parses.
+const readPages = (file) => {
+  let text; try { text = fs.readFileSync(file, 'utf8'); } catch { return null; }
+  const pages = []; let depth = 0, inStr = false, esc = false, start = -1;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+    if (ch === '"') inStr = true;
+    else if (ch === '[' || ch === '{') { if (depth++ === 0) start = i; }
+    else if (ch === ']' || ch === '}') {
+      if (--depth === 0) { try { pages.push(JSON.parse(text.slice(start, i + 1))); } catch { return null; } }
+      else if (depth < 0) return null;
+    }
+  }
+  if (depth !== 0 || !pages.length || !pages.every(Array.isArray)) return null;
+  return pages.flat();
+};
 const RED = ['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure', 'stale'];
 const classify = (r) => {
   if (r.status !== 'completed') return 'pending';
@@ -45,10 +63,13 @@ else if (mode === "gate") {
   const others = runs.filter((r) => !gates.includes(r));
   if (gates.length && others.every((r) => ['green', 'skipped'].includes(classify(r)))) console.log(gates[0].id);
 } else if (mode === 'codex') {
-  const head8 = args[0] || ''; const isCodex = (c) => /codex/i.test((c.user && c.user.login) || '');
+  const head8 = args[0] || '';
+  // Only the real Codex GitHub App counts: this exact login AND account type Bot. A substring
+  // match let any human whose login contains "codex" forge a review state (or a clean verdict).
+  const isCodex = (c) => !!c.user && c.user.login === 'chatgpt-codex-connector[bot]' && c.user.type === 'Bot';
   const comments = (read() || []).filter(isCodex);
   let thr = null;
-  if (process.env.CODEX_THREADS) { try { thr = JSON.parse(process.env.CODEX_THREADS); } catch { thr = null; } }
+  if (args[2]) { try { thr = JSON.parse(fs.readFileSync(args[2], 'utf8')); } catch { thr = null; } }
   if (thr && !Array.isArray(thr)) thr = thr.threads || thr.review_threads || null;
   let tpart = 'threads=unknown';
   if (Array.isArray(thr)) {
@@ -65,8 +86,7 @@ else if (mode === "gate") {
   // Codex also posts "Codex Review Summary" as an ISSUE comment carrying a hidden
   // <!-- codex-review-state:v1 {json} --> marker, and posts no review comment at all
   // when it finds nothing. The marker's commit_sha is what it reviewed.
-  let iss = null;
-  if (process.env.CODEX_ISSUE) { try { iss = JSON.parse(process.env.CODEX_ISSUE); } catch { iss = null; } }
+  const iss = args[1] ? readPages(args[1]) : null;
   let state = null;
   if (Array.isArray(iss)) {
     const stamp = (c) => String(c.updated_at || c.created_at);
@@ -193,14 +213,19 @@ gate_check() {
 }
 
 codex_report() {
-  local pr="$1" head comments threads="" issue=""
+  local pr="$1" head comments tdir
   head="$(head_of_pr "$pr")"
   comments="$(api "repos/$R/pulls/$pr/comments?per_page=100")" || die "cannot read review comments"
-  threads="$(api "repos/$R/pulls/$pr/ccr/review_threads" 2>/dev/null)" || threads=""
-  # Issue comments: where Codex's "Codex Review Summary" and its state marker live.
-  # Unreadable is not fatal; the review comments above still say what they say.
-  issue="$(api "repos/$R/issues/$pr/comments?per_page=100" 2>/dev/null)" || issue=""
-  CODEX_THREADS="$threads" CODEX_ISSUE="$issue" jx codex "${head:0:8}" <<<"$comments"
+  # Both extra payloads go to node as FILES, never environment variables: a long discussion
+  # (or pasted logs) can exceed the per-string environment limit and node would not start.
+  tdir="$(mktemp -d)"
+  api "repos/$R/pulls/$pr/ccr/review_threads" >"$tdir/threads.json" 2>/dev/null || : >"$tdir/threads.json"
+  # Issue comments: where Codex's "Codex Review Summary" and its state marker live. Every page,
+  # so a summary past the first 100 comments is seen. Unreadable is not fatal; the review
+  # comments above still say what they say.
+  api "repos/$R/issues/$pr/comments?per_page=100" --paginate >"$tdir/issue.json" 2>/dev/null || : >"$tdir/issue.json"
+  jx codex "${head:0:8}" "$tdir/issue.json" "$tdir/threads.json" <<<"$comments" || { rm -rf "$tdir"; return 1; }
+  rm -rf "$tdir"
 }
 
 rc=0

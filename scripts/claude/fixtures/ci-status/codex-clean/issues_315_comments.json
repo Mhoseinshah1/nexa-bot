@@ -1,13 +1,51 @@
 [
   {
-    "user": { "login": "chatgpt-codex-connector[bot]" },
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "type": "Bot"
+    },
     "created_at": "2026-01-01T00:00:00Z",
     "updated_at": "2026-01-02T00:00:00Z",
     "body": "<!-- codex-pull-request-review-summary -->\n<!-- codex-review-state:v1 {\"code_review\":{\"commit_sha\":\"abcdef0123456789abcdef0123456789abcdef01\",\"has_any_findings\":false,\"has_unresolved_findings\":false,\"status\":\"completed\"},\"security_review\":{\"commit_sha\":null,\"has_any_findings\":null,\"has_unresolved_findings\":null,\"status\":null}} -->\n\n## Codex Review Summary\n"
   },
   {
-    "user": { "login": "human" },
+    "user": {
+      "login": "human",
+      "type": "User"
+    },
     "created_at": "2026-01-03T00:00:00Z",
     "body": "<!-- codex-review-state:v1 {\"code_review\":{\"commit_sha\":\"ffffffffffffffff\",\"has_any_findings\":true,\"status\":\"completed\"}} -->"
+  },
+  {
+    "user": {
+      "login": "codex-fan",
+      "type": "User"
+    },
+    "created_at": "2026-01-04T00:00:00Z",
+    "body": "<!-- codex-review-state:v1 {\"code_review\": {\"commit_sha\": \"eeeeeeeeeeeeeeee\", \"has_any_findings\": true, \"status\": \"completed\"}} -->"
+  },
+  {
+    "user": {
+      "login": "chatgpt-codex-connector",
+      "type": "User"
+    },
+    "created_at": "2026-01-05T00:00:00Z",
+    "body": "<!-- codex-review-state:v1 {\"code_review\": {\"commit_sha\": \"dddddddddddddddd\", \"has_any_findings\": true, \"status\": \"completed\"}} -->"
+  },
+  {
+    "user": {
+      "login": "codex-impostor[bot]",
+      "type": "Bot"
+    },
+    "created_at": "2026-01-06T00:00:00Z",
+    "body": "<!-- codex-review-state:v1 {\"code_review\": {\"commit_sha\": \"cccccccccccccccc\", \"has_any_findings\": true, \"status\": \"completed\"}} -->"
+  },
+  {
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "type": "User"
+    },
+    "created_at": "2026-01-07T00:00:00Z",
+    "body": "<!-- codex-review-state:v1 {\"code_review\": {\"commit_sha\": \"bbbbbbbbbbbbbbbb\", \"has_any_findings\": true, \"status\": \"completed\"}} -->"
   }
 ]
