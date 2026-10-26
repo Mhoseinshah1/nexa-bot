@@ -58,6 +58,16 @@ assert "a human comment is not reported" "$(grep -q 'src/c.ts' <<<"$out" && echo
 run codex-nothreads --codex 315
 check "a failing threads endpoint reports threads=unknown" 0 "threads=unknown" "$rc" "$out"
 
+# Codex posts nothing inline when it finds nothing: its verdict is the hidden
+# codex-review-state marker in the "Codex Review Summary" ISSUE comment.
+run codex-clean --codex 315
+check "codex marker: reviewed is the marker's commit_sha, not none" 0 "codex comments=0 threads=unknown reviewed=abcdef01 head=abcdef01 findings=none status=completed" "$rc" "$out"
+run codex-findings --codex 315
+check "codex marker with findings: findings=yes" 0 "reviewed=abcdef01 head=abcdef01 findings=yes" "$rc" "$out"
+check "codex marker: inline findings are still listed" 0 "P1 src/a.ts:42 — Refund twice on retry" "$rc" "$out"
+run codex --codex 315
+assert "no marker: no findings= claim is made" "$(grep -q 'findings=' <<<"$out" && echo 1 || echo 0)" "$out"
+
 run wait --wait 315 --every 0 --max 5
 check "wait polls until nothing is pending, then exits 0" 0 "green=2 pending=0" "$rc" "$out"
 assert "wait printed a summary per poll (2)" "$(((  $(grep -c '^abcdef01' <<<"$out") == 2) ? 0 : 1))" "$out"
