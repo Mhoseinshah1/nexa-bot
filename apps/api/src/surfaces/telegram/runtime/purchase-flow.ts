@@ -15,6 +15,7 @@ import {
   inlineLabel,
 } from '../../../modules/commerce/messaging/application/inline-buttons.js';
 import type { OrderRecord } from '../../../modules/commerce/orders/application/ports.js';
+import { personalDiscountPercentOf } from '../../../modules/commerce/pricing/domain/pricing-engine.js';
 import type { CustomerCaptureRecord } from '../../../modules/commerce/customers/application/customer-capture-ports.js';
 import {
   CANCEL_ORDER_CALLBACK_PREFIX,
@@ -491,7 +492,12 @@ export async function preinvoice(
     addedTrafficBytes:
       order.purpose === 'ADD_TRAFFIC' ? order.line.specification.trafficBytes : null,
     discount: discounted
-      ? { subtotal: order.totals.subtotal, discount: order.totals.discount }
+      ? {
+          subtotal: order.totals.subtotal,
+          discount: order.totals.discount,
+          // R10 D3: the frozen quote's own decision names the personal discount.
+          personalPercent: personalDiscountPercentOf(order.totals.quote),
+        }
       : null,
     cashback: cashback === undefined ? null : cashback.amount,
     locations: display?.displayLocations ?? [],

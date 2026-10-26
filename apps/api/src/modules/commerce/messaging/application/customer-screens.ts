@@ -47,7 +47,15 @@ export interface PreinvoiceFacts {
   readonly trafficBytes: bigint | null;
   /** What an add-traffic package adds; null otherwise. */
   readonly addedTrafficBytes: bigint | null;
-  readonly discount: { readonly subtotal: Money; readonly discount: Money } | null;
+  /**
+   * `personalPercent` (R10 D3): set when the order's frozen quote was priced with the
+   * customer's personal discount — the line then names it, instead of the generic one.
+   */
+  readonly discount: {
+    readonly subtotal: Money;
+    readonly discount: Money;
+    readonly personalPercent?: number | null;
+  } | null;
   readonly cashback: Money | null;
   readonly locations: readonly string[];
   readonly features: readonly string[];
@@ -218,10 +226,22 @@ export class CustomerScreenComposer {
       ...(facts.discount === null
         ? {}
         : {
-            discountLine: await this.templates.render(scope, 'bot.order.preinvoice_discount_line', {
-              discount: facts.discount.discount,
-              subtotal: facts.discount.subtotal,
-            }),
+            discountLine:
+              facts.discount.personalPercent === null ||
+              facts.discount.personalPercent === undefined
+                ? await this.templates.render(scope, 'bot.order.preinvoice_discount_line', {
+                    discount: facts.discount.discount,
+                    subtotal: facts.discount.subtotal,
+                  })
+                : await this.templates.render(
+                    scope,
+                    'bot.order.preinvoice_personal_discount_line',
+                    {
+                      percent: facts.discount.personalPercent,
+                      discount: facts.discount.discount,
+                      subtotal: facts.discount.subtotal,
+                    },
+                  ),
           }),
       ...(facts.cashback === null
         ? {}

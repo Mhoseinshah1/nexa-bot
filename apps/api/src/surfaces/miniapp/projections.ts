@@ -24,6 +24,7 @@ import { paysInChat } from '../../modules/commerce/checkout/application/checkout
 import { amountToTransfer } from '../../modules/commerce/payments/domain/amount-to-transfer.js';
 import { cardNumberToCopy } from '../../modules/commerce/payments/domain/card-number.js';
 import { transferFigures } from '../../modules/commerce/payments/domain/transfer-figures.js';
+import { personalDiscountPercentOf } from '../../modules/commerce/pricing/domain/pricing-engine.js';
 
 /**
  * Records to the mini app's wire (`@nexa/contracts` miniapp.ts). Projection only: every
@@ -88,6 +89,8 @@ export function orderWire(
     discount: wire(order.totals.discount),
     total: wire(order.totals.total),
     discountApplied: order.discountCode !== null,
+    // R10 D3: from the frozen quote's own decision, never today's percent.
+    personalDiscountPercent: personalDiscountPercentOf(order.totals.quote),
     discountEditable: order.state === 'DRAFT' && purchase,
     cashback: cashback === undefined ? null : wire(cashback.amount),
     expiresAt: order.expiresAt?.toISOString() ?? null,
