@@ -353,10 +353,7 @@ export const panelActivationSchema = z.union([
   customActivationSchema,
 ]);
 export type PanelActivation =
-  | MarzbanActivation
-  | RickpanelActivation
-  | SanaeiActivation
-  | CustomActivation;
+  MarzbanActivation | RickpanelActivation | SanaeiActivation | CustomActivation;
 
 /** The schema a panel's activation must satisfy, by provider type. Exhaustive. */
 export const PANEL_ACTIVATION_SCHEMAS: Readonly<{
