@@ -4442,3 +4442,36 @@ error text; what follows is only what it does not settle.
   `/cancel` once when its deadline expires a `pending` attempt; a customer who transferred but never
   sent the receipt before the deadline has money on the card and no invoice. That case was already
   stranded before (Nexa's receipt window had closed); it needs an operator either way.
+
+## R10 C2 — the custom panel (Nexa's own bridge protocol, `docs/protocols/custom-panel.md`)
+
+Defaults below are the readings that move no money and send no customer message.
+
+- **OQ-C2-01 — adopt an account after a lost create by its binding (C2-b).** After a create
+  whose answer was lost, the bridge can PROVE an account is this service's (`nexaRef`
+  matches). Today the provisioner adopts only with a recorded 2xx create answer (WP15 G7), so
+  the service waits UNRECONCILED for an operator, never refunded. Proposal: also adopt when
+  the signed read shows the matching `nexaRef` (a `binding` field on the lookup outcome, a
+  contract change, plus a provisioner change). **Not built; the owner decides.**
+- **OQ-C2-02 — declare-after-acceptance.** The `custom` capabilities are declared on Nexa's
+  own specification and a mock bridge, not a real one. Recommended: run §12 of the protocol
+  document (Nexa's shipped adapter, env-configured URL and secret, failing rather than
+  skipping) against the first real bridge before `custom_panel_provider` is turned on for a
+  production tenant. Until then the flag stays OFF.
+- **OQ-C2-03 — the flag turned off while custom panels exist.** Built: it stops new custom
+  panels only; existing ones keep operating and selling. Alternative, if the owner wants the
+  switch to stop SALES too: an eligibility reason for gated types (a contract change).
+- **OQ-C2-04 — `http://` bridges on a private network.** Refused everywhere (create, address
+  change, the adapter itself): a subscription link is a bearer secret. Allowing plain HTTP on
+  a private range is the owner's call.
+- **OQ-C2-05 — `lastConnection`.** Read and stored like Marzban's `online_at` and shown where
+  that is shown (the service card, the admin's customer view); nothing notifies on it. Whether a bridge's "never"
+  should ever trigger a customer message is not decided.
+- **OQ-C2-06 — `GET …/links` raw configs.** Specified and implemented by bridges, not called by
+  Nexa v1 (`DELIVER_RAW_CONFIGS` is not declared). Delivering raw configs needs a consumer and
+  the owner's decision on how they are shown.
+- **OQ-C2-07 — accounts not created through the protocol (`nexaRef: null`).** Never managed
+  or adopted in v1; importing an existing panel's customers through a bridge is not designed.
+- **OQ-C2-08 — the type's display name.** `canonicalName` is «Custom (Nexa bridge v1)», shown
+  Latin in the Persian admin like the other providers' names; the Features page calls the
+  switch «پنل اختصاصی (پل Nexa)». Confirm or rename.
