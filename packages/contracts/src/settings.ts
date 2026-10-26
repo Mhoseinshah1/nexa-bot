@@ -76,6 +76,11 @@ import {
 } from './data-compaction.js';
 import { uuidV7Schema } from './ids.js';
 import {
+  AUTO_RENEW_LEAD_HOURS_DEFAULT,
+  AUTO_RENEW_LEAD_HOURS_MAX,
+  AUTO_RENEW_LEAD_HOURS_MIN,
+} from './auto-renew.js';
+import {
   LATE_CREDIT_SETTING_KEYS,
   CARD_SWITCH_COOLDOWN_SECONDS_DEFAULT,
   CARD_SWITCH_COOLDOWN_SECONDS_MAX,
@@ -1742,6 +1747,24 @@ export const SETTINGS = [
     // enough that a copied launch is useless the same afternoon. At most a day.
     defaultValue: 3600,
     configures: 'mini_app',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'auto_renew.lead_hours',
+    description:
+      'Round 10, D1: how long before a service expires its automatic renewal is attempted, in ' +
+      'hours. A customer who switched «تمدید خودکار» on for a service has it renewed from their ' +
+      'wallet once the service is this close to its deadline; a wallet that does not cover it is ' +
+      'told once, and a later pass before the deadline renews it if the wallet has been topped ' +
+      'up. At least one hour (a sweep runs every fifteen minutes), at most a week. Inert while ' +
+      'the service_auto_renew flag is off, which is the default.',
+    schema: z.number().int().min(AUTO_RENEW_LEAD_HOURS_MIN).max(AUTO_RENEW_LEAD_HOURS_MAX),
+    // A day: room for a customer told their wallet is short to top it up before the deadline.
+    defaultValue: AUTO_RENEW_LEAD_HOURS_DEFAULT,
+    configures: 'service_auto_renew',
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
