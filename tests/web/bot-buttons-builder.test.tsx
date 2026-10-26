@@ -1350,6 +1350,7 @@ describe('the revision history pager', () => {
         onClose={() => undefined}
         publishedRevision={25}
         items={new Map()}
+        customs={new Map()}
         mayEdit={false}
         onRestore={() => undefined}
       />,

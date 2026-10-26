@@ -404,11 +404,11 @@ describe('personal discount (R10 D3)', () => {
       expect(stored).toEqual([{ percent: 0 }]);
     });
 
-    it('migration 0285 backfills the key into existing owner roles only, idempotently', async () => {
+    it('migration 0288 backfills the key into existing owner roles only, idempotently', async () => {
       await api.container.database.db.execute(
         sql`DELETE FROM role_permissions WHERE permission_key = 'users.discount.edit'`,
       );
-      const migration = readFileSync('apps/api/drizzle/0285_personal_discount_grant.sql', 'utf8');
+      const migration = readFileSync('apps/api/drizzle/0288_personal_discount_grant.sql', 'utf8');
       const backfill = migration.slice(migration.indexOf('INSERT INTO "role_permissions"'));
       await api.container.database.db.execute(sql.raw(backfill));
       await api.container.database.db.execute(sql.raw(backfill));

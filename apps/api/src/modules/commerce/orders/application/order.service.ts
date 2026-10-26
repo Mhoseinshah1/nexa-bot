@@ -149,6 +149,15 @@ export const MANUAL_ORDER_AUTHORITY: OrderAuthority = {
 };
 
 /**
+ * Round 10, D1: the automatic-renewal worker withdrawing a renewal order its settlement
+ * refused — the customer's own permission, in the worker's `SCHEDULER` namespace.
+ */
+export const AUTO_RENEW_ORDER_AUTHORITY: OrderAuthority = {
+  permission: ORDER_PLACE_PERMISSION,
+  namespace: 'SCHEDULER',
+};
+
+/**
  * What an order cancellation needs to know and do about the payments against it.
  *
  * A NARROW port rather than `PaymentRepository`, for the reason `CustomerBotReader`

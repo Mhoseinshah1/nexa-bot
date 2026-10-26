@@ -1,13 +1,17 @@
 import {
   MAIN_MENU_BUTTONS,
+  customMenuRouteValue,
   customerRowsOf,
+  isCustomMenuRef,
   legacyProjectionOf,
   mainMenuButton,
   packMainMenuRows,
   resolveMainMenuLayout,
   type AppearanceSlot,
   type BotMenuButton,
-  type ExplicitMainMenu,
+  type AnyExplicitMainMenu,
+  type CustomMenuRef,
+  type CustomMenuVisibleById,
   type FeatureFlagKey,
   type MainMenuButtonId,
   type MainMenuButtonStyle,
@@ -35,7 +39,7 @@ import {
  * A draft is never an answer: the runtime reads only what was published.
  */
 export type MainMenuSourceAnswer =
-  | { readonly kind: 'EXPLICIT'; readonly layout: ExplicitMainMenu; readonly revision: number }
+  | { readonly kind: 'EXPLICIT'; readonly layout: AnyExplicitMainMenu; readonly revision: number }
   | {
       readonly kind: 'LEGACY';
       readonly superseded: boolean;
@@ -77,6 +81,12 @@ export interface MainMenuKeyboardButton {
  */
 export interface MainMenuReadOptions {
   readonly pinned?: MainMenuSnapshot;
+  /**
+   * R10 D2: the SENDING bot, which decides which custom buttons are drawn (a button may be
+   * shown on selected bots only). Absent names no bot — the builder's tenant-wide view —
+   * and the bot filter is then ignored; the feature flag and the archive never are.
+   */
+  readonly botInstanceId?: string;
 }
 
 export interface MainMenuDeps {
@@ -98,6 +108,20 @@ export interface MainMenuDeps {
    */
   readonly trials: {
     anyOffered(scope: ScopeContext): Promise<boolean>;
+  };
+  /**
+   * R10 D2: the owner's custom buttons. Absent in a stand-in, which draws none. `visibleFor`
+   * is the server's per-bot answer (flag, archive, bot) with each button's label;
+   * `routeLabels` lists every label that may still be tapped, active buttons first.
+   */
+  readonly customButtons?: {
+    visibleFor(
+      scope: ScopeContext,
+      botInstanceId: string | null,
+    ): Promise<ReadonlyMap<CustomMenuRef, string>>;
+    routeLabels(
+      scope: ScopeContext,
+    ): Promise<readonly { readonly id: string; readonly label: string }[]>;
   };
   /** The tenant's own rendering — the resolver every customer message goes through. */
   readonly templates: {
@@ -253,12 +277,28 @@ export class MainMenuLayout {
     if (source.kind === 'EXPLICIT') {
       const gateOpenById: Partial<Record<MainMenuButtonId, boolean | null>> = {};
       for (const one of described) gateOpenById[one.item.button] = one.gateOpen;
-      const rows = customerRowsOf(source.layout, gateOpenById as MainMenuGateOpenById);
+      /*
+       * A custom button is asked about only when the layout places one, and only then is
+       * the table read. Anything the server does not answer `visible` is not drawn.
+       */
+      const customLabels: ReadonlyMap<CustomMenuRef, string> =
+        source.layout.v === 2 && this.deps.customButtons !== undefined
+          ? await this.deps.customButtons.visibleFor(scope, options.botInstanceId ?? null)
+          : new Map();
+      const customVisibleById: Record<string, boolean> = {};
+      for (const ref of customLabels.keys()) customVisibleById[ref] = true;
+      const rows = customerRowsOf(
+        source.layout,
+        gateOpenById as MainMenuGateOpenById,
+        customVisibleById as CustomMenuVisibleById,
+      );
       return Promise.all(
         rows.map((row) =>
           Promise.all(
             row.map(async (one) => ({
-              text: await label(mainMenuButton(one.button)),
+              text: isCustomMenuRef(one.button)
+                ? (customLabels.get(one.button) ?? '')
+                : await label(mainMenuButton(one.button)),
               style: one.style,
               iconSlot: one.iconSlot,
             })),
@@ -304,6 +344,19 @@ export class MainMenuLayout {
       if (label === '' || label.startsWith('/')) return;
       if (!routes.has(label)) routes.set(label, `/${button.command}`);
     });
+    /*
+     * R10 D2: the owner's labels, AFTER the registry's, so a registry label always wins a
+     * collision. The VALUE is `mb:<id>`, never a slash command: the runtime tests the map's
+     * value, so typed text that merely reads `mb:<id>` routes nothing. Archived buttons are
+     * routed too (active ones first): a keyboard already in a chat is answered "unavailable".
+     */
+    if (this.deps.customButtons !== undefined) {
+      for (const custom of await this.deps.customButtons.routeLabels(scope)) {
+        const label = custom.label.trim();
+        if (label === '' || label.startsWith('/') || routes.has(label)) continue;
+        routes.set(label, customMenuRouteValue(custom.id));
+      }
+    }
     return routes;
   }
 }

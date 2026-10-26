@@ -516,6 +516,8 @@ describe('the feature presentation catalogue', () => {
       // WP-A9: a reminder the customer relies on stops silently, like the families below.
       'payment_pending_reminders',
       'referrals',
+      // Round 10, D1: off stops every automatic renewal at once; opted-in services lapse.
+      'service_auto_renew',
       'service_expired_notice',
       'service_expiry_day_reminder',
       'service_expiry_reminders',

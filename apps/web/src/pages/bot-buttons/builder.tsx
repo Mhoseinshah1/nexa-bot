@@ -2,14 +2,17 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   customerRowsOf,
-  explicitMainMenuSchema,
   explicitMainMenusEqual,
+  isCustomMenuRef,
+  parseExplicitMainMenu,
+  type AnyExplicitMainMenu,
   type BotMenuBuilderResponse,
-  type ExplicitMainMenu,
+  type CustomMenuButtonView,
   type MainMenuBuilderItem,
   type MainMenuBuilderMutationResponse,
   type MainMenuButtonId,
   type MainMenuDraftView,
+  type MainMenuRowItem,
   type MainMenuResetSeed,
   type MainMenuRevisionView,
 } from '@nexa/contracts';
@@ -52,9 +55,11 @@ import {
 } from './canvas';
 import { usePointerDrag, type DragSource, type DropTarget } from './dnd';
 import { HistoryDrawer, REVISIONS_QUERY_KEY } from './history';
+import { CustomButtonsPanel, CUSTOM_BUTTONS_QUERY_KEY } from './custom-buttons';
 import { Inspector } from './inspector';
 import {
   applyDrop,
+  customVisibleOf,
   diffLayouts,
   gateAnswersOf,
   lookOf,
@@ -66,8 +71,11 @@ import {
   positionOf,
   removeToPool,
   rowLooksCramped,
+  withoutUnusableCustom,
   type ButtonChange,
 } from './model';
+
+type ExplicitMainMenu = AnyExplicitMainMenu;
 
 export const BUILDER_QUERY_KEY = ['bot-menu-builder'] as const;
 /** Every builder write carries this key, so the page knows one is in flight (Codex #134-1). */
@@ -138,7 +146,24 @@ interface Seed {
   readonly layout: ExplicitMainMenu;
 }
 
-const seedOf = (draft: MainMenuDraftView): Seed => ({ basis: draft, layout: draft.layout });
+/**
+ * The page edits the server's draft MINUS any custom button archived since it was saved (R10
+ * D2): the server refuses a layout that places one, so the page drops it to the pool and the
+ * draft reads as changed, ready to save.
+ */
+/**
+ * A custom button whose label a registry button also shows: the registry button wins the tap
+ * (ADR 0036 §5), so the custom one is unreachable until one of them is renamed.
+ */
+const shadowedBy = (
+  custom: CustomMenuButtonView | undefined,
+  items: readonly MainMenuBuilderItem[],
+): boolean => custom !== undefined && items.some((one) => one.label === custom.label);
+
+const seedOf = (draft: MainMenuDraftView, customs: readonly CustomMenuButtonView[]): Seed => ({
+  basis: draft,
+  layout: withoutUnusableCustom(draft.layout, customs),
+});
 
 function sameServerDraft(a: MainMenuDraftView, b: MainMenuDraftView): boolean {
   return (
@@ -179,8 +204,8 @@ export function MenuBuilder({
 }) {
   const client = useQueryClient();
   const toast = useToast();
-  const [seed, setSeed] = useState<Seed>(() => seedOf(view.draft));
-  const [selected, setSelected] = useState<MainMenuButtonId | null>(null);
+  const [seed, setSeed] = useState<Seed>(() => seedOf(view.draft, view.customButtons));
+  const [selected, setSelected] = useState<MainMenuRowItem | null>(null);
   const [mode, setMode] = useState<Mode>('edit');
   const [announcement, setAnnouncement] = useState('');
   const [conflict, setConflict] = useState<'save' | 'publish' | 'reset' | 'restore' | null>(null);
@@ -192,19 +217,24 @@ export function MenuBuilder({
     | null
   >(null);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const focusChip = useRef<MainMenuButtonId | null>(null);
+  const focusChip = useRef<MainMenuRowItem | null>(null);
   const publishRef = useRef<HTMLButtonElement>(null);
 
   const items = useMemo(
     () => new Map<MainMenuButtonId, MainMenuBuilderItem>(view.items.map((item) => [item.id, item])),
     [view.items],
   );
+  // R10 D2: the owner's custom buttons by reference, for labels and the pool.
+  const customs = useMemo(
+    () => new Map<string, CustomMenuButtonView>(view.customButtons.map((one) => [one.ref, one])),
+    [view.customButtons],
+  );
   // The Inspector's icon control says which slots carry a custom emoji (restored 2026-10-05).
   const appearance = useQuery({ queryKey: ['appearance'], queryFn: fetchAppearance });
 
   const layout = seed.layout;
   const dirty = !explicitMainMenusEqual(layout, seed.basis.layout);
-  const valid = explicitMainMenuSchema.safeParse(layout).success;
+  const valid = parseExplicitMainMenu(layout).success;
   // The server's draft moved while this page held its own: adopt it when nothing would be
   // lost, and otherwise SAY so — a save would then be refused (409), never overwrite. A read
   // OLDER than the draft this page already holds (one that started before this page's own
@@ -223,11 +253,23 @@ export function MenuBuilder({
     !olderThan(view.draft, seed.basis);
   useEffect(() => {
     if (serverMoved && !dirty) {
-      setSeed(seedOf(view.draft));
+      setSeed(seedOf(view.draft, view.customButtons));
       // A refusal answered by this fresh read is no longer the page's state.
       setConflict(null);
     }
-  }, [serverMoved, dirty, view.draft]);
+  }, [serverMoved, dirty, view.draft, view.customButtons]);
+  // The custom-button LIST can change while the draft does not (an archive from the panel
+  // below, Codex #337-2): the reseed above never runs then, and a reference to a button that
+  // is no longer usable would stay in the rows until the server refused the next save or
+  // publish. Prune just those references from what the page holds, keeping every other
+  // unsaved edit; the draft then reads as changed, ready to save. `withoutUnusableCustom`
+  // returns the same object when nothing is pruned, so this settles after one pass.
+  useEffect(() => {
+    setSeed((current) => {
+      const pruned = withoutUnusableCustom(current.layout, view.customButtons);
+      return pruned === current.layout ? current : { ...current, layout: pruned };
+    });
+  }, [view.customButtons]);
 
   useUnsavedChanges(mayEdit && dirty, t('web.bb_unsaved_leave'));
   // The page's tab strip marks the builder's tab while the draft holds unsaved edits.
@@ -243,7 +285,7 @@ export function MenuBuilder({
 
   const adopt = (response: MainMenuBuilderMutationResponse) => {
     setAnswered(latestRead.current);
-    setSeed(seedOf(response.head.draft));
+    setSeed(seedOf(response.head.draft, view.customButtons));
     setConflict(null);
     setReloadError(null);
   };
@@ -256,14 +298,15 @@ export function MenuBuilder({
 
   // --- edits ------------------------------------------------------------------------
 
-  const describePlace = (next: ExplicitMainMenu, id: MainMenuButtonId): string => {
-    const label = labelOf(id, items.get(id));
+  const registryItem = (id: MainMenuRowItem) => (isCustomMenuRef(id) ? undefined : items.get(id));
+  const describePlace = (next: ExplicitMainMenu, id: MainMenuRowItem): string => {
+    const label = labelOf(id, registryItem(id), customs.get(id));
     const at = positionOf(next, id);
     return at === null
       ? fill(t('web.bb_announce_pool'), { label })
       : fill(t('web.bb_announce_moved'), { label, row: at.row + 1, index: at.index + 1 });
   };
-  const onMove = (id: MainMenuButtonId, op: (l: ExplicitMainMenu) => ExplicitMainMenu) => {
+  const onMove = (id: MainMenuRowItem, op: (l: ExplicitMainMenu) => ExplicitMainMenu) => {
     if (!editable) return;
     const next = op(layout);
     if (explicitMainMenusEqual(next, layout)) return;
@@ -318,7 +361,7 @@ export function MenuBuilder({
    * the arrows: up and down change row; the arrow pointing to the start of the line (right,
    * in Persian) moves earlier. Delete takes the button back to the pool.
    */
-  const onKey = (id: MainMenuButtonId, event: KeyboardEvent<HTMLButtonElement>) => {
+  const onKey = (id: MainMenuRowItem, event: KeyboardEvent<HTMLButtonElement>) => {
     if (!editable) return;
     const rtl = document.documentElement.dir !== 'ltr';
     const placed = positionOf(layout, id) !== null;
@@ -342,6 +385,8 @@ export function MenuBuilder({
   const context: ChipContext = {
     layout,
     items,
+    customs,
+    customMenuEnabled: view.customMenuEnabled,
     selected,
     editable,
     drag,
@@ -467,7 +512,7 @@ export function MenuBuilder({
     }
     setReloadError(null);
     setAnswered(null);
-    setSeed(seedOf(read.data.draft));
+    setSeed(seedOf(read.data.draft, read.data.customButtons));
     setConflict(null);
     save.reset();
     say(t('web.bb_reloaded'));
@@ -526,19 +571,31 @@ export function MenuBuilder({
     rows.map((row) =>
       row.map((one) => ({
         key: one.button,
-        label: labelOf(one.button, items.get(one.button)),
+        label: labelOf(
+          one.button,
+          isCustomMenuRef(one.button) ? undefined : items.get(one.button),
+          customs.get(one.button),
+        ),
         look: lookOf(one),
         iconSlot: one.iconSlot,
       })),
     );
-  const customerRows = toPreview(customerRowsOf(layout, gates));
+  const bot =
+    view.iconEligibility.find((one) => one.status === 'ACTIVE') ?? view.iconEligibility[0];
+  // The phone names one bot, and a custom button is drawn on it only if it is shown there.
+  const customVisible = customVisibleOf(
+    view.customButtons,
+    view.customMenuEnabled,
+    bot?.botInstanceId ?? null,
+  );
+  const customerRows = toPreview(customerRowsOf(layout, gates, customVisible));
   // The live keyboard: the server's rendered labels, row by row. While an explicit layout
   // is what customers get, each key's style is that PUBLISHED layout's, drawn by
   // the same rule with the server's gate answers — used only when it lines up key for key
   // with the server's rows, so nothing is drawn that the server did not say (Codex #134-5).
   const publishedRows =
     view.source === 'EXPLICIT' && view.published?.layout !== null && view.published !== null
-      ? customerRowsOf(view.published.layout, gates)
+      ? customerRowsOf(view.published.layout, gates, customVisible)
       : null;
   const aligned =
     publishedRows !== null &&
@@ -555,15 +612,14 @@ export function MenuBuilder({
       };
     }),
   );
-  const wide = (id: MainMenuButtonId) => items.get(id)?.wide ?? false;
+  const wide = (id: MainMenuRowItem) =>
+    isCustomMenuRef(id) ? false : (items.get(id)?.wide ?? false);
   const crampedRows = layout.rows
     .map((row, at) => (rowLooksCramped(row, wide) ? at + 1 : null))
     .filter((n): n is number => n !== null);
   const usesIcons = layout.buttons.some(
     (config) => config.iconSlot !== null && positionOf(layout, config.button) !== null,
   );
-  const bot =
-    view.iconEligibility.find((one) => one.status === 'ACTIVE') ?? view.iconEligibility[0];
   const phoneTitle =
     bot === undefined ? (
       t('web.bot_buttons_preview_title')
@@ -782,7 +838,10 @@ export function MenuBuilder({
           key={selected ?? 'none'}
           layout={layout}
           id={selected}
-          item={selected === null ? undefined : items.get(selected)}
+          item={selected === null ? undefined : registryItem(selected)}
+          custom={selected === null ? undefined : customs.get(selected)}
+          shadowed={shadowedBy(selected === null ? undefined : customs.get(selected), view.items)}
+          customMenuEnabled={view.customMenuEnabled}
           editable={editable}
           iconEligibility={view.iconEligibility}
           appearanceSlots={appearance.data?.slots ?? null}
@@ -793,11 +852,21 @@ export function MenuBuilder({
         />
       </div>
 
+      <CustomButtonsPanel
+        bots={view.iconEligibility}
+        mayEdit={mayEdit}
+        onChanged={() => {
+          void client.invalidateQueries({ queryKey: BUILDER_QUERY_KEY });
+          void client.invalidateQueries({ queryKey: CUSTOM_BUTTONS_QUERY_KEY });
+        }}
+      />
+
       <HistoryDrawer
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
         publishedRevision={view.published?.revision ?? null}
         items={items}
+        customs={customs}
         mayEdit={mayEdit}
         onRestore={(revision) => {
           setHistoryOpen(false);
@@ -812,6 +881,7 @@ export function MenuBuilder({
           customerRows={customerRows}
           liveRows={liveRows}
           items={items}
+          customs={customs}
           onCancel={() => setAsking(null)}
           onConfirm={() => {
             setAsking(null);
@@ -874,6 +944,7 @@ function PublishDialog({
   customerRows,
   liveRows,
   items,
+  customs,
   onCancel,
   onConfirm,
 }: {
@@ -882,6 +953,7 @@ function PublishDialog({
   customerRows: readonly (readonly PreviewKey[])[];
   liveRows: readonly (readonly PreviewKey[])[];
   items: ReadonlyMap<MainMenuButtonId, MainMenuBuilderItem>;
+  customs: ReadonlyMap<string, CustomMenuButtonView>;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -923,7 +995,13 @@ function PublishDialog({
         <ul className="bb-diff" data-testid="bb-diff">
           {changes?.map((change) => (
             <li key={change.id} data-diff={change.id}>
-              <strong>{labelOf(change.id, items.get(change.id))}</strong>
+              <strong>
+                {labelOf(
+                  change.id,
+                  isCustomMenuRef(change.id) ? undefined : items.get(change.id),
+                  customs.get(change.id),
+                )}
+              </strong>
               {': '}
               {change.changes.map((one) => t(CHANGE_LABEL[one])).join(t('web.bb_sep'))}
             </li>

@@ -57,6 +57,16 @@ export const MINIAPP_FA = {
   'miniapp.service_action_ADD_TRAFFIC': 'حجم اضافه',
   'miniapp.service_action_ADD_TIME': 'زمان اضافه',
   'miniapp.service_offer_empty': 'فعلاً گزینه‌ای برای این کار نیست.',
+  // Round 10, D1: «تمدید خودکار».
+  'miniapp.auto_renew_title': 'تمدید خودکار',
+  'miniapp.auto_renew_on':
+    'تمدید خودکار این سرویس فعال است؛ {hours} ساعت پیش از پایان اعتبار، با مبلغ حداکثر {price} از کیف پول تمدید می‌شود.',
+  'miniapp.auto_renew_off':
+    'با فعال‌سازی، {hours} ساعت پیش از پایان اعتبار، سرویس با همین پلن و مبلغ {price} از کیف پول شما تمدید می‌شود. اگر موجودی کافی نباشد فقط یک بار اطلاع می‌دهیم و اگر مبلغ تمدید بیشتر شود، تمدید خودکار انجام نمی‌شود.',
+  'miniapp.auto_renew_enable': 'فعال‌سازی تمدید خودکار',
+  'miniapp.auto_renew_confirm': 'تأیید: تمدید خودکار با مبلغ {price}',
+  'miniapp.auto_renew_disable': 'لغو تمدید خودکار',
+  'miniapp.auto_renew_unavailable': 'در حال حاضر تمدید خودکار برای این سرویس در دسترس نیست.',
   'miniapp.services_title': 'سرویس‌های من',
 
   'miniapp.store_title': 'فروشگاه',

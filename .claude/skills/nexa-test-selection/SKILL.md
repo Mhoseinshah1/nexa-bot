@@ -49,9 +49,13 @@ Run every tier through the summary instead of reading raw output:
 
 ```bash
 bash scripts/claude/test-summary.sh pnpm verify
-bash scripts/claude/test-summary.sh pnpm test:integration <files>
+bash scripts/claude/test-summary.sh pnpm exec vitest run --project integration <files>
 bash scripts/claude/test-summary.sh --from "$SCRATCH/int.log"   # an existing log
 ```
+
+Trap: `pnpm test:integration -- <files>` ignores the file list and runs the
+WHOLE integration suite; for selected files always use
+`pnpm exec vitest run --project integration <files>` (same for `unit` and `web`).
 
 It prints `passed=N failed=N skipped=N`, the failing test names or failed
 `pnpm verify` stages, the first 20 lines of each failure, `exit=N` and the raw

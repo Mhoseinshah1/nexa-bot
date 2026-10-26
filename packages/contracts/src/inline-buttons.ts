@@ -149,6 +149,8 @@ export const INLINE_BUTTONS = [
   // Navigation
   button('main_menu', 'NAVIGATION', 'bot.menu.main_button'),
   button('list.close', 'NAVIGATION', 'bot.wallet.topup_close_button'),
+  // R10 D2: the URL button under a custom main-menu link button's answer.
+  button('custom.link_open', 'NAVIGATION', 'bot.custom_button.open_link_button', 'URL'),
 
   // Wallet
   button('wallet.open', 'WALLET', 'bot.wallet.open_button'),
@@ -267,6 +269,10 @@ export const INLINE_BUTTONS = [
     'SERVICE_ACTIONS',
     'bot.service.refund_request_confirm_button',
   ),
+  // Round 10, D1: «تمدید خودکار» — on and off are one slot; the ON tap asks first.
+  button('service.auto_renew_enable', 'SERVICE_ACTIONS', 'bot.service.auto_renew_enable_button'),
+  button('service.auto_renew_disable', 'SERVICE_ACTIONS', 'bot.service.auto_renew_disable_button'),
+  button('service.auto_renew_confirm', 'SERVICE_ACTIONS', 'bot.service.auto_renew_confirm_button'),
   button('service.transfer', 'SERVICE_ACTIONS', 'bot.service.transfer_button'),
   button('service.transfer_confirm', 'SERVICE_ACTIONS', 'bot.service.transfer_confirm_button'),
 

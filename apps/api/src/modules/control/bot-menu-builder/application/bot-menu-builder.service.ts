@@ -4,17 +4,20 @@ import {
   BOT_MENU_PUBLISHED_READABLE_CODE,
   BOT_MENU_PUBLISHED_UNREADABLE_CODE,
   CONTROL_ERROR_CODES,
+  CUSTOM_MENU_BUTTON_ERROR_CODES,
+  customMenuIdOfRef,
   DEFAULT_EXPLICIT_MAIN_MENU,
   MAIN_MENU_BUTTONS,
   PLATFORM_ERROR_CODES,
   errors,
   explicitFromLegacy,
-  explicitMainMenuSchema,
   explicitMainMenusEqual,
   legacyProjectionOf,
   mainMenuLayoutSchema,
   mainMenuRevisionsQuerySchema,
   normalizeExplicitMainMenu,
+  parseExplicitMainMenu,
+  placedCustomRefs,
   publishMainMenuRequestSchema,
   resetMainMenuDraftRequestSchema,
   restoreMainMenuRevisionRequestSchema,
@@ -24,7 +27,8 @@ import {
   type BotMenuBuilderResponse,
   type BotMenuButton,
   type Clock,
-  type ExplicitMainMenu,
+  type AnyExplicitMainMenu,
+  type FeatureFlagKey,
   type IdGenerator,
   type IdempotencyStore,
   type MainMenuBuilderHead,
@@ -65,6 +69,8 @@ import {
   PUBLISHED_UNREADABLE_DEDUPE_KEY,
   type PublishedMainMenuSource,
 } from './main-menu-source.js';
+import type { CustomMenuButtonRepository } from './custom-menu-button.ports.js';
+import { customMenuButtonViewOf as customButtonViewOf } from './custom-menu-button.service.js';
 import type { MainMenuBuilderRepository, StoredMainMenuLayout } from './ports.js';
 
 export const BOT_MENU_BUILDER_VIEW_PERMISSION = 'settings.view' satisfies PermissionKey;
@@ -123,6 +129,11 @@ export interface BotMenuBuilderServiceDeps {
   readonly defaultLabel: (key: TemplateKey) => string;
   /** The tenant's bots with their last appearance test — the preview names one of them. */
   readonly bots: { listBots(scope: TenantContext): Promise<AppearanceBotRecord[]> };
+  /** R10 D2: the owner's custom buttons a layout may place, and the flag that draws them. */
+  readonly customButtons: Pick<CustomMenuButtonRepository, 'list' | 'findMany'>;
+  readonly features: {
+    isEnabled(scope: TenantContext, key: FeatureFlagKey, tx?: unknown): Promise<boolean>;
+  };
 }
 
 /**
@@ -158,10 +169,12 @@ export class BotMenuBuilderService {
     const answer = pinned.source;
     const row = state.layout;
     const head = headOf(row, explicitFromLegacy(pinned.legacy), setting.version);
-    const [described, live, bots] = await Promise.all([
+    const [described, live, bots, customButtons, customMenuEnabled] = await Promise.all([
       this.deps.mainMenu.describeFor(scope, { gatesForHidden: true, pinned }),
       this.deps.mainMenu.rowsFor(scope, { pinned }),
       this.deps.bots.listBots(scope),
+      this.deps.customButtons.list(scope),
+      this.deps.features.isEnabled(scope, 'custom_menu_buttons'),
     ]);
     return {
       source: answer.kind,
@@ -170,7 +183,11 @@ export class BotMenuBuilderService {
       settingVersion: setting.version,
       draft: head.draft,
       published: head.published,
-      items: await this.items(scope, described),
+      items: await this.items(
+        scope,
+        described,
+        customButtons.filter((one) => one.archivedAt === null).map((one) => one.label),
+      ),
       live: { rows: live },
       iconEligibility: bots.map((bot) => ({
         botInstanceId: bot.id,
@@ -179,6 +196,8 @@ export class BotMenuBuilderService {
         // The runtime's own rule (`decorationFor`), not a copy of it.
         eligible: isCustomEmojiEligible(bot),
       })),
+      customButtons: customButtons.map(customButtonViewOf),
+      customMenuEnabled,
     };
   }
 
@@ -218,7 +237,7 @@ export class BotMenuBuilderService {
     const denial = this.denial(scope, BOT_MENU_BUILDER_AUDIT_ACTIONS.DRAFT_SAVED);
     await this.authorize(scope, actor, denial);
     const command = saveMainMenuDraftRequestSchema.parse(input);
-    const parsed = explicitMainMenuSchema.safeParse(command.layout);
+    const parsed = parseExplicitMainMenu(command.layout);
     if (!parsed.success) {
       throw errors.validation(
         CONTROL_ERROR_CODES.INVALID_VALUE,
@@ -240,6 +259,7 @@ export class BotMenuBuilderService {
     });
     return this.mutate(scope, actor, denial, command.idempotencyKey, requestHash, async (tx) => {
       const before = await this.lockedRow(scope, tx, command.expectedDraftVersion);
+      await this.assertCustomRefsUsable(scope, tx, layout);
       if (before !== null && sameDraft(before, layout)) {
         return {
           changed: false,
@@ -407,6 +427,8 @@ export class BotMenuBuilderService {
           'The saved draft cannot be read by this release. Save the draft again.',
         );
       }
+      // Every custom button the layout places must still exist and be active, read HERE.
+      await this.assertCustomRefsUsable(scope, tx, layout);
       const setting = await this.deps.settings.resolve(scope, 'bot.main_menu', tx);
       /*
        * The DURABLE legacy baseline (owner, PR #133). A publish OVERWRITES `bot.main_menu`.
@@ -558,6 +580,7 @@ export class BotMenuBuilderService {
   private async items(
     scope: TenantContext,
     described: Awaited<ReturnType<BuilderMainMenuReader['describeFor']>>,
+    customLabels: readonly string[],
   ): Promise<MainMenuBuilderItem[]> {
     const gateOf = new Map(described.map((one) => [one.item.button, one]));
     const rendered = await Promise.all(
@@ -581,12 +604,43 @@ export class BotMenuBuilderService {
         defaultAppearanceSlot: button.appearanceSlot,
         gate: decision?.gate ?? null,
         gateOpen: decision?.gate == null ? null : (decision.gateOpen ?? null),
+        // A custom button with the same label is unreachable by it: the registry wins (D2).
         duplicateLabel:
           label !== '' &&
-          rendered.some((other) => other.button !== button && other.label === label),
+          (rendered.some((other) => other.button !== button && other.label === label) ||
+            customLabels.includes(label)),
         slashLabel: label.startsWith('/'),
       };
     });
+  }
+
+  /**
+   * R10 D2: a layout may place only custom buttons that exist in THIS tenant and are not
+   * archived — checked inside the write's transaction, at save and again at publish, so a
+   * button archived since the draft was saved cannot be published onto a keyboard.
+   */
+  private async assertCustomRefsUsable(
+    scope: TenantContext,
+    tx: TransactionScope,
+    layout: AnyExplicitMainMenu,
+  ): Promise<void> {
+    const refs = placedCustomRefs(layout);
+    if (refs.length === 0) return;
+    const ids = refs.map((ref) => customMenuIdOfRef(ref)).filter((id): id is string => id !== null);
+    const found = new Map(
+      (await this.deps.customButtons.findMany(scope, ids, tx)).map((one) => [one.id, one]),
+    );
+    const unusable = refs.filter((ref) => {
+      const one = found.get(customMenuIdOfRef(ref) ?? '');
+      return one === undefined || one.archivedAt !== null;
+    });
+    if (unusable.length > 0) {
+      throw errors.validation(
+        CUSTOM_MENU_BUTTON_ERROR_CODES.ARCHIVED_IN_LAYOUT,
+        'The layout places a custom button that does not exist or was archived.',
+        { refs: unusable },
+      );
+    }
   }
 
   /** The tenant's row under its lock, refused when it is not at the version the caller read. */
@@ -609,7 +663,7 @@ export class BotMenuBuilderService {
     tx: TransactionScope,
     before: StoredMainMenuLayout | null,
     change: {
-      readonly draft: ExplicitMainMenu;
+      readonly draft: AnyExplicitMainMenu;
       readonly restoredFromRevisionId: string | null;
       /**
        * The draft's legacy baseline. A first draft always states one (the row is created
@@ -773,13 +827,13 @@ export class BotMenuBuilderService {
 }
 
 /** A stored layout, parsed and in canonical form; null when this release cannot read it. */
-function readLayout(stored: unknown): ExplicitMainMenu | null {
+function readLayout(stored: unknown): AnyExplicitMainMenu | null {
   if (stored === null || stored === undefined) return null;
-  const parsed = explicitMainMenuSchema.safeParse(stored);
+  const parsed = parseExplicitMainMenu(stored);
   return parsed.success ? normalizeExplicitMainMenu(parsed.data) : null;
 }
 
-function sameDraft(row: StoredMainMenuLayout, layout: ExplicitMainMenu): boolean {
+function sameDraft(row: StoredMainMenuLayout, layout: AnyExplicitMainMenu): boolean {
   const draft = readLayout(row.draft);
   return draft !== null && explicitMainMenusEqual(draft, layout);
 }
@@ -790,7 +844,7 @@ function sameDraft(row: StoredMainMenuLayout, layout: ExplicitMainMenu): boolean
  */
 function headOf(
   row: StoredMainMenuLayout | null,
-  seed: ExplicitMainMenu,
+  seed: AnyExplicitMainMenu,
   settingVersion: number | null,
 ): MainMenuBuilderHead {
   const published =

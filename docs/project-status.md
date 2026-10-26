@@ -5,12 +5,14 @@ This file was moved verbatim out of `CLAUDE.md` on 2026-10-24. It holds project 
 ## Contents
 
 - [Phases and status](#phases-and-status)
+- [Owner-defined main-menu buttons (R10 D2)](#owner-defined-main-menu-buttons-r10-d2)
 - [Authentication and authorization](#authentication-and-authorization)
 - [Payments and gateways (TonPays)](#payments-and-gateways-tonpays)
 - [Providers and panels (Phase 3)](#providers-and-panels-phase-3)
 - [Pricing, referral and resellers](#pricing-referral-and-resellers)
 - [Money rules](#money-rules)
 - [Phase 4 product rules](#phase-4-product-rules)
+- [Automatic renewal (Round 10, D1)](#automatic-renewal-round-10-d1)
 - [Phase 2 control plane](#phase-2-control-plane)
 - [Phase 6 capacity and usernames](#phase-6-capacity-and-usernames)
 - [Deployment](#deployment)
@@ -49,6 +51,30 @@ Telegram bootstrap surface; 4J the final hardening pass
 removed `PAID_UNFULFILLED` and everything built on it — the operator retry, the
 reassignment, `orders.fulfil` — in favour of one automatic outcome. See the four
 money rules below.
+
+## Owner-defined main-menu buttons (R10 D2)
+
+Owner-defined buttons on the customer main menu, added from the Web Admin: a **link** (opens
+a URL) or **content** (a stored text, photo or document the bot sends). Binding rules; the
+reasoning is ADR-0036.
+
+- **Off by default** (`custom_menu_buttons`, switched from the Web Admin's features page). Off, no
+  custom button is drawn on any keyboard and a tap on a stale one is answered
+  `bot.custom_button.unavailable`; the registry buttons are exactly as before.
+- **Placed through the builder**, never in `bot.main_menu`. A layout that places a custom button is
+  stored as `v: 2` (`custom:<uuid>` rows); one that places none is **always `v: 1`**, so a tenant
+  that never uses the feature is untouched by a rollback. A `v: 2` head read by an older release
+  falls back to the projection (the recorded `bot_menu.published_unreadable` degrade).
+- **A custom button is always gated** (flag, archive, sending bot), so it never keeps a keyboard
+  non-empty. "Per bot" means which bots show it.
+- **A route is not authority.** The tap re-decides from state (flag, archive, bot, the PUBLISHED
+  layout). A custom label routes to the map VALUE `mb:<uuid>`; typed `mb:<uuid>` routes nothing; a
+  registry label always wins a collision.
+- **Content is bytes, never a `file_id`**, under the ticket-file allow-list; a link must pass the
+  https-only grammar; the operator's text is a value of a plain-text template. Limits: 20 buttons,
+  label 64, text 4096, caption 1024, 50 MB per tenant. A button is archived, never deleted.
+- **Owner's real-bot acceptance** (not done by the tests): an inline URL button opens, a multipart
+  photo and document arrive, the reply keyboard shows the custom label and its style.
 
 ## Authentication and authorization
 
@@ -293,6 +319,26 @@ Four Phase 4 rules that are easy to break by accident:
   and that is a stated exception with a bound and a test — see
   `docs/conventions.md`. Everything else reads `ScopeActivityReader` inside its
   transaction.
+
+## Automatic renewal (Round 10, D1)
+
+Owner spec, binding: the customer opts in per service («تمدید خودکار», bot service screen
+and mini app); before expiry (`auto_renew.lead_hours`, default 24) a covered wallet renews
+it through the normal renewal service — same pricing, ledger, provisioning, and ops log
+«منبع: تمدید خودکار»; a short wallet gets ONE notice through the reminder lane; idempotent
+per service per period, never double-charged; feature flag `service_auto_renew` OFF by
+default, switchable from the Web Admin. Lead decisions (Round 10): imported (Mirza)
+services are not offered it in v1 (`OQ-R10-D1-01`); a price above the total consented at
+opt-in is not renewed and is told once; a transfer clears the consent; the worker acts as
+`SYSTEM_JOB` (surface and idempotency namespace `SCHEDULER`) with keys derived from the
+unique (service, period) run row; the flag off stops new runs immediately.
+
+- **No second money path.** The sweep runs the customer's own RENEW draft, confirmation
+  and `settleFromWallet`, exactly as the manual order runs an operator's.
+- **A debit commits only with `RENEWED`.** The run's `CLAIMED -> RENEWED` is the
+  settlement's `inTransaction` hook, conditional on the attempt, and it re-reads the flag,
+  the owner's consent and its ceiling where the money moves.
+- **No order for money that is not there.** The wallet is read before any draft.
 
 ## Phase 2 control plane
 

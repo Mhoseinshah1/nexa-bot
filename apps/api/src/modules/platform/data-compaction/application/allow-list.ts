@@ -284,6 +284,16 @@ export const CUSTOMER_NOTIFICATION_COMPACTION: Readonly<
   SERVICE_RENEWED: ANNOUNCED,
   SERVICE_TRAFFIC_ADDED: ANNOUNCED,
   SERVICE_TIME_ADDED: ANNOUNCED,
+  SERVICE_AUTO_RENEW_FUNDS_SHORT: {
+    compact: 'RESOLVED',
+    reason:
+      'Subject is a `service_auto_renew_runs` row, one per (service, period); the sweep ' +
+      "notifies only when it stamps that row's `notified_at`, which it does once.",
+  },
+  SERVICE_AUTO_RENEW_PRICE_CHANGED: {
+    compact: 'RESOLVED',
+    reason: 'As SERVICE_AUTO_RENEW_FUNDS_SHORT.',
+  },
 };
 
 /** The resolved states a row may be removed in. PENDING and UNCONFIRMED never. */

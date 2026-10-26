@@ -117,8 +117,14 @@ export function firstTwoLines(text: string | null, perLine = 160): string | null
  * R9 C2: the value of the source line of a purchase, renewal, extra traffic, extra time or
  * ticket log — «مینی‌اپ» when the recorded source surface is the mini app, «ربات» for anything
  * else (a surface that is not the mini app, or no recorded surface at all, is the bot).
+ * Round 10, D1: «تمدید خودکار» when an automatic-renewal run paid the order (`autoRenew`).
  */
-export function sourceOf(surface: string | null | undefined, words: OpsLogWords): string {
+export function sourceOf(
+  surface: string | null | undefined,
+  words: OpsLogWords,
+  autoRenew = false,
+): string {
+  if (autoRenew) return words.sourceName('AUTO_RENEW');
   return words.sourceName(surface === 'MINI_APP' ? 'MINI_APP' : 'BOT');
 }
 
@@ -335,7 +341,7 @@ export function serviceCreated(input: {
   // R9 C2: the «first purchase of the customer» line, only for their first paid purchase
   // (`OrderFact.isFirstPurchase`, one definition shared with the badge and the nightly count).
   if (order.isFirstPurchase) values['firstPurchase'] = words.firstPurchaseYes;
-  values['source'] = sourceOf(origin?.surface, words);
+  values['source'] = sourceOf(origin?.surface, words, origin?.autoRenew === true);
   put(values, 'phone', customer?.phone);
   put(values, 'location', order.locationLabel);
   put(values, 'panelName', service.panelName === '' ? null : service.panelName);
@@ -401,7 +407,7 @@ export function serviceChanged(input: {
   };
   // Always present (see `serviceCreated`): the title line must survive an absent badge.
   values['badges'] = words.badges({ firstPurchase: false, reseller: order.reseller }) ?? '';
-  values['source'] = sourceOf(origin?.surface, words);
+  values['source'] = sourceOf(origin?.surface, words, origin?.autoRenew === true);
   put(values, 'phone', customer?.phone);
   put(values, 'panelName', service.panelName === '' ? null : service.panelName);
   put(values, 'serviceUsername', service.providerUsername);

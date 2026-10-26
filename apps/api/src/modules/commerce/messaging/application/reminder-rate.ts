@@ -159,6 +159,9 @@ export const REMINDER_KIND_FLAGS: Readonly<
   PAYMENT_PENDING_REMINDER: 'payment_pending_reminders',
   ORDER_PENDING_REMINDER: 'payment_pending_reminders',
   RESELLER_MINIMUM_REMINDER: 'reseller_minimum_reminders',
+  // Round 10, D1: the automatic-renewal notices are held while the feature is off.
+  SERVICE_AUTO_RENEW_FUNDS_SHORT: 'service_auto_renew',
+  SERVICE_AUTO_RENEW_PRICE_CHANGED: 'service_auto_renew',
 };
 
 /** How many reminders this pass may claim: what the minute leaves, within the pass's room. */

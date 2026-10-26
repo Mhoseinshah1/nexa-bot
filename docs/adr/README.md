@@ -50,3 +50,4 @@ ADR says so explicitly.
 | [0033](0033-telegram-business-conversations-and-human-takeover.md) | Telegram Business conversations, and why a human always wins               | Accepted for implementation — TB0            |
 | [0034](0034-support-ai-provider-abstraction.md)                    | The support AI: one provider contract, a structured decision, no authority | Accepted for implementation — TB0            |
 | [0035](0035-support-knowledge-and-controlled-learning.md)          | Support knowledge, and why nothing is learned without a reviewer           | Accepted for implementation — TB0            |
+| [0036](0036-custom-main-menu-buttons.md)                           | Owner-defined main-menu buttons, and why the layout became version 2       | Accepted — R10 D2                            |

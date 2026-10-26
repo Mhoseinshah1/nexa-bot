@@ -63,6 +63,7 @@ export * from './bot-commands.js';
 export * from './bot-menu.js';
 // Round T: the button builder — explicit rows, styles, icons, draft/publish/revisions.
 export * from './bot-menu-builder.js';
+export * from './custom-menu-buttons.js';
 // Owner spec §6: the customer's inline («شیشه‌ای») buttons — keys, labels, styles.
 export * from './inline-buttons.js';
 export * from './service-card-layout.js';
@@ -89,6 +90,8 @@ export * from './messaging-reliability.js';
 export * from './channel-membership.js';
 export * from './service-refund-requests.js';
 export * from './service-transfer.js';
+// Round 10, D1: automatic renewal (تمدید خودکار).
+export * from './auto-renew.js';
 // WP-A7: the support ticket system.
 export * from './tickets.js';
 export * from './miniapp.js';

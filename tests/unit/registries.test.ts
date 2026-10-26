@@ -299,6 +299,9 @@ describe('the feature flag registry', () => {
       // the Stars route and the FX section it switches on are reachable, and every
       // existing route keeps pricing exactly as before until an operator switches a mode.
       'central_fx',
+      // R10 D2. Off by default; the custom main-menu buttons it switches on are reachable, and
+      // with it off no custom button is drawn and a tap on a stale one is answered as unavailable.
+      'custom_menu_buttons',
       // R10 C2. Off by default; creating a `custom` (bridge-protocol) panel is refused and
       // the type is hidden from the panel form while it is off. Custom panels that already
       // exist keep operating either way.
@@ -346,6 +349,9 @@ describe('the feature flag registry', () => {
       'rich_messages',
       'rich_plan_table',
       'rich_premium_emoji',
+      // Round 10, D1. Off by default; the customer's «تمدید خودکار» switch and the sweep it
+      // switches on are reachable, and off stops every new run while consents are kept.
+      'service_auto_renew',
       // The three reminder switches. `service_expired_notice` is a flag rather than a
       // sixth threshold because it is not a number: it fires at zero days and what an
       // operator decides about it is whether it is sent at all.

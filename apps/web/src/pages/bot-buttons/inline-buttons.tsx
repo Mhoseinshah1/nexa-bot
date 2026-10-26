@@ -97,6 +97,7 @@ const STYLE_NAME: Readonly<Record<InlineButtonStyle, WebKey>> = {
 export const INLINE_BUTTON_NAME: Readonly<Record<InlineButtonKey, WebKey>> = {
   main_menu: 'web.ib_button_main_menu',
   'list.close': 'web.ib_button_list_close',
+  'custom.link_open': 'web.ib_button_custom_link_open',
   'wallet.open': 'web.ib_button_wallet_open',
   'wallet.topup': 'web.ib_button_wallet_topup',
   'wallet.topup_amount': 'web.ib_button_wallet_topup_amount',
@@ -179,6 +180,9 @@ export const INLINE_BUTTON_NAME: Readonly<Record<InlineButtonKey, WebKey>> = {
   'service.refund_request': 'web.ib_button_service_refund_request',
   'service.refund_request_confirm': 'web.ib_button_service_refund_request_confirm',
   'service.transfer': 'web.ib_button_service_transfer',
+  'service.auto_renew_enable': 'web.ib_button_service_auto_renew_enable',
+  'service.auto_renew_disable': 'web.ib_button_service_auto_renew_disable',
+  'service.auto_renew_confirm': 'web.ib_button_service_auto_renew_confirm',
   'service.transfer_confirm': 'web.ib_button_service_transfer_confirm',
   'support.tickets': 'web.ib_button_support_tickets',
   'support.contact': 'web.ib_button_support_contact',
