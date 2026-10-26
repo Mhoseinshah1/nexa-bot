@@ -68,6 +68,12 @@
  * `backup.archive_password` is the owner-set password that seals a 7-Zip backup archive
  * (Round 4 PR-E, E4), on its `backup_archive_passwords` row; the entity is that row's id.
  * Never returned by any response once stored.
+ *
+ * `gift_card.batch_export` is the plaintext codes of one gift card batch (R10 D4), sealed at the
+ * batch's creation on its `gift_card_batches` row so the operator can download them for 24 hours;
+ * the entity is the batch row's id, so an export moved onto another batch — or another tenant's —
+ * fails authentication. The worker purges it (both columns NULL) once the window passes, after
+ * which the codes exist only as hashes.
  */
 export const SECRET_PURPOSES = [
   'bot_instance.token',
@@ -82,6 +88,7 @@ export const SECRET_PURPOSES = [
   'support_ai_provider.api_key',
   'legacy_migration.package_key',
   'backup.archive_password',
+  'gift_card.batch_export',
 ] as const;
 export type SecretPurpose = (typeof SECRET_PURPOSES)[number];
 
