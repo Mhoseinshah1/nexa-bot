@@ -299,6 +299,9 @@ describe('the feature flag registry', () => {
       // the Stars route and the FX section it switches on are reachable, and every
       // existing route keeps pricing exactly as before until an operator switches a mode.
       'central_fx',
+      // R10 D2. Off by default; the custom main-menu buttons it switches on are reachable, and
+      // with it off no custom button is drawn and a tap on a stale one is answered as unavailable.
+      'custom_menu_buttons',
       // Package D. Off by default; the custom-service button, the typed volume and days and
       // the draft it switches on are reachable, and confirmation refuses while it is off.
       'custom_service',
