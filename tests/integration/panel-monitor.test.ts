@@ -231,6 +231,7 @@ describe('the panel health monitor', () => {
   function service(probe: Partial<ProbeCoreDeps> = {}): PanelService {
     const deps = probeDeps(probe);
     return new PanelService({
+      features: ctx.container.featureFlagResolver,
       capacity: ctx.container.panelCapacity,
       usernameNamespace: ctx.container.usernameNamespace,
       repository: deps.repository,

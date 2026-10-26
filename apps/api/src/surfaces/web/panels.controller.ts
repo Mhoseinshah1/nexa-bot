@@ -62,17 +62,34 @@ export class PanelsController {
   async providers(@Req() request: FastifyRequest): Promise<ProviderListResponse> {
     // Authenticated, because it describes what this installation can operate —
     // and it now does, which it did not before.
-    // No permission beyond a session: it is a catalogue of code, identical for
-    // every tenant, and a permission nobody can be denied is a permission that
-    // exists to be looked at rather than enforced.
-    await this.authenticate(request);
+    // No permission beyond a session: it is a catalogue of code, and a permission
+    // nobody can be denied is a permission that exists to be looked at rather than
+    // enforced.
+    const { scope } = await this.authenticate(request);
     // Only the types this release has an ADAPTER for. The descriptor catalogue
     // is the frozen contract and lists `sanaei`, whose adapter is Phase 3B; a
     // client shown it would offer a configuration that every create rejects
     // with PROVIDER_TYPE_UNSUPPORTED, which is the legacy bot's "your panel was
     // added successfully" failure wearing better manners.
+    /*
+     * R10 C2: a type whose descriptor `requiresFeature` is off for THIS tenant is not
+     * offered — the form would only produce `PROVIDER_FEATURE_DISABLED`. A courtesy, not
+     * the enforcement: the panel service refuses the create itself. Read from the
+     * descriptor, never by type name. Existing panels of the type are unaffected; their
+     * pages read the contract's descriptor, not this list.
+     */
+    const offered: (typeof IMPLEMENTED_PROVIDER_TYPES)[number][] = [];
+    for (const type of IMPLEMENTED_PROVIDER_TYPES) {
+      const feature = providerDescriptor(type)?.requiresFeature;
+      if (
+        feature === undefined ||
+        (await this.container.featureFlagResolver.isEnabled(scope, feature))
+      ) {
+        offered.push(type);
+      }
+    }
     return {
-      providers: IMPLEMENTED_PROVIDER_TYPES.map((type) => {
+      providers: offered.map((type) => {
         const adapter = providerAdapter(type);
         const descriptor = adapter.descriptor;
         return {

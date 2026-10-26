@@ -14,6 +14,7 @@ import {
   isSystemContext,
   type ActorContext,
   type AuditWriter,
+  type FeatureFlagKey,
   type Clock,
   type IdGenerator,
   type IdempotencyStore,
@@ -214,6 +215,14 @@ export interface PanelServiceDeps {
   readonly ids: IdGenerator;
   readonly http: SafeHttpClient;
   readonly urlPolicy: UrlPolicyOptions;
+  /**
+   * Whether a feature is on for the tenant (R10 C2). Read for the ONE gate a provider
+   * descriptor may declare on creation, `requiresFeature`, inside the create's
+   * transaction — the same place scope activity is read, for the same reason.
+   */
+  readonly features: {
+    isEnabled(scope: ScopeContext, key: FeatureFlagKey, tx?: unknown): Promise<boolean>;
+  };
   /**
    * Which adapter operates a provider type.
    *
@@ -700,6 +709,76 @@ export class PanelService {
     }
   }
 
+  /*
+   * The three provider gates a descriptor may declare (R10 C2), enforced HERE and
+   * generically: none of them names a provider type. The `custom` bridge declares all
+   * three; the three older providers declare none and pass through unchanged.
+   */
+
+  /**
+   * `transport: 'HTTPS_ONLY'` — the address must be `https:`.
+   *
+   * At create and at every address change. A provider whose answers carry bearer links
+   * and whose integrity rests on a shared secret must not be reached over plain HTTP on
+   * any network; the adapter refuses to dial one as well, so a row that reached the
+   * database another way is still not called. `PANEL_URL_INVALID`: it is exactly "a
+   * scheme this installation will not call".
+   */
+  private assertProviderTransport(providerType: string, baseUrl: string): void {
+    const descriptor = providerDescriptor(providerType);
+    if (descriptor?.transport !== 'HTTPS_ONLY') return;
+    if (new URL(baseUrl).protocol !== 'https:') {
+      throw errors.validation(
+        PANEL_ERROR_CODES.PANEL_URL_INVALID,
+        'This provider is called over HTTPS only. Use an https:// address.',
+      );
+    }
+  }
+
+  /**
+   * `minimumApiTokenLength` — a token shorter than the provider's floor is refused.
+   *
+   * For the `custom` bridge the token is the HMAC key every request is signed with and
+   * every answer is verified against; a short one is a guessable signature. Refused at
+   * the save, where the operator can fix it. Absent and null (leave / remove) are not
+   * values and are not judged — the shape check owns those.
+   */
+  private assertApiTokenLength(providerType: string, apiToken: string | null | undefined): void {
+    const minimum = providerDescriptor(providerType)?.minimumApiTokenLength;
+    if (minimum === undefined || apiToken === undefined || apiToken === null) return;
+    if (apiToken.length < minimum) {
+      throw errors.validation(
+        PANEL_ERROR_CODES.PANEL_CREDENTIAL_TOO_SHORT,
+        `This provider's API token must be at least ${String(minimum)} characters.`,
+        { minimum },
+      );
+    }
+  }
+
+  /**
+   * `requiresFeature` — a NEW panel of a gated type needs the tenant's flag on.
+   *
+   * Creation only, by the lead's decision for R10 C2: a flag switched off after panels of
+   * the type exist does not stop them being operated, edited, tested or re-keyed — their
+   * services were paid for. Read inside the create's transaction, like scope activity:
+   * a switch-off that commits between the request arriving and this write still stops it.
+   */
+  private async assertProviderFeature(
+    scope: ScopeContext,
+    providerType: string,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const key = providerDescriptor(providerType)?.requiresFeature;
+    if (key === undefined) return;
+    if (!(await this.deps.features.isEnabled(scope, key, tx))) {
+      throw errors.preconditionFailed(
+        PANEL_ERROR_CODES.PROVIDER_FEATURE_DISABLED,
+        'This provider type is switched off for this tenant. Turn its feature on to add a panel of it.',
+        { feature: key },
+      );
+    }
+  }
+
   async create(
     scope: ScopeContext,
     actor: ActorContext,
@@ -793,6 +872,7 @@ export class PanelService {
     const providerType: ProviderType = command.providerType;
     this.deps.adapters(providerType);
     const baseUrl = this.validateUrl(command.baseUrl);
+    this.assertProviderTransport(providerType, baseUrl);
     // Validated against THIS provider, before the transaction opens. See the method.
     const usernamePolicy =
       command.usernamePolicy === undefined
@@ -836,6 +916,7 @@ export class PanelService {
     // all; this one is about the content of a write the caller may not make.
     if (parsed.credentials !== undefined) {
       this.assertCredentialsFitShape(parsed.providerType, parsed.credentials);
+      this.assertApiTokenLength(parsed.providerType, parsed.credentials.apiToken);
     }
 
     // The credentials are NOT in the hash. Two creates with the same key and
@@ -910,6 +991,7 @@ export class PanelService {
         denial,
         async (tx) => {
           await this.requireActiveScope(scope, tx);
+          await this.assertProviderFeature(scope, providerType, tx);
           /*
            * The CRITICAL permission, re-checked INSIDE the transaction like the
            * edit permission above it. `runAuthorizedMutation` re-runs only the
@@ -1107,6 +1189,9 @@ export class PanelService {
             'This panel is archived. Restore it before editing.',
           );
         }
+        // R10 C2: an address change keeps an HTTPS-only provider on HTTPS. The panel's
+        // own type decides, so it is checked against the row just read.
+        if (baseUrl !== undefined) this.assertProviderTransport(before.panel.providerType, baseUrl);
         if (
           command.name !== undefined &&
           (await this.deps.repository.nameTaken(tenant, command.name, panelId, tx))
@@ -1362,6 +1447,7 @@ export class PanelService {
         // this is checked here rather than on the request: the request names a
         // panel, not a provider. Inside the lock, against the row just read.
         this.assertCredentialsFitShape(before.panel.providerType, write);
+        this.assertApiTokenLength(before.panel.providerType, write.apiToken);
         await this.deps.credentials.write(tenant, panelId, write, now, tx);
         // Same rule as an edit, and this is the case that matters most: an
         // operator replacing a rejected password wants to know whether it

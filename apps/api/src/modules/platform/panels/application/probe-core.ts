@@ -20,6 +20,7 @@ import {
 } from '../../../../infrastructure/net/url-policy.js';
 
 import type { SafeHttpClient } from '../../../../infrastructure/net/safe-http.js';
+import { panelClient } from './panel-http.js';
 import type { MonitorCadence } from '../domain/monitor-cadence.js';
 import { connectionIdentityOf } from './panel-eligibility.js';
 import type {
@@ -244,7 +245,7 @@ export async function attemptProbe(
 
   const outcome = await provider.probe(
     { baseUrl: before.panel.baseUrl, credentials: target },
-    deps.http.forBase(before.panel.baseUrl),
+    panelClient(deps.http, before.panel),
   );
   const finishedAt = deps.clock.now();
 

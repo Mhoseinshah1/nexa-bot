@@ -221,6 +221,7 @@ describe('panels', () => {
       const panelId = view.panel.id;
 
       const service = new PanelService({
+        features: ctx.container.featureFlagResolver,
         capacity: ctx.container.panelCapacity,
         usernameNamespace: ctx.container.usernameNamespace,
         repository: new DrizzlePanelRepository(ctx.container.database.db),
@@ -1356,6 +1357,7 @@ describe('panels', () => {
     };
 
     const service = new PanelService({
+      features: ctx.container.featureFlagResolver,
       capacity: ctx.container.panelCapacity,
       usernameNamespace: ctx.container.usernameNamespace,
       repository: new DrizzlePanelRepository(ctx.container.database.db),
@@ -1551,6 +1553,7 @@ describe('panels', () => {
     adapterOverrides: Partial<ProviderConnectionAdapter> = {},
   ) {
     const scripted = new PanelService({
+      features: ctx.container.featureFlagResolver,
       capacity: ctx.container.panelCapacity,
       usernameNamespace: ctx.container.usernameNamespace,
       repository: new DrizzlePanelRepository(ctx.container.database.db),
