@@ -259,6 +259,13 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: null,
     confirmEnable: null,
   },
+  // R10 D3: off withdraws an offer (every price is the ordinary one again); nothing is lost.
+  personal_discount: {
+    title: 'web.feature_personal_discount_title',
+    summary: 'web.feature_personal_discount_summary',
+    disableEffect: null,
+    confirmEnable: null,
+  },
   // Round 9, C5: the customer mini app. Off withdraws the menu button and ends new sessions.
   mini_app: {
     title: 'web.feature_mini_app_title',
