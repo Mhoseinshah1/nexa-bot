@@ -188,6 +188,9 @@ describe('which kinds quiet hours hold', () => {
         'ORDER_PENDING_REMINDER',
         // Round N, package D: the reseller month-end reminder (never the achievement).
         'RESELLER_MINIMUM_REMINDER',
+        // Round 10, D1: the two automatic-renewal notices a sweep raises.
+        'SERVICE_AUTO_RENEW_FUNDS_SHORT',
+        'SERVICE_AUTO_RENEW_PRICE_CHANGED',
       ].sort(),
     );
   });

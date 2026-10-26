@@ -330,6 +330,9 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   discountLine: 'خط تخفیف',
   displayName: 'نام نمایشی',
   durationDays: 'مدت (روز)',
+  // Round 10, D1: automatic renewal.
+  consented: 'مبلغ پذیرفته‌شده هنگام فعال‌سازی',
+  leadHours: 'ساعت پیش از انقضا',
   emoji: 'ایموجی',
   evidence: 'مبنای تأیید',
   expired: 'وضعیت اعلان پایان اعتبار',

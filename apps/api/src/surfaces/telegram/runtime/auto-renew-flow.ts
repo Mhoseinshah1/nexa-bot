@@ -85,7 +85,13 @@ export async function autoRenewSet(
 ): Promise<PendingReply> {
   if (rt.deps.autoRenew === undefined) return unavailable(serviceId);
   try {
-    await rt.deps.autoRenew.set(scope, actor, customer.id, { serviceId, enabled, idempotencyKey });
+    await rt.deps.autoRenew.set(scope, actor, customer.id, {
+      serviceId,
+      enabled,
+      // The update's key is the turn's, shared with the customer's resolution in the same
+      // namespace: this command takes its own suffix of it, as every other bot command does.
+      idempotencyKey: `${idempotencyKey}:auto-renew-${enabled ? 'on' : 'off'}`,
+    });
   } catch (error) {
     if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
       return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };

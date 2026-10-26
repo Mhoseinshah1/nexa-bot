@@ -42,14 +42,14 @@ import {
  * transfer clears the consent; the notice is superseded once its fact stops being true; the
  * run row refuses an incoherent state.
  *
- * MUTATIONS, each turns a named case red:
- * - `claimNew` without `ON CONFLICT … DO NOTHING` (or the period key dropped): "two passes at
- *   once renew the period once" (the loser's claim transaction fails, or two runs buy twice).
+ * MUTATIONS, each run and seen red (Round 10):
  * - the transfer repository's consent clearing removed: "a transfer clears the consent".
- * - the subject reader's ledger comparison removed: "the short-wallet notice holds …".
+ * - the subject reader's ledger comparison removed: "a short wallet creates no order …"
+ *   (the notice still holds once the wallet covers the quote).
  * - the ops-log facts' run lookup removed: "renews a covered period …" (origin.autoRenew).
- * - `s.customer_id = p.customer_id` dropped from `listDue`: "a transfer clears the consent"
- *   (with the clearing also removed, the new owner would be renewed).
+ * Not a mutation this suite catches: `claimNew` without `ON CONFLICT … DO NOTHING` stays green,
+ * because the period's UNIQUE key still refuses the second claim (that pass's claim transaction
+ * fails instead of skipping); "the run row refuses an incoherent state" pins the key itself.
  */
 
 const BOT_A = SEED_IDS.botA1 as BotInstanceId;
@@ -460,7 +460,7 @@ describe('R10 D1 — automatic renewal', () => {
     await tap(`ay:${serviceId}`);
     expect(await preference(serviceId)).toEqual({
       enabled: true,
-      consented_total_minor: String(PRICE),
+      consented_total_minor: PRICE,
     });
     sent = [];
     await tap(`s:${serviceId}`);

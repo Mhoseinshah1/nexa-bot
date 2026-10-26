@@ -42,7 +42,11 @@ import {
  * - the `marked` check ignored: "a pass that lost its claim debits nothing".
  * - `markNotified` gate removed in `finish`: "tells a short wallet once per period".
  * - the quote-above-consent check removed: "does not renew above the consented total".
- * - the in-settlement consent re-read removed: "a consent withdrawn before the money moves".
+ * - the in-settlement flag re-read removed: "a switch turned off before the money moves …".
+ * - the in-settlement ceiling removed: "a consent lowered below the order …".
+ * - the in-settlement owner test removed: "another customer’s consent is not this owner’s".
+ *   (`!preference.enabled` alone is an equivalent mutant: the table's consent CHECK makes a
+ *   disabled row carry no total, which the `consented === null` test refuses.)
  * - the flag read removed from `runOnce`: "claims nothing while the feature is off".
  * - `autoRenewEligible` MIRZA test removed: "imported services are never offered it".
  */
@@ -113,7 +117,7 @@ describe('the surfaces', () => {
     ]);
     const price = notificationButtons('SERVICE_AUTO_RENEW_PRICE_CHANGED', { serviceId: SERVICE });
     expect(price).toHaveLength(1);
-    expect(price[0]?.data).toContain(SERVICE);
+    expect(price[0]).toMatchObject({ data: expect.stringContaining(SERVICE) as unknown });
   });
 });
 
@@ -461,6 +465,29 @@ describe('the sweep', () => {
     expect(w.cancels).toHaveLength(1);
     expect(w.events.map((event) => event.payload['refusal'])).toEqual(['CONSENT_WITHDRAWN']);
     expect(w.notices).toEqual([]);
+  });
+
+  it('a consent lowered below the order before the money moves is a refusal, never a charge', async () => {
+    const w = world();
+    // Switched off and on again at a lower price while this pass was between its steps.
+    w.onConfirm = () => {
+      w.preference = { ...(w.preference as AutoRenewPreference), consented: IRT(90_000n) };
+    };
+    expect((await sweep(w).runOnce(scope)).refused).toBe(1);
+    expect(w.debits).toEqual([]);
+    expect(w.runs[0]?.state).toBe('REFUSED');
+  });
+
+  it('another customer’s consent is not this owner’s: no charge', async () => {
+    const w = world();
+    w.onConfirm = () => {
+      w.preference = {
+        ...(w.preference as AutoRenewPreference),
+        customerId: '01900000-0000-7000-8000-0000000000c2' as UserId,
+      };
+    };
+    await sweep(w).runOnce(scope);
+    expect(w.debits).toEqual([]);
   });
 
   it('a switch turned off before the money moves is a refusal too', async () => {

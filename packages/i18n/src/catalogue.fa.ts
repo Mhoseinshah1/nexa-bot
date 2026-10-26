@@ -87,7 +87,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'هر زمان بخواهید می‌توانید تمدید خودکار را لغو کنید.\n\n' +
     'تمدید خودکار فعال شود؟',
   'bot.service.auto_renew_confirm_button': '✅ فعال‌سازی تمدید خودکار',
-  'bot.service.auto_renew_enabled': '✅ تمدید خودکار این سرویس فعال شد.',
+  'bot.service.auto_renew_enabled': '{icon:success} تمدید خودکار این سرویس فعال شد.',
   'bot.service.auto_renew_disabled': '⏹ تمدید خودکار این سرویس لغو شد.',
   'bot.service.auto_renew_unavailable': 'در حال حاضر تمدید خودکار برای این سرویس در دسترس نیست.',
   'bot.service.transfer_button': '🔄 انتقال سرویس',

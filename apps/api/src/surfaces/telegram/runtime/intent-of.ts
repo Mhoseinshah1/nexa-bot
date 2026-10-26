@@ -732,7 +732,7 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
         id,
       );
     }
-    /* Round 10, D1: «تمدید خودکار» — ask, confirm, off. */
+    // Round 10, D1: automatic renewal — ask, confirm, off.
     if (data.startsWith(SERVICE_AUTO_RENEW_ASK_CALLBACK_PREFIX)) {
       return callbackCommand(
         'SERVICE_AUTO_RENEW_ASK',
