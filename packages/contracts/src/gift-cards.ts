@@ -169,6 +169,13 @@ export type GiftCardBatchWire = z.infer<typeof giftCardBatchSchema>;
 export const giftCardBatchListResponseSchema = z.object({
   batches: z.array(giftCardBatchSchema),
   nextCursor: z.string().nullable(),
+  /**
+   * What the create form needs and must not guess: the currency a batch is minted in (the
+   * wallet's, `sales.currency`) and whether the `gift_cards` feature is on now — a batch is
+   * refused while it is off, so the form says so instead of failing on submit.
+   */
+  walletCurrency: currencyCodeSchema,
+  enabled: z.boolean(),
 });
 export type GiftCardBatchListResponse = z.infer<typeof giftCardBatchListResponseSchema>;
 
