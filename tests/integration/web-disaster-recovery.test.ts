@@ -62,6 +62,22 @@ describe('web disaster recovery', () => {
       .inject(options as never);
 
   /**
+   * The upload ceiling this file runs under, with headroom for the SCHEMA to grow.
+   *
+   * It was 1 MiB, sized against a "~100 KiB dump" — but a custom-format dump stores
+   * the DDL (its TOC) uncompressed, so the archive grows with every migration, data
+   * or not. By R10 the schema-only dump was ~943 KiB and a real archive sat just
+   * under the ceiling; one more migration (R10 D1 and D2 each add one) made it
+   * 1,066,274 bytes, the upload answered 413 instead of a recovery, and every
+   * case that uploads a real backup failed with `recovery: undefined`. Nothing in
+   * the recovery code changed; the fixture had run out of room.
+   *
+   * `takeBackup` now asserts the archive fits, with this explanation, so the next
+   * time the schema outgrows it the failure names the cause instead of a ZodError.
+   */
+  const RECOVERY_UPLOAD_CEILING_BYTES = 8 * 1024 * 1024;
+
+  /**
    * Debris from an INTERRUPTED earlier run, removed once before this file starts.
    *
    * The cleanup case below asserts that no `nexa_rtest_*` database exists
@@ -107,10 +123,9 @@ describe('web disaster recovery', () => {
       WEB_ADMIN_ORIGINS: ORIGIN,
       BACKUP_WORK_DIR: workRoot,
       RECOVERY_WORK_DIR: recoveryRoot,
-      // Small enough to exercise the ceiling with a real archive, large enough
-      // that the dev database's ~100 KiB dump fits. The oversize case writes a
-      // buffer bigger than this rather than a real archive.
-      RECOVERY_UPLOAD_MAX_BYTES: '1048576',
+      // See RECOVERY_UPLOAD_CEILING_BYTES: far above a real archive of this
+      // schema, and the oversize case writes a buffer just past it.
+      RECOVERY_UPLOAD_MAX_BYTES: String(RECOVERY_UPLOAD_CEILING_BYTES),
     });
     const { resolveKeyring } =
       await import('../../apps/api/src/infrastructure/crypto/resolve-keyring');
@@ -205,6 +220,10 @@ describe('web disaster recovery', () => {
     expect(body.run.state).toBe('SUCCEEDED');
     expect(body.run.verifiedAt).not.toBeNull();
     const archive = await readFile(join(workRoot, body.run.id, 'archive.nxb'));
+    expect(
+      archive.length,
+      `a real archive (${archive.length} bytes) must fit RECOVERY_UPLOAD_CEILING_BYTES; the schema outgrew it — raise the ceiling`,
+    ).toBeLessThan(RECOVERY_UPLOAD_CEILING_BYTES);
     return { id: body.run.id, checksum: body.run.checksum ?? '', archive };
   }
 
@@ -481,7 +500,7 @@ describe('web disaster recovery', () => {
     it('refuses an oversized upload on the STREAM, and keeps nothing', async () => {
       // Past `RECOVERY_UPLOAD_MAX_BYTES`. Counted by the server as it writes,
       // not read off a header — a chunked request declares no length.
-      const oversize = randomBytes(1024 * 1024 + 4096);
+      const oversize = randomBytes(RECOVERY_UPLOAD_CEILING_BYTES + 4096);
       const response = await upload(oversize);
       expect([400, 413]).toContain(response.statusCode);
 
@@ -867,7 +886,7 @@ describe('web disaster recovery', () => {
       expect(capabilities.confirmationPhrase).toBe(RECOVERY_CONFIRMATION_PHRASE);
       // Reported so the Web Admin refuses a too-large file before sending it, and
       // so the refusal it renders names the real limit.
-      expect(capabilities.maxUploadBytes).toBe(1048576);
+      expect(capabilities.maxUploadBytes).toBe(RECOVERY_UPLOAD_CEILING_BYTES);
     });
 
     it('needs a session', async () => {

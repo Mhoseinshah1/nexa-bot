@@ -71,10 +71,12 @@ export interface CustomerControlDeps {
   readonly locationOverrides: CustomerLocationOverrideRepository;
   /** R10 D3: `customers.personal_discount_percent`, read and conditionally written. */
   readonly personalDiscounts: {
+    /** `lock` takes the customer row `FOR UPDATE` before reading it. */
     find(
       scope: TenantContext,
       customerId: UserId,
       tx?: unknown,
+      lock?: boolean,
     ): Promise<{ readonly percent: number; readonly setAt: Date | null } | null>;
     set(
       scope: TenantContext,
@@ -387,7 +389,17 @@ export class CustomerControlService {
       reason: input.reason,
       command: { percent },
       write: async (customerId, _before, now, tx) => {
-        const previous = await this.deps.personalDiscounts.find(scope, customerId, tx);
+        /*
+         * The previous percent, read UNDER the customer row's lock (Codex, PR #339).
+         *
+         * An unlocked read let two concurrent changes both see the same previous percent:
+         * the conditional UPDATE below serialised the writes but not the read, so 0 -> 20
+         * and 0 -> 30 were both audited and emitted although the second was 20 -> 30. With
+         * the row held from the read to the commit, the second change waits here and then
+         * reads the first one's committed percent. It is the lock the UPDATE took anyway,
+         * taken one statement earlier, so it adds no lock and no edge to any lock order.
+         */
+        const previous = await this.deps.personalDiscounts.find(scope, customerId, tx, true);
         const percentBefore = previous?.percent ?? 0;
         const changed = await this.deps.personalDiscounts.set(scope, customerId, percent, now, tx);
         return {

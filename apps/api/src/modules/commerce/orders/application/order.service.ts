@@ -89,6 +89,7 @@ import {
   assertWalletNotNegative,
   type WalletBalanceReader,
 } from '../../wallet/application/negative-balance-gate.js';
+import type { WalletRepository } from '../../wallet/application/ports.js';
 
 /** What an operator needs to read the order list and an order's detail. */
 export const ORDER_VIEW_PERMISSION: PermissionKey = 'orders.view';
@@ -219,8 +220,11 @@ export interface OrderServiceDeps {
    */
   readonly categories: ProductCategoryRepository;
   readonly customers: CustomerRepository;
-  /** The derived balance, for the negative-wallet gate at confirmation. */
-  readonly wallet: WalletBalanceReader;
+  /**
+   * The derived balance, for the negative-wallet gate at confirmation, and the customer
+   * row's lock confirmation takes before the panel (`order -> customer -> panel`).
+   */
+  readonly wallet: WalletBalanceReader & Pick<WalletRepository, 'lockCustomer'>;
   readonly settings: SettingsResolver;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
@@ -1884,6 +1888,30 @@ export class OrderService {
         }
         // A concurrent confirmation that got the lock first answers exactly as a replay.
         if (locked.state !== 'DRAFT') return alreadyConfirmed(locked);
+
+        /*
+         * And the CUSTOMER, after the order and before the panel (Codex, PR #339).
+         *
+         * `order -> customer -> panel -> reservation` is the canonical order settlement
+         * takes (`PaymentService`, before `prepareFulfilment`). Confirmation used to reach
+         * the customer row only AFTER `panelSales.acquire` had taken the panel: R10 D3's
+         * personal discount re-reads the percent under the customer row's lock inside
+         * `pricing.redeem`, and a promotional redemption row's foreign key takes
+         * `FOR KEY SHARE` on the same row. A settlement of another of this customer's
+         * orders on the same panel holds the customer and waits for the panel, so the two
+         * closed a cycle and PostgreSQL aborted one with `40P01` — `DrizzleUnitOfWork` has
+         * no retry, so a customer's confirmation or payment failed outright.
+         *
+         * Taken unconditionally, like settlement's, because whether `redeem` will touch
+         * the row is decided further down; a lock taken and not needed costs one row lock.
+         * After the DRAFT check, so a replay takes nothing new. Nothing locks a DRAFT
+         * order while holding its customer (settlement refuses anything not
+         * `AWAITING_PAYMENT` before its order lock), so `order -> customer` closes no
+         * cycle. `tests/integration/personal-discount.test.ts` reproduces it.
+         */
+        if (!(await this.deps.wallet.lockCustomer(scope, customerId, tx))) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+        }
 
         /*
          * A custom order's terms, re-decided under the order's lock and before the slot:

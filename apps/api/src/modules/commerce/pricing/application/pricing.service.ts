@@ -263,6 +263,13 @@ export class PricingService {
       );
     // A trace step with no recorded decision is a quote that cannot be believed.
     if (quoted === undefined || quoted.outcome !== 'APPLIED') throw refuse('NOT_RECORDED');
+    /*
+     * Under the customer row's lock. `OrderService.confirm` already holds it — taken after
+     * the order and BEFORE the panel, the canonical `order -> customer -> panel` (Codex,
+     * PR #339) — so there this is a re-entry that waits for nothing. A renewal's
+     * confirmation holds no panel lock before `redeem`, so here it is its first lock on
+     * the row and still precedes anything it could close a cycle with.
+     */
     const percent = await this.deps.personalDiscounts.percentOf(
       scope,
       order.customerId,

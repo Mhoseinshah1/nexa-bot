@@ -48,7 +48,10 @@ import {
  * - the larger single discount wins, never stacked, and the decision is frozen on the quote;
  * - confirmation refuses `DISCOUNT_NO_LONGER_VALID` when the percent changed or the flag went
  *   off since the quote — never re-prices;
- * - a reseller whose personal discount wins confirms and records LIST terms.
+ * - a reseller whose personal discount wins confirms and records LIST terms;
+ * - concurrency (Codex, PR #339): confirmation takes the customer before the panel, so it
+ *   cannot deadlock against settlement's `customer -> panel`; two concurrent changes of the
+ *   percent audit the true previous value, read under the customer row's lock.
  */
 
 const ORIGIN = 'https://admin.example.test';
@@ -664,6 +667,163 @@ describe('personal discount (R10 D3)', () => {
         'TIER_PRICE',
       ]);
       await confirm(resellerPriced);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Concurrency (Codex, PR #339)
+  // -------------------------------------------------------------------------
+
+  describe('concurrency', () => {
+    /** Waits until PostgreSQL reports `count` backends of this database blocked on a lock. */
+    const awaitBlocked = async (count: number): Promise<void> => {
+      for (let attempt = 0; attempt < 2_500; attempt += 1) {
+        const blocked = await rows<{ n: number }>(
+          sql`SELECT count(*)::int AS n FROM pg_stat_activity
+               WHERE datname = current_database() AND wait_event_type = 'Lock'
+                 AND query NOT ILIKE '%pg_stat_activity%'`,
+        );
+        if ((blocked[0]?.n ?? 0) >= count) return;
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+      throw new Error('nothing ever blocked on a lock; the interleaving never happened');
+    };
+
+    /** The SQLSTATE behind a failure (`40P01` is PostgreSQL's deadlock), or null. */
+    const sqlStateOf = (thrown: unknown): string | null => {
+      const seen = new Set<unknown>();
+      let cursor: unknown = thrown;
+      while (cursor !== null && typeof cursor === 'object' && !seen.has(cursor)) {
+        seen.add(cursor);
+        const code = (cursor as { code?: unknown }).code;
+        if (typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code)) return code;
+        cursor = (cursor as { cause?: unknown }).cause;
+      }
+      return null;
+    };
+
+    /**
+     * A transaction holding the customer row `FOR UPDATE` while `racing` runs, released
+     * only once `blocked` backends wait on a lock, then — when `then` is given — taking
+     * that second lock before it commits. Never left open: a holder kept by a failing
+     * assertion would block the next case's reset.
+     */
+    async function holdingTheCustomer<T>(
+      racing: () => Promise<T>,
+      blocked: number,
+      then?: SQL,
+    ): Promise<{ readonly holder: unknown; readonly raced: T | unknown }> {
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let holding: () => void = () => undefined;
+      const locked = new Promise<void>((resolve) => {
+        holding = resolve;
+      });
+      const holder = api.container.uow
+        .run(tenantA, async (tx) => {
+          await tx.tx.execute(sql`SELECT id FROM customers WHERE id = ${customerA} FOR UPDATE`);
+          holding();
+          await held;
+          if (then !== undefined) await tx.tx.execute(then);
+        })
+        .then(
+          () => null,
+          (error: unknown) => error,
+        );
+      await locked;
+      const raced = racing().then(
+        (value) => value,
+        (error: unknown) => error,
+      );
+      try {
+        await awaitBlocked(blocked);
+      } finally {
+        release();
+      }
+      return { holder: await holder, raced: await raced };
+    }
+
+    /*
+     * The cycle Codex found: settlement takes `customer -> panel`; a confirmation that
+     * took the panel (`acquire`) and only THEN the customer row (the personal discount's
+     * re-read in `redeem`) waited for the customer while settlement waited for the panel,
+     * and PostgreSQL aborted one with `40P01`. The holder does settlement's two locks in
+     * settlement's order. Against `order -> customer -> panel` the confirmation blocks on
+     * the customer before it holds the panel, the holder's panel lock finds nothing in its
+     * way, and both complete.
+     */
+    it('a personally discounted confirmation takes the customer before the panel: no deadlock against settlement', async () => {
+      await setFlag(true);
+      await setPercent(30);
+      const order = await draft();
+      expect(order.totals.quote.trace.map((s) => s.step)).toContain('PERSONAL_DISCOUNT');
+      const { holder, raced } = await holdingTheCustomer(
+        () => confirm(order),
+        1,
+        sql`SELECT id FROM panels WHERE id = ${panelA} FOR UPDATE`,
+      );
+      expect([sqlStateOf(holder), sqlStateOf(raced)]).toEqual([null, null]);
+      expect(holder).toBeNull();
+      expect((raced as OrderRecord).state).toBe('AWAITING_PAYMENT');
+    });
+
+    /*
+     * The same cycle through a promotional redemption: its row's foreign key takes
+     * `FOR KEY SHARE` on the customer, which conflicts with settlement's `FOR UPDATE`.
+     */
+    it('a promotionally discounted confirmation takes the customer before the panel too', async () => {
+      const ruleId = await automaticRule(40n);
+      const order = await draft();
+      expect(order.totals.quote.trace.map((s) => s.ruleId)).toContain(ruleId);
+      const { holder, raced } = await holdingTheCustomer(
+        () => confirm(order),
+        1,
+        sql`SELECT id FROM panels WHERE id = ${panelA} FOR UPDATE`,
+      );
+      expect([sqlStateOf(holder), sqlStateOf(raced)]).toEqual([null, null]);
+      expect(holder).toBeNull();
+      expect((raced as OrderRecord).state).toBe('AWAITING_PAYMENT');
+    });
+
+    /*
+     * Two administrators changing one customer's percent at once. The previous percent is
+     * read under the customer row's lock, so the second change's audit `before` and event
+     * `percentBefore` are the first change's `after` — never both "0".
+     */
+    it('two concurrent changes record the true previous percent', async () => {
+      const { holder, raced } = await holdingTheCustomer(
+        () => Promise.all([setPercent(20), setPercent(30)]),
+        2,
+      );
+      expect(holder).toBeNull();
+      expect((raced as { changed: boolean }[]).map((r) => r.changed)).toEqual([true, true]);
+
+      const changes = (await events()).map(
+        (e) => e.payload as { percentBefore: number; percentAfter: number },
+      );
+      expect(changes).toHaveLength(2);
+      const first = changes.find((c) => c.percentBefore === 0);
+      const second = changes.find((c) => c !== first);
+      expect(first).toBeDefined();
+      expect(second?.percentBefore).toBe(first?.percentAfter);
+
+      const trail = (await audits()).map((a) => [
+        (a.before as { percent: number }).percent,
+        (a.after as { percent: number }).percent,
+      ]);
+      expect(trail).toHaveLength(2);
+      expect(trail).toEqual(
+        expect.arrayContaining([
+          [0, first?.percentAfter],
+          [first?.percentAfter, second?.percentAfter],
+        ]),
+      );
+      const stored = await rows<{ percent: number }>(
+        sql`SELECT personal_discount_percent AS percent FROM customers WHERE id = ${customerA}`,
+      );
+      expect(stored[0]?.percent).toBe(second?.percentAfter);
     });
   });
 });
