@@ -59,7 +59,7 @@ log's path; its exit code is the command's. Open the raw log only at the
 failure it names (`grep -n`, then a range). `log-digest.sh` (`nexa-log-digest`)
 stays for other long output.
 
-**Non-merchandise shortcut.** A PR that touches no money, ledger, payment,
+**Non-money shortcut.** A PR that touches no money, ledger, payment,
 gateway, pricing, provisioning or migration code may use tiers 1–2 (typecheck,
 the selected suites with their guard suites, the class checks) as its local
 gate instead of tier 3; CI still runs the full suite on the exact head and

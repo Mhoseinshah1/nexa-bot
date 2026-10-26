@@ -33,7 +33,7 @@ A round prompt names its tasks and the model split; everything else is here.
 - The lead reads each report once and the full diff once, line by line, and
   confirms no reviewer mutation is left behind (`git status`, every line of
   `git diff`; deletions especially).
-- **Non-merchandise shortcut.** For a PR that touches no money, ledger,
+- **Non-money shortcut.** For a PR that touches no money, ledger,
   payment, gateway, pricing, provisioning or migration code, the local gate may
   be the affected suites only (`nexa-test-selection`) and the lead's own
   one-pass review may be skipped; CI still runs the full suite on the exact
