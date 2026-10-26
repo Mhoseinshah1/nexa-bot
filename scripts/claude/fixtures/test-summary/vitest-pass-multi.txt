@@ -1,0 +1,30 @@
+
+> nexa-bot@0.0.0 test /repo
+> vitest run --project unit
+
+
+ RUN  v4.1.11 /repo
+
+ ✓ |unit| tests/unit/money.test.ts (12 tests) 8ms
+ ✓ |unit| tests/unit/ledger.test.ts (40 tests | 2 skipped) 31ms
+
+ Test Files  2 passed (2)
+      Tests  50 passed | 2 skipped (52)
+   Start at  03:25:08
+   Duration  1.20s (transform 40ms, setup 0ms, import 59ms, tests 39ms, environment 0ms)
+
+
+> nexa-bot@0.0.0 test:web /repo
+> vitest run --project web
+
+
+ RUN  v4.1.11 /repo
+
+ ✓ |web| tests/web/login.test.tsx (6 tests) 90ms
+ ✓ |web| tests/web/payment-gateways.test.tsx (9 tests | 1 skipped) 112ms
+
+ Test Files  2 passed (2)
+      Tests  14 passed | 1 skipped (15)
+   Start at  03:25:11
+   Duration  2.10s (transform 140ms, setup 0ms, import 359ms, tests 202ms, environment 800ms)
+

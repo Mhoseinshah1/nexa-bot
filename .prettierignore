@@ -9,3 +9,5 @@ docs/web-redesign/demo-parity/reference
 docs/web-redesign/demo-parity/DIFFS.md
 # The owner's mini-app design, kept verbatim (Round 9, C5)
 docs/design/mini-app/project
+# renumber-migration fixtures mimic drizzle output byte for byte
+scripts/claude/fixtures/renumber-migration

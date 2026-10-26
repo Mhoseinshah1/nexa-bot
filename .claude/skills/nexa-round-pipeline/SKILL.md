@@ -18,6 +18,12 @@ A round prompt names its tasks and the model split; everything else is here.
   agent; fact collection is read-only.
 - Nobody sits idle waiting on CI: while one agent watches it, the others take
   the remaining review, docs or test work.
+- **Fresh agent per PR.** The lead delegates each PR's merge-main, renumber,
+  gate and fix work to a fresh agent that returns the 25-line report (§2); the
+  lead does not run those steps, or read their logs, in its own context.
+- Agents run tests and the gate through `test-summary.sh` (`nexa-log-digest`:
+  `bash scripts/claude/test-summary.sh <command...>`) and quote its summary,
+  never raw output.
 
 ## 2. Lead review
 
@@ -27,6 +33,16 @@ A round prompt names its tasks and the model split; everything else is here.
 - The lead reads each report once and the full diff once, line by line, and
   confirms no reviewer mutation is left behind (`git status`, every line of
   `git diff`; deletions especially).
+- **Non-money shortcut.** For a PR that touches no money, ledger,
+  payment, gateway, pricing, provisioning or migration code, the local gate may
+  be the affected suites only (`nexa-test-selection`) and the lead's own
+  one-pass review may be skipped; CI still runs the full suite on the exact
+  head and the Codex review is still read and fixed (§3). The pre-commit
+  `git status` and line-by-line `git diff` read for leftover reviewer
+  mutations is never skipped. Money PRs — and any PR where it is unclear —
+  keep the full local gate and the lead review.
+- **Lead narration:** the lead writes a progress line only when a PR merges,
+  something breaks, or a decision is taken. No step-by-step narration.
 - The incidents behind these rules: `references/agent-review-lessons.md`.
 
 ## 3. PR pipeline
@@ -49,6 +65,10 @@ Nothing else is approval.
 - Renumber that branch's migrations to follow `main` sequentially, regenerate
   snapshot and journal with the tooling (`nexa-migrations` § Renumbering),
   run `pnpm db:check`. The SQL stays byte-identical, and the PR body says so.
+  `bash scripts/claude/renumber-migration.sh` does the renumber, regeneration
+  and byte-identity proof in one call (last line `renumbered=N identical=yes|no`;
+  `identical=no` or a non-zero exit stops the merge); `pnpm db:check` and the
+  migration suites stay yours.
 
 ## 5. Invariants
 
@@ -78,6 +98,10 @@ customer message, and record it under "Decisions taken".
 Near the session limit: finish and merge what is done, write a handoff
 (`nexa-handoff`), list the rest. A round always ends with a handoff; never
 leave a half-done change pushed without one.
+
+Write or refresh the handoff after every merged PR and whenever the context
+passes ~50 %. After a compact, re-read the round prompt and the handoff before
+continuing.
 
 ## 9. End of round
 

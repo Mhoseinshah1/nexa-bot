@@ -10,6 +10,15 @@ session. A handoff is the minimum the next session needs to act correctly,
 not a transcript. Target: under ~40 lines. `nexa-round-pipeline` requires one at
 the end of every round, and as soon as the session budget runs low.
 
+## When
+
+- **After every merged PR**, and **when the context passes ~50 %** — write it,
+  or refresh the existing one (replace, never append). Do not wait for the
+  compaction warning: a summary written then is written from a context that is
+  already being lost.
+- **After a compact** (or any resume), re-read the round prompt and the
+  handoff, then re-verify as § Reading one says, before the next action.
+
 ## Writing one
 
 1. Generate the mechanical facts (read-only, no fetch):

@@ -1,15 +1,34 @@
 ---
 name: nexa-log-digest
-description: Shrink NEXA test, typecheck, lint, format, drizzle-kit and pnpm verify output to the failures only (≤40 lines - failing test, first error, file:line, failed/passed summary) with scripts/claude/log-digest.sh. Use every time you or a subagent run tests, pnpm verify, pnpm typecheck, pnpm lint or pnpm db:check, and before pasting any test output into a report.
+description: Read NEXA test and gate runs through scripts/claude/test-summary.sh (passed/failed/skipped counts, failing tests or stages, the first 20 lines of each failure, exit code, raw log path), and shrink any other long tool output - typecheck, lint, format, drizzle-kit - to the failures only (≤40 lines) with scripts/claude/log-digest.sh. Use every time you or a subagent run tests, pnpm verify, pnpm typecheck, pnpm lint or pnpm db:check, and before pasting any test output into a report.
 ---
 
 # Digest tool output before reading it
 
+## Tests and the gate: test-summary.sh
+
 ```bash
-pnpm verify 2>&1 | bash scripts/claude/log-digest.sh
-pnpm exec vitest run --project unit <files> 2>&1 | bash scripts/claude/log-digest.sh
-pnpm test:integration 2>&1 | tee "$SCRATCH/int.log" | bash scripts/claude/log-digest.sh
+bash scripts/claude/test-summary.sh pnpm verify
+bash scripts/claude/test-summary.sh pnpm test:integration <files>
+bash scripts/claude/test-summary.sh --from "$SCRATCH/int.log"
 ```
+
+Runs the command (or reads a saved log) and prints only
+`passed=N failed=N skipped=N`, the failing test names or failed `pnpm verify`
+stages, the first 20 lines of each failure, `exit=N` and the raw log's path. Its
+exit code mirrors the command's, so no `pipefail` is needed. Use it instead of
+reading raw test output; open the raw log only at a failure it names.
+
+## Any other long output: log-digest.sh
+
+```bash
+pnpm typecheck 2>&1 | bash scripts/claude/log-digest.sh
+pnpm db:check 2>&1 | bash scripts/claude/log-digest.sh
+pnpm lint 2>&1 | tee "$SCRATCH/lint.log" | bash scripts/claude/log-digest.sh
+```
+
+It also digests test output (`… vitest run … 2>&1 | log-digest.sh`) when you
+want one short digest rather than `test-summary.sh`'s per-failure excerpts.
 
 It prints each failing test as `file › title`, its first error message,
 `file:line` for each tsc/eslint/prettier/drizzle-kit error, and a last line
@@ -17,8 +36,9 @@ It prints each failing test as `file › title`, its first error message,
 
 ## Rules
 
-- Every agent that runs tests or `pnpm verify` pipes the output through it.
-  Reports quote the digest, never raw output.
+- Every agent that runs tests or `pnpm verify` reads them through
+  `test-summary.sh` (or pipes them through `log-digest.sh`). Reports quote the
+  summary or the digest, never raw output.
 - Keep the full log in a scratch file (`tee`) when a run is slow, so the
   digest is not the only copy.
 - Read full output only when the digest is not enough — and then only the named

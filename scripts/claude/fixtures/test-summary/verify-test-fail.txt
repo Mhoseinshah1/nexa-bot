@@ -1,0 +1,31 @@
+
+> nexa-bot@0.0.0 verify /repo
+> pnpm typecheck && pnpm lint && pnpm test
+
+> nexa-bot@0.0.0 typecheck /repo
+> tsc -b
+
+> nexa-bot@0.0.0 lint /repo
+> eslint . --max-warnings 0
+
+> nexa-bot@0.0.0 test /repo
+> vitest run --project unit
+
+ RUN  v4.1.11 /repo
+
+ ❯ |unit| tests/unit/order.test.ts (5 tests | 1 failed) 11ms
+   × order > refund > reverses cashback 4ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| tests/unit/order.test.ts > order > refund > reverses cashback
+Error: ledger entry missing
+ ❯ tests/unit/order.test.ts:88:11
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 4 passed (5)
+
+ ELIFECYCLE  Command failed with exit code 1.
+ ELIFECYCLE  Command failed with exit code 1.

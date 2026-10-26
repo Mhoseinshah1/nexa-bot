@@ -1,0 +1,24 @@
+
+> nexa-bot@0.0.0 verify /repo
+> pnpm typecheck && pnpm lint && pnpm format:check && pnpm check:boundaries && pnpm check:i18n && pnpm check:citations && pnpm check:shell && pnpm test && pnpm test:web && pnpm test:deploy && pnpm build
+
+
+> nexa-bot@0.0.0 typecheck /repo
+> tsc -b
+
+
+> nexa-bot@0.0.0 lint /repo
+> eslint . --max-warnings 0
+
+
+/repo/apps/api/src/surfaces/web/a.controller.ts
+  12:5  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  30:1  warning  Missing return type  @typescript-eslint/explicit-function-return-type
+
+/repo/apps/web/src/Page.tsx
+  7:10  error  'x' is defined but never used  @typescript-eslint/no-unused-vars
+
+✖ 3 problems (2 errors, 1 warning)
+
+ ELIFECYCLE  Command failed with exit code 1.
+ ELIFECYCLE  Command failed with exit code 1.
