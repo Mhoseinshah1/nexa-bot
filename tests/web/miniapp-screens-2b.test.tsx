@@ -485,8 +485,33 @@ describe('automatic renewal', () => {
     fireEvent.click(await screen.findByText(confirmText));
     expect(await screen.findByText(fa('miniapp.auto_renew_disable'))).toBeTruthy();
     const post = calls.find((call) => call.key === 'POST /services/s1/auto-renew');
-    expect(post?.body).toEqual({ enabled: true });
+    // The confirm names the figure it showed: the consent is bound to it (Codex, PR 338).
+    expect(post?.body).toEqual({ enabled: true, expected: money('120000') });
     expect(post?.headers['idempotency-key']).toMatch(/^[0-9a-f-]{36}$/u);
+  });
+
+  it('a price that rose before the confirm is asked again at the new figure, never recorded', async () => {
+    routes['GET /services/s1'] = () => ({ body: service({ autoRenew: offered }) });
+    routes['POST /services/s1/auto-renew'] = () => ({
+      body: { offered: true, enabled: false, price: money('130000'), leadHours: 24 },
+    });
+    render(<ServiceDetail serviceId="s1" />);
+    fireEvent.click(await screen.findByText(fa('miniapp.auto_renew_enable')));
+    fireEvent.click(await screen.findByText(confirmText));
+    // Still the question, now naming the new price; the second confirm carries THAT figure.
+    await waitFor(() =>
+      expect(calls.filter((call) => call.key === 'POST /services/s1/auto-renew')).toHaveLength(1),
+    );
+    fireEvent.click(await screen.findByText(confirmText));
+    await waitFor(() =>
+      expect(calls.filter((call) => call.key === 'POST /services/s1/auto-renew')).toHaveLength(2),
+    );
+    const posts = calls.filter((call) => call.key === 'POST /services/s1/auto-renew');
+    expect(posts.map((call) => call.body)).toEqual([
+      { enabled: true, expected: money('120000') },
+      { enabled: true, expected: money('130000') },
+    ]);
+    expect(screen.queryByText(fa('miniapp.auto_renew_disable'))).toBeNull();
   });
 
   it('switches off at once, and answers a refusal in Persian', async () => {

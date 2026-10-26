@@ -14,6 +14,7 @@ import {
   autoRenewDue,
   autoRenewEligible,
   ServiceAutoRenewService,
+  type ServiceAutoRenewDeps,
 } from '../../apps/api/src/modules/commerce/provisioning/application/service-auto-renew.service';
 import type {
   AutoRenewCandidate,
@@ -24,6 +25,8 @@ import type {
 import { sourceOf } from '../../apps/api/src/modules/commerce/ops-log/application/presenters';
 import { notificationButtons } from '../../apps/api/src/surfaces/telegram/runtime/keyboards';
 import {
+  decodeAutoRenewConfirm,
+  encodeAutoRenewConfirm,
   SERVICE_AUTO_RENEW_ASK_CALLBACK_PREFIX,
   SERVICE_AUTO_RENEW_CONFIRM_CALLBACK_PREFIX,
   SERVICE_AUTO_RENEW_OFF_CALLBACK_PREFIX,
@@ -49,6 +52,17 @@ import {
  *   disabled row carry no total, which the `consented === null` test refuses.)
  * - the flag read removed from `runOnce`: "claims nothing while the feature is off".
  * - `autoRenewEligible` MIRZA test removed: "imported services are never offered it".
+ *
+ * Codex review of PR 338 (each run and seen red, then restored):
+ * - `set`'s shown-total check removed: "records nothing above the total the confirmation
+ *   showed …".
+ * - `runOnce` reading one page only (`break` after the first): "a short wallet still short does
+ *   not starve a covered service behind it".
+ * - `withdrawLeftBehind` not called: "a takeover withdraws the order its stopped pass left …".
+ * - its ORDER_STATE_INVALID pass-through removed: "… an order no longer awaiting payment is
+ *   nothing to withdraw".
+ * - the in-settlement `periodCurrent` check removed: "a period renewed by hand since the claim
+ *   is never bought again".
  */
 
 const scope = { tenantId: 't-1', botInstanceId: null } as unknown as TenantContext;
@@ -147,6 +161,12 @@ interface World {
   serviceSource: 'NEXA' | 'MIRZA';
   saved: { enabled: boolean; consented: Money | null }[];
   ignoreMarked: boolean;
+  /** Whether the service's deadline is still the claimed period's (`periodCurrent`). */
+  periodCurrent: boolean;
+  /** This lane's unpaid orders for the service, left by a pass that stopped. */
+  leftOrders: string[];
+  /** What withdrawing an order answers; null is success. */
+  cancelError: ((orderId: string) => Error | null) | null;
 }
 
 function world(overrides: Partial<World> = {}): World {
@@ -177,6 +197,9 @@ function world(overrides: Partial<World> = {}): World {
     serviceSource: 'NEXA',
     saved: [],
     ignoreMarked: false,
+    periodCurrent: true,
+    leftOrders: [],
+    cancelError: null,
     ...overrides,
   };
 }
@@ -200,8 +223,10 @@ function repository(w: World): AutoRenewRepository {
       };
       return true;
     },
-    listDue: async () => {
+    listDue: async (_scope, bounds) => {
       w.calls.push('listDue');
+      // One service: a second page is empty.
+      if (bounds.after !== undefined && bounds.after !== null) return [];
       if (w.preference === null || !w.preference.enabled || w.preference.consented === null) {
         return [];
       }
@@ -209,6 +234,7 @@ function repository(w: World): AutoRenewRepository {
       // A final period (RENEWED, REFUSED) is no candidate; a short or lapsed one is.
       if (run !== undefined && run.state !== 'FUNDS_SHORT' && run.state !== 'CLAIMED') return [];
       const candidate: AutoRenewCandidate = {
+        cursor: { expiresAt: 'basis', serviceId: SERVICE },
         serviceId: SERVICE,
         customerId: CUSTOMER,
         serviceLabel: 'nx-auto',
@@ -273,11 +299,13 @@ function repository(w: World): AutoRenewRepository {
     },
     noticeFacts: async () => null,
     renewedOrder: async () => false,
+    periodCurrent: async () => w.periodCurrent,
+    unpaidLaneOrders: async () => w.leftOrders,
   };
 }
 
 let seq = 0;
-function sweep(w: World): ServiceAutoRenewService {
+function sweep(w: World, extra: Partial<ServiceAutoRenewDeps> = {}): ServiceAutoRenewService {
   const order = (id: string, state: string, total: bigint) => ({
     id,
     state,
@@ -321,6 +349,9 @@ function sweep(w: World): ServiceAutoRenewService {
     },
     orders: {
       cancelByCustomer: async (_scope, _actor, input) => {
+        w.calls.push(`cancel:${input.idempotencyKey}`);
+        const refused = w.cancelError?.(input.orderId) ?? null;
+        if (refused !== null) throw refused;
         w.cancels.push(input.orderId);
         return {} as never;
       },
@@ -371,6 +402,7 @@ function sweep(w: World): ServiceAutoRenewService {
     } as never,
     clock: { now: () => NOW },
     ids: { uuid: () => `run-${String(++seq)}` } as never,
+    ...extra,
   });
 }
 
@@ -510,6 +542,110 @@ describe('the sweep', () => {
     expect(report).toEqual({ renewed: 0, short: 0, refused: 0 });
     expect(w.debits).toEqual([]);
     expect(w.runs[0]?.state).toBe('CLAIMED');
+    // The order it confirmed is withdrawn, not left awaiting a payment nobody chose to make.
+    expect(w.cancels).toHaveLength(1);
+    expect(w.events).toEqual([]);
+  });
+
+  // --- Codex review of PR 338 ----------------------------------------------------------
+
+  it('a period renewed by hand since the claim is never bought again', async () => {
+    // The customer's own renewal was applied between the claim and the settlement.
+    const w = world({ periodCurrent: false });
+    expect((await sweep(w).runOnce(scope)).refused).toBe(1);
+    expect(w.calls).toContain('settle');
+    expect(w.debits).toEqual([]);
+    expect(w.cancels).toHaveLength(1);
+    expect(w.runs[0]?.state).toBe('REFUSED');
+    expect(w.events.map((event) => event.payload['refusal'])).toEqual(['NOT_RENEWABLE']);
+    expect(w.notices).toEqual([]);
+  });
+
+  it('a short wallet still short does not starve a covered service behind it', async () => {
+    const OTHER = '01900000-0000-7000-8000-0000000000a2';
+    const w = world({ balance: 150_000n });
+    const candidates: AutoRenewCandidate[] = [
+      {
+        cursor: { expiresAt: 'first', serviceId: OTHER },
+        serviceId: OTHER,
+        customerId: CUSTOMER,
+        serviceLabel: 'nx-short',
+        consented: IRT(1_000_000n),
+        // Told last pass; the wallet still does not cover what was quoted then.
+        run: { id: 'run-short', state: 'FUNDS_SHORT', attempt: 1, quoted: IRT(999_999n) },
+      },
+      {
+        cursor: { expiresAt: 'second', serviceId: SERVICE },
+        serviceId: SERVICE,
+        customerId: CUSTOMER,
+        serviceLabel: 'nx-auto',
+        consented: IRT(100_000n),
+        run: null,
+      },
+    ];
+    const pages: (string | null)[] = [];
+    const listDue: AutoRenewRepository['listDue'] = async (_scope, bounds, limit) => {
+      const after = bounds.after ?? null;
+      pages.push(after?.expiresAt ?? null);
+      const from =
+        after === null
+          ? 0
+          : candidates.findIndex((one) => one.cursor.expiresAt === after.expiresAt) + 1;
+      return candidates.slice(from, from + limit);
+    };
+    const report = await sweep(w, {
+      repository: { ...repository(w), listDue },
+      batchLimit: 1,
+    }).runOnce(scope);
+    expect(report.renewed).toBe(1);
+    expect(pages).toEqual([null, 'first']);
+    expect(w.runs.map((run) => [run.serviceId, run.state])).toEqual([[SERVICE, 'RENEWED']]);
+  });
+
+  it('a takeover withdraws the order its stopped pass left, before drafting its own', async () => {
+    const w = world({ leftOrders: ['order-left'] });
+    // A pass claimed the period, confirmed its order and stopped; its lease lapsed.
+    w.runs = [
+      {
+        id: 'run-left',
+        serviceId: SERVICE,
+        customerId: CUSTOMER,
+        attempt: 1,
+        state: 'CLAIMED',
+        consented: IRT(100_000n),
+        quoted: null,
+        serviceLabel: 'nx-auto',
+        basisExpiresAt: new Date(NOW.getTime() + 12 * HOUR),
+      },
+    ];
+    expect((await sweep(w).runOnce(scope)).renewed).toBe(1);
+    expect(w.cancels).toEqual(['order-left']);
+    const withdrawn = w.calls.indexOf('cancel:autorenew:run-left:2:withdraw:order-left');
+    expect(withdrawn).toBeGreaterThan(-1);
+    expect(withdrawn).toBeLessThan(w.calls.indexOf('draft'));
+    expect(w.debits).toEqual([expect.objectContaining({ key: 'autorenew:run-left:2:settle' })]);
+  });
+
+  it('… an order no longer awaiting payment is nothing to withdraw', async () => {
+    const w = world({
+      leftOrders: ['order-paid'],
+      cancelError: () => errors.conflict(COMMERCE_ERROR_CODES.ORDER_STATE_INVALID, 'paid'),
+    });
+    expect((await sweep(w).runOnce(scope)).renewed).toBe(1);
+  });
+
+  it('… one the customer is paying right now stops the attempt: nothing drafted, nothing debited', async () => {
+    const w = world({
+      leftOrders: ['order-transfer'],
+      cancelError: () =>
+        errors.conflict(COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW, 'under review'),
+    });
+    expect(await sweep(w).runOnce(scope)).toEqual({ renewed: 0, short: 0, refused: 0 });
+    expect(w.calls).not.toContain('quote');
+    expect(w.calls).not.toContain('draft');
+    expect(w.debits).toEqual([]);
+    // Left CLAIMED: a later pass takes it over once the payment is decided.
+    expect(w.runs[0]?.state).toBe('CLAIMED');
   });
 
   it('a renewal the service refuses is not retried as a renewal and sends no extra message', async () => {
@@ -531,8 +667,13 @@ describe('the customer’s switch', () => {
     surface: 'TELEGRAM',
     correlationId: 'c' as never,
   } satisfies ActorContext;
-  const set = (w: World, enabled: boolean) =>
-    sweep(w).set(scope, actor, CUSTOMER, { serviceId: SERVICE, enabled, idempotencyKey: 'k' });
+  const set = (w: World, enabled: boolean, expected: Money | null = IRT(w.quote)) =>
+    sweep(w).set(scope, actor, CUSTOMER, {
+      serviceId: SERVICE,
+      enabled,
+      expected,
+      idempotencyKey: 'k',
+    });
   const code = async (promise: Promise<unknown>) => {
     try {
       await promise;
@@ -548,6 +689,55 @@ describe('the customer’s switch', () => {
     expect(state).toMatchObject({ enabled: true, price: IRT(120_000n) });
     expect(w.saved).toEqual([{ enabled: true, consented: IRT(120_000n) }]);
     expect(w.events.map((event) => event.eventType)).toEqual(['ServiceAutoRenewChanged']);
+  });
+
+  it('records nothing above the total the confirmation showed, and offers the new price', async () => {
+    // Shown 100 000; the price rose to 120 000 before the tap.
+    const w = world({ preference: null, quote: 120_000n });
+    expect(await set(w, true, IRT(100_000n))).toEqual({
+      offered: true,
+      enabled: false,
+      price: IRT(120_000n),
+      leadHours: 24,
+    });
+    expect(w.saved).toEqual([]);
+    expect(w.events).toEqual([]);
+    // A tap naming no figure (a card drawn before the rule), or another currency: nothing.
+    expect((await set(w, true, null)).enabled).toBe(false);
+    expect((await set(w, true, money(500_000n, 'IRR'))).enabled).toBe(false);
+    expect(w.saved).toEqual([]);
+    // Confirmed again at the new figure: recorded, at the server's quote.
+    expect((await set(w, true, IRT(120_000n))).enabled).toBe(true);
+    expect(w.saved).toEqual([{ enabled: true, consented: IRT(120_000n) }]);
+  });
+
+  it('a quote that fell is recorded as the lower quote, never the figure shown', async () => {
+    const w = world({ preference: null, quote: 90_000n });
+    expect((await set(w, true, IRT(100_000n))).price).toEqual(IRT(90_000n));
+    expect(w.saved).toEqual([{ enabled: true, consented: IRT(90_000n) }]);
+  });
+
+  it('the bot’s confirm carries the figure it showed; a bare or malformed one decodes safely', () => {
+    const data = encodeAutoRenewConfirm(SERVICE, IRT(123_456n));
+    expect(data).toBe(`${SERVICE_AUTO_RENEW_CONFIRM_CALLBACK_PREFIX}${SERVICE}.123456.IRT`);
+    expect(decodeAutoRenewConfirm(data)).toEqual({ serviceId: SERVICE, shown: IRT(123_456n) });
+    // The widest figure the decoder accepts still fits Telegram's 64 bytes.
+    const widest = encodeAutoRenewConfirm(SERVICE, money(999_999_999_999_999_999n, 'USDT'));
+    expect(Buffer.byteLength(widest)).toBeLessThanOrEqual(64);
+    expect(decodeAutoRenewConfirm(widest)?.shown).toEqual(money(999_999_999_999_999_999n, 'USDT'));
+    expect(decodeAutoRenewConfirm(`ay:${SERVICE}`)).toEqual({ serviceId: SERVICE, shown: null });
+    for (const bad of [
+      `ay:${SERVICE}.`,
+      `ay:${SERVICE}.01.IRT`,
+      `ay:${SERVICE}.-1.IRT`,
+      `ay:${SERVICE}.1e3.IRT`,
+      `ay:${SERVICE}.1.XYZ`,
+      `ay:${SERVICE}.1.IRT.9`,
+      `ay:${SERVICE}.1234567890123456789.IRT`,
+      'ay:not-a-service.1.IRT',
+    ]) {
+      expect(decodeAutoRenewConfirm(bad), bad).toBeNull();
+    }
   });
 
   it('cannot be switched on while the feature is off, and can always be switched off', async () => {

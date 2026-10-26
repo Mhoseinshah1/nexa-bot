@@ -52,6 +52,8 @@ import {
 } from '../../payments/application/payment.service.js';
 import type { ServiceRecord, ServiceRepository } from './ports.js';
 import type {
+  AutoRenewCandidate,
+  AutoRenewCursor,
   AutoRenewRepository,
   AutoRenewRun,
   AutoRenewWalletReader,
@@ -155,6 +157,8 @@ export interface ServiceAutoRenewDeps {
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /** At most this many periods claimed per pass; `AUTO_RENEW_BATCH_LIMIT` unless given. */
+  readonly batchLimit?: number;
   readonly logger?: {
     error: (context: Record<string, unknown>, message: string) => void;
   };
@@ -167,6 +171,19 @@ function isRefusal(error: unknown): boolean {
 
 function sameOrBelow(total: Money, ceiling: Money): boolean {
   return total.currency === ceiling.currency && total.amountMinor <= ceiling.amountMinor;
+}
+
+/**
+ * Raised inside the settling transaction when the period is no longer this run's to buy: the
+ * deadline moved since the claim (a renewal was applied), or another pass took the claim over.
+ * A decided refusal, so the debit rolls back and the order is withdrawn.
+ */
+function periodGone(reason: string): Error {
+  return errors.conflict(
+    COMMERCE_ERROR_CODES.AUTO_RENEW_NOT_AVAILABLE,
+    "This renewal period is no longer this run's to renew.",
+    { reason },
+  );
 }
 
 /** Raised inside the settling transaction when the consent or the switch went away. */
@@ -206,6 +223,11 @@ function consentWithdrawn(): Error {
  *   last quote. A refusal at settlement withdraws the confirmed order, as the manual order
  *   does — never a refund (a wallet purchase is refused, not refunded).
  * - A quote above the consented total is not renewed (`PRICE_ROSE`) and told once.
+ * - Codex review of PR 338: the consent is bound to the total the confirmation SHOWED (`set`
+ *   records nothing when today's quote is above it); a pass pages past short wallets still
+ *   short until its batch is filled; a run first withdraws any unpaid order this lane left for
+ *   the service (a pass that stopped between confirming and settling); and the settling
+ *   transaction refuses a period whose deadline moved since the claim (renewed by hand).
  */
 export class ServiceAutoRenewService {
   constructor(private readonly deps: ServiceAutoRenewDeps) {}
@@ -290,6 +312,12 @@ export class ServiceAutoRenewService {
     input: {
       readonly serviceId: string;
       readonly enabled: boolean;
+      /**
+       * Switching ON: the renewal total the confirmation SHOWED the customer. The consent is
+       * recorded only when the fresh quote is at or below it (same currency); otherwise, or
+       * without it, nothing is recorded and the answer offers the new price to confirm again.
+       */
+      readonly expected?: Money | null;
       readonly idempotencyKey: string;
     },
   ): Promise<AutoRenewState> {
@@ -318,7 +346,14 @@ export class ServiceAutoRenewService {
     }
 
     const namespace = actor.surface;
-    const requestHash = hashRequest({ customerId, serviceId, autoRenew: input.enabled });
+    const expected = input.enabled ? (input.expected ?? null) : null;
+    const requestHash = hashRequest({
+      customerId,
+      serviceId,
+      autoRenew: input.enabled,
+      expectedMinor: expected?.amountMinor.toString() ?? null,
+      expectedCurrency: expected?.currency ?? null,
+    });
     const replay = await this.deps.idempotency.find<{ serviceId: string }>(
       scope,
       namespace,
@@ -344,13 +379,33 @@ export class ServiceAutoRenewService {
       const service = await owned();
       if (!autoRenewEligible(service)) throw this.notAvailable();
       if (!(await this.featureOn(scope))) throw this.featureOff();
+      let quote: Money;
       try {
-        consented = (await this.deps.commercial.renewalQuote(scope, actor, customerId, serviceId))
+        quote = (await this.deps.commercial.renewalQuote(scope, actor, customerId, serviceId))
           .total;
       } catch (error) {
         if (isRefusal(error)) throw this.notAvailable();
         throw error;
       }
+      /*
+       * The consent is bound to what the customer SAW (Codex review of PR 338). A quote above
+       * the confirmed figure — the price rose between the screen and the tap — or a tap that
+       * names no figure (a card drawn before this rule) records nothing: the answer is the new
+       * price, to be confirmed again. The figure recorded is still this quote, never the
+       * client's, so a forged figure can only raise the customer's own ceiling to today's price.
+       */
+      if (expected === null || !sameOrBelow(quote, expected)) {
+        if (await this.enabledFor(scope, customerId, serviceId)) {
+          return this.stateFor(scope, actor, customerId, service);
+        }
+        return {
+          offered: true,
+          enabled: false,
+          price: quote,
+          leadHours: await this.leadHours(scope),
+        };
+      }
+      consented = quote;
     }
 
     const now = this.deps.clock.now();
@@ -480,63 +535,31 @@ export class ServiceAutoRenewService {
       const leadHours = await this.leadHours(scope, tx);
       const dueBefore = new Date(now.getTime() + leadHours * HOUR_MS);
       const leaseUntil = new Date(now.getTime() + AUTO_RENEW_LEASE_MS);
-      const candidates = await this.deps.repository.listDue(
-        scope,
-        { now, dueBefore },
-        AUTO_RENEW_BATCH_LIMIT,
-        tx,
-      );
+      const limit = this.deps.batchLimit ?? AUTO_RENEW_BATCH_LIMIT;
       const runs: AutoRenewRun[] = [];
-      for (const candidate of candidates) {
-        if (candidate.run === null) {
-          const run = await this.deps.repository.claimNew(
-            scope,
-            {
-              id: this.deps.ids.uuid(),
-              serviceId: candidate.serviceId,
-              customerId: candidate.customerId,
-              serviceLabel: candidate.serviceLabel,
-              consented: candidate.consented,
-              now,
-              dueBefore,
-              leaseUntil,
-            },
-            tx,
-          );
-          if (run !== null) runs.push(run);
-          continue;
-        }
-        if (candidate.run.state === 'FUNDS_SHORT') {
-          /*
-           * A short period is tried again only once the wallet covers what was last quoted —
-           * the customer was already told, and a pass that drafted an order every fifteen
-           * minutes for money that is still not there would be work for nothing.
-           */
-          const quoted = candidate.run.quoted;
-          if (quoted === null) continue;
-          const balance = await this.deps.wallet.balanceOf(
-            scope,
-            candidate.customerId,
-            quoted.currency,
-            tx,
-          );
-          if (!walletCoverage(money(balance.amountMinor, balance.currency), quoted).sufficient) {
-            continue;
-          }
-        }
-        const run = await this.deps.repository.reclaim(
+      /*
+       * Page through the due candidates until the batch is FILLED (Codex review of PR 338).
+       * A short wallet still short is skipped below, and the limit used to apply before that
+       * skip: fifty such periods at the front of the order made every pass select the same
+       * fifty, skip them all and claim nothing, while a covered service behind them lapsed.
+       * Finite: every page moves strictly forward through a window bounded by the lead time.
+       */
+      let after: AutoRenewCursor | null = null;
+      for (;;) {
+        const candidates = await this.deps.repository.listDue(
           scope,
-          {
-            runId: candidate.run.id,
-            from: candidate.run.state,
-            attempt: candidate.run.attempt,
-            consented: candidate.consented,
-            now,
-            leaseUntil,
-          },
+          { now, dueBefore, after },
+          limit,
           tx,
         );
-        if (run !== null) runs.push(run);
+        for (const candidate of candidates) {
+          if (runs.length >= limit) break;
+          const run = await this.claim(scope, candidate, { now, dueBefore, leaseUntil }, tx);
+          if (run !== null) runs.push(run);
+        }
+        const last = candidates.at(-1);
+        if (runs.length >= limit || candidates.length < limit || last === undefined) break;
+        after = last.cursor;
       }
       return runs;
     });
@@ -559,6 +582,65 @@ export class ServiceAutoRenewService {
   }
 
   /**
+   * One candidate claimed, or null: a new period by its unique insert, a lapsed claim or a short
+   * wallet by a conditional takeover. A short wallet is taken over only once it covers what was
+   * last quoted.
+   */
+  private async claim(
+    scope: TenantContext,
+    candidate: AutoRenewCandidate,
+    at: { readonly now: Date; readonly dueBefore: Date; readonly leaseUntil: Date },
+    tx: TransactionScope,
+  ): Promise<AutoRenewRun | null> {
+    if (candidate.run === null) {
+      return this.deps.repository.claimNew(
+        scope,
+        {
+          id: this.deps.ids.uuid(),
+          serviceId: candidate.serviceId,
+          customerId: candidate.customerId,
+          serviceLabel: candidate.serviceLabel,
+          consented: candidate.consented,
+          now: at.now,
+          dueBefore: at.dueBefore,
+          leaseUntil: at.leaseUntil,
+        },
+        tx,
+      );
+    }
+    if (candidate.run.state === 'FUNDS_SHORT') {
+      /*
+       * A short period is tried again only once the wallet covers what was last quoted — the
+       * customer was already told, and a pass that drafted an order every fifteen minutes for
+       * money that is still not there would be work for nothing.
+       */
+      const quoted = candidate.run.quoted;
+      if (quoted === null) return null;
+      const balance = await this.deps.wallet.balanceOf(
+        scope,
+        candidate.customerId,
+        quoted.currency,
+        tx,
+      );
+      if (!walletCoverage(money(balance.amountMinor, balance.currency), quoted).sufficient) {
+        return null;
+      }
+    }
+    return this.deps.repository.reclaim(
+      scope,
+      {
+        runId: candidate.run.id,
+        from: candidate.run.state,
+        attempt: candidate.run.attempt,
+        consented: candidate.consented,
+        now: at.now,
+        leaseUntil: at.leaseUntil,
+      },
+      tx,
+    );
+  }
+
+  /**
    * One claimed period, renewed or not. Returns where it ended, or `null` when it was left
    * `CLAIMED` (the scope stopped, or another pass moved it).
    */
@@ -569,6 +651,9 @@ export class ServiceAutoRenewService {
     const actor = autoRenewActor(run.id);
     const customerId = run.customerId;
     const stem = `autorenew:${run.id}:${String(run.attempt)}`;
+
+    // 0. This lane's own unpaid orders for the service, withdrawn before anything is drafted.
+    await this.withdrawLeftBehind(scope, actor, run, stem);
 
     // 1. The quote, read: refused before anything is written for a period that cannot renew.
     let quote: Money;
@@ -641,6 +726,17 @@ export class ServiceAutoRenewService {
              * ceiling. A refusal here rolls the debit back with it.
              */
             if (!(await this.featureOn(scope, tx))) throw consentWithdrawn();
+            /*
+             * The PERIOD is still the claimed one (Codex review of PR 338). A renewal applied
+             * since the claim — the customer's own, bought by hand — moved the deadline, and
+             * the ordinary settlement would happily sell another on top of it. Asked here,
+             * after the settlement's lifecycle lock and its "no commercial action outstanding"
+             * check: a renewal still being applied is refused there, one already applied is
+             * refused here, so nothing can slip between the two.
+             */
+            if (!(await this.deps.repository.periodCurrent(scope, run.id, tx))) {
+              throw periodGone('PERIOD_MOVED');
+            }
             const preference = await this.deps.repository.preferenceOf(scope, run.serviceId, tx);
             if (
               preference === null ||
@@ -664,10 +760,13 @@ export class ServiceAutoRenewService {
               tx,
             );
             if (!marked) {
-              // Not this attempt's claim any more: nothing may be debited for it.
-              throw new Error(
-                `auto-renew run ${run.id} attempt ${String(run.attempt)} lost its claim`,
-              );
+              /*
+               * Not this attempt's claim any more: nothing may be debited for it. A decided
+               * refusal, so the order this attempt confirmed is withdrawn below rather than
+               * left awaiting a payment (the takeover owns the period now; `finish` finds the
+               * claim gone and writes nothing).
+               */
+              throw periodGone('CLAIM_LOST');
             }
             await this.deps.audit.record(
               scope,
@@ -723,6 +822,41 @@ export class ServiceAutoRenewService {
       return this.finish(scope, run, 'REFUSED', 'NOT_RENEWABLE', total);
     }
     return 'RENEWED';
+  }
+
+  /**
+   * Withdraws every unpaid renewal order THIS LANE placed for the service and its owner — left
+   * by a pass that stopped after confirming it, or whose settlement failed in transit (Codex
+   * review of PR 338). Without this the order kept the service out of the candidates until it
+   * expired, past the deadline it was for. Moves no money: an order still awaiting payment has
+   * none. One that stopped awaiting payment since the read (paid, expired) is nothing to
+   * withdraw, and whatever paid it is refused at this run's settlement (the outstanding-action
+   * and period checks). One the customer is paying right now (a transfer under review, a
+   * checkout) refuses the withdrawal: this attempt stops, left `CLAIMED` for a later pass.
+   */
+  private async withdrawLeftBehind(
+    scope: TenantContext,
+    actor: ActorContext,
+    run: AutoRenewRun,
+    stem: string,
+  ): Promise<void> {
+    const orderIds = await this.deps.repository.unpaidLaneOrders(scope, {
+      serviceId: run.serviceId,
+      customerId: run.customerId,
+    });
+    for (const orderId of orderIds) {
+      try {
+        await this.deps.orders.cancelByCustomer(
+          scope,
+          actor,
+          { idempotencyKey: `${stem}:withdraw:${orderId}`, customerId: run.customerId, orderId },
+          AUTO_RENEW_ORDER_AUTHORITY,
+        );
+      } catch (error) {
+        if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.ORDER_STATE_INVALID) continue;
+        throw error;
+      }
+    }
   }
 
   /** The withdrawal of a refused order; its own failure is logged, never the run's outcome. */

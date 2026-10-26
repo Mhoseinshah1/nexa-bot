@@ -172,8 +172,10 @@ function Offer({ serviceId, kind }: { serviceId: string; kind: MiniAppServiceAct
 
 /**
  * Round 10, D1: «تمدید خودکار». Switching on asks first, naming the renewal total the server
- * quoted (the most it will charge); the server quotes again and records that total. Switching
- * off acts at once. Every refusal is the server's, in Persian.
+ * quoted (the most it will charge); the confirm sends that figure back, and the server quotes
+ * again and records its quote only when it is no higher. A higher one is recorded nowhere: the
+ * answer carries the new price and the question stays open on it, to be confirmed again.
+ * Switching off acts at once. Every refusal is the server's, in Persian.
  */
 function AutoRenew({ serviceId, initial }: { serviceId: string; initial: MiniAppAutoRenew }) {
   const { api } = useApp();
@@ -185,12 +187,15 @@ function AutoRenew({ serviceId, initial }: { serviceId: string; initial: MiniApp
     setError(null);
     setBusy(true);
     try {
-      setState(
-        await api.post(MINIAPP_ROUTES.serviceAutoRenew, { serviceId }, miniAppAutoRenewSchema, {
-          enabled,
-        }),
+      const next = await api.post(
+        MINIAPP_ROUTES.serviceAutoRenew,
+        { serviceId },
+        miniAppAutoRenewSchema,
+        enabled && state.price !== null ? { enabled, expected: state.price } : { enabled },
       );
-      setAsking(false);
+      setState(next);
+      // Not recorded because the price moved: still asking, now at the new figure.
+      setAsking(enabled && !next.enabled && next.offered);
     } catch (failure) {
       setError(errorText(failure));
     } finally {

@@ -6,6 +6,7 @@ import {
   MINIAPP_SERVICE_ACTIONS,
   COMMERCE_ERROR_CODES,
   errors,
+  fromWire,
   miniAppAutoRenewRequestSchema,
   miniAppPageQuerySchema,
   miniAppServiceLocationRequestSchema,
@@ -113,6 +114,8 @@ export class MiniAppServicesController {
       {
         serviceId: service.id,
         enabled: input.enabled,
+        // The total the confirmation showed: the consent is bound to it (Codex, PR 338).
+        expected: input.expected === undefined ? null : fromWire(input.expected),
         idempotencyKey: `${miniAppKey(request, call, 'auto-renew')}:${input.enabled ? 'on' : 'off'}`,
       },
     );

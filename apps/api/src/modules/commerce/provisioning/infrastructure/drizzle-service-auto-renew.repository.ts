@@ -17,6 +17,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
   AutoRenewCandidate,
+  AutoRenewCursor,
   AutoRenewNoticeFacts,
   AutoRenewPreference,
   AutoRenewRepository,
@@ -151,14 +152,30 @@ export class DrizzleServiceAutoRenewRepository implements AutoRenewRepository {
 
   async listDue(
     scope: TenantContext,
-    bounds: { readonly now: Date; readonly dueBefore: Date },
+    bounds: {
+      readonly now: Date;
+      readonly dueBefore: Date;
+      readonly after?: AutoRenewCursor | null;
+    },
     limit: number,
     tx: TransactionScope,
   ): Promise<readonly AutoRenewCandidate[]> {
     const tenantId = requireTenantId(scope);
+    /*
+     * Keyset pagination on the ORDER BY below (Codex review of PR 338). The deadline goes out
+     * and comes back as PostgreSQL's own text — never through a JavaScript `Date`, which would
+     * drop the microseconds, and a cursor truncated below the last row's deadline would hand
+     * the same page back for ever. Every page is read in the one claiming transaction, so one
+     * session renders and parses the text.
+     */
+    const after =
+      bounds.after === undefined || bounds.after === null
+        ? sql`TRUE`
+        : sql`(s.expires_at, s.id) > (${bounds.after.expiresAt}::timestamptz, ${bounds.after.serviceId}::uuid)`;
     const rows = await this.rows(
       tx,
       sql`SELECT s.id AS service_id, s.customer_id, s.provider_username,
+                 s.expires_at::text AS cursor_expires_at,
                  p.consented_total_minor, p.consented_currency,
                  r.id AS run_id, r.state AS run_state, r.attempt AS run_attempt,
                  r.quoted_total_minor, r.quoted_currency
@@ -183,12 +200,17 @@ export class DrizzleServiceAutoRenewRepository implements AutoRenewRepository {
              AND (r.id IS NULL
                   OR r.state = 'FUNDS_SHORT'
                   OR (r.state = 'CLAIMED' AND (r.lease_until IS NULL OR r.lease_until <= ${bounds.now})))
-             -- A renewal the customer is paying for by hand is theirs to finish.
+             -- A renewal the customer is paying for by hand is theirs to finish. This lane's
+             -- OWN unpaid order (the worker's surface, this owner's) is not: a pass that stopped
+             -- after confirming it is taken over, and the takeover withdraws it before anything
+             -- else (Codex review of PR 338) — no customer ever placed a SCHEDULER order.
              AND NOT EXISTS (
                SELECT 1 FROM service_commercial_actions c
                  JOIN orders o ON o.tenant_id = c.tenant_id AND o.id = c.order_id
                 WHERE c.tenant_id = s.tenant_id AND c.service_id = s.id
-                  AND o.state = 'AWAITING_PAYMENT')
+                  AND o.state = 'AWAITING_PAYMENT'
+                  AND NOT (o.source_surface IS NOT DISTINCT FROM 'SCHEDULER'
+                           AND o.customer_id = s.customer_id))
              -- A change still being applied (a paid renewal not yet on the panel among them)
              -- has not moved the deadline yet; renewing on top of it would buy a second period.
              AND NOT EXISTS (
@@ -196,10 +218,12 @@ export class DrizzleServiceAutoRenewRepository implements AutoRenewRepository {
                 WHERE op.tenant_id = s.tenant_id AND op.service_id = s.id
                   AND op.state NOT IN ${TERMINAL_OPERATION_STATES}
                   AND (op.type <> 'SYNC_USAGE' OR op.requested_by_customer_id IS NOT NULL))
+             AND ${after}
            ORDER BY s.expires_at, s.id
            LIMIT ${limit}`,
     );
     return rows.map((row) => ({
+      cursor: { expiresAt: String(row['cursor_expires_at']), serviceId: String(row['service_id']) },
       serviceId: String(row['service_id']),
       customerId: String(row['customer_id']) as UserId,
       serviceLabel: String(row['provider_username']),
@@ -286,6 +310,41 @@ export class DrizzleServiceAutoRenewRepository implements AutoRenewRepository {
           RETURNING ${RUN_COLUMNS}`,
     );
     return row === undefined ? null : runOf(row);
+  }
+
+  async periodCurrent(scope: TenantContext, runId: string, tx: TransactionScope): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    /*
+     * Compared in SQL, column to column: `basis_expires_at` was copied from
+     * `services.expires_at` in SQL at the claim, so an unchanged deadline is EQUAL to the
+     * microsecond, and any renewal applied since — a manual one among them — is not.
+     */
+    const rows = await this.rows(
+      tx,
+      sql`SELECT 1 FROM service_auto_renew_runs r
+            JOIN services s ON s.tenant_id = r.tenant_id AND s.id = r.service_id
+           WHERE r.tenant_id = ${tenantId} AND r.id = ${runId}
+             AND s.expires_at = r.basis_expires_at`,
+    );
+    return rows.length === 1;
+  }
+
+  async unpaidLaneOrders(
+    scope: TenantContext,
+    input: { readonly serviceId: string; readonly customerId: UserId },
+    tx?: unknown,
+  ): Promise<readonly string[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.rows(
+      tx,
+      sql`SELECT o.id FROM service_commercial_actions c
+            JOIN orders o ON o.tenant_id = c.tenant_id AND o.id = c.order_id
+           WHERE c.tenant_id = ${tenantId} AND c.service_id = ${input.serviceId}
+             AND o.customer_id = ${input.customerId}
+             AND o.state = 'AWAITING_PAYMENT' AND o.source_surface = 'SCHEDULER'
+           ORDER BY o.id`,
+    );
+    return rows.map((row) => String(row['id']));
   }
 
   async markRenewed(

@@ -174,6 +174,7 @@ import {
   USERNAME_CUSTOM_CALLBACK_PREFIX,
   WALLET_OPEN_CALLBACK_DATA,
   WALLET_PAY_CALLBACK_PREFIX,
+  decodeAutoRenewConfirm,
   decodeDeviceQuantity,
   decodeIdPair,
   decodeServiceLocationPair,
@@ -741,11 +742,14 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
       );
     }
     if (data.startsWith(SERVICE_AUTO_RENEW_CONFIRM_CALLBACK_PREFIX)) {
-      return callbackCommand(
-        'SERVICE_AUTO_RENEW_CONFIRM',
-        data.slice(SERVICE_AUTO_RENEW_CONFIRM_CALLBACK_PREFIX.length),
-        id,
-      );
+      const confirmed = decodeAutoRenewConfirm(data);
+      if (confirmed === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      return {
+        intent: 'SERVICE_AUTO_RENEW_CONFIRM',
+        targetId: confirmed.serviceId,
+        shownTotal: confirmed.shown,
+        callbackQueryId: id,
+      };
     }
     if (data.startsWith(SERVICE_AUTO_RENEW_OFF_CALLBACK_PREFIX)) {
       return callbackCommand(

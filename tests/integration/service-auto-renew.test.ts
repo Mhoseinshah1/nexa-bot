@@ -19,6 +19,10 @@ import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/pr
 import { DrizzleServiceTransferRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service-transfer.repository';
 import { DrizzleNotificationSubjectReader } from '../../apps/api/src/modules/commerce/messaging/infrastructure/drizzle-notification-subject.reader';
 import { DrizzleOpsLogFacts } from '../../apps/api/src/modules/commerce/ops-log/infrastructure/drizzle-ops-log-facts';
+import {
+  ServiceAutoRenewService,
+  type ServiceAutoRenewDeps,
+} from '../../apps/api/src/modules/commerce/provisioning/application/service-auto-renew.service';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
   adminActorFor,
@@ -47,6 +51,14 @@ import {
  * - the subject reader's ledger comparison removed: "a short wallet creates no order …"
  *   (the notice still holds once the wallet covers the quote).
  * - the ops-log facts' run lookup removed: "renews a covered period …" (origin.autoRenew).
+ * Codex review of PR 338 (each run and seen red, then restored):
+ * - `listDue` cursor rendered through a JavaScript `Date` (microseconds dropped): "pages past a
+ *   short wallet …" (the same page comes back for ever; the case times out).
+ * - `listDue`'s SCHEDULER exemption removed: "a takeover withdraws the order a stopped pass
+ *   left …".
+ * - the settlement's `periodCurrent` check removed: "a period renewed by hand since the claim
+ *   …".
+ * - the bot confirm's figure ignored (`expected` not passed): "the bot asks before …".
  * Not a mutation this suite catches: `claimNew` without `ON CONFLICT … DO NOTHING` stays green,
  * because the period's UNIQUE key still refuses the second claim (that pass's claim transaction
  * fails instead of skipping); "the run row refuses an incoherent state" pins the key itself.
@@ -231,9 +243,15 @@ describe('R10 D1 — automatic renewal', () => {
     return ctx.container.serviceAutoRenew.set(tenantA, botActor('opt-in'), customerId, {
       serviceId,
       enabled: true,
+      // The figure the confirmation showed: the fixture's price.
+      expected: money(PRICE, 'IRT'),
       idempotencyKey: `auto-renew-opt-${String(keySeq)}`,
     });
   };
+
+  /** The container's own dependencies, for a sweep with one of them replaced. */
+  const deps = (): ServiceAutoRenewDeps =>
+    (ctx.container.serviceAutoRenew as unknown as { deps: ServiceAutoRenewDeps }).deps;
 
   const balance = async (customerId: UserId): Promise<bigint> =>
     (await ctx.container.wallet.balance(tenantA, owner, customerId)).amountMinor;
@@ -454,10 +472,21 @@ describe('R10 D1 — automatic renewal', () => {
     expect((await tap(`s:${serviceId}`)).replyKey).toBe('bot.service.card');
     expect(sent.join('\n'), 'the ON switch is drawn').toContain(`ar:${serviceId}`);
 
+    sent = [];
     expect((await tap(`ar:${serviceId}`)).replyKey).toBe('bot.service.auto_renew_ask');
     expect(await preference(serviceId), 'asking records nothing').toBeNull();
+    // The confirm names the figure the question showed (Codex review of PR 338).
+    expect(sent.join('\n')).toContain(`ay:${serviceId}.${String(PRICE)}.IRT`);
 
-    await tap(`ay:${serviceId}`);
+    // A confirm drawn before the figure was carried, or one below today's price, records
+    // nothing: the question is asked again, at the price now.
+    expect((await tap(`ay:${serviceId}`)).replyKey).toBe('bot.service.auto_renew_ask');
+    expect((await tap(`ay:${serviceId}.${String(PRICE - 1n)}.IRT`)).replyKey).toBe(
+      'bot.service.auto_renew_ask',
+    );
+    expect(await preference(serviceId)).toBeNull();
+
+    await tap(`ay:${serviceId}.${String(PRICE)}.IRT`);
     expect(await preference(serviceId)).toEqual({
       enabled: true,
       consented_total_minor: PRICE,
@@ -474,8 +503,103 @@ describe('R10 D1 — automatic renewal', () => {
     sent = [];
     await tap(`s:${serviceId}`);
     expect(sent.join('\n')).not.toContain(`ar:${serviceId}`);
-    expect((await tap(`ay:${serviceId}`)).replyKey).toBe('bot.service.auto_renew_unavailable');
+    expect((await tap(`ay:${serviceId}.${String(PRICE)}.IRT`)).replyKey).toBe(
+      'bot.service.auto_renew_unavailable',
+    );
     expect(await preference(serviceId)).toEqual({ enabled: false, consented_total_minor: null });
+  });
+
+  // --- Codex review of PR 338 ------------------------------------------------------------
+
+  it('pages past a short wallet still short to a covered service behind it', async () => {
+    const short = await activeService(customerB);
+    const covered = await activeService(customerA);
+    // One deadline to the microsecond: the order is then decided by the service id alone,
+    // and a cursor that lost the microseconds would hand the first page back for ever.
+    await run(sql`UPDATE services
+                     SET expires_at = date_trunc('second', now()) + interval '12 hours 123457 microseconds'
+                   WHERE id IN (${short}, ${covered})`);
+    const [first] = await rows(sql`SELECT id FROM services WHERE id IN (${short}, ${covered})
+                                    ORDER BY id LIMIT 1`);
+    expect(first?.['id'], 'the fixture needs the short service first').toBe(short);
+    const limited = new ServiceAutoRenewService({ ...deps(), batchLimit: 1 });
+
+    await optIn(customerB, short);
+    expect((await limited.runOnce(tenantA)).short).toBe(1);
+
+    await optIn(customerA, covered);
+    await credit(customerA, PRICE);
+    expect(await limited.runOnce(tenantA)).toEqual({ renewed: 1, short: 0, refused: 0 });
+    expect(await runsOf(covered)).toEqual([expect.objectContaining({ state: 'RENEWED' })]);
+    expect(await runsOf(short)).toEqual([
+      expect.objectContaining({ state: 'FUNDS_SHORT', attempt: 1 }),
+    ]);
+  });
+
+  it('a takeover withdraws the order a stopped pass left, and renews the period once', async () => {
+    const serviceId = await activeService(customerA);
+    await optIn(customerA, serviceId);
+    await credit(customerA, PRICE);
+    // A pass confirms its order and then loses the settlement in transit.
+    const stopped = new ServiceAutoRenewService({
+      ...deps(),
+      payments: {
+        settleFromWallet: async () => {
+          throw new Error('connection reset');
+        },
+      },
+    });
+    expect(await stopped.runOnce(tenantA)).toEqual({ renewed: 0, short: 0, refused: 0 });
+    const [left] = await renewOrders(serviceId);
+    expect(left).toMatchObject({ state: 'AWAITING_PAYMENT', source_surface: 'SCHEDULER' });
+    expect(await runsOf(serviceId)).toEqual([
+      expect.objectContaining({ state: 'CLAIMED', attempt: 1 }),
+    ]);
+
+    // Its lease lapses: the next pass takes the period over.
+    await run(sql`UPDATE service_auto_renew_runs
+                     SET lease_until = ${new Date(ctx.container.clock.now().getTime() - 60_000)}
+                   WHERE service_id = ${serviceId}`);
+    expect((await ctx.container.serviceAutoRenew.runOnce(tenantA)).renewed).toBe(1);
+    const orders = await renewOrders(serviceId);
+    expect(orders).toHaveLength(2);
+    expect(orders.find((order) => order['id'] === left?.['id'])).toMatchObject({
+      state: 'CANCELLED',
+    });
+    expect(orders.filter((order) => order['state'] === 'PAID')).toHaveLength(1);
+    expect(await purchases(customerA)).toHaveLength(2);
+    expect(await balance(customerA)).toBe(0n);
+    expect(await runsOf(serviceId)).toEqual([
+      expect.objectContaining({ state: 'RENEWED', attempt: 2 }),
+    ]);
+  });
+
+  it('a period renewed by hand since the claim is never bought again', async () => {
+    const serviceId = await activeService(customerA);
+    await optIn(customerA, serviceId);
+    await credit(customerA, PRICE * 2n);
+    const base = deps();
+    // The customer's own renewal is applied between this pass's claim and its settlement.
+    const racing = new ServiceAutoRenewService({
+      ...base,
+      commercial: {
+        renewalQuote: (...args) => base.commercial.renewalQuote(...args),
+        draft: (...args) => base.commercial.draft(...args),
+        confirm: async (...args) => {
+          const confirmed = await base.commercial.confirm(...args);
+          await run(sql`UPDATE services SET expires_at = expires_at + interval '30 days'
+                         WHERE id = ${serviceId}`);
+          return confirmed;
+        },
+      },
+    });
+    expect(await racing.runOnce(tenantA)).toEqual({ renewed: 0, short: 0, refused: 1 });
+    expect(await purchases(customerA), 'only the original purchase').toHaveLength(1);
+    expect(await balance(customerA)).toBe(PRICE * 2n);
+    expect(await runsOf(serviceId)).toEqual([
+      expect.objectContaining({ state: 'REFUSED', refusal: 'NOT_RENEWABLE', order_id: null }),
+    ]);
+    expect(await renewOrders(serviceId)).toEqual([expect.objectContaining({ state: 'CANCELLED' })]);
   });
 
   it('the run row refuses an incoherent state', async () => {

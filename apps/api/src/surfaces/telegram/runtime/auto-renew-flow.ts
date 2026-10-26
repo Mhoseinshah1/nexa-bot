@@ -2,12 +2,13 @@ import {
   COMMERCE_ERROR_CODES,
   isNexaError,
   type ActorContext,
+  type Money,
   type TenantContext,
 } from '@nexa/contracts';
 import type { CustomerRecord } from '../../../modules/commerce/customers/application/ports.js';
 import { inlineLabel } from '../../../modules/commerce/messaging/application/inline-buttons.js';
 import type { PendingReply } from './replies.js';
-import { SERVICE_AUTO_RENEW_CONFIRM_CALLBACK_PREFIX } from './callbacks.js';
+import { encodeAutoRenewConfirm } from './callbacks.js';
 import { backToCardButton, cardWithToast, ownedService } from './service-card-flow.js';
 import type { BotRuntime } from '../bot-runtime.js';
 
@@ -60,7 +61,8 @@ export async function autoRenewAsk(
     buttons: [
       {
         ...inlineLabel('service.auto_renew_confirm'),
-        data: `${SERVICE_AUTO_RENEW_CONFIRM_CALLBACK_PREFIX}${service.id}`,
+        // The confirm carries the figure shown above it: the consent is bound to it.
+        data: encodeAutoRenewConfirm(service.id, state.price),
         row: 0,
       },
       { ...backToCardButton(service.id), row: 1 },
@@ -72,7 +74,9 @@ export async function autoRenewAsk(
 
 /**
  * The confirm (`enabled`) or the OFF switch. The card comes back with a short notice; a
- * refusal is the one Persian sentence, and nothing was recorded.
+ * refusal is the one Persian sentence, and nothing was recorded. A confirm whose shown total
+ * is below today's quote (or that names none) records nothing either: the question is asked
+ * again with the new price (Codex review of PR 338).
  */
 export async function autoRenewSet(
   rt: BotRuntime,
@@ -82,16 +86,20 @@ export async function autoRenewSet(
   serviceId: string,
   enabled: boolean,
   idempotencyKey: string,
+  shown: Money | null = null,
 ): Promise<PendingReply> {
   if (rt.deps.autoRenew === undefined) return unavailable(serviceId);
   try {
-    await rt.deps.autoRenew.set(scope, actor, customer.id, {
+    const state = await rt.deps.autoRenew.set(scope, actor, customer.id, {
       serviceId,
       enabled,
+      expected: shown,
       // The update's key is the turn's, shared with the customer's resolution in the same
       // namespace: this command takes its own suffix of it, as every other bot command does.
       idempotencyKey: `${idempotencyKey}:auto-renew-${enabled ? 'on' : 'off'}`,
     });
+    // Not recorded: the price moved since the question. Asked again, at the new figure.
+    if (enabled && !state.enabled) return autoRenewAsk(rt, scope, actor, customer, serviceId);
   } catch (error) {
     if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
       return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };

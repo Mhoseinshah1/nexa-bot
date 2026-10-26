@@ -43,6 +43,8 @@ export interface AutoRenewRun {
  * renews a period, and the renewal's own commands decide whether it is renewable.
  */
 export interface AutoRenewCandidate {
+  /** Where the next page starts: this row's place in the candidate order. */
+  readonly cursor: AutoRenewCursor;
   readonly serviceId: string;
   readonly customerId: UserId;
   readonly serviceLabel: string;
@@ -54,6 +56,16 @@ export interface AutoRenewCandidate {
     readonly attempt: number;
     readonly quoted: Money | null;
   } | null;
+}
+
+/**
+ * A place in the candidate order `(deadline, service)`. The deadline is PostgreSQL's own text
+ * rendering of `services.expires_at`, handed back as it came: a JavaScript `Date` would drop
+ * its microseconds.
+ */
+export interface AutoRenewCursor {
+  readonly expiresAt: string;
+  readonly serviceId: string;
 }
 
 /** The figures a notice renders, read back by the run's id at send time. */
@@ -98,11 +110,18 @@ export interface AutoRenewRepository {
    * (non-imported) service with a product and a deadline in `(now, dueBefore]`, no renewal
    * order awaiting payment and no undecided operation on it, and no run for this deadline in
    * a final state — or one `CLAIMED` whose lease lapsed, or one `FUNDS_SHORT`. Oldest
-   * deadline first, at most `limit`.
+   * deadline first, at most `limit`, strictly after `after` when one is given (the sweep pages
+   * past candidates it skips, such as a short wallet still short). An unpaid renewal order
+   * this lane placed for the same owner does not exclude a service: the run it belongs to is
+   * taken over and withdraws it.
    */
   listDue(
     scope: TenantContext,
-    bounds: { readonly now: Date; readonly dueBefore: Date },
+    bounds: {
+      readonly now: Date;
+      readonly dueBefore: Date;
+      readonly after?: AutoRenewCursor | null;
+    },
     limit: number,
     tx: TransactionScope,
   ): Promise<readonly AutoRenewCandidate[]>;
@@ -145,6 +164,24 @@ export interface AutoRenewRepository {
     },
     tx: TransactionScope,
   ): Promise<AutoRenewRun | null>;
+
+  /**
+   * Whether the service's deadline is still the one this run renews (`basis_expires_at`),
+   * compared in SQL. Asked inside the settling transaction, after the settlement's lifecycle
+   * lock: false once any renewal has moved the deadline since the claim.
+   */
+  periodCurrent(scope: TenantContext, runId: string, tx: TransactionScope): Promise<boolean>;
+
+  /**
+   * The renewal orders this lane placed (`source_surface = 'SCHEDULER'`) for this service and
+   * owner that still await payment — left behind by a pass that stopped between confirming
+   * and settling. Every one is withdrawn before a run drafts anything.
+   */
+  unpaidLaneOrders(
+    scope: TenantContext,
+    input: { readonly serviceId: string; readonly customerId: UserId },
+    tx?: unknown,
+  ): Promise<readonly string[]>;
 
   /**
    * `CLAIMED -> RENEWED` for this attempt, naming the paid order. Run inside the settling

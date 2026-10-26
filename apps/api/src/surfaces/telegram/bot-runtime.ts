@@ -2058,6 +2058,7 @@ export class BotRuntime {
         command.targetId,
         command.intent === 'SERVICE_AUTO_RENEW_CONFIRM',
         input.idempotencyKey,
+        command.shownTotal ?? null,
       );
     }
     if (command.intent === 'SERVICE_TRANSFER_ASK' && command.targetId !== null) {
