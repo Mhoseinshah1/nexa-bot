@@ -77,6 +77,7 @@ export const OUTBOX_EVENT_LABELS: Readonly<Record<EventType, WebKey>> = {
   CustomerPhoneVerificationChanged: 'web.outbox_event_customer_phone_verification_changed',
   CustomerLocationChangeOverrideChanged:
     'web.outbox_event_customer_location_change_override_changed',
+  CustomerPersonalDiscountChanged: 'web.outbox_event_customer_personal_discount_changed',
   CustomerImported: 'web.outbox_event_customer_imported',
   CustomerAccountTransferred: 'web.outbox_event_customer_account_transferred',
   TermsVersionPublished: 'web.outbox_event_terms_version_published',

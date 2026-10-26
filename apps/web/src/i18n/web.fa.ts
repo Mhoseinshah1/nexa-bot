@@ -10995,6 +10995,7 @@ export const WEB_FA = {
   'web.outbox_event_customer_channel_membership_exemption_changed': 'تغییر معافیت عضویت کانال',
   'web.outbox_event_customer_phone_verification_changed': 'تغییر تأیید شماره تلفن',
   'web.outbox_event_customer_location_change_override_changed': 'تغییر محدودیت تغییر لوکیشن',
+  'web.outbox_event_customer_personal_discount_changed': 'تغییر تخفیف شخصی مشتری',
   'web.outbox_event_customer_imported': 'ورود مشتری از دادهٔ قدیمی',
   'web.outbox_event_customer_account_transferred': 'انتقال حساب مشتری',
   'web.outbox_event_terms_version_published': 'انتشار قوانین',

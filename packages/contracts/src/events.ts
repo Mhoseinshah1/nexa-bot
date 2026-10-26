@@ -111,6 +111,13 @@ export const EVENT_TYPES = [
   'CustomerPhoneVerificationChanged',
   'CustomerLocationChangeOverrideChanged',
   /**
+   * R10 D3: an operator changed a customer's personal discount percent. The before and
+   * after values are on the event (a percent is not personal data) so the change is a
+   * durable fact with a correlation id, like every other Customer 360 control; nothing
+   * consumes it for pricing — the engine reads the column.
+   */
+  'CustomerPersonalDiscountChanged',
+  /**
    * Migration P7: a customer created by the legacy importer for a legacy user who never
    * started this installation's bot. NOT `CustomerRegistered`, whose payload names the bot
    * the customer arrived through — an imported customer arrived through none, and naming
@@ -365,6 +372,10 @@ export const EVENT_PAYLOAD_SCHEMAS = {
   /** Whether a verified number is now recorded. The number itself is never in an event. */
   CustomerPhoneVerificationChanged: z.object({ verified: z.boolean() }),
   CustomerLocationChangeOverrideChanged: z.object({ overridden: z.boolean() }),
+  CustomerPersonalDiscountChanged: z.object({
+    percentBefore: z.number().int().min(0).max(100),
+    percentAfter: z.number().int().min(0).max(100),
+  }),
   /*
    * Program §8. Aggregate `CustomerTag` for a catalogue change, `Customer` for the rest. Ids
    * and a change kind only: a label is operator text and a note is private, so neither is
