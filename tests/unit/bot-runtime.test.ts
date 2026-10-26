@@ -95,6 +95,7 @@ import {
   SERVICES_LIST_PAGE_CALLBACK_PREFIX,
   SERVICES_SEARCH_CALLBACK_DATA,
   REFERRAL_GIFT_CALLBACK_DATA,
+  START_CAPTCHA_CALLBACK_PREFIX,
   SERVICE_NOTE_CALLBACK_PREFIX,
   SERVICE_RENEW_QUOTE_CALLBACK_PREFIX,
   SERVICE_RENEW_PLAN_CALLBACK_PREFIX,
@@ -775,6 +776,17 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.blocked_with_reason',
       // Item 12 (C4): a tapped button this installation does not recognise.
       'bot.callback.stale',
+      /*
+       * R10 D5 (a): the /start captcha. Reviewed: each asks a sum and offers four answers,
+       * or says how long to wait before sending /start again. None says the account is
+       * blocked (it never is), none claims the action the customer asked for ran, and the
+       * one instruction — "send /start again" — is answered on this head.
+       */
+      'bot.captcha.challenge',
+      'bot.captcha.expired',
+      'bot.captcha.locked',
+      'bot.captcha.option_button',
+      'bot.captcha.wrong',
       'bot.catalog.back_to_categories_button',
       'bot.catalog.categories_heading',
       'bot.catalog.category_empty',
@@ -1913,6 +1925,8 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
     SERVICES_LIST_PAGE: SERVICES_LIST_PAGE_CALLBACK_PREFIX,
     SERVICES_SEARCH: SERVICES_SEARCH_CALLBACK_DATA,
     REFERRAL_GIFT: REFERRAL_GIFT_CALLBACK_DATA,
+    // R10 D5: `hc:` begins with `h` like add-time's `h:`; the shadowing case proves it safe.
+    CAPTCHA_ANSWER: START_CAPTCHA_CALLBACK_PREFIX,
     // Package F: a service and a recipient's numeric id, not a uuid alone.
     SERVICE_TRANSFER_CONFIRM: SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX,
     // WP-A5: a service-and-rate pair and a bounded count.

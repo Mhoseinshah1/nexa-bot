@@ -226,6 +226,13 @@ export const BOT_INTENTS = [
    */
   'TERMS_ACCEPT',
   /*
+   * R10 D5 (a) — one of the four answers under the `/start` captcha: `hc:<question id>:<0-3>`.
+   * Decided by the captcha gate at the very top of `guardedAct`, before membership and
+   * terms; a tap from a customer the gate does not hold reaches `act` and is answered as a
+   * stale button.
+   */
+  'CAPTCHA_ANSWER',
+  /*
    * WP-A7 — the customer's support tickets. `TICKETS` is the list (the menu entry, /tickets
    * and its callback), `TICKET_NEW` the category chooser, `TICKET_CATEGORY` opens the window
    * that reads the new ticket's first message, `TICKET_VIEW` shows one conversation,
@@ -514,6 +521,12 @@ export interface BotCommand {
    * tapped, and pays that count's price. Decoded at the boundary as a bounded integer.
    */
   readonly quantity?: number;
+  /**
+   * R10 D5 (a): which of the captcha's four answers a `hc:` tap chose, 0 to 3; absent on
+   * every other command. A POSITION, never a value: the number it stands for is read from
+   * the question the server stored, so a modified client can only pick one of the four.
+   */
+  readonly choice?: number;
   /**
    * The words after a slash command, for the two the management panel accepts.
    *

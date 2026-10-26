@@ -18,6 +18,7 @@ import type {
 } from '@nexa/contracts';
 import type { AntiSpamService } from '../../../modules/commerce/customers/application/anti-spam.service.js';
 import type { ChannelMembershipService } from '../../../modules/commerce/customers/application/channel-membership.service.js';
+import type { StartCaptchaService } from '../../../modules/commerce/customers/application/start-captcha.service.js';
 import type { TermsAcceptanceService } from '../../../modules/control/terms/application/terms-acceptance.service.js';
 import type { CustomerService } from '../../../modules/commerce/customers/application/customer.service.js';
 import type { PaymentDestinationRenderer } from '../../../modules/commerce/payments/infrastructure/destination-renderer.js';
@@ -294,6 +295,12 @@ export interface BotRuntimeDeps {
    * tenant with no REQUIRED channel sees.
    */
   readonly membership?: Pick<ChannelMembershipService, 'missingRequired'>;
+  /**
+   * R10 D5 (a): the optional `/start` captcha for NEW customers, the first check of the gate
+   * chain. Optional for the reason `membership` is; absent, nobody is ever asked — which is
+   * also what every customer sees while `start_captcha` is off.
+   */
+  readonly captcha?: Pick<StartCaptchaService, 'present' | 'answer'>;
   /**
    * The terms and rules (program §6). Optional for the reason `membership` is; absent, no
    * customer is asked to accept anything — which is also what a tenant with enforcement off,

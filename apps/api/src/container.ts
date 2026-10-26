@@ -307,6 +307,8 @@ import {
   QrTemplatePreviewService,
 } from './modules/control/media/application/qr-template.service.js';
 import { ReferralSignupGiftService } from './modules/commerce/referrals/application/referral-signup-gift.service.js';
+import { StartCaptchaService } from './modules/commerce/customers/application/start-captcha.service.js';
+import { DrizzleStartCaptchaRepository } from './modules/commerce/customers/infrastructure/drizzle-start-captcha.repository.js';
 import { DrizzleReferralSignupGiftRepository } from './modules/commerce/referrals/infrastructure/drizzle-referral-signup-gift.repository.js';
 import {
   CONTROL_ERROR_CODES,
@@ -1273,6 +1275,8 @@ export interface Container {
   /** Round W: the dashboard's operational gauges and the sidebar counters, per permission. */
   readonly operationsOverview: OperationsOverviewService;
   readonly referralSignupGifts: ReferralSignupGiftService;
+  /** R10 D5 (a): the optional /start captcha for new customers. */
+  readonly startCaptcha: StartCaptchaService;
   readonly tenantMedia: TenantMediaService;
   /** Phase 2 item 4: the Web Admin's preview of the QR on the tenant's background. */
   readonly deliveryQrPreview: QrTemplatePreviewService;
@@ -2409,8 +2413,27 @@ export function createContainer(
     guard,
   });
 
+  /*
+   * R10 D5 (a): the optional `/start` captcha for NEW customers. Its row is written by the
+   * customer service's registration hook below and read by the bot's gate and the mini app's.
+   */
+  const startCaptchaService = new StartCaptchaService({
+    captchas: new DrizzleStartCaptchaRepository(database.db),
+    features: featureFlagResolver,
+    settings: settingsResolver,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    clock,
+    ids,
+  });
   const customerService = new CustomerService({
     referrals: referralProgram,
+    captcha: startCaptchaService,
     repository: customerRepository,
     guard,
     audit,
@@ -8058,6 +8081,8 @@ export function createContainer(
     sessions: new DrizzleMiniAppSessionRepository(database.db),
     membership: channelMembership,
     terms: termsAcceptanceService,
+    // R10 D5 (a): the bot's /start captcha, as a gate the mini app holds too.
+    captcha: startCaptchaService,
     telegramAdmins,
     uow,
     scopeActivity: tenants,
@@ -8229,6 +8254,7 @@ export function createContainer(
     reports: reportingService,
     operationsOverview,
     referralSignupGifts: referralSignupGiftService,
+    startCaptcha: startCaptchaService,
     tenantMedia: tenantMediaService,
     deliveryQrPreview,
     deliveryQr: deliveryQrRenderer,
@@ -8317,6 +8343,8 @@ export function createContainer(
       // Package B: the REQUIRED channels, enforced before any business action; fails open.
       membership: channelMembership,
       terms: termsAcceptanceService,
+      // R10 D5 (a): the /start captcha, the first check of the gate chain.
+      captcha: startCaptchaService,
       // WP11A: the external-gateway attempt's customer reads and the check tap.
       gateway: gatewayPayments,
       // TonPays Telegram: «📤 ارسال فیش واریزی» and «🔄 تعویض کارت» (database writes only).

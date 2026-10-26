@@ -58,6 +58,8 @@ import {
   withBlockedSupportButton,
 } from './runtime/replies.js';
 import * as startMenuFlow from './runtime/start-menu-flow.js';
+import * as captchaFlow from './runtime/captcha-flow.js';
+import { CAPTCHA_EXEMPT_INTENTS } from './runtime/captcha-flow.js';
 import {
   MEMBERSHIP_EXEMPT_INTENTS,
   membershipRequired,
@@ -166,6 +168,7 @@ export {
   MARKETING_OPT_IN_CALLBACK_DATA,
   MEMBERSHIP_CHECK_CALLBACK_DATA,
   TERMS_ACCEPT_CALLBACK_PREFIX,
+  START_CAPTCHA_CALLBACK_PREFIX,
   TUTORIAL_PLATFORM_CALLBACK_PREFIX,
   CLIENT_APP_CALLBACK_PREFIX,
   TOPUP_ROUTE_CALLBACK_PREFIX,
@@ -1051,13 +1054,19 @@ export class BotRuntime {
    * The check button answers the MAIN MENU on a pass. It never replays what the customer
    * first asked for: a purchase, a payment or a termination is not something a membership
    * check may run.
+   *
+   * R10 D5 (a): the `/start` captcha stands IN FRONT of the membership gate, as the first
+   * check of the chain: a customer created while `start_captcha` was on, who has not yet
+   * answered, is shown the question whatever they asked for (`captcha-flow.ts`). Exempt: the
+   * management panel, the promotional opt-out and opt-in, and a bound administrator. The
+   * right answer continues down the chain as the customer's first `/start`.
    */
   async guardedAct(
     scope: TenantContext,
     actor: ActorContext,
-    command: BotCommand,
+    asked: BotCommand,
     customer: CustomerRecord,
-    arrival: CustomerArrival,
+    arrivedAs: CustomerArrival,
     input: {
       readonly idempotencyKey: string;
       readonly botInstanceId: BotInstanceId;
@@ -1065,6 +1074,21 @@ export class BotRuntime {
       readonly telegramUserId: string;
     },
   ): Promise<PendingReply> {
+    let command = asked;
+    let arrival = arrivedAs;
+    if (!ADMIN_INTENTS.has(asked.intent) && !CAPTCHA_EXEMPT_INTENTS.has(asked.intent)) {
+      const captcha = await captchaFlow.captchaGate(
+        this,
+        scope,
+        actor,
+        asked,
+        customer,
+        arrivedAs,
+        input,
+      );
+      if (captcha.kind === 'HOLD') return captcha.reply;
+      ({ command, arrival } = captcha);
+    }
     const checking = command.intent === 'MEMBERSHIP_CHECK';
     const safe: BotCommand = checking
       ? { intent: 'MAIN_MENU', targetId: null, callbackQueryId: command.callbackQueryId }

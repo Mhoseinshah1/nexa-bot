@@ -6,7 +6,8 @@ import { openTelegram } from '../telegram.js';
 import { Button, Card, Ltr, Message, errorText } from '../ui.js';
 
 /**
- * The bot's three gates, shown where the bot would answer with them: blocked, the required
+ * The bot's four gates, shown where the bot would answer with them: blocked, the `/start`
+ * captcha (R10 D5 — answered in the chat only, so this says so and opens the bot), the required
  * channels (with the fresh re-check), the current terms (with their accept button). Only
  * the channels Telegram says are MISSING are listed: the service returns no per-channel
  * "joined" state, so the design's «۱ از ۲», its progress bar and its ticks are not drawn, nor
@@ -15,7 +16,7 @@ import { Button, Card, Ltr, Message, errorText } from '../ui.js';
  * one glass card (avatar, @handle, join), the full-width check button under it.
  */
 export function Gate({ gate }: { gate: NonNullable<MiniAppMeResponse['gate']> }) {
-  const { api, refreshMe } = useApp();
+  const { api, me, refreshMe } = useApp();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -33,6 +34,21 @@ export function Gate({ gate }: { gate: NonNullable<MiniAppMeResponse['gate']> })
   };
 
   if (gate.kind === 'BLOCKED') return <Message text={t('miniapp.gate_blocked')} />;
+
+  if (gate.kind === 'CAPTCHA') {
+    return (
+      <Message
+        text={t('miniapp.gate_captcha')}
+        action={
+          me.botLink === null ? undefined : (
+            <Button primary onClick={() => openTelegram(me.botLink as string)}>
+              {t('miniapp.gate_captcha_open_bot')}
+            </Button>
+          )
+        }
+      />
+    );
+  }
 
   if (gate.kind === 'CHANNELS') {
     return (

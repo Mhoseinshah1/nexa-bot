@@ -118,6 +118,20 @@ export interface CustomerServiceDeps {
       tx: TransactionScope,
     ): Promise<void>;
   };
+  /**
+   * R10 D5 (a): the `/start` captcha's one hook into registration, beside the referral's and
+   * for the same reason — called inside the transaction that resolved the customer, with that
+   * transaction's own `created`, so a captcha row exists only for a customer this very
+   * transaction created while `start_captcha` was on, and commits with them or not at all.
+   * Optional so a narrow wiring need not supply it; absent, nobody is ever asked.
+   */
+  readonly captcha?: {
+    requireOnArrival(
+      scope: TenantContext,
+      input: { readonly customerId: string; readonly created: boolean; readonly now: Date },
+      tx: TransactionScope,
+    ): Promise<void>;
+  };
   readonly clock: Clock;
   readonly ids: IdGenerator;
   /**
@@ -404,6 +418,12 @@ export class CustomerService {
           scope,
           actor,
           { refereeId: customer.id, created, startPayload, now },
+          tx,
+        );
+        // R10 D5 (a): the captcha row, only for a customer THIS transaction created.
+        await this.deps.captcha?.requireOnArrival(
+          scope,
+          { customerId: customer.id, created, now },
           tx,
         );
 

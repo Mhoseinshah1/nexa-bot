@@ -223,6 +223,10 @@ export const MINIAPP_FA = {
 
   'miniapp.gate_title': 'یک قدم تا شروع',
   'miniapp.gate_blocked': 'دسترسی حساب شما به ربات محدود شده است.',
+  // R10 D5: the bot's /start question, answered in the chat only.
+  'miniapp.gate_captcha':
+    'برای شروع، ابتدا در گفتگو با ربات به سؤال امنیتی ساده پاسخ دهید؛ سپس به مینی‌اپ برگردید.',
+  'miniapp.gate_captcha_open_bot': 'رفتن به ربات',
   'miniapp.gate_channels': 'برای ادامه، در کانال‌های زیر عضو شوید.',
   'miniapp.gate_channel_private': 'کانال {number}',
   'miniapp.gate_join': 'عضویت',
