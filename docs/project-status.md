@@ -5,6 +5,7 @@ This file was moved verbatim out of `CLAUDE.md` on 2026-10-24. It holds project 
 ## Contents
 
 - [Phases and status](#phases-and-status)
+- [Owner-defined main-menu buttons (R10 D2)](#owner-defined-main-menu-buttons-r10-d2)
 - [Authentication and authorization](#authentication-and-authorization)
 - [Payments and gateways (TonPays)](#payments-and-gateways-tonpays)
 - [Providers and panels (Phase 3)](#providers-and-panels-phase-3)
@@ -49,6 +50,30 @@ Telegram bootstrap surface; 4J the final hardening pass
 removed `PAID_UNFULFILLED` and everything built on it — the operator retry, the
 reassignment, `orders.fulfil` — in favour of one automatic outcome. See the four
 money rules below.
+
+## Owner-defined main-menu buttons (R10 D2)
+
+Owner-defined buttons on the customer main menu, added from the Web Admin: a **link** (opens
+a URL) or **content** (a stored text, photo or document the bot sends). Binding rules; the
+reasoning is ADR-0036.
+
+- **Off by default** (`custom_menu_buttons`, switched from the Web Admin's features page). Off, no
+  custom button is drawn on any keyboard and a tap on a stale one is answered
+  `bot.custom_button.unavailable`; the registry buttons are exactly as before.
+- **Placed through the builder**, never in `bot.main_menu`. A layout that places a custom button is
+  stored as `v: 2` (`custom:<uuid>` rows); one that places none is **always `v: 1`**, so a tenant
+  that never uses the feature is untouched by a rollback. A `v: 2` head read by an older release
+  falls back to the projection (the recorded `bot_menu.published_unreadable` degrade).
+- **A custom button is always gated** (flag, archive, sending bot), so it never keeps a keyboard
+  non-empty. "Per bot" means which bots show it.
+- **A route is not authority.** The tap re-decides from state (flag, archive, bot, the PUBLISHED
+  layout). A custom label routes to the map VALUE `mb:<uuid>`; typed `mb:<uuid>` routes nothing; a
+  registry label always wins a collision.
+- **Content is bytes, never a `file_id`**, under the ticket-file allow-list; a link must pass the
+  https-only grammar; the operator's text is a value of a plain-text template. Limits: 20 buttons,
+  label 64, text 4096, caption 1024, 50 MB per tenant. A button is archived, never deleted.
+- **Owner's real-bot acceptance** (not done by the tests): an inline URL button opens, a multipart
+  photo and document arrive, the reply keyboard shows the custom label and its style.
 
 ## Authentication and authorization
 
