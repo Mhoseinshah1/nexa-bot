@@ -4,7 +4,7 @@ import {
   templateDefinition,
   validateTemplateBody,
   type PaymentId,
-  type ScopeContext,
+  type TenantContext,
   type TemplateKey,
   type UserId,
 } from '@nexa/contracts';
@@ -292,7 +292,7 @@ describe('R10 B6: the overpaid screens state the amount returned in RIAL, Toman 
 });
 
 describe('R10 B6: the manual invoice without a card states the amount in RIAL, Toman in brackets', () => {
-  const scope = { tenantId: 't', botInstanceId: 'b' } as unknown as ScopeContext;
+  const scope = { tenantId: 't', botInstanceId: 'b' } as unknown as TenantContext;
   // With no destination the instruction reads no card, no switch and no renderer.
   const rt = { deps: {} } as unknown as BotRuntime;
 
