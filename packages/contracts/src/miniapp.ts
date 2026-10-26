@@ -7,6 +7,7 @@ import { PAYMENT_METHODS, PAYMENT_STATES } from './payment.js';
 import { TICKET_MESSAGE_MAX_LENGTH, TICKET_STATUSES } from './tickets.js';
 import { CLIENT_APP_PLATFORMS } from './client-apps.js';
 import { LEDGER_DIRECTIONS, LEDGER_REASONS } from './ledger.js';
+import { GIFT_CARD_CODE_INPUT_MAX_LENGTH } from './gift-cards.js';
 
 /**
  * The customer's Telegram Mini App (Round 9, C5): its paths, its wire shapes and its bounds.
@@ -116,6 +117,8 @@ export const MINIAPP_ROUTES = {
   walletEntries: '/wallet/entries',
   walletTopupQuote: '/wallet/topup/quote',
   walletTopup: '/wallet/topup',
+  /** R10 D4: redeem a gift card into the wallet. */
+  walletGiftCard: '/wallet/gift-card',
   referral: '/referral',
   trial: '/trial',
   ticketCategories: '/ticket-categories',
@@ -536,6 +539,8 @@ export const miniAppWalletResponseSchema = z.object({
   presets: z.array(moneySchema),
   minimum: moneySchema.nullable(),
   maximum: moneySchema.nullable(),
+  /** R10 D4: whether the gift-card field is drawn — the `gift_cards` flag, read per request. */
+  giftCards: z.boolean(),
 });
 export type MiniAppWalletResponse = z.infer<typeof miniAppWalletResponseSchema>;
 
@@ -584,6 +589,21 @@ export const miniAppTopupResponseSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('CARD_TO_CARD'), instruction: miniAppCardInstructionSchema }),
   z.object({ kind: z.literal('GATEWAY'), attempt: miniAppGatewayAttemptSchema }),
 ]);
+
+/**
+ * R10 D4: a gift card typed into the wallet screen. The code is bounded before anything reads
+ * it; the answer is one of three, and `REJECTED` is the same for an unknown, used, expired or
+ * disabled code, a reached limit and a currency mismatch, so the endpoint is no oracle.
+ */
+export const miniAppGiftCardRequestSchema = z.object({
+  code: z.string().min(1).max(GIFT_CARD_CODE_INPUT_MAX_LENGTH),
+});
+export const miniAppGiftCardResponseSchema = z.discriminatedUnion('outcome', [
+  z.object({ outcome: z.literal('REDEEMED'), amount: moneySchema, balance: moneySchema }),
+  z.object({ outcome: z.literal('REJECTED') }),
+  z.object({ outcome: z.literal('RATE_LIMITED') }),
+]);
+export type MiniAppGiftCardResponse = z.infer<typeof miniAppGiftCardResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // Referral, trial

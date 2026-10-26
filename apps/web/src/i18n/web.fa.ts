@@ -10158,6 +10158,15 @@ export const WEB_FA = {
   'web.err_commerce_discount_code_rejected': 'این کد تخفیف پذیرفته نشد.',
   'web.err_commerce_discount_code_taken':
     'این کد تخفیف قبلاً استفاده شده است. کد دیگری انتخاب کنید.',
+  'web.err_commerce_gift_card_batch_invalid':
+    'این دسته ساخته نشد: ارز باید ارز کیف پول باشد، تاریخ انقضا دست‌کم یک ساعت و حداکثر پنج سال بعد باشد و مبلغ هر کد از سقف مجاز بیشتر نباشد.',
+  'web.err_commerce_gift_card_batch_not_found': 'این دستهٔ کارت هدیه پیدا نشد.',
+  'web.err_commerce_gift_card_confirmation_mismatch':
+    'تأیید با اعداد نمایش‌داده‌شده نمی‌خواند (تعداد یا جمع مبلغ، یا تعداد کدهای استفاده‌نشده از پیش‌نمایش تغییر کرده است). دوباره بررسی و تأیید کنید.',
+  'web.err_commerce_gift_card_export_gone':
+    'مهلت ۲۴ ساعتهٔ دریافت کدهای این دسته تمام شده است. کدها فقط به‌صورت رمزنگاری‌شدهٔ یک‌طرفه نگه داشته می‌شوند و دیگر قابل بازیابی نیستند؛ در صورت گم شدن فایل، دسته را غیرفعال کنید و دستهٔ تازه بسازید.',
+  'web.err_commerce_gift_cards_disabled':
+    'کارت هدیه خاموش است. برای ساخت دسته، آن را در صفحهٔ «قابلیت‌ها» روشن کنید.',
   'web.err_commerce_discount_no_longer_valid': 'تخفیف دیگر معتبر نیست. دوباره قیمت بگیرید.',
   'web.err_commerce_discount_not_found': 'تخفیف پیدا نشد.',
   'web.err_commerce_location_change_cooldown':
