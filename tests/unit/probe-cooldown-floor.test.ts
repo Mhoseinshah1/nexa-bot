@@ -99,6 +99,15 @@ describe('the probe cooldown floor', () => {
       probePath: ['probe', 'authenticate', 'authenticateWithSession'],
       file: 'apps/api/src/modules/platform/providers/infrastructure/sanaei.adapter.ts',
     },
+    /*
+     * R10 C2: one signed `GET v1/health`. There is no session to open — the signature is
+     * per request — so the probe is `probe` calling `exchange` once.
+     */
+    custom: {
+      longestPath: 1,
+      probePath: ['probe', 'exchange'],
+      file: 'apps/api/src/modules/platform/providers/infrastructure/custom-panel.adapter.ts',
+    },
   };
 
   /**
@@ -176,7 +185,10 @@ describe('the probe cooldown floor', () => {
       const expected = EXPECTED[descriptor.key];
       if (expected === undefined) continue;
       const source = readFileSync(join(__dirname, '../..', expected.file), 'utf8');
-      const whole = [...source.matchAll(/http\.send\(/g)].length;
+      // `this.exchange(` too: the custom adapter (R10 C2) sends every request through ONE
+      // signing method, so its file has one `http.send(` and its service half shows as
+      // the calls into that method from outside the probe path.
+      const whole = [...source.matchAll(/http\.send\(|this\.exchange\(/g)].length;
       expect(whole, `${descriptor.key} has no service-half requests`).toBeGreaterThan(
         expected.longestPath,
       );
