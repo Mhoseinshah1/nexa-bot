@@ -173,6 +173,16 @@ describe('the Payment Operations Center', () => {
     if (provider === 'TONPAYS_TELEGRAM') base.bot_instance_id = BOT_A;
     // A TetraPay attempt is billed in RIAL with no bot (`gateway_invoices_tetrapay_check`).
     if (provider === 'TETRAPAY') base.provider_unit = 'IRR';
+    // A custom attempt is billed in RIAL to the bridge it was created against, under Nexa's own
+    // `cg_` invoice id and the customer's opaque number (`gateway_invoices_custom_check`).
+    if (provider === 'CUSTOM') {
+      Object.assign(base, {
+        provider_unit: 'IRR',
+        provider_order_id: `cg_${String(seq).padStart(26, '0')}`,
+        provider_user_id: String(2_000_000_000 + seq),
+        endpoint_base_url: 'https://bridge.example.test',
+      });
+    }
     if (provider === 'NOWPAYMENTS') {
       Object.assign(base, {
         provider_unit: 'USD',
