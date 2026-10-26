@@ -338,6 +338,7 @@ function fixtures(container: Container, owner: ActorContext, finance: ActorConte
     program,
     guard,
     registered,
+    codeOf,
     referrerWith,
     claim,
     claimable,
@@ -606,6 +607,29 @@ describe('the referral abuse guard (R10 D5 b)', () => {
       // Nothing held back: the result is the one a claim always returned.
       expect(await f.claim(referrer)).toEqual({ credited: money(SHARE, 'IRT'), claimedCount: 1 });
       expect(await f.claimable(referrer)).toEqual([]);
+    });
+
+    it('never caps a REFEREE share, even of a customer whose own referrer shares hit the cap today', async () => {
+      await f.program();
+      await f.guard({ giftCap: 1 });
+      // B joined through A's link, and C through B's: B is A's referee AND C's referrer.
+      const {
+        referees: [b],
+      } = await f.referrerWith(1);
+      const c = await f.registered(`ref-${await f.codeOf(b as string)}`);
+      await f.bought(c);
+      // B's referrer share for C: the one their cap allows today.
+      expect(await f.claim(b as string)).toEqual({
+        credited: money(SHARE, 'IRT'),
+        claimedCount: 1,
+      });
+
+      // B now buys, which opens B's own share as A's referee — never capped.
+      await f.bought(b as UserId);
+      expect(await f.claim(b as string)).toEqual({
+        credited: money(SHARE, 'IRT'),
+        claimedCount: 1,
+      });
     });
 
     it('counts a share stamped at the day’s first instant, and not one at the next day’s', async () => {
