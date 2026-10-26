@@ -575,12 +575,18 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
     const miniOrder = await miniDraft(mini.token, small);
     const last = await tap(`pm:${botDraft}`);
     pin('manual-out-of-bounds.methods', last);
-    expectSameRoutes(last, (await miniRoutes(mini.token, miniOrder.id)).routes, 'manual last');
+    const lastListed = (await miniRoutes(mini.token, miniOrder.id)).routes;
+    expectSameRoutes(last, lastListed, 'manual last');
+    expect
+      .soft(lastListed.map((one) => one.provider))
+      .toEqual(['TONPAYS', 'TETRAPAY', 'MANUAL_TRANSFER']);
 
     await route('MANUAL_TRANSFER', { sortOrder: 2, allowServicePurchase: false });
     const none = await tap(`pm:${botDraft}`);
     pin('manual-off.methods', none);
-    expectSameRoutes(none, (await miniRoutes(mini.token, miniOrder.id)).routes, 'manual off');
+    const noneListed = (await miniRoutes(mini.token, miniOrder.id)).routes;
+    expectSameRoutes(none, noneListed, 'manual off');
+    expect.soft(noneListed.map((one) => one.provider)).toEqual(['TONPAYS', 'TETRAPAY']);
   }, 60_000);
 
   it('refuses a wallet payment the balance does not cover before confirming anything, and settles one it covers', async () => {
@@ -919,7 +925,8 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
                WHERE o.customer_id = ${customerId} AND o.purpose = 'RENEW' ORDER BY a.action`,
         )
       ).map((row) => row.action);
-    expect.soft(await confirmedBy(mini.customerId)).toEqual(await confirmedBy(botId));
+    expect.soft(await confirmedBy(botId)).toEqual(['service.action_confirm']);
+    expect.soft(await confirmedBy(mini.customerId)).toEqual(['service.action_confirm']);
   }, 90_000);
 
   it('offers a top-up the same routes, names and gifts', async () => {
