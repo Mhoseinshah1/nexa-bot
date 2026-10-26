@@ -657,6 +657,8 @@ export interface ReferralGiftSource {
     readonly total: Money;
     readonly referrerPercent: number;
     readonly referredPercent: number;
+    /** R10 D5 (b): the guard holds the gift for the referee's first paid purchase. */
+    readonly requiresPurchase?: boolean;
   }>;
   stats(
     scope: TenantContext,
@@ -672,7 +674,12 @@ export interface ReferralGiftSource {
     actor: ActorContext,
     customerId: UserId,
     input: { readonly idempotencyKey: string },
-  ): Promise<{ readonly credited: Money; readonly claimedCount: number }>;
+  ): Promise<{
+    readonly credited: Money;
+    readonly claimedCount: number;
+    /** R10 D5 (b): referrer shares the daily cap left for a later day. */
+    readonly cappedCount?: number;
+  }>;
   /**
    * R1: what this customer could be paid now — the claim button is drawn only when there
    * is something. Optional so a stand-in without it keeps the older rule (drawn while the

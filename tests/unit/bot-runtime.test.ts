@@ -1010,6 +1010,12 @@ describe('profile metadata, normalised before it is ever stored', () => {
       // `bot.referral.button` left in F5: the wallet no longer draws a referral button.
       'bot.referral.gift_button',
       'bot.referral.gift_claimed',
+      /*
+       * R10 D5 (b): the claim's answer when the referrer's daily cap left a share unpaid.
+       * Reviewed: it says the share waits and is claimable from tomorrow, which the claim
+       * does — the side stays unstamped and the next day's claim pays it.
+       */
+      'bot.referral.gift_daily_cap',
       'bot.referral.gift_disabled',
       'bot.referral.gift_nothing',
       'bot.referral.share_button',

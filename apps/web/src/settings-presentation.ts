@@ -12,6 +12,7 @@ import {
   type OperationalSeverity,
   type PanelBalancingStrategy,
   type ReferralCommissionScope,
+  type ReferralGiftUnlockMode,
   type SettingKey,
   type StarsPricingMode,
 } from '@nexa/contracts';
@@ -182,6 +183,12 @@ const SEVERITY_LABELS: Readonly<Record<OperationalSeverity, WebKey>> = {
 const COMMISSION_SCOPE_OPTIONS: Readonly<Record<ReferralCommissionScope, WebKey>> = {
   FIRST_PAID_ORDER: 'web.referral_trigger_first_paid_order',
   EVERY_PAID_ORDER: 'web.referral_trigger_every_paid_order',
+};
+
+/** R10 D5 (b): when the signup gift becomes claimable while the guard is on. */
+const GIFT_UNLOCK_OPTIONS: Readonly<Record<ReferralGiftUnlockMode, WebKey>> = {
+  ON_FIRST_PAID_PURCHASE: 'web.gift_unlock_on_first_paid_purchase',
+  ON_ATTRIBUTION: 'web.gift_unlock_on_attribution',
 };
 
 /** Round 9 C3: the data compaction's two modes; DRY_RUN is the default. */
@@ -709,6 +716,25 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'sales',
     control: { kind: 'integer', unit: 'web.unit_minutes' },
   },
+  // R10 D5 (a): the /start captcha for new customers.
+  'captcha.expiry_seconds': {
+    title: 'web.setting_captcha_expiry_seconds',
+    description: 'web.setting_captcha_expiry_seconds_desc',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_seconds' },
+  },
+  'captcha.max_attempts': {
+    title: 'web.setting_captcha_max_attempts',
+    description: 'web.setting_captcha_max_attempts_desc',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_times' },
+  },
+  'captcha.cooldown_seconds': {
+    title: 'web.setting_captcha_cooldown_seconds',
+    description: 'web.setting_captcha_cooldown_seconds_desc',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_seconds' },
+  },
   'services.link_rotation_cooldown_hours': {
     title: 'web.setting_link_rotation_cooldown_hours',
     description: 'web.setting_link_rotation_cooldown_hours_desc',
@@ -756,6 +782,25 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     description: 'web.setting_referral_signup_gift_referred_percent_desc',
     group: 'referral',
     control: { kind: 'integer', unit: 'web.unit_percent' },
+  },
+  // R10 D5 (b): the referral-gift guard.
+  'referral.abuse.gift_unlock': {
+    title: 'web.setting_referral_abuse_gift_unlock',
+    description: 'web.setting_referral_abuse_gift_unlock_desc',
+    group: 'referral',
+    control: { kind: 'select', options: options(GIFT_UNLOCK_OPTIONS) },
+  },
+  'referral.abuse.referrer_daily_gift_cap': {
+    title: 'web.setting_referral_abuse_referrer_daily_gift_cap',
+    description: 'web.setting_referral_abuse_referrer_daily_gift_cap_desc',
+    group: 'referral',
+    control: { kind: 'integer', unit: 'web.unit_times', optional: true },
+  },
+  'referral.abuse.referrer_daily_commission_cap': {
+    title: 'web.setting_referral_abuse_referrer_daily_commission_cap',
+    description: 'web.setting_referral_abuse_referrer_daily_commission_cap_desc',
+    group: 'referral',
+    control: { kind: 'integer', unit: 'web.unit_times', optional: true },
   },
   /*
    * Package FX: the central exchange rate and the Stars route's pricing mode. The live

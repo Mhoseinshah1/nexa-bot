@@ -310,6 +310,7 @@ import { ReferralSignupGiftService } from './modules/commerce/referrals/applicat
 import { StartCaptchaService } from './modules/commerce/customers/application/start-captcha.service.js';
 import { DrizzleStartCaptchaRepository } from './modules/commerce/customers/infrastructure/drizzle-start-captcha.repository.js';
 import { DrizzleReferralSignupGiftRepository } from './modules/commerce/referrals/infrastructure/drizzle-referral-signup-gift.repository.js';
+import { TenantReferralDayCalendar } from './modules/commerce/referrals/infrastructure/tenant-referral-day.calendar.js';
 import {
   CONTROL_ERROR_CODES,
   SERVICE_REMINDER_DEFAULTS,
@@ -3422,6 +3423,8 @@ export function createContainer(
    * REFERRER's wallet — earned by the provisioner loop on delivery, reversed by a refund
    * in the refund's own transaction.
    */
+  /* R10 D5 (b): the referral caps' local day, from the one period resolver. */
+  const referralDays = new TenantReferralDayCalendar(database.db);
   const referralCommissionService = new ReferralCommissionService({
     commissions: referralCommissionRepository,
     wallet: walletRepository,
@@ -3432,6 +3435,8 @@ export function createContainer(
     scopeActivity: tenants,
     clock,
     ids,
+    // R10 D5 (b): the daily commission cap, while `referral_abuse_guard` is on.
+    abuse: { features: featureFlagResolver, settings: settingsResolver, days: referralDays },
   });
   /*
    * The signup gift (customer UX §I): one credit per side of a referral, from the terms
@@ -3454,6 +3459,7 @@ export function createContainer(
     outbox,
     clock,
     ids,
+    days: referralDays,
   });
 
   /* The tenant's media slots (customer UX §I): the referral banner, bytes in the database. */

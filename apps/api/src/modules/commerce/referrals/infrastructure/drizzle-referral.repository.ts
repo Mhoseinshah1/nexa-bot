@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { money } from '@nexa/contracts';
 import type {
@@ -9,6 +9,7 @@ import type {
   ReferralCommissionState,
   ReferralTrigger,
   TenantContext,
+  TimePeriod,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -376,9 +377,10 @@ export class DrizzleReferralCommissionRepository implements ReferralCommissionRe
   async due(
     scope: TenantContext,
     limit: number,
+    holdsBefore: Date | null,
     tx?: unknown,
   ): Promise<readonly DueReferralCommission[]> {
-    return this.answered(scope, null, limit, tx);
+    return this.answered(scope, null, limit, tx, holdsBefore ?? undefined);
   }
 
   async dueFor(
@@ -402,6 +404,7 @@ export class DrizzleReferralCommissionRepository implements ReferralCommissionRe
     orderId: string | null,
     limit: number,
     tx?: unknown,
+    now?: Date,
   ): Promise<readonly DueReferralCommission[]> {
     const tenantId = requireTenantId(scope);
     const purchasedAs = sql.join(
@@ -425,6 +428,20 @@ export class DrizzleReferralCommissionRepository implements ReferralCommissionRe
       sql`(${delivered} OR ${ended})`,
     ];
     if (orderId !== null) conditions.push(eq(orderReferralCommissions.orderId, orderId));
+    /*
+     * R10 D5 (b): discovery skips a commission the daily cap holds until a later instant.
+     * Without this the held rows — the OLDEST, by the order below — would be returned first
+     * on every tick and, once there were `limit` of them, nothing behind them would ever be
+     * reached. `dueFor` (one order, under the lock) does not filter: `settle` judges the
+     * hold itself, from the row it locked.
+     */
+    if (now !== undefined) {
+      const ready = or(
+        isNull(orderReferralCommissions.notBefore),
+        lte(orderReferralCommissions.notBefore, now),
+      );
+      if (ready !== undefined) conditions.push(ready);
+    }
     const rows = await exec(this.db, tx)
       .select({ orderId: orderReferralCommissions.orderId, delivered, ended })
       .from(orderReferralCommissions)
@@ -514,6 +531,52 @@ export class DrizzleReferralCommissionRepository implements ReferralCommissionRe
       )
       .returning({ id: orderReferralCommissions.id });
     return rows.length === 1;
+  }
+
+  async defer(
+    scope: TenantContext,
+    id: string,
+    notBefore: Date,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await exec(this.db, tx)
+      .update(orderReferralCommissions)
+      .set({ notBefore, updatedAt: now })
+      .where(
+        and(
+          eq(orderReferralCommissions.tenantId, tenantId),
+          eq(orderReferralCommissions.id, id),
+          eq(orderReferralCommissions.state, 'PENDING'),
+        ),
+      )
+      .returning({ id: orderReferralCommissions.id });
+    return rows.length === 1;
+  }
+
+  async countEarnedIn(
+    scope: TenantContext,
+    referrerId: string,
+    period: TimePeriod,
+    tx: unknown,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await exec(this.db, tx)
+      .select({ n: sql<number>`count(*)::int` })
+      .from(orderReferralCommissions)
+      .where(
+        and(
+          eq(orderReferralCommissions.tenantId, tenantId),
+          eq(orderReferralCommissions.referrerId, referrerId),
+          eq(orderReferralCommissions.state, 'EARNED'),
+          // A commission earned at zero (refunded in full before delivery) credited nothing.
+          gt(orderReferralCommissions.earnedAmount, 0n),
+          gte(orderReferralCommissions.earnedAt, period.start),
+          lt(orderReferralCommissions.earnedAt, period.end),
+        ),
+      );
+    return row?.n ?? 0;
   }
 
   async reversals(
@@ -721,6 +784,7 @@ function toCommission(row: typeof orderReferralCommissions.$inferSelect): Referr
     earnedEntryId: row.earnedEntryId,
     earnedAt: row.earnedAt,
     voidedAt: row.voidedAt,
+    notBefore: row.notBefore,
     createdAt: row.createdAt,
   };
 }

@@ -1,6 +1,16 @@
-import { and, asc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
-import { DISCOUNTABLE_PURPOSES, SALE_ORDER_ORIGINS, money } from '@nexa/contracts';
-import type { CurrencyCode, ReferralSignupGiftSide, TenantContext } from '@nexa/contracts';
+import { and, asc, eq, getTableColumns, gte, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import {
+  DISCOUNTABLE_PURPOSES,
+  ORDER_SETTLED_STATES,
+  SALE_ORDER_ORIGINS,
+  money,
+} from '@nexa/contracts';
+import type {
+  CurrencyCode,
+  ReferralSignupGiftSide,
+  TenantContext,
+  TimePeriod,
+} from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   requireTenantId,
@@ -15,6 +25,7 @@ import {
 } from '../../../../infrastructure/persistence/schema.js';
 import { PURCHASED_AS } from '../../provisioning/application/provisioner.service.js';
 import type {
+  LockedReferral,
   OpenReferralSignupGiftSide,
   ReferralRecord,
   ReferralSignupGiftRecord,
@@ -54,6 +65,49 @@ function toReferral(row: typeof referrals.$inferSelect): ReferralRecord {
   };
 }
 
+/**
+ * R10 D5 (b): whether a referral's REFEREE has made a qualifying purchase — ONE predicate,
+ * read by the claim button (`openSides`) and by the claim's locked set (`lockReferralsOf`)
+ * alike.
+ *
+ * "Delivered" is the commission earner's and `referredPurchases`' own: an operation of the
+ * type the order bought (`PURCHASED_AS`) having `SUCCEEDED`. A trial never qualifies
+ * (`DISCOUNTABLE_PURPOSES` is the paid list), nor an adopted legacy service
+ * (`SALE_ORDER_ORIGINS`), nor an order refunded because it could not be delivered (its
+ * operation never succeeded). The order must be SETTLED — paid, or paid and later refunded —
+ * so the predicate is monotonic: an operation that has SUCCEEDED stays SUCCEEDED and a
+ * settled order stays settled, which is why reading it inside the claim needs no lock of its
+ * own. A refund after delivery does not take the qualification back (open question, default:
+ * no clawback, consistent with "never collected").
+ *
+ * The outer referral is named by its TABLE (`referrals.referee_id`), not through drizzle's
+ * column objects: a single-table select renders those unqualified, and inside this subquery
+ * a bare "tenant_id" would bind to the order's or the operation's, not the referral's.
+ */
+function refereeQualified() {
+  const purchasedAs = sql.join(
+    Object.entries(PURCHASED_AS).map(([purpose, type]) => sql`WHEN ${purpose} THEN ${type}`),
+    sql` `,
+  );
+  const list = (values: readonly string[]) =>
+    sql.join(
+      values.map((value) => sql`${value}`),
+      sql`, `,
+    );
+  return sql<boolean>`EXISTS (
+    SELECT 1 FROM ${orders} qo
+    JOIN ${provisioningOperations} qop
+      ON qop.tenant_id = qo.tenant_id AND qop.order_id = qo.id
+    WHERE qo.tenant_id = referrals.tenant_id
+      AND qo.customer_id = referrals.referee_id
+      AND qo.state IN (${list(ORDER_SETTLED_STATES)})
+      AND qo.origin IN (${list(SALE_ORDER_ORIGINS)})
+      AND qo.purpose IN (${list(DISCOUNTABLE_PURPOSES)})
+      AND qop.state = 'SUCCEEDED'
+      AND qop.type = (CASE qo.purpose ${purchasedAs} END)
+  )`;
+}
+
 /** The signup gift rows and the referral statistics, in PostgreSQL. Every query carries the tenant. */
 export class DrizzleReferralSignupGiftRepository implements ReferralSignupGiftRepository {
   constructor(private readonly db: Database) {}
@@ -75,6 +129,7 @@ export class DrizzleReferralSignupGiftRepository implements ReferralSignupGiftRe
         currency: referralSignupGifts.currency,
         referrerClaimedAt: referralSignupGifts.referrerClaimedAt,
         refereeClaimedAt: referralSignupGifts.refereeClaimedAt,
+        refereeQualified: refereeQualified(),
       })
       .from(referrals)
       .leftJoin(
@@ -106,6 +161,7 @@ export class DrizzleReferralSignupGiftRepository implements ReferralSignupGiftRe
           side,
           snapshotAmount: null,
           snapshotCurrency: null,
+          refereeQualified: row.refereeQualified,
         });
         continue;
       }
@@ -117,6 +173,7 @@ export class DrizzleReferralSignupGiftRepository implements ReferralSignupGiftRe
         side,
         snapshotAmount,
         snapshotCurrency: row.currency as CurrencyCode,
+        refereeQualified: row.refereeQualified,
       });
     }
     return open;
@@ -126,10 +183,12 @@ export class DrizzleReferralSignupGiftRepository implements ReferralSignupGiftRe
     scope: TenantContext,
     customerId: string,
     tx: unknown,
-  ): Promise<readonly ReferralRecord[]> {
+  ): Promise<readonly LockedReferral[]> {
     const tenantId = requireTenantId(scope);
     const rows = await exec(this.db, tx)
-      .select()
+      // R10 D5 (b): the qualification is read HERE, with the lock, and not only by
+      // `openSides`: a claim pays the set this query returns, so a crafted tap meets it too.
+      .select({ ...getTableColumns(referrals), refereeQualified: refereeQualified() })
       .from(referrals)
       .where(
         and(
@@ -141,7 +200,29 @@ export class DrizzleReferralSignupGiftRepository implements ReferralSignupGiftRe
       )
       .orderBy(asc(referrals.id))
       .for('update');
-    return rows.map(toReferral);
+    return rows.map((row) => ({ ...toReferral(row), refereeQualified: row.refereeQualified }));
+  }
+
+  async countReferrerClaimsIn(
+    scope: TenantContext,
+    referrerId: string,
+    period: TimePeriod,
+    tx: unknown,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await exec(this.db, tx)
+      .select({ n: sql<number>`count(*)::int` })
+      .from(referralSignupGifts)
+      .where(
+        and(
+          eq(referralSignupGifts.tenantId, tenantId),
+          eq(referralSignupGifts.referrerId, referrerId),
+          // Half-open: a share stamped at the next day's first instant is the next day's.
+          gte(referralSignupGifts.referrerClaimedAt, period.start),
+          lt(referralSignupGifts.referrerClaimedAt, period.end),
+        ),
+      );
+    return row?.n ?? 0;
   }
 
   async findByReferral(

@@ -166,6 +166,27 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: null,
     confirmEnable: null,
   },
+  // R10 D5 (b). ON makes every unclaimed gift wait for its referee's first paid purchase, at
+  // once, so it asks first; nothing already paid is touched either way. Off restores the old
+  // rule with nothing to undo, so one click.
+  referral_abuse_guard: {
+    title: 'web.feature_referral_abuse_guard_title',
+    summary: 'web.feature_referral_abuse_guard_summary',
+    disableEffect: null,
+    confirmEnable: {
+      question: 'web.referral_abuse_guard_confirm_question',
+      detail: 'web.referral_abuse_guard_confirm_detail',
+      confirmLabel: 'web.referral_abuse_guard_confirm',
+    },
+  },
+  // R10 D5 (a). ON asks only customers who arrive from then on; nobody already here is
+  // stopped, so one click. Off lets everyone still waiting through at once — also one click.
+  start_captcha: {
+    title: 'web.feature_start_captcha_title',
+    summary: 'web.feature_start_captcha_summary',
+    disableEffect: null,
+    confirmEnable: null,
+  },
   // Off: new drafts go to their product's own panel again; nothing already placed moves.
   panel_auto_balancing: {
     title: 'web.feature_panel_auto_balancing_title',

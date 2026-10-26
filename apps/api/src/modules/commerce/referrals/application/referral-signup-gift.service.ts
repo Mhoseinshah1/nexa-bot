@@ -36,10 +36,12 @@ import type { CustomerRepository } from '../../customers/application/ports.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
 import { REFERRAL_WEBHOOK_PERMISSION } from './referral-program.js';
 import type {
+  ReferralDayCalendar,
   ReferralRepository,
   ReferralSignupGiftRecord,
   ReferralSignupGiftRepository,
 } from './ports.js';
+import { readReferralAbuseTerms } from './referral-abuse-terms.js';
 
 const REFERRAL_NAMESPACE = 'TELEGRAM';
 
@@ -60,6 +62,12 @@ export interface ReferralSignupGiftServiceDeps {
   readonly outbox: OutboxWriter;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /**
+   * R10 D5 (b): the tenant's local day, for the referrer's daily gift cap. Optional so a
+   * narrow wiring need not supply it; a cap set with no calendar is refused loudly rather
+   * than counted over a day nobody chose.
+   */
+  readonly days?: ReferralDayCalendar;
 }
 
 /** The gift's terms as they stand, read in one place so no caller decides "active" alone. */
@@ -68,6 +76,11 @@ export interface ReferralSignupGiftTerms {
   readonly total: Money;
   readonly referrerPercent: number;
   readonly referredPercent: number;
+  /**
+   * R10 D5 (b): whether the guard holds the gift until the referee's first paid, delivered
+   * purchase — for the dashboard line that says so. The claim re-reads it itself.
+   */
+  readonly requiresPurchase: boolean;
 }
 
 /** One side of one referral the customer could be paid for now. */
@@ -80,6 +93,12 @@ export interface SignupGiftClaimResult {
   /** The sum credited to THIS customer by this call. Zero when nothing was owed. */
   readonly credited: Money;
   readonly claimedCount: number;
+  /**
+   * R10 D5 (b): referrer shares this call left UNPAID because the referrer's daily cap was
+   * reached. Not lost: each stays unstamped and is claimable on a later day. Present only
+   * when positive, so with the guard off the result is exactly the one it always was.
+   */
+  readonly cappedCount?: number;
 }
 
 export interface ReferralStats {
@@ -94,20 +113,48 @@ interface ClaimReplayRecord {
   readonly creditedMinor: string;
   readonly currency: CurrencyCode;
   readonly claimedCount: number;
+  /** Absent on a claim remembered before R10 D5, which capped nothing. */
+  readonly cappedCount?: number;
 }
 
 /**
  * The membership gift a valid referral pays, once per side
  * (`docs/customer-ux-completion-audit.md` §I).
  *
- * ELIGIBILITY IS THE ACCEPTED ATTRIBUTION, AND NOTHING ELSE. A new customer whose first
- * `/start` carried a valid referral link is a referee the moment `attributeOnArrival`
- * writes the referral row, and both sides may claim from then on — with zero orders,
- * zero payments, no service anywhere. The owner defined two rewards and keeps them
- * apart: this gift pays for the MEMBERSHIP, the purchase commission
- * (`ReferralCommissionService`) pays for a DELIVERED purchase and waits for delivery.
- * No purchase, payment or provisioning predicate belongs in this file; a later purchase
- * creates no second gift, because the gift row is one per referral.
+ * ELIGIBILITY IS THE ACCEPTED ATTRIBUTION, AND NOTHING ELSE — while `referral_abuse_guard`
+ * is off. A new customer whose first `/start` carried a valid referral link is a referee
+ * the moment `attributeOnArrival` writes the referral row, and both sides may claim from
+ * then on — with zero orders, zero payments, no service anywhere. The owner defined two
+ * rewards and keeps them apart: this gift pays for the MEMBERSHIP, the purchase commission
+ * (`ReferralCommissionService`) pays for a DELIVERED purchase and waits for delivery. A
+ * later purchase creates no second gift, because the gift row is one per referral.
+ *
+ * ## R10 D5 (b): the owner's amendment, behind `referral_abuse_guard`
+ *
+ * The owner amended the rule above for an installation that turns the guard on (R10 D5:
+ * "the signup gift is granted only after the referred customer's first PAID purchase
+ * (configurable), plus a per-referrer daily cap"). With the guard on:
+ *
+ * - `referral.abuse.gift_unlock = ON_FIRST_PAID_PURCHASE` adds ONE payability condition to
+ *   both sides of a referral: its referee has a paid order that was delivered — the
+ *   commission earner's own "delivered", read by the repository's one predicate. It is
+ *   read in BOTH places a side is judged: `openSides` (the button) and `lockReferralsOf`
+ *   (the claim's locked set), so a crafted `rg:` tap meets it as a drawn one does. An
+ *   unqualified referral is skipped BEFORE its gift row is written: no snapshot is taken
+ *   for a side that cannot be paid. `ON_ATTRIBUTION` keeps the rule above.
+ * - `referral.abuse.referrer_daily_gift_cap` pays at most that many REFERRER shares per
+ *   referrer per local day (`[start, end)` from the one period resolver), counted inside
+ *   the claim under the claimant's referral row locks, which every claim by one referrer
+ *   takes. A share over the cap stays unstamped and is claimable the next day. The
+ *   referee's own share is never capped.
+ *
+ * There is no new grant path and no new writer: nothing is "granted later" by a job, and
+ * the claim is still the only way a share is paid, with exactly the double-payment
+ * protection it always had (the conditional stamp, then the append; the unique ledger
+ * reference; the idempotent replay). Turning the guard on or off never touches a stamped
+ * side or a balance: nothing is clawed back and nothing is granted retroactively. A
+ * referee who already bought before the switch qualifies at once — which is a claim the
+ * customer still has to make, not a grant.
  *
  * Independent of the purchase commission in the other direction too: the amounts come
  * from settings, never from a ledger entry, so nothing here can compound. Each share is ONE `REFERRAL_SIGNUP_GIFT`
@@ -141,11 +188,12 @@ export class ReferralSignupGiftService {
    * guard having run earlier.
    */
   async terms(scope: TenantContext, tx?: unknown): Promise<ReferralSignupGiftTerms> {
-    const [gift, referrals, terms, walletCurrency] = await Promise.all([
+    const [gift, referrals, terms, walletCurrency, abuse] = await Promise.all([
       this.deps.features.isEnabled(scope, 'referral_signup_gift', tx),
       this.deps.features.isEnabled(scope, 'referrals', tx),
       readSignupGiftTerms(this.deps.settings, scope, tx),
       readWalletCurrency(this.deps.settings, scope, tx),
+      readReferralAbuseTerms(this.deps, scope, tx),
     ]);
     // Inactive, not merely refused, when the total is in a currency the wallet does not
     // keep: no button is drawn for a gift that could only be paid where nobody can see it.
@@ -154,6 +202,7 @@ export class ReferralSignupGiftService {
       total: terms.total,
       referrerPercent: terms.referrerPercent,
       referredPercent: terms.referredPercent,
+      requiresPurchase: abuse.giftRequiresPurchase,
     };
   }
 
@@ -161,8 +210,11 @@ export class ReferralSignupGiftService {
    * What the customer could be paid for now, as referee and as referrer.
    *
    * Decides whether the claim button is drawn and lets "nothing to claim" be said
-   * truthfully. A side is open from the attribution on: `openSides` reads the referral
-   * rows and the gift row and nothing about orders. A side whose share is zero — snapshotted, or under the current terms when
+   * truthfully. A side is open from the attribution on — or, with the guard requiring a
+   * purchase (R10 D5), from the referee's first paid, delivered order, the same predicate
+   * the claim's locked set reads. The daily cap is NOT judged here: a referrer over it still
+   * sees the button, and the claim answers that the rest waits for tomorrow, which is
+   * true; hiding it would say there is nothing owed. A side whose share is zero — snapshotted, or under the current terms when
    * no row exists yet — is not claimable: there is nothing to pay, and the schema pins a
    * stamped side to a ledger entry, so a zero share is never stamped either.
    */
@@ -173,10 +225,13 @@ export class ReferralSignupGiftService {
   ): Promise<readonly ClaimableSignupGift[]> {
     const terms = await this.terms(scope, tx);
     if (!terms.active) return [];
+    const abuse = await readReferralAbuseTerms(this.deps, scope, tx);
     const shares = referralSignupGiftShares(terms.total.amountMinor, terms.referrerPercent);
     const open = await this.deps.gifts.openSides(scope, customerId, tx);
     return open
       .filter((side) => {
+        // R10 D5 (b): not before the referee's first paid, delivered purchase.
+        if (abuse.giftRequiresPurchase && !side.refereeQualified) return false;
         // A row snapshotted in a currency the wallet no longer keeps is not offered: the
         // claim skips it for the same reason, and a button that leads to nothing lies.
         if (side.snapshotCurrency !== null && side.snapshotCurrency !== terms.total.currency) {
@@ -227,6 +282,9 @@ export class ReferralSignupGiftService {
       return {
         credited: money(BigInt(replay.result.creditedMinor), replay.result.currency),
         claimedCount: replay.result.claimedCount,
+        ...(replay.result.cappedCount === undefined
+          ? {}
+          : { cappedCount: replay.result.cappedCount }),
       };
     }
 
@@ -267,6 +325,16 @@ export class ReferralSignupGiftService {
         const now = this.deps.clock.now();
         const currency = terms.total.currency;
         const shares = referralSignupGiftShares(terms.total.amountMinor, terms.referrerPercent);
+        // R10 D5 (b): read in THIS transaction, so the claim decides from what it sees.
+        const abuse = await readReferralAbuseTerms(this.deps, scope, tx);
+        /*
+         * The referrer shares already paid today, counted once and only when a referrer
+         * share is about to be paid under a cap — then advanced by every one this call pays.
+         * The count is taken after `lockReferralsOf`, so a concurrent claim by the same
+         * referrer has either committed (and is counted) or waits behind these locks.
+         */
+        let paidToday: number | null = null;
+        let capped = 0;
         const paid: {
           referralId: string;
           side: ReferralSignupGiftSide;
@@ -282,6 +350,12 @@ export class ReferralSignupGiftService {
           if (referral.referrerId === referral.refereeId) continue;
           const side: ReferralSignupGiftSide =
             referral.refereeId === claimant ? 'REFEREE' : 'REFERRER';
+          /*
+           * R10 D5 (b): neither side is payable before the referee's first paid, delivered
+           * purchase. Skipped BEFORE `giftFor`, so no gift row — and no snapshot of today's
+           * terms — is written for a referral that cannot be paid yet.
+           */
+          if (abuse.giftRequiresPurchase && !referral.refereeQualified) continue;
 
           const gift = await this.giftFor(scope, referral, terms.total, shares, now, tx);
           /*
@@ -302,6 +376,24 @@ export class ReferralSignupGiftService {
           // the suite green, so neither could be told from the other (falsification
           // record, UX-06).
           if (amount <= 0n) continue;
+
+          /*
+           * R10 D5 (b): the referrer's daily cap, for the REFERRER's share only. Over it the
+           * side is left exactly as it is — unstamped — and the next day's claim pays it.
+           *
+           * Judged only for a side the locked gift row shows unpaid, so a share paid on an
+           * earlier day is not reported as held back. That read gates the CAP alone: whether
+           * the side is paid is still decided by `claimSide`'s conditional UPDATE below, which
+           * a side shown paid reaches exactly as before and is refused by.
+           */
+          const cap = abuse.referrerDailyGiftCap;
+          if (side === 'REFERRER' && cap !== null && gift.referrerClaimedAt === null) {
+            paidToday ??= await this.paidToday(scope, claimant, now, tx);
+            if (paidToday >= cap) {
+              capped += 1;
+              continue;
+            }
+          }
 
           const entryId = this.deps.ids.uuid();
           const stamped = await this.deps.gifts.claimSide(
@@ -360,6 +452,7 @@ export class ReferralSignupGiftService {
             },
           });
           paid.push({ referralId: referral.id, side, amountMinor: amount.toString(), entryId });
+          if (side === 'REFERRER' && paidToday !== null) paidToday += 1;
           // A share snapshotted in another currency was paid, but it is not summed into a
           // figure denominated in today's — no rate exists to add them with.
           if (entry.amount.currency === currency) credited += amount;
@@ -390,6 +483,7 @@ export class ReferralSignupGiftService {
           creditedMinor: credited.toString(),
           currency,
           claimedCount: paid.length,
+          ...(capped > 0 ? { cappedCount: capped } : {}),
         };
         await rememberOnce(
           this.deps.idempotency,
@@ -400,9 +494,27 @@ export class ReferralSignupGiftService {
           result,
           tx,
         );
-        return { credited: money(credited, currency), claimedCount: paid.length };
+        return {
+          credited: money(credited, currency),
+          claimedCount: paid.length,
+          ...(capped > 0 ? { cappedCount: capped } : {}),
+        };
       },
     );
+  }
+
+  /** R10 D5 (b): referrer shares this referrer was paid in the local day containing `now`. */
+  private async paidToday(
+    scope: TenantContext,
+    referrerId: string,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<number> {
+    if (this.deps.days === undefined) {
+      throw new Error('a referral gift cap is in force with no day calendar');
+    }
+    const today = await this.deps.days.dayOf(scope, now, tx);
+    return this.deps.gifts.countReferrerClaimsIn(scope, referrerId, today, tx);
   }
 
   /**

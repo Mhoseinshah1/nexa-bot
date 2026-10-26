@@ -170,6 +170,8 @@ export interface ReferralScreenFacts {
     readonly total: Money;
     readonly referrerPercent: number;
     readonly referredPercent: number;
+    /** R10 D5 (b): the gift waits for the referee's first paid, delivered purchase. */
+    readonly afterPurchase?: boolean;
   } | null;
   readonly referralCount: number;
   readonly referredPurchaseCount: number;
@@ -475,6 +477,25 @@ export class CustomerScreenComposer {
   }
 
   /**
+   * The gift terms, and — while the guard holds the gift for the referee's first paid,
+   * delivered purchase (R10 D5) — the line that says so, under them. Both are templates;
+   * the line break between them is layout, as between the dashboard's own blocks.
+   */
+  private async giftBlock(
+    scope: ScopeContext,
+    gift: NonNullable<ReferralScreenFacts['gift']>,
+  ): Promise<string> {
+    const terms = await this.templates.render(scope, 'bot.referral.gift_block', {
+      total: gift.total,
+      referrerPercent: gift.referrerPercent,
+      referredPercent: gift.referredPercent,
+    });
+    if (gift.afterPurchase !== true) return terms;
+    const after = await this.templates.render(scope, 'bot.referral.gift_after_purchase', {});
+    return `${terms}\n${after}`;
+  }
+
+  /**
    * R1, message 2: the customer's own dashboard — the gift terms (absent while the gift is
    * off), the commission, its scope and minimum (absent when there is none), and the
    * figures. Never the link: that is the invite's, and the share button's.
@@ -498,11 +519,7 @@ export class CustomerScreenComposer {
         ...(facts.gift === null
           ? {}
           : {
-              giftBlock: await this.templates.render(scope, 'bot.referral.gift_block', {
-                total: facts.gift.total,
-                referrerPercent: facts.gift.referrerPercent,
-                referredPercent: facts.gift.referredPercent,
-              }),
+              giftBlock: await this.giftBlock(scope, facts.gift),
             }),
         referralCount: facts.referralCount,
         referredPurchaseCount: facts.referredPurchaseCount,

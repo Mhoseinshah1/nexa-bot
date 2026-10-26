@@ -307,6 +307,28 @@ export const WEB_FA = {
     'سهم معرف از هدیهٔ عضویت. جمع سهم معرف و کاربر تازه باید ۱۰۰ باشد.',
   'web.setting_referral_signup_gift_referred_percent_desc':
     'سهم کاربر تازه از هدیهٔ عضویت. جمع سهم معرف و کاربر تازه باید ۱۰۰ باشد.',
+  // R10 D5 (b): the referral-gift guard.
+  'web.setting_referral_abuse_gift_unlock': 'زمان قابل دریافت شدن هدیهٔ عضویت',
+  'web.setting_referral_abuse_gift_unlock_desc':
+    'وقتی «محافظ سوءاستفاده از معرفی» روشن است: هدیهٔ عضویت هر دو طرف پس از نخستین خرید پرداخت‌شده و تحویل‌شدهٔ کاربر معرفی‌شده قابل دریافت شود، یا مثل قبل بلافاصله پس از معرفی. سهم‌هایی که پیش‌تر پرداخت شده‌اند دست نمی‌خورند.',
+  'web.gift_unlock_on_first_paid_purchase': 'پس از نخستین خرید زیرمجموعه',
+  'web.gift_unlock_on_attribution': 'بلافاصله پس از معرفی (مثل قبل)',
+  'web.setting_referral_abuse_referrer_daily_gift_cap': 'سقف روزانهٔ هدیهٔ معرف',
+  'web.setting_referral_abuse_referrer_daily_gift_cap_desc':
+    'بیشترین تعداد سهم هدیهٔ عضویت که هر معرف در یک روز (به وقت و تقویم فروشگاه) دریافت می‌کند. سهم بیش از سقف از بین نمی‌رود و روز بعد قابل دریافت است. سهم کاربر تازه سقف ندارد. خالی یعنی بدون سقف.',
+  'web.setting_referral_abuse_referrer_daily_commission_cap': 'سقف روزانهٔ پورسانت معرف',
+  'web.setting_referral_abuse_referrer_daily_commission_cap_desc':
+    'بیشترین تعداد پورسانت خرید که هر معرف در یک روز دریافت می‌کند. پورسانت بیش از سقف باطل نمی‌شود؛ در انتظار می‌ماند و از روز بعد به همان قاعدهٔ همیشگی پرداخت می‌شود. خالی یعنی بدون سقف.',
+  // R10 D5 (a): the /start captcha for new customers.
+  'web.setting_captcha_expiry_seconds': 'مهلت پاسخ به سؤال امنیتی',
+  'web.setting_captcha_expiry_seconds_desc':
+    'هر سؤال تا این مدت قابل پاسخ است. پاسخ به سؤالی که مهلتش گذشته شمرده نمی‌شود و سؤال تازه‌ای پرسیده می‌شود.',
+  'web.setting_captcha_max_attempts': 'تعداد پاسخ نادرست مجاز',
+  'web.setting_captcha_max_attempts_desc':
+    'پس از این تعداد پاسخ نادرست، کاربر تازه باید مدتی صبر کند. حساب او هرگز مسدود نمی‌شود.',
+  'web.setting_captcha_cooldown_seconds': 'مدت انتظار پس از پاسخ‌های نادرست',
+  'web.setting_captcha_cooldown_seconds_desc':
+    'پس از پایان این مدت، با فرستادن /start سؤال تازه‌ای پرسیده می‌شود و شمارش از نو آغاز می‌شود.',
 
   // Feature flags
   'web.features_title': 'قابلیت‌ها',
@@ -397,6 +419,17 @@ export const WEB_FA = {
   'web.feature_referral_signup_gift_title': 'هدیهٔ عضویت با معرفی',
   'web.feature_referral_signup_gift_summary':
     'برای هر معرفی معتبر، مبلغ هدیه میان معرف و کاربر جدید تقسیم می‌شود و هر کدام یک بار سهم خود را دریافت می‌کنند.',
+  // R10 D5.
+  'web.feature_referral_abuse_guard_title': 'محافظ سوءاستفاده از معرفی',
+  'web.feature_referral_abuse_guard_summary':
+    'هدیهٔ عضویت فقط پس از نخستین خرید پرداخت‌شده و تحویل‌شدهٔ کاربر معرفی‌شده قابل دریافت می‌شود و برای هدیه و پورسانت هر معرف سقف روزانه می‌توان گذاشت. موجودی‌ها و سهم‌های پرداخت‌شده دست نمی‌خورند.',
+  'web.referral_abuse_guard_confirm_question': 'محافظ سوءاستفاده از معرفی روشن شود؟',
+  'web.referral_abuse_guard_confirm_detail':
+    'از همین حالا هدیه‌های عضویتی که هنوز دریافت نشده‌اند تا نخستین خرید تحویل‌شدهٔ کاربر معرفی‌شده منتظر می‌مانند (مگر در تنظیمات «بلافاصله پس از معرفی» انتخاب شده باشد). هیچ مبلغ پرداخت‌شده‌ای پس گرفته نمی‌شود و موجودی هیچ کاربری تغییر نمی‌کند.',
+  'web.referral_abuse_guard_confirm': 'روشن کن',
+  'web.feature_start_captcha_title': 'سؤال امنیتی شروع (کپچا)',
+  'web.feature_start_captcha_summary':
+    'از هر کاربر تازه پیش از استفاده از ربات یک سؤال ساده (جمع دو عدد با چهار گزینه) پرسیده می‌شود. کاربران فعلی و مدیران هرگز پرسیده نمی‌شوند و پاسخ نادرست هرگز به مسدودی نمی‌انجامد. خاموش کردن آن همهٔ منتظران را آزاد می‌کند.',
   // A flag from a newer server that this panel build has no entry for.
   'web.feature_unknown_off_effect':
     'این قابلیت برای این نسخه از پنل ناشناخته است و خاموش کردن آن ممکن است بخشی از کار ربات را متوقف کند.',
@@ -4266,6 +4299,9 @@ export const WEB_FA = {
   'web.setting_miniapp_init_data_max_age_seconds': 'اعتبار ورود به مینی‌اپ',
   'web.setting_miniapp_session_ttl_minutes': 'مدت هر نشست مینی‌اپ',
   'web.flag_referral_signup_gift': 'هدیهٔ عضویت از طریق معرفی',
+  'web.flag_referral_abuse_guard': 'محافظ سوءاستفاده از معرفی',
+  'web.flag_start_captcha': 'سؤال امنیتی شروع (کپچا)',
+  'web.referral_not_before': 'در انتظار سقف روزانه تا',
   'web.setting_referral_signup_gift_total': 'مبلغ کل هدیهٔ عضویت',
   'web.setting_referral_signup_gift_referrer_percent': 'سهم معرف از هدیهٔ عضویت',
   'web.setting_referral_signup_gift_referred_percent': 'سهم کاربر معرفی‌شده از هدیهٔ عضویت',
