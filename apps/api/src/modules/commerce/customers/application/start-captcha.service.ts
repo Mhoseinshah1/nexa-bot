@@ -78,7 +78,11 @@ export type StartCaptchaOutcome =
 export interface StartCaptchaServiceDeps {
   readonly captchas: StartCaptchaRepository;
   readonly features: {
-    isEnabled(scope: TenantContext, key: typeof START_CAPTCHA_FEATURE, tx?: unknown): Promise<boolean>;
+    isEnabled(
+      scope: TenantContext,
+      key: typeof START_CAPTCHA_FEATURE,
+      tx?: unknown,
+    ): Promise<boolean>;
   };
   readonly settings: { valueOf<T>(scope: TenantContext, key: string, tx?: unknown): Promise<T> };
   readonly guard: PermissionGuard;
@@ -241,7 +245,10 @@ export class StartCaptchaService {
         remaining: Math.max(1, terms.maxAttempts - row.attempts),
       };
     }
-    return this.decide(scope, actor, customerId, { idempotencyKey: input.idempotencyKey, tap: null });
+    return this.decide(scope, actor, customerId, {
+      idempotencyKey: input.idempotencyKey,
+      tap: null,
+    });
   }
 
   /** A tap on one of the four answers of question `challengeId`. */
@@ -359,7 +366,16 @@ export class StartCaptchaService {
      */
     const cooldownOver = row.lockedUntil !== null;
     if (cooldownOver || row.expiresAt.getTime() <= now.getTime()) {
-      const next = await this.reissue(scope, row, row.challengeId, row.attempts, null, terms, now, tx);
+      const next = await this.reissue(
+        scope,
+        row,
+        row.challengeId,
+        row.attempts,
+        null,
+        terms,
+        now,
+        tx,
+      );
       if (next === null) return { result: current, wrote: false };
       return {
         result: {

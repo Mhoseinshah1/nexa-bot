@@ -212,9 +212,6 @@ describe('the /start captcha (R10 D5 a)', () => {
   const say = (from: number, text: string) => deliver(message(from, text));
   const tap = (from: number, data: string) => deliver(tapUpdate(from, data));
 
-  const textOf = (bodies: readonly Record<string, unknown>[]) =>
-    bodies.map((body) => String(body.text));
-
   async function customerIdOf(telegramUserId: number): Promise<string> {
     const [row] = await rows<{ id: string }>(
       sql`SELECT id FROM customers WHERE tenant_id = ${tenantA.tenantId}
