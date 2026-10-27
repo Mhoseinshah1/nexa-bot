@@ -229,9 +229,10 @@ describe('the freshness line', () => {
     expect(screen.getByTestId('list-read-at').textContent).toBe(before);
     // The read instant itself, with its seconds.
     expect(before).toContain(
-      new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium', timeStyle: 'medium' }).format(
-        new Date(READ),
-      ),
+      new Intl.DateTimeFormat('fa-IR-u-nu-latn', {
+        dateStyle: 'medium',
+        timeStyle: 'medium',
+      }).format(new Date(READ)),
     );
   });
 

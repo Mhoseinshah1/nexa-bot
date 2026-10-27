@@ -24,7 +24,6 @@ body {
   font-size: var(--fs-body);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
-  font-feature-settings: 'ss01';
 }
 
 /*
@@ -124,12 +123,6 @@ hr {
   direction: ltr;
   unicode-bidi: isolate;
   text-align: start;
-  /*
-   * A technical value keeps its Latin digits. The body's stylistic set draws
-   * digits in Persian shapes, which is right for prose and wrong for a
-   * username, a host or a version: `@user_7` is not `@user_۷`.
-   */
-  font-feature-settings: normal;
 }
 /*
  * Persian text that reached a technical-value box (`Ltr`, `CodeValue`): drawn
@@ -152,7 +145,7 @@ hr {
 .num {
   font-variant-numeric: tabular-nums;
 }
-/* A signed quantity: its sign stays in front, its digits keep the body's shapes. */
+/* A signed quantity: its sign stays in front. */
 .num.signed {
   direction: ltr;
   unicode-bidi: isolate;
@@ -365,6 +358,23 @@ form:not([class]) > * + * {
   + :where(.card, .banner, .notice, .grid, .grid-2, .two-col, .kv) {
   margin-top: var(--gap);
 }
-:where(.grid, .grid-2, .two-col, .stat-grid, .row, .head-stats, .toolbar) > * {
+:where(
+    .grid,
+    .grid-2,
+    .two-col,
+    .stat-grid,
+    .row,
+    .head-stats,
+    .toolbar,
+    .dash-kgrid,
+    .dash-mini,
+    .dash-ops,
+    .dash-charts,
+    .dash-row,
+    .dash-figures,
+    .bx-side-split,
+    .report-kpis
+  )
+  > * {
   margin-top: 0;
 }

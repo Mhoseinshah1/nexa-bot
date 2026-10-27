@@ -4643,6 +4643,67 @@ key for its `Retry-After`, else 5 s doubling to 5 min, ±20 %. Defaults that mov
   window if the worker is ever scaled out. **Decide** with the real provider: record the limit
   and its scope, and set the two settings from it.
 
+## Round 11 A1 — Web Admin vs the approved demo
+
+- **OQ-R11-A1-01 — a numbered pager («1–10 of 732 · page 1 of 74») on the cursor-paged lists.**
+  The demo draws it on every list; the keyset lists (`/orders`, `/payments`, `/users`, `/services`,
+  …) return a cursor and no total, and the Web Admin prints only totals the server sent. Built
+  where the list already holds all its rows and a server `total` was cheap: `/content`
+  (`GET /templates`) and `/features` (`GET /features`) gained an optional `total`. Default for the
+  rest: the existing «قبلی / بعدی» keyset pager. A `total` on each cursor list is a count query per
+  request (filtered, tenant-scoped, on large tables); the owner decides which lists are worth it.
+- **OQ-R11-A1-02 — global search beyond customers, orders and services.** `GET /search` covers
+  those three kinds, each under its own list permission. Payments, tickets and products are not
+  searched (the demo's grouped results show three kinds); adding one is a new source plus its own
+  permission row in `GLOBAL_SEARCH_KIND_PERMISSIONS`, no new permission. A service is found by its
+  exact panel username or its 8-character code, as the services list's own search finds it.
+- **OQ-R11-A1-03 — Persian digits in text the server writes.** The owner's Latin-digit rule is
+  applied to the Web Admin's own catalogue (`apps/web/src/i18n/web.fa.ts`) and every formatter.
+  Text that arrives from the server or from the shared catalogue (`packages/i18n`: ops-log and
+  report messages, bot template previews on `/content`) still carries the digits it was written
+  with, because the same strings are customer-facing in Telegram. Default: unchanged; normalising
+  them for display only is a separate decision.
+
+## Round 11 A2 — the cutover rehearsal (`docs/cutover/12-rehearsal.md`)
+
+`botctl cutover rehearse` runs the runbook's data steps against a disposable database on the
+test server. Each default below moves no money, sends no customer message and touches nothing
+live; the owner decides otherwise.
+
+- **OQ-R11-A2-01 — tariff products in the disposable database.** The rehearsal creates none and
+  copies none from the live tenant (that would be touching it), so a Mirza service found on a
+  stand-in can still be held for want of a product to adopt it into; the money reconciliation is
+  complete without them. Whether the rehearsal should take a products file (as it takes
+  `--panel-inventory`) so the adoption counts are real is the owner's call.
+- **OQ-R11-A2-02 — where it may run.** It is written and documented for the test server. It
+  refuses the live database, a production-like name and an existing database wherever it runs,
+  but does not refuse the production host itself (as the isolated kit does): on production it
+  would create, fill and drop one more database on that server, like `nexa_cutover_scratch` at C2.
+  Whether it should refuse a production host outright is the owner's call.
+- **OQ-R11-A2-03 — the approver.** The import's approval is an administrator's act, so the
+  rehearsal creates the rehearsing owner in the DISPOSABLE database through the installer's own
+  `BootstrapOwnerService` (the `--owner-telegram-id` the operator gives, a random password nobody
+  sees) and records the approval under it, as a `WEB_ADMIN` actor with no session — the only
+  administrator actor type there is. It never exists outside that database, and the database is
+  dropped. Decision taken; recorded here for the owner to confirm.
+
+## Round 11 A7 — the service's panel username in the operations log
+
+- **OQ-R11-A7-01 — the referral-commission message (L8).** A commission is earned on a buyer's
+  order that is tied to a service, but the message is about the REFERRER's wallet (the owner's list
+  did not name it, and L8 is being reworked in a parallel round). Default: it does not print the
+  service's username. Adding the optional token to `ops.log.referral_commission` is one line in the
+  template and one in the builder if the owner wants it.
+- **OQ-R11-A7-02 — the label.** The nine messages that already printed the name said
+  «🔑 نام سرویس:», which reads as a product name (the same wording the 2026-10-10 text audit
+  replaced on the customer screens). All service messages now say «👤 نام کاربری سرویس:», the
+  owner's wording of this item. Default text only; a tenant override is untouched.
+- **OQ-R11-A7-03 — a payment of a purchase that is not built yet.** The order-paid and crypto logs
+  of a NEW purchase print the name the checkout RESERVED (funded at settlement), because the
+  service row does not exist until the provisioner runs; a payment that failed, expired or was
+  never settled has no funded reservation and prints no name. If the owner prefers the line only
+  once the service exists, drop the reservation branch of `serviceUsernameOfOrder`.
+
 ## Round 11 A5 — Bot API 10.2 compatibility
 
 - **OQ-R11-A5-01 — Mini App origin protection: the official rule is unverified.** Reported

@@ -86,7 +86,11 @@ class FakeFacts {
   undeliverable: string | null = 'PANEL_REJECTED';
   failed: OperationFact | null = null;
   roleNames = new Map<string, string>();
+  /** R11 A7: the panel account of the service an order is tied to, by order id. */
+  usernameOfOrder = new Map<string, string>();
 
+  serviceUsernameOfOrder = async (_s: unknown, orderId: string) =>
+    this.usernameOfOrder.get(orderId) ?? null;
   customer = async (_s: unknown, id: string) => this.customers.get(id) ?? null;
   admin = async (_s: unknown, id: string) => this.admins.get(id) ?? null;
   order = async (_s: unknown, id: string) => this.orders.get(id) ?? null;
@@ -1362,7 +1366,7 @@ describe('R9 C2 item 2 — an extra-volume gift that failed on the panel (L24)',
     expect(queued[0]!.dedupeKey).toBe('oplog:op-failed:op-gift');
     const text = render(queued[0]!);
     expect(text).toContain('افزودن حجم هدیه انجام نشد');
-    expect(text).toContain('🔑 نام سرویس: nxtest01');
+    expect(text).toContain('👤 نام کاربری سرویس: nxtest01');
     expect(text).toContain('🖥 پنل: پنل آزمایشی');
     expect(text).toContain(`❗ علت: ${words.providerFailure('TIMEOUT')}`);
     expect(text).toContain('🔧 کد: TIMEOUT · HTTP 504');
@@ -1663,5 +1667,96 @@ describe('R10 B5 — a customer the import wrote: what happens after the import 
     expect(queued).toEqual([]);
     await consumer.handle(replied, TX);
     expect(queued.map((one) => one.templateKey)).toEqual(['ops.support.customer_replied']);
+  });
+});
+
+describe('R11 A7 — the failure log names the service’s panel account', () => {
+  const LINE = '👤 نام کاربری سرویس:';
+  const refunded = (): DomainEvent =>
+    event('OrderRefunded', 'ord-1', {
+      customerId: 'cust-1',
+      amountMinor: '250000',
+      currency: 'IRT',
+      reason: AUTOMATIC_REFUND_REASON,
+    });
+  const failed = (overrides: Partial<OperationFact> = {}): OperationFact => ({
+    id: 'op-1',
+    type: 'CREATE_USER',
+    state: 'FAILED',
+    serviceId: 'svc-1',
+    orderId: 'ord-1',
+    requestedByCustomerId: 'cust-1',
+    panelId: 'pan-1',
+    failureKind: 'REJECTED',
+    failureMessage: null,
+    targetExpiresAt: null,
+    targetTrafficLimitBytes: null,
+    completedAt: AT,
+    ...overrides,
+  });
+
+  it('L23: a service that was not created prints the account its failed create left on the order', async () => {
+    const { facts, queued, lane, ofFacts } = setup();
+    facts.payments.set('ord-1', paymentFact('WALLET'));
+    facts.failed = failed();
+    await new FailureLogConsumer({ lane, facts: ofFacts, words }).handle(refunded(), TX);
+    expect(queued[0]!.templateKey).toBe('ops.log.error_provision');
+    expect(render(queued[0]!).split('\n')).toContain(`${LINE} nxtest01`);
+  });
+
+  it('L23: with no service row, the account the order holds is printed', async () => {
+    const { facts, queued, lane, ofFacts } = setup();
+    facts.payments.set('ord-1', paymentFact('WALLET'));
+    facts.usernameOfOrder.set('ord-1', 'nx_reserved');
+    await new FailureLogConsumer({ lane, facts: ofFacts, words }).handle(refunded(), TX);
+    expect(render(queued[0]!).split('\n')).toContain(`${LINE} nx_reserved`);
+  });
+
+  it('L23 (administrator-created): the admin message prints it too', async () => {
+    const { facts, queued, lane, ofFacts } = setup();
+    facts.payments.set('ord-1', paymentFact('WALLET'));
+    facts.usernameOfOrder.set('ord-1', 'nx_reserved');
+    facts.origins.set(
+      'ord-1',
+      origin({ surface: 'WEB', actorType: 'WEB_ADMIN', actorId: 'adm-1', actorLabel: 'مدیر' }),
+    );
+    await new FailureLogConsumer({ lane, facts: ofFacts, words }).handle(refunded(), TX);
+    expect(queued[0]!.templateKey).toBe('ops.log.error_provision_admin');
+    expect(render(queued[0]!).split('\n')).toContain(`${LINE} nx_reserved`);
+  });
+
+  it('L23: an order that holds no account prints no such line', async () => {
+    const { facts, queued, lane, ofFacts } = setup();
+    facts.payments.set('ord-1', paymentFact('WALLET'));
+    await new FailureLogConsumer({ lane, facts: ofFacts, words }).handle(refunded(), TX);
+    expect(render(queued[0]!)).not.toContain('نام کاربری سرویس');
+  });
+
+  it('L24: a renewal whose outcome is unknown prints the renewed service’s account', async () => {
+    const { facts, queued, lane, ofFacts } = setup();
+    facts.payments.set('ord-1', paymentFact('MANUAL_TRANSFER'));
+    facts.orders.set('ord-1', orderFact({ purpose: 'RENEW' }));
+    await new FailureLogConsumer({ lane, facts: ofFacts, words }).handle(
+      event('ProvisioningOutcomeUnknown', 'svc-1', {
+        serviceId: 'svc-1',
+        panelId: 'pan-1',
+        operationType: 'RENEW',
+        failureKind: 'TIMEOUT',
+      }),
+      TX,
+    );
+    expect(queued[0]!.templateKey).toBe('ops.log.error_operation');
+    expect(render(queued[0]!).split('\n')).toContain(`${LINE} nxtest01`);
+  });
+
+  it('L24: an imported (MIRZA) service’s failed renewal prints the stored panel account', async () => {
+    const { facts, queued, lane, ofFacts } = setup();
+    facts.payments.set('ord-1', paymentFact('MANUAL_TRANSFER'));
+    facts.orders.set('ord-1', orderFact({ purpose: 'RENEW' }));
+    facts.services.set('svc-1', serviceFact({ source: 'MIRZA', providerUsername: 'mirza_user_7' }));
+    facts.failed = failed({ type: 'RENEW' });
+    await new FailureLogConsumer({ lane, facts: ofFacts, words }).handle(refunded(), TX);
+    expect(queued[0]!.templateKey).toBe('ops.log.error_operation');
+    expect(render(queued[0]!).split('\n')).toContain(`${LINE} mirza_user_7`);
   });
 });

@@ -237,6 +237,8 @@ describe('control plane HTTP surface', () => {
       );
       const ops = body.flags.find((flag) => flag.key === 'ops_notifications');
 
+      // R11 A1: the server states the list's size (the counted pager's «of N»).
+      expect(body.total).toBe(body.flags.length);
       expect(ops?.enabled).toBe(false);
       expect(ops?.blastRadius).toBe('TENANT_WIDE');
       // The legacy pair sits on two screens with nothing saying the flag makes
@@ -339,6 +341,10 @@ describe('control plane HTTP surface', () => {
         (await get(CONTROL_ROUTES.templates, ownerCookie)).json(),
       );
       const ping = body.templates.find((template) => template.key === key);
+
+      // R11 A1: the server states the catalogue's size (the counted pager's «of N»).
+      expect(body.total).toBe(body.templates.length);
+      expect(body.total).toBeGreaterThan(0);
 
       // The placeholder survives. In the legacy system the edit screen shows the
       // RENDERED string, so the raw template cannot be read back from the screen

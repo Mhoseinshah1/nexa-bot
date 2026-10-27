@@ -31,11 +31,13 @@ customer anything automatically.
 | [`09-go-no-go.md`](09-go-no-go.md)                 | The owner's go/no-go checklist, one table per decision point                                              |
 | [`10-communications.md`](10-communications.md)     | What customers are told, by whom, when — and what Nexa never sends                                        |
 | [`11-records.md`](11-records.md)                   | The cutover record to fill in as you go                                                                   |
+| [`12-rehearsal.md`](12-rehearsal.md)               | **Rehearsal**: the whole runbook on the test server against a disposable database, with the go/no-go      |
 
 ## The tools these pages use
 
-All three are read-only. None can change the installation, and none reads the live database
-except through the same read-only CLIs `botctl status` already runs.
+The first three are read-only. None can change the installation, and none reads the live
+database except through the same read-only CLIs `botctl status` already runs. The fourth
+writes only a database it creates for itself.
 
 - **`sudo botctl cutover preflight [--expect-version V] [--expect-telegram none|ready]
 [--max-backup-age-hours N] [--min-free-gib N]`** — eight checks (release, readiness,
@@ -55,6 +57,17 @@ except through the same read-only CLIs `botctl status` already runs.
   **restored copy** of the post-import backup (`nexa_cutover_scratch`). Exit 0 `RECONCILED`,
   2 `RECONCILED_WITH_HELD`, 3 `DIFFERENCES`. Tests: `tests/unit/cutover-reconciliation.test.ts`,
   `tests/integration/cutover-reconcile.test.ts`.
+- **`sudo botctl cutover rehearse PACKAGE (--key-file FILE | --passphrase) --owner-telegram-id N
+[--database NAME] [--keep-database] [--panel-inventory FILE] [--json]`** (`pnpm cutover-rehearse`)
+  — the rehearsal ([`12-rehearsal.md`](12-rehearsal.md)): a NEW database on the server, migrated,
+  provisioned and imported into through the restore page's own service and executor with
+  read-only panel stand-ins, then the balance, service and reseller-credit reconciliation against
+  the package and a go/no-go; the database is dropped afterwards. It refuses the live database
+  (by name, and when it equals `DATABASE_URL`'s), a production-like name and an existing database;
+  it never hands the token over, changes a webhook, starts a role, calls Telegram or messages a
+  customer. Exit 0 `GO`, 2 `GO_WITH_HELD`, 3 `NO_GO`, 64 usage, 65 refused target. Tests:
+  `tests/integration/cutover-rehearsal.test.ts`, `tests/unit/cutover-rehearsal.test.ts`,
+  `tests/deploy/cutover-rehearse.test.sh`.
 
 ## Related
 

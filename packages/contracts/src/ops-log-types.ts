@@ -609,6 +609,8 @@ export const OPS_LOG_TEMPLATES = [
       ...req('severity'),
       // Optional so a body written before Round 4, which has none of them, stays valid.
       ...opt('heading', 'technical', 'details', 'occurrences', 'firstSeenAt', 'lastSeenAt'),
+      // R11 A7: the panel account name of the service an event is about; absent for any other event.
+      ...opt('serviceUsername'),
       // Kept so an override written before Round 4 (`{code}`, `{message}`) still saves and renders.
       ...opt('code', 'message'),
     ],
@@ -619,7 +621,7 @@ export const OPS_LOG_TEMPLATES = [
     [
       ...req('gateway', 'cause', 'technical', 'retry', 'impact', 'at'),
       ...WHO(),
-      ...opt('amount', 'reference', 'orderCode', 'providerInvoiceId'),
+      ...opt('amount', 'reference', 'orderCode', 'providerInvoiceId', 'serviceUsername'),
     ],
   ),
   logTemplate(
@@ -642,6 +644,7 @@ export const OPS_LOG_TEMPLATES = [
         'fee',
         'evidence',
         'orderCode',
+        'serviceUsername',
         'productTitle',
         'operation',
         'badges',
@@ -658,7 +661,7 @@ export const OPS_LOG_TEMPLATES = [
     [
       ...req('cause', 'method', 'reference', 'principal', 'fee', 'payable', 'at'),
       ...WHO(),
-      ...opt('orderCode'),
+      ...opt('orderCode', 'serviceUsername'),
     ],
   ),
   logTemplate(
@@ -667,7 +670,7 @@ export const OPS_LOG_TEMPLATES = [
     [
       ...req('cancelledBy', 'method', 'reference', 'principal', 'fee', 'payable', 'at'),
       ...WHO(),
-      ...opt('orderCode'),
+      ...opt('orderCode', 'serviceUsername'),
     ],
   ),
   logTemplate(
@@ -676,7 +679,7 @@ export const OPS_LOG_TEMPLATES = [
     [
       ...req('method', 'reference', 'principal', 'fee', 'payable', 'at'),
       ...WHO(),
-      ...opt('rejectReasons', 'orderCode'),
+      ...opt('rejectReasons', 'orderCode', 'serviceUsername'),
     ],
   ),
   logTemplate(
@@ -685,7 +688,7 @@ export const OPS_LOG_TEMPLATES = [
     [
       ...req('method', 'reference', 'principal', 'fee', 'payable', 'at'),
       ...WHO(),
-      ...opt('orderCode'),
+      ...opt('orderCode', 'serviceUsername'),
     ],
   ),
   logTemplate(
@@ -694,7 +697,13 @@ export const OPS_LOG_TEMPLATES = [
     [
       ...req('method', 'reference', 'principal', 'fee', 'payable', 'at'),
       ...WHO(),
-      ...opt('orderCode', 'providerInvoiceId', 'remainingAmount', 'remainderInvoiceId'),
+      ...opt(
+        'orderCode',
+        'serviceUsername',
+        'providerInvoiceId',
+        'remainingAmount',
+        'remainderInvoiceId',
+      ),
     ],
   ),
   logTemplate(
@@ -703,7 +712,7 @@ export const OPS_LOG_TEMPLATES = [
     [
       ...req('method', 'reference', 'principal', 'fee', 'payable', 'at'),
       ...WHO(),
-      ...opt('orderCode', 'providerInvoiceId', 'refundAmount'),
+      ...opt('orderCode', 'serviceUsername', 'providerInvoiceId', 'refundAmount'),
     ],
   ),
   logTemplate(
@@ -712,7 +721,7 @@ export const OPS_LOG_TEMPLATES = [
     [
       ...req('gateway', 'reference', 'principal', 'fee', 'payable', 'at'),
       ...WHO(),
-      ...opt('orderCode', 'providerInvoiceId', 'providerFinalAmount'),
+      ...opt('orderCode', 'serviceUsername', 'providerInvoiceId', 'providerFinalAmount'),
     ],
   ),
   logTemplate(
@@ -721,7 +730,7 @@ export const OPS_LOG_TEMPLATES = [
     [
       ...req('gateway', 'reference', 'amount', 'expiredAt', 'approvedAt'),
       ...WHO(),
-      ...opt('orderCode', 'balanceBefore', 'balanceAfter'),
+      ...opt('orderCode', 'serviceUsername', 'balanceBefore', 'balanceAfter'),
     ],
   ),
   logTemplate(
@@ -730,7 +739,7 @@ export const OPS_LOG_TEMPLATES = [
     [
       ...req('gateway', 'reference', 'principal', 'fee', 'payable', 'at'),
       ...WHO(),
-      ...opt('orderCode', 'providerInvoiceId', 'providerFinalAmount'),
+      ...opt('orderCode', 'serviceUsername', 'providerInvoiceId', 'providerFinalAmount'),
     ],
   ),
   logTemplate(
@@ -739,7 +748,7 @@ export const OPS_LOG_TEMPLATES = [
     [
       ...req('gateway', 'reference', 'principal', 'fee', 'payable', 'creditAmount', 'at'),
       ...WHO(),
-      ...opt('orderCode', 'providerInvoiceId', 'invoicedAmount'),
+      ...opt('orderCode', 'serviceUsername', 'providerInvoiceId', 'invoicedAmount'),
     ],
   ),
   logTemplate(
@@ -748,18 +757,26 @@ export const OPS_LOG_TEMPLATES = [
     [
       ...req('channel', 'reference', 'amount', 'at'),
       ...WHO(),
-      ...opt('orderCode', 'balanceBefore', 'balanceAfter'),
+      ...opt('orderCode', 'serviceUsername', 'balanceBefore', 'balanceAfter'),
     ],
   ),
   logTemplate(
     'ops.financial.refund_failed',
     'Log L6: a refund failed or was cancelled — where it was to go, why and the amount.',
-    [...req('channel', 'cause', 'reference', 'amount', 'at'), ...WHO(), ...opt('orderCode')],
+    [
+      ...req('channel', 'cause', 'reference', 'amount', 'at'),
+      ...WHO(),
+      ...opt('orderCode', 'serviceUsername'),
+    ],
   ),
   logTemplate(
     'ops.financial.service_refund_request',
     'Log L6 (WP19): a customer’s service refund request reached a final outcome — completed (deleted and credited), rejected, or failed. Never the customer’s or the administrator’s free text.',
-    [...req('outcome', 'at'), ...WHO(), ...opt('serviceCode', 'reference', 'amount', 'adminName')],
+    [
+      ...req('outcome', 'at'),
+      ...WHO(),
+      ...opt('serviceCode', 'serviceUsername', 'reference', 'amount', 'adminName'),
+    ],
   ),
   logTemplate(
     'ops.support.ticket_opened',
@@ -788,6 +805,7 @@ export const OPS_LOG_TEMPLATES = [
         'providerPaymentId',
         'providerInvoiceId',
         'orderCode',
+        'serviceUsername',
         'balanceBefore',
         'balanceAfter',
       ),
@@ -1034,7 +1052,7 @@ export const OPS_LOG_TEMPLATES = [
     [
       ...req('cause', 'technical', 'impact', 'at'),
       ...WHO(),
-      ...opt('productTitle', 'panelName', 'amount', 'orderCode', 'reference'),
+      ...opt('productTitle', 'panelName', 'serviceUsername', 'amount', 'orderCode', 'reference'),
     ],
   ),
   logTemplate(
@@ -1049,6 +1067,7 @@ export const OPS_LOG_TEMPLATES = [
         'adminTelegramId',
         'productTitle',
         'panelName',
+        'serviceUsername',
         'amount',
         'orderCode',
         'reference',
