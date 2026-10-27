@@ -1,4 +1,6 @@
 import {
+  COMMERCE_ERROR_CODES,
+  errors,
   money,
   PAYMENT_GATEWAY_DESCRIPTORS,
   type ActorContext,
@@ -366,7 +368,16 @@ export class CheckoutService {
 
   /**
    * Paying an order card to card: a DRAFT is confirmed through its lane, then the transfer is
-   * requested — the payment service decides whether card to card is offered, and the amount.
+   * requested — the payment service decides, in its transaction, whether card to card is
+   * offered, and the amount.
+   *
+   * R11 A6: for a DRAFT, card to card is checked BEFORE the confirm, by the rule the order's
+   * menu draws it with (`orderRoutes`: `manualTransferOffered`), as `payByGateway` checks its
+   * route. It used to confirm first and let the payment service refuse after, which left a
+   * DRAFT confirmed — a reservation held, a discount redeemed — for a payment that could not
+   * be made. The refusal is the payment service's own `PAYMENT_METHOD_UNAVAILABLE`, so each
+   * surface answers it with the Persian sentence it always has. An order already confirmed
+   * reserves nothing here and is left to the payment service's check alone, as before.
    */
   async payByCard(
     scope: TenantContext,
@@ -376,6 +387,12 @@ export class CheckoutService {
     idempotencyKey: string,
   ): Promise<ManualTransferInstruction> {
     if (order.state === 'DRAFT') {
+      if (!(await this.deps.payments.manualTransferOffered(scope))) {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.PAYMENT_METHOD_UNAVAILABLE,
+          'Card to card is not offered for this order.',
+        );
+      }
       await this.confirmDraft(scope, actor, customerId, order, idempotencyKey);
     }
     return this.deps.payments.requestManualTransfer(scope, actor, customerId, {

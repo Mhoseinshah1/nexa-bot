@@ -690,15 +690,23 @@ export class DrizzleOpsLogFacts implements OpsLogFacts {
     scope: TenantContext,
     referralId: string,
     tx: TransactionScope,
-  ): Promise<{ readonly referrerId: string; readonly refereeId: string } | null> {
+  ): Promise<{
+    readonly referrerId: string;
+    readonly refereeId: string;
+    readonly source: string;
+  } | null> {
     const tenantId = requireTenantId(scope);
     const [row] = await this.rows(
       tx,
-      sql`SELECT referrer_id, referee_id FROM referrals WHERE tenant_id = ${tenantId} AND id = ${referralId}`,
+      sql`SELECT referrer_id, referee_id, source FROM referrals WHERE tenant_id = ${tenantId} AND id = ${referralId}`,
     );
     return row === undefined
       ? null
-      : { referrerId: String(row['referrer_id']), refereeId: String(row['referee_id']) };
+      : {
+          referrerId: String(row['referrer_id']),
+          refereeId: String(row['referee_id']),
+          source: String(row['source']),
+        };
   }
 
   async ticket(
