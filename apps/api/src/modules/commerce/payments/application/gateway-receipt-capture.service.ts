@@ -25,6 +25,7 @@ import type { SettingsResolver } from '../../../control/settings/application/set
 import { gatewaySettlementDeadline } from '../domain/settlement.js';
 import {
   cancelAvailable,
+  cancelRetryNotBefore,
   cardChangeAvailable,
   type CardChangeAllowance,
   maskRefundCard,
@@ -466,8 +467,12 @@ export class GatewayReceiptCaptureService {
    * «❌ لغو فاکتور» (Round 6): a `gateway_provider_requests` row `CANCEL / REQUESTED`, which the
    * gateway worker sends. Re-decided under the payment's lock: this customer's PENDING payment
    * inside the CUSTOMER window (a review means a receipt, and a receipt means `processing`), a
-   * created invoice whose provider status is `pending`, no cancel in flight or lost, no receipt
-   * on its way. Returns whether a request was written.
+   * created invoice whose provider status is `pending`, no cancel in flight or applied, no
+   * receipt on its way. Returns whether a request was written.
+   *
+   * R11 A8 (owner): a previous cancel whose answer was lost, or that the provider rate-limited,
+   * does not stop this one — it is a NEW row (the in-flight index still allows one at a time),
+   * held back from the worker for `cancelRetryNotBefore` so it is not sent into the same trouble.
    */
   async requestCancel(
     scope: TenantContext,
@@ -502,7 +507,7 @@ export class GatewayReceiptCaptureService {
           kind: 'CANCEL',
           idempotencyKey: input.idempotencyKey,
           now,
-          claimedUntil: null,
+          claimedUntil: cancelRetryNotBefore(latest, now),
           refund: null,
         },
         tx,
@@ -516,7 +521,13 @@ export class GatewayReceiptCaptureService {
           entityType: 'Payment',
           entityId: open.payment.id,
           before: null,
-          after: { requestId: requested.id, state: requested.state, reason: 'CUSTOMER' },
+          after: {
+            requestId: requested.id,
+            state: requested.state,
+            reason: 'CUSTOMER',
+            // R11 A8: the cancel request this one follows, if any (a retry after a lost answer).
+            retryOf: latest === null ? null : latest.id,
+          },
           result: 'SUCCESS',
         },
         tx,

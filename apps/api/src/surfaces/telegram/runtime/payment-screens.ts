@@ -40,6 +40,7 @@ import {
   remainderReceiptAvailable,
 } from '../../../modules/commerce/payments/domain/tonpays-telegram.js';
 import { gatewaySettlementDeadline } from '../../../modules/commerce/payments/domain/settlement.js';
+import { failureStatusOf } from '../../../modules/commerce/payments/domain/payment-failure-outcome.js';
 import { rialitLinkDeadline } from '../../../modules/commerce/payments/domain/rialit.js';
 import {
   CARD_INVOICE_ROW,
@@ -213,6 +214,8 @@ function cardTransferScreen(
    * (`changeAllowance`) bound it like the manual switch.
    */
   const menu = mainMenuButton();
+  const cancelOffered =
+    facts !== null && windowOpen && cancelAvailable(invoice, cancelRequest, submissions);
   const actions = [
     copyExact,
     ...(copyCard === null ? [] : [copyCard]),
@@ -224,9 +227,7 @@ function cardTransferScreen(
     ...(facts !== null && windowOpen && receiptUploadAvailable(invoice, submissions)
       ? [receipt]
       : []),
-    ...(facts !== null && windowOpen && cancelAvailable(invoice, cancelRequest, submissions)
-      ? [cancel]
-      : []),
+    ...(cancelOffered ? [cancel] : []),
     menu,
   ];
   const copies = (button: CustomerButton): boolean => button !== copyExact && button !== copyCard;
@@ -242,10 +243,24 @@ function cardTransferScreen(
   if (cancelRequest !== null) {
     const cancelKey = cancelNoticeKey(cancelRequest, invoice);
     if (cancelKey !== null) {
+      /*
+       * R11 A8 (owner): a LOST answer is not a cancellation. While the invoice is still open as
+       * far as Nexa knows, the notice keeps «❌ لغو فاکتور» so the customer can ask again (the
+       * tap asks first, and re-decides under the payment's lock).
+       */
+      const retry =
+        cancelKey === 'bot.payment.gateway_cancel_unknown' && cancelOffered
+          ? [
+              {
+                ...inlineLabel('payment.gateway_cancel'),
+                data: `${GATEWAY_CANCEL_ASK_CALLBACK_PREFIX}${payment.id}`,
+              },
+            ]
+          : [];
       return {
         key: cancelKey,
         values: { reference },
-        buttons: [cardCheck(payment.id), mainMenuButton()],
+        buttons: [...retry, cardCheck(payment.id), mainMenuButton()],
         orderId,
         wizard,
       };
@@ -583,6 +598,19 @@ function failedCardScreen(
   const retry: CustomerButton =
     payment.orderId === null ? topupButton() : payMethodsButton(payment.orderId);
   if (facts?.latestCancel?.state === 'APPLIED') {
+    return screen('bot.payment.gateway_cancelled', [retry], 'NOTICE');
+  }
+  /*
+   * R11 A8: the customer's cancel whose answer was lost (or the retry the provider then refused
+   * as no longer pending) DID cancel it — the inquiry read `canceled` and failed the payment.
+   * The customer asked for exactly that, so it reads "cancelled", not "failed".
+   */
+  const asked = facts?.latestCancel ?? null;
+  if (
+    asked !== null &&
+    asked.requestedByNexa !== true &&
+    failureStatusOf(payment.resolutionNote) === 'canceled'
+  ) {
     return screen('bot.payment.gateway_cancelled', [retry], 'NOTICE');
   }
   if (invoice.creationState === 'CREATE_FAILED' && isBuyerConflictCode(invoice.creationErrorCode)) {

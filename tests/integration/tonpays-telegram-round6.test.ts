@@ -28,6 +28,7 @@ import { DrizzleGatewayInvoiceRepository } from '../../apps/api/src/modules/comm
 import { DrizzleGatewayProviderRequestRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-provider-request.repository';
 import { DrizzleServiceRefundRequestRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-service-refund-request.repository';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
+import { attemptWire } from '../../apps/api/src/surfaces/miniapp/projections';
 import {
   adminActorFor,
   createAdmin,
@@ -654,7 +655,7 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     }
   });
 
-  it('cancel: a cancel whose answer is lost is UNKNOWN, never sent again, and the next inquiry says what the invoice is', async () => {
+  it('cancel: a cancel whose answer is lost is UNKNOWN, never sent again by Nexa itself, and the next inquiry says what the invoice is', async () => {
     const { paymentId, message } = await cardOnScreen();
     fake.cancelMode = 'TIMEOUT';
     await tapOn(message, `gz:${paymentId}`);
@@ -1380,5 +1381,216 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     expect(await requests(attempt.payment.id, 'CANCEL')).toMatchObject([
       { state: 'REFUSED', error_code: 'nexa.not_pending' },
     ]);
+  });
+
+  // ------------------------------------------------------------------------------------
+  // R11 A8 (owner bug): a cancel whose answer was lost may be asked again
+  // ------------------------------------------------------------------------------------
+
+  /** The cancel's answer is lost (a timeout): one call, one UNKNOWN row. */
+  const lostCancel = async (paymentId: string, message: number) => {
+    fake.cancelMode = 'TIMEOUT';
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    await lane.runOnce(tenantA);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([{ state: 'UNKNOWN' }]);
+    expect(fake.cancels).toHaveLength(1);
+    fake.cancelMode = 'OK';
+  };
+  /** The spacing a retry waits for (`CANCEL_RETRY_BACKOFF_SECONDS`), and a little more. */
+  const pastRetrySpacing = () => clock.shift(31_000);
+  const UNKNOWN_PHRASE = 'پاسخ تون‌پی به درخواست لغو دریافت نشد';
+
+  it('R11 A8: a lost cancel keeps «❌ لغو فاکتور» on its notice and on the invoice; the retry is a NEW row, held for the spacing, sent ONCE, and cancels', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    await lostCancel(paymentId, message);
+    // The notice the worker edits in: the lost answer, and the button to ask again.
+    expect(String(lastOn(message)?.['text'])).toContain(UNKNOWN_PHRASE);
+    expect(markupOf(lastOn(message))).toContain(`gq:${paymentId}`);
+    // The provider still says pending: the owner's screen — copy amount, copy card AND cancel.
+    await inquireNow();
+    await tapOn(message, `gc:${paymentId}`);
+    expect(String(lastOn(message)?.['text'])).not.toContain(UNKNOWN_PHRASE);
+    expect(markupOf(lastOn(message))).toContain('copy_text');
+    expect(markupOf(lastOn(message))).toContain(`gq:${paymentId}`);
+    expect((await paymentOf(paymentId)).state).toBe('PENDING');
+
+    expect((await tapOn(message, `gq:${paymentId}`)).replyKey).toBe(
+      'bot.payment.gateway_cancel_confirm',
+    );
+    await tapOn(message, `gz:${paymentId}`);
+    expect(String(lastOn(message)?.['text'])).toContain('درخواست لغو');
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'UNKNOWN' },
+      { state: 'REQUESTED' },
+    ]);
+    // Within the spacing from the lost answer the worker leaves it.
+    const [held] = await rows<{ claimed_until: string | null }>(
+      sql`SELECT claimed_until FROM gateway_provider_requests
+           WHERE payment_id = ${paymentId} AND state = 'REQUESTED'`,
+    );
+    expect(held!.claimed_until).not.toBeNull();
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(1);
+    pastRetrySpacing();
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'UNKNOWN' },
+      { state: 'APPLIED' },
+    ]);
+    expect((await paymentOf(paymentId)).state).toBe('FAILED');
+    expect(String(lastOn(message)?.['text'])).toContain('فاکتور لغو شد');
+    expect(await walletEntries(paymentId)).toEqual([]);
+    // The retry's audit row names the lost cancel it follows.
+    const audits = await rows<{ after: { retryOf: string | null } }>(
+      sql`SELECT after FROM audit_logs WHERE action = 'gateway_invoice.cancel_requested'
+           AND entity_id = ${paymentId} ORDER BY occurred_at`,
+    );
+    expect(audits).toHaveLength(2);
+    expect(audits[0]!.after.retryOf).toBeNull();
+    expect(audits[1]!.after.retryOf).not.toBeNull();
+
+    /*
+     * A cancel button still on another message (one the worker did not edit — the tapped
+     * message itself is now a notice, whose old keyboard is stale and swallowed):
+     * «فاکتور قبلاً لغو شده», and nothing is sent.
+     */
+    const older = await tapOn(null, `gq:${paymentId}`);
+    expect(older.replyKey).toBe('bot.payment.gateway_cancel_already_cancelled');
+    expect((await tapOn(null, `gz:${paymentId}`)).replyKey).toBe(
+      'bot.payment.gateway_cancel_already_cancelled',
+    );
+    expect(String(lastOn(updateSeq)?.['text'])).toContain('فاکتور قبلاً لغو شده');
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+    expect(await requests(paymentId, 'CANCEL')).toHaveLength(2);
+  });
+
+  it('R11 A8: the lost cancel HAD cancelled it — the retry meets NOT_PENDING, the inquiry reads canceled, and the next tap says «فاکتور قبلاً لغو شده»', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    await lostCancel(paymentId, message);
+    // TonPays did cancel it; Nexa does not know yet (the next inquiry is not due).
+    firstInvoice().status = 'canceled';
+    await ctx.container.database.db.execute(
+      sql`UPDATE gateway_invoices SET next_inquiry_at = now() + interval '1 hour'
+           WHERE payment_id = ${paymentId}`,
+    );
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    pastRetrySpacing();
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'UNKNOWN' },
+      { state: 'REFUSED', error_code: 'NOT_PENDING' },
+    ]);
+    // A refusal is not an approval and not a cancellation: still open until the inquiry says.
+    expect((await paymentOf(paymentId)).state).toBe('PENDING');
+    await inquireNow();
+    expect((await paymentOf(paymentId)).state).toBe('FAILED');
+    expect(await rows(sql`SELECT resolution_note FROM payments WHERE id = ${paymentId}`)).toEqual([
+      { resolution_note: 'tonpays_telegram:canceled' },
+    ]);
+    expect(await walletEntries(paymentId)).toEqual([]);
+    // The worker edited the attempt into "cancelled" (the customer asked), not "failed".
+    expect(String(lastOn(message)?.['text'])).toContain('فاکتور لغو شد');
+    // A cancel button still on another message: «فاکتور قبلاً لغو شده».
+    expect((await tapOn(null, `gq:${paymentId}`)).replyKey).toBe(
+      'bot.payment.gateway_cancel_already_cancelled',
+    );
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+  });
+
+  it('R11 A8: two confirm taps at once after a lost cancel write ONE request and TonPays is asked ONCE more', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    await lostCancel(paymentId, message);
+    // One tap on the invoice and one on another message carrying the button: two turns that
+    // the wizard does not merge, so only the payment's lock and the in-flight index decide.
+    await Promise.all([tapOn(message, `gz:${paymentId}`), tapOn(null, `gz:${paymentId}`)]);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'UNKNOWN' },
+      { state: 'REQUESTED' },
+    ]);
+    pastRetrySpacing();
+    await lane.runOnce(tenantA);
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'UNKNOWN' },
+      { state: 'APPLIED' },
+    ]);
+    expect((await paymentOf(paymentId)).state).toBe('FAILED');
+    // One effect: the payment failed once.
+    expect(
+      await rows(
+        sql`SELECT id FROM outbox_messages
+             WHERE event_type = 'PaymentFailed' AND aggregate_id = ${paymentId}`,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('R11 A8: after PAID a cancel tap is refused in Persian, nothing is sent and nothing moves', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    await lostCancel(paymentId, message);
+    firstInvoice().status = 'completed';
+    firstInvoice().paid = true;
+    await inquireNow();
+    expect((await paymentOf(paymentId)).state).toBe('CONFIRMED');
+    const before = await walletEntries(paymentId);
+    // A cancel button still on another message (the tapped one now says paid, and is closed).
+    for (const data of [`gq:${paymentId}`, `gz:${paymentId}`]) {
+      expect((await tapOn(null, data)).replyKey, data).toBe('bot.payment.gateway_not_pending');
+      expect(String(lastOn(updateSeq)?.['text']), data).toContain('دیگر در انتظار پرداخت نیست');
+    }
+    pastRetrySpacing();
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(1);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([{ state: 'UNKNOWN' }]);
+    expect((await paymentOf(paymentId)).state).toBe('CONFIRMED');
+    expect(await walletEntries(paymentId)).toEqual(before);
+  });
+
+  it('R11 A8: a card change whose answer was lost keeps the card change and the cancel; both can be asked again', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    clock.shift(61_000);
+    fake.changeMode = 'TIMEOUT';
+    await tapOn(message, `gk:${paymentId}`);
+    await lane.runOnce(tenantA);
+    fake.changeMode = 'OK';
+    await tapOn(message, `gc:${paymentId}`);
+    // No card is shown (the change may have happened); the change and the cancel stay.
+    expect(markupOf(lastOn(message))).toContain(`gk:${paymentId}`);
+    expect(markupOf(lastOn(message))).toContain(`gq:${paymentId}`);
+    clock.shift(2 * 61_000);
+    await tapOn(message, `gk:${paymentId}`);
+    await lane.runOnce(tenantA);
+    expect(fake.changes).toHaveLength(2);
+    // And the cancel after a lost change, then a lost cancel, still goes through.
+    await lostCancel(paymentId, message);
+    expect(markupOf(lastOn(message))).toContain(`gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    clock.shift(2 * 61_000 + 31_000);
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+    expect((await paymentOf(paymentId)).state).toBe('FAILED');
+  });
+
+  it('R11 A8 (mini app): a lost cancel leaves the payment open there too — paid in the bot, where the cancel is; the applied retry closes it', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    await lostCancel(paymentId, message);
+    const open = await lane.attemptFor(tenantA, maryam, paymentId);
+    expect(open?.payment.state).toBe('PENDING');
+    expect(attemptWire(open!)).toMatchObject({
+      paysInChat: true,
+      invoiceReady: true,
+      payUrl: null,
+    });
+    await tapOn(message, `gz:${paymentId}`);
+    pastRetrySpacing();
+    await lane.runOnce(tenantA);
+    const closed = await lane.attemptFor(tenantA, maryam, paymentId);
+    expect(closed?.payment.state).toBe('FAILED');
   });
 });

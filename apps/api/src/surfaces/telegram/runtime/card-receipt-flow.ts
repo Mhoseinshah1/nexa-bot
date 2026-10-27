@@ -19,7 +19,10 @@ import type { CustomerRecord } from '../../../modules/commerce/customers/applica
 import { inlineLabel } from '../../../modules/commerce/messaging/application/inline-buttons.js';
 import type { ManualTransferInstruction } from '../../../modules/commerce/payments/application/payment.service.js';
 import type { GatewayAttemptView } from '../../../modules/commerce/payments/application/gateway-payment.service.js';
-import { decideCardChange } from '../../../modules/commerce/payments/domain/tonpays-telegram.js';
+import {
+  cancelTapRefusal,
+  decideCardChange,
+} from '../../../modules/commerce/payments/domain/tonpays-telegram.js';
 import { amountToTransfer } from '../../../modules/commerce/payments/domain/amount-to-transfer.js';
 import {
   CARD_INVOICE_ROW,
@@ -296,7 +299,7 @@ export async function gatewayCancelAsk(
     paymentId: view.payment.id,
     botInstanceId,
   });
-  if (!offered) return refusedCardTap(rt, scope, view);
+  if (!offered) return refusedCancelTap(rt, scope, view);
   return {
     key: 'bot.payment.gateway_cancel_confirm',
     values: { reference: paymentTrackingCode(view.payment) },
@@ -352,7 +355,41 @@ export async function gatewayCancel(
   const fresh = (await rt.deps.gateway.attemptFor(scope, customer.id, paymentId)) ?? view;
   return requested
     ? gatewayAttemptReply(rt, { ...fresh, reissued: true }, fresh.payment.orderId, scope)
-    : refusedCardTap(rt, scope, fresh);
+    : refusedCancelTap(rt, scope, fresh);
+}
+
+/**
+ * R11 A8: a cancel tap that was refused (`gq:` or `gz:`). A cancel button may still be on screen
+ * after the invoice's fate is known — a lost cancel answer keeps it drawn (owner), and an older
+ * message keeps whatever it had. A PAID invoice is refused in so many words and nothing moves;
+ * one Nexa KNOWS was cancelled says «فاکتور قبلاً لغو شده»; anything else redraws the attempt
+ * as it stands. Reads only: the refusal itself was decided under the payment's lock.
+ */
+async function refusedCancelTap(
+  rt: BotRuntime,
+  scope: TenantContext,
+  view: GatewayAttemptView,
+): Promise<PendingReply> {
+  const facts = await rt.deps.gateway.cardFactsFor(scope, view.invoice);
+  const reference = paymentTrackingCode(view.payment);
+  switch (cancelTapRefusal(view.payment, view.invoice, facts?.latestCancel ?? null)) {
+    case 'PAID':
+      return {
+        key: 'bot.payment.gateway_not_pending',
+        values: { reference },
+        buttons: [cardCheck(view.payment.id), mainMenuButton()],
+        orderId: null,
+      };
+    case 'ALREADY_CANCELLED':
+      return {
+        key: 'bot.payment.gateway_cancel_already_cancelled',
+        values: { reference },
+        buttons: [mainMenuButton()],
+        orderId: null,
+      };
+    case null:
+      return refusedCardTap(rt, scope, view);
+  }
 }
 
 /**
