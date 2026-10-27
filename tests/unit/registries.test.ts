@@ -365,6 +365,9 @@ describe('the feature flag registry', () => {
       // WP-A9. "Expires today", on by default; a flag for the same reason as the one above.
       'service_expiry_day_reminder',
       'service_expiry_reminders',
+      // R11 B2. Off by default; the mini app's usage chart, its history endpoint and the
+      // hourly snapshot written beside an existing usage read are reachable behind it.
+      'service_usage_chart',
       'service_usage_reminders',
       // R10 D5 (a). Off by default; the captcha gate in front of a new customer's turns
       // and the mini app's matching gate are reachable, and with it off nobody is asked.

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { moneySchema } from './money.js';
 import { ORDER_PURPOSES, ORDER_STATES } from './commerce.js';
-import { SERVICE_STATES } from './provisioning.js';
+import { SERVICE_STATES, USAGE_CHART_RANGES_DAYS } from './provisioning.js';
 import { PAYMENT_GATEWAY_PROVIDERS } from './payment-gateways.js';
 import { PAYMENT_METHODS, PAYMENT_STATES } from './payment.js';
 import { TICKET_MESSAGE_MAX_LENGTH, TICKET_STATUSES } from './tickets.js';
@@ -115,6 +115,8 @@ export const MINIAPP_ROUTES = {
   serviceLocation: '/services/:serviceId/location',
   // Round 10, D1: switch automatic renewal on or off for one service.
   serviceAutoRenew: '/services/:serviceId/auto-renew',
+  // R11 B2: the used volume over the last 7 or 30 days, from the stored usage snapshots.
+  serviceUsage: '/services/:serviceId/usage',
   wallet: '/wallet',
   walletEntries: '/wallet/entries',
   walletTopupQuote: '/wallet/topup/quote',
@@ -520,6 +522,35 @@ export const miniAppAutoRenewRequestSchema = z.object({
   expected: moneySchema.optional(),
 });
 
+/**
+ * R11 B2: one point of the usage chart -- the used volume the panel reported at `at`. Never a
+ * connected-device count, never a rate: only the figure Nexa stored.
+ */
+export const miniAppUsagePointSchema = z.object({ at: isoSchema, usedBytes: bytesSchema });
+
+export const miniAppUsageQuerySchema = z.object({
+  days: z.coerce
+    .number()
+    .int()
+    .refine((value) => (USAGE_CHART_RANGES_DAYS as readonly number[]).includes(value))
+    .default(7),
+});
+
+/**
+ * The chart's data: points oldest first inside `[from, to)`. `totalBytes` and `expiresAt` are
+ * the allowance and deadline of the NEWEST point (null = unlimited / no deadline), so the chart
+ * can draw its ceiling.
+ */
+export const miniAppUsageHistorySchema = z.object({
+  days: z.number().int(),
+  from: isoSchema,
+  to: isoSchema,
+  points: z.array(miniAppUsagePointSchema),
+  totalBytes: bytesSchema.nullable(),
+  expiresAt: isoSchema.nullable(),
+});
+export type MiniAppUsageHistory = z.infer<typeof miniAppUsageHistorySchema>;
+
 export const miniAppServiceDetailSchema = miniAppServiceSummarySchema.extend({
   /** The subscription link, only while the service is deliverable. A secret: never logged. */
   subscriptionUrl: z.string().nullable(),
@@ -533,6 +564,8 @@ export const miniAppServiceDetailSchema = miniAppServiceSummarySchema.extend({
   canChangeLocation: z.boolean(),
   /** Round 10, D1: «تمدید خودکار» for this service (`MINIAPP_ROUTES.serviceAutoRenew`). */
   autoRenew: miniAppAutoRenewSchema,
+  /** R11 B2: whether the usage chart is drawn (`service_usage_chart` is on). */
+  usageChart: z.boolean(),
 });
 export type MiniAppServiceDetail = z.infer<typeof miniAppServiceDetailSchema>;
 

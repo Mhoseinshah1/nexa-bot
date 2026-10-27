@@ -562,6 +562,22 @@ export const FEATURE_FLAGS = [
     configuredBy: ['miniapp.init_data_max_age_seconds', 'miniapp.session_ttl_minutes'],
   },
   {
+    key: 'service_usage_chart',
+    description:
+      'R11 B2: a usage chart on the mini app\u2019s service screen \u2014 used volume over the last 7 ' +
+      'or 30 days. On, every usage figure Nexa ALREADY reads from a panel (the scheduled usage ' +
+      'sync, a renewal that returns usage, a card\u2019s live check) is also kept as a snapshot, ' +
+      'at most one per service per hour, for 90 days; it adds no panel request and no polling ' +
+      'loop. Off by default: no snapshot is written, the chart is not drawn and the history ' +
+      'endpoint answers as if it did not exist. Snapshots already stored are kept (and still ' +
+      'expire after 90 days) while it is off, and the chart shows them again when it is back on.',
+    defaultEnabled: false,
+    // LOCAL: it adds a chart to one screen and one small write beside an existing one; no
+    // customer is charged, messaged or refused anything either way.
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
+  {
     key: 'gift_cards',
     description:
       'R10 D4: gift cards \u2014 wallet top-up codes an operator mints in batches in the Web ' +
