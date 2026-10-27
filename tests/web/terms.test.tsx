@@ -264,6 +264,7 @@ describe('Customer 360’s terms line', () => {
     locationOverride: null,
     marketingOptOutAt: null,
     personalDiscount: { percent: 0, setAt: null, enabled: false },
+    reminders: { optOutAt: null, enabled: false },
   };
 
   it('says a customer must accept the current version, and when they last accepted one', () => {

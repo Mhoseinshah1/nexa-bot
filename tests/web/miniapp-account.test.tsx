@@ -660,6 +660,66 @@ describe('profile', () => {
     expect(screen.queryByText(text('miniapp.profile_trial'))).toBeNull();
   });
 
+  it('R11 B6: draws the reminder switch only while the installation offers it', async () => {
+    serve({ 'GET /preferences/reminders': () => ({ offered: false, enabled: true }) });
+    await mount();
+    tabProfile();
+    await screen.findByText(text('miniapp.profile_wallet_history'));
+    expect(screen.queryByText(text('miniapp.profile_reminders_title'))).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: text('miniapp.profile_reminders_disable') }),
+    ).toBeNull();
+  });
+
+  it('R11 B6: a failed reminder read hides only that row', async () => {
+    serve({ 'GET /preferences/reminders': () => refuse(500, 'internal.unhandled') });
+    await mount();
+    tabProfile();
+    await screen.findByText(text('miniapp.profile_wallet_history'));
+    expect(screen.queryByText(text('miniapp.profile_reminders_title'))).toBeNull();
+  });
+
+  it('R11 B6: switches the reminders off and on, sending only the wanted state', async () => {
+    let enabled = true;
+    const calls = serve({
+      'GET /preferences/reminders': () => ({ offered: true, enabled }),
+      'POST /preferences/reminders': (_url, init) => {
+        enabled = (JSON.parse(String(init.body)) as { enabled: boolean }).enabled;
+        return { offered: true, enabled };
+      },
+    });
+    await mount();
+    tabProfile();
+    await screen.findByText(text('miniapp.profile_reminders_on'));
+    fireEvent.click(
+      screen.getByRole('button', { name: text('miniapp.profile_reminders_disable') }),
+    );
+    await screen.findByText(text('miniapp.profile_reminders_off'));
+    // Only the wanted state travels: whose setting it is comes from the session.
+    expect(
+      calls.filter((call) => call.method === 'POST' && call.route === '/preferences/reminders')[0]
+        ?.body,
+    ).toEqual({
+      enabled: false,
+    });
+    fireEvent.click(screen.getByRole('button', { name: text('miniapp.profile_reminders_enable') }));
+    await screen.findByText(text('miniapp.profile_reminders_on'));
+  });
+
+  it('R11 B6: says so when the choice stopped being offered between the read and the tap', async () => {
+    serve({
+      'GET /preferences/reminders': () => ({ offered: true, enabled: true }),
+      'POST /preferences/reminders': () => refuse(409, 'miniapp.route_unavailable'),
+    });
+    await mount();
+    tabProfile();
+    fireEvent.click(
+      await screen.findByRole('button', { name: text('miniapp.profile_reminders_disable') }),
+    );
+    expect(await screen.findByText(text('miniapp.profile_reminders_unavailable'))).toBeTruthy();
+    expect(screen.getByText(text('miniapp.profile_reminders_on'))).toBeTruthy();
+  });
+
   it('opens the wallet and the referral screens from its rows', async () => {
     serve({
       'GET /wallet': () => wallet(),

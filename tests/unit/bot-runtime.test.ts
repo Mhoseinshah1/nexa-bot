@@ -1038,6 +1038,15 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.referral.gift_nothing',
       'bot.referral.share_button',
       'bot.referral.unconfigured',
+      /*
+       * Round 11 B6, reviewed: the customer's reminder switch. Each names only what this head
+       * does — the expiry and volume reminders stop or resume — and promises no flow beyond it.
+       */
+      'bot.reminders.opt_in_button',
+      'bot.reminders.opt_out_button',
+      'bot.reminders.opted_in',
+      'bot.reminders.opted_out',
+      'bot.reminders.unavailable',
       'bot.request_unavailable',
       'bot.service.action_in_progress',
       'bot.service.action_not_allowed',

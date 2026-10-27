@@ -44,6 +44,7 @@ const overview = (overrides: Record<string, unknown> = {}) => ({
     locationOverride: null,
     marketingOptOutAt: null,
     personalDiscount: { percent: 0, setAt: null, enabled: false },
+    reminders: { optOutAt: null, enabled: false },
     terms: { available: false },
     ...overrides,
   },
@@ -228,6 +229,56 @@ describe('Customer 360 — the customer page', () => {
         'قابلیت «تخفیف شخصی مشتری» خاموش است؛ این درصد فعلاً روی هیچ سفارشی اعمال نمی‌شود',
       ),
     ).toBeTruthy();
+  });
+
+  it('R11 B6: turns the customer’s expiry and volume reminders off with a reason, sending an idempotency key', async () => {
+    const api = stubApi(
+      routes([
+        {
+          url: `/users/${ID}/reminders`,
+          body: {
+            ...overview({
+              reminders: { optOutAt: '2026-10-27T10:00:00.000Z', enabled: true },
+            }),
+            changed: true,
+          },
+        },
+      ]),
+    );
+    renderPage(<UserDetailPage id={ID} {...OFF} mayEditNotifications denied={false} />);
+    await openC360Tab('controls');
+    expect(await screen.findByText('یادآوری انقضا و حجم')).toBeTruthy();
+    fireEvent.click(await screen.findByRole('button', { name: 'قطع یادآوری انقضا و حجم' }));
+    const confirm = screen.getByRole('button', { name: 'تأیید' });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('دلیل (اجباری)'), {
+      target: { value: 'درخواست مشتری' },
+    });
+    fireEvent.click(confirm);
+    await waitFor(() =>
+      expect(api.calls.some((call) => call.url.includes('/reminders'))).toBe(true),
+    );
+    const sent = api.calls.find((call) => call.url.includes('/reminders'));
+    expect(sent?.method).toBe('POST');
+    expect(sent?.body).toMatchObject({ remindersOptedOut: true, reason: 'درخواست مشتری' });
+    expect(typeof (sent?.body as { idempotencyKey?: unknown }).idempotencyKey).toBe('string');
+    // The page now shows the stored state the server answered with, and the way back.
+    expect(
+      await screen.findByRole('button', { name: 'فعال کردن یادآوری انقضا و حجم' }),
+    ).toBeTruthy();
+  });
+
+  it('R11 B6: draws no reminder control without users.notifications.edit, and says when the feature is off', async () => {
+    stubApi(
+      routes([], overview({ reminders: { optOutAt: '2026-10-27T10:00:00.000Z', enabled: false } })),
+    );
+    renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
+    await openC360Tab('controls');
+    expect(await screen.findByText('یادآوری انقضا و حجم')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'قطع یادآوری انقضا و حجم' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'فعال کردن یادآوری انقضا و حجم' })).toBeNull();
+    expect(screen.getByText('قطع کرده است', { exact: false })).toBeTruthy();
+    expect(screen.getByText('فعلاً اعمال نمی‌شود (امکان خاموش است)')).toBeTruthy();
   });
 
   it('R10 D3: reads a typed percent as a whole number from 0 to 100, or nothing', () => {

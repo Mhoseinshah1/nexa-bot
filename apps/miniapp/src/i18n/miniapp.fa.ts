@@ -323,6 +323,13 @@ export const MINIAPP_FA = {
   'miniapp.profile_wallet_history': 'تراکنش‌ها و پرداخت‌ها',
   'miniapp.profile_referral': 'دعوت دوستان',
   'miniapp.profile_trial': 'سرویس تست رایگان',
+  'miniapp.profile_reminders_title': 'یادآوری‌ها',
+  'miniapp.profile_reminders_on': 'یادآوری نزدیک شدن به پایان زمان و حجم سرویس‌های شما فعال است.',
+  'miniapp.profile_reminders_off':
+    'یادآوری پایان زمان و حجم سرویس‌های شما قطع است. پیام‌های پرداخت، تحویل سرویس و پشتیبانی همچنان ارسال می‌شود.',
+  'miniapp.profile_reminders_disable': 'قطع یادآوری',
+  'miniapp.profile_reminders_enable': 'فعال‌سازی یادآوری',
+  'miniapp.profile_reminders_unavailable': 'در حال حاضر امکان تغییر این گزینه وجود ندارد.',
 
   'miniapp.referral_title': 'دعوت دوستان',
   'miniapp.referral_inactive': 'برنامهٔ معرفی دوستان در حال حاضر فعال نیست.',

@@ -69,6 +69,7 @@ const overview = {
     locationOverride: null,
     marketingOptOutAt: null,
     personalDiscount: { percent: 0, setAt: null, enabled: false },
+    reminders: { optOutAt: null, enabled: false },
     terms: { available: false },
   },
 };

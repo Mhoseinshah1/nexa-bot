@@ -6,6 +6,7 @@ import {
   customerLocationOverrideRequestSchema,
   customerManualOrderRequestSchema,
   customerNotificationsRequestSchema,
+  customerRemindersRequestSchema,
   customerPersonalDiscountRequestSchema,
   customerPhoneVerificationRequestSchema,
   customerServicesToggleRequestSchema,
@@ -123,6 +124,27 @@ export class Customer360Controller {
       idempotencyKey: command.idempotencyKey,
       customerId: id,
       optedOut: command.marketingOptedOut,
+      reason: command.reason,
+    });
+    return { overview: toOverview(result.overview), changed: result.changed };
+  }
+
+  /**
+   * Round 11 B6: the service expiry / volume reminder switch, set for the customer. Same
+   * permission as the promotional preference (`users.notifications.edit`), charged by the service.
+   */
+  @Post('users/:id/reminders')
+  async reminders(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<{ overview: CustomerOverviewResponse; changed: boolean }> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const command = customerRemindersRequestSchema.parse(body);
+    const result = await this.container.customerControls.setReminderPreference(scope, actor, {
+      idempotencyKey: command.idempotencyKey,
+      customerId: id,
+      optedOut: command.remindersOptedOut,
       reason: command.reason,
     });
     return { overview: toOverview(result.overview), changed: result.changed };
@@ -390,6 +412,10 @@ function toOverview(overview: CustomerOverview): CustomerOverviewResponse {
         ? null
         : { ...locationOverride.limits, setAt: locationOverride.setAt.toISOString() },
     marketingOptOutAt: customer.marketingOptOutAt?.toISOString() ?? null,
+    reminders: {
+      optOutAt: overview.reminders.optOutAt?.toISOString() ?? null,
+      enabled: overview.reminders.enabled,
+    },
     personalDiscount: {
       percent: overview.personalDiscount.percent,
       setAt: overview.personalDiscount.setAt?.toISOString() ?? null,

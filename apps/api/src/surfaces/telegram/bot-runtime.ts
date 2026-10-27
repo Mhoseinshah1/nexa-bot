@@ -171,6 +171,8 @@ export {
   MAIN_MENU_CALLBACK_DATA,
   MARKETING_OPT_OUT_CALLBACK_DATA,
   MARKETING_OPT_IN_CALLBACK_DATA,
+  REMINDERS_OPT_OUT_CALLBACK_DATA,
+  REMINDERS_OPT_IN_CALLBACK_DATA,
   MEMBERSHIP_CHECK_CALLBACK_DATA,
   TERMS_ACCEPT_CALLBACK_PREFIX,
   START_CAPTCHA_CALLBACK_PREFIX,
@@ -1454,6 +1456,17 @@ export class BotRuntime {
         actor,
         customer,
         command.intent === 'MARKETING_OPT_OUT',
+        input.idempotencyKey,
+      );
+    }
+    // Round 11, B6: the customer's own switch for the expiry / volume reminders.
+    if (command.intent === 'REMINDERS_OPT_OUT' || command.intent === 'REMINDERS_OPT_IN') {
+      return startMenuFlow.reminderPreference(
+        this,
+        scope,
+        actor,
+        customer,
+        command.intent === 'REMINDERS_OPT_OUT',
         input.idempotencyKey,
       );
     }

@@ -682,6 +682,7 @@ import {
   type CustomerManualOrderRequest,
   type CustomerManualOrderResponse,
   type CustomerNotificationsRequest,
+  type CustomerRemindersRequest,
   type CustomerPersonalDiscountRequest,
   type CustomerOverviewResponse,
   type CustomerPhoneVerificationRequest,
@@ -5121,6 +5122,14 @@ export function setCustomerNotifications(
   body: CustomerNotificationsRequest,
 ): Promise<Customer360ControlResponse> {
   return post(CUSTOMER_360_ROUTES.notifications(id), body, customer360ControlResponseSchema);
+}
+
+/** Round 11 B6: a customer's expiry / volume reminder switch (`users.notifications.edit`). */
+export function setCustomerReminders(
+  id: string,
+  body: CustomerRemindersRequest,
+): Promise<Customer360ControlResponse> {
+  return post(CUSTOMER_360_ROUTES.reminders(id), body, customer360ControlResponseSchema);
 }
 
 /** R10 D3: a customer's personal discount percent (`users.discount.edit`). */

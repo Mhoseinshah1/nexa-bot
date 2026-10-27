@@ -111,6 +111,8 @@ import {
   MANUAL_PAY_CALLBACK_PREFIX,
   MARKETING_OPT_IN_CALLBACK_DATA,
   MARKETING_OPT_OUT_CALLBACK_DATA,
+  REMINDERS_OPT_IN_CALLBACK_DATA,
+  REMINDERS_OPT_OUT_CALLBACK_DATA,
   MEMBERSHIP_CHECK_CALLBACK_DATA,
   ORDER_CALLBACK_PREFIX,
   PAY_METHODS_CALLBACK_PREFIX,
@@ -408,6 +410,12 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     }
     if (data === MARKETING_OPT_IN_CALLBACK_DATA) {
       return { intent: 'MARKETING_OPT_IN', targetId: null, callbackQueryId: id };
+    }
+    if (data === REMINDERS_OPT_OUT_CALLBACK_DATA) {
+      return { intent: 'REMINDERS_OPT_OUT', targetId: null, callbackQueryId: id };
+    }
+    if (data === REMINDERS_OPT_IN_CALLBACK_DATA) {
+      return { intent: 'REMINDERS_OPT_IN', targetId: null, callbackQueryId: id };
     }
     if (data === MAIN_MENU_CALLBACK_DATA) {
       return { intent: 'MAIN_MENU', targetId: null, callbackQueryId: id };

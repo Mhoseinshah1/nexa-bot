@@ -24,9 +24,14 @@ import {
   TERMS_ACCEPT_CALLBACK_PREFIX,
   MARKETING_OPT_IN_CALLBACK_DATA,
   MARKETING_OPT_OUT_CALLBACK_DATA,
+  REMINDERS_OPT_IN_CALLBACK_DATA,
+  REMINDERS_OPT_OUT_CALLBACK_DATA,
 } from './callbacks.js';
 import { mainMenuButton } from './keyboards.js';
-import { MARKETING_OPT_OUT_DISABLED_REASON } from '../../../modules/commerce/customers/application/customer.service.js';
+import {
+  MARKETING_OPT_OUT_DISABLED_REASON,
+  REMINDER_OPT_OUT_DISABLED_REASON,
+} from '../../../modules/commerce/customers/application/customer.service.js';
 import type { CustomerRecord } from '../../../modules/commerce/customers/application/ports.js';
 import type { StartGreetingKey } from '../../../modules/commerce/messaging/application/start-greeting.js';
 import type { BotRuntime } from '../bot-runtime.js';
@@ -247,6 +252,67 @@ export async function marketingPreference(
     key: optedOut ? 'bot.marketing.opted_out' : 'bot.marketing.opted_in',
     values: {},
     buttons: [marketingPreferenceButton(optedOut), mainMenuButton()],
+    orderId: null,
+  };
+}
+
+/** Round 11, B6: the service refused the change because the switch is off. */
+export function isReminderOptOutDisabled(error: unknown): boolean {
+  return isNexaError(error) && error.details['reason'] === REMINDER_OPT_OUT_DISABLED_REASON;
+}
+
+/**
+ * Round 11, B6: the button that turns the customer's expiry / volume reminders back on when
+ * they are off, and off otherwise. One button, the reverse of the state, like the promotional
+ * one — the screen never shows a choice that is already the case.
+ */
+export function reminderPreferenceButton(optedOut: boolean): CustomerButton {
+  return optedOut
+    ? { ...inlineLabel('reminders.opt_in'), data: REMINDERS_OPT_IN_CALLBACK_DATA }
+    : { ...inlineLabel('reminders.opt_out'), data: REMINDERS_OPT_OUT_CALLBACK_DATA };
+}
+
+/**
+ * Round 11, B6: the customer's own reminder opt-out or opt-in, under the update's key. The
+ * subject is the customer the signed update resolved to — the button carries no id, so no tap
+ * can name anybody else. The reply says what changed and carries the way back; a repeated tap
+ * is answered with the same reply because the preference already holds.
+ *
+ * While the installation does not offer the choice (`customer_reminder_opt_out` off), an old
+ * button is answered and changes nothing; the service decides again in its transaction and its
+ * refusal (the switch moved between the two reads) is answered the same way.
+ */
+export async function reminderPreference(
+  rt: BotRuntime,
+  scope: TenantContext,
+  actor: ActorContext,
+  customer: CustomerRecord,
+  optedOut: boolean,
+  idempotencyKey: string,
+): Promise<PendingReply> {
+  const unavailable: PendingReply = {
+    key: 'bot.reminders.unavailable',
+    values: {},
+    buttons: [mainMenuButton()],
+    orderId: null,
+  };
+  if (!(await rt.deps.customers.remindersOptOutAllowed(scope))) return unavailable;
+  try {
+    // The update's key is already spent by `resolveFromUpdate` under this surface: the
+    // preference is a second command of the same turn, so it takes the turn's sub-key.
+    await rt.deps.customers.setRemindersOptOut(scope, actor, {
+      idempotencyKey: `${idempotencyKey}:reminders`,
+      customerId: customer.id,
+      optedOut,
+    });
+  } catch (error) {
+    if (isReminderOptOutDisabled(error)) return unavailable;
+    throw error;
+  }
+  return {
+    key: optedOut ? 'bot.reminders.opted_out' : 'bot.reminders.opted_in',
+    values: {},
+    buttons: [reminderPreferenceButton(optedOut), mainMenuButton()],
     orderId: null,
   };
 }

@@ -148,7 +148,7 @@ export interface CustomerServiceDeps {
   readonly features?: {
     isEnabled(
       scope: TenantContext,
-      key: typeof MARKETING_OPT_OUT_FLAG,
+      key: typeof MARKETING_OPT_OUT_FLAG | typeof REMINDER_OPT_OUT_FLAG,
       tx?: unknown,
     ): Promise<boolean>;
   };
@@ -156,6 +156,16 @@ export interface CustomerServiceDeps {
 
 /** Spec §9: the switch that lets a customer stop MARKETING broadcasts themselves. */
 export const MARKETING_OPT_OUT_FLAG = 'customer_marketing_opt_out' as const;
+
+/**
+ * Round 11, B6: the switch that lets a customer turn their own service expiry / volume
+ * reminders off. OFF by default — the opposite default of the promotional one, because this is
+ * a new feature, not the behaviour before it existed.
+ */
+export const REMINDER_OPT_OUT_FLAG = 'customer_reminder_opt_out' as const;
+
+/** Round 11, B6: the refusal `setRemindersOptOut` answers while the switch is off. */
+export const REMINDER_OPT_OUT_DISABLED_REASON = 'REMINDER_OPT_OUT_DISABLED';
 
 /**
  * Spec §9: the refusal `setMarketingOptOut` answers while the switch is off. A conflict, not
@@ -663,6 +673,142 @@ export class CustomerService {
   async marketingOptOutAllowed(scope: TenantContext, tx?: unknown): Promise<boolean> {
     if (this.deps.features === undefined) return true;
     return this.deps.features.isEnabled(scope, MARKETING_OPT_OUT_FLAG, tx);
+  }
+
+  /**
+   * Round 11, B6: whether a customer may change their reminder preference right now. A
+   * courtesy for the surface (draw the button or not); the write decides again inside its own
+   * transaction. Absent `features` reads as OFF — the flag's default — so a narrow test wiring
+   * never offers the choice by accident.
+   */
+  async remindersOptOutAllowed(scope: TenantContext, tx?: unknown): Promise<boolean> {
+    if (this.deps.features === undefined) return false;
+    return this.deps.features.isEnabled(scope, REMINDER_OPT_OUT_FLAG, tx);
+  }
+
+  /**
+   * Round 11, B6: the customer's OWN switch for the service expiry and volume reminders, from
+   * their Telegram turn or their mini-app session.
+   *
+   * Authorised like `setMarketingOptOut` (`maintenance.run`, the surface acting as SYSTEM_JOB):
+   * the customer named is the one the update or session resolved, never one a request chose,
+   * so a customer can change only their own setting. Governs the service reminder sweep and
+   * nothing else — a payment, delivery, wallet, security, ticket or administrator message is a
+   * fact about their account and still arrives. Idempotent under the caller's key (a replay
+   * answers the first result) and a conditional UPDATE (a second tap changes nothing and says
+   * so). Refused, inside its transaction, while the feature flag is off.
+   */
+  async setRemindersOptOut(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly customerId: string;
+      readonly optedOut: boolean;
+    },
+  ): Promise<{ readonly customer: CustomerRecord; readonly changed: boolean }> {
+    const customerId = this.customerId(input.customerId);
+    const requestHash = hashRequest({ customerId, remindersOptOut: input.optedOut });
+    await this.deps.guard.check(scope, actor, RESOLVE_CUSTOMER_PERMISSION);
+    const namespace = actor.surface;
+    const replay = await this.deps.idempotency.find<{ customerId: string; changed: boolean }>(
+      scope,
+      namespace,
+      input.idempotencyKey,
+      requestHash,
+    );
+    if (replay !== null) {
+      const replayed = await this.deps.repository.findById(
+        scope,
+        replay.result.customerId as UserId,
+      );
+      if (replayed !== null) return { customer: replayed, changed: replay.result.changed };
+    }
+    const now = this.deps.clock.now();
+    const action = input.optedOut ? 'customer.reminders_opt_out' : 'customer.reminders_opt_in';
+    return runAuthorizedMutation(
+      {
+        uow: this.deps.uow,
+        guard: this.deps.guard,
+        audit: this.deps.audit,
+        opsLog: this.deps.opsLog,
+        sessions: this.deps.sessions,
+        clock: this.deps.clock,
+      },
+      scope,
+      actor,
+      RESOLVE_CUSTOMER_PERMISSION,
+      { action, entityType: 'Customer', entityId: customerId },
+      async (tx) => {
+        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+            'This installation has stopped accepting work.',
+          );
+        }
+        /*
+         * Authoritative, inside the transaction: while the installation does not offer the
+         * choice, a stale button or an old mini-app screen changes NOTHING, and the stored
+         * preference is kept exactly as it is.
+         */
+        if (!(await this.remindersOptOutAllowed(scope, tx))) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+            'This installation does not let customers change their reminder preference.',
+            { reason: REMINDER_OPT_OUT_DISABLED_REASON },
+          );
+        }
+        const before = await this.deps.repository.findById(scope, customerId, tx);
+        if (before === null) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+        }
+        const changed = await this.deps.repository.setRemindersOptOut(
+          scope,
+          customerId,
+          input.optedOut,
+          now,
+          tx,
+        );
+        const after = await this.deps.repository.findById(scope, customerId, tx);
+        if (after === null) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+        }
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action,
+            entityType: 'Customer',
+            entityId: customerId,
+            before: { remindersOptOutAt: before.remindersOptOutAt?.toISOString() ?? null },
+            after: {
+              remindersOptOutAt: after.remindersOptOutAt?.toISOString() ?? null,
+              changed,
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        if (changed) {
+          await this.deps.outbox.write(tx, actor, {
+            eventType: 'CustomerReminderOptOutChanged',
+            aggregateType: 'Customer',
+            aggregateId: customerId,
+            payload: { optedOut: input.optedOut },
+          });
+        }
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          namespace,
+          input.idempotencyKey,
+          requestHash,
+          { customerId, changed },
+          tx,
+        );
+        return { customer: after, changed };
+      },
+    );
   }
 
   async setMarketingOptOut(

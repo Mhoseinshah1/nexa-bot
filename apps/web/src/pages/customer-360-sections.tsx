@@ -29,6 +29,7 @@ import {
   setCustomerNotifications,
   setCustomerPersonalDiscount,
   setCustomerPhone,
+  setCustomerReminders,
   toggleCustomerServices,
   transferCustomer,
 } from '../api/client';
@@ -217,6 +218,8 @@ type ControlKind =
   | 'UNLOCATION'
   | 'MKT_OUT'
   | 'MKT_IN'
+  | 'REMIND_OUT'
+  | 'REMIND_IN'
   | 'DISCOUNT';
 
 /**
@@ -323,6 +326,14 @@ export function CustomerControlsCard({
             idempotencyKey: submission.current({ kind, ...body }),
           });
         }
+        case 'REMIND_OUT':
+        case 'REMIND_IN': {
+          const body = { remindersOptedOut: kind === 'REMIND_OUT', reason: note };
+          return setCustomerReminders(customerId, {
+            ...body,
+            idempotencyKey: submission.current({ kind, ...body }),
+          });
+        }
         case 'DISCOUNT': {
           // `ready` below refuses to send an invalid percent; the server decides again.
           const body = { percent: parsePersonalDiscountPercent(percentText) ?? -1, reason: note };
@@ -380,6 +391,7 @@ export function CustomerControlsCard({
   const exempt = overview?.channelMembershipExemptAt ?? null;
   const verified = overview?.phone ?? null;
   const optedOut = overview?.marketingOptOutAt ?? null;
+  const reminders = overview?.reminders ?? null;
   const personal = overview?.personalDiscount ?? null;
   const limitText =
     location === null
@@ -446,6 +458,23 @@ export function CustomerControlsCard({
               optedOut === null
                 ? { label: t('web.c360_notifications_off_action'), kind: 'MKT_OUT' }
                 : { label: t('web.c360_notifications_on_action'), kind: 'MKT_IN' },
+              mayEditNotifications,
+            ),
+            row(
+              t('web.c360_reminders'),
+              reminders === null || reminders.optOutAt === null ? (
+                t('web.c360_reminders_on')
+              ) : (
+                <span>
+                  {t('web.c360_reminders_off')}{' '}
+                  {!reminders.enabled && (
+                    <Badge tone="warn">{t('web.c360_reminders_feature_off')}</Badge>
+                  )}
+                </span>
+              ),
+              reminders === null || reminders.optOutAt === null
+                ? { label: t('web.c360_reminders_off_action'), kind: 'REMIND_OUT' }
+                : { label: t('web.c360_reminders_on_action'), kind: 'REMIND_IN' },
               mayEditNotifications,
             ),
             row(
@@ -742,6 +771,8 @@ const ACTION_LABELS: Readonly<Record<string, WebKey>> = {
   'customer.channel_exemption.revoke': 'web.c360_action_unexempt',
   'customer.marketing_opt_out': 'web.c360_action_marketing_out',
   'customer.marketing_opt_in': 'web.c360_action_marketing_in',
+  'customer.reminders_opt_out': 'web.c360_action_reminders_out',
+  'customer.reminders_opt_in': 'web.c360_action_reminders_in',
   'customer.personal_discount.set': 'web.c360_action_personal_discount_set',
   'customer.terms_accept': 'web.c360_action_terms_accept',
   'reseller.register': 'web.c360_action_reseller_register',

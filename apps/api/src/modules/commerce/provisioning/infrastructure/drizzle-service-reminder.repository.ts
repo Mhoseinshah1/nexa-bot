@@ -41,6 +41,8 @@ interface CandidateRow {
   readonly baseline_used_bytes?: string | null;
   /** Round 5A-2: an imported service with no baseline row. */
   readonly import_unproven?: boolean | null;
+  /** Round 11, B6: the customer's stored reminder opt-out (the two candidate queries). */
+  readonly reminders_opted_out?: boolean | null;
 }
 
 /**
@@ -82,6 +84,16 @@ const IMPORT_BASELINE_COLUMNS = sql`
   END AS baseline_used_bytes,
   (s.source <> 'NEXA' AND b.service_id IS NULL) AS import_unproven`;
 
+/**
+ * Round 11, B6: whether the owner of the service aliased `s` turned the reminders off, selected
+ * beside the candidate so the sweep's decision and the query's row cannot disagree. A missing
+ * customer row reads false: nothing is withheld on a guess.
+ */
+const REMINDERS_OPTED_OUT_COLUMN = sql`
+  COALESCE((SELECT cu.reminders_opt_out_at IS NOT NULL FROM customers cu
+            WHERE cu.tenant_id = s.tenant_id AND cu.id = s.customer_id), false)
+    AS reminders_opted_out`;
+
 function toCandidate(row: CandidateRow): ServiceReminderCandidate {
   const limit = BigInt(row.traffic_limit_bytes);
   return {
@@ -110,6 +122,7 @@ function toCandidate(row: CandidateRow): ServiceReminderCandidate {
     trafficUsedBytes: BigInt(row.traffic_used_bytes),
     basis: { expiresAt: row.expires_at, trafficLimitBytes: limit },
     importUnproven: row.import_unproven === true,
+    remindersOptedOut: row.reminders_opted_out === true,
     importBaseline:
       row.baseline_at === undefined || row.baseline_at === null
         ? null
@@ -193,7 +206,7 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
       SELECT c.id, c.customer_id, c.provider_username, c.expires_at,
              c.traffic_limit_bytes, c.traffic_used_bytes,
              c.day_start AS expiry_day_starts_at, c.baseline_at, c.baseline_used_bytes,
-             c.import_unproven
+             c.import_unproven, c.reminders_opted_out
       FROM (
         SELECT s.id, s.tenant_id, s.customer_id, s.provider_username, s.expires_at,
                s.traffic_limit_bytes, s.traffic_used_bytes,
@@ -202,7 +215,8 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
                    AT TIME ZONE t.display_timezone,
                  s.expires_at - make_interval(secs => ${EXPIRY_DAY_MIN_NOTICE_MS / 1000})
                ) AS day_start,
-               ${IMPORT_BASELINE_COLUMNS}
+               ${IMPORT_BASELINE_COLUMNS},
+               ${REMINDERS_OPTED_OUT_COLUMN}
         FROM services s
         JOIN tenants t ON t.id = s.tenant_id
         ${IMPORT_BASELINE_JOIN}
@@ -260,7 +274,8 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
     const result = await this.exec(tx).execute(sql`
       SELECT s.id, s.customer_id, s.provider_username, s.expires_at,
              s.traffic_limit_bytes, s.traffic_used_bytes,
-             ${IMPORT_BASELINE_COLUMNS}
+             ${IMPORT_BASELINE_COLUMNS},
+             ${REMINDERS_OPTED_OUT_COLUMN}
       FROM services s
       ${IMPORT_BASELINE_JOIN}
       WHERE s.tenant_id = ${tenantId}

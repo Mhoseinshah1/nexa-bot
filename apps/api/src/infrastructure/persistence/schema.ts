@@ -3703,6 +3703,16 @@ export const customers = pgTable(
      */
     marketingOptOutAt: timestamptz('marketing_opt_out_at'),
     /**
+     * Round 11, B6: when the customer (or an operator on their behalf) turned OFF the service
+     * expiry and volume reminders; NULL while they are reminded, which is the default for every
+     * existing and every new customer. A preference, not a status: it governs the service
+     * reminder sweep alone (`SERVICE_REMINDER_NOTIFICATION_KINDS`) and never a payment,
+     * delivery, wallet, security, ticket or administrator message. Honoured only while the
+     * `customer_reminder_opt_out` flag is on; the stored choice is kept when it is off.
+     * Set and cleared through a conditional UPDATE naming the state it expects.
+     */
+    remindersOptOutAt: timestamptz('reminders_opt_out_at'),
+    /**
      * Customer 360 (§11.4): when an operator exempted this customer from MANDATORY channel
      * membership; NULL while the gate applies to them. Read by the Telegram gate itself
      * (`BotRuntime.guardedAct`) from the row it resolves on every update — not a Web Admin

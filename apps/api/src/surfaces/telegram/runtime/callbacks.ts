@@ -394,6 +394,12 @@ export const MAIN_MENU_CALLBACK_DATA = 'mm:';
 /** Round N close (§D): the promotional opt-out and opt-in buttons. No id: the tapper is the subject. */
 export const MARKETING_OPT_OUT_CALLBACK_DATA = 'mk:out';
 export const MARKETING_OPT_IN_CALLBACK_DATA = 'mk:in';
+/**
+ * Round 11, B6: the expiry / volume reminder switch's two buttons. No id: the tapper is the
+ * subject. Two letters, `rm:`, so neither is shadowed by the one-letter `r:` (resend).
+ */
+export const REMINDERS_OPT_OUT_CALLBACK_DATA = 'rm:out';
+export const REMINDERS_OPT_IN_CALLBACK_DATA = 'rm:in';
 /** Package B: the membership check button's callback data. */
 export const MEMBERSHIP_CHECK_CALLBACK_DATA = 'mc:';
 /**

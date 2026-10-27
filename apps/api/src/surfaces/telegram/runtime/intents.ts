@@ -222,6 +222,14 @@ export const BOT_INTENTS = [
    */
   'MARKETING_OPT_OUT',
   'MARKETING_OPT_IN',
+  /*
+   * Round 11, B6: the customer's own switch for the service expiry and volume reminders, the
+   * two buttons on the support screen. Ordinary gated intents (unlike /stop they are not a
+   * way out of the membership guard), and never a way to change anything but the tapper's own
+   * setting: the subject is the customer the update resolved to.
+   */
+  'REMINDERS_OPT_OUT',
+  'REMINDERS_OPT_IN',
   'RECEIPT_UPLOAD',
   /*
    * Package B — the `✅ بررسی عضویت` button. Exempt from the membership guard, and it
