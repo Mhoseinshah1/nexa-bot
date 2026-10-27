@@ -666,15 +666,21 @@ describe('the TonPays Telegram payment screen', () => {
     expect(back.key).toBe('bot.payment.gateway_card_invoice');
     expect(copies(back)).toHaveLength(2);
     expect(data(back)).toContain(`gq:${PAYMENT_ID}`);
-    // A rate-limited cancel leaves no notice and the button.
-    expect(
-      data(
-        screenOf(
-          'pending',
-          withFacts({ latestCancel: request('CANCEL', 'RATE_LIMITED', { decidedAt }) }),
-        ),
-      ),
-    ).toContain(`gq:${PAYMENT_ID}`);
+    // A rate-limited cancel (TonPays' 429, or held by the client's own limiter) reads the same,
+    // with the same retry; Nexa's own rate-limited cancel says nothing.
+    const limited = request('CANCEL', 'RATE_LIMITED', {
+      decidedAt,
+      errorCode: 'nexa.rate_limited_locally',
+    });
+    const busy = screenOf('pending', withFacts({ latestCancel: limited }));
+    expect(busy.key).toBe('bot.payment.gateway_cancel_unknown');
+    expect(data(busy)).toEqual([`gq:${PAYMENT_ID}`, `gc:${PAYMENT_ID}`, 'mm:']);
+    const ours = screenOf(
+      'pending',
+      withFacts({ latestCancel: { ...limited, requestedByNexa: true } }),
+    );
+    expect(ours.key).toBe('bot.payment.gateway_card_invoice');
+    expect(data(ours)).toContain(`gq:${PAYMENT_ID}`);
     // Not once the invoice moved on, was reported paid, or the customer window closed.
     expect(data(screenOf('processing', lost))).not.toContain(`gq:${PAYMENT_ID}`);
     expect(data(screenOf('pending', lost, {}, { providerPaid: true }))).not.toContain(

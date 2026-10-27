@@ -1467,6 +1467,33 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     expect(await requests(paymentId, 'CANCEL')).toHaveLength(2);
   });
 
+  it('R11 A8: a cancel TonPays rate-limited (429 RATE_LIMIT_EXCEEDED) reads as undetermined, keeps the button, and the retry cancels', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    fake.cancelMode = { code: 'RATE_LIMIT_EXCEEDED', status: 429 };
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    await lane.runOnce(tenantA);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'RATE_LIMITED', error_code: 'RATE_LIMIT_EXCEEDED' },
+    ]);
+    expect(String(lastOn(message)?.['text'])).toContain(UNKNOWN_PHRASE);
+    expect(markupOf(lastOn(message))).toContain(`gq:${paymentId}`);
+    fake.cancelMode = 'OK';
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    // Spaced from the rate-limited one like a retry after a lost answer.
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(1);
+    pastRetrySpacing();
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'RATE_LIMITED' },
+      { state: 'APPLIED' },
+    ]);
+    expect((await paymentOf(paymentId)).state).toBe('FAILED');
+  });
+
   it('R11 A8: the lost cancel HAD cancelled it — the retry meets NOT_PENDING, the inquiry reads canceled, and the next tap says «فاکتور قبلاً لغو شده»', async () => {
     const { paymentId, message } = await cardOnScreen();
     await lostCancel(paymentId, message);

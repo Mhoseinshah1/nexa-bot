@@ -374,7 +374,8 @@ function cardTransferScreen(
  * The notice a customer's cancel request leaves on the invoice (Round 6): "cancelling…" while
  * it is with the provider; the provider's refusal or a lost answer until the next inquiry has
  * answered (that inquiry says what the invoice is now, and replaces the notice). A request that
- * was applied, rate-limited, or answered before the latest inquiry leaves none.
+ * was applied, or answered before the latest inquiry, leaves none; since R11 A8 the customer's
+ * rate-limited one reads as a lost answer.
  */
 function cancelNoticeKey(
   request: GatewayProviderRequestRecord,
@@ -389,6 +390,16 @@ function cancelNoticeKey(
     invoice.lastInquiryAt.getTime() >= request.decidedAt.getTime();
   if (answeredSince) return null;
   if (request.state === 'UNKNOWN') return 'bot.payment.gateway_cancel_unknown';
+  /*
+   * R11 A8: the customer's cancel that TonPays rate-limited — or that the TonPays client's own
+   * limiter held before it left — did not go through either. To the customer it is the same
+   * open question as a lost answer (owner: «لغو فاکتور از سمت تون‌پی مشخص نشد»), with the same
+   * way on: the cancel button, which `cancelAvailable` keeps. Nexa's own rate-limited cancel
+   * (before a new create) is asked again by Nexa and says nothing here.
+   */
+  if (request.state === 'RATE_LIMITED' && request.requestedByNexa !== true) {
+    return 'bot.payment.gateway_cancel_unknown';
+  }
   if (request.state === 'REFUSED') {
     const key = customerMessageKeyOfError(request.errorCode);
     // Only the cancel refusals have a sentence of their own here; others change nothing.
