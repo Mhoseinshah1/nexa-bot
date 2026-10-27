@@ -19,6 +19,7 @@ import {
   type IdGenerator,
   type IdempotencyStore,
   type OperationalEventRecorder,
+  type PanelQrKind,
   type PanelStatus,
   type ProviderConnectionAdapter,
   type ProviderType,
@@ -29,6 +30,8 @@ import {
   shapeAcceptsCredential,
   providerDescriptor,
   providerDeliversConnectionFiles,
+  panelSupportsQrKind,
+  DEFAULT_PANEL_QR_KIND,
   deriveCapabilityRegistry,
   validateUsernamePolicy as decideUsernamePolicy,
 } from '@nexa/contracts';
@@ -151,6 +154,9 @@ export interface UpdatePanelCommand {
   readonly balancingGroup?: string | null | undefined;
   /** R11 A4: absent leaves it; true or false sets «فقط فایل، بدون لینک ساب». */
   readonly filesOnlyDelivery?: boolean | undefined;
+  /** R11 A4: «نوع بارکد» — RickPanel only; absent leaves it. */
+  readonly qrKind?: PanelQrKind | undefined;
+  readonly singboxIntervalMinutes?: number | undefined;
   /** Absent leaves the whole policy; present replaces the whole policy. */
   readonly usernamePolicy?: PanelUsernamePolicy | undefined;
   readonly idempotencyKey: string;
@@ -1212,6 +1218,10 @@ export class PanelService {
       ...(command.filesOnlyDelivery === undefined
         ? {}
         : { filesOnlyDelivery: command.filesOnlyDelivery }),
+      ...(command.qrKind === undefined ? {} : { qrKind: command.qrKind }),
+      ...(command.singboxIntervalMinutes === undefined
+        ? {}
+        : { singboxIntervalMinutes: command.singboxIntervalMinutes }),
     });
     const existing = await this.deps.idempotency.find<{ panelId: string }>(
       scope,
@@ -1263,6 +1273,8 @@ export class PanelService {
           usernamePolicy?: PanelUsernamePolicy;
           balancingGroup?: string | null;
           filesOnlyDelivery?: boolean;
+          qrKind?: PanelQrKind;
+          singboxIntervalMinutes?: number;
         } = {};
         // Phase C3: a label, or null to leave the group. It decides which of the operator's
         // own panels a NEW account may land on, never anything about an existing service.
@@ -1280,6 +1292,35 @@ export class PanelService {
           if (command.filesOnlyDelivery) this.assertDeliversFiles(before.panel.providerType);
           if (command.filesOnlyDelivery !== before.panel.filesOnlyDelivery) {
             changes.filesOnlyDelivery = command.filesOnlyDelivery;
+          }
+        }
+        /*
+         * R11 A4, «نوع بارکد». Only a RickPanel has a choice of QR, decided against the STORED
+         * provider type under the lock. A CHANGE to anything but the default is refused on any
+         * other type and stores nothing; asking for the value a panel already holds is never a
+         * refusal, so a form that sends all of its fields back is not punished for it.
+         */
+        if (command.qrKind !== undefined || command.singboxIntervalMinutes !== undefined) {
+          const kindChanges =
+            command.qrKind !== undefined && command.qrKind !== before.panel.qrKind;
+          const intervalChanges =
+            command.singboxIntervalMinutes !== undefined &&
+            command.singboxIntervalMinutes !== before.panel.singboxIntervalMinutes;
+          if (
+            (kindChanges || intervalChanges) &&
+            !panelSupportsQrKind(before.panel.providerType) &&
+            // Putting a panel back on the default kind is always allowed.
+            !(kindChanges && !intervalChanges && command.qrKind === DEFAULT_PANEL_QR_KIND)
+          ) {
+            throw errors.validation(
+              PANEL_ERROR_CODES.PANEL_QR_KIND_UNSUPPORTED,
+              'Only a RickPanel panel can choose the kind of QR its customers are shown.',
+              { providerType: before.panel.providerType },
+            );
+          }
+          if (kindChanges) changes.qrKind = command.qrKind as PanelQrKind;
+          if (intervalChanges) {
+            changes.singboxIntervalMinutes = command.singboxIntervalMinutes as number;
           }
         }
         /*
@@ -1420,6 +1461,8 @@ export class PanelService {
               usernamePolicy: before.panel.usernamePolicy,
               balancingGroup: before.panel.balancingGroup,
               filesOnlyDelivery: before.panel.filesOnlyDelivery,
+              qrKind: before.panel.qrKind,
+              singboxIntervalMinutes: before.panel.singboxIntervalMinutes,
             },
             after: {
               name: updated.name,
@@ -1429,6 +1472,8 @@ export class PanelService {
               usernamePolicy: updated.usernamePolicy,
               balancingGroup: updated.balancingGroup,
               filesOnlyDelivery: updated.filesOnlyDelivery,
+              qrKind: updated.qrKind,
+              singboxIntervalMinutes: updated.singboxIntervalMinutes,
             },
             result: 'SUCCESS',
           },

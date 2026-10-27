@@ -183,6 +183,8 @@ describe('PanelPlacementService.place', () => {
         drain: null,
         balancingGroup: 'eu',
         filesOnlyDelivery: false,
+        qrKind: 'SUB_LINK',
+        singboxIntervalMinutes: 360,
         createdAt: NOW,
         updatedAt: NOW,
       },

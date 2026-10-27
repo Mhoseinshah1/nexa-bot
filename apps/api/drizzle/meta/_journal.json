@@ -2059,6 +2059,13 @@
       "when": 1793082735398,
       "tag": "0293_panels_files_only_delivery",
       "breakpoints": true
+    },
+    {
+      "idx": 294,
+      "version": "7",
+      "when": 1793087438433,
+      "tag": "0294_panels_qr_kind",
+      "breakpoints": true
     }
   ]
 }

@@ -346,6 +346,8 @@ export class PanelsController {
       },
       balancingGroup: view.panel.balancingGroup,
       filesOnlyDelivery: view.panel.filesOnlyDelivery,
+      qrKind: view.panel.qrKind,
+      singboxIntervalMinutes: view.panel.singboxIntervalMinutes,
       createdAt: view.panel.createdAt.toISOString(),
       updatedAt: view.panel.updatedAt.toISOString(),
     };

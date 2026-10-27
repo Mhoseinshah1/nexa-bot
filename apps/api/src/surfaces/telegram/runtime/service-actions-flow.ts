@@ -465,12 +465,14 @@ export async function serviceRotateAsk(
    * confirmation then puts the card back (`serviceRotate`), so the change of link is
    * one message throughout rather than a new one per step.
    */
+  // R11 A4: on a files-only panel the same question is about new FILES, never a link.
+  const filesOnly = await rt.deps.delivery.isFilesOnly(scope, service);
   return {
-    key: 'bot.service.rotate_ask',
+    key: filesOnly ? 'bot.service.files_new_ask' : 'bot.service.rotate_ask',
     values: { cooldownHours: offer.cooldownHours },
     buttons: [
       {
-        ...inlineLabel('service.rotate_confirm'),
+        ...inlineLabel(filesOnly ? 'service.files_new_confirm' : 'service.rotate_confirm'),
         data: `${SERVICE_ROTATE_CALLBACK_PREFIX}${service.id}`,
         row: 0,
       },
@@ -541,8 +543,10 @@ export async function serviceRotate(
         'availableAt'
       ];
       if (typeof at === 'string') {
+        const owned = await ownedService(rt, scope, customer, serviceId);
+        const filesOnly = owned !== null && (await rt.deps.delivery.isFilesOnly(scope, owned));
         return {
-          key: 'bot.service.rotate_cooldown',
+          key: filesOnly ? 'bot.service.files_new_cooldown' : 'bot.service.rotate_cooldown',
           values: { availableAt: new Date(at) },
           buttons: [backToCardButton(serviceId)],
           orderId: null,

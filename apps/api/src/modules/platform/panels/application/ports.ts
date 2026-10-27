@@ -2,6 +2,7 @@ import type {
   MonitorDeferralReason,
   PanelActivation,
   PanelHealthState,
+  PanelQrKind,
   PanelStatus,
   ProviderFailureKind,
   ProviderType,
@@ -79,6 +80,9 @@ export interface PanelRecord {
    * to keep the subscription link from a customer; nothing that operates a service reads it.
    */
   readonly filesOnlyDelivery: boolean;
+  /** R11 A4: «نوع بارکد» and the sing-box refresh interval (minutes). Read by delivery. */
+  readonly qrKind: PanelQrKind;
+  readonly singboxIntervalMinutes: number;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -235,6 +239,9 @@ export interface UpdatePanelInput {
   readonly balancingGroup?: string | null;
   /** R11 A4: absent leaves it; true or false sets it. */
   readonly filesOnlyDelivery?: boolean;
+  /** R11 A4: absent leaves them. */
+  readonly qrKind?: PanelQrKind;
+  readonly singboxIntervalMinutes?: number;
 }
 
 /**
