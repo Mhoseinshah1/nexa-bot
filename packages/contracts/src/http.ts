@@ -575,6 +575,11 @@ export const telegramUpdateSchema = z
   // Unknown keys pass through: Telegram adds fields without asking, and a
   // strict object here would reject valid traffic on their release schedule
   // rather than on ours.
+  //
+  // That covers a whole new top-level update KIND as well (Bot API 10.2's `subscription`):
+  // the webhook routes by the presence of the keys it knows, so a kind it does not know
+  // matches no route and is answered with a success and ignored.
+  // `tests/unit/telegram-unknown-update-kinds.test.ts` fails if this becomes `.strict()`.
   .passthrough();
 export type TelegramUpdate = z.infer<typeof telegramUpdateSchema>;
 

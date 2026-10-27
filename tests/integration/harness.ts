@@ -145,6 +145,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        recovery_requests,
        -- ADR-0032: the imported decrypt-only keys. Installation-wide, no tenant to cascade from.
        installation_keys,
+       -- R11 A3: the latest life of each process role. Installation-wide, no tenant.
+       process_runs,
        -- The Phase 4 tables, listed EXPLICITLY rather than left to CASCADE.
        --
        -- The tenants table is in this list and every one of these references it, so

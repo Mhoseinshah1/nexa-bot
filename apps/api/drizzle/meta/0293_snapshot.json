@@ -1,5 +1,5 @@
 {
-  "id": "4cc86cea-9809-42be-815f-93e6d2368716",
+  "id": "0ea936cb-6b5f-449f-9292-99073ccb6ada",
   "prevId": "77b32aec-0cc4-426b-878d-06543d980a75",
   "version": "7",
   "dialect": "postgresql",
@@ -25114,13 +25114,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "files_only_delivery": {
-          "name": "files_only_delivery",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -27119,6 +27112,71 @@
         "payments_provider_review_check": {
           "name": "payments_provider_review_check",
           "value": "(provider_review_started_at IS NULL) = (provider_review_until IS NULL) AND (provider_review_until IS NULL OR (method = 'GATEWAY' AND gateway_provider IN ('TONPAYS_TELEGRAM', 'NOWPAYMENTS') AND expires_at IS NOT NULL AND provider_review_started_at < expires_at AND provider_review_until = provider_review_started_at + interval '24 hours'))"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.process_runs": {
+      "name": "process_runs",
+      "schema": "",
+      "columns": {
+        "role": {
+          "name": "role",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "run_id": {
+          "name": "run_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "stable_at": {
+          "name": "stable_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "stopped_at": {
+          "name": "stopped_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "restarts": {
+          "name": "restarts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "restarts_since": {
+          "name": "restarts_since",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "process_runs_role_check": {
+          "name": "process_runs_role_check",
+          "value": "role ~ '^[a-z][a-z0-9_-]{0,31}$'"
+        },
+        "process_runs_restarts_check": {
+          "name": "process_runs_restarts_check",
+          "value": "restarts >= 0 AND (restarts = 0) = (restarts_since IS NULL)"
         }
       },
       "isRLSEnabled": false
