@@ -41,6 +41,8 @@ the end of every round, and as soon as the session budget runs low.
 
    - PR: <full URL> — open/draft/merged; head <sha>; CI on that head: green/red (<failing job>)
    - Review threads open: <n> (<who, what>)
+   - Codex review: <read / still "running" for >1 h — owner to comment `@codex review`>
+   - Gate holds: <none / `run-gate.sh --hold <name>` still set — release it or say why>
 
    ## Done
 
