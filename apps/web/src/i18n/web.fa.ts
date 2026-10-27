@@ -4896,6 +4896,8 @@ export const WEB_FA = {
   'web.ib_button_discount_remove': 'حذف کد تخفیف',
   'web.ib_button_order_cancel': 'لغو سفارش',
   'web.ib_button_order_cancel_confirm': 'تأیید لغو سفارش',
+  'web.ib_button_order_reorder': 'سفارش دوباره (زیر سفارش منقضی یا لغوشده)',
+  'web.ib_button_order_main_menu': 'منوی اصلی (زیر سفارش منقضی یا لغوشده)',
   'web.ib_button_payment_wallet': 'پرداخت از کیف پول',
   'web.ib_button_payment_methods': 'ثبت پرداخت (انتخاب روش)',
   'web.ib_button_payment_route': 'روش‌های پرداخت',

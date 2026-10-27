@@ -179,6 +179,9 @@ export const INLINE_BUTTONS = [
   button('discount.remove', 'PURCHASE', 'bot.discount.remove_button'),
   button('order.cancel', 'PURCHASE', 'bot.order.cancel_button'),
   button('order.cancel_confirm', 'PURCHASE', 'bot.order.cancel_confirm_button'),
+  // R11 A11: under an expired or cancelled order's edited payment message.
+  button('order.reorder', 'PURCHASE', 'bot.order.reorder_button'),
+  button('order.main_menu', 'PURCHASE', 'bot.order.main_menu_button'),
 
   // Payment
   button('payment.wallet', 'PAYMENT', 'bot.payment.wallet_button'),
