@@ -318,7 +318,7 @@ export interface CommercialActionServiceDeps {
    * the configured targets, the cooldown and the rolling limit — and the frozen change
    * request a paid move writes beside its order.
    */
-  readonly locations: Pick<LocationChangePolicy, 'offer' | 'decide'>;
+  readonly locations: Pick<LocationChangePolicy, 'offer' | 'decide' | 'remainingChanges'>;
   readonly locationChanges: Pick<LocationChangeRepository, 'create' | 'findByOrderId'>;
   readonly clock: Clock;
   readonly ids: IdGenerator;
@@ -520,6 +520,32 @@ export class CommercialActionService {
       if ((await this.offerableAddons(scope, service, kind, 1)).length > 0) available.push(kind);
     }
     return available;
+  }
+
+  /**
+   * R11 B4: the location changes this service has left, «۲ از ۳» — or null when the surface
+   * says nothing: a custom service, a state no move is legal from, a panel that cannot move
+   * accounts, a panel policy that switched `LOCATION_CHANGE` off, no enabled priced target, or
+   * no limit set.
+   *
+   * The same first three gates `availableFor` applies to `CHANGE_LOCATION` (state, the panel's
+   * capability, the policy row), so "enabled" means one thing; the count itself is
+   * `LocationChangePolicy.remainingChanges`, the evaluator's own figure. A read: it stays
+   * answerable at zero remaining, where `availableFor` has already withdrawn the button.
+   */
+  async locationChangesLeft(
+    scope: TenantContext,
+    actor: ActorContext,
+    service: ServiceRecord,
+  ): Promise<{ readonly remaining: number; readonly max: number } | null> {
+    await this.deps.guard.check(scope, actor, COMMERCIAL_ACTION_PERMISSION);
+    if (service.productId === null) return null;
+    if (!OPERATION_LEGAL_FROM.CHANGE_LOCATION.includes(service.state)) return null;
+    const operable = await this.deps.panels.operability(scope, service.panelId, 'CHANGE_LOCATION');
+    if (!operable.ok) return null;
+    const policy = await this.deps.panelPolicy.forPanel(scope, service.panelId);
+    if (!commercialPolicyAllows(policy, 'CHANGE_LOCATION')) return null;
+    return this.deps.locations.remainingChanges(scope, service);
   }
 
   /**

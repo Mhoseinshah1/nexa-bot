@@ -528,7 +528,7 @@ export const miniAppAutoRenewRequestSchema = z.object({
  */
 export const miniAppLocationRemainingSchema = z.object({
   remaining: z.number().int().min(0),
-  max: z.number().int().min(1),
+  max: z.number().int().min(0),
 });
 export type MiniAppLocationRemaining = z.infer<typeof miniAppLocationRemainingSchema>;
 

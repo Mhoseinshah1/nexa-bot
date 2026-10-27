@@ -114,11 +114,37 @@ export function locationChangeWindow(
     }
   }
   if (limits.maxChanges !== null && limits.periodDays !== null) {
-    const windowStart = nowMs - limits.periodDays * 86_400_000;
-    const inWindow = requestedAt.filter((at) => at.getTime() >= windowStart).length;
+    const inWindow = changesInWindow(limits.periodDays, requestedAt, now);
     if (inWindow >= limits.maxChanges) return { ok: false, reason: 'LIMIT' };
   }
   return { ok: true };
+}
+
+/**
+ * How many of the counted requests fall inside the rolling window `[now - periodDays, ∞)`.
+ * The ONE count: `locationChangeWindow` refuses on it and `locationChangesRemaining` shows it,
+ * so what a customer is told they have left is what the server will allow.
+ */
+function changesInWindow(periodDays: number, requestedAt: readonly Date[], now: Date): number {
+  const windowStart = now.getTime() - periodDays * 86_400_000;
+  return requestedAt.filter((at) => at.getTime() >= windowStart).length;
+}
+
+/**
+ * R11 B4: what is left of a limit — `maxChanges` less the counted requests inside the period,
+ * never below zero — or null when no limit is set (`maxChanges`/`periodDays` come as a pair, so
+ * either one missing means none). A read of the same inputs and the same count as
+ * `locationChangeWindow`: `remaining === 0` exactly when that function refuses with `LIMIT`.
+ * The cooldown is a separate refusal and is not part of this figure.
+ */
+export function locationChangesRemaining(
+  limits: LocationChangeLimits,
+  requestedAt: readonly Date[],
+  now: Date,
+): { readonly remaining: number; readonly max: number } | null {
+  if (limits.maxChanges === null || limits.periodDays === null) return null;
+  const used = changesInWindow(limits.periodDays, requestedAt, now);
+  return { remaining: Math.max(0, limits.maxChanges - used), max: limits.maxChanges };
 }
 
 /**

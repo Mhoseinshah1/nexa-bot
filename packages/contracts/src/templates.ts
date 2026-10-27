@@ -7159,7 +7159,8 @@ export const TEMPLATES = [
       {
         token: 'remaining',
         type: 'NUMBER',
-        description: 'Location changes this service may still make in the current period; 0 or more.',
+        description:
+          'Location changes this service may still make in the current period; 0 or more.',
         required: true,
         repeatable: false,
       },
