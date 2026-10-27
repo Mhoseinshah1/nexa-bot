@@ -10,6 +10,9 @@ interface TelegramBackButton {
   offClick(handler: () => void): void;
 }
 
+/** What `openInvoice` reports when the invoice closes (Bot API, Mini Apps). */
+export type InvoiceStatus = 'paid' | 'cancelled' | 'failed' | 'pending';
+
 export interface TelegramWebApp {
   readonly initData: string;
   readonly colorScheme: 'light' | 'dark';
@@ -18,6 +21,8 @@ export interface TelegramWebApp {
   expand(): void;
   openLink(url: string): void;
   openTelegramLink(url: string): void;
+  /** Absent on a Telegram client older than Bot API 6.1. */
+  openInvoice?(url: string, callback?: (status: InvoiceStatus) => void): void;
   onEvent(event: 'themeChanged', handler: () => void): void;
 }
 
@@ -53,4 +58,23 @@ export function openTelegram(url: string): void {
   const app = webApp();
   if (app !== null) app.openTelegramLink(url);
   else window.open(url, '_blank', 'noopener');
+}
+
+/**
+ * R11 B5: opens a Stars invoice link in place (`Telegram.WebApp.openInvoice`) and resolves
+ * with the status Telegram's client reports when it closes, or `unsupported` where there is
+ * no such method (outside Telegram, or an old client).
+ *
+ * The status is what the CLIENT saw and is never proof of payment: `paid` only means "ask the
+ * server", which decides from the charge its webhook recorded.
+ */
+export function openStarsInvoice(url: string): Promise<InvoiceStatus | 'unsupported'> {
+  const app = webApp();
+  if (app === null || typeof app.openInvoice !== 'function') {
+    return Promise.resolve('unsupported');
+  }
+  const open = app.openInvoice.bind(app);
+  return new Promise((resolve) => {
+    open(url, (status) => resolve(status));
+  });
 }

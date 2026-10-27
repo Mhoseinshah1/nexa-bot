@@ -60,3 +60,24 @@ export interface ReceiptImageUploader {
 
 export const RECEIPT_IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 export type ReceiptImageMime = (typeof RECEIPT_IMAGE_MIMES)[number];
+
+/**
+ * R11 B5: a Telegram Stars invoice LINK (`createInvoiceLink`) for one attempt, made with the
+ * token of the bot the attempt is bound to and the tenant's own invoice texts — the same
+ * fields the chat invoice is sent with. The token never leaves the implementation.
+ */
+export interface StarsInvoiceLinkCreator {
+  create(
+    scope: TenantContext,
+    input: {
+      readonly botInstanceId: BotInstanceId;
+      /** The attempt's opaque provider order id: what pre-checkout and the payment hand back. */
+      readonly payload: string;
+      /** The attempt's snapshotted Stars (`gateway_invoices.sent_amount`), never recomputed. */
+      readonly stars: bigint;
+    },
+  ): Promise<
+    | { readonly outcome: 'CREATED'; readonly link: string }
+    | { readonly outcome: 'FAILED'; readonly code: string }
+  >;
+}

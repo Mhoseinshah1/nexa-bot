@@ -12,6 +12,7 @@ import {
   type MiniAppGatewayAttempt,
   type MiniAppPaymentList,
   type MiniAppPaymentStatus,
+  type MiniAppStarsInvoice,
   type PaymentId,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
@@ -70,7 +71,13 @@ export class MiniAppPaymentsController {
       state: payment.state,
       transferPending: payment.method === 'MANUAL_TRANSFER' && payment.state === 'PENDING',
       receiptFiled,
-      gateway: attempt === null ? null : attemptWire(attempt),
+      gateway:
+        attempt === null
+          ? null
+          : attemptWire(
+              attempt,
+              await this.container.miniApp.starsInvoice.offersInApp(call.context, attempt),
+            ),
       order:
         order === null
           ? null
@@ -150,7 +157,25 @@ export class MiniAppPaymentsController {
     );
     if (view === null) throw notFound();
     await this.container.gatewayPayments.requestCheck(call.context.scope, view);
-    return attemptWire(view);
+    return attemptWire(
+      view,
+      await this.container.miniApp.starsInvoice.offersInApp(call.context, view),
+    );
+  }
+
+  /**
+   * R11 B5: the Stars invoice link of the customer's own open order attempt, for
+   * `Telegram.WebApp.openInvoice`. One link per attempt (a replay is the same link); refused
+   * as `payGateway` refuses when the bot would not offer Stars for this order now. Paying it
+   * is the bot's own Stars payment: the webhook decides, and the client reads `payment`.
+   */
+  @Post(MINIAPP_ROUTES.paymentStarsInvoice)
+  async starsInvoice(
+    @Req() request: FastifyRequest,
+    @Param('paymentId') paymentId: string,
+  ): Promise<MiniAppStarsInvoice> {
+    const call = await miniAppCall(this.container, request, { gated: true });
+    return this.container.miniApp.starsInvoice.linkFor(call.context, call.actor, paymentId);
   }
 
   /** The customer's own payments, newest first (owner correction 2026-10-25). Read-only. */

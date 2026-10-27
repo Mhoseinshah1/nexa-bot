@@ -1460,27 +1460,89 @@ export async function telegramSendInvoice(
   assertOutsideTransaction('A Telegram sendInvoice');
 
   const { chatId, title, description, payload, priceLabel, stars, ...rest } = request;
-  const amount = Number(stars);
-  if (!Number.isSafeInteger(amount) || amount < 1) {
-    return {
-      outcome: 'FAILED_PERMANENT',
-      errorCode: 'telegram.rejected.stars_amount',
-      errorMessage: 'A Stars invoice needs a positive whole number of Stars.',
-    };
-  }
+  const invoice = starsInvoiceFields({ title, description, payload, priceLabel, stars });
+  if (invoice === null) return STARS_AMOUNT_REFUSED;
   return telegramSend({
     ...rest,
     method: 'sendInvoice',
-    body: {
-      chat_id: chatId,
-      title,
-      description,
-      payload,
-      provider_token: '',
-      currency: 'XTR',
-      prices: [{ label: priceLabel, amount }],
-    },
+    body: { chat_id: chatId, ...invoice },
   });
+}
+
+const STARS_AMOUNT_REFUSED = {
+  outcome: 'FAILED_PERMANENT',
+  errorCode: 'telegram.rejected.stars_amount',
+  errorMessage: 'A Stars invoice needs a positive whole number of Stars.',
+} as const;
+
+/**
+ * The fields of a Stars invoice, ONE body for both ways Nexa issues one: the chat message
+ * (`sendInvoice`) and the link the mini app opens (`createInvoiceLink`, R11 B5). Every field is
+ * a rule of brief A2, so a second copy of it would be a second place for one to drift: `XTR`,
+ * an EMPTY provider token, exactly one price, no tips, shipping, flexible price or
+ * subscription period. Null when the Stars are not a positive safe integer — refused before
+ * any call.
+ */
+function starsInvoiceFields(input: {
+  readonly title: string;
+  readonly description: string;
+  readonly payload: string;
+  readonly priceLabel: string;
+  readonly stars: bigint;
+}): Record<string, unknown> | null {
+  const amount = Number(input.stars);
+  if (!Number.isSafeInteger(amount) || amount < 1) return null;
+  return {
+    title: input.title,
+    description: input.description,
+    payload: input.payload,
+    provider_token: '',
+    currency: 'XTR',
+    prices: [{ label: input.priceLabel, amount }],
+  };
+}
+
+export type TelegramInvoiceLinkOutcome =
+  | { readonly outcome: 'SUCCEEDED'; readonly link: string }
+  | Exclude<TelegramSendOutcome, { outcome: 'SUCCEEDED' }>;
+
+/**
+ * Create a Telegram Stars invoice LINK (`createInvoiceLink`, R11 B5) — what the mini app hands
+ * to `Telegram.WebApp.openInvoice`.
+ *
+ * The body is `sendInvoice`'s exactly, minus the chat: the same `payload` (the attempt's
+ * opaque provider order id), the same one XTR price. So a payment made through the link
+ * arrives as the same `pre_checkout_query` and `successful_payment` on the bot's webhook,
+ * naming the same attempt, and is decided by the same code. A link is not a charge and names
+ * no customer: who may pay it is decided at pre-checkout, against the attempt.
+ *
+ * A 2xx whose `result` is not a non-empty string is UNKNOWN (`telegram.no_invoice_link`), never
+ * a link.
+ */
+export async function telegramCreateInvoiceLink(
+  request: Omit<TelegramSendRequest, 'body' | 'method'> & {
+    readonly title: string;
+    readonly description: string;
+    readonly payload: string;
+    readonly priceLabel: string;
+    readonly stars: bigint;
+  },
+): Promise<TelegramInvoiceLinkOutcome> {
+  assertOutsideTransaction('A Telegram createInvoiceLink');
+
+  const { title, description, payload, priceLabel, stars, ...rest } = request;
+  const invoice = starsInvoiceFields({ title, description, payload, priceLabel, stars });
+  if (invoice === null) return STARS_AMOUNT_REFUSED;
+  const call = await telegramCall({ ...rest, method: 'createInvoiceLink', body: invoice });
+  if (call.outcome !== 'SUCCEEDED') return call;
+  if (typeof call.result !== 'string' || call.result === '') {
+    return {
+      outcome: 'FAILED_RETRYABLE',
+      errorCode: 'telegram.no_invoice_link',
+      errorMessage: 'createInvoiceLink answered without a link.',
+    };
+  }
+  return { outcome: 'SUCCEEDED', link: call.result };
 }
 
 /**

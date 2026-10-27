@@ -135,7 +135,9 @@ function Invoice({
         { provider: method.route.provider },
       );
       if (attempt.payUrl !== null) openExternal(attempt.payUrl);
-      replace({ name: 'pay', paymentId: attempt.paymentId });
+      // R11 B5: a Stars attempt payable here opens its invoice on the status screen, which
+      // then waits for the server — never for the invoice's own callback — to call it paid.
+      replace({ name: 'pay', paymentId: attempt.paymentId, openInvoice: attempt.inAppInvoice });
     });
 
   const discounted = order.discount.amountMinor !== '0';
@@ -271,7 +273,13 @@ function Invoice({
                 selected={method?.kind === 'ROUTE' && method.route.provider === route.provider}
                 onSelect={() => setMethod({ kind: 'ROUTE', route })}
                 title={route.kind === 'CARD_TO_CARD' ? t('miniapp.checkout_card') : route.name}
-                detail={route.paysInChat ? t('miniapp.checkout_in_chat') : null}
+                detail={
+                  route.paysInApp
+                    ? t('miniapp.checkout_in_app_stars')
+                    : route.paysInChat
+                      ? t('miniapp.checkout_in_chat')
+                      : null
+                }
               />
             ))}
           </div>

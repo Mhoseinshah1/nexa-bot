@@ -4658,3 +4658,23 @@ money and sends no customer message; the owner decides otherwise.
   idempotency row (a redelivery is ignored again); `tests/unit/telegram-unknown-update-kinds.test.ts`
   pins this. If bot subscriptions become a product feature, the update needs its own route,
   its own contract and an owner decision about what it moves.
+
+## Round 11 B5 — Telegram Stars paid inside the mini app
+
+- **OQ-R11-B5-01 — two invoices for one attempt.** With `miniapp_stars_invoice` on, a Stars order
+  attempt opened from the mini app has two ways to be paid: the chat invoice the worker sends (the
+  bot path, unchanged) and the `createInvoiceLink` link the mini app opens. Both carry the SAME
+  payload and Stars, so whichever is paid first settles the attempt through the one webhook path,
+  and pre-checkout refuses the other afterwards (`ALREADY_PAID`). Two pre-checkouts approved inside
+  the same few seconds (both invoices paid at once) would let Telegram charge twice; the second
+  charge is recorded as `SECOND_CHARGE` and settles nothing (the existing rule), and an operator
+  reconciles it by its charge id. Default: no change to the pre-checkout (no new settlement code
+  was in scope). Refusing a pre-checkout while an earlier approval's hold is live would close it;
+  that is a change to the bot's own Stars path and the owner's call.
+- **OQ-R11-B5-02 — wallet top-ups.** The in-app invoice is offered for ORDER attempts only; a Stars
+  top-up from the mini app keeps its invoice in the bot's chat, as before. Default: unchanged.
+  Extending it is the same endpoint with the top-up route's eligibility instead of the order's.
+- **OQ-R11-B5-03 — `openInvoice` and origin protection.** The mini app now calls
+  `Telegram.WebApp.openInvoice` (Bot API 6.1+) from its own document, beside `openLink` and
+  `openTelegramLink`; OQ-R11-A5-01's unverified origin rule applies to it the same way. A client
+  without the method is told to pay the chat invoice.

@@ -909,6 +909,8 @@ import { RecordingTransport } from './modules/control/notifications/infrastructu
 import type { NotificationTransport } from './modules/control/notifications/application/ports.js';
 import { MiniAppSessionService } from './modules/commerce/miniapp/application/miniapp-session.service.js';
 import { MiniAppReceiptService } from './modules/commerce/miniapp/application/miniapp-receipt.service.js';
+import { MiniAppStarsInvoiceService } from './modules/commerce/miniapp/application/miniapp-stars-invoice.service.js';
+import { TelegramStarsInvoiceLinkCreator } from './modules/commerce/miniapp/infrastructure/telegram-stars-invoice-link.js';
 import { MiniAppRateLimiter } from './modules/commerce/miniapp/application/miniapp-rate-limiter.js';
 import { CheckoutService } from './modules/commerce/checkout/application/checkout.service.js';
 import { DrizzleMiniAppSessionRepository } from './modules/commerce/miniapp/infrastructure/drizzle-miniapp-session.repository.js';
@@ -985,6 +987,8 @@ export interface MiniAppSurfaceDeps {
   readonly rateLimit: MiniAppRateLimiter;
   readonly receipts: MiniAppReceiptService;
   readonly checkout: CheckoutService;
+  /** R11 B5: Telegram Stars paid inside the mini app (`openInvoice`). */
+  readonly starsInvoice: MiniAppStarsInvoiceService;
   readonly topup: WalletTopupFlowService;
   readonly productDisplay: {
     displayFor(
@@ -3888,6 +3892,16 @@ export function createContainer(
       logger,
     },
   );
+  /*
+   * The Stars invoice's own text, from the tenant's templates — never a literal. One function
+   * for the worker's chat invoice and the mini app's invoice link (R11 B5), so the two can
+   * never be two different invoices.
+   */
+  const starsInvoicePresentation = async (scope: TenantContext) => ({
+    title: await templateResolver.render(scope, 'bot.payment.stars_invoice_title', {}),
+    description: await templateResolver.render(scope, 'bot.payment.stars_invoice_description', {}),
+    priceLabel: await templateResolver.render(scope, 'bot.payment.stars_price_label', {}),
+  });
   const gatewayPayments = new GatewayPaymentService({
     invoices: gatewayInvoiceRepository,
     payments: paymentService,
@@ -3920,15 +3934,7 @@ export function createContainer(
         botInstances.tokenForBotInstance(scope, botInstanceId as BotInstanceId),
     },
     // The Stars invoice's own text, from the tenant's templates — never a literal.
-    presentation: async (scope) => ({
-      title: await templateResolver.render(scope, 'bot.payment.stars_invoice_title', {}),
-      description: await templateResolver.render(
-        scope,
-        'bot.payment.stars_invoice_description',
-        {},
-      ),
-      priceLabel: await templateResolver.render(scope, 'bot.payment.stars_price_label', {}),
-    }),
+    presentation: starsInvoicePresentation,
     budget: new DrizzleGatewayCallBudget(database.db),
     callbackUrlFor: gatewayCallbackUrlFor,
     customers: customerRepository,
@@ -8331,6 +8337,31 @@ export function createContainer(
     }),
     // R10 B1: the checkout the bot is handed too — one instance, one set of rules.
     checkout: checkoutService,
+    // R11 B5: the Stars invoice link of an order attempt, for `openInvoice` in the mini app.
+    starsInvoice: new MiniAppStarsInvoiceService({
+      features: featureFlagResolver,
+      attempts: gatewayPayments,
+      orders: orderService,
+      checkout: checkoutService,
+      links: new TelegramStarsInvoiceLinkCreator({
+        bots: {
+          tokenForBotInstance: (scope, botInstanceId) =>
+            botInstances.tokenForBotInstance(scope, botInstanceId),
+        },
+        presentation: starsInvoicePresentation,
+        apiBaseUrl: config.TELEGRAM_API_BASE_URL,
+        timeoutMs: config.NOTIFICATION_SEND_TIMEOUT_MS,
+      }),
+      idempotency,
+      scopeActivity: tenants,
+      guard,
+      uow,
+      audit,
+      opsLog,
+      sessions,
+      clock,
+      logger,
+    }),
     topup: walletTopupFlow,
     productDisplay: miniAppProductDisplay,
     purchaseTitle: async (scope, orderId) => {

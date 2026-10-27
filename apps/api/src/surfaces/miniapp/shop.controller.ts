@@ -222,13 +222,19 @@ export class MiniAppShopController {
         sufficient: coverage.sufficient,
         shortfall: coverage.shortfall === null ? null : toWire(coverage.shortfall),
       },
-      routes: routes.map((route) => ({
-        provider: route.provider,
-        kind: route.kind,
-        name: route.name,
-        paysInChat: route.paysInChat,
-        paysInApp: false,
-      })),
+      routes: await Promise.all(
+        routes.map(async (route) => ({
+          provider: route.provider,
+          kind: route.kind,
+          name: route.name,
+          paysInChat: route.paysInChat,
+          // R11 B5: the Stars route's invoice can also be opened here while the flag is on.
+          paysInApp: await this.container.miniApp.starsInvoice.paysInApp(
+            call.context.scope,
+            route.provider,
+          ),
+        })),
+      ),
     };
   }
 
@@ -285,7 +291,10 @@ export class MiniAppShopController {
     if (paid.outcome === 'NOT_OFFERED') {
       throw errors.conflict(MINIAPP_ERROR_CODES.MINIAPP_ROUTE_UNAVAILABLE, 'Route not offered.');
     }
-    return attemptWire(paid.attempt);
+    return attemptWire(
+      paid.attempt,
+      await this.container.miniApp.starsInvoice.offersInApp(call.context, paid.attempt),
+    );
   }
 
   /**

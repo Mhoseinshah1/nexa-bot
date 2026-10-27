@@ -100,6 +100,7 @@ export const MINIAPP_FA = {
   'miniapp.checkout_wallet_short': 'کمبود موجودی: {amount}',
   'miniapp.checkout_card': 'کارت به کارت',
   'miniapp.checkout_in_chat': 'پرداخت در چت ربات',
+  'miniapp.checkout_in_app_stars': 'پرداخت همین‌جا با تلگرام استارز',
   'miniapp.checkout_no_routes': 'روش پرداخت دیگری فعال نیست.',
   'miniapp.checkout_pay': 'پرداخت',
   'miniapp.checkout_cancel': 'لغو سفارش',
@@ -142,6 +143,12 @@ export const MINIAPP_FA = {
   'miniapp.pay_open_gateway': 'رفتن به صفحهٔ پرداخت',
   'miniapp.pay_in_chat': 'فاکتور پرداخت در چت ربات برای شما فرستاده می‌شود.',
   'miniapp.pay_go_bot': 'رفتن به ربات',
+  'miniapp.pay_stars_open': 'پرداخت با تلگرام استارز',
+  'miniapp.pay_stars_confirming': 'در حال تأیید پرداخت…',
+  'miniapp.pay_stars_not_completed':
+    'پرداخت انجام نشد. سفارش شما هنوز باز است و می‌توانید دوباره پرداخت کنید.',
+  'miniapp.pay_stars_unsupported':
+    'تلگرام شما پرداخت داخل مینی‌اپ را پشتیبانی نمی‌کند؛ لطفاً از فاکتور داخل چت ربات پرداخت کنید.',
   'miniapp.pay_check': 'بررسی پرداخت',
   'miniapp.pay_receipt_review': 'رسید شما ارسال شد و در حال بررسی است.',
   'miniapp.pay_transfer_open': 'منتظر واریز و ارسال رسید',

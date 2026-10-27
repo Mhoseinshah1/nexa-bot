@@ -37,7 +37,8 @@ export type Route =
   | { readonly name: 'services' }
   | { readonly name: 'checkout'; readonly orderId: string }
   | { readonly name: 'card'; readonly instruction: MiniAppCardInstruction }
-  | { readonly name: 'pay'; readonly paymentId: string }
+  /** `openInvoice`: open the Stars invoice in place once, on arrival (R11 B5). */
+  | { readonly name: 'pay'; readonly paymentId: string; readonly openInvoice?: boolean }
   | { readonly name: 'service'; readonly serviceId: string }
   | { readonly name: 'wallet' }
   | { readonly name: 'profile' }
@@ -195,7 +196,9 @@ export function App() {
           {route.name === 'services' && <Services />}
           {route.name === 'checkout' && <Checkout orderId={route.orderId} />}
           {route.name === 'card' && <CardPay instruction={route.instruction} />}
-          {route.name === 'pay' && <PayStatus paymentId={route.paymentId} />}
+          {route.name === 'pay' && (
+            <PayStatus paymentId={route.paymentId} openInvoice={route.openInvoice === true} />
+          )}
           {route.name === 'service' && <ServiceDetail serviceId={route.serviceId} />}
           {route.name === 'wallet' && <Wallet />}
           {route.name === 'profile' && <Profile />}

@@ -182,7 +182,8 @@ export class MiniAppAccountController {
       },
     );
     if (result.outcome === 'GATEWAY_REQUESTED') {
-      return { kind: 'GATEWAY' as const, attempt: attemptWire(result.attempt) };
+      // A top-up's Stars invoice stays in the chat: the in-app link is for order attempts (R11 B5).
+      return { kind: 'GATEWAY' as const, attempt: attemptWire(result.attempt, false) };
     }
     if (result.outcome === 'REQUESTED') {
       return { kind: 'CARD_TO_CARD' as const, instruction: instructionWire(result.instruction) };
