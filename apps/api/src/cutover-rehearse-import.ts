@@ -1,8 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { copyFile, stat } from 'node:fs/promises';
-import type { Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import { basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,13 +38,25 @@ export interface StandinCounts {
   readonly unauthorized: number;
   readonly not_found: number;
 }
+/**
+ * The stand-in's HTTP server, as far as this file uses it. Declared here rather than imported
+ * from `node:http`: this file opens no socket of its own (the stand-in module does, in the
+ * rehearsal process), so it is not one of the network sinks `check-boundaries.sh` lists.
+ */
+export interface StandinServer {
+  listen(port: number, host: string, callback: () => void): unknown;
+  once(event: 'error', listener: (error: Error) => void): unknown;
+  close(callback: () => void): unknown;
+  address(): unknown;
+}
+
 export interface StandinModule {
   createStandin(options: {
     readonly username: string;
     readonly password: string;
     readonly users?: readonly unknown[];
     readonly log?: (line: object) => void;
-  }): { readonly server: Server; readonly counts: StandinCounts };
+  }): { readonly server: StandinServer; readonly counts: StandinCounts };
 }
 
 /**
@@ -100,7 +110,7 @@ export interface RunningStandin {
   readonly username: string;
   readonly password: string;
   readonly accounts: number;
-  readonly server: Server;
+  readonly server: StandinServer;
   readonly counts: StandinCounts;
 }
 
@@ -122,7 +132,7 @@ export async function startStandin(
     server.once('error', reject);
     server.listen(0, host, () => resolve());
   });
-  const port = (server.address() as AddressInfo).port;
+  const port = (server.address() as { readonly port: number }).port;
   return {
     code,
     baseUrl: `http://${host}:${String(port)}`,
