@@ -63,7 +63,11 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
   { id: 'terms', label: 'قوانین و مقررات', prefixes: ['bot.terms.'] },
   // R10 D5: the /start captcha for new customers.
   { id: 'captcha', label: 'سؤال امنیتی شروع (کپچا)', prefixes: ['bot.captcha.'] },
-  { id: 'catalog', label: 'فروشگاه، سفارش و پیش‌فاکتور', prefixes: ['bot.catalog.', 'bot.order.'] },
+  {
+    id: 'catalog',
+    label: 'فروشگاه، سفارش و پیش‌فاکتور',
+    prefixes: ['bot.catalog.', 'bot.order.', 'bot.pricing.'],
+  },
   { id: 'username', label: 'انتخاب یوزرنیم سرویس', prefixes: ['bot.username.'] },
   { id: 'discount', label: 'کد تخفیف', prefixes: ['bot.discount.'] },
   { id: 'trial', label: 'سرویس آزمایشی', prefixes: ['bot.trial.'] },
