@@ -65,12 +65,17 @@ Repository-level helpers the skills call (outside `.claude/`):
 - **`ci-status.sh`** — one line per PR head (green/pending/red), trimmed failure
   logs and Codex findings, over the REST API.
 - **`log-digest.sh`** — filters tool output down to failures, at most 40 lines.
+- **`run-gate.sh`** — the one runner for every test, format, lint, typecheck,
+  `db:check` and verify-stage run in a round: at most 2 at once and one
+  integration run at a time round-wide (flock, no stale locks), queued runs
+  resume by themselves, `--hold`/`--release` raise a TTL'd priority marker
+  instead of a pause, exit 75 after `--max-wait`; prints the test-summary digest.
 - **`module-map.sh`** — a module's services, tables it writes, contracts and
   tests; also `--who-writes` and `--who-calls`.
 - **`check-claude-md-moves.mjs`** — checks that every heading and bold span of the old
   `CLAUDE.md` still exists in the new one, `docs/project-status.md` or a skill.
 
-Tests: `bash scripts/claude/<name>.test.sh` for the three shell scripts and
+Tests: `bash scripts/claude/<name>.test.sh` for the shell scripts (`for t in scripts/claude/*.test.sh; do bash "$t"; done`) and
 `node --test scripts/claude/check-claude-md-moves.test.mjs`. Run by hand — not
 part of `pnpm verify`.
 

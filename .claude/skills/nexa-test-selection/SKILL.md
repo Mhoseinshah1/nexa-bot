@@ -40,22 +40,38 @@ and the full gate catch those); name-based guard globs; no knowledge of
    suites in full (never a `-t` filter on a money or migration suite), plus
    the class checks the selector printed (`pnpm db:check`, `pnpm check:shell &&
 pnpm test:deploy`, `pnpm check:i18n`).
-3. **Before marking a PR ready, before merge, before any release** —
-   `pnpm verify`, and `pnpm test:integration` whenever the change can reach the
-   database. CI runs both on the PR head; a green local gate is not a
-   substitute for green CI on the exact head.
+3. **Before marking a money PR ready, before merge, before any release** —
+   `pnpm verify` once, plus the money/guard integration suites the selector
+   printed (affected files only, below). The **full** `pnpm test:integration`
+   runs on CI only, for every PR including money PRs, on the exact head; a green
+   local gate is not a substitute for green CI on it. Locally it is never run
+   in full: four CI shards exist because one machine and one agent should not.
 
-Run every tier through the summary instead of reading raw output:
+Run every tier through the shared runner, which queues behind other agents'
+runs and prints the `test-summary.sh` digest instead of raw output:
 
 ```bash
-bash scripts/claude/test-summary.sh pnpm verify
-bash scripts/claude/test-summary.sh pnpm exec vitest run --project integration <files>
+bash scripts/claude/run-gate.sh pnpm verify
+bash scripts/claude/run-gate.sh --integration pnpm exec vitest run --project integration <files>
+bash scripts/claude/run-gate.sh pnpm exec vitest run --project unit <files>
+bash scripts/claude/run-gate.sh pnpm typecheck      # lint, format:check, db:check likewise
 bash scripts/claude/test-summary.sh --from "$SCRATCH/int.log"   # an existing log
 ```
+
+The runner is binding in a round (`nexa-round-pipeline` §1a): every test,
+typecheck, lint, format, `db:check` or verify-stage run, from every worktree,
+goes through it, in the foreground. At most 2 runs execute at once round-wide
+and `--integration` runs one at a time, so a run may print "waiting" lines
+first; they resume by themselves, never on a manual signal. Exit 75 means it
+gave up waiting (30 min, `--max-wait <s>`): keep coding, re-run later. A lead's
+`--hold <name>` makes runs without `NEXA_GATE_PRIORITY=<name>` queue until
+`--release <name>` or its 4 h expiry. Outside a round `test-summary.sh` alone is
+fine.
 
 Trap: `pnpm test:integration -- <files>` ignores the file list and runs the
 WHOLE integration suite; for selected files always use
 `pnpm exec vitest run --project integration <files>` (same for `unit` and `web`).
+Split a long file list over several calls so each fits Bash's 600000 ms limit.
 
 It prints `passed=N failed=N skipped=N`, the failing test names or failed
 `pnpm verify` stages, the first 20 lines of each failure, `exit=N` and the raw
@@ -66,7 +82,7 @@ stays for other long output.
 **Non-money shortcut.** A PR that touches no money, ledger, payment,
 gateway, pricing, provisioning or migration code may use tiers 1–2 (typecheck,
 the selected suites with their guard suites, the class checks) as its local
-gate instead of tier 3; CI still runs the full suite on the exact head and
+gate instead of tier 3 (`pnpm verify`); CI still runs the full suite on the exact head and
 Codex still reviews (`nexa-round-pipeline` §3). A PR that touches any of those
 keeps tier 3 locally. When unsure, it is a money PR.
 
@@ -115,8 +131,10 @@ pnpm test:deploy               # botctl update/rollback logic against a fake doc
 
 Integration suites truncate tables. Start services with
 `bash scripts/dev-services.sh`; run one integration process per database at a
-time; never run two agents' suites against the same database (CLAUDE.md,
-"Reviewing with agents").
+time (the runner's `--integration` lock enforces it round-wide); never run two
+agents' suites against the same database (CLAUDE.md, "Reviewing with agents").
+Each agent uses its own database with BOTH `TEST_DATABASE_URL` and
+`DATABASE_URL` set to it.
 
 - Check Postgres and Redis are up first; an unreachable service is not a test
   result.

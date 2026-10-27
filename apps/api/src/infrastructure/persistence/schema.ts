@@ -3523,7 +3523,49 @@ export const installationKeys = pgTable(
   ],
 );
 
+/**
+ * R11 A3: the life of each process role, kept so a CRASH LOOP can be seen across lives.
+ *
+ * One row per role (`api`, `worker`, `monitor`, ...), overwritten by every boot of that role.
+ * A process that is restarted within seconds cannot remember anything itself, and the
+ * loop-stall watchdog gives no verdict in a process's first minute, so a role that dies young
+ * was never reported. What survives the crash is this row: the next boot reads how the
+ * previous life ended — it reached `stable_at` (lived a full minute), was stopped on purpose
+ * (`stopped_at`, a SIGTERM that shut down cleanly), or did neither, which is a crash — and
+ * counts the unbroken streak of crashed lives (`restarts`, since `restarts_since`).
+ *
+ * Installation-wide: a role is not a tenant's, and nothing here is money, a customer or a
+ * secret. The announcement itself is an operational event (`process.restart_storm`), whose
+ * own dedupe row is what stops a restarting process announcing twice.
+ */
+export const processRuns = pgTable(
+  'process_runs',
+  {
+    /** The process role's name, the primary key: the table holds the LATEST life of each. */
+    role: text('role').primaryKey(),
+    /** This life's id, so a late write from an older life cannot mark a newer one. */
+    runId: uuid('run_id').notNull(),
+    startedAt: timestamptz('started_at').notNull(),
+    /** Set when the life has stayed up `PROCESS_RUN_STABLE_AFTER_MS`; the streak ends there. */
+    stableAt: timestamptz('stable_at'),
+    /** Set by a clean shutdown (SIGTERM/SIGINT handled): an operator's stop, not a crash. */
+    stoppedAt: timestamptz('stopped_at'),
+    /** Crashed lives in the current unbroken streak, as of THIS boot. */
+    restarts: integer('restarts').notNull().default(0),
+    /** When the first crashed life of the streak began; null while `restarts` is 0. */
+    restartsSince: timestamptz('restarts_since'),
+  },
+  () => [
+    check('process_runs_role_check', sql`role ~ '^[a-z][a-z0-9_-]{0,31}$'`),
+    check(
+      'process_runs_restarts_check',
+      sql`restarts >= 0 AND (restarts = 0) = (restarts_since IS NULL)`,
+    ),
+  ],
+);
+
 export const schema = {
+  processRuns,
   tenants,
   botInstances,
   admins,

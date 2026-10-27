@@ -15,7 +15,9 @@ and **forward-only**.
    meaningful name: `pnpm --filter @nexa/api exec drizzle-kit generate --name add_wallet_entries`.
 3. **Read the generated SQL.** It is the artifact under review, not the schema
    file.
-4. `pnpm db:migrate` to apply, then `pnpm test:integration`.
+4. `pnpm db:migrate` to apply, then the affected integration files through
+   `run-gate.sh --integration` (`nexa-test-selection`, which has the command).
+   The full integration suite runs on CI.
 5. `pnpm db:check` must pass — it regenerates and fails if anything new appears.
 
 ## Rules
@@ -69,6 +71,7 @@ reports. Renumber on the branch that merges **second**, after merging
 
 ```bash
 git merge origin/main
+pnpm --filter @nexa/contracts build                        # FIRST, see below
 bash scripts/claude/renumber-migration.sh --dry-run        # the plan, nothing changed
 bash scripts/claude/renumber-migration.sh [--base <ref>]   # renumber, regenerate, verify
 ```
@@ -82,8 +85,20 @@ old number outside `apps/api/drizzle/`. Its last line is
 `renumbered=N identical=yes|no`. Step 4 is still yours: `pnpm db:check` and the
 migration suites. The PR body says the SQL is byte-identical.
 
+**Rebuild `packages/contracts` before renumbering, every time** (and after any
+merge that brought in contract changes): drizzle-kit reads the _built_ package,
+so with stale `dist` constants it regenerates from the wrong enums (for example a
+CHECK list without a state main added) and the SQL is no longer
+byte-identical. Use a private test database too (`TEST_DATABASE_URL` and
+`DATABASE_URL` both set) for the `db:check` and migration suites that follow.
+
+A branch that renumbered inside its "merge origin/main" commit is renumbered
+again correctly when main moves on: the script reads snapshots added by merge
+commits (`git log -m`) and only drops the ones that are main's own blobs.
+
 The manual steps — what the script does, and the fallback when it cannot run:
 
+0. `pnpm --filter @nexa/contracts build`.
 1. Save the branch's SQL: `cp apps/api/drizzle/NNNN_name.sql "$SCRATCH/"`.
 2. Generated migration: remove the branch's `NNNN_name.sql`, its
    `meta/NNNN_snapshot.json` and its `_journal.json` entry (take main's journal
@@ -132,7 +147,9 @@ the guard stays in force for application code.
 
 - [ ] The generated SQL was read, not just produced.
 - [ ] `pnpm db:check` passes.
-- [ ] `pnpm test:integration` passes against the applied migration.
+- [ ] `tests/integration/migration-*` and the suites that touch the changed
+      tables pass against the applied migration (affected files, through
+      `run-gate.sh --integration`; the full integration suite runs on CI).
 - [ ] No column named anything like `balance`.
 - [ ] Every new status column has a CHECK constraint from a contract enum.
 - [ ] Every new tenant-owned table has `tenant_id NOT NULL` and a leading index.
