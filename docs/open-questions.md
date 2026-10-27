@@ -4615,3 +4615,20 @@ money and sends no customer message; the owner decides otherwise.
 - **OQ-D5-07 — a customer first created by a mini-app launch while the flag is on.** They get a
   captcha row like a `/start` arrival and the mini app holds them at `CAPTCHA`, pointing to the
   bot; whether a mini-app arrival should be asked at all is the owner's call.
+
+## Round 11 A7 — the service's panel username in the operations log
+
+- **OQ-R11-A7-01 — the referral-commission message (L8).** A commission is earned on a buyer's
+  order that is tied to a service, but the message is about the REFERRER's wallet (the owner's list
+  did not name it, and L8 is being reworked in a parallel round). Default: it does not print the
+  service's username. Adding the optional token to `ops.log.referral_commission` is one line in the
+  template and one in the builder if the owner wants it.
+- **OQ-R11-A7-02 — the label.** The nine messages that already printed the name said
+  «🔑 نام سرویس:», which reads as a product name (the same wording the 2026-10-10 text audit
+  replaced on the customer screens). All service messages now say «👤 نام کاربری سرویس:», the
+  owner's wording of this item. Default text only; a tenant override is untouched.
+- **OQ-R11-A7-03 — a payment of a purchase that is not built yet.** The order-paid and crypto logs
+  of a NEW purchase print the name the checkout RESERVED (funded at settlement), because the
+  service row does not exist until the provisioner runs; a payment that failed, expired or was
+  never settled has no funded reservation and prints no name. If the owner prefers the line only
+  once the service exists, drop the reservation branch of `serviceUsernameOfOrder`.
