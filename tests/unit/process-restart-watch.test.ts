@@ -287,6 +287,52 @@ describe('a stable life ends the episode', () => {
     expect(ticks[0]?.stopped).toBe(true);
   });
 
+  it('two overlapping checks record the recovery once (a slow database, a 10 s timer)', async () => {
+    const w = await stormed();
+    const { watch } = w.watch();
+    await watch.start();
+    w.clock.now += PROCESS_RUN_STABLE_AFTER_MS;
+    // The condition read blocks until released, as a database slower than the interval does.
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const read = w.events.openConditions.bind(w.events);
+    let reads = 0;
+    w.events.openConditions = async (scope, keys) => {
+      reads += 1;
+      await gate;
+      return read(scope, keys);
+    };
+    const first = watch.check();
+    const second = watch.check(); // the next timer tick, while the first is still awaiting
+    release();
+    await Promise.all([first, second]);
+    expect(reads).toBe(1);
+    expect(w.events.count(PROCESS_RESTART_STORM_ENDED_CODE)).toBe(1);
+  });
+
+  it('a check that was running when the life is stopped records nothing', async () => {
+    const w = await stormed();
+    const { watch } = w.watch();
+    await watch.start();
+    w.clock.now += PROCESS_RUN_STABLE_AFTER_MS;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const read = w.events.openConditions.bind(w.events);
+    w.events.openConditions = async (scope, keys) => {
+      await gate;
+      return read(scope, keys);
+    };
+    const running = watch.check();
+    await watch.stop();
+    release();
+    await running;
+    expect(w.events.count(PROCESS_RESTART_STORM_ENDED_CODE)).toBe(0);
+  });
+
   it('a life that dies before the stable window leaves the open condition to the next life', async () => {
     const w = await stormed();
     const { watch } = w.watch();

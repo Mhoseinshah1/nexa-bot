@@ -56,6 +56,10 @@ export class ProcessRestartWatch {
   private bornAt = 0;
   private started = false;
   private stableMarked = false;
+  /** A check is awaiting the database: the next tick must not start a second one. */
+  private checking = false;
+  /** Set by `disarm()`: a check that was already running must not record anything more. */
+  private disarmed = false;
   private runId = '';
 
   constructor(
@@ -121,10 +125,15 @@ export class ProcessRestartWatch {
    * the next tick: the episode is not over until its recovery is recorded.
    */
   async check(): Promise<void> {
+    // One check at a time. A check slower than the interval would otherwise be joined by
+    // the next tick; both read the condition as open and both record the recovery, which
+    // carries no dedupe key, so the group would be told twice (Codex P2 on #344).
+    if (this.checking || this.disarmed) return;
     const now = this.deps.clock.now();
     if (now.getTime() - this.bornAt < (this.deps.stableAfterMs ?? PROCESS_RUN_STABLE_AFTER_MS)) {
       return;
     }
+    this.checking = true;
     try {
       if (!this.stableMarked) {
         await this.deps.store.transact(this.deps.role, (current) =>
@@ -135,6 +144,8 @@ export class ProcessRestartWatch {
       if (await this.endEpisode()) this.disarm();
     } catch (error: unknown) {
       this.warn(error, 'process run stability could not be recorded; tried again shortly');
+    } finally {
+      this.checking = false;
     }
   }
 
@@ -153,6 +164,7 @@ export class ProcessRestartWatch {
   }
 
   private disarm(): void {
+    this.disarmed = true;
     this.timer?.stop();
     this.timer = null;
   }
@@ -186,6 +198,8 @@ export class ProcessRestartWatch {
     if (scope === null) return true;
     const key = restartStormConditionKey(this.deps.role);
     const open = await this.deps.conditions.openConditions(scope, [key]);
+    // Disarmed while the read was in flight (a stop, or the episode closed): record nothing.
+    if (this.disarmed) return true;
     if (!open.includes(PROCESS_RESTART_STORM_CODE)) return true;
     const recorded = await recordQuietly(
       this.deps.recorder,
