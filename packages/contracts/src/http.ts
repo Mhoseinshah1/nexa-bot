@@ -962,7 +962,15 @@ export const featureFlagSchema = z.object({
 });
 export type FeatureFlagResponse = z.infer<typeof featureFlagSchema>;
 
-export const featureFlagListResponseSchema = z.object({ flags: z.array(featureFlagSchema) });
+/**
+ * `total` (R11 A1): how many flags the server holds for the tenant — the figure a counted pager
+ * may print (the list is not cursor-paged, so a page cannot count its own rows). Optional on the
+ * wire so an older server's answer still parses; a client draws no «of N» without it.
+ */
+export const featureFlagListResponseSchema = z.object({
+  flags: z.array(featureFlagSchema),
+  total: z.number().int().nonnegative().optional(),
+});
 export type FeatureFlagListResponse = z.infer<typeof featureFlagListResponseSchema>;
 
 export const featureFlagWriteResponseSchema = z.object({
@@ -1022,7 +1030,15 @@ export const templateViewSchema = z.object({
 });
 export type TemplateViewResponse = z.infer<typeof templateViewSchema>;
 
-export const templateListResponseSchema = z.object({ templates: z.array(templateViewSchema) });
+/**
+ * `total` (R11 A1): how many texts the server holds for the tenant — the figure the counted pager
+ * prints («1–10 of 732»). The catalogue is returned whole, so a client could count it, but the
+ * Web Admin states only totals the server sent. Optional so an older server's answer still parses.
+ */
+export const templateListResponseSchema = z.object({
+  templates: z.array(templateViewSchema),
+  total: z.number().int().nonnegative().optional(),
+});
 export type TemplateListResponse = z.infer<typeof templateListResponseSchema>;
 
 /**
