@@ -4615,3 +4615,20 @@ money and sends no customer message; the owner decides otherwise.
 - **OQ-D5-07 — a customer first created by a mini-app launch while the flag is on.** They get a
   captcha row like a `/start` arrival and the mini app holds them at `CAPTCHA`, pointing to the
   bot; whether a mini-app arrival should be asked at all is the owner's call.
+
+## R11 A4 — files only, no subscription link; the RickPanel QR kind
+
+- **OQ-R11-A4-01 — files only on a panel whose customer «فایل‌های اتصال» action is switched off.**
+  A panel policy may switch off the customer `SUBSCRIPTION_FILES` action; with «فقط فایل، بدون
+  لینک ساب» on, such a customer then has neither the link nor the files. Not guarded: the two
+  settings are saved independently. Default: left as is; refusing the combination in the policy
+  save (and warning on the switch) is a small follow-up if the owner wants it.
+- **OQ-R11-A4-02 — a mini-app customer of a files-only panel.** The mini app has no files screen,
+  so such a customer sees no link and no QR there and is not shown how to get the files. Default:
+  nothing new is added; the bot's «📁 دریافت فایل‌های اتصال» is where the files are.
+- **OQ-R11-A4-03 — the panel's own per-file captions.** RickPanel may write the subscription link
+  into the caption it sends with a file. The bot passes that caption through; on a files-only panel
+  it cannot know whether it names the link. Default: unchanged.
+- **OQ-R11-A4-04 — the sing-box import string on iOS and desktop.** The format
+  `sing-box://import-remote-profile?url=…&autoUpdate=true&autoUpdateInterval=…` is the owner's;
+  which clients honour `autoUpdate*` has not been measured against a real client.
