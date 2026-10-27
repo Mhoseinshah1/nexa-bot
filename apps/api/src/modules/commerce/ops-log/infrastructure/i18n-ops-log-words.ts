@@ -144,6 +144,12 @@ export const i18nOpsLogWords: OpsLogWords = {
     roleName: (role) => processRoleLabelFa(role) ?? UNKNOWN_PROCESS_ROLE_LABEL_FA,
     roleLabel: PROCESS_ROLE_LINE_LABEL_FA,
   },
+  restartStorm: {
+    heading: (role) => W.restartStorm.heading(role),
+    endedHeading: (role) => W.restartStorm.endedHeading(role),
+    detail: (restarts, minutes) =>
+      W.restartStorm.detail(toPersianDigits(restarts), toPersianDigits(minutes)),
+  },
   severity: (klass) =>
     ({
       SECURITY: '🛡 امنیتی',

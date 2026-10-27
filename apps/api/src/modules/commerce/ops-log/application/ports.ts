@@ -491,6 +491,12 @@ export interface OpsLogWords {
     roleName(role: string): string;
     roleLabel: string;
   };
+  /** R11 A3: the words of a role that keeps restarting (`process.restart_storm`) and of its end. */
+  restartStorm: {
+    heading(role: string): string;
+    endedHeading(role: string): string;
+    detail(restarts: string, minutes: string): string;
+  };
   severity(klass: string): string;
   cleanupLine(countText: string): string;
   /** Round 9 C3: the data compaction's part of the cleanup line; `parts` is already worded. */

@@ -1,6 +1,10 @@
 import 'reflect-metadata';
 import { isNexaError } from '@nexa/contracts';
-import { loopStallReporterFor, resolveInstallationTenant } from './bootstrap.js';
+import {
+  loopStallReporterFor,
+  resolveInstallationTenant,
+  startProcessRestartWatch,
+} from './bootstrap.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
@@ -50,6 +54,8 @@ async function main(): Promise<void> {
   // the container resolves settings for the installation at boot, and the loop refuses
   // to invent a tenant id when there is none.
   await resolveInstallationTenant(container);
+  // R11 A3: a role that is restarted over and over is reported once (see ProcessRestartWatch).
+  const restartWatch = await startProcessRestartWatch(container, 'provisioner');
 
   /*
    * FIX-03 (batch 2026-10-10): a stalled lane is an operational condition, as the worker's
@@ -108,6 +114,8 @@ async function main(): Promise<void> {
     exit: (code) => process.exit(code),
     close: async () => {
       heartbeat.stop();
+      // A clean stop is an operator's, not a crash: it must not count towards a storm.
+      await restartWatch.stop();
       container.provisionerLoop.stop();
       await container.shutdown();
     },

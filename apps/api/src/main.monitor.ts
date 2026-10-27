@@ -1,6 +1,10 @@
 import 'reflect-metadata';
 import { isNexaError } from '@nexa/contracts';
-import { loopStallReporterFor, resolveInstallationTenant } from './bootstrap.js';
+import {
+  loopStallReporterFor,
+  resolveInstallationTenant,
+  startProcessRestartWatch,
+} from './bootstrap.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
@@ -50,6 +54,8 @@ async function main(): Promise<void> {
   // The installation's tenant, for the same reason the worker needs it: the
   // container resolves settings for the installation at boot.
   await resolveInstallationTenant(container);
+  // R11 A3: a role that is restarted over and over is reported once (see ProcessRestartWatch).
+  const restartWatch = await startProcessRestartWatch(container, 'monitor');
 
   /*
    * FIX-03 (batch 2026-10-10): a monitor whose discovery throws on every tick is an
@@ -124,6 +130,8 @@ async function main(): Promise<void> {
     exit: (code) => process.exit(code),
     close: async () => {
       heartbeat.stop();
+      // A clean stop is an operator's, not a crash: it must not count towards a storm.
+      await restartWatch.stop();
       await container.shutdown();
     },
   });

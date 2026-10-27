@@ -286,6 +286,7 @@ recorded at its own site.
 | 36  | Backups, recovery, settings, incidents                                   | Covered                 | existing codes                                                                                                                                                                                                                  |
 | 37  | Trials, orders, service actions refused by rules                         | Not reported, by design | user-facing refusals; an unexpected failure is #15                                                                                                                                                                              |
 | 38  | Support AI, legacy importer / Mirza                                      | Out of scope            | excluded by the owner's brief; their codes are not classified here and the inventory test skips their directories                                                                                                               |
+| 39  | Any supervised role crash-looping (lives < 60 s)                         | **Covered (new)**       | R11 A3: `process.restart_storm`/`_ended` from the `process_runs` row, one condition per role, third restart inside five minutes; `docs/deployment.md`                                                                           |
 
 Row 9, two details (Codex on #260). A route whose inquiry is authorised by a SEPARATE
 verify key (CentralPay) opens `payments.gateway_misconfigured` under its own subject,

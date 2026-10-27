@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { isNexaError } from '@nexa/contracts';
-import { resolveInstallationTenant } from './bootstrap.js';
+import { resolveInstallationTenant, startProcessRestartWatch } from './bootstrap.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
@@ -25,6 +25,8 @@ async function main(): Promise<void> {
     exit: (code) => process.exit(code),
   });
   await resolveInstallationTenant(container);
+  // R11 A3: a role that is restarted over and over is reported once (see ProcessRestartWatch).
+  const restartWatch = await startProcessRestartWatch(container, 'assistant');
 
   const heartbeat = startHeartbeat({
     path: config.ASSISTANT_HEARTBEAT_PATH,
@@ -50,6 +52,8 @@ async function main(): Promise<void> {
     exit: (code) => process.exit(code),
     close: async () => {
       heartbeat.stop();
+      // A clean stop is an operator's, not a crash: it must not count towards a storm.
+      await restartWatch.stop();
       await container.assistantLoop.stop();
       await container.shutdown();
     },
