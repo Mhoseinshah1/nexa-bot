@@ -177,8 +177,10 @@ const RECORDS = [
  * 2785 → 2805: Round 9 C1 adds 19 rows R9-01..R9-19 citing 20 tests (R9-16 cites two) (+20).
  * 2805 → 2838: Round 10 C1, the custom gateway, `docs/custom-gateway-falsification.md` — 33 rows
  * CG-01..CG-33, one citation each (+33).
+ * 2838 → 2855: Round 11 A8, the TonPays Telegram cancel retry — thirteen rows R11A8-01..13 in
+ * `docs/tonpays-telegram-falsification.md` citing 17 tests (R11A8-01 cites five) (+17).
  */
-const EXPECTED = 2838;
+const EXPECTED = 2855;
 /**
  * A table whose last column is one of these is making citations.
  *
