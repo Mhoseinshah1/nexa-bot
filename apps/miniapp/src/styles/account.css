@@ -101,3 +101,82 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
+
+/* Round 11, B1: the notification centre. The bell sits in a bar of its own above a tab's page. */
+.topbar {
+  display: flex;
+  justify-content: flex-end;
+  max-inline-size: 560px;
+  margin-inline: auto;
+  padding: 8px var(--gutter) 0;
+}
+.bell {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  min-inline-size: var(--ctl-h);
+  min-block-size: var(--ctl-h);
+  padding: 0;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-pill);
+  background: var(--glass-2);
+  cursor: pointer;
+}
+.bell-badge {
+  position: absolute;
+  inset-block-start: 2px;
+  inset-inline-end: 2px;
+  min-inline-size: 18px;
+  block-size: 18px;
+  padding-inline: 4px;
+  border-radius: 9px;
+  background: var(--danger);
+  color: var(--bg-0);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+.notices {
+  gap: 0;
+  padding-block: 6px;
+}
+.notice {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  inline-size: 100%;
+  padding: 12px 0;
+  border: 0;
+  border-block-start: 1px solid var(--track);
+  background: none;
+  text-align: start;
+  cursor: pointer;
+  min-block-size: var(--ctl-h);
+}
+.notice:first-child {
+  border-block-start: 0;
+}
+.notice-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+}
+.notice-dot {
+  inline-size: 8px;
+  block-size: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+.notice-text {
+  color: var(--fg-2);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.notice-unread .notice-text {
+  color: var(--fg);
+  font-weight: 600;
+}

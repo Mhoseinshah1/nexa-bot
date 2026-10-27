@@ -11,8 +11,10 @@ import { LEDGER_REASON_KEY } from '../../apps/miniapp/src/screens/wallet-labels'
  * Round 9, C5 part 2a: the wallet, profile, referral and trial screens of the customer mini
  * app, rendered from mocked API answers through the whole shell (handshake, tab bar, stack).
  *
- * The notification centre and the reseller panel have no capability behind them, so the
- * tests also pin that nothing in the shell reaches either.
+ * The reseller panel has no capability behind it, so the tests also pin that nothing in the
+ * shell reaches it. The notification centre has one since Round 11 (B1), behind the feature
+ * `notification_centre`: with it off (the default, and `/me`'s `notifications` null) nothing
+ * of it is drawn, which these tests also pin; its own screens are in `miniapp-notifications`.
  */
 
 const BOT = '01900000-0000-7000-8000-00000000a001';
@@ -701,14 +703,10 @@ describe('home', () => {
     ).toBeTruthy();
   });
 
-  it('reaches no screen for notifications or the reseller panel', () => {
+  it('reaches no screen for the reseller panel', () => {
     const keys = Object.keys(MINIAPP_FA);
-    expect(
-      keys.filter((key) => /notification|reseller_panel|reseller_dashboard/u.test(key)),
-    ).toEqual([]);
-    expect(
-      Object.keys(MINIAPP_ROUTES).filter((key) => /notification|reseller/iu.test(key)),
-    ).toEqual([]);
+    expect(keys.filter((key) => /reseller_panel|reseller_dashboard/u.test(key))).toEqual([]);
+    expect(Object.keys(MINIAPP_ROUTES).filter((key) => /reseller/iu.test(key))).toEqual([]);
   });
 });
 

@@ -11,9 +11,10 @@ import { useTrialOffers } from './entry-points.js';
  * خانه: the greeting, the wallet balance, «خرید سرویس», and the customer's services.
  *
  * Not drawn, because nothing backs them: the cashback-earned chip (no customer-own cashback
- * total), the outage strip with its compensation extension (no such feature; the incident
- * banner is the operators'), and the bell (there is no in-app notification store). The
- * support tile arrives with its screen. The top-up button and the trial shortcut (drawn only
+ * total) and the outage strip with its compensation extension (no such feature; the incident
+ * banner is the operators'). The bell is the shell's (`NotificationBell`, Round 11 B1), drawn
+ * above every tab while the feature `notification_centre` is on. The support tile arrives with
+ * its screen. The top-up button and the trial shortcut (drawn only
  * while a panel offers a trial) are here; the referral entry lives in the profile.
  */
 export function Home() {
