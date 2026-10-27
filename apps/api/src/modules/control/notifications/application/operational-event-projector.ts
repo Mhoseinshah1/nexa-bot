@@ -241,6 +241,9 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
         return;
       }
       const details = operationalEventDetails(event.context);
+      // R11 A7: an event about a service shows that service's panel account name as its own line.
+      const serviceUsername =
+        (await this.presenter?.serviceUsernameOf?.(scope, event, nested)) ?? null;
       // Round 8 B6: the group reads Persian; the stored English message stays the log's.
       const shownMessage = this.presenter?.messageOf?.(recorded.code) ?? recorded.message;
       await this.notifications.queue(
@@ -271,6 +274,7 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
             firstSeenAt: recorded.firstSeenAt,
             lastSeenAt: recorded.lastSeenAt,
             ...(details ? { details } : {}),
+            ...(serviceUsername === null ? {} : { serviceUsername }),
           },
           ...(event.correlationId ? { correlationId: event.correlationId } : {}),
           opsTopic: opsLogTopicForCode(recorded.code),

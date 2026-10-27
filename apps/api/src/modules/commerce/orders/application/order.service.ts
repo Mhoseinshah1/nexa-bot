@@ -1,6 +1,7 @@
 import {
   customServiceVolumeBytes,
   orderPurposeCreatesNewService,
+  orderPurposeTargetsExistingService,
   canonicalizeCustomUsername,
   isValidCustomUsername,
   USERNAME_CAPTURE_TTL_MS,
@@ -90,6 +91,13 @@ import {
   type WalletBalanceReader,
 } from '../../wallet/application/negative-balance-gate.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
+
+/**
+ * R11 A6: the `details.reason` of the `ORDER_STATE_INVALID` that `OrderService.confirm`
+ * answers an order acting on an existing service with (that order's lane is
+ * `CommercialActionService.confirm`).
+ */
+export const ORDER_CONFIRM_COMMERCIAL_PURPOSE = 'COMMERCIAL_PURPOSE';
 
 /** What an operator needs to read the order list and an order's detail. */
 export const ORDER_VIEW_PERMISSION: PermissionKey = 'orders.view';
@@ -1744,6 +1752,25 @@ export class OrderService {
          */
         if (before === null || before.customerId !== customerId) {
           throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
+        }
+
+        /*
+         * R11 A6: this lane confirms an order that CREATES a service (a new or custom one).
+         * An order that acts on an existing service — a renewal, a package, a location
+         * change — is confirmed by `CommercialActionService.confirm`, which re-checks the
+         * service it names and what was quoted; through here it would be confirmed as if it
+         * were a purchase of its product, with neither re-check. No caller passes one
+         * (`CheckoutService.confirmDraft` dispatches by purpose since R10 B1, and the manual
+         * order drafts a product), so this is the refusal of a caller's bug, in any state —
+         * an already-confirmed commercial order is not this lane's success either. Typed:
+         * the machine's own `ORDER_STATE_INVALID`, with the reason and the purpose.
+         */
+        if (orderPurposeTargetsExistingService(before.purpose)) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
+            'An order on an existing service is confirmed through its commercial action.',
+            { reason: ORDER_CONFIRM_COMMERCIAL_PURPOSE, purpose: before.purpose },
+          );
         }
 
         /*

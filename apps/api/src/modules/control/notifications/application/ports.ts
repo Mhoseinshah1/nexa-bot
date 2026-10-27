@@ -559,4 +559,13 @@ export interface OpsEventPresenter {
   messageOf?(code: string): string | null;
   /** The Persian name of a severity class. */
   severity(klass: string): string;
+  /**
+   * R11 A7: the panel account name of the service an event is about (read from its context),
+   * for the generic layout's own line; null when it is about none. Never an id or a link.
+   */
+  serviceUsernameOf?(
+    scope: TenantContext,
+    input: OperationalEventInput,
+    tx: unknown,
+  ): Promise<string | null>;
 }

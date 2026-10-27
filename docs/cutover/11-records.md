@@ -22,6 +22,21 @@ person's amount. Every time is UTC.
 | Rehearsal import duration (GO-1) |       |
 | Window start (T0)                |       |
 
+## Rehearsal on the test server (12, R1)
+
+| Item                                                                  | Value |
+| --------------------------------------------------------------------- | ----- |
+| Date (UTC), release on the test server                                |       |
+| Package SHA-256 (the `package` line)                                  |       |
+| Exit code and `go/no-go` line                                         |       |
+| Duration (`rehearsal-start.txt` to the end)                           |       |
+| Balances: verdict, matched rows and sum, held per class               |       |
+| Services: verdict, matched, held per outcome                          |       |
+| Agent credit LISTED, NOT CREDITED (rows, IRT) — a figure NOT credited |       |
+| `no-messages` line (every count 0)                                    |       |
+| `cleanup` line (dropped, or kept and dropped by hand on …)            |       |
+| Held classes accepted by name (owner)                                 |       |
+
 ## Freeze and export (F4, E1, E2)
 
 | Item                                                             | Value |

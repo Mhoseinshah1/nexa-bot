@@ -967,6 +967,26 @@ print(json.dumps({"services": {"api": {"environment": env}}}))
         # installer's own `owner_state` — the pipeline included — is what the
         # tests exercise.
         case "$*" in
+          *'cutover-rehearse.cli.js'*)
+            # `botctl cutover rehearse`: what the one-off container received. The secret is
+            # recorded from the ENVIRONMENT (argv is in the docker log, which a test reads
+            # for the key text), and the mounted directory is listed while it exists.
+            printf '%s' "${NEXA_REHEARSAL_PACKAGE_KEY:-${NEXA_REHEARSAL_PACKAGE_PASSPHRASE:-}}" \
+              >"${FAKE_DIR}/rehearse_secret"
+            _mount=""
+            _prev=""
+            for _arg in "$@"; do
+              [ "$_prev" = "-v" ] && _mount="${_arg%%:*}"
+              _prev="$_arg"
+            done
+            if [ -n "$_mount" ] && [ -d "$_mount" ]; then
+              (cd "$_mount" && find . -type f -printf '%P %m\n' | sort) >"${FAKE_DIR}/rehearse_mount"
+              stat -c '%a' "$_mount" >"${FAKE_DIR}/rehearse_mount_mode"
+              printf '%s' "$_mount" >"${FAKE_DIR}/rehearse_mount_path"
+            fi
+            printf 'Cutover rehearsal (fake)\ngo/no-go: %s\n' "$(read_state rehearse_verdict GO)"
+            exit "$(read_state rehearse_exit 0)"
+            ;;
           *'migrate.js --check'*)
             # `botctl cutover preflight`: the read-only migration check, one word on stdout.
             printf '%s\n' "$(read_state migrate_check current)"
