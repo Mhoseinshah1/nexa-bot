@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import type { MiniAppListedPersonalDiscount, MoneyWire } from '@nexa/contracts';
 import { ApiError } from './api.js';
+import { money } from './format.js';
 import { t, type MiniAppKey } from './i18n/t.js';
 import { MINIAPP_FA } from './i18n/miniapp.fa.js';
 import type { Tab } from './app.js';
@@ -12,6 +14,31 @@ export function Message({ text, action }: { text: string; action?: ReactNode }) 
       <p>{text}</p>
       {action}
     </main>
+  );
+}
+
+/**
+ * R11 A9: a listed price the customer's personal discount wins — the price the list showed
+ * before, struck through, the discounted price the server's quote will charge, and the tag
+ * «تخفیف شخصی N٪». Every figure is the server's (`personalDiscount` comes from the pricing
+ * boundary); nothing is computed here. A line it does not win is drawn by the caller exactly
+ * as before, so this is used only when `discount` is set.
+ */
+export function PersonalPrice({
+  price,
+  discount,
+}: {
+  price: MoneyWire;
+  discount: MiniAppListedPersonalDiscount;
+}) {
+  return (
+    <span className="price personal-price">
+      <s className="personal-price-was">{money(price)}</s>
+      <strong className="personal-price-now">{money(discount.price)}</strong>
+      <span className="personal-price-tag">
+        {t('miniapp.personal_discount_tag', { percent: discount.percent })}
+      </span>
+    </span>
   );
 }
 
