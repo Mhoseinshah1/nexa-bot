@@ -121,6 +121,25 @@ export function escapeTelegramHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
+/** U+0336 COMBINING LONG STROKE OVERLAY: what `strikeThroughText` draws through each character. */
+export const STRIKE_THROUGH_MARK = '\u0336';
+
+/**
+ * Text drawn struck through without any markup (R11 A9): U+0336 after every character.
+ *
+ * For the one place Telegram gives formatting no way in — an inline-keyboard button's text,
+ * which the Bot API takes as plain text with no `parse_mode` and no entities — where a
+ * customer is listed a price their personal discount replaces. Wherever the text CAN carry
+ * formatting (a message body, a rich message's table) the real strikethrough is used
+ * instead. Applied to text the caller formatted itself (`formatMoney`), never to a value a
+ * template interpolates.
+ */
+export function strikeThroughText(value: string): string {
+  return Array.from(value)
+    .map((character) => `${character}${STRIKE_THROUGH_MARK}`)
+    .join('');
+}
+
 /**
  * The unit every traffic amount is shown in (Package C): the gigabyte, which is the
  * binary 1 GiB this codebase has always shown and `BYTES_PER_GB` names.

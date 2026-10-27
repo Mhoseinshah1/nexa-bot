@@ -106,6 +106,15 @@ export interface CustomerCallbackButton {
    * message ignores them. Presentation only: the route is `data`.
    */
   readonly planFacts?: { readonly trafficBytes: bigint; readonly durationDays: number };
+  /**
+   * R11 A9: this line is listed with the customer's personal discount (R10 D3). The label
+   * already carries the DISCOUNTED price — the total the line's quote charges, from
+   * `PricingService.personalListPrices`; the messenger draws `listPrice` (what the list
+   * showed before) struck through after it, then `bot.pricing.personal_discount_tag`. In a
+   * rich plan table the price cell does the same with a real strikethrough. Presentation
+   * only: the route is `data`, and the price charged is the quote's, decided again there.
+   */
+  readonly personalDiscount?: { readonly listPrice: Money; readonly percent: number };
 }
 
 /**

@@ -74,6 +74,7 @@ export const MINIAPP_FA = {
   'miniapp.store_category_empty': 'در این دسته پلنی نیست.',
   'miniapp.store_more': 'بیشتر',
   'miniapp.store_continue': 'ادامه و پیش‌فاکتور',
+  'miniapp.personal_discount_tag': 'تخفیف شخصی {percent}٪',
 
   'miniapp.checkout_title': 'پیش‌فاکتور',
   'miniapp.checkout_order': 'سفارش',

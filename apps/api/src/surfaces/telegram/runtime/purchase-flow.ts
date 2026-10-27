@@ -16,6 +16,7 @@ import {
 } from '../../../modules/commerce/messaging/application/inline-buttons.js';
 import type { OrderRecord } from '../../../modules/commerce/orders/application/ports.js';
 import { personalDiscountPercentOf } from '../../../modules/commerce/pricing/domain/pricing-engine.js';
+import { personalDiscountOf } from './listed-price.js';
 import type { CustomerCaptureRecord } from '../../../modules/commerce/customers/application/customer-capture-ports.js';
 import {
   CANCEL_ORDER_CALLBACK_PREFIX,
@@ -370,11 +371,13 @@ export async function categoryPage(
     // changed under this surface. Skipped rather than drawn without an amount,
     // because a plan whose price a customer cannot see is one they cannot consent to.
     if (product.price === null) continue;
+    // R11 A9: the price the draft will quote when the personal discount wins it.
+    const personal = product.personalDiscount;
     buttons.push({
       ...inlineDataLabel('catalog.product', {
         kind: 'TEXT',
         text: product.title,
-        amount: product.price,
+        amount: personal === null ? product.price : personal.price,
       }),
       data: `${ORDER_CALLBACK_PREFIX}${product.id}`,
       // R4 PR-F (F2): the plan table of a rich message; an ordinary message ignores it.
@@ -382,6 +385,7 @@ export async function categoryPage(
         trafficBytes: product.specification.trafficBytes,
         durationDays: product.specification.durationDays,
       },
+      ...personalDiscountOf(product),
     });
   }
   if (page > 0) {
