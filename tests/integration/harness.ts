@@ -170,6 +170,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        service_location_changes, service_locations,
        -- Customer UX completion. Named before the tables they reference.
        customer_text_captures, referral_signup_gifts, support_faqs, support_faq_seeds,
+       -- R10 D5: the /start captcha rows, before the customers they name.
+       customer_captchas,
        tenant_media_assets,
        -- WP-A10: client apps, before the tenants they belong to.
        client_apps,

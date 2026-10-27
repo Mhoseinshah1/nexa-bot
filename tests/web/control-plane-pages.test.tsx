@@ -540,7 +540,18 @@ describe('the enable-confirmation policy', () => {
       .map((f) => f.key)
       .sort();
     // R4 A4: turning the re-prompt ON also stops every customer who accepted an older version.
-    expect(asking).toEqual(['terms_enforcement', 'terms_reprompt_on_new_version']);
+    // R10 D5 (b): turning the referral guard ON makes every unclaimed gift wait for a purchase
+    // at once (no balance moves, but customers stop being able to claim), so it asks too.
+    expect(asking).toEqual([
+      'referral_abuse_guard',
+      'terms_enforcement',
+      'terms_reprompt_on_new_version',
+    ]);
+    expect(FEATURE_PRESENTATION.referral_abuse_guard.confirmEnable).toEqual({
+      question: 'web.referral_abuse_guard_confirm_question',
+      detail: 'web.referral_abuse_guard_confirm_detail',
+      confirmLabel: 'web.referral_abuse_guard_confirm',
+    });
     expect(FEATURE_PRESENTATION.terms_enforcement.confirmEnable).toEqual({
       question: 'web.terms_enforce_confirm_question',
       detail: 'web.terms_enforce_confirm_detail',

@@ -116,8 +116,8 @@ export class MiniAppSessionController {
         customer,
         botLink,
         gate:
-          gate.kind === 'BLOCKED'
-            ? { kind: 'BLOCKED' }
+          gate.kind === 'BLOCKED' || gate.kind === 'CAPTCHA'
+            ? { kind: gate.kind }
             : gate.kind === 'CHANNELS'
               ? {
                   kind: 'CHANNELS',

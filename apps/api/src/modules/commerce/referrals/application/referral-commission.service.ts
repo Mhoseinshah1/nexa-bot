@@ -18,7 +18,12 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type { WalletRepository } from '../../wallet/application/ports.js';
 import type { PaymentRepository } from '../../payments/application/ports.js';
 import type { RefundRecord, RefundRepository } from '../../payments/application/refund-ports.js';
-import type { ReferralCommissionRepository } from './ports.js';
+import type { ReferralCommissionRepository, ReferralDayCalendar } from './ports.js';
+import {
+  REFERRAL_ABUSE_GUARD_OFF,
+  readReferralAbuseTerms,
+  type ReferralAbuseTermsSource,
+} from './referral-abuse-terms.js';
 
 export interface ReferralCommissionServiceDeps {
   readonly commissions: ReferralCommissionRepository;
@@ -30,6 +35,12 @@ export interface ReferralCommissionServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /**
+   * R10 D5 (b): the referral-gift guard's daily commission cap — the flag and settings, and
+   * the tenant's local day. Optional so a narrow wiring need not supply them; absent, the
+   * guard is off, which is the behaviour before it existed.
+   */
+  readonly abuse?: ReferralAbuseTermsSource & { readonly days: ReferralDayCalendar };
 }
 
 /**
@@ -52,9 +63,18 @@ export interface ReferralCommissionServiceDeps {
 export class ReferralCommissionService {
   constructor(private readonly deps: ReferralCommissionServiceDeps) {}
 
-  /** Decides up to `limit` answered commissions, oldest first. Returns how many it moved. */
+  /**
+   * Decides up to `limit` answered commissions, oldest first. Returns how many it moved.
+   *
+   * R10 D5 (b): while a daily commission cap is in force, a commission the cap held is not
+   * offered again before its `not_before`. With no cap (the guard off, or no cap set) the
+   * hold is not honoured at all, so turning the guard off earns a held commission on the
+   * next tick — today's rule, with nothing to undo.
+   */
   async settleDue(scope: TenantContext, limit: number): Promise<number> {
-    const due = await this.deps.commissions.due(scope, limit);
+    const now = this.deps.clock.now();
+    const capped = (await this.abuseTerms(scope)).referrerDailyCommissionCap !== null;
+    const due = await this.deps.commissions.due(scope, limit, capped ? now : null);
     let moved = 0;
     for (const item of due) {
       if (await this.settle(scope, item.orderId)) moved += 1;
@@ -84,6 +104,15 @@ export class ReferralCommissionService {
       if (answer === null) return false;
 
       const now = this.deps.clock.now();
+      const cap = (await this.abuseTerms(scope, tx)).referrerDailyCommissionCap;
+      // R10 D5 (b): held by the cap until a later instant — untouched, still PENDING.
+      if (
+        cap !== null &&
+        commission.notBefore !== null &&
+        commission.notBefore.getTime() > now.getTime()
+      ) {
+        return false;
+      }
       if (!answer.delivered) {
         // Cancelled, expired, or refunded because it could not be delivered: nothing was
         // ever credited, so nothing is reversed.
@@ -124,6 +153,28 @@ export class ReferralCommissionService {
         payment.amount.amountMinor,
         refunded,
       );
+
+      /*
+       * R10 D5 (b): the referrer's daily commission cap, decided HERE — under the referrer's
+       * wallet lock, which every earn of theirs holds, so two deliveries at once are counted
+       * one after the other. At the cap the commission is DEFERRED to the start of the next
+       * local day: it stays PENDING and is earned then by this same rule, from the refunds
+       * as they stand then. The cap never voids. A commission that would credit nothing is
+       * not held: it is earned at zero now, as before, and is not counted against the cap.
+       */
+      if (cap !== null && earned > 0n) {
+        const today = await this.abuseDays().dayOf(scope, now, tx);
+        const earnedToday = await this.deps.commissions.countEarnedIn(
+          scope,
+          commission.referrerId,
+          today,
+          tx,
+        );
+        if (earnedToday >= cap) {
+          await this.deps.commissions.defer(scope, commission.id, today.end, now, tx);
+          return false;
+        }
+      }
 
       const actor = this.actor();
       let entryId: string | null = null;
@@ -336,5 +387,19 @@ export class ReferralCommissionService {
 
   private actor(): ActorContext {
     return systemJobActor('referral', this.deps.ids.uuid() as CorrelationId);
+  }
+
+  private async abuseTerms(scope: TenantContext, tx?: unknown) {
+    const abuse = this.deps.abuse;
+    return abuse === undefined
+      ? REFERRAL_ABUSE_GUARD_OFF
+      : readReferralAbuseTerms(abuse, scope, tx);
+  }
+
+  /** Reached only with a cap in force, which only `abuse` can supply. */
+  private abuseDays(): ReferralDayCalendar {
+    const abuse = this.deps.abuse;
+    if (abuse === undefined) throw new Error('a referral cap is in force with no day calendar');
+    return abuse.days;
   }
 }

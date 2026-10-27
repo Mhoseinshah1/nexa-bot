@@ -334,6 +334,9 @@ describe('the feature flag registry', () => {
       // renewal with the customer's personal percent (larger single discount wins), and a
       // stored percent changes no price while it is off.
       'personal_discount',
+      // R10 D5 (b). Off by default; the purchase condition and the two daily caps it
+      // switches on are read by the gift claim and the commission earner.
+      'referral_abuse_guard',
       // Customer UX completion §I. Off by default; the claim path it switches on is
       // reachable, and it refuses to turn on until the two shares total 100.
       'referral_signup_gift',
@@ -363,6 +366,9 @@ describe('the feature flag registry', () => {
       'service_expiry_day_reminder',
       'service_expiry_reminders',
       'service_usage_reminders',
+      // R10 D5 (a). Off by default; the captcha gate in front of a new customer's turns
+      // and the mini app's matching gate are reachable, and with it off nobody is asked.
+      'start_captcha',
       'template_overrides',
       // Program §6. Off by default; the one Telegram gate it switches on is reachable, and
       // with no published version it stops nobody.

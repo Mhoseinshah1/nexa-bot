@@ -18,6 +18,7 @@ import type {
 } from '@nexa/contracts';
 import type { AntiSpamService } from '../../../modules/commerce/customers/application/anti-spam.service.js';
 import type { ChannelMembershipService } from '../../../modules/commerce/customers/application/channel-membership.service.js';
+import type { StartCaptchaService } from '../../../modules/commerce/customers/application/start-captcha.service.js';
 import type { TermsAcceptanceService } from '../../../modules/control/terms/application/terms-acceptance.service.js';
 import type { CustomerService } from '../../../modules/commerce/customers/application/customer.service.js';
 import type { PaymentDestinationRenderer } from '../../../modules/commerce/payments/infrastructure/destination-renderer.js';
@@ -302,6 +303,12 @@ export interface BotRuntimeDeps {
    * tenant with no REQUIRED channel sees.
    */
   readonly membership?: Pick<ChannelMembershipService, 'missingRequired'>;
+  /**
+   * R10 D5 (a): the optional `/start` captcha for NEW customers, the first check of the gate
+   * chain. Optional for the reason `membership` is; absent, nobody is ever asked — which is
+   * also what every customer sees while `start_captcha` is off.
+   */
+  readonly captcha?: Pick<StartCaptchaService, 'present' | 'answer'>;
   /**
    * The terms and rules (program §6). Optional for the reason `membership` is; absent, no
    * customer is asked to accept anything — which is also what a tenant with enforcement off,
@@ -667,6 +674,8 @@ export interface ReferralGiftSource {
     readonly total: Money;
     readonly referrerPercent: number;
     readonly referredPercent: number;
+    /** R10 D5 (b): the guard holds the gift for the referee's first paid purchase. */
+    readonly requiresPurchase?: boolean;
   }>;
   stats(
     scope: TenantContext,
@@ -682,7 +691,12 @@ export interface ReferralGiftSource {
     actor: ActorContext,
     customerId: UserId,
     input: { readonly idempotencyKey: string },
-  ): Promise<{ readonly credited: Money; readonly claimedCount: number }>;
+  ): Promise<{
+    readonly credited: Money;
+    readonly claimedCount: number;
+    /** R10 D5 (b): referrer shares the daily cap left for a later day. */
+    readonly cappedCount?: number;
+  }>;
   /**
    * R1: what this customer could be paid now — the claim button is drawn only when there
    * is something. Optional so a stand-in without it keeps the older rule (drawn while the

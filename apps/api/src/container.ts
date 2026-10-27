@@ -314,7 +314,10 @@ import {
   QrTemplatePreviewService,
 } from './modules/control/media/application/qr-template.service.js';
 import { ReferralSignupGiftService } from './modules/commerce/referrals/application/referral-signup-gift.service.js';
+import { StartCaptchaService } from './modules/commerce/customers/application/start-captcha.service.js';
+import { DrizzleStartCaptchaRepository } from './modules/commerce/customers/infrastructure/drizzle-start-captcha.repository.js';
 import { DrizzleReferralSignupGiftRepository } from './modules/commerce/referrals/infrastructure/drizzle-referral-signup-gift.repository.js';
+import { TenantReferralDayCalendar } from './modules/commerce/referrals/infrastructure/tenant-referral-day.calendar.js';
 import { GiftCardAdminService } from './modules/commerce/gift-cards/application/gift-card-admin.service.js';
 import { GiftCardRedemptionService } from './modules/commerce/gift-cards/application/gift-card-redemption.service.js';
 import {
@@ -1296,6 +1299,8 @@ export interface Container {
   /** Round W: the dashboard's operational gauges and the sidebar counters, per permission. */
   readonly operationsOverview: OperationsOverviewService;
   readonly referralSignupGifts: ReferralSignupGiftService;
+  /** R10 D5 (a): the optional /start captcha for new customers. */
+  readonly startCaptcha: StartCaptchaService;
   /** R10 D4: gift cards — the operator's batches and the customer's redemption. */
   readonly giftCards: GiftCardAdminService;
   readonly giftCardRedemption: GiftCardRedemptionService;
@@ -2443,8 +2448,27 @@ export function createContainer(
     guard,
   });
 
+  /*
+   * R10 D5 (a): the optional `/start` captcha for NEW customers. Its row is written by the
+   * customer service's registration hook below and read by the bot's gate and the mini app's.
+   */
+  const startCaptchaService = new StartCaptchaService({
+    captchas: new DrizzleStartCaptchaRepository(database.db),
+    features: featureFlagResolver,
+    settings: settingsResolver,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    clock,
+    ids,
+  });
   const customerService = new CustomerService({
     referrals: referralProgram,
+    captcha: startCaptchaService,
     repository: customerRepository,
     guard,
     audit,
@@ -3462,6 +3486,8 @@ export function createContainer(
    * REFERRER's wallet — earned by the provisioner loop on delivery, reversed by a refund
    * in the refund's own transaction.
    */
+  /* R10 D5 (b): the referral caps' local day, from the one period resolver. */
+  const referralDays = new TenantReferralDayCalendar(database.db);
   const referralCommissionService = new ReferralCommissionService({
     commissions: referralCommissionRepository,
     wallet: walletRepository,
@@ -3472,6 +3498,8 @@ export function createContainer(
     scopeActivity: tenants,
     clock,
     ids,
+    // R10 D5 (b): the daily commission cap, while `referral_abuse_guard` is on.
+    abuse: { features: featureFlagResolver, settings: settingsResolver, days: referralDays },
   });
   /*
    * The signup gift (customer UX §I): one credit per side of a referral, from the terms
@@ -3494,6 +3522,7 @@ export function createContainer(
     outbox,
     clock,
     ids,
+    days: referralDays,
   });
 
   /*
@@ -8264,6 +8293,8 @@ export function createContainer(
     sessions: new DrizzleMiniAppSessionRepository(database.db),
     membership: channelMembership,
     terms: termsAcceptanceService,
+    // R10 D5 (a): the bot's /start captcha, as a gate the mini app holds too.
+    captcha: startCaptchaService,
     telegramAdmins,
     uow,
     scopeActivity: tenants,
@@ -8436,6 +8467,7 @@ export function createContainer(
     reports: reportingService,
     operationsOverview,
     referralSignupGifts: referralSignupGiftService,
+    startCaptcha: startCaptchaService,
     giftCards: giftCardAdminService,
     giftCardRedemption: giftCardRedemptionService,
     giftCardSweepLoop,
@@ -8529,6 +8561,8 @@ export function createContainer(
       // Package B: the REQUIRED channels, enforced before any business action; fails open.
       membership: channelMembership,
       terms: termsAcceptanceService,
+      // R10 D5 (a): the /start captcha, the first check of the gate chain.
+      captcha: startCaptchaService,
       // WP11A: the external-gateway attempt's customer reads and the check tap.
       gateway: gatewayPayments,
       // TonPays Telegram: «📤 ارسال فیش واریزی» and «🔄 تعویض کارت» (database writes only).

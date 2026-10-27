@@ -113,6 +113,16 @@ import {
   TOPUP_PRESETS_MAX,
 } from './payment.js';
 import { referralSignupGiftShareSchema } from './customer-ux.js';
+import {
+  START_CAPTCHA_COOLDOWN_SECONDS_MAX,
+  START_CAPTCHA_COOLDOWN_SECONDS_MIN,
+  START_CAPTCHA_EXPIRY_SECONDS_MAX,
+  START_CAPTCHA_EXPIRY_SECONDS_MIN,
+  START_CAPTCHA_MAX_ATTEMPTS_MAX,
+  START_CAPTCHA_MAX_ATTEMPTS_MIN,
+  referralDailyCapSchema,
+  referralGiftUnlockModeSchema,
+} from './anti-abuse.js';
 import { qrTemplateSettingSchema } from './delivery-qr.js';
 import { DEFAULT_MAIN_MENU_LAYOUT, mainMenuLayoutSchema } from './bot-commands.js';
 import { serviceCardLayoutSchema } from './service-card-layout.js';
@@ -1806,6 +1816,61 @@ export const SETTINGS = [
     classification: 'PUBLIC',
     consumer: 'ACTIVE',
   },
+  /*
+   * R10 D5 (a): the `/start` captcha's three parameters. Read on every captcha turn; inert
+   * while `start_captcha` is off.
+   */
+  {
+    key: 'captcha.expiry_seconds',
+    description:
+      'How long one captcha question stays answerable, in seconds. An answer to an expired ' +
+      'question is not counted: a new question is asked instead.',
+    schema: z
+      .number()
+      .int()
+      .min(START_CAPTCHA_EXPIRY_SECONDS_MIN)
+      .max(START_CAPTCHA_EXPIRY_SECONDS_MAX),
+    defaultValue: 300,
+    configures: 'start_captcha',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'captcha.max_attempts',
+    description:
+      'How many wrong answers a new customer may give before a cooldown. The cooldown never ' +
+      'blocks the customer: when it ends a new question is asked and the count starts again.',
+    schema: z
+      .number()
+      .int()
+      .min(START_CAPTCHA_MAX_ATTEMPTS_MIN)
+      .max(START_CAPTCHA_MAX_ATTEMPTS_MAX),
+    defaultValue: 3,
+    configures: 'start_captcha',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'captcha.cooldown_seconds',
+    description:
+      'How long a new customer waits, in seconds, after using up their attempts, before a ' +
+      'new question is asked.',
+    schema: z
+      .number()
+      .int()
+      .min(START_CAPTCHA_COOLDOWN_SECONDS_MIN)
+      .max(START_CAPTCHA_COOLDOWN_SECONDS_MAX),
+    defaultValue: 600,
+    configures: 'start_captcha',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
   {
     key: 'services.link_rotation_cooldown_hours',
     description:
@@ -1978,6 +2043,57 @@ export const SETTINGS = [
     defaultValue: 50,
     configures: 'referral_signup_gift',
     zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * R10 D5 (b): the referral-gift guard's three parameters. Read by the gift claim inside
+   * its locked transaction and by the commission earner under the referrer's lock; inert
+   * while `referral_abuse_guard` is off, which is today's behaviour byte for byte.
+   */
+  {
+    key: 'referral.abuse.gift_unlock',
+    description:
+      'When a referral’s membership gift becomes claimable while the guard is on: at ' +
+      'the attribution (as with the guard off), or only once the referred customer has a ' +
+      'paid order that was delivered — the same delivery the purchase commission waits ' +
+      'for. Both sides wait. Sides already paid stay paid; nothing is granted or taken back ' +
+      'by a change.',
+    schema: referralGiftUnlockModeSchema,
+    defaultValue: 'ON_FIRST_PAID_PURCHASE',
+    configures: 'referral_abuse_guard',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'referral.abuse.referrer_daily_gift_cap',
+    description:
+      'The most referrer shares of the membership gift one referrer is paid per local day ' +
+      '(the tenant’s time zone and calendar). A share over the cap is not lost: it stays ' +
+      'unclaimed and can be claimed the next day. The new customer’s own share is never ' +
+      'capped. Empty means no cap.',
+    schema: referralDailyCapSchema,
+    defaultValue: null,
+    configures: 'referral_abuse_guard',
+    // Empty switches the cap off: there is no limit, and nothing waits for the next day.
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'referral.abuse.referrer_daily_commission_cap',
+    description:
+      'The most purchase commissions one referrer is credited per local day. A commission ' +
+      'over the cap is never voided: it stays pending and is earned on a later day, by the ' +
+      'same rule as any other. Empty means no cap.',
+    schema: referralDailyCapSchema,
+    defaultValue: null,
+    configures: 'referral_abuse_guard',
+    zeroMeaning: 'DISABLES',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     consumer: 'ACTIVE',

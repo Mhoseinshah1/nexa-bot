@@ -23,9 +23,11 @@ export async function referralGift(
     const claimed = await rt.deps.referralGifts.claim(scope, actor, customer.id, {
       idempotencyKey: `${idempotencyKey}:signup-gift`,
     });
+    // R10 D5 (b): a share the referrer's daily cap held back is said to wait, not to be gone.
+    const capped = (claimed.cappedCount ?? 0) > 0;
     if (claimed.claimedCount === 0 || claimed.credited.amountMinor === 0n) {
       return {
-        key: 'bot.referral.gift_nothing',
+        key: capped ? 'bot.referral.gift_daily_cap' : 'bot.referral.gift_nothing',
         values: {},
         buttons: [mainMenuButton()],
         orderId: null,
@@ -36,6 +38,7 @@ export async function referralGift(
       values: { amount: claimed.credited },
       buttons: [mainMenuButton()],
       orderId: null,
+      ...(capped ? { followUpKey: 'bot.referral.gift_daily_cap' as const } : {}),
     };
   } catch (error) {
     return refusal(error);
@@ -108,6 +111,7 @@ export async function referralInvite(
           total: gift.total,
           referrerPercent: gift.referrerPercent,
           referredPercent: gift.referredPercent,
+          afterPurchase: gift.requiresPurchase === true,
         }
       : null,
     referralCount: stats.referralCount,

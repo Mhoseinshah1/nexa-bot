@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
 import { ReferralAnalytics } from './business';
@@ -503,6 +503,20 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
               </span>
             ),
           ],
+          /*
+           * R10 D5: a pending commission the referrer's daily cap held back, and from when it
+           * is paid. Only while it is still pending: once earned, the hold is history.
+           */
+          ...(row.state === 'PENDING' && row.notBefore !== null
+            ? [
+                [
+                  t('web.referral_not_before'),
+                  <span key="not-before" className="nowrap">
+                    {formatTimestamp(row.notBefore)}
+                  </span>,
+                ] satisfies [ReactNode, ReactNode],
+              ]
+            : []),
         ]}
       />
     );

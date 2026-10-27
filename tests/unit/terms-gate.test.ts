@@ -93,6 +93,22 @@ describe('the one central gate', () => {
     expect(new Set(callersOf('this.guardedAct('))).toEqual(new Set(['handle']));
   });
 
+  it('asks the /start captcha FIRST, inside the one gate, before membership and terms (R10 D5)', () => {
+    // The captcha is a check of the chain, not a handler: called from `guardedAct` and
+    // nowhere else, and before the membership lookup there, so `act` is still reached
+    // only through captcha -> membership -> terms.
+    expect(new Set(callersOf('captchaFlow.captchaGate('))).toEqual(new Set(['guardedAct']));
+    const gate = source.slice(source.indexOf('  async guardedAct('));
+    const captcha = gate.indexOf('captchaFlow.captchaGate(');
+    const membership = gate.indexOf('membership.missingRequired(');
+    expect(captcha).toBeGreaterThan(0);
+    expect(membership).toBeGreaterThan(captcha);
+    // A HOLD returns the question and nothing below it runs.
+    expect(gate.slice(captcha, membership)).toContain(
+      "if (captcha.kind === 'HOLD') return captcha.reply;",
+    );
+  });
+
   it('keeps the frame of the customer message to Appearance markers and the two placeholders', () => {
     for (const key of ['bot.terms.required', 'bot.terms.updated'] as const) {
       expect(CATALOGUE_FA[key]).toContain('{title}');

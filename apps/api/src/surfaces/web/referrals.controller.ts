@@ -158,5 +158,6 @@ function toCommissionSummary(item: ReferralCommissionListing): ReferralCommissio
     createdAt: item.createdAt.toISOString(),
     earnedAt: item.earnedAt === null ? null : item.earnedAt.toISOString(),
     voidedAt: item.voidedAt === null ? null : item.voidedAt.toISOString(),
+    notBefore: item.notBefore === null ? null : item.notBefore.toISOString(),
   };
 }

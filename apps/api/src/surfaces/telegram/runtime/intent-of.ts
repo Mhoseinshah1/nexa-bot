@@ -157,6 +157,7 @@ import {
   SERVICE_AUTO_RENEW_OFF_CALLBACK_PREFIX,
   SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX,
   TERMS_ACCEPT_CALLBACK_PREFIX,
+  START_CAPTCHA_CALLBACK_PREFIX,
   TICKETS_CALLBACK_DATA,
   TICKET_CATEGORY_CALLBACK_PREFIX,
   TICKET_CLOSE_ASK_CALLBACK_PREFIX,
@@ -425,6 +426,22 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
       const version = uuidV7Schema.safeParse(data.slice(TERMS_ACCEPT_CALLBACK_PREFIX.length));
       if (!version.success) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
       return { intent: 'TERMS_ACCEPT', targetId: version.data, callbackQueryId: id };
+    }
+    // R10 D5 (a): `hc:<question uuid>:<0-3>` — a question and a position, nothing else.
+    if (data.startsWith(START_CAPTCHA_CALLBACK_PREFIX)) {
+      const answer = /^([0-9a-f-]{36}):([0-3])$/u.exec(
+        data.slice(START_CAPTCHA_CALLBACK_PREFIX.length),
+      );
+      const question = uuidV7Schema.safeParse(answer?.[1]);
+      if (answer === null || !question.success) {
+        return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      }
+      return {
+        intent: 'CAPTCHA_ANSWER',
+        targetId: question.data,
+        choice: Number(answer[2]),
+        callbackQueryId: id,
+      };
     }
     if (data === TUTORIAL_CALLBACK_DATA) {
       return { intent: 'TUTORIAL', targetId: null, callbackQueryId: id };

@@ -72,6 +72,8 @@ export const TEMPLATE_CATEGORY_PREFIXES: Readonly<Record<TemplateCategory, reado
     'bot.help',
     'bot.ping.',
     'bot.appearance.',
+    // R10 D5: the /start captcha, the first thing a new customer may meet.
+    'bot.captcha.',
     'bot.custom_button.',
   ],
   purchase: ['bot.catalog.', 'bot.order.', 'bot.username.', 'bot.discount.', 'bot.custom_service.'],

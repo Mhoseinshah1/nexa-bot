@@ -104,6 +104,7 @@ export * from './customer-reminders.js';
 export * from './service-username.js';
 export * from './promotions.js';
 export * from './customer-ux.js';
+export * from './anti-abuse.js';
 export * from './delivery-qr.js';
 // R2: the Telegram messages edited in place (wizards, receipt review).
 export * from './telegram-wizards.js';

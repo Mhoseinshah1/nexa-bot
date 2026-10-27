@@ -85,6 +85,10 @@ export const AUDIT_VERB_LABELS: Readonly<Record<string, WebKey>> = {
   bootstrap: 'web.audit_verb_bootstrap',
   cancel: 'web.audit_verb_cancel',
   change_location: 'web.audit_verb_change_location',
+  // R10 D5 (a): the /start captcha's three outcomes.
+  captcha_answer: 'web.audit_verb_captcha_answer',
+  captcha_locked: 'web.audit_verb_captcha_locked',
+  captcha_passed: 'web.audit_verb_captcha_passed',
   claim: 'web.audit_verb_claim',
   clear: 'web.audit_verb_clear',
   close: 'web.audit_verb_close',

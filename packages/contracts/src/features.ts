@@ -320,6 +320,38 @@ export const FEATURE_FLAGS = [
     ],
   },
   {
+    key: 'referral_abuse_guard',
+    description:
+      'R10 D5 (b): guard referral money against fake sign-ups. On, a referral’s membership ' +
+      'gift is claimable only once the referred customer has a paid order that was delivered ' +
+      '(or from the attribution, if the unlock setting says so), and each referrer is paid at ' +
+      'most a configured number of gift shares and of purchase commissions per local day; ' +
+      'what is over a cap waits for the next day and is never voided. Off by default: the ' +
+      'gift and the commission behave exactly as before. Turning it on or off never changes ' +
+      'a balance — nothing already paid is taken back and nothing is granted by the switch.',
+    defaultEnabled: false,
+    // TENANT_WIDE: it changes when money is paid to every referrer and referee of the tenant.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [
+      'referral.abuse.gift_unlock',
+      'referral.abuse.referrer_daily_gift_cap',
+      'referral.abuse.referrer_daily_commission_cap',
+    ],
+  },
+  {
+    key: 'start_captcha',
+    description:
+      'R10 D5 (a): ask every NEW customer a simple question in the chat (a sum, four answer ' +
+      'buttons) before the bot serves them. Only customers who first arrive while it is on ' +
+      'are asked; existing customers never are, and turning it off lets everybody waiting ' +
+      'through at once. A wrong answer costs an attempt and, at the limit, a cooldown — ' +
+      'never a block. Administrators are never asked. No third-party service is involved.',
+    defaultEnabled: false,
+    // TENANT_WIDE: it stands in front of every new customer of the tenant.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: ['captcha.expiry_seconds', 'captcha.max_attempts', 'captcha.cooldown_seconds'],
+  },
+  {
     key: 'panel_auto_balancing',
     description:
       'Place each new service on the best eligible panel of its product\u2019s balancing ' +

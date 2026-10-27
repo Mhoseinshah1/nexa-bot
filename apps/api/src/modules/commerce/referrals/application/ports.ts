@@ -8,6 +8,7 @@ import type {
   ReferralSignupGiftSide,
   ReferralTrigger,
   TenantContext,
+  TimePeriod,
 } from '@nexa/contracts';
 
 /**
@@ -59,6 +60,11 @@ export interface ReferralCommissionRecord {
   readonly earnedEntryId: string | null;
   readonly earnedAt: Date | null;
   readonly voidedAt: Date | null;
+  /**
+   * R10 D5 (b): a PENDING commission the referrer's daily cap held back is not earned before
+   * this instant. Null for every other commission.
+   */
+  readonly notBefore: Date | null;
   readonly createdAt: Date;
 }
 
@@ -195,8 +201,18 @@ export interface ReferralCommissionRepository {
     tx: unknown,
   ): Promise<ReferralCommissionRecord | null>;
 
-  /** `PENDING` commissions whose order was delivered or has ended, oldest first, bounded. */
-  due(scope: TenantContext, limit: number, tx?: unknown): Promise<readonly DueReferralCommission[]>;
+  /**
+   * `PENDING` commissions whose order was delivered or has ended, oldest first, bounded —
+   * skipping, when `holdsBefore` is given, one the daily cap holds until after it (R10 D5),
+   * so a held commission never stands at the head of the queue in front of the ones behind
+   * it. Null when no cap is in force: a hold is then not honoured at all.
+   */
+  due(
+    scope: TenantContext,
+    limit: number,
+    holdsBefore: Date | null,
+    tx?: unknown,
+  ): Promise<readonly DueReferralCommission[]>;
 
   /** The same answer for one order, or null while its order is still in flight. */
   dueFor(
@@ -223,6 +239,31 @@ export interface ReferralCommissionRepository {
 
   /** `PENDING -> VOID`, conditional. */
   void(scope: TenantContext, id: string, now: Date, tx: unknown): Promise<boolean>;
+
+  /**
+   * R10 D5 (b): holds a PENDING commission until `notBefore`, conditional on `PENDING`. The
+   * row stays PENDING — the cap never voids — and the guard trigger (0283) allows exactly
+   * this one PENDING -> PENDING change.
+   */
+  defer(
+    scope: TenantContext,
+    id: string,
+    notBefore: Date,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
+
+  /**
+   * R10 D5 (b): how many of this referrer's commissions were EARNED with a credit inside
+   * `[period.start, period.end)`. Read under the referrer's wallet lock, which every earn of
+   * theirs holds, so the count cannot move while it is being decided on.
+   */
+  countEarnedIn(
+    scope: TenantContext,
+    referrerId: string,
+    period: TimePeriod,
+    tx: unknown,
+  ): Promise<number>;
 
   reversals(
     scope: TenantContext,
@@ -281,6 +322,14 @@ export interface ReferralSignupGiftRecord {
 }
 
 /**
+ * A referral, locked for a claim, with whether its REFEREE has made a qualifying purchase
+ * (R10 D5 (b)): a paid order delivered — the commission earner's own "delivered".
+ */
+export interface LockedReferral extends ReferralRecord {
+  readonly refereeQualified: boolean;
+}
+
+/**
  * A side of a referral a customer has not been paid for. `snapshotAmount` is the gift
  * row's figure for that side, or null while no row exists yet — in which case the
  * current terms decide whether there is anything to claim.
@@ -291,6 +340,17 @@ export interface OpenReferralSignupGiftSide {
   readonly snapshotAmount: bigint | null;
   /** The currency the gift row was snapshotted in; null with `snapshotAmount` when no row exists. */
   readonly snapshotCurrency: CurrencyCode | null;
+  /** R10 D5 (b): whether the referral's referee has a paid order that was delivered. */
+  readonly refereeQualified: boolean;
+}
+
+/**
+ * R10 D5 (b): the referrer's local day, half-open, cut by the ONE period resolver in the
+ * tenant's time zone and calendar. `at` is the caller's own clock reading, so the window and
+ * the decision made at `at` agree.
+ */
+export interface ReferralDayCalendar {
+  dayOf(scope: TenantContext, at: Date, tx?: unknown): Promise<TimePeriod>;
 }
 
 /** What a referrer's referees have bought and had delivered, in one currency. */
@@ -319,7 +379,19 @@ export interface ReferralSignupGiftRepository {
     scope: TenantContext,
     customerId: string,
     tx: unknown,
-  ): Promise<readonly ReferralRecord[]>;
+  ): Promise<readonly LockedReferral[]>;
+
+  /**
+   * R10 D5 (b): how many REFERRER shares this referrer was paid inside
+   * `[period.start, period.end)`. Read in the claim, under the claimant's referral row locks:
+   * every claim by one referrer takes those same rows, so the count is serialised.
+   */
+  countReferrerClaimsIn(
+    scope: TenantContext,
+    referrerId: string,
+    period: TimePeriod,
+    tx: unknown,
+  ): Promise<number>;
 
   /** The gift row of one referral, `FOR UPDATE` when asked. Null until the first claim. */
   findByReferral(

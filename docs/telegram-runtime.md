@@ -16,7 +16,7 @@ who calls it. Use those instead of opening the router.
 | Member                                             | What it is                                                                                                                                                                                                                                         |
 | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `handle`                                           | The public entry: resolve the customer, commit, classify (`intentOf`), act, then send or edit, outside any transaction. The welcome banner and tutorial video sends live here (`r5c2-inline-keyboard-scan` allows `.sendFile(` in this file only). |
-| `guardedAct` → `termsGatedAct` → `act`             | The membership gate, the terms gate, and the intent switch. `terms-gate.test.ts` pins that `act` is reached only through these, by reading this file.                                                                                              |
+| `guardedAct` → `termsGatedAct` → `act`             | The captcha (R10 D5) and membership gates, the terms gate, and the intent switch. `terms-gate.test.ts` pins that `act` is reached only through these, by reading this file.                                                                        |
 | `acceptTerms`, `isAdmin`, `capturedText`           | The terms button, the administrator check, and the customer's open text window by purpose.                                                                                                                                                         |
 | `editWizard`, `editOrSend`, `stopSpinner`, `refOf` | The message plumbing every flow's reply goes through.                                                                                                                                                                                              |
 | `menuFor`                                          | The reply-keyboard route table for a text message. An owner-defined label maps to `mb:<id>` and never overrides a shared label (R10 D2).                                                                                                           |
@@ -27,34 +27,35 @@ exports are re-exported from it, because tests and `container.ts` import them fr
 
 ## The flows: `runtime/`
 
-| File                       | What lives there                                                                                                      |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `intents.ts`               | `BOT_INTENTS`, `BotIntent`, `BotCommand`: the closed vocabulary of what a customer asked for.                         |
-| `callbacks.ts`             | Every `callback_data` prefix and the id-pair / version encoders.                                                      |
-| `intent-of.ts`             | `intentOf`: one update to one `BotCommand`; `startPayloadOf`, `updateIdOf`, `privateChatIdOf`.                        |
-| `deps.ts`                  | `BotRuntimeDeps` and the ports the runtime needs.                                                                     |
-| `replies.ts`               | `PendingReply`, `BotTurnResult`, `replyFor`, the blocked and stale replies.                                           |
-| `refusals.ts`              | `refusal(error)` and `REFUSAL_REPLIES`: an error code to one customer sentence.                                       |
-| `keyboards.ts`             | The main-menu button and the notification lane's buttons.                                                             |
-| `start-menu-flow.ts`       | `/start` greeting, membership and terms replies, marketing opt-in/out.                                                |
-| `purchase-flow.ts`         | Catalogue, categories, the custom service, draft, username, discount code, pre-invoice, order cancel.                 |
-| `checkout-flow.ts`         | Wallet payment, the method selector, gateway payment and check, `settledKeyFor`; the rules live in `CheckoutService`. |
-| `payment-screens.ts`       | The gateway attempt screen, pay-method and top-up buttons.                                                            |
-| `card-receipt-flow.ts`     | Card-to-card: instructions, switch card, transfer sent, receipt upload, cancel, gateway receipts.                     |
-| `topup-flow.ts`            | Wallet balance and the top-up flow.                                                                                   |
-| `service-card-flow.ts`     | My services list, the service card, resend, files, suspend/resume, search, note, refresh.                             |
-| `service-actions-flow.ts`  | Renew, add traffic/time/devices, change location, rotate link, the commercial quote and confirm.                      |
-| `service-requests-flow.ts` | Refund and transfer requests on a service.                                                                            |
-| `referral-flow.ts`         | The invite and the gift.                                                                                              |
-| `trial-flow.ts`            | The trial.                                                                                                            |
-| `tutorial-flow.ts`         | Tutorials and client-app screens.                                                                                     |
-| `support-flow.ts`          | Support screen and tickets.                                                                                           |
-| `custom-button-flow.ts`    | A tap on an owner-defined main-menu button: link, text, photo, document, or "unavailable" (R10 D2, ADR-0036).         |
-| `admin-common.ts`          | The management panel's shared prefixes and section check.                                                             |
-| `admin-flow.ts`            | `adminTurn`, `adminCaptureText`: the management panel's switch.                                                       |
-| `admin-review-flow.ts`     | Receipt and refund-request review, approve, reject, credit.                                                           |
-| `admin-customers-flow.ts`  | Customers and categories sections.                                                                                    |
-| `admin-services-flow.ts`   | Services, panels, reminders, usernames and administrators sections.                                                   |
+| File                       | What lives there                                                                                                        |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `intents.ts`               | `BOT_INTENTS`, `BotIntent`, `BotCommand`: the closed vocabulary of what a customer asked for.                           |
+| `callbacks.ts`             | Every `callback_data` prefix and the id-pair / version encoders.                                                        |
+| `intent-of.ts`             | `intentOf`: one update to one `BotCommand`; `startPayloadOf`, `updateIdOf`, `privateChatIdOf`.                          |
+| `deps.ts`                  | `BotRuntimeDeps` and the ports the runtime needs.                                                                       |
+| `replies.ts`               | `PendingReply`, `BotTurnResult`, `replyFor`, the blocked and stale replies.                                             |
+| `refusals.ts`              | `refusal(error)` and `REFUSAL_REPLIES`: an error code to one customer sentence.                                         |
+| `keyboards.ts`             | The main-menu button and the notification lane's buttons.                                                               |
+| `start-menu-flow.ts`       | `/start` greeting, membership and terms replies, marketing opt-in/out.                                                  |
+| `captcha-flow.ts`          | R10 D5: the `/start` captcha gate (`captchaGate`, first check of `guardedAct`), its replies and answer buttons (`hc:`). |
+| `purchase-flow.ts`         | Catalogue, categories, the custom service, draft, username, discount code, pre-invoice, order cancel.                   |
+| `checkout-flow.ts`         | Wallet payment, the method selector, gateway payment and check, `settledKeyFor`; the rules live in `CheckoutService`.   |
+| `payment-screens.ts`       | The gateway attempt screen, pay-method and top-up buttons.                                                              |
+| `card-receipt-flow.ts`     | Card-to-card: instructions, switch card, transfer sent, receipt upload, cancel, gateway receipts.                       |
+| `topup-flow.ts`            | Wallet balance and the top-up flow.                                                                                     |
+| `service-card-flow.ts`     | My services list, the service card, resend, files, suspend/resume, search, note, refresh.                               |
+| `service-actions-flow.ts`  | Renew, add traffic/time/devices, change location, rotate link, the commercial quote and confirm.                        |
+| `service-requests-flow.ts` | Refund and transfer requests on a service.                                                                              |
+| `referral-flow.ts`         | The invite and the gift.                                                                                                |
+| `trial-flow.ts`            | The trial.                                                                                                              |
+| `tutorial-flow.ts`         | Tutorials and client-app screens.                                                                                       |
+| `support-flow.ts`          | Support screen and tickets.                                                                                             |
+| `custom-button-flow.ts`    | A tap on an owner-defined main-menu button: link, text, photo, document, or "unavailable" (R10 D2, ADR-0036).           |
+| `admin-common.ts`          | The management panel's shared prefixes and section check.                                                               |
+| `admin-flow.ts`            | `adminTurn`, `adminCaptureText`: the management panel's switch.                                                         |
+| `admin-review-flow.ts`     | Receipt and refund-request review, approve, reject, credit.                                                             |
+| `admin-customers-flow.ts`  | Customers and categories sections.                                                                                      |
+| `admin-services-flow.ts`   | Services, panels, reminders, usernames and administrators sections.                                                     |
 
 ## The pattern: free functions, no forwarders
 

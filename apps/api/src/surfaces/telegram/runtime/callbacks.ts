@@ -401,6 +401,12 @@ export const MEMBERSHIP_CHECK_CALLBACK_DATA = 'mc:';
  * letters: `a:` is taken, and `ac:` differs from it at the second character. 39 bytes.
  */
 export const TERMS_ACCEPT_CALLBACK_PREFIX = 'ac:';
+/**
+ * R10 D5 (a): `hc:<question uuid>:<0-3>` — one answer under the `/start` captcha. Two
+ * letters: `h:` is taken (add time), and `hc:` differs from it at the second character.
+ * 41 bytes. The answer itself is never in it, only the question's id and a position.
+ */
+export const START_CAPTCHA_CALLBACK_PREFIX = 'hc:';
 export const TUTORIAL_PLATFORM_CALLBACK_PREFIX = 'to:';
 /** WP-A10: `ca:<entry uuid>` — one of the tenant's client apps. Begins with `c` like `c:`, `cg:`, `ck:`. */
 export const CLIENT_APP_CALLBACK_PREFIX = 'ca:';

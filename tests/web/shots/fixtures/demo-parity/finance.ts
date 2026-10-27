@@ -469,6 +469,7 @@ const COMMISSION_ROWS: readonly Json[] = LEDGER.map(
       createdAt: ago(60 * 24 * index + 60 * 5),
       earnedAt: state === 'EARNED' ? ago(60 * 24 * index) : null,
       voidedAt: state === 'VOID' ? ago(60 * 24 * index) : null,
+      notBefore: null,
     };
   },
 );

@@ -4586,3 +4586,32 @@ money.
   owner-only, a security alert on every change, or public addresses only.
 - **OQ-CG-06 — a return-to-bot link.** The protocol sends no return URL; the customer comes back to
   the bot by themselves. A `return_url` field is an additive v1 change if wanted.
+
+## Round 10 D5 — anti-abuse: the /start captcha and the referral-gift guard
+
+Both switches ship OFF (`start_captcha`, `referral_abuse_guard`). Each default below moves no
+money and sends no customer message; the owner decides otherwise.
+
+- **OQ-D5-01 — a purchase paid ENTIRELY from wallet credit.** An operator credit, cashback or an
+  imported Mirza balance can pay the referee's first order. Default: it qualifies like any rail —
+  the condition is a paid, DELIVERED order. The referee's own gift is held until then, so it cannot
+  fund the qualifying purchase.
+- **OQ-D5-02 — a qualifying order refunded after delivery.** Default: the qualification stands and
+  nothing is clawed back (consistent with "never collected"); the predicate counts a settled order,
+  PAID or later REFUNDED, whose delivery succeeded.
+- **OQ-D5-03 — telling a customer their gift became claimable.** Default: no push message; it is
+  visible on the referral screen (the claim button appears). A notice would need a new
+  `CUSTOMER_NOTIFICATION_KINDS` value and its CHECK change.
+- **OQ-D5-04 — over a cap: defer (built) or forfeit; is a commission cap wanted at all?** A
+  commission already needs a real delivered purchase. Default: both caps empty (no cap); over a
+  cap the gift share waits for the next local day and the commission is deferred, never voided.
+- **OQ-D5-05 — captcha difficulty and accessibility.** A sum of two digits with four answer
+  buttons, Latin digits (the owner's R6 rule keeps Persian digits to the two greetings), defaults
+  300 s / 3 answers / 600 s cooldown, no third-party service. Whether a harder or a different
+  challenge is wanted is the owner's call.
+- **OQ-D5-06 — a held customer's referral attribution, and a manual "pass".** Default: the
+  attribution is written at registration as always (the money is guarded by (b)); no operator
+  tool passes one customer — turning `start_captcha` off frees everybody waiting.
+- **OQ-D5-07 — a customer first created by a mini-app launch while the flag is on.** They get a
+  captcha row like a `/start` arrival and the mini app holds them at `CAPTCHA`, pointing to the
+  bot; whether a mini-app arrival should be asked at all is the owner's call.

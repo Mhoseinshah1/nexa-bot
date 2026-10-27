@@ -57,9 +57,11 @@ export interface MiniAppContext {
   readonly telegramUserId: string;
 }
 
-/** Where the customer is held, if anywhere: the bot's three gates, in the bot's order. */
+/** Where the customer is held, if anywhere: the bot's four gates, in the bot's order. */
 export type MiniAppGateState =
   | { readonly kind: 'BLOCKED' }
+  /** R10 D5 (a): the bot's `/start` question, unanswered. Answered in the chat only. */
+  | { readonly kind: 'CAPTCHA' }
   | {
       readonly kind: 'CHANNELS';
       readonly channels: readonly TelegramChannel[];
@@ -109,6 +111,13 @@ export interface MiniAppSessionServiceDeps {
         readonly fresh: boolean;
       },
     ): Promise<readonly TelegramChannel[]>;
+  };
+  /**
+   * R10 D5 (a): the bot's `/start` captcha — whether it holds this customer now (a PENDING
+   * row while `start_captcha` is on). Absent, nobody is held by it.
+   */
+  readonly captcha?: {
+    holds(scope: TenantContext, customerId: string): Promise<boolean>;
   };
   readonly terms?: {
     requirement(
@@ -319,10 +328,11 @@ export class MiniAppSessionService {
 
   /**
    * The gate this customer is held at, asked exactly as the bot's router asks it: BLOCKED
-   * first (the turn never reaches `act`), then the REQUIRED channels (skipped for an
-   * operator's per-customer exemption), then the CURRENT published terms. A bound
-   * administrator is never held by the second or the third, and the binding is asked only
-   * when something would hold them. `fresh` re-asks Telegram, as «عضو شدم» does.
+   * first (the turn never reaches `act`), then the `/start` captcha (R10 D5), then the
+   * REQUIRED channels (skipped for an operator's per-customer exemption), then the CURRENT
+   * published terms. A bound administrator is never held by the last three, and the binding
+   * is asked only when something would hold them. `fresh` re-asks Telegram, as «عضو شدم»
+   * does. The captcha is never ANSWERED here: the mini app says so and links to the bot.
    */
   async gateFor(
     context: MiniAppContext,
@@ -338,6 +348,13 @@ export class MiniAppSessionService {
         null;
       return admin;
     };
+    if (
+      this.deps.captcha !== undefined &&
+      (await this.deps.captcha.holds(scope, customer.id)) &&
+      !(await isAdmin())
+    ) {
+      return { kind: 'CAPTCHA' };
+    }
     if (this.deps.membership !== undefined && customer.channelMembershipExemptAt === null) {
       const missing = await this.deps.membership.missingRequired(scope, {
         botInstanceId: context.botInstanceId,

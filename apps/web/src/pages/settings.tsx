@@ -251,6 +251,9 @@ const FLAG_LABELS: Readonly<Record<string, WebKey>> = {
   reminder_quiet_hours: 'web.flag_reminder_quiet_hours',
   customer_link_rotation: 'web.flag_customer_link_rotation',
   referral_signup_gift: 'web.flag_referral_signup_gift',
+  // R10 D5.
+  referral_abuse_guard: 'web.flag_referral_abuse_guard',
+  start_captcha: 'web.flag_start_captcha',
   custom_service: 'web.flag_custom_service',
   panel_auto_balancing: 'web.flag_panel_auto_balancing',
   // R10 C2.

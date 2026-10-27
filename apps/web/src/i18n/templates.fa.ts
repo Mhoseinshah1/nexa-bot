@@ -61,6 +61,8 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
   },
   { id: 'channels', label: 'عضویت اجباری در کانال', prefixes: ['bot.channels.'] },
   { id: 'terms', label: 'قوانین و مقررات', prefixes: ['bot.terms.'] },
+  // R10 D5: the /start captcha for new customers.
+  { id: 'captcha', label: 'سؤال امنیتی شروع (کپچا)', prefixes: ['bot.captcha.'] },
   { id: 'catalog', label: 'فروشگاه، سفارش و پیش‌فاکتور', prefixes: ['bot.catalog.', 'bot.order.'] },
   { id: 'username', label: 'انتخاب یوزرنیم سرویس', prefixes: ['bot.username.'] },
   { id: 'discount', label: 'کد تخفیف', prefixes: ['bot.discount.'] },
@@ -281,6 +283,9 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   adminId: 'شناسهٔ مدیر تصمیم‌گیرنده',
   amount: 'مبلغ',
   answer: 'پاسخ',
+  // R10 D5: the two numbers of the captcha's sum.
+  first: 'عدد اول سؤال',
+  second: 'عدد دوم سؤال',
   app: 'نام برنامه (با نماد، اگر تعیین شده باشد)',
   at: 'زمان',
   expiredAt: 'زمان پایان مهلت پرداخت',
@@ -761,6 +766,10 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
     unitPrice: 'قیمت هر کاربر اضافه',
   },
   'bot.service.devices_option': { quantity: 'تعداد کاربر', price: 'قیمت این تعداد' },
+  // R10 D5: the captcha's counts are answers and minutes, not money or traffic.
+  'bot.captcha.wrong': { remaining: 'تعداد فرصت باقی‌مانده' },
+  'bot.captcha.locked': { minutes: 'دقیقه‌های باقی‌مانده تا سؤال تازه' },
+  'bot.captcha.option_button': { answer: 'عدد پیشنهادی' },
   'bot.order.preinvoice_devices': { unitPrice: 'قیمت هر کاربر اضافه' },
   'bot.service.renew_option_button': { title: 'نام محصول' },
   // R2: the renewal result names the renewed account, not the customer's Telegram username.
@@ -1006,6 +1015,24 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'پاسخ دکمهٔ پذیرش قوانین؛ همان پیام قوانین به این متن ویرایش می‌شود (پیام تازه‌ای فرستاده نمی‌شود) و دکمهٔ منوی اصلی زیر آن می‌آید.',
   ],
   'bot.terms.accept_button': ['دکمهٔ پذیرش قوانین', 'دکمه‌ای که زیر متن قوانین می‌آید.'],
+  // R10 D5 (a): the /start captcha.
+  'bot.captcha.challenge': [
+    'سؤال امنیتی شروع',
+    'وقتی «سؤال امنیتی شروع» روشن است، به کاربر تازه به‌جای هر درخواستی این سؤال جمع دو عدد نشان داده می‌شود و چهار گزینه زیر آن می‌آید.',
+  ],
+  'bot.captcha.wrong': [
+    'پاسخ نادرست به سؤال امنیتی',
+    'پیام سؤال به این متن ویرایش می‌شود: تعداد فرصت باقی‌مانده و یک سؤال تازه. این پیام نباید از مسدود شدن حرف بزند.',
+  ],
+  'bot.captcha.expired': [
+    'زمان سؤال امنیتی تمام شده',
+    'پاسخ به سؤالی که زمانش گذشته شمرده نمی‌شود و پیام به یک سؤال تازه ویرایش می‌شود.',
+  ],
+  'bot.captcha.locked': [
+    'فرصت‌های سؤال امنیتی تمام شد',
+    'پس از پاسخ‌های نادرست بیش از حد مجاز؛ کاربر چند دقیقه صبر می‌کند و دوباره /start می‌فرستد. حساب مسدود نمی‌شود.',
+  ],
+  'bot.captcha.option_button': ['دکمهٔ گزینهٔ سؤال امنیتی', 'هر یک از چهار عدد پیشنهادی زیر سؤال.'],
   'bot.channels.join_private_button': [
     'دکمهٔ عضویت در کانال خصوصی',
     'دکمهٔ عضویت برای کانال اجباری بدون آیدی عمومی که با لینک دعوت باز می‌شود؛ با شمارهٔ کانال در فهرست.',
@@ -2718,6 +2745,15 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.referral.gift_disabled': [
     'هدیهٔ عضویت غیرفعال است',
     'هدیهٔ عضویت خاموش است یا شرایط آن کامل تنظیم نشده است.',
+  ],
+  // R10 D5 (b): the referral-gift guard.
+  'bot.referral.gift_after_purchase': [
+    'هدیه پس از نخستین خرید',
+    'سطری زیر شرایط هدیهٔ عضویت در داشبورد زیرمجموعه‌گیری، وقتی محافظ سوءاستفاده هدیه را تا نخستین خرید تحویل‌شدهٔ زیرمجموعه نگه می‌دارد.',
+  ],
+  'bot.referral.gift_daily_cap': [
+    'سقف روزانهٔ هدیه پر شده',
+    'پاسخ دکمهٔ دریافت هدیه وقتی سقف روزانهٔ معرف سهمی را پرداخت‌نشده گذاشته است؛ آن سهم از بین نمی‌رود و روز بعد قابل دریافت است.',
   ],
 
   // --- Support and FAQ --------------------------------------------------------------
