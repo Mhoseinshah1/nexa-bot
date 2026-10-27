@@ -4,6 +4,8 @@ import {
   LATE_CREDIT_SETTING_KEYS,
   LATE_CREDIT_WINDOW_SETTING_KEY,
   PANEL_SETTING_KEYS,
+  TONPAYS_PACING_BURST_SETTING_KEY,
+  TONPAYS_PACING_SETTING_KEYS,
   isSettingKey,
   settingIntegerRange,
   type DataCompactionMode,
@@ -306,6 +308,25 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     description: 'web.late_credit_window_hint',
     group: 'sales',
     control: { kind: 'integer', unit: 'web.unit_hours' },
+  },
+  // Round 11 A8: the TonPays pace — calls a minute per key, and how many may leave together.
+  [TONPAYS_PACING_SETTING_KEYS.TONPAYS]: {
+    title: 'web.tonpays_pace_title',
+    description: 'web.tonpays_pace_hint',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_times' },
+  },
+  [TONPAYS_PACING_SETTING_KEYS.TONPAYS_TELEGRAM]: {
+    title: 'web.tonpays_telegram_pace_title',
+    description: 'web.tonpays_pace_hint',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_times' },
+  },
+  [TONPAYS_PACING_BURST_SETTING_KEY]: {
+    title: 'web.tonpays_burst_title',
+    description: 'web.tonpays_burst_hint',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_times' },
   },
   // R5A-2 item 5: the emergency switch for automated customer messages.
   'customer_notices.pause_automated': {

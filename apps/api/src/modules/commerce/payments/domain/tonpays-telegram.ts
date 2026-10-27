@@ -16,6 +16,7 @@ import {
   TONPAYS_TELEGRAM_STATUS_LESS,
   TONPAYS_TELEGRAM_STATUS_MORE,
   type GatewayProviderNeedKind,
+  type PaymentGatewayProvider,
   type TemplateKey,
   type TonPaysTelegramErrorCode,
   type TonPaysTelegramReceiptMimeType,
@@ -33,6 +34,28 @@ import {
   CANCELLED_BY_NEXA_STATUS,
   failureStatusOf,
 } from './payment-failure-outcome.js';
+import { classifyTonPaysError } from './tonpays.js';
+
+/**
+ * Round 11 A8: whether a create that ended `CREATE_FAILED` with `code` was the provider's own
+ * readable rate-limit refusal on its last retry — no invoice was made, and the customer is told
+ * the gateway is busy and may try again (`bot.payment.gateway_busy`), not that it is unavailable.
+ * TonPays routes only: every other route keeps its own sentences.
+ */
+export function createEndedRateLimited(
+  provider: PaymentGatewayProvider,
+  code: string | null,
+): boolean {
+  if (code === null) return false;
+  switch (provider) {
+    case 'TONPAYS':
+      return classifyTonPaysError(code) === 'RATE_LIMITED';
+    case 'TONPAYS_TELEGRAM':
+      return classifyTonPaysTelegramError(code) === 'RATE_LIMITED';
+    default:
+      return false;
+  }
+}
 
 /**
  * The TonPays Telegram rules that decide anything, as pure functions

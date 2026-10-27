@@ -907,6 +907,11 @@ describe('profile metadata, normalised before it is ever stored', () => {
        * refund card, remainder receipt) and none of these says paid.
        */
       /*
+       * Round 11 A8: a create the provider refused for its rate limit on every retry. Reviewed:
+       * it says no invoice was made and nothing was charged, and its retry opens a new attempt.
+       */
+      'bot.payment.gateway_busy',
+      /*
        * R11 A8, reviewed: a cancel tap on an invoice Nexa already knows was cancelled. It says
        * only that, and invites a new payment — which this head offers (the order's method
        * selector or the top-up). Nothing is sent to the provider when it is shown.

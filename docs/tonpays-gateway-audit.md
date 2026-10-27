@@ -363,6 +363,23 @@ What was built, where it differs in detail from §5, and why.
 - **Rate limit and budget.** A create is granted while the tenant's minute holds fewer than
   50 calls, an inquiry fewer than 40. A pass that is refused stops and the next pass (3 s)
   retries; nothing is dropped.
+- **Pacing and 429 (Round 11 A8, after TonPays answered 429 to two creates in a minute).** Every
+  TonPays request of either route — create, check, card change, receipt, cancel, refund — goes
+  through `tonpaysRequest`, which first takes a token from ONE bucket per API key
+  (`TonPaysRateLimiter`: `payments.tonpays.calls_per_minute` 30,
+  `payments.tonpays_telegram.calls_per_minute` 15, `payments.tonpays.burst` 3, editable in Web
+  Admin). A call waits up to 5 s for its token, else it is HELD — never sent — and the adapter
+  answers `RATE_LIMITED` with `notSent` and `retryAfterMs`. A 429 (readable or not) pauses the
+  key for its `Retry-After`, else 5 s doubling per consecutive 429 to 5 min, ±20 %; any other
+  answer resets the back-off. A held create is deferred without spending one of its three
+  retries; a create refused with `RATE_LIMIT_EXCEEDED` on all three ends with no invoice and the
+  customer is shown `bot.payment.gateway_busy` (retry = a new attempt, new order id). A bare 429
+  on a create stays `CREATE_UNKNOWN` (`OQ-R11-A8-01`). A rate-limited inquiry only delays: its
+  `inquiry_not_before` is always set (at least 60 s for a provider 429), it spends no
+  post-deadline allowance and leaves an operator's request standing. The scheduled cadence
+  grows with the invoice's age: 15 s, then 20 s to two minutes, 30 s to five, 60 s to fifteen,
+  120 s to thirty, then 300 s. One rolled-up warning line a minute per route counts the 429s and
+  the held calls.
 - **Webhook dedupe.** One `last_webhook_delivery_id` per attempt: a repeat of the last
   delivery changes nothing. The settlement's own exactly-once does not depend on it.
 - **One attempt at a time.** An order (or a customer's gateway top-up) has at most one

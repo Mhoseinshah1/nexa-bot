@@ -51,6 +51,8 @@ import {
   CUSTOMER_NOTIFICATION_AUTOMATED,
   CUSTOMER_NOTIFICATION_KINDS,
   CUSTOMER_NOTICES_PAUSE_SETTING_KEY,
+  TONPAYS_PACING_BURST_SETTING_KEY,
+  TONPAYS_PACING_SETTING_KEYS,
   type PanelBalancingStrategy,
 } from '@nexa/contracts';
 import type {
@@ -597,6 +599,10 @@ import {
   TONPAYS_TIMEOUT_MS,
   TonPaysAdapter,
 } from './modules/commerce/payments/infrastructure/tonpays-adapter.js';
+import {
+  TONPAYS_PACING_MAX_WAIT_MS,
+  TonPaysRateLimiter,
+} from './modules/commerce/payments/infrastructure/tonpays-rate-limiter.js';
 import { DrizzleGatewayInvoiceRepository } from './modules/commerce/payments/infrastructure/drizzle-gateway-invoice.repository.js';
 import type {
   CardTransferGatewayAdapter,
@@ -3297,14 +3303,34 @@ export function createContainer(
    * the only code that speaks its HTTP. Everything else asks through the provider-neutral
    * port. The callback URL is generated from the tenant's registered public origin.
    */
-  const tonpaysAdapter = new TonPaysAdapter();
+  /*
+   * Round 11 A8: ONE rate limiter for both TonPays adapters — a token bucket per API key, inside
+   * the TonPays HTTP client, so every TonPays endpoint (create, check, card change, receipt,
+   * cancel, refund) is paced and a 429 pauses the key. Its pace is the installation tenant's
+   * settings (the tenant the worker serves), re-read at most once a minute; until a tenant is
+   * provisioned, or if a read fails, the conservative defaults.
+   */
+  const tonpaysLimiter = new TonPaysRateLimiter({
+    clock,
+    logger,
+    pacingFor: async (route) => {
+      if (installationTenantId === null) return {};
+      const scope = { tenantId: installationTenantId, botInstanceId: null };
+      const [callsPerMinute, burst] = await Promise.all([
+        settingsResolver.valueOf<number>(scope, TONPAYS_PACING_SETTING_KEYS[route]),
+        settingsResolver.valueOf<number>(scope, TONPAYS_PACING_BURST_SETTING_KEY),
+      ]);
+      return { callsPerMinute, burst };
+    },
+  });
+  const tonpaysAdapter = new TonPaysAdapter({ limiter: tonpaysLimiter });
   /*
    * TonPays Telegram (`docs/tonpays-telegram-gateway-audit.md`): a SEPARATE adapter for the
    * custom API — its own paths, its own key, a payee card instead of a link, a card change
    * and a receipt upload. It shares the website adapter's request and classifier, never a
    * key. Not accepted against the real provider yet (`OQ-WP10-01`).
    */
-  const tonpaysTelegramAdapter = new TonPaysTelegramAdapter();
+  const tonpaysTelegramAdapter = new TonPaysTelegramAdapter({ limiter: tonpaysLimiter });
   /*
    * NOWPayments (`docs/nowpayments-gateway-audit.md`): the hosted crypto invoice. Its own
    * adapter, the only code that speaks its HTTP; priced from the central USDT quote; its IPN
@@ -3969,7 +3995,9 @@ export function createContainer(
      * provider's is TONPAYS_TIMEOUT_MS) and up to three Telegram calls around it (a
      * receipt's getFile and file, the invoice screen's edit). The lease covers it.
      */
-    rowBoundMs: TONPAYS_TIMEOUT_MS + 3 * config.NOTIFICATION_SEND_TIMEOUT_MS,
+    // Round 11 A8: plus the longest a TonPays call waits for its token.
+    rowBoundMs:
+      TONPAYS_PACING_MAX_WAIT_MS + TONPAYS_TIMEOUT_MS + 3 * config.NOTIFICATION_SEND_TIMEOUT_MS,
     /*
      * R5A item 4: a late approval the provider's inquiry re-verified is credited to the
      * customer's wallet, by the payment service's one path, when the route's switch is on.
@@ -4037,7 +4065,7 @@ export function createContainer(
         GATEWAY_CARD_CHANGE_BATCH +
         GATEWAY_PROVIDER_REQUEST_BATCH +
         GATEWAY_RECEIPT_BATCH) *
-        (TONPAYS_TIMEOUT_MS + config.NOTIFICATION_SEND_TIMEOUT_MS) +
+        (TONPAYS_PACING_MAX_WAIT_MS + TONPAYS_TIMEOUT_MS + config.NOTIFICATION_SEND_TIMEOUT_MS) +
       // TonPays Telegram: each receipt is first fetched from Telegram (getFile, then the file).
       GATEWAY_RECEIPT_BATCH * 2 * config.NOTIFICATION_SEND_TIMEOUT_MS,
     now: () => clock.now().getTime(),

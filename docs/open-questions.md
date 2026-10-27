@@ -4621,3 +4621,30 @@ money and sends no customer message; the owner decides otherwise.
 - **OQ-D5-07 — a customer first created by a mini-app launch while the flag is on.** They get a
   captcha row like a `/start` arrival and the mini app holds them at `CAPTCHA`, pointing to the
   bot; whether a mini-app arrival should be asked at all is the owner's call.
+
+## Round 11 A8 — TonPays answered HTTP 429 to invoice creates
+
+Every TonPays call now takes a token from one client-side bucket per API key inside the TonPays
+HTTP client (`tonpays-rate-limiter.ts`; settings `payments.tonpays.calls_per_minute` 30,
+`payments.tonpays_telegram.calls_per_minute` 15, `payments.tonpays.burst` 3), and a 429 pauses the
+key for its `Retry-After`, else 5 s doubling to 5 min, ±20 %. Defaults that move no money:
+
+- **OQ-R11-A8-01 — does a 429 WITHOUT a readable `detail.code` mean "not created"?** The
+  documentation names `RATE_LIMIT_EXCEEDED` (in `{ detail: { code } }`) as the rate-limit answer,
+  and only that readable code is taken to mean the invoice was not made (the same order id is sent
+  again, at most three times). A bare 429 — an empty or HTML body, as a proxy or edge in front of
+  TonPays would send — is still `CREATE_UNKNOWN`: never re-sent, never re-keyed, the lost-create
+  rule. It now also pauses the key. **Ask TonPays** whether their own 429 always carries
+  `RATE_LIMIT_EXCEEDED`, and whether anything in front of the API can answer 429 after the
+  request reached it. **Check the owner's two 429s**: a create deferred with
+  `creation_error_code = RATE_LIMIT_EXCEEDED` was the readable code; one that ended
+  `CREATE_UNKNOWN` with `http.429` (or `http.429.unreadable.*`) was not.
+- **OQ-R11-A8-02 — the real limit, its scope, and `Retry-After`.** Documented: 60 create/check
+  requests a minute and 120 per IP. Undocumented: whether it is per key, store or account
+  (`OQ-WP11A-02`) and whether a 429 carries `Retry-After` (honoured when present). The defaults
+  (30 + 15 a minute, burst 3) stay under 60 even if both routes' keys count against one account.
+  The bucket is per worker process; the per-minute budget (`payment_gateway_call_budgets`, a
+  FIXED window of 50) remains the only cross-replica bound and can grant up to twice its limit
+  across a window edge — harmless with one worker (the bucket is stricter), worth a sliding
+  window if the worker is ever scaled out. **Decide** with the real provider: record the limit
+  and its scope, and set the two settings from it.

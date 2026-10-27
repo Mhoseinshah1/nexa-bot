@@ -301,18 +301,18 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
   // =====================================================================================
 
   describe('the schedule', () => {
-    it('asks TonPays first about ten seconds after the invoice, at the jitter the payment names', async () => {
+    it('asks TonPays first about fifteen seconds after the invoice, at the jitter the payment names (R11 A8)', async () => {
       const { paymentId, invoice } = await createdTopup();
       const created = new Date(invoice.created_invoice_at!);
       expect(new Date(invoice.next_inquiry_at!).getTime()).toBe(
         firstInquiryAt(TONPAYS_INQUIRY_SCHEDULE, created, paymentId).getTime(),
       );
       const delay = new Date(invoice.next_inquiry_at!).getTime() - created.getTime();
-      expect(delay).toBeGreaterThanOrEqual(9_000);
-      expect(delay).toBeLessThanOrEqual(11_000);
+      expect(delay).toBeGreaterThanOrEqual(13_500);
+      expect(delay).toBeLessThanOrEqual(16_500);
     });
 
-    it('a lost callback is still discovered inside the early window: paid just after an ask, seen within one 10 s step', async () => {
+    it('a lost callback is still discovered inside the early window: paid just after an ask, seen within one 20 s step (R11 A8)', async () => {
       const { paymentId, invoice } = await createdTopup();
       // The lane at its interval until its first ask, which finds the invoice unpaid.
       while (tonpays.checks() === 0) {
@@ -325,8 +325,9 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
       tonpays.set(invoice.provider_invoice_id!, 'completed', true);
       const paidAt = now;
       const seenAt = await passesUntilConfirmed(paymentId, 5 * 60_000);
-      // One band step (10 s, +10 % jitter) and one pass, where the old schedule waited 40 s.
-      expect(seenAt - paidAt).toBeLessThanOrEqual(11_000 + GATEWAY_PAYMENT_INTERVAL_MS);
+      // One band step (20 s since R11 A8, +10 % jitter) and one pass, where the pre-FIX-06
+      // schedule waited 40 s.
+      expect(seenAt - paidAt).toBeLessThanOrEqual(22_000 + GATEWAY_PAYMENT_INTERVAL_MS);
       expect(tonpays.checks()).toBe(2);
       expect(await credits(paymentId)).toHaveLength(1);
     });
