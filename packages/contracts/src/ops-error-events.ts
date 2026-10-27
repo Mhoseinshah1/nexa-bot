@@ -229,6 +229,24 @@ export const JOB_LOOP_STALLED_CODE = 'job.loop_stalled';
 export const JOB_LOOP_RECOVERED_CODE = 'job.loop_recovered';
 
 /**
+ * R11 A3: a process role that is crashing and being restarted by its supervisor, again and
+ * again, each life shorter than `PROCESS_RUN_STABLE_AFTER_MS`. The stalled-loop watchdog
+ * cannot see it: it gives no verdict in a process's first minute (v0.8.2 hotfix), so a role
+ * that dies in seconds was never reported at all. One condition per role
+ * (`process.restart_storm:<role>`), announced once when the Nth restart inside the window
+ * is seen and closed by `PROCESS_RESTART_STORM_ENDED_CODE` when a life of that role stays
+ * up for a full `PROCESS_RUN_STABLE_AFTER_MS`.
+ */
+export const PROCESS_RESTART_STORM_CODE = 'process.restart_storm';
+export const PROCESS_RESTART_STORM_ENDED_CODE = 'process.restart_storm_ended';
+/** A life that ends before this many ms is a SHORT run; one that reaches it ends the episode. */
+export const PROCESS_RUN_STABLE_AFTER_MS = 60_000;
+/** Restarts after short runs, inside `PROCESS_RESTART_STORM_WINDOW_MS`, that open the condition. */
+export const PROCESS_RESTART_STORM_MIN_RESTARTS = 3;
+/** The window those restarts must fall in, measured from the first short run of the streak. */
+export const PROCESS_RESTART_STORM_WINDOW_MS = 5 * 60_000;
+
+/**
  * An API request failed with an unhandled 5xx. The body code of the same name has always
  * been answered to the client; this records it as an operational event too. One row per
  * failure name per window.
@@ -491,6 +509,8 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
   // --- Jobs and the worker ----------------------------------------------------------------
   failure(JOB_LOOP_STALLED_CODE, 'JOBS', 'CONDITION'),
   recovery(JOB_LOOP_RECOVERED_CODE, 'JOBS', JOB_LOOP_STALLED_CODE),
+  failure(PROCESS_RESTART_STORM_CODE, 'JOBS', 'CONDITION'),
+  recovery(PROCESS_RESTART_STORM_ENDED_CODE, 'JOBS', PROCESS_RESTART_STORM_CODE),
   failure(INTERNAL_UNHANDLED_CODE, 'SYSTEM', 'WINDOW'),
 
   // --- Backups and recovery ---------------------------------------------------------------
