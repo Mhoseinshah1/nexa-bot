@@ -3000,6 +3000,16 @@ textarea.input,
   font-size: var(--fs-xs);
   color: var(--fg-3);
 }
+.palette .list a .hit-title {
+  font-weight: 600;
+}
+/* A record hit: its title, one more fact beside it, and its state at the far end. */
+.palette .list a .hit-sub {
+  margin-inline-start: 0;
+}
+.palette .list a .hit-state {
+  margin-inline-start: auto;
+}
 .palette .none {
   padding: 24px;
   text-align: center;

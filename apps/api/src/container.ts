@@ -783,6 +783,12 @@ import { ServiceAutoRenewService } from './modules/commerce/provisioning/applica
 import { DrizzleServiceAutoRenewRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-auto-renew.repository.js';
 import { DrizzleServiceTransferRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-transfer.repository.js';
 import { ServiceAdminService } from './modules/commerce/provisioning/application/service-admin.service.js';
+import { GlobalSearchService } from './modules/commerce/global-search/application/global-search.service.js';
+import {
+  ListBackedCustomerSource,
+  ListBackedOrderSource,
+  ListBackedServiceSource,
+} from './modules/commerce/global-search/application/list-backed-sources.js';
 import { ServiceGrantService } from './modules/commerce/provisioning/application/service-grant.service.js';
 import { decideOperability } from './modules/commerce/provisioning/application/panel-operability.js';
 import {
@@ -1510,6 +1516,8 @@ export interface Container {
    * operation from a GET.
    */
   readonly serviceAdmin: ServiceAdminService;
+  /** R11 A1: the top-bar search over customers, orders and services. */
+  readonly globalSearch: GlobalSearchService;
   /** Program §13: an operator's free traffic or time grant to one service. */
   readonly serviceGrants: ServiceGrantService;
   /** The lane that creates services on panels. Driven by the `provisioner` role. */
@@ -8534,6 +8542,14 @@ export function createContainer(
     receiptFiles,
     provisioning: provisioningService,
     serviceAdmin,
+    globalSearch: new GlobalSearchService({
+      guard,
+      sources: {
+        CUSTOMER: new ListBackedCustomerSource(customerService),
+        ORDER: new ListBackedOrderSource(orderService),
+        SERVICE: new ListBackedServiceSource(serviceAdmin),
+      },
+    }),
     serviceGrants: serviceGrantService,
     provisioner,
     provisionerLoop,
