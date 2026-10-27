@@ -4637,6 +4637,29 @@ money and sends no customer message; the owner decides otherwise.
   with, because the same strings are customer-facing in Telegram. Default: unchanged; normalising
   them for display only is a separate decision.
 
+## Round 11 A2 — the cutover rehearsal (`docs/cutover/12-rehearsal.md`)
+
+`botctl cutover rehearse` runs the runbook's data steps against a disposable database on the
+test server. Each default below moves no money, sends no customer message and touches nothing
+live; the owner decides otherwise.
+
+- **OQ-R11-A2-01 — tariff products in the disposable database.** The rehearsal creates none and
+  copies none from the live tenant (that would be touching it), so a Mirza service found on a
+  stand-in can still be held for want of a product to adopt it into; the money reconciliation is
+  complete without them. Whether the rehearsal should take a products file (as it takes
+  `--panel-inventory`) so the adoption counts are real is the owner's call.
+- **OQ-R11-A2-02 — where it may run.** It is written and documented for the test server. It
+  refuses the live database, a production-like name and an existing database wherever it runs,
+  but does not refuse the production host itself (as the isolated kit does): on production it
+  would create, fill and drop one more database on that server, like `nexa_cutover_scratch` at C2.
+  Whether it should refuse a production host outright is the owner's call.
+- **OQ-R11-A2-03 — the approver.** The import's approval is an administrator's act, so the
+  rehearsal creates the rehearsing owner in the DISPOSABLE database through the installer's own
+  `BootstrapOwnerService` (the `--owner-telegram-id` the operator gives, a random password nobody
+  sees) and records the approval under it, as a `WEB_ADMIN` actor with no session — the only
+  administrator actor type there is. It never exists outside that database, and the database is
+  dropped. Decision taken; recorded here for the owner to confirm.
+
 ## Round 11 A7 — the service's panel username in the operations log
 
 - **OQ-R11-A7-01 — the referral-commission message (L8).** A commission is earned on a buyer's
