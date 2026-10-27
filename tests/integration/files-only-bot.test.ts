@@ -470,4 +470,66 @@ describe('files only, no subscription link (R11 A4): the bot', () => {
     expect(customerText()).not.toContain('sing-box');
     expect(posts('/sendMediaGroup')).toHaveLength(1);
   });
+
+  // =========================================================================
+  // An operator's resend (Codex review of #349)
+  // =========================================================================
+
+  /*
+   * Both surfaces' entry is `DeliveryService.resendForOperator`: the Web Admin's
+   * `POST services/:id/resend` calls it directly, and the Telegram management panel's «K:»
+   * tap calls it from `adminServiceAct`. On a files-only panel the card it sends carries no
+   * configuration, so the files must follow it — the resend records DELIVERED, and no later
+   * sweep would send them.
+   */
+  const resendLanded = () => {
+    expect(customerText()).not.toContain('https://');
+    expect(posts('/sendPhoto')).toHaveLength(0);
+    const card = posts('/sendMessage').find((one) =>
+      textOf(one).includes('فایل‌های اتصال شما در پیام‌های بعدی ارسال می‌شود'),
+    );
+    expect(card, 'the files-only card was sent').toBeDefined();
+    const album = posts('/sendMediaGroup');
+    expect(album, 'the connection files follow the card').toHaveLength(1);
+    expect(sent.indexOf(album[0]!)).toBeGreaterThan(sent.indexOf(card!));
+  };
+
+  it('an operator resend (the Web Admin entry) on a files-only panel sends the files too', async () => {
+    await filesOnly(true);
+    const service = await deliveredService('resend-web');
+    panel.forgetFileReads();
+    sent = [];
+    const record = await ctx.container.delivery.resendForOperator(tenantA, owner, service.id);
+    expect(record).toMatchObject({ state: 'DELIVERED', recorded: true });
+    resendLanded();
+    // Recorded once: the next sweep sends neither the card nor the files again.
+    panel.forgetFileReads();
+    sent = [];
+    await ctx.container.provisionerLoop.tick();
+    expect(posts('/sendMediaGroup')).toHaveLength(0);
+  });
+
+  it('an operator resend from the Telegram management panel («K:») sends the files too', async () => {
+    await filesOnly(true);
+    const service = await deliveredService('resend-tg');
+    const ADMIN_TG = '930999';
+    await ctx.container.adminManagement.setTelegramBinding(tenantA, owner, owner.id as never, {
+      telegramUserId: ADMIN_TG,
+      reason: 'files-only resend test',
+    });
+    panel.forgetFileReads();
+    sent = [];
+    const tapped = await tap(`K:${service.id}`, ADMIN_TG);
+    expect(tapped.replyKey).toBe('bot.admin.service_resent');
+    resendLanded();
+  });
+
+  it('control: an operator resend on a link panel sends the card with its link and no files', async () => {
+    const service = await deliveredService('resend-link');
+    panel.forgetFileReads();
+    sent = [];
+    await ctx.container.delivery.resendForOperator(tenantA, owner, service.id);
+    expect(customerText()).toContain(service.subscriptionUrl ?? '-');
+    expect(posts('/sendMediaGroup')).toHaveLength(0);
+  });
 });

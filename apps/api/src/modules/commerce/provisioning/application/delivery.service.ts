@@ -1528,7 +1528,29 @@ export class DeliveryService {
         { reason: lookup.kind === 'BLOCKED' ? 'CUSTOMER_BLOCKED' : 'NO_CONTACT' },
       );
     }
-    return this.deliver(scope, service, lookup.contact.chatId, lookup.contact.botInstanceId);
+    const record = await this.deliver(
+      scope,
+      service,
+      lookup.contact.chatId,
+      lookup.contact.botInstanceId,
+    );
+    /*
+     * R11 A4 (Codex review of #349): on a files-only panel the card this resend sent carries
+     * no configuration — the files ARE the configuration. The sweep sends them only after its
+     * own DELIVERED record, and this resend has just recorded DELIVERED, so no later sweep
+     * would. They go here, by the sweep's own path (`sendFilesAfter`: never throws, never
+     * writes the delivery), and only after a send that was DELIVERED and recorded, so a card
+     * that may not have arrived is not followed by files. A panel that shows its link sends
+     * none: its card is the configuration, exactly as before.
+     */
+    if (
+      record.recorded &&
+      record.state === 'DELIVERED' &&
+      (await this.isFilesOnly(scope, service))
+    ) {
+      await this.sendFilesAfter(scope, service, record.sentTo ?? lookup.contact);
+    }
+    return record;
   }
 }
 
