@@ -130,6 +130,10 @@ export const MINIAPP_ROUTES = {
   support: '/support',
   guide: '/guide',
   guidePlatform: '/guide/:platform',
+  /** Round 11, B1: the notification centre (feature `notification_centre`). */
+  notifications: '/notifications',
+  notificationRead: '/notifications/:notificationId/read',
+  notificationsReadAll: '/notifications/read-all',
 } as const;
 
 /** A route with its parameters filled, URI-encoded. */
@@ -201,6 +205,12 @@ export const miniAppMeResponseSchema = z.object({
   wallet: z.object({ balance: moneySchema }).nullable(),
   /** An ACTIVE reseller's standing; null for everybody else (SUSPENDED is an ordinary customer). */
   reseller: z.object({ tierName: z.string() }).nullable(),
+  /**
+   * Round 11, B1: the bell. Null while the feature `notification_centre` is off (no bell is
+   * drawn) and while gated; otherwise how many delivered messages the customer has not read.
+   * Defaulted so a client built before it still parses an older answer.
+   */
+  notifications: z.object({ unreadCount: z.number().int().nonnegative() }).nullable().default(null),
 });
 export type MiniAppMeResponse = z.infer<typeof miniAppMeResponseSchema>;
 
@@ -774,6 +784,50 @@ export const miniAppGuidePlatformResponseSchema = z.object({
   fallbackGuide: z.string().nullable(),
 });
 export type MiniAppGuidePlatformResponse = z.infer<typeof miniAppGuidePlatformResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// Notification centre (Round 11, B1)
+// ---------------------------------------------------------------------------
+
+/** How many messages one page of the centre holds. */
+export const MINIAPP_NOTIFICATION_PAGE_SIZE = 20;
+/**
+ * How far back the centre reaches, in days, counted from the moment the message was
+ * delivered. The list and the unread counter are bounded by it, so an old backlog is
+ * neither paged through nor counted; the stored rows are kept as long as the lane keeps them.
+ */
+export const MINIAPP_NOTIFICATION_WINDOW_DAYS = 60;
+/** The longest text one entry carries; a longer message is cut with a visible ellipsis. */
+export const MINIAPP_NOTIFICATION_TEXT_MAX = 4096;
+
+/**
+ * One delivered bot message: the text exactly as it was rendered when it was sent (markup
+ * removed), never re-rendered. There is no kind, subject id or value on the wire: the
+ * centre shows what the customer was told, and nothing the message did not already say.
+ */
+export const miniAppNotificationSchema = z.object({
+  id: idSchema,
+  text: z.string(),
+  /** When the bot delivered it. */
+  createdAt: isoSchema,
+  read: z.boolean(),
+});
+export type MiniAppNotification = z.infer<typeof miniAppNotificationSchema>;
+
+export const miniAppNotificationsResponseSchema = z.object({
+  items: z.array(miniAppNotificationSchema),
+  nextCursor: z.string().nullable(),
+  /** Unread within the window, whatever page was asked for. */
+  unreadCount: z.number().int().nonnegative(),
+});
+export type MiniAppNotificationsResponse = z.infer<typeof miniAppNotificationsResponseSchema>;
+
+/** What marking read answers: how many this call changed, and the count left unread. */
+export const miniAppNotificationReadResponseSchema = z.object({
+  marked: z.number().int().nonnegative(),
+  unreadCount: z.number().int().nonnegative(),
+});
+export type MiniAppNotificationReadResponse = z.infer<typeof miniAppNotificationReadResponseSchema>;
 
 /** The error body every refusal carries (the API's error filter shape). */
 export const miniAppErrorSchema = z.object({
