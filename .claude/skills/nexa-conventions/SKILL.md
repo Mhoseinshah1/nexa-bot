@@ -121,8 +121,9 @@ broken by a convenience refactor:
   migration, an import or a backfill. The operations log is silent only for
   the records the import itself created: it reads the provenance of the record
   a log is ABOUT (the order, the ticket, the customer row of a registration),
-  never the customer's — a migrated customer's purchase, block, alert, failure
-  or ticket after the import is logged (v0.8.2-e, R10 B5).
+  never the customer's — a migrated customer's purchase, block, alert, failure,
+  ticket, referral commission or signup gift after the import is logged
+  (v0.8.2-e, R10 B5, R11 A6).
 
 Adding a payment gateway: `nexa-gateway-integration`.
 
