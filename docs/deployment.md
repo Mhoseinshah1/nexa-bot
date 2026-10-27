@@ -626,6 +626,22 @@ not a stall. A role switched off (`PROVISIONER_ENABLED=false`,
 `PANEL_MONITOR_ENABLED=false`) reports nothing stalled, which closes a condition a
 previous life opened.
 
+**A role that keeps restarting (R11 A3).** The grace above means a role that dies in
+seconds is never in a position to report a stall, and `restart: unless-stopped` brings
+it straight back, so no health check stays red either. Every supervised role (`api`,
+`worker`, `monitor`, `provisioner`, `assistant`, `recovery`) therefore records its own
+life in `process_runs` at boot and reads how the previous one ended: stopped on purpose
+(a handled SIGTERM) or alive for a full minute is not a crash, anything else is. The
+third restart after crashed lives inside five minutes opens
+`process.restart_storm:<role>` — one message, «سرویس … پی‌درپی ری‌استارت می‌شود» — in the
+SYSTEM topic, and every further restart only counts on that row. The first life that
+stays up a minute records `process.restart_storm_ended`; a later storm is a new message.
+The state lives in the database, so it survives each crash; a PostgreSQL that is down at
+boot hides that boot from the count, and a role that cannot reach it is down anyway.
+The message is SENT by the worker's dispatcher: when the worker is the role that is
+crash-looping it goes out the first time a life lives long enough to dispatch, and the
+row is in the Web Admin's alerts at once.
+
 **What none of this can do: report a dead worker.** Every message to the operations
 log group is SENT by the notification dispatcher, and the dispatcher runs in the
 worker. The other roles still record their stalls while the worker is down — the rows

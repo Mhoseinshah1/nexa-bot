@@ -1,6 +1,10 @@
 import 'reflect-metadata';
 import { isNexaError } from '@nexa/contracts';
-import { loopStallReporterFor, resolveInstallationTenant } from './bootstrap.js';
+import {
+  loopStallReporterFor,
+  resolveInstallationTenant,
+  startProcessRestartWatch,
+} from './bootstrap.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
@@ -64,6 +68,8 @@ async function main(): Promise<void> {
   // tenant provisioned" branch and is silently dropped — and the events this
   // role records are the ones saying a restore of the whole database failed.
   await resolveInstallationTenant(container);
+  // R11 A3: a role that is restarted over and over is reported once (see ProcessRestartWatch).
+  const restartWatch = await startProcessRestartWatch(container, 'recovery');
 
   /*
    * FIX-03 (batch 2026-10-10): an executor whose tick throws every time is an operational
@@ -143,6 +149,8 @@ async function main(): Promise<void> {
     exit: (code) => process.exit(code),
     close: async () => {
       heartbeat.stop();
+      // A clean stop is an operator's, not a crash: it must not count towards a storm.
+      await restartWatch.stop();
       // Stops the TIMER only, as for the recovery executor: an import step in flight runs to
       // its end, or is resumed from its phase bookmark after its lease expires.
       container.migrationExecutor.stop();
