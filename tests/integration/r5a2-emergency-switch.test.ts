@@ -38,6 +38,7 @@ import {
   tenantA,
   type TestContext,
 } from './harness';
+import { orderEndsReader } from '../support/order-ends';
 
 /**
  * R5A-2 item 5 — the owner's emergency switch for AUTOMATED customer messages.
@@ -202,6 +203,8 @@ describe('the emergency switch for automated customer messages (R5A-2 item 5)', 
         },
       },
       subjects: new DrizzleNotificationSubjectReader(db),
+      // R11 A11: the two ended-order kinds render the order's own summary.
+      orderEnds: orderEndsReader(db as never),
       messenger: {
         send: async (_scope, message) => {
           sends.push(message);
