@@ -162,6 +162,8 @@ export const MINIAPP_FA = {
   'miniapp.service_guide': 'آموزش اتصال',
   'miniapp.service_support': 'مشکل دارم، پشتیبانی',
   'miniapp.service_qr_title': 'QR و لینک اشتراک',
+  'miniapp.service_qr_sublink': 'QR لینک اشتراک',
+  'miniapp.service_qr_singbox': 'QR مخصوص sing-box',
   'miniapp.service_qr_hint': 'در برنامه «افزودن از QR» را بزنید و این کد را اسکن کنید.',
   'miniapp.service_qr_failed': 'ساخت تصویر QR انجام نشد.',
   'miniapp.service_copy_failed': 'کپی انجام نشد؛ لینک را نگه دارید و کپی کنید.',

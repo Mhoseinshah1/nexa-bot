@@ -14,6 +14,11 @@ import {
   USERNAME_TEMPLATE_MAX_LENGTH,
 } from './service-username.js';
 import { paymentAccountInputSchema } from './payment-accounts.js';
+import {
+  PANEL_QR_KINDS,
+  SINGBOX_INTERVAL_MAX_MINUTES,
+  SINGBOX_INTERVAL_MIN_MINUTES,
+} from './panel-qr.js';
 import { REFUND_REFUSAL_REASONS, refundChannelSchema, refundStateSchema } from './refunds.js';
 import {
   serviceRefundRequestStateSchema,
@@ -1622,6 +1627,12 @@ export const panelSummarySchema = z.object({
    * everywhere else and by default.
    */
   filesOnlyDelivery: z.boolean(),
+  /**
+   * R11 A4: «نوع بارکد» — which QR a customer of this panel is shown (RickPanel only; SUB_LINK
+   * everywhere else) and how often a sing-box profile refreshes itself, in minutes.
+   */
+  qrKind: z.enum(PANEL_QR_KINDS),
+  singboxIntervalMinutes: z.number().int(),
   createdAt: isoTimestamp,
   updatedAt: isoTimestamp,
 });
@@ -1906,6 +1917,19 @@ export const updatePanelRequestSchema = z.object({
    * `PANEL_FILES_ONLY_UNSUPPORTED` (on) for a panel whose provider hands over no files.
    */
   filesOnlyDelivery: z.boolean().optional(),
+  /**
+   * R11 A4: «نوع بارکد». `panels.edit`, alongside the name. A kind other than SUB_LINK, or a
+   * changed interval, is refused with `PANEL_QR_KIND_UNSUPPORTED` for a panel that is not a
+   * RickPanel. The interval is whole minutes in `[SINGBOX_INTERVAL_MIN_MINUTES,
+   * SINGBOX_INTERVAL_MAX_MINUTES]`.
+   */
+  qrKind: z.enum(PANEL_QR_KINDS).optional(),
+  singboxIntervalMinutes: z
+    .number()
+    .int()
+    .min(SINGBOX_INTERVAL_MIN_MINUTES)
+    .max(SINGBOX_INTERVAL_MAX_MINUTES)
+    .optional(),
   idempotencyKey: z.string().min(8).max(255),
 });
 export type UpdatePanelRequest = z.infer<typeof updatePanelRequestSchema>;

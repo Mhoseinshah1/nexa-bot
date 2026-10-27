@@ -10687,6 +10687,8 @@ export const WEB_FA = {
   'web.err_panel_credential_too_short':
     'کلید وارد‌شده کوتاه‌تر از کمترین طولی است که این نوع پنل می‌پذیرد.',
   'web.err_panel_credential_unsupported': 'این نوع اطلاعات ورود برای این پنل پشتیبانی نمی‌شود.',
+  'web.err_panel_qr_kind_unsupported':
+    'نوع بارکد فقط برای پنل‌های ریک‌پنل قابل تنظیم است؛ این پنل فقط QR لینک اشتراک دارد.',
   'web.err_panel_files_only_unsupported':
     'این پنل فایل اتصال تحویل نمی‌دهد؛ گزینهٔ «فقط فایل، بدون لینک ساب» فقط برای پنل‌هایی ممکن است که فایل اتصال دارند.',
   'web.err_panel_credentials_missing': 'اطلاعات ورود پنل وارد نشده است.',

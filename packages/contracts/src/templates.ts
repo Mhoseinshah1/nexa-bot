@@ -6116,6 +6116,22 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.service.qr_caption_sublink',
+    description:
+      'R11 A4: the one-line caption under the plain subscription-link QR when a RickPanel ' +
+      'panel is set to show BOTH QR kinds («نوع بارکد»). Carries no link.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.qr_caption_singbox',
+    description:
+      'R11 A4: the one-line caption under the sing-box import QR when a RickPanel panel is ' +
+      'set to show BOTH QR kinds («نوع بارکد»). Carries no link.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.service.files_new_button',
     description:
       'R11 A4: the button on a files-only service that asks for new connection files. ' +

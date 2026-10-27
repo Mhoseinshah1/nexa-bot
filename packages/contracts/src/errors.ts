@@ -722,6 +722,11 @@ export const PANEL_ERROR_CODES = {
    */
   PANEL_FILES_ONLY_UNSUPPORTED: 'panel.files_only_unsupported',
   /**
+   * R11 A4: a QR kind other than the plain link (or a sing-box interval) was asked for a panel
+   * that is not a RickPanel. Refused rather than stored: nothing would read it.
+   */
+  PANEL_QR_KIND_UNSUPPORTED: 'panel.qr_kind_unsupported',
+  /**
    * Phase 2 item 5: the panel's post-delivery tutorial changed since the operator read it.
    * The panel trial's and the policy's rule: a reload, never a silent overwrite.
    */

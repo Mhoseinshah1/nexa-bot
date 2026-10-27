@@ -8,6 +8,7 @@ import { TICKET_MESSAGE_MAX_LENGTH, TICKET_STATUSES } from './tickets.js';
 import { CLIENT_APP_PLATFORMS } from './client-apps.js';
 import { LEDGER_DIRECTIONS, LEDGER_REASONS } from './ledger.js';
 import { GIFT_CARD_CODE_INPUT_MAX_LENGTH } from './gift-cards.js';
+import { QR_PAYLOAD_KINDS } from './panel-qr.js';
 
 /**
  * The customer's Telegram Mini App (Round 9, C5): its paths, its wire shapes and its bounds.
@@ -109,6 +110,8 @@ export const MINIAPP_ROUTES = {
   services: '/services',
   service: '/services/:serviceId',
   serviceQr: '/services/:serviceId/qr',
+  // R11 A4: one named QR of a service (`SUB_LINK` or `SINGBOX`) on a panel that offers both.
+  serviceQrKind: '/services/:serviceId/qr/:kind',
   serviceOffer: '/services/:serviceId/offers/:kind',
   serviceQuote: '/services/:serviceId/quotes',
   serviceLocations: '/services/:serviceId/locations',
@@ -529,6 +532,12 @@ export const miniAppServiceDetailSchema = miniAppServiceSummarySchema.extend({
   actions: z.array(z.enum(MINIAPP_SERVICE_ACTIONS)),
   /** Whether a QR of the link can be fetched (`MINIAPP_ROUTES.serviceQr`). */
   qr: z.boolean(),
+  /**
+   * R11 A4: the QRs the sheet shows, in order — `SUB_LINK`, `SINGBOX`, both or none (none on a
+   * files-only panel). Each is fetched from `MINIAPP_ROUTES.serviceQrKind`. `qr` above stays
+   * true exactly when this is not empty.
+   */
+  qrKinds: z.array(z.enum(QR_PAYLOAD_KINDS)),
   /** Whether the location sheet has anything to offer now (`CHANGE_LOCATION` is available). */
   canChangeLocation: z.boolean(),
   /** Round 10, D1: «تمدید خودکار» for this service (`MINIAPP_ROUTES.serviceAutoRenew`). */
