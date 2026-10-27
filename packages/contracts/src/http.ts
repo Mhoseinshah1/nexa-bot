@@ -1615,6 +1615,13 @@ export const panelSummarySchema = z.object({
    * group is only ever sold onto through the products bound to it.
    */
   balancingGroup: z.string().nullable(),
+  /**
+   * R11 A4: «فقط فایل، بدون لینک ساب». When true, the subscription link of a service on this
+   * panel is never shown to its customer (the bot, «سرویس‌های من», the mini app): they get the
+   * connection files only. Possible only on a panel whose provider hands over files; false
+   * everywhere else and by default.
+   */
+  filesOnlyDelivery: z.boolean(),
   createdAt: isoTimestamp,
   updatedAt: isoTimestamp,
 });
@@ -1893,6 +1900,12 @@ export const updatePanelRequestSchema = z.object({
    * never what anything costs. Lower case, so two spellings cannot be two groups.
    */
   balancingGroup: panelBalancingGroupInputSchema.nullable().optional(),
+  /**
+   * R11 A4: switch «فقط فایل، بدون لینک ساب» on or off. `panels.edit`, alongside the name: it
+   * decides what a customer is shown, never what anything costs. Refused with
+   * `PANEL_FILES_ONLY_UNSUPPORTED` (on) for a panel whose provider hands over no files.
+   */
+  filesOnlyDelivery: z.boolean().optional(),
   idempotencyKey: z.string().min(8).max(255),
 });
 export type UpdatePanelRequest = z.infer<typeof updatePanelRequestSchema>;

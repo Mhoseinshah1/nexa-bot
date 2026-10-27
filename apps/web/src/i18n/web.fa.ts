@@ -4943,6 +4943,8 @@ export const WEB_FA = {
   'web.ib_button_service_link': 'دریافت لینک اتصال',
   'web.ib_button_service_rotate': 'تغییر لینک',
   'web.ib_button_service_rotate_confirm': 'تأیید تغییر لینک',
+  'web.ib_button_service_files_new': 'دریافت فایل‌های جدید (پنل فقط‌فایل)',
+  'web.ib_button_service_files_new_confirm': 'تأیید دریافت فایل‌های جدید (پنل فقط‌فایل)',
   'web.ib_button_service_note': 'یادداشت',
   'web.ib_button_service_renew': 'تمدید سرویس',
   'web.ib_button_service_renew_option': 'گزینه‌های تمدید',
@@ -10685,6 +10687,8 @@ export const WEB_FA = {
   'web.err_panel_credential_too_short':
     'کلید وارد‌شده کوتاه‌تر از کمترین طولی است که این نوع پنل می‌پذیرد.',
   'web.err_panel_credential_unsupported': 'این نوع اطلاعات ورود برای این پنل پشتیبانی نمی‌شود.',
+  'web.err_panel_files_only_unsupported':
+    'این پنل فایل اتصال تحویل نمی‌دهد؛ گزینهٔ «فقط فایل، بدون لینک ساب» فقط برای پنل‌هایی ممکن است که فایل اتصال دارند.',
   'web.err_panel_credentials_missing': 'اطلاعات ورود پنل وارد نشده است.',
   'web.err_panel_delivery_tutorial_stale':
     'راهنمای تحویل در همین فاصله تغییر کرده است. صفحه را تازه کنید.',

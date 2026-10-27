@@ -712,6 +712,16 @@ export const PANEL_ERROR_CODES = {
    */
   PANEL_POLICY_STALE: 'panel.policy_stale',
   /**
+   * R11 A4: «فقط فایل، بدون لینک ساب» was asked for a panel whose provider does not hand
+   * over connection files.
+   *
+   * Refused rather than stored: with the link hidden and no files to send, a customer on
+   * such a panel would be given nothing to connect with. Raised at the operator's save and
+   * never deferred to a customer's purchase; the Web Admin does not draw the switch for such
+   * a panel, so this is the server's own answer to a request that did not come from it.
+   */
+  PANEL_FILES_ONLY_UNSUPPORTED: 'panel.files_only_unsupported',
+  /**
    * Phase 2 item 5: the panel's post-delivery tutorial changed since the operator read it.
    * The panel trial's and the policy's rule: a reload, never a silent overwrite.
    */
