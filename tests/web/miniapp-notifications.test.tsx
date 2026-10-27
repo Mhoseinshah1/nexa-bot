@@ -45,6 +45,14 @@ function serve(routes: Record<string, Handler>) {
     }),
     'GET /services': () => ({ items: [], page: 0, pages: 1, total: 0 }),
     'GET /trial': () => ({ offers: [] }),
+    'GET /wallet': () => ({
+      balance: { amountMinor: '1000', currency: 'IRT' },
+      presets: [],
+      minimum: null,
+      maximum: null,
+      giftCards: false,
+    }),
+    'GET /wallet/entries': () => ({ items: [], nextCursor: null }),
     ...routes,
   };
   vi.stubGlobal(
@@ -244,6 +252,8 @@ describe('marking read', () => {
       },
     });
     await mount();
+    // From the wallet tab, which (unlike home) does not re-read /me when it comes back.
+    fireEvent.click(screen.getByRole('button', { name: text('miniapp.tab_wallet') }));
     fireEvent.click(await screen.findByRole('button', { name: bellName(2) }));
     fireEvent.click(await screen.findByText('الف'));
     await waitFor(() =>
@@ -255,7 +265,7 @@ describe('marking read', () => {
     // A second tap on the same, now read, message asks nothing.
     fireEvent.click(screen.getByText('الف'));
     expect(writes(calls)).toHaveLength(1);
-    // Telegram's back button returns to the tab, whose bell shows the lowered counter.
+    // Telegram's back button returns to the wallet tab, whose bell shows the lowered counter.
     act(() => pressBack());
     expect(await screen.findByRole('button', { name: bellName(1) })).toBeTruthy();
   });
@@ -275,6 +285,7 @@ describe('marking read', () => {
       },
     });
     await mount();
+    fireEvent.click(screen.getByRole('button', { name: text('miniapp.tab_wallet') }));
     fireEvent.click(await screen.findByRole('button', { name: bellName(2) }));
     await screen.findByText('الف');
     fireEvent.click(screen.getByRole('button', { name: text('miniapp.notifications_read_all') }));
@@ -287,6 +298,10 @@ describe('marking read', () => {
     expect(
       screen.getByRole('button', { name: text('miniapp.notifications_read_all') }),
     ).toHaveProperty('disabled', true);
+    // The bell on the tab behind it follows: nothing is unread any more.
+    act(() => pressBack());
+    const bell = await screen.findByRole('button', { name: text('miniapp.notifications_title') });
+    expect(bell.querySelector('.bell-badge')).toBeNull();
   });
 
   it('shows a refusal in Persian and keeps the message unread', async () => {
