@@ -10708,7 +10708,7 @@ export const WEB_FA = {
   'web.qr_kind_singbox': 'QR مخصوص sing-box',
   'web.qr_kind_both': 'هر دو QR',
   'web.singbox_interval_label': 'فاصلهٔ به‌روزرسانی خودکار sing-box (دقیقه)',
-  'web.singbox_interval_hint': 'عدد صحیح بین {min} و {max}. پیش‌فرض ۳۶۰ دقیقه.',
+  'web.singbox_interval_hint': 'عدد صحیح بین {min} و {max}. پیش‌فرض 360 دقیقه.',
   'web.singbox_interval_invalid': 'فاصله باید عددی صحیح در بازهٔ مجاز باشد.',
   'web.qr_kind_files_only_note':
     'تا وقتی «فقط فایل، بدون لینک ساب» روشن است هیچ QR نشان داده نمی‌شود.',
