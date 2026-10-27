@@ -60,6 +60,8 @@
     "legacy-money-report:dev": "pnpm --filter @nexa/api legacy-money-report:dev",
     "cutover-reconcile": "pnpm --filter @nexa/api cutover-reconcile",
     "cutover-reconcile:dev": "pnpm --filter @nexa/api cutover-reconcile:dev",
+    "cutover-rehearse": "pnpm --filter @nexa/api cutover-rehearse",
+    "cutover-rehearse:dev": "pnpm --filter @nexa/api cutover-rehearse:dev",
     "customers-link-bot": "pnpm --filter @nexa/api customers-link-bot",
     "customers-link-bot:dev": "pnpm --filter @nexa/api customers-link-bot:dev",
     "data-compaction": "pnpm --filter @nexa/api data-compaction",

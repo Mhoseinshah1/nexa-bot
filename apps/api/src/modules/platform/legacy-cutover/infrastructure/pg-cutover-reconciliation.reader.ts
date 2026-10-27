@@ -5,6 +5,10 @@ import type {
   NexaHeldUser,
   NexaResellerRow,
 } from '../application/cutover-reconciliation.js';
+import type {
+  NexaServiceCandidate,
+  NexaServiceRow,
+} from '../application/cutover-service-reconciliation.js';
 
 /**
  * The NEXA half of the cutover reconciliation: what the database holds now, for one tenant,
@@ -140,6 +144,70 @@ export async function readNexaCutoverState(
         heldUsers,
         resellers,
         legacyDebtRows: debts.rows[0]?.n ?? 0,
+      };
+    } finally {
+      await client.query('ROLLBACK');
+    }
+  });
+}
+
+/** The NEXA half of the SERVICE reconciliation (`cutover-service-reconciliation.ts`). */
+export interface NexaServiceState {
+  readonly tenantId: string;
+  readonly candidates: readonly NexaServiceCandidate[];
+  readonly services: readonly NexaServiceRow[];
+}
+
+/**
+ * Every recorded service outcome and every service of one tenant, in the same kind of
+ * `REPEATABLE READ, READ ONLY` transaction as `readNexaCutoverState`, always rolled back.
+ */
+export async function readNexaServiceState(
+  handle: DatabaseHandle,
+  options: { readonly tenantSlug: string | null; readonly statementTimeoutMs: number },
+): Promise<NexaServiceState> {
+  return handle.withClient(async (client) => {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    try {
+      await client.query(`SET LOCAL statement_timeout = ${String(options.statementTimeoutMs)}`);
+      const tenantId = await tenantIdOf(client, options.tenantSlug);
+      const candidates = await client.query<{
+        invoice_key: string;
+        outcome: string;
+        service_id: string | null;
+      }>(
+        `SELECT invoice_key, outcome, service_id
+           FROM legacy_service_candidates
+          WHERE tenant_id = $1`,
+        [tenantId],
+      );
+      const services = await client.query<{
+        id: string;
+        state: string;
+        source: string | null;
+        source_ref: string | null;
+        telegram_user_id: string | null;
+      }>(
+        `SELECT s.id, s.state, s.source, s.source_ref, c.telegram_user_id
+           FROM services s
+           LEFT JOIN customers c ON c.tenant_id = s.tenant_id AND c.id = s.customer_id
+          WHERE s.tenant_id = $1`,
+        [tenantId],
+      );
+      return {
+        tenantId,
+        candidates: candidates.rows.map((c) => ({
+          invoiceKey: c.invoice_key,
+          outcome: c.outcome as NexaServiceCandidate['outcome'],
+          serviceId: c.service_id,
+        })),
+        services: services.rows.map((s) => ({
+          serviceId: s.id,
+          state: s.state,
+          source: s.source,
+          sourceRef: s.source_ref,
+          ownerTelegramId: s.telegram_user_id,
+        })),
       };
     } finally {
       await client.query('ROLLBACK');
