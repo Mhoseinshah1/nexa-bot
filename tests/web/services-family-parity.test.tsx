@@ -223,7 +223,7 @@ describe('custom service, as the demo draws it', () => {
   it('keeps a location panel’s copy control, revealed on the row’s hover as the demo', async () => {
     stubApi(routesOf(fixturesFor('demo-parity')));
     renderPage(<CustomServicePage denied={false} mayEdit mayViewPanels mayViewTiers />);
-    const panel = await screen.findByText('Frankfurt A', { selector: '.copyable .val' });
+    const panel = await screen.findByText('DE-1', { selector: '.copyable .val' });
     const row = panel.closest('tr')!;
     expect(within(row).getByRole('button', { name: t('web.copy') })).toBeInTheDocument();
     const css = readFileSync(

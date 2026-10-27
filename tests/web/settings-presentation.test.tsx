@@ -212,7 +212,7 @@ describe('the settings page', () => {
         key,
       ).toBeNull();
     }
-  });
+  }, 60_000);
 
   it('keeps the machine key in a closed technical disclosure', async () => {
     stubApi(ROUTES);

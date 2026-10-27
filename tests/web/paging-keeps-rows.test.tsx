@@ -159,8 +159,9 @@ describe('every server-paged list keeps its page while turning', () => {
    * list added without it brings the jump back; this names it.
    */
   const PAGES = join(import.meta.dirname, '../../apps/web/src/pages');
-  // Pages whose pager walks rows already in memory (usePagedRows / useClientPaging).
-  const IN_MEMORY = new Set(['ops-paging.tsx']);
+  // Pages whose pager walks rows already in memory (usePagedRows / useClientPaging; content.tsx
+  // pages the whole catalogue the server returned at once).
+  const IN_MEMORY = new Set(['ops-paging.tsx', 'content.tsx']);
 
   it('names no paged page without it', () => {
     const files = readdirSync(PAGES, { recursive: true, encoding: 'utf8' }).filter((file) =>

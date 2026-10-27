@@ -38,7 +38,7 @@ import {
   reportExportUrl,
   type ReportRangeSelection,
 } from '../api/client';
-import { formatMoney, formatNumber, formatTrafficGbText } from '../format';
+import { formatMoney, formatTrafficGbText } from '../format';
 import { LEDGER_REASON_LABELS } from './mirza-labels';
 import { t, type WebKey } from '../i18n/web.fa';
 import { RecordLink, recordHref } from '../ui/record-ref';
