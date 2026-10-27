@@ -160,7 +160,8 @@ const OPERATOR_NAMESPACE = 'WEB' as const;
  */
 export interface WalletSettlementAuthority {
   readonly permission: PermissionKey;
-  readonly namespace: 'WEB' | 'TELEGRAM';
+  /** Round 10, D1: `SCHEDULER` is the automatic-renewal worker's own namespace. */
+  readonly namespace: 'WEB' | 'TELEGRAM' | 'SCHEDULER';
   /**
    * Run inside the settling transaction, after the money moved and before the key is
    * remembered — so whatever it writes (the manual order's own audit row, its extra
@@ -181,6 +182,18 @@ export const CUSTOMER_WALLET_SETTLEMENT: WalletSettlementAuthority = {
 export const MANUAL_ORDER_WALLET_SETTLEMENT: WalletSettlementAuthority = {
   permission: 'orders.manual.create',
   namespace: OPERATOR_NAMESPACE,
+};
+
+/**
+ * Round 10, D1: an automatic renewal, settled by the worker as `SYSTEM_JOB` — the customer's
+ * own permission (`maintenance.run`) in the `SCHEDULER` namespace, so the worker's keys and the
+ * customer's never meet. Otherwise exactly this path: the same lock, the same sufficiency
+ * check, the same `PURCHASE` debit, the same refusal (never a refund). The caller adds an
+ * `inTransaction` hook that records the period renewed in the settling transaction itself.
+ */
+export const AUTO_RENEW_WALLET_SETTLEMENT: WalletSettlementAuthority = {
+  permission: PAYMENT_PLACE_PERMISSION,
+  namespace: 'SCHEDULER',
 };
 
 export interface PaymentServiceDeps {
@@ -5368,7 +5381,7 @@ export class PaymentService {
     remember?: {
       readonly idempotencyKey: string;
       readonly requestHash: string;
-      readonly namespace: 'WEB' | 'TELEGRAM';
+      readonly namespace: 'WEB' | 'TELEGRAM' | 'SCHEDULER';
     },
     /** As `confirmAndCredit`'s: `UNKNOWN` only for a reconciliation (§9.6.4). */
     from: 'PENDING' | 'UNKNOWN' = 'PENDING',
@@ -5932,7 +5945,7 @@ export class PaymentService {
   /** The committed result of an identical earlier command, or null. */
   private async replayed(
     scope: TenantContext,
-    namespace: 'WEB' | 'TELEGRAM',
+    namespace: 'WEB' | 'TELEGRAM' | 'SCHEDULER',
     idempotencyKey: string,
     requestHash: string,
   ): Promise<{ readonly payment: PaymentRecord; readonly order: OrderRecord } | null> {

@@ -4443,6 +4443,62 @@ error text; what follows is only what it does not settle.
   sent the receipt before the deadline has money on the card and no invoice. That case was already
   stranded before (Nexa's receipt window had closed); it needs an operator either way.
 
+## Round 10 D3 — the personal discount («تخفیف شخصی»)
+
+Built to the owner's spec behind `personal_discount` (OFF): a whole percent 0–100 per customer,
+set on the customer's page (`users.discount.edit`, owner role only), applied by the pricing engine
+to NEW_SERVICE and RENEW, never to a top-up. Stacking is `LARGER_SINGLE_WINS`: the ordinary quote
+(reseller price, codes, automatic rules — unchanged) against list − percent; the strictly lower
+total wins, a tie keeps the ordinary quote, never combined; the decision is frozen on the order's
+quote. What it does not settle:
+
+- **OQ-R10-D3-01 — 100 % gives a one-unit total, not zero.** A 100 % personal discount is floored
+  at one minor unit payable, exactly as a 100 % discount code is (`clampDiscount`, Payment File 02
+  §14 D4): there is no zero-total payment (`payments_amount_check amount > 0`). The owner decides
+  whether to cap the percent at 99, or to build a free-settlement path for fully discounted orders.
+- **OQ-R10-D3-02 — which purposes.** Applied to purchases and renewals only. Add-ons (traffic,
+  time, devices), a custom service and a paid location change are left at their ordinary price by
+  default; widening `PERSONAL_DISCOUNT_PURPOSES` is a contract change the owner decides.
+- **OQ-R10-D3-03 — a typed code that loses to the personal discount.** The customer is told the one
+  sentence every code refusal gets (the reason is an oracle); saying "your personal discount is
+  larger" would reveal the code is valid. The owner may prefer an explicit sentence.
+- **OQ-R10-D3-04 — reporting.** Personal discounts are counted in `orders.discount` with every
+  other discount; a per-source split (personal vs code vs automatic) needs a reporting change.
+- **OQ-R10-D3-05 — a quote the personal discount LOST.** Confirmation re-decides a personal
+  discount only when it was APPLIED (flag still on, percent unchanged, else
+  `DISCOUNT_NO_LONGER_VALID`). A quote where it lost is the ordinary price and is honoured even if
+  the percent rose since; the customer may start again to be priced at the new percent.
+- **OQ-R10-D3-06 — the legacy per-user discount (UBR-004).** The Mirza per-user percent kept in
+  `resellers.source_detail` is not imported into the new column; whether to backfill it (silently,
+  no customer message) is the owner's call.
+
+## Round 10 D1 — automatic renewal (تمدید خودکار)
+
+Each is decided the way that moves no money and sends no extra message; the owner may decide
+otherwise.
+
+- **OQ-R10-D1-01 — imported (Mirza) services.** Their renewal is a plan of their panel the
+  customer chooses at the time (owner rule 2026-10-18), and nothing may choose one for them, so v1
+  does not offer them «تمدید خودکار» (the switch is not drawn; the server refuses it with
+  `commerce.auto_renew_not_available`; the sweep never selects them). To offer it, the owner
+  decides which plan an imported service renews to automatically (the cheapest current plan? the
+  one last bought? one the customer picks at opt-in?).
+- **OQ-R10-D1-02 — a renewal price above the consented total.** Lead decision: no renewal and ONE
+  notice (`SERVICE_AUTO_RENEW_PRICE_CHANGED`); the consent stays on, so the next period is tried
+  again at the then-current price, refused again if still higher, and told again (one notice per
+  period). Whether a raised price should switch the consent off instead is the owner's call.
+- **OQ-R10-D1-03 — the ordinary expiry reminders of an opted-in service.** Unchanged: a service
+  that will be renewed automatically still gets the week/three-day/day reminders. Suppressing
+  them would hide the deadline from a customer whose renewal then fails for a reason they could
+  fix.
+- **OQ-R10-D1-04 — a renewal the service itself refuses** (the product withdrawn, the panel unable
+  or switched off for renewals, a tier that no longer grants it, a negative wallet). The period is
+  `REFUSED (NOT_RENEWABLE)` with no extra customer message; the ordinary reminders still speak.
+  Whether to tell the customer is open.
+- **OQ-R10-D1-05 — a worker down past the deadline.** A period whose deadline passed before any
+  pass renewed it is not renewed after the fact (the service lapses as it would have); the lead
+  window (`auto_renew.lead_hours`, default 24 h) is what makes that unlikely.
+
 ## R10 C2 — the custom panel (Nexa's own bridge protocol, `docs/protocols/custom-panel.md`)
 
 Defaults below are the readings that move no money and send no customer message.

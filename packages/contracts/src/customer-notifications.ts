@@ -392,6 +392,19 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    */
   'SERVICE_TRAFFIC_ADDED',
   'SERVICE_TIME_ADDED',
+  /*
+   * Round 10, D1: automatic renewal could not renew this period. The subject is the
+   * `service_auto_renew_runs` row — one per (service, period) — so the customer is told at
+   * most once per period whatever number of passes find the wallet short, and the run row
+   * itself refuses a second notice of either kind for the same period. The values (the
+   * service's account name, the quoted total, the deadline) are read at send time from that
+   * row's own snapshot: a reader, not a payload (ADR 0030 §1).
+   *
+   * Two kinds because each renders ONE frozen template: the wallet does not cover the
+   * renewal, or the renewal now costs more than the customer agreed to when switching it on.
+   */
+  'SERVICE_AUTO_RENEW_FUNDS_SHORT',
+  'SERVICE_AUTO_RENEW_PRICE_CHANGED',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -469,6 +482,9 @@ export const CUSTOMER_NOTIFICATION_AUTOMATED: Readonly<Record<CustomerNotificati
     ACCOUNT_UNBLOCKED: false,
     SERVICE_TRAFFIC_ADDED: false,
     SERVICE_TIME_ADDED: false,
+    // Round 10, D1: raised by the auto-renew sweep, not by anything the customer did then.
+    SERVICE_AUTO_RENEW_FUNDS_SHORT: true,
+    SERVICE_AUTO_RENEW_PRICE_CHANGED: true,
   };
 
 /**
@@ -669,6 +685,15 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    */
   SERVICE_TRAFFIC_ADDED: false,
   SERVICE_TIME_ADDED: false,
+  /*
+   * Round 10, D1: `true` both. "Your wallet does not cover the automatic renewal" stops being
+   * true once the period is renewed (automatically or by hand), the customer switched it off,
+   * the installation switched the feature off, or the wallet now covers the quote; "the price
+   * rose" stops once the period is renewed or the consent is gone. The reader decides from the
+   * run row, the service's current deadline, the preference and the ledger.
+   */
+  SERVICE_AUTO_RENEW_FUNDS_SHORT: true,
+  SERVICE_AUTO_RENEW_PRICE_CHANGED: true,
 };
 
 /**
@@ -756,6 +781,9 @@ export const CUSTOMER_NOTIFICATION_QUIET_HOURS: Readonly<
   // R5C-1: the receipt of a package the customer just paid for is expected NOW.
   SERVICE_TRAFFIC_ADDED: false,
   SERVICE_TIME_ADDED: false,
+  // Round 10, D1: a sweep's notice, held like every reminder.
+  SERVICE_AUTO_RENEW_FUNDS_SHORT: true,
+  SERVICE_AUTO_RENEW_PRICE_CHANGED: true,
 };
 
 /**
@@ -842,6 +870,9 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   // R5C-1 item 4: values read at send time from the operation the notification names.
   SERVICE_TRAFFIC_ADDED: 'bot.service.addon_traffic_added',
   SERVICE_TIME_ADDED: 'bot.service.addon_time_added',
+  // Round 10, D1: values read at send time from the run row's snapshot.
+  SERVICE_AUTO_RENEW_FUNDS_SHORT: 'bot.service.auto_renew_funds_short',
+  SERVICE_AUTO_RENEW_PRICE_CHANGED: 'bot.service.auto_renew_price_changed',
 };
 
 /**

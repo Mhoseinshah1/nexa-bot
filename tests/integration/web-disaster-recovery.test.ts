@@ -100,6 +100,16 @@ describe('web disaster recovery', () => {
     }
   }
 
+  /*
+   * The upload ceiling this suite runs under. It was 1 MiB, sized against a ~100 KiB dump; a
+   * pg_dump custom-format archive stores the DDL uncompressed, so every migration adds to it,
+   * and the test database's real archive passed 1 MiB (~1.07 MB) once another migration
+   * landed — every upload of a real archive then answered 413 and fifteen cases failed far
+   * from the cause. Eight MiB leaves room for the schema to grow; `takeBackup` asserts each
+   * real archive still fits, so the next time it outgrows the ceiling the failure says so.
+   */
+  const RECOVERY_UPLOAD_CEILING_BYTES = 8 * 1024 * 1024;
+
   beforeAll(async () => {
     workRoot = await mkdtemp(join(tmpdir(), 'nexa-dr-backups-'));
     recoveryRoot = await mkdtemp(join(tmpdir(), 'nexa-dr-recovery-'));
@@ -107,10 +117,10 @@ describe('web disaster recovery', () => {
       WEB_ADMIN_ORIGINS: ORIGIN,
       BACKUP_WORK_DIR: workRoot,
       RECOVERY_WORK_DIR: recoveryRoot,
-      // Small enough to exercise the ceiling with a real archive, large enough
-      // that the dev database's ~100 KiB dump fits. The oversize case writes a
-      // buffer bigger than this rather than a real archive.
-      RECOVERY_UPLOAD_MAX_BYTES: '1048576',
+      // Large enough that the test database's real archive fits (asserted in
+      // `takeBackup`). The oversize case writes a buffer bigger than this rather
+      // than a real archive.
+      RECOVERY_UPLOAD_MAX_BYTES: String(RECOVERY_UPLOAD_CEILING_BYTES),
     });
     const { resolveKeyring } =
       await import('../../apps/api/src/infrastructure/crypto/resolve-keyring');
@@ -205,6 +215,10 @@ describe('web disaster recovery', () => {
     expect(body.run.state).toBe('SUCCEEDED');
     expect(body.run.verifiedAt).not.toBeNull();
     const archive = await readFile(join(workRoot, body.run.id, 'archive.nxb'));
+    expect(
+      archive.length,
+      `a real archive (${String(archive.length)} bytes) must fit RECOVERY_UPLOAD_CEILING_BYTES; the schema outgrew it — raise the ceiling`,
+    ).toBeLessThan(RECOVERY_UPLOAD_CEILING_BYTES);
     return { id: body.run.id, checksum: body.run.checksum ?? '', archive };
   }
 
@@ -481,7 +495,7 @@ describe('web disaster recovery', () => {
     it('refuses an oversized upload on the STREAM, and keeps nothing', async () => {
       // Past `RECOVERY_UPLOAD_MAX_BYTES`. Counted by the server as it writes,
       // not read off a header — a chunked request declares no length.
-      const oversize = randomBytes(1024 * 1024 + 4096);
+      const oversize = randomBytes(RECOVERY_UPLOAD_CEILING_BYTES + 4096);
       const response = await upload(oversize);
       expect([400, 413]).toContain(response.statusCode);
 
@@ -867,7 +881,7 @@ describe('web disaster recovery', () => {
       expect(capabilities.confirmationPhrase).toBe(RECOVERY_CONFIRMATION_PHRASE);
       // Reported so the Web Admin refuses a too-large file before sending it, and
       // so the refusal it renders names the real limit.
-      expect(capabilities.maxUploadBytes).toBe(1048576);
+      expect(capabilities.maxUploadBytes).toBe(RECOVERY_UPLOAD_CEILING_BYTES);
     });
 
     it('needs a session', async () => {

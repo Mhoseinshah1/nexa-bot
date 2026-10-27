@@ -127,6 +127,20 @@ export const PERMISSIONS = [
   p('users.phone.verify', "Record or revoke a customer's manually verified phone number"),
   p('users.location.edit', "Set or remove a customer's location-change limit override", 'HIGH'),
   p('users.notifications.edit', "Change a customer's promotional notification preference"),
+  /*
+   * R10 D3: a customer's personal discount percent (0–100), applied by the pricing boundary
+   * to their purchases and renewals while `personal_discount` is on.
+   *
+   * Its own key, on the rule above — one key per control, because the blast radii differ —
+   * and this one's is MONEY: every other Customer 360 control changes a gate or a
+   * preference, this one lowers what a customer pays on every order until it is changed
+   * back. Not `catalog.discounts.edit` either: that key writes tenant-wide rules with a
+   * window, limits and a place in the trace, and a role that may run a campaign is not
+   * thereby a role that may give one customer a standing percentage off. HIGH, like the
+   * discount-rule key. Seeded on the owner role only (every key); an owner grants it to
+   * another role deliberately.
+   */
+  p('users.discount.edit', "Set or remove a customer's personal discount percent", 'HIGH'),
   p('users.transfer', "Transfer a customer's account to another Telegram identity", 'CRITICAL'),
   /*
    * Phase A2 (`docs/direct-message-audit.md`): one operator-written message to ONE customer,
@@ -1054,6 +1068,7 @@ export const PERMISSION_REQUIRES: Readonly<Partial<Record<PermissionKey, Permiss
   'users.phone.verify': 'users.view',
   'users.location.edit': 'users.view',
   'users.notifications.edit': 'users.view',
+  'users.discount.edit': 'users.view',
   'users.transfer': 'users.view',
   /*
    * Phase A2. A direct message is composed on the customer's page and answers with that

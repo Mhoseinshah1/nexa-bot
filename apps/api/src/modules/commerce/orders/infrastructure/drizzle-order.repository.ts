@@ -501,6 +501,19 @@ function quoteFromJson(raw: unknown, orderId: string): PriceQuote {
             amount: money(BigInt(wire.cashback.amount.amountMinor), wire.cashback.amount.currency),
           },
         }),
+    ...(wire.personalDiscount === undefined
+      ? {}
+      : {
+          personalDiscount: {
+            percent: wire.personalDiscount.percent,
+            outcome: wire.personalDiscount.outcome,
+            competingTotal: money(
+              BigInt(wire.personalDiscount.competingTotal.amountMinor),
+              wire.personalDiscount.competingTotal.currency,
+            ),
+            rule: wire.personalDiscount.rule,
+          },
+        }),
   };
 }
 

@@ -132,6 +132,8 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
   { id: 'referral', label: 'معرفی دوستان و هدیهٔ عضویت', prefixes: ['bot.referral.'] },
   { id: 'support', label: 'پشتیبانی و پرسش‌های متداول', prefixes: ['bot.faq.', 'bot.support.'] },
   { id: 'tickets', label: 'تیکت‌های پشتیبانی (مشتری)', prefixes: ['bot.ticket.'] },
+  // R10 D2: what an owner-defined main-menu button answers with.
+  { id: 'custom_button', label: 'دکمه‌های دلخواه منوی اصلی', prefixes: ['bot.custom_button.'] },
   // Phase A2: a direct message an operator sends from the customer's page.
   { id: 'direct_message', label: 'پیام مستقیم به مشتری', prefixes: ['bot.direct_message.'] },
   // Phase E3: the incident / maintenance notice.
@@ -335,6 +337,9 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   discountLine: 'خط تخفیف',
   displayName: 'نام نمایشی',
   durationDays: 'مدت (روز)',
+  // Round 10, D1: automatic renewal.
+  consented: 'مبلغ پذیرفته‌شده هنگام فعال‌سازی',
+  leadHours: 'ساعت پیش از انقضا',
   emoji: 'ایموجی',
   evidence: 'مبنای تأیید',
   expired: 'وضعیت اعلان پایان اعتبار',
@@ -795,6 +800,9 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.ticket.support_attachment': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
   'bot.direct_message.text': { text: 'متن پیام اپراتور' },
   'bot.direct_message.media': { caption: 'توضیح عکس یا فایل' },
+  'bot.custom_button.text': { text: 'متن دکمه' },
+  'bot.custom_button.caption': { caption: 'توضیح عکس یا فایل دکمه' },
+  'bot.custom_button.link': { text: 'یادداشت اختیاری کنار لینک' },
   'bot.incident.notice': { message: 'پیام اپراتور به مشتری' },
   'ops.support.ticket_opened': { category: 'موضوع تیکت' },
   'ops.support.customer_replied': { category: 'موضوع تیکت' },
@@ -1162,6 +1170,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.order.preinvoice_discount_line': [
     'خط تخفیف در پیش‌فاکتور',
     'مبلغ تخفیف و قیمت پیش از تخفیف؛ فقط وقتی تخفیفی اعمال شده است.',
+  ],
+  'bot.order.preinvoice_personal_discount_line': [
+    'خط تخفیف شخصی در پیش‌فاکتور',
+    'درصد تخفیف شخصی مشتری، مبلغ تخفیف و قیمت پیش از تخفیف؛ فقط وقتی سفارش با تخفیف شخصی قیمت‌گذاری شده و به‌جای خط تخفیف معمول.',
   ],
   'bot.order.preinvoice_cashback_line': [
     'خط کش‌بک در پیش‌فاکتور',
@@ -2460,6 +2472,14 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'یادآور روز انقضای سرویس',
     'در روز پایان اعتبار و پیش از پایان آن فرستاده می‌شود و زمان دقیق انقضا را می‌گوید.',
   ],
+  'bot.service.auto_renew_funds_short': [
+    'کمبود موجودی برای تمدید خودکار',
+    'یک بار در هر دوره، وقتی تمدید خودکار سرویس به‌خاطر کافی نبودن موجودی کیف پول انجام نشد؛ مبلغی کسر نشده و با شارژ کیف پول پیش از پایان اعتبار، سرویس خودکار تمدید می‌شود.',
+  ],
+  'bot.service.auto_renew_price_changed': [
+    'تغییر مبلغ تمدید خودکار',
+    'یک بار، وقتی تمدید خودکار انجام نشد چون مبلغ تمدید از مبلغی که مشتری هنگام فعال‌سازی پذیرفته بود بیشتر شده است؛ مبلغی کسر نشده است.',
+  ],
   'bot.wallet.low_balance': [
     'هشدار کمبود موجودی کیف پول',
     'وقتی موجودی کیف پول از آستانهٔ تعیین‌شده کمتر شود، یک بار فرستاده می‌شود.',
@@ -2480,6 +2500,36 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.reseller.minimum_achieved': [
     'رسیدن به حداقل فروش ماهانه',
     'یک بار در ماه، وقتی فروش نماینده به حداقل ماهانهٔ او برسد (اگر این پیام روشن باشد).',
+  ],
+
+  // --- Automatic renewal (Round 10, D1) ----------------------------------------------
+  'bot.service.auto_renew_enable_button': [
+    'دکمهٔ فعال‌سازی تمدید خودکار',
+    'روی صفحهٔ سرویس، وقتی تمدید خودکار روشن است و سرویس قابل تمدید خودکار است؛ ابتدا تأیید می‌گیرد.',
+  ],
+  'bot.service.auto_renew_disable_button': [
+    'دکمهٔ لغو تمدید خودکار',
+    'روی صفحهٔ سرویسی که تمدید خودکار آن فعال است؛ بی‌درنگ آن را لغو می‌کند.',
+  ],
+  'bot.service.auto_renew_ask': [
+    'پرسش تأیید تمدید خودکار',
+    'مبلغ تمدید و فاصلهٔ زمانی پیش از انقضا را می‌گوید و تأیید مشتری را می‌خواهد؛ چیزی ثبت نمی‌کند.',
+  ],
+  'bot.service.auto_renew_confirm_button': [
+    'دکمهٔ تأیید تمدید خودکار',
+    'تنها دکمه‌ای که رضایت مشتری به تمدید خودکار را ثبت می‌کند.',
+  ],
+  'bot.service.auto_renew_enabled': [
+    'فعال شدن تمدید خودکار',
+    'خطی که پس از فعال‌سازی تمدید خودکار روی صفحهٔ سرویس می‌آید.',
+  ],
+  'bot.service.auto_renew_disabled': [
+    'لغو تمدید خودکار',
+    'خطی که پس از لغو تمدید خودکار روی صفحهٔ سرویس می‌آید.',
+  ],
+  'bot.service.auto_renew_unavailable': [
+    'در دسترس نبودن تمدید خودکار',
+    'وقتی تمدید خودکار برای این سرویس قابل فعال‌سازی نیست (خاموش بودن قابلیت، سرویس منتقل‌شده از ربات قبلی، بدون تاریخ انقضا یا غیرقابل تمدید).',
   ],
 
   // --- Service transfer -------------------------------------------------------------
@@ -2894,6 +2944,26 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.direct_message.media': [
     'پیام مستقیم به مشتری (عکس یا فایل)',
     'زیرنویس عکس یا فایلی که اپراتور از صفحهٔ مشتری فرستاده است؛ اگر توضیحی نداشته باشد آن خط حذف می‌شود.',
+  ],
+  'bot.custom_button.text': [
+    'دکمهٔ دلخواه منو (متن)',
+    'پیامی که با زدن یک دکمهٔ متنیِ ساخته‌شده توسط شما به مشتری فرستاده می‌شود؛ متن هنگام ارسال از خود دکمه خوانده می‌شود و فقط به‌صورت متن ساده ارسال می‌شود.',
+  ],
+  'bot.custom_button.caption': [
+    'دکمهٔ دلخواه منو (زیرنویس عکس یا فایل)',
+    'زیرنویس عکس یا فایلی که با زدن یک دکمهٔ دلخواه فرستاده می‌شود؛ هنگام ارسال از خود دکمه خوانده می‌شود.',
+  ],
+  'bot.custom_button.link': [
+    'دکمهٔ دلخواه منو (لینک)',
+    'پیامی که با زدن یک دکمهٔ لینک فرستاده می‌شود؛ خود لینک دکمهٔ زیر پیام است. اگر یادداشتی نداشته باشد آن خط حذف می‌شود.',
+  ],
+  'bot.custom_button.open_link_button': [
+    'دکمهٔ باز کردن لینک',
+    'دکمهٔ زیر پاسخ یک دکمهٔ لینک که نشانی شما را باز می‌کند.',
+  ],
+  'bot.custom_button.unavailable': [
+    'دکمهٔ دلخواه در دسترس نیست',
+    'پاسخ به زدن دکمه‌ای که دیگر در دسترس نیست: قابلیت خاموش شده، دکمه حذف شده یا برای این ربات نمایش داده نمی‌شود. برای کیبوردی که قبل از تغییر ارسال شده بود.',
   ],
   'bot.incident.notice': [
     'اطلاع‌رسانی رخداد یا نگهداری (به مشتری)',

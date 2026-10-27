@@ -68,6 +68,7 @@ const overview = {
     phone: null,
     locationOverride: null,
     marketingOptOutAt: null,
+    personalDiscount: { percent: 0, setAt: null, enabled: false },
     terms: { available: false },
   },
 };

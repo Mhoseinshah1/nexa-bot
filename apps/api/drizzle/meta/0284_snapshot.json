@@ -1,5 +1,5 @@
 {
-  "id": "ad24b620-f8cc-4954-bf76-508e86ef7b02",
+  "id": "8f75209e-a60f-4dfb-85a7-0774efd8a76c",
   "prevId": "66e6fd5e-5e42-4bc4-97fd-fa5d47b7a4a8",
   "version": "7",
   "dialect": "postgresql",
@@ -7958,173 +7958,6 @@
       },
       "isRLSEnabled": false
     },
-    "public.customer_captchas": {
-      "name": "customer_captchas",
-      "schema": "",
-      "columns": {
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "customer_id": {
-          "name": "customer_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "state": {
-          "name": "state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'PENDING'"
-        },
-        "challenge_id": {
-          "name": "challenge_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "operand_a": {
-          "name": "operand_a",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "operand_b": {
-          "name": "operand_b",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "options": {
-          "name": "options",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "answer_index": {
-          "name": "answer_index",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "attempts": {
-          "name": "attempts",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "issued_at": {
-          "name": "issued_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "locked_until": {
-          "name": "locked_until",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "passed_at": {
-          "name": "passed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "customer_captchas_tenant_id_tenants_id_fk": {
-          "name": "customer_captchas_tenant_id_tenants_id_fk",
-          "tableFrom": "customer_captchas",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "customer_captchas_customer_fk": {
-          "name": "customer_captchas_customer_fk",
-          "tableFrom": "customer_captchas",
-          "tableTo": "customers",
-          "columnsFrom": [
-            "tenant_id",
-            "customer_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "customer_captchas_pkey": {
-          "name": "customer_captchas_pkey",
-          "columns": [
-            "tenant_id",
-            "customer_id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "customer_captchas_state_check": {
-          "name": "customer_captchas_state_check",
-          "value": "state IN ('PENDING', 'PASSED')"
-        },
-        "customer_captchas_answer_index_check": {
-          "name": "customer_captchas_answer_index_check",
-          "value": "answer_index BETWEEN 0 AND 3"
-        },
-        "customer_captchas_options_check": {
-          "name": "customer_captchas_options_check",
-          "value": "jsonb_typeof(options) = 'array' AND jsonb_array_length(options) = 4"
-        },
-        "customer_captchas_attempts_check": {
-          "name": "customer_captchas_attempts_check",
-          "value": "attempts >= 0"
-        },
-        "customer_captchas_passed_check": {
-          "name": "customer_captchas_passed_check",
-          "value": "(state = 'PASSED') = (passed_at IS NOT NULL)"
-        },
-        "customer_captchas_expiry_check": {
-          "name": "customer_captchas_expiry_check",
-          "value": "expires_at > issued_at"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.customer_direct_messages": {
       "name": "customer_direct_messages",
       "schema": "",
@@ -8919,7 +8752,7 @@
       "checkConstraints": {
         "customer_notifications_kind_check": {
           "name": "customer_notifications_kind_check",
-          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'GATEWAY_LATE_PAYMENT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'TICKET_REPLY', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER', 'TICKET_REPLY_ATTACHMENT', 'SERVICE_RENEWED', 'RESELLER_MINIMUM_REMINDER', 'RESELLER_MINIMUM_ACHIEVED', 'WALLET_MASS_CREDITED', 'SERVICE_GIFT_APPLIED', 'DIRECT_MESSAGE', 'DIRECT_MESSAGE_MEDIA', 'INCIDENT_NOTICE', 'WALLET_ADMIN_CREDITED', 'WALLET_ADMIN_DEBITED', 'ACCOUNT_UNBLOCKED', 'SERVICE_TRAFFIC_ADDED', 'SERVICE_TIME_ADDED')"
+          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'GATEWAY_LATE_PAYMENT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'TICKET_REPLY', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER', 'TICKET_REPLY_ATTACHMENT', 'SERVICE_RENEWED', 'RESELLER_MINIMUM_REMINDER', 'RESELLER_MINIMUM_ACHIEVED', 'WALLET_MASS_CREDITED', 'SERVICE_GIFT_APPLIED', 'DIRECT_MESSAGE', 'DIRECT_MESSAGE_MEDIA', 'INCIDENT_NOTICE', 'WALLET_ADMIN_CREDITED', 'WALLET_ADMIN_DEBITED', 'ACCOUNT_UNBLOCKED', 'SERVICE_TRAFFIC_ADDED', 'SERVICE_TIME_ADDED', 'SERVICE_AUTO_RENEW_FUNDS_SHORT', 'SERVICE_AUTO_RENEW_PRICE_CHANGED')"
         },
         "customer_notifications_state_check": {
           "name": "customer_notifications_state_check",
@@ -21595,12 +21428,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "not_before": {
-          "name": "not_before",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -30811,6 +30638,434 @@
         "service_addons_duration_bound_check": {
           "name": "service_addons_duration_bound_check",
           "value": "duration_days IS NULL OR duration_days <= 3650"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.service_auto_renew_preferences": {
+      "name": "service_auto_renew_preferences",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "service_id": {
+          "name": "service_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consented_total_minor": {
+          "name": "consented_total_minor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "consented_currency": {
+          "name": "consented_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "service_auto_renew_preferences_enabled_idx": {
+          "name": "service_auto_renew_preferences_enabled_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "service_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "enabled",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "service_auto_renew_preferences_tenant_id_tenants_id_fk": {
+          "name": "service_auto_renew_preferences_tenant_id_tenants_id_fk",
+          "tableFrom": "service_auto_renew_preferences",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_auto_renew_preferences_service_fk": {
+          "name": "service_auto_renew_preferences_service_fk",
+          "tableFrom": "service_auto_renew_preferences",
+          "tableTo": "services",
+          "columnsFrom": [
+            "tenant_id",
+            "service_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_auto_renew_preferences_customer_fk": {
+          "name": "service_auto_renew_preferences_customer_fk",
+          "tableFrom": "service_auto_renew_preferences",
+          "tableTo": "customers",
+          "columnsFrom": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "service_auto_renew_preferences_pkey": {
+          "name": "service_auto_renew_preferences_pkey",
+          "columns": [
+            "tenant_id",
+            "service_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "service_auto_renew_preferences_source_check": {
+          "name": "service_auto_renew_preferences_source_check",
+          "value": "source IN ('TELEGRAM', 'MINI_APP', 'TRANSFER')"
+        },
+        "service_auto_renew_preferences_currency_check": {
+          "name": "service_auto_renew_preferences_currency_check",
+          "value": "consented_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
+        "service_auto_renew_preferences_consent_check": {
+          "name": "service_auto_renew_preferences_consent_check",
+          "value": "(enabled AND consented_total_minor IS NOT NULL AND consented_currency IS NOT NULL\n            AND consented_total_minor >= 0)\n          OR (NOT enabled AND consented_total_minor IS NULL AND consented_currency IS NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.service_auto_renew_runs": {
+      "name": "service_auto_renew_runs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "service_id": {
+          "name": "service_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "basis_expires_at": {
+          "name": "basis_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attempt": {
+          "name": "attempt",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "refusal": {
+          "name": "refusal",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "service_label": {
+          "name": "service_label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consented_total_minor": {
+          "name": "consented_total_minor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consented_currency": {
+          "name": "consented_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "quoted_total_minor": {
+          "name": "quoted_total_minor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "quoted_currency": {
+          "name": "quoted_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "order_id": {
+          "name": "order_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "notified_at": {
+          "name": "notified_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lease_until": {
+          "name": "lease_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "service_auto_renew_runs_order_key": {
+          "name": "service_auto_renew_runs_order_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "order_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "order_id IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "service_auto_renew_runs_state_idx": {
+          "name": "service_auto_renew_runs_state_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lease_until",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "service_auto_renew_runs_tenant_id_tenants_id_fk": {
+          "name": "service_auto_renew_runs_tenant_id_tenants_id_fk",
+          "tableFrom": "service_auto_renew_runs",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_auto_renew_runs_service_fk": {
+          "name": "service_auto_renew_runs_service_fk",
+          "tableFrom": "service_auto_renew_runs",
+          "tableTo": "services",
+          "columnsFrom": [
+            "tenant_id",
+            "service_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_auto_renew_runs_customer_fk": {
+          "name": "service_auto_renew_runs_customer_fk",
+          "tableFrom": "service_auto_renew_runs",
+          "tableTo": "customers",
+          "columnsFrom": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_auto_renew_runs_order_fk": {
+          "name": "service_auto_renew_runs_order_fk",
+          "tableFrom": "service_auto_renew_runs",
+          "tableTo": "orders",
+          "columnsFrom": [
+            "tenant_id",
+            "order_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "service_auto_renew_runs_period_key": {
+          "name": "service_auto_renew_runs_period_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "service_id",
+            "basis_expires_at"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "service_auto_renew_runs_state_check": {
+          "name": "service_auto_renew_runs_state_check",
+          "value": "state IN ('CLAIMED', 'RENEWED', 'FUNDS_SHORT', 'REFUSED')"
+        },
+        "service_auto_renew_runs_refusal_check": {
+          "name": "service_auto_renew_runs_refusal_check",
+          "value": "refusal IN ('PRICE_ROSE', 'CONSENT_WITHDRAWN', 'NOT_RENEWABLE')"
+        },
+        "service_auto_renew_runs_refusal_state_check": {
+          "name": "service_auto_renew_runs_refusal_state_check",
+          "value": "(state = 'REFUSED') = (refusal IS NOT NULL)"
+        },
+        "service_auto_renew_runs_renewed_check": {
+          "name": "service_auto_renew_runs_renewed_check",
+          "value": "(state = 'RENEWED') = (order_id IS NOT NULL)"
+        },
+        "service_auto_renew_runs_attempt_check": {
+          "name": "service_auto_renew_runs_attempt_check",
+          "value": "attempt >= 1"
+        },
+        "service_auto_renew_runs_consented_currency_check": {
+          "name": "service_auto_renew_runs_consented_currency_check",
+          "value": "consented_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
+        "service_auto_renew_runs_quoted_currency_check": {
+          "name": "service_auto_renew_runs_quoted_currency_check",
+          "value": "quoted_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
+        "service_auto_renew_runs_quote_check": {
+          "name": "service_auto_renew_runs_quote_check",
+          "value": "(quoted_total_minor IS NULL) = (quoted_currency IS NULL)\n          AND consented_total_minor >= 0\n          AND (quoted_total_minor IS NULL OR quoted_total_minor >= 0)"
         }
       },
       "isRLSEnabled": false

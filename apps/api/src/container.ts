@@ -199,8 +199,11 @@ import { BotCommandSyncConsumer } from './modules/platform/tenancy/application/b
 import { BotCommandSyncLoop } from './modules/platform/tenancy/application/bot-command-sync-loop.js';
 import { BotMenuService } from './modules/platform/tenancy/application/bot-menu.service.js';
 import { BotMenuBuilderService } from './modules/control/bot-menu-builder/application/bot-menu-builder.service.js';
+import { CustomMenuButtonRuntime } from './modules/control/bot-menu-builder/application/custom-menu-button-runtime.js';
+import { CustomMenuButtonService } from './modules/control/bot-menu-builder/application/custom-menu-button.service.js';
 import { MainMenuSettingGuard } from './modules/control/bot-menu-builder/application/main-menu-setting-guard.js';
 import { PublishedMainMenuSource } from './modules/control/bot-menu-builder/application/main-menu-source.js';
+import { DrizzleCustomMenuButtonRepository } from './modules/control/bot-menu-builder/infrastructure/drizzle-custom-menu-button.repository.js';
 import { DrizzleMainMenuBuilderRepository } from './modules/control/bot-menu-builder/infrastructure/drizzle-main-menu-builder.repository.js';
 import { CommandMenu } from './modules/platform/tenancy/application/command-menu.js';
 import { DrizzleBotCommandSyncRepository } from './modules/platform/tenancy/infrastructure/drizzle-bot-command-sync.repository.js';
@@ -342,6 +345,7 @@ import { DrizzleCustomerAccountTransferRepository } from './modules/commerce/cus
 import { ManualOrderService } from './modules/commerce/orders/application/manual-order.service.js';
 import { CustomerServicesToggleService } from './modules/commerce/provisioning/application/customer-services-toggle.service.js';
 import { DrizzleCustomerRepository } from './modules/commerce/customers/infrastructure/drizzle-customer.repository.js';
+import { DrizzlePersonalDiscountRepository } from './modules/commerce/customers/infrastructure/drizzle-personal-discount.repository.js';
 import { DrizzleCustomerLocationOverrideRepository } from './modules/commerce/locations/infrastructure/drizzle-customer-location-override.repository.js';
 import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastructure/telegram-customer-messenger.js';
 import type { RichMessageSupport } from './modules/commerce/messaging/application/rich-messages.js';
@@ -765,6 +769,8 @@ import {
 } from './modules/commerce/provisioning/application/operation-card.js';
 import { DrizzleOperationCardRepository } from './modules/commerce/provisioning/infrastructure/drizzle-operation-card.repository.js';
 import { ServiceTransferService } from './modules/commerce/provisioning/application/service-transfer.service.js';
+import { ServiceAutoRenewService } from './modules/commerce/provisioning/application/service-auto-renew.service.js';
+import { DrizzleServiceAutoRenewRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-auto-renew.repository.js';
 import { DrizzleServiceTransferRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-transfer.repository.js';
 import { ServiceAdminService } from './modules/commerce/provisioning/application/service-admin.service.js';
 import { ServiceGrantService } from './modules/commerce/provisioning/application/service-grant.service.js';
@@ -1262,6 +1268,8 @@ export interface Container {
   readonly subscriptionFiles: SubscriptionFileService;
   /** Package F: a customer hands one of their services to another customer. */
   readonly serviceTransfers: ServiceTransferService;
+  /** Round 10, D1: «تمدید خودکار» — the customer's switch and the worker's sweep. */
+  readonly serviceAutoRenew: ServiceAutoRenewService;
   /** WP-A7: support tickets, for the bot and the Web Admin alike. */
   readonly tickets: TicketService;
   /** WP-A7: the categories a customer files a ticket under. */
@@ -1364,6 +1372,10 @@ export interface Container {
    * its compatibility projection, and the append-only revisions.
    */
   readonly botMenuBuilder: BotMenuBuilderService;
+  /** R10 D2: the owner's custom main-menu buttons (define; the builder places them). */
+  readonly customMenuButtons: CustomMenuButtonService;
+  /** R10 D2: what a tap on one answers, and which are drawn for a bot — read by the bot. */
+  readonly customMenuRuntime: CustomMenuButtonRuntime;
   /**
    * The customer main menu's ONE evaluator (R1), read by the messenger and the runtime:
    * `keyboardFor` (round T, structured buttons), `rowsFor`, `routesFor`, `describeFor`.
@@ -2327,6 +2339,7 @@ export function createContainer(
    * their own idempotency view, and a replay handled by one would not be seen by the
    * other.
    */
+  const personalDiscountRepository = new DrizzlePersonalDiscountRepository(database.db);
   const customerRepository = new DrizzleCustomerRepository(database.db, {
     fillFirstBotOnContact: config.CUSTOMER_FIRST_BOT_FILL_ON_CONTACT,
   });
@@ -2357,6 +2370,8 @@ export function createContainer(
    * and the builder service.
    */
   const mainMenuBuilderRepository = new DrizzleMainMenuBuilderRepository(database.db);
+  // R10 D2: the owner's custom main-menu buttons, their bot filter and their media.
+  const customMenuButtonRepository = new DrizzleCustomMenuButtonRepository(database.db);
   /*
    * Package B — mandatory channel membership. `getChatMember` through the receiving bot's
    * own token, bounded well under the send timeout because a customer's turn waits on it,
@@ -2914,6 +2929,9 @@ export function createContainer(
     orderCashback: orderCashbackRepository,
     outbox,
     ids,
+    // R10 D3: the customer's personal discount, behind `personal_discount`.
+    personalDiscounts: personalDiscountRepository,
+    featureFlags: featureFlagResolver,
   });
   /*
    * The operator's half of pricing (P12): the two rule catalogues and the read-only
@@ -4771,6 +4789,33 @@ export function createContainer(
     ids,
     audit,
   });
+  /*
+   * Round 10, D1: automatic renewal. Not a new money path: the sweep runs the customer's own
+   * RENEW draft, confirmation and wallet settlement as a SYSTEM_JOB in the SCHEDULER
+   * namespace — the same services the bot and the mini app call.
+   */
+  const serviceAutoRenewService = new ServiceAutoRenewService({
+    repository: new DrizzleServiceAutoRenewRepository(database.db),
+    services: serviceRepository,
+    commercial: commercialActionService,
+    orders: orderService,
+    payments: paymentService,
+    wallet: walletRepository,
+    features: featureFlagResolver,
+    settings: settingsResolver,
+    notifier: customerNotifier,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    outbox,
+    scopeActivity: tenants,
+    uow,
+    clock,
+    ids,
+    logger,
+  });
   const customerReminderLoop = new CustomerReminderLoop(
     [
       {
@@ -4792,6 +4837,18 @@ export function createContainer(
         name: 'reseller-monthly-minimum',
         everyMs: SERVICE_REMINDER_INTERVAL_MS,
         runOnce: async (scope) => resellerMinimumService.runOnce(scope),
+      },
+      {
+        /*
+         * Round 10, D1: the service reminder cadence. The lead time is at least an hour, so a
+         * fifteen-minute pass always lands inside it; the flag is read inside the pass.
+         */
+        name: 'service-auto-renew',
+        everyMs: SERVICE_REMINDER_INTERVAL_MS,
+        runOnce: async (scope) => {
+          const report = await serviceAutoRenewService.runOnce(scope);
+          return report.renewed + report.short + report.refused;
+        },
       },
     ],
     {
@@ -5050,6 +5107,8 @@ export function createContainer(
   });
   const customerControlService = new CustomerControlService({
     customers: customerRepository,
+    personalDiscounts: personalDiscountRepository,
+    featureFlags: featureFlagResolver,
     locationOverrides: customerLocationOverrides,
     guard,
     audit,
@@ -5420,8 +5479,19 @@ export function createContainer(
     settingsResolver,
     opsLog,
   );
+  /*
+   * R10 D2: what the customer side reads of the owner's custom buttons — which are drawn on a
+   * bot's keyboard, which labels route a tap, and the answer to a tap. Decided from state
+   * (flag, archive, bot, the PUBLISHED layout), never from the route.
+   */
+  const customMenuRuntime = new CustomMenuButtonRuntime({
+    repository: customMenuButtonRepository,
+    features: featureFlagResolver,
+    source: mainMenuSource,
+  });
   const mainMenuLayout = new MainMenuLayout({
     source: mainMenuSource,
+    customButtons: customMenuRuntime,
     settings: settingsResolver,
     features: featureFlagResolver,
     templates: templateResolver,
@@ -5499,6 +5569,34 @@ export function createContainer(
     templates: templateResolver,
     defaultLabel: (key) => templateCatalogue.defaultBody(key, DEFAULT_TEMPLATE_LOCALE),
     bots: appearanceRepository,
+    customButtons: customMenuButtonRepository,
+    features: featureFlagResolver,
+  });
+  /*
+   * R10 D2: the Web Admin's custom main-menu buttons. A custom label may not take a label the
+   * keyboard already routes: the registry buttons as this tenant renders them, their shared
+   * default labels (a keyboard drawn before a rename still routes by them) and the management
+   * panel's.
+   */
+  const customMenuButtons = new CustomMenuButtonService({
+    repository: customMenuButtonRepository,
+    guard,
+    uow,
+    audit,
+    opsLog: opsLogWriter,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+    features: featureFlagResolver,
+    reservedLabels: async (scope) => {
+      const keys = [...MAIN_MENU_BUTTONS.map((button) => button.label), ADMIN_MENU_BUTTON.label];
+      const rendered = await Promise.all(
+        keys.map((key) => templateResolver.render(scope, key, {})),
+      );
+      return [...rendered, ...keys.map((key) => CATALOGUE_FA[key])].map((label) => label.trim());
+    },
   });
   const botCommandSyncLoop = new BotCommandSyncLoop(botCommandSync, {
     now: () => clock.now(),
@@ -5740,6 +5838,8 @@ export function createContainer(
        * — derived from the subject by the surface that owns the callback vocabulary.
        */
       serviceTransfers: serviceTransferService,
+      // Round 10, D1: the two automatic-renewal notices, read from the run row they name.
+      autoRenew: serviceAutoRenewService,
       // WP-A7: support's reply, read from the ticket message the notification names.
       tickets: ticketService,
       // Phase A2: an operator's direct message, read from the message row it names.
@@ -8289,6 +8389,7 @@ export function createContainer(
     customerCaptures: customerCaptureService,
     subscriptionFiles: subscriptionFileService,
     serviceTransfers: serviceTransferService,
+    serviceAutoRenew: serviceAutoRenewService,
     tickets: ticketService,
     ticketCategories: ticketCategoryService,
     pricingRead: pricingReadService,
@@ -8337,6 +8438,8 @@ export function createContainer(
     botManagement,
     botMenu,
     botMenuBuilder,
+    customMenuButtons,
+    customMenuRuntime,
     mainMenu: mainMenuLayout,
     botCommandSync,
     botCommandSyncLoop,
@@ -8423,6 +8526,8 @@ export function createContainer(
       // R1: this tenant's own labels, matched BEFORE the shared ones above so a renamed
       // button routes under its new name — the same object the messenger draws from.
       menuRoutes: mainMenuLayout,
+      // R10 D2: the answer to a tap on an owner-defined main-menu button.
+      customMenuButtons: customMenuRuntime,
       destinations: paymentDestinationRenderer,
       // R4 A1: «🔄 تغییر شماره کارت» on the card-to-card invoice.
       cardSwitch: cardSwitchService,
@@ -8531,6 +8636,8 @@ export function createContainer(
       // Spec §7: the tutorial video — the admin wizard and the customer's app screen.
       clientAppVideos: clientAppVideoService,
       serviceTransfers: serviceTransferService,
+      // Round 10, D1: «تمدید خودکار» on the service screen.
+      autoRenew: serviceAutoRenewService,
       /*
        * WP-A7: the ticket desk. A file answers a ticket window only when that window is open
        * and newer than any open receipt window — the prompt the customer saw last — and the

@@ -52,6 +52,7 @@ import type { CustomerCaptureRecord } from '../../../modules/commerce/customers/
 import type { SubscriptionFileService } from '../../../modules/commerce/provisioning/application/subscription-file.service.js';
 import type { ServiceRefreshService } from '../../../modules/commerce/provisioning/application/service-refresh.service.js';
 import type { ServiceTransferService } from '../../../modules/commerce/provisioning/application/service-transfer.service.js';
+import type { ServiceAutoRenewService } from '../../../modules/commerce/provisioning/application/service-auto-renew.service.js';
 import type { CustomerCountersReader } from '../../../modules/commerce/customers/application/customer-counters-ports.js';
 import type {
   TopupRoute,
@@ -68,6 +69,7 @@ import type { TicketCategoryService } from '../../../modules/commerce/tickets/ap
 import type { TicketScreenComposer } from '../../../modules/commerce/tickets/application/ticket-screens.js';
 import type { ClientAppCatalog } from '../../../modules/control/client-apps/application/client-app-catalog.js';
 import type { ClientAppVideoService } from '../../../modules/control/client-apps/application/client-app-video.service.js';
+import type { CustomMenuTap } from '../../../modules/control/bot-menu-builder/application/custom-menu-button-runtime.js';
 import type { MainMenuRoutes } from './intent-of.js';
 
 /** What the runtime needs of the custom-service flow (Package D). */
@@ -276,6 +278,11 @@ export interface BotRuntimeDeps {
     ServiceTransferService,
     'offered' | 'begin' | 'preview' | 'transfer'
   >;
+  /**
+   * Round 10, D1: «تمدید خودکار». Without it no service shows the switch, and a crafted
+   * `ar:`/`ay:`/`an:` answers that automatic renewal is not available.
+   */
+  readonly autoRenew?: Pick<ServiceAutoRenewService, 'switchFor' | 'stateFor' | 'set'>;
   /**
    * WP19: an administrator's decision prompts behind the review card. Without it the card's
    * approve and reject answer as any unknown admin tap.
@@ -546,6 +553,13 @@ export interface BotRuntimeDeps {
   readonly resellers?: Pick<ResellerService, 'standing'>;
   readonly referralGifts?: ReferralGiftSource;
   readonly media?: TenantMediaSource;
+  /**
+   * R10 D2: the answer to a tap on an owner-defined main-menu button, decided from state for
+   * the sending bot. Absent, every such tap is answered as unavailable.
+   */
+  readonly customMenuButtons?: {
+    forTap(scope: TenantContext, id: string, botInstanceId: string): Promise<CustomMenuTap>;
+  };
   /** WP-A7: the customer's support tickets. Absent, the desk is not offered. */
   readonly tickets?: TicketDeskPort;
   /**

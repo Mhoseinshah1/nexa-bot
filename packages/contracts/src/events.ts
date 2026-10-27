@@ -111,6 +111,13 @@ export const EVENT_TYPES = [
   'CustomerPhoneVerificationChanged',
   'CustomerLocationChangeOverrideChanged',
   /**
+   * R10 D3: an operator changed a customer's personal discount percent. The before and
+   * after values are on the event (a percent is not personal data) so the change is a
+   * durable fact with a correlation id, like every other Customer 360 control; nothing
+   * consumes it for pricing — the engine reads the column.
+   */
+  'CustomerPersonalDiscountChanged',
+  /**
    * Migration P7: a customer created by the legacy importer for a legacy user who never
    * started this installation's bot. NOT `CustomerRegistered`, whose payload names the bot
    * the customer arrived through — an imported customer arrived through none, and naming
@@ -214,6 +221,11 @@ export const EVENT_TYPES = [
   // tiers, suspended or reactivated. Aggregate is the CUSTOMER. Tier NAMES and closed status
   // words only: no price, no limit, no free text.
   'ResellerStandingChanged',
+  // Round 10, D1: a customer switched automatic renewal on or off for a service (or a
+  // transfer cleared it), and one automatic-renewal period reached its outcome. Aggregate is
+  // the SERVICE. Ids, amounts in minor units with their currency, and closed words only.
+  'ServiceAutoRenewChanged',
+  'ServiceAutoRenewRunSettled',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -365,6 +377,10 @@ export const EVENT_PAYLOAD_SCHEMAS = {
   /** Whether a verified number is now recorded. The number itself is never in an event. */
   CustomerPhoneVerificationChanged: z.object({ verified: z.boolean() }),
   CustomerLocationChangeOverrideChanged: z.object({ overridden: z.boolean() }),
+  CustomerPersonalDiscountChanged: z.object({
+    percentBefore: z.number().int().min(0).max(100),
+    percentAfter: z.number().int().min(0).max(100),
+  }),
   /*
    * Program §8. Aggregate `CustomerTag` for a catalogue change, `Customer` for the rest. Ids
    * and a change kind only: a label is operator text and a note is private, so neither is
@@ -739,6 +755,32 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     toStatus: z.string(),
     fromTierName: z.string().nullable(),
     toTierName: z.string(),
+  }),
+  /*
+   * Round 10, D1. `consentedTotalMinor`/`currency` are the renewal total the customer agreed
+   * to when switching it on (null when switched off). `source` is the customer's surface. A
+   * transfer of the service also clears the consent, in the reassigning statement's
+   * transaction; that fact is `ServiceOwnershipTransferred`, not a second event.
+   */
+  ServiceAutoRenewChanged: z.object({
+    serviceId: z.string(),
+    customerId: z.string(),
+    enabled: z.boolean(),
+    consentedTotalMinor: z.string().nullable(),
+    currency: z.string().nullable(),
+    source: z.enum(['TELEGRAM', 'MINI_APP']),
+  }),
+  /*
+   * Round 10, D1: one period's outcome. `orderId` is the renewal order when one was paid
+   * (`RENEWED`), else null; `refusal` names why a `REFUSED` period was not renewed.
+   */
+  ServiceAutoRenewRunSettled: z.object({
+    serviceId: z.string(),
+    customerId: z.string(),
+    runId: z.string(),
+    outcome: z.enum(['RENEWED', 'FUNDS_SHORT', 'REFUSED']),
+    refusal: z.enum(['PRICE_ROSE', 'CONSENT_WITHDRAWN', 'NOT_RENEWABLE']).nullable(),
+    orderId: z.string().nullable(),
   }),
 } as const satisfies Record<EventType, z.ZodType>;
 

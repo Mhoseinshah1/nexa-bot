@@ -13,6 +13,14 @@ import {
   type MainMenuLayoutEntry,
 } from './bot-commands.js';
 import { MAIN_MENU_GATES } from './bot-menu.js';
+import {
+  CUSTOM_MENU_BUTTONS_MAX,
+  customMenuButtonViewSchema,
+  customMenuRefSchema,
+  isCustomMenuRef,
+  type CustomMenuRef,
+  type CustomMenuVisibleById,
+} from './custom-menu-buttons.js';
 import { MENU_APPEARANCE_SLOTS } from './menu-appearance.js';
 import { BOT_INSTANCE_STATUSES } from './tenant.js';
 
@@ -62,6 +70,20 @@ import { BOT_INSTANCE_STATUSES } from './tenant.js';
  * - A button declared by a later release and missing from `buttons` is unplaced
  *   (`normalizeExplicitMainMenu`): shipping a button never draws it on somebody's explicit
  *   layout (OQ-T-2).
+ *
+ * ## R10 D2: layout version 2, and custom buttons
+ *
+ * The owner's own buttons (`custom-menu-buttons.ts`) are placed in the same rows by a
+ * reference, `custom:<uuid>`, which `explicitMainMenuSchema` (the `v: 1` shape, UNTOUCHED)
+ * cannot hold. A layout that places one is `v: 2` (`explicitMainMenuV2Schema`): rows of a
+ * registry id OR a reference, the registry `buttons` as before and a `customButtons` list with
+ * each placed reference's switch and style. A layout that places NONE is written as `v: 1`
+ * whatever the editor held (`normalizeExplicitMainMenu`), so a tenant that never uses the
+ * feature never has a `v: 2` value in its row or its revisions and a rollback changes
+ * nothing for it. A `v: 2` head read by a release that predates this is "published
+ * unreadable": the keyboard falls back to the projection, which is the documented degrade
+ * (`bot_menu.published_unreadable`). The projection (`legacyProjectionOf`) never names a
+ * custom button, so it parses under the frozen `mainMenuLayoutSchema` either way.
  */
 
 /**
@@ -179,6 +201,148 @@ export const explicitMainMenuSchema = z
   );
 export type ExplicitMainMenu = z.infer<typeof explicitMainMenuSchema>;
 
+/** At most every declared button and every custom button, one per row. */
+export const MAIN_MENU_ROWS_MAX_V2 = MAIN_MENU_BUTTON_IDS.length + CUSTOM_MENU_BUTTONS_MAX;
+/** At most every declared button and every custom button on one row (a Nexa bound, not Telegram's). */
+export const MAIN_MENU_ROW_LENGTH_MAX_V2 = MAIN_MENU_BUTTON_IDS.length + CUSTOM_MENU_BUTTONS_MAX;
+/** The snapshot shape version of a layout that places a custom button. */
+export const EXPLICIT_MAIN_MENU_VERSION_V2 = 2;
+
+/** What a row of a `v: 2` layout holds: a registry id, or a custom button's reference. */
+export type MainMenuRowItem = MainMenuButtonId | CustomMenuRef;
+
+/** One custom button's place in a layout: its switch and its style. No icon (not offered). */
+export const customMenuButtonConfigSchema = z
+  .object({
+    ref: customMenuRefSchema,
+    enabled: z.boolean(),
+    style: z.enum(MAIN_MENU_BUTTON_STYLES),
+  })
+  .strict();
+export type CustomMenuButtonConfig = z.infer<typeof customMenuButtonConfigSchema>;
+
+const rowItemSchema = z.union([z.enum(MAIN_MENU_BUTTON_IDS), customMenuRefSchema]);
+
+/**
+ * A `v: 2` layout: `explicitMainMenuSchema`'s rules, with custom references allowed in the
+ * rows. Refused as well: a reference placed twice, a placed reference with no configuration,
+ * a configuration for a reference that is not placed, and — as in v1 — a layout with no
+ * placed, enabled button that nothing else can hide. A custom button is ALWAYS gated (flag,
+ * archive, bot), so it never satisfies that rule: a layout whose only enabled button is a
+ * custom one is refused, because the keyboard would be empty the moment the flag goes off.
+ */
+export const explicitMainMenuV2Schema = z
+  .object({
+    v: z.literal(EXPLICIT_MAIN_MENU_VERSION_V2),
+    rows: z
+      .array(z.array(rowItemSchema).min(1).max(MAIN_MENU_ROW_LENGTH_MAX_V2))
+      .max(MAIN_MENU_ROWS_MAX_V2),
+    buttons: z.array(mainMenuButtonConfigSchema).max(MAIN_MENU_BUTTON_IDS.length),
+    customButtons: z.array(customMenuButtonConfigSchema).max(CUSTOM_MENU_BUTTONS_MAX),
+  })
+  .strict()
+  .refine(
+    (layout) => {
+      const placed = layout.rows.flat();
+      return new Set(placed).size === placed.length;
+    },
+    { message: 'A button may be placed once.', path: ['rows'] },
+  )
+  .refine(
+    (layout) =>
+      new Set(layout.buttons.map((config) => config.button)).size === layout.buttons.length,
+    { message: 'Each button has one configuration.', path: ['buttons'] },
+  )
+  .refine(
+    (layout) => {
+      const configured = new Set(layout.buttons.map((config) => config.button));
+      return layout.rows.flat().every((id) => isCustomMenuRef(id) || configured.has(id));
+    },
+    { message: 'Every placed button has a configuration.', path: ['buttons'] },
+  )
+  .refine(
+    (layout) =>
+      new Set(layout.customButtons.map((config) => config.ref)).size ===
+      layout.customButtons.length,
+    { message: 'Each custom button has one configuration.', path: ['customButtons'] },
+  )
+  .refine(
+    (layout) => {
+      const configured = new Set<string>(layout.customButtons.map((config) => config.ref));
+      return layout.rows
+        .flat()
+        .filter(isCustomMenuRef)
+        .every((ref) => configured.has(ref));
+    },
+    { message: 'Every placed custom button has a configuration.', path: ['customButtons'] },
+  )
+  .refine(
+    (layout) => {
+      const placed = new Set<string>(layout.rows.flat());
+      return layout.customButtons.every((config) => placed.has(config.ref));
+    },
+    { message: 'A custom button is configured only where it is placed.', path: ['customButtons'] },
+  )
+  .refine(
+    (layout) => {
+      const byId = new Map(layout.buttons.map((config) => [config.button, config]));
+      return layout.rows
+        .flat()
+        .some(
+          (id) =>
+            !isCustomMenuRef(id) &&
+            byId.get(id)?.enabled === true &&
+            !mainMenuButtonIsGated(mainMenuButton(id)),
+        );
+    },
+    { message: 'At least one placed button that nothing else can hide must stay on.' },
+  );
+export type ExplicitMainMenuV2 = z.infer<typeof explicitMainMenuV2Schema>;
+
+/** Either shape of a stored or edited layout. */
+export type AnyExplicitMainMenu = ExplicitMainMenu | ExplicitMainMenuV2;
+
+/** For a response: either shape. Input validation uses `parseExplicitMainMenu`, whose errors are readable. */
+export const anyExplicitMainMenuSchema = z.union([
+  explicitMainMenuSchema,
+  explicitMainMenuV2Schema,
+]);
+
+/**
+ * Parse a layout of either version, chosen by its `v`. Anything that is not `v: 2` is judged
+ * as `v: 1`, so an unknown `v` fails with v1's own message, as before. The result is NOT
+ * normalised: that is `normalizeExplicitMainMenu`'s job, and it is what decides the version
+ * a publish writes.
+ */
+export function parseExplicitMainMenu(
+  raw: unknown,
+):
+  | { readonly success: true; readonly data: AnyExplicitMainMenu }
+  | { readonly success: false; readonly error: z.ZodError } {
+  const isV2 =
+    typeof raw === 'object' &&
+    raw !== null &&
+    (raw as { v?: unknown }).v === EXPLICIT_MAIN_MENU_VERSION_V2;
+  const parsed = isV2
+    ? explicitMainMenuV2Schema.safeParse(raw)
+    : explicitMainMenuSchema.safeParse(raw);
+  return parsed.success
+    ? { success: true, data: parsed.data }
+    : { success: false, error: parsed.error };
+}
+
+/** The custom references a layout places, row-major. Always empty for `v: 1`. */
+export function placedCustomRefs(layout: AnyExplicitMainMenu): CustomMenuRef[] {
+  return layout.v === EXPLICIT_MAIN_MENU_VERSION_V2
+    ? layout.rows.flat().filter(isCustomMenuRef)
+    : [];
+}
+
+/** The configuration a custom button has when first placed. */
+export function defaultCustomMenuButtonConfig(ref: CustomMenuRef): CustomMenuButtonConfig {
+  return { ref, enabled: true, style: 'default' };
+}
+
 /** The configuration a button has before anybody chose one. */
 export function defaultMainMenuButtonConfig(id: MainMenuButtonId): MainMenuButtonConfig {
   return { button: id, enabled: true, style: 'default', iconSlot: null, appearanceSlot: null };
@@ -190,36 +354,59 @@ export function defaultMainMenuButtonConfig(id: MainMenuButtonId): MainMenuButto
  * `appearanceSlot` equal to the button's default written as null — the form the server
  * stores and compares, so "nothing changed" is decided on meaning rather than key order.
  * `iconSlot` is carried as given (restored 2026-10-05).
+ *
+ * R10 D2: the version a layout is WRITTEN as is decided here. A `v: 2` layout that places no
+ * custom button becomes `v: 1` (its `customButtons` are dropped), so only a tenant that
+ * actually uses the feature has a `v: 2` value anywhere; a `v: 2` layout that places one stays
+ * `v: 2`, with a configuration for exactly the references placed, in placement order.
  */
-export function normalizeExplicitMainMenu(layout: ExplicitMainMenu): ExplicitMainMenu {
+export function normalizeExplicitMainMenu(layout: ExplicitMainMenu): ExplicitMainMenu;
+export function normalizeExplicitMainMenu(layout: AnyExplicitMainMenu): AnyExplicitMainMenu;
+export function normalizeExplicitMainMenu(layout: AnyExplicitMainMenu): AnyExplicitMainMenu {
   const byId = new Map(layout.buttons.map((config) => [config.button, config]));
+  const buttons = MAIN_MENU_BUTTON_IDS.map((id) => {
+    const config = byId.get(id) ?? defaultMainMenuButtonConfig(id);
+    const slot = config.appearanceSlot;
+    return {
+      button: id,
+      enabled: config.enabled,
+      style: config.style,
+      iconSlot: config.iconSlot,
+      appearanceSlot: slot === null || slot === mainMenuButton(id).appearanceSlot ? null : slot,
+    };
+  });
+  const customRefs = placedCustomRefs(layout);
+  if (layout.v !== EXPLICIT_MAIN_MENU_VERSION_V2 || customRefs.length === 0) {
+    return {
+      v: EXPLICIT_MAIN_MENU_VERSION,
+      rows: (layout.rows as readonly (readonly MainMenuRowItem[])[]).map((row) =>
+        row.filter((id): id is MainMenuButtonId => !isCustomMenuRef(id)),
+      ),
+      buttons,
+    };
+  }
+  const customById = new Map(layout.customButtons.map((config) => [config.ref, config]));
   return {
-    v: EXPLICIT_MAIN_MENU_VERSION,
+    v: EXPLICIT_MAIN_MENU_VERSION_V2,
     rows: layout.rows.map((row) => [...row]),
-    buttons: MAIN_MENU_BUTTON_IDS.map((id) => {
-      const config = byId.get(id) ?? defaultMainMenuButtonConfig(id);
-      const slot = config.appearanceSlot;
-      return {
-        button: id,
-        enabled: config.enabled,
-        style: config.style,
-        iconSlot: config.iconSlot,
-        appearanceSlot: slot === null || slot === mainMenuButton(id).appearanceSlot ? null : slot,
-      };
+    buttons,
+    customButtons: customRefs.map((ref) => {
+      const config = customById.get(ref) ?? defaultCustomMenuButtonConfig(ref);
+      return { ref, enabled: config.enabled, style: config.style };
     }),
   };
 }
 
 /** Whether two layouts mean the same thing (compared in canonical form). */
-export function explicitMainMenusEqual(a: ExplicitMainMenu, b: ExplicitMainMenu): boolean {
+export function explicitMainMenusEqual(a: AnyExplicitMainMenu, b: AnyExplicitMainMenu): boolean {
   return (
     JSON.stringify(normalizeExplicitMainMenu(a)) === JSON.stringify(normalizeExplicitMainMenu(b))
   );
 }
 
 /** The declared buttons in no row: the Available pool, in declared order. */
-export function unplacedMainMenuButtons(layout: ExplicitMainMenu): MainMenuButtonId[] {
-  const placed = new Set(placedIds(layout.rows));
+export function unplacedMainMenuButtons(layout: AnyExplicitMainMenu): MainMenuButtonId[] {
+  const placed = new Set<string>(layout.rows.flat());
   return MAIN_MENU_BUTTON_IDS.filter((id) => !placed.has(id));
 }
 
@@ -233,8 +420,9 @@ export type MainMenuGateOpenById = Readonly<
 >;
 
 /** One button as the customer's keyboard draws it, before its label is rendered. */
-export interface CustomerMainMenuButton {
-  readonly button: MainMenuButtonId;
+export interface CustomerMainMenuButton<Item extends MainMenuRowItem = MainMenuRowItem> {
+  /** A registry id, or (R10 D2) a custom button's reference, whose label is the owner's own. */
+  readonly button: Item;
   readonly style: MainMenuButtonStyle;
   /** The icon's appearance SLOT; resolved to a custom emoji per sending bot by the runtime. */
   readonly iconSlot: AppearanceSlot | null;
@@ -249,16 +437,42 @@ export interface CustomerMainMenuButton {
  * drop a row that is left empty. NO REFLOW between rows: the rows are the operator's, not
  * a packing, so a hidden button leaves its row shorter rather than pulling the next row's
  * first button up. Gates are not evaluated here — `gateOpenById` is the server's answer.
+ *
+ * R10 D2: a custom reference is drawn when its configuration is on AND `customVisibleById`
+ * (the server's answer for the SENDING bot: flag, archive, bot) is `true`. Anything else, an
+ * absent answer included, hides it: a custom button is always gated.
  */
 export function customerRowsOf(
   layout: ExplicitMainMenu,
   gateOpenById: MainMenuGateOpenById,
+  customVisibleById?: CustomMenuVisibleById,
+): CustomerMainMenuButton<MainMenuButtonId>[][];
+export function customerRowsOf(
+  layout: AnyExplicitMainMenu,
+  gateOpenById: MainMenuGateOpenById,
+  customVisibleById?: CustomMenuVisibleById,
+): CustomerMainMenuButton[][];
+export function customerRowsOf(
+  layout: AnyExplicitMainMenu,
+  gateOpenById: MainMenuGateOpenById,
+  customVisibleById: CustomMenuVisibleById = {},
 ): CustomerMainMenuButton[][] {
   const byId = new Map(layout.buttons.map((config) => [config.button, config]));
+  const customById = new Map(
+    layout.v === EXPLICIT_MAIN_MENU_VERSION_V2
+      ? layout.customButtons.map((config) => [config.ref, config] as const)
+      : [],
+  );
   const rows: CustomerMainMenuButton[][] = [];
   for (const row of layout.rows) {
     const drawn: CustomerMainMenuButton[] = [];
     for (const id of row) {
+      if (isCustomMenuRef(id)) {
+        const custom = customById.get(id);
+        if (custom === undefined || !custom.enabled || customVisibleById[id] !== true) continue;
+        drawn.push({ button: id, style: custom.style, iconSlot: null });
+        continue;
+      }
       const config = byId.get(id);
       if (config === undefined || !config.enabled) continue;
       if (mainMenuButtonIsGated(mainMenuButton(id)) && gateOpenById[id] !== true) continue;
@@ -309,7 +523,7 @@ export const DEFAULT_EXPLICIT_MAIN_MENU: ExplicitMainMenu =
  * declared button, targets the declared ones, and the explicit layout's own "one placed,
  * enabled, ungated button" rule is what keeps one ungated entry on.
  */
-export function legacyProjectionOf(layout: ExplicitMainMenu): MainMenuLayoutEntry[] {
+export function legacyProjectionOf(layout: AnyExplicitMainMenu): MainMenuLayoutEntry[] {
   const normalized = normalizeExplicitMainMenu(layout);
   const byId = new Map(normalized.buttons.map((config) => [config.button, config]));
   const entryOf = (id: MainMenuButtonId, enabled: boolean): MainMenuLayoutEntry => ({
@@ -319,7 +533,11 @@ export function legacyProjectionOf(layout: ExplicitMainMenu): MainMenuLayoutEntr
     appearanceSlot: byId.get(id)?.appearanceSlot ?? null,
   });
   return [
-    ...placedIds(normalized.rows).map((id) => entryOf(id, byId.get(id)?.enabled === true)),
+    // A custom reference is never projected: the previous release has no such button.
+    ...normalized.rows
+      .flat()
+      .filter((id): id is MainMenuButtonId => !isCustomMenuRef(id))
+      .map((id) => entryOf(id, byId.get(id)?.enabled === true)),
     ...unplacedMainMenuButtons(normalized).map((id) => entryOf(id, false)),
   ];
 }
@@ -380,7 +598,7 @@ export type MainMenuRevisionRef = z.infer<typeof mainMenuRevisionRefSchema>;
  * `version` the row's, so a save overwrites it.
  */
 export const mainMenuDraftViewSchema = z.object({
-  layout: explicitMainMenuSchema,
+  layout: anyExplicitMainMenuSchema,
   version: z.number().int().positive().nullable(),
   updatedAt: isoInstant.nullable(),
   updatedByAdminId: z.string().nullable(),
@@ -407,7 +625,7 @@ export type MainMenuDraftView = z.infer<typeof mainMenuDraftViewSchema>;
 
 /** What is published. `layout` is null only when the stored snapshot is unreadable. */
 export const mainMenuPublishedViewSchema = z.object({
-  layout: explicitMainMenuSchema.nullable(),
+  layout: anyExplicitMainMenuSchema.nullable(),
   revision: z.number().int().positive(),
   publishedAt: isoInstant,
   publishedByAdminId: z.string().nullable(),
@@ -485,6 +703,14 @@ export const botMenuBuilderResponseSchema = z.object({
   /** The customer keyboard as drawn now: rows of rendered labels. */
   live: z.object({ rows: z.array(z.array(z.string())) }),
   iconEligibility: z.array(mainMenuIconEligibilitySchema),
+  /**
+   * R10 D2: the owner's custom buttons (active and archived, archived last) — the Available
+   * pool's second half, and what the preview resolves a `custom:<uuid>` reference against.
+   * Defaults to none so a page of this release reading a replica of the previous one parses.
+   */
+  customButtons: z.array(customMenuButtonViewSchema).default([]),
+  /** The flag `custom_menu_buttons`: off, no custom button is drawn on any keyboard. */
+  customMenuEnabled: z.boolean().default(false),
 });
 export type BotMenuBuilderResponse = z.infer<typeof botMenuBuilderResponseSchema>;
 
@@ -508,7 +734,7 @@ export const saveMainMenuDraftRequestSchema = z.object({
 export type SaveMainMenuDraftRequest = Omit<
   z.infer<typeof saveMainMenuDraftRequestSchema>,
   'layout'
-> & { readonly layout: ExplicitMainMenu };
+> & { readonly layout: AnyExplicitMainMenu };
 
 /** Publish the saved draft, against the draft version AND the published revision read. */
 export const publishMainMenuRequestSchema = z.object({
@@ -561,7 +787,7 @@ export const mainMenuRevisionViewSchema = z.object({
   id: z.string(),
   revision: z.number().int().positive(),
   /** Null when this release cannot read the snapshot (a later release wrote it). */
-  layout: explicitMainMenuSchema.nullable(),
+  layout: anyExplicitMainMenuSchema.nullable(),
   createdAt: isoInstant,
   createdByAdminId: z.string().nullable(),
   /**

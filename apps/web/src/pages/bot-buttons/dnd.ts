@@ -5,7 +5,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from 'react';
-import { MAIN_MENU_BUTTON_IDS, type MainMenuButtonId } from '@nexa/contracts';
+import { MAIN_MENU_BUTTON_IDS, isCustomMenuRef, type MainMenuRowItem } from '@nexa/contracts';
 import { chipSide, type DragSource, type DropTarget } from './model';
 
 export type { DragSource, DropTarget } from './model';
@@ -79,8 +79,11 @@ export function scrollContainerOf(element: Element | null): Element {
   return document.scrollingElement ?? document.documentElement;
 }
 
-function isButtonId(value: string | undefined): value is MainMenuButtonId {
-  return value !== undefined && (MAIN_MENU_BUTTON_IDS as readonly string[]).includes(value);
+function isButtonId(value: string | undefined): value is MainMenuRowItem {
+  return (
+    value !== undefined &&
+    ((MAIN_MENU_BUTTON_IDS as readonly string[]).includes(value) || isCustomMenuRef(value))
+  );
 }
 
 /** The target an element declares through its `data-drop` attributes. */

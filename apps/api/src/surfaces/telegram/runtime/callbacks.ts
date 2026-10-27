@@ -2,7 +2,10 @@
 // Moved verbatim out of bot-runtime.ts, which still re-exports every name it exported.
 import { createHash } from 'node:crypto';
 import {
+  currencyCodeSchema,
   DEVICE_ADDON_MAX_QUANTITY,
+  money,
+  type Money,
   type SettingKey,
   telegramUserIdSchema,
   uuidV7Schema,
@@ -465,6 +468,49 @@ export const SERVICE_REFUND_CONFIRM_CALLBACK_PREFIX = 'fb:';
  *   recipient and the service again, under the service's locks.
  */
 export const SERVICE_TRANSFER_ASK_CALLBACK_PREFIX = 'ta:';
+/**
+ * Round 10, D1: «تمدید خودکار». `ar:` asks (names the amount, records nothing), `ay:` is the
+ * question's confirm and the only tap that records the consent, `an:` switches it off at once.
+ * `a` then a letter, like `ac:`; none begins, or is begun by, another prefix (pinned in
+ * `bot-runtime.test.ts`). A uuid after three characters is 39 bytes.
+ */
+export const SERVICE_AUTO_RENEW_ASK_CALLBACK_PREFIX = 'ar:';
+export const SERVICE_AUTO_RENEW_CONFIRM_CALLBACK_PREFIX = 'ay:';
+export const SERVICE_AUTO_RENEW_OFF_CALLBACK_PREFIX = 'an:';
+
+/**
+ * `ay:<service id>.<total in minor units>.<currency>` — the confirm names the renewal total the
+ * question SHOWED (Codex review of PR 338), so the consent is bound to it: the server records
+ * its own fresh quote only when that is at or below this figure. Not an authority — a modified
+ * client can only raise its own ceiling, and the recorded consent is still the server's quote.
+ * At most 63 bytes: 3 + 36 + 1 + 18 digits + 1 + 4.
+ */
+export function encodeAutoRenewConfirm(serviceId: string, shown: Money): string {
+  return `${SERVICE_AUTO_RENEW_CONFIRM_CALLBACK_PREFIX}${serviceId}.${shown.amountMinor.toString()}.${shown.currency}`;
+}
+
+/**
+ * An `ay:` tap, decoded, or null when malformed. A bare `ay:<service id>` — a question drawn
+ * before the figure was carried — decodes with `shown: null`, which records nothing and asks
+ * again at today's price.
+ */
+export function decodeAutoRenewConfirm(
+  data: string,
+): { readonly serviceId: string; readonly shown: Money | null } | null {
+  if (!data.startsWith(SERVICE_AUTO_RENEW_CONFIRM_CALLBACK_PREFIX)) return null;
+  const parts = data.slice(SERVICE_AUTO_RENEW_CONFIRM_CALLBACK_PREFIX.length).split('.');
+  const service = uuidV7Schema.safeParse(parts[0]);
+  if (!service.success) return null;
+  if (parts.length === 1) return { serviceId: service.data, shown: null };
+  const [, amountPart, currencyPart, ...rest] = parts;
+  if (rest.length > 0 || amountPart === undefined || !/^(0|[1-9][0-9]{0,17})$/.test(amountPart)) {
+    return null;
+  }
+  const currency = currencyCodeSchema.safeParse(currencyPart);
+  if (!currency.success) return null;
+  return { serviceId: service.data, shown: money(BigInt(amountPart), currency.data) };
+}
+
 export const SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX = 'tc:';
 export const ADMIN_REFUND_REQUEST_APPROVE_CALLBACK_PREFIX = 'qa:';
 export const ADMIN_REFUND_REQUEST_REJECT_CALLBACK_PREFIX = 'qb:';

@@ -319,6 +319,37 @@ describe('the pre-invoice', () => {
     expect(text).toContain('🎁 کش‌بک این سفارش پس از تحویل: 10,000 تومان');
   });
 
+  it('R10 D3: names the personal discount on the discount line, instead of the generic one', async () => {
+    const screen = await composer.preinvoice(scope, {
+      ...facts,
+      total: money(175_000n, 'IRT'),
+      discount: {
+        subtotal: money(250_000n, 'IRT'),
+        discount: money(75_000n, 'IRT'),
+        personalPercent: 30,
+      },
+    });
+    const text = render(screen.key, screen.values);
+    expect(text).toContain('💵 مبلغ سفارش: 175,000 تومان');
+    expect(text).toContain(
+      '🏷 تخفیف شخصی شما (30٪): 75,000 تومان (قیمت پیش از تخفیف: 250,000 تومان)',
+    );
+    // ONE discount line: never the generic one beside it.
+    expect(text.match(/🏷/gu)).toHaveLength(1);
+    // A null percent (a code or an automatic rule won) keeps the generic line.
+    const generic = await composer.preinvoice(scope, {
+      ...facts,
+      discount: {
+        subtotal: money(250_000n, 'IRT'),
+        discount: money(50_000n, 'IRT'),
+        personalPercent: null,
+      },
+    });
+    expect(render(generic.key, generic.values)).toContain(
+      '🏷 تخفیف: 50,000 تومان (قیمت پیش از تخفیف: 250,000 تومان)',
+    );
+  });
+
   it('renders an add-traffic package as added volume, not as a plan', async () => {
     const screen = await composer.preinvoice(scope, {
       ...facts,

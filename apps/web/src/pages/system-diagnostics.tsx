@@ -77,6 +77,7 @@ export const OUTBOX_EVENT_LABELS: Readonly<Record<EventType, WebKey>> = {
   CustomerPhoneVerificationChanged: 'web.outbox_event_customer_phone_verification_changed',
   CustomerLocationChangeOverrideChanged:
     'web.outbox_event_customer_location_change_override_changed',
+  CustomerPersonalDiscountChanged: 'web.outbox_event_customer_personal_discount_changed',
   CustomerImported: 'web.outbox_event_customer_imported',
   CustomerAccountTransferred: 'web.outbox_event_customer_account_transferred',
   TermsVersionPublished: 'web.outbox_event_terms_version_published',
@@ -125,6 +126,8 @@ export const OUTBOX_EVENT_LABELS: Readonly<Record<EventType, WebKey>> = {
   LegacyImportReviewStateChanged: 'web.outbox_event_legacy_import_review_state_changed',
   ServiceAdopted: 'web.outbox_event_service_adopted',
   ResellerStandingChanged: 'web.outbox_event_reseller_standing_changed',
+  ServiceAutoRenewChanged: 'web.outbox_event_service_auto_renew_changed',
+  ServiceAutoRenewRunSettled: 'web.outbox_event_service_auto_renew_run_settled',
 };
 
 export const OUTBOX_AGGREGATE_LABELS: Readonly<Record<string, WebKey>> = {

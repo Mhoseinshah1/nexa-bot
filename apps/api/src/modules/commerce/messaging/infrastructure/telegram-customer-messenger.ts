@@ -466,7 +466,10 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * reach the wire; the legacy path answers `default` and no slot for every button.
      */
     private readonly menu?: {
-      keyboardFor(scope: ScopeContext): Promise<readonly (readonly MainMenuKeyboardButton[])[]>;
+      keyboardFor(
+        scope: ScopeContext,
+        options?: { readonly botInstanceId?: string },
+      ): Promise<readonly (readonly MainMenuKeyboardButton[])[]>;
     },
     /**
      * Premium UI: what a bot may decorate its messages with. Absent in a stand-in, which
@@ -578,7 +581,8 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       message.keyboard === undefined
         ? undefined
         : this.menu !== undefined
-          ? await this.menu.keyboardFor(scope)
+          ? // R10 D2: the SENDING bot decides which custom buttons it draws.
+            await this.menu.keyboardFor(scope, { botInstanceId: message.botInstanceId })
           : packMainMenuRows(
               MAIN_MENU_BUTTONS.filter((button) => !mainMenuButtonIsGated(button)),
             ).map((row) =>

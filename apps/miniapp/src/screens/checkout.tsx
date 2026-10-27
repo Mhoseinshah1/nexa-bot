@@ -162,7 +162,18 @@ function Invoice({
         )}
         {order.description !== null && <p className="prose">{order.description}</p>}
         {discounted && <Row label={t('miniapp.checkout_subtotal')} value={money(order.subtotal)} />}
-        {discounted && <Row label={t('miniapp.checkout_discount')} value={money(order.discount)} />}
+        {discounted && (
+          <Row
+            label={
+              order.personalDiscountPercent === null
+                ? t('miniapp.checkout_discount')
+                : t('miniapp.checkout_personal_discount', {
+                    percent: order.personalDiscountPercent,
+                  })
+            }
+            value={money(order.discount)}
+          />
+        )}
         <Row label={t('miniapp.checkout_total')} value={<strong>{money(order.total)}</strong>} />
         {order.cashback !== null && (
           <Row label={t('miniapp.checkout_cashback')} value={money(order.cashback)} />

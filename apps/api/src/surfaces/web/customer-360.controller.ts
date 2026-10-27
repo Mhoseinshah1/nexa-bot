@@ -6,6 +6,7 @@ import {
   customerLocationOverrideRequestSchema,
   customerManualOrderRequestSchema,
   customerNotificationsRequestSchema,
+  customerPersonalDiscountRequestSchema,
   customerPhoneVerificationRequestSchema,
   customerServicesToggleRequestSchema,
   customerTransferPreviewRequestSchema,
@@ -38,7 +39,8 @@ import type {
  *
  * Authentication happens here; AUTHORIZATION does not. Every method calls a service that
  * charges its own permission through the guard — `users.channel_membership.exempt`,
- * `users.phone.verify`, `users.location.edit`, `users.notifications.edit`, `users.transfer`,
+ * `users.phone.verify`, `users.location.edit`, `users.notifications.edit`,
+ * `users.discount.edit`, `users.transfer`,
  * `orders.manual.create`, `services.edit`, `audit.view` — so no control is protected merely
  * by the Web Admin not drawing it. Every write carries its idempotency key in the body and
  * is refused from an origin the installation does not list.
@@ -121,6 +123,24 @@ export class Customer360Controller {
       idempotencyKey: command.idempotencyKey,
       customerId: id,
       optedOut: command.marketingOptedOut,
+      reason: command.reason,
+    });
+    return { overview: toOverview(result.overview), changed: result.changed };
+  }
+
+  /** R10 D3: the personal discount percent; `users.discount.edit`, charged by the service. */
+  @Post('users/:id/personal-discount')
+  async personalDiscount(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<{ overview: CustomerOverviewResponse; changed: boolean }> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const command = customerPersonalDiscountRequestSchema.parse(body);
+    const result = await this.container.customerControls.setPersonalDiscount(scope, actor, {
+      idempotencyKey: command.idempotencyKey,
+      customerId: id,
+      percent: command.percent,
       reason: command.reason,
     });
     return { overview: toOverview(result.overview), changed: result.changed };
@@ -370,6 +390,11 @@ function toOverview(overview: CustomerOverview): CustomerOverviewResponse {
         ? null
         : { ...locationOverride.limits, setAt: locationOverride.setAt.toISOString() },
     marketingOptOutAt: customer.marketingOptOutAt?.toISOString() ?? null,
+    personalDiscount: {
+      percent: overview.personalDiscount.percent,
+      setAt: overview.personalDiscount.setAt?.toISOString() ?? null,
+      enabled: overview.personalDiscount.enabled,
+    },
     terms: overview.terms === null ? { available: false } : toTermsStanding(overview.terms),
   };
 }

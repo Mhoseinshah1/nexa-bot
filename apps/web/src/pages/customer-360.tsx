@@ -186,6 +186,7 @@ export function UserDetailPage({
   mayVerifyPhone = false,
   mayEditLocation = false,
   mayEditNotifications = false,
+  mayEditPersonalDiscount = false,
   mayTransfer = false,
   mayManualOrder = false,
   mayEditServices = false,
@@ -243,6 +244,8 @@ export function UserDetailPage({
   mayEditLocation?: boolean;
   /** `users.notifications.edit` */
   mayEditNotifications?: boolean;
+  /** `users.discount.edit` — R10 D3, the personal discount percent. */
+  mayEditPersonalDiscount?: boolean;
   /** `users.transfer` — the account transfer, CRITICAL. */
   mayTransfer?: boolean;
   /** `orders.manual.create` */
@@ -771,6 +774,7 @@ export function UserDetailPage({
                     mayVerifyPhone={mayVerifyPhone}
                     mayEditLocation={mayEditLocation}
                     mayEditNotifications={mayEditNotifications}
+                    mayEditPersonalDiscount={mayEditPersonalDiscount}
                   />
                   <TrialCard customerId={id} mayEdit={mayEditTrial} />
                 </div>

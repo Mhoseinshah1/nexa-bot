@@ -359,6 +359,8 @@ describe('TonPays, through the one settlement path', () => {
       /** FIX10: a wrapped adapter, so a case can make one row's call throw. */
       readonly adapter?: TonPaysAdapter;
       readonly logger?: GatewayPaymentServiceDeps['logger'];
+      /** A case that tests an exact clock boundary pins the lane's clock instead of moving it. */
+      readonly clock?: GatewayPaymentServiceDeps['clock'];
     } = {},
   ): GatewayPaymentService {
     const db = ctx.container.database.db;
@@ -385,7 +387,7 @@ describe('TonPays, through the one settlement path', () => {
       audit: ctx.container.audit,
       opsLog: ctx.container.opsLog,
       outbox: ctx.container.outbox,
-      clock: { now: () => new Date(Date.now() + offsetMs) },
+      clock: overrides.clock ?? { now: () => new Date(Date.now() + offsetMs) },
       ids: ctx.container.ids,
       logger: overrides.logger ?? {
         info: () => undefined,
@@ -3172,7 +3174,15 @@ describe('TonPays, through the one settlement path', () => {
     it('allows 299 s of skew in both directions and refuses 301 s', async () => {
       const { invoice } = await createdAttempt();
       await setSecret(WHSEC);
+      /*
+       * The verifier reads the lane's clock on EVERY delivery, and the four deliveries below
+       * each take a few database round trips. With the wall clock behind it, a second boundary
+       * crossed after `now` was taken turned `now + 301` into a skew of 300 (accepted) in CI.
+       * The boundary is the subject here, so the lane's clock is pinned to `now` exactly.
+       */
       const now = Math.floor((Date.now() + offsetMs) / 1000);
+      const pinned = new Date(now * 1000);
+      lane = laneWith(tonpays, { clock: { now: () => pinned } });
       const attempt = async (id: string, t: number) => {
         const raw = rawOf(invoice, 'completed', id);
         return deliver(raw, sign(raw, WHSEC, t), id);
