@@ -31,6 +31,14 @@ describe('the legacy invoice archive query plans', () => {
     await ctx.reset();
     repository = new DrizzleLegacyInvoiceArchiveRepository(ctx.container.database.db);
     await ctx.container.database.withClient(async (client) => {
+      /*
+       * The plans below are only as deterministic as the statistics they are made from. A
+       * background auto-analyze after the bulk insert would replace the full statistics taken
+       * below with a fresh 30k-row sample, so it is held off while this file runs.
+       */
+      await client.query(
+        'ALTER TABLE legacy_invoice_archive SET (autovacuum_enabled = false, toast.autovacuum_enabled = false)',
+      );
       for (const [scope, run, rows] of [
         [tenantA, RUN_A, ROWS],
         [tenantB, RUN_B, Math.max(1000, Math.floor(ROWS / 10))],
@@ -88,12 +96,26 @@ describe('the legacy invoice archive query plans', () => {
           [scope.tenantId],
         );
       }
+      /*
+       * At the default target (100) ANALYZE samples 30k of the ~220k rows, and whether one
+       * sampled `svc_12345…` value lands in the histogram moved the username-prefix estimate
+       * from ~20 rows to ~2000 — and the planner from the username index to the revision key.
+       * At 10000 the sample is the whole table, so the same rows always give the same plan.
+       * Session-scoped, on this one client, and reset straight after.
+       */
+      await client.query('SET default_statistics_target = 10000');
       await client.query('ANALYZE legacy_invoice_archive');
       await client.query('ANALYZE legacy_invoice_archive_runs');
+      await client.query('RESET default_statistics_target');
     });
   }, 600_000);
 
   afterAll(async () => {
+    await ctx?.container.database.withClient((client) =>
+      client.query(
+        'ALTER TABLE legacy_invoice_archive RESET (autovacuum_enabled, toast.autovacuum_enabled)',
+      ),
+    );
     await ctx?.close();
   });
 
