@@ -618,6 +618,22 @@ export const FEATURE_FLAGS = [
     blastRadius: 'TENANT_WIDE',
     configuredBy: ['auto_renew.lead_hours'],
   },
+  {
+    key: 'customer_reminder_opt_out',
+    description:
+      'Round 11, B6: a customer may turn OFF the expiry and volume reminders about their own ' +
+      'services (the service-expiry ladder, the «expired» notice and the three volume ' +
+      'thresholds) from the bot’s support screen or the mini app, and an operator may set ' +
+      'it from the customer’s page. Off by default. While it is off nobody is offered the ' +
+      'choice and a stored opt-out is NOT honoured: every customer is reminded exactly as ' +
+      'before; the stored choice is kept, and turning this on makes it effective again. A ' +
+      'customer who opted out is skipped by the reminder sweep alone — payment, delivery, ' +
+      'wallet, security, ticket and administrator messages are never affected.',
+    defaultEnabled: false,
+    // TENANT_WIDE: turning it off reminds every customer who had opted out, all at once.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
 ] as const satisfies readonly FeatureFlagDefinition[];
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[number]['key'];

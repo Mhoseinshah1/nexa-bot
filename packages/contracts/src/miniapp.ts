@@ -130,6 +130,8 @@ export const MINIAPP_ROUTES = {
   support: '/support',
   guide: '/guide',
   guidePlatform: '/guide/:platform',
+  /** Round 11 B6: the customer's own switch for service expiry / volume reminders. */
+  reminders: '/preferences/reminders',
 } as const;
 
 /** A route with its parameters filled, URI-encoded. */
@@ -203,6 +205,23 @@ export const miniAppMeResponseSchema = z.object({
   reseller: z.object({ tierName: z.string() }).nullable(),
 });
 export type MiniAppMeResponse = z.infer<typeof miniAppMeResponseSchema>;
+
+/**
+ * Round 11, B6: the customer's own expiry / volume reminder switch.
+ *
+ * - `offered` — the `customer_reminder_opt_out` flag is on. While it is off the row is not
+ *   drawn, and a write is refused: nobody is offered the choice and a stored opt-out is not
+ *   honoured.
+ * - `enabled` — the customer IS reminded (the default); false once they turned it off.
+ *
+ * The write names only `enabled`; whose setting it is comes from the session, never a body.
+ */
+export const miniAppRemindersSchema = z.object({
+  offered: z.boolean(),
+  enabled: z.boolean(),
+});
+export type MiniAppReminders = z.infer<typeof miniAppRemindersSchema>;
+export const miniAppRemindersRequestSchema = z.object({ enabled: z.boolean() });
 
 export const miniAppTermsAcceptRequestSchema = z.object({ termsVersionId: idSchema });
 

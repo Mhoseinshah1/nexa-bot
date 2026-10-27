@@ -413,6 +413,11 @@ export const WEB_FA = {
     'مشتری می‌تواند با /stop یا دکمهٔ «قطع پیام‌های تبلیغاتی» پیام‌های تبلیغاتی را برای خود قطع یا دوباره وصل کند و ارسال‌های تبلیغاتی انتخاب او را رعایت می‌کنند. پیام‌های پرداخت، سرویس و پشتیبانی همیشه ارسال می‌شوند.',
   'web.feature_customer_marketing_opt_out_off_effect':
     'دکمهٔ قطع پنهان می‌شود و /stop یا دکمه‌های قدیمی چیزی را تغییر نمی‌دهند. ارسال‌های تبلیغاتی به مشتریانی هم که قبلاً قطع کرده بودند فرستاده می‌شود — حتی ارسالی که پیش از خاموش‌کردن زمان‌بندی شده است، چون تصمیم در لحظهٔ ارسال گرفته می‌شود؛ انتخاب آن‌ها پاک نمی‌شود و با روشن‌کردن دوباره، دوباره اعمال می‌شود.',
+  'web.feature_customer_reminder_opt_out_title': 'اجازه قطع یادآوری انقضا و حجم توسط مشتری',
+  'web.feature_customer_reminder_opt_out_summary':
+    'مشتری می‌تواند از صفحهٔ پشتیبانی ربات یا مینی‌اپ یادآوری‌های انقضا و حجم سرویس‌های خود را قطع یا دوباره وصل کند، و مدیر هم می‌تواند این را از صفحهٔ مشتری تنظیم کند. فقط یادآوری‌های انقضا و حجم قطع می‌شوند؛ پیام‌های پرداخت، تحویل سرویس، کیف پول، امنیت و پشتیبانی همیشه ارسال می‌شوند.',
+  'web.feature_customer_reminder_opt_out_off_effect':
+    'دکمه‌ها از ربات و مینی‌اپ برداشته می‌شوند و انتخاب قبلی مشتریان دیگر رعایت نمی‌شود: یادآوری‌های انقضا و حجم دوباره برای همهٔ مشتریان فرستاده می‌شود، حتی کسانی که قبلاً قطع کرده بودند. انتخاب آن‌ها پاک نمی‌شود و با روشن‌کردن دوباره، دوباره اعمال می‌شود.',
   'web.feature_referrals_title': 'برنامهٔ معرفی (زیرمجموعه‌گیری)',
   'web.feature_referrals_summary':
     'مشتری با لینک اختصاصی خود دیگران را معرفی می‌کند و از خریدهای آن‌ها پورسانت به کیف پولش واریز می‌شود. درصد پورسانت باید در تنظیمات تعیین شده باشد.',
@@ -4988,6 +4993,8 @@ export const WEB_FA = {
   'web.ib_button_tickets_back': 'بازگشت به تیکت‌ها',
   'web.ib_button_marketing_opt_out': 'قطع پیام‌های تبلیغاتی',
   'web.ib_button_marketing_opt_in': 'فعال‌سازی پیام‌های تبلیغاتی',
+  'web.ib_button_reminders_opt_out': 'قطع یادآوری انقضا و حجم',
+  'web.ib_button_reminders_opt_in': 'فعال‌سازی یادآوری انقضا و حجم',
   'web.ib_button_referral_share': 'اشتراک‌گذاری لینک دعوت',
   'web.ib_button_referral_gift': 'دریافت هدیهٔ عضویت',
   'web.ib_button_apps_platform_android': 'اندروید',
@@ -11322,6 +11329,7 @@ export const WEB_FA = {
   'web.outbox_event_customer_blocked': 'مسدودسازی مشتری',
   'web.outbox_event_customer_unblocked': 'رفع مسدودی مشتری',
   'web.outbox_event_customer_marketing_opt_out_changed': 'تغییر دریافت پیام تبلیغاتی',
+  'web.outbox_event_customer_reminder_opt_out_changed': 'تغییر دریافت یادآوری انقضا و حجم',
   'web.outbox_event_customer_channel_membership_exemption_changed': 'تغییر معافیت عضویت کانال',
   'web.outbox_event_customer_phone_verification_changed': 'تغییر تأیید شماره تلفن',
   'web.outbox_event_customer_location_change_override_changed': 'تغییر محدودیت تغییر لوکیشن',

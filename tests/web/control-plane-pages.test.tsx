@@ -510,6 +510,8 @@ describe('the feature presentation catalogue', () => {
       'central_fx',
       // Spec §9: off sends promotions to customers who had opted out (their choice is kept).
       'customer_marketing_opt_out',
+      // Round 11 B6: off reminds again every customer who had turned reminders off.
+      'customer_reminder_opt_out',
       // R10 D4: off stops redemptions, and a code whose expiry passes meanwhile is lost.
       'gift_cards',
       // Round 9, C5: off takes the menu button away and closes the mini app mid-checkout.

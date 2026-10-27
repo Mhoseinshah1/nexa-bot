@@ -199,6 +199,8 @@ export const INLINE_BUTTON_NAME: Readonly<Record<InlineButtonKey, WebKey>> = {
   'tickets.back': 'web.ib_button_tickets_back',
   'marketing.opt_out': 'web.ib_button_marketing_opt_out',
   'marketing.opt_in': 'web.ib_button_marketing_opt_in',
+  'reminders.opt_out': 'web.ib_button_reminders_opt_out',
+  'reminders.opt_in': 'web.ib_button_reminders_opt_in',
   'referral.share': 'web.ib_button_referral_share',
   'referral.gift': 'web.ib_button_referral_gift',
   'apps.platform_android': 'web.ib_button_apps_platform_android',

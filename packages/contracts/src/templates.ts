@@ -12915,6 +12915,47 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  // --- Round 11, B6: the customer's switch for service expiry / volume reminders ----------
+  {
+    key: 'bot.reminders.opted_out',
+    description:
+      'Round 11 B6: answers the button that turns the expiry and volume reminders off. Says only ' +
+      'the reminders about the customer\u2019s own services stop; payment, delivery, wallet and ' +
+      'support notices still arrive. Carries the way back (the opt-in button).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.reminders.opted_in',
+    description:
+      'Round 11 B6: answers the button that turns the expiry and volume reminders back on.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.reminders.opt_out_button',
+    description:
+      'Round 11 B6: the button on the support screen that turns the customer\u2019s expiry and ' +
+      'volume reminders off. Drawn only while the customer_reminder_opt_out flag is on.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.reminders.opt_in_button',
+    description:
+      'Round 11 B6: the button, on the opted-out reply and on the support screen, that turns the ' +
+      'customer\u2019s expiry and volume reminders back on.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.reminders.unavailable',
+    description:
+      'Round 11 B6: answers an old reminder opt-out / opt-in button while the installation does ' +
+      'not offer the choice (the customer_reminder_opt_out flag is off). Nothing is changed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.menu.tickets',
     description:

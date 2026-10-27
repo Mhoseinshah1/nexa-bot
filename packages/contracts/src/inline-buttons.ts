@@ -296,6 +296,8 @@ export const INLINE_BUTTONS = [
   button('tickets.back', 'SUPPORT', 'bot.ticket.back_button'),
   button('marketing.opt_out', 'SUPPORT', 'bot.marketing.opt_out_button'),
   button('marketing.opt_in', 'SUPPORT', 'bot.marketing.opt_in_button'),
+  button('reminders.opt_out', 'SUPPORT', 'bot.reminders.opt_out_button'),
+  button('reminders.opt_in', 'SUPPORT', 'bot.reminders.opt_in_button'),
 
   // Referral
   button('referral.share', 'REFERRAL', 'bot.referral.share_button', 'URL'),

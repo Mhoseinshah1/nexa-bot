@@ -72,6 +72,7 @@ export const OUTBOX_EVENT_LABELS: Readonly<Record<EventType, WebKey>> = {
   CustomerBlocked: 'web.outbox_event_customer_blocked',
   CustomerUnblocked: 'web.outbox_event_customer_unblocked',
   CustomerMarketingOptOutChanged: 'web.outbox_event_customer_marketing_opt_out_changed',
+  CustomerReminderOptOutChanged: 'web.outbox_event_customer_reminder_opt_out_changed',
   CustomerChannelMembershipExemptionChanged:
     'web.outbox_event_customer_channel_membership_exemption_changed',
   CustomerPhoneVerificationChanged: 'web.outbox_event_customer_phone_verification_changed',

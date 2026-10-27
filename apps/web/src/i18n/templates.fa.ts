@@ -111,6 +111,8 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
       'bot.order.pending_reminder',
       // Round N, package D: the reseller monthly minimum.
       'bot.reseller.minimum_',
+      // Round 11 B6: the customer's switch for expiry / volume reminders.
+      'bot.reminders.',
     ],
   },
   { id: 'transfer', label: 'انتقال سرویس', prefixes: ['bot.service.transfer_'] },
@@ -901,6 +903,27 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.marketing.unavailable': [
     'پاسخ وقتی قطع پیام‌های تبلیغاتی مجاز نیست',
     'وقتی «اجازه قطع پیام‌های تبلیغاتی توسط مشتری» خاموش است و مشتری /stop را می‌فرستد یا دکمهٔ قدیمی قطع/وصل را می‌زند؛ چیزی تغییر نمی‌کند.',
+  ],
+  // --- Round 11 B6: the customer's switch for expiry / volume reminders ---------------
+  'bot.reminders.opted_out': [
+    'پاسخ به قطع یادآوری انقضا و حجم',
+    'وقتی مشتری دکمهٔ قطع یادآوری انقضا و حجم را می‌زند؛ می‌گوید فقط این یادآوری‌ها قطع شد و پیام‌های پرداخت، تحویل، کیف پول و پشتیبانی همچنان می‌آید.',
+  ],
+  'bot.reminders.opted_in': [
+    'پاسخ به فعال‌سازی دوبارهٔ یادآوری انقضا و حجم',
+    'وقتی مشتری دکمهٔ دریافت دوبارهٔ یادآوری انقضا و حجم را می‌زند.',
+  ],
+  'bot.reminders.opt_out_button': [
+    'دکمهٔ قطع یادآوری انقضا و حجم',
+    'روی صفحهٔ پشتیبانی، برای مشتری‌ای که یادآوری‌ها را دریافت می‌کند؛ فقط وقتی «اجازه قطع یادآوری توسط مشتری» روشن است.',
+  ],
+  'bot.reminders.opt_in_button': [
+    'دکمهٔ دریافت دوبارهٔ یادآوری انقضا و حجم',
+    'زیر پاسخ قطع و روی صفحهٔ پشتیبانی، برای مشتری‌ای که یادآوری‌ها را قطع کرده است.',
+  ],
+  'bot.reminders.unavailable': [
+    'پاسخ وقتی قطع یادآوری مجاز نیست',
+    'وقتی «اجازه قطع یادآوری انقضا و حجم توسط مشتری» خاموش است و مشتری دکمهٔ قدیمی قطع/وصل را می‌زند؛ چیزی تغییر نمی‌کند.',
   ],
   'bot.menu.tickets': [
     'دکمهٔ تیکت‌ها در منوی اصلی',
