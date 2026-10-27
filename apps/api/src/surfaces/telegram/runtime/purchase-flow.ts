@@ -36,6 +36,8 @@ import { refusal } from './refusals.js';
 import type { PendingReply } from './replies.js';
 import { payMethodsButton } from './payment-screens.js';
 import { awaitingPaymentReply, orderRouteButtons } from './checkout-flow.js';
+import { cancelledOrderReply, orderEndedRefusal } from './order-end-flow.js';
+import type { CardMessageRef } from '../../../modules/commerce/provisioning/application/operation-card.js';
 import type { BotRuntime } from '../bot-runtime.js';
 
 /**
@@ -920,7 +922,8 @@ export async function confirm(
     );
     return awaitingPaymentReply(rt, scope, customer, order);
   } catch (error) {
-    return refusal(error);
+    // R11 A11: a draft past its hold is answered ON its pre-invoice, not by a new message.
+    return (await orderEndedRefusal(rt, scope, actor, customer, orderId, error)) ?? refusal(error);
   }
 }
 
@@ -992,6 +995,8 @@ export async function cancelOrder(
   orderId: string,
   customer: CustomerRecord,
   idempotencyKey: string,
+  /** R11 A11: the confirmation question the customer tapped, removed once it is answered. */
+  tapped: CardMessageRef | null = null,
 ): Promise<PendingReply> {
   try {
     await rt.deps.orders.cancelByCustomer(scope, actor, {
@@ -999,18 +1004,17 @@ export async function cancelOrder(
       customerId: customer.id,
       orderId,
     });
-    return {
-      key: 'bot.order.cancelled',
-      values: {},
-      buttons: [],
-      orderId: null,
-      // The order is gone. A customer who does not learn that keeps waiting for
-      // a service that will never be made.
-      fallback: { kind: 'ORDER_CANCELLED', subjectId: orderId },
-    };
   } catch (error) {
     return refusal(error);
   }
+  /*
+   * R11 A11: the order is gone, and the customer is told so ON the order's own payment
+   * message — edited into the cancelled screen, with re-order and the main menu — rather than
+   * by a «سفارش لغو شد» under a payment screen that still offers to pay. The fallback is
+   * unchanged in purpose: a customer who does not learn the order is gone keeps waiting for a
+   * service that will never be made, so a rate-limited answer still reaches them by the lane.
+   */
+  return cancelledOrderReply(rt, scope, actor, customer, orderId, tapped);
 }
 
 function preinvoiceButtons(order: OrderRecord, routesOffered: boolean): readonly CustomerButton[] {

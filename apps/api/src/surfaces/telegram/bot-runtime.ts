@@ -257,6 +257,7 @@ export {
   CATALOG_BROWSE_MAX_PAGE,
   CATALOG_PAGE_CALLBACK_PREFIX,
   CATEGORY_CALLBACK_PREFIX,
+  REORDER_CATEGORY_CALLBACK_PREFIX,
   TRIAL_CALLBACK_DATA,
   TRIAL_PANEL_CALLBACK_PREFIX,
   CUSTOM_SERVICE_CALLBACK_DATA,
@@ -1341,6 +1342,10 @@ export class BotRuntime {
         customer.id,
       );
     }
+    // R11 A11: «🔁 سفارش دوباره» — the ended order's category, read-only, as a new message.
+    if (command.intent === 'REORDER_CATEGORY' && command.targetId !== null) {
+      return purchaseFlow.categoryPage(this, scope, actor, command.targetId, 0, customer.id);
+    }
     if (command.intent === 'ORDER' && command.targetId !== null) {
       return purchaseFlow.draft(
         this,
@@ -1865,6 +1870,7 @@ export class BotRuntime {
         command.targetId,
         customer,
         input.idempotencyKey,
+        cardMessageOf(input.update, input.botInstanceId),
       );
     }
     if (command.intent === 'SERVICE_RENEW' && command.targetId !== null) {

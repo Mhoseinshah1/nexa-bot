@@ -810,6 +810,7 @@ import { parseCustomerAmount } from './modules/commerce/payments/domain/customer
 import { composeFaqScreen } from './modules/control/support/application/faq-screen.js';
 import { CustomerNotificationService } from './modules/commerce/messaging/application/customer-notification.service.js';
 import { orderScreenSettleMs } from './modules/commerce/messaging/application/order-screen-answer.js';
+import { orderEndScreen } from './modules/commerce/messaging/application/order-end-screen.js';
 import {
   CustomerNotificationLoop,
   CUSTOMER_NOTIFICATION_INTERVAL_MS,
@@ -5915,6 +5916,16 @@ export function createContainer(
       incidents: incidentService,
       buttonsFor: notificationButtons,
       /*
+       * R11 A11: an ended order's screen — its summary and where re-ordering leads — read from
+       * the order the notification names, with the state the lane checks against the kind.
+       */
+      orderEnds: {
+        screenFor: async (scope, orderId) => {
+          const order = await orderRepository.findById(scope, orderId as OrderId);
+          return order === null ? null : { state: order.state, screen: orderEndScreen(order) };
+        },
+      },
+      /*
        * The ledger reader the refund sentence renders from. The wallet repository
        * itself, because both figures are derived from `wallet_entries` and a
        * second implementation would be a second answer to "how much did we give
@@ -5972,20 +5983,22 @@ export function createContainer(
        */
       orderScreens: {
         close: (scope, orderId) => wizardScreens.closeOrder(scope, orderId),
-        readiness: (scope, orderId, destination) =>
+        readiness: (scope, orderId, destination, steps) =>
           wizardScreens.orderReadiness(
             scope,
             orderId,
             destination,
             orderScreenSettleMs(config.NOTIFICATION_SEND_TIMEOUT_MS),
+            steps,
           ),
-        answer: (scope, orderId, destination, content) =>
+        answer: (scope, orderId, destination, content, steps) =>
           wizardScreens.answerOrder(
             scope,
             orderId,
             destination,
             orderScreenSettleMs(config.NOTIFICATION_SEND_TIMEOUT_MS),
             content,
+            steps,
           ),
       },
       // HF-A9: reminders claimed inside the tenant's quiet window wait for its end.

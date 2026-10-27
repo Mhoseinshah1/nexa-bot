@@ -347,6 +347,31 @@ Four Phase 4 rules that are easy to break by accident:
   `docs/conventions.md`. Everything else reads `ScopeActivityReader` inside its
   transaction.
 
+## An ended order is answered on its own message (Round 11, A11)
+
+Owner request: when an unpaid order expires or is cancelled, Nexa **edits the order's own
+payment message** into the ended screen instead of sending a new «مهلت این سفارش به پایان
+رسیده است». Binding rules:
+
+- **One expiry notice per order, ever:** `ORDER_EXPIRED`, unique per order and kind by
+  `customer_notifications_subject_key`. A payment against an order is told nothing of its own
+  (`PaymentExpiryService`); only a top-up's payment keeps `PAYMENT_EXPIRED`. Before this an order
+  with several attempts got one `PAYMENT_EXPIRED` per attempt, minutes apart (a gateway attempt's
+  lifetime runs from its own creation), plus the order's.
+- The ended screen (`bot.order.expired_screen` / `bot.order.cancelled_screen`) keeps the order
+  summary (code, product, amount), carries **nothing that pays** (no card, no copy button, no
+  pay or receipt button), shows «🔁 سفارش دوباره» and «🏠 منوی اصلی», and has **no "no money
+  was taken" line**. Re-order is a read-only entry (the order's category, the custom-service
+  menu or the catalogue); nothing is ordered until the customer confirms again.
+- It is EDITED onto the order's latest screen (FIX-08's `answerOrder`, plus the receipt prompt
+  `RECEIPT_WAIT`). A new message only when that message cannot be edited (deleted, too old) or
+  is not known (a mini-app order) — once, recorded by the notification row. «message is not
+  modified» counts as delivered; an unknown edit is never repeated.
+- A tap on a stale pay/confirm button of an ended order is answered by editing THAT message into
+  the ended screen, never by a new refusal message. A cancellation edits the order's message and
+  removes the confirmation question.
+- No customer message from a migration or backfill; nothing here has one.
+
 ## Automatic renewal (Round 10, D1)
 
 Owner spec, binding: the customer opts in per service («تمدید خودکار», bot service screen

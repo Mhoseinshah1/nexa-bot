@@ -1,10 +1,17 @@
 import type {
+  BotInstanceId,
   TelegramReviewOutcome,
   TelegramWizardKind,
   TelegramWizardStep,
   TemplateKey,
+  TemplateValues,
   TenantContext,
 } from '@nexa/contracts';
+import type {
+  CustomerButton,
+  CustomerSendResult,
+} from '../../modules/commerce/messaging/application/ports.js';
+import type { OrderScreenWait } from '../../modules/commerce/messaging/application/order-screen-answer.js';
 
 /**
  * R2 (v0.3.5 real-test items 3–5): the surface's half of editing a flow in place.
@@ -306,4 +313,20 @@ export type { TelegramMessageStateService as MessageStatePort } from '../../modu
  */
 export interface InvoiceScreensPort {
   refresh(scope: TenantContext, paymentId: string): Promise<void>;
+  /**
+   * R11 A11: an ended order's screen edited onto the order's own payment message (FIX-08's
+   * `answerOrder`). Absent in a stand-in: the turn answers on the tapped message instead.
+   */
+  answerOrder?(
+    scope: TenantContext,
+    orderId: string,
+    destination: { readonly chatId: string; readonly botInstanceId: BotInstanceId },
+    settleMs: number,
+    content: {
+      readonly templateKey: TemplateKey;
+      readonly values: TemplateValues;
+      readonly buttons: readonly CustomerButton[];
+    },
+    steps?: readonly TelegramWizardStep[],
+  ): Promise<CustomerSendResult | OrderScreenWait | null>;
 }

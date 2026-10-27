@@ -969,7 +969,18 @@ describe('the customer purchase flow over Telegram', () => {
 
     await tap(`f:${orderId}`);
 
-    expect(String(lastMessage()?.body['text'])).toBe(CATALOGUE_FA['bot.order.cancelled']);
+    /*
+     * R11 A11: the answer is the ORDER's own message, edited into the cancelled screen — the
+     * summary kept, re-order and the main menu under it, nothing that pays — and the spent
+     * question removed, rather than a «سفارش لغو شد» under a screen still offering to pay.
+     */
+    const answer = lastMessage();
+    expect(answer?.url).toContain('/editMessageText');
+    expect(String(answer?.body['text'])).toContain(
+      plain(CATALOGUE_FA['bot.order.cancelled_screen']).split('\n')[0] ?? '',
+    );
+    expect(buttonsOf(answer).map((b) => b.callback_data)).not.toContain(`w:${orderId}`);
+    expect(sent.filter((one) => one.url.includes('/deleteMessage'))).toHaveLength(1);
     const rows = await orders();
     expect(rows[0]?.['state']).toBe('CANCELLED');
     /*
@@ -1159,8 +1170,12 @@ describe('the customer purchase flow over Telegram', () => {
 
     await tap(`c:${orderId}`);
     // A different message from "unavailable": nobody withdrew this, the window closed,
-    // and a customer told "cancelled" looks for what they did.
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.order.expired']);
+    // and a customer told "cancelled" looks for what they did. R11 A11: said ON the tapped
+    // pre-invoice (edited into the expired screen), never as a new message under it.
+    expect(lastMessage()?.url).toContain('/editMessageText');
+    expect(String(lastMessage()?.body['text'])).toContain(
+      plain(CATALOGUE_FA['bot.order.expired_screen']).split('\n')[0] ?? '',
+    );
     expect((await orders())[0]?.['state']).toBe('DRAFT');
     expect(await orderEvents()).toHaveLength(0);
   });
