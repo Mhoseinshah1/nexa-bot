@@ -375,6 +375,10 @@ import {
   APPEARANCE_TEST_OUTCOMES,
   // Track 3 §2: the registry's PANEL-scoped keys, the only keys a panel row may hold.
   PANEL_SETTING_KEYS,
+  // R10 D4: gift cards.
+  GIFT_CARD_BATCH_STATES,
+  GIFT_CARD_CODE_STATES,
+  GIFT_CARD_REJECTIONS,
 } from '@nexa/contracts';
 
 /**
@@ -7042,6 +7046,21 @@ export const walletEntries = pgTable(
      * it is an inherited balance, not a sale, a top-up, an undo or an operator's grant.
      * `left(...)` rather than `LIKE`, whose `_` would be a wildcard.
      */
+    /**
+     * R10 D4: a gift card redemption and its reference prefix are ONE thing, in both
+     * directions, like the opening balance below. A `GIFT_CARD_REDEMPTION` entry is written
+     * under `giftcard:<codeId>` and nothing else, so `wallet_entries_tenant_reference_key`
+     * allows ONE credit per code whoever writes it; and the prefix belongs to that reason
+     * alone, so no other writer can occupy a code's reference. It is a CREDIT that names no
+     * order, payment, reversal or administrator: no operator decided this credit and no
+     * payment arrived with it. `left(...)` rather than `LIKE`, whose `_` is a wildcard.
+     */
+    check(
+      'wallet_entries_gift_card_shape_check',
+      sql`(reason = 'GIFT_CARD_REDEMPTION') = (left(reference, 9) = 'giftcard:')
+        AND (reason <> 'GIFT_CARD_REDEMPTION' OR (direction = 'CREDIT' AND order_id IS NULL
+          AND payment_id IS NULL AND reverses_entry_id IS NULL AND actor_admin_id IS NULL))`,
+    ),
     check(
       'wallet_entries_migration_opening_shape_check',
       sql`(reason = 'MIGRATION_OPENING_BALANCE') = (left(reference, 15) = 'legacy:opening:')
@@ -17084,6 +17103,175 @@ export const miniAppSessions = pgTable(
     check('miniapp_sessions_init_hash_check', sql`init_data_hash ~ '^[0-9a-f]{64}$'`),
     check('miniapp_sessions_token_hash_check', sql`token_hash ~ '^[0-9a-f]{64}$'`),
     check('miniapp_sessions_window_check', sql`expires_at > created_at`),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// R10 D4 — gift cards (wallet top-up codes)
+// ---------------------------------------------------------------------------
+
+/**
+ * A batch of gift cards an operator minted in the Web Admin: N codes of one face value, one
+ * expiry, an optional per-customer limit.
+ *
+ * The plaintext codes exist ONCE, in `export_ciphertext` (SecretCipher, purpose
+ * `gift_card.batch_export`, entity = this row), so the operator can download them until
+ * `export_expires_at`; the worker then sets both export columns to NULL and the codes exist
+ * only as hashes. `state` moves ACTIVE -> DISABLED once, by a conditional UPDATE; disabling
+ * stops the UNREDEEMED codes and touches no money.
+ */
+export const giftCardBatches = pgTable(
+  'gift_card_batches',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    label: text('label').notNull(),
+    /** The face value of ONE code, positive minor units. */
+    amountMinor: bigint('amount_minor', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    codeCount: integer('code_count').notNull(),
+    /** How many codes of this batch one customer may redeem; NULL is no limit. */
+    perCustomerLimit: integer('per_customer_limit'),
+    /** Redeemable while `now < expires_at`: the interval is half-open. */
+    expiresAt: timestamptz('expires_at').notNull(),
+    state: text('state').notNull().default('ACTIVE'),
+    /** The operator's reason, mandatory, bounded. Never customer text. */
+    reason: text('reason').notNull(),
+    createdByAdminId: uuid('created_by_admin_id').references(() => admins.id),
+    createdAt: timestamptz('created_at').notNull(),
+    disabledAt: timestamptz('disabled_at'),
+    disabledByAdminId: uuid('disabled_by_admin_id').references(() => admins.id),
+    exportCiphertext: text('export_ciphertext'),
+    exportKeyId: text('export_key_id'),
+    exportExpiresAt: timestamptz('export_expires_at').notNull(),
+  },
+  (table) => [
+    unique('gift_card_batches_tenant_id_key').on(table.tenantId, table.id),
+    index('gift_card_batches_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+    check('gift_card_batches_state_check', enumCheck('state', GIFT_CARD_BATCH_STATES)),
+    check('gift_card_batches_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    check('gift_card_batches_amount_check', sql`amount_minor > 0`),
+    check(
+      'gift_card_batches_count_check',
+      // `GIFT_CARD_BATCH_MAX_CODES`; a migration test pins the literal to the constant.
+      sql`code_count BETWEEN 1 AND 5000`,
+    ),
+    check(
+      'gift_card_batches_limit_check',
+      sql`per_customer_limit IS NULL OR per_customer_limit >= 1`,
+    ),
+    check('gift_card_batches_label_check', sql`char_length(label) BETWEEN 1 AND 80`),
+    check('gift_card_batches_reason_check', sql`char_length(reason) BETWEEN 1 AND 300`),
+    check('gift_card_batches_window_check', sql`expires_at > created_at`),
+    check(
+      'gift_card_batches_disabled_check',
+      sql`(state = 'DISABLED') = (disabled_at IS NOT NULL)`,
+    ),
+    check(
+      'gift_card_batches_export_check',
+      sql`(export_ciphertext IS NULL) = (export_key_id IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * One gift card. Max uses = 1 is the COLUMN, not a counter: a code is redeemed when
+ * `redeemed_at` is set, by a conditional UPDATE from "not redeemed, ACTIVE" under the batch's
+ * share lock, and the ledger reference `giftcard:<id>` is unique — the second lock.
+ *
+ * Only `code_hash` is stored: SHA-256 over a domain tag, the tenant and the normalised code
+ * (`gift-card-code.ts`), so the same code can never match in another tenant and nothing in the
+ * database reveals one. `last4` is the code's last four symbols, for support.
+ *
+ * `wallet_entry_id` is NOT a foreign key: the code is stamped before its entry is appended, in
+ * the same transaction, and the ledger reference is the link the database enforces.
+ */
+export const giftCardCodes = pgTable(
+  'gift_card_codes',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    batchId: uuid('batch_id').notNull(),
+    codeHash: text('code_hash').notNull(),
+    last4: text('last4').notNull(),
+    state: text('state').notNull().default('ACTIVE'),
+    disabledAt: timestamptz('disabled_at'),
+    redeemedAt: timestamptz('redeemed_at'),
+    redeemedByCustomerId: uuid('redeemed_by_customer_id'),
+    walletEntryId: uuid('wallet_entry_id'),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.batchId],
+      foreignColumns: [giftCardBatches.tenantId, giftCardBatches.id],
+      name: 'gift_card_codes_batch_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.redeemedByCustomerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'gift_card_codes_customer_fk',
+    }),
+    /** A code is looked up by its hash, and one hash names one code in a tenant. */
+    uniqueIndex('gift_card_codes_tenant_hash_key').on(table.tenantId, table.codeHash),
+    /** The per-customer limit and the batch's counts read this slice. */
+    index('gift_card_codes_batch_customer_idx').on(
+      table.tenantId,
+      table.batchId,
+      table.redeemedByCustomerId,
+    ),
+    check('gift_card_codes_state_check', enumCheck('state', GIFT_CARD_CODE_STATES)),
+    check('gift_card_codes_hash_check', sql`code_hash ~ '^[0-9a-f]{64}$'`),
+    check('gift_card_codes_last4_check', sql`last4 ~ '^[2-9A-HJKMNP-TV-Z]{4}$'`),
+    check(
+      'gift_card_codes_redeemed_check',
+      sql`(redeemed_at IS NULL) = (redeemed_by_customer_id IS NULL)
+        AND (redeemed_at IS NULL) = (wallet_entry_id IS NULL)`,
+    ),
+    check(
+      'gift_card_codes_disabled_check',
+      sql`(state = 'DISABLED') = (disabled_at IS NOT NULL)
+        AND NOT (state = 'DISABLED' AND redeemed_at IS NOT NULL)`,
+    ),
+  ],
+);
+
+/**
+ * Every REFUSED redemption, for the failed-attempt limiter and the operator: who, when, why,
+ * and the code row it matched when it matched one. Never the code, never its hash. Counted
+ * under the customer's wallet lock, so the limit holds without Redis. Rows past
+ * `GIFT_CARD_ATTEMPT_RETENTION_MS` are deleted by the worker's gift-card sweep.
+ */
+export const giftCardRedemptionAttempts = pgTable(
+  'gift_card_redemption_attempts',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    attemptedAt: timestamptz('attempted_at').notNull(),
+    outcome: text('outcome').notNull(),
+    codeId: uuid('code_id'),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'gift_card_redemption_attempts_customer_fk',
+    }),
+    index('gift_card_redemption_attempts_customer_idx').on(
+      table.tenantId,
+      table.customerId,
+      table.attemptedAt,
+    ),
+    check(
+      'gift_card_redemption_attempts_outcome_check',
+      enumCheck('outcome', GIFT_CARD_REJECTIONS),
+    ),
   ],
 );
 

@@ -1821,6 +1821,75 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  /*
+   * R10 D4: gift cards (wallet top-up codes). The button under the balance, the prompt that
+   * opens the capture window, and the three answers. The rejection is ONE sentence for an
+   * unknown, used, expired or disabled code, a reached per-customer limit and a currency
+   * mismatch, so the bot is no oracle for which codes exist.
+   */
+  {
+    key: 'bot.wallet.gift_card_button',
+    description:
+      'The inline button under the wallet balance that starts redeeming a gift card. Drawn ' +
+      'only while the gift_cards feature is on.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.gift_card_ask',
+    description:
+      'Asks the customer to send the gift card code. The next plain message is read as the ' +
+      'code, for ten minutes.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.gift_card_redeemed',
+    description:
+      'The gift card was accepted: the amount credited to the wallet and the balance after it, ' +
+      'derived from the ledger.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'The face value credited.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'balance',
+        type: 'MONEY',
+        description: 'The wallet balance after the credit.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.wallet.gift_card_rejected',
+    description:
+      'The code was not accepted. One sentence for every reason — mistyped, unknown, already ' +
+      'used, expired, disabled, the per-customer limit reached — so it reveals nothing about ' +
+      'which codes exist.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.gift_card_rate_limited',
+    description:
+      'Too many refused codes in the last hour: the code was not read. Says to try again later.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.gift_card_unavailable',
+    description:
+      'Gift cards are switched off: a button tapped from an old wallet screen, or a code typed ' +
+      'after the feature was turned off.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.wallet.topup_unavailable',
     description:

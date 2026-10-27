@@ -4443,6 +4443,28 @@ error text; what follows is only what it does not settle.
   sent the receipt before the deadline has money on the card and no invoice. That case was already
   stranded before (Nexa's receipt window had closed); it needs an operator either way.
 
+## Round 10 D4 — gift cards (wallet top-up codes)
+
+Each is a default that moves no money; the owner decides whether to change it.
+
+- **OQ-GC-01 — re-exporting a batch's codes after 24 hours.** The codes are stored only as
+  tenant-salted hashes; the plaintext is sealed (`gift_card.batch_export`) for 24 hours so the
+  operator can download the CSV, then purged by the worker's sweep. After that the codes cannot be
+  shown again — a lost file means disabling the batch and minting another. A longer window, or a
+  permanently sealed copy, is possible but weakens "stored hashed"; the owner decides.
+- **OQ-GC-02 — a batch minted in another currency than the wallet's.** A batch is minted in
+  `sales.currency`; if that setting changes later, a code of the old currency is REFUSED at
+  redemption (the one rejection sentence; the attempt row records `CURRENCY_MISMATCH`), never
+  converted — no rate exists to convert it at. Whether such codes should convert, and at what rate,
+  is the owner's call.
+- **OQ-GC-03 — sold or promotional.** A redeemed card is a `GIFT_CARD_REDEMPTION` credit, reported
+  in its own wallet group (`GIFT_CARD`) and never as revenue or a top-up. If batches are SOLD for
+  money outside Nexa, the sale is not in Nexa's revenue either; the owner decides whether reports
+  should treat redemptions as prepaid revenue.
+- **OQ-GC-04 — the limits.** 5000 codes per batch, 5 refused codes per customer per rolling hour,
+  an expiry between one hour and five years, `gift_cards.create`/`.export` CRITICAL and
+  `gift_cards.view` MEDIUM (owner role only by default): defaults pending the owner's review.
+
 ## Round 10 D3 — the personal discount («تخفیف شخصی»)
 
 Built to the owner's spec behind `personal_discount` (OFF): a whole percent 0–100 per customer,

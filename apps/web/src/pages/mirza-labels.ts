@@ -72,6 +72,7 @@ export const LEDGER_REASON_LABELS: Readonly<Record<LedgerReason, WebKey>> = {
   REFERRAL_COMMISSION: 'web.ledger_reason_referral_commission',
   REFERRAL_COMMISSION_REVERSAL: 'web.ledger_reason_referral_commission_reversal',
   REFERRAL_SIGNUP_GIFT: 'web.ledger_reason_referral_signup_gift',
+  GIFT_CARD_REDEMPTION: 'web.ledger_reason_gift_card_redemption',
   START_GIFT: 'web.ledger_reason_start_gift',
   LOTTERY_WIN: 'web.ledger_reason_lottery_win',
   LUCK_WHEEL_WIN: 'web.ledger_reason_luck_wheel_win',

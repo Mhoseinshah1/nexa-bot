@@ -2024,6 +2024,20 @@
       "when": 1793055097304,
       "tag": "0288_personal_discount_grant",
       "breakpoints": true
+    },
+    {
+      "idx": 289,
+      "version": "7",
+      "when": 1793061975710,
+      "tag": "0289_gift_cards",
+      "breakpoints": true
+    },
+    {
+      "idx": 290,
+      "version": "7",
+      "when": 1793061975802,
+      "tag": "0290_gift_cards_permissions",
+      "breakpoints": true
     }
   ]
 }

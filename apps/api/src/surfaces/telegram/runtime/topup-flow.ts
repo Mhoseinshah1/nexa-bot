@@ -19,6 +19,7 @@ import type {
 } from '../../../modules/commerce/payments/application/wallet-topup-flow.service.js';
 import type { WizardDirective } from '../wizard-state.js';
 import {
+  GIFT_CARD_CALLBACK_DATA,
   TOPUP_CLOSE_CALLBACK_PREFIX,
   TOPUP_MENU_CALLBACK_PREFIX,
   TOPUP_PICK_CALLBACK_PREFIX,
@@ -218,6 +219,8 @@ export async function walletBalance(
       : await rt.deps.resellers.standing(scope, customer.id, undefined);
   const fundable =
     (await rt.deps.routes.routesFor(scope, customer.id, 'WALLET_TOPUP', null)).length > 0;
+  // R10 D4: the gift-card button only while the feature is on, read when the screen is drawn.
+  const giftCards = rt.deps.giftCards !== undefined && (await rt.deps.giftCards.isEnabled(scope));
   const summary = await rt.deps.screens.walletSummary(scope, {
     telegramId: customer.telegramUserId,
     displayName: displayNameOf(customer),
@@ -246,6 +249,7 @@ export async function walletBalance(
             },
           ]
         : []),
+      ...(giftCards ? [{ ...inlineLabel('wallet.gift_card'), data: GIFT_CARD_CALLBACK_DATA }] : []),
       mainMenuButton(),
     ],
     orderId: null,
@@ -346,6 +350,103 @@ export async function topupPick(
     amount: preset,
   });
   return topupAmountReply(rt, scope, result, begun.capture.id);
+}
+
+/**
+ * R10 D4: «🎁 کارت هدیه» — opens the customer's text window for ONE code. Whether gift cards are
+ * on is read when the tap arrives: a button from an old wallet screen after the feature was
+ * switched off answers «unavailable» and opens nothing.
+ */
+export async function giftCardBegin(
+  rt: BotRuntime,
+  scope: TenantContext,
+  actor: ActorContext,
+  customer: CustomerRecord,
+  botInstanceId: BotInstanceId,
+  idempotencyKey: string,
+): Promise<PendingReply> {
+  if (rt.deps.giftCards === undefined || !(await rt.deps.giftCards.isEnabled(scope))) {
+    return {
+      key: 'bot.wallet.gift_card_unavailable',
+      values: {},
+      buttons: [mainMenuButton()],
+      orderId: null,
+    };
+  }
+  await rt.deps.captures.open(scope, actor, {
+    idempotencyKey: `${idempotencyKey}:gift-card-open`,
+    botInstanceId,
+    customerId: customer.id,
+    purpose: 'GIFT_CARD_CODE',
+    subjectId: null,
+  });
+  return {
+    key: 'bot.wallet.gift_card_ask',
+    values: {},
+    buttons: [mainMenuButton()],
+    orderId: null,
+  };
+}
+
+/**
+ * R10 D4: the code the window read. The redemption service decides everything; the reply is
+ * one of three sentences — the credit and the balance after it, ONE refusal for every reason
+ * (so the bot is no oracle for which codes exist), or «too many tries». A refused code offers
+ * the button again; no customer message is sent beyond this reply.
+ */
+export async function giftCardText(
+  rt: BotRuntime,
+  scope: TenantContext,
+  actor: ActorContext,
+  customer: CustomerRecord,
+  text: string,
+  input: { readonly idempotencyKey: string },
+): Promise<PendingReply> {
+  if (rt.deps.giftCards === undefined) {
+    return {
+      key: 'bot.wallet.gift_card_unavailable',
+      values: {},
+      buttons: [mainMenuButton()],
+      orderId: null,
+    };
+  }
+  let result;
+  try {
+    result = await rt.deps.giftCards.redeem(scope, actor, {
+      customerId: customer.id,
+      code: text,
+      idempotencyKey: `${input.idempotencyKey}:gift-card-redeem`,
+    });
+  } catch (error) {
+    // Switched off since the button (`bot.wallet.gift_card_unavailable`), or anything else the
+    // refusal table names; an unexpected error is rethrown to the turn's own handler.
+    return refusal(error);
+  }
+  if (result.outcome === 'REDEEMED') {
+    return {
+      key: 'bot.wallet.gift_card_redeemed',
+      values: { amount: result.amount, balance: result.balance },
+      buttons: [mainMenuButton()],
+      orderId: null,
+    };
+  }
+  if (result.outcome === 'RATE_LIMITED') {
+    return {
+      key: 'bot.wallet.gift_card_rate_limited',
+      values: {},
+      buttons: [mainMenuButton()],
+      orderId: null,
+    };
+  }
+  return {
+    key: 'bot.wallet.gift_card_rejected',
+    values: {},
+    buttons: [
+      { ...inlineLabel('wallet.gift_card'), data: GIFT_CARD_CALLBACK_DATA },
+      mainMenuButton(),
+    ],
+    orderId: null,
+  };
 }
 
 /** First and last name, else the username, else the numeric id — never blank. */

@@ -334,6 +334,18 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_sales',
   },
   {
+    id: 'gift-cards',
+    path: '/gift-cards',
+    label: 'web.nav_gift_cards',
+    icon: 'gift',
+    /*
+     * R10 D4: `gift_cards.view`. Creating, downloading and disabling are each their own key,
+     * passed to the page as props and charged again by `GiftCardAdminService`.
+     */
+    permission: 'gift_cards.view',
+    group: 'web.navgroup_sales',
+  },
+  {
     id: 'reports',
     path: '/reports',
     label: 'web.nav_reports',

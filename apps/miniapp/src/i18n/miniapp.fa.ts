@@ -248,6 +248,15 @@ export const MINIAPP_FA = {
 
   'miniapp.wallet_title': 'کیف پول',
   'miniapp.wallet_balance': 'موجودی',
+  'miniapp.wallet_gift_title': 'کارت هدیه',
+  'miniapp.wallet_gift_label': 'کد کارت هدیه',
+  'miniapp.wallet_gift_submit': 'ثبت کد',
+  'miniapp.wallet_gift_redeemed': '{amount} به کیف پول شما اضافه شد. موجودی فعلی: {balance}',
+  'miniapp.wallet_gift_rejected':
+    'این کد پذیرفته نشد. ممکن است اشتباه وارد شده باشد، قبلاً استفاده شده باشد یا دیگر معتبر نباشد.',
+  'miniapp.wallet_gift_rate_limited':
+    'تعداد کدهای نادرست زیاد بود. لطفاً کمی بعد دوباره امتحان کنید.',
+  'miniapp.wallet_gift_unavailable': 'کارت هدیه در حال حاضر فعال نیست.',
   'miniapp.wallet_topup_title': 'مبلغ افزایش موجودی',
   'miniapp.wallet_custom_label': 'مبلغ دلخواه',
   'miniapp.wallet_minimum': 'حداقل مبلغ: {amount}',
@@ -289,6 +298,7 @@ export const MINIAPP_FA = {
   'miniapp.wallet_reason_referral': 'پاداش دعوت',
   'miniapp.wallet_reason_referral_reversal': 'برگشت پاداش دعوت',
   'miniapp.wallet_reason_signup_gift': 'هدیهٔ عضویت با دعوت',
+  'miniapp.wallet_reason_gift_card': 'کارت هدیه',
   'miniapp.wallet_reason_start_gift': 'هدیهٔ شروع',
   'miniapp.wallet_reason_lottery': 'جایزهٔ قرعه‌کشی',
   'miniapp.wallet_reason_wheel': 'جایزهٔ گردونهٔ شانس',

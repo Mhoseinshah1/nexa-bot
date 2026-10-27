@@ -59,6 +59,13 @@ export const LEDGER_REASONS = [
   'REFERRAL_COMMISSION',
   'REFERRAL_COMMISSION_REVERSAL',
   'REFERRAL_SIGNUP_GIFT',
+  // R10 D4: a gift card (wallet top-up code) an operator minted in a batch and a customer
+  // redeemed. A CREDIT, never a reversal and never administrative: no operator decided THIS
+  // credit (the batch was minted earlier, for anyone holding a code) and no payment arrived
+  // with it. Its own reason so the liability a batch created is reported apart from top-ups,
+  // signup gifts and operator grants. One per code, under `giftcard:<codeId>`, and a CHECK
+  // pins the reason and the prefix to each other in both directions.
+  'GIFT_CARD_REDEMPTION',
   // Grants
   'START_GIFT',
   'LOTTERY_WIN',
@@ -139,4 +146,24 @@ export function migrationOpeningReference(telegramUserId: string): string {
     throw new Error('A migration opening reference needs a Telegram user id.');
   }
   return `${MIGRATION_OPENING_REFERENCE_PREFIX}${telegramUserId}`;
+}
+
+/**
+ * R10 D4: the reference a gift card's redemption credit is written under.
+ *
+ * DERIVED from the code row's id, so a retry, a replay and two redeemers racing one code all
+ * compute the same reference, and `wallet_entries_tenant_reference_key` lets at most one
+ * credit exist per code even if a writer forgot the code row's conditional UPDATE. The prefix
+ * is reserved for `GIFT_CARD_REDEMPTION` by a CHECK in both directions.
+ */
+export const GIFT_CARD_REFERENCE_PREFIX = 'giftcard:' as const;
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+
+/** Throws for anything that is not a lower-case uuid: the reference names a real code row. */
+export function giftCardReference(codeId: string): string {
+  if (!UUID_PATTERN.test(codeId)) {
+    throw new Error('A gift card reference needs the code row id.');
+  }
+  return `${GIFT_CARD_REFERENCE_PREFIX}${codeId}`;
 }

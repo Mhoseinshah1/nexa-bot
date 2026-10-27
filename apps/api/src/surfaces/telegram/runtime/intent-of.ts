@@ -166,6 +166,7 @@ import {
   TICKET_VIEW_CALLBACK_PREFIX,
   TOPUP_CLOSE_CALLBACK_PREFIX,
   TOPUP_MENU_CALLBACK_PREFIX,
+  GIFT_CARD_CALLBACK_DATA,
   TOPUP_PICK_CALLBACK_PREFIX,
   TOPUP_ROUTE_CALLBACK_PREFIX,
   TRIAL_CALLBACK_DATA,
@@ -625,6 +626,9 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
      */
     if (data === TOPUP_MENU_CALLBACK_PREFIX) {
       return { intent: 'TOPUP_MENU', targetId: null, callbackQueryId: id };
+    }
+    if (data === GIFT_CARD_CALLBACK_DATA) {
+      return { intent: 'GIFT_CARD', targetId: null, callbackQueryId: id };
     }
     if (data === REFERRAL_INVITE_CALLBACK_PREFIX) {
       return { intent: 'REFERRAL_INVITE', targetId: null, callbackQueryId: id };

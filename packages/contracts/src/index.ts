@@ -197,3 +197,5 @@ export * from './support-analytics.js';
 export * from './ops-error-events.js';
 /** The one-time Mirza import: which rows of the normal tables came from Mirza. */
 export * from './record-source.js';
+/** R10 D4: gift cards — wallet top-up codes minted in batches and redeemed once. */
+export * from './gift-cards.js';

@@ -221,6 +221,13 @@ export const EVENT_TYPES = [
   // tiers, suspended or reactivated. Aggregate is the CUSTOMER. Tier NAMES and closed status
   // words only: no price, no limit, no free text.
   'ResellerStandingChanged',
+  // R10 D4: gift cards. A batch minted, a code redeemed (aggregate: the redeemer's WALLET, so
+  // concurrent redemptions of one batch do not queue on one aggregate sequence row) and a
+  // batch disabled. Ids, counts and amounts only — never a code, which exists in plaintext
+  // nowhere but the sealed export.
+  'GiftCardBatchCreated',
+  'GiftCardRedeemed',
+  'GiftCardBatchDisabled',
   // Round 10, D1: a customer switched automatic renewal on or off for a service (or a
   // transfer cleared it), and one automatic-renewal period reached its outcome. Aggregate is
   // the SERVICE. Ids, amounts in minor units with their currency, and closed words only.
@@ -271,6 +278,8 @@ export const AGGREGATE_TYPES = [
   // Program 4 Item 9: one legacy_import_map row, addressed by its `ref` uuid (a `user` row's
   // legacy key is a Telegram id, which no audit row or event may carry).
   'LegacyImportMapRow',
+  // R10 D4: one batch of gift cards.
+  'GiftCardBatch',
 ] as const;
 export type AggregateType = (typeof AGGREGATE_TYPES)[number];
 
@@ -755,6 +764,31 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     toStatus: z.string(),
     fromTierName: z.string().nullable(),
     toTierName: z.string(),
+  }),
+  /*
+   * R10 D4. Aggregate is the BATCH. `expiresAt` is ISO-8601 UTC; the code values are absent
+   * by design — the payload is relayed and logged, and a code is a bearer instrument.
+   */
+  GiftCardBatchCreated: z.object({
+    batchId: z.string(),
+    count: z.number().int().positive(),
+    amountMinor: z.string(),
+    currency: z.string(),
+    expiresAt: z.string(),
+  }),
+  /** Aggregate is the redeemer's WALLET. `entryId` is the GIFT_CARD_REDEMPTION credit. */
+  GiftCardRedeemed: z.object({
+    batchId: z.string(),
+    codeId: z.string(),
+    customerId: z.string(),
+    entryId: z.string(),
+    amountMinor: z.string(),
+    currency: z.string(),
+  }),
+  /** Aggregate is the BATCH. `codesDisabled` counts the unredeemed codes it stopped. */
+  GiftCardBatchDisabled: z.object({
+    batchId: z.string(),
+    codesDisabled: z.number().int().nonnegative(),
   }),
   /*
    * Round 10, D1. `consentedTotalMinor`/`currency` are the renewal total the customer agreed

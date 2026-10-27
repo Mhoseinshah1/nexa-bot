@@ -126,6 +126,9 @@ export const OUTBOX_EVENT_LABELS: Readonly<Record<EventType, WebKey>> = {
   LegacyImportReviewStateChanged: 'web.outbox_event_legacy_import_review_state_changed',
   ServiceAdopted: 'web.outbox_event_service_adopted',
   ResellerStandingChanged: 'web.outbox_event_reseller_standing_changed',
+  GiftCardBatchCreated: 'web.outbox_event_gift_card_batch_created',
+  GiftCardRedeemed: 'web.outbox_event_gift_card_redeemed',
+  GiftCardBatchDisabled: 'web.outbox_event_gift_card_batch_disabled',
   ServiceAutoRenewChanged: 'web.outbox_event_service_auto_renew_changed',
   ServiceAutoRenewRunSettled: 'web.outbox_event_service_auto_renew_run_settled',
 };
@@ -139,6 +142,7 @@ export const OUTBOX_AGGREGATE_LABELS: Readonly<Record<string, WebKey>> = {
   CustomerTag: 'web.outbox_aggregate_customer_tag',
   Discount: 'web.outbox_aggregate_discount',
   FeatureFlag: 'web.outbox_aggregate_feature_flag',
+  GiftCardBatch: 'web.outbox_aggregate_gift_card_batch',
   Incident: 'web.outbox_aggregate_incident',
   LegacyImportMapRow: 'web.outbox_aggregate_legacy_import_map_row',
   OpsLogGroup: 'web.outbox_aggregate_ops_log_group',
