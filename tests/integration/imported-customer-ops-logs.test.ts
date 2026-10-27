@@ -64,6 +64,13 @@ import {
  *    (imported: true)" and "L26: a ticket the import wrote ..."; the ticket's own provenance
  *    check removed, and separately applied to replies too -> "L26: a ticket the import
  *    wrote ...".
+ *  - R11 A6, `LedgerLogConsumer.commission`: `referrer.source !== 'NEXA'` put back -> "L8 ...
+ *    (referrer imported: true ...)"; the ORDER's `source` check removed -> "L8: a commission
+ *    on an order the import wrote stays silent".
+ *  - R11 A6, `LedgerLogConsumer.gift`: `referee.source !== 'NEXA'` put back -> "L9 ...
+ *    (... referee imported: true)" (both) and "L9: a gift of a referral the import carried
+ *    ..." (its control's referee is imported); the REFERRAL's `source` check removed -> "L9:
+ *    a gift of a referral the import carried stays silent ...".
  *  - the reconcile's `ServiceProvisioned` not written -> "L10/L11: a purchase whose create
  *    answer was lost ..." (both); written even when the conditional move did not happen ->
  *    "L10/L11: an adoption that finds the service already moved ..."; the adopted
@@ -115,7 +122,11 @@ describe('R10 B5: what an imported customer does after the import reaches the op
         }
         sent.push({ url: request.url ?? '', body });
         response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ ok: true, result: { message_id: 11 } }));
+        // `getMe` is what the referral invite asks for the bot's current name (R11 A6).
+        const result = (request.url ?? '').endsWith('/getMe')
+          ? { id: 7001, is_bot: true, first_name: 'Nexa', username: 'nexa_r11a6_bot' }
+          : { message_id: 11 };
+        response.end(JSON.stringify({ ok: true, result }));
       });
     });
     await new Promise<void>((resolve) => telegram.listen(0, '127.0.0.1', resolve));
@@ -232,13 +243,17 @@ describe('R10 B5: what an imported customer does after the import reaches the op
    * whether the operations chat RECEIVED each: a row is only `SENT` once Telegram took it, and
    * the text Telegram was handed to the operations chat names the customer.
    */
-  async function opsLogs(templates: readonly string[], tg: string): Promise<string[]> {
+  async function opsLogs(
+    templates: readonly string[],
+    tg: string,
+    payloadKey = 'telegramId',
+  ): Promise<string[]> {
     const rows = (
       await exec(
         sql`SELECT template_key, status FROM notifications
              WHERE tenant_id = ${tenantA.tenantId}
                AND template_key = ANY(${sql.param([...templates])}::text[])
-               AND payload ->> 'telegramId' = ${tg}
+               AND payload ->> ${payloadKey} = ${tg}
              ORDER BY created_at, id`,
       )
     ).rows as { template_key: string; status: string }[];
@@ -280,7 +295,10 @@ describe('R10 B5: what an imported customer does after the import reaches the op
     );
 
   /** A customer who reached the bot (so has a bot to be told through), imported or not. */
-  async function customer(imported: boolean): Promise<{ id: UserId; tg: string }> {
+  async function customer(
+    imported: boolean,
+    startPayload: string | null = null,
+  ): Promise<{ id: UserId; tg: string }> {
     tgSeq += 1;
     const tg = String(tgSeq);
     const resolved = await ctx.container.customers.resolveFromUpdate(
@@ -291,6 +309,7 @@ describe('R10 B5: what an imported customer does after the import reaches the op
         telegramUserId: tg,
         from: { id: Number(tg), first_name: 'مشتری' },
         botInstanceId: BOT_A1,
+        ...(startPayload === null ? {} : { startPayload }),
       },
     );
     if (imported) await markImported(resolved.customer.id);
@@ -555,6 +574,206 @@ describe('R10 B5: what an imported customer does after the import reaches the op
     await reply(who.id, ticketId, 'پیام تازه بعد از مهاجرت');
     await relayAndDispatch();
     expect(await opsLogs(TICKET_LOGS, who.tg)).toEqual(['ops.support.customer_replied']);
+  });
+
+  // --- L8 / L9 (R11 A6): a commission and a signup gift after the import ------------------
+
+  async function setFlag(flag: string, enabled: boolean): Promise<void> {
+    const current = await ctx.container.featureFlagResolver.resolve(tenantA, flag as never);
+    if (current.enabled === enabled) return;
+    await ctx.container.featureFlags.set(tenantA, owner, {
+      key: flag as never,
+      enabled,
+      expectedVersion: current.version,
+      idempotencyKey: key(),
+      confirmKey: flag,
+      reason: 'R11 A6 integration test',
+    });
+  }
+  async function setSetting(settingKey: string, value: unknown): Promise<void> {
+    const before = await ctx.container.settingsService.get(tenantA, owner, settingKey);
+    await ctx.container.settingsService.set(tenantA, owner, {
+      key: settingKey,
+      value,
+      expectedVersion: before.version,
+      idempotencyKey: key(),
+    });
+  }
+  /** The purchase commission (10 %) and the signup gift (100 000 تومان, half each), on. */
+  async function referralProgram(): Promise<void> {
+    await setSetting('referral.commission_percent', 10);
+    await setFlag('referrals', true);
+    await setSetting('referral.signup_gift.total', { amountMinor: '100000', currency: 'IRT' });
+    await setSetting('referral.signup_gift.referrer_percent', 50);
+    await setSetting('referral.signup_gift.referred_percent', 50);
+    await setFlag('referral_signup_gift', true);
+  }
+
+  /**
+   * A referrer and a NEW customer who arrived through their code, after the import. An
+   * imported referrer is a customer the import wrote who invites after it; an imported referee
+   * is marked once attributed — whichever side the import wrote, the referral is this
+   * installation's (`source = 'NEXA'`), and so is every payment it earns.
+   */
+  async function referredPair(
+    referrerImported: boolean,
+    refereeImported: boolean,
+  ): Promise<{ referrer: { id: UserId; tg: string }; referee: { id: UserId; tg: string } }> {
+    await referralProgram();
+    const referrer = await customer(referrerImported);
+    const invited = await ctx.container.referrals.invite(tenantA, systemActor('r11a6-invite'), {
+      idempotencyKey: key(),
+      customerId: referrer.id,
+      botInstanceId: BOT_A1,
+    });
+    if (invited.outcome !== 'READY') throw new Error(`no code: ${invited.outcome}`);
+    const referee = await customer(false, `ref-${invited.code}`);
+    if (refereeImported) await markImported(referee.id);
+    const attributed = (
+      await exec(
+        sql`SELECT referrer_id, source FROM referrals
+             WHERE tenant_id = ${tenantA.tenantId} AND referee_id = ${referee.id}`,
+      )
+    ).rows as { referrer_id: string; source: string }[];
+    expect(attributed).toEqual([{ referrer_id: referrer.id, source: 'NEXA' }]);
+    return { referrer, referee };
+  }
+
+  const claimGift = (customerId: UserId) =>
+    ctx.container.referralSignupGifts.claim(tenantA, systemActor('r11a6-claim'), customerId, {
+      idempotencyKey: key(),
+    });
+
+  const PAIRS = [
+    { referrerImported: true, refereeImported: false },
+    { referrerImported: false, refereeImported: true },
+    { referrerImported: true, refereeImported: true },
+    { referrerImported: false, refereeImported: false },
+  ] as const;
+
+  it.each(PAIRS)(
+    'L8: a referral commission earned after the import is logged (referrer imported: $referrerImported, referee imported: $refereeImported)',
+    async ({ referrerImported, refereeImported }) => {
+      const { referrer, referee } = await referredPair(referrerImported, refereeImported);
+      await paidOrder(referee.id);
+      await settle();
+      const earned = (
+        await exec(
+          sql`SELECT count(*)::int AS n FROM wallet_entries
+               WHERE customer_id = ${referrer.id} AND reason = 'REFERRAL_COMMISSION'`,
+        )
+      ).rows as { n: number }[];
+      expect(earned[0]?.n, 'the commission was paid').toBe(1);
+      expect(
+        await opsLogs(['ops.log.referral_commission'], referrer.tg, 'referrerTelegramId'),
+      ).toEqual(['ops.log.referral_commission']);
+    },
+  );
+
+  it('L8: a commission on an order the import wrote stays silent', async () => {
+    const { referrer, referee } = await referredPair(false, false);
+    const orderId = await paidOrder(referee.id);
+    // Deliver and earn, without relaying: the commission's event waits in the outbox.
+    for (let round = 0; round < 5; round += 1) {
+      await makeDue();
+      await ctx.container.provisionerLoop.tick();
+    }
+    const earned = (
+      await exec(
+        sql`SELECT count(*)::int AS n FROM wallet_entries
+             WHERE customer_id = ${referrer.id} AND reason = 'REFERRAL_COMMISSION'`,
+      )
+    ).rows as { n: number }[];
+    expect(earned[0]?.n, 'the commission was paid').toBe(1);
+    // The order is the import's (as the import leaves an order it brought over), before the
+    // commission's event is relayed: the record the line is about is history.
+    await exec(
+      sql`UPDATE orders SET source = 'MIRZA', source_ref = ${`invoice:${orderId}`}
+           WHERE id = ${orderId}`,
+    );
+    await relayAndDispatch();
+    expect(
+      await opsLogs(['ops.log.referral_commission'], referrer.tg, 'referrerTelegramId'),
+    ).toEqual([]);
+  });
+
+  it.each(PAIRS)(
+    'L9: a signup gift claimed after the import is logged, each side once (referrer imported: $referrerImported, referee imported: $refereeImported)',
+    async ({ referrerImported, refereeImported }) => {
+      const { referrer, referee } = await referredPair(referrerImported, refereeImported);
+      await claimGift(referee.id);
+      await relayAndDispatch();
+      await claimGift(referrer.id);
+      await relayAndDispatch();
+      expect(await opsLogs(['ops.log.signup_gift'], referee.tg, 'refereeTelegramId')).toEqual([
+        'ops.log.signup_gift',
+        'ops.log.signup_gift',
+      ]);
+    },
+  );
+
+  it('L9: a gift of a referral the import carried stays silent; the same gift of this installation’s referral is logged', async () => {
+    // No path of this installation pays a gift on an imported attribution (the claim refuses
+    // a MIRZA referral), and `referrals` is append-only, so the import's record is written the
+    // way the referral-history step writes it, and its gift entry beside it; the shipped
+    // ledger consumer is handed each entry's event exactly as the relay would hand it.
+    const referrer = await customer(true);
+    const importedReferee = await customer(true);
+    const nativeReferee = await customer(true);
+    const giftOf = async (refereeId: UserId, source: 'MIRZA' | 'NEXA') => {
+      const referralId = ctx.container.ids.uuid();
+      await exec(
+        sql`INSERT INTO referrals (id, tenant_id, referrer_id, referee_id, trigger, source, source_ref)
+            VALUES (${referralId}, ${tenantA.tenantId}, ${referrer.id}, ${refereeId}, 'ON_SIGNUP',
+                    ${source}, ${source === 'MIRZA' ? `referral:${refereeId}` : null})`,
+      );
+      const entryId = ctx.container.ids.uuid();
+      await exec(
+        sql`INSERT INTO wallet_entries (id, tenant_id, customer_id, direction, reason, amount,
+                                        currency, reference)
+            VALUES (${entryId}, ${tenantA.tenantId}, ${refereeId}, 'CREDIT',
+                    'REFERRAL_SIGNUP_GIFT', '50000', 'IRT',
+                    ${`${referralId}:signup-gift:REFEREE`})`,
+      );
+      return {
+        eventId: ctx.container.ids.uuid(),
+        eventType: 'WalletEntryRecorded',
+        eventVersion: 1,
+        tenantId: String(tenantA.tenantId),
+        aggregateType: 'Wallet',
+        aggregateId: refereeId,
+        sequence: 1,
+        correlationId: 'r11a6-import-gift',
+        causationId: null,
+        actor: { type: 'SYSTEM_JOB', id: null },
+        occurredAt: ctx.container.clock.now().toISOString(),
+        payload: {
+          customerId: refereeId,
+          entryId,
+          direction: 'CREDIT',
+          reason: 'REFERRAL_SIGNUP_GIFT',
+          amountMinor: '50000',
+          currency: 'IRT',
+        },
+      };
+    };
+    const ledger = (
+      ctx.container.relay as unknown as {
+        consumers: { name: string; handle(event: unknown, tx: unknown): Promise<void> }[];
+      }
+    ).consumers.find((one) => one.name === 'ops-log.ledger');
+    if (ledger === undefined) throw new Error('no ledger consumer');
+    const imported = await giftOf(importedReferee.id, 'MIRZA');
+    const native = await giftOf(nativeReferee.id, 'NEXA');
+    await ctx.container.uow.run(tenantA, (tx) => ledger.handle(imported, tx));
+    await ctx.container.uow.run(tenantA, (tx) => ledger.handle(native, tx));
+    await relayAndDispatch();
+    expect(await opsLogs(['ops.log.signup_gift'], importedReferee.tg, 'refereeTelegramId')).toEqual(
+      [],
+    );
+    expect(await opsLogs(['ops.log.signup_gift'], nativeReferee.tg, 'refereeTelegramId')).toEqual([
+      'ops.log.signup_gift',
+    ]);
   });
 
   // --- L10 / L11: a create whose answer was lost, adopted by a reconcile ------------------

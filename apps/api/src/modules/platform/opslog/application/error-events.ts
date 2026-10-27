@@ -36,14 +36,29 @@ export function sanitizedErrorCode(code: string): string {
 }
 
 /**
+ * A UUID exactly as PostgreSQL renders one this installation minted: lowercase hex in the
+ * 8-4-4-4-12 groups, an RFC 9562 version nibble (1–8) and the RFC variant (8, 9, a, b).
+ * Nothing else — no braces, no upper case, no surrounding text.
+ */
+const STRICT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+/**
  * An identifier as it may be printed, or null. Ids, references and order ids are drawn
  * from a small alphabet; anything outside it is not an id this code minted, so it is
  * dropped rather than cleaned up into something that looks like one.
+ *
+ * R11 A6: a UUID is accepted by its FORMAT, never by "the card redactor left it unchanged".
+ * Its hex groups are free to hold a long digit run — `01a17a35-657e-7f61-9252-783554496375`
+ * carries `61-9252-783554496375`, eighteen digits that pass Luhn — so about one UUIDv7 in a
+ * thousand looked like a card, and the customer's operations alert silently lost their
+ * name, username and USER button. Everything that is not a strict UUID (a provider's
+ * reference, a tracking code, a PAN) still has to pass the redactor unchanged.
  */
 export function safeIdentifier(value: unknown, max = 100): string | null {
   if (typeof value !== 'string' && typeof value !== 'number') return null;
   const text = String(value);
   if (text.length === 0 || text.length > max) return null;
+  if (STRICT_UUID.test(text)) return text;
   if (!/^[A-Za-z0-9._:@-]+$/.test(text)) return null;
   // A digit run that is a card number is never an id we print.
   return redactOperatorText(text) === text ? text : null;

@@ -780,6 +780,67 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
       ]);
   }, 60_000);
 
+  it('refuses card to card before confirming a draft once it is not offered, on both, and confirms nothing', async () => {
+    /*
+     * R11 A6 (an open item of R10 B1). `payByCard` confirmed the DRAFT through its lane and
+     * only then asked the payment service, which refused a route that is off — leaving the
+     * draft AWAITING_PAYMENT, its capacity reserved, for a payment that could not be made.
+     * The route is now checked first, by the rule the menu draws it with, and the refusal
+     * is the payment service's own code, so each surface answers in its usual Persian.
+     *
+     * MUTATION: the `manualTransferOffered` check in `CheckoutService.payByCard` removed ->
+     * both orders read AWAITING_PAYMENT and this case fails.
+     */
+    const small = await product(SMALL);
+    const botId = await botCustomer();
+    const mini = await miniSession();
+    const { id: botDraft } = await botDraftOf(botId, small);
+    const miniOrder = await miniDraft(mini.token, small);
+    // Off for purchases — the same switch the menu reads, so `m:` is drawn on no screen.
+    await route('MANUAL_TRANSFER', { sortOrder: 2, allowServicePurchase: false });
+
+    const refusedBot = await tap(`m:${botDraft}`);
+    expect.soft(refusedBot.key).toBe('bot.payment.unconfigured');
+    const refusedMini = await call(mini.token, 'POST', MINIAPP_ROUTES.orderPayCard, {
+      orderId: miniOrder.id,
+    });
+    expect.soft(refusedMini.statusCode, refusedMini.body).toBe(409);
+    expect.soft(JSON.parse(refusedMini.body)).toMatchObject({
+      error: { code: 'commerce.payment_method_unavailable' },
+    });
+
+    for (const customerId of [botId, mini.customerId]) {
+      expect.soft((await ordersOf(customerId)).map((row) => row.state)).toEqual(['DRAFT']);
+      expect.soft(await paymentsOf(customerId)).toEqual([]);
+      const confirmations = await rows<{ n: number }>(
+        sql`SELECT count(*)::int AS n FROM audit_logs a JOIN orders o ON a.entity_id = o.id::text
+             WHERE o.customer_id = ${customerId} AND a.action = 'order.confirm'`,
+      );
+      expect.soft(confirmations[0]?.n, 'nothing was confirmed').toBe(0);
+    }
+    const held = await rows<{ n: number }>(
+      sql`SELECT count(*)::int AS n FROM panel_capacity_reservations
+           WHERE order_id = ANY(${sql.param([botDraft, miniOrder.id])}::uuid[])`,
+    );
+    expect.soft(held[0]?.n, 'no capacity is held').toBe(0);
+
+    // Switched back on, the same drafts are confirmed and issued as before.
+    await route('MANUAL_TRANSFER', { sortOrder: 2 });
+    await tap(`m:${botDraft}`);
+    const issued = await call(mini.token, 'POST', MINIAPP_ROUTES.orderPayCard, {
+      orderId: miniOrder.id,
+    });
+    expect.soft(issued.statusCode, issued.body).toBe(201);
+    for (const customerId of [botId, mini.customerId]) {
+      expect
+        .soft((await ordersOf(customerId)).map((row) => row.state))
+        .toEqual(['AWAITING_PAYMENT']);
+      expect
+        .soft(await paymentsOf(customerId))
+        .toMatchObject([{ method: 'MANUAL_TRANSFER', state: 'PENDING' }]);
+    }
+  }, 60_000);
+
   it('re-quotes a draft under a code the same way, and the wallet pays the discounted total', async () => {
     const small = await product(SMALL);
     const created = await ctx.container.discounts.create(tenantA, owner, {
@@ -999,6 +1060,75 @@ describe('one checkout: the bot and the mini app, for the same cart', () => {
 
     // Another customer's order through the same tap: the same refusal as before the change.
     pin('confirm-tap.foreign', await tap(`c:${miniRenew.id}`));
+  }, 90_000);
+
+  it('OrderService.confirm refuses an order on an existing service, in any state; its own lane confirms it', async () => {
+    /*
+     * R11 A6 (an open item of R10 B1). `OrderService.confirm` is the lane of an order that
+     * CREATES a service; R10 B1 routed every renewal and package through
+     * `CommercialActionService.confirm`, but the new-service lane still accepted one. No
+     * caller passes one now (`CheckoutService.confirmDraft` dispatches by purpose; the manual
+     * order drafts a product), so this is the refusal of a caller's bug: typed, nothing
+     * written.
+     *
+     * MUTATION: the `orderPurposeTargetsExistingService` refusal in `OrderService.confirm`
+     * removed -> the renewal is confirmed through the new-service lane and this case fails.
+     */
+    const panelId = await marzbanPanel();
+    const small = await product(SMALL, panelId);
+    const botId = await botCustomer();
+    await credit(botId, SMALL);
+    await tap(`w:${(await botDraftOf(botId, small)).id}`);
+    await ctx.container.provisionerLoop.tick();
+    const [service] = await rows<{ id: string }>(
+      sql`SELECT id FROM services WHERE customer_id = ${botId}`,
+    );
+    const { order: renewal } = await ctx.container.commercialActions.draft(
+      tenantA,
+      systemActor('r11-a6-renew'),
+      botId,
+      { serviceId: service?.id ?? '', kind: 'RENEW', idempotencyKey: key() },
+    );
+    expect.soft(renewal.purpose).toBe('RENEW');
+
+    const viaNewServiceLane = () =>
+      ctx.container.orders
+        .confirm(tenantA, systemActor('r11-a6-renew'), {
+          idempotencyKey: key(),
+          customerId: botId,
+          orderId: renewal.id,
+        })
+        .then(
+          () => null,
+          (error: unknown) => error as { code?: string; details?: Record<string, unknown> },
+        );
+    const refused = await viaNewServiceLane();
+    expect.soft(refused?.code).toBe('commerce.order_state_invalid');
+    expect.soft(refused?.details).toEqual({ reason: 'COMMERCIAL_PURPOSE', purpose: 'RENEW' });
+    const states = async () =>
+      (await ordersOf(botId)).map((row) => `${String(row.purpose)}:${String(row.state)}`);
+    expect.soft(await states()).toEqual(['NEW_SERVICE:PAID', 'RENEW:DRAFT']);
+    const audited = async () =>
+      (
+        await rows<{ action: string }>(
+          sql`SELECT DISTINCT a.action FROM audit_logs a WHERE a.entity_id = ${renewal.id}
+               ORDER BY a.action`,
+        )
+      ).map((row) => row.action);
+    expect
+      .soft(await audited(), 'the new-service lane wrote nothing')
+      .not.toContain('order.confirm');
+
+    // Its own lane confirms it; the new-service lane still refuses it once it is confirmed.
+    await ctx.container.commercialActions.confirm(tenantA, systemActor('r11-a6-renew'), botId, {
+      orderId: renewal.id,
+      idempotencyKey: key(),
+    });
+    expect.soft(await states()).toEqual(['NEW_SERVICE:PAID', 'RENEW:AWAITING_PAYMENT']);
+    const again = await viaNewServiceLane();
+    expect.soft(again?.code).toBe('commerce.order_state_invalid');
+    expect.soft(again?.details).toEqual({ reason: 'COMMERCIAL_PURPOSE', purpose: 'RENEW' });
+    expect.soft(await audited()).not.toContain('order.confirm');
   }, 90_000);
 
   it('offers a top-up the same routes, names and gifts', async () => {
