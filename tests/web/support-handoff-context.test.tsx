@@ -115,7 +115,7 @@ describe('roadmap A3–A6 on the Web Admin', () => {
     const body = document.body.textContent ?? '';
     expect(body).toContain(`${t('web.bchat_handoff_context_topic')} مشکل اتصال`);
     expect(body).toContain(`${t('web.bchat_handoff_context_intent')} رفع مشکل اتصال`);
-    expect(body).toContain(`${t('web.bchat_handoff_context_steps')} ۳`);
+    expect(body).toContain(`${t('web.bchat_handoff_context_steps')} 3`);
     expect(body).toContain(t('web.bchat_outbound_origin_handoff_notice'));
   });
 

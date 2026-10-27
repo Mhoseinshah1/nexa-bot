@@ -55,6 +55,8 @@ export * from './pricing.js';
 export * from './customer.js';
 // Spec §10: the one free-text search a Web Admin list page draws.
 export * from './list-search.js';
+// R11 A1: the top-bar search over customers, orders and services (no new permission).
+export * from './global-search.js';
 export * from './catalog.js';
 export * from './traffic-input.js';
 export * from './commerce.js';

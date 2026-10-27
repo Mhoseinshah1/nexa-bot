@@ -4616,6 +4616,27 @@ money and sends no customer message; the owner decides otherwise.
   captcha row like a `/start` arrival and the mini app holds them at `CAPTCHA`, pointing to the
   bot; whether a mini-app arrival should be asked at all is the owner's call.
 
+## Round 11 A1 — Web Admin vs the approved demo
+
+- **OQ-R11-A1-01 — a numbered pager («1–10 of 732 · page 1 of 74») on the cursor-paged lists.**
+  The demo draws it on every list; the keyset lists (`/orders`, `/payments`, `/users`, `/services`,
+  …) return a cursor and no total, and the Web Admin prints only totals the server sent. Built
+  where the list already holds all its rows and a server `total` was cheap: `/content`
+  (`GET /templates`) and `/features` (`GET /features`) gained an optional `total`. Default for the
+  rest: the existing «قبلی / بعدی» keyset pager. A `total` on each cursor list is a count query per
+  request (filtered, tenant-scoped, on large tables); the owner decides which lists are worth it.
+- **OQ-R11-A1-02 — global search beyond customers, orders and services.** `GET /search` covers
+  those three kinds, each under its own list permission. Payments, tickets and products are not
+  searched (the demo's grouped results show three kinds); adding one is a new source plus its own
+  permission row in `GLOBAL_SEARCH_KIND_PERMISSIONS`, no new permission. A service is found by its
+  exact panel username or its 8-character code, as the services list's own search finds it.
+- **OQ-R11-A1-03 — Persian digits in text the server writes.** The owner's Latin-digit rule is
+  applied to the Web Admin's own catalogue (`apps/web/src/i18n/web.fa.ts`) and every formatter.
+  Text that arrives from the server or from the shared catalogue (`packages/i18n`: ops-log and
+  report messages, bot template previews on `/content`) still carries the digits it was written
+  with, because the same strings are customer-facing in Telegram. Default: unchanged; normalising
+  them for display only is a separate decision.
+
 ## Round 11 A2 — the cutover rehearsal (`docs/cutover/12-rehearsal.md`)
 
 `botctl cutover rehearse` runs the runbook's data steps against a disposable database on the

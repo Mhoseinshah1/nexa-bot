@@ -25,13 +25,13 @@ const KIT_CSS = readFileSync(
   'utf8',
 );
 
-describe('formatTimestampNumeric — the demo list cell «۱۴۰۵/۰۷/۱۴ ۱۹:۳۰»', () => {
-  it('draws the Jalali date in numbers and the 24-hour time, in Persian digits, left to right', () => {
+describe('formatTimestampNumeric — the demo list cell «1405/07/14 19:30»', () => {
+  it('draws the Jalali date in numbers and the 24-hour time, in Latin digits, left to right', () => {
     const text = formatTimestampNumeric('2026-10-06T16:00:00.000Z');
     // Isolated left to right, so the date stays before the time inside a Persian cell.
-    expect(text).toMatch(/^\u2066[۰-۹]{4}\/[۰-۹]{2}\/[۰-۹]{2} [۰-۹]{2}:[۰-۹]{2}\u2069$/);
-    expect(text.startsWith('\u2066۱۴۰۵/۰۷/')).toBe(true);
-    expect(text).not.toMatch(/[0-9]/);
+    expect(text).toMatch(/^\u20661405\/07\/14 16:00\u2069$/);
+    expect(text.startsWith('\u20661405/07/')).toBe(true);
+    expect(text).not.toMatch(/[\u06f0-\u06f9]/u);
   });
 
   it('returns an unparseable string unchanged, as formatTimestamp does', () => {
@@ -162,7 +162,7 @@ describe('services detail, as the demo draws it', () => {
     );
   });
 
-  it('puts the usage percentage beside a neutral bar («۷۱٪» of 35.3 / 50 GB)', async () => {
+  it('puts the usage percentage beside a neutral bar («71٪» of 35.3 / 50 GB)', async () => {
     stubApi(routesOf(fixturesFor('demo-parity')));
     renderPage(<ServiceDetailPage id={DETAIL_ID} denied={false} mayEdit mayTerminate mayGrant />);
     const bar = await screen.findByRole('progressbar', { name: t('web.service_traffic_used') });
@@ -223,7 +223,7 @@ describe('custom service, as the demo draws it', () => {
   it('keeps a location panel’s copy control, revealed on the row’s hover as the demo', async () => {
     stubApi(routesOf(fixturesFor('demo-parity')));
     renderPage(<CustomServicePage denied={false} mayEdit mayViewPanels mayViewTiers />);
-    const panel = await screen.findByText('Frankfurt A', { selector: '.copyable .val' });
+    const panel = await screen.findByText('DE-1', { selector: '.copyable .val' });
     const row = panel.closest('tr')!;
     expect(within(row).getByRole('button', { name: t('web.copy') })).toBeInTheDocument();
     const css = readFileSync(
