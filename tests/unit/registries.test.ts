@@ -337,6 +337,9 @@ describe('the feature flag registry', () => {
       // R10 D5 (b). Off by default; the purchase condition and the two daily caps it
       // switches on are read by the gift claim and the commission earner.
       'referral_abuse_guard',
+      // R11 B3. Off by default; the mini app's invited-friends list it switches on is read-only
+      // and reachable, and with it off the route answers that the feature is off.
+      'referral_friends_list',
       // Customer UX completion §I. Off by default; the claim path it switches on is
       // reachable, and it refuses to turn on until the two shares total 100.
       'referral_signup_gift',
