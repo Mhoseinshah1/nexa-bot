@@ -369,14 +369,14 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
         ['processing', true],
       ] as const) {
         tonpays.set(invoice.provider_invoice_id!, status, paid);
-        advance(11_000);
+        advance(23_000);
         await lane.runOnce(tenantA);
         expect(await stateOf(paymentId), `${status}/${String(paid)}`).toBe('PENDING');
       }
       // A lost answer is UNKNOWN, never success.
       tonpays.set(invoice.provider_invoice_id!, 'completed', true);
       tonpays.checkMode = 'LOST';
-      advance(11_000);
+      advance(23_000);
       await lane.runOnce(tenantA);
       expect(await stateOf(paymentId)).toBe('PENDING');
       expect(await credits(paymentId)).toEqual([]);
@@ -386,7 +386,7 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
       const { paymentId, invoice } = await createdTopup();
       tonpays.set(invoice.provider_invoice_id!, 'completed', true);
       tonpays.checkMode = 'RATE_LIMITED';
-      advance(11_000);
+      advance(23_000);
       await lane.runOnce(tenantA);
       expect(tonpays.checks()).toBe(1);
       const next = new Date((await invoiceOf(paymentId)).next_inquiry_at!).getTime();
@@ -422,7 +422,7 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
       const reserve = hintReservePerMinute(TONPAYS_INQUIRY_BUDGET_PER_MINUTE);
       const { paymentId, invoice } = await createdTopup();
       tonpays.set(invoice.provider_invoice_id!, 'completed', true);
-      advance(11_000);
+      advance(23_000);
       // Every scheduled call this minute already spent.
       await budgetUsed(TONPAYS_INQUIRY_BUDGET_PER_MINUTE - reserve);
       const report = await lane.runOnce(tenantA);
@@ -529,7 +529,7 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
       const backlog: PaymentId[] = [];
       for (let i = 0; i < 12; i += 1) backlog.push(await topup(251_000n + BigInt(i) * 1_000n));
       const hintedId = await topup(400_000n);
-      // Every invoice made at one instant: every first ask is about ten seconds out.
+      // Every invoice made at one instant: every first ask is about fifteen seconds out (R11 A8).
       for (let i = 0; i < 3; i += 1) await lane.runOnce(tenantA);
       const hinted = await invoiceOf(hintedId);
       expect(hinted.provider_invoice_id).not.toBeNull();
@@ -575,7 +575,7 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
       const tappedId = await topup(400_000n);
       const backlog: PaymentId[] = [];
       for (let i = 0; i < 12; i += 1) backlog.push(await topup(251_000n + BigInt(i) * 1_000n));
-      // Every invoice made at one instant, so every first ask is about ten seconds out.
+      // Every invoice made at one instant, so every first ask is about fifteen seconds out (R11 A8).
       for (let i = 0; i < 3; i += 1) await lane.runOnce(tenantA);
       expect(tonpays.checks()).toBe(0);
       const tapped = await invoiceOf(tappedId);
@@ -613,7 +613,7 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
       const { paymentId, invoice } = await createdTopup();
       await topup(300_000n);
       tonpays.calls.length = 0;
-      advance(11_000);
+      advance(23_000);
       await lane.runOnce(tenantA);
       expect(tonpays.calls).toEqual(['create', `check:${invoice.provider_invoice_id!}`]);
       expect(await stateOf(paymentId)).toBe('PENDING');
