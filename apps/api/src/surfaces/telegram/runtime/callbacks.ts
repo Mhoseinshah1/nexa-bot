@@ -397,6 +397,17 @@ export const MARKETING_OPT_IN_CALLBACK_DATA = 'mk:in';
 /** Package B: the membership check button's callback data. */
 export const MEMBERSHIP_CHECK_CALLBACK_DATA = 'mc:';
 /**
+ * R11 B7: «تأیید شماره تلفن» — opens the contact-share prompt. No id: the tapper is the
+ * subject, and the number arrives as their own contact message, never in callback data.
+ */
+export const PHONE_VERIFY_CALLBACK_DATA = 'pv:';
+/**
+ * R11 B7: the command the reply keyboard's «🔙 انصراف و بازگشت به منو» stands for. Routed
+ * by the shared label map (`container.ts`, beside the management panel's label), because a
+ * reply-keyboard tap arrives as ordinary TEXT; not registered with `setMyCommands`.
+ */
+export const PHONE_VERIFY_CANCEL_COMMAND = 'phone_cancel';
+/**
  * Program §6: `ac:<terms version uuid>` — accept THAT version of the terms and rules. Two
  * letters: `a:` is taken, and `ac:` differs from it at the second character. 39 bytes.
  */

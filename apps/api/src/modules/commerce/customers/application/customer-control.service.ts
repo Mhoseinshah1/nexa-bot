@@ -3,6 +3,7 @@ import {
   PERSONAL_DISCOUNT_PERCENT_MAX,
   PERSONAL_DISCOUNT_PERCENT_MIN,
   errors,
+  maskPhoneNumber,
   normalisePhoneNumber,
   userIdSchema,
   type ActorContext,
@@ -61,6 +62,12 @@ export interface CustomerOverview {
   readonly terms: CustomerTermsStanding | null;
   /** R10 D3. */
   readonly personalDiscount: CustomerPersonalDiscount;
+  /**
+   * R11 B7: whether the READER may see the verified number in full — they hold
+   * `users.phone.verify`, the permission that sets and revokes it. Everybody else with
+   * `users.view` is shown its masked form only.
+   */
+  readonly phoneNumberVisible: boolean;
 }
 
 export interface CustomerControlDeps {
@@ -135,7 +142,8 @@ interface ControlChange {
  */
 export function maskPhone(phone: string | null): string | null {
   if (phone === null) return null;
-  return `…${phone.slice(-4)}`;
+  // R11 B7: the one masking rule, shared with the Web Admin, the bot and the ops log.
+  return maskPhoneNumber(phone);
 }
 
 export class CustomerControlService {
@@ -144,7 +152,7 @@ export class CustomerControlService {
   /** The controls as stored. `users.view`, the customer page's own read. */
   async overview(scope: TenantContext, actor: ActorContext, id: string): Promise<CustomerOverview> {
     await this.deps.guard.check(scope, actor, CUSTOMER_VIEW_PERMISSION);
-    return this.read(scope, this.customerId(id));
+    return this.read(scope, actor, this.customerId(id));
   }
 
   /**
@@ -465,7 +473,10 @@ export class CustomerControlService {
     );
     if (replay !== null) {
       // The controls as they are NOW: a replay answers "is it done", not a snapshot.
-      return { overview: await this.read(scope, customerId), changed: replay.result.changed };
+      return {
+        overview: await this.read(scope, actor, customerId),
+        changed: replay.result.changed,
+      };
     }
 
     const now = this.deps.clock.now();
@@ -521,10 +532,14 @@ export class CustomerControlService {
         return change.changed;
       },
     );
-    return { overview: await this.read(scope, customerId), changed };
+    return { overview: await this.read(scope, actor, customerId), changed };
   }
 
-  private async read(scope: TenantContext, customerId: UserId): Promise<CustomerOverview> {
+  private async read(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+  ): Promise<CustomerOverview> {
     const customer = await this.deps.customers.findById(scope, customerId);
     if (customer === null) {
       throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
@@ -539,6 +554,7 @@ export class CustomerControlService {
         setAt: personal?.setAt ?? null,
         enabled: await this.deps.featureFlags.isEnabled(scope, PERSONAL_DISCOUNT_FLAG),
       },
+      phoneNumberVisible: await this.deps.guard.has(scope, actor, PHONE_VERIFY_PERMISSION),
     };
   }
 

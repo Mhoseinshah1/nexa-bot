@@ -5,6 +5,7 @@ import type { InboundReceiptFile } from '../../../modules/commerce/payments/appl
 import type { KeysetToken } from '../keyset-token.js';
 import type { InboundTutorialVideo } from '../../../modules/control/client-apps/application/client-app-video.service.js';
 import { ADMIN_TUTORIAL_INTENTS } from '../admin-tutorial-video.js';
+import type { SharedContact } from '../../../modules/commerce/customers/application/phone-verification.service.js';
 
 /**
  * What the customer asked for.
@@ -222,6 +223,15 @@ export const BOT_INTENTS = [
    */
   'MARKETING_OPT_OUT',
   'MARKETING_OPT_IN',
+  /*
+   * R11 B7: phone verification — the «تأیید شماره تلفن» button (`pv:`), a CONTACT message
+   * (the reply keyboard's contact button, or any contact the customer sends), and the
+   * reply keyboard's cancel label. Whether a contact verifies anything is decided by
+   * `PhoneVerificationService`, never here.
+   */
+  'PHONE_VERIFY',
+  'PHONE_CONTACT',
+  'PHONE_VERIFY_CANCEL',
   'RECEIPT_UPLOAD',
   /*
    * Package B — the `✅ بررسی عضویت` button. Exempt from the membership guard, and it
@@ -607,4 +617,9 @@ export interface BotCommand {
   readonly file?: InboundReceiptFile | null;
   /** Spec §7: the video an `ADMIN_APP_VIDEO_UPLOAD` carries, and nothing else ever does. */
   readonly video?: InboundTutorialVideo | null;
+  /**
+   * R11 B7: the contact a `PHONE_CONTACT` carries, read from the update and nothing else —
+   * whether it is the sender's own is decided against the resolved customer row.
+   */
+  readonly contact?: SharedContact | null;
 }

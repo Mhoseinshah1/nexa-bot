@@ -2125,7 +2125,9 @@ export const WEB_FA = {
   'web.c360_display_name': 'نام',
   'web.c360_phone': 'شماره تلفن',
   'web.c360_phone_none': 'ثبت نشده',
-  'web.c360_phone_verified': 'تأییدشده دستی',
+  // R11 B7: a number is now verified by an operator OR by the customer's own contact.
+  'web.c360_phone_verified': 'تأییدشده',
+  'web.c360_phone_not_verified': 'تأییدنشده',
   'web.c360_terms': 'پذیرش قوانین',
   'web.c360_notifications': 'پیام‌های تبلیغاتی',
   'web.c360_group': 'گروه کاربری',
@@ -2202,6 +2204,7 @@ export const WEB_FA = {
   'web.c360_action_location_set': 'تنظیم محدودیت تغییر لوکیشن',
   'web.c360_action_location_remove': 'حذف محدودیت اختصاصی لوکیشن',
   'web.c360_action_phone_verify': 'تأیید دستی شماره تلفن',
+  'web.c360_action_phone_self_verify': 'تأیید شماره توسط خود کاربر (ارسال مخاطب در ربات)',
   'web.c360_action_phone_revoke': 'لغو تأیید شماره تلفن',
   'web.c360_action_exempt': 'معافیت از عضویت کانال',
   'web.c360_action_unexempt': 'لغو معافیت عضویت کانال',
@@ -3102,6 +3105,10 @@ export const WEB_FA = {
   'web.payment_gateway_after_payments': 'فعال پس از این تعداد پرداخت موفق',
   'web.payment_gateway_until_payments': 'غیرفعال پس از این تعداد پرداخت موفق',
   'web.payment_gateway_after_days': 'فعال پس از این تعداد روز عضویت',
+  // R11 B7.
+  'web.payment_gateway_verified_phone_only': 'فقط برای شمارهٔ تأییدشده',
+  'web.payment_gateway_verified_phone_only_hint':
+    'این درگاه فقط به کاربرانی نشان داده می‌شود که شماره تلفن خود را تأیید کرده‌اند. فقط وقتی «تأیید شماره تلفن کاربران» در صفحهٔ امکانات روشن است اعمال می‌شود؛ خاموش باشد، نادیده گرفته می‌شود.',
   'web.payment_gateway_updated': 'آخرین تغییر',
   'web.payment_gateway_actions': 'عملیات',
   'web.payment_gateway_edit': 'ویرایش',

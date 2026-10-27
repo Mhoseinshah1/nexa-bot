@@ -21,6 +21,7 @@ import type { ChannelMembershipService } from '../../../modules/commerce/custome
 import type { StartCaptchaService } from '../../../modules/commerce/customers/application/start-captcha.service.js';
 import type { TermsAcceptanceService } from '../../../modules/control/terms/application/terms-acceptance.service.js';
 import type { CustomerService } from '../../../modules/commerce/customers/application/customer.service.js';
+import type { PhoneVerificationService } from '../../../modules/commerce/customers/application/phone-verification.service.js';
 import type { PaymentDestinationRenderer } from '../../../modules/commerce/payments/infrastructure/destination-renderer.js';
 import type { CardSwitchService } from '../../../modules/commerce/payments/application/card-switch.service.js';
 import type { ReceiptService } from '../../../modules/commerce/payments/application/receipt.service.js';
@@ -157,6 +158,12 @@ export interface BotRuntimeDeps {
     readonly error: (context: Record<string, unknown>, message: string) => void;
   };
   readonly customers: CustomerService;
+  /**
+   * R11 B7: phone verification by the customer's own Telegram contact. Optional for the
+   * fixtures that build a runtime without it: absent, no verify button is drawn and a
+   * contact or a stale button is answered as «not available», exactly as with the flag off.
+   */
+  readonly phoneVerification?: Pick<PhoneVerificationService, 'enabled' | 'verifyOwnContact'>;
   readonly messenger: CustomerMessenger;
   readonly products: ProductService;
   readonly commercial: CommercialActionService;

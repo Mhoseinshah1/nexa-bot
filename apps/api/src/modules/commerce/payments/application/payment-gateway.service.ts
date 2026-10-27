@@ -48,6 +48,9 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import {
   accountAgeInDays,
   evaluateGatewayEligibility,
+  PHONE_VERIFICATION_FLAG,
+  phoneRuleRefuses,
+  phoneStandingOf,
   type GatewayAudience,
   type GatewayEligibility,
 } from '../domain/gateway-eligibility.js';
@@ -136,7 +139,11 @@ export interface PaymentGatewayServiceDeps {
    * supply it; absent is read as "off" for that one gate, never as "on".
    */
   readonly features?: {
-    isEnabled(scope: TenantContext, key: 'central_fx', tx?: unknown): Promise<boolean>;
+    isEnabled(
+      scope: TenantContext,
+      key: 'central_fx' | typeof PHONE_VERIFICATION_FLAG,
+      tx?: unknown,
+    ): Promise<boolean>;
   };
   /**
    * Round 10 C1: whether the installation's URL policy (`checkUrl`, the one every panel and
@@ -939,6 +946,10 @@ export class PaymentGatewayService {
       // edit, and a key reused for it must not replay the edit that left it on.
       allowServicePurchase: input.config.allowServicePurchase,
       allowWalletTopup: input.config.allowWalletTopup,
+      // R11 B7: the verified-phone switch, on the same terms as the purpose switches.
+      ...(input.config.requiresVerifiedPhone === undefined
+        ? {}
+        : { requiresVerifiedPhone: input.config.requiresVerifiedPhone }),
     });
     const replayed = await this.replay(scope, input.idempotencyKey, requestHash);
     if (replayed !== null) return replayed;
@@ -978,6 +989,9 @@ export class PaymentGatewayService {
             input.config.providerUnitRateMinor === undefined
               ? before.providerUnitRateMinor
               : input.config.providerUnitRateMinor,
+          // R11 B7: absent keeps the stored verified-phone switch.
+          requiresVerifiedPhone:
+            input.config.requiresVerifiedPhone ?? before.requiresVerifiedPhone ?? false,
         };
         /*
          * A conversion rate exists only on a `FIXED_RATE` route (Package A). Anywhere else
@@ -1306,6 +1320,55 @@ export class PaymentGatewayService {
   }
 
   /**
+   * R11 B7: whether verifying their phone number would offer this customer a route for this
+   * purpose (and amount, when given) that they are not offered now. False while
+   * `phone_verification` is off or the customer is verified. The question the bot asks to
+   * decide whether a payment screen carries «تأیید شماره تلفن»; the SAME evaluation as
+   * `routesFor`, once as the customer stands and once as if verified.
+   */
+  async phoneVerificationUnlocks(
+    scope: TenantContext,
+    customerId: UserId,
+    purpose: PaymentPurpose,
+    amount: Money | null,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const { audience, routes } = await this.evaluateRoutes(scope, customerId, purpose, amount, tx);
+    if (audience.phone !== 'UNVERIFIED') return false;
+    const offered = new Set(routes.map((route) => route.provider));
+    const { routes: ifVerified } = await this.evaluateRoutes(
+      scope,
+      customerId,
+      purpose,
+      amount,
+      tx,
+      (actual) => ({ ...actual, phone: 'VERIFIED' }),
+    );
+    return ifVerified.some((route) => !offered.has(route.provider));
+  }
+
+  /**
+   * R11 B7: whether THIS route's verified-phone rule refuses this customer now — the route
+   * requires a verified number, `phone_verification` is on, and theirs is not verified.
+   *
+   * Asked by a path that has already chosen the route and been refused it, to tell the
+   * customer the one thing they can do about it (`PHONE_VERIFICATION_REQUIRED`) rather than
+   * "not offered"; and by the ORDER card-to-card path, which applies no customer threshold
+   * (`OQ-5C-01`) but does apply this rule. The predicate is the evaluator's own
+   * (`phoneRuleRefuses`), so the two cannot disagree.
+   */
+  async phoneVerificationRequired(
+    scope: TenantContext,
+    customerId: UserId,
+    provider: PaymentGatewayProvider,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const gateway = await this.deps.repository.find(scope, provider, tx);
+    if (gateway === null || gateway.requiresVerifiedPhone !== true) return false;
+    return phoneRuleRefuses(gateway, await this.phoneStanding(scope, customerId, tx));
+  }
+
+  /**
    * The route a customer's TOP-UP of this amount should be issued against.
    *
    * `routesFor(WALLET_TOPUP)`'s first answer, with the refusals a caller that needs
@@ -1365,6 +1428,25 @@ export class PaymentGatewayService {
      */
     const eligible = routes.find((route) => route.descriptor.settlesVia === 'MANUAL_TRANSFER');
     if (eligible === undefined) {
+      /*
+       * R11 B7: a transfer route held back ONLY by its verified-phone rule (every threshold
+       * before it passed) is answered with the one step the customer can take.
+       */
+      const phoneHeld = gateways.some(
+        (gateway) =>
+          PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].settlesVia === 'MANUAL_TRANSFER' &&
+          allowsPurpose(gateway, 'WALLET_TOPUP') &&
+          (() => {
+            const verdict = evaluateGatewayEligibility(gateway.status, gateway, audience);
+            return !verdict.eligible && verdict.reason === 'PHONE_NOT_VERIFIED';
+          })(),
+      );
+      if (phoneHeld) {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED,
+          'This payment route is offered only to customers with a verified phone number.',
+        );
+      }
       /*
        * The reasons go to the DETAIL, not to the message. An operator reading the
        * operational log needs to know it was `TOO_FEW_PAYMENTS` on every route; the
@@ -1516,13 +1598,20 @@ export class PaymentGatewayService {
     purpose: PaymentPurpose,
     amount: Money | null,
     tx?: unknown,
+    /*
+     * R11 B7: the audience to decide for, when it is not this customer's as it stands —
+     * `phoneVerificationUnlocks` asks the same question of the same customer as if their
+     * number were verified. Everything else is decided exactly as for the customer.
+     */
+    as?: (audience: GatewayAudience) => GatewayAudience,
   ): Promise<{
     readonly gateways: readonly PaymentGatewayRecord[];
     readonly audience: GatewayAudience;
     readonly routes: readonly OfferedRoute[];
   }> {
     const gateways = await this.deps.repository.list(scope, tx);
-    const audience = await this.audienceFor(scope, customerId, tx);
+    const actual = await this.audienceFor(scope, customerId, tx);
+    const audience = as === undefined ? actual : as(actual);
     const blockersOf = await this.offerability(scope, gateways, purpose, tx);
     const routes = gateways
       .filter(
@@ -1641,10 +1730,15 @@ export class PaymentGatewayService {
     return typeof text === 'string' ? parseUnitRatio(text) : null;
   }
 
-  private async audienceFor(scope: TenantContext, customerId: UserId, tx?: unknown) {
-    const [confirmedPayments, firstSeenAt] = await Promise.all([
+  private async audienceFor(
+    scope: TenantContext,
+    customerId: UserId,
+    tx?: unknown,
+  ): Promise<GatewayAudience> {
+    const [confirmedPayments, firstSeenAt, phone] = await Promise.all([
       this.deps.audience.confirmedPaymentCount(scope, customerId, tx),
       this.deps.audience.firstSeenAt(scope, customerId, tx),
+      this.phoneStanding(scope, customerId, tx),
     ]);
     /*
      * A customer this tenant does not have gets an age of ZERO, not an exception.
@@ -1658,7 +1752,22 @@ export class PaymentGatewayService {
       confirmedPayments,
       accountAgeDays:
         firstSeenAt === null ? 0 : accountAgeInDays(firstSeenAt, this.deps.clock.now()),
+      phone,
     };
+  }
+
+  /**
+   * R11 B7: the customer's standing under the verified-phone rule. `NOT_ENFORCED` while
+   * `phone_verification` is off — the decision recorded in the PR: off, every route's
+   * phone rule is treated as not configured, so switching the feature off can never hide
+   * a route from anybody. With no feature resolver wired it is off too.
+   */
+  private async phoneStanding(scope: TenantContext, customerId: UserId, tx?: unknown) {
+    const enforced =
+      this.deps.features !== undefined &&
+      (await this.deps.features.isEnabled(scope, PHONE_VERIFICATION_FLAG, tx));
+    if (!enforced) return phoneStandingOf(false, false);
+    return phoneStandingOf(true, await this.deps.audience.phoneVerified(scope, customerId, tx));
   }
 
   private async require(
@@ -1816,6 +1925,7 @@ function auditView(gateway: PaymentGatewayRecord): Record<string, unknown> {
     providerUnitRateMinor: gateway.providerUnitRateMinor?.toString() ?? null,
     allowServicePurchase: gateway.allowServicePurchase,
     allowWalletTopup: gateway.allowWalletTopup,
+    requiresVerifiedPhone: gateway.requiresVerifiedPhone ?? false,
   };
 }
 

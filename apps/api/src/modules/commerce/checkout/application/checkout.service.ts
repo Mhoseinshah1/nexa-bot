@@ -75,6 +75,19 @@ export interface CheckoutDeps {
       purpose: PaymentPurpose,
       amount: Money | null,
     ): Promise<readonly TopupRoute[]>;
+    /** R11 B7: whether this route's verified-phone rule refuses the customer now. */
+    phoneVerificationRequired(
+      scope: TenantContext,
+      customerId: UserId,
+      provider: PaymentGatewayProvider,
+    ): Promise<boolean>;
+    /** R11 B7: whether verifying their number would offer them a route they lack now. */
+    phoneVerificationUnlocks(
+      scope: TenantContext,
+      customerId: UserId,
+      purpose: PaymentPurpose,
+      amount: Money | null,
+    ): Promise<boolean>;
   };
   readonly payments: {
     manualTransferOffered(scope: TenantContext, purpose?: PaymentPurpose): Promise<boolean>;
@@ -218,7 +231,7 @@ export class CheckoutService {
     total: Money,
   ): Promise<readonly CheckoutRoute[]> {
     const routes = await this.deps.routes.routesFor(scope, customerId, 'SERVICE_PURCHASE', total);
-    const manualOffered = await this.deps.payments.manualTransferOffered(scope);
+    const manualOffered = await this.manualOfferedTo(scope, customerId);
     const offered: CheckoutRoute[] = [];
     let manualDrawn = false;
     for (const route of routes) {
@@ -258,6 +271,42 @@ export class CheckoutService {
       });
     }
     return offered;
+  }
+
+  /**
+   * Card-to-card for an ORDER, for this customer: `manualTransferOffered` (status, purpose,
+   * an enabled account) and — R11 B7 — the route's verified-phone rule, the one per-customer
+   * rule an order's transfer applies (`requestManualTransfer` refuses it again).
+   */
+  private async manualOfferedTo(scope: TenantContext, customerId: UserId): Promise<boolean> {
+    if (!(await this.deps.payments.manualTransferOffered(scope))) return false;
+    return !(await this.deps.routes.phoneVerificationRequired(
+      scope,
+      customerId,
+      'MANUAL_TRANSFER',
+    ));
+  }
+
+  /**
+   * R11 B7: whether a payment screen for this purpose should offer «تأیید شماره تلفن» —
+   * verifying would offer a route this customer is not offered now (for an order, a
+   * gateway route or the card-to-card its verified-phone rule holds back). False while
+   * `phone_verification` is off or the customer is verified.
+   */
+  async phoneVerificationOffered(
+    scope: TenantContext,
+    customerId: UserId,
+    purpose: PaymentPurpose,
+    amount: Money | null,
+  ): Promise<boolean> {
+    if (await this.deps.routes.phoneVerificationUnlocks(scope, customerId, purpose, amount)) {
+      return true;
+    }
+    if (purpose !== 'SERVICE_PURCHASE') return false;
+    return (
+      (await this.deps.payments.manualTransferOffered(scope)) &&
+      (await this.deps.routes.phoneVerificationRequired(scope, customerId, 'MANUAL_TRANSFER'))
+    );
   }
 
   /** A top-up's routes, in the order given, each with its name and its gift percent. */
@@ -354,7 +403,16 @@ export class CheckoutService {
     provider: PaymentGatewayProvider | null,
   ): Promise<GatewayPayment> {
     const route = await this.gatewayRouteFor(scope, customerId, order.totals.total, provider);
-    if (route === null) return { outcome: 'NOT_OFFERED' };
+    if (route === null) {
+      // R11 B7: the tapped route held back by its verified-phone rule, said as that.
+      if (
+        provider !== null &&
+        (await this.deps.routes.phoneVerificationRequired(scope, customerId, provider))
+      ) {
+        throw phoneVerificationRequired();
+      }
+      return { outcome: 'NOT_OFFERED' };
+    }
     if (order.state === 'DRAFT') {
       await this.confirmDraft(scope, actor, customerId, order, idempotencyKey);
     }
@@ -393,6 +451,10 @@ export class CheckoutService {
           'Card to card is not offered for this order.',
         );
       }
+      // R11 B7: before the confirm too, so a refused transfer holds no reservation.
+      if (await this.deps.routes.phoneVerificationRequired(scope, customerId, 'MANUAL_TRANSFER')) {
+        throw phoneVerificationRequired();
+      }
       await this.confirmDraft(scope, actor, customerId, order, idempotencyKey);
     }
     return this.deps.payments.requestManualTransfer(scope, actor, customerId, {
@@ -400,4 +462,12 @@ export class CheckoutService {
       orderId: order.id,
     });
   }
+}
+
+/** R11 B7: the refusal of a route held back by its verified-phone rule. */
+function phoneVerificationRequired() {
+  return errors.conflict(
+    COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED,
+    'This payment route is offered only to customers with a verified phone number.',
+  );
 }

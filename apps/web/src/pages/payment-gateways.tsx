@@ -144,6 +144,8 @@ const EMPTY_FORM = {
    */
   allowServicePurchase: true,
   allowWalletTopup: true,
+  /** R11 B7: offered only to customers with a verified phone number. Off by default. */
+  requiresVerifiedPhone: false,
 };
 
 type FormState = typeof EMPTY_FORM;
@@ -164,6 +166,7 @@ function formOf(gateway: PaymentGatewayView): FormState {
     providerUnitRate: gateway.conversion.rateMinor ?? '',
     allowServicePurchase: gateway.allowServicePurchase,
     allowWalletTopup: gateway.allowWalletTopup,
+    requiresVerifiedPhone: gateway.requiresVerifiedPhone,
   };
 }
 
@@ -497,6 +500,8 @@ export function PaymentGatewaysPage({
          */
         allowServicePurchase: form.allowServicePurchase,
         allowWalletTopup: form.allowWalletTopup,
+        // R11 B7: always sent as shown, for the reason the two switches above are.
+        requiresVerifiedPhone: form.requiresVerifiedPhone,
       };
       /*
        * The key is bound to the whole payload AND to which route is being written, so
@@ -849,6 +854,8 @@ export function PaymentGatewaysPage({
           row.eligibility.activateAfterAccountDays > 0
             ? `${t('web.payment_gateway_after_days')}: ${row.eligibility.activateAfterAccountDays}`
             : null,
+          // R11 B7.
+          row.requiresVerifiedPhone ? t('web.payment_gateway_verified_phone_only') : null,
         ].filter((part): part is string => part !== null);
         // One threshold a line, as the demo stacks them.
         return parts.length === 0 ? (
@@ -1465,6 +1472,13 @@ export function PaymentGatewaysPage({
                     />
                   </Field>
                 </div>
+                {/* R11 B7: applied only while «تأیید شماره تلفن کاربران» is on (the hint says so). */}
+                <ToggleRow
+                  title={t('web.payment_gateway_verified_phone_only')}
+                  description={t('web.payment_gateway_verified_phone_only_hint')}
+                  checked={form.requiresVerifiedPhone}
+                  onChange={(next) => setForm({ ...form, requiresVerifiedPhone: next })}
+                />
               </div>
 
               <div className="form-section">

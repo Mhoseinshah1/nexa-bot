@@ -507,6 +507,11 @@ export interface TelegramReplyKeyboardButton {
   readonly text: string;
   readonly style?: TelegramKeyboardButtonStyle;
   readonly iconCustomEmojiId?: string;
+  /**
+   * R11 B7: Telegram's `request_contact` — a tap sends the user's OWN contact (with
+   * `user_id` set to their id), never text. Only the phone-verification keyboard sets it.
+   */
+  readonly requestContact?: true;
 }
 
 /**
@@ -530,6 +535,7 @@ export function replyKeyboardButtonMarkup(
   if (button.iconCustomEmojiId !== undefined && button.iconCustomEmojiId !== '') {
     cell.icon_custom_emoji_id = button.iconCustomEmojiId;
   }
+  if (button.requestContact === true) cell.request_contact = true;
   return cell;
 }
 

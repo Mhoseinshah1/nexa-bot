@@ -200,7 +200,7 @@ export interface CustomerMessage {
    * Mutually exclusive with `buttons` in practice rather than by type: no reply carries
    * both today, and Telegram's `reply_markup` holds one or the other.
    */
-  readonly keyboard?: MainMenuVariant;
+  readonly keyboard?: CustomerReplyKeyboard;
   /**
    * Round N (F1): send this as a REPLY to one message of the same chat — the complete
    * receipt-review record under the review message whose caption could not hold it. Only the
@@ -226,6 +226,14 @@ export interface CustomerMessage {
  * permission server-side; this only decides what a person can see.
  */
 export type MainMenuVariant = 'MAIN_MENU' | 'MAIN_MENU_ADMIN';
+
+/**
+ * Every persistent keyboard a reply may set: a main-menu variant, or (R11 B7)
+ * `PHONE_REQUEST` — Telegram's contact button («📞 ارسال شمارهٔ من», `request_contact`) over
+ * the cancel label that brings the main menu back. Both labels come from the SHARED
+ * catalogue, like the management panel's row: the cancel label is routed by its text.
+ */
+export type CustomerReplyKeyboard = MainMenuVariant | 'PHONE_REQUEST';
 
 /**
  * A file this installation already holds, sent on to somebody who may see it.

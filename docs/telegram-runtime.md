@@ -51,6 +51,7 @@ exports are re-exported from it, because tests and `container.ts` import them fr
 | `tutorial-flow.ts`         | Tutorials and client-app screens.                                                                                       |
 | `support-flow.ts`          | Support screen and tickets.                                                                                             |
 | `custom-button-flow.ts`    | A tap on an owner-defined main-menu button: link, text, photo, document, or "unavailable" (R10 D2, ADR-0036).           |
+| `phone-verify-flow.ts`     | R11 B7: «تأیید شماره تلفن» (`pv:`), the contact keyboard, a shared contact, the cancel label (`/phone_cancel`).         |
 | `admin-common.ts`          | The management panel's shared prefixes and section check.                                                               |
 | `admin-flow.ts`            | `adminTurn`, `adminCaptureText`: the management panel's switch.                                                         |
 | `admin-review-flow.ts`     | Receipt and refund-request review, approve, reject, credit.                                                             |

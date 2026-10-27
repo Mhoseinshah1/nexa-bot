@@ -126,6 +126,8 @@ const ERROR_TEXT: Readonly<Record<string, MiniAppKey>> = {
   // Round 10, D1: one Persian sentence for both automatic-renewal refusals.
   'commerce.auto_renew_disabled': 'miniapp.auto_renew_unavailable',
   'commerce.auto_renew_not_available': 'miniapp.auto_renew_unavailable',
+  // R11 B7.
+  'commerce.phone_verification_required': 'miniapp.phone_verification_required',
 };
 
 export function errorText(error: unknown): string {

@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Inject, Param, Post, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import {
+  maskPhoneNumber,
   API_PREFIX,
   customerChannelExemptionRequestSchema,
   customerLocationOverrideRequestSchema,
@@ -384,7 +385,12 @@ function toOverview(overview: CustomerOverview): CustomerOverviewResponse {
     phone:
       customer.phoneNumber === null || customer.phoneVerifiedAt === null
         ? null
-        : { number: customer.phoneNumber, verifiedAt: customer.phoneVerifiedAt.toISOString() },
+        : {
+            // R11 B7: in full only to a holder of `users.phone.verify`; masked for the rest.
+            number: overview.phoneNumberVisible ? customer.phoneNumber : null,
+            masked: maskPhoneNumber(customer.phoneNumber),
+            verifiedAt: customer.phoneVerifiedAt.toISOString(),
+          },
     locationOverride:
       locationOverride === null
         ? null

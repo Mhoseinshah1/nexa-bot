@@ -63,6 +63,12 @@ export interface PaymentGatewayRecord {
   readonly allowServicePurchase: boolean;
   readonly allowWalletTopup: boolean;
   /**
+   * R11 B7: offered only to a customer with a verified phone number, and only while the
+   * `phone_verification` flag is on. Optional so a narrow test fake need not carry it;
+   * absent is false.
+   */
+  readonly requiresVerifiedPhone?: boolean;
+  /**
    * Round 6 item 6: until when the PROVIDER's own daily limit hides this route (TetraPay), or
    * null. Not `status`: the operator's switch is untouched, and the route returns by itself
    * when the instant passes. A route is not offered while this is after the clock.
@@ -84,6 +90,7 @@ export interface PaymentGatewayRecord {
 export type StoredGatewayConfig = PaymentGatewayConfig & {
   readonly customerFeeBasisPoints: number;
   readonly providerUnitRateMinor: bigint | null;
+  readonly requiresVerifiedPhone: boolean;
 };
 
 export interface PaymentGatewayRepository {
@@ -225,4 +232,12 @@ export interface GatewayAudienceReader {
    * rule means is what keeps them from diverging silently later.
    */
   firstSeenAt(scope: TenantContext, customerId: UserId, tx?: unknown): Promise<Date | null>;
+
+  /**
+   * R11 B7: whether this customer's phone number is verified (`phone_verified_at` is set),
+   * however it was — by an operator or by their own contact. False for a customer the
+   * tenant does not have, which is the conservative answer: a route that requires a
+   * verified number is refused to them.
+   */
+  phoneVerified(scope: TenantContext, customerId: UserId, tx?: unknown): Promise<boolean>;
 }

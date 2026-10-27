@@ -4,8 +4,10 @@ import {
   type ActorContext,
   type BotInstanceId,
   money,
+  type Money,
   type PaymentGatewayProvider,
   type TenantContext,
+  type UserId,
 } from '@nexa/contracts';
 import type { CustomerButton } from '../../../modules/commerce/messaging/application/ports.js';
 import type { CustomerRecord } from '../../../modules/commerce/customers/application/ports.js';
@@ -30,6 +32,7 @@ import { refusal } from './refusals.js';
 import type { PendingReply } from './replies.js';
 import { gatewayAttemptReply } from './checkout-flow.js';
 import { transferInstruction } from './card-receipt-flow.js';
+import { phoneUnlocksRoutes, phoneVerifyButton, phoneVerifyOffered } from './phone-verify-flow.js';
 import type { BotRuntime } from '../bot-runtime.js';
 
 /** The answer to a recorded (or refused) top-up amount: the route chooser, or why not. */
@@ -94,7 +97,10 @@ export async function topupAmountScreen(
       wizard: amountStep,
     };
   }
-  return topupChooser(rt, scope, captureId, result.routes);
+  return topupChooser(rt, scope, captureId, result.routes, {
+    customerId: result.capture.customerId,
+    amount: result.amount,
+  });
 }
 
 /**
@@ -107,17 +113,25 @@ export async function topupChooser(
   scope: TenantContext,
   captureId: string,
   routes: readonly TopupRoute[],
+  /** R11 B7: whose amount this is, to offer «تأیید شماره تلفن» when it would add a route. */
+  phone?: { readonly customerId: UserId; readonly amount: Money },
 ): Promise<PendingReply> {
   const close = {
     ...inlineLabel('list.close'),
     data: `${TOPUP_CLOSE_CALLBACK_PREFIX}${captureId}`,
   };
   const methods: WizardDirective = { kind: 'TOPUP', step: 'METHODS', subjectId: captureId };
+  const verify =
+    phone !== undefined &&
+    (await phoneUnlocksRoutes(rt, scope, phone.customerId, 'WALLET_TOPUP', phone.amount))
+      ? [phoneVerifyButton()]
+      : [];
   if (routes.length === 0) {
     return {
-      key: 'bot.wallet.topup_none_available',
+      // R11 B7: nothing offered, but a verified number would be: say so, with the button.
+      key: verify.length > 0 ? 'bot.payment.phone_required' : 'bot.wallet.topup_none_available',
       values: {},
-      buttons: [close],
+      buttons: [...verify, close],
       orderId: null,
       wizard: methods,
     };
@@ -132,7 +146,7 @@ export async function topupChooser(
       data: `${TOPUP_ROUTE_CALLBACK_PREFIX}${captureId}.${route.provider}`,
     });
   }
-  buttons.push(close);
+  buttons.push(...verify, close);
   return {
     key: 'bot.wallet.topup_method_prompt',
     values: {},
@@ -160,7 +174,10 @@ export async function topupRoute(
       return { key: 'bot.wallet.topup_expired', values: {}, buttons: [], orderId: null };
     }
     if (chosen.outcome === 'NOT_OFFERED') {
-      return topupChooser(rt, scope, captureId, chosen.routes);
+      return topupChooser(rt, scope, captureId, chosen.routes, {
+        customerId: customer.id,
+        amount: chosen.amount,
+      });
     }
     if (chosen.outcome === 'GATEWAY_REQUESTED') {
       return await gatewayAttemptReply(rt, chosen.attempt, null, scope);
@@ -250,6 +267,8 @@ export async function walletBalance(
           ]
         : []),
       ...(giftCards ? [{ ...inlineLabel('wallet.gift_card'), data: GIFT_CARD_CALLBACK_DATA }] : []),
+      // R11 B7: «تأیید شماره تلفن» while the feature is on and the number is not verified.
+      ...((await phoneVerifyOffered(rt, scope, customer)) ? [phoneVerifyButton()] : []),
       mainMenuButton(),
     ],
     orderId: null,
@@ -275,6 +294,15 @@ export async function topupBegin(
 ): Promise<PendingReply> {
   const offered = await rt.deps.routes.routesFor(scope, customer.id, 'WALLET_TOPUP', null);
   if (offered.length === 0) {
+    // R11 B7: no route now, but a verified number would open one — say so, with the button.
+    if (await phoneUnlocksRoutes(rt, scope, customer.id, 'WALLET_TOPUP', null)) {
+      return {
+        key: 'bot.payment.phone_required',
+        values: {},
+        buttons: [phoneVerifyButton(), mainMenuButton()],
+        orderId: null,
+      };
+    }
     return {
       key: 'bot.wallet.topup_unavailable',
       values: {},

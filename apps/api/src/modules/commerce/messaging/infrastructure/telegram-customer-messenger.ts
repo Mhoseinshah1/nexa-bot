@@ -578,7 +578,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * gated one without its flag or trial offer read would be a promise nobody checked.
      */
     const customerRows: readonly (readonly MainMenuKeyboardButton[])[] | undefined =
-      message.keyboard === undefined
+      message.keyboard === undefined || message.keyboard === 'PHONE_REQUEST'
         ? undefined
         : this.menu !== undefined
           ? // R10 D2: the SENDING bot decides which custom buttons it draws.
@@ -607,9 +607,22 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
         ? [...rows, [{ text: CATALOGUE_FA[ADMIN_MENU_BUTTON.label] }]]
         : rows;
     // The admin row is unstyled and carries no icon, in both versions.
-    const keyboard = iconKeyboard === undefined ? undefined : withAdminRow(iconKeyboard);
+    /*
+     * R11 B7: the phone prompt's keyboard — Telegram's contact button over the cancel label,
+     * both from the shared catalogue, no style and no icon (so the plain retry is the same).
+     */
+    const phoneRows: TelegramReplyKeyboardButton[][] | undefined =
+      message.keyboard === 'PHONE_REQUEST'
+        ? [
+            [{ text: CATALOGUE_FA['bot.phone.share_button'], requestContact: true }],
+            [{ text: CATALOGUE_FA['bot.phone.cancel_button'] }],
+          ]
+        : undefined;
+    const keyboard =
+      phoneRows ?? (iconKeyboard === undefined ? undefined : withAdminRow(iconKeyboard));
     const plainKeyboard =
-      iconKeyboard === undefined ? undefined : withAdminRow(withoutKeyboardIcons(iconKeyboard));
+      phoneRows ??
+      (iconKeyboard === undefined ? undefined : withAdminRow(withoutKeyboardIcons(iconKeyboard)));
     /*
      * Only a keyboard that REACHES the wire counts: `textMessageBody` gives inline buttons
      * precedence and drops the reply keyboard, so with inline buttons no icon is sent, and

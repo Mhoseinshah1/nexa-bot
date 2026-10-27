@@ -130,12 +130,13 @@ export function GeneralInfoCard({
             overview === undefined ? (
               <Dash key="p" />
             ) : overview.phone === null ? (
-              <span key="p" className="muted">
-                {t('web.c360_phone_none')}
-              </span>
+              <Badge key="p" tone="neutral">
+                {t('web.c360_phone_not_verified')}
+              </Badge>
             ) : (
               <span key="p">
-                <Ltr>{overview.phone.number}</Ltr>{' '}
+                {/* R11 B7: masked here; the full number only in the controls, to its editors. */}
+                <Ltr>{overview.phone.masked}</Ltr>{' '}
                 <Badge tone="ok">{t('web.c360_phone_verified')}</Badge>
               </span>
             ),
@@ -418,7 +419,12 @@ export function CustomerControlsCard({
             ),
             row(
               t('web.c360_phone'),
-              verified === null ? t('web.c360_phone_none') : <Ltr>{verified.number}</Ltr>,
+              verified === null ? (
+                t('web.c360_phone_none')
+              ) : (
+                // R11 B7: the full number to a holder of `users.phone.verify`, masked otherwise.
+                <Ltr>{verified.number ?? verified.masked}</Ltr>
+              ),
               verified === null
                 ? { label: t('web.c360_phone_verify_action'), kind: 'PHONE' }
                 : { label: t('web.c360_phone_revoke_action'), kind: 'UNPHONE' },
@@ -737,6 +743,8 @@ const ACTION_LABELS: Readonly<Record<string, WebKey>> = {
   'customer.location_override.set': 'web.c360_action_location_set',
   'customer.location_override.remove': 'web.c360_action_location_remove',
   'customer.phone.verify': 'web.c360_action_phone_verify',
+  // R11 B7: the customer verified their own number by sharing their Telegram contact.
+  'customer.phone.self_verify': 'web.c360_action_phone_self_verify',
   'customer.phone.revoke': 'web.c360_action_phone_revoke',
   'customer.channel_exemption.grant': 'web.c360_action_exempt',
   'customer.channel_exemption.revoke': 'web.c360_action_unexempt',

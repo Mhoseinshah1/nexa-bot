@@ -4702,3 +4702,21 @@ live; the owner decides otherwise.
   idempotency row (a redelivery is ignored again); `tests/unit/telegram-unknown-update-kinds.test.ts`
   pins this. If bot subscriptions become a product feature, the update needs its own route,
   its own contract and an owner decision about what it moves.
+
+## Round 11 B7 — phone verification by the customer's own contact
+
+- **OQ-R11-B7-01 — an allowed-prefix list per route (e.g. only `+98`) was NOT built.** The brief
+  made it optional "if it falls out naturally"; it does not: it needs a column, a validated list
+  on the route form, a second refusal reason and its own copy. A route's verified-phone switch
+  is the whole rule today. To add it: a `text[]` on `payment_gateways`, a `PHONE_PREFIX_REFUSED`
+  ineligibility reason after `PHONE_NOT_VERIFIED`, evaluated by the same `phoneRuleRefuses`.
+- **OQ-R11-B7-02 — the Mini App draws no «تأیید شماره تلفن».** Verification needs Telegram's
+  contact button, which only the bot's chat has. The Mini App inherits the route rule (its lists
+  are `CheckoutService`'s) and answers a refused route in Persian, pointing to the bot. If the
+  owner wants the Mini App to start the flow, `WebApp.requestContact` is the candidate; its
+  answer would need the same own-account check server-side.
+- **OQ-R11-B7-03 — the operations log now masks every verified number.** The brief asked that
+  the number never appear in full in the ops logs; the masking is applied at the facts reader,
+  so an operator-verified number (R4 A6 showed it in full) is now `…1234` too. If the owner
+  wants operator-verified numbers in full again, that is a per-source decision the audit row
+  (`customer.phone.verify` vs `customer.phone.self_verify`) can support.

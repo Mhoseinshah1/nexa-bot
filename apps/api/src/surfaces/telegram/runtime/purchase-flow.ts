@@ -33,6 +33,7 @@ import {
 } from './callbacks.js';
 import { mainMenuButton } from './keyboards.js';
 import { refusal } from './refusals.js';
+import { phoneUnlocksRoutes } from './phone-verify-flow.js';
 import type { PendingReply } from './replies.js';
 import { payMethodsButton } from './payment-screens.js';
 import { awaitingPaymentReply, orderRouteButtons } from './checkout-flow.js';
@@ -510,7 +511,12 @@ export async function preinvoice(
   return {
     key: screen.key,
     values: screen.values,
-    buttons: preinvoiceButtons(order, routes.length > 0),
+    buttons: preinvoiceButtons(
+      order,
+      routes.length > 0 ||
+        // R11 B7: the selector also carries «تأیید شماره تلفن» when that would add a route.
+        (await phoneUnlocksRoutes(rt, scope, customer.id, 'SERVICE_PURCHASE', order.totals.total)),
+    ),
     orderId: order.id,
     wizard: { kind: 'ORDER', step: 'PREINVOICE', subjectId: order.id },
   };

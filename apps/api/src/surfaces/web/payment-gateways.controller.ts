@@ -140,6 +140,7 @@ export class PaymentGatewaysController {
       customerFeeBasisPoints: input.customerFeeBasisPoints,
       allowServicePurchase: input.allowServicePurchase,
       allowWalletTopup: input.allowWalletTopup,
+      requiresVerifiedPhone: input.requiresVerifiedPhone,
     });
     const gateway = await this.container.paymentGateways.configure(scope, actor, {
       idempotencyKey: input.idempotencyKey,
@@ -365,6 +366,7 @@ function toView(
     customerFeeBasisPoints: gateway.customerFeeBasisPoints,
     allowServicePurchase: gateway.allowServicePurchase,
     allowWalletTopup: gateway.allowWalletTopup,
+    requiresVerifiedPhone: gateway.requiresVerifiedPhone ?? false,
     credential: {
       required: PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].requiresCredentials,
       setAt: facts.credentialSetAt?.toISOString() ?? null,

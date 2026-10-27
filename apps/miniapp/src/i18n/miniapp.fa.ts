@@ -67,6 +67,9 @@ export const MINIAPP_FA = {
   'miniapp.auto_renew_confirm': 'تأیید: تمدید خودکار با مبلغ {price}',
   'miniapp.auto_renew_disable': 'لغو تمدید خودکار',
   'miniapp.auto_renew_unavailable': 'در حال حاضر تمدید خودکار برای این سرویس در دسترس نیست.',
+  // R11 B7: a route for verified numbers only; verification happens in the bot's chat.
+  'miniapp.phone_verification_required':
+    'این روش پرداخت فقط برای کاربرانی است که شماره تلفن خود را تأیید کرده‌اند. شماره را در ربات با دکمهٔ «📱 تأیید شماره تلفن» تأیید کنید.',
   'miniapp.services_title': 'سرویس‌های من',
 
   'miniapp.store_title': 'فروشگاه',

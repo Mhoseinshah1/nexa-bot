@@ -1,5 +1,6 @@
 import {
   EVENT_PAYLOAD_SCHEMAS,
+  maskPhoneNumber,
   money,
   paymentTrackingCode,
   toPersianDigits,
@@ -683,7 +684,8 @@ function who(customer: CustomerRecord | null, words: OpsLogWords): TemplateValue
           username: customer.username,
           firstName: customer.firstName,
           lastName: customer.lastName,
-          phone: customer.phoneNumber,
+          // R11 B7: masked, as every operations-log fact carries it.
+          phone: customer.phoneNumber === null ? null : maskPhoneNumber(customer.phoneNumber),
           source: customer.source,
           status: customer.status,
           blockedReason: customer.blockedReason,

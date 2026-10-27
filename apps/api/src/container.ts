@@ -346,6 +346,7 @@ import {
 } from './modules/control/templates/application/template-resolver.js';
 import { CustomerService } from './modules/commerce/customers/application/customer.service.js';
 import { CustomerControlService } from './modules/commerce/customers/application/customer-control.service.js';
+import { PhoneVerificationService } from './modules/commerce/customers/application/phone-verification.service.js';
 import { CustomerCrmService } from './modules/commerce/customers/application/customer-crm.service.js';
 import { DrizzleCustomerCrmRepository } from './modules/commerce/customers/infrastructure/drizzle-customer-crm.repository.js';
 import { CustomerInsightService } from './modules/commerce/customers/application/customer-insight.service.js';
@@ -584,6 +585,7 @@ import {
   receiptReviewButtons,
   refundRequestReviewButtons,
 } from './surfaces/telegram/bot-runtime.js';
+import { PHONE_VERIFY_CANCEL_COMMAND } from './surfaces/telegram/runtime/callbacks.js';
 import { DrizzleAdminAmountCaptureRepository } from './modules/commerce/payments/infrastructure/drizzle-admin-amount-capture.repository.js';
 import { DrizzleReceiptCreditRepository } from './modules/commerce/payments/infrastructure/drizzle-receipt-credit.repository.js';
 import { DrizzleRefundRepository } from './modules/commerce/payments/infrastructure/drizzle-refund.repository.js';
@@ -5196,6 +5198,20 @@ export function createContainer(
     clock,
     terms: termsAcceptanceService,
   });
+  // R11 B7: a customer verifies their OWN phone number by sharing their Telegram contact.
+  const phoneVerificationService = new PhoneVerificationService({
+    customers: customerRepository,
+    features: featureFlagResolver,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    outbox,
+    clock,
+  });
   const customerCrmService = new CustomerCrmService({
     crm: new DrizzleCustomerCrmRepository(database.db),
     customers: customerRepository,
@@ -8579,6 +8595,8 @@ export function createContainer(
       terms: termsAcceptanceService,
       // R10 D5 (a): the /start captcha, the first check of the gate chain.
       captcha: startCaptchaService,
+      // R11 B7: «تأیید شماره تلفن» and the contact the customer shares.
+      phoneVerification: phoneVerificationService,
       // WP11A: the external-gateway attempt's customer reads and the check tap.
       gateway: gatewayPayments,
       // TonPays Telegram: «📤 ارسال فیش واریزی» and «🔄 تعویض کارت» (database writes only).
@@ -8608,6 +8626,11 @@ export function createContainer(
          * binding and finds nothing for a customer who types the same words.
          */
         [CATALOGUE_FA[ADMIN_MENU_BUTTON.label], `/${ADMIN_MENU_COMMAND}`] as const,
+        /*
+         * R11 B7: the phone prompt's cancel label, for the same reason as the panel's: the
+         * contact keyboard draws it from this catalogue, and a tap arrives as TEXT.
+         */
+        [CATALOGUE_FA['bot.phone.cancel_button'], `/${PHONE_VERIFY_CANCEL_COMMAND}`] as const,
       ]),
       // R1: this tenant's own labels, matched BEFORE the shared ones above so a renamed
       // button routes under its new name — the same object the messenger draws from.

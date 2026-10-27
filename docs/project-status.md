@@ -8,6 +8,7 @@ This file was moved verbatim out of `CLAUDE.md` on 2026-10-24. It holds project 
 - [Owner-defined main-menu buttons (R10 D2)](#owner-defined-main-menu-buttons-r10-d2)
 - [Authentication and authorization](#authentication-and-authorization)
 - [Payments and gateways (TonPays)](#payments-and-gateways-tonpays)
+- [Phone verification (R11 B7)](#phone-verification-r11-b7)
 - [Providers and panels (Phase 3)](#providers-and-panels-phase-3)
 - [Pricing, referral and resellers](#pricing-referral-and-resellers)
 - [Money rules](#money-rules)
@@ -105,6 +106,30 @@ callback NEVER credits by itself (only the bridge's SIGNED inquiry answer, `PAID
 attempt's invoice id, reference and exact amount, approves); one per-route secret signs every
 direction with its own prefix; the base URL is https-only through the installation's URL policy,
 frozen on each attempt, and changed only while the route is DISABLED. The route ships DISABLED.
+
+## Phone verification (R11 B7)
+
+A customer may verify their OWN phone number in the bot by sharing their Telegram contact
+(«تأیید شماره تلفن»), and a payment route may require a verified number. Off by default
+(`phone_verification`, switched from the Web Admin's features page).
+
+- **Own number only.** The contact's `user_id` must be the Telegram id of the customer the
+  signed update resolved to; a contact naming nobody or somebody else, and ANY forwarded
+  contact, is refused (`commerce.phone_contact_not_own`) and nothing is stored. Stored as
+  E.164 in `customers.phone_number` with `phone_verified_at` from the Clock; the same number
+  again changes nothing, a new one replaces it. The audit row says how
+  (`customer.phone.self_verify` vs an operator's `customer.phone.verify`).
+- **One evaluator.** The route rule (`payment_gateways.requires_verified_phone`) is part of
+  `evaluateGatewayEligibility`, which the bot's menus, the checkout and the Mini App all reach
+  through `routesFor`; a route reached anyway is refused in its transaction with
+  `commerce.phone_verification_required`, which the bot answers with the verify button. Unlike
+  the payment-count and age thresholds (`OQ-5C-01`), the phone rule ALSO applies to an order's
+  card-to-card transfer.
+- **Flag off = rule not configured.** With `phone_verification` off every route's phone rule
+  is ignored, so switching the feature off never hides a route; stored numbers are kept.
+- **The number is never logged in full.** Audit rows, the operations log facts and the Customer
+  360 page (for an administrator without `users.phone.verify`) carry `maskPhoneNumber` (`…1234`).
+  Open: `OQ-R11-B7-01..03`.
 
 ## Providers and panels (Phase 3)
 

@@ -17,6 +17,7 @@ import {
   uuidV7Schema,
 } from '@nexa/contracts';
 import type { InboundReceiptFile } from '../../../modules/commerce/payments/application/receipt-ports.js';
+import type { SharedContact } from '../../../modules/commerce/customers/application/phone-verification.service.js';
 import { paymentIdOfTetrapayStart } from '../../../modules/commerce/payments/domain/tetrapay.js';
 import {
   CONNECTED_CALLBACK_PREFIX,
@@ -113,6 +114,8 @@ import {
   MARKETING_OPT_OUT_CALLBACK_DATA,
   MEMBERSHIP_CHECK_CALLBACK_DATA,
   ORDER_CALLBACK_PREFIX,
+  PHONE_VERIFY_CALLBACK_DATA,
+  PHONE_VERIFY_CANCEL_COMMAND,
   PAY_METHODS_CALLBACK_PREFIX,
   PAY_METHODS_CLOSE_CALLBACK_PREFIX,
   PAY_SENT_CALLBACK_PREFIX,
@@ -411,6 +414,10 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     }
     if (data === MAIN_MENU_CALLBACK_DATA) {
       return { intent: 'MAIN_MENU', targetId: null, callbackQueryId: id };
+    }
+    // R11 B7: «تأیید شماره تلفن». No id — the tapper is the subject.
+    if (data === PHONE_VERIFY_CALLBACK_DATA) {
+      return { intent: 'PHONE_VERIFY', targetId: null, callbackQueryId: id };
     }
     // Owner spec §2.2: the wallet-credit message's two next actions.
     if (data === WALLET_OPEN_CALLBACK_DATA) {
@@ -1203,6 +1210,15 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
    * of the two this installation accepts falls through to the text path and then to
    * `UNSUPPORTED`, exactly as it did before this existed.
    */
+  /*
+   * R11 B7: a CONTACT message — what the reply keyboard's contact button sends, or any
+   * contact the customer forwards or picks. Read as data only (number, the account it
+   * names, whether it was forwarded); whether it verifies anything is the service's call.
+   */
+  const contact = sharedContactOf((update as { message?: unknown } | null)?.message);
+  if (contact !== null) {
+    return { intent: 'PHONE_CONTACT', targetId: null, callbackQueryId: null, contact };
+  }
   const file = receiptFileOf((update as { message?: unknown } | null)?.message);
   if (file !== null) {
     return { intent: 'RECEIPT_UPLOAD', targetId: null, callbackQueryId: null, file };
@@ -1264,6 +1280,10 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
    * `setMyCommands` render, so the menu and the help cannot disagree.
    */
   if (command === '/help') return { intent: 'HELP', targetId: null, callbackQueryId: null };
+  // R11 B7: the phone prompt's «🔙 انصراف و بازگشت به منو», through the shared label map.
+  if (command === `/${PHONE_VERIFY_CANCEL_COMMAND}`) {
+    return { intent: 'PHONE_VERIFY_CANCEL', targetId: null, callbackQueryId: null };
+  }
   /*
    * `/paysupport` (Package A): Telegram requires a bot that sells for Stars to answer it.
    * It opens the same support screen the menu's support entry does — no new ticketing.
@@ -1425,6 +1445,46 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
 }
 
 const UNSUPPORTED: BotCommand = { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: null };
+
+/**
+ * R11 B7: the contact inside a message, or null when there is none.
+ *
+ * `contact.phone_number` is required by Telegram; a contact without one is not a contact.
+ * `contact.user_id` is the Telegram account the contact belongs to — set to the sender's
+ * own id when they share their own number with the contact button, absent for a number
+ * from an address book. Read as a safe integer and carried as its DECIMAL STRING, the
+ * form `customers.telegram_user_id` holds, so the comparison never rounds through a float.
+ *
+ * A forwarded message is marked whatever it carries: `forward_origin` (Bot API 7.0+) and
+ * the older `forward_from` / `forward_from_chat` / `forward_sender_name` / `forward_date`
+ * all count, because a client that sends either form must not get past the rule by
+ * picking the one that is not read.
+ */
+export function sharedContactOf(message: unknown): SharedContact | null {
+  if (typeof message !== 'object' || message === null) return null;
+  const record = message as Record<string, unknown>;
+  const contact = record['contact'];
+  if (typeof contact !== 'object' || contact === null) return null;
+  const fields = contact as Record<string, unknown>;
+  const phoneNumber = fields['phone_number'];
+  if (typeof phoneNumber !== 'string' || phoneNumber.trim() === '') return null;
+  const userId = fields['user_id'];
+  const forwarded = [
+    'forward_origin',
+    'forward_from',
+    'forward_from_chat',
+    'forward_sender_name',
+    'forward_date',
+  ].some((key) => record[key] !== undefined && record[key] !== null);
+  return {
+    phoneNumber: phoneNumber.slice(0, 64),
+    userId:
+      typeof userId === 'number' && Number.isSafeInteger(userId) && userId > 0
+        ? String(userId)
+        : null,
+    forwarded,
+  };
+}
 
 /**
  * The receipt inside a message, or null when there is not one.
