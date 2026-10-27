@@ -122,6 +122,7 @@ const OVERVIEW = {
     phone: { number: '+989121234567', verifiedAt: ago(60 * 24 * 20) },
     locationOverride: null,
     marketingOptOutAt: null,
+    personalDiscount: { percent: 0, setAt: null, enabled: false },
     terms: { available: false },
   },
 };

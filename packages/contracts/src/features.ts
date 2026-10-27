@@ -530,6 +530,21 @@ export const FEATURE_FLAGS = [
     configuredBy: ['miniapp.init_data_max_age_seconds', 'miniapp.session_ttl_minutes'],
   },
   {
+    key: 'personal_discount',
+    description:
+      'R10 D3: apply each customer\u2019s personal discount percent \u2014 set on the customer\u2019s ' +
+      'page \u2014 to purchases and renewals. The larger single discount wins: the order is ' +
+      'priced the ordinary way (reseller price, discount codes and automatic discounts) and ' +
+      'as the list price minus the personal percent, and the strictly lower total is charged; ' +
+      'the two are never combined. Never applied to a wallet top-up. Off by default: every ' +
+      'price is exactly what it was, and the percents stay stored. Turning it off refuses the ' +
+      'confirmation of a draft priced with a personal discount; the customer starts again.',
+    defaultEnabled: false,
+    // TENANT_WIDE: it changes what every customer with a percent is charged.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
+  {
     key: 'custom_menu_buttons',
     description:
       'R10 D2: owner-defined buttons on the customer main menu \u2014 a link that opens a URL, or ' +

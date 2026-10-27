@@ -764,12 +764,16 @@ describe('discounts reach the order, and confirmation keeps its word', () => {
   it('serialises first purchases through DIFFERENT rules on the customer’s first-purchase lock', async () => {
     /*
      * Two first-purchase rules, each scoped to its own product, so no rule row is shared
-     * and the rule locks serialise nothing. What makes the second confirmation see the
-     * first is the per-customer advisory lock — held here from outside, both
-     * confirmations proven waiting on it, then released.
+     * and the rule locks serialise nothing. The per-customer advisory lock is held here
+     * from outside and a confirmation is proven waiting on it, then released.
+     *
+     * Since Codex on PR #339 the confirmation takes the CUSTOMER row before the panel
+     * (`order -> customer -> panel`), so the second confirmation of the same customer now
+     * queues on that row, behind the first, rather than on the advisory lock beside it:
+     * the barrier is one advisory waiter plus a second blocked backend. Removing
+     * `lockFirstPurchase` still leaves no advisory waiter and fails this case.
      */
-    // Two PANELS as well: two orders on one panel already queue on its row lock
-    // before either reaches the first-purchase lock, which would prove nothing here.
+    // Two PANELS as well, so neither confirmation can be queued by a shared panel row.
     const panelA2 = ctx.container.ids.uuid();
     await ctx.container.database.db.execute(sql`
       INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
@@ -810,7 +814,8 @@ describe('discounts reach the order, and confirmation keeps its word', () => {
       while (
         (await count(
           sql`SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted AND locktype = 'advisory'`,
-        )) < 2
+        )) < 1 ||
+        (await count(sql`SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted`)) < 2
       ) {
         if (Date.now() > deadline) throw new Error('the confirmations never queued on the lock');
         await new Promise((resolve) => setTimeout(resolve, 25));

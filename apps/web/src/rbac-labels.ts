@@ -23,6 +23,7 @@ export const PERMISSION_LABELS: Readonly<Record<PermissionKey, WebKey>> = {
   'users.phone.verify': 'web.perm_users_phone_verify',
   'users.location.edit': 'web.perm_users_location_edit',
   'users.notifications.edit': 'web.perm_users_notifications_edit',
+  'users.discount.edit': 'web.perm_users_discount_edit',
   'users.transfer': 'web.perm_users_transfer',
   'users.tier.change': 'web.perm_users_tier_change',
   'users.wallet.credit': 'web.perm_users_wallet_credit',

@@ -679,6 +679,7 @@ import {
   type CustomerManualOrderRequest,
   type CustomerManualOrderResponse,
   type CustomerNotificationsRequest,
+  type CustomerPersonalDiscountRequest,
   type CustomerOverviewResponse,
   type CustomerPhoneVerificationRequest,
   type CustomerServicesToggleRequest,
@@ -5105,6 +5106,14 @@ export function setCustomerNotifications(
   body: CustomerNotificationsRequest,
 ): Promise<Customer360ControlResponse> {
   return post(CUSTOMER_360_ROUTES.notifications(id), body, customer360ControlResponseSchema);
+}
+
+/** R10 D3: a customer's personal discount percent (`users.discount.edit`). */
+export function setCustomerPersonalDiscount(
+  id: string,
+  body: CustomerPersonalDiscountRequest,
+): Promise<Customer360ControlResponse> {
+  return post(CUSTOMER_360_ROUTES.personalDiscount(id), body, customer360ControlResponseSchema);
 }
 
 export function toggleCustomerServices(

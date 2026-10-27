@@ -259,6 +259,13 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: null,
     confirmEnable: null,
   },
+  // R10 D3: off withdraws an offer (every price is the ordinary one again); nothing is lost.
+  personal_discount: {
+    title: 'web.feature_personal_discount_title',
+    summary: 'web.feature_personal_discount_summary',
+    disableEffect: null,
+    confirmEnable: null,
+  },
   // R10 C2: off refuses NEW custom panels only; existing ones keep operating, so nothing is
   // lost by switching it off and it does not ask first.
   custom_panel_provider: {

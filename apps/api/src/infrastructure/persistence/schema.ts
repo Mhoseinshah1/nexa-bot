@@ -3678,12 +3678,27 @@ export const customers = pgTable(
      * records a tap on a version of THIS bot's rules, and this is no such tap.
      */
     legacyTermsAcceptedAt: timestamptz('legacy_terms_accepted_at'),
+    /**
+     * R10 D3: the customer's personal discount, a whole percent 0–100 an operator sets on
+     * the customer's page (`users.discount.edit`); 0 is none. Applied by the pricing engine
+     * to purchases and renewals while the `personal_discount` flag is on, as the larger of
+     * it and the ordinary quote — never combined (`PERSONAL_DISCOUNT_STACKING`).
+     *
+     * Not a balance and not a counter: a standing term, like the other Customer 360
+     * controls on this row. There is no history table: the audit row holds each change's
+     * before and after, and every order's frozen quote holds what was applied to it.
+     * Written only by `CustomerControlService` through a conditional UPDATE.
+     */
+    personalDiscountPercent: integer('personal_discount_percent').notNull().default(0),
+    /** When an operator last CHANGED the percent; NULL while it has never been set. */
+    personalDiscountSetAt: timestamptz('personal_discount_set_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     ...recordSourceColumns(),
   },
   (table) => [
     ...recordSourceChecks('customers', table),
+    check('customers_personal_discount_check', sql`personal_discount_percent BETWEEN 0 AND 100`),
     /** The identity. Per tenant, so the same human may be a customer of two. */
     uniqueIndex('customers_tenant_telegram_key').on(table.tenantId, table.telegramUserId),
     /** The list's deterministic keyset: created_at then id, never a mutable column. */

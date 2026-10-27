@@ -82,6 +82,7 @@ export const MINIAPP_FA = {
   'miniapp.checkout_duration': 'مدت',
   'miniapp.checkout_subtotal': 'مبلغ',
   'miniapp.checkout_discount': 'تخفیف',
+  'miniapp.checkout_personal_discount': 'تخفیف شخصی شما ({percent}٪)',
   'miniapp.checkout_total': 'قابل پرداخت',
   'miniapp.checkout_cashback': 'کش‌بک به کیف پول، پس از تحویل',
   'miniapp.checkout_username': 'نام کاربری سرویس',
