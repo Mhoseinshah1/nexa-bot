@@ -71,6 +71,8 @@ export const OPERATIONAL_EVENT_MESSAGES_FA: Readonly<Record<string, string>> = {
   'settings.stored_value_valid': 'مقدار ذخیره‌شدهٔ تنظیم دوباره معتبر شد.',
   'job.loop_stalled': 'یک حلقهٔ پس‌زمینه پیشرفت نمی‌کند.',
   'job.loop_recovered': 'حلقهٔ پس‌زمینه دوباره پیشرفت می‌کند.',
+  'process.restart_storm': 'یکی از سرویس‌های ربات پی‌درپی کرش می‌کند و دوباره بالا می‌آید.',
+  'process.restart_storm_ended': 'سرویس دوباره پایدار شد و دیگر ری‌استارت نمی‌شود.',
   'order.refunded_undeliverable': 'سفارش قابل تحویل نبود و مبلغ آن به کیف پول برگشت.',
   'outbox.message_exhausted': 'یک پیام صف خروجی بارها ناموفق ماند و دیگر خودکار تکرار نمی‌شود.',
   'panel.probe.limited':
