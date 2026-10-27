@@ -417,7 +417,11 @@ describe('cutover-rehearse: the runbook against a disposable database', () => {
     expect(live).toMatch(/test/u); // a name the production-word rule alone would accept
     const before = await databases();
     const footprint = await liveFootprint();
-    await expect(rehearse(['--database', live])).rejects.toBeInstanceOf(TargetRefused);
+    // Refused by THIS rule, not only by "it already exists": a live database that had just
+    // been dropped and recreated would pass that one.
+    const refusal = rehearse(['--database', live]);
+    await expect(refusal).rejects.toBeInstanceOf(TargetRefused);
+    await expect(refusal).rejects.toThrow(/is the live database DATABASE_URL names/u);
     expect(await databases()).toEqual(before);
     expect(await liveFootprint()).toBe(footprint);
   });

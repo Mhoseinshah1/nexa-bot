@@ -76,6 +76,12 @@ Rollback: none needed.
 
 ## 0.5 Rehearsal reconciliation
 
+On the **test server**, the whole rehearsal is one command: `sudo botctl cutover rehearse`
+([`12-rehearsal.md`](12-rehearsal.md) R1) creates a disposable database, imports the package into
+it, prints this reconciliation together with the service and reseller-credit checks, and drops it.
+Its `rehearsal.txt` and exit code stand for `rehearsal-reconcile.txt` below. The isolated kit
+remains the way to rehearse on a machine with no installation:
+
 Run on the isolated rehearsal machine, **not** production. It reads the rehearsal database
 (its name carries `rehearsal`; the kit's database is `nexa_mirza_rehearsal`).
 
