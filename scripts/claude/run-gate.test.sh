@@ -221,6 +221,25 @@ bash "$gate" --max-wait 1 --raw true >"$root/o" 2>&1; rc=$?
 check "exit 75 while a hold blocks" "$r" "rc=$rc $(cat "$root/o")"
 bash "$gate" --release lead >/dev/null
 
+# --- a TERMed gate stops the whole command tree before it frees its locks
+newgate tree
+cat >"$root/tree.sh" <<'TREE'
+#!/usr/bin/env bash
+# a grandchild that would keep using the database after a cancel
+bash -c 'touch "$1/started.gc"; while :; do sleep 0.05; done' gc "$1" &
+wait
+TREE
+bash "$gate" --integration --raw bash "$root/tree.sh" "$W" >/dev/null 2>&1 &
+tree_gate=$!
+waitfor 5 started gc
+kill -TERM "$tree_gate"; { wait "$tree_gate"; } 2>/dev/null
+[ -z "$(pgrep -f "$W" 2>/dev/null)" ] && r2=0 || r2=1
+check "a TERMed gate leaves no grandchild of the command running" "$r2" "$(pgrep -af "$W")"
+bash "$gate" --integration --max-wait 3 --raw true >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] && r=0 || r=1
+check "...and only then frees the integration lock" "$r" "rc=$rc"
+pkill -9 -f "$W" 2>/dev/null || true
+
 # --- usage errors
 newgate usage
 bash "$gate" >/dev/null 2>&1; rc=$?
@@ -229,6 +248,12 @@ check "no command: exit 2" "$r" "rc=$rc"
 bash "$gate" --hold 'bad name' >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 2 ] && r=0 || r=1
 check "a hold name with a space is refused" "$r" "rc=$rc"
+bash "$gate" --hold .lead >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 2 ] && [ -z "$(find "$NEXA_GATE_DIR" -name '.lead*' 2>/dev/null)" ] && r=0 || r=1
+check "a hold name with a leading dot is refused (its marker would be invisible)" "$r" "rc=$rc"
+NEXA_GATE_PRIORITY=.lead bash "$gate" --raw true >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 2 ] && r=0 || r=1
+check "NEXA_GATE_PRIORITY with a leading dot is refused" "$r" "rc=$rc"
 bash "$gate" --max-wait x true >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 2 ] && r=0 || r=1
 check "--max-wait must be a number" "$r" "rc=$rc"

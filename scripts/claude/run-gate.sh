@@ -61,7 +61,9 @@ command -v flock >/dev/null 2>&1 || die "flock(1) is required (util-linux)"
 case "$SLOTS" in '' | *[!0-9]*) die "NEXA_GATE_SLOTS must be a number" ;; esac
 [ "$SLOTS" -ge 1 ] || die "NEXA_GATE_SLOTS must be at least 1"
 
-is_name() { [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]; }
+# A leading dot is refused: the marker would be a hidden file the holder glob
+# never sees, so the hold would block nothing and never expire (Codex, #342).
+is_name() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
 is_num() { [[ "$1" =~ ^[0-9]+$ ]]; }
 now() { date +%s; }
 setup() { mkdir -p "$HOLDERS" 2>/dev/null || die "cannot create $HOLDERS"; }
@@ -87,7 +89,7 @@ live_holders() {
 
 cmd_hold() {
   local name="$1" ttl="$2" t
-  is_name "$name" || die "hold name must match [A-Za-z0-9._-]+"
+  is_name "$name" || die "hold name must match [A-Za-z0-9][A-Za-z0-9._-]*"
   is_num "$ttl" && [ "$ttl" -ge 1 ] || die "--ttl must be a positive number of seconds"
   setup
   t="$(now)"
@@ -98,7 +100,7 @@ cmd_hold() {
 
 cmd_release() {
   local name="$1"
-  is_name "$name" || die "hold name must match [A-Za-z0-9._-]+"
+  is_name "$name" || die "hold name must match [A-Za-z0-9][A-Za-z0-9._-]*"
   setup
   if [ -f "$HOLDERS/$name" ]; then
     rm -f -- "$HOLDERS/$name"
@@ -186,7 +188,7 @@ esac
 [ $# -gt 0 ] || usage
 ME="${NEXA_GATE_PRIORITY:-}"
 if [ "$PRIORITY_FLAG" -eq 1 ] && [ -z "$ME" ]; then die "--priority needs NEXA_GATE_PRIORITY=<hold name>"; fi
-if [ -n "$ME" ]; then is_name "$ME" || die "NEXA_GATE_PRIORITY must match [A-Za-z0-9._-]+"; fi
+if [ -n "$ME" ]; then is_name "$ME" || die "NEXA_GATE_PRIORITY must match [A-Za-z0-9][A-Za-z0-9._-]*"; fi
 setup
 
 # --- queue -------------------------------------------------------------------
@@ -254,25 +256,41 @@ kind=""
 echo "run-gate: start slot=$SLOT_N$kind waited=$((SECONDS - start))s: $*" >&2
 
 # --- run ---------------------------------------------------------------------
-# Background + wait so a TERM/INT/HUP to the gate stops the command too; the
-# command gets the descriptors closed so it cannot keep a lock alive.
+# The command runs in its OWN process group (setsid), in the background, so a
+# TERM/INT/HUP to the gate stops the whole tree — package-manager scripts start
+# test workers two or three levels down — and the gate does not exit (releasing
+# its locks) until that group is gone: a cancelled integration run must not
+# leave workers on the database while the next one starts (Codex, #342). The
+# command gets the lock descriptors closed so it cannot keep a lock alive.
+# A command that ends normally is not touched: a daemon it deliberately starts
+# (dev-services) outlives it.
 if [ "$RAW" -eq 1 ]; then
   CMD=("$@")
 else
   CMD=(bash "$here/test-summary.sh" "$@")
 fi
+command -v setsid >/dev/null 2>&1 || die "setsid(1) is required (util-linux)"
 child=0
+# group_alive: some process of the command's group still exists.
+group_alive() { kill -0 -- "-$child" 2>/dev/null; }
 # shellcheck disable=SC2329 # runs from the TERM/INT/HUP trap
 stop_child() {
+  local i
   [ "$child" -gt 1 ] || return 0
-  pkill -TERM -P "$child" 2>/dev/null || true
-  kill -TERM "$child" 2>/dev/null || true
+  kill -TERM -- "-$child" 2>/dev/null || true
+  for i in $(seq 1 100); do
+    group_alive || break
+    sleep 0.1
+  done
+  if group_alive; then kill -KILL -- "-$child" 2>/dev/null || true; fi
+  while group_alive; do sleep 0.1; done
+  exit 143
 }
 trap stop_child TERM INT HUP
 if [ -n "$INT_FD" ]; then
-  "${CMD[@]}" {SLOT_FD}>&- {INT_FD}>&- &
+  setsid "${CMD[@]}" {SLOT_FD}>&- {INT_FD}>&- &
 else
-  "${CMD[@]}" {SLOT_FD}>&- &
+  setsid "${CMD[@]}" {SLOT_FD}>&- &
 fi
 child=$!
 rc=0
