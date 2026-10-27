@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { randomUUID } from 'node:crypto';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import {
@@ -28,7 +29,7 @@ import {
   GATEWAY_WEBHOOK_BODY_LIMIT_BYTES,
   GATEWAY_WEBHOOK_ROUTE_PREFIX,
 } from './surfaces/gateway/webhook.controller.js';
-import { createContainer, type Container } from './container.js';
+import { createContainer, type Container, type ProcessRole } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { developmentExposureWarnings } from './infrastructure/config/exposure.js';
 import { trustProxyOption } from './infrastructure/trusted-proxy.js';
@@ -38,6 +39,8 @@ import {
   type LoopReportingRole,
 } from './modules/platform/opslog/application/loop-stall-reporter.js';
 import { DrizzleOperationalConditionReader } from './modules/platform/opslog/infrastructure/drizzle-operational-event.reader.js';
+import { ProcessRestartWatch } from './modules/platform/opslog/application/process-restart-watch.js';
+import { DrizzleProcessRunStore } from './modules/platform/opslog/infrastructure/drizzle-process-run.store.js';
 
 /** The decisions upload's route pattern, as Nest registers it (derived, never restated). */
 const LEGACY_MIGRATION_DECISIONS_ROUTE_SUFFIX = routePattern(
@@ -110,6 +113,37 @@ export function loopStallReporterFor(
     logger: container.logger,
     role,
   });
+}
+
+/**
+ * R11 A3: starts the crash-loop watch of one process role, and returns it so the role's
+ * shutdown can `stop()` it (a clean stop is not a crash). Called by every `main*.ts` right
+ * after `resolveInstallationTenant`, because the announcement is recorded under the
+ * installation's tenant and nothing is announced while there is none. One construction, so
+ * the seven roles cannot disagree about where a restart storm is recorded.
+ *
+ * Awaited by the caller: the row of THIS life must be written before the role can crash,
+ * or the next boot would count nothing. It never throws.
+ */
+export async function startProcessRestartWatch(
+  container: Container,
+  role: ProcessRole,
+): Promise<ProcessRestartWatch> {
+  const watch = new ProcessRestartWatch({
+    role,
+    store: new DrizzleProcessRunStore(container.database.db),
+    recorder: container.opsLog,
+    conditions: new DrizzleOperationalConditionReader(container.database.db),
+    scope: () =>
+      container.installationTenantId === null
+        ? null
+        : { tenantId: container.installationTenantId, botInstanceId: null },
+    clock: container.clock,
+    newRunId: () => randomUUID(),
+    logger: container.logger,
+  });
+  await watch.start();
+  return watch;
 }
 
 export async function resolveInstallationTenant(container: Container): Promise<void> {

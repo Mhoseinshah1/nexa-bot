@@ -1,6 +1,10 @@
 import 'reflect-metadata';
 import { isNexaError } from '@nexa/contracts';
-import { loopStallReporterFor, resolveInstallationTenant } from './bootstrap.js';
+import {
+  loopStallReporterFor,
+  resolveInstallationTenant,
+  startProcessRestartWatch,
+} from './bootstrap.js';
 import { createContainer } from './container.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { startHeartbeat } from './infrastructure/lifecycle/heartbeat.js';
@@ -34,6 +38,8 @@ async function main(): Promise<void> {
   // and for one more: the notification dispatcher runs for the installation
   // while its rate ceiling is a tenant setting.
   await resolveInstallationTenant(container);
+  // R11 A3: a role that is restarted over and over is reported once (see ProcessRestartWatch).
+  const restartWatch = await startProcessRestartWatch(container, 'worker');
 
   // The same coordinator as the API. The worker's own boolean guard was the
   // better half of the two and still had no deadline; one policy is easier to
@@ -220,6 +226,8 @@ async function main(): Promise<void> {
     exit: (code) => process.exit(code),
     close: async () => {
       heartbeat.stop();
+      // A clean stop is an operator's, not a crash: it must not count towards a storm.
+      await restartWatch.stop();
       await container.shutdown();
     },
   });

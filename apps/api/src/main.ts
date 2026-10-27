@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { isNexaError } from '@nexa/contracts';
-import { createApiApp } from './bootstrap.js';
+import { createApiApp, startProcessRestartWatch } from './bootstrap.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
 import { installProcessBackstop } from './infrastructure/lifecycle/process-backstop.js';
@@ -16,6 +16,8 @@ import { installProcessBackstop } from './infrastructure/lifecycle/process-backs
 async function main(): Promise<void> {
   const config = loadConfig();
   const { app, container } = await createApiApp(config);
+  // R11 A3: a role that is restarted over and over is reported once (see ProcessRestartWatch).
+  const restartWatch = await startProcessRestartWatch(container, 'api');
   // A dropped promise is logged and survived; an uncaught exception is logged and exits.
   installProcessBackstop({
     role: 'api',
@@ -32,6 +34,8 @@ async function main(): Promise<void> {
       // Nest first, so no new request is accepted and in-flight ones finish;
       // then the container, which owns the pool those requests are using.
       await app.close();
+      // A clean stop is an operator's, not a crash: it must not count towards a storm.
+      await restartWatch.stop();
       await container.shutdown();
     },
   });

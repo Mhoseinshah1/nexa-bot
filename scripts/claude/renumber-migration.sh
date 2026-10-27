@@ -89,7 +89,29 @@ if [ "$need" -eq 0 ]; then
 fi
 
 # Which migrations did the branch generate? It added their snapshot.
-branch_added="$(git log --no-renames --diff-filter=A --name-only --format= "$BASE..HEAD" -- "$META" | sort -u)"
+#
+# -m: `git log` prints NO diff for a merge commit by default. A snapshot that
+# arrived on the branch inside a merge commit - the usual place for the first
+# renumber, "merge origin/main" + renumber in one commit - would be invisible,
+# and its migration misclassified as hand-written on the next renumber.
+#
+# Not --first-parent: BASE..HEAD already leaves out everything main has, and a
+# branch that merged another branch (stacked PRs) owns the snapshots that
+# branch added on its second-parent side; --first-parent would hide them.
+#
+# The price of -m is that a merge commit also shows, as "added" against its
+# first parent, the snapshots main brought in. Those are main's, not the
+# branch's, and a later main snapshot can carry the number of a hand-written
+# branch migration. So a snapshot whose blob in HEAD is the very blob in BASE
+# is dropped: a file the branch really generated differs from main's (new id).
+branch_added=""
+while IFS= read -r p; do
+  [ -n "$p" ] || continue
+  b="$(git rev-parse -q --verify "$BASE:$p" 2>/dev/null || true)"
+  h="$(git rev-parse -q --verify "HEAD:$p" 2>/dev/null || true)"
+  if [ -n "$b" ] && [ "$b" = "$h" ]; then continue; fi
+  branch_added+="$p"$'\n'
+done < <(git log -m --no-renames --diff-filter=A --name-only --format= "$BASE..HEAD" -- "$META" | sort -u)
 declare -a KIND=() NEWTAG=()
 NEXT=$((base_max + 1))
 for i in "${!BR[@]}"; do
