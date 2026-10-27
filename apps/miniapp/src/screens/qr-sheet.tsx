@@ -19,7 +19,7 @@ export function QrSheet({
 }: {
   serviceId: string;
   link: string;
-  /** R11 A4, «نوع بارکد»: the QRs the server offers, in order — one, or both. */
+  /** R11 A4, the QR kind: the QRs the server offers, in order — one, or both. */
   kinds: readonly QrPayloadKind[];
   onClose: () => void;
 }) {
