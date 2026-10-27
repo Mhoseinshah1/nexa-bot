@@ -519,3 +519,49 @@ One more, learned in Phase 3C:
   still open under it, unresolvable, for ever. Do it only in the release that
   introduced the code, or ship a reconciliation that resolves the open rows
   through the ordinary recorder.
+
+## Round 11 B1 — the mini app's notification centre (feature `notification_centre`, default OFF)
+
+A bell with an unread counter in the mini app's header, and «اعلان‌ها»: the bot messages already
+**delivered to the customer**, newest first, paged, with read and unread. A tap marks one read;
+«همه خوانده شد» marks every one.
+
+- **Source of truth: the customer notification lane's own record.** `customer_notifications`
+  (ADR 0030) is the only store; no second message table exists. Migration 0294 adds two nullable
+  columns to it: `rendered_text` (the plain words the customer was sent, stamped by the same
+  statement that records `DELIVERED`, and by nothing else) and `customer_read_at` (null is unread).
+  A CHECK keeps text to `DELIVERED` rows and a read mark to rows that have text.
+- **The words are stored, not re-rendered.** The lane froze its figures when it sent, and a
+  balance or status read today is not what the customer was told, so a kind and a subject id
+  cannot be turned back into the same sentence. `CustomerNotificationService` renders the kind's
+  template once more with the values it just sent (the tenant's own resolver, so an edited
+  template is what is stored) and `notificationCentreText` strips markup (tags and references of a
+  `TELEGRAM_HTML` key; a `PLAIN_TEXT` key is left exactly as typed), turns `{icon:…}` markers into
+  their fallback emoji and cuts at 4096 characters. It adds nothing, so the centre can say no
+  more than the bot said. A failed second render never costs the delivery its record: the row is
+  `DELIVERED` and simply not listed.
+- **Only the customer's own, from the bot they opened, in their tenant.** Every query names the
+  tenant, the customer and the bot instance; the customer is the session's, never a client's.
+  Another customer's, another bot's (of the same tenant) and another tenant's rows are
+  `miniapp.not_found` to a mark and absent from a list. Operator and ops-group messages are a
+  different lane (`notifications`, destinations are operator channels) and never appear.
+- **Bounded.** A page is 20, by a keyset cursor `(delivered_at, id)`; the list and the counter
+  reach back `MINIAPP_NOTIFICATION_WINDOW_DAYS` (60) from delivery. «همه خوانده شد» marks every
+  unread message of the customer, including any older than the window, so nothing is left unread
+  out of sight.
+- **Idempotent.** A mark is a conditional UPDATE naming `customer_read_at IS NULL`: a second tap
+  changes nothing, answers `marked: 0` and keeps the first moment. The mini app's idempotency key
+  replays a request's own first answer, and a key reused for a different message is a 409.
+- **Off means absent.** The flag is in Web Admin «امکانات». While off, `/me` carries
+  `notifications: null` (no bell is drawn, the list is never requested) and the three endpoints
+  answer the existing `miniapp.unavailable` (404), exactly as the mini app does when it is off.
+  Turning it off keeps every stored text and read mark. The flag changes nothing the bot sends.
+- **Write path.** Authorised as the customer-own permission the wallet read uses
+  (`maintenance.run` for the mini app's session job), with the scope-activity check and the flag
+  read **inside** the transaction. Marking read is a per-customer view preference, not a business
+  fact, so it writes no audit row and no outbox event; a denial is audited like any other.
+- **No customer message from the migration.** Rows delivered before 0294 have no text and are not
+  listed; nothing is backfilled and nobody is told anything.
+- **Not in the centre (by construction):** a broadcast, a direct reply to a button tap, the
+  subscription link's own delivery lane and anything else that does not go through
+  `customer_notifications`. See OQ-R11-B1-01.
