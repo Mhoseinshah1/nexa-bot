@@ -105,6 +105,11 @@ export const MINIAPP_ROUTES = {
   paymentTransferSent: '/payments/:paymentId/transfer-sent',
   paymentCheck: '/payments/:paymentId/check',
   paymentReceipt: '/payments/:paymentId/receipt',
+  /**
+   * R11 B5: the Stars invoice LINK of one open order attempt, for `Telegram.WebApp.openInvoice`.
+   * The same payload and Stars as the attempt's chat invoice; one link per attempt.
+   */
+  paymentStarsInvoice: '/payments/:paymentId/stars-invoice',
   payments: '/payments',
   services: '/services',
   service: '/services/:serviceId',
@@ -323,6 +328,11 @@ export const miniAppPaymentRoutesResponseSchema = z.object({
        * gateway): the customer pays there, and the mini app says so.
        */
       paysInChat: z.boolean(),
+      /**
+       * R11 B5: true for the Stars route while `miniapp_stars_invoice` is on — its invoice can
+       * also be paid here, inside the mini app (`openInvoice`). Defaults to false on the wire.
+       */
+      paysInApp: z.boolean().default(false),
     }),
   ),
 });
@@ -405,9 +415,29 @@ export const miniAppGatewayAttemptSchema = z.object({
   /** Where the customer pays: the provider's page. Null until ready, or for an in-chat invoice. */
   payUrl: z.string().nullable(),
   paysInChat: z.boolean(),
+  /**
+   * R11 B5: true when this attempt's Stars invoice may also be paid inside the mini app
+   * (`MINIAPP_ROUTES.paymentStarsInvoice` then `openInvoice`): a Stars ORDER attempt opened in
+   * this bot, while `miniapp_stars_invoice` is on. Defaults to false on the wire.
+   */
+  inAppInvoice: z.boolean().default(false),
   expiresAt: isoSchema.nullable(),
 });
 export type MiniAppGatewayAttempt = z.infer<typeof miniAppGatewayAttemptSchema>;
+
+/**
+ * R11 B5: the Stars invoice link of one attempt, for `Telegram.WebApp.openInvoice`.
+ *
+ * It is NEVER evidence of payment, and neither is `openInvoice`'s `paid` callback: only
+ * Telegram's `successful_payment`, recorded on the bot's webhook, settles the attempt, and the
+ * client reads the outcome from `MINIAPP_ROUTES.payment` like any other payment.
+ */
+export const miniAppStarsInvoiceSchema = z.object({
+  paymentId: idSchema,
+  /** The `https://t.me/$…` link Telegram's `createInvoiceLink` returned for this attempt. */
+  invoiceLink: z.string().min(1),
+});
+export type MiniAppStarsInvoice = z.infer<typeof miniAppStarsInvoiceSchema>;
 
 /**
  * What a customer may know about their own payment, from the reads the bot already has:

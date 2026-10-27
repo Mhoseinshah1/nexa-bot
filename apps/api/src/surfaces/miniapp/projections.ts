@@ -143,6 +143,7 @@ export function attemptWire(attempt: GatewayAttempt | GatewayAttemptView): MiniA
         ? null
         : (attempt.invoice.webInvoiceUrl ?? attempt.invoice.invoiceUrl ?? null),
     paysInChat: inChat,
+    inAppInvoice: false,
     expiresAt: attempt.payment.expiresAt?.toISOString() ?? null,
   };
 }

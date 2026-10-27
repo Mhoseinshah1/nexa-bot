@@ -323,6 +323,14 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: 'web.feature_service_auto_renew_off_effect',
     confirmEnable: null,
   },
+  // R11 B5: Stars paid inside the mini app. Off sends customers to the bot's chat invoice
+  // again; that invoice stays payable and nothing already paid changes, so it does not ask.
+  miniapp_stars_invoice: {
+    title: 'web.feature_miniapp_stars_invoice_title',
+    summary: 'web.feature_miniapp_stars_invoice_summary',
+    disableEffect: null,
+    confirmEnable: null,
+  },
 };
 
 /**

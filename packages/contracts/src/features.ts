@@ -618,6 +618,22 @@ export const FEATURE_FLAGS = [
     blastRadius: 'TENANT_WIDE',
     configuredBy: ['auto_renew.lead_hours'],
   },
+  {
+    key: 'miniapp_stars_invoice',
+    description:
+      'Round 11, B5: pay an order with Telegram Stars INSIDE the mini app ' +
+      '(`Telegram.WebApp.openInvoice`). On, and only while the Stars route itself is offered ' +
+      'for the order exactly as the bot offers it, the mini app asks the server for an invoice ' +
+      'LINK (`createInvoiceLink`) carrying the SAME payload and Stars as the attempt the bot ' +
+      'path opened, once per attempt; Telegram’s own pre_checkout_query and ' +
+      'successful_payment settle it on the bot’s webhook, as every Stars payment. Off by ' +
+      'default: the mini app keeps saying the invoice is in the bot’s chat, and the link ' +
+      'endpoint refuses. Switching it off never touches a payment already made.',
+    defaultEnabled: false,
+    // TENANT_WIDE: it offers every customer of the tenant a second place to pay a Stars invoice.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
 ] as const satisfies readonly FeatureFlagDefinition[];
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[number]['key'];

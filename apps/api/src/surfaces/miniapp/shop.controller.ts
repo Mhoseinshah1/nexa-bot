@@ -227,6 +227,7 @@ export class MiniAppShopController {
         kind: route.kind,
         name: route.name,
         paysInChat: route.paysInChat,
+        paysInApp: false,
       })),
     };
   }
