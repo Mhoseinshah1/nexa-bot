@@ -9810,6 +9810,31 @@ export const TEMPLATES = [
       },
     ],
   },
+  /*
+   * Round 11 A8: the gateway said in so many words that it is rate limited (a readable
+   * rate-limit code), Nexa asked again with the SAME order id and was refused each time, so the
+   * attempt ended with NO invoice. Retryable: a new tap opens a new attempt, and since this one
+   * provably created nothing, the customer cannot end up with two invoices.
+   */
+  {
+    key: 'bot.payment.gateway_busy',
+    description:
+      'The gateway is busy (it refused to create the invoice because of its own rate limit), ' +
+      'so no invoice was made and nothing was charged. The customer may try again in a minute. ' +
+      'Never phrased as the customer\u2019s payment failing.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment\u2019s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
+          'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
   {
     key: 'bot.payment.gateway_unknown',
     description:
