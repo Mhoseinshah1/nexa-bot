@@ -3710,9 +3710,12 @@ export const customers = pgTable(
      */
     channelMembershipExemptAt: timestamptz('channel_membership_exempt_at'),
     /**
-     * Customer 360 (§11.4): a phone number an OPERATOR verified out of band, and when. The
-     * bot never asks for one. Both or neither (`customers_phone_check`), so a number is
-     * never stored without the verification that justified storing it.
+     * Customer 360 (§11.4): a verified phone number, and when it was verified — by an
+     * OPERATOR out of band, or (R11 B7, while `phone_verification` is on) by the customer
+     * sharing their OWN Telegram contact in the bot. The audit row says which
+     * (`customer.phone.verify` / `customer.phone.self_verify`). Both or neither
+     * (`customers_phone_check`), so a number is never stored without the verification that
+     * justified storing it.
      */
     phoneNumber: text('phone_number'),
     phoneVerifiedAt: timestamptz('phone_verified_at'),
@@ -5917,6 +5920,13 @@ export const paymentGateways = pgTable(
      */
     allowServicePurchase: boolean('allow_service_purchase').notNull().default(true),
     allowWalletTopup: boolean('allow_wallet_topup').notNull().default(true),
+    /**
+     * R11 B7: offer the route only to a customer whose phone number is verified
+     * (`customers.phone_verified_at`). Default false, the state every row was in before the
+     * column existed. Read ONLY while the `phone_verification` flag is on: off, the rule is
+     * treated as not configured (`evaluateGatewayEligibility`).
+     */
+    requiresVerifiedPhone: boolean('requires_verified_phone').notNull().default(false),
     /**
      * A `FIXED_RATE` route's conversion (Package A): sales-currency minor units per ONE
      * provider unit — for Telegram Stars in a Toman installation, the owner's
