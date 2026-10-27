@@ -102,6 +102,7 @@ export const INLINE_BUTTON_NAME: Readonly<Record<InlineButtonKey, WebKey>> = {
   'wallet.open': 'web.ib_button_wallet_open',
   'wallet.topup': 'web.ib_button_wallet_topup',
   'wallet.topup_amount': 'web.ib_button_wallet_topup_amount',
+  'wallet.gift_card': 'web.ib_button_wallet_gift_card',
   'account.copy_id': 'web.ib_button_account_copy_id',
   'catalog.open': 'web.ib_button_catalog_open',
   'catalog.category': 'web.ib_button_catalog_category',

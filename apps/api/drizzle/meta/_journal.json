@@ -2028,15 +2028,29 @@
     {
       "idx": 289,
       "version": "7",
-      "when": 1793064553848,
-      "tag": "0289_r10_anti_abuse",
+      "when": 1793061975710,
+      "tag": "0289_gift_cards",
       "breakpoints": true
     },
     {
       "idx": 290,
       "version": "7",
-      "when": 1793064553941,
-      "tag": "0290_referral_commission_deferral_guard",
+      "when": 1793061975802,
+      "tag": "0290_gift_cards_permissions",
+      "breakpoints": true
+    },
+    {
+      "idx": 291,
+      "version": "7",
+      "when": 1793076162303,
+      "tag": "0291_r10_anti_abuse",
+      "breakpoints": true
+    },
+    {
+      "idx": 292,
+      "version": "7",
+      "when": 1793076162401,
+      "tag": "0292_referral_commission_deferral_guard",
       "breakpoints": true
     }
   ]

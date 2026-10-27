@@ -63,6 +63,11 @@ export const CUSTOMER_CAPTURE_PURPOSES = [
    * stored as typed: it is validated, sealed for the gateway worker, and kept masked.
    */
   'GATEWAY_REFUND_CARD',
+  /**
+   * R10 D4: a gift card code. No subject: the code names its own batch. The text is never
+   * stored: the window is closed RECEIVED on the read, and the redemption hashes the code.
+   */
+  'GIFT_CARD_CODE',
 ] as const;
 export type CustomerCapturePurpose = (typeof CUSTOMER_CAPTURE_PURPOSES)[number];
 export const customerCapturePurposeSchema = z.enum(CUSTOMER_CAPTURE_PURPOSES);

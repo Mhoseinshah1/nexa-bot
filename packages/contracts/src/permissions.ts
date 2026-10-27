@@ -471,6 +471,21 @@ export const PERMISSIONS = [
   p('campaigns.manage', 'Create, schedule, pause, resume or cancel a campaign', 'HIGH'),
 
   /*
+   * R10 D4, gift cards (wallet top-up codes). Four keys, because the blast radii differ:
+   * VIEW reads the batches, their face value and how many codes were redeemed — MEDIUM, so
+   * the read-only `observer` (every LOW key) is not handed the tenant's outstanding gift-card
+   * liability by default. CREATE mints codes that each credit a wallet when redeemed: it
+   * creates a liability of amount × count in one act, so it is CRITICAL like a large wallet
+   * credit. EXPORT hands out the plaintext codes — bearer instruments worth money — and is
+   * CRITICAL for the reason `backup.download` is. DISABLE only stops unredeemed codes (no
+   * money moves back or forth), HIGH. All three writes require VIEW (`PERMISSION_REQUIRES`).
+   */
+  p('gift_cards.view', 'View gift card batches and their redemption counts'),
+  p('gift_cards.create', 'Create a batch of gift cards (wallet top-up codes)', 'CRITICAL'),
+  p('gift_cards.export', 'Download the codes of a gift card batch', 'CRITICAL'),
+  p('gift_cards.disable', 'Disable the unredeemed codes of a gift card batch', 'HIGH'),
+
+  /*
    * Terms and rules (program §6, `docs/terms-audit.md`). VIEW reads the versions, the
    * history and the acceptance statistics. EDIT writes the draft, which no customer sees.
    * PUBLISH is its own HIGH key: publishing makes a new version the one every customer is
@@ -1139,6 +1154,13 @@ export const PERMISSION_REQUIRES: Readonly<Partial<Record<PermissionKey, Permiss
    * `campaigns.view` reads, and each answers with the campaign's preview and results.
    */
   'campaigns.manage': 'campaigns.view',
+  /*
+   * R10 D4. Every gift-card command is taken FROM the batch list, which `gift_cards.view`
+   * reads, and answers with the batch as it now stands.
+   */
+  'gift_cards.create': 'gift_cards.view',
+  'gift_cards.export': 'gift_cards.view',
+  'gift_cards.disable': 'gift_cards.view',
   /*
    * Phase D1. An export is the list an operator filtered on the audit page, written to a
    * file; without `audit.view` there is no list to have filtered.

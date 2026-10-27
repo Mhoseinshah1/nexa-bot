@@ -138,6 +138,8 @@ const wallet = (extra: Record<string, unknown> = {}) => ({
   presets: [IRT(100_000), IRT(200_000), IRT(500_000)],
   minimum: IRT(50_000),
   maximum: IRT(5_000_000),
+  // R10 D4: the gift-card field is drawn only while the server says the feature is on.
+  giftCards: false,
   ...extra,
 });
 
@@ -176,6 +178,50 @@ describe('wallet', () => {
     expect(screen.getByText(`−${money(IRT(264_000))}`)).toBeTruthy();
     expect(screen.getByText(text('miniapp.wallet_reason_purchase'))).toBeTruthy();
     expect(signedMoney('DEBIT', IRT(5))).toMatch(/^−/u);
+  });
+
+  it('R10 D4: draws no gift-card field while the feature is off', async () => {
+    serve({ 'GET /wallet': () => wallet(), 'GET /wallet/entries': () => entries });
+    await mount();
+    tabWallet();
+    await screen.findByText(text('miniapp.wallet_reason_referral'));
+    expect(screen.queryByText(text('miniapp.wallet_gift_title'))).toBeNull();
+  });
+
+  it('R10 D4: redeems a typed gift card, says what was credited, and gives one sentence for a refusal', async () => {
+    let answer: unknown = {
+      outcome: 'REDEEMED',
+      amount: IRT(50_000),
+      balance: IRT(1_300_000),
+    };
+    const calls = serve({
+      'GET /wallet': () => wallet({ giftCards: true }),
+      'GET /wallet/entries': () => entries,
+      'POST /wallet/gift-card': () => answer,
+    });
+    await mount();
+    tabWallet();
+    await screen.findByText(text('miniapp.wallet_gift_title'));
+    const field = screen.getByLabelText(text('miniapp.wallet_gift_label'));
+    fireEvent.change(field, { target: { value: 'abcd-efgh-jkmn-pqrs-tvwx' } });
+    fireEvent.click(screen.getByRole('button', { name: text('miniapp.wallet_gift_submit') }));
+    await screen.findByText(
+      text('miniapp.wallet_gift_redeemed', {
+        amount: money(IRT(50_000)),
+        balance: money(IRT(1_300_000)),
+      }),
+    );
+    expect(calls.find((call) => call.route === MINIAPP_ROUTES.walletGiftCard)?.body).toEqual({
+      code: 'abcd-efgh-jkmn-pqrs-tvwx',
+    });
+    // The code is not kept on the screen once answered.
+    expect((field as HTMLInputElement).value).toBe('');
+    answer = { outcome: 'REJECTED' };
+    fireEvent.change(screen.getByLabelText(text('miniapp.wallet_gift_label')), {
+      target: { value: '2222-3333-4444-5555-6666' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: text('miniapp.wallet_gift_submit') }));
+    await screen.findByText(text('miniapp.wallet_gift_rejected'));
   });
 
   it('lists the payments, a pending top-up included, and opens one in the payment screen', async () => {

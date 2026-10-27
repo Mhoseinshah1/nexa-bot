@@ -76,6 +76,7 @@ import { DiscountsPage } from './pages/discounts';
 import { CampaignDetailPage, CampaignNewPage, CampaignsPage } from './pages/campaigns';
 import { CustomServicePage } from './pages/custom-service';
 import { ReferralsPage } from './pages/referrals';
+import { GiftCardsPage } from './pages/gift-cards';
 import { ReportsPage } from './pages/business';
 import { isSuperAdmin, mayExportReports } from './report-view';
 import { ResellersPage } from './pages/resellers';
@@ -229,6 +230,7 @@ export const ROUTE_PATTERNS: readonly string[] = [
   '/campaigns/:id',
   '/custom-service',
   '/referrals',
+  '/gift-cards',
   '/resellers',
   '/reseller-tiers',
   '/reseller-plans',
@@ -925,6 +927,21 @@ export function resolve(
       ),
       crumbs: [{ label: t('web.referrals_title') }],
       title: t('web.referrals_title'),
+    };
+  }
+
+  if (route.path === '/gift-cards') {
+    return {
+      element: (
+        <GiftCardsPage
+          denied={!may('gift_cards.view')}
+          mayCreate={may('gift_cards.create')}
+          mayExport={may('gift_cards.export')}
+          mayDisable={may('gift_cards.disable')}
+        />
+      ),
+      crumbs: [{ label: t('web.gift_cards_title') }],
+      title: t('web.gift_cards_title'),
     };
   }
 

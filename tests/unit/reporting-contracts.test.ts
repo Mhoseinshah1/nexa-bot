@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_ORDER_ORIGIN,
   LEDGER_REASONS,
+  GIFT_CARD_REFERENCE_PREFIX,
   MIGRATION_OPENING_REFERENCE_PREFIX,
   ORDER_ORIGINS,
   SALE_ORDER_ORIGINS,
@@ -13,6 +14,7 @@ import {
   SALE_ORDER_PURPOSES,
   WALLET_REPORT_GROUP_OF,
   ledgerReasonsIn,
+  giftCardReference,
   migrationOpeningReference,
   orderPurposeIsSale,
   reportGranularityFor,
@@ -75,6 +77,19 @@ describe('reporting contracts', () => {
     }
     expect(WALLET_REPORT_GROUP_OF.RECEIPT_CREDIT).toBe('RECEIPT_CREDIT');
     expect(WALLET_REPORT_GROUP_OF.PURCHASE).toBe('SPENDING');
+  });
+
+  it('files a gift card redemption alone, never as a top-up or a signup gift (R10 D4)', () => {
+    // Sold or given away is the owner's open question; its own group reads either way.
+    expect(WALLET_REPORT_GROUP_OF.GIFT_CARD_REDEMPTION).toBe('GIFT_CARD');
+    expect(ledgerReasonsIn('GIFT_CARD')).toEqual(['GIFT_CARD_REDEMPTION']);
+    expect(ledgerReasonsIn('TOPUP')).not.toContain('GIFT_CARD_REDEMPTION');
+    expect(GIFT_CARD_REFERENCE_PREFIX).toBe('giftcard:');
+    const id = '0190a5b2-7c3d-7e4f-8a1b-2c3d4e5f6a7b';
+    expect(giftCardReference(id)).toBe(`giftcard:${id}`);
+    for (const bad of ['', 'abc', id.toUpperCase(), `${id} `]) {
+      expect(() => giftCardReference(bad)).toThrow();
+    }
   });
 
   it('files a legacy opening balance alone, never as a top-up, a sale, a grant or a gift', () => {

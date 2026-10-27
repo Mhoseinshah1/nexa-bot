@@ -731,6 +731,16 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'موجودی کیف پول شما منفی است. برای خرید، ابتدا کیف پول را شارژ کنید.',
   'bot.wallet.topup_refused':
     'این مبلغ برای شارژ پذیرفته نشد. لطفاً مبلغ دیگری انتخاب کنید یا بفرستید.',
+  'bot.wallet.gift_card_button': '🎁 کارت هدیه',
+  'bot.wallet.gift_card_ask':
+    '{icon:referral} کد کارت هدیه را همین‌جا بفرستید.\n\nکد ۲۰ حرفی است؛ با خط تیره یا بدون آن، با حروف کوچک یا بزرگ، فرقی نمی‌کند.',
+  'bot.wallet.gift_card_redeemed':
+    '{icon:success} کارت هدیه پذیرفته شد.\n\n{icon:wallet} {amount} به کیف پول شما اضافه شد.\n👛 موجودی فعلی: {balance}',
+  'bot.wallet.gift_card_rejected':
+    '{icon:error} این کد پذیرفته نشد. ممکن است اشتباه وارد شده باشد، قبلاً استفاده شده باشد یا دیگر معتبر نباشد.',
+  'bot.wallet.gift_card_rate_limited':
+    '{icon:time} تعداد کدهای نادرست زیاد بود. لطفاً کمی بعد دوباره امتحان کنید.',
+  'bot.wallet.gift_card_unavailable': 'کارت هدیه در حال حاضر فعال نیست.',
   'bot.wallet.topup_unavailable':
     'شارژ کیف پول در حال حاضر فعال نیست. لطفاً با پشتیبانی تماس بگیرید.',
   /*

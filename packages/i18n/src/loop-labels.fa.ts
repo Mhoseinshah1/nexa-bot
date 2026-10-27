@@ -28,6 +28,7 @@ export const LOOP_LABELS_FA: Readonly<Record<string, string>> = {
   'customer-reminders': 'یادآوری پرداخت و موجودی کیف پول',
   'campaign-schedule': 'زمان‌بندی کمپین‌ها',
   'telegram-message-retention': 'پاک‌سازی پیام‌های تلگرام',
+  'gift-card-sweep': 'پاک‌سازی فایل‌های کارت هدیه',
   'bot-command-sync': 'همگام‌سازی دستورهای ربات',
   'customer-notifications': 'پیام‌های خودکار مشتری',
   'business-outbound': 'ارسال پیام‌های تلگرام بیزنس',

@@ -8,6 +8,8 @@ import type { EventConsumer } from '../../../platform/eventing/application/event
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { isAdminActor, publish, scopeOf } from './publish.js';
 import {
+  giftCardBatchCreated,
+  giftCardRedeemed,
   massCredited,
   referralCommission,
   signupGift,
@@ -17,6 +19,8 @@ import {
 import type { LedgerEntryFact, OpsLogFacts, OpsLogLane, OpsLogWords } from './ports.js';
 
 const SIGNUP_GIFT_REFERENCE = /^([0-9a-f-]{36}):signup-gift:(REFEREE|REFERRER)$/;
+/** R10 D4: `giftcard:<codeId>`, the only reference a GIFT_CARD_REDEMPTION entry may carry. */
+const GIFT_CARD_REFERENCE = /^giftcard:([0-9a-f-]{36})$/;
 
 /**
  * The wallet movements the operations log group is told about (Round 4 PR-D): an
@@ -51,6 +55,8 @@ export class LedgerLogConsumer implements EventConsumer {
   readonly subscribesTo: readonly EventType[] = [
     'WalletEntryRecorded',
     'BulkOperationStateChanged',
+    // R10 D4: a gift card batch minted is a liability created in one act.
+    'GiftCardBatchCreated',
   ];
 
   constructor(
@@ -77,13 +83,18 @@ export class LedgerLogConsumer implements EventConsumer {
       await this.massCredit(scope, event, tx);
       return;
     }
+    if (event.eventType === 'GiftCardBatchCreated') {
+      await this.giftCardBatch(scope, event, tx);
+      return;
+    }
     const payload = EVENT_PAYLOAD_SCHEMAS.WalletEntryRecorded.parse(event.payload);
     // Cheap exit before any read: most wallet movements are none of these three.
     if (
       payload.reason !== 'ADMIN_CREDIT' &&
       payload.reason !== 'ADMIN_DEBIT' &&
       payload.reason !== 'REFERRAL_COMMISSION' &&
-      payload.reason !== 'REFERRAL_SIGNUP_GIFT'
+      payload.reason !== 'REFERRAL_SIGNUP_GIFT' &&
+      payload.reason !== 'GIFT_CARD_REDEMPTION'
     ) {
       return;
     }
@@ -96,6 +107,8 @@ export class LedgerLogConsumer implements EventConsumer {
       built = await this.adjusted(scope, event, entry, at, tx);
     } else if (entry.reason === 'REFERRAL_COMMISSION') {
       built = await this.commission(scope, entry, at, tx);
+    } else if (entry.reason === 'GIFT_CARD_REDEMPTION') {
+      built = await this.giftCard(scope, entry, at, tx);
     } else {
       built = await this.gift(scope, entry, at, tx);
     }
@@ -201,6 +214,56 @@ export class LedgerLogConsumer implements EventConsumer {
       payment,
       at,
       words: this.deps.words,
+    });
+  }
+
+  /**
+   * R10 D4: a gift card redeemed. Logged whoever the customer is — imported or not — because
+   * only a redemption made in this installation, after the import, writes this reason.
+   */
+  private async giftCard(
+    scope: TenantContext,
+    entry: LedgerEntryFact,
+    at: Date,
+    tx: TransactionScope,
+  ): Promise<Built | null> {
+    const match = GIFT_CARD_REFERENCE.exec(entry.reference);
+    if (match === null) return null;
+    const customer = await this.deps.facts.customer(scope, entry.customerId, tx);
+    const balance = await this.deps.facts.balanceAround(
+      scope,
+      entry.customerId,
+      entry.amount.currency,
+      [entry.id],
+      tx,
+    );
+    if (balance === null) return null;
+    const redemption = await this.deps.facts.giftCardRedemption(scope, match[1] as string, tx);
+    return giftCardRedeemed({ entry, balance, customer, redemption, at, words: this.deps.words });
+  }
+
+  /** R10 D4: ONE message per batch minted, whatever relays the event again. */
+  private async giftCardBatch(
+    scope: TenantContext,
+    event: DomainEvent,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const payload = EVENT_PAYLOAD_SCHEMAS.GiftCardBatchCreated.parse(event.payload);
+    const batch = await this.deps.facts.giftCardBatch(scope, payload.batchId, tx);
+    if (batch === null) return;
+    const admin =
+      batch.createdByAdminId === null
+        ? null
+        : await this.deps.facts.admin(scope, batch.createdByAdminId, tx);
+    const built = giftCardBatchCreated({
+      batch,
+      admin,
+      at: new Date(event.occurredAt),
+      words: this.deps.words,
+    });
+    await publish(this.deps.lane, scope, tx, built, {
+      dedupeKey: `oplog:gift-card-batch:${batch.id}`,
+      correlationId: event.correlationId,
     });
   }
 

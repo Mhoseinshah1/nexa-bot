@@ -132,6 +132,7 @@ export const WALLET_GROUP_LABELS: Readonly<Record<WalletReportGroup, WebKey>> = 
   ADMINISTRATIVE: 'web.report_wallet_admin',
   TRANSFER: 'web.report_wallet_transfer',
   OPENING_BALANCE: 'web.report_wallet_opening_balance',
+  GIFT_CARD: 'web.report_wallet_gift_card',
   OTHER: 'web.report_wallet_other',
 };
 

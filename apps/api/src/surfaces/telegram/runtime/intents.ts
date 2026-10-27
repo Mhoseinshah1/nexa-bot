@@ -90,6 +90,8 @@ export const BOT_INTENTS = [
   'PAY_SWITCH_CARD',
   'TOPUP_MENU',
   'TOPUP_PICK',
+  /* R10 D4: start redeeming a gift card. Carries nothing; the feature is read on the tap. */
+  'GIFT_CARD',
   /*
    * The customer's own referral link (WP9 F12). Carries nothing: whose link, and whether
    * the program is running at all, are decided on the server when the tap arrives.

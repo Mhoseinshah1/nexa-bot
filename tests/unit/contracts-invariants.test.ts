@@ -104,8 +104,9 @@ describe('ledger reason catalog', () => {
     // Customer 360 added the ACCOUNT_TRANSFER_OUT/IN pair
     // (docs/customer-account-transfer-audit.md). Migration P2 added
     // MIGRATION_OPENING_BALANCE (docs/migration-opening-balance.md). R5A item 4 added
-    // GATEWAY_LATE_CREDIT (a gateway's late approval credited to the wallet).
-    expect(LEDGER_REASONS.length).toBe(32);
+    // GATEWAY_LATE_CREDIT (a gateway's late approval credited to the wallet). R10 D4 added
+    // GIFT_CARD_REDEMPTION (a redeemed wallet top-up code).
+    expect(LEDGER_REASONS.length).toBe(33);
     expect(new Set(LEDGER_REASONS).size).toBe(LEDGER_REASONS.length);
   });
 

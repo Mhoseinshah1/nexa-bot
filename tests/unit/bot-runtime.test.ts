@@ -1272,6 +1272,13 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.username.stale',
       'bot.username.taken',
       'bot.username.unavailable',
+      // R10 D4: gift cards — the wallet button, the ask, and the three answers.
+      'bot.wallet.gift_card_ask',
+      'bot.wallet.gift_card_button',
+      'bot.wallet.gift_card_rate_limited',
+      'bot.wallet.gift_card_redeemed',
+      'bot.wallet.gift_card_rejected',
+      'bot.wallet.gift_card_unavailable',
       'bot.wallet.insufficient',
       'bot.wallet.negative_balance',
       // Owner spec §2.2: a button label under a wallet credit, opening the wallet screen.

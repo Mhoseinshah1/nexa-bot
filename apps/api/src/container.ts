@@ -318,6 +318,16 @@ import { StartCaptchaService } from './modules/commerce/customers/application/st
 import { DrizzleStartCaptchaRepository } from './modules/commerce/customers/infrastructure/drizzle-start-captcha.repository.js';
 import { DrizzleReferralSignupGiftRepository } from './modules/commerce/referrals/infrastructure/drizzle-referral-signup-gift.repository.js';
 import { TenantReferralDayCalendar } from './modules/commerce/referrals/infrastructure/tenant-referral-day.calendar.js';
+import { GiftCardAdminService } from './modules/commerce/gift-cards/application/gift-card-admin.service.js';
+import { GiftCardRedemptionService } from './modules/commerce/gift-cards/application/gift-card-redemption.service.js';
+import {
+  GIFT_CARD_SWEEP_INITIAL_DELAY_MS,
+  GIFT_CARD_SWEEP_INTERVAL_MS,
+  GiftCardSweepLoop,
+} from './modules/commerce/gift-cards/application/gift-card-sweep.js';
+import { DrizzleGiftCardRepository } from './modules/commerce/gift-cards/infrastructure/drizzle-gift-card.repository.js';
+import { PresentationGiftCardCsvRenderer } from './modules/commerce/gift-cards/infrastructure/gift-card-csv.js';
+import { SecretCipherGiftCardSealer } from './modules/commerce/gift-cards/infrastructure/secret-cipher-gift-card-sealer.js';
 import {
   CONTROL_ERROR_CODES,
   SERVICE_REMINDER_DEFAULTS,
@@ -1291,6 +1301,10 @@ export interface Container {
   readonly referralSignupGifts: ReferralSignupGiftService;
   /** R10 D5 (a): the optional /start captcha for new customers. */
   readonly startCaptcha: StartCaptchaService;
+  /** R10 D4: gift cards — the operator's batches and the customer's redemption. */
+  readonly giftCards: GiftCardAdminService;
+  readonly giftCardRedemption: GiftCardRedemptionService;
+  readonly giftCardSweepLoop: GiftCardSweepLoop;
   readonly tenantMedia: TenantMediaService;
   /** Phase 2 item 4: the Web Admin's preview of the QR on the tenant's background. */
   readonly deliveryQrPreview: QrTemplatePreviewService;
@@ -3511,6 +3525,45 @@ export function createContainer(
     days: referralDays,
   });
 
+  /*
+   * R10 D4: gift cards. One repository for the batches, the codes and the refused attempts;
+   * the sealer is the only place a batch's plaintext codes are encrypted or opened.
+   */
+  const giftCardRepository = new DrizzleGiftCardRepository(database.db);
+  const giftCardAdminService = new GiftCardAdminService({
+    repository: giftCardRepository,
+    sealer: new SecretCipherGiftCardSealer(cipher),
+    csv: new PresentationGiftCardCsvRenderer(new CachedTenantPresentationReader(tenants, clock)),
+    settings: settingsResolver,
+    features: featureFlagResolver,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    outbox,
+    clock,
+    ids,
+  });
+  const giftCardRedemptionService = new GiftCardRedemptionService({
+    repository: giftCardRepository,
+    wallet: walletRepository,
+    settings: settingsResolver,
+    features: featureFlagResolver,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    outbox,
+    clock,
+    ids,
+  });
+
   /* The tenant's media slots (customer UX §I): the referral banner, bytes in the database. */
   const tenantMediaRepository = new DrizzleTenantMediaRepository(database.db);
   const tenantMediaService = new TenantMediaService({
@@ -3821,6 +3874,20 @@ export function createContainer(
     conditions: new DrizzleOperationalConditionReader(database.db),
     logger,
   });
+  /* R10 D4: hourly, purge expired gift-card exports and old refused attempts. */
+  const giftCardSweepLoop = new GiftCardSweepLoop(
+    { repository: giftCardRepository, uow, guard, audit, opsLog, sessions, clock },
+    {
+      scope: () =>
+        installationTenantId === null
+          ? null
+          : { tenantId: installationTenantId, botInstanceId: null },
+      intervalMs: GIFT_CARD_SWEEP_INTERVAL_MS,
+      initialDelayMs: GIFT_CARD_SWEEP_INITIAL_DELAY_MS,
+      ids,
+      logger,
+    },
+  );
   const gatewayPayments = new GatewayPaymentService({
     invoices: gatewayInvoiceRepository,
     payments: paymentService,
@@ -8401,6 +8468,9 @@ export function createContainer(
     operationsOverview,
     referralSignupGifts: referralSignupGiftService,
     startCaptcha: startCaptchaService,
+    giftCards: giftCardAdminService,
+    giftCardRedemption: giftCardRedemptionService,
+    giftCardSweepLoop,
     tenantMedia: tenantMediaService,
     deliveryQrPreview,
     deliveryQr: deliveryQrRenderer,
@@ -8558,6 +8628,7 @@ export function createContainer(
       },
       resellers: resellerService,
       referralGifts: referralSignupGiftService,
+      giftCards: giftCardRedemptionService,
       media: tenantMediaService,
       /*
        * The one write the turn makes after its Telegram send, and the transaction
@@ -8904,6 +8975,7 @@ export function createContainer(
       await customerReminderLoop.stop();
       await campaignScheduleLoop.stop();
       await telegramMessageRetentionLoop.stop();
+      await giftCardSweepLoop.stop();
       // Round P: a claimed command sync finishes its record or lapses with its lease.
       await botCommandSyncLoop.stop();
       await customerNotificationLoop.stop();

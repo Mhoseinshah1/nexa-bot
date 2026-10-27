@@ -211,6 +211,12 @@ export const CANCEL_ORDER_CALLBACK_PREFIX = 'f:';
  * amount when an operator edits the presets between the keyboard and the tap.
  */
 export const TOPUP_MENU_CALLBACK_PREFIX = 'o:';
+/**
+ * R10 D4: «🎁 کارت هدیه» under the balance. Carries NOTHING: matched on the whole string, and
+ * whether gift cards are on is decided when the tap arrives. `wg:` — `w:`, `wa:`…`wo:` exist,
+ * and `wg:` differs from each at its second character.
+ */
+export const GIFT_CARD_CALLBACK_DATA = 'wg:';
 export const TOPUP_PICK_CALLBACK_PREFIX = 'y:';
 /**
  * The wallet screen's invite button (WP9). Matched on the whole string, like the top-up menu.

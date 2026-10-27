@@ -1502,6 +1502,29 @@ export const COMMERCE_ERROR_CODES = {
   SERVICE_SYNC_TOO_SOON: 'commerce.service_sync_too_soon',
   /** The signup gift flag is off or its terms are incomplete. */
   REFERRAL_GIFT_DISABLED: 'commerce.referral_gift_disabled',
+
+  // --- Gift cards (R10 D4) ----------------------------------------------------------------
+  /**
+   * The `gift_cards` flag is off: a redemption, or a batch's creation, is refused. A refused
+   * redemption of a code that exists, was used or expired is NOT an error — it is the
+   * `REJECTED` outcome, one sentence for every reason, so the endpoint is no oracle.
+   */
+  GIFT_CARDS_DISABLED: 'commerce.gift_cards_disabled',
+  /** No gift card batch with this id in this tenant. Another tenant's is answered the same way. */
+  GIFT_CARD_BATCH_NOT_FOUND: 'commerce.gift_card_batch_not_found',
+  /**
+   * A batch the service refuses to mint: the currency is not the wallet's (`sales.currency`),
+   * the expiry is closer than an hour or further than five years, or the face value is over
+   * the payment ceiling. `details.problem` names which.
+   */
+  GIFT_CARD_BATCH_INVALID: 'commerce.gift_card_batch_invalid',
+  /**
+   * The confirmation does not match: the typed count or the face total of a creation, or the
+   * unredeemed count of a disable, which has changed since the operator's preview.
+   */
+  GIFT_CARD_CONFIRMATION_MISMATCH: 'commerce.gift_card_confirmation_mismatch',
+  /** The batch's codes can no longer be downloaded: the 24-hour export has expired or was purged. */
+  GIFT_CARD_EXPORT_GONE: 'commerce.gift_card_export_gone',
   /** No such FAQ entry in this tenant. Another tenant's is answered the same way. */
   SUPPORT_FAQ_NOT_FOUND: 'commerce.support_faq_not_found',
   /** The FAQ row moved since the client read it. Carries the current version. */

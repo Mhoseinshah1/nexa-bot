@@ -562,6 +562,20 @@ export const FEATURE_FLAGS = [
     configuredBy: ['miniapp.init_data_max_age_seconds', 'miniapp.session_ttl_minutes'],
   },
   {
+    key: 'gift_cards',
+    description:
+      'R10 D4: gift cards \u2014 wallet top-up codes an operator mints in batches in the Web ' +
+      'Admin and a customer redeems in the bot or the mini app, crediting their wallet through ' +
+      'the ledger (GIFT_CARD_REDEMPTION). Off by default: the wallet screen draws no gift-card ' +
+      'button, the mini app hides the field, a redemption is refused and no batch can be ' +
+      'created. Codes already minted keep their own expiry while it is off, and redeem again ' +
+      'once it is back on; exporting and disabling a batch stay available to an operator.',
+    defaultEnabled: false,
+    // TENANT_WIDE: turning it on lets every customer of the tenant redeem codes.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
+  {
     key: 'personal_discount',
     description:
       'R10 D3: apply each customer\u2019s personal discount percent \u2014 set on the customer\u2019s ' +

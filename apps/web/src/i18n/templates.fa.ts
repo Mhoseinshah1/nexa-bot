@@ -582,6 +582,10 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   refereeTelegramId: 'شناسهٔ تلگرام زیرمجموعه',
   refereeBefore: 'موجودی زیرمجموعه پیش از هدیه',
   refereeAfter: 'موجودی زیرمجموعه پس از هدیه',
+  batchLabel: 'نام دستهٔ کارت هدیه',
+  codeLast4: 'چهار حرف آخر کد کارت هدیه',
+  codeCount: 'تعداد کدهای دسته',
+  faceTotal: 'جمع ارزش اسمی کدهای دسته',
   referrerBefore: 'موجودی معرف پیش از واریز',
   referrerAfter: 'موجودی معرف پس از واریز',
   badges: 'برچسب‌های عنوان (اولین خرید، نماینده)',
@@ -678,6 +682,8 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
 > = {
   // B1: the product's own description, the one customer-facing text on the pre-invoice.
   'bot.order.preinvoice': { description: 'توضیح محصول برای مشتری' },
+  // R10 D4: on the batch-created log, `expiry` is when the batch's codes stop being redeemable.
+  'ops.log.gift_card_batch_created': { expiry: 'زمان انقضای کدهای دسته' },
   // R6 item 4: on the card-to-card invoice the total is what must be TRANSFERRED.
   'bot.payment.transfer_instructions': { total: 'مبلغ قابل پرداخت (اصل + کارمزد)' },
   // R10 B6: on the overpaid screens the rial figure is the amount TonPays returns.
@@ -1367,6 +1373,30 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.wallet.topup_choose': [
     'انتخاب مبلغ شارژ',
     'بالای دکمه‌های مبلغ‌های از پیش تعیین‌شدهٔ شارژ نمایش داده می‌شود.',
+  ],
+  'bot.wallet.gift_card_button': [
+    'دکمهٔ کارت هدیه',
+    'دکمهٔ زیر موجودی کیف پول که واردکردن کد کارت هدیه را شروع می‌کند؛ فقط وقتی قابلیت کارت هدیه روشن است.',
+  ],
+  'bot.wallet.gift_card_ask': [
+    'درخواست کد کارت هدیه',
+    'پس از زدن دکمهٔ کارت هدیه؛ پیام متنی بعدی مشتری تا ده دقیقه به‌عنوان کد خوانده می‌شود.',
+  ],
+  'bot.wallet.gift_card_redeemed': [
+    'کارت هدیه پذیرفته شد',
+    'وقتی کد درست است و مبلغ آن به کیف پول اضافه شده؛ مبلغ و موجودی پس از آن.',
+  ],
+  'bot.wallet.gift_card_rejected': [
+    'کارت هدیه پذیرفته نشد',
+    'یک جمله برای همهٔ حالت‌ها: کد اشتباه، استفاده‌شده، منقضی، غیرفعال یا رسیدن به سقف هر مشتری؛ تا معلوم نشود کدام کدها وجود دارند.',
+  ],
+  'bot.wallet.gift_card_rate_limited': [
+    'تلاش‌های ناموفق زیاد',
+    'وقتی مشتری در یک ساعت گذشته چند کد نادرست فرستاده است؛ کد خوانده نمی‌شود.',
+  ],
+  'bot.wallet.gift_card_unavailable': [
+    'کارت هدیه غیرفعال',
+    'وقتی قابلیت کارت هدیه خاموش است و مشتری دکمهٔ قدیمی را زده یا کدی فرستاده است.',
   ],
   'bot.wallet.topup_unavailable': [
     'شارژ کیف پول غیرفعال',
@@ -4018,6 +4048,14 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'ops.log.referral_commission': [
     'گزارش مالی: پورسانت معرف',
     'وقتی پورسانت خرید یک زیرمجموعه به کیف پول معرف واریز می‌شود؛ هر دو طرف، سرویس خریداری‌شده و موجودی معرف قبل و بعد.',
+  ],
+  'ops.log.gift_card_redeemed': [
+    'گزارش مالی: استفاده از کارت هدیه',
+    'وقتی مشتری کد کارت هدیه‌ای را وارد می‌کند و مبلغ آن به کیف پولش اضافه می‌شود؛ کاربر، دسته، چهار حرف آخر کد، موجودی قبل و بعد و منبع (ربات یا مینی‌اپ).',
+  ],
+  'ops.log.gift_card_batch_created': [
+    'گزارش مالی: ساخت دستهٔ کارت هدیه',
+    'وقتی ادمینی دسته‌ای از کارت‌های هدیه می‌سازد؛ تعداد کدها، مبلغ هر کد و جمع ارزش اسمی، تاریخ انقضا، ادمین و دلیل.',
   ],
   'ops.log.signup_gift': [
     'گزارش مالی: هدیهٔ عضویت',

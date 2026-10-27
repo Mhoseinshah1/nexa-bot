@@ -138,6 +138,7 @@ export {
   CANCEL_ORDER_CALLBACK_PREFIX,
   TOPUP_MENU_CALLBACK_PREFIX,
   TOPUP_PICK_CALLBACK_PREFIX,
+  GIFT_CARD_CALLBACK_DATA,
   REFERRAL_INVITE_CALLBACK_PREFIX,
   SERVICE_CALLBACK_PREFIX,
   SERVICES_PAGE_CALLBACK_PREFIX,
@@ -1502,6 +1503,16 @@ export class BotRuntime {
         orderId: null,
       };
     }
+    if (command.intent === 'GIFT_CARD') {
+      return topupFlow.giftCardBegin(
+        this,
+        scope,
+        actor,
+        customer,
+        input.botInstanceId,
+        input.idempotencyKey,
+      );
+    }
     if (command.intent === 'TOPUP_MENU') {
       return topupFlow.topupBegin(
         this,
@@ -2301,6 +2312,10 @@ export class BotRuntime {
         buttons: [...found.map((service) => serviceListButton(service, now)), backToListButton()],
         orderId: null,
       };
+    }
+    // R10 D4: a gift card code. The window is closed RECEIVED by the read; the text is hashed.
+    if (capture.purpose === 'GIFT_CARD_CODE') {
+      return topupFlow.giftCardText(this, scope, actor, customer, text, input);
     }
     if (capture.purpose === 'GATEWAY_REFUND_CARD') {
       return cardReceiptFlow.gatewayRefundCardText(

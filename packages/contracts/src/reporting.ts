@@ -178,6 +178,13 @@ export const WALLET_REPORT_GROUPS = [
    * wallet identity opening + Σ movements = closing still holds.
    */
   'OPENING_BALANCE',
+  /*
+   * R10 D4: a gift card redeemed (`GIFT_CARD_REDEMPTION`). Its own group, beside GIFT and
+   * never TOPUP: whether a batch was sold for money or given away is the owner's question
+   * (`docs/open-questions.md`), and kept apart it can be read either way without
+   * reclassifying history. Not revenue: no sale and no payment stands behind the credit.
+   */
+  'GIFT_CARD',
   'OTHER',
 ] as const;
 export type WalletReportGroup = (typeof WALLET_REPORT_GROUPS)[number];
@@ -200,6 +207,7 @@ export const WALLET_REPORT_GROUP_OF: Readonly<Record<LedgerReason, WalletReportG
   REFERRAL_COMMISSION: 'REFERRAL_COMMISSION',
   REFERRAL_COMMISSION_REVERSAL: 'REFERRAL_COMMISSION_REVERSAL',
   REFERRAL_SIGNUP_GIFT: 'GIFT',
+  GIFT_CARD_REDEMPTION: 'GIFT_CARD',
   START_GIFT: 'GIFT',
   LOTTERY_WIN: 'GIFT',
   LUCK_WHEEL_WIN: 'GIFT',
