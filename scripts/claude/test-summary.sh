@@ -5,7 +5,8 @@
 # digest (name + first message), this gives the per-failure detail.
 #
 #   bash scripts/claude/test-summary.sh pnpm verify
-#   bash scripts/claude/test-summary.sh pnpm test:integration -- tests/integration/foo.test.ts
+#   bash scripts/claude/test-summary.sh pnpm exec vitest run --project integration tests/integration/foo.test.ts
+#   (never `pnpm test:integration -- <files>`: it ignores the file list and runs the WHOLE suite)
 #   bash scripts/claude/test-summary.sh --from run.log        # summarise a saved log
 #   some-command 2>&1 | bash scripts/claude/test-summary.sh --from -
 #

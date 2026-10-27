@@ -14,6 +14,7 @@ import {
   SERVICE_LOCATION_MAX_CHANGES_MAX,
   SERVICE_LOCATION_PERIOD_DAYS_MAX,
 } from './service-location.js';
+import { PERSONAL_DISCOUNT_PERCENT_MAX, PERSONAL_DISCOUNT_PERCENT_MIN } from './pricing.js';
 import { customerTermsStandingSchema } from './terms.js';
 
 /**
@@ -99,6 +100,17 @@ export const customerOverviewSchema = z.object({
   locationOverride: customerLocationOverrideSchema.nullable(),
   marketingOptOutAt: z.iso.datetime().nullable(),
   /**
+   * R10 D3: the customer's personal discount as stored — `percent` 0 means none — and when
+   * an operator last changed it (null: never). `enabled` is whether the tenant's
+   * `personal_discount` flag is on NOW: a stored percent applies to nothing while it is
+   * off, and the page says so rather than letting the percent read as in force.
+   */
+  personalDiscount: z.object({
+    percent: z.number().int().min(PERSONAL_DISCOUNT_PERCENT_MIN).max(PERSONAL_DISCOUNT_PERCENT_MAX),
+    setAt: z.iso.datetime().nullable(),
+    enabled: z.boolean(),
+  }),
+  /**
    * Terms and rules acceptance (§11.3, program §6). `available: false` remains for a server
    * built without the terms domain — said as "not available", never as "not accepted",
    * which would be a claim the data cannot support. Otherwise the customer's standing.
@@ -163,6 +175,18 @@ export const customerNotificationsRequestSchema = z.object({
   reason: reasonSchema.min(1),
 });
 export type CustomerNotificationsRequest = z.infer<typeof customerNotificationsRequestSchema>;
+
+/**
+ * R10 D3: set a customer's personal discount percent; `0` removes it. A whole percent from
+ * `PERSONAL_DISCOUNT_PERCENT_MIN` to `PERSONAL_DISCOUNT_PERCENT_MAX`, with a reason — it
+ * changes what the customer pays, so the reason is required like every control here.
+ */
+export const customerPersonalDiscountRequestSchema = z.object({
+  idempotencyKey: idempotencyKeySchema,
+  percent: z.number().int().min(PERSONAL_DISCOUNT_PERCENT_MIN).max(PERSONAL_DISCOUNT_PERCENT_MAX),
+  reason: reasonSchema.min(1),
+});
+export type CustomerPersonalDiscountRequest = z.infer<typeof customerPersonalDiscountRequestSchema>;
 
 export const CUSTOMER_SERVICES_TOGGLE_ACTIONS = ['SUSPEND', 'RESUME'] as const;
 export type CustomerServicesToggleAction = (typeof CUSTOMER_SERVICES_TOGGLE_ACTIONS)[number];
@@ -549,6 +573,8 @@ export const CUSTOMER_360_ROUTES = {
   phone: (id: string) => `/users/${encodeURIComponent(id)}/phone`,
   locationOverride: (id: string) => `/users/${encodeURIComponent(id)}/location-override`,
   notifications: (id: string) => `/users/${encodeURIComponent(id)}/notifications`,
+  /** R10 D3: the personal discount percent (`users.discount.edit`). */
+  personalDiscount: (id: string) => `/users/${encodeURIComponent(id)}/personal-discount`,
   servicesToggle: (id: string) => `/users/${encodeURIComponent(id)}/services/toggle`,
   transferPreview: (id: string) => `/users/${encodeURIComponent(id)}/transfer/preview`,
   transfer: (id: string) => `/users/${encodeURIComponent(id)}/transfer`,

@@ -397,3 +397,23 @@ export interface DiscountCodeCaptureRepository {
     tx: unknown,
   ): Promise<boolean>;
 }
+
+/**
+ * R10 D3: a customer's personal discount, as the pricing boundary reads it.
+ *
+ * Implemented over `customers.personal_discount_percent` in the customers module; the
+ * pricing module declares what it needs and nothing about where it lives. `lock` takes the
+ * customer row `FOR UPDATE` (the wallet's own lock, so a later wallet lock in the same
+ * transaction cannot deadlock against a second confirmation): confirmation re-reads the
+ * percent under it, so an operator's change either committed before (and is seen) or waits
+ * for the confirmation to commit.
+ */
+export interface PersonalDiscountReader {
+  /** The stored percent, 0 when none; null when the customer is not this tenant's. */
+  percentOf(
+    scope: TenantContext,
+    customerId: string,
+    options: { readonly lock: boolean },
+    tx?: unknown,
+  ): Promise<number | null>;
+}

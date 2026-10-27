@@ -21,6 +21,9 @@ import { sql, type SQL } from 'drizzle-orm';
 import {
   ACTOR_TYPES,
   ADMIN_STATUSES,
+  AUTO_RENEW_PREFERENCE_SOURCES,
+  AUTO_RENEW_REFUSALS,
+  AUTO_RENEW_RUN_STATES,
   BACKUP_ARCHIVE_FORMATS,
   LEGACY_COMPACTION_FAILURE_CODES,
   LEGACY_COMPACTION_STATES,
@@ -36,6 +39,11 @@ import {
   BOT_INSTANCE_STATUSES,
   CALENDARS,
   CURRENCY_CODES,
+  CUSTOM_MENU_BOT_SCOPES,
+  CUSTOM_MENU_BUTTON_KINDS,
+  CUSTOM_MENU_CAPTION_MAX,
+  CUSTOM_MENU_LABEL_MAX,
+  CUSTOM_MENU_TEXT_MAX,
   CUSTOMER_NOTE_MAX_LENGTH,
   CUSTOMER_TAG_COLORS,
   CUSTOMER_TAG_LABEL_MAX_LENGTH,
@@ -3674,12 +3682,27 @@ export const customers = pgTable(
      * records a tap on a version of THIS bot's rules, and this is no such tap.
      */
     legacyTermsAcceptedAt: timestamptz('legacy_terms_accepted_at'),
+    /**
+     * R10 D3: the customer's personal discount, a whole percent 0–100 an operator sets on
+     * the customer's page (`users.discount.edit`); 0 is none. Applied by the pricing engine
+     * to purchases and renewals while the `personal_discount` flag is on, as the larger of
+     * it and the ordinary quote — never combined (`PERSONAL_DISCOUNT_STACKING`).
+     *
+     * Not a balance and not a counter: a standing term, like the other Customer 360
+     * controls on this row. There is no history table: the audit row holds each change's
+     * before and after, and every order's frozen quote holds what was applied to it.
+     * Written only by `CustomerControlService` through a conditional UPDATE.
+     */
+    personalDiscountPercent: integer('personal_discount_percent').notNull().default(0),
+    /** When an operator last CHANGED the percent; NULL while it has never been set. */
+    personalDiscountSetAt: timestamptz('personal_discount_set_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     ...recordSourceColumns(),
   },
   (table) => [
     ...recordSourceChecks('customers', table),
+    check('customers_personal_discount_check', sql`personal_discount_percent BETWEEN 0 AND 100`),
     /** The identity. Per tenant, so the same human may be a customer of two. */
     uniqueIndex('customers_tenant_telegram_key').on(table.tenantId, table.telegramUserId),
     /** The list's deterministic keyset: created_at then id, never a mutable column. */
@@ -17249,5 +17272,374 @@ export const giftCardRedemptionAttempts = pgTable(
       'gift_card_redemption_attempts_outcome_check',
       enumCheck('outcome', GIFT_CARD_REJECTIONS),
     ),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Round 10, D1 — automatic renewal (تمدید خودکار)
+// ---------------------------------------------------------------------------
+
+/**
+ * A customer's consent to renew ONE of their services automatically.
+ *
+ * One row per service. `customer_id` is the customer who GAVE the consent, and every run asks
+ * that it still equals `services.customer_id`: a service that changed hands is never renewed
+ * on the strength of somebody else's consent. A transfer also switches it off in the very
+ * statement's transaction that reassigns the service (`DrizzleServiceTransferRepository.
+ * reassign`), so a service handed back does not silently revive an old consent either.
+ *
+ * `consented_total_minor` / `consented_currency` are the renewal total the customer was shown
+ * when they switched it on: a later quote above it is not renewed (`PRICE_ROSE`). Both are
+ * present exactly while it is enabled — the CHECK below — so "on, for how much" is never
+ * half-answered. Not a balance and not a ledger figure: a ceiling the customer agreed to.
+ */
+export const serviceAutoRenewPreferences = pgTable(
+  'service_auto_renew_preferences',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    serviceId: uuid('service_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    enabled: boolean('enabled').notNull(),
+    consentedTotalMinor: bigint('consented_total_minor', { mode: 'bigint' }),
+    consentedCurrency: text('consented_currency'),
+    /** One of `AUTO_RENEW_PREFERENCE_SOURCES`: where it last changed. */
+    source: text('source').notNull(),
+    createdAt: timestamptz('created_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'service_auto_renew_preferences_pkey',
+      columns: [table.tenantId, table.serviceId],
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+      name: 'service_auto_renew_preferences_service_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'service_auto_renew_preferences_customer_fk',
+    }),
+    /** The sweep reads the enabled consents of one tenant. */
+    index('service_auto_renew_preferences_enabled_idx')
+      .on(table.tenantId, table.serviceId)
+      .where(sql`enabled`),
+    check(
+      'service_auto_renew_preferences_source_check',
+      enumCheck('source', AUTO_RENEW_PREFERENCE_SOURCES),
+    ),
+    check(
+      'service_auto_renew_preferences_currency_check',
+      enumCheck('consented_currency', CURRENCY_CODES),
+    ),
+    check(
+      'service_auto_renew_preferences_consent_check',
+      sql`(enabled AND consented_total_minor IS NOT NULL AND consented_currency IS NOT NULL
+            AND consented_total_minor >= 0)
+          OR (NOT enabled AND consented_total_minor IS NULL AND consented_currency IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * One automatic-renewal PERIOD of one service: "this deadline was (or was not) renewed
+ * automatically, and why".
+ *
+ * UNIQUE on (tenant, service, `basis_expires_at`) — the deadline the run was claimed against —
+ * and that is the exactly-once rule: two worker replicas, or a pass that overran, both reach
+ * the same due service and only one INSERT claims it. Every idempotency key the renewal's own
+ * commands take is derived from this row's id and `attempt`, and the wallet debit's reference
+ * is unique on that key. A pass that takes over a lapsed claim (or re-tries a short wallet)
+ * does so as the NEXT attempt: the earlier attempt debited nothing, because a debit commits
+ * only together with `RENEWED`.
+ *
+ * `RENEWED` is written INSIDE the settling transaction (the wallet settlement's `inTransaction`
+ * hook, with `order_id`), so the debit and this state commit together or not at all — a
+ * renewed period that debited nothing, or a debit with the run still `CLAIMED`, cannot exist.
+ *
+ * The snapshot columns (`service_label`, the consented and quoted totals) are what the two
+ * customer notices render at send time (ADR 0030 §1), and `notified_at` is what makes a period
+ * produce at most ONE notice of either kind.
+ */
+export const serviceAutoRenewRuns = pgTable(
+  'service_auto_renew_runs',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    serviceId: uuid('service_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    /** The deadline this run renews: the period. Copied in SQL from `services.expires_at`. */
+    basisExpiresAt: timestamptz('basis_expires_at').notNull(),
+    /** Starts at 1; a period found short and later re-tried is attempt 2, 3, … */
+    attempt: integer('attempt').notNull(),
+    /** One of `AUTO_RENEW_RUN_STATES`. */
+    state: text('state').notNull(),
+    /** One of `AUTO_RENEW_REFUSALS`; present exactly when `state` is `REFUSED`. */
+    refusal: text('refusal'),
+    /** The account name on the panel when the run was claimed: what a notice names. */
+    serviceLabel: text('service_label').notNull(),
+    consentedTotalMinor: bigint('consented_total_minor', { mode: 'bigint' }).notNull(),
+    consentedCurrency: text('consented_currency').notNull(),
+    /** The renewal total quoted by this attempt, once quoted. */
+    quotedTotalMinor: bigint('quoted_total_minor', { mode: 'bigint' }),
+    quotedCurrency: text('quoted_currency'),
+    /** The renewal order this period paid, when `RENEWED`. */
+    orderId: uuid('order_id'),
+    /** When the one notice of this period was raised; null while none was. */
+    notifiedAt: timestamptz('notified_at'),
+    /** A `CLAIMED` run whose lease lapsed is taken over by a later pass. */
+    leaseUntil: timestamptz('lease_until'),
+    createdAt: timestamptz('created_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    unique('service_auto_renew_runs_period_key').on(
+      table.tenantId,
+      table.serviceId,
+      table.basisExpiresAt,
+    ),
+    /** One period per order: an order renews at most one period. */
+    uniqueIndex('service_auto_renew_runs_order_key')
+      .on(table.tenantId, table.orderId)
+      .where(sql`order_id IS NOT NULL`),
+    index('service_auto_renew_runs_state_idx').on(table.tenantId, table.state, table.leaseUntil),
+    foreignKey({
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+      name: 'service_auto_renew_runs_service_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'service_auto_renew_runs_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.orderId],
+      foreignColumns: [orders.tenantId, orders.id],
+      name: 'service_auto_renew_runs_order_fk',
+    }),
+    check('service_auto_renew_runs_state_check', enumCheck('state', AUTO_RENEW_RUN_STATES)),
+    check('service_auto_renew_runs_refusal_check', enumCheck('refusal', AUTO_RENEW_REFUSALS)),
+    check(
+      'service_auto_renew_runs_refusal_state_check',
+      sql`(state = 'REFUSED') = (refusal IS NOT NULL)`,
+    ),
+    check(
+      'service_auto_renew_runs_renewed_check',
+      sql`(state = 'RENEWED') = (order_id IS NOT NULL)`,
+    ),
+    check('service_auto_renew_runs_attempt_check', sql`attempt >= 1`),
+    check(
+      'service_auto_renew_runs_consented_currency_check',
+      enumCheck('consented_currency', CURRENCY_CODES),
+    ),
+    check(
+      'service_auto_renew_runs_quoted_currency_check',
+      enumCheck('quoted_currency', CURRENCY_CODES),
+    ),
+    check(
+      'service_auto_renew_runs_quote_check',
+      sql`(quoted_total_minor IS NULL) = (quoted_currency IS NULL)
+          AND consented_total_minor >= 0
+          AND (quoted_total_minor IS NULL OR quoted_total_minor >= 0)`,
+    ),
+  ],
+);
+
+// --- R10 D2: owner-defined main-menu buttons ---------------------------------------------
+
+/**
+ * R10 D2 — the media of an owner-defined main-menu button: ONE photo or document, as BYTES.
+ *
+ * The precedent is `tenant_media_assets` and `customer_direct_messages`: the bytes live in
+ * PostgreSQL, bounded, and a Telegram `file_id` is never the source of truth because it is
+ * scoped to the one bot that received the upload (another bot of the tenant would answer
+ * "file not found"). Every send is a multipart upload. A backup carries the bytes.
+ *
+ * The allow-list is support's own (`TICKET_REPLY_FILE_TYPES`): the type CHECK is built from
+ * it exactly as `customer_direct_messages_file_type_check` is, so a type, its kind (PHOTO or
+ * DOCUMENT) and its size bound cannot disagree with the contract. A button's `kind` and its
+ * media's `kind` are held equal by the composite foreign key on `custom_menu_buttons`.
+ *
+ * Replacing a button's file inserts a NEW row, repoints the button and deletes the old row in
+ * one transaction, so the tenant's storage bound counts live files only.
+ */
+export const customMenuButtonMedia = pgTable(
+  'custom_menu_button_media',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /** PHOTO or DOCUMENT, decided from the verified type — never from the browser. */
+    kind: text('kind').notNull(),
+    mimeType: text('mime_type').notNull(),
+    /** The name it is sent under: cleaned, ending in the verified type's extension. */
+    fileName: text('file_name').notNull(),
+    byteLength: integer('byte_length').notNull(),
+    sha256: text('sha256').notNull(),
+    content: bytea('content').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('custom_menu_button_media_tenant_id_key').on(table.tenantId, table.id),
+    // The target of the button's (tenant, media, kind) foreign key.
+    unique('custom_menu_button_media_tenant_kind_key').on(table.tenantId, table.id, table.kind),
+    index('custom_menu_button_media_tenant_idx').on(table.tenantId),
+    check('custom_menu_button_media_kind_check', enumCheck('kind', ['PHOTO', 'DOCUMENT'])),
+    /** The allow-list, from the contract: each type with its kind and its own bound. */
+    check(
+      'custom_menu_button_media_type_check',
+      sql`CASE mime_type ${sql.raw(
+        TICKET_REPLY_FILE_TYPES.map((type) => {
+          if (!/^[a-z]+\/[a-z0-9.+-]+$/.test(type.mimeType) || !/^[A-Z]+$/.test(type.kind)) {
+            throw new Error(`custom_menu_button_media: "${type.mimeType}" is not a plain literal.`);
+          }
+          return `WHEN '${type.mimeType}' THEN kind = '${type.kind}' AND byte_length BETWEEN 1 AND ${String(type.maxBytes)}`;
+        }).join(' '),
+      )} ELSE false END`,
+    ),
+    check('custom_menu_button_media_content_check', sql`octet_length(content) = byte_length`),
+    check('custom_menu_button_media_sha256_check', sql`sha256 ~ '^[0-9a-f]{64}$'`),
+    check(
+      'custom_menu_button_media_file_name_check',
+      sql`char_length(file_name) BETWEEN 1 AND 255`,
+    ),
+  ],
+);
+
+/**
+ * R10 D2 — an owner-defined main-menu button (`packages/contracts/src/custom-menu-buttons.ts`).
+ *
+ * A row, not a registry entry: the layout places it by reference (`custom:<id>`, a `v: 2`
+ * layout), and a button is shown on all of the tenant's bots or on the ones named in
+ * `custom_menu_button_bots`. Rows are ARCHIVED, never deleted (a trigger refuses the DELETE):
+ * published revisions reference the id, and a keyboard already sitting in a chat can still
+ * be tapped and must be answered "unavailable" rather than "unknown". Archiving a PHOTO or
+ * DOCUMENT button deletes its file (the storage bound counts live files) and clears `media_id`,
+ * which is why the file is required only while the button is active.
+ *
+ * The SHAPE is one CHECK, whatever writes the row: a LINK has a normalised https `url`
+ * and no file (a `body` is its optional note); a TEXT has a `body` of 1..4096; a PHOTO or
+ * DOCUMENT has a file of its own kind and an optional caption of at most 1024. The label is
+ * unique among the tenant's ACTIVE buttons only, one line, never reading as a slash command.
+ *
+ * Every write is a conditional UPDATE naming the `version` it read.
+ */
+export const customMenuButtons = pgTable(
+  'custom_menu_buttons',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    label: text('label').notNull(),
+    kind: text('kind').notNull(),
+    url: text('url'),
+    /** The TEXT message, a LINK's optional note, or a PHOTO or DOCUMENT's optional caption. */
+    body: text('body'),
+    mediaId: uuid('media_id'),
+    botScope: text('bot_scope').notNull().default('ALL'),
+    version: integer('version').notNull().default(1),
+    archivedAt: timestamptz('archived_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    createdByAdminId: uuid('created_by_admin_id'),
+    updatedByAdminId: uuid('updated_by_admin_id'),
+  },
+  (table) => [
+    unique('custom_menu_buttons_tenant_id_key').on(table.tenantId, table.id),
+    /** A label is one active button's: an archived button frees it. */
+    uniqueIndex('custom_menu_buttons_active_label_key')
+      .on(table.tenantId, table.label)
+      .where(sql`archived_at IS NULL`),
+    index('custom_menu_buttons_tenant_idx').on(table.tenantId, table.createdAt, table.id),
+    check('custom_menu_buttons_kind_check', enumCheck('kind', CUSTOM_MENU_BUTTON_KINDS)),
+    check('custom_menu_buttons_scope_check', enumCheck('bot_scope', CUSTOM_MENU_BOT_SCOPES)),
+    check('custom_menu_buttons_version_check', sql`version >= 1`),
+    check(
+      'custom_menu_buttons_label_check',
+      sql`char_length(label) BETWEEN 1 AND ${sql.raw(String(CUSTOM_MENU_LABEL_MAX))}
+          AND label !~ '[[:cntrl:]]' AND left(label, 1) <> '/' AND label = btrim(label)`,
+    ),
+    check(
+      'custom_menu_buttons_url_check',
+      sql`url IS NULL OR (url ~ '^https://' AND char_length(url) <= ${sql.raw(String(CLIENT_APP_URL_MAX_LENGTH))})`,
+    ),
+    check(
+      'custom_menu_buttons_shape_check',
+      sql`CASE kind
+            WHEN 'LINK' THEN url IS NOT NULL AND media_id IS NULL
+              AND (body IS NULL OR char_length(body) BETWEEN 1 AND ${sql.raw(String(CUSTOM_MENU_TEXT_MAX))})
+            WHEN 'TEXT' THEN url IS NULL AND media_id IS NULL AND body IS NOT NULL
+              AND char_length(body) BETWEEN 1 AND ${sql.raw(String(CUSTOM_MENU_TEXT_MAX))}
+            WHEN 'PHOTO' THEN url IS NULL AND (media_id IS NOT NULL OR archived_at IS NOT NULL)
+              AND (body IS NULL OR char_length(body) BETWEEN 1 AND ${sql.raw(String(CUSTOM_MENU_CAPTION_MAX))})
+            WHEN 'DOCUMENT' THEN url IS NULL AND (media_id IS NOT NULL OR archived_at IS NOT NULL)
+              AND (body IS NULL OR char_length(body) BETWEEN 1 AND ${sql.raw(String(CUSTOM_MENU_CAPTION_MAX))})
+            ELSE false
+          END`,
+    ),
+    /*
+     * The file belongs to this tenant AND is of this button's kind: a PHOTO button cannot
+     * point at a PDF. A LINK or TEXT button has no media, and a NULL column skips the key.
+     */
+    foreignKey({
+      name: 'custom_menu_buttons_media_fk',
+      columns: [table.tenantId, table.mediaId, table.kind],
+      foreignColumns: [
+        customMenuButtonMedia.tenantId,
+        customMenuButtonMedia.id,
+        customMenuButtonMedia.kind,
+      ],
+    }),
+    foreignKey({
+      name: 'custom_menu_buttons_created_admin_fk',
+      columns: [table.tenantId, table.createdByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+    foreignKey({
+      name: 'custom_menu_buttons_updated_admin_fk',
+      columns: [table.tenantId, table.updatedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+  ],
+);
+
+/**
+ * R10 D2 — which bots show a `SELECTED` custom button. Rows exist only for a button whose
+ * `bot_scope` is `SELECTED` (the service keeps that true; an `ALL` button has none). The button
+ * foreign key carries the tenant; the bot foreign key is the plain one every table uses for
+ * `bot_instances`, and the repository only accepts ids of the tenant's own bots (it reads them
+ * with the tenant filter inside the write transaction).
+ */
+export const customMenuButtonBots = pgTable(
+  'custom_menu_button_bots',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    buttonId: uuid('button_id').notNull(),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+  },
+  (table) => [
+    primaryKey({
+      name: 'custom_menu_button_bots_pk',
+      columns: [table.tenantId, table.buttonId, table.botInstanceId],
+    }),
+    index('custom_menu_button_bots_bot_idx').on(table.tenantId, table.botInstanceId),
+    foreignKey({
+      name: 'custom_menu_button_bots_button_fk',
+      columns: [table.tenantId, table.buttonId],
+      foreignColumns: [customMenuButtons.tenantId, customMenuButtons.id],
+    }),
   ],
 );

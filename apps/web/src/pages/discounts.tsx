@@ -2230,8 +2230,18 @@ function PricePreview({ denied, options }: { denied: boolean; options: ScopeOpti
   );
 }
 
+/** R10 D3: what the personal-discount decision came to, as the preview shows it. */
+const PERSONAL_OUTCOME_LABELS: Readonly<
+  Record<NonNullable<PricePreviewResponse['quote']['personalDiscount']>['outcome'], WebKey>
+> = {
+  APPLIED: 'web.preview_personal_applied',
+  NOT_LARGER: 'web.preview_personal_not_larger',
+  NOT_APPLICABLE: 'web.preview_personal_not_applicable',
+};
+
 function PreviewResult({ result }: { result: PricePreviewResponse }) {
   const cashback = result.quote.cashback;
+  const personal = result.quote.personalDiscount;
   const columns: readonly Column<PricePreviewResponse['rules'][number]>[] = [
     { key: 'label', header: t('web.rule_label'), render: (row) => row.label },
     {
@@ -2294,6 +2304,21 @@ function PreviewResult({ result }: { result: PricePreviewResponse }) {
                 </span>
               ),
             ],
+            ...(personal === undefined
+              ? []
+              : [
+                  [
+                    t('web.preview_personal_discount'),
+                    <span key="p">
+                      <Num value={String(personal.percent)} /> {t('web.discount_percent_unit')} —{' '}
+                      <Badge tone={personal.outcome === 'APPLIED' ? 'ok' : 'neutral'}>
+                        {t(PERSONAL_OUTCOME_LABELS[personal.outcome])}
+                      </Badge>{' '}
+                      — {t('web.preview_personal_competing')}{' '}
+                      <Money value={personal.competingTotal} />
+                    </span>,
+                  ] as [ReactNode, ReactNode],
+                ]),
             ...(result.code === null
               ? []
               : [

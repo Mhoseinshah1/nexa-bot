@@ -3,7 +3,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   COMMERCE_ERROR_CODES,
   CUSTOMER_CONTROL_REASON_MAX_LENGTH,
+  PERSONAL_DISCOUNT_PERCENT_MAX,
+  PERSONAL_DISCOUNT_PERCENT_MIN,
   WALLET_REPORT_GROUP_OF,
+  typedDigitsAsAscii,
   type CurrencyCode,
   type CustomerOverviewResponse,
   type CustomerSummaryResponse,
@@ -24,6 +27,7 @@ import {
   setCustomerChannelExemption,
   setCustomerLocationOverride,
   setCustomerNotifications,
+  setCustomerPersonalDiscount,
   setCustomerPhone,
   toggleCustomerServices,
   transferCustomer,
@@ -205,7 +209,30 @@ function TermsStanding({ overview }: { overview: CustomerOverviewResponse | unde
 // ---------------------------------------------------------------------------
 
 type ControlKind =
-  'EXEMPT' | 'UNEXEMPT' | 'PHONE' | 'UNPHONE' | 'LOCATION' | 'UNLOCATION' | 'MKT_OUT' | 'MKT_IN';
+  | 'EXEMPT'
+  | 'UNEXEMPT'
+  | 'PHONE'
+  | 'UNPHONE'
+  | 'LOCATION'
+  | 'UNLOCATION'
+  | 'MKT_OUT'
+  | 'MKT_IN'
+  | 'DISCOUNT';
+
+/**
+ * R10 D3: the percent an operator typed, or null when it is not a whole number from 0 to 100.
+ * Persian and Arabic-Indic digits are read as ASCII, as every typed number on this page is.
+ * The server decides again (`customerPersonalDiscountRequestSchema`); this is the Persian
+ * sentence before the request, not the rule.
+ */
+export function parsePersonalDiscountPercent(text: string): number | null {
+  const ascii = typedDigitsAsAscii(text);
+  if (!/^[0-9]{1,3}$/u.test(ascii)) return null;
+  const value = Number(ascii);
+  return value >= PERSONAL_DISCOUNT_PERCENT_MIN && value <= PERSONAL_DISCOUNT_PERCENT_MAX
+    ? value
+    : null;
+}
 
 export function CustomerControlsCard({
   customerId,
@@ -214,6 +241,7 @@ export function CustomerControlsCard({
   mayVerifyPhone,
   mayEditLocation,
   mayEditNotifications,
+  mayEditPersonalDiscount = false,
 }: {
   customerId: string;
   overview: CustomerOverviewResponse | undefined;
@@ -221,6 +249,8 @@ export function CustomerControlsCard({
   mayVerifyPhone: boolean;
   mayEditLocation: boolean;
   mayEditNotifications: boolean;
+  /** `users.discount.edit` (R10 D3). */
+  mayEditPersonalDiscount?: boolean;
 }) {
   const notify = useToast();
   const queries = useQueryClient();
@@ -231,6 +261,7 @@ export function CustomerControlsCard({
   const [cooldown, setCooldown] = useState('');
   const [maxChanges, setMaxChanges] = useState('');
   const [periodDays, setPeriodDays] = useState('');
+  const [percentText, setPercentText] = useState('');
 
   const close = () => {
     setOpen(null);
@@ -239,6 +270,7 @@ export function CustomerControlsCard({
     setCooldown('');
     setMaxChanges('');
     setPeriodDays('');
+    setPercentText('');
     write.reset();
   };
 
@@ -291,6 +323,14 @@ export function CustomerControlsCard({
             idempotencyKey: submission.current({ kind, ...body }),
           });
         }
+        case 'DISCOUNT': {
+          // `ready` below refuses to send an invalid percent; the server decides again.
+          const body = { percent: parsePersonalDiscountPercent(percentText) ?? -1, reason: note };
+          return setCustomerPersonalDiscount(customerId, {
+            ...body,
+            idempotencyKey: submission.current({ kind, ...body }),
+          });
+        }
       }
     },
     onSuccess: (response) => {
@@ -308,10 +348,15 @@ export function CustomerControlsCard({
   });
 
   const reasonTooLong = Array.from(reason.trim()).length > CUSTOMER_CONTROL_REASON_MAX_LENGTH;
+  const percentInvalid =
+    open === 'DISCOUNT' &&
+    percentText.trim() !== '' &&
+    parsePersonalDiscountPercent(percentText) === null;
   const ready =
     reason.trim() !== '' &&
     !reasonTooLong &&
     (open !== 'PHONE' || phone.trim() !== '') &&
+    (open !== 'DISCOUNT' || parsePersonalDiscountPercent(percentText) !== null) &&
     !write.isPending;
 
   const row = (
@@ -335,6 +380,7 @@ export function CustomerControlsCard({
   const exempt = overview?.channelMembershipExemptAt ?? null;
   const verified = overview?.phone ?? null;
   const optedOut = overview?.marketingOptOutAt ?? null;
+  const personal = overview?.personalDiscount ?? null;
   const limitText =
     location === null
       ? t('web.c360_location_default')
@@ -401,6 +447,22 @@ export function CustomerControlsCard({
                 ? { label: t('web.c360_notifications_off_action'), kind: 'MKT_OUT' }
                 : { label: t('web.c360_notifications_on_action'), kind: 'MKT_IN' },
               mayEditNotifications,
+            ),
+            row(
+              t('web.c360_personal_discount'),
+              personal === null || personal.percent === 0 ? (
+                t('web.c360_personal_discount_none')
+              ) : (
+                <span>
+                  <Num value={String(personal.percent)} />
+                  {t('web.c360_personal_discount_unit')}{' '}
+                  {!personal.enabled && (
+                    <Badge tone="warn">{t('web.c360_personal_discount_feature_off')}</Badge>
+                  )}
+                </span>
+              ),
+              { label: t('web.c360_personal_discount_set_action'), kind: 'DISCOUNT' },
+              mayEditPersonalDiscount,
             ),
           ]}
         />
@@ -475,6 +537,22 @@ export function CustomerControlsCard({
             </Field>
             <p className="muted small">{t('web.c360_location_hint')}</p>
           </div>
+        )}
+        {open === 'DISCOUNT' && (
+          <Field
+            label={t('web.c360_personal_discount_label')}
+            hint={t('web.c360_personal_discount_hint')}
+            htmlFor="c360-personal-discount"
+            {...(percentInvalid ? { error: t('web.c360_personal_discount_invalid') } : {})}
+          >
+            <Input
+              id="c360-personal-discount"
+              dir="ltr"
+              inputMode="numeric"
+              value={percentText}
+              onChange={(event) => setPercentText(event.target.value)}
+            />
+          </Field>
         )}
         <Field
           label={t('web.c360_reason_label')}
@@ -664,6 +742,7 @@ const ACTION_LABELS: Readonly<Record<string, WebKey>> = {
   'customer.channel_exemption.revoke': 'web.c360_action_unexempt',
   'customer.marketing_opt_out': 'web.c360_action_marketing_out',
   'customer.marketing_opt_in': 'web.c360_action_marketing_in',
+  'customer.personal_discount.set': 'web.c360_action_personal_discount_set',
   'customer.terms_accept': 'web.c360_action_terms_accept',
   'reseller.register': 'web.c360_action_reseller_register',
   'reseller.update': 'web.c360_action_reseller_update',

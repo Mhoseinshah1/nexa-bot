@@ -320,6 +320,12 @@ export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
   [COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE]: 'bot.service.capability_unsupported',
   [COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS]: 'bot.service.action_in_progress',
   /*
+   * Round 10, D1: «تمدید خودکار» cannot be switched on — the feature is off, or this service
+   * cannot be renewed automatically. One Persian sentence for both; nothing was recorded.
+   */
+  [COMMERCE_ERROR_CODES.AUTO_RENEW_DISABLED]: 'bot.service.auto_renew_unavailable',
+  [COMMERCE_ERROR_CODES.AUTO_RENEW_NOT_AVAILABLE]: 'bot.service.auto_renew_unavailable',
+  /*
    * WP-A6: the three location-change refusals a customer can act on, each its own
    * sentence — already there, moved too recently, no changes left in the period.
    */

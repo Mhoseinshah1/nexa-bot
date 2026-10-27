@@ -79,6 +79,19 @@ export function notificationButtons(
   }
   // R4 A5: unblocked — the way back into the bot.
   if (kind === 'ACCOUNT_UNBLOCKED') return [mainMenuButton()];
+  // Round 10, D1: a wallet short of an automatic renewal opens the wallet, to top it up.
+  if (kind === 'SERVICE_AUTO_RENEW_FUNDS_SHORT') {
+    return [{ ...inlineLabel('wallet.open'), data: WALLET_OPEN_CALLBACK_DATA }];
+  }
+  // Round 10, D1: a renewal price above the consent opens the service, to renew it by hand.
+  if (kind === 'SERVICE_AUTO_RENEW_PRICE_CHANGED' && subject.serviceId !== undefined) {
+    return [
+      {
+        ...inlineLabel('service.renewed_details'),
+        data: `${SERVICE_CALLBACK_PREFIX}${subject.serviceId}`,
+      },
+    ];
+  }
   // R2 (item 11): the renewal result's one button opens the renewed service's card.
   if (
     (kind === 'SERVICE_RENEWED' ||

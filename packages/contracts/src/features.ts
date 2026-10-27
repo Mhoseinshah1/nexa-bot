@@ -543,6 +543,49 @@ export const FEATURE_FLAGS = [
     blastRadius: 'TENANT_WIDE',
     configuredBy: [],
   },
+  {
+    key: 'personal_discount',
+    description:
+      'R10 D3: apply each customer\u2019s personal discount percent \u2014 set on the customer\u2019s ' +
+      'page \u2014 to purchases and renewals. The larger single discount wins: the order is ' +
+      'priced the ordinary way (reseller price, discount codes and automatic discounts) and ' +
+      'as the list price minus the personal percent, and the strictly lower total is charged; ' +
+      'the two are never combined. Never applied to a wallet top-up. Off by default: every ' +
+      'price is exactly what it was, and the percents stay stored. Turning it off refuses the ' +
+      'confirmation of a draft priced with a personal discount; the customer starts again.',
+    defaultEnabled: false,
+    // TENANT_WIDE: it changes what every customer with a percent is charged.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
+  {
+    key: 'custom_menu_buttons',
+    description:
+      'R10 D2: owner-defined buttons on the customer main menu \u2014 a link that opens a URL, or ' +
+      'a stored text, photo or document the bot sends \u2014 placed through the button builder. ' +
+      'Off by default: no custom button is drawn on any keyboard, a tap on one already sitting in ' +
+      'a chat is answered as unavailable, and the registry buttons are exactly as before. Turning ' +
+      'it off keeps every button and its place in the layout; turning it on again draws them.',
+    defaultEnabled: false,
+    // LOCAL: it adds buttons to the keyboard the operator has just arranged, and nothing else.
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
+  {
+    key: 'service_auto_renew',
+    description:
+      'Round 10, D1: «تمدید خودکار». On, a customer may switch automatic renewal on for one of ' +
+      'their services from the bot\u2019s service screen or the mini app; auto_renew.lead_hours ' +
+      'before the deadline the worker renews it through the ordinary renewal \u2014 the same ' +
+      'quote, the same wallet debit, the same provisioning \u2014 if the wallet covers it and the ' +
+      'price is not above what the customer agreed to; otherwise the customer is told once. Off ' +
+      'by default. Off stops every new run at once: an opted-in service is simply not renewed, ' +
+      'its consent is kept, and the customer can still switch it off.',
+    defaultEnabled: false,
+    // TENANT_WIDE: it spends customers' wallets without a tap of theirs at the time.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: ['auto_renew.lead_hours'],
+  },
 ] as const satisfies readonly FeatureFlagDefinition[];
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[number]['key'];

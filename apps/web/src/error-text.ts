@@ -8,6 +8,7 @@ import type {
   CAMPAIGN_ERROR_CODES,
   COMMERCE_ERROR_CODES,
   CONTROL_ERROR_CODES,
+  CUSTOM_MENU_BUTTON_ERROR_CODES,
   DELIVERY_QR_ERROR_CODES,
   DIRECT_MESSAGE_ERROR_CODES,
   IDENTITY_ERROR_CODES,
@@ -62,6 +63,7 @@ export type ContractErrorCode =
   | CodesOf<typeof CAMPAIGN_ERROR_CODES>
   | CodesOf<typeof COMMERCE_ERROR_CODES>
   | CodesOf<typeof CONTROL_ERROR_CODES>
+  | CodesOf<typeof CUSTOM_MENU_BUTTON_ERROR_CODES>
   | CodesOf<typeof DELIVERY_QR_ERROR_CODES>
   | CodesOf<typeof DIRECT_MESSAGE_ERROR_CODES>
   | CodesOf<typeof IDENTITY_ERROR_CODES>
@@ -206,6 +208,8 @@ export const ERROR_TEXT = {
   'campaign.window_invalid': 'web.err_campaign_window_invalid',
   'commerce.addon_not_found': 'web.err_commerce_addon_not_found',
   'commerce.addon_not_purchasable': 'web.err_commerce_addon_not_purchasable',
+  'commerce.auto_renew_disabled': 'web.err_commerce_auto_renew_disabled',
+  'commerce.auto_renew_not_available': 'web.err_commerce_auto_renew_not_available',
   'commerce.capture_input_invalid': 'web.err_commerce_capture_input_invalid',
   'commerce.capture_not_open': 'web.err_commerce_capture_not_open',
   'commerce.cashback_rule_not_found': 'web.err_commerce_cashback_rule_not_found',
@@ -346,6 +350,16 @@ export const ERROR_TEXT = {
   'control.template_not_overridden': 'web.err_control_template_not_overridden',
   'control.unknown_key': 'web.err_control_unknown_key',
   'control.version_conflict': 'web.conflict',
+  'custom_menu_button.archived_in_layout': 'web.err_custom_menu_button_archived_in_layout',
+  'custom_menu_button.bot_invalid': 'web.err_custom_menu_button_bot_invalid',
+  'custom_menu_button.content_invalid': 'web.err_custom_menu_button_content_invalid',
+  'custom_menu_button.file_refused': 'web.err_custom_menu_button_file_refused',
+  'custom_menu_button.label_invalid': 'web.err_custom_menu_button_label_invalid',
+  'custom_menu_button.label_taken': 'web.err_custom_menu_button_label_taken',
+  'custom_menu_button.limit_reached': 'web.err_custom_menu_button_limit_reached',
+  'custom_menu_button.storage_full': 'web.err_custom_menu_button_storage_full',
+  'custom_menu_button.unknown_button': 'web.err_custom_menu_button_unknown_button',
+  'custom_menu_button.url_invalid': 'web.err_custom_menu_button_url_invalid',
   'direct_message.body_invalid': 'web.err_direct_message_body_invalid',
   'direct_message.file_refused': 'web.err_direct_message_file_refused',
   'direct_message.file_storage_full': 'web.err_direct_message_file_storage_full',

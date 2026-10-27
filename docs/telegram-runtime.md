@@ -19,7 +19,7 @@ who calls it. Use those instead of opening the router.
 | `guardedAct` → `termsGatedAct` → `act`             | The membership gate, the terms gate, and the intent switch. `terms-gate.test.ts` pins that `act` is reached only through these, by reading this file.                                                                                              |
 | `acceptTerms`, `isAdmin`, `capturedText`           | The terms button, the administrator check, and the customer's open text window by purpose.                                                                                                                                                         |
 | `editWizard`, `editOrSend`, `stopSpinner`, `refOf` | The message plumbing every flow's reply goes through.                                                                                                                                                                                              |
-| `menuFor`                                          | The reply-keyboard route table for a text message.                                                                                                                                                                                                 |
+| `menuFor`                                          | The reply-keyboard route table for a text message. An owner-defined label maps to `mb:<id>` and never overrides a shared label (R10 D2).                                                                                                           |
 | `serviceCardFor`                                   | Public: `container.ts` hands it to the provisioner, which redraws a service card through it.                                                                                                                                                       |
 
 The file is also the barrel: the callback prefixes, intents, reply helpers and a few flow
@@ -49,6 +49,7 @@ exports are re-exported from it, because tests and `container.ts` import them fr
 | `trial-flow.ts`            | The trial.                                                                                                            |
 | `tutorial-flow.ts`         | Tutorials and client-app screens.                                                                                     |
 | `support-flow.ts`          | Support screen and tickets.                                                                                           |
+| `custom-button-flow.ts`    | A tap on an owner-defined main-menu button: link, text, photo, document, or "unavailable" (R10 D2, ADR-0036).         |
 | `admin-common.ts`          | The management panel's shared prefixes and section check.                                                             |
 | `admin-flow.ts`            | `adminTurn`, `adminCaptureText`: the management panel's switch.                                                       |
 | `admin-review-flow.ts`     | Receipt and refund-request review, approve, reject, credit.                                                           |

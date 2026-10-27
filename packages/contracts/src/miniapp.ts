@@ -113,6 +113,8 @@ export const MINIAPP_ROUTES = {
   serviceQuote: '/services/:serviceId/quotes',
   serviceLocations: '/services/:serviceId/locations',
   serviceLocation: '/services/:serviceId/location',
+  // Round 10, D1: switch automatic renewal on or off for one service.
+  serviceAutoRenew: '/services/:serviceId/auto-renew',
   wallet: '/wallet',
   walletEntries: '/wallet/entries',
   walletTopupQuote: '/wallet/topup/quote',
@@ -257,6 +259,12 @@ export const miniAppOrderSchema = z.object({
   total: moneySchema,
   /** Whether a code is applied. The code itself is not echoed. */
   discountApplied: z.boolean(),
+  /**
+   * R10 D3: the customer's personal discount percent when the order's frozen quote was
+   * priced with it (it won over every other discount); null otherwise. The invoice names
+   * it on the discount line. Defaulted so a client meeting an older server reads "none".
+   */
+  personalDiscountPercent: z.number().int().min(1).max(100).nullable().default(null),
   /** Whether a code may be applied or removed now (a DRAFT purchase only). */
   discountEditable: z.boolean(),
   /** The cashback this order promises, earned at delivery; null when none. */
@@ -471,6 +479,41 @@ export const miniAppServicesResponseSchema = z.object({
 });
 export type MiniAppServicesResponse = z.infer<typeof miniAppServicesResponseSchema>;
 
+/**
+ * Round 10, D1: automatic renewal of one service, as the customer may act on it now.
+ *
+ * - `offered` — the switch can be turned ON: the feature is on and this service can be renewed
+ *   automatically (not imported, has a deadline, renewable now). A service already opted in is
+ *   always shown, so it can be turned off whatever else changed.
+ * - `enabled` — the customer's consent is recorded for this service.
+ * - `price` — the renewal total quoted now when `offered` (what switching on agrees to), the
+ *   consented total when `enabled`, else null. Never a client-supplied figure.
+ * - `leadHours` — how long before the deadline the renewal runs.
+ */
+export const miniAppAutoRenewSchema = z.object({
+  offered: z.boolean(),
+  enabled: z.boolean(),
+  price: moneySchema.nullable(),
+  leadHours: z.number().int(),
+});
+export type MiniAppAutoRenew = z.infer<typeof miniAppAutoRenewSchema>;
+
+/**
+ * Switch it on (the server quotes and records that total as the consent) or off.
+ *
+ * `expected` — switching ON only: the renewal total the confirmation SHOWED (the `price` of the
+ * state the customer confirmed). The server records its own fresh quote, and only when that
+ * quote is at or below `expected` in the same currency; otherwise — or with no `expected` —
+ * nothing is recorded and the answer is the state with the new price, to be confirmed again
+ * (Codex review of PR 338: a price that rose between the screen and the tap must never become
+ * the consent). A client that sends a figure it was not shown only raises its own ceiling, and
+ * the consent is still the server's quote, never this figure. Ignored when switching off.
+ */
+export const miniAppAutoRenewRequestSchema = z.object({
+  enabled: z.boolean(),
+  expected: moneySchema.optional(),
+});
+
 export const miniAppServiceDetailSchema = miniAppServiceSummarySchema.extend({
   /** The subscription link, only while the service is deliverable. A secret: never logged. */
   subscriptionUrl: z.string().nullable(),
@@ -482,6 +525,8 @@ export const miniAppServiceDetailSchema = miniAppServiceSummarySchema.extend({
   qr: z.boolean(),
   /** Whether the location sheet has anything to offer now (`CHANGE_LOCATION` is available). */
   canChangeLocation: z.boolean(),
+  /** Round 10, D1: «تمدید خودکار» for this service (`MINIAPP_ROUTES.serviceAutoRenew`). */
+  autoRenew: miniAppAutoRenewSchema,
 });
 export type MiniAppServiceDetail = z.infer<typeof miniAppServiceDetailSchema>;
 

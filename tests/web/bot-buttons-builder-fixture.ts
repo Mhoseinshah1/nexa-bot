@@ -1,5 +1,6 @@
 import {
   BOT_COMMANDS,
+  CUSTOM_MENU_STORAGE_MAX_BYTES,
   DEFAULT_EXPLICIT_MAIN_MENU,
   MAIN_MENU_BUTTONS,
   botMenuBuilderResponseSchema,
@@ -153,6 +154,18 @@ export function builderApi(
   return stubApi([
     ...extra,
     { url: '/bot-menu/builder', body: view },
+    // R10 D2: the custom-buttons panel under the builder reads its own list.
+    {
+      url: '/bot-menu/custom-buttons',
+      body: {
+        featureEnabled: view.customMenuEnabled,
+        buttons: view.customButtons,
+        storage: {
+          usedBytes: 0,
+          maxBytes: CUSTOM_MENU_STORAGE_MAX_BYTES,
+        },
+      },
+    },
     {
       url: '/bot-menu',
       body: {

@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { COMMERCE_ERROR_CODES } from '@nexa/contracts';
 import { UserDetailPage } from '../../apps/web/src/pages/users';
-import { TOGGLE_REFUSAL_LABELS } from '../../apps/web/src/pages/customer-360-sections';
+import {
+  TOGGLE_REFUSAL_LABELS,
+  parsePersonalDiscountPercent,
+} from '../../apps/web/src/pages/customer-360-sections';
 import { customer, product, renderPage, stubApi } from './harness';
 import { openC360Tab } from './c360-helpers';
 import { t, type WebKey } from '../../apps/web/src/i18n/web.fa';
@@ -40,6 +43,7 @@ const overview = (overrides: Record<string, unknown> = {}) => ({
     phone: null,
     locationOverride: null,
     marketingOptOutAt: null,
+    personalDiscount: { percent: 0, setAt: null, enabled: false },
     terms: { available: false },
     ...overrides,
   },
@@ -170,6 +174,70 @@ describe('Customer 360 — the customer page', () => {
     expect(typeof (sent?.body as { idempotencyKey?: unknown }).idempotencyKey).toBe('string');
     // The page now shows the stored state the server answered with.
     expect((await screen.findAllByText('معاف از عضویت')).length).toBeGreaterThan(0);
+  });
+
+  it('R10 D3: sets a personal discount — a whole percent 0..100 and a reason, Persian errors', async () => {
+    const api = stubApi(
+      routes([
+        {
+          url: `/users/${ID}/personal-discount`,
+          body: {
+            ...overview({
+              personalDiscount: { percent: 25, setAt: '2026-10-26T10:00:00.000Z', enabled: true },
+            }),
+            changed: true,
+          },
+        },
+      ]),
+    );
+    renderPage(<UserDetailPage id={ID} {...OFF} mayEditPersonalDiscount denied={false} />);
+    await openC360Tab('controls');
+    expect(await screen.findByText('تخفیف شخصی')).toBeTruthy();
+    fireEvent.click(await screen.findByRole('button', { name: 'تعیین درصد' }));
+    const confirm = screen.getByRole('button', { name: 'تأیید' });
+    fireEvent.change(screen.getByLabelText('دلیل (اجباری)'), { target: { value: 'وفادار' } });
+    const percent = screen.getByLabelText('درصد تخفیف شخصی (۰ تا ۱۰۰)');
+    // Out of range: the Persian sentence, and nothing can be sent.
+    fireEvent.change(percent, { target: { value: '۱۵۰' } });
+    expect(screen.getByText('درصد باید یک عدد صحیح از ۰ تا ۱۰۰ باشد.')).toBeTruthy();
+    expect(confirm).toBeDisabled();
+    // Persian digits are read as the number they are.
+    fireEvent.change(percent, { target: { value: '۲۵' } });
+    expect(screen.queryByText('درصد باید یک عدد صحیح از ۰ تا ۱۰۰ باشد.')).toBeNull();
+    expect(confirm).not.toBeDisabled();
+    fireEvent.click(confirm);
+    await waitFor(() =>
+      expect(api.calls.some((call) => call.url.includes('/personal-discount'))).toBe(true),
+    );
+    const sent = api.calls.find((call) => call.url.includes('/personal-discount'));
+    expect(sent?.method).toBe('POST');
+    expect(sent?.body).toMatchObject({ percent: 25, reason: 'وفادار' });
+    expect(typeof (sent?.body as { idempotencyKey?: unknown }).idempotencyKey).toBe('string');
+  });
+
+  it('R10 D3: draws no personal-discount control without users.discount.edit, and says when the feature is off', async () => {
+    stubApi(
+      routes([], overview({ personalDiscount: { percent: 15, setAt: null, enabled: false } })),
+    );
+    renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
+    await openC360Tab('controls');
+    expect(await screen.findByText('تخفیف شخصی')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'تعیین درصد' })).toBeNull();
+    expect(
+      screen.getByText(
+        'قابلیت «تخفیف شخصی مشتری» خاموش است؛ این درصد فعلاً روی هیچ سفارشی اعمال نمی‌شود',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('R10 D3: reads a typed percent as a whole number from 0 to 100, or nothing', () => {
+    expect(parsePersonalDiscountPercent('0')).toBe(0);
+    expect(parsePersonalDiscountPercent(' 100 ')).toBe(100);
+    expect(parsePersonalDiscountPercent('۳۵')).toBe(35);
+    expect(parsePersonalDiscountPercent('٤٠')).toBe(40);
+    for (const bad of ['', '101', '-5', '12.5', 'ده', '1e2']) {
+      expect(parsePersonalDiscountPercent(bad), bad).toBeNull();
+    }
   });
 
   it('refuses to confirm a transfer whose preview has blockers, and lists them', async () => {

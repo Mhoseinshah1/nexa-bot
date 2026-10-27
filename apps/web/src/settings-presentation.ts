@@ -704,6 +704,13 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
       }),
     },
   },
+  // Round 10, D1: how long before a service's deadline its automatic renewal runs.
+  'auto_renew.lead_hours': {
+    title: 'web.setting_auto_renew_lead_hours',
+    description: 'web.setting_auto_renew_lead_hours_desc',
+    group: 'services',
+    control: { kind: 'integer', unit: 'web.unit_hours' },
+  },
   'miniapp.init_data_max_age_seconds': {
     title: 'web.setting_miniapp_init_data_max_age_seconds',
     description: 'web.setting_miniapp_init_data_max_age_seconds_desc',

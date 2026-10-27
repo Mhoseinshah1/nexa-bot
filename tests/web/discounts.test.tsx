@@ -686,6 +686,34 @@ describe('the price preview', () => {
     expect(screen.getByText('هیچ قاعدهٔ کش‌بکی بر این سفارش اعمال نمی‌شود.')).toBeInTheDocument();
   });
 
+  it('R10 D3: shows the personal-discount decision the quote was made with', async () => {
+    stubApi([
+      ...lists(),
+      {
+        url: '/pricing/preview',
+        body: {
+          ...preview,
+          quote: {
+            ...preview.quote,
+            personalDiscount: {
+              percent: 20,
+              outcome: 'NOT_LARGER',
+              competingTotal: { amountMinor: '200000', currency: 'IRT' },
+              rule: 'LARGER_SINGLE_WINS',
+            },
+          },
+        },
+      },
+    ]);
+    const { container } = render();
+    await screen.findByText('Summer launch');
+    fireEvent.change(input('preview-product'), { target: { value: PRODUCT_ID } });
+    fireEvent.click(screen.getByRole('button', { name: 'محاسبه' }));
+    expect(await screen.findByText('تخفیف شخصی مشتری')).toBeInTheDocument();
+    expect(screen.getByText('اعمال نشد (قیمت معمول کمتر یا برابر است)')).toBeInTheDocument();
+    expect(container.textContent ?? '').toContain('200,000');
+  });
+
   it('prices an add-on purchase from an add-on id, never a product id', async () => {
     const api = stubApi([...lists(), { url: '/pricing/preview', body: preview }]);
     render();

@@ -35,6 +35,7 @@ import { MainMenuLayout } from '../../apps/api/src/modules/commerce/messaging/ap
 import { BotMenuBuilderService } from '../../apps/api/src/modules/control/bot-menu-builder/application/bot-menu-builder.service';
 import { PublishedMainMenuSource } from '../../apps/api/src/modules/control/bot-menu-builder/application/main-menu-source';
 import type { MainMenuBuilderRepository } from '../../apps/api/src/modules/control/bot-menu-builder/application/ports';
+import { DrizzleCustomMenuButtonRepository } from '../../apps/api/src/modules/control/bot-menu-builder/infrastructure/drizzle-custom-menu-button.repository';
 import { DrizzleMainMenuBuilderRepository } from '../../apps/api/src/modules/control/bot-menu-builder/infrastructure/drizzle-main-menu-builder.repository';
 import {
   CachedAppearanceReader,
@@ -1181,6 +1182,8 @@ function serviceWith(
     templates: container.templateResolver,
     defaultLabel: (templateKey) => label(templateKey),
     bots: new DrizzleAppearanceRepository(db),
+    customButtons: new DrizzleCustomMenuButtonRepository(db),
+    features: container.featureFlagResolver,
     ...overrides,
   });
 }

@@ -3,11 +3,14 @@ import { createPortal } from 'react-dom';
 import {
   APPEARANCE_SLOT_FALLBACKS,
   mainMenuButton,
+  isCustomMenuRef,
+  type AnyExplicitMainMenu,
   type AppearanceSlot,
-  type ExplicitMainMenu,
+  type CustomMenuButtonView,
   type MainMenuBuilderItem,
   type MainMenuButtonId,
   type MainMenuButtonStyle,
+  type MainMenuRowItem,
 } from '@nexa/contracts';
 import { t } from '../../i18n/web.fa';
 import { templateCopy } from '../../template-copy';
@@ -16,6 +19,7 @@ import { Icon } from '../../ui/icons';
 import { type PointerDrag } from './dnd';
 import {
   configOf,
+  customHiddenNow,
   dropHintOf,
   hiddenNowByGate,
   hintedRow,
@@ -25,8 +29,16 @@ import {
   type DropHint,
 } from './model';
 
-/** The label a button shows now: the tenant's rendered text, else the template's Persian name. */
-export function labelOf(id: MainMenuButtonId, item: MainMenuBuilderItem | undefined): string {
+/**
+ * The label a button shows now: the tenant's rendered text, else the template's Persian name;
+ * for a custom button (R10 D2) the owner's own label from the list the server gave.
+ */
+export function labelOf(
+  id: MainMenuRowItem,
+  item: MainMenuBuilderItem | undefined,
+  custom?: CustomMenuButtonView,
+): string {
+  if (isCustomMenuRef(id)) return custom?.label ?? t('web.bb_custom_badge');
   if (item !== undefined && item.label !== '') return item.label;
   return templateCopy(mainMenuButton(id).label, '').name;
 }
@@ -112,13 +124,21 @@ export function PreviewKeyboard({
 }
 
 interface ChipContext {
-  readonly layout: ExplicitMainMenu;
+  readonly layout: AnyExplicitMainMenu;
   readonly items: ReadonlyMap<MainMenuButtonId, MainMenuBuilderItem>;
-  readonly selected: MainMenuButtonId | null;
+  /** R10 D2: the owner's custom buttons by reference, and whether the feature is on. */
+  readonly customs: ReadonlyMap<string, CustomMenuButtonView>;
+  readonly customMenuEnabled: boolean;
+  readonly selected: MainMenuRowItem | null;
   readonly editable: boolean;
   readonly drag: PointerDrag;
-  readonly onSelect: (id: MainMenuButtonId) => void;
-  readonly onKey: (id: MainMenuButtonId, event: KeyboardEvent<HTMLButtonElement>) => void;
+  readonly onSelect: (id: MainMenuRowItem) => void;
+  readonly onKey: (id: MainMenuRowItem, event: KeyboardEvent<HTMLButtonElement>) => void;
+}
+
+/** The registry item behind a row item; a custom button has none. */
+function itemOf(context: ChipContext, id: MainMenuRowItem): MainMenuBuilderItem | undefined {
+  return isCustomMenuRef(id) ? undefined : context.items.get(id);
 }
 
 /** The insertion placeholder the drag shows now, or null (no drag, or a drop that does nothing). */
@@ -163,17 +183,23 @@ function Chip({
   where,
   placed,
 }: {
-  id: MainMenuButtonId;
+  id: MainMenuRowItem;
   context: ChipContext;
   /** The position sentence, or the pool's. */
   where: string;
   placed: boolean;
 }) {
-  const { layout, items, selected, editable, drag } = context;
-  const item = items.get(id);
+  const { layout, selected, editable, drag } = context;
+  const item = itemOf(context, id);
+  const custom = isCustomMenuRef(id) ? context.customs.get(id) : undefined;
   const config = configOf(layout, id);
-  const label = labelOf(id, item);
-  const hidden = placed && config.enabled && hiddenNowByGate(item);
+  const label = labelOf(id, item, custom);
+  const hidden =
+    placed &&
+    config.enabled &&
+    (isCustomMenuRef(id)
+      ? customHiddenNow(custom, context.customMenuEnabled)
+      : hiddenNowByGate(item));
   const hint = hintOf(context);
   const states = [
     where,
@@ -213,6 +239,7 @@ function Chip({
       >
         {config.iconSlot !== null && <IconMark slot={config.iconSlot} />}
         <span className="bb-chip-label">{label}</span>
+        {isCustomMenuRef(id) && <Badge tone="info">{t('web.bb_custom_badge')}</Badge>}
         {!config.enabled && <Badge tone="neutral">{t('web.bb_state_off')}</Badge>}
         {hidden && <Badge tone="warn">{t('web.bb_hidden_now')}</Badge>}
       </button>
@@ -244,8 +271,9 @@ function Gap({ at, context }: { at: number; context: ChipContext }) {
 /** The editable keyboard: explicit rows of chips, with drop zones between them. */
 export function EditableKeyboard({ context }: { context: ChipContext }) {
   const { layout, items, editable, drag } = context;
-  const wide = (id: MainMenuButtonId) => items.get(id)?.wide ?? mainMenuButton(id).wide;
-  const rows = layout.rows;
+  const wide = (id: MainMenuRowItem) =>
+    isCustomMenuRef(id) ? false : (items.get(id)?.wide ?? mainMenuButton(id).wide);
+  const rows = layout.rows as readonly (readonly MainMenuRowItem[])[];
   const hint = hintOf(context);
   const targetRow = hintedRow(hint);
   return (
@@ -313,7 +341,7 @@ export function EditableKeyboard({ context }: { context: ChipContext }) {
  * CSP). It never takes the pointer, so hit-testing sees what is under it.
  */
 function DragGhost({ context }: { context: ChipContext }) {
-  const { drag, items, layout } = context;
+  const { drag, layout } = context;
   const box = useRef<SVGRectElement | null>(null);
   const text = useRef<SVGTextElement | null>(null);
   const source = drag.source;
@@ -321,7 +349,11 @@ function DragGhost({ context }: { context: ChipContext }) {
     source === null
       ? ''
       : source.kind === 'button'
-        ? labelOf(source.id, items.get(source.id))
+        ? labelOf(
+            source.id,
+            itemOf(context, source.id),
+            isCustomMenuRef(source.id) ? context.customs.get(source.id) : undefined,
+          )
         : fill(t('web.bb_row_n'), { n: source.row + 1 });
   const look = source?.kind === 'button' ? lookOf(configOf(layout, source.id)) : 'default';
   // Fit the box to the label once it is drawn: measured, then written as attributes.
@@ -360,7 +392,7 @@ function DragGhost({ context }: { context: ChipContext }) {
 /** The Available pool: every declared button in no row, with its configuration kept. */
 export function Pool({ context, children }: { context: ChipContext; children?: ReactNode }) {
   const { layout, drag } = context;
-  const pool = poolOf(layout);
+  const pool = poolOf(layout, [...context.customs.values()]);
   const over = hintOf(context)?.kind === 'pool';
   return (
     <section

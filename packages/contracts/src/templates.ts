@@ -6636,6 +6636,75 @@ export const TEMPLATES = [
     ],
   },
   /*
+   * Round 10, D1: the two notices of automatic renewal. Their values are read at send time
+   * from the `service_auto_renew_runs` row the notification names (ADR 0030 \u00a71).
+   */
+  {
+    key: 'bot.service.auto_renew_funds_short',
+    description:
+      'Round 10, D1: sent at most once per service per period when automatic renewal found the ' +
+      'wallet short of the renewal total. Nothing was charged and no order was left waiting; ' +
+      'the service is renewed automatically if the wallet is topped up before the deadline. ' +
+      'Superseded unsent if the period was renewed meanwhile, automatic renewal was switched ' +
+      'off, or the wallet now covers it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'price',
+        type: 'MONEY',
+        description: 'The renewal total quoted when the run was made.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'The deadline the renewal was for.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.auto_renew_price_changed',
+    description:
+      'Round 10, D1: sent once when automatic renewal did not renew a service because its ' +
+      'renewal now costs more than the total the customer agreed to when switching it on. ' +
+      'Nothing was charged; the customer may renew by hand and switch automatic renewal on ' +
+      'again at the new price.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'price',
+        type: 'MONEY',
+        description: 'The renewal total quoted now.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'consented',
+        type: 'MONEY',
+        description: 'The renewal total the customer agreed to when switching it on.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  /*
    * WP-A9: the wallet low-balance alert and the two pending-payment reminders. Their values
    * are read at send time from the subject (a reader, not a payload \u2014 ADR 0030 \u00a71).
    */
@@ -8541,7 +8610,10 @@ export const TEMPLATES = [
       {
         token: 'discountLine',
         type: 'STRING',
-        description: 'Rendered `bot.order.preinvoice_discount_line`, when a discount applies.',
+        description:
+          'Rendered `bot.order.preinvoice_discount_line`, when a discount applies — or ' +
+          '`bot.order.preinvoice_personal_discount_line` when the discount is the customer’s ' +
+          'personal discount (R10 D3).',
         required: false,
         repeatable: false,
       },
@@ -8782,6 +8854,38 @@ export const TEMPLATES = [
         token: 'subtotal',
         type: 'MONEY',
         description: 'The price before the discount.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.order.preinvoice_personal_discount_line',
+    description:
+      'R10 D3: the pre-invoice line when the order is priced with the customer’s personal ' +
+      'discount — its percent, what it took off and the list price it was taken from. ' +
+      'Shown INSTEAD of the generic discount line, never with it: a personal discount is ' +
+      'never combined with another discount.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'percent',
+        type: 'NUMBER',
+        description: 'The personal discount percent, 1 to 100.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'discount',
+        type: 'MONEY',
+        description: 'The amount taken off.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'subtotal',
+        type: 'MONEY',
+        description: 'The list price the percent was taken from.',
         required: true,
         repeatable: false,
       },
@@ -12055,6 +12159,87 @@ export const TEMPLATES = [
     placeholders: [],
   },
   /*
+   * Round 10, D1: «تمدید خودکار» on a customer's service screen. The switch ON asks first and
+   * names the amount; only its confirm button records the consent. The switch OFF acts at once.
+   */
+  {
+    key: 'bot.service.auto_renew_enable_button',
+    description:
+      'Round 10, D1: the button on a service screen that starts switching automatic renewal ON. ' +
+      'Drawn only while the feature is on and the service can be renewed automatically; it ' +
+      'asks first and records nothing.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.auto_renew_disable_button',
+    description:
+      'Round 10, D1: the button on a service screen that switches automatic renewal OFF, drawn ' +
+      'while it is on for this service. Acts at once.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.auto_renew_ask',
+    description:
+      'Round 10, D1: asks the customer to confirm automatic renewal for one service, naming the ' +
+      'renewal total quoted now (the most it will ever charge) and how long before the deadline ' +
+      'it runs. Records nothing; only its confirm button does.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'price',
+        type: 'MONEY',
+        description: 'The renewal total quoted now, through the ordinary renewal pricing.',
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'leadHours',
+        type: 'NUMBER',
+        description: 'How many hours before the deadline the renewal is attempted.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.auto_renew_confirm_button',
+    description: 'Round 10, D1: the confirm button of the automatic-renewal question.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.auto_renew_enabled',
+    description:
+      'Round 10, D1: the line on the service screen once automatic renewal was switched on.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.auto_renew_disabled',
+    description:
+      'Round 10, D1: the line on the service screen once automatic renewal was switched off.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.auto_renew_unavailable',
+    description:
+      'Round 10, D1: the one answer when automatic renewal cannot be switched on for this ' +
+      'service now — the feature is off, the service is imported or has no deadline, or it ' +
+      'cannot be renewed. Nothing was recorded.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  /*
    * Package F: a customer hands a service to another customer of the tenant
    * (`docs/package-f-service-transfer-audit.md`). The button, the prompt, the confirmation
    * button, the success sentence and the recipient's heading are the brief's own words.
@@ -13165,6 +13350,64 @@ export const TEMPLATES = [
         repeatable: false,
       },
     ],
+  },
+  {
+    key: 'bot.custom_button.text',
+    description:
+      'R10 D2: the message an owner-defined main-menu button of kind text sends when tapped. The text is read at send time from the button row; it goes out as plain text, so no markup the operator typed is interpreted.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'text',
+        type: 'STRING',
+        description: "The operator's text, exactly as stored.",
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.custom_button.caption',
+    description:
+      'R10 D2: the caption on the photo or document an owner-defined main-menu button sends when tapped. Read at send time from the button row; plain text.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'caption',
+        type: 'STRING',
+        description: "The operator's caption, exactly as stored.",
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.custom_button.link',
+    description:
+      'R10 D2: the message an owner-defined main-menu button of kind link answers with; the link itself is the inline button under it. The operator may add a note, and a button without one drops that line.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'text',
+        type: 'STRING',
+        description: "The operator's note, exactly as stored, when there is one.",
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.custom_button.open_link_button',
+    description: "R10 D2: the inline button under a link answer; it opens the operator's link.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.custom_button.unavailable',
+    description:
+      'R10 D2: the answer to a tap on an owner-defined main-menu button that is no longer available: the feature is off, the button was removed or hidden for this bot, or it is not on the published menu. Sent for a keyboard that was drawn before the change.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
   },
   {
     key: 'bot.ticket.view_button',

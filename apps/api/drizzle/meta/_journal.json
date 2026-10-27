@@ -1993,15 +1993,50 @@
     {
       "idx": 284,
       "version": "7",
-      "when": 1793046432973,
-      "tag": "0284_gift_cards",
+      "when": 1793043606848,
+      "tag": "0284_service_auto_renew",
       "breakpoints": true
     },
     {
       "idx": 285,
       "version": "7",
-      "when": 1793046433072,
-      "tag": "0285_gift_cards_permissions",
+      "when": 1793052463954,
+      "tag": "0285_custom_menu_buttons",
+      "breakpoints": true
+    },
+    {
+      "idx": 286,
+      "version": "7",
+      "when": 1793052464037,
+      "tag": "0286_custom_menu_buttons_no_delete",
+      "breakpoints": true
+    },
+    {
+      "idx": 287,
+      "version": "7",
+      "when": 1793055097197,
+      "tag": "0287_customer_personal_discount",
+      "breakpoints": true
+    },
+    {
+      "idx": 288,
+      "version": "7",
+      "when": 1793055097304,
+      "tag": "0288_personal_discount_grant",
+      "breakpoints": true
+    },
+    {
+      "idx": 289,
+      "version": "7",
+      "when": 1793061975710,
+      "tag": "0289_gift_cards",
+      "breakpoints": true
+    },
+    {
+      "idx": 290,
+      "version": "7",
+      "when": 1793061975802,
+      "tag": "0290_gift_cards_permissions",
       "breakpoints": true
     }
   ]

@@ -107,6 +107,11 @@ export function discountAmountMinor(
  * The legacy per-user discount percent (UBR-004) is an `AUTOMATIC` rule scoped to one
  * customer, not a column on the customer: it then has a window, a priority and a place
  * in the trace like every other adjustment.
+ *
+ * R10 D3 adds the owner's own per-customer "personal discount" beside this: a percent an
+ * operator sets on the customer's page, which competes with every rule and the reseller
+ * layer and is never combined with them (`PERSONAL_DISCOUNT_STACKING` in `pricing.ts`). A
+ * customer-scoped AUTOMATIC rule is still a rule, and still stacks by its own flags.
  */
 export const DISCOUNT_KINDS = ['CODE', 'AUTOMATIC'] as const;
 export type DiscountKind = (typeof DISCOUNT_KINDS)[number];

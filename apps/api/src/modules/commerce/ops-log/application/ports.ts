@@ -117,6 +117,11 @@ export interface OrderOriginFact {
   readonly actorId: string | null;
   /** The label captured at action time, so the message survives a deleted administrator. */
   readonly actorLabel: string | null;
+  /**
+   * Round 10, D1: present (and true) when an automatic-renewal run paid this order — decided
+   * by the run row that names it, never by the surface an order was written from.
+   */
+  readonly autoRenew?: true;
 }
 
 export interface ServiceFact {
@@ -433,8 +438,11 @@ export interface OpsLogWords {
   walletAdjustHeading(direction: 'CREDIT' | 'DEBIT'): string;
   /** `" · 🥇 اولین خرید · 🧑‍💼 نماینده"`, or null when neither applies. */
   badges(badges: { readonly firstPurchase: boolean; readonly reseller: boolean }): string | null;
-  /** R9 C2: where a request came from, in Persian: `BOT` (ربات) or `MINI_APP` (مینی‌اپ). */
-  sourceName(source: 'BOT' | 'MINI_APP'): string;
+  /**
+   * R9 C2: where a request came from, in Persian: `BOT` (ربات) or `MINI_APP` (مینی‌اپ); Round 10
+   * D1: `AUTO_RENEW` (تمدید خودکار) for a renewal the worker made on the customer's consent.
+   */
+  sourceName(source: 'BOT' | 'MINI_APP' | 'AUTO_RENEW'): string;
   /** R9 C2: the value of the «first purchase of the customer» line. */
   readonly firstPurchaseYes: string;
   failedOperation(type: string): string;

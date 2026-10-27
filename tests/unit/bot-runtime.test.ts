@@ -83,6 +83,9 @@ import {
   SERVICE_REFRESH_CALLBACK_PREFIX,
   SERVICE_FILES_CALLBACK_PREFIX,
   SERVICE_TRANSFER_ASK_CALLBACK_PREFIX,
+  SERVICE_AUTO_RENEW_ASK_CALLBACK_PREFIX,
+  SERVICE_AUTO_RENEW_CONFIRM_CALLBACK_PREFIX,
+  SERVICE_AUTO_RENEW_OFF_CALLBACK_PREFIX,
   SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX,
   decodeTransferConfirm,
   notificationButtons,
@@ -789,6 +792,21 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.channels.join_private_button',
       'bot.channels.join_required',
       'bot.channels.still_missing',
+      /*
+       * R10 D2: a tap on an owner-defined main-menu button. Reviewed against this rule:
+       *   `bot.custom_button.text` / `.caption`   the owner's own words, sent as plain text.
+       *   `bot.custom_button.link`                "press the button below", sent WITH the
+       *                                           inline URL button, so it never promises
+       *                                           a control that is not there.
+       *   `bot.custom_button.open_link_button`    that button's label.
+       *   `bot.custom_button.unavailable`         the answer to a stale or switched-off
+       *                                           button; it names /start, which answers.
+       */
+      'bot.custom_button.caption',
+      'bot.custom_button.link',
+      'bot.custom_button.open_link_button',
+      'bot.custom_button.text',
+      'bot.custom_button.unavailable',
       // Package D: the custom-service flow, from the catalogue button to its refusals.
       'bot.custom_service.ask_days',
       'bot.custom_service.ask_volume',
@@ -1017,6 +1035,19 @@ describe('profile metadata, normalised before it is ever stored', () => {
       // R5C-1 item 4: what the payment message of a wallet-paid package says until the receipt
       // replaces it. It claims only that the package is being applied, never that it was.
       'bot.service.addon_paid',
+      /*
+       * Round 10, D1: «تمدید خودکار». Reviewed: the ON button and the question ASK and record
+       * nothing — the question names the most it will charge and that a short wallet is told
+       * once and charged nothing; only the confirm button records the consent; OFF acts at
+       * once; the two toasts say what changed; one sentence answers every refusal.
+       */
+      'bot.service.auto_renew_ask',
+      'bot.service.auto_renew_confirm_button',
+      'bot.service.auto_renew_disable_button',
+      'bot.service.auto_renew_disabled',
+      'bot.service.auto_renew_enable_button',
+      'bot.service.auto_renew_enabled',
+      'bot.service.auto_renew_unavailable',
       // R3 item 9: a button label; it puts the service card back in the same message.
       'bot.service.back_to_card_button',
       'bot.service.back_to_list_button',
@@ -1640,6 +1671,10 @@ describe('profile metadata, normalised before it is ever stored', () => {
       // real buttons («🛒 خرید اشتراک», «🧪 سرویس تست»), which is the menu that exists — not
       // the prose "use the menu" this rule refuses. Pinned to this one key.
       'bot.start.welcome',
+      // R10 D2: a stale or switched-off owner button points at the menu that exists: «/start»
+      // redraws the persistent keyboard (and /start is answered, which the loop below checks).
+      // Pinned to this one key.
+      'bot.custom_button.unavailable',
     ]);
     for (const key of new Set([...reachable, ...sent])) {
       const body = CATALOGUE_FA[key];
@@ -1868,6 +1903,10 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
     SERVICE_FILES: SERVICE_FILES_CALLBACK_PREFIX,
     // Package F: `ta:` begins with `t` like `t:`, `to:` and `tp:`; the shadowing case proves it safe.
     SERVICE_TRANSFER_ASK: SERVICE_TRANSFER_ASK_CALLBACK_PREFIX,
+    // Round 10, D1: `ar:`, `ay:` and `an:` begin with `a` like `a:` and `ac:`; proven safe below.
+    SERVICE_AUTO_RENEW_ASK: SERVICE_AUTO_RENEW_ASK_CALLBACK_PREFIX,
+    SERVICE_AUTO_RENEW_CONFIRM: SERVICE_AUTO_RENEW_CONFIRM_CALLBACK_PREFIX,
+    SERVICE_AUTO_RENEW_OFF: SERVICE_AUTO_RENEW_OFF_CALLBACK_PREFIX,
     SERVICE_NOTE: SERVICE_NOTE_CALLBACK_PREFIX,
     SERVICE_RENEW_QUOTE: SERVICE_RENEW_QUOTE_CALLBACK_PREFIX,
     TOPUP_CLOSE: TOPUP_CLOSE_CALLBACK_PREFIX,

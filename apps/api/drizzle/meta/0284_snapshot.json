@@ -1,5 +1,5 @@
 {
-  "id": "506ecb18-8698-4324-8622-3b533db626f5",
+  "id": "8f75209e-a60f-4dfb-85a7-0774efd8a76c",
   "prevId": "66e6fd5e-5e42-4bc4-97fd-fa5d47b7a4a8",
   "version": "7",
   "dialect": "postgresql",
@@ -8752,7 +8752,7 @@
       "checkConstraints": {
         "customer_notifications_kind_check": {
           "name": "customer_notifications_kind_check",
-          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'GATEWAY_LATE_PAYMENT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'TICKET_REPLY', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER', 'TICKET_REPLY_ATTACHMENT', 'SERVICE_RENEWED', 'RESELLER_MINIMUM_REMINDER', 'RESELLER_MINIMUM_ACHIEVED', 'WALLET_MASS_CREDITED', 'SERVICE_GIFT_APPLIED', 'DIRECT_MESSAGE', 'DIRECT_MESSAGE_MEDIA', 'INCIDENT_NOTICE', 'WALLET_ADMIN_CREDITED', 'WALLET_ADMIN_DEBITED', 'ACCOUNT_UNBLOCKED', 'SERVICE_TRAFFIC_ADDED', 'SERVICE_TIME_ADDED')"
+          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'GATEWAY_LATE_PAYMENT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'TICKET_REPLY', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER', 'TICKET_REPLY_ATTACHMENT', 'SERVICE_RENEWED', 'RESELLER_MINIMUM_REMINDER', 'RESELLER_MINIMUM_ACHIEVED', 'WALLET_MASS_CREDITED', 'SERVICE_GIFT_APPLIED', 'DIRECT_MESSAGE', 'DIRECT_MESSAGE_MEDIA', 'INCIDENT_NOTICE', 'WALLET_ADMIN_CREDITED', 'WALLET_ADMIN_DEBITED', 'ACCOUNT_UNBLOCKED', 'SERVICE_TRAFFIC_ADDED', 'SERVICE_TIME_ADDED', 'SERVICE_AUTO_RENEW_FUNDS_SHORT', 'SERVICE_AUTO_RENEW_PRICE_CHANGED')"
         },
         "customer_notifications_state_check": {
           "name": "customer_notifications_state_check",
@@ -9263,7 +9263,7 @@
       "checkConstraints": {
         "customer_text_captures_purpose_check": {
           "name": "customer_text_captures_purpose_check",
-          "value": "purpose IN ('TOPUP_AMOUNT', 'SERVICE_SEARCH', 'SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT', 'TICKET_NEW_MESSAGE', 'TICKET_REPLY', 'GATEWAY_REFUND_CARD', 'GIFT_CARD_CODE')"
+          "value": "purpose IN ('TOPUP_AMOUNT', 'SERVICE_SEARCH', 'SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT', 'TICKET_NEW_MESSAGE', 'TICKET_REPLY', 'GATEWAY_REFUND_CARD')"
         },
         "customer_text_captures_state_check": {
           "name": "customer_text_captures_state_check",
@@ -13671,539 +13671,6 @@
         "gateway_receipt_submissions_bounds_check": {
           "name": "gateway_receipt_submissions_bounds_check",
           "value": "attempts >= 0 AND (byte_length IS NULL OR byte_length >= 0) AND (declared_size IS NULL OR declared_size > 0) AND (error_code IS NULL OR length(error_code) BETWEEN 1 AND 64) AND (provider_status IS NULL OR length(provider_status) BETWEEN 1 AND 32) AND length(telegram_file_unique_id) BETWEEN 1 AND 255 AND length(telegram_file_id) BETWEEN 1 AND 1024"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.gift_card_batches": {
-      "name": "gift_card_batches",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "label": {
-          "name": "label",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "amount_minor": {
-          "name": "amount_minor",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "currency": {
-          "name": "currency",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "code_count": {
-          "name": "code_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "per_customer_limit": {
-          "name": "per_customer_limit",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "state": {
-          "name": "state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'ACTIVE'"
-        },
-        "reason": {
-          "name": "reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_by_admin_id": {
-          "name": "created_by_admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "disabled_at": {
-          "name": "disabled_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "disabled_by_admin_id": {
-          "name": "disabled_by_admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "export_ciphertext": {
-          "name": "export_ciphertext",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "export_key_id": {
-          "name": "export_key_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "export_expires_at": {
-          "name": "export_expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "gift_card_batches_tenant_created_idx": {
-          "name": "gift_card_batches_tenant_created_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "gift_card_batches_tenant_id_tenants_id_fk": {
-          "name": "gift_card_batches_tenant_id_tenants_id_fk",
-          "tableFrom": "gift_card_batches",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "gift_card_batches_created_by_admin_id_admins_id_fk": {
-          "name": "gift_card_batches_created_by_admin_id_admins_id_fk",
-          "tableFrom": "gift_card_batches",
-          "tableTo": "admins",
-          "columnsFrom": [
-            "created_by_admin_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "gift_card_batches_disabled_by_admin_id_admins_id_fk": {
-          "name": "gift_card_batches_disabled_by_admin_id_admins_id_fk",
-          "tableFrom": "gift_card_batches",
-          "tableTo": "admins",
-          "columnsFrom": [
-            "disabled_by_admin_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "gift_card_batches_tenant_id_key": {
-          "name": "gift_card_batches_tenant_id_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "gift_card_batches_state_check": {
-          "name": "gift_card_batches_state_check",
-          "value": "state IN ('ACTIVE', 'DISABLED')"
-        },
-        "gift_card_batches_currency_check": {
-          "name": "gift_card_batches_currency_check",
-          "value": "currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
-        },
-        "gift_card_batches_amount_check": {
-          "name": "gift_card_batches_amount_check",
-          "value": "amount_minor > 0"
-        },
-        "gift_card_batches_count_check": {
-          "name": "gift_card_batches_count_check",
-          "value": "code_count BETWEEN 1 AND 5000"
-        },
-        "gift_card_batches_limit_check": {
-          "name": "gift_card_batches_limit_check",
-          "value": "per_customer_limit IS NULL OR per_customer_limit >= 1"
-        },
-        "gift_card_batches_label_check": {
-          "name": "gift_card_batches_label_check",
-          "value": "char_length(label) BETWEEN 1 AND 80"
-        },
-        "gift_card_batches_reason_check": {
-          "name": "gift_card_batches_reason_check",
-          "value": "char_length(reason) BETWEEN 1 AND 300"
-        },
-        "gift_card_batches_window_check": {
-          "name": "gift_card_batches_window_check",
-          "value": "expires_at > created_at"
-        },
-        "gift_card_batches_disabled_check": {
-          "name": "gift_card_batches_disabled_check",
-          "value": "(state = 'DISABLED') = (disabled_at IS NOT NULL)"
-        },
-        "gift_card_batches_export_check": {
-          "name": "gift_card_batches_export_check",
-          "value": "(export_ciphertext IS NULL) = (export_key_id IS NULL)"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.gift_card_codes": {
-      "name": "gift_card_codes",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "batch_id": {
-          "name": "batch_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "code_hash": {
-          "name": "code_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "last4": {
-          "name": "last4",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "state": {
-          "name": "state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'ACTIVE'"
-        },
-        "disabled_at": {
-          "name": "disabled_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "redeemed_at": {
-          "name": "redeemed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "redeemed_by_customer_id": {
-          "name": "redeemed_by_customer_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "wallet_entry_id": {
-          "name": "wallet_entry_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "gift_card_codes_tenant_hash_key": {
-          "name": "gift_card_codes_tenant_hash_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "code_hash",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "gift_card_codes_batch_customer_idx": {
-          "name": "gift_card_codes_batch_customer_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "batch_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "redeemed_by_customer_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "gift_card_codes_tenant_id_tenants_id_fk": {
-          "name": "gift_card_codes_tenant_id_tenants_id_fk",
-          "tableFrom": "gift_card_codes",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "gift_card_codes_batch_fk": {
-          "name": "gift_card_codes_batch_fk",
-          "tableFrom": "gift_card_codes",
-          "tableTo": "gift_card_batches",
-          "columnsFrom": [
-            "tenant_id",
-            "batch_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "gift_card_codes_customer_fk": {
-          "name": "gift_card_codes_customer_fk",
-          "tableFrom": "gift_card_codes",
-          "tableTo": "customers",
-          "columnsFrom": [
-            "tenant_id",
-            "redeemed_by_customer_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "gift_card_codes_state_check": {
-          "name": "gift_card_codes_state_check",
-          "value": "state IN ('ACTIVE', 'DISABLED')"
-        },
-        "gift_card_codes_hash_check": {
-          "name": "gift_card_codes_hash_check",
-          "value": "code_hash ~ '^[0-9a-f]{64}$'"
-        },
-        "gift_card_codes_last4_check": {
-          "name": "gift_card_codes_last4_check",
-          "value": "last4 ~ '^[2-9A-HJKMNP-TV-Z]{4}$'"
-        },
-        "gift_card_codes_redeemed_check": {
-          "name": "gift_card_codes_redeemed_check",
-          "value": "(redeemed_at IS NULL) = (redeemed_by_customer_id IS NULL)\n        AND (redeemed_at IS NULL) = (wallet_entry_id IS NULL)"
-        },
-        "gift_card_codes_disabled_check": {
-          "name": "gift_card_codes_disabled_check",
-          "value": "(state = 'DISABLED') = (disabled_at IS NOT NULL)\n        AND NOT (state = 'DISABLED' AND redeemed_at IS NOT NULL)"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.gift_card_redemption_attempts": {
-      "name": "gift_card_redemption_attempts",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "customer_id": {
-          "name": "customer_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "attempted_at": {
-          "name": "attempted_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "outcome": {
-          "name": "outcome",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "code_id": {
-          "name": "code_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "gift_card_redemption_attempts_customer_idx": {
-          "name": "gift_card_redemption_attempts_customer_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "customer_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "attempted_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "gift_card_redemption_attempts_tenant_id_tenants_id_fk": {
-          "name": "gift_card_redemption_attempts_tenant_id_tenants_id_fk",
-          "tableFrom": "gift_card_redemption_attempts",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "gift_card_redemption_attempts_customer_fk": {
-          "name": "gift_card_redemption_attempts_customer_fk",
-          "tableFrom": "gift_card_redemption_attempts",
-          "tableTo": "customers",
-          "columnsFrom": [
-            "tenant_id",
-            "customer_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "gift_card_redemption_attempts_outcome_check": {
-          "name": "gift_card_redemption_attempts_outcome_check",
-          "value": "outcome IN ('MALFORMED', 'UNKNOWN', 'USED', 'EXPIRED', 'DISABLED', 'LIMIT_REACHED', 'CURRENCY_MISMATCH')"
         }
       },
       "isRLSEnabled": false
@@ -31175,6 +30642,434 @@
       },
       "isRLSEnabled": false
     },
+    "public.service_auto_renew_preferences": {
+      "name": "service_auto_renew_preferences",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "service_id": {
+          "name": "service_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consented_total_minor": {
+          "name": "consented_total_minor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "consented_currency": {
+          "name": "consented_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "service_auto_renew_preferences_enabled_idx": {
+          "name": "service_auto_renew_preferences_enabled_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "service_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "enabled",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "service_auto_renew_preferences_tenant_id_tenants_id_fk": {
+          "name": "service_auto_renew_preferences_tenant_id_tenants_id_fk",
+          "tableFrom": "service_auto_renew_preferences",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_auto_renew_preferences_service_fk": {
+          "name": "service_auto_renew_preferences_service_fk",
+          "tableFrom": "service_auto_renew_preferences",
+          "tableTo": "services",
+          "columnsFrom": [
+            "tenant_id",
+            "service_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_auto_renew_preferences_customer_fk": {
+          "name": "service_auto_renew_preferences_customer_fk",
+          "tableFrom": "service_auto_renew_preferences",
+          "tableTo": "customers",
+          "columnsFrom": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "service_auto_renew_preferences_pkey": {
+          "name": "service_auto_renew_preferences_pkey",
+          "columns": [
+            "tenant_id",
+            "service_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "service_auto_renew_preferences_source_check": {
+          "name": "service_auto_renew_preferences_source_check",
+          "value": "source IN ('TELEGRAM', 'MINI_APP', 'TRANSFER')"
+        },
+        "service_auto_renew_preferences_currency_check": {
+          "name": "service_auto_renew_preferences_currency_check",
+          "value": "consented_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
+        "service_auto_renew_preferences_consent_check": {
+          "name": "service_auto_renew_preferences_consent_check",
+          "value": "(enabled AND consented_total_minor IS NOT NULL AND consented_currency IS NOT NULL\n            AND consented_total_minor >= 0)\n          OR (NOT enabled AND consented_total_minor IS NULL AND consented_currency IS NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.service_auto_renew_runs": {
+      "name": "service_auto_renew_runs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "service_id": {
+          "name": "service_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "basis_expires_at": {
+          "name": "basis_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attempt": {
+          "name": "attempt",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "refusal": {
+          "name": "refusal",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "service_label": {
+          "name": "service_label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consented_total_minor": {
+          "name": "consented_total_minor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consented_currency": {
+          "name": "consented_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "quoted_total_minor": {
+          "name": "quoted_total_minor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "quoted_currency": {
+          "name": "quoted_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "order_id": {
+          "name": "order_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "notified_at": {
+          "name": "notified_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lease_until": {
+          "name": "lease_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "service_auto_renew_runs_order_key": {
+          "name": "service_auto_renew_runs_order_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "order_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "order_id IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "service_auto_renew_runs_state_idx": {
+          "name": "service_auto_renew_runs_state_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lease_until",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "service_auto_renew_runs_tenant_id_tenants_id_fk": {
+          "name": "service_auto_renew_runs_tenant_id_tenants_id_fk",
+          "tableFrom": "service_auto_renew_runs",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_auto_renew_runs_service_fk": {
+          "name": "service_auto_renew_runs_service_fk",
+          "tableFrom": "service_auto_renew_runs",
+          "tableTo": "services",
+          "columnsFrom": [
+            "tenant_id",
+            "service_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_auto_renew_runs_customer_fk": {
+          "name": "service_auto_renew_runs_customer_fk",
+          "tableFrom": "service_auto_renew_runs",
+          "tableTo": "customers",
+          "columnsFrom": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_auto_renew_runs_order_fk": {
+          "name": "service_auto_renew_runs_order_fk",
+          "tableFrom": "service_auto_renew_runs",
+          "tableTo": "orders",
+          "columnsFrom": [
+            "tenant_id",
+            "order_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "service_auto_renew_runs_period_key": {
+          "name": "service_auto_renew_runs_period_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "service_id",
+            "basis_expires_at"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "service_auto_renew_runs_state_check": {
+          "name": "service_auto_renew_runs_state_check",
+          "value": "state IN ('CLAIMED', 'RENEWED', 'FUNDS_SHORT', 'REFUSED')"
+        },
+        "service_auto_renew_runs_refusal_check": {
+          "name": "service_auto_renew_runs_refusal_check",
+          "value": "refusal IN ('PRICE_ROSE', 'CONSENT_WITHDRAWN', 'NOT_RENEWABLE')"
+        },
+        "service_auto_renew_runs_refusal_state_check": {
+          "name": "service_auto_renew_runs_refusal_state_check",
+          "value": "(state = 'REFUSED') = (refusal IS NOT NULL)"
+        },
+        "service_auto_renew_runs_renewed_check": {
+          "name": "service_auto_renew_runs_renewed_check",
+          "value": "(state = 'RENEWED') = (order_id IS NOT NULL)"
+        },
+        "service_auto_renew_runs_attempt_check": {
+          "name": "service_auto_renew_runs_attempt_check",
+          "value": "attempt >= 1"
+        },
+        "service_auto_renew_runs_consented_currency_check": {
+          "name": "service_auto_renew_runs_consented_currency_check",
+          "value": "consented_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
+        "service_auto_renew_runs_quoted_currency_check": {
+          "name": "service_auto_renew_runs_quoted_currency_check",
+          "value": "quoted_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
+        "service_auto_renew_runs_quote_check": {
+          "name": "service_auto_renew_runs_quote_check",
+          "value": "(quoted_total_minor IS NULL) = (quoted_currency IS NULL)\n          AND consented_total_minor >= 0\n          AND (quoted_total_minor IS NULL OR quoted_total_minor >= 0)"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.service_commercial_actions": {
       "name": "service_commercial_actions",
       "schema": "",
@@ -41282,7 +41177,7 @@
         },
         "wallet_entries_reason_check": {
           "name": "wallet_entries_reason_check",
-          "value": "reason IN ('TOPUP_GATEWAY', 'TOPUP_RECEIPT', 'TOPUP_STARS', 'TOPUP_CRYPTO', 'RECEIPT_CREDIT', 'GATEWAY_LATE_CREDIT', 'PURCHASE', 'PURCHASE_REVERSAL', 'REFUND', 'CASHBACK_GATEWAY', 'CASHBACK_TOPUP', 'CASHBACK_RENEWAL', 'CASHBACK_PURCHASE', 'CASHBACK_REVERSAL', 'REFERRAL_COMMISSION', 'REFERRAL_COMMISSION_REVERSAL', 'REFERRAL_SIGNUP_GIFT', 'GIFT_CARD_REDEMPTION', 'START_GIFT', 'LOTTERY_WIN', 'LUCK_WHEEL_WIN', 'ADMIN_CREDIT', 'ADMIN_DEBIT', 'MASS_CREDIT', 'MASS_DEBIT', 'ACCOUNT_TRANSFER_OUT', 'ACCOUNT_TRANSFER_IN', 'RESELLER_SETTLEMENT', 'RESELLER_MEMBERSHIP_FEE', 'MIGRATION_OPENING_BALANCE', 'CHARGEBACK', 'CORRECTION', 'OTHER')"
+          "value": "reason IN ('TOPUP_GATEWAY', 'TOPUP_RECEIPT', 'TOPUP_STARS', 'TOPUP_CRYPTO', 'RECEIPT_CREDIT', 'GATEWAY_LATE_CREDIT', 'PURCHASE', 'PURCHASE_REVERSAL', 'REFUND', 'CASHBACK_GATEWAY', 'CASHBACK_TOPUP', 'CASHBACK_RENEWAL', 'CASHBACK_PURCHASE', 'CASHBACK_REVERSAL', 'REFERRAL_COMMISSION', 'REFERRAL_COMMISSION_REVERSAL', 'REFERRAL_SIGNUP_GIFT', 'START_GIFT', 'LOTTERY_WIN', 'LUCK_WHEEL_WIN', 'ADMIN_CREDIT', 'ADMIN_DEBIT', 'MASS_CREDIT', 'MASS_DEBIT', 'ACCOUNT_TRANSFER_OUT', 'ACCOUNT_TRANSFER_IN', 'RESELLER_SETTLEMENT', 'RESELLER_MEMBERSHIP_FEE', 'MIGRATION_OPENING_BALANCE', 'CHARGEBACK', 'CORRECTION', 'OTHER')"
         },
         "wallet_entries_currency_check": {
           "name": "wallet_entries_currency_check",
@@ -41311,10 +41206,6 @@
         "wallet_entries_gateway_late_credit_payment_check": {
           "name": "wallet_entries_gateway_late_credit_payment_check",
           "value": "reason <> 'GATEWAY_LATE_CREDIT' OR payment_id IS NOT NULL"
-        },
-        "wallet_entries_gift_card_shape_check": {
-          "name": "wallet_entries_gift_card_shape_check",
-          "value": "(reason = 'GIFT_CARD_REDEMPTION') = (left(reference, 9) = 'giftcard:')\n        AND (reason <> 'GIFT_CARD_REDEMPTION' OR (direction = 'CREDIT' AND order_id IS NULL\n          AND payment_id IS NULL AND reverses_entry_id IS NULL AND actor_admin_id IS NULL))"
         },
         "wallet_entries_migration_opening_shape_check": {
           "name": "wallet_entries_migration_opening_shape_check",
