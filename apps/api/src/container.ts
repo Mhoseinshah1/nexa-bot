@@ -781,6 +781,8 @@ import { DrizzleOperationCardRepository } from './modules/commerce/provisioning/
 import { ServiceTransferService } from './modules/commerce/provisioning/application/service-transfer.service.js';
 import { ServiceAutoRenewService } from './modules/commerce/provisioning/application/service-auto-renew.service.js';
 import { DrizzleServiceAutoRenewRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-auto-renew.repository.js';
+import { DrizzleUsageSnapshotRepository } from './modules/commerce/provisioning/infrastructure/drizzle-usage-snapshot.repository.js';
+import { UsageSnapshotService } from './modules/commerce/provisioning/application/usage-snapshots.js';
 import { DrizzleServiceTransferRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-transfer.repository.js';
 import { ServiceAdminService } from './modules/commerce/provisioning/application/service-admin.service.js';
 import { ServiceGrantService } from './modules/commerce/provisioning/application/service-grant.service.js';
@@ -1280,6 +1282,8 @@ export interface Container {
   readonly serviceTransfers: ServiceTransferService;
   /** Round 10, D1: «تمدید خودکار» — the customer's switch and the worker's sweep. */
   readonly serviceAutoRenew: ServiceAutoRenewService;
+  /** R11 B2: the usage snapshots behind the mini app's chart (`service_usage_chart`). */
+  readonly usageSnapshots: UsageSnapshotService;
   /** WP-A7: support tickets, for the bot and the Web Admin alike. */
   readonly tickets: TicketService;
   /** WP-A7: the categories a customer files a ticket under. */
@@ -6439,6 +6443,17 @@ export function createContainer(
    * `workerId` names the process instance in a claim, so an operator reading a stuck
    * `IN_FLIGHT` row can tell which replica holds it.
    */
+  /*
+   * R11 B2: kept beside the usage reads below (the provisioner's sync and renewal, the live
+   * check) and read by the mini app's chart. No panel client in it.
+   */
+  const usageSnapshotService = new UsageSnapshotService({
+    store: new DrizzleUsageSnapshotRepository(database.db),
+    features: featureFlagResolver,
+    scopeActivity: tenants,
+    clock,
+  });
+
   const provisioner = new ProvisionerService({
     operations: operationRepository,
     services: serviceRepository,
@@ -6481,6 +6496,7 @@ export function createContainer(
     conditions: new DrizzleOperationalConditionReader(database.db),
     outbox,
     scopeActivity: tenants,
+    usageSnapshots: usageSnapshotService,
     settings: settingsResolver,
     workerId: `${role}:${ids.uuid()}`,
     leaseMs: OPERATION_LEASE_SECONDS_MIN * 1000,
@@ -8457,6 +8473,7 @@ export function createContainer(
     subscriptionFiles: subscriptionFileService,
     serviceTransfers: serviceTransferService,
     serviceAutoRenew: serviceAutoRenewService,
+    usageSnapshots: usageSnapshotService,
     tickets: ticketService,
     ticketCategories: ticketCategoryService,
     pricingRead: pricingReadService,
@@ -8691,6 +8708,7 @@ export function createContainer(
         backgroundBudgetReserve: usageSyncBackgroundReserve,
         guard,
         scopeActivity: tenants,
+        usageSnapshots: usageSnapshotService,
         panelPolicy: panelPolicyReader,
         uow,
         clock,

@@ -11,6 +11,7 @@ import {
   miniAppPageQuerySchema,
   miniAppServiceLocationRequestSchema,
   miniAppServiceQuoteRequestSchema,
+  miniAppUsageQuerySchema,
   type MiniAppAutoRenew,
   type MiniAppOrder,
   type MiniAppServiceAction,
@@ -19,6 +20,8 @@ import {
   type MiniAppServiceLocations,
   type MiniAppServiceOffer,
   type MiniAppServicesResponse,
+  type MiniAppUsageHistory,
+  type UsageChartRangeDays,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { ProvisioningService } from '../../modules/commerce/provisioning/application/provisioning.service.js';
@@ -91,6 +94,42 @@ export class MiniAppServicesController {
       qr: deliverable,
       canChangeLocation: offered.includes('CHANGE_LOCATION'),
       autoRenew: await this.autoRenewOf(call, service),
+      usageChart: await this.container.usageSnapshots.chartEnabled(call.context.scope),
+    };
+  }
+
+  /**
+   * R11 B2: the used volume of ONE of the customer's own services over the last 7 or 30 days,
+   * from the snapshots Nexa stored beside the usage reads it already makes. Another customer's
+   * service is "not found" exactly as on the detail route (`ownService`), and with
+   * `service_usage_chart` off the route answers as if it did not exist. Reads nothing from a
+   * panel. Points carry the used volume only -- no connected-device count.
+   */
+  @Get(MINIAPP_ROUTES.serviceUsage)
+  async usage(
+    @Req() request: FastifyRequest,
+    @Param('serviceId') serviceId: string,
+    @Query() query: unknown,
+  ): Promise<MiniAppUsageHistory> {
+    const call = await miniAppCall(this.container, request, { gated: true });
+    const { days } = parseWith(miniAppUsageQuerySchema, query);
+    const service = await this.ownService(call, serviceId);
+    const history = await this.container.usageSnapshots.history(
+      call.context.scope,
+      service.id,
+      days as UsageChartRangeDays,
+    );
+    if (history === null) throw notFound();
+    return {
+      days: history.days,
+      from: history.from.toISOString(),
+      to: history.to.toISOString(),
+      points: history.points.map((point) => ({
+        at: point.at.toISOString(),
+        usedBytes: point.usedBytes.toString(),
+      })),
+      totalBytes: history.totalBytes === null ? null : history.totalBytes.toString(),
+      expiresAt: history.expiresAt === null ? null : history.expiresAt.toISOString(),
     };
   }
 

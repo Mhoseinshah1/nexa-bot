@@ -61,6 +61,7 @@ interface Harness {
   readonly service: ServiceRefreshService;
   readonly lookup: ReturnType<typeof vi.fn>;
   readonly recordUsage: ReturnType<typeof vi.fn>;
+  readonly usageSnapshots: { readonly record: ReturnType<typeof vi.fn> };
   readonly recorded: OperationalEventInput[];
   readonly budget: ReturnType<typeof vi.fn>;
   readonly clock: { at: Date };
@@ -75,6 +76,7 @@ function harness(
     readonly budgetPermits?: readonly boolean[];
     readonly usageSyncedAt?: Date | null;
     readonly timeoutMs?: number;
+    readonly usageRecorded?: boolean;
     readonly overrides?: Partial<ServiceRefreshDeps>;
   } = {},
 ): Harness {
@@ -111,7 +113,9 @@ function harness(
   });
   const recordUsage = vi.fn(async (_s: unknown, _id: string, usage: { syncedAt: Date }) => {
     row.usageSyncedAt = usage.syncedAt;
+    return options.usageRecorded ?? true;
   });
+  const usageSnapshots = { record: vi.fn(async () => true) };
   const recorded: OperationalEventInput[] = [];
   const openConditions = new Set<string>();
   let budgetCall = 0;
@@ -166,6 +170,7 @@ function harness(
     backgroundBudgetReserve: 2,
     guard: { check: vi.fn(async () => undefined) } as never,
     scopeActivity: { scopeIsActive: vi.fn(async () => true) } as never,
+    usageSnapshots,
     panelPolicy: { forPanel: vi.fn(async () => resolvePanelPolicy(null)) },
     uow: { run: async (_s: unknown, fn: (tx: unknown) => unknown) => fn({}) } as never,
     clock: { now: () => clock.at },
@@ -185,6 +190,7 @@ function harness(
     service: new ServiceRefreshService(deps),
     lookup,
     recordUsage,
+    usageSnapshots,
     recorded,
     budget,
     clock,
@@ -206,6 +212,32 @@ describe('opening a card checks the panel live (Track 3 §1)', () => {
     expect(h.recorded).toEqual([]);
     // Above the background floor, never from it.
     expect(h.budget.mock.calls[0]?.[4]).toBe(2);
+  });
+
+  it('R11 B2: the figure a live check wrote is also kept for the chart, with no extra read', async () => {
+    const h = harness([FOUND]);
+    await h.service.liveCheck(scope, actor, input);
+    expect(h.lookup, 'the snapshot rides on the one read the check makes').toHaveBeenCalledTimes(1);
+    expect(h.usageSnapshots.record).toHaveBeenCalledTimes(1);
+    expect(h.usageSnapshots.record.mock.calls[0]).toEqual([
+      scope,
+      's-1',
+      { usedBytes: 5_368_709_120n, at: T0 },
+      expect.anything(),
+    ]);
+  });
+
+  it('R11 B2: no snapshot when the usage write did not take (the service moved meanwhile)', async () => {
+    const h = harness([FOUND], { usageRecorded: false });
+    await h.service.liveCheck(scope, actor, input);
+    expect(h.recordUsage).toHaveBeenCalledTimes(1);
+    expect(h.usageSnapshots.record).not.toHaveBeenCalled();
+  });
+
+  it('R11 B2: no snapshot for an account the panel says is missing', async () => {
+    const h = harness([MISSING, MISSING]);
+    await h.service.liveCheck(scope, actor, input);
+    expect(h.usageSnapshots.record).not.toHaveBeenCalled();
   });
 
   it('missing: a SECOND read must agree; then the condition is recorded and nothing else', async () => {
