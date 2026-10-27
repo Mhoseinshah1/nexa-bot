@@ -146,7 +146,7 @@ export async function cancelledOrderReply(
   tapped: CardMessageRef | null,
 ): Promise<PendingReply> {
   const fallback = { kind: 'ORDER_CANCELLED' as const, subjectId: orderId };
-  let order: OrderRecord | null = null;
+  let order: OrderRecord | null;
   try {
     order = await rt.deps.orders.orderForCustomer(scope, actor, {
       customerId: customer.id,
@@ -162,7 +162,7 @@ export async function cancelledOrderReply(
   const content = endedContent(order, 'CANCELLED');
   const answer = rt.deps.invoiceScreens?.answerOrder;
   if (answer !== undefined && tapped !== null) {
-    let answered: Awaited<ReturnType<typeof answer>> = null;
+    let answered: Awaited<ReturnType<typeof answer>>;
     try {
       answered = await answer.call(
         rt.deps.invoiceScreens,
