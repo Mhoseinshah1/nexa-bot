@@ -2209,6 +2209,18 @@ export const panels = pgTable(
      * catalogue's reach, never by anything that operates an existing service.
      */
     balancingGroup: text('balancing_group'),
+    /**
+     * R11 A4: «فقط فایل، بدون لینک ساب» — the subscription link of a service on this panel
+     * is never shown to its customer (bot card, «سرویس‌های من», mini app); they get the
+     * connection files only, and «تغییر لینک» becomes «دریافت فایل‌های جدید».
+     *
+     * NOT NULL with default false, so every panel that exists when the migration runs keeps
+     * showing its link and nothing changes underneath an operator. Possible only on a panel
+     * whose provider hands over connection files; `PanelService.update` refuses it on any
+     * other (a CHECK cannot know which provider can). Nothing is sent to a customer when it
+     * is switched, and no service row is touched.
+     */
+    filesOnlyDelivery: boolean('files_only_delivery').notNull().default(false),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },

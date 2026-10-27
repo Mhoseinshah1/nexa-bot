@@ -74,6 +74,11 @@ export interface PanelRecord {
    * catalogue's reach; nothing that operates an existing service reads it.
    */
   readonly balancingGroup: string | null;
+  /**
+   * R11 A4: «فقط فایل، بدون لینک ساب». Read by delivery, «سرویس‌های من» and the mini app
+   * to keep the subscription link from a customer; nothing that operates a service reads it.
+   */
+  readonly filesOnlyDelivery: boolean;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -228,6 +233,8 @@ export interface UpdatePanelInput {
   readonly usernamePolicy?: PanelUsernamePolicy;
   /** Absent leaves it; `null` takes the panel out of its group; a label sets it. */
   readonly balancingGroup?: string | null;
+  /** R11 A4: absent leaves it; true or false sets it. */
+  readonly filesOnlyDelivery?: boolean;
 }
 
 /**

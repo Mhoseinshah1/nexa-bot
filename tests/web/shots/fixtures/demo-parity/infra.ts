@@ -116,6 +116,7 @@ function panel(id: string, name: string, host: string, over: Json = {}): Json {
     },
     drain: { draining: false, since: null, reason: null },
     balancingGroup: null,
+    filesOnlyDelivery: false,
     createdAt: ago(60 * 24 * 160),
     updatedAt: ago(60 * 24 * 3),
     ...over,

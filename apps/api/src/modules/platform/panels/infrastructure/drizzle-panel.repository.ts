@@ -429,6 +429,8 @@ export class DrizzlePanelRepository implements PanelRepository {
     if (input.maxServices !== undefined) changes['maxServices'] = input.maxServices;
     // A VALUE too: `null` takes the panel out of its group.
     if (input.balancingGroup !== undefined) changes['balancingGroup'] = input.balancingGroup;
+    if (input.filesOnlyDelivery !== undefined)
+      changes['filesOnlyDelivery'] = input.filesOnlyDelivery;
     /*
      * All three columns, or none. `null` on the template is a VALUE — it selects the
      * derived generator — so it is written rather than skipped.
@@ -1386,6 +1388,7 @@ function toRecord(row: typeof panels.$inferSelect): PanelRecord {
     activation: row.activation,
     archivedAt: row.archivedAt,
     balancingGroup: row.balancingGroup,
+    filesOnlyDelivery: row.filesOnlyDelivery,
     drain:
       row.drainedAt === null || row.drainReason === null
         ? null

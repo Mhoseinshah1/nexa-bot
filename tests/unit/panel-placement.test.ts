@@ -182,6 +182,7 @@ describe('PanelPlacementService.place', () => {
         archivedAt: null,
         drain: null,
         balancingGroup: 'eu',
+        filesOnlyDelivery: false,
         createdAt: NOW,
         updatedAt: NOW,
       },

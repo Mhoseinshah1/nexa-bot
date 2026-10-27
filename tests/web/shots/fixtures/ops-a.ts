@@ -84,6 +84,7 @@ export function panel(id: string, name: string, over: Json = {}): Json {
     },
     drain: { draining: false, since: null, reason: null },
     balancingGroup: null,
+    filesOnlyDelivery: false,
     createdAt: ago(60 * 24 * 200),
     updatedAt: ago(60 * 24 * 3),
     ...over,
