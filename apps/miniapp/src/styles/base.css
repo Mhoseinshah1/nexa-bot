@@ -194,6 +194,29 @@ h2 {
 .usage-warn {
   fill: var(--warn);
 }
+/* R11 B2: the usage chart on the service screen. */
+.usage-chart svg {
+  inline-size: 100%;
+  block-size: auto;
+}
+.usage-chart-axis {
+  stroke: var(--track);
+  stroke-width: 1;
+}
+.usage-chart-area {
+  fill: var(--usage);
+  fill-opacity: 0.16;
+}
+.usage-chart-line {
+  fill: none;
+  stroke: var(--usage);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.usage-chart-dot {
+  fill: var(--usage);
+}
 .chips {
   display: flex;
   gap: 8px;

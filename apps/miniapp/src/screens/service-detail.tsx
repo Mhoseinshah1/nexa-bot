@@ -16,6 +16,7 @@ import { Button, Card, Loading, Ltr, errorText, useLoad } from '../ui.js';
 import { ServiceCard } from './service-card.js';
 import { QrSheet } from './qr-sheet.js';
 import { LocationSheet } from './location-sheet.js';
+import { UsageChart } from './usage-chart.js';
 
 /**
  * جزئیات سرویس: the same facts the bot's service card shows — usage with the moment it was
@@ -23,8 +24,9 @@ import { LocationSheet } from './location-sheet.js';
  * and the renew / extra traffic / extra time the server offers now, each quoted into a
  * DRAFT and paid through the same checkout as a purchase.
  *
- * Not drawn: the seven-day usage chart and a connected-device count (only the stored usage
- * and the device LIMIT exist), «افزودن خودکار به برنامه» (client apps carry no import
+ * The usage chart (R11 B2, behind `service_usage_chart`) draws the used volume over 7 or 30
+ * days from stored snapshots. Not drawn: a connected-device count (only the stored usage and
+ * the device LIMIT exist), «افزودن خودکار به برنامه» (client apps carry no import
  * link), and «حذف سرویس» (a customer can suspend or resume, never delete). Suspend, rotate,
  * transfer, files, note and refund request arrive with their screens; the QR and the
  * location change are sheets over this page, and the connection guide and support are links.
@@ -64,6 +66,7 @@ function Detail({ service }: { service: MiniAppServiceDetail }) {
             : t('miniapp.service_synced', { at: dateTime(service.usageSyncedAt) })}
         </p>
       </Card>
+      {service.usageChart && <UsageChart serviceId={service.id} />}
       {service.subscriptionUrl !== null && (
         <Card>
           <h2>{t('miniapp.service_link')}</h2>
