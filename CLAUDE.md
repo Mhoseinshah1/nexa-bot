@@ -75,9 +75,15 @@ pnpm verify                    # the gate: static, shell, unit, deploy logic, bu
 pnpm test:integration          # needs the services above
 ```
 
-`pnpm verify` is the gate; after a schema change also `pnpm db:check`. Run tests
-and the gate as `bash scripts/claude/test-summary.sh <command...>`, never reading
-raw output; other long output goes through `bash scripts/claude/log-digest.sh`.
+`pnpm verify` is the gate; after a schema change also `pnpm db:check`. In a
+round every test, typecheck, lint, format, `db:check` or verify-stage run goes
+through `bash scripts/claude/run-gate.sh [--integration] <command...>`, in the
+foreground (max 2 at once, one integration run, round-wide; it prints the
+`test-summary.sh` digest; exit 75 = gave up waiting, retry later; there is no
+global pause). Affected suites only locally
+(`pnpm exec vitest run --project integration <files>`); the full integration
+suite is CI-only. Never read raw output; other long output goes through `bash scripts/claude/log-digest.sh`.
+Rules: `nexa-round-pipeline` §1a, `nexa-test-selection`.
 Other commands (provisioning, backup, shell, deploy, Docker smoke):
 `nexa-test-selection`. CI: `bash scripts/claude/ci-status.sh <pr>`. GraphQL is
 blocked here: `gh api repos/...` REST only, never `gh pr …` or `gh run …`.

@@ -4636,3 +4636,29 @@ money and sends no customer message; the owner decides otherwise.
   report messages, bot template previews on `/content`) still carries the digits it was written
   with, because the same strings are customer-facing in Telegram. Default: unchanged; normalising
   them for display only is a separate decision.
+
+## Round 11 A5 — Bot API 10.2 compatibility
+
+- **OQ-R11-A5-01 — Mini App origin protection: the official rule is unverified.** Reported
+  by secondary sources only (search snippets citing the Bot API changelog, 10.2, 2026-07-14):
+  from 2026-07-20 Telegram blocks Mini App methods called from an origin other than the Mini
+  App's original domain, on by default for every Mini App, with an opt-out in the @BotFather
+  Mini App. `core.telegram.org` (`/bots/webapps`, `/bots/api-changelog`) could not be fetched
+  from the build sandbox (DNS refused), so the exact wording, the method list, how the
+  "original domain" is matched (host only, or scheme and port too; redirects) and the opt-out's
+  scope are NOT established. Nothing was guessed. What was checked in this repository: the Mini
+  App is one origin (`/miniapp/<botInstanceId>/` on the installation's public origin, the same
+  URL `setChatMenuButton` registers); it renders no frame and navigates its view nowhere; the
+  only Telegram calls are `ready`, `expand`, `openLink` and `openTelegramLink`, made from its own
+  document; a payment page opens through `openLink` (Telegram's browser), not inside the view.
+  So no code change is made, and `tests/unit/miniapp-origin-protection.test.ts` pins the
+  single-origin property. To close: the owner (or a session with network access) reads the
+  official text and confirms (a) each bot's menu-button URL host equals the host the page is
+  served from, with no redirect between them (a proxy that redirects `http`/`www` to another
+  host would be a different origin), and (b) whether any `web_app` URL is registered for a
+  different host. The opt-out is not used and not recommended.
+- **OQ-R11-A5-02 — the Bot API 10.2 `subscription` update is ignored, not handled.** Like every
+  update kind without a route it is answered with a success, writes nothing and creates no
+  idempotency row (a redelivery is ignored again); `tests/unit/telegram-unknown-update-kinds.test.ts`
+  pins this. If bot subscriptions become a product feature, the update needs its own route,
+  its own contract and an owner decision about what it moves.
