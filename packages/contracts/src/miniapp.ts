@@ -221,10 +221,25 @@ export const miniAppCategoriesResponseSchema = z.object({
 });
 export type MiniAppCategoriesResponse = z.infer<typeof miniAppCategoriesResponseSchema>;
 
+/**
+ * R11 A9: the personal discount a listed line carries (R10 D3) — set only when the
+ * customer's personal discount wins that line's quote at the pricing boundary, and then
+ * `price` is the total the checkout quotes. The line's own `price` stays what the list
+ * showed before (struck through beside this one). Null everywhere else: no percent, the
+ * flag off, a purpose it does not apply to, or another single discount as large or larger.
+ */
+export const miniAppListedPersonalDiscountSchema = z.object({
+  percent: z.number().int().min(1).max(100),
+  price: moneySchema,
+});
+export type MiniAppListedPersonalDiscount = z.infer<typeof miniAppListedPersonalDiscountSchema>;
+
 export const miniAppProductSchema = z.object({
   id: idSchema,
   title: z.string(),
   price: moneySchema,
+  /** R11 A9. Defaulted so a client meeting an older server reads "none". */
+  personalDiscount: miniAppListedPersonalDiscountSchema.nullable().default(null),
   trafficBytes: bytesSchema,
   durationDays: z.number().int(),
   /** The device limit the plan is sold with; null when the plan does not limit devices. */
@@ -545,6 +560,8 @@ export const miniAppServiceOfferSchema = z.object({
       planId: idSchema.nullable(),
       title: z.string(),
       price: moneySchema,
+      /** R11 A9, as on a product. Defaulted so a client meeting an older server reads "none". */
+      personalDiscount: miniAppListedPersonalDiscountSchema.nullable().default(null),
     }),
   ),
 });
