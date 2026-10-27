@@ -5,6 +5,22 @@ description: Read NEXA test and gate runs through scripts/claude/test-summary.sh
 
 # Digest tool output before reading it
 
+## In a round: run-gate.sh wraps test-summary.sh
+
+```bash
+bash scripts/claude/run-gate.sh [--integration] [--max-wait <s>] <command...>
+bash scripts/claude/run-gate.sh --integration pnpm exec vitest run --project integration <files>
+```
+
+Every test, typecheck, lint, format, `db:check` or verify-stage run in a round
+goes through this runner, in the foreground (`nexa-round-pipeline` §1a). It
+queues behind other agents (2 runs at once, one integration run, round-wide),
+resumes by itself, runs the command through `test-summary.sh` and prints that
+digest below, so you read the digest and nothing else. Exit 75 = it gave up
+waiting: keep coding, re-run later. `--raw` skips the digest. Waiting is
+bounded: a watched output file that stays empty for 3 min means check the
+process exists (`pgrep -af`), never wait blindly on a background command.
+
 ## Tests and the gate: test-summary.sh
 
 ```bash
@@ -41,8 +57,8 @@ It prints each failing test as `file › title`, its first error message,
 ## Rules
 
 - Every agent that runs tests or `pnpm verify` reads them through
-  `test-summary.sh` (or pipes them through `log-digest.sh`). Reports quote the
-  summary or the digest, never raw output.
+  `run-gate.sh` (which uses `test-summary.sh`) or pipes other output through
+  `log-digest.sh`. Reports quote the summary or the digest, never raw output.
 - Keep the full log in a scratch file (`tee`) when a run is slow, so the
   digest is not the only copy.
 - Read full output only when the digest is not enough — and then only the named
