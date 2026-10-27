@@ -54,6 +54,8 @@ export const LOOP_LABELS_FA: Readonly<Record<string, string>> = {
 
 /** The process roles by their `processRole` value. The assistant reports through the worker. */
 export const PROCESS_ROLE_LABELS_FA: Readonly<Record<string, string>> = {
+  // R11 A3: the API reports no loops, but a restart storm names it like any other role.
+  api: 'سرور وب و وب‌هوک تلگرام',
   worker: 'کارگر پس‌زمینه',
   monitor: 'پایشگر پنل‌ها',
   recovery: 'بازیابی',
