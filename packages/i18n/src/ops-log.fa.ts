@@ -144,6 +144,16 @@ export const OPS_LOG_WORDS_FA = {
   /** The title of an operational event whose code the Persian label map does not know. */
   unknownEvent: 'رویداد سامانه',
   /**
+   * R11 A3: a process role that keeps restarting (`process.restart_storm`) and its end. The
+   * role is already a Persian name (the loop-stall role table); the digits are Persian too.
+   */
+  restartStorm: {
+    heading: (role: string): string => `سرویس ${role} پی‌درپی ری‌استارت می‌شود`,
+    endedHeading: (role: string): string => `سرویس ${role} دوباره پایدار شد`,
+    detail: (restarts: string, minutes: string): string =>
+      `${restarts} بار ری‌استارت در ${minutes} دقیقه، هر بار کمتر از یک دقیقه کار کرد`,
+  },
+  /**
    * `provisioning.stalled` for an operation that is NOT a paid PROVISION (R5A-2 item 6): the
    * title names what actually stalled. The code is unchanged — only the rendered words vary by
    * the operation type the event's context carries.

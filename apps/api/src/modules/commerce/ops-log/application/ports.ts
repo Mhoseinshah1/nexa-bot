@@ -364,12 +364,19 @@ export interface OpsLogFacts {
   ): Promise<number>;
   /** The referrer of a customer, or null. */
   referrerOf(scope: TenantContext, refereeId: string, tx: TransactionScope): Promise<string | null>;
-  /** The referral a signup-gift ledger reference names: the two customers, or null. */
+  /**
+   * The referral a signup-gift ledger reference names: the two customers and the referral
+   * row's own provenance (`NEXA`, or `MIRZA` for an attribution the import carried), or null.
+   */
   referralOf(
     scope: TenantContext,
     referralId: string,
     tx: TransactionScope,
-  ): Promise<{ readonly referrerId: string; readonly refereeId: string } | null>;
+  ): Promise<{
+    readonly referrerId: string;
+    readonly refereeId: string;
+    readonly source: string;
+  } | null>;
   ticket(
     scope: TenantContext,
     id: string,
@@ -490,6 +497,12 @@ export interface OpsLogWords {
     loopName(loop: string): string;
     roleName(role: string): string;
     roleLabel: string;
+  };
+  /** R11 A3: the words of a role that keeps restarting (`process.restart_storm`) and of its end. */
+  restartStorm: {
+    heading(role: string): string;
+    endedHeading(role: string): string;
+    detail(restarts: string, minutes: string): string;
   };
   severity(klass: string): string;
   cleanupLine(countText: string): string;
