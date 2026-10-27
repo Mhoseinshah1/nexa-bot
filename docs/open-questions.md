@@ -4616,6 +4616,28 @@ money and sends no customer message; the owner decides otherwise.
   captcha row like a `/start` arrival and the mini app holds them at `CAPTCHA`, pointing to the
   bot; whether a mini-app arrival should be asked at all is the owner's call.
 
+## Round 11 B4 — the location changes a customer has left
+
+- **Decision (not a question) — no feature flag.** The line only adds text to screens the
+  existing settings already govern: it exists exactly where the `LOCATION_CHANGE` panel-policy
+  row, the service state, the panel capability, an enabled priced target and the location's (or
+  the customer's override) limit already make location change available. A flag would only let
+  the line disagree with the button. It moves no money and sends no message.
+- **OQ-R11-B4-01 — targets with different limits.** The limit lives on each configured
+  location (and a Customer 360 override replaces all of them). When the targets offered to one
+  service carry different limits, the line shows the LARGEST remaining toward any target (it is
+  «0» exactly when every target refuses with the limit), and a service with even one unlimited
+  target shows no line, because the customer can always move there. Is that the reading the
+  owner wants, or should the choice screen show a figure per target? Taken: one figure, no
+  money, no message.
+- **OQ-R11-B4-02 — digits.** The brief's example is «۲ از ۳»; every customer-facing template in
+  this repository renders Latin digits unless the template opts in (`digits: 'PERSIAN'`), so the
+  line reads «2 از 3» like «تا 5 کاربر دیگر قابل افزودن است». One flag on the key would switch
+  it; not taken without a decision.
+- **OQ-R11-B4-03 — the cooldown.** «باقی‌مانده» counts the rolling LIMIT only. A service inside
+  its cooldown can show «2 از 3» and still be refused with the cooldown sentence (the button is
+  withdrawn then, as before). Showing «available again in N hours» is a different feature.
+
 ## Round 11 A7 — the service's panel username in the operations log
 
 - **OQ-R11-A7-01 — the referral-commission message (L8).** A commission is earned on a buyer's
