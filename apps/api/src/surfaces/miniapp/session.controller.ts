@@ -136,6 +136,8 @@ export class MiniAppSessionController {
                 },
         wallet: null,
         reseller: null,
+        // Nothing behind a gate is read for a customer held at one; no bell either.
+        notifications: null,
       };
     }
     const balance = await this.container.wallet.balanceForCustomer(
@@ -154,6 +156,12 @@ export class MiniAppSessionController {
       gate: null,
       wallet: { balance: wire(money(balance.amountMinor, balance.currency)) },
       reseller: standing === null ? null : { tierName: standing.tier.name },
+      // Round 11, B1: null while `notification_centre` is off, which is what hides the bell.
+      notifications: await this.container.miniApp.notificationCentre.summary(
+        context.scope,
+        call.actor,
+        { customerId: context.customer.id, botInstanceId: context.botInstanceId },
+      ),
     };
   }
 }

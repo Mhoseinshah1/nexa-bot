@@ -1,0 +1,5 @@
+ALTER TABLE "customer_notifications" ADD COLUMN "rendered_text" text;--> statement-breakpoint
+ALTER TABLE "customer_notifications" ADD COLUMN "customer_read_at" timestamp with time zone;--> statement-breakpoint
+CREATE INDEX "customer_notifications_centre_idx" ON "customer_notifications" USING btree ("tenant_id","customer_id","resolved_at","id") WHERE rendered_text IS NOT NULL;--> statement-breakpoint
+CREATE INDEX "customer_notifications_centre_unread_idx" ON "customer_notifications" USING btree ("tenant_id","customer_id","resolved_at") WHERE rendered_text IS NOT NULL AND customer_read_at IS NULL;--> statement-breakpoint
+ALTER TABLE "customer_notifications" ADD CONSTRAINT "customer_notifications_centre_check" CHECK ((rendered_text IS NULL OR state = 'DELIVERED') AND (customer_read_at IS NULL OR rendered_text IS NOT NULL));

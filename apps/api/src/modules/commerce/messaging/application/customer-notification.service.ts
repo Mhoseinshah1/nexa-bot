@@ -8,6 +8,7 @@ import {
   CUSTOMER_NOTIFICATION_QUIET_HOURS,
   CUSTOMER_NOTIFICATION_TEMPLATES,
   SERVICE_REMINDER_NOTIFICATION_KINDS,
+  templateDefinition,
   type BotInstanceId,
   type Clock,
   type CustomerNotificationKind,
@@ -37,6 +38,7 @@ import {
   rollReminderWindow,
   type ReminderRateDeps,
 } from './reminder-rate.js';
+import { notificationCentreText } from './notification-centre-text.js';
 import {
   CUSTOMER_NOTIFICATION_LATENCY_WARN_MS,
   notificationLatency,
@@ -347,6 +349,16 @@ export interface CustomerNotificationDeps {
    */
   readonly paymentReferences?: {
     trackingCodeFor: (scope: TenantContext, paymentId: string) => Promise<string | null>;
+  };
+  /**
+   * Round 11, B1: renders a delivered message once more, for the mini app's notification
+   * centre — the tenant's template for the key, with the values this send used. The result is
+   * stored with the `DELIVERED` outcome and is the only copy of the words the centre shows.
+   * Absent, nothing is stored and the centre has nothing to list. A failure never costs the
+   * delivery its record (see `renderedTextFor`).
+   */
+  readonly centreText?: {
+    render(scope: TenantContext, key: TemplateKey, values: TemplateValues): Promise<string>;
   };
   /**
    * Package F: what `SERVICE_TRANSFER_RECEIVED` renders — the service's name, location and
@@ -1575,6 +1587,10 @@ export class CustomerNotificationService {
               ? 'FAILED'
               : 'PENDING';
 
+      // R11 B1: the words, rendered OUTSIDE the transaction (it reads templates) and only for a
+      // delivery; null on any failure, which leaves the row delivered and out of the centre.
+      const renderedText =
+        to === 'DELIVERED' ? await this.renderedTextFor(scope, row, content.values) : null;
       const recorded = await this.deps.uow.run(scope, async (tx) => {
         const moved = await this.deps.notifications.record(
           scope,
@@ -1584,6 +1600,7 @@ export class CustomerNotificationService {
             resolvedAt: to === 'PENDING' ? null : at,
             nextAttemptAt:
               to === 'PENDING' ? new Date(at.getTime() + CUSTOMER_NOTIFICATION_BACKOFF_MS) : null,
+            ...(renderedText === null ? {} : { renderedText }),
           },
           at,
           tx,
@@ -1625,6 +1642,32 @@ export class CustomerNotificationService {
         'customer notification send failed',
       );
       return 'errored';
+    }
+  }
+
+  /**
+   * R11 B1: the plain text of a message that has just been delivered, or `null`.
+   *
+   * Never throws: the customer HAS the message, and the lane's record of that must not hang
+   * on a second render of its template. The cost of a failure is that this one message is
+   * not listed in the centre; it is logged.
+   */
+  private async renderedTextFor(
+    scope: TenantContext,
+    row: CustomerNotificationRecord,
+    values: TemplateValues,
+  ): Promise<string | null> {
+    if (this.deps.centreText === undefined) return null;
+    try {
+      const key = CUSTOMER_NOTIFICATION_TEMPLATES[row.kind];
+      const rendered = await this.deps.centreText.render(scope, key, values);
+      return notificationCentreText(rendered, templateDefinition(key).format);
+    } catch (error: unknown) {
+      this.deps.logger.error(
+        { err: error instanceof Error ? error.name : 'unknown', notificationId: row.id },
+        'a delivered notification could not be rendered for the notification centre',
+      );
+      return null;
     }
   }
 

@@ -910,6 +910,8 @@ import type { NotificationTransport } from './modules/control/notifications/appl
 import { MiniAppSessionService } from './modules/commerce/miniapp/application/miniapp-session.service.js';
 import { MiniAppReceiptService } from './modules/commerce/miniapp/application/miniapp-receipt.service.js';
 import { MiniAppRateLimiter } from './modules/commerce/miniapp/application/miniapp-rate-limiter.js';
+import { NotificationCentreService } from './modules/commerce/miniapp/application/notification-centre.service.js';
+import { DrizzleNotificationCentreRepository } from './modules/commerce/miniapp/infrastructure/drizzle-notification-centre.repository.js';
 import { CheckoutService } from './modules/commerce/checkout/application/checkout.service.js';
 import { DrizzleMiniAppSessionRepository } from './modules/commerce/miniapp/infrastructure/drizzle-miniapp-session.repository.js';
 import { TelegramReceiptUploader } from './modules/commerce/miniapp/infrastructure/telegram-receipt-uploader.js';
@@ -984,6 +986,8 @@ export interface MiniAppSurfaceDeps {
   readonly sessions: MiniAppSessionService;
   readonly rateLimit: MiniAppRateLimiter;
   readonly receipts: MiniAppReceiptService;
+  /** Round 11, B1: the customer's notification centre (feature `notification_centre`). */
+  readonly notificationCentre: NotificationCentreService;
   readonly checkout: CheckoutService;
   readonly topup: WalletTopupFlowService;
   readonly productDisplay: {
@@ -5938,6 +5942,12 @@ export function createContainer(
       },
       // B14: a wallet credit's tracking code (receipt or gateway), from the payment's own row.
       paymentReferences: paymentRepository,
+      /*
+       * R11 B1: the mini app's notification centre keeps the words of a delivered message.
+       * The tenant's own resolver, so an edited template is what is stored, exactly as it is
+       * what the messenger sent.
+       */
+      centreText: { render: (scope, key, values) => templateResolver.render(scope, key, values) },
       contacts: {
         contactFor: async (scope, customerId, tx) => {
           const customer = await customerRepository.findById(scope, customerId, tx);
@@ -8328,6 +8338,18 @@ export function createContainer(
         logger,
       }),
       idempotency,
+    }),
+    notificationCentre: new NotificationCentreService({
+      repository: new DrizzleNotificationCentreRepository(database.db),
+      features: featureFlagResolver,
+      guard,
+      audit,
+      opsLog,
+      sessions,
+      scopeActivity: tenants,
+      uow,
+      idempotency,
+      clock,
     }),
     // R10 B1: the checkout the bot is handed too — one instance, one set of rules.
     checkout: checkoutService,

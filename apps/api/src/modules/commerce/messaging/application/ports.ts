@@ -726,7 +726,16 @@ export interface CustomerNotificationRepository {
     scope: TenantContext,
     id: string,
     to: CustomerNotificationState,
-    stamps: { readonly resolvedAt: Date | null; readonly nextAttemptAt: Date | null },
+    stamps: {
+      readonly resolvedAt: Date | null;
+      readonly nextAttemptAt: Date | null;
+      /**
+       * Round 11, B1: the plain text the customer was sent, for the mini app's notification
+       * centre. Honoured only when `to` is `DELIVERED` — in the same statement, so a delivered
+       * row and its words commit together and no other state ever carries any.
+       */
+      readonly renderedText?: string | null;
+    },
     now: Date,
     tx: TransactionScope,
   ): Promise<boolean>;

@@ -10599,6 +10599,28 @@ export const customerNotifications = pgTable(
      * columns that can disagree with the one that decides.
      */
     resolvedAt: timestamptz('resolved_at'),
+    /**
+     * Round 11, B1 (the mini app's notification centre): the plain text the customer was
+     * sent, exactly as it was rendered at the moment of delivery — markup removed, cut at
+     * `MINIAPP_NOTIFICATION_TEXT_MAX`.
+     *
+     * Stamped by the SAME statement that records `DELIVERED`, and by nothing else, so it
+     * is the answer to "what did this bot tell this customer" and not a second message
+     * store: the row, its owner, its bot and its moment already live here, and a kind and a
+     * subject id cannot be re-rendered into the same words later (the lane froze its
+     * figures; a balance or a status read today is not what was said). Null for every row
+     * delivered before the centre existed and for any row that never reached the customer,
+     * which is what keeps both out of the list without a backfill — and no customer is
+     * messaged about them.
+     */
+    renderedText: text('rendered_text'),
+    /**
+     * When the customer marked this delivered message read in the mini app. Null is unread.
+     * The row is already the customer's own (`customer_id`), so this is read state keyed by
+     * customer without a second table; set only where it is null, so a second tap changes
+     * nothing and keeps the first moment.
+     */
+    customerReadAt: timestamptz('customer_read_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -10608,6 +10630,27 @@ export const customerNotifications = pgTable(
       foreignColumns: [customers.tenantId, customers.id],
       name: 'customer_notifications_customer_fk',
     }),
+    /**
+     * The centre's text exists only for a delivered message, and only a message with text can
+     * have been read: the list is "delivered rows with text", so a read mark on anything else
+     * would be unreachable state.
+     */
+    check(
+      'customer_notifications_centre_check',
+      sql`(rendered_text IS NULL OR state = 'DELIVERED') AND (customer_read_at IS NULL OR rendered_text IS NOT NULL)`,
+    ),
+    /*
+     * The centre's page: one customer's delivered messages, newest first. Ascending on
+     * purpose, as `service_refund_requests_attention_idx` is: scanned backwards it is
+     * `DESC NULLS FIRST`, which is what `ORDER BY resolved_at DESC, id DESC` means.
+     */
+    index('customer_notifications_centre_idx')
+      .on(table.tenantId, table.customerId, table.resolvedAt, table.id)
+      .where(sql`rendered_text IS NOT NULL`),
+    /** The bell's counter: the unread ones only. */
+    index('customer_notifications_centre_unread_idx')
+      .on(table.tenantId, table.customerId, table.resolvedAt)
+      .where(sql`rendered_text IS NOT NULL AND customer_read_at IS NULL`),
     check('customer_notifications_kind_check', enumCheck('kind', CUSTOMER_NOTIFICATION_KINDS)),
     check('customer_notifications_state_check', enumCheck('state', CUSTOMER_NOTIFICATION_STATES)),
     /**
