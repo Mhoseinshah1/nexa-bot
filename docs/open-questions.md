@@ -4494,6 +4494,42 @@ quote. What it does not settle:
   `resellers.source_detail` is not imported into the new column; whether to backfill it (silently,
   no customer message) is the owner's call.
 
+## Round 11 A9 — price lists show the personal discount
+
+Owner bug: with `personal_discount` on and a percent set, every price list still showed the
+undiscounted price. Fixed by pricing each listed line through `PricingService.
+personalListPrices` — the same facts and the same `quoteWith` composition `PricingService.price`
+ends in — so a listed personal price IS the invoice's (bot plan list, renewal menu, package
+lists; mini app store and service offers). Each decided the way that moves no money:
+
+- **OQ-R11-A9-01 — packages are listed at their own price.** The owner listed «extra traffic /
+  extra time» among the lists that must show the discount, but R10 D3 applies the personal
+  discount to purchases and renewals only (`PERSONAL_DISCOUNT_PURPOSES`, OQ-R10-D3-02), so the
+  invoice of a package is undiscounted. A list that showed a discount the invoice does not
+  charge would break the rule this fix exists for, so the package lists ask the same boundary
+  and are unchanged. Widening the purposes (a contract change the owner decides) makes them
+  follow with no further change. Extra users and a paid location change are likewise outside
+  the purposes and are not routed through it.
+- **OQ-R11-A9-02 — a Telegram button cannot carry `<s>`.** Every bot price list is an inline
+  keyboard, and the Bot API takes a button's text as plain text (no `parse_mode`, no entities).
+  The old price on a button is therefore struck with U+0336 (`strikeThroughText`); the rich plan
+  table (rich messages on) uses a real `strikethrough`. Some Telegram clients draw U+0336 less
+  cleanly over Persian text; the owner may prefer the old price without a strike there.
+- **OQ-R11-A9-03 — a list does not show automatic rules, as before.** A list has never shown an
+  automatic promotion. When an automatic rule beats the personal discount, the list shows what
+  it always showed and the invoice the rule's price; when the personal discount wins, the list
+  shows the invoice's figure. Showing every automatic rule on every list is a separate change.
+- **OQ-R11-A9-05 — a reseller's package list shows the package's own price.** Found by this
+  round's test, and older than it: a rate tier's percent is taken off a package at checkout
+  (`PricingService.price` applies the reseller layer to every purpose), but the package lists
+  have never applied it, so a 20 % reseller is listed a 50 000 package and invoiced 40 000 — in
+  the customer's favour. Left as it was (the brief: an undiscounted list shows what it showed);
+  showing the reseller's package price is a one-line change through the same boundary, and the
+  owner's call. `tests/integration/r11-personal-discount-listing.test.ts` pins it.
+- **OQ-R11-A9-04 — digits.** The tag renders its percent in Latin digits («تخفیف شخصی 20٪»), as
+  every customer-facing template and D3's pre-invoice line do; Persian digits would be a
+  catalogue-wide decision.
+
 ## Round 10 D1 — automatic renewal (تمدید خودکار)
 
 Each is decided the way that moves no money and sends no extra message; the owner may decide

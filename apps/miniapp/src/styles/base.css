@@ -216,6 +216,32 @@ h2 {
 .price {
   white-space: nowrap;
 }
+/* R11 A9: a price the customer's personal discount wins — the old one struck, the new, a tag. */
+.personal-price {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 4px 8px;
+  white-space: normal;
+}
+.personal-price-was {
+  color: var(--fg-2);
+  font-size: var(--fs-sm);
+  text-decoration: line-through;
+  white-space: nowrap;
+}
+.personal-price-now {
+  white-space: nowrap;
+}
+.personal-price-tag {
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
 .features {
   margin: 0;
   padding-inline-start: 18px;

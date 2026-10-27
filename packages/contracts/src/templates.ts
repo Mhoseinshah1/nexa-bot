@@ -9007,6 +9007,25 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.pricing.personal_discount_tag',
+    description:
+      'R11 A9: the short tag beside a price a customer is LISTED with their personal ' +
+      'discount (R10 D3) — a plan, a renewal or a package button, the rich plan table, ' +
+      'before any order exists. Shown only when the personal discount wins that line’s ' +
+      'quote, after the discounted price and the struck-through price it replaces, so ' +
+      'the figure on the list is the figure on the invoice. Never shown otherwise.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'percent',
+        type: 'NUMBER',
+        description: 'The personal discount percent, 1 to 100.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.order.preinvoice_cashback_line',
     description: 'The pre-invoice line for a promised cashback, credited only after delivery.',
     format: 'PLAIN_TEXT',

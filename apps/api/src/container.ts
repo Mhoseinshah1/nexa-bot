@@ -2567,8 +2567,28 @@ export function createContainer(
    */
   const productCategoryRepository = new DrizzleProductCategoryRepository(database.db);
 
+  /*
+   * Built before the catalogue (R11 A9): `ProductService` lists a customer's personal
+   * discount through `personalListPrices`, the same boundary every draft is priced at.
+   */
+  const discountRepository = new DrizzleDiscountRepository(database.db);
+  const cashbackRuleRepository = new DrizzleCashbackRuleRepository(database.db);
+  const orderCashbackRepository = new DrizzleOrderCashbackRepository(database.db);
+  const pricingService = new PricingService({
+    referrals: referralProgram,
+    resellers: resellerService,
+    discounts: discountRepository,
+    cashbackRules: cashbackRuleRepository,
+    orderCashback: orderCashbackRepository,
+    outbox,
+    ids,
+    // R10 D3: the customer's personal discount, behind `personal_discount`.
+    personalDiscounts: personalDiscountRepository,
+    featureFlags: featureFlagResolver,
+  });
   const productService = new ProductService({
     resellers: resellerService,
+    pricing: pricingService,
     panelSales: panelSalesGate,
     placement: panelPlacement,
     repository: productRepository,
@@ -2945,21 +2965,6 @@ export function createContainer(
     settings: settingsResolver,
     auditHistory: new DrizzleAuditHistoryReader(database.db),
     outbox,
-  });
-  const discountRepository = new DrizzleDiscountRepository(database.db);
-  const cashbackRuleRepository = new DrizzleCashbackRuleRepository(database.db);
-  const orderCashbackRepository = new DrizzleOrderCashbackRepository(database.db);
-  const pricingService = new PricingService({
-    referrals: referralProgram,
-    resellers: resellerService,
-    discounts: discountRepository,
-    cashbackRules: cashbackRuleRepository,
-    orderCashback: orderCashbackRepository,
-    outbox,
-    ids,
-    // R10 D3: the customer's personal discount, behind `personal_discount`.
-    personalDiscounts: personalDiscountRepository,
-    featureFlags: featureFlagResolver,
   });
   /*
    * The operator's half of pricing (P12): the two rule catalogues and the read-only

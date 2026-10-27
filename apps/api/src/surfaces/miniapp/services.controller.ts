@@ -31,7 +31,7 @@ import {
   parseWith,
   type MiniAppCall,
 } from './miniapp-request.js';
-import { orderWire, serviceSummaryWire, wire } from './projections.js';
+import { listedPersonalDiscountWire, orderWire, serviceSummaryWire, wire } from './projections.js';
 
 /**
  * The customer's services (Round 9, C5): the list, one service's card data (the same facts
@@ -177,6 +177,8 @@ export class MiniAppServicesController {
           planId: null,
           title: offer.product.title,
           price: wire(offer.product.price),
+          // R11 A9: the price the quote charges when the personal discount wins it.
+          personalDiscount: listedPersonalDiscountWire(offer.product.personalDiscount),
         });
       }
       for (const plan of offer.plans ?? []) {
@@ -186,6 +188,7 @@ export class MiniAppServicesController {
           planId: plan.id,
           title: plan.title,
           price: wire(plan.price),
+          personalDiscount: listedPersonalDiscountWire(plan.personalDiscount),
         });
       }
     } else {
@@ -197,6 +200,7 @@ export class MiniAppServicesController {
           planId: null,
           title: addon.title,
           price: wire(addon.price),
+          personalDiscount: listedPersonalDiscountWire(addon.personalDiscount),
         });
       }
     }

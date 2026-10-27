@@ -63,7 +63,11 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
   { id: 'terms', label: 'قوانین و مقررات', prefixes: ['bot.terms.'] },
   // R10 D5: the /start captcha for new customers.
   { id: 'captcha', label: 'سؤال امنیتی شروع (کپچا)', prefixes: ['bot.captcha.'] },
-  { id: 'catalog', label: 'فروشگاه، سفارش و پیش‌فاکتور', prefixes: ['bot.catalog.', 'bot.order.'] },
+  {
+    id: 'catalog',
+    label: 'فروشگاه، سفارش و پیش‌فاکتور',
+    prefixes: ['bot.catalog.', 'bot.order.', 'bot.pricing.'],
+  },
   { id: 'username', label: 'انتخاب یوزرنیم سرویس', prefixes: ['bot.username.'] },
   { id: 'discount', label: 'کد تخفیف', prefixes: ['bot.discount.'] },
   { id: 'trial', label: 'سرویس آزمایشی', prefixes: ['bot.trial.'] },
@@ -1180,6 +1184,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.order.preinvoice_personal_discount_line': [
     'خط تخفیف شخصی در پیش‌فاکتور',
     'درصد تخفیف شخصی مشتری، مبلغ تخفیف و قیمت پیش از تخفیف؛ فقط وقتی سفارش با تخفیف شخصی قیمت‌گذاری شده و به‌جای خط تخفیف معمول.',
+  ],
+  'bot.pricing.personal_discount_tag': [
+    'برچسب تخفیف شخصی در فهرست قیمت‌ها',
+    'کنار قیمتی که با تخفیف شخصی مشتری در فهرست پلن‌ها، تمدید و بسته‌ها نشان داده می‌شود، پس از قیمت تخفیف‌خورده و قیمت خط‌خورده؛ فقط وقتی تخفیف شخصی در قیمت همان ردیف برنده است.',
   ],
   'bot.order.preinvoice_cashback_line': [
     'خط کش‌بک در پیش‌فاکتور',
