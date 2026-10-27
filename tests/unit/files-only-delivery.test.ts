@@ -16,7 +16,6 @@ import type { ServiceRecord } from '../../apps/api/src/modules/commerce/provisio
 import type {
   CustomerFileMessage,
   CustomerMessage,
-  CustomerSendResult,
 } from '../../apps/api/src/modules/commerce/messaging/application/ports';
 import { FixedClock } from '../../apps/api/src/infrastructure/clock';
 
