@@ -11,6 +11,7 @@ import {
   type TemplateValue,
   type TemplateValues,
 } from '@nexa/contracts';
+import { redactOperatorText } from '../../../../infrastructure/redaction.js';
 import type {
   AdminFact,
   BalanceAround,
@@ -102,6 +103,26 @@ export function oneLine(text: string | null, max = FREE_TEXT_MAX): string | null
   const flat = text.replace(/\s+/g, ' ').trim();
   if (flat === '') return null;
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+/** The longest panel account name a log prints; a panel's own limit is far below it. */
+const SERVICE_USERNAME_MAX = 64;
+
+/**
+ * R11 A7: the value of the «نام کاربری سرویس» line of every message about a service — the
+ * account name on the PANEL (`services.provider_username`, also for an imported MIRZA service).
+ *
+ * Never the subscription link or any token: the only input is the username column. It is still
+ * made one bounded line and passed through the operations-log redactor, because an imported
+ * name is whatever the old bot stored; a name the redactor would hide (a secret-shaped token,
+ * a URL, a card number) is shown redacted rather than posted. Absent (null) for nothing to say,
+ * so the renderer drops the line.
+ */
+export function serviceUsernameValue(raw: string | null | undefined): string | null {
+  const line = oneLine(raw ?? null, SERVICE_USERNAME_MAX);
+  if (line === null) return null;
+  const safe = redactOperatorText(line).trim();
+  return safe === '' ? null : safe;
 }
 
 /** The first two lines of a message, each bounded: what a ticket log shows (L26). */
@@ -412,7 +433,7 @@ export function serviceCreated(input: {
   put(values, 'phone', customer?.phone);
   put(values, 'location', order.locationLabel);
   put(values, 'panelName', service.panelName === '' ? null : service.panelName);
-  put(values, 'serviceUsername', service.providerUsername);
+  put(values, 'serviceUsername', serviceUsernameValue(service.providerUsername));
   const list = listPriceOf(order);
   if (list !== null) values['listPrice'] = list;
   put(values, 'orderCode', order.code);
@@ -477,7 +498,7 @@ export function serviceChanged(input: {
   values['source'] = sourceOf(origin?.surface, words, origin?.autoRenew === true);
   put(values, 'phone', customer?.phone);
   put(values, 'panelName', service.panelName === '' ? null : service.panelName);
-  put(values, 'serviceUsername', service.providerUsername);
+  put(values, 'serviceUsername', serviceUsernameValue(service.providerUsername));
   put(values, 'orderCode', order.code);
   put(values, 'serviceCode', service.code);
   if (payment !== null) put(values, 'reference', paymentTrackingCode(payment));
@@ -565,7 +586,7 @@ export function linkChanged(input: {
     at,
   };
   put(values, 'panelName', service.panelName === '' ? null : service.panelName);
-  put(values, 'serviceUsername', service.providerUsername);
+  put(values, 'serviceUsername', serviceUsernameValue(service.providerUsername));
   put(values, 'serviceCode', service.code);
   // "Nth time in 30 days": at least this one, so never zero and never NaN.
   values['rotations'] = Math.max(rotations, 1);
@@ -588,7 +609,7 @@ export function trialCreated(input: {
   const values: Mutable = { ...identityValues(customer, words), at };
   put(values, 'phone', customer?.phone);
   put(values, 'panelName', service.panelName === '' ? null : service.panelName);
-  put(values, 'serviceUsername', service.providerUsername);
+  put(values, 'serviceUsername', serviceUsernameValue(service.providerUsername));
   put(values, 'serviceCode', service.code);
   values['traffic'] = order?.trafficBytes ?? service.trafficLimitBytes;
   if (order !== null) values['duration'] = order.durationDays;
@@ -769,7 +790,7 @@ export function serviceAlert(input: {
     remainingBytes: remaining,
     at,
   };
-  put(values, 'serviceUsername', service.providerUsername);
+  put(values, 'serviceUsername', serviceUsernameValue(service.providerUsername));
   put(values, 'panelName', service.panelName === '' ? null : service.panelName);
   values['remainingTime'] = words.timeLeft(remainingDays);
   if (service.lastSeenAt !== null) values['lastConnection'] = service.lastSeenAt;
@@ -819,11 +840,24 @@ export function provisionFailure(input: {
    * purchase. Present, the report is the admin template of L23.
    */
   readonly createdBy?: { readonly admin: AdminFact | null; readonly label: string | null };
+  /** R11 A7: the panel account name of the service being created; null when none is known. */
+  readonly serviceUsername?: string | null;
   readonly at: Date;
   readonly words: OpsLogWords;
 }): Built {
-  const { order, customer, operation, reason, payment, refunded, unknown, createdBy, at, words } =
-    input;
+  const {
+    order,
+    customer,
+    operation,
+    reason,
+    payment,
+    refunded,
+    unknown,
+    createdBy,
+    serviceUsername,
+    at,
+    words,
+  } = input;
   const cause = words.refundReason(reason, operation?.failureKind ?? null);
   const values: Mutable = {
     ...identityValues(customer, words),
@@ -843,6 +877,7 @@ export function provisionFailure(input: {
     at,
   };
   put(values, 'panelName', order.panelName === '' ? null : order.panelName);
+  put(values, 'serviceUsername', serviceUsernameValue(serviceUsername));
   put(values, 'orderCode', order.code);
   if (payment !== null) put(values, 'reference', paymentTrackingCode(payment));
   if (createdBy !== undefined) {
@@ -882,9 +917,9 @@ export function giftFailure(input: {
     cause: words.providerFailure(operation.failureKind),
     technical: technicalLine(operation.failureKind, httpStatusIn(operation.failureMessage)),
     impact: words.impact('giftNotApplied'),
-    serviceUsername: service.providerUsername,
     at,
   };
+  put(values, 'serviceUsername', serviceUsernameValue(service.providerUsername));
   put(values, 'panelName', service.panelName === '' ? null : service.panelName);
   return {
     logType: 'ERROR_OPERATION',
@@ -907,11 +942,27 @@ export function operationFailure(input: {
   /** What the ledger says was credited back for this order; null when nothing was. */
   readonly refunded: Money | null;
   readonly unknown: boolean;
+  /**
+   * R11 A7: the panel account name of the order's service when the operation names no service
+   * row (a failure before one was read); `service` wins when there is one.
+   */
+  readonly serviceUsername?: string | null;
   readonly at: Date;
   readonly words: OpsLogWords;
 }): Built {
-  const { order, service, customer, operation, reason, payment, refunded, unknown, at, words } =
-    input;
+  const {
+    order,
+    service,
+    customer,
+    operation,
+    reason,
+    payment,
+    refunded,
+    unknown,
+    serviceUsername,
+    at,
+    words,
+  } = input;
   const type = order.purpose === 'TRIAL' ? 'TRIAL' : (operation?.type ?? order.purpose);
   const values: Mutable = {
     ...identityValues(customer, words),
@@ -933,7 +984,11 @@ export function operationFailure(input: {
     at,
   };
   if (order.total.amountMinor > 0n) values['amount'] = order.total;
-  put(values, 'serviceUsername', service?.providerUsername);
+  put(
+    values,
+    'serviceUsername',
+    serviceUsernameValue(service?.providerUsername ?? serviceUsername),
+  );
   put(
     values,
     'panelName',
@@ -987,6 +1042,7 @@ export function stalledReport(input: {
       at,
     };
     put(values, 'panelName', panelName ?? (order.panelName === '' ? null : order.panelName));
+    put(values, 'serviceUsername', serviceUsernameValue(service.providerUsername));
     put(values, 'orderCode', order.code);
     if (payment !== null) put(values, 'reference', paymentTrackingCode(payment));
     return {
@@ -1008,7 +1064,7 @@ export function stalledReport(input: {
     retry: words.retry('UNKNOWN'),
     at,
   };
-  put(values, 'serviceUsername', service.providerUsername);
+  put(values, 'serviceUsername', serviceUsernameValue(service.providerUsername));
   put(values, 'panelName', panelName);
   return {
     logType: 'ERROR_OPERATION',

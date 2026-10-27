@@ -539,6 +539,12 @@ describe('hotfix v0.8.2-e: one service log per purchase and per service action, 
       expect(paidLogs[0]).toContain('💠 روش: کیف پول');
       expect(paidLogs[0]).not.toContain('کارمزد درگاه');
       expect(paidLogs[0]).not.toContain('منبع تأیید');
+      // R11 A7: the purchase log and its payment log both name the service's panel account —
+      // the same name, and the one stored on the service.
+      const accountLine = /👤 نام کاربری سرویس: (\S+)/u;
+      const account = accountLine.exec(firstLogs[0]!)?.[1];
+      expect(account, 'the purchase log names the service account').toBeDefined();
+      expect(accountLine.exec(paidLogs[0]!)?.[1]).toBe(account);
 
       // Retried: a second provisioner pass and a redelivered event post nothing new.
       from = opsTexts().length;
@@ -729,6 +735,8 @@ describe('hotfix v0.8.2-e: one service log per purchase and per service action, 
 
       const logs = logsSince(from, headline);
       expect(logs, `exactly one «${headline}»`).toHaveLength(1);
+      // R11 A7: an imported customer's service is named by its stored panel account too.
+      expect(logs[0]).toMatch(/👤 نام کاربری سرویس: \S+/u);
       if (sourced) {
         expect(logs[0]).toContain(SOURCE[surface]);
         expect(logs[0]).not.toContain(SOURCE[surface === 'bot' ? 'miniapp' : 'bot']);
