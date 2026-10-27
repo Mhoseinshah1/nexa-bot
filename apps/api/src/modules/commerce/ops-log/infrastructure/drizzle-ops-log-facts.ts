@@ -515,6 +515,31 @@ export class DrizzleOpsLogFacts implements OpsLogFacts {
     };
   }
 
+  async serviceUsernameOfOrder(
+    scope: TenantContext,
+    orderId: string,
+    tx: TransactionScope,
+  ): Promise<string | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.rows(
+      tx,
+      sql`SELECT COALESCE(
+                   (SELECT s.provider_username FROM services s
+                     WHERE s.tenant_id = ${tenantId} AND s.order_id = ${orderId} LIMIT 1),
+                   (SELECT s.provider_username FROM service_commercial_actions c
+                      JOIN services s ON s.tenant_id = c.tenant_id AND s.id = c.service_id
+                     WHERE c.tenant_id = ${tenantId} AND c.order_id = ${orderId} LIMIT 1),
+                   (SELECT s.provider_username FROM provisioning_operations o
+                      JOIN services s ON s.tenant_id = o.tenant_id AND s.id = o.service_id
+                     WHERE o.tenant_id = ${tenantId} AND o.order_id = ${orderId} LIMIT 1),
+                   (SELECT r.username FROM service_username_reservations r
+                     WHERE r.tenant_id = ${tenantId} AND r.order_id = ${orderId}
+                       AND r.funded_at IS NOT NULL LIMIT 1)
+                 ) AS username`,
+    );
+    return str(row?.['username']);
+  }
+
   async operation(
     scope: TenantContext,
     id: string,

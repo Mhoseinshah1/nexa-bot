@@ -537,6 +537,8 @@ const FAKE_FACTS = {
         }
       : null,
   order: async () => ({ code: 'KQ7M2X9T' }),
+  // R11 A7: a payment-link failure looks up the order's service account; this order has none.
+  serviceUsernameOfOrder: async () => null,
 } as unknown as OpsLogFacts;
 
 const presenter = new OperationalEventPresenter({ facts: FAKE_FACTS, words: i18nOpsLogWords });
