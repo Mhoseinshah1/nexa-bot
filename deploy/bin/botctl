@@ -2728,7 +2728,7 @@ cmd_cutover_rehearse() {
     esac
   done
   [ -n "$package" ] || nexa_die "$REHEARSE_USAGE"
-  [ -f "$package" ] && [ -r "$package" ] || nexa_die "cannot read the package ${package}."
+  if [ ! -f "$package" ] || [ ! -r "$package" ]; then nexa_die "cannot read the package ${package}."; fi
   if [ -n "$key_file" ] && [ "$passphrase_prompt" -eq 1 ]; then
     nexa_die "give the key file OR --passphrase, not both."
   fi
@@ -2736,7 +2736,7 @@ cmd_cutover_rehearse() {
     nexa_die "the package needs its key: --key-file FILE, or --passphrase to type it."
   fi
   if [ -n "$key_file" ]; then
-    [ -f "$key_file" ] && [ -r "$key_file" ] || nexa_die "cannot read the key file."
+    if [ ! -f "$key_file" ] || [ ! -r "$key_file" ]; then nexa_die "cannot read the key file."; fi
   fi
   case "$owner_id" in
     '' | 0* | *[!0-9]*) nexa_die "--owner-telegram-id must be the owner's numeric Telegram id." ;;
@@ -2746,7 +2746,7 @@ cmd_cutover_rehearse() {
       nexa_die "--database must be a plain lowercase database name."
   fi
   if [ -n "$inventory" ]; then
-    [ -f "$inventory" ] && [ -r "$inventory" ] || nexa_die "cannot read the panel inventory."
+    if [ ! -f "$inventory" ] || [ ! -r "$inventory" ]; then nexa_die "cannot read the panel inventory."; fi
   fi
 
   # The secret: the key file's TEXT, or the passphrase typed on the terminal. It reaches the
