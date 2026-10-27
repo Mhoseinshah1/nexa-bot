@@ -280,7 +280,7 @@ const SITES: readonly Site[] = [
       />
     ),
     act: async () => {
-      fireEvent.click(await screen.findByRole('button', { name: 'هر ۳ ساعت' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'هر 3 ساعت' }));
       fireEvent.click(screen.getByRole('button', { name: 'ذخیره‌ی فاصله' }));
     },
     reference: true,

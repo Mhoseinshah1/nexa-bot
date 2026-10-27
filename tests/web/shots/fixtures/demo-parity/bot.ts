@@ -268,6 +268,7 @@ const templates = fixture('/templates', templateListResponseSchema, {
       placeholders: definition.placeholders.map((placeholder) => ({ ...placeholder })),
     };
   }),
+  total: TEMPLATE_KEYS.length,
 });
 
 /* `#/client-apps`: the demo's four apps, the mac one switched off. */
