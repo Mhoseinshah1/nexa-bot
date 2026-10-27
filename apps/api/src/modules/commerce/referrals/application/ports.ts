@@ -445,3 +445,52 @@ export interface ReferralSignupGiftRepository {
     tx?: unknown,
   ): Promise<bigint>;
 }
+
+// --- The invited-friends list (R11 B3) --------------------------------------------
+
+/**
+ * Where one invited friend stands, from the referrer's side, decided by the repository in ONE
+ * place (the same expression cuts the page and counts the whole list). `REWARD_PAID` is a
+ * purchase commission EARNED for more than nothing; `REWARD_PENDING` is one still PENDING;
+ * `PURCHASED` is a delivered paid purchase with neither; `JOINED` is the rest. Exclusive, and
+ * in that order of precedence.
+ */
+export type ReferralFriendStatus = 'JOINED' | 'PURCHASED' | 'REWARD_PENDING' | 'REWARD_PAID';
+
+/**
+ * One friend as the repository reads them. Only the first name and the username of the
+ * customer row are selected: the last name, the Telegram id and the phone are never read.
+ */
+export interface ReferralFriendRow {
+  readonly referralId: string;
+  readonly createdAt: Date;
+  readonly firstName: string | null;
+  readonly username: string | null;
+  readonly status: ReferralFriendStatus;
+  /** When EVERY pending commission is held back by the daily cap, the earliest instant; else null. */
+  readonly pendingNotBefore: Date | null;
+}
+
+/** Friends of one referrer by status; they add up to the referrer's attribution count. */
+export interface ReferralFriendCounts {
+  readonly joined: number;
+  readonly purchased: number;
+  readonly rewardPending: number;
+  readonly rewardPaid: number;
+}
+
+export interface ReferralFriendsRepository {
+  /** The referrer's own referrals, newest first, `limit` of them; tenant and referrer in the WHERE. */
+  page(
+    scope: TenantContext,
+    referrerId: string,
+    limit: number,
+    cursor: ReferralCursor | null,
+  ): Promise<{
+    readonly items: readonly ReferralFriendRow[];
+    readonly next: ReferralCursor | null;
+  }>;
+
+  /** Every one of the referrer's referrals, counted by status (not just a page). */
+  counts(scope: TenantContext, referrerId: string): Promise<ReferralFriendCounts>;
+}
