@@ -68,6 +68,8 @@ import { NotifyingOperationalEventRecorder } from '../../apps/api/src/modules/co
 const API_KEY = 'tp_live_KEY_that_must_never_leak_71c0de';
 const BOT_TOKEN = '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw';
 const PAN = '6037991234567893'; // Luhn-valid
+/** A real-shaped UUIDv7 whose `61-9252-783554496375` is 18 Luhn-valid digits (R11 A6). */
+const CARD_SHAPED_UUID = '01a17a35-657e-7f61-9252-783554496375';
 const SIGNED_LINK = 'https://pay.tonpays.online/i/TP-1?sig=deadbeefcafe';
 
 const AT = new Date('2026-10-09T09:37:00Z');
@@ -521,7 +523,7 @@ describe('FIX-04: a payment link failure, classified once', () => {
 /** The customer the failure happened to, as the ops-log facts reader would find them. */
 const FAKE_FACTS = {
   customer: async (_scope: unknown, id: string) =>
-    id === 'cust-1'
+    id === 'cust-1' || id === CARD_SHAPED_UUID
       ? {
           id,
           telegramUserId: '123456789',
@@ -711,6 +713,58 @@ describe('operator-text redaction', () => {
     expect(httpStatusOfCode('http.502')).toBe(502);
     expect(httpStatusOfCode('http.403.unreadable.html')).toBe(403);
     expect(httpStatusOfCode('http.timeout')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// R11 A6: a UUID is an id by its format, not by surviving the card redactor
+// ---------------------------------------------------------------------------------------
+
+describe('R11 A6: a customer UUID that looks like a card number is still an id', () => {
+  it('is cut by the card redactor (the shape of the bug), and kept by safeIdentifier', () => {
+    // The premise: `61-9252-783554496375` inside it is 18 Luhn-valid digits.
+    expect(redactOperatorText(CARD_SHAPED_UUID)).not.toBe(CARD_SHAPED_UUID);
+    expect(safeIdentifier(CARD_SHAPED_UUID)).toBe(CARD_SHAPED_UUID);
+    expect(safeIdentifier(CARD_SHAPED_UUID, 64)).toBe(CARD_SHAPED_UUID);
+  });
+
+  it('still rejects everything that is not a strict UUID, exactly as before', () => {
+    // The same digits outside a UUID's frame, an upper-case or braced UUID, a UUID with text
+    // around it, a nil-variant shape: back on the old rule, and the old rule drops them.
+    expect(safeIdentifier('7f61-9252-783554496375')).toBeNull();
+    expect(safeIdentifier(CARD_SHAPED_UUID.toUpperCase())).toBeNull();
+    expect(safeIdentifier(`{${CARD_SHAPED_UUID}}`)).toBeNull();
+    expect(safeIdentifier(`x${CARD_SHAPED_UUID}`)).toBeNull();
+    expect(safeIdentifier(`${CARD_SHAPED_UUID} ${PAN}`)).toBeNull();
+    expect(safeIdentifier('01a17a35-657e-0f61-9252-783554496375')).toBeNull();
+    // Variant 1 (not RFC) with the run kept Luhn-valid.
+    expect(safeIdentifier('01a17a35-657e-7f61-1252-783554496372')).toBeNull();
+    expect(safeIdentifier(PAN)).toBeNull();
+    expect(safeIdentifier('6037-9912-3456-7893')).toBeNull();
+    expect(safeIdentifier(SIGNED_LINK)).toBeNull();
+    // A UUID longer than the caller's bound is still refused by the bound.
+    expect(safeIdentifier(CARD_SHAPED_UUID, 20)).toBeNull();
+    // Ids that never were UUIDs keep passing the old rule.
+    expect(safeIdentifier('7d433a363380f69e')).toBe('7d433a363380f69e');
+    expect(safeIdentifier('01900000-0000-7000-8000-00000000fa11')).toBe(
+      '01900000-0000-7000-8000-00000000fa11',
+    );
+  });
+
+  it('keeps the customer id in the payment-link event and its name and button in the alert', async () => {
+    const event = paymentLinkFailureEvent(
+      paymentLinkFailureOf({ kind: 'UNKNOWN', code: 'http.502' }, 'LINK', {
+        rateLimitIsFinal: true,
+      })!,
+      { ...FACTS, customerId: CARD_SHAPED_UUID, orderId: CARD_SHAPED_UUID },
+    );
+    expect(event.context?.['customerId']).toBe(CARD_SHAPED_UUID);
+    expect(event.context?.['orderId']).toBe(CARD_SHAPED_UUID);
+    const presented = await presenter.present(tenant, event, RECORDED, {} as never);
+    expect(presented!.buttons).toContainEqual({ kind: 'USER', ref: CARD_SHAPED_UUID });
+    const text = await presentPaymentLink(event);
+    expect(text).toContain('👤 مریم · @maryam_s · 123456789');
+    expect(text).toContain('📦 سفارش: KQ7M2X9T');
   });
 });
 
