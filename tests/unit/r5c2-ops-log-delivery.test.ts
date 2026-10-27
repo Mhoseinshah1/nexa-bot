@@ -282,7 +282,7 @@ describe('provisioning.stalled is the error report, with every field', () => {
     expect(presented!.templateKey).toBe('ops.log.error_operation');
     const text = render(presented!.templateKey, presented!.values);
     expect(text).toContain('تمدید سرویس ناموفق ماند — نتیجه نامشخص');
-    expect(text).toContain('🔑 نام سرویس: nx7k2m9q');
+    expect(text).toContain('👤 نام کاربری سرویس: nx7k2m9q');
     expect(text).toContain('🖥 پنل: آلمان ۱');
     expect(text).toContain('❗ علت: اعمال تغییر روی پنل تأیید نشد');
     expect(text).not.toMatch(/ساخت سرویس|💰|کد سفارش|کد پرداخت/);
@@ -358,7 +358,7 @@ describe('L10 — a service created after a purchase, with every field', () => {
     expect(text).toContain('📊 حجم: ۵۰ گیگابایت');
     expect(text).toContain('⏳ مدت: ۳۰ روز');
     expect(text).toContain('🖥 پنل: آلمان ۱');
-    expect(text).toContain('🔑 نام سرویس: nx7k2m9q');
+    expect(text).toContain('👤 نام کاربری سرویس: nx7k2m9q');
     expect(text).toContain('💵 قیمت محصول: ۳۰۰٬۰۰۰ تومان');
     expect(text).toContain('💵 قیمت نهایی: ۲۵۰٬۰۰۰ تومان');
     expect(text).toContain('🔖 کد سفارش: KQ7M2X9T');

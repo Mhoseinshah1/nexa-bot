@@ -35,9 +35,18 @@ const GIFT_CARD_REFERENCE = /^giftcard:([0-9a-f-]{36})$/;
  * the unchanged number the previous bot printed.
  *
  * Every other reason is ignored — a purchase has its own message, an opening balance
- * written by the import has none at all. A customer the import wrote is never logged for a
- * commission or a gift: a migration that mints a hundred thousand rows must not post a hundred
- * thousand lines.
+ * written by the import has none at all: a migration that mints a hundred thousand rows must
+ * not post a hundred thousand lines.
+ *
+ * R11 A6 (the v0.8.2-e rule of R10 B5, for L8 and L9): a commission and a gift are logged
+ * whoever the referrer and the referee are — imported or not. The import writes neither
+ * reason (it writes `MIGRATION_OPENING_BALANCE`, and a referral it carries is an attribution
+ * with no reward and no entry), so an entry of either is a payment THIS installation made,
+ * after the import. Refusing a `MIRZA` referrer (L8) or referee (L9) silenced every
+ * commission and gift of an installation migrated with the one-click import. What stays
+ * silent is the import's own record the line is ABOUT: a commission on an order the import
+ * brought over (`origin` or `source` not this installation's sale) and a gift of a referral
+ * the import carried (`referrals.source` not `NEXA`), neither of which the money paths pay.
  *
  * R8 A4: an ADMINISTRATOR's adjustment is logged whoever the customer is. Only
  * `WalletService.adjust` writes `ADMIN_CREDIT`/`ADMIN_DEBIT` — the import writes
@@ -188,11 +197,13 @@ export class LedgerLogConsumer implements EventConsumer {
     at: Date,
     tx: TransactionScope,
   ): Promise<Built | null> {
+    // Imported referrer or buyer included (see the class comment): the customer's provenance
+    // is not the commission's. The ORDER is — an order the import wrote earned nothing here.
     const referrer = await this.deps.facts.customer(scope, entry.customerId, tx);
-    if (referrer === null || referrer.source !== 'NEXA') return null;
+    if (referrer === null) return null;
     const order =
       entry.orderId === null ? null : await this.deps.facts.order(scope, entry.orderId, tx);
-    if (order !== null && order.origin !== 'STANDARD') return null;
+    if (order !== null && (order.origin !== 'STANDARD' || order.source !== 'NEXA')) return null;
     const buyer =
       order === null ? null : await this.deps.facts.customer(scope, order.customerId, tx);
     const payment =
@@ -276,10 +287,12 @@ export class LedgerLogConsumer implements EventConsumer {
     const match = SIGNUP_GIFT_REFERENCE.exec(entry.reference);
     if (match === null) return null;
     const referral = await this.deps.facts.referralOf(scope, match[1] as string, tx);
-    if (referral === null) return null;
+    // The REFERRAL is the gift's provenance: an attribution the import carried is history.
+    if (referral === null || referral.source !== 'NEXA') return null;
+    // Imported referee or referrer included (see the class comment).
     const referee = await this.deps.facts.customer(scope, referral.refereeId, tx);
     const referrer = await this.deps.facts.customer(scope, referral.referrerId, tx);
-    if (referee === null || referee.source !== 'NEXA') return null;
+    if (referee === null) return null;
 
     // Each side's wallet around ITS OWN gift entry, if that side has received it. The side
     // this event is about is the one just written; the other may have been paid earlier, or
