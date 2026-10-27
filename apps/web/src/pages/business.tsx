@@ -69,6 +69,7 @@ import {
   TabPanel,
   Tabs,
   BarChart,
+  compactAxis,
   ButtonGroup,
   ChartCard,
   CountedPager,
@@ -596,12 +597,16 @@ function TrendCard({ selection }: { selection: ReportRangeSelection }) {
               previous={data.previous}
               format={format}
               axisFormat={(value) =>
-                currency === null
-                  ? formatNumber(Math.round(value))
-                  : formatMoney({
-                      amountMinor: BigInt(Math.round(value)).toString(),
-                      currency,
-                    }).amount
+                compactAxis(
+                  currency === null
+                    ? value
+                    : Number(
+                        formatMoney({
+                          amountMinor: BigInt(Math.round(value)).toString(),
+                          currency,
+                        }).amount.replace(/,/gu, ''),
+                      ),
+                )
               }
               caption={t(METRIC_LABELS[metric])}
             />

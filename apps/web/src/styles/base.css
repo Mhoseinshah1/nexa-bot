@@ -358,6 +358,23 @@ form:not([class]) > * + * {
   + :where(.card, .banner, .notice, .grid, .grid-2, .two-col, .kv) {
   margin-top: var(--gap);
 }
-:where(.grid, .grid-2, .two-col, .stat-grid, .row, .head-stats, .toolbar) > * {
+:where(
+    .grid,
+    .grid-2,
+    .two-col,
+    .stat-grid,
+    .row,
+    .head-stats,
+    .toolbar,
+    .dash-kgrid,
+    .dash-mini,
+    .dash-ops,
+    .dash-charts,
+    .dash-row,
+    .dash-figures,
+    .bx-side-split,
+    .report-kpis
+  )
+  > * {
   margin-top: 0;
 }

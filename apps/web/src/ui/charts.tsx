@@ -39,6 +39,31 @@ export function niceCeiling(max: number): number {
 }
 
 /**
+ * A tight axis ceiling (the demo's): the largest value plus 4% of headroom, rounded up to a whole
+ * number, so the peak sits just under the top line (a stacked bar of 69 gets 72: 18, 36, 54, 72)
+ * instead of a "nice" 100 that leaves a third of the plot empty. Always a coordinate, never a
+ * figure the page states.
+ */
+export function tightCeiling(max: number): number {
+  if (!(max > 0)) return 1;
+  return Math.max(1, Math.ceil(max * 1.04));
+}
+
+/**
+ * A value-axis tick as short text (`21M`, `5.3M`, `850K`, `72`): Latin digits, one decimal at
+ * most, no grouping. A coordinate on an axis, never a figure — readouts and tables keep the
+ * exact value.
+ */
+export function compactAxis(value: number): string {
+  const abs = Math.abs(value);
+  const trim = (n: number) => String(Math.round(n * 10) / 10);
+  if (abs >= 1e9) return `${trim(value / 1e9)}B`;
+  if (abs >= 1e6) return `${trim(value / 1e6)}M`;
+  if (abs >= 1e4) return `${trim(value / 1e3)}K`;
+  return formatNumber(Math.round(value));
+}
+
+/**
  * Which x-axis slots carry a label: every `step`-th from the first, where
  * `step` keeps at most `most` labels, and always the last. When the last does
  * not land on the stepping, the stepped label before it is dropped rather
@@ -310,6 +335,8 @@ export function LineChart({
   height = 220,
   width = DEFAULT_WIDTH,
   gradient = false,
+  axisFormat,
+  tight = false,
 }: {
   labels: readonly string[];
   series: readonly LineSeries[];
@@ -320,6 +347,10 @@ export function LineChart({
   width?: number;
   /** Fill the area under each solid line with a gradient that fades to the axis. */
   gradient?: boolean;
+  /** A value-axis tick as short text; the readout and the table keep `format`. */
+  axisFormat?: (value: number) => string;
+  /** A ceiling just above the peak (`tightCeiling`) instead of a "nice" round one. */
+  tight?: boolean;
 }) {
   const [active, setActive] = useState<number | null>(null);
   const gradientId = svgId(useId());
@@ -329,7 +360,7 @@ export function LineChart({
   const padR = 12;
   const padT = 12;
   const padB = 28;
-  const max = niceCeiling(Math.max(0, ...known));
+  const max = (tight ? tightCeiling : niceCeiling)(Math.max(0, ...known));
   const slots = labels.length;
   const x = (i: number) => padL + (slots <= 1 ? 0 : (i / (slots - 1)) * (WIDTH - padL - padR));
   const y = (v: number) => padT + (1 - v / max) * (height - padT - padB);
@@ -359,7 +390,7 @@ export function LineChart({
             ))}
           </defs>
         )}
-        <Grid max={max} y={y} padL={padL} padR={padR} format={format} width={WIDTH} />
+        <Grid max={max} y={y} padL={padL} padR={padR} format={axisFormat ?? format} width={WIDTH} />
         {labels.map((label, i) =>
           labelled.has(i) ? (
             <text key={i} x={x(i)} y={height - 8} textAnchor="middle">
@@ -442,6 +473,8 @@ export function BarChart({
   height = 200,
   width = DEFAULT_WIDTH,
   ticks = [0, 0.5, 1],
+  axisFormat,
+  tight = false,
 }: {
   labels: readonly string[];
   series: readonly BarSeries[];
@@ -453,6 +486,10 @@ export function BarChart({
   width?: number;
   /** The gridlines, as shares of the axis ceiling. */
   ticks?: readonly number[];
+  /** A value-axis tick as short text; the readout and the table keep `format`. */
+  axisFormat?: (value: number) => string;
+  /** A ceiling just above the tallest bar (`tightCeiling`) instead of a "nice" round one. */
+  tight?: boolean;
 }) {
   const [active, setActive] = useState<number | null>(null);
   const WIDTH = width;
@@ -467,7 +504,7 @@ export function BarChart({
       : Math.max(0, ...series.map((one) => one.values[i] ?? 0)),
   );
   const anything = series.some((one) => one.values.some((v) => v !== null));
-  const max = niceCeiling(Math.max(0, ...totals));
+  const max = (tight ? tightCeiling : niceCeiling)(Math.max(0, ...totals));
   const slot = slots === 0 ? 0 : (WIDTH - padL - padR) / slots;
   const bw = stacked ? slot * 0.55 : (slot * 0.7) / Math.max(1, series.length);
   const y = (v: number) => padT + (1 - v / max) * (height - padT - padB);
@@ -478,7 +515,15 @@ export function BarChart({
   return (
     <figure className="chart-figure">
       <svg className="chart" viewBox={`0 0 ${WIDTH} ${height}`} role="img" aria-label={caption}>
-        <Grid max={max} y={y} padL={padL} padR={padR} format={format} ticks={ticks} width={WIDTH} />
+        <Grid
+          max={max}
+          y={y}
+          padL={padL}
+          padR={padR}
+          format={axisFormat ?? format}
+          ticks={ticks}
+          width={WIDTH}
+        />
         {labels.map((label, i) => {
           const cx = padL + slot * i + slot / 2;
           let acc = 0;
@@ -546,12 +591,15 @@ export function Donut({
   caption,
   format = defaultFormat,
   center,
+  shares = true,
 }: {
   slices: readonly DonutSlice[];
   caption: string;
   format?: (value: number) => string;
   /** What the middle says; defaults to the formatted total. */
   center?: string;
+  /** Print each slice's percentage beside its value (the demo's dashboard legend does not). */
+  shares?: boolean;
 }) {
   const total = slices.reduce((sum, slice) => sum + Math.max(0, slice.value), 0);
   if (total === 0) return <ChartEmpty />;
@@ -600,7 +648,9 @@ export function Donut({
               <i className={`key s${slice.tone ?? (index % 6) + 1}`} aria-hidden="true" />
               <span>{slice.label}</span>
               <b className="num">{format(slice.value)}</b>
-              <span className="faint num">{`${formatNumber(Math.round((Math.max(0, slice.value) / total) * 100))}${t('web.percent_sign')}`}</span>
+              {shares && (
+                <span className="faint num">{`${formatNumber(Math.round((Math.max(0, slice.value) / total) * 100))}${t('web.percent_sign')}`}</span>
+              )}
             </li>
           ))}
         </ul>

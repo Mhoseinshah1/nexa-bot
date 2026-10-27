@@ -238,8 +238,9 @@ describe('X7 — linkable identifiers', () => {
     for (const selector of ['.lk', '.tbl td a:not(.btn)']) {
       expect(KIT_CSS).toContain(selector);
     }
+    // R11 (S6): the demo marks a link with a faint DASHED rule, not a text underline.
     expect(KIT_CSS).toMatch(
-      /\.lk,\n\.tbl td a:not\(\.btn\),[^{]*\{[^}]*text-decoration: underline/,
+      /\.lk,\n\.tbl td a:not\(\.btn\),[^{]*\{[^}]*text-decoration: none;[^}]*border-bottom: 1px dashed/,
     );
   });
 
