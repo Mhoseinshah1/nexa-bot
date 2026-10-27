@@ -107,11 +107,20 @@ describe('Round W dashboard', () => {
 
   const ids = { panelA: '', panelB: '', productA: '', productB: '', c0: '', c1: '', c2: '' };
 
-  async function customer(tenantId: string, createdAt: string): Promise<string> {
+  /**
+   * A customer registered at `createdAt`. `MIRZA` writes one the way the legacy import leaves
+   * it: `created_at` is the import, `source = 'MIRZA'` with its `user:` ref.
+   */
+  async function customer(
+    tenantId: string,
+    createdAt: string,
+    source: 'NEXA' | 'MIRZA' = 'NEXA',
+  ): Promise<string> {
     const id = uuid();
     n += 1;
-    await run(sql`INSERT INTO customers (id, tenant_id, telegram_user_id, first_name, created_at, first_seen_at)
-      VALUES (${id}, ${tenantId}, ${`78000${n}`}, ${`Customer${n}`}, ${createdAt}::timestamptz, ${createdAt}::timestamptz)`);
+    const sourceRef = source === 'MIRZA' ? `user:${n}` : null;
+    await run(sql`INSERT INTO customers (id, tenant_id, telegram_user_id, first_name, created_at, first_seen_at, source, source_ref)
+      VALUES (${id}, ${tenantId}, ${`78000${n}`}, ${`Customer${n}`}, ${createdAt}::timestamptz, ${createdAt}::timestamptz, ${source}, ${sourceRef})`);
     return id;
   }
 
@@ -601,6 +610,24 @@ describe('Round W dashboard', () => {
     expect(body.activeServices).toBe(4);
     expect(body.period.granularity).toBe('HOUR');
     expect(body.period.current.startLocal).toBe('1405/06/10');
+  });
+
+  it('counts no customer the Mirza import carried as a new customer, in the card, its comparison or its sparkline', async () => {
+    // As the import leaves them: `created_at` is the import, here inside D and inside the
+    // day before. And one customer this installation registered on D, beside them.
+    await customer(tenantA.tenantId, at(11, 0), 'MIRZA');
+    await customer(tenantA.tenantId, at(11, 15), 'MIRZA');
+    await customer(tenantA.tenantId, at(11, 0, -1), 'MIRZA');
+    await customer(tenantA.tenantId, at(11, 30));
+
+    const body = dashboardSummaryResponseSchema.parse(
+      (await get(`${DASHBOARD_ROUTES.summary}?${DAY_D}`, cookies.owner as string)).json(),
+    );
+    // The two seeded on D and the new one; the one seeded the day before. Not 5 against 2.
+    expect(body.selected.newCustomers).toEqual({ current: 3, previous: 1 });
+    const series = body.selected.newCustomerSeries;
+    expect(series[11]?.value).toBe('1');
+    expect(series.reduce((sum, b) => sum + BigInt(b.value ?? '0'), 0n)).toBe(3n);
   });
 
   it('agrees with the report summary and trend for the same period, figure for figure', async () => {

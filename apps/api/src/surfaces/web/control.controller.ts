@@ -108,7 +108,7 @@ export class ControlController {
   async features(@Req() request: FastifyRequest): Promise<FeatureFlagListResponse> {
     const { scope, actor } = await this.authenticate(request);
     const flags = await this.container.featureFlags.list(scope, actor);
-    return { flags: flags.map(toFlagResponse) };
+    return { flags: flags.map(toFlagResponse), total: flags.length };
   }
 
   @Post('features/:key')
@@ -131,7 +131,7 @@ export class ControlController {
   async templates(@Req() request: FastifyRequest): Promise<TemplateListResponse> {
     const { scope, actor } = await this.authenticate(request);
     const templates = await this.container.templatesService.list(scope, actor);
-    return { templates: templates.map(toTemplateResponse) };
+    return { templates: templates.map(toTemplateResponse), total: templates.length };
   }
 
   @Get('templates/:key')

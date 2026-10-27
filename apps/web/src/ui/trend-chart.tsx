@@ -4,7 +4,7 @@ import { t } from '../i18n/web.fa';
 import { formatNumber } from '../format';
 import { seriesValues } from '../report-view';
 import { axisLabel } from '../dashboard-view';
-import { axisLabelSlots, niceCeiling } from './charts';
+import { axisLabelSlots, niceCeiling, tightCeiling } from './charts';
 
 /**
  * The one business trend chart: the current period and the previous equivalent period
@@ -39,10 +39,12 @@ export interface TrendChartProps {
   readonly format: (value: string) => ReactNode;
   readonly caption: string;
   /**
-   * A value-axis tick as text — a coordinate, not a figure, and never abbreviated. Grouped
-   * digits by default; a money metric passes its currency's grouping.
+   * A value-axis tick as text — a coordinate, not a figure (readouts keep the exact value).
+   * Grouped digits by default; the business report passes the compact form (`21M`).
    */
   readonly axisFormat?: (value: number) => string;
+  /** A ceiling just above the peak (`tightCeiling`), as the demo draws it. */
+  readonly tight?: boolean;
 }
 
 /**
@@ -73,6 +75,7 @@ export function TrendChart({
   format,
   caption,
   axisFormat = (value) => formatNumber(Math.round(value)),
+  tight = false,
 }: TrendChartProps) {
   const [active, setActive] = useState<number | null>(null);
   const box = useBoxWidth(FALLBACK_WIDTH);
@@ -80,7 +83,9 @@ export function TrendChart({
   const slots = Math.max(current.length, previous.length);
   const a = seriesValues(current);
   const b = seriesValues(previous);
-  const max = niceCeiling(Math.max(0, ...a.filter(isNumber), ...b.filter(isNumber)));
+  const max = (tight ? tightCeiling : niceCeiling)(
+    Math.max(0, ...a.filter(isNumber), ...b.filter(isNumber)),
+  );
   const plot = WIDTH - PAD_L - PAD_R;
   const x = (i: number) => PAD_L + (slots <= 1 ? 0 : (i * plot) / (slots - 1));
   const y = (v: number) => HEIGHT - PAD_B - (v / max) * (HEIGHT - PAD_T - PAD_B);
