@@ -166,6 +166,13 @@ export function inquiryBackoffMs(attempts: number): number {
 /** The first inquiry after an invoice is created: long enough for a customer to open it. */
 export const FIRST_INQUIRY_DELAY_MS = 20_000;
 
+/**
+ * Round 11 A8: the code of a TonPays call Nexa's own limiter HELD — it never left the process
+ * (`TonPaysRateLimiter`). A create held this way provably created nothing, so it is deferred
+ * without spending one of its `TONPAYS_CREATE_MAX_ATTEMPTS`.
+ */
+export const TONPAYS_HELD_CODE = 'nexa.rate_limited_locally';
+
 /** A rate-limited create is retried with the SAME order id, at most this many times. */
 export const TONPAYS_CREATE_MAX_ATTEMPTS = 3;
 export const TONPAYS_CREATE_RETRY_MS = 15_000;
