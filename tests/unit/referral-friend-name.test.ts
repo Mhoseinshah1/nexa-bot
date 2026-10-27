@@ -41,4 +41,8 @@ describe('friendDisplayName', () => {
     expect(Array.from(long)).toHaveLength(FRIEND_NAME_MAX_LENGTH);
     expect(friendDisplayName('‮علی‏\n  رضا\u0000', null)).toBe('علی رضا');
   });
+
+  it('keeps the zero-width non-joiner a Persian name is spelt with', () => {
+    expect(friendDisplayName('نگین\u200cدخت', null)).toBe('نگین\u200cدخت');
+  });
 });
