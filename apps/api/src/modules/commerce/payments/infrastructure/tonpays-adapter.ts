@@ -590,18 +590,24 @@ export async function tonpaysRequest(
     const gate = await limiter.acquire(request.route, request.apiKey);
     if (gate.kind === 'HELD') return { kind: 'HELD', retryAfterMs: gate.retryAfterMs };
   }
-  const sent = await tonpaysSend(options, request);
-  if (sent.kind === 'NO_RESPONSE') return sent;
-  const { retryAfter, ...raw } = sent;
-  if (raw.status !== 429) {
-    limiter?.answered(request.apiKey);
-    return raw;
-  }
-  const retryAfterMs =
-    limiter !== undefined
-      ? limiter.rateLimited(request.route, request.apiKey, retryAfter)
-      : (tonpaysRetryAfterMs(retryAfter, new Date()) ?? undefined);
-  return retryAfterMs === undefined ? raw : { ...raw, retryAfterMs };
+  /*
+   * Codex P2 on #351: the pause is taken the moment the STATUS and headers arrive, not after
+   * the body. A 429 whose body then stalls until the timeout is NO_RESPONSE (a create stays
+   * UNKNOWN), but the key is paused all the same — otherwise the next row hits it at once.
+   */
+  let retryAfterMs: number | undefined;
+  const raw = await tonpaysSend(options, request, (status, retryAfter) => {
+    if (status !== 429) {
+      limiter?.answered(request.apiKey);
+      return;
+    }
+    retryAfterMs =
+      limiter !== undefined
+        ? limiter.rateLimited(request.route, request.apiKey, retryAfter)
+        : (tonpaysRetryAfterMs(retryAfter, new Date()) ?? undefined);
+  });
+  if (raw.kind === 'NO_RESPONSE' || raw.status !== 429 || retryAfterMs === undefined) return raw;
+  return { ...raw, retryAfterMs };
 }
 
 export interface TonPaysHttpRequest {
@@ -616,14 +622,15 @@ export interface TonPaysHttpRequest {
   readonly route: TonPaysRoute;
 }
 
-/** The request itself, with a 429's `Retry-After` header kept beside the answer. */
+/**
+ * The request itself. `onHeaders` is told the status and a 429's `Retry-After` as soon as the
+ * headers arrive, before the body is read.
+ */
 async function tonpaysSend(
   options: { readonly fetch?: FetchLike; readonly timeoutMs?: number },
   request: TonPaysHttpRequest,
-): Promise<
-  | (Extract<Raw, { kind: 'BODY' | 'UNREADABLE' }> & { readonly retryAfter: string | null })
-  | Extract<Raw, { kind: 'NO_RESPONSE' }>
-> {
+  onHeaders: (status: number, retryAfter: string | null) => void,
+): Promise<Raw> {
   const doFetch: FetchLike = options.fetch ?? ((url, init) => fetch(url, init));
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? TONPAYS_TIMEOUT_MS);
@@ -658,24 +665,26 @@ async function tonpaysSend(
        */
       return { kind: 'NO_RESPONSE', reason: transportReason(error, controller.signal.aborted) };
     }
-    const retryAfter = response.status === 429 ? response.headers.get('retry-after') : null;
+    onHeaders(
+      response.status,
+      response.status === 429 ? response.headers.get('retry-after') : null,
+    );
     let text: string | null;
     try {
       text = await readBounded(response, MAX_RESPONSE_BYTES);
     } catch {
       return controller.signal.aborted
         ? { kind: 'NO_RESPONSE', reason: 'timeout' }
-        : { kind: 'UNREADABLE', status: response.status, shape: 'stream', retryAfter };
+        : { kind: 'UNREADABLE', status: response.status, shape: 'stream' };
     }
     if (text === null) {
-      return { kind: 'UNREADABLE', status: response.status, shape: 'too_large', retryAfter };
+      return { kind: 'UNREADABLE', status: response.status, shape: 'too_large' };
     }
     try {
       return {
         kind: 'BODY',
         status: response.status,
         body: JSON.parse(text) as unknown,
-        retryAfter,
       };
     } catch {
       const trimmed = text.trimStart();
@@ -686,7 +695,7 @@ async function tonpaysSend(
           : trimmed.startsWith('<') || /html/iu.test(contentType)
             ? 'html'
             : 'text';
-      return { kind: 'UNREADABLE', status: response.status, shape, retryAfter };
+      return { kind: 'UNREADABLE', status: response.status, shape };
     }
   } finally {
     clearTimeout(timer);

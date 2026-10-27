@@ -93,6 +93,47 @@ describe('a create the provider rate limits', () => {
   });
 });
 
+describe('a 429 whose body never arrives (Codex P2 on #351)', () => {
+  it('pauses the key from the 429’s headers even when the body stalls past the timeout: the create stays UNKNOWN, the next call is HELD', async () => {
+    let fetches = 0;
+    const stalled: FetchLike = (_url, init) => {
+      fetches += 1;
+      const signal = init.signal;
+      const body = new ReadableStream<Uint8Array>({
+        pull: () =>
+          new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener('abort', () => reject(new Error('aborted')));
+          }),
+      });
+      return Promise.resolve(
+        new Response(body, {
+          status: 429,
+          headers: { 'content-type': 'application/json', 'retry-after': '120' },
+        }),
+      );
+    };
+    const now = Date.UTC(2026, 9, 27, 9, 0, 0);
+    const limiter = new TonPaysRateLimiter({
+      clock: { now: () => new Date(now) },
+      sleep: () => Promise.resolve(),
+      pacingFor: () => Promise.resolve({ callsPerMinute: 30, burst: 3 }),
+    });
+    const website = new TonPaysAdapter({ fetch: stalled, timeoutMs: 50, limiter });
+    const created = await website.createInvoice(WEBSITE_KEY, createRequest);
+    // A lost answer is still a lost answer: UNKNOWN, never re-sent.
+    expect(created).toEqual({ kind: 'UNKNOWN', code: 'http.timeout' });
+    // But the key is paused for the 429's Retry-After: the next call never leaves.
+    const next = await website.inquire(WEBSITE_KEY, 'TP-1');
+    expect(next).toEqual({
+      kind: 'RATE_LIMITED',
+      code: TONPAYS_HELD_CODE,
+      retryAfterMs: 120_000,
+      notSent: true,
+    });
+    expect(fetches).toBe(1);
+  });
+});
+
 describe('an inquiry the provider rate limits', () => {
   it('backs off exponentially without Retry-After, growing with each consecutive 429', async () => {
     const r = rig([() => rateLimited(), () => rateLimited(), () => rateLimited()]);
