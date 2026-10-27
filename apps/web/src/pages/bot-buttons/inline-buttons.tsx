@@ -218,6 +218,7 @@ export const INLINE_BUTTON_NAME: Readonly<Record<InlineButtonKey, WebKey>> = {
   'channels.join_private': 'web.ib_button_channels_join_private',
   'channels.check': 'web.ib_button_channels_check',
   'terms.accept': 'web.ib_button_terms_accept',
+  'phone.verify': 'web.ib_button_phone_verify',
   'captcha.option': 'web.ib_button_captcha_option',
 };
 

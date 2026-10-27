@@ -845,6 +845,12 @@ export interface PaymentGatewayEligibility {
   readonly activateAfterPayments: number;
   readonly deactivateAfterPayments: number;
   readonly activateAfterAccountDays: number;
+  /**
+   * R11 B7: offered only to a customer whose phone number is verified (they shared their
+   * OWN Telegram contact, or an operator verified it). Absent is false. Read ONLY while the
+   * `phone_verification` flag is on: off, the requirement is treated as not configured.
+   */
+  readonly requiresVerifiedPhone?: boolean;
 }
 
 /**
@@ -864,6 +870,11 @@ export const PAYMENT_GATEWAY_INELIGIBILITY_REASONS = [
   'TOO_MANY_PAYMENTS',
   /** The account is younger than `activateAfterAccountDays`. */
   'ACCOUNT_TOO_NEW',
+  /**
+   * R11 B7: the route requires a verified phone number and this customer has none, while
+   * `phone_verification` is on. The one refusal the customer can lift themselves.
+   */
+  'PHONE_NOT_VERIFIED',
 ] as const;
 export type PaymentGatewayIneligibilityReason =
   (typeof PAYMENT_GATEWAY_INELIGIBILITY_REASONS)[number];
@@ -990,6 +1001,12 @@ export const paymentGatewayConfigSchema = z
      */
     allowServicePurchase: z.boolean().optional().default(true),
     allowWalletTopup: z.boolean().optional().default(true),
+    /**
+     * R11 B7: offer the route only to customers with a verified phone number. OPTIONAL, and
+     * absent means "leave the stored switch as it is", for the reason the fee gives: a
+     * client on the previous release, which never sends it, must not clear it by saving.
+     */
+    requiresVerifiedPhone: z.boolean().optional(),
     /**
      * A `FIXED_RATE` route's conversion rate (Package A). OPTIONAL, and absent means
      * "leave the stored rate as it is", for the same reason as the fee: a client that

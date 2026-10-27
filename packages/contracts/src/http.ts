@@ -5553,6 +5553,12 @@ export const paymentGatewaySchema = z.object({
   allowServicePurchase: z.boolean(),
   allowWalletTopup: z.boolean(),
   /**
+   * R11 B7: whether the route is offered only to customers with a verified phone number.
+   * Applied only while `phone_verification` is on. Defaulted on parse for a response from
+   * the previous release.
+   */
+  requiresVerifiedPhone: z.boolean().default(false),
+  /**
    * The route's credential STATE (WP11A), never its value.
    *
    * `required` is the descriptor's `requiresCredentials`; `setAt` is when the API key was
@@ -5746,6 +5752,8 @@ export const updatePaymentGatewayRequestSchema = z.object({
   /** Optional on the wire for the previous release's client; `paymentGatewayConfigSchema` defaults both to true. */
   allowServicePurchase: z.boolean().optional(),
   allowWalletTopup: z.boolean().optional(),
+  /** R11 B7: the route's verified-phone requirement. Absent keeps the stored switch. */
+  requiresVerifiedPhone: z.boolean().optional(),
   /**
    * A `FIXED_RATE` route's rate (Package A): sales-currency minor units per provider unit,
    * a positive whole number as a decimal string, or null to clear. Absent keeps the

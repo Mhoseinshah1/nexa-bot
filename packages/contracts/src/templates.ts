@@ -12915,6 +12915,99 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  // --- R11 B7: phone verification by the customer's own Telegram contact ------------------
+  {
+    key: 'bot.phone.verify_button',
+    description:
+      'R11 B7: the button «تأیید شماره تلفن» — on the account screen, on a payment screen where a ' +
+      'route needs a verified number, and under the refusal that says so. Drawn only while the ' +
+      'phone_verification feature is on.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.phone.prompt',
+    description:
+      'R11 B7: asks the customer to share their OWN number with the button under the chat ' +
+      '(Telegram\u2019s contact button). Says only their own number is accepted and that the ' +
+      'other button goes back to the main menu.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.phone.share_button',
+    description:
+      'R11 B7: the reply-keyboard button that shares the customer\u2019s own contact. Drawn from ' +
+      'the shared catalogue (like the management panel\u2019s button), so an override does not ' +
+      'change it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.phone.cancel_button',
+    description:
+      'R11 B7: the reply-keyboard button under the contact button that leaves the verification ' +
+      'and brings back the main menu. Drawn from the shared catalogue and matched by its text, so ' +
+      'an override does not change it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.phone.verified',
+    description:
+      'R11 B7: the customer\u2019s own number was verified (or verified again). Shows only its ' +
+      'last four digits. Brings back the main menu.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'phone',
+        type: 'STRING',
+        description: 'The verified number, masked to its last four digits (…4567).',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.phone.not_own',
+    description:
+      'R11 B7: the shared contact is not the customer\u2019s own number — another person\u2019s ' +
+      'contact, or a forwarded one. Nothing was stored; asks them to use the contact button.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.phone.invalid',
+    description:
+      'R11 B7: the shared number cannot be stored (it has no country code or is not a phone ' +
+      'number). Nothing was stored.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.phone.unavailable',
+    description:
+      'R11 B7: phone verification is switched off in this bot (the phone_verification feature ' +
+      'is off). Nothing was stored.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.phone.cancelled',
+    description:
+      'R11 B7: the customer left the phone verification; nothing was stored. Brings back the ' +
+      'main menu.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.phone_required',
+    description:
+      'R11 B7: the payment method the customer chose is only for customers with a verified ' +
+      'phone number. Nothing was charged; carries the «تأیید شماره تلفن» button.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.menu.tickets',
     description:

@@ -334,6 +334,9 @@ describe('the feature flag registry', () => {
       // renewal with the customer's personal percent (larger single discount wins), and a
       // stored percent changes no price while it is off.
       'personal_discount',
+      // R11 B7. Off by default; the bot's contact-share verification and every payment
+      // route's verified-phone rule are reachable behind it, and with it off neither applies.
+      'phone_verification',
       // R10 D5 (b). Off by default; the purchase condition and the two daily caps it
       // switches on are read by the gift claim and the commission earner.
       'referral_abuse_guard',

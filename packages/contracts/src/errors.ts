@@ -1654,6 +1654,19 @@ export const COMMERCE_ERROR_CODES = {
   CUSTOMER_TRANSFER_CONFIRMATION_MISMATCH: 'commerce.customer_transfer_confirmation_mismatch',
   /** Not a phone number this installation can store. */
   CUSTOMER_PHONE_INVALID: 'commerce.customer_phone_invalid',
+  /**
+   * R11 B7: the payment route the customer chose requires a phone number they verified, and
+   * theirs is not verified. Raised only while `phone_verification` is on; the bot answers it
+   * with the «تأیید شماره تلفن» button.
+   */
+  PHONE_VERIFICATION_REQUIRED: 'commerce.phone_verification_required',
+  /**
+   * R11 B7: a shared contact that is not the sender's OWN number — another person's
+   * contact, or a contact forwarded from somewhere else. Nothing was stored.
+   */
+  PHONE_CONTACT_NOT_OWN: 'commerce.phone_contact_not_own',
+  /** R11 B7: `phone_verification` is off, so a shared contact verifies nothing. */
+  PHONE_VERIFICATION_DISABLED: 'commerce.phone_verification_disabled',
 
   // --- Customer notes and tags (program §8, docs/customer-notes-tags.md) ---------------
   /** No such tag in this tenant. */

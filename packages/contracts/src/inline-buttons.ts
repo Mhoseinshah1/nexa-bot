@@ -324,6 +324,9 @@ export const INLINE_BUTTONS = [
   // Terms and rules (program §6)
   button('terms.accept', 'TERMS', 'bot.terms.accept_button'),
 
+  // R11 B7: «تأیید شماره تلفن» — opens the contact-share prompt.
+  button('phone.verify', 'PAYMENT', 'bot.phone.verify_button'),
+
   // The /start captcha's four answers (R10 D5): the label is the offered number.
   button('captcha.option', 'CAPTCHA', 'bot.captcha.option_button'),
 ] as const satisfies readonly InlineButtonDefinition[];

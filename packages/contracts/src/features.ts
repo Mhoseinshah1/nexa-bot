@@ -591,6 +591,20 @@ export const FEATURE_FLAGS = [
     configuredBy: [],
   },
   {
+    key: 'phone_verification',
+    description:
+      'R11 B7: a customer may verify their own phone number in the bot by sharing their ' +
+      'Telegram contact («تأیید شماره تلفن»); only their OWN number is accepted, never a ' +
+      'forwarded or another person’s contact. A payment route may then require a verified ' +
+      'number (the route’s «فقط برای شماره تأییدشده» switch). Off by default: no verification ' +
+      'button is drawn, a shared contact verifies nothing, and every route’s phone ' +
+      'requirement is ignored as if it were not set. Turning it off keeps every stored number.',
+    defaultEnabled: false,
+    // TENANT_WIDE: on, it can hide a payment route from every unverified customer.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
+  {
     key: 'custom_menu_buttons',
     description:
       'R10 D2: owner-defined buttons on the customer main menu \u2014 a link that opens a URL, or ' +

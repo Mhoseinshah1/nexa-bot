@@ -187,6 +187,14 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: null,
     confirmEnable: null,
   },
+  // R11 B7. ON only offers a button and lets operators' route rules apply; OFF withdraws the
+  // button and ignores every route's phone rule — nothing stored is lost. One click either way.
+  phone_verification: {
+    title: 'web.feature_phone_verification_title',
+    summary: 'web.feature_phone_verification_summary',
+    disableEffect: null,
+    confirmEnable: null,
+  },
   // Off: new drafts go to their product's own panel again; nothing already placed moves.
   panel_auto_balancing: {
     title: 'web.feature_panel_auto_balancing_title',

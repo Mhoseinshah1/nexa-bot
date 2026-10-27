@@ -432,6 +432,10 @@ export const WEB_FA = {
   'web.feature_start_captcha_title': 'سؤال امنیتی شروع (کپچا)',
   'web.feature_start_captcha_summary':
     'از هر کاربر تازه پیش از استفاده از ربات یک سؤال ساده (جمع دو عدد با چهار گزینه) پرسیده می‌شود. کاربران فعلی و مدیران هرگز پرسیده نمی‌شوند و پاسخ نادرست هرگز به مسدودی نمی‌انجامد. خاموش کردن آن همهٔ منتظران را آزاد می‌کند.',
+  // R11 B7.
+  'web.feature_phone_verification_title': 'تأیید شماره تلفن کاربران',
+  'web.feature_phone_verification_summary':
+    'کاربر می‌تواند در ربات با ارسال مخاطب خود («تأیید شماره تلفن») شمارهٔ خودش را تأیید کند؛ فقط شمارهٔ خود حساب تلگرام پذیرفته می‌شود. هر درگاه می‌تواند فقط برای شماره‌های تأییدشده نمایش داده شود. خاموش باشد، دکمه‌ای نشان داده نمی‌شود و شرط شمارهٔ تأییدشده در درگاه‌ها نادیده گرفته می‌شود؛ شماره‌های ثبت‌شده حفظ می‌شوند.',
   // A flag from a newer server that this panel build has no entry for.
   'web.feature_unknown_off_effect':
     'این قابلیت برای این نسخه از پنل ناشناخته است و خاموش کردن آن ممکن است بخشی از کار ربات را متوقف کند.',
@@ -4448,6 +4452,7 @@ export const WEB_FA = {
   'web.flag_referral_signup_gift': 'هدیهٔ عضویت از طریق معرفی',
   'web.flag_referral_abuse_guard': 'محافظ سوءاستفاده از معرفی',
   'web.flag_start_captcha': 'سؤال امنیتی شروع (کپچا)',
+  'web.flag_phone_verification': 'تأیید شماره تلفن کاربران',
   'web.referral_not_before': 'در انتظار سقف روزانه تا',
   'web.setting_referral_signup_gift_total': 'مبلغ کل هدیهٔ عضویت',
   'web.setting_referral_signup_gift_referrer_percent': 'سهم معرف از هدیهٔ عضویت',
@@ -5007,6 +5012,7 @@ export const WEB_FA = {
   'web.ib_button_channels_join_private': 'عضویت در کانال خصوصی',
   'web.ib_button_channels_check': 'بررسی عضویت',
   'web.ib_button_terms_accept': 'پذیرش قوانین',
+  'web.ib_button_phone_verify': 'تأیید شماره تلفن (حساب کاربری و روش‌های پرداخت)',
   'web.ib_button_captcha_option': 'گزینهٔ پاسخ سؤال امنیتی',
   'web.setting_bot_main_menu_desc':
     'ترتیب و نمایش دکمه‌های منوی اصلی ربات؛ در صفحهٔ «دکمه‌های ربات» ویرایش می‌شود.',
@@ -10487,6 +10493,11 @@ export const WEB_FA = {
   'web.err_commerce_payment_state_invalid':
     'این کار در وضعیت فعلی پرداخت ممکن نیست. صفحه را تازه کنید.',
   'web.err_commerce_payment_window_too_short': 'مهلت پرداخت کوتاه‌تر از حد مجاز است.',
+  'web.err_commerce_phone_contact_not_own':
+    'فقط شمارهٔ خود حساب تلگرام کاربر پذیرفته می‌شود؛ مخاطب دیگران یا بازارسال‌شده پذیرفته نیست.',
+  'web.err_commerce_phone_verification_disabled': 'تأیید شماره تلفن در حال حاضر خاموش است.',
+  'web.err_commerce_phone_verification_required':
+    'این روش پرداخت فقط برای کاربرانی است که شماره تلفن خود را تأیید کرده‌اند.',
   'web.err_commerce_product_currency_unsupported': 'واحد پول این محصول پشتیبانی نمی‌شود.',
   'web.err_commerce_product_not_categorised': 'این محصول دسته‌بندی ندارد.',
   'web.err_commerce_product_not_for_audience': 'این محصول برای این مشتری عرضه نمی‌شود.',

@@ -52,6 +52,16 @@ export function normalisePhoneNumber(raw: string): string | null {
 }
 
 /**
+ * R11 B7: a stored phone number as a log, a timeline or a screen that is not the number's
+ * own editor may show it — the last four digits behind an ellipsis, never the number. The
+ * audit log is append-only and the operations group is a chat other people read, so the
+ * full number is never written to either.
+ */
+export function maskPhoneNumber(phone: string): string {
+  return `\u2026${phone.slice(-4)}`;
+}
+
+/**
  * A Telegram numeric id as an operator TYPES it: Persian `۰-۹` and Arabic-Indic `٠-٩` digits
  * read as ASCII and surrounding space dropped, THEN held to `telegramUserIdSchema`. At the
  * boundary, so an id copied onto a Persian keyboard is not refused before any code that
@@ -90,10 +100,18 @@ export const customerOverviewSchema = z.object({
   customerId: z.string(),
   /** When an operator exempted this customer from mandatory channel membership; null: not exempt. */
   channelMembershipExemptAt: z.iso.datetime().nullable(),
-  /** The number an operator verified out of band, or null. Customers are never asked for one. */
+  /**
+   * The verified number, or null when none is: one an operator verified out of band, or
+   * (R11 B7) one the customer verified by sharing their own Telegram contact.
+   *
+   * `masked` (`maskPhoneNumber`) is what the page shows. `number` is the full number, and
+   * only to an administrator holding `users.phone.verify` — the permission that may set or
+   * revoke it; null to everybody else, who sees the masked form only.
+   */
   phone: z
     .object({
-      number: z.string(),
+      number: z.string().nullable(),
+      masked: z.string(),
       verifiedAt: z.iso.datetime(),
     })
     .nullable(),

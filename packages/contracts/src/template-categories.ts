@@ -77,7 +77,8 @@ export const TEMPLATE_CATEGORY_PREFIXES: Readonly<Record<TemplateCategory, reado
     'bot.custom_button.',
   ],
   purchase: ['bot.catalog.', 'bot.order.', 'bot.username.', 'bot.discount.', 'bot.custom_service.'],
-  payment: ['bot.payment.', 'bot.refund.'],
+  // R11 B7: phone verification, which a payment route may require.
+  payment: ['bot.payment.', 'bot.refund.', 'bot.phone.'],
   wallet: ['bot.wallet.'],
   services: ['bot.service.'],
   service_changes: [
