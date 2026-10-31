@@ -64,7 +64,7 @@ import {
  * Built like `late-gateway-credit.test.ts`: the container's own services decide everything,
  * the lane is built here over the container's database with the REAL TonPays and TetraPay
  * adapters whose `fetch` is a recording fake written from the documented shapes, and only the
- * lane's clock moves. The late-credit switches are left at their default (OFF) throughout.
+ * lane's clock moves. Both routes' late-credit switches are set OFF in every case.
  */
 
 const BOT_A = SEED_IDS.botA1 as BotInstanceId;
@@ -285,7 +285,25 @@ describe('R12 F1 — gateway money for an attempt that can no longer pay its ord
     tetrapay = new FakeTetraPay();
     offsetMs = 0;
     lane = laneWith();
+    /*
+     * Both routes' late-credit switches OFF, explicitly (TonPays' default is ON): everything
+     * returned below is returned whatever the switch says.
+     */
+    await setSetting('payments.late_credit.tonpays_enabled', false);
+    await setSetting('payments.late_credit.tetrapay_enabled', false);
   });
+
+  async function setSetting(settingKey: string, value: unknown) {
+    const current = (await ctx.container.settingsService.list(tenantA, owner)).find(
+      (row) => row.key === settingKey,
+    );
+    await ctx.container.settingsService.set(tenantA, owner, {
+      key: settingKey,
+      value,
+      expectedVersion: current?.version ?? null,
+      idempotencyKey: key('setting'),
+    });
+  }
 
   /** The production lane's wiring: the same policy reader and the same credit path. */
   function laneWith(): GatewayPaymentService {
