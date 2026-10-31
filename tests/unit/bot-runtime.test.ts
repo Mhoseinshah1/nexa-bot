@@ -921,6 +921,12 @@ describe('profile metadata, normalised before it is ever stored', () => {
        * it says no invoice was made and nothing was charged, and its retry opens a new attempt.
        */
       'bot.payment.gateway_busy',
+      /*
+       * R11 A8, reviewed: a cancel tap on an invoice Nexa already knows was cancelled. It says
+       * only that, and invites a new payment — which this head offers (the order's method
+       * selector or the top-up). Nothing is sent to the provider when it is shown.
+       */
+      'bot.payment.gateway_cancel_already_cancelled',
       'bot.payment.gateway_cancel_button',
       'bot.payment.gateway_cancel_confirm',
       'bot.payment.gateway_cancel_confirm_button',

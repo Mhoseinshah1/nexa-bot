@@ -4442,6 +4442,12 @@ error text; what follows is only what it does not settle.
   `/cancel` once when its deadline expires a `pending` attempt; a customer who transferred but never
   sent the receipt before the deadline has money on the card and no invoice. That case was already
   stranded before (Nexa's receipt window had closed); it needs an operator either way.
+- **OQ-TPTG-30 — what `/cancel` answers for an invoice that is already cancelled** (Round 11 A8).
+  A customer may now ask again after a cancel whose answer was lost, so the second request may
+  reach an invoice the first one did cancel. The document gives no response for that case. Nexa
+  reads a 2xx as cancelled (as for any cancel) and `NOT_PENDING` / any refusal as a refusal only;
+  the inquiry brought forward then says `canceled` and closes the payment, and the customer's next
+  tap says «فاکتور قبلاً لغو شده». If TonPays has a distinct code for it, it can be mapped then.
 
 ## Round 10 D4 — gift cards (wallet top-up codes)
 
