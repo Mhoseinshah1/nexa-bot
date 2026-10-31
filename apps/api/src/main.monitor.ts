@@ -122,7 +122,14 @@ async function main(): Promise<void> {
       // nothing. It must not report itself unhealthy and be restarted for ever
       // by the container runtime — the operator turned it off on purpose.
       if (!config.PANEL_MONITOR_ENABLED) return true;
-      return fresh;
+      // R12 F2 (Codex P1 on #359): unready after three silent intervals, as before — but
+      // alive while the last finished panel is within one provider exchange's allowance
+      // beyond that, so a sweep blocked on a slow panel inside its own deadline is not
+      // killed. Progress is per panel, so a sweep that keeps finishing panels stays alive.
+      return {
+        healthy: fresh,
+        alive: container.panelMonitor.iterationIsFresh(now - container.panelExchangeAllowanceMs),
+      };
     },
   });
 
