@@ -97,6 +97,17 @@ import {
 } from './payment-gateways.js';
 import { connectionFileCaptionTemplateIssues } from './templates.js';
 import {
+  TONPAYS_CALLS_PER_MINUTE_DEFAULT,
+  TONPAYS_CALLS_PER_MINUTE_MAX,
+  TONPAYS_CALLS_PER_MINUTE_MIN,
+  TONPAYS_PACING_BURST_DEFAULT,
+  TONPAYS_PACING_BURST_MAX,
+  TONPAYS_PACING_BURST_MIN,
+  TONPAYS_PACING_BURST_SETTING_KEY,
+  TONPAYS_PACING_SETTING_KEYS,
+  TONPAYS_TELEGRAM_CALLS_PER_MINUTE_DEFAULT,
+} from './tonpays.js';
+import {
   REFERRAL_COMMISSION_PERCENT_MAX,
   REFERRAL_COMMISSION_PERCENT_MIN,
   RESELLER_MINIMUM_REMINDER_DAYS_DEFAULT,
@@ -1144,6 +1155,49 @@ export const SETTINGS = [
       'except what a webhook or an operator brings forward, as before.',
     schema: z.number().int().min(LATE_CREDIT_WINDOW_HOURS_MIN).max(LATE_CREDIT_WINDOW_HOURS_MAX),
     defaultValue: LATE_CREDIT_WINDOW_HOURS_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: TONPAYS_PACING_SETTING_KEYS.TONPAYS,
+    description:
+      'Round 11 A8: the most calls a minute this installation makes to TonPays (website) with ' +
+      'one API key — invoice creates and status checks together — paced by a token bucket in ' +
+      'the TonPays client itself, so a pass never fires a volley. A 429 from TonPays also ' +
+      'pauses every call on that key for its Retry-After (else an exponential back-off). Never ' +
+      'above the documented 60. Lower it if TonPays still answers 429.',
+    schema: z.number().int().min(TONPAYS_CALLS_PER_MINUTE_MIN).max(TONPAYS_CALLS_PER_MINUTE_MAX),
+    defaultValue: TONPAYS_CALLS_PER_MINUTE_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: TONPAYS_PACING_SETTING_KEYS.TONPAYS_TELEGRAM,
+    description:
+      'Round 11 A8: the same pace for TonPays Telegram (card-to-card): every create, check, ' +
+      'card change, receipt upload, cancel and refund with its key. Kept below the website ' +
+      'route so both together stay under 60 a minute even if TonPays counts them as one account.',
+    schema: z.number().int().min(TONPAYS_CALLS_PER_MINUTE_MIN).max(TONPAYS_CALLS_PER_MINUTE_MAX),
+    defaultValue: TONPAYS_TELEGRAM_CALLS_PER_MINUTE_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: TONPAYS_PACING_BURST_SETTING_KEY,
+    description:
+      'Round 11 A8: how many TonPays calls may leave back to back before the pace above applies ' +
+      '(the token bucket\u2019s size), for both TonPays routes. Small on purpose.',
+    schema: z.number().int().min(TONPAYS_PACING_BURST_MIN).max(TONPAYS_PACING_BURST_MAX),
+    defaultValue: TONPAYS_PACING_BURST_DEFAULT,
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',

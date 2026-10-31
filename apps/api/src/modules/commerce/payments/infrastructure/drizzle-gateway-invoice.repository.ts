@@ -767,14 +767,20 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     retryAt: Date,
     now: Date,
     tx?: unknown,
+    options?: { readonly notSent?: boolean },
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
     const rows = await this.exec(tx)
       .update(gatewayInvoices)
       .set({
         // Cleared ONLY here, where the provider said in so many words that it did not
-        // process the request. Anywhere else a stamped send means the answer is unknown.
+        // process the request — or (Round 11 A8) where it was never asked: the adapter's own
+        // limiter held it. Anywhere else a stamped send means the answer is unknown.
         creationSentAt: null,
+        // Round 11 A8: a send that never left gives back the attempt its stamp counted.
+        ...(options?.notSent === true
+          ? { creationAttempts: sql`GREATEST(${gatewayInvoices.creationAttempts} - 1, 0)` }
+          : {}),
         creationClaimedUntil: null,
         creationRetryAt: retryAt,
         creationErrorCode: errorCode,
@@ -1056,6 +1062,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly crypto?: GatewayCryptoFigures | null;
       readonly method?: string | null;
       readonly notBefore?: Date | null;
+      readonly rateLimited?: boolean;
       readonly claimedUntil?: Date;
     },
     now: Date,
@@ -1110,13 +1117,15 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         lastInquiryAt: now,
         lastInquiryErrorCode: result.errorCode,
         inquiryAttempts: sql`${gatewayInvoices.inquiryAttempts} + 1`,
-        ...(result.postDeadline
+        // Round 11 A8: a rate-limited inquiry asked nothing, so it spends none of the
+        // post-deadline allowance and leaves an operator's request standing.
+        ...(result.postDeadline && result.rateLimited !== true
           ? { postDeadlineInquiries: sql`${gatewayInvoices.postDeadlineInquiries} + 1` }
           : {}),
         nextInquiryAt: result.nextInquiryAt,
         inquiryClaimedUntil: null,
         // An operator's request is answered by the inquiry it let through.
-        reconcileInquiryRequestedAt: null,
+        ...(result.rateLimited === true ? {} : { reconcileInquiryRequestedAt: null }),
         updatedAt: now,
       })
       .where(

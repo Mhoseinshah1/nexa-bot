@@ -906,6 +906,11 @@ describe('profile metadata, normalised before it is ever stored', () => {
        * receipt-empty screens. Reviewed: the worker performs every provider call (cancel,
        * refund card, remainder receipt) and none of these says paid.
        */
+      /*
+       * Round 11 A8: a create the provider refused for its rate limit on every retry. Reviewed:
+       * it says no invoice was made and nothing was charged, and its retry opens a new attempt.
+       */
+      'bot.payment.gateway_busy',
       'bot.payment.gateway_cancel_button',
       'bot.payment.gateway_cancel_confirm',
       'bot.payment.gateway_cancel_confirm_button',
