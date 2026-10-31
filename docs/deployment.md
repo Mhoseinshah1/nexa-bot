@@ -735,6 +735,38 @@ every rollback to it — after the assets had already moved. The relaxation is
 exactly one service wide; a monitor-less topology still requires its API and its
 worker.
 
+### PostgreSQL and Redis are sized for the host (R12 F2)
+
+The `postgres` service used the image's defaults whatever the host had. Now:
+
+| Setting (deploy.env key)                                | Value                                         |
+| ------------------------------------------------------- | --------------------------------------------- |
+| `shared_buffers` (`NEXA_PG_SHARED_BUFFERS`)             | 25 % of RAM, at least 128 MB, at most 8 GB    |
+| `effective_cache_size` (`NEXA_PG_EFFECTIVE_CACHE_SIZE`) | 60 % of RAM, at least 256 MB                  |
+| `work_mem` (`NEXA_PG_WORK_MEM`)                         | 16 MB                                         |
+| `max_connections` (`NEXA_PG_MAX_CONNECTIONS`)           | 150                                           |
+| `shared_preload_libraries`                              | `pg_stat_statements`                          |
+| `/dev/shm` (`shm_size`)                                 | 512 MB (Docker's 64 MB breaks parallel query) |
+| Redis                                                   | `maxmemory 64mb`, `allkeys-lru`               |
+
+The installer, every `botctl update` and every `botctl restart` compute the four
+`NEXA_PG_*` values from `/proc/meminfo` and write them into `/etc/nexa/deploy.env`,
+so a host that grew is resized by its next update. **The first update INTO this
+release is run by the outgoing release's botctl, which does not size anything: run
+`sudo botctl restart` once after it** (the new botctl then records and applies the
+sizing). compose passes them as `-c` flags; a deploy.env without
+them gets PostgreSQL's own defaults, so an installation that has not updated yet runs
+exactly as before. These are memory settings only — nothing in the data directory
+changes — and a rollback to a release whose compose file does not name them ignores
+them. The first update that carries them recreates the `postgres` container (a few
+seconds without the database, inside the update's own window). `botctl status` prints
+the recorded values under `database tuning`. A host whose memory cannot be read keeps
+whatever deploy.env already says. To read the statistics:
+`sudo docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml exec postgres psql -U nexa -d nexa -c 'CREATE EXTENSION IF NOT EXISTS pg_stat_statements'`
+once, then query `pg_stat_statements`. Redis holds only short-lived counters (the
+anti-spam and mini-app windows), so evicting the least recently used at 64 MB loses
+nothing durable.
+
 ## What one installation can keep fresh
 
 Panel health carries a freshness window (`PANEL_HEALTH_FRESH_FOR_MS`, fifteen

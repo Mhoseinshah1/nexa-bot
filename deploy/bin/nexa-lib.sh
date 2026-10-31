@@ -967,6 +967,81 @@ nexa_set_deploy_values() {
   mv -f "$tmp" "$file"
 }
 
+# --- PostgreSQL sizing (R12 F2) ----------------------------------------------
+#
+# The postgres service used the image's defaults whatever the host had: 128 MB of
+# shared buffers on a 16 GB machine, and a planner told the OS caches 4 GB. compose
+# now passes `-c` flags from these deploy.env keys, and this computes them from the
+# host's memory at install and at every update — so a host that grew is resized by
+# the next update, and nothing else ever writes them.
+#
+#   shared_buffers        25 % of RAM, at least 128 MB, at most 8 GB
+#   effective_cache_size  60 % of RAM, at least 256 MB
+#   work_mem              16 MB
+#   max_connections       150 (seven roles at DATABASE_POOL_MAX=10 is 70, plus the
+#                         backup tools and an operator's psql)
+#
+# Safe on update and rollback: it changes PostgreSQL's memory settings and nothing in
+# the data directory, and a release whose compose file does not name these keys (a
+# rollback past R12) simply ignores them. A host whose memory cannot be read keeps
+# whatever deploy.env already says, and compose's own defaults when it says nothing.
+# NEXA_MEMINFO exists for the tests.
+nexa_host_memory_mb() {
+  local meminfo="${NEXA_MEMINFO:-/proc/meminfo}" kb
+  kb="$(awk '/^MemTotal:/ { print $2; exit }' "$meminfo" 2>/dev/null)" || return 1
+  case "$kb" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  printf '%s\n' "$((kb / 1024))"
+}
+
+nexa_pg_tuning() {
+  local mb shared cache
+  mb="$(nexa_host_memory_mb)" || return 1
+  [ "$mb" -gt 0 ] || return 1
+  shared=$((mb / 4))
+  [ "$shared" -ge 128 ] || shared=128
+  [ "$shared" -le 8192 ] || shared=8192
+  cache=$((mb * 6 / 10))
+  [ "$cache" -ge 256 ] || cache=256
+  printf 'NEXA_PG_SHARED_BUFFERS=%sMB\n' "$shared"
+  printf 'NEXA_PG_EFFECTIVE_CACHE_SIZE=%sMB\n' "$cache"
+  printf 'NEXA_PG_WORK_MEM=16MB\n'
+  printf 'NEXA_PG_MAX_CONNECTIONS=150\n'
+}
+
+# Records the sizing in deploy.env. Never fatal: a host whose memory cannot be read is
+# not a reason to refuse an install or an update.
+nexa_record_pg_tuning() {
+  local values
+  if ! values="$(nexa_pg_tuning)"; then
+    nexa_warn "could not read this host's memory; PostgreSQL keeps the sizing deploy.env already has."
+    return 0
+  fi
+  # shellcheck disable=SC2086 # one KEY=VALUE per word, none containing a space.
+  nexa_set_deploy_values $values
+  nexa_ok "PostgreSQL sized for this host: $(printf '%s' "$values" | tr '\n' ' ')"
+}
+
+# The sizing as status prints it: what deploy.env names, or the default compose uses.
+nexa_db_tuning_report() {
+  local file="${NEXA_CONFIG_DIR}/deploy.env" pair key value default
+  printf '\ndatabase tuning (deploy.env; applied when postgres is next recreated):\n'
+  for pair in NEXA_PG_SHARED_BUFFERS:128MB NEXA_PG_EFFECTIVE_CACHE_SIZE:4GB \
+    NEXA_PG_WORK_MEM:4MB NEXA_PG_MAX_CONNECTIONS:100; do
+    key="${pair%%:*}"
+    default="${pair#*:}"
+    value="$(nexa_env_value "$file" "$key" || true)"
+    if [ -n "$value" ]; then
+      printf '  %-30s %s\n' "$key" "$value"
+    else
+      printf '  %-30s %s (not recorded; compose default)\n' "$key" "$default"
+    fi
+  done
+  printf '  %-30s %s\n' 'postgres shared_preload' 'pg_stat_statements'
+  printf '  %-30s %s\n' 'redis' 'maxmemory 64mb, allkeys-lru'
+}
+
 nexa_set_deploy_image() {
   local image="$1" edge="${2:-}"
   [ -n "$image" ] || nexa_die "refusing to record an empty image reference."

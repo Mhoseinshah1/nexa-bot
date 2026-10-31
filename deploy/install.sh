@@ -801,6 +801,8 @@ write_deploy_env() {
   } >"$file"
   chmod 0600 "$file"
   nexa_ok "deployment settings recorded"
+  # R12 F2: PostgreSQL's memory settings, from this host's RAM (botctl update redoes it).
+  nexa_record_pg_tuning
 }
 
 # ---------------------------------------------------------------------------

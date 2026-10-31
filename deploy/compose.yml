@@ -146,6 +146,30 @@ services:
       - FOWNER
       - SETGID
       - SETUID
+    # R12 F2: sized for the host. botctl writes the NEXA_PG_* values into deploy.env
+    # from the host's memory at install and at every update (`nexa_pg_tuning`); the
+    # defaults after `:-` are PostgreSQL's own, so a deploy.env that predates them
+    # runs exactly as before. Memory settings only — nothing in the data directory
+    # changes, and `botctl status` prints what is recorded. pg_stat_statements is
+    # preloaded so a slow query can be found (`CREATE EXTENSION pg_stat_statements`
+    # in psql to read it); the image ships the module.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${NEXA_PG_SHARED_BUFFERS:-128MB}
+      - -c
+      - effective_cache_size=${NEXA_PG_EFFECTIVE_CACHE_SIZE:-4GB}
+      - -c
+      - work_mem=${NEXA_PG_WORK_MEM:-4MB}
+      - -c
+      - max_connections=${NEXA_PG_MAX_CONNECTIONS:-100}
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=top
+    # Docker's 64 MB /dev/shm is too small for parallel query's shared memory, which
+    # fails with "could not resize shared memory segment" under load.
+    shm_size: 512m
     healthcheck:
       # The credentials come from the environment inside the container, so
       # nothing here lands in the command line.
@@ -206,7 +230,7 @@ services:
       - |
         set -e
         umask 077
-        printf 'requirepass "%s"\nsave ""\nappendonly no\n' "$$REDIS_PASSWORD" >/tmp/redis.conf
+        printf 'requirepass "%s"\nsave ""\nappendonly no\nmaxmemory 64mb\nmaxmemory-policy allkeys-lru\n' "$$REDIS_PASSWORD" >/tmp/redis.conf
         exec redis-server /tmp/redis.conf
     env_file:
       - ${NEXA_CONFIG_DIR:-/etc/nexa}/redis.env
