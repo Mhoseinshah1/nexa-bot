@@ -460,6 +460,8 @@ export const ERROR_TEXT = {
   'panel.configuration_changed': 'web.err_panel_configuration_changed',
   'panel.credential_too_short': 'web.err_panel_credential_too_short',
   'panel.credential_unsupported': 'web.err_panel_credential_unsupported',
+  'panel.files_only_unsupported': 'web.err_panel_files_only_unsupported',
+  'panel.qr_kind_unsupported': 'web.err_panel_qr_kind_unsupported',
   'panel.credentials_missing': 'web.err_panel_credentials_missing',
   'panel.delivery_tutorial_stale': 'web.err_panel_delivery_tutorial_stale',
   'panel.name_taken': 'web.err_panel_name_taken',

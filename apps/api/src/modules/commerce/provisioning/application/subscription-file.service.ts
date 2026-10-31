@@ -322,7 +322,15 @@ export class SubscriptionFileService {
      * after it is sent and nothing is retried, exactly as the one-by-one loop did.
      */
     const files = fetched.files;
-    const captionFor = await this.captionPlan(scope, service, files);
+    /*
+     * R11 A4: the captions' link variables ({sub_link}, {subscription_url}) read a service's
+     * `subscriptionUrl`. On a «فقط فایل، بدون لینک ساب» panel the caption is built from a
+     * service WITHOUT it, so a template that names the link renders that line absent — the
+     * renderer drops a line made only of absent facts — and a caption can never carry it.
+     */
+    const captionService: ServiceRecord =
+      view?.panel.filesOnlyDelivery === true ? { ...service, subscriptionUrl: null } : service;
+    const captionFor = await this.captionPlan(scope, captionService, files);
     const kinds = files.map(() => 'DOCUMENT' as const);
     let sent = 0;
     for (const batch of planMediaBatches(kinds)) {

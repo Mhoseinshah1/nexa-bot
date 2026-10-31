@@ -130,6 +130,8 @@ function harness(
     panelPolicy: {
       forPanel: async () => resolvePanelPolicy({ delivery: { mode }, actions: {} }),
     },
+    filesOnly: { isFilesOnly: async () => false },
+    qrOptions: { qrOptionsOf: async () => ({ kind: 'SUB_LINK' as const, intervalMinutes: 360 }) },
   };
   return { delivery: new DeliveryService(deps), encoded, files, texts, recorded };
 }

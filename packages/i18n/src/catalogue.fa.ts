@@ -951,6 +951,21 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.rotate_ask':
     'برای این سرویس یک لینک اشتراک جدید ساخته می‌شود و باید آن را در برنامه‌های خود جایگزین کنید.\nپس از آن، تا {cooldownHours} ساعت نمی‌توانید دوباره لینک جدید بگیرید.\nادامه می‌دهید؟',
   'bot.service.rotate_confirm_button': 'بله، لینک جدید بساز',
+  // R11 A4 — «فقط فایل، بدون لینک ساب»: none of these carries a link.
+  'bot.service.delivered_files_only':
+    '{icon:success} سرویس با موفقیت ایجاد شد\n\n{icon:user} نام کاربری سرویس: {serviceUsername}\n🌿 نام سرویس: {productName}\n{icon:location} لوکیشن: 🚀 {serviceLocation}\n⌛ مدت زمان: {durationDays}\n⏱ حجم سرویس: {trafficBytes}\n\n📂 فایل‌های اتصال شما در پیام‌های بعدی ارسال می‌شود. فایل مخصوص دستگاه خود را در برنامه باز کنید.\n\n🚶 شما میتوانید شیوه اتصال را با فشردن دکمه زیر و\nانتخاب سیستم عامل خود را دریافت کنید',
+  'bot.service.files_renewed':
+    '{icon:success} فایل‌های اتصال سرویس {serviceUsername} با موفقیت تغییر کرد.\nلطفاً فایل‌های جدید را که در پیام‌های بعدی ارسال می‌شود در برنامه خود جایگزین کنید.',
+  // R11 A4 — «نوع بارکد»: the one-line captions when a panel shows both QRs.
+  'bot.service.qr_caption_sublink': '📷 QR لینک اشتراک؛ آن را با برنامهٔ خود اسکن کنید.',
+  'bot.service.qr_caption_singbox':
+    '📷 QR مخصوص sing-box؛ با اسکن آن اشتراک در sing-box افزوده می‌شود.',
+  'bot.service.files_new_button': '⚙️ دریافت فایل‌های جدید',
+  'bot.service.files_new_ask':
+    'برای این سرویس فایل‌های اتصال جدید ساخته می‌شود و باید آن را در برنامه‌های خود جایگزین کنید.\nپس از آن، تا {cooldownHours} ساعت نمی‌توانید دوباره فایل جدید بگیرید.\nادامه می‌دهید؟',
+  'bot.service.files_new_confirm_button': 'بله، فایل‌های جدید بساز',
+  'bot.service.files_new_cooldown':
+    'شما به‌تازگی برای این سرویس فایل جدید گرفته‌اید.\nاز {availableAt} می‌توانید دوباره درخواست کنید.',
   'bot.service.rotate_cooldown':
     'شما به‌تازگی برای این سرویس لینک جدید گرفته‌اید.\nاز {availableAt} می‌توانید دوباره درخواست کنید.',
   'bot.service.provisioning':

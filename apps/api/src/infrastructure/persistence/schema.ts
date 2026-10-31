@@ -381,6 +381,8 @@ import {
   GIFT_CARD_BATCH_STATES,
   GIFT_CARD_CODE_STATES,
   GIFT_CARD_REJECTIONS,
+  // R11 A4: «نوع بارکد».
+  PANEL_QR_KINDS,
 } from '@nexa/contracts';
 
 /**
@@ -2209,12 +2211,37 @@ export const panels = pgTable(
      * catalogue's reach, never by anything that operates an existing service.
      */
     balancingGroup: text('balancing_group'),
+    /**
+     * R11 A4: «فقط فایل، بدون لینک ساب» — the subscription link of a service on this panel
+     * is never shown to its customer (bot card, «سرویس‌های من», mini app); they get the
+     * connection files only, and «تغییر لینک» becomes «دریافت فایل‌های جدید».
+     *
+     * NOT NULL with default false, so every panel that exists when the migration runs keeps
+     * showing its link and nothing changes underneath an operator. Possible only on a panel
+     * whose provider hands over connection files; `PanelService.update` refuses it on any
+     * other (a CHECK cannot know which provider can). Nothing is sent to a customer when it
+     * is switched, and no service row is touched.
+     */
+    filesOnlyDelivery: boolean('files_only_delivery').notNull().default(false),
+    /**
+     * R11 A4: «نوع بارکد» — which QR a customer of this panel is shown. RickPanel panels only
+     * (`PanelService.update` refuses another provider; a CHECK cannot know which provider a
+     * row is). `SUB_LINK` is the default and exactly what every panel drew before.
+     */
+    qrKind: text('qr_kind').notNull().default('SUB_LINK'),
+    /** The refresh interval written into a sing-box import QR, in minutes. */
+    singboxIntervalMinutes: integer('singbox_interval_minutes').notNull().default(360),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
     index('panels_tenant_status_idx').on(table.tenantId, table.status),
     /** A drain and its reason, or neither — the same biconditional shape as the username policy. */
+    check('panels_qr_kind_check', enumCheck('qr_kind', PANEL_QR_KINDS)),
+    check(
+      'panels_singbox_interval_check',
+      sql`${table.singboxIntervalMinutes} BETWEEN 1 AND 10080`,
+    ),
     check(
       'panels_balancing_group_check',
       sql`${table.balancingGroup} IS NULL OR ${table.balancingGroup} ~ '^[a-z0-9][a-z0-9_-]{0,39}$'`,

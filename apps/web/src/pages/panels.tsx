@@ -62,6 +62,7 @@ import { messageFor } from './settings';
 import { PanelTrialTab } from './panel-trial';
 import { DeliveryTutorialTab } from './delivery-tutorial';
 import { PanelConnectionFilesTab } from './panel-connection-files';
+import { PanelDeliveryOptionsCard } from './panel-delivery-options';
 import { HEALTH_TONES } from './dashboard';
 /*
  * The product and service vocabularies, imported rather than restated.
@@ -902,10 +903,17 @@ export function PanelDetailPage({
                 />
               )}
               {tab === 'connection-files' && sendsConnectionFiles(data) && (
-                <PanelConnectionFilesTab
-                  panelId={data.id}
-                  mayEdit={mayEdit && data.status !== 'ARCHIVED'}
-                />
+                <>
+                  {/* R11 A4: files only / QR kind, above the files' caption. */}
+                  <PanelDeliveryOptionsCard
+                    panel={data}
+                    mayEdit={mayEdit && data.status !== 'ARCHIVED'}
+                  />
+                  <PanelConnectionFilesTab
+                    panelId={data.id}
+                    mayEdit={mayEdit && data.status !== 'ARCHIVED'}
+                  />
+                </>
               )}
               {tab === 'capabilities' && (
                 <CapabilitiesTab

@@ -16,6 +16,7 @@ import {
   type IncidentNoticeRequest,
   type IncidentNoticeResponse,
   type IncidentResponse,
+  type PanelQrKind,
   type UpdateIncidentRequest,
 } from '@nexa/contracts';
 import {
@@ -2695,6 +2696,10 @@ export function updatePanel(input: {
   usernamePolicy?: PanelUsernamePolicyInput;
   /** Phase C3: absent leaves it; `null` takes the panel out of its group; a label sets it. */
   balancingGroup?: string | null;
+  /** R11 A4: files only, and the QR kind (RickPanel only); absent leaves them. */
+  filesOnlyDelivery?: boolean;
+  qrKind?: PanelQrKind;
+  singboxIntervalMinutes?: number;
   idempotencyKey: string;
 }): Promise<PanelResponse> {
   const { id, ...body } = input;

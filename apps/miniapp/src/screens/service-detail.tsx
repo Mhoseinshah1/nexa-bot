@@ -115,6 +115,7 @@ function Detail({ service }: { service: MiniAppServiceDetail }) {
         <QrSheet
           serviceId={service.id}
           link={service.subscriptionUrl}
+          kinds={service.qrKinds}
           onClose={() => setSheet(null)}
         />
       )}

@@ -129,6 +129,8 @@ function harness(
       forPanel: async () =>
         resolvePanelPolicy({ delivery: { mode: options.mode ?? 'CARD_WITH_QR' }, actions: {} }),
     },
+    filesOnly: { isFilesOnly: async () => false },
+    qrOptions: { qrOptionsOf: async () => ({ kind: 'SUB_LINK' as const, intervalMinutes: 360 }) },
     linkQr: {
       claim: async (_s, key) => {
         claims += 1;

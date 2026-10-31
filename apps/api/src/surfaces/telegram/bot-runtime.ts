@@ -2022,7 +2022,7 @@ export class BotRuntime {
       return serviceCardFlow.openServiceCard(this, scope, actor, customer, command.targetId);
     }
     if (command.intent === 'SERVICE_RESEND' && command.targetId !== null) {
-      return serviceCardFlow.serviceResend(this, scope, customer, command.targetId, input);
+      return serviceCardFlow.serviceResend(this, scope, actor, customer, command.targetId, input);
     }
     if (command.intent === 'SERVICE_FILES' && command.targetId !== null) {
       return serviceCardFlow.serviceFiles(this, scope, actor, customer, command.targetId, input);
