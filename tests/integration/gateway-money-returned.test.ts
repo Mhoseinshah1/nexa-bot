@@ -443,13 +443,8 @@ describe('R12 F1 — gateway money for an attempt that can no longer pay its ord
     );
 
   const walletTotal = async () =>
-    (
-      await new DrizzleWalletRepository(ctx.container.database.db).balanceOf(
-        tenantA,
-        maryam,
-        'IRT',
-      )
-    ).amountMinor;
+    (await new DrizzleWalletRepository(ctx.container.database.db).balanceOf(tenantA, maryam, 'IRT'))
+      .amountMinor;
 
   const notices = (paymentId: string) =>
     rows<{ kind: string }>(

@@ -169,12 +169,11 @@ describe('R12 F1 — a full refund suspends the service it paid for', () => {
   /** A RENEW of that service, paid from the wallet and applied. */
   async function renewed(serviceId: string): Promise<{ orderId: string; paymentId: PaymentId }> {
     const k = key('renew');
-    const { order } = await ctx.container.commercialActions.draft(
-      tenantA,
-      botActor(k),
-      customerA,
-      { serviceId, kind: 'RENEW', idempotencyKey: `${k}-quote` },
-    );
+    const { order } = await ctx.container.commercialActions.draft(tenantA, botActor(k), customerA, {
+      serviceId,
+      kind: 'RENEW',
+      idempotencyKey: `${k}-quote`,
+    });
     await ctx.container.commercialActions.confirm(tenantA, botActor(k), customerA, {
       orderId: order.id,
       idempotencyKey: `${k}-confirm`,

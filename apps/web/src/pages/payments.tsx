@@ -1430,8 +1430,7 @@ function RefundsCard({
    */
   const refundMaySuspendService =
     orderId !== null &&
-    (order.data === undefined ||
-      REFUND_SUSPENDS_PURPOSES.has(order.data.order.purpose));
+    (order.data === undefined || REFUND_SUSPENDS_PURPOSES.has(order.data.order.purpose));
 
   const refresh = (response: RefundResponse) => {
     void response;
