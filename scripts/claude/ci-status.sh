@@ -103,6 +103,36 @@ else if (mode === "gate") {
     else if (state.has_any_findings === true) extra += ' findings=yes';
     if (state.status) extra += ` status=${state.status}`;
   }
+  // The receipt Codex posts when a review finishes: "Didn't find any major issues" (clean) and
+  // "**Reviewed commit:** `<sha>`". The latest one from the real bot wins.
+  let receipt = null;
+  if (Array.isArray(iss)) {
+    const stamp = (c) => String(c.updated_at || c.created_at);
+    for (const c of iss.filter(isCodex).sort((a, b) => stamp(a).localeCompare(stamp(b)))) {
+      const b = String(c.body || '');
+      if (!/codex-review-receipt:v1/.test(b)) continue;
+      const m = b.match(/Reviewed commit:\**\s*`([0-9a-f]{7,40})`/i);
+      if (m) receipt = { sha: m[1].slice(0, 8), clean: /Didn['\u2019]t find any major issues/i.test(b) };
+    }
+  }
+  if (receipt) {
+    if (!state) { rev = receipt.sha; if (receipt.clean) extra += ' findings=none'; }
+    extra += ` receipt=${receipt.sha}:${receipt.clean ? 'clean' : 'findings'}`;
+  }
+  // Codex's 👍 on the PR means "reviewed, nothing found". A reaction carries no commit, so it
+  // counts for the head only when it is newer than the head commit (thumbsup=head), else stale.
+  // The reactions API reports the app's user as type User; its exact "[bot]" login cannot be
+  // taken by a person, so the login alone identifies it here.
+  const reactions = args[3] ? readPages(args[3]) : null;
+  if (Array.isArray(reactions)) {
+    const ups = reactions.filter((r) => r && r.content === '+1' && r.user && r.user.login === 'chatgpt-codex-connector[bot]');
+    if (ups.length) {
+      let headAt = '';
+      try { const cm = JSON.parse(fs.readFileSync(args[4], 'utf8')); headAt = String((cm.commit && cm.commit.committer && cm.commit.committer.date) || ''); } catch { headAt = ''; }
+      const last = ups.map((r) => String(r.created_at)).sort().pop();
+      extra += !headAt ? ' thumbsup=undated' : last >= headAt ? ' thumbsup=head' : ' thumbsup=stale';
+    }
+  }
   console.log(`codex comments=${comments.length} ${tpart} reviewed=${rev} head=${head8 || 'unknown'}${extra}`);
   for (const c of comments) {
     const body = String(c.body || '');
@@ -224,7 +254,10 @@ codex_report() {
   # so a summary past the first 100 comments is seen. Unreadable is not fatal; the review
   # comments above still say what they say.
   api "repos/$R/issues/$pr/comments?per_page=100" --paginate >"$tdir/issue.json" 2>/dev/null || : >"$tdir/issue.json"
-  jx codex "${head:0:8}" "$tdir/issue.json" "$tdir/threads.json" <<<"$comments" || { rm -rf "$tdir"; return 1; }
+  # Codex's 👍 reaction, and the head commit's date to tell whether the 👍 is newer.
+  api "repos/$R/issues/$pr/reactions?per_page=100" --paginate >"$tdir/reactions.json" 2>/dev/null || : >"$tdir/reactions.json"
+  api "repos/$R/commits/$head" >"$tdir/head.json" 2>/dev/null || : >"$tdir/head.json"
+  jx codex "${head:0:8}" "$tdir/issue.json" "$tdir/threads.json" "$tdir/reactions.json" "$tdir/head.json" <<<"$comments" || { rm -rf "$tdir"; return 1; }
   rm -rf "$tdir"
 }
 

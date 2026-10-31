@@ -26,17 +26,20 @@ bash $S --wait <pr> --every 60 --max 540     # bounded loop, fits one foreground
   full-log fetch.
 - **Waiting** is ONE foreground blocking call with a timeout: the bounded
   `--wait` loop, with `--max` under the Bash tool's 600 s limit in the
-  foreground (`--max 540`). Never an agent polling in a loop; never `gh pr
-checks` (GraphQL). A scheduled check-in can lapse silently (one left a session idle for
+  foreground (`--max 540`). Never an agent polling in a loop; never
+  `gh pr checks` (GraphQL). A scheduled check-in can lapse silently (one left a session idle for
   an hour): at most one per wait, at least 20 minutes apart, as a backstop only.
 - **One checker.** Never spawn a watcher agent per wait or per notification. If
   the round names one CI-checking agent, it is the only one; everyone else keeps
   working.
 - **Duplicates:** do not reply to, or act twice on, a duplicate CI or Codex
   notification. Re-run the script; if the line has not changed, do nothing.
-- **Codex** reviews automatically when the PR opens. Never request it again.
-  Read the existing review with `--codex`; if `reviewed` ≠ `head`, say in the
-  report that it reviewed an older head. No second review.
+- **Codex**: request it yourself at once with one `@codex review` comment
+  (when, how, the 2-comment cap: `nexa-round-pipeline` §3). Read it with
+  `--codex`: `receipt=<sha>:clean|findings` is Codex's "Reviewed commit"
+  receipt; `thumbsup=head` is its 👍 newer than the head commit (`stale` =
+  older). Clean on the head = findings=none. If `reviewed` ≠ `head`, it
+  reviewed an older head. Act on the first complete review of a head only.
 - **Re-runs:** once, and only when the failure is in a test this PR does not
   touch (or `--gate` reports gate-only-red, using the exact command it prints).
   A second failure is real: investigate. "Flake" is not a root cause.

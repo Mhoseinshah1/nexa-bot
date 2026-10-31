@@ -62,17 +62,31 @@ only**. A money PR keeps `pnpm verify` once at the end and its guard suites.
 
 ## 3. PR pipeline
 
-Push → open the PR → **one** CI checker (`nexa-ci-watch`) → read the **one**
-Codex review (automatic; never request another; if it reviewed an older head,
-say so) → fix its findings in **one** commit → green CI on that head → merge
-with a **merge commit**. No second review round.
+Push → open the PR → request Codex → **one** CI checker (`nexa-ci-watch`) →
+act on the **one** Codex review → fix all its findings in **one** commit → green
+CI on that head → merge with a **merge commit**. No second review round; never
+request a review after the fix commit.
 
 Waiting for CI is ONE foreground blocking call with a timeout
 (`bash scripts/claude/ci-status.sh --wait <pr> --max 540`, under the Bash
 tool's 600 s limit; `nexa-ci-watch`), never an agent polling in a loop.
 
-If Codex still "runs" 1 h after the PR opened, tell the owner and keep working;
-only the owner comments `@codex review`.
+**The lead (or the CI checker) requests Codex itself, at once** (owner,
+2026-10-31) — REST only, exactly this text, nothing else in the comment:
+
+```bash
+gh api repos/Mhoseinshah1/nexa-bot/issues/<pr>/comments -f body='@codex review'
+```
+
+- When: right after opening the PR (or pushing the head to review); after a
+  re-push that changes the head while that head still needs its one review;
+  once more if Codex still "runs" 1 h after the comment — then report it and
+  keep working on other PRs. **At most 2 `@codex review` comments per PR.**
+- Clean = a Codex receipt "Didn't find any major issues" whose reviewed commit
+  is the head, or Codex's 👍 newer than the head (`--codex`: `receipt=<head>:clean`
+  or `thumbsup=head`); treat it as findings=none.
+- Opening a PR also triggers Codex, so a head may get two reviews: act on the
+  FIRST complete review of that head only; ignore the other (no reply, no fix).
 
 A round prompt that says to push, open a PR and merge on green **is** the
 explicit owner approval `nexa-pr-workflow` §6 requires, for that round's PRs,
