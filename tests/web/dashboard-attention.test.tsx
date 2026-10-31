@@ -32,6 +32,7 @@ const ALL_NULL: NavCountersResponse['counters'] = {
   refundRequestsAwaiting: null,
   paymentsUnknown: null,
   businessHandoffs: null,
+  receiptsAwaitingReview: null,
 };
 
 const counters = (values: Partial<NavCountersResponse['counters']> = {}) =>
@@ -126,6 +127,27 @@ describe('the attention queue', () => {
     const stuck = within(list).getByText(t('web.dash_attn_stuck_operations')).closest('a');
     expect(stuck?.textContent).toContain('3');
     expect(within(list).getByText(t('web.dash_attn_handoffs'))).toBeTruthy();
+  });
+
+  it('R12 F3: card-to-card receipts awaiting review are a row that opens that very queue', async () => {
+    stubApi(routes(counters({ paymentsUnknown: 4, receiptsAwaitingReview: 3 })));
+    renderPage(<AttentionQueueCard permissions={['payments.view', 'receipts.review']} />);
+    const list = await queue();
+    await waitFor(() => expect(hrefs(list)).toContain('/payments?queue=RECEIPT_REVIEW'));
+    const row = within(list).getByText(t('web.dash_attn_receipts_review')).closest('a');
+    expect(row?.textContent).toContain('3');
+    // After the UNKNOWN outcomes, before the reconcilable ones: money waiting on a person.
+    expect(hrefs(list).slice(0, 2)).toEqual([
+      '/payments?queue=UNKNOWN',
+      '/payments?queue=RECEIPT_REVIEW',
+    ]);
+  });
+
+  it('R12 F3: a viewer who cannot review receipts gets no receipts row (the server withholds it)', async () => {
+    stubApi(routes(counters({ paymentsUnknown: 4, receiptsAwaitingReview: null })));
+    renderPage(<AttentionQueueCard permissions={['payments.view']} />);
+    const list = await queue();
+    expect(hrefs(list)).not.toContain('/payments?queue=RECEIPT_REVIEW');
   });
 
   it('asks no source the viewer may not read, and draws no row it withheld', async () => {
@@ -292,6 +314,7 @@ describe('the attention queue’s rules', () => {
         'opslog.view',
         'panels.view',
         'payments.view',
+        'receipts.review',
         'refunds.view',
         'services.view',
         'tickets.view',

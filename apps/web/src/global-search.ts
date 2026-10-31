@@ -16,15 +16,25 @@ const GROUP_KEYS: Readonly<Record<GlobalSearchKind, WebKey>> = {
   CUSTOMER: 'web.search_group_customer',
   ORDER: 'web.search_group_order',
   SERVICE: 'web.search_group_service',
+  PAYMENT: 'web.search_group_payment',
+  TICKET: 'web.search_group_ticket',
 };
 
 export function searchGroupLabel(kind: GlobalSearchKind): string {
   return t(GROUP_KEYS[kind]);
 }
 
+const SEARCH_HIT_BASE: Readonly<Record<GlobalSearchKind, string>> = {
+  CUSTOMER: '/users',
+  ORDER: '/orders',
+  SERVICE: '/services',
+  PAYMENT: '/payments',
+  TICKET: '/tickets',
+};
+
 /** Where a hit opens: the detail page of its own kind. */
 export function searchHitPath(kind: GlobalSearchKind, id: string): string {
-  const base = kind === 'CUSTOMER' ? '/users' : kind === 'ORDER' ? '/orders' : '/services';
+  const base = SEARCH_HIT_BASE[kind];
   return `${base}/${encodeURIComponent(id)}`;
 }
 
@@ -32,6 +42,8 @@ const STATE_PREFIX: Readonly<Record<GlobalSearchKind, string>> = {
   CUSTOMER: 'web.user_status_',
   ORDER: 'web.order_state_',
   SERVICE: 'web.service_state_',
+  PAYMENT: 'web.payment_state_',
+  TICKET: 'web.ticket_status_',
 };
 
 /** The Persian name of a hit's state, from the catalogue the lists already use; null if none. */

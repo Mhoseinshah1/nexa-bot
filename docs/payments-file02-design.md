@@ -76,6 +76,8 @@ requires. The unmerged §10-A work is reshaped to fit File 02 before that PR is 
 
 ### D3 — The review surface is Telegram only (§10, §21)
 
+> **Superseded 2026-10-31 (R12 F3 item 8, owner decision): card-to-card receipt review happens in BOTH the Web Admin and Telegram.** The Web Admin's `POST /payments/:id/receipt/{approve,reject,credit}` call the same application methods the Telegram panel calls (`PaymentService.confirmManualTransfer` / `rejectManualTransfer`, `ReceiptDispositionService.creditToWallet`) — no second settlement path, the same permissions, audit and idempotency, and the same conditional PENDING edge, so a decision in one place excludes a decision in the other. The text below is the original decision and is kept as history.
+
 **The Web Admin becomes read-only for card-to-card.**
 
 - These are removed: `POST payments/:id/confirm` and `POST payments/:id/reject`, with their UI, their contract route entries and their tests, and the §10-A credit and dismiss routes.

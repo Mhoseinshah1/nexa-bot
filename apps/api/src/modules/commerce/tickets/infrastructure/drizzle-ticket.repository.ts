@@ -469,7 +469,9 @@ export class DrizzleTicketRepository implements TicketRepository {
   async list(scope: TenantContext, filter: TicketListFilter): Promise<readonly TicketListItem[]> {
     const tenantId = requireTenantId(scope);
     // A customer was named and nobody matched: the answer is no rows, not every row.
-    if (filter.customerId === null && filter.code === undefined) return [];
+    if (filter.customerId === null && filter.code === undefined && filter.number === undefined) {
+      return [];
+    }
     const rows = await this.listSelect()
       .where(
         and(
@@ -857,7 +859,9 @@ function ticketWhoCondition(filter: TicketListFilter): SQL | undefined {
     filter.customerId === undefined || filter.customerId === null
       ? undefined
       : eq(tickets.customerId, filter.customerId);
-  if (filter.code === undefined) return byCustomer;
-  const byCode = eq(tickets.code, filter.code);
-  return byCustomer === undefined ? byCode : or(byCustomer, byCode);
+  const byCode = filter.code === undefined ? undefined : eq(tickets.code, filter.code);
+  const byNumber =
+    filter.number === undefined ? undefined : eq(tickets.number, BigInt(filter.number));
+  const arms = [byCustomer, byCode, byNumber].filter((arm): arm is SQL => arm !== undefined);
+  return arms.length === 0 ? undefined : arms.length === 1 ? arms[0] : or(...arms);
 }

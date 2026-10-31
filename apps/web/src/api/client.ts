@@ -2066,6 +2066,47 @@ export function reconcilePayment(input: {
   return post(PAYMENT_ROUTES.reconcile(paymentId), body, paymentResponseSchema);
 }
 
+/**
+ * R12 F3 item 8: the three dispositions of a card-to-card receipt — the same application
+ * methods the Telegram panel calls, behind `receipts.review` (the credit also
+ * `users.wallet.credit`). Each answers the payment as it now stands.
+ */
+export function approveReceipt(input: {
+  paymentId: string;
+  idempotencyKey: string;
+  note?: string;
+}): Promise<PaymentResponse> {
+  const { paymentId, ...rest } = input;
+  return post(
+    PAYMENT_ROUTES.receiptApprove(paymentId),
+    { ...rest, confirm: true },
+    paymentResponseSchema,
+  );
+}
+
+export function rejectReceipt(input: {
+  paymentId: string;
+  idempotencyKey: string;
+  reason: string;
+}): Promise<PaymentResponse> {
+  const { paymentId, ...rest } = input;
+  return post(PAYMENT_ROUTES.receiptReject(paymentId), rest, paymentResponseSchema);
+}
+
+export function creditReceipt(input: {
+  paymentId: string;
+  idempotencyKey: string;
+  amountMinor: string;
+  note?: string;
+}): Promise<PaymentResponse> {
+  const { paymentId, ...rest } = input;
+  return post(
+    PAYMENT_ROUTES.receiptCredit(paymentId),
+    { ...rest, confirm: true },
+    paymentResponseSchema,
+  );
+}
+
 /** Bring the next provider inquiry of an `UNKNOWN` gateway payment forward. */
 export function reinquirePayment(input: {
   paymentId: string;
