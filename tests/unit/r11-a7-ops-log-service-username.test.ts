@@ -639,6 +639,7 @@ describe('R11 A7 — the declaration and the default bodies agree', () => {
     'ops.financial.payment_overpaid',
     'ops.financial.late_completion',
     'ops.financial.late_credit',
+    'ops.financial.late_credit_returned',
     'ops.financial.outcome_unknown',
     'ops.financial.credit_amount_mismatch',
     'ops.financial.refund_completed',
