@@ -42,6 +42,13 @@ in the session scratchpad, so if lost, rebuild it from the PR descriptions above
 See `docs/round-reports/phase-1.md` (pending commit): rebase→merge; #355 diagnosis correction;
 A11 trusts only the sweep's EXPIRED; A8 HELD-cancel requeue bounded by the customer window.
 
+## Phase 5 note (owner, 2026-10-31; act on it only when Phase 5 starts)
+
+R11 B1/B2/B3 already have pushed work from 2026-10-27: `feat/r11-notification-centre` (WIP),
+`feat/r11-usage-chart`, `feat/r11-referral-list`. Continue from those branches (merge latest
+`main` into them, finish, PR) instead of rebuilding. If a branch's approach no longer fits main,
+keep its intent and tests and record why (in the PR and `docs/round-reports/phase-5.md`).
+
 ## Owner answers (2026-10-31, binding; both go into F3)
 
 - OQ-R11-A11-04: change it — a still-live payment must never read "order again". NEW key for that
