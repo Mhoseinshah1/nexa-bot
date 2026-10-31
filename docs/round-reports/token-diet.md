@@ -9,20 +9,20 @@ changed.
 
 | Skill                      | Before | After |  Delta |
 | -------------------------- | -----: | ----: | -----: |
-| `nexa-ci-watch`            |   2894 |  3005 |   +111 |
-| `nexa-code-navigation`     |   9579 |  5094 |  -4485 |
+| `nexa-ci-watch`            |   2894 |  3024 |   +130 |
+| `nexa-code-navigation`     |   9579 |  5117 |  -4462 |
 | `nexa-conventions`         |   7224 |  5112 |  -2112 |
 | `nexa-gateway-integration` |   5197 |  5197 |      0 |
 | `nexa-handoff`             |   3794 |  3794 |      0 |
 | `nexa-log-digest`          |   3606 |  3606 |      0 |
 | `nexa-migrations`          |   8284 |  4400 |  -3884 |
 | `nexa-pr-workflow`         |   6268 |  5067 |  -1201 |
-| `nexa-round-pipeline`      |   8991 |  6719 |  -2272 |
+| `nexa-round-pipeline`      |   8991 |  6806 |  -2185 |
 | `nexa-test-selection`      |   9634 |  5073 |  -4561 |
 | `nexa-web-design`          |   4619 |  4619 |      0 |
-| **Total**                  |  70090 | 51686 | -18404 |
+| **Total**                  |  70090 | 51815 | -18275 |
 
-Over the 5120-byte target: `nexa-round-pipeline` (6719) — it is almost all
+Over the 5120-byte target: `nexa-round-pipeline` (6806) — it is almost all
 safety and pipeline rules, and the requested §1/§3/§4/§9 additions add text;
 nothing further could move without dropping or burying a rule.
 `nexa-conventions` is 5112 (8 under).
@@ -48,13 +48,26 @@ Each reference is linked once from its `SKILL.md`. Section numbers are unchanged
 - `nexa-round-pipeline` §1: max 3 implementer agents at once unless the round prompt
   sets another number; Sonnet stays default.
 - §3 and `nexa-ci-watch` (text only): waiting for CI is ONE foreground blocking call
-  with a timeout, never an agent polling in a loop. `gh pr checks --watch` is named
-  with "where GraphQL is reachable" because it returns 403 in these sessions.
+  with a timeout (`ci-status.sh --wait <pr> --max 540`, under the Bash tool's 600 s
+  limit), never an agent polling in a loop. The round prompt's alternative
+  `gh pr checks --watch` is not named: CLAUDE.md forbids `gh pr …` (GraphQL is
+  blocked, 403); the script's own `--wait` is the same blocking call over REST.
+  The `--wait` example went from `--max 5400` (cannot run as one foreground call)
+  to `--every 60 --max 540`.
 - §4: small unrelated non-money, non-migration changes may share one PR.
 - §9: the per-PR report goes to the PR description and `docs/round-reports/<round>.md`
   (nothing dropped); chat message is a summary of at most 20 lines with links; a usage
   table (PRs, agents, model per agent, CI cycles, CLI usage numbers) ends the file.
 - `nexa-handoff`: untouched (template section names unchanged).
+
+## Lead review fixes (on top of the agent's commit)
+
+- §3 / `nexa-ci-watch`: dropped `gh pr checks --watch` (above).
+- `nexa-code-navigation`: the two backticked paths that had moved to
+  `references/` (`apps/api/src/modules/`, `docs/research/`) are named again in
+  Step 2, so PATH_FILES checks 40 paths as before (not 38).
+- `nexa-code-navigation`: the closing "Writing rules / migrations / tests" pointer
+  removed to stay under 5 KB; the same map is CLAUDE.md § Where to look.
 
 ## Safety checklist: old rule -> where it is now
 
@@ -132,6 +145,6 @@ Code navigation: 800-line rule, big-file paths, runtime/ flow list, snapshot ban
 
 ## Usage table
 
-| PRs                                           | Agents | Model per agent | CI cycles | CLI usage |
-| --------------------------------------------- | ------ | --------------- | --------- | --------- |
-| 0 (local commit; the lead reviews and pushes) | 1      | Sonnet 5.5      | 0         | not shown |
+| PRs | Agents               | Model per agent                  | CI cycles  | CLI usage                                |
+| --- | -------------------- | -------------------------------- | ---------- | ---------------------------------------- |
+| 1   | 1 implementer + lead | implementer: default; lead: lead | see the PR | implementer ≈ 188k tokens, 72 tool calls |

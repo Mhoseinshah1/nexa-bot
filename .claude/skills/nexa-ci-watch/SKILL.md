@@ -14,7 +14,7 @@ bash $S <pr|sha>                 # one line; exit 0 green, 1 red, 2 pending
 bash $S <pr> --fail-logs         # ≤20 lines around the first error, per red job
 bash $S <pr> --gate              # gate red while every job it needs is green?
 bash $S --codex <pr>             # Codex comments, threads, findings; reviewed=/findings=none read its issue-comment marker
-bash $S --wait <pr> --every 300 --max 5400   # bounded loop; returns on completion
+bash $S --wait <pr> --every 60 --max 540     # bounded loop, fits one foreground call
 ```
 
 ## Rules
@@ -25,9 +25,9 @@ bash $S --wait <pr> --every 300 --max 5400   # bounded loop; returns on completi
   `mcp__github__get_job_logs` call, make that call (with `tail_lines`), not a
   full-log fetch.
 - **Waiting** is ONE foreground blocking call with a timeout: the bounded
-  `--wait` loop, a `ci-status.sh <pr>` loop in one call, or
-  `gh pr checks --watch` where GraphQL is reachable. Never an agent polling in
-  a loop. A scheduled check-in can lapse silently (one left a session idle for
+  `--wait` loop, with `--max` under the Bash tool's 600 s limit in the
+  foreground (`--max 540`). Never an agent polling in a loop; never `gh pr
+checks` (GraphQL). A scheduled check-in can lapse silently (one left a session idle for
   an hour): at most one per wait, at least 20 minutes apart, as a backstop only.
 - **One checker.** Never spawn a watcher agent per wait or per notification. If
   the round names one CI-checking agent, it is the only one; everyone else keeps

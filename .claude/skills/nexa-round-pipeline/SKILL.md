@@ -67,10 +67,9 @@ Codex review (automatic; never request another; if it reviewed an older head,
 say so) → fix its findings in **one** commit → green CI on that head → merge
 with a **merge commit**. No second review round.
 
-Waiting for CI is ONE foreground blocking call with a timeout (a
-`bash scripts/claude/ci-status.sh <pr>` loop in one call, or
-`gh pr checks --watch` where GraphQL is reachable), never an agent polling in a
-loop.
+Waiting for CI is ONE foreground blocking call with a timeout
+(`bash scripts/claude/ci-status.sh --wait <pr> --max 540`, under the Bash
+tool's 600 s limit; `nexa-ci-watch`), never an agent polling in a loop.
 
 If Codex still "runs" 1 h after the PR opened, tell the owner and keep working;
 only the owner comments `@codex review`.
@@ -131,4 +130,5 @@ Remove every worktree and temporary test database the round created.
   and `docs/round-reports/<round>.md`. Nothing is dropped from it.
 - The chat final message is a summary of at most 20 lines with links.
 - End the report file with a short **usage table**: PRs, agents used, model per
-  agent, CI cycles, and any usage numbers the CLI shows.
+  agent (as its tier: lead / default / money; model names only in chat, never in
+  the repository), CI cycles, and any usage numbers the CLI shows.

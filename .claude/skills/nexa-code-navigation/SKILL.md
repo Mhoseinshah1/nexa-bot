@@ -79,12 +79,12 @@ generic word (`payment`) returns noise.
 - Bot button or command: `module-map.sh --bot <handler>`; `apps/api/src/surfaces/telegram/runtime/*-flow.ts`
 - Gateway webhooks: `apps/api/src/surfaces/gateway/`
 - Business rule, transaction: `apps/api/src/modules/<plane>/<context>/application/*.service.ts`
-- Pure decision: `.../domain/*.ts`; SQL, repositories: `.../infrastructure/*.ts`
+- Pure decision: `.../domain/*.ts`; SQL: `.../infrastructure/*.ts`
 - A column: `grep -n "<table>" apps/api/src/infrastructure/persistence/schema.ts`, then ~60 lines
 - Shared shapes, permissions, states, events: `packages/contracts/src/<concept>.ts`
 - Persian text: `packages/i18n/src/*.fa.ts`, `apps/web/src/i18n/*.fa.ts`
 - Which process runs it: `apps/api/src/main*.ts`; topology: `deploy/compose.yml`, `deploy/bin/botctl`
+- Planes under `apps/api/src/modules/` (`ls` a plane, never guess); research corpus `docs/research/` → the `research-lookup` agent
 
 "What did we decide about X": grep `docs/`, read the one audit or ADR
-(`docs/adr/`) it names. Writing rules: `nexa-conventions`; migrations:
-`nexa-migrations`; tests: `nexa-test-selection`.
+(`docs/adr/`) it names.
