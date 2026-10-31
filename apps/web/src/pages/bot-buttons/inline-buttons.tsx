@@ -119,6 +119,8 @@ export const INLINE_BUTTON_NAME: Readonly<Record<InlineButtonKey, WebKey>> = {
   'discount.remove': 'web.ib_button_discount_remove',
   'order.cancel': 'web.ib_button_order_cancel',
   'order.cancel_confirm': 'web.ib_button_order_cancel_confirm',
+  'order.reorder': 'web.ib_button_order_reorder',
+  'order.main_menu': 'web.ib_button_order_main_menu',
   'payment.wallet': 'web.ib_button_payment_wallet',
   'payment.methods': 'web.ib_button_payment_methods',
   'payment.route': 'web.ib_button_payment_route',

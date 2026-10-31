@@ -852,6 +852,13 @@ export const CATALOG_BROWSE_MAX_PAGE = 999;
 export const CATALOG_PAGE_CALLBACK_PREFIX = 'cg:';
 export const CATEGORY_CALLBACK_PREFIX = 'ck:';
 /**
+ * R11 A11: «🔁 سفارش دوباره» under an ended order whose category was recorded —
+ * `ro:<category uuid>`, the category's product list as a new message. An identifier only;
+ * the list is re-read for the tapping customer. `r:` is resend's and `ro:` does not start
+ * with it.
+ */
+export const REORDER_CATEGORY_CALLBACK_PREFIX = 'ro:';
+/**
  * The catalogue's trial button (WP6-A). The WHOLE data, not a prefix: it carries no
  * id and no figure, because nothing about a trial is the client's to say. Two letters
  * because every single-letter prefix is taken; `t:` is terminate's, and `tr:` does not

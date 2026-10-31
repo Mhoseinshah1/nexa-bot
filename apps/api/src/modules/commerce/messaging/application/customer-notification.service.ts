@@ -11,6 +11,7 @@ import {
   type BotInstanceId,
   type Clock,
   type CustomerNotificationKind,
+  type TelegramWizardStep,
   type TemplateKey,
   type TemplateValues,
   type TicketAttachmentKind,
@@ -26,7 +27,16 @@ import type {
   CustomerNotificationRepository,
   CustomerSendResult,
 } from './ports.js';
-import type { OrderScreenReadiness, OrderScreenWait } from './order-screen-answer.js';
+import {
+  ORDER_END_ANSWER_STEPS,
+  type OrderScreenReadiness,
+  type OrderScreenWait,
+} from './order-screen-answer.js';
+import {
+  ORDER_END_STATES,
+  type OrderEndScreen,
+  type OrderReorderTarget,
+} from './order-end-screen.js';
 import type { ServiceReminderSnapshotReader } from '../../provisioning/application/service-reminder.ports.js';
 import {
   REMINDER_KIND_FLAGS,
@@ -395,8 +405,26 @@ export interface CustomerNotificationDeps {
    */
   readonly buttonsFor?: (
     kind: CustomerNotificationKind,
-    subject: { readonly serviceId?: string; readonly ticketId?: string },
+    subject: {
+      readonly serviceId?: string;
+      readonly ticketId?: string;
+      /** R11 A11: where an ended order's «🔁 سفارش دوباره» leads. */
+      readonly reorder?: OrderReorderTarget;
+    },
   ) => readonly CustomerButton[];
+  /**
+   * R11 A11: what an ended order's screen renders (`ORDER_EXPIRED`, `ORDER_CANCELLED`) — the
+   * order's summary and where re-ordering leads, read at send time from the ORDER the row
+   * names (`orderEndScreen`), with the order's state, which must be the ending the kind
+   * states. A reader, not a payload (ADR 0030 §1). Absent, or null (no such order), sends
+   * nothing.
+   */
+  readonly orderEnds?: {
+    screenFor(
+      scope: TenantContext,
+      orderId: string,
+    ): Promise<{ readonly state: string; readonly screen: OrderEndScreen } | null>;
+  };
   /**
    * WP-A7: what `TICKET_REPLY` renders — the ticket's number and category and support's
    * reply, read at send time from the MESSAGE ROW the notification names, and the ticket
@@ -504,6 +532,8 @@ export interface CustomerNotificationDeps {
       scope: TenantContext,
       orderId: string,
       destination: { readonly chatId: string; readonly botInstanceId: BotInstanceId },
+      /** R11 A11: the screens that may be answered on, when not the default set. */
+      steps?: readonly TelegramWizardStep[],
     ): Promise<OrderScreenReadiness>;
     answer?(
       scope: TenantContext,
@@ -514,6 +544,7 @@ export interface CustomerNotificationDeps {
         readonly values: TemplateValues;
         readonly buttons: readonly CustomerButton[];
       },
+      steps?: readonly TelegramWizardStep[],
     ): Promise<CustomerSendResult | OrderScreenWait | null>;
   };
   /**
@@ -871,6 +902,8 @@ export class CustomerNotificationService {
      * when it cannot.
      */
     readonly closesOrder?: string;
+    /** R11 A11: the screens `closesOrder` may be answered on, when not FIX-08's default. */
+    readonly answerSteps?: readonly TelegramWizardStep[];
     /**
      * Where a delivered file's handle is stamped and its staged bytes cleared, in the
      * transaction that records the delivery — the subject's own owner (HF-A7, Phase A2).
@@ -881,6 +914,31 @@ export class CustomerNotificationService {
       tx: TransactionScope,
     ) => Promise<boolean>;
   } | null> {
+    /*
+     * R11 A11: an unpaid order that ENDED — its window closed, or the customer cancelled it —
+     * is answered ON the order's own payment message (`closesOrder`, FIX-08's edit-in-place):
+     * that message is edited into the summary with «🔁 سفارش دوباره» and «🏠 منوی اصلی», and
+     * loses its card, copy and pay buttons. Only when it cannot be edited (none known — a
+     * mini-app order —, deleted, too old) is this sent, ONCE: the row is the dedupe, one per
+     * order and kind (`customer_notifications_subject_key`), and the lane's stamp makes two
+     * dispatchers one answer.
+     *
+     * Null — nothing sent, nothing edited — unless the order is IN the ending the kind
+     * states: an order paid just before its deadline never reaches `EXPIRED` (the sweep's
+     * UPDATE names its source state), and a row that somehow names one must not tell its
+     * customer it lapsed.
+     */
+    if (row.kind === 'ORDER_EXPIRED' || row.kind === 'ORDER_CANCELLED') {
+      if (this.deps.orderEnds === undefined) return null;
+      const ended = await this.deps.orderEnds.screenFor(scope, row.subjectId);
+      if (ended === null || ended.state !== ORDER_END_STATES[row.kind]) return null;
+      return {
+        values: ended.screen.values,
+        buttons: this.deps.buttonsFor?.(row.kind, { reorder: ended.screen.reorder }) ?? [],
+        closesOrder: row.subjectId,
+        answerSteps: ORDER_END_ANSWER_STEPS,
+      };
+    }
     if (row.kind === 'SERVICE_RENEWED') {
       if (this.deps.renewals === undefined) return null;
       const facts = await this.deps.renewals.notificationFacts(scope, row.subjectId);
@@ -1420,7 +1478,12 @@ export class CustomerNotificationService {
           ? content.closesOrder
           : null;
       if (answersOrder !== null) {
-        const ready = await this.deps.orderScreens?.readiness?.(scope, answersOrder, destination);
+        const ready = await this.deps.orderScreens?.readiness?.(
+          scope,
+          answersOrder,
+          destination,
+          content.answerSteps,
+        );
         if (ready?.kind === 'WAIT') {
           const at = this.deps.clock.now();
           await this.deps.uow.run(scope, async (tx) =>
@@ -1456,11 +1519,17 @@ export class CustomerNotificationService {
       let answer: CustomerSendResult | OrderScreenWait | null = null;
       if (answersOrder !== null && this.deps.orderScreens?.answer !== undefined) {
         try {
-          answer = await this.deps.orderScreens.answer(scope, answersOrder, destination, {
-            templateKey: CUSTOMER_NOTIFICATION_TEMPLATES[row.kind],
-            values: content.values,
-            buttons: content.buttons,
-          });
+          answer = await this.deps.orderScreens.answer(
+            scope,
+            answersOrder,
+            destination,
+            {
+              templateKey: CUSTOMER_NOTIFICATION_TEMPLATES[row.kind],
+              values: content.values,
+              buttons: content.buttons,
+            },
+            content.answerSteps,
+          );
         } catch (error: unknown) {
           answer = null;
           this.deps.logger.error(

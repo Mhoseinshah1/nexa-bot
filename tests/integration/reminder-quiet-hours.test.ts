@@ -36,6 +36,7 @@ import {
   tenantA,
   type TestContext,
 } from './harness';
+import { orderEndsReader } from '../support/order-ends';
 
 /**
  * HF-A9: quiet hours for customer reminders, over the real lane and the real tables.
@@ -284,6 +285,8 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
         },
       },
       subjects: new DrizzleNotificationSubjectReader(db),
+      // R11 A11: the two ended-order kinds render the order's own summary.
+      orderEnds: orderEndsReader(db as never),
       messenger: {
         send: async (_scope, message) => {
           sends.push(message);
@@ -668,7 +671,8 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
     // A pass bounded to two, at the window's end: four rows are due.
     const pass = await dispatcher(at(end)).deliverDue(tenantA, 2);
     expect(pass).toMatchObject({ claimed: 2, delivered: 2 });
-    expect(sends[0]?.templateKey).toBe('bot.order.cancelled');
+    // R11 A11: the cancellation's outcome is the order's cancelled screen.
+    expect(sends[0]?.templateKey).toBe('bot.order.cancelled_screen');
     // The backlog is not lost: the next pass takes the rest.
     expect(await dispatcher(at(end)).deliverDue(tenantA, 2)).toMatchObject({ delivered: 2 });
     expect(sends).toHaveLength(4);
@@ -698,7 +702,7 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
     expect(await enqueue('ORDER_CANCELLED', cancelled)).toBe(true);
 
     expect(await deliver()).toMatchObject({ claimed: 2, delivered: 1, quietHours: 1 });
-    expect(sends.map((one) => one.templateKey)).toEqual(['bot.order.cancelled']);
+    expect(sends.map((one) => one.templateKey)).toEqual(['bot.order.cancelled_screen']);
     const states = new Map((await notifications()).map((row) => [row.kind, row.state]));
     expect(states.get('ORDER_CANCELLED')).toBe('DELIVERED');
     expect(states.get('SERVICE_EXPIRY_FIRST')).toBe('PENDING');

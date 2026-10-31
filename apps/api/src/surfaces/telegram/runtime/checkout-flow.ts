@@ -31,6 +31,7 @@ import {
   WALLET_PAY_CALLBACK_PREFIX,
 } from './callbacks.js';
 import { mainMenuButton } from './keyboards.js';
+import { endedOrderScreen, orderEndedRefusal } from './order-end-flow.js';
 import { refusal } from './refusals.js';
 import type { PendingReply } from './replies.js';
 import { gatewayAttemptScreen, payMethodsButton, topupButton } from './payment-screens.js';
@@ -210,7 +211,8 @@ export async function walletPayment(
         };
       }
     }
-    return refusal(error);
+    // R11 A11: an order past its deadline, swept or cancelled — answered ON the tapped screen.
+    return (await orderEndedRefusal(rt, scope, actor, customer, orderId, error)) ?? refusal(error);
   }
 }
 
@@ -290,6 +292,9 @@ export async function paymentMethods(
       ...inlineLabel('list.close'),
       data: `${PAY_METHODS_CLOSE_CALLBACK_PREFIX}${order.id}`,
     };
+    // R11 A11: an order that ended (expired, cancelled) shows its ended screen in place.
+    const ended = endedOrderScreen(rt, order);
+    if (ended !== null) return ended;
     if (order.state !== 'DRAFT' && order.state !== 'AWAITING_PAYMENT') {
       return {
         key: 'bot.order.not_awaiting_payment',
@@ -397,6 +402,9 @@ export async function gatewayPayment(
     }
     return await gatewayAttemptReply(rt, paid.attempt, orderId, scope);
   } catch (error) {
+    // R11 A11: an order that ended is answered ON the tapped screen, not by a new message.
+    const ended = await orderEndedRefusal(rt, scope, actor, customer, orderId, error);
+    if (ended !== null) return ended;
     const refused = gatewayRefusal(error);
     return refused.key === 'bot.payment.gateway_unavailable'
       ? { ...refused, buttons: [payMethodsButton(orderId), mainMenuButton()] }

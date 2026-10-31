@@ -113,6 +113,7 @@ import {
   MARKETING_OPT_OUT_CALLBACK_DATA,
   MEMBERSHIP_CHECK_CALLBACK_DATA,
   ORDER_CALLBACK_PREFIX,
+  REORDER_CATEGORY_CALLBACK_PREFIX,
   PAY_METHODS_CALLBACK_PREFIX,
   PAY_METHODS_CLOSE_CALLBACK_PREFIX,
   PAY_SENT_CALLBACK_PREFIX,
@@ -388,6 +389,11 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
       const page = parseCatalogPage(data.slice(CATALOG_PAGE_CALLBACK_PREFIX.length));
       if (page === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
       return { intent: 'CATALOG_PAGE', targetId: null, page, callbackQueryId: id };
+    }
+    if (data.startsWith(REORDER_CATEGORY_CALLBACK_PREFIX)) {
+      const category = uuidV7Schema.safeParse(data.slice(REORDER_CATEGORY_CALLBACK_PREFIX.length));
+      if (!category.success) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      return { intent: 'REORDER_CATEGORY', targetId: category.data, callbackQueryId: id };
     }
     if (data.startsWith(CATEGORY_CALLBACK_PREFIX)) {
       const [rawId, rawPage, ...rest] = data.slice(CATEGORY_CALLBACK_PREFIX.length).split('.');

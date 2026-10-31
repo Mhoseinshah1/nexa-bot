@@ -3,9 +3,12 @@
 import type { CustomerNotificationKind } from '@nexa/contracts';
 import type { CustomerButton } from '../../../modules/commerce/messaging/application/ports.js';
 import { inlineLabel } from '../../../modules/commerce/messaging/application/inline-buttons.js';
+import type { OrderReorderTarget } from '../../../modules/commerce/messaging/application/order-end-screen.js';
 import {
   CATALOG_OPEN_CALLBACK_DATA,
+  CUSTOM_SERVICE_CALLBACK_DATA,
   MAIN_MENU_CALLBACK_DATA,
+  REORDER_CATEGORY_CALLBACK_PREFIX,
   SERVICE_CALLBACK_PREFIX,
   TICKET_REPLY_CALLBACK_PREFIX,
   TICKET_VIEW_CALLBACK_PREFIX,
@@ -21,6 +24,26 @@ export function mainMenuButton(): CustomerButton {
 }
 
 /**
+ * R11 A11: the two buttons under an ended order's screen (expired or cancelled), side by side
+ * — «🔁 سفارش دوباره» and «🏠 منوی اصلی» — and nothing that pays. The first leads to a
+ * READ-ONLY entry of the purchase flow (`OrderReorderTarget`): the order's category's product
+ * list, the custom-service menu or the catalogue. None of those writes
+ * anything; a new order exists only once the customer picks a plan and confirms it.
+ */
+export function orderEndButtons(reorder: OrderReorderTarget): readonly CustomerButton[] {
+  const data =
+    reorder.kind === 'CATEGORY'
+      ? `${REORDER_CATEGORY_CALLBACK_PREFIX}${reorder.categoryId}`
+      : reorder.kind === 'CUSTOM_SERVICE'
+        ? CUSTOM_SERVICE_CALLBACK_DATA
+        : CATALOG_OPEN_CALLBACK_DATA;
+  return [
+    { ...inlineLabel('order.reorder'), data, row: 0 },
+    { ...inlineLabel('order.main_menu'), data: MAIN_MENU_CALLBACK_DATA, row: 0 },
+  ];
+}
+
+/**
  * The inline buttons a customer NOTIFICATION carries, derived from its subject by kind
  * (Package F). Handed to the notification lane by the composition root, because the
  * callback vocabulary is this surface's: the lane stores no button and carries no payload.
@@ -32,8 +55,16 @@ export function mainMenuButton(): CustomerButton {
  */
 export function notificationButtons(
   kind: CustomerNotificationKind,
-  subject: { readonly serviceId?: string; readonly ticketId?: string },
+  subject: {
+    readonly serviceId?: string;
+    readonly ticketId?: string;
+    readonly reorder?: OrderReorderTarget;
+  },
 ): readonly CustomerButton[] {
+  // R11 A11: an ended order's screen — re-order and the main menu, nothing that pays.
+  if ((kind === 'ORDER_EXPIRED' || kind === 'ORDER_CANCELLED') && subject.reorder !== undefined) {
+    return orderEndButtons(subject.reorder);
+  }
   // WP-A7: support's reply opens the ticket, or its reply window, for whoever taps it.
   if (kind === 'TICKET_REPLY' && subject.ticketId !== undefined) {
     return [

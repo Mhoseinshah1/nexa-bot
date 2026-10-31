@@ -316,6 +316,16 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '{icon:success} پرداخت شما تأیید شد و سفارش پرداخت‌شده است؛ انجام آن در حال پیگیری است و نتیجه در همین ربات به شما اعلام می‌شود.',
   'bot.order.cancelled': 'سفارش لغو شد.',
   /*
+   * R11 A11: the order's payment message, edited into its end state. The summary stays (code,
+   * product, amount); nothing that pays stays; no "no money was taken" line (owner).
+   */
+  'bot.order.expired_screen':
+    '{icon:time} مهلت پرداخت این سفارش به پایان رسید.\n\n🔖 کد سفارش: {orderCode}\n{icon:service} سرویس: {productName}\n{icon:amount} مبلغ سفارش: {total}\n\nبرای خرید دوباره از دکمهٔ زیر استفاده کنید.',
+  'bot.order.cancelled_screen':
+    '{icon:info} این سفارش لغو شد.\n\n🔖 کد سفارش: {orderCode}\n{icon:service} سرویس: {productName}\n{icon:amount} مبلغ سفارش: {total}\n\nبرای خرید دوباره از دکمهٔ زیر استفاده کنید.',
+  'bot.order.reorder_button': '🔁 سفارش دوباره',
+  'bot.order.main_menu_button': '🏠 منوی اصلی',
+  /*
    * Three lines, and the two figures are the point of the change.
    *
    * The old sentence said the money came back and sent the customer to /wallet to
