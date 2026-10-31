@@ -259,6 +259,28 @@ describe('R12 F3 item 5: «بیشتر» adds the next page, and an empty list le
     ]);
   });
 
+  it('«بیشتر» cannot be tapped again before the asked-for page arrives (no page is skipped)', async () => {
+    // Codex, #362: the previous result stays on screen while the next page loads; advancing
+    // from it a second time asked for page 2 and never showed page 1.
+    routes['GET /services'] = () => ({
+      body: { items: [service(1)], page: 0, pages: 3, total: 3 },
+    });
+    render(<Services />);
+    await screen.findByText('سرویس 1');
+    routes['GET /services'] = () => ({
+      body: { items: [service(2)], page: 1, pages: 3, total: 3 },
+    });
+    fireEvent.click(screen.getByRole('button', { name: fa('miniapp.store_more') }));
+    // Until page 1 is in, there is no «بیشتر» to tap a second time.
+    expect(screen.queryByRole('button', { name: fa('miniapp.store_more') })).toBeNull();
+    await screen.findByText('سرویس 2');
+    expect(screen.getByRole('button', { name: fa('miniapp.store_more') })).toBeTruthy();
+    expect(calls.filter((call) => call.startsWith('GET /services?'))).toEqual([
+      'GET /services?page=0',
+      'GET /services?page=1',
+    ]);
+  });
+
   it('a category’s plans: page two is added under page one', async () => {
     routes['GET /catalogue/categories'] = () => ({
       body: { items: [{ id: 'c1', name: 'ماهانه', emoji: null }], page: 0, hasMore: false },

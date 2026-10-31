@@ -27,7 +27,9 @@ export function Services() {
   const now = new Date();
   const ready = loaded.state === 'ready' ? loaded.data : null;
   const shown = appendPage(earlier, ready?.items ?? []);
-  const more = ready !== null && ready.page + 1 < ready.pages;
+  // Only from the page that was asked for: while the next one loads, the previous result is
+  // still on screen, and advancing from it again would skip a page (Codex, #362).
+  const more = ready !== null && ready.page === page && ready.page + 1 < ready.pages;
   return (
     <main className="page">
       <h1 className="title">{t('miniapp.services_title')}</h1>
@@ -62,7 +64,7 @@ export function Services() {
             <Button
               onClick={() => {
                 setEarlier(shown);
-                setPage(page + 1);
+                setPage(ready.page + 1);
               }}
             >
               {t('miniapp.store_more')}
