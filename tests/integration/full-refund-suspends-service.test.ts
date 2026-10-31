@@ -303,6 +303,80 @@ describe('R12 F1 — a full refund suspends the service it paid for', () => {
     });
   });
 
+  /*
+   * Codex on #360: the suspension takes the service's row (the lock a transfer holds from its
+   * first statement to its commit) without waiting, and re-reads the owner under it. Here a
+   * transfer holds the row while the refund completes: the refund does not wait (no lock
+   * cycle), suspends nothing and says why; the transfer then commits. Before the fix the
+   * refund read the old owner and suspended the service the new owner was receiving.
+   */
+  const lockWaiters = async (): Promise<number> =>
+    (
+      await rows<{ n: number }>(sql`SELECT count(*)::int AS n FROM pg_stat_activity
+                      WHERE datname = current_database() AND wait_event_type = 'Lock'`)
+    )[0]?.n ?? 0;
+
+  it('R12 F1: a transfer racing the full refund is never followed by the old owner’s suspension', async () => {
+    const { serviceId, orderId, paymentId } = await boughtService();
+    const transfers = new DrizzleServiceTransferRepository(ctx.container.database.db);
+    let rowLocked!: () => void;
+    const locked = new Promise<void>((resolve) => (rowLocked = resolve));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const transfer = ctx.container.database.db.transaction(async (tx) => {
+      // The transfer's first lock: the service row.
+      await tx.execute(sql`SELECT id FROM services WHERE id = ${serviceId} FOR NO KEY UPDATE`);
+      rowLocked();
+      await gate;
+      const now = ctx.container.clock.now();
+      await transfers.create(
+        tenantA,
+        {
+          id: ctx.container.ids.uuid(),
+          serviceId,
+          fromCustomerId: customerA,
+          toCustomerId: customerB,
+          botInstanceId: BOT_A,
+          idempotencyKey: 'r12-refund-race-transfer',
+          actorType: 'SYSTEM_JOB',
+          actorLabel: 'test',
+          correlationId: 'r12-refund-race-transfer' as CorrelationId,
+          now,
+        },
+        { tx } as never,
+      );
+      await transfers.reassign(
+        tenantA,
+        { serviceId, fromCustomerId: customerA, toCustomerId: customerB, now },
+        { tx } as never,
+      );
+    });
+    await locked;
+    let done = false;
+    const refunding = refund(paymentId, PRICE).then(
+      (value) => {
+        done = true;
+        return value;
+      },
+      (error: unknown) => {
+        done = true;
+        throw error;
+      },
+    );
+    for (let i = 0; i < 200 && !done && (await lockWaiters()) === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    release();
+    await transfer;
+    await expect(refunding).resolves.toMatchObject({ state: 'COMPLETED' });
+
+    expect(await suspends(serviceId)).toHaveLength(0);
+    expect(await orderAudit(orderId)).toMatchObject({
+      state: 'REFUNDED',
+      serviceSuspension: { planned: false, serviceId, reason: 'SERVICE_BUSY' },
+    });
+  });
+
   it('a service already suspended is left as it is, and the refund still completes', async () => {
     const { serviceId, orderId, paymentId } = await boughtService();
     await ctx.container.database.db.execute(

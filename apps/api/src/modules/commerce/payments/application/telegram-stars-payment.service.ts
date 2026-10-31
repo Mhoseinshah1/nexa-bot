@@ -411,7 +411,9 @@ export class StarsPaymentService {
             code: STARS_CHARGE_REFUNDED_CODE,
             severity: 'ERROR',
             message:
-              reason === 'SETTLED_THEN_REFUNDED' || reason === 'REFUNDED_UNSETTLED'
+              reason === 'SETTLED_THEN_REFUNDED' ||
+              reason === 'REFUNDED_UNSETTLED' ||
+              reason === 'REFUNDED_BEFORE_RECORDED'
                 ? 'Telegram refunded a Stars charge outside this installation. The payment is ' +
                   'marked refunded; the service and the wallet were not changed. Decide what it means.'
                 : 'Telegram refunded a Stars charge this installation could not attach to an ' +
@@ -433,17 +435,52 @@ export class StarsPaymentService {
         await alert('SCOPE_INACTIVE', {});
         return 'SCOPE_INACTIVE';
       }
-      const found = await this.deps.invoices.findByProviderOrderId(
+      /*
+       * Codex on #360: the invoice's row LOCK, the one `recordSuccessfulPayment` records the
+       * charge under — so a refund that arrives while that charge is being recorded waits for
+       * it and then sees it, instead of reading "not recorded" and being answered as unmatched
+       * while the charge commits and settles. Invoice first, then the payment: the order the
+       * charge's own recording and its pre-checkout hold take them in.
+       */
+      const found = await this.deps.invoices.lockByProviderOrderId(
         scope,
         PROVIDER,
         update.payload,
         tx,
       );
-      if (found === null || found.providerChargeId !== update.chargeId) {
+      if (found === null) {
         await alert('UNMATCHED', {});
         return 'UNMATCHED';
       }
-      // The payment's lock FIRST, then the invoice's: the order the credit paths take them in.
+      /*
+       * Codex on #360: a refund of a charge this attempt has NOT recorded yet — its
+       * `successful_payment` failed to record and Telegram will deliver it again, or it is
+       * still on its way. The refund is recorded as that charge's, refunded (the charge id is
+       * written once, `provider_paid = false`), so the success that arrives later finds its own
+       * charge already recorded and refunded and never settles it. Only for the bot the attempt
+       * was sent through, and only for a charge id no other attempt holds; anything else is
+       * reported and marks nothing. A refund naming a DIFFERENT charge than the one recorded is
+       * not this attempt's either.
+       */
+      const beforeRecorded = found.providerChargeId === null;
+      if (beforeRecorded) {
+        const elsewhere = await this.deps.invoices.findByChargeId(
+          scope,
+          PROVIDER,
+          update.chargeId,
+          tx,
+        );
+        if (
+          (found.botInstanceId !== null && found.botInstanceId !== botInstanceId) ||
+          elsewhere !== null
+        ) {
+          await alert('UNMATCHED', {});
+          return 'UNMATCHED';
+        }
+      } else if (found.providerChargeId !== update.chargeId) {
+        await alert('UNMATCHED', {});
+        return 'UNMATCHED';
+      }
       const payment = await this.deps.payments.findByIdForUpdate(
         scope,
         found.paymentId as PaymentId,
@@ -480,6 +517,8 @@ export class StarsPaymentService {
             providerPaid: false,
             provider: PROVIDER,
             providerChargeId: update.chargeId,
+            // Codex on #360: the charge was recorded BY this refund (its success had not been).
+            chargeRecordedByRefund: beforeRecorded,
             refundedAmount: update.totalAmount.toString(),
             refundedCurrency: update.currency,
             orderId: payment.orderId,
@@ -491,14 +530,21 @@ export class StarsPaymentService {
         },
         tx,
       );
-      await alert(payment.state === 'CONFIRMED' ? 'SETTLED_THEN_REFUNDED' : 'REFUNDED_UNSETTLED', {
-        paymentId: payment.id,
-        customerId: payment.customerId,
-        orderId: payment.orderId,
-        paymentState: payment.state,
-        refundedAmount: update.totalAmount.toString(),
-        refundedCurrency: update.currency,
-      });
+      await alert(
+        payment.state === 'CONFIRMED'
+          ? 'SETTLED_THEN_REFUNDED'
+          : beforeRecorded
+            ? 'REFUNDED_BEFORE_RECORDED'
+            : 'REFUNDED_UNSETTLED',
+        {
+          paymentId: payment.id,
+          customerId: payment.customerId,
+          orderId: payment.orderId,
+          paymentState: payment.state,
+          refundedAmount: update.totalAmount.toString(),
+          refundedCurrency: update.currency,
+        },
+      );
       this.deps.logger.info(
         { paymentId: payment.id, provider: PROVIDER, paymentState: payment.state },
         'stars charge refunded by telegram',
