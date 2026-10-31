@@ -8,6 +8,7 @@ import type { OrderReorderTarget } from '../../../modules/commerce/messaging/app
 import {
   CATALOG_OPEN_CALLBACK_DATA,
   CUSTOM_SERVICE_CALLBACK_DATA,
+  GATEWAY_CHECK_CALLBACK_PREFIX,
   MAIN_MENU_CALLBACK_DATA,
   PAY_METHODS_CALLBACK_PREFIX,
   REORDER_CATEGORY_CALLBACK_PREFIX,
@@ -81,7 +82,7 @@ export function notificationButtons(
     /** R12 F3 item 1: the order a pending-order reminder is about. */
     readonly orderId?: string;
     /** R12 F3 item 1: the payment a notice is about and its order (null: a wallet top-up). */
-    readonly payment?: { readonly orderId: string | null };
+    readonly payment?: { readonly orderId: string | null; readonly paymentId?: string };
   },
 ): readonly CustomerButton[] {
   // R11 A11: an ended order's screen — re-order and the main menu, nothing that pays.
@@ -126,14 +127,19 @@ export function notificationButtons(
       },
     ];
   }
-  if (kind === 'PAYMENT_PENDING_REMINDER' && subject.payment !== undefined) {
+  /*
+   * R12 F3 (lead review): a pending payment's reminder opens THAT payment — its own invoice
+   * (`gc:<payment>`: the gateway attempt, or the card transfer with «📤 ارسال رسید») — for a
+   * top-up and an order alike. Never the top-up menu or the method list, which start a NEW
+   * payment: a customer who already transferred would get a second reference while the one
+   * they paid expires without its receipt.
+   */
+  if (kind === 'PAYMENT_PENDING_REMINDER' && subject.payment?.paymentId !== undefined) {
     return [
-      subject.payment.orderId === null
-        ? { ...inlineLabel('wallet.topup'), data: TOPUP_MENU_CALLBACK_PREFIX }
-        : {
-            ...inlineLabel('payment.methods'),
-            data: `${PAY_METHODS_CALLBACK_PREFIX}${subject.payment.orderId}`,
-          },
+      {
+        ...inlineLabel('payment.gateway_open_invoice'),
+        data: `${GATEWAY_CHECK_CALLBACK_PREFIX}${subject.payment.paymentId}`,
+      },
     ];
   }
   if (

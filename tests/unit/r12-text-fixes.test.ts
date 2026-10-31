@@ -15,16 +15,6 @@ describe('R12 F3 item 6: texts that name wrong buttons or are wrong', () => {
     expect(body).not.toContain('پرداخت را انجام دادم');
   });
 
-  it('the default welcome names no brand and no button the menu may not draw', () => {
-    const body = text('bot.start.welcome');
-    expect(body).not.toMatch(/ZED/iu);
-    expect(body).not.toContain('━');
-    // The buy button it names is the main menu's own label; the trial one is not promised.
-    expect(body).toContain(`«${text('bot.menu.catalog')}»`);
-    expect(body).not.toContain('سرویس تست');
-    expect(body).not.toContain('«🧪');
-  });
-
   it('the FAQ default points at the real apps and tutorial button', () => {
     expect(text('bot.faq.default_6_answer')).toContain(`«${text('bot.menu.apps')}»`);
     expect(text('bot.faq.default_6_answer')).not.toContain('📚 آموزش»');

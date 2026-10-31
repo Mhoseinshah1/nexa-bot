@@ -641,30 +641,79 @@ describe('an ended order is answered ON its own payment message (R11 A11)', () =
     expect((await orderOf(orderId))?.state).toBe('AWAITING_PAYMENT');
 
     /*
-     * R12 F3 item 9 (OQ-R11-A11-04): and the answer is NOT the bare refusal either. «لطفاً دوباره
-     * سفارش دهید» invites a second payment; the customer is told the payment is being checked,
-     * not to pay again, and that the result comes in the bot — with the status button.
+     * R12 F3 item 9 (OQ-R11-A11-04) + lead review: and the answer is NOT the bare refusal
+     * either («لطفاً دوباره سفارش دهید» invites a second payment). Here NO receipt is filed, so
+     * nothing is "being checked": the answer is this transfer's OWN invoice again, with
+     * «📤 ارسال رسید» — the same payment, never a new one.
      */
-    expect(replies).toEqual(['bot.order.payment_in_review', 'bot.order.payment_in_review']);
     expect(replies).not.toContain('bot.order.expired');
+    expect(replies).not.toContain('bot.order.payment_in_review');
+    expect(replies).toEqual([
+      'bot.payment.transfer_instructions',
+      'bot.payment.transfer_instructions',
+    ]);
     const sentTexts = seen.map((call) => textOf(call));
     expect(sentTexts.some((text) => text.includes('لطفاً دوباره سفارش دهید'))).toBe(false);
+    const payments = async () =>
+      rows<{ id: string; state: string }>(
+        sql`SELECT id, state FROM payments WHERE order_id = ${orderId}` as never,
+      );
+    const [only, ...others] = await payments();
+    expect(others, 'no second payment was started').toEqual([]);
+    expect(seen.some((call) => dataOf(call).includes(`i:${String(only?.id)}`))).toBe(true);
+
+    // The server says WHY it refused (lead review): the deadline passed while a payment is live,
+    // so the mini app, which only has the error, never answers "order again" either.
+    const refusedLate = await ctx.container.payments
+      .settleFromWallet(tenantA, systemActor('late-wallet'), maryam, {
+        idempotencyKey: 'late-wallet',
+        orderId,
+      })
+      .then(
+        () => null,
+        (error: unknown) => error as { code: string; details: Record<string, unknown> },
+      );
+    expect(refusedLate?.code).toBe('commerce.order_expired');
+    expect(refusedLate?.details).toEqual({ paymentLive: true });
+
+    // The pending-payment reminder's «🧾 مشاهدهٔ فاکتور باز» (`gc:`) opens the same invoice.
+    expect((await tapOn(822, `gc:${String(only?.id)}`)).replyKey).toBe(
+      'bot.payment.transfer_instructions',
+    );
+
+    // Once a receipt IS filed, the payment is in review: the in-review sentence, the status button.
+    await ctx.container.payments.signalTransferSent(tenantA, systemActor('live-signal'), maryam, {
+      idempotencyKey: 'live-signal',
+      paymentId: String(only?.id),
+      botInstanceId: BOT_A,
+    });
+    await ctx.container.receipts.submit(tenantA, systemActor('live-receipt'), maryam, {
+      idempotencyKey: 'live-receipt-file',
+      botInstanceId: BOT_A,
+      file: {
+        kind: 'PHOTO',
+        fileId: 'file-live',
+        fileUniqueId: 'u-live',
+        mimeType: null,
+        fileSize: 1_024n,
+        fileName: null,
+        telegramMessageId: 9n,
+        caption: null,
+      },
+    });
+    seen.length = 0;
+    const inReview = await tapOn(823, `pm:${orderId}`);
+    seen.push(...calls);
+    expect(inReview.replyKey).toBe('bot.order.payment_in_review');
     const review = seen.find((call) => dataOf(call).includes(`os:${orderId}`));
     expect(review, 'the status button').toBeDefined();
     expect(dataOf(review)).toEqual([`os:${orderId}`, 'mm:']);
     expect(plain(textOf(review))).toContain('دوباره پرداخت نکنید');
-    // Edited into the tapped message (the owner's edit-in-place rule), not a new message.
     expect(review?.method).toBe('editMessageText');
-    // The status button pays nothing and creates no payment.
-    const before = await rows<{ n: number }>(
-      sql`SELECT count(*)::int AS n FROM payments WHERE order_id = ${orderId}` as never,
-    );
-    const status = await tapOn(821, `os:${orderId}`);
-    expect(status.replyKey).not.toBeNull();
-    const after = await rows<{ n: number }>(
-      sql`SELECT count(*)::int AS n FROM payments WHERE order_id = ${orderId}` as never,
-    );
-    expect(after).toEqual(before);
+    // The status button says the receipt is being reviewed — not the same sentence again.
+    const status = await tapOn(824, `os:${orderId}`);
+    expect(status.replyKey).toBe('bot.payment.receipt_received');
+    expect(await payments()).toEqual([{ id: only?.id, state: 'PENDING' }]);
     expect((await orderOf(orderId))?.state).toBe('AWAITING_PAYMENT');
   });
 
@@ -678,6 +727,26 @@ describe('an ended order is answered ON its own payment message (R11 A11)', () =
     const answered = await tapOn(820, `pm:${orderId}`);
     expect(answered.replyKey).toBe('bot.order.expired_screen');
     expect(answered.replyKey).not.toBe('bot.order.payment_in_review');
+
+    // Lead review: an order awaiting payment with NO payment, past its deadline, is refused
+    // ORDER_EXPIRED with no `paymentLive` — the mini app keeps «لطفاً دوباره سفارش دهید» for it.
+    const bare = await preinvoiceOn(818, 'bare');
+    await tapOn(818, `pm:${bare}`);
+    expect((await orderOf(bare))?.state).toBe('AWAITING_PAYMENT');
+    await ctx.container.database.db.execute(
+      sql`UPDATE orders SET expires_at = now() - interval '1 minute' WHERE id = ${bare}` as never,
+    );
+    const refused = await ctx.container.payments
+      .settleFromWallet(tenantA, systemActor('bare-wallet'), maryam, {
+        idempotencyKey: 'bare-wallet',
+        orderId: bare,
+      })
+      .then(
+        () => null,
+        (error: unknown) => error as { code: string; details: Record<string, unknown> },
+      );
+    expect(refused?.code).toBe('commerce.order_expired');
+    expect(refused?.details).toEqual({});
   });
 
   it('a draft past its hold whose ended-screen edit is rate-limited answers the next tap', async () => {

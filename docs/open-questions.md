@@ -4829,11 +4829,12 @@ live; the owner decides otherwise.
 
 ## Round 12 F3 — UX quick wins: what was decided, what is left
 
-- **OQ-R12-F3-01 — the welcome has no brand variable.** `bot.start.welcome` no longer hard-codes a
-  brand («ZED PROXY»); it also stops naming the trial button, because a literal cannot be
-  conditional on the trial being on. A bot/business-name variable (and a «trial on» line) would be
-  a new placeholder on that template plus a value source (the bot instance has only a username).
-  Default: neither; the owner decides the source.
+- **OQ-R12-F3-01 — the welcome's brand and trial lines (OPEN).** The spec asks for a name variable
+  in `bot.start.welcome` and the trial line (and its «🧪» mention) only when the trial is on. Not
+  built: there is no business/brand name to fill the variable from (a bot instance has only its
+  username), and a conditional line is a new placeholder or a second template key plus a
+  trial-enabled read in the start flow. The text is UNCHANGED («ZED PROXY» and the trial line stay
+  for every tenant) until the owner names the source of the name.
 - **OQ-R12-F3-02 — a rate-limited TonPays cancel is not retried automatically.** The owner asked
   for «در صف است و خودکار دوباره تلاش می‌شود». That is true of a cancel the client's limiter HELD and
   requeued (it reads «در حال لغو» as before) but not of one the provider answered with a readable

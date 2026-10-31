@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CUSTOMER_NOTIFICATION_KINDS, type CustomerNotificationKind } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import {
+  GATEWAY_CHECK_CALLBACK_PREFIX,
   PAY_METHODS_CALLBACK_PREFIX,
   SERVICE_ADD_TRAFFIC_CALLBACK_PREFIX,
   SERVICE_CALLBACK_PREFIX,
@@ -56,13 +57,22 @@ describe('R12 F3 item 1: the buttons a notification carries', () => {
   it('a pending order and a pending payment open the order’s payment methods', () => {
     const order = notificationButtons('ORDER_PENDING_REMINDER', { orderId: ORDER });
     expect(order.map(dataOf)).toEqual([`${PAY_METHODS_CALLBACK_PREFIX}${ORDER}`]);
-    const payment = notificationButtons('PAYMENT_PENDING_REMINDER', {
-      payment: { orderId: ORDER },
-    });
-    expect(payment.map(dataOf)).toEqual([`${PAY_METHODS_CALLBACK_PREFIX}${ORDER}`]);
-    // A top-up has no order: its way on is the top-up menu.
-    const topup = notificationButtons('PAYMENT_PENDING_REMINDER', { payment: { orderId: null } });
-    expect(topup.map(dataOf)).toEqual([TOPUP_MENU_CALLBACK_PREFIX]);
+    // R12 F3 lead review: a pending PAYMENT opens that payment's own invoice by its id — for an
+    // order and a top-up alike — never a list or menu that starts a new payment.
+    const PAYMENT = '33333333-3333-4333-8333-333333333333';
+    for (const orderId of [ORDER, null]) {
+      const payment = notificationButtons('PAYMENT_PENDING_REMINDER', {
+        payment: { orderId, paymentId: PAYMENT },
+      });
+      expect(payment.map(dataOf)).toEqual([`${GATEWAY_CHECK_CALLBACK_PREFIX}${PAYMENT}`]);
+      expect(payment.map(labelOf)).toEqual([
+        CATALOGUE_FA['bot.payment.gateway_open_invoice_button'],
+      ]);
+    }
+    // Without the payment's id there is nothing to open: no button, never a guessed one.
+    expect(notificationButtons('PAYMENT_PENDING_REMINDER', { payment: { orderId: null } })).toEqual(
+      [],
+    );
   });
 
   it.each(['PAYMENT_REJECTED', 'PAYMENT_EXPIRED'] as const)('%s: «🧾 پرداخت دوباره»', (kind) => {

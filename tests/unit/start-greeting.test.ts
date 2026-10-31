@@ -68,10 +68,9 @@ describe('the /start greeting is filled from the receiving customer', () => {
 
   it('the new default welcome greets by name and keeps the owner’s lines', () => {
     const text = render(WELCOME, WELCOME_BODY, facts());
-    // R12 F3 item 6: no hard-coded brand line and no trial button the menu may not draw.
-    expect(text.split('\n')[0]).toBe('علی عزیز، خوش آمدید.');
-    expect(text).not.toContain('ZED PROXY');
-    expect(text).toContain('«🛒 خرید اشتراک» را بزنید');
+    expect(text.split('\n')[0]).toBe('ZED PROXY');
+    expect(text).toContain('علی عزیز، خوش آمدید.');
+    expect(text).toContain('«🛒 خرید اشتراک» یا «🧪 سرویس تست»');
   });
 
   it('the rendered greeting is never stored: only the raw template is read, for any customer', async () => {
@@ -169,8 +168,7 @@ describe('an empty value never leaves a gap', () => {
     for (const firstName of [null, '', '   ', '​‮']) {
       const f = facts({ firstName });
       const welcome = render(WELCOME, WELCOME_BODY, f);
-      // The greeting is the first line now (R12 F3 item 6 dropped the brand line above it).
-      expect(welcome.startsWith('عزیز، خوش آمدید.\n')).toBe(true);
+      expect(welcome).toContain('\nعزیز، خوش آمدید.\n');
       expect(welcome).not.toMatch(/ {2}|\n[ ،]/u);
       expect(render(BACK, BACK_BODY, f)).toContain('👋 سلام، خوش برگشتی');
     }

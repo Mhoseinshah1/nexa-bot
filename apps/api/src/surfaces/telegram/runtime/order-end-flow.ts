@@ -22,6 +22,7 @@ import { inlineLabel } from '../../../modules/commerce/messaging/application/inl
 import { ORDER_PAYMENT_STATUS_CALLBACK_PREFIX } from './callbacks.js';
 import { refusal } from './refusals.js';
 import { gatewayAttemptReply } from './checkout-flow.js';
+import { unreceiptedTransfer } from './card-receipt-flow.js';
 import type { PendingReply } from './replies.js';
 import type { BotRuntime } from '../bot-runtime.js';
 
@@ -155,7 +156,14 @@ export async function liveOrderInReview(
     customerId: customer.id,
     orderId: order.id,
   });
-  return live === null ? null : paymentInReviewReply(order.id);
+  if (live === null) return null;
+  /*
+   * R12 F3 (lead review): a card-to-card transfer with NO receipt filed is not "being checked" —
+   * nothing is. Its own invoice again, with «📤 ارسال رسید», so the customer sends the receipt for
+   * this payment (and is still not offered a new one).
+   */
+  const transfer = await unreceiptedTransfer(rt, scope, actor, customer, live.paymentId);
+  return transfer ?? paymentInReviewReply(order.id);
 }
 
 function paymentInReviewReply(orderId: string): PendingReply {
@@ -205,7 +213,17 @@ export async function orderPaymentStatus(
     const attempt = await rt.deps.gateway.attemptFor(scope, customer.id, live.paymentId);
     if (attempt !== null)
       return { ...(await gatewayAttemptReply(rt, attempt, orderId, scope)), edit: true };
-    return paymentInReviewReply(orderId);
+    // A transfer whose receipt was never sent: its invoice, to send it (lead review).
+    const transfer = await unreceiptedTransfer(rt, scope, actor, customer, live.paymentId);
+    if (transfer !== null) return transfer;
+    // A receipt under review: say THAT, rather than repeat the message the button sits under.
+    return {
+      key: 'bot.payment.receipt_received',
+      values: {},
+      buttons: [mainMenuButton()],
+      orderId,
+      edit: true,
+    };
   } catch (error) {
     return refusal(error);
   }
