@@ -1555,6 +1555,56 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     expect(fake.cancels).toHaveLength(2);
   });
 
+  it('R11 A8: a HELD retry that would only be due after the customer window is decided rate-limited, so the expiry cancel still follows', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    lane = telegramLaneWith(ctx, fake, {
+      invoiceScreens: ctx.container.wizardScreens,
+      providerRequests: true,
+      limiter: new TonPaysRateLimiter({
+        clock: ctx.container.clock,
+        sleep: () => Promise.resolve(),
+        random: () => 0.5,
+      }),
+    });
+    // Nexa's deadline in 100 s; TonPays pauses the key for 120 s.
+    await ctx.container.database.db.execute(
+      sql`UPDATE payments SET expires_at = ${new Date(clock.now().getTime() + 100_000)}
+           WHERE id = ${paymentId}`,
+    );
+    fake.cancelMode = { code: 'RATE_LIMIT_EXCEEDED', status: 429, retryAfter: '120' };
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    await lane.runOnce(tenantA);
+    fake.cancelMode = 'OK';
+    pastRetrySpacing();
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    await lane.runOnce(tenantA);
+    // HELD, and the pause outlasts the window: not put back — nothing sent, decided.
+    expect(fake.cancels).toHaveLength(1);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'RATE_LIMITED', error_code: 'RATE_LIMIT_EXCEEDED' },
+      { state: 'RATE_LIMITED', error_code: 'nexa.rate_limited_locally' },
+    ]);
+    // Nexa's deadline expires the attempt; nothing stands in the way of its own cancel.
+    clock.shift(130_000);
+    await ctx.container.paymentExpirySweep.runOnce(tenantA);
+    expect((await paymentOf(paymentId)).state).toBe('EXPIRED');
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'RATE_LIMITED' },
+      { state: 'RATE_LIMITED' },
+      { state: 'REQUESTED' },
+    ]);
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'RATE_LIMITED' },
+      { state: 'RATE_LIMITED' },
+      { state: 'APPLIED' },
+    ]);
+    expect(await walletEntries(paymentId)).toEqual([]);
+  });
+
   it('R11 A8: requeueUnsentCancel takes back only the stamp it is given, and only from SENT', async () => {
     const { paymentId, message } = await cardOnScreen();
     await tapOn(message, `gq:${paymentId}`);

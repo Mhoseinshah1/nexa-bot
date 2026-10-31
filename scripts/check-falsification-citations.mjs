@@ -179,11 +179,12 @@ const RECORDS = [
  * CG-01..CG-33, one citation each (+33).
  * 2838 → 2855: Round 11 A8, the TonPays Telegram cancel retry — thirteen rows R11A8-01..13 in
  * `docs/tonpays-telegram-falsification.md` citing 17 tests (R11A8-01 cites five) (+17).
- * 2855 → 2859: Round 11 A8 after the rate-limit PR — R11A8-14 (a HELD cancel is put back),
+ * 2855 → 2860: Round 11 A8 after the rate-limit PR — R11A8-14 (a HELD cancel is put back),
  * R11A8-15 (the retry's audit names the cancel it follows), R11A8-16/17 (only its own send
- * stamp, only from SENT, is taken back), one citation each (+4).
+ * stamp, only from SENT, is taken back), R11A8-18 (never past the customer window), one
+ * citation each (+5).
  */
-const EXPECTED = 2859;
+const EXPECTED = 2860;
 /**
  * A table whose last column is one of these is making citations.
  *
