@@ -109,10 +109,13 @@ export interface CustomerCallbackButton {
   /**
    * R11 A9: this line is listed with the customer's personal discount (R10 D3). The label
    * already carries the DISCOUNTED price — the total the line's quote charges, from
-   * `PricingService.personalListPrices`; the messenger draws `listPrice` (what the list
-   * showed before) struck through after it, then `bot.pricing.personal_discount_tag`. In a
-   * rich plan table the price cell does the same with a real strikethrough. Presentation
-   * only: the route is `data`, and the price charged is the quote's, decided again there.
+   * `PricingService.personalListPrices`. On the button the messenger writes that one price
+   * in a left-to-right isolate and follows it with `bot.pricing.personal_discount_button_
+   * suffix` («(20٪ تخفیف)»); a button never shows `listPrice` (R11 hotfix: a plain-text
+   * strike broke the right-to-left label). The rich plan table's price cell draws
+   * `listPrice` with a real strikethrough, then the discounted price and
+   * `bot.pricing.personal_discount_tag`. Presentation only: the route is `data`, and the
+   * price charged is the quote's, decided again there.
    */
   readonly personalDiscount?: { readonly listPrice: Money; readonly percent: number };
 }

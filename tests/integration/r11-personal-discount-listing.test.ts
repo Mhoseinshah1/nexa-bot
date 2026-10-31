@@ -23,7 +23,7 @@ import {
   type TenantContext,
   type UserId,
 } from '@nexa/contracts';
-import { formatMoney, strikeThroughText } from '@nexa/i18n';
+import { formatMoney, formatMoneyIsolated } from '@nexa/i18n';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
@@ -47,7 +47,8 @@ import {
  * real HTTP. Every case compares what each list SHOWS with what the INVOICE — the draft the
  * same line opens, priced by `PricingService.price` — charges:
  *
- * (a) a discounted customer          — the list shows the discounted price, struck + tagged;
+ * (a) a discounted customer          — the list shows the discounted price (a bot button: that
+ *                                       one price, isolated, and «(N٪ تخفیف)», R11 hotfix);
  * (b) a customer with no percent      — the list is what it always was;
  * (c) a reseller whose tier wins      — the tier price, untagged (the larger single wins);
  * (d) a reseller whose percent wins   — the personal price, never stacked on the tier price;
@@ -66,7 +67,8 @@ const USER = 962_101;
 const viaBot: TenantContext = { ...tenantA, botInstanceId: BOT_A };
 const LIST = 100_000n;
 const PACKAGE = 50_000n;
-const TAG = (percent: number) => `تخفیف شخصی ${String(percent)}٪`;
+/** R11 hotfix: what follows the one price on a discounted bot button. */
+const SUFFIX = (percent: number) => `(${String(percent)}٪ تخفیف)`;
 
 const customerActor = (correlationId: string): ActorContext => ({
   type: 'SYSTEM_JOB',
@@ -420,9 +422,9 @@ describe('R11 A9: price lists show the personal discount the invoice charges', (
 
   /**
    * The rule every case asserts: the list shows the invoice's figure. Discounted — the bot's
-   * button carries the invoice total, the shown price struck through and the tag, and the mini
-   * app's line carries the invoice total as its personal price. Not — the line is drawn as it
-   * always was, at `shown`.
+   * button carries the invoice total as its ONE price (isolated left-to-right, no U+0336, never
+   * the shown price) and «(N٪ تخفیف)», and the mini app's line carries the invoice total as its
+   * personal price. Not — the line is drawn as it always was, at `shown`.
    */
   function expectListed(
     line: Line,
@@ -445,8 +447,14 @@ describe('R11 A9: price lists show the personal discount the invoice charges', (
     }
     const now = money(personal.price, 'IRT');
     expect(line.bot).toBe(
-      `${title.replace('{price}', formatMoney(now))} ${strikeThroughText(formatMoney(was))} ${TAG(personal.percent)}`,
+      `${title.replace('{price}', formatMoneyIsolated(now))} ${SUFFIX(personal.percent)}`,
     );
+    expect(line.bot).not.toContain('\u0336');
+    expect(line.bot).not.toContain(formatMoney(was).split(' ')[0] as string);
+    // The amount on the button, once, is the amount the invoice charges.
+    const figure = formatMoney(line.invoice).split(' ')[0] as string;
+    expect(line.bot.split(figure).length - 1).toBe(1);
+    expect(line.bot).toContain(`\u2066${figure}\u2069`);
     expect(line.mini).toEqual({ price: was, personal: { percent: personal.percent, price: now } });
     // The hard rule: the listed figure IS the invoice's.
     expect(line.invoice).toEqual(now);
@@ -517,7 +525,7 @@ describe('R11 A9: price lists show the personal discount the invoice charges', (
   // The cases
   // -------------------------------------------------------------------------
 
-  it('(a) a discounted customer: every list shows the invoice price, struck and tagged', async () => {
+  it('(a) a discounted customer: every list shows the invoice price, tagged', async () => {
     await setFlag('personal_discount', true);
     await setPercent(20);
     expectListed(await plan(), PLAN, LIST, { percent: 20, price: 80_000n });
