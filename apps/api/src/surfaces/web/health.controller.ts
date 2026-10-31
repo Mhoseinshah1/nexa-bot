@@ -73,7 +73,7 @@ export class HealthController {
    */
   @Get(HEALTH_ROUTES.ready)
   async ready(@Res({ passthrough: true }) reply: FastifyReply): Promise<HealthReadyResponse> {
-    const { degraded } = await this.probe.run();
+    const { degraded } = await this.probe.verdict();
     reply.status(degraded ? 503 : 200);
     return { status: degraded ? 'degraded' : 'ok' };
   }

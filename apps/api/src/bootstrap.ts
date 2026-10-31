@@ -22,6 +22,10 @@ import {
 import { AppModule } from './app.module.js';
 import { installRawBodyCapture } from './surfaces/gateway/raw-body.js';
 import {
+  AnonymousRateLimiter,
+  installAnonymousRateLimit,
+} from './surfaces/web/anonymous-rate-limit.js';
+import {
   TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES,
   TELEGRAM_WEBHOOK_ROUTE_PREFIX,
 } from './surfaces/telegram/webhook.controller.js';
@@ -318,6 +322,15 @@ export async function createApiApp(config: AppConfig = loadConfig()): Promise<Ap
    * Registered here, before `app.init()`, with the route's own body limit.
    */
   installRawBodyCapture(fastify, GATEWAY_WEBHOOK_ROUTE_PREFIX, GATEWAY_WEBHOOK_BODY_LIMIT_BYTES);
+
+  // R12 F2: a per-address budget for the routes anyone can call without a session.
+  installAnonymousRateLimit(
+    fastify,
+    new AnonymousRateLimiter({
+      limitPerWindow: config.ANONYMOUS_RATE_LIMIT_PER_MINUTE,
+      now: () => container.clock.now().getTime(),
+    }),
+  );
 
   const routes: RegisteredRoute[] = [];
   fastify.addHook('onRoute', (route) => {

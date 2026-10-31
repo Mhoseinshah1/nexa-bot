@@ -2307,6 +2307,7 @@ export function createContainer(
     logger,
     clock,
     maxOutboxLagMs: config.OUTBOX_RELAY_MAX_LAG_MS,
+    verdictCacheMs: config.READINESS_CACHE_MS,
   });
 
   // Comfortably past the longest window plus lockout the schema permits, so a

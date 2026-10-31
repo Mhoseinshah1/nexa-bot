@@ -376,7 +376,9 @@ describe('readiness when a dependency is down', () => {
   const ORIGIN = 'http://localhost:5173';
 
   beforeAll(async () => {
-    const config = testConfig();
+    // These cases watch readiness change from one request to the next; the anonymous
+    // verdict's reuse window is pinned by tests/unit/readiness-verdict-cache.test.ts.
+    const config = testConfig({ READINESS_CACHE_MS: '0' });
     await migrateOnce(config.DATABASE_URL);
     // An unreachable Redis, rather than stopping the shared one out from under
     // the other tests.

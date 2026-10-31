@@ -598,6 +598,34 @@ Any of the three in a crash loop, alive with a blocked event loop, or alive and
 cut off from PostgreSQL goes unhealthy within a check or two, and a release in
 that state is backed out exactly as one whose API never answered.
 
+### `/health/ready` is private to the host (R12 F2)
+
+Every `/health/ready` runs the readiness probes, and three of them check connections out
+of the API's database pool — the pool the operators and the bot use. It used to be
+public through the edge, so a loop of anonymous requests could hold that pool. Now:
+
+- **Caddy answers `/health/ready` only from its own loopback and the edge network**
+  (`NEXA_EDGE_SUBNET`, whose gateway is this host); from anywhere else it is a `404`.
+  `/health/live` stays public. Nothing in the installation needs readiness through the
+  edge: the api container's own check calls the API directly, and `botctl status`,
+  `update` and `rollback` read Docker's health state. To read it by hand on the host:
+  `sudo docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml exec api node -e "fetch('http://127.0.0.1:3000/health/ready').then(async r=>console.log(r.status, await r.text()))"`.
+- **One computation at a time, reused for `READINESS_CACHE_MS` (default 3000 ms).**
+  Callers that arrive while the probes run share their answer; callers inside the
+  window read the stored one. The authenticated readiness page in the Web Admin still
+  asks fresh.
+- **Every database checkout waits at most 5 s** (`connectionTimeoutMillis`), for a new
+  connection and for a free slot alike. It used to wait for ever, so an exhausted pool
+  queued every later request behind it.
+- **A per-address budget for the anonymous routes** — `/health/*`, `/payments/return/*`
+  and sign-in: `ANONYMOUS_RATE_LIMIT_PER_MINUTE` (default 120) per client address per
+  minute, answered `429 platform.request_rate_limited` with `Retry-After` above it.
+  Loopback is never limited (the container check). It is in the application because the
+  stock Caddy image has no rate-limit module; the client address is the one
+  `TRUSTED_PROXY_IPS` resolves, never Caddy's. The Telegram and gateway webhooks and the
+  mini app are not covered: their senders are a few provider addresses, and the mini app
+  has its own budget.
+
 ### Who reports a stalled role, and the one that cannot report itself
 
 Every background role now turns a loop that has stopped making progress into an
@@ -653,18 +681,18 @@ merely unhealthy.
 So an installation needs one check that does not run inside it. Two that work with
 what exists today:
 
-- **An off-host uptime check on `https://<domain>/health/ready`**, alerting on any
-  non-200 for more than a couple of minutes. It covers the API, PostgreSQL, the
-  migrations, and — through the `outbox` dependency, which fails when the oldest
-  unpublished event is older than `OUTBOX_RELAY_MAX_LAG_MS` — a worker whose relay
-  has stopped while events are being written. It does NOT see a stalled dispatcher
-  beside a healthy relay, and on a quiet installation it sees a dead relay only once
-  something is written.
+- **An off-host uptime check on `https://<domain>/health/live`**, alerting on any
+  non-200 for more than a couple of minutes. It covers the edge and a live API
+  process. It used to be `/health/ready`, which also covered PostgreSQL, the
+  migrations and the outbox lag; since R12 F2 that route answers `404` from outside
+  the host (see above), so **an existing off-host check on `/health/ready` must be
+  moved** — to `/health/live` here, with readiness left to the host-side check below.
 - **A host-side cron that runs `botctl status`** and alerts through a channel that is
   not this installation (mail, a separate bot, the hosting provider's monitor) when
-  the exit status is non-zero. `status` reads every container's own health check,
-  including the worker's heartbeat, which goes stale when ANY of its loops — the
-  dispatcher included — stops making progress.
+  the exit status is non-zero. `status` reads every container's own health check —
+  the API's is `/health/ready`, so PostgreSQL, the migrations and the outbox lag are
+  covered here — including the worker's heartbeat, which goes stale when ANY of its
+  loops — the dispatcher included — stops making progress.
 
 Neither is configured by the installer, and neither is a substitute for the other.
 

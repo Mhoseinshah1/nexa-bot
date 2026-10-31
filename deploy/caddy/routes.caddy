@@ -38,10 +38,30 @@
 		reverse_proxy api:3000
 	}
 
-	# /health/live and /health/ready are anonymous by design and answer with a
-	# word and a status code. /health/info requires a session and returns 401
-	# without one, so proxying all three is the existing contract rather than a
-	# widening of it.
+	# /health/ready is NOT public (R12 F2). Every call runs the readiness probes,
+	# which check connections out of the pool the operators and the bot share, so
+	# the internet must not be able to drive it. It answers only this container's
+	# own loopback (the internal :8080 site) and the edge network — the compose
+	# network, whose gateway is this host. Nothing in the installation needs it
+	# through the edge: the api's container check calls the API directly, and
+	# `botctl status`/`update` read Docker's health state. The internet gets a
+	# 404, not a 403, so the route does not advertise itself. `/health/live` stays
+	# public: it is a word and an uptime, and touches nothing.
+	#
+	# `remote_ip` is the connection's peer, never X-Forwarded-For, so a client
+	# cannot claim to be local. NEXA_EDGE_SUBNET is passed in by compose from the
+	# same expression that creates the network.
+	@health_ready_public {
+		path /health/ready
+		not remote_ip 127.0.0.0/8 ::1 {$NEXA_EDGE_SUBNET:172.29.0.0/24}
+	}
+	handle @health_ready_public {
+		respond 404
+	}
+
+	# /health/live is anonymous by design and answers with a word and a status
+	# code; /health/ready reaches here only from the addresses above. /health/info
+	# requires a session and returns 401 without one.
 	@health path /health/*
 	handle @health {
 		reverse_proxy api:3000

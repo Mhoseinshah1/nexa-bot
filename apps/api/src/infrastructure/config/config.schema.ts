@@ -260,6 +260,18 @@ export const configSchema = z
     OUTBOX_RELAY_POLL_INTERVAL_MS: z.coerce.number().int().min(50).max(60_000).default(1000),
     OUTBOX_RELAY_MAX_LAG_MS: z.coerce.number().int().min(1000).default(300_000),
     /**
+     * How long the anonymous `/health/ready` verdict is reused (R12 F2). One computation is
+     * in flight at a time whatever this says; the window bounds how often one starts, so a
+     * flood of anonymous probes cannot hold the API's database pool. 0 recomputes per call.
+     */
+    READINESS_CACHE_MS: z.coerce.number().int().min(0).max(60_000).default(3_000),
+    /**
+     * Requests one client address may make per minute to the anonymous routes — the health
+     * probes, the payment return, sign-in (R12 F2, `anonymous-rate-limit.ts`). Loopback is
+     * never limited. 0 turns the limit off.
+     */
+    ANONYMOUS_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(0).max(100_000).default(120),
+    /**
      * Where the worker writes its heartbeat, and how often.
      *
      * The worker serves no HTTP, so this file is its health check: written

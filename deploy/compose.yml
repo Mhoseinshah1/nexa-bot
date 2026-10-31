@@ -540,6 +540,9 @@ services:
       # predates this has no such key and must still start; it compares unequal
       # to every real fingerprint, so the first update recreates the edge once.
       NEXA_EDGE_CONFIG: ${NEXA_EDGE_CONFIG:-unset}
+      # routes.caddy answers /health/ready only from loopback and this network
+      # (R12 F2); the same expression that creates the network below.
+      NEXA_EDGE_SUBNET: ${NEXA_EDGE_SUBNET:-172.29.0.0/24}
     volumes:
       # The whole directory, read-only: the Caddyfile imports routes.caddy
       # beside it, and a single-file mount would leave that import dangling.

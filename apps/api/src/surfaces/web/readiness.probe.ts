@@ -22,7 +22,13 @@ import { CONTAINER, type Container } from '../../container.js';
 export class ReadinessProbe {
   constructor(@Inject(CONTAINER) private readonly container: Container) {}
 
+  /** Fresh, with every reason: the authenticated `system/readiness`. */
   run(): Promise<{ degraded: boolean; dependencies: DependencyStatus[] }> {
     return this.container.readiness.run();
+  }
+
+  /** Shared and briefly reused: the anonymous `/health/ready` (see `ReadinessService.verdict`). */
+  verdict(): Promise<{ degraded: boolean; dependencies: DependencyStatus[] }> {
+    return this.container.readiness.verdict();
   }
 }
