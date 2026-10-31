@@ -621,8 +621,12 @@ describe('an ended order is answered ON its own payment message (R11 A11)', () =
 
     const replies: (string | null)[] = [];
     const seen: Call[] = [];
-    for (const data of [`pm:${orderId}`, `w:${orderId}`]) {
-      replies.push((await tapOn(815, data)).replyKey);
+    // Two different messages: a tap on a message the first answer already edited is a stale tap.
+    for (const [on, data] of [
+      [815, `pm:${orderId}`],
+      [819, `w:${orderId}`],
+    ] as const) {
+      replies.push((await tapOn(on, data)).replyKey);
       seen.push(...calls);
     }
     expect(replies).not.toContain('bot.order.expired_screen');
@@ -635,6 +639,45 @@ describe('an ended order is answered ON its own payment message (R11 A11)', () =
       'no «سفارش دوباره»',
     ).toEqual([]);
     expect((await orderOf(orderId))?.state).toBe('AWAITING_PAYMENT');
+
+    /*
+     * R12 F3 item 9 (OQ-R11-A11-04): and the answer is NOT the bare refusal either. «لطفاً دوباره
+     * سفارش دهید» invites a second payment; the customer is told the payment is being checked,
+     * not to pay again, and that the result comes in the bot — with the status button.
+     */
+    expect(replies).toEqual(['bot.order.payment_in_review', 'bot.order.payment_in_review']);
+    expect(replies).not.toContain('bot.order.expired');
+    const sentTexts = seen.map((call) => textOf(call));
+    expect(sentTexts.some((text) => text.includes('لطفاً دوباره سفارش دهید'))).toBe(false);
+    const review = seen.find((call) => dataOf(call).includes(`os:${orderId}`));
+    expect(review, 'the status button').toBeDefined();
+    expect(dataOf(review)).toEqual([`os:${orderId}`, 'mm:']);
+    expect(plain(textOf(review))).toContain('دوباره پرداخت نکنید');
+    // Edited into the tapped message (the owner's edit-in-place rule), not a new message.
+    expect(review?.method).toBe('editMessageText');
+    // The status button pays nothing and creates no payment.
+    const before = await rows<{ n: number }>(
+      sql`SELECT count(*)::int AS n FROM payments WHERE order_id = ${orderId}` as never,
+    );
+    const status = await tapOn(821, `os:${orderId}`);
+    expect(status.replyKey).not.toBeNull();
+    const after = await rows<{ n: number }>(
+      sql`SELECT count(*)::int AS n FROM payments WHERE order_id = ${orderId}` as never,
+    );
+    expect(after).toEqual(before);
+    expect((await orderOf(orderId))?.state).toBe('AWAITING_PAYMENT');
+  });
+
+  it('R12 F3 item 9: the in-review answer is only for a LIVE payment — an order the sweep expired is the ended screen', async () => {
+    const message = 817;
+    const orderId = await cardInvoiceOn(message, 'dead');
+    await lapse(orderId);
+    await ctx.container.paymentExpirySweep.runOnce(tenantA);
+    expect((await orderOf(orderId))?.state).toBe('EXPIRED');
+    // An older screen of the same order (the card message itself was edited by the invoice).
+    const answered = await tapOn(820, `pm:${orderId}`);
+    expect(answered.replyKey).toBe('bot.order.expired_screen');
+    expect(answered.replyKey).not.toBe('bot.order.payment_in_review');
   });
 
   it('a draft past its hold whose ended-screen edit is rate-limited answers the next tap', async () => {

@@ -24,6 +24,8 @@ import {
   TOPUP_MENU_CALLBACK_PREFIX,
   TOPUP_PICK_CALLBACK_PREFIX,
   TOPUP_ROUTE_CALLBACK_PREFIX,
+  WALLET_HISTORY_CALLBACK_PREFIX,
+  WALLET_OPEN_CALLBACK_DATA,
 } from './callbacks.js';
 import { mainMenuButton } from './keyboards.js';
 import { refusal } from './refusals.js';
@@ -31,6 +33,7 @@ import type { PendingReply } from './replies.js';
 import { gatewayAttemptReply } from './checkout-flow.js';
 import { transferInstruction } from './card-receipt-flow.js';
 import type { BotRuntime } from '../bot-runtime.js';
+import { encodeKeysetToken, type KeysetToken } from '../keyset-token.js';
 
 /** The answer to a recorded (or refused) top-up amount: the route chooser, or why not. */
 export async function topupAmountReply(
@@ -250,9 +253,74 @@ export async function walletBalance(
           ]
         : []),
       ...(giftCards ? [{ ...inlineLabel('wallet.gift_card'), data: GIFT_CARD_CALLBACK_DATA }] : []),
+      // R12 F3 item 7: the wallet's last movements, ten a page, edited in place.
+      { ...inlineLabel('wallet.history'), data: WALLET_HISTORY_CALLBACK_PREFIX },
       mainMenuButton(),
     ],
     orderId: null,
+  };
+}
+
+/** R12 F3 item 7: how many movements one page of the wallet history shows. */
+export const WALLET_HISTORY_PAGE_SIZE = 10;
+
+/**
+ * R12 F3 item 7: the customer's last wallet movements, newest first, ten a page, drawn IN
+ * PLACE of the tapped message (the wallet screen, or the previous page). The page is the
+ * customer's own ledger in the selling currency (`WalletService.historyForCustomer`, the
+ * customer-own permission; the id is the one the update authenticated), read when the tap
+ * arrives. `wh:<token>` pages on by keyset, so a movement written meanwhile cannot shift a page
+ * under the reader. «◀️» goes back to the newest page; there is no back-by-page, because a
+ * keyset names a position and not a number. Nothing here writes.
+ */
+export async function walletHistory(
+  rt: BotRuntime,
+  scope: TenantContext,
+  actor: ActorContext,
+  customer: CustomerRecord,
+  cursor: KeysetToken | null,
+): Promise<PendingReply> {
+  const page = await rt.deps.wallet.historyForCustomer(scope, actor, customer.id, {
+    limit: WALLET_HISTORY_PAGE_SIZE,
+    ...(cursor === null ? {} : { cursor }),
+  });
+  const screen = await rt.deps.screens.walletHistory(
+    scope,
+    page.items.map((entry) => ({
+      direction: entry.direction,
+      reason: entry.reason,
+      amount: entry.amount,
+      createdAt: entry.createdAt,
+    })),
+  );
+  const next = page.nextCursor === null ? null : encodeKeysetToken(page.nextCursor);
+  return {
+    key: screen.key,
+    values: screen.values,
+    buttons: [
+      ...(cursor === null
+        ? []
+        : [
+            {
+              ...inlineLabel('services.previous_page'),
+              data: WALLET_HISTORY_CALLBACK_PREFIX,
+              row: 0,
+            },
+          ]),
+      ...(next === null
+        ? []
+        : [
+            {
+              ...inlineLabel('services.next_page'),
+              data: `${WALLET_HISTORY_CALLBACK_PREFIX}${next}`,
+              row: 0,
+            },
+          ]),
+      { ...inlineLabel('wallet.open'), data: WALLET_OPEN_CALLBACK_DATA, row: 1 },
+      { ...mainMenuButton(), row: 1 },
+    ],
+    orderId: null,
+    edit: true,
   };
 }
 

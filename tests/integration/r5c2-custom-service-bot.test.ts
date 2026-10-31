@@ -233,6 +233,31 @@ describe('R5C-2 B1: the custom service over Telegram', () => {
     expect(lastText()).toContain('مدت واردشده درست نیست');
   });
 
+  /*
+   * R12 F3 item 2: the volume and days questions carry «🔙 بازگشت به مکان‌ها» (there is no
+   * pre-invoice yet) and «انصراف»; each closes the open window, so the next number typed is an
+   * ordinary message again.
+   */
+  it('R12 F3: the volume and days questions carry back and cancel, and each closes the window', async () => {
+    await send('tap', 'cu:');
+    await send('tap', `cv:${panelA}`);
+    expect(lastButtons()).toEqual(['ik:', 'iz:']);
+
+    await send('tap', 'ik:');
+    expect(lastButtons()).toEqual([`cv:${panelA}`]);
+    await send('text', '10');
+    expect(lastText()).toBe(CATALOGUE_FA['bot.unknown_command']);
+
+    await send('tap', `cv:${panelA}`);
+    await send('text', '10');
+    expect(lastText()).toContain('مدت را بین 7 تا 90 روز');
+    expect(lastButtons()).toEqual(['ik:', 'iz:']);
+    await send('tap', 'iz:');
+    expect(lastText()).toContain('خوش برگشتی');
+    await send('text', '30');
+    expect(lastText()).toBe(CATALOGUE_FA['bot.unknown_command']);
+  });
+
   it('the days step answers UNAVAILABLE, not a range, when the flag was turned off after the volume step', async () => {
     await send('tap', 'cu:');
     await send('tap', `cv:${panelA}`);
