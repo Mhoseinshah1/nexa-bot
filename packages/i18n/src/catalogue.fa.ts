@@ -1286,6 +1286,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.order.preinvoice_personal_discount_line':
     '🏷 تخفیف شخصی شما ({percent}٪): {discount} (قیمت پیش از تخفیف: {subtotal})',
   'bot.pricing.personal_discount_tag': 'تخفیف شخصی {percent}٪',
+  'bot.pricing.personal_discount_button_suffix': '({percent}٪ تخفیف)',
   'bot.order.preinvoice_cashback_line': '{icon:referral} کش‌بک این سفارش پس از تحویل: {cashback}',
   'bot.payment.gateway_button': '💳 پرداخت با درگاه',
   'bot.payment.gateway_choose': '{icon:payment} درگاه پرداخت خود را انتخاب کنید:',
