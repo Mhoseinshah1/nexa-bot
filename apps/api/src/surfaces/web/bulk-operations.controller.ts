@@ -18,7 +18,7 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, authenticateAdmin } from './authenticated-request.js';
+import { authenticateAdmin, type adminActor } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
 import type { BulkOperationRecord } from '../../modules/commerce/bulk-operations/application/ports.js';

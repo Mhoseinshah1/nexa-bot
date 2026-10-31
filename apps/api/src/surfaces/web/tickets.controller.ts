@@ -31,7 +31,7 @@ import {
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import type { PublicLabels } from '../../modules/commerce/public-codes/application/public-labels.js';
-import { adminActor, authenticateAdmin } from './authenticated-request.js';
+import { authenticateAdmin, type adminActor } from './authenticated-request.js';
 import type {
   TicketCategoryRecord,
   TicketListItem,

@@ -19,7 +19,7 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, authenticateAdmin } from './authenticated-request.js';
+import { authenticateAdmin, type adminActor } from './authenticated-request.js';
 import type {
   ServiceRefundRequestListItem,
   ServiceRefundRequestRecord,
