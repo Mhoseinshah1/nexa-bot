@@ -158,6 +158,8 @@ export const INLINE_BUTTONS = [
   // Wallet
   button('wallet.open', 'WALLET', 'bot.wallet.open_button'),
   button('wallet.topup', 'WALLET', 'bot.wallet.topup_button'),
+  // R12 F3: «📜 تراکنش‌ها» under the balance.
+  button('wallet.history', 'WALLET', 'bot.wallet.history_button'),
   button('wallet.topup_amount', 'WALLET', null),
   // R10 D4: «🎁 کارت هدیه» under the balance, while the gift_cards feature is on.
   button('wallet.gift_card', 'WALLET', 'bot.wallet.gift_card_button'),
@@ -183,6 +185,12 @@ export const INLINE_BUTTONS = [
   // R11 A11: under an expired or cancelled order's edited payment message.
   button('order.reorder', 'PURCHASE', 'bot.order.reorder_button'),
   button('order.main_menu', 'PURCHASE', 'bot.order.main_menu_button'),
+  // R12 F3: the status button of `bot.order.payment_in_review`, and the back / cancel pair under
+  // a typed-input prompt (also «بازگشت به پیش‌فاکتور» under the wallet shortfall).
+  button('order.payment_status', 'PURCHASE', 'bot.order.payment_status_button'),
+  button('order.input_back', 'PURCHASE', 'bot.order.input_back_button'),
+  button('order.input_cancel', 'PURCHASE', 'bot.order.input_cancel_button'),
+  button('custom_service.back', 'PURCHASE', 'bot.custom_service.back_button'),
 
   // Payment
   button('payment.wallet', 'PAYMENT', 'bot.payment.wallet_button'),
@@ -200,6 +208,8 @@ export const INLINE_BUTTONS = [
     'COPY',
   ),
   button('payment.sent', 'PAYMENT', 'bot.payment.sent_button'),
+  // R12 F3: under a rejected or expired payment's notice.
+  button('payment.retry', 'PAYMENT', 'bot.payment.retry_button'),
   button('payment.cancel', 'PAYMENT', 'bot.payment.cancel_button'),
   button('payment.cancel_confirm', 'PAYMENT', 'bot.payment.cancel_confirm_button'),
   button('payment.gateway_pay', 'PAYMENT', 'bot.payment.gateway_pay_button', 'URL'),

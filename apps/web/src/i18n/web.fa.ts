@@ -4914,6 +4914,13 @@ export const WEB_FA = {
   'web.ib_button_order_cancel_confirm': 'تأیید لغو سفارش',
   'web.ib_button_order_reorder': 'سفارش دوباره (زیر سفارش منقضی یا لغوشده)',
   'web.ib_button_order_main_menu': 'منوی اصلی (زیر سفارش منقضی یا لغوشده)',
+  'web.ib_button_order_payment_status': 'وضعیت پرداخت (زیر «پرداخت شما در حال بررسی است»)',
+  'web.ib_button_order_input_back':
+    'بازگشت به پیش‌فاکتور (زیر پرسش کد تخفیف و نام کاربری و کمبود موجودی)',
+  'web.ib_button_order_input_cancel': 'انصراف (زیر پرسش‌هایی که مشتری باید متن تایپ کند)',
+  'web.ib_button_custom_service_back': 'بازگشت به مکان‌ها (زیر پرسش حجم و روز سرویس دلخواه)',
+  'web.ib_button_wallet_history': 'تراکنش‌ها (زیر موجودی کیف پول)',
+  'web.ib_button_payment_retry': 'پرداخت دوباره (زیر اعلان پرداخت ردشده یا منقضی)',
   'web.ib_button_payment_wallet': 'پرداخت از کیف پول',
   'web.ib_button_payment_methods': 'ثبت پرداخت (انتخاب روش)',
   'web.ib_button_payment_route': 'روش‌های پرداخت',

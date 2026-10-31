@@ -1881,6 +1881,34 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.order.payment_in_review',
+    description:
+      'R12 F3 (OQ-R11-A11-04): the answer to a pay tap on an order whose deadline passed but whose payment is still live (a receipt under review, a gateway attempt pending or UNKNOWN, a confirmed payment not yet settled) — the sweep keeps such an order. Tells the customer the payment is being checked, not to pay again, and that the result comes in the bot. `bot.order.expired` stays the answer for a draft past its price hold, which has no payment.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.order.payment_status_button',
+    description:
+      'R12 F3: «وضعیت پرداخت» under `bot.order.payment_in_review`. Opens the live payment’s own screen (a gateway attempt’s status) or repeats the review sentence; it pays nothing and creates no payment.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.order.input_back_button',
+    description:
+      'R12 F3: «بازگشت به پیش‌فاکتور» under a typed-input prompt (discount code, service username) and under the wallet shortfall. Re-draws the order’s pre-invoice and closes the open text window; it writes nothing else.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.order.input_cancel_button',
+    description:
+      'R12 F3: «انصراف» under a typed-input prompt (discount code, service username, custom-service volume and days). Closes the open text window and returns to the main menu; the draft order is left as it is and lapses by its own deadline.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.order.refunded_to_wallet',
     description:
       'Told to a customer whose money arrived and whose order this installation ' +
@@ -2013,6 +2041,34 @@ export const TEMPLATES = [
     description:
       'The inline button that opens the wallet screen (balance and account summary) as a ' +
       'new message. Shown under the wallet-credit messages.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.history_button',
+    description:
+      'R12 F3: «تراکنش‌ها» under the wallet balance. Opens the customer’s last ledger movements (ten per page), edited in place.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.history',
+    description:
+      'R12 F3: the customer’s last wallet movements, newest first, ten per page; one line per movement (date, signed amount, what it was). Read from the ledger; nothing here changes a balance.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'lines',
+        type: 'STRING',
+        description: 'The page’s movement lines, already formatted, one per line.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.wallet.history_empty',
+    description: 'R12 F3: the wallet has no movement yet.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -5711,6 +5767,13 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.payment.retry_button',
+    description:
+      'R12 F3: «پرداخت دوباره» under the rejected-payment and expired-payment notices. Opens the order’s payment-method selector (or the wallet top-up for a top-up payment); it pays nothing itself and re-decides on the tap whether the order may still be paid.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.request_unavailable',
     description:
       'The truthful generic refusal, for the causes a customer can neither act on nor ' +
@@ -8165,6 +8228,13 @@ export const TEMPLATES = [
       'The catalogue button that starts a custom service (Package D). Drawn only while the ' +
       'custom_service flag is on and at least one location can price this customer, and ' +
       'decided again on the server when tapped.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.custom_service.back_button',
+    description:
+      'R12 F3: «بازگشت به مکان‌ها» under the custom-service volume and days questions. There is no pre-invoice yet at that point, so it re-opens the location list and closes the open text window.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -11165,6 +11235,22 @@ export const TEMPLATES = [
         type: 'STRING',
         description:
           'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_cancel_rate_limited',
+    description:
+      'R12 F3 (R11 A8 follow-up): the customer’s cancel was NOT processed because TonPays rate-limited it (a readable RATE_LIMIT_EXCEEDED, or Nexa’s own limiter held it past the customer window). Unlike `gateway_cancel_unknown` the provider’s answer is known: it did nothing. The invoice is not cancelled yet; the cancel button stays so the customer may ask again; do not pay again.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (`paymentTrackingCode`). Optional: a line holding only it is dropped where no payment is in hand.',
         required: false,
         repeatable: false,
       },

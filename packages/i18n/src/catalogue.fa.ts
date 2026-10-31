@@ -325,6 +325,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '{icon:info} این سفارش لغو شد.\n\n🔖 کد سفارش: {orderCode}\n{icon:service} سرویس: {productName}\n{icon:amount} مبلغ سفارش: {total}\n\nبرای خرید دوباره از دکمهٔ زیر استفاده کنید.',
   'bot.order.reorder_button': '🔁 سفارش دوباره',
   'bot.order.main_menu_button': '🏠 منوی اصلی',
+  // R12 F3 (OQ-R11-A11-04): a pay tap on an order past its deadline whose payment is still live.
+  'bot.order.payment_in_review':
+    '{icon:time} پرداخت شما برای این سفارش هنوز در حال بررسی است. لطفاً دوباره پرداخت نکنید.\n\nنتیجهٔ بررسی در همین ربات به شما اطلاع داده می‌شود.',
+  'bot.order.payment_status_button': '📊 وضعیت پرداخت',
+  'bot.order.input_back_button': '🔙 بازگشت به پیش‌فاکتور',
+  'bot.order.input_cancel_button': 'انصراف',
   /*
    * Three lines, and the two figures are the point of the change.
    *
@@ -735,6 +741,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.wallet.insufficient': '{icon:warning} موجودی کیف پول کافی نیست. کمبود: {shortfall}',
   'bot.wallet.topup_button': '💰 افزایش موجودی',
   'bot.wallet.open_button': '💰 کیف پول',
+  'bot.wallet.history_button': '📜 تراکنش‌ها',
+  'bot.wallet.history': '📜 تراکنش‌های اخیر کیف پول\n\n{lines}',
+  'bot.wallet.history_empty': '📜 هنوز تراکنشی در کیف پول شما ثبت نشده است.',
   'bot.catalog.open_button': '🛒 خرید سرویس',
   'bot.wallet.topup_choose': 'مبلغ شارژ را انتخاب کنید:',
   'bot.wallet.negative_balance':
@@ -820,6 +829,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.copy_transfer_amount_button': '📋 کپی مبلغ (ریال)',
   'bot.payment.wallet_button': '💰 پرداخت از کیف پول',
   'bot.payment.manual_button': '🧾 ثبت پرداخت',
+  'bot.payment.retry_button': '🧾 پرداخت دوباره',
   /*
    * The generic refusal, and it says two things on purpose: that the request cannot be
    * completed NOW (so trying later is sensible), and that nothing was charged — because
@@ -1146,6 +1156,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '{icon:trial} سرویس تست را روی کدام سرور می‌خواهید؟ یکی را انتخاب کنید:',
   'bot.trial.panel_button': '{label} — {traffic} / {hours} ساعت',
   'bot.custom_service.button': '🛠 سرویس دلخواه',
+  'bot.custom_service.back_button': '🔙 بازگشت به مکان‌ها',
   'bot.custom_service.locations': '📍 لوکیشن سرویس دلخواه خود را انتخاب کنید:',
   'bot.custom_service.ask_volume':
     '📍 لوکیشن: {location}\n\n📦 حجم مورد نظر خود را به گیگابایت بفرستید؛ حداکثر با دو رقم اعشار (مثلاً 10 یا 10.5).\n\n📏 حجم را بین {minGb} تا {maxGb} گیگابایت وارد کنید.',
@@ -1434,6 +1445,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '{icon:warning} این فاکتور دیگر در انتظار پرداخت نیست و این درخواست انجام نشد. وضعیت را بررسی کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_cancel_unknown':
     '{icon:warning} پاسخ تون‌پی به درخواست لغو دریافت نشد و درخواست دوباره به‌صورت خودکار ارسال نمی‌شود. وضعیت را بررسی کنید.\n\nکد پیگیری پرداخت: {reference}',
+  // R12 F3: TonPays rate-limited the customer's cancel — its answer is known: it did nothing.
+  'bot.payment.gateway_cancel_rate_limited':
+    '{icon:warning} درخواست لغو فاکتور فعلاً توسط تون‌پی پذیرفته نشد، چون تعداد درخواست‌ها از حد مجاز گذشته بود. فاکتور هنوز لغو نشده است. اگر قصد پرداخت ندارید، چند دقیقه بعد دوباره «❌ لغو فاکتور» را بزنید. اگر مبلغی واریز کرده‌اید، لغو نکنید و رسید را بفرستید. لطفاً دوباره پرداخت نکنید.\n\nکد پیگیری پرداخت: {reference}',
   // R11 A8: a cancel tap on an invoice Nexa already knows was cancelled.
   'bot.payment.gateway_cancel_already_cancelled':
     '{icon:info} فاکتور قبلاً لغو شده است و دیگر قابل پرداخت نیست. برای پرداخت می‌توانید دوباره اقدام کنید.\n\nکد پیگیری پرداخت: {reference}',
