@@ -44,6 +44,9 @@ export const GLOBAL_SEARCH_KIND_PERMISSIONS: Readonly<
   CUSTOMER: ['users.view', 'users.search'],
   ORDER: ['orders.view'],
   SERVICE: ['services.view'],
+  // R12 F3 item 8: the payments list's and the tickets inbox's own permissions.
+  PAYMENT: ['payments.view'],
+  TICKET: ['tickets.view'],
 };
 
 export interface GlobalSearchSourceResult {

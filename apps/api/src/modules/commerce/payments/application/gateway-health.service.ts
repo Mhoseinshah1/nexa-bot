@@ -357,4 +357,5 @@ const ZERO_COUNTS: PaymentOpsQueueCounts = {
   PROVIDER_ERROR: 0,
   REFUND_RELATED: 0,
   NEEDS_ACTION: 0,
+  RECEIPT_REVIEW: 0,
 };

@@ -97,6 +97,13 @@ each a way to credit money nobody approved:
 - **A create whose answer was lost is never retried and never re-keyed.** The send is
   stamped before the call; only the provider's own `RATE_LIMIT_EXCEEDED` clears it.
 
+**Card-to-card receipt review happens in BOTH places** (owner, R12 F3 item 8, reversing Payment File
+02 §10). The Web Admin approves, rejects or credits to the wallet through the SAME application
+methods Telegram uses (`confirmManualTransfer`, `rejectManualTransfer`,
+`ReceiptDispositionService.creditToWallet`): no second settlement path; `receipts.review` (the
+credit also `users.wallet.credit`); approve asks first. A decision in one place excludes a decision
+in the other.
+
 **A TonPays Telegram cancel whose answer was lost is not a cancellation** (owner, Round 11 A8).
 While the invoice is open as far as Nexa knows, «❌ لغو فاکتور» stays and the customer may ask
 again — a new request row, one in flight at a time, spaced from the lost one; Nexa never repeats

@@ -63,7 +63,16 @@ export function navCountersFrom(response: NavCountersResponse): NavCounters {
   // A ticket waiting for support is something to act on: the demo's yellow badge, not a grey one.
   one('tickets', c.ticketsAwaitingSupport, 'warn');
   one('panels', c.unhealthyPanels, 'danger');
-  one('payments', c.paymentsUnknown, 'warn');
+  // Two things wait on an operator at /payments: UNKNOWN outcomes and card-to-card receipts to
+  // decide (R12 F3 item 8). The badge is their sum; a counter at its cap makes the sum a floor.
+  if (c.paymentsUnknown !== null || c.receiptsAwaitingReview !== null) {
+    put(
+      'payments',
+      (c.paymentsUnknown ?? 0) + (c.receiptsAwaitingReview ?? 0),
+      'warn',
+      capped(c.paymentsUnknown) || capped(c.receiptsAwaitingReview),
+    );
+  }
   // Roadmap B6: support handoffs — a person must answer, the AI has stood down.
   one('business-chats', c.businessHandoffs, 'warn');
   if (c.unreconciledServices !== null || c.refundRequestsAwaiting !== null) {
