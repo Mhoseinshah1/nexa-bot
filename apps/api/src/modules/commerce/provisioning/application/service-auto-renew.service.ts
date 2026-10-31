@@ -720,6 +720,17 @@ export class ServiceAutoRenewService {
         { idempotencyKey: `${stem}:settle`, orderId: confirmed.id },
         {
           ...AUTO_RENEW_WALLET_SETTLEMENT,
+          /*
+           * R12 F1 (Codex on #360): the service's row FIRST, before the settlement takes any
+           * other lock, and the service checked under it — still ACTIVE, still the run's owner's,
+           * the period unchanged. Held to the commit, so a TERMINATE, a SUSPEND or a transfer
+           * waits for this renewal to be decided instead of committing beside it.
+           */
+          beforeSettlement: async (tx) => {
+            if (!(await this.deps.repository.periodCurrent(scope, run.id, tx))) {
+              throw periodGone('PERIOD_MOVED');
+            }
+          },
           inTransaction: async (tx, done) => {
             /*
              * Decided again WHERE THE MONEY MOVES: the switch, the owner's consent and its

@@ -58,6 +58,7 @@ import {
 import type {
   AdminId,
   OrderId,
+  OrderPurpose,
   TemplateKey,
   ProductDisplay,
   AuditWriter,
@@ -3648,6 +3649,16 @@ export function createContainer(
   );
   const deliveryQrPreview = new QrTemplatePreviewService(guard, deliveryQrRenderer);
 
+  /** R12 F1 item 3: the service a refund of this order concerns — the purchase's, or the renewal's. */
+  const refundServiceIdOf = async (
+    scope: TenantContext,
+    input: { readonly orderId: OrderId; readonly purpose: OrderPurpose },
+    tx: TransactionScope,
+  ): Promise<string | null> =>
+    input.purpose === 'RENEW'
+      ? ((await commercialActionRepository.findByOrderId(scope, input.orderId, tx))?.serviceId ??
+        null)
+      : ((await serviceRepository.findByOrderId(scope, input.orderId, tx))?.id ?? null);
   const refundService = new RefundService({
     cashback: cashbackService,
     referrals: referralCommissionService,
@@ -3700,13 +3711,23 @@ export function createContainer(
      */
     serviceSuspension: {
       suspendForFullRefund: async (scope, actor, input, now, tx) => {
-        const serviceId =
-          input.purpose === 'RENEW'
-            ? ((await commercialActionRepository.findByOrderId(scope, input.orderId, tx))
-                ?.serviceId ?? null)
-            : ((await serviceRepository.findByOrderId(scope, input.orderId, tx))?.id ?? null);
+        const serviceId = await refundServiceIdOf(scope, input, tx);
         if (serviceId === null) {
           return { outcome: 'NOT_PLANNED', serviceId: null, reason: 'NO_SERVICE' };
+        }
+        /*
+         * Codex on #360: the service's ROW, the lock a transfer holds from its first statement
+         * to its commit — taken WITHOUT waiting. Held, it serialises this refund with any
+         * transfer: one committed before is seen (the owner `planStatusWithin` re-reads below,
+         * under this lock, is the one that holds), and none can commit before this refund does.
+         * Not waiting is what keeps it from a lock cycle: this transaction already holds the
+         * payment (and on a wallet refund the customer), and a transfer, a refund request's
+         * filing or its approval take the row first and the payment or the customer after. A
+         * row someone else holds right now is left alone and the audit says so (`SERVICE_BUSY`):
+         * an operator suspends it by hand rather than the refund guessing whose it is.
+         */
+        if (!(await serviceRepository.tryLockForUpdate(scope, serviceId, tx))) {
+          return { outcome: 'NOT_PLANNED', serviceId, reason: 'SERVICE_BUSY' };
         }
         const planned = await provisioningService.planStatusWithin(
           scope,

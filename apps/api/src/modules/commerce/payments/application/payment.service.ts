@@ -173,6 +173,15 @@ export interface WalletSettlementAuthority {
     tx: TransactionScope,
     settled: { readonly payment: PaymentRecord; readonly order: OrderRecord },
   ) => Promise<void>;
+  /**
+   * R12 F1 (Codex on #360): run FIRST in the settling transaction, before any other lock —
+   * the automatic renewal locks the service's ROW here and refuses a service that is no longer
+   * the claimed one. First, because every planner that locks a service takes its row before
+   * the lifecycle lock (`ProvisioningService.planWithin`, the transfer, a refund request's
+   * approval); taken after this settlement's lifecycle lock it was a lock cycle with a
+   * TERMINATE being planned. A throw rolls everything back: nothing was debited yet.
+   */
+  readonly beforeSettlement?: (tx: TransactionScope) => Promise<void>;
 }
 
 export const CUSTOMER_WALLET_SETTLEMENT: WalletSettlementAuthority = {
@@ -1045,6 +1054,8 @@ export class PaymentService {
       denial,
       async (tx) => {
         await this.assertScopeActive(scope, tx);
+        // R12 F1: the caller's own first lock (the renewal's service row), before every other.
+        if (authority.beforeSettlement !== undefined) await authority.beforeSettlement(tx);
 
         /*
          * A wallet payment and an open transfer cannot both settle this order (P2, D2).

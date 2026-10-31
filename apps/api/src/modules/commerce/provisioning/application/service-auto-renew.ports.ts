@@ -171,6 +171,8 @@ export interface AutoRenewRepository {
    * lock: false once any renewal has moved the deadline since the claim — and (R12 F1 item 4)
    * false unless the service, read with its row LOCKED, is still `ACTIVE` and still the run's
    * owner's. A service terminated, suspended or transferred since the claim is never debited.
+   * The renewal asks it FIRST in the settling transaction (row before the lifecycle lock, the
+   * order every planner takes them in) and again after the debit.
    */
   periodCurrent(scope: TenantContext, runId: string, tx: TransactionScope): Promise<boolean>;
 

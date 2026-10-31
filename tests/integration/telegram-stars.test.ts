@@ -1236,6 +1236,108 @@ describe('Telegram Stars (Package A)', () => {
       expect(await ledger()).toEqual([]);
     });
 
+    /*
+     * Codex on #360 (1a): a refund that arrives WHILE the charge is being recorded. The record
+     * holds the invoice's row lock; the refund waits for it, then sees the charge and marks it,
+     * so the settlement that follows the record never settles it.
+     */
+    it('a refund arriving while its charge is being recorded waits for it, and the charge never settles', async () => {
+      await enableStars();
+      const { attempt, invoice, stars } = await invoicedTopup();
+      const invoices = new DrizzleGatewayInvoiceRepository(api.container.database.db);
+      let recordLocked!: () => void;
+      const locked = new Promise<void>((resolve) => (recordLocked = resolve));
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      // `recordSuccessfulPayment`'s own steps: the row lock, then the charge, then the commit.
+      const recording = api.container.uow.run(tenantA, async (tx) => {
+        await invoices.lockByProviderOrderId(
+          tenantA,
+          'TELEGRAM_STARS',
+          invoice.provider_order_id,
+          tx,
+        );
+        recordLocked();
+        await gate;
+        await invoices.recordCharge(
+          tenantA,
+          attempt.payment.id as PaymentId,
+          { chargeId: 'charge-r5', status: 'successful_payment', dueAt: new Date() },
+          new Date(),
+          tx,
+        );
+      });
+      await locked;
+      let answered = false;
+      const refund = refundedPayment(invoice.provider_order_id, stars, 'charge-r5').then(
+        (value) => {
+          answered = true;
+          return value;
+        },
+        (error: unknown) => {
+          answered = true;
+          throw error;
+        },
+      );
+      const waiting = async () =>
+        (
+          await rows<{ n: number }>(sql`SELECT count(*)::int AS n FROM pg_stat_activity
+                          WHERE datname = current_database() AND wait_event_type = 'Lock'`)
+        )[0]?.n ?? 0;
+      for (let i = 0; i < 200 && !answered && (await waiting()) === 0; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      release();
+      await recording;
+      expect((await refund).statusCode).toBeLessThan(300);
+
+      // The success's own settlement, straight after its record, and the worker after it.
+      expect(
+        await api.container.gatewayPayments.settleRecorded(
+          tenantA,
+          attempt.payment.id as PaymentId,
+        ),
+      ).toBe('NOT_RECORDED');
+      await worker();
+      expect(await paymentState(attempt.payment.id)).toBe('PENDING');
+      expect(await ledger()).toEqual([]);
+      expect(await invoiceOf(attempt.payment.id)).toMatchObject({
+        provider_charge_id: 'charge-r5',
+        provider_paid: false,
+      });
+      expect((await refundedAlerts())[0]?.context).toMatchObject({ reason: 'REFUNDED_UNSETTLED' });
+    });
+
+    /*
+     * Codex on #360 (1b): the refund arrives BEFORE its charge was ever recorded (the
+     * `successful_payment` failed to record and Telegram delivers it again later). The refund
+     * records the charge as refunded; the redelivered success settles nothing.
+     */
+    it('a refund that arrives before its charge was recorded is kept, and the redelivered success never settles', async () => {
+      await enableStars();
+      const { attempt, invoice, stars } = await invoicedTopup();
+
+      await refundedPayment(invoice.provider_order_id, stars, 'charge-r6');
+      expect(await invoiceOf(attempt.payment.id)).toMatchObject({
+        provider_charge_id: 'charge-r6',
+        provider_paid: false,
+      });
+      expect((await refundedAlerts())[0]?.context).toMatchObject({
+        reason: 'REFUNDED_BEFORE_RECORDED',
+        paymentState: 'PENDING',
+      });
+      expect((await refundAudits(attempt.payment.id))[0]?.after).toMatchObject({
+        chargeRecordedByRefund: true,
+      });
+
+      const redelivered = await successfulPayment(invoice.provider_order_id, stars, 'charge-r6');
+      expect(redelivered.statusCode).toBeLessThan(300);
+      await worker();
+      expect(await paymentState(attempt.payment.id)).toBe('PENDING');
+      expect(await ledger()).toEqual([]);
+      expect((await invoiceOf(attempt.payment.id)).outcome).not.toBe('SETTLED');
+    });
+
     it('a refund for a charge no attempt holds is reported and marks nothing; a malformed one too', async () => {
       await enableStars();
       const { attempt, invoice, stars } = await invoicedTopup();
