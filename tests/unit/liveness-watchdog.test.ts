@@ -6,6 +6,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startHeartbeat } from '../../apps/api/src/infrastructure/lifecycle/heartbeat';
 import { LIVENESS_WATCHDOG_THREAD_SOURCE } from '../../apps/api/src/infrastructure/lifecycle/liveness-watchdog';
 import { configSchema } from '../../apps/api/src/infrastructure/config/config.schema';
+import {
+  ProvisionerLoop,
+  STALE_TICK_MULTIPLE,
+} from '../../apps/api/src/modules/commerce/provisioning/application/provisioner-loop';
+import type { ProvisionerService } from '../../apps/api/src/modules/commerce/provisioning/application/provisioner.service';
+import type { DeliveryService } from '../../apps/api/src/modules/commerce/provisioning/application/delivery.service';
+import type { OperationOutcomeAnnouncer } from '../../apps/api/src/modules/commerce/messaging/application/operation-outcome-announcer';
 
 /**
  * R12 F2 item 3: a role that is alive but no longer working leaves, so Docker restarts it.
@@ -158,6 +165,115 @@ describe('the liveness watchdog', () => {
       neverHealthy.stop();
       off.stop();
     }
+  });
+
+  it('Codex P1 on #359: a provisioner in a slow call inside its allowance is busy, not hung', async () => {
+    const TICK = 5_000;
+    const ALLOWANCE = 120_000;
+    const clock = { now: 1_000_000 };
+    let release: (() => void) | null = null;
+    let hang = false;
+    const ok = { settleDue: async () => 0 };
+    const loop = new ProvisionerLoop(
+      {
+        runOnce: async () => {
+          if (hang) await new Promise<void>((resolve) => (release = resolve));
+          return { kind: 'IDLE' };
+        },
+      } as unknown as ProvisionerService,
+      { deliverDue: async () => undefined } as unknown as DeliveryService,
+      {
+        announce: async () => undefined,
+        announceDue: async () => undefined,
+      } as unknown as OperationOutcomeAnnouncer,
+      {
+        scope: () => ({ tenantId: 't', botInstanceId: null }) as never,
+        cashback: ok,
+        referrals: ok,
+        serviceRefunds: ok,
+        tickMs: TICK,
+        inFlightAllowanceMs: ALLOWANCE,
+        now: () => clock.now,
+        logger: { info: () => undefined, error: () => undefined },
+      },
+    );
+    await loop.tick();
+    hang = true;
+    const inFlight = loop.tick();
+
+    const exits: number[] = [];
+    // The provisioner role's own verdict (main.provisioner.ts): unready, but alive.
+    const heartbeat = startHeartbeat({
+      path: join(dir, 'provisioner'),
+      intervalMs: 30,
+      now: () => Date.now(),
+      logger,
+      exitAfterMissed: 3,
+      exit: (code) => exits.push(code),
+      check: async () => ({
+        healthy: loop.iterationIsFresh(clock.now),
+        alive: loop.isWorking(clock.now),
+      }),
+    });
+    try {
+      // 100 s into a call allowed 120 s: far past readiness's 15 s window, and the watchdog's
+      // own 90 ms of silence elapses several times over — no exit.
+      clock.now += 100_000;
+      expect(loop.iterationIsFresh(clock.now)).toBe(false);
+      await wait(400);
+      expect(exits).toEqual([]);
+      // Past the call's own allowance and the window: a hang, and the role leaves.
+      clock.now += TICK * STALE_TICK_MULTIPLE + ALLOWANCE;
+      expect(loop.isWorking(clock.now)).toBe(false);
+      await wait(600);
+      expect(exits[0]).toBe(1);
+    } finally {
+      heartbeat.stop();
+      hang = false;
+      (release as (() => void) | null)?.();
+      await inFlight;
+    }
+  });
+
+  it('busy-but-alive writes no heartbeat file (readiness unchanged) and touches the watchdog', async () => {
+    let first = true;
+    const exits: number[] = [];
+    const path = join(dir, 'busy');
+    const heartbeat = startHeartbeat({
+      path,
+      intervalMs: 30,
+      now: () => Date.now(),
+      logger,
+      exitAfterMissed: 3,
+      exit: (code) => exits.push(code),
+      check: async () => {
+        const answer = first ? true : { healthy: false, alive: true };
+        first = false;
+        return answer;
+      },
+    });
+    try {
+      await wait(20);
+      const written = readFileSync(path, 'utf8');
+      await wait(400);
+      expect(readFileSync(path, 'utf8')).toBe(written);
+      expect(exits).toEqual([]);
+    } finally {
+      heartbeat.stop();
+    }
+  });
+
+  it('every role states its liveness: provisioner in flight, monitor and worker with slack', () => {
+    expect(readFileSync('apps/api/src/main.provisioner.ts', 'utf8')).toContain(
+      'alive: container.provisionerLoop.isWorking(now)',
+    );
+    expect(readFileSync('apps/api/src/main.monitor.ts', 'utf8')).toContain(
+      'alive: container.panelMonitor.iterationIsFresh(now - container.panelExchangeAllowanceMs)',
+    );
+    expect(readFileSync('apps/api/src/main.worker.ts', 'utf8')).toMatch(
+      /alive: stalledLoops\(loopsAt\(now - config\.HEARTBEAT_LIVENESS_ALLOWANCE_MS\)\)/,
+    );
+    expect(configSchema.shape.HEARTBEAT_LIVENESS_ALLOWANCE_MS.parse(undefined)).toBe(600_000);
   });
 
   it('KILLS a process whose main thread is blocked and cannot act on the request', async () => {

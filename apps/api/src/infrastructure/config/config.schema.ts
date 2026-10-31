@@ -291,6 +291,17 @@ export const configSchema = z
      * its two renames. 0 turns it off (the file only goes stale, as before).
      */
     HEARTBEAT_EXIT_AFTER_MISSED: z.coerce.number().int().min(0).max(100).default(3),
+    /**
+     * R12 F2 (Codex P1 on #359): how much longer than its readiness window a WORKER loop may
+     * go without completing a tick before the liveness watchdog treats it as hung. A tick
+     * records progress only when it finishes, so a long legitimate one must not be killed.
+     */
+    HEARTBEAT_LIVENESS_ALLOWANCE_MS: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(86_400_000)
+      .default(600_000),
 
     /**
      * How long a graceful shutdown may take before the process leaves anyway.

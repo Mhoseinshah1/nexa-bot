@@ -23,8 +23,17 @@ import { startLivenessWatchdog, type LivenessWatchdog } from './liveness-watchdo
 export interface HeartbeatOptions {
   readonly path: string;
   readonly intervalMs: number;
-  /** A real check of the worker's ability to do its job. Must not throw. */
-  readonly check: () => Promise<boolean>;
+  /**
+   * A real check of the role's ability to do its job. Must not throw.
+   *
+   * A boolean answers both questions at once. The object form separates them (R12 F2,
+   * Codex P1 on #359): `healthy` writes the file the container check reads, as before;
+   * `alive` is what the liveness watchdog is told. A role whose loop is legitimately busy
+   * — a provider call inside its own deadline, a long tick still making progress — is not
+   * healthy (its readiness says so, and the operator can see it) but it is ALIVE, and must
+   * not be killed mid-operation. Only a role that is not even alive misses its beat.
+   */
+  readonly check: () => Promise<boolean | HeartbeatVerdict>;
   readonly now: () => number;
   readonly logger: Logger;
   /**
@@ -37,6 +46,13 @@ export interface HeartbeatOptions {
   readonly role?: string;
   /** How the process leaves when the watchdog asks. `process.exit` unless a test injects. */
   readonly exit?: (code: number) => void;
+}
+
+export interface HeartbeatVerdict {
+  /** Write the heartbeat file: the container reports healthy. */
+  readonly healthy: boolean;
+  /** Tell the liveness watchdog this role is still working. Implied by `healthy`. */
+  readonly alive: boolean;
 }
 
 export interface Heartbeat {
@@ -63,12 +79,20 @@ export function startHeartbeat(options: HeartbeatOptions): Heartbeat {
 
   const beat = async (): Promise<boolean> => {
     let ok = false;
+    let alive = false;
     try {
-      ok = await options.check();
+      const verdict = await options.check();
+      ok = typeof verdict === 'boolean' ? verdict : verdict.healthy;
+      alive = typeof verdict === 'boolean' ? verdict : verdict.healthy || verdict.alive;
     } catch (error) {
       options.logger.warn({ err: String(error) }, 'worker heartbeat check failed');
     }
-    if (!ok || stopped) return false;
+    if (stopped) return false;
+    // Busy but alive: no file (readiness reports it), and no exit either.
+    if (!ok) {
+      if (alive) watchdog?.touch();
+      return false;
+    }
     try {
       writeHeartbeat(options.path, options.now());
       watchdog?.touch();
