@@ -65,6 +65,8 @@ export const OPERATIONAL_EVENT_MESSAGES_FA: Readonly<Record<string, string>> = {
     'پرداخت تأییدشدهٔ درگاه تسویه نشد؛ چیزی اعتبار داده نشد و دوباره بررسی می‌شود.',
   'payments.gateway_charge_unmatched':
     'پرداخت تلگرام (ستاره) به هیچ تلاشی وصل نشد؛ چیزی تسویه نشد.',
+  'payments.gateway_charge_refunded':
+    'تلگرام یک پرداخت ستاره را به مشتری برگرداند. پرداخت «بازپرداخت‌شده» علامت خورد؛ سرویس و کیف پول خودکار تغییر نکردند و مدیر باید تعیین تکلیف کند.',
   'internal.unhandled': 'یک درخواست API با خطای داخلی ناموفق شد.',
   'settings.stored_value_invalid':
     'مقدار ذخیره‌شدهٔ یک تنظیم با تعریفش نمی‌خواند؛ مقدار پیش‌فرض اعمال است.',

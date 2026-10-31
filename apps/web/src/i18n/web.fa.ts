@@ -8010,6 +8010,7 @@ export const WEB_FA = {
   'web.nc_t_late_completion': 'پرداختی پس از مهلت تأیید شد',
   'web.nc_t_identity_mismatch': 'هویت پرداخت با سفارش نمی‌خواند',
   'web.nc_t_charge_unmatched': 'پرداختی بدون فاکتور مطابق دریافت شد',
+  'web.nc_t_charge_refunded': 'پرداخت ستارهٔ تلگرام بازپرداخت شد',
   'web.nc_t_receipt_push_failed': 'رسید در انتظار بررسی به بررسی‌کننده‌ها نرسید',
   'web.nc_t_refund_push_failed': 'درخواست بازگشت وجه به مدیران نرسید',
   'web.nc_t_gateway_misconfigured': 'درگاه پرداخت درست پیکربندی نشده است',

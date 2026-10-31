@@ -98,6 +98,7 @@ export const OPERATIONAL_EVENT_LABELS_FA: Readonly<Record<string, string>> = {
   'payments.gateway_card_change_unknown': 'نتیجهٔ تغییر کارت درگاه نامعلوم است',
   'payments.gateway_request_unknown': 'نتیجهٔ لغو یا بازگشت وجه درگاه نامعلوم است',
   'payments.gateway_charge_unmatched': 'پرداخت درگاه با سفارشی جور نشد',
+  'payments.gateway_charge_refunded': 'پرداخت ستارهٔ تلگرام بازپرداخت شد',
   'payments.gateway_configured': 'درگاه پرداخت درست تنظیم شد',
   'payments.gateway_create_unknown': 'نتیجهٔ ساخت پرداخت در درگاه نامعلوم است',
   'payments.gateway_identity_mismatch': 'هویت درگاه با تنظیمات نمی‌خواند',

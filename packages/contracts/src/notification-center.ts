@@ -200,6 +200,13 @@ export const NOTIFICATION_RULES: readonly NotificationRule[] = [
     link: 'PAYMENTS',
     minSeverity: 'WARN',
   },
+  // R12 F1 item 6: a Stars charge Telegram refunded — money that left outside the ledger.
+  {
+    code: 'payments.gateway_charge_refunded',
+    category: 'PAYMENTS',
+    link: 'PAYMENT',
+    minSeverity: 'WARN',
+  },
   // Reviewers were not told about a receipt, or a refund request, waiting for them.
   {
     code: 'payments.receipt_push_failed',
