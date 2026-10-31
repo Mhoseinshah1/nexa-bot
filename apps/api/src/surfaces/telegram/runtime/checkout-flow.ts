@@ -27,11 +27,12 @@ import {
   CANCEL_ORDER_ASK_CALLBACK_PREFIX,
   GATEWAY_ROUTE_PAY_CALLBACK_PREFIX,
   MANUAL_PAY_CALLBACK_PREFIX,
+  INPUT_BACK_CALLBACK_PREFIX,
   PAY_METHODS_CLOSE_CALLBACK_PREFIX,
   WALLET_PAY_CALLBACK_PREFIX,
 } from './callbacks.js';
 import { mainMenuButton } from './keyboards.js';
-import { endedOrderScreen, orderEndedRefusal } from './order-end-flow.js';
+import { endedOrderScreen, liveOrderInReview, orderEndedRefusal } from './order-end-flow.js';
 import { refusal } from './refusals.js';
 import type { PendingReply } from './replies.js';
 import { gatewayAttemptScreen, payMethodsButton, topupButton } from './payment-screens.js';
@@ -82,6 +83,16 @@ function gatewayRefusal(error: unknown): PendingReply {
     return gatewayUnavailable();
   }
   return refusal(error);
+}
+
+/**
+ * R12 F3 item 7: «🔙 بازگشت به پیش‌فاکتور» under the wallet shortfall — after the customer tops
+ * up (the top-up is its own flow), the way back to the order they were paying is one tap, not a
+ * hunt through the chat. The same `ib:` route as the typed-input prompts: it closes any open
+ * text window and draws the order's current screen; it pays nothing.
+ */
+export function preinvoiceBackButton(orderId: string): CustomerButton {
+  return { ...inlineLabel('order.input_back'), data: `${INPUT_BACK_CALLBACK_PREFIX}${orderId}` };
 }
 
 /**
@@ -168,7 +179,7 @@ export async function walletPayment(
       return {
         key: 'bot.wallet.insufficient',
         values: { shortfall: paid.shortfall },
-        buttons: [topupButton(), mainMenuButton()],
+        buttons: [topupButton(), preinvoiceBackButton(orderId), mainMenuButton()],
         orderId,
         // R2: its own message, so the pre-invoice stays payable after a top-up.
         wizard: WALLET_SHORT,
@@ -205,7 +216,7 @@ export async function walletPayment(
         return {
           key: 'bot.wallet.insufficient',
           values: { shortfall },
-          buttons: [topupButton(), mainMenuButton()],
+          buttons: [topupButton(), preinvoiceBackButton(orderId), mainMenuButton()],
           orderId,
           wizard: WALLET_SHORT,
         };
@@ -295,6 +306,9 @@ export async function paymentMethods(
     // R11 A11: an order that ended (expired, cancelled) shows its ended screen in place.
     const ended = endedOrderScreen(rt, order);
     if (ended !== null) return ended;
+    // R12 F3 item 9: past its deadline only because a payment is still live — not payable again.
+    const review = await liveOrderInReview(rt, scope, actor, customer, order);
+    if (review !== null) return review;
     if (order.state !== 'DRAFT' && order.state !== 'AWAITING_PAYMENT') {
       return {
         key: 'bot.order.not_awaiting_payment',

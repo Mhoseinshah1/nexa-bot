@@ -105,6 +105,18 @@ export const BOT_INTENTS = [
    */
   'REFERRAL_INVITE',
   'ORDER_CANCEL_ASK',
+  /* R12 F3 item 7: the wallet's last movements, a page at a time (`wh:` + optional keyset token). */
+  'WALLET_HISTORY',
+  /*
+   * R12 F3 item 2: leaving a typed-input prompt. INPUT_BACK names the order whose pre-invoice
+   * is drawn again; INPUT_CANCEL goes to the main menu; CUSTOM_SERVICE_BACK to the locations.
+   * Each closes the customer's open text window first and writes nothing else.
+   */
+  'INPUT_BACK',
+  /* R12 F3 item 9: the status of the live payment an order past its deadline is waiting on. */
+  'ORDER_PAYMENT_STATUS',
+  'INPUT_CANCEL',
+  'CUSTOM_SERVICE_BACK',
   'ORDER_CANCEL',
   'SERVICES',
   /*

@@ -822,6 +822,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       // Package D: the custom-service flow, from the catalogue button to its refusals.
       'bot.custom_service.ask_days',
       'bot.custom_service.ask_volume',
+      // R12 F3: «بازگشت به مکان‌ها» under the volume and days questions; re-opens the location list (`ik:`) and names no pre-invoice that does not exist yet.
+      'bot.custom_service.back_button',
       'bot.custom_service.button',
       'bot.custom_service.days_unpriced',
       'bot.custom_service.invalid_days',
@@ -871,8 +873,16 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.order.cancelled_screen',
       'bot.order.expired',
       'bot.order.expired_screen',
+      // R12 F3: «بازگشت به پیش‌فاکتور» (`ib:`) re-draws the order’s current screen and closes the text window; pays nothing.
+      'bot.order.input_back_button',
+      // R12 F3: «انصراف» (`iz:`) closes the text window and answers the main menu; moves nothing.
+      'bot.order.input_cancel_button',
       'bot.order.main_menu_button',
       'bot.order.not_awaiting_payment',
+      // R12 F3 (OQ-R11-A11-04): a pay tap on an order past its deadline whose payment is still live. Reviewed: says only that the payment is being checked, tells the customer NOT to pay again and that the result comes in the bot — all true on this head (the sweep keeps such an order; the notification lane answers when the review ends). Offers a status button and the main menu; promises no outcome.
+      'bot.order.payment_in_review',
+      // R12 F3: «وضعیت پرداخت» (`os:`) draws the live payment’s own screen or repeats the review sentence; creates and pays nothing.
+      'bot.order.payment_status_button',
       'bot.order.reorder_button',
       'bot.order.settled',
       'bot.order.terms_changed',
@@ -930,6 +940,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.gateway_cancel_button',
       'bot.payment.gateway_cancel_confirm',
       'bot.payment.gateway_cancel_confirm_button',
+      // R12 F3 item 10: TonPays rate-limited the cancel. Reviewed: says the cancel was NOT processed, the invoice is NOT cancelled, the cancel button may be tapped again later, a receipt should be sent if money was paid, and not to pay again. Claims no automatic retry (none exists for this state).
+      'bot.payment.gateway_cancel_rate_limited',
       'bot.payment.gateway_cancel_requested',
       'bot.payment.gateway_cancel_unknown',
       'bot.payment.gateway_cancelled',
@@ -1009,6 +1021,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.receipt_prompt',
       'bot.payment.receipt_received',
       'bot.payment.received_for_review',
+      // R12 F3: «پرداخت دوباره» under a rejected / expired payment: opens the payment methods (`pm:`) or the top-up menu (`o:`); the tap re-decides whether the order may still be paid.
+      'bot.payment.retry_button',
       /*
        * Rialit (`docs/rialit-gateway-audit.md`): the two create refusals (the payable outside
        * Rialit's range, refused before any call; a misconfiguration — both sides charging a fee
@@ -1305,6 +1319,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.wallet.gift_card_redeemed',
       'bot.wallet.gift_card_rejected',
       'bot.wallet.gift_card_unavailable',
+      // R12 F3: «تراکنش‌ها» (`wh:`) opens the read-only list of the wallet’s last movements.
+      'bot.wallet.history_button',
       'bot.wallet.insufficient',
       'bot.wallet.negative_balance',
       // Owner spec §2.2: a button label under a wallet credit, opening the wallet screen.

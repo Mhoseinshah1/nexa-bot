@@ -416,7 +416,8 @@ describe('a customer pays through the approved screens', () => {
       const result = await handle(tap(`w:${orderId}`));
       expect(result.replyKey).toBe('bot.wallet.insufficient');
       expect(lastText()).toContain('150,000 تومان');
-      expect(buttonsOf(lastMarkup())).toEqual(['o:', 'mm:']);
+      // R12 F3 item 7: and «🔙 بازگشت به پیش‌فاکتور» for after the top-up.
+      expect(buttonsOf(lastMarkup())).toEqual(['o:', `ib:${orderId}`, 'mm:']);
       const rows = await ctx.container.database.db.execute(
         sql`SELECT state FROM orders WHERE id = ${orderId}`,
       );
@@ -508,7 +509,12 @@ describe('a customer pays through the approved screens', () => {
         /🔖 گروه کاربری: کاربر عادی\n\n📅 تاریخ: 14\d\d\/\d\d\/\d\d\n🕒 ساعت: \d\d:\d\d$/u,
       );
       // R8-C2: no separate «کپی شناسه» button — the id is tap-to-copy in the text above.
-      expect(labelsOf(lastMarkup())).toEqual(['💰 افزایش موجودی', '🏠 بازگشت به منوی اصلی']);
+      // R12 F3 item 7: «📜 تراکنش‌ها» sits before the main menu.
+      expect(labelsOf(lastMarkup())).toEqual([
+        '💰 افزایش موجودی',
+        '📜 تراکنش‌ها',
+        '🏠 بازگشت به منوی اصلی',
+      ]);
       expect(lastMarkup()).not.toContain('copy_text');
       expect(lastMarkup()).not.toContain('کپی شناسه');
     });

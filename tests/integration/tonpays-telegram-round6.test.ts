@@ -1401,6 +1401,8 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
   /** The spacing a retry waits for (`CANCEL_RETRY_BACKOFF_SECONDS`), and a little more. */
   const pastRetrySpacing = () => clock.shift(31_000);
   const UNKNOWN_PHRASE = 'پاسخ تون‌پی به درخواست لغو دریافت نشد';
+  // R12 F3 item 10: a rate-limited cancel is a KNOWN "not processed", told apart from a lost answer.
+  const RATE_LIMITED_PHRASE = 'درخواست لغو فاکتور فعلاً توسط تون‌پی پذیرفته نشد';
 
   it('R11 A8: a lost cancel keeps «❌ لغو فاکتور» on its notice and on the invoice; the retry is a NEW row, held for the spacing, sent ONCE, and cancels', async () => {
     const { paymentId, message } = await cardOnScreen();
@@ -1468,7 +1470,7 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     expect(await requests(paymentId, 'CANCEL')).toHaveLength(2);
   });
 
-  it('R11 A8: a cancel TonPays rate-limited (429 RATE_LIMIT_EXCEEDED) reads as undetermined, keeps the button, and the retry cancels', async () => {
+  it('R11 A8: a cancel TonPays rate-limited (429 RATE_LIMIT_EXCEEDED) says not-cancelled-yet (R12 F3 item 10, not "lost"), keeps the button, and the retry cancels', async () => {
     const { paymentId, message } = await cardOnScreen();
     fake.cancelMode = { code: 'RATE_LIMIT_EXCEEDED', status: 429 };
     await tapOn(message, `gq:${paymentId}`);
@@ -1477,7 +1479,8 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     expect(await requests(paymentId, 'CANCEL')).toMatchObject([
       { state: 'RATE_LIMITED', error_code: 'RATE_LIMIT_EXCEEDED' },
     ]);
-    expect(String(lastOn(message)?.['text'])).toContain(UNKNOWN_PHRASE);
+    expect(String(lastOn(message)?.['text'])).toContain(RATE_LIMITED_PHRASE);
+    expect(String(lastOn(message)?.['text'])).not.toContain(UNKNOWN_PHRASE);
     expect(markupOf(lastOn(message))).toContain(`gq:${paymentId}`);
     fake.cancelMode = 'OK';
     await tapOn(message, `gq:${paymentId}`);

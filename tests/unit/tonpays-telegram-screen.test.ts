@@ -666,15 +666,29 @@ describe('the TonPays Telegram payment screen', () => {
     expect(back.key).toBe('bot.payment.gateway_card_invoice');
     expect(copies(back)).toHaveLength(2);
     expect(data(back)).toContain(`gq:${PAYMENT_ID}`);
-    // A rate-limited cancel (TonPays' 429, or held by the client's own limiter) reads the same,
-    // with the same retry; Nexa's own rate-limited cancel says nothing.
+    // A rate-limited cancel (TonPays' 429, or held by the client's own limiter) keeps the same
+    // retry — but R12 F3 item 10: it is not a LOST answer, so it has its own sentence («not
+    // processed, not cancelled yet, do not pay again»), never «پاسخ تون‌پی دریافت نشد».
+    // Nexa's own rate-limited cancel says nothing.
     const limited = request('CANCEL', 'RATE_LIMITED', {
       decidedAt,
       errorCode: 'nexa.rate_limited_locally',
     });
     const busy = screenOf('pending', withFacts({ latestCancel: limited }));
-    expect(busy.key).toBe('bot.payment.gateway_cancel_unknown');
+    expect(busy.key).toBe('bot.payment.gateway_cancel_rate_limited');
     expect(data(busy)).toEqual([`gq:${PAYMENT_ID}`, `gc:${PAYMENT_ID}`, 'mm:']);
+    const readable = request('CANCEL', 'RATE_LIMITED', {
+      decidedAt,
+      errorCode: 'RATE_LIMIT_EXCEEDED',
+    });
+    expect(screenOf('pending', withFacts({ latestCancel: readable })).key).toBe(
+      'bot.payment.gateway_cancel_rate_limited',
+    );
+    // A genuinely lost answer (UNKNOWN: a timeout, a 5xx, a bare 429) keeps the old sentence.
+    expect(
+      screenOf('pending', withFacts({ latestCancel: request('CANCEL', 'UNKNOWN', { decidedAt }) }))
+        .key,
+    ).toBe('bot.payment.gateway_cancel_unknown');
     const ours = screenOf(
       'pending',
       withFacts({ latestCancel: { ...limited, requestedByNexa: true } }),

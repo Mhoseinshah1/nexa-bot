@@ -1706,7 +1706,8 @@ describe('a customer looks after the services they bought', () => {
 
       const guide = await handle(tap('tu:'));
       expect(guide.replyKey).toBe('bot.tutorial.choose');
-      expect(buttonsOf(lastMarkup())).toEqual([
+      // R12 F3 item 4: the guide's platform choice EDITS the tapped message.
+      expect(buttonsOf(lastDrawnMarkup())).toEqual([
         'to:ANDROID',
         'to:IOS',
         'to:WINDOWS',

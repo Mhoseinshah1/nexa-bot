@@ -733,18 +733,23 @@ export async function serviceFiles(
       return {
         key: 'bot.service.files_rate_limited',
         values: { seconds: result.retryAfterSeconds },
-        buttons: [],
+        buttons: [backToCardButton(serviceId)],
         orderId: null,
       };
     case 'UNAVAILABLE':
-      return { key: 'bot.service.files_unavailable', values: {}, buttons: [], orderId: null };
+      return {
+        key: 'bot.service.files_unavailable',
+        values: {},
+        buttons: [backToCardButton(serviceId)],
+        orderId: null,
+      };
     case 'SENT':
       return result.failed === 0
         ? { key: null, values: {}, buttons: [], orderId: null }
         : {
             key: 'bot.service.files_partial',
             values: { failed: result.failed },
-            buttons: [],
+            buttons: [backToCardButton(serviceId)],
             orderId: null,
           };
     case 'STOPPED':
