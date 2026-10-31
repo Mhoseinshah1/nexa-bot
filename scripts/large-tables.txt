@@ -1,0 +1,65 @@
+# Tables that grow with traffic, for scripts/check-migration-ddl.mjs (R12 F2 item 8).
+#
+# A migration that builds an index on one of these without CONCURRENTLY, or adds a CHECK
+# or FOREIGN KEY constraint without NOT VALID, fails CI unless the statement is annotated
+# `-- nexa:blocking-ddl-ok <reason>`. Add a table here when it can reach hundreds of
+# thousands of rows on a busy installation; never remove one to make a migration pass.
+
+# Event, audit and delivery trails
+audit_logs
+outbox_messages
+processed_messages
+request_idempotency
+operational_events
+notifications
+notification_delivery_attempts
+customer_notifications
+admin_notification_reads
+
+# Customers and their services
+customers
+services
+service_reminders
+provisioning_operations
+customer_tag_assignments
+customer_notes
+customer_direct_messages
+customer_captchas
+terms_acceptances
+
+# Money
+orders
+payments
+wallet_entries
+refunds
+payment_receipts
+gateway_invoices
+gateway_provider_requests
+gateway_invoice_provider_facts
+receipt_captures
+fx_quotes
+order_cashback
+order_referral_commissions
+referrals
+discount_redemptions
+gift_card_codes
+gift_card_redemption_attempts
+
+# Messaging and support
+tickets
+ticket_messages
+broadcast_recipients
+bulk_operation_items
+frozen_audience_members
+business_messages
+business_conversations
+telegram_message_horizons
+telegram_review_messages
+support_ai_runs
+support_ai_jobs
+
+# Imported history
+legacy_import_map
+legacy_history_records
+legacy_invoice_archive
+legacy_invoice_archive_staging

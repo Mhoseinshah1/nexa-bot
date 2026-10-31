@@ -2645,6 +2645,15 @@ operations named in it, not every operation the previous release could perform.
 It is evidence for this transition and a gate for the next one, which is more
 than a documented rule and less than a mechanical guarantee.
 
+**And a new migration may not block a large table (R12 F2).** `pnpm check:boundaries`
+runs `scripts/check-migration-ddl.mjs`: in a migration numbered above `0295`, a
+`CREATE [UNIQUE] INDEX` without `CONCURRENTLY`, or an `ADD CONSTRAINT … CHECK / FOREIGN
+KEY` without `NOT VALID`, on a table listed in `scripts/large-tables.txt` fails CI. The
+index goes to `online-indexes.ts` (below); the constraint is added `NOT VALID` and
+validated separately. A statement that must block anyway carries
+`-- nexa:blocking-ddl-ok <reason>` directly above it, so the exception is written down
+where a reviewer reads it.
+
 **Indexes that must not lock the table they are built on are not migrations.**
 Drizzle runs every pending migration inside one transaction, and PostgreSQL
 refuses `CREATE INDEX CONCURRENTLY` there; an ordinary `CREATE INDEX` takes a
