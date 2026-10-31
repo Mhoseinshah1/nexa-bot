@@ -18,10 +18,15 @@ import { CONTAINER, type Container } from '../../container.js';
 import { perBotWebhookSecret } from '../../modules/platform/tenancy/application/webhook-secret.js';
 import { recordQuietly } from '../../modules/platform/opslog/application/error-events.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
-import { STARS_CHARGE_UNMATCHED_CODE } from '../../modules/commerce/payments/application/telegram-stars-payment.service.js';
 import {
+  STARS_CHARGE_REFUNDED_CODE,
+  STARS_CHARGE_UNMATCHED_CODE,
+} from '../../modules/commerce/payments/application/telegram-stars-payment.service.js';
+import {
+  hasRefundedPayment,
   hasSuccessfulPayment,
   starsPreCheckoutOf,
+  starsRefundedPaymentOf,
   starsSuccessfulPaymentOf,
 } from './stars-updates.js';
 import { opsConnectAttemptOf, opsMembershipChangeOf } from './ops-group-updates.js';
@@ -259,6 +264,29 @@ export class TelegramWebhookController {
         return { ok: true };
       }
       await this.container.starsPayments.recordSuccessfulPayment(scope, botInstance.id, payment);
+      return { ok: true };
+    }
+    /*
+     * R12 F1 item 6: Telegram's `refunded_payment` — a Stars charge refunded outside Nexa. Like
+     * a `successful_payment` it is money that has moved and a fact Telegram tells once: it is
+     * recorded before this returns (a record that throws is a non-2xx, so it is redelivered),
+     * and it never reaches the customer turn. A malformed one is still reported.
+     */
+    if (hasRefundedPayment(update)) {
+      const refunded = starsRefundedPaymentOf(update);
+      if (refunded === null) {
+        await this.container.opsLog.record(scope, {
+          code: STARS_CHARGE_REFUNDED_CODE,
+          severity: 'ERROR',
+          message:
+            'Telegram reported a refunded Stars payment this installation could not read. Find ' +
+            'it in the bot’s Star transactions.',
+          dedupeKey: `${STARS_CHARGE_REFUNDED_CODE}:malformed:${botInstance.id}:${updateId}`,
+          context: { botInstanceId: botInstance.id, updateId, reason: 'MALFORMED' },
+        });
+        return { ok: true };
+      }
+      await this.container.starsPayments.recordRefundedPayment(scope, botInstance.id, refunded);
       return { ok: true };
     }
 

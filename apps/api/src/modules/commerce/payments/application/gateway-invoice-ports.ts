@@ -755,6 +755,30 @@ export interface GatewayInvoiceRepository {
   ): Promise<boolean>;
 
   /**
+   * R12 F1 item 6: Telegram REFUNDED this Stars charge (`refunded_payment`). Marks the invoice
+   * `provider_status = 'refunded_payment'` and `provider_paid = false`, conditional on this very
+   * charge id (or on no charge recorded yet, which then records this one, refunded — Codex on
+   * #360) and on not being marked already — so a charge that has not settled can no longer
+   * settle (nothing recorded is nothing approved), and a redelivered update changes nothing. The payment's own state, the ledger and the order are untouched:
+   * what happens to the service or the wallet is an operator's decision. Returns whether this
+   * call marked it, and what the row said before.
+   */
+  markChargeRefunded(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    chargeId: string,
+    now: Date,
+    tx: unknown,
+  ): Promise<{
+    readonly marked: boolean;
+    readonly before: {
+      readonly providerStatus: string | null;
+      readonly providerPaid: boolean | null;
+      readonly outcome: string | null;
+    } | null;
+  }>;
+
+  /**
    * Claims up to `limit` CREATING rows whose payment is still PENDING, taking a lease.
    * `SKIP LOCKED` plus a conditional lease, so two worker replicas never claim one row.
    */

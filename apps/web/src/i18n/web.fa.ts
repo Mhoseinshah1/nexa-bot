@@ -3667,6 +3667,9 @@ export const WEB_FA = {
    */
   'web.refund_request_hint':
     'مبلغ در سرور و بر پایهٔ همین پرداخت محدود می‌شود؛ رقم این فرم پیشنهاد است. بازگشت به کیف پول در همین لحظه ثبت و اعتبار افزوده می‌شود، اما بازگشت واریز دستی تا زمانی که اپراتور واریز را تأیید نکند «انجام‌شده» به حساب نمی‌آید.',
+  // R12 F1 item 3: said before the operator confirms a refund of a service purchase or renewal.
+  'web.refund_full_suspends_service':
+    'هشدار: اگر با این بازپرداخت کل مبلغ این پرداخت برگردد، سرویسی که این سفارش خریده یا تمدید کرده روی پنل معلق می‌شود (مدیر می‌تواند دوباره فعالش کند). بازپرداخت بخشی از مبلغ سرویس را تغییر نمی‌دهد.',
   'web.refund_amount_minor': 'مبلغ (به کوچک‌ترین یکای پول)',
   'web.refund_amount_all': 'کل باقی‌ماندهٔ قابل بازگشت',
   'web.refund_request': 'ثبت درخواست',
@@ -8013,6 +8016,7 @@ export const WEB_FA = {
   'web.nc_t_late_completion': 'پرداختی پس از مهلت تأیید شد',
   'web.nc_t_identity_mismatch': 'هویت پرداخت با سفارش نمی‌خواند',
   'web.nc_t_charge_unmatched': 'پرداختی بدون فاکتور مطابق دریافت شد',
+  'web.nc_t_charge_refunded': 'پرداخت ستارهٔ تلگرام بازپرداخت شد',
   'web.nc_t_receipt_push_failed': 'رسید در انتظار بررسی به بررسی‌کننده‌ها نرسید',
   'web.nc_t_refund_push_failed': 'درخواست بازگشت وجه به مدیران نرسید',
   'web.nc_t_gateway_misconfigured': 'درگاه پرداخت درست پیکربندی نشده است',

@@ -523,6 +523,31 @@ export interface PaymentRepository {
   ): Promise<readonly PaymentId[]>;
 
   /**
+   * R12 F1: the `CANCEL` edge over the OTHER open link-invoice gateway attempts of an order
+   * that has just settled, in the settling transaction — so a second provider's link is closed
+   * in Nexa (its screen says so, and it is never handed back as an open attempt) instead of
+   * staying payable for an order that can take no more money. Only `providers` (the
+   * inquiry-approved LINK routes): a card-transfer attempt keeps its receipt path, and a Stars
+   * invoice is charged by Telegram, which a cancelled row could not record.
+   *
+   * The same row-local refusals as `cancelPendingForOrder` (a receipt in flight, a signal, a
+   * checkout hold, a provider review), and the rows are locked with SKIP LOCKED: a sibling
+   * whose own settlement holds its row is left to that settlement, which then finds the order
+   * paid and returns the money to the wallet. Money the provider later confirms for a
+   * cancelled attempt is returned to the wallet too (`PaymentService.creditLateGatewayApproval`).
+   */
+  closeOpenGatewaySiblings(
+    scope: TenantContext,
+    input: {
+      readonly orderId: OrderId;
+      readonly exceptPaymentId: PaymentId;
+      readonly providers: readonly PaymentGatewayProvider[];
+    },
+    now: Date,
+    tx: unknown,
+  ): Promise<readonly PaymentId[]>;
+
+  /**
    * The CONFIRMED payment that settled one order, or null.
    *
    * For the lane that discovers, after the fact, that a paid order cannot be
