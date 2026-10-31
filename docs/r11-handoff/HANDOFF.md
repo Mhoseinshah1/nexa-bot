@@ -24,6 +24,11 @@ in the session scratchpad, so if lost, rebuild it from the PR descriptions above
 
 ## Owner decisions this session (binding)
 
+- 2026-10-31 (budget): after Phase 2 merges, STOP — write the Phase 2 report and this handoff,
+  then wait for the owner (the owner runs the MirzaBot cutover first). Until then at most 2
+  implementers at a time. Later: Phase 4 = `NEXA-PROMPT-SAI.md` ONLY (SAI-QUALITY and SAI-GUIDE
+  deferred). Do not start Phase 3 without the owner's go.
+
 - 2026-10-31: ONE GitHub issue «گزارش‌های NEXA-ALL» is the owner's report channel:
   https://github.com/Mhoseinshah1/nexa-bot/issues/358 (reuse it; never open another). At the end
   of EVERY phase, and whenever something is Blocked or an owner decision is needed, post one
