@@ -448,10 +448,15 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     } | null;
   }> {
     const tenantId = requireTenantId(scope);
+    /*
+     * This charge's row — or the attempt's row with NO charge recorded yet (Codex on #360): the
+     * refund then records the charge itself, refunded, and the write-once charge id makes the
+     * later `successful_payment` of the same charge a duplicate of a refunded charge.
+     */
     const identity = and(
       eq(gatewayInvoices.tenantId, tenantId),
       eq(gatewayInvoices.paymentId, paymentId),
-      eq(gatewayInvoices.providerChargeId, chargeId),
+      or(eq(gatewayInvoices.providerChargeId, chargeId), isNull(gatewayInvoices.providerChargeId)),
     );
     // The row as it stood, locked: the evidence the audit row keeps.
     const [current] = await this.exec(tx)
@@ -466,7 +471,12 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     if (current === undefined) return { marked: false, before: null };
     const rows = await this.exec(tx)
       .update(gatewayInvoices)
-      .set({ providerStatus: STARS_REFUNDED_STATUS, providerPaid: false, updatedAt: now })
+      .set({
+        providerChargeId: chargeId,
+        providerStatus: STARS_REFUNDED_STATUS,
+        providerPaid: false,
+        updatedAt: now,
+      })
       .where(
         and(
           identity,
