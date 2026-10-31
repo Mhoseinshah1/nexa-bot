@@ -168,7 +168,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // R6 item 3: the owner's greetings. Every variable is filled at send time from the receiving
   // customer's own data; the «🛒 خرید اشتراک» and «🧪 سرویس تست» names are the main-menu buttons'.
   'bot.start.welcome':
-    'ZED PROXY\n━━━━━━━━━━━━\n{firstName} عزیز، خوش آمدید.\n\n✓ اتصال پایدار با لوکیشن‌های متنوع\n✓ کار با همه اپ‌های داخلی بدون خاموش کردن فیلترشکن\n✓ سرویس تست رایگان قبل از خرید\n✓ پشتیبانی از داخل همین ربات\n\nبرای شروع از منوی پایین «🛒 خرید اشتراک» یا «🧪 سرویس تست» را بزنید.',
+    '{firstName} عزیز، خوش آمدید.\n\n✓ اتصال پایدار با لوکیشن‌های متنوع\n✓ کار با همه اپ‌های داخلی بدون خاموش کردن فیلترشکن\n✓ پشتیبانی از داخل همین ربات\n\nبرای شروع از منوی پایین «🛒 خرید اشتراک» را بزنید.',
   'bot.start.welcome_back':
     '👋 سلام {firstName}، خوش برگشتی\n\n📱 {activeServices} سرویس فعال داری\n{icon:time} نزدیک‌ترین انقضا: {nearestExpiry}\n\nاگه سرویست داره تموم می‌شه، از «📱 سرویس‌های من» همین الان تمدیدش کن تا وسط کار قطع نشی 🔄',
   'bot.blocked': 'دسترسی این حساب به ربات بسته شده است.',
@@ -802,7 +802,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * attempt for ever without anything happening. 4H gives them the step that exists.
    */
   'bot.payment.manual_instructions':
-    'برای پرداخت مبلغ زیر طبق راهنمای فروشنده اقدام کنید و سپس دکمهٔ «پرداخت را انجام دادم» را بزنید.\nمبلغ قابل واریز: {amountRial} ریال\n(معادل {amountToman} تومان)\nکد پیگیری پرداخت: {reference}',
+    'برای پرداخت مبلغ زیر طبق راهنمای فروشنده اقدام کنید و سپس دکمهٔ «📤 ارسال رسید» را بزنید.\nمبلغ قابل واریز: {amountRial} ریال\n(معادل {amountToman} تومان)\nکد پیگیری پرداخت: {reference}',
   /*
    * The invoice layout the owner specified: heading, invoice id, payable amount, then
    * the destination lines, then the instructions.
@@ -973,7 +973,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.rotate_confirm_button': 'بله، لینک جدید بساز',
   // R11 A4 — «فقط فایل، بدون لینک ساب»: none of these carries a link.
   'bot.service.delivered_files_only':
-    '{icon:success} سرویس با موفقیت ایجاد شد\n\n{icon:user} نام کاربری سرویس: {serviceUsername}\n🌿 نام سرویس: {productName}\n{icon:location} لوکیشن: 🚀 {serviceLocation}\n⌛ مدت زمان: {durationDays}\n⏱ حجم سرویس: {trafficBytes}\n\n📂 فایل‌های اتصال شما در پیام‌های بعدی ارسال می‌شود. فایل مخصوص دستگاه خود را در برنامه باز کنید.\n\n🚶 شما میتوانید شیوه اتصال را با فشردن دکمه زیر و\nانتخاب سیستم عامل خود را دریافت کنید',
+    '{icon:success} سرویس با موفقیت ایجاد شد\n\n{icon:user} نام کاربری سرویس: {serviceUsername}\n🌿 نام سرویس: {productName}\n{icon:location} لوکیشن: 🚀 {serviceLocation}\n⌛ مدت زمان: {durationDays}\n⏱ حجم سرویس: {trafficBytes}\n\n📂 فایل‌های اتصال شما در پیام‌های بعدی ارسال می‌شود. فایل مخصوص دستگاه خود را در برنامه باز کنید.\n\n🚶 شما می‌توانید شیوه اتصال را با فشردن دکمهٔ زیر و انتخاب سیستم‌عامل خود دریافت کنید.',
   'bot.service.files_renewed':
     '{icon:success} فایل‌های اتصال سرویس {serviceUsername} با موفقیت تغییر کرد.\nلطفاً فایل‌های جدید را که در پیام‌های بعدی ارسال می‌شود در برنامه خود جایگزین کنید.',
   // R11 A4 — «نوع بارکد»: the one-line captions when a panel shows both QRs.
@@ -1190,7 +1190,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * names neither, and points at the one place a figure is shown.
    */
   'bot.refund.completed':
-    'بازپرداخت شما انجام شد. اگر مبلغ به کیف پول بازگشته باشد، موجودی جدید را با /wallet ببینید.',
+    'بازپرداخت شما انجام شد. اگر مبلغ به کیف پول بازگشته باشد، موجودی جدید را در «💰 کیف پول» ببینید.',
 
   /*
    * Customer UX completion — the owner's approved defaults, verbatim
@@ -1199,7 +1199,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * carry the approved lines exactly as written.
    */
   'bot.service.delivered':
-    '{icon:success} سرویس با موفقیت ایجاد شد\n\n{icon:user} نام کاربری سرویس: {serviceUsername}\n🌿 نام سرویس: {productName}\n{icon:location} لوکیشن: 🚀 {serviceLocation}\n⌛ مدت زمان: {durationDays}\n⏱ حجم سرویس: {trafficBytes}\n\nلینک اتصال:\n<code>{subscriptionUrl}</code>\n\n🚶 شما میتوانید شیوه اتصال را با فشردن دکمه زیر و\nانتخاب سیستم عامل خود را دریافت کنید',
+    '{icon:success} سرویس با موفقیت ایجاد شد\n\n{icon:user} نام کاربری سرویس: {serviceUsername}\n🌿 نام سرویس: {productName}\n{icon:location} لوکیشن: 🚀 {serviceLocation}\n⌛ مدت زمان: {durationDays}\n⏱ حجم سرویس: {trafficBytes}\n\nلینک اتصال:\n<code>{subscriptionUrl}</code>\n\n🚶 شما می‌توانید شیوه اتصال را با فشردن دکمهٔ زیر و انتخاب سیستم‌عامل خود دریافت کنید.',
   'bot.service.delivered_qr_caption':
     '📷 کد QR لینک اتصال شما. جزئیات سرویس در پیام بعدی آمده است.',
   'bot.service.link_qr_caption': '📷 کد QR همین لینک اتصال؛ آن را با برنامهٔ خود اسکن کنید.',
@@ -1267,7 +1267,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.faq.default_5_answer':
     'لوکیشن سرویس شما پس از خرید در کارت سرویس نمایش داده می‌شود. برای اطلاع از لوکیشن‌های هر محصول پیش از خرید، توضیحات محصول را ببینید یا از پشتیبانی بپرسید.',
   'bot.faq.default_6_question': 'چطور باید از این فیلترشکن استفاده کنم؟',
-  'bot.faq.default_6_answer': 'برای آموزش استفاده از برنامه، روی دکمه «📚 آموزش» بزنید.',
+  'bot.faq.default_6_answer':
+    'برای آموزش استفاده از برنامه، روی دکمه «📱 دانلود برنامه و آموزش اتصال» بزنید.',
   'bot.faq.default_7_question': 'فیلترشکن وصل نمیشه، چیکار کنم؟',
   'bot.faq.default_7_answer': 'به همراه یک عکس از پیغام خطایی که میگیرید به پشتیبانی مراجعه کنید.',
   'bot.faq.default_8_question': 'فیلترشکن شما تضمینی هست که همیشه مواقع متصل بشه؟',
@@ -1495,7 +1496,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '{icon:service} سرویس‌های شما\n\nبرای دیدن جزئیات و مدیریت هر سرویس، روی نام کاربری آن بزنید.\nبرای پیدا کردن سریع یک سرویس، از دکمهٔ جستجو در پایین فهرست استفاده کنید.\n\n📄 صفحه {page} از {pages} | کل: {total} سرویس',
   // Batch 01 item 3: the marker is the service's DERIVED status (green serving, red over).
   'bot.service.list_item_button': '{marker} {username}',
-  'bot.service.search_label_button': 'جستجو نام کاربری',
+  'bot.service.search_label_button': 'جستجوی نام کاربری',
   'bot.service.search_button': '🔎 جستجو',
   'bot.service.page_button': '{page}/{pages}',
   'bot.service.prev_page_button': '◀️',
@@ -1522,7 +1523,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.state_unreconciled': '{icon:warning} در حال بررسی',
   'bot.service.traffic_value': '{bytes}',
   'bot.service.traffic_unknown': 'هنوز از سرور خوانده نشده',
-  'bot.service.remaining_value': '{bytes} ({percent}%)',
+  'bot.service.remaining_value': '{bytes} ({percent}٪)',
   'bot.service.remaining_unlimited': 'نامحدود',
   'bot.service.no_expiry': '{icon:date} تاریخ اتمام: بدون محدودیت زمانی',
   'bot.service.last_seen_at': '{at}',
