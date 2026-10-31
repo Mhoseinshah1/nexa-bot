@@ -4891,6 +4891,39 @@ export const paymentReconcileRequestSchema = z.object({
 });
 export type PaymentReconcileRequest = z.infer<typeof paymentReconcileRequestSchema>;
 
+/**
+ * R12 F3 item 8: approving a card-to-card receipt. `confirm: true` is the explicit final
+ * confirmation (the Web Admin asks first), stated in the body so a request that omits it is
+ * refused at the schema rather than executed. The server settles the payment's OWN amount —
+ * nothing the client types decides how much arrives; the note is the reviewer's, optional.
+ */
+export const paymentReceiptApproveRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  confirm: z.literal(true),
+  note: z.string().trim().max(500).optional(),
+});
+export type PaymentReceiptApproveRequest = z.infer<typeof paymentReceiptApproveRequestSchema>;
+
+/** R12 F3 item 8: rejecting one. The reason is MANDATORY — the customer is told it. */
+export const paymentReceiptRejectRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  reason: z.string().trim().min(1).max(500),
+});
+export type PaymentReceiptRejectRequest = z.infer<typeof paymentReceiptRejectRequestSchema>;
+
+/**
+ * R12 F3 item 8: crediting what the reviewer judged arrived to the customer's wallet. The
+ * amount is minor units as a decimal string (bounded by the ledger on the server); `confirm:
+ * true` because it moves money.
+ */
+export const paymentReceiptCreditRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  amountMinor: z.string().regex(/^[0-9]{1,19}$/u),
+  confirm: z.literal(true),
+  note: z.string().trim().max(500).optional(),
+});
+export type PaymentReceiptCreditRequest = z.infer<typeof paymentReceiptCreditRequestSchema>;
+
 /** "Ask the provider again" on an `UNKNOWN` gateway payment: a database write only. */
 export const paymentReinquireRequestSchema = z.object({
   idempotencyKey: z.string().min(8).max(255),
@@ -5250,6 +5283,19 @@ export const PAYMENT_ROUTES = {
   reconcile: (id: string) => `/payments/${encodeURIComponent(id)}/reconcile`,
   /** Bring the next provider inquiry of an `UNKNOWN` gateway payment forward: a row write only. */
   reinquire: (id: string) => `/payments/${encodeURIComponent(id)}/reinquire`,
+  /*
+   * R12 F3 item 8 (owner decision: card-to-card review happens in BOTH places — this reverses
+   * Payment File 02 §10's "Telegram only"). The three dispositions of a card-to-card receipt,
+   * each through the SAME application method the Telegram panel calls
+   * (`PaymentService.confirmManualTransfer`, `rejectManualTransfer`,
+   * `ReceiptDispositionService.creditToWallet`): no parallel settlement, the same permissions
+   * (`receipts.review`; the credit also `users.wallet.credit`), the same audit, the same
+   * idempotency namespace and the same conditional PENDING edge, so a decision taken here and
+   * one taken in Telegram are mutually exclusive and the loser is told which won.
+   */
+  receiptApprove: (id: string) => `/payments/${encodeURIComponent(id)}/receipt/approve`,
+  receiptReject: (id: string) => `/payments/${encodeURIComponent(id)}/receipt/reject`,
+  receiptCredit: (id: string) => `/payments/${encodeURIComponent(id)}/receipt/credit`,
 } as const;
 
 /**
