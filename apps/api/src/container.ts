@@ -78,6 +78,7 @@ import {
   createTranslator,
   DEFAULT_TEMPLATE_PRESENTATION,
   formatDateTime,
+  LEDGER_REASON_LABELS_FA,
   rejectReasonFa,
 } from '@nexa/i18n';
 import type {
@@ -5140,7 +5141,7 @@ export function createContainer(
     terms: orderCustomServiceTermsRepository,
     guard,
   });
-  const customerScreens = new CustomerScreenComposer(templateResolver);
+  const customerScreens = new CustomerScreenComposer(templateResolver, LEDGER_REASON_LABELS_FA);
   /**
    * Package F — a customer hands one of their services to another customer of the tenant.
    * Only ownership moves: no provider is called, and the order, payment and ledger are left

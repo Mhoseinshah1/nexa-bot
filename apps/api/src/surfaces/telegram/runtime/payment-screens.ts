@@ -250,7 +250,9 @@ function cardTransferScreen(
        * tap asks first, and re-decides under the payment's lock).
        */
       const retry =
-        cancelKey === 'bot.payment.gateway_cancel_unknown' && cancelOffered
+        (cancelKey === 'bot.payment.gateway_cancel_unknown' ||
+          cancelKey === 'bot.payment.gateway_cancel_rate_limited') &&
+        cancelOffered
           ? [
               {
                 ...inlineLabel('payment.gateway_cancel'),
@@ -393,13 +395,18 @@ function cancelNoticeKey(
   /*
    * R11 A8: the customer's cancel that TonPays rate-limited did not go through either (one the
    * TonPays client's own limiter HELD is not decided at all: the lane puts it back and sends it
-   * when the key may be used, so it reads "cancelling…" meanwhile). To the customer it is the same
-   * open question as a lost answer (owner: «لغو فاکتور از سمت تون‌پی مشخص نشد»), with the same
-   * way on: the cancel button, which `cancelAvailable` keeps. Nexa's own rate-limited cancel
+   * when the key may be used, so it reads "cancelling…" meanwhile), with the same way on as a
+   * lost answer: the cancel button, which `cancelAvailable` keeps. Nexa's own rate-limited cancel
    * (before a new create) is asked again by Nexa and says nothing here.
+   *
+   * R12 F3 item 10: but it is NOT a lost answer. A readable RATE_LIMIT_EXCEEDED (or a cancel
+   * Nexa's limiter held past the customer window) is the provider's — or our own — definite
+   * "not processed": the answer is known, and `gateway_cancel_unknown` («پاسخ تون‌پی دریافت نشد»)
+   * would say the opposite. Its own sentence: not cancelled yet, may be asked again, do not pay
+   * again. A genuinely lost answer (`UNKNOWN`: timeout, 5xx, a bare 429) keeps the old key.
    */
   if (request.state === 'RATE_LIMITED' && request.requestedByNexa !== true) {
-    return 'bot.payment.gateway_cancel_unknown';
+    return 'bot.payment.gateway_cancel_rate_limited';
   }
   if (request.state === 'REFUSED') {
     const key = customerMessageKeyOfError(request.errorCode);
