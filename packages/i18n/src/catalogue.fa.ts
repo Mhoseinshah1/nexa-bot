@@ -744,6 +744,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.wallet.history_button': '📜 تراکنش‌ها',
   'bot.wallet.history': '📜 تراکنش‌های اخیر کیف پول\n\n{lines}',
   'bot.wallet.history_empty': '📜 هنوز تراکنشی در کیف پول شما ثبت نشده است.',
+  'bot.wallet.history_line_credit': '➕ {amount} | {reason} | {at}',
+  'bot.wallet.history_line_debit': '➖ {amount} | {reason} | {at}',
   'bot.catalog.open_button': '🛒 خرید سرویس',
   'bot.wallet.topup_choose': 'مبلغ شارژ را انتخاب کنید:',
   'bot.wallet.negative_balance':
