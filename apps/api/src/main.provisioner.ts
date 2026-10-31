@@ -106,7 +106,14 @@ async function main(): Promise<void> {
       // must not report itself unhealthy and be restarted for ever by the container
       // runtime — the operator turned it off on purpose. The same rule the monitor has.
       if (!config.PROVISIONER_ENABLED) return true;
-      return container.provisionerLoop.iterationIsFresh(container.clock.now().getTime());
+      const now = container.clock.now().getTime();
+      // R12 F2 (Codex P1 on #359): unready while a long drain runs, as before — but alive
+      // while its in-flight step is inside its allowance, so the watchdog never kills a
+      // provider call that is still within its own deadline.
+      return {
+        healthy: container.provisionerLoop.iterationIsFresh(now),
+        alive: container.provisionerLoop.isWorking(now),
+      };
     },
   });
 

@@ -1548,6 +1548,12 @@ export interface Container {
   readonly delivery: DeliveryService;
   /** The timer that drives it, and the readiness signal that timer earns. */
   readonly provisionerLoop: ProvisionerLoop;
+  /**
+   * The longest one provider exchange may legitimately take: the panel HTTP timeout x
+   * attempts x the most requests a registered provider makes in one exchange. The
+   * provisioner's in-flight allowance and (R12 F2) the monitor's liveness slack.
+   */
+  readonly panelExchangeAllowanceMs: number;
   readonly settingsService: SettingsService;
   readonly settingsResolver: SettingsResolver;
   readonly featureFlags: FeatureFlagsService;
@@ -6843,6 +6849,8 @@ export function createContainer(
     clock,
   });
 
+  const panelExchangeAllowanceMs =
+    config.PANEL_HTTP_TIMEOUT_MS * (1 + PANEL_HTTP_RETRIES) * MAX_REQUESTS_PER_PROBE;
   const provisionerLoop = new ProvisionerLoop(provisioner, deliveryService, outcomeAnnouncer, {
     cards: operationCardEditor,
     cashback: cashbackService,
@@ -6878,8 +6886,7 @@ export function createContainer(
      * requests a registered provider makes in one exchange — so a call still inside its
      * own deadline is never reported as a stalled provisioner.
      */
-    inFlightAllowanceMs:
-      config.PANEL_HTTP_TIMEOUT_MS * (1 + PANEL_HTTP_RETRIES) * MAX_REQUESTS_PER_PROBE,
+    inFlightAllowanceMs: panelExchangeAllowanceMs,
     now: () => clock.now().getTime(),
     logger,
   });
@@ -8627,6 +8634,7 @@ export function createContainer(
     serviceGrants: serviceGrantService,
     provisioner,
     provisionerLoop,
+    panelExchangeAllowanceMs,
     delivery: deliveryService,
     orders: orderService,
     publicLabels: new PublicLabelService({
