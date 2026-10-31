@@ -4521,6 +4521,13 @@ lists; mini app store and service offers). Each decided the way that moves no mo
   The old price on a button is therefore struck with U+0336 (`strikeThroughText`); the rich plan
   table (rich messages on) uses a real `strikethrough`. Some Telegram clients draw U+0336 less
   cleanly over Persian text; the owner may prefer the old price without a strike there.
+  **Decided by the owner (R11 hotfix):** the U+0336 strike broke the right-to-left button —
+  the combining marks split the figure into separate bidi runs («104,000 تومان 000,130 تومان
+  تخفیف شخصی 20٪»). A discounted button now shows one price, the invoice's, its figure in a
+  left-to-right isolate (`formatMoneyIsolated`), then «(20٪ تخفیف)»
+  (`bot.pricing.personal_discount_button_suffix`): «20 گیگ 60 روزه — 104,000 تومان (20٪ تخفیف)».
+  The struck price stays only where real formatting exists (the rich plan table, the
+  pre-invoice, the mini app); `strikeThroughText` is removed.
 - **OQ-R11-A9-03 — a list does not show automatic rules, as before.** A list has never shown an
   automatic promotion. When an automatic rule beats the personal discount, the list shows what
   it always showed and the invoice the rule's price; when the personal discount wins, the list

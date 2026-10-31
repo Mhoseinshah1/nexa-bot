@@ -9,9 +9,10 @@ import type { CustomerCallbackButton } from '../../../modules/commerce/messaging
  * `PricingService.personalListPrices`, the boundary the line's draft is priced at, so its
  * `price` IS the invoice's. This file decides nothing about money; it only puts the two
  * figures where the messenger draws them — the discounted price in the label, and the price
- * it replaces (what the list showed before) with the percent on the button, which the
- * messenger draws struck through and tagged. A line it does not win is drawn exactly as
- * before.
+ * it replaces (what the list showed before) with the percent on the button. The messenger
+ * writes the button with the discounted price only and «(N٪ تخفیف)» (R11 hotfix); the price
+ * it replaces is drawn struck through only in the rich plan table. A line it does not win is
+ * drawn exactly as before.
  */
 interface ListedLine {
   readonly price: Money | null;
@@ -23,7 +24,7 @@ export function listedPrice(line: ListedLine & { readonly price: Money }): Money
   return line.personalDiscount === null ? line.price : line.personalDiscount.price;
 }
 
-/** The button field the messenger strikes and tags by; nothing for an ordinary line. */
+/** The button field the messenger tags by (the rich table strikes); nothing otherwise. */
 export function personalDiscountOf(
   line: ListedLine,
 ): Pick<CustomerCallbackButton, 'personalDiscount'> {
