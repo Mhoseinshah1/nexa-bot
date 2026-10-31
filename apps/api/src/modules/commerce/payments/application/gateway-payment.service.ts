@@ -100,6 +100,7 @@ import {
 import { GatewayInquiryHealth } from './gateway-inquiry-health.js';
 import { readCardSwitchLimits } from './card-switch-limits.js';
 import {
+  cancelledAttemptPollingOpen,
   lateCreditPollAt,
   lateCreditPollingOpen,
   type LateCreditPolicy,
@@ -1770,7 +1771,18 @@ export class GatewayPaymentService {
     });
     let eligible =
       paymentState === 'PENDING' && expiresAt !== null && now.getTime() < expiresAt.getTime();
-    let postDeadline = !eligible;
+    /*
+     * R12 F1: an attempt Nexa CANCELLED (its order paid from the wallet or withdrawn) is still
+     * payable at the provider until its own deadline, so it is asked about on the ordinary
+     * schedule until then — never settled (`eligible` stays false), and money it reports is
+     * returned to the wallet by the credit path. Whatever the late-credit switch says.
+     */
+    let cancelledOpen = cancelledAttemptPollingOpen({
+      state: paymentState,
+      now,
+      deadline: expiresAt,
+    });
+    let postDeadline = !eligible && !cancelledOpen;
     // An operator's "ask again" on an UNKNOWN payment lets ONE inquiry past the bound.
     const operatorAsked = invoice.reconcileInquiryRequestedAt !== null;
     /*
@@ -1938,7 +1950,12 @@ export class GatewayPaymentService {
       expiresAt = gatewaySettlementDeadline(current);
       eligible =
         paymentState === 'PENDING' && expiresAt !== null && at.getTime() < expiresAt.getTime();
-      postDeadline = !eligible;
+      cancelledOpen = cancelledAttemptPollingOpen({
+        state: paymentState,
+        now: at,
+        deadline: expiresAt,
+      });
+      postDeadline = !eligible && !cancelledOpen;
     }
     const next = postDeadline
       ? null
@@ -2267,7 +2284,12 @@ export class GatewayPaymentService {
           current !== null &&
           (await this.deps.scopeActivity.scopeIsActive(scope, tx))
         ) {
-          announced = need;
+          /*
+           * R12 F1: a CANCELLED attempt is still asked about until its deadline, and an ask
+           * the provider makes of it reaches the operations log — but the customer is never
+           * sent a new message asking them to pay more on an attempt Nexa withdrew.
+           */
+          if (paymentState !== 'CANCELLED') announced = need;
           await this.deps.outbox.write(tx, actor, {
             eventType: 'GatewayPaymentAttentionRaised',
             aggregateType: 'Payment',
@@ -2537,6 +2559,10 @@ export class GatewayPaymentService {
           at,
         );
         await this.deps.invoices.recordOutcome(scope, invoice.paymentId, 'SETTLED', at);
+        // R12 F1: the order's other link attempts were closed with it; their messages say so.
+        for (const siblingId of confirmation.closedSiblings ?? []) {
+          await this.refreshScreens(scope, siblingId);
+        }
         return 'SETTLED';
       case 'ALREADY_CONFIRMED':
         await this.deps.invoices.recordOutcome(scope, invoice.paymentId, 'ALREADY_SETTLED', at);
@@ -2561,6 +2587,12 @@ export class GatewayPaymentService {
           lateCreditInput !== null &&
           (confirmation.reason === 'DEADLINE_PASSED' ||
             confirmation.reason === 'PAYMENT_NOT_PENDING' ||
+            /*
+             * R12 F1: money for an order another payment already settled (a second provider,
+             * the wallet). It can never pay the order; the credit path returns it to the wallet
+             * under the payment's lock, whatever the late-credit switch says.
+             */
+            confirmation.reason === 'ORDER_NOT_AWAITING_PAYMENT' ||
             // Already credited: the credit path answers CREDITED again and records the outcome.
             confirmation.reason === 'LATE_CREDIT_ALREADY_APPLIED')
         ) {
