@@ -7,22 +7,29 @@ slimmed in Phase 0; read them fresh. The older R11 handoff is in this branch's h
 
 ## main
 
-`main` = e93baa4 (after #356). Migrations end at 0295. Push CI was green on 76921ca and
+`main` = 767576f (after #357). Migrations end at 0295. Push CI was green on 76921ca and
 7105aa2; check e93baa4 with `bash scripts/claude/ci-status.sh e93baa4`.
 
 ## Phases
 
-| Phase              | State       | PRs                                                                                                                                                                                                                                         |
-| ------------------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0 token diet       | merged      | #352 (01c9d70); plus owner add-on `chore/codex-self-request` #353 (19117cd)                                                                                                                                                                 |
-| 1 open R11 Phase A | merged      | #349 A4 (c26ff7e), #351 A10 (a8daa8b), #355 main-red test fix (7105aa2), #354 A11 (76921ca), #356 A8 (e93baa4)                                                                                                                              |
-| 2 fixes            | IN PROGRESS | agents running (local branches, not pushed): `fix/r11-discount-button-bidi` (hotfix), `fix/r12-security-reliability` (F2), `fix/r12-money-edges` (F1). F3 `fix/r12-ux-quick-wins` not started (start when a slot frees; max 3 implementers) |
-| 3–6                | not started |                                                                                                                                                                                                                                             |
+| Phase              | State       | PRs                                                                                                                                                       |
+| ------------------ | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0 token diet       | merged      | #352 (01c9d70); plus owner add-on `chore/codex-self-request` #353 (19117cd)                                                                               |
+| 1 open R11 Phase A | merged      | #349 A4 (c26ff7e), #351 A10 (a8daa8b), #355 main-red test fix (7105aa2), #354 A11 (76921ca), #356 A8 (e93baa4)                                            |
+| 2 fixes            | IN PROGRESS | hotfix #357 merged (767576f). Agents running (local, not pushed): F1 `fix/r12-money-edges`, F2 `fix/r12-security-reliability`, F3 `fix/r12-ux-quick-wins` |
+| 3–6                | not started |                                                                                                                                                           |
 
 Phase 1 report (to commit as `docs/round-reports/phase-1.md` with the next suitable PR): it is
 in the session scratchpad, so if lost, rebuild it from the PR descriptions above.
 
 ## Owner decisions this session (binding)
+
+- 2026-10-31: ONE GitHub issue «گزارش‌های NEXA-ALL» is the owner's report channel:
+  https://github.com/Mhoseinshah1/nexa-bot/issues/358 (reuse it; never open another). At the end
+  of EVERY phase, and whenever something is Blocked or an owner decision is needed, post one
+  comment via REST: `gh api repos/Mhoseinshah1/nexa-bot/issues/358/comments -F body=@<file>`.
+  It holds the ≤ 20-line Persian summary, PR links, and any question. GitHub emails the owner.
+  Already posted: Phases 0–1 plus Phase 2 progress (issuecomment-6544213190).
 
 - 2026-10-31: the lead posts `@codex review` itself right after opening a PR or pushing a head that
   needs its one review; at most 2 per PR; act on the FIRST complete review of a head only; never
@@ -52,5 +59,5 @@ A11 trusts only the sweep's EXPIRED; A8 HELD-cancel requeue bounded by the custo
 
 ## Next step
 
-Wait for the hotfix / F2 / F1 agents; lead-review each diff, push, open the PR, post
-`@codex review`, CI, one fix commit, merge. Start F3 (Sonnet implements, Opus reviews) when a slot frees.
+Wait for the F1 / F2 / F3 agents; lead-review each diff (F3 gets an Opus review), push, open the
+PR, post `@codex review`, CI, one fix commit, merge. Then the phase-2 report + comment on #358.
