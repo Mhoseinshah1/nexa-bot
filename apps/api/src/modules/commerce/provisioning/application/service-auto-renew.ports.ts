@@ -168,7 +168,9 @@ export interface AutoRenewRepository {
   /**
    * Whether the service's deadline is still the one this run renews (`basis_expires_at`),
    * compared in SQL. Asked inside the settling transaction, after the settlement's lifecycle
-   * lock: false once any renewal has moved the deadline since the claim.
+   * lock: false once any renewal has moved the deadline since the claim — and (R12 F1 item 4)
+   * false unless the service, read with its row LOCKED, is still `ACTIVE` and still the run's
+   * owner's. A service terminated, suspended or transferred since the claim is never debited.
    */
   periodCurrent(scope: TenantContext, runId: string, tx: TransactionScope): Promise<boolean>;
 
