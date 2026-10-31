@@ -300,7 +300,8 @@ export class SettingsService {
       };
     }
 
-    const result = await runAuthorizedMutation(
+    const ownerOnly = OWNER_ONLY_SETTING_KEYS.includes(key);
+    const mutation = runAuthorizedMutation(
       {
         uow: this.uow,
         guard: this.guard,
@@ -314,6 +315,11 @@ export class SettingsService {
       SETTINGS_EDIT,
       { action: 'settings.set', entityType: 'Setting', entityId: key },
       async (tx) => {
+        // R12 F2 (Codex P2 on #359): the CRITICAL permission again, INSIDE the transaction
+        // and on its connection, as `settings.edit` is checked by the helper above. The
+        // early check alone left a window: an owner's `settings.destructive` revoked after it
+        // and before this commit would still widen the outbound allow-list.
+        if (ownerOnly) await this.guard.check(scope, actor, SETTINGS_DESTRUCTIVE, tx);
         if (!(await this.scopeActivity.scopeIsActive(scope, tx))) {
           throw errors.notFound(
             PLATFORM_ERROR_CODES.TENANT_NOT_FOUND,
@@ -478,6 +484,26 @@ export class SettingsService {
         return { setting, changed: true };
       },
     );
+    let result: Awaited<typeof mutation>;
+    try {
+      result = await mutation;
+    } catch (error) {
+      // The helper records a refusal of ITS permission (`settings.edit`); a refusal of the
+      // destructive one inside the transaction is recorded here, after the rollback, with
+      // the same DENIED audit row the early check writes. `recordMutationDenial` writes
+      // nothing for any other error, or for a denial of a different permission.
+      if (ownerOnly) {
+        await recordMutationDenial(
+          { guard: this.guard, audit: this.audit, opsLog: this.opsLog },
+          scope,
+          actor,
+          SETTINGS_DESTRUCTIVE,
+          { action: 'settings.set', entityType: 'Setting', entityId: key },
+          error,
+        );
+      }
+      throw error;
+    }
 
     return { ...result, replayed: false };
   }
