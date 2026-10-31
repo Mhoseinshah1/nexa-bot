@@ -6278,4 +6278,74 @@ assert_contains 'docs/deployment.md does not document botctl roles' \
   "$(cat "${REPO}/docs/deployment.md")" 'NEXA_DISABLED_ROLES'
 assert_contains 'usage does not list botctl roles' "$("$BOTCTL" help)" 'botctl roles disable'
 
+# =============================================================================
+# R12 F2 item 5 — PostgreSQL sized from the host's memory, Redis bounded
+# =============================================================================
+setup_root
+setup_fake_docker
+seed_release 'v1.0.0' "$DIGEST_A"
+fake_set resolve_digest "$DIGEST_B"
+# shellcheck source=../../deploy/bin/nexa-lib.sh
+. "$NEXA_LIB"
+MEMINFO_FIXTURE="${NEXA_ROOT}/meminfo"
+
+test_case 'db tuning: 25 % / 60 % of RAM, 16MB work_mem, 150 connections, with floors and a cap'
+printf 'MemTotal:       16384000 kB\nMemFree:  1 kB\n' >"$MEMINFO_FIXTURE"
+assert_equals '16 GB host' \
+  "$(printf 'NEXA_PG_SHARED_BUFFERS=4000MB\nNEXA_PG_EFFECTIVE_CACHE_SIZE=9600MB\nNEXA_PG_WORK_MEM=16MB\nNEXA_PG_MAX_CONNECTIONS=150')" \
+  "$(NEXA_MEMINFO="$MEMINFO_FIXTURE" nexa_pg_tuning)"
+printf 'MemTotal:       262144 kB\n' >"$MEMINFO_FIXTURE"
+assert_contains 'a 256 MB host is not given less than the floor' \
+  "$(NEXA_MEMINFO="$MEMINFO_FIXTURE" nexa_pg_tuning)" 'NEXA_PG_SHARED_BUFFERS=128MB'
+assert_contains 'a 256 MB host: cache floor' \
+  "$(NEXA_MEMINFO="$MEMINFO_FIXTURE" nexa_pg_tuning)" 'NEXA_PG_EFFECTIVE_CACHE_SIZE=256MB'
+printf 'MemTotal:       134217728 kB\n' >"$MEMINFO_FIXTURE"
+assert_contains 'a 128 GB host is capped at 8 GB of shared buffers' \
+  "$(NEXA_MEMINFO="$MEMINFO_FIXTURE" nexa_pg_tuning)" 'NEXA_PG_SHARED_BUFFERS=8192MB'
+printf 'garbage\n' >"$MEMINFO_FIXTURE"
+assert_fails 'unreadable memory produced a sizing' env NEXA_MEMINFO="$MEMINFO_FIXTURE" bash -c ". '$NEXA_LIB'; nexa_pg_tuning"
+
+test_case 'db tuning: an update records the sizing in deploy.env, and status shows it'
+printf 'MemTotal:       8192000 kB\n' >"$MEMINFO_FIXTURE"
+export NEXA_MEMINFO="$MEMINFO_FIXTURE"
+run_botctl update v2.0.0
+assert_equals 'the update failed' 0 "$BOTCTL_STATUS"
+deploy_env="$(cat "${NEXA_CONFIG_DIR}/deploy.env")"
+assert_contains 'shared_buffers not recorded' "$deploy_env" 'NEXA_PG_SHARED_BUFFERS=2000MB'
+assert_contains 'effective_cache_size not recorded' "$deploy_env" 'NEXA_PG_EFFECTIVE_CACHE_SIZE=4800MB'
+assert_contains 'work_mem not recorded' "$deploy_env" 'NEXA_PG_WORK_MEM=16MB'
+assert_contains 'max_connections not recorded' "$deploy_env" 'NEXA_PG_MAX_CONNECTIONS=150'
+assert_contains 'the image was lost' "$deploy_env" "NEXA_IMAGE="
+run_botctl status
+assert_contains 'status does not show shared_buffers' "$BOTCTL_OUTPUT" 'NEXA_PG_SHARED_BUFFERS         2000MB'
+assert_contains 'status does not show the redis bound' "$BOTCTL_OUTPUT" 'maxmemory 64mb, allkeys-lru'
+
+test_case 'db tuning: a restart records it too (the first update into R12 runs the old botctl)'
+printf 'MemTotal:       4096000 kB\n' >"$MEMINFO_FIXTURE"
+run_botctl restart
+assert_equals 'the restart failed' 0 "$BOTCTL_STATUS"
+assert_contains 'restart did not record the sizing' "$(cat "${NEXA_CONFIG_DIR}/deploy.env")" 'NEXA_PG_SHARED_BUFFERS=1000MB'
+
+test_case 'db tuning: a host whose memory cannot be read keeps what deploy.env has'
+printf 'nothing useful\n' >"$MEMINFO_FIXTURE"
+before="$(cat "${NEXA_CONFIG_DIR}/deploy.env")"
+# shellcheck source=../../deploy/bin/nexa-lib.sh
+( . "$NEXA_LIB"; nexa_record_pg_tuning ) >/dev/null 2>&1
+assert_equals 'deploy.env changed on an unreadable host' "$before" "$(cat "${NEXA_CONFIG_DIR}/deploy.env")"
+unset NEXA_MEMINFO
+teardown_root
+
+test_case 'db tuning: compose applies it with PostgreSQL defaults when unrecorded, and bounds Redis'
+compose_file="$(cat "${REPO}/deploy/compose.yml")"
+for flag in 'shared_buffers=${NEXA_PG_SHARED_BUFFERS:-128MB}' \
+  'effective_cache_size=${NEXA_PG_EFFECTIVE_CACHE_SIZE:-4GB}' \
+  'work_mem=${NEXA_PG_WORK_MEM:-4MB}' 'max_connections=${NEXA_PG_MAX_CONNECTIONS:-100}' \
+  'shared_preload_libraries=pg_stat_statements' 'shm_size: 512m' \
+  'maxmemory 64mb' 'maxmemory-policy allkeys-lru'; do
+  assert_contains "compose.yml lacks ${flag}" "$compose_file" "$flag"
+done
+assert_contains 'the installer does not size PostgreSQL' "$(cat "${REPO}/deploy/install.sh")" 'nexa_record_pg_tuning'
+assert_contains 'docs/deployment.md does not document the sizing' \
+  "$(cat "${REPO}/docs/deployment.md")" 'NEXA_PG_SHARED_BUFFERS'
+
 report

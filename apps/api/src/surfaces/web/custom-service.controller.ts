@@ -18,11 +18,9 @@ import {
   type CustomServiceRuleSummaryResponse,
   type CustomServiceRuleWriteRequest,
   type OrderCustomServiceResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import type { CustomServiceRuleInput } from '../../modules/commerce/custom-service/application/custom-service-admin.service.js';
 import type {
   CustomServiceLocationRecord,
@@ -45,7 +43,7 @@ export class CustomServiceController {
 
   @Get(CUSTOM_SERVICE_ROUTES.rules)
   async listRules(@Req() request: FastifyRequest): Promise<CustomServiceRuleListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const rules = await this.container.customServiceAdmin.listRules(scope, actor);
     return { rules: rules.map(toRuleSummary) };
   }
@@ -55,7 +53,7 @@ export class CustomServiceController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<CustomServiceRuleResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customServiceRuleWriteSchema.parse(body);
     const rule = await this.container.customServiceAdmin.createRule(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -69,7 +67,7 @@ export class CustomServiceController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<CustomServiceRuleResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return {
       rule: toRuleSummary(await this.container.customServiceAdmin.getRule(scope, actor, id)),
     };
@@ -81,7 +79,7 @@ export class CustomServiceController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CustomServiceRuleResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customServiceRuleWriteSchema.parse(body);
     const rule = await this.container.customServiceAdmin.updateRule(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -97,7 +95,7 @@ export class CustomServiceController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<{ readonly deleted: boolean }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customServiceRuleDeleteSchema.parse(body);
     return this.container.customServiceAdmin.deleteRule(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -107,7 +105,7 @@ export class CustomServiceController {
 
   @Get(CUSTOM_SERVICE_ROUTES.locations)
   async listLocations(@Req() request: FastifyRequest): Promise<CustomServiceLocationListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const locations = await this.container.customServiceAdmin.listLocations(scope, actor);
     return { locations: locations.map(toLocationSummary) };
   }
@@ -118,7 +116,7 @@ export class CustomServiceController {
     @Param('panelId') panelId: string,
     @Body() body: unknown,
   ): Promise<CustomServiceLocationResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customServiceLocationWriteSchema.parse(body);
     const saved = await this.container.customServiceAdmin.saveLocation(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -135,7 +133,7 @@ export class CustomServiceController {
     @Param('panelId') panelId: string,
     @Body() body: unknown,
   ): Promise<{ readonly deleted: boolean }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customServiceRuleDeleteSchema.parse(body);
     return this.container.customServiceAdmin.deleteLocation(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -148,26 +146,9 @@ export class CustomServiceController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<OrderCustomServiceResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const terms = await this.container.customServiceAdmin.orderTerms(scope, actor, id);
     return { terms: terms === null ? null : toTermsWire(terms) };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.container.config.NODE_ENV === 'production');
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    // The rules belong to the TENANT, like the catalogue: one set for every bot it runs.
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
   }
 }
 

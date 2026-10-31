@@ -10,13 +10,11 @@ import {
   type RevokeOtherSessionsResponse,
   type RevokeOwnSessionResponse,
   type SecurityEventListResponse,
-  type TenantContext,
   type TotpEnrolResponse,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { ipThrottleSubject } from '../../infrastructure/trusted-proxy.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 
 /**
  * The signed-in administrator's OWN security (Phase D2): two-step sign-in, backup codes,
@@ -38,13 +36,13 @@ export class AccountSecurityController {
 
   @Get('security')
   async overview(@Req() request: FastifyRequest): Promise<AccountSecurityResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.accountSecurity.overview(scope, actor);
   }
 
   @Get('security/events')
   async events(@Req() request: FastifyRequest): Promise<SecurityEventListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { events: [...(await this.container.accountSecurity.securityEvents(scope, actor))] };
   }
 
@@ -56,7 +54,7 @@ export class AccountSecurityController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Body() body: unknown,
   ): Promise<TotpEnrolResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     void reply.header('cache-control', 'no-store');
     return this.container.accountSecurity.enrolTotp(
       scope,
@@ -74,7 +72,7 @@ export class AccountSecurityController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Body() body: unknown,
   ): Promise<BackupCodesResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     void reply.header('cache-control', 'no-store');
     const result = await this.container.accountSecurity.activateTotp(
       scope,
@@ -88,7 +86,7 @@ export class AccountSecurityController {
   @Post('security/totp/disable')
   @HttpCode(200)
   async disable(@Req() request: FastifyRequest, @Body() body: unknown): Promise<{ ok: true }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     await this.container.accountSecurity.disableTotp(
       scope,
       actor,
@@ -105,7 +103,7 @@ export class AccountSecurityController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Body() body: unknown,
   ): Promise<BackupCodesResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     void reply.header('cache-control', 'no-store');
     return this.container.accountSecurity.regenerateBackupCodes(
       scope,
@@ -117,7 +115,7 @@ export class AccountSecurityController {
 
   @Get('sessions')
   async sessions(@Req() request: FastifyRequest): Promise<AdminSessionListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { sessions: [...(await this.container.accountSecurity.listOwnSessions(scope, actor))] };
   }
 
@@ -133,7 +131,7 @@ export class AccountSecurityController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param('id') id: string,
   ): Promise<RevokeOwnSessionResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const result = await this.container.accountSecurity.revokeOwnSession(scope, actor, id);
     if (result.current) this.clearSessionCookie(reply);
     return result;
@@ -142,7 +140,7 @@ export class AccountSecurityController {
   @Post('sessions/revoke-others')
   @HttpCode(200)
   async revokeOthers(@Req() request: FastifyRequest): Promise<RevokeOtherSessionsResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { revoked: await this.container.accountSecurity.revokeOtherSessions(scope, actor) };
   }
 
@@ -157,19 +155,5 @@ export class AccountSecurityController {
       if (this.isProduction) attributes.push('Secure');
       void reply.header('set-cookie', attributes.join('; '));
     }
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (options.write) assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
   }
 }

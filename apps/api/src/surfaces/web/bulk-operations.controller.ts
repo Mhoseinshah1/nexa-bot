@@ -18,10 +18,9 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin, type adminActor } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type { BulkOperationRecord } from '../../modules/commerce/bulk-operations/application/ports.js';
 
 const EMPTY: BulkCounts = {
@@ -52,7 +51,7 @@ export class BulkOperationsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<BulkOperationListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = bulkOperationListQuerySchema.parse(singleValued(raw));
     const limit = query.limit ?? BULK_PAGE_DEFAULT;
     const position = query.cursor === undefined ? null : decodeKeysetCursor(query.cursor);
@@ -85,7 +84,7 @@ export class BulkOperationsController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<BulkPreviewResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = bulkPreviewRequestSchema.parse(body);
     return { preview: await this.container.bulkOperations.preview(scope, actor, command) };
   }
@@ -95,7 +94,7 @@ export class BulkOperationsController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<BulkOperationResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = createBulkOperationRequestSchema.parse(body);
     const record = await this.container.bulkOperations.create(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -119,7 +118,7 @@ export class BulkOperationsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<BulkOperationResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.respond(scope, actor, await this.container.bulkOperations.get(scope, actor, id));
   }
 
@@ -128,7 +127,7 @@ export class BulkOperationsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<BulkOperationResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.respond(scope, actor, await this.container.bulkOperations.cancel(scope, actor, id));
   }
 
@@ -138,7 +137,7 @@ export class BulkOperationsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<BulkOperationResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.respond(scope, actor, await this.container.bulkOperations.pause(scope, actor, id));
   }
 
@@ -147,7 +146,7 @@ export class BulkOperationsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<BulkOperationResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.respond(scope, actor, await this.container.bulkOperations.resume(scope, actor, id));
   }
 
@@ -161,7 +160,7 @@ export class BulkOperationsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<{ preview: BulkRetryPreview }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { preview: await this.container.bulkOperations.retryPreview(scope, actor, id) };
   }
 
@@ -172,7 +171,7 @@ export class BulkOperationsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<BulkOperationResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = bulkRetryRequestSchema.parse(body);
     return this.respond(
       scope,
@@ -193,7 +192,7 @@ export class BulkOperationsController {
     @Param('id') id: string,
     @Query() raw: Record<string, unknown>,
   ): Promise<BulkItemListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = bulkItemListQuerySchema.parse(singleValued(raw));
     const limit = query.limit ?? BULK_PAGE_DEFAULT;
     const rows = await this.container.bulkOperations.items(scope, actor, id, {
@@ -234,22 +233,6 @@ export class BulkOperationsController {
         progress.counts.get(record.id) ?? EMPTY,
         progress.credited.get(record.id),
       ),
-    };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.container.config.NODE_ENV === 'production');
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
     };
   }
 }
