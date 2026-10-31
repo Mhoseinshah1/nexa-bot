@@ -97,6 +97,12 @@ each a way to credit money nobody approved:
 - **A create whose answer was lost is never retried and never re-keyed.** The send is
   stamped before the call; only the provider's own `RATE_LIMIT_EXCEEDED` clears it.
 
+**A TonPays Telegram cancel whose answer was lost is not a cancellation** (owner, Round 11 A8).
+While the invoice is open as far as Nexa knows, «❌ لغو فاکتور» stays and the customer may ask
+again — a new request row, one in flight at a time, spaced from the lost one; Nexa never repeats
+it by itself. A tap once Nexa knows it was cancelled says «فاکتور قبلاً لغو شده»; a paid invoice
+is never cancelled (`docs/tonpays-telegram-gateway-audit.md` §21).
+
 **The custom gateway (Round 10 C1) is built and NOT yet accepted against a real bridge**
 (`docs/protocols/custom-gateway.md`, `docs/custom-gateway-audit.md`, `OQ-CG-01`). It is Nexa's
 OWN protocol — one code-backed type, `CUSTOM`, that a third-party bridge implements; an operator

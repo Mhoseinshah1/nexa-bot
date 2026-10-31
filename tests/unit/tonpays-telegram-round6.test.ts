@@ -411,7 +411,7 @@ const request = (
 ): { state: GatewayProviderRequestState; errorCode: string | null } => ({ state, errorCode });
 
 describe('what the customer may do now', () => {
-  it('cancel: only a pending invoice, once, with nothing on its way', () => {
+  it('cancel: only a pending invoice, with nothing on its way', () => {
     expect(cancelAvailable({ ...created, providerStatus: null }, null, [])).toBe(true);
     expect(cancelAvailable({ ...created, providerStatus: 'pending' }, null, [])).toBe(true);
     for (const status of [
@@ -429,9 +429,9 @@ describe('what the customer may do now', () => {
     expect(cancelAvailable({ ...created, providerStatus: 'pending' }, request('SENT'), [])).toBe(
       false,
     );
-    // A lost answer is never repeated by a tap.
+    // R11 A8 (owner): a lost answer is not a cancellation; the customer may ask again.
     expect(cancelAvailable({ ...created, providerStatus: 'pending' }, request('UNKNOWN'), [])).toBe(
-      false,
+      true,
     );
     expect(cancelAvailable({ ...created, providerStatus: 'pending' }, request('REFUSED'), [])).toBe(
       true,

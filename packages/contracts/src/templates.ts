@@ -9238,10 +9238,31 @@ export const TEMPLATES = [
     key: 'bot.pricing.personal_discount_tag',
     description:
       'R11 A9: the short tag beside a price a customer is LISTED with their personal ' +
-      'discount (R10 D3) — a plan, a renewal or a package button, the rich plan table, ' +
-      'before any order exists. Shown only when the personal discount wins that line’s ' +
-      'quote, after the discounted price and the struck-through price it replaces, so ' +
-      'the figure on the list is the figure on the invoice. Never shown otherwise.',
+      'discount (R10 D3) in the rich plan table, before any order exists. Shown only when ' +
+      'the personal discount wins that line’s quote, after the struck-through price it ' +
+      'replaces and the discounted price, so the figure on the list is the figure on the ' +
+      'invoice. Never shown otherwise. A button carries `bot.pricing.' +
+      'personal_discount_button_suffix` instead (R11 hotfix).',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'percent',
+        type: 'NUMBER',
+        description: 'The personal discount percent, 1 to 100.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.pricing.personal_discount_button_suffix',
+    description:
+      'R11 hotfix: what follows the discounted price on a plan, renewal or package BUTTON ' +
+      'a customer is listed with their personal discount (R10 D3) — «(20٪ تخفیف)». A ' +
+      'button is plain text (no entities), so it shows ONE price, the one the invoice ' +
+      'charges, and never the struck-through price it replaces: combining strike marks ' +
+      'inside a right-to-left label split the figure into reversed runs. Shown only when ' +
+      'the personal discount wins that line’s quote. Never shown otherwise.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
@@ -11137,6 +11158,29 @@ export const TEMPLATES = [
     key: 'bot.payment.gateway_cancel_unknown',
     description:
       'TonPays Telegram: the answer to the cancel request was lost. It is never sent again automatically.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  /*
+   * Round 11 A8 (owner): a cancel whose answer was lost does not count as cancelled, so the
+   * customer may ask again. When Nexa has since LEARNED that the invoice was cancelled (the
+   * applied cancel, an inquiry that read `canceled`, or the payment failed as cancelled), a tap
+   * on a cancel button still on screen is answered with this sentence — never with the generic
+   * "closed" one, which does not say the cancel the customer asked for happened.
+   */
+  {
+    key: 'bot.payment.gateway_cancel_already_cancelled',
+    description:
+      'TonPays Telegram: the customer tapped «❌ لغو فاکتور» on an invoice Nexa already knows was cancelled. Nothing is sent to the provider and nothing changes.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {

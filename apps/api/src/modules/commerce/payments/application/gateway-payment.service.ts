@@ -81,6 +81,7 @@ import type {
   GatewayWebhookHint,
   RefundCardSealer,
 } from './gateway-invoice-ports.js';
+import { GATEWAY_HELD_RETRY_MIN_MS } from './gateway-invoice-ports.js';
 import { GatewayProviderRequestLane } from './gateway-provider-request.lane.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
 import type { GatewayConfirmation, PaymentService } from './payment.service.js';
@@ -283,9 +284,9 @@ export const INQUIRY_RATE_LIMIT_RETRY_MS = 60_000;
 
 /**
  * Round 11 A8: the soonest a call the adapter's own limiter HELD (nothing sent) is tried again.
- * The limiter says when a token will be there; this only stops a zero from spinning the lane.
+ * Defined beside the ports since R11 A8 (cancel retry): the cancel lane uses it too.
  */
-export const GATEWAY_HELD_RETRY_MIN_MS = 1_000;
+export { GATEWAY_HELD_RETRY_MIN_MS };
 
 /**
  * FIX10 BUG-1: how soon a row whose processing THREW is due again. Measured from the last

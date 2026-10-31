@@ -4442,6 +4442,12 @@ error text; what follows is only what it does not settle.
   `/cancel` once when its deadline expires a `pending` attempt; a customer who transferred but never
   sent the receipt before the deadline has money on the card and no invoice. That case was already
   stranded before (Nexa's receipt window had closed); it needs an operator either way.
+- **OQ-TPTG-30 — what `/cancel` answers for an invoice that is already cancelled** (Round 11 A8).
+  A customer may now ask again after a cancel whose answer was lost, so the second request may
+  reach an invoice the first one did cancel. The document gives no response for that case. Nexa
+  reads a 2xx as cancelled (as for any cancel) and `NOT_PENDING` / any refusal as a refusal only;
+  the inquiry brought forward then says `canceled` and closes the payment, and the customer's next
+  tap says «فاکتور قبلاً لغو شده». If TonPays has a distinct code for it, it can be mapped then.
 
 ## Round 10 D4 — gift cards (wallet top-up codes)
 
@@ -4515,6 +4521,13 @@ lists; mini app store and service offers). Each decided the way that moves no mo
   The old price on a button is therefore struck with U+0336 (`strikeThroughText`); the rich plan
   table (rich messages on) uses a real `strikethrough`. Some Telegram clients draw U+0336 less
   cleanly over Persian text; the owner may prefer the old price without a strike there.
+  **Decided by the owner (R11 hotfix):** the U+0336 strike broke the right-to-left button —
+  the combining marks split the figure into separate bidi runs («104,000 تومان 000,130 تومان
+  تخفیف شخصی 20٪»). A discounted button now shows one price, the invoice's, its figure in a
+  left-to-right isolate (`formatMoneyIsolated`), then «(20٪ تخفیف)»
+  (`bot.pricing.personal_discount_button_suffix`): «20 گیگ 60 روزه — 104,000 تومان (20٪ تخفیف)».
+  The struck price stays only where real formatting exists (the rich plan table, the
+  pre-invoice, the mini app); `strikeThroughText` is removed.
 - **OQ-R11-A9-03 — a list does not show automatic rules, as before.** A list has never shown an
   automatic promotion. When an automatic rule beats the personal discount, the list shows what
   it always showed and the invoice the rule's price; when the personal discount wins, the list
