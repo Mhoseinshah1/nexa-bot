@@ -11,7 +11,7 @@ import {
   type GlobalSearchResponse,
 } from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
-import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
+import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
   adminActorFor,
   createAdmin,
@@ -109,7 +109,15 @@ describe('the global search', () => {
   async function household(
     tenantId: string,
     input: { telegramUserId: string; username: string; first: string; provider: string },
-  ): Promise<{ customerId: string; orderId: string; serviceId: string }> {
+  ): Promise<{
+    customerId: string;
+    orderId: string;
+    serviceId: string;
+    paymentId: string;
+    paymentCode: string;
+    ticketId: string;
+    ticketNumber: string;
+  }> {
     const panelId = newId();
     await run(sql`INSERT INTO panels (id, tenant_id, name, provider_type, base_url, status)
       VALUES (${panelId}, ${tenantId}, ${`Panel ${panelId.slice(-6)}`}, 'marzban',
@@ -139,7 +147,33 @@ describe('the global search', () => {
          delivery_state, traffic_limit_bytes, traffic_used_bytes, provisioned_at, delivered_at)
       VALUES (${serviceId}, ${tenantId}, ${customerId}, ${orderId}, ${panelId}, ${productId},
               ${input.provider}, 'ACTIVE', 'DELIVERED', 53687091200, 0, now(), now())`);
-    return { customerId, orderId, serviceId };
+    // R12 F3 item 8: a payment (found by its tracking code) and a ticket (found by its number).
+    const paymentId = newId();
+    await run(sql`INSERT INTO payments
+        (id, tenant_id, customer_id, order_id, state, method, amount, currency, reference,
+         expires_at)
+      VALUES (${paymentId}, ${tenantId}, ${customerId}, ${orderId}, 'PENDING', 'MANUAL_TRANSFER',
+              250000, 'IRT', ${`NX-${paymentId.slice(-12)}`}, now() + interval '1 hour')`);
+    const paymentCode = (
+      (await run(sql`SELECT code FROM payments WHERE id = ${paymentId}`)).rows[0] as {
+        code: string;
+      }
+    ).code;
+    const categoryId = newId();
+    await run(sql`INSERT INTO ticket_categories (id, tenant_id, title)
+      VALUES (${categoryId}, ${tenantId}, 'اتصال')`);
+    const ticketId = newId();
+    await run(sql`INSERT INTO tickets
+        (id, tenant_id, customer_id, bot_instance_id, category_id, category_title, subject,
+         opening_key)
+      VALUES (${ticketId}, ${tenantId}, ${customerId},
+              ${tenantId === (tenantA.tenantId as string) ? SEED_IDS.botA1 : SEED_IDS.botB1},
+              ${categoryId}, 'اتصال', 'کندی اتصال', ${`open-${ticketId}`})`);
+    const ticketNumber = (
+      (await run(sql`SELECT number::text AS number FROM tickets WHERE id = ${ticketId}`))
+        .rows[0] as { number: string }
+    ).number;
+    return { customerId, orderId, serviceId, paymentId, paymentCode, ticketId, ticketNumber };
   }
 
   beforeEach(async () => {
@@ -157,7 +191,9 @@ describe('the global search', () => {
     await adminWith('only-customers', ['users.view', 'users.search']);
     await adminWith('view-no-search', ['users.view']);
     await adminWith('only-services', ['services.view']);
-    await adminWith('nothing-relevant', ['tickets.view']);
+    await adminWith('nothing-relevant', ['panels.view']);
+    await adminWith('only-tickets', ['tickets.view']);
+    await adminWith('only-payments', ['payments.view']);
 
     const a = await household(tenantA.tenantId as string, {
       telegramUserId: '111111111',
@@ -178,6 +214,12 @@ describe('the global search', () => {
     ids.customerB = b.customerId;
     ids.orderB = b.orderId;
     ids.serviceB = b.serviceId;
+    ids.paymentA = a.paymentId;
+    ids.paymentCodeA = a.paymentCode;
+    ids.ticketA = a.ticketId;
+    ids.ticketNumberA = a.ticketNumber;
+    ids.paymentB = b.paymentId;
+    ids.ticketB = b.ticketId;
   });
 
   const search = async (
@@ -206,7 +248,8 @@ describe('the global search', () => {
     expect(hitIds(byProduct, 'ORDER')).toEqual([ids.orderA]);
     const byProvider = await search('nxali1');
     expect(hitIds(byProvider, 'SERVICE')).toEqual([ids.serviceA]);
-    expect(kinds(byProvider)).toEqual(['CUSTOMER', 'ORDER', 'SERVICE']);
+    // Every kind the owner may read is asked (R12 F3 item 8 added payments and tickets).
+    expect(kinds(byProvider)).toEqual(['CUSTOMER', 'ORDER', 'SERVICE', 'PAYMENT', 'TICKET']);
   });
 
   it('never returns another tenant’s record, whatever the twin looks like', async () => {
@@ -243,6 +286,41 @@ describe('the global search', () => {
     const services = await search('nxali1', 'only-services');
     expect(kinds(services)).toEqual(['SERVICE']);
     expect(hitIds(services, 'SERVICE')).toEqual([ids.serviceA]);
+  });
+
+  it('R12 F3: finds a payment by its tracking code and a ticket by its number, per permission and tenant', async () => {
+    const byCode = await search(ids.paymentCodeA as string);
+    expect(hitIds(byCode, 'PAYMENT')).toEqual([ids.paymentA]);
+    expect(byCode.groups.find((g) => g.kind === 'PAYMENT')?.hits[0]).toMatchObject({
+      title: ids.paymentCodeA,
+      state: 'PENDING',
+    });
+    // The code is also found typed lower-case or after a #, the way operators paste it.
+    expect(hitIds(await search((ids.paymentCodeA as string).toLowerCase()), 'PAYMENT')).toEqual([
+      ids.paymentA,
+    ]);
+
+    const byNumber = await search(ids.ticketNumberA as string);
+    expect(hitIds(byNumber, 'TICKET')).toEqual([ids.ticketA]);
+    expect(byNumber.groups.find((g) => g.kind === 'TICKET')?.hits[0]?.title).toBe(
+      `#${ids.ticketNumberA as string}`,
+    );
+    expect(hitIds(await search(`#${ids.ticketNumberA as string}`), 'TICKET')).toEqual([
+      ids.ticketA,
+    ]);
+    // Free text is not a ticket number or code: the customers' kind finds people, not tickets.
+    expect(hitIds(await search('کندی'), 'TICKET')).toEqual([]);
+
+    // Each kind needs its own permission and is ABSENT otherwise.
+    expect(kinds(await search(ids.paymentCodeA as string, 'only-payments'))).toEqual(['PAYMENT']);
+    expect(kinds(await search(ids.ticketNumberA as string, 'only-tickets'))).toEqual(['TICKET']);
+    expect(kinds(await search(ids.paymentCodeA as string, 'only-orders'))).not.toContain('PAYMENT');
+    // Never another tenant's.
+    for (const q of [ids.paymentCodeA as string, ids.ticketNumberA as string]) {
+      const all = (await search(q)).groups.flatMap((g) => g.hits.map((h) => h.id));
+      expect(all, q).not.toContain(ids.paymentB);
+      expect(all, q).not.toContain(ids.ticketB);
+    }
   });
 
   it('refuses nothing and reveals nothing to an actor with users.view but not users.search', async () => {

@@ -159,6 +159,12 @@ export interface TicketListFilter {
    * id, so neither reading is dropped.
    */
   readonly code?: string;
+  /**
+   * R12 F3 item 8: the ticket's per-tenant number (the «#1042» an operator quotes). Matches OR
+   * the customer / code above, the way `code` does, so the global search can find a ticket by
+   * either of the two things it is called.
+   */
+  readonly number?: number;
   /** An administrator's id, or `null` for "unassigned". */
   readonly assignedAdminId?: AdminId | null;
   /** Half-open `[from, to)` on `created_at`. */

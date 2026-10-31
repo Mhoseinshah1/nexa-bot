@@ -888,6 +888,9 @@ describe('Round W dashboard', () => {
       // The OPEN request; not the REJECTED one.
       refundRequestsAwaiting: 1,
       paymentsUnknown: 1,
+      // R12 F3 item 8: no card-to-card receipt is filed in this fixture (the counted case is
+      // `wallet-payments-http.test.ts`).
+      receiptsAwaitingReview: 0,
       // HANDOFF_REQUIRED; not AI_ACTIVE, not HUMAN_ACTIVE, not tenant B's.
       businessHandoffs: 2,
     });
@@ -906,6 +909,7 @@ describe('Round W dashboard', () => {
       unreconciledServices: 1,
       refundRequestsAwaiting: null,
       paymentsUnknown: null,
+      receiptsAwaitingReview: null,
       businessHandoffs: 2,
     });
     expect(await counters('technical')).toEqual({
@@ -915,6 +919,7 @@ describe('Round W dashboard', () => {
       unreconciledServices: 1,
       refundRequestsAwaiting: null,
       paymentsUnknown: null,
+      receiptsAwaitingReview: null,
       businessHandoffs: null,
     });
     expect(Object.values(await counters('sales')).every((value) => value === null)).toBe(true);
@@ -933,6 +938,7 @@ describe('Round W dashboard', () => {
       unreconciledServices: 0,
       refundRequestsAwaiting: 0,
       paymentsUnknown: 0,
+      receiptsAwaitingReview: 0,
       businessHandoffs: 1,
     });
   });

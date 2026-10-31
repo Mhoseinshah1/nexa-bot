@@ -746,6 +746,9 @@ export class TicketService {
       readonly awaitingSupport?: boolean;
       readonly categoryId?: string;
       readonly customer?: string;
+      /** R12 F3 item 8: find by the ticket's public code and/or its number (global search). */
+      readonly publicCode?: string;
+      readonly number?: number;
       readonly assigned?: string;
       readonly from?: Date;
       readonly to?: Date;
@@ -776,6 +779,8 @@ export class TicketService {
       ...(query.customer === undefined || publicCodeFromSearch(query.customer) === null
         ? {}
         : { code: publicCodeFromSearch(query.customer) as string }),
+      ...(query.publicCode === undefined ? {} : { code: query.publicCode }),
+      ...(query.number === undefined ? {} : { number: query.number }),
       ...(assigned === undefined ? {} : { assignedAdminId: assigned }),
       ...(query.from === undefined ? {} : { from: query.from }),
       ...(query.to === undefined ? {} : { to: query.to }),

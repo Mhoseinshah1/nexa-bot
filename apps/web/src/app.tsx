@@ -1036,8 +1036,9 @@ export function resolve(
           key={payment['id'] ?? ''}
           id={payment['id'] ?? ''}
           /*
-           * No review permission is passed: card-to-card review is Telegram's alone
-           * (Payment File 02 §10), and this page draws no decision for anybody.
+           * R12 F3 item 8: card-to-card review is in BOTH places now (owner decision, reversing
+           * Payment File 02 §10). The decision controls are drawn for `receipts.review`; the
+           * server charges it again, and the credit needs `users.wallet.credit` as well.
            */
           mayViewReceipts={may('receipts.view')}
           /*
@@ -1052,6 +1053,9 @@ export function resolve(
           mayViewRefunds={may('refunds.view')}
           // TonPays Telegram §9.6.4: resolving an UNKNOWN gateway payment from recorded evidence.
           mayReconcile={may('payments.reconcile')}
+          // R12 F3 item 8: card-to-card review in the Web Admin as well as Telegram.
+          mayReviewReceipts={may('receipts.review')}
+          mayCreditWallet={may('users.wallet.credit')}
           mayIssueRefunds={may('refunds.issue')}
           mayViewWallet={may('users.view')}
           /*

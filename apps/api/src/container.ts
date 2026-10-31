@@ -799,6 +799,8 @@ import {
   ListBackedCustomerSource,
   ListBackedOrderSource,
   ListBackedServiceSource,
+  ListBackedPaymentSource,
+  ListBackedTicketSource,
 } from './modules/commerce/global-search/application/list-backed-sources.js';
 import { ServiceGrantService } from './modules/commerce/provisioning/application/service-grant.service.js';
 import { decideOperability } from './modules/commerce/provisioning/application/panel-operability.js';
@@ -8604,6 +8606,8 @@ export function createContainer(
         CUSTOMER: new ListBackedCustomerSource(customerService),
         ORDER: new ListBackedOrderSource(orderService),
         SERVICE: new ListBackedServiceSource(serviceAdmin),
+        PAYMENT: new ListBackedPaymentSource(paymentService),
+        TICKET: new ListBackedTicketSource(ticketService),
       },
     }),
     serviceGrants: serviceGrantService,
