@@ -5,25 +5,18 @@ description: The NEXA branch → PR → CI → review → merge cycle — syncin
 
 # Branch, PR and merge in NEXA
 
-`CLAUDE.md` § Git is the authority; its full text is §0. Merging, tagging,
-releasing and deploying are the owner's call — "the work looks finished" is
-never approval. This skill is the procedure around those rules.
+`CLAUDE.md` § Git is the authority. Merging, tagging, releasing and deploying
+are the owner's call — "the work looks finished" is never approval. Read
+`references/git-rule.md` for the full rule, REST endpoints, release detail.
 
-## 0. The rule in full (moved from CLAUDE.md § Git)
+## 0. The rule in short
 
 Work on the session's task branch. **Never push implementation directly to
-`main`**, and never force-push anything.
-
-`main` moves only through a pull request that the owner has explicitly approved
-after review, with CI green on the exact reviewed head. Phase 1 was merged that
-way — reviewed to a clean round, then merged as a merge commit on the owner's
-instruction, so the reviewed history stays reachable.
-
-So: normal feature work happens on a branch and reaches `main` through a PR.
-Merging one is the owner's call, never a step you take because the work looks
-finished. Absent that explicit approval, leave the PR open and say it is
-ready. A round prompt that says to push, open a PR and merge on green IS that
-approval, for that round's PRs only (`nexa-round-pipeline`).
+`main`**, and never force-push anything. `main` moves only through a PR the
+owner explicitly approved after review, with CI green on the exact reviewed
+head, merged as a merge commit. Absent that approval, leave the PR open and say
+it is ready. A round prompt that says to push, open a PR and merge on green IS
+that approval, for that round's PRs only (`nexa-round-pipeline`).
 
 ## 1. Start from the real main
 
@@ -33,8 +26,8 @@ git log --oneline -1 origin/main
 git status -sb
 ```
 
-- On the session's branch: if its PR is already merged, restart the branch from
-  `origin/main` (same name) instead of stacking on merged history.
+- If the session branch's PR is already merged, restart it from `origin/main`
+  (same name) instead of stacking on merged history.
 - Otherwise bring main in with a **merge** (`git merge origin/main`), never a
   rebase of a pushed branch.
 
@@ -44,18 +37,13 @@ git status -sb
 bash .claude/skills/nexa-pr-workflow/scripts/branch-check.sh   # read-only
 ```
 
-Reports ahead/behind, a dirty tree, a trial-merge conflict list, a
-`packages/contracts` change (must be its own commit, with the reason), and any
-migration this branch adds whose number collides with, or sits at or below,
-`origin/main`'s highest. Self-test: `scripts/branch-check.test.sh`.
-
-A migration collision is the most common merge break here (the Mirza importer
-and three `fix10/*` PRs all claimed 0240). Fix it on the branch that merges
-second: after `git merge origin/main`, run
-`bash scripts/claude/renumber-migration.sh` (`--dry-run` first to see the plan),
-which renumbers, regenerates the journal and snapshot with the tooling and
-proves the SQL byte-identical (`nexa-migrations` § Renumbering) — never
-hand-edit `_journal.json`. Then `pnpm db:check` and the migration suites.
+Reports ahead/behind, a dirty tree, trial-merge conflicts, a `packages/contracts`
+change (its own commit, with the reason), and any migration this branch adds
+that collides with or sits at or below `origin/main`'s highest. A
+collision is fixed on the branch that merges second: after `git merge
+origin/main`, `bash scripts/claude/renumber-migration.sh` (`--dry-run` first),
+never a hand-edited `_journal.json` (`nexa-migrations` § Renumbering); then
+`pnpm db:check` and the migration suites.
 
 ## 3. Open the PR
 
@@ -65,24 +53,20 @@ hand-edit `_journal.json`. Then `pnpm db:check` and the migration suites.
   run — cite commands, never discarded probes), what is **not** in the PR,
   open owner decisions, overlaps/stacking ("stacked on #N", "carries #N").
 - No model names in commits, PR titles or bodies.
-- Do not create a PR unless asked; when you do, say it is ready and stop. A
-  round prompt that says to push and open a PR is that ask
-  (`nexa-round-pipeline`).
+- Do not create a PR unless asked; then say it is ready and stop. A round
+  prompt that says to push and open a PR is that ask (`nexa-round-pipeline`).
 - A citation or falsification pin count (`pnpm check:citations`) rises only by
-  exactly the number of citations this PR adds. Never raise it to hide a
-  missing reference.
+  exactly the citations this PR adds. Never raise it to hide a missing one.
 
 ## 4. CI and reviews
 
 - CI runs on the PR's merge ref (`docs/ci.md`); pushes to non-main branches do
   not run CI. Read the failing job's log before touching code.
-- Read CI with `nexa-ci-watch` (`bash scripts/claude/ci-status.sh <pr>`,
-  `--fail-logs`, `--gate`, `--codex`). GraphQL is blocked here, so `gh pr view`,
-  `gh pr checks` and `gh run …` fail with 403: use `gh api repos/{owner}/{repo}/…`
-  REST (`pulls/{n}`, `commits/{sha}/check-runs`, `actions/jobs/{id}/logs`,
-  `actions/runs/{id}/rerun-failed-jobs`, `pulls/{n}/ccr/review_threads`).
-- Codex reviews automatically when the PR opens; read that one review, never
-  request another.
+- Read CI with `nexa-ci-watch` (`bash scripts/claude/ci-status.sh <pr>`).
+  GraphQL is blocked: `gh pr view`, `gh pr checks`, `gh run …` fail with 403;
+  use `gh api repos/{owner}/{repo}/…` REST.
+- Request the Codex review yourself (`@codex review`, at most twice per PR) and
+  act on that one review only (`nexa-round-pipeline` §3).
 - Diagnose every red: this PR's bug, or red on `main` too (then port the fix
   that exists, and say so once on the PR). "Flake" is not a root cause; at most
   one re-run, only to confirm.
@@ -95,7 +79,7 @@ hand-edit `_journal.json`. Then `pnpm db:check` and the migration suites.
 ## 5. Stacked and dependent PRs
 
 - Merge order follows the stack; the later PR merges `main` in after each
-  earlier one lands ("Merge main into <branch> (after #N)").
+  earlier one lands.
 - Two PRs touching the same migration range, `main.recovery.ts`, `app.tsx` or
   a contracts file need an agreed order — record it in both PR bodies.
 
@@ -114,10 +98,6 @@ and the Codex findings are fixed:
 
 ## 7. Release candidates
 
-A release is a tag on a `main` commit whose **push** CI run is green;
-`release.yml` refuses anything else and never republishes a version.
-Preparing notes is fine; pushing a `v*` tag is the owner's decision. With a
-Docker daemon, the deployment smokes (`nexa-test-selection` § Heavy suites) are
-the local check of a release candidate; CI's Ubuntu job runs them anyway.
-Version, notes and deploy steps: `docs/deployment.md` (§ releases, update,
-rollback).
+A release is a tag on a `main` commit whose **push** CI run is green. Preparing
+notes is fine; pushing a `v*` tag is the owner's decision. Deploy steps:
+`docs/deployment.md`.
