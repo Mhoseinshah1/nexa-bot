@@ -2059,6 +2059,20 @@
       "when": 1793082798163,
       "tag": "0293_process_runs",
       "breakpoints": true
+    },
+    {
+      "idx": 294,
+      "version": "7",
+      "when": 1793097398019,
+      "tag": "0294_panels_files_only_delivery",
+      "breakpoints": true
+    },
+    {
+      "idx": 295,
+      "version": "7",
+      "when": 1793097407507,
+      "tag": "0295_panels_qr_kind",
+      "breakpoints": true
     }
   ]
 }

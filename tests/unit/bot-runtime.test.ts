@@ -1094,6 +1094,11 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.devices_option',
       // Package E: the connection-files button and its three answers.
       'bot.service.files_button',
+      // R11 A4: «دریافت فایل‌های جدید» on a files-only panel — its button, ask, confirm, cooldown.
+      'bot.service.files_new_ask',
+      'bot.service.files_new_button',
+      'bot.service.files_new_confirm_button',
+      'bot.service.files_new_cooldown',
       'bot.service.files_partial',
       'bot.service.files_rate_limited',
       'bot.service.files_unavailable',

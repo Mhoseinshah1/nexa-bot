@@ -24,7 +24,7 @@ import {
   sanitizedErrorCode,
 } from '../../../platform/opslog/application/error-events.js';
 import type { OpsLogFacts, OpsLogWords } from './ports.js';
-import { identityOf, stalledReport, technicalLine } from './presenters.js';
+import { identityOf, serviceUsernameValue, stalledReport, technicalLine } from './presenters.js';
 import {
   PROVISIONING_DELIVERED_CODE,
   PROVISIONING_STALLED_CODE,
@@ -113,6 +113,22 @@ export class OperationalEventPresenter implements OpsEventPresenter {
 
   severity(klass: string): string {
     return this.deps.words.severity(klass);
+  }
+
+  /**
+   * R11 A7: an event whose context names a service (`serviceId`, as every service event's does)
+   * shows that service's panel account name on the generic layout too — the id itself is never
+   * printed. Null for an event about no service, or about one that is gone.
+   */
+  async serviceUsernameOf(
+    scope: TenantContext,
+    input: OperationalEventInput,
+    tx: unknown,
+  ): Promise<string | null> {
+    const serviceId = safeIdentifier(input.context?.['serviceId']);
+    if (serviceId === null) return null;
+    const service = await this.deps.facts.service(scope, serviceId, tx as TransactionScope);
+    return serviceUsernameValue(service?.providerUsername);
   }
 
   async present(
@@ -217,6 +233,12 @@ export class OperationalEventPresenter implements OpsEventPresenter {
     if (orderId !== null) {
       const order = await facts.order(scope, orderId, tx);
       if (order?.code !== null && order?.code !== undefined) values['orderCode'] = order.code;
+      // R11 A7: a renewal or add-on order names the service's panel account; a new purchase
+      // that never settled has no service yet, so the line is dropped.
+      const serviceUsername = serviceUsernameValue(
+        await facts.serviceUsernameOfOrder(scope, orderId, tx),
+      );
+      if (serviceUsername !== null) values['serviceUsername'] = serviceUsername;
     }
     const buttons: OpsLogButton[] = [
       { kind: 'GATEWAY', ref: provider },

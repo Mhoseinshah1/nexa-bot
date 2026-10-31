@@ -29,7 +29,7 @@ import {
   type InlineButtonIcons,
   type InlineButtonStyles,
 } from '@nexa/contracts';
-import { CATALOGUE_FA, formatMoney } from '@nexa/i18n';
+import { CATALOGUE_FA, formatMoney, strikeThroughText } from '@nexa/i18n';
 import {
   buttonsHaveIcons,
   withoutButtonIcons,
@@ -84,6 +84,7 @@ import {
   richMessageBody,
   richTableBlock,
   type RichBlock,
+  type RichText,
   plainTableText,
 } from '../../../../infrastructure/telegram/rich-message.js';
 import type { InlineButtonStyleReader } from '../application/inline-buttons.js';
@@ -99,6 +100,7 @@ import type {
   AppearanceReader,
   CustomerButton,
   CustomerButtonLabel,
+  CustomerCallbackButton,
   CustomerCaption,
   CustomerMediaGroupMessage,
   CustomerButtonRow,
@@ -1320,6 +1322,28 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
   }
 
   /**
+   * R11 A9: what follows a personally discounted line's label — the price it replaces,
+   * struck through, and the tag. A button is plain text (no `parse_mode`, no entities), so
+   * the strike is `strikeThroughText`; the price is `formatMoney`, like the label's own.
+   */
+  private async personalDiscountSuffix(
+    scope: ScopeContext,
+    discount: NonNullable<CustomerCallbackButton['personalDiscount']>,
+  ): Promise<string> {
+    return `${strikeThroughText(formatMoney(discount.listPrice))} ${await this.personalDiscountTag(
+      scope,
+      discount.percent,
+    )}`;
+  }
+
+  /** R11 A9: `bot.pricing.personal_discount_tag`, as plain text (a button, a table cell). */
+  private async personalDiscountTag(scope: ScopeContext, percent: number): Promise<string> {
+    return appearanceFallbackText(
+      await this.templates.render(scope, 'bot.pricing.personal_discount_tag', { percent }),
+    );
+  }
+
+  /**
    * A label is either a catalogue key or tenant data. One place that knows which.
    *
    * Phase 2 Item 3: a registry button also takes its optional premium ICON here
@@ -1378,7 +1402,13 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     const ownIconCategories: string[] = [];
     for (const button of buttons) {
       const category = categoryOf(button);
-      const label = await this.labelText(scope, button.label);
+      const ownLabel = await this.labelText(scope, button.label);
+      // R11 A9: a personally discounted line names the price it replaces and the percent.
+      const discount = 'data' in button ? button.personalDiscount : undefined;
+      const label =
+        discount === undefined
+          ? ownLabel
+          : `${ownLabel} ${await this.personalDiscountSuffix(scope, discount)}`;
       // Item 2: a category's `after` emoji follows its label; with none the label is unchanged.
       const text =
         category === undefined
@@ -1635,7 +1665,14 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       button.planFacts !== undefined &&
       button.label.kind === 'TEXT' &&
       button.label.amount !== undefined
-        ? [{ title: button.label.text, amount: button.label.amount, facts: button.planFacts }]
+        ? [
+            {
+              title: button.label.text,
+              amount: button.label.amount,
+              facts: button.planFacts,
+              personalDiscount: button.personalDiscount,
+            },
+          ]
         : [],
     );
     if (plans.length === 0) return null;
@@ -1647,13 +1684,25 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       await label('bot.catalog.table_days_header'),
       await label('bot.catalog.table_price_header'),
     ];
-    const rows: string[][] = [];
+    const rows: RichText[][] = [];
     for (const plan of plans) {
+      const discount = plan.personalDiscount;
       rows.push([
         plan.title,
         await label('bot.catalog.table_traffic_cell', { traffic: plan.facts.trafficBytes }),
         await label('bot.catalog.table_days_cell', { durationDays: plan.facts.durationDays }),
-        formatMoney(plan.amount),
+        /*
+         * R11 A9: a personally discounted plan's price cell — the price it replaces as a
+         * real strikethrough (a rich message carries formatting, a button does not), the
+         * discounted price the quote charges, and the tag.
+         */
+        discount === undefined
+          ? formatMoney(plan.amount)
+          : [
+              { type: 'strikethrough', text: formatMoney(discount.listPrice) },
+              ` ${formatMoney(plan.amount)} `,
+              await this.personalDiscountTag(scope, discount.percent),
+            ],
       ]);
     }
     return richTableBlock({ header, rows, compact: true });

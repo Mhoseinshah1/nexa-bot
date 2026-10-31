@@ -19,6 +19,7 @@ import {
   type IdGenerator,
   type IdempotencyStore,
   type OperationalEventRecorder,
+  type PanelQrKind,
   type PanelStatus,
   type ProviderConnectionAdapter,
   type ProviderType,
@@ -28,6 +29,10 @@ import {
   NexaError,
   shapeAcceptsCredential,
   providerDescriptor,
+  providerDeliversConnectionFiles,
+  panelSupportsQrKind,
+  DEFAULT_PANEL_QR_KIND,
+  deriveCapabilityRegistry,
   validateUsernamePolicy as decideUsernamePolicy,
 } from '@nexa/contracts';
 import type { PanelActivation, PanelSellability } from '@nexa/contracts';
@@ -147,6 +152,11 @@ export interface UpdatePanelCommand {
   readonly maxServices?: number | null | undefined;
   /** Phase C3: absent leaves it; `null` leaves the group; a label sets it. */
   readonly balancingGroup?: string | null | undefined;
+  /** R11 A4: absent leaves it; true or false sets «فقط فایل، بدون لینک ساب». */
+  readonly filesOnlyDelivery?: boolean | undefined;
+  /** R11 A4: «نوع بارکد» — RickPanel only; absent leaves it. */
+  readonly qrKind?: PanelQrKind | undefined;
+  readonly singboxIntervalMinutes?: number | undefined;
   /** Absent leaves the whole policy; present replaces the whole policy. */
   readonly usernamePolicy?: PanelUsernamePolicy | undefined;
   readonly idempotencyKey: string;
@@ -756,6 +766,30 @@ export class PanelService {
   }
 
   /**
+   * R11 A4: whether «فقط فایل، بدون لینک ساب» may be on for a panel of this provider type.
+   *
+   * The descriptor must declare `SUBSCRIPTION_FILES` (the question the Web Admin asks to draw
+   * the switch) AND the adapter must implement and declare it (the capability registry's
+   * row), so a provider that declares files with no method behind them cannot be switched
+   * into hiding the only thing a customer would have.
+   */
+  private assertDeliversFiles(providerType: string): void {
+    let supported = false;
+    if (providerDeliversConnectionFiles(providerType)) {
+      supported = deriveCapabilityRegistry(this.deps.adapters(providerType as ProviderType)).some(
+        (entry) => entry.row === 'SUBSCRIPTION_FILES' && entry.supported,
+      );
+    }
+    if (!supported) {
+      throw errors.validation(
+        PANEL_ERROR_CODES.PANEL_FILES_ONLY_UNSUPPORTED,
+        'This panel does not hand over connection files, so its customers cannot be given files only.',
+        { providerType },
+      );
+    }
+  }
+
+  /**
    * `requiresFeature` — a NEW panel of a gated type needs the tenant's flag on.
    *
    * Creation only, by the lead's decision for R10 C2: a flag switched off after panels of
@@ -1180,6 +1214,14 @@ export class PanelService {
       // Phase C3. ONLY when present, for the reason `setStatus` gives about `name`: a key
       // minted before this release and replayed after it must hash as it did.
       ...(command.balancingGroup === undefined ? {} : { balancingGroup: command.balancingGroup }),
+      // R11 A4: for the same reason — a key minted before this release hashes as it did.
+      ...(command.filesOnlyDelivery === undefined
+        ? {}
+        : { filesOnlyDelivery: command.filesOnlyDelivery }),
+      ...(command.qrKind === undefined ? {} : { qrKind: command.qrKind }),
+      ...(command.singboxIntervalMinutes === undefined
+        ? {}
+        : { singboxIntervalMinutes: command.singboxIntervalMinutes }),
     });
     const existing = await this.deps.idempotency.find<{ panelId: string }>(
       scope,
@@ -1230,12 +1272,57 @@ export class PanelService {
           maxServices?: number | null;
           usernamePolicy?: PanelUsernamePolicy;
           balancingGroup?: string | null;
+          filesOnlyDelivery?: boolean;
+          qrKind?: PanelQrKind;
+          singboxIntervalMinutes?: number;
         } = {};
         // Phase C3: a label, or null to leave the group. It decides which of the operator's
         // own panels a NEW account may land on, never anything about an existing service.
         if (command.balancingGroup !== undefined) changes.balancingGroup = command.balancingGroup;
         if (command.name !== undefined) changes.name = command.name;
         if (baseUrl !== undefined) changes.baseUrl = baseUrl;
+        /*
+         * R11 A4. ON is accepted only for a panel whose provider hands over connection files,
+         * decided against the STORED provider type under the lock (the request carries none),
+         * and refused with a Persian-mapped code rather than stored: with the link hidden and
+         * no files, a customer would be given nothing to connect with. OFF is always allowed.
+         * Setting the value it already has changes nothing and is not an audit row.
+         */
+        if (command.filesOnlyDelivery !== undefined) {
+          if (command.filesOnlyDelivery) this.assertDeliversFiles(before.panel.providerType);
+          if (command.filesOnlyDelivery !== before.panel.filesOnlyDelivery) {
+            changes.filesOnlyDelivery = command.filesOnlyDelivery;
+          }
+        }
+        /*
+         * R11 A4, «نوع بارکد». Only a RickPanel has a choice of QR, decided against the STORED
+         * provider type under the lock. A CHANGE to anything but the default is refused on any
+         * other type and stores nothing; asking for the value a panel already holds is never a
+         * refusal, so a form that sends all of its fields back is not punished for it.
+         */
+        if (command.qrKind !== undefined || command.singboxIntervalMinutes !== undefined) {
+          const kindChanges =
+            command.qrKind !== undefined && command.qrKind !== before.panel.qrKind;
+          const intervalChanges =
+            command.singboxIntervalMinutes !== undefined &&
+            command.singboxIntervalMinutes !== before.panel.singboxIntervalMinutes;
+          if (
+            (kindChanges || intervalChanges) &&
+            !panelSupportsQrKind(before.panel.providerType) &&
+            // Putting a panel back on the default kind is always allowed.
+            !(kindChanges && !intervalChanges && command.qrKind === DEFAULT_PANEL_QR_KIND)
+          ) {
+            throw errors.validation(
+              PANEL_ERROR_CODES.PANEL_QR_KIND_UNSUPPORTED,
+              'Only a RickPanel panel can choose the kind of QR its customers are shown.',
+              { providerType: before.panel.providerType },
+            );
+          }
+          if (kindChanges) changes.qrKind = command.qrKind as PanelQrKind;
+          if (intervalChanges) {
+            changes.singboxIntervalMinutes = command.singboxIntervalMinutes as number;
+          }
+        }
         /*
          * Accepted WHATEVER the panel's current usage is, deliberately.
          *
@@ -1373,6 +1460,9 @@ export class PanelService {
                */
               usernamePolicy: before.panel.usernamePolicy,
               balancingGroup: before.panel.balancingGroup,
+              filesOnlyDelivery: before.panel.filesOnlyDelivery,
+              qrKind: before.panel.qrKind,
+              singboxIntervalMinutes: before.panel.singboxIntervalMinutes,
             },
             after: {
               name: updated.name,
@@ -1381,6 +1471,9 @@ export class PanelService {
               maxServices: updated.maxServices,
               usernamePolicy: updated.usernamePolicy,
               balancingGroup: updated.balancingGroup,
+              filesOnlyDelivery: updated.filesOnlyDelivery,
+              qrKind: updated.qrKind,
+              singboxIntervalMinutes: updated.singboxIntervalMinutes,
             },
             result: 'SUCCESS',
           },

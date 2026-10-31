@@ -628,8 +628,11 @@ const RECOVERIES = [
 
 export const OPS_B: readonly ShotFixture[] = [
   fixture('/settings', settingListResponseSchema, { settings: SETTINGS_IN_USE }),
-  fixture('/features', featureFlagListResponseSchema, { flags: FLAGS }),
-  fixture('/templates', templateListResponseSchema, { templates: TEMPLATE_VIEWS }),
+  fixture('/features', featureFlagListResponseSchema, { flags: FLAGS, total: FLAGS.length }),
+  fixture('/templates', templateListResponseSchema, {
+    templates: TEMPLATE_VIEWS,
+    total: TEMPLATE_VIEWS.length,
+  }),
   fixture('/support/faqs', supportFaqListSchema, { items: FAQS }),
   fixture('/tickets', ticketListResponseSchema, { tickets: TICKETS, nextCursor: null }),
   fixture('/tickets/assignees', ticketAssigneesResponseSchema, {

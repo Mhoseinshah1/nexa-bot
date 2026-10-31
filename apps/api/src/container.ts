@@ -125,6 +125,10 @@ import {
 // WP-A8: advanced provider settings.
 import { PanelAdvancedService } from './modules/platform/panels/application/panel-advanced.service.js';
 import { PanelPolicyReader } from './modules/platform/panels/application/panel-policy.js';
+import {
+  PanelFilesOnlyReader,
+  PanelQrOptionsReader,
+} from './modules/platform/panels/application/panel-files-only.js';
 import { DrizzlePanelPolicyRepository } from './modules/platform/panels/infrastructure/drizzle-panel-policy.repository.js';
 import { PROVIDER_RULES } from './modules/platform/providers/infrastructure/provider-rules.js';
 import { SystemClock } from './infrastructure/clock.js';
@@ -783,6 +787,12 @@ import { ServiceAutoRenewService } from './modules/commerce/provisioning/applica
 import { DrizzleServiceAutoRenewRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-auto-renew.repository.js';
 import { DrizzleServiceTransferRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-transfer.repository.js';
 import { ServiceAdminService } from './modules/commerce/provisioning/application/service-admin.service.js';
+import { GlobalSearchService } from './modules/commerce/global-search/application/global-search.service.js';
+import {
+  ListBackedCustomerSource,
+  ListBackedOrderSource,
+  ListBackedServiceSource,
+} from './modules/commerce/global-search/application/list-backed-sources.js';
 import { ServiceGrantService } from './modules/commerce/provisioning/application/service-grant.service.js';
 import { decideOperability } from './modules/commerce/provisioning/application/panel-operability.js';
 import {
@@ -1511,6 +1521,8 @@ export interface Container {
    * operation from a GET.
    */
   readonly serviceAdmin: ServiceAdminService;
+  /** R11 A1: the top-bar search over customers, orders and services. */
+  readonly globalSearch: GlobalSearchService;
   /** Program §13: an operator's free traffic or time grant to one service. */
   readonly serviceGrants: ServiceGrantService;
   /** The lane that creates services on panels. Driven by the `provisioner` role. */
@@ -2513,6 +2525,9 @@ export function createContainer(
    */
   const panelPolicyRepository = new DrizzlePanelPolicyRepository(database.db);
   const panelPolicyReader = new PanelPolicyReader(panelPolicyRepository);
+  // R11 A4: «فقط فایل، بدون لینک ساب» — the one reader every link-showing place asks.
+  const panelFilesOnlyReader = new PanelFilesOnlyReader(panelRepository);
+  const panelQrOptionsReader = new PanelQrOptionsReader(panelRepository);
   const panelSalesGate = new PanelSalesGate({
     panels: panelRepository,
     capacity: panelCapacity,
@@ -2554,8 +2569,28 @@ export function createContainer(
    */
   const productCategoryRepository = new DrizzleProductCategoryRepository(database.db);
 
+  /*
+   * Built before the catalogue (R11 A9): `ProductService` lists a customer's personal
+   * discount through `personalListPrices`, the same boundary every draft is priced at.
+   */
+  const discountRepository = new DrizzleDiscountRepository(database.db);
+  const cashbackRuleRepository = new DrizzleCashbackRuleRepository(database.db);
+  const orderCashbackRepository = new DrizzleOrderCashbackRepository(database.db);
+  const pricingService = new PricingService({
+    referrals: referralProgram,
+    resellers: resellerService,
+    discounts: discountRepository,
+    cashbackRules: cashbackRuleRepository,
+    orderCashback: orderCashbackRepository,
+    outbox,
+    ids,
+    // R10 D3: the customer's personal discount, behind `personal_discount`.
+    personalDiscounts: personalDiscountRepository,
+    featureFlags: featureFlagResolver,
+  });
   const productService = new ProductService({
     resellers: resellerService,
+    pricing: pricingService,
     panelSales: panelSalesGate,
     placement: panelPlacement,
     repository: productRepository,
@@ -2932,21 +2967,6 @@ export function createContainer(
     settings: settingsResolver,
     auditHistory: new DrizzleAuditHistoryReader(database.db),
     outbox,
-  });
-  const discountRepository = new DrizzleDiscountRepository(database.db);
-  const cashbackRuleRepository = new DrizzleCashbackRuleRepository(database.db);
-  const orderCashbackRepository = new DrizzleOrderCashbackRepository(database.db);
-  const pricingService = new PricingService({
-    referrals: referralProgram,
-    resellers: resellerService,
-    discounts: discountRepository,
-    cashbackRules: cashbackRuleRepository,
-    orderCashback: orderCashbackRepository,
-    outbox,
-    ids,
-    // R10 D3: the customer's personal discount, behind `personal_discount`.
-    personalDiscounts: personalDiscountRepository,
-    featureFlags: featureFlagResolver,
   });
   /*
    * The operator's half of pricing (P12): the two rule catalogues and the read-only
@@ -6389,6 +6409,8 @@ export function createContainer(
     clock,
     guard,
     panelPolicy: panelPolicyReader,
+    filesOnly: panelFilesOnlyReader,
+    qrOptions: panelQrOptionsReader,
     /*
      * R3 item 6: every connection file, right after a delivered link, for any purchase
      * kind. `subscriptionFileService` is built further down (it needs the provisioning
@@ -8547,6 +8569,14 @@ export function createContainer(
     receiptFiles,
     provisioning: provisioningService,
     serviceAdmin,
+    globalSearch: new GlobalSearchService({
+      guard,
+      sources: {
+        CUSTOMER: new ListBackedCustomerSource(customerService),
+        ORDER: new ListBackedOrderSource(orderService),
+        SERVICE: new ListBackedServiceSource(serviceAdmin),
+      },
+    }),
     serviceGrants: serviceGrantService,
     provisioner,
     provisionerLoop,

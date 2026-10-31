@@ -88,6 +88,23 @@ assert "the issue-comments request is paginated" "$(grep -q -- 'issues/315/comme
 run codex-big --codex 315
 check "a huge issue-comment payload does not break --codex" 0 "reviewed=abcdef01 head=abcdef01 findings=none" "$rc" "$out"
 
+# The receipt comment ("Didn't find any major issues", "Reviewed commit") and Codex's 👍
+# reaction. Lookalike logins are ignored; a 👍 older than the head's first check suite (its
+# push) is stale.
+run codex-receipt --codex 315
+check "receipt: clean review of the head, no marker" 0 "reviewed=abcdef01 head=abcdef01 findings=none receipt=abcdef01:clean thumbsup=head" "$rc" "$out"
+run codex-stale --codex 315
+check "receipt of an older head; the bot's 👍 predates the head's push" 0 "reviewed=11111111 head=abcdef01 findings=none receipt=11111111:clean thumbsup=stale" "$rc" "$out"
+run codex-receipt-findings --codex 315
+check "a receipt with suggestions is findings, never findings=none" 0 "reviewed=abcdef01 head=abcdef01 receipt=abcdef01:findings" "$rc" "$out"
+# Two reviews of the head: the FIRST receipt is the one acted on, even when a later one is clean.
+# A 👍 with no check suite for the head cannot be tied to it.
+run codex-dup --codex 315
+check "two receipts for the head: the first one (findings) is reported" 0 "reviewed=abcdef01 head=abcdef01 receipt=abcdef01:findings thumbsup=unknown" "$rc" "$out"
+assert "the later clean receipt does not turn the head clean" "$(grep -q 'findings=none' <<<"$out" && echo 1 || echo 0)" "$out"
+run codex --codex 315
+assert "no receipt, no reaction: neither is claimed" "$(grep -qE 'receipt=|thumbsup=' <<<"$out" && echo 1 || echo 0)" "$out"
+
 run wait --wait 315 --every 0 --max 5
 check "wait polls until nothing is pending, then exits 0" 0 "green=2 pending=0" "$rc" "$out"
 assert "wait printed a summary per poll (2)" "$(((  $(grep -c '^abcdef01' <<<"$out") == 2) ? 0 : 1))" "$out"

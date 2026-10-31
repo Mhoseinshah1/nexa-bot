@@ -164,6 +164,8 @@ export const INLINE_BUTTON_NAME: Readonly<Record<InlineButtonKey, WebKey>> = {
   'service.link': 'web.ib_button_service_link',
   'service.rotate': 'web.ib_button_service_rotate',
   'service.rotate_confirm': 'web.ib_button_service_rotate_confirm',
+  'service.files_new': 'web.ib_button_service_files_new',
+  'service.files_new_confirm': 'web.ib_button_service_files_new_confirm',
   'service.note': 'web.ib_button_service_note',
   'service.renew': 'web.ib_button_service_renew',
   'service.renew_option': 'web.ib_button_service_renew_option',

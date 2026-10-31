@@ -55,6 +55,13 @@ function harness(options: {
   provider?: string | null;
   order?: OrderOverrides;
   invoice?: Record<string, unknown> | null;
+  /** R11 A7: the panel account of the service the order is tied to; null/absent for none. */
+  serviceUsername?: string | null;
+  /** The payment's resolution note (`<provider>:<status>`), which picks the L4 headline. */
+  resolutionNote?: string;
+  /** A service refund request and the service it is about, for `ServiceRefundRequestResolved`. */
+  refundRequest?: Record<string, unknown>;
+  service?: Record<string, unknown>;
 }) {
   const payment = {
     id: 'pay-1',
@@ -69,6 +76,7 @@ function harness(options: {
     customerFee: null,
     confirmedAt: AT,
     resolvedAt: AT,
+    resolutionNote: options.resolutionNote ?? null,
   };
   const customer = {
     id: 'cust-1',
@@ -129,7 +137,8 @@ function harness(options: {
         .reduce((sum, row) => sum + row.signed, 0n);
       return { before: money(after - own, currency), after: money(after, currency) };
     },
-    service: async () => null,
+    service: async () => (options.service ?? null) as never,
+    serviceUsernameOfOrder: async () => options.serviceUsername ?? null,
     admin: async () => null,
   } as unknown as OpsLogFacts;
   const queued: Parameters<
@@ -149,7 +158,7 @@ function harness(options: {
     invoices: { findByPayment: async () => (options.invoice ?? null) as never },
     facts,
     words,
-    refundRequests: { findById: async () => null },
+    refundRequests: { findById: async () => (options.refundRequest ?? null) as never },
   });
   const event = (eventType: string, payload: unknown): DomainEvent =>
     ({
@@ -588,5 +597,356 @@ describe('L6 — a refund', () => {
       TX,
     );
     expect(render(h.queued[1]!)).toContain('بازگشت وجه با درخواست دیگری جایگزین شد');
+  });
+});
+
+/**
+ * R11 A7 — every payment log of an order tied to a service prints the service's panel account
+ * name as its own line («👤 نام کاربری سرویس»), and a log of an order with no service (and a
+ * wallet top-up) prints no such line.
+ *
+ * MUTATIONS (each applied, the named tests red, reverted, green):
+ *  - `FinancialLogConsumer.withServiceUsername` body removed -> every «names the service» case
+ *    except order_paid / crypto (which read it in `PaymentConfirmed`) and the refund request;
+ *  - the `PaymentConfirmed` call of `withServiceUsername` removed -> the order_paid and crypto cases;
+ *  - the `ServiceRefundRequestResolved` line removed -> the refund-request case.
+ */
+describe('R11 A7 — payment logs of an order tied to a service name its panel account', () => {
+  const LINE = '👤 نام کاربری سرویس: nx7k2m9q';
+  const LABEL = 'نام کاربری سرویس';
+  const refundPayload = (channel: string) => ({
+    refundId: 'rf-1',
+    customerId: 'cust-1',
+    paymentId: 'pay-1',
+    orderId: 'ord-1',
+    channel,
+    amountMinor: '250000',
+    currency: 'IRT',
+  });
+  const invoice = {
+    provider: 'TONPAYS',
+    providerUnit: 'IRT',
+    sentAmount: 250_000n,
+    creditAmount: 123_456n,
+    providerInvoiceId: 'inv-1',
+  };
+
+  interface Case {
+    readonly name: string;
+    readonly template: string;
+    readonly setup: Parameters<typeof harness>[0];
+    readonly run: (h: ReturnType<typeof harness>) => Promise<void>;
+  }
+  const base = { method: 'MANUAL_TRANSFER', orderId: 'ord-1' } as const;
+  const cases: Case[] = [
+    {
+      name: 'L2 order paid (card)',
+      template: 'ops.financial.order_paid',
+      setup: base,
+      run: (h) =>
+        h.consumer.handle(h.event('PaymentConfirmed', confirmed('MANUAL_TRANSFER', 'ord-1')), TX),
+    },
+    {
+      name: 'L2 order paid (wallet)',
+      template: 'ops.financial.order_paid',
+      setup: { method: 'WALLET', orderId: 'ord-1' },
+      run: async (h) => {
+        h.ledger.push({
+          id: 'e1',
+          paymentId: 'pay-1',
+          orderId: 'ord-1',
+          signed: -250_000n,
+          reason: 'PURCHASE',
+          at: 1,
+        });
+        await h.consumer.handle(
+          h.event('PaymentConfirmed', confirmed('WALLET', 'ord-1', 'WALLET_DEBIT')),
+          TX,
+        );
+      },
+    },
+    {
+      name: 'L3 crypto order payment',
+      template: 'ops.log.payment_crypto',
+      setup: { method: 'GATEWAY', orderId: 'ord-1', provider: 'NOWPAYMENTS' },
+      run: (h) =>
+        h.consumer.handle(
+          h.event('PaymentConfirmed', confirmed('GATEWAY', 'ord-1', 'GATEWAY_INQUIRY')),
+          TX,
+        ),
+    },
+    {
+      name: 'L4 payment failed',
+      template: 'ops.financial.payment_failed',
+      setup: { ...base, resolutionNote: 'TONPAYS:failed' },
+      run: (h) =>
+        h.consumer.handle(
+          h.event('PaymentFailed', {
+            customerId: 'cust-1',
+            orderId: 'ord-1',
+            method: 'GATEWAY',
+            cause: 'GATEWAY_FAILED',
+          }),
+          TX,
+        ),
+    },
+    {
+      name: 'L4 invoice cancelled',
+      template: 'ops.financial.invoice_cancelled',
+      setup: { ...base, resolutionNote: 'TONPAYS:canceled_by_customer' },
+      run: (h) =>
+        h.consumer.handle(
+          h.event('PaymentFailed', {
+            customerId: 'cust-1',
+            orderId: 'ord-1',
+            method: 'GATEWAY',
+            cause: 'GATEWAY_FAILED',
+          }),
+          TX,
+        ),
+    },
+    {
+      name: 'L4 receipt rejected',
+      template: 'ops.financial.receipt_rejected',
+      setup: base,
+      run: (h) =>
+        h.consumer.handle(
+          h.event('PaymentFailed', {
+            customerId: 'cust-1',
+            orderId: 'ord-1',
+            method: 'MANUAL_TRANSFER',
+            cause: 'REJECTED',
+          }),
+          TX,
+        ),
+    },
+    {
+      name: 'L4 payment expired',
+      template: 'ops.financial.payment_expired',
+      setup: { ...base, resolutionNote: 'TONPAYS:expired' },
+      run: (h) =>
+        h.consumer.handle(
+          h.event('PaymentFailed', {
+            customerId: 'cust-1',
+            orderId: 'ord-1',
+            method: 'GATEWAY',
+            cause: 'GATEWAY_FAILED',
+          }),
+          TX,
+        ),
+    },
+    {
+      name: 'L4 underpaid',
+      template: 'ops.financial.payment_underpaid',
+      setup: { ...base, invoice },
+      run: (h) =>
+        h.consumer.handle(
+          h.event('GatewayPaymentAttentionRaised', {
+            customerId: 'cust-1',
+            orderId: 'ord-1',
+            provider: 'TONPAYS',
+            reason: 'UNDERPAID',
+          }),
+          TX,
+        ),
+    },
+    {
+      name: 'L4 overpaid',
+      template: 'ops.financial.payment_overpaid',
+      setup: { ...base, invoice },
+      run: (h) =>
+        h.consumer.handle(
+          h.event('GatewayPaymentAttentionRaised', {
+            customerId: 'cust-1',
+            orderId: 'ord-1',
+            provider: 'TONPAYS',
+            reason: 'OVERPAID',
+          }),
+          TX,
+        ),
+    },
+    {
+      name: 'L5 late completion',
+      template: 'ops.financial.late_completion',
+      setup: base,
+      run: (h) =>
+        h.consumer.handle(
+          h.event('PaymentLateCompletionObserved', {
+            customerId: 'cust-1',
+            orderId: 'ord-1',
+            provider: 'TONPAYS',
+          }),
+          TX,
+        ),
+    },
+    {
+      name: 'L5 outcome unknown',
+      template: 'ops.financial.outcome_unknown',
+      setup: base,
+      run: (h) => h.consumer.handle(h.event('PaymentOutcomeUnknown', {}), TX),
+    },
+    {
+      name: 'L5 credit amount mismatch',
+      template: 'ops.financial.credit_amount_mismatch',
+      setup: { method: 'GATEWAY', orderId: 'ord-1', provider: 'TONPAYS', invoice },
+      run: (h) =>
+        h.consumer.handle(
+          h.event('GatewayPaymentAttentionRaised', {
+            customerId: 'cust-1',
+            orderId: 'ord-1',
+            provider: 'TONPAYS',
+            reason: 'CREDIT_AMOUNT_MISMATCH',
+          }),
+          TX,
+        ),
+    },
+    {
+      name: 'L5 late credit',
+      template: 'ops.financial.late_credit',
+      setup: base,
+      run: async (h) => {
+        h.ledger.push({
+          id: 'e1',
+          paymentId: 'pay-1',
+          orderId: 'ord-1',
+          signed: 250_000n,
+          reason: 'GATEWAY_LATE_CREDIT',
+          at: 1,
+        });
+        await h.consumer.handle(
+          h.event('PaymentLateCredited', {
+            customerId: 'cust-1',
+            orderId: 'ord-1',
+            provider: 'TONPAYS',
+            entryId: 'e1',
+            amountMinor: '250000',
+            currency: 'IRT',
+          }),
+          TX,
+        );
+      },
+    },
+    {
+      name: 'L6 refund completed',
+      template: 'ops.financial.refund_completed',
+      setup: base,
+      run: (h) =>
+        h.consumer.handle(h.event('RefundCompleted', refundPayload('EXTERNAL_MANUAL')), TX),
+    },
+    {
+      name: 'L6 refund failed',
+      template: 'ops.financial.refund_failed',
+      setup: base,
+      run: (h) =>
+        h.consumer.handle(
+          h.event('RefundFailed', { ...refundPayload('EXTERNAL_MANUAL'), cause: 'SUPERSEDED' }),
+          TX,
+        ),
+    },
+    {
+      name: 'L6 service refund request',
+      template: 'ops.financial.service_refund_request',
+      setup: {
+        ...base,
+        // Unlike the payment logs this one names the SERVICE directly (no order lookup).
+        serviceUsername: null,
+        service: { id: 'svc-1', code: 'SV3H5J7K', providerUsername: 'nx7k2m9q' },
+        refundRequest: {
+          customerId: 'cust-1',
+          serviceId: 'svc-1',
+          paymentId: 'pay-1',
+          approvedAmount: irt(250_000),
+          decidedByAdminId: null,
+          resolvedAt: AT,
+        },
+      },
+      run: (h) =>
+        h.consumer.handle(
+          h.event('ServiceRefundRequestResolved', {
+            requestId: 'req-1',
+            customerId: 'cust-1',
+            paymentId: 'pay-1',
+            outcome: 'COMPLETED',
+          }),
+          TX,
+        ),
+    },
+  ];
+
+  it.each(cases)('$name: prints the service username as its own line', async (one) => {
+    const h = harness({ serviceUsername: 'nx7k2m9q', ...one.setup });
+    await one.run(h);
+    const message = h.queued.at(-1)!;
+    expect(message.templateKey).toBe(one.template);
+    expect(message.values).toMatchObject({ serviceUsername: 'nx7k2m9q' });
+    const text = render(message);
+    expect(text.split('\n')).toContain(LINE);
+    expect(text).not.toMatch(/\{[a-zA-Z]+\}|NaN|undefined/);
+  });
+
+  it.each(cases.filter((one) => one.name !== 'L6 service refund request'))(
+    '$name: an order with no service prints no such line',
+    async (one) => {
+      const h = harness({ serviceUsername: null, ...one.setup });
+      await one.run(h);
+      const message = h.queued.at(-1)!;
+      expect(message.templateKey).toBe(one.template);
+      expect(message.values).not.toHaveProperty('serviceUsername');
+      expect(render(message)).not.toContain(LABEL);
+    },
+  );
+
+  it('a service refund request of a service the panel account of which is unknown prints no line', async () => {
+    const h = harness({
+      ...base,
+      service: { id: 'svc-1', code: 'SV3H5J7K', providerUsername: '' },
+      refundRequest: {
+        customerId: 'cust-1',
+        serviceId: 'svc-1',
+        paymentId: 'pay-1',
+        approvedAmount: null,
+        decidedByAdminId: null,
+        resolvedAt: AT,
+      },
+    });
+    await h.consumer.handle(
+      h.event('ServiceRefundRequestResolved', {
+        requestId: 'req-1',
+        customerId: 'cust-1',
+        paymentId: 'pay-1',
+        outcome: 'REJECTED',
+      }),
+      TX,
+    );
+    expect(render(h.queued[0]!)).not.toContain(LABEL);
+  });
+
+  it('a wallet top-up (no order) is unchanged: no service line, and no lookup', async () => {
+    const h = harness({ method: 'MANUAL_TRANSFER', orderId: null, serviceUsername: 'nx7k2m9q' });
+    h.ledger.push({
+      id: 'e1',
+      paymentId: 'pay-1',
+      orderId: null,
+      signed: 250_000n,
+      reason: 'TOPUP_RECEIPT',
+      at: 1,
+    });
+    await h.consumer.handle(h.event('PaymentConfirmed', confirmed('MANUAL_TRANSFER', null)), TX);
+    const message = h.queued[0]!;
+    expect(message.templateKey).toBe('ops.financial.topup_credited');
+    expect(message.values).not.toHaveProperty('serviceUsername');
+    expect(render(message)).not.toContain(LABEL);
+  });
+
+  it('prints only the username: a subscription link or token that sits in the name is redacted', async () => {
+    const h = harness({
+      ...base,
+      serviceUsername: 'https://sub.example.com/s/0123456789abcdef0123456789abcdef',
+    });
+    await h.consumer.handle(h.event('PaymentConfirmed', confirmed('MANUAL_TRANSFER', 'ord-1')), TX);
+    const text = render(h.queued[0]!);
+    expect(text).toContain('👤 نام کاربری سرویس: [redacted]');
+    expect(text).not.toContain('sub.example.com');
+    expect(text).not.toContain('0123456789abcdef');
   });
 });

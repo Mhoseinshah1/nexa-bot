@@ -57,7 +57,16 @@ export class FailureLogConsumer implements EventConsumer {
     const payload = EVENT_PAYLOAD_SCHEMAS.ProvisioningOutcomeUnknown.parse(event.payload);
     const service = await this.deps.facts.service(scope, payload.serviceId, tx);
     if (service === null) return;
-    await this.report(scope, event, service.orderId, payload, true, at, tx);
+    await this.report(
+      scope,
+      event,
+      service.orderId,
+      payload,
+      true,
+      at,
+      tx,
+      service.providerUsername,
+    );
   }
 
   private async report(
@@ -68,6 +77,8 @@ export class FailureLogConsumer implements EventConsumer {
     unknown: boolean,
     at: Date,
     tx: TransactionScope,
+    /** R11 A7: the panel account name when the event itself named the service (unknown outcome). */
+    eventServiceUsername: string | null = null,
   ): Promise<void> {
     // The ORDER is the purchase's provenance (hotfix v0.8.2-e, extended by R10 B5): an
     // adopted or imported order is history and stays silent; an order this installation took
@@ -107,6 +118,13 @@ export class FailureLogConsumer implements EventConsumer {
     // (money review of #301). None — an unknown outcome, a free order, a refund not yet
     // written — and the message says nothing was refunded rather than name a figure.
     const refunded = unknown ? null : await this.refundedOf(scope, order, tx);
+    // R11 A7: the panel account name — the operation's service row when it is read, then the
+    // service the event itself named, otherwise whatever service the order is tied to (the row
+    // a provision failure left behind).
+    const serviceUsername =
+      service?.providerUsername ??
+      eventServiceUsername ??
+      (await this.deps.facts.serviceUsernameOfOrder(scope, order.id, tx));
 
     const createsService = order.purpose === 'NEW_SERVICE' || order.purpose === 'CUSTOM_SERVICE';
     // R9 C2: a service an administrator created from the Web Admin has a report of its own,
@@ -122,6 +140,7 @@ export class FailureLogConsumer implements EventConsumer {
           refunded,
           unknown,
           ...(createdBy === undefined ? {} : { createdBy }),
+          serviceUsername,
           at,
           words: this.deps.words,
         })
@@ -134,6 +153,7 @@ export class FailureLogConsumer implements EventConsumer {
           payment,
           refunded,
           unknown,
+          serviceUsername,
           at,
           words: this.deps.words,
         });

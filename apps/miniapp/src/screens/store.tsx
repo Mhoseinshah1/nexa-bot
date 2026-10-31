@@ -12,7 +12,7 @@ import type { MiniAppApi } from '../api.js';
 import { useApp } from '../app.js';
 import { t } from '../i18n/t.js';
 import { money, trafficLimit } from '../format.js';
-import { Button, Card, Loading, errorText, useLoad } from '../ui.js';
+import { Button, Card, Loading, PersonalPrice, errorText, useLoad } from '../ui.js';
 
 /**
  * فروشگاه: the tenant's own categories as tabs (never four fixed period tabs — Nexa has
@@ -125,7 +125,11 @@ function Category({ categoryId }: { categoryId: string }) {
             <Card key={product.id} className="plan">
               <div className="card-head">
                 <strong>{product.title}</strong>
-                <strong className="price">{money(product.price)}</strong>
+                {product.personalDiscount === null ? (
+                  <strong className="price">{money(product.price)}</strong>
+                ) : (
+                  <PersonalPrice price={product.price} discount={product.personalDiscount} />
+                )}
               </div>
               <div className="card-figures">
                 <span>{trafficLimit(product.trafficBytes)}</span>

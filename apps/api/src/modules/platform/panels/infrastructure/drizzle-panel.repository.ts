@@ -8,6 +8,7 @@ import {
 import type {
   MonitorDeferralReason,
   PanelHealthState,
+  PanelQrKind,
   PanelStatus,
   ProviderFailureKind,
   ProviderType,
@@ -429,6 +430,12 @@ export class DrizzlePanelRepository implements PanelRepository {
     if (input.maxServices !== undefined) changes['maxServices'] = input.maxServices;
     // A VALUE too: `null` takes the panel out of its group.
     if (input.balancingGroup !== undefined) changes['balancingGroup'] = input.balancingGroup;
+    if (input.filesOnlyDelivery !== undefined)
+      changes['filesOnlyDelivery'] = input.filesOnlyDelivery;
+    if (input.qrKind !== undefined) changes['qrKind'] = input.qrKind;
+    if (input.singboxIntervalMinutes !== undefined) {
+      changes['singboxIntervalMinutes'] = input.singboxIntervalMinutes;
+    }
     /*
      * All three columns, or none. `null` on the template is a VALUE — it selects the
      * derived generator — so it is written rather than skipped.
@@ -1386,6 +1393,10 @@ function toRecord(row: typeof panels.$inferSelect): PanelRecord {
     activation: row.activation,
     archivedAt: row.archivedAt,
     balancingGroup: row.balancingGroup,
+    filesOnlyDelivery: row.filesOnlyDelivery,
+    // Narrowed from `text`: `panels_qr_kind_check` is what makes the cast safe.
+    qrKind: row.qrKind as PanelQrKind,
+    singboxIntervalMinutes: row.singboxIntervalMinutes,
     drain:
       row.drainedAt === null || row.drainReason === null
         ? null

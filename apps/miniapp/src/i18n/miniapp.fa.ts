@@ -74,6 +74,7 @@ export const MINIAPP_FA = {
   'miniapp.store_category_empty': 'در این دسته پلنی نیست.',
   'miniapp.store_more': 'بیشتر',
   'miniapp.store_continue': 'ادامه و پیش‌فاکتور',
+  'miniapp.personal_discount_tag': 'تخفیف شخصی {percent}٪',
 
   'miniapp.checkout_title': 'پیش‌فاکتور',
   'miniapp.checkout_order': 'سفارش',
@@ -162,6 +163,8 @@ export const MINIAPP_FA = {
   'miniapp.service_guide': 'آموزش اتصال',
   'miniapp.service_support': 'مشکل دارم، پشتیبانی',
   'miniapp.service_qr_title': 'QR و لینک اشتراک',
+  'miniapp.service_qr_sublink': 'QR لینک اشتراک',
+  'miniapp.service_qr_singbox': 'QR مخصوص sing-box',
   'miniapp.service_qr_hint': 'در برنامه «افزودن از QR» را بزنید و این کد را اسکن کنید.',
   'miniapp.service_qr_failed': 'ساخت تصویر QR انجام نشد.',
   'miniapp.service_copy_failed': 'کپی انجام نشد؛ لینک را نگه دارید و کپی کنید.',
