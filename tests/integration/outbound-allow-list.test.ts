@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OUTBOUND_PRIVATE_TARGETS_SETTING_KEY, type ActorContext } from '@nexa/contracts';
 import { resolveInstallationTenant } from '../../apps/api/src/bootstrap';
 import { checkUrl } from '../../apps/api/src/infrastructure/net/url-policy';
@@ -78,6 +78,56 @@ describe('the outbound private-target allow-list', () => {
         idempotencyKey: randomUUID(),
       }),
     ).resolves.toMatchObject({ changed: true });
+  });
+
+  it('Codex P2 on #359: re-checks settings.destructive INSIDE the transaction', async () => {
+    // An owner-shaped custom role holding both permissions, so revoking one is one DELETE.
+    const roleId = ctx.container.ids.uuid();
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO roles (id, tenant_id, key, name, is_system)
+      VALUES (${roleId}, ${tenantA.tenantId}, 'security_editor', 'security_editor', false)`);
+    for (const permission of ['settings.view', 'settings.edit', 'settings.destructive']) {
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO role_permissions (tenant_id, role_id, permission_key)
+        VALUES (${tenantA.tenantId}, ${roleId}, ${permission})`);
+    }
+    const admin = await createAdmin(ctx.container, tenantA, { username: 'security-editor' });
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO admin_roles (tenant_id, admin_id, role_id)
+      VALUES (${tenantA.tenantId}, ${admin.id}, ${roleId})`);
+    const editor = adminActorFor(admin);
+
+    // The permission is revoked right after the early check passes and before the
+    // transaction begins — the window the early check alone left open.
+    const guard = (
+      ctx.container.settingsService as unknown as {
+        guard: { check: (...args: unknown[]) => Promise<void> };
+      }
+    ).guard;
+    const original = guard.check.bind(guard);
+    const spy = vi.spyOn(guard, 'check').mockImplementation(async (...args: unknown[]) => {
+      await original(...args);
+      if (args[2] === 'settings.destructive' && args[3] === undefined) {
+        await ctx.container.database.db.execute(sql`
+          DELETE FROM role_permissions
+           WHERE role_id = ${roleId} AND permission_key = 'settings.destructive'`);
+      }
+    });
+    try {
+      await expect(set(editor, '172.17.0.1')).rejects.toMatchObject({ kind: 'PERMISSION_DENIED' });
+    } finally {
+      spy.mockRestore();
+    }
+    // Nothing was stored, and the refusal is in the audit log.
+    const stored = await ctx.container.database.db.execute<{ n: string }>(sql`
+      SELECT count(*)::text AS n FROM setting_values
+       WHERE tenant_id = ${tenantA.tenantId} AND setting_key = ${OUTBOUND_PRIVATE_TARGETS_SETTING_KEY}`);
+    expect(stored.rows[0]?.n).toBe('0');
+    const audit = await ctx.container.database.db.execute<{ result: string }>(sql`
+      SELECT result FROM audit_logs
+       WHERE tenant_id = ${tenantA.tenantId} AND action = 'settings.set'
+         AND entity_id = ${OUTBOUND_PRIVATE_TARGETS_SETTING_KEY} AND actor_id = ${admin.id}`);
+    expect(audit.rows.map((row) => row.result)).toContain('DENIED');
   });
 
   it('lets the owner allow a target, which the URL policy re-opens after the refresh', async () => {
