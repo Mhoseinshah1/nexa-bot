@@ -49,6 +49,12 @@ R11 B1/B2/B3 already have pushed work from 2026-10-27: `feat/r11-notification-ce
 `main` into them, finish, PR) instead of rebuilding. If a branch's approach no longer fits main,
 keep its intent and tests and record why (in the PR and `docs/round-reports/phase-5.md`).
 
+Lead observation, not an owner instruction: origin also has `feat/r11-miniapp-stars` (98020f4),
+`feat/r11-phone-verify` (a575f4d), `feat/r11-location-remaining` (ecb8266),
+`feat/r11-reminder-optout` (ce8c5f3), `feat/r11-cutover-rehearsal` (cad6904) and
+`feat/r11-ops-log-service-username` (e1c7064). Their state is not verified. Before building an
+R11 B/C item, check whether one of these already carries it.
+
 ## Owner answers (2026-10-31, binding; both go into F3)
 
 - OQ-R11-A11-04: change it — a still-live payment must never read "order again". NEW key for that
