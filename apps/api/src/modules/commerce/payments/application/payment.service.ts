@@ -436,6 +436,11 @@ export type GatewayConfirmation =
          */
         | 'LATE_CREDIT_ALREADY_APPLIED'
         /*
+         * R12 F1 item 6: a recorded charge (Stars) that Telegram reported refunded before it
+         * settled. Never settled; recorded as a late completion for the operator.
+         */
+        | 'PROVIDER_PAYMENT_REFUNDED'
+        /*
          * CentralPay: the provider reference the lane bound is not this attempt's under the
          * payment's lock — the money is not provably this payment's. Held, never settled.
          */
@@ -3904,6 +3909,18 @@ export class PaymentService {
           payment.gatewayProvider === null
             ? 'INQUIRY'
             : PAYMENT_GATEWAY_DESCRIPTORS[payment.gatewayProvider].approval;
+        /*
+         * R12 F1 item 6: a recorded charge (Stars) settles only while it is still recorded as
+         * paid, read under this lock — the lock `StarsPaymentService.recordRefundedPayment`
+         * marks a refunded charge under. A charge Telegram refunded before it settled is never
+         * settled; the lane records it as a late completion and the refund's alert is open.
+         */
+        if (approval === 'RECORDED_PAYMENT') {
+          const recorded = await this.deps.gatewayInvoices.findByPayment(scope, paymentId, tx);
+          if (recorded === null || recorded.providerPaid !== true) {
+            return { outcome: 'NOT_ELIGIBLE', reason: 'PROVIDER_PAYMENT_REFUNDED', payment };
+          }
+        }
         const confirmation = {
           evidenceKind:
             approval === 'RECORDED_PAYMENT'

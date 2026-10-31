@@ -25,7 +25,10 @@ import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleGatewayInvoiceRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-invoice.repository';
-import { STARS_CHARGE_UNMATCHED_CODE } from '../../apps/api/src/modules/commerce/payments/application/telegram-stars-payment.service';
+import {
+  STARS_CHARGE_REFUNDED_CODE,
+  STARS_CHARGE_UNMATCHED_CODE,
+} from '../../apps/api/src/modules/commerce/payments/application/telegram-stars-payment.service';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
   adminActorFor,
@@ -1083,6 +1086,182 @@ describe('Telegram Stars (Package A)', () => {
       expect(late.outcome).toBe('LATE_COMPLETION');
       expect(await opsCodes()).toContain('payments.gateway_late_completion');
       expect(await ledger()).toEqual([]);
+    });
+  });
+
+  /*
+   * R12 F1 item 6 — Telegram's `refunded_payment`: a Stars charge refunded outside Nexa (Nexa
+   * never asks Telegram to refund). Before R12 it had no handler and reached the customer turn
+   * as a message; the money left outside the ledger and nobody was told.
+   */
+  describe('refunded_payment (R12 F1 item 6)', () => {
+    const refundedPayment = (
+      payload: string,
+      totalAmount: number,
+      chargeId: string,
+      options: { from?: number; bot?: BotInstanceId } = {},
+    ) =>
+      webhook(options.bot ?? BOT_A, {
+        message: {
+          message_id: (messageId += 1),
+          date: 0,
+          chat: { id: options.from ?? MARYAM, type: 'private' },
+          from: { id: options.from ?? MARYAM, is_bot: false, first_name: 'Customer' },
+          refunded_payment: {
+            currency: 'XTR',
+            total_amount: totalAmount,
+            invoice_payload: payload,
+            telegram_payment_charge_id: chargeId,
+            provider_payment_charge_id: '',
+          },
+        },
+      });
+
+    const refundedAlerts = () =>
+      rows<{ context: Record<string, unknown>; occurrence_count: number }>(
+        sql`SELECT context, occurrence_count FROM operational_events
+             WHERE tenant_id = ${tenantA.tenantId} AND code = ${STARS_CHARGE_REFUNDED_CODE}`,
+      );
+
+    const refundAudits = (paymentId: string) =>
+      rows<{ before: Record<string, unknown>; after: Record<string, unknown> }>(
+        sql`SELECT before, after FROM audit_logs
+             WHERE entity_id = ${paymentId} AND action = 'gateway_invoice.charge_refunded'`,
+      );
+
+    it('marks a settled charge refunded, opens an operator follow-up, and moves no money', async () => {
+      await enableStars();
+      const { attempt, invoice, stars } = await invoicedTopup(100_000n);
+      await successfulPayment(invoice.provider_order_id, stars, 'charge-r1');
+      expect(await paymentState(attempt.payment.id)).toBe('CONFIRMED');
+      const ledgerBefore = await ledger();
+      const before = calls.length;
+
+      const answered = await refundedPayment(invoice.provider_order_id, stars, 'charge-r1');
+      expect(answered.statusCode).toBeLessThan(300);
+
+      expect(await invoiceOf(attempt.payment.id)).toMatchObject({
+        provider_charge_id: 'charge-r1',
+        provider_paid: false,
+        outcome: 'SETTLED',
+      });
+      const [status] = await rows<{ provider_status: string }>(
+        sql`SELECT provider_status FROM gateway_invoices WHERE payment_id = ${attempt.payment.id}`,
+      );
+      expect(status?.provider_status).toBe('refunded_payment');
+      // The payment, the ledger and the wallet are as they were: the operator decides.
+      expect(await paymentState(attempt.payment.id)).toBe('CONFIRMED');
+      expect(await ledger()).toEqual(ledgerBefore);
+      const audits = await refundAudits(attempt.payment.id);
+      expect(audits).toHaveLength(1);
+      expect(audits[0]!.before).toMatchObject({ providerPaid: true, outcome: 'SETTLED' });
+      expect(audits[0]!.after).toMatchObject({
+        providerStatus: 'refunded_payment',
+        providerPaid: false,
+        providerChargeId: 'charge-r1',
+        refundedAmount: String(stars),
+        serviceChanged: false,
+        walletChanged: false,
+      });
+      const alerts = await refundedAlerts();
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0]!.context).toMatchObject({
+        reason: 'SETTLED_THEN_REFUNDED',
+        paymentId: attempt.payment.id,
+        providerChargeId: 'charge-r1',
+        paymentState: 'CONFIRMED',
+      });
+      // Not the customer turn: the bot sent the customer nothing about it.
+      expect(calls.slice(before).filter((call) => call.method === 'sendMessage')).toEqual([]);
+
+      // Telegram redelivers it: nothing is marked or audited twice.
+      await refundedPayment(invoice.provider_order_id, stars, 'charge-r1');
+      expect(await refundAudits(attempt.payment.id)).toHaveLength(1);
+      expect(await ledger()).toEqual(ledgerBefore);
+    });
+
+    it('a refunded order payment names the order, so the alert can print the service username', async () => {
+      await enableStars();
+      const orderId = await draftOrder(260_000n);
+      await tapAs(MARYAM, `gp:${orderId}.TELEGRAM_STARS`);
+      const [payment] = await rows<{ id: string }>(
+        sql`SELECT id FROM payments WHERE order_id = ${orderId} AND method = 'GATEWAY'`,
+      );
+      await worker();
+      const invoice = await invoiceOf(payment!.id);
+      await successfulPayment(invoice.provider_order_id, 200, 'charge-r2');
+      await refundedPayment(invoice.provider_order_id, 200, 'charge-r2');
+      const [alert] = await refundedAlerts();
+      expect(alert?.context).toMatchObject({ orderId, paymentId: payment!.id });
+      // The order is untouched.
+      const [order] = await rows<{ state: string }>(
+        sql`SELECT state FROM orders WHERE id = ${orderId}`,
+      );
+      expect(order?.state).toBe('PAID');
+    });
+
+    it('a charge refunded before it settled is never settled', async () => {
+      await enableStars();
+      const { attempt, invoice, stars } = await invoicedTopup();
+      // The webhook recorded the charge and died before settling.
+      await api.container.uow.run(tenantA, (tx) =>
+        new DrizzleGatewayInvoiceRepository(api.container.database.db).recordCharge(
+          tenantA,
+          attempt.payment.id as PaymentId,
+          { chargeId: 'charge-r3', status: 'successful_payment', dueAt: new Date() },
+          new Date(),
+          tx,
+        ),
+      );
+      await refundedPayment(invoice.provider_order_id, stars, 'charge-r3');
+      expect((await refundedAlerts())[0]?.context).toMatchObject({
+        reason: 'REFUNDED_UNSETTLED',
+        paymentState: 'PENDING',
+      });
+
+      await worker();
+      expect(await paymentState(attempt.payment.id)).toBe('PENDING');
+      expect(await ledger()).toEqual([]);
+
+      // A settlement that read the charge before the refund was marked is refused under the
+      // payment's lock, whatever it believed.
+      const late = await api.container.payments.confirmGatewayPayment(
+        tenantA,
+        systemActor('stars-late-settle'),
+        attempt.payment.id,
+        { evidenceNote: 'telegram_stars:successful_payment' },
+      );
+      expect(late).toMatchObject({ outcome: 'NOT_ELIGIBLE', reason: 'PROVIDER_PAYMENT_REFUNDED' });
+      expect(await paymentState(attempt.payment.id)).toBe('PENDING');
+      expect(await ledger()).toEqual([]);
+    });
+
+    it('a refund for a charge no attempt holds is reported and marks nothing; a malformed one too', async () => {
+      await enableStars();
+      const { attempt, invoice, stars } = await invoicedTopup();
+      await successfulPayment(invoice.provider_order_id, stars, 'charge-r4');
+
+      await refundedPayment(invoice.provider_order_id, stars, 'charge-someone-else');
+      expect((await refundedAlerts()).map((alert) => alert.context['reason'])).toEqual([
+        'UNMATCHED',
+      ]);
+      expect((await invoiceOf(attempt.payment.id)).provider_paid).toBe(true);
+
+      const malformed = await webhook(BOT_A, {
+        message: {
+          message_id: (messageId += 1),
+          date: 0,
+          chat: { id: MARYAM, type: 'private' },
+          from: { id: MARYAM, is_bot: false, first_name: 'Customer' },
+          refunded_payment: { currency: 'XTR', total_amount: 'x' },
+        },
+      });
+      expect(malformed.statusCode).toBeLessThan(300);
+      expect((await refundedAlerts()).map((alert) => alert.context['reason']).sort()).toEqual([
+        'MALFORMED',
+        'UNMATCHED',
+      ]);
+      expect((await invoiceOf(attempt.payment.id)).provider_paid).toBe(true);
     });
   });
 

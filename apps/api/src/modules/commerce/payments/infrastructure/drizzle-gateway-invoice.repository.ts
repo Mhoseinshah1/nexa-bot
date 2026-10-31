@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { STARS_REFUNDED_STATUS } from '../domain/telegram-stars.js';
 import type {
   FxBaseAsset,
   FxSource,
@@ -430,6 +431,60 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       )
       .returning({ paymentId: gatewayInvoices.paymentId });
     return rows.length > 0;
+  }
+
+  async markChargeRefunded(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    chargeId: string,
+    now: Date,
+    tx: unknown,
+  ): Promise<{
+    readonly marked: boolean;
+    readonly before: {
+      readonly providerStatus: string | null;
+      readonly providerPaid: boolean | null;
+      readonly outcome: string | null;
+    } | null;
+  }> {
+    const tenantId = requireTenantId(scope);
+    const identity = and(
+      eq(gatewayInvoices.tenantId, tenantId),
+      eq(gatewayInvoices.paymentId, paymentId),
+      eq(gatewayInvoices.providerChargeId, chargeId),
+    );
+    // The row as it stood, locked: the evidence the audit row keeps.
+    const [current] = await this.exec(tx)
+      .select({
+        providerStatus: gatewayInvoices.providerStatus,
+        providerPaid: gatewayInvoices.providerPaid,
+        outcome: gatewayInvoices.outcome,
+      })
+      .from(gatewayInvoices)
+      .where(identity)
+      .for('update');
+    if (current === undefined) return { marked: false, before: null };
+    const rows = await this.exec(tx)
+      .update(gatewayInvoices)
+      .set({ providerStatus: STARS_REFUNDED_STATUS, providerPaid: false, updatedAt: now })
+      .where(
+        and(
+          identity,
+          or(
+            isNull(gatewayInvoices.providerStatus),
+            sql`${gatewayInvoices.providerStatus} <> ${STARS_REFUNDED_STATUS}`,
+          ),
+        ),
+      )
+      .returning({ paymentId: gatewayInvoices.paymentId });
+    return {
+      marked: rows.length > 0,
+      before: {
+        providerStatus: current.providerStatus,
+        providerPaid: current.providerPaid,
+        outcome: current.outcome,
+      },
+    };
   }
 
   async claimCreating(

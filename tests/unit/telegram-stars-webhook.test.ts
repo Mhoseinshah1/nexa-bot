@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { TelegramWebhookController } from '../../apps/api/src/surfaces/telegram/webhook.controller';
-import { STARS_CHARGE_UNMATCHED_CODE } from '../../apps/api/src/modules/commerce/payments/application/telegram-stars-payment.service';
+import {
+  STARS_CHARGE_REFUNDED_CODE,
+  STARS_CHARGE_UNMATCHED_CODE,
+} from '../../apps/api/src/modules/commerce/payments/application/telegram-stars-payment.service';
 
 /**
  * Package A: the webhook answers Telegram's two payment updates itself, before the
@@ -28,6 +31,7 @@ describe('the Telegram webhook and Stars payment updates', () => {
       starsPayments: {
         preCheckout: vi.fn(async () => true),
         recordSuccessfulPayment: vi.fn(record),
+        recordRefundedPayment: vi.fn(record),
       },
       botRuntime: { handle: vi.fn(async () => undefined) },
       antiSpam: { observe: vi.fn(async () => ({ verdict: 'ALLOWED' })) },
@@ -111,6 +115,69 @@ describe('the Telegram webhook and Stars payment updates', () => {
     expect(container.opsLog.record).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ code: STARS_CHARGE_UNMATCHED_CODE }),
+    );
+  });
+
+  /*
+   * R12 F1 item 6: Telegram's `refunded_payment` is a Stars charge refunded outside Nexa. It
+   * is recorded like a charge — before the customer turn, never handed to it — and a record
+   * that fails is a non-2xx so it is redelivered.
+   */
+  const refunded = {
+    message: {
+      message_id: 3,
+      from: { id: 910910, is_bot: false },
+      chat: { id: 910910, type: 'private' },
+      refunded_payment: {
+        currency: 'XTR',
+        total_amount: 81,
+        invoice_payload: 'a'.repeat(32),
+        telegram_payment_charge_id: 'ch-1',
+        provider_payment_charge_id: '',
+      },
+    },
+  };
+
+  it('R12 F1: records a refunded payment, never handing it to the customer turn', async () => {
+    const { container, receive } = controllerWith();
+    expect(await receive(refunded)).toEqual({ ok: true });
+    expect(container.starsPayments.recordRefundedPayment).toHaveBeenCalledWith(
+      { tenantId: 'tenant-a', botInstanceId: BOT },
+      BOT,
+      {
+        payerTelegramUserId: '910910',
+        currency: 'XTR',
+        totalAmount: 81n,
+        payload: 'a'.repeat(32),
+        chargeId: 'ch-1',
+      },
+    );
+    expect(container.starsPayments.recordSuccessfulPayment).not.toHaveBeenCalled();
+    expect(container.botRuntime.handle).not.toHaveBeenCalled();
+  });
+
+  it('R12 F1: fails the request when a refund could not be recorded, so Telegram redelivers it', async () => {
+    const { container, receive } = controllerWith(async () => {
+      throw new Error('database unavailable');
+    });
+    await expect(receive(refunded)).rejects.toThrow('database unavailable');
+    expect(container.botRuntime.handle).not.toHaveBeenCalled();
+  });
+
+  it('R12 F1: reports a refunded payment it cannot read, and never runs a turn on it', async () => {
+    const { container, receive } = controllerWith();
+    const broken = {
+      message: {
+        ...refunded.message,
+        refunded_payment: { ...refunded.message.refunded_payment, total_amount: -1 },
+      },
+    };
+    expect(await receive(broken)).toEqual({ ok: true });
+    expect(container.starsPayments.recordRefundedPayment).not.toHaveBeenCalled();
+    expect(container.botRuntime.handle).not.toHaveBeenCalled();
+    expect(container.opsLog.record).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ code: STARS_CHARGE_REFUNDED_CODE }),
     );
   });
 
