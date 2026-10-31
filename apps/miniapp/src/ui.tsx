@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { MiniAppListedPersonalDiscount, MoneyWire } from '@nexa/contracts';
 import { ApiError } from './api.js';
+import { commerceErrorText } from './commerce-errors.js';
 import { money } from './format.js';
 import { t, type MiniAppKey } from './i18n/t.js';
 import { MINIAPP_FA } from './i18n/miniapp.fa.js';
@@ -164,6 +165,9 @@ export function errorText(error: unknown): string {
     }
     const key = ERROR_TEXT[error.code];
     if (key !== undefined) return t(key);
+    // R12 F3 item 5: every other commerce refusal is told in the bot's own words.
+    const shared = commerceErrorText(error.code);
+    if (shared !== null) return shared;
   }
   return t('miniapp.error');
 }
@@ -176,6 +180,19 @@ export type Loaded<T> =
   | { readonly state: 'loading' }
   | { readonly state: 'failed'; readonly error: unknown }
   | { readonly state: 'ready'; readonly data: T };
+
+/**
+ * R12 F3 item 5: «بیشتر» ADDS the next page under the ones already shown. `earlier` is what the
+ * pages before this one showed and `current` this page's items; a row both hold (a list that
+ * shifted between two reads) is drawn once, from the newer read.
+ */
+export function appendPage<T extends { readonly id: string }>(
+  earlier: readonly T[],
+  current: readonly T[],
+): readonly T[] {
+  const seen = new Set(current.map((item) => item.id));
+  return [...earlier.filter((item) => !seen.has(item.id)), ...current];
+}
 
 /** One read, re-run when `deps` change, with a `reload` for after a write. */
 export function useLoad<T>(load: () => Promise<T>, deps: readonly unknown[]) {
