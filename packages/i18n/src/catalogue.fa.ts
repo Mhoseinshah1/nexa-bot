@@ -1433,6 +1433,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '{icon:warning} این فاکتور دیگر در انتظار پرداخت نیست و این درخواست انجام نشد. وضعیت را بررسی کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_cancel_unknown':
     '{icon:warning} پاسخ تون‌پی به درخواست لغو دریافت نشد و درخواست دوباره به‌صورت خودکار ارسال نمی‌شود. وضعیت را بررسی کنید.\n\nکد پیگیری پرداخت: {reference}',
+  // R11 A8: a cancel tap on an invoice Nexa already knows was cancelled.
+  'bot.payment.gateway_cancel_already_cancelled':
+    '{icon:info} فاکتور قبلاً لغو شده است و دیگر قابل پرداخت نیست. برای پرداخت می‌توانید دوباره اقدام کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_buyer_pending':
     '{icon:warning} شما هم‌اکنون یک فاکتور باز در تون‌پی دارید و فاکتور تازه ساخته نشد. فاکتور باز را کامل یا لغو کنید و سپس دوباره اقدام کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_buyer_processing':

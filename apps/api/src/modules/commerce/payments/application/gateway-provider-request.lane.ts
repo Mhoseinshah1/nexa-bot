@@ -18,7 +18,7 @@ import {
   CANCELLED_BY_CUSTOMER_STATUS,
   CANCELLED_BY_NEXA_STATUS,
 } from '../domain/payment-failure-outcome.js';
-import { NEXA_CANCEL_KEY_PREFIX } from './gateway-invoice-ports.js';
+import { GATEWAY_HELD_RETRY_MIN_MS, NEXA_CANCEL_KEY_PREFIX } from './gateway-invoice-ports.js';
 import type {
   CardTransferGatewayAdapter,
   ClaimedProviderRequest,
@@ -341,6 +341,36 @@ export class GatewayProviderRequestLane {
         });
         return 'DONE';
       case 'RATE_LIMITED':
+        /*
+         * R11 A8: the CUSTOMER's cancel that the TonPays client's own limiter HELD never left
+         * the process — not a lost answer, not the provider's word, nothing for the customer to
+         * ask again. It goes back as it was asked, due when the limiter would let it go (the
+         * key's pause after a 429, or the next token): the customer's tap is not spent on
+         * Nexa's own pacing. Its window and the invoice's `pending` are checked again when it
+         * is sent, and it is sent at most once like any request. Only while it would be due
+         * BEFORE the customer window closes: one still waiting at Nexa's deadline would stand
+         * in the way of the expiry cancel (one cancel at a time) and then be refused, leaving
+         * TonPays' invoice open — decided `RATE_LIMITED` instead, the expiry cancel may follow.
+         * Nexa's own cancels keep the decision (their callers ask a rate-limited one again as a
+         * new row), and so does a refund, whose sealed card went with the send stamp.
+         */
+        if (
+          outcome.notSent === true &&
+          request.kind === 'CANCEL' &&
+          request.requestedByNexa !== true &&
+          !onExpiry
+        ) {
+          const notBefore = new Date(
+            at.getTime() + Math.max(GATEWAY_HELD_RETRY_MIN_MS, outcome.retryAfterMs ?? 0),
+          );
+          const requeued =
+            deadline !== null &&
+            notBefore.getTime() < deadline.getTime() &&
+            (await this.deps.uow.run(scope, (tx) =>
+              this.deps.requests.requeueUnsentCancel(scope, request.id, now, notBefore, tx),
+            ));
+          if (requeued) return 'DONE';
+        }
         // Not processed: the customer may ask again (a refund must be typed again).
         await decide('RATE_LIMITED', outcome.code);
         return 'DONE';

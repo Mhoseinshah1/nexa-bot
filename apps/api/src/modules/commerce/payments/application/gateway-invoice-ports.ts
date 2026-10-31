@@ -1541,6 +1541,12 @@ export interface GatewayProviderRequestRecord {
   readonly requestedOnExpiry?: boolean;
 }
 
+/**
+ * Round 11 A8: the soonest a call the adapter's own limiter HELD (nothing sent) is tried again.
+ * The limiter says when a token will be there; this only stops a zero from spinning the lane.
+ */
+export const GATEWAY_HELD_RETRY_MIN_MS = 1_000;
+
 /** The idempotency-key prefix of a cancel Nexa asks for itself (`cancelNow`). */
 export const NEXA_CANCEL_KEY_PREFIX = 'sibling-cancel:';
 /**
@@ -1630,6 +1636,19 @@ export interface GatewayProviderRequestRepository {
   ): Promise<ClaimedProviderRequest | null>;
   /** `REQUESTED -> SENT`, stamped BEFORE the call; the sealed card is wiped in the same statement. */
   markSent(scope: TenantContext, id: string, now: Date, tx: unknown): Promise<boolean>;
+  /**
+   * R11 A8: `SENT -> REQUESTED` for a CANCEL whose call the TonPays client's own limiter HELD —
+   * it never left the process. Only the very stamp this pass wrote (`sentAt`) is taken back,
+   * and the row is left to the worker until `notBefore`. Never for a refund (its sealed card
+   * went with the stamp) and never for a call that may have reached the provider.
+   */
+  requeueUnsentCancel(
+    scope: TenantContext,
+    id: string,
+    sentAt: Date,
+    notBefore: Date,
+    tx: unknown,
+  ): Promise<boolean>;
   /** `REQUESTED | SENT -> APPLIED | REFUSED | RATE_LIMITED | UNKNOWN`; wipes any sealed card. */
   decide(
     scope: TenantContext,

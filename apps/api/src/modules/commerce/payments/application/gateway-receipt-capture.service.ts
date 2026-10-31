@@ -25,6 +25,7 @@ import type { SettingsResolver } from '../../../control/settings/application/set
 import { gatewaySettlementDeadline } from '../domain/settlement.js';
 import {
   cancelAvailable,
+  cancelRetryNotBefore,
   cardChangeAvailable,
   type CardChangeAllowance,
   maskRefundCard,
@@ -466,8 +467,12 @@ export class GatewayReceiptCaptureService {
    * «❌ لغو فاکتور» (Round 6): a `gateway_provider_requests` row `CANCEL / REQUESTED`, which the
    * gateway worker sends. Re-decided under the payment's lock: this customer's PENDING payment
    * inside the CUSTOMER window (a review means a receipt, and a receipt means `processing`), a
-   * created invoice whose provider status is `pending`, no cancel in flight or lost, no receipt
-   * on its way. Returns whether a request was written.
+   * created invoice whose provider status is `pending`, no cancel in flight or applied, no
+   * receipt on its way. Returns whether a request was written.
+   *
+   * R11 A8 (owner): a previous cancel whose answer was lost, or that the provider rate-limited,
+   * does not stop this one — it is a NEW row (the in-flight index still allows one at a time),
+   * held back from the worker for `cancelRetryNotBefore` so it is not sent into the same trouble.
    */
   async requestCancel(
     scope: TenantContext,
@@ -492,6 +497,18 @@ export class GatewayReceiptCaptureService {
       const latest = await requests.latest(scope, open.payment.id, 'CANCEL', tx);
       const submissions = await this.deps.cardTransfer.submissionsFor(scope, open.payment.id, tx);
       if (!cancelAvailable(open.invoice, latest, submissions)) return false;
+      /*
+       * Codex (#356): a retry whose spacing would only end at or after the customer window is
+       * not written. Such a row would still be waiting when Nexa's deadline expires the attempt;
+       * one cancel at a time, so the expiry cancel could not be written, and the lane would then
+       * refuse this one (`nexa.attempt_closed`), leaving TonPays' invoice `pending`. Without it,
+       * the expiry cancel follows at the deadline. Same bound as the lane's HELD requeue.
+       */
+      const notBefore = cancelRetryNotBefore(latest, now);
+      const deadline = gatewaySettlementDeadline(open.payment) ?? open.payment.expiresAt;
+      if (notBefore !== null && (deadline === null || notBefore.getTime() >= deadline.getTime())) {
+        return false;
+      }
       const requested = await requests.request(
         scope,
         {
@@ -502,7 +519,7 @@ export class GatewayReceiptCaptureService {
           kind: 'CANCEL',
           idempotencyKey: input.idempotencyKey,
           now,
-          claimedUntil: null,
+          claimedUntil: notBefore,
           refund: null,
         },
         tx,
@@ -516,7 +533,13 @@ export class GatewayReceiptCaptureService {
           entityType: 'Payment',
           entityId: open.payment.id,
           before: null,
-          after: { requestId: requested.id, state: requested.state, reason: 'CUSTOMER' },
+          after: {
+            requestId: requested.id,
+            state: requested.state,
+            reason: 'CUSTOMER',
+            // R11 A8: the cancel request this one follows, if any (a retry after a lost answer).
+            retryOf: latest === null ? null : latest.id,
+          },
           result: 'SUCCESS',
         },
         tx,

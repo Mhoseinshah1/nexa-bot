@@ -11149,6 +11149,29 @@ export const TEMPLATES = [
       },
     ],
   },
+  /*
+   * Round 11 A8 (owner): a cancel whose answer was lost does not count as cancelled, so the
+   * customer may ask again. When Nexa has since LEARNED that the invoice was cancelled (the
+   * applied cancel, an inquiry that read `canceled`, or the payment failed as cancelled), a tap
+   * on a cancel button still on screen is answered with this sentence — never with the generic
+   * "closed" one, which does not say the cancel the customer asked for happened.
+   */
+  {
+    key: 'bot.payment.gateway_cancel_already_cancelled',
+    description:
+      'TonPays Telegram: the customer tapped «❌ لغو فاکتور» on an invoice Nexa already knows was cancelled. Nothing is sent to the provider and nothing changes.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
   {
     key: 'bot.payment.gateway_buyer_pending',
     description:
