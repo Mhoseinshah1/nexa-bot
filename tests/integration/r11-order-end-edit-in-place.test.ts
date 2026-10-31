@@ -81,6 +81,8 @@ describe('an ended order is answered ON its own payment message (R11 A11)', () =
   let updateSeq = 0;
   /** Messages Telegram will no longer edit (deleted, too old): a 400 on edit. */
   const uneditable = new Set<number>();
+  /** Messages whose NEXT edit Telegram declines with a definite 429 (once each). */
+  const rateLimited = new Set<number>();
 
   beforeAll(async () => {
     calls = [];
@@ -103,6 +105,19 @@ describe('an ended order is answered ON its own payment message (R11 A11)', () =
               ok: false,
               error_code: 400,
               description: 'Bad Request: message to edit not found',
+            }),
+          );
+          return;
+        }
+        if (method === 'editMessageText' && rateLimited.delete(Number(body['message_id']))) {
+          calls.push({ method, body, sentId: null });
+          response.writeHead(429, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              ok: false,
+              error_code: 429,
+              description: 'Too Many Requests: retry after 1',
+              parameters: { retry_after: 1 },
             }),
           );
           return;
@@ -141,6 +156,7 @@ describe('an ended order is answered ON its own payment message (R11 A11)', () =
     products = new DrizzleProductRepository(ctx.container.database.db);
     calls = [];
     uneditable.clear();
+    rateLimited.clear();
     cardNumber = null;
     panel = await startFakeMarzban({ host: '127.0.0.2' });
     owner = adminActorFor(
@@ -568,10 +584,10 @@ describe('an ended order is answered ON its own payment message (R11 A11)', () =
     const message = 808;
     const orderId = await cardInvoiceOn(message, 'stale');
     await fund(1_000_000n, 'stale');
-    // Past the deadline and not yet swept: the order still reads AWAITING_PAYMENT.
-    await ctx.container.database.db.execute(
-      sql`UPDATE orders SET expires_at = now() - interval '1 minute' WHERE id = ${orderId}` as never,
-    );
+    // Past the deadline and swept: the order reads EXPIRED (Codex, #354 — the sweep decides).
+    await lapse(orderId);
+    expect(await ctx.container.paymentExpirySweep.runOnce(tenantA)).toMatchObject({ orders: 1 });
+    expect((await orderOf(orderId))?.state).toBe('EXPIRED');
     // An older screen of the same order, still carrying its wallet button.
     const older = 809;
     const first = await tapOn(older, `w:${orderId}`);
@@ -583,6 +599,65 @@ describe('an ended order is answered ON its own payment message (R11 A11)', () =
     const again = await tapOn(older, `w:${orderId}`);
     expect(again.replyKey).toBeNull();
     expect(methods()).toEqual(['answerCallbackQuery']);
+  });
+
+  it('an order past its deadline that the sweep KEEPS (a payment still live) is never shown as expired', async () => {
+    /*
+     * Codex, #354: a deadline alone does not end an AWAITING_PAYMENT order.
+     * `DrizzleOrderRepository.expireDue` keeps one whose payment is still live — here the
+     * card transfer, whose own window is still open — exactly as it keeps a receipt under
+     * review or an UNKNOWN TonPays payment, so an operator can still confirm it. A customer
+     * who may already have paid must never be shown «مهلت پرداخت … به پایان رسید» with
+     * «🔁 سفارش دوباره».
+     */
+    const message = 814;
+    const orderId = await cardInvoiceOn(message, 'live');
+    await fund(1_000_000n, 'live');
+    await ctx.container.database.db.execute(
+      sql`UPDATE orders SET expires_at = now() - interval '1 minute' WHERE id = ${orderId}` as never,
+    );
+    expect(await ctx.container.paymentExpirySweep.runOnce(tenantA)).toMatchObject({ orders: 0 });
+    expect((await orderOf(orderId))?.state).toBe('AWAITING_PAYMENT');
+
+    const replies: (string | null)[] = [];
+    const seen: Call[] = [];
+    for (const data of [`pm:${orderId}`, `w:${orderId}`]) {
+      replies.push((await tapOn(815, data)).replyKey);
+      seen.push(...calls);
+    }
+    expect(replies).not.toContain('bot.order.expired_screen');
+    expect(
+      seen.filter((call) => textOf(call).includes(EXPIRED_HEADER)),
+      'no expired screen, edited or sent',
+    ).toEqual([]);
+    expect(
+      seen.flatMap((call) => dataOf(call)).filter((data) => data.startsWith('ro:')),
+      'no «سفارش دوباره»',
+    ).toEqual([]);
+    expect((await orderOf(orderId))?.state).toBe('AWAITING_PAYMENT');
+  });
+
+  it('a draft past its hold whose ended-screen edit is rate-limited answers the next tap', async () => {
+    /*
+     * Codex, #354: the turn landed the message CLOSED and Telegram declined the edit with a
+     * definite 429, so the pre-invoice still shows its buttons. A CLOSED wizard would swallow
+     * every later tap on them, and no sweep ever answers a draft. The message goes back to the
+     * step it was tapped at, and the next tap answers it.
+     */
+    const message = 816;
+    const orderId = await preinvoiceOn(message, 'limited');
+    await ctx.container.database.db.execute(
+      sql`UPDATE orders SET expires_at = now() - interval '1 minute' WHERE id = ${orderId}` as never,
+    );
+    rateLimited.add(message);
+    await tapOn(message, `pm:${orderId}`);
+    expect(editsOf(message), 'the edit was asked for, and declined').toHaveLength(1);
+    expect(methods()).not.toContain('sendMessage');
+
+    const again = await tapOn(message, `pm:${orderId}`);
+    expect(again.replyKey).toBe('bot.order.expired_screen');
+    expect(methods()).not.toContain('sendMessage');
+    expectEndedScreen(editsOf(message)[0], null, EXPIRED_HEADER);
   });
 
   it('a draft past its hold is answered ON its pre-invoice, not by a new message', async () => {
@@ -609,6 +684,8 @@ describe('an ended order is answered ON its own payment message (R11 A11)', () =
     const questionId = question?.sentId;
     if (questionId === null || questionId === undefined) throw new Error('no question');
 
+    // The payment message has been left alone past the settle window: this turn edits it.
+    await settle();
     const answered = await tapOn(questionId, `f:${orderId}`);
     expect((await orderOf(orderId))?.state).toBe('CANCELLED');
     expect(answered.replyKey).toBeNull();
@@ -624,6 +701,51 @@ describe('an ended order is answered ON its own payment message (R11 A11)', () =
       ),
       'the spent question is removed',
     ).toHaveLength(1);
+  });
+
+  it('a cancellation while the order’s message is still settling is deferred to the lane, then edited once', async () => {
+    /*
+     * Codex, #354: another writer's edit of the payment message may still be in flight (the
+     * gateway worker's refresh, a tap whose landing already cleared its hold). An immediate
+     * cancelled screen could land under it and the payment buttons come back. So within the
+     * settle window the turn does not touch that message: the ORDER_CANCELLED row is queued,
+     * the question removed, and the lane edits the message once it is left alone.
+     */
+    const message = 817;
+    const orderId = await cardInvoiceOn(message, 'settling');
+    calls = [];
+    await tapOn(818, `d:${orderId}`);
+    const question = calls.find((call) => call.method === 'sendMessage');
+    const questionId = question?.sentId;
+    if (questionId === null || questionId === undefined) throw new Error('no question');
+
+    // The invoice was edited onto `message` moments ago: it is still settling.
+    const answered = await tapOn(questionId, `f:${orderId}`);
+    expect((await orderOf(orderId))?.state).toBe('CANCELLED');
+    expect(answered.replyKey).toBeNull();
+    expect(editsOf(message), 'the settling message is not touched now').toEqual([]);
+    expect(methods()).not.toContain('sendMessage');
+    expect(
+      calls.filter(
+        (call) => call.method === 'deleteMessage' && call.body['message_id'] === questionId,
+      ),
+      'the spent question is removed',
+    ).toHaveLength(1);
+    expect((await notices()).map((row) => [row.kind, row.state])).toEqual([
+      ['ORDER_CANCELLED', 'PENDING'],
+    ]);
+
+    await deliver();
+    expect(methods(), 'one edit of the order’s message, and no new message').toEqual([
+      'editMessageText',
+    ]);
+    expectEndedScreen(
+      editsOf(message)[0],
+      (await orderOf(orderId))?.code ?? null,
+      CANCELLED_HEADER,
+    );
+    await deliver();
+    expect(methods()).toEqual([]);
   });
 
   it('«🔁 سفارش دوباره» opens the category’s plans as a new message and creates no order', async () => {

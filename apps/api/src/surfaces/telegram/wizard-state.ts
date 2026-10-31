@@ -138,6 +138,14 @@ export interface WizardDirective {
    * prompt, or this turn finds the receipt — the message never goes back to the prompt.
    */
   readonly receiptPrompt?: { readonly customerId: string };
+  /**
+   * R11 A11 (Codex, #354): a screen landed `CLOSED` whose edit Telegram definitely declined
+   * (429) goes back to the step it was tapped at. The message still shows its old buttons, and
+   * a `CLOSED` wizard would swallow every tap on them — for an expired draft, nothing else will
+   * ever answer that message. Put back, the next tap answers it again. Only a definite rate
+   * limit: an `UNKNOWN` edit may have landed.
+   */
+  readonly reopenOnRateLimit?: true;
 }
 
 /**

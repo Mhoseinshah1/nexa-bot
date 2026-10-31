@@ -966,6 +966,11 @@ describe('the customer purchase flow over Telegram', () => {
     const confirm = buttonsOf(lastMessage());
     expect(confirm.map((b) => b.callback_data)).toEqual([`f:${orderId}`]);
     sent = [];
+    // The order's message has been left alone past the lane's settle window (Codex, #354:
+    // within it the cancellation defers to the ORDER_CANCELLED notice instead of editing).
+    await api.container.database.db.execute(
+      sql`UPDATE telegram_wizards SET updated_at = updated_at - interval '1 hour', busy_until = NULL`,
+    );
 
     await tap(`f:${orderId}`);
 

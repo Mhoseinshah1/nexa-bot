@@ -10,7 +10,10 @@ import {
 } from '@nexa/contracts';
 import type { CustomerRecord } from '../../../modules/commerce/customers/application/ports.js';
 import type { CustomerButton } from '../../../modules/commerce/messaging/application/ports.js';
-import { ORDER_END_ANSWER_STEPS } from '../../../modules/commerce/messaging/application/order-screen-answer.js';
+import {
+  ORDER_END_ANSWER_STEPS,
+  orderScreenSettleMs,
+} from '../../../modules/commerce/messaging/application/order-screen-answer.js';
 import { orderEndScreen } from '../../../modules/commerce/messaging/application/order-end-screen.js';
 import type { OrderRecord } from '../../../modules/commerce/orders/application/ports.js';
 import type { CardMessageRef } from '../../../modules/commerce/provisioning/application/operation-card.js';
@@ -27,15 +30,24 @@ const ENDING_KEYS: Readonly<Record<OrderEnding, TemplateKey>> = {
 };
 
 /**
- * The order's ending at `now`: EXPIRED once the sweep moved it, and also while it is still
- * unpaid past its own deadline (the sweep has not reached it yet — the same instant
- * `orderAwaitingPayment` refuses a payment with `ORDER_EXPIRED`); CANCELLED once withdrawn.
+ * The order's ending at `now`: EXPIRED once the sweep moved it; CANCELLED once withdrawn; and
+ * a DRAFT past its price hold, which nothing will ever sweep (`OrderRepository.expireDue`
+ * covers `AWAITING_PAYMENT` only) and which `OrderService.confirm` refuses from that instant.
+ *
+ * An `AWAITING_PAYMENT` order past its deadline is NOT read as ended (Codex, #354). Its
+ * deadline alone does not decide it: `DrizzleOrderRepository.expireDue` keeps an order whose
+ * payment is still live — a transfer whose receipt is under review, a TonPays attempt in a
+ * provider review, an `UNKNOWN` money-probably-sent — so an operator can still confirm it.
+ * Drawing «⏳ مهلت پرداخت این سفارش به پایان رسید» with «🔁 سفارش دوباره» on such an order would
+ * invite a customer who has already paid to pay again. The sweep is the one judge of that, so
+ * only its outcome — the order's own `EXPIRED` state — is trusted here; until it runs (at most
+ * a minute) a tap is answered by the caller's refusal, as before A11.
  */
 function endingOf(order: OrderRecord, now: Date): OrderEnding | null {
   if (order.state === 'EXPIRED') return 'EXPIRED';
   if (order.state === 'CANCELLED') return 'CANCELLED';
   if (
-    (order.state === 'DRAFT' || order.state === 'AWAITING_PAYMENT') &&
+    order.state === 'DRAFT' &&
     order.expiresAt !== null &&
     now.getTime() >= order.expiresAt.getTime()
   ) {
@@ -117,7 +129,8 @@ export function endedOrderScreen(rt: BotRuntime, order: OrderRecord): PendingRep
     values: content.values,
     buttons: content.buttons,
     orderId: order.id,
-    wizard: { kind: 'ORDER', step: 'CLOSED', subjectId: order.id },
+    // A definite 429 puts the message back on the step it was tapped at (Codex, #354).
+    wizard: { kind: 'ORDER', step: 'CLOSED', subjectId: order.id, reopenOnRateLimit: true },
   };
 }
 
@@ -129,13 +142,19 @@ export function endedOrderScreen(rt: BotRuntime, order: OrderRecord): PendingRep
  * «سفارش لغو شد» under them.
  *
  * Called AFTER the cancellation committed, outside every transaction, like the router's own
- * reply. Through `WizardInvoiceScreens.answerOrder` — the lane's FIX-08 edit — with no settle
- * window: this turn is the writer, and a turn still HOLDING the message (a tap on it in
- * flight) makes it answer `WAIT`, which is treated as "not edited".
+ * reply. Through `WizardInvoiceScreens.answerOrder` — the lane's FIX-08 edit — WITH the lane's
+ * settle window (Codex, #354): this turn owns the question, not the order's payment message.
+ * Another writer may still have an edit of that message in flight — the gateway worker's
+ * `refresh` after it moved the invoice, a tap whose landing already cleared its hold — and an
+ * edit landing after the cancelled screen would put the payment instructions and buttons
+ * back. So while the message is settling (`WAIT`), the answer is DEFERRED: the
+ * `ORDER_CANCELLED` row is queued for the end of the window, the lane edits the message once
+ * it is left alone (or sends once), and the spent question is removed now.
  *
- * Returns the reply: nothing (`key: null`) when the order's message took the screen, else the
- * same screen EDITED onto the question message (sent once as a new message when Telegram
- * cannot edit that one either), with the `ORDER_CANCELLED` lane fallback for a rate limit.
+ * Returns the reply: nothing (`key: null`) when the order's message took the screen or the
+ * answer was deferred, else the same screen EDITED onto the question message (sent once as a
+ * new message when Telegram cannot edit that one either), with the `ORDER_CANCELLED` lane
+ * fallback for a rate limit.
  */
 export async function cancelledOrderReply(
   rt: BotRuntime,
@@ -169,12 +188,19 @@ export async function cancelledOrderReply(
         scope,
         orderId,
         { chatId: tapped.chatId, botInstanceId: tapped.botInstanceId as BotInstanceId },
-        0,
+        rt.deps.orderScreenSettleMs ?? orderScreenSettleMs(0),
         content,
         ORDER_END_ANSWER_STEPS,
       );
     } catch {
       answered = null;
+    }
+    if (answered !== null && 'kind' in answered) {
+      // Still settling: the lane answers on the message once it is left alone.
+      if (await deferToLane(rt, scope, customer, orderId, answered.until)) {
+        await retireQuestion(rt, scope, tapped);
+        return { key: null, values: {}, buttons: [], orderId: null };
+      }
     }
     const edited =
       answered !== null &&
@@ -194,6 +220,28 @@ export async function cancelledOrderReply(
     edit: true,
     fallback,
   };
+}
+
+/**
+ * Queues the order's `ORDER_CANCELLED` notice, due when the message's settle window ends. The
+ * row is the durable answer: one per order (`customer_notifications_subject_key`), rendered
+ * from the order, edited onto its message by the lane under the same settle rule. False when
+ * it could not be queued — the turn then answers on the question itself, as it would have.
+ */
+async function deferToLane(
+  rt: BotRuntime,
+  scope: TenantContext,
+  customer: Pick<CustomerRecord, 'id'>,
+  orderId: string,
+  until: Date,
+): Promise<boolean> {
+  try {
+    const wait = Math.max(0, until.getTime() - rt.deps.clock.now().getTime());
+    await rt.deps.queueRateLimitedFact(scope, customer.id, 'ORDER_CANCELLED', orderId, wait);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function retireQuestion(

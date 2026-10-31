@@ -4801,3 +4801,9 @@ live; the owner decides otherwise.
   new `bot.order.expired` per tap on a stale pay/confirm button (fixed). Three orders, each told
   once, are also possible: every confirmed pre-invoice is its own order with its own window, and
   tapping a plan again starts a new draft — order creation is unchanged.
+- **OQ-R11-A11-04 — the bare refusal on a live order past its deadline.** An `AWAITING_PAYMENT`
+  order past its deadline whose payment is still live (receipt under review, provider review,
+  `UNKNOWN`) is not shown the ended screen (Codex, #354), so a pay tap on it is answered by the
+  refusal it always got, `bot.order.expired` («… لطفاً دوباره سفارش دهید.»). That text predates
+  A11 and is left unchanged (no copy rewrite outside the spec). Default: unchanged; whether such a
+  customer should instead be told their payment is still being checked is the owner's call.

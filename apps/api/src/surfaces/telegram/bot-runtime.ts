@@ -2517,6 +2517,14 @@ export class BotRuntime {
         await state.move(scope, actor, target.id, edited.messageId);
       }
     }
+    // R11 A11 (Codex, #354): a definite 429 left the message as it was; so is its wizard.
+    if (
+      edited.outcome === 'RATE_LIMITED' &&
+      directive?.reopenOnRateLimit === true &&
+      target.step !== directive.step
+    ) {
+      await state.moveBack(scope, actor, { ...target, version: target.version + 1 }, target.step);
+    }
     if (typed && edited.outcome === 'DELIVERED') {
       const own = typedMessageOf(input.update);
       if (own !== null && this.deps.messenger.remove !== undefined) {

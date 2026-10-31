@@ -370,6 +370,16 @@ payment message** into the ended screen instead of sending a new «مهلت ای
 - A tap on a stale pay/confirm button of an ended order is answered by editing THAT message into
   the ended screen, never by a new refusal message. A cancellation edits the order's message and
   removes the confirmation question.
+- **Ended means the sweep ended it** (Codex, #354): an `AWAITING_PAYMENT` order past its deadline
+  is not shown as expired until `expireDue` has moved it — the sweep keeps an order whose payment
+  is still live (a receipt under review, a provider review, `UNKNOWN`), and a customer who may
+  have paid is never offered «🔁 سفارش دوباره». Only a DRAFT past its hold (never swept) is read
+  from its deadline.
+- **A cancellation respects the settle window** (Codex, #354): while another writer may still be
+  editing the order's message, the turn does not touch it; the `ORDER_CANCELLED` row is queued
+  for the window's end and the lane edits the message (or sends once).
+- **A definite 429 on an ended screen leaves the screen tappable** (Codex, #354): the wizard goes
+  back to the step it was tapped at, so the next tap answers it; nothing else would for a draft.
 - No customer message from a migration or backfill; nothing here has one.
 
 ## Automatic renewal (Round 10, D1)

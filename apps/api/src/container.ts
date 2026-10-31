@@ -8789,6 +8789,8 @@ export function createContainer(
       // R2 (items 3–5): edit-in-place state for wizards and receipt reviews.
       messageState: telegramMessageState,
       invoiceScreens: wizardScreens,
+      // R11 A11 (Codex, #354): a cancellation edits the order's message under the lane's rule.
+      orderScreenSettleMs: orderScreenSettleMs(config.NOTIFICATION_SEND_TIMEOUT_MS),
       // R2: which order an open typed-answer window names, so a refusal edits ITS wizard.
       answerWindowOrder: async (scope, botInstanceId, customerId, window) => {
         const open =
