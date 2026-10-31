@@ -1555,6 +1555,52 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     expect(fake.cancels).toHaveLength(2);
   });
 
+  it('R11 A8: requeueUnsentCancel takes back only the stamp it is given, and only from SENT', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    const repo = new DrizzleGatewayProviderRequestRepository(ctx.container.database.db);
+    const [row] = await rows<{ id: string }>(
+      sql`SELECT id FROM gateway_provider_requests WHERE payment_id = ${paymentId}`,
+    );
+    const stamp = new Date(Math.floor(clock.now().getTime() / 1000) * 1000);
+    const notBefore = new Date(stamp.getTime() + 90_000);
+    // Never sent: there is no stamp to take back.
+    expect(await repo.requeueUnsentCancel(tenantA, row!.id, stamp, notBefore, undefined)).toBe(
+      false,
+    );
+    expect(await repo.markSent(tenantA, row!.id, stamp, undefined)).toBe(true);
+    // A stamp that is not this one (another send) is never taken back.
+    expect(
+      await repo.requeueUnsentCancel(
+        tenantA,
+        row!.id,
+        new Date(stamp.getTime() + 1),
+        notBefore,
+        undefined,
+      ),
+    ).toBe(false);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([{ state: 'SENT' }]);
+    expect(await repo.requeueUnsentCancel(tenantA, row!.id, stamp, notBefore, undefined)).toBe(
+      true,
+    );
+    const [back] = await rows<{ state: string; sent_at: string | null; claimed_until: string }>(
+      sql`SELECT state, sent_at, claimed_until FROM gateway_provider_requests WHERE id = ${row!.id}`,
+    );
+    expect(back!.state).toBe('REQUESTED');
+    expect(back!.sent_at).toBeNull();
+    expect(new Date(back!.claimed_until).getTime()).toBe(notBefore.getTime());
+    // A decided row is never moved back either.
+    expect(await repo.markSent(tenantA, row!.id, stamp, undefined)).toBe(true);
+    expect(await repo.decide(tenantA, row!.id, 'UNKNOWN', 'http.timeout', stamp, undefined)).toBe(
+      true,
+    );
+    expect(await repo.requeueUnsentCancel(tenantA, row!.id, stamp, notBefore, undefined)).toBe(
+      false,
+    );
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([{ state: 'UNKNOWN' }]);
+  });
+
   it('R11 A8: the lost cancel HAD cancelled it — the retry meets NOT_PENDING, the inquiry reads canceled, and the next tap says «فاکتور قبلاً لغو شده»', async () => {
     const { paymentId, message } = await cardOnScreen();
     await lostCancel(paymentId, message);
