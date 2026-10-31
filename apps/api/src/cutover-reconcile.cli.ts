@@ -19,7 +19,11 @@ import {
   classifyTarget,
   type TargetIdentity,
 } from './modules/platform/legacy-importer/application/production-guard.js';
-import { readLegacySnapshot } from './modules/platform/legacy-importer/application/source-snapshot.js';
+import {
+  readLegacySnapshot,
+  serviceCandidateInvoices,
+} from './modules/platform/legacy-importer/application/source-snapshot.js';
+import type { MirzaServiceInvoice } from './modules/platform/legacy-cutover/application/cutover-service-reconciliation.js';
 import { nxpkgSourceConnector } from './modules/platform/legacy-importer/infrastructure/nxpkg-legacy-source.js';
 
 /**
@@ -188,7 +192,10 @@ export function packageSecret(args: ReconcileArgs, env: NodeJS.ProcessEnv): Nxpk
   return args.packageKeyEnv !== null ? { keyFileText: value } : { passphrase: value };
 }
 
-/** The Mirza half: the package's own `user` snapshot and its agent states. */
+/**
+ * The Mirza half: the package's own `user` snapshot and its agent states, and the service
+ * candidates the importer decides from (the rehearsal's service reconciliation reads them).
+ */
 export async function readMirzaSide(
   packagePath: string,
   secret: NxpkgSecret,
@@ -197,11 +204,16 @@ export async function readMirzaSide(
   readonly users: MirzaUserRow[];
   readonly agentStates: MirzaAgentState[];
   readonly agentProfileIds: ReadonlySet<string>;
+  readonly serviceInvoices: MirzaServiceInvoice[];
 }> {
   const connector = await nxpkgSourceConnector(packagePath, secret, workDir);
   try {
     const snapshot = await readLegacySnapshot(connector);
     const users = snapshot.users.map((u) => ({ id: u.id, balance: u.balance, agent: u.agent }));
+    const serviceInvoices = serviceCandidateInvoices(snapshot).map((invoice) => ({
+      invoiceKey: invoice.idInvoice,
+      ownerTelegramId: invoice.idUser,
+    }));
     const agentStates: MirzaAgentState[] = [];
     const pkg = connector.pkg;
     const agentProfileIds = new Set<string>();
@@ -219,7 +231,7 @@ export async function readMirzaSide(
         if (id !== null) agentProfileIds.add(id);
       }
     }
-    return { users, agentStates, agentProfileIds };
+    return { users, agentStates, agentProfileIds, serviceInvoices };
   } finally {
     await connector.close();
   }

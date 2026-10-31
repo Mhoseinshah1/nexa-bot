@@ -22,7 +22,7 @@ import {
 import type { EventConsumer } from '../../../platform/eventing/application/event-consumer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { CustomerRecord, CustomerRepository } from '../../customers/application/ports.js';
-import { identityOf, oneLine } from '../../ops-log/application/presenters.js';
+import { identityOf, oneLine, serviceUsernameValue } from '../../ops-log/application/presenters.js';
 import type { CustomerFact, OpsLogFacts, OpsLogWords } from '../../ops-log/application/ports.js';
 import type {
   GatewayInvoiceRecord,
@@ -260,6 +260,10 @@ export class FinancialLogConsumer implements EventConsumer {
           at: payment.confirmedAt ?? new Date(event.occurredAt),
         };
         if (order?.code !== null && order?.code !== undefined) common['orderCode'] = order.code;
+        // R11 A7: an order tied to a service names the service's panel account (a top-up has none).
+        if (payment.orderId !== null) {
+          await this.withServiceUsername(scope, payment.orderId, common, tx);
+        }
         const buttons: OpsLogButton[] = [
           { kind: 'USER', ref: payment.customerId },
           { kind: 'PAYMENT', ref: payment.id },
@@ -588,6 +592,9 @@ export class FinancialLogConsumer implements EventConsumer {
         const service = await facts.service(scope, request.serviceId, tx);
         if (service?.code !== null && service?.code !== undefined)
           values['serviceCode'] = service.code;
+        // R11 A7: the request is ABOUT this service — its panel account name, as the service stands.
+        const requested = serviceUsernameValue(service?.providerUsername);
+        if (requested !== null) values['serviceUsername'] = requested;
         const payment = await this.deps.payments.findById(
           scope,
           request.paymentId as PaymentId,
@@ -623,6 +630,25 @@ export class FinancialLogConsumer implements EventConsumer {
     if (payment.orderId === null) return;
     const order = await this.deps.facts.order(scope, payment.orderId, tx);
     if (order?.code !== null && order?.code !== undefined) values['orderCode'] = order.code;
+    // R11 A7: and, when that order is tied to a service, the service's panel account name.
+    await this.withServiceUsername(scope, payment.orderId, values, tx);
+  }
+
+  /**
+   * R11 A7: the panel account name of the service an order is tied to, as its own line. Absent
+   * (the line is dropped) for an order with no service — a top-up, or a payment that never
+   * settled into one.
+   */
+  private async withServiceUsername(
+    scope: TenantContext,
+    orderId: string,
+    values: Record<string, TemplateValue>,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const name = serviceUsernameValue(
+      await this.deps.facts.serviceUsernameOfOrder(scope, orderId, tx),
+    );
+    if (name !== null) values['serviceUsername'] = name;
   }
 
   /** The payment, its customer and (for a gateway payment) its invoice, as they stand. */

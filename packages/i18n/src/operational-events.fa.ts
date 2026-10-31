@@ -60,6 +60,8 @@ export const OPERATIONAL_EVENT_LABELS_FA: Readonly<Record<string, string>> = {
   'job.loop_recovered': 'کار پس‌زمینه دوباره راه افتاد',
   'job.loop_stalled': 'کار پس‌زمینه متوقف مانده است',
   'job.superseded': 'کار پس‌زمینه جایگزین شد',
+  'process.restart_storm': 'سرویس پی‌درپی ری‌استارت می‌شود',
+  'process.restart_storm_ended': 'سرویس دیگر پی‌درپی ری‌استارت نمی‌شود',
   'nexa.invoice_id_unsafe': 'شناسهٔ فاکتور درگاه ناامن است',
   'nexa.no_payment_card': 'کارت پرداختی در دسترس نیست',
   'nexa.no_payment_link': 'پیوند پرداخت ساخته نشد',

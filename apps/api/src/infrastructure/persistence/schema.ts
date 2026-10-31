@@ -381,6 +381,8 @@ import {
   GIFT_CARD_BATCH_STATES,
   GIFT_CARD_CODE_STATES,
   GIFT_CARD_REJECTIONS,
+  // R11 A4: «نوع بارکد».
+  PANEL_QR_KINDS,
 } from '@nexa/contracts';
 
 /**
@@ -2209,12 +2211,37 @@ export const panels = pgTable(
      * catalogue's reach, never by anything that operates an existing service.
      */
     balancingGroup: text('balancing_group'),
+    /**
+     * R11 A4: «فقط فایل، بدون لینک ساب» — the subscription link of a service on this panel
+     * is never shown to its customer (bot card, «سرویس‌های من», mini app); they get the
+     * connection files only, and «تغییر لینک» becomes «دریافت فایل‌های جدید».
+     *
+     * NOT NULL with default false, so every panel that exists when the migration runs keeps
+     * showing its link and nothing changes underneath an operator. Possible only on a panel
+     * whose provider hands over connection files; `PanelService.update` refuses it on any
+     * other (a CHECK cannot know which provider can). Nothing is sent to a customer when it
+     * is switched, and no service row is touched.
+     */
+    filesOnlyDelivery: boolean('files_only_delivery').notNull().default(false),
+    /**
+     * R11 A4: «نوع بارکد» — which QR a customer of this panel is shown. RickPanel panels only
+     * (`PanelService.update` refuses another provider; a CHECK cannot know which provider a
+     * row is). `SUB_LINK` is the default and exactly what every panel drew before.
+     */
+    qrKind: text('qr_kind').notNull().default('SUB_LINK'),
+    /** The refresh interval written into a sing-box import QR, in minutes. */
+    singboxIntervalMinutes: integer('singbox_interval_minutes').notNull().default(360),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
     index('panels_tenant_status_idx').on(table.tenantId, table.status),
     /** A drain and its reason, or neither — the same biconditional shape as the username policy. */
+    check('panels_qr_kind_check', enumCheck('qr_kind', PANEL_QR_KINDS)),
+    check(
+      'panels_singbox_interval_check',
+      sql`${table.singboxIntervalMinutes} BETWEEN 1 AND 10080`,
+    ),
     check(
       'panels_balancing_group_check',
       sql`${table.balancingGroup} IS NULL OR ${table.balancingGroup} ~ '^[a-z0-9][a-z0-9_-]{0,39}$'`,
@@ -3523,7 +3550,49 @@ export const installationKeys = pgTable(
   ],
 );
 
+/**
+ * R11 A3: the life of each process role, kept so a CRASH LOOP can be seen across lives.
+ *
+ * One row per role (`api`, `worker`, `monitor`, ...), overwritten by every boot of that role.
+ * A process that is restarted within seconds cannot remember anything itself, and the
+ * loop-stall watchdog gives no verdict in a process's first minute, so a role that dies young
+ * was never reported. What survives the crash is this row: the next boot reads how the
+ * previous life ended — it reached `stable_at` (lived a full minute), was stopped on purpose
+ * (`stopped_at`, a SIGTERM that shut down cleanly), or did neither, which is a crash — and
+ * counts the unbroken streak of crashed lives (`restarts`, since `restarts_since`).
+ *
+ * Installation-wide: a role is not a tenant's, and nothing here is money, a customer or a
+ * secret. The announcement itself is an operational event (`process.restart_storm`), whose
+ * own dedupe row is what stops a restarting process announcing twice.
+ */
+export const processRuns = pgTable(
+  'process_runs',
+  {
+    /** The process role's name, the primary key: the table holds the LATEST life of each. */
+    role: text('role').primaryKey(),
+    /** This life's id, so a late write from an older life cannot mark a newer one. */
+    runId: uuid('run_id').notNull(),
+    startedAt: timestamptz('started_at').notNull(),
+    /** Set when the life has stayed up `PROCESS_RUN_STABLE_AFTER_MS`; the streak ends there. */
+    stableAt: timestamptz('stable_at'),
+    /** Set by a clean shutdown (SIGTERM/SIGINT handled): an operator's stop, not a crash. */
+    stoppedAt: timestamptz('stopped_at'),
+    /** Crashed lives in the current unbroken streak, as of THIS boot. */
+    restarts: integer('restarts').notNull().default(0),
+    /** When the first crashed life of the streak began; null while `restarts` is 0. */
+    restartsSince: timestamptz('restarts_since'),
+  },
+  () => [
+    check('process_runs_role_check', sql`role ~ '^[a-z][a-z0-9_-]{0,31}$'`),
+    check(
+      'process_runs_restarts_check',
+      sql`restarts >= 0 AND (restarts = 0) = (restarts_since IS NULL)`,
+    ),
+  ],
+);
+
 export const schema = {
+  processRuns,
   tenants,
   botInstances,
   admins,

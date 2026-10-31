@@ -63,7 +63,11 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
   { id: 'terms', label: 'قوانین و مقررات', prefixes: ['bot.terms.'] },
   // R10 D5: the /start captcha for new customers.
   { id: 'captcha', label: 'سؤال امنیتی شروع (کپچا)', prefixes: ['bot.captcha.'] },
-  { id: 'catalog', label: 'فروشگاه، سفارش و پیش‌فاکتور', prefixes: ['bot.catalog.', 'bot.order.'] },
+  {
+    id: 'catalog',
+    label: 'فروشگاه، سفارش و پیش‌فاکتور',
+    prefixes: ['bot.catalog.', 'bot.order.', 'bot.pricing.'],
+  },
   { id: 'username', label: 'انتخاب یوزرنیم سرویس', prefixes: ['bot.username.'] },
   { id: 'discount', label: 'کد تخفیف', prefixes: ['bot.discount.'] },
   { id: 'trial', label: 'سرویس آزمایشی', prefixes: ['bot.trial.'] },
@@ -1181,6 +1185,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'خط تخفیف شخصی در پیش‌فاکتور',
     'درصد تخفیف شخصی مشتری، مبلغ تخفیف و قیمت پیش از تخفیف؛ فقط وقتی سفارش با تخفیف شخصی قیمت‌گذاری شده و به‌جای خط تخفیف معمول.',
   ],
+  'bot.pricing.personal_discount_tag': [
+    'برچسب تخفیف شخصی در فهرست قیمت‌ها',
+    'کنار قیمتی که با تخفیف شخصی مشتری در فهرست پلن‌ها، تمدید و بسته‌ها نشان داده می‌شود، پس از قیمت تخفیف‌خورده و قیمت خط‌خورده؛ فقط وقتی تخفیف شخصی در قیمت همان ردیف برنده است.',
+  ],
   'bot.order.preinvoice_cashback_line': [
     'خط کش‌بک در پیش‌فاکتور',
     'کش‌بکی که پس از تحویل سرویس واریز می‌شود؛ فقط وقتی کش‌بک وعده داده شده است.',
@@ -2165,6 +2173,38 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.service.rotate_confirm_button': [
     'دکمهٔ تأیید ساخت لینک جدید',
     'دکمه‌ای که در صفحهٔ تأیید، لینک جدید را درخواست می‌کند.',
+  ],
+  'bot.service.delivered_files_only': [
+    'کارت تحویل سرویس (فقط فایل)',
+    'کارت تحویل در پنلی که «فقط فایل، بدون لینک ساب» روشن است: مشخصات سرویس و اشاره به فایل‌های اتصال؛ بدون لینک و بدون کد QR.',
+  ],
+  'bot.service.files_renewed': [
+    'نتیجهٔ دریافت فایل‌های جدید (فقط فایل)',
+    'پس از «دریافت فایل‌های جدید» در پنل فقط‌فایل، روی کارت سرویس نشان داده می‌شود؛ بدون لینک.',
+  ],
+  'bot.service.qr_caption_sublink': [
+    'توضیح QR لینک اشتراک (دو بارکد)',
+    'یک‌خطی زیر QR لینک اشتراک، وقتی نوع بارکد پنل «هر دو» است.',
+  ],
+  'bot.service.qr_caption_singbox': [
+    'توضیح QR مخصوص sing-box (دو بارکد)',
+    'یک‌خطی زیر QR واردکردن در sing-box، وقتی نوع بارکد پنل «هر دو» است.',
+  ],
+  'bot.service.files_new_button': [
+    'دکمهٔ دریافت فایل‌های جدید',
+    'در پنل فقط‌فایل جای «تغییر لینک» را می‌گیرد؛ فایل‌های اتصال تازه می‌سازد.',
+  ],
+  'bot.service.files_new_ask': [
+    'پرسش تأیید دریافت فایل‌های جدید',
+    'پیش از ساخت فایل‌های جدید می‌گوید باید آن‌ها را در برنامه‌ها جایگزین کنند و تا چه مدت نمی‌توان دوباره درخواست داد.',
+  ],
+  'bot.service.files_new_confirm_button': [
+    'دکمهٔ تأیید ساخت فایل‌های جدید',
+    'دکمه‌ای که در صفحهٔ تأیید، فایل‌های جدید را درخواست می‌کند.',
+  ],
+  'bot.service.files_new_cooldown': [
+    'محدودیت زمانی دریافت فایل جدید',
+    'مشتری به‌تازگی فایل جدید گرفته است؛ زمانی را که دوباره ممکن است می‌گوید.',
   ],
   'bot.service.rotate_cooldown': [
     'محدودیت زمانی تغییر لینک',

@@ -133,6 +133,85 @@ if (bad.length) { console.log(bad.join("\n")); process.exit(1); }
   check "$p no temp dir left behind" "$r" "$(ls -A "$root/tmp")"
 done
 
+# --- a SECOND renumber, after the first one was committed inside a merge commit.
+# `git log` shows no diff for a merge commit unless asked (-m), so the snapshot the
+# first renumber generated inside "merge main + renumber" was invisible and the
+# generated migration was reclassified as hand-written (journal entry, no regeneration,
+# no snapshot) the next time main moved.
+
+# main_advance <dir> <n>: origin/main gains n generated migrations (0003, 0004, ...)
+main_advance() {
+  local dir="$1" n="$2" i
+  (
+    cd "$dir"
+    git checkout -q main
+    for i in $(seq 1 "$n"); do
+      node -e '
+const fs = require("fs");
+const [d, i] = process.argv.slice(1);
+const f = d + "/meta/_journal.json";
+const raw = fs.readFileSync(f, "utf8");
+const j = JSON.parse(raw);
+const last = j.entries[j.entries.length - 1];
+const idx = last.idx + 1;
+const num = String(idx).padStart(4, "0");
+const tag = num + "_main_next_" + i;
+fs.writeFileSync(d + "/" + tag + ".sql", "-- main " + tag + "\n");
+const prev = JSON.parse(fs.readFileSync(d + "/meta/" + String(last.idx).padStart(4, "0") + "_snapshot.json", "utf8"));
+fs.writeFileSync(d + "/meta/" + num + "_snapshot.json",
+  JSON.stringify({ id: "22222222-2222-4222-8222-" + num.padStart(12, "0"), prevId: prev.id, version: "7", dialect: "postgresql", tables: {} }, null, 2));
+j.entries.push({ idx, version: "7", when: last.when + 1000, tag, breakpoints: true });
+fs.writeFileSync(f, JSON.stringify(j, null, 2) + (raw.endsWith("\n") ? "\n" : ""));
+' "$D" "$i"
+      git add -A && git_ commit -q -m "main moves again ($i)"
+    done
+    git update-ref refs/remotes/origin/main main
+    git checkout -q feature
+  )
+}
+
+# first renumber done inside the merge commit, as the round pipeline does it
+repo="$root/second"
+mkrepo "$repo" conflict
+run "$repo"
+check "second renumber: first renumber (conflicted merge) exits 0" "$RC" "$OUT"
+(cd "$repo" && git_ commit -q -m "merge main + renumber")
+main_advance "$repo" 1
+(cd "$repo" && git_ merge origin/main >/dev/null 2>&1 || true)
+run "$repo" --dry-run
+grep -qF 'plan: 0003_add_widgets -> 0004_add_widgets (generated)' <<<"$OUT" &&
+  grep -qF 'plan: 0004_widgets_guard -> 0005_widgets_guard (hand-written)' <<<"$OUT" && r=0 || r=1
+check "second renumber (dry-run): the migration generated inside a merge commit is 'generated'" "$r" "$OUT"
+run "$repo"
+check "second renumber: exits 0" "$RC" "$OUT"
+[[ "$(tail -n1 <<<"$OUT")" == "renumbered=2 identical=yes" ]] && r=0 || r=1
+check "second renumber: last line is renumbered=2 identical=yes" "$r" "$OUT"
+grep -qF 'regenerated 0003_add_widgets -> 0004_add_widgets' <<<"$OUT" && r=0 || r=1
+check "second renumber: the generated migration is regenerated, not just registered" "$r" "$OUT"
+cmp -s "$repo/$D/0004_add_widgets.sql" "$fx/branch/$D/0002_add_widgets.sql" && r=0 || r=1
+check "second renumber: regenerated SQL byte-identical" "$r"
+cmp -s "$repo/$D/0005_widgets_guard.sql" "$fx/branch/$D/0003_widgets_guard.sql" && r=0 || r=1
+check "second renumber: hand-written SQL byte-identical" "$r"
+[ -f "$repo/$D/meta/0004_snapshot.json" ] && [ ! -e "$repo/$D/meta/0005_snapshot.json" ] && r=0 || r=1
+check "second renumber: a snapshot for the generated migration, none for the hand-written" "$r" "$(ls "$repo/$D/meta")"
+
+# main's snapshots arriving through a merge are not the branch's: main's 0004 must
+# not turn the branch's hand-written 0004_widgets_guard into a 'generated' one.
+repo="$root/second-theirs"
+mkrepo "$repo" conflict
+run "$repo"
+(cd "$repo" && git_ commit -q -m "merge main + renumber")
+main_advance "$repo" 2
+(
+  cd "$repo"
+  git_ merge origin/main >/dev/null 2>&1 || true
+  git checkout -q origin/main -- $D/meta
+  git add -A && git_ commit -q -m "merge main (meta taken from main)"
+)
+run "$repo" --dry-run
+grep -qF 'plan: 0004_widgets_guard -> 0006_widgets_guard (hand-written)' <<<"$OUT" && r=0 || r=1
+check "main's snapshot with a hand-written migration's number does not make it 'generated'" "$r" "$OUT"
+
 # --- dry-run changes nothing and prints the plan
 for mode in conflict committed; do
   repo="$root/dry-$mode"

@@ -1,6 +1,8 @@
 import {
   JOB_LOOP_RECOVERED_CODE,
   JOB_LOOP_STALLED_CODE,
+  PROCESS_RESTART_STORM_CODE,
+  PROCESS_RESTART_STORM_ENDED_CODE,
   PAYMENT_LINK_FAILURE_KINDS,
   PAYMENT_LINK_CREATE_FAILED_CODE,
   money,
@@ -22,7 +24,7 @@ import {
   sanitizedErrorCode,
 } from '../../../platform/opslog/application/error-events.js';
 import type { OpsLogFacts, OpsLogWords } from './ports.js';
-import { identityOf, stalledReport, technicalLine } from './presenters.js';
+import { identityOf, serviceUsernameValue, stalledReport, technicalLine } from './presenters.js';
 import {
   PROVISIONING_DELIVERED_CODE,
   PROVISIONING_STALLED_CODE,
@@ -113,6 +115,22 @@ export class OperationalEventPresenter implements OpsEventPresenter {
     return this.deps.words.severity(klass);
   }
 
+  /**
+   * R11 A7: an event whose context names a service (`serviceId`, as every service event's does)
+   * shows that service's panel account name on the generic layout too — the id itself is never
+   * printed. Null for an event about no service, or about one that is gone.
+   */
+  async serviceUsernameOf(
+    scope: TenantContext,
+    input: OperationalEventInput,
+    tx: unknown,
+  ): Promise<string | null> {
+    const serviceId = safeIdentifier(input.context?.['serviceId']);
+    if (serviceId === null) return null;
+    const service = await this.deps.facts.service(scope, serviceId, tx as TransactionScope);
+    return serviceUsernameValue(service?.providerUsername);
+  }
+
   async present(
     scope: TenantContext,
     input: OperationalEventInput,
@@ -134,6 +152,12 @@ export class OperationalEventPresenter implements OpsEventPresenter {
     }
     if (recorded.code === JOB_LOOP_STALLED_CODE || recorded.code === JOB_LOOP_RECOVERED_CODE) {
       return this.loopStall(input, recorded);
+    }
+    if (
+      recorded.code === PROCESS_RESTART_STORM_CODE ||
+      recorded.code === PROCESS_RESTART_STORM_ENDED_CODE
+    ) {
+      return this.restartStorm(input, recorded);
     }
     if (recorded.code === 'panel.health.recovered') {
       return this.panelUp(scope, input, recorded, scoped);
@@ -209,6 +233,12 @@ export class OperationalEventPresenter implements OpsEventPresenter {
     if (orderId !== null) {
       const order = await facts.order(scope, orderId, tx);
       if (order?.code !== null && order?.code !== undefined) values['orderCode'] = order.code;
+      // R11 A7: a renewal or add-on order names the service's panel account; a new purchase
+      // that never settled has no service yet, so the line is dropped.
+      const serviceUsername = serviceUsernameValue(
+        await facts.serviceUsernameOfOrder(scope, orderId, tx),
+      );
+      if (serviceUsername !== null) values['serviceUsername'] = serviceUsername;
     }
     const buttons: OpsLogButton[] = [
       { kind: 'GATEWAY', ref: provider },
@@ -260,6 +290,53 @@ export class OperationalEventPresenter implements OpsEventPresenter {
         ...(typeof role === 'string'
           ? { details: `${words.loopStall.roleLabel}: ${words.loopStall.roleName(role)}` }
           : {}),
+      },
+    };
+  }
+
+  // --- R11 A3: a role that keeps restarting -------------------------------------------
+
+  /**
+   * `process.restart_storm` / `process.restart_storm_ended`: «سرویس … پی‌درپی ری‌استارت
+   * می‌شود» with the role named in Persian, the count and the window beneath it. The role
+   * and the numbers come from the event's context; a context that does not name a role (a
+   * hand-recorded row) keeps the generic layout, as the loop-stall message does.
+   */
+  private restartStorm(
+    input: OperationalEventInput,
+    recorded: RecordedOperationalEvent,
+  ): PresentedOpsEvent | null {
+    const { words } = this.deps;
+    const role = input.context?.['processRole'];
+    if (typeof role !== 'string' || !/^[a-z][a-z0-9_-]{0,31}$/.test(role)) return null;
+    const roleName = words.loopStall.roleName(role);
+    const ended = recorded.code === PROCESS_RESTART_STORM_ENDED_CODE;
+    const restarts = input.context?.['restarts'];
+    const windowMinutes = input.context?.['windowMinutes'];
+    const heading = ended
+      ? words.restartStorm.endedHeading(roleName)
+      : words.restartStorm.heading(roleName);
+    const counted =
+      !ended &&
+      typeof restarts === 'number' &&
+      Number.isInteger(restarts) &&
+      typeof windowMinutes === 'number' &&
+      Number.isInteger(windowMinutes);
+    return {
+      templateKey: 'ops.notification.operational_event' as TemplateKey,
+      values: {
+        severity: words.severity(opsErrorClassOf(recorded.code, recorded.severity)),
+        heading,
+        technical: technicalLine(recorded.code, role),
+        code: recorded.code,
+        message: heading,
+        occurrences: recorded.occurrenceCount,
+        firstSeenAt: recorded.firstSeenAt,
+        lastSeenAt: recorded.lastSeenAt,
+        details: [
+          `${words.loopStall.roleLabel}: ${roleName}`,
+          ...(counted ? [words.restartStorm.detail(String(restarts), String(windowMinutes))] : []),
+        ].join('\n'),
       },
     };
   }

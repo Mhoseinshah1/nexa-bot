@@ -12,8 +12,13 @@ import {
   type UserId,
   type TemplateValues,
   deliveryModeOf,
+  qrPayloads,
 } from '@nexa/contracts';
 import type { PanelPolicyGate } from '../../../platform/panels/application/panel-policy.js';
+import type {
+  PanelFilesOnlyGate,
+  PanelQrOptionsGate,
+} from '../../../platform/panels/application/panel-files-only.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
@@ -171,6 +176,9 @@ export interface DeliveryCardFactsReader {
   factsFor(scope: TenantContext, service: ServiceRecord): Promise<DeliveryCardFacts | null>;
 }
 
+/** R11 A4: the QRs one send draws, in order, and the string each encodes. */
+type QrPlan = ReturnType<typeof qrPayloads>;
+
 export interface DeliveryServiceDeps {
   readonly services: ServiceRepository;
   readonly contacts: CustomerContactReader;
@@ -212,6 +220,19 @@ export interface DeliveryServiceDeps {
    * default card.
    */
   readonly panelPolicy: PanelPolicyGate;
+  /**
+   * R11 A4: «فقط فایل، بدون لینک ساب». On such a panel no message this service sends carries
+   * the subscription link or a QR of it: the delivery card is `bot.service.delivered_files_only`,
+   * a link change is `bot.service.files_renewed`, and the link view is refused. REQUIRED, so a
+   * wiring that forgot it cannot compile into a delivery that shows a link it should not.
+   */
+  readonly filesOnly: PanelFilesOnlyGate;
+  /**
+   * R11 A4, «نوع بارکد»: which QR(s) a service on this panel is shown and what each encodes
+   * (RickPanel panels only; every other panel reads as the plain link). Required for the
+   * reason `filesOnly` is. `qrPayloads` applies files-only on top, so the two cannot disagree.
+   */
+  readonly qrOptions: PanelQrOptionsGate;
   /**
    * R3 item 6: the connection files, sent right after an AUTOMATIC delivery was recorded
    * DELIVERED — for every purchase kind, since this lane never knows what bought the
@@ -394,6 +415,22 @@ export class DeliveryService {
       );
     }
 
+    /*
+     * R11 A4. Read before anything is stamped or sent. The link VIEW («🔗 لینک اشتراک» on the
+     * card) is refused outright on a files-only panel: it exists to show the link. A stale
+     * button from a message older than the option reaches here, and the surface answers it
+     * with the files instead (`serviceResend`). Every other path continues, in its files-only
+     * form: the delivery card, the link change and an operator's resend carry no link.
+     */
+    const filesOnly = await this.isFilesOnly(scope, service);
+    if (filesOnly && options.card !== undefined && options.rotated !== true) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_NOT_DELIVERABLE,
+        'This service is delivered as files only.',
+        { reason: 'FILES_ONLY' },
+      );
+    }
+
     const from = service.deliveryState;
     /*
      * B9/C3: «🔗 لینک اشتراک» answered by ONE photo — the QR, the link as its caption and the
@@ -434,6 +471,7 @@ export class DeliveryService {
      * a send nobody will record, until the reaper gives up on it.
      */
     const sentUrl = service.subscriptionUrl;
+    const qr = await this.qrPlan(scope, service, sentUrl, filesOnly);
     const started = await this.deps.uow.run(scope, async (tx) =>
       this.deps.services.markSendStarted(
         scope,
@@ -460,15 +498,15 @@ export class DeliveryService {
      */
     const rotated =
       options.rotated === true
-        ? await this.sendRotated(scope, service, chatId, botInstanceId, sentUrl)
+        ? await this.sendRotated(scope, service, chatId, botInstanceId, sentUrl, filesOnly, qr)
         : null;
     const sentTo = rotated?.sentTo;
     const result =
       rotated !== null
         ? rotated.result
         : options.card !== undefined
-          ? await this.showLinkOnCard(scope, service, options.card, sentUrl, linkPhoto)
-          : await this.sendCard(scope, service, chatId, botInstanceId, sentUrl);
+          ? await this.showLinkOnCard(scope, service, options.card, sentUrl, linkPhoto, qr)
+          : await this.sendCard(scope, service, chatId, botInstanceId, sentUrl, filesOnly, qr);
 
     const now = this.deps.clock.now();
 
@@ -545,6 +583,17 @@ export class DeliveryService {
   }
 
   /**
+   * R11 A4: whether this service's panel is set to «فقط فایل، بدون لینک ساب». Public so the
+   * Telegram surface asks the SAME reader the delivery does, rather than a second one.
+   */
+  async isFilesOnly(
+    scope: TenantContext,
+    service: Pick<ServiceRecord, 'panelId'>,
+  ): Promise<boolean> {
+    return this.deps.filesOnly.isFilesOnly(scope, service.panelId);
+  }
+
+  /**
    * B9/C3: whether «🔗 لینک اشتراک» is answered by the ONE QR photo, and the claim that makes
    * that photo once-only.
    *
@@ -588,6 +637,74 @@ export class DeliveryService {
       );
     }
     return claimed ? 'PHOTO' : 'REPLAY';
+  }
+
+  /**
+   * R11 A4: the QRs a service shows a customer, in order — for the mini app's QR sheet, which
+   * asks the same question the bot's sends do. Empty for a service with no link, a service
+   * on a files-only panel, and a panel whose delivery mode is text only is NOT special here:
+   * that mode is a property of the Telegram card, not of the sheet.
+   */
+  async qrPayloadsFor(
+    scope: TenantContext,
+    service: Pick<ServiceRecord, 'panelId' | 'subscriptionUrl'>,
+  ): Promise<QrPlan> {
+    if (service.subscriptionUrl === null) return [];
+    return this.qrPlan(
+      scope,
+      service as ServiceRecord,
+      service.subscriptionUrl,
+      await this.isFilesOnly(scope, service),
+    );
+  }
+
+  /**
+   * R11 A4: the QRs this send draws and what each encodes — `qrPayloads` over the panel's
+   * «نوع بارکد»: empty when files-only is on, the plain link by default, the sing-box import
+   * string, or both. One question for the card, the link change and the link view.
+   */
+  private async qrPlan(
+    scope: TenantContext,
+    service: ServiceRecord,
+    sentUrl: string,
+    filesOnly: boolean,
+  ): Promise<QrPlan> {
+    const options = await this.deps.qrOptions.qrOptionsOf(scope, service.panelId);
+    return qrPayloads({
+      kind: options.kind,
+      intervalMinutes: options.intervalMinutes,
+      subscriptionUrl: sentUrl,
+      filesOnly,
+    });
+  }
+
+  /**
+   * R11 A4: both QRs, each as a photo with its own one-line caption, one after the other.
+   * Best effort beneath a message that is already delivered — except that an answer that is
+   * neither delivered nor a definite refusal (a rate limit, an unknown outcome) stops the
+   * sequence and is returned, as `qrThenCard` does.
+   */
+  private async sendCaptionedQrs(
+    scope: TenantContext,
+    target: { readonly chatId: string; readonly botInstanceId: BotInstanceId },
+    qr: QrPlan,
+  ): Promise<CustomerSendResult | null> {
+    for (const payload of qr) {
+      const photo = await this.qrPhoto(scope, target, payload.text);
+      if (photo === null) continue;
+      const sent = await this.deps.messenger.sendFile(scope, {
+        ...photo,
+        caption: {
+          templateKey:
+            payload.kind === 'SINGBOX'
+              ? 'bot.service.qr_caption_singbox'
+              : 'bot.service.qr_caption_sublink',
+          values: {},
+        },
+      });
+      if (sent.outcome !== 'DELIVERED' && sent.outcome !== 'REFUSED') return sent;
+    }
+    return null;
   }
 
   /** The QR of `sentUrl` as a photo upload, or null when it could not be drawn. */
@@ -908,8 +1025,36 @@ export class DeliveryService {
     chatId: string,
     botInstanceId: BotInstanceId,
     sentUrl: string,
+    filesOnly: boolean,
+    qr: QrPlan,
   ): Promise<CustomerSendResult> {
     const facts = await this.deps.card.factsFor(scope, service);
+    if (filesOnly) {
+      /*
+       * R11 A4: the card with NO link and NO QR — the connection files follow it (the sweep
+       * sends them right after a DELIVERED record). `sentUrl` is not read on this branch;
+       * it stays the compare-and-set key of the stamp and the record, and nothing else.
+       */
+      return this.deps.messenger.send(scope, {
+        chatId,
+        botInstanceId,
+        templateKey: 'bot.service.delivered_files_only',
+        values: {
+          serviceUsername: service.providerUsername,
+          ...(facts === null
+            ? {}
+            : {
+                productName: facts.productName,
+                ...(facts.serviceLocation === null
+                  ? {}
+                  : { serviceLocation: facts.serviceLocation }),
+                durationDays: facts.durationDays,
+                trafficBytes: facts.trafficBytes,
+              }),
+        },
+        buttons: deliveryCardButtons(service.id),
+      });
+    }
     if (facts === null) {
       return this.deps.messenger.send(scope, {
         chatId,
@@ -939,7 +1084,26 @@ export class DeliveryService {
         buttons,
       });
     }
-    const png = (await this.deps.qr.render(scope, { kind: 'PAYLOAD', text: sentUrl })).bytes;
+    if (qr.length === 2) {
+      /*
+       * R11 A4, «نوع بارکد» = BOTH: the two QRs, each with its one-line caption, and the whole
+       * card as a text message after them (buttons inside it) — never the card split across a
+       * caption. The plain-link QR is first.
+       */
+      const stopped = await this.sendCaptionedQrs(scope, { chatId, botInstanceId }, qr);
+      if (stopped !== null) return stopped;
+      return this.deps.messenger.send(scope, {
+        chatId,
+        botInstanceId,
+        templateKey: 'bot.service.delivered',
+        values,
+        buttons,
+      });
+    }
+    // One QR: the plain link's (the default, as ever) or the sing-box import string.
+    const png = (
+      await this.deps.qr.render(scope, { kind: 'PAYLOAD', text: qr[0]?.text ?? sentUrl })
+    ).bytes;
     const photo = {
       chatId,
       botInstanceId,
@@ -1024,14 +1188,60 @@ export class DeliveryService {
     chatId: string,
     botInstanceId: BotInstanceId,
     sentUrl: string,
+    filesOnly: boolean,
+    qr: QrPlan,
   ): Promise<{
     readonly result: CustomerSendResult;
     readonly sentTo?: { readonly chatId: string; readonly botInstanceId: BotInstanceId };
   }> {
-    const values: TemplateValues = {
-      serviceUsername: service.providerUsername,
-      subscriptionUrl: sentUrl,
-    };
+    const answered = await this.sendRotatedText(
+      scope,
+      service,
+      chatId,
+      botInstanceId,
+      sentUrl,
+      filesOnly,
+      qr,
+    );
+    /*
+     * R11 A4, «نوع بارکد» = BOTH: the answer above is the text (the mode below reads as
+     * CARD_TEXT for it) and the two QRs follow it, each with its one-line caption. Only after
+     * a DELIVERED answer, so a failed or ambiguous one is never followed by a QR of a link the
+     * customer was not told about, and to the place the answer went.
+     */
+    if (qr.length === 2 && answered.result.outcome === 'DELIVERED') {
+      const policy = deliveryModeOf(await this.deps.panelPolicy.forPanel(scope, service.panelId));
+      if (policy !== 'CARD_TEXT') {
+        const target = answered.sentTo ?? { chatId, botInstanceId };
+        await this.sendCaptionedQrs(scope, target, qr).catch(() => null);
+      }
+    }
+    return answered;
+  }
+
+  private async sendRotatedText(
+    scope: TenantContext,
+    service: ServiceRecord,
+    chatId: string,
+    botInstanceId: BotInstanceId,
+    sentUrl: string,
+    filesOnly: boolean,
+    qr: QrPlan,
+  ): Promise<{
+    readonly result: CustomerSendResult;
+    readonly sentTo?: { readonly chatId: string; readonly botInstanceId: BotInstanceId };
+  }> {
+    /*
+     * R11 A4: on a files-only panel the answer to a link change is `bot.service.files_renewed`
+     * — no link, never a QR (the text path below, exactly a CARD_TEXT panel's) — and the new
+     * files follow from the sweep. The panel DID rotate its link; the customer is never shown it.
+     */
+    const values: TemplateValues = filesOnly
+      ? { serviceUsername: service.providerUsername }
+      : { serviceUsername: service.providerUsername, subscriptionUrl: sentUrl };
+    const rotatedKey: 'bot.service.files_renewed' | 'bot.service.link_rotated' = filesOnly
+      ? 'bot.service.files_renewed'
+      : 'bot.service.link_rotated';
     const buttons = deliveryCardButtons(service.id);
     /*
      * Round N (F4): a link change asked from the service card is answered ON that card —
@@ -1050,7 +1260,10 @@ export class DeliveryService {
      * edit alone. A `CARD_TEXT` panel is the text edit, as before. A card Telegram cannot edit
      * (deleted, too old) falls back, once, to the message R3 sends — the smallest fallback.
      */
-    const mode = deliveryModeOf(await this.deps.panelPolicy.forPanel(scope, service.panelId));
+    const mode =
+      filesOnly || qr.length === 2
+        ? 'CARD_TEXT'
+        : deliveryModeOf(await this.deps.panelPolicy.forPanel(scope, service.panelId));
     const edit = this.deps.messenger.edit;
     const cards = this.deps.cards;
     if (edit !== undefined && cards !== undefined) {
@@ -1060,12 +1273,13 @@ export class DeliveryService {
       if (card !== null) {
         const onCard = [...buttons, { ...backToCardButton(service.id), row: 2 }];
         const sentTo = { chatId: card.chatId, botInstanceId: card.botInstanceId };
-        const cardPhoto = mode === 'CARD_TEXT' ? null : await this.qrPhoto(scope, card, sentUrl);
+        const cardPhoto =
+          mode === 'CARD_TEXT' ? null : await this.qrPhoto(scope, card, qr[0]?.text ?? sentUrl);
         let overBound = false;
         if (cardPhoto !== null) {
           const single = await this.deps.messenger.sendFile(scope, {
             ...cardPhoto,
-            caption: { templateKey: 'bot.service.link_rotated', values },
+            caption: { templateKey: rotatedKey, values },
             buttons: onCard,
           });
           if (single.outcome === 'RATE_LIMITED') {
@@ -1085,7 +1299,7 @@ export class DeliveryService {
           chatId: card.chatId,
           messageId: card.messageId,
           botInstanceId: card.botInstanceId,
-          templateKey: 'bot.service.link_rotated',
+          templateKey: rotatedKey,
           values,
           buttons: onCard,
         });
@@ -1112,7 +1326,7 @@ export class DeliveryService {
     const text = {
       chatId,
       botInstanceId,
-      templateKey: 'bot.service.link_rotated' as const,
+      templateKey: rotatedKey,
       values,
       buttons,
     };
@@ -1123,7 +1337,8 @@ export class DeliveryService {
       kind: 'PHOTO' as const,
       source: {
         kind: 'BYTES' as const,
-        bytes: (await this.deps.qr.render(scope, { kind: 'PAYLOAD', text: sentUrl })).bytes,
+        bytes: (await this.deps.qr.render(scope, { kind: 'PAYLOAD', text: qr[0]?.text ?? sentUrl }))
+          .bytes,
         fileName: 'subscription.png',
         mimeType: 'image/png' as const,
       },
@@ -1132,7 +1347,7 @@ export class DeliveryService {
     if (inBubble !== null) return { result: inBubble };
     const single = await this.deps.messenger.sendFile(scope, {
       ...photo,
-      caption: { templateKey: 'bot.service.link_rotated', values },
+      caption: { templateKey: rotatedKey, values },
       buttons,
     });
     if (single.outcome !== 'REFUSED' || single.reason !== 'CAPTION_OVER_BOUND') {
@@ -1203,9 +1418,22 @@ export class DeliveryService {
     card: CardMessageRef,
     sentUrl: string,
     asPhoto: boolean,
+    qr: QrPlan,
   ): Promise<CustomerSendResult> {
     const back = [backToCardButton(service.id)];
-    const photo = asPhoto ? await this.qrPhoto(scope, card, sentUrl) : null;
+    if (qr.length === 2 && asPhoto) {
+      /*
+       * R11 A4, «نوع بارکد» = BOTH: the link as text ON the card, and the two QRs beneath it,
+       * each with its one-line caption (the over-bound fallback below is this same shape).
+       * The tap's key was claimed already, so a replay sends neither again.
+       */
+      const view = await this.linkViewOnCard(scope, service, card, sentUrl);
+      if (view.outcome === 'DELIVERED') {
+        await this.sendCaptionedQrs(scope, card, qr).catch(() => null);
+      }
+      return view;
+    }
+    const photo = asPhoto ? await this.qrPhoto(scope, card, qr[0]?.text ?? sentUrl) : null;
     if (photo !== null) {
       const single = await this.deps.messenger.sendFile(scope, {
         ...photo,
@@ -1300,7 +1528,29 @@ export class DeliveryService {
         { reason: lookup.kind === 'BLOCKED' ? 'CUSTOMER_BLOCKED' : 'NO_CONTACT' },
       );
     }
-    return this.deliver(scope, service, lookup.contact.chatId, lookup.contact.botInstanceId);
+    const record = await this.deliver(
+      scope,
+      service,
+      lookup.contact.chatId,
+      lookup.contact.botInstanceId,
+    );
+    /*
+     * R11 A4 (Codex review of #349): on a files-only panel the card this resend sent carries
+     * no configuration — the files ARE the configuration. The sweep sends them only after its
+     * own DELIVERED record, and this resend has just recorded DELIVERED, so no later sweep
+     * would. They go here, by the sweep's own path (`sendFilesAfter`: never throws, never
+     * writes the delivery), and only after a send that was DELIVERED and recorded, so a card
+     * that may not have arrived is not followed by files. A panel that shows its link sends
+     * none: its card is the configuration, exactly as before.
+     */
+    if (
+      record.recorded &&
+      record.state === 'DELIVERED' &&
+      (await this.isFilesOnly(scope, service))
+    ) {
+      await this.sendFilesAfter(scope, service, record.sentTo ?? lookup.contact);
+    }
+    return record;
   }
 }
 

@@ -16,6 +16,7 @@ import {
   type IncidentNoticeRequest,
   type IncidentNoticeResponse,
   type IncidentResponse,
+  type PanelQrKind,
   type UpdateIncidentRequest,
 } from '@nexa/contracts';
 import {
@@ -409,6 +410,9 @@ import {
   type RunBackupResponse,
   CUSTOMER_ROUTES,
   customerListResponseSchema,
+  GLOBAL_SEARCH_ROUTES,
+  globalSearchResponseSchema,
+  type GlobalSearchResponse,
   PRODUCT_ROUTES,
   productListResponseSchema,
   productResponseSchema,
@@ -1446,6 +1450,18 @@ export function fetchCustomers(
   return authedGet(
     suffix ? `${CUSTOMER_ROUTES.list}?${suffix}` : CUSTOMER_ROUTES.list,
     customerListResponseSchema,
+  );
+}
+
+/**
+ * The top-bar search (R11 A1): customers, orders and services for one typed string. The server
+ * returns only the kinds the signed-in operator may read; a kind that is absent is simply not
+ * drawn. Read-only, so no idempotency key.
+ */
+export function fetchGlobalSearch(q: string): Promise<GlobalSearchResponse> {
+  return authedGet(
+    `${GLOBAL_SEARCH_ROUTES.search}?${new URLSearchParams({ q }).toString()}`,
+    globalSearchResponseSchema,
   );
 }
 
@@ -2680,6 +2696,10 @@ export function updatePanel(input: {
   usernamePolicy?: PanelUsernamePolicyInput;
   /** Phase C3: absent leaves it; `null` takes the panel out of its group; a label sets it. */
   balancingGroup?: string | null;
+  /** R11 A4: files only, and the QR kind (RickPanel only); absent leaves them. */
+  filesOnlyDelivery?: boolean;
+  qrKind?: PanelQrKind;
+  singboxIntervalMinutes?: number;
   idempotencyKey: string;
 }): Promise<PanelResponse> {
   const { id, ...body } = input;

@@ -317,6 +317,21 @@ export interface OpsLogFacts {
     tx: TransactionScope,
   ): Promise<OrderOriginFact | null>;
   service(scope: TenantContext, id: string, tx: TransactionScope): Promise<ServiceFact | null>;
+  /**
+   * R11 A7: the panel account name of the service an order is TIED to, or null when it is tied
+   * to none. Read in this order, first hit wins: the service the order created (including an
+   * imported one, whose `provider_username` is the MIRZA account name), the service a
+   * commercial action (renewal, extra traffic or time, devices, location) acted on, the
+   * service a provisioning operation of the order targets, and last the name a FUNDED
+   * checkout reservation holds for a service that is about to exist. An unfunded reservation
+   * is never read: a payment that failed, expired or was never settled has no service and
+   * names none.
+   */
+  serviceUsernameOfOrder(
+    scope: TenantContext,
+    orderId: string,
+    tx: TransactionScope,
+  ): Promise<string | null>;
   operation(scope: TenantContext, id: string, tx: TransactionScope): Promise<OperationFact | null>;
   /**
    * The service as it was BEFORE the operation of this order changed it, from the audit row
@@ -364,12 +379,19 @@ export interface OpsLogFacts {
   ): Promise<number>;
   /** The referrer of a customer, or null. */
   referrerOf(scope: TenantContext, refereeId: string, tx: TransactionScope): Promise<string | null>;
-  /** The referral a signup-gift ledger reference names: the two customers, or null. */
+  /**
+   * The referral a signup-gift ledger reference names: the two customers and the referral
+   * row's own provenance (`NEXA`, or `MIRZA` for an attribution the import carried), or null.
+   */
   referralOf(
     scope: TenantContext,
     referralId: string,
     tx: TransactionScope,
-  ): Promise<{ readonly referrerId: string; readonly refereeId: string } | null>;
+  ): Promise<{
+    readonly referrerId: string;
+    readonly refereeId: string;
+    readonly source: string;
+  } | null>;
   ticket(
     scope: TenantContext,
     id: string,
@@ -490,6 +512,12 @@ export interface OpsLogWords {
     loopName(loop: string): string;
     roleName(role: string): string;
     roleLabel: string;
+  };
+  /** R11 A3: the words of a role that keeps restarting (`process.restart_storm`) and of its end. */
+  restartStorm: {
+    heading(role: string): string;
+    endedHeading(role: string): string;
+    detail(restarts: string, minutes: string): string;
   };
   severity(klass: string): string;
   cleanupLine(countText: string): string;

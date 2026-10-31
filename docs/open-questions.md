@@ -4500,6 +4500,42 @@ quote. What it does not settle:
   `resellers.source_detail` is not imported into the new column; whether to backfill it (silently,
   no customer message) is the owner's call.
 
+## Round 11 A9 — price lists show the personal discount
+
+Owner bug: with `personal_discount` on and a percent set, every price list still showed the
+undiscounted price. Fixed by pricing each listed line through `PricingService.
+personalListPrices` — the same facts and the same `quoteWith` composition `PricingService.price`
+ends in — so a listed personal price IS the invoice's (bot plan list, renewal menu, package
+lists; mini app store and service offers). Each decided the way that moves no money:
+
+- **OQ-R11-A9-01 — packages are listed at their own price.** The owner listed «extra traffic /
+  extra time» among the lists that must show the discount, but R10 D3 applies the personal
+  discount to purchases and renewals only (`PERSONAL_DISCOUNT_PURPOSES`, OQ-R10-D3-02), so the
+  invoice of a package is undiscounted. A list that showed a discount the invoice does not
+  charge would break the rule this fix exists for, so the package lists ask the same boundary
+  and are unchanged. Widening the purposes (a contract change the owner decides) makes them
+  follow with no further change. Extra users and a paid location change are likewise outside
+  the purposes and are not routed through it.
+- **OQ-R11-A9-02 — a Telegram button cannot carry `<s>`.** Every bot price list is an inline
+  keyboard, and the Bot API takes a button's text as plain text (no `parse_mode`, no entities).
+  The old price on a button is therefore struck with U+0336 (`strikeThroughText`); the rich plan
+  table (rich messages on) uses a real `strikethrough`. Some Telegram clients draw U+0336 less
+  cleanly over Persian text; the owner may prefer the old price without a strike there.
+- **OQ-R11-A9-03 — a list does not show automatic rules, as before.** A list has never shown an
+  automatic promotion. When an automatic rule beats the personal discount, the list shows what
+  it always showed and the invoice the rule's price; when the personal discount wins, the list
+  shows the invoice's figure. Showing every automatic rule on every list is a separate change.
+- **OQ-R11-A9-05 — a reseller's package list shows the package's own price.** Found by this
+  round's test, and older than it: a rate tier's percent is taken off a package at checkout
+  (`PricingService.price` applies the reseller layer to every purpose), but the package lists
+  have never applied it, so a 20 % reseller is listed a 50 000 package and invoiced 40 000 — in
+  the customer's favour. Left as it was (the brief: an undiscounted list shows what it showed);
+  showing the reseller's package price is a one-line change through the same boundary, and the
+  owner's call. `tests/integration/r11-personal-discount-listing.test.ts` pins it.
+- **OQ-R11-A9-04 — digits.** The tag renders its percent in Latin digits («تخفیف شخصی 20٪»), as
+  every customer-facing template and D3's pre-invoice line do; Persian digits would be a
+  catalogue-wide decision.
+
 ## Round 10 D1 — automatic renewal (تمدید خودکار)
 
 Each is decided the way that moves no money and sends no extra message; the owner may decide
@@ -4648,3 +4684,107 @@ key for its `Retry-After`, else 5 s doubling to 5 min, ±20 %. Defaults that mov
   across a window edge — harmless with one worker (the bucket is stricter), worth a sliding
   window if the worker is ever scaled out. **Decide** with the real provider: record the limit
   and its scope, and set the two settings from it.
+
+## Round 11 A1 — Web Admin vs the approved demo
+
+- **OQ-R11-A1-01 — a numbered pager («1–10 of 732 · page 1 of 74») on the cursor-paged lists.**
+  The demo draws it on every list; the keyset lists (`/orders`, `/payments`, `/users`, `/services`,
+  …) return a cursor and no total, and the Web Admin prints only totals the server sent. Built
+  where the list already holds all its rows and a server `total` was cheap: `/content`
+  (`GET /templates`) and `/features` (`GET /features`) gained an optional `total`. Default for the
+  rest: the existing «قبلی / بعدی» keyset pager. A `total` on each cursor list is a count query per
+  request (filtered, tenant-scoped, on large tables); the owner decides which lists are worth it.
+- **OQ-R11-A1-02 — global search beyond customers, orders and services.** `GET /search` covers
+  those three kinds, each under its own list permission. Payments, tickets and products are not
+  searched (the demo's grouped results show three kinds); adding one is a new source plus its own
+  permission row in `GLOBAL_SEARCH_KIND_PERMISSIONS`, no new permission. A service is found by its
+  exact panel username or its 8-character code, as the services list's own search finds it.
+- **OQ-R11-A1-03 — Persian digits in text the server writes.** The owner's Latin-digit rule is
+  applied to the Web Admin's own catalogue (`apps/web/src/i18n/web.fa.ts`) and every formatter.
+  Text that arrives from the server or from the shared catalogue (`packages/i18n`: ops-log and
+  report messages, bot template previews on `/content`) still carries the digits it was written
+  with, because the same strings are customer-facing in Telegram. Default: unchanged; normalising
+  them for display only is a separate decision.
+
+## Round 11 A2 — the cutover rehearsal (`docs/cutover/12-rehearsal.md`)
+
+`botctl cutover rehearse` runs the runbook's data steps against a disposable database on the
+test server. Each default below moves no money, sends no customer message and touches nothing
+live; the owner decides otherwise.
+
+- **OQ-R11-A2-01 — tariff products in the disposable database.** The rehearsal creates none and
+  copies none from the live tenant (that would be touching it), so a Mirza service found on a
+  stand-in can still be held for want of a product to adopt it into; the money reconciliation is
+  complete without them. Whether the rehearsal should take a products file (as it takes
+  `--panel-inventory`) so the adoption counts are real is the owner's call.
+- **OQ-R11-A2-02 — where it may run.** It is written and documented for the test server. It
+  refuses the live database, a production-like name and an existing database wherever it runs,
+  but does not refuse the production host itself (as the isolated kit does): on production it
+  would create, fill and drop one more database on that server, like `nexa_cutover_scratch` at C2.
+  Whether it should refuse a production host outright is the owner's call.
+- **OQ-R11-A2-03 — the approver.** The import's approval is an administrator's act, so the
+  rehearsal creates the rehearsing owner in the DISPOSABLE database through the installer's own
+  `BootstrapOwnerService` (the `--owner-telegram-id` the operator gives, a random password nobody
+  sees) and records the approval under it, as a `WEB_ADMIN` actor with no session — the only
+  administrator actor type there is. It never exists outside that database, and the database is
+  dropped. Decision taken; recorded here for the owner to confirm.
+
+## Round 11 A7 — the service's panel username in the operations log
+
+- **OQ-R11-A7-01 — the referral-commission message (L8).** A commission is earned on a buyer's
+  order that is tied to a service, but the message is about the REFERRER's wallet (the owner's list
+  did not name it, and L8 is being reworked in a parallel round). Default: it does not print the
+  service's username. Adding the optional token to `ops.log.referral_commission` is one line in the
+  template and one in the builder if the owner wants it.
+- **OQ-R11-A7-02 — the label.** The nine messages that already printed the name said
+  «🔑 نام سرویس:», which reads as a product name (the same wording the 2026-10-10 text audit
+  replaced on the customer screens). All service messages now say «👤 نام کاربری سرویس:», the
+  owner's wording of this item. Default text only; a tenant override is untouched.
+- **OQ-R11-A7-03 — a payment of a purchase that is not built yet.** The order-paid and crypto logs
+  of a NEW purchase print the name the checkout RESERVED (funded at settlement), because the
+  service row does not exist until the provisioner runs; a payment that failed, expired or was
+  never settled has no funded reservation and prints no name. If the owner prefers the line only
+  once the service exists, drop the reservation branch of `serviceUsernameOfOrder`.
+
+## Round 11 A5 — Bot API 10.2 compatibility
+
+- **OQ-R11-A5-01 — Mini App origin protection: the official rule is unverified.** Reported
+  by secondary sources only (search snippets citing the Bot API changelog, 10.2, 2026-07-14):
+  from 2026-07-20 Telegram blocks Mini App methods called from an origin other than the Mini
+  App's original domain, on by default for every Mini App, with an opt-out in the @BotFather
+  Mini App. `core.telegram.org` (`/bots/webapps`, `/bots/api-changelog`) could not be fetched
+  from the build sandbox (DNS refused), so the exact wording, the method list, how the
+  "original domain" is matched (host only, or scheme and port too; redirects) and the opt-out's
+  scope are NOT established. Nothing was guessed. What was checked in this repository: the Mini
+  App is one origin (`/miniapp/<botInstanceId>/` on the installation's public origin, the same
+  URL `setChatMenuButton` registers); it renders no frame and navigates its view nowhere; the
+  only Telegram calls are `ready`, `expand`, `openLink` and `openTelegramLink`, made from its own
+  document; a payment page opens through `openLink` (Telegram's browser), not inside the view.
+  So no code change is made, and `tests/unit/miniapp-origin-protection.test.ts` pins the
+  single-origin property. To close: the owner (or a session with network access) reads the
+  official text and confirms (a) each bot's menu-button URL host equals the host the page is
+  served from, with no redirect between them (a proxy that redirects `http`/`www` to another
+  host would be a different origin), and (b) whether any `web_app` URL is registered for a
+  different host. The opt-out is not used and not recommended.
+- **OQ-R11-A5-02 — the Bot API 10.2 `subscription` update is ignored, not handled.** Like every
+  update kind without a route it is answered with a success, writes nothing and creates no
+  idempotency row (a redelivery is ignored again); `tests/unit/telegram-unknown-update-kinds.test.ts`
+  pins this. If bot subscriptions become a product feature, the update needs its own route,
+  its own contract and an owner decision about what it moves.
+
+## R11 A4 — files only, no subscription link; the RickPanel QR kind
+
+- **OQ-R11-A4-01 — files only on a panel whose customer «فایل‌های اتصال» action is switched off.**
+  A panel policy may switch off the customer `SUBSCRIPTION_FILES` action; with «فقط فایل، بدون
+  لینک ساب» on, such a customer then has neither the link nor the files. Not guarded: the two
+  settings are saved independently. Default: left as is; refusing the combination in the policy
+  save (and warning on the switch) is a small follow-up if the owner wants it.
+- **OQ-R11-A4-02 — a mini-app customer of a files-only panel.** The mini app has no files screen,
+  so such a customer sees no link and no QR there and is not shown how to get the files. Default:
+  nothing new is added; the bot's «📁 دریافت فایل‌های اتصال» is where the files are.
+- **OQ-R11-A4-03 — the panel's own per-file captions.** RickPanel may write the subscription link
+  into the caption it sends with a file. The bot passes that caption through; on a files-only panel
+  it cannot know whether it names the link. Default: unchanged.
+- **OQ-R11-A4-04 — the sing-box import string on iOS and desktop.** The format
+  `sing-box://import-remote-profile?url=…&autoUpdate=true&autoUpdateInterval=…` is the owner's;
+  which clients honour `autoUpdate*` has not been measured against a real client.

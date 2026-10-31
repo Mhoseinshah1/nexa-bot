@@ -108,6 +108,8 @@ const EXPECTED: Readonly<Record<string, OpsLogTopicCategory>> = {
   'ops_group.topic_recreated': 'SYSTEM',
   'job.loop_stalled': 'SYSTEM',
   'job.loop_recovered': 'SYSTEM',
+  'process.restart_storm': 'SYSTEM',
+  'process.restart_storm_ended': 'SYSTEM',
   'internal.unhandled': 'ERRORS',
   'backup.run_failed': 'BACKUPS',
   'backup.run_ok': 'BACKUPS',

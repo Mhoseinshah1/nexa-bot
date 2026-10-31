@@ -186,7 +186,7 @@ describe('the gateway form’s top-up gift', () => {
     fireEvent.change(input, { target: { value: '150' } });
 
     expect(
-      await screen.findByText('درصد هدیهٔ شارژ باید عددی صحیح از ۰ تا ۱۰۰ باشد.'),
+      await screen.findByText('درصد هدیهٔ شارژ باید عددی صحیح از 0 تا 100 باشد.'),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'ذخیره' })).toBeDisabled();
     expect(api.calls.some((call) => call.method === 'POST')).toBe(false);
@@ -997,7 +997,7 @@ describe('the custom gateway page', () => {
     expect(invalid('ENDPOINT_ADDRESS_REFUSED')).toContain('نشانی');
     expect(invalid('ENDPOINT_URL_INVALID')).toContain('https://');
     expect(invalid('ALLOWLIST_INVALID')).toContain('CIDR');
-    expect(invalid('SECRET_TOO_SHORT')).toContain('۳۲');
+    expect(invalid('SECRET_TOO_SHORT')).toContain('32');
     expect(invalid('SOMETHING_ELSE')).toBeUndefined();
   });
 });
@@ -1062,7 +1062,7 @@ describe('the customer gateway fee', () => {
     for (const bad of ['5.123', '100.01', '-1', '1e2']) {
       fireEvent.change(input, { target: { value: bad } });
       expect(
-        await screen.findByText('کارمزد مشتری باید عددی از ۰ تا ۱۰۰ با حداکثر دو رقم اعشار باشد.'),
+        await screen.findByText('کارمزد مشتری باید عددی از 0 تا 100 با حداکثر دو رقم اعشار باشد.'),
       ).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'ذخیره' })).toBeDisabled();
     }

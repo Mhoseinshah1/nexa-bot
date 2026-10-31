@@ -6047,6 +6047,138 @@ export const TEMPLATES = [
       },
     ],
   },
+  /*
+   * R11 A4 — «فقط فایل، بدون لینک ساب». On a panel with that option on, a service's
+   * subscription link is never shown to its customer; these are the texts that replace
+   * the ones that carry it. None of them has a link placeholder, and a test pins that.
+   */
+  {
+    key: 'bot.service.delivered_files_only',
+    description:
+      'R11 A4: the delivery card on a panel set to «فقط فایل، بدون لینک ساب»: the service ' +
+      'details and a line saying the connection files follow in the next messages. Carries ' +
+      'NO link and is sent with no QR code. Only the username is required; a missing fact ' +
+      'drops its line.',
+    format: 'TELEGRAM_HTML',
+    placeholders: [
+      {
+        token: 'serviceUsername',
+        type: 'STRING',
+        description: 'The service’s username on the panel.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'productName',
+        type: 'STRING',
+        description: 'The product’s public name, frozen on the order.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'serviceLocation',
+        type: 'STRING',
+        description: 'The product’s service-location label, when configured.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'durationDays',
+        type: 'DURATION_DAYS',
+        description: 'The plan’s validity in days; 0 is unlimited.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'trafficBytes',
+        type: 'TRAFFIC_LIMIT',
+        description: 'The plan’s traffic allowance; 0 is unlimited.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.files_renewed',
+    description:
+      'R11 A4: the answer to a customer’s «دریافت فایل‌های جدید» on a files-only panel, ' +
+      'shown on the service card: the files were renewed, the old ones should be replaced, ' +
+      'the new files follow. Carries no link. Replaces `bot.service.link_rotated` there.',
+    format: 'TELEGRAM_HTML',
+    placeholders: [
+      {
+        token: 'serviceUsername',
+        type: 'STRING',
+        description: 'The service’s username on the panel.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.qr_caption_sublink',
+    description:
+      'R11 A4: the one-line caption under the plain subscription-link QR when a RickPanel ' +
+      'panel is set to show BOTH QR kinds («نوع بارکد»). Carries no link.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.qr_caption_singbox',
+    description:
+      'R11 A4: the one-line caption under the sing-box import QR when a RickPanel panel is ' +
+      'set to show BOTH QR kinds («نوع بارکد»). Carries no link.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.files_new_button',
+    description:
+      'R11 A4: the button on a files-only service that asks for new connection files. ' +
+      'Takes the place of «تغییر لینک» (same slot, same conditions).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.files_new_ask',
+    description:
+      'R11 A4: the confirmation before new connection files are made on a files-only panel. ' +
+      'Says the files are renewed and have to be replaced in the customer’s apps, and how ' +
+      'long until they may ask again. Says nothing about the old files stopping (OQ-RP-07).',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'cooldownHours',
+        type: 'NUMBER',
+        description:
+          'services.link_rotation_cooldown_hours, as it stands when the screen is drawn.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.files_new_confirm_button',
+    description: 'R11 A4: the button on the confirmation screen that asks for the new files.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.files_new_cooldown',
+    description:
+      'R11 A4: the refusal a customer on a files-only panel sees when they asked for new ' +
+      'files too recently. Names the instant another request will be accepted.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'availableAt',
+        type: 'DATETIME',
+        description: 'The first instant another request for this service will be accepted.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
   {
     key: 'bot.service.rotate_confirm_button',
     description: 'The button on the rotation confirmation screen that asks for the new link.',
@@ -9001,6 +9133,25 @@ export const TEMPLATES = [
         token: 'subtotal',
         type: 'MONEY',
         description: 'The list price the percent was taken from.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.pricing.personal_discount_tag',
+    description:
+      'R11 A9: the short tag beside a price a customer is LISTED with their personal ' +
+      'discount (R10 D3) — a plan, a renewal or a package button, the rich plan table, ' +
+      'before any order exists. Shown only when the personal discount wins that line’s ' +
+      'quote, after the discounted price and the struck-through price it replaces, so ' +
+      'the figure on the list is the figure on the invoice. Never shown otherwise.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'percent',
+        type: 'NUMBER',
+        description: 'The personal discount percent, 1 to 100.',
         required: true,
         repeatable: false,
       },

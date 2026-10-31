@@ -461,6 +461,8 @@ botctl logs [service]      follow logs
 botctl restart             restart the stack
 botctl restart background  restart worker, monitor and provisioner (after an import or a restore)
 botctl cutover preflight   the MirzaBot cutover's read-only checklist (docs/cutover/): PASS/FAIL per check
+botctl cutover rehearse PACKAGE --key-file FILE --owner-telegram-id N
+                           the whole cutover runbook against a NEW, disposable database (test server)
 botctl admin check-2fa --username NAME
                            whether an administrator has two-step sign-in on
 botctl admin reset-2fa --username NAME --reason TEXT
@@ -623,6 +625,22 @@ the most requests one exchange makes), so a slow panel call within its own deadl
 not a stall. A role switched off (`PROVISIONER_ENABLED=false`,
 `PANEL_MONITOR_ENABLED=false`) reports nothing stalled, which closes a condition a
 previous life opened.
+
+**A role that keeps restarting (R11 A3).** The grace above means a role that dies in
+seconds is never in a position to report a stall, and `restart: unless-stopped` brings
+it straight back, so no health check stays red either. Every supervised role (`api`,
+`worker`, `monitor`, `provisioner`, `assistant`, `recovery`) therefore records its own
+life in `process_runs` at boot and reads how the previous one ended: stopped on purpose
+(a handled SIGTERM) or alive for a full minute is not a crash, anything else is. The
+third restart after crashed lives inside five minutes opens
+`process.restart_storm:<role>` — one message, «سرویس … پی‌درپی ری‌استارت می‌شود» — in the
+SYSTEM topic, and every further restart only counts on that row. The first life that
+stays up a minute records `process.restart_storm_ended`; a later storm is a new message.
+The state lives in the database, so it survives each crash; a PostgreSQL that is down at
+boot hides that boot from the count, and a role that cannot reach it is down anyway.
+The message is SENT by the worker's dispatcher: when the worker is the role that is
+crash-looping it goes out the first time a life lives long enough to dispatch, and the
+row is in the Web Admin's alerts at once.
 
 **What none of this can do: report a dead worker.** Every message to the operations
 log group is SENT by the notification dispatcher, and the dispatcher runs in the
@@ -2602,6 +2620,41 @@ sudo botctl roles status                        # each switchable role, enabled 
 - The edit is one atomic rewrite of `nexa.env` (mode and owner kept, every other line kept) and is
   idempotent. With the provisioner off nothing creates accounts for paid orders, so enable it again before
   taking orders.
+
+## Rehearsing the MirzaBot cutover
+
+On the **test server**, before GO-1 ([`cutover/12-rehearsal.md`](cutover/12-rehearsal.md)):
+
+```bash
+sudo botctl cutover rehearse ~/cutover/nexa-restore-mirza-<date>.nxpkg \
+  --key-file ~/cutover/<key>.nxkey --owner-telegram-id <owner-numeric-id> \
+  | tee rehearsal.txt; echo "exit ${PIPESTATUS[0]}"
+```
+
+It runs `dist/cutover-rehearse.cli.js` in a one-off `api` container (`compose run --rm
+--no-deps`), with the package copied into a private directory mounted read-only and the key in
+that one call's environment (or `--passphrase`, typed on the terminal) — never on a command
+line. Inside, it:
+
+- refuses the database `DATABASE_URL` names (whatever word its name carries), any
+  production-like name and any database that already exists (exit 65, nothing created);
+- creates `nexa_cutover_rehearsal_<UTC>` (or `--database NAME`) on the installation's PostgreSQL
+  server, migrates it, provisions one PRIMARY tenant and the rehearsing owner in it;
+- imports the package through the restore page's own service and executor — read-only RickPanel
+  stand-ins in that container instead of any real panel, the real protective and post-import
+  backups into its own private directory;
+- reconciles balances, services and reseller credit against the package, checks that nothing
+  was sent (no customer notification, no outbox publication, no fetch, no panel write), and
+  prints the report and `go/no-go: GO | GO_WITH_HELD | NO_GO`;
+- drops the database it created (`--keep-database` keeps it; drop it yourself afterwards).
+
+Its own configuration has notification dispatch, the webhook, backup delivery to Telegram, the
+backup schedule, the provisioner and the monitor forced off, and every outbound `fetch` of the
+process is refused. It takes no lock and changes nothing on the installation: no `up`, `stop`,
+`restart` or `exec`, no migration of the live database, no Telegram command, no edit of
+`nexa.env`. Exit 0 GO, 2 GO_WITH_HELD (sign each held class off by name), 3 NO_GO, 64 usage,
+65 refused target, 1 anything else. It needs room on Docker's data root for one more imported
+database, the decrypted package and two backups of it, for the length of the run.
 
 ## Reboots
 
