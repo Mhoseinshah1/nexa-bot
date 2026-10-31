@@ -97,6 +97,11 @@ async function main(): Promise<void> {
   const heartbeat = startHeartbeat({
     path: config.RECOVERY_HEARTBEAT_PATH,
     intervalMs: config.WORKER_HEARTBEAT_INTERVAL_MS,
+    // R12 F2: deliberately NO `exitAfterMissed`. Every other role leaves after missed beats
+    // so Docker restarts it; this one runs the restore, whose cutover has no safe point
+    // between its two renames (see the shutdown note below) and whose own database
+    // connection is the one being swapped. A hung executor is reported by its stalled
+    // loop and its stale health column instead, and its lease is taken over by FAILING it.
     now: () => container.clock.now().getTime(),
     logger: container.logger,
     check: async () => {

@@ -4,6 +4,7 @@ import { createApiApp, startProcessRestartWatch } from './bootstrap.js';
 import { loadConfig } from './infrastructure/config/load-config.js';
 import { createShutdownCoordinator } from './infrastructure/lifecycle/shutdown.js';
 import { installProcessBackstop } from './infrastructure/lifecycle/process-backstop.js';
+import { startLivenessWatchdog } from './infrastructure/lifecycle/liveness-watchdog.js';
 
 /**
  * Process role: `api`.
@@ -25,12 +26,38 @@ async function main(): Promise<void> {
     exit: (code) => process.exit(code),
   });
 
+  /*
+   * R12 F2: the API has no heartbeat file — its container check asks `/health/ready` — but a
+   * BLOCKED event loop is the hang that check can only mark unhealthy, and Docker never
+   * restarts an unhealthy container. So the event loop itself is watched: a timer touches
+   * the watchdog every interval, and if N intervals pass without one the process is asked
+   * to exit and, if it cannot (the loop is blocked), killed — and Docker restarts it.
+   * Deliberately NOT the database: an API that cannot reach PostgreSQL is reported not
+   * ready and keeps answering; restarting it would fix nothing.
+   */
+  const watchdog =
+    config.HEARTBEAT_EXIT_AFTER_MISSED > 0
+      ? startLivenessWatchdog({
+          role: 'api',
+          maxSilenceMs: config.HEARTBEAT_EXIT_AFTER_MISSED * config.WORKER_HEARTBEAT_INTERVAL_MS,
+          graceMs: config.WORKER_HEARTBEAT_INTERVAL_MS,
+          logger: container.logger,
+          exit: (code) => process.exit(code),
+        })
+      : null;
+  watchdog?.touch();
+  const eventLoopBeat = setInterval(() => watchdog?.touch(), config.WORKER_HEARTBEAT_INTERVAL_MS);
+  eventLoopBeat.unref();
+
   const { shutdown } = createShutdownCoordinator({
     name: 'api',
     logger: container.logger,
     timeoutMs: config.SHUTDOWN_TIMEOUT_MS,
     exit: (code) => process.exit(code),
     close: async () => {
+      // A draining API goes quiet on purpose; it must not be killed for it.
+      clearInterval(eventLoopBeat);
+      watchdog?.stop();
       // Nest first, so no new request is accepted and in-flight ones finish;
       // then the container, which owns the pool those requests are using.
       await app.close();

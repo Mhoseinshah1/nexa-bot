@@ -31,6 +31,9 @@ async function main(): Promise<void> {
   const heartbeat = startHeartbeat({
     path: config.ASSISTANT_HEARTBEAT_PATH,
     intervalMs: config.WORKER_HEARTBEAT_INTERVAL_MS,
+    // R12 F2: N missed beats and the role leaves, so Docker restarts it (liveness-watchdog.ts).
+    exitAfterMissed: config.HEARTBEAT_EXIT_AFTER_MISSED,
+    role: 'assistant',
     now: () => container.clock.now().getTime(),
     logger: container.logger,
     check: async () => {

@@ -282,6 +282,15 @@ export const configSchema = z
      */
     WORKER_HEARTBEAT_PATH: z.string().min(1).default('/tmp/nexa-worker.heartbeat'),
     WORKER_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
+    /**
+     * R12 F2: a role leaves (exit 1, or SIGKILL when its event loop is blocked) after this
+     * many consecutive heartbeat intervals without a successful beat, so Docker's
+     * `restart: unless-stopped` restarts it — a merely UNHEALTHY container is never
+     * restarted. The API, which has no heartbeat file, uses the same count for its event
+     * loop. The recovery role never exits this way: a restore must not be killed between
+     * its two renames. 0 turns it off (the file only goes stale, as before).
+     */
+    HEARTBEAT_EXIT_AFTER_MISSED: z.coerce.number().int().min(0).max(100).default(3),
 
     /**
      * How long a graceful shutdown may take before the process leaves anyway.

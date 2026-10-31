@@ -2,6 +2,7 @@ import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Logger } from '@nexa/contracts';
 import { runGuardedTick } from './loop-guard.js';
+import { startLivenessWatchdog, type LivenessWatchdog } from './liveness-watchdog.js';
 
 /**
  * The worker's liveness, as something outside the process can read.
@@ -26,6 +27,16 @@ export interface HeartbeatOptions {
   readonly check: () => Promise<boolean>;
   readonly now: () => number;
   readonly logger: Logger;
+  /**
+   * R12 F2: leave the process after this many consecutive heartbeat intervals without a
+   * successful beat, so Docker restarts it (`liveness-watchdog.ts`). 0 or absent: never —
+   * the file goes stale and the container reports unhealthy, as before.
+   */
+  readonly exitAfterMissed?: number;
+  /** The role's name, for the watchdog's log line. */
+  readonly role?: string;
+  /** How the process leaves when the watchdog asks. `process.exit` unless a test injects. */
+  readonly exit?: (code: number) => void;
 }
 
 export interface Heartbeat {
@@ -37,6 +48,18 @@ export interface Heartbeat {
 export function startHeartbeat(options: HeartbeatOptions): Heartbeat {
   let timer: NodeJS.Timeout | null = null;
   let stopped = false;
+  const watchdog: LivenessWatchdog | null =
+    options.exitAfterMissed !== undefined && options.exitAfterMissed > 0
+      ? startLivenessWatchdog({
+          role: options.role ?? 'unknown',
+          maxSilenceMs: options.exitAfterMissed * options.intervalMs,
+          // One more interval for a responsive main thread to act on the request; after
+          // that it is blocked, and the watchdog kills it.
+          graceMs: options.intervalMs,
+          logger: options.logger,
+          exit: options.exit ?? ((code) => process.exit(code)),
+        })
+      : null;
 
   const beat = async (): Promise<boolean> => {
     let ok = false;
@@ -48,6 +71,7 @@ export function startHeartbeat(options: HeartbeatOptions): Heartbeat {
     if (!ok || stopped) return false;
     try {
       writeHeartbeat(options.path, options.now());
+      watchdog?.touch();
       return true;
     } catch (error) {
       options.logger.warn(
@@ -72,6 +96,7 @@ export function startHeartbeat(options: HeartbeatOptions): Heartbeat {
     beat,
     stop() {
       stopped = true;
+      watchdog?.stop();
       if (timer) clearTimeout(timer);
       timer = null;
     },

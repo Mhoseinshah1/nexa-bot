@@ -598,6 +598,36 @@ Any of the three in a crash loop, alive with a blocked event loop, or alive and
 cut off from PostgreSQL goes unhealthy within a check or two, and a release in
 that state is backed out exactly as one whose API never answered.
 
+### A hung role is restarted, not only reported (R12 F2)
+
+Unhealthy is not enough on its own: Docker's `restart: unless-stopped` restarts a
+container whose process EXITS and never one that is merely unhealthy. So every
+application role now leaves by itself when it stops working:
+
+- `worker`, `monitor`, `provisioner`, `assistant` and the legacy-migration role exit
+  with status 1 after `HEARTBEAT_EXIT_AFTER_MISSED` (default **3**) consecutive
+  heartbeat intervals (`WORKER_HEARTBEAT_INTERVAL_MS`, default 10 s) without a
+  successful beat — the same beat the container check reads, so "missed" means
+  exactly what the health column shows.
+- `api`, which has no heartbeat file, has its EVENT LOOP watched with the same count.
+  Not its database: an API that cannot reach PostgreSQL reports not ready and keeps
+  answering, and restarting it would fix nothing.
+- The watching runs on a separate thread, because the hang that matters most is a
+  blocked event loop that can run no timer of its own. A role that is still
+  responsive is asked to exit and logs why; one that cannot act on the request within
+  one more interval is killed (SIGKILL) after one line to stderr.
+- **Not before the first healthy beat.** A role that has never been healthy is
+  failing to start, which `botctl update`'s readiness gate already reports, and a
+  restart loop would not fix it.
+- **Never the `recovery` role.** A restore's cutover has no safe point between its two
+  renames, and its own database connection is the one being swapped; a hung executor
+  is reported by its stalled loop and its stale health column instead.
+
+Each such exit is a crash to the restart watch below, so a role that keeps hanging is
+still announced once as `process.restart_storm:<role>`, and the loop that stopped has
+already been reported as `job.loop_stalled` before the exit. `HEARTBEAT_EXIT_AFTER_MISSED=0`
+in nexa.env turns the exits off (the file only goes stale, as before).
+
 ### `/health/ready` is private to the host (R12 F2)
 
 Every `/health/ready` runs the readiness probes, and three of them check connections out
@@ -674,9 +704,9 @@ row is in the Web Admin's alerts at once.
 log group is SENT by the notification dispatcher, and the dispatcher runs in the
 worker. The other roles still record their stalls while the worker is down — the rows
 are durable and are sent when it returns — but nobody is told in the meantime, and a
-worker whose dispatcher is stalled cannot announce its own stall either. Docker does
-not help: `restart: unless-stopped` restarts a container that EXITS, never one that is
-merely unhealthy.
+worker whose dispatcher is stalled cannot announce its own stall either. A HUNG worker
+now exits and is restarted (above), but a worker that cannot start — or keeps dying —
+is still not one that can send anything.
 
 So an installation needs one check that does not run inside it. Two that work with
 what exists today:
