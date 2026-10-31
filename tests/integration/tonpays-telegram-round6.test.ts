@@ -1605,6 +1605,42 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     expect(await walletEntries(paymentId)).toEqual([]);
   });
 
+  it('R11 A8 (Codex #356): a retry whose spacing would end after the customer window writes no row, so the expiry cancel follows', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    fake.cancelMode = { code: 'RATE_LIMIT_EXCEEDED', status: 429 };
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    await lane.runOnce(tenantA);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([{ state: 'RATE_LIMITED' }]);
+    fake.cancelMode = 'OK';
+    // Nexa's deadline is 10 s away: the 30 s spacing would end after it.
+    await ctx.container.database.db.execute(
+      sql`UPDATE payments SET expires_at = ${new Date(clock.now().getTime() + 10_000)}
+           WHERE id = ${paymentId}`,
+    );
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    expect(await requests(paymentId, 'CANCEL')).toHaveLength(1);
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(1);
+    // At the deadline the expiry cancel is written, and sent once.
+    clock.shift(15_000);
+    await ctx.container.paymentExpirySweep.runOnce(tenantA);
+    expect((await paymentOf(paymentId)).state).toBe('EXPIRED');
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'RATE_LIMITED' },
+      { state: 'REQUESTED' },
+    ]);
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'RATE_LIMITED' },
+      { state: 'APPLIED' },
+    ]);
+    expect(firstInvoice().status).toBe('canceled');
+    expect(await walletEntries(paymentId)).toEqual([]);
+  });
+
   it('R11 A8: requeueUnsentCancel takes back only the stamp it is given, and only from SENT', async () => {
     const { paymentId, message } = await cardOnScreen();
     await tapOn(message, `gq:${paymentId}`);

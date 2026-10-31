@@ -183,8 +183,9 @@ const RECORDS = [
  * R11A8-15 (the retry's audit names the cancel it follows), R11A8-16/17 (only its own send
  * stamp, only from SENT, is taken back), R11A8-18 (never past the customer window), one
  * citation each (+5).
+ * 2860 → 2861: Codex on #356 — R11A8-19, no retry row whose spacing ends after the window (+1).
  */
-const EXPECTED = 2860;
+const EXPECTED = 2861;
 /**
  * A table whose last column is one of these is making citations.
  *

@@ -497,6 +497,18 @@ export class GatewayReceiptCaptureService {
       const latest = await requests.latest(scope, open.payment.id, 'CANCEL', tx);
       const submissions = await this.deps.cardTransfer.submissionsFor(scope, open.payment.id, tx);
       if (!cancelAvailable(open.invoice, latest, submissions)) return false;
+      /*
+       * Codex (#356): a retry whose spacing would only end at or after the customer window is
+       * not written. Such a row would still be waiting when Nexa's deadline expires the attempt;
+       * one cancel at a time, so the expiry cancel could not be written, and the lane would then
+       * refuse this one (`nexa.attempt_closed`), leaving TonPays' invoice `pending`. Without it,
+       * the expiry cancel follows at the deadline. Same bound as the lane's HELD requeue.
+       */
+      const notBefore = cancelRetryNotBefore(latest, now);
+      const deadline = gatewaySettlementDeadline(open.payment) ?? open.payment.expiresAt;
+      if (notBefore !== null && (deadline === null || notBefore.getTime() >= deadline.getTime())) {
+        return false;
+      }
       const requested = await requests.request(
         scope,
         {
@@ -507,7 +519,7 @@ export class GatewayReceiptCaptureService {
           kind: 'CANCEL',
           idempotencyKey: input.idempotencyKey,
           now,
-          claimedUntil: cancelRetryNotBefore(latest, now),
+          claimedUntil: notBefore,
           refund: null,
         },
         tx,
