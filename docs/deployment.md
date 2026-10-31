@@ -258,8 +258,23 @@ looking in the wrong place. The bot's identity comes from Telegram's answer, not
 from anything typed.
 
 The webhook is then registered at
-`https://<your domain>/telegram/webhook/<bot instance id>`, authenticated by the
-installation-wide `TELEGRAM_WEBHOOK_SECRET` the installer mints.
+`https://<your domain>/telegram/webhook/<bot instance id>`, authenticated by
+**that bot's own secret**, derived from the `TELEGRAM_WEBHOOK_SECRET` the
+installer mints (R12: HMAC-SHA256 of the bot id under it). A secret that leaks
+from one bot's registration therefore authenticates that bot and no other.
+Nothing new is stored or rotated: rotating `TELEGRAM_WEBHOOK_SECRET` rotates
+every bot's secret.
+
+**The rotation window.** A webhook registered before R12 was registered with
+`TELEGRAM_WEBHOOK_SECRET` itself, and the receiver keeps accepting that value
+for every bot in this release, so an update never 401s a live webhook. Such a
+bot is `ready` (it receives); the status command below names it as on the
+installation-wide secret, and the next `botctl update`, `botctl telegram
+register` or installer rerun re-registers it with its own secret, keeping its
+queued updates. A later release stops accepting the installation-wide value
+once `status` shows no bot left on it. A rollback to a release that accepts only
+the installation-wide value is re-registered by that release's own reconcile
+(`botctl rollback` runs it), for the installation's bot.
 
 **A rerun reconciles; it never rotates.** If a bot is already configured the
 installer does not ask for the token again, does not replace it, and does not
@@ -305,13 +320,21 @@ Telegram holds NO webhook URL for this bot, so updates are queued at Telegram an
 bot instance           0190…
 expected webhook URL   https://bot.example.com/telegram/webhook/0190…
 local registration     current (registered 2026-09-01T10:00:00.000Z)
+webhook secret         own (per-bot secret)
 remote (Telegram)      READ
 remote webhook URL     (none set)
 remote matches         no
 update types narrowed  no
 pending updates        22
 problems               WEBHOOK_NOT_SET
+secret per bot         @acme_bot (tenant acme): own (per-bot secret)
+secret per bot         @acme_reseller_bot (tenant reseller): installation-wide (the rotation window: still accepted; re-registering moves it to its own)
+installation secret    still registered for 1 bot(s); it stays accepted until each is re-registered
 ```
+
+The `secret per bot` lines cover **every** bot on the installation, every
+tenant, so they answer "may the installation-wide secret be retired yet": only
+when the last line says no bot is registered with it.
 
 | word          | when                                                                                                                                                                                                                                                                                                                                                                                                                                                     | remedy                           |
 | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |

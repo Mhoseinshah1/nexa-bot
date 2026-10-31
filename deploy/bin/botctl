@@ -151,6 +151,10 @@ ciphertext under that key.
 `telegram status` prints one word (none, incomplete, ready, unavailable) and,
 beside it, both halves: what this installation recorded and what Telegram itself
 reports (URL, pending updates, last delivery error). `ready` only when they agree.
+It also lists every bot on the installation by the webhook secret it is registered
+with: its own (per-bot) secret, or still the installation-wide one — a word, never a
+secret or a fingerprint. A bot on the installation-wide secret still receives; the
+next `telegram register` (or `botctl update`) moves the installation's bot to its own.
 
 `telegram register` never asks for a token and never replaces a stored one. It
 resumes from the encrypted token the install already holds, reads Telegram's

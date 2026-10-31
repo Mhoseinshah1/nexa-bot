@@ -6,6 +6,7 @@ import {
   parseArgs,
   executeResultLines,
   statusDetailLines,
+  webhookSecretListingLines,
   suppliedToken,
   tokenForRun,
   tokenFromFile,
@@ -229,6 +230,7 @@ describe('statusDetailLines', () => {
       recordedUrl: url,
       registeredAt: new Date('2026-09-01T10:00:00Z'),
       secret: 'MATCHES',
+      secretScope: 'PER_BOT',
     },
     remote: {
       outcome: 'READ',
@@ -284,6 +286,68 @@ describe('statusDetailLines', () => {
     }).join('\n');
     expect(text).toMatch(/another bot row on this installation still holds that name/);
     expect(text).not.toMatch(/run `botctl telegram register` to record it/);
+  });
+
+  // R12 F2 item 7: which accepted secret the registration was made with, as a word.
+  it('says whether the bot is on its own secret or still on the installation-wide one', () => {
+    expect(statusDetailLines(detail).join('\n')).toMatch(/webhook secret\s+own \(per-bot secret\)/);
+    const onMaster = statusDetailLines({
+      ...detail,
+      local: { ...detail.local, secretScope: 'INSTALLATION' },
+    }).join('\n');
+    expect(onMaster).toMatch(/webhook secret\s+installation-wide \(the rotation window/);
+    // A secret that matches neither has no scope, and the marker line already says so.
+    const stale = statusDetailLines({
+      ...detail,
+      local: { ...detail.local, registered: false, secret: 'DIFFERS', secretScope: null },
+    }).join('\n');
+    expect(stale).not.toMatch(/^webhook secret/m);
+    expect(stale).toMatch(/local registration\s+stale \(webhook secret differs\)/);
+  });
+});
+
+describe('webhookSecretListingLines (R12 F2 item 7)', () => {
+  const row = (
+    username: string,
+    secret: 'PER_BOT' | 'INSTALLATION' | 'OTHER' | 'UNKNOWN' | 'NOT_REGISTERED',
+    status: 'ACTIVE' | 'STOPPED' = 'ACTIVE',
+  ) => ({
+    botInstanceId: `id-${username}` as never,
+    tenantSlug: 'acme',
+    username,
+    status,
+    secret,
+  });
+
+  it('lists every bot by the secret it is on, and counts what still needs the master', () => {
+    const lines = webhookSecretListingLines([
+      row('acme_bot', 'PER_BOT'),
+      row('acme_support_bot', 'INSTALLATION', 'STOPPED'),
+      row('reseller_bot', 'NOT_REGISTERED'),
+    ]);
+    expect(lines).toEqual([
+      'secret per bot         @acme_bot (tenant acme): own (per-bot secret)',
+      'secret per bot         @acme_support_bot (tenant acme, STOPPED): installation-wide ' +
+        '(the rotation window: still accepted; re-registering moves it to its own)',
+      'secret per bot         @reseller_bot (tenant acme): no registration recorded',
+      'installation secret    still registered for 1 bot(s); it stays accepted until each is ' +
+        're-registered',
+    ]);
+  });
+
+  it('says when no bot is on the master any more, and prints nothing for no bots', () => {
+    expect(webhookSecretListingLines([row('acme_bot', 'PER_BOT')]).at(-1)).toBe(
+      'installation secret    no bot is registered with it',
+    );
+    expect(webhookSecretListingLines([])).toEqual([]);
+  });
+
+  it('names a refused or unknown secret with its remedy', () => {
+    const text = webhookSecretListingLines([row('a_bot', 'OTHER'), row('b_bot', 'UNKNOWN')]).join(
+      '\n',
+    );
+    expect(text).toMatch(/@a_bot \(tenant acme\): not accepted .*re-register/);
+    expect(text).toMatch(/@b_bot \(tenant acme\): unknown .*re-register/);
   });
 });
 
