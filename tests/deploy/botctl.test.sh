@@ -6329,6 +6329,7 @@ assert_contains 'restart did not record the sizing' "$(cat "${NEXA_CONFIG_DIR}/d
 test_case 'db tuning: a host whose memory cannot be read keeps what deploy.env has'
 printf 'nothing useful\n' >"$MEMINFO_FIXTURE"
 before="$(cat "${NEXA_CONFIG_DIR}/deploy.env")"
+# shellcheck source=../../deploy/bin/nexa-lib.sh
 ( . "$NEXA_LIB"; nexa_record_pg_tuning ) >/dev/null 2>&1
 assert_equals 'deploy.env changed on an unreadable host' "$before" "$(cat "${NEXA_CONFIG_DIR}/deploy.env")"
 unset NEXA_MEMINFO
