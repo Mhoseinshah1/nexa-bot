@@ -106,6 +106,15 @@ Four locations, with four different lifetimes.
 Every file under `/etc/nexa` is mode `0600` and owned by root. Docker reads
 them as the daemon, which is also root, so no container needs permission to.
 
+**Which role mounts which workspace (R12 F2).** The three named volumes the application
+writes — `backups` (archives), `recovery` (uploads and restore scratch) and
+`legacymigration` (the Mirza package) — are mounted only into `api`, `worker` and
+`recovery`, the roles that read or write them. `monitor`, `provisioner` and
+`assistant` mount none: a compromise of one of those is not a read of every backup
+this installation holds. The environment is NOT split per role: every role reads
+`nexa.env`, and the monitor (panel credentials), the provisioner and the assistant (AI
+provider credentials) all decrypt with `SECRETS_KEYS`, so none of them can drop the key.
+
 ## Installing
 
 ```bash
@@ -598,6 +607,64 @@ Any of the three in a crash loop, alive with a blocked event loop, or alive and
 cut off from PostgreSQL goes unhealthy within a check or two, and a release in
 that state is backed out exactly as one whose API never answered.
 
+### A hung role is restarted, not only reported (R12 F2)
+
+Unhealthy is not enough on its own: Docker's `restart: unless-stopped` restarts a
+container whose process EXITS and never one that is merely unhealthy. So every
+application role now leaves by itself when it stops working:
+
+- `worker`, `monitor`, `provisioner`, `assistant` and the legacy-migration role exit
+  with status 1 after `HEARTBEAT_EXIT_AFTER_MISSED` (default **3**) consecutive
+  heartbeat intervals (`WORKER_HEARTBEAT_INTERVAL_MS`, default 10 s) without a
+  successful beat — the same beat the container check reads, so "missed" means
+  exactly what the health column shows.
+- `api`, which has no heartbeat file, has its EVENT LOOP watched with the same count.
+  Not its database: an API that cannot reach PostgreSQL reports not ready and keeps
+  answering, and restarting it would fix nothing.
+- The watching runs on a separate thread, because the hang that matters most is a
+  blocked event loop that can run no timer of its own. A role that is still
+  responsive is asked to exit and logs why; one that cannot act on the request within
+  one more interval is killed (SIGKILL) after one line to stderr.
+- **Not before the first healthy beat.** A role that has never been healthy is
+  failing to start, which `botctl update`'s readiness gate already reports, and a
+  restart loop would not fix it.
+- **Never the `recovery` role.** A restore's cutover has no safe point between its two
+  renames, and its own database connection is the one being swapped; a hung executor
+  is reported by its stalled loop and its stale health column instead.
+
+Each such exit is a crash to the restart watch below, so a role that keeps hanging is
+still announced once as `process.restart_storm:<role>`, and the loop that stopped has
+already been reported as `job.loop_stalled` before the exit. `HEARTBEAT_EXIT_AFTER_MISSED=0`
+in nexa.env turns the exits off (the file only goes stale, as before).
+
+### `/health/ready` is private to the host (R12 F2)
+
+Every `/health/ready` runs the readiness probes, and three of them check connections out
+of the API's database pool — the pool the operators and the bot use. It used to be
+public through the edge, so a loop of anonymous requests could hold that pool. Now:
+
+- **Caddy answers `/health/ready` only from its own loopback and the edge network**
+  (`NEXA_EDGE_SUBNET`, whose gateway is this host); from anywhere else it is a `404`.
+  `/health/live` stays public. Nothing in the installation needs readiness through the
+  edge: the api container's own check calls the API directly, and `botctl status`,
+  `update` and `rollback` read Docker's health state. To read it by hand on the host:
+  `sudo docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml exec api node -e "fetch('http://127.0.0.1:3000/health/ready').then(async r=>console.log(r.status, await r.text()))"`.
+- **One computation at a time, reused for `READINESS_CACHE_MS` (default 3000 ms).**
+  Callers that arrive while the probes run share their answer; callers inside the
+  window read the stored one. The authenticated readiness page in the Web Admin still
+  asks fresh.
+- **Every database checkout waits at most 5 s** (`connectionTimeoutMillis`), for a new
+  connection and for a free slot alike. It used to wait for ever, so an exhausted pool
+  queued every later request behind it.
+- **A per-address budget for the anonymous routes** — `/health/*`, `/payments/return/*`
+  and sign-in: `ANONYMOUS_RATE_LIMIT_PER_MINUTE` (default 120) per client address per
+  minute, answered `429 platform.request_rate_limited` with `Retry-After` above it.
+  Loopback is never limited (the container check). It is in the application because the
+  stock Caddy image has no rate-limit module; the client address is the one
+  `TRUSTED_PROXY_IPS` resolves, never Caddy's. The Telegram and gateway webhooks and the
+  mini app are not covered: their senders are a few provider addresses, and the mini app
+  has its own budget.
+
 ### Who reports a stalled role, and the one that cannot report itself
 
 Every background role now turns a loop that has stopped making progress into an
@@ -646,25 +713,25 @@ row is in the Web Admin's alerts at once.
 log group is SENT by the notification dispatcher, and the dispatcher runs in the
 worker. The other roles still record their stalls while the worker is down — the rows
 are durable and are sent when it returns — but nobody is told in the meantime, and a
-worker whose dispatcher is stalled cannot announce its own stall either. Docker does
-not help: `restart: unless-stopped` restarts a container that EXITS, never one that is
-merely unhealthy.
+worker whose dispatcher is stalled cannot announce its own stall either. A HUNG worker
+now exits and is restarted (above), but a worker that cannot start — or keeps dying —
+is still not one that can send anything.
 
 So an installation needs one check that does not run inside it. Two that work with
 what exists today:
 
-- **An off-host uptime check on `https://<domain>/health/ready`**, alerting on any
-  non-200 for more than a couple of minutes. It covers the API, PostgreSQL, the
-  migrations, and — through the `outbox` dependency, which fails when the oldest
-  unpublished event is older than `OUTBOX_RELAY_MAX_LAG_MS` — a worker whose relay
-  has stopped while events are being written. It does NOT see a stalled dispatcher
-  beside a healthy relay, and on a quiet installation it sees a dead relay only once
-  something is written.
+- **An off-host uptime check on `https://<domain>/health/live`**, alerting on any
+  non-200 for more than a couple of minutes. It covers the edge and a live API
+  process. It used to be `/health/ready`, which also covered PostgreSQL, the
+  migrations and the outbox lag; since R12 F2 that route answers `404` from outside
+  the host (see above), so **an existing off-host check on `/health/ready` must be
+  moved** — to `/health/live` here, with readiness left to the host-side check below.
 - **A host-side cron that runs `botctl status`** and alerts through a channel that is
   not this installation (mail, a separate bot, the hosting provider's monitor) when
-  the exit status is non-zero. `status` reads every container's own health check,
-  including the worker's heartbeat, which goes stale when ANY of its loops — the
-  dispatcher included — stops making progress.
+  the exit status is non-zero. `status` reads every container's own health check —
+  the API's is `/health/ready`, so PostgreSQL, the migrations and the outbox lag are
+  covered here — including the worker's heartbeat, which goes stale when ANY of its
+  loops — the dispatcher included — stops making progress.
 
 Neither is configured by the installer, and neither is a substitute for the other.
 
@@ -676,6 +743,38 @@ predates the monitor defines no such service, and demanding one would time out
 every rollback to it — after the assets had already moved. The relaxation is
 exactly one service wide; a monitor-less topology still requires its API and its
 worker.
+
+### PostgreSQL and Redis are sized for the host (R12 F2)
+
+The `postgres` service used the image's defaults whatever the host had. Now:
+
+| Setting (deploy.env key)                                | Value                                         |
+| ------------------------------------------------------- | --------------------------------------------- |
+| `shared_buffers` (`NEXA_PG_SHARED_BUFFERS`)             | 25 % of RAM, at least 128 MB, at most 8 GB    |
+| `effective_cache_size` (`NEXA_PG_EFFECTIVE_CACHE_SIZE`) | 60 % of RAM, at least 256 MB                  |
+| `work_mem` (`NEXA_PG_WORK_MEM`)                         | 16 MB                                         |
+| `max_connections` (`NEXA_PG_MAX_CONNECTIONS`)           | 150                                           |
+| `shared_preload_libraries`                              | `pg_stat_statements`                          |
+| `/dev/shm` (`shm_size`)                                 | 512 MB (Docker's 64 MB breaks parallel query) |
+| Redis                                                   | `maxmemory 64mb`, `allkeys-lru`               |
+
+The installer, every `botctl update` and every `botctl restart` compute the four
+`NEXA_PG_*` values from `/proc/meminfo` and write them into `/etc/nexa/deploy.env`,
+so a host that grew is resized by its next update. **The first update INTO this
+release is run by the outgoing release's botctl, which does not size anything: run
+`sudo botctl restart` once after it** (the new botctl then records and applies the
+sizing). compose passes them as `-c` flags; a deploy.env without
+them gets PostgreSQL's own defaults, so an installation that has not updated yet runs
+exactly as before. These are memory settings only — nothing in the data directory
+changes — and a rollback to a release whose compose file does not name them ignores
+them. The first update that carries them recreates the `postgres` container (a few
+seconds without the database, inside the update's own window). `botctl status` prints
+the recorded values under `database tuning`. A host whose memory cannot be read keeps
+whatever deploy.env already says. To read the statistics:
+`sudo docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml exec postgres psql -U nexa -d nexa -c 'CREATE EXTENSION IF NOT EXISTS pg_stat_statements'`
+once, then query `pg_stat_statements`. Redis holds only short-lived counters (the
+anti-spam and mini-app windows), so evicting the least recently used at 64 MB loses
+nothing durable.
 
 ## What one installation can keep fresh
 
@@ -2555,6 +2654,15 @@ operations named in it, not every operation the previous release could perform.
 It is evidence for this transition and a gate for the next one, which is more
 than a documented rule and less than a mechanical guarantee.
 
+**And a new migration may not block a large table (R12 F2).** `pnpm check:boundaries`
+runs `scripts/check-migration-ddl.mjs`: in a migration numbered above `0295`, a
+`CREATE [UNIQUE] INDEX` without `CONCURRENTLY`, or an `ADD CONSTRAINT … CHECK / FOREIGN
+KEY` without `NOT VALID`, on a table listed in `scripts/large-tables.txt` fails CI. The
+index goes to `online-indexes.ts` (below); the constraint is added `NOT VALID` and
+validated separately. A statement that must block anyway carries
+`-- nexa:blocking-ddl-ok <reason>` directly above it, so the exception is written down
+where a reviewer reads it.
+
 **Indexes that must not lock the table they are built on are not migrations.**
 Drizzle runs every pending migration inside one transaction, and PostgreSQL
 refuses `CREATE INDEX CONCURRENTLY` there; an ordinary `CREATE INDEX` takes a
@@ -3029,6 +3137,36 @@ Before staging.8 was accepted, the installer copied the subnet into
 installation upgraded from a `nexa.env` that predated the key was protected only
 because its subnet happened to be the default. That is the arrangement this
 replaces.
+
+### Docker's own networks are refused too, unless the owner allows a target (R12 F2)
+
+Every application container also sits on the **edge** network beside Caddy, and
+that network's gateway — like `172.17.0.1` on Docker's default bridge — is the
+**host**. "Private is reachable" therefore let a panel, payment-gateway or
+custom-bridge URL reach the host's own services. Since R12 F2 the outbound URL
+policy (one policy for panels, the custom gateway bridge and the FX sources)
+refuses, by default:
+
+- the installation's edge network, `NEXA_EDGE_SUBNET` (compose passes it to every
+  application role from `/etc/nexa/deploy.env`, by the expression that creates the
+  network — no second copy), and
+- Docker's default bridge `172.17.0.0/16`.
+
+A refused panel URL answers as the data network does (`panel.target_blocked`, «این
+نشانی برای پنل مجاز نیست.»). Every other private address — a LAN or VPN
+panel — is unaffected. **An installation whose panel runs on this same host and was
+added by a Docker address** (`http://172.17.0.1:…`, an address in the edge network)
+stops reaching it after the update: monitor probes and provisioning to that panel
+are refused until the owner allows the address.
+
+The owner allows such a target in the Web Admin: **تنظیمات → «گزارش‌های مدیریتی» → «نشانی‌های
+داخلی مجاز برای پنل و درگاه (فقط مالک)»** (`security.outbound_private_targets`): a
+comma-separated list of addresses or CIDRs, for example `172.17.0.1`. The form shows
+the security warning beside it. Writing it requires `settings.destructive` as well as
+`settings.edit` (the owner role holds both), and the change is recorded in the audit
+log. Every role re-reads it within a minute. It can never re-open the data network,
+the database or Redis — those stay refused whatever it lists. A network another
+compose project created on this host can be added to `PANEL_HTTP_DENIED_SUBNETS`.
 
 ## Still outstanding
 

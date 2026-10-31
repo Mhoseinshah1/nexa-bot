@@ -260,6 +260,18 @@ export const configSchema = z
     OUTBOX_RELAY_POLL_INTERVAL_MS: z.coerce.number().int().min(50).max(60_000).default(1000),
     OUTBOX_RELAY_MAX_LAG_MS: z.coerce.number().int().min(1000).default(300_000),
     /**
+     * How long the anonymous `/health/ready` verdict is reused (R12 F2). One computation is
+     * in flight at a time whatever this says; the window bounds how often one starts, so a
+     * flood of anonymous probes cannot hold the API's database pool. 0 recomputes per call.
+     */
+    READINESS_CACHE_MS: z.coerce.number().int().min(0).max(60_000).default(3_000),
+    /**
+     * Requests one client address may make per minute to the anonymous routes — the health
+     * probes, the payment return, sign-in (R12 F2, `anonymous-rate-limit.ts`). Loopback is
+     * never limited. 0 turns the limit off.
+     */
+    ANONYMOUS_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(0).max(100_000).default(120),
+    /**
      * Where the worker writes its heartbeat, and how often.
      *
      * The worker serves no HTTP, so this file is its health check: written
@@ -270,6 +282,15 @@ export const configSchema = z
      */
     WORKER_HEARTBEAT_PATH: z.string().min(1).default('/tmp/nexa-worker.heartbeat'),
     WORKER_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
+    /**
+     * R12 F2: a role leaves (exit 1, or SIGKILL when its event loop is blocked) after this
+     * many consecutive heartbeat intervals without a successful beat, so Docker's
+     * `restart: unless-stopped` restarts it — a merely UNHEALTHY container is never
+     * restarted. The API, which has no heartbeat file, uses the same count for its event
+     * loop. The recovery role never exits this way: a restore must not be killed between
+     * its two renames. 0 turns it off (the file only goes stale, as before).
+     */
+    HEARTBEAT_EXIT_AFTER_MISSED: z.coerce.number().int().min(0).max(100).default(3),
 
     /**
      * How long a graceful shutdown may take before the process leaves anyway.
@@ -959,6 +980,22 @@ export const configSchema = z
       .refine(
         (value) => value === undefined || CIDR.test(value),
         'NEXA_DATA_SUBNET must be a CIDR, for example 172.29.1.0/24.',
+      ),
+    /**
+     * The installation's EDGE network (R12 F2 item 4), set by compose from `NEXA_EDGE_SUBNET`
+     * in deploy.env by the expression that creates it. Every application role sits on it
+     * beside Caddy and its gateway is this host, so the panel/gateway URL policy refuses it
+     * unless the owner allow-lists a target (`security.outbound_private_targets`). Optional
+     * for the reason the data subnet is.
+     */
+    NEXA_EDGE_SUBNET: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value) => (value === '' ? undefined : value))
+      .refine(
+        (value) => value === undefined || CIDR.test(value),
+        'NEXA_EDGE_SUBNET must be a CIDR, for example 172.29.0.0/24.',
       ),
     /**
      * EXTRA networks a panel may never point at, beyond the installation's

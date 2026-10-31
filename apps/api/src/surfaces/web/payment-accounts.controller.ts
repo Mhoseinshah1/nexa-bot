@@ -11,11 +11,9 @@ import {
   type PaymentAccountListResponse,
   type PaymentAccountResponse,
   type PaymentAccountView,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import type { PaymentAccountRecord } from '../../modules/commerce/payments/application/account-ports.js';
 
 /**
@@ -44,7 +42,7 @@ export class PaymentAccountsController {
 
   @Get(PAYMENT_ACCOUNT_ROUTES.list)
   async list(@Req() request: FastifyRequest): Promise<PaymentAccountListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const accounts = await this.container.paymentAccounts.list(scope, actor);
     return { accounts: accounts.map(toView) };
   }
@@ -54,7 +52,7 @@ export class PaymentAccountsController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<PaymentAccountResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     /*
      * Parsed HERE, which is where the card number and the Sheba are normalised and
      * structurally checked. Everything downstream — the service, the repository, the
@@ -76,7 +74,7 @@ export class PaymentAccountsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<PaymentAccountResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = updatePaymentAccountRequestSchema.parse(body);
     const account = await this.container.paymentAccounts.update(scope, actor, {
       idempotencyKey: input.idempotencyKey,
@@ -92,7 +90,7 @@ export class PaymentAccountsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<PaymentAccountResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = setPaymentAccountEnabledRequestSchema.parse(body);
     const account = await this.container.paymentAccounts.setEnabled(scope, actor, {
       idempotencyKey: input.idempotencyKey,
@@ -108,29 +106,13 @@ export class PaymentAccountsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<PaymentAccountResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = setDefaultPaymentAccountRequestSchema.parse(body);
     const account = await this.container.paymentAccounts.setDefault(scope, actor, {
       idempotencyKey: input.idempotencyKey,
       accountId: id,
     });
     return { account: toView(account) };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

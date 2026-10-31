@@ -4,7 +4,6 @@ import {
   API_PREFIX,
   walletAdjustRequestSchema,
   walletEntryListQuerySchema,
-  type TenantContext,
   type WalletEntryListResponse,
   type WalletEntryResponse,
   type WalletEntrySummaryResponse,
@@ -12,10 +11,9 @@ import {
   type WalletResponse,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type {
   WalletCursor,
   WalletEntryRecord,
@@ -57,7 +55,7 @@ export class WalletController {
     @Req() request: FastifyRequest,
     @Param('customerId') customerId: string,
   ): Promise<WalletResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // The id is NOT cast: `WalletService` validates it, so a malformed path segment is
     // a 400 rather than a 500 at the `uuid` cast.
     const balance = await this.container.wallet.balance(scope, actor, customerId);
@@ -77,7 +75,7 @@ export class WalletController {
     @Param('customerId') customerId: string,
     @Query() raw: Record<string, unknown>,
   ): Promise<WalletEntryListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = singleValued(raw);
     const page = walletEntryListQuerySchema.parse({
       ...(query.limit === undefined ? {} : { limit: query.limit }),
@@ -121,7 +119,7 @@ export class WalletController {
     @Param('customerId') customerId: string,
     @Body() body: unknown,
   ): Promise<WalletEntryResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = walletAdjustRequestSchema.parse(body);
     const entry = await this.container.wallet.adjust(scope, actor, customerId, {
       idempotencyKey: input.idempotencyKey,
@@ -132,24 +130,6 @@ export class WalletController {
       showNoteToCustomer: input.showNoteToCustomer,
     });
     return { entry: toSummary(entry) };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    // `botInstanceId: null`: a wallet belongs to the TENANT. A customer who arrived
-    // through one bot and a tenant running two share one balance.
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

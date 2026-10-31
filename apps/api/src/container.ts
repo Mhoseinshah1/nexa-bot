@@ -95,6 +95,10 @@ import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema
 import { readFileSync } from 'node:fs';
 import { rename, stat } from 'node:fs/promises';
 import { panelUrlPolicy } from './infrastructure/net/installation-policy.js';
+import {
+  OutboundAllowList,
+  settingAllowListSource,
+} from './infrastructure/net/outbound-allow-list.js';
 import { SafeHttpClient } from './infrastructure/net/safe-http.js';
 import { checkUrl } from './infrastructure/net/url-policy.js';
 import { matchesTrustedEntry } from './infrastructure/trusted-proxy.js';
@@ -1694,6 +1698,8 @@ export interface Container {
    */
   readonly keyring: InstallationKeyring;
   readonly installationKeyLoader: InstallationKeyLoader;
+  /** R12 F2: the owner's outbound allow-list the URL policy consults (refreshed per role). */
+  readonly outboundAllowList: OutboundAllowList;
   readonly installationKeyRepository: DrizzleInstallationKeyRepository;
   readonly installationKeys: InstallationKeyService;
   /**
@@ -2307,6 +2313,7 @@ export function createContainer(
     logger,
     clock,
     maxOutboxLagMs: config.OUTBOX_RELAY_MAX_LAG_MS,
+    verdictCacheMs: config.READINESS_CACHE_MS,
   });
 
   // Comfortably past the longest window plus lockout the schema permits, so a
@@ -2394,6 +2401,18 @@ export function createContainer(
 
   const settingRepository = new DrizzleSettingRepository(database.db);
   const settingsResolver = new SettingsResolver(settingRepository, opsLog);
+  // R12 F2 item 4: the owner's outbound allow-list, read on the installation tenant and kept
+  // in memory for the synchronous URL policy (refreshed by `resolveInstallationTenant`).
+  const outboundAllowList = new OutboundAllowList(
+    settingAllowListSource({
+      installationTenant: () =>
+        installationTenantId === null
+          ? null
+          : { tenantId: installationTenantId, botInstanceId: null },
+      valueOf: (scope, key) => settingsResolver.valueOf(scope, key),
+    }),
+    logger,
+  );
   // Track 3 §2: the PANEL-scoped settings (a panel's connection-file caption).
   const panelSettingRepository = new DrizzlePanelSettingRepository(database.db);
   const panelSettingsResolver = new PanelSettingsResolver(panelSettingRepository, opsLog);
@@ -3386,7 +3405,7 @@ export function createContainer(
    * same CA bundle as the panel calls, the protocol's 15 s budget and 64 KiB cap, and no retry
    * (a create is never re-sent; an inquiry is re-asked by the lane's own schedule).
    */
-  const customGatewayUrlPolicy = panelUrlPolicy(config);
+  const customGatewayUrlPolicy = panelUrlPolicy(config, outboundAllowList);
   const customGatewayHttp = new SafeHttpClient({
     ...customGatewayUrlPolicy,
     ...(config.PANEL_HTTP_CA_FILE === undefined
@@ -4199,7 +4218,7 @@ export function createContainer(
   // extra networks the operator listed — see `panelUrlPolicy`, which the
   // deployment smoke test runs inside the real container against the real
   // environment.
-  const urlPolicy = panelUrlPolicy(config);
+  const urlPolicy = panelUrlPolicy(config, outboundAllowList);
 
   const panelCredentials = new DrizzlePanelCredentialStore(database.db, cipher);
 
@@ -8964,6 +8983,7 @@ export function createContainer(
     migrationWorkspaces,
     keyring,
     installationKeyLoader,
+    outboundAllowList,
     installationKeyRepository,
     installationKeys,
     legacyPanelInventory: (options = {}) => legacyInventory(options),
@@ -9011,6 +9031,7 @@ export function createContainer(
     },
     async shutdown() {
       installationKeyLoader.stop();
+      outboundAllowList.stop();
       // Round 8 (B1): the in-flight backup dies with this process; its plaintext goes now
       // rather than waiting for a sweep to find the run abandoned. Never its archive.
       await backup.discardInFlightPlaintext().then(

@@ -470,8 +470,9 @@ describe('the subnet defaults are one decision, not several literals', () => {
   };
 
   it('agrees on the edge subnet across every place it is spelled', () => {
-    // compose: the network. install.sh: TRUSTED_PROXY_IPS, and deploy.env.
-    expect(agreed('NEXA_EDGE_SUBNET', { compose: 1, installer: 2 })).toBeTruthy();
+    // compose: the network, and (R12 F2) the value handed to the application roles and to
+    // Caddy. install.sh: TRUSTED_PROXY_IPS, and deploy.env.
+    expect(agreed('NEXA_EDGE_SUBNET', { compose: 3, installer: 2 })).toBeTruthy();
   });
 
   it('agrees on the data subnet across every place it is spelled', () => {
@@ -484,7 +485,7 @@ describe('the subnet defaults are one decision, not several literals', () => {
     // `172.29.1.0/24` are different strings and the second is inside the first.
     // Either Docker refuses the deployment or the edge/data separation the whole
     // topology rests on is gone.
-    const edge = agreed('NEXA_EDGE_SUBNET', { compose: 1, installer: 2 });
+    const edge = agreed('NEXA_EDGE_SUBNET', { compose: 3, installer: 2 });
     const data = agreed('NEXA_DATA_SUBNET', { compose: 2, installer: 1 });
     expect(overlaps(edge, data), `${edge} and ${data} intersect`).toBe(false);
   });

@@ -22,10 +22,9 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin, type adminActor } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type { BroadcastRecord } from '../../modules/commerce/broadcasts/application/ports.js';
 
 const EMPTY_COUNTS: BroadcastCounts = {
@@ -55,7 +54,7 @@ export class BroadcastsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<BroadcastListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = broadcastListQuerySchema.parse(singleValued(raw));
     const limit = query.limit ?? BROADCAST_PAGE_DEFAULT;
     const position = query.cursor === undefined ? null : decodeKeysetCursor(query.cursor);
@@ -83,7 +82,7 @@ export class BroadcastsController {
 
   @Post()
   async create(@Req() request: FastifyRequest, @Body() body: unknown): Promise<BroadcastResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = createBroadcastRequestSchema.parse(body);
     const record = await this.container.broadcasts.create(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -102,7 +101,7 @@ export class BroadcastsController {
 
   @Get(':id')
   async one(@Req() request: FastifyRequest, @Param('id') id: string): Promise<BroadcastResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.respond(scope, actor, await this.container.broadcasts.get(scope, actor, id));
   }
 
@@ -112,7 +111,7 @@ export class BroadcastsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<BroadcastResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = updateBroadcastRequestSchema.parse(body);
     const record = await this.container.broadcasts.update(scope, actor, id, {
       expectedVersion: command.expectedVersion,
@@ -134,7 +133,7 @@ export class BroadcastsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<BroadcastResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = uploadBroadcastMediaRequestSchema.parse(body);
     return this.respond(
       scope,
@@ -148,7 +147,7 @@ export class BroadcastsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<BroadcastResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.respond(
       scope,
       actor,
@@ -162,7 +161,7 @@ export class BroadcastsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<AudiencePreviewResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { preview: await this.container.broadcasts.preview(scope, actor, id) };
   }
 
@@ -171,7 +170,7 @@ export class BroadcastsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<BroadcastTestResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { outcome: await this.container.broadcasts.test(scope, actor, id) };
   }
 
@@ -181,7 +180,7 @@ export class BroadcastsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<BroadcastResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = launchBroadcastRequestSchema.parse(body);
     const record = await this.container.broadcasts.launch(scope, actor, id, {
       idempotencyKey: command.idempotencyKey,
@@ -198,7 +197,7 @@ export class BroadcastsController {
 
   @Post(':id/pause')
   async pause(@Req() request: FastifyRequest, @Param('id') id: string): Promise<BroadcastResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.respond(scope, actor, await this.container.broadcasts.pause(scope, actor, id));
   }
 
@@ -207,7 +206,7 @@ export class BroadcastsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<BroadcastResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.respond(scope, actor, await this.container.broadcasts.resume(scope, actor, id));
   }
 
@@ -216,7 +215,7 @@ export class BroadcastsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<BroadcastResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.respond(scope, actor, await this.container.broadcasts.cancel(scope, actor, id));
   }
 
@@ -225,7 +224,7 @@ export class BroadcastsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<BroadcastResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.respond(
       scope,
       actor,
@@ -239,7 +238,7 @@ export class BroadcastsController {
     @Param('id') id: string,
     @Query() raw: Record<string, unknown>,
   ): Promise<BroadcastRecipientListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = broadcastRecipientListQuerySchema.parse(singleValued(raw));
     const limit = query.limit ?? BROADCAST_PAGE_DEFAULT;
     const rows = await this.container.broadcasts.recipients(scope, actor, id, {
@@ -271,7 +270,7 @@ export class BroadcastsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<BroadcastFailureReasonsResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { reasons: [...(await this.container.broadcasts.failureReasons(scope, actor, id))] };
   }
 
@@ -281,7 +280,7 @@ export class BroadcastsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<BroadcastBotDeliveryResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const rows = await this.container.broadcasts.botDelivery(scope, actor, id);
     return {
       bots: rows.map((row) => ({
@@ -301,7 +300,7 @@ export class BroadcastsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<BroadcastHistoryResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const { entries, truncated } = await this.container.broadcasts.history(scope, actor, id);
     return {
       truncated,
@@ -326,22 +325,6 @@ export class BroadcastsController {
   ): Promise<BroadcastResponse> {
     const counts = await this.container.broadcasts.counts(scope, actor, [record.id]);
     return { broadcast: toItem(record, counts.get(record.id) ?? EMPTY_COUNTS) };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.container.config.NODE_ENV === 'production');
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
   }
 }
 

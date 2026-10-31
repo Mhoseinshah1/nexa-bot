@@ -418,6 +418,35 @@ export type ConnectionFileCaptionMode = (typeof CONNECTION_FILE_CAPTION_MODES)[n
 export const CONNECTION_FILE_CAPTION_PLACEMENTS = ['LAST_FILE', 'EVERY_FILE'] as const;
 export type ConnectionFileCaptionPlacement = (typeof CONNECTION_FILE_CAPTION_PLACEMENTS)[number];
 
+/**
+ * R12 F2: one IPv4 or IPv6 address, or a CIDR, in the owner's outbound allow-list. Loose by
+ * design for IPv6 — the URL policy parses each entry properly and an entry it cannot parse
+ * opens nothing — but strict enough that a typo is refused at the form, not ignored later.
+ */
+function isOutboundTargetEntry(entry: string): boolean {
+  const [address = '', prefix, extra] = entry.split('/');
+  if (extra !== undefined) return false;
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(address);
+  if (v4 !== null) {
+    if (v4.slice(1).some((octet) => Number(octet) > 255)) return false;
+    return prefix === undefined || (/^\d{1,2}$/.test(prefix) && Number(prefix) <= 32);
+  }
+  if (address.includes(':') && /^[0-9A-Fa-f:]{2,39}$/.test(address)) {
+    return prefix === undefined || (/^\d{1,3}$/.test(prefix) && Number(prefix) <= 128);
+  }
+  return false;
+}
+
+/** The setting key of the owner's outbound private-target allow-list (R12 F2). */
+export const OUTBOUND_PRIVATE_TARGETS_SETTING_KEY = 'security.outbound_private_targets';
+
+/**
+ * Settings whose edit is a security decision, not configuration: writing one also requires
+ * `settings.destructive` (CRITICAL), which the owner role holds and an operator with only
+ * `settings.edit` does not. A key here is one that widens what the installation will reach.
+ */
+export const OWNER_ONLY_SETTING_KEYS: readonly string[] = [OUTBOUND_PRIVATE_TARGETS_SETTING_KEY];
+
 export const SETTINGS = [
   {
     key: 'ops.notifications.telegram_chat_id',
@@ -594,6 +623,44 @@ export const SETTINGS = [
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     configures: 'ops_notifications',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * R12 F2 item 4: the owner's allow-list of private outbound targets. The panel, gateway
+   * and custom-bridge URL policy refuses Docker's own networks by default — the edge network
+   * (NEXA_EDGE_SUBNET, whose gateway is this host) and Docker's default bridge
+   * 172.17.0.0/16 — because a panel URL pointed there reaches the host's own services. An
+   * owner whose panel genuinely runs on this host behind one of those addresses lists that
+   * address (or a CIDR) here. The installation's DATA network and its database and Redis
+   * hosts are refused whatever this says. Read on the installation tenant by every role,
+   * within a minute of a change. Writing it requires settings.destructive as well.
+   */
+  {
+    key: OUTBOUND_PRIVATE_TARGETS_SETTING_KEY,
+    description:
+      'Comma-separated IPv4/IPv6 addresses or CIDRs that panels, payment gateways and custom ' +
+      'bridges may call although they are inside the Docker networks this installation ' +
+      'refuses by default (its edge network and the default bridge 172.17.0.0/16, both of ' +
+      'which reach the host itself). Empty — the default — allows none. The data network, ' +
+      'the database and Redis are never reachable, whatever this lists.',
+    schema: z
+      .string()
+      .trim()
+      .max(2000)
+      .refine(
+        (value) =>
+          value === '' ||
+          value
+            .split(',')
+            .map((entry) => entry.trim())
+            .every((entry) => entry !== '' && isOutboundTargetEntry(entry)),
+        'A comma-separated list of IP addresses or CIDRs, for example 172.17.0.1 or 172.29.0.0/24.',
+      ),
+    defaultValue: '',
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'SENSITIVE',
+    configures: null,
     consumer: 'ACTIVE',
   },
   {

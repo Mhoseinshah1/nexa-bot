@@ -19,8 +19,7 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin, type adminActor } from './authenticated-request.js';
 import type {
   ServiceRefundRequestListItem,
   ServiceRefundRequestRecord,
@@ -45,7 +44,7 @@ export class ServiceRefundRequestsController {
     @Req() request: FastifyRequest,
     @Query() query: unknown,
   ): Promise<ServiceRefundRequestListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = serviceRefundRequestListQuerySchema.parse(query ?? {});
     const limit = input.limit ?? SERVICE_REFUND_REQUEST_PAGE_MAX;
     // One row past the page, so "there is another page" is read, never guessed from a full one.
@@ -73,7 +72,7 @@ export class ServiceRefundRequestsController {
     @Req() request: FastifyRequest,
     @Param('serviceId') serviceId: string,
   ): Promise<ServiceRefundRequestListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const items = await this.container.serviceRefundRequests.list(scope, actor, {
       serviceId: uuidV7Schema.parse(serviceId),
       limit: SERVICE_REFUND_REQUEST_PAGE_MAX,
@@ -89,7 +88,7 @@ export class ServiceRefundRequestsController {
     @Param('requestId') requestId: string,
     @Body() body: unknown,
   ): Promise<ServiceRefundRequestResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = serviceRefundApproveRequestSchema.parse(body);
     const approved = await this.container.serviceRefundRequests.approve(scope, actor, {
       requestId: uuidV7Schema.parse(requestId),
@@ -105,7 +104,7 @@ export class ServiceRefundRequestsController {
     @Param('requestId') requestId: string,
     @Body() body: unknown,
   ): Promise<ServiceRefundRequestResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = serviceRefundRejectRequestSchema.parse(body);
     const rejected = await this.container.serviceRefundRequests.reject(scope, actor, {
       requestId: uuidV7Schema.parse(requestId),
@@ -124,7 +123,7 @@ export class ServiceRefundRequestsController {
     @Req() request: FastifyRequest,
     @Param('serviceId') serviceId: string,
   ): Promise<ServiceDeleteRefundQuote> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const quote = await this.container.serviceRefundRequests.quoteDeleteWithRefund(
       scope,
       actor,
@@ -162,7 +161,7 @@ export class ServiceRefundRequestsController {
     @Param('serviceId') serviceId: string,
     @Body() body: unknown,
   ): Promise<ServiceRefundRequestResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = serviceDeleteWithRefundRequestSchema.parse(body);
     const created = await this.container.serviceRefundRequests.deleteWithRefund(scope, actor, {
       serviceId: uuidV7Schema.parse(serviceId),
@@ -194,25 +193,6 @@ export class ServiceRefundRequestsController {
       });
     }
     return toView(found);
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    // Item 11's write is cookie-authenticated and destructive: only from a configured origin.
-    if (options.write) assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

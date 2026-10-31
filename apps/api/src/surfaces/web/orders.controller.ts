@@ -17,10 +17,9 @@ import {
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import type { PublicLabels } from '../../modules/commerce/public-codes/application/public-labels.js';
-import { adminActor, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin, type adminActor } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type {
   OrderCursor,
   OrderCustomerIdentity,
@@ -60,7 +59,7 @@ export class OrdersController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<OrderListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // A repeated parameter is an ARRAY, not a string — the same guard every other list
     // on this surface uses rather than trusting the schema to refuse it.
     const query = singleValued(raw);
@@ -98,7 +97,7 @@ export class OrdersController {
 
   @Get('orders/:id')
   async detail(@Req() request: FastifyRequest, @Param('id') id: string): Promise<OrderResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // The id is NOT cast here: `OrderService.get` validates it, so a malformed path
     // segment is a 400 rather than a 500 at the `uuid` cast.
     const order = await this.container.orders.get(scope, actor, id);
@@ -128,7 +127,7 @@ export class OrdersController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<OrderPlacementEnvelope> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const placement = await this.container.orders.placement(scope, actor, id);
     return {
       placement:
@@ -144,24 +143,6 @@ export class OrdersController {
               decidedAt: placement.decidedAt.toISOString(),
             },
     };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    // `botInstanceId: null`: an order belongs to the TENANT. A customer who arrived
-    // through one bot and a tenant running two are the same shop.
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

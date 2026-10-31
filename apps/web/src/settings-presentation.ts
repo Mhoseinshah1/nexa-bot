@@ -365,6 +365,16 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'ops',
     control: { kind: 'text' },
   },
+  /*
+   * R12 F2 item 4: the owner's outbound allow-list. The description is the warning: each
+   * address here is one a panel URL may point at although it reaches this server itself.
+   */
+  'security.outbound_private_targets': {
+    title: 'web.setting_outbound_private_targets',
+    description: 'web.setting_outbound_private_targets_desc',
+    group: 'ops',
+    control: { kind: 'text' },
+  },
   'ops.notifications.max_per_minute': {
     title: 'web.setting_ops_max_per_minute',
     description: 'web.setting_ops_max_per_minute_desc',

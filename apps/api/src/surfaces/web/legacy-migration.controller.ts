@@ -14,11 +14,9 @@ import {
   type LegacyMigrationCapabilitiesResponse,
   type LegacyMigrationImportListResponse,
   type LegacyMigrationImportResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 
 /**
  * Mirza `.nxpkg` importer over HTTP — the Web Admin «مهاجرت از میرزا»
@@ -44,7 +42,7 @@ export class LegacyMigrationController {
 
   @Get(LEGACY_MIGRATION_ROUTES.capabilities)
   async capabilities(@Req() request: FastifyRequest): Promise<LegacyMigrationCapabilitiesResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.service.capabilities(scope, actor);
   }
 
@@ -53,7 +51,7 @@ export class LegacyMigrationController {
     @Req() request: FastifyRequest,
     @Query() query: unknown,
   ): Promise<LegacyMigrationImportListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.service.list(scope, actor, legacyMigrationListQuerySchema.parse(query ?? {}));
   }
 
@@ -62,14 +60,14 @@ export class LegacyMigrationController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<LegacyMigrationImportResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { import: await this.service.detail(scope, actor, id) };
   }
 
   /** The package. Nothing the client sent reaches a path; the file name is a label. */
   @Post(LEGACY_MIGRATION_ROUTES.upload)
   async upload(@Req() request: FastifyRequest): Promise<LegacyMigrationImportResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const pending = await this.service.beginUpload(scope, actor, {
       fileName: declaredFileName(request.headers['x-nexa-filename']),
     });
@@ -95,7 +93,7 @@ export class LegacyMigrationController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<LegacyMigrationImportResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { import: await this.service.setKey(scope, actor, id, body) };
   }
 
@@ -105,7 +103,7 @@ export class LegacyMigrationController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<LegacyMigrationImportResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { import: await this.service.setPanelBindings(scope, actor, id, body) };
   }
 
@@ -115,7 +113,7 @@ export class LegacyMigrationController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<LegacyMigrationImportResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const pending = await this.service.beginDecisionsUpload(scope, actor, id);
     let received: { bytes: number; sha256: string };
     try {
@@ -140,7 +138,7 @@ export class LegacyMigrationController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<LegacyMigrationImportResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { import: await this.service.requestDryRun(scope, actor, id, body) };
   }
 
@@ -150,7 +148,7 @@ export class LegacyMigrationController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<LegacyMigrationImportResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { import: await this.service.approve(scope, actor, id, body) };
   }
 
@@ -161,7 +159,7 @@ export class LegacyMigrationController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<LegacyMigrationImportResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { import: await this.service.requestAdopt(scope, actor, id, body) };
   }
 
@@ -171,26 +169,12 @@ export class LegacyMigrationController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<LegacyMigrationImportResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { import: await this.service.cancel(scope, actor, id, body) };
   }
 
   private get service() {
     return this.container.legacyMigration;
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.container.config.NODE_ENV === 'production');
-    if (options.write) assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
   }
 }
 

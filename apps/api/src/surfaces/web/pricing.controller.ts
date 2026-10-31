@@ -21,13 +21,11 @@ import {
   type DiscountWriteRequest,
   type OrderPricingResponse,
   type PricePreviewResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import { priceQuoteToWire } from '../../modules/commerce/orders/application/order-pricing.js';
 import type {
   CashbackRuleRecord,
@@ -61,7 +59,7 @@ export class PricingController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<DiscountListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = singleValued(raw);
     const page = discountListQuerySchema.parse({
       ...(query.limit === undefined ? {} : { limit: query.limit }),
@@ -90,7 +88,7 @@ export class PricingController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<DiscountResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = discountWriteSchema.parse(body);
     const listing = await this.container.discounts.create(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -104,7 +102,7 @@ export class PricingController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<DiscountResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { discount: toDiscountSummary(await this.container.discounts.get(scope, actor, id)) };
   }
 
@@ -114,7 +112,7 @@ export class PricingController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<DiscountResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = discountWriteSchema.parse(body);
     const listing = await this.container.discounts.update(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -130,7 +128,7 @@ export class PricingController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<DiscountResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = discountStatusRequestSchema.parse(body);
     const listing = await this.container.discounts.activate(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -145,7 +143,7 @@ export class PricingController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<DiscountResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = discountStatusRequestSchema.parse(body);
     const listing = await this.container.discounts.deactivate(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -161,7 +159,7 @@ export class PricingController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<CashbackRuleListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = singleValued(raw);
     const page = cashbackRuleListQuerySchema.parse({
       ...(query.limit === undefined ? {} : { limit: query.limit }),
@@ -184,7 +182,7 @@ export class PricingController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<CashbackRuleResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = cashbackRuleWriteSchema.parse(body);
     const rule = await this.container.cashbackRules.create(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -198,7 +196,7 @@ export class PricingController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<CashbackRuleResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { rule: toCashbackSummary(await this.container.cashbackRules.get(scope, actor, id)) };
   }
 
@@ -208,7 +206,7 @@ export class PricingController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CashbackRuleResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = cashbackRuleWriteSchema.parse(body);
     const rule = await this.container.cashbackRules.update(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -224,7 +222,7 @@ export class PricingController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CashbackRuleResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = discountStatusRequestSchema.parse(body);
     const rule = await this.container.cashbackRules.activate(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -239,7 +237,7 @@ export class PricingController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CashbackRuleResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = discountStatusRequestSchema.parse(body);
     const rule = await this.container.cashbackRules.deactivate(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -256,7 +254,7 @@ export class PricingController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<PricePreviewResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = singleValued(raw);
     const parsed = pricePreviewQuerySchema.parse({
       ...(query.purpose === undefined ? {} : { purpose: query.purpose }),
@@ -294,30 +292,8 @@ export class PricingController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<OrderPricingResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return toOrderPricing(await this.container.pricingRead.orderPricing(scope, actor, id));
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    // A rule belongs to the TENANT, like the catalogue it prices: one set of rules for
-    // every bot the tenant runs.
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 
