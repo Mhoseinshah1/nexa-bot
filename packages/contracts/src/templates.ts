@@ -2073,6 +2073,64 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.wallet.history_line_credit',
+    description:
+      'R12 F3: one line of the wallet history for money that CAME IN (amount, what it was, when). Composed into `bot.wallet.history`’s `{lines}`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'The movement’s amount in the selling currency, positive.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reason',
+        type: 'STRING',
+        description: 'What the movement was, in the customer’s words (from the ledger reason).',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When the movement was recorded.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.wallet.history_line_debit',
+    description:
+      'R12 F3: one line of the wallet history for money that WENT OUT (amount, what it was, when). Composed into `bot.wallet.history`’s `{lines}`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'The movement’s amount in the selling currency, positive.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reason',
+        type: 'STRING',
+        description: 'What the movement was, in the customer’s words (from the ledger reason).',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When the movement was recorded.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.catalog.open_button',
     description:
       'The inline button that opens the catalogue (buy a service) as a new message. Shown ' +
