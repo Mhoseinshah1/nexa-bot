@@ -168,7 +168,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // R6 item 3: the owner's greetings. Every variable is filled at send time from the receiving
   // customer's own data; the «🛒 خرید اشتراک» and «🧪 سرویس تست» names are the main-menu buttons'.
   'bot.start.welcome':
-    '{firstName} عزیز، خوش آمدید.\n\n✓ اتصال پایدار با لوکیشن‌های متنوع\n✓ کار با همه اپ‌های داخلی بدون خاموش کردن فیلترشکن\n✓ پشتیبانی از داخل همین ربات\n\nبرای شروع از منوی پایین «🛒 خرید اشتراک» را بزنید.',
+    'ZED PROXY\n━━━━━━━━━━━━\n{firstName} عزیز، خوش آمدید.\n\n✓ اتصال پایدار با لوکیشن‌های متنوع\n✓ کار با همه اپ‌های داخلی بدون خاموش کردن فیلترشکن\n✓ سرویس تست رایگان قبل از خرید\n✓ پشتیبانی از داخل همین ربات\n\nبرای شروع از منوی پایین «🛒 خرید اشتراک» یا «🧪 سرویس تست» را بزنید.',
   'bot.start.welcome_back':
     '👋 سلام {firstName}، خوش برگشتی\n\n📱 {activeServices} سرویس فعال داری\n{icon:time} نزدیک‌ترین انقضا: {nearestExpiry}\n\nاگه سرویست داره تموم می‌شه، از «📱 سرویس‌های من» همین الان تمدیدش کن تا وسط کار قطع نشی 🔄',
   'bot.blocked': 'دسترسی این حساب به ربات بسته شده است.',

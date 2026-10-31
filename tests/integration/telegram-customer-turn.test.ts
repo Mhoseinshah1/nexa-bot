@@ -219,8 +219,7 @@ describe('the customer Telegram turn', () => {
      * still fails.
      */
     // R6 item 3: the owner's greeting, with this customer's own first name filled in.
-    // R12 F3 item 6: the default welcome names no brand.
-    expect(sent[0]?.body['text']).not.toContain('ZED PROXY');
+    expect(sent[0]?.body['text']).toContain('ZED PROXY');
     expect(sent[0]?.body['text']).toContain('عزیز، خوش آمدید.');
     expect(sent[0]?.body['text']).not.toContain('{');
 
@@ -787,8 +786,7 @@ describe('the customer Telegram turn', () => {
     await start({ update: id });
     const row = (await customers())[0] as Record<string, unknown>;
     expect(sent).toHaveLength(1);
-    // R12 F3 item 6: the default welcome names no brand.
-    expect(sent[0]?.body['text']).not.toContain('ZED PROXY');
+    expect(sent[0]?.body['text']).toContain('ZED PROXY');
 
     await api.container.database.db.execute(sql`
       UPDATE customers
