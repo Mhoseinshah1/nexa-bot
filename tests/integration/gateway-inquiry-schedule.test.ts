@@ -410,8 +410,16 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
         sql`UPDATE payments SET expires_at = ${new Date(now + 15_000)} WHERE id = ${paymentId}`,
       );
       tonpays.set(invoice.provider_invoice_id!, 'completed', true);
-      advance(16_000);
+      /*
+       * Past the deadline AND the row's own first ask. Since R11 A10 that ask falls 13.5–16.5 s
+       * after the invoice (15 s ±10 %, seeded by the random payment id), so a fixed 16 s left
+       * about one run in six with nothing asked and no outcome (main's push CI, a8daa8b).
+       */
+      const firstAsk = new Date(invoice.next_inquiry_at!).getTime();
+      advance(Math.max(16_000, firstAsk - now));
+      expect(now).toBeGreaterThanOrEqual(firstAsk);
       await lane.runOnce(tenantA);
+      expect(tonpays.checks()).toBe(1);
       expect(await credits(paymentId)).toEqual([]);
       expect((await invoiceOf(paymentId)).outcome).toBe('LATE_COMPLETION');
     });
