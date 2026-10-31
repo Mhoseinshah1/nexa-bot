@@ -2105,6 +2105,7 @@ export function PaymentDetailPage({
                     <ReceiptReviewCard
                       paymentId={row.id}
                       amountMinor={row.amount}
+                      payableMinor={row.customerFee?.payable ?? null}
                       currency={row.currency}
                       mayReview={mayReviewReceipts}
                       mayCredit={mayCreditWallet}

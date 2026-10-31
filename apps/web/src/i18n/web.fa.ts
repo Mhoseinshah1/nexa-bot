@@ -2732,7 +2732,6 @@ export const WEB_FA = {
    */
   'web.receipt_review_hint':
     'رسید را ببینید و یکی از تصمیم‌ها را ثبت کنید: تأیید، رد یا واریز به کیف پول. همین تصمیم‌ها در ربات تلگرام هم انجام می‌شود و تصمیمِ اول معتبر است.',
-  'web.receipt_amount': 'مبلغ پرداخت',
   'web.receipt_note': 'یادداشت (اختیاری)',
   'web.receipt_approve': 'تأیید پرداخت',
   'web.receipt_approve_title': 'تأیید پرداخت کارت‌به‌کارت',

@@ -17,11 +17,14 @@ import { renderPage, stubApi } from './harness';
 const PAYMENT = '019240ab-cdef-7012-8345-6789abcdef01';
 const decided = { payment: { id: PAYMENT, state: 'CONFIRMED' } };
 
-const card = (over: { mayReview?: boolean; mayCredit?: boolean } = {}) =>
+const card = (
+  over: { mayReview?: boolean; mayCredit?: boolean; payableMinor?: string | null } = {},
+) =>
   renderPage(
     <ReceiptReviewCard
       paymentId={PAYMENT}
       amountMinor="250000"
+      payableMinor={over.payableMinor ?? null}
       currency="IRT"
       mayReview={over.mayReview ?? true}
       mayCredit={over.mayCredit ?? true}
@@ -70,6 +73,23 @@ describe('the receipt review card', () => {
     expect((post?.body as { idempotencyKey: string }).idempotencyKey.length).toBeGreaterThanOrEqual(
       8,
     );
+  });
+
+  it('APPROVE names what the customer was asked to TRANSFER — the payable with a fee, not the principal', async () => {
+    // Codex, #362: with a customer fee the transfer is 275,000 though the order is 250,000. A
+    // reviewer shown 250,000 would reject the correct receipt or approve a short one.
+    stubApi([]);
+    card({ payableMinor: '275000' });
+    fireEvent.click(screen.getByRole('button', { name: t('web.receipt_approve') }));
+    const dialog = await screen.findByRole('dialog');
+    const rows = [...dialog.querySelectorAll('dt')].map((dt) => [
+      dt.textContent,
+      dt.nextElementSibling?.textContent ?? '',
+    ]);
+    const payable = rows.find(([label]) => label === t('web.payment_transfer_payable'));
+    expect(payable?.[1]).toContain('275,000');
+    const principal = rows.find(([label]) => label === t('web.payment_amounts_principal'));
+    expect(principal?.[1]).toContain('250,000');
   });
 
   it('REJECT needs its reason — the customer is told it — and sends it', async () => {

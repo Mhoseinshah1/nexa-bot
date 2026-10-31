@@ -542,6 +542,31 @@ describe('the wizard is one message, edited in place', () => {
     expect(await debits()).toBe(0);
   });
 
+  it('R12 F3 (Codex, #362): Back from the code prompt lands the wizard on the pre-invoice, and its pay button works', async () => {
+    // The tracked message was left at DISCOUNT by an ungated Back, so the pre-invoice's own
+    // buttons (gated on PREINVOICE) were swallowed as stale: the wallet tap did nothing.
+    const productId = await product('back-pay');
+    await fund(1_000_000n, 'back-pay');
+    const wizard = 745;
+    await tapOn(wizard, `ck:${SEED_IDS.categoryA}.0`);
+    await tapOn(wizard, `p:${productId}`);
+    const [order] = await draftOrders();
+    if (order === undefined) throw new Error('no draft');
+    if (buttonsOf(edited(wizard).at(-1)).includes(`Z:${order.id}`)) {
+      await tapOn(wizard, `Z:${order.id}`);
+    }
+    await tapOn(wizard, `dc:${order.id}`);
+    expect(buttonsOf(edited(wizard).at(-1))).toEqual([`ib:${order.id}`, 'iz:']);
+
+    const back = await tapOn(wizard, `ib:${order.id}`);
+    expect(back.replyKey).toBe('bot.order.preinvoice');
+    expect(buttonsOf(edited(wizard).at(-1))).toContain(`w:${order.id}`);
+
+    const paid = await tapOn(wizard, `w:${order.id}`);
+    expect(paid.replyKey, 'the pre-invoice pay tap is honoured, not swallowed').not.toBeNull();
+    expect(await debits()).toBe(1);
+  });
+
   it('R12 F3: the wallet shortfall carries a way back to the pre-invoice', async () => {
     const productId = await product('short');
     await fund(1_000n, 'short');

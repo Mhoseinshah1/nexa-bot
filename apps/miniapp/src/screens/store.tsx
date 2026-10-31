@@ -90,14 +90,18 @@ function Category({ categoryId }: { categoryId: string }) {
   const [earlier, setEarlier] = useState<readonly MiniAppProduct[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The page each result answers, so «بیشتر» never advances from a result of an EARLIER
+  // page still on screen while the requested one loads (two quick taps skipped a page).
   const { loaded, reload } = useLoad(
-    () =>
-      api.get(
+    async () => ({
+      forPage: page,
+      result: await api.get(
         MINIAPP_ROUTES.category,
         { categoryId },
         miniAppCategoryResponseSchema,
         `page=${String(page)}`,
       ),
+    }),
     [api, categoryId, page],
   );
 
@@ -116,7 +120,8 @@ function Category({ categoryId }: { categoryId: string }) {
     }
   };
 
-  const ready = loaded.state === 'ready' ? loaded.data : null;
+  const ready = loaded.state === 'ready' ? loaded.data.result : null;
+  const current = loaded.state === 'ready' && loaded.data.forPage === page;
   const plans = appendPage(earlier, ready?.items ?? []);
   const list = (hasMore: boolean) => (
     <section className="section">
@@ -175,10 +180,10 @@ function Category({ categoryId }: { categoryId: string }) {
 
   // The first page waits on its read; once a page is shown, «بیشتر» keeps it on screen.
   return earlier.length > 0 ? (
-    list(ready?.hasMore === true)
+    list(current && ready?.hasMore === true)
   ) : (
     <Loading loaded={loaded} reload={reload}>
-      {(result) => list(result.hasMore)}
+      {(loadedPage) => list(loadedPage.forPage === page && loadedPage.result.hasMore)}
     </Loading>
   );
 }

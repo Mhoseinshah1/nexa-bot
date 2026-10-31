@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { MoneyWire } from '@nexa/contracts';
 import { approveReceipt, creditReceipt, rejectReceipt } from '../api/client';
@@ -52,13 +52,20 @@ export function creditAmountOf(typed: string): string | null {
 export function ReceiptReviewCard({
   paymentId,
   amountMinor,
+  payableMinor,
   currency,
   mayReview,
   mayCredit,
 }: {
   paymentId: string;
   /** The payment's own amount: what an approval settles. */
+  /** The PRINCIPAL (`payment.amount`). */
   amountMinor: string;
+  /**
+   * What the customer was asked to TRANSFER — the frozen payable with a customer fee
+   * (`customerFee.payable`), or null when there is none and the principal is the payable.
+   */
+  payableMinor: string | null;
   currency: MoneyWire['currency'];
   /** `receipts.review`. */
   mayReview: boolean;
@@ -174,10 +181,24 @@ export function ReceiptReviewCard({
     );
   }
 
-  const settled: MoneyWire = { amountMinor, currency };
+  /*
+   * Codex, #362: the reviewer compares the receipt against what the customer was asked to
+   * TRANSFER — the payable, as the Telegram review does (`amountToTransfer`) — not the
+   * principal, which with a fee is less and would make a correct receipt look short. The
+   * principal is shown beside it, by its own name, only when it differs.
+   */
+  const transfer: MoneyWire = { amountMinor: payableMinor ?? amountMinor, currency };
+  const amounts: [string, ReactNode][] = [
+    [t('web.payment_transfer_payable'), <Money key="p" value={transfer} />],
+    ...(payableMinor === null || payableMinor === amountMinor
+      ? []
+      : ([
+          [t('web.payment_amounts_principal'), <Money key="a" value={{ amountMinor, currency }} />],
+        ] as [string, ReactNode][])),
+  ];
   return (
     <Card title={t('web.payment_confirm_title')} hint={t('web.receipt_review_hint')}>
-      <KV items={[[t('web.receipt_amount'), <Money key="m" value={settled} />]]} />
+      <KV items={amounts} />
       <div className="form-actions">
         <Button variant="primary" size="sm" disabled={busy} onClick={() => setDialog('APPROVE')}>
           {t('web.receipt_approve')}
@@ -215,7 +236,7 @@ export function ReceiptReviewCard({
         }
       >
         <p className="muted small">{t('web.receipt_approve_body')}</p>
-        <KV items={[[t('web.receipt_amount'), <Money key="m" value={settled} />]]} />
+        <KV items={amounts} />
         <Checkbox label={t('web.receipt_approve_check')} checked={sure} onChange={setSure} />
         <Field label={t('web.receipt_note')} htmlFor="receipt-approve-note">
           <Input
