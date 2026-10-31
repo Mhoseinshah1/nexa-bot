@@ -4854,3 +4854,35 @@ live; the owner decides otherwise.
   Admin leaves the administrators' Telegram review messages with their buttons; a tap on one is
   answered «decided» (the conditional edge refuses), as for two reviewers racing in Telegram. They
   are not edited in place by a Web decision.
+
+## R12 F1 — money edges (`fix/r12-money-edges`)
+
+- **OQ-R12-F1-01 — what a full operator refund does to the service.** Implemented: the refund that
+  makes a NEW_SERVICE / CUSTOM_SERVICE / RENEW payment whole plans a **SUSPEND** of the order's
+  service in the same transaction (reversible; an operator may resume it), with a Persian warning
+  in the Web Admin before confirming. Not chosen: TERMINATE for a purchase (destroys the panel
+  account and cannot be undone), or routing the refund through the service-refund-request path
+  (its approval DELETES the account first and credits only afterwards — a different product for a
+  different request). For a RENEW the whole service is suspended, including any time the customer
+  had bought before that renewal; rolling back only the renewed period has no planner today. A
+  service that has changed hands since the purchase, or is not ACTIVE, is left as it is and the
+  order's audit row says why. The owner decides whether TERMINATE (or a renewal roll-back) is
+  wanted instead.
+- **OQ-R12-F1-02 — a Stars charge Telegram refunded.** Implemented: `refunded_payment` marks the
+  charge's invoice `refunded_payment` / `provider_paid = false` (a charge refunded before it
+  settled never settles), writes an audit row and opens `payments.gateway_charge_refunded` for an
+  operator (with «👤 نام کاربری سرویس» when the charge paid an order). Nothing is done to the
+  service or the wallet automatically: the service a refunded charge paid for stays live, and a
+  top-up a refunded charge credited stays in the wallet, until an operator suspends it or debits
+  the wallet by hand. Whether Nexa should do either by itself (and whether the payment should get a
+  refund row and its order go REFUNDED) is the owner's call.
+- **OQ-R12-F1-03 — late money for a cancelled attempt after its deadline.** A cancelled attempt is
+  asked about on its ordinary schedule until its own deadline and no longer (the provider's invoice
+  is not payable after it). Money the provider confirms for it is returned to the wallet whatever
+  the late-credit switch says — including when such an answer arrives later (an operator's
+  re-inquiry, a webhook within the post-deadline allowance). Whether a cancelled attempt should also
+  be polled through the late-credit window when the switch is ON is the owner's call; today it is
+  not.
+- **OQ-R12-F1-04 — TonPays Telegram and `request_amount`.** Item 5 makes a TonPays (website)
+  approval whose `request_amount` differs from what Nexa sent a MISMATCH. The TonPays Telegram
+  route is unchanged: what its `request_amount` means for a card transfer is still OQ-TPTG-03.

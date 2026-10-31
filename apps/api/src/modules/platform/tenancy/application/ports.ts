@@ -4,6 +4,7 @@ import type {
   BotInstanceId,
   BotInstanceStatus,
   ScopeContext,
+  SystemContext,
   Tenant,
   TenantId,
   TenantStatus,
@@ -87,6 +88,17 @@ export interface TokenReplacementClaims {
  * docblock on the schema. A row with it NULL is a bootstrap that has not
  * finished, whichever of the two crashes produced it.
  */
+/** One bot's registration facts, for the installation-wide secret listing. */
+export interface BotWebhookSecretRecord {
+  readonly id: BotInstanceId;
+  readonly tenantSlug: string;
+  readonly username: string;
+  readonly status: BotInstanceStatus;
+  readonly webhookRegisteredAt: Date | null;
+  /** SHA-256 of the secret it was registered with. NULL means unknown. */
+  readonly webhookSecretFingerprint: string | null;
+}
+
 export interface BotBootstrapView {
   readonly id: BotInstanceId;
   readonly username: string;
@@ -141,6 +153,14 @@ export interface BotBootstrapRepository {
    * state instead.
    */
   findBootstrapTarget(scope: ScopeContext, tx?: unknown): Promise<BotBootstrapView | null>;
+  /**
+   * R12 F2 item 7: every bot on the installation, every tenant, with the digest its webhook
+   * was registered with — for `botctl telegram status` to say, per bot, whether it is on its
+   * own secret or still on the installation-wide one. Read-only and SYSTEM-scoped: the
+   * question "may the master be retired yet" is about the whole installation. The digest
+   * goes no further than the service's comparison; the answer is a word.
+   */
+  listWebhookSecretRecords(scope: SystemContext): Promise<BotWebhookSecretRecord[]>;
   /** Encrypts the token here; the plaintext never leaves this call. */
   createFromBootstrap(
     scope: ScopeContext,

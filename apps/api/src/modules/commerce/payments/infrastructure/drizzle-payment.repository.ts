@@ -587,6 +587,62 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     return rows.map((row) => row.id as PaymentId);
   }
 
+  async closeOpenGatewaySiblings(
+    scope: TenantContext,
+    input: {
+      readonly orderId: OrderId;
+      readonly exceptPaymentId: PaymentId;
+      readonly providers: readonly PaymentGatewayProvider[];
+    },
+    now: Date,
+    tx: unknown,
+  ): Promise<readonly PaymentId[]> {
+    if (input.providers.length === 0) return [];
+    const tenantId = requireTenantId(scope);
+    /*
+     * Locked first, in a statement of their own, for the reason `cancelPendingForOrder` gives
+     * (the receipt-in-flight predicate reads another table) — and SKIP LOCKED: the settling
+     * transaction already holds the order, and a sibling whose own settlement holds its row
+     * and waits for that order would otherwise be a lock cycle. A skipped row is left to its
+     * own settlement, which finds the order paid and returns the money to the wallet.
+     */
+    const locked = await this.exec(tx)
+      .select({ id: payments.id })
+      .from(payments)
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.orderId, input.orderId),
+          eq(payments.state, 'PENDING'),
+          eq(payments.method, 'GATEWAY'),
+          inArray(payments.gatewayProvider, [...input.providers]),
+          sql`${payments.id} <> ${input.exceptPaymentId}`,
+        ),
+      )
+      .for('update', { skipLocked: true });
+    if (locked.length === 0) return [];
+    const rows = await this.exec(tx)
+      .update(payments)
+      .set({ state: 'CANCELLED', resolvedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          inArray(
+            payments.id,
+            locked.map((row) => row.id),
+          ),
+          eq(payments.state, 'PENDING'),
+          // The row-local refusals of `cancelPendingForOrder`, unchanged.
+          sql`NOT ${receiptInFlight()}`,
+          isNull(payments.customerSignalledAt),
+          notHeldAt(now),
+          isNull(payments.providerReviewUntil),
+        ),
+      )
+      .returning({ id: payments.id });
+    return rows.map((row) => row.id as PaymentId);
+  }
+
   /**
    * The `EXPIRE` edge as a bounded set, for the sweep.
    *

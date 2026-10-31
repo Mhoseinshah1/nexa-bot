@@ -6106,6 +6106,33 @@ test_case 'telegram status does NOT take the lock'
 run_botctl telegram status
 assert_ok 'telegram status was refused' test "$BOTCTL_STATUS" -eq 0
 
+test_case 'telegram status relays the per-bot webhook secret lines, and stdout stays one word'
+# R12 F2 item 7: the CLI lists every bot by the secret its webhook is registered
+# with, on stderr. botctl must pass that through untouched (a `2>/dev/null` here
+# would hide which bots still need the installation-wide secret) and must not
+# let it reach stdout, which the installer, `botctl update` and the cutover
+# preflight compare as one word.
+fake_set owner_state ready
+fake_set status_stderr "$(printf '%s\n' \
+  'webhook secret         installation-wide (the rotation window: still accepted; re-registering moves it to its own)' \
+  'secret per bot         @acme_bot (tenant acme): own (per-bot secret)' \
+  'installation secret    no bot is registered with it')"
+telegram_status_stdout="$("$BOTCTL" telegram status 2>/dev/null)"
+assert_equals 'telegram status stdout is no longer the one word' 'ready' "$telegram_status_stdout"
+run_botctl telegram status
+assert_contains 'the per-bot secret line was not relayed' \
+  "$BOTCTL_OUTPUT" 'secret per bot         @acme_bot (tenant acme): own (per-bot secret)'
+assert_contains 'the installation-wide secret summary was not relayed' \
+  "$BOTCTL_OUTPUT" 'installation secret    no bot is registered with it'
+fake_set status_stderr ''
+# And the help says what the listing is, and that it never shows a value.
+run_botctl help
+assert_contains 'the help does not mention the per-bot secret listing' \
+  "$BOTCTL_OUTPUT" 'lists every bot on the installation by the webhook secret'
+assert_contains 'the help does not promise the listing shows no secret' \
+  "$BOTCTL_OUTPUT" 'never a
+secret or a fingerprint'
+
 teardown_root
 
 test_case 'the token never reaches the bootstrap CLI as an argument'
