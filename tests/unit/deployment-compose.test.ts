@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { parse } from 'yaml';
 
 /**
  * The production topology's security invariants, asserted against the file
@@ -323,12 +324,13 @@ describe('the production compose topology', () => {
   });
 
   it('Phase 7: shares the Mirza package workspace between the api (upload) and recovery (executor)', () => {
-    // Through the app-role anchor, so every role that uses it — the api that streams the
-    // upload, the recovery role whose executor opens it — sees the SAME named volume.
-    const anchor = compose.slice(compose.indexOf('x-app-common:'), compose.indexOf('\nservices:'));
+    // Through the workspace anchor (R12 F2: no longer every app role's), so every role that
+    // uses it — the api that streams the upload, the recovery role whose executor opens it —
+    // sees the SAME named volume.
+    const anchor = compose.slice(compose.indexOf('x-app-volumes:'), compose.indexOf('\nservices:'));
     expect(anchor).toMatch(/- legacymigration:\/var\/lib\/nexa\/legacy-migration/);
     for (const role of ['api', 'recovery']) {
-      expect(serviceBlock(compose, role), role).toMatch(/<<: \*app-common/);
+      expect(serviceBlock(compose, role), role).toMatch(/volumes: \*app-volumes/);
     }
     const volumes = compose.slice(compose.indexOf('\nvolumes:'));
     expect(volumes).toMatch(/\n {2}legacymigration:\n/);
@@ -344,8 +346,8 @@ describe('the production compose topology', () => {
     // A named volume is initialised from the image's directory at that path; a path the
     // image does not create comes up root-owned and the non-root process cannot write it
     // (the Phase 7 review's H2: `legacymigration` was mounted and never created).
-    const anchor = compose.slice(compose.indexOf('x-app-common:'), compose.indexOf('\nservices:'));
-    const mounts = [...anchor.matchAll(/^ {4}- ([a-z][a-z0-9-]*):(\/[^\s]+)$/gmu)].map(
+    const anchor = compose.slice(compose.indexOf('x-app-volumes:'), compose.indexOf('\nservices:'));
+    const mounts = [...anchor.matchAll(/^ {2}- ([a-z][a-z0-9-]*):(\/[^\s]+)$/gmu)].map(
       (m) => m[2] ?? '',
     );
     expect(mounts.length, 'the anchor mounts nothing the test can see').toBeGreaterThanOrEqual(3);
@@ -360,6 +362,27 @@ describe('the production compose topology', () => {
     for (const path of mounts) {
       expect(created.has(path), `${path} is not created in the Dockerfile`).toBe(true);
       expect(locked.has(path), `${path} is not chmod 700 in the Dockerfile`).toBe(true);
+    }
+  });
+
+  it('R12 F2: mounts the archive, recovery and Mirza workspaces only into api, worker and recovery', () => {
+    const parsed = parse(compose) as {
+      'x-app-common': Record<string, unknown>;
+      services: Record<string, { volumes?: string[] }>;
+    };
+    // Not through the anchor every role merges.
+    expect(parsed['x-app-common'].volumes).toBeUndefined();
+    const workspaces = [
+      'backups:/var/lib/nexa/backups',
+      'recovery:/var/lib/nexa/recovery',
+      'legacymigration:/var/lib/nexa/legacy-migration',
+    ];
+    for (const role of ['api', 'worker', 'recovery']) {
+      expect(parsed.services[role]?.volumes, role).toEqual(workspaces);
+    }
+    // The monitor, the provisioner and the assistant read no backup, upload or package.
+    for (const role of ['monitor', 'provisioner', 'assistant']) {
+      expect(parsed.services[role]?.volumes, role).toBeUndefined();
     }
   });
 

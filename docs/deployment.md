@@ -106,6 +106,15 @@ Four locations, with four different lifetimes.
 Every file under `/etc/nexa` is mode `0600` and owned by root. Docker reads
 them as the daemon, which is also root, so no container needs permission to.
 
+**Which role mounts which workspace (R12 F2).** The three named volumes the application
+writes — `backups` (archives), `recovery` (uploads and restore scratch) and
+`legacymigration` (the Mirza package) — are mounted only into `api`, `worker` and
+`recovery`, the roles that read or write them. `monitor`, `provisioner` and
+`assistant` mount none: a compromise of one of those is not a read of every backup
+this installation holds. The environment is NOT split per role: every role reads
+`nexa.env`, and the monitor (panel credentials), the provisioner and the assistant (AI
+provider credentials) all decrypt with `SECRETS_KEYS`, so none of them can drop the key.
+
 ## Installing
 
 ```bash
