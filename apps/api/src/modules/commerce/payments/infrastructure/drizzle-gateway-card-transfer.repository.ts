@@ -690,12 +690,17 @@ export class DrizzleGatewayCardTransferRepository implements GatewayCardTransfer
     retryAt: Date,
     now: Date,
     tx: unknown,
+    options?: { readonly notSent?: boolean },
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
     const rows = await this.exec(tx)
       .update(gatewayReceiptSubmissions)
       .set({
-        // Cleared ONLY here: the provider said, in so many words, it did not process it.
+        // Cleared ONLY here: the provider said, in so many words, it did not process it — or
+        // (Round 11 A8) it was never sent, and the attempt its stamp counted is given back.
+        ...(options?.notSent === true
+          ? { attempts: sql`GREATEST(${gatewayReceiptSubmissions.attempts} - 1, 0)` }
+          : {}),
         state: 'QUEUED',
         sentAt: null,
         retryAt,

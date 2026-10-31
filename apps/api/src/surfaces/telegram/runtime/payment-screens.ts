@@ -33,6 +33,7 @@ import type {
 import {
   cancelAvailable,
   cardChangeOffered,
+  createEndedRateLimited,
   customerMessageKeyOfError,
   isBuyerConflictCode,
   receiptUploadAvailable,
@@ -889,10 +890,13 @@ export function gatewayAttemptScreen(
     // Round 6: the customer's own cancel, a rejection with reasons, a buyer with another invoice.
     const failed = failedCardScreen(payment, invoice, orderId, cardFacts, screen);
     if (failed !== null) return failed;
-    // A create the gateway refused is "unavailable"; an invoice it did not approve failed.
+    // A create the gateway refused is "unavailable" — or, Round 11 A8, "busy" when it was the
+    // provider's own rate limit; an invoice it did not approve failed.
     return screen(
       invoice.creationState === 'CREATE_FAILED'
-        ? 'bot.payment.gateway_unavailable'
+        ? createEndedRateLimited(invoice.provider, invoice.creationErrorCode)
+          ? 'bot.payment.gateway_busy'
+          : 'bot.payment.gateway_unavailable'
         : 'bot.payment.gateway_failed',
       [retry],
       'NOTICE',
@@ -951,7 +955,13 @@ export function gatewayAttemptScreen(
   if (invoice.creationState === 'CREATE_FAILED') {
     const failed = failedCardScreen(payment, invoice, orderId, cardFacts, screen);
     if (failed !== null) return failed;
-    return screen('bot.payment.gateway_unavailable', [retry], 'NOTICE');
+    return screen(
+      createEndedRateLimited(invoice.provider, invoice.creationErrorCode)
+        ? 'bot.payment.gateway_busy'
+        : 'bot.payment.gateway_unavailable',
+      [retry],
+      'NOTICE',
+    );
   }
   if (
     PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].invoiceForm === 'CARD_TRANSFER' &&
