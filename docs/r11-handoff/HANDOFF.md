@@ -24,6 +24,14 @@ in the session scratchpad, so if lost, rebuild it from the PR descriptions above
 
 ## Owner decisions this session (binding)
 
+- 2026-10-31 (after a container restart): every agent with uncommitted work pushes a WIP backup
+  now and after each meaningful step to a SEPARATE branch `wip/<branch-name>`, never to a PR
+  branch (a PR branch still gets exactly one fix commit). Fast-forward only (no force-push):
+  snapshot with a temporary index + `git commit-tree -p HEAD -p <previous wip tip>`, push to
+  `refs/heads/wip/<branch>`. Delete the `wip/` branches after each PR merges. Live now:
+  `wip/fix/r12-money-edges`, `wip/fix/r12-security-reliability`,
+  `wip/fix/r12-webhook-secret-per-bot`, `wip/fix/r12-ux-quick-wins`.
+
 - 2026-10-31 token-budget rules, binding FROM THE NEXT SESSION (in-flight Phase 2 keeps its
   models and rules):
   1. One phase per session: when a phase ends, write the phase report + handoff and STOP; the
