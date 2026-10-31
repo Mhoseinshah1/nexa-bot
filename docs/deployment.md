@@ -3088,6 +3088,36 @@ installation upgraded from a `nexa.env` that predated the key was protected only
 because its subnet happened to be the default. That is the arrangement this
 replaces.
 
+### Docker's own networks are refused too, unless the owner allows a target (R12 F2)
+
+Every application container also sits on the **edge** network beside Caddy, and
+that network's gateway — like `172.17.0.1` on Docker's default bridge — is the
+**host**. "Private is reachable" therefore let a panel, payment-gateway or
+custom-bridge URL reach the host's own services. Since R12 F2 the outbound URL
+policy (one policy for panels, the custom gateway bridge and the FX sources)
+refuses, by default:
+
+- the installation's edge network, `NEXA_EDGE_SUBNET` (compose passes it to every
+  application role from `/etc/nexa/deploy.env`, by the expression that creates the
+  network — no second copy), and
+- Docker's default bridge `172.17.0.0/16`.
+
+A refused panel URL answers as the data network does (`panel.target_blocked`, «این
+نشانی برای پنل مجاز نیست.»). Every other private address — a LAN or VPN
+panel — is unaffected. **An installation whose panel runs on this same host and was
+added by a Docker address** (`http://172.17.0.1:…`, an address in the edge network)
+stops reaching it after the update: monitor probes and provisioning to that panel
+are refused until the owner allows the address.
+
+The owner allows such a target in the Web Admin: **تنظیمات → «گزارش‌های مدیریتی» → «نشانی‌های
+داخلی مجاز برای پنل و درگاه (فقط مالک)»** (`security.outbound_private_targets`): a
+comma-separated list of addresses or CIDRs, for example `172.17.0.1`. The form shows
+the security warning beside it. Writing it requires `settings.destructive` as well as
+`settings.edit` (the owner role holds both), and the change is recorded in the audit
+log. Every role re-reads it within a minute. It can never re-open the data network,
+the database or Redis — those stay refused whatever it lists. A network another
+compose project created on this host can be added to `PANEL_HTTP_DENIED_SUBNETS`.
+
 ## Still outstanding
 
 **Images are digest-pinned but not signature-verified.** A release is addressed

@@ -28,7 +28,9 @@ export function panelUrlPolicy(
     | 'PANEL_HTTP_DENIED_SUBNETS'
     | 'DATABASE_URL'
     | 'REDIS_URL'
-  >,
+  > &
+    Partial<Pick<AppConfig, 'NEXA_EDGE_SUBNET'>>,
+  allowList?: { current(): readonly string[] },
 ): UrlPolicyOptions {
   return {
     allowLoopback: config.PANEL_HTTP_ALLOW_LOOPBACK,
@@ -37,5 +39,19 @@ export function panelUrlPolicy(
       ...config.PANEL_HTTP_DENIED_SUBNETS,
     ],
     deniedHosts: infrastructureHosts([config.DATABASE_URL, config.REDIS_URL]),
+    // R12 F2 item 4: Docker's own networks, whose gateways are this host — refused unless
+    // the owner allow-lists a target (`security.outbound_private_targets`).
+    dockerSubnets: [
+      ...(config.NEXA_EDGE_SUBNET === undefined ? [] : [config.NEXA_EDGE_SUBNET]),
+      ...DOCKER_DEFAULT_BRIDGE_SUBNETS,
+    ],
+    ...(allowList === undefined ? {} : { allowedPrivateTargets: () => allowList.current() }),
   };
 }
+
+/**
+ * Docker's default bridge (`docker0`), whose gateway `172.17.0.1` is the host. Refused by
+ * default beside the installation's own edge network; networks other compose projects on
+ * this host created can be added to `PANEL_HTTP_DENIED_SUBNETS`.
+ */
+export const DOCKER_DEFAULT_BRIDGE_SUBNETS: readonly string[] = ['172.17.0.0/16'];

@@ -9,6 +9,7 @@ import {
   CUSTOMER_NOTICES_PAUSED_CODE,
   CUSTOMER_NOTICES_PAUSE_SETTING_KEY,
   CUSTOMER_NOTICES_RESUMED_CODE,
+  OWNER_ONLY_SETTING_KEYS,
   PLATFORM_ERROR_CODES,
   type ActorContext,
   type AuditWriter,
@@ -39,6 +40,8 @@ import type { ResolvedSetting, SettingsResolver } from './settings-resolver.js';
 
 export const SETTINGS_VIEW: PermissionKey = 'settings.view';
 export const SETTINGS_EDIT: PermissionKey = 'settings.edit';
+/** Also required for `OWNER_ONLY_SETTING_KEYS` (R12 F2). */
+export const SETTINGS_DESTRUCTIVE: PermissionKey = 'settings.destructive';
 
 /**
  * The command to change one setting.
@@ -250,6 +253,25 @@ export class SettingsService {
 
     const command = setSettingCommandSchema.parse(input);
     const key = this.requireKey(command.key);
+
+    // R12 F2: a key that widens what this installation will reach (the outbound allow-list)
+    // is a security decision, so editing it also takes the CRITICAL `settings.destructive`
+    // that the owner holds — `settings.edit` alone is an operator's.
+    if (OWNER_ONLY_SETTING_KEYS.includes(key)) {
+      try {
+        await this.guard.check(scope, actor, SETTINGS_DESTRUCTIVE);
+      } catch (denial) {
+        await recordMutationDenial(
+          { guard: this.guard, audit: this.audit, opsLog: this.opsLog },
+          scope,
+          actor,
+          SETTINGS_DESTRUCTIVE,
+          { action: 'settings.set', entityType: 'Setting', entityId: key },
+          denial,
+        );
+        throw denial;
+      }
+    }
 
     const parsed = parseSettingValue(key, command.value);
     if (!parsed.ok) {

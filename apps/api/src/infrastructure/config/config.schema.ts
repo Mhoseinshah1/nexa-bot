@@ -982,6 +982,22 @@ export const configSchema = z
         'NEXA_DATA_SUBNET must be a CIDR, for example 172.29.1.0/24.',
       ),
     /**
+     * The installation's EDGE network (R12 F2 item 4), set by compose from `NEXA_EDGE_SUBNET`
+     * in deploy.env by the expression that creates it. Every application role sits on it
+     * beside Caddy and its gateway is this host, so the panel/gateway URL policy refuses it
+     * unless the owner allow-lists a target (`security.outbound_private_targets`). Optional
+     * for the reason the data subnet is.
+     */
+    NEXA_EDGE_SUBNET: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value) => (value === '' ? undefined : value))
+      .refine(
+        (value) => value === undefined || CIDR.test(value),
+        'NEXA_EDGE_SUBNET must be a CIDR, for example 172.29.0.0/24.',
+      ),
+    /**
      * EXTRA networks a panel may never point at, beyond the installation's
      * own. Comma-separated CIDRs, empty by default: the installation subnet
      * is not configured here and cannot be removed here.

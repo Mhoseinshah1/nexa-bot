@@ -95,6 +95,8 @@ const CUSTOM_MENU_BUTTON_BODY_LIMIT_BYTES =
  */
 /** How often every process re-reads `installation_keys`. */
 export const INSTALLATION_KEY_REFRESH_MS = 60_000;
+/** How often every process re-reads the owner's outbound allow-list (R12 F2). */
+export const OUTBOUND_ALLOW_LIST_REFRESH_MS = 60_000;
 
 /**
  * The stalled-loop reporter of one background role (FIX-05; every role since FIX-03 of
@@ -162,6 +164,12 @@ export async function resolveInstallationTenant(container: Container): Promise<v
 
   const primary = await container.tenants.findPrimary();
   container.setInstallationTenant(primary?.id ?? null);
+
+  // R12 F2 item 4: the owner's outbound allow-list, read on the tenant just resolved and
+  // kept fresh on a timer in every role, so a change in the Web Admin reaches the monitor,
+  // the provisioner and the worker within one interval. Fails closed: unread is empty.
+  await container.outboundAllowList.refreshQuietly();
+  container.outboundAllowList.start(OUTBOUND_ALLOW_LIST_REFRESH_MS);
 
   if (primary === null) return;
 

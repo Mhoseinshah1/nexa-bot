@@ -45,6 +45,10 @@ describe('the edge keeps /health/ready private', () => {
     expect(compose.services.caddy?.environment?.NEXA_EDGE_SUBNET).toBe(
       '${NEXA_EDGE_SUBNET:-172.29.0.0/24}',
     );
+    // And every application role: the outbound URL policy refuses it (item 4).
+    expect(compose['x-app-common'].environment.NEXA_EDGE_SUBNET).toBe(
+      '${NEXA_EDGE_SUBNET:-172.29.0.0/24}',
+    );
   });
 
   it('keeps the api container check on the API itself, not through the edge', () => {
