@@ -151,6 +151,19 @@ export interface RefundServiceDeps {
    * audit row says which.
    */
   readonly serviceSuspension: {
+    /**
+     * R12 F1 (Codex on #360): LOCKS the row of the service a refund of this order would
+     * suspend (`ServiceRepository.lockForUpdate`, the lock a transfer takes first), so a
+     * transfer of that service and this refund are serialised and the owner the suspension
+     * checks is the one that holds when it commits. Taken BEFORE the payment's lock: a refund
+     * request's approval takes the service row and then the payment, and a transfer the row and
+     * then its own writes. A purpose that suspends nothing locks nothing.
+     */
+    lockServiceOf(
+      scope: TenantContext,
+      input: { readonly orderId: OrderId; readonly purpose: OrderPurpose },
+      tx: TransactionScope,
+    ): Promise<void>;
     suspendForFullRefund(
       scope: TenantContext,
       actor: ActorContext,
@@ -417,6 +430,16 @@ export class RefundService {
          * The PAYMENT row is the lock because the bound is per payment — two refunds of
          * different payments never wait for each other.
          */
+        /*
+         * R12 F1 (Codex on #360): the service this refund may suspend, locked FIRST — before
+         * the payment, the order a refund request's approval and a transfer take their locks
+         * in — so a transfer cannot commit between the owner check and the suspension.
+         * `payments.order_id` and the order's purpose are frozen: the unlocked reads are exact.
+         */
+        const unlockedPayment = await this.deps.payments.findById(scope, paymentId, tx);
+        if (unlockedPayment?.orderId != null) {
+          await this.lockSuspendableService(scope, unlockedPayment.orderId, tx);
+        }
         const locked = await this.deps.repository.lockPayment(scope, paymentId, tx);
         if (!locked) {
           throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
@@ -588,6 +611,10 @@ export class RefundService {
         const unlocked = await this.deps.repository.findById(scope, refundId, tx);
         if (unlocked === null) {
           throw errors.notFound(COMMERCE_ERROR_CODES.REFUND_NOT_FOUND, 'Unknown refund.');
+        }
+        // R12 F1 (Codex on #360): the service it may suspend first, as `request` takes it.
+        if (unlocked.orderId !== null) {
+          await this.lockSuspendableService(scope, unlocked.orderId, tx);
         }
         if (!(await this.deps.repository.lockPayment(scope, unlocked.paymentId, tx))) {
           throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
@@ -1185,6 +1212,21 @@ export class RefundService {
       aggregateId: refund.paymentId,
       payload: { ...common, cause: result.cause },
     });
+  }
+
+  /** R12 F1: locks the row of the service a full refund of this order would suspend. */
+  private async lockSuspendableService(
+    scope: TenantContext,
+    orderId: OrderId,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const order = await this.deps.orders.findById(scope, orderId, tx);
+    if (order === null || !FULL_REFUND_SUSPENDS.has(order.purpose)) return;
+    await this.deps.serviceSuspension.lockServiceOf(
+      scope,
+      { orderId: order.id, purpose: order.purpose },
+      tx,
+    );
   }
 
   private async completed(

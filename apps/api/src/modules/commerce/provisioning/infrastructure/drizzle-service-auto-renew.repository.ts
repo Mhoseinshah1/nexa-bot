@@ -321,11 +321,13 @@ export class DrizzleServiceAutoRenewRepository implements AutoRenewRepository {
      */
     /*
      * R12 F1 item 4: and the SERVICE is still the one claimed — ACTIVE, and still the run's
-     * owner's — read with the service row LOCKED (`FOR UPDATE OF s`), in the settling
-     * transaction. The settlement's own check (`prepareCommercialAction`) runs under the
-     * lifecycle advisory lock, which a provisioner's TERMINATE or SUSPEND does not take: a
-     * state change committed between that read and this one is seen here, and one that has
-     * not committed yet waits behind this lock and then finds the renewal already decided.
+     * owner's — read with the service row LOCKED (`FOR NO KEY UPDATE OF s`, the mode of
+     * `ServiceRepository.lockForUpdate`), in the settling transaction. The renewal asks this
+     * FIRST in that transaction (`beforeSettlement`), so the row is taken before the lifecycle
+     * lock, as every planner takes them (Codex on #360: taken after it, it was a lock cycle with
+     * a TERMINATE being planned), and is held to the commit: a TERMINATE, a SUSPEND or a
+     * transfer cannot commit while the renewal settles, and one committed before is refused
+     * here. Asked again after the debit, where re-taking the held lock waits for nothing.
      */
     const rows = await this.rows(
       tx,
@@ -335,7 +337,7 @@ export class DrizzleServiceAutoRenewRepository implements AutoRenewRepository {
              AND s.expires_at = r.basis_expires_at
              AND s.state = 'ACTIVE'
              AND s.customer_id = r.customer_id
-           FOR UPDATE OF s`,
+           FOR NO KEY UPDATE OF s`,
     );
     return rows.length === 1;
   }

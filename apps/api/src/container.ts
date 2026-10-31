@@ -58,6 +58,7 @@ import {
 import type {
   AdminId,
   OrderId,
+  OrderPurpose,
   TemplateKey,
   ProductDisplay,
   AuditWriter,
@@ -3648,6 +3649,16 @@ export function createContainer(
   );
   const deliveryQrPreview = new QrTemplatePreviewService(guard, deliveryQrRenderer);
 
+  /** R12 F1 item 3: the service a refund of this order concerns — the purchase's, or the renewal's. */
+  const refundServiceIdOf = async (
+    scope: TenantContext,
+    input: { readonly orderId: OrderId; readonly purpose: OrderPurpose },
+    tx: TransactionScope,
+  ): Promise<string | null> =>
+    input.purpose === 'RENEW'
+      ? ((await commercialActionRepository.findByOrderId(scope, input.orderId, tx))?.serviceId ??
+        null)
+      : ((await serviceRepository.findByOrderId(scope, input.orderId, tx))?.id ?? null);
   const refundService = new RefundService({
     cashback: cashbackService,
     referrals: referralCommissionService,
@@ -3699,12 +3710,16 @@ export function createContainer(
      * refunded customer still owns it.
      */
     serviceSuspension: {
+      /*
+       * Codex on #360: the row a transfer locks first, taken before the refund's payment lock;
+       * held to the commit, so the owner `planStatusWithin` re-reads below is the one that holds.
+       */
+      lockServiceOf: async (scope, input, tx) => {
+        const serviceId = await refundServiceIdOf(scope, input, tx);
+        if (serviceId !== null) await serviceRepository.lockForUpdate(scope, serviceId, tx);
+      },
       suspendForFullRefund: async (scope, actor, input, now, tx) => {
-        const serviceId =
-          input.purpose === 'RENEW'
-            ? ((await commercialActionRepository.findByOrderId(scope, input.orderId, tx))
-                ?.serviceId ?? null)
-            : ((await serviceRepository.findByOrderId(scope, input.orderId, tx))?.id ?? null);
+        const serviceId = await refundServiceIdOf(scope, input, tx);
         if (serviceId === null) {
           return { outcome: 'NOT_PLANNED', serviceId: null, reason: 'NO_SERVICE' };
         }
