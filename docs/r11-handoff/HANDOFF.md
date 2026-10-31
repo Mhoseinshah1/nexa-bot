@@ -24,6 +24,16 @@ in the session scratchpad, so if lost, rebuild it from the PR descriptions above
 
 ## Owner decisions this session (binding)
 
+- 2026-10-31 token-budget rules, binding FROM THE NEXT SESSION (in-flight Phase 2 keeps its
+  models and rules):
+  1. One phase per session: when a phase ends, write the phase report + handoff and STOP; the
+     owner starts a fresh session for the next phase.
+  2. Lead = Sonnet for coordination. For money/ledger/payment/security PRs spawn ONE fresh Opus
+     reviewer per PR for the lead review; implementers stay as the plan says.
+  3. Mutation checks only for money, security and guard changes; UI/text/docs PRs skip them.
+  4. No repeated wait tasks; one blocking wait per run.
+  5. Disable unused connectors/MCP tools in the session where possible.
+
 - 2026-10-31 (budget): after Phase 2 merges, STOP — write the Phase 2 report and this handoff,
   then wait for the owner (the owner runs the MirzaBot cutover first). Until then at most 2
   implementers at a time. Later: Phase 4 = `NEXA-PROMPT-SAI.md` ONLY (SAI-QUALITY and SAI-GUIDE
