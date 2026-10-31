@@ -80,6 +80,31 @@ export class MissingTranslationError extends Error {
  * templates whose copy says تومان and ریال for the same `{price}` token.
  */
 export function formatMoney(value: Money, locale: Locale = DEFAULT_LOCALE): string {
+  const { figure, unit } = moneyParts(value, locale);
+  return `${figure} ${unit}`;
+}
+
+/** U+2066 LEFT-TO-RIGHT ISOLATE … U+2069 POP DIRECTIONAL ISOLATE. */
+export const LTR_ISOLATE = '\u2066';
+export const POP_DIRECTIONAL_ISOLATE = '\u2069';
+
+/**
+ * `formatMoney`, with the figure — sign, digits, group and decimal separators — wrapped in a
+ * left-to-right isolate (R11 hotfix): U+2066, «104,000», U+2069, then « تومان». The same
+ * figure and the same unit; only the two invisible marks are added.
+ *
+ * For text that carries no formatting and sits in a right-to-left line: an inline-keyboard
+ * button, whose text the Bot API takes as plain text. The isolate keeps the figure one
+ * left-to-right run in logical order whatever surrounds it, so its digit groups can never be
+ * reordered and the unit stays after it. Everywhere else `formatMoney` is used as it is.
+ */
+export function formatMoneyIsolated(value: Money, locale: Locale = DEFAULT_LOCALE): string {
+  const { figure, unit } = moneyParts(value, locale);
+  return `${LTR_ISOLATE}${figure}${POP_DIRECTIONAL_ISOLATE} ${unit}`;
+}
+
+/** The one place a money figure and its unit are worked out, for both formatters above. */
+function moneyParts(value: Money, locale: Locale): { figure: string; unit: string } {
   const exponent = CURRENCY_EXPONENT[value.currency];
   const negative = value.amountMinor < 0n;
   const digits = (negative ? -value.amountMinor : value.amountMinor).toString();
@@ -95,7 +120,7 @@ export function formatMoney(value: Money, locale: Locale = DEFAULT_LOCALE): stri
   const grouped = major.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   const amount = minor ? `${grouped}.${minor}` : grouped;
   const unit = CURRENCY_UNIT[locale][value.currency] ?? value.currency;
-  return `${negative ? '-' : ''}${amount} ${unit}`;
+  return { figure: `${negative ? '-' : ''}${amount}`, unit };
 }
 
 const CURRENCY_UNIT: Record<Locale, Partial<Record<Money['currency'], string>>> = {
@@ -119,25 +144,6 @@ export function escapeTelegramHtml(value: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-}
-
-/** U+0336 COMBINING LONG STROKE OVERLAY: what `strikeThroughText` draws through each character. */
-export const STRIKE_THROUGH_MARK = '\u0336';
-
-/**
- * Text drawn struck through without any markup (R11 A9): U+0336 after every character.
- *
- * For the one place Telegram gives formatting no way in — an inline-keyboard button's text,
- * which the Bot API takes as plain text with no `parse_mode` and no entities — where a
- * customer is listed a price their personal discount replaces. Wherever the text CAN carry
- * formatting (a message body, a rich message's table) the real strikethrough is used
- * instead. Applied to text the caller formatted itself (`formatMoney`), never to a value a
- * template interpolates.
- */
-export function strikeThroughText(value: string): string {
-  return Array.from(value)
-    .map((character) => `${character}${STRIKE_THROUGH_MARK}`)
-    .join('');
 }
 
 /**

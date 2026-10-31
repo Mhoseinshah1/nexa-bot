@@ -10,6 +10,7 @@ import {
   ADMIN_MENU_BUTTON,
   MAIN_MENU_BUTTONS,
   errors,
+  isMoneyValue,
   mainMenuButtonIsGated,
   packMainMenuRows,
   templateDefinition,
@@ -29,7 +30,7 @@ import {
   type InlineButtonIcons,
   type InlineButtonStyles,
 } from '@nexa/contracts';
-import { CATALOGUE_FA, formatMoney, strikeThroughText } from '@nexa/i18n';
+import { CATALOGUE_FA, formatMoney, formatMoneyIsolated } from '@nexa/i18n';
 import {
   buttonsHaveIcons,
   withoutButtonIcons,
@@ -100,7 +101,6 @@ import type {
   AppearanceReader,
   CustomerButton,
   CustomerButtonLabel,
-  CustomerCallbackButton,
   CustomerCaption,
   CustomerMediaGroupMessage,
   CustomerButtonRow,
@@ -1309,34 +1309,48 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
    *
    * `formatMoney` is the same function the message body uses, so an amount on a button
    * and the same amount in the text it sits under cannot be written two different ways.
+   *
+   * R11 hotfix: `isolateMoney` (a personally discounted line) writes each amount with
+   * `formatMoneyIsolated` instead — the same figure and unit, the figure in a left-to-right
+   * isolate — so the price stays one run in logical order inside the right-to-left label
+   * the suffix follows. Without it the label is exactly what it always was.
    */
-  private async labelText(scope: ScopeContext, label: CustomerButtonLabel): Promise<string> {
+  private async labelText(
+    scope: ScopeContext,
+    label: CustomerButtonLabel,
+    isolateMoney = false,
+  ): Promise<string> {
+    const money = isolateMoney ? formatMoneyIsolated : formatMoney;
     if (label.kind === 'TEMPLATE') {
       // A button carries no entities, so a marker on a label is always its fallback emoji.
-      return appearanceFallbackText(
-        await this.templates.render(scope, label.key, label.values ?? {}),
-      );
+      const values = label.values ?? {};
+      const text = appearanceFallbackText(await this.templates.render(scope, label.key, values));
+      return isolateMoney ? isolateRenderedMoney(text, values) : text;
     }
-    if (label.kind === 'AMOUNT') return formatMoney(label.amount);
-    return label.amount === undefined ? label.text : `${label.text} — ${formatMoney(label.amount)}`;
+    if (label.kind === 'AMOUNT') return money(label.amount);
+    return label.amount === undefined ? label.text : `${label.text} — ${money(label.amount)}`;
   }
 
   /**
-   * R11 A9: what follows a personally discounted line's label — the price it replaces,
-   * struck through, and the tag. A button is plain text (no `parse_mode`, no entities), so
-   * the strike is `strikeThroughText`; the price is `formatMoney`, like the label's own.
+   * R11 hotfix: what follows a personally discounted BUTTON's label (the discounted price,
+   * the one the quote charges): «(20٪ تخفیف)», `bot.pricing.personal_discount_button_suffix`.
+   * Never the price it replaces: a button is plain text (no `parse_mode`, no entities), and
+   * the U+0336 strike A9 drew there split the figure into reversed bidi runs inside the
+   * right-to-left label. The struck price stays where real formatting exists — the rich plan
+   * table below, the invoice text, the mini app.
    */
-  private async personalDiscountSuffix(
+  private async personalDiscountButtonSuffix(
     scope: ScopeContext,
-    discount: NonNullable<CustomerCallbackButton['personalDiscount']>,
+    percent: number,
   ): Promise<string> {
-    return `${strikeThroughText(formatMoney(discount.listPrice))} ${await this.personalDiscountTag(
-      scope,
-      discount.percent,
-    )}`;
+    return appearanceFallbackText(
+      await this.templates.render(scope, 'bot.pricing.personal_discount_button_suffix', {
+        percent,
+      }),
+    );
   }
 
-  /** R11 A9: `bot.pricing.personal_discount_tag`, as plain text (a button, a table cell). */
+  /** R11 A9: `bot.pricing.personal_discount_tag`, as plain text (the rich plan table's cell). */
   private async personalDiscountTag(scope: ScopeContext, percent: number): Promise<string> {
     return appearanceFallbackText(
       await this.templates.render(scope, 'bot.pricing.personal_discount_tag', { percent }),
@@ -1402,13 +1416,15 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     const ownIconCategories: string[] = [];
     for (const button of buttons) {
       const category = categoryOf(button);
-      const ownLabel = await this.labelText(scope, button.label);
-      // R11 A9: a personally discounted line names the price it replaces and the percent.
+      // R11 A9 + hotfix: a personally discounted line shows ONE price, isolated, and the percent.
       const discount = 'data' in button ? button.personalDiscount : undefined;
       const label =
         discount === undefined
-          ? ownLabel
-          : `${ownLabel} ${await this.personalDiscountSuffix(scope, discount)}`;
+          ? await this.labelText(scope, button.label)
+          : `${await this.labelText(scope, button.label, true)} ${await this.personalDiscountButtonSuffix(
+              scope,
+              discount.percent,
+            )}`;
       // Item 2: a category's `after` emoji follows its label; with none the label is unchanged.
       const text =
         category === undefined
@@ -1991,3 +2007,27 @@ const MESSAGE_FOR: Readonly<Record<SendFailureReason, string>> = {
     'replies through it are refused. Replace the token on the bot\u2019s page in the Web Admin; ' +
     '`botctl telegram status` shows the same state.',
 };
+
+/**
+ * R11 hotfix: a rendered TEMPLATE label with each of its Money values' text — exactly what the
+ * renderer wrote for it, `formatMoney` — rewritten as `formatMoneyIsolated`. One pass, and only
+ * where the match does not continue a figure, so an amount is never found inside a longer
+ * number in the tenant's own title («180,000 تومان» stays whole for a price of 80,000). A
+ * label whose override does not show the amount is returned as it is.
+ */
+function isolateRenderedMoney(text: string, values: TemplateValues): string {
+  const amounts = new Map<string, string>();
+  for (const value of Object.values(values)) {
+    if (value !== undefined && isMoneyValue(value)) {
+      amounts.set(formatMoney(value), formatMoneyIsolated(value));
+    }
+  }
+  if (amounts.size === 0) return text;
+  const alternatives = [...amounts.keys()].map((shown) =>
+    shown.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'),
+  );
+  return text.replace(
+    new RegExp(`(?<![\\d,.-])(?:${alternatives.join('|')})`, 'gu'),
+    (shown) => amounts.get(shown) ?? shown,
+  );
+}
