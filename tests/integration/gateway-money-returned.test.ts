@@ -112,6 +112,8 @@ class FakeTonPays {
     { invoiceId: string; orderId: string; amount: number; status: string; paid: unknown }
   >();
   readonly checks: string[] = [];
+  /** R12 F1 item 5: a `request_amount` the check reports instead of the invoice's own. */
+  readonly reportedAmount = new Map<string, number>();
   private seq = 0;
 
   readonly fetch: FetchLike = async (url, init) => {
@@ -148,7 +150,7 @@ class FakeTonPays {
       return json(200, {
         invoice_id: invoice.invoiceId,
         order_id: invoice.orderId,
-        request_amount: invoice.amount,
+        request_amount: this.reportedAmount.get(invoiceId) ?? invoice.amount,
         final_amount: invoice.amount + 37,
         status: invoice.status,
         paid: invoice.paid,
@@ -669,6 +671,38 @@ describe('R12 F1 — gateway money for an attempt that can no longer pay its ord
       expect((await invoiceOf(second.paymentId)).late_completion_observed_at).toBeNull();
       // And the PENDING payment can never settle the order now.
       expect(await paymentState(first.paymentId)).toBe('CONFIRMED');
+    });
+  });
+
+  describe('item 5: TonPays approval and the amount', () => {
+    it('an approval whose request_amount is not what Nexa sent is held for an operator, never settled', async () => {
+      await enable('TONPAYS', TONPAYS_KEY);
+      const orderId = await awaitingOrder();
+      const { paymentId, invoiceId } = await attempt(orderId, 'TONPAYS');
+      tonpays.pay(invoiceId);
+      // Nexa sent 250,000 Toman; the check says the invoice asked for 25,000.
+      tonpays.reportedAmount.set(invoiceId, 25_000);
+      await laterPass();
+
+      expect(await paymentState(paymentId)).toBe('UNKNOWN');
+      expect(await orderState(orderId)).toBe('AWAITING_PAYMENT');
+      expect(await lateCredits(paymentId)).toHaveLength(0);
+      expect(await walletTotal()).toBe(0n);
+      const [held] = await rows<{ provider_paid: boolean | null }>(
+        sql`SELECT provider_paid FROM gateway_invoices WHERE payment_id = ${paymentId}`,
+      );
+      expect(held?.provider_paid).toBe(false);
+    });
+
+    it('the figure Nexa sent settles as before', async () => {
+      await enable('TONPAYS', TONPAYS_KEY);
+      const orderId = await awaitingOrder();
+      const { paymentId, invoiceId } = await attempt(orderId, 'TONPAYS');
+      tonpays.pay(invoiceId);
+      tonpays.reportedAmount.set(invoiceId, Number(PRICE));
+      await laterPass();
+      expect(await paymentState(paymentId)).toBe('CONFIRMED');
+      expect(await orderState(orderId)).toBe('PAID');
     });
   });
 
