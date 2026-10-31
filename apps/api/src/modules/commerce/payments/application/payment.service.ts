@@ -3,6 +3,7 @@ import {
   COMMERCE_ERROR_CODES,
   MAX_MONEY_AMOUNT_MINOR,
   PAYMENT_GATEWAY_DESCRIPTORS,
+  PAYMENT_GATEWAY_PROVIDERS,
   TONPAYS_TELEGRAM_REVIEW_WINDOW_MS,
   PAYMENT_RECEIPT_MAX_PER_PAYMENT,
   PAYMENT_WINDOW_MINUTES_MIN,
@@ -418,6 +419,8 @@ export type GatewayConfirmation =
       readonly payment: PaymentRecord;
       /** The settled order's purpose; absent for a top-up. Evidence only (FIX-01). */
       readonly orderPurpose?: OrderPurpose;
+      /** R12 F1: the order's other open link attempts this settlement closed. */
+      readonly closedSiblings?: readonly PaymentId[];
     }
   | { readonly outcome: 'ALREADY_CONFIRMED'; readonly payment: PaymentRecord }
   | {
@@ -432,6 +435,11 @@ export type GatewayConfirmation =
          * (`<paymentId>:late-credit`). It never also settles its order or top-up.
          */
         | 'LATE_CREDIT_ALREADY_APPLIED'
+        /*
+         * R12 F1 item 6: a recorded charge (Stars) that Telegram reported refunded before it
+         * settled. Never settled; recorded as a late completion for the operator.
+         */
+        | 'PROVIDER_PAYMENT_REFUNDED'
         /*
          * CentralPay: the provider reference the lane bound is not this attempt's under the
          * payment's lock — the money is not provably this payment's. Held, never settled.
@@ -475,6 +483,17 @@ export type LateGatewayCredit =
 
 /** The audit action of every late credit this path writes. */
 export const GATEWAY_LATE_CREDIT_ACTION = 'payment.gateway_late_credit';
+
+/**
+ * R12 F1: the routes whose open attempts an order's settlement closes — approved by the
+ * provider's inquiry and paid on a LINK. A card transfer keeps its receipt path (the customer
+ * may already have transferred), and a Stars invoice is charged by Telegram itself.
+ */
+const LINK_INQUIRY_PROVIDERS: readonly PaymentGatewayProvider[] = PAYMENT_GATEWAY_PROVIDERS.filter(
+  (provider) =>
+    PAYMENT_GATEWAY_DESCRIPTORS[provider].approval === 'INQUIRY' &&
+    PAYMENT_GATEWAY_DESCRIPTORS[provider].invoiceForm === 'LINK',
+);
 
 /** How many random order ids a `numericIdentity` attempt draws before refusing (§3). */
 const NUMERIC_ORDER_ID_DRAWS = 5;
@@ -3890,6 +3909,18 @@ export class PaymentService {
           payment.gatewayProvider === null
             ? 'INQUIRY'
             : PAYMENT_GATEWAY_DESCRIPTORS[payment.gatewayProvider].approval;
+        /*
+         * R12 F1 item 6: a recorded charge (Stars) settles only while it is still recorded as
+         * paid, read under this lock — the lock `StarsPaymentService.recordRefundedPayment`
+         * marks a refunded charge under. A charge Telegram refunded before it settled is never
+         * settled; the lane records it as a late completion and the refund's alert is open.
+         */
+        if (approval === 'RECORDED_PAYMENT') {
+          const recorded = await this.deps.gatewayInvoices.findByPayment(scope, paymentId, tx);
+          if (recorded === null || recorded.providerPaid !== true) {
+            return { outcome: 'NOT_ELIGIBLE', reason: 'PROVIDER_PAYMENT_REFUNDED', payment };
+          }
+        }
         const confirmation = {
           evidenceKind:
             approval === 'RECORDED_PAYMENT'
@@ -3929,7 +3960,14 @@ export class PaymentService {
           now,
           GATEWAY_CONFIRM_ACTION,
         );
-        return { outcome: 'SETTLED', payment: settled.payment, orderPurpose: order.purpose };
+        return {
+          outcome: 'SETTLED',
+          payment: settled.payment,
+          orderPurpose: order.purpose,
+          ...(settled.closedSiblings === undefined || settled.closedSiblings.length === 0
+            ? {}
+            : { closedSiblings: settled.closedSiblings }),
+        };
       },
     );
   }
@@ -3946,13 +3984,17 @@ export class PaymentService {
    * - an entry already under `<paymentId>:late-credit` means the credit was done: `CREDITED`,
    *   `credited: false`, and nothing is written twice — however many webhooks, inquiries,
    *   polling passes or replicas arrive, and whatever the setting says by now;
-   * - the route must name a late-credit setting in its descriptor, and the setting must be ON
-   *   (read in this transaction): OFF is today's behaviour exactly, a late completion;
+   * - for a LATE approval, the route must name a late-credit setting in its descriptor, and the
+   *   setting must be ON (read in this transaction): OFF is today's behaviour exactly, a late
+   *   completion. Money RETURNED for an attempt that can no longer pay its order (R12 F1: the
+   *   payment was CANCELLED, or it is PENDING inside its deadline and its order was paid
+   *   another way) is credited whatever the switch says — nothing else would ever give it back;
    * - the invoice's RECORDED answer must still be an approval by the route's own evidence
    *   table (the same one an operator's reconciliation needs), and the request amount the
    *   provider echoed must equal the amount Nexa sent. A mismatch credits nothing;
-   * - the payment must be `EXPIRED`, `UNKNOWN`, or `PENDING` past its effective deadline;
-   *   `CONFIRMED` and `FAILED` are never credited;
+   * - the payment must be `EXPIRED`, `UNKNOWN`, `PENDING` past its effective deadline (a late
+   *   approval), or `CANCELLED` / `PENDING` with its order no longer awaiting payment (money
+   *   returned); `CONFIRMED` and `FAILED` are never credited (`lateCreditStateDecision`);
    * - and the amount is the payment's OWN frozen amount, in the currency this installation
    *   still sells in.
    *
@@ -4014,24 +4056,55 @@ export class PaymentService {
             credited: false,
           };
         }
-        const settingName = PAYMENT_GATEWAY_DESCRIPTORS[payment.gatewayProvider].lateCreditSetting;
-        if (settingName === null) {
-          return { outcome: 'NOT_ELIGIBLE', reason: 'ROUTE_HAS_NO_LATE_CREDIT', payment };
+        /*
+         * R12 F1: whether the ORDER can still take this money, asked only of a PENDING payment
+         * inside its deadline — the one case where the answer decides. Read under the payment's
+         * lock, after it; an order leaves `AWAITING_PAYMENT` one way only, so an order read as
+         * paid (or closed) here cannot be awaiting payment again by the time this commits.
+         */
+        const deadline = gatewaySettlementDeadline(payment);
+        let orderAwaitingPayment: boolean | null = null;
+        if (
+          payment.state === 'PENDING' &&
+          payment.orderId !== null &&
+          deadline !== null &&
+          now.getTime() < deadline.getTime()
+        ) {
+          const order = await this.deps.orders.findById(scope, payment.orderId, tx);
+          orderAwaitingPayment =
+            order !== null &&
+            order.customerId === payment.customerId &&
+            order.state === 'AWAITING_PAYMENT';
         }
-        const enabled = await this.deps.settings.valueOf<boolean>(
-          scope,
-          settingKeyOf(settingName),
-          tx,
-        );
-        if (enabled !== true) return { outcome: 'NOT_ELIGIBLE', reason: 'SETTING_OFF', payment };
-
         const state = lateCreditStateDecision({
           state: payment.state,
-          deadline: gatewaySettlementDeadline(payment),
+          deadline,
           now,
+          orderAwaitingPayment,
         });
         if (!state.creditable) {
           return { outcome: 'NOT_ELIGIBLE', reason: state.reason, payment };
+        }
+        /*
+         * Only a LATE approval waits for the route's switch (R5A item 4). Money RETURNED for an
+         * attempt that can no longer pay its order (R12 F1: a cancelled attempt, an order paid
+         * another way) is credited whatever the switch says and on every inquiry route — off,
+         * nothing would ever give it back.
+         */
+        if (state.basis === 'LATE_APPROVAL') {
+          const settingName =
+            PAYMENT_GATEWAY_DESCRIPTORS[payment.gatewayProvider].lateCreditSetting;
+          if (settingName === null) {
+            return { outcome: 'NOT_ELIGIBLE', reason: 'ROUTE_HAS_NO_LATE_CREDIT', payment };
+          }
+          const enabled = await this.deps.settings.valueOf<boolean>(
+            scope,
+            settingKeyOf(settingName),
+            tx,
+          );
+          if (enabled !== true) {
+            return { outcome: 'NOT_ELIGIBLE', reason: 'SETTING_OFF', payment };
+          }
         }
         /*
          * The re-verify rule, held here as well as in the lane: the invoice's recorded inquiry
@@ -4047,6 +4120,10 @@ export class PaymentService {
             paid: invoice.providerPaid,
           })
         ) {
+          return { outcome: 'NOT_ELIGIBLE', reason: 'APPROVAL_NOT_VERIFIED', payment };
+        }
+        // A reference-bound route (CentralPay) credits only with its reference bound, as it settles.
+        if (requiresProviderReference(invoice.provider) && invoice.providerChargeId === null) {
           return { outcome: 'NOT_ELIGIBLE', reason: 'APPROVAL_NOT_VERIFIED', payment };
         }
         if (
@@ -4115,6 +4192,7 @@ export class PaymentService {
               entryId: entry.id,
               amountMinor: entry.amount.amountMinor.toString(),
               currency: entry.amount.currency,
+              basis: state.basis,
             },
           });
           await this.deps.audit.record(
@@ -4135,6 +4213,9 @@ export class PaymentService {
                 balanceBeforeMinor: before.amountMinor.toString(),
                 providerStatus: invoice.providerStatus,
                 evidenceNote: input.evidenceNote,
+                // R12 F1: a late approval (behind the switch), or money returned for an attempt
+                // that could no longer pay its order (whatever the switch says).
+                basis: state.basis,
                 credited: true,
               },
               result: 'SUCCESS',
@@ -5385,7 +5466,12 @@ export class PaymentService {
     },
     /** As `confirmAndCredit`'s: `UNKNOWN` only for a reconciliation (§9.6.4). */
     from: 'PENDING' | 'UNKNOWN' = 'PENDING',
-  ): Promise<{ readonly payment: PaymentRecord; readonly order: OrderRecord }> {
+  ): Promise<{
+    readonly payment: PaymentRecord;
+    readonly order: OrderRecord;
+    /** R12 F1: the other open link attempts this settlement closed (none on a replay). */
+    readonly closedSiblings?: readonly PaymentId[];
+  }> {
     const moved =
       from === 'UNKNOWN'
         ? await this.deps.repository.reconcileConfirm(scope, payment.id, confirmation, now, tx)
@@ -5571,6 +5657,41 @@ export class PaymentService {
         COMMERCE_ERROR_CODES.SETTLEMENT_NOT_FUNDED,
         'That order is no longer awaiting payment.',
         { reason: 'ORDER_NOT_AWAITING_PAYMENT' },
+      );
+    }
+
+    /*
+     * R12 F1: the order can take no more money, so the OTHER open link-invoice attempts for it
+     * (a second provider the customer also opened) are closed in this transaction — their
+     * screens stop offering a payable link and none is handed back as an open attempt. A
+     * provider may still accept money on such a link until its own deadline; the lane keeps
+     * asking until then, and anything it confirms is returned to the wallet.
+     */
+    const closedSiblings = await this.deps.repository.closeOpenGatewaySiblings(
+      scope,
+      { orderId: order.id, exceptPaymentId: confirmed.id, providers: LINK_INQUIRY_PROVIDERS },
+      now,
+      tx,
+    );
+    for (const siblingId of closedSiblings) {
+      await this.deps.audit.record(
+        scope,
+        actor,
+        {
+          action: 'payment.withdraw',
+          entityType: 'Payment',
+          entityId: siblingId,
+          before: { state: 'PENDING' },
+          after: {
+            state: 'CANCELLED',
+            orderId: order.id,
+            // Why this installation closed it: another payment settled the order.
+            withdrawnBy: 'ORDER_SETTLED',
+            settledByPaymentId: confirmed.id,
+          },
+          result: 'SUCCESS',
+        },
+        tx,
       );
     }
 
@@ -5786,7 +5907,7 @@ export class PaymentService {
       );
     }
 
-    return { payment: confirmed, order: outcome };
+    return { payment: confirmed, order: outcome, closedSiblings };
   }
 
   /**

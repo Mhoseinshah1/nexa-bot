@@ -89,6 +89,7 @@ const TITLES: Readonly<Record<string, WebKey>> = {
   'payments.gateway_late_completion': 'web.nc_t_late_completion',
   'payments.gateway_identity_mismatch': 'web.nc_t_identity_mismatch',
   'payments.gateway_charge_unmatched': 'web.nc_t_charge_unmatched',
+  'payments.gateway_charge_refunded': 'web.nc_t_charge_refunded',
   'payments.receipt_push_failed': 'web.nc_t_receipt_push_failed',
   'payments.refund_request_push_failed': 'web.nc_t_refund_push_failed',
   'payments.gateway_misconfigured': 'web.nc_t_gateway_misconfigured',

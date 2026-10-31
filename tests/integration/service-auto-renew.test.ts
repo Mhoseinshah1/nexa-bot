@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { sql } from 'drizzle-orm';
+import { Client } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   COMMERCE_ERROR_CODES,
@@ -600,6 +601,90 @@ describe('R10 D1 — automatic renewal', () => {
       expect.objectContaining({ state: 'REFUSED', refusal: 'NOT_RENEWABLE', order_id: null }),
     ]);
     expect(await renewOrders(serviceId)).toEqual([expect.objectContaining({ state: 'CANCELLED' })]);
+  });
+
+  /*
+   * R12 F1 item 4: the SERVICE is re-checked where the money moves, with its row locked. A
+   * provisioner's TERMINATE (or SUSPEND) does not take the lifecycle advisory lock the
+   * settlement's own check runs under, so the change is committed — by another connection —
+   * just before the settling transaction asks `periodCurrent`, after that check. The service's
+   * state is not a key column, so that commit does not wait on the settlement.
+   */
+  async function raceAtPeriodCheck(change: (client: Client, serviceId: string) => Promise<void>) {
+    const serviceId = await activeService(customerA);
+    await optIn(customerA, serviceId);
+    await credit(customerA, PRICE);
+    const base = deps();
+    const other = new Client({ connectionString: process.env['TEST_DATABASE_URL'] });
+    await other.connect();
+    try {
+      const repository = new Proxy(base.repository, {
+        get(target, property, receiver) {
+          if (property === 'periodCurrent') {
+            return async (...args: Parameters<typeof target.periodCurrent>) => {
+              await change(other, serviceId);
+              return target.periodCurrent(...args);
+            };
+          }
+          const value: unknown = Reflect.get(target, property, receiver);
+          return typeof value === 'function'
+            ? (value as (...rest: unknown[]) => unknown).bind(target)
+            : value;
+        },
+      });
+      const racing = new ServiceAutoRenewService({ ...base, repository });
+      const report = await racing.runOnce(tenantA);
+      return { serviceId, report };
+    } finally {
+      await other.end();
+    }
+  }
+
+  it('R12 F1: a service terminated between the claim and the settlement is never debited', async () => {
+    const { serviceId, report } = await raceAtPeriodCheck(async (client, id) => {
+      await client.query(
+        `UPDATE services SET state = 'TERMINATED', terminated_at = now() WHERE id = $1`,
+        [id],
+      );
+    });
+    expect(report).toEqual({ renewed: 0, short: 0, refused: 1 });
+    expect(await purchases(customerA), 'only the original purchase').toHaveLength(1);
+    expect(await balance(customerA)).toBe(PRICE);
+    expect(await runsOf(serviceId)).toEqual([
+      expect.objectContaining({ state: 'REFUSED', refusal: 'NOT_RENEWABLE', order_id: null }),
+    ]);
+    expect(await renewOrders(serviceId)).toEqual([expect.objectContaining({ state: 'CANCELLED' })]);
+  });
+
+  it('R12 F1: the settlement already refuses a service terminated before it starts', async () => {
+    /*
+     * Found on main: `prepareCommercialAction` checks the owner and the state under the
+     * lifecycle lock. Pinned here so the period check is not the only line of defence. (A
+     * transfer racing the settlement was not reproducible this way: moving `customer_id` waited
+     * on the settling transaction's own locks on the service row until it ended.)
+     */
+    const serviceId = await activeService(customerA);
+    await optIn(customerA, serviceId);
+    await credit(customerA, PRICE);
+    const base = deps();
+    const racing = new ServiceAutoRenewService({
+      ...base,
+      commercial: {
+        renewalQuote: (...args) => base.commercial.renewalQuote(...args),
+        draft: (...args) => base.commercial.draft(...args),
+        confirm: async (...args) => {
+          const confirmed = await base.commercial.confirm(...args);
+          await run(
+            sql`UPDATE services SET state = 'TERMINATED', terminated_at = now()
+                 WHERE id = ${serviceId}`,
+          );
+          return confirmed;
+        },
+      },
+    });
+    expect(await racing.runOnce(tenantA)).toEqual({ renewed: 0, short: 0, refused: 1 });
+    expect(await purchases(customerA)).toHaveLength(1);
+    expect(await balance(customerA)).toBe(PRICE);
   });
 
   it('the run row refuses an incoherent state', async () => {

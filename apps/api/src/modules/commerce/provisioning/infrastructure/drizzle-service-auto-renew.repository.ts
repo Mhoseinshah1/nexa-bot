@@ -319,12 +319,23 @@ export class DrizzleServiceAutoRenewRepository implements AutoRenewRepository {
      * `services.expires_at` in SQL at the claim, so an unchanged deadline is EQUAL to the
      * microsecond, and any renewal applied since — a manual one among them — is not.
      */
+    /*
+     * R12 F1 item 4: and the SERVICE is still the one claimed — ACTIVE, and still the run's
+     * owner's — read with the service row LOCKED (`FOR UPDATE OF s`), in the settling
+     * transaction. The settlement's own check (`prepareCommercialAction`) runs under the
+     * lifecycle advisory lock, which a provisioner's TERMINATE or SUSPEND does not take: a
+     * state change committed between that read and this one is seen here, and one that has
+     * not committed yet waits behind this lock and then finds the renewal already decided.
+     */
     const rows = await this.rows(
       tx,
       sql`SELECT 1 FROM service_auto_renew_runs r
             JOIN services s ON s.tenant_id = r.tenant_id AND s.id = r.service_id
            WHERE r.tenant_id = ${tenantId} AND r.id = ${runId}
-             AND s.expires_at = r.basis_expires_at`,
+             AND s.expires_at = r.basis_expires_at
+             AND s.state = 'ACTIVE'
+             AND s.customer_id = r.customer_id
+           FOR UPDATE OF s`,
     );
     return rows.length === 1;
   }

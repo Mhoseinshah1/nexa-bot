@@ -119,6 +119,8 @@ export const OPS_LOG_TYPES = {
       'ops.financial.late_completion',
       'ops.financial.outcome_unknown',
       'ops.financial.late_credit',
+      // R12 F1: money for an attempt that could no longer pay its order, returned to the wallet.
+      'ops.financial.late_credit_returned',
       // R9 C1: the provider's webhook `credit_amount` differs from what Nexa invoiced.
       'ops.financial.credit_amount_mismatch',
     ],
@@ -729,6 +731,15 @@ export const OPS_LOG_TEMPLATES = [
     'Log L5 (R5A item 4): a gateway approved a payment after Nexa had closed it, its inquiry re-verified the approval, and the paid amount was credited to the customer’s wallet. The order was not reopened and no service was built.',
     [
       ...req('gateway', 'reference', 'amount', 'expiredAt', 'approvedAt'),
+      ...WHO(),
+      ...opt('orderCode', 'serviceUsername', 'balanceBefore', 'balanceAfter'),
+    ],
+  ),
+  logTemplate(
+    'ops.financial.late_credit_returned',
+    'Log L5 (R12 F1): a gateway confirmed money for an attempt that could no longer pay its order — the attempt had been cancelled (the order was paid from the wallet, the customer withdrew it) or the order was already paid by another payment. Its inquiry re-verified the approval and the payment’s own principal was returned to the customer’s wallet, whatever the late-credit switch says. The order was not changed and no service was built.',
+    [
+      ...req('gateway', 'reference', 'amount', 'approvedAt'),
       ...WHO(),
       ...opt('orderCode', 'serviceUsername', 'balanceBefore', 'balanceAfter'),
     ],

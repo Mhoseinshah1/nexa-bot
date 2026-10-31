@@ -22,7 +22,9 @@ import { jitteredMs } from './inquiry-schedule.js';
 
 /**
  * The states a payment may be in for a late approval to be credited, judged under the
- * payment's lock.
+ * payment's lock — and on what BASIS it is credited.
+ *
+ * `LATE_APPROVAL` (R5A item 4) is credited only while the route's late-credit switch is ON:
  *
  * - `EXPIRED` — the sweep closed it; the customer was told so.
  * - `UNKNOWN` — a provider review ended with no trustworthy answer, or a mismatch held it.
@@ -31,12 +33,25 @@ import { jitteredMs } from './inquiry-schedule.js';
  * - `PENDING` — only once its effective deadline has passed (the expiry sweep has not run
  *   yet). Inside the deadline the ordinary settlement owns the approval.
  *
+ * `RETURNED` (R12 F1) is credited WHATEVER the switch says, because nothing else will ever
+ * give that money back:
+ *
+ * - `CANCELLED` — Nexa withdrew the attempt (the order was paid from the wallet, the customer
+ *   cancelled the order or withdrew the payment) while the provider's invoice stayed payable.
+ *   The money the provider confirms for it can never pay its order. Before R12 it was recorded
+ *   as a late completion and never credited.
+ * - `PENDING` inside its deadline whose ORDER is no longer awaiting payment — another payment
+ *   (another provider's attempt, the wallet, a transfer) settled it first. A second settlement
+ *   is impossible (one confirmed payment per order), so the money goes back to the wallet.
+ *
  * `CONFIRMED` is already settled (nothing is owed twice); `FAILED` was a definitive "no"
- * from the provider or an operator and is frozen; `CANCELLED` was withdrawn by the customer.
- * Both of those stay an operator's decision, recorded as a late completion.
+ * from the provider or an operator and is frozen — an operator's decision, recorded as a late
+ * completion.
  */
+export type LateCreditBasis = 'LATE_APPROVAL' | 'RETURNED';
+
 export type LateCreditStateDecision =
-  | { readonly creditable: true }
+  | { readonly creditable: true; readonly basis: LateCreditBasis }
   | {
       readonly creditable: false;
       readonly reason: 'ALREADY_CONFIRMED' | 'PAYMENT_CLOSED' | 'STILL_PAYABLE';
@@ -48,14 +63,25 @@ export function lateCreditStateDecision(input: {
   readonly deadline: Date | null;
   /** Read AFTER the payment's lock was taken. */
   readonly now: Date;
+  /**
+   * Whether the payment's ORDER still awaits payment, read under the payment's lock. Asked
+   * only of a PENDING payment inside its deadline; null for a top-up (no order) or when it
+   * was not read — and null is never "not awaiting": it credits nothing.
+   */
+  readonly orderAwaitingPayment?: boolean | null;
 }): LateCreditStateDecision {
   switch (input.state) {
     case 'EXPIRED':
     case 'UNKNOWN':
-      return { creditable: true };
+      return { creditable: true, basis: 'LATE_APPROVAL' };
+    case 'CANCELLED':
+      return { creditable: true, basis: 'RETURNED' };
     case 'PENDING':
-      return input.deadline === null || input.now.getTime() >= input.deadline.getTime()
-        ? { creditable: true }
+      if (input.deadline === null || input.now.getTime() >= input.deadline.getTime()) {
+        return { creditable: true, basis: 'LATE_APPROVAL' };
+      }
+      return input.orderAwaitingPayment === false
+        ? { creditable: true, basis: 'RETURNED' }
         : { creditable: false, reason: 'STILL_PAYABLE' };
     case 'CONFIRMED':
       return { creditable: false, reason: 'ALREADY_CONFIRMED' };
@@ -137,6 +163,26 @@ export function lateCreditPollAt(input: {
 export interface LateCreditPolicy {
   readonly enabled: boolean;
   readonly windowMs: number;
+}
+
+/**
+ * R12 F1: whether a CANCELLED attempt is still asked about on its ORDINARY schedule. Nexa
+ * withdrew it, but the provider's invoice stays payable until the attempt's own deadline, and
+ * money the customer sends before then is returned to the wallet (`RETURNED` above) — so the
+ * attempt is polled like an open one until that deadline, and no longer. A null deadline is
+ * "past", never "none". Independent of the late-credit switch.
+ */
+export function cancelledAttemptPollingOpen(input: {
+  /** A string: the claim carries the state as the row holds it. */
+  readonly state: string;
+  readonly now: Date;
+  readonly deadline: Date | null;
+}): boolean {
+  return (
+    input.state === 'CANCELLED' &&
+    input.deadline !== null &&
+    input.now.getTime() < input.deadline.getTime()
+  );
 }
 
 /** Whether a late poll may still be asked: the window is open and the payment is not closed for good. */

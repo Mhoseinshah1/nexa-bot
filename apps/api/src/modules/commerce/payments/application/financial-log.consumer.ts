@@ -483,13 +483,16 @@ export class FinancialLogConsumer implements EventConsumer {
         const { payment, customer } = found;
         const occurredAt = new Date(event.occurredAt);
         const currency = payload.currency as CurrencyCode;
+        // R12 F1: money returned for an attempt that could no longer pay its order has its own
+        // message — it was never "approved after the deadline". An older event is a late approval.
+        const returned = payload.basis === 'RETURNED';
         const values: Record<string, TemplateValue> = {
           gateway: words.gatewayName(payload.provider),
           ...who(customer, words),
           reference: paymentTrackingCode(payment),
           amount: money(BigInt(payload.amountMinor), currency),
           // When the payment stopped being payable in Nexa, against when the approval was credited.
-          expiredAt: gatewaySettlementDeadline(payment) ?? occurredAt,
+          ...(returned ? {} : { expiredAt: gatewaySettlementDeadline(payment) ?? occurredAt }),
           approvedAt: occurredAt,
         };
         await this.withOrderCode(scope, payment, values, tx);
@@ -506,7 +509,9 @@ export class FinancialLogConsumer implements EventConsumer {
           values['balanceAfter'] = balance.after;
         }
         return {
-          templateKey: 'ops.financial.late_credit' as TemplateKey,
+          templateKey: (returned
+            ? 'ops.financial.late_credit_returned'
+            : 'ops.financial.late_credit') as TemplateKey,
           values,
           logType: 'PAYMENT_LATE',
           buttons: [
