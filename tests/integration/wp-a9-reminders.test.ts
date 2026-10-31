@@ -298,6 +298,7 @@ describe('WP-A9 reminders', () => {
       refundFigures: new DrizzleWalletRepository(db),
       paymentCredits: new DrizzleWalletRepository(db),
       rejectionReasons: new DrizzlePaymentRepository(db),
+      paymentReferences: new DrizzlePaymentRepository(db),
       reminderSnapshots: new DrizzleServiceReminderSnapshotReader(db),
       reminderFacts: new DrizzleCustomerReminderFactsReader(db),
       contacts: {
@@ -499,6 +500,86 @@ describe('WP-A9 reminders', () => {
       },
     ]);
     expect(CATALOGUE_FA['bot.wallet.low_balance']).not.toContain('/wallet');
+  });
+
+  /*
+   * R12 F3 item 1: every reminder that asks the customer to act carries the button that does
+   * it, read back from the subject row at send time (the service a reminder is about, the
+   * order a payment pays for). Real readers over the real tables, and the composition root's
+   * `buttonsFor`.
+   */
+  it('R12 F3: an expiry reminder carries renew + details, a usage reminder extra traffic', async () => {
+    const expiring = await service({ expiresInDays: 2.5 });
+    const heavy = await service({ expiresInDays: 30, usedBytes: (ALLOWANCE * 90n) / 100n });
+    expect(await servicePass()).toEqual({ expiry: 1, usage: 1 });
+    expect(
+      (await dispatcher(undefined, notificationButtons).deliverDue(tenantA, 200)).delivered,
+    ).toBe(2);
+    const dataOf = (template: string) =>
+      sends
+        .find((one) => one.templateKey === template)
+        ?.buttons?.map((button) => ('data' in button ? button.data : undefined));
+    expect(dataOf('bot.service.expiry_first')).toEqual([`n:${expiring}`, `s:${expiring}`]);
+    expect(dataOf('bot.service.usage_second')).toEqual([`v:${heavy}`]);
+  });
+
+  it('R12 F3: a pending order or payment reminder opens the order’s payment methods', async () => {
+    const bare = await order({ state: 'AWAITING_PAYMENT', expiresInMinutes: 8 });
+    const paying = await order({ state: 'AWAITING_PAYMENT', expiresInMinutes: 60 });
+    await payment({ state: 'PENDING', expiresInMinutes: 8, orderId: paying });
+    expect(await pendingPass()).toEqual({ payments: 1, orders: 1 });
+    await dispatcher(undefined, notificationButtons).deliverDue(tenantA, 200);
+    const dataOf = (template: string) =>
+      sends
+        .find((one) => one.templateKey === template)
+        ?.buttons?.map((button) => ('data' in button ? button.data : undefined));
+    expect(dataOf('bot.order.pending_reminder')).toEqual([`pm:${bare}`]);
+    expect(dataOf('bot.payment.pending_reminder')).toEqual([`pm:${paying}`]);
+  });
+
+  it('R12 F3: a rejected or expired payment carries «پرداخت دوباره»; a failed action, support', async () => {
+    const orderId = await order({ state: 'AWAITING_PAYMENT', expiresInMinutes: 60 });
+    const rejected = await payment({ state: 'FAILED', expiresInMinutes: 30, orderId });
+    const expired = await payment({ state: 'EXPIRED', expiresInMinutes: -5, orderId });
+    const repo = new DrizzleCustomerNotificationRepository(ctx.container.database.db);
+    const enqueue = (
+      kind: 'PAYMENT_REJECTED' | 'PAYMENT_EXPIRED' | 'SERVICE_ACTION_FAILED',
+      subjectId: string,
+    ) =>
+      ctx.container.uow.run(tenantA, (tx) =>
+        repo.enqueue(
+          tenantA,
+          {
+            id: ctx.container.ids.uuid(),
+            customerId: customerA,
+            botInstanceId: BOT_A,
+            kind,
+            subjectId,
+          },
+          ctx.container.clock.now(),
+          tx,
+        ),
+      );
+    await enqueue('PAYMENT_REJECTED', rejected);
+    await enqueue('PAYMENT_EXPIRED', expired);
+    await enqueue('SERVICE_ACTION_FAILED', ctx.container.ids.uuid());
+    await dispatcher(undefined, notificationButtons).deliverDue(tenantA, 200);
+    const buttonsOf = (template: string) =>
+      sends.find((one) => one.templateKey === template)?.buttons ?? [];
+    for (const template of ['bot.payment.rejected', 'bot.payment.expired']) {
+      const buttons = buttonsOf(template);
+      expect(
+        buttons.map((button) => button.inline),
+        template,
+      ).toEqual(['payment.retry']);
+      expect(
+        buttons.map((button) => ('data' in button ? button.data : undefined)),
+        template,
+      ).toEqual([`pm:${orderId}`]);
+    }
+    expect(buttonsOf('bot.service.action_failed').map((button) => button.inline)).toEqual([
+      'service.support',
+    ]);
   });
 
   it('writes no row on a scan that has nothing to send', async () => {
