@@ -21,6 +21,7 @@ import type {
   ExternalGatewayAdapter,
   GatewayCreateOutcome,
   GatewayCreateRequest,
+  GatewayInquiryContext,
   GatewayInquiryOutcome,
   GatewayWebhookHint,
 } from '../application/gateway-invoice-ports.js';
@@ -30,7 +31,7 @@ import {
   classifyTonPaysError,
   tomanAmountOf,
   tonpaysOrderId,
-  tonpaysVerdict,
+  tonpaysInquiryVerdict,
 } from '../domain/tonpays.js';
 import { verifyTonPaysWebhook } from './tonpays-signature.js';
 import {
@@ -457,7 +458,11 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
     }
   }
 
-  async inquire(apiKey: string, invoiceId: string): Promise<GatewayInquiryOutcome> {
+  async inquire(
+    apiKey: string,
+    invoiceId: string,
+    context?: GatewayInquiryContext,
+  ): Promise<GatewayInquiryOutcome> {
     // The documented POST form, so the invoice id travels in the body rather than a path.
     const raw = await this.call('POST', TONPAYS_CHECK_PATH, apiKey, { invoice_id: invoiceId });
     if (raw.kind === 'HELD') {
@@ -477,15 +482,27 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
           ),
         };
       }
+      const requestAmount = metadataAmount(parsed.data.request_amount);
+      /*
+       * R12 F1 item 5: an approval whose `request_amount` is present and is not the amount
+       * Nexa sent (Toman, the provider's unit) is a MISMATCH, held and never settled.
+       */
+      const judged = tonpaysInquiryVerdict({
+        status: parsed.data.status,
+        paid: parsed.data.paid,
+        requestAmount,
+        sentAmount: context?.sentAmount ?? null,
+      });
       return {
         kind: 'OBSERVED',
         invoiceId: parsed.data.invoice_id,
         orderId: parsed.data.order_id,
         status: parsed.data.status,
         paid: typeof parsed.data.paid === 'boolean' ? parsed.data.paid : null,
-        verdict: tonpaysVerdict(parsed.data.status, parsed.data.paid),
-        requestAmount: metadataAmount(parsed.data.request_amount),
+        verdict: judged.verdict,
+        requestAmount,
         finalAmount: metadataAmount(parsed.data.final_amount),
+        ...(judged.mismatchReason === null ? {} : { mismatchReason: judged.mismatchReason }),
       };
     }
     const code = this.errorCodeOf(raw.body);

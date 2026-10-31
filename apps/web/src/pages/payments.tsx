@@ -182,6 +182,13 @@ const REFUND_REFUSAL_TEXT: Readonly<Record<RefundRefusalReason, WebKey>> = {
   DELIVERY_IN_PROGRESS: 'web.refund_refusal_delivery',
 };
 
+/** R12 F1 item 3: the purposes whose FULL refund suspends the order's service (the server's list). */
+const REFUND_SUSPENDS_PURPOSES: ReadonlySet<string> = new Set([
+  'NEW_SERVICE',
+  'CUSTOM_SERVICE',
+  'RENEW',
+]);
+
 const REFUND_CHANNEL_LABELS: Readonly<Record<RefundChannel, WebKey>> = {
   WALLET_CREDIT: 'web.refund_channel_wallet',
   EXTERNAL_MANUAL: 'web.refund_channel_manual',
@@ -1416,6 +1423,14 @@ function RefundsCard({
     enabled: mayViewOrders && orderId !== null,
   });
   const orderRefunded = order.data?.order.state === 'REFUNDED';
+  /*
+   * R12 F1 item 3: a refund that makes a service purchase or renewal whole SUSPENDS that
+   * service on the panel. Warned before the operator confirms — and when the order cannot be
+   * read (no `orders.view`), warned anyway: the server decides from the order, not this page.
+   */
+  const refundMaySuspendService =
+    orderId !== null &&
+    (order.data === undefined || REFUND_SUSPENDS_PURPOSES.has(order.data.order.purpose));
 
   const refresh = (response: RefundResponse) => {
     void response;
@@ -1778,6 +1793,9 @@ function RefundsCard({
               }
             >
               <p className="muted small">{t('web.refund_request_hint')}</p>
+              {refundMaySuspendService && (
+                <Banner tone="warn">{t('web.refund_full_suspends_service')}</Banner>
+              )}
               <KV
                 inline
                 items={[
@@ -1915,6 +1933,10 @@ function RefundsCard({
                   </Field>
                 )}
               </div>
+              {/* R12 F1: the completion that makes the payment whole suspends the service too. */}
+              {answerKind === 'complete' && refundMaySuspendService && (
+                <Banner tone="warn">{t('web.refund_full_suspends_service')}</Banner>
+              )}
               {complete.error !== null && (
                 <Banner tone="danger">
                   {refundMessageFor(complete.error)}
