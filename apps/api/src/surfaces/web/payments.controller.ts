@@ -295,7 +295,7 @@ export class PaymentsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<PaymentResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = paymentReceiptApproveRequestSchema.parse(body);
     await this.container.payments.confirmManualTransfer(scope, actor, id, {
       idempotencyKey: input.idempotencyKey,
@@ -316,7 +316,7 @@ export class PaymentsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<PaymentResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = paymentReceiptRejectRequestSchema.parse(body);
     await this.container.payments.rejectManualTransfer(scope, actor, id, {
       idempotencyKey: input.idempotencyKey,
@@ -337,7 +337,7 @@ export class PaymentsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<PaymentResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = paymentReceiptCreditRequestSchema.parse(body);
     await this.container.receiptDispositions.creditToWallet(scope, actor, {
       idempotencyKey: input.idempotencyKey,
