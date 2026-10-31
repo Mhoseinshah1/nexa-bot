@@ -11,6 +11,7 @@ import {
   type CurrencyCode,
   type ScopeContext,
   type SecretCipher,
+  type SystemContext,
   type Tenant,
   type TenantId,
   type TenantKind,
@@ -27,6 +28,7 @@ import type {
   BotBootstrapRepository,
   BotBootstrapView,
   BotInstanceRepository,
+  BotWebhookSecretRecord,
   TenantRepository,
   TokenReplacementClaims,
 } from '../application/ports.js';
@@ -312,6 +314,34 @@ export class DrizzleBotInstanceRepository
       .orderBy(botInstances.createdAt, botInstances.id)
       .limit(1);
     return row ? toBootstrapView(row) : null;
+  }
+
+  async listWebhookSecretRecords(scope: SystemContext): Promise<BotWebhookSecretRecord[]> {
+    // Every tenant's bots, by design (see the port). Refused for a tenant scope, so this
+    // cannot become a cross-tenant read by a caller holding one.
+    if (!isSystemContext(scope)) {
+      throw errors.permissionDenied(
+        PLATFORM_ERROR_CODES.PERMISSION_DENIED,
+        'The installation-wide webhook secret listing needs the system scope.',
+      );
+    }
+    const rows = await this.db
+      .select({
+        id: botInstances.id,
+        tenantSlug: tenants.slug,
+        username: botInstances.username,
+        status: botInstances.status,
+        webhookRegisteredAt: botInstances.webhookRegisteredAt,
+        webhookSecretFingerprint: botInstances.webhookSecretFingerprint,
+      })
+      .from(botInstances)
+      .innerJoin(tenants, eq(tenants.id, botInstances.tenantId))
+      .orderBy(tenants.slug, botInstances.createdAt, botInstances.id);
+    return rows.map((row) => ({
+      ...row,
+      id: asId<'BotInstanceId'>(row.id),
+      status: row.status as BotInstanceStatus,
+    }));
   }
 
   async createFromBootstrap(

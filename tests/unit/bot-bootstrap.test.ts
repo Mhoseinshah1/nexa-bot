@@ -16,8 +16,14 @@ import type {
   BotBootstrapView,
   BotCommandsRegistration,
   BotIdentityProbe,
+  BotWebhookSecretRecord,
   WebhookRegistration,
 } from '../../apps/api/src/modules/platform/tenancy/application/ports';
+import {
+  perBotWebhookSecret,
+  perBotWebhookSecretFingerprint,
+} from '../../apps/api/src/modules/platform/tenancy/application/webhook-secret';
+import { webhookSecretFingerprint } from '../../apps/api/src/modules/platform/tenancy/application/webhook-fingerprint';
 import type { BotWebhookRead } from '../../apps/api/src/modules/platform/tenancy/application/bot-management-ports';
 import {
   currentTransactionLabel,
@@ -98,6 +104,17 @@ class FakeBots implements BotBootstrapRepository {
       webhookSecretFingerprint: row.webhookSecretFingerprint,
       commandsRevision: row.commandsRevision,
     };
+  }
+
+  async listWebhookSecretRecords(): Promise<BotWebhookSecretRecord[]> {
+    return this.rows.map((row) => ({
+      id: row.id as BotWebhookSecretRecord['id'],
+      tenantSlug: 'acme',
+      username: row.username,
+      status: row.status,
+      webhookRegisteredAt: row.webhookRegisteredAt,
+      webhookSecretFingerprint: row.webhookSecretFingerprint,
+    }));
   }
 
   async markCommandsRegistered(
@@ -525,7 +542,14 @@ describe('bot bootstrap — a fresh install', () => {
     // could have produced this username.
     expect(bots.rows[0]?.telegramBotId).toBe('8123456789');
     expect(telegram.webhookCalls[0]?.url).toBe(result.webhookUrl);
-    expect(telegram.webhookCalls[0]?.secretToken).toBe(SECRET);
+    // R12 F2 item 7: THIS bot's own secret, never the installation-wide one.
+    expect(telegram.webhookCalls[0]?.secretToken).toBe(
+      perBotWebhookSecret(SECRET, result.botInstanceId),
+    );
+    expect(telegram.webhookCalls[0]?.secretToken).not.toBe(SECRET);
+    expect(bots.rows[0]?.webhookSecretFingerprint).toBe(
+      perBotWebhookSecretFingerprint(SECRET, result.botInstanceId),
+    );
     expect(bots.webhookMarks).toEqual([{ id: result.botInstanceId, url: result.webhookUrl }]);
     expect(audit.map((entry) => entry.action)).toEqual([
       'bot_instance.bootstrap',
@@ -1322,7 +1346,9 @@ describe('bot bootstrap — the rules the review found untested', () => {
     const result = await after.execute(scope, { token: null, publicBaseUrl: ORIGIN });
 
     expect(result.kind).toBe('RECONCILED');
-    expect(rotated.telegram.webhookCalls.at(-1)?.secretToken).toBe('a-completely-different-secret');
+    expect(rotated.telegram.webhookCalls.at(-1)?.secretToken).toBe(
+      perBotWebhookSecret('a-completely-different-secret', result.botInstanceId),
+    );
     expect(await after.status(scope, ORIGIN)).toBe('ready');
     // And the credential was still not touched.
     expect(rotated.bots.tokenWrites).toHaveLength(0);
@@ -1876,7 +1902,9 @@ describe('bot bootstrap — status asks Telegram, and ready means BOTH halves ag
       pendingUpdateCount: 1,
       lastErrorAt: new Date('2026-10-06T10:00:00Z'),
       // Telegram echoing a request URL, the shape `redaction.ts` records.
-      lastErrorMessage: `Wrong response from https://api.telegram.org/bot${TOKEN}/x ${SECRET}`,
+      lastErrorMessage:
+        `Wrong response from https://api.telegram.org/bot${TOKEN}/x ${SECRET} ` +
+        perBotWebhookSecret(SECRET, built.bots.rows[0]!.id),
     });
 
     const report = await built.service.statusWithReason(scope, ORIGIN);
@@ -1884,6 +1912,8 @@ describe('bot bootstrap — status asks Telegram, and ready means BOTH halves ag
     expect(text).not.toContain(TOKEN);
     expect(text).not.toContain(TOKEN.split(':')[1]);
     expect(text).not.toContain(SECRET);
+    // R12 F2 item 7: nor the bot's own derived secret, which is what Telegram now holds.
+    expect(text).not.toContain(perBotWebhookSecret(SECRET, built.bots.rows[0]!.id));
     expect(report.detail?.remote.lastErrorMessage).toContain('Wrong response');
   });
 });
@@ -2165,5 +2195,96 @@ describe('bot bootstrap — a BotFather rename is reconciled by register, shown 
     const built = await installed();
     const report = await built.service.statusWithReason(scope, ORIGIN);
     expect(report.detail).not.toHaveProperty('usernameDrift');
+  });
+});
+
+describe('bot bootstrap — R12 F2 item 7: the per-bot webhook secret and its rotation window', () => {
+  async function installedOnMaster(): Promise<ReturnType<typeof build>> {
+    const built = build();
+    await built.service.execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN });
+    // The state every installation is in before this release: registered with the master.
+    built.bots.rows[0]!.webhookSecretFingerprint = webhookSecretFingerprint(SECRET);
+    built.telegram.held = webhookRead(built.bots.rows[0]!.webhookUrl, { pendingUpdateCount: 7 });
+    return built;
+  }
+
+  it('a bot still on the master is READY (it receives), and says which secret it is on', async () => {
+    const { service } = await installedOnMaster();
+    const report = await service.statusWithReason(scope, ORIGIN);
+    expect(report.state).toBe('ready');
+    expect(report.detail?.local).toMatchObject({
+      registered: true,
+      secret: 'MATCHES',
+      secretScope: 'INSTALLATION',
+    });
+    expect(report.detail?.problems).toEqual([]);
+    expect(await service.status(scope, ORIGIN)).toBe('ready');
+  });
+
+  it('a reconcile moves a bot off the master to its own secret, keeping the queue', async () => {
+    const { service, bots, telegram } = await installedOnMaster();
+    const id = bots.rows[0]!.id;
+    const result = await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+
+    expect(result.kind).toBe('RECONCILED');
+    const call = telegram.webhookCalls.at(-1);
+    expect(call?.secretToken).toBe(perBotWebhookSecret(SECRET, id));
+    expect(call?.dropPendingUpdates).toBe(false);
+    expect(bots.rows[0]?.webhookSecretFingerprint).toBe(perBotWebhookSecretFingerprint(SECRET, id));
+    expect(bots.tokenWrites).toHaveLength(1);
+
+    const after = await service.statusWithReason(scope, ORIGIN);
+    expect(after.state).toBe('ready');
+    expect(after.detail?.local.secretScope).toBe('PER_BOT');
+    // And from then on a rerun registers nothing.
+    const calls = telegram.webhookCalls.length;
+    expect((await service.execute(scope, { token: null, publicBaseUrl: ORIGIN })).kind).toBe(
+      'ALREADY_COMPLETE',
+    );
+    expect(telegram.webhookCalls).toHaveLength(calls);
+  });
+
+  it("another bot's secret on this bot's marker is a changed secret, not a match", async () => {
+    const built = await installedOnMaster();
+    built.bots.rows[0]!.webhookSecretFingerprint = perBotWebhookSecretFingerprint(
+      SECRET,
+      '01890000-0000-7000-8000-0000000000ff',
+    );
+    const report = await built.service.statusWithReason(scope, ORIGIN);
+    expect(report.state).toBe('incomplete');
+    expect(report.detail?.local).toMatchObject({ secret: 'DIFFERS', secretScope: null });
+    expect(report.detail?.problems).toContain('WEBHOOK_SECRET_NOT_CURRENT');
+  });
+
+  it('lists every bot by the secret it is registered with — words, never a value', async () => {
+    const built = await installedOnMaster();
+    const id = built.bots.rows[0]!.id;
+    expect(await built.service.webhookSecretsByBot()).toEqual([
+      {
+        botInstanceId: id,
+        tenantSlug: 'acme',
+        username: 'acme_bot',
+        status: 'ACTIVE',
+        secret: 'INSTALLATION',
+      },
+    ]);
+    await built.service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+    const listed = await built.service.webhookSecretsByBot();
+    expect(listed?.map((row) => row.secret)).toEqual(['PER_BOT']);
+    expect(JSON.stringify(listed)).not.toContain(perBotWebhookSecretFingerprint(SECRET, id));
+
+    built.bots.rows[0]!.webhookRegisteredAt = null;
+    expect((await built.service.webhookSecretsByBot())?.[0]?.secret).toBe('NOT_REGISTERED');
+    built.bots.rows[0]!.webhookRegisteredAt = new Date('2026-09-01T10:00:00Z');
+    built.bots.rows[0]!.webhookSecretFingerprint = null;
+    expect((await built.service.webhookSecretsByBot())?.[0]?.secret).toBe('UNKNOWN');
+    built.bots.rows[0]!.webhookSecretFingerprint = webhookSecretFingerprint('rotated-away-secret');
+    expect((await built.service.webhookSecretsByBot())?.[0]?.secret).toBe('OTHER');
+
+    const unconfigured = new BotBootstrapService({
+      ...serviceDeps(built),
+      webhookSecret: () => '',
+    });
+    expect(await unconfigured.webhookSecretsByBot()).toBeNull();
   });
 });
