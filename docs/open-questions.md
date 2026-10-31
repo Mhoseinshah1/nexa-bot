@@ -4788,3 +4788,28 @@ live; the owner decides otherwise.
 - **OQ-R11-A4-04 — the sing-box import string on iOS and desktop.** The format
   `sing-box://import-remote-profile?url=…&autoUpdate=true&autoUpdateInterval=…` is the owner's;
   which clients honour `autoUpdate*` has not been measured against a real client.
+
+## Round 11 A11 — an ended order is answered on its own message
+
+- **OQ-R11-A11-01 — a payment attempt that lapses while its order is still payable.** With
+  `sales.order_expiry_minutes` longer than an attempt's window (up to 14 days vs at most 60
+  minutes), an attempt can expire while its order stays `AWAITING_PAYMENT`. Default (the owner's
+  "one expiry notice per order"): nothing is sent for that attempt; its invoice message keeps its
+  text and each of its buttons re-checks the payment on a tap; the order's own `ORDER_EXPIRED`
+  later edits the order's latest screen. Whether such an attempt's message should also be edited
+  in place (no new message) is the owner's call.
+- **OQ-R11-A11-02 — re-order for a renewal or an add-on.** «🔁 سفارش دوباره» opens the catalogue for
+  those (the service is reached from «سرویس‌های من»); a new service opens its category's plans, a
+  custom service its location menu. A button straight to the service's renewal would need the
+  service id read from the order; the owner decides whether that is wanted.
+- **OQ-R11-A11-03 — three expiry messages minutes apart.** Read from the code (no production data):
+  one order produced several only through one `PAYMENT_EXPIRED` per payment attempt (fixed) and one
+  new `bot.order.expired` per tap on a stale pay/confirm button (fixed). Three orders, each told
+  once, are also possible: every confirmed pre-invoice is its own order with its own window, and
+  tapping a plan again starts a new draft — order creation is unchanged.
+- **OQ-R11-A11-04 — the bare refusal on a live order past its deadline.** An `AWAITING_PAYMENT`
+  order past its deadline whose payment is still live (receipt under review, provider review,
+  `UNKNOWN`) is not shown the ended screen (Codex, #354), so a pay tap on it is answered by the
+  refusal it always got, `bot.order.expired` («… لطفاً دوباره سفارش دهید.»). That text predates
+  A11 and is left unchanged (no copy rewrite outside the spec). Default: unchanged; whether such a
+  customer should instead be told their payment is still being checked is the owner's call.

@@ -1784,6 +1784,102 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  /*
+   * R11 A11 (owner request: order-expiry edit-in-place). The order's OWN payment message,
+   * edited into its end state instead of a new message under it. Two keys, because the two
+   * ends say different things (`bot.order.expired` vs `bot.order.cancelled` above), and both
+   * keep the order summary — code, product, amount — so the edited message is still the
+   * record of what was ordered once the card number, the copy buttons and the pay buttons
+   * are gone. Neither says "no money was taken": the owner removed that line.
+   */
+  {
+    key: 'bot.order.expired_screen',
+    description:
+      'R11 A11: what an unpaid order\u2019s payment message becomes when its window closes — ' +
+      'the `ORDER_EXPIRED` notice, EDITED onto the message that offered to pay (or sent once, ' +
+      'when that message cannot be edited or is not known), and the answer to a tap on a stale ' +
+      'pay button of an expired order. Keeps the order summary; carries the re-order and ' +
+      'main-menu buttons and nothing that pays. Says nothing about money having been taken.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'orderCode',
+        type: 'STRING',
+        description:
+          'The order\u2019s 8-character public code (`orderCodeOf`). Absent for a row the code backfill has not reached, and the line is dropped.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'productName',
+        type: 'STRING',
+        description:
+          'What the order was for: the order line\u2019s own title, frozen at the draft.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'The amount the order asked for (its frozen total).',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.order.cancelled_screen',
+    description:
+      'R11 A11: what an order\u2019s payment message becomes when the customer cancels it — ' +
+      'edited onto that message (or sent once, as the `ORDER_CANCELLED` lane fallback, when it ' +
+      'cannot be edited). The customer\u2019s own decision, so distinct from ' +
+      '`bot.order.expired_screen`. Keeps the order summary; carries the re-order and main-menu ' +
+      'buttons and nothing that pays.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'orderCode',
+        type: 'STRING',
+        description:
+          'The order\u2019s 8-character public code (`orderCodeOf`). Absent for a row the code backfill has not reached, and the line is dropped.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'productName',
+        type: 'STRING',
+        description:
+          'What the order was for: the order line\u2019s own title, frozen at the draft.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'The amount the order asked for (its frozen total).',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.order.reorder_button',
+    description:
+      'R11 A11: «سفارش دوباره» under an expired or cancelled order. Opens the same product\u2019s ' +
+      'purchase flow at its read-only entry (its category\u2019s product list, or the catalogue); ' +
+      'no order exists until the customer confirms a new one.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.order.main_menu_button',
+    description:
+      'R11 A11: «منوی اصلی» under an expired or cancelled order. Its own key, not ' +
+      '`bot.menu.main_button`, because the owner worded this one differently and no two ' +
+      'inline buttons share a label template.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.order.refunded_to_wallet',
     description:

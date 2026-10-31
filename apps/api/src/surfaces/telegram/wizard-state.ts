@@ -1,10 +1,17 @@
 import type {
+  BotInstanceId,
   TelegramReviewOutcome,
   TelegramWizardKind,
   TelegramWizardStep,
   TemplateKey,
+  TemplateValues,
   TenantContext,
 } from '@nexa/contracts';
+import type {
+  CustomerButton,
+  CustomerSendResult,
+} from '../../modules/commerce/messaging/application/ports.js';
+import type { OrderScreenWait } from '../../modules/commerce/messaging/application/order-screen-answer.js';
 
 /**
  * R2 (v0.3.5 real-test items 3–5): the surface's half of editing a flow in place.
@@ -131,6 +138,14 @@ export interface WizardDirective {
    * prompt, or this turn finds the receipt — the message never goes back to the prompt.
    */
   readonly receiptPrompt?: { readonly customerId: string };
+  /**
+   * R11 A11 (Codex, #354): a screen landed `CLOSED` whose edit Telegram definitely declined
+   * (429) goes back to the step it was tapped at. The message still shows its old buttons, and
+   * a `CLOSED` wizard would swallow every tap on them — for an expired draft, nothing else will
+   * ever answer that message. Put back, the next tap answers it again. Only a definite rate
+   * limit: an `UNKNOWN` edit may have landed.
+   */
+  readonly reopenOnRateLimit?: true;
 }
 
 /**
@@ -306,4 +321,20 @@ export type { TelegramMessageStateService as MessageStatePort } from '../../modu
  */
 export interface InvoiceScreensPort {
   refresh(scope: TenantContext, paymentId: string): Promise<void>;
+  /**
+   * R11 A11: an ended order's screen edited onto the order's own payment message (FIX-08's
+   * `answerOrder`). Absent in a stand-in: the turn answers on the tapped message instead.
+   */
+  answerOrder?(
+    scope: TenantContext,
+    orderId: string,
+    destination: { readonly chatId: string; readonly botInstanceId: BotInstanceId },
+    settleMs: number,
+    content: {
+      readonly templateKey: TemplateKey;
+      readonly values: TemplateValues;
+      readonly buttons: readonly CustomerButton[];
+    },
+    steps?: readonly TelegramWizardStep[],
+  ): Promise<CustomerSendResult | OrderScreenWait | null>;
 }

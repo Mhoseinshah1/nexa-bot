@@ -154,7 +154,9 @@ export interface PaymentExpiryServiceDeps {
  * name the customer chose rather than falling back to a random one.
  *
  * A transfer with NO receipt — a signal alone, or nothing — expires at its window as it
- * always has, and its customer is told `PAYMENT_EXPIRED`. Once expired it is closed:
+ * always has, and its customer is told — since R11 A11 through the ORDER's single
+ * `ORDER_EXPIRED` notice, edited onto the order's payment message, and only a top-up's
+ * payment through its own `PAYMENT_EXPIRED`. Once expired it is closed:
  * `confirm` finds it no longer PENDING and refuses. That is the owner's expiry rule for
  * a transfer nobody sent evidence for, and File 02 does not change it.
  */
@@ -229,14 +231,27 @@ export class PaymentExpiryService {
           },
           tx,
         );
-        await this.deps.notifier.notify(
-          scope,
-          payment.customerId,
-          'PAYMENT_EXPIRED',
-          payment.id,
-          now,
-          tx,
-        );
+        /*
+         * R11 A11: ONE expiry notice per order, ever — the order's own, `ORDER_EXPIRED`,
+         * which `customer_notifications_subject_key` already makes unique per order and
+         * the lane edits onto the order's payment message. A payment AGAINST an order is
+         * therefore told nothing of its own: an order can hold several attempts (a card
+         * transfer, then a gateway, then another gateway; a gateway attempt's lifetime
+         * runs from ITS creation, not the order's), each expiring at its own minute, and
+         * each used to send «مهلت پرداخت شما به پایان رسید» as a new message — one order,
+         * several expiry messages minutes apart. A top-up has no order, so its payment
+         * is still the subject and keeps its notice.
+         */
+        if (payment.orderId === null) {
+          await this.deps.notifier.notify(
+            scope,
+            payment.customerId,
+            'PAYMENT_EXPIRED',
+            payment.id,
+            now,
+            tx,
+          );
+        }
         // R9 C1: the provider's invoice is still open; ask the provider to cancel it.
         if (payment.method === 'GATEWAY' && this.deps.gatewayCancels !== undefined) {
           await this.deps.gatewayCancels.requestOnExpiry(scope, actor, payment, now, tx);

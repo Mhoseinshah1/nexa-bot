@@ -45,6 +45,7 @@ import { refusal } from './refusals.js';
 import { editSent, type PendingReply, staleCallbackReply } from './replies.js';
 import { cardCheck } from './payment-screens.js';
 import { gatewayAttemptReply } from './checkout-flow.js';
+import { orderEndedRefusal } from './order-end-flow.js';
 import type { BotRuntime } from '../bot-runtime.js';
 
 /**
@@ -142,7 +143,8 @@ export async function manualPayment(
     );
     return transferInstruction(rt, scope, instruction, orderId);
   } catch (error) {
-    return refusal(error);
+    // R11 A11: an order that ended is answered ON the tapped screen, not by a new message.
+    return (await orderEndedRefusal(rt, scope, actor, customer, orderId, error)) ?? refusal(error);
   }
 }
 

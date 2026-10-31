@@ -862,8 +862,18 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.order.cancel_confirm',
       'bot.order.cancel_confirm_button',
       'bot.order.cancelled',
+      /*
+       * R11 A11: an ended order's own message, edited into its end state, and its two buttons.
+       * Reviewed: each keeps only the order's summary, promises nothing this head does not do —
+       * «🔁 سفارش دوباره» opens a read-only list of plans (`ro:`, `cu:` or `co:`, all parsed) and
+       * «🏠 منوی اصلی» is `mm:` — and none says money was or was not taken.
+       */
+      'bot.order.cancelled_screen',
       'bot.order.expired',
+      'bot.order.expired_screen',
+      'bot.order.main_menu_button',
       'bot.order.not_awaiting_payment',
+      'bot.order.reorder_button',
       'bot.order.settled',
       'bot.order.terms_changed',
       'bot.order.transfer_under_review',
@@ -1701,6 +1711,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
     const menuButtons: ReadonlySet<TemplateKey> = new Set<TemplateKey>([
       'bot.menu.main_button',
       'bot.service.back_to_menu_button',
+      // R11 A11: the owner's «🏠 منوی اصلی» under an ended order — a button that goes to it (`mm:`).
+      'bot.order.main_menu_button',
       // R6 item 3: the owner's welcome points at the persistent bottom menu AND names its
       // real buttons («🛒 خرید اشتراک», «🧪 سرویس تست»), which is the menu that exists — not
       // the prose "use the menu" this rule refuses. Pinned to this one key.

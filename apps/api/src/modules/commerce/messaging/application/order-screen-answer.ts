@@ -54,6 +54,19 @@ export const ORDER_SCREEN_ANSWER_STEPS: readonly TelegramWizardStep[] = [
 ];
 
 /**
+ * R11 A11: the screens an ENDED unpaid order (expired, cancelled) is answered on — the ones
+ * above, and the card-transfer receipt prompt (`RECEIPT_WAIT`). The exclusion above is about
+ * a receipt a person will decide later; an order that expired from `RECEIPT_WAIT` had NO
+ * receipt (a receipted transfer is never expired), so nothing else will ever answer that
+ * message, and its prompt to send a receipt would stay in the chat for an order that is gone.
+ * `RECEIPT_REVIEW` stays out: a receipt is under review there and its decision is its own.
+ */
+export const ORDER_END_ANSWER_STEPS: readonly TelegramWizardStep[] = [
+  ...ORDER_SCREEN_ANSWER_STEPS,
+  'RECEIPT_WAIT',
+];
+
+/**
  * The settle window for a messenger whose requests time out after `requestTimeoutMs`: the
  * longest another writer's edit of the message can still be in flight, plus a margin for the
  * write that preceded it. With the default 10 s timeout, an outcome waits at most ~12 s
@@ -80,9 +93,11 @@ export function orderScreenReadiness(
   destination: { readonly chatId: string; readonly botInstanceId: BotInstanceId },
   now: Date,
   settleMs: number,
+  /** Which screens may be answered on; `ORDER_END_ANSWER_STEPS` for an ended order. */
+  steps: readonly TelegramWizardStep[] = ORDER_SCREEN_ANSWER_STEPS,
 ): OrderScreenReadiness {
   if (latest === null || latest.kind !== 'ORDER') return { kind: 'NONE' };
-  if (!ORDER_SCREEN_ANSWER_STEPS.includes(latest.step)) return { kind: 'NONE' };
+  if (!steps.includes(latest.step)) return { kind: 'NONE' };
   // Only the customer's own chat, through the bot the notice goes through.
   if (latest.chatId !== destination.chatId) return { kind: 'NONE' };
   if (latest.botInstanceId !== destination.botInstanceId) return { kind: 'NONE' };
