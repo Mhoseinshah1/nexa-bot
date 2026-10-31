@@ -115,6 +115,7 @@ describe('R11 A9: the mini app lists the personal discount the invoice charges',
       working: false,
       actions: ['RENEW'],
       qr: false,
+      qrKinds: [],
       canChangeLocation: false,
       autoRenew: { offered: false, enabled: false, price: null, leadHours: 24 },
     });
