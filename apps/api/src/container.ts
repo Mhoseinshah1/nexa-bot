@@ -3692,6 +3692,39 @@ export function createContainer(
     scopeActivity: tenants,
     clock,
     ids,
+    /*
+     * R12 F1 item 3: a FULL refund of a purchase or renewal suspends the order's service —
+     * planned in the refund's transaction by the operator's own suspend planner. The service
+     * is the order's (a purchase) or its commercial action's (a renewal), and only while the
+     * refunded customer still owns it.
+     */
+    serviceSuspension: {
+      suspendForFullRefund: async (scope, actor, input, now, tx) => {
+        const serviceId =
+          input.purpose === 'RENEW'
+            ? ((await commercialActionRepository.findByOrderId(scope, input.orderId, tx))
+                ?.serviceId ?? null)
+            : ((await serviceRepository.findByOrderId(scope, input.orderId, tx))?.id ?? null);
+        if (serviceId === null) {
+          return { outcome: 'NOT_PLANNED', serviceId: null, reason: 'NO_SERVICE' };
+        }
+        const planned = await provisioningService.planStatusWithin(
+          scope,
+          actor,
+          {
+            serviceId,
+            customerId: input.customerId,
+            type: 'SUSPEND',
+            key: `refund:${input.refundId}:suspend`,
+          },
+          now,
+          tx,
+        );
+        return planned.outcome === 'PLANNED'
+          ? { outcome: 'PLANNED', serviceId, operationId: planned.operation.id }
+          : { outcome: 'NOT_PLANNED', serviceId, reason: planned.reason };
+      },
+    },
   });
 
   /**
