@@ -37,8 +37,9 @@ bash $S --wait <pr> --every 60 --max 540     # bounded loop, fits one foreground
 - **Codex**: request it yourself at once with one `@codex review` comment
   (when, how, the 2-comment cap: `nexa-round-pipeline` §3). Read it with
   `--codex`: `receipt=<sha>:clean|findings` is Codex's "Reviewed commit"
-  receipt; `thumbsup=head` is its 👍 newer than the head commit (`stale` =
-  older). Clean on the head = findings=none. If `reviewed` ≠ `head`, it
+  receipt (the FIRST one for the head); `thumbsup=head` is its 👍 newer than
+  the head's push (first check suite; `stale` older, `unknown` no suite). Clean
+  on the head = findings=none. If `reviewed` ≠ `head`, it
   reviewed an older head. Act on the first complete review of a head only.
 - **Re-runs:** once, and only when the failure is in a test this PR does not
   touch (or `--gate` reports gate-only-red, using the exact command it prints).

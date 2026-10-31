@@ -20,9 +20,10 @@ the owner comments `@codex review`" rule, for this round and every later phase.
 - `scripts/claude/ci-status.sh --codex`: the only script change, as the owner
   allowed. It now reads
   - the `codex-review-receipt:v1` comment, giving `receipt=<sha8>:clean|findings`
-    (and `reviewed`/`findings=none` when there is no state marker);
-  - the PR's reactions, giving `thumbsup=head|stale|undated` for Codex's 👍
-    compared with the head commit's date.
+    (and `reviewed`/`findings=none` when there is no state marker); the FIRST
+    receipt for the head is reported;
+  - the PR's reactions, giving `thumbsup=head|stale|unknown` for Codex's 👍
+    compared with the head's push (its first check suite).
     Only the exact `chatgpt-codex-connector[bot]` login counts. The reactions API
     reports it as type `User`, and a person cannot take a `[bot]` login.
 
@@ -50,6 +51,26 @@ Mutation checks (each rule broken alone, then restored):
 | M2  | 👍 never stale         | KILLED (codex-stale)            |
 | M3  | receipt from any login | KILLED (codex-receipt)          |
 | M4  | every receipt clean    | KILLED (codex-receipt-findings) |
+
+## Codex review (the one review acted on)
+
+Codex reviewed `f661d4c` with two P2 findings, both fixed in one commit:
+
+1. `thumbsup=head` used the head commit's committer date. A commit made before
+   the previous head's 👍 but pushed after it would count as reviewed. The 👍
+   is now compared with the head's first check suite, which GitHub creates on
+   push and which is tied to that SHA. With no suite it reports `unknown`,
+   never `head`.
+2. A later receipt overwrote the first one. With an automatic review and a
+   requested review of the same head, a clean second review could hide the
+   first review's findings. The first receipt for the head is now reported.
+
+Tests: `codex-dup` (first receipt for the head has findings and a later one is
+clean, plus a later receipt for another commit; the 👍 has no check suite) →
+`receipt=abcdef01:findings thumbsup=unknown`. The other fixtures now carry
+check suites. 43 ok, 0 FAIL. Mutations: first→latest receipt (M5), no head
+preference (M7), no staleness (M2), no-suite treated as known (M6), 👍 from
+any login (M1) are all KILLED.
 
 ## Usage
 

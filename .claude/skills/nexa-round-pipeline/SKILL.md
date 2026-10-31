@@ -83,7 +83,7 @@ gh api repos/Mhoseinshah1/nexa-bot/issues/<pr>/comments -f body='@codex review'
   once more if Codex still "runs" 1 h after the comment — then report it and
   keep working on other PRs. **At most 2 `@codex review` comments per PR.**
 - Clean = a Codex receipt "Didn't find any major issues" whose reviewed commit
-  is the head, or Codex's 👍 newer than the head (`--codex`: `receipt=<head>:clean`
+  is the head, or Codex's 👍 newer than the head's push (`--codex`: `receipt=<head>:clean`
   or `thumbsup=head`); treat it as findings=none.
 - Opening a PR also triggers Codex, so a head may get two reviews: act on the
   FIRST complete review of that head only; ignore the other (no reply, no fix).
