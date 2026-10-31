@@ -1902,9 +1902,12 @@ describe('bot bootstrap — status asks Telegram, and ready means BOTH halves ag
       pendingUpdateCount: 1,
       lastErrorAt: new Date('2026-10-06T10:00:00Z'),
       // Telegram echoing a request URL, the shape `redaction.ts` records.
+      // R12 F2 item 7: the bot's own secret FIRST — content redaction does not know its shape,
+      // and anything after the request URL is dropped with it, so only the explicit scrub
+      // can be what removes it here.
       lastErrorMessage:
-        `Wrong response from https://api.telegram.org/bot${TOKEN}/x ${SECRET} ` +
-        perBotWebhookSecret(SECRET, built.bots.rows[0]!.id),
+        `${perBotWebhookSecret(SECRET, built.bots.rows[0]!.id)} ` +
+        `Wrong response from https://api.telegram.org/bot${TOKEN}/x ${SECRET}`,
     });
 
     const report = await built.service.statusWithReason(scope, ORIGIN);
