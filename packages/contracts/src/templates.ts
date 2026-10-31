@@ -11314,6 +11314,22 @@ export const TEMPLATES = [
       },
     ],
   },
+  {
+    key: 'bot.payment.gateway_cancel_rate_limited_closed',
+    description:
+      'R12 F3 lead review: `gateway_cancel_rate_limited` for an invoice whose cancel button is NOT on offer any more (its window closed, a receipt is on its way). The same facts — not processed, not cancelled, do not pay again, send the receipt if paid — WITHOUT the sentence that asks the customer to tap «❌ لغو فاکتور» again, which would point at a button that is not there.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (`paymentTrackingCode`). Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
   /*
    * Round 11 A8 (owner): a cancel whose answer was lost does not count as cancelled, so the
    * customer may ask again. When Nexa has since LEARNED that the invoice was cancelled (the

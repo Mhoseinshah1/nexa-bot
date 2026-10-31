@@ -942,6 +942,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.gateway_cancel_confirm_button',
       // R12 F3 item 10: TonPays rate-limited the cancel. Reviewed: says the cancel was NOT processed, the invoice is NOT cancelled, the cancel button may be tapped again later, a receipt should be sent if money was paid, and not to pay again. Claims no automatic retry (none exists for this state).
       'bot.payment.gateway_cancel_rate_limited',
+      // R12 F3 lead review: the same where the cancel button is gone. Reviewed: no «tap cancel again» sentence; not cancelled, send the receipt if paid, do not pay again.
+      'bot.payment.gateway_cancel_rate_limited_closed',
       'bot.payment.gateway_cancel_requested',
       'bot.payment.gateway_cancel_unknown',
       'bot.payment.gateway_cancelled',

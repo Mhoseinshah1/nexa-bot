@@ -1451,6 +1451,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // R12 F3: TonPays rate-limited the customer's cancel — its answer is known: it did nothing.
   'bot.payment.gateway_cancel_rate_limited':
     '{icon:warning} درخواست لغو فاکتور فعلاً توسط تون‌پی پذیرفته نشد، چون تعداد درخواست‌ها از حد مجاز گذشته بود. فاکتور هنوز لغو نشده است. اگر قصد پرداخت ندارید، چند دقیقه بعد دوباره «❌ لغو فاکتور» را بزنید. اگر مبلغی واریز کرده‌اید، لغو نکنید و رسید را بفرستید. لطفاً دوباره پرداخت نکنید.\n\nکد پیگیری پرداخت: {reference}',
+  // R12 F3 lead review: the same, where «❌ لغو فاکتور» is no longer offered.
+  'bot.payment.gateway_cancel_rate_limited_closed':
+    '{icon:warning} درخواست لغو فاکتور فعلاً توسط تون‌پی پذیرفته نشد، چون تعداد درخواست‌ها از حد مجاز گذشته بود. فاکتور هنوز لغو نشده است. اگر مبلغی واریز کرده‌اید، رسید را بفرستید. لطفاً دوباره پرداخت نکنید.\n\nکد پیگیری پرداخت: {reference}',
   // R11 A8: a cancel tap on an invoice Nexa already knows was cancelled.
   'bot.payment.gateway_cancel_already_cancelled':
     '{icon:info} فاکتور قبلاً لغو شده است و دیگر قابل پرداخت نیست. برای پرداخت می‌توانید دوباره اقدام کنید.\n\nکد پیگیری پرداخت: {reference}',
