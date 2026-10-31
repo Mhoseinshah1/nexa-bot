@@ -65,8 +65,8 @@ never a hand-edited `_journal.json` (`nexa-migrations` § Renumbering); then
 - Read CI with `nexa-ci-watch` (`bash scripts/claude/ci-status.sh <pr>`).
   GraphQL is blocked: `gh pr view`, `gh pr checks`, `gh run …` fail with 403;
   use `gh api repos/{owner}/{repo}/…` REST.
-- Codex reviews automatically when the PR opens; read that one review, never
-  request another.
+- Request the Codex review yourself (`@codex review`, at most twice per PR) and
+  act on that one review only (`nexa-round-pipeline` §3).
 - Diagnose every red: this PR's bug, or red on `main` too (then port the fix
   that exists, and say so once on the PR). "Flake" is not a root cause; at most
   one re-run, only to confirm.
