@@ -523,10 +523,10 @@ describe('WP-A9 reminders', () => {
     expect(dataOf('bot.service.usage_second')).toEqual([`v:${heavy}`]);
   });
 
-  it('R12 F3: a pending order or payment reminder opens the order’s payment methods', async () => {
+  it('R12 F3: a pending order reminder opens its methods; a pending payment reminder, that payment’s own invoice', async () => {
     const bare = await order({ state: 'AWAITING_PAYMENT', expiresInMinutes: 8 });
     const paying = await order({ state: 'AWAITING_PAYMENT', expiresInMinutes: 60 });
-    await payment({ state: 'PENDING', expiresInMinutes: 8, orderId: paying });
+    const pendingId = await payment({ state: 'PENDING', expiresInMinutes: 8, orderId: paying });
     expect(await pendingPass()).toEqual({ payments: 1, orders: 1 });
     await dispatcher(undefined, notificationButtons).deliverDue(tenantA, 200);
     const dataOf = (template: string) =>
@@ -534,7 +534,8 @@ describe('WP-A9 reminders', () => {
         .find((one) => one.templateKey === template)
         ?.buttons?.map((button) => ('data' in button ? button.data : undefined));
     expect(dataOf('bot.order.pending_reminder')).toEqual([`pm:${bare}`]);
-    expect(dataOf('bot.payment.pending_reminder')).toEqual([`pm:${paying}`]);
+    // Lead review: never the method list (a NEW payment) — the payment already started, by id.
+    expect(dataOf('bot.payment.pending_reminder')).toEqual([`gc:${pendingId}`]);
   });
 
   it('R12 F3: a rejected or expired payment carries «پرداخت دوباره»; a failed action, support', async () => {

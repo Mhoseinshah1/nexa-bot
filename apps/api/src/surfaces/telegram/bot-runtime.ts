@@ -1739,7 +1739,7 @@ export class BotRuntime {
     ) {
       // A return is the same question as a tap on «بررسی وضعیت»: the payment's own state, read
       // now, with a verify brought forward - and answered as closed for anyone else's payment.
-      return checkoutFlow.gatewayCheck(this, scope, command.targetId, customer);
+      return checkoutFlow.gatewayCheck(this, scope, actor, command.targetId, customer);
     }
     if (command.intent === 'GATEWAY_RECEIPT' && command.targetId !== null) {
       return cardReceiptFlow.gatewayReceipt(

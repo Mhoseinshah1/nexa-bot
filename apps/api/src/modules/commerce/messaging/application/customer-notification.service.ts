@@ -424,7 +424,7 @@ export interface CustomerNotificationDeps {
        * R12 F3 item 1: the payment a payment notice is about, with the order it pays for —
        * null for a wallet top-up, whose way on is the top-up menu.
        */
-      readonly payment?: { readonly orderId: string | null };
+      readonly payment?: { readonly orderId: string | null; readonly paymentId?: string };
     },
   ) => readonly CustomerButton[];
   /**
@@ -1115,7 +1115,7 @@ export class CustomerNotificationService {
   ): Promise<{
     readonly serviceId?: string;
     readonly orderId?: string;
-    readonly payment?: { readonly orderId: string | null };
+    readonly payment?: { readonly orderId: string | null; readonly paymentId?: string };
   }> {
     if (REMINDER_NOTIFICATION_KINDS.has(row.kind)) {
       const snapshot = await this.deps.reminderSnapshots.snapshotOf(scope, row.subjectId);
@@ -1128,7 +1128,9 @@ export class CustomerNotificationService {
       row.kind === 'PAYMENT_EXPIRED'
     ) {
       const paid = await this.deps.paymentReferences?.orderIdFor?.(scope, row.subjectId);
-      return paid === null || paid === undefined ? {} : { payment: { orderId: paid.orderId } };
+      return paid === null || paid === undefined
+        ? {}
+        : { payment: { orderId: paid.orderId, paymentId: row.subjectId } };
     }
     return {};
   }

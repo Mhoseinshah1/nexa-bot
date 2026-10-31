@@ -611,6 +611,36 @@ export async function ownedTrackingCode(
 }
 
 /**
+ * R12 F3 (lead review): a customer's own PENDING card-to-card transfer with NO receipt filed,
+ * drawn as its own invoice again — the amount, the card and «📤 ارسال رسید» — so a customer who
+ * may already have transferred sends the receipt for THIS payment instead of being told it is
+ * "being checked" (nothing is) or being handed a second reference. Null for every other
+ * payment: a gateway attempt, one with a receipt filed, one no longer pending, another
+ * customer's. Reads only; the invoice is read from the payment's own issued snapshot.
+ */
+export async function unreceiptedTransfer(
+  rt: BotRuntime,
+  scope: TenantContext,
+  actor: ActorContext,
+  customer: Pick<CustomerRecord, 'id'>,
+  paymentId: string,
+): Promise<PendingReply | null> {
+  const instruction = await rt.deps.payments.pendingTransferInstructionForCustomer(
+    scope,
+    customer.id,
+    paymentId,
+  );
+  if (instruction === null) return null;
+  const filed = await rt.deps.receipts.filedForCustomer(
+    scope,
+    actor,
+    customer.id,
+    instruction.payment.id,
+  );
+  return filed ? null : transferInstruction(rt, scope, instruction, instruction.payment.orderId);
+}
+
+/**
  * The transfer invoice, rendered once for every payment that needs one.
  *
  * Shared by the order path and the wallet top-up path — the owner's 5B instruction is

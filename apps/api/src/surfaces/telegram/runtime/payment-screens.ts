@@ -260,8 +260,16 @@ function cardTransferScreen(
               },
             ]
           : [];
+      /*
+       * R12 F3 lead review: the rate-limited notice asks the customer to tap «❌ لغو فاکتور»
+       * again — true only while that button is offered. Otherwise the same notice without it.
+       */
+      const shownKey =
+        cancelKey === 'bot.payment.gateway_cancel_rate_limited' && !cancelOffered
+          ? 'bot.payment.gateway_cancel_rate_limited_closed'
+          : cancelKey;
       return {
-        key: cancelKey,
+        key: shownKey,
         values: { reference },
         buttons: [...retry, cardCheck(payment.id), mainMenuButton()],
         orderId,

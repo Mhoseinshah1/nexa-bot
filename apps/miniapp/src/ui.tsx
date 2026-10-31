@@ -166,7 +166,7 @@ export function errorText(error: unknown): string {
     const key = ERROR_TEXT[error.code];
     if (key !== undefined) return t(key);
     // R12 F3 item 5: every other commerce refusal is told in the bot's own words.
-    const shared = commerceErrorText(error.code);
+    const shared = commerceErrorText(error.code, error.details);
     if (shared !== null) return shared;
   }
   return t('miniapp.error');

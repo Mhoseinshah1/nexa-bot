@@ -36,6 +36,7 @@ import { endedOrderScreen, liveOrderInReview, orderEndedRefusal } from './order-
 import { refusal } from './refusals.js';
 import type { PendingReply } from './replies.js';
 import { gatewayAttemptScreen, payMethodsButton, topupButton } from './payment-screens.js';
+import { unreceiptedTransfer } from './card-receipt-flow.js';
 import { repricedSummary } from './purchase-flow.js';
 import type { BotRuntime } from '../bot-runtime.js';
 
@@ -434,11 +435,29 @@ export async function gatewayPayment(
 export async function gatewayCheck(
   rt: BotRuntime,
   scope: TenantContext,
+  actor: ActorContext,
   paymentId: string,
   customer: CustomerRecord,
 ): Promise<PendingReply> {
   const view = await rt.deps.gateway.attemptFor(scope, customer.id, paymentId);
   if (view === null) {
+    /*
+     * R12 F3 (lead review): «🧾 مشاهدهٔ فاکتور باز» also names a card-to-card transfer (the
+     * pending-payment reminder's button). Its own invoice while no receipt is filed; once one
+     * is, that it was received and is being reviewed. Never a new payment.
+     */
+    const transfer = await unreceiptedTransfer(rt, scope, actor, customer, paymentId);
+    if (transfer !== null) return transfer;
+    if (
+      (await rt.deps.payments.pendingTransferForCustomer(scope, customer.id, paymentId)) !== null
+    ) {
+      return {
+        key: 'bot.payment.receipt_received',
+        values: {},
+        buttons: [mainMenuButton()],
+        orderId: null,
+      };
+    }
     return {
       key: 'bot.payment.gateway_closed',
       values: {},

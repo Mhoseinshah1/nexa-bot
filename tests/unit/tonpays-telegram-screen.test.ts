@@ -684,6 +684,14 @@ describe('the TonPays Telegram payment screen', () => {
     expect(screenOf('pending', withFacts({ latestCancel: readable })).key).toBe(
       'bot.payment.gateway_cancel_rate_limited',
     );
+    // R12 F3 lead review: its «tap ❌ لغو فاکتور again» sentence only while that button is
+    // offered. A receipt on its way withdraws the button, so the notice drops the sentence.
+    const noButton = screenOf(
+      'pending',
+      withFacts({ latestCancel: readable, submissions: [submission('QUEUED')] }),
+    );
+    expect(noButton.key).toBe('bot.payment.gateway_cancel_rate_limited_closed');
+    expect(data(noButton)).not.toContain(`gq:${PAYMENT_ID}`);
     // A genuinely lost answer (UNKNOWN: a timeout, a 5xx, a bare 429) keeps the old sentence.
     expect(
       screenOf('pending', withFacts({ latestCancel: request('CANCEL', 'UNKNOWN', { decidedAt }) }))

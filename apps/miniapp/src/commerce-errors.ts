@@ -154,8 +154,19 @@ export const COMMERCE_ERROR_GENERIC: readonly string[] = [
  * tenant's Appearance are dropped (the mini app has its own), a `{limit}` is the receipt cap,
  * and a sentence that still holds an unfilled placeholder is not shown at all.
  */
-export function commerceErrorText(code: string): string | null {
-  const key = COMMERCE_ERROR_BOT_KEY[code];
+export function commerceErrorText(
+  code: string,
+  details: Readonly<Record<string, unknown>> = {},
+): string | null {
+  const key =
+    /*
+     * OQ-R11-A11-04: an order past its deadline only because a payment of it is still live
+     * (the server says so in `paymentLive`) is NOT "order again" — that invites a second
+     * payment. The bot's in-review sentence instead.
+     */
+    code === COMMERCE_ERROR_CODES.ORDER_EXPIRED && details['paymentLive'] === true
+      ? 'bot.order.payment_in_review'
+      : COMMERCE_ERROR_BOT_KEY[code];
   if (key === undefined) return null;
   const text = CATALOGUE_FA[key]
     .replaceAll(/\{icon:[a-z]+\}\s*/gu, '')

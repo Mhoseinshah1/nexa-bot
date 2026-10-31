@@ -118,6 +118,13 @@ describe('R12 F3 item 5: every commerce refusal has a sentence or is decided gen
     expect(errorText(refused(COMMERCE_ERROR_CODES.ORDER_EXPIRED))).toBe(
       CATALOGUE_FA['bot.order.expired'],
     );
+    // OQ-R11-A11-04: past the deadline only because a payment is still live — never "order
+    // again", which invites a second payment; the bot's in-review sentence instead.
+    const live = new ApiError(409, COMMERCE_ERROR_CODES.ORDER_EXPIRED, { paymentLive: true });
+    expect(errorText(live)).toBe(
+      CATALOGUE_FA['bot.order.payment_in_review'].replaceAll(/\{icon:[a-z]+\}\s*/gu, '').trim(),
+    );
+    expect(errorText(live)).not.toBe(CATALOGUE_FA['bot.order.expired']);
     expect(errorText(refused(COMMERCE_ERROR_CODES.SERVICE_LOCATION_NOT_FOUND))).toBe(
       fa('miniapp.error'),
     );
