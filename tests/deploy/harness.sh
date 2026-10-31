@@ -1002,6 +1002,9 @@ print(json.dumps({"services": {"api": {"environment": env}}}))
           *--status*)
             [ "$(read_state owner_state_exit 0)" = "0" ] || exit 1
             printf '%s\n' "$(read_state owner_state none)"
+            # The CLI's explanation, which goes to STDERR (R12 F2 item 7: the
+            # per-bot webhook secret lines among it). Empty unless a test sets it.
+            read_state status_stderr '' >&2
             exit 0
             ;;
           *shutdown-check*)
