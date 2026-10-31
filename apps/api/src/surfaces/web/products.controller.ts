@@ -15,14 +15,12 @@ import {
   type ProductResponse,
   type ProductSummaryResponse,
   type ProductWriteRequest,
-  type TenantContext,
 } from '@nexa/contracts';
 import type { ProductCategoryId, ProductDisplay, ProductId } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type {
   ProductCursor,
   ProductDraft,
@@ -51,7 +49,7 @@ export class ProductsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ProductListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // A repeated parameter is an ARRAY, not a string — the same guard every other list
     // on this surface uses rather than trusting the schema to refuse it.
     const query = singleValued(raw);
@@ -104,7 +102,7 @@ export class ProductsController {
 
   @Post(PRODUCT_ROUTES.create)
   async create(@Req() request: FastifyRequest, @Body() body: unknown): Promise<ProductResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = productWriteSchema.parse(body);
     const product = await this.container.products.create(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -115,7 +113,7 @@ export class ProductsController {
 
   @Get('products/:id')
   async detail(@Req() request: FastifyRequest, @Param('id') id: string): Promise<ProductResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // The id is NOT cast here: `ProductService.get` validates it, so a malformed path
     // segment is a 400 rather than a 500 at the `uuid` cast.
     return { product: toSummary(await this.container.products.get(scope, actor, id)) };
@@ -127,7 +125,7 @@ export class ProductsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ProductResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = productWriteSchema.parse(body);
     const product = await this.container.products.update(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -143,7 +141,7 @@ export class ProductsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ProductResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = productStatusRequestSchema.parse(body);
     const product = await this.container.products.activate(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -158,36 +156,13 @@ export class ProductsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ProductResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = productStatusRequestSchema.parse(body);
     const product = await this.container.products.deactivate(scope, actor, {
       idempotencyKey: command.idempotencyKey,
       productId: id,
     });
     return { product: toSummary(product) };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    // `botInstanceId: null`: a product belongs to the TENANT. A tenant running two bots
-    // sells one catalogue, and scoping a product to a bot would make the same plan two
-    // rows an operator has to keep in step.
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

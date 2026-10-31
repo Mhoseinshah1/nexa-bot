@@ -9,11 +9,9 @@ import {
   type LegacyProductReviewListResponse,
   type LegacyProductReviewResponse,
   type LegacyProductReviewView,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import type { LegacyProductReviewListItem } from '../../modules/commerce/legacy-product-review/application/ports.js';
 
 /**
@@ -36,7 +34,7 @@ export class LegacyProductsController {
     @Req() request: FastifyRequest,
     @Query() query: unknown,
   ): Promise<LegacyProductReviewListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = legacyProductReviewListQuerySchema.parse(query ?? {});
     const page = await this.service.list(scope, actor, input);
     return { reviews: page.items.map((item) => this.toView(item)), nextCursor: page.nextCursor };
@@ -47,7 +45,7 @@ export class LegacyProductsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<LegacyProductReviewResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { review: this.toView(await this.service.get(scope, actor, uuidV7Schema.parse(id))) };
   }
 
@@ -57,7 +55,7 @@ export class LegacyProductsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<LegacyProductReviewResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const item = await this.service.approveExisting(scope, actor, uuidV7Schema.parse(id), body);
     return { review: this.toView(item) };
   }
@@ -68,7 +66,7 @@ export class LegacyProductsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<LegacyProductReviewResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const item = await this.service.approveNew(scope, actor, uuidV7Schema.parse(id), body);
     return { review: this.toView(item) };
   }
@@ -79,7 +77,7 @@ export class LegacyProductsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<LegacyProductReviewResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const item = await this.service.reject(scope, actor, uuidV7Schema.parse(id), body);
     return { review: this.toView(item) };
   }
@@ -90,7 +88,7 @@ export class LegacyProductsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<LegacyProductReviewResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const item = await this.service.reopen(scope, actor, uuidV7Schema.parse(id), body);
     return { review: this.toView(item) };
   }
@@ -134,23 +132,5 @@ export class LegacyProductsController {
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
     };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (options.write) assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }

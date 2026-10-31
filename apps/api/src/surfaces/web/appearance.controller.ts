@@ -7,11 +7,9 @@ import {
   type AppearanceResponse,
   type AppearanceSlotMutationResponse,
   type AppearanceTestResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 
 /**
  * «ظاهر ربات» over HTTP (Premium UI), at `/appearance`.
@@ -27,7 +25,7 @@ export class AppearanceController {
 
   @Get(APPEARANCE_ROUTES.view)
   async view(@Req() request: FastifyRequest): Promise<AppearanceResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.appearance.view(scope, actor);
   }
 
@@ -37,7 +35,7 @@ export class AppearanceController {
     @Param('slot') slot: string,
     @Body() body: unknown,
   ): Promise<AppearanceSlotMutationResponse> {
-    const { scope, actor } = await this.authenticate(request, true);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.appearance.saveSlot(scope, actor, slot, body);
   }
 
@@ -47,7 +45,7 @@ export class AppearanceController {
     @Param('slot') slot: string,
     @Body() body: unknown,
   ): Promise<AppearanceSlotMutationResponse> {
-    const { scope, actor } = await this.authenticate(request, true);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.appearance.resetSlot(scope, actor, slot, body);
   }
 
@@ -57,25 +55,7 @@ export class AppearanceController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<AppearanceTestResponse> {
-    const { scope, actor } = await this.authenticate(request, true);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.appearance.sendTest(scope, actor, body);
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    write = false,
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (write) assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }

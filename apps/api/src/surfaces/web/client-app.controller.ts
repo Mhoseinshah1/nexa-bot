@@ -18,11 +18,9 @@ import {
   type ClientAppVideoResponse,
   type ClientAppVideoSessionResponse,
   type ClientAppVideosResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import type { ClientAppRecord } from '../../modules/control/client-apps/application/ports.js';
 import type { ClientAppVideoRecord } from '../../modules/control/client-apps/application/client-app-video.service.js';
 import type { WebVideoSession } from '../../modules/control/client-apps/application/client-app-video-web.service.js';
@@ -44,14 +42,14 @@ export class ClientAppController {
 
   @Get(CLIENT_APP_ROUTES.list)
   async list(@Req() request: FastifyRequest): Promise<ClientAppListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const items = await this.container.clientApps.listForOperator(scope, actor);
     return { items: items.map(toView) };
   }
 
   @Post(CLIENT_APP_ROUTES.create)
   async create(@Req() request: FastifyRequest, @Body() body: unknown): Promise<ClientAppResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = createClientAppRequestSchema.parse(body);
     return toView(await this.container.clientApps.create(scope, actor, input));
   }
@@ -62,7 +60,7 @@ export class ClientAppController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ClientAppResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = updateClientAppRequestSchema.parse(body);
     return toView(await this.container.clientApps.update(scope, actor, { ...input, id }));
   }
@@ -73,7 +71,7 @@ export class ClientAppController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ClientAppResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = setClientAppStatusRequestSchema.parse(body);
     return toView(await this.container.clientApps.setStatus(scope, actor, { ...input, id }));
   }
@@ -84,7 +82,7 @@ export class ClientAppController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ClientAppDeletedResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = deleteClientAppRequestSchema.parse(body);
     return this.container.clientApps.remove(scope, actor, { ...input, id });
   }
@@ -104,7 +102,7 @@ export class ClientAppController {
     @Res() reply: FastifyReply,
     @Param('id') id: string,
   ): Promise<void> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const content = await this.container.clientApps.imageForOperator(scope, actor, id);
     await reply
       .header('content-type', content.mimeType)
@@ -121,7 +119,7 @@ export class ClientAppController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ClientAppResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = uploadClientAppImageRequestSchema.parse(body);
     return toView(await this.container.clientApps.uploadImage(scope, actor, { ...input, id }));
   }
@@ -132,7 +130,7 @@ export class ClientAppController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ClientAppResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = clearClientAppImageRequestSchema.parse(body);
     return toView(await this.container.clientApps.clearImage(scope, actor, { ...input, id }));
   }
@@ -147,7 +145,7 @@ export class ClientAppController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<ClientAppVideosResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const overview = await this.container.clientAppVideoWeb.overview(scope, actor, id);
     return {
       telegramLinked: overview.telegramLinked,
@@ -167,7 +165,7 @@ export class ClientAppController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ClientAppVideoSessionResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = openClientAppVideoSessionRequestSchema.parse(body);
     return toSessionView(
       await this.container.clientAppVideoWeb.open(scope, actor, { ...input, appId: id }),
@@ -180,7 +178,7 @@ export class ClientAppController {
     @Param('id') id: string,
     @Param('sessionId') sessionId: string,
   ): Promise<ClientAppVideoSessionResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return toSessionView(await this.container.clientAppVideoWeb.read(scope, actor, id, sessionId));
   }
 
@@ -191,7 +189,7 @@ export class ClientAppController {
     @Param('sessionId') sessionId: string,
     @Body() body: unknown,
   ): Promise<ClientAppVideoSessionResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = cancelClientAppVideoSessionRequestSchema.parse(body);
     return toSessionView(
       await this.container.clientAppVideoWeb.cancel(scope, actor, {
@@ -200,27 +198,6 @@ export class ClientAppController {
         sessionId,
       }),
     );
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    // `botInstanceId: null`: the apps belong to the TENANT; every bot it runs offers them.
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

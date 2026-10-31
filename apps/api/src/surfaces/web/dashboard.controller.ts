@@ -7,12 +7,10 @@ import {
   type DashboardOperationsResponse,
   type DashboardSummaryResponse,
   type NavCountersResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import { singleValued } from './query.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 
 /**
  * The dashboard and the sidebar counters, over HTTP (`docs/web-redesign/dashboard.md`).
@@ -33,7 +31,7 @@ export class DashboardController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<DashboardSummaryResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = singleValued(raw);
     const parsed = reportRangeQuerySchema.parse({
       ...(query.range === undefined ? {} : { range: query.range }),
@@ -49,26 +47,13 @@ export class DashboardController {
 
   @Get(DASHBOARD_ROUTES.operations)
   async operations(@Req() request: FastifyRequest): Promise<DashboardOperationsResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.operationsOverview.operations(scope, actor);
   }
 
   @Get(DASHBOARD_ROUTES.navCounters)
   async navCounters(@Req() request: FastifyRequest): Promise<NavCountersResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.operationsOverview.navCounters(scope, actor);
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.container.config.NODE_ENV === 'production');
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    // The tenant's figures: every bot it runs sells into the same orders and panels.
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
   }
 }

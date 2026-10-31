@@ -226,9 +226,22 @@ export async function resolveInstallationTenant(container: Container): Promise<v
   });
 }
 
+/** One route as Fastify registered it: the method(s) and the URL pattern. */
+export interface RegisteredRoute {
+  readonly methods: readonly string[];
+  readonly url: string;
+}
+
 export interface ApiApp {
   readonly app: NestFastifyApplication;
   readonly container: Container;
+  /**
+   * Every route this application registered, in registration order (R12 F2). Recorded by
+   * the same `onRoute` hook that sets body limits, so a suite can enumerate the WHOLE
+   * surface — the Origin/401 sweep walks it — instead of a hand-kept list that a new
+   * controller is never added to.
+   */
+  readonly routes: readonly RegisteredRoute[];
   close(): Promise<void>;
 }
 
@@ -306,7 +319,12 @@ export async function createApiApp(config: AppConfig = loadConfig()): Promise<Ap
    */
   installRawBodyCapture(fastify, GATEWAY_WEBHOOK_ROUTE_PREFIX, GATEWAY_WEBHOOK_BODY_LIMIT_BYTES);
 
+  const routes: RegisteredRoute[] = [];
   fastify.addHook('onRoute', (route) => {
+    routes.push({
+      methods: Array.isArray(route.method) ? [...route.method] : [route.method],
+      url: route.url,
+    });
     if (route.url.startsWith(TELEGRAM_WEBHOOK_ROUTE_PREFIX)) {
       route.bodyLimit = TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES;
     }
@@ -389,6 +407,7 @@ export async function createApiApp(config: AppConfig = loadConfig()): Promise<Ap
   return {
     app,
     container,
+    routes,
     async close() {
       await app.close();
       await container.shutdown();

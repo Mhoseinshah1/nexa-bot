@@ -12,11 +12,9 @@ import {
   type ProductCategoryListingResponse,
   type ProductCategoryResponse,
   type ProductCategorySummaryResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import type {
   ProductCategoryListing,
   ProductCategoryRecord,
@@ -40,7 +38,7 @@ export class ProductCategoriesController {
 
   @Get(PRODUCT_CATEGORY_ROUTES.list)
   async list(@Req() request: FastifyRequest): Promise<ProductCategoryListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const categories = await this.container.productCategories.list(scope, actor);
     return { categories: categories.map(toListing) };
   }
@@ -50,7 +48,7 @@ export class ProductCategoriesController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<ProductCategoryResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = productCategoryCreateSchema.parse(body);
     const category = await this.container.productCategories.create(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -74,7 +72,7 @@ export class ProductCategoriesController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<ProductCategoryListResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = productCategoryReorderSchema.parse(body);
     const categories = await this.container.productCategories.reorder(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -88,7 +86,7 @@ export class ProductCategoriesController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<ProductCategoryResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // The id is NOT cast here: the service validates it, so a malformed path segment is
     // a 400 rather than a 500 at the `uuid` cast.
     const category = await this.container.productCategories.get(scope, actor, id);
@@ -101,7 +99,7 @@ export class ProductCategoriesController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ProductCategoryResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = productCategoryWriteSchema.parse(body);
     const category = await this.container.productCategories.update(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -129,7 +127,7 @@ export class ProductCategoriesController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<{ readonly deleted: true }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = productStatusRequestSchema.parse(body);
     return this.container.productCategories.remove(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -186,7 +184,7 @@ export class ProductCategoriesController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<{ readonly productId: string; readonly categoryId: string }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = productCategoryAssignSchema.parse(body);
     return this.container.productCategories.reassignProduct(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -202,35 +200,13 @@ export class ProductCategoriesController {
     body: unknown,
     which: 'activate' | 'deactivate' | 'show' | 'hide',
   ): Promise<ProductCategoryResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = productStatusRequestSchema.parse(body);
     const category = await this.container.productCategories[which](scope, actor, {
       idempotencyKey: command.idempotencyKey,
       categoryId: id,
     });
     return { category: toSummary(category) };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    // `botInstanceId: null`, for the reason `ProductsController` gives: a category
-    // belongs to the TENANT, and a tenant running two bots sells one catalogue.
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

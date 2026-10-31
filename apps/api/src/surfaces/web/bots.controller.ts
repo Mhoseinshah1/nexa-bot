@@ -11,11 +11,9 @@ import {
   type BotMutationResponse,
   type BotResponse,
   type BotTokenReplacementResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 
 /**
  * This tenant's Telegram bot instances over HTTP, at `/bots` (WP13).
@@ -41,13 +39,13 @@ export class BotsController {
 
   @Get(BOT_ROUTES.list)
   async list(@Req() request: FastifyRequest): Promise<BotListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.botManagement.list(scope, actor);
   }
 
   @Get(routePattern(BOT_ROUTES.detail, 'id'))
   async detail(@Req() request: FastifyRequest, @Param('id') id: string): Promise<BotResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.botManagement.get(scope, actor, id);
   }
 
@@ -57,7 +55,7 @@ export class BotsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<BotMutationResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = setBotStatusRequestSchema.parse(body);
     return this.container.botManagement.setStatus(scope, actor, {
       idempotencyKey: input.idempotencyKey,
@@ -77,7 +75,7 @@ export class BotsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<BotTokenReplacementResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // Only the key is parsed here. The token goes to the service UNPARSED, which
     // authorizes first and validates after, so a caller without `settings.destructive`
     // is answered 403 — and the refusal recorded — whatever the value looks like.
@@ -97,23 +95,7 @@ export class BotsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<BotDiagnosticResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { diagnostic: await this.container.botManagement.diagnose(scope, actor, id) };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }

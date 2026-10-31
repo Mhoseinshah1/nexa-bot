@@ -10,11 +10,9 @@ import {
   type RefundListResponse,
   type RefundResponse,
   type RefundView,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import type { RefundRecord } from '../../modules/commerce/payments/application/refund-ports.js';
 
 /**
@@ -47,7 +45,7 @@ export class RefundsController {
     @Req() request: FastifyRequest,
     @Param('paymentId') paymentId: string,
   ): Promise<RefundListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const view = await this.container.refunds.ledgerFor(scope, actor, paymentId as never);
     return {
       refunds: view.refunds.map(toView),
@@ -66,7 +64,7 @@ export class RefundsController {
     @Param('paymentId') paymentId: string,
     @Body() body: unknown,
   ): Promise<RefundResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     /*
      * The path is authoritative for the payment, and the body's own `paymentId` is
      * ignored rather than trusted or cross-checked.
@@ -92,7 +90,7 @@ export class RefundsController {
     @Param('refundId') refundId: string,
     @Body() body: unknown,
   ): Promise<RefundResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = refundCompletionSchema.parse(body);
     const refund = await this.container.refunds.complete(scope, actor, {
       idempotencyKey: input.idempotencyKey,
@@ -109,7 +107,7 @@ export class RefundsController {
     @Param('refundId') refundId: string,
     @Body() body: unknown,
   ): Promise<RefundResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = refundFailureSchema.parse(body);
     const refund = await this.container.refunds.fail(scope, actor, {
       idempotencyKey: input.idempotencyKey,
@@ -117,22 +115,6 @@ export class RefundsController {
       note: input.note,
     });
     return { refund: toView(refund) };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

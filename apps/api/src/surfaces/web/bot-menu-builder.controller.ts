@@ -6,11 +6,9 @@ import {
   type BotMenuBuilderResponse,
   type MainMenuBuilderMutationResponse,
   type MainMenuRevisionListResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 
 /**
  * Round T — the button builder at `/bot-menu/builder` (`docs/round-t-button-builder-audit.md`
@@ -29,7 +27,7 @@ export class BotMenuBuilderController {
 
   @Get(BOT_MENU_BUILDER_ROUTES.view)
   async view(@Req() request: FastifyRequest): Promise<BotMenuBuilderResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.botMenuBuilder.view(scope, actor);
   }
 
@@ -38,7 +36,7 @@ export class BotMenuBuilderController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<MainMenuBuilderMutationResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.botMenuBuilder.saveDraft(scope, actor, body);
   }
 
@@ -47,7 +45,7 @@ export class BotMenuBuilderController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<MainMenuBuilderMutationResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.botMenuBuilder.publish(scope, actor, body);
   }
 
@@ -56,7 +54,7 @@ export class BotMenuBuilderController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<MainMenuBuilderMutationResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.botMenuBuilder.reset(scope, actor, body);
   }
 
@@ -65,7 +63,7 @@ export class BotMenuBuilderController {
     @Req() request: FastifyRequest,
     @Query() query: unknown,
   ): Promise<MainMenuRevisionListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.botMenuBuilder.revisions(scope, actor, query);
   }
 
@@ -75,23 +73,7 @@ export class BotMenuBuilderController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<MainMenuBuilderMutationResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.botMenuBuilder.restore(scope, actor, id, body);
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }

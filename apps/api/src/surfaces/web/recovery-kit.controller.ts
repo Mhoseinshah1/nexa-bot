@@ -6,11 +6,9 @@ import {
   type ImportRecoveryKitResponse,
   type InstallationKeysResponse,
   type RemoveInstallationKeyResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import { ipThrottleSubject } from '../../infrastructure/trusted-proxy.js';
 
 /**
@@ -32,7 +30,7 @@ export class RecoveryKitController {
 
   @Get(RECOVERY_KIT_ROUTES.keys)
   async keys(@Req() request: FastifyRequest): Promise<InstallationKeysResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { keys: await this.container.installationKeys.list(scope, actor) };
   }
 
@@ -52,7 +50,7 @@ export class RecoveryKitController {
     @Res() reply: FastifyReply,
     @Body() body: unknown,
   ): Promise<void> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const kit = await this.container.installationKeys.exportKit(scope, actor, body, {
       ip: ipThrottleSubject(request.ip, this.container.config.TRUSTED_PROXY_IPS),
     });
@@ -72,7 +70,7 @@ export class RecoveryKitController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<ImportRecoveryKitResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.installationKeys.importKit(scope, actor, body, {
       ip: ipThrottleSubject(request.ip, this.container.config.TRUSTED_PROXY_IPS),
     });
@@ -83,22 +81,7 @@ export class RecoveryKitController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<RemoveInstallationKeyResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.installationKeys.removeKey(scope, actor, body);
-  }
-
-  /** The same authentication every other Web Admin controller performs. */
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.container.config.NODE_ENV === 'production');
-    if (options.write) assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
   }
 }
