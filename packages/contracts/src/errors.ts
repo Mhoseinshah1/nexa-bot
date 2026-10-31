@@ -467,6 +467,12 @@ export const PLATFORM_ERROR_CODES = {
    * counts are in `details`; nothing was removed.
    */
   INSTALLATION_KEY_IN_USE: 'installation_key.in_use',
+  /**
+   * R12 F2: one client address sent more anonymous requests (health probes, the payment
+   * return, the sign-in form) in the current minute than this installation answers. Nothing
+   * was done; `details.retryAfterSeconds` says when the window ends.
+   */
+  REQUEST_RATE_LIMITED: 'platform.request_rate_limited',
 } as const;
 
 /**

@@ -484,6 +484,7 @@ export const ERROR_TEXT = {
   'platform.idempotency_in_flight': 'web.err_platform_idempotency_in_flight',
   'platform.idempotency_payload_mismatch': 'web.err_platform_idempotency_payload_mismatch',
   'platform.permission_denied': 'web.no_permission',
+  'platform.request_rate_limited': 'web.err_platform_request_rate_limited',
   'platform.secret_auth_failed': 'web.err_platform_secret_auth_failed',
   'platform.secret_key_id_mismatch': 'web.err_platform_secret_key_id_mismatch',
   'platform.secret_key_unknown': 'web.err_platform_secret_key_unknown',

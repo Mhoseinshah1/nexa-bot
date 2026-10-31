@@ -5,11 +5,9 @@ import {
   GLOBAL_SEARCH_ROUTES,
   globalSearchQuerySchema,
   type GlobalSearchResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
-import { adminActor, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import { singleValued } from './query.js';
 
 /**
@@ -29,20 +27,8 @@ export class GlobalSearchController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<GlobalSearchResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = globalSearchQuerySchema.parse(singleValued(raw));
     return this.container.globalSearch.search(scope, actor, query);
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.container.config.NODE_ENV === 'production');
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
   }
 }

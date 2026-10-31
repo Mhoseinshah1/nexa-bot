@@ -316,6 +316,25 @@ export class ProvisionerLoop {
   }
 
   /**
+   * Whether the loop is still WORKING, for the liveness watchdog (R12 F2, Codex P1 on #359).
+   *
+   * Wider than `iterationIsFresh` on purpose. Readiness moves only when a whole drain
+   * finishes, so one provider call at `PANEL_HTTP_TIMEOUT_MS` — or a drain of ten shorter
+   * ones — makes the provisioner unready for longer than the watchdog's three beats, and
+   * killing it then would abandon an operation mid-call. So: fresh, or a tick in flight
+   * whose last step finished within the tick window plus `inFlightAllowanceMs` — the same
+   * evidence `laneStatuses` uses. A step past its own allowance is a hang, and still exits.
+   */
+  isWorking(nowMs: number): boolean {
+    if (this.iterationIsFresh(nowMs)) return true;
+    const window = this.options.tickMs * STALE_TICK_MULTIPLE;
+    return (
+      this.tickActivityAt !== null &&
+      nowMs - this.tickActivityAt <= window + (this.options.inFlightAllowanceMs ?? 0)
+    );
+  }
+
+  /**
    * Each lane, stalled or not, for the operations log (FIX-03, batch 2026-10-10).
    *
    * Three answers per lane (Codex P2 on #258):

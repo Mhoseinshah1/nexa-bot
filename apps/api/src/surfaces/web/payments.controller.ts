@@ -45,10 +45,9 @@ import {
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import type { PublicLabels } from '../../modules/commerce/public-codes/application/public-labels.js';
-import { adminActor, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin, type adminActor } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type {
   PaymentCursor,
   PaymentCustomerIdentity,
@@ -98,7 +97,7 @@ export class PaymentsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<PaymentListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // A repeated parameter is an ARRAY, not a string — the guard every list here uses.
     const query = singleValued(raw);
     const page = paymentListQuerySchema.parse({
@@ -183,7 +182,7 @@ export class PaymentsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<PaymentAttentionResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = singleValued(raw);
     const input = paymentAttentionQuerySchema.parse({
       ...(query.range === undefined ? {} : { range: query.range }),
@@ -207,7 +206,7 @@ export class PaymentsController {
 
   @Get('payments/:id')
   async detail(@Req() request: FastifyRequest, @Param('id') id: string): Promise<PaymentResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const [payment, destination, credit] = await Promise.all([
       this.container.payments.get(scope, actor, id),
       this.container.payments.destinationFor(scope, actor, id),
@@ -268,7 +267,7 @@ export class PaymentsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<PaymentResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = paymentReconcileRequestSchema.parse(body);
     await this.container.payments.reconcileGatewayPayment(scope, actor, id, {
       to: input.to,
@@ -285,7 +284,7 @@ export class PaymentsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<PaymentReinquireResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = paymentReinquireRequestSchema.parse(body);
     const requested = await this.container.payments.reinquireGatewayPayment(scope, actor, id, {
       idempotencyKey: input.idempotencyKey,
@@ -303,7 +302,7 @@ export class PaymentsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<PaymentTimelineResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const view = await this.container.paymentTimeline.timeline(scope, actor, id);
     return {
       // The canonical id, not the path's spelling of it (Codex review of #81).
@@ -323,7 +322,7 @@ export class PaymentsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<CompensationListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = singleValued(raw);
     const page = compensationListQuerySchema.parse({
       ...(query.limit === undefined ? {} : { limit: query.limit }),
@@ -357,7 +356,7 @@ export class PaymentsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<PaymentReceiptListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const records = await this.container.receipts.listForPayment(
       scope,
       actor,
@@ -390,7 +389,7 @@ export class PaymentsController {
     @Param('paymentId') paymentId: string,
     @Param('receiptId') receiptId: string,
   ): Promise<void> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const { receipt } = await this.container.receipts.findForDownload(
       scope,
       actor,
@@ -428,22 +427,6 @@ export class PaymentsController {
       // A customer's bank receipt must not sit in a proxy or a browser cache.
       .header('cache-control', 'no-store')
       .send(Buffer.from(fetched.bytes));
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

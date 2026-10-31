@@ -8,11 +8,9 @@ import {
   type BotMenuConfigResponse,
   type CheckBotMenuResponse,
   type SyncBotMenuResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 
 /**
  * The bot's menu — the keyboard's items beside every bot's command-menu sync state — at
@@ -33,13 +31,13 @@ export class BotMenuController {
 
   @Get(BOT_MENU_ROUTES.config)
   async config(@Req() request: FastifyRequest): Promise<BotMenuConfigResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.botMenu.config(scope, actor);
   }
 
   @Post(BOT_MENU_ROUTES.sync)
   async sync(@Req() request: FastifyRequest, @Body() body: unknown): Promise<SyncBotMenuResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = syncBotMenuRequestSchema.parse(body);
     return this.container.botMenu.resync(scope, actor, input);
   }
@@ -50,24 +48,8 @@ export class BotMenuController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<CheckBotMenuResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = checkBotMenuRequestSchema.parse(body ?? {});
     return this.container.botMenu.check(scope, actor, input);
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }

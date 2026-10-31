@@ -909,6 +909,8 @@ cmd_status() {
 
   status_secrets
   status_capabilities
+  # R12 F2: the PostgreSQL / Redis sizing this installation runs with.
+  nexa_db_tuning_report
 
   printf '\nreadiness: '
   if nexa_wait_ready 5; then
@@ -1417,6 +1419,11 @@ cmd_update() {
   fi
   nexa_ok "migrations applied"
 
+  # R12 F2: size PostgreSQL for this host before the start that applies it. Memory
+  # settings only — no data change — and a release whose compose file does not read
+  # these keys ignores them, so the back-out below and a later rollback are unaffected.
+  nexa_record_pg_tuning
+
   # 6. START the target.
   nexa_step "starting ${target}"
   if ! nexa_bring_up_with_edge "$target_image" "$target_edge"; then
@@ -1774,6 +1781,10 @@ cmd_restart() {
   local edge
   edge="$(nexa_edge_config_fingerprint)" ||
     nexa_die "cannot fingerprint the edge configuration on this host, so a restart cannot guarantee the edge serves it."
+  # R12 F2: PostgreSQL sized for this host here too. The FIRST update into a release that
+  # sizes it runs the outgoing release's botctl, which does not, so this restart — run by
+  # the new botctl — is what applies it on that installation.
+  nexa_record_pg_tuning
   nexa_bring_up_with_edge "" "$edge" ||
     nexa_die "the stack restarted but the edge did not adopt the installed configuration (${edge#sha256:}). Run 'botctl logs caddy'."
   nexa_wait_ready || nexa_die "the stack restarted but the API is not ready."
