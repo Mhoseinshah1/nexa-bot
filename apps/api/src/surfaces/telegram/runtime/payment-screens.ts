@@ -391,8 +391,9 @@ function cancelNoticeKey(
   if (answeredSince) return null;
   if (request.state === 'UNKNOWN') return 'bot.payment.gateway_cancel_unknown';
   /*
-   * R11 A8: the customer's cancel that TonPays rate-limited — or that the TonPays client's own
-   * limiter held before it left — did not go through either. To the customer it is the same
+   * R11 A8: the customer's cancel that TonPays rate-limited did not go through either (one the
+   * TonPays client's own limiter HELD is not decided at all: the lane puts it back and sends it
+   * when the key may be used, so it reads "cancelling…" meanwhile). To the customer it is the same
    * open question as a lost answer (owner: «لغو فاکتور از سمت تون‌پی مشخص نشد»), with the same
    * way on: the cancel button, which `cancelAvailable` keeps. Nexa's own rate-limited cancel
    * (before a new create) is asked again by Nexa and says nothing here.

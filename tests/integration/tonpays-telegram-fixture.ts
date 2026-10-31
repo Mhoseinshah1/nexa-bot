@@ -16,6 +16,7 @@ import {
   type FetchLike,
 } from '../../apps/api/src/modules/commerce/payments/infrastructure/tonpays-adapter';
 import { TonPaysTelegramAdapter } from '../../apps/api/src/modules/commerce/payments/infrastructure/tonpays-telegram-adapter';
+import type { TonPaysRateLimiter } from '../../apps/api/src/modules/commerce/payments/infrastructure/tonpays-rate-limiter';
 import {
   GatewayPaymentService,
   gatewayCallbackUrl,
@@ -54,7 +55,15 @@ export interface FakeTelegramInvoice {
 }
 
 export type FakeWrite =
-  'OK' | 'TIMEOUT' | 'SERVER_ERROR' | { readonly code: string; readonly status: number };
+  | 'OK'
+  | 'TIMEOUT'
+  | 'SERVER_ERROR'
+  | {
+      readonly code: string;
+      readonly status: number;
+      /** R11 A8: a `Retry-After` header on the answer (only `/cancel` sends it). */
+      readonly retryAfter?: string;
+    };
 
 export interface RecordedCall {
   readonly url: string;
@@ -303,7 +312,9 @@ export class FakeTonPaysTelegram {
       const invoice = this.invoices.get(decodeURIComponent(cancel[1]!));
       const mode = this.cancelMode;
       if (typeof mode === 'object') {
-        return json(mode.status, { detail: { code: mode.code, message: 'refused' } });
+        const answer = json(mode.status, { detail: { code: mode.code, message: 'refused' } });
+        if (mode.retryAfter !== undefined) answer.headers.set('retry-after', mode.retryAfter);
+        return answer;
       }
       if (mode === 'SERVER_ERROR') return json(502, { error: 'bad gateway' });
       if (mode === 'TIMEOUT') throw new Error('socket hang up');
@@ -519,10 +530,16 @@ export function telegramLaneWith(
         ) => DrizzleGatewayProviderRequestRepository);
     /** R5A item 4: the late-credit collaborator the production lane is given; absent, none. */
     readonly lateCredit?: GatewayPaymentServiceDeps['lateCredit'];
+    /** R11 A8: the per-key TonPays limiter the production adapters share; absent, none. */
+    readonly limiter?: TonPaysRateLimiter;
   } = {},
 ): GatewayPaymentService {
   const db = ctx.container.database.db;
-  const telegram = new TonPaysTelegramAdapter({ fetch: fake.fetch, timeoutMs: 2_000 });
+  const telegram = new TonPaysTelegramAdapter({
+    fetch: fake.fetch,
+    timeoutMs: 2_000,
+    ...(overrides.limiter === undefined ? {} : { limiter: overrides.limiter }),
+  });
   const website = new TonPaysAdapter({
     fetch:
       overrides.websiteFetch ??
