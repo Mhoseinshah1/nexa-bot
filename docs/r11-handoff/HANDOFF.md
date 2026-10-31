@@ -35,11 +35,13 @@ in the session scratchpad, so if lost, rebuild it from the PR descriptions above
 See `docs/round-reports/phase-1.md` (pending commit): rebase→merge; #355 diagnosis correction;
 A11 trusts only the sweep's EXPIRED; A8 HELD-cancel requeue bounded by the customer window.
 
-## Open owner questions
+## Owner answers (2026-10-31, binding; both go into F3)
 
-- OQ-R11-A11-04: a pay tap on a live order past its deadline still gets the old `bot.order.expired`
-  «… لطفاً دوباره سفارش دهید.» (pre-A11 text; not rewritten).
-- A8: `gateway_cancel_unknown` wording for a readable RATE_LIMIT_EXCEEDED (new key needed).
+- OQ-R11-A11-04: change it — a still-live payment must never read "order again". NEW key for that
+  case: payment still being checked, do NOT pay again, result comes in the bot, button to the
+  order/payment status. (`bot.order.expired` stays for a draft past its hold.)
+- A8 rate-limited cancel: NEW key, accurate sentence — the cancel request is queued and retried
+  automatically; nothing to do; do not pay again.
 
 ## Sandbox notes
 
