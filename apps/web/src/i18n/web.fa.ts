@@ -10749,6 +10749,8 @@ export const WEB_FA = {
   'web.err_platform_idempotency_in_flight': 'همین درخواست هنوز در حال انجام است. کمی صبر کنید.',
   'web.err_platform_idempotency_payload_mismatch':
     'این درخواست با درخواست قبلی همین فرم نمی‌خواند. فرم را دوباره باز کنید.',
+  'web.err_platform_request_rate_limited':
+    'از این نشانی در این دقیقه درخواست‌های زیادی رسیده است. یک دقیقه صبر کنید و دوباره تلاش کنید.',
   'web.err_platform_secret_auth_failed': 'رمزگشایی دادهٔ محرمانه انجام نشد.',
   'web.err_platform_secret_key_id_mismatch': 'شناسهٔ کلید رمزنگاری با داده نمی‌خواند.',
   'web.err_platform_secret_key_unknown': 'کلید رمزنگاری این داده در این نصب نیست.',
