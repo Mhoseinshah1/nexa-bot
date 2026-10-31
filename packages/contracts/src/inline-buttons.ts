@@ -119,6 +119,7 @@ const INLINE_BUTTON_SUGGESTED_STYLES: Readonly<
   'payment.centralpay_open': 'success',
   'service.renew_option': 'success',
   'service.rotate_confirm': 'success',
+  'service.files_new_confirm': 'success',
   'service.location_confirm': 'success',
   'service.resume_confirm': 'success',
   'service.transfer_confirm': 'success',
@@ -248,6 +249,9 @@ export const INLINE_BUTTONS = [
   button('service.link', 'SERVICE_ACTIONS', 'bot.service.link_button'),
   button('service.rotate', 'SERVICE_ACTIONS', 'bot.service.rotate_button'),
   button('service.rotate_confirm', 'SERVICE_ACTIONS', 'bot.service.rotate_confirm_button'),
+  // R11 A4: on a files-only panel «تغییر لینک» is «دریافت فایل‌های جدید» (same slot, same tap).
+  button('service.files_new', 'SERVICE_ACTIONS', 'bot.service.files_new_button'),
+  button('service.files_new_confirm', 'SERVICE_ACTIONS', 'bot.service.files_new_confirm_button'),
   button('service.note', 'SERVICE_ACTIONS', 'bot.service.note_button'),
   button('service.renew', 'SERVICE_ACTIONS', 'bot.service.renew_button'),
   button('service.renew_option', 'SERVICE_ACTIONS', 'bot.service.renew_option_button'),

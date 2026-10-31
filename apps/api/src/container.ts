@@ -125,6 +125,10 @@ import {
 // WP-A8: advanced provider settings.
 import { PanelAdvancedService } from './modules/platform/panels/application/panel-advanced.service.js';
 import { PanelPolicyReader } from './modules/platform/panels/application/panel-policy.js';
+import {
+  PanelFilesOnlyReader,
+  PanelQrOptionsReader,
+} from './modules/platform/panels/application/panel-files-only.js';
 import { DrizzlePanelPolicyRepository } from './modules/platform/panels/infrastructure/drizzle-panel-policy.repository.js';
 import { PROVIDER_RULES } from './modules/platform/providers/infrastructure/provider-rules.js';
 import { SystemClock } from './infrastructure/clock.js';
@@ -2520,6 +2524,9 @@ export function createContainer(
    */
   const panelPolicyRepository = new DrizzlePanelPolicyRepository(database.db);
   const panelPolicyReader = new PanelPolicyReader(panelPolicyRepository);
+  // R11 A4: «فقط فایل، بدون لینک ساب» — the one reader every link-showing place asks.
+  const panelFilesOnlyReader = new PanelFilesOnlyReader(panelRepository);
+  const panelQrOptionsReader = new PanelQrOptionsReader(panelRepository);
   const panelSalesGate = new PanelSalesGate({
     panels: panelRepository,
     capacity: panelCapacity,
@@ -6389,6 +6396,8 @@ export function createContainer(
     clock,
     guard,
     panelPolicy: panelPolicyReader,
+    filesOnly: panelFilesOnlyReader,
+    qrOptions: panelQrOptionsReader,
     /*
      * R3 item 6: every connection file, right after a delivered link, for any purchase
      * kind. `subscriptionFileService` is built further down (it needs the provisioning

@@ -4952,6 +4952,8 @@ export const WEB_FA = {
   'web.ib_button_service_link': 'دریافت لینک اتصال',
   'web.ib_button_service_rotate': 'تغییر لینک',
   'web.ib_button_service_rotate_confirm': 'تأیید تغییر لینک',
+  'web.ib_button_service_files_new': 'دریافت فایل‌های جدید (پنل فقط‌فایل)',
+  'web.ib_button_service_files_new_confirm': 'تأیید دریافت فایل‌های جدید (پنل فقط‌فایل)',
   'web.ib_button_service_note': 'یادداشت',
   'web.ib_button_service_renew': 'تمدید سرویس',
   'web.ib_button_service_renew_option': 'گزینه‌های تمدید',
@@ -10694,6 +10696,26 @@ export const WEB_FA = {
   'web.err_panel_credential_too_short':
     'کلید وارد‌شده کوتاه‌تر از کمترین طولی است که این نوع پنل می‌پذیرد.',
   'web.err_panel_credential_unsupported': 'این نوع اطلاعات ورود برای این پنل پشتیبانی نمی‌شود.',
+  'web.delivery_options_title': 'تحویل به مشتری',
+  'web.delivery_options_hint':
+    'تعیین می‌کند مشتری این پنل چه چیزی از اتصال خود می‌بیند. با ذخیره‌کردن چیزی برای مشتری فرستاده نمی‌شود.',
+  'web.files_only_title': 'فقط فایل، بدون لینک ساب',
+  'web.files_only_hint':
+    'اگر روشن باشد، مشتری این پنل هرگز لینک اشتراک، QR یا دکمهٔ کپی نمی‌بیند؛ فقط فایل‌های اتصال را می‌گیرد و «تغییر لینک» برایش «دریافت فایل‌های جدید» می‌شود.',
+  'web.qr_kind_label': 'نوع بارکد',
+  'web.qr_kind_hint': 'QR که مشتری می‌بیند: لینک اشتراک، واردکردن در sing-box یا هر دو.',
+  'web.qr_kind_sub_link': 'QR لینک اشتراک (پیش‌فرض)',
+  'web.qr_kind_singbox': 'QR مخصوص sing-box',
+  'web.qr_kind_both': 'هر دو QR',
+  'web.singbox_interval_label': 'فاصلهٔ به‌روزرسانی خودکار sing-box (دقیقه)',
+  'web.singbox_interval_hint': 'عدد صحیح بین {min} و {max}. پیش‌فرض 360 دقیقه.',
+  'web.singbox_interval_invalid': 'فاصله باید عددی صحیح در بازهٔ مجاز باشد.',
+  'web.qr_kind_files_only_note':
+    'تا وقتی «فقط فایل، بدون لینک ساب» روشن است هیچ QR نشان داده نمی‌شود.',
+  'web.err_panel_qr_kind_unsupported':
+    'نوع بارکد فقط برای پنل‌های ریک‌پنل قابل تنظیم است؛ این پنل فقط QR لینک اشتراک دارد.',
+  'web.err_panel_files_only_unsupported':
+    'این پنل فایل اتصال تحویل نمی‌دهد؛ گزینهٔ «فقط فایل، بدون لینک ساب» فقط برای پنل‌هایی ممکن است که فایل اتصال دارند.',
   'web.err_panel_credentials_missing': 'اطلاعات ورود پنل وارد نشده است.',
   'web.err_panel_delivery_tutorial_stale':
     'راهنمای تحویل در همین فاصله تغییر کرده است. صفحه را تازه کنید.',

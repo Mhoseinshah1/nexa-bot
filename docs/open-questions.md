@@ -4738,3 +4738,20 @@ live; the owner decides otherwise.
   idempotency row (a redelivery is ignored again); `tests/unit/telegram-unknown-update-kinds.test.ts`
   pins this. If bot subscriptions become a product feature, the update needs its own route,
   its own contract and an owner decision about what it moves.
+
+## R11 A4 — files only, no subscription link; the RickPanel QR kind
+
+- **OQ-R11-A4-01 — files only on a panel whose customer «فایل‌های اتصال» action is switched off.**
+  A panel policy may switch off the customer `SUBSCRIPTION_FILES` action; with «فقط فایل، بدون
+  لینک ساب» on, such a customer then has neither the link nor the files. Not guarded: the two
+  settings are saved independently. Default: left as is; refusing the combination in the policy
+  save (and warning on the switch) is a small follow-up if the owner wants it.
+- **OQ-R11-A4-02 — a mini-app customer of a files-only panel.** The mini app has no files screen,
+  so such a customer sees no link and no QR there and is not shown how to get the files. Default:
+  nothing new is added; the bot's «📁 دریافت فایل‌های اتصال» is where the files are.
+- **OQ-R11-A4-03 — the panel's own per-file captions.** RickPanel may write the subscription link
+  into the caption it sends with a file. The bot passes that caption through; on a files-only panel
+  it cannot know whether it names the link. Default: unchanged.
+- **OQ-R11-A4-04 — the sing-box import string on iOS and desktop.** The format
+  `sing-box://import-remote-profile?url=…&autoUpdate=true&autoUpdateInterval=…` is the owner's;
+  which clients honour `autoUpdate*` has not been measured against a real client.
