@@ -15,6 +15,7 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
+import { perBotWebhookSecret } from '../../modules/platform/tenancy/application/webhook-secret.js';
 import { recordQuietly } from '../../modules/platform/opslog/application/error-events.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import { STARS_CHARGE_UNMATCHED_CODE } from '../../modules/commerce/payments/application/telegram-stars-payment.service.js';
@@ -98,8 +99,16 @@ export class TelegramWebhookController {
     const expected = this.container.config.TELEGRAM_WEBHOOK_SECRET;
 
     // Authenticated before the bot id is even parsed, so the endpoint cannot be
-    // used to probe which bot ids exist.
-    if (!expected || !secretTokenMatches(secretToken, expected)) {
+    // used to probe which bot ids exist. R12 F2: the bot's own derived secret is
+    // accepted beside the installation-wide one (see `perBotWebhookSecret`); it is
+    // computed from the id AS WRITTEN in the URL, so it reveals nothing either.
+    if (
+      !expected ||
+      !(
+        secretTokenMatches(secretToken, expected) ||
+        secretTokenMatches(secretToken, perBotWebhookSecret(expected, botInstanceIdParam))
+      )
+    ) {
       throw errors.unauthenticated(
         PLATFORM_ERROR_CODES.TELEGRAM_BAD_SECRET_TOKEN,
         'Missing or incorrect Telegram secret token.',
