@@ -104,6 +104,11 @@ export const MINIAPP_FA = {
   'miniapp.checkout_no_routes': 'روش پرداخت دیگری فعال نیست.',
   'miniapp.checkout_pay': 'پرداخت',
   'miniapp.checkout_cancel': 'لغو سفارش',
+  // R12 F3 item 5: the cancel asks first, in the bot's own words (`bot.order.cancel_confirm`).
+  'miniapp.checkout_cancel_title': 'لغو سفارش',
+  'miniapp.checkout_cancel_question':
+    'آیا از لغو این سفارش مطمئن هستید؟ این کار برگشت‌پذیر نیست و قیمت فعلی شما از بین می‌رود؛ سفارش بعدی با قیمت روز ثبت می‌شود.',
+  'miniapp.checkout_cancel_yes': 'بله، سفارش را لغو کن',
   'miniapp.checkout_expires': 'این پیش‌فاکتور تا {at} معتبر است.',
   'miniapp.checkout_not_payable': 'این سفارش دیگر قابل پرداخت نیست.',
 

@@ -9,12 +9,23 @@ import {
   type MiniAppOrder,
   type MiniAppPaymentRoutesResponse,
 } from '@nexa/contracts';
-import { formatDurationDays } from '@nexa/i18n';
+import { CATALOGUE_FA, formatDurationDays } from '@nexa/i18n';
 import { useApp } from '../app.js';
 import { t } from '../i18n/t.js';
 import { dateTime, money, trafficLimit } from '../format.js';
+import { Sheet } from '../sheet.js';
 import { openExternal } from '../telegram.js';
 import { Button, Card, Loading, Ltr, Row, errorText, useLoad } from '../ui.js';
+
+/**
+ * R12 F3 item 5: the custom-username rule, the bot's own lines (`bot.username.instructions`
+ * without its opening request) — so both surfaces state the same rule the shared validator
+ * enforces.
+ */
+const USERNAME_RULE: readonly string[] = CATALOGUE_FA['bot.username.instructions']
+  .split('\n')
+  .slice(1)
+  .map((line) => line.replace(/^•\s*/u, ''));
 
 /** What the customer chose to pay with: the wallet, or one route the server offered. */
 type Method =
@@ -66,6 +77,8 @@ function Invoice({
   const [error, setError] = useState<string | null>(null);
   const [code, setCode] = useState('');
   const [username, setUsername] = useState('');
+  // R12 F3 item 5: «لغو سفارش» asks before it cancels (the bot asks too).
+  const [confirmCancel, setConfirmCancel] = useState(false);
 
   const run = async (work: () => Promise<void>) => {
     setBusy(true);
@@ -211,6 +224,12 @@ function Invoice({
                   autoComplete="off"
                 />
               </label>
+              {/* R12 F3 item 5: the rule, in the bot's own lines, before the customer is refused. */}
+              <ul className="features muted" data-testid="username-rule">
+                {USERNAME_RULE.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
               <Button type="submit" disabled={busy || username.trim() === ''}>
                 {t('miniapp.checkout_username_save')}
               </Button>
@@ -279,12 +298,30 @@ function Invoice({
           <Button primary disabled={busy || method === null} onClick={pay}>
             {t('miniapp.checkout_pay')}
           </Button>
-          <Button disabled={busy} onClick={cancel}>
+          <Button disabled={busy} onClick={() => setConfirmCancel(true)}>
             {t('miniapp.checkout_cancel')}
           </Button>
         </Card>
       )}
       {error !== null && <p className="error">{error}</p>}
+      {confirmCancel && (
+        <Sheet title={t('miniapp.checkout_cancel_title')} onClose={() => setConfirmCancel(false)}>
+          <p>{t('miniapp.checkout_cancel_question')}</p>
+          <div className="sheet-actions">
+            <Button onClick={() => setConfirmCancel(false)}>{t('miniapp.sheet_cancel')}</Button>
+            <Button
+              primary
+              disabled={busy}
+              onClick={() => {
+                setConfirmCancel(false);
+                void cancel();
+              }}
+            >
+              {t('miniapp.checkout_cancel_yes')}
+            </Button>
+          </div>
+        </Sheet>
+      )}
     </>
   );
 }
