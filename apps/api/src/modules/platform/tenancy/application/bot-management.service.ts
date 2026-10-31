@@ -617,7 +617,7 @@ export class BotManagementService {
     const registered = await this.deps.telegram.registerWebhook({
       token,
       url: expectedUrl,
-      secretToken: perBotWebhookSecret(secret, botId),
+      secretToken: secret,
       dropPendingUpdates: false,
       resetAllowedUpdates: true,
     });
