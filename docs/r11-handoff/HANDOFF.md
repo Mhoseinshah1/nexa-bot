@@ -1,4 +1,4 @@
-# Handoff — NEXA-MASTER-NEXT (owner's `_prompts/NEXA-ALL.md`), after Phase 2 — STOPPED for the owner
+# Handoff — NEXA-MASTER-NEXT (owner's `_prompts/NEXA-ALL.md`), after Phase 3 — STOPPED (Phase 4 next, new session)
 
 Resume: the owner says "Continue NEXA-MASTER-NEXT from the latest handoff". Re-read
 `_prompts/NEXA-ALL.md` (master section + the current phase section) and this file. Skills were
@@ -7,8 +7,8 @@ slimmed in Phase 0; read them fresh. The older R11 handoff is in this branch's h
 
 ## main
 
-`main` = 45de2f4 (after #362). CI green on every merged head. Migrations end at 0295.
-Check main's push CI with `bash scripts/claude/ci-status.sh 45de2f4`.
+`main` = e3f67a8 (after #364). CI green on every merged head. Migrations end at 0295.
+Check main's push CI with `bash scripts/claude/ci-status.sh e3f67a8`.
 
 ## Phases
 
@@ -17,11 +17,24 @@ Check main's push CI with `bash scripts/claude/ci-status.sh 45de2f4`.
 | 0 token diet       | merged      | #352 (01c9d70); plus owner add-on `chore/codex-self-request` #353 (19117cd)                                                                                        |
 | 1 open R11 Phase A | merged      | #349 A4 (c26ff7e), #351 A10 (a8daa8b), #355 main-red test fix (7105aa2), #354 A11 (76921ca), #356 A8 (e93baa4)                                                     |
 | 2 fixes            | merged      | #357 hotfix (767576f), #359 F2 (d29b130), #360 F1 (1ef32e2), #361 F2.7 per-bot webhook secret (4a40484), #362 F3 (45de2f4); report `docs/round-reports/phase-2.md` |
-| 3–6                | not started |                                                                                                                                                                    |
+| 3 README+installer | merged      | #363 PR-1 installer assets (3a1b499), #364 PR-2 README (e3f67a8); report `docs/round-reports/phase-3.md` on THIS branch (carry it to main in Phase 4's first PR) |
+| 4–6                | not started |                                                                                                                                                                    |
 
 Phase 1 and Phase 2 reports are on main: `docs/round-reports/phase-1.md`, `phase-2.md`.
 
-## Owner decisions this session (binding)
+## Owner decisions (binding)
+
+- 2026-11-01: the MirzaBot cutover is POSTPONED (blocked on an importer issue the owner handles
+  separately). This overrides "stop after Phase 2 and wait for the cutover". Phase 3 ran and merged;
+  Phase 4 (`NEXA-PROMPT-SAI.md` ONLY) starts in a NEW session.
+- 2026-11-01 Phase 3 scope: no screenshots, no screenshot script, no demo seed, no chat mocks (a
+  follow-up for the final release); a text wordmark; README.fa.md is for non-technical readers; only
+  its commands must match README.md / botctl help (`pnpm check:readme`).
+- Session rules (repeat each session): Sonnet lead for coordination; at most 2 implementers; one
+  fresh Opus reviewer only for money/security/installer-verification PRs; mutation checks only for
+  money/security/guard code; one blocking wait per CI run; per PR: push, `@codex review` yourself,
+  first complete review only, ONE fix commit, green CI on the exact head (SHA from `git rev-parse`),
+  merge.
 
 - 2026-10-31 (after a container restart): every agent with uncommitted work pushes a WIP backup
   now and after each meaningful step to a SEPARATE branch `wip/<branch-name>`, never to a PR
@@ -91,18 +104,22 @@ R11 B/C item, check whether one of these already carries it.
 - backup 7-Zip unit tests need `7zz` (CI installs it; green there).
 - `/home/user/nexa-bot` is on an OLD commit (adbe45b); run repo scripts from a worktree of
   `origin/main` (`/home/user/wt-main`).
+- The sandbox's shellcheck (0.11) misses some SC2015 that CI flags; grep new deploy shell for
+  `A && B ||` before pushing.
 
 ## Open for the owner
 
 - OQ-R12-F3-02 (asked on #358): make a provider-rate-limited TonPays customer cancel retry inside the
   window and switch to the owner's wording (recommended), or keep F3's accurate wording.
-- The session proxy refuses branch deletion (403). Owner deletes `wip/fix/r12-money-edges`,
-  `wip/fix/r12-security-reliability`, `wip/fix/r12-webhook-secret-per-bot`, `wip/fix/r12-ux-quick-wins`.
+- The session cannot delete branches. Owner deletes: `wip/fix/r12-money-edges`,
+  `wip/fix/r12-security-reliability`, `wip/fix/r12-webhook-secret-per-bot`, `wip/fix/r12-ux-quick-wins`,
+  `ci/release-installer-assets`, `wip/ci/release-installer-assets`, `docs/readme-pro`.
+- Phase 3 low items (not fixed): release re-run `--clobber`, draft-release lookup, publish summary's
+  clone-mode command (see phase-3.md).
 - Merge tool lesson: pass the head SHA from `git rev-parse`, never typed (see phase-2.md).
 
 ## Next step
 
-STOPPED after Phase 2 by the owner's budget decision; the owner runs the MirzaBot cutover first.
-When the owner says go, start a FRESH session for Phase 3 (README + installer, `NEXA-PROMPT-README.md`,
-PR-1 then PR-2) under the token-budget rules above (Sonnet lead; one phase per session; max 2
-implementers). Post the phase report on issue #358.
+Phase 3 merged and reported on #358. STOP. A NEW session starts Phase 4 = `NEXA-PROMPT-SAI.md` ONLY
+(SAI-QUALITY and SAI-GUIDE deferred), under the session rules above. Its first PR also carries
+`docs/round-reports/phase-3.md` from this branch to main.
