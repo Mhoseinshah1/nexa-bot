@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { supportAiFailureDiagnosticSchema } from './support-ai.js';
+import { SUPPORT_AI_MODES, supportAiFailureDiagnosticSchema } from './support-ai.js';
 
 /**
  * TB1 — Telegram Business connections and the classification of a business message.
@@ -524,6 +524,8 @@ export const BUSINESS_CHAT_ROUTES = {
   send: (id: string) => `/business-chats/${encodeURIComponent(id)}/messages`,
   takeover: (id: string) => `/business-chats/${encodeURIComponent(id)}/takeover`,
   resume: (id: string) => `/business-chats/${encodeURIComponent(id)}/resume`,
+  /** Phase 4 PR-5: the per-conversation return, applied to every conversation a person holds. */
+  resumeAll: '/business-chats/resume-all',
   connections: '/business-connections',
 } as const;
 
@@ -543,6 +545,33 @@ export const businessChatControlRequestSchema = z.object({
   idempotencyKey: idempotencyKeySchema,
 });
 export type BusinessChatControlRequest = z.infer<typeof businessChatControlRequestSchema>;
+
+/** Conversations returned to the AI by one bulk request (the rest stay for the next one). */
+export const BUSINESS_CHAT_RESUME_ALL_LIMIT = 100;
+
+/**
+ * Phase 4 PR-5 — «بازگرداندن همه به هوش مصنوعی». Each conversation goes through the SAME
+ * `resume` (same permission, audit and idempotency, key `<key>:<conversationId>`). `includeHard`
+ * is the operator's explicit choice to also return HARD holds (money, a customer's request for
+ * a person, an operator's own takeover, holds from before kinds existed): without it only SOFT
+ * holds are returned and the hard ones are counted, never touched.
+ */
+export const businessChatResumeAllRequestSchema = z.object({
+  idempotencyKey: idempotencyKeySchema,
+  includeHard: z.boolean(),
+});
+export type BusinessChatResumeAllRequest = z.infer<typeof businessChatResumeAllRequestSchema>;
+
+export const businessChatResumeAllResponseSchema = z.object({
+  resumed: z.number().int().nonnegative(),
+  /** Hard holds left alone because `includeHard` was false. */
+  skippedHard: z.number().int().nonnegative(),
+  /** Conversations that could not be returned (changed meanwhile, refused). */
+  failed: z.number().int().nonnegative(),
+  /** More candidates remain than `BUSINESS_CHAT_RESUME_ALL_LIMIT`: ask again. */
+  more: z.boolean(),
+});
+export type BusinessChatResumeAllResponse = z.infer<typeof businessChatResumeAllResponseSchema>;
 
 /**
  * The inbox's query. TB10: the list is ordered HANDOFF_REQUIRED first, then by activity,
@@ -620,6 +649,12 @@ const conversationSummarySchema = z.object({
   handoffReason: z.enum(BUSINESS_HANDOFF_WIRE_REASONS).nullable(),
   /** The real reason (`businessHandoffWireReason`); see `businessHandoffReasonDetailSchema`. */
   handoffReasonDetail: businessHandoffReasonDetailSchema,
+  /**
+   * Phase 4 PR-5: whether the current hold is HARD (sticky) or SOFT (the AI returns by itself);
+   * null for an AI-held conversation and for a hold from before kinds existed (sticky).
+   * Optional when READ: an older replica does not send it.
+   */
+  handoffKind: z.enum(BUSINESS_HANDOFF_KINDS).nullable().optional().catch(undefined),
   peerTelegramUserId: z.string(),
   customer: z
     .object({ id: z.string(), username: z.string().nullable(), firstName: z.string().nullable() })
@@ -639,6 +674,12 @@ export type BusinessConversationSummary = z.infer<typeof conversationSummarySche
 export const businessChatListResponseSchema = z.object({
   conversations: z.array(conversationSummarySchema),
   nextCursor: z.string().nullable(),
+  /**
+   * Phase 4 PR-5: the support AI's mode as stored, so the inbox says what the AI really does
+   * (a conversation held by the AI while the mode is OFF is answered by nobody). Optional when
+   * READ (an older replica does not send it).
+   */
+  aiMode: z.enum(SUPPORT_AI_MODES).optional().catch(undefined),
 });
 export type BusinessChatListResponse = z.infer<typeof businessChatListResponseSchema>;
 
