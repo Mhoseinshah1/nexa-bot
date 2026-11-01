@@ -3,9 +3,10 @@
 Resume: re-read the owner's Phase 4 prompt (session upload `NEXA-PHASE4-SAI.md`, the version WITH
 the "Cross-cutting: manipulation / social-engineering hardening" section) and this block.
 
-- main = e67879b (after #366 PR-5; before it #365 PR-1 a8fb982). CI green 23/23 on each merged head. Migrations end at 0298.
+- main = 48d2db2 (after #367 PR-2; #366 PR-5 e67879b; #365 PR-1 a8fb982). CI green 23/23 on each merged head. Migrations end at 0299.
+- PR-2 `feat/sai-knowledge-live` #367 MERGED (48d2db2): Codex P1 credential URLs + 7 P2 + CI loop label + lead D8 wiring test in fix 133821d; migration renumbered 0297→0299 (byte-identical).
 - PR-5 `feat/sai-admin-ux` #366 MERGED (e67879b): readiness card, test console, model picker, bulk return, analytics/gaps, runbook + Persian owner guide. Codex 4 P2 + CI web fixes + lead D6 in fix commit e31f57c.
-- PR-2 `feat/sai-knowledge-live` #367 OPEN (head 9e365b4; its migration 0297 must be renumbered to 0299 when main is merged in). PR-3 `feat/sai-actions` in progress, stacked on PR-2 (/home/user/wt-sai3, DB nexa_sai3).
+- PR-3 `feat/sai-actions` in progress, stacked on PR-2 (/home/user/wt-sai3, DB nexa_sai3).
 - PR-1 `fix/sai-handoff-policy` #365 MERGED (also brought `docs/round-reports/phase-3.md` into main).
   Codex: 4 P2 (money window stops at business reply; job lease covers 2 generations; sticky takeover
   for SOFT HUMAN_ACTIVE in Web Admin; cited-service flag on NO_ACTION close) + lead D3 (promise phrase,
@@ -16,7 +17,7 @@ the "Cross-cutting: manipulation / social-engineering hardening" section) and th
   PR-4 `feat/sai-bot-tickets` (Sonnet) → PR-6 `chore/sai-eval` (Sonnet; ≥40 attack scenarios). PR-5 parallel.
 - Decisions taken so far (D1 hardening split PR-1/PR-3; D2 stacking; D3 promise phrase; D4 ACCOUNT_UNDER_REVIEW
   hard, SUSPICIOUS_PROBING soft) go into `docs/round-reports/phase-4.md` at the end.
-- Branches to delete after the round (owner): `fix/sai-handoff-policy`, `feat/sai-admin-ux`.
+- Branches to delete after the round (owner): `fix/sai-handoff-policy`, `feat/sai-admin-ux`, `feat/sai-knowledge-live`.
 
 ---
 
