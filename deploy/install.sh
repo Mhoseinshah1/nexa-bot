@@ -77,8 +77,9 @@ nexa_standalone() {
 
   # The stamp is checked for shape as well as presence: it becomes part of a
   # URL and a file name.
-  [[ $version =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] && [[ $version != *..* ]] ||
+  if [[ ! $version =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || [[ $version == *..* ]]; then
     nexa_standalone_die "the release stamp in this installer is damaged (version \"${version}\"). Download install.sh again."
+  fi
   [[ $repo =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
     nexa_standalone_die "the release stamp in this installer is damaged (repository \"${repo}\"). Download install.sh again."
   [[ $expected =~ ^[0-9a-f]{64}$ ]] ||
