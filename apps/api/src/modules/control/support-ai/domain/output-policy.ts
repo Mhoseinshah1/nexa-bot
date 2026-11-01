@@ -1,24 +1,30 @@
+import { domainToASCII } from 'node:url';
 import { foldCustomerText } from './auto-reply-guards.js';
 
 /**
  * Phase 4 PR-1 (cross-cutting hardening, item 3) — the server-side output validator, run on
- * every automatic reply AFTER the model and the decision guards. Pure: no clock, no database.
+ * every automatic reply AFTER the model and the decision guards. Pure: no database; the time is
+ * passed in (from the Clock port) for the date rule.
  *
- * Even a fully fooled model can only send what NEXA already holds for THIS customer or has
- * published itself:
+ * It is a BACKSTOP. The primary control is that nothing secret is in the model's context at all
+ * (item 2: the payload carries only this customer's own facts and the tenant's published
+ * content), so a fooled model has nothing to leak. This only refuses a reply that names what the
+ * context does not hold. Its rules are deliberately blunt (second security review: no regex arms
+ * race) — a false positive costs one regeneration, then a soft handoff, never a wrong message:
  *
- * - every LINK is one the context carries (the tenant's published content — knowledge, client
- *   apps, support accounts — or this customer's own facts) or a whitelisted tenant link (the
- *   bot's own start link);
- * - every NUMBER of four digits or more — an amount, a card, a phone, a Telegram id, a tracking
- *   code — is one the context carries (the customer's own facts or published content), or one
- *   a plugged-in price family recognises (PR-2 adds the live catalogue). Shorter numbers (a
- *   step, «۳۰ روز», «۵۰ گیگ») are not identifiers and pass;
- * - every Telegram HANDLE is one the context carries;
- * - no PROMISE word (refund, compensation, free, discount, «برمی‌گردونیم», «رایگان», «تخفیف
- *   می‌دم», their Finglish forms…) unless that very word is in approved knowledge.
- *
- * A failure is regenerated once by the caller; a second failure hands off (`OUTPUT_POLICY`).
+ * - LINKS and EMAILS: any `scheme://…`, any `local@domain`, any domain-like token — labels of
+ *   letters (any script, punycode `xn--` included) and digits with a TLD — must equal (after
+ *   IDNA `domainToASCII` and lower-casing) a link the context or the tenant whitelists; a bare
+ *   host passes when an allowed link lives on it.
+ * - NUMBERS: after the allowed links and the numbers the context holds are removed, ALL digits of
+ *   a line, and of the whole reply, are joined (every script, normalised to Latin, whatever
+ *   separates them); a joined sequence of 8+ digits must occur in the context's own joined
+ *   digits, and every digit group of 4+ must be a number the context holds (or the price
+ *   family's, PR-2). A DATE is removed first only when its year is within ±1 of now (Gregorian or
+ *   Jalali); any other date is digits like the rest.
+ * - HANDLES: any `@handle` must be one the context holds.
+ * - PROMISES: refund, compensation, free, discount, «برمی‌گردونیم», «رایگان», «تخفیف می‌دم»…
+ *   only when approved knowledge carries the same word.
  */
 
 export type OutputPolicyViolation = 'link' | 'number' | 'handle' | 'promise';
@@ -32,39 +38,45 @@ export interface OutputPriceFamily {
 }
 
 export interface OutputPolicyAllowance {
+  /** Normalised links and emails (`normaliseLink`). */
   readonly links: ReadonlySet<string>;
+  /** Every digit group the context holds, and every amount's ÷10 / ÷1000 form. */
   readonly numbers: ReadonlySet<string>;
+  /** Each context string's digits, joined: where an 8+ digit sequence of a reply may occur. */
+  readonly joinedDigits: readonly string[];
   readonly handles: ReadonlySet<string>;
   /** Approved knowledge's text, folded (`foldCustomerText`): where a promise word may come from. */
   readonly knowledgeText: string;
   readonly priceFamily?: OutputPriceFamily;
 }
 
-/**
- * Every link Telegram would make clickable (security review of PR-1): any `scheme://` (http,
- * https, tg…), and any bare domain-like token — a hostname with a letter TLD, with or without a
- * path (`bit.ly/abc`, `example.com`, `telegram.me/x`, `telegram.dog/x`).
- */
-const URL_PATTERN =
-  /(?:\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"«»()]+)|(?<![\p{L}\p{N}@._-])(?:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\.)+[a-z]{2,24}\b(?:[/?#][^\s<>"«»()]*)?/giu;
-const HANDLE_PATTERN = /(?<![\p{L}\p{N}_])@([A-Za-z][A-Za-z0-9_]{3,31})/gu;
-/** A digit run, Persian and Arabic digits included, thousands separators inside it allowed. */
-const NUMBER_PATTERN = /[0-9۰-۹٠-٩](?:[0-9۰-۹٠-٩]|[,٬،.](?=[0-9۰-۹٠-٩]{3}))*/gu;
-/**
- * A digit sequence split by separators (security review of PR-1): digits joined by up to three
- * characters that are neither a letter nor a digit — spaces, `- / . _ ,`, a ZWNJ, Persian and
- * Arabic separators — are one number, judged whole («6037 9912…», «0912/123/4567»).
- */
-const SPAN_PATTERN = /[0-9۰-۹٠-٩](?:[^\p{L}\p{N}]{0,3}[0-9۰-۹٠-٩])*/gu;
+const LABEL = '[\\p{L}\\p{N}](?:[\\p{L}\\p{N}-]{0,62}[\\p{L}\\p{N}])?';
+/** A TLD: Latin letters, punycode, or the Persian IDN TLD. */
+const TLD = '(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59}|ایران)';
+const HOST = `(?:${LABEL}\\.)+${TLD}(?![\\p{L}\\p{N}])`;
+const LINK_PATTERN = new RegExp(
+  [
+    // any scheme: http, https, tg, …
+    '[a-z][a-z0-9+.-]*:\\/\\/[^\\s<>"«»()]+',
+    // an email
+    `[\\p{L}\\p{N}._%+-]+@${HOST}`,
+    // a bare host, with or without a path
+    `(?<![\\p{L}\\p{N}@._-])${HOST}(?:[/?#:][^\\s<>"«»()]*)?`,
+  ].join('|'),
+  'giu',
+);
+const HANDLE_PATTERN = /(?<![\p{L}\p{N}_.])@([A-Za-z][A-Za-z0-9_]{3,31})(?![A-Za-z0-9_.])/gu;
+/** One digit group: digits with thousands separators inside it. */
+const GROUP_PATTERN = /[0-9۰-۹٠-٩](?:[0-9۰-۹٠-٩]|[,٬،.](?=[0-9۰-۹٠-٩]{3}))*/gu;
+/** A date: year, month, day with any single separator; digits of any script. */
+const DATE_PATTERN =
+  /(?<![0-9۰-۹٠-٩])([0-9۰-۹٠-٩]{4})[/.-]([0-9۰-۹٠-٩]{1,2})[/.-]([0-9۰-۹٠-٩]{1,2})(?![0-9۰-۹٠-٩])/gu;
+/** Shorter than this, a digit group is a count or a step, never an identifier or an amount. */
+const IDENTIFIER_MIN_DIGITS = 4;
 /** A joined sequence this long is an identifier (a card, a phone, an id), never a count. */
 const SEQUENCE_MIN_DIGITS = 8;
-/** A date (Jalali or Gregorian), which is not an identifier however many digits it has. */
-const DATE_SHAPE =
-  /^(?:1[34]|19|20)[0-9]{2}[/.-](?:0?[1-9]|1[0-2])[/.-](?:0?[1-9]|[12][0-9]|3[01])$/u;
-/** Shorter than this, a number is a count or a step, never an identifier or an amount. */
-const IDENTIFIER_MIN_DIGITS = 4;
 
-/** Latin digits, separators dropped. */
+/** Latin digits, everything else dropped. */
 export function digitsOf(text: string): string {
   return text
     .replace(/[۰-۹]/gu, (d) => String(d.charCodeAt(0) - 0x06f0))
@@ -72,18 +84,32 @@ export function digitsOf(text: string): string {
     .replace(/[^0-9]/gu, '');
 }
 
-/** A link as compared: scheme and `www.` dropped, host lower-cased, no trailing punctuation. */
+/**
+ * A link or email as compared: scheme and `www.` dropped, the host through IDNA
+ * (`domainToASCII`) and lower-cased, Telegram's aliases folded to t.me, no trailing punctuation.
+ */
 export function normaliseLink(link: string): string {
   const trimmed = link.replace(/[.,;:!?؟،)\]]+$/u, '');
-  const bare = trimmed
-    .replace(/^https?:\/\//iu, '')
-    .replace(/^www\./iu, '')
-    // Telegram's own aliases of t.me.
-    .replace(/^(?:telegram\.me|telegram\.dog)(?=\/|$)/iu, 't.me');
-  const slash = bare.indexOf('/');
-  const host = (slash < 0 ? bare : bare.slice(0, slash)).toLowerCase();
-  const path = slash < 0 ? '' : bare.slice(slash).replace(/\/+$/u, '');
-  return `${host}${path}`;
+  const at = trimmed.indexOf('@');
+  if (at > 0 && !trimmed.includes('://')) {
+    return `${trimmed.slice(0, at).toLowerCase()}@${asciiHost(trimmed.slice(at + 1))}`;
+  }
+  const bare = trimmed.replace(/^https?:\/\//iu, '');
+  const scheme = /^[a-z][a-z0-9+.-]*:\/\//iu.exec(bare)?.[0].toLowerCase() ?? '';
+  const rest = bare.slice(scheme.length);
+  const cut = rest.search(/[/?#]/u);
+  const host = asciiHost((cut < 0 ? rest : rest.slice(0, cut)).replace(/^www\./iu, '')).replace(
+    /^(?:telegram\.me|telegram\.dog)$/u,
+    't.me',
+  );
+  const path = cut < 0 ? '' : rest.slice(cut).replace(/\/+$/u, '');
+  return `${scheme}${host}${path}`;
+}
+
+function asciiHost(host: string): string {
+  const lower = host.toLowerCase();
+  const ascii = domainToASCII(lower);
+  return ascii === '' ? lower : ascii;
 }
 
 /**
@@ -111,6 +137,7 @@ export function outputPolicyAllowanceFromContext(
 ): OutputPolicyAllowance {
   const links = new Set<string>((extra.links ?? []).map(normaliseLink));
   const numbers = new Set<string>();
+  const joinedDigits: string[] = [];
   const handles = new Set<string>();
   const knowledge: string[] = [];
   let payload: unknown;
@@ -121,19 +148,21 @@ export function outputPolicyAllowanceFromContext(
   }
   const visit = (value: unknown, inKnowledge: boolean): void => {
     if (typeof value === 'string') {
-      for (const match of value.matchAll(URL_PATTERN)) links.add(normaliseLink(match[0]));
+      for (const match of value.matchAll(LINK_PATTERN)) links.add(normaliseLink(match[0]));
       for (const match of value.matchAll(HANDLE_PATTERN)) handles.add(match[1]!.toLowerCase());
-      for (const match of value.matchAll(SPAN_PATTERN)) numbers.add(digitsOf(match[0]));
-      for (const match of value.matchAll(NUMBER_PATTERN)) {
+      for (const match of value.matchAll(GROUP_PATTERN)) {
         const digits = digitsOf(match[0]);
-        if (digits === '') continue;
         numbers.add(digits);
         // An amount in minor units may be quoted in tomans or in thousands («۱۵۰ هزار»).
-        for (const divisor of ['0', '000']) {
-          if (digits.length > divisor.length && digits.endsWith(divisor)) {
-            numbers.add(digits.slice(0, -divisor.length));
+        for (const zeros of ['0', '000']) {
+          if (digits.length > zeros.length && digits.endsWith(zeros)) {
+            numbers.add(digits.slice(0, -zeros.length));
           }
         }
+      }
+      for (const line of value.split(/\n/u)) {
+        const joined = digitsOf(line);
+        if (joined.length >= SEQUENCE_MIN_DIGITS) joinedDigits.push(joined);
       }
       if (inKnowledge) knowledge.push(value);
       return;
@@ -151,49 +180,71 @@ export function outputPolicyAllowanceFromContext(
   return {
     links,
     numbers,
+    joinedDigits,
     handles,
     knowledgeText: foldCustomerText(knowledge.join('\n')),
     ...(extra.priceFamily === undefined ? {} : { priceFamily: extra.priceFamily }),
   };
 }
 
-/** Whether a reply names only what the allowance holds. */
+/** Whether a reply names only what the allowance holds. `now` is the Clock's. */
 export function checkOutputPolicy(
   reply: string,
   allowance: OutputPolicyAllowance,
+  now: Date,
 ): OutputPolicyVerdict {
   let rest = reply;
-  for (const match of reply.matchAll(URL_PATTERN)) {
+  // 1. Links and emails.
+  for (const match of reply.matchAll(LINK_PATTERN)) {
     const link = normaliseLink(match[0]);
-    // A bare host is allowed when an allowed link lives on it (naming github.com for an app
-    // whose release page the knowledge links).
+    // A bare host is allowed when an allowed link lives on it.
     const hostOnly =
-      !link.includes('/') && [...allowance.links].some((allowed) => allowed.startsWith(`${link}/`));
+      !link.includes('/') &&
+      !link.includes('@') &&
+      [...allowance.links].some((allowed) => allowed.startsWith(`${link}/`));
     if (!allowance.links.has(link) && !hostOnly) return { ok: false, violation: 'link' };
     // A number inside an allowed link is the link's, not an amount.
     rest = rest.replace(match[0], ' ');
   }
-  // Digits split by separators are judged as the one number they spell.
-  for (const match of rest.matchAll(SPAN_PATTERN)) {
-    const digits = digitsOf(match[0]);
-    if (digits.length < SEQUENCE_MIN_DIGITS) continue;
-    const latin = match[0].replace(/[۰-۹٠-٩]/gu, (d) => digitsOf(d)).replace(/\s+/gu, '');
-    const known = allowance.numbers.has(digits) || allowance.priceFamily?.has(digits) === true;
-    if (!known && !DATE_SHAPE.test(latin)) return { ok: false, violation: 'number' };
-    rest = rest.replace(match[0], ' ');
-  }
+  // 2. Handles.
   for (const match of rest.matchAll(HANDLE_PATTERN)) {
     if (!allowance.handles.has(match[1]!.toLowerCase())) return { ok: false, violation: 'handle' };
   }
-  for (const match of rest.matchAll(NUMBER_PATTERN)) {
+  // 3. Numbers. A date of this year (±1, Gregorian or Jalali) is not an identifier.
+  const year = now.getUTCFullYear();
+  const years = new Set([year - 1, year, year + 1, year - 622, year - 621, year - 620]);
+  rest = rest.replace(DATE_PATTERN, (date, y: string, m: string, d: string) => {
+    const month = Number(digitsOf(m));
+    const day = Number(digitsOf(d));
+    const fine =
+      years.has(Number(digitsOf(y))) && month >= 1 && month <= 12 && day >= 1 && day <= 31;
+    return fine ? ' ' : date;
+  });
+  const known = (digits: string) =>
+    allowance.numbers.has(digits) ||
+    allowance.numbers.has(digits.replace(/^0+/u, '')) ||
+    allowance.priceFamily?.has(digits) === true;
+  const inCorpus = (joined: string) =>
+    known(joined) || allowance.joinedDigits.some((corpus) => corpus.includes(joined));
+  for (const match of rest.matchAll(GROUP_PATTERN)) {
     const digits = digitsOf(match[0]);
     if (digits.length < IDENTIFIER_MIN_DIGITS) continue;
-    const known =
-      allowance.numbers.has(digits) ||
-      allowance.numbers.has(digits.replace(/^0+/u, '')) ||
-      allowance.priceFamily?.has(digits) === true;
-    if (!known) return { ok: false, violation: 'number' };
+    const fine = digits.length >= SEQUENCE_MIN_DIGITS ? inCorpus(digits) : known(digits);
+    if (!fine) return { ok: false, violation: 'number' };
   }
+  // The context's own amounts and identifiers (4+ digits) are taken out; every other digit —
+  // small ones included, however they are separated — is joined, per line and for the whole.
+  const unknownDigits = rest.replace(GROUP_PATTERN, (group) => {
+    const digits = digitsOf(group);
+    return digits.length >= IDENTIFIER_MIN_DIGITS && inCorpus(digits) ? ' ' : group;
+  });
+  for (const piece of [...unknownDigits.split(/\n/u), unknownDigits]) {
+    const joined = digitsOf(piece);
+    if (joined.length >= SEQUENCE_MIN_DIGITS && !inCorpus(joined)) {
+      return { ok: false, violation: 'number' };
+    }
+  }
+  // 4. Promises.
   const folded = foldCustomerText(reply);
   for (const term of PROMISE_TERMS) {
     const hit = term.exec(folded);

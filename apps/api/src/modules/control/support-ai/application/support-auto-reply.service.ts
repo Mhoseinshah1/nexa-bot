@@ -580,7 +580,7 @@ export class SupportAutoReplyService {
       }
       // 6b. Cross-cutting item 3 — the output validator; Roadmap A3 — advice the customer already
       // received in this epoch is not sent again. Either is asked for once more, then hands off.
-      const policy = checkOutputPolicy(decision.replyText, allowance);
+      const policy = checkOutputPolicy(decision.replyText, allowance, this.deps.clock.now());
       const repeated = autoRepeatedAdviceGuard(decision, transcript, since);
       const refused = !policy.ok ? failVerdict('output_policy', 'OUTPUT_POLICY') : repeated;
       if (!refused.pass) {

@@ -32,7 +32,7 @@ export function handoffRateVerdict(
 ): {
   readonly alert: boolean;
   readonly soft: number;
-  readonly total: number;
+  readonly jobs: number;
   readonly top: readonly { readonly reason: string; readonly count: number }[];
 } {
   const window = rows.slice(0, SUPPORT_AI_HANDOFF_RATE_WINDOW);
@@ -51,7 +51,7 @@ export function handoffRateVerdict(
     .slice(0, 3);
   const alert =
     pct > 0 && window.length >= SUPPORT_AI_HANDOFF_RATE_WINDOW && soft * 100 > pct * window.length;
-  return { alert, soft, total: window.length, top };
+  return { alert, soft, jobs: window.length, top };
 }
 
 /**
@@ -95,7 +95,7 @@ export class SupportHandoffRateAlert {
           .map((row) => `${this.deps.reasonLabel(row.reason)} (${String(row.count)})`)
           .join('، '),
         soft: verdict.soft,
-        total: verdict.total,
+        jobs: verdict.jobs,
         thresholdPct: pct,
       },
     });

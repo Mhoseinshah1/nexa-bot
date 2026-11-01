@@ -100,7 +100,7 @@ describe('the output validator (cross-cutting item 3)', () => {
   const allowance = outputPolicyAllowanceFromContext(context, {
     links: ['https://t.me/nexa_bot?start=support'],
   });
-  const check = (reply: string) => checkOutputPolicy(reply, allowance);
+  const check = (reply: string) => checkOutputPolicy(reply, allowance, NOW);
 
   it('passes what the context holds', () => {
     for (const reply of [
@@ -125,7 +125,7 @@ describe('the output validator (cross-cutting item 3)', () => {
       ['مبلغ ۲۰۰٬۰۰۰ تومان واریز کنید', 'number'],
       ['به کارت 6219861034567890 واریز کنید', 'number'],
       ['با شماره 09121234567 تماس بگیرید', 'number'],
-      ['آیدی تلگرام ادمین 123456789 است', 'number'],
+      ['آیدی تلگرام ادمین 918273645 است', 'number'],
       ['به @admin_real پیام بدهید', 'handle'],
       ['پولتان را برمی‌گردونیم', 'promise'],
       ['یک ماه مجانی برایتان فعال می‌کنیم', 'promise'],
@@ -178,6 +178,30 @@ describe('the output validator (cross-cutting item 3)', () => {
     expect(check('تاریخ پایان: ۱۴۰۵/۰۸/۱۰')).toEqual({ ok: true });
   });
 
+  it('second security review: emails, IDN hosts, wide separators, fake dates', () => {
+    for (const reply of [
+      'به admin@evil.example ایمیل بزنید',
+      'پشتیبانی: help@پشتیبانی.ایران',
+      'سایت پشتیبانی.ایران را ببینید',
+      'xn--mgbai9azgqp6j.xn--mgba3a4f16a/x',
+      'https://xn--80ak6aa92e.com/login',
+    ]) {
+      expect(check(reply), reply).toEqual({ ok: false, violation: 'link' });
+    }
+    for (const reply of [
+      'کارت: 6219 - - - 8610 / / / 3456 ... 7890',
+      'کارت: ۶۲۱\n۹۸۶\n۱۰۳\n۴۵۶\n۷۸۹۰',
+      'کد: ۶۲۱ ـــ ۹۸۶ ـــ ۱۰۳',
+      'تاریخ: 6219-86-10 و 3456-78-90',
+      'تاریخ: 1999/12/31 و 2019/12/31',
+    ]) {
+      expect(check(reply), reply).toEqual({ ok: false, violation: 'number' });
+    }
+    // A date of this year (Gregorian or Jalali) passes; so does one the facts hold.
+    expect(check('تاریخ پایان: ۱۴۰۵/۰۸/۱۰')).toEqual({ ok: true });
+    expect(check('تاریخ پایان: 2026-12-01')).toEqual({ ok: true });
+  });
+
   it('a promise word is allowed when approved knowledge carries it', () => {
     // «رایگان» is in K1; «تخفیف» is not.
     expect(check('تست رایگان دارید.')).toEqual({ ok: true });
@@ -188,8 +212,8 @@ describe('the output validator (cross-cutting item 3)', () => {
     const priced = outputPolicyAllowanceFromContext(context, {
       priceFamily: { has: (digits) => digits === '250000' },
     });
-    expect(checkOutputPolicy('قیمت ۲۵۰٬۰۰۰ تومان است', priced)).toEqual({ ok: true });
-    expect(checkOutputPolicy('قیمت ۳۵۰٬۰۰۰ تومان است', priced)).toEqual({
+    expect(checkOutputPolicy('قیمت ۲۵۰٬۰۰۰ تومان است', priced, NOW)).toEqual({ ok: true });
+    expect(checkOutputPolicy('قیمت ۳۵۰٬۰۰۰ تومان است', priced, NOW)).toEqual({
       ok: false,
       violation: 'number',
     });
@@ -197,8 +221,8 @@ describe('the output validator (cross-cutting item 3)', () => {
 
   it('no context at all: only links, numbers and handles NEXA whitelisted', () => {
     const bare = outputPolicyAllowanceFromContext(null);
-    expect(checkOutputPolicy('برنامه را دوباره باز کنید.', bare)).toEqual({ ok: true });
-    expect(checkOutputPolicy('https://example.com', bare)).toEqual({
+    expect(checkOutputPolicy('برنامه را دوباره باز کنید.', bare, NOW)).toEqual({ ok: true });
+    expect(checkOutputPolicy('https://example.com', bare, NOW)).toEqual({
       ok: false,
       violation: 'link',
     });

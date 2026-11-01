@@ -180,9 +180,12 @@ describe('A8 — the weighted query', () => {
       [prior({ intent: null, topic: 'REFUND', decision: 'HANDOFF' })],
     );
     expect(parts).toEqual([{ text: 'x1', weight: 1 }]);
-    // Every safe topic but the greeting has words; no handoff topic has any.
+    // Every safe topic but the greeting (and, Phase 4 PR-1, a polite refusal, which no article
+    // answers) has words; no handoff topic has any.
     for (const topic of SUPPORT_AI_SAFE_TOPICS) {
-      expect(TOPIC_QUERY_TERMS[topic] !== undefined, topic).toBe(topic !== 'GREETING');
+      expect(TOPIC_QUERY_TERMS[topic] !== undefined, topic).toBe(
+        topic !== 'GREETING' && topic !== 'POLICY_REFUSAL',
+      );
     }
   });
 
