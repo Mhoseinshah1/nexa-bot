@@ -134,7 +134,9 @@ import {
  * Refusals become `LegacyMigrationStepFailure` with the contract's code: a reader error keeps
  * its own (`NXPKG_WRONG_KEY`, …), an acceptance or binding refusal its own, and an importer
  * refusal (a usage, source, mapping, archive or cutover refusal) is `IMPORT_FAILED` — its
- * reason goes to the log, never to the row. An INTERRUPTED import is rethrown untouched, so
+ * reason goes to the log, never to the row; a SOURCE refusal also leaves its own code, and
+ * the `table.column` names of a schema refusal, in the row's refusal counts
+ * (`sourceRefusalCounts`). An INTERRUPTED import is rethrown untouched, so
  * the executor resumes it rather than failing it.
  */
 export interface NxpkgMigrationAdapterDeps {
@@ -1313,7 +1315,8 @@ export class NxpkgMigrationAdapters
       );
     }
     if (error instanceof PanelMappingRefused) return fail('PANEL_TARGET_MISMATCH');
-    if (error instanceof LegacySourceRefused) return fail('IMPORT_FAILED');
+    if (error instanceof LegacySourceRefused)
+      return fail('IMPORT_FAILED', sourceRefusalCounts(error));
     if (error instanceof Error && error.name === 'LegacyImportInterrupted') return error;
     if (isNexaError(error) && error.code === LEGACY_IMPORT_ERROR_CODES.RUN_CONFLICT) {
       if (isTransientRunConflict(error.message)) {
@@ -1345,6 +1348,20 @@ export class NxpkgMigrationAdapters
     }
     return error;
   }
+}
+
+/**
+ * What the owner sees of a source refusal beside `IMPORT_FAILED`: its own code (a fixed
+ * vocabulary), and for a schema refusal one `CODE:table.column` per column named
+ * (`LegacySourceRefused.columns`: identifiers from NEXA's read definitions, never a value).
+ * The detail sentence itself stays in no row (L3).
+ */
+export function sourceRefusalCounts(error: LegacySourceRefused): LegacyMigrationCodeCount[] {
+  if (error.columns.length === 0) return [{ code: error.code, count: 1 }];
+  return [...new Set(error.columns)].map((column) => ({
+    code: `${error.code}:${column}`,
+    count: 1,
+  }));
 }
 
 /**
@@ -1401,8 +1418,13 @@ function requireFingerprint(context: Context): string {
 async function liveServicesByCodePanel(
   session: LegacySourceSession,
 ): Promise<ReadonlyMap<string, number>> {
+  // Described AND carried by the snapshot's rows file (`readableColumns`): a column only the
+  // catalogue lists cannot be read, so it counts as absent here as it does for the importer.
+  const readable = session.readableColumns?.('invoice') ?? null;
   const present = new Set(
-    (await session.columns()).filter((c) => c.table === 'invoice').map((c) => c.column),
+    (await session.columns())
+      .filter((c) => c.table === 'invoice' && (readable === null || readable.has(c.column)))
+      .map((c) => c.column),
   );
   const out = new Map<string, number>();
   if (!present.has('code_panel') || !present.has('Status') || !present.has('is_test')) return out;

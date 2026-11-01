@@ -82,6 +82,14 @@ readOnlyProof: {kind: 'NOT_APPLICABLE'}}`;
 - `columns()`, `tables()`, `catalogColumns()`, `countRows()` from `source/catalog.json`;
 - `rows()` / `readSetRows()` from `source/tables/<table>.jsonl`, in primary-key byte order,
   refusing a table outside the snapshot or a column the snapshot does not carry;
+- `readableColumns(table)`: the rows file's columns. The catalogue describes the dumped table
+  (every column; the schema hash is over it), the rows file carries only the converter's
+  `ALLOWLIST`. The importer (`resolveReadColumns`) reads an **optional** column the rows file
+  does not carry as absent — as a source without it (converter 0.8.0 omitted
+  `user.roll_Status`: everybody imports as "rules not accepted") — and refuses a **required**
+  one before any row with `SOURCE_SCHEMA_MISSING_COLUMN`, naming `table.column`. The migration
+  row shows it in its refusal counts (`SOURCE_SCHEMA_MISSING_COLUMN:user.Balance`), and so does
+  `botctl cutover rehearse`'s failed step;
 - `aggregate()` throws `EvidenceUnsupported`; `syntheticMarker()` returns the package's synthetic
   marker (`source/catalog.json.synthetic_marker`, null for a real backup).
 
