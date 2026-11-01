@@ -25,4 +25,6 @@ export const HANDOFF_LABELS: Readonly<Record<BusinessHandoffReason, WebKey>> = {
   NO_PROGRESS: 'web.bchat_handoff_no_progress',
   REPEATED_ADVICE: 'web.bchat_handoff_repeated_advice',
   INBOUND_FLOOD: 'web.bchat_handoff_inbound_flood',
+  OUTPUT_POLICY: 'web.bchat_handoff_output_policy',
+  SUSPICIOUS_PROBING: 'web.bchat_handoff_suspicious_probing',
 };

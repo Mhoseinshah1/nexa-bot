@@ -9012,6 +9012,21 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.support.ai_link_account',
+    description:
+      'Phase 4 PR-1: what the support AI sends, instead of handing off, when a Telegram Business customer NEXA cannot link to an account asks about their own service, traffic, expiry or link: one message with the bot\u2019s start link, where they sign in and see it themselves.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'botLink',
+        type: 'STRING',
+        description: 'The bot\u2019s start link (https://t.me/<bot>?start=support).',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.order.preinvoice',
     description:
       'The pre-invoice a customer pays from. B1: the product is described to the customer ' +

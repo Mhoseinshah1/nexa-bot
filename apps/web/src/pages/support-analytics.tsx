@@ -97,6 +97,9 @@ export const AUTO_OUTCOME_LABELS: Readonly<Record<SupportAiAutoOutcome, WebKey>>
   guard_repeated_advice: 'web.sa_auto_guard_repeated_advice',
   guard_inbound_flood: 'web.sa_auto_guard_inbound_flood',
   no_action: 'web.sa_auto_no_action',
+  guard_output_policy: 'web.sa_auto_guard_output_policy',
+  guard_refusal_abuse: 'web.sa_auto_guard_refusal_abuse',
+  sent_link: 'web.sa_auto_sent_link',
 };
 
 export function SupportAnalyticsPage({ route, denied }: { route: Route; denied: boolean }) {

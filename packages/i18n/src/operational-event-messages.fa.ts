@@ -111,6 +111,15 @@ export const OPERATIONAL_EVENT_MESSAGES_FA: Readonly<Record<string, string>> = {
   'support.ai_provider.credential_rejected': 'یک ارائه‌دهندهٔ هوش مصنوعی کلید را نپذیرفت.',
   'support.ai_provider.unavailable':
     'هیچ ارائه‌دهندهٔ هوش مصنوعی پاسخ نداد؛ گفتگوهای پشتیبانی تا برگشت به اپراتور سپرده می‌شوند.',
+  'support.ai_provider.config_invalid':
+    'پیکربندی هوش مصنوعی نامعتبر است: ارائه‌دهنده درخواست را نپذیرفت؛ ارائه‌دهندهٔ بعدی استفاده می‌شود.',
+  'support.ai_provider.config_valid': 'ارائه‌دهندهٔ هوش مصنوعی دوباره درخواست را پذیرفت.',
+  'support.ai.handoff_rate_high':
+    'نرخ ارجاع به پشتیبان بالا است؛ بیشتر پاسخ‌های خودکار اخیر به پشتیبان سپرده شده‌اند.',
+  'support.ai.job_exception':
+    'یک کار دستیار پشتیبانی با خطا متوقف شد و یک بار دوباره امتحان می‌شود.',
+  'support.ai.suspicious_probing':
+    'تلاش مشکوک برای گرفتن اطلاعات: گفتگو پس از چند درخواست ردشده به پشتیبان سپرده شد.',
   'support.assistant.running': 'دستیار پشتیبانی دوباره کار می‌کند.',
   'support.assistant.stalled':
     'دستیار پشتیبانی کار نمی‌کند و پیش‌نویس‌ها و پاسخ‌های خودکار بی‌صاحب مانده‌اند.',

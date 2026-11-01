@@ -1286,6 +1286,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   /* Brief C2.6: the «شما» form every other customer text uses, and no promised time. */
   'bot.support.handoff_notice':
     'پیام شما برای بررسی بیشتر به پشتیبان ارجاع شد و پاسخ در همین گفتگو داده می‌شود. لطفاً گفتگو را همین‌جا ادامه دهید؛ نیازی به ارسال دوبارهٔ پیام نیست.',
+  /* Phase 4 PR-1: an unlinked Business customer asked about their own service. */
+  'bot.support.ai_link_account':
+    'برای دیدن سرویس، حجم، تاریخ پایان یا لینک اشتراک خودتان، لطفاً وارد ربات شوید؛ همهٔ این اطلاعات آنجا برایتان نمایش داده می‌شود:\n{botLink}',
   'bot.order.preinvoice':
     '{icon:invoice} پیش‌فاکتور\n🔖 کد سفارش: {orderCode}\n\n{icon:service} سرویس: {productName}\n{icon:user} نام کاربری: {serviceUsername}\n{icon:date} مدت: {durationDays}\n{icon:traffic} حجم: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{customBlock}\n{devicesBlock}\n{locationChangeBlock}\n{discountLine}\n{cashbackLine}\n{icon:amount} مبلغ سفارش: {total}\n\n{description}\n\n{icon:wallet} موجودی کیف پول: {walletBalance}\n\n{icon:purchase} سفارش شما آماده پرداخت است؛ روش پرداخت را با دکمه‌های زیر انتخاب کنید. اگر روشی کارمزد داشته باشد، کارمزد و مبلغ قابل پرداخت در فاکتور همان روش جداگانه نمایش داده می‌شود.',
   'bot.order.preinvoice_custom':

@@ -200,6 +200,12 @@ export const WEB_FA = {
   'web.setting_sales_currency_refused':
     'تا وقتی پرداخت‌های قابل بازپرداختی به واحد پول فعلی وجود دارد، واحد پول فروشگاه را نمی‌توان تغییر داد. ابتدا آن پرداخت‌ها را تسویه یا بازپرداخت کنید.',
   'web.setting_support_accounts': 'حساب‌های پشتیبانی',
+  'web.setting_support_ai_resume_after_minutes': 'بازگشت خودکار به هوش مصنوعی (دقیقه)',
+  'web.setting_support_ai_resume_after_minutes_desc':
+    'اگر پس از ارجاع عادی یا پیام شما در گفتگو، این مدت کسی از پشتیبانی چیزی ننویسد، هوش مصنوعی دوباره پاسخ می‌دهد. ارجاع‌های حساس (بازپرداخت، اختلاف پرداخت، امنیت، درخواست پشتیبان انسانی) هرگز خودکار برنمی‌گردند. 0 یعنی هرگز.',
+  'web.setting_support_ai_handoff_alert_pct': 'آستانهٔ هشدار نرخ ارجاع (درصد)',
+  'web.setting_support_ai_handoff_alert_pct_desc':
+    'اگر سهم ارجاع‌های عادی در 50 پاسخ خودکار اخیر از این درصد بیشتر شود، در گروه گزارش‌ها هشدار داده می‌شود (حداکثر هر 6 ساعت یک بار). 0 یعنی خاموش.',
   'web.setting_support_accounts_desc':
     'حساب‌های تلگرامی پشتیبانی که به مشتری معرفی می‌شوند، به همین ترتیب. دکمهٔ تماس با پشتیبانی به نخستین حساب باز می‌شود و اگر فهرست خالی باشد نمایش داده نمی‌شود.',
   'web.setting_telegram_channels': 'کانال‌های ربات',
@@ -7167,6 +7173,9 @@ export const WEB_FA = {
   // Roadmap A3–A5 (2026-10-07).
   'web.bchat_handoff_no_progress': 'مشتری چند بار گفت راهنمایی هوش مصنوعی جواب نداد',
   'web.bchat_handoff_repeated_advice': 'هوش مصنوعی همان راهنمایی قبلی را تکرار می‌کرد',
+  'web.bchat_handoff_output_policy':
+    'پاسخ هوش مصنوعی پیوند، مبلغ یا وعده‌ای داشت که در اطلاعات تأییدشده نبود',
+  'web.bchat_handoff_suspicious_probing': 'چند درخواست پیاپی برای اطلاعات غیرمجاز رد شد',
   'web.bchat_handoff_inbound_flood': 'مشتری پیام تکراری یا پیام‌های پشت‌سرهم زیادی فرستاد',
   'web.bchat_handoff_context_topic': 'موضوع:',
   'web.bchat_handoff_context_intent': 'خواستهٔ مشتری به برداشت هوش مصنوعی:',
@@ -8815,6 +8824,15 @@ export const WEB_FA = {
   'web.sai_auto_topic_traffic_and_expiry': 'حجم و تاریخ انقضا',
   'web.sai_auto_topic_plan_info': 'اطلاعات پلن',
   'web.sai_auto_topic_known_error': 'خطای شناخته‌شده',
+  'web.sai_auto_topic_purchase_info': 'اطلاعات خرید سرویس',
+  'web.sai_auto_topic_renewal_info': 'اطلاعات تمدید',
+  'web.sai_auto_topic_addon_info': 'اطلاعات حجم و زمان اضافه',
+  'web.sai_auto_topic_trial_info': 'اطلاعات سرویس تست',
+  'web.sai_auto_topic_location_info': 'اطلاعات لوکیشن',
+  'web.sai_auto_topic_speed_quality': 'سرعت و کیفیت اتصال',
+  'web.sai_auto_topic_get_subscription_link': 'دریافت لینک اشتراک',
+  'web.sai_auto_topic_payment_howto': 'راهنمای روش پرداخت',
+  'web.sai_auto_topic_policy_refusal': 'رد مؤدبانهٔ درخواست غیرمجاز',
   'web.sai_auto_topic_greeting': 'سلام و احوالپرسی',
   'web.sai_auto_min_confidence': 'حداقل اطمینان برای پاسخ خودکار',
   'web.sai_auto_min_confidence_hint':
@@ -8954,6 +8972,9 @@ export const WEB_FA = {
   'web.sa_auto_guard_no_progress': 'راهنمایی جواب نداد (سه بار پیاپی)',
   'web.sa_auto_guard_repeated_advice': 'پاسخ تکراری فرستاده نشد',
   'web.sa_auto_guard_inbound_flood': 'پیام تکراری یا پیام‌های پشت‌سرهم مشتری',
+  'web.sa_auto_guard_output_policy': 'پاسخ از بررسی خروجی رد شد',
+  'web.sa_auto_guard_refusal_abuse': 'درخواست‌های ردشدهٔ پیاپی',
+  'web.sa_auto_sent_link': 'لینک ورود به ربات فرستاده شد',
   'web.sa_auto_no_action': 'بی‌پاسخ بسته شد (تشکر یا حل شد)',
   'web.sa_auto_handoff_ai_requested': 'مدل خواست به همکار سپرده شود',
   'web.sa_auto_handoff_output_invalid': 'خروجی مدل نامعتبر بود',
@@ -9125,6 +9146,15 @@ export const WEB_FA = {
   'web.assist_topic_fraud': 'تقلب یا برگشت وجه',
   'web.assist_topic_legal': 'حقوقی یا ایمنی',
   'web.assist_topic_human_requested': 'درخواست گفتگو با انسان',
+  'web.assist_topic_purchase_info': 'اطلاعات خرید سرویس',
+  'web.assist_topic_renewal_info': 'اطلاعات تمدید',
+  'web.assist_topic_addon_info': 'اطلاعات حجم و زمان اضافه',
+  'web.assist_topic_trial_info': 'اطلاعات سرویس تست',
+  'web.assist_topic_location_info': 'اطلاعات لوکیشن',
+  'web.assist_topic_speed_quality': 'سرعت و کیفیت اتصال',
+  'web.assist_topic_get_subscription_link': 'دریافت لینک اشتراک',
+  'web.assist_topic_payment_howto': 'راهنمای روش پرداخت',
+  'web.assist_topic_policy_refusal': 'رد مؤدبانهٔ درخواست غیرمجاز',
   'web.assist_topic_other': 'سایر',
   // TB8: support knowledge and the learning-candidate queue.
   'web.nav_support_knowledge': 'دانش پشتیبان',

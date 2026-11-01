@@ -284,6 +284,15 @@ export const SAI_AUTO_TOPIC_LABELS: Readonly<Record<SupportAiSafeTopic, WebKey>>
   PLAN_INFO: 'web.sai_auto_topic_plan_info',
   KNOWN_ERROR: 'web.sai_auto_topic_known_error',
   GREETING: 'web.sai_auto_topic_greeting',
+  PURCHASE_INFO: 'web.sai_auto_topic_purchase_info',
+  RENEWAL_INFO: 'web.sai_auto_topic_renewal_info',
+  ADDON_INFO: 'web.sai_auto_topic_addon_info',
+  TRIAL_INFO: 'web.sai_auto_topic_trial_info',
+  LOCATION_INFO: 'web.sai_auto_topic_location_info',
+  SPEED_QUALITY: 'web.sai_auto_topic_speed_quality',
+  GET_SUBSCRIPTION_LINK: 'web.sai_auto_topic_get_subscription_link',
+  PAYMENT_HOWTO: 'web.sai_auto_topic_payment_howto',
+  POLICY_REFUSAL: 'web.sai_auto_topic_policy_refusal',
 };
 
 export const SAI_AUTO_MIN_CONFIDENCE_LABELS: Readonly<Record<SupportAiAutoMinConfidence, WebKey>> =

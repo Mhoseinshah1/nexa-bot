@@ -266,6 +266,8 @@ export const PLACEHOLDER_TYPE_LABELS_FA: Readonly<Record<PlaceholderType, string
  * here and the specific one is in `PLACEHOLDER_LABEL_OVERRIDES_FA` below.
  */
 export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
+  // Phase 4 PR-1: the bot's start link an unlinked Business customer is sent.
+  botLink: 'لینک شروع ربات',
   // Track 3 §2: a panel's connection-file caption variables.
   volume_total: 'حجم کل',
   volume_used: 'حجم مصرف‌شده',
@@ -2947,6 +2949,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.support.handoff_notice': [
     'اطلاع ارجاع به پشتیبان',
     'تنها پیامی که گفتگوی حساب تجاری هنگام سپرده شدن به پشتیبان از طرف هوش مصنوعی دریافت می‌کند؛ در هر ارجاع حداکثر یک بار، و اگر همکار زودتر پاسخ داده باشد فرستاده نمی‌شود.',
+  ],
+  'bot.support.ai_link_account': [
+    'لینک ورود به ربات برای مشتری ناشناس',
+    'وقتی مشتری حساب تجاری که به حسابی وصل نیست دربارهٔ سرویس خودش می‌پرسد، هوش مصنوعی به‌جای ارجاع، این پیام را با لینک شروع ربات می‌فرستد.',
   ],
   'bot.support.tickets_button': [
     'دکمهٔ تیکت‌ها در صفحهٔ پشتیبانی',
