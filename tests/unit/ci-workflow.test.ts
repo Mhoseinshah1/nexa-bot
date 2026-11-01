@@ -546,6 +546,7 @@ describe('the CI workflow', () => {
       'pnpm check:boundaries',
       'pnpm check:i18n',
       'pnpm check:citations',
+      'pnpm check:readme',
       'pnpm build',
       'pnpm check:runtime',
       'pnpm test\n',
