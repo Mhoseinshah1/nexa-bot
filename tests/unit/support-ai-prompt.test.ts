@@ -154,6 +154,10 @@ describe('A7/A8 — the policy for authors and knowledge', () => {
     'sai5p-2026-11-01': 'bf4a142536da8726b64bb272629420226b160c03e53d9bda3458a08994895ed6',
     'sai6k-2026-11-01': '30256f55fad07fee3f33b1acc0c5f62fc0151429a6295ab64c93ec20d3aa08b1',
     'sai6m-2026-11-01': 'c10da05812d1342390805f7fb8a6ca2bef64d499ff56f3d099ad0a86ea352e90',
+    // Phase 4 PR-3: rule 14 (ACTIONS), on PR-2's sai6m text.
+    'sai7b-2026-11-01': 'bf6a17b4a7d2131f92b1a1fb77bcd4940e3c17df3672c991ce83171bc8e2f686',
+    // Review of PR #369: rule 14 names the two read-only exceptions to rule 7.
+    'sai7c-2026-11-01': '7fc80a3f6c80e84844ba5bd02e71f9b75ff272a064bf749510f2d92acf683a28',
   };
 
   it('pins the policy text to its version, in both directions', () => {
@@ -161,6 +165,8 @@ describe('A7/A8 — the policy for authors and knowledge', () => {
       { ...base, contextJson: '{"services":[]}' },
       { ...base, contextJson: '{"services":[]}', identityLinked: false },
       { ...base, contextJson: '{"services":[]}', businessToneInstructions: 'لحن رسمی و کوتاه.' },
+      // Phase 4 PR-3: the ACTIONS rule, with the tools on.
+      { ...base, contextJson: '{"services":[]}', actionsEnabled: true },
     ];
     const digest = createHash('sha256')
       .update(variants.map((variant) => supportSystemPrompt(variant)).join('\u0000'))
@@ -218,6 +224,8 @@ describe('the structured decision', () => {
     ticketAction: 'NONE',
     summary: 'مشتری نمی‌تواند وصل شود.',
     intent: 'اتصال',
+    // Phase 4 PR-3: required of a provider, optional for zod (pre-PR-3 decisions still parse).
+    action: { kind: 'NONE', target: '' },
   };
 
   it('accepts the closed shape', () => {
@@ -230,6 +238,13 @@ describe('the structured decision', () => {
     ['a topic outside the catalogue', { ...valid, topic: 'WHATEVER' }],
     ['a malformed fact ref', { ...valid, factRefs: ['services[0].id'] }],
     ['a reply past the hard bound', { ...valid, replyText: 'x'.repeat(4001) }],
+    // Phase 4 PR-3: an action outside the set, an id-length target, an unknown key in it.
+    ['a tool outside the closed set', { ...valid, action: { kind: 'REFUND', target: '' } }],
+    [
+      'a target longer than an alias',
+      { ...valid, action: { kind: 'SEND_SUBSCRIPTION_LINK', target: '0190a1b2-c3d4' } },
+    ],
+    ['an unknown key in the action', { ...valid, action: { kind: 'NONE', target: '', id: 'x' } }],
   ])('refuses %s', (_label, input) => {
     expect(supportAiDecisionSchema.safeParse(input).success).toBe(false);
   });

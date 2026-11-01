@@ -239,7 +239,49 @@ export type BusinessUpdate =
   | { readonly kind: 'CONNECTION'; readonly payload: unknown }
   | { readonly kind: 'MESSAGE'; readonly payload: unknown }
   | { readonly kind: 'EDITED_MESSAGE'; readonly payload: unknown }
-  | { readonly kind: 'DELETED_MESSAGES'; readonly payload: unknown };
+  | { readonly kind: 'DELETED_MESSAGES'; readonly payload: unknown }
+  /**
+   * Phase 4 PR-3 — a tap on an inline button of a message sent ON BEHALF OF the business
+   * account (its `message.business_connection_id`): the support AI's own buttons. Never the
+   * customer turn: the tap is in the business account's chat, not the bot's.
+   */
+  | { readonly kind: 'CALLBACK'; readonly payload: unknown };
+
+/** Phase 4 PR-3 — a tap on a business message's button, read strictly. */
+export interface ParsedBusinessCallback {
+  readonly callbackQueryId: string;
+  readonly data: string | null;
+  /** Who tapped (`callback_query.from.id`). */
+  readonly fromUserId: string;
+  /** The chat and message the tapped button sits on, and its business connection. */
+  readonly chatId: string;
+  readonly messageId: number;
+  readonly connectionId: string;
+}
+
+const callbackSchema = z.object({
+  id: z.string().min(1),
+  data: z.string().max(64).optional(),
+  from: z.object({ id: z.number().int() }),
+  message: z.object({
+    message_id: z.number().int(),
+    chat: z.object({ id: z.number().int() }),
+    business_connection_id: z.string().min(1),
+  }),
+});
+
+export function parseBusinessCallback(raw: unknown): ParsedBusinessCallback | null {
+  const parsed = callbackSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  return {
+    callbackQueryId: parsed.data.id,
+    data: parsed.data.data ?? null,
+    fromUserId: String(parsed.data.from.id),
+    chatId: String(parsed.data.message.chat.id),
+    messageId: parsed.data.message.message_id,
+    connectionId: parsed.data.message.business_connection_id,
+  };
+}
 
 export function businessUpdateOf(update: unknown): BusinessUpdate | null {
   if (typeof update !== 'object' || update === null) return null;
@@ -252,6 +294,14 @@ export function businessUpdateOf(update: unknown): BusinessUpdate | null {
   }
   if ('deleted_business_messages' in shaped) {
     return { kind: 'DELETED_MESSAGES', payload: shaped.deleted_business_messages };
+  }
+  // Phase 4 PR-3: a button tap on a message the bot sent for the business account.
+  const callback = shaped.callback_query;
+  if (typeof callback === 'object' && callback !== null) {
+    const message = (callback as { message?: unknown }).message;
+    if (typeof message === 'object' && message !== null && 'business_connection_id' in message) {
+      return { kind: 'CALLBACK', payload: callback };
+    }
   }
   return null;
 }

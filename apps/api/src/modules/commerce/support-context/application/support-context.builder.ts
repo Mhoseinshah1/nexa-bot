@@ -102,6 +102,8 @@ export interface SupportContextBuild {
     readonly services: ReadonlyMap<string, string>;
     readonly orders: ReadonlyMap<string, string>;
     readonly payments: ReadonlyMap<string, string>;
+    /** Phase 4 PR-3: `C…` → product id, for a BUY deep link into the plan's category. */
+    readonly catalogue: ReadonlyMap<string, string>;
   };
 }
 
@@ -184,7 +186,12 @@ export class SupportContextBuilder {
             customerBlocked: false,
           },
         },
-        { services: [], orders: [], payments: [] },
+        {
+          services: [],
+          orders: [],
+          payments: [],
+          catalogue: catalogue.plans.map((plan) => plan.productId),
+        },
         selected.available,
       );
     }
@@ -265,6 +272,7 @@ export class SupportContextBuilder {
         services: services.map((service) => service.id),
         orders: orderFacts.map((order) => order.id),
         payments: paymentFacts.map((payment) => payment.id),
+        catalogue: catalogue.plans.map((plan) => plan.productId),
       },
       selected.available,
     );
@@ -298,6 +306,7 @@ export class SupportContextBuilder {
       readonly services: readonly string[];
       readonly orders: readonly string[];
       readonly payments: readonly string[];
+      readonly catalogue: readonly string[];
     },
     knowledgeAvailable: number,
   ): SupportContextBuild {
@@ -314,13 +323,14 @@ export class SupportContextBuilder {
         services: survivingReferences('S', ids.services, parsed.services),
         orders: survivingReferences('O', ids.orders, parsed.orders),
         payments: survivingReferences('P', ids.payments, parsed.payments),
+        catalogue: survivingReferences('C', ids.catalogue, parsed.catalogue),
       },
     };
   }
 }
 
 function survivingReferences(
-  prefix: 'S' | 'O' | 'P',
+  prefix: 'S' | 'O' | 'P' | 'C',
   ids: readonly string[],
   shown: readonly { readonly alias: string }[],
 ): ReadonlyMap<string, string> {

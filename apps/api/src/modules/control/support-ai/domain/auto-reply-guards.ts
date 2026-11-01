@@ -104,6 +104,12 @@ export function autoPreflight(input: {
   readonly sessionReplyBudget: number;
   /** The tenant's `maxAutoRepliesPerHour`. */
   readonly maxPerWindow: number;
+  /**
+   * Phase 4 PR-3: with the tools on, a voice message, sticker or non-image file (`OTHER`) is
+   * not a reason to hand off — it is answered with ONE templated request to type, so the
+   * content check passes it and the blocked-customer and loop checks still apply.
+   */
+  readonly otherIsAnswerable?: boolean;
 }): AutoVerdict {
   const trigger = input.trigger;
   // Only a customer's own message is ever answered — never our echo, an away message or a
@@ -115,7 +121,8 @@ export function autoPreflight(input: {
     trigger !== null &&
     !trigger.deleted &&
     ((trigger.kind === 'TEXT' && trigger.text !== null && trigger.text.trim() !== '') ||
-      trigger.kind === 'PHOTO');
+      trigger.kind === 'PHOTO' ||
+      (trigger.kind === 'OTHER' && input.otherIsAnswerable === true));
   if (trigger === null || trigger.origin !== 'INBOUND' || !readable) {
     return fail('content', 'UNSUPPORTED_CONTENT');
   }
@@ -181,6 +188,13 @@ export function autoDecisionGuards(input: {
    * (`otherStreakOf`). 0 lets one through; anything more hands off.
    */
   readonly otherStreak?: number;
+  /**
+   * Phase 4 PR-3: the read-only tools are on (`support.ai.actions_enabled`). Two hard topics
+   * then have a read-only answer (`readOnlyToolAnswer`): a payment-status question answered by
+   * the payment_status tool from the customer's own rows, and a wallet top-up how-to answered
+   * with the bot's top-up button. Off: both hand off as before.
+   */
+  readonly actionsEnabled?: boolean;
 }): AutoVerdict {
   const { decision, config, flags } = input;
   // The model itself asked for a person: never second-guessed into a reply.
@@ -194,13 +208,22 @@ export function autoDecisionGuards(input: {
     decision.topic === 'OTHER' &&
     decision.decision === 'ASK_CLARIFYING_QUESTION' &&
     (input.otherStreak ?? 0) === 0;
-  if (!otherQuestion && (SUPPORT_AI_HANDOFF_TOPICS as readonly string[]).includes(decision.topic)) {
+  const readOnly = input.actionsEnabled === true && readOnlyToolAnswer(decision, flags);
+  if (
+    !otherQuestion &&
+    !readOnly &&
+    (SUPPORT_AI_HANDOFF_TOPICS as readonly string[]).includes(decision.topic)
+  ) {
     return fail('handoff_topic', 'HANDOFF_TOPIC');
   }
   if (decision.decision !== 'REPLY' && decision.decision !== 'ASK_CLARIFYING_QUESTION') {
     return fail('decision', 'DECISION_NOT_REPLY');
   }
-  if (!otherQuestion && !(config.autoTopics as readonly string[]).includes(decision.topic)) {
+  // A read-only tool answer is allowed where the owner allowed payment how-to answers.
+  const allowlisted = readOnly
+    ? (config.autoTopics as readonly string[]).includes('PAYMENT_HOWTO')
+    : (config.autoTopics as readonly string[]).includes(decision.topic);
+  if (!otherQuestion && !allowlisted) {
     return fail('topic_allowlist', 'TOPIC_NOT_ALLOWED');
   }
   // Phase 4 PR-1: an unlinked customer's account question is answered with the bot's start link
@@ -248,6 +271,25 @@ export function autoDecisionGuards(input: {
 }
 
 /**
+ * Phase 4 PR-3 (review of PR #369) — the two hard topics a read-only tool answers, with the
+ * tools on: `PAYMENT_STATUS` with the `PAYMENT_STATUS` action, for a linked customer (NEXA
+ * appends the states of their own latest payments, «در حال بررسی» for one under review, no
+ * promise), and `WALLET` with the `WALLET_TOPUP` action (a top-up how-to: the bot's top-up
+ * button). A REPLY only. A wallet balance question, a dispute — the money guard hands disputes
+ * off before any model — or any other action still hands off.
+ */
+export function readOnlyToolAnswer(
+  decision: SupportAiDecision,
+  flags: Pick<AutoContextFlags, 'identityLinked'>,
+): boolean {
+  if (decision.decision !== 'REPLY') return false;
+  const kind = decision.action?.kind;
+  if (decision.topic === 'PAYMENT_STATUS') return kind === 'PAYMENT_STATUS' && flags.identityLinked;
+  if (decision.topic === 'WALLET') return kind === 'WALLET_TOPUP';
+  return false;
+}
+
+/**
  * Phase 4 PR-1 — the OTHER streak: walking back from the newest automatic reply of the epoch,
  * how many in a row were clarifying questions on `OTHER`. Any other reply ends it.
  */
@@ -292,7 +334,11 @@ export function clarifyingStreakOf(
  * Folded first (`foldCustomerText`): Arabic ي/ك to Persian, a ZWNJ to a space, marks dropped,
  * lower case, so «پول‌مو», «پولمو», «پس‌بدید» and «پس بدید» are one form.
  */
-const MONEY_DISPUTE_TERMS: readonly RegExp[] = [
+/**
+ * Phase 4 PR-3 — a DISPUTE: refund / money back, a complaint, chargeback or fraud, a wallet that
+ * emptied. Always a straight hard handoff: nothing for the AI to check.
+ */
+const MONEY_DISPUTE_ONLY_TERMS: readonly RegExp[] = [
   // Money coming back: refund in every common spelling, «عودت», «استرداد», «برگشت وجه/پول».
   /(?<!\p{L})(?:ری?فا?ند|ریفاند|عودت|استرداد|بازپرداخت)/u,
   /(?<!\p{L})(?:باز|بر)گشت\s*(?:وجه|هزینه|پول)/u,
@@ -300,12 +346,23 @@ const MONEY_DISPUTE_TERMS: readonly RegExp[] = [
   /(?<!\p{L})پس\S{0,3}\s*(?:بده|بدید|بدهید|بدین|بدن|بگیرم|بگیرید|میخوام|میدید|میدین)(?!\p{L})/u,
   // A dispute, a chargeback, fraud.
   /(?<!\p{L})(?:کلاهبردار|کلاه\s*برداری|شکایت|اعتراض\s*به\s*(?:پرداخت|تراکنش|مبلغ))/u,
+  // «کیف پولم خالی شد» — the wallet emptied without the customer's doing.
+  /(?<!\p{L})کیف\s*پول\S{0,3}\s*خالی\s*(?:شد|شده)(?!\p{L})/u,
+  // English and Finglish.
+  /\b(?:refund\w*|reimburs\w*|money\s*back|charge\s*back|chargeback|dispute\w*|scam\w*|fraud\w*|re\s+fund\w*)\b/u,
+  /\b(?:pool|pul)\w*\s*(?:ro\s*)?(?:pas|bargard\w*|bedid|bedin)\b/u,
+  /\b(?:kolah\s*bardari|kolahbardar\w*|shekayat)\b/u,
+];
+
+/**
+ * Phase 4 PR-3 — «paid but not received»: money deducted, «I paid», «bought … but nothing came».
+ * Still a hard handoff, but check-before-handoff reads the customer's payments first.
+ */
+const PAID_NOT_RECEIVED_TERMS: readonly RegExp[] = [
   // Money taken: «کسر شد», «برداشت شد», and «پول / از حسابم / کارتم … کم شد» — never «حجمم
   // کم شد» (traffic), which is a service question.
   /(?<!\p{L})(?:کسر|برداشت)\s*(?:شد|شده|کرد|کردن|کردید|کردین)(?!\p{L})/u,
   /(?<!\p{L})(?:پول|حساب|کارت|موجودی|مبلغ|وجه|تومن|تومان|ریال)\S{0,4}(?:\s+\S+){0,2}\s+کم\s*(?:شد|شده|کرد|کردن|کردید|کردین)(?!\p{L})/u,
-  // «کیف پولم خالی شد» — the wallet emptied without the customer's doing.
-  /(?<!\p{L})کیف\s*پول\S{0,3}\s*خالی\s*(?:شد|شده)(?!\p{L})/u,
   // «bought / ordered / paid … but … did not arrive».
   /(?<!\p{L})(?:خرید|خریدم|سفارش|پرداخت|واریز)\S{0,3}.{0,40}(?:ولی|اما|هنوز).{0,40}(?:نیومد|نیامد|نرسید|نشد|ندادید|نفرستادید|نگرفتم|دریافت\s*نکردم|خبری\s*نیست)/u,
   // «I paid / deposited / transferred / topped up», past tense, first person — with or without
@@ -314,18 +371,20 @@ const MONEY_DISPUTE_TERMS: readonly RegExp[] = [
   /(?<!\p{L})(?:پرداخت|واریز|کارت\s*به\s*کارت|شارژ|تراکنش)\S{0,3}\s*(?:رو|را|و)?\s*(?:کردم|کردیم|کرده\s*ام|کردم\S*|زدم|انجام\s*دادم)(?!\p{L})/u,
   /(?<!\p{L})پول\S{0,3}\s*(?:رو|را|و)?\s*(?:دادم|ریختم|زدم|واریز\s*کردم|فرستادم)(?!\p{L})/u,
   /(?<!\p{L})(?:پرداختم|واریزی\s*من|فیش\s*واریز|رسید\s*پرداخت)/u,
-  // English and Finglish.
-  /\b(?:refund\w*|reimburs\w*|money\s*back|charge\s*back|chargeback|dispute\w*|scam\w*|fraud\w*|re\s+fund\w*)\b/u,
   /\b(?:i|we)\s+(?:have\s+|already\s+)?(?:paid|payed|transferred|deposited|topped\s+up|sent\s+(?:the\s+)?money)\b/u,
   /\b(?:paid|payed|charged|deducted)\b.{0,40}\b(?:but|not|no|never|didn'?t|haven'?t|still)\b/u,
   /\b(?:money|amount)\s+(?:was\s+)?(?:taken|deducted|gone|charged)\b/u,
-  /\b(?:pool|pul)\w*\s*(?:ro\s*)?(?:pas|bargard\w*|bedid|bedin)\b/u,
   /\b(?:pardakht|variz|kart\s*be\s*kart|sharj)\s*(?:ro\s*)?(?:kardam|kardim|zadam)\b/u,
   /\b(?:pool|pul)\w*\s*(?:ro\s*)?(?:dadam|rikhtam|variz\s*kardam|ferestadam)\b/u,
   /\b(?:kasr|bardasht)\s*(?:shod|shode|kard|kardan)\b/u,
   /\b(?:pool|pul|hesab|kart|mojoodi|mojudi)\w*(?:\s+\w+){0,2}\s+kam\s*(?:shod|shode|kard|kardan)\b/u,
   /\b(?:kharid\w*|sefaresh|pardakht|variz)\b.{0,40}\b(?:vali|ama|hanooz|hanuz)\b.{0,40}\b(?:nayomad|nayumad|naresid|nashod|nadadid|nafrestadid|nagereftam)\b/u,
-  /\b(?:pardakhtam|kolah\s*bardari|kolahbardar\w*|shekayat)\b/u,
+  /\b(?:pardakhtam)\b/u,
+];
+
+const MONEY_DISPUTE_TERMS: readonly RegExp[] = [
+  ...MONEY_DISPUTE_ONLY_TERMS,
+  ...PAID_NOT_RECEIVED_TERMS,
 ];
 
 /** The text a customer typed, folded so a spelling or joiner variant matches the same term. */
@@ -364,6 +423,22 @@ export function mentionsMoneyTopic(text: string | null): boolean {
  * Before the provider call: the customer texts the money guard reads
  * (`moneyGuardWindow`). A dispute in any of them hands off, hard.
  */
+/**
+ * Phase 4 PR-3 — which money matter the customer's texts are: `DISPUTE` (refund, complaint,
+ * chargeback, fraud — any one line decides), `PAID_NOT_RECEIVED` (deducted, «I paid», «bought but
+ * nothing came») or `NONE`. Both hand off, hard; only a «paid but not received» is checked first.
+ */
+export type MoneyMatter = 'NONE' | 'DISPUTE' | 'PAID_NOT_RECEIVED';
+export function moneyMatterOf(customerTexts: readonly (string | null)[]): MoneyMatter {
+  const folded = customerTexts.flatMap((text) => (text === null ? [] : [foldCustomerText(text)]));
+  if (folded.some((text) => MONEY_DISPUTE_ONLY_TERMS.some((term) => term.test(text)))) {
+    return 'DISPUTE';
+  }
+  return folded.some((text) => PAID_NOT_RECEIVED_TERMS.some((term) => term.test(text)))
+    ? 'PAID_NOT_RECEIVED'
+    : 'NONE';
+}
+
 export function autoMoneyGuard(customerTexts: readonly (string | null)[]): AutoVerdict {
   return customerTexts.some(mentionsMoneyTopic) ? fail('handoff_topic', 'HANDOFF_TOPIC') : PASS;
 }

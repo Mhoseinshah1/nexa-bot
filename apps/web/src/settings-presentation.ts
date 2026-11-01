@@ -492,6 +492,24 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'support',
     control: { kind: 'integer' },
   },
+  'support.ai.actions_enabled': {
+    title: 'web.setting_support_ai_actions_enabled',
+    description: 'web.setting_support_ai_actions_enabled_desc',
+    group: 'support',
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
+  },
+  'support.ai.label_enabled': {
+    title: 'web.setting_support_ai_label_enabled',
+    description: 'web.setting_support_ai_label_enabled_desc',
+    group: 'support',
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
+  },
+  'support.ai.feedback_enabled': {
+    title: 'web.setting_support_ai_feedback_enabled',
+    description: 'web.setting_support_ai_feedback_enabled_desc',
+    group: 'support',
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
+  },
   'support.knowledge.auto_refresh': {
     title: 'web.setting_support_knowledge_auto_refresh',
     description: 'web.setting_support_knowledge_auto_refresh_desc',

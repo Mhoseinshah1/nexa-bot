@@ -15,6 +15,7 @@ import {
   type BusinessHandoffKind,
   type BusinessHandoffReason,
   type BusinessMessageOrigin,
+  type BusinessOutboundButtons,
   type BusinessOutboundOrigin,
   type BusinessTakeoverReason,
   type Clock,
@@ -604,7 +605,7 @@ export class BusinessConversationService {
     if (moved === null) return false;
     await this.deps.outbound.supersedeStale(scope, conversationId, moved.controlEpoch, now, tx);
     await this.deps.escalation.escalate(scope, { conversation: moved, reason, detail, now }, tx);
-    await this.enqueueHandoffNotice(scope, moved, now, tx);
+    await this.enqueueHandoffNotice(scope, moved, now, tx, detail.notice);
     return true;
   }
 
@@ -632,6 +633,8 @@ export class BusinessConversationService {
     conversation: BusinessConversationRecord,
     now: Date,
     tx: unknown,
+    /** Phase 4 PR-3: check-before-handoff's facts message, in place of the template. */
+    notice?: HandoffDetail['notice'],
   ): Promise<void> {
     const connection = await this.deps.connections.findById(
       scope,
@@ -647,8 +650,9 @@ export class BusinessConversationService {
         id: this.deps.ids.uuid(),
         conversationId: conversation.id,
         origin: 'HANDOFF_NOTICE',
-        body: null,
-        templateKey: BUSINESS_HANDOFF_NOTICE_TEMPLATE_KEY,
+        body: notice?.body ?? null,
+        templateKey: notice === undefined ? BUSINESS_HANDOFF_NOTICE_TEMPLATE_KEY : null,
+        buttons: notice?.buttons ?? null,
         createdByAdminId: null,
         controlEpoch: conversation.controlEpoch,
         idempotencyKey: key,
@@ -690,6 +694,13 @@ export class BusinessConversationService {
       readonly text: string;
       readonly idempotencyKey: string;
       readonly now: Date;
+      /** Phase 4 PR-3: the reply's inline keyboard (deep links, the AI's own buttons). */
+      readonly buttons?: BusinessOutboundButtons | null;
+      /**
+       * Phase 4 PR-3: the row id, when the caller built callback data naming it (a button
+       * bound to its own row). Absent: a fresh id.
+       */
+      readonly id?: string;
     },
     tx: unknown,
   ): Promise<{ readonly row: BusinessOutboundRecord } | { readonly refused: AutoSendRefusal }> {
@@ -704,10 +715,11 @@ export class BusinessConversationService {
     const row = await this.deps.outbound.insert(
       scope,
       {
-        id: this.deps.ids.uuid(),
+        id: input.id ?? this.deps.ids.uuid(),
         conversationId: conversation.id,
         origin: 'AUTO',
         body: input.text,
+        buttons: input.buttons ?? null,
         createdByAdminId: null,
         controlEpoch: input.controlEpoch,
         idempotencyKey: input.idempotencyKey,

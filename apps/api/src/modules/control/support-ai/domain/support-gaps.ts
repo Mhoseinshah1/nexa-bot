@@ -28,6 +28,8 @@ export const KNOWLEDGE_GAP_REASONS: readonly BusinessHandoffReason[] = [
   'LOW_CONFIDENCE',
   'DECISION_NOT_REPLY',
   'AI_REQUESTED',
+  // Phase 4 PR-3: 👎 under an automatic answer — the customer said it did not help.
+  'CUSTOMER_UNSATISFIED',
 ];
 
 export function normalizeIntent(intent: string | null): string {

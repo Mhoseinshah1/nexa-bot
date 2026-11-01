@@ -4,6 +4,7 @@ import {
   businessTextSchema,
   type ActorContext,
   type BusinessConnectionStatus,
+  type BusinessOutboundButtons,
   type Clock,
   type OperationalEventRecorder,
   type ScopeContext,
@@ -81,6 +82,8 @@ export class BusinessTransport {
       readonly chatId: string;
       readonly text: string;
       readonly replyToMessageId?: number;
+      /** Phase 4 PR-3: the row's inline keyboard, when it has one. */
+      readonly buttons?: BusinessOutboundButtons | null;
     },
   ): Promise<BusinessSendOutcome> {
     const text = businessTextSchema.safeParse(input.text);
@@ -125,6 +128,7 @@ export class BusinessTransport {
       chatId: input.chatId,
       text: text.data,
       ...(input.replyToMessageId === undefined ? {} : { replyToMessageId: input.replyToMessageId }),
+      ...(input.buttons === undefined || input.buttons === null ? {} : { buttons: input.buttons }),
     });
     if (sent.outcome === 'SUCCEEDED') {
       return { outcome: 'DELIVERED', messageId: sent.messageId, sentAt: sent.sentAt };

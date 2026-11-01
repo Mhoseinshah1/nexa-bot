@@ -107,6 +107,12 @@ export const AUTO_OUTCOME_LABELS: Readonly<Record<SupportAiAutoOutcome, WebKey>>
   guard_output_policy: 'web.sa_auto_guard_output_policy',
   guard_refusal_abuse: 'web.sa_auto_guard_refusal_abuse',
   sent_link: 'web.sa_auto_sent_link',
+  guard_tool_scope: 'web.sa_auto_guard_tool_scope',
+  guard_tool_rate_limit: 'web.sa_auto_guard_tool_rate_limit',
+  sent_payment_delivered: 'web.sa_auto_sent_payment_delivered',
+  sent_payment_ask: 'web.sa_auto_sent_payment_ask',
+  handoff_payment_checked: 'web.sa_auto_handoff_payment_checked',
+  sent_unsupported_content: 'web.sa_auto_sent_unsupported_content',
 };
 
 export function SupportAnalyticsPage({

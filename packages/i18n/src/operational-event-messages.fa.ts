@@ -120,6 +120,8 @@ export const OPERATIONAL_EVENT_MESSAGES_FA: Readonly<Record<string, string>> = {
     'یک کار دستیار پشتیبانی با خطا متوقف شد و یک بار دوباره امتحان می‌شود.',
   'support.ai.suspicious_probing':
     'تلاش مشکوک برای گرفتن اطلاعات: گفتگو پس از چند درخواست ردشده به پشتیبان سپرده شد.',
+  'support.ai.subscription_link_sent':
+    'هوش مصنوعی لینک اشتراک (یا دکمهٔ فایل‌ها) را برای سرویس خود مشتری در گفتگوی حساب تجاری فرستاد.',
   'support.assistant.running': 'دستیار پشتیبانی دوباره کار می‌کند.',
   'support.assistant.stalled':
     'دستیار پشتیبانی کار نمی‌کند و پیش‌نویس‌ها و پاسخ‌های خودکار بی‌صاحب مانده‌اند.',

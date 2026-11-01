@@ -142,6 +142,7 @@ export const OPERATIONAL_EVENT_LABELS_FA: Readonly<Record<string, string>> = {
   'support.ai.handoff_rate_high': 'نرخ ارجاع به پشتیبان بالا است',
   'support.ai.job_exception': 'یک کار دستیار پشتیبانی با خطا متوقف شد',
   'support.ai.suspicious_probing': 'تلاش مشکوک برای گرفتن اطلاعات',
+  'support.ai.subscription_link_sent': 'هوش مصنوعی لینک اشتراک فرستاد',
   'support.assistant.running': 'دستیار پشتیبانی دوباره کار می‌کند',
   'support.assistant.stalled': 'دستیار پشتیبانی متوقف مانده است',
   'support.business_connection.unusable': 'اتصال حساب تجاری تلگرام قابل استفاده نیست',

@@ -28,4 +28,5 @@ export const SUPPORT_HANDOFF_REASON_LABELS_FA: Readonly<Record<string, string>> 
   INBOUND_FLOOD: 'پیام‌های تکراری یا پشت‌سرهم مشتری',
   OUTPUT_POLICY: 'پاسخ از بررسی خروجی رد شد',
   SUSPICIOUS_PROBING: 'درخواست‌های ردشدهٔ پیاپی',
+  CUSTOMER_UNSATISFIED: 'مشتری گفت پاسخ مشکل را حل نکرد',
 };

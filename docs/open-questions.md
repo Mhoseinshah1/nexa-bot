@@ -4924,3 +4924,15 @@ live; the owner decides otherwise.
 - **OQ-SAI-2-03 — packages are listed without one panel's per-purchase cap (PR-2, item 1).** The
   traffic/time packages in the context are the tenant's offerable ones in the sales currency; a
   panel's policy cap is re-decided by the bot when the customer opens the offer for a service.
+- **OQ-SAI-3-01 — inline buttons and their taps on Business messages are assumed, not observed
+  live (PR-3).** The Bot API accepts `reply_markup` on a message sent with
+  `business_connection_id`, and a tap is expected as an ordinary `callback_query` whose `message`
+  carries the `business_connection_id` (that is how NEXA routes it). Verify on the test server
+  with a real Business account before turning `support.ai.actions_enabled` on; if taps never
+  arrive, the URL buttons still work and «👤 پشتیبان انسانی» / 👍 / 👎 do nothing.
+- **OQ-SAI-3-02 — the customer's link is sent as plain text, no QR, in the Business chat (PR-3).**
+  «سرویس‌های من» shows the link as a QR photo with the link in its caption; the Business lane sends
+  text only, so the AI sends the same link without the QR. Whether to add a Business photo send
+  is the owner's call.
+- **OQ-SAI-3-03 — voice transcription is not built (PR-3, Blocked).** A voice message gets one
+  templated request to type; transcribing it needs a provider decision (cost, privacy).

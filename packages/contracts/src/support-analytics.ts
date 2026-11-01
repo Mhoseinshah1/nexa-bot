@@ -56,9 +56,14 @@ export type SupportAutoOutcomeClass = (typeof SUPPORT_AUTO_OUTCOME_CLASSES)[numb
 
 export function supportAutoOutcomeClass(outcome: SupportAiAutoOutcome): SupportAutoOutcomeClass {
   switch (outcome) {
+    // Phase 4 PR-1: `sent_link`, the bot's start link to an unlinked customer; Phase 4 PR-3: the
+    // three after it, a message sent and the conversation still with the AI.
     case 'sent':
     case 'sent_clarifying':
-    case 'sent_link': // Phase 4 PR-1: the bot's start link to an unlinked customer.
+    case 'sent_link':
+    case 'sent_payment_delivered':
+    case 'sent_payment_ask':
+    case 'sent_unsupported_content':
       return 'SENT';
     case 'dropped_mode':
     case 'dropped_epoch':
@@ -68,6 +73,7 @@ export function supportAutoOutcomeClass(outcome: SupportAiAutoOutcome): SupportA
     case 'dropped_scope':
     case 'no_action': // A6: ended silently — nothing sent, nobody handed off.
       return 'DROPPED';
+    // Phase 4 PR-3: guard_tool_scope, guard_tool_rate_limit and handoff_payment_checked, last.
     case 'guard_content':
     case 'guard_customer_blocked':
     case 'guard_consecutive':
@@ -91,6 +97,9 @@ export function supportAutoOutcomeClass(outcome: SupportAiAutoOutcome): SupportA
     case 'guard_inbound_flood':
     case 'guard_output_policy':
     case 'guard_refusal_abuse':
+    case 'guard_tool_scope':
+    case 'guard_tool_rate_limit':
+    case 'handoff_payment_checked':
       return 'HANDED_OFF';
     default: {
       // Compile-time: every outcome this release knows is listed above. Run-time: a NEWER
@@ -162,8 +171,21 @@ export function supportAutoWireOutcome(
     // Phase 4 PR-1: as its handoff reason goes as INSUFFICIENT_GROUNDING.
     case 'guard_output_policy':
       return 'guard_grounding';
+    // Phase 4 PR-3: the last three too — a message sent, the conversation still with the AI.
     case 'sent_link':
+    case 'sent_payment_delivered':
+    case 'sent_payment_ask':
+    case 'sent_unsupported_content':
       return 'sent';
+    // Phase 4 PR-3: a target the payload did not hold is a grounding failure (as its reason);
+    // a tool flood is the loop guard (as SUSPICIOUS_PROBING goes as LOOP_GUARD).
+    case 'guard_tool_scope':
+      return 'guard_grounding';
+    case 'guard_tool_rate_limit':
+      return 'guard_consecutive';
+    // The facts were told, then a hard handoff, exactly the money guard's.
+    case 'handoff_payment_checked':
+      return 'guard_handoff_topic';
     case 'no_action':
       return null;
     default:

@@ -51,9 +51,13 @@ export class TbSupportContextSource implements SupportContextSource {
       readonly transcript?: readonly SupportTranscriptLine[];
     } = {},
   ) {
-    const { payload, knowledgeAvailable } = await this.builder.build(tenantOf(scope), customerId, {
-      query: await this.queryFor(scope, options),
-    });
+    const { payload, knowledgeAvailable, references } = await this.builder.build(
+      tenantOf(scope),
+      customerId,
+      {
+        query: await this.queryFor(scope, options),
+      },
+    );
     const aliases = new Map<string, string>();
     for (const service of payload.services) aliases.set(service.alias, service.label);
     for (const order of payload.orders) aliases.set(order.alias, order.title);
@@ -79,6 +83,9 @@ export class TbSupportContextSource implements SupportContextSource {
       knowledge: { sent: payload.knowledge.length, available: knowledgeAvailable },
       // Phase 4 PR-2: the amounts a reply may quote — what survived the byte budget, only.
       priceFamily: livePriceFamily(payload),
+      // Phase 4 PR-3: what each alias names, kept on the server — the ONLY way a tool's target
+      // becomes a row (cross-cutting item 1). Never part of the JSON the model reads.
+      references: { services: references.services, catalogue: references.catalogue },
     };
   }
 
