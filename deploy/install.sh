@@ -127,7 +127,7 @@ nexa_standalone() {
   chmod 0700 "$work"
 
   printf '==> downloading %s\n' "$name"
-  curl -fsSL --proto "$protocols" --proto-redir "$protocols" --tlsv1.2 \
+  curl -fsSLS --proto "$protocols" --proto-redir "$protocols" --tlsv1.2 \
     --retry 3 -o "${work}/${name}" "${base}/${name}" ||
     nexa_standalone_die "could not download ${base}/${name}."
 

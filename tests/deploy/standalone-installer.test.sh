@@ -72,7 +72,7 @@ run_alone() {
     bash "$installer" "$@" </dev/null 2>&1)"
   STATUS=$?
 }
-leftovers() { find "${WORK}/tmp" -mindepth 1 | head -5; }
+leftovers() { find "${WORK}/tmp" -mindepth 1 -print -quit; }
 
 # A stamped copy of the tagged installer for an arbitrary bundle — the shape the
 # build produces, for archives the build would never make.
@@ -217,6 +217,7 @@ test_case 'alone: plain http is not a protocol it will use, even when overridden
 run_alone "${DL}/install.sh" "http://127.0.0.1:9" --help
 assert_equals 'exit status' 1 "$STATUS"
 assert_contains 'refused the download' "$OUT" 'could not download'
+assert_contains 'curl refused the protocol itself' "$OUT" 'Protocol "http" not supported or disabled'
 
 test_case 'alone: a tampered bundle is refused before it is unpacked or run'
 # A WORKING archive whose installer leaves a mark: if the hash were not
@@ -264,7 +265,7 @@ make_traversal() {
   cp -R "${SRC}/deploy/." "$1/t/deploy/"
   printf 'x\n' >"$1/t/escaped"
   # deploy/../escaped: inside the archive's own prefix, then out of it.
-  tar -czf "$1/nexa-deploy-${TAG}.tar.gz" -C "$1/t" deploy deploy/../escaped
+  tar -czPf "$1/nexa-deploy-${TAG}.tar.gz" -C "$1/t" deploy deploy/../escaped
 }
 make_absolute() {
   mkdir -p "$1/t"
@@ -316,27 +317,27 @@ assert_contains 'says outside' "$OUT" 'outside deploy/'
 # one it refuses as it always has. Driven with the installer SOURCED, as the
 # botctl suite drives the owner inputs, so no root and no preflight.
 operator_probe() {
-  bash -c '. "$1"; shift; preflight_operator_inputs; printf "DOMAIN=%s ACME=%s\n" "$DOMAIN" "$ACME_EMAIL"' \
-    _ "${REPO}/deploy/install.sh" "$@" 2>&1
+  bash -c 'f="$1"; shift; . "$f"; preflight_operator_inputs; printf "DOMAIN=%s ACME=%s\n" "$DOMAIN" "$ACME_EMAIL"' \
+    _ "${REPO}/deploy/install.sh" 2>&1
 }
 
 test_case 'no terminal: --domain and --acme-email are still required'
 assert_contains 'domain' "$(operator_probe </dev/null)" '--domain is required.'
-probe="$(bash -c '. "$1"; DOMAIN=admin.example.com; preflight_operator_inputs' _ "${REPO}/deploy/install.sh" </dev/null 2>&1)"
+probe="$(bash -c 'f="$1"; shift; . "$f"; DOMAIN=admin.example.com; preflight_operator_inputs' _ "${REPO}/deploy/install.sh" </dev/null 2>&1)"
 assert_contains 'acme e-mail' "$probe" '--acme-email is required'
 
 test_case 'arguments are validated, never re-asked'
-probe="$(bash -c '. "$1"; DOMAIN="https://x.example.com"; ACME_EMAIL=ops@example.com; preflight_operator_inputs' \
+probe="$(bash -c 'f="$1"; shift; . "$f"; DOMAIN="https://x.example.com"; ACME_EMAIL=ops@example.com; preflight_operator_inputs' \
   _ "${REPO}/deploy/install.sh" </dev/null 2>&1)"
 assert_contains 'bad domain' "$probe" 'is not a valid hostname'
-probe="$(bash -c '. "$1"; DOMAIN=admin.example.com; ACME_EMAIL=nobody; preflight_operator_inputs' \
+probe="$(bash -c 'f="$1"; shift; . "$f"; DOMAIN=admin.example.com; ACME_EMAIL=nobody; preflight_operator_inputs' \
   _ "${REPO}/deploy/install.sh" </dev/null 2>&1)"
 assert_contains 'bad e-mail' "$probe" 'does not look like an e-mail address'
 
 test_case 'a terminal: both are asked for, until each is valid'
 if command -v script >/dev/null 2>&1; then
   printf -v probe_cmd '%q -c %q _ %q' bash \
-    '. "$1"; preflight_operator_inputs; printf "DOMAIN=%s ACME=%s\n" "$DOMAIN" "$ACME_EMAIL"' \
+    'f="$1"; shift; . "$f"; preflight_operator_inputs; printf "DOMAIN=%s ACME=%s\n" "$DOMAIN" "$ACME_EMAIL"' \
     "${REPO}/deploy/install.sh"
   probe="$(printf '%s\n' 'https://admin.example.com' ' admin.example.com ' 'not-an-email' 'ops@example.com' |
     script -qec "$probe_cmd" /dev/null 2>&1 | tr -d '\r')"
