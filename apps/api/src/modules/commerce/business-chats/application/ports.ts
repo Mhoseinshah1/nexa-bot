@@ -6,6 +6,8 @@ import type {
   BusinessHandoffReason,
   BusinessMessageKind,
   BusinessMessageOrigin,
+  BusinessOutboundButtons,
+  BusinessOutboundFeedback,
   BusinessOutboundOrigin,
   BusinessOutboundState,
   BusinessTakeoverReason,
@@ -149,6 +151,8 @@ export interface BusinessTelegramGateway {
       readonly chatId: string;
       readonly text: string;
       readonly replyToMessageId?: number;
+      /** Phase 4 PR-3: the inline keyboard (deep links and the support AI's buttons). */
+      readonly buttons?: BusinessOutboundButtons | null;
     },
   ): Promise<
     | {
@@ -461,6 +465,10 @@ export interface BusinessOutboundRecord {
   readonly resolvedAt: Date | null;
   readonly telegramMessageId: number | null;
   readonly failureCode: string | null;
+  /** Phase 4 PR-3: the inline keyboard (automatic rows and notices only); null for none. */
+  readonly buttons: BusinessOutboundButtons | null;
+  /** Phase 4 PR-3: the customer's 👍 / 👎 under an automatic answer; null until tapped. */
+  readonly feedback: BusinessOutboundFeedback | null;
   readonly createdAt: Date;
 }
 
@@ -474,6 +482,8 @@ export interface BusinessOutboundRepository {
       /** Null exactly for a `HANDOFF_NOTICE`, which names its `templateKey` instead. */
       readonly body: string | null;
       readonly templateKey?: string | null;
+      /** Phase 4 PR-3: an automatic row's or a notice's inline keyboard. */
+      readonly buttons?: BusinessOutboundButtons | null;
       readonly createdByAdminId: string | null;
       readonly controlEpoch: number;
       readonly idempotencyKey: string;
@@ -482,6 +492,18 @@ export interface BusinessOutboundRepository {
     },
     tx: unknown,
   ): Promise<BusinessOutboundRecord>;
+
+  /**
+   * Phase 4 PR-3 — the customer's 👍 / 👎 on an AUTO row, once: a conditional UPDATE from
+   * `feedback IS NULL`. False when it was already recorded (the first tap wins).
+   */
+  recordFeedback(
+    scope: ScopeContext,
+    id: string,
+    feedback: BusinessOutboundFeedback,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
 
   findByIdempotencyKey(
     scope: ScopeContext,
@@ -665,6 +687,15 @@ export interface HandoffDetail {
   readonly intent?: string | null;
   /** Phase 4 PR-1: the handoff's kind; absent, `businessHandoffKindOf(reason, topic)`. */
   readonly kind?: BusinessHandoffKind;
+  /**
+   * Phase 4 PR-3 — check-before-handoff: the handoff's ONE customer message is this rendered
+   * text (and keyboard) instead of the generic notice template. Same row, same rules: at most one
+   * per handoff epoch, sent only while nobody answered (`HANDOFF_REQUIRED` at that epoch).
+   */
+  readonly notice?: {
+    readonly body: string;
+    readonly buttons: BusinessOutboundButtons | null;
+  };
 }
 
 /**

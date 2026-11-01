@@ -13,8 +13,10 @@ import {
   clientAppPlatformSchema,
   customMenuIdOfRoute,
   normalizeReceiptCaption,
+  parseSupportAiStartPayload,
   paymentGatewayProviderSchema,
   uuidV7Schema,
+  type SupportAiDeepLinkFlow,
 } from '@nexa/contracts';
 import type { InboundReceiptFile } from '../../../modules/commerce/payments/application/receipt-ports.js';
 import { paymentIdOfTetrapayStart } from '../../../modules/commerce/payments/domain/tetrapay.js';
@@ -322,6 +324,34 @@ export function startPayloadOf(update: unknown): string | null {
   if (typeof text !== 'string') return null;
   const match = /^\/start(?:@[A-Za-z0-9_]+)?\s+([A-Za-z0-9_-]{1,64})\s*$/.exec(text);
   return match?.[1] ?? null;
+}
+
+/**
+ * Phase 4 PR-3 — the bot intent a support-AI deep link opens: an EXISTING intent each, with the
+ * id the link carries as its target. Null when the payload is not one (an ordinary `/start`, a
+ * referral code, anything malformed): the customer gets the start screen as before.
+ */
+const SUPPORT_AI_DEEP_LINK_INTENTS: Readonly<Record<SupportAiDeepLinkFlow, BotIntent>> = {
+  buy: 'CATALOG',
+  category: 'REORDER_CATEGORY',
+  renew: 'SERVICE_RENEW',
+  addTraffic: 'SERVICE_ADD_TRAFFIC',
+  addTime: 'SERVICE_ADD_TIME',
+  changeLocation: 'SERVICE_CHANGE_LOCATION',
+  rotate: 'SERVICE_ROTATE_ASK',
+  service: 'SERVICE',
+  trial: 'TRIAL_CLAIM',
+  topup: 'TOPUP_MENU',
+};
+
+export function supportAiStartCommandOf(payload: string | null): BotCommand | null {
+  const link = parseSupportAiStartPayload(payload);
+  if (link === null) return null;
+  return {
+    intent: SUPPORT_AI_DEEP_LINK_INTENTS[link.flow],
+    targetId: link.id,
+    callbackQueryId: null,
+  };
 }
 
 /**
@@ -1286,6 +1316,14 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     if (returned !== null) {
       return { intent: 'GATEWAY_RETURN', targetId: returned, callbackQueryId: null };
     }
+    /*
+     * Phase 4 PR-3 — a support-AI deep link (`sai-<flow>[-<uuid>]`): the Business chat's button
+     * opens the bot's OWN flow for it, as its own button would. Parsed strictly; the id is only
+     * an identifier — ownership, availability and every rule are decided by that flow's handler
+     * exactly as for a tap, and nothing is done but showing its first screen.
+     */
+    const deepLink = supportAiStartCommandOf(startPayloadOf(update));
+    if (deepLink !== null) return deepLink;
     return { intent: 'START', targetId: null, callbackQueryId: null };
   }
   if (command === '/catalog') return { intent: 'CATALOG', targetId: null, callbackQueryId: null };

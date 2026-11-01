@@ -119,6 +119,15 @@ export interface SupportContextSource {
      * output validator lets a reply quote. Absent: only the payload's own numbers are allowed.
      */
     readonly priceFamily?: OutputPriceFamily;
+    /**
+     * Phase 4 PR-3: alias → row id for the services (`S…`) and catalogue plans (`C…`) the payload
+     * SHOWED, server-side only. A tool's target is resolved here and nowhere else; absent, every
+     * target is refused.
+     */
+    readonly references?: {
+      readonly services: ReadonlyMap<string, string>;
+      readonly catalogue: ReadonlyMap<string, string>;
+    };
   }>;
 }
 

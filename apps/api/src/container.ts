@@ -878,6 +878,11 @@ import {
   SupportAutoReplyService,
 } from './modules/control/support-ai/application/support-auto-reply.service.js';
 import { SupportHandoffContext } from './modules/control/support-ai/application/support-handoff-context.js';
+import { SupportAiCallbackService } from './modules/control/support-ai/application/support-ai-callback.service.js';
+import {
+  DrizzleSupportAiToolReader,
+  SettingsSupportAiToolSettings,
+} from './modules/control/support-ai/infrastructure/drizzle-support-ai-tools.reader.js';
 import { BusinessEscalationService } from './modules/commerce/business-chats/application/business-escalation.service.js';
 import {
   AssistantLoop,
@@ -1629,6 +1634,8 @@ export interface Container {
   readonly assistantLoop: AssistantLoop;
   /** TB7: AUTO_REPLY_SAFE's producer (the `assistant` role runs it through the loop). */
   readonly supportAutoReply: SupportAutoReplyService;
+  /** Phase 4 PR-3: taps on the support AI's buttons under a Business message. */
+  readonly supportAiCallbacks: SupportAiCallbackService;
   /** TB8: support knowledge and its review, and controlled learning (ADR-0035). */
   readonly supportKnowledge: SupportKnowledgeService;
   readonly supportLearning: SupportLearningService;
@@ -7226,6 +7233,34 @@ export function createContainer(
       usernameOf: async (scope, botInstanceId) =>
         (await botInstances.findById(botInstanceId as BotInstanceId))?.username ?? null,
     },
+    // Phase 4 PR-3: the read-only tools, deep links and check-before-handoff (off by default).
+    tools: {
+      reader: new DrizzleSupportAiToolReader({
+        db: database.db,
+        filesOnly: panelFilesOnlyReader,
+        trials: trialService,
+        products: productRepository,
+      }),
+      settings: new SettingsSupportAiToolSettings(settingsResolver),
+      jobs: supportAiJobs,
+    },
+  });
+  // Phase 4 PR-3: the support AI's own buttons under a Business message (bound to their row).
+  const supportAiCallbacks = new SupportAiCallbackService({
+    outbound: businessOutboundRepository,
+    conversations: businessConversationRepository,
+    connections: businessConnectionRepository,
+    jobs: supportAiJobs,
+    control: businessConversations,
+    acknowledge: (scope, input) =>
+      customerMessenger.acknowledge(scope as TenantContext, {
+        callbackQueryId: input.callbackQueryId,
+        botInstanceId: input.botInstanceId as BotInstanceId,
+        toast: { templateKey: input.toastKey, values: {} },
+      }),
+    uow,
+    scopeActivity: tenants,
+    clock,
   });
   const supportAssist = new SupportAssistService({
     jobs: supportAiJobs,
@@ -9077,6 +9112,7 @@ export function createContainer(
     supportAssist,
     assistantLoop,
     supportAutoReply,
+    supportAiCallbacks,
     supportKnowledge,
     supportLearning,
     supportKnowledgeBuild,

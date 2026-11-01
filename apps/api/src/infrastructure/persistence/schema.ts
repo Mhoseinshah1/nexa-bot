@@ -313,6 +313,7 @@ import {
   BUSINESS_MESSAGE_KINDS,
   BUSINESS_MESSAGE_ORIGINS,
   BUSINESS_OUTBOUND_ORIGINS,
+  BUSINESS_OUTBOUND_FEEDBACK,
   BUSINESS_OUTBOUND_STATES,
   BUSINESS_TAKEOVER_REASONS,
   SUPPORT_AI_MODES,
@@ -331,6 +332,7 @@ import {
   SUPPORT_AI_SAFE_TOPICS,
   SUPPORT_AI_AUTO_MIN_CONFIDENCES,
   SUPPORT_AI_AUTO_OUTCOMES,
+  SUPPORT_AI_ACTION_KINDS,
   BUSINESS_ESCALATION_TICKET_OUTCOMES,
   // TB8: support knowledge and controlled learning.
   SUPPORT_KNOWLEDGE_ARTICLE_STATES,
@@ -15961,6 +15963,14 @@ export const businessOutboundMessages = pgTable(
      * text is rendered when the row is sent, never stored (CLAUDE.md, Phase 2).
      */
     templateKey: text('template_key'),
+    /**
+     * Phase 4 PR-3: the inline keyboard of an automatic message or a handoff notice
+     * (`businessOutboundButtonsSchema`): deep links into the bot and the support AI's own
+     * callbacks, labels rendered from templates when the row was enqueued. Purged with the body.
+     */
+    buttons: jsonb('buttons'),
+    /** Phase 4 PR-3: the customer's 👍 / 👎 under an automatic answer; the first tap wins. */
+    feedback: text('feedback'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -16004,10 +16014,24 @@ export const businessOutboundMessages = pgTable(
       'business_outbound_messages_author_check',
       sql`(origin IN ('AUTO', 'HANDOFF_NOTICE')) = (created_by_admin_id IS NULL)`,
     ),
-    // Roadmap A4: the notice, and only the notice, is a template with no stored body.
+    /*
+     * Roadmap A4: only the notice is a template, and a template has no stored body. Phase 4
+     * PR-3: a notice may instead carry a rendered body — check-before-handoff's facts message,
+     * which IS the notice of that handoff — never both (a purged body leaves neither; the lane
+     * sends only a row with one).
+     */
     check(
       'business_outbound_messages_template_check',
-      sql`(origin = 'HANDOFF_NOTICE') = (template_key IS NOT NULL) AND (template_key IS NULL OR body IS NULL)`,
+      sql`(origin = 'HANDOFF_NOTICE' OR template_key IS NULL) AND (template_key IS NULL OR body IS NULL)`,
+    ),
+    // Phase 4 PR-3: buttons only on what the support AI sends; feedback only on its replies.
+    check(
+      'business_outbound_messages_buttons_check',
+      sql`buttons IS NULL OR origin IN ('AUTO', 'HANDOFF_NOTICE')`,
+    ),
+    check(
+      'business_outbound_messages_feedback_check',
+      sql`feedback IS NULL OR (origin = 'AUTO' AND ${enumCheck('feedback', BUSINESS_OUTBOUND_FEEDBACK)})`,
     ),
     // Resolved exactly when not PENDING; a delivered row knows its Telegram message.
     check(
@@ -16467,6 +16491,12 @@ export const supportAiJobs = pgTable(
      */
     knowledgeSent: integer('knowledge_sent'),
     knowledgeAvailable: integer('knowledge_available'),
+    /**
+     * Phase 4 PR-3: the tool this automatic job used or asked for (`SUPPORT_AI_ACTION_KINDS`,
+     * never `NONE`; `PAYMENT_STATUS` for a check-before-handoff), null for none — what the
+     * per-epoch tool-call limit counts.
+     */
+    toolAction: text('tool_action'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -16541,6 +16571,10 @@ export const supportAiJobs = pgTable(
       sql`unseen_image_handoff IS NULL OR (decision IS NOT DISTINCT FROM 'HANDOFF' AND provider IS NULL AND model IS NULL AND summary IS NULL AND images_seen = 0 AND (suggested_reply IS NOT DISTINCT FROM '' OR (suggested_reply IS NULL AND text_purged_at IS NOT NULL)))`,
     ),
     check('support_ai_jobs_outcome_check', nullableEnumCheck('outcome', SUPPORT_AI_AUTO_OUTCOMES)),
+    check(
+      'support_ai_jobs_tool_action_check',
+      sql`tool_action IS NULL OR (tool_action <> 'NONE' AND ${enumCheck('tool_action', SUPPORT_AI_ACTION_KINDS)})`,
+    ),
     check(
       'support_ai_jobs_failure_class_check',
       nullableEnumCheck('failure_class', SUPPORT_AI_FAILURE_CLASSES),

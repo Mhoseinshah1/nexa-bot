@@ -153,6 +153,7 @@ describe('A7/A8 — the policy for authors and knowledge', () => {
     'sai4m-2026-10-07': '3dc8a68be32e72b2a95ed81590f65497a340f599844d67f08a1da259d3aef11e',
     'sai5p-2026-11-01': 'bf4a142536da8726b64bb272629420226b160c03e53d9bda3458a08994895ed6',
     'sai6k-2026-11-01': '30256f55fad07fee3f33b1acc0c5f62fc0151429a6295ab64c93ec20d3aa08b1',
+    'sai7a-2026-11-01': '2ac897c5451127ce0b1c2da10b97f928f569f43bb1d3ded3342655895addeb5f',
   };
 
   it('pins the policy text to its version, in both directions', () => {
@@ -160,6 +161,8 @@ describe('A7/A8 — the policy for authors and knowledge', () => {
       { ...base, contextJson: '{"services":[]}' },
       { ...base, contextJson: '{"services":[]}', identityLinked: false },
       { ...base, contextJson: '{"services":[]}', businessToneInstructions: 'لحن رسمی و کوتاه.' },
+      // Phase 4 PR-3: the ACTIONS rule, with the tools on.
+      { ...base, contextJson: '{"services":[]}', actionsEnabled: true },
     ];
     const digest = createHash('sha256')
       .update(variants.map((variant) => supportSystemPrompt(variant)).join('\u0000'))
@@ -217,6 +220,8 @@ describe('the structured decision', () => {
     ticketAction: 'NONE',
     summary: 'مشتری نمی‌تواند وصل شود.',
     intent: 'اتصال',
+    // Phase 4 PR-3: required of a provider, optional for zod (pre-PR-3 decisions still parse).
+    action: { kind: 'NONE', target: '' },
   };
 
   it('accepts the closed shape', () => {
@@ -229,6 +234,13 @@ describe('the structured decision', () => {
     ['a topic outside the catalogue', { ...valid, topic: 'WHATEVER' }],
     ['a malformed fact ref', { ...valid, factRefs: ['services[0].id'] }],
     ['a reply past the hard bound', { ...valid, replyText: 'x'.repeat(4001) }],
+    // Phase 4 PR-3: an action outside the set, an id-length target, an unknown key in it.
+    ['a tool outside the closed set', { ...valid, action: { kind: 'REFUND', target: '' } }],
+    [
+      'a target longer than an alias',
+      { ...valid, action: { kind: 'SEND_SUBSCRIPTION_LINK', target: '0190a1b2-c3d4' } },
+    ],
+    ['an unknown key in the action', { ...valid, action: { kind: 'NONE', target: '', id: 'x' } }],
   ])('refuses %s', (_label, input) => {
     expect(supportAiDecisionSchema.safeParse(input).success).toBe(false);
   });
