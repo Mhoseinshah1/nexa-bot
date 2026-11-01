@@ -131,13 +131,13 @@ describe('the offline run with the recommended preset', () => {
     // RECORDED offline resolution rate (scripted good answers: the pipeline's ceiling, not a
     // model's skill): every everyday scenario ends without a handoff.
     expect(report.everyday).toMatchObject({
-      total: 37,
+      count: 37,
       resolved: 33,
       clarifying: 4,
       handedOff: 0,
       rate: 1,
     });
-    expect(report.attacks.total).toBe(45);
+    expect(report.attacks.count).toBe(45);
     expect(report.attacks.trials).toBe(112);
   });
 
@@ -198,6 +198,66 @@ describe('the offline run with the recommended preset', () => {
       tools: false,
     });
     expect(off.observed).toBe('HANDOFF');
+  });
+});
+
+describe('review fixes (PR #370)', () => {
+  const noAction = (topic: string) => ({
+    decision: 'NO_ACTION',
+    replyText: '',
+    topic,
+    confidence: 'HIGH',
+    factRefs: [],
+    knowledgeRefs: [],
+    ticketAction: 'NONE',
+    summary: 's',
+    intent: 'i',
+  });
+
+  it('a valid NO_ACTION on an allowlisted safe topic closes silently, not as a handoff', async () => {
+    const s = SAI_SCENARIOS.find((x) => x.id === 'e-price-fa')!;
+    const closed = await runSaiTrial(s, scriptedProvider([noAction('GREETING')]), {
+      guard: recommended.guard,
+    });
+    expect(closed).toMatchObject({ observed: 'CLOSED_SILENTLY', delivered: null });
+    const hard = await runSaiTrial(s, scriptedProvider([noAction('REFUND')]), {
+      guard: recommended.guard,
+    });
+    expect(hard.observed).toBe('HANDOFF');
+  });
+
+  it('the request carries the effective config: its reply limit, token budget and the tools rule', async () => {
+    const s = SAI_SCENARIOS.find((x) => x.id === 'e-link-fa')!;
+    const seen: { system: string; max: number }[] = [];
+    const spy = {
+      ...scriptedProvider([s.script.good]),
+      generate: async (request: { system: string; maxOutputTokens: number }) => {
+        seen.push({ system: request.system, max: request.maxOutputTokens });
+        return { kind: 'OK' as const, output: s.script.good };
+      },
+    };
+    await runSaiTrial(s, spy, { guard: { ...recommended.guard, maxOutputChars: 300 } });
+    await runSaiTrial(s, spy, { guard: { ...recommended.guard, maxOutputChars: 700 } });
+    await runSaiTrial(s, spy, { guard: recommended.guard, tools: false });
+    expect(seen[0]!.system).toContain('at most 300 characters');
+    expect(seen[1]!.system).toContain('at most 700 characters');
+    expect(seen[0]!.max).toBeLessThan(seen[1]!.max);
+    expect(seen[0]!.system).not.toBe(seen[2]!.system);
+  });
+
+  it('--only matching no scenario of any enabled suite is a usage error', async () => {
+    const { checkOnlyMatches } =
+      await import('../../apps/api/src/modules/control/support-ai/eval/live-args');
+    expect(() => checkOnlyMatches(['nope'], 'all', ['greeting-01'], ['e-price-fa'])).toThrow(
+      /--only/u,
+    );
+    expect(() => checkOnlyMatches(['nope'], 'sai', ['greeting-01'], ['e-price-fa'])).toThrow(
+      /--only/u,
+    );
+    expect(() =>
+      checkOnlyMatches(['e-price-fa'], 'all', ['greeting-01'], ['e-price-fa']),
+    ).not.toThrow();
+    expect(() => checkOnlyMatches([], 'all', [], [])).not.toThrow();
   });
 });
 

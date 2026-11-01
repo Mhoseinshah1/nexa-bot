@@ -14,10 +14,12 @@ import type {
   SupportAiCredential,
 } from './modules/control/support-ai/application/ports.js';
 import { EVAL_SCENARIOS } from './modules/control/support-ai/eval/corpus.js';
+import { SAI_SCENARIOS } from './modules/control/support-ai/eval/sai-corpus.js';
 import {
   EVAL_USAGE,
   UsageError,
   assertNoPaidProviderUnderCi,
+  checkOnlyMatches,
   evalProviders,
   parseEvalArgs,
 } from './modules/control/support-ai/eval/live-args.js';
@@ -194,9 +196,12 @@ async function main(argv: readonly string[]): Promise<number> {
       : args.only.length === 0
         ? EVAL_SCENARIOS
         : EVAL_SCENARIOS.filter((s) => args.only.includes(s.id));
-  if (scenarios.length === 0 && args.suite === 'classic') {
-    throw new UsageError('--only matched no scenario');
-  }
+  checkOnlyMatches(
+    args.only,
+    args.suite,
+    EVAL_SCENARIOS.map((s) => s.id),
+    SAI_SCENARIOS.map((s) => s.id),
+  );
   // The paid-call gate (`evalProviders`): the factory, which reads the key, runs only when
   // `liveRunRefusal` allowed the run; and no paid provider is ever run under CI.
   const { providers, refusal } = evalProviders(args, process.env, (provider, model) =>

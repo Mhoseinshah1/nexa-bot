@@ -193,3 +193,15 @@ export function liveRunRefusal(
   if (args.provider === 'ZAI' && args.region === null) return '--region is required for ZAI';
   return null;
 }
+
+/** `--only` must select at least one scenario of an ENABLED suite (a stale id must not pass green). */
+export function checkOnlyMatches(
+  only: readonly string[],
+  suite: EvalArgs['suite'],
+  classicIds: readonly string[],
+  saiIds: readonly string[],
+): void {
+  if (only.length === 0) return;
+  const pool = [...(suite === 'sai' ? [] : classicIds), ...(suite === 'classic' ? [] : saiIds)];
+  if (!only.some((id) => pool.includes(id))) throw new UsageError('--only matched no scenario');
+}

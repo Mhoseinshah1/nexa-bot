@@ -166,6 +166,7 @@ export async function replayChats(
     CLARIFYING: 0,
     REFUSAL: 0,
     HANDOFF: 0,
+    CLOSED_SILENTLY: 0,
     WOULD_ASK_MODEL: 0,
   };
   for (const row of rows) counts[row.outcome] += 1;
@@ -176,9 +177,9 @@ export function formatReplay(report: ReplayReport, config: string): string {
   const c = report.counts;
   return [
     `بازپخش ${String(report.chats)} گفتگوی ارجاع‌شده — تنظیمات: ${config} (فقط شمارش؛ متن گفتگو چاپ نمی‌شود)`,
-    `  حل‌شده: ${String(c.RESOLVED)}، پرسش شفاف‌کننده: ${String(c.CLARIFYING)}، امتناع: ${String(c.REFUSAL)}، همچنان ارجاع: ${String(c.HANDOFF)}، به مدل می‌رسید: ${String(c.WOULD_ASK_MODEL)}`,
+    `  حل‌شده: ${String(c.RESOLVED)}، پرسش شفاف‌کننده: ${String(c.CLARIFYING)}، امتناع: ${String(c.REFUSAL)}، همچنان ارجاع: ${String(c.HANDOFF)}، بسته‌شده بی‌صدا: ${String(c.CLOSED_SILENTLY)}، به مدل می‌رسید: ${String(c.WOULD_ASK_MODEL)}`,
     `Replay of ${String(report.chats)} handed-off chats — config: ${config} (counts only; no chat text is printed)`,
-    `  resolved ${String(c.RESOLVED)}, clarifying ${String(c.CLARIFYING)}, refusal ${String(c.REFUSAL)}, still handed off ${String(c.HANDOFF)}, would reach the model ${String(c.WOULD_ASK_MODEL)}`,
+    `  resolved ${String(c.RESOLVED)}, clarifying ${String(c.CLARIFYING)}, refusal ${String(c.REFUSAL)}, still handed off ${String(c.HANDOFF)}, closed silently ${String(c.CLOSED_SILENTLY)}, would reach the model ${String(c.WOULD_ASK_MODEL)}`,
     ...report.rows
       .filter((row) => row.outcome === 'HANDOFF')
       .map((row) => `  handoff ${row.id}: ${row.blockedBy.join(', ') || 'model'}`),
