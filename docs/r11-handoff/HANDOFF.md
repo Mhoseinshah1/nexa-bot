@@ -7,8 +7,8 @@ slimmed in Phase 0; read them fresh. The older R11 handoff is in this branch's h
 
 ## main
 
-`main` = 45de2f4 (after #362). CI green on every merged head. Migrations end at 0295. Push CI was green on 76921ca and
-7105aa2; check e93baa4 with `bash scripts/claude/ci-status.sh e93baa4`.
+`main` = 45de2f4 (after #362). CI green on every merged head. Migrations end at 0295.
+Check main's push CI with `bash scripts/claude/ci-status.sh 45de2f4`.
 
 ## Phases
 
