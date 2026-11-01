@@ -51,8 +51,8 @@ export interface OutputPolicyAllowance {
 }
 
 const LABEL = '[\\p{L}\\p{N}](?:[\\p{L}\\p{N}-]{0,62}[\\p{L}\\p{N}])?';
-/** A TLD: Latin letters, punycode, or the Persian IDN TLD. */
-const TLD = '(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59}|ایران)';
+/** A TLD: any run of letters (any script — an IDN TLD), or punycode. */
+const TLD = '(?:\\p{L}{2,63}|xn--[a-z0-9-]{2,59})';
 const HOST = `(?:${LABEL}\\.)+${TLD}(?![\\p{L}\\p{N}])`;
 const LINK_PATTERN = new RegExp(
   [
@@ -65,23 +65,44 @@ const LINK_PATTERN = new RegExp(
   ].join('|'),
   'giu',
 );
-const HANDLE_PATTERN = /(?<![\p{L}\p{N}_.])@([A-Za-z][A-Za-z0-9_]{3,31})(?![A-Za-z0-9_.])/gu;
+/** Any @username-like run, whatever follows it (`@admin_real.` included). */
+const HANDLE_PATTERN = /(?<![\p{L}\p{N}_])@([A-Za-z][A-Za-z0-9_]{3,31})/gu;
 /** One digit group: digits with thousands separators inside it. */
-const GROUP_PATTERN = /[0-9۰-۹٠-٩](?:[0-9۰-۹٠-٩]|[,٬،.](?=[0-9۰-۹٠-٩]{3}))*/gu;
+const GROUP_PATTERN = /\p{Nd}(?:\p{Nd}|[,٬،.](?=\p{Nd}{3}))*/gu;
 /** A date: year, month, day with any single separator; digits of any script. */
-const DATE_PATTERN =
-  /(?<![0-9۰-۹٠-٩])([0-9۰-۹٠-٩]{4})[/.-]([0-9۰-۹٠-٩]{1,2})[/.-]([0-9۰-۹٠-٩]{1,2})(?![0-9۰-۹٠-٩])/gu;
+const DATE_PATTERN = /(?<!\p{Nd})(\p{Nd}{4})[/.-](\p{Nd}{1,2})[/.-](\p{Nd}{1,2})(?!\p{Nd})/gu;
 /** Shorter than this, a digit group is a count or a step, never an identifier or an amount. */
 const IDENTIFIER_MIN_DIGITS = 4;
 /** A joined sequence this long is an identifier (a card, a phone, an id), never a count. */
 const SEQUENCE_MIN_DIGITS = 8;
 
+/**
+ * A decimal digit of any script (`\p{Nd}`) as its Latin value. Unicode lays every script's
+ * digits out as contiguous runs of ten starting at zero, so the value is the distance back to the
+ * start of the run, modulo ten.
+ */
+function latinDigit(digit: string): string {
+  const code = digit.codePointAt(0) ?? 0;
+  let back = 0;
+  while (back < 9 && /\p{Nd}/u.test(String.fromCodePoint(code - back - 1))) back += 1;
+  return String(back % 10);
+}
+
+/**
+ * Third security review: text as the validator reads it — NFKC (full-width and mathematical
+ * digits and letters become plain ones), every decimal digit of any script mapped to Latin, and
+ * the ideographic / full-width / half-width full stops (U+3002, U+FF0E, U+FF61) folded to '.'.
+ */
+export function normaliseForPolicy(text: string): string {
+  return text
+    .normalize('NFKC')
+    .replace(/[\u3002\uFF0E\uFF61]/gu, '.')
+    .replace(/\p{Nd}/gu, (digit) => (/[0-9]/u.test(digit) ? digit : latinDigit(digit)));
+}
+
 /** Latin digits, everything else dropped. */
 export function digitsOf(text: string): string {
-  return text
-    .replace(/[۰-۹]/gu, (d) => String(d.charCodeAt(0) - 0x06f0))
-    .replace(/[٠-٩]/gu, (d) => String(d.charCodeAt(0) - 0x0660))
-    .replace(/[^0-9]/gu, '');
+  return normaliseForPolicy(text).replace(/[^0-9]/gu, '');
 }
 
 /**
@@ -146,7 +167,8 @@ export function outputPolicyAllowanceFromContext(
   } catch {
     payload = null;
   }
-  const visit = (value: unknown, inKnowledge: boolean): void => {
+  const visit = (raw: unknown, inKnowledge: boolean): void => {
+    const value = typeof raw === 'string' ? normaliseForPolicy(raw) : raw;
     if (typeof value === 'string') {
       for (const match of value.matchAll(LINK_PATTERN)) links.add(normaliseLink(match[0]));
       for (const match of value.matchAll(HANDLE_PATTERN)) handles.add(match[1]!.toLowerCase());
@@ -189,10 +211,11 @@ export function outputPolicyAllowanceFromContext(
 
 /** Whether a reply names only what the allowance holds. `now` is the Clock's. */
 export function checkOutputPolicy(
-  reply: string,
+  raw: string,
   allowance: OutputPolicyAllowance,
   now: Date,
 ): OutputPolicyVerdict {
+  const reply = normaliseForPolicy(raw);
   let rest = reply;
   // 1. Links and emails.
   for (const match of reply.matchAll(LINK_PATTERN)) {

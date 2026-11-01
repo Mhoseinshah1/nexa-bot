@@ -202,6 +202,28 @@ describe('the output validator (cross-cutting item 3)', () => {
     expect(check('تاریخ پایان: 2026-12-01')).toEqual({ ok: true });
   });
 
+  it('third security review: other digit scripts, other full stops, Unicode TLDs, handles', () => {
+    for (const reply of [
+      'کارت: ６２１９８６１０３４５６７８９０',
+      'کارت: 𝟔𝟐𝟏𝟗𝟖𝟔𝟏𝟎𝟑𝟒𝟓𝟔𝟕𝟖𝟗𝟎',
+      'کارت: ६२१९८६१०३४५६७८९०',
+    ]) {
+      expect(check(reply), reply).toEqual({ ok: false, violation: 'number' });
+    }
+    for (const reply of [
+      'evil。example/app',
+      'evil．example/app',
+      'evil｡example/app',
+      'سایت.شبکه',
+    ]) {
+      expect(check(reply), reply).toEqual({ ok: false, violation: 'link' });
+    }
+    expect(check('به @admin_real. پیام بدهید')).toEqual({ ok: false, violation: 'handle' });
+    expect(check('به @nexa_support. پیام بدهید')).toEqual({ ok: true });
+    // A published number in full-width digits is still the published number.
+    expect(check('کارت: ６０３７９９１２３４５６７８９３')).toEqual({ ok: true });
+  });
+
   it('a promise word is allowed when approved knowledge carries it', () => {
     // «رایگان» is in K1; «تخفیف» is not.
     expect(check('تست رایگان دارید.')).toEqual({ ok: true });
