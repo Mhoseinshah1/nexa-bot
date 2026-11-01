@@ -346,6 +346,9 @@ export class SupportTicketAiService {
         ...grounding,
         clarifyingStreak,
         otherStreak,
+        // As the Business producer: the read-only tool exceptions (payment status, wallet top-up)
+        // exist only while the owner's tools switch is on.
+        actionsEnabled: tools.actions,
       });
       if (!guards.pass) {
         // An unlinked-customer link is a Business matter; a ticket's customer is always linked.
@@ -439,7 +442,18 @@ export class SupportTicketAiService {
           produced,
         );
       }
-      return this.reply(scope, job, ticket, decision, produced, grounding, since, body, tool);
+      return this.reply(
+        scope,
+        job,
+        ticket,
+        decision,
+        produced,
+        grounding,
+        since,
+        body,
+        tool,
+        citedServiceLabels(decision, context.aliases),
+      );
     }
   }
 
@@ -603,6 +617,8 @@ export class SupportTicketAiService {
     since: Date | null,
     body: string,
     tool: PreparedTool | null,
+    /** The panel usernames of the services the decision cites, from THIS payload's alias map. */
+    citedLabels: readonly string[],
   ): Promise<TicketAiJobResult> {
     return this.inJobTransaction(scope, async (tx, now) => {
       const { config } = await this.deps.configs.get(scope, tx);
@@ -613,7 +629,7 @@ export class SupportTicketAiService {
       if (stillOurs !== null) return this.finish(scope, job, stillOurs, now, tx);
       const flags = await this.deps.facts.autoGuardFlags(scope, ticket.customerId, tx, {
         since: new Date(now.getTime() - SUPPORT_AI_UNDER_REVIEW_WINDOW_DAYS * 86_400_000),
-        serviceLabels: citedServiceLabels(decision, new Map()),
+        serviceLabels: citedLabels,
       });
       const rows = await this.deps.tickets.transcript(
         scope,
@@ -652,6 +668,8 @@ export class SupportTicketAiService {
             ...grounding,
             clarifyingStreak: clarifyingStreakOf(sentRows),
             otherStreak: otherStreakOf(sentRows),
+            // The switch as it is NOW, read in this transaction.
+            actionsEnabled: (await this.toolSettings(scope, tx)).actions,
           });
       if (!recheck.pass) {
         const failed =
@@ -866,14 +884,11 @@ export class SupportTicketAiService {
     extra: { readonly toolAction?: PreparedTool['toolAction'] | null } = {},
     failureClass: SupportAiFailureClass | null = null,
   ): Promise<TicketAiJobResult> {
-    const ticket = await this.deps.tickets.ticket(scope, job.ticketId, tx, true);
-    const hold = await this.deps.tickets.hold(scope, job.ticketId, tx);
-    if (ticket === null || ticket.status === 'CLOSED') {
-      return this.finish(scope, job, 'dropped_state', now, tx);
-    }
-    if ((hold?.epoch ?? 0) !== job.epoch || hold?.state === 'HANDOFF_REQUIRED') {
-      return this.finish(scope, job, 'dropped_epoch', now, tx);
-    }
+    // Under the ticket's row lock, as the reply path: closed, moved on (a hold at another epoch),
+    // or no longer the newest message (a person replied, or the customer wrote again) means this
+    // decision is stale and writes no hold — a stale HARD handoff must not silence the ticket.
+    const stale = await this.stillOurs(scope, job, tx);
+    if (stale !== null) return this.finish(scope, job, stale, now, tx);
     const kind = businessHandoffKindOf(failed.reason, decision?.topic ?? null);
     const ok = await this.deps.tickets.finish(
       scope,

@@ -227,6 +227,22 @@ export class DrizzleSupportAiTicketRepository {
     };
   }
 
+  /** When the AI last answered this ticket (its newest AI message); null when never. */
+  async lastAiReplyAt(scope: ScopeContext, ticketId: string, tx?: unknown): Promise<Date | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select({ at: sql<Date | null>`max(${ticketMessages.createdAt})` })
+      .from(ticketMessages)
+      .where(
+        and(
+          eq(ticketMessages.tenantId, tenantId),
+          eq(ticketMessages.ticketId, ticketId),
+          eq(ticketMessages.senderType, 'AI'),
+        ),
+      );
+    return row?.at == null ? null : new Date(row.at);
+  }
+
   /** The ticket's messages, oldest first, at most `limit` of the newest. */
   async transcript(
     scope: ScopeContext,

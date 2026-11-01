@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import {
   SUPPORT_AI_SAFE_TOPICS,
+  isNexaError,
   systemJobActor,
   type ActorContext,
   type BusinessBotRight,
@@ -70,6 +71,7 @@ describe('Phase 4 PR-4: the support AI in tickets', () => {
   let tools: { actions: boolean; label: boolean; feedback: boolean };
   let references: { services: Map<string, string>; catalogue: Map<string, string> };
   let contextJson: string;
+  let aliasLabels: Map<string, string>;
   let fixtures: AudienceFixtures;
   let customerId: string;
   let strangerId: string;
@@ -186,6 +188,7 @@ describe('Phase 4 PR-4: the support AI in tickets', () => {
     return { id, url, username: row!.provider_username };
   }
   function showServices(...services: { alias: string; id: string; username: string }[]) {
+    aliasLabels = new Map(services.map((s) => [s.alias, s.username]));
     references = {
       services: new Map(services.map((s) => [s.alias, s.id])),
       catalogue: references.catalogue,
@@ -276,6 +279,7 @@ describe('Phase 4 PR-4: the support AI in tickets', () => {
     tools = { actions: true, label: false, feedback: true };
     references = { services: new Map(), catalogue: new Map() };
     contextJson = '{"services":[]}';
+    aliasLabels = new Map();
     flags = {
       identityLinked: true,
       customerBlocked: false,
@@ -311,7 +315,12 @@ describe('Phase 4 PR-4: the support AI in tickets', () => {
           builtFor.push(forCustomer);
           return {
             json: contextJson,
-            aliases: new Map([...references.services.keys()].map((alias) => [alias, alias])),
+            aliases: new Map(
+              [...references.services.keys()].map((alias) => [
+                alias,
+                aliasLabels.get(alias) ?? alias,
+              ]),
+            ),
             knowledgeAliases: new Map(),
             linked: flags.identityLinked,
             flags,
@@ -996,6 +1005,144 @@ describe('Phase 4 PR-4: the support AI in tickets', () => {
     ).rows as { context: Record<string, unknown> }[];
     expect(events[0]?.context).toMatchObject({ ticketId });
     expect(JSON.stringify(events[0]?.context)).not.toContain('لینک');
+  });
+
+  // --- review of PR #371 --------------------------------------------------------------------
+
+  it('a cited service that turns UNRECONCILED while the model thinks is caught in the final check', async () => {
+    await enable();
+    const own = await liveService();
+    showServices({ alias: 'S1', id: own.id, username: own.username });
+    const cited = {
+      ...answer,
+      topic: 'SERVICE_INFO',
+      factRefs: ['S1'],
+      replyText: 'سرویس شما فعال است و تا پایان ماه اعتبار دارد.',
+    };
+    outputs = [cited];
+    const ticketId = await open('وضعیت سرویسم چیه؟');
+    const original = service['deps'].chain.generate;
+    (service['deps'] as { chain: { generate: unknown } }).chain.generate = async (
+      ...args: never[]
+    ) => {
+      await db().execute(
+        sql`UPDATE services SET state = 'UNRECONCILED', provisioned_at = NULL WHERE id = ${own.id}`,
+      );
+      return (original as (...a: never[]) => unknown)(...args);
+    };
+    await tick();
+    expect(await aiMessages(ticketId)).toEqual([]);
+    expect(await jobs(ticketId)).toMatchObject([
+      { outcome: 'guard_account_review', handoff_reason: 'ACCOUNT_UNDER_REVIEW' },
+    ]);
+  });
+
+  it('a handoff decided after a person replied is stale: dropped, and no hold silences the ticket', async () => {
+    await enable();
+    const ticketId = await open();
+    outputs = [
+      { ...answer, decision: 'HANDOFF', topic: 'REFUND', replyText: '', confidence: 'HIGH' },
+    ];
+    const original = service['deps'].chain.generate;
+    (service['deps'] as { chain: { generate: unknown } }).chain.generate = async (
+      ...args: never[]
+    ) => {
+      await adminReplies(ticketId);
+      return (original as (...a: never[]) => unknown)(...args);
+    };
+    await tick();
+    expect(await outcomes(ticketId)).toEqual(['dropped_state']);
+    expect(await hold(ticketId)).toBeUndefined();
+  });
+
+  it('the read-only payment-status tool is allowed with the tools on, exactly as in a Business chat', async () => {
+    await enable();
+    const status = {
+      ...answer,
+      topic: 'PAYMENT_STATUS',
+      replyText: 'وضعیت پرداخت‌های اخیر شما در ادامه آمده است.',
+      action: { kind: 'PAYMENT_STATUS', target: '' },
+    };
+    const ticketId = await run('وضعیت آخرین سفارشم را بگویید', status);
+    expect(await jobs(ticketId)).toMatchObject([
+      { outcome: 'sent', tool_action: 'PAYMENT_STATUS' },
+    ]);
+    expect(await aiMessages(ticketId)).toHaveLength(1);
+  });
+
+  it('with the tools off the same answer is a hard handoff, as before', async () => {
+    await enable();
+    tools = { actions: false, label: false, feedback: false };
+    const status = {
+      ...answer,
+      topic: 'PAYMENT_STATUS',
+      replyText: 'وضعیت پرداخت‌های اخیر شما در ادامه آمده است.',
+    };
+    const ticketId = await run('وضعیت آخرین سفارشم را بگویید', status);
+    expect(await aiMessages(ticketId)).toEqual([]);
+    expect(await hold(ticketId)).toMatchObject({ handoff_kind: 'HARD' });
+  });
+
+  it('the owner’s cooldown paces ticket answers: the next job is due after the last answer plus the cooldown', async () => {
+    await enable();
+    await configure({ cooldownSeconds: 600 });
+    const ticketId = await run('اتصال برقرار نمی‌شود');
+    expect(await aiMessages(ticketId)).toHaveLength(1);
+    await write(ticketId, 'هنوز مشکل دارم');
+    const [row] = (
+      await db().execute(
+        sql`SELECT extract(epoch FROM (j.due_at - m.created_at))::int AS gap
+            FROM support_ai_ticket_jobs j, ticket_messages m
+            WHERE j.ticket_id = ${ticketId} AND j.state = 'QUEUED'
+              AND m.ticket_id = ${ticketId} AND m.sender_type = 'AI'`,
+      )
+    ).rows as { gap: number }[];
+    expect(row!.gap).toBeGreaterThanOrEqual(599);
+  });
+
+  it('turning the switch ON takes support_ai.auto_reply server-side: settings.edit alone is refused and audited; OFF never needs it', async () => {
+    const operator = await createAdmin(ctx.container, tenantA, {
+      username: 'operator1',
+      roleKeys: ['owner'],
+    });
+    await db().execute(
+      sql`INSERT INTO admin_permission_overrides (tenant_id, admin_id, permission_key, effect, reason, created_by_admin_id)
+          VALUES (${SEED_IDS.tenantA}, ${operator.id}, 'support_ai.auto_reply', 'DENY', 'test', ${operator.id})`,
+    );
+    const op = adminActorFor(operator);
+    const set = (actor: ActorContext, value: boolean, expectedVersion: number | null) =>
+      ctx.container.settingsService.set(tenantA as never, actor, {
+        key: 'support.ai.tickets_enabled',
+        value,
+        expectedVersion,
+        idempotencyKey: key('perm'),
+      });
+    await expect(set(op, true, null)).rejects.toSatisfy(isNexaError);
+    expect(
+      await ctx.container.settingsResolver.valueOf<boolean>(
+        tenantA as never,
+        'support.ai.tickets_enabled',
+      ),
+    ).toBe(false);
+    const denied = await count(
+      sql`SELECT count(*)::int AS n FROM audit_logs
+          WHERE action = 'settings.set' AND result = 'DENIED' AND entity_id = 'support.ai.tickets_enabled'`,
+    );
+    expect(denied).toBe(1);
+    // The owner may turn it on; the operator may always turn it off.
+    await set(owner, true, null);
+    const current = await ctx.container.settingsService.get(
+      tenantA as never,
+      owner,
+      'support.ai.tickets_enabled',
+    );
+    await set(op, false, current.version);
+    expect(
+      await ctx.container.settingsResolver.valueOf<boolean>(
+        tenantA as never,
+        'support.ai.tickets_enabled',
+      ),
+    ).toBe(false);
   });
 
   it('the handoff is audited as a system job and sends the customer no message', async () => {
