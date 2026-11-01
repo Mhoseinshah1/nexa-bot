@@ -40,12 +40,27 @@ export interface OutputPolicyAllowance {
   readonly priceFamily?: OutputPriceFamily;
 }
 
-const URL_PATTERN = /(?:https?:\/\/|(?<![\p{L}\p{N}.])t\.me\/)[^\s<>"«»()]+/giu;
+/**
+ * Every link Telegram would make clickable (security review of PR-1): any `scheme://` (http,
+ * https, tg…), and any bare domain-like token — a hostname with a letter TLD, with or without a
+ * path (`bit.ly/abc`, `example.com`, `telegram.me/x`, `telegram.dog/x`).
+ */
+const URL_PATTERN =
+  /(?:\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"«»()]+)|(?<![\p{L}\p{N}@._-])(?:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\.)+[a-z]{2,24}\b(?:[/?#][^\s<>"«»()]*)?/giu;
 const HANDLE_PATTERN = /(?<![\p{L}\p{N}_])@([A-Za-z][A-Za-z0-9_]{3,31})/gu;
 /** A digit run, Persian and Arabic digits included, thousands separators inside it allowed. */
 const NUMBER_PATTERN = /[0-9۰-۹٠-٩](?:[0-9۰-۹٠-٩]|[,٬،.](?=[0-9۰-۹٠-٩]{3}))*/gu;
-/** A card or phone number written in groups («6037-9912-3456-7893», «0912 123 4567»). */
-const GROUPED_PATTERN = /[0-9۰-۹٠-٩](?:[0-9۰-۹٠-٩]|[\s-](?=[0-9۰-۹٠-٩])){7,}/gu;
+/**
+ * A digit sequence split by separators (security review of PR-1): digits joined by up to three
+ * characters that are neither a letter nor a digit — spaces, `- / . _ ,`, a ZWNJ, Persian and
+ * Arabic separators — are one number, judged whole («6037 9912…», «0912/123/4567»).
+ */
+const SPAN_PATTERN = /[0-9۰-۹٠-٩](?:[^\p{L}\p{N}]{0,3}[0-9۰-۹٠-٩])*/gu;
+/** A joined sequence this long is an identifier (a card, a phone, an id), never a count. */
+const SEQUENCE_MIN_DIGITS = 8;
+/** A date (Jalali or Gregorian), which is not an identifier however many digits it has. */
+const DATE_SHAPE =
+  /^(?:1[34]|19|20)[0-9]{2}[/.-](?:0?[1-9]|1[0-2])[/.-](?:0?[1-9]|[12][0-9]|3[01])$/u;
 /** Shorter than this, a number is a count or a step, never an identifier or an amount. */
 const IDENTIFIER_MIN_DIGITS = 4;
 
@@ -60,7 +75,11 @@ export function digitsOf(text: string): string {
 /** A link as compared: scheme and `www.` dropped, host lower-cased, no trailing punctuation. */
 export function normaliseLink(link: string): string {
   const trimmed = link.replace(/[.,;:!?؟،)\]]+$/u, '');
-  const bare = trimmed.replace(/^https?:\/\//iu, '').replace(/^www\./iu, '');
+  const bare = trimmed
+    .replace(/^https?:\/\//iu, '')
+    .replace(/^www\./iu, '')
+    // Telegram's own aliases of t.me.
+    .replace(/^(?:telegram\.me|telegram\.dog)(?=\/|$)/iu, 't.me');
   const slash = bare.indexOf('/');
   const host = (slash < 0 ? bare : bare.slice(0, slash)).toLowerCase();
   const path = slash < 0 ? '' : bare.slice(slash).replace(/\/+$/u, '');
@@ -104,7 +123,7 @@ export function outputPolicyAllowanceFromContext(
     if (typeof value === 'string') {
       for (const match of value.matchAll(URL_PATTERN)) links.add(normaliseLink(match[0]));
       for (const match of value.matchAll(HANDLE_PATTERN)) handles.add(match[1]!.toLowerCase());
-      for (const match of value.matchAll(GROUPED_PATTERN)) numbers.add(digitsOf(match[0]));
+      for (const match of value.matchAll(SPAN_PATTERN)) numbers.add(digitsOf(match[0]));
       for (const match of value.matchAll(NUMBER_PATTERN)) {
         const digits = digitsOf(match[0]);
         if (digits === '') continue;
@@ -145,15 +164,22 @@ export function checkOutputPolicy(
 ): OutputPolicyVerdict {
   let rest = reply;
   for (const match of reply.matchAll(URL_PATTERN)) {
-    if (!allowance.links.has(normaliseLink(match[0]))) return { ok: false, violation: 'link' };
+    const link = normaliseLink(match[0]);
+    // A bare host is allowed when an allowed link lives on it (naming github.com for an app
+    // whose release page the knowledge links).
+    const hostOnly =
+      !link.includes('/') && [...allowance.links].some((allowed) => allowed.startsWith(`${link}/`));
+    if (!allowance.links.has(link) && !hostOnly) return { ok: false, violation: 'link' };
     // A number inside an allowed link is the link's, not an amount.
     rest = rest.replace(match[0], ' ');
   }
-  // A grouped card or phone number is judged whole, then left out of the per-number pass.
-  for (const match of rest.matchAll(GROUPED_PATTERN)) {
+  // Digits split by separators are judged as the one number they spell.
+  for (const match of rest.matchAll(SPAN_PATTERN)) {
     const digits = digitsOf(match[0]);
-    if (digits.length < 8 || match[0] === digits) continue;
-    if (!allowance.numbers.has(digits)) return { ok: false, violation: 'number' };
+    if (digits.length < SEQUENCE_MIN_DIGITS) continue;
+    const latin = match[0].replace(/[۰-۹٠-٩]/gu, (d) => digitsOf(d)).replace(/\s+/gu, '');
+    const known = allowance.numbers.has(digits) || allowance.priceFamily?.has(digits) === true;
+    if (!known && !DATE_SHAPE.test(latin)) return { ok: false, violation: 'number' };
     rest = rest.replace(match[0], ' ');
   }
   for (const match of rest.matchAll(HANDLE_PATTERN)) {

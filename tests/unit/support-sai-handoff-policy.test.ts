@@ -142,6 +142,42 @@ describe('the output validator (cross-cutting item 3)', () => {
     }
   });
 
+  it('security review: bare domains, Telegram aliases and other schemes are links too', () => {
+    for (const reply of [
+      'از bit.ly/abc دانلود کنید',
+      'سایت example.com را باز کنید',
+      'telegram.me/scam_channel',
+      'telegram.dog/scam_channel',
+      'tg://resolve?domain=scam_channel',
+      'WWW.Evil-Site.IR/app',
+      'لینک: evil.example/app.apk',
+    ]) {
+      expect(check(reply), reply).toEqual({ ok: false, violation: 'link' });
+    }
+    // An allowed link in its Telegram alias, and the bare host of an allowed link, pass.
+    expect(check('telegram.me/nexa_bot?start=support')).toEqual({ ok: true });
+    expect(check('برنامه را از github.com بگیرید')).toEqual({ ok: true });
+  });
+
+  it('security review: digits split by separators are judged as one number', () => {
+    const ZWNJ = '\u200c';
+    for (const reply of [
+      'کارت: 6219/8610/3456/7890',
+      'کارت: 6219.8610.3456.7890',
+      'کارت: 6219_8610_3456_7890',
+      'کارت: 6219   8610   3456   7890',
+      `کارت: ۶۲۱۹${ZWNJ}۸۶۱۰${ZWNJ}۳۴۵۶${ZWNJ}۷۸۹۰`,
+      'کارت: ۶۲۱۹٬۸۶۱۰٬۳۴۵۶٬۷۸۹۰',
+      'شماره: 0 9 1 2 1 2 3 4 5 6 7',
+      'کارت: 621 986 103 456 789 0',
+    ]) {
+      expect(check(reply), reply).toEqual({ ok: false, violation: 'number' });
+    }
+    // The published card, however it is split, and a date pass.
+    expect(check('کارت: 6037/9912/3456/7893')).toEqual({ ok: true });
+    expect(check('تاریخ پایان: ۱۴۰۵/۰۸/۱۰')).toEqual({ ok: true });
+  });
+
   it('a promise word is allowed when approved knowledge carries it', () => {
     // «رایگان» is in K1; «تخفیف» is not.
     expect(check('تست رایگان دارید.')).toEqual({ ok: true });
