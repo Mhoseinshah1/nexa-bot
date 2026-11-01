@@ -104,7 +104,9 @@ for (const file of READMES) {
 
 // docs/deployment.md carries it only once the installer change has landed.
 const deployment = read('docs/deployment.md');
-const deployLines = deployment.split('\n').filter((l) => l.startsWith('curl -fsSL --remote-name-all '));
+const deployLines = deployment
+  .split('\n')
+  .filter((l) => l.startsWith('curl -fsSL --remote-name-all '));
 for (const l of deployLines) {
   if (l !== ONE_LINER && l !== PINNED_LINER) {
     fail(`docs/deployment.md: install one-liner differs from the READMEs: ${l}`);
