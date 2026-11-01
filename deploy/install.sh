@@ -26,10 +26,170 @@
 #                     --version v1.0.0 [--owner-username owner] \
 #                     [--owner-telegram-id 123456789] \
 #                     [--owner-password-file /path/to/file]
+#
+# Or, with a release's own install.sh downloaded alone (docs/deployment.md):
+#   sudo bash install.sh            # asks for what it needs
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+# --- Release stamp ------------------------------------------------------------
+#
+# Empty in the repository. The release workflow fills exactly these three lines
+# in the copy of this file it attaches to a GitHub release, and
+# scripts/release-installer-assets.sh refuses to publish a copy that differs
+# from the tagged file anywhere else. They are what lets that copy run ALONE —
+# downloaded by itself, with no checkout beside it.
+NEXA_RELEASE_VERSION=""
+NEXA_RELEASE_REPO=""
+NEXA_RELEASE_BUNDLE_SHA256=""
+
+# --- Standalone mode ----------------------------------------------------------
+#
+# Three cases, decided before anything is sourced:
+#
+#   1. bin/nexa-lib.sh is beside this file: a checkout or an extracted deploy
+#      bundle. Everything below runs as it always has.
+#   2. It is not, and the stamp above is filled: the release's own install.sh,
+#      downloaded alone. It fetches that release's deploy bundle, checks it
+#      against the sha256 stamped above, unpacks it into a private directory
+#      and runs the bundle's installer with the same arguments.
+#   3. Neither: a copy of the repository's file with nothing beside it. Refused.
+#
+# The trust chain is: the operator checks THIS file (sha256sum -c, or
+# `gh attestation verify`), this file carries the bundle's hash, and nothing
+# downloaded is unpacked, let alone executed, until its bytes match that hash.
+#
+# NEXA_INSTALL_BUNDLE_BASE_URL replaces the download location, for the test
+# suite and the CI smoke only. It is not a trust decision: the hash stamped
+# above still binds the bytes, so a different location can serve the right
+# bundle or a refusal, nothing else. It may name https:// or file://, never
+# plain http. `sudo` drops it from the environment unless told otherwise.
+nexa_standalone_die() {
+  printf '\033[31merror\033[0m %s\n' "$*" >&2
+  exit 1
+}
+
+nexa_standalone() {
+  local version="$NEXA_RELEASE_VERSION" repo="$NEXA_RELEASE_REPO"
+  local expected="$NEXA_RELEASE_BUNDLE_SHA256" requested="" arg previous=""
+
+  # The stamp is checked for shape as well as presence: it becomes part of a
+  # URL and a file name.
+  if [[ ! $version =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || [[ $version == *..* ]]; then
+    nexa_standalone_die "the release stamp in this installer is damaged (version \"${version}\"). Download install.sh again."
+  fi
+  [[ $repo =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
+    nexa_standalone_die "the release stamp in this installer is damaged (repository \"${repo}\"). Download install.sh again."
+  [[ $expected =~ ^[0-9a-f]{64}$ ]] ||
+    nexa_standalone_die "the release stamp in this installer is damaged (bundle hash). Download install.sh again."
+
+  # This file installs exactly the release it was published with. Installing
+  # another one with it would pair this version's checks with that version's
+  # files.
+  for arg in "$@"; do
+    if [ "$previous" = "--version" ]; then
+      requested="$arg"
+      if [ "$requested" != "$version" ]; then
+        nexa_standalone_die "this install.sh belongs to release ${version} and cannot install \"${requested}\". Download that release's installer from https://github.com/${repo}/releases/download/${requested}/install.sh (and its install.sh.sha256), or omit --version."
+      fi
+    fi
+    previous="$arg"
+  done
+  [ "$previous" != "--version" ] || nexa_standalone_die "--version needs a value."
+
+  # Root BEFORE anything is downloaded: the installer needs it anyway, and a
+  # download that is then refused is a download for nothing.
+  [ "$(id -u)" -eq 0 ] ||
+    nexa_standalone_die "this installer must run as root (try: sudo bash $0 ${*:-}). It downloads release ${version}'s deploy files first, so even --help needs root here."
+
+  command -v curl >/dev/null 2>&1 ||
+    nexa_standalone_die "curl is required to download release ${version}'s deploy files. Install it with: apt-get install -y curl ca-certificates"
+  command -v sha256sum >/dev/null 2>&1 || nexa_standalone_die "sha256sum is required (coreutils)."
+  command -v tar >/dev/null 2>&1 || nexa_standalone_die "tar is required."
+
+  local base="https://github.com/${repo}/releases/download/${version}"
+  local protocols="=https"
+  if [ -n "${NEXA_INSTALL_BUNDLE_BASE_URL:-}" ]; then
+    base="${NEXA_INSTALL_BUNDLE_BASE_URL%/}"
+    protocols="=https,file"
+    printf 'note  downloading from %s (NEXA_INSTALL_BUNDLE_BASE_URL); the stamped hash still decides.\n' "$base" >&2
+  fi
+  local name="nexa-deploy-${version}.tar.gz"
+
+  # Removed on every way out, including a refusal and an interrupt. Always under
+  # /tmp, never $TMPDIR: `sudo -E` can carry a user's TMPDIR in, and a directory
+  # that user controls could swap the bundle between the hash check and tar.
+  NEXA_STANDALONE_WORK="$(mktemp -d /tmp/nexa-install.XXXXXXXXXX)" ||
+    nexa_standalone_die "could not create a private working directory."
+  trap 'rm -rf -- "$NEXA_STANDALONE_WORK"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  local work="$NEXA_STANDALONE_WORK"
+  chmod 0700 "$work"
+
+  printf '==> downloading %s\n' "$name"
+  # A redirect is followed to https only, even when the override allows file.
+  curl -fsSLS --proto "$protocols" --proto-redir '=https' --tlsv1.2 \
+    --retry 3 -o "${work}/${name}" "${base}/${name}" ||
+    nexa_standalone_die "could not download ${base}/${name}."
+
+  local actual
+  actual="$(sha256sum "${work}/${name}" | awk '{print $1}')"
+  if [ "$actual" != "$expected" ]; then
+    nexa_standalone_die "the downloaded ${name} does not match this installer: expected sha256 ${expected}, got ${actual:-nothing}. Nothing was unpacked or run. Download install.sh and its .sha256 again; if this repeats, do not install."
+  fi
+  printf 'ok    %s matches sha256 %s\n' "$name" "$expected"
+
+  # The hash already says these are the release's bytes; the listing is checked
+  # anyway, because an archive that can write outside its directory should be
+  # refused whoever made it. Only directories and regular files, all under
+  # deploy/, no absolute path and no `..` component.
+  local listing entry
+  listing="$(tar -tvzf "${work}/${name}")" || nexa_standalone_die "${name} is not a readable archive."
+  while IFS= read -r entry; do
+    case "${entry:0:1}" in
+      - | d) ;;
+      *) nexa_standalone_die "${name} contains something that is not a file or a directory (${entry}). Refusing to unpack it." ;;
+    esac
+  done <<<"$listing"
+  listing="$(tar -tzf "${work}/${name}")" || nexa_standalone_die "${name} is not a readable archive."
+  while IFS= read -r entry; do
+    case "$entry" in
+      /* | .. | ../* | */.. | */../*)
+        nexa_standalone_die "${name} contains the unsafe path \"${entry}\". Refusing to unpack it."
+        ;;
+      deploy/*) ;;
+      *) nexa_standalone_die "${name} contains \"${entry}\", outside deploy/. Refusing to unpack it." ;;
+    esac
+  done <<<"$listing"
+
+  mkdir -m 0700 "${work}/bundle"
+  tar -xzf "${work}/${name}" -C "${work}/bundle" --no-same-owner ||
+    nexa_standalone_die "could not unpack ${name}."
+  if [ ! -f "${work}/bundle/deploy/install.sh" ] || [ ! -f "${work}/bundle/deploy/bin/nexa-lib.sh" ]; then
+    nexa_standalone_die "${name} does not hold deploy/install.sh and deploy/bin/nexa-lib.sh."
+  fi
+
+  # Not `exec`: the working directory is removed on the way out. The bundle's
+  # installer finds its own files beside it, so it runs as case 1 above, with
+  # the terminal this one was given — its questions are asked there. Its exit
+  # status is this script's.
+  local status=0
+  bash "${work}/bundle/deploy/install.sh" --version "$version" "$@" || status=$?
+  exit "$status"
+}
+
+if [ ! -f "${SCRIPT_DIR}/bin/nexa-lib.sh" ]; then
+  if [ -n "$NEXA_RELEASE_VERSION" ] || [ -n "$NEXA_RELEASE_REPO" ] || [ -n "$NEXA_RELEASE_BUNDLE_SHA256" ]; then
+    # Called plainly, never as `nexa_standalone || …`: that would switch
+    # `set -e` off for every line inside it. It exits itself.
+    nexa_standalone "$@"
+  fi
+  nexa_standalone_die "${SCRIPT_DIR}/bin/nexa-lib.sh is missing, and this install.sh carries no release stamp. Either run deploy/install.sh from a checkout of the repository, or download a release's install.sh, which fetches and verifies everything else itself: https://github.com/Mhoseinshah1/nexa-bot/releases/latest"
+fi
+
 # shellcheck source=bin/nexa-lib.sh
 . "${SCRIPT_DIR}/bin/nexa-lib.sh"
 
@@ -80,8 +240,11 @@ Install Nexa.
 
 Required:
   --domain DOMAIN              the admin panel's hostname, already pointing here
+                               (asked for when missing and there is a terminal)
   --acme-email EMAIL           for Let's Encrypt expiry notices
-  --version VERSION            the release to install, e.g. v1.0.0
+                               (asked for when missing and there is a terminal)
+  --version VERSION            the release to install, e.g. v1.0.0. A release's
+                               own install.sh supplies it and refuses any other.
 
 Optional:
   --slug SLUG                  installation slug        (default: nexa)
@@ -235,20 +398,65 @@ refuse_digest_change() {
   nexa_die "this host already runs ${VERSION}, but ${NEXA_IMAGE_REPO}:${VERSION} now resolves to ${resolved} while the installed release records ${recorded}. A published version is immutable, so that tag has been moved. The installer would migrate and start the new bytes with no backup and no rollback target. Find out why the tag moved; if the new image is the one you want, publish it as a NEW version and run: botctl update <that version>"
 }
 
+nexa_valid_acme_email() {
+  [[ $1 =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]
+}
+
+# Reads one answer from the terminal into the named global, trimming only the
+# edges (a pasted space or a trailing CR is not part of a value), until the
+# named check accepts it. Same shape as `ask_owner_telegram_id`.
+ask_operator_value() {
+  local prompt="$1" variable="$2" check="$3" complaint="$4" answer=""
+  while :; do
+    printf '%s: ' "$prompt" >&2
+    IFS= read -r answer || nexa_die "no answer for \"${prompt}\": input ended. Nothing was changed."
+    answer="${answer#"${answer%%[![:space:]]*}"}"
+    answer="${answer%"${answer##*[![:space:]]}"}"
+    if "$check" "$answer"; then
+      printf -v "$variable" '%s' "$answer"
+      return 0
+    fi
+    nexa_warn "\"${answer}\" ${complaint}"
+  done
+}
+
+# The domain and the ACME address: from the arguments, or asked at a terminal.
+# Its own function, like `preflight_owner_inputs`, so the suite can drive it
+# with the installer sourced and without being root.
+preflight_operator_inputs() {
+  if [ -z "$DOMAIN" ]; then
+    [ -t 0 ] || nexa_die "--domain is required."
+    ask_operator_value "Admin panel domain (e.g. admin.example.com, already pointing at this server)" DOMAIN \
+      nexa_valid_domain "is not a valid hostname. Give a bare name such as admin.example.com — no scheme, no port, no path."
+  fi
+  nexa_valid_domain "$DOMAIN" ||
+    nexa_die "\"$DOMAIN\" is not a valid hostname. Give a bare name such as admin.example.com — no scheme, no port, no path."
+  if [ -z "$ACME_EMAIL" ]; then
+    [ -t 0 ] || nexa_die "--acme-email is required; Let's Encrypt sends expiry warnings to it."
+    ask_operator_value "E-mail for Let's Encrypt expiry notices" ACME_EMAIL \
+      nexa_valid_acme_email "does not look like an e-mail address."
+  fi
+  nexa_valid_acme_email "$ACME_EMAIL" ||
+    nexa_die "\"$ACME_EMAIL\" does not look like an e-mail address."
+}
+
 preflight() {
   nexa_step "preflight"
 
   [ "$(id -u)" -eq 0 ] || nexa_die "this installer must run as root (try: sudo $0 ...)."
 
   # --- The operator's answers ---
-  [ -n "$DOMAIN" ] || nexa_die "--domain is required."
-  nexa_valid_domain "$DOMAIN" ||
-    nexa_die "\"$DOMAIN\" is not a valid hostname. Give a bare name such as admin.example.com — no scheme, no port, no path."
-  [ -n "$ACME_EMAIL" ] || nexa_die "--acme-email is required; Let's Encrypt sends expiry warnings to it."
-  [[ $ACME_EMAIL =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] ||
-    nexa_die "\"$ACME_EMAIL\" does not look like an e-mail address."
+  #
+  # Asked for when missing and there is a terminal — the release's one-liner is
+  # `sudo bash install.sh` with no arguments — and refused, as before, when
+  # there is not. A value given as an argument is never asked for again, and a
+  # bad one is refused rather than re-asked: a script passed it.
+  #
+  # The version is checked first, so nobody answers two questions only to be
+  # told the command was missing an argument no terminal can supply.
   [ -n "$VERSION" ] || nexa_die "--version is required. A deployment without a version is a deployment nobody can support."
   nexa_require_version "$VERSION"
+  preflight_operator_inputs
 
   refuse_version_change
 
