@@ -447,6 +447,16 @@ export const OUTBOUND_PRIVATE_TARGETS_SETTING_KEY = 'security.outbound_private_t
  */
 export const OWNER_ONLY_SETTING_KEYS: readonly string[] = [OUTBOUND_PRIVATE_TARGETS_SETTING_KEY];
 
+/**
+ * Phase 4 PR-4 (review of PR #371): settings whose TURNING ON widens what the support AI may send
+ * to customers on its own, and so takes the permission that widening takes everywhere else — the
+ * owner's decision, not an operator's with `settings.edit` alone. Enforced in the settings write
+ * path, not only in a page: key → the extra permission charged when the value becomes `true`.
+ */
+export const SETTING_ENABLE_PERMISSIONS: Readonly<Record<string, string>> = {
+  'support.ai.tickets_enabled': 'support_ai.auto_reply',
+};
+
 export const SETTINGS = [
   {
     key: 'ops.notifications.telegram_chat_id',
