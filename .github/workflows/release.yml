@@ -352,3 +352,102 @@ jobs:
           # whose metadata names a different commit is a release nobody can
           # trace back to source.
           bash scripts/check-image.sh "$reference" "$VERSION" "$COMMIT"
+
+  # The installer, attached to the GitHub release for the tag: install.sh,
+  # install.sh.sha256, the deploy bundle install.sh fetches when it runs alone,
+  # and a keyless provenance attestation for both.
+  #
+  # Only after `verify`: an installer that points at an image nobody verified
+  # would be the first thing an operator runs. Built from the SHA the gate
+  # resolved, never from the tag again, by scripts/release-installer-assets.sh,
+  # which reads git objects (not the working tree) and refuses an install.sh
+  # that differs from the tagged one in anything but its three stamp lines.
+  #
+  # The attestation is signed with a short-lived Sigstore certificate minted
+  # from this job's OIDC token (`id-token: write`); there is no long-lived key
+  # anywhere. `gh attestation verify install.sh --repo <owner/repo>` checks it.
+  installer:
+    name: Attach the installer to the release
+    runs-on: ubuntu-24.04
+    needs: [gate, publish, verify]
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          persist-credentials: false
+
+      - name: Build the installer assets
+        env:
+          TAG: ${{ needs.gate.outputs.tag }}
+          SHA: ${{ needs.gate.outputs.sha }}
+          REPO: ${{ github.repository }}
+        run: bash scripts/release-installer-assets.sh build "$TAG" "$REPO" "$SHA" release-assets
+
+      - name: Attest the installer's provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            release-assets/install.sh
+            release-assets/nexa-deploy-*.tar.gz
+
+      - name: Attach the assets to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.gate.outputs.tag }}
+          SHA: ${{ needs.gate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          assets=(
+            "release-assets/install.sh"
+            "release-assets/install.sh.sha256"
+            "release-assets/nexa-deploy-${TAG}.tar.gz"
+          )
+          for asset in "${assets[@]}"; do
+            [ -f "$asset" ] || { printf 'missing %s\n' "$asset" >&2; exit 1; }
+          done
+
+          # The release page names the tag, so the tag must still name the
+          # commit these assets were built from. Annotated tags are followed.
+          object="$(gh api "repos/${GH_REPO}/git/ref/tags/${TAG}" --jq '.object.type + " " + .object.sha')"
+          while [ "${object%% *}" = "tag" ]; do
+            object="$(gh api "repos/${GH_REPO}/git/tags/${object#* }" --jq '.object.type + " " + .object.sha')"
+          done
+          if [ "$object" != "commit ${SHA}" ]; then
+            printf 'refusing: tag %s now points at %s, not the verified commit %s.\n' "$TAG" "$object" "$SHA" >&2
+            exit 1
+          fi
+
+          # The owner may have created the release already; its assets are then
+          # added or replaced. Otherwise this run creates it, for the tag the
+          # owner pushed. As with the registry lookup in the gate, only a
+          # definite "not found" counts as absence.
+          set +e
+          lookup="$(gh release view "$TAG" --json tagName --jq .tagName 2>&1)"
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            printf 'release %s exists; attaching the installer to it.\n' "$TAG"
+            gh release upload "$TAG" "${assets[@]}" --clobber
+          else
+            case "$lookup" in
+              *"release not found"*) ;;
+              *)
+                printf 'could not determine whether release %s exists:\n%s\n' "$TAG" "$lookup" >&2
+                exit 1
+                ;;
+            esac
+            printf 'creating release %s.\n' "$TAG"
+            notes="$(printf 'Install on a fresh Ubuntu 22.04 or 24.04 server (bash):\n\n```\ncurl -fsSLO https://github.com/%s/releases/download/%s/install.sh{,.sha256} && sha256sum -c install.sh.sha256 && sudo bash install.sh\n```\n\nSee docs/deployment.md.\n' "$GH_REPO" "$TAG")"
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes "$notes" "${assets[@]}"
+          fi
+
+          {
+            printf '### Installer for %s\n\n```\n' "$TAG"
+            (cd release-assets && sha256sum install.sh "nexa-deploy-${TAG}.tar.gz")
+            printf '```\n'
+          } >>"$GITHUB_STEP_SUMMARY"
