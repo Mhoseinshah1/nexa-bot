@@ -1,4 +1,4 @@
-import { and, desc, eq, ne, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, ne, sql, type SQL } from 'drizzle-orm';
 import type {
   CurrencyCode,
   OrderPurpose,
@@ -105,13 +105,18 @@ export class DrizzleSupportContextReader implements SupportContextReader {
    * L4 — whether ANY of the customer's services is UNRECONCILED, not only the page the payload
    * shows: the same predicate as `autoGuardFlags`. One EXISTS.
    */
-  async anyUnreconciledService(scope: TenantContext, customerId: UserId): Promise<boolean> {
+  async anyUnreconciledService(
+    scope: TenantContext,
+    customerId: UserId,
+    since?: Date,
+  ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
+    const recent = since === undefined ? sql`` : sql`AND ${services.createdAt} >= ${since}`;
     const result = await this.db.execute(sql`SELECT EXISTS (
           SELECT 1 FROM ${services}
            WHERE ${services.tenantId} = ${tenantId}
              AND ${services.customerId} = ${customerId}
-             AND ${services.state} = 'UNRECONCILED') AS unreconciled`);
+             AND ${services.state} = 'UNRECONCILED' ${recent}) AS unreconciled`);
     return (result.rows[0] as { unreconciled?: boolean } | undefined)?.unreconciled === true;
   }
 
@@ -126,17 +131,25 @@ export class DrizzleSupportContextReader implements SupportContextReader {
     scope: ScopeContext,
     customerId: string | null,
     tx?: unknown,
+    /**
+     * Phase 4 PR-1: payments under review and unreconciled services count only from `since`
+     * (`SUPPORT_AI_UNDER_REVIEW_WINDOW_DAYS`); a service the reply cites (`serviceLabels`, its
+     * panel username) counts whatever its age. Absent: every one, as before.
+     */
+    scoping?: { readonly since: Date; readonly serviceLabels: readonly string[] },
   ): Promise<{
     readonly identityLinked: boolean;
     readonly customerBlocked: boolean;
     readonly hasUnderReviewPayment: boolean;
     readonly hasUnreconciledService: boolean;
+    readonly unreconciledCited: boolean;
   }> {
     const none = {
       identityLinked: false,
       customerBlocked: false,
       hasUnderReviewPayment: false,
       hasUnreconciledService: false,
+      unreconciledCited: false,
     };
     if (customerId === null) return none;
     const tenantId = requireTenantId(scope);
@@ -148,12 +161,20 @@ export class DrizzleSupportContextReader implements SupportContextReader {
           SELECT 1 FROM ${payments}
            WHERE ${payments.tenantId} = ${tenantId}
              AND ${payments.customerId} = ${customerId}
+             ${scoping === undefined ? sql`` : sql`AND ${payments.createdAt} >= ${scoping.since}`}
              AND ${underReviewCondition()})`,
         unreconciled: sql<boolean>`EXISTS (
           SELECT 1 FROM ${services}
            WHERE ${services.tenantId} = ${tenantId}
              AND ${services.customerId} = ${customerId}
+             ${scoping === undefined ? sql`` : sql`AND ${services.createdAt} >= ${scoping.since}`}
              AND ${services.state} = 'UNRECONCILED')`,
+        cited: sql<boolean>`EXISTS (
+          SELECT 1 FROM ${services}
+           WHERE ${services.tenantId} = ${tenantId}
+             AND ${services.customerId} = ${customerId}
+             AND ${services.state} = 'UNRECONCILED'
+             AND ${services.providerUsername} = ANY(${sql.param([...(scoping?.serviceLabels ?? [])])}::text[]))`,
       })
       .from(customers)
       .where(and(eq(customers.tenantId, tenantId), eq(customers.id, customerId)));
@@ -163,6 +184,7 @@ export class DrizzleSupportContextReader implements SupportContextReader {
       customerBlocked: row.status === 'BLOCKED',
       hasUnderReviewPayment: row.underReview === true,
       hasUnreconciledService: row.unreconciled === true,
+      unreconciledCited: row.cited === true,
     };
   }
 
@@ -170,6 +192,7 @@ export class DrizzleSupportContextReader implements SupportContextReader {
     scope: TenantContext,
     customerId: UserId,
     limit: number,
+    reviewSince?: Date,
   ): Promise<{ readonly items: readonly SupportPaymentFact[]; readonly anyUnderReview: boolean }> {
     const tenantId = requireTenantId(scope);
     const underReview = underReviewCondition();
@@ -199,7 +222,13 @@ export class DrizzleSupportContextReader implements SupportContextReader {
     const flagged = this.db
       .select({ one: sql<number>`1` })
       .from(payments)
-      .where(and(owned, underReview))
+      .where(
+        and(
+          owned,
+          underReview,
+          reviewSince === undefined ? undefined : gte(payments.createdAt, reviewSince),
+        ),
+      )
       .limit(1);
     const [rows, anyRows] = await Promise.all([recent, flagged]);
     return {

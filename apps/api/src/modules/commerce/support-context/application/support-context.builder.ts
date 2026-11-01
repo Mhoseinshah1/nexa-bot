@@ -1,4 +1,5 @@
 import {
+  SUPPORT_AI_UNDER_REVIEW_WINDOW_DAYS,
   neutralizeClientAppBareLinks,
   normalizeClientAppUrl,
   renderClientAppGuide,
@@ -161,6 +162,8 @@ export class SupportContextBuilder {
       );
     }
 
+    // Phase 4 PR-1: the account-review flags look back SUPPORT_AI_UNDER_REVIEW_WINDOW_DAYS only.
+    const reviewSince = new Date(now.getTime() - SUPPORT_AI_UNDER_REVIEW_WINDOW_DAYS * 86_400_000);
     const [services, orders, payments, incidents, anyUnreconciled] = await Promise.all([
       this.deps.services.supportServicesForCustomer(
         scope,
@@ -168,10 +171,15 @@ export class SupportContextBuilder {
         SUPPORT_CONTEXT_LIMITS.services,
       ),
       this.deps.reader.recentOrders(scope, customer.id, SUPPORT_CONTEXT_LIMITS.orders),
-      this.deps.reader.recentPayments(scope, customer.id, SUPPORT_CONTEXT_LIMITS.payments),
+      this.deps.reader.recentPayments(
+        scope,
+        customer.id,
+        SUPPORT_CONTEXT_LIMITS.payments,
+        reviewSince,
+      ),
       this.deps.reader.activeIncidentNotices(scope, customer.id, SUPPORT_CONTEXT_LIMITS.incidents),
-      // L4: over ALL of the customer's services, not the page shown.
-      this.deps.reader.anyUnreconciledService(scope, customer.id),
+      // L4: over ALL of the customer's services, not the page shown — the recent ones only.
+      this.deps.reader.anyUnreconciledService(scope, customer.id, reviewSince),
     ]);
     const [cards, appFacts] = await Promise.all([
       services.length === 0
@@ -209,8 +217,9 @@ export class SupportContextBuilder {
         supportAccounts,
         flags: {
           hasUnderReviewPayment: payments.anyUnderReview,
-          hasUnreconciledService:
-            anyUnreconciled || serviceEntries.some((entry) => entry.unreconciled),
+          // Phase 4 PR-1: a recent unreconciled service only; a service the reply is about is
+          // judged by its own `unreconciled` entry (the decision guard reads the citation).
+          hasUnreconciledService: anyUnreconciled,
           identityLinked: true,
           customerBlocked: customer.status === 'BLOCKED',
         },

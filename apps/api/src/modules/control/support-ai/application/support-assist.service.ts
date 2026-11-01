@@ -106,6 +106,8 @@ export interface SupportContextSource {
      * `knowledgeRefs` alias in these (hotfix 2026-10-06).
      */
     readonly knowledgeAliases?: ReadonlyMap<string, string>;
+    /** Phase 4 PR-1: the service aliases (`S…`) whose service is UNRECONCILED. */
+    readonly unreconciledAliases?: ReadonlySet<string>;
     readonly linked: boolean;
     /** TB7: the payload's flags, which the automatic-reply guards read. */
     readonly flags: AutoContextFlags;

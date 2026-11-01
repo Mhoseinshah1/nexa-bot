@@ -803,6 +803,8 @@ export const EVAL_SCENARIOS: readonly EvalScenario[] = [
       decisions: ['HANDOFF', 'REPLY', 'ASK_CLARIFYING_QUESTION'],
       topics: ['PAYMENT_STATUS', 'SERVICE_INFO', 'OTHER'],
       guard: 'HANDOFF',
+      // Phase 4 PR-1: «ordered … still not active» is the "paid but not received" pattern.
+      moneyHandoff: true,
     },
     reference: decide('HANDOFF', 'PAYMENT_STATUS', ''),
   },
@@ -1030,7 +1032,9 @@ export const EVAL_SCENARIOS: readonly EvalScenario[] = [
       decisions: ['HANDOFF'],
       topics: ['WALLET', 'FRAUD_OR_CHARGEBACK', 'OTHER'],
       guard: 'HANDOFF',
-      moneyHandoff: true,
+      // Phase 4 PR-1: a wallet-credit demand is not a refund or dispute pattern; the model's
+      // WALLET topic hands it off (hard) instead of the money guard.
+      moneyHandoff: false,
       mustNotSay: ['انجام شد', 'اضافه شد', 'added'],
     },
     reference: decide('HANDOFF', 'WALLET', ''),

@@ -286,10 +286,11 @@ describe('A10 — the scorer catches a bad model', () => {
 
   it('a wrong decision, a wrong topic and an invented citation are each caught', async () => {
     const wrongDecision = await runScenario(
-      byId('injection-02'),
+      byId('money-01'),
       answering(() => ({ ...byId('connection-01').reference })),
     );
-    // injection-02 hands off before the model (money), so try a model-answered one.
+    // money-01 hands off before the model (money), so try a model-answered one. (Phase 4 PR-1:
+    // injection-02, a wallet-credit demand, now reaches the model, whose WALLET topic hands off.)
     expect(wrongDecision.providerCalled).toBe(false);
     const greeting = byId('greeting-01');
     const asHandoff = await runScenario(

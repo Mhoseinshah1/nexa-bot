@@ -1,7 +1,9 @@
 import {
   BUSINESS_MESSAGE_TEXT_MAX,
+  SUPPORT_AI_ACCOUNT_REVIEW_TOPICS,
   SUPPORT_AI_GENERAL_TOPICS,
   SUPPORT_AI_HANDOFF_TOPICS,
+  supportAiTopicNeedsAccount,
   SUPPORT_AI_INBOUND_FLOOD,
   SUPPORT_AI_NO_PROGRESS_LIMIT,
   SUPPORT_AI_REPEAT_SIMILARITY,
@@ -34,6 +36,11 @@ export type AutoVerdict =
       readonly guard: SupportAiAutoGuard | null;
       readonly outcome: SupportAiAutoOutcome;
       readonly reason: BusinessHandoffReason;
+      /**
+       * Phase 4 PR-1: an unlinked customer asked an account topic — send the bot's start link
+       * (`sent_link`) instead of handing off. `reason` is what a failed send hands off with.
+       */
+      readonly sendLink?: true;
     };
 
 const PASS: AutoVerdict = { pass: true };
@@ -48,6 +55,28 @@ export interface AutoContextFlags {
   readonly customerBlocked: boolean;
   readonly hasUnderReviewPayment: boolean;
   readonly hasUnreconciledService: boolean;
+  /**
+   * Phase 4 PR-1: a service the decision CITES is unreconciled. When the decision cites a
+   * service, this decides; when it cites none, `hasUnreconciledService` (a recent one) does.
+   */
+  readonly unreconciledCited?: boolean;
+}
+
+/**
+ * Phase 4 PR-1 — the account-review guard, scoped: only the topics about the customer's own
+ * service (`SUPPORT_AI_ACCOUNT_REVIEW_TOPICS`); a payment under review in the window
+ * (`SUPPORT_AI_UNDER_REVIEW_WINDOW_DAYS`, applied by the reader); an unreconciled service that
+ * is the one the reply cites, or — citing none — a recent one.
+ */
+export function accountUnderReview(
+  topic: string,
+  factRefs: readonly string[],
+  flags: AutoContextFlags,
+): boolean {
+  if (!(SUPPORT_AI_ACCOUNT_REVIEW_TOPICS as readonly string[]).includes(topic)) return false;
+  if (flags.hasUnderReviewPayment) return true;
+  const citesService = factRefs.some((ref) => ref.startsWith('S'));
+  return citesService ? flags.unreconciledCited === true : flags.hasUnreconciledService;
 }
 
 /**
@@ -147,6 +176,11 @@ export function autoDecisionGuards(input: {
    * REPLY (`clarifyingStreakOf`). Read by NEXA from the rows, never from the model.
    */
   readonly clarifyingStreak: number;
+  /**
+   * Phase 4 PR-1: automatic `OTHER` clarifying questions sent in a row at the job's epoch
+   * (`otherStreakOf`). 0 lets one through; anything more hands off.
+   */
+  readonly otherStreak?: number;
 }): AutoVerdict {
   const { decision, config, flags } = input;
   // The model itself asked for a person: never second-guessed into a reply.
@@ -154,22 +188,33 @@ export function autoDecisionGuards(input: {
     return { pass: false, guard: null, outcome: 'handoff_ai_requested', reason: 'AI_REQUESTED' };
   }
   if (decision.topic === 'HUMAN_REQUESTED') return fail('human_requested', 'HUMAN_REQUESTED');
-  if ((SUPPORT_AI_HANDOFF_TOPICS as readonly string[]).includes(decision.topic)) {
+  // Phase 4 PR-1: an unclear question (`OTHER`) gets ONE clarifying question; the second OTHER
+  // in a row hands off (soft — businessHandoffKindOf reads the topic).
+  const otherQuestion =
+    decision.topic === 'OTHER' &&
+    decision.decision === 'ASK_CLARIFYING_QUESTION' &&
+    (input.otherStreak ?? 0) === 0;
+  if (!otherQuestion && (SUPPORT_AI_HANDOFF_TOPICS as readonly string[]).includes(decision.topic)) {
     return fail('handoff_topic', 'HANDOFF_TOPIC');
   }
   if (decision.decision !== 'REPLY' && decision.decision !== 'ASK_CLARIFYING_QUESTION') {
     return fail('decision', 'DECISION_NOT_REPLY');
   }
-  if (!(config.autoTopics as readonly string[]).includes(decision.topic)) {
+  if (!otherQuestion && !(config.autoTopics as readonly string[]).includes(decision.topic)) {
     return fail('topic_allowlist', 'TOPIC_NOT_ALLOWED');
   }
-  if (
-    !flags.identityLinked &&
-    !(SUPPORT_AI_GENERAL_TOPICS as readonly string[]).includes(decision.topic)
-  ) {
-    return fail('identity', 'IDENTITY_UNVERIFIED');
+  // Phase 4 PR-1: an unlinked customer's account question is answered with the bot's start link
+  // (the service enqueues `bot.support.ai_link_account`), never with the model's words.
+  if (!flags.identityLinked && supportAiTopicNeedsAccount(decision.topic)) {
+    return {
+      pass: false,
+      guard: 'identity',
+      outcome: 'sent_link',
+      reason: 'IDENTITY_UNVERIFIED',
+      sendLink: true,
+    };
   }
-  if (flags.hasUnderReviewPayment || flags.hasUnreconciledService) {
+  if (accountUnderReview(decision.topic, decision.factRefs, flags)) {
     return fail('account_review', 'ACCOUNT_UNDER_REVIEW');
   }
   if (CONFIDENCE_RANK[decision.confidence] < CONFIDENCE_RANK[config.autoMinConfidence]) {
@@ -203,6 +248,21 @@ export function autoDecisionGuards(input: {
 }
 
 /**
+ * Phase 4 PR-1 — the OTHER streak: walking back from the newest automatic reply of the epoch,
+ * how many in a row were clarifying questions on `OTHER`. Any other reply ends it.
+ */
+export function otherStreakOf(
+  newestFirst: readonly { readonly decision: string | null; readonly topic?: string | null }[],
+): number {
+  let streak = 0;
+  for (const row of newestFirst) {
+    if (row.topic === 'OTHER' && row.decision === 'ASK_CLARIFYING_QUESTION') streak += 1;
+    else break;
+  }
+  return streak;
+}
+
+/**
  * The clarifying streak: walking back from the newest, the automatic replies that count (see
  * the repository), how many are `ASK_CLARIFYING_QUESTION` before the first real `REPLY`. A
  * REPLY ends the streak; a customer message does not (the point is a question, an answer, a
@@ -221,35 +281,51 @@ export function clarifyingStreakOf(
 }
 
 /**
- * D9 — the money guard: a deterministic look at what the CUSTOMER wrote, before any provider is
- * asked. The topic guard above trusts the model's `topic`, and a model can label «وصل نمیشه،
- * پولمو پس بدید» `CONNECTION_TROUBLESHOOTING` and answer the half it likes. Anything that
- * mentions money coming back, a payment, a wallet or a balance is a person's to answer, so a
- * match hands off as a hard topic (`HANDOFF_TOPIC`, which opens or links the ticket) and no
- * automatic reply is ever produced for it.
+ * D9, narrowed by Phase 4 PR-1 — the money guard: a deterministic look at what the CUSTOMER
+ * wrote, before any provider is asked. It hands off (hard, `HANDOFF_TOPIC` with no topic) ONLY
+ * for money that went wrong: a refund or money back, a dispute, a chargeback or fraud claim, money
+ * deducted, or «I paid» — a first-person payment in the past tense, with or without «…but nothing
+ * came». Asking a price («چند تومنه»), how to pay, how to top up the wallet or which methods exist
+ * goes through: the model answers it from facts and knowledge, and a model that labels it a hard
+ * topic still hands off by the topic guard.
  *
- * Fail closed by design: a false positive (a customer asking how to pay) costs a handoff, never
- * a wrong answer about money. The text is folded first — Arabic `ي`/`ك` to Persian, a ZWNJ to a
- * space, the other zero-width marks, diacritics, accents and tatweel dropped, lower case — so
- * «پول‌مو», «پولمو», «کیف‌پولم», «پس‌بدید» and «پس بدید» all match.
+ * Folded first (`foldCustomerText`): Arabic ي/ك to Persian, a ZWNJ to a space, marks dropped,
+ * lower case, so «پول‌مو», «پولمو», «پس‌بدید» and «پس بدید» are one form.
  */
-const MONEY_TERMS: readonly RegExp[] = [
-  // Money itself, an amount, and the wallet («کیف پول»): پول, پولم, پولمو, پولامو, مبلغ …
-  /(?<!\p{L})(?:پول|مبلغ)/u,
-  // «وجه» alone is also «به هیچ وجه» (by no means): only the possessive forms are money.
-  /(?<!\p{L})وجه(?:م|مو|مون|مان|تان|ش)(?!\p{L})/u,
-  // Money coming back: refund in every common spelling, and «پس بدید / پسش بدید / پس بگیرم».
-  /(?<!\p{L})(?:ری?فا?ند|ریفند|عودت|استرداد)/u,
-  /(?<!\p{L})(?:باز|بر)گشت\s*(?:وجه|هزینه)/u,
-  /(?<!\p{L})پس\S{0,3}\s*(?:بده|بدید|بدهید|بدین|بدن|بدیم|بگیر\S*|گرفتن)(?!\p{L})/u,
-  // Payment, deposit, transaction, a deduction, the balance.
-  /پرداخت|واریز|تراکنش|کارت\s*به\s*کارت|(?<!\p{L})فیش|کسر\s*(?:شد|شده|کرد)|برداشت\s*(?:شد|شده|کرد)|موجودی|شارژ\s*(?:حساب|کیف)/u,
-  // A currency, money taken from the account, a top-up.
-  /(?<!\p{L})(?:تومن|تومان|ریال)/u,
-  /حساب\S{0,3}\s*کم\s*(?:شد|شده|کرد|کردن|کردید)(?!\p{L})/u,
-  /شارژ\s*(?:کردم|کرده|کردیم)/u,
-  // The same in English and in Latin-letter Persian (Finglish).
-  /\b(?:refund\w*|reimburs\w*|money\s*back|charge\s*back|chargeback|wallet|payments?|paid|pay|deducted|transactions?|balance|my\s+money|pool\w*|pul\w*|pardakht\w*|variz\w*|kife?\s*pool|re\s+fund\w*|toman|tomen|rial)\b/u,
+const MONEY_DISPUTE_TERMS: readonly RegExp[] = [
+  // Money coming back: refund in every common spelling, «عودت», «استرداد», «برگشت وجه/پول».
+  /(?<!\p{L})(?:ری?فا?ند|ریفاند|عودت|استرداد|بازپرداخت)/u,
+  /(?<!\p{L})(?:باز|بر)گشت\s*(?:وجه|هزینه|پول)/u,
+  /(?<!\p{L})(?:پول|وجه|هزینه|مبلغ)\S{0,4}\s*(?:رو|را|و)?\s*(?:پس|برگرد|بر\s*گرد)/u,
+  /(?<!\p{L})پس\S{0,3}\s*(?:بده|بدید|بدهید|بدین|بدن|بگیرم|بگیرید|میخوام|میدید|میدین)(?!\p{L})/u,
+  // A dispute, a chargeback, fraud.
+  /(?<!\p{L})(?:کلاهبردار|کلاه\s*برداری|شکایت|اعتراض\s*به\s*(?:پرداخت|تراکنش|مبلغ))/u,
+  // Money taken: «کسر شد», «برداشت شد», and «پول / از حسابم / کارتم … کم شد» — never «حجمم
+  // کم شد» (traffic), which is a service question.
+  /(?<!\p{L})(?:کسر|برداشت)\s*(?:شد|شده|کرد|کردن|کردید|کردین)(?!\p{L})/u,
+  /(?<!\p{L})(?:پول|حساب|کارت|موجودی|مبلغ|وجه|تومن|تومان|ریال)\S{0,4}(?:\s+\S+){0,2}\s+کم\s*(?:شد|شده|کرد|کردن|کردید|کردین)(?!\p{L})/u,
+  // «کیف پولم خالی شد» — the wallet emptied without the customer's doing.
+  /(?<!\p{L})کیف\s*پول\S{0,3}\s*خالی\s*(?:شد|شده)(?!\p{L})/u,
+  // «bought / ordered / paid … but … did not arrive».
+  /(?<!\p{L})(?:خرید|خریدم|سفارش|پرداخت|واریز)\S{0,3}.{0,40}(?:ولی|اما|هنوز).{0,40}(?:نیومد|نیامد|نرسید|نشد|ندادید|نفرستادید|نگرفتم|دریافت\s*نکردم|خبری\s*نیست)/u,
+  // «I paid / deposited / transferred / topped up», past tense, first person — with or without
+  // «…but it did not arrive». The future («پرداخت کنم») and the question («چطور پرداخت کنم») do
+  // not match: they are how-to questions.
+  /(?<!\p{L})(?:پرداخت|واریز|کارت\s*به\s*کارت|شارژ|تراکنش)\S{0,3}\s*(?:رو|را|و)?\s*(?:کردم|کردیم|کرده\s*ام|کردم\S*|زدم|انجام\s*دادم)(?!\p{L})/u,
+  /(?<!\p{L})پول\S{0,3}\s*(?:رو|را|و)?\s*(?:دادم|ریختم|زدم|واریز\s*کردم|فرستادم)(?!\p{L})/u,
+  /(?<!\p{L})(?:پرداختم|واریزی\s*من|فیش\s*واریز|رسید\s*پرداخت)/u,
+  // English and Finglish.
+  /\b(?:refund\w*|reimburs\w*|money\s*back|charge\s*back|chargeback|dispute\w*|scam\w*|fraud\w*|re\s+fund\w*)\b/u,
+  /\b(?:i|we)\s+(?:have\s+|already\s+)?(?:paid|payed|transferred|deposited|topped\s+up|sent\s+(?:the\s+)?money)\b/u,
+  /\b(?:paid|payed|charged|deducted)\b.{0,40}\b(?:but|not|no|never|didn'?t|haven'?t|still)\b/u,
+  /\b(?:money|amount)\s+(?:was\s+)?(?:taken|deducted|gone|charged)\b/u,
+  /\b(?:pool|pul)\w*\s*(?:ro\s*)?(?:pas|bargard\w*|bedid|bedin)\b/u,
+  /\b(?:pardakht|variz|kart\s*be\s*kart|sharj)\s*(?:ro\s*)?(?:kardam|kardim|zadam)\b/u,
+  /\b(?:pool|pul)\w*\s*(?:ro\s*)?(?:dadam|rikhtam|variz\s*kardam|ferestadam)\b/u,
+  /\b(?:kasr|bardasht)\s*(?:shod|shode|kard|kardan)\b/u,
+  /\b(?:pool|pul|hesab|kart|mojoodi|mojudi)\w*(?:\s+\w+){0,2}\s+kam\s*(?:shod|shode|kard|kardan)\b/u,
+  /\b(?:kharid\w*|sefaresh|pardakht|variz)\b.{0,40}\b(?:vali|ama|hanooz|hanuz)\b.{0,40}\b(?:nayomad|nayumad|naresid|nashod|nadadid|nafrestadid|nagereftam)\b/u,
+  /\b(?:pardakhtam|kolah\s*bardari|kolahbardar\w*|shekayat)\b/u,
 ];
 
 /** The text a customer typed, folded so a spelling or joiner variant matches the same term. */
@@ -274,19 +350,36 @@ export function foldCustomerText(text: string): string {
   );
 }
 
-/** Whether a customer's text mentions a refund, money, a payment, a wallet or a balance. */
+/**
+ * Whether a customer's text is about money that went wrong (Phase 4 PR-1: refund, dispute,
+ * chargeback, deduction, «I paid»). A price or how-to-pay question is not.
+ */
 export function mentionsMoneyTopic(text: string | null): boolean {
   if (text === null) return false;
   const folded = foldCustomerText(text);
-  return MONEY_TERMS.some((term) => term.test(folded));
+  return MONEY_DISPUTE_TERMS.some((term) => term.test(folded));
 }
 
 /**
- * Before the provider call: every customer text the reply would answer (the trigger and the
- * customer's messages since the business last spoke). A money mention in any of them hands off.
+ * Before the provider call: the customer texts the money guard reads
+ * (`moneyGuardWindow`). A dispute in any of them hands off, hard.
  */
 export function autoMoneyGuard(customerTexts: readonly (string | null)[]): AutoVerdict {
   return customerTexts.some(mentionsMoneyTopic) ? fail('handoff_topic', 'HANDOFF_TOPIC') : PASS;
+}
+
+/**
+ * Phase 4 PR-1 — the money guard's window: the trigger and the customer's previous TWO lines
+ * only (was every line since the business last replied). A refund asked hours ago and already
+ * handled by a person is not this message's matter; three lines cover «پرداخت کردم» / «ولی» /
+ * «هنوز نیومد» typed as a burst.
+ */
+export function moneyGuardWindow(
+  lines: readonly { readonly origin: BusinessMessageOrigin; readonly text: string | null }[],
+  triggerText: string | null,
+): readonly (string | null)[] {
+  const inbound = lines.filter((line) => line.origin === 'INBOUND').map((line) => line.text);
+  return [triggerText, ...inbound.slice(-3)];
 }
 
 /** The origins that mean the business answered: a walk back for the customer's lines stops there. */
@@ -705,9 +798,9 @@ export function isClosingAcknowledgement(text: string | null): boolean {
 }
 
 /**
- * A6 — why a `NO_ACTION` decision may NOT end the job silently, or PASS when it may: every
- * customer text the reply would have answered is a closing acknowledgement, and the decision
- * passes every guard a reply passes that can apply to silence. The verdict is the handoff to make
+ * A6 — why a `NO_ACTION` decision may NOT end the job silently, or PASS when it may: the
+ * decision passes every guard a reply passes that can apply to silence (Phase 4 PR-1: on any
+ * allowlisted safe topic, no longer only after a closing acknowledgement). The verdict is the handoff to make
  * otherwise, with the most specific reason (review of PR #246, CX2: decided again in the job's
  * transaction on the facts of then).
  */
@@ -724,7 +817,7 @@ export function autoNoActionVerdict(input: {
     return fail('handoff_topic', 'HANDOFF_TOPIC');
   }
   if (flags.customerBlocked) return fail('customer_blocked', 'CUSTOMER_BLOCKED');
-  if (flags.hasUnderReviewPayment || flags.hasUnreconciledService) {
+  if (accountUnderReview(decision.topic, decision.factRefs, flags)) {
     return fail('account_review', 'ACCOUNT_UNDER_REVIEW');
   }
   const closes =
@@ -732,8 +825,10 @@ export function autoNoActionVerdict(input: {
     (flags.identityLinked ||
       (SUPPORT_AI_GENERAL_TOPICS as readonly string[]).includes(decision.topic)) &&
     CONFIDENCE_RANK[decision.confidence] >= CONFIDENCE_RANK[config.autoMinConfidence] &&
-    input.customerTexts.length > 0 &&
-    input.customerTexts.every((text) => isClosingAcknowledgement(text));
+    // Phase 4 PR-1: a NO_ACTION on an allowlisted safe topic closes silently whatever the
+    // customer wrote (was: only a thanks or «حل شد»). Nothing is sent either way; a handoff for
+    // it only queued a person behind a message the model judged needs no answer.
+    input.customerTexts.length > 0;
   return closes ? PASS : fail('decision', 'DECISION_NOT_REPLY');
 }
 

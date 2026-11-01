@@ -23,7 +23,7 @@ import {
   supportAiJobs,
   supportLearningJobs,
 } from '../../../../infrastructure/persistence/schema.js';
-import { clarifyingStreakOf } from '../domain/auto-reply-guards.js';
+import { clarifyingStreakOf, otherStreakOf } from '../domain/auto-reply-guards.js';
 import type { PriorDecisionFact } from '../domain/knowledge-query.js';
 import {
   requireTenantId,
@@ -419,6 +419,130 @@ export class DrizzleSupportAiJobRepository {
       // Past the highest limit there is nothing more to know.
       .limit(SUPPORT_AI_LIMITS.maxConsecutiveClarifyingQuestions.max + 1);
     return clarifyingStreakOf(rows);
+  }
+
+  /**
+   * Phase 4 PR-1 — the OTHER streak (`otherStreakOf`): the automatic replies of `epoch` still on
+   * their way or delivered, newest first, read as the clarifying streak reads them.
+   */
+  async otherStreak(
+    scope: ScopeContext,
+    input: { readonly conversationId: string; readonly epoch: number },
+    tx?: unknown,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const rows = await exec(this.db, tx)
+      .select({ decision: supportAiJobs.decision, topic: supportAiJobs.topic })
+      .from(businessOutboundMessages)
+      .innerJoin(
+        supportAiJobs,
+        and(
+          eq(supportAiJobs.tenantId, businessOutboundMessages.tenantId),
+          eq(supportAiJobs.conversationId, businessOutboundMessages.conversationId),
+          eq(supportAiJobs.sentOutboundId, businessOutboundMessages.id),
+          eq(supportAiJobs.kind, 'AUTO_DECISION'),
+          eq(supportAiJobs.state, 'SENT'),
+        ),
+      )
+      .where(
+        and(
+          eq(businessOutboundMessages.tenantId, tenantId),
+          eq(businessOutboundMessages.conversationId, input.conversationId),
+          eq(businessOutboundMessages.origin, 'AUTO'),
+          eq(businessOutboundMessages.controlEpoch, input.epoch),
+          inArray(businessOutboundMessages.state, ['PENDING', 'DELIVERED', 'UNCONFIRMED']),
+        ),
+      )
+      .orderBy(desc(businessOutboundMessages.createdAt), desc(businessOutboundMessages.id))
+      .limit(4);
+    return otherStreakOf(rows);
+  }
+
+  /**
+   * Phase 4 PR-1 (cross-cutting item 7) — the polite refusals (`POLICY_REFUSAL`) the AI sent at
+   * `epoch`: the abuse signal's count. The epoch is the session here: a person's action or a
+   * return to the AI starts it again.
+   */
+  async refusalCount(
+    scope: ScopeContext,
+    input: { readonly conversationId: string; readonly epoch: number },
+    tx?: unknown,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await exec(this.db, tx)
+      .select({ n: sql<number>`count(*)::int` })
+      .from(supportAiJobs)
+      .where(
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          eq(supportAiJobs.conversationId, input.conversationId),
+          eq(supportAiJobs.kind, 'AUTO_DECISION'),
+          eq(supportAiJobs.controlEpoch, input.epoch),
+          eq(supportAiJobs.state, 'SENT'),
+          eq(supportAiJobs.topic, 'POLICY_REFUSAL'),
+        ),
+      );
+    return Number(row?.n ?? 0);
+  }
+
+  /**
+   * Phase 4 PR-1 item 9 — the newest finished automatic jobs (handed off or sent; drops are not
+   * the AI's answer), for the handoff-rate alert. Reasons and topics only, never text.
+   */
+  async recentAutoResults(
+    scope: ScopeContext,
+    limit: number,
+  ): Promise<
+    readonly {
+      readonly outcome: string | null;
+      readonly handoffReason: string | null;
+      readonly topic: string | null;
+    }[]
+  > {
+    const tenantId = requireTenantId(scope);
+    return this.db
+      .select({
+        outcome: supportAiJobs.outcome,
+        handoffReason: supportAiJobs.handoffReason,
+        topic: supportAiJobs.topic,
+      })
+      .from(supportAiJobs)
+      .where(
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          eq(supportAiJobs.kind, 'AUTO_DECISION'),
+          inArray(supportAiJobs.state, ['SENT', 'FAILED']),
+        ),
+      )
+      .orderBy(desc(supportAiJobs.updatedAt), desc(supportAiJobs.id))
+      .limit(limit);
+  }
+
+  /**
+   * Phase 4 PR-1 item 8 — a job whose production THREW: its lease is moved to `retryAt`, so it
+   * is claimed again then (the attempt it spent is kept, so the next throw gives up). Only a
+   * QUEUED job, conditional like every transition.
+   */
+  async releaseLease(
+    scope: ScopeContext,
+    id: string,
+    retryAt: Date,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await exec(this.db, tx)
+      .update(supportAiJobs)
+      .set({ claimedUntil: retryAt, updatedAt: now })
+      .where(
+        and(
+          eq(supportAiJobs.tenantId, tenantId),
+          eq(supportAiJobs.id, id),
+          eq(supportAiJobs.state, 'QUEUED'),
+        ),
+      )
+      .returning({ id: supportAiJobs.id });
+    return rows.length > 0;
   }
 
   /**
