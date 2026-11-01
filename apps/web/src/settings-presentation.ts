@@ -492,6 +492,12 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'support',
     control: { kind: 'integer' },
   },
+  'support.knowledge.auto_refresh': {
+    title: 'web.setting_support_knowledge_auto_refresh',
+    description: 'web.setting_support_knowledge_auto_refresh_desc',
+    group: 'support',
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
+  },
   'telegram.channels': {
     title: 'web.setting_telegram_channels',
     description: 'web.setting_telegram_channels_desc',
