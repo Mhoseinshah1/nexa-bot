@@ -1,3 +1,4 @@
+import { I18nSupportFactFormatter } from '../../apps/api/src/modules/commerce/support-context/infrastructure/i18n-support-fact-formatter';
 import { describe, expect, it } from 'vitest';
 import { SUPPORT_CONTEXT_FALLBACK_KNOWLEDGE, type SupportContextPayload } from '@nexa/contracts';
 import {
@@ -275,6 +276,7 @@ describe('precomputed account facts', () => {
       },
       NOW,
       presentation,
+      new I18nSupportFactFormatter(),
     );
     expect(facts).toEqual({
       remainingTraffic: '37.5 گیگابایت',
@@ -294,6 +296,7 @@ describe('precomputed account facts', () => {
       },
       NOW,
       presentation,
+      new I18nSupportFactFormatter(),
     );
     expect(facts.remainingTraffic).toBeNull();
     expect(facts.usageAge).toBeNull();

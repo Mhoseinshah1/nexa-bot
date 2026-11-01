@@ -1,3 +1,4 @@
+import { I18nSupportFactFormatter } from '../../apps/api/src/modules/commerce/support-context/infrastructure/i18n-support-fact-formatter';
 import { describe, expect, it } from 'vitest';
 import {
   SUPPORT_CONTEXT_KNOWLEDGE_RESERVE_BYTES,
@@ -138,6 +139,7 @@ function deps(over: {
       activeForContext: async (_scope, limit) => (over.articles ?? []).slice(0, limit),
     },
     settings: { valueOf: async <T>() => ['@support'] as unknown as T },
+    format: new I18nSupportFactFormatter(),
     clock,
   } as SupportContextBuilderDeps;
 }

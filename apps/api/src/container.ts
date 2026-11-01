@@ -313,6 +313,7 @@ import {
   SUPPORT_KNOWLEDGE_REFRESH_INTERVAL_MS,
   SupportKnowledgeRefreshLoop,
 } from './modules/control/support-knowledge/application/support-knowledge-refresh.js';
+import { I18nSupportFactFormatter } from './modules/commerce/support-context/infrastructure/i18n-support-fact-formatter.js';
 import { SupportCatalogueReader } from './modules/commerce/support-context/application/support-catalogue.js';
 import { DrizzleSupportContextReader } from './modules/commerce/support-context/infrastructure/drizzle-support-context.reader.js';
 import { ModuleIncidentEffects } from './modules/platform/incidents/infrastructure/incident-effects.js';
@@ -6810,6 +6811,8 @@ export function createContainer(
   /** TB8: the one home of support knowledge; the context reads only what was approved. */
   const supportKnowledgeRepository = new DrizzleSupportKnowledgeRepository(database.db);
   const supportContextReader = new DrizzleSupportContextReader(database.db);
+  /** Phase 4 PR-2: the bot's own formatters for the support context's figures. */
+  const supportFactFormatter = new I18nSupportFactFormatter();
   const supportContext = new SupportContextBuilder({
     customers: customerRepository,
     services: provisioningService,
@@ -6830,8 +6833,10 @@ export function createContainer(
       addons: serviceAddonRepository,
       pricing: pricingService,
       settings: settingsResolver,
+      format: supportFactFormatter,
     }),
     presentation: templatePresentation,
+    format: supportFactFormatter,
   });
 
   /**

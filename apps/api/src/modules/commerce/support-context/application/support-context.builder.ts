@@ -35,10 +35,12 @@ import { isClientAppRelevant } from '../../../control/client-apps/domain/relevan
 import type { ProvisionedServiceFacts } from '../../../control/client-apps/application/customer-service-facts.js';
 import type { SupportFaqRepository } from '../../../control/support/application/ports.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
-import { DEFAULT_TEMPLATE_PRESENTATION, type TemplatePresentation } from '@nexa/i18n';
 import {
+  DEFAULT_SUPPORT_PRESENTATION,
   accountFacts,
   aliasFor,
+  type SupportFactFormatter,
+  type SupportPresentation,
   clip,
   clipGuide,
   fitPayload,
@@ -70,6 +72,8 @@ export interface SupportContextBuilderDeps {
   readonly knowledge: SupportKnowledgeReader;
   readonly settings: Pick<SettingsResolver, 'valueOf'>;
   readonly clock: Clock;
+  /** Phase 4 PR-2: the bot's own money, traffic and date formatters, behind the domain's port. */
+  readonly format: SupportFactFormatter;
   /**
    * Phase 4 PR-2: the live catalogue, priced at the checkout's boundary for this customer.
    * Absent (a unit test's fake): the payload carries no catalogue and no renewal prices.
@@ -77,7 +81,7 @@ export interface SupportContextBuilderDeps {
   readonly catalogue?: Pick<SupportCatalogueReader, 'forCustomer'>;
   /** Phase 4 PR-2: the tenant's zone and calendar, for `expiresOn`. Absent: Tehran, Jalali. */
   readonly presentation?: {
-    presentationFor(scope: TenantContext): Promise<TemplatePresentation>;
+    presentationFor(scope: TenantContext): Promise<SupportPresentation>;
   };
 }
 
@@ -171,7 +175,7 @@ export class SupportContextBuilder {
           clientApps: clientAppsFor(appRows, [], selected.builtAppIds),
           incidents: [],
           knowledge,
-          ...catalogueEntries(catalogue),
+          ...catalogueEntries(catalogue, this.deps.format),
           supportAccounts,
           flags: {
             hasUnderReviewPayment: false,
@@ -218,13 +222,14 @@ export class SupportContextBuilder {
       this.deps.serviceFacts.factsOf(scope, services),
       this.catalogueFor(scope, customer.id, services, now),
       this.deps.presentation?.presentationFor(scope) ??
-        Promise.resolve(DEFAULT_TEMPLATE_PRESENTATION),
+        Promise.resolve(DEFAULT_SUPPORT_PRESENTATION),
     ]);
 
     const serviceEntries = services.map((service, index) =>
       serviceEntry(service, cards[index] ?? null, index, now, {
         presentation,
         renewalPrice: catalogue.renewals.get(service.id) ?? null,
+        format: this.deps.format,
       }),
     );
     const orderFacts = orders.slice(0, SUPPORT_CONTEXT_LIMITS.orders);
@@ -234,8 +239,10 @@ export class SupportContextBuilder {
         generatedAt: now.toISOString(),
         customer: customerEntry(customer),
         services: serviceEntries,
-        orders: orderFacts.map(orderEntry),
-        payments: paymentFacts.map(paymentEntry),
+        orders: orderFacts.map((order, index) => orderEntry(order, index, this.deps.format)),
+        payments: paymentFacts.map((payment, index) =>
+          paymentEntry(payment, index, this.deps.format),
+        ),
         clientApps: clientAppsFor(appRows, appFacts, selected.builtAppIds),
         incidents: incidents.slice(0, SUPPORT_CONTEXT_LIMITS.incidents).map((incident) => ({
           customerMessage: clip(incident.customerMessage, 2000),
@@ -243,7 +250,7 @@ export class SupportContextBuilder {
           scheduledEndAt: incident.scheduledEndAt?.toISOString() ?? null,
         })),
         knowledge,
-        ...catalogueEntries(catalogue),
+        ...catalogueEntries(catalogue, this.deps.format),
         supportAccounts,
         flags: {
           hasUnderReviewPayment: payments.anyUnderReview,
@@ -426,9 +433,10 @@ function serviceEntry(
   card: SupportServiceCardFact | null,
   index: number,
   now: Date,
-  extra: { readonly presentation: TemplatePresentation; readonly renewalPrice: Money | null } = {
-    presentation: DEFAULT_TEMPLATE_PRESENTATION,
-    renewalPrice: null,
+  extra: {
+    readonly presentation: SupportPresentation;
+    readonly renewalPrice: Money | null;
+    readonly format: SupportFactFormatter;
   },
 ): SupportContextService {
   return {
@@ -455,20 +463,23 @@ function serviceEntry(
     deviceLimit: service.deviceLimit,
     hasSubscriptionLink: ProvisioningService.isDeliverable(service),
     unreconciled: service.state === 'UNRECONCILED',
-    ...accountFacts(service, now, extra.presentation),
+    ...accountFacts(service, now, extra.presentation, extra.format),
     renewalPrice:
       extra.renewalPrice === null
         ? null
-        : moneyOf(extra.renewalPrice.amountMinor, extra.renewalPrice.currency),
+        : moneyOf(extra.renewalPrice.amountMinor, extra.renewalPrice.currency, extra.format),
   };
 }
 
 /** Phase 4 PR-2: the catalogue and packages as the payload carries them (C1.. by position). */
-function catalogueEntries(catalogue: SupportCatalogue): {
+function catalogueEntries(
+  catalogue: SupportCatalogue,
+  format: SupportFactFormatter,
+): {
   readonly catalogue: SupportContextCatalogueEntry[];
   readonly addons: SupportContextAddon[];
 } {
-  const priced = (value: Money) => moneyOf(value.amountMinor, value.currency);
+  const priced = (value: Money) => moneyOf(value.amountMinor, value.currency, format);
   return {
     catalogue: catalogue.plans.slice(0, SUPPORT_CONTEXT_LIMITS.catalogue).map((plan, index) => ({
       alias: aliasFor('C', index),
@@ -493,13 +504,17 @@ function clipOrNull(value: string | null, max: number): string | null {
   return value === null ? null : clip(value, max);
 }
 
-function orderEntry(order: SupportOrderFact, index: number): SupportContextPayload['orders'][0] {
+function orderEntry(
+  order: SupportOrderFact,
+  index: number,
+  format: SupportFactFormatter,
+): SupportContextPayload['orders'][0] {
   return {
     alias: aliasFor('O', index),
     state: order.state,
     purpose: order.purpose,
     title: clip(order.title, 256),
-    total: moneyOf(order.totalMinor, order.currency),
+    total: moneyOf(order.totalMinor, order.currency, format),
     createdAt: order.createdAt.toISOString(),
     settledAt: order.settledAt?.toISOString() ?? null,
     expiresAt: order.expiresAt?.toISOString() ?? null,
@@ -509,10 +524,11 @@ function orderEntry(order: SupportOrderFact, index: number): SupportContextPaylo
 function paymentEntry(
   payment: SupportPaymentFact,
   index: number,
+  format: SupportFactFormatter,
 ): SupportContextPayload['payments'][0] {
   return {
     alias: aliasFor('P', index),
-    amount: moneyOf(payment.amountMinor, payment.currency),
+    amount: moneyOf(payment.amountMinor, payment.currency, format),
     method: payment.method,
     routeLabelKey: routeLabelKeyOf(payment),
     state: payment.state,

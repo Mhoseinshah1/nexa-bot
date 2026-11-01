@@ -7,9 +7,36 @@ import {
   UNLIMITED_TRAFFIC_BYTES,
   type CurrencyCode,
   type SupportContextMoney,
+  type Calendar,
+  type Money,
   type SupportContextPayload,
 } from '@nexa/contracts';
-import { formatBytes, formatDateOnly, formatMoney, type TemplatePresentation } from '@nexa/i18n';
+
+/**
+ * Phase 4 PR-2 — how the customer-facing figures of the payload are written: the bot's own
+ * formatters (`formatMoney`, `formatBytes`, `formatTrafficLimit`, `formatDurationDays`,
+ * `formatDateOnly`), behind a port so the domain never reaches the catalogue package itself.
+ * Bound in container.ts (`I18nSupportFactFormatter`).
+ */
+export interface SupportFactFormatter {
+  money(value: Money): string;
+  bytes(bytes: bigint): string;
+  trafficLimit(bytes: bigint): string;
+  durationDays(days: number): string;
+  date(at: Date, presentation: SupportPresentation): string;
+}
+
+/** The tenant's zone and calendar, as the template presentation reader answers it. */
+export interface SupportPresentation {
+  readonly timezone: string;
+  readonly calendar: Calendar;
+}
+
+/** What a render with no tenant presentation uses: Tehran, Jalali (the template default). */
+export const DEFAULT_SUPPORT_PRESENTATION: SupportPresentation = Object.freeze({
+  timezone: 'Asia/Tehran',
+  calendar: 'jalali',
+});
 
 /**
  * TB3 — the pure half of the support context: aliases, the few derived numbers, the
@@ -28,11 +55,15 @@ export function aliasFor(prefix: 'S' | 'O' | 'P' | 'K' | 'C', index: number): st
  * Money as the payload carries it: decimal minor units and the currency, JSON-safe, and (Phase 4
  * PR-2) the amount as the bot's one money formatter renders it («150,000 تومان»).
  */
-export function moneyOf(amountMinor: bigint, currency: CurrencyCode): SupportContextMoney {
+export function moneyOf(
+  amountMinor: bigint,
+  currency: CurrencyCode,
+  format: Pick<SupportFactFormatter, 'money'>,
+): SupportContextMoney {
   return {
     amountMinor: amountMinor.toString(),
     currency,
-    formatted: formatMoney(money(amountMinor, currency)),
+    formatted: format.money(money(amountMinor, currency)),
   };
 }
 
@@ -50,7 +81,7 @@ export const ACCOUNT_FACT_WORDS = {
  * Phase 4 PR-2 — the account facts a model must never compute itself, from the service row, the
  * clock and the tenant's presentation (zone and calendar):
  *
- * - `remainingTraffic`: what is left, in gigabytes (`formatBytes`), null exactly when
+ * - `remainingTraffic`: what is left, in gigabytes (`format.bytes`), null exactly when
  *   `remainingTrafficBytes` is null (usage never read, or unlimited);
  * - `daysLeft`: whole days until the expiry, rounded UP (a service expiring in 3 hours has 1 day
  *   left), 0 once past it, null without an expiry;
@@ -65,7 +96,8 @@ export function accountFacts(
     readonly expiresAt: Date | null;
   },
   now: Date,
-  presentation: TemplatePresentation,
+  presentation: SupportPresentation,
+  format: Pick<SupportFactFormatter, 'bytes' | 'date'>,
 ): {
   readonly remainingTraffic: string | null;
   readonly daysLeft: number | null;
@@ -75,9 +107,9 @@ export function accountFacts(
   const remaining = remainingTrafficBytes(facts);
   const left = facts.expiresAt === null ? null : facts.expiresAt.getTime() - now.getTime();
   return {
-    remainingTraffic: remaining === null ? null : formatBytes(BigInt(remaining)),
+    remainingTraffic: remaining === null ? null : format.bytes(BigInt(remaining)),
     daysLeft: left === null ? null : left <= 0 ? 0 : Math.ceil(left / 86_400_000),
-    expiresOn: facts.expiresAt === null ? null : formatDateOnly(facts.expiresAt, presentation),
+    expiresOn: facts.expiresAt === null ? null : format.date(facts.expiresAt, presentation),
     usageAge: facts.usageSyncedAt === null ? null : usageAgeText(facts.usageSyncedAt, now),
   };
 }

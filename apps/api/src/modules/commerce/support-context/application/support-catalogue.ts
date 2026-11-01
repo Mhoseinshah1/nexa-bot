@@ -7,12 +7,12 @@ import {
   type ProductId,
   type TenantContext,
 } from '@nexa/contracts';
-import { formatDurationDays, formatTrafficLimit } from '@nexa/i18n';
 import type { ProductService } from '../../catalog/application/product.service.js';
 import type { ProductRecord, ProductRepository } from '../../catalog/application/ports.js';
 import type { ServiceAddonRepository } from '../../catalog/application/addon-ports.js';
 import type { PricingService } from '../../pricing/application/pricing.service.js';
 import { quoteAddon, quoteProduct } from '../../orders/application/order-pricing.js';
+import type { SupportFactFormatter } from '../domain/support-context-payload.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 
 /**
@@ -39,6 +39,8 @@ export interface SupportCatalogueDeps {
   readonly addons: Pick<ServiceAddonRepository, 'listOfferable'>;
   readonly pricing: Pick<PricingService, 'quoteListPrices'>;
   readonly settings: Pick<SettingsResolver, 'valueOf'>;
+  /** The bot's own duration and traffic formatters, behind the domain's port. */
+  readonly format: Pick<SupportFactFormatter, 'durationDays' | 'trafficLimit'>;
 }
 
 export interface SupportCataloguePlan {
@@ -103,8 +105,8 @@ export class SupportCatalogueReader {
           {
             productId: product.id,
             title: product.title,
-            duration: formatDurationDays(product.specification.durationDays),
-            traffic: formatTrafficLimit(product.specification.trafficBytes),
+            duration: this.deps.format.durationDays(product.specification.durationDays),
+            traffic: this.deps.format.trafficLimit(product.specification.trafficBytes),
             deviceLimit: product.specification.deviceLimit,
             locations:
               product.display.displayLocations.length === 0

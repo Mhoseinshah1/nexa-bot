@@ -1,3 +1,4 @@
+import { I18nSupportFactFormatter } from '../../apps/api/src/modules/commerce/support-context/infrastructure/i18n-support-fact-formatter';
 import { describe, expect, it } from 'vitest';
 /** A zod schema seen structurally: the root test project does not resolve `zod` itself. */
 type ZodLike = object;
@@ -522,6 +523,7 @@ describe('TB3 support context — the builder over fakes', () => {
       faqs: { list: async () => [] },
       knowledge: { activeForContext: async () => [] },
       settings: { valueOf: async <T>() => ['@support'] as unknown as T },
+      format: new I18nSupportFactFormatter(),
       clock,
       ...overrides,
     };

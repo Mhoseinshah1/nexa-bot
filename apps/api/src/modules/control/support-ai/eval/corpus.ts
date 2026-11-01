@@ -11,6 +11,10 @@ import {
   accountFacts,
   moneyOf,
 } from '../../../commerce/support-context/domain/support-context-payload.js';
+import { I18nSupportFactFormatter } from '../../../commerce/support-context/infrastructure/i18n-support-fact-formatter.js';
+
+/** Phase 4 PR-2: the eval writes figures exactly as the production builder does. */
+const EVAL_FORMAT = new I18nSupportFactFormatter();
 import type { SupportTranscriptAuthor } from '../domain/transcript.js';
 
 /**
@@ -206,6 +210,7 @@ function accountFactsOf(over: Partial<Omit<SupportContextService, 'alias'>>) {
     { trafficLimitBytes: limit, trafficUsedBytes: used, usageSyncedAt: synced, expiresAt: expires },
     EVAL_NOW,
     { timezone: 'Asia/Tehran', calendar: 'jalali' },
+    EVAL_FORMAT,
   );
 }
 
@@ -213,7 +218,7 @@ export function evalPayment(
   over: Partial<Omit<SupportContextPayment, 'alias'>> = {},
 ): Omit<SupportContextPayment, 'alias'> {
   return {
-    amount: moneyOf(1_500_000n, 'IRT'),
+    amount: moneyOf(1_500_000n, 'IRT', EVAL_FORMAT),
     method: 'MANUAL_TRANSFER',
     routeLabelKey: null,
     state: 'CONFIRMED',
