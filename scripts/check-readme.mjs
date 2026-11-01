@@ -47,7 +47,7 @@ for (const line of help.split('\n')) {
   if (!m) continue;
   const words = [];
   for (const w of m[1].split(/\s{2,}/)[0].split(/\s+/)) {
-    if (!/^[a-z][a-z-]*$/.test(w)) break;
+    if (!/^[a-z][a-z0-9-]*$/.test(w)) break;
     words.push(w);
   }
   if (words.length) paths.push(words);
