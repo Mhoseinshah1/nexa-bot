@@ -188,6 +188,13 @@ export function autoDecisionGuards(input: {
    * (`otherStreakOf`). 0 lets one through; anything more hands off.
    */
   readonly otherStreak?: number;
+  /**
+   * Phase 4 PR-3: the read-only tools are on (`support.ai.actions_enabled`). Two hard topics
+   * then have a read-only answer (`readOnlyToolAnswer`): a payment-status question answered by
+   * the payment_status tool from the customer's own rows, and a wallet top-up how-to answered
+   * with the bot's top-up button. Off: both hand off as before.
+   */
+  readonly actionsEnabled?: boolean;
 }): AutoVerdict {
   const { decision, config, flags } = input;
   // The model itself asked for a person: never second-guessed into a reply.
@@ -201,13 +208,22 @@ export function autoDecisionGuards(input: {
     decision.topic === 'OTHER' &&
     decision.decision === 'ASK_CLARIFYING_QUESTION' &&
     (input.otherStreak ?? 0) === 0;
-  if (!otherQuestion && (SUPPORT_AI_HANDOFF_TOPICS as readonly string[]).includes(decision.topic)) {
+  const readOnly = input.actionsEnabled === true && readOnlyToolAnswer(decision, flags);
+  if (
+    !otherQuestion &&
+    !readOnly &&
+    (SUPPORT_AI_HANDOFF_TOPICS as readonly string[]).includes(decision.topic)
+  ) {
     return fail('handoff_topic', 'HANDOFF_TOPIC');
   }
   if (decision.decision !== 'REPLY' && decision.decision !== 'ASK_CLARIFYING_QUESTION') {
     return fail('decision', 'DECISION_NOT_REPLY');
   }
-  if (!otherQuestion && !(config.autoTopics as readonly string[]).includes(decision.topic)) {
+  // A read-only tool answer is allowed where the owner allowed payment how-to answers.
+  const allowlisted = readOnly
+    ? (config.autoTopics as readonly string[]).includes('PAYMENT_HOWTO')
+    : (config.autoTopics as readonly string[]).includes(decision.topic);
+  if (!otherQuestion && !allowlisted) {
     return fail('topic_allowlist', 'TOPIC_NOT_ALLOWED');
   }
   // Phase 4 PR-1: an unlinked customer's account question is answered with the bot's start link
@@ -252,6 +268,25 @@ export function autoDecisionGuards(input: {
     return fail('clarifying_limit', 'CLARIFYING_LIMIT');
   }
   return PASS;
+}
+
+/**
+ * Phase 4 PR-3 (review of PR #369) — the two hard topics a read-only tool answers, with the
+ * tools on: `PAYMENT_STATUS` with the `PAYMENT_STATUS` action, for a linked customer (NEXA
+ * appends the states of their own latest payments, «در حال بررسی» for one under review, no
+ * promise), and `WALLET` with the `WALLET_TOPUP` action (a top-up how-to: the bot's top-up
+ * button). A REPLY only. A wallet balance question, a dispute — the money guard hands disputes
+ * off before any model — or any other action still hands off.
+ */
+export function readOnlyToolAnswer(
+  decision: SupportAiDecision,
+  flags: Pick<AutoContextFlags, 'identityLinked'>,
+): boolean {
+  if (decision.decision !== 'REPLY') return false;
+  const kind = decision.action?.kind;
+  if (decision.topic === 'PAYMENT_STATUS') return kind === 'PAYMENT_STATUS' && flags.identityLinked;
+  if (decision.topic === 'WALLET') return kind === 'WALLET_TOPUP';
+  return false;
 }
 
 /**

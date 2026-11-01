@@ -6,6 +6,7 @@ import {
   type ScopeContext,
   type SupportAiActionKind,
 } from '@nexa/contracts';
+import { appearanceFallbackText } from '../../../commerce/messaging/application/appearance-render.js';
 import type { TemplateResolver } from '../../templates/application/template-resolver.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
@@ -80,7 +81,10 @@ export class SupportToolPreparer {
         undefined,
         tx,
       );
-      return text === undefined || text.trim() === '' ? null : text.trim();
+      if (text === undefined) return null;
+      // A plain-text message: every Appearance marker ({icon:…}) as its emoji.
+      const plain = appearanceFallbackText(text).trim();
+      return plain === '' ? null : plain;
     } catch {
       return null;
     }

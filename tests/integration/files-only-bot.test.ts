@@ -1,6 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { sql } from 'drizzle-orm';
 import {
   EMPTY_PRODUCT_DISPLAY,
   money,
@@ -531,5 +532,56 @@ describe('files only, no subscription link (R11 A4): the bot', () => {
     await ctx.container.delivery.resendForOperator(tenantA, owner, service.id);
     expect(customerText()).toContain(service.subscriptionUrl ?? '-');
     expect(posts('/sendMediaGroup')).toHaveLength(0);
+  });
+
+  // =========================================================================
+  // Phase 4 PR-3 (review of PR #369): a support-AI deep link forwarded to someone else
+  // =========================================================================
+
+  /** `/start <payload>` typed (or opened from a deep link) by `telegramUserId`. */
+  const start = (payload: string, telegramUserId = CUSTOMER_TG) => {
+    updateSeq += 1;
+    return ctx.container.botRuntime.handle(tenantA, systemActor('bot'), {
+      idempotencyKey: `fo-start-${String(updateSeq)}-${randomUUID()}`,
+      botInstanceId: BOT_A,
+      update: {
+        update_id: updateSeq,
+        message: {
+          message_id: updateSeq,
+          date: 0,
+          chat: { id: Number(telegramUserId), type: 'private' },
+          from: { id: Number(telegramUserId), is_bot: false, first_name: 'نیما' },
+          text: `/start ${payload}`,
+        },
+      },
+      telegramUserId,
+      from: { id: Number(telegramUserId), first_name: 'نیما' },
+    });
+  };
+
+  it('a deep link naming another customer’s service is refused by the bot’s own handlers: nothing leaks, nothing changes', async () => {
+    await enableRotation();
+    const service = await deliveredService('forwarded');
+    const ordersBefore = (
+      await ctx.container.database.db.execute(sql`SELECT count(*)::int AS n FROM orders`)
+    ).rows[0] as { n: number };
+    for (const code of ['rn', 'at', 'am', 'lc', 'ro', 'sv']) {
+      sent = [];
+      await start(`sai-${code}-${service.id}`, OTHER_TG);
+      const told = sent.map(raw).join('\n');
+      expect(told, code).not.toContain(service.providerUsername);
+      expect(told, code).not.toContain(service.subscriptionUrl ?? '-');
+      expect(told, code).not.toContain(service.id);
+    }
+    expect((await rotations(service.id)).length).toBe(0);
+    const ordersAfter = (
+      await ctx.container.database.db.execute(sql`SELECT count(*)::int AS n FROM orders`)
+    ).rows[0] as { n: number };
+    expect(ordersAfter.n).toBe(ordersBefore.n);
+    expect((await reload(service.id)).customerId).toBe(customerId);
+    // Control: the owner's own link opens the card.
+    sent = [];
+    await start(`sai-sv-${service.id}`);
+    expect(sent.map(raw).join('\n')).toContain(service.providerUsername);
   });
 });

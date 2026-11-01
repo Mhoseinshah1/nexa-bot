@@ -193,7 +193,8 @@ describe('deep links: each payload names an EXISTING bot flow', () => {
     [`lc-${SERVICE_ID}`, 'SERVICE_CHANGE_LOCATION', SERVICE_ID],
     [`ro-${SERVICE_ID}`, 'SERVICE_ROTATE_ASK', SERVICE_ID],
     [`sv-${SERVICE_ID}`, 'SERVICE', SERVICE_ID],
-    ['t', 'TRIAL_CLAIM', null],
+    // Review of PR #369 (D12): the main menu, never the claim itself.
+    ['t', 'MAIN_MENU', null],
     ['w', 'TOPUP_MENU', null],
   ])('the bot routes /start sai-%s to its own %s', (code, intent, target) => {
     expect(intentOf(startUpdate(`sai-${code}`))).toMatchObject({ intent, targetId: target });

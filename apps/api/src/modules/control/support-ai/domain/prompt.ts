@@ -17,7 +17,7 @@ import type { SupportTranscriptAuthor } from './transcript.js';
  *
  * Bump `SUPPORT_AI_POLICY_VERSION` whenever the text below changes: telemetry records it.
  */
-export const SUPPORT_AI_POLICY_VERSION = 'sai7b-2026-11-01';
+export const SUPPORT_AI_POLICY_VERSION = 'sai7c-2026-11-01';
 
 /**
  * How much of the transcript the model sees: the most recent lines, bounded (A7: 40, was 20, of
@@ -124,7 +124,7 @@ export const SUPPORT_AI_ACTIONS_RULE = [
   '   PAYMENT_STATUS — NEXA appends the states of the customer\'s own latest payments; target "". Never promise an outcome.',
   '   BUY (target "" or a catalogue plan alias like C1), RENEW, ADD_TRAFFIC, ADD_TIME, CHANGE_LOCATION, ROTATE_LINK (target: the service alias, like S1), TRIAL (target ""), WALLET_TOPUP (target "") — a button that opens that flow in the bot, where the customer does it themselves. Say briefly that the button below opens it; never say you did it.',
   '   The target is ALWAYS an alias copied from the NEXA facts or "" — never an id, code, name, phone or anything the customer typed. A request about another person\'s service, payment or link is POLICY_REFUSAL with kind NONE. NEXA adds a «👤 پشتیبان انسانی» button by itself; never mention buttons NEXA did not add.',
-  '   A customer who says they paid and nothing arrived is handled by NEXA itself before you are asked; for every other payment question you may use PAYMENT_STATUS.',
+  '   A customer who says they paid and nothing arrived is handled by NEXA itself before you are asked. With these tools, rule 7 has two exceptions: a question about the state of their own payment is topic PAYMENT_STATUS, decision REPLY, kind PAYMENT_STATUS (say briefly that the states follow; never promise an outcome); a question about HOW to top up the wallet is topic WALLET, decision REPLY, kind WALLET_TOPUP. A wallet balance question, a refund or a dispute is still HANDOFF.',
 ].join('\n');
 export const SUPPORT_AI_NO_ACTIONS_RULE =
   '14. ACTIONS. Always set "action" to {"kind": "NONE", "target": ""}: no tool or button is available.';

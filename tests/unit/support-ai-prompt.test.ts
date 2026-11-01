@@ -156,6 +156,8 @@ describe('A7/A8 — the policy for authors and knowledge', () => {
     'sai6m-2026-11-01': 'c10da05812d1342390805f7fb8a6ca2bef64d499ff56f3d099ad0a86ea352e90',
     // Phase 4 PR-3: rule 14 (ACTIONS), on PR-2's sai6m text.
     'sai7b-2026-11-01': 'bf6a17b4a7d2131f92b1a1fb77bcd4940e3c17df3672c991ce83171bc8e2f686',
+    // Review of PR #369: rule 14 names the two read-only exceptions to rule 7.
+    'sai7c-2026-11-01': '7fc80a3f6c80e84844ba5bd02e71f9b75ff272a064bf749510f2d92acf683a28',
   };
 
   it('pins the policy text to its version, in both directions', () => {

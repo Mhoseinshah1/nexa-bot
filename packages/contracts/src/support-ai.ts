@@ -1467,7 +1467,7 @@ export const SUPPORT_AI_TEMPLATE_KEYS = {
  * intent), reached by `https://t.me/<bot>?start=<payload>`. The payload names the flow and, for
  * a service or a category, its id: the bot decides ownership, availability and every rule again
  * when the customer taps, exactly as for its own buttons. Nothing is done by opening one except
- * showing that flow's first screen — except `TRIAL`, which is the main menu's trial button.
+ * showing that flow's first screen (the trial's link opens the main menu).
  */
 export const SUPPORT_AI_DEEP_LINK_FLOWS = {
   /** The catalogue (`CATALOG`). */
@@ -1486,7 +1486,10 @@ export const SUPPORT_AI_DEEP_LINK_FLOWS = {
   rotate: 'ro',
   /** The service card (`SERVICE`), where «📄 فایل‌ها» sends a «فقط فایل» panel's files. */
   service: 'sv',
-  /** The main menu's trial (`TRIAL_CLAIM`). */
+  /**
+   * The main menu (`MAIN_MENU`), where the customer taps the bot's own trial button: opening the
+   * link claims nothing (review of PR #369).
+   */
   trial: 't',
   /** The wallet top-up (`TOPUP_MENU`). */
   topup: 'w',
