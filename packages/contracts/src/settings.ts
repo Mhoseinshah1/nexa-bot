@@ -447,6 +447,16 @@ export const OUTBOUND_PRIVATE_TARGETS_SETTING_KEY = 'security.outbound_private_t
  */
 export const OWNER_ONLY_SETTING_KEYS: readonly string[] = [OUTBOUND_PRIVATE_TARGETS_SETTING_KEY];
 
+/**
+ * Phase 4 PR-4 (review of PR #371): settings whose TURNING ON widens what the support AI may send
+ * to customers on its own, and so takes the permission that widening takes everywhere else — the
+ * owner's decision, not an operator's with `settings.edit` alone. Enforced in the settings write
+ * path, not only in a page: key → the extra permission charged when the value becomes `true`.
+ */
+export const SETTING_ENABLE_PERMISSIONS: Readonly<Record<string, string>> = {
+  'support.ai.tickets_enabled': 'support_ai.auto_reply',
+};
+
 export const SETTINGS = [
   {
     key: 'ops.notifications.telegram_chat_id',
@@ -1059,6 +1069,24 @@ export const SETTINGS = [
       'default (the owner\u2019s decision).',
     schema: z.boolean(),
     defaultValue: true,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'support.ai.tickets_enabled',
+    description:
+      'Phase 4 PR-4: whether the support AI also writes the first answers inside the bot\u2019s ' +
+      'support tickets and the Mini App\u2019s support screen, by the same pipeline, guards, ' +
+      'tools and output checks as its automatic Telegram Business replies (so it needs the ' +
+      'support AI in the automatic mode). Its replies are recorded in the ticket as the ' +
+      'assistant\u2019s, never as an administrator\u2019s, and never change the ticket\u2019s status. ' +
+      'An administrator\u2019s reply pauses the AI in that ticket for ' +
+      'support.ai.resume_after_minutes; a hard handoff stays with a person. Off by default.',
+    schema: z.boolean(),
+    defaultValue: false,
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',

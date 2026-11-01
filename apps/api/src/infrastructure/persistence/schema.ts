@@ -333,6 +333,8 @@ import {
   SUPPORT_AI_AUTO_MIN_CONFIDENCES,
   SUPPORT_AI_AUTO_OUTCOMES,
   SUPPORT_AI_ACTION_KINDS,
+  SUPPORT_AI_TICKET_JOB_STATES,
+  SUPPORT_AI_TICKET_HOLD_STATES,
   BUSINESS_ESCALATION_TICKET_OUTCOMES,
   // TB8: support knowledge and controlled learning.
   SUPPORT_KNOWLEDGE_ARTICLE_STATES,
@@ -12297,6 +12299,8 @@ export const ticketMessages = pgTable(
                  AND body IS NOT NULL AND attachment_kind IS NULL AND idempotency_key IS NOT NULL
             WHEN 'SYSTEM' THEN author_admin_id IS NULL AND system_event IS NOT NULL
                  AND body IS NULL AND attachment_kind IS NULL
+            WHEN 'AI' THEN author_admin_id IS NULL AND system_event IS NULL
+                 AND body IS NOT NULL AND attachment_kind IS NULL AND idempotency_key IS NOT NULL
             ELSE false
           END`,
     ),
@@ -16598,6 +16602,160 @@ export const supportAiJobs = pgTable(
           AND (kind = 'AUTO_DECISION') = (trigger_content_version IS NOT NULL)
           AND (kind <> 'AUTO_DECISION' OR requested_by_admin_id IS NULL)
           AND (kind = 'AUTO_DECISION' OR outcome IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * Phase 4 PR-4 — the support AI's jobs for TICKETS. Its own table, never `support_ai_jobs`: a
+ * ticket job has no Business conversation, no connection and no outbound lane, so it cannot
+ * name, claim or send into one (isolation by construction — the Business job table's foreign
+ * key is to `business_conversations`, this one's to `tickets`).
+ *
+ * One QUEUED job per ticket at a time (a second customer message while one waits is covered by
+ * it: the producer answers the ticket's latest customer message, `trigger_message_id` is only
+ * the first). `epoch` is the ticket hold's epoch when the job was enqueued; a person speaking
+ * or a handoff moves the hold, and a job of an older epoch is dropped. The reply, when there is
+ * one, is a `ticket_messages` row of sender `AI` named by `reply_message_id`.
+ */
+export const supportAiTicketJobs = pgTable(
+  'support_ai_ticket_jobs',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    ticketId: uuid('ticket_id').notNull(),
+    /** The customer message that caused the job (`ticket_messages.id`). */
+    triggerMessageId: uuid('trigger_message_id').notNull(),
+    epoch: integer('epoch').notNull().default(0),
+    /** `ticket-ai:<ticket id>:<trigger message id>`: a redelivered update enqueues once. */
+    idempotencyKey: text('idempotency_key').notNull(),
+    state: text('state').notNull().default('QUEUED'),
+    attempts: integer('attempts').notNull().default(0),
+    claimedUntil: timestamptz('claimed_until'),
+    /** Not claimed before this instant (the settle delay). */
+    dueAt: timestamptz('due_at').notNull(),
+    /** What became of it (`SUPPORT_AI_AUTO_OUTCOMES`, the Business jobs' closed set). */
+    outcome: text('outcome'),
+    decision: text('decision'),
+    topic: text('topic'),
+    confidence: text('confidence'),
+    handoffReason: text('handoff_reason'),
+    failureClass: text('failure_class'),
+    /** The tool this job used or asked for (never `NONE`) — what the tool-call limit counts. */
+    toolAction: text('tool_action'),
+    provider: text('provider'),
+    model: text('model'),
+    /** The AI's message in the ticket (`ticket_messages.id`), when one was written. */
+    replyMessageId: uuid('reply_message_id'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('support_ai_ticket_jobs_tenant_id_key').on(table.tenantId, table.id),
+    uniqueIndex('support_ai_ticket_jobs_idempotency_key').on(table.tenantId, table.idempotencyKey),
+    /** Coalescing's backstop: never two pending jobs for one ticket. */
+    uniqueIndex('support_ai_ticket_jobs_pending_key')
+      .on(table.tenantId, table.ticketId)
+      .where(sql`state = 'QUEUED'`),
+    index('support_ai_ticket_jobs_due_idx')
+      .on(table.tenantId, table.createdAt)
+      .where(sql`state = 'QUEUED'`),
+    index('support_ai_ticket_jobs_ticket_idx').on(table.tenantId, table.ticketId, table.createdAt),
+    foreignKey({
+      columns: [table.tenantId, table.ticketId],
+      foreignColumns: [tickets.tenantId, tickets.id],
+      name: 'support_ai_ticket_jobs_ticket_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.triggerMessageId],
+      foreignColumns: [ticketMessages.tenantId, ticketMessages.id],
+      name: 'support_ai_ticket_jobs_trigger_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.replyMessageId],
+      foreignColumns: [ticketMessages.tenantId, ticketMessages.id],
+      name: 'support_ai_ticket_jobs_reply_fk',
+    }),
+    check('support_ai_ticket_jobs_state_check', enumCheck('state', SUPPORT_AI_TICKET_JOB_STATES)),
+    check(
+      'support_ai_ticket_jobs_outcome_check',
+      nullableEnumCheck('outcome', SUPPORT_AI_AUTO_OUTCOMES),
+    ),
+    check('support_ai_ticket_jobs_decision_check', enumCheck('decision', SUPPORT_AI_DECISIONS)),
+    check('support_ai_ticket_jobs_topic_check', enumCheck('topic', SUPPORT_AI_TOPICS)),
+    check(
+      'support_ai_ticket_jobs_confidence_check',
+      enumCheck('confidence', SUPPORT_AI_CONFIDENCES),
+    ),
+    check('support_ai_ticket_jobs_provider_check', enumCheck('provider', SUPPORT_AI_PROVIDERS)),
+    check(
+      'support_ai_ticket_jobs_handoff_reason_check',
+      nullableEnumCheck('handoff_reason', BUSINESS_HANDOFF_REASONS),
+    ),
+    check(
+      'support_ai_ticket_jobs_failure_class_check',
+      nullableEnumCheck('failure_class', SUPPORT_AI_FAILURE_CLASSES),
+    ),
+    check(
+      'support_ai_ticket_jobs_tool_action_check',
+      sql`tool_action IS NULL OR (tool_action <> 'NONE' AND ${enumCheck('tool_action', SUPPORT_AI_ACTION_KINDS)})`,
+    ),
+    check('support_ai_ticket_jobs_attempts_check', sql`attempts >= 0 AND epoch >= 0`),
+    /** Done iff it has an outcome; a sent reply names its message. */
+    check(
+      'support_ai_ticket_jobs_done_check',
+      sql`(state = 'DONE') = (outcome IS NOT NULL) AND (reply_message_id IS NULL OR state = 'DONE')`,
+    ),
+    check('support_ai_ticket_jobs_key_check', sql`length(idempotency_key) BETWEEN 1 AND 300`),
+  ],
+);
+
+/**
+ * Phase 4 PR-4 — who holds a ticket's AI answers. No row: the AI answers (epoch 0). A row is
+ * written when a person replies in the ticket (`HUMAN_ACTIVE`, SOFT) or the AI hands it off
+ * (`HANDOFF_REQUIRED`, HARD or SOFT by `businessHandoffKindOf`), and again when the AI takes the
+ * ticket back (`AI_ACTIVE`, epoch + 1: the earlier epoch's jobs no longer count and are
+ * dropped). `last_human_at` is the last administrator reply; `held_at` when the hold began.
+ * The resume rule is the Business chats' own (`autoResumeTrigger`).
+ */
+export const supportAiTicketHolds = pgTable(
+  'support_ai_ticket_holds',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    ticketId: uuid('ticket_id').notNull(),
+    state: text('state').notNull(),
+    epoch: integer('epoch').notNull().default(0),
+    handoffKind: text('handoff_kind'),
+    handoffReason: text('handoff_reason'),
+    heldAt: timestamptz('held_at').notNull(),
+    lastHumanAt: timestamptz('last_human_at'),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.ticketId], name: 'support_ai_ticket_holds_pkey' }),
+    foreignKey({
+      columns: [table.tenantId, table.ticketId],
+      foreignColumns: [tickets.tenantId, tickets.id],
+      name: 'support_ai_ticket_holds_ticket_fk',
+    }),
+    check('support_ai_ticket_holds_state_check', enumCheck('state', SUPPORT_AI_TICKET_HOLD_STATES)),
+    check(
+      'support_ai_ticket_holds_kind_check',
+      nullableEnumCheck('handoff_kind', BUSINESS_HANDOFF_KINDS),
+    ),
+    check(
+      'support_ai_ticket_holds_reason_check',
+      nullableEnumCheck('handoff_reason', BUSINESS_HANDOFF_REASONS),
+    ),
+    check('support_ai_ticket_holds_epoch_check', sql`epoch >= 0`),
+    /** A hold that ended has no kind; one that is held always has one. */
+    check(
+      'support_ai_ticket_holds_shape_check',
+      sql`(state = 'AI_ACTIVE') = (handoff_kind IS NULL)`,
     ),
   ],
 );

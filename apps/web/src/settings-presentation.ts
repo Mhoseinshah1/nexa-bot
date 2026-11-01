@@ -498,6 +498,12 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'support',
     control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
   },
+  'support.ai.tickets_enabled': {
+    title: 'web.setting_support_ai_tickets_enabled',
+    description: 'web.setting_support_ai_tickets_enabled_desc',
+    group: 'support',
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
+  },
   'support.ai.label_enabled': {
     title: 'web.setting_support_ai_label_enabled',
     description: 'web.setting_support_ai_label_enabled_desc',

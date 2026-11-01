@@ -1,5 +1,8 @@
 import { SupportHandoffRateAlert } from './modules/control/support-ai/application/handoff-rate-alert.js';
 import { SupportAutoResumePolicy } from './modules/control/support-ai/infrastructure/support-auto-resume.policy.js';
+import { DrizzleSupportAiTicketRepository } from './modules/control/support-ai/infrastructure/drizzle-support-ai-ticket.repository.js';
+import { SupportTicketAiTrigger } from './modules/control/support-ai/application/support-ticket-ai.trigger.js';
+import { SupportTicketAiService } from './modules/control/support-ai/application/support-ticket-ai.service.js';
 import { CustomerDirectMessageService } from './modules/commerce/direct-messages/application/customer-direct-message.service.js';
 import { LegacyMaterializeService } from './modules/platform/legacy-materialize/application/materialize.service.js';
 import { CustomerSourceStep } from './modules/platform/legacy-materialize/application/customers-source.step.js';
@@ -1641,6 +1644,9 @@ export interface Container {
   readonly assistantLoop: AssistantLoop;
   /** TB7: AUTO_REPLY_SAFE's producer (the `assistant` role runs it through the loop). */
   readonly supportAutoReply: SupportAutoReplyService;
+  /** Phase 4 PR-4: the support AI's producer for tickets, and its trigger. */
+  readonly supportTicketAi: SupportTicketAiService;
+  readonly supportAiTickets: DrizzleSupportAiTicketRepository;
   /** Phase 4 PR-3: taps on the support AI's buttons under a Business message. */
   readonly supportAiCallbacks: SupportAiCallbackService;
   /** TB8: support knowledge and its review, and controlled learning (ADR-0035). */
@@ -5487,7 +5493,14 @@ export function createContainer(
   });
   // TB7: the business-chat handoffs a ticket carries (written by business-chats below).
   const businessEscalationRepository = new DrizzleBusinessEscalationRepository(database.db);
+  // Phase 4 PR-4: the support AI's ticket trigger, bound once the support AI is built below.
+  const ticketAiRef: { current: SupportTicketAiTrigger | null } = { current: null };
   const ticketService = new TicketService({
+    supportAi: {
+      customerMessagePosted: async (scope, input, tx) => {
+        await ticketAiRef.current?.customerMessagePosted(scope, input, tx);
+      },
+    },
     tickets: ticketRepository,
     categories: ticketCategoryRepository,
     escalations: businessEscalationRepository,
@@ -7254,6 +7267,54 @@ export function createContainer(
       jobs: supportAiJobs,
     },
   });
+  /*
+   * Phase 4 PR-4: the support AI inside tickets. Its own storage (`support_ai_ticket_*`), trigger
+   * and producer; the pipeline's pieces — the chain, the context, the guards' facts, the tool
+   * reader and the settings — are the Business auto-reply's own instances.
+   */
+  const supportAiTickets = new DrizzleSupportAiTicketRepository(database.db);
+  const ticketAiResume = new SupportAutoResumePolicy({
+    db: database.db,
+    configs: supportAiConfigs,
+    settings: settingsResolver,
+  });
+  ticketAiRef.current = new SupportTicketAiTrigger({
+    settings: settingsResolver,
+    configs: supportAiConfigs,
+    tickets: supportAiTickets,
+    resume: ticketAiResume,
+    ids,
+    clock,
+  });
+  const supportTicketAi = new SupportTicketAiService({
+    tickets: supportAiTickets,
+    configs: supportAiConfigs,
+    chain: supportAiChain,
+    context: supportContextSource,
+    facts: supportContextReader,
+    ticketService,
+    settings: settingsResolver,
+    resume: ticketAiResume,
+    audit,
+    opsLog,
+    templates: templateResolver,
+    bots: {
+      usernameOf: async (scope, botInstanceId) =>
+        (await botInstances.findById(botInstanceId as BotInstanceId))?.username ?? null,
+    },
+    tools: {
+      reader: new DrizzleSupportAiToolReader({
+        db: database.db,
+        filesOnly: panelFilesOnlyReader,
+        trials: trialService,
+        products: productRepository,
+      }),
+      settings: new SettingsSupportAiToolSettings(settingsResolver),
+    },
+    uow,
+    scopeActivity: tenants,
+    clock,
+  });
   // Phase 4 PR-3: the support AI's own buttons under a Business message (bound to their row).
   const supportAiCallbacks = new SupportAiCallbackService({
     outbound: businessOutboundRepository,
@@ -7321,6 +7382,7 @@ export function createContainer(
   });
   const assistantLoop = new AssistantLoop(supportAssist, {
     auto: supportAutoReply,
+    tickets: supportTicketAi,
     handoffRate: new SupportHandoffRateAlert({
       jobs: supportAiJobs,
       settings: settingsResolver,
@@ -9146,6 +9208,8 @@ export function createContainer(
     supportTestConsole,
     assistantLoop,
     supportAutoReply,
+    supportTicketAi,
+    supportAiTickets,
     supportAiCallbacks,
     supportKnowledge,
     supportLearning,

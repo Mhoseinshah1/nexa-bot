@@ -4936,6 +4936,15 @@ live; the owner decides otherwise.
   is the owner's call.
 - **OQ-SAI-3-03 — voice transcription is not built (PR-3, Blocked).** A voice message gets one
   templated request to type; transcribing it needs a provider decision (cost, privacy).
+- **OQ-SAI-4-01 — no operator action returns a HARD-held ticket to the AI (PR-4).** A HARD
+  handoff in a ticket (money, security, an explicit request for a person…) is sticky by design, and
+  unlike a Business conversation there is no «سپردن دوباره به هوش مصنوعی» for a ticket yet. A ticket
+  held HARD stays with people until it is closed. Whether to add that action (and its permission)
+  is the owner's call.
+- **OQ-SAI-4-02 — analytics and the failure page do not list ticket jobs (PR-4).** The ticket AI's
+  jobs live in `support_ai_ticket_jobs`, not `support_ai_jobs`, so the resolution rate, handoff
+  reasons, knowledge-gaps report and failure page count Business chats only. Reading both tables
+  into those pages is follow-up work.
 - **OQ-SAI-6-01 — the output validator does not refuse a fabricated secret or a prompt echo
   (PR-6).** `checkOutputPolicy` owns links, numbers, handles and promises. A made-up API-key-looking
   string, or a verbatim echo of the system prompt, passes it: by design (cross-cutting item 2) no

@@ -105,9 +105,12 @@ export const TICKET_MACHINE: StateMachineDefinition<TicketStatus, TicketEvent> =
  */
 export function ticketStatusAfterMessage(
   from: TicketStatus,
-  sender: 'CUSTOMER' | 'ADMIN',
+  sender: 'CUSTOMER' | 'ADMIN' | 'AI',
 ): TicketStatus | null {
   if (from === 'CLOSED') return null;
+  // Phase 4 PR-4: an AI answer is not support's: it never moves the status, so the ticket
+  // stays in the queue a person works from until a person answers or closes it.
+  if (sender === 'AI') return from;
   const on: TicketEvent = sender === 'ADMIN' ? 'SUPPORT_REPLY' : 'CUSTOMER_REPLY';
   return TICKET_MACHINE.transitions.find((t) => t.from === from && t.on === on)?.to ?? from;
 }
@@ -141,8 +144,12 @@ export type TicketPriority = (typeof TICKET_PRIORITIES)[number];
 export const ticketPrioritySchema = z.enum(TICKET_PRIORITIES);
 export const TICKET_DEFAULT_PRIORITY: TicketPriority = 'NORMAL';
 
-/** Who wrote a message. `SYSTEM` is the conversation recording a status fact, never text. */
-export const TICKET_MESSAGE_SENDERS = ['CUSTOMER', 'ADMIN', 'SYSTEM'] as const;
+/**
+ * Who wrote a message. `SYSTEM` is the conversation recording a status fact, never text.
+ * Phase 4 PR-4: `AI` is the support assistant's reply — written by no administrator, labelled as
+ * the assistant's in every view, and never a status change.
+ */
+export const TICKET_MESSAGE_SENDERS = ['CUSTOMER', 'ADMIN', 'SYSTEM', 'AI'] as const;
 export type TicketMessageSender = (typeof TICKET_MESSAGE_SENDERS)[number];
 
 /**

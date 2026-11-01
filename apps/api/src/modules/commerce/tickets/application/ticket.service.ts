@@ -79,7 +79,9 @@ import type {
   TicketMessageRecord,
   TicketRecord,
   TicketReplyFileRecord,
+  TicketAiReplyResult,
   TicketRepository,
+  TicketSupportAiHooks,
 } from './ports.js';
 import { TICKETS_VIEW_PERMISSION } from './ticket-category.service.js';
 
@@ -150,6 +152,12 @@ export interface TicketServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /**
+   * Phase 4 PR-4: the support AI, told of a customer's message in the customer's own
+   * transaction (it enqueues a job when the owner's switch is on and nothing holds the ticket).
+   * Absent: nothing is ever enqueued.
+   */
+  readonly supportAi?: TicketSupportAiHooks;
 }
 
 /**
@@ -507,6 +515,7 @@ export class TicketService {
           },
           tx,
         );
+        await this.deps.supportAi?.customerMessagePosted(scope, { ticket, message }, tx);
         return { ticket, message, replayed: false };
       },
     );
@@ -560,7 +569,7 @@ export class TicketService {
         });
         const replay = await this.replayOf(scope, input.idempotencyKey, requestHash, ticket, tx);
         if (replay !== null) return replay;
-        return this.post(scope, actor, tx, ticket, {
+        const posted = await this.post(scope, actor, tx, ticket, {
           senderType: 'CUSTOMER',
           authorAdminId: null,
           body: content.body,
@@ -569,6 +578,14 @@ export class TicketService {
           requestHash,
           audit: 'ticket.customer_message',
         });
+        if (!posted.replayed) {
+          await this.deps.supportAi?.customerMessagePosted(
+            scope,
+            { ticket: posted.ticket, message: posted.message },
+            tx,
+          );
+        }
+        return posted;
       },
     );
   }
@@ -673,14 +690,26 @@ export class TicketService {
   async notificationFacts(
     scope: TenantContext,
     messageId: string,
-  ): Promise<{ readonly values: TemplateValues; readonly ticketId: string } | null> {
+  ): Promise<{
+    readonly values: TemplateValues;
+    readonly ticketId: string;
+    readonly templateKey?: 'bot.ticket.ai_replied';
+  } | null> {
     const message = await this.deps.tickets.findMessageById(scope, messageId);
-    if (message === null || message.senderType !== 'ADMIN' || message.body === null) return null;
+    if (
+      message === null ||
+      (message.senderType !== 'ADMIN' && message.senderType !== 'AI') ||
+      message.body === null
+    ) {
+      return null;
+    }
     const ticket = await this.deps.tickets.findById(scope, message.ticketId);
     if (ticket === null) return null;
     return {
       values: { number: ticket.number, category: ticket.categoryTitle, text: message.body },
       ticketId: ticket.id,
+      // Phase 4 PR-4: an AI answer is labelled as the assistant's, never as support's.
+      ...(message.senderType === 'AI' ? { templateKey: 'bot.ticket.ai_replied' as const } : {}),
     };
   }
 
@@ -996,6 +1025,84 @@ export class TicketService {
     );
   }
 
+  /**
+   * Phase 4 PR-4 — the support AI's answer, written into a ticket in the CALLER's transaction
+   * (the assistant's final transaction, which has already re-checked the hold and the job).
+   *
+   * - The ticket is read under its row lock and must be this customer's and not CLOSED; a blocked
+   *   customer gets nothing. Nothing here throws for a business reason: a refusal is a result,
+   *   so the job can come to an outcome.
+   * - The row is sender `AI` (never an administrator's), idempotent on the job, and does not
+   *   move the status: the ticket stays in the queue a person works from.
+   * - The customer is told through the same `TICKET_REPLY` lane row an administrator's reply
+   *   uses; the lane renders it with the AI template.
+   */
+  async postAiReply(
+    scope: TenantContext,
+    input: {
+      readonly ticketId: string;
+      readonly customerId: string;
+      readonly body: string;
+      readonly jobId: string;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<TicketAiReplyResult> {
+    const scoped = tx as TransactionScope;
+    const actor = systemJobActor(`support-ai-ticket:${input.jobId}`, input.jobId as CorrelationId);
+    if (!(await this.deps.scopeActivity.scopeIsActive(scope, scoped))) {
+      return { outcome: 'REFUSED', reason: 'SCOPE_INACTIVE' };
+    }
+    await this.deps.guard.check(scope, actor, CUSTOMER_PERMISSION, scoped);
+    const body = normalizeTicketText(input.body);
+    if (body === null || !isTicketTextWithinBound(body)) {
+      return { outcome: 'REFUSED', reason: 'INVALID' };
+    }
+    const id = uuidV7Schema.safeParse(input.ticketId);
+    const ticket = id.success
+      ? await this.deps.tickets.findByIdForUpdate(scope, id.data, scoped)
+      : null;
+    if (ticket === null || ticket.customerId !== input.customerId) {
+      return { outcome: 'REFUSED', reason: 'NOT_FOUND' };
+    }
+    if (ticket.status === 'CLOSED') return { outcome: 'REFUSED', reason: 'CLOSED' };
+    const customer = await this.deps.customers.findById(scope, ticket.customerId, scoped);
+    if (customer === null) return { outcome: 'REFUSED', reason: 'NOT_FOUND' };
+    if (customer.status === 'BLOCKED') return { outcome: 'REFUSED', reason: 'BLOCKED' };
+    const key = `support-ai:ticket-reply:${input.jobId}`;
+    const requestHash = hashRequest({ op: 'ai-reply', ticketId: ticket.id, body });
+    const written = await this.deps.tickets.findMessageByKey(scope, key, scoped);
+    if (written !== null) {
+      this.assertSameRequest(written, requestHash);
+      return { outcome: 'POSTED', message: written, replayed: true };
+    }
+    if (
+      (await this.deps.tickets.countMessages(scope, ticket.id, scoped)) >=
+      TICKET_MESSAGES_MAX_PER_TICKET
+    ) {
+      return { outcome: 'REFUSED', reason: 'FULL' };
+    }
+    const posted = await this.post(scope, actor, scoped, ticket, {
+      senderType: 'AI',
+      authorAdminId: null,
+      body,
+      attachment: null,
+      idempotencyKey: key,
+      requestHash,
+      audit: 'ticket.ai_reply',
+    });
+    await this.deps.notifier.notifyThrough(
+      scope,
+      ticket.customerId,
+      ticket.botInstanceId,
+      'TICKET_REPLY',
+      posted.message.id,
+      input.now,
+      scoped,
+    );
+    return { outcome: 'POSTED', message: posted.message, replayed: false };
+  }
+
   /** Close, reopen or triage: the target status, on the one edge the machine declares. */
   async setStatus(
     scope: TenantContext,
@@ -1309,7 +1416,7 @@ export class TicketService {
     tx: TransactionScope,
     ticket: TicketRecord,
     input: {
-      readonly senderType: 'CUSTOMER' | 'ADMIN';
+      readonly senderType: 'CUSTOMER' | 'ADMIN' | 'AI';
       readonly authorAdminId: AdminId | null;
       readonly body: string | null;
       readonly attachment: TicketAttachmentRecord | null;
