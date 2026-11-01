@@ -1,27 +1,23 @@
-# Handoff — Phase 4 (Support AI, `NEXA-PHASE4-SAI.md` + owner's cross-cutting hardening addition) — IN PROGRESS
+# Handoff — Phase 4 (Support AI) — DONE, STOPPED (Phase 5 next, NEW session)
 
-Resume: re-read the owner's Phase 4 prompt (session upload `NEXA-PHASE4-SAI.md`, the version WITH
-the "Cross-cutting: manipulation / social-engineering hardening" section) and this block.
+Resume: the owner starts Phase 5 in a new session. Read this block, then the older blocks below.
 
-- main = e0f6f31 (after #371 PR-4; #369 PR-3 84e1f58; #367 PR-2 48d2db2; #366 PR-5 e67879b; #365 PR-1 a8fb982). CI green 23/23 on each merged head. Migrations end at 0301.
-- PR-4 `feat/sai-bot-tickets` #371 MERGED (e0f6f31): ticket AI behind support.ai.tickets_enabled (OFF) + AUTO_REPLY_SAFE. Contract 3f1e428 (enable permission), fix 0038531 (CI ddl/web + Codex 2 P1 + 3 P2). One integration shard (gift-cards-http.test.ts:172, untouched code) failed once and passed on the single re-run — flaky, for the owner.
-- PR-6 `chore/sai-eval` #370 OPEN (fix 598771d), main being merged in; merges last.
-- PR-3 `feat/sai-actions` #369 MERGED (84e1f58): tools/deep links/buttons behind support.ai.actions_enabled (OFF). Codex 3 P2 + CI (tb10 table, icon slots) + lead D12 (trial link → menu) + forwarded-link ownership test in fix 5707539.
-
-- PR-2 `feat/sai-knowledge-live` #367 MERGED (48d2db2): Codex P1 credential URLs + 7 P2 + CI loop label + lead D8 wiring test in fix 133821d; migration renumbered 0297→0299 (byte-identical).
-- PR-5 `feat/sai-admin-ux` #366 MERGED (e67879b): readiness card, test console, model picker, bulk return, analytics/gaps, runbook + Persian owner guide. Codex 4 P2 + CI web fixes + lead D6 in fix commit e31f57c.
-
-- PR-1 `fix/sai-handoff-policy` #365 MERGED (also brought `docs/round-reports/phase-3.md` into main).
-  Codex: 4 P2 (money window stops at business reply; job lease covers 2 generations; sticky takeover
-  for SOFT HUMAN_ACTIVE in Web Admin; cited-service flag on NO_ACTION close) + lead D3 (promise phrase,
-  not bare word) — one fix commit 2957956.
-- In flight (stacked on PR-1's head, origin/main to be merged in): `feat/sai-knowledge-live` (PR-2, Opus,
-  /home/user/wt-sai2, DB nexa_sai2), `feat/sai-admin-ux` (PR-5, Sonnet, /home/user/wt-sai5, DB nexa_sai5).
-- Next: PR-2 → PR-3 `feat/sai-actions` (Opus; cross-cutting item 1 tool scoping + tool rate limit) →
-  PR-4 `feat/sai-bot-tickets` (Sonnet) → PR-6 `chore/sai-eval` (Sonnet; ≥40 attack scenarios). PR-5 parallel.
-- Decisions taken so far (D1 hardening split PR-1/PR-3; D2 stacking; D3 promise phrase; D4 ACCOUNT_UNDER_REVIEW
-  hard, SUSPICIOUS_PROBING soft) go into `docs/round-reports/phase-4.md` at the end.
-- Branches to delete after the round (owner): `fix/sai-handoff-policy`, `feat/sai-admin-ux`, `feat/sai-knowledge-live`, `feat/sai-actions`, `feat/sai-bot-tickets`, `wip/feat/sai-bot-tickets` (container-restart backup).
+- main = 0d25a29 (after #372). Phase 4 merges, in order: #365 PR-1 a8fb982, #366 PR-5 e67879b, #367 PR-2 48d2db2,
+  #369 PR-3 84e1f58, #371 PR-4 e0f6f31, #370 PR-6 dfd14a2, plus owner-requested #372 (gift-card test, 0d25a29).
+  CI green 23/23 on every merged head. Migrations end at 0301.
+- Round report: `docs/round-reports/phase-4.md` on THIS branch — carry it into main with Phase 5's first PR (D20).
+- Owner report posted: https://github.com/Mhoseinshah1/nexa-bot/issues/358#issuecomment-6563735102
+- OFF by default (owner turns on in Web Admin): support.ai.actions_enabled, support.ai.tickets_enabled,
+  support.knowledge.auto_refresh, support.ai.label_enabled. Buttons on Business messages unverified live (OQ-SAI-3-01).
+- Eval offline: legacy config 12/37 everyday without handoff → preset 37/37; hard 16/16; 45 attacks / 112 trials:
+  0 leaks, 0 promises, 0 tool escapes (pipeline ceiling, scripted provider).
+- Gift-card CI failure (gift-cards-http.test.ts:172): test bug, not a leak (regex matched digit groups in UUID ids);
+  fixed by #372 (D21).
+- Incident D13: one `@codex review` was posted on the owner's #368 by mistake and deleted within seconds.
+- Branches for the owner to delete (the session cannot): fix/sai-handoff-policy, feat/sai-admin-ux,
+  feat/sai-knowledge-live, feat/sai-actions, feat/sai-bot-tickets, chore/sai-eval, fix/gift-card-code-assertion,
+  wip/feat/sai-bot-tickets — plus the older list below.
+- Phase 5 note (owner, 2026-10-31) below still applies.
 
 ---
 
