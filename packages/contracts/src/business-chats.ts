@@ -814,6 +814,8 @@ export const businessChatDetailResponseSchema = z.object({
   outbound: z.array(outboundViewSchema),
   /** TB7: the conversation's handoffs, newest first. */
   escalations: z.array(businessEscalationViewSchema),
+  /** Phase 4 PR-5: the support AI's stored mode, as on the list. Optional when READ. */
+  aiMode: z.enum(SUPPORT_AI_MODES).optional().catch(undefined),
 });
 export type BusinessChatDetailResponse = z.infer<typeof businessChatDetailResponseSchema>;
 
