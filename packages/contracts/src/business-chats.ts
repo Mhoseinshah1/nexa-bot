@@ -342,9 +342,9 @@ export function businessHandoffWireReason(
     case 'INBOUND_FLOOD':
     case 'SUSPICIOUS_PROBING':
       return 'LOOP_GUARD';
-    // Phase 4 PR-1: a reply that named something the facts do not hold is a grounding failure.
-    case 'OUTPUT_POLICY':
+    // Phase 4 PR-1: a reply that named something the facts do not hold is a grounding failure;
     // Phase 4 PR-3: an answer the customer said did not help is not grounded enough either.
+    case 'OUTPUT_POLICY':
     case 'CUSTOMER_UNSATISFIED':
       return 'INSUFFICIENT_GROUNDING';
     default:

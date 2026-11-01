@@ -56,10 +56,11 @@ export type SupportAutoOutcomeClass = (typeof SUPPORT_AUTO_OUTCOME_CLASSES)[numb
 
 export function supportAutoOutcomeClass(outcome: SupportAiAutoOutcome): SupportAutoOutcomeClass {
   switch (outcome) {
+    // Phase 4 PR-1: `sent_link`, the bot's start link to an unlinked customer; Phase 4 PR-3: the
+    // three after it, a message sent and the conversation still with the AI.
     case 'sent':
     case 'sent_clarifying':
-    case 'sent_link': // Phase 4 PR-1: the bot's start link to an unlinked customer.
-    // Phase 4 PR-3: a message sent, the conversation still with the AI.
+    case 'sent_link':
     case 'sent_payment_delivered':
     case 'sent_payment_ask':
     case 'sent_unsupported_content':
@@ -72,6 +73,7 @@ export function supportAutoOutcomeClass(outcome: SupportAiAutoOutcome): SupportA
     case 'dropped_scope':
     case 'no_action': // A6: ended silently — nothing sent, nobody handed off.
       return 'DROPPED';
+    // Phase 4 PR-3: guard_tool_scope, guard_tool_rate_limit and handoff_payment_checked, last.
     case 'guard_content':
     case 'guard_customer_blocked':
     case 'guard_consecutive':
@@ -95,7 +97,6 @@ export function supportAutoOutcomeClass(outcome: SupportAiAutoOutcome): SupportA
     case 'guard_inbound_flood':
     case 'guard_output_policy':
     case 'guard_refusal_abuse':
-    // Phase 4 PR-3.
     case 'guard_tool_scope':
     case 'guard_tool_rate_limit':
     case 'handoff_payment_checked':
@@ -170,8 +171,8 @@ export function supportAutoWireOutcome(
     // Phase 4 PR-1: as its handoff reason goes as INSUFFICIENT_GROUNDING.
     case 'guard_output_policy':
       return 'guard_grounding';
+    // Phase 4 PR-3: the last three too — a message sent, the conversation still with the AI.
     case 'sent_link':
-    // Phase 4 PR-3: a message was sent and the conversation stayed with the AI.
     case 'sent_payment_delivered':
     case 'sent_payment_ask':
     case 'sent_unsupported_content':
