@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  SUPPORT_AI_GENERATIONS_PER_JOB,
   SUPPORT_AI_LIMITS,
   SUPPORT_AI_VISION_FETCH_TIMEOUT_MS,
   SUPPORT_AI_VISION_MAX_IMAGES,
@@ -123,9 +124,14 @@ describe('AssistantLoop', () => {
       providerTimeoutMs: SUPPORT_AI_LIMITS.timeoutMs.max,
       visionMaxImages: SUPPORT_AI_VISION_MAX_IMAGES,
       visionFetchTimeoutMs: SUPPORT_AI_VISION_FETCH_TIMEOUT_MS,
+      // Phase 4 PR-1 (review of PR #365): the answer and one regeneration.
+      generations: SUPPORT_AI_GENERATIONS_PER_JOB,
     });
+    expect(SUPPORT_AI_GENERATIONS_PER_JOB).toBe(2);
     expect(ASSISTANT_JOB_WORST_CASE_MS).toBe(
-      (1 + SUPPORT_AI_LIMITS.maxFallbacks) * SUPPORT_AI_LIMITS.timeoutMs.max +
+      SUPPORT_AI_GENERATIONS_PER_JOB *
+        (1 + SUPPORT_AI_LIMITS.maxFallbacks) *
+        SUPPORT_AI_LIMITS.timeoutMs.max +
         SUPPORT_AI_VISION_MAX_IMAGES * 2 * SUPPORT_AI_VISION_FETCH_TIMEOUT_MS,
     );
     expect(ASSISTANT_LEASE_MS).toBe(assistantLeaseMs(ASSISTANT_JOB_BOUNDS));

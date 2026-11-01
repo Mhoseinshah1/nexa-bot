@@ -40,7 +40,6 @@ import {
   autoImageGuard,
   autoInboundFloodGuard,
   autoMoneyGuard,
-  autoNoActionAllowed,
   autoNoActionVerdict,
   autoNoProgressGuard,
   autoPreflight,
@@ -519,8 +518,29 @@ export class SupportAutoReplyService {
       // 5b. Roadmap A6 — «مرسی», «حل شد»: a NO_ACTION on an allowlisted, non-sensitive topic, when
       // every customer line it would answer only thanks or says it is solved, ends the job
       // silently. No reply, no handoff, no ticket; the conversation stays with the AI.
-      if (autoNoActionAllowed({ decision, config, flags: context.flags, customerTexts })) {
-        return this.closeSilently(scope, job, decision, produced, customerTexts, images);
+      // Review of PR #365: the cited-service flag is supplied here too, as on the reply path.
+      const silenceFlags: AutoContextFlags = {
+        ...context.flags,
+        unreconciledCited: decision.factRefs.some(
+          (ref) => context.unreconciledAliases?.has(ref) === true,
+        ),
+      };
+      const silence = autoNoActionVerdict({ decision, config, flags: silenceFlags, customerTexts });
+      // A NO_ACTION that may not close hands off with the most specific reason (an account under
+      // review, a blocked customer…), as the in-transaction recheck of a silent close does.
+      if (decision.decision === 'NO_ACTION' && !silence.pass) {
+        return this.handOff(scope, job, silence, decision, produced, images);
+      }
+      if (silence.pass) {
+        return this.closeSilently(
+          scope,
+          job,
+          decision,
+          produced,
+          customerTexts,
+          citedServiceLabels(decision, context.aliases),
+          images,
+        );
       }
 
       // 6. NEXA decides. The clarifying streak is read from the rows, never from the model.
@@ -1038,6 +1058,8 @@ export class SupportAutoReplyService {
     decision: SupportAiDecision,
     produced: { readonly provider: SupportAiProvider; readonly model: string },
     customerTexts: readonly (string | null)[],
+    /** The panel usernames of the services the decision cites (the in-transaction recheck). */
+    citedLabels: readonly string[],
     images?: ImageWrite,
   ): Promise<AutoJobResult> {
     return this.inJobTransaction(scope, job, images, async (tx, now) => {
@@ -1052,7 +1074,10 @@ export class SupportAutoReplyService {
       if (conversation.state !== 'AI_ACTIVE') {
         return this.finish(scope, job, 'dropped_state', now, tx, { decision, produced });
       }
-      const flags = await this.deps.facts.autoGuardFlags(scope, conversation.customerId, tx);
+      const flags = await this.deps.facts.autoGuardFlags(scope, conversation.customerId, tx, {
+        since: new Date(now.getTime() - SUPPORT_AI_UNDER_REVIEW_WINDOW_DAYS * 86_400_000),
+        serviceLabels: citedLabels,
+      });
       const verdict = autoNoActionVerdict({ decision, config, flags, customerTexts });
       if (!verdict.pass) {
         return this.handOffChecked(scope, job, verdict, decision, produced, now, tx);

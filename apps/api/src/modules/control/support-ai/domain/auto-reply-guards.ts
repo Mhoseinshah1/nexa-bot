@@ -369,17 +369,24 @@ export function autoMoneyGuard(customerTexts: readonly (string | null)[]): AutoV
 }
 
 /**
- * Phase 4 PR-1 — the money guard's window: the trigger and the customer's previous TWO lines
- * only (was every line since the business last replied). A refund asked hours ago and already
- * handled by a person is not this message's matter; three lines cover «پرداخت کردم» / «ولی» /
- * «هنوز نیومد» typed as a burst.
+ * Phase 4 PR-1 — the money guard's window: the trigger and at most the customer's previous TWO
+ * lines, and only lines AFTER the business last spoke (review of PR #365: a refund a person
+ * already handled, before the conversation returned to the AI, is not this message's matter).
+ * An away or greeting message (`OFFLINE`) is not the business speaking, so the walk goes past it;
+ * three lines cover «پرداخت کردم» / «ولی» / «هنوز نیومد» typed as a burst.
  */
 export function moneyGuardWindow(
   lines: readonly { readonly origin: BusinessMessageOrigin; readonly text: string | null }[],
   triggerText: string | null,
 ): readonly (string | null)[] {
-  const inbound = lines.filter((line) => line.origin === 'INBOUND').map((line) => line.text);
-  return [triggerText, ...inbound.slice(-3)];
+  const unanswered: (string | null)[] = [];
+  for (let index = lines.length - 1; index >= 0 && unanswered.length < 3; index -= 1) {
+    const line = lines[index];
+    if (line === undefined) continue;
+    if (REPLY_ORIGINS.has(line.origin)) break;
+    if (line.origin === 'INBOUND') unanswered.push(line.text);
+  }
+  return [triggerText, ...unanswered];
 }
 
 /** The origins that mean the business answered: a walk back for the customer's lines stops there. */

@@ -182,6 +182,7 @@ function toSummary(item: BusinessConversationListItem): BusinessConversationSumm
         ? null
         : businessHandoffWireReason(conversation.handoffReason),
     handoffReasonDetail: conversation.handoffReason,
+    handoffKind: conversation.handoffKind,
     peerTelegramUserId: conversation.peerTelegramUserId,
     customer: item.customer,
     connectionStatus: businessConnectionStatus(item.connection),
