@@ -11,17 +11,20 @@ import {
   type BusinessConversationState,
   type BusinessConversationSummary,
   type BusinessEscalationTicketOutcome,
+  type BusinessHandoffKind,
   type BusinessMessageKind,
   type BusinessMessageOrigin,
   type BusinessOutboundOrigin,
   type BusinessOutboundState,
   type BusinessTakeoverReason,
+  type SupportAiMode,
 } from '@nexa/contracts';
 import {
   ApiError,
   fetchBusinessChat,
   fetchBusinessChats,
   fetchBusinessConnections,
+  resumeAllBusinessChats,
   resumeBusinessChat,
   sendBusinessChatMessage,
   takeOverBusinessChat,
@@ -203,8 +206,53 @@ function stateOf(raw: string | null): BusinessConversationState | null {
     : null;
 }
 
-function StateBadge({ value }: { value: BusinessConversationState }) {
-  return <Badge tone={STATE_TONES[value]}>{t(BUSINESS_STATE_LABELS[value])}</Badge>;
+/**
+ * Phase 4 PR-5: what «هوش مصنوعی فعال» really means depends on the stored mode. A conversation
+ * the AI holds while the mode is ASSIST_ONLY only gets drafts; while OFF it gets nothing.
+ * `mode` is undefined for a server that does not send it (then the old wording stands).
+ */
+export function stateLabelFor(
+  state: BusinessConversationState,
+  mode: SupportAiMode | undefined,
+): { readonly label: WebKey; readonly tone: Tone } {
+  if (state === 'AI_ACTIVE' && mode === 'ASSIST_ONLY') {
+    return { label: 'web.bchat_state_ai_assist', tone: 'info' };
+  }
+  if (state === 'AI_ACTIVE' && mode === 'OFF') {
+    return { label: 'web.bchat_state_ai_off', tone: 'warn' };
+  }
+  return { label: BUSINESS_STATE_LABELS[state], tone: STATE_TONES[state] };
+}
+
+function StateBadge({
+  value,
+  mode,
+}: {
+  value: BusinessConversationState;
+  mode?: SupportAiMode | undefined;
+}) {
+  const shown = stateLabelFor(value, mode);
+  return <Badge tone={shown.tone}>{t(shown.label)}</Badge>;
+}
+
+const HOLD_KIND_LABELS: Readonly<Record<BusinessHandoffKind, WebKey>> = {
+  HARD: 'web.bchat_kind_hard',
+  SOFT: 'web.bchat_kind_soft',
+};
+
+/**
+ * Phase 4 PR-5: whether a hold returns to the AI by itself. A SOFT hold does after the quiet
+ * window; HARD stays until someone returns it. A hold with no recorded kind (it predates kinds)
+ * is read as HARD, exactly as the server reads it. Nothing is drawn for an AI-held conversation.
+ */
+function HoldKindBadge({ conversation }: { conversation: BusinessConversationSummary }) {
+  if (conversation.state === 'AI_ACTIVE') return null;
+  const kind: BusinessHandoffKind = conversation.handoffKind === 'SOFT' ? 'SOFT' : 'HARD';
+  return (
+    <Badge tone={kind === 'HARD' ? 'danger' : 'info'} outline>
+      {t(HOLD_KIND_LABELS[kind])}
+    </Badge>
+  );
 }
 
 function ConnectionBadge({ status }: { status: BusinessConnectionStatus }) {
@@ -348,7 +396,16 @@ export function inboxRows(
   return rows;
 }
 
-export function BusinessChatsPage({ route, denied }: { route: Route; denied: boolean }) {
+export function BusinessChatsPage({
+  route,
+  denied,
+  mayReply = false,
+}: {
+  route: Route;
+  denied: boolean;
+  /** `business_chats.reply`: the bulk return charges what the single return charges. */
+  mayReply?: boolean;
+}) {
   const state = stateOf(route.query.get('state'));
   const chats = useInfiniteQuery({
     queryKey: ['business-chats', state],
@@ -362,6 +419,7 @@ export function BusinessChatsPage({ route, denied }: { route: Route; denied: boo
     enabled: !denied,
   });
   const rows = inboxRows(chats.data?.pages ?? []);
+  const aiMode = chats.data?.pages[0]?.aiMode;
   /*
    * The demo's inbox footer: «نمایش N» and «نمایش بیشتر» (DIFFS business-chats #2). Ten
    * rows at first (W1.8); «نمایش بیشتر» shows ten more of the conversations already read,
@@ -405,7 +463,8 @@ export function BusinessChatsPage({ route, denied }: { route: Route; denied: boo
       wrap: true,
       render: (row) => (
         <span className="bchat-state-cell">
-          <StateBadge value={row.state} />
+          <StateBadge value={row.state} mode={aiMode} />
+          <HoldKindBadge conversation={row} />
           {row.handoffReason !== null && (
             <span className="small muted">
               {t(
@@ -459,7 +518,13 @@ export function BusinessChatsPage({ route, denied }: { route: Route; denied: boo
 
   return (
     <>
-      <PageHead title={t('web.bchats_title')} subtitle={t('web.bchats_intro')} />
+      <PageHead
+        title={t('web.bchats_title')}
+        subtitle={t('web.bchats_intro')}
+        actions={mayReply && !denied ? <ResumeAllButton /> : undefined}
+      />
+      {aiMode === 'OFF' && <Banner tone="warn">{t('web.bchat_mode_off_note')}</Banner>}
+      {aiMode === 'ASSIST_ONLY' && <Banner tone="info">{t('web.bchat_mode_assist_note')}</Banner>}
 
       <Card>
         {requestable && (
@@ -621,7 +686,11 @@ export function BusinessChatDetailPage({
             ? t('web.bchat_detail')
             : `${t('web.bchat_detail')}${t('web.list_separator')}${customerName(conversation)}`
         }
-        badge={conversation === undefined ? undefined : <StateBadge value={conversation.state} />}
+        badge={
+          conversation === undefined ? undefined : (
+            <StateBadge value={conversation.state} mode={data?.aiMode} />
+          )
+        }
         subtitle={
           conversation === undefined
             ? t('web.bchat_detail_intro')
@@ -643,7 +712,7 @@ export function BusinessChatDetailPage({
               {mayReply && <ComposerCard detail={data} />}
             </div>
             <div className="stack">
-              <ControlCard detail={data} mayReply={mayReply} />
+              <ControlCard detail={data} mayReply={mayReply} aiMode={data.aiMode} />
               {data.escalations.length > 0 && <EscalationsCard detail={data} />}
               <OutboundCard detail={data} mayPropose={mayPropose} />
             </div>
@@ -666,9 +735,11 @@ function useRefresh(id: string): () => void {
 function ControlCard({
   detail,
   mayReply,
+  aiMode,
 }: {
   detail: BusinessChatDetailResponse;
   mayReply: boolean;
+  aiMode?: SupportAiMode | undefined;
 }) {
   const { conversation } = detail;
   const notify = useToast();
@@ -726,7 +797,24 @@ function ControlCard({
     <Card title={t('web.bchat_control')} hint={t(STATE_EXPLAINED[conversation.state])}>
       <KV
         items={[
-          [t('web.status'), <StateBadge key="s" value={conversation.state} />],
+          [t('web.status'), <StateBadge key="s" value={conversation.state} mode={aiMode} />],
+          [
+            t('web.bchat_hold_kind'),
+            conversation.state === 'AI_ACTIVE' ? (
+              <Dash key="k0" />
+            ) : (
+              <span key="k0">
+                <HoldKindBadge conversation={conversation} />{' '}
+                <span className="muted small">
+                  {t(
+                    conversation.handoffKind === 'SOFT'
+                      ? 'web.bchat_kind_soft_hint'
+                      : 'web.bchat_kind_hard_hint',
+                  )}
+                </span>
+              </span>
+            ),
+          ],
           [
             t('web.bchat_takeover_reason'),
             conversation.takeoverReason === null ? (
@@ -1057,5 +1145,76 @@ function ComposerCard({ detail }: { detail: BusinessChatDetailResponse }) {
         </Banner>
       )}
     </Card>
+  );
+}
+
+/**
+ * «بازگرداندن همه به هوش مصنوعی». One button, one confirmation that names what it will do -
+ * hard holds included only if the operator ticks the box - and one request: the server returns
+ * each conversation through the same single return (same permission, audit and idempotency).
+ */
+function ResumeAllButton() {
+  const queries = useQueryClient();
+  const notify = useToast();
+  const [asking, setAsking] = useState(false);
+  const [includeHard, setIncludeHard] = useState(false);
+  const submission = useSubmissionKey();
+  const run = useMutation({
+    mutationFn: (hard: boolean) =>
+      resumeAllBusinessChats({
+        idempotencyKey: submission.current({ action: 'resume-all', includeHard: hard }),
+        includeHard: hard,
+      }),
+    onSuccess: (result) => {
+      submission.settle();
+      setAsking(false);
+      setIncludeHard(false);
+      notify({
+        tone: result.failed > 0 ? 'warn' : 'ok',
+        message: `${t('web.bchat_resume_all_done')} ${result.resumed} · ${t('web.bchat_resume_all_skipped')} ${result.skippedHard} · ${t('web.bchat_resume_all_failed')} ${result.failed}${result.more ? ` — ${t('web.bchat_resume_all_more')}` : ''}`,
+      });
+      void queries.invalidateQueries({ queryKey: ['business-chats'] });
+    },
+    onError: (error) => {
+      submission.settleOn(error);
+      setAsking(false);
+      notify({ tone: 'danger', message: businessChatFault(error), error });
+    },
+  });
+  return (
+    <>
+      <button
+        type="button"
+        className="btn"
+        disabled={run.isPending}
+        onClick={() => setAsking(true)}
+      >
+        <Icon name="bots" />
+        {t('web.bchat_resume_all')}
+      </button>
+      {asking && (
+        <ConfirmDialog
+          title={t('web.bchat_resume_all_title')}
+          question={t('web.bchat_resume_all_body')}
+          detail={
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={includeHard}
+                onChange={(event) => setIncludeHard(event.target.checked)}
+              />{' '}
+              {t('web.bchat_resume_all_hard')}
+            </label>
+          }
+          confirmLabel={t('web.bchat_resume_all_confirm')}
+          cancelLabel={t('web.bchat_cancel')}
+          onConfirm={() => run.mutate(includeHard)}
+          onCancel={() => {
+            setAsking(false);
+            setIncludeHard(false);
+          }}
+        />
+      )}
+    </>
   );
 }

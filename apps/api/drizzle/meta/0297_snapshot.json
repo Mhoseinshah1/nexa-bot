@@ -1,5 +1,5 @@
 {
-  "id": "a14444b3-5342-41c7-ad1b-97ff85f82b44",
+  "id": "15993021-8bec-42c2-a45f-492078a386fe",
   "prevId": "55c2aac3-9faf-4025-ad08-34fcfce1b924",
   "version": "7",
   "dialect": "postgresql",
@@ -36771,7 +36771,7 @@
         },
         "support_ai_runs_operation_check": {
           "name": "support_ai_runs_operation_check",
-          "value": "operation IN ('CONNECTION_TEST', 'ASSIST_DRAFT', 'AUTO_DECISION', 'SUMMARY', 'LEARNING_EXTRACT')"
+          "value": "operation IN ('CONNECTION_TEST', 'ASSIST_DRAFT', 'AUTO_DECISION', 'SUMMARY', 'LEARNING_EXTRACT', 'TEST_CONSOLE')"
         },
         "support_ai_runs_provider_check": {
           "name": "support_ai_runs_provider_check",
@@ -38090,19 +38090,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "replaces_article_id": {
-          "name": "replaces_article_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "assisted": {
-          "name": "assisted",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
         "reviewed_by_admin_id": {
           "name": "reviewed_by_admin_id",
           "type": "uuid",
@@ -38161,7 +38148,7 @@
             }
           ],
           "isUnique": true,
-          "where": "state = 'PENDING'",
+          "where": "reject_reason IS DISTINCT FROM 'SENSITIVE_CONTENT'",
           "concurrently": false,
           "method": "btree",
           "with": {}

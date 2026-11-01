@@ -14,6 +14,7 @@ import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
   SUPPORT_AI_ASSIST_ROUTES,
+  SUPPORT_AI_CONSOLE_ROUTES,
   SUPPORT_AI_ROUTES,
   SUPPORT_ANALYTICS_ROUTES,
   routePattern,
@@ -23,6 +24,10 @@ import {
   type SupportAiConfigResponse,
   type SupportAiDraftView,
   type SupportAiTestResponse,
+  type SupportHandoffQuestionsResponse,
+  type SupportKnowledgeGapsResponse,
+  type SupportReadinessResponse,
+  type SupportTestConsoleResponse,
   type SupportAiUsageResponse,
   type SupportAnalyticsResponse,
 } from '@nexa/contracts';
@@ -109,6 +114,48 @@ export class SupportAiController {
       singleValued((query ?? {}) as Record<string, unknown>),
     );
     return this.container.supportAnalytics.analytics(scope, actor, input);
+  }
+
+  /** Phase 4 PR-5: the readiness card (`support_ai.configure`); read-only. */
+  @Get(SUPPORT_AI_CONSOLE_ROUTES.readiness)
+  async readiness(@Req() request: FastifyRequest): Promise<SupportReadinessResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    return this.container.supportInsights.readiness(scope, actor);
+  }
+
+  /**
+   * Phase 4 PR-5: «امتحان یک سؤال». Runs the stored configuration through the decision
+   * pipeline and its guards and reports what WOULD happen. Sends nothing to anyone; the service
+   * has no outbound port. `support_ai.configure`, audited.
+   */
+  @Post(SUPPORT_AI_CONSOLE_ROUTES.testConsole)
+  async testConsole(
+    @Req() request: FastifyRequest,
+    @Body() body: unknown,
+  ): Promise<SupportTestConsoleResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    return this.container.supportTestConsole.run(scope, actor, body);
+  }
+
+  /** Phase 4 PR-5: the customers' questions behind one handoff reason (last 30 days). */
+  @Get(SUPPORT_AI_CONSOLE_ROUTES.handoffQuestions)
+  async handoffQuestions(
+    @Req() request: FastifyRequest,
+    @Query() query: unknown,
+  ): Promise<SupportHandoffQuestionsResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    return this.container.supportInsights.handoffQuestions(
+      scope,
+      actor,
+      singleValued((query ?? {}) as Record<string, unknown>),
+    );
+  }
+
+  /** Phase 4 PR-5: clustered questions the AI could not answer from approved content. */
+  @Get(SUPPORT_AI_CONSOLE_ROUTES.knowledgeGaps)
+  async knowledgeGaps(@Req() request: FastifyRequest): Promise<SupportKnowledgeGapsResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    return this.container.supportInsights.knowledgeGaps(scope, actor);
   }
 
   /** TB5: the recent drafts of one conversation (`support_ai.assist`). */
