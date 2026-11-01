@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   SUPPORT_KNOWLEDGE_BUILD_ERROR_CODES,
   SUPPORT_KNOWLEDGE_BUILD_LIMITS,
@@ -12,6 +13,8 @@ import {
   type IdGenerator,
   type IdempotencyStore,
   type OperationalEventRecorder,
+  type PermissionKey,
+  type SettingKey,
   type ScopeContext,
   type SupportKnowledgeBuildSourceType,
   type TenantContext,
@@ -150,35 +153,14 @@ export class SupportKnowledgeBuildService {
       }
     }
     // Read OUTSIDE the transaction: a source read takes no lock and changes nothing.
-    const collection = await this.deps.sources.collect(scope);
-    const collected = collection.items.slice(0, SUPPORT_KNOWLEDGE_BUILD_LIMITS.proposals);
-    // What the per-build bound drops is counted, and its types are incomplete: no RETIRE for
-    // an article whose source is merely beyond the bound (N2, S2).
-    const overflow = collection.items.slice(SUPPORT_KNOWLEDGE_BUILD_LIMITS.proposals);
-    const capped = collection.capped + overflow.length;
-    const incomplete = new Set<SupportKnowledgeBuildSourceType>([
-      ...collection.incomplete,
-      ...overflow.map((item) => item.sourceType),
-    ]);
-    // A source the allowlist still yields is present, whether or not the scrubber excludes it
-    // from the change-set below: an excluded source is not a retired one.
-    const present = new Set(collection.items.map((i) => sourceRef(i.sourceType, i.sourceKey)));
-    // Fail closed (TB9 × TB8 review): every article passes `assertClean`, so a source item the
-    // scrubber matches — a link, a host, a support handle, a card or phone in payment
-    // instructions — is EXCLUDED from the change-set rather than proposed and refused at
-    // apply. Only the count and the kinds are recorded, never the text (OQ-TB-66).
-    const excludedKinds = new Set<string>();
-    // L3: the installation's own support handles are not personal data; every other handle is.
-    const allowedHandles = await this.supportHandles(scope);
-    const items = collected.filter((item) => {
-      const kinds = detectSensitive(
-        [item.content.title, item.content.body, item.content.tags.join(' ')].join('\n'),
-        { allowedHandles },
-      );
-      for (const kind of kinds) excludedKinds.add(kind);
-      return kinds.length === 0;
-    });
-    const excluded = { count: collected.length - items.length, kinds: [...excludedKinds].sort() };
+    const {
+      items,
+      present,
+      incomplete,
+      capped,
+      excluded,
+      truncated: collectedTruncated,
+    } = await this.collectItems(scope);
     const id = this.deps.ids.uuid();
     return runAuthorizedMutation(
       this.mutationDeps(),
@@ -189,26 +171,7 @@ export class SupportKnowledgeBuildService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         const now = this.deps.clock.now();
-        const built = (await this.deps.repository.listBuilt(scope, tx)).flatMap(
-          (row): BuiltArticle[] =>
-            row.sourceType === null || row.sourceKey === null
-              ? []
-              : [
-                  {
-                    id: row.id,
-                    sourceType: row.sourceType,
-                    sourceKey: row.sourceKey,
-                    state: row.state,
-                    revision: row.revision,
-                    builtRevision: row.builtRevision,
-                    builtHash: row.builtHash,
-                    title: row.title,
-                    body: row.body,
-                    category: row.category,
-                    tags: row.tags,
-                  },
-                ],
-        );
+        const built = await this.builtArticles(scope, tx);
         const drafts = diffBuild(items, built, { present, incomplete });
         const proposals: NewProposal[] = drafts.map((draft) => ({
           id: this.deps.ids.uuid(),
@@ -229,12 +192,12 @@ export class SupportKnowledgeBuildService {
           conflict: proposals.filter((p) => p.kind === 'CONFLICT').length,
           retire: proposals.filter((p) => p.kind === 'RETIRE').length,
         };
-        const truncated = collection.truncated;
+        const truncated = collectedTruncated;
         await this.deps.repository.supersedeOpenBuild(scope, now, tx);
         try {
           await this.deps.repository.insertBuild(
             scope,
-            { id, createdByAdminId: actor.id, counts, truncated, capped, now },
+            { id, createdByAdminId: adminOf(actor), counts, truncated, capped, now },
             proposals,
             tx,
           );
@@ -432,7 +395,7 @@ export class SupportKnowledgeBuildService {
           throw errors.internal('support_knowledge.conflict_shape', 'A conflict names no article.');
         }
         if (command.choice === 'TAKE_BUILD') {
-          assertClean(proposal.content, await this.supportHandles(scope));
+          assertClean(proposal.content, await this.supportHandles(scope), proposal.sourceType);
           const after = await this.deps.repository.rewriteBuilt(
             scope,
             articleId,
@@ -446,7 +409,7 @@ export class SupportKnowledgeBuildService {
               id: this.deps.ids.uuid(),
               article: after,
               origin: 'BUILD',
-              reviewerAdminId: actor.id,
+              reviewerAdminId: adminOf(actor),
               now,
             },
             tx,
@@ -468,7 +431,7 @@ export class SupportKnowledgeBuildService {
             kind: 'CONFLICT',
             to: command.choice === 'TAKE_BUILD' ? 'APPLIED' : 'SKIPPED',
             resolution: command.choice,
-            adminId: actor.id,
+            adminId: adminOf(actor),
             now,
           },
           tx,
@@ -503,6 +466,260 @@ export class SupportKnowledgeBuildService {
     );
   }
 
+  /**
+   * Phase 4 PR-2 — the AUTOMATIC refresh (`support.knowledge.auto_refresh`, off by default),
+   * driven by the worker's `SupportKnowledgeRefreshLoop` as `SYSTEM_JOB`: two minutes after the
+   * owner's content stops changing, and once a night.
+   *
+   * The same build as «run» — the allowlisted sources through the business allowlist, the same
+   * diff — and, in the SAME transaction, the apply of every ADD, UPDATE and RETIRE: the sources
+   * are all owner-owned content, so nothing here needs a reviewer. A CONFLICT (a reviewer edited
+   * the article since) is never applied: it stays PENDING in the build for a person. MANUAL and
+   * LEARNED knowledge is never matched, so a lesson learned from a chat still needs approval.
+   * Every per-proposal guard of «apply» holds: an article that moved becomes a CONFLICT, one
+   * retired since is skipped.
+   *
+   * Nothing is written when the diff changes nothing. Charges `maintenance.run` (what a
+   * `SYSTEM_JOB` holds); idempotent by the diff's own signature (a replica that computed the same
+   * change answers with the first one's result); scope activity is read inside the transaction;
+   * audited as `support_knowledge.build.auto_refresh`. No customer is told anything.
+   */
+  async autoRefresh(
+    scope: TenantContext,
+    actor: ActorContext,
+  ): Promise<KnowledgeAutoRefreshResult> {
+    if (!(await this.deps.settings.valueOf<boolean>(scope, SUPPORT_KNOWLEDGE_AUTO_REFRESH_KEY))) {
+      return { outcome: 'OFF' };
+    }
+    const denial = {
+      action: 'support_knowledge.build.auto_refresh',
+      entityType: 'SupportKnowledgeBuild',
+      entityId: null,
+    };
+    const collected = await this.collectItems(scope);
+    const preview = diffBuild(collected.items, await this.builtArticles(scope), {
+      present: collected.present,
+      incomplete: collected.incomplete,
+    });
+    const signature = buildSignature(preview);
+    if (signature === null) return { outcome: 'UNCHANGED' };
+    const idempotencyKey = `support_knowledge.auto_refresh:${signature}`;
+    const requestHash = hashRequest({ action: denial.action, signature });
+    const replay = await this.deps.idempotency.find<KnowledgeAutoRefreshResult>(
+      scope,
+      actor.surface,
+      idempotencyKey,
+      requestHash,
+    );
+    if (replay !== null) return replay.result;
+    const id = this.deps.ids.uuid();
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      SUPPORT_KNOWLEDGE_AUTO_REFRESH_PERMISSION,
+      denial,
+      async (tx) => {
+        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
+          return { outcome: 'INACTIVE' } as const;
+        }
+        const now = this.deps.clock.now();
+        // Re-diffed inside the transaction: the articles as they are NOW decide.
+        const drafts = diffBuild(collected.items, await this.builtArticles(scope, tx), {
+          present: collected.present,
+          incomplete: collected.incomplete,
+        });
+        if (buildSignature(drafts) === null) return { outcome: 'UNCHANGED' } as const;
+        const proposals: NewProposal[] = drafts.map((draft) => ({
+          id: this.deps.ids.uuid(),
+          sourceType: draft.item.sourceType,
+          sourceKey: draft.item.sourceKey,
+          kind: draft.kind,
+          content: draft.item.content,
+          hash: draft.hash,
+          articleId: draft.article?.id ?? null,
+          baseRevision: draft.article?.revision ?? null,
+          baseTitle: draft.article?.title ?? null,
+          baseBody: draft.article?.body ?? null,
+        }));
+        const counts: KnowledgeBuildCounts = {
+          add: proposals.filter((p) => p.kind === 'ADD').length,
+          update: proposals.filter((p) => p.kind === 'UPDATE').length,
+          unchanged: proposals.filter((p) => p.kind === 'UNCHANGED').length,
+          conflict: proposals.filter((p) => p.kind === 'CONFLICT').length,
+          retire: proposals.filter((p) => p.kind === 'RETIRE').length,
+        };
+        await this.deps.repository.supersedeOpenBuild(scope, now, tx);
+        try {
+          await this.deps.repository.insertBuild(
+            scope,
+            {
+              id,
+              createdByAdminId: null,
+              counts,
+              truncated: collected.truncated,
+              capped: collected.capped,
+              now,
+            },
+            proposals,
+            tx,
+          );
+        } catch (error) {
+          // A person's «run» (or another replica) committed an OPEN build meanwhile: theirs
+          // stands; the next pass diffs again.
+          if (isUniqueViolation(error, 'support_knowledge_builds_open_key')) {
+            return { outcome: 'BUSY' } as const;
+          }
+          throw error;
+        }
+        const targets = (await this.deps.repository.proposals(scope, id, tx)).filter(
+          (p) =>
+            p.state === 'PENDING' &&
+            (p.kind === 'ADD' || p.kind === 'UPDATE' || p.kind === 'RETIRE'),
+        );
+        let applied = 0;
+        let conflicted = 0;
+        let skipped = 0;
+        for (const target of targets) {
+          const outcome =
+            target.kind === 'ADD'
+              ? await this.applyAdd(scope, actor, target, now, tx)
+              : target.kind === 'UPDATE'
+                ? await this.applyUpdate(scope, actor, target, now, tx)
+                : await this.applyRetire(scope, actor, target, now, tx);
+          if (outcome === 'APPLIED') applied += 1;
+          if (outcome === 'CONFLICT') conflicted += 1;
+          if (outcome === 'SKIPPED') skipped += 1;
+        }
+        await this.deps.repository.recountBuild(scope, id, now, tx);
+        const result: KnowledgeAutoRefreshResult = {
+          outcome: 'REFRESHED',
+          buildId: id,
+          applied,
+          conflicted: conflicted + counts.conflict,
+          skipped,
+          capped: collected.capped,
+        };
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: denial.action,
+            entityType: 'SupportKnowledgeBuild',
+            entityId: id,
+            before: null,
+            after: {
+              ...counts,
+              applied,
+              conflicted: result.conflicted,
+              skipped,
+              excluded: collected.excluded,
+              truncated: collected.truncated,
+              capped: collected.capped,
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          actor.surface,
+          idempotencyKey,
+          requestHash,
+          result,
+          tx,
+        );
+        return result;
+      },
+    );
+  }
+
+  /**
+   * Phase 4 PR-2: the signature of the change the automatic refresh WOULD apply now, or null
+   * (the setting off, or nothing changes). A READ: the debounce compares it between passes.
+   */
+  async pendingRefreshSignature(scope: TenantContext): Promise<string | null> {
+    if (!(await this.deps.settings.valueOf<boolean>(scope, SUPPORT_KNOWLEDGE_AUTO_REFRESH_KEY))) {
+      return null;
+    }
+    const collected = await this.collectItems(scope);
+    return buildSignature(
+      diffBuild(collected.items, await this.builtArticles(scope), {
+        present: collected.present,
+        incomplete: collected.incomplete,
+      }),
+    );
+  }
+
+  /**
+   * The allowlisted sources' items, filtered through each source's business allowlist
+   * (`detectSensitive` with `business`): what «run» and the automatic refresh both diff.
+   */
+  private async collectItems(scope: TenantContext) {
+    const collection = await this.deps.sources.collect(scope);
+    const collected = collection.items.slice(0, SUPPORT_KNOWLEDGE_BUILD_LIMITS.proposals);
+    // What the per-build bound drops is counted, and its types are incomplete: no RETIRE for
+    // an article whose source is merely beyond the bound (N2, S2).
+    const overflow = collection.items.slice(SUPPORT_KNOWLEDGE_BUILD_LIMITS.proposals);
+    const capped = collection.capped + overflow.length;
+    const incomplete = new Set<SupportKnowledgeBuildSourceType>([
+      ...collection.incomplete,
+      ...overflow.map((item) => item.sourceType),
+    ]);
+    // A source the allowlist still yields is present, whether or not the scrubber excludes it
+    // from the change-set below: an excluded source is not a retired one.
+    const present = new Set(collection.items.map((i) => sourceRef(i.sourceType, i.sourceKey)));
+    // Fail closed (TB9 × TB8 review): every article passes `assertClean`, so a source item the
+    // scrubber matches is EXCLUDED from the change-set rather than proposed and refused at
+    // apply. Phase 4 PR-2: through the source's BUSINESS ALLOWLIST — what it publishes to its
+    // customers (links, prices, a payment route's card number) stays; a subscription link, a
+    // secret, a phone, an e-mail or a stranger's handle still excludes the item. Only the count
+    // and the kinds are recorded, never the text (OQ-TB-66).
+    const excludedKinds = new Set<string>();
+    // L3: the installation's own support handles are not personal data; every other handle is.
+    const allowedHandles = await this.supportHandles(scope);
+    const items = collected.filter((item) => {
+      const kinds = detectSensitive(
+        [item.content.title, item.content.body, item.content.tags.join(' ')].join('\n'),
+        { allowedHandles, business: item.sourceType },
+      );
+      for (const kind of kinds) excludedKinds.add(kind);
+      return kinds.length === 0;
+    });
+    return {
+      items,
+      present,
+      incomplete,
+      capped,
+      truncated: collection.truncated,
+      excluded: { count: collected.length - items.length, kinds: [...excludedKinds].sort() },
+    };
+  }
+
+  /** The NEXA_BUILD articles, as the diff reads them. */
+  private async builtArticles(scope: ScopeContext, tx?: TransactionScope): Promise<BuiltArticle[]> {
+    return (await this.deps.repository.listBuilt(scope, tx)).flatMap((row): BuiltArticle[] =>
+      row.sourceType === null || row.sourceKey === null
+        ? []
+        : [
+            {
+              id: row.id,
+              sourceType: row.sourceType,
+              sourceKey: row.sourceKey,
+              state: row.state,
+              revision: row.revision,
+              builtRevision: row.builtRevision,
+              builtHash: row.builtHash,
+              title: row.title,
+              body: row.body,
+              category: row.category,
+              tags: row.tags,
+            },
+          ],
+    );
+  }
+
   // -------------------------------------------------------------------------------
 
   /** Claims the proposal first: a concurrent apply of the same proposal adds nothing. */
@@ -523,13 +740,13 @@ export class SupportKnowledgeBuildService {
     const claimed = await this.deps.repository.decideProposal(
       scope,
       target.id,
-      { kind: 'ADD', to: 'APPLIED', resolution: null, adminId: actor.id, now },
+      { kind: 'ADD', to: 'APPLIED', resolution: null, adminId: adminOf(actor), now },
       tx,
     );
     // A concurrent apply of the same build took it: that one answers for it.
     if (!claimed) return 'NONE';
     // The backstop: no write path puts unclean text in an article, the build's included.
-    assertClean(target.content, await this.supportHandles(scope));
+    assertClean(target.content, await this.supportHandles(scope), target.sourceType);
     const article = await this.deps.repository.insertArticle(
       scope,
       {
@@ -539,7 +756,7 @@ export class SupportKnowledgeBuildService {
         content: target.content,
         revision: 1,
         candidateId: null,
-        createdByAdminId: actor.id,
+        createdByAdminId: adminOf(actor),
         built: { sourceType: target.sourceType, sourceKey: target.sourceKey, hash: target.hash },
         now,
       },
@@ -547,7 +764,7 @@ export class SupportKnowledgeBuildService {
     );
     await this.deps.repository.insertRevision(
       scope,
-      { id: this.deps.ids.uuid(), article, origin: 'BUILD', reviewerAdminId: actor.id, now },
+      { id: this.deps.ids.uuid(), article, origin: 'BUILD', reviewerAdminId: adminOf(actor), now },
       tx,
     );
     return 'APPLIED';
@@ -562,7 +779,7 @@ export class SupportKnowledgeBuildService {
     tx: TransactionScope,
   ): Promise<ApplyOutcome> {
     if (target.articleId === null || target.baseRevision === null) return 'NONE';
-    assertClean(target.content, await this.supportHandles(scope));
+    assertClean(target.content, await this.supportHandles(scope), target.sourceType);
     const after = await this.deps.repository.rewriteBuilt(
       scope,
       target.articleId,
@@ -595,13 +812,19 @@ export class SupportKnowledgeBuildService {
     const decided = await this.deps.repository.decideProposal(
       scope,
       target.id,
-      { kind: 'UPDATE', to: 'APPLIED', resolution: null, adminId: actor.id, now },
+      { kind: 'UPDATE', to: 'APPLIED', resolution: null, adminId: adminOf(actor), now },
       tx,
     );
     if (!decided) throw baseMoved();
     await this.deps.repository.insertRevision(
       scope,
-      { id: this.deps.ids.uuid(), article: after, origin: 'BUILD', reviewerAdminId: actor.id, now },
+      {
+        id: this.deps.ids.uuid(),
+        article: after,
+        origin: 'BUILD',
+        reviewerAdminId: adminOf(actor),
+        now,
+      },
       tx,
     );
     return 'APPLIED';
@@ -646,7 +869,7 @@ export class SupportKnowledgeBuildService {
     const decided = await this.deps.repository.decideProposal(
       scope,
       target.id,
-      { kind: 'RETIRE', to: 'APPLIED', resolution: null, adminId: actor.id, now },
+      { kind: 'RETIRE', to: 'APPLIED', resolution: null, adminId: adminOf(actor), now },
       tx,
     );
     if (!decided) throw baseMoved();
@@ -677,7 +900,7 @@ export class SupportKnowledgeBuildService {
     const closed = await this.deps.repository.decideProposal(
       scope,
       target.id,
-      { kind: target.kind, to: 'SKIPPED', resolution: null, adminId: actor.id, now },
+      { kind: target.kind, to: 'SKIPPED', resolution: null, adminId: adminOf(actor), now },
       tx,
     );
     return closed ? 'SKIPPED' : 'NONE';
@@ -749,6 +972,62 @@ export class SupportKnowledgeBuildService {
       clock: this.deps.clock,
     };
   }
+}
+
+/** Phase 4 PR-2: the setting behind the automatic refresh (default false). */
+export const SUPPORT_KNOWLEDGE_AUTO_REFRESH_KEY =
+  'support.knowledge.auto_refresh' satisfies SettingKey;
+
+/** Phase 4 PR-2: what the automatic refresh charges — what a `SYSTEM_JOB` holds. */
+export const SUPPORT_KNOWLEDGE_AUTO_REFRESH_PERMISSION: PermissionKey = 'maintenance.run';
+
+/** Phase 4 PR-2: what one automatic refresh came to. */
+export type KnowledgeAutoRefreshResult =
+  | { readonly outcome: 'OFF' | 'UNCHANGED' | 'INACTIVE' | 'BUSY' }
+  | {
+      readonly outcome: 'REFRESHED';
+      readonly buildId: string;
+      readonly applied: number;
+      readonly conflicted: number;
+      readonly skipped: number;
+      readonly capped: number;
+    };
+
+/**
+ * Phase 4 PR-2: a diff's identity — the source, kind, content hash and article revision of every
+ * proposal that changes something (UNCHANGED left out), sorted — or null when nothing changes. Two passes over
+ * the same change have the same signature: the debounce compares it, and the refresh is keyed
+ * by it.
+ */
+export function buildSignature(
+  drafts: readonly {
+    readonly item: BuildItem;
+    readonly kind: string;
+    readonly hash: string;
+    readonly article: { readonly id: string; readonly revision: number } | null;
+  }[],
+): string | null {
+  // The article's revision is part of it: the same text proposed again after an apply (A → B →
+  // A → B) is a new change, never a replay of the first one.
+  const changes = drafts
+    .filter((draft) => draft.kind !== 'UNCHANGED')
+    .map(
+      (draft) =>
+        `${draft.item.sourceType}:${draft.item.sourceKey}:${draft.kind}:${draft.hash}:${
+          draft.article === null ? '-' : `${draft.article.id}@${String(draft.article.revision)}`
+        }`,
+    )
+    .sort();
+  if (changes.length === 0) return null;
+  return createHash('sha256').update(changes.join('\n')).digest('hex').slice(0, 32);
+}
+
+/**
+ * The admin a build row names: the acting administrator, or none for the automatic refresh — a
+ * `SYSTEM_JOB`'s id is a job name, never an `admins` row.
+ */
+function adminOf(actor: ActorContext): string | null {
+  return actor.type === 'SYSTEM_JOB' ? null : actor.id;
 }
 
 function baseMoved() {

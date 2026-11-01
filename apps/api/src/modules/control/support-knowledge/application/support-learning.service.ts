@@ -43,6 +43,7 @@ import type { DrizzleSupportAiConfigRepository } from '../../support-ai/infrastr
 import { findDuplicate, normalizeTitle } from '../domain/dedupe.js';
 import { learningSystemPrompt, learningUserMessage } from '../domain/learning-prompt.js';
 import { scrubSensitive } from '../domain/scrubber.js';
+import { normalizePersian } from '../../../commerce/support-context/domain/persian-text.js';
 import { SUPPORT_KNOWLEDGE_REVIEW_PERMISSION } from './support-knowledge.service.js';
 import { readSupportTranscript } from '../../support-ai/application/support-transcript.js';
 import type {
@@ -137,6 +138,8 @@ interface LearningSource {
   readonly text: string;
   /** The administrator who wrote it; null for a message typed in the Telegram app. */
   readonly authorAdminId: string | null;
+  /** Phase 4 PR-2: an AI draft a person sent (Assist), not a person's own words. */
+  readonly assisted: boolean;
 }
 
 function keyOf(source: Pick<LearningSource, 'kind' | 'id'>): string {
@@ -150,7 +153,42 @@ function replySource(row: BusinessOutboundRecord): LearningSource {
     conversationId: row.conversationId,
     text: row.body ?? '',
     authorAdminId: row.createdByAdminId,
+    assisted: row.origin === 'ASSIST',
   };
+}
+
+/**
+ * Phase 4 PR-2 — a customer line that closes the problem: thanks, «درست شد», «حل شد», «اوکی
+ * شد», «وصل شد», Finglish and English forms. Folded with the shared normaliser first.
+ */
+const RESOLVED_ACK =
+  /(?:^|[^\p{L}])(?:مرسی|ممنون|متشکر|سپاس|دمت گرم|درست شد|حل شد|اوکی شد|وصل شد|اوکیه|مشکل حل|عالی شد|merci|mersi|mamnoon|mamnun|dorost shod|hal shod|vasl shod|ok shod|thanks|thank you|solved|fixed|works now)/u;
+
+export function isResolvedAcknowledgement(text: string | null): boolean {
+  return text !== null && RESOLVED_ACK.test(normalizePersian(text));
+}
+
+/**
+ * Phase 4 PR-2 — the person's reply that RESOLVED the conversation, which a handback learns from
+ * (it used to be simply the latest one — often «خواهش می‌کنم» after the customer's thanks): when
+ * the customer's latest acknowledgement («مرسی درست شد») follows a person's reply, the latest
+ * eligible reply BEFORE it; with no acknowledgement, the latest eligible reply. Pure.
+ */
+export function resolvingReply<
+  R extends { readonly createdAt: Date; readonly id: string },
+  M extends { readonly origin: string; readonly text: string | null; readonly sentAt: Date },
+>(replies: readonly R[], customerLines: readonly M[]): R | null {
+  const ordered = [...replies].sort(
+    (a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id),
+  );
+  const ack = [...customerLines]
+    .filter((line) => line.origin === 'INBOUND' && isResolvedAcknowledgement(line.text))
+    .sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())[0];
+  if (ack !== undefined) {
+    const before = ordered.find((reply) => reply.createdAt.getTime() <= ack.sentAt.getTime());
+    if (before !== undefined) return before;
+  }
+  return ordered[0] ?? null;
 }
 
 /** Thrown inside a transaction to roll it back when the job was resolved by someone else. */
@@ -186,10 +224,13 @@ export class SupportLearningService implements HandbackLearningTrigger {
     const { config } = await this.deps.configs.get(scope);
     if (config.mode === 'OFF') return;
     const replies = await this.deps.outbound.recent(scope, input.conversation.id, 50);
-    const latest = [...replies]
-      .filter((row) => isEligibleReply(row, input.conversation.id))
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id))[0];
-    if (latest === undefined) return;
+    const lines = await this.deps.messages.recent(scope, input.conversation.id, 50, tx);
+    // Phase 4 PR-2: the reply that resolved it, not merely the latest one.
+    const latest = resolvingReply(
+      replies.filter((row) => isEligibleReply(row, input.conversation.id)),
+      lines,
+    );
+    if (latest === null) return;
     await this.enqueue(
       scope,
       { source: replySource(latest), trigger: 'HANDBACK', adminId: null, now: input.now },
@@ -531,7 +572,24 @@ export class SupportLearningService implements HandbackLearningTrigger {
         ? { conversationId: job.conversationId, outboundId: reply.id, at }
         : { conversationId: job.conversationId, messageId: reply.id, at };
     const recent = await this.deps.repository.recentTitles(scope, SUPPORT_LEARNING_DEDUPE_WINDOW);
-    const duplicate = findDuplicate(normalizedTitle, recent);
+    // Phase 4 PR-2: a merge only into a PENDING candidate. The same lesson APPROVED before makes
+    // this one «جایگزین پاسخ تأییدشده» — a new candidate naming the article it would replace —
+    // and a REJECTED one is never matched (the reviewer's decision was about that text).
+    const duplicate = findDuplicate(
+      normalizedTitle,
+      recent.filter((row) => row.state === 'PENDING'),
+    );
+    const approvedTwin =
+      duplicate === null
+        ? findDuplicate(
+            normalizedTitle,
+            recent.filter((row) => row.state === 'APPROVED' && row.articleId !== null),
+          )
+        : null;
+    const replaces =
+      approvedTwin === null || approvedTwin.articleId === null
+        ? null
+        : await this.replaceableArticle(scope, approvedTwin.articleId);
     try {
       return await this.deps.uow.run(scope, async (tx) => {
         const now = this.deps.clock.now();
@@ -561,6 +619,8 @@ export class SupportLearningService implements HandbackLearningTrigger {
             jobId: job.id,
             provider: result.step?.provider ?? null,
             model: result.outcome.outcome === 'OK' ? result.outcome.model : null,
+            replacesArticleId: rejected ? null : replaces,
+            assisted: reply.assisted,
             now,
           },
           tx,
@@ -590,6 +650,18 @@ export class SupportLearningService implements HandbackLearningTrigger {
       if (error instanceof JobGone) return 'gone';
       throw error;
     }
+  }
+
+  /**
+   * Phase 4 PR-2: the article a re-proposed lesson may replace — only a LEARNED article still
+   * APPROVED. A retired one, or one a person rewrote as MANUAL, is not replaced: the lesson is
+   * then an ordinary new candidate.
+   */
+  private async replaceableArticle(scope: ScopeContext, articleId: string): Promise<string | null> {
+    const article = await this.deps.repository.findArticle(scope, articleId);
+    return article !== null && article.source === 'LEARNED' && article.state === 'APPROVED'
+      ? article.id
+      : null;
   }
 
   private async finishIn(
@@ -655,6 +727,7 @@ export class SupportLearningService implements HandbackLearningTrigger {
       conversationId: message.conversationId,
       text: message.text ?? '',
       authorAdminId: null,
+      assisted: false,
     };
   }
 

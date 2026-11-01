@@ -1,4 +1,7 @@
-import type { SupportLearningSensitiveKind } from '@nexa/contracts';
+import type {
+  SupportKnowledgeBuildSourceType,
+  SupportLearningSensitiveKind,
+} from '@nexa/contracts';
 
 /**
  * TB8 — the deterministic scrubber of controlled learning (program §29, ADR-0035 §2).
@@ -220,6 +223,52 @@ export interface ScrubOptions {
    * is still scrubbed, and no other kind is affected.
    */
   readonly allowedHandles?: readonly string[];
+  /**
+   * Phase 4 PR-2 — the BUSINESS ALLOWLIST: the text is the tenant's own content, published to
+   * every customer, read from this build source (`businessAllowedKinds`). What that source
+   * shows customers is kept: a download or help link, a price, and — only in a payment route's
+   * instructions — the card / IBAN / account number customers pay to. Absent (learning from
+   * chats, a reviewer's manual article): the strict scrub, unchanged.
+   */
+  readonly business?: SupportKnowledgeBuildSourceType;
+  /**
+   * Phase 4 PR-2 — learning from a chat: an amount becomes `{مبلغ}` and a public link (no
+   * credential in it) `{پیوند}` instead of a redaction marker, so a lesson about a price or a
+   * download keeps its shape and the support AI fills the figure from the live facts. The value
+   * itself is still removed; every other kind is still a marker.
+   */
+  readonly placeholders?: boolean;
+}
+
+/** Phase 4 PR-2: the placeholders `ScrubOptions.placeholders` writes. */
+export const LEARNING_PLACEHOLDERS = { AMOUNT: '{مبلغ}', LINK: '{پیوند}' } as const;
+
+/**
+ * Phase 4 PR-2: the kinds a business source may show its customers. Every source keeps its
+ * public links (`HOST`, and a `URL_TOKEN` without userinfo — a store link carries a query) and
+ * its prices (`AMOUNT`). Only a payment route's instructions keep the card, IBAN or account
+ * number customers pay to (`CARD`, `IBAN`, `LONG_NUMBER`): the tenant's published payment-route
+ * text is the one place a card number may come from. Never allowed anywhere: a subscription
+ * link (one customer's bearer capability), a secret, a UUID, an IP address, a phone, an e-mail,
+ * a handle other than the support accounts, a redaction marker.
+ */
+export function businessAllowedKinds(
+  source: SupportKnowledgeBuildSourceType,
+): ReadonlySet<SupportLearningSensitiveKind> {
+  const kinds = new Set<SupportLearningSensitiveKind>(['HOST', 'URL_TOKEN', 'AMOUNT']);
+  if (source === 'PAYMENT_METHOD') {
+    kinds.add('CARD');
+    kinds.add('IBAN');
+    kinds.add('LONG_NUMBER');
+  }
+  return kinds;
+}
+
+/** A URL whose authority carries userinfo (`user:pass@host`): a credential, never public. */
+function hasUserinfo(match: string): boolean {
+  const rest = match.replace(/^[a-z][a-z0-9+.-]*:\/\//iu, '');
+  const slash = rest.search(/[/?#]/u);
+  return (slash < 0 ? rest : rest.slice(0, slash)).includes('@');
 }
 
 /** Scrubs `text`: every sensitive span becomes a marker naming its kind. */
@@ -230,14 +279,37 @@ export function scrubSensitive(text: string, options: ScrubOptions = {}): ScrubR
     (options.allowedHandles ?? []).map(handleKey).filter((key) => key.length > 0),
   );
   const kept: string[] = [];
+  const business = options.business === undefined ? null : businessAllowedKinds(options.business);
+  const keep = (match: string) => {
+    kept.push(match);
+    return `\uE000${String(kept.length - 1)}\uE001`;
+  };
   for (const pattern of PATTERNS) {
     out = out.replace(pattern.regex, (match) => {
       const kind = typeof pattern.kind === 'function' ? pattern.kind(match) : pattern.kind;
       // An allowed handle is set aside under a private-use mark no later pattern reads (a
       // `t.me/name` would otherwise be a HOST), and put back at the end.
-      if (kind === 'USERNAME' && allowed.has(handleKey(match))) {
-        kept.push(match);
-        return `\uE000${String(kept.length - 1)}\uE001`;
+      if (kind === 'USERNAME' && allowed.has(handleKey(match))) return keep(match);
+      // Phase 4 PR-2: what this business source publishes to its customers stays, set aside
+      // the same way — never a link carrying userinfo, and never a marker already written.
+      if (
+        business !== null &&
+        business.has(kind) &&
+        !match.includes(`[${REDACTION_MARK}:`) &&
+        !((kind === 'URL_TOKEN' || kind === 'HOST') && hasUserinfo(match))
+      ) {
+        return keep(match);
+      }
+      if (options.placeholders === true && !match.includes(`[${REDACTION_MARK}:`)) {
+        // Still a hit (the value is gone, and the kind is reported): only the marker differs.
+        if (kind === 'AMOUNT') {
+          found.add(kind);
+          return LEARNING_PLACEHOLDERS.AMOUNT;
+        }
+        if ((kind === 'HOST' || kind === 'URL_TOKEN') && !hasUserinfo(match)) {
+          found.add(kind);
+          return LEARNING_PLACEHOLDERS.LINK;
+        }
       }
       // A marker an earlier pattern wrote is not re-scrubbed; one in the INPUT is a hit.
       if (kind !== 'REDACTION_MARK' && match.includes(`[${REDACTION_MARK}:`)) return match;

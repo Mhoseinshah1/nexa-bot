@@ -825,6 +825,8 @@ const CANDIDATES = (
   provider: 'OPENAI',
   model: MODEL.OPENAI,
   articleId: null,
+  replacesArticleId: null,
+  assisted: false,
   version: 1,
   createdAt: ago(60 * (5 + index * 7)),
   reviewedAt: null,

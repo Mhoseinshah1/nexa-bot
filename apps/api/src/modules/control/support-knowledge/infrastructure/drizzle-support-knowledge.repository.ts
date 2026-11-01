@@ -39,12 +39,12 @@ import {
 export const SUPPORT_LEARNING_ENQUEUE_LOCK_CLASS = 0x4c4a;
 
 /**
- * A candidate the scrubber rejected is outside the duplicate rules (the partial unique index
- * `support_learning_candidates_title_key` says the same): it is not a decision about the
- * lesson, so it never absorbs a later clean proposal of it. Unqualified, because it is also the
- * `ON CONFLICT` arbiter's predicate, which must match the index's own.
+ * Phase 4 PR-2: only a PENDING candidate takes part in the exact-duplicate rule (the partial
+ * unique index `support_learning_candidates_title_key` says the same). A rejected or approved
+ * lesson is a decision about that text and never absorbs a later proposal of it. Unqualified,
+ * because it is also the `ON CONFLICT` arbiter's predicate, which must match the index's own.
  */
-const notSensitiveRejection = sql.raw(`reject_reason IS DISTINCT FROM 'SENSITIVE_CONTENT'`);
+const pendingOnly = sql.raw(`state = 'PENDING'`);
 
 // --- records -------------------------------------------------------------------
 
@@ -116,6 +116,10 @@ export interface LearningCandidateRecord {
   readonly provider: SupportAiProvider | null;
   readonly model: string | null;
   readonly articleId: string | null;
+  /** Phase 4 PR-2: the approved LEARNED article this lesson would replace, if any. */
+  readonly replacesArticleId: string | null;
+  /** Phase 4 PR-2: the source reply was an AI draft a person sent (Assist). */
+  readonly assisted: boolean;
   readonly reviewedByAdminId: string | null;
   readonly reviewedAt: Date | null;
   readonly version: number;
@@ -190,6 +194,8 @@ function candidate(row: CandidateRow): LearningCandidateRecord {
     provider: row.provider as SupportAiProvider | null,
     model: row.model,
     articleId: row.articleId,
+    replacesArticleId: row.replacesArticleId,
+    assisted: row.assisted,
     reviewedByAdminId: row.reviewedByAdminId,
     reviewedAt: row.reviewedAt,
     version: row.version,
@@ -529,27 +535,46 @@ export class DrizzleSupportKnowledgeRepository {
     return row === undefined ? null : candidate(row);
   }
 
-  /** The most recent candidates' normalised titles, for the near-duplicate check. */
+  /**
+   * The most recent PENDING and APPROVED candidates' normalised titles, for the duplicate check
+   * (Phase 4 PR-2): a PENDING one takes a merge, an APPROVED one makes the new lesson a
+   * replacement of its article. A rejected lesson is never matched.
+   */
   async recentTitles(
     scope: ScopeContext,
     limit: number,
-  ): Promise<readonly { readonly id: string; readonly normalizedTitle: string }[]> {
+  ): Promise<
+    readonly {
+      readonly id: string;
+      readonly normalizedTitle: string;
+      readonly state: SupportLearningCandidateState;
+      readonly articleId: string | null;
+    }[]
+  > {
     const tenantId = requireTenantId(scope);
-    return this.db
+    const rows = await this.db
       .select({
         id: supportLearningCandidates.id,
         normalizedTitle: supportLearningCandidates.normalizedTitle,
+        state: supportLearningCandidates.state,
+        articleId: supportLearningCandidates.articleId,
       })
       .from(supportLearningCandidates)
-      .where(and(eq(supportLearningCandidates.tenantId, tenantId), notSensitiveRejection))
+      .where(
+        and(
+          eq(supportLearningCandidates.tenantId, tenantId),
+          inArray(supportLearningCandidates.state, ['PENDING', 'APPROVED']),
+        ),
+      )
       .orderBy(desc(supportLearningCandidates.createdAt))
       .limit(limit);
+    return rows.map((row) => ({ ...row, state: row.state as SupportLearningCandidateState }));
   }
 
   /**
-   * Inserts a candidate, or — when its normalised title is already taken, by a row of ANY
-   * state — writes nothing and returns null. The unique index decides, so two replicas
-   * proposing the same lesson produce one candidate.
+   * Inserts a candidate, or — when its normalised title is already taken by a PENDING row
+   * (Phase 4 PR-2; it was any state) — writes nothing and returns null. The unique index
+   * decides, so two replicas proposing the same lesson produce one candidate.
    */
   async insertCandidate(
     scope: ScopeContext,
@@ -569,6 +594,9 @@ export class DrizzleSupportKnowledgeRepository {
       readonly jobId: string;
       readonly provider: SupportAiProvider | null;
       readonly model: string | null;
+      /** Phase 4 PR-2. */
+      readonly replacesArticleId?: string | null;
+      readonly assisted?: boolean;
       readonly now: Date;
     },
     tx: unknown,
@@ -597,13 +625,15 @@ export class DrizzleSupportKnowledgeRepository {
         jobId: row.jobId,
         provider: row.provider,
         model: row.model?.slice(0, 128) ?? null,
+        replacesArticleId: row.replacesArticleId ?? null,
+        assisted: row.assisted ?? false,
         reviewedAt: row.state === 'REJECTED' ? row.now : null,
         createdAt: row.now,
         updatedAt: row.now,
       })
       .onConflictDoNothing({
         target: [supportLearningCandidates.tenantId, supportLearningCandidates.normalizedTitle],
-        where: notSensitiveRejection,
+        where: pendingOnly,
       })
       .returning();
     return inserted === undefined ? null : candidate(inserted);
@@ -622,7 +652,7 @@ export class DrizzleSupportKnowledgeRepository {
         and(
           eq(supportLearningCandidates.tenantId, tenantId),
           eq(supportLearningCandidates.normalizedTitle, normalizedTitle),
-          notSensitiveRejection,
+          pendingOnly,
         ),
       )
       .limit(1);

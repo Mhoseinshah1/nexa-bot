@@ -247,6 +247,8 @@ export function candidateView(row: LearningCandidateRecord): SupportLearningCand
     provider: row.provider,
     model: row.model,
     articleId: row.articleId,
+    replacesArticleId: row.replacesArticleId,
+    assisted: row.assisted,
     version: row.version,
     createdAt: row.createdAt.toISOString(),
     reviewedAt: row.reviewedAt?.toISOString() ?? null,

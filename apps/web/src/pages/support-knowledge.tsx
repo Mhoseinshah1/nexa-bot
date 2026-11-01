@@ -795,6 +795,19 @@ export function LearningCandidatesPage({
           <span className="muted">
             {`${t('web.sk_cand_confidence')}: ${t(CONFIDENCE_LABELS[row.confidence])} · ${t('web.sk_cand_sources')}: ${String(row.sourceCount)}`}
           </span>
+          {/* Phase 4 PR-2: a replacement of an approved answer, and an AI-drafted source. */}
+          {row.replacesArticleId !== null && (
+            <>
+              <br />
+              <Badge tone="info">{t('web.sk_cand_replaces')}</Badge>
+            </>
+          )}
+          {row.assisted && (
+            <>
+              <br />
+              <Badge tone="warn">{t('web.sk_cand_assisted')}</Badge>
+            </>
+          )}
         </span>
       ),
     },

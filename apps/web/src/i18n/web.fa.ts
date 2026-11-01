@@ -9236,6 +9236,8 @@ export const WEB_FA = {
   'web.sk_cand_rationale': 'دلیل',
   'web.sk_cand_confidence': 'اطمینان',
   'web.sk_cand_sources': 'تعداد منبع',
+  'web.sk_cand_replaces': 'جایگزین پاسخ تأییدشده',
+  'web.sk_cand_assisted': 'از پیش‌نویس هوش مصنوعی — با دقت بررسی شود',
   'web.sk_cand_purged': 'متن این پیشنهاد طبق سیاست نگهداری پاک شده است.',
   'web.sk_cand_title_purged': 'عنوان پاک شده',
   'web.sk_cand_auto_rejected': 'خودکار رد شد: اطلاعات حساس',
@@ -9295,6 +9297,8 @@ export const WEB_FA = {
   'web.kb_bounds': 'محدودیت‌های ساخت',
   'web.kb_truncated': 'متن کوتاه‌شده',
   'web.kb_capped': 'موارد خارج از سقف',
+  'web.kb_capped_warning':
+    'بخشی از اطلاعات به دلیل سقف تعداد در این ساخت نیامد (هر منبع حداکثر 100 مورد و هر ساخت حداکثر 400 پیشنهاد). مقاله‌های آن منابع بازنشسته نمی‌شوند؛ برای پوشش کامل، موارد قدیمی یا غیرفعال را کم کنید.',
   'web.kb_fault_running': 'ساخت دیگری هم‌زمان اجرا شد. آخرین ساخت را بررسی کنید.',
   'web.kb_state_applied': 'اعمال شد',
   'web.kb_state_skipped': 'کنار گذاشته شد',

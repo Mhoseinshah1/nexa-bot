@@ -16681,6 +16681,13 @@ export const supportLearningCandidates = pgTable(
     provider: text('provider'),
     model: text('model'),
     articleId: uuid('article_id'),
+    /**
+     * Phase 4 PR-2 «جایگزین پاسخ تأییدشده»: the approved LEARNED article this lesson re-proposes
+     * (the same normalised title was approved before). Approval writes a new revision of it.
+     */
+    replacesArticleId: uuid('replaces_article_id'),
+    /** Phase 4 PR-2: the source reply was an AI draft a person sent (Assist). */
+    assisted: boolean('assisted').notNull().default(false),
     reviewedByAdminId: uuid('reviewed_by_admin_id'),
     reviewedAt: timestamptz('reviewed_at'),
     textPurgedAt: timestamptz('text_purged_at'),
@@ -16691,12 +16698,14 @@ export const supportLearningCandidates = pgTable(
   (table) => [
     unique('support_learning_candidates_tenant_id_key').on(table.tenantId, table.id),
     /*
-     * A lesson the scrubber rejected is not a decision about the lesson: it holds no title for
-     * the exact-duplicate rule, so the same lesson proposed cleanly later is its own candidate.
+     * Phase 4 PR-2: the exact-duplicate rule holds among PENDING candidates only. A lesson that
+     * was rejected, or approved, is a decision about THAT text: the same lesson proposed again
+     * is a new candidate for a reviewer (for an approved one, a replacement of its article),
+     * never silently merged into a decision already taken.
      */
     uniqueIndex('support_learning_candidates_title_key')
       .on(table.tenantId, table.normalizedTitle)
-      .where(sql`reject_reason IS DISTINCT FROM 'SENSITIVE_CONTENT'`),
+      .where(sql`state = 'PENDING'`),
     /** The review queue: by state, newest first. */
     index('support_learning_candidates_queue_idx').on(table.tenantId, table.state, table.createdAt),
     /*
