@@ -117,8 +117,71 @@ provider credentials) all decrypt with `SECRETS_KEYS`, so none of them can drop 
 
 ## Installing
 
+On a fresh Ubuntu 22.04 or 24.04 host, with the admin domain's DNS already
+pointing at it, download the latest release's installer and its checksum,
+verify, then run it:
+
 ```bash
-# On a fresh Ubuntu host, with DNS already pointing here.
+curl -fsSLO https://github.com/Mhoseinshah1/nexa-bot/releases/latest/download/install.sh{,.sha256} && sha256sum -c install.sh.sha256 && sudo bash install.sh
+```
+
+Or pin a release, which is what to do on any host you will want to reproduce:
+
+```bash
+curl -fsSLO https://github.com/Mhoseinshah1/nexa-bot/releases/download/vX.Y.Z/install.sh{,.sha256} && sha256sum -c install.sh.sha256 && sudo bash install.sh
+```
+
+`install.sh{,.sha256}` is **bash brace expansion** for `install.sh
+install.sh.sha256`: it works in bash and zsh, not in plain `sh` or `dash`. In
+those, name both URLs. The script is downloaded and checked _before_ it runs —
+never `curl | sh`. To check its provenance as well as its integrity, with the
+GitHub CLI:
+
+```bash
+gh attestation verify install.sh --repo Mhoseinshah1/nexa-bot
+```
+
+Run that way, with no arguments, the installer **asks** for what it needs:
+
+1. the admin panel's domain (a bare hostname such as `admin.example.com`);
+2. the e-mail Let's Encrypt sends expiry notices to;
+3. the first owner's Telegram **numeric** id, then what the owner bootstrap
+   asks for (the password hidden);
+4. the Telegram bot token (hidden).
+
+Each answer is validated the way the matching argument is, and asked again until
+it is valid. Without a terminal it asks nothing: every input must then come from
+arguments (`--domain`, `--acme-email`, and the rest of
+[Non-interactive installs](#non-interactive-installs)), or it stops.
+
+How the standalone `install.sh` works, and what it trusts:
+
+- The release attaches three files: `install.sh`, `install.sh.sha256`, and
+  `nexa-deploy-<version>.tar.gz` — the tagged `deploy/` tree, built
+  reproducibly from the commit the release gate verified
+  (`scripts/release-installer-assets.sh`). A keyless provenance attestation
+  covers `install.sh` and the bundle.
+- The attached `install.sh` **is** the tagged `deploy/install.sh` with exactly
+  three lines filled in: the version, the repository and the bundle's sha256.
+  The release refuses to publish a copy that differs anywhere else.
+- Run alone, it refuses to continue unless it is root, then downloads that
+  release's bundle over HTTPS only, checks it against the stamped sha256,
+  refuses an archive with anything but files and directories under `deploy/`,
+  unpacks it into a private temporary directory and runs the bundle's
+  installer with your arguments. Nothing downloaded is unpacked or run before
+  its hash matches. The temporary directory is removed afterwards, and the
+  installer's exit status is returned.
+- It installs **its own** version only. `--version` with another value is
+  refused — download that release's `install.sh` instead. Updating an existing
+  installation is `botctl update`, not the installer.
+- `NEXA_INSTALL_BUNDLE_BASE_URL` replaces the download location. It exists for
+  the test suite and the CI smoke; the stamped hash still decides which bytes
+  are accepted, so it can only change where they come from.
+
+From a checkout of the repository, `deploy/install.sh` runs as it always has,
+using the files beside it:
+
+```bash
 sudo ./install.sh \
   --domain admin.example.com \
   --acme-email ops@example.com \
