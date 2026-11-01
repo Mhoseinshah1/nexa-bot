@@ -450,7 +450,12 @@ export interface CustomerNotificationDeps {
     notificationFacts(
       scope: TenantContext,
       messageId: string,
-    ): Promise<{ readonly values: TemplateValues; readonly ticketId: string } | null>;
+    ): Promise<{
+      readonly values: TemplateValues;
+      readonly ticketId: string;
+      /** Phase 4 PR-4: the template of an AI answer (labelled as the assistant's); else the kind's. */
+      readonly templateKey?: TemplateKey;
+    } | null>;
     /**
      * HF-A7: what `TICKET_REPLY_ATTACHMENT` sends — support's file and its caption's values,
      * read at send time from the file row the MESSAGE id names. A reader, not a payload.
@@ -911,6 +916,8 @@ export class CustomerNotificationService {
     readonly buttons: readonly CustomerButton[];
     /** HF-A7: a file to send, with the kind's template as its caption, instead of text. */
     readonly file?: NotificationFile;
+    /** Phase 4 PR-4: a template other than the kind's own (an AI answer in a ticket). */
+    readonly templateKey?: TemplateKey;
     /**
      * The order this outcome belongs to (R2; FIX-08): its payment message is where the
      * outcome is EDITED when it can be, and whose screens are closed before it is sent
@@ -1086,6 +1093,7 @@ export class CustomerNotificationService {
       if (facts === null) return null;
       return {
         values: facts.values,
+        ...(facts.templateKey === undefined ? {} : { templateKey: facts.templateKey }),
         buttons: this.deps.buttonsFor?.(row.kind, { ticketId: facts.ticketId }) ?? [],
       };
     }
@@ -1644,7 +1652,7 @@ export class CustomerNotificationService {
             ? await this.deps.messenger.send(scope, {
                 chatId: lookup.contact.chatId,
                 botInstanceId: row.botInstanceId,
-                templateKey: CUSTOMER_NOTIFICATION_TEMPLATES[row.kind],
+                templateKey: content.templateKey ?? CUSTOMER_NOTIFICATION_TEMPLATES[row.kind],
                 values: content.values,
                 // Absent rather than empty: Telegram draws an empty keyboard as a blank attachment.
                 ...(content.buttons.length === 0 ? {} : { buttons: content.buttons }),
