@@ -2,6 +2,7 @@ import type {
   BusinessBotRight,
   BusinessConversationState,
   BusinessEscalationTicketOutcome,
+  BusinessHandoffKind,
   BusinessHandoffReason,
   BusinessMessageKind,
   BusinessMessageOrigin,
@@ -187,6 +188,8 @@ export interface BusinessConversationRecord {
   readonly controlEpoch: number;
   readonly takeoverReason: BusinessTakeoverReason | null;
   readonly handoffReason: BusinessHandoffReason | null;
+  /** Phase 4 PR-1: how the current human hold ends; null on AI_ACTIVE and on older holds. */
+  readonly handoffKind: BusinessHandoffKind | null;
   readonly lastMessageAt: Date | null;
   readonly lastInboundAt: Date | null;
   readonly lastHumanAt: Date | null;
@@ -206,6 +209,11 @@ export interface ConversationTransition {
   readonly bumpEpoch: boolean;
   readonly takeoverReason?: BusinessTakeoverReason | null;
   readonly handoffReason?: BusinessHandoffReason | null;
+  /**
+   * Phase 4 PR-1: the hold's kind. Into AI_ACTIVE it is always cleared; otherwise `undefined`
+   * keeps the stored value (a person's message over a hard handoff stays hard).
+   */
+  readonly handoffKind?: BusinessHandoffKind | null;
   readonly now: Date;
 }
 
@@ -655,6 +663,8 @@ export interface HandoffDetail {
   /** Roadmap A5: the deciding AI decision's topic and intent, when the handoff had one. */
   readonly topic?: string | null;
   readonly intent?: string | null;
+  /** Phase 4 PR-1: the handoff's kind; absent, `businessHandoffKindOf(reason, topic)`. */
+  readonly kind?: BusinessHandoffKind;
 }
 
 /**
@@ -750,6 +760,8 @@ export interface BusinessEscalationRepository {
       readonly contextFrom: Date | null;
       readonly ticketId: string | null;
       readonly ticketOutcome: BusinessEscalationTicketOutcome;
+      /** Phase 4 PR-1: the handoff's kind. */
+      readonly handoffKind?: BusinessHandoffKind | null;
       readonly jobId: string | null;
       readonly now: Date;
     },
@@ -804,4 +816,26 @@ export interface BusinessCustomerLookup {
     telegramUserId: string,
     tx?: unknown,
   ): Promise<{ readonly id: string; readonly status: string } | null>;
+}
+
+/**
+ * Phase 4 PR-1 — what the conversation service needs to decide an automatic return to the AI
+ * (`autoResumeTrigger`), read inside the inbound message's transaction. Implemented by the
+ * support AI: the window is `support.ai.resume_after_minutes`, and 0 unless the support AI is
+ * in automatic-reply mode (a conversation nobody would answer is never taken from a person).
+ */
+export interface AutoResumePolicy {
+  resumeAfterMinutes(scope: ScopeContext, tx: unknown): Promise<number>;
+  /** Whether this ticket is CLOSED. */
+  ticketClosed(scope: ScopeContext, ticketId: string, tx: unknown): Promise<boolean>;
+  /**
+   * The current hold's own latest activity at `epoch`: its handoff's record, or the latest
+   * OPERATOR/ASSIST reply enqueued; null when neither exists.
+   */
+  holdActivityAt(
+    scope: ScopeContext,
+    conversationId: string,
+    epoch: number,
+    tx: unknown,
+  ): Promise<Date | null>;
 }

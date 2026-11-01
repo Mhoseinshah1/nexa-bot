@@ -19,6 +19,7 @@ import type {
   BusinessBotRight,
   BusinessConversationState,
   BusinessEscalationTicketOutcome,
+  BusinessHandoffKind,
   BusinessHandoffReason,
   BusinessMessageKind,
   BusinessMessageOrigin,
@@ -82,6 +83,7 @@ function toConversation(row: ConversationRow): BusinessConversationRecord {
     controlEpoch: row.controlEpoch,
     takeoverReason: row.takeoverReason as BusinessTakeoverReason | null,
     handoffReason: row.handoffReason as BusinessHandoffReason | null,
+    handoffKind: row.handoffKind as BusinessHandoffKind | null,
     lastMessageAt: row.lastMessageAt,
     lastInboundAt: row.lastInboundAt,
     lastHumanAt: row.lastHumanAt,
@@ -289,6 +291,12 @@ export class DrizzleBusinessConversationRepository implements BusinessConversati
           : { takeoverReason: transition.takeoverReason }),
         handoffReason:
           transition.to === 'HANDOFF_REQUIRED' ? (transition.handoffReason ?? null) : null,
+        // Phase 4 PR-1: AI_ACTIVE never has a kind; otherwise an absent kind keeps the stored one.
+        ...(transition.to === 'AI_ACTIVE'
+          ? { handoffKind: null }
+          : transition.handoffKind === undefined
+            ? {}
+            : { handoffKind: transition.handoffKind }),
         version: sql`${businessConversations.version} + 1`,
         updatedAt: transition.now,
       })
@@ -1168,6 +1176,7 @@ export class DrizzleBusinessEscalationRepository implements BusinessEscalationRe
         contextFrom: row.contextFrom,
         ticketId: row.ticketId,
         ticketOutcome: row.ticketOutcome,
+        handoffKind: row.handoffKind ?? null,
         jobId: row.jobId,
         createdAt: row.now,
       })
