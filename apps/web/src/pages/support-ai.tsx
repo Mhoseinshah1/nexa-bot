@@ -58,6 +58,7 @@ import {
   type Tone,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { TicketAiSwitchCard } from './support-ai-tickets-card';
 import {
   FAILURE_CLASS_ACTIONS,
   FAILURE_CLASS_LABELS,
@@ -248,6 +249,10 @@ export function SupportAiPage({
             )}
             <ReadinessCard config={data} />
             <ConfigCard response={data} mayAutoReply={mayAutoReply} />
+            <TicketAiSwitchCard
+              automatic={data.config.mode === 'AUTO_REPLY_SAFE'}
+              mayEdit={mayAutoReply}
+            />
             <CredentialsCard response={data} />
             <TestConsoleCard mode={data.config.mode} maySearchCustomers={maySearchCustomers} />
             <UsageCard />
