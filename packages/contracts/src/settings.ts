@@ -1066,6 +1066,24 @@ export const SETTINGS = [
     consumer: 'ACTIVE',
   },
   {
+    key: 'support.ai.tickets_enabled',
+    description:
+      'Phase 4 PR-4: whether the support AI also writes the first answers inside the bot\u2019s ' +
+      'support tickets and the Mini App\u2019s support screen, by the same pipeline, guards, ' +
+      'tools and output checks as its automatic Telegram Business replies (so it needs the ' +
+      'support AI in the automatic mode). Its replies are recorded in the ticket as the ' +
+      'assistant\u2019s, never as an administrator\u2019s, and never change the ticket\u2019s status. ' +
+      'An administrator\u2019s reply pauses the AI in that ticket for ' +
+      'support.ai.resume_after_minutes; a hard handoff stays with a person. Off by default.',
+    schema: z.boolean(),
+    defaultValue: false,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
     key: 'telegram.channels',
     description:
       'The channels shown to customers, in order, each flagged as required membership or ' +

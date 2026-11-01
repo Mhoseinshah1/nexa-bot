@@ -1563,3 +1563,28 @@ export function parseSupportAiCallbackData(
   if (action === undefined || !DEEP_LINK_ID.test(rowId)) return null;
   return { action, rowId };
 }
+
+// ---------------------------------------------------------------------------
+// Phase 4 PR-4 (2026-11-01) — the support AI inside bot and Mini App tickets.
+// ---------------------------------------------------------------------------
+
+/**
+ * A ticket job's life: `QUEUED` until the assistant produces it, `DONE` once it came to an
+ * outcome (the outcome is `SUPPORT_AI_AUTO_OUTCOMES`, the same closed set a Business job uses).
+ */
+export const SUPPORT_AI_TICKET_JOB_STATES = ['QUEUED', 'DONE'] as const;
+export type SupportAiTicketJobState = (typeof SUPPORT_AI_TICKET_JOB_STATES)[number];
+
+/**
+ * Who holds a ticket's AI answers, with the SAME names a Business conversation uses so the one
+ * resume rule (`autoResumeTrigger`) reads both: `AI_ACTIVE` — the AI answers; `HANDOFF_REQUIRED`
+ * — the AI handed the ticket to a person; `HUMAN_ACTIVE` — a person replied. A ticket with no
+ * row is `AI_ACTIVE`. A SOFT hold ends after `support.ai.resume_after_minutes` without a person;
+ * a HARD one only when an operator returns the ticket (never from a ticket's own message).
+ */
+export const SUPPORT_AI_TICKET_HOLD_STATES = [
+  'AI_ACTIVE',
+  'HANDOFF_REQUIRED',
+  'HUMAN_ACTIVE',
+] as const;
+export type SupportAiTicketHoldState = (typeof SUPPORT_AI_TICKET_HOLD_STATES)[number];

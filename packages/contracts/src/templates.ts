@@ -14031,6 +14031,28 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.ticket.line_ai',
+    description:
+      "Phase 4 PR-4: one of the support assistant's (AI) messages in the conversation view. Never shown as an administrator's.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When it was sent.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'text',
+        type: 'STRING',
+        description: 'The message, possibly shortened.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.ticket.line_closed_by_customer',
     description: 'WP-A7: the conversation records that the customer closed the ticket.',
     format: 'PLAIN_TEXT',
@@ -14200,6 +14222,35 @@ export const TEMPLATES = [
         token: 'text',
         type: 'STRING',
         description: "Support's reply, exactly as stored in the ticket.",
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.ai_replied',
+    description:
+      "Phase 4 PR-4: the customer notification for the support assistant's (AI) answer in a ticket (TICKET_REPLY on a message the assistant wrote). Every value is read at send time from the ticket message the notification names; the one button opens the ticket.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'category',
+        type: 'STRING',
+        description: "The ticket's category title.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'text',
+        type: 'STRING',
+        description: "The assistant's reply, exactly as stored in the ticket.",
         required: true,
         repeatable: false,
       },

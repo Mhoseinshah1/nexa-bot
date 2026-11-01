@@ -217,6 +217,7 @@ export const MINIAPP_FA = {
   'miniapp.ticket_reply_send': 'ارسال',
   'miniapp.ticket_author_CUSTOMER': 'شما',
   'miniapp.ticket_author_SUPPORT': 'پشتیبانی',
+  'miniapp.ticket_author_AI': 'هوش مصنوعی',
   'miniapp.ticket_attachment': 'این پیام پیوست دارد؛ پیوست در ربات دیده می‌شود.',
   'miniapp.ticket_closed': 'این تیکت بسته شده است. برای ادامه یک تیکت تازه ثبت کنید.',
   'miniapp.ticket_open_limit':
