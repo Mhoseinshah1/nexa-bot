@@ -4912,3 +4912,15 @@ live; the owner decides otherwise.
 - **OQ-SAI-5-06 - the model dropdown.** The known-model list (`support-ai-models.ts`) is a
   convenience, not a guarantee; the capability test is the check. It needs a refresh when a
   provider retires a model.
+- **OQ-SAI-2-01 — live usage refresh for the asked service (Phase 4 PR-2, item 2, optional).** The
+  support context now carries `usageAge` («به‌روزشده N دقیقه پیش») beside the stored usage, but
+  does NOT call the panel when the figure is older than 10 minutes: the assistant role holds no
+  panel client today, and a panel call from it would be a new outbound path with its own
+  credential handling. Whether to add a bounded (≤ 2 s, fall back to stored) read is the owner's
+  call.
+- **OQ-SAI-2-02 — CLOSED by the review of PR #367.** The live catalogue is now the customer's own
+  catalogue (`ProductService.customerCatalogue`, the browse's view): an ACTIVE reseller sees what
+  their grants show (granted panels, products, categories, reseller-only plans included).
+- **OQ-SAI-2-03 — packages are listed without one panel's per-purchase cap (PR-2, item 1).** The
+  traffic/time packages in the context are the tenant's offerable ones in the sales currency; a
+  panel's policy cap is re-decided by the bot when the customer opens the offer for a service.

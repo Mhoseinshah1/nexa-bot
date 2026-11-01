@@ -501,7 +501,8 @@ describe('Assist Mode (TB5)', () => {
       knowledgeAvailable: 2,
     });
 
-    // Without the conversation's memory, the same words match nothing and carry no knowledge.
+    // Without the conversation's memory, the same words match nothing: Phase 4 PR-2 then sends
+    // the general entries (the fallback), never the one article the conversation is about first.
     const forgetful = build({ context: new TbSupportContextSource(c.supportContext) });
     const forgetfulLoop = new AssistantLoop(forgetful, {
       scope: () => scopeA,
@@ -510,8 +511,8 @@ describe('Assist Mode (TB5)', () => {
       logger: c.logger,
     });
     const third = await readyDraft(forgetful, forgetfulLoop);
-    expect(chainSystems.at(-1)).not.toContain('اینترنت وصل نمی‌شود');
-    expect(await jobs.findById(scopeA, third.id)).toMatchObject({ knowledgeSent: 0 });
+    expect(chainSystems.at(-1)).toContain('تمدید سرویس');
+    expect(await jobs.findById(scopeA, third.id)).toMatchObject({ knowledgeSent: 2 });
   });
 
   it('PR #236 review N5: the ASSEMBLED container gives both AI paths a context source with memory', async () => {

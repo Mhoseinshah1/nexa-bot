@@ -12,6 +12,7 @@ import {
   type BusinessBotRight,
   type CorrelationId,
   type SupportAiConfigInput,
+  type SupportContextPayload,
   type SupportAiOutcome,
 } from '@nexa/contracts';
 import { AssistantLoop } from '../../apps/api/src/modules/control/support-ai/application/assistant-loop';
@@ -21,6 +22,8 @@ import {
 } from '../../apps/api/src/modules/control/support-ai/application/support-auto-reply.service';
 import type { AutoContextFlags } from '../../apps/api/src/modules/control/support-ai/domain/auto-reply-guards';
 import { SUPPORT_AI_AUTHOR_MARKERS } from '../../apps/api/src/modules/control/support-ai/domain/prompt';
+import type { OutputPriceFamily } from '../../apps/api/src/modules/control/support-ai/domain/output-policy';
+import { livePriceFamily } from '../../apps/api/src/modules/control/support-ai/domain/price-family';
 import type { SupportImageLoad } from '../../apps/api/src/modules/control/support-ai/application/ports';
 import { DrizzleSupportAiJobRepository } from '../../apps/api/src/modules/control/support-ai/infrastructure/drizzle-support-ai-job.repository';
 import { DrizzleSupportAiConfigRepository } from '../../apps/api/src/modules/control/support-ai/infrastructure/drizzle-support-ai.repository';
@@ -121,6 +124,8 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
   /** D2: the query the context was built with, last call. */
   /** A8: the customer's words in the transcript the context source was given, and for which conversation. */
   let contextQuery: string | null | undefined;
+  /** Phase 4 PR-2 (lead D8): a priced context the fake source returns, when set. */
+  let priced: { readonly json: string; readonly priceFamily: OutputPriceFamily } | null = null;
   let contextConversation: string | undefined;
   let duringCall: (() => Promise<void>) | null;
   /** Phase 4 PR-1: the stub context's unreconciled service aliases. */
@@ -272,6 +277,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
   beforeEach(async () => {
     ctx ??= await createTestContext();
     await ctx.reset();
+    priced = null;
     const c = ctx.container;
     await db().execute(
       sql`UPDATE bot_instances SET telegram_bot_id = ${OUR_BOT} WHERE id = ${BOT}`,
@@ -380,7 +386,8 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
             .join('\n');
           contextConversation = options?.conversationId;
           return {
-            json: '{"services":[{"alias":"S1"}]}',
+            json: priced?.json ?? '{"services":[{"alias":"S1"}]}',
+            ...(priced === null ? {} : { priceFamily: priced.priceFamily }),
             aliases: new Map([['S1', 'سرویس user123']]),
             knowledgeAliases,
             linked: flags.identityLinked,
@@ -4014,6 +4021,56 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
       expect(await kindOf(id)).toBe('SOFT');
       await deliver();
       expect(transport.sent.map((m) => m.text).join('\n')).not.toContain('evil.example');
+    });
+
+    /*
+     * Lead D8 (review of PR #367): the auto-reply service really hands the context's live price
+     * family to the validator. The catalogue's 150,000 تومان written as 1,500,000 ریال is in
+     * the facts' JSON only through the family; an invented price is not in it at all.
+     */
+    function pricedContext() {
+      const payload = {
+        services: [{ alias: 'S1', renewalPrice: null }],
+        orders: [],
+        payments: [],
+        addons: [],
+        catalogue: [
+          {
+            alias: 'C1',
+            title: 'یک‌ماهه',
+            price: { amountMinor: '150000', currency: 'IRT', formatted: '150,000 تومان' },
+            renewalPrice: null,
+          },
+        ],
+      };
+      return {
+        json: JSON.stringify(payload),
+        priceFamily: livePriceFamily(payload as unknown as SupportContextPayload),
+      };
+    }
+
+    it('PR-2 price family: the catalogue price in rials is sent (only the family allows it)', async () => {
+      priced = pricedContext();
+      const id = await turnOf(
+        'قیمت یک ماهه چنده؟',
+        out({ replyText: 'قیمت آن 1,500,000 ریال است.' }),
+      );
+      expect(calls).toBe(1);
+      expect((await autoJobs(id)).at(-1)).toMatchObject({ state: 'SENT', outcome: 'sent' });
+    });
+
+    it('PR-2 price family: an invented price is refused, regenerated once, then a soft handoff', async () => {
+      priced = pricedContext();
+      const id = await turnOf(
+        'قیمت یک ماهه چنده؟',
+        out({ replyText: 'قیمت آن 99,000 تومان است.' }),
+      );
+      expect(calls).toBe(2);
+      expect((await autoJobs(id)).at(-1)).toMatchObject({
+        state: 'FAILED',
+        outcome: 'guard_output_policy',
+        handoff_reason: 'OUTPUT_POLICY',
+      });
     });
 
     it('output validator: a regenerated clean reply is sent', async () => {

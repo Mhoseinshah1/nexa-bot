@@ -42,6 +42,7 @@ import {
   type TranscriptLine,
 } from '../domain/prompt.js';
 import { planVision } from '../domain/vision.js';
+import type { OutputPriceFamily } from '../domain/output-policy.js';
 import type { SupportTranscriptLine } from '../domain/transcript.js';
 import { decisionOutputTokens, parseSupportDecision } from '../domain/decision.js';
 import type {
@@ -113,6 +114,11 @@ export interface SupportContextSource {
     readonly flags: AutoContextFlags;
     /** D2 telemetry: knowledge entries sent, and how many there were to choose from. */
     readonly knowledge?: KnowledgeCounts;
+    /**
+     * Phase 4 PR-2: the live price family of THIS payload (`livePriceFamily`) — the amounts the
+     * output validator lets a reply quote. Absent: only the payload's own numbers are allowed.
+     */
+    readonly priceFamily?: OutputPriceFamily;
   }>;
 }
 

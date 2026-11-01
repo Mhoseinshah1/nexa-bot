@@ -411,6 +411,29 @@ export class ProductService {
   }
 
   /**
+   * Phase 4 PR-2 (review of PR #367) — the catalogue THIS customer may buy from, for the support
+   * AI's read-only live catalogue: the browse's own view (`catalogueView` with the customer, so
+   * an ACTIVE reseller's grants narrow it to the granted panels, products and categories, and add
+   * the reseller-only plans those grants show) and the same SQL predicate as `browseCategory`.
+   * No guard: no customer is browsing; the support context builder is the caller and charges
+   * nothing (it acts as SYSTEM_JOB over a conversation it resolved). Null customer: the public view.
+   */
+  async customerCatalogue(
+    scope: TenantContext,
+    customerId: string | null,
+    limit: number,
+  ): Promise<CustomerPage<ProductRecord>> {
+    const view = await this.catalogueView(scope, customerId ?? undefined);
+    if (view === null) return { items: [], hasMore: false };
+    return this.deps.repository.listCustomerVisibleProducts(
+      scope,
+      Math.max(limit, 1),
+      view.panelIds,
+      view.audience,
+    );
+  }
+
+  /**
    * Whose catalogue this is, and on which panels (`docs/wp9-reseller-audit.md` R5, R6).
    *
    * An ordinary customer — and a SUSPENDED reseller — sees the public catalogue on every

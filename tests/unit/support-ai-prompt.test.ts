@@ -152,6 +152,8 @@ describe('A7/A8 — the policy for authors and knowledge', () => {
     'sai3-2026-10-06': '6804f713868a449a35dbfee13ca9a19a7954d19577f36e51d3e8c27b236e964f',
     'sai4m-2026-10-07': '3dc8a68be32e72b2a95ed81590f65497a340f599844d67f08a1da259d3aef11e',
     'sai5p-2026-11-01': 'bf4a142536da8726b64bb272629420226b160c03e53d9bda3458a08994895ed6',
+    'sai6k-2026-11-01': '30256f55fad07fee3f33b1acc0c5f62fc0151429a6295ab64c93ec20d3aa08b1',
+    'sai6m-2026-11-01': 'c10da05812d1342390805f7fb8a6ca2bef64d499ff56f3d099ad0a86ea352e90',
   };
 
   it('pins the policy text to its version, in both directions', () => {

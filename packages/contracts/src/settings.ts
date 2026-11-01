@@ -1001,6 +1001,24 @@ export const SETTINGS = [
     consumer: 'ACTIVE',
   },
   {
+    key: 'support.knowledge.auto_refresh',
+    description:
+      'Phase 4 PR-2: whether the support knowledge built from NEXA\u2019s own content (plans, FAQ, ' +
+      'connection guides, client apps, locations, terms, support accounts, payment-route ' +
+      'instructions) refreshes by itself: two minutes after that content stops changing, and ' +
+      'once a night. Only those owner-owned sources are applied automatically (new, changed and ' +
+      'retired articles); an article a reviewer edited stays a conflict for a person, and a ' +
+      'lesson learned from a chat still needs approval. Off by default: the build is run and ' +
+      'applied by hand, as before.',
+    schema: z.boolean(),
+    defaultValue: false,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
     key: 'telegram.channels',
     description:
       'The channels shown to customers, in order, each flagged as required membership or ' +

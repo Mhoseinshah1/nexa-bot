@@ -299,6 +299,8 @@ const candidate = (n: number, over: Json): Json => ({
   provider: 'OPENAI',
   model: 'gpt-4o-mini',
   articleId: null,
+  replacesArticleId: null,
+  assisted: false,
   version: 1,
   createdAt: ago(60 * (5 + n)),
   reviewedAt: null,

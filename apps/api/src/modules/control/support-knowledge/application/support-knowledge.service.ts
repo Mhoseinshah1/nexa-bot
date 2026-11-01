@@ -17,6 +17,7 @@ import {
   type PermissionKey,
   type ScopeContext,
   type SupportKnowledgeArticleState,
+  type SupportKnowledgeBuildSourceType,
   type SupportKnowledgeContent,
   type SupportKnowledgeSource,
   type SupportLearningCandidateState,
@@ -228,8 +229,9 @@ export class SupportKnowledgeService {
         assertVersion(before.version, command.expectedVersion);
         if (before.state === 'RETIRED') throw notInState(before.state);
         // Whatever the article's source: a LEARNED article edited after its approval is
-        // republished, and a MANUAL one is repeated to every customer just the same.
-        assertClean(command.content, await this.supportHandles(scope));
+        // republished, and a MANUAL one is repeated to every customer just the same. Phase 4
+        // PR-2: a built article keeps its source's business allowlist.
+        assertClean(command.content, await this.supportHandles(scope), before.sourceType);
         const publish = before.state === 'APPROVED';
         const after = await this.deps.repository.rewrite(
           scope,
@@ -356,6 +358,60 @@ export class SupportKnowledgeService {
         const content = command.edit ?? asProposed(before);
         // The last line before knowledge: whatever is approved, edited or not, is scrubbed.
         assertClean(content, await this.supportHandles(scope));
+        /*
+         * Phase 4 PR-2 «جایگزین پاسخ تأییدشده»: a lesson that re-proposes an approved LEARNED
+         * article replaces it — a new revision of THAT article, never a second copy — while it
+         * is still a LEARNED, APPROVED article; otherwise it is published as a new one.
+         */
+        const replaced =
+          before.replacesArticleId === null
+            ? null
+            : await this.deps.repository.findArticle(scope, before.replacesArticleId, tx);
+        if (replaced !== null && replaced.source === 'LEARNED' && replaced.state === 'APPROVED') {
+          const rewritten = await this.deps.repository.rewrite(
+            scope,
+            replaced.id,
+            {
+              expectedVersion: replaced.version,
+              from: ['APPROVED'],
+              content,
+              publish: true,
+              now,
+            },
+            tx,
+          );
+          if (rewritten === null) throw await this.articleMoved(scope, replaced.id, tx);
+          const approved = await this.deps.repository.approveCandidate(
+            scope,
+            candidateId,
+            {
+              expectedVersion: command.expectedVersion,
+              articleId: rewritten.id,
+              reviewerAdminId: this.reviewerOf(actor),
+              now,
+            },
+            tx,
+          );
+          if (approved === null) throw await this.candidateMoved(scope, candidateId, tx);
+          await this.recordRevision(scope, actor, rewritten, 'CANDIDATE', now, tx);
+          return {
+            result: approved,
+            id: candidateId,
+            audit: {
+              entityId: candidateId,
+              before: { state: before.state, version: before.version },
+              after: {
+                state: approved.state,
+                version: approved.version,
+                articleId: rewritten.id,
+                replaced: true,
+                edited: command.edit !== null,
+                title: content.title,
+                category: content.category,
+              },
+            },
+          };
+        }
         if (
           (await this.deps.repository.countArticles(scope, tx)) >= SUPPORT_KNOWLEDGE_LIMITS.articles
         ) {
@@ -512,7 +568,9 @@ export class SupportKnowledgeService {
         assertVersion(before.version, command.expectedVersion);
         // What is published is scrubbed as it is published, whoever wrote the draft and
         // whenever: the draft may predate a scrubber rule.
-        if (spec.publish) assertClean(before, await this.supportHandles(scope));
+        if (spec.publish) {
+          assertClean(before, await this.supportHandles(scope), before.sourceType);
+        }
         const after = await this.deps.repository.rewrite(
           scope,
           articleId,
@@ -724,9 +782,16 @@ export function assertClean(
   },
   /** L3: the installation's own support handles (`support.accounts`), which are not PII. */
   allowedHandles: readonly string[] = [],
+  /**
+   * Phase 4 PR-2: the build source a NEXA_BUILD article was made from — its published links,
+   * prices and (a payment route only) card numbers are the business allowlist
+   * (`businessAllowedKinds`). Null or absent: the strict scrub (manual and learned text).
+   */
+  business: SupportKnowledgeBuildSourceType | null = null,
 ): void {
   const kinds = detectSensitive([content.title, content.body, content.tags.join(' ')].join('\n'), {
     allowedHandles,
+    ...(business === null ? {} : { business }),
   });
   if (kinds.length > 0) {
     throw errors.conflict(

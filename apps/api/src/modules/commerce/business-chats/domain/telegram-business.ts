@@ -80,8 +80,34 @@ const businessMessageSchema = z
     text: z.string().optional(),
     caption: z.string().optional(),
     photo: z.array(z.unknown()).optional(),
+    document: z.unknown().optional(),
   })
   .passthrough();
+
+/**
+ * Phase 4 PR-2: the image types a DOCUMENT may carry and still be read as a photo — a customer
+ * who sends a screenshot «as a file» sends the same picture. The declared type only selects the
+ * candidate: the support AI's image source still decides by the magic bytes (JPEG, PNG, WEBP).
+ */
+export const BUSINESS_IMAGE_DOCUMENT_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+
+const imageDocumentSchema = z.object({
+  file_id: z.string().min(1).max(256),
+  file_unique_id: z.string().min(1).max(128),
+  file_size: z.number().int().nonnegative().safe().optional(),
+  mime_type: z.enum(BUSINESS_IMAGE_DOCUMENT_TYPES),
+});
+
+/** A document that is a JPEG, PNG or WEBP image, as a photo reference; null for anything else. */
+export function imageDocumentReference(raw: unknown): BusinessPhotoReference | null {
+  const parsed = imageDocumentSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  return {
+    fileId: parsed.data.file_id,
+    fileUniqueId: parsed.data.file_unique_id,
+    fileSize: parsed.data.file_size ?? null,
+  };
+}
 
 /** One business message: its routing facts, and (TB2) its bounded text and kind. */
 export interface ParsedBusinessMessage {
@@ -153,6 +179,11 @@ export function parseBusinessMessage(raw: unknown): ParsedBusinessMessage | null
   const parsed = businessMessageSchema.safeParse(raw);
   if (!parsed.success) return null;
   const message = parsed.data;
+  // Phase 4 PR-2: an image sent as a document (jpg/png/webp) counts as a photo.
+  const imageDocument =
+    message.photo === undefined && message.document !== undefined
+      ? imageDocumentReference(message.document)
+      : null;
   return {
     connectionId: message.business_connection_id,
     chatId: String(message.chat.id),
@@ -164,9 +195,14 @@ export function parseBusinessMessage(raw: unknown): ParsedBusinessMessage | null
     isFromOffline: message.is_from_offline === true,
     sentAt: new Date(message.date * 1000),
     editedAt: message.edit_date === undefined ? null : new Date(message.edit_date * 1000),
-    kind: message.photo !== undefined ? 'PHOTO' : message.text !== undefined ? 'TEXT' : 'OTHER',
+    kind:
+      message.photo !== undefined || imageDocument !== null
+        ? 'PHOTO'
+        : message.text !== undefined
+          ? 'TEXT'
+          : 'OTHER',
     text: boundedText(message.text ?? message.caption),
-    photo: message.photo === undefined ? null : largestPhotoSize(message.photo),
+    photo: message.photo !== undefined ? largestPhotoSize(message.photo) : imageDocument,
   };
 }
 
