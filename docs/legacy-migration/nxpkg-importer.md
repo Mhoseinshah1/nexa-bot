@@ -95,6 +95,22 @@ readOnlyProof: {kind: 'NOT_APPLICABLE'}}`;
 
 CLI: `legacy-import ... --source nxpkg:<path> --package-key-env <NAME>` (key never on argv).
 
+### 3a. The converter's snapshot allowlist (contract guard)
+
+`tests/unit/nxpkg-converter-allowlist.test.ts` compares every column (required and optional)
+of every read NEXA makes of `user`, `invoice` and `product` — the v1 vocabulary
+(`IMPORT_READ_SET_V1`) and every `defineLegacyReadSet` — with a vendored copy of the
+converter's `ALLOWLIST`, `tests/fixtures/legacy/converter-allowlist.json`. A column NEXA reads
+that the converter does not carry fails CI ("add it to mirza-to-nexa ALLOWLIST"), before a
+real package meets it. To refresh it from a new converter release:
+
+1. In `mirza-to-nexa` at the release tag, copy `ALLOWLIST` from
+   `src/mirza2nexa/source_snapshot.py`, verbatim and in its order, into the fixture's
+   `allowlist`, and set `version` to the release.
+2. `pnpm exec vitest run --project unit tests/unit/nxpkg-converter-allowlist.test.ts`.
+3. A failure means the release dropped a column NEXA reads: fix the converter, never the
+   fixture. A NEXA read that gains a column needs the converter release that carries it first.
+
 For an `nxpkg:` source `runMode` — the one path the operator's CLI and the migration worker
 share — adds, before the snapshot is read:
 
