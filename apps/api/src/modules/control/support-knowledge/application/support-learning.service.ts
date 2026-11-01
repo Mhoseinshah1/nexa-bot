@@ -35,12 +35,13 @@ import type {
   BusinessMessageRecord,
   BusinessMessageRepository,
   BusinessOutboundRecord,
+  BusinessEscalationRepository,
   BusinessOutboundRepository,
   HandbackLearningTrigger,
 } from '../../../commerce/business-chats/application/ports.js';
 import type { SupportAiChain } from '../../support-ai/application/support-ai-chain.js';
 import type { DrizzleSupportAiConfigRepository } from '../../support-ai/infrastructure/drizzle-support-ai.repository.js';
-import { findDuplicate, normalizeTitle } from '../domain/dedupe.js';
+import { findDuplicate, normalizeTitle, titleKeys } from '../domain/dedupe.js';
 import { learningSystemPrompt, learningUserMessage } from '../domain/learning-prompt.js';
 import { scrubSensitive } from '../domain/scrubber.js';
 import { normalizePersian } from '../../../commerce/support-context/domain/persian-text.js';
@@ -74,6 +75,11 @@ export interface SupportLearningServiceDeps {
   /** The transcript, and (D8) a message the owner typed, proposed as a source. */
   readonly messages: Pick<BusinessMessageRepository, 'recent' | 'findById'>;
   readonly outbound: Pick<BusinessOutboundRepository, 'findById' | 'recent' | 'deliveredSince'>;
+  /**
+   * Review of PR #367: the conversation's handoffs, newest first — where the current support
+   * episode starts. Absent: the whole recent chat is one episode.
+   */
+  readonly escalations?: Pick<BusinessEscalationRepository, 'forConversation'>;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -164,31 +170,61 @@ function replySource(row: BusinessOutboundRecord): LearningSource {
 const RESOLVED_ACK =
   /(?:^|[^\p{L}])(?:مرسی|ممنون|متشکر|سپاس|دمت گرم|درست شد|حل شد|اوکی شد|وصل شد|اوکیه|مشکل حل|عالی شد|merci|mersi|mamnoon|mamnun|dorost shod|hal shod|vasl shod|ok shod|thanks|thank you|solved|fixed|works now)/u;
 
+/**
+ * Review of PR #367 — a line that says the problem is NOT solved: a contrast after the thanks
+ * («ممنون ولی هنوز وصل نمیشه», «but», «vali», «hanooz») or a problem phrase (a negated verb, «نشد»,
+ * «not working», «still»). Such a line is never a resolution, whatever thanks it starts with.
+ */
+const NOT_RESOLVED =
+  /(?:^|[^\p{L}])(?:ولی|اما|ولیکن|هنوز|نمیشه|نمیشود|نمیکنه|نمیکند|نشد|نمیاد|نمیده|قطعه|خراب|مشکل دارم|but|however|still|vali|ama|hanooz|hanuz|nemishe|nashod|not working|doesn'?t|isn'?t|didn'?t)(?![\p{L}])/u;
+
 export function isResolvedAcknowledgement(text: string | null): boolean {
-  return text !== null && RESOLVED_ACK.test(normalizePersian(text));
+  if (text === null) return false;
+  const folded = normalizePersian(text);
+  return RESOLVED_ACK.test(folded) && !NOT_RESOLVED.test(folded);
 }
 
 /**
  * Phase 4 PR-2 — the person's reply that RESOLVED the conversation, which a handback learns from
- * (it used to be simply the latest one — often «خواهش می‌کنم» after the customer's thanks): when
- * the customer's latest acknowledgement («مرسی درست شد») follows a person's reply, the latest
- * eligible reply BEFORE it; with no acknowledgement, the latest eligible reply. Pure.
+ * (it used to be simply the latest one — often «خواهش می‌کنم» after the customer's thanks).
+ *
+ * Only the CURRENT support episode is read (review of PR #367): lines and replies at or after
+ * `since` — the latest handoff of the conversation; an acknowledgement from an earlier issue in a
+ * reused chat never decides. Within it, an acknowledgement counts only while it is the customer's
+ * LAST word: a customer line after it that is not itself an acknowledgement (troubleshooting went
+ * on) supersedes it. Then the latest eligible reply BEFORE that acknowledgement; otherwise the
+ * episode's latest eligible reply, and with none in the episode the latest overall. Pure.
  */
 export function resolvingReply<
   R extends { readonly createdAt: Date; readonly id: string },
   M extends { readonly origin: string; readonly text: string | null; readonly sentAt: Date },
->(replies: readonly R[], customerLines: readonly M[]): R | null {
+>(replies: readonly R[], customerLines: readonly M[], since: Date | null = null): R | null {
+  const inEpisode =
+    <T>(at: (row: T) => Date) =>
+    (row: T) =>
+      since === null || at(row).getTime() >= since.getTime();
   const ordered = [...replies].sort(
     (a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id),
   );
-  const ack = [...customerLines]
-    .filter((line) => line.origin === 'INBOUND' && isResolvedAcknowledgement(line.text))
-    .sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())[0];
-  if (ack !== undefined) {
-    const before = ordered.find((reply) => reply.createdAt.getTime() <= ack.sentAt.getTime());
+  const episodeReplies = ordered.filter(inEpisode<R>((reply) => reply.createdAt));
+  const inbound = customerLines
+    .filter((line) => line.origin === 'INBOUND')
+    .filter(inEpisode<M>((line) => line.sentAt))
+    .sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime());
+  // The customer's last word, read back over any trailing acknowledgements.
+  const latest = inbound[0];
+  if (latest !== undefined && isResolvedAcknowledgement(latest.text)) {
+    let ack = latest;
+    for (const line of inbound.slice(1)) {
+      if (!isResolvedAcknowledgement(line.text)) break;
+      ack = line;
+    }
+    const before = episodeReplies.find(
+      (reply) => reply.createdAt.getTime() <= ack.sentAt.getTime(),
+    );
     if (before !== undefined) return before;
   }
-  return ordered[0] ?? null;
+  return episodeReplies[0] ?? ordered[0] ?? null;
 }
 
 /** Thrown inside a transaction to roll it back when the job was resolved by someone else. */
@@ -225,10 +261,16 @@ export class SupportLearningService implements HandbackLearningTrigger {
     if (config.mode === 'OFF') return;
     const replies = await this.deps.outbound.recent(scope, input.conversation.id, 50);
     const lines = await this.deps.messages.recent(scope, input.conversation.id, 50, tx);
+    // Review of PR #367: the current episode starts at the conversation's latest handoff.
+    const [handoff] =
+      this.deps.escalations === undefined
+        ? []
+        : await this.deps.escalations.forConversation(scope, input.conversation.id, 1);
     // Phase 4 PR-2: the reply that resolved it, not merely the latest one.
     const latest = resolvingReply(
       replies.filter((row) => isEligibleReply(row, input.conversation.id)),
       lines,
+      handoff?.createdAt ?? null,
     );
     if (latest === null) return;
     await this.enqueue(
@@ -576,13 +618,13 @@ export class SupportLearningService implements HandbackLearningTrigger {
     // this one «جایگزین پاسخ تأییدشده» — a new candidate naming the article it would replace —
     // and a REJECTED one is never matched (the reviewer's decision was about that text).
     const duplicate = findDuplicate(
-      normalizedTitle,
+      titleKeys(title.text),
       recent.filter((row) => row.state === 'PENDING'),
     );
     const approvedTwin =
       duplicate === null
         ? findDuplicate(
-            normalizedTitle,
+            titleKeys(title.text),
             recent.filter((row) => row.state === 'APPROVED' && row.articleId !== null),
           )
         : null;
@@ -596,9 +638,19 @@ export class SupportLearningService implements HandbackLearningTrigger {
         // Refusing is not ending (docs/conventions.md): a tenant stopped during the call
         // writes nothing, and its job is left QUEUED under its lease.
         if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 'inactive';
+        let replacesNow = replaces;
         if (duplicate !== null) {
-          await this.deps.repository.mergeSource(scope, duplicate.id, source, now, tx);
-          return this.finishIn(scope, job.id, 'DONE', 'merged', duplicate.id, now, tx);
+          // Review of PR #367: the merge is conditional on the candidate still being PENDING.
+          if (await this.deps.repository.mergeSource(scope, duplicate.id, source, now, tx)) {
+            return this.finishIn(scope, job.id, 'DONE', 'merged', duplicate.id, now, tx);
+          }
+          // A reviewer decided it between the read and now: the lesson is its own candidate —
+          // the replacement of the article an approval published, or new after a rejection.
+          const decided = await this.deps.repository.findCandidate(scope, duplicate.id, tx);
+          replacesNow =
+            decided !== null && decided.state === 'APPROVED' && decided.articleId !== null
+              ? await this.replaceableArticle(scope, decided.articleId, tx)
+              : null;
         }
         const rejected = kinds.length > 0;
         const inserted = await this.deps.repository.insertCandidate(
@@ -619,7 +671,7 @@ export class SupportLearningService implements HandbackLearningTrigger {
             jobId: job.id,
             provider: result.step?.provider ?? null,
             model: result.outcome.outcome === 'OK' ? result.outcome.model : null,
-            replacesArticleId: rejected ? null : replaces,
+            replacesArticleId: rejected ? null : replacesNow,
             assisted: reply.assisted,
             now,
           },
@@ -632,8 +684,12 @@ export class SupportLearningService implements HandbackLearningTrigger {
             normalizedTitle,
             tx,
           );
-          if (existing === null) throw new Error('A candidate title conflicted with no row.');
-          await this.deps.repository.mergeSource(scope, existing.id, source, now, tx);
+          if (
+            existing === null ||
+            !(await this.deps.repository.mergeSource(scope, existing.id, source, now, tx))
+          ) {
+            throw new Error('A candidate title conflicted with no PENDING row.');
+          }
           return this.finishIn(scope, job.id, 'DONE', 'merged', existing.id, now, tx);
         }
         return this.finishIn(
@@ -657,8 +713,12 @@ export class SupportLearningService implements HandbackLearningTrigger {
    * APPROVED. A retired one, or one a person rewrote as MANUAL, is not replaced: the lesson is
    * then an ordinary new candidate.
    */
-  private async replaceableArticle(scope: ScopeContext, articleId: string): Promise<string | null> {
-    const article = await this.deps.repository.findArticle(scope, articleId);
+  private async replaceableArticle(
+    scope: ScopeContext,
+    articleId: string,
+    tx?: unknown,
+  ): Promise<string | null> {
+    const article = await this.deps.repository.findArticle(scope, articleId, tx);
     return article !== null && article.source === 'LEARNED' && article.state === 'APPROVED'
       ? article.id
       : null;

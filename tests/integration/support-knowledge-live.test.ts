@@ -237,4 +237,59 @@ describe('PR-2: the live catalogue quotes the checkout’s price', () => {
     });
     expect(plan.personalDiscountPercent).toBeNull();
   });
+  it('review of PR #367: a reseller sees only what their tier grants (products, panels, categories)', async () => {
+    const c = ctx.container;
+    const products = new DrizzleProductRepository(c.database.db);
+    const product = (await products.findById(tenantA, productId))!;
+    const granted = await products.create(tenantA, {
+      id: c.ids.uuid() as ProductId,
+      draft: {
+        title: 'پلن نمایندگی',
+        description: null,
+        audience: 'EVERYONE',
+        sortOrder: 20,
+        panelId: product.panelId,
+        categoryId: SEED_IDS.categoryA as ProductCategoryId,
+        specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
+        price: money(200_000n, 'IRT'),
+        display: EMPTY_PRODUCT_DISPLAY,
+      },
+      now: c.clock.now(),
+    });
+    await products.setStatus(tenantA, granted.id, 'INACTIVE', 'ACTIVE', c.clock.now());
+    const tier = await c.resellersAdmin.createTier(tenantA, owner, {
+      idempotencyKey: key('tier'),
+      write: {
+        name: 'Tier PR-2',
+        pricingMode: 'PERCENTAGE_DISCOUNT',
+        discountPercentage: 10,
+        creditLimit: money(0n, 'IRT'),
+      },
+    });
+    await c.resellersAdmin.replaceGrants(tenantA, owner, {
+      idempotencyKey: key('grants'),
+      tierId: tier.id,
+      grants: [
+        { kind: 'OPERATION', subject: 'NEW_SERVICE' },
+        { kind: 'PRODUCT', subject: granted.id },
+        { kind: 'PANEL', subject: null },
+        { kind: 'BOT', subject: null },
+      ],
+    });
+    await c.resellersAdmin.register(tenantA, owner, {
+      idempotencyKey: key('register'),
+      customerId: customer,
+      write: { tierId: tier.id, pricingMode: 'TIER', discountPercentage: null, creditLimit: null },
+    });
+    const { payload } = await c.supportContext.build(tenantA, customer);
+    // The public plan the tier does not grant is not listed; the granted one is, at the
+    // reseller's price — what its draft charges.
+    expect(payload.catalogue.map((plan) => plan.title)).toEqual(['پلن نمایندگی']);
+    const draft = await c.orders.createDraft(viaBot, customerActor(key('draft')), {
+      idempotencyKey: key('draft'),
+      customerId: customer,
+      productId: granted.id,
+    });
+    expect(payload.catalogue[0]?.price.amountMinor).toBe(draft.totals.total.amountMinor.toString());
+  });
 });

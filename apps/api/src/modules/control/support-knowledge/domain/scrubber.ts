@@ -271,6 +271,59 @@ function hasUserinfo(match: string): boolean {
   return (slash < 0 ? rest : rest.slice(0, slash)).includes('@');
 }
 
+/**
+ * Review of PR #367 (P1): query parameter NAMES that carry a credential. A link with one is never
+ * public, whatever host it is on.
+ */
+const CREDENTIAL_PARAM =
+  /^(?:.*(?:token|secret|passw(?:or)?d|pwd|apikey|api_key|api-key|auth|sig(?:nature)?|session|credential|access|private)|key|pass|sid|code|otp|jwt|uuid|hash)$/iu;
+
+/**
+ * Review of PR #367 (P1) — whether a link an owner published is PUBLIC, checked on its parts
+ * BEFORE the business exemption may keep it: no userinfo; no subscription-shaped path; no query
+ * parameter whose name carries a credential (`token=`, `key=`, `sig=`, …); and no path segment or
+ * query value that looks like a secret — a UUID, a provider key (`sk-…`, `ghp_…`), or a run of 16+
+ * letters and digits mixed (a token, never a word or an app id). Anything else falls through to
+ * the strict scrub.
+ */
+export function isPublicBusinessLink(match: string): boolean {
+  if (hasUserinfo(match)) return false;
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//iu.test(match) ? match : `https://${match}`;
+  let url: URL;
+  try {
+    url = new URL(withScheme);
+  } catch {
+    return false;
+  }
+  const path = decodeURIComponentSafe(url.pathname);
+  if (new RegExp(`(?:^|/)${SUB_PATH}(?:/|$)`, 'iu').test(path)) return false;
+  const values: string[] = path.split('/').filter((segment) => segment !== '');
+  for (const [name, value] of url.searchParams) {
+    if (CREDENTIAL_PARAM.test(name)) return false;
+    values.push(value);
+  }
+  const fragment = decodeURIComponentSafe(url.hash.replace(/^#/u, ''));
+  if (fragment !== '') values.push(...fragment.split(/[&=/]/u));
+  return !values.some(looksSecret);
+}
+
+function looksSecret(value: string): boolean {
+  if (/[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}/iu.test(value)) return true;
+  if (/(?:^|[^a-z])(?:sk|pk|rk|ghp|gho|xox[abp])[-_][a-z0-9_-]{8,}/iu.test(value)) return true;
+  for (const run of value.match(/[A-Za-z0-9_+=-]{16,}/gu) ?? []) {
+    if (/[0-9]/u.test(run) && /[A-Za-z]/u.test(run)) return true;
+  }
+  return false;
+}
+
+function decodeURIComponentSafe(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 /** Scrubs `text`: every sensitive span becomes a marker naming its kind. */
 export function scrubSensitive(text: string, options: ScrubOptions = {}): ScrubResult {
   let out = foldDigits(text.normalize('NFKC'));
@@ -291,12 +344,13 @@ export function scrubSensitive(text: string, options: ScrubOptions = {}): ScrubR
       // `t.me/name` would otherwise be a HOST), and put back at the end.
       if (kind === 'USERNAME' && allowed.has(handleKey(match))) return keep(match);
       // Phase 4 PR-2: what this business source publishes to its customers stays, set aside
-      // the same way — never a link carrying userinfo, and never a marker already written.
+      // the same way — never a marker already written, and a link only once its parts are
+      // checked (`isPublicBusinessLink`, review of PR #367): a credential in it is a hit.
       if (
         business !== null &&
         business.has(kind) &&
         !match.includes(`[${REDACTION_MARK}:`) &&
-        !((kind === 'URL_TOKEN' || kind === 'HOST') && hasUserinfo(match))
+        !((kind === 'URL_TOKEN' || kind === 'HOST') && !isPublicBusinessLink(match))
       ) {
         return keep(match);
       }

@@ -670,9 +670,9 @@ export class DrizzleSupportKnowledgeRepository {
     source: LearningSourceRef,
     now: Date,
     tx: unknown,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
-    await exec(this.db, tx)
+    const updated = await exec(this.db, tx)
       .update(supportLearningCandidates)
       .set({
         sourceRefs: sql`CASE WHEN jsonb_array_length(${supportLearningCandidates.sourceRefs}) < ${SUPPORT_LEARNING_MAX_SOURCES}
@@ -682,8 +682,15 @@ export class DrizzleSupportKnowledgeRepository {
         updatedAt: now,
       })
       .where(
-        and(eq(supportLearningCandidates.tenantId, tenantId), eq(supportLearningCandidates.id, id)),
-      );
+        and(
+          eq(supportLearningCandidates.tenantId, tenantId),
+          eq(supportLearningCandidates.id, id),
+          // Review of PR #367: only into a candidate still PENDING, decided atomically here.
+          eq(supportLearningCandidates.state, 'PENDING'),
+        ),
+      )
+      .returning({ id: supportLearningCandidates.id });
+    return updated.length > 0;
   }
 
   /** PENDING → APPROVED, naming the version the reviewer read and the article it published. */
@@ -1047,6 +1054,85 @@ export class DrizzleSupportKnowledgeRepository {
           input.unedited
             ? eq(supportKnowledgeArticles.builtRevision, input.baseRevision)
             : undefined,
+        ),
+      )
+      .returning();
+    return row === undefined ? null : article(row);
+  }
+
+  /**
+   * Review of PR #367 — the built articles the AUTOMATIC refresh retired (its source left the
+   * allowlist) and nothing has written since: a RETIRED NEXA_BUILD article, unedited
+   * (`revision = built_revision`), whose last write was an APPLIED RETIRE proposal of a build no
+   * administrator ran (`created_by_admin_id IS NULL`). A reviewer's own retirement writes no
+   * proposal, and a later write moves `updated_at` past the proposal's decision, so neither is
+   * ever reinstated by the refresh.
+   */
+  async autoRetiredBuilt(
+    scope: ScopeContext,
+    tx?: unknown,
+  ): Promise<readonly KnowledgeArticleRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await exec(this.db, tx)
+      .select()
+      .from(supportKnowledgeArticles)
+      .where(
+        and(
+          eq(supportKnowledgeArticles.tenantId, tenantId),
+          eq(supportKnowledgeArticles.source, 'NEXA_BUILD'),
+          eq(supportKnowledgeArticles.state, 'RETIRED'),
+          sql`${supportKnowledgeArticles.revision} = ${supportKnowledgeArticles.builtRevision}`,
+          sql`EXISTS (
+            SELECT 1 FROM support_knowledge_build_proposals p
+              JOIN support_knowledge_builds b ON b.tenant_id = p.tenant_id AND b.id = p.build_id
+             WHERE p.tenant_id = ${supportKnowledgeArticles.tenantId}
+               AND p.article_id = ${supportKnowledgeArticles.id}
+               AND p.kind = 'RETIRE' AND p.state = 'APPLIED'
+               AND b.created_by_admin_id IS NULL
+               AND p.decided_at = ${supportKnowledgeArticles.updatedAt})`,
+        ),
+      );
+    return rows.map(article);
+  }
+
+  /**
+   * Review of PR #367: an automatically retired article whose source is back — RETIRED →
+   * APPROVED with the source's current text as the next built revision, conditional on the
+   * version read (a concurrent write wins and nothing is reinstated).
+   */
+  async reinstateBuilt(
+    scope: ScopeContext,
+    id: string,
+    input: {
+      readonly expectedVersion: number;
+      readonly content: SupportKnowledgeContent;
+      readonly hash: string;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<KnowledgeArticleRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await exec(this.db, tx)
+      .update(supportKnowledgeArticles)
+      .set({
+        state: 'APPROVED',
+        title: input.content.title,
+        body: input.content.body,
+        category: input.content.category,
+        tags: [...input.content.tags],
+        revision: sql`${supportKnowledgeArticles.revision} + 1`,
+        builtRevision: sql`${supportKnowledgeArticles.revision} + 1`,
+        builtHash: input.hash,
+        version: sql`${supportKnowledgeArticles.version} + 1`,
+        updatedAt: input.now,
+      })
+      .where(
+        and(
+          eq(supportKnowledgeArticles.tenantId, tenantId),
+          eq(supportKnowledgeArticles.id, id),
+          eq(supportKnowledgeArticles.source, 'NEXA_BUILD'),
+          eq(supportKnowledgeArticles.state, 'RETIRED'),
+          eq(supportKnowledgeArticles.version, input.expectedVersion),
         ),
       )
       .returning();

@@ -31,10 +31,17 @@ import type { SessionRepository } from '../../../platform/identity/application/p
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { isUniqueViolation } from '../../../../infrastructure/persistence/sqlstate.js';
-import { diffBuild, sourceRef, type BuildItem, type BuiltArticle } from '../domain/build-diff.js';
+import {
+  contentHash,
+  diffBuild,
+  sourceRef,
+  type BuildItem,
+  type BuiltArticle,
+} from '../domain/build-diff.js';
 import type {
   DrizzleSupportKnowledgeRepository,
   KnowledgeBuildCounts,
+  KnowledgeArticleRecord,
   KnowledgeBuildRecord,
   KnowledgeProposalRecord,
   NewProposal,
@@ -501,7 +508,7 @@ export class SupportKnowledgeBuildService {
       present: collected.present,
       incomplete: collected.incomplete,
     });
-    const signature = buildSignature(preview);
+    const signature = buildSignature(preview, await this.pendingReinstatements(scope, collected));
     if (signature === null) return { outcome: 'UNCHANGED' };
     const idempotencyKey = `support_knowledge.auto_refresh:${signature}`;
     const requestHash = hashRequest({ action: denial.action, signature });
@@ -529,7 +536,71 @@ export class SupportKnowledgeBuildService {
           present: collected.present,
           incomplete: collected.incomplete,
         });
-        if (buildSignature(drafts) === null) return { outcome: 'UNCHANGED' } as const;
+        const reinstate = await this.pendingReinstatements(scope, collected, tx);
+        if (buildSignature(drafts, reinstate) === null) return { outcome: 'UNCHANGED' } as const;
+        // Review of PR #367: an automatically retired article whose source is back is reinstated
+        // (never one a reviewer retired, never one written since — `autoRetiredBuilt`).
+        let reinstated = 0;
+        for (const entry of reinstate) {
+          const back = await this.deps.repository.reinstateBuilt(
+            scope,
+            entry.article.id,
+            {
+              expectedVersion: entry.article.version,
+              content: entry.item.content,
+              hash: contentHash(entry.item.content),
+              now,
+            },
+            tx,
+          );
+          if (back === null) continue;
+          await this.deps.repository.insertRevision(
+            scope,
+            {
+              id: this.deps.ids.uuid(),
+              article: back,
+              origin: 'BUILD',
+              reviewerAdminId: null,
+              now,
+            },
+            tx,
+          );
+          reinstated += 1;
+        }
+        if (buildSignature(drafts) === null) {
+          const only: KnowledgeAutoRefreshResult = {
+            outcome: 'REFRESHED',
+            buildId: null,
+            applied: 0,
+            conflicted: 0,
+            skipped: 0,
+            reinstated,
+            capped: collected.capped,
+          };
+          await this.deps.audit.record(
+            scope,
+            actor,
+            {
+              action: denial.action,
+              entityType: 'SupportKnowledgeBuild',
+              entityId: null,
+              before: null,
+              after: { reinstated },
+              result: 'SUCCESS',
+            },
+            tx,
+          );
+          await rememberOnce(
+            this.deps.idempotency,
+            scope,
+            actor.surface,
+            idempotencyKey,
+            requestHash,
+            only,
+            tx,
+          );
+          return only;
+        }
         const proposals: NewProposal[] = drafts.map((draft) => ({
           id: this.deps.ids.uuid(),
           sourceType: draft.item.sourceType,
@@ -598,6 +669,7 @@ export class SupportKnowledgeBuildService {
           applied,
           conflicted: conflicted + counts.conflict,
           skipped,
+          reinstated,
           capped: collected.capped,
         };
         await this.deps.audit.record(
@@ -613,6 +685,7 @@ export class SupportKnowledgeBuildService {
               applied,
               conflicted: result.conflicted,
               skipped,
+              reinstated,
               excluded: collected.excluded,
               truncated: collected.truncated,
               capped: collected.capped,
@@ -649,7 +722,27 @@ export class SupportKnowledgeBuildService {
         present: collected.present,
         incomplete: collected.incomplete,
       }),
+      await this.pendingReinstatements(scope, collected),
     );
+  }
+
+  /**
+   * Review of PR #367: the automatically retired articles (`autoRetiredBuilt`) whose source the
+   * allowlist yields again, with the source item that brings each back.
+   */
+  private async pendingReinstatements(
+    scope: ScopeContext,
+    collected: { readonly items: readonly BuildItem[] },
+    tx?: TransactionScope,
+  ): Promise<readonly { readonly article: KnowledgeArticleRecord; readonly item: BuildItem }[]> {
+    const retired = await this.deps.repository.autoRetiredBuilt(scope, tx);
+    if (retired.length === 0) return [];
+    const bySource = new Map(collected.items.map((i) => [sourceRef(i.sourceType, i.sourceKey), i]));
+    return retired.flatMap((article) => {
+      if (article.sourceType === null || article.sourceKey === null) return [];
+      const item = bySource.get(sourceRef(article.sourceType, article.sourceKey));
+      return item === undefined ? [] : [{ article, item }];
+    });
   }
 
   /**
@@ -986,10 +1079,12 @@ export type KnowledgeAutoRefreshResult =
   | { readonly outcome: 'OFF' | 'UNCHANGED' | 'INACTIVE' | 'BUSY' }
   | {
       readonly outcome: 'REFRESHED';
-      readonly buildId: string;
+      /** Null when the pass only reinstated articles (no change-set to write). */
+      readonly buildId: string | null;
       readonly applied: number;
       readonly conflicted: number;
       readonly skipped: number;
+      readonly reinstated: number;
       readonly capped: number;
     };
 
@@ -1006,18 +1101,26 @@ export function buildSignature(
     readonly hash: string;
     readonly article: { readonly id: string; readonly revision: number } | null;
   }[],
+  /** Review of PR #367: automatically retired articles whose source is back. */
+  reinstatements: readonly {
+    readonly article: { readonly id: string; readonly version: number };
+  }[] = [],
 ): string | null {
   // The article's revision is part of it: the same text proposed again after an apply (A → B →
   // A → B) is a new change, never a replay of the first one.
-  const changes = drafts
-    .filter((draft) => draft.kind !== 'UNCHANGED')
-    .map(
-      (draft) =>
-        `${draft.item.sourceType}:${draft.item.sourceKey}:${draft.kind}:${draft.hash}:${
-          draft.article === null ? '-' : `${draft.article.id}@${String(draft.article.revision)}`
-        }`,
-    )
-    .sort();
+  const changes = [
+    ...drafts
+      .filter((draft) => draft.kind !== 'UNCHANGED')
+      .map(
+        (draft) =>
+          `${draft.item.sourceType}:${draft.item.sourceKey}:${draft.kind}:${draft.hash}:${
+            draft.article === null ? '-' : `${draft.article.id}@${String(draft.article.revision)}`
+          }`,
+      ),
+    ...reinstatements.map(
+      (entry) => `REINSTATE:${entry.article.id}@${String(entry.article.version)}`,
+    ),
+  ].sort();
   if (changes.length === 0) return null;
   return createHash('sha256').update(changes.join('\n')).digest('hex').slice(0, 32);
 }

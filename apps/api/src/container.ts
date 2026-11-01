@@ -7111,6 +7111,8 @@ export function createContainer(
     conversations: businessConversationRepository,
     messages: businessMessageRepository,
     outbound: businessOutboundRepository,
+    // Review of PR #367: a handback learns only from the current episode (since its handoff).
+    escalations: businessEscalationRepository,
     guard,
     uow,
     audit,

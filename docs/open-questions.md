@@ -4918,11 +4918,9 @@ live; the owner decides otherwise.
   panel client today, and a panel call from it would be a new outbound path with its own
   credential handling. Whether to add a bounded (≤ 2 s, fall back to stored) read is the owner's
   call.
-- **OQ-SAI-2-02 — reseller-only plans in the support AI's catalogue (Phase 4 PR-2, item 1).** The
-  live catalogue lists the PUBLIC customer catalogue, priced for each customer through the one
-  pricing boundary (a reseller's tier applies; a plan their table does not sell is left out).
-  Plans visible only to resellers are not listed. Whether a reseller's conversation should list
-  their tier's catalogue is the owner's call.
+- **OQ-SAI-2-02 — CLOSED by the review of PR #367.** The live catalogue is now the customer's own
+  catalogue (`ProductService.customerCatalogue`, the browse's view): an ACTIVE reseller sees what
+  their grants show (granted panels, products, categories, reseller-only plans included).
 - **OQ-SAI-2-03 — packages are listed without one panel's per-purchase cap (PR-2, item 1).** The
   traffic/time packages in the context are the tenant's offerable ones in the sales currency; a
   panel's policy cap is re-decided by the bot when the customer opens the offer for a service.
