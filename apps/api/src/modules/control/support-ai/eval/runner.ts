@@ -162,7 +162,10 @@ export interface EvalPrepared {
 export function prepareScenario(
   scenario: EvalScenario,
   capabilities: SupportAiCapabilities = REFERENCE_CAPABILITIES,
+  /** Phase 4 PR-6: the effective configuration's reply limit and tool switch (default: A10's). */
+  options: { readonly maxOutputChars?: number; readonly actionsEnabled?: boolean } = {},
 ): EvalPrepared {
+  const maxChars = options.maxOutputChars ?? EVAL_GUARD_CONFIG.maxOutputChars;
   const lines = scenario.transcript.map((line, index) => ({
     id: `L${String(index + 1)}`,
     origin: ORIGIN_OF[line.author],
@@ -173,7 +176,7 @@ export function prepareScenario(
   }));
   const prior = scenario.prior ?? [];
   const selected = selectKnowledge(
-    EVAL_ARTICLES.map((article) => ({
+    (scenario.articles ?? EVAL_ARTICLES).map((article) => ({
       title: article.title,
       body: article.body,
       tags: article.tags ?? [],
@@ -206,9 +209,12 @@ export function prepareScenario(
         alias: aliasFor('K', index),
         ...entry,
       })),
-      // Phase 4 PR-2: no live catalogue in the eval (its scenarios carry no prices yet).
-      catalogue: [],
-      addons: [],
+      // Phase 4 PR-2/PR-6: the live catalogue a scenario carries (none unless it sets one).
+      catalogue: (scenario.catalogue ?? []).map((plan, index) => ({
+        alias: aliasFor('C', index),
+        ...plan,
+      })),
+      addons: [...(scenario.addons ?? [])],
       supportAccounts: ['@nexa_support_demo'],
       flags: {
         hasUnderReviewPayment: payments.some((payment) => payment.underReview),
@@ -278,14 +284,15 @@ export function prepareScenario(
     request: {
       system: supportSystemPrompt({
         businessToneInstructions: '',
-        maxReplyChars: EVAL_GUARD_CONFIG.maxOutputChars,
+        maxReplyChars: maxChars,
         contextJson: JSON.stringify(payload),
         identityLinked: scenario.linked,
+        ...(options.actionsEnabled === undefined ? {} : { actionsEnabled: options.actionsEnabled }),
       }),
       messages,
       jsonSchema: SUPPORT_AI_DECISION_JSON_SCHEMA,
       schemaName: 'support_decision',
-      maxOutputTokens: decisionOutputTokens(EVAL_GUARD_CONFIG.maxOutputChars),
+      maxOutputTokens: decisionOutputTokens(maxChars),
     },
     knowledgeTitles: payload.knowledge.map((entry) => entry.question),
     factAliases: new Set([

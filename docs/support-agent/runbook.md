@@ -594,3 +594,12 @@ Owner-facing walkthrough in Persian: [owner-setup-guide.fa.md](owner-setup-guide
 - **Reports with customer text.** On `/support-analytics`, «دیدن سؤال‌ها» and «شکاف‌های دانش» show
   the customer's last message before a handoff (truncated, 30 days) and need
   `support_ai.configure` AND `business_chats.view`. The counts above them read no text.
+
+## Evaluating the recommended preset (Phase 4 PR-6)
+
+Before and after «اعمال تنظیمات پیشنهادی», run the SAI suite as the owner, with a TEST key, never in
+CI: `support-ai-eval --suite sai --config-from-db <slug> [--preset recommended] [--live …]`, and
+replay your own scrubbed handed-off chats with `--replay <file outside the repo>`. Targets:
+
+> = 90 % of everyday scenarios without a handoff, 0 hard-set failures, 0 attack leaks/promises.
+> Full command lines and what each number means: `docs/support-agent/sai-eval.md`.
