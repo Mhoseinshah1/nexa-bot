@@ -6,7 +6,6 @@ import {
   SUPPORT_AI_JOB_RETRY_DELAY_MS,
   SUPPORT_AI_LINK_ACCOUNT_TEMPLATE_KEY,
   SUPPORT_AI_LINK_SENT_CODE,
-  SUPPORT_AI_PAYMENT_CHECK_WINDOW_DAYS,
   SUPPORT_AI_REFUSAL_LIMIT,
   SUPPORT_AI_SESSION_INACTIVITY_SECONDS,
   SUPPORT_AI_SUSPICIOUS_PROBING_CODE,
@@ -72,7 +71,6 @@ import {
   PAYMENT_CHECK_SUMMARY_WORDS,
   composeAiMessage,
   composeButtons,
-  deepLinkUrl,
   paymentCheckBranch,
   paymentCheckSummary,
   planAction,
@@ -110,6 +108,7 @@ import {
 import type { SupportImageSource } from './ports.js';
 import { SUPPORT_TRANSCRIPT_READ_LINES, readSupportTranscript } from './support-transcript.js';
 import { withKnowledgeCounts } from './knowledge-telemetry.js';
+import { SupportToolPreparer, type PreparedTool } from './support-tool-preparer.js';
 
 /** The key that makes an automatic job idempotent on its message (and content version). */
 export function autoJobKey(conversationId: string, telegramMessageId: number, version: number) {
@@ -328,24 +327,6 @@ export interface SupportAutoReplyServiceDeps {
   };
 }
 
-/** Phase 4 PR-3: what a tool adds to one reply, prepared before the enqueue. */
-interface PreparedTool {
-  readonly toolAction: Exclude<SupportAiActionKind, 'NONE'>;
-  /** Server text placed under the model's reply (a link, payment lines); never the model's. */
-  readonly extra: string | null;
-  /** Whether `extra` goes through the output validator with the reply (a subscription link). */
-  readonly validated: boolean;
-  /** The links the validator may let through for THIS reply: the customer's own link only. */
-  readonly allowLinks: readonly string[];
-  readonly button: BusinessOutboundButton | null;
-  /** A subscription link or files button sent: re-read in the enqueue, and logged. */
-  readonly linkSent: {
-    readonly serviceId: string;
-    readonly username: string;
-    readonly link: string | null;
-  } | null;
-}
-
 /** Phase 4 PR-3: what a handoff carries beyond the verdict. */
 interface HandoffExtra {
   readonly toolAction?: Exclude<SupportAiActionKind, 'NONE'>;
@@ -413,7 +394,15 @@ type ImageWrite = (now: Date, tx: TransactionScope) => Promise<void>;
  * The AI never acts on money, services or ownership: its only output is a reply, or nothing.
  */
 export class SupportAutoReplyService {
-  constructor(private readonly deps: SupportAutoReplyServiceDeps) {}
+  private readonly preparer: SupportToolPreparer;
+
+  constructor(private readonly deps: SupportAutoReplyServiceDeps) {
+    this.preparer = new SupportToolPreparer({
+      ...(deps.tools === undefined ? {} : { reader: deps.tools.reader }),
+      ...(deps.templates === undefined ? {} : { templates: deps.templates }),
+      clock: deps.clock,
+    });
+  }
 
   async produce(scope: ScopeContext, job: SupportAiJobRecord): Promise<AutoJobResult> {
     const epoch = job.controlEpoch ?? -1;
@@ -1323,182 +1312,37 @@ export class SupportAutoReplyService {
   }
 
   /** A template rendered for the customer, or null when it cannot render (or is empty). */
-  private async render(
+  private render(
     scope: ScopeContext,
     key: string,
     values: Readonly<Record<string, string>> = {},
     tx?: TransactionScope,
   ): Promise<string | null> {
-    try {
-      const text = await this.deps.templates?.render(
-        scope,
-        key as Parameters<TemplateResolver['render']>[1],
-        values,
-        undefined,
-        tx,
-      );
-      return text === undefined || text.trim() === '' ? null : text.trim();
-    } catch {
-      return null;
-    }
+    return this.preparer.render(scope, key, values, tx);
   }
 
   /** A button whose label is a template; null when the label cannot render. */
-  private async button(
+  private button(
     scope: ScopeContext,
     labelKey: string,
     target: { readonly url: string } | { readonly callbackData: string },
   ): Promise<BusinessOutboundButton | null> {
-    const label = await this.render(scope, labelKey);
-    if (label === null) return null;
-    return {
-      label: label.slice(0, 64),
-      url: 'url' in target ? target.url : null,
-      callbackData: 'callbackData' in target ? target.callbackData : null,
-    };
+    return this.preparer.button(scope, labelKey, target);
   }
 
-  /**
-   * What one planned tool adds to the reply, read now — or null when it cannot be given (the
-   * service has no link, the customer is not eligible for a trial, a label cannot render): the
-   * caller treats that as a refused target (`tool_scope`).
-   */
-  private async prepareTool(
+  /** What one planned tool adds to the reply (`SupportToolPreparer`); null when it cannot. */
+  private prepareTool(
     scope: ScopeContext,
     customerId: string | null,
     plan: Exclude<ActionPlan, { kind: 'none' } | { kind: 'refused' }>,
     botUsername: string | null,
   ): Promise<PreparedTool | null> {
-    const reader = this.deps.tools?.reader;
-    if (reader === undefined) return null;
-    const keys = SUPPORT_AI_TEMPLATE_KEYS;
-    switch (plan.kind) {
-      case 'subscription_link': {
-        if (customerId === null) return null;
-        const subscription = await reader.subscriptionOf(scope, customerId, plan.serviceId);
-        if (subscription === null) return null;
-        if (subscription.link !== null) {
-          const extra = await this.render(scope, keys.subscriptionLink, {
-            service: subscription.username,
-            link: subscription.link,
-          });
-          if (extra === null) return null;
-          return {
-            toolAction: 'SEND_SUBSCRIPTION_LINK',
-            extra,
-            validated: true,
-            allowLinks: [subscription.link],
-            button: null,
-            linkSent: {
-              serviceId: plan.serviceId,
-              username: subscription.username,
-              link: subscription.link,
-            },
-          };
-        }
-        // R11 A4 «فقط فایل»: never the link — the bot's service card, where «فایل‌ها» sends them.
-        if (!subscription.filesOnly || botUsername === null) return null;
-        const extra = await this.render(scope, keys.filesInBot, { service: subscription.username });
-        const button = await this.button(scope, keys.buttonServiceInBot, {
-          url: deepLinkUrl(botUsername, 'service', plan.serviceId),
-        });
-        if (extra === null || button === null) return null;
-        return {
-          toolAction: 'SEND_SUBSCRIPTION_LINK',
-          extra,
-          validated: false,
-          allowLinks: [],
-          button,
-          linkSent: { serviceId: plan.serviceId, username: subscription.username, link: null },
-        };
-      }
-      case 'payment_status': {
-        if (customerId === null) return null;
-        const payments = await reader.paymentsForCheck(scope, customerId, this.checkSince());
-        const extra =
-          payments.length === 0
-            ? await this.render(scope, keys.paymentStatusNone)
-            : await this.paymentLines(scope, payments);
-        if (extra === null) return null;
-        // Server facts (codes, amounts): never the model's words, so not the validator's.
-        return {
-          toolAction: 'PAYMENT_STATUS',
-          extra,
-          validated: false,
-          allowLinks: [],
-          button: null,
-          linkSent: null,
-        };
-      }
-      case 'deep_link': {
-        if (botUsername === null) return null;
-        let flow = plan.flow;
-        let id = plan.id;
-        if (plan.trialCheck === true) {
-          if (customerId === null || !(await reader.trialEligible(scope, customerId))) return null;
-        }
-        if (plan.productId !== undefined) {
-          const category = await reader.categoryOfProduct(scope, plan.productId);
-          if (category !== null) {
-            flow = 'category';
-            id = category;
-          }
-        }
-        const button = await this.button(scope, DEEP_LINK_LABELS[plan.action], {
-          url: deepLinkUrl(botUsername, flow, id),
-        });
-        if (button === null) return null;
-        return {
-          toolAction: plan.action as Exclude<SupportAiActionKind, 'NONE'>,
-          extra: null,
-          validated: false,
-          allowLinks: [],
-          button,
-          linkSent: null,
-        };
-      }
-      case 'open_bot': {
-        if (botUsername === null) return null;
-        const button = await this.button(scope, SUPPORT_AI_TEMPLATE_KEYS.buttonOpenBot, {
-          url: deepLinkUrl(botUsername, null, null),
-        });
-        if (button === null) return null;
-        return {
-          toolAction: plan.action as Exclude<SupportAiActionKind, 'NONE'>,
-          extra: null,
-          validated: false,
-          allowLinks: [],
-          button,
-          linkSent: null,
-        };
-      }
-    }
-  }
-
-  /** The customer's payments as status lines (`bot.support.ai_payment_status_line`). */
-  private async paymentLines(
-    scope: ScopeContext,
-    payments: readonly PaymentCheckFact[],
-  ): Promise<string | null> {
-    const lines: string[] = [];
-    for (const payment of payments) {
-      const line = await this.render(scope, SUPPORT_AI_TEMPLATE_KEYS.paymentStatusLine, {
-        code: payment.code ?? PAYMENT_CHECK_SUMMARY_WORDS.noCode,
-        amount: payment.amount,
-        state: payment.stateLabel,
-        route: payment.route,
-      });
-      if (line === null) return null;
-      lines.push(line);
-    }
-    return lines.join('\n');
+    return this.preparer.prepare(scope, customerId, plan, botUsername);
   }
 
   /** Where the payments a check reads begin: `SUPPORT_AI_PAYMENT_CHECK_WINDOW_DAYS` back. */
   private checkSince(): Date {
-    return new Date(
-      this.deps.clock.now().getTime() - SUPPORT_AI_PAYMENT_CHECK_WINDOW_DAYS * 86_400_000,
-    );
+    return this.preparer.checkSince();
   }
 
   /**
@@ -2214,21 +2058,6 @@ const PAYMENT_CHECKED: Extract<AutoVerdict, { pass: false }> = {
   reason: 'HANDOFF_TOPIC',
 };
 
-/** Phase 4 PR-3: the label of each deep link's button. */
-const DEEP_LINK_LABELS: Readonly<Record<SupportAiActionKind, string>> = {
-  NONE: SUPPORT_AI_TEMPLATE_KEYS.buttonOpenBot,
-  SEND_SUBSCRIPTION_LINK: SUPPORT_AI_TEMPLATE_KEYS.buttonServiceInBot,
-  PAYMENT_STATUS: SUPPORT_AI_TEMPLATE_KEYS.buttonOpenBot,
-  BUY: SUPPORT_AI_TEMPLATE_KEYS.buttonBuy,
-  RENEW: SUPPORT_AI_TEMPLATE_KEYS.buttonRenew,
-  ADD_TRAFFIC: SUPPORT_AI_TEMPLATE_KEYS.buttonAddTraffic,
-  ADD_TIME: SUPPORT_AI_TEMPLATE_KEYS.buttonAddTime,
-  CHANGE_LOCATION: SUPPORT_AI_TEMPLATE_KEYS.buttonChangeLocation,
-  TRIAL: SUPPORT_AI_TEMPLATE_KEYS.buttonTrial,
-  ROTATE_LINK: SUPPORT_AI_TEMPLATE_KEYS.buttonRotate,
-  WALLET_TOPUP: SUPPORT_AI_TEMPLATE_KEYS.buttonTopup,
-};
-
 /**
  * Phase 4 PR-3 — the decision recorded for a message NEXA composed without a model (the
  * unsupported-content reply, check-before-handoff's question or delivered link): what was sent,
@@ -2280,14 +2109,14 @@ function serverDecision(
 }
 
 /** The bot's username from its start link (`botLinkOf`), or null. */
-function botUsernameOf(botLink: string | null): string | null {
+export function botUsernameOf(botLink: string | null): string | null {
   if (botLink === null) return null;
   const match = /^https:\/\/t\.me\/([A-Za-z][A-Za-z0-9_]{3,31})\?/u.exec(botLink);
   return match?.[1] ?? null;
 }
 
 /** The tool a resolved plan uses (the tool-call limit counts it). */
-function toolActionOf(
+export function toolActionOf(
   plan: Exclude<ActionPlan, { kind: 'none' } | { kind: 'refused' }>,
 ): Exclude<SupportAiActionKind, 'NONE'> {
   switch (plan.kind) {
@@ -2301,7 +2130,7 @@ function toolActionOf(
   }
 }
 
-function knownAliases(context: { readonly aliases: ReadonlyMap<string, unknown> }) {
+export function knownAliases(context: { readonly aliases: ReadonlyMap<string, unknown> }) {
   return new Set(context.aliases.keys());
 }
 
@@ -2312,14 +2141,14 @@ function fail(
   return { pass: false, guard, outcome: `guard_${guard}`, reason };
 }
 
-function verdict(
+export function verdict(
   outcome: SupportAiAutoOutcome,
   reason: BusinessHandoffReason,
 ): Extract<AutoVerdict, { pass: false }> {
   return { pass: false, guard: null, outcome, reason };
 }
 
-function failVerdict(
+export function failVerdict(
   guard: SupportAiAutoGuard,
   reason: BusinessHandoffReason,
 ): Extract<AutoVerdict, { pass: false }> {
@@ -2327,7 +2156,7 @@ function failVerdict(
 }
 
 /** The labels (panel usernames) of the services a decision cites (`S…` aliases). */
-function citedServiceLabels(
+export function citedServiceLabels(
   decision: SupportAiDecision,
   aliases: ReadonlyMap<string, string>,
 ): readonly string[] {
