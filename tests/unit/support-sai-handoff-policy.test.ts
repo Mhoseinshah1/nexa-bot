@@ -219,6 +219,8 @@ describe('the output validator (cross-cutting item 3)', () => {
       expect(check(reply), reply).toEqual({ ok: false, violation: 'link' });
     }
     expect(check('به @admin_real. پیام بدهید')).toEqual({ ok: false, violation: 'handle' });
+    // Full-width letters are plain ones after NFKC.
+    expect(check('به @ａｄｍｉｎ_ｒｅａｌ پیام بدهید')).toEqual({ ok: false, violation: 'handle' });
     expect(check('به @nexa_support. پیام بدهید')).toEqual({ ok: true });
     // A published number in full-width digits is still the published number.
     expect(check('کارت: ６０３７９９１２３４５６７８９３')).toEqual({ ok: true });
