@@ -4886,3 +4886,17 @@ live; the owner decides otherwise.
 - **OQ-R12-F1-04 — TonPays Telegram and `request_amount`.** Item 5 makes a TonPays (website)
   approval whose `request_amount` differs from what Nexa sent a MISMATCH. The TonPays Telegram
   route is unchanged: what its `request_amount` means for a card transfer is still OQ-TPTG-03.
+- **OQ-SAI-2-01 — live usage refresh for the asked service (Phase 4 PR-2, item 2, optional).** The
+  support context now carries `usageAge` («به‌روزشده N دقیقه پیش») beside the stored usage, but
+  does NOT call the panel when the figure is older than 10 minutes: the assistant role holds no
+  panel client today, and a panel call from it would be a new outbound path with its own
+  credential handling. Whether to add a bounded (≤ 2 s, fall back to stored) read is the owner's
+  call.
+- **OQ-SAI-2-02 — reseller-only plans in the support AI's catalogue (Phase 4 PR-2, item 1).** The
+  live catalogue lists the PUBLIC customer catalogue, priced for each customer through the one
+  pricing boundary (a reseller's tier applies; a plan their table does not sell is left out).
+  Plans visible only to resellers are not listed. Whether a reseller's conversation should list
+  their tier's catalogue is the owner's call.
+- **OQ-SAI-2-03 — packages are listed without one panel's per-purchase cap (PR-2, item 1).** The
+  traffic/time packages in the context are the tenant's offerable ones in the sales currency; a
+  panel's policy cap is re-decided by the bot when the customer opens the offer for a service.
