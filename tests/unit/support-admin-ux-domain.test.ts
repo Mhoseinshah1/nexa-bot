@@ -61,6 +61,7 @@ function facts(over: Partial<SupportReadinessFacts> = {}): SupportReadinessFacts
       restarts: 0,
     },
     assistantStalled: false,
+    testedModel: 'gpt-5.5',
     approvedKnowledge: 12,
     ...over,
   };
@@ -145,6 +146,22 @@ describe('support readiness card', () => {
         'STRUCTURED_OUTPUT',
       ).detail,
     ).toBe('UNSUPPORTED');
+  });
+
+  it('a test that ran on another model proves nothing about the primary', () => {
+    expect(lineOf(facts(), 'STRUCTURED_OUTPUT').detail).toBe('TEST_PASSED');
+    expect(lineOf(facts({ testedModel: 'gpt-4o' }), 'STRUCTURED_OUTPUT').detail).toBe('NOT_TESTED');
+    // Recorded before the model was kept: untested for this model too.
+    expect(lineOf(facts({ testedModel: null }), 'STRUCTURED_OUTPUT').detail).toBe('NOT_TESTED');
+    expect(
+      lineOf(
+        facts({
+          testedModel: 'gpt-4o',
+          credentials: [credential({ lastTestOutcome: 'INVALID_OUTPUT' })],
+        }),
+        'STRUCTURED_OUTPUT',
+      ).detail,
+    ).toBe('NOT_TESTED');
   });
 
   it('ASSISTANT_ROLE: never started, stopped, restarting, stalled, running', () => {

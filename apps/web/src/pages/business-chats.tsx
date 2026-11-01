@@ -24,7 +24,6 @@ import {
   fetchBusinessChat,
   fetchBusinessChats,
   fetchBusinessConnections,
-  newIdempotencyKey,
   resumeAllBusinessChats,
   resumeBusinessChat,
   sendBusinessChatMessage,
@@ -1159,9 +1158,15 @@ function ResumeAllButton() {
   const notify = useToast();
   const [asking, setAsking] = useState(false);
   const [includeHard, setIncludeHard] = useState(false);
+  const submission = useSubmissionKey();
   const run = useMutation({
-    mutationFn: () => resumeAllBusinessChats({ idempotencyKey: newIdempotencyKey(), includeHard }),
+    mutationFn: (hard: boolean) =>
+      resumeAllBusinessChats({
+        idempotencyKey: submission.current({ action: 'resume-all', includeHard: hard }),
+        includeHard: hard,
+      }),
     onSuccess: (result) => {
+      submission.settle();
       setAsking(false);
       setIncludeHard(false);
       notify({
@@ -1171,6 +1176,7 @@ function ResumeAllButton() {
       void queries.invalidateQueries({ queryKey: ['business-chats'] });
     },
     onError: (error) => {
+      submission.settleOn(error);
       setAsking(false);
       notify({ tone: 'danger', message: businessChatFault(error), error });
     },
@@ -1202,7 +1208,7 @@ function ResumeAllButton() {
           }
           confirmLabel={t('web.bchat_resume_all_confirm')}
           cancelLabel={t('web.bchat_cancel')}
-          onConfirm={() => run.mutate()}
+          onConfirm={() => run.mutate(includeHard)}
           onCancel={() => {
             setAsking(false);
             setIncludeHard(false);

@@ -4906,10 +4906,9 @@ live; the owner decides otherwise.
   (the `support_ai_jobs` shape CHECK allows `due_at` only on AUTO_DECISION), so three quick lines
   make up to three provider calls, two of them discarded. A debounce needs a migration relaxing
   that CHECK.
-- **OQ-SAI-5-05 - the analytics intro.** «شمارش‌ها از رخدادهای ثبت‌شده؛ هیچ متنی از گفت‌وگوها
-  خوانده نمی‌شود» is true of the counts and no longer of the page: «دیدن سؤال‌ها» and «شکاف‌های
-  دانش» show the customers' text for `business_chats.view`. The new cards say so; the old
-  sentence was left untouched on purpose (existing copy is not rewritten).
+- **OQ-SAI-5-05 - the analytics intro - CLOSED.** The old sentence (no text is read) was no longer
+  true; the page now uses a new key that says counts read no text and names the two views that
+  show the customer's last message (`business_chats.view`).
 - **OQ-SAI-5-06 - the model dropdown.** The known-model list (`support-ai-models.ts`) is a
   convenience, not a guarantee; the capability test is the check. It needs a refresh when a
   provider retires a model.

@@ -1,6 +1,7 @@
 import {
   BUSINESS_CHAT_DETAIL_MESSAGES,
   BUSINESS_CHAT_RESUME_ALL_LIMIT,
+  businessInboxPriority,
   BUSINESS_HANDOFF_NOTICE_TEMPLATE_KEY,
   BUSINESS_TAKEOVER_ORIGINS,
   BUSINESS_UPDATE_FAILED_CODE,
@@ -58,6 +59,9 @@ import type {
 } from './ports.js';
 
 export const BUSINESS_CHATS_VIEW_PERMISSION = 'business_chats.view' satisfies PermissionKey;
+/** Rows one bulk-return request examines per state before it stops and says `more`. */
+const BUSINESS_CHAT_RESUME_ALL_SCAN_MAX = 2_000;
+
 export const BUSINESS_CHATS_REPLY_PERMISSION = 'business_chats.reply' satisfies PermissionKey;
 
 export const BUSINESS_CHAT_ERROR_CODES = {
@@ -403,6 +407,12 @@ export class BusinessConversationService {
     scope: ScopeContext,
     actor: ActorContext,
     input: { readonly conversationId: string; readonly idempotencyKey: string },
+    /**
+     * Phase 4 PR-5 (bulk return): decided on the conversation as LOCKED, inside the mutation.
+     * False leaves it exactly as it is (nothing written, no audit); the result then shows the
+     * state it kept.
+     */
+    eligible?: (conversation: BusinessConversationRecord) => boolean,
   ): Promise<{ readonly state: BusinessConversationState; readonly controlEpoch: number }> {
     return this.control(
       scope,
@@ -411,6 +421,7 @@ export class BusinessConversationService {
       'business_chat.resume',
       async (conversation, now, tx) => {
         if (conversation.state === 'AI_ACTIVE') return conversation;
+        if (eligible !== undefined && !eligible(conversation)) return conversation;
         const moved = await this.deps.conversations.transition(
           scope,
           conversation.id,
@@ -477,30 +488,61 @@ export class BusinessConversationService {
     let failed = 0;
     let more = false;
     for (const state of ['HANDOFF_REQUIRED', 'HUMAN_ACTIVE', 'PAUSED'] as const) {
-      const rows = await this.deps.conversations.list(scope, {
-        state,
-        limit: BUSINESS_CHAT_RESUME_ALL_LIMIT + 1,
-      });
-      for (const { conversation } of rows.slice(0, BUSINESS_CHAT_RESUME_ALL_LIMIT)) {
-        if (conversation.handoffKind !== 'SOFT' && !input.includeHard) {
-          skippedHard += 1;
-          continue;
+      // Walk the state's list by its keyset, past the holds this request leaves alone, until
+      // the batch is full or the list ends: eligible holds behind many hard ones are reached,
+      // and `more` is true only when an eligible hold really remains.
+      let before: { priority: 0 | 1; at: Date; id: string } | undefined;
+      let scanned = 0;
+      scan: for (;;) {
+        const page = await this.deps.conversations.list(scope, {
+          state,
+          ...(before === undefined ? {} : { before }),
+          limit: BUSINESS_CHAT_RESUME_ALL_LIMIT,
+        });
+        for (const item of page) {
+          const { conversation } = item;
+          if (conversation.handoffKind !== 'SOFT' && !input.includeHard) {
+            skippedHard += 1;
+            continue;
+          }
+          if (resumed + failed >= BUSINESS_CHAT_RESUME_ALL_LIMIT) {
+            more = true;
+            break scan;
+          }
+          try {
+            // The hold may have changed since the list was read (a takeover upgrades a soft
+            // hold to hard): eligibility is decided again on the locked row.
+            const expectedEpoch = conversation.controlEpoch;
+            const result = await this.resume(
+              scope,
+              actor,
+              {
+                conversationId: conversation.id,
+                idempotencyKey: `${input.idempotencyKey}:${conversation.id}`,
+              },
+              (locked) =>
+                locked.controlEpoch === expectedEpoch &&
+                (input.includeHard || locked.handoffKind === 'SOFT'),
+            );
+            if (result.state === 'AI_ACTIVE') resumed += 1;
+            else skippedHard += 1;
+          } catch {
+            failed += 1;
+          }
         }
-        if (resumed + failed >= BUSINESS_CHAT_RESUME_ALL_LIMIT) {
+        scanned += page.length;
+        const last = page[page.length - 1];
+        if (page.length < BUSINESS_CHAT_RESUME_ALL_LIMIT || last === undefined) break;
+        if (scanned >= BUSINESS_CHAT_RESUME_ALL_SCAN_MAX) {
           more = true;
-          continue;
+          break;
         }
-        try {
-          await this.resume(scope, actor, {
-            conversationId: conversation.id,
-            idempotencyKey: `${input.idempotencyKey}:${conversation.id}`,
-          });
-          resumed += 1;
-        } catch {
-          failed += 1;
-        }
+        before = {
+          priority: businessInboxPriority(last.conversation.state),
+          at: last.activityAt,
+          id: last.conversation.id,
+        };
       }
-      if (rows.length > BUSINESS_CHAT_RESUME_ALL_LIMIT) more = true;
     }
     return { resumed, skippedHard, failed, more };
   }

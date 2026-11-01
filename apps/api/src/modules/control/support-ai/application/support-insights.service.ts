@@ -75,6 +75,9 @@ export class SupportInsightsService {
       connectedUsernames: facts.connectedUsernames,
       assistant: facts.assistant,
       assistantStalled: stalled,
+      testedModel: view.config.primary
+        ? (facts.testedModels.get(view.config.primary.provider) ?? null)
+        : null,
       approvedKnowledge: facts.approvedKnowledge,
     });
   }

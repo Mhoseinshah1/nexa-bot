@@ -668,7 +668,7 @@ export class SupportAiConfigService {
     const failed = checks.find((check) => check.result === 'FAIL') ?? null;
     const outcome = failed?.outcome ?? 'OK';
     const failureClass = failed?.failureClass ?? null;
-    await this.deps.credentials.recordTest(scope, provider, outcome, now, failureClass);
+    await this.deps.credentials.recordTest(scope, provider, outcome, now, failureClass, model);
     const keySetAt = credential.keySetAt;
     // The key's alert reads what the PROVIDER said: any answer proves the key; a rejection
     // raises the alert.

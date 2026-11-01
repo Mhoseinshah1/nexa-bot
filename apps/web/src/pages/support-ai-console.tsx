@@ -6,7 +6,9 @@ import {
   type SupportAiMode,
   type SupportTestConsoleResponse,
 } from '@nexa/contracts';
-import { newIdempotencyKey, runSupportTestConsole } from '../api/client';
+import { runSupportTestConsole } from '../api/client';
+import { useSubmissionKey } from '../submission-key';
+import { ErrorRef } from '../ui/technical-details';
 import { t, type WebKey } from '../i18n/web.fa';
 import { Badge, Banner, Button, Card, Field, KV, Num, type Tone } from '../ui/kit';
 import { CustomerIdentity, CustomerPicker } from './customer-picker';
@@ -70,14 +72,14 @@ export function TestConsoleCard({
 }) {
   const [question, setQuestion] = useState('');
   const [customer, setCustomer] = useState<CustomerSummaryResponse | null>(null);
+  const submission = useSubmissionKey();
   const run = useMutation({
-    // A new key for every press: a run is a paid, answer-less command, not a retry of one.
-    mutationFn: () =>
-      runSupportTestConsole({
-        idempotencyKey: newIdempotencyKey(),
-        question: question.trim(),
-        customerId: customer?.id ?? null,
-      }),
+    // One key per press, retired by any answer (a run is a paid, answer-less command: the
+    // next press is a NEW run, never a replay of the last).
+    mutationFn: (input: { question: string; customerId: string | null }) =>
+      runSupportTestConsole({ idempotencyKey: submission.current(input), ...input }),
+    onSuccess: () => submission.settle(),
+    onError: (error) => submission.settleOn(error),
   });
   const result = run.data;
   return (
@@ -86,7 +88,8 @@ export function TestConsoleCard({
         className="stack"
         onSubmit={(event) => {
           event.preventDefault();
-          if (question.trim() !== '') run.mutate();
+          if (question.trim() !== '')
+            run.mutate({ question: question.trim(), customerId: customer?.id ?? null });
         }}
       >
         <Banner tone="info" slim>
@@ -134,6 +137,7 @@ export function TestConsoleCard({
       {run.error !== null && (
         <Banner tone="danger" role="alert">
           {supportAiFault(run.error)}
+          <ErrorRef error={run.error} />
         </Banner>
       )}
       {result !== undefined && <ConsoleResult result={result} />}

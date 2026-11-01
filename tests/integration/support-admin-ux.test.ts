@@ -357,6 +357,18 @@ describe('support admin UX (Phase 4 PR-5)', () => {
       expect((await ask('سلام', {}, configOnly)).verdict).toBe('WOULD_SEND');
     });
 
+    it('overlapping requests with one key make ONE paid call', async () => {
+      const k = key('overlap');
+      const results = await Promise.allSettled([
+        ask('سلام', { idempotencyKey: k }),
+        ask('سلام', { idempotencyKey: k }),
+      ]);
+      expect(chainCalls).toBe(1);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      const lost = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+      expect(isNexaError(lost.reason)).toBe(true);
+    });
+
     it('a double click with the same key runs once', async () => {
       const k = key('dbl');
       const first = await ask('سلام', { idempotencyKey: k });
@@ -630,6 +642,38 @@ describe('support admin UX (Phase 4 PR-5)', () => {
       });
       expect(second).toMatchObject({ resumed: 1, skippedHard: 0, failed: 0 });
       expect(await stateOf(b)).toBe('AI_ACTIVE');
+    });
+
+    it('reaches soft holds behind more hard ones than a batch holds, and says more only when true', async () => {
+      const older = await soft('7200000');
+      for (let n = 0; n < 101; n += 1) await hard(`73${String(n).padStart(5, '0')}`);
+      const result = await ctx.container.businessConversations.resumeAll(scopeA, supportStaff, {
+        idempotencyKey: key('bulk'),
+        includeHard: false,
+      });
+      expect(result).toEqual({ resumed: 1, skippedHard: 101, failed: 0, more: false });
+      expect(await stateOf(older)).toBe('AI_ACTIVE');
+    }, 120_000);
+
+    it('re-checks eligibility on the locked row: a soft hold taken over meanwhile stays with the person', async () => {
+      const id = await soft('7100010');
+      await ctx.container.businessConversations.takeOver(scopeA, supportStaff, {
+        conversationId: id,
+        idempotencyKey: key('take'),
+      });
+      // What the bulk loop saw when it listed: a SOFT hold at that epoch. Now it is HARD.
+      const result = await ctx.container.businessConversations.resume(
+        scopeA,
+        supportStaff,
+        { conversationId: id, idempotencyKey: key('r') },
+        (locked) => locked.handoffKind === 'SOFT',
+      );
+      expect(result.state).toBe('HUMAN_ACTIVE');
+      expect(await stateOf(id)).toBe('HUMAN_ACTIVE');
+      const audited = await db().execute(
+        sql`SELECT count(*)::int AS n FROM audit_logs WHERE action = 'business_chat.resume' AND entity_id = ${id}`,
+      );
+      expect((audited.rows[0] as { n: number }).n).toBe(0);
     });
 
     it('a replay of the same bulk key changes nothing more', async () => {

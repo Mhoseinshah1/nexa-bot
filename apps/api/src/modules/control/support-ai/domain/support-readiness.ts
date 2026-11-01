@@ -31,6 +31,8 @@ export interface SupportReadinessFacts {
   } | null;
   /** `support.assistant.stalled` is open. */
   readonly assistantStalled: boolean;
+  /** The model the primary provider's last capability test ran on; null when never recorded. */
+  readonly testedModel?: string | null;
   /** Approved and enabled knowledge articles. */
   readonly approvedKnowledge: number;
 }
@@ -103,7 +105,11 @@ export function supportReadiness(facts: SupportReadinessFacts): SupportReadiness
       ? line('STRUCTURED_OUTPUT', 'WARN', 'NOT_TESTED')
       : !capabilities.structuredOutput
         ? line('STRUCTURED_OUTPUT', 'WARN', 'UNSUPPORTED')
-        : credential.lastTestOutcome === null
+        : // A test of another model (or one from before the model was recorded) says nothing
+          // about the model the chain will call.
+          credential.lastTestOutcome === null ||
+            primary === null ||
+            facts.testedModel !== primary.model
           ? line('STRUCTURED_OUTPUT', 'WARN', 'NOT_TESTED')
           : credential.lastTestOutcome === 'OK'
             ? line('STRUCTURED_OUTPUT', 'OK', 'TEST_PASSED')

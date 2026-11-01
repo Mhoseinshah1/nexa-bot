@@ -135,8 +135,8 @@ export function SupportAnalyticsPage({
         title={t('web.sa_title')}
         subtitle={
           data === undefined
-            ? t('web.sa_intro')
-            : `${t('web.sa_intro')} ${t('web.sa_period_from')} ${formatTimestamp(data.period.start)} ${t('web.sa_period_to')} ${formatTimestamp(data.period.end)}`
+            ? t('web.sa_intro_counts_and_text')
+            : `${t('web.sa_intro_counts_and_text')} ${t('web.sa_period_from')} ${formatTimestamp(data.period.start)} ${t('web.sa_period_to')} ${formatTimestamp(data.period.end)}`
         }
       />
       {/* Demo parity (DIFFS support-analytics #2): the range label beside the pills, no rule under them. */}
@@ -505,15 +505,9 @@ function HandoffReasonsCard({
                     </a>
                   )}
                   {fix?.kind === 'scroll' && (
-                    <button
-                      type="button"
-                      className="btn sm"
-                      onClick={() =>
-                        document.getElementById(fix.id)?.scrollIntoView({ behavior: 'smooth' })
-                      }
-                    >
+                    <a className="btn sm" href={`#${fix.id}`}>
                       {t('web.sa_fix')}: {t(fix.label)}
-                    </button>
+                    </a>
                   )}
                   {mayReadText && (
                     <button

@@ -49,6 +49,8 @@ export class DrizzleSupportInsightsReader {
     } | null;
     readonly approvedKnowledge: number;
     readonly connectedUsernames: readonly string[];
+    /** provider -> the model its last capability test ran on. */
+    readonly testedModels: ReadonlyMap<string, string | null>;
   }> {
     const tenantId = requireTenantId(scope);
     return this.db.transaction(async (q) => {
@@ -77,6 +79,11 @@ export class DrizzleSupportInsightsReader {
              AND b.superseded_at IS NULL AND b.is_enabled
              AND c.username IS NOT NULL`)
       ).rows as unknown as { username: string }[];
+      const tested = (
+        await q.execute(sql`
+          SELECT provider, last_tested_model FROM support_ai_provider_credentials
+           WHERE tenant_id = ${tenantId}::uuid`)
+      ).rows as unknown as { provider: string; last_tested_model: string | null }[];
       const first = role[0];
       return {
         assistant:
@@ -90,6 +97,7 @@ export class DrizzleSupportInsightsReader {
               },
         approvedKnowledge: knowledge[0]?.n ?? 0,
         connectedUsernames: usernames.map((row) => row.username),
+        testedModels: new Map(tested.map((row) => [row.provider, row.last_tested_model])),
       };
     }, SNAPSHOT);
   }

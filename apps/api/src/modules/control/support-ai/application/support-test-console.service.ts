@@ -16,7 +16,6 @@ import {
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import { recordMutationDenial } from '../../../platform/access/application/authorized-mutation.js';
-import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -142,6 +141,25 @@ export class SupportTestConsoleService {
       throw errors.notFound('users.not_found', 'No such customer.');
     }
 
+    // Claimed BEFORE the paid call, atomically (the store's insert is the arbiter): of two
+    // overlapping requests with one key exactly one reaches the provider.
+    const claimed = await this.deps.uow.run(scope, (tx) =>
+      this.deps.idempotency.remember(
+        scope,
+        actor.surface,
+        command.idempotencyKey,
+        requestHash,
+        { ran: true as const },
+        tx,
+      ),
+    );
+    if (!claimed) {
+      throw errors.conflict(
+        SUPPORT_AI_ERROR_CODES.TEST_CONSOLE_REPLAY,
+        'This test already ran; run it again.',
+      );
+    }
+
     const result = await this.decide(scope, command.question, transcript, config, context, mode);
 
     await this.deps.uow.run(scope, async (tx) => {
@@ -161,15 +179,6 @@ export class SupportTestConsoleService {
           },
           result: 'SUCCESS',
         },
-        tx,
-      );
-      await rememberOnce(
-        this.deps.idempotency,
-        scope,
-        actor.surface,
-        command.idempotencyKey,
-        requestHash,
-        { ran: true as const },
         tx,
       );
     });
