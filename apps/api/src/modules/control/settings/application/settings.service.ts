@@ -10,6 +10,7 @@ import {
   CUSTOMER_NOTICES_PAUSE_SETTING_KEY,
   CUSTOMER_NOTICES_RESUMED_CODE,
   OWNER_ONLY_SETTING_KEYS,
+  SETTING_ENABLE_PERMISSIONS,
   PLATFORM_ERROR_CODES,
   type ActorContext,
   type AuditWriter,
@@ -283,6 +284,26 @@ export class SettingsService {
     }
     const value = parsed.value;
 
+    // Phase 4 PR-4 (review of PR #371): turning ON a setting that lets the support AI answer
+    // customers on its own takes the permission that widening takes everywhere else. Checked here,
+    // in the write path, so no page or caller can skip it; a refusal is audited like any other.
+    const enabling = SETTING_ENABLE_PERMISSIONS[key];
+    if (enabling !== undefined && value === true) {
+      try {
+        await this.guard.check(scope, actor, enabling as PermissionKey);
+      } catch (denial) {
+        await recordMutationDenial(
+          { guard: this.guard, audit: this.audit, opsLog: this.opsLog },
+          scope,
+          actor,
+          enabling as PermissionKey,
+          { action: 'settings.set', entityType: 'Setting', entityId: key },
+          denial,
+        );
+        throw denial;
+      }
+    }
+
     const requestHash = hashRequest({ key, value, expectedVersion: command.expectedVersion });
     // A replay returns the FIRST result, rebuilt from the snapshot. See
     // `SettingReplayRecord` for the two wrong answers this is between.
@@ -320,6 +341,9 @@ export class SettingsService {
         // early check alone left a window: an owner's `settings.destructive` revoked after it
         // and before this commit would still widen the outbound allow-list.
         if (ownerOnly) await this.guard.check(scope, actor, SETTINGS_DESTRUCTIVE, tx);
+        if (enabling !== undefined && value === true) {
+          await this.guard.check(scope, actor, enabling as PermissionKey, tx);
+        }
         if (!(await this.scopeActivity.scopeIsActive(scope, tx))) {
           throw errors.notFound(
             PLATFORM_ERROR_CODES.TENANT_NOT_FOUND,

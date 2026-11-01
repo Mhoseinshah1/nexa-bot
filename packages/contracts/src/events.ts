@@ -707,7 +707,7 @@ export const EVENT_PAYLOAD_SCHEMAS = {
   TicketMessagePosted: z.object({
     ticketId: z.string(),
     messageId: z.string(),
-    senderType: z.enum(['CUSTOMER', 'ADMIN']),
+    senderType: z.enum(['CUSTOMER', 'ADMIN', 'AI']),
   }),
   TicketStatusChanged: z.object({
     ticketId: z.string(),

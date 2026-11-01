@@ -811,6 +811,12 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.ticket.category_button': { title: 'نام دسته' },
   'bot.ticket.message_prompt': { category: 'موضوع تیکت' },
   'bot.ticket.support_replied': { text: 'متن پاسخ پشتیبانی', category: 'موضوع تیکت' },
+  'bot.ticket.ai_open_in_bot': { link: 'لینک ورود به ربات' },
+  'bot.ticket.ai_replied': {
+    number: 'شمارهٔ تیکت',
+    text: 'متن پاسخ هوش مصنوعی',
+    category: 'موضوع تیکت',
+  },
   'bot.ticket.support_attachment': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
   'bot.direct_message.text': { text: 'متن پیام اپراتور' },
   'bot.direct_message.media': { caption: 'توضیح عکس یا فایل' },
@@ -3132,6 +3138,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'پیام پشتیبانی در گفتگوی تیکت',
     'یک پیام پشتیبانی در نمای گفتگوی تیکت.',
   ],
+  'bot.ticket.line_ai': [
+    'پیام هوش مصنوعی در گفتگوی تیکت',
+    'یک پاسخ دستیار هوش مصنوعی در نمای گفتگوی تیکت؛ هرگز به‌جای پاسخ پشتیبان نشان داده نمی‌شود.',
+  ],
   'bot.ticket.line_closed_by_customer': [
     'خط بستن تیکت توسط مشتری',
     'در گفتگو ثبت می‌کند که مشتری تیکت را بسته است.',
@@ -3184,6 +3194,14 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.ticket.support_replied': [
     'پاسخ پشتیبانی به تیکت (اعلان به مشتری)',
     'وقتی پشتیبانی در پنل پاسخ می‌دهد برای مشتری فرستاده می‌شود؛ متن پاسخ هنگام ارسال از خود تیکت خوانده می‌شود.',
+  ],
+  'bot.ticket.ai_replied': [
+    'پاسخ هوش مصنوعی به تیکت (اعلان به مشتری)',
+    'وقتی دستیار هوش مصنوعی در تیکت پاسخ می‌دهد برای مشتری فرستاده می‌شود؛ متن پاسخ هنگام ارسال از خود تیکت خوانده می‌شود.',
+  ],
+  'bot.ticket.ai_open_in_bot': [
+    'خط لینک ربات در پاسخ هوش مصنوعی به تیکت',
+    'وقتی پاسخ هوش مصنوعی در تیکت مشتری را به خرید، تمدید، حجم یا زمان اضافه، تغییر لوکیشن، سرویس تست، تغییر لینک یا شارژ کیف پول در ربات می‌فرستد، این خط با لینک ساخته‌شدهٔ سیستم در انتهای پاسخ می‌آید.',
   ],
   'bot.ticket.support_attachment': [
     'پیوست پاسخ پشتیبانی (اعلان به مشتری)',

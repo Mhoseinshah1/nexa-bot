@@ -9,6 +9,7 @@ import {
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { SupportAssistService } from './support-assist.service.js';
 import type { SupportAutoReplyService } from './support-auto-reply.service.js';
+import type { SupportTicketAiService } from './support-ticket-ai.service.js';
 import type { SupportLearningService } from '../../support-knowledge/application/support-learning.service.js';
 import {
   SUPPORT_ASSISTANT_WATCH_INTERVAL_MS,
@@ -103,6 +104,15 @@ export class AssistantLoop {
       /** TB7: the producer of AUTO_DECISION jobs. Without it, such a job is never claimed. */
       readonly auto?: Pick<SupportAutoReplyService, 'produce' | 'giveUp'> &
         Partial<Pick<SupportAutoReplyService, 'recoverFromException'>>;
+      /**
+       * Phase 4 PR-4: the producer of TICKET jobs (`support_ai_ticket_jobs`). A table, a claim and
+       * a producer of their own: a ticket job is never claimed by, or produced as, a Business
+       * one. Without it, no ticket job is ever claimed.
+       */
+      readonly tickets?: Pick<
+        SupportTicketAiService,
+        'claimNext' | 'produce' | 'giveUp' | 'recoverFromException'
+      >;
       /** Phase 4 PR-1 item 9: the handoff-rate alert, checked every `HANDOFF_RATE_INTERVAL_MS`. */
       readonly handoffRate?: Pick<SupportHandoffRateAlert, 'check'>;
       /** TB8: the producer of learning jobs. Without it, no learning job is ever claimed. */
@@ -212,6 +222,46 @@ export class AssistantLoop {
         this.progress.record(this.options.now().getTime());
         // A stopped tenant: the job was left untouched, and so is the rest of the pass.
         if (result === 'INACTIVE') break;
+      }
+      // Phase 4 PR-4: ticket jobs, claimed and produced ONE at a time like the conversations'.
+      const tickets = this.options.tickets;
+      if (tickets !== undefined) {
+        let ticketClaimed = 0;
+        while (ticketClaimed < ASSISTANT_BATCH) {
+          const at = this.options.now();
+          const job = await tickets.claimNext(
+            scope,
+            at,
+            new Date(at.getTime() + ASSISTANT_LEASE_MS),
+          );
+          if (job === null) break;
+          ticketClaimed += 1;
+          claimed += 1;
+          let result: string;
+          try {
+            result =
+              job.attempts > ASSISTANT_MAX_ATTEMPTS
+                ? await tickets.giveUp(scope, job)
+                : await tickets.produce(scope, job);
+          } catch (error: unknown) {
+            this.options.logger.error(
+              { err: error, jobId: job.id },
+              'assistant: a ticket job failed',
+            );
+            result = 'exception';
+            try {
+              await tickets.recoverFromException(scope, job);
+            } catch (recovery: unknown) {
+              this.options.logger.error(
+                { err: recovery, jobId: job.id },
+                'assistant: a failed ticket job could not be released',
+              );
+            }
+          }
+          counts[`ticket_${result}`] = (counts[`ticket_${result}`] ?? 0) + 1;
+          this.progress.record(this.options.now().getTime());
+          if (result === 'INACTIVE') break;
+        }
       }
       // TB8: learning jobs, after the conversations' own jobs — a customer waits on those. ONE
       // per claim, each leased from the moment it is claimed (TB5 review, finding 4): a batch

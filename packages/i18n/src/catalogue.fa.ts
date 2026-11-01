@@ -1664,6 +1664,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.ticket.view_older': '… {count} پیام قدیمی‌تر در پنل پشتیبانی نگه داشته شده است.',
   'bot.ticket.line_customer': '{icon:user} شما — {at}\n{text}',
   'bot.ticket.line_support': '{icon:support} پشتیبانی — {at}\n{text}',
+  'bot.ticket.line_ai': '🤖 پاسخ هوش مصنوعی — {at}\n{text}',
   'bot.ticket.line_closed_by_customer': '🔒 {at} — تیکت را بستید.',
   'bot.ticket.line_closed_by_support': '🔒 {at} — پشتیبانی تیکت را بست.',
   'bot.ticket.line_reopened': '🔓 {at} — پشتیبانی تیکت را دوباره باز کرد.',
@@ -1683,6 +1684,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.ticket.status_closed': '🔒 بسته‌شده',
   'bot.ticket.support_replied':
     '📩 پاسخ پشتیبانی به تیکت #{number}\n📂 موضوع: {category}\n\n{text}',
+  'bot.ticket.ai_replied':
+    '🤖 پاسخ هوش مصنوعی به تیکت #{number}\n📂 موضوع: {category}\n\n{text}\n\nاگر پاسخ کافی نبود، همکاران پشتیبانی به‌زودی بررسی می‌کنند.',
+  'bot.ticket.ai_open_in_bot': '👈 برای انجام این کار، این لینک را در ربات باز کنید:\n{link}',
   'bot.ticket.support_attachment': '📎 پیوست پاسخ پشتیبانی به تیکت #{number}\n📂 موضوع: {category}',
   'bot.ticket.view_button': '🎫 مشاهده تیکت',
   'bot.direct_message.text': '{icon:support} پیام پشتیبانی\n\n{text}',

@@ -750,8 +750,8 @@ export const miniAppTicketsResponseSchema = z.object({
 export const miniAppTicketDetailSchema = miniAppTicketSummarySchema.extend({
   messages: z.array(
     z.object({
-      /** Who wrote it: the customer, or support. */
-      author: z.enum(['CUSTOMER', 'SUPPORT']),
+      /** Who wrote it: the customer, support, or (Phase 4 PR-4) the support assistant. */
+      author: z.enum(['CUSTOMER', 'SUPPORT', 'AI']),
       text: z.string().nullable(),
       /** A Telegram file was attached; it is seen in the bot, not here. */
       hasAttachment: z.boolean(),

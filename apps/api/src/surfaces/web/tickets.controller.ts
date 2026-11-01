@@ -391,7 +391,7 @@ function toMessageView(item: TicketMessageListItem): TicketMessageView {
               fileSize: item.replyFile.byteLength,
             }
           : null,
-    delivery: message.senderType === 'ADMIN' ? item.delivery : null,
+    delivery: message.senderType === 'ADMIN' || message.senderType === 'AI' ? item.delivery : null,
     attachmentDelivery: item.replyFile === null ? null : item.attachmentDelivery,
     createdAt: message.createdAt.toISOString(),
   };
