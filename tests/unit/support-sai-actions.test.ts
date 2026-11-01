@@ -33,6 +33,7 @@ import {
 } from '../../apps/api/src/modules/commerce/business-chats/domain/telegram-business';
 import { businessTextMessageBody } from '../../apps/api/src/infrastructure/telegram/send-message';
 import { intentOf } from '../../apps/api/src/surfaces/telegram/bot-runtime';
+import { KNOWLEDGE_GAP_REASONS } from '../../apps/api/src/modules/control/support-ai/domain/support-gaps';
 
 /**
  * Phase 4 PR-3 — the support AI's tools, deep links and check-before-handoff, pure: tool scoping
@@ -399,5 +400,11 @@ describe('check-before-handoff', () => {
       paymentCheckSummary({ customerId: null, payments: [], told: 'x'.repeat(2000), max: 600 })
         .length,
     ).toBe(600);
+  });
+});
+
+describe('👎 is a knowledge-gap entry', () => {
+  it('the gaps report reads CUSTOMER_UNSATISFIED handoffs (by the answer’s topic and intent)', () => {
+    expect(KNOWLEDGE_GAP_REASONS).toContain('CUSTOMER_UNSATISFIED');
   });
 });
