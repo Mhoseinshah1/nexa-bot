@@ -1,4 +1,4 @@
-import { foldDigits } from './scrubber.js';
+import { normalizePersian } from '../../../commerce/support-context/domain/persian-text.js';
 
 /**
  * TB8 — duplicate detection for learning candidates (ADR-0035 §3).
@@ -14,24 +14,18 @@ import { foldDigits } from './scrubber.js';
  *      match is merged into the existing candidate as an extra source, exactly as an exact
  *      match is. This rule is best-effort (a read, then a write); rule 1 is the backstop.
  *
- * Normalisation folds what Persian text varies in without changing meaning: Arabic ي/ك/ة/ۀ and
- * hamza-carrying alefs to their Persian forms, Persian and Arabic-Indic digits to ASCII,
- * diacritics and tatweel removed, zero-width joiners and every non-letter, non-digit run to
- * one space, lower case (for Latin), trimmed.
+ * Normalisation is `normalizePersian` (Phase 4 PR-2: the one shared with knowledge retrieval —
+ * Arabic ي/ى/ئ/ك/ة/ۀ/ؤ and hamza-carrying alefs to their Persian forms, digits to ASCII,
+ * diacritics, tatweel and zero-width joiners removed, lower case), then every non-letter,
+ * non-digit run to one space, trimmed.
  */
 
 export const NEAR_DUPLICATE_THRESHOLD = 0.8;
 
 export function normalizeTitle(title: string): string {
-  return foldDigits(title.normalize('NFKC'))
-    .replace(/[يى]/gu, 'ی')
-    .replace(/ك/gu, 'ک')
-    .replace(/[ةۀ]/gu, 'ه')
-    .replace(/[أإآٱ]/gu, 'ا')
-    .replace(/ؤ/gu, 'و')
-    .replace(/[ً-ٰٟـ]/gu, '')
-    .replace(/[\u200b-\u200f\u2060\ufeff]/gu, ' ')
-    .toLowerCase()
+  // Phase 4 PR-2: the one shared Persian normaliser (retrieval reads the same), then every
+  // non-letter, non-digit run to one space.
+  return normalizePersian(title)
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim();
 }
