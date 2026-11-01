@@ -122,13 +122,13 @@ pointing at it, download the latest release's installer and its checksum,
 verify, then run it:
 
 ```bash
-curl -fsSLO https://github.com/Mhoseinshah1/nexa-bot/releases/latest/download/install.sh{,.sha256} && sha256sum -c install.sh.sha256 && sudo bash install.sh
+curl -fsSL --remote-name-all https://github.com/Mhoseinshah1/nexa-bot/releases/latest/download/install.sh{,.sha256} && sha256sum -c install.sh.sha256 && sudo bash install.sh
 ```
 
 Or pin a release, which is what to do on any host you will want to reproduce:
 
 ```bash
-curl -fsSLO https://github.com/Mhoseinshah1/nexa-bot/releases/download/vX.Y.Z/install.sh{,.sha256} && sha256sum -c install.sh.sha256 && sudo bash install.sh
+curl -fsSL --remote-name-all https://github.com/Mhoseinshah1/nexa-bot/releases/download/vX.Y.Z/install.sh{,.sha256} && sha256sum -c install.sh.sha256 && sudo bash install.sh
 ```
 
 `install.sh{,.sha256}` is **bash brace expansion** for `install.sh

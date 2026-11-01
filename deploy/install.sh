@@ -117,8 +117,10 @@ nexa_standalone() {
   fi
   local name="nexa-deploy-${version}.tar.gz"
 
-  # Removed on every way out, including a refusal and an interrupt.
-  NEXA_STANDALONE_WORK="$(mktemp -d "${TMPDIR:-/tmp}/nexa-install.XXXXXXXXXX")" ||
+  # Removed on every way out, including a refusal and an interrupt. Always under
+  # /tmp, never $TMPDIR: `sudo -E` can carry a user's TMPDIR in, and a directory
+  # that user controls could swap the bundle between the hash check and tar.
+  NEXA_STANDALONE_WORK="$(mktemp -d /tmp/nexa-install.XXXXXXXXXX)" ||
     nexa_standalone_die "could not create a private working directory."
   trap 'rm -rf -- "$NEXA_STANDALONE_WORK"' EXIT
   trap 'exit 130' INT
@@ -127,7 +129,8 @@ nexa_standalone() {
   chmod 0700 "$work"
 
   printf '==> downloading %s\n' "$name"
-  curl -fsSLS --proto "$protocols" --proto-redir "$protocols" --tlsv1.2 \
+  # A redirect is followed to https only, even when the override allows file.
+  curl -fsSLS --proto "$protocols" --proto-redir '=https' --tlsv1.2 \
     --retry 3 -o "${work}/${name}" "${base}/${name}" ||
     nexa_standalone_die "could not download ${base}/${name}."
 
@@ -164,8 +167,9 @@ nexa_standalone() {
   mkdir -m 0700 "${work}/bundle"
   tar -xzf "${work}/${name}" -C "${work}/bundle" --no-same-owner ||
     nexa_standalone_die "could not unpack ${name}."
-  [ -f "${work}/bundle/deploy/install.sh" ] && [ -f "${work}/bundle/deploy/bin/nexa-lib.sh" ] ||
+  if [ ! -f "${work}/bundle/deploy/install.sh" ] || [ ! -f "${work}/bundle/deploy/bin/nexa-lib.sh" ]; then
     nexa_standalone_die "${name} does not hold deploy/install.sh and deploy/bin/nexa-lib.sh."
+  fi
 
   # Not `exec`: the working directory is removed on the way out. The bundle's
   # installer finds its own files beside it, so it runs as case 1 above, with

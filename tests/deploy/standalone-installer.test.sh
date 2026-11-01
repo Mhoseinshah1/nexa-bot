@@ -61,18 +61,26 @@ exec /usr/bin/id "$@"
 FAKE
 chmod +x "${FAKE_BIN}/id"
 
-# Runs a downloaded install.sh as the one-liner would, with stdin closed and a
-# private TMPDIR so the test can see what is left behind. Sets OUT and STATUS.
+# Runs a downloaded install.sh as the one-liner would, with stdin closed. Its
+# working directory is always under /tmp, whatever TMPDIR says (a TMPDIR kept
+# by `sudo -E` may belong to the user), so a private TMPDIR is set only to show
+# it stays unused; what is left behind is any NEW /tmp/nexa-install.* too.
+# Sets OUT and STATUS.
+nexa_tmp_dirs() { find /tmp -maxdepth 1 -name 'nexa-install.*' 2>/dev/null | sort; }
 run_alone() {
   local installer="$1" base="$2"
   shift 2
   rm -rf "${WORK}/tmp"
   mkdir -p "${WORK}/tmp"
+  TMP_BEFORE="$(nexa_tmp_dirs)"
   OUT="$(PATH="${FAKE_BIN}:${PATH}" TMPDIR="${WORK}/tmp" NEXA_INSTALL_BUNDLE_BASE_URL="$base" \
     bash "$installer" "$@" </dev/null 2>&1)"
   STATUS=$?
 }
-leftovers() { find "${WORK}/tmp" -mindepth 1 -print -quit; }
+leftovers() {
+  find "${WORK}/tmp" -mindepth 1 -print -quit
+  comm -13 <(printf '%s\n' "$TMP_BEFORE") <(nexa_tmp_dirs) | sed '/^$/d'
+}
 
 # A stamped copy of the tagged installer for an arbitrary bundle — the shape the
 # build produces, for archives the build would never make.
@@ -177,6 +185,33 @@ refusal="$(bash "$ASSETS" check-stamp "$TAGGED" "${WORK}/extra.sh" "$TAG" "$GH_R
 assert_contains 'says why' "$refusal" 'more than its release stamp'
 
 # --- install.sh, alone ---------------------------------------------------------
+test_case 'the documented one-liners download BOTH files, and `sha256sum -c` passes'
+# Taken literally from docs/deployment.md: only the https base becomes the built
+# assets' file:// directory, and `&& sudo bash install.sh` is cut off. Run under
+# `bash -c`, as the operator's shell would, so the brace expansion happens.
+DOC_LINES="$(grep -E '^curl .*install\.sh\{,\.sha256\}' "${REPO}/docs/deployment.md")"
+assert_equals 'both variants are documented' 2 "$(printf '%s\n' "$DOC_LINES" | grep -c .)"
+while IFS= read -r line; do
+  case "$line" in
+    *' && sudo bash install.sh') ;;
+    *) fail_test "the one-liner does not end by running install.sh: ${line}" ;;
+  esac
+  check="${line% && sudo bash install.sh}"
+  check="$(printf '%s' "$check" |
+    sed -E "s#https://github\.com/Mhoseinshah1/nexa-bot/releases/(latest/download|download/vX\.Y\.Z)#file://${OUT_DIR}#")"
+  case "$check" in
+    *"file://${OUT_DIR}/install.sh{,.sha256}"*) ;;
+    *) fail_test "the one-liner's URL did not map onto the built assets: ${line}" ;;
+  esac
+  empty="$(mktemp -d "${WORK}/oneliner.XXXXXX")"
+  if ! oneliner_out="$(cd "$empty" && bash -c "$check" 2>&1)"; then
+    fail_test "the documented download and check failed: ${check}
+       ${oneliner_out}"
+  fi
+  [ -f "${empty}/install.sh" ] || fail_test "install.sh was not saved by: ${check}"
+  [ -f "${empty}/install.sh.sha256" ] || fail_test "install.sh.sha256 was not saved by: ${check}"
+done <<<"$DOC_LINES"
+
 DL="${WORK}/download"
 mkdir -p "$DL"
 cp "${OUT_DIR}/install.sh" "${DL}/install.sh"

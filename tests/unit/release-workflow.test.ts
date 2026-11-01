@@ -273,9 +273,18 @@ describe('the release workflow', () => {
     const unresolved = run.slice(run.indexOf('could not determine whether release'));
     expect(run).toContain('*"release not found"*');
     expect(unresolved.slice(0, unresolved.indexOf(';;'))).toContain('exit 1');
-    // The tag must still name the commit the assets came from.
-    expect(run).toContain('"commit ${SHA}"');
     expect(steps[attach]?.env?.SHA).toBe('${{ needs.gate.outputs.sha }}');
+    // The tag must still name the commit the assets came from, checked BEFORE
+    // the attestation, so a tag that moved leaves no attestation behind.
+    const tagCheck = steps.findIndex(
+      (s) => s.name === 'Require the tag to still name the gate SHA',
+    );
+    expect(tagCheck, 'no tag check').toBeGreaterThan(build);
+    expect(tagCheck, 'the tag is checked after the attestation').toBeLessThan(attest);
+    expect(steps[tagCheck]?.run ?? '').toContain('if [ "$object" != "commit ${SHA}" ]; then');
+    expect(steps[tagCheck]?.run ?? '').toMatch(/refusing: tag[^\n]*\n\s*exit 1/);
+    expect(steps[tagCheck]?.env?.SHA).toBe('${{ needs.gate.outputs.sha }}');
+    expect(steps[tagCheck]?.env?.TAG).toBe('${{ needs.gate.outputs.tag }}');
   });
 
   it('passes every expression to a run block through env, never by interpolation', () => {
