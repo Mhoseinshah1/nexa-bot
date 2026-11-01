@@ -109,14 +109,14 @@ not a guarantee.
 ### Install
 
 ```bash
-curl -fsSLO https://github.com/Mhoseinshah1/nexa-bot/releases/latest/download/install.sh{,.sha256} && sha256sum -c install.sh.sha256 && sudo bash install.sh
+curl -fsSL --remote-name-all https://github.com/Mhoseinshah1/nexa-bot/releases/latest/download/install.sh{,.sha256} && sha256sum -c install.sh.sha256 && sudo bash install.sh
 ```
 
 To install a specific release, replace `latest` as below and use that version
 number instead of `vX.Y.Z`:
 
 ```bash
-curl -fsSLO https://github.com/Mhoseinshah1/nexa-bot/releases/download/vX.Y.Z/install.sh{,.sha256} && sha256sum -c install.sh.sha256 && sudo bash install.sh
+curl -fsSL --remote-name-all https://github.com/Mhoseinshah1/nexa-bot/releases/download/vX.Y.Z/install.sh{,.sha256} && sha256sum -c install.sh.sha256 && sudo bash install.sh
 ```
 
 Optionally verify the build attestation of the downloaded file:
