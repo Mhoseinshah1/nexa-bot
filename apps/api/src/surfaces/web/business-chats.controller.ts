@@ -127,6 +127,7 @@ export class BusinessChatsController {
       // CX1 (review of PR #248): the one projection, which keeps `origin` readable by the
       // pre-A4 bundle a rolling deploy can still be serving.
       outbound: found.outbound.map(businessOutboundView),
+      aiMode: await this.container.supportInsights.aiMode(scope),
     };
   }
 
