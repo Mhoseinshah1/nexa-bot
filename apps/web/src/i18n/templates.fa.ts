@@ -811,6 +811,7 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.ticket.category_button': { title: 'نام دسته' },
   'bot.ticket.message_prompt': { category: 'موضوع تیکت' },
   'bot.ticket.support_replied': { text: 'متن پاسخ پشتیبانی', category: 'موضوع تیکت' },
+  'bot.ticket.ai_open_in_bot': { link: 'لینک ورود به ربات' },
   'bot.ticket.ai_replied': {
     number: 'شمارهٔ تیکت',
     text: 'متن پاسخ هوش مصنوعی',
@@ -3197,6 +3198,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.ticket.ai_replied': [
     'پاسخ هوش مصنوعی به تیکت (اعلان به مشتری)',
     'وقتی دستیار هوش مصنوعی در تیکت پاسخ می‌دهد برای مشتری فرستاده می‌شود؛ متن پاسخ هنگام ارسال از خود تیکت خوانده می‌شود.',
+  ],
+  'bot.ticket.ai_open_in_bot': [
+    'خط لینک ربات در پاسخ هوش مصنوعی به تیکت',
+    'وقتی پاسخ هوش مصنوعی در تیکت مشتری را به خرید، تمدید، حجم یا زمان اضافه، تغییر لوکیشن، سرویس تست، تغییر لینک یا شارژ کیف پول در ربات می‌فرستد، این خط با لینک ساخته‌شدهٔ سیستم در انتهای پاسخ می‌آید.',
   ],
   'bot.ticket.support_attachment': [
     'پیوست پاسخ پشتیبانی (اعلان به مشتری)',

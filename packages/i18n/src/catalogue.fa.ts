@@ -1686,6 +1686,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '📩 پاسخ پشتیبانی به تیکت #{number}\n📂 موضوع: {category}\n\n{text}',
   'bot.ticket.ai_replied':
     '🤖 پاسخ هوش مصنوعی به تیکت #{number}\n📂 موضوع: {category}\n\n{text}\n\nاگر پاسخ کافی نبود، همکاران پشتیبانی به‌زودی بررسی می‌کنند.',
+  'bot.ticket.ai_open_in_bot': '👈 برای انجام این کار، این لینک را در ربات باز کنید:\n{link}',
   'bot.ticket.support_attachment': '📎 پیوست پاسخ پشتیبانی به تیکت #{number}\n📂 موضوع: {category}',
   'bot.ticket.view_button': '🎫 مشاهده تیکت',
   'bot.direct_message.text': '{icon:support} پیام پشتیبانی\n\n{text}',

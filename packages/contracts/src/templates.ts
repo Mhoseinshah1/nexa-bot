@@ -14257,6 +14257,21 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.ticket.ai_open_in_bot',
+    description:
+      "Phase 4 PR-4: the line the support assistant's ticket answer ends with when it points the customer at one of the bot's own flows (buy, renew, add-on, location, trial, link rotation, wallet top-up, or a service's card). A ticket reply has no buttons of its own, so the bot link, built by NEXA and never written by the model, is the text.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'link',
+        type: 'STRING',
+        description: "NEXA\\'s deep link into the bot (https://t.me/<bot>?start=sai-…).",
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.ticket.support_attachment',
     description:
       "HF-A7: the caption on the file support attached to a reply (TICKET_REPLY_ATTACHMENT). The file is sent beside the reply's own message; the values are read at send time from the ticket.",
