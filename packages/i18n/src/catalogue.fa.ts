@@ -1289,6 +1289,44 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   /* Phase 4 PR-1: an unlinked Business customer asked about their own service. */
   'bot.support.ai_link_account':
     'برای دیدن سرویس، حجم، تاریخ پایان یا لینک اشتراک خودتان، لطفاً وارد ربات شوید؛ همهٔ این اطلاعات آنجا برایتان نمایش داده می‌شود:\n{botLink}',
+  /* Phase 4 PR-3: the support AI's tools, deep links, check-before-handoff and buttons. */
+  'bot.support.ai_subscription_link':
+    '🔗 لینک اشتراک سرویس {service}:\n{link}\n\nاین لینک را در برنامهٔ اتصال وارد کنید. لطفاً آن را در اختیار کس دیگری نگذارید.',
+  'bot.support.ai_files_in_bot':
+    'فایل‌های اتصال سرویس {service} فقط از داخل ربات دریافت می‌شوند. با دکمهٔ زیر سرویس را در ربات باز کنید و «فایل‌ها» را بزنید.',
+  'bot.support.ai_payment_status_line': '• کد پیگیری {code} — {amount} — {route}: {state}',
+  'bot.support.ai_payment_status_none': 'در دو هفتهٔ گذشته پرداختی برای حساب شما ثبت نشده است.',
+  'bot.support.ai_payment_under_review':
+    'پرداخت شما با کد پیگیری {code} به مبلغ {amount} ثبت شده و در حال بررسی است. نتیجهٔ بررسی را همکاران پشتیبانی در همین گفتگو اطلاع می‌دهند؛ نیازی به ارسال دوبارهٔ پیام نیست.',
+  'bot.support.ai_payment_delivered':
+    'پرداخت شما با کد پیگیری {code} تأیید شده و سرویس {service} برایتان ساخته شده است. اطلاعات اتصال آن در ادامه است:',
+  'bot.support.ai_payment_settled_pending':
+    'پرداخت شما با کد پیگیری {code} به مبلغ {amount} تأیید شده است. وضعیت سرویس آن را همکاران پشتیبانی بررسی می‌کنند و در همین گفتگو اطلاع می‌دهند.',
+  'bot.support.ai_payment_not_found':
+    'برای بررسی دقیق پرداخت، لطفاً یکی از این موارد را بفرستید: تصویر رسید پرداخت، کد پیگیری، یا مبلغ و زمان پرداخت.',
+  'bot.support.ai_payment_unlinked':
+    'برای بررسی پرداخت، حساب شما در ربات لازم است:\n{botLink}\nپیام شما برای بررسی به همکاران پشتیبانی هم ارجاع شد و پاسخ در همین گفتگو داده می‌شود.',
+  'bot.support.ai_unsupported_content':
+    'متأسفانه امکان شنیدن پیام صوتی یا باز کردن این نوع فایل را ندارم. لطفاً سؤالتان را به‌صورت متن بنویسید تا راهنمایی‌تان کنم.',
+  'bot.support.ai_label': '🤖 پاسخ هوش مصنوعی',
+  'bot.support.ai_feedback_question': 'مشکل حل شد؟',
+  'bot.support.ai_feedback_thanks': 'ممنون از بازخوردتان 🙏',
+  'bot.support.ai_feedback_handoff': 'پیام شما به همکاران پشتیبانی ارجاع شد.',
+  'bot.support.ai_human_requested': 'گفتگو به پشتیبان انسانی سپرده شد.',
+  'bot.support.ai_callback_stale': 'این دکمه دیگر فعال نیست.',
+  'bot.support.ai_button_human': '👤 پشتیبان انسانی',
+  'bot.support.ai_button_yes': '👍',
+  'bot.support.ai_button_no': '👎',
+  'bot.support.ai_button_buy': '🛒 خرید سرویس در ربات',
+  'bot.support.ai_button_renew': '💊 تمدید سرویس در ربات',
+  'bot.support.ai_button_add_traffic': '➕ خرید حجم اضافه در ربات',
+  'bot.support.ai_button_add_time': '⏳ خرید زمان اضافه در ربات',
+  'bot.support.ai_button_change_location': '🌍 تغییر لوکیشن در ربات',
+  'bot.support.ai_button_trial': '🎁 دریافت سرویس تست در ربات',
+  'bot.support.ai_button_rotate': '⚙️ تغییر لینک در ربات',
+  'bot.support.ai_button_topup': '💰 شارژ کیف پول در ربات',
+  'bot.support.ai_button_service_in_bot': '📄 باز کردن سرویس در ربات',
+  'bot.support.ai_button_open_bot': '🤖 ورود به ربات',
   'bot.order.preinvoice':
     '{icon:invoice} پیش‌فاکتور\n🔖 کد سفارش: {orderCode}\n\n{icon:service} سرویس: {productName}\n{icon:user} نام کاربری: {serviceUsername}\n{icon:date} مدت: {durationDays}\n{icon:traffic} حجم: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{customBlock}\n{devicesBlock}\n{locationChangeBlock}\n{discountLine}\n{cashbackLine}\n{icon:amount} مبلغ سفارش: {total}\n\n{description}\n\n{icon:wallet} موجودی کیف پول: {walletBalance}\n\n{icon:purchase} سفارش شما آماده پرداخت است؛ روش پرداخت را با دکمه‌های زیر انتخاب کنید. اگر روشی کارمزد داشته باشد، کارمزد و مبلغ قابل پرداخت در فاکتور همان روش جداگانه نمایش داده می‌شود.',
   'bot.order.preinvoice_custom':

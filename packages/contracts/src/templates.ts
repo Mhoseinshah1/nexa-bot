@@ -9027,6 +9027,301 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.support.ai_subscription_link',
+    description:
+      'Phase 4 PR-3: the customer’s own subscription link as the support AI sends it in a Telegram Business chat (get_subscription_link) — the same link «سرویس\u200cهای من» shows, as plain text (a Business message has no HTML), only to a linked customer and only for their own service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The service’s panel username, as the service card shows it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'link',
+        type: 'STRING',
+        description: 'The service’s subscription link.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.support.ai_files_in_bot',
+    description:
+      'Phase 4 PR-3: instead of a link, for a service on a «فقط فایل، بدون لینک ساب» panel: the connection files are taken in the bot (a button opens that service there).',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The service’s panel username.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.support.ai_payment_status_line',
+    description:
+      'Phase 4 PR-3: one of the customer’s own latest payments, as the support AI reports it (payment_status): tracking code, amount, state and route, never a promise.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'code',
+        type: 'STRING',
+        description: 'The payment’s tracking code.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'amount',
+        type: 'STRING',
+        description: 'The amount, formatted.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'state',
+        type: 'STRING',
+        description: 'The payment’s state in Persian.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'route',
+        type: 'STRING',
+        description: 'How it was paid, in Persian.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.support.ai_payment_status_none',
+    description:
+      'Phase 4 PR-3: payment_status found no payment of this customer in the last two weeks.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_payment_under_review',
+    description:
+      'Phase 4 PR-3, check-before-handoff: a «paid but not received» customer whose payment is under review or waiting for the gateway — said once, no outcome promised, then a person takes over.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'code',
+        type: 'STRING',
+        description: 'The payment’s tracking code.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'amount',
+        type: 'STRING',
+        description: 'The amount, formatted.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.support.ai_payment_delivered',
+    description:
+      'Phase 4 PR-3, check-before-handoff: the payment is confirmed and its service delivered; the service’s link or files button follows, with «مشکل حل شد؟».',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'code',
+        type: 'STRING',
+        description: 'The payment’s tracking code.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The delivered service’s panel username.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.support.ai_payment_settled_pending',
+    description:
+      'Phase 4 PR-3, check-before-handoff: the payment is confirmed but its service is not delivered yet (or it settled something else) — said once, no outcome promised, then a person takes over.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'code',
+        type: 'STRING',
+        description: 'The payment’s tracking code.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'amount',
+        type: 'STRING',
+        description: 'The amount, formatted.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.support.ai_payment_not_found',
+    description:
+      'Phase 4 PR-3, check-before-handoff: no matching payment was found; asks ONCE for the receipt, the tracking code or the amount and time. The next message goes to a person.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_payment_unlinked',
+    description:
+      'Phase 4 PR-3, check-before-handoff: a «paid but not received» customer NEXA cannot link to an account — the bot link, and a person takes over.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'botLink',
+        type: 'STRING',
+        description: 'The bot’s start link.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.support.ai_unsupported_content',
+    description:
+      'Phase 4 PR-3: a voice message, sticker or non-image file in a Telegram Business chat: the support AI asks the customer to type the question (it cannot listen to voice). The conversation stays with the AI.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_label',
+    description:
+      'Phase 4 PR-3: the first line of an automatic reply when support.ai.label_enabled is on — says an assistant wrote it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_feedback_question',
+    description:
+      'Phase 4 PR-3: the last line of an automatic answer when support.ai.feedback_enabled is on, above 👍 / 👎.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_feedback_thanks',
+    description: 'Phase 4 PR-3: the short notice a 👍 tap gets.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_feedback_handoff',
+    description: 'Phase 4 PR-3: the short notice a 👎 tap gets — a person will look.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_human_requested',
+    description: 'Phase 4 PR-3: the short notice a «👤 پشتیبان انسانی» tap gets.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_callback_stale',
+    description:
+      'Phase 4 PR-3: the short notice a support-AI button gets when it no longer applies (the conversation moved on, or the tap is not from this chat).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_human',
+    description:
+      'Phase 4 PR-3: the button under an automatic reply that hands the conversation to a person.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_yes',
+    description: 'Phase 4 PR-3: 👍 under «مشکل حل شد؟».',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_no',
+    description: 'Phase 4 PR-3: 👎 under «مشکل حل شد؟».',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_buy',
+    description: 'Phase 4 PR-3: a URL button into the bot’s catalogue.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_renew',
+    description: 'Phase 4 PR-3: a URL button into the bot’s renewal of one service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_add_traffic',
+    description: 'Phase 4 PR-3: a URL button into the bot’s traffic packages for one service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_add_time',
+    description: 'Phase 4 PR-3: a URL button into the bot’s time packages for one service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_change_location',
+    description: 'Phase 4 PR-3: a URL button into the bot’s location change for one service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_trial',
+    description:
+      'Phase 4 PR-3: a URL button into the bot’s free trial (shown only to an eligible customer).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_rotate',
+    description:
+      'Phase 4 PR-3: a URL button into the bot’s link change for one service (the bot asks to confirm).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_topup',
+    description: 'Phase 4 PR-3: a URL button into the bot’s wallet top-up.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_service_in_bot',
+    description: 'Phase 4 PR-3: a URL button opening one service’s card in the bot (its files).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_open_bot',
+    description: 'Phase 4 PR-3: a URL button opening the bot.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.order.preinvoice',
     description:
       'The pre-invoice a customer pays from. B1: the product is described to the customer ' +

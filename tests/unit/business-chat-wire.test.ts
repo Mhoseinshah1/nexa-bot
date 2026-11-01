@@ -120,8 +120,9 @@ describe('the handoff-reason follow-up to CX1 — reasons and outcomes a pre-A3 
       expect(wire, reason).toBe(
         ['NO_PROGRESS', 'REPEATED_ADVICE', 'INBOUND_FLOOD', 'SUSPICIOUS_PROBING'].includes(reason)
           ? 'LOOP_GUARD'
-          : // Phase 4 PR-1: a reply naming what the facts do not hold is a grounding failure.
-            reason === 'OUTPUT_POLICY'
+          : // Phase 4 PR-1: a reply naming what the facts do not hold is a grounding failure;
+            // Phase 4 PR-3: so is an answer the customer said did not help (👎).
+            reason === 'OUTPUT_POLICY' || reason === 'CUSTOMER_UNSATISFIED'
             ? 'INSUFFICIENT_GROUNDING'
             : reason,
       );
@@ -167,7 +168,8 @@ describe('the handoff-reason follow-up to CX1 — reasons and outcomes a pre-A3 
     const sum = (rows: readonly { count: number }[]) => rows.reduce((n, row) => n + row.count, 0);
     expect(sum(result.handoffsByReason)).toBe(BUSINESS_HANDOFF_REASONS.length);
     expect(supportHandoffCountsOf(result)).toHaveLength(BUSINESS_HANDOFF_REASONS.length);
-    expect(result.auto.byOutcome.find((row) => row.outcome === 'guard_consecutive')?.count).toBe(5);
+    // Phase 4 PR-3: the tool-call limit is the loop guard too.
+    expect(result.auto.byOutcome.find((row) => row.outcome === 'guard_consecutive')?.count).toBe(6);
     // no_action is left out of the folded list only; the detail and the totals keep it.
     expect(sum(result.auto.byOutcome)).toBe(SUPPORT_AI_AUTO_OUTCOMES.length - 1);
     expect(supportAutoOutcomeCountsOf(result)).toHaveLength(SUPPORT_AI_AUTO_OUTCOMES.length);

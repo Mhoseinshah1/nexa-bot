@@ -27,4 +27,5 @@ export const HANDOFF_LABELS: Readonly<Record<BusinessHandoffReason, WebKey>> = {
   INBOUND_FLOOD: 'web.bchat_handoff_inbound_flood',
   OUTPUT_POLICY: 'web.bchat_handoff_output_policy',
   SUSPICIOUS_PROBING: 'web.bchat_handoff_suspicious_probing',
+  CUSTOMER_UNSATISFIED: 'web.bchat_handoff_customer_unsatisfied',
 };

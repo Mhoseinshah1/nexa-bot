@@ -1019,6 +1019,53 @@ export const SETTINGS = [
     consumer: 'ACTIVE',
   },
   {
+    key: 'support.ai.actions_enabled',
+    description:
+      'Phase 4 PR-3: whether the support AI\u2019s automatic Telegram Business replies may use its ' +
+      'read-only tools and the bot\u2019s deep links: send the customer\u2019s own subscription link ' +
+      '(as «سرویس‌های من» shows it), report the customer\u2019s own payment states, attach buttons ' +
+      'into the bot\u2019s buy, renew, add-on, location, trial, link-rotation and wallet top-up ' +
+      'flows, check the customer\u2019s payments before handing a «paid but not received» to a ' +
+      'person, draw «👤 پشتیبان انسانی» under its replies, and answer a voice message, sticker or ' +
+      'file with a request to type instead of handing off. The AI never performs any of those ' +
+      'changes itself. Off by default: replies are text only, as before.',
+    schema: z.boolean(),
+    defaultValue: false,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'support.ai.label_enabled',
+    description:
+      'Phase 4 PR-3: whether every automatic support-AI reply on Telegram Business opens with a ' +
+      'short line saying an assistant wrote it («🤖 پاسخ هوش مصنوعی»). Off by default.',
+    schema: z.boolean(),
+    defaultValue: false,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'support.ai.feedback_enabled',
+    description:
+      'Phase 4 PR-3: whether an automatic support-AI answer on Telegram Business ends with ' +
+      '«مشکل حل شد؟» and 👍 / 👎 buttons. 👎 hands the conversation to a person (soft) and records ' +
+      'a knowledge gap. Read only while the tools are on (support.ai.actions_enabled). On by ' +
+      'default (the owner\u2019s decision).',
+    schema: z.boolean(),
+    defaultValue: true,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
     key: 'telegram.channels',
     description:
       'The channels shown to customers, in order, each flagged as required membership or ' +

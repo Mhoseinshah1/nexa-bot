@@ -893,6 +893,48 @@ export type SupportAiTopic = (typeof SUPPORT_AI_TOPICS)[number];
 
 export const SUPPORT_AI_TICKET_ACTIONS = ['NONE', 'CREATE', 'LINK'] as const;
 
+/**
+ * Phase 4 PR-3 — what a decision may ask NEXA to ATTACH to its reply. Every one is READ-ONLY or a
+ * deep link into the bot's own, already-checked flow: the AI never buys, renews, adds, rotates,
+ * moves a location, starts a trial, tops up a wallet or moves money — the customer does, in the
+ * bot, where every rule is decided again on the tap.
+ *
+ * - `NONE` — no tool.
+ * - `SEND_SUBSCRIPTION_LINK` — the customer's own subscription link for service `target` (`S…`),
+ *   exactly what «سرویس‌های من» shows (a «فقط فایل» panel: the bot's files button instead of the
+ *   link). Only to a LINKED customer, only their own service.
+ * - `PAYMENT_STATUS` — the state of the customer's latest payments, from NEXA's rows, in Persian,
+ *   no promise. No target.
+ * - `BUY` (optional `target` C…: the plan's category), `RENEW`, `ADD_TRAFFIC`, `ADD_TIME`,
+ *   `CHANGE_LOCATION`, `ROTATE_LINK` (each `target` S…), `TRIAL` (eligibility read first),
+ *   `WALLET_TOPUP` — an inline URL button into the matching bot flow (`supportAiStartPayload`).
+ */
+export const SUPPORT_AI_ACTION_KINDS = [
+  'NONE',
+  'SEND_SUBSCRIPTION_LINK',
+  'PAYMENT_STATUS',
+  'BUY',
+  'RENEW',
+  'ADD_TRAFFIC',
+  'ADD_TIME',
+  'CHANGE_LOCATION',
+  'TRIAL',
+  'ROTATE_LINK',
+  'WALLET_TOPUP',
+] as const;
+export type SupportAiActionKind = (typeof SUPPORT_AI_ACTION_KINDS)[number];
+/** The actions about ONE of the customer's services: `target` must be an `S…` alias. */
+export const SUPPORT_AI_SERVICE_ACTION_KINDS = [
+  'SEND_SUBSCRIPTION_LINK',
+  'RENEW',
+  'ADD_TRAFFIC',
+  'ADD_TIME',
+  'CHANGE_LOCATION',
+  'ROTATE_LINK',
+] as const satisfies readonly SupportAiActionKind[];
+/** An action's target is an alias (`S12`, `C3`) or empty — never longer. */
+export const SUPPORT_AI_ACTION_TARGET_MAX_CHARS = 4;
+
 /** The longest reply text a decision may carry, whatever the tenant configures. */
 export const SUPPORT_AI_REPLY_MAX_CHARS = 4000;
 /** The operator-only notes of a decision: stated to the model, and the parser's bounds. */
@@ -921,6 +963,20 @@ export const supportAiDecisionSchema = z
     summary: z.string().max(SUPPORT_AI_SUMMARY_MAX_CHARS),
     /** A short label of the customer's intent, for the operator. */
     intent: z.string().max(SUPPORT_AI_INTENT_MAX_CHARS),
+    /**
+     * Phase 4 PR-3 — the ONE read-only tool or bot deep link the reply asks NEXA to attach
+     * (`SUPPORT_AI_ACTION_KINDS`). Optional for zod (a decision from before PR-3, an Assist draft
+     * and every test fixture parse unchanged); REQUIRED in the providers' JSON Schema, so a model
+     * always states it. Never an id: `target` is a fact alias of THIS payload or empty, and NEXA
+     * resolves it through the server-side alias map (`SupportContextBuild.references`).
+     */
+    action: z
+      .object({
+        kind: z.enum(SUPPORT_AI_ACTION_KINDS),
+        target: z.string().max(SUPPORT_AI_ACTION_TARGET_MAX_CHARS),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type SupportAiDecision = z.infer<typeof supportAiDecisionSchema>;
@@ -943,6 +999,7 @@ export const SUPPORT_AI_DECISION_JSON_SCHEMA: Record<string, unknown> = {
     'ticketAction',
     'summary',
     'intent',
+    'action',
   ],
   properties: {
     decision: { type: 'string', enum: [...SUPPORT_AI_DECISIONS] },
@@ -954,6 +1011,15 @@ export const SUPPORT_AI_DECISION_JSON_SCHEMA: Record<string, unknown> = {
     ticketAction: { type: 'string', enum: [...SUPPORT_AI_TICKET_ACTIONS] },
     summary: { type: 'string' },
     intent: { type: 'string' },
+    action: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['kind', 'target'],
+      properties: {
+        kind: { type: 'string', enum: [...SUPPORT_AI_ACTION_KINDS] },
+        target: { type: 'string' },
+      },
+    },
   },
 };
 
@@ -1169,6 +1235,20 @@ export const SUPPORT_AI_AUTO_GUARDS = [
   'output_policy',
   /** `SUPPORT_AI_REFUSAL_LIMIT` refusals in one epoch: `SUSPICIOUS_PROBING`, soft. */
   'refusal_abuse',
+  // --- Phase 4 PR-3 (2026-11-01).
+  /**
+   * The decision's action named a target that is not one of THIS customer's rows in THIS payload
+   * (an alias it was not shown, an id, a service of another kind), a tool the customer may not
+   * use (a link for an unlinked customer, a trial they are not eligible for), or a button with no
+   * bot to open. Nothing is attached; regenerated once, then a soft handoff
+   * (`INSUFFICIENT_GROUNDING`).
+   */
+  'tool_scope',
+  /**
+   * More than `SUPPORT_AI_TOOL_CALL_LIMIT` tool calls in one epoch: tools stop, a soft handoff
+   * (`SUSPICIOUS_PROBING`) and `support.ai.suspicious_probing` with the customer's code only.
+   */
+  'tool_rate_limit',
 ] as const;
 export type SupportAiAutoGuard = (typeof SUPPORT_AI_AUTO_GUARDS)[number];
 
@@ -1234,6 +1314,31 @@ export const SUPPORT_AI_AUTO_OUTCOMES = [
    * message with the bot's start link (`bot.support.ai_link_account`) was enqueued.
    */
   'sent_link',
+  // --- Phase 4 PR-3 (2026-11-01).
+  'guard_tool_scope',
+  'guard_tool_rate_limit',
+  /**
+   * Check-before-handoff («paid but not received»): the customer's payment is CONFIRMED and its
+   * service delivered — that service's link (or files button) was sent with «مشکل حل شد؟». No
+   * handoff yet: a confirmation closes the matter, anything else hands off, HARD.
+   */
+  'sent_payment_delivered',
+  /**
+   * Check-before-handoff: no matching payment was found — ONE message asked for the receipt, the
+   * tracking code or the amount and time. The customer's next message hands off, HARD, with it.
+   */
+  'sent_payment_ask',
+  /**
+   * Check-before-handoff: the facts NEXA read (a payment under review or waiting for the gateway,
+   * confirmed without a delivered service, or an unlinked customer) were told in ONE message and
+   * the conversation handed off, HARD, with a Persian summary for the person.
+   */
+  'handoff_payment_checked',
+  /**
+   * A voice message, a sticker or a non-image file: ONE templated message asking the customer to
+   * type the question. The conversation stays with the AI (no handoff).
+   */
+  'sent_unsupported_content',
 ] as const;
 export type SupportAiAutoOutcome = (typeof SUPPORT_AI_AUTO_OUTCOMES)[number];
 
@@ -1299,3 +1404,160 @@ export const SUPPORT_AI_SUSPICIOUS_PROBING_CODE = 'support.ai.suspicious_probing
 
 /** Phase 4 PR-1 — the deep-link message an unlinked customer gets for an account topic. */
 export const SUPPORT_AI_LINK_ACCOUNT_TEMPLATE_KEY = 'bot.support.ai_link_account';
+
+// ---------------------------------------------------------------------------
+// Phase 4 PR-3 (2026-11-01) — read-only tools, deep links, check-before-handoff.
+// ---------------------------------------------------------------------------
+
+/**
+ * More than this many tool calls (`action` other than `NONE`, a payment check included) in ONE
+ * control epoch stop the tools: a soft handoff (`SUSPICIOUS_PROBING`) and the operations log's
+ * `support.ai.suspicious_probing` with the customer's code only, never a word of what was asked.
+ */
+export const SUPPORT_AI_TOOL_CALL_LIMIT = 6;
+/**
+ * One subscription link (or files button) the support AI sent a customer: the operations log
+ * names the service by its panel username (the ops-log rule) and the customer by its code.
+ */
+export const SUPPORT_AI_LINK_SENT_CODE = 'support.ai.subscription_link_sent';
+/**
+ * The payments check-before-handoff reads: this customer's, created this many days back at most
+ * (the account-review window). A pending check (a link sent, or the one question asked) lasts
+ * one session (`SUPPORT_AI_SESSION_INACTIVITY_SECONDS`).
+ */
+export const SUPPORT_AI_PAYMENT_CHECK_WINDOW_DAYS = 14;
+
+/** The customer-facing template keys of PR-3 (each Persian, in the catalogue). */
+export const SUPPORT_AI_TEMPLATE_KEYS = {
+  subscriptionLink: 'bot.support.ai_subscription_link',
+  filesInBot: 'bot.support.ai_files_in_bot',
+  paymentStatusLine: 'bot.support.ai_payment_status_line',
+  paymentStatusNone: 'bot.support.ai_payment_status_none',
+  paymentUnderReview: 'bot.support.ai_payment_under_review',
+  paymentDelivered: 'bot.support.ai_payment_delivered',
+  paymentSettledPending: 'bot.support.ai_payment_settled_pending',
+  paymentNotFound: 'bot.support.ai_payment_not_found',
+  paymentUnlinked: 'bot.support.ai_payment_unlinked',
+  unsupportedContent: 'bot.support.ai_unsupported_content',
+  label: 'bot.support.ai_label',
+  feedbackQuestion: 'bot.support.ai_feedback_question',
+  feedbackThanks: 'bot.support.ai_feedback_thanks',
+  feedbackHandoff: 'bot.support.ai_feedback_handoff',
+  humanRequested: 'bot.support.ai_human_requested',
+  callbackStale: 'bot.support.ai_callback_stale',
+  buttonHuman: 'bot.support.ai_button_human',
+  buttonYes: 'bot.support.ai_button_yes',
+  buttonNo: 'bot.support.ai_button_no',
+  buttonBuy: 'bot.support.ai_button_buy',
+  buttonRenew: 'bot.support.ai_button_renew',
+  buttonAddTraffic: 'bot.support.ai_button_add_traffic',
+  buttonAddTime: 'bot.support.ai_button_add_time',
+  buttonChangeLocation: 'bot.support.ai_button_change_location',
+  buttonTrial: 'bot.support.ai_button_trial',
+  buttonRotate: 'bot.support.ai_button_rotate',
+  buttonTopup: 'bot.support.ai_button_topup',
+  buttonServiceInBot: 'bot.support.ai_button_service_in_bot',
+  buttonOpenBot: 'bot.support.ai_button_open_bot',
+} as const;
+
+/**
+ * The bot flows a support-AI deep link opens, each an EXISTING flow of the bot (its own
+ * intent), reached by `https://t.me/<bot>?start=<payload>`. The payload names the flow and, for
+ * a service or a category, its id: the bot decides ownership, availability and every rule again
+ * when the customer taps, exactly as for its own buttons. Nothing is done by opening one except
+ * showing that flow's first screen — except `TRIAL`, which is the main menu's trial button.
+ */
+export const SUPPORT_AI_DEEP_LINK_FLOWS = {
+  /** The catalogue (`CATALOG`). */
+  buy: 'b',
+  /** A category's plans (`REORDER_CATEGORY`), id required. */
+  category: 'c',
+  /** The service's renewal menu (`SERVICE_RENEW`). */
+  renew: 'rn',
+  /** Traffic packages (`SERVICE_ADD_TRAFFIC`). */
+  addTraffic: 'at',
+  /** Time packages (`SERVICE_ADD_TIME`). */
+  addTime: 'am',
+  /** The location choice (`SERVICE_CHANGE_LOCATION`). */
+  changeLocation: 'lc',
+  /** The rotation's confirmation question (`SERVICE_ROTATE_ASK`) — the bot asks before acting. */
+  rotate: 'ro',
+  /** The service card (`SERVICE`), where «📄 فایل‌ها» sends a «فقط فایل» panel's files. */
+  service: 'sv',
+  /** The main menu's trial (`TRIAL_CLAIM`). */
+  trial: 't',
+  /** The wallet top-up (`TOPUP_MENU`). */
+  topup: 'w',
+} as const;
+export type SupportAiDeepLinkFlow = keyof typeof SUPPORT_AI_DEEP_LINK_FLOWS;
+const DEEP_LINK_PREFIX = 'sai-';
+const DEEP_LINK_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const FLOWS_WITH_ID: readonly SupportAiDeepLinkFlow[] = [
+  'category',
+  'renew',
+  'addTraffic',
+  'addTime',
+  'changeLocation',
+  'rotate',
+  'service',
+];
+
+/**
+ * The `/start` payload of a deep link: `sai-<flow>` or `sai-<flow>-<uuid>` — at most 43
+ * characters of `[A-Za-z0-9_-]`, inside Telegram's 64. Throws on a flow that needs an id and
+ * has none (or the reverse), or an id that is not a lower-case UUID: a payload is never built
+ * from anything but a row id the server resolved.
+ */
+export function supportAiStartPayload(flow: SupportAiDeepLinkFlow, id: string | null): string {
+  const needsId = FLOWS_WITH_ID.includes(flow);
+  if (needsId !== (id !== null) || (id !== null && !DEEP_LINK_ID.test(id))) {
+    throw new Error(`support AI deep link ${flow}: bad id`);
+  }
+  const code = SUPPORT_AI_DEEP_LINK_FLOWS[flow];
+  return id === null ? `${DEEP_LINK_PREFIX}${code}` : `${DEEP_LINK_PREFIX}${code}-${id}`;
+}
+
+/** The flow and id a `/start` payload names, or null when it is not a support-AI deep link. */
+export function parseSupportAiStartPayload(
+  payload: string | null,
+): { readonly flow: SupportAiDeepLinkFlow; readonly id: string | null } | null {
+  if (payload === null || !payload.startsWith(DEEP_LINK_PREFIX)) return null;
+  const rest = payload.slice(DEEP_LINK_PREFIX.length);
+  const dash = rest.indexOf('-');
+  const code = dash === -1 ? rest : rest.slice(0, dash);
+  const id = dash === -1 ? null : rest.slice(dash + 1);
+  const flow = (Object.keys(SUPPORT_AI_DEEP_LINK_FLOWS) as SupportAiDeepLinkFlow[]).find(
+    (key) => SUPPORT_AI_DEEP_LINK_FLOWS[key] === code,
+  );
+  if (flow === undefined) return null;
+  if (FLOWS_WITH_ID.includes(flow) !== (id !== null)) return null;
+  if (id !== null && !DEEP_LINK_ID.test(id)) return null;
+  return { flow, id };
+}
+
+/**
+ * The callback data of the support AI's own buttons on a Business message: `sai:<a>:<row id>`,
+ * the row id of the outbound message the button sits on. NOT an authority: the handler accepts
+ * a tap only when the row's conversation is the chat the tap came from, on the same connection,
+ * from that chat's customer, on that very message (`SupportAiCallbackService`), so data forged
+ * for another chat's row is refused.
+ */
+export const SUPPORT_AI_CALLBACK_ACTIONS = { human: 'h', yes: 'y', no: 'n' } as const;
+export type SupportAiCallbackAction = keyof typeof SUPPORT_AI_CALLBACK_ACTIONS;
+export function supportAiCallbackData(action: SupportAiCallbackAction, rowId: string): string {
+  if (!DEEP_LINK_ID.test(rowId)) throw new Error('support AI callback: bad row id');
+  return `sai:${SUPPORT_AI_CALLBACK_ACTIONS[action]}:${rowId}`;
+}
+export function parseSupportAiCallbackData(
+  data: string | null,
+): { readonly action: SupportAiCallbackAction; readonly rowId: string } | null {
+  if (data === null) return null;
+  const match = /^sai:([a-z]):([0-9a-f-]{36})$/u.exec(data);
+  if (match === null) return null;
+  const action = (Object.keys(SUPPORT_AI_CALLBACK_ACTIONS) as SupportAiCallbackAction[]).find(
+    (key) => SUPPORT_AI_CALLBACK_ACTIONS[key] === match[1],
+  );
+  const rowId = match[2] ?? '';
+  if (action === undefined || !DEEP_LINK_ID.test(rowId)) return null;
+  return { action, rowId };
+}

@@ -59,6 +59,10 @@ export function supportAutoOutcomeClass(outcome: SupportAiAutoOutcome): SupportA
     case 'sent':
     case 'sent_clarifying':
     case 'sent_link': // Phase 4 PR-1: the bot's start link to an unlinked customer.
+    // Phase 4 PR-3: a message sent, the conversation still with the AI.
+    case 'sent_payment_delivered':
+    case 'sent_payment_ask':
+    case 'sent_unsupported_content':
       return 'SENT';
     case 'dropped_mode':
     case 'dropped_epoch':
@@ -91,6 +95,10 @@ export function supportAutoOutcomeClass(outcome: SupportAiAutoOutcome): SupportA
     case 'guard_inbound_flood':
     case 'guard_output_policy':
     case 'guard_refusal_abuse':
+    // Phase 4 PR-3.
+    case 'guard_tool_scope':
+    case 'guard_tool_rate_limit':
+    case 'handoff_payment_checked':
       return 'HANDED_OFF';
     default: {
       // Compile-time: every outcome this release knows is listed above. Run-time: a NEWER
@@ -163,7 +171,20 @@ export function supportAutoWireOutcome(
     case 'guard_output_policy':
       return 'guard_grounding';
     case 'sent_link':
+    // Phase 4 PR-3: a message was sent and the conversation stayed with the AI.
+    case 'sent_payment_delivered':
+    case 'sent_payment_ask':
+    case 'sent_unsupported_content':
       return 'sent';
+    // Phase 4 PR-3: a target the payload did not hold is a grounding failure (as its reason);
+    // a tool flood is the loop guard (as SUSPICIOUS_PROBING goes as LOOP_GUARD).
+    case 'guard_tool_scope':
+      return 'guard_grounding';
+    case 'guard_tool_rate_limit':
+      return 'guard_consecutive';
+    // The facts were told, then a hard handoff, exactly the money guard's.
+    case 'handoff_payment_checked':
+      return 'guard_handoff_topic';
     case 'no_action':
       return null;
     default:

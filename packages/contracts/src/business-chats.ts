@@ -284,6 +284,13 @@ export const BUSINESS_HANDOFF_REASONS = [
   'OUTPUT_POLICY',
   /** Repeated refusals in one epoch: somebody is probing for what the AI must not give. */
   'SUSPICIOUS_PROBING',
+  // --- Phase 4 PR-3 (2026-11-01).
+  /**
+   * The customer answered «مشکل حل شد؟» with 👎 under an automatic reply: the answer did not help.
+   * Soft (the AI may take the conversation back later); a knowledge-gap entry by its topic and
+   * intent.
+   */
+  'CUSTOMER_UNSATISFIED',
 ] as const;
 export type BusinessHandoffReason = (typeof BUSINESS_HANDOFF_REASONS)[number];
 
@@ -337,6 +344,8 @@ export function businessHandoffWireReason(
       return 'LOOP_GUARD';
     // Phase 4 PR-1: a reply that named something the facts do not hold is a grounding failure.
     case 'OUTPUT_POLICY':
+    // Phase 4 PR-3: an answer the customer said did not help is not grounded enough either.
+    case 'CUSTOMER_UNSATISFIED':
       return 'INSUFFICIENT_GROUNDING';
     default:
       return reason;
@@ -475,6 +484,44 @@ export const BUSINESS_OUTBOUND_ORIGINS = ['OPERATOR', 'ASSIST', 'AUTO', 'HANDOFF
 /** Roadmap A4 — the handoff notice's template (customer text is a key, never a string). */
 export const BUSINESS_HANDOFF_NOTICE_TEMPLATE_KEY = 'bot.support.handoff_notice';
 export type BusinessOutboundOrigin = (typeof BUSINESS_OUTBOUND_ORIGINS)[number];
+
+/**
+ * Phase 4 PR-3 — the inline keyboard an automatic Business message may carry: rows of buttons,
+ * each a URL (a deep link into the bot, `https://t.me/…`) or the support AI's own callback
+ * (`sai:…`, bound to the row it sits on). Labels are rendered from template keys when the row is
+ * enqueued. Bounded: at most `BUSINESS_OUTBOUND_BUTTON_ROWS` rows of
+ * `BUSINESS_OUTBOUND_BUTTONS_PER_ROW`.
+ */
+export const BUSINESS_OUTBOUND_BUTTON_ROWS = 4;
+export const BUSINESS_OUTBOUND_BUTTONS_PER_ROW = 3;
+export const businessOutboundButtonSchema = z
+  .object({
+    label: z.string().min(1).max(64),
+    url: z
+      .string()
+      .regex(/^https:\/\/t\.me\/[A-Za-z0-9_]{4,32}(?:\?start=[A-Za-z0-9_-]{1,64})?$/u)
+      .nullable(),
+    callbackData: z
+      .string()
+      .regex(/^sai:[a-z]:[0-9a-f-]{36}$/u)
+      .nullable(),
+  })
+  .strict()
+  .refine((button) => (button.url === null) !== (button.callbackData === null), {
+    message: 'A button is a URL or a callback, never both.',
+  });
+export type BusinessOutboundButton = z.infer<typeof businessOutboundButtonSchema>;
+export const businessOutboundButtonsSchema = z
+  .array(z.array(businessOutboundButtonSchema).min(1).max(BUSINESS_OUTBOUND_BUTTONS_PER_ROW))
+  .max(BUSINESS_OUTBOUND_BUTTON_ROWS);
+export type BusinessOutboundButtons = z.infer<typeof businessOutboundButtonsSchema>;
+
+/**
+ * Phase 4 PR-3 — the customer's answer to «مشکل حل شد؟» under an automatic message, recorded on
+ * that message's lane row once (the first tap wins).
+ */
+export const BUSINESS_OUTBOUND_FEEDBACK = ['UP', 'DOWN'] as const;
+export type BusinessOutboundFeedback = (typeof BUSINESS_OUTBOUND_FEEDBACK)[number];
 
 /**
  * The lane's states — ADR-0030's, for the same reasons:
