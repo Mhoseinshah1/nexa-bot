@@ -309,6 +309,7 @@ import { IncidentService } from './modules/platform/incidents/application/incide
 import { IncidentSchedulerLoop } from './modules/platform/incidents/application/incident-scheduler-loop.js';
 import { DrizzleIncidentRepository } from './modules/platform/incidents/infrastructure/drizzle-incident.repository.js';
 import { SupportContextBuilder } from './modules/commerce/support-context/application/support-context.builder.js';
+import { SupportCatalogueReader } from './modules/commerce/support-context/application/support-catalogue.js';
 import { DrizzleSupportContextReader } from './modules/commerce/support-context/infrastructure/drizzle-support-context.reader.js';
 import { ModuleIncidentEffects } from './modules/platform/incidents/infrastructure/incident-effects.js';
 import { NotificationCenterService } from './modules/platform/opslog/application/notification-center.service.js';
@@ -6813,6 +6814,18 @@ export function createContainer(
     knowledge: supportKnowledgeRepository,
     settings: settingsResolver,
     clock,
+    /*
+     * Phase 4 PR-2: the live catalogue, priced by `PricingService.quoteListPrices` — the
+     * checkout's own boundary (personal discount, promotions, reseller tiers) — read-only.
+     */
+    catalogue: new SupportCatalogueReader({
+      catalogue: productService,
+      products: productRepository,
+      addons: serviceAddonRepository,
+      pricing: pricingService,
+      settings: settingsResolver,
+    }),
+    presentation: templatePresentation,
   });
 
   /**

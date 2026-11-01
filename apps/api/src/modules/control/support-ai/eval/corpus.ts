@@ -7,6 +7,10 @@ import type {
   SupportContextService,
 } from '@nexa/contracts';
 import type { PriorDecisionFact } from '../domain/knowledge-query.js';
+import {
+  accountFacts,
+  moneyOf,
+} from '../../../commerce/support-context/domain/support-context-payload.js';
 import type { SupportTranscriptAuthor } from '../domain/transcript.js';
 
 /**
@@ -176,15 +180,40 @@ export function evalService(
     deviceLimit: 2,
     hasSubscriptionLink: true,
     unreconciled: false,
+    renewalPrice: null,
+    ...accountFactsOf(over),
     ...over,
   };
+}
+
+/** Phase 4 PR-2: the precomputed facts the production builder writes, for the eval's service. */
+function accountFactsOf(over: Partial<Omit<SupportContextService, 'alias'>>) {
+  const limit = BigInt(over.trafficLimitBytes ?? String(50 * 1024 ** 3));
+  const used = BigInt(over.trafficUsedBytes ?? String(12 * 1024 ** 3));
+  const synced =
+    over.usageSyncedAt === undefined
+      ? new Date(EVAL_NOW.getTime() - 3_600_000)
+      : over.usageSyncedAt === null
+        ? null
+        : new Date(over.usageSyncedAt);
+  const expires =
+    over.expiresAt === undefined
+      ? new Date(EVAL_NOW.getTime() + 20 * DAY)
+      : over.expiresAt === null
+        ? null
+        : new Date(over.expiresAt);
+  return accountFacts(
+    { trafficLimitBytes: limit, trafficUsedBytes: used, usageSyncedAt: synced, expiresAt: expires },
+    EVAL_NOW,
+    { timezone: 'Asia/Tehran', calendar: 'jalali' },
+  );
 }
 
 export function evalPayment(
   over: Partial<Omit<SupportContextPayment, 'alias'>> = {},
 ): Omit<SupportContextPayment, 'alias'> {
   return {
-    amount: { amountMinor: '1500000', currency: 'IRT' },
+    amount: moneyOf(1_500_000n, 'IRT'),
     method: 'MANUAL_TRANSFER',
     routeLabelKey: null,
     state: 'CONFIRMED',

@@ -440,6 +440,8 @@ describe('A8 — the context source builds the query', () => {
       orders: [],
       payments: [],
       knowledge: [],
+      catalogue: [],
+      addons: [],
       flags: { identityLinked: false },
     },
     knowledgeAvailable: 0,

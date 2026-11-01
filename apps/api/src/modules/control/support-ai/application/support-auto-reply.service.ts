@@ -431,6 +431,8 @@ export class SupportAutoReplyService {
     const botLink = await this.botLinkOf(scope, conversation.botInstanceId);
     const allowance = outputPolicyAllowanceFromContext(context.json, {
       links: botLink === null ? [] : [botLink],
+      // Phase 4 PR-2: the live price family — a quoted price passes, an invented one does not.
+      ...(context.priceFamily === undefined ? {} : { priceFamily: context.priceFamily }),
     });
     let regenerateNote: string | null = null;
     for (let attempt = 0; ; attempt += 1) {

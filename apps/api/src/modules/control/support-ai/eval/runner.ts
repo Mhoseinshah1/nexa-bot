@@ -206,6 +206,9 @@ export function prepareScenario(
         alias: aliasFor('K', index),
         ...entry,
       })),
+      // Phase 4 PR-2: no live catalogue in the eval (its scenarios carry no prices yet).
+      catalogue: [],
+      addons: [],
       supportAccounts: ['@nexa_support_demo'],
       flags: {
         hasUnderReviewPayment: payments.some((payment) => payment.underReview),
