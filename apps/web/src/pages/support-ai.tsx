@@ -7,6 +7,7 @@ import {
   SUPPORT_AI_MODES,
   SUPPORT_AI_PROVIDERS,
   SUPPORT_AI_SAFE_TOPICS,
+  supportAiConfigIsRestrictive,
   SUPPORT_AI_SETTLE_DELAY_MAX_SECONDS,
   SUPPORT_AI_SETTLE_DELAY_MIN_SECONDS,
   supportAiConfigSaveSchema,
@@ -160,6 +161,7 @@ const FAULTS: Readonly<Record<string, WebKey>> = {
   'support_ai.region_not_applicable': 'web.sai_fault_region',
   'platform.idempotency_payload_mismatch': 'web.sai_fault_retry',
   'support_ai.test_too_soon': 'web.sai_fault_test_too_soon',
+  'support_ai.auto_topics_required': 'web.sai_fault_auto_topics_required',
 };
 
 /**
@@ -465,15 +467,33 @@ function ConfigCard({
   const dirty =
     JSON.stringify(fromDraft(draft)) !== JSON.stringify(fromDraft(toDraft(response.config)));
   useUnsavedChanges(dirty);
-  const issues = parsed.success
-    ? []
-    : [
-        ...new Set(
-          parsed.error.issues.map(
-            (issue) => ISSUE_LABELS[String(issue.path[0])] ?? 'web.sai_invalid_bounds',
+  // Phase 4 PR-1: automatic replies with no topic answer nothing — refused here as the server does.
+  const noTopics = draft.mode === 'AUTO_REPLY_SAFE' && draft.autoTopics.length === 0;
+  const issues: WebKey[] = [
+    ...(parsed.success
+      ? []
+      : [
+          ...new Set(
+            parsed.error.issues.map(
+              (issue) => ISSUE_LABELS[String(issue.path[0])] ?? 'web.sai_invalid_bounds',
+            ),
           ),
-        ),
-      ];
+        ]),
+    ...(noTopics ? (['web.sai_fault_auto_topics_required'] as const) : []),
+  ];
+  // Phase 4 PR-1: the recommended preset — every safe topic, MEDIUM, vision when the primary
+  // provider can see. Applied to the FORM only; nothing is saved until the owner saves.
+  const applyPreset = () =>
+    setDraft((current) => ({
+      ...current,
+      autoTopics: [...SUPPORT_AI_SAFE_TOPICS],
+      autoMinConfidence: 'MEDIUM',
+      visionEnabled:
+        current.visionEnabled ||
+        (current.primary.provider !== '' &&
+          response.capabilities[current.primary.provider as SupportAiProvider]?.vision === true),
+    }));
+  const restrictive = supportAiConfigIsRestrictive(response.config);
 
   const save = useMutation({
     mutationFn: (parsedConfig: SupportAiConfigSave) => {
@@ -554,7 +574,12 @@ function ConfigCard({
                   name="support-ai-mode"
                   value={mode}
                   checked={draft.mode === mode}
-                  onChange={() => set('mode', mode)}
+                  onChange={() => {
+                    set('mode', mode);
+                    // Phase 4 PR-1: switching to automatic replies with no topic fills the
+                    // recommended preset into the form (visible, unsaved).
+                    if (mode === 'AUTO_REPLY_SAFE' && draft.autoTopics.length === 0) applyPreset();
+                  }}
                 />{' '}
                 <strong>{t(SUPPORT_AI_MODE_LABELS[mode])}</strong>
                 <span className="muted small"> — {t(MODE_EXPLAINED[mode])}</span>
@@ -621,6 +646,18 @@ function ConfigCard({
           {t('web.sai_vision')}
         </label>
 
+        {restrictive && (
+          <Banner
+            tone="info"
+            action={
+              <button type="button" className="btn sm" onClick={applyPreset}>
+                {t('web.sai_preset_apply')}
+              </button>
+            }
+          >
+            {t('web.sai_preset_banner')}
+          </Banner>
+        )}
         <fieldset className="field">
           <legend className="field-label">{t('web.sai_auto_topics')}</legend>
           <p className="muted small">{t('web.sai_auto_topics_hint')}</p>
@@ -737,7 +774,7 @@ function ConfigCard({
           <button
             type="submit"
             className="btn primary"
-            disabled={!parsed.success || !dirty || save.isPending}
+            disabled={!parsed.success || noTopics || !dirty || save.isPending}
           >
             <Icon name="check" />
             {t('web.sai_save')}

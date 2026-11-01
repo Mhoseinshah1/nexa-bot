@@ -8833,6 +8833,11 @@ export const WEB_FA = {
   'web.sai_auto_topic_get_subscription_link': 'دریافت لینک اشتراک',
   'web.sai_auto_topic_payment_howto': 'راهنمای روش پرداخت',
   'web.sai_auto_topic_policy_refusal': 'رد مؤدبانهٔ درخواست غیرمجاز',
+  'web.sai_fault_auto_topics_required':
+    'پاسخ خودکار بدون هیچ موضوعی به هیچ پیامی پاسخ نمی‌دهد؛ دست‌کم یک موضوع را انتخاب کنید یا «اعمال تنظیمات پیشنهادی» را بزنید.',
+  'web.sai_preset_banner':
+    'تنظیمات فعلی پاسخ خودکار محدود است و بیشتر گفتگوها به پشتیبان ارجاع می‌شوند. تنظیمات پیشنهادی همهٔ موضوع‌های امن را با اطمینان متوسط فعال می‌کند؛ پیش از ذخیره می‌توانید آن را تغییر دهید.',
+  'web.sai_preset_apply': 'اعمال تنظیمات پیشنهادی',
   'web.sai_auto_topic_greeting': 'سلام و احوالپرسی',
   'web.sai_auto_min_confidence': 'حداقل اطمینان برای پاسخ خودکار',
   'web.sai_auto_min_confidence_hint':
