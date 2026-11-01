@@ -269,13 +269,38 @@ export function checkOutputPolicy(
   }
   // 4. Promises.
   const folded = foldCustomerText(reply);
+  const knowledge = allowance.knowledgeText.replace(/\s+/gu, ' ');
   for (const term of PROMISE_TERMS) {
     const hit = term.exec(folded);
-    if (hit !== null && !allowance.knowledgeText.includes(hit[0].trim())) {
+    if (hit !== null && !knowledge.includes(promisePhrase(folded, hit.index, hit[0].length))) {
       return { ok: false, violation: 'promise' };
     }
   }
   return { ok: true };
+}
+
+/**
+ * Review of PR #365 (D3) — the phrase a promise word must be approved as: the word(s) of the
+ * hit plus one neighbouring word on each side, inside its clause. A plan text that merely
+ * mentions «تخفیف» does not approve «۵۰ درصد تخفیف می‌دم»; the knowledge must say that phrase.
+ */
+function promisePhrase(folded: string, start: number, length: number): string {
+  const CLAUSE = /[.!?؟،,;؛:\n]/u;
+  let from = start;
+  while (from > 0 && !CLAUSE.test(folded[from - 1] ?? '')) from -= 1;
+  let to = start + length;
+  while (to < folded.length && !CLAUSE.test(folded[to] ?? '')) to += 1;
+  const clause = folded.slice(from, to);
+  const words: { readonly word: string; readonly at: number }[] = [];
+  for (const match of clause.matchAll(/\S+/gu))
+    words.push({ word: match[0], at: from + match.index });
+  const first = words.findIndex((w) => w.at + w.word.length > start);
+  let last = first;
+  while (last + 1 < words.length && (words[last + 1]?.at ?? Infinity) < start + length) last += 1;
+  return words
+    .slice(Math.max(0, first - 1), last + 2)
+    .map((w) => w.word)
+    .join(' ');
 }
 
 /** The instruction a regenerated request carries after a refused reply (never the reply). */

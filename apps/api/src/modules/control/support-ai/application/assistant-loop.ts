@@ -1,4 +1,5 @@
 import {
+  SUPPORT_AI_GENERATIONS_PER_JOB,
   SUPPORT_AI_LIMITS,
   SUPPORT_AI_VISION_FETCH_TIMEOUT_MS,
   SUPPORT_AI_VISION_MAX_IMAGES,
@@ -26,16 +27,22 @@ export interface AssistantJobBounds {
   /** TB6: customer images fetched per job, each in two Telegram legs (`getFile`, the file). */
   readonly visionMaxImages: number;
   readonly visionFetchTimeoutMs: number;
+  /**
+   * Phase 4 PR-1 (review of PR #365): how many times one job may walk the provider chain — the
+   * first answer, and ONE regeneration after a refused or repeated reply.
+   */
+  readonly generations: number;
 }
 
 /**
  * The worst case of producing ONE job: every step of the chain (the primary and up to
- * `maxFallbacks` fallbacks) timing out at the longest timeout the configuration allows, after
+ * `maxFallbacks` fallbacks) timing out at the longest timeout the configuration allows, on
+ * every generation the job may make (Phase 4 PR-1: the answer and one regeneration), after
  * every image download has spent both of its legs' timeouts (PR #201 review, N2).
  */
 export function assistantJobWorstCaseMs(bounds: AssistantJobBounds): number {
   return (
-    (1 + bounds.maxFallbacks) * bounds.providerTimeoutMs +
+    bounds.generations * (1 + bounds.maxFallbacks) * bounds.providerTimeoutMs +
     bounds.visionMaxImages * 2 * bounds.visionFetchTimeoutMs
   );
 }
@@ -54,6 +61,7 @@ export const ASSISTANT_JOB_BOUNDS: AssistantJobBounds = {
   providerTimeoutMs: SUPPORT_AI_LIMITS.timeoutMs.max,
   visionMaxImages: SUPPORT_AI_VISION_MAX_IMAGES,
   visionFetchTimeoutMs: SUPPORT_AI_VISION_FETCH_TIMEOUT_MS,
+  generations: SUPPORT_AI_GENERATIONS_PER_JOB,
 };
 export const ASSISTANT_JOB_WORST_CASE_MS = assistantJobWorstCaseMs(ASSISTANT_JOB_BOUNDS);
 export const ASSISTANT_LEASE_MS = assistantLeaseMs(ASSISTANT_JOB_BOUNDS);

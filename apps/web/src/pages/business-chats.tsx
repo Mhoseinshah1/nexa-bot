@@ -875,7 +875,9 @@ function ControlCard({
       />
       {mayReply && (
         <div className="btn-group bchat-controls">
-          {conversation.state !== 'HUMAN_ACTIVE' && (
+          {/* Phase 4 PR-1: a person's message only pauses the AI (a SOFT hold); taking the
+              conversation over makes the hold sticky. */}
+          {(conversation.state !== 'HUMAN_ACTIVE' || conversation.handoffKind === 'SOFT') && (
             <button
               type="button"
               className="btn primary sm"

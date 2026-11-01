@@ -650,11 +650,11 @@ const conversationSummarySchema = z.object({
   /** The real reason (`businessHandoffWireReason`); see `businessHandoffReasonDetailSchema`. */
   handoffReasonDetail: businessHandoffReasonDetailSchema,
   /**
-   * Phase 4 PR-5: whether the current hold is HARD (sticky) or SOFT (the AI returns by itself);
-   * null for an AI-held conversation and for a hold from before kinds existed (sticky).
-   * Optional when READ: an older replica does not send it.
+   * Phase 4 PR-1: how the current person's hold ends (`BUSINESS_HANDOFF_KINDS`); null on
+   * AI_ACTIVE and on holds from before the kind. Optional when read (an older replica does not
+   * send it) and an unknown value reads as absent.
    */
-  handoffKind: z.enum(BUSINESS_HANDOFF_KINDS).nullable().optional().catch(undefined),
+  handoffKind: z.enum(BUSINESS_HANDOFF_KINDS).nullish().catch(undefined),
   peerTelegramUserId: z.string(),
   customer: z
     .object({ id: z.string(), username: z.string().nullable(), firstName: z.string().nullable() })

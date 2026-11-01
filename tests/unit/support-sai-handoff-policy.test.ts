@@ -227,9 +227,32 @@ describe('the output validator (cross-cutting item 3)', () => {
   });
 
   it('a promise word is allowed when approved knowledge carries it', () => {
-    // «رایگان» is in K1; «تخفیف» is not.
-    expect(check('تست رایگان دارید.')).toEqual({ ok: true });
+    // «تست رایگان یک‌روزه» is K1's own phrase; «تخفیف» is in no knowledge.
+    expect(check('بله، تست رایگان یک‌روزه داریم.')).toEqual({ ok: true });
     expect(check('تخفیف دارید.')).toEqual({ ok: false, violation: 'promise' });
+  });
+
+  it('review of PR #365 (D3): the bare word in knowledge does not approve a promise phrase', () => {
+    const plan = outputPolicyAllowanceFromContext(
+      JSON.stringify({
+        knowledge: [
+          { alias: 'K1', question: 'تخفیف', answer: 'تخفیف عید فقط برای پلن سالانه اعمال می‌شود.' },
+        ],
+      }),
+    );
+    // The knowledge's own phrase passes …
+    expect(checkOutputPolicy('تخفیف عید فقط برای پلن سالانه است.', plan, NOW)).toEqual({
+      ok: true,
+    });
+    // … the same word in a promise does not.
+    for (const reply of ['۵۰ درصد تخفیف می‌دم', 'برایتان تخفیف ویژه می‌گذاریم', 'takhfif midim']) {
+      expect(checkOutputPolicy(reply, plan, NOW), reply).toEqual({
+        ok: false,
+        violation: 'promise',
+      });
+    }
+    // A free test the knowledge describes vs a free month it never mentions.
+    expect(check('یک ماه رایگان برایتان فعال می‌کنم')).toEqual({ ok: false, violation: 'promise' });
   });
 
   it('a price family plugs in (PR-2’s live catalogue)', () => {
