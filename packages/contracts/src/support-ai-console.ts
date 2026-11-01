@@ -1,8 +1,5 @@
 import { z } from 'zod';
-import {
-  BUSINESS_HANDOFF_KINDS,
-  BUSINESS_HANDOFF_REASONS,
-} from './business-chats.js';
+import { BUSINESS_HANDOFF_KINDS, BUSINESS_HANDOFF_REASONS } from './business-chats.js';
 import {
   SUPPORT_AI_AUTO_OUTCOMES,
   SUPPORT_AI_CONFIDENCES,

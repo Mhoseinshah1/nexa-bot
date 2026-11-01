@@ -1,5 +1,6 @@
 import {
   BUSINESS_CHAT_DETAIL_MESSAGES,
+  BUSINESS_CHAT_RESUME_ALL_LIMIT,
   BUSINESS_HANDOFF_NOTICE_TEMPLATE_KEY,
   BUSINESS_TAKEOVER_ORIGINS,
   BUSINESS_UPDATE_FAILED_CODE,
@@ -431,6 +432,77 @@ export class BusinessConversationService {
         return moved;
       },
     );
+  }
+
+  /**
+   * Phase 4 PR-5 — «بازگرداندن همه به هوش مصنوعی». Every conversation a person holds goes
+   * through the SAME `resume` above: same permission (`business_chats.reply`), same audit
+   * entry per conversation, same idempotency (the per-conversation key is `<key>:<id>`, so a
+   * replay of the bulk request replays each one). Nothing here bypasses it.
+   *
+   * Hard holds are never returned silently. A hold is SOFT only when its kind says so; HARD,
+   * a missing kind (every hold from before kinds existed) and a PAUSED conversation are hard.
+   * Without `includeHard` they are COUNTED and left alone; with it, the operator has chosen to
+   * return them too (the page's dialog says so before it asks).
+   *
+   * At most `BUSINESS_CHAT_RESUME_ALL_LIMIT` per request, so one click cannot hold a worker
+   * for minutes; `more` says another request is needed. A conversation that changed meanwhile
+   * (a person answered, it was returned already) is a `failed`, not an abort.
+   */
+  async resumeAll(
+    scope: ScopeContext,
+    actor: ActorContext,
+    input: { readonly idempotencyKey: string; readonly includeHard: boolean },
+  ): Promise<{
+    readonly resumed: number;
+    readonly skippedHard: number;
+    readonly failed: number;
+    readonly more: boolean;
+  }> {
+    try {
+      await this.deps.guard.check(scope, actor, BUSINESS_CHATS_REPLY_PERMISSION);
+    } catch (error) {
+      await recordMutationDenial(
+        this.mutationDeps(),
+        scope,
+        actor,
+        BUSINESS_CHATS_REPLY_PERMISSION,
+        { action: 'business_chat.resume', entityType: 'BusinessConversation', entityId: null },
+        error,
+      );
+      throw error;
+    }
+    let resumed = 0;
+    let skippedHard = 0;
+    let failed = 0;
+    let more = false;
+    for (const state of ['HANDOFF_REQUIRED', 'HUMAN_ACTIVE', 'PAUSED'] as const) {
+      const rows = await this.deps.conversations.list(scope, {
+        state,
+        limit: BUSINESS_CHAT_RESUME_ALL_LIMIT + 1,
+      });
+      for (const { conversation } of rows.slice(0, BUSINESS_CHAT_RESUME_ALL_LIMIT)) {
+        if (conversation.handoffKind !== 'SOFT' && !input.includeHard) {
+          skippedHard += 1;
+          continue;
+        }
+        if (resumed + failed >= BUSINESS_CHAT_RESUME_ALL_LIMIT) {
+          more = true;
+          continue;
+        }
+        try {
+          await this.resume(scope, actor, {
+            conversationId: conversation.id,
+            idempotencyKey: `${input.idempotencyKey}:${conversation.id}`,
+          });
+          resumed += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+      if (rows.length > BUSINESS_CHAT_RESUME_ALL_LIMIT) more = true;
+    }
+    return { resumed, skippedHard, failed, more };
   }
 
   /**

@@ -6,6 +6,7 @@ import {
   BUSINESS_CHAT_ROUTES,
   businessChatControlRequestSchema,
   businessChatListQuerySchema,
+  businessChatResumeAllRequestSchema,
   businessChatSendRequestSchema,
   businessConnectionStatus,
   businessHandoffWireReason,
@@ -16,6 +17,7 @@ import {
   type BusinessChatControlResponse,
   type BusinessChatDetailResponse,
   type BusinessChatListResponse,
+  type BusinessChatResumeAllResponse,
   type BusinessChatSendResponse,
   type BusinessConnectionListResponse,
   type BusinessConversationSummary,
@@ -56,6 +58,8 @@ export class BusinessChatsController {
       conversations: page.map(toSummary),
       nextCursor:
         items.length > BUSINESS_CHAT_LIST_LIMIT && last !== undefined ? encodeCursor(last) : null,
+      // Phase 4 PR-5: what the AI really does, beside the state each conversation is in.
+      aiMode: await this.container.supportInsights.aiMode(scope),
     };
   }
 
@@ -156,6 +160,20 @@ export class BusinessChatsController {
     });
   }
 
+  /**
+   * Phase 4 PR-5: «بازگرداندن همه به هوش مصنوعی». Each conversation goes through the existing
+   * `resume` (same permission, audit and idempotency); `includeHard` is the operator's choice.
+   */
+  @Post(BUSINESS_CHAT_ROUTES.resumeAll)
+  async resumeAll(
+    @Req() request: FastifyRequest,
+    @Body() body: unknown,
+  ): Promise<BusinessChatResumeAllResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    const command = businessChatResumeAllRequestSchema.parse(body);
+    return this.container.businessConversations.resumeAll(scope, actor, command);
+  }
+
   @Post(routePattern(BUSINESS_CHAT_ROUTES.resume, 'conversationId'))
   async resume(
     @Req() request: FastifyRequest,
@@ -182,6 +200,7 @@ function toSummary(item: BusinessConversationListItem): BusinessConversationSumm
         ? null
         : businessHandoffWireReason(conversation.handoffReason),
     handoffReasonDetail: conversation.handoffReason,
+    handoffKind: conversation.handoffKind,
     peerTelegramUserId: conversation.peerTelegramUserId,
     customer: item.customer,
     connectionStatus: businessConnectionStatus(item.connection),

@@ -887,6 +887,9 @@ import { DrizzleSupportAiJobRepository } from './modules/control/support-ai/infr
 import { TelegramSupportImageSource } from './modules/control/support-ai/infrastructure/telegram-support-image-source.js';
 import { TbSupportContextSource } from './modules/control/support-ai/infrastructure/support-context-source.js';
 import { SupportAnalyticsService } from './modules/control/support-ai/application/support-analytics.service.js';
+import { SupportInsightsService } from './modules/control/support-ai/application/support-insights.service.js';
+import { SupportTestConsoleService } from './modules/control/support-ai/application/support-test-console.service.js';
+import { DrizzleSupportInsightsReader } from './modules/control/support-ai/infrastructure/drizzle-support-insights.reader.js';
 import { DrizzleSupportAnalyticsReader } from './modules/control/support-ai/infrastructure/drizzle-support-analytics.reader.js';
 import { SupportAiConfigService } from './modules/control/support-ai/application/support-ai-config.service.js';
 import type { SupportAiAdapter } from './modules/control/support-ai/application/ports.js';
@@ -1617,6 +1620,10 @@ export interface Container {
   readonly supportAnalytics: SupportAnalyticsService;
   /** TB5: Assist Mode — drafts an operator may edit and send (ADR-0034 §7). */
   readonly supportAssist: SupportAssistService;
+  /** Phase 4 PR-5: readiness card, handoff questions and knowledge gaps (read-only). */
+  readonly supportInsights: SupportInsightsService;
+  /** Phase 4 PR-5: «امتحان یک سؤال» — the real config through the real guards, sends nothing. */
+  readonly supportTestConsole: SupportTestConsoleService;
   /** TB5: produces drafts. Built in every role, STARTED only by the `assistant` role. */
   readonly assistantLoop: AssistantLoop;
   /** TB7: AUTO_REPLY_SAFE's producer (the `assistant` role runs it through the loop). */
@@ -7189,6 +7196,29 @@ export function createContainer(
         (await botInstances.findById(botInstanceId as BotInstanceId))?.username ?? null,
     },
   });
+  // Phase 4 PR-5: the support pages' read-only insights, and the test console (no outbound port).
+  const supportInsights = new SupportInsightsService({
+    guard,
+    reader: new DrizzleSupportInsightsReader(database.db),
+    config: supportAiConfig,
+    configs: supportAiConfigs,
+    connections: businessConnections,
+    settings: settingsResolver,
+    conditions: supportAiConditions,
+    clock,
+  });
+  const supportTestConsole = new SupportTestConsoleService({
+    configs: supportAiConfigs,
+    chain: supportAiChain,
+    context: supportContextSource,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+  });
   const supportAssist = new SupportAssistService({
     jobs: supportAiJobs,
     runs: supportAiRuns,
@@ -9036,6 +9066,8 @@ export function createContainer(
     supportAiChain,
     supportAnalytics,
     supportAssist,
+    supportInsights,
+    supportTestConsole,
     assistantLoop,
     supportAutoReply,
     supportKnowledge,

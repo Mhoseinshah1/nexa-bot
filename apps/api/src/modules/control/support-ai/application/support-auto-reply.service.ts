@@ -69,7 +69,12 @@ import type {
   DrizzleSupportAiJobRepository,
   SupportAiJobRecord,
 } from '../infrastructure/drizzle-support-ai-job.repository.js';
-import { resolveKnowledgeLabels, type SupportContextSource } from './support-assist.service.js';
+import {
+  resolveKnowledgeLabels,
+  unclaimedCutoff,
+  type SupportContextSource,
+} from './support-assist.service.js';
+import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import {
   chainFailureClass,
   type SupportAiChain,
@@ -84,11 +89,22 @@ export function autoJobKey(conversationId: string, telegramMessageId: number, ve
   return `auto:${conversationId}:${telegramMessageId}:v${version}`;
 }
 
+/** Phase 4 PR-5: the key of the draft ASSIST_ONLY prepares for one inbound message. */
+export function autoDraftKey(conversationId: string, telegramMessageId: number, version: number) {
+  return `assist-auto:${conversationId}:${telegramMessageId}:v${version}`;
+}
+
 export interface SupportAutoEnqueuerDeps {
   readonly configs: Pick<DrizzleSupportAiConfigRepository, 'get'>;
   readonly jobs: Pick<
     DrizzleSupportAiJobRepository,
-    'insertAuto' | 'queuedAuto' | 'finishAuto' | 'findByIdempotencyKey'
+    | 'insertAuto'
+    | 'queuedAuto'
+    | 'finishAuto'
+    | 'findByIdempotencyKey'
+    | 'insertAutoDraft'
+    | 'discardOpen'
+    | 'failUnclaimed'
   >;
   readonly ids: IdGenerator;
 }
@@ -133,8 +149,11 @@ export class SupportAutoEnqueuer implements InboundAutoTrigger, AutoReplyModeRea
     tx: unknown,
   ): Promise<void> {
     const conversation = input.conversation;
-    if (conversation.state !== 'AI_ACTIVE') return;
     const { config } = await this.deps.configs.get(scope, tx);
+    // Phase 4 PR-5: ASSIST_ONLY prepares a DRAFT for every inbound message, whoever holds the
+    // conversation (a person answering it is who the draft is for). Never a send.
+    if (config.mode === 'ASSIST_ONLY') return this.draftFor(scope, input, tx);
+    if (conversation.state !== 'AI_ACTIVE') return;
     if (config.mode !== 'AUTO_REPLY_SAFE') return;
     const key = autoJobKey(conversation.id, input.telegramMessageId, input.contentVersion);
     if ((await this.deps.jobs.findByIdempotencyKey(scope, key, tx)) !== null) return;
@@ -173,6 +192,49 @@ export class SupportAutoEnqueuer implements InboundAutoTrigger, AutoReplyModeRea
         triggerContentVersion: input.contentVersion,
         controlEpoch: conversation.controlEpoch,
         dueAt: new Date(Math.max(settle, cooled)),
+        now: input.now,
+      },
+      tx,
+    );
+  }
+
+  /**
+   * ASSIST_ONLY's draft for one inbound message. Idempotent on the message and its version
+   * (a redelivery enqueues nothing); an edit of an older message starts nothing; a newer message
+   * replaces the open draft, exactly as an operator's re-request does (`discardOpen`). The draft
+   * is produced by the `assistant` role as any requested one is, sits in the conversation for a
+   * person to read, edit and send, and is purged with the transcript. NOTHING is sent here.
+   */
+  private async draftFor(
+    scope: ScopeContext,
+    input: {
+      readonly conversation: BusinessConversationRecord;
+      readonly telegramMessageId: number;
+      readonly contentVersion: number;
+      readonly edited: boolean;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<void> {
+    if (input.edited) return;
+    const conversation = input.conversation;
+    const key = autoDraftKey(conversation.id, input.telegramMessageId, input.contentVersion);
+    if ((await this.deps.jobs.findByIdempotencyKey(scope, key, tx)) !== null) return;
+    await this.deps.jobs.failUnclaimed(
+      scope,
+      conversation.id,
+      unclaimedCutoff(input.now),
+      input.now,
+      tx,
+    );
+    await this.deps.jobs.discardOpen(scope, conversation.id, input.now, tx);
+    await this.deps.jobs.insertAutoDraft(
+      scope,
+      {
+        id: this.deps.ids.uuid(),
+        conversationId: conversation.id,
+        idempotencyKey: key,
+        requestHash: hashRequest({ command: 'support_ai.draft.auto', key }),
         now: input.now,
       },
       tx,
