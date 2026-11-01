@@ -1091,6 +1091,13 @@ export class PaymentService {
         if (owned === null || owned.customerId !== customerId) {
           throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
         }
+        /*
+         * R12 F3 lead review: whether a payment held the order open BEFORE the wallet withdraws
+         * the unclaimed transfer below — if the deadline then refuses, this whole transaction
+         * rolls back and that transfer is live again, which is what the refusal must say.
+         */
+        const liveBeforeWithdrawal =
+          (await this.deps.orders.livePaymentOf(scope, orderId, tx)) !== null;
         const withdrawn = await this.deps.repository.cancelPendingForOrder(scope, orderId, now, tx);
         if (await this.deps.repository.hasClaimedPendingForOrder(scope, orderId, tx)) {
           throw errors.conflict(
@@ -1157,6 +1164,7 @@ export class PaymentService {
           tx,
           now,
           'REFUSE_AFTER_DEADLINE',
+          liveBeforeWithdrawal,
         );
 
         for (const cancelledId of withdrawn) {
@@ -3176,6 +3184,23 @@ export class PaymentService {
     const payment = await this.deps.repository.findById(scope, parsed.data);
     if (payment === null || payment.customerId !== customerId) return null;
     return payment.state === 'PENDING' ? payment : null;
+  }
+
+  /**
+   * R12 F3 (lead review): one of a customer's OWN pending card-to-card transfers with the
+   * destination it was ISSUED against — what the surface needs to draw that transfer's own
+   * invoice again ("open the invoice"), instead of starting a new payment. Null for anything
+   * else (another customer's, not pending, not a manual transfer), the same null each time.
+   * A read: nothing is issued, extended or re-keyed.
+   */
+  async pendingTransferInstructionForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    id: string,
+  ): Promise<ManualTransferInstruction | null> {
+    const payment = await this.pendingTransferForCustomer(scope, customerId, id);
+    if (payment === null || payment.method !== 'MANUAL_TRANSFER') return null;
+    return this.instructionFor(scope, payment);
   }
 
   /**
@@ -5978,6 +6003,8 @@ export class PaymentService {
      * late, deliberately and by name.
      */
     deadline: 'REFUSE_AFTER_DEADLINE' | 'OPERATOR_MAY_CONFIRM_LATE',
+    /** Read by a caller that withdraws payments before this check (`settleFromWallet`). */
+    paymentLiveBefore?: boolean,
   ): Promise<OrderRecord> {
     const order = await this.deps.orders.findById(scope, orderId, tx);
     if (order === null || order.customerId !== customerId) {
@@ -6011,9 +6038,18 @@ export class PaymentService {
       order.expiresAt !== null &&
       now.getTime() >= order.expiresAt.getTime()
     ) {
+      /*
+       * R12 F3 (lead review, OQ-R11-A11-04): past the deadline only because a payment of it is
+       * still LIVE (the sweep's own states) — say so, so no surface answers "order again" to a
+       * customer whose money may already be on its way. A fact for the caller, never a reason
+       * to accept the payment.
+       */
+      const live =
+        paymentLiveBefore ?? (await this.deps.orders.livePaymentOf(scope, order.id, tx)) !== null;
       throw errors.conflict(
         COMMERCE_ERROR_CODES.ORDER_EXPIRED,
         'The time allowed to pay for that order has passed.',
+        live ? { paymentLive: true } : undefined,
       );
     }
     return order;

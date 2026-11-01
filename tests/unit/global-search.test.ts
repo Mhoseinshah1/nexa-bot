@@ -26,7 +26,7 @@ const actor = { type: 'WEB_ADMIN', id: 'a1', surface: 'WEB' } as unknown as Acto
 
 function service(held: readonly PermissionKey[]) {
   const sources = Object.fromEntries(
-    (['CUSTOMER', 'ORDER', 'SERVICE'] as const).map((kind) => [
+    (['CUSTOMER', 'ORDER', 'SERVICE', 'PAYMENT', 'TICKET'] as const).map((kind) => [
       kind,
       {
         search: vi.fn(async (_s: unknown, _a: unknown, _t: unknown, limit: number) => ({
@@ -71,7 +71,8 @@ describe('GlobalSearchService', () => {
   });
 
   it('answers nothing, and asks no source, for an actor holding none of the permissions', async () => {
-    const { svc, sources } = service(['tickets.view' as PermissionKey]);
+    // Not tickets.view: since R12 F3 item 8 that permission finds tickets.
+    const { svc, sources } = service(['settings.view' as PermissionKey]);
     expect(await svc.search(scope, actor, { q: 'ali' })).toEqual({ groups: [] });
     for (const source of Object.values(sources)) expect(source.search).not.toHaveBeenCalled();
   });
@@ -109,8 +110,13 @@ describe('GlobalSearchService', () => {
     expect(Object.keys(GLOBAL_SEARCH_KIND_PERMISSIONS).sort()).toEqual([
       'CUSTOMER',
       'ORDER',
+      'PAYMENT',
       'SERVICE',
+      'TICKET',
     ]);
+    // R12 F3 item 8: payments and tickets, each behind its own list's read permission.
+    expect(GLOBAL_SEARCH_KIND_PERMISSIONS.PAYMENT).toEqual(['payments.view']);
+    expect(GLOBAL_SEARCH_KIND_PERMISSIONS.TICKET).toEqual(['tickets.view']);
     expect(GLOBAL_SEARCH_KIND_PERMISSIONS.CUSTOMER).toEqual(['users.view', 'users.search']);
     expect(GLOBAL_SEARCH_KIND_PERMISSIONS.ORDER).toEqual(['orders.view']);
     expect(GLOBAL_SEARCH_KIND_PERMISSIONS.SERVICE).toEqual(['services.view']);

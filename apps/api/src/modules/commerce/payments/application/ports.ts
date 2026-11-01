@@ -634,6 +634,17 @@ export interface PaymentRepository {
   trackingCodeFor(scope: TenantContext, paymentId: string, tx?: unknown): Promise<string | null>;
 
   /**
+   * R12 F3 item 1: the order a payment pays for, so a payment notice can carry the button that
+   * opens that order's payment methods. `orderId` is null for a wallet top-up payment; the
+   * whole result is null for a payment this tenant does not have. A reader, never a payload.
+   */
+  orderIdFor(
+    scope: TenantContext,
+    paymentId: string,
+    tx?: unknown,
+  ): Promise<{ readonly orderId: string | null } | null>;
+
+  /**
    * Opens the provider review window (`docs/tonpays-telegram-gateway-audit.md` §9.6.3 c), as
    * ONE conditional UPDATE naming its `from`: PENDING, no window yet, and the payment's own
    * deadline strictly after the acknowledgement. There is no setter. False on a repeated or

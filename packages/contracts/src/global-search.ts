@@ -11,7 +11,9 @@ import { LIST_SEARCH_MAX_LENGTH } from './list-search.js';
  *
  *   - `CUSTOMER`: `users.view` AND `users.search` (the `/users` list's own pair);
  *   - `ORDER`:    `orders.view`;
- *   - `SERVICE`:  `services.view`.
+ *   - `SERVICE`:  `services.view`;
+ *   - `PAYMENT`:  `payments.view` — found by its public tracking code (R12 F3 item 8);
+ *   - `TICKET`:   `tickets.view` — found by its number (R12 F3 item 8).
  *
  * A kind the actor may not read is ABSENT from `groups` — not an empty group, not an error —
  * so the response never reveals that a matching record exists to someone who may not list it.
@@ -25,7 +27,14 @@ import { LIST_SEARCH_MAX_LENGTH } from './list-search.js';
 export const GLOBAL_SEARCH_ROUTES = { search: '/search' } as const;
 
 /** The kinds, in the order their groups are returned. */
-export const GLOBAL_SEARCH_KINDS = ['CUSTOMER', 'ORDER', 'SERVICE'] as const;
+export const GLOBAL_SEARCH_KINDS = [
+  'CUSTOMER',
+  'ORDER',
+  'SERVICE',
+  // R12 F3 item 8: a payment's tracking code and a ticket's number.
+  'PAYMENT',
+  'TICKET',
+] as const;
 export type GlobalSearchKind = (typeof GLOBAL_SEARCH_KINDS)[number];
 
 export const GLOBAL_SEARCH_LIMIT_DEFAULT = 5;

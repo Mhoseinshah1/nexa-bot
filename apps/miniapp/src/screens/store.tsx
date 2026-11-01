@@ -12,7 +12,7 @@ import type { MiniAppApi } from '../api.js';
 import { useApp } from '../app.js';
 import { t } from '../i18n/t.js';
 import { money, trafficLimit } from '../format.js';
-import { Button, Card, Loading, PersonalPrice, errorText, useLoad } from '../ui.js';
+import { Button, Card, Loading, PersonalPrice, appendPage, errorText, useLoad } from '../ui.js';
 
 /**
  * فروشگاه: the tenant's own categories as tabs (never four fixed period tabs — Nexa has
@@ -86,16 +86,22 @@ async function allCategories(api: MiniAppApi) {
 function Category({ categoryId }: { categoryId: string }) {
   const { api, navigate } = useApp();
   const [page, setPage] = useState(0);
+  // R12 F3 item 5: «بیشتر» adds the next page under the plans already shown.
+  const [earlier, setEarlier] = useState<readonly MiniAppProduct[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The page each result answers, so «بیشتر» never advances from a result of an EARLIER
+  // page still on screen while the requested one loads (two quick taps skipped a page).
   const { loaded, reload } = useLoad(
-    () =>
-      api.get(
+    async () => ({
+      forPage: page,
+      result: await api.get(
         MINIAPP_ROUTES.category,
         { categoryId },
         miniAppCategoryResponseSchema,
         `page=${String(page)}`,
       ),
+    }),
     [api, categoryId, page],
   );
 
@@ -114,51 +120,70 @@ function Category({ categoryId }: { categoryId: string }) {
     }
   };
 
-  return (
-    <Loading loaded={loaded} reload={reload}>
-      {(result) => (
-        <section className="section">
-          {result.items.length === 0 && (
-            <p className="muted">{t('miniapp.store_category_empty')}</p>
+  const ready = loaded.state === 'ready' ? loaded.data.result : null;
+  const current = loaded.state === 'ready' && loaded.data.forPage === page;
+  const plans = appendPage(earlier, ready?.items ?? []);
+  const list = (hasMore: boolean) => (
+    <section className="section">
+      {plans.length === 0 && <p className="muted">{t('miniapp.store_category_empty')}</p>}
+      {plans.map((product) => (
+        <Card key={product.id} className="plan">
+          <div className="card-head">
+            <strong>{product.title}</strong>
+            {product.personalDiscount === null ? (
+              <strong className="price">{money(product.price)}</strong>
+            ) : (
+              <PersonalPrice price={product.price} discount={product.personalDiscount} />
+            )}
+          </div>
+          <div className="card-figures">
+            <span>{trafficLimit(product.trafficBytes)}</span>
+            <span>{formatDurationDays(product.durationDays)}</span>
+            {product.deviceLimit !== null && (
+              <span>{t('miniapp.service_devices', { count: product.deviceLimit })}</span>
+            )}
+          </div>
+          {product.locations.length > 0 && (
+            <p className="muted">{product.locations.join(t('miniapp.list_separator'))}</p>
           )}
-          {result.items.map((product) => (
-            <Card key={product.id} className="plan">
-              <div className="card-head">
-                <strong>{product.title}</strong>
-                {product.personalDiscount === null ? (
-                  <strong className="price">{money(product.price)}</strong>
-                ) : (
-                  <PersonalPrice price={product.price} discount={product.personalDiscount} />
-                )}
-              </div>
-              <div className="card-figures">
-                <span>{trafficLimit(product.trafficBytes)}</span>
-                <span>{formatDurationDays(product.durationDays)}</span>
-                {product.deviceLimit !== null && (
-                  <span>{t('miniapp.service_devices', { count: product.deviceLimit })}</span>
-                )}
-              </div>
-              {product.locations.length > 0 && (
-                <p className="muted">{product.locations.join(t('miniapp.list_separator'))}</p>
-              )}
-              {product.features.length > 0 && (
-                <ul className="features">
-                  {product.features.map((feature) => (
-                    <li key={feature}>{feature}</li>
-                  ))}
-                </ul>
-              )}
-              <Button primary disabled={busy !== null} onClick={() => buy(product)}>
-                {t('miniapp.store_continue')}
-              </Button>
-            </Card>
-          ))}
-          {error !== null && <p className="error">{error}</p>}
-          {result.hasMore && (
-            <Button onClick={() => setPage(page + 1)}>{t('miniapp.store_more')}</Button>
+          {product.features.length > 0 && (
+            <ul className="features">
+              {product.features.map((feature) => (
+                <li key={feature}>{feature}</li>
+              ))}
+            </ul>
           )}
-        </section>
+          <Button primary disabled={busy !== null} onClick={() => buy(product)}>
+            {t('miniapp.store_continue')}
+          </Button>
+        </Card>
+      ))}
+      {error !== null && <p className="error">{error}</p>}
+      {loaded.state === 'failed' && (
+        <>
+          <p className="error">{errorText(loaded.error)}</p>
+          <Button onClick={reload}>{t('miniapp.retry')}</Button>
+        </>
       )}
+      {hasMore && (
+        <Button
+          onClick={() => {
+            setEarlier(plans);
+            setPage(page + 1);
+          }}
+        >
+          {t('miniapp.store_more')}
+        </Button>
+      )}
+    </section>
+  );
+
+  // The first page waits on its read; once a page is shown, «بیشتر» keeps it on screen.
+  return earlier.length > 0 ? (
+    list(current && ready?.hasMore === true)
+  ) : (
+    <Loading loaded={loaded} reload={reload}>
+      {(loadedPage) => list(loadedPage.forPage === page && loadedPage.result.hasMore)}
     </Loading>
   );
 }

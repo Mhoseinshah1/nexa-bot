@@ -17,6 +17,9 @@ import {
   paymentIdSchema,
   paymentReceiptIdSchema,
   paymentListQuerySchema,
+  paymentReceiptApproveRequestSchema,
+  paymentReceiptCreditRequestSchema,
+  paymentReceiptRejectRequestSchema,
   paymentReconcileRequestSchema,
   paymentReinquireRequestSchema,
   routePattern,
@@ -71,13 +74,17 @@ import type { PaymentSituationRead } from '../../modules/commerce/payments/appli
 
 /**
  * Payments over HTTP, at `/payments`, and the compensation list at `/compensations`.
- * READS ONLY.
  *
- * Payment File 02 §10 is the rule: card-to-card review happens in Telegram, and the Web
- * Admin is read-only for it. So the two writes this controller used to carry — the
- * confirmation and the rejection — are removed, with their contract routes, rather than
- * hidden: a route that exists is a route a client can call (D3). The Telegram panel
- * calls the same `PaymentService` and `ReceiptDispositionService` the routes did.
+ * Reads, plus — since R12 F3 item 8 — the three dispositions of a card-to-card receipt.
+ * Payment File 02 §10 said card-to-card review happens in Telegram and the Web Admin is
+ * read-only for it; the owner has since decided review happens in BOTH places, and these three
+ * routes are the Web Admin's half. They are thin on purpose: each calls the SAME application
+ * method the Telegram panel calls (`PaymentService.confirmManualTransfer` /
+ * `rejectManualTransfer`, `ReceiptDispositionService.creditToWallet`), which hold the
+ * permissions, the scope-activity check, the conditional PENDING edge, the audit and the
+ * idempotency. There is no second settlement path, so a decision taken here and one taken in
+ * Telegram are mutually exclusive: the loser is refused `PAYMENT_STATE_INVALID` and nothing of
+ * it commits.
  *
  * What stays is every read: the list with File 02 §21's diagnostic columns, the
  * current-state detail, its read-only timeline (WP17), the receipts' metadata and their bytes — which is
@@ -273,6 +280,70 @@ export class PaymentsController {
       to: input.to,
       note: input.note === undefined || input.note === '' ? null : input.note,
       idempotencyKey: input.idempotencyKey,
+    });
+    return this.detail(request, id);
+  }
+
+  /**
+   * R12 F3 item 8: APPROVE a card-to-card receipt. The explicit `confirm: true` is the
+   * schema's; the payment's own amount is what settles (nothing typed here decides it); the
+   * service refuses a transfer with no stored receipt (`requireReceipt`).
+   */
+  @Post(routePattern(PAYMENT_ROUTES.receiptApprove, 'id'))
+  async approveReceipt(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<PaymentResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    const input = paymentReceiptApproveRequestSchema.parse(body);
+    await this.container.payments.confirmManualTransfer(scope, actor, id, {
+      idempotencyKey: input.idempotencyKey,
+      // An audit field naming the surface the decision was taken in, plus the reviewer's own.
+      note:
+        input.note === undefined || input.note === ''
+          ? 'Approved in the Web Admin.'
+          : `Approved in the Web Admin. ${input.note}`,
+      requireReceipt: true,
+    });
+    return this.detail(request, id);
+  }
+
+  /** R12 F3 item 8: REJECT one. The reason is mandatory — the customer is told it. */
+  @Post(routePattern(PAYMENT_ROUTES.receiptReject, 'id'))
+  async rejectReceipt(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<PaymentResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    const input = paymentReceiptRejectRequestSchema.parse(body);
+    await this.container.payments.rejectManualTransfer(scope, actor, id, {
+      idempotencyKey: input.idempotencyKey,
+      note: input.reason,
+      requireReceipt: true,
+    });
+    return this.detail(request, id);
+  }
+
+  /**
+   * R12 F3 item 8: CREDIT what the reviewer judged arrived to the customer's wallet — the
+   * one disposition that moves an amount the payment does not name. `ReceiptDispositionService`
+   * takes BOTH `receipts.review` and `users.wallet.credit`, the one credit path.
+   */
+  @Post(routePattern(PAYMENT_ROUTES.receiptCredit, 'id'))
+  async creditReceipt(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<PaymentResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    const input = paymentReceiptCreditRequestSchema.parse(body);
+    await this.container.receiptDispositions.creditToWallet(scope, actor, {
+      idempotencyKey: input.idempotencyKey,
+      paymentId: id,
+      amountMinor: BigInt(input.amountMinor),
+      note: input.note ?? null,
     });
     return this.detail(request, id);
   }

@@ -4820,6 +4820,40 @@ live; the owner decides otherwise.
   refusal it always got, `bot.order.expired` («… لطفاً دوباره سفارش دهید.»). That text predates
   A11 and is left unchanged (no copy rewrite outside the spec). Default: unchanged; whether such a
   customer should instead be told their payment is still being checked is the owner's call.
+  **Answered 2026-10-31 (R12 F3 item 9):** yes — a pay tap on such an order (or its method list)
+  gets the new `bot.order.payment_in_review` («پرداخت شما هنوز در حال بررسی است، دوباره پرداخت
+  نکنید؛ نتیجه در همین ربات اعلام می‌شود») with a «📊 وضعیت پرداخت» button. The live payment is read
+  from `OrderService.livePaymentFor`, whose states are the sweep's own
+  (`ORDER_HELD_OPEN_BY_PAYMENT`). `bot.order.expired` is unchanged. Still open: the mini app maps
+  `ORDER_EXPIRED` to the same old sentence, so the same order shows it there.
+
+## Round 12 F3 — UX quick wins: what was decided, what is left
+
+- **OQ-R12-F3-01 — the welcome's brand and trial lines (OPEN).** The spec asks for a name variable
+  in `bot.start.welcome` and the trial line (and its «🧪» mention) only when the trial is on. Not
+  built: there is no business/brand name to fill the variable from (a bot instance has only its
+  username), and a conditional line is a new placeholder or a second template key plus a
+  trial-enabled read in the start flow. The text is UNCHANGED («ZED PROXY» and the trial line stay
+  for every tenant) until the owner names the source of the name.
+- **OQ-R12-F3-02 — a rate-limited TonPays cancel is not retried automatically.** The owner asked
+  for «در صف است و خودکار دوباره تلاش می‌شود». That is true of a cancel the client's limiter HELD and
+  requeued (it reads «در حال لغو» as before) but not of one the provider answered with a readable
+  `RATE_LIMIT_EXCEEDED` (decided `RATE_LIMITED`; only the customer's next tap asks again). The new
+  `bot.payment.gateway_cancel_rate_limited` says what is true for that state (not cancelled yet,
+  ask again later, do not pay again). A held-and-requeued row is indistinguishable from a fresh
+  one in the stored columns (both `REQUESTED` with a claim time), so it keeps the «در حال لغو»
+  sentence. Telling them apart needs a column.
+- **OQ-R12-F3-03 — «پرداخت مابه‌التفاوت» at a short balance.** Not built: a top-up of exactly the
+  shortfall is a new money path (the top-up flow matches presets, not an amount tied to an
+  order). The shortfall screen offers «🔙 بازگشت به پیش‌فاکتور» after the customer tops up.
+- **OQ-R12-F3-04 — CSV export is of the ticked rows, in the browser.** Users, orders and payments
+  lists export the rows already shown and ticked (at most 200, the columns the list prints, formula
+  cells defanged). A server-side export of a whole filtered list would need a counted preview, an
+  audit row and its own permission; not built.
+- **OQ-R12-F3-05 — Telegram review messages after a Web decision.** A receipt decided in the Web
+  Admin leaves the administrators' Telegram review messages with their buttons; a tap on one is
+  answered «decided» (the conditional edge refuses), as for two reviewers racing in Telegram. They
+  are not edited in place by a Web decision.
 
 ## R12 F1 — money edges (`fix/r12-money-edges`)
 

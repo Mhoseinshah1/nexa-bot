@@ -79,6 +79,7 @@ import {
   createTranslator,
   DEFAULT_TEMPLATE_PRESENTATION,
   formatDateTime,
+  LEDGER_REASON_LABELS_FA,
   rejectReasonFa,
 } from '@nexa/i18n';
 import type {
@@ -803,6 +804,8 @@ import {
   ListBackedCustomerSource,
   ListBackedOrderSource,
   ListBackedServiceSource,
+  ListBackedPaymentSource,
+  ListBackedTicketSource,
 } from './modules/commerce/global-search/application/list-backed-sources.js';
 import { ServiceGrantService } from './modules/commerce/provisioning/application/service-grant.service.js';
 import { decideOperability } from './modules/commerce/provisioning/application/panel-operability.js';
@@ -5219,7 +5222,7 @@ export function createContainer(
     terms: orderCustomServiceTermsRepository,
     guard,
   });
-  const customerScreens = new CustomerScreenComposer(templateResolver);
+  const customerScreens = new CustomerScreenComposer(templateResolver, LEDGER_REASON_LABELS_FA);
   /**
    * Package F — a customer hands one of their services to another customer of the tenant.
    * Only ownership moves: no provider is called, and the order, payment and ledger are left
@@ -8683,6 +8686,8 @@ export function createContainer(
         CUSTOMER: new ListBackedCustomerSource(customerService),
         ORDER: new ListBackedOrderSource(orderService),
         SERVICE: new ListBackedServiceSource(serviceAdmin),
+        PAYMENT: new ListBackedPaymentSource(paymentService),
+        TICKET: new ListBackedTicketSource(ticketService),
       },
     }),
     serviceGrants: serviceGrantService,

@@ -58,8 +58,11 @@ import {
   replyFor,
   staleCallbackReply,
   withBlockedSupportButton,
+  inPlace,
 } from './runtime/replies.js';
 import * as customButtonFlow from './runtime/custom-button-flow.js';
+import * as orderEndFlow from './runtime/order-end-flow.js';
+import { withWayOn } from './runtime/way-on.js';
 import * as startMenuFlow from './runtime/start-menu-flow.js';
 import * as captchaFlow from './runtime/captcha-flow.js';
 import { CAPTCHA_EXEMPT_INTENTS } from './runtime/captcha-flow.js';
@@ -136,6 +139,10 @@ export {
   PAY_SWITCH_CARD_CALLBACK_PREFIX,
   CANCEL_ORDER_ASK_CALLBACK_PREFIX,
   CANCEL_ORDER_CALLBACK_PREFIX,
+  INPUT_BACK_CALLBACK_PREFIX,
+  INPUT_CANCEL_CALLBACK_DATA,
+  ORDER_PAYMENT_STATUS_CALLBACK_PREFIX,
+  CUSTOM_SERVICE_BACK_CALLBACK_DATA,
   TOPUP_MENU_CALLBACK_PREFIX,
   TOPUP_PICK_CALLBACK_PREFIX,
   GIFT_CARD_CALLBACK_DATA,
@@ -186,6 +193,7 @@ export {
   SERVICE_RENEW_QUOTE_CALLBACK_PREFIX,
   SERVICE_RENEW_PLAN_CALLBACK_PREFIX,
   REFERRAL_GIFT_CALLBACK_DATA,
+  WALLET_HISTORY_CALLBACK_PREFIX,
   WALLET_OPEN_CALLBACK_DATA,
   CATALOG_OPEN_CALLBACK_DATA,
   ADMIN_PANEL_CALLBACK_PREFIX,
@@ -637,7 +645,7 @@ export class BotRuntime {
      * blocked the customer without a word. And under concurrency the 21st can lose the
      * block to a later turn, so answering the 21st as well would tell them twice.
      */
-    const reply: PendingReply =
+    const unfinished: PendingReply =
       spam !== null &&
       spam.verdict !== 'ALLOWED' &&
       arrival === 'BLOCKED' &&
@@ -645,6 +653,11 @@ export class BotRuntime {
       !blockedThisTurn
         ? { key: null, values: {}, buttons: [], orderId: null }
         : answered;
+    // R12 F3 item 3: no dead ends. A customer reply with no button gets its way on; the
+    // management panel's own replies are the operator's and are left as they are.
+    const reply: PendingReply = ADMIN_INTENTS.has(command.intent)
+      ? unfinished
+      : withWayOn(unfinished);
 
     const chatId = privateChatIdOf(input.update);
     // R2: a reply that sends nothing gives its wizard claim back unchanged.
@@ -1452,6 +1465,9 @@ export class BotRuntime {
       }
     }
     if (command.intent === 'WALLET') return topupFlow.walletBalance(this, scope, actor, customer);
+    if (command.intent === 'WALLET_HISTORY') {
+      return topupFlow.walletHistory(this, scope, actor, customer, command.cursor ?? null);
+    }
     if (command.intent === 'MARKETING_OPT_OUT' || command.intent === 'MARKETING_OPT_IN') {
       return startMenuFlow.marketingPreference(
         this,
@@ -1468,33 +1484,26 @@ export class BotRuntime {
       command.intent === 'SUPPORT'
     ) {
       if (command.intent !== 'MAIN_MENU') return supportFlow.supportScreen(this, scope, customer);
-      return {
-        ...(await startMenuFlow.startGreeting(
-          this,
-          scope,
-          actor,
-          customer,
-          'bot.start.welcome_back',
-        )),
-        buttons: [],
-        orderId: null,
-        keyboard: (await this.isAdmin(scope, actor, input)) ? 'MAIN_MENU_ADMIN' : 'MAIN_MENU',
-      };
+      return this.mainMenuReply(scope, actor, customer, input);
     }
     // WP-A7: the customer's support tickets.
     const ticketed = await supportFlow.ticketTurn(this, scope, actor, command, customer, input);
-    if (ticketed !== null) return ticketed;
+    if (ticketed !== null) return inPlace(ticketed);
     if (command.intent === 'TUTORIAL')
-      return tutorialFlow.tutorialChoiceReply(this, scope, customer);
+      return inPlace(await tutorialFlow.tutorialChoiceReply(this, scope, customer));
     if (command.intent === 'TUTORIAL_PLATFORM' && command.targetId !== null) {
-      return tutorialFlow.tutorialPlatform(
-        this,
-        scope,
-        customer,
-        command.targetId as ClientAppPlatform,
+      return inPlace(
+        await tutorialFlow.tutorialPlatform(
+          this,
+          scope,
+          customer,
+          command.targetId as ClientAppPlatform,
+        ),
       );
     }
     if (command.intent === 'CLIENT_APP' && command.targetId !== null) {
+      // NOT `inPlace`: an app's guide is its own NEW message (spec A4) — with a video it is a
+      // file, and without one it stays the single text message it always was.
       return tutorialFlow.clientApp(this, scope, customer, command.targetId, input.botInstanceId);
     }
     if (command.intent === 'SERVICE_CONNECTED' && command.targetId !== null) {
@@ -1634,16 +1643,20 @@ export class BotRuntime {
       );
     }
     if (command.intent === 'REFERRAL_GIFT') {
-      return referralFlow.referralGift(this, scope, actor, customer, input.idempotencyKey);
+      return inPlace(
+        await referralFlow.referralGift(this, scope, actor, customer, input.idempotencyKey),
+      );
     }
     if (command.intent === 'REFERRAL_INVITE') {
-      return referralFlow.referralInvite(
-        this,
-        scope,
-        actor,
-        customer,
-        input.botInstanceId,
-        input.idempotencyKey,
+      return inPlace(
+        await referralFlow.referralInvite(
+          this,
+          scope,
+          actor,
+          customer,
+          input.botInstanceId,
+          input.idempotencyKey,
+        ),
       );
     }
     if (command.intent === 'TOPUP_PICK' && command.targetId !== null) {
@@ -1726,7 +1739,7 @@ export class BotRuntime {
     ) {
       // A return is the same question as a tap on «بررسی وضعیت»: the payment's own state, read
       // now, with a verify brought forward - and answered as closed for anyone else's payment.
-      return checkoutFlow.gatewayCheck(this, scope, command.targetId, customer);
+      return checkoutFlow.gatewayCheck(this, scope, actor, command.targetId, customer);
     }
     if (command.intent === 'GATEWAY_RECEIPT' && command.targetId !== null) {
       return cardReceiptFlow.gatewayReceipt(
@@ -1861,6 +1874,34 @@ export class BotRuntime {
     }
     if (command.intent === 'ORDER_CANCEL_ASK' && command.targetId !== null) {
       return purchaseFlow.cancelOrderAsk(this, scope, command.targetId, customer);
+    }
+    // R12 F3 item 2: leaving a typed-input prompt closes its window, then answers.
+    if (command.intent === 'INPUT_BACK' && command.targetId !== null) {
+      const abandoned = await purchaseFlow.abandonTextEntry(this, scope, actor, customer, input);
+      if (abandoned !== null) return abandoned;
+      const draft = await purchaseFlow.inputBack(this, scope, actor, command.targetId, customer);
+      if (draft === 'MENU') return this.mainMenuReply(scope, actor, customer, input);
+      if (draft !== null) return draft;
+      const back = await checkoutFlow.paymentMethodsBack(
+        this,
+        scope,
+        actor,
+        command.targetId,
+        customer,
+      );
+      if (back !== null) return back;
+      return this.mainMenuReply(scope, actor, customer, input);
+    }
+    if (command.intent === 'ORDER_PAYMENT_STATUS' && command.targetId !== null) {
+      return orderEndFlow.orderPaymentStatus(this, scope, actor, customer, command.targetId);
+    }
+    if (command.intent === 'INPUT_CANCEL') {
+      const abandoned = await purchaseFlow.abandonTextEntry(this, scope, actor, customer, input);
+      return abandoned ?? this.mainMenuReply(scope, actor, customer, input);
+    }
+    if (command.intent === 'CUSTOM_SERVICE_BACK') {
+      const abandoned = await purchaseFlow.abandonTextEntry(this, scope, actor, customer, input);
+      return abandoned ?? purchaseFlow.customServiceMenu(this, scope, actor, customer);
     }
     if (command.intent === 'ORDER_CANCEL' && command.targetId !== null) {
       return purchaseFlow.cancelOrder(
@@ -2241,6 +2282,27 @@ export class BotRuntime {
         ? await startMenuFlow.startGreeting(this, scope, actor, customer, key)
         : { key, values: {} };
     return { ...greeting, buttons: [], orderId: null, ...menu };
+  }
+
+  /** The main menu: the returning customer's greeting with the main keyboard. */
+  async mainMenuReply(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    input: { readonly telegramUserId: string },
+  ): Promise<PendingReply> {
+    return {
+      ...(await startMenuFlow.startGreeting(
+        this,
+        scope,
+        actor,
+        customer,
+        'bot.start.welcome_back',
+      )),
+      buttons: [],
+      orderId: null,
+      keyboard: (await this.isAdmin(scope, actor, input)) ? 'MAIN_MENU_ADMIN' : 'MAIN_MENU',
+    };
   }
 
   /** Public: the provisioner edits the card through this (`container.ts`). */

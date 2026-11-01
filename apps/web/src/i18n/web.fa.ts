@@ -2727,11 +2727,54 @@ export const WEB_FA = {
     'تأیید یک پرداخت فقط از راه تسویه و با مدرک انجام می‌شود. برای نامعلوم‌ها «استعلام دوباره» و سپس تطبیق در صفحهٔ پرداخت؛ برای برگشت پول، کارت بازپرداخت همان صفحه.',
   'web.payment_confirm_title': 'بررسی رسید',
   /*
-   * Payment File 02 §10: card-to-card review is Telegram's alone. The Web Admin says
-   * where the decision is taken rather than drawing a control it has no route for.
+   * R12 F3 item 8: card-to-card review is in BOTH places (owner decision, reversing Payment File
+   * 02 §10's "Telegram only"). The same three dispositions, through the same application methods.
    */
-  'web.payment_review_in_telegram':
-    'این کارت‌به‌کارت در انتظار بررسی است. تأیید، رد یا واریز به کیف پول فقط از پنل مدیریت تلگرام انجام می‌شود و این صفحه تنها نتیجه را نمایش می‌دهد.',
+  'web.receipt_review_hint':
+    'رسید را ببینید و یکی از تصمیم‌ها را ثبت کنید: تأیید، رد یا واریز به کیف پول. همین تصمیم‌ها در ربات تلگرام هم انجام می‌شود و تصمیمِ اول معتبر است.',
+  'web.receipt_note': 'یادداشت (اختیاری)',
+  'web.receipt_approve': 'تأیید پرداخت',
+  'web.receipt_approve_title': 'تأیید پرداخت کارت‌به‌کارت',
+  'web.receipt_approve_body':
+    'با تأیید، پرداخت به مبلغ زیر ثبت و نهایی می‌شود و سفارش یا شارژ مشتری ادامه پیدا می‌کند. این کار برگشت‌پذیر نیست.',
+  'web.receipt_approve_check': 'مبلغ رسید را با حساب بانکی تطبیق داده‌ام',
+  'web.receipt_approve_confirm': 'تأیید و ثبت پرداخت',
+  'web.receipt_done_approved': 'پرداخت تأیید شد.',
+  'web.receipt_reject': 'رد رسید',
+  'web.receipt_reject_title': 'رد رسید',
+  'web.receipt_reject_body':
+    'دلیل رد به مشتری اعلام می‌شود. با رد رسید، این پرداخت بسته می‌شود و مشتری باید دوباره پرداخت کند.',
+  'web.receipt_reject_reason': 'دلیل رد (به مشتری گفته می‌شود)',
+  'web.receipt_reject_confirm': 'رد رسید',
+  'web.receipt_done_rejected': 'رسید رد شد و دلیل آن به مشتری اعلام می‌شود.',
+  'web.receipt_credit': 'واریز به کیف پول',
+  'web.receipt_credit_title': 'واریز به کیف پول مشتری',
+  'web.receipt_credit_hint':
+    'مبلغی را که واقعاً به حساب رسیده به کیف پول مشتری اضافه می‌کند. سفارش پرداخت‌شده حساب نمی‌شود و هدیهٔ شارژ ندارد؛ مشتری می‌تواند با کیف پول پرداخت کند.',
+  'web.receipt_credit_amount': 'مبلغ رسیده، به واحد پایه',
+  'web.receipt_credit_invalid': 'مبلغ باید عدد صحیح مثبت باشد.',
+  'web.receipt_credit_will_add': 'به کیف پول اضافه می‌شود',
+  'web.receipt_credit_check': 'مبلغ رسیده را با حساب بانکی تطبیق داده‌ام',
+  'web.receipt_credit_confirm': 'واریز به کیف پول',
+  'web.receipt_done_credited': 'مبلغ به کیف پول مشتری واریز شد.',
+  'web.receipt_denied':
+    'بررسی رسید به دسترسی receipts.review نیاز دارد. در ربات تلگرام هم قابل انجام است.',
+  'web.receipt_credit_denied': 'واریز به کیف پول به دسترسی users.wallet.credit هم نیاز دارد.',
+  'web.payment_ops_queue_receipt_review': 'رسید در انتظار بررسی',
+  'web.payment_ops_queue_hint_receipt_review':
+    'کارت‌به‌کارت‌هایی که مشتری رسید فرستاده و هنوز کسی تأیید یا رد نکرده است.',
+  'web.dash_attn_receipts_review': 'رسید کارت‌به‌کارت در انتظار بررسی',
+  // R12 F3 item 8: row selection and CSV export on the users, orders and payments lists.
+  'web.export_bar': 'خروجی ردیف‌های انتخاب‌شده',
+  'web.export_select': 'انتخاب',
+  'web.export_select_row': 'انتخاب این ردیف',
+  'web.export_select_all': 'انتخاب همهٔ ردیف‌های این صفحه',
+  'web.export_selected': 'انتخاب‌شده:',
+  'web.export_csv': 'خروجی CSV',
+  'web.export_cap': 'حداکثر ردیف در هر فایل:',
+  'web.payment_currency': 'واحد پول',
+  'web.search_group_payment': 'پرداخت‌ها',
+  'web.search_group_ticket': 'تیکت‌ها',
   // Payment accounts — the destination an out-of-band transfer is told to go to.
   // The screen that replaces editing a message template to change a card number.
   // UX Batch 01, item 7: the cards of the card-to-card method, managed on its own view
@@ -4920,6 +4963,13 @@ export const WEB_FA = {
   'web.ib_button_order_cancel_confirm': 'تأیید لغو سفارش',
   'web.ib_button_order_reorder': 'سفارش دوباره (زیر سفارش منقضی یا لغوشده)',
   'web.ib_button_order_main_menu': 'منوی اصلی (زیر سفارش منقضی یا لغوشده)',
+  'web.ib_button_order_payment_status': 'وضعیت پرداخت (زیر «پرداخت شما در حال بررسی است»)',
+  'web.ib_button_order_input_back':
+    'بازگشت به پیش‌فاکتور (زیر پرسش کد تخفیف و نام کاربری و کمبود موجودی)',
+  'web.ib_button_order_input_cancel': 'انصراف (زیر پرسش‌هایی که مشتری باید متن تایپ کند)',
+  'web.ib_button_custom_service_back': 'بازگشت به مکان‌ها (زیر پرسش حجم و روز سرویس دلخواه)',
+  'web.ib_button_wallet_history': 'تراکنش‌ها (زیر موجودی کیف پول)',
+  'web.ib_button_payment_retry': 'پرداخت دوباره (زیر اعلان پرداخت ردشده یا منقضی)',
   'web.ib_button_payment_wallet': 'پرداخت از کیف پول',
   'web.ib_button_payment_methods': 'ثبت پرداخت (انتخاب روش)',
   'web.ib_button_payment_route': 'روش‌های پرداخت',

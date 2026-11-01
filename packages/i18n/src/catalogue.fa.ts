@@ -325,6 +325,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '{icon:info} این سفارش لغو شد.\n\n🔖 کد سفارش: {orderCode}\n{icon:service} سرویس: {productName}\n{icon:amount} مبلغ سفارش: {total}\n\nبرای خرید دوباره از دکمهٔ زیر استفاده کنید.',
   'bot.order.reorder_button': '🔁 سفارش دوباره',
   'bot.order.main_menu_button': '🏠 منوی اصلی',
+  // R12 F3 (OQ-R11-A11-04): a pay tap on an order past its deadline whose payment is still live.
+  'bot.order.payment_in_review':
+    '{icon:time} پرداخت شما برای این سفارش هنوز در حال بررسی است. لطفاً دوباره پرداخت نکنید.\n\nنتیجهٔ بررسی در همین ربات به شما اطلاع داده می‌شود.',
+  'bot.order.payment_status_button': '📊 وضعیت پرداخت',
+  'bot.order.input_back_button': '🔙 بازگشت به پیش‌فاکتور',
+  'bot.order.input_cancel_button': 'انصراف',
   /*
    * Three lines, and the two figures are the point of the change.
    *
@@ -735,6 +741,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.wallet.insufficient': '{icon:warning} موجودی کیف پول کافی نیست. کمبود: {shortfall}',
   'bot.wallet.topup_button': '💰 افزایش موجودی',
   'bot.wallet.open_button': '💰 کیف پول',
+  'bot.wallet.history_button': '📜 تراکنش‌ها',
+  'bot.wallet.history': '📜 تراکنش‌های اخیر کیف پول\n\n{lines}',
+  'bot.wallet.history_empty': '📜 هنوز تراکنشی در کیف پول شما ثبت نشده است.',
+  'bot.wallet.history_line_credit': '➕ {amount} | {reason} | {at}',
+  'bot.wallet.history_line_debit': '➖ {amount} | {reason} | {at}',
   'bot.catalog.open_button': '🛒 خرید سرویس',
   'bot.wallet.topup_choose': 'مبلغ شارژ را انتخاب کنید:',
   'bot.wallet.negative_balance':
@@ -793,7 +804,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * attempt for ever without anything happening. 4H gives them the step that exists.
    */
   'bot.payment.manual_instructions':
-    'برای پرداخت مبلغ زیر طبق راهنمای فروشنده اقدام کنید و سپس دکمهٔ «پرداخت را انجام دادم» را بزنید.\nمبلغ قابل واریز: {amountRial} ریال\n(معادل {amountToman} تومان)\nکد پیگیری پرداخت: {reference}',
+    'برای پرداخت مبلغ زیر طبق راهنمای فروشنده اقدام کنید و سپس دکمهٔ «📤 ارسال رسید» را بزنید.\nمبلغ قابل واریز: {amountRial} ریال\n(معادل {amountToman} تومان)\nکد پیگیری پرداخت: {reference}',
   /*
    * The invoice layout the owner specified: heading, invoice id, payable amount, then
    * the destination lines, then the instructions.
@@ -820,6 +831,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.copy_transfer_amount_button': '📋 کپی مبلغ (ریال)',
   'bot.payment.wallet_button': '💰 پرداخت از کیف پول',
   'bot.payment.manual_button': '🧾 ثبت پرداخت',
+  'bot.payment.retry_button': '🧾 پرداخت دوباره',
   /*
    * The generic refusal, and it says two things on purpose: that the request cannot be
    * completed NOW (so trying later is sensible), and that nothing was charged — because
@@ -963,7 +975,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.rotate_confirm_button': 'بله، لینک جدید بساز',
   // R11 A4 — «فقط فایل، بدون لینک ساب»: none of these carries a link.
   'bot.service.delivered_files_only':
-    '{icon:success} سرویس با موفقیت ایجاد شد\n\n{icon:user} نام کاربری سرویس: {serviceUsername}\n🌿 نام سرویس: {productName}\n{icon:location} لوکیشن: 🚀 {serviceLocation}\n⌛ مدت زمان: {durationDays}\n⏱ حجم سرویس: {trafficBytes}\n\n📂 فایل‌های اتصال شما در پیام‌های بعدی ارسال می‌شود. فایل مخصوص دستگاه خود را در برنامه باز کنید.\n\n🚶 شما میتوانید شیوه اتصال را با فشردن دکمه زیر و\nانتخاب سیستم عامل خود را دریافت کنید',
+    '{icon:success} سرویس با موفقیت ایجاد شد\n\n{icon:user} نام کاربری سرویس: {serviceUsername}\n🌿 نام سرویس: {productName}\n{icon:location} لوکیشن: 🚀 {serviceLocation}\n⌛ مدت زمان: {durationDays}\n⏱ حجم سرویس: {trafficBytes}\n\n📂 فایل‌های اتصال شما در پیام‌های بعدی ارسال می‌شود. فایل مخصوص دستگاه خود را در برنامه باز کنید.\n\n🚶 شما می‌توانید شیوه اتصال را با فشردن دکمهٔ زیر و انتخاب سیستم‌عامل خود دریافت کنید.',
   'bot.service.files_renewed':
     '{icon:success} فایل‌های اتصال سرویس {serviceUsername} با موفقیت تغییر کرد.\nلطفاً فایل‌های جدید را که در پیام‌های بعدی ارسال می‌شود در برنامه خود جایگزین کنید.',
   // R11 A4 — «نوع بارکد»: the one-line captions when a panel shows both QRs.
@@ -1146,6 +1158,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '{icon:trial} سرویس تست را روی کدام سرور می‌خواهید؟ یکی را انتخاب کنید:',
   'bot.trial.panel_button': '{label} — {traffic} / {hours} ساعت',
   'bot.custom_service.button': '🛠 سرویس دلخواه',
+  'bot.custom_service.back_button': '🔙 بازگشت به مکان‌ها',
   'bot.custom_service.locations': '📍 لوکیشن سرویس دلخواه خود را انتخاب کنید:',
   'bot.custom_service.ask_volume':
     '📍 لوکیشن: {location}\n\n📦 حجم مورد نظر خود را به گیگابایت بفرستید؛ حداکثر با دو رقم اعشار (مثلاً 10 یا 10.5).\n\n📏 حجم را بین {minGb} تا {maxGb} گیگابایت وارد کنید.',
@@ -1179,7 +1192,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * names neither, and points at the one place a figure is shown.
    */
   'bot.refund.completed':
-    'بازپرداخت شما انجام شد. اگر مبلغ به کیف پول بازگشته باشد، موجودی جدید را با /wallet ببینید.',
+    'بازپرداخت شما انجام شد. اگر مبلغ به کیف پول بازگشته باشد، موجودی جدید را در «💰 کیف پول» ببینید.',
 
   /*
    * Customer UX completion — the owner's approved defaults, verbatim
@@ -1188,7 +1201,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * carry the approved lines exactly as written.
    */
   'bot.service.delivered':
-    '{icon:success} سرویس با موفقیت ایجاد شد\n\n{icon:user} نام کاربری سرویس: {serviceUsername}\n🌿 نام سرویس: {productName}\n{icon:location} لوکیشن: 🚀 {serviceLocation}\n⌛ مدت زمان: {durationDays}\n⏱ حجم سرویس: {trafficBytes}\n\nلینک اتصال:\n<code>{subscriptionUrl}</code>\n\n🚶 شما میتوانید شیوه اتصال را با فشردن دکمه زیر و\nانتخاب سیستم عامل خود را دریافت کنید',
+    '{icon:success} سرویس با موفقیت ایجاد شد\n\n{icon:user} نام کاربری سرویس: {serviceUsername}\n🌿 نام سرویس: {productName}\n{icon:location} لوکیشن: 🚀 {serviceLocation}\n⌛ مدت زمان: {durationDays}\n⏱ حجم سرویس: {trafficBytes}\n\nلینک اتصال:\n<code>{subscriptionUrl}</code>\n\n🚶 شما می‌توانید شیوه اتصال را با فشردن دکمهٔ زیر و انتخاب سیستم‌عامل خود دریافت کنید.',
   'bot.service.delivered_qr_caption':
     '📷 کد QR لینک اتصال شما. جزئیات سرویس در پیام بعدی آمده است.',
   'bot.service.link_qr_caption': '📷 کد QR همین لینک اتصال؛ آن را با برنامهٔ خود اسکن کنید.',
@@ -1256,7 +1269,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.faq.default_5_answer':
     'لوکیشن سرویس شما پس از خرید در کارت سرویس نمایش داده می‌شود. برای اطلاع از لوکیشن‌های هر محصول پیش از خرید، توضیحات محصول را ببینید یا از پشتیبانی بپرسید.',
   'bot.faq.default_6_question': 'چطور باید از این فیلترشکن استفاده کنم؟',
-  'bot.faq.default_6_answer': 'برای آموزش استفاده از برنامه، روی دکمه «📚 آموزش» بزنید.',
+  'bot.faq.default_6_answer':
+    'برای آموزش استفاده از برنامه، روی دکمه «📱 دانلود برنامه و آموزش اتصال» بزنید.',
   'bot.faq.default_7_question': 'فیلترشکن وصل نمیشه، چیکار کنم؟',
   'bot.faq.default_7_answer': 'به همراه یک عکس از پیغام خطایی که میگیرید به پشتیبانی مراجعه کنید.',
   'bot.faq.default_8_question': 'فیلترشکن شما تضمینی هست که همیشه مواقع متصل بشه؟',
@@ -1434,6 +1448,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '{icon:warning} این فاکتور دیگر در انتظار پرداخت نیست و این درخواست انجام نشد. وضعیت را بررسی کنید.\n\nکد پیگیری پرداخت: {reference}',
   'bot.payment.gateway_cancel_unknown':
     '{icon:warning} پاسخ تون‌پی به درخواست لغو دریافت نشد و درخواست دوباره به‌صورت خودکار ارسال نمی‌شود. وضعیت را بررسی کنید.\n\nکد پیگیری پرداخت: {reference}',
+  // R12 F3: TonPays rate-limited the customer's cancel — its answer is known: it did nothing.
+  'bot.payment.gateway_cancel_rate_limited':
+    '{icon:warning} درخواست لغو فاکتور فعلاً توسط تون‌پی پذیرفته نشد، چون تعداد درخواست‌ها از حد مجاز گذشته بود. فاکتور هنوز لغو نشده است. اگر قصد پرداخت ندارید، چند دقیقه بعد دوباره «❌ لغو فاکتور» را بزنید. اگر مبلغی واریز کرده‌اید، لغو نکنید و رسید را بفرستید. لطفاً دوباره پرداخت نکنید.\n\nکد پیگیری پرداخت: {reference}',
+  // R12 F3 lead review: the same, where «❌ لغو فاکتور» is no longer offered.
+  'bot.payment.gateway_cancel_rate_limited_closed':
+    '{icon:warning} درخواست لغو فاکتور فعلاً توسط تون‌پی پذیرفته نشد، چون تعداد درخواست‌ها از حد مجاز گذشته بود. فاکتور هنوز لغو نشده است. اگر مبلغی واریز کرده‌اید، رسید را بفرستید. لطفاً دوباره پرداخت نکنید.\n\nکد پیگیری پرداخت: {reference}',
   // R11 A8: a cancel tap on an invoice Nexa already knows was cancelled.
   'bot.payment.gateway_cancel_already_cancelled':
     '{icon:info} فاکتور قبلاً لغو شده است و دیگر قابل پرداخت نیست. برای پرداخت می‌توانید دوباره اقدام کنید.\n\nکد پیگیری پرداخت: {reference}',
@@ -1481,7 +1501,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '{icon:service} سرویس‌های شما\n\nبرای دیدن جزئیات و مدیریت هر سرویس، روی نام کاربری آن بزنید.\nبرای پیدا کردن سریع یک سرویس، از دکمهٔ جستجو در پایین فهرست استفاده کنید.\n\n📄 صفحه {page} از {pages} | کل: {total} سرویس',
   // Batch 01 item 3: the marker is the service's DERIVED status (green serving, red over).
   'bot.service.list_item_button': '{marker} {username}',
-  'bot.service.search_label_button': 'جستجو نام کاربری',
+  'bot.service.search_label_button': 'جستجوی نام کاربری',
   'bot.service.search_button': '🔎 جستجو',
   'bot.service.page_button': '{page}/{pages}',
   'bot.service.prev_page_button': '◀️',
@@ -1508,7 +1528,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.state_unreconciled': '{icon:warning} در حال بررسی',
   'bot.service.traffic_value': '{bytes}',
   'bot.service.traffic_unknown': 'هنوز از سرور خوانده نشده',
-  'bot.service.remaining_value': '{bytes} ({percent}%)',
+  'bot.service.remaining_value': '{bytes} ({percent}٪)',
   'bot.service.remaining_unlimited': 'نامحدود',
   'bot.service.no_expiry': '{icon:date} تاریخ اتمام: بدون محدودیت زمانی',
   'bot.service.last_seen_at': '{at}',

@@ -17,7 +17,12 @@ import {
 import { orderEndScreen } from '../../../modules/commerce/messaging/application/order-end-screen.js';
 import type { OrderRecord } from '../../../modules/commerce/orders/application/ports.js';
 import type { CardMessageRef } from '../../../modules/commerce/provisioning/application/operation-card.js';
-import { orderEndButtons } from './keyboards.js';
+import { mainMenuButton, orderEndButtons } from './keyboards.js';
+import { inlineLabel } from '../../../modules/commerce/messaging/application/inline-buttons.js';
+import { ORDER_PAYMENT_STATUS_CALLBACK_PREFIX } from './callbacks.js';
+import { refusal } from './refusals.js';
+import { gatewayAttemptReply } from './checkout-flow.js';
+import { unreceiptedTransfer } from './card-receipt-flow.js';
 import type { PendingReply } from './replies.js';
 import type { BotRuntime } from '../bot-runtime.js';
 
@@ -112,7 +117,116 @@ export async function orderEndedRefusal(
     // Not this customer's, or unreadable: the ordinary refusal answers it.
     return null;
   }
-  return endedOrderScreen(rt, order);
+  const ended = endedOrderScreen(rt, order);
+  if (ended !== null) return ended;
+  // R12 F3 item 9: past its deadline only because a payment of it is still live.
+  return error.code === COMMERCE_ERROR_CODES.ORDER_EXPIRED
+    ? liveOrderInReview(rt, scope, actor, customer, order)
+    : null;
+}
+
+/**
+ * R12 F3 item 9 (OQ-R11-A11-04): a pay tap on an order whose deadline passed but whose payment
+ * is still LIVE — the sweep keeps such an order (`OrderRepository.expireDue`) — is answered
+ * «پرداخت شما در حال بررسی است، دوباره پرداخت نکنید; نتیجه در همین ربات اعلام می‌شود», never by
+ * `bot.order.expired` («لطفاً دوباره سفارش دهید»), which would invite a second payment. The
+ * live payment comes from the application layer's own read (`OrderService.livePaymentFor`, the
+ * sweep's states), not from a copy of the sweep's predicate here.
+ *
+ * Null for every other order — a draft past its price hold has no payment and keeps its
+ * ended screen / `bot.order.expired`; an order inside its deadline is still payable. Edits the
+ * tapped message and sets no wizard step: the payment's own notification still answers on the
+ * order's message when the review ends. Writes nothing.
+ */
+export async function liveOrderInReview(
+  rt: BotRuntime,
+  scope: TenantContext,
+  actor: ActorContext,
+  customer: Pick<CustomerRecord, 'id'>,
+  order: OrderRecord,
+): Promise<PendingReply | null> {
+  if (
+    order.state !== 'AWAITING_PAYMENT' ||
+    order.expiresAt === null ||
+    rt.deps.clock.now().getTime() < order.expiresAt.getTime()
+  ) {
+    return null;
+  }
+  const live = await rt.deps.orders.livePaymentFor(scope, actor, {
+    customerId: customer.id,
+    orderId: order.id,
+  });
+  if (live === null) return null;
+  /*
+   * R12 F3 (lead review): a card-to-card transfer with NO receipt filed is not "being checked" —
+   * nothing is. Its own invoice again, with «📤 ارسال رسید», so the customer sends the receipt for
+   * this payment (and is still not offered a new one).
+   */
+  const transfer = await unreceiptedTransfer(rt, scope, actor, customer, live.paymentId);
+  return transfer ?? paymentInReviewReply(order.id);
+}
+
+function paymentInReviewReply(orderId: string): PendingReply {
+  return {
+    key: 'bot.order.payment_in_review',
+    values: {},
+    buttons: [
+      {
+        ...inlineLabel('order.payment_status'),
+        data: `${ORDER_PAYMENT_STATUS_CALLBACK_PREFIX}${orderId}`,
+        row: 0,
+      },
+      { ...mainMenuButton(), row: 0 },
+    ],
+    orderId,
+    edit: true,
+  };
+}
+
+/**
+ * «📊 وضعیت پرداخت» under `bot.order.payment_in_review`: the order's live payment, drawn as
+ * its own status — the gateway attempt's screen (a read: the attempt as it stands) — and for a
+ * payment with no attempt screen (a card-to-card receipt under review) the review sentence
+ * again. Nothing is paid, created or re-requested; the order is read as this customer's.
+ */
+export async function orderPaymentStatus(
+  rt: BotRuntime,
+  scope: TenantContext,
+  actor: ActorContext,
+  customer: CustomerRecord,
+  orderId: string,
+): Promise<PendingReply> {
+  try {
+    const live = await rt.deps.orders.livePaymentFor(scope, actor, {
+      customerId: customer.id,
+      orderId,
+    });
+    if (live === null) {
+      return {
+        key: 'bot.order.not_awaiting_payment',
+        values: {},
+        buttons: [mainMenuButton()],
+        orderId,
+        edit: true,
+      };
+    }
+    const attempt = await rt.deps.gateway.attemptFor(scope, customer.id, live.paymentId);
+    if (attempt !== null)
+      return { ...(await gatewayAttemptReply(rt, attempt, orderId, scope)), edit: true };
+    // A transfer whose receipt was never sent: its invoice, to send it (lead review).
+    const transfer = await unreceiptedTransfer(rt, scope, actor, customer, live.paymentId);
+    if (transfer !== null) return transfer;
+    // A receipt under review: say THAT, rather than repeat the message the button sits under.
+    return {
+      key: 'bot.payment.receipt_received',
+      values: {},
+      buttons: [mainMenuButton()],
+      orderId,
+      edit: true,
+    };
+  } catch (error) {
+    return refusal(error);
+  }
 }
 
 /**

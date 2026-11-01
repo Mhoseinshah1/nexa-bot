@@ -1169,6 +1169,20 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     return row === undefined ? null : paymentTrackingCode(row);
   }
 
+  async orderIdFor(
+    scope: TenantContext,
+    paymentId: string,
+    tx?: unknown,
+  ): Promise<{ readonly orderId: string | null } | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select({ orderId: payments.orderId })
+      .from(payments)
+      .where(and(eq(payments.tenantId, tenantId), eq(payments.id, paymentId)))
+      .limit(1);
+    return row === undefined ? null : { orderId: row.orderId };
+  }
+
   async rejectionReasonFor(
     scope: TenantContext,
     paymentId: string,

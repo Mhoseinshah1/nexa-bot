@@ -242,6 +242,13 @@ export const WIZARD_GATES: ReadonlyMap<string, WizardGate> = new Map<string, Wiz
   ['USERNAME_AUTOMATIC', ORDER('USERNAME')],
   ['DISCOUNT_CODE_ENTER', ORDER('PREINVOICE')],
   ['DISCOUNT_CODE_REMOVE', ORDER('PREINVOICE')],
+  /*
+   * R12 F3 item 2 (Codex, #362): «🔙 بازگشت به پیش‌فاکتور» under the discount or username
+   * prompt, and under the wallet shortfall (a PREINVOICE-step message of its own). Gated so
+   * Back CLAIMS the tracked message and LANDS it on the screen it draws: without the claim
+   * the record stayed at DISCOUNT and the pre-invoice's own buttons were swallowed as stale.
+   */
+  ['INPUT_BACK', ORDER('DISCOUNT', 'USERNAME', 'PREINVOICE')],
   ['CONFIRM', ORDER('PREINVOICE')],
   ['PAY_WALLET', ORDER('PREINVOICE', 'AWAITING_PAYMENT')],
   // «🧾 ثبت پرداخت»: from the pre-invoice, the awaiting-payment screen, or a failed invoice.

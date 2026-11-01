@@ -357,6 +357,14 @@ export interface CustomerNotificationDeps {
    */
   readonly paymentReferences?: {
     trackingCodeFor: (scope: TenantContext, paymentId: string) => Promise<string | null>;
+    /**
+     * R12 F3 item 1: the order a payment pays for (null for a top-up), read at send time so a
+     * payment notice's button can open that order's payment methods. Absent, no such button.
+     */
+    orderIdFor?: (
+      scope: TenantContext,
+      paymentId: string,
+    ) => Promise<{ readonly orderId: string | null } | null>;
   };
   /**
    * Package F: what `SERVICE_TRANSFER_RECEIVED` renders — the service's name, location and
@@ -410,6 +418,13 @@ export interface CustomerNotificationDeps {
       readonly ticketId?: string;
       /** R11 A11: where an ended order's «🔁 سفارش دوباره» leads. */
       readonly reorder?: OrderReorderTarget;
+      /** R12 F3 item 1: the order a pending-order reminder is about. */
+      readonly orderId?: string;
+      /**
+       * R12 F3 item 1: the payment a payment notice is about, with the order it pays for —
+       * null for a wallet top-up, whose way on is the top-up menu.
+       */
+      readonly payment?: { readonly orderId: string | null; readonly paymentId?: string };
     },
   ) => readonly CustomerButton[];
   /**
@@ -1075,9 +1090,49 @@ export class CustomerNotificationService {
       };
     }
     const values = await this.reminderValues(scope, row);
-    // Owner spec §2.1/§2.2: a kind's buttons, derived from the KIND alone (no subject): the
-    // low-balance alert's top-up, a wallet credit's wallet and catalogue. Still no payload.
-    return values === null ? null : { values, buttons: this.deps.buttonsFor?.(row.kind, {}) ?? [] };
+    if (values === null) return null;
+    /*
+     * Owner spec §2.1/§2.2: a kind's buttons, derived from the KIND alone: the low-balance
+     * alert's top-up, a wallet credit's wallet and catalogue. R12 F3 item 1: the kinds that
+     * point at a service, an order or a payment read that id back from the subject row (below)
+     * — still a reader, never a payload.
+     */
+    return {
+      values,
+      buttons: this.deps.buttonsFor?.(row.kind, await this.buttonSubject(scope, row)) ?? [],
+    };
+  }
+
+  /**
+   * R12 F3 item 1: what a reminder or payment notice's button needs from its subject — the
+   * service a reminder is about, the order a pending reminder names, the order a payment pays
+   * for. Empty for every other kind (their buttons are derived from the kind alone). A subject
+   * that cannot be read yields no id and so no button, never a guessed one.
+   */
+  private async buttonSubject(
+    scope: TenantContext,
+    row: CustomerNotificationRecord,
+  ): Promise<{
+    readonly serviceId?: string;
+    readonly orderId?: string;
+    readonly payment?: { readonly orderId: string | null; readonly paymentId?: string };
+  }> {
+    if (REMINDER_NOTIFICATION_KINDS.has(row.kind)) {
+      const snapshot = await this.deps.reminderSnapshots.snapshotOf(scope, row.subjectId);
+      return snapshot?.serviceId === undefined ? {} : { serviceId: snapshot.serviceId };
+    }
+    if (row.kind === 'ORDER_PENDING_REMINDER') return { orderId: row.subjectId };
+    if (
+      row.kind === 'PAYMENT_PENDING_REMINDER' ||
+      row.kind === 'PAYMENT_REJECTED' ||
+      row.kind === 'PAYMENT_EXPIRED'
+    ) {
+      const paid = await this.deps.paymentReferences?.orderIdFor?.(scope, row.subjectId);
+      return paid === null || paid === undefined
+        ? {}
+        : { payment: { orderId: paid.orderId, paymentId: row.subjectId } };
+    }
+    return {};
   }
 
   /** The payment's tracking code (`payments.reference`), or null when it cannot be read. */

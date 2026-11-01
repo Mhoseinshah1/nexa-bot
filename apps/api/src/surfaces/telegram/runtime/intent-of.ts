@@ -88,6 +88,10 @@ import {
   ADMIN_USERNAME_TOGGLE_CALLBACK_PREFIX,
   CANCEL_ORDER_ASK_CALLBACK_PREFIX,
   CANCEL_ORDER_CALLBACK_PREFIX,
+  CUSTOM_SERVICE_BACK_CALLBACK_DATA,
+  INPUT_BACK_CALLBACK_PREFIX,
+  INPUT_CANCEL_CALLBACK_DATA,
+  ORDER_PAYMENT_STATUS_CALLBACK_PREFIX,
   CANCEL_PAY_ASK_CALLBACK_PREFIX,
   CANCEL_PAY_CALLBACK_PREFIX,
   CATALOG_OPEN_CALLBACK_DATA,
@@ -176,6 +180,7 @@ import {
   TUTORIAL_PLATFORM_CALLBACK_PREFIX,
   USERNAME_AUTOMATIC_CALLBACK_PREFIX,
   USERNAME_CUSTOM_CALLBACK_PREFIX,
+  WALLET_HISTORY_CALLBACK_PREFIX,
   WALLET_OPEN_CALLBACK_DATA,
   WALLET_PAY_CALLBACK_PREFIX,
   decodeAutoRenewConfirm,
@@ -417,6 +422,33 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     }
     if (data === MAIN_MENU_CALLBACK_DATA) {
       return { intent: 'MAIN_MENU', targetId: null, callbackQueryId: id };
+    }
+    // R12 F3 item 2: the buttons under a typed-input prompt.
+    if (data === INPUT_CANCEL_CALLBACK_DATA) {
+      return { intent: 'INPUT_CANCEL', targetId: null, callbackQueryId: id };
+    }
+    if (data === CUSTOM_SERVICE_BACK_CALLBACK_DATA) {
+      return { intent: 'CUSTOM_SERVICE_BACK', targetId: null, callbackQueryId: id };
+    }
+    if (data.startsWith(ORDER_PAYMENT_STATUS_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'ORDER_PAYMENT_STATUS',
+        data.slice(ORDER_PAYMENT_STATUS_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(INPUT_BACK_CALLBACK_PREFIX)) {
+      return callbackCommand('INPUT_BACK', data.slice(INPUT_BACK_CALLBACK_PREFIX.length), id);
+    }
+    // R12 F3 item 7: the wallet history, its newest page or the page after a keyset token.
+    if (data.startsWith(WALLET_HISTORY_CALLBACK_PREFIX)) {
+      const token = data.slice(WALLET_HISTORY_CALLBACK_PREFIX.length);
+      if (token === '') {
+        return { intent: 'WALLET_HISTORY', targetId: null, callbackQueryId: id };
+      }
+      const cursor = decodeKeysetToken(token);
+      if (cursor === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      return { intent: 'WALLET_HISTORY', targetId: null, cursor, callbackQueryId: id };
     }
     // Owner spec §2.2: the wallet-credit message's two next actions.
     if (data === WALLET_OPEN_CALLBACK_DATA) {

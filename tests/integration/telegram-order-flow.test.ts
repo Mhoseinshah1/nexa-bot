@@ -789,6 +789,43 @@ describe('the customer purchase flow over Telegram', () => {
     expect((await orders())[0]?.['total_amount']).toBe(250_000n);
   });
 
+  it('R12 F3: the code prompt carries back and cancel, and each closes its window', async () => {
+    await discount({ kind: 'CODE', code: 'SPRING', value: 20n });
+    const sellable = await product(tenantA, 'ACTIVE');
+    await tap(`p:${sellable.id}`);
+    const orderId = String((await orders())[0]?.['id']);
+    await tap(`Z:${orderId}`);
+
+    await tap(`dc:${orderId}`);
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.discount.ask']);
+    expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual([`ib:${orderId}`, 'iz:']);
+    expect(buttonsOf(lastMessage()).map((b) => b.text)).toEqual([
+      CATALOGUE_FA['bot.order.input_back_button'],
+      CATALOGUE_FA['bot.order.input_cancel_button'],
+    ]);
+
+    // Back: the pre-invoice again, unchanged, and the window is closed.
+    await tap(`ib:${orderId}`);
+    expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual([
+      `w:${orderId}`,
+      `pm:${orderId}`,
+      `dc:${orderId}`,
+      'mm:',
+    ]);
+    await command('SPRING');
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect((await orders())[0]?.['total_amount']).toBe(250_000n);
+
+    // Cancel: the main menu, window closed, order left alone.
+    await tap(`dc:${orderId}`);
+    await tap('iz:');
+    expect(String(lastMessage()?.body['text'])).toContain('خوش برگشتی');
+    await command('SPRING');
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect((await orders())[0]?.['state']).toBe('DRAFT');
+    expect((await orders())[0]?.['total_amount']).toBe(250_000n);
+  });
+
   it('closes a code window whose draft was confirmed from the summary still on screen', async () => {
     await discount({ kind: 'CODE', code: 'SPRING', value: 20n });
     const sellable = await product(tenantA, 'ACTIVE');
@@ -1014,7 +1051,8 @@ describe('the customer purchase flow over Telegram', () => {
     expect(String(lastMessage()?.body['text'])).toBe(
       CATALOGUE_FA['bot.order.not_awaiting_payment'],
     );
-    expect(buttonsOf(lastMessage())).toHaveLength(0);
+    // R12 F3 item 3: the refusal is not a dead end — «🛒 خرید سرویس» and the main menu.
+    expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual(['co:', 'mm:']);
   });
 
   it('lets a double tap of Confirm produce ONE transition and ONE event', async () => {
