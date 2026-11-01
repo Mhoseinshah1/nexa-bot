@@ -2080,6 +2080,20 @@
       "when": 1793513383512,
       "tag": "0296_sai_handoff_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 297,
+      "version": "7",
+      "when": 1793524352430,
+      "tag": "0297_sai_test_console_operation",
+      "breakpoints": true
+    },
+    {
+      "idx": 298,
+      "version": "7",
+      "when": 1793532590853,
+      "tag": "0298_sai_last_tested_model",
+      "breakpoints": true
     }
   ]
 }

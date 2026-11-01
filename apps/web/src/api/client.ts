@@ -573,6 +573,17 @@ import {
   // TB2: Telegram Business conversations.
   BUSINESS_CHAT_ROUTES,
   businessChatControlResponseSchema,
+  businessChatResumeAllResponseSchema,
+  supportReadinessResponseSchema,
+  supportTestConsoleResponseSchema,
+  supportHandoffQuestionsResponseSchema,
+  supportKnowledgeGapsResponseSchema,
+  type BusinessChatResumeAllResponse,
+  type SupportReadinessResponse,
+  type SupportTestConsoleResponse,
+  type SupportHandoffQuestionsResponse,
+  type SupportKnowledgeGapsResponse,
+  type BusinessHandoffReason,
   businessChatDetailResponseSchema,
   businessChatListResponseSchema,
   businessChatSendResponseSchema,
@@ -585,6 +596,7 @@ import {
   type BusinessConversationState,
   // TB4/TB5: the support AI's configuration and Assist drafts.
   SUPPORT_AI_ASSIST_ROUTES,
+  SUPPORT_AI_CONSOLE_ROUTES,
   SUPPORT_AI_ROUTES,
   SUPPORT_ANALYTICS_ROUTES,
   supportAiConfigResponseSchema,
@@ -4571,6 +4583,20 @@ export function resumeBusinessChat(input: {
   );
 }
 
+/**
+ * Phase 4 PR-5: «بازگرداندن همه به هوش مصنوعی» — each goes through the single `resume`.
+ */
+export function resumeAllBusinessChats(input: {
+  readonly idempotencyKey: string;
+  readonly includeHard: boolean;
+}): Promise<BusinessChatResumeAllResponse> {
+  return post(
+    BUSINESS_CHAT_ROUTES.resumeAll,
+    { idempotencyKey: input.idempotencyKey, includeHard: input.includeHard },
+    businessChatResumeAllResponseSchema,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // TB4/TB5 — the support AI: configuration, keys, usage and Assist drafts (ADR-0034)
 // ---------------------------------------------------------------------------
@@ -4671,6 +4697,45 @@ export function testSupportAiProvider(input: {
     { model: input.model, idempotencyKey: input.idempotencyKey },
     supportAiTestResponseSchema,
   );
+}
+
+/** Phase 4 PR-5: the readiness card. `support_ai.configure`, read-only. */
+export function fetchSupportReadiness(): Promise<SupportReadinessResponse> {
+  return authedGet(SUPPORT_AI_CONSOLE_ROUTES.readiness, supportReadinessResponseSchema);
+}
+
+/**
+ * Phase 4 PR-5: «امتحان یک سؤال» — the real config, the real guards; nothing is sent.
+ */
+export function runSupportTestConsole(input: {
+  readonly idempotencyKey: string;
+  readonly question: string;
+  readonly customerId: string | null;
+}): Promise<SupportTestConsoleResponse> {
+  return post(
+    SUPPORT_AI_CONSOLE_ROUTES.testConsole,
+    {
+      idempotencyKey: input.idempotencyKey,
+      question: input.question,
+      customerId: input.customerId,
+    },
+    supportTestConsoleResponseSchema,
+  );
+}
+
+/** Phase 4 PR-5: the customers' questions behind one handoff reason. */
+export function fetchSupportHandoffQuestions(
+  reason: BusinessHandoffReason,
+): Promise<SupportHandoffQuestionsResponse> {
+  return authedGet(
+    paged(SUPPORT_AI_CONSOLE_ROUTES.handoffQuestions, { reason }),
+    supportHandoffQuestionsResponseSchema,
+  );
+}
+
+/** Phase 4 PR-5: clustered questions the AI could not answer from approved content. */
+export function fetchSupportKnowledgeGaps(): Promise<SupportKnowledgeGapsResponse> {
+  return authedGet(SUPPORT_AI_CONSOLE_ROUTES.knowledgeGaps, supportKnowledgeGapsResponseSchema);
 }
 
 /** Thirty days of telemetry, summarised. Never a prompt, never a response. */

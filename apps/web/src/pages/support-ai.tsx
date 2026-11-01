@@ -44,6 +44,7 @@ import {
   Card,
   ConfirmDialog,
   DataTable,
+  Disclosure,
   Empty,
   Field,
   KV,
@@ -58,6 +59,7 @@ import {
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import {
+  FAILURE_CLASS_ACTIONS,
   FAILURE_CLASS_LABELS,
   TEST_CHECK_LABELS,
   TEST_RESULT_LABELS,
@@ -65,6 +67,9 @@ import {
   failureParticulars,
 } from './support-ai-failure';
 import { ErrorRef } from '../ui/technical-details';
+import { ReadinessCard } from './support-ai-readiness';
+import { SUPPORT_AI_KNOWN_MODELS, SUPPORT_AI_OTHER_MODEL } from './support-ai-models';
+import { TestConsoleCard } from './support-ai-console';
 
 /**
  * TB4 — the support AI's settings (ADR-0034 §8): the mode, the provider chain, the bounds,
@@ -91,6 +96,16 @@ const MODE_EXPLAINED: Readonly<Record<SupportAiMode, WebKey>> = {
   OFF: 'web.sai_mode_off_hint',
   ASSIST_ONLY: 'web.sai_mode_assist_only_hint',
   AUTO_REPLY_SAFE: 'web.sai_mode_auto_reply_safe_hint',
+};
+
+/**
+ * Phase 4 PR-5: what choosing a mode MEANS - who answers the customer, what is spent, and what
+ * the AI can never do - drawn under each radio so the owner reads it before choosing.
+ */
+const MODE_CONSEQUENCES: Readonly<Record<SupportAiMode, WebKey>> = {
+  OFF: 'web.sai_mode_off_consequence',
+  ASSIST_ONLY: 'web.sai_mode_assist_only_consequence',
+  AUTO_REPLY_SAFE: 'web.sai_mode_auto_reply_safe_consequence',
 };
 
 const MODE_TONES: Readonly<Record<SupportAiMode, Tone>> = {
@@ -131,6 +146,7 @@ export const OPERATION_LABELS: Readonly<Record<SupportAiOperation, WebKey>> = {
   AUTO_DECISION: 'web.sai_operation_auto_decision',
   SUMMARY: 'web.sai_operation_summary',
   LEARNING_EXTRACT: 'web.sai_operation_learning_extract',
+  TEST_CONSOLE: 'web.sai_operation_test_console',
 };
 
 type Region = 'INTERNATIONAL' | 'CHINA';
@@ -162,6 +178,9 @@ const FAULTS: Readonly<Record<string, WebKey>> = {
   'platform.idempotency_payload_mismatch': 'web.sai_fault_retry',
   'support_ai.test_too_soon': 'web.sai_fault_test_too_soon',
   'support_ai.auto_topics_required': 'web.sai_fault_auto_topics_required',
+  'support_ai.test_console_off': 'web.sai_fault_test_console_off',
+  'support_ai.test_console_replay': 'web.sai_fault_test_console_replay',
+  'users.not_found': 'web.sai_fault_customer_not_found',
 };
 
 /**
@@ -191,9 +210,12 @@ function Dash() {
 export function SupportAiPage({
   denied,
   mayAutoReply,
+  maySearchCustomers = false,
 }: {
   denied: boolean;
   mayAutoReply: boolean;
+  /** `users.view` and `users.search`: the test console may pick a real customer. */
+  maySearchCustomers?: boolean;
 }) {
   const config = useQuery({
     queryKey: ['support-ai-config'],
@@ -224,8 +246,10 @@ export function SupportAiPage({
                 <p>{t('web.sai_chain_unavailable_hint')}</p>
               </Banner>
             )}
+            <ReadinessCard config={data} />
             <ConfigCard response={data} mayAutoReply={mayAutoReply} />
             <CredentialsCard response={data} />
+            <TestConsoleCard mode={data.config.mode} maySearchCustomers={maySearchCustomers} />
             <UsageCard />
           </div>
         )}
@@ -323,12 +347,14 @@ const NUMERIC_FIELDS: readonly {
   {
     field: 'timeoutMs',
     label: 'web.sai_timeout_ms',
+    help: 'web.sai_timeout_ms_hint',
     min: SUPPORT_AI_LIMITS.timeoutMs.min,
     max: SUPPORT_AI_LIMITS.timeoutMs.max,
   },
   {
     field: 'maxOutputChars',
     label: 'web.sai_max_output_chars',
+    help: 'web.sai_max_output_chars_hint',
     min: SUPPORT_AI_LIMITS.maxOutputChars.min,
     max: SUPPORT_AI_LIMITS.maxOutputChars.max,
   },
@@ -356,12 +382,14 @@ const NUMERIC_FIELDS: readonly {
   {
     field: 'cooldownSeconds',
     label: 'web.sai_cooldown_seconds',
+    help: 'web.sai_cooldown_seconds_hint',
     min: SUPPORT_AI_LIMITS.cooldownSeconds.min,
     max: SUPPORT_AI_LIMITS.cooldownSeconds.max,
   },
   {
     field: 'settleDelaySeconds',
     label: 'web.sai_settle_delay_seconds',
+    help: 'web.sai_settle_delay_seconds_hint',
     min: SUPPORT_AI_SETTLE_DELAY_MIN_SECONDS,
     max: SUPPORT_AI_SETTLE_DELAY_MAX_SECONDS,
   },
@@ -583,6 +611,9 @@ function ConfigCard({
                 />{' '}
                 <strong>{t(SUPPORT_AI_MODE_LABELS[mode])}</strong>
                 <span className="muted small"> — {t(MODE_EXPLAINED[mode])}</span>
+                <span className="muted small sai-mode-consequence">
+                  {t(MODE_CONSEQUENCES[mode])}
+                </span>
               </label>
             ))}
           </div>
@@ -712,25 +743,28 @@ function ConfigCard({
           </Banner>
         )}
 
-        <div className="grid-2">
-          {NUMERIC_FIELDS.map(({ field, label, help, min, max }) => (
-            <Field
-              key={field}
-              label={t(label)}
-              htmlFor={`sai-${field}`}
-              hint={`${help === undefined ? '' : `${t(help)} `}${t('web.sai_range')} ${min} – ${max}`}
-            >
-              <input
-                id={`sai-${field}`}
-                className="input"
-                dir="ltr"
-                inputMode="numeric"
-                value={draft[field]}
-                onChange={(event) => set(field, event.target.value)}
-              />
-            </Field>
-          ))}
-        </div>
+        <Disclosure summary={t('web.sai_advanced')} variant="boxed">
+          <p className="muted small">{t('web.sai_advanced_hint')}</p>
+          <div className="grid-2">
+            {NUMERIC_FIELDS.map(({ field, label, help, min, max }) => (
+              <Field
+                key={field}
+                label={t(label)}
+                htmlFor={`sai-${field}`}
+                hint={`${help === undefined ? '' : `${t(help)} `}${t('web.sai_range')} ${min} – ${max}`}
+              >
+                <input
+                  id={`sai-${field}`}
+                  className="input"
+                  dir="ltr"
+                  inputMode="numeric"
+                  value={draft[field]}
+                  onChange={(event) => set(field, event.target.value)}
+                />
+              </Field>
+            ))}
+          </div>
+        </Disclosure>
 
         <Field label={t('web.sai_tone')} htmlFor="sai-tone" hint={t('web.sai_tone_hint')}>
           <textarea
@@ -816,16 +850,7 @@ function StepFields({
       </Field>
       <Field label={`${label} — ${t('web.sai_model')}`} htmlFor={`${id}-model`}>
         <div className="row">
-          <input
-            id={`${id}-model`}
-            className="input"
-            dir="ltr"
-            autoComplete="off"
-            maxLength={SUPPORT_AI_LIMITS.modelIdChars}
-            disabled={step.provider === ''}
-            value={step.model}
-            onChange={(event) => onChange({ ...step, model: event.target.value })}
-          />
+          <ModelPicker id={id} step={step} onChange={onChange} />
           {onRemove !== undefined && (
             <button
               type="button"
@@ -838,6 +863,66 @@ function StepFields({
           )}
         </div>
       </Field>
+    </div>
+  );
+}
+
+/**
+ * Phase 4 PR-5: the known models of the chosen provider as a dropdown, plus «سایر» which reveals
+ * the free-text id (a model released after this list, or a private deployment). A stored model
+ * that is not in the list opens as «سایر» with its id, so nothing saved is ever hidden or lost.
+ */
+function ModelPicker({
+  id,
+  step,
+  onChange,
+}: {
+  id: string;
+  step: StepDraft;
+  onChange: (next: StepDraft) => void;
+}) {
+  const known = step.provider === '' ? [] : SUPPORT_AI_KNOWN_MODELS[step.provider];
+  const [other, setOther] = useState(step.model !== '' && !known.includes(step.model));
+  const isOther = other || (step.model !== '' && !known.includes(step.model));
+  const selected = isOther ? SUPPORT_AI_OTHER_MODEL : step.model;
+  return (
+    <div className="stack-sm sai-model">
+      <select
+        id={`${id}-model`}
+        className="input"
+        dir="ltr"
+        disabled={step.provider === ''}
+        value={selected}
+        onChange={(event) => {
+          if (event.target.value === SUPPORT_AI_OTHER_MODEL) {
+            setOther(true);
+            return;
+          }
+          setOther(false);
+          onChange({ ...step, model: event.target.value });
+        }}
+      >
+        <option value="">{t('web.sai_model_choose')}</option>
+        {known.map((model) => (
+          <option key={model} value={model}>
+            {model}
+          </option>
+        ))}
+        <option value={SUPPORT_AI_OTHER_MODEL}>{t('web.sai_model_other')}</option>
+      </select>
+      {isOther && (
+        <input
+          id={`${id}-model-other`}
+          className="input"
+          dir="ltr"
+          autoComplete="off"
+          aria-label={t('web.sai_model_other_id')}
+          placeholder={t('web.sai_model_other_id')}
+          maxLength={SUPPORT_AI_LIMITS.modelIdChars}
+          value={step.model}
+          onChange={(event) => onChange({ ...step, model: event.target.value })}
+        />
+      )}
     </div>
   );
 }
@@ -885,6 +970,12 @@ function TestResult({ result }: { result: SupportAiTestResponse }) {
           <> — {t(FAILURE_CLASS_LABELS[result.failureClass])}</>
         )} — <Num value={result.latencyMs} /> {t('web.sai_ms')}
       </p>
+      {result.failureClass !== null && (
+        <p className="small">
+          <strong>{t('web.sai_failure_what_to_do')}:</strong>{' '}
+          {t(FAILURE_CLASS_ACTIONS[result.failureClass])}
+        </p>
+      )}
       <ul className="stack-sm" aria-label={t('web.sai_test_check')}>
         {result.checks.map((check) => (
           <li key={check.check} data-check={check.check} data-result={check.result}>
@@ -893,7 +984,11 @@ function TestResult({ result }: { result: SupportAiTestResponse }) {
               {t(TEST_RESULT_LABELS[check.result])}
             </Badge>
             {check.failureClass !== null && check.result === 'FAIL' && (
-              <> {t(FAILURE_CLASS_LABELS[check.failureClass])}</>
+              <>
+                {' '}
+                {t(FAILURE_CLASS_LABELS[check.failureClass])} —{' '}
+                {t(FAILURE_CLASS_ACTIONS[check.failureClass])}
+              </>
             )}
             {check.result === 'FAIL' && failureParticulars(check).length > 0 && (
               <KV inline items={failureParticulars(check)} />

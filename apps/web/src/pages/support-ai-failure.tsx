@@ -35,6 +35,28 @@ export const FAILURE_CLASS_LABELS: Readonly<Record<SupportAiFailureClass, WebKey
   no_provider: 'web.sai_failure_no_provider',
 };
 
+/**
+ * Phase 4 PR-5: ONE line per technical code saying what the owner does about it. The class says
+ * what happened; this says what to do - in the order of how often the fix is theirs to make.
+ */
+export const FAILURE_CLASS_ACTIONS: Readonly<Record<SupportAiFailureClass, WebKey>> = {
+  request_rejected: 'web.sai_failure_action_request_rejected',
+  unsupported_capability: 'web.sai_failure_action_unsupported_capability',
+  auth: 'web.sai_failure_action_auth',
+  quota: 'web.sai_failure_action_quota',
+  rate_limited: 'web.sai_failure_action_rate_limited',
+  timeout: 'web.sai_failure_action_timeout',
+  network: 'web.sai_failure_action_network',
+  provider_error: 'web.sai_failure_action_provider_error',
+  refused: 'web.sai_failure_action_refused',
+  no_content: 'web.sai_failure_action_no_content',
+  truncated: 'web.sai_failure_action_truncated',
+  not_json: 'web.sai_failure_action_not_json',
+  schema_invalid: 'web.sai_failure_action_schema_invalid',
+  reply_too_long: 'web.sai_failure_action_reply_too_long',
+  no_provider: 'web.sai_failure_action_no_provider',
+};
+
 export const TEST_CHECK_LABELS: Readonly<Record<SupportAiTestCheck, WebKey>> = {
   MODEL_ACCESS: 'web.sai_test_check_model_access',
   STRUCTURED_GENERATION: 'web.sai_test_check_structured_generation',
@@ -113,6 +135,10 @@ export function FailureDiagnosticView({ failure }: { failure: SupportAiFailureDi
       <p className="small">
         <strong>{t('web.sai_failure_reason')}:</strong>{' '}
         {t(FAILURE_CLASS_LABELS[failure.failureClass])}
+      </p>
+      <p className="small" data-failure-action={failure.failureClass}>
+        <strong>{t('web.sai_failure_what_to_do')}:</strong>{' '}
+        {t(FAILURE_CLASS_ACTIONS[failure.failureClass])}
       </p>
       {items.length > 0 && <KV inline items={items} />}
     </div>

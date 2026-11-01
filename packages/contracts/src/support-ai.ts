@@ -250,6 +250,8 @@ export const SUPPORT_AI_OPERATIONS = [
   'AUTO_DECISION',
   'SUMMARY',
   'LEARNING_EXTRACT',
+  /** Phase 4 PR-5: the Web Admin's test console — a paid call that sends nothing to anyone. */
+  'TEST_CONSOLE',
 ] as const;
 export type SupportAiOperation = (typeof SUPPORT_AI_OPERATIONS)[number];
 

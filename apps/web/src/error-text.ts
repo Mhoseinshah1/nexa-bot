@@ -642,6 +642,9 @@ export const API_LOCAL_ERROR_TEXT = {
   'support_ai.region_not_applicable': 'web.sai_fault_region',
   'support_ai.test_too_soon': 'web.sai_fault_test_too_soon',
   'support_ai.auto_topics_required': 'web.sai_fault_auto_topics_required',
+  'support_ai.test_console_off': 'web.sai_fault_test_console_off',
+  'support_ai.test_console_replay': 'web.sai_fault_test_console_replay',
+  'users.not_found': 'web.sai_fault_customer_not_found',
   'support_ai.unknown_provider': 'web.sai_fault_unknown_provider',
   'support_ai.version_conflict': 'web.sai_fault_conflict',
 } as const satisfies Readonly<Record<string, WebKey>>;

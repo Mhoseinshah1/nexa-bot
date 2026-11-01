@@ -54,6 +54,11 @@ import { ErrorRef } from '../ui/technical-details';
 
 /** How often the drafts are read again while one is still QUEUED. */
 export const ASSIST_POLL_MS = 3_000;
+/**
+ * Phase 4 PR-5: ASSIST_ONLY prepares a draft for every customer message by itself, so an open
+ * conversation looks for a new one at this pace even when nothing is waiting.
+ */
+export const ASSIST_DISCOVER_MS = 10_000;
 
 /**
  * How long the screen waits on a QUEUED draft: the server's unclaimed bound plus two polls'
@@ -176,6 +181,7 @@ export function AssistCard({
     refetchInterval: pollUnlessFinalWhile<{ drafts: SupportAiDraftView[] }>(
       ASSIST_POLL_MS,
       (data) => data.drafts.some((draft) => awaitingDraft(draft)),
+      ASSIST_DISCOVER_MS,
     ),
   });
   const request = useMutation({

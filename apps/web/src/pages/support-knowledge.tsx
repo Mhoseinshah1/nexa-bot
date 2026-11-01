@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import type { Route } from '../router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ListFilterBar } from '../ui/filter-bar';
 import {
@@ -260,9 +261,16 @@ const PERSIAN_COMMA_SPACE = '\u060C ';
 export function SupportKnowledgePage({
   denied,
   mayReview,
+  route,
 }: {
   denied: boolean;
   mayReview: boolean;
+  /**
+   * Phase 4 PR-5: «ساخت مقاله از این» (the knowledge-gaps report) arrives as `?new=1&title=…`,
+   * which opens the create form with that TITLE and nothing else - the customers' own words
+   * never travel in an address. Nothing is saved until the reviewer saves.
+   */
+  route?: Route;
 }) {
   const queries = useQueryClient();
   const notify = useToast();
@@ -281,8 +289,16 @@ export function SupportKnowledgePage({
   const rows = articles.data ?? [];
   // W1.8: the server sends the whole list; it is drawn ten at a time.
   const paging = usePagedRows(rows, `${source}|${state}`);
-  const [editor, setEditor] = useState<Editor>({ kind: 'closed' });
-  const [form, setForm] = useState<ContentForm>(EMPTY_CONTENT);
+  const prefill = !denied && mayReview && route?.query.get('new') === '1';
+  const [editor, setEditor] = useState<Editor>(prefill ? { kind: 'create' } : { kind: 'closed' });
+  const [form, setForm] = useState<ContentForm>(
+    prefill
+      ? {
+          ...EMPTY_CONTENT,
+          title: (route?.query.get('title') ?? '').slice(0, SUPPORT_KNOWLEDGE_LIMITS.titleChars),
+        }
+      : EMPTY_CONTENT,
+  );
   const [publishNow, setPublishNow] = useState(true);
   const [history, setHistory] = useState<SupportKnowledgeArticleView | null>(null);
 

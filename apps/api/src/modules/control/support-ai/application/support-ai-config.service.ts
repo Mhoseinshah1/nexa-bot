@@ -119,6 +119,10 @@ export const SUPPORT_AI_ERROR_CODES = {
   TEST_TOO_SOON: 'support_ai.test_too_soon',
   /** Phase 4 PR-1: automatic replies with no topic would answer nothing — refused, not saved. */
   AUTO_TOPICS_REQUIRED: 'support_ai.auto_topics_required',
+  /** Phase 4 PR-5: the test console runs only while the AI is on (assist or automatic). */
+  TEST_CONSOLE_OFF: 'support_ai.test_console_off',
+  /** Phase 4 PR-5: the same console key twice (a double click) is not run twice. */
+  TEST_CONSOLE_REPLAY: 'support_ai.test_console_replay',
 } as const;
 
 /**
@@ -664,7 +668,7 @@ export class SupportAiConfigService {
     const failed = checks.find((check) => check.result === 'FAIL') ?? null;
     const outcome = failed?.outcome ?? 'OK';
     const failureClass = failed?.failureClass ?? null;
-    await this.deps.credentials.recordTest(scope, provider, outcome, now, failureClass);
+    await this.deps.credentials.recordTest(scope, provider, outcome, now, failureClass, model);
     const keySetAt = credential.keySetAt;
     // The key's alert reads what the PROVIDER said: any answer proves the key; a rejection
     // raises the alert.
