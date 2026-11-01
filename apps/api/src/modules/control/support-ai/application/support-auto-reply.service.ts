@@ -1629,7 +1629,16 @@ export class SupportAutoReplyService {
     const ok = await this.deps.jobs.finishAuto(
       scope,
       job.id,
-      { state: 'SENT', outcome, sentOutboundId: queued.row.id, toolAction, now },
+      {
+        state: 'SENT',
+        outcome,
+        sentOutboundId: queued.row.id,
+        toolAction,
+        // A sent job carries the decision behind it (`support_ai_jobs_result_shape_check`):
+        // here NEXA's own, deterministic one — the text it sent, never a model's.
+        decision: serverDecision(outcome, message.text),
+        now,
+      },
       tx,
     );
     if (!ok) throw new JobGone();
@@ -2157,6 +2166,56 @@ const DEEP_LINK_LABELS: Readonly<Record<SupportAiActionKind, string>> = {
   ROTATE_LINK: SUPPORT_AI_TEMPLATE_KEYS.buttonRotate,
   WALLET_TOPUP: SUPPORT_AI_TEMPLATE_KEYS.buttonTopup,
 };
+
+/**
+ * Phase 4 PR-3 — the decision recorded for a message NEXA composed without a model (the
+ * unsupported-content reply, check-before-handoff's question or delivered link): what was sent,
+ * its topic, and an operator note. Deterministic; it is NEXA\'s own record, never a model\'s.
+ */
+const SERVER_DECISION_NOTES: Readonly<
+  Record<
+    'sent_unsupported_content' | 'sent_payment_ask' | 'sent_payment_delivered',
+    {
+      readonly topic: SupportAiDecision['topic'];
+      readonly summary: string;
+      readonly intent: string;
+    }
+  >
+> = {
+  sent_unsupported_content: {
+    topic: 'OTHER',
+    summary: 'پیام صوتی، استیکر یا فایل؛ از مشتری خواسته شد سؤال را بنویسد.',
+    intent: 'پیام غیرمتنی',
+  },
+  sent_payment_ask: {
+    topic: 'PAYMENT_STATUS',
+    summary: 'پرداختی پیدا نشد؛ رسید، کد پیگیری یا مبلغ و زمان پرداخت خواسته شد.',
+    intent: 'پرداخت کردم ولی نرسید',
+  },
+  sent_payment_delivered: {
+    topic: 'PAYMENT_STATUS',
+    summary: 'پرداخت تأیید و سرویس تحویل شده بود؛ لینک همان سرویس فرستاده شد.',
+    intent: 'پرداخت کردم ولی نرسید',
+  },
+};
+
+function serverDecision(
+  outcome: keyof typeof SERVER_DECISION_NOTES,
+  text: string,
+): SupportAiDecision {
+  const note = SERVER_DECISION_NOTES[outcome];
+  return {
+    decision: 'REPLY',
+    replyText: text.slice(0, 4000),
+    topic: note.topic,
+    confidence: 'HIGH',
+    factRefs: [],
+    knowledgeRefs: [],
+    ticketAction: 'NONE',
+    summary: note.summary,
+    intent: note.intent,
+  };
+}
 
 /** The bot's username from its start link (`botLinkOf`), or null. */
 function botUsernameOf(botLink: string | null): string | null {
