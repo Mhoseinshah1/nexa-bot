@@ -1284,6 +1284,12 @@ export const SUPPORT_AI_CONFIG_VALID_CODE = 'support.ai_provider.config_valid';
 export const SUPPORT_AI_HANDOFF_RATE_HIGH_CODE = 'support.ai.handoff_rate_high';
 export const SUPPORT_AI_HANDOFF_RATE_WINDOW = 50;
 export const SUPPORT_AI_HANDOFF_RATE_ALERT_HOURS = 6;
+/**
+ * Phase 4 PR-1 — the provider chain is walked at most this many times for one automatic job:
+ * the answer, and ONE regeneration after the output validator refused it or it repeated
+ * earlier advice. The assistant's lease and liveness bounds are derived from it.
+ */
+export const SUPPORT_AI_GENERATIONS_PER_JOB = 2;
 /** One automatic job threw while it was produced: its lease was released for one retry. */
 export const SUPPORT_AI_JOB_EXCEPTION_CODE = 'support.ai.job_exception';
 /** A thrown job is retried this long after the throw, once. */

@@ -620,6 +620,12 @@ const conversationSummarySchema = z.object({
   handoffReason: z.enum(BUSINESS_HANDOFF_WIRE_REASONS).nullable(),
   /** The real reason (`businessHandoffWireReason`); see `businessHandoffReasonDetailSchema`. */
   handoffReasonDetail: businessHandoffReasonDetailSchema,
+  /**
+   * Phase 4 PR-1: how the current person's hold ends (`BUSINESS_HANDOFF_KINDS`); null on
+   * AI_ACTIVE and on holds from before the kind. Optional when read (an older replica does not
+   * send it) and an unknown value reads as absent.
+   */
+  handoffKind: z.enum(BUSINESS_HANDOFF_KINDS).nullish().catch(undefined),
   peerTelegramUserId: z.string(),
   customer: z
     .object({ id: z.string(), username: z.string().nullable(), firstName: z.string().nullable() })

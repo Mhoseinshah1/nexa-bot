@@ -812,6 +812,21 @@ describe('automatic-reply money guard (D9, narrowed by Phase 4 PR-1)', () => {
     expect(autoMoneyGuard(moneyGuardWindow(near, 'وصل نمیشه')).pass).toBe(false);
   });
 
+  it('review of PR #365: the window stops at the business’s last reply', () => {
+    const handled = [
+      { origin: 'INBOUND' as const, text: 'پولمو پس بدید' },
+      { origin: 'HUMAN' as const, text: 'بازگشت داده شد' },
+      { origin: 'INBOUND' as const, text: 'وصل نمیشه' },
+    ];
+    expect(moneyGuardWindow(handled, 'وصل نمیشه')).toEqual(['وصل نمیشه', 'وصل نمیشه']);
+    expect(autoMoneyGuard(moneyGuardWindow(handled, 'وصل نمیشه')).pass).toBe(true);
+    // Our own reply (an echo) ends it too; an away message does not.
+    const echoed = [handled[0]!, { origin: 'OWN_ECHO' as const, text: 'x' }, handled[2]!];
+    expect(autoMoneyGuard(moneyGuardWindow(echoed, 'وصل نمیشه')).pass).toBe(true);
+    const away = [handled[0]!, { origin: 'OFFLINE' as const, text: 'x' }, handled[2]!];
+    expect(autoMoneyGuard(moneyGuardWindow(away, 'وصل نمیشه')).pass).toBe(false);
+  });
+
   it('folds Arabic letters, joiners and diacritics', () => {
     // B2: a ZWNJ is a word boundary inside a compound, so it folds to a space.
     expect(foldCustomerText(`كيف${ZWNJ}پولِ`)).toBe('کیف پول');

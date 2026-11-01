@@ -123,6 +123,8 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
   let contextQuery: string | null | undefined;
   let contextConversation: string | undefined;
   let duringCall: (() => Promise<void>) | null;
+  /** Phase 4 PR-1: the stub context's unreconciled service aliases. */
+  let unreconciledAliases = new Set<string>();
   let flags: AutoContextFlags;
   /** The knowledge aliases (`K…`) the scripted context carries, as the real source builds them. */
   let knowledgeAliases: Map<string, string>;
@@ -312,6 +314,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
     calls = 0;
     requests = [];
     duringCall = null;
+    unreconciledAliases = new Set<string>();
     visionStep = true;
     modelSees = true;
     visionCalls = [];
@@ -382,6 +385,7 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
             knowledgeAliases,
             linked: flags.identityLinked,
             flags,
+            unreconciledAliases,
             knowledge: { sent: 3, available: 4 },
           };
         },
@@ -3628,6 +3632,17 @@ describe('AUTO_REPLY_SAFE, handoff and tickets (TB7)', () => {
         handoff_reason: 'CUSTOMER_BLOCKED',
       });
       expect(await conversation(id)).toMatchObject({ state: 'HANDOFF_REQUIRED' });
+    });
+
+    it('review of PR #365: a silent close citing an unreconciled service hands off', async () => {
+      const id = await thankAfterAnswer();
+      // The cited service S1 is unreconciled; no recent unreconciled service flags the account.
+      unreconciledAliases = new Set(['S1']);
+      await turn('مرسی، حل شد', closing({ topic: 'SERVICE_INFO', factRefs: ['S1'] }));
+      expect((await autoJobs(id)).at(-1)).toMatchObject({
+        outcome: 'guard_account_review',
+        handoff_reason: 'ACCOUNT_UNDER_REVIEW',
+      });
     });
 
     it('CX2: a payment put under review during the provider call hands off', async () => {
