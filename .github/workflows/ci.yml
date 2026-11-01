@@ -132,6 +132,11 @@ jobs:
       - name: Falsification citations
         run: pnpm check:citations
 
+      # The READMEs' botctl commands and install one-liner must match
+      # `botctl --help` and docs/deployment.md.
+      - name: README commands
+        run: pnpm check:readme
+
   # Built ONCE. Every job that needs compiled output — the unit suite runs the
   # built CLIs, the integration shards migrate with the compiled migrator —
   # downloads this artifact rather than building again, so every test job runs
