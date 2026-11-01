@@ -175,6 +175,13 @@ async function main(): Promise<void> {
         ['business-outbound', true, () => container.businessOutboundLoop.isFresh(at)],
         // D5: and the watch that raises a stalled assistant role.
         ['support-assistant-watch', true, () => container.supportAssistantWatchLoop.isFresh(at)],
+        // Phase 4 PR-2: the knowledge refresh. No flag on the loop: with the setting off a pass
+        // reads one setting and does nothing, and still progresses.
+        [
+          'support-knowledge-refresh',
+          true,
+          () => container.supportKnowledgeRefreshLoop.isFresh(at),
+        ],
         // Round N: the broadcast lane. No flag: a confirmed broadcast nobody sends is a
         // report that says "sending" for ever, and silence is what a stalled lane looks like.
         ['broadcasts', true, () => container.broadcastLoop.isFresh(at)],
@@ -310,6 +317,9 @@ async function main(): Promise<void> {
   // D5: and the watch over the `assistant` role, which no other signal covers: due AI work left
   // unclaimed raises `support.assistant.stalled`, and the assistant closes it once it runs.
   container.supportAssistantWatchLoop.start();
+  // Phase 4 PR-2: and the automatic knowledge refresh (debounced 2 min + nightly), off until the
+  // owner turns `support.knowledge.auto_refresh` on; it never messages a customer.
+  container.supportKnowledgeRefreshLoop.start();
   // Round N: and the broadcast lane — frozen recipients, paced per bot, at most once.
   container.broadcastLoop.start();
   container.incidentSchedulerLoop.start();

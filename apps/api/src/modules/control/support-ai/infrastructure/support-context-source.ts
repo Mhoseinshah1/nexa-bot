@@ -17,6 +17,7 @@ import {
   type PriorDecisionFact,
 } from '../domain/knowledge-query.js';
 import type { SupportTranscriptLine } from '../domain/transcript.js';
+import { livePriceFamily } from '../domain/price-family.js';
 
 /** A8: the conversation's latest decided jobs, newest first (`priorDecisions`). */
 export interface PriorDecisionReader {
@@ -59,6 +60,8 @@ export class TbSupportContextSource implements SupportContextSource {
     for (const payment of payload.payments) {
       aliases.set(payment.alias, paymentLabel(payment));
     }
+    // Phase 4 PR-2: a catalogue plan is a fact a price reply cites (`C1`), labelled by title.
+    for (const plan of payload.catalogue) aliases.set(plan.alias, plan.title);
     // Knowledge is cited apart from the facts (`knowledgeRefs`), and labelled by its question.
     const knowledgeAliases = new Map<string, string>(
       payload.knowledge.map((entry) => [entry.alias, entry.question]),
@@ -74,6 +77,8 @@ export class TbSupportContextSource implements SupportContextSource {
       flags: payload.flags,
       // D2 telemetry: what the budget left of the selected knowledge, and the candidates.
       knowledge: { sent: payload.knowledge.length, available: knowledgeAvailable },
+      // Phase 4 PR-2: the amounts a reply may quote — what survived the byte budget, only.
+      priceFamily: livePriceFamily(payload),
     };
   }
 

@@ -1,5 +1,7 @@
 import {
   SUPPORT_AI_UNDER_REVIEW_WINDOW_DAYS,
+  SUPPORT_CONTEXT_FALLBACK_KNOWLEDGE,
+  SUPPORT_CONTEXT_KNOWLEDGE_ANSWER_CHARS,
   neutralizeClientAppBareLinks,
   normalizeClientAppUrl,
   renderClientAppGuide,
@@ -8,6 +10,9 @@ import {
   supportContextPayloadSchema,
   type Clock,
   type PaymentGatewayProvider,
+  type Money,
+  type SupportContextAddon,
+  type SupportContextCatalogueEntry,
   type SupportContextClientApp,
   type SupportContextKnowledge,
   type SupportContextPayload,
@@ -31,14 +36,23 @@ import type { ProvisionedServiceFacts } from '../../../control/client-apps/appli
 import type { SupportFaqRepository } from '../../../control/support/application/ports.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import {
+  DEFAULT_SUPPORT_PRESENTATION,
+  accountFacts,
   aliasFor,
+  type SupportFactFormatter,
+  type SupportPresentation,
   clip,
   clipGuide,
   fitPayload,
   moneyOf,
   remainingTrafficBytes,
 } from '../domain/support-context-payload.js';
-import { selectRelevantKnowledge, type KnowledgeQuery } from '../domain/knowledge-relevance.js';
+import {
+  selectRelevantKnowledge,
+  weightedQueryTerms,
+  type KnowledgeQuery,
+} from '../domain/knowledge-relevance.js';
+import type { SupportCatalogue, SupportCatalogueReader } from './support-catalogue.js';
 import type {
   SupportContextReader,
   SupportKnowledgeReader,
@@ -58,6 +72,17 @@ export interface SupportContextBuilderDeps {
   readonly knowledge: SupportKnowledgeReader;
   readonly settings: Pick<SettingsResolver, 'valueOf'>;
   readonly clock: Clock;
+  /** Phase 4 PR-2: the bot's own money, traffic and date formatters, behind the domain's port. */
+  readonly format: SupportFactFormatter;
+  /**
+   * Phase 4 PR-2: the live catalogue, priced at the checkout's boundary for this customer.
+   * Absent (a unit test's fake): the payload carries no catalogue and no renewal prices.
+   */
+  readonly catalogue?: Pick<SupportCatalogueReader, 'forCustomer'>;
+  /** Phase 4 PR-2: the tenant's zone and calendar, for `expiresOn`. Absent: Tehran, Jalali. */
+  readonly presentation?: {
+    presentationFor(scope: TenantContext): Promise<SupportPresentation>;
+  };
 }
 
 /**
@@ -139,6 +164,7 @@ export class SupportContextBuilder {
     const supportAccounts = accounts.slice(0, 10).map((handle) => clip(handle, 64));
 
     if (customer === null) {
+      const catalogue = await this.catalogueFor(scope, null, [], now);
       return this.finish(
         {
           generatedAt: now.toISOString(),
@@ -149,6 +175,7 @@ export class SupportContextBuilder {
           clientApps: clientAppsFor(appRows, [], selected.builtAppIds),
           incidents: [],
           knowledge,
+          ...catalogueEntries(catalogue, this.deps.format),
           supportAccounts,
           flags: {
             hasUnderReviewPayment: false,
@@ -181,7 +208,7 @@ export class SupportContextBuilder {
       // L4: over ALL of the customer's services, not the page shown — the recent ones only.
       this.deps.reader.anyUnreconciledService(scope, customer.id, reviewSince),
     ]);
-    const [cards, appFacts] = await Promise.all([
+    const [cards, appFacts, catalogue, presentation] = await Promise.all([
       services.length === 0
         ? Promise.resolve([] as readonly SupportServiceCardFact[])
         : this.deps.reader.serviceCardFacts(
@@ -193,10 +220,17 @@ export class SupportContextBuilder {
             })),
           ),
       this.deps.serviceFacts.factsOf(scope, services),
+      this.catalogueFor(scope, customer.id, services, now),
+      this.deps.presentation?.presentationFor(scope) ??
+        Promise.resolve(DEFAULT_SUPPORT_PRESENTATION),
     ]);
 
     const serviceEntries = services.map((service, index) =>
-      serviceEntry(service, cards[index] ?? null, index, now),
+      serviceEntry(service, cards[index] ?? null, index, now, {
+        presentation,
+        renewalPrice: catalogue.renewals.get(service.id) ?? null,
+        format: this.deps.format,
+      }),
     );
     const orderFacts = orders.slice(0, SUPPORT_CONTEXT_LIMITS.orders);
     const paymentFacts = payments.items.slice(0, SUPPORT_CONTEXT_LIMITS.payments);
@@ -205,8 +239,10 @@ export class SupportContextBuilder {
         generatedAt: now.toISOString(),
         customer: customerEntry(customer),
         services: serviceEntries,
-        orders: orderFacts.map(orderEntry),
-        payments: paymentFacts.map(paymentEntry),
+        orders: orderFacts.map((order, index) => orderEntry(order, index, this.deps.format)),
+        payments: paymentFacts.map((payment, index) =>
+          paymentEntry(payment, index, this.deps.format),
+        ),
         clientApps: clientAppsFor(appRows, appFacts, selected.builtAppIds),
         incidents: incidents.slice(0, SUPPORT_CONTEXT_LIMITS.incidents).map((incident) => ({
           customerMessage: clip(incident.customerMessage, 2000),
@@ -214,6 +250,7 @@ export class SupportContextBuilder {
           scheduledEndAt: incident.scheduledEndAt?.toISOString() ?? null,
         })),
         knowledge,
+        ...catalogueEntries(catalogue, this.deps.format),
         supportAccounts,
         flags: {
           hasUnderReviewPayment: payments.anyUnderReview,
@@ -230,6 +267,28 @@ export class SupportContextBuilder {
         payments: paymentFacts.map((payment) => payment.id),
       },
       selected.available,
+    );
+  }
+
+  /** Phase 4 PR-2: the live catalogue, or an empty one without a reader. */
+  private async catalogueFor(
+    scope: TenantContext,
+    customerId: string | null,
+    services: readonly ServiceRecord[],
+    now: Date,
+  ): Promise<SupportCatalogue> {
+    if (this.deps.catalogue === undefined) {
+      return { plans: [], addons: [], renewals: new Map() };
+    }
+    return this.deps.catalogue.forCustomer(
+      scope,
+      customerId,
+      services.map((service) => ({
+        id: service.id,
+        productId: service.productId,
+        source: service.source,
+      })),
+      now,
     );
   }
 
@@ -277,6 +336,9 @@ function survivingReferences(
 type KnowledgeArticleFact = Awaited<ReturnType<SupportKnowledgeReader['activeForContext']>>[number];
 
 /**
+ * Phase 4 PR-2: answers are clipped to `SUPPORT_CONTEXT_KNOWLEDGE_ANSWER_CHARS`; when nothing
+ * matches, `SUPPORT_CONTEXT_FALLBACK_KNOWLEDGE` general entries are sent.
+ *
  * D2 — the knowledge a request carries: every approved article and every live FAQ entry (an FAQ
  * entry the build brought into knowledge is read as that reviewed article, once — TB9), ranked
  * by relevance to `query`, the most relevant `SUPPORT_CONTEXT_LIMITS.knowledge` (8). A8: only
@@ -305,7 +367,7 @@ export function selectKnowledge(
       entry: {
         source: 'KNOWLEDGE',
         question: clip(row.title, 512),
-        answer: clip(row.body, 4096),
+        answer: clip(row.body, SUPPORT_CONTEXT_KNOWLEDGE_ANSWER_CHARS),
       } satisfies Omit<SupportContextKnowledge, 'alias'>,
       appId: row.sourceType === 'CLIENT_APP' ? row.sourceKey : null,
     })),
@@ -321,12 +383,25 @@ export function selectKnowledge(
         entry: {
           source: 'FAQ',
           question: clip(row.question, 512),
-          answer: clip(row.answer, 4096),
+          answer: clip(row.answer, SUPPORT_CONTEXT_KNOWLEDGE_ANSWER_CHARS),
         } satisfies Omit<SupportContextKnowledge, 'alias'>,
         appId: null,
       })),
   ];
-  const chosen = selectRelevantKnowledge(candidates, query, SUPPORT_CONTEXT_LIMITS.knowledge);
+  const matched = selectRelevantKnowledge(candidates, query, SUPPORT_CONTEXT_LIMITS.knowledge);
+  /*
+   * Phase 4 PR-2: when nothing scores above zero, the first few GENERAL entries (the reader's
+   * order: approved articles newest first, then the FAQ) go instead of none — a client-app
+   * article is about one app, never general. A query with no term at all (a greeting, a thanks:
+   * only stop words) still selects nothing.
+   */
+  const hasQuery = weightedQueryTerms(query).size > 0;
+  const chosen =
+    matched.length > 0 || !hasQuery
+      ? matched
+      : candidates
+          .filter((candidate) => candidate.appId === null)
+          .slice(0, SUPPORT_CONTEXT_FALLBACK_KNOWLEDGE);
   return {
     entries: chosen.map((candidate) => candidate.entry),
     builtAppIds: new Set(
@@ -358,6 +433,11 @@ function serviceEntry(
   card: SupportServiceCardFact | null,
   index: number,
   now: Date,
+  extra: {
+    readonly presentation: SupportPresentation;
+    readonly renewalPrice: Money | null;
+    readonly format: SupportFactFormatter;
+  },
 ): SupportContextService {
   return {
     alias: aliasFor('S', index),
@@ -383,6 +463,40 @@ function serviceEntry(
     deviceLimit: service.deviceLimit,
     hasSubscriptionLink: ProvisioningService.isDeliverable(service),
     unreconciled: service.state === 'UNRECONCILED',
+    ...accountFacts(service, now, extra.presentation, extra.format),
+    renewalPrice:
+      extra.renewalPrice === null
+        ? null
+        : moneyOf(extra.renewalPrice.amountMinor, extra.renewalPrice.currency, extra.format),
+  };
+}
+
+/** Phase 4 PR-2: the catalogue and packages as the payload carries them (C1.. by position). */
+function catalogueEntries(
+  catalogue: SupportCatalogue,
+  format: SupportFactFormatter,
+): {
+  readonly catalogue: SupportContextCatalogueEntry[];
+  readonly addons: SupportContextAddon[];
+} {
+  const priced = (value: Money) => moneyOf(value.amountMinor, value.currency, format);
+  return {
+    catalogue: catalogue.plans.slice(0, SUPPORT_CONTEXT_LIMITS.catalogue).map((plan, index) => ({
+      alias: aliasFor('C', index),
+      title: clip(plan.title, 256),
+      duration: clip(plan.duration, 64),
+      traffic: clip(plan.traffic, 64),
+      deviceLimit: plan.deviceLimit,
+      locations: plan.locations === null ? null : clip(plan.locations, 512),
+      price: priced(plan.price),
+      renewalPrice: plan.renewalPrice === null ? null : priced(plan.renewalPrice),
+      personalDiscountPercent: plan.personalDiscountPercent,
+    })),
+    addons: catalogue.addons.slice(0, SUPPORT_CONTEXT_LIMITS.addons).map((addon) => ({
+      kind: addon.kind,
+      title: clip(addon.title, 256),
+      price: priced(addon.price),
+    })),
   };
 }
 
@@ -390,13 +504,17 @@ function clipOrNull(value: string | null, max: number): string | null {
   return value === null ? null : clip(value, max);
 }
 
-function orderEntry(order: SupportOrderFact, index: number): SupportContextPayload['orders'][0] {
+function orderEntry(
+  order: SupportOrderFact,
+  index: number,
+  format: SupportFactFormatter,
+): SupportContextPayload['orders'][0] {
   return {
     alias: aliasFor('O', index),
     state: order.state,
     purpose: order.purpose,
     title: clip(order.title, 256),
-    total: moneyOf(order.totalMinor, order.currency),
+    total: moneyOf(order.totalMinor, order.currency, format),
     createdAt: order.createdAt.toISOString(),
     settledAt: order.settledAt?.toISOString() ?? null,
     expiresAt: order.expiresAt?.toISOString() ?? null,
@@ -406,10 +524,11 @@ function orderEntry(order: SupportOrderFact, index: number): SupportContextPaylo
 function paymentEntry(
   payment: SupportPaymentFact,
   index: number,
+  format: SupportFactFormatter,
 ): SupportContextPayload['payments'][0] {
   return {
     alias: aliasFor('P', index),
-    amount: moneyOf(payment.amountMinor, payment.currency),
+    amount: moneyOf(payment.amountMinor, payment.currency, format),
     method: payment.method,
     routeLabelKey: routeLabelKeyOf(payment),
     state: payment.state,

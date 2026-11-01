@@ -309,6 +309,12 @@ import { IncidentService } from './modules/platform/incidents/application/incide
 import { IncidentSchedulerLoop } from './modules/platform/incidents/application/incident-scheduler-loop.js';
 import { DrizzleIncidentRepository } from './modules/platform/incidents/infrastructure/drizzle-incident.repository.js';
 import { SupportContextBuilder } from './modules/commerce/support-context/application/support-context.builder.js';
+import {
+  SUPPORT_KNOWLEDGE_REFRESH_INTERVAL_MS,
+  SupportKnowledgeRefreshLoop,
+} from './modules/control/support-knowledge/application/support-knowledge-refresh.js';
+import { I18nSupportFactFormatter } from './modules/commerce/support-context/infrastructure/i18n-support-fact-formatter.js';
+import { SupportCatalogueReader } from './modules/commerce/support-context/application/support-catalogue.js';
 import { DrizzleSupportContextReader } from './modules/commerce/support-context/infrastructure/drizzle-support-context.reader.js';
 import { ModuleIncidentEffects } from './modules/platform/incidents/infrastructure/incident-effects.js';
 import { NotificationCenterService } from './modules/platform/opslog/application/notification-center.service.js';
@@ -1611,6 +1617,8 @@ export interface Container {
   readonly businessOutboundLoop: BusinessOutboundLoop;
   /** D5: the worker's watch for a stalled `assistant` role. */
   readonly supportAssistantWatchLoop: SupportAssistantWatchLoop;
+  /** Phase 4 PR-2: the debounced and nightly refresh of the knowledge built from owner content. */
+  readonly supportKnowledgeRefreshLoop: SupportKnowledgeRefreshLoop;
   /** TB3: the support agent's read-only, allowlisted context for one conversation. */
   readonly supportContext: SupportContextBuilder;
   /** TB4: the support AI's configuration, keys and provider chain (ADR-0034). */
@@ -6810,6 +6818,8 @@ export function createContainer(
   /** TB8: the one home of support knowledge; the context reads only what was approved. */
   const supportKnowledgeRepository = new DrizzleSupportKnowledgeRepository(database.db);
   const supportContextReader = new DrizzleSupportContextReader(database.db);
+  /** Phase 4 PR-2: the bot's own formatters for the support context's figures. */
+  const supportFactFormatter = new I18nSupportFactFormatter();
   const supportContext = new SupportContextBuilder({
     customers: customerRepository,
     services: provisioningService,
@@ -6820,6 +6830,20 @@ export function createContainer(
     knowledge: supportKnowledgeRepository,
     settings: settingsResolver,
     clock,
+    /*
+     * Phase 4 PR-2: the live catalogue, priced by `PricingService.quoteListPrices` — the
+     * checkout's own boundary (personal discount, promotions, reseller tiers) — read-only.
+     */
+    catalogue: new SupportCatalogueReader({
+      catalogue: productService,
+      products: productRepository,
+      addons: serviceAddonRepository,
+      pricing: pricingService,
+      settings: settingsResolver,
+      format: supportFactFormatter,
+    }),
+    presentation: templatePresentation,
+    format: supportFactFormatter,
   });
 
   /**
@@ -7087,6 +7111,8 @@ export function createContainer(
     conversations: businessConversationRepository,
     messages: businessMessageRepository,
     outbound: businessOutboundRepository,
+    // Review of PR #367: a handback learns only from the current episode (since its handoff).
+    escalations: businessEscalationRepository,
     guard,
     uow,
     audit,
@@ -7136,6 +7162,20 @@ export function createContainer(
     scopeActivity: tenants,
     clock,
     ids,
+  });
+  /*
+   * Phase 4 PR-2: the automatic refresh, in the worker (`support.knowledge.auto_refresh`, off
+   * by default): two minutes after the owner's content stops changing, and nightly.
+   */
+  const supportKnowledgeRefreshLoop = new SupportKnowledgeRefreshLoop(supportKnowledgeBuild, {
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    intervalMs: SUPPORT_KNOWLEDGE_REFRESH_INTERVAL_MS,
+    now: () => clock.now(),
+    correlationId: () => ids.uuid(),
+    logger,
   });
   const businessConversations = new BusinessConversationService({
     conversations: businessConversationRepository,
@@ -9061,6 +9101,7 @@ export function createContainer(
     businessConversations,
     businessOutboundLoop,
     supportAssistantWatchLoop,
+    supportKnowledgeRefreshLoop,
     supportContext,
     supportAiConfig,
     supportAiChain,
@@ -9199,6 +9240,7 @@ export function createContainer(
       // TB2: a stamped business send is recorded before the pool closes.
       await businessOutboundLoop.stop();
       await supportAssistantWatchLoop.stop();
+      await supportKnowledgeRefreshLoop.stop();
       // Round N: and the broadcast lane, for the same reason — a stamped send is recorded.
       await broadcastLoop.stop();
       await incidentSchedulerLoop.stop();

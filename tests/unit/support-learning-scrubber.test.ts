@@ -282,9 +282,17 @@ describe('the extraction prompt', () => {
 
 describe('duplicate detection', () => {
   it('normalises Arabic letters, digits, diacritics, ZWNJ, punctuation and case', () => {
+    // Phase 4 PR-2: the shared normaliser REMOVES a ZWNJ (as retrieval always did), so
+    // «برنامه‌ي» is «برنامهی»; the spaced spelling «برنامه ی» is a near duplicate instead.
     expect(normalizeTitle('چطور  برنامه‌ي v2rayNG را نصب كنم؟')).toBe(
-      normalizeTitle('چطور برنامه ی V2RAYNG را نصب کنم'),
+      normalizeTitle('چطور برنامهی V2RAYNG را نصب کنم'),
     );
+    expect(
+      trigramSimilarity(
+        normalizeTitle('چطور  برنامه‌ي v2rayNG را نصب كنم؟'),
+        normalizeTitle('چطور برنامه ی V2RAYNG را نصب کنم'),
+      ),
+    ).toBeGreaterThanOrEqual(0.8);
     expect(normalizeTitle('پلن ۳۰ روزه')).toBe('پلن 30 روزه');
     expect(normalizeTitle('ـسلامٌ!')).toBe('سلام');
     expect(normalizeTitle('?!')).toBe('');

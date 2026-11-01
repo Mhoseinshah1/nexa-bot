@@ -544,13 +544,10 @@ describe('controlled learning (TB8)', () => {
     );
   });
 
-  it('a lesson proposed again — even one already rejected — merges as an extra source', async () => {
+  it('PR-2: a lesson proposed again merges only into a PENDING one; after a rejection it is new', async () => {
     const { candidate } = await pendingCandidate();
-    await ctx.container.supportKnowledge.rejectCandidate(tenantA, owner, candidate.id, {
-      idempotencyKey: key('reject'),
-      expectedVersion: candidate.version,
-    });
-    // Same lesson from another conversation, worded with Arabic letters and punctuation.
+    // Same lesson from another conversation, worded with Arabic letters and punctuation, while
+    // the first is still PENDING: one candidate, two sources.
     next = {
       ...next,
       output: { ...lesson, title: `${lesson.title.replace('ی', 'ي')}!!` },
@@ -558,13 +555,60 @@ describe('controlled learning (TB8)', () => {
     const other = await conversationWithReply(scopeA, BOT, support, '7000006', 'همان پاسخ.');
     await handBack(scopeA, support, other.conversationId);
     await loop.tick();
-    const all = await ctx.container.supportKnowledge.listCandidates(tenantA, owner, {});
+    let all = await ctx.container.supportKnowledge.listCandidates(tenantA, owner, {});
     expect(all).toHaveLength(1);
-    expect(all[0]).toMatchObject({ state: 'REJECTED', sourceCount: 2 });
+    expect(all[0]).toMatchObject({ state: 'PENDING', sourceCount: 2 });
+    // Rejected, then proposed again: the rejection was about THAT text — a new candidate for a
+    // reviewer, never silently merged into the rejection (it used to be).
+    await ctx.container.supportKnowledge.rejectCandidate(tenantA, owner, candidate.id, {
+      idempotencyKey: key('reject'),
+      expectedVersion: all[0]!.version,
+    });
+    const third = await conversationWithReply(scopeA, BOT, support, '7000007', 'باز همان پاسخ.');
+    await handBack(scopeA, support, third.conversationId);
+    await loop.tick();
+    all = await ctx.container.supportKnowledge.listCandidates(tenantA, owner, {});
+    expect(all.map((row) => [row.state, row.sourceCount, row.replacesArticleId]).sort()).toEqual([
+      ['PENDING', 1, null],
+      ['REJECTED', 2, null],
+    ]);
     const job = await ctx.container.database.db.execute(
       sql`SELECT outcome FROM support_learning_jobs ORDER BY created_at DESC LIMIT 1`,
     );
-    expect(job.rows).toEqual([{ outcome: 'merged' }]);
+    expect(job.rows).toEqual([{ outcome: 'candidate_created' }]);
+  });
+
+  it('PR-2 «جایگزین پاسخ تأییدشده»: an approved lesson proposed again replaces its article', async () => {
+    const { candidate } = await pendingCandidate();
+    const approved = await ctx.container.supportKnowledge.approveCandidate(
+      tenantA,
+      owner,
+      candidate.id,
+      { idempotencyKey: key('approve'), expectedVersion: candidate.version, edit: null },
+    );
+    next = {
+      ...next,
+      output: { ...lesson, body: `${lesson.body} سپس برنامه را یک بار ببندید و باز کنید.` },
+    } as SupportAiOutcome;
+    const other = await conversationWithReply(scopeA, BOT, support, '7000008', 'پاسخ تازه.');
+    await handBack(scopeA, support, other.conversationId);
+    await loop.tick();
+    const all = await ctx.container.supportKnowledge.listCandidates(tenantA, owner, {});
+    const replacement = all.find((row) => row.state === 'PENDING')!;
+    expect(replacement).toMatchObject({ replacesArticleId: approved.articleId, assisted: false });
+    await ctx.container.supportKnowledge.approveCandidate(tenantA, owner, replacement.id, {
+      idempotencyKey: key('approve2'),
+      expectedVersion: replacement.version,
+      edit: null,
+    });
+    // One article, revision 2, with the new text — never a second copy.
+    const articles = await ctx.container.supportKnowledge.listArticles(tenantA, owner, {});
+    expect(articles).toHaveLength(1);
+    expect(articles[0]).toMatchObject({
+      id: approved.articleId,
+      revision: 2,
+      body: `${lesson.body} سپس برنامه را یک بار ببندید و باز کنید.`,
+    });
   });
 
   it('the model declining, or an invalid output, creates no candidate', async () => {
@@ -1250,7 +1294,8 @@ describe('controlled learning (TB8)', () => {
     ]);
     const pending = all.find((row) => row.state === 'PENDING')!;
     expect(pending.body).toBe(lesson.body);
-    // And a reviewer's rejection still absorbs it: that IS a decision about the lesson.
+    // Phase 4 PR-2: a reviewer's rejection no longer absorbs it either — the same lesson proposed
+    // after a rejection is a new PENDING candidate (dedupe only against PENDING).
     await ctx.container.supportKnowledge.rejectCandidate(tenantA, owner, pending.id, {
       idempotencyKey: key('reject'),
       expectedVersion: pending.version,
@@ -1259,8 +1304,8 @@ describe('controlled learning (TB8)', () => {
     await handBack(scopeA, support, third.conversationId);
     await loop.tick();
     all = await ctx.container.supportKnowledge.listCandidates(tenantA, owner, {});
-    expect(all).toHaveLength(2);
-    expect(all.find((row) => row.id === pending.id)).toMatchObject({ sourceCount: 2 });
+    expect(all).toHaveLength(3);
+    expect(all.find((row) => row.id === pending.id)).toMatchObject({ sourceCount: 1 });
   });
 
   it('nit: the reviewer’s reject note is scrubbed before it reaches the audit log', async () => {
@@ -1454,5 +1499,35 @@ describe('controlled learning (TB8)', () => {
       outboundId: theirs.outboundId,
     });
     expect(await jobCount()).toBe(1);
+  });
+  it('review of PR #367: a candidate decided between the duplicate read and the merge is not merged into', async () => {
+    const { candidate } = await pendingCandidate();
+    // The reviewer rejects it AFTER the learning pass read the titles, BEFORE it merges.
+    class Racing extends DrizzleSupportKnowledgeRepository {
+      override async recentTitles(
+        ...args: Parameters<DrizzleSupportKnowledgeRepository['recentTitles']>
+      ) {
+        const rows = await super.recentTitles(...args);
+        await ctx.container.supportKnowledge.rejectCandidate(tenantA, owner, candidate.id, {
+          idempotencyKey: key('race-reject'),
+          expectedVersion: candidate.version,
+        });
+        return rows;
+      }
+    }
+    const racing = makeLearning(new Racing(ctx.container.database.db));
+    const other = await conversationWithReply(scopeA, BOT, support, '7000099', 'همان پاسخ.');
+    await handBack(scopeA, support, other.conversationId);
+    const counts = await racing.runDue(scopeA, {
+      now: ctx.container.clock.now(),
+      leaseUntil: new Date(ctx.container.clock.now().getTime() + 60_000),
+      limit: 5,
+    });
+    expect(counts).toEqual({ learning_candidate_created: 1 });
+    const all = await ctx.container.supportKnowledge.listCandidates(tenantA, owner, {});
+    expect(all.map((row) => [row.state, row.sourceCount]).sort()).toEqual([
+      ['PENDING', 1],
+      ['REJECTED', 1],
+    ]);
   });
 });
