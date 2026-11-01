@@ -1502,9 +1502,9 @@ export class BotRuntime {
       );
     }
     if (command.intent === 'CLIENT_APP' && command.targetId !== null) {
-      return inPlace(
-        await tutorialFlow.clientApp(this, scope, customer, command.targetId, input.botInstanceId),
-      );
+      // NOT `inPlace`: an app's guide is its own NEW message (spec A4) — with a video it is a
+      // file, and without one it stays the single text message it always was.
+      return tutorialFlow.clientApp(this, scope, customer, command.targetId, input.botInstanceId);
     }
     if (command.intent === 'SERVICE_CONNECTED' && command.targetId !== null) {
       // Acknowledged, and NOTHING is written: the customer told us a fact about their
