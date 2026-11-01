@@ -232,6 +232,16 @@ export interface LegacySourceSession {
    * source, where such a table stays `UNCLASSIFIED`. Never overrides a catalogue entry.
    */
   packageClassification?(table: string): Readonly<LegacyTableClassification> | null;
+  /**
+   * A `.nxpkg` source only: the columns of `table` the session can actually READ — its
+   * snapshot rows file's columns, which may be fewer than `columns()`/`catalogColumns()`
+   * describe (the converter carries an allowlist). Null for a table it holds no rows of
+   * (reading one is refused by `rows`/`readSetRows` themselves, as before).
+   * Absent on every other source, where every described column is readable. Read sets and
+   * the v1 read decide optional presence from it (`resolveReadColumns`); the schema hash
+   * stays over the described columns.
+   */
+  readableColumns?(table: string): ReadonlySet<string> | null;
   /** Rolls the READ ONLY transaction back and releases the connection. */
   close(): Promise<void>;
 }
@@ -265,6 +275,12 @@ export class LegacySourceRefused extends Error {
       /** A read set's delivery pass read other rows than its verified pass, in one session. */
       | 'READ_SET_SNAPSHOT_DIVERGED',
     readonly detail: string,
+    /**
+     * A schema refusal's `table.column` names (`SOURCE_SCHEMA_MISSING_COLUMN`): identifiers
+     * from NEXA's own read definitions, never a value, so they are safe to put in front of
+     * the owner (the migration row's `refusalCounts`, the rehearsal report).
+     */
+    readonly columns: readonly string[] = [],
   ) {
     super(`${code}: ${detail}`);
   }

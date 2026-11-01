@@ -274,7 +274,7 @@ export async function runImport(
   await service.setKey(scope, owner, view.id, { idempotencyKey: key(), ...input.secret });
   view = await settle(view.id, 'VERIFIED');
   if (view.status !== 'VERIFIED' || view.verifyReport === null) {
-    input.step('04', 'verify', 'FAIL', `${view.status} ${String(view.errorCode ?? '')}`.trim());
+    input.step('04', 'verify', 'FAIL', failedDetail(view));
     return view;
   }
   input.step(
@@ -332,7 +332,7 @@ export async function runImport(
   await service.requestDryRun(scope, owner, view.id, { idempotencyKey: key() });
   view = await settle(view.id, 'DRY_RUN_DONE');
   if (view.status !== 'DRY_RUN_DONE' || view.dryRunSha256 === null) {
-    input.step('04', 'dry-run', 'FAIL', `${view.status} ${String(view.errorCode ?? '')}`.trim());
+    input.step('04', 'dry-run', 'FAIL', failedDetail(view));
     return view;
   }
   input.step('04', 'dry-run', 'PASS', `DRY_RUN_DONE; digest ${view.dryRunSha256}`);
@@ -348,4 +348,18 @@ export async function runImport(
       : null,
   });
   return settle(view.id, 'COMPLETED');
+}
+
+/**
+ * A failed step as the rehearsal report prints it: the status, the contract code and the
+ * refusal counts the row carries — e.g. `SOURCE_SCHEMA_MISSING_COLUMN:user.Balance` — so the
+ * owner reads WHICH column without opening a log. Codes and names only, never a value.
+ */
+export function failedDetail(view: LegacyMigrationImportView): string {
+  const counts = view.progress.refusalCounts.map((c) =>
+    c.count === 1 ? c.code : `${c.code}=${String(c.count)}`,
+  );
+  return [view.status, view.errorCode ?? '', counts.length > 0 ? `(${counts.join(', ')})` : '']
+    .filter((part) => part !== '')
+    .join(' ');
 }

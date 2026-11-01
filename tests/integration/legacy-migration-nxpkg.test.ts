@@ -15,6 +15,7 @@ import {
 } from '@nexa/contracts';
 import { runAsLegacyMigration } from '../../apps/api/src/infrastructure/persistence/write-gate';
 import { LegacyMigrationExecutor } from '../../apps/api/src/modules/platform/legacy-migration/application/legacy-migration-executor';
+import { failedDetail } from '../../apps/api/src/cutover-rehearse-import';
 import { NxpkgMigrationAdapters } from '../../apps/api/src/modules/platform/legacy-migration/infrastructure/nxpkg-migration-adapters';
 import { INVENTORY_READ_ATTEMPTS } from '../../apps/api/src/modules/platform/legacy-importer/infrastructure/rickpanel-inventory-source';
 import { PipelineBackupPort } from '../../apps/api/src/modules/platform/legacy-migration/infrastructure/migration-adapters';
@@ -38,8 +39,12 @@ import { startFakeRickpanel, type FakeRickpanel } from '../support/fake-rickpane
 import { newRawKey, writeNxpkg } from '../support/nxpkg/writer';
 import {
   READY_MANIFEST,
+  dropCatalogueColumn,
+  dropSnapshotColumn,
+  listInCatalogueOnly,
   snapshotOfDataset,
   snapshotPackageFiles,
+  type SnapshotParts,
 } from '../support/nxpkg-legacy-package';
 import {
   SEED_IDS,
@@ -238,6 +243,8 @@ describe('legacy migration: the executor over a real package', () => {
        * `reports/coverage.json` (`coverage: true`) or without it.
        */
       readonly historyTables?: { readonly coverage: boolean };
+      /** Edits the source snapshot before it is written (a converter's allowlist, a gap). */
+      readonly snapshot?: (parts: SnapshotParts) => void;
     } = {},
   ): Promise<{ path: string; keyFileText: string }> {
     const built = buildSyntheticLegacyDataset();
@@ -278,6 +285,7 @@ describe('legacy migration: the executor over a real package', () => {
             }
           : dataset;
     const parts = snapshotOfDataset(source as never);
+    options.snapshot?.(parts);
     const coverageFiles: Record<string, { json: unknown }> = {};
     if (options.historyTables !== undefined) {
       const catalogTables = parts.catalog['tables'] as Record<string, unknown>[];
@@ -1423,6 +1431,89 @@ describe('legacy migration: the executor over a real package', () => {
       'TABLE_INVENTORY_INCOMPLETE',
     );
     expect(done.dryRunReport?.warnings.map((w) => w.code)).not.toContain('INVENTORY_INCOMPLETE');
+    expect(await count('customers')).toBe(0);
+  }, 300_000);
+
+  /** Upload, key, bind both mapped panels and dry-run `pkg`; the row as the owner reads it. */
+  async function dryRunOf(pkg: { path: string; keyFileText: string }) {
+    const id = await upload(pkg.path);
+    const service = ctx.container.legacyMigration;
+    const executor = ctx.container.migrationExecutor;
+    await service.setKey(tenantA, owner, id, {
+      idempotencyKey: key(),
+      keyFileText: pkg.keyFileText,
+    });
+    await executor.tick();
+    const verified = await detail(id);
+    if (verified.status !== 'VERIFIED') return verified;
+    await service.setPanelBindings(tenantA, owner, id, {
+      idempotencyKey: key(),
+      bindings: [
+        { codePanel: SYNTHETIC_PANEL_CODES.mappedA, panelId: panelAId },
+        { codePanel: SYNTHETIC_PANEL_CODES.mappedB, panelId: panelBId },
+      ],
+    });
+    await service.requestDryRun(tenantA, owner, id, { idempotencyKey: key() });
+    await executor.tick();
+    return detail(id);
+  }
+
+  it('converter 0.8.0: user.roll_Status in the catalogue but not in the rows file — the dry run passes, the import completes, nobody is carried as accepted', async () => {
+    const pkg = await writePackage({
+      classified: true,
+      clean: true,
+      snapshot: (parts) => listInCatalogueOnly(parts, 'user', 'roll_Status', 'tinyint'),
+    });
+    const dry = await dryRunOf(pkg);
+    expect(dry.status, JSON.stringify([dry.errorCode, dry.progress.refusalCounts])).toBe(
+      'DRY_RUN_DONE',
+    );
+    await ctx.container.legacyMigration.approve(tenantA, owner, dry.id, {
+      idempotencyKey: key(),
+      dryRunSha256: dry.dryRunSha256,
+      confirmation: LEGACY_MIGRATION_APPROVAL_PHRASE,
+    });
+    await ctx.container.migrationExecutor.tick();
+    const done = await detail(dry.id);
+    expect(done.status, JSON.stringify(done.applyReport)).toBe('COMPLETED');
+    expect(await count('customers')).toBe(8);
+    const accepted = await ctx.container.database.db.execute<{ n: number }>(
+      sql`SELECT count(*)::int AS n FROM customers
+           WHERE tenant_id = ${TENANT} AND legacy_terms_accepted_at IS NOT NULL`,
+    );
+    expect(accepted.rows[0]?.n).toBe(0);
+  }, 300_000);
+
+  it('a REQUIRED column missing from the rows file, or from the rows file and the catalogue, is refused naming table.column in the report', async () => {
+    // A v1 column is refused at VERIFY (verification recomputes the v1 fingerprint); a read
+    // set's own required column (`user-status`: User_Status) at the DRY RUN.
+    const cases: [string, 'VERIFY_FAILED' | 'DRY_RUN_FAILED', (parts: SnapshotParts) => void][] = [
+      ['user.Balance', 'VERIFY_FAILED', (parts) => dropSnapshotColumn(parts, 'user', 'Balance')],
+      [
+        'invoice.price_product',
+        'VERIFY_FAILED',
+        (parts) => {
+          dropSnapshotColumn(parts, 'invoice', 'price_product');
+          dropCatalogueColumn(parts, 'invoice', 'price_product');
+        },
+      ],
+      [
+        'user.User_Status',
+        'DRY_RUN_FAILED',
+        (parts) => dropSnapshotColumn(parts, 'user', 'User_Status'),
+      ],
+    ];
+    for (const [column, status, snapshot] of cases) {
+      const refused = await dryRunOf(
+        await writePackage({ classified: true, clean: true, snapshot }),
+      );
+      expect(refused.status, column).toBe(status);
+      expect(refused.errorCode, column).toBe('IMPORT_FAILED');
+      expect(refused.progress.refusalCounts, column).toEqual([
+        { code: `SOURCE_SCHEMA_MISSING_COLUMN:${column}`, count: 1 },
+      ]);
+      expect(failedDetail(refused), column).toContain(`SOURCE_SCHEMA_MISSING_COLUMN:${column}`);
+    }
     expect(await count('customers')).toBe(0);
   }, 300_000);
 });
