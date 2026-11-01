@@ -2,6 +2,8 @@ import type {
   SupportAiDecision,
   SupportAiDecisionKind,
   SupportAiTopic,
+  SupportContextAddon,
+  SupportContextCatalogueEntry,
   SupportContextIncident,
   SupportContextPayment,
   SupportContextService,
@@ -14,7 +16,7 @@ import {
 import { I18nSupportFactFormatter } from '../../../commerce/support-context/infrastructure/i18n-support-fact-formatter.js';
 
 /** Phase 4 PR-2: the eval writes figures exactly as the production builder does. */
-const EVAL_FORMAT = new I18nSupportFactFormatter();
+export const EVAL_FORMAT = new I18nSupportFactFormatter();
 import type { SupportTranscriptAuthor } from '../domain/transcript.js';
 
 /**
@@ -101,6 +103,11 @@ export interface EvalScenario {
   readonly services?: readonly Omit<SupportContextService, 'alias'>[];
   readonly payments?: readonly Omit<SupportContextPayment, 'alias'>[];
   readonly incidents?: readonly SupportContextIncident[];
+  /** Phase 4 PR-6: the live catalogue and packages the payload carries (default: none). */
+  readonly catalogue?: readonly Omit<SupportContextCatalogueEntry, 'alias'>[];
+  readonly addons?: readonly SupportContextAddon[];
+  /** Phase 4 PR-6: the tenant's approved knowledge (default: `EVAL_ARTICLES`). */
+  readonly articles?: readonly EvalArticle[];
   readonly prior?: readonly PriorDecisionFact[];
   readonly transcript: readonly EvalLine[];
   readonly expect: EvalExpectation;
@@ -229,18 +236,18 @@ export function evalPayment(
   };
 }
 
-const c = (text: string): EvalLine => ({ author: 'CUSTOMER', text });
-const ai = (text: string): EvalLine => ({ author: 'AI_AUTO', text });
-const staff = (text: string): EvalLine => ({ author: 'STAFF', text });
-const assisted = (text: string): EvalLine => ({ author: 'AI_ASSIST', text });
-const photo = (seen: 'SEEN' | 'UNSEEN', caption: string | null = null): EvalLine => ({
+export const c = (text: string): EvalLine => ({ author: 'CUSTOMER', text });
+export const ai = (text: string): EvalLine => ({ author: 'AI_AUTO', text });
+export const staff = (text: string): EvalLine => ({ author: 'STAFF', text });
+export const assisted = (text: string): EvalLine => ({ author: 'AI_ASSIST', text });
+export const photo = (seen: 'SEEN' | 'UNSEEN', caption: string | null = null): EvalLine => ({
   author: 'CUSTOMER',
   text: caption,
   photo: seen,
 });
 
 /** A decision with the parts every reference shares. */
-function decide(
+export function decide(
   decision: SupportAiDecisionKind,
   topic: SupportAiTopic,
   replyText: string,

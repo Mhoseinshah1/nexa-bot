@@ -173,7 +173,7 @@ export function prepareScenario(
   }));
   const prior = scenario.prior ?? [];
   const selected = selectKnowledge(
-    EVAL_ARTICLES.map((article) => ({
+    (scenario.articles ?? EVAL_ARTICLES).map((article) => ({
       title: article.title,
       body: article.body,
       tags: article.tags ?? [],
@@ -206,9 +206,12 @@ export function prepareScenario(
         alias: aliasFor('K', index),
         ...entry,
       })),
-      // Phase 4 PR-2: no live catalogue in the eval (its scenarios carry no prices yet).
-      catalogue: [],
-      addons: [],
+      // Phase 4 PR-2/PR-6: the live catalogue a scenario carries (none unless it sets one).
+      catalogue: (scenario.catalogue ?? []).map((plan, index) => ({
+        alias: aliasFor('C', index),
+        ...plan,
+      })),
+      addons: [...(scenario.addons ?? [])],
       supportAccounts: ['@nexa_support_demo'],
       flags: {
         hasUnderReviewPayment: payments.some((payment) => payment.underReview),
