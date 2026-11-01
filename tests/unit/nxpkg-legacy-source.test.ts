@@ -9,6 +9,7 @@ import { takeLegacyInventory } from '../../apps/api/src/modules/platform/legacy-
 import { PRODUCTS_READ_SET } from '../../apps/api/src/modules/platform/legacy-importer/application/products-read-set';
 import {
   USER_STATUS_READ_SET,
+  USER_TERMS_READ_SET,
   readLegacyReadSet,
 } from '../../apps/api/src/modules/platform/legacy-importer/application/read-set';
 import {
@@ -28,6 +29,9 @@ import { buildSyntheticLegacyDataset } from '../fixtures/legacy/synthetic-legacy
 import { newRawKey, writeNxpkg } from '../support/nxpkg/writer';
 import {
   READY_MANIFEST,
+  dropCatalogueColumn,
+  dropSnapshotColumn,
+  listInCatalogueOnly,
   snapshotOfDataset,
   snapshotPackageFiles,
   writeSnapshotDirectory,
@@ -267,17 +271,55 @@ describe('NxpkgLegacySourceConnector', () => {
       );
     });
 
-    it('a column the catalogue lists but the rows file does not carry is refused, never read as NULL', async () => {
+    it('a REQUIRED column the catalogue lists but the rows file does not carry is refused before any row, naming table.column', async () => {
       const parts = base();
-      const catalog = parts.catalog as Record<string, any>;
-      const columns: string[] = catalog.snapshot_tables.user.columns;
-      const at = columns.indexOf('agent');
-      columns.splice(at, 1);
-      for (const row of userRows(parts).slice(1)) (row as { c: unknown[] }).c.splice(at, 1);
-      (userRows(parts)[0] as { columns: string[] }).columns = [...columns];
+      dropSnapshotColumn(parts, 'user', 'Balance');
       const error = await refusal(await directory(parts));
       expect(error).toBeInstanceOf(LegacySourceRefused);
       expect((error as LegacySourceRefused).code).toBe('SOURCE_SCHEMA_MISSING_COLUMN');
+      expect((error as LegacySourceRefused).detail).toMatch(
+        /user\.Balance \(in the source catalogue, not in the package's rows file\)/u,
+      );
+      expect((error as LegacySourceRefused).columns).toEqual(['user.Balance']);
+    });
+
+    it('a REQUIRED column absent from both the catalogue and the rows file is refused, naming table.column', async () => {
+      const parts = base();
+      dropSnapshotColumn(parts, 'invoice', 'price_product');
+      dropCatalogueColumn(parts, 'invoice', 'price_product');
+      const error = await refusal(await directory(parts));
+      expect((error as LegacySourceRefused).code).toBe('SOURCE_SCHEMA_MISSING_COLUMN');
+      expect((error as LegacySourceRefused).detail).toMatch(
+        /invoice\.price_product \(not in the source\)/u,
+      );
+      expect((error as LegacySourceRefused).columns).toEqual(['invoice.price_product']);
+    });
+
+    it('a v1 OPTIONAL column (user.agent) only the catalogue lists is read as absent, not refused, and the schema hash still covers it', async () => {
+      const full = await identity(await directory(base()));
+      const parts = base();
+      dropSnapshotColumn(parts, 'user', 'agent');
+      const id = await identity(await directory(parts));
+      expect(id.schemaHash).toBe(full.schemaHash);
+      expect(id.tables.user.columns).not.toContain('agent');
+      expect(id.users.every((u) => u.agent === null)).toBe(true);
+      expect(id.fingerprint).not.toBe(full.fingerprint);
+    });
+
+    it('an OPTIONAL column the catalogue lists but the rows file does not carry (user.roll_Status, converter 0.8.0) is read as absent: nobody accepted', async () => {
+      const parts = base();
+      listInCatalogueOnly(parts, 'user', 'roll_Status', 'tinyint');
+      const connector = await directory(parts);
+      const id = await identity(connector);
+      expect(id.users.length).toBeGreaterThan(0);
+      expect(id.users.every((u) => !u.termsAccepted)).toBe(true);
+      const session = await connector.open();
+      try {
+        const terms = await readLegacyReadSet(session, USER_TERMS_READ_SET);
+        expect(terms.tables['user']?.columns).toEqual(['id']);
+      } finally {
+        await session.close();
+      }
     });
 
     it('a table outside the snapshot, a table the catalogue does not let a read set read, another key, a non-identifier', async () => {
