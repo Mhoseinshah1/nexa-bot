@@ -894,7 +894,9 @@ describe('Assist Mode (TB5)', () => {
     const figures = await ctx.container.supportAnalytics.analytics(tenantA as never, owner, {
       range: 'TODAY',
     });
-    expect(figures.assist).toMatchObject({ requested: 2, discarded: 1, superseded: 1 });
+    // Phase 4 PR-5: ASSIST_ONLY prepared its own draft for the customer's message; the first
+    // request replaced it, and the second replaced the first.
+    expect(figures.assist).toMatchObject({ requested: 3, discarded: 1, superseded: 2 });
   });
 
   it('refuses a draft while the support AI is OFF', async () => {
@@ -1115,7 +1117,13 @@ describe('Assist Mode (TB5)', () => {
       await expect(
         service.request(scopeA, operator, { conversationId: other, idempotencyKey: requestKey }),
       ).rejects.toMatchObject({ code: PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH });
-      expect(await service.drafts(scopeA, operator, other)).toEqual([]);
+      // The refused request left nothing behind: only the draft ASSIST_ONLY prepared by itself
+      // for that conversation's own message (Phase 4 PR-5) - no requested draft.
+      expect(
+        (await service.drafts(scopeA, operator, other)).filter(
+          (draft) => draft.requestedByAdminId !== null,
+        ),
+      ).toEqual([]);
     });
   });
 

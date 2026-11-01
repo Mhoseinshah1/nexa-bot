@@ -17,7 +17,12 @@ import {
   usageAgeText,
 } from '../../apps/api/src/modules/commerce/support-context/domain/support-context-payload';
 import { selectKnowledge } from '../../apps/api/src/modules/commerce/support-context/application/support-context.builder';
-import { normalizeTitle } from '../../apps/api/src/modules/control/support-knowledge/domain/dedupe';
+import {
+  findDuplicate,
+  legacyNormalizeTitle,
+  normalizeTitle,
+  titleKeys,
+} from '../../apps/api/src/modules/control/support-knowledge/domain/dedupe';
 import {
   LEARNING_PLACEHOLDERS,
   detectSensitive,
@@ -441,5 +446,83 @@ describe('vision — an image sent as a document counts', () => {
     });
     expect(pdf?.kind).toBe('OTHER');
     expect(pdf?.photo).toBeNull();
+  });
+});
+
+describe('review of PR #367', () => {
+  it('P1: a business link carrying a credential is never kept (query, path, subscription path)', () => {
+    for (const text of [
+      'https://docs.example.com/help?token=sk-abcdefghijkl123456789',
+      'https://docs.example.com/help?key=abc',
+      'https://docs.example.com/dl?sig=x1&id=2',
+      'https://docs.example.com/file/AbCdEf1234567890xyzQ/app.apk',
+      'https://docs.example.com/x/0f8fad5b-d9cb-469f-a165-70867728950e',
+      'https://docs.example.com/x#access_token=abcDEF1234567890abcd',
+      'panel.example.com/subscribe/abc',
+    ]) {
+      expect(detectSensitive(text, { business: 'TUTORIAL' }).length, text).toBeGreaterThan(0);
+    }
+    // A public link stays public: a store id, a plain path, a short version number.
+    for (const text of [
+      'https://play.google.com/store/apps/details?id=com.v2ray.ang',
+      'https://downloads.example.com/v2/app-1.8.apk',
+      'https://apps.apple.com/us/app/streisand/id6450534064',
+    ]) {
+      expect(detectSensitive(text, { business: 'TUTORIAL' }), text).toEqual([]);
+    }
+  });
+
+  it('P2: thanks with a contrast or a problem phrase is not a resolution', () => {
+    for (const text of [
+      'ممنون ولی هنوز وصل نمیشه',
+      'مرسی اما نشد',
+      'thanks but still not working',
+      'mersi vali hanooz nemishe',
+    ]) {
+      expect(isResolvedAcknowledgement(text), text).toBe(false);
+    }
+    const at = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000);
+    const replies = [
+      { id: 'r1', createdAt: at(1) },
+      { id: 'r2', createdAt: at(5) },
+    ];
+    // «ممنون ولی هنوز…» after r1, then the real fix r2: the fix is learned.
+    expect(
+      resolvingReply(replies, [
+        { origin: 'INBOUND', text: 'ممنون ولی هنوز وصل نمیشه', sentAt: at(3) },
+      ])?.id,
+    ).toBe('r2');
+    // Troubleshooting went on after a thanks: the thanks no longer decides.
+    expect(
+      resolvingReply(replies, [
+        { origin: 'INBOUND', text: 'مرسی درست شد', sentAt: at(2) },
+        { origin: 'INBOUND', text: 'دوباره قطع شد', sentAt: at(4) },
+      ])?.id,
+    ).toBe('r2');
+  });
+
+  it('P2: only the current episode decides — an old acknowledgement before the handoff is ignored', () => {
+    const at = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000);
+    const replies = [
+      { id: 'old', createdAt: at(1) },
+      { id: 'today', createdAt: at(100) },
+    ];
+    const lines = [
+      { origin: 'INBOUND', text: 'مرسی درست شد', sentAt: at(2) },
+      { origin: 'INBOUND', text: 'خواهش', sentAt: at(3) },
+    ].slice(0, 1);
+    // Without an episode bound the old thanks is the customer's last word: the old reply.
+    expect(resolvingReply(replies, lines)?.id).toBe('old');
+    // From today's handoff on, the old thanks is outside: today's reply.
+    expect(resolvingReply(replies, lines, at(50))?.id).toBe('today');
+  });
+
+  it('P2: a stored pre-PR-2 dedupe key (ZWNJ as a space) is still matched', () => {
+    const legacy = legacyNormalizeTitle('چرا وصل نمی‌شود؟');
+    expect(legacy).not.toBe(normalizeTitle('چرا وصل نمی‌شود؟'));
+    const stored = [{ id: 'c1', normalizedTitle: legacy }];
+    expect(findDuplicate(titleKeys('چرا وصل نمی‌شود؟'), stored)?.id).toBe('c1');
+    // Today's form alone misses it (the trigram near rule is below the threshold).
+    expect(findDuplicate(normalizeTitle('چرا وصل نمی‌شود؟'), stored)).toBeNull();
   });
 });

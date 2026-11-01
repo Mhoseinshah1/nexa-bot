@@ -153,7 +153,9 @@ describe('A7/A8 — the policy for authors and knowledge', () => {
     'sai4m-2026-10-07': '3dc8a68be32e72b2a95ed81590f65497a340f599844d67f08a1da259d3aef11e',
     'sai5p-2026-11-01': 'bf4a142536da8726b64bb272629420226b160c03e53d9bda3458a08994895ed6',
     'sai6k-2026-11-01': '30256f55fad07fee3f33b1acc0c5f62fc0151429a6295ab64c93ec20d3aa08b1',
-    'sai7a-2026-11-01': '2ac897c5451127ce0b1c2da10b97f928f569f43bb1d3ded3342655895addeb5f',
+    'sai6m-2026-11-01': 'c10da05812d1342390805f7fb8a6ca2bef64d499ff56f3d099ad0a86ea352e90',
+    // Phase 4 PR-3: rule 14 (ACTIONS), on PR-2's sai6m text.
+    'sai7b-2026-11-01': 'PENDING',
   };
 
   it('pins the policy text to its version, in both directions', () => {

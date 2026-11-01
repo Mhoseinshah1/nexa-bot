@@ -4886,17 +4886,41 @@ live; the owner decides otherwise.
 - **OQ-R12-F1-04 — TonPays Telegram and `request_amount`.** Item 5 makes a TonPays (website)
   approval whose `request_amount` differs from what Nexa sent a MISMATCH. The TonPays Telegram
   route is unchanged: what its `request_amount` means for a card transfer is still OQ-TPTG-03.
+
+## Phase 4 PR-5 (Web Admin support pages) - 2026-11-01
+
+- **OQ-SAI-5-01 - verifying the support handle against the connected account.**
+  `telegram_business_connections` stores the owner's Telegram id, not their username, so the
+  readiness card compares `support.accounts` with a username only when a `customers` row for that
+  id exists (the owner once wrote to the bot). Otherwise it says "cannot verify" with the fix
+  "send /start from that account". Storing the username from `BusinessConnection.user` at report
+  time would make it exact; that is a schema change in business-chats, not done here.
+- **OQ-SAI-5-02 - a cost estimate.** The analytics page shows the token total and no money:
+  there is still no price source (OQ-TB-07), and a price this page invented would be a number
+  nobody approved. Needs an owner-entered price per million tokens per model.
+- **OQ-SAI-5-03 - bulk return and a long hard queue.** «بازگرداندن همه» reads the first 100
+  conversations of each of the three states. With `includeHard` off, more than 100 HARD holds in
+  front of a state's list hide the soft ones behind them until those are handled; `more` is then
+  true. A keyset walk over the soft holds only needs a repository filter on `handoff_kind`.
+- **OQ-SAI-5-04 - ASSIST_ONLY drafting cost.** One draft per inbound message, no settle delay
+  (the `support_ai_jobs` shape CHECK allows `due_at` only on AUTO_DECISION), so three quick lines
+  make up to three provider calls, two of them discarded. A debounce needs a migration relaxing
+  that CHECK.
+- **OQ-SAI-5-05 - the analytics intro - CLOSED.** The old sentence (no text is read) was no longer
+  true; the page now uses a new key that says counts read no text and names the two views that
+  show the customer's last message (`business_chats.view`).
+- **OQ-SAI-5-06 - the model dropdown.** The known-model list (`support-ai-models.ts`) is a
+  convenience, not a guarantee; the capability test is the check. It needs a refresh when a
+  provider retires a model.
 - **OQ-SAI-2-01 — live usage refresh for the asked service (Phase 4 PR-2, item 2, optional).** The
   support context now carries `usageAge` («به‌روزشده N دقیقه پیش») beside the stored usage, but
   does NOT call the panel when the figure is older than 10 minutes: the assistant role holds no
   panel client today, and a panel call from it would be a new outbound path with its own
   credential handling. Whether to add a bounded (≤ 2 s, fall back to stored) read is the owner's
   call.
-- **OQ-SAI-2-02 — reseller-only plans in the support AI's catalogue (Phase 4 PR-2, item 1).** The
-  live catalogue lists the PUBLIC customer catalogue, priced for each customer through the one
-  pricing boundary (a reseller's tier applies; a plan their table does not sell is left out).
-  Plans visible only to resellers are not listed. Whether a reseller's conversation should list
-  their tier's catalogue is the owner's call.
+- **OQ-SAI-2-02 — CLOSED by the review of PR #367.** The live catalogue is now the customer's own
+  catalogue (`ProductService.customerCatalogue`, the browse's view): an ACTIVE reseller sees what
+  their grants show (granted panels, products, categories, reseller-only plans included).
 - **OQ-SAI-2-03 — packages are listed without one panel's per-purchase cap (PR-2, item 1).** The
   traffic/time packages in the context are the tenant's offerable ones in the sales currency; a
   panel's policy cap is re-decided by the bot when the customer opens the offer for a service.

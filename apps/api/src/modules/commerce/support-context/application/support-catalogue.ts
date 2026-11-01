@@ -26,15 +26,15 @@ import type { SettingsResolver } from '../../../control/settings/application/set
  *
  * READ-ONLY: nothing is drafted, quoted, stored or locked to learn a price.
  *
- * Which plans: the PUBLIC customer catalogue (`ProductService.publicCatalogue` — the browse's
- * own predicate: ACTIVE, for everyone, priced, on a panel that may take a new account, in a
- * visible category). A reseller is priced through the boundary's reseller layer; a plan their
- * table does not sell is left out. Reseller-only plans are not listed (decision recorded in the
- * PR). Packages: the offerable traffic and time packages in the tenant's sales currency, without
+ * Which plans: the customer's OWN catalogue (`ProductService.customerCatalogue` — the browse's
+ * view and predicate: ACTIVE, priced, on a panel that may take a new account, in a visible
+ * category; for an ACTIVE reseller only what their grants show, reseller-only plans included).
+ * A reseller is priced through the boundary's reseller layer; a plan their table does not sell
+ * is left out. Packages: the offerable traffic and time packages in the tenant's sales currency, without
  * any one panel's per-purchase cap (the bot re-decides availability per service).
  */
 export interface SupportCatalogueDeps {
-  readonly catalogue: Pick<ProductService, 'publicCatalogue'>;
+  readonly catalogue: Pick<ProductService, 'customerCatalogue'>;
   readonly products: Pick<ProductRepository, 'findById'>;
   readonly addons: Pick<ServiceAddonRepository, 'listOfferable'>;
   readonly pricing: Pick<PricingService, 'quoteListPrices'>;
@@ -86,7 +86,13 @@ export class SupportCatalogueReader {
     now: Date,
   ): Promise<SupportCatalogue> {
     const currency = await this.deps.settings.valueOf<CurrencyCode>(scope, 'sales.currency');
-    const page = await this.deps.catalogue.publicCatalogue(scope, SUPPORT_CONTEXT_LIMITS.catalogue);
+    // Review of PR #367: the customer's OWN catalogue — a reseller's purchase grants (panels,
+    // products, categories) decide which plans are listed, exactly as the bot's listing.
+    const page = await this.deps.catalogue.customerCatalogue(
+      scope,
+      customerId,
+      SUPPORT_CONTEXT_LIMITS.catalogue,
+    );
     const plans = page.items.filter(
       (product): product is ProductRecord & { readonly price: Money } =>
         product.price !== null && product.price.currency === currency,

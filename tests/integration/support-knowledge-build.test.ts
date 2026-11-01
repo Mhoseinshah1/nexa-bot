@@ -1071,4 +1071,38 @@ describe('the knowledge build (TB9)', () => {
     expect((await faqArticle()).body).toBe('شبانه.');
     expect(logs).not.toContain('support knowledge refresh pass failed');
   });
+  it('review of PR #367: an automatically retired source that returns is reinstated; a reviewer’s retirement is not', async () => {
+    await autoRefreshOn();
+    const service = ctx.container.supportKnowledgeBuild;
+    await service.autoRefresh(tenantA, job());
+    const productArticle = async () =>
+      (await builtArticles()).find((a) => a.sourceType === 'PRODUCT' && a.title === 'پلن عمومی')!;
+    // The product leaves the public catalogue: retired by the refresh.
+    await ctx.container.database.db.execute(
+      sql`UPDATE products SET audience = 'RESELLERS_ONLY' WHERE id = ${productId}`,
+    );
+    await service.autoRefresh(tenantA, job());
+    expect((await productArticle()).state).toBe('RETIRED');
+    // It comes back: the next refresh reinstates it, as the next revision.
+    await ctx.container.database.db.execute(
+      sql`UPDATE products SET audience = 'EVERYONE' WHERE id = ${productId}`,
+    );
+    expect(await service.pendingRefreshSignature(tenantA)).not.toBeNull();
+    expect(await service.autoRefresh(tenantA, job())).toMatchObject({
+      outcome: 'REFRESHED',
+      reinstated: 1,
+    });
+    const back = await productArticle();
+    expect(back.state).toBe('APPROVED');
+    expect(back.revision).toBe(2);
+    expect(await service.pendingRefreshSignature(tenantA)).toBeNull();
+    // A reviewer's own retirement, with the source still present, is never undone.
+    await ctx.container.supportKnowledge.retireArticle(tenantA, owner, back.id, {
+      idempotencyKey: key('retire'),
+      expectedVersion: back.version,
+    });
+    expect(await service.pendingRefreshSignature(tenantA)).toBeNull();
+    expect(await service.autoRefresh(tenantA, job())).toEqual({ outcome: 'UNCHANGED' });
+    expect((await productArticle()).state).toBe('RETIRED');
+  });
 });

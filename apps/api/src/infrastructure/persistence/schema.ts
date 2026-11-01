@@ -16284,6 +16284,8 @@ export const supportAiProviderCredentials = pgTable(
     /** Why the last capability test was not OK: its first failing check's class. */
     lastTestFailureClass: text('last_test_failure_class'),
     lastTestedAt: timestamptz('last_tested_at'),
+    /** Phase 4 PR-5: the model that capability test ran on (readiness compares it to the primary's). */
+    lastTestedModel: text('last_tested_model'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },

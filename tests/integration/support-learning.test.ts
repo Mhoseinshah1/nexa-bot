@@ -1500,4 +1500,34 @@ describe('controlled learning (TB8)', () => {
     });
     expect(await jobCount()).toBe(1);
   });
+  it('review of PR #367: a candidate decided between the duplicate read and the merge is not merged into', async () => {
+    const { candidate } = await pendingCandidate();
+    // The reviewer rejects it AFTER the learning pass read the titles, BEFORE it merges.
+    class Racing extends DrizzleSupportKnowledgeRepository {
+      override async recentTitles(
+        ...args: Parameters<DrizzleSupportKnowledgeRepository['recentTitles']>
+      ) {
+        const rows = await super.recentTitles(...args);
+        await ctx.container.supportKnowledge.rejectCandidate(tenantA, owner, candidate.id, {
+          idempotencyKey: key('race-reject'),
+          expectedVersion: candidate.version,
+        });
+        return rows;
+      }
+    }
+    const racing = makeLearning(new Racing(ctx.container.database.db));
+    const other = await conversationWithReply(scopeA, BOT, support, '7000099', 'همان پاسخ.');
+    await handBack(scopeA, support, other.conversationId);
+    const counts = await racing.runDue(scopeA, {
+      now: ctx.container.clock.now(),
+      leaseUntil: new Date(ctx.container.clock.now().getTime() + 60_000),
+      limit: 5,
+    });
+    expect(counts).toEqual({ learning_candidate_created: 1 });
+    const all = await ctx.container.supportKnowledge.listCandidates(tenantA, owner, {});
+    expect(all.map((row) => [row.state, row.sourceCount]).sort()).toEqual([
+      ['PENDING', 1],
+      ['REJECTED', 1],
+    ]);
+  });
 });

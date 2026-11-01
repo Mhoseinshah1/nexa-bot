@@ -171,6 +171,41 @@ export class DrizzleSupportAiJobRepository {
     return toRecord(inserted);
   }
 
+  /**
+   * Phase 4 PR-5: the draft ASSIST_ONLY prepares by itself for an inbound message - an
+   * ASSIST_DRAFT with no requesting admin (no `due_at`: the shape CHECK reserves that for
+   * AUTO_DECISION). Idempotent on the key; false when it already existed.
+   */
+  async insertAutoDraft(
+    scope: ScopeContext,
+    row: {
+      readonly id: string;
+      readonly conversationId: string;
+      readonly idempotencyKey: string;
+      readonly requestHash: string;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const inserted = await exec(this.db, tx)
+      .insert(supportAiJobs)
+      .values({
+        id: row.id,
+        tenantId,
+        kind: 'ASSIST_DRAFT',
+        conversationId: row.conversationId,
+        requestedByAdminId: null,
+        idempotencyKey: row.idempotencyKey,
+        requestHash: row.requestHash,
+        createdAt: row.now,
+        updatedAt: row.now,
+      })
+      .onConflictDoNothing()
+      .returning({ id: supportAiJobs.id });
+    return inserted.length > 0;
+  }
+
   async findById(
     scope: ScopeContext,
     id: string,

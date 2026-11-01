@@ -1,3 +1,4 @@
+import { foldDigits } from './scrubber.js';
 import { normalizePersian } from '../../../commerce/support-context/domain/persian-text.js';
 
 /**
@@ -30,6 +31,33 @@ export function normalizeTitle(title: string): string {
     .trim();
 }
 
+/**
+ * Review of PR #367 — the key every candidate stored BEFORE Phase 4 PR-2 was written with (a ZWNJ
+ * became a space, «ئ» was kept). Stored keys are not rewritten: the duplicate check matches a
+ * proposal under BOTH forms (`titleKeys`), so an existing «چرا وصل نمی‌شود؟» candidate is still
+ * found by the identical proposal.
+ */
+export function legacyNormalizeTitle(title: string): string {
+  return foldDigits(title.normalize('NFKC'))
+    .replace(/[يى]/gu, 'ی')
+    .replace(/ك/gu, 'ک')
+    .replace(/[ةۀ]/gu, 'ه')
+    .replace(/[أإآٱ]/gu, 'ا')
+    .replace(/ؤ/gu, 'و')
+    .replace(/[ً-ٰٟـ]/gu, '')
+    .replace(/[\u200b-\u200f\u2060\ufeff]/gu, ' ')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+/** The keys a title is compared under: today's form first, then the pre-PR-2 form if different. */
+export function titleKeys(title: string): readonly string[] {
+  const current = normalizeTitle(title);
+  const legacy = legacyNormalizeTitle(title);
+  return legacy === current ? [current] : [current, legacy];
+}
+
 /** The padded character trigrams of an (already normalised) string. */
 export function trigrams(normalized: string): ReadonlySet<string> {
   const padded = `  ${normalized} `;
@@ -55,15 +83,16 @@ export function trigramSimilarity(a: string, b: string): number {
  * otherwise the most similar at or above the threshold (ties to the earlier entry).
  */
 export function findDuplicate<T extends { readonly normalizedTitle: string }>(
-  normalized: string,
+  normalized: string | readonly string[],
   existing: readonly T[],
 ): T | null {
-  const exact = existing.find((row) => row.normalizedTitle === normalized);
+  const keys = typeof normalized === 'string' ? [normalized] : normalized;
+  const exact = existing.find((row) => keys.includes(row.normalizedTitle));
   if (exact !== undefined) return exact;
   let best: T | null = null;
   let bestScore = NEAR_DUPLICATE_THRESHOLD;
   for (const row of existing) {
-    const score = trigramSimilarity(normalized, row.normalizedTitle);
+    const score = Math.max(...keys.map((key) => trigramSimilarity(key, row.normalizedTitle)));
     if (score >= bestScore && (best === null || score > bestScore)) {
       best = row;
       bestScore = score;
