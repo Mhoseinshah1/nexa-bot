@@ -4,6 +4,7 @@ Not yet on main. This file lives on `docs/r11-handoff`; the next phase's first P
 `docs/round-reports/phase-3.md` on main (Phase 1/2 reports went in the same way).
 
 ## PR-1 #363 `ci/release-installer-assets` — merge commit 3a1b499 (head a06a072)
+
 - `release.yml`: new `installer` job (after gate → publish → verify). From the gate SHA it builds
   `install.sh` (the tagged file + exactly 3 stamp lines: version, repo, bundle sha256; enforced by
   `scripts/release-installer-assets.sh check-stamp`), `install.sh.sha256` and
@@ -28,6 +29,7 @@ Not yet on main. This file lives on `docs/r11-handoff`; the next phase's first P
   CI's newer shellcheck flagged and the sandbox's 0.11 did not.
 
 ## PR-2 #364 `docs/readme-pro` — merge commit e3f67a8 (head d7a2200)
+
 - README.md (English, technical), README.fa.md (Persian for non-technical readers, RTL, Latin
   digits), SECURITY.md (GitHub private vulnerability reporting), `pnpm check:readme` in verify and
   CI. Every `botctl` command in both READMEs must match the `usage()` text, and the one-liner in
@@ -38,6 +40,7 @@ Not yet on main. This file lives on `docs/r11-handoff`; the next phase's first P
   Fixed in ONE commit (d7a2200).
 
 ## Decisions taken
+
 - The one-liner is `curl -fsSL --remote-name-all …/install.sh{,.sha256} && sha256sum -c install.sh.sha256 && sudo bash install.sh`.
   The plan's `-fsSLO` form cannot work. This is the plan's intent with the flag corrected.
 - "Exactly the tagged install.sh" plus "version embedded at release" → the tagged file plus 3
@@ -52,6 +55,7 @@ Not yet on main. This file lives on `docs/r11-handoff`; the next phase's first P
   Sonnet.
 
 ## Recorded, not fixed (low)
+
 - `gh release upload --clobber` on a re-run of the release workflow replaces assets. The bytes
   are reproducible from the same SHA; differing gzip output would fail closed.
 - A draft release the owner created may not be found by `gh release view`, which could lead to a
@@ -59,7 +63,8 @@ Not yet on main. This file lives on `docs/r11-handoff`; the next phase's first P
 - The publish job's step summary still prints the clone-mode install command.
 
 ## Usage
-| PR | agents | tier | CI cycles |
-|---|---|---|---|
-| #363 | implementer, security reviewer, fix agent | money/security tier ×3; lead | 3 |
-| #364 | implementer | default; lead | 2 |
+
+| PR   | agents                                    | tier                         | CI cycles |
+| ---- | ----------------------------------------- | ---------------------------- | --------- |
+| #363 | implementer, security reviewer, fix agent | money/security tier ×3; lead | 3         |
+| #364 | implementer                               | default; lead                | 2         |
