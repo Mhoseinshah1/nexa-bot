@@ -1,3 +1,23 @@
+# Handoff — Phase 4 (Support AI, `NEXA-PHASE4-SAI.md` + owner's cross-cutting hardening addition) — IN PROGRESS
+
+Resume: re-read the owner's Phase 4 prompt (session upload `NEXA-PHASE4-SAI.md`, the version WITH
+the "Cross-cutting: manipulation / social-engineering hardening" section) and this block.
+
+- main = a8fb982 (after #365, Phase 4 PR-1, merged 2026-11-01; CI green 23/23 on 2957956). Migrations end at 0296.
+- PR-1 `fix/sai-handoff-policy` #365 MERGED (also brought `docs/round-reports/phase-3.md` into main).
+  Codex: 4 P2 (money window stops at business reply; job lease covers 2 generations; sticky takeover
+  for SOFT HUMAN_ACTIVE in Web Admin; cited-service flag on NO_ACTION close) + lead D3 (promise phrase,
+  not bare word) — one fix commit 2957956.
+- In flight (stacked on PR-1's head, origin/main to be merged in): `feat/sai-knowledge-live` (PR-2, Opus,
+  /home/user/wt-sai2, DB nexa_sai2), `feat/sai-admin-ux` (PR-5, Sonnet, /home/user/wt-sai5, DB nexa_sai5).
+- Next: PR-2 → PR-3 `feat/sai-actions` (Opus; cross-cutting item 1 tool scoping + tool rate limit) →
+  PR-4 `feat/sai-bot-tickets` (Sonnet) → PR-6 `chore/sai-eval` (Sonnet; ≥40 attack scenarios). PR-5 parallel.
+- Decisions taken so far (D1 hardening split PR-1/PR-3; D2 stacking; D3 promise phrase; D4 ACCOUNT_UNDER_REVIEW
+  hard, SUSPICIOUS_PROBING soft) go into `docs/round-reports/phase-4.md` at the end.
+- Branches to delete after the round (owner): `fix/sai-handoff-policy`.
+
+---
+
 # Handoff — NEXA-MASTER-NEXT (owner's `_prompts/NEXA-ALL.md`), after Phase 3 — STOPPED (Phase 4 next, new session)
 
 Resume: the owner says "Continue NEXA-MASTER-NEXT from the latest handoff". Re-read
