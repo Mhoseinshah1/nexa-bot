@@ -3,10 +3,12 @@
 Resume: re-read the owner's Phase 4 prompt (session upload `NEXA-PHASE4-SAI.md`, the version WITH
 the "Cross-cutting: manipulation / social-engineering hardening" section) and this block.
 
-- main = 48d2db2 (after #367 PR-2; #366 PR-5 e67879b; #365 PR-1 a8fb982). CI green 23/23 on each merged head. Migrations end at 0299.
+- main = 84e1f58 (after #369 PR-3; #367 PR-2 48d2db2; #366 PR-5 e67879b; #365 PR-1 a8fb982). CI green 23/23 on each merged head. Migrations end at 0300.
+- PR-3 `feat/sai-actions` #369 MERGED (84e1f58): tools/deep links/buttons behind support.ai.actions_enabled (OFF). Codex 3 P2 + CI (tb10 table, icon slots) + lead D12 (trial link → menu) + forwarded-link ownership test in fix 5707539.
+- In flight: PR-4 `feat/sai-bot-tickets` (Sonnet, /home/user/wt-sai4, DB nexa_sai4), PR-6 `chore/sai-eval` (Sonnet, /home/user/wt-sai6). Both stacked on PR-3's head.
 - PR-2 `feat/sai-knowledge-live` #367 MERGED (48d2db2): Codex P1 credential URLs + 7 P2 + CI loop label + lead D8 wiring test in fix 133821d; migration renumbered 0297→0299 (byte-identical).
 - PR-5 `feat/sai-admin-ux` #366 MERGED (e67879b): readiness card, test console, model picker, bulk return, analytics/gaps, runbook + Persian owner guide. Codex 4 P2 + CI web fixes + lead D6 in fix commit e31f57c.
-- PR-3 `feat/sai-actions` in progress, stacked on PR-2 (/home/user/wt-sai3, DB nexa_sai3).
+
 - PR-1 `fix/sai-handoff-policy` #365 MERGED (also brought `docs/round-reports/phase-3.md` into main).
   Codex: 4 P2 (money window stops at business reply; job lease covers 2 generations; sticky takeover
   for SOFT HUMAN_ACTIVE in Web Admin; cited-service flag on NO_ACTION close) + lead D3 (promise phrase,
@@ -17,7 +19,7 @@ the "Cross-cutting: manipulation / social-engineering hardening" section) and th
   PR-4 `feat/sai-bot-tickets` (Sonnet) → PR-6 `chore/sai-eval` (Sonnet; ≥40 attack scenarios). PR-5 parallel.
 - Decisions taken so far (D1 hardening split PR-1/PR-3; D2 stacking; D3 promise phrase; D4 ACCOUNT_UNDER_REVIEW
   hard, SUSPICIOUS_PROBING soft) go into `docs/round-reports/phase-4.md` at the end.
-- Branches to delete after the round (owner): `fix/sai-handoff-policy`, `feat/sai-admin-ux`, `feat/sai-knowledge-live`.
+- Branches to delete after the round (owner): `fix/sai-handoff-policy`, `feat/sai-admin-ux`, `feat/sai-knowledge-live`, `feat/sai-actions`.
 
 ---
 
