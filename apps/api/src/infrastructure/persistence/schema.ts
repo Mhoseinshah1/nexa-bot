@@ -309,6 +309,7 @@ import {
   BUSINESS_BOT_RIGHTS,
   BUSINESS_CONVERSATION_STATES,
   BUSINESS_HANDOFF_REASONS,
+  BUSINESS_HANDOFF_KINDS,
   BUSINESS_MESSAGE_KINDS,
   BUSINESS_MESSAGE_ORIGINS,
   BUSINESS_OUTBOUND_ORIGINS,
@@ -15759,6 +15760,12 @@ export const businessConversations = pgTable(
     controlEpoch: integer('control_epoch').notNull().default(0),
     takeoverReason: text('takeover_reason'),
     handoffReason: text('handoff_reason'),
+    /**
+     * Phase 4 PR-1 — how the current human hold ends (`BUSINESS_HANDOFF_KINDS`): HARD is sticky,
+     * SOFT returns to the AI by itself. NULL on AI_ACTIVE, and on every hold from before this
+     * column, which stays sticky.
+     */
+    handoffKind: text('handoff_kind'),
     lastMessageAt: timestamptz('last_message_at'),
     lastInboundAt: timestamptz('last_inbound_at'),
     lastHumanAt: timestamptz('last_human_at'),
@@ -15820,6 +15827,15 @@ export const businessConversations = pgTable(
     check(
       'business_conversations_handoff_shape_check',
       sql`(state = 'HANDOFF_REQUIRED') = (handoff_reason IS NOT NULL)`,
+    ),
+    check(
+      'business_conversations_handoff_kind_check',
+      enumCheck('handoff_kind', BUSINESS_HANDOFF_KINDS),
+    ),
+    // Only a person's hold has a kind.
+    check(
+      'business_conversations_handoff_kind_shape_check',
+      sql`state <> 'AI_ACTIVE' OR handoff_kind IS NULL`,
     ),
     check('business_conversations_epoch_check', sql`control_epoch >= 0`),
     check('business_conversations_chat_check', sql`chat_id ~ '^-?[1-9][0-9]{0,31}$'`),
@@ -16039,6 +16055,8 @@ export const businessConversationEscalations = pgTable(
     contextFrom: timestamptz('context_from'),
     ticketId: uuid('ticket_id'),
     ticketOutcome: text('ticket_outcome').notNull(),
+    /** Phase 4 PR-1 — the handoff's kind (`BUSINESS_HANDOFF_KINDS`); NULL before this column. */
+    handoffKind: text('handoff_kind'),
     jobId: uuid('job_id'),
     textPurgedAt: timestamptz('text_purged_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
@@ -16088,6 +16106,10 @@ export const businessConversationEscalations = pgTable(
     check(
       'business_conversation_escalations_steps_check',
       sql`steps_tried IS NULL OR steps_tried >= 0`,
+    ),
+    check(
+      'business_conversation_escalations_handoff_kind_check',
+      enumCheck('handoff_kind', BUSINESS_HANDOFF_KINDS),
     ),
     check('business_conversation_escalations_epoch_check', sql`control_epoch >= 1`),
   ],

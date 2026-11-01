@@ -968,6 +968,39 @@ export const SETTINGS = [
     consumer: 'ACTIVE',
   },
   {
+    key: 'support.ai.resume_after_minutes',
+    description:
+      'Phase 4 PR-1: how many minutes after the last word of a person (an operator, the owner ' +
+      'typing in the business account) a SOFT handoff returns the Telegram Business conversation ' +
+      'to the support AI by itself; also how long a person\u2019s message pauses the AI. Between 0 ' +
+      'and 1440. A HARD handoff (money dispute, refund, credentials, security, a request for a ' +
+      'person, abuse) never returns by itself. Read when the customer next writes, and only while ' +
+      'the support AI is in automatic-reply mode.',
+    schema: z.number().int().min(0).max(1440),
+    defaultValue: 30,
+    // 0 = never: every handoff and every person's message is sticky, as before Phase 4.
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'support.ai.handoff_alert_pct',
+    description:
+      'Phase 4 PR-1: the share (percent) of SOFT handoffs among the last 50 automatic support-AI ' +
+      'jobs above which the operations log is told «نرخ ارجاع به پشتیبان بالا است», at most once ' +
+      'every six hours, with the top three reasons. Between 0 and 100.',
+    schema: z.number().int().min(0).max(100),
+    defaultValue: 30,
+    // 0 = the alert is off.
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
     key: 'telegram.channels',
     description:
       'The channels shown to customers, in order, each flagged as required membership or ' +

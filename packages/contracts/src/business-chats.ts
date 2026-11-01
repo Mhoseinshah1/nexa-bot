@@ -276,6 +276,14 @@ export const BUSINESS_HANDOFF_REASONS = [
   'REPEATED_ADVICE',
   /** The customer repeated one message, or sent many in a minute: a person reads them. */
   'INBOUND_FLOOD',
+  // --- Phase 4 PR-1 (2026-11-01).
+  /**
+   * The output validator refused the reply twice (a link, amount, phone, card or Telegram id
+   * the context does not hold, or a promise word): nothing was sent.
+   */
+  'OUTPUT_POLICY',
+  /** Repeated refusals in one epoch: somebody is probing for what the AI must not give. */
+  'SUSPICIOUS_PROBING',
 ] as const;
 export type BusinessHandoffReason = (typeof BUSINESS_HANDOFF_REASONS)[number];
 
@@ -325,7 +333,11 @@ export function businessHandoffWireReason(
     case 'NO_PROGRESS':
     case 'REPEATED_ADVICE':
     case 'INBOUND_FLOOD':
+    case 'SUSPICIOUS_PROBING':
       return 'LOOP_GUARD';
+    // Phase 4 PR-1: a reply that named something the facts do not hold is a grounding failure.
+    case 'OUTPUT_POLICY':
+      return 'INSUFFICIENT_GROUNDING';
     default:
       return reason;
   }
@@ -347,6 +359,68 @@ export const businessHandoffReasonDetailSchema = z
   .enum(BUSINESS_HANDOFF_REASONS)
   .nullish()
   .catch(undefined);
+
+/**
+ * Phase 4 PR-1 — how a person's hold on a conversation ends.
+ *
+ * - `HARD` — sticky: only an operator's «سپردن دوباره به هوش مصنوعی» returns it to the AI. A
+ *   money dispute or refund, credentials, security, an explicit request for a person, abuse, a
+ *   send whose outcome is unknown, an operator's explicit takeover.
+ * - `SOFT` — the AI takes the conversation back by itself when no person wrote for
+ *   `support.ai.resume_after_minutes`, when the handoff's ticket is resolved, or when the
+ *   customer starts a new session after that long a silence. Every other handoff reason, and a
+ *   person's message in a conversation the AI held (it pauses the AI for that window only).
+ *
+ * A conversation whose kind is NULL (any handoff from before this column) is sticky: no stored
+ * conversation changes behaviour because a release shipped.
+ */
+export const BUSINESS_HANDOFF_KINDS = ['HARD', 'SOFT'] as const;
+export type BusinessHandoffKind = (typeof BUSINESS_HANDOFF_KINDS)[number];
+
+/** The handoff topics that are always HARD: everything but `OTHER` (an unclear question). */
+const HARD_HANDOFF_TOPICS: readonly string[] = [
+  'REFUND',
+  'WALLET',
+  'PAYMENT_DISPUTE',
+  'PAYMENT_STATUS',
+  'RECEIPT_REVIEW',
+  'SERVICE_DELETE_OR_TERMINATE',
+  'OWNERSHIP_OR_ACCOUNT_TRANSFER',
+  'ACCOUNT_SECURITY',
+  'CREDENTIALS',
+  'PROVIDER_CHANGE',
+  'FRAUD_OR_CHARGEBACK',
+  'LEGAL_OR_SAFETY',
+  'HUMAN_REQUESTED',
+];
+
+/**
+ * The kind of a handoff from its reason and, when the AI decided, the decision's topic. A
+ * `HANDOFF_TOPIC` with no topic is the deterministic money guard (a refund or a «paid but not
+ * received»): hard. An `AI_REQUESTED` handoff is as hard as the topic the model named.
+ */
+export function businessHandoffKindOf(
+  reason: BusinessHandoffReason,
+  topic: string | null = null,
+): BusinessHandoffKind {
+  switch (reason) {
+    case 'HUMAN_REQUESTED':
+    case 'CUSTOMER_BLOCKED':
+    case 'SEND_OUTCOME_UNKNOWN':
+    case 'ACCOUNT_UNDER_REVIEW':
+      return 'HARD';
+    case 'HANDOFF_TOPIC':
+      return topic === 'OTHER' ? 'SOFT' : 'HARD';
+    case 'AI_REQUESTED':
+      return topic !== null && HARD_HANDOFF_TOPICS.includes(topic) ? 'HARD' : 'SOFT';
+    default:
+      return 'SOFT';
+  }
+}
+
+/** The three ways a SOFT hold returns to the AI (audit only). */
+export const BUSINESS_AUTO_RESUME_TRIGGERS = ['RESOLVED', 'NEW_SESSION', 'HUMAN_SILENT'] as const;
+export type BusinessAutoResumeTrigger = (typeof BUSINESS_AUTO_RESUME_TRIGGERS)[number];
 
 /**
  * TB7 — the operator-visible signal of a handoff. A CODE IS SCHEMA (CLAUDE.md): deduped per
@@ -546,6 +620,12 @@ const conversationSummarySchema = z.object({
   handoffReason: z.enum(BUSINESS_HANDOFF_WIRE_REASONS).nullable(),
   /** The real reason (`businessHandoffWireReason`); see `businessHandoffReasonDetailSchema`. */
   handoffReasonDetail: businessHandoffReasonDetailSchema,
+  /**
+   * Phase 4 PR-1: how the current person's hold ends (`BUSINESS_HANDOFF_KINDS`); null on
+   * AI_ACTIVE and on holds from before the kind. Optional when read (an older replica does not
+   * send it) and an unknown value reads as absent.
+   */
+  handoffKind: z.enum(BUSINESS_HANDOFF_KINDS).nullish().catch(undefined),
   peerTelegramUserId: z.string(),
   customer: z
     .object({ id: z.string(), username: z.string().nullable(), firstName: z.string().nullable() })

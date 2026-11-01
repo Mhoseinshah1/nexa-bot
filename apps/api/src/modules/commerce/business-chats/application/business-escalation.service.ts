@@ -105,6 +105,7 @@ export class BusinessEscalationService implements HandoffEscalation {
             : null,
         ticketId,
         ticketOutcome: outcome,
+        handoffKind: input.conversation.handoffKind,
         jobId: input.detail.jobId,
         now: input.now,
       },
@@ -122,6 +123,7 @@ export class BusinessEscalationService implements HandoffEscalation {
         context: {
           conversationId: conversation.id,
           reason: input.reason,
+          handoffKind: conversation.handoffKind,
           ticketId,
           ticketOutcome: outcome,
         },

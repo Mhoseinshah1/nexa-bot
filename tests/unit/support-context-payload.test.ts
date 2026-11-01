@@ -468,10 +468,13 @@ describe('TB3 support context — the builder over fakes', () => {
     expect(built.references.services.get('S2')).toBe('svc-b');
     expect(built.payload.flags).toEqual({
       hasUnderReviewPayment: true,
-      hasUnreconciledService: true,
+      // Phase 4 PR-1: the flag is the reader's RECENT unreconciled service (none here); the
+      // unreconciled service on the page is judged by its own entry when a reply cites it.
+      hasUnreconciledService: false,
       identityLinked: true,
       customerBlocked: false,
     });
+    expect(built.payload.services.some((service) => service.unreconciled)).toBe(true);
     expect(built.payload.clientApps[0]?.guide.length).toBeLessThanOrEqual(1500);
     const json = JSON.stringify(built.payload);
     for (const secret of [

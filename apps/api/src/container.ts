@@ -1,3 +1,5 @@
+import { SupportHandoffRateAlert } from './modules/control/support-ai/application/handoff-rate-alert.js';
+import { SupportAutoResumePolicy } from './modules/control/support-ai/infrastructure/support-auto-resume.policy.js';
 import { CustomerDirectMessageService } from './modules/commerce/direct-messages/application/customer-direct-message.service.js';
 import { LegacyMaterializeService } from './modules/platform/legacy-materialize/application/materialize.service.js';
 import { CustomerSourceStep } from './modules/platform/legacy-materialize/application/customers-source.step.js';
@@ -81,6 +83,7 @@ import {
   formatDateTime,
   LEDGER_REASON_LABELS_FA,
   rejectReasonFa,
+  SUPPORT_HANDOFF_REASON_LABELS_FA,
 } from '@nexa/i18n';
 import type {
   OperationType,
@@ -7146,6 +7149,12 @@ export function createContainer(
     escalation: businessEscalation,
     escalations: businessEscalationRepository,
     learning: supportLearning,
+    // Phase 4 PR-1: a SOFT hold returns to the AI after `support.ai.resume_after_minutes`.
+    autoResume: new SupportAutoResumePolicy({
+      db: database.db,
+      configs: supportAiConfigs,
+      settings: settingsResolver,
+    }),
   });
   // A8: the knowledge query also reads the conversation's earlier decisions.
   const supportContextSource = new TbSupportContextSource(supportContext, supportAiJobs);
@@ -7171,6 +7180,14 @@ export function createContainer(
     uow,
     scopeActivity: tenants,
     clock,
+    // Phase 4 PR-1: the logger (was not passed), the operations log, and the start-link message.
+    logger,
+    opsLog,
+    templates: templateResolver,
+    bots: {
+      usernameOf: async (scope, botInstanceId) =>
+        (await botInstances.findById(botInstanceId as BotInstanceId))?.username ?? null,
+    },
   });
   const supportAssist = new SupportAssistService({
     jobs: supportAiJobs,
@@ -7199,6 +7216,13 @@ export function createContainer(
   });
   const assistantLoop = new AssistantLoop(supportAssist, {
     auto: supportAutoReply,
+    handoffRate: new SupportHandoffRateAlert({
+      jobs: supportAiJobs,
+      settings: settingsResolver,
+      opsLog,
+      clock,
+      reasonLabel: (reason) => SUPPORT_HANDOFF_REASON_LABELS_FA[reason] ?? reason,
+    }),
     learning: supportLearning,
     // D5: the assistant closes the worker's "stalled" condition itself.
     liveness: new SupportAssistantLiveness({

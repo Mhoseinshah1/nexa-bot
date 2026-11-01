@@ -423,9 +423,17 @@ describe('A6: closing acknowledgements and the silent NO_ACTION', () => {
     expect(allowed({ decision: { ...decision, topic: 'HUMAN_REQUESTED' } })).toBe(false);
     expect(allowed({ decision: { ...decision, topic: 'APP_SETUP' } })).toBe(false);
     expect(allowed({ decision: { ...decision, confidence: 'MEDIUM' } })).toBe(false);
-    expect(allowed({ flags: { ...flags, hasUnderReviewPayment: true } })).toBe(false);
+    // Phase 4 PR-1: the account flags matter on an account topic only.
+    const account = { decision: { ...decision, topic: 'SERVICE_INFO' as const } };
+    const accountConfig = { config: { ...config, autoTopics: ['SERVICE_INFO' as const] } };
+    expect(
+      allowed({ ...account, ...accountConfig, flags: { ...flags, hasUnderReviewPayment: true } }),
+    ).toBe(false);
     // m3
-    expect(allowed({ flags: { ...flags, hasUnreconciledService: true } })).toBe(false);
+    expect(
+      allowed({ ...account, ...accountConfig, flags: { ...flags, hasUnreconciledService: true } }),
+    ).toBe(false);
+    expect(allowed({ flags: { ...flags, hasUnderReviewPayment: true } })).toBe(true);
     expect(allowed({ flags: { ...flags, customerBlocked: true } })).toBe(false);
     expect(
       allowed({
@@ -444,12 +452,19 @@ describe('A6: closing acknowledgements and the silent NO_ACTION', () => {
       reason: 'CUSTOMER_BLOCKED',
     });
     for (const flag of ['hasUnderReviewPayment', 'hasUnreconciledService'] as const) {
-      expect(autoNoActionVerdict(input({ flags: { ...flags, [flag]: true } })), flag).toMatchObject(
-        {
-          outcome: 'guard_account_review',
-          reason: 'ACCOUNT_UNDER_REVIEW',
-        },
-      );
+      expect(
+        autoNoActionVerdict(
+          input({
+            decision: { ...decision, topic: 'SERVICE_INFO' },
+            config: { ...config, autoTopics: ['SERVICE_INFO'] },
+            flags: { ...flags, [flag]: true },
+          }),
+        ),
+        flag,
+      ).toMatchObject({
+        outcome: 'guard_account_review',
+        reason: 'ACCOUNT_UNDER_REVIEW',
+      });
     }
     expect(
       autoNoActionVerdict(input({ decision: { ...decision, topic: 'WALLET' } })),
@@ -461,15 +476,16 @@ describe('A6: closing acknowledgements and the silent NO_ACTION', () => {
     ).toMatchObject({
       reason: 'HUMAN_REQUESTED',
     });
-    expect(autoNoActionVerdict(input({ customerTexts: ['یه سؤال دیگه'] }))).toMatchObject({
-      reason: 'DECISION_NOT_REPLY',
-    });
+    expect(
+      autoNoActionVerdict(input({ decision: { ...decision, topic: 'APP_SETUP' } })),
+    ).toMatchObject({ reason: 'DECISION_NOT_REPLY' });
   });
 
-  it('never when any customer line it would answer is not a closing one', () => {
-    expect(allowed({ customerTexts: ['مرسی', 'یه سؤال دیگه دارم'] })).toBe(false);
+  it('Phase 4 PR-1: a NO_ACTION on an allowlisted safe topic closes silently whatever was said', () => {
+    expect(allowed({ customerTexts: ['مرسی', 'یه سؤال دیگه دارم'] })).toBe(true);
+    expect(allowed({ customerTexts: [null] })).toBe(true);
+    // With nothing the customer said, there is nothing to close.
     expect(allowed({ customerTexts: [] })).toBe(false);
-    expect(allowed({ customerTexts: [null] })).toBe(false);
   });
 });
 

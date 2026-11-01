@@ -117,6 +117,8 @@ export const SUPPORT_AI_ERROR_CODES = {
   UNKNOWN_PROVIDER: 'support_ai.unknown_provider',
   REGION_NOT_APPLICABLE: 'support_ai.region_not_applicable',
   TEST_TOO_SOON: 'support_ai.test_too_soon',
+  /** Phase 4 PR-1: automatic replies with no topic would answer nothing — refused, not saved. */
+  AUTO_TOPICS_REQUIRED: 'support_ai.auto_topics_required',
 } as const;
 
 /**
@@ -295,6 +297,17 @@ export class SupportAiConfigService {
               next.settleDelaySeconds < prev.settleDelaySeconds));
         if (widened) {
           await this.deps.guard.check(scope, actor, SUPPORT_AI_AUTO_REPLY_PERMISSION, tx);
+        }
+        // Phase 4 PR-1 (after the permission checks, so a refused entry is still audited as a
+        // denial): AUTO_REPLY_SAFE with an empty allowlist answers nothing and hands every
+        // conversation off — the configuration that made almost every chat end with a person. A
+        // save of it is refused (a stored one is never rewritten: the dashboard suggests the
+        // preset instead).
+        if (config.mode === 'AUTO_REPLY_SAFE' && config.autoTopics.length === 0) {
+          throw errors.validation(
+            SUPPORT_AI_ERROR_CODES.AUTO_TOPICS_REQUIRED,
+            'Automatic replies need at least one topic.',
+          );
         }
         const expected = command.expectedVersion ?? 0;
         if (expected !== before.version) throw this.versionConflict();

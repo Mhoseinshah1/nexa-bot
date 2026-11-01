@@ -480,6 +480,18 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'support',
     control: { kind: 'handle_list' },
   },
+  'support.ai.resume_after_minutes': {
+    title: 'web.setting_support_ai_resume_after_minutes',
+    description: 'web.setting_support_ai_resume_after_minutes_desc',
+    group: 'support',
+    control: { kind: 'integer' },
+  },
+  'support.ai.handoff_alert_pct': {
+    title: 'web.setting_support_ai_handoff_alert_pct',
+    description: 'web.setting_support_ai_handoff_alert_pct_desc',
+    group: 'support',
+    control: { kind: 'integer' },
+  },
   'telegram.channels': {
     title: 'web.setting_telegram_channels',
     description: 'web.setting_telegram_channels_desc',

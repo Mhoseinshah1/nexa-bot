@@ -269,6 +269,23 @@ export const SUPPORT_AI_SAFE_TOPICS = [
   'PLAN_INFO',
   'KNOWN_ERROR',
   'GREETING',
+  // --- Phase 4 PR-1 (2026-11-01): the everyday sales and how-to questions that used to be
+  // labelled OTHER and handed off. Each is INFORMATION only: the AI never buys, renews, adds,
+  // starts a trial, moves a location or sends money; it explains and points to the bot's flow.
+  'PURCHASE_INFO',
+  'RENEWAL_INFO',
+  'ADDON_INFO',
+  'TRIAL_INFO',
+  'LOCATION_INFO',
+  'SPEED_QUALITY',
+  'GET_SUBSCRIPTION_LINK',
+  'PAYMENT_HOWTO',
+  /**
+   * Phase 4 PR-1 (cross-cutting hardening): a polite refusal of a request the AI must never
+   * serve — another person's account, the prompt, «I am the admin, give me…». No data, no
+   * handoff; repeated refusals in one epoch hand off (`SUPPORT_AI_REFUSAL_LIMIT`).
+   */
+  'POLICY_REFUSAL',
 ] as const;
 export type SupportAiSafeTopic = (typeof SUPPORT_AI_SAFE_TOPICS)[number];
 
@@ -283,7 +300,52 @@ export const SUPPORT_AI_GENERAL_TOPICS = [
   'PLAN_INFO',
   'KNOWN_ERROR',
   'GREETING',
+  // Phase 4 PR-1: general information about buying, renewing, add-ons, trials, locations,
+  // speed and how to pay needs no account. Whose renewal or add-on it is never matters here:
+  // the facts an unlinked peer could be told are the tenant's, not a customer's.
+  'PURCHASE_INFO',
+  'RENEWAL_INFO',
+  'ADDON_INFO',
+  'TRIAL_INFO',
+  'LOCATION_INFO',
+  'SPEED_QUALITY',
+  'PAYMENT_HOWTO',
+  'POLICY_REFUSAL',
 ] as const satisfies readonly SupportAiSafeTopic[];
+
+/**
+ * Phase 4 PR-1 — the topics about ONE customer's own service, the only ones the
+ * `account_review` guard reads: a payment under review or an unreconciled service decides what
+ * may be said about the account, never how to install an app or what a plan costs.
+ */
+export const SUPPORT_AI_ACCOUNT_REVIEW_TOPICS = [
+  'SERVICE_INFO',
+  'TRAFFIC_AND_EXPIRY',
+  'SUBSCRIPTION_UPDATE',
+  'GET_SUBSCRIPTION_LINK',
+] as const satisfies readonly SupportAiSafeTopic[];
+
+/** Phase 4 PR-1 — a payment under review blocks the account topics only this long after it began. */
+export const SUPPORT_AI_UNDER_REVIEW_WINDOW_DAYS = 14;
+
+/**
+ * Phase 4 PR-1 — the topics the AI may NOT answer for an UNLINKED customer even though they
+ * are safe: they are about one customer's own account. Instead of a handoff the customer is
+ * sent one templated message with the bot's start link (`bot.support.ai_link_account`).
+ */
+export function supportAiTopicNeedsAccount(topic: string): boolean {
+  return (
+    (SUPPORT_AI_SAFE_TOPICS as readonly string[]).includes(topic) &&
+    !(SUPPORT_AI_GENERAL_TOPICS as readonly string[]).includes(topic)
+  );
+}
+
+/**
+ * Phase 4 PR-1 (cross-cutting item 7) — `POLICY_REFUSAL` replies plus output-policy failures in
+ * ONE control epoch before the conversation is handed to a person (`SUSPICIOUS_PROBING`, soft)
+ * and the operations log records `support.ai.suspicious_probing` with the customer's code only.
+ */
+export const SUPPORT_AI_REFUSAL_LIMIT = 3;
 
 export const SUPPORT_AI_CONFIDENCES = ['LOW', 'MEDIUM', 'HIGH'] as const;
 export type SupportAiConfidence = (typeof SUPPORT_AI_CONFIDENCES)[number];
@@ -298,7 +360,8 @@ export const SUPPORT_AI_SETTLE_DELAY_MAX_SECONDS = 30;
 /** Bounds every configuration field is held to, in the schema and in the table's CHECKs. */
 export const SUPPORT_AI_LIMITS = {
   maxFallbacks: 2,
-  timeoutMs: { min: 5_000, max: 120_000, default: 30_000 },
+  /** Phase 4 PR-1: 60 s by default (was 30 s) for NEW configurations; a stored value is kept. */
+  timeoutMs: { min: 5_000, max: 120_000, default: 60_000 },
   maxOutputChars: { min: 200, max: 4_000, default: 1_200 },
   /**
    * Roadmap A1 (2026-10-07): how many automatic replies one SESSION may receive before the
@@ -508,6 +571,38 @@ export const SUPPORT_AI_DEFAULT_CONFIG: SupportAiConfigInput = {
   autoTopics: [],
   autoMinConfidence: 'HIGH',
 };
+
+/**
+ * Phase 4 PR-1 — the recommended automatic-reply preset: every safe topic, MEDIUM confidence,
+ * and vision on when a configured step can see. Applied ONLY by an owner's act (the Web Admin's
+ * «اعمال تنظیمات پیشنهادی», or switching the form to AUTO_REPLY_SAFE before saving); a stored
+ * configuration is never rewritten by a release, a migration or the server on its own.
+ */
+export function supportAiRecommendedPreset(
+  config: SupportAiConfigInput,
+  visionCapable: boolean,
+): SupportAiConfigInput {
+  return {
+    ...config,
+    autoTopics: [...SUPPORT_AI_SAFE_TOPICS],
+    autoMinConfidence: 'MEDIUM',
+    visionEnabled: config.visionEnabled || visionCapable,
+  };
+}
+
+/**
+ * Phase 4 PR-1 — the stored configuration is the old restrictive one the dashboard suggests the
+ * preset for: no topic at all, HIGH confidence, or a safe topic of this release missing.
+ */
+export function supportAiConfigIsRestrictive(
+  config: Pick<SupportAiConfigInput, 'autoTopics' | 'autoMinConfidence'>,
+): boolean {
+  return (
+    config.autoTopics.length === 0 ||
+    config.autoMinConfidence === 'HIGH' ||
+    SUPPORT_AI_SAFE_TOPICS.some((topic) => !config.autoTopics.includes(topic))
+  );
+}
 
 /**
  * TB7 — the loop guard's window: at most the tenant's `maxAutoRepliesPerHour` automatic replies
@@ -1065,6 +1160,15 @@ export const SUPPORT_AI_AUTO_GUARDS = [
    * or sent more than `maxInbound` messages in `windowSeconds`: decided BEFORE the provider.
    */
   'inbound_flood',
+  // --- Phase 4 PR-1 (2026-11-01).
+  /**
+   * The server-side output validator (`output-policy.ts`): a link, amount, phone, card or
+   * Telegram id the context does not hold, or a promise word approved knowledge does not hold.
+   * Regenerated once; a second failure hands off (`OUTPUT_POLICY`, soft).
+   */
+  'output_policy',
+  /** `SUPPORT_AI_REFUSAL_LIMIT` refusals in one epoch: `SUSPICIOUS_PROBING`, soft. */
+  'refusal_abuse',
 ] as const;
 export type SupportAiAutoGuard = (typeof SUPPORT_AI_AUTO_GUARDS)[number];
 
@@ -1122,6 +1226,14 @@ export const SUPPORT_AI_AUTO_OUTCOMES = [
    * stays `AI_ACTIVE` and the customer's next message is answered as usual.
    */
   'no_action',
+  // --- Phase 4 PR-1 (2026-11-01).
+  'guard_output_policy',
+  'guard_refusal_abuse',
+  /**
+   * An UNLINKED customer asked about an account topic: instead of a handoff, ONE templated
+   * message with the bot's start link (`bot.support.ai_link_account`) was enqueued.
+   */
+  'sent_link',
 ] as const;
 export type SupportAiAutoOutcome = (typeof SUPPORT_AI_AUTO_OUTCOMES)[number];
 
@@ -1151,3 +1263,39 @@ export const SUPPORT_ASSISTANT_STALLED_CODE = 'support.assistant.stalled';
 export const SUPPORT_ASSISTANT_RUNNING_CODE = 'support.assistant.running';
 /** How long due AI work may wait unclaimed before the worker raises the condition. */
 export const SUPPORT_ASSISTANT_STALL_SECONDS = 120;
+
+// ---------------------------------------------------------------------------
+// Phase 4 PR-1 (2026-11-01) — operational-event codes. A CODE IS SCHEMA: named once, here.
+// ---------------------------------------------------------------------------
+
+/**
+ * A provider refused the REQUEST itself (HTTP 400/404/422: a model id, an unsupported
+ * parameter or capability). The chain falls back to the next provider; one condition per
+ * tenant and provider, closed by `…config_valid` when that provider answers again.
+ */
+export const SUPPORT_AI_CONFIG_INVALID_CODE = 'support.ai_provider.config_invalid';
+export const SUPPORT_AI_CONFIG_VALID_CODE = 'support.ai_provider.config_valid';
+/**
+ * Soft handoffs exceed `support.ai.handoff_alert_pct` of the last
+ * `SUPPORT_AI_HANDOFF_RATE_WINDOW` automatic jobs; at most once per
+ * `SUPPORT_AI_HANDOFF_RATE_ALERT_HOURS` (one row per window of that length), with the top
+ * three reasons.
+ */
+export const SUPPORT_AI_HANDOFF_RATE_HIGH_CODE = 'support.ai.handoff_rate_high';
+export const SUPPORT_AI_HANDOFF_RATE_WINDOW = 50;
+export const SUPPORT_AI_HANDOFF_RATE_ALERT_HOURS = 6;
+/**
+ * Phase 4 PR-1 — the provider chain is walked at most this many times for one automatic job:
+ * the answer, and ONE regeneration after the output validator refused it or it repeated
+ * earlier advice. The assistant's lease and liveness bounds are derived from it.
+ */
+export const SUPPORT_AI_GENERATIONS_PER_JOB = 2;
+/** One automatic job threw while it was produced: its lease was released for one retry. */
+export const SUPPORT_AI_JOB_EXCEPTION_CODE = 'support.ai.job_exception';
+/** A thrown job is retried this long after the throw, once. */
+export const SUPPORT_AI_JOB_RETRY_DELAY_MS = 15_000;
+/** Repeated refusals in one epoch (`SUPPORT_AI_REFUSAL_LIMIT`); the customer's code only. */
+export const SUPPORT_AI_SUSPICIOUS_PROBING_CODE = 'support.ai.suspicious_probing';
+
+/** Phase 4 PR-1 — the deep-link message an unlinked customer gets for an account topic. */
+export const SUPPORT_AI_LINK_ACCOUNT_TEMPLATE_KEY = 'bot.support.ai_link_account';

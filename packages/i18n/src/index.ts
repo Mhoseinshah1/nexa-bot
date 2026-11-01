@@ -43,6 +43,7 @@ export {
 } from './loop-labels.fa.js';
 export { CUSTOMER_NOTIFICATION_KIND_NAMES_FA } from './customer-notification-kinds.fa.js';
 export { LEDGER_REASON_LABELS_FA } from './ledger-reasons.fa.js';
+export { SUPPORT_HANDOFF_REASON_LABELS_FA } from './support-handoff-reasons.fa.js';
 export { TONPAYS_REJECT_REASONS_FA, rejectReasonFa } from './gateway-reject-reasons.fa.js';
 import { clipEntities, parseCaptionMarkup, type CaptionMarkup } from './caption-markup.js';
 

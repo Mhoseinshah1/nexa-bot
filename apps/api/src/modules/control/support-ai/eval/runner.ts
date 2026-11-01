@@ -28,7 +28,7 @@ import {
   autoRepeatedAdviceGuard,
   type ProgressLine,
   clarifyingStreakOf,
-  customerTextsSinceReply,
+  moneyGuardWindow,
 } from '../domain/auto-reply-guards.js';
 import { decisionOutputTokens, parseSupportDecision } from '../domain/decision.js';
 import { knowledgeQueryFor } from '../domain/knowledge-query.js';
@@ -262,7 +262,7 @@ export function prepareScenario(
     sentAt: new Date(index * 120_000),
   }));
   const lastCustomer = [...lines].reverse().find((line) => line.origin === 'INBOUND');
-  const money = autoMoneyGuard(customerTextsSinceReply(lines, lastCustomer?.text ?? null));
+  const money = autoMoneyGuard(moneyGuardWindow(lines, lastCustomer?.text ?? null));
   const messages: TranscriptTurn[] = transcriptMessages(
     lines.map((line) => ({
       ...line,

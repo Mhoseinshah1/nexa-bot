@@ -2,7 +2,15 @@ import {
   SUPPORT_AI_AUTO_STALE_SECONDS,
   SUPPORT_AI_AUTO_WINDOW,
   SUPPORT_AI_DECISION_JSON_SCHEMA,
+  SUPPORT_AI_JOB_EXCEPTION_CODE,
+  SUPPORT_AI_JOB_RETRY_DELAY_MS,
+  SUPPORT_AI_LINK_ACCOUNT_TEMPLATE_KEY,
+  SUPPORT_AI_REFUSAL_LIMIT,
+  SUPPORT_AI_SUSPICIOUS_PROBING_CODE,
+  SUPPORT_AI_UNDER_REVIEW_WINDOW_DAYS,
   type BusinessHandoffReason,
+  type OperationalEventRecorder,
+  type SupportAiAutoGuard,
   type Clock,
   type IdGenerator,
   type Logger,
@@ -15,6 +23,7 @@ import {
   type UnitOfWork,
 } from '@nexa/contracts';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
+import type { TemplateResolver } from '../../templates/application/template-resolver.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { BusinessConversationService } from '../../../commerce/business-chats/application/business-conversation.service.js';
 import type {
@@ -31,16 +40,22 @@ import {
   autoImageGuard,
   autoInboundFloodGuard,
   autoMoneyGuard,
-  autoNoActionAllowed,
   autoNoActionVerdict,
   autoNoProgressGuard,
   autoPreflight,
   autoRepeatedAdviceGuard,
   customerTextsSinceReply,
+  moneyGuardWindow,
   type AutoContextFlags,
   type AutoVerdict,
 } from '../domain/auto-reply-guards.js';
 import { planVision } from '../domain/vision.js';
+import {
+  OUTPUT_POLICY_REGENERATE_NOTE,
+  REPEATED_ADVICE_REGENERATE_NOTE,
+  checkOutputPolicy,
+  outputPolicyAllowanceFromContext,
+} from '../domain/output-policy.js';
 import { decisionOutputTokens, parseSupportDecision } from '../domain/decision.js';
 import {
   supportSystemPrompt,
@@ -173,6 +188,9 @@ export interface SupportAutoReplyServiceDeps {
     | 'clarifyingStreak'
     | 'sessionReplyCount'
     | 'epochStartedAt'
+    | 'otherStreak'
+    | 'refusalCount'
+    | 'releaseLease'
   >;
   readonly configs: Pick<DrizzleSupportAiConfigRepository, 'get'>;
   readonly chain: Pick<SupportAiChain, 'generate' | 'visionStepConfigured'>;
@@ -201,6 +219,14 @@ export interface SupportAutoReplyServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   readonly clock: Clock;
   readonly logger?: Pick<Logger, 'info'>;
+  /** Phase 4 PR-1: the operations log (the repeated-refusal signal). */
+  readonly opsLog?: OperationalEventRecorder;
+  /** Phase 4 PR-1 item 5: renders the start-link message for an unlinked customer. */
+  readonly templates?: Pick<TemplateResolver, 'render'>;
+  /** Phase 4 PR-1 item 5: the bot's username, for its start link. */
+  readonly bots?: {
+    usernameOf(scope: ScopeContext, botInstanceId: string): Promise<string | null>;
+  };
 }
 
 /** The guards' account facts for one customer, read in the caller's transaction. */
@@ -209,6 +235,8 @@ export interface AutoGuardFacts {
     scope: ScopeContext,
     customerId: string | null,
     tx?: unknown,
+    /** Phase 4 PR-1: the review window and the services the reply cites (their labels). */
+    scoping?: { readonly since: Date; readonly serviceLabels: readonly string[] },
   ): Promise<AutoContextFlags>;
 }
 
@@ -300,7 +328,8 @@ export class SupportAutoReplyService {
     }
     // 3c. D9: money in what the customer wrote is a person's, whatever topic a model would pick.
     const customerTexts = customerTextsSinceReply(transcript, trigger?.text ?? null);
-    const money = autoMoneyGuard(customerTexts);
+    // Phase 4 PR-1: the trigger and the customer's previous two lines only.
+    const money = autoMoneyGuard(moneyGuardWindow(transcript, trigger?.text ?? null));
     if (!money.pass) return this.handOff(scope, job, money, null, null);
     // 3d. Roadmap A3 — the progress guards, deterministic and before any provider cost, on the
     // transcript since the AI's part in this epoch began: three «نشد» in a row after its advice,
@@ -354,7 +383,9 @@ export class SupportAutoReplyService {
       image: loaded.get(m.id)?.image ?? null,
     }));
 
-    // 5. The model proposes.
+    // 5. The model proposes — at most twice (Phase 4 PR-1): a reply the output validator refuses,
+    // or one that repeats advice already given, is asked for ONCE more with a note saying why;
+    // a second refusal hands off. Nothing refused is ever sent.
     const turns = transcriptMessages(lines, { attachImages: false });
     if (turns.length === 0) {
       const unreadable = {
@@ -396,119 +427,211 @@ export class SupportAutoReplyService {
     // `reply_bounds` guard's, not the parser's.
     const parse = (output: unknown) =>
       parseSupportDecision(output, { maxReplyChars: null, mode: 'STRICT' });
-    const result = await this.deps.chain.generate(scope, {
-      operation: 'AUTO_DECISION',
-      conversationId: conversation.id,
-      jobId: job.id,
-      validate: (output) => {
-        const parsed = parse(output);
-        return parsed.ok ? null : parsed.failure;
-      },
-      request: {
-        system: supportSystemPrompt({
-          businessToneInstructions: config.toneInstructions,
-          maxReplyChars: config.maxOutputChars,
-          contextJson: context.json,
-          identityLinked: context.linked,
-        }),
-        messages: turns,
-        jsonSchema: SUPPORT_AI_DECISION_JSON_SCHEMA,
-        schemaName: 'support_decision',
-        maxOutputTokens: decisionOutputTokens(config.maxOutputChars),
-      },
-      ...(vision === null ? {} : { vision }),
+    const botLink = await this.botLinkOf(scope, conversation.botInstanceId);
+    const allowance = outputPolicyAllowanceFromContext(context.json, {
+      links: botLink === null ? [] : [botLink],
     });
-    const answered = result.outcome.outcome === 'OK' && result.step !== null;
-    const seenIds = new Set(answered ? result.sight.seen : []);
-    // A loaded image is PROCESSED only when the step that ANSWERED was given it. The rows are
-    // written only with this job's own transition, in its transaction (TB6 review, S1).
-    // D2: the knowledge counts go with the job's result, in its transaction.
-    const images = withKnowledgeCounts(
-      this.deps.jobs,
-      scope,
-      job.id,
-      context.knowledge,
-      this.imageWriter(scope, job.id, skipped, loaded, (messageId) =>
-        seenIds.has(messageId)
-          ? null
-          : answered
-            ? (result.sight.unseen.get(messageId) ?? 'NO_VISION_CAPABILITY')
-            : 'NOT_ANSWERED',
-      ),
-    );
-    // No configured step could look at a required image: an unseen image hands off.
-    if (
-      result.exhausted === 'NO_VISION_STEP' ||
-      (answered && !required.every((id) => seenIds.has(id)))
-    ) {
-      return this.handOff(scope, job, fail('content', 'UNSUPPORTED_CONTENT'), null, null, images);
-    }
-    if (result.outcome.outcome !== 'OK' || result.step === null) {
-      // A provider that refused or produced something unparseable is not "unavailable".
-      const invalid =
-        result.outcome.outcome === 'INVALID_OUTPUT' ||
-        result.outcome.outcome === 'REFUSED_BY_PROVIDER';
-      // The customer-facing outcome stays coarse (the handoff reason); the CLASS is the
-      // operator's diagnosis, recorded on the job beside it.
-      return this.handOff(
-        scope,
-        job,
-        invalid
-          ? verdict('handoff_output_invalid', 'AI_OUTPUT_INVALID')
-          : verdict('handoff_ai_unavailable', 'AI_UNAVAILABLE'),
-        null,
-        null,
-        images,
-        chainFailureClass(result),
-      );
-    }
-    const parsed = parse(result.outcome.output);
-    const produced = { provider: result.step.provider, model: result.outcome.model };
-    if (!parsed.ok) {
-      return this.handOff(
-        scope,
-        job,
-        verdict('handoff_output_invalid', 'AI_OUTPUT_INVALID'),
-        null,
-        produced,
-        images,
-        parsed.failure.failureClass,
-      );
-    }
-    const decision = parsed.decision;
-
-    // 5b. Roadmap A6 — «مرسی», «حل شد»: a NO_ACTION on an allowlisted, non-sensitive topic, when
-    // every customer line it would answer only thanks or says it is solved, ends the job
-    // silently. No reply, no handoff, no ticket; the conversation stays with the AI.
-    if (autoNoActionAllowed({ decision, config, flags: context.flags, customerTexts })) {
-      return this.closeSilently(scope, job, decision, produced, customerTexts, images);
-    }
-
-    // 6. NEXA decides. The clarifying streak is read from the rows, never from the model.
-    const grounding = {
-      knownAliases: knownAliases(context),
-      knownKnowledgeAliases: new Set(context.knowledgeAliases?.keys() ?? []),
-    };
-    const guards = autoDecisionGuards({
-      decision,
-      config,
-      flags: context.flags,
-      ...grounding,
-      clarifyingStreak: await this.deps.jobs.clarifyingStreak(scope, {
+    let regenerateNote: string | null = null;
+    for (let attempt = 0; ; attempt += 1) {
+      const result = await this.deps.chain.generate(scope, {
+        operation: 'AUTO_DECISION',
         conversationId: conversation.id,
-        epoch,
-      }),
-    });
-    if (!guards.pass) return this.handOff(scope, job, guards, decision, produced, images);
-    // 6b. Roadmap A3 — advice the customer already received in this epoch is not sent again.
-    const repeated = autoRepeatedAdviceGuard(decision, transcript, since);
-    if (!repeated.pass) return this.handOff(scope, job, repeated, decision, produced, images);
-    // A8 review N2: the titles it cited, so the next request's knowledge query can read them.
-    const knowledgeLabels = resolveKnowledgeLabels(
-      decision.knowledgeRefs,
-      context.knowledgeAliases,
-    );
-    return this.enqueue(scope, job, decision, produced, grounding, since, images, knowledgeLabels);
+        jobId: job.id,
+        validate: (output) => {
+          const parsed = parse(output);
+          return parsed.ok ? null : parsed.failure;
+        },
+        request: {
+          system: supportSystemPrompt({
+            businessToneInstructions: config.toneInstructions,
+            maxReplyChars: config.maxOutputChars,
+            contextJson: context.json,
+            identityLinked: context.linked,
+            regenerateNote,
+          }),
+          messages: turns,
+          jsonSchema: SUPPORT_AI_DECISION_JSON_SCHEMA,
+          schemaName: 'support_decision',
+          maxOutputTokens: decisionOutputTokens(config.maxOutputChars),
+        },
+        ...(vision === null ? {} : { vision }),
+      });
+      const answered = result.outcome.outcome === 'OK' && result.step !== null;
+      const seenIds = new Set(answered ? result.sight.seen : []);
+      // A loaded image is PROCESSED only when the step that ANSWERED was given it. The rows are
+      // written only with this job's own transition, in its transaction (TB6 review, S1).
+      // D2: the knowledge counts go with the job's result, in its transaction.
+      const images = withKnowledgeCounts(
+        this.deps.jobs,
+        scope,
+        job.id,
+        context.knowledge,
+        this.imageWriter(scope, job.id, skipped, loaded, (messageId) =>
+          seenIds.has(messageId)
+            ? null
+            : answered
+              ? (result.sight.unseen.get(messageId) ?? 'NO_VISION_CAPABILITY')
+              : 'NOT_ANSWERED',
+        ),
+      );
+      // No configured step could look at a required image: an unseen image hands off.
+      if (
+        result.exhausted === 'NO_VISION_STEP' ||
+        (answered && !required.every((id) => seenIds.has(id)))
+      ) {
+        return this.handOff(scope, job, fail('content', 'UNSUPPORTED_CONTENT'), null, null, images);
+      }
+      if (result.outcome.outcome !== 'OK' || result.step === null) {
+        // A provider that refused or produced something unparseable is not "unavailable".
+        const invalid =
+          result.outcome.outcome === 'INVALID_OUTPUT' ||
+          result.outcome.outcome === 'REFUSED_BY_PROVIDER';
+        // The customer-facing outcome stays coarse (the handoff reason); the CLASS is the
+        // operator's diagnosis, recorded on the job beside it.
+        return this.handOff(
+          scope,
+          job,
+          invalid
+            ? verdict('handoff_output_invalid', 'AI_OUTPUT_INVALID')
+            : verdict('handoff_ai_unavailable', 'AI_UNAVAILABLE'),
+          null,
+          null,
+          images,
+          chainFailureClass(result),
+        );
+      }
+      const parsed = parse(result.outcome.output);
+      const produced = { provider: result.step.provider, model: result.outcome.model };
+      if (!parsed.ok) {
+        return this.handOff(
+          scope,
+          job,
+          verdict('handoff_output_invalid', 'AI_OUTPUT_INVALID'),
+          null,
+          produced,
+          images,
+          parsed.failure.failureClass,
+        );
+      }
+      const decision = parsed.decision;
+
+      // 5b. Roadmap A6 — «مرسی», «حل شد»: a NO_ACTION on an allowlisted, non-sensitive topic, when
+      // every customer line it would answer only thanks or says it is solved, ends the job
+      // silently. No reply, no handoff, no ticket; the conversation stays with the AI.
+      // Review of PR #365: the cited-service flag is supplied here too, as on the reply path.
+      const silenceFlags: AutoContextFlags = {
+        ...context.flags,
+        unreconciledCited: decision.factRefs.some(
+          (ref) => context.unreconciledAliases?.has(ref) === true,
+        ),
+      };
+      const silence = autoNoActionVerdict({ decision, config, flags: silenceFlags, customerTexts });
+      // A NO_ACTION that may not close hands off with the most specific reason (an account under
+      // review, a blocked customer…), as the in-transaction recheck of a silent close does.
+      if (decision.decision === 'NO_ACTION' && !silence.pass) {
+        return this.handOff(scope, job, silence, decision, produced, images);
+      }
+      if (silence.pass) {
+        return this.closeSilently(
+          scope,
+          job,
+          decision,
+          produced,
+          customerTexts,
+          citedServiceLabels(decision, context.aliases),
+          images,
+        );
+      }
+
+      // 6. NEXA decides. The clarifying streak is read from the rows, never from the model.
+      const grounding = {
+        knownAliases: knownAliases(context),
+        knownKnowledgeAliases: new Set(context.knowledgeAliases?.keys() ?? []),
+      };
+      const flags: AutoContextFlags = {
+        ...context.flags,
+        unreconciledCited: decision.factRefs.some(
+          (ref) => context.unreconciledAliases?.has(ref) === true,
+        ),
+      };
+      const guards = autoDecisionGuards({
+        decision,
+        config,
+        flags,
+        ...grounding,
+        clarifyingStreak: await this.deps.jobs.clarifyingStreak(scope, {
+          conversationId: conversation.id,
+          epoch,
+        }),
+        otherStreak: await this.deps.jobs.otherStreak(scope, {
+          conversationId: conversation.id,
+          epoch,
+        }),
+      });
+      const citedLabels = citedServiceLabels(decision, context.aliases);
+      // Phase 4 PR-1 item 5: an unlinked customer's account question gets the bot's start link.
+      if (!guards.pass && guards.sendLink === true && botLink !== null) {
+        return this.enqueue(scope, job, decision, produced, grounding, since, images, [], {
+          link: botLink,
+          citedLabels,
+        });
+      }
+      if (!guards.pass) {
+        // No start link to send (the bot's username is unknown): the identity handoff as before.
+        const failed =
+          guards.sendLink === true ? failVerdict('identity', 'IDENTITY_UNVERIFIED') : guards;
+        return this.handOff(scope, job, failed, decision, produced, images);
+      }
+      // 6a. Cross-cutting item 7: the third polite refusal in an epoch is somebody probing.
+      if (
+        decision.topic === 'POLICY_REFUSAL' &&
+        (await this.deps.jobs.refusalCount(scope, { conversationId: conversation.id, epoch })) +
+          1 >=
+          SUPPORT_AI_REFUSAL_LIMIT
+      ) {
+        return this.handOff(
+          scope,
+          job,
+          failVerdict('refusal_abuse', 'SUSPICIOUS_PROBING'),
+          decision,
+          produced,
+          this.withProbingSignal(scope, conversation, epoch, images),
+        );
+      }
+      // 6b. Cross-cutting item 3 — the output validator; Roadmap A3 — advice the customer already
+      // received in this epoch is not sent again. Either is asked for once more, then hands off.
+      const policy = checkOutputPolicy(decision.replyText, allowance, this.deps.clock.now());
+      const repeated = autoRepeatedAdviceGuard(decision, transcript, since);
+      const refused = !policy.ok ? failVerdict('output_policy', 'OUTPUT_POLICY') : repeated;
+      if (!refused.pass) {
+        if (attempt === 0) {
+          regenerateNote = policy.ok
+            ? REPEATED_ADVICE_REGENERATE_NOTE
+            : OUTPUT_POLICY_REGENERATE_NOTE;
+          continue;
+        }
+        return this.handOff(scope, job, refused, decision, produced, images);
+      }
+      // A8 review N2: the titles it cited, so the next request's knowledge query can read them.
+      const knowledgeLabels = resolveKnowledgeLabels(
+        decision.knowledgeRefs,
+        context.knowledgeAliases,
+      );
+      return this.enqueue(
+        scope,
+        job,
+        decision,
+        produced,
+        grounding,
+        since,
+        images,
+        knowledgeLabels,
+        {
+          link: null,
+          citedLabels,
+        },
+      );
+    }
   }
 
   /**
@@ -612,6 +735,44 @@ export class SupportAutoReplyService {
   }
 
   /**
+   * Phase 4 PR-1 item 8 — a job whose `produce` THREW (a context builder, a reader, a bug). The
+   * first time, its lease is moved to `SUPPORT_AI_JOB_RETRY_DELAY_MS` from now so it is claimed
+   * once more, and the operations log is told (the job and conversation ids only). A job that
+   * throws again hands off (`giveUp`), so the customer is never left with neither a reply nor a
+   * person — the loop meanwhile goes on to the next job instead of holding the lease for minutes.
+   */
+  async recoverFromException(
+    scope: ScopeContext,
+    job: SupportAiJobRecord,
+  ): Promise<AutoJobResult | 'RETRY'> {
+    if (job.attempts >= 2) return this.giveUp(scope, job);
+    return this.deps.uow.run(scope, async (tx) => {
+      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 'INACTIVE' as const;
+      const now = this.deps.clock.now();
+      await this.deps.jobs.releaseLease(
+        scope,
+        job.id,
+        new Date(now.getTime() + SUPPORT_AI_JOB_RETRY_DELAY_MS),
+        now,
+        tx,
+      );
+      await this.deps.opsLog?.record(
+        scope,
+        {
+          code: SUPPORT_AI_JOB_EXCEPTION_CODE,
+          severity: 'ERROR',
+          message:
+            'An automatic support-AI job failed with an error; it is retried once, then handed to a person.',
+          dedupeKey: `${SUPPORT_AI_JOB_EXCEPTION_CODE}:${job.id}`,
+          context: { operationId: job.id, conversationId: job.conversationId },
+        },
+        tx,
+      );
+      return 'RETRY' as const;
+    });
+  }
+
+  /**
    * The reply onto the lane, in ONE transaction that decides again on what is true NOW
    * (substitute review of PR #202, finding 1). Under the conversation's lock: the epoch and the
    * state; then the configuration (the mode, and every guard that reads it — the allowlist, the
@@ -634,6 +795,15 @@ export class SupportAutoReplyService {
     since: Date | null,
     images?: ImageWrite,
     knowledgeLabels: readonly string[] = [],
+    /**
+     * Phase 4 PR-1: `link` set — the decision guards sent an unlinked customer's account question
+     * to the bot's start link, and this enqueues the templated message instead of the model's
+     * words. `citedLabels`: the panel usernames of the services the decision cites.
+     */
+    extra: { readonly link: string | null; readonly citedLabels: readonly string[] } = {
+      link: null,
+      citedLabels: [],
+    },
   ): Promise<AutoJobResult> {
     return this.inJobTransaction(scope, job, images, async (tx, now) => {
       const { config } = await this.deps.configs.get(scope, tx);
@@ -646,6 +816,10 @@ export class SupportAutoReplyService {
         scope,
         conversation?.customerId ?? null,
         tx,
+        {
+          since: new Date(now.getTime() - SUPPORT_AI_UNDER_REVIEW_WINDOW_DAYS * 86_400_000),
+          serviceLabels: extra.citedLabels,
+        },
       );
       const { verdict: preflight } = await this.preflight(
         scope,
@@ -668,9 +842,25 @@ export class SupportAutoReplyService {
               { conversationId: job.conversationId, epoch: job.controlEpoch ?? -1 },
               tx,
             ),
+            otherStreak: await this.deps.jobs.otherStreak(
+              scope,
+              { conversationId: job.conversationId, epoch: job.controlEpoch ?? -1 },
+              tx,
+            ),
           });
-      if (!recheck.pass)
-        return this.handOffChecked(scope, job, recheck, decision, produced, now, tx);
+      // The link path is decided again too. Chosen before the call, it stays the link (a
+      // template, never the model's words — the model answered an unlinked context) unless a
+      // guard other than identity now fails.
+      const linkStill =
+        extra.link !== null && (recheck.pass || (!recheck.pass && recheck.sendLink === true));
+      if (!recheck.pass && !linkStill) {
+        const failed =
+          recheck.sendLink === true ? failVerdict('identity', 'IDENTITY_UNVERIFIED') : recheck;
+        return this.handOffChecked(scope, job, failed, decision, produced, now, tx);
+      }
+      if (linkStill && extra.link !== null) {
+        return this.enqueueLink(scope, job, decision, produced, extra.link, now, tx);
+      }
       /*
        * Review of PR #248, CX5 — repeated advice, decided again on what is DELIVERED now. The
        * check before the provider call read the transcript as it was then; an earlier automatic
@@ -745,6 +935,112 @@ export class SupportAutoReplyService {
   }
 
   /**
+   * Phase 4 PR-1 item 5 — the bot's start link to an unlinked customer, in the enqueue's
+   * transaction: the template rendered now (never the model's words), enqueued under the
+   * captured epoch like any automatic reply. A template that cannot render hands off instead.
+   */
+  private async enqueueLink(
+    scope: ScopeContext,
+    job: SupportAiJobRecord,
+    decision: SupportAiDecision,
+    produced: { readonly provider: SupportAiProvider; readonly model: string },
+    link: string,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<AutoJobResult> {
+    let text: string;
+    try {
+      text =
+        (await this.deps.templates?.render(
+          scope,
+          SUPPORT_AI_LINK_ACCOUNT_TEMPLATE_KEY as Parameters<TemplateResolver['render']>[1],
+          { botLink: link },
+          undefined,
+          tx,
+        )) ?? '';
+    } catch {
+      text = '';
+    }
+    if (text.trim() === '') {
+      return this.handOffChecked(
+        scope,
+        job,
+        failVerdict('identity', 'IDENTITY_UNVERIFIED'),
+        decision,
+        produced,
+        now,
+        tx,
+      );
+    }
+    const queued = await this.deps.control.enqueueAutoSend(
+      scope,
+      {
+        conversationId: job.conversationId,
+        controlEpoch: job.controlEpoch ?? -1,
+        text: text.trim(),
+        idempotencyKey: `support-ai:auto:${job.id}`,
+        now,
+      },
+      tx,
+    );
+    if ('refused' in queued) {
+      return this.finish(scope, job, `dropped_${queued.refused}`, now, tx, { decision, produced });
+    }
+    const ok = await this.deps.jobs.finishAuto(
+      scope,
+      job.id,
+      {
+        state: 'SENT',
+        outcome: 'sent_link',
+        decision,
+        provider: produced.provider,
+        model: produced.model,
+        sentOutboundId: queued.row.id,
+        knowledgeLabels: [],
+        now,
+      },
+      tx,
+    );
+    if (!ok) throw new JobGone();
+    return 'sent_link';
+  }
+
+  /** The bot's start link for this conversation's bot; null when its username is unknown. */
+  private async botLinkOf(scope: ScopeContext, botInstanceId: string): Promise<string | null> {
+    const username = (await this.deps.bots?.usernameOf(scope, botInstanceId)) ?? null;
+    if (username === null || !/^[A-Za-z][A-Za-z0-9_]{3,31}$/u.test(username)) return null;
+    return `https://t.me/${username}?start=support`;
+  }
+
+  /**
+   * Cross-cutting item 7 — the operations-log signal of repeated refusals, written with the
+   * handoff in its transaction: the customer's id and the conversation only, never a word of
+   * what was asked. One row per conversation and epoch.
+   */
+  private withProbingSignal(
+    scope: ScopeContext,
+    conversation: BusinessConversationRecord,
+    epoch: number,
+    images: ImageWrite | undefined,
+  ): ImageWrite {
+    return async (now, tx) => {
+      if (images !== undefined) await images(now, tx);
+      await this.deps.opsLog?.record(
+        scope,
+        {
+          code: SUPPORT_AI_SUSPICIOUS_PROBING_CODE,
+          severity: 'WARN',
+          message:
+            'A Telegram Business customer asked repeatedly for what the support AI must not give; the conversation was handed to a person.',
+          dedupeKey: `${SUPPORT_AI_SUSPICIOUS_PROBING_CODE}:${conversation.id}:${String(epoch)}`,
+          context: { customerId: conversation.customerId, conversationId: conversation.id },
+        },
+        tx,
+      );
+    };
+  }
+
+  /**
    * Roadmap A6 — the silent close, in ONE transaction that decides again on what is true now
    * (review of PR #246, CX2), exactly as the reply path's enqueue does: the mode, then the
    * conversation under its lock (epoch and state), then the configuration and the customer's
@@ -762,6 +1058,8 @@ export class SupportAutoReplyService {
     decision: SupportAiDecision,
     produced: { readonly provider: SupportAiProvider; readonly model: string },
     customerTexts: readonly (string | null)[],
+    /** The panel usernames of the services the decision cites (the in-transaction recheck). */
+    citedLabels: readonly string[],
     images?: ImageWrite,
   ): Promise<AutoJobResult> {
     return this.inJobTransaction(scope, job, images, async (tx, now) => {
@@ -776,7 +1074,10 @@ export class SupportAutoReplyService {
       if (conversation.state !== 'AI_ACTIVE') {
         return this.finish(scope, job, 'dropped_state', now, tx, { decision, produced });
       }
-      const flags = await this.deps.facts.autoGuardFlags(scope, conversation.customerId, tx);
+      const flags = await this.deps.facts.autoGuardFlags(scope, conversation.customerId, tx, {
+        since: new Date(now.getTime() - SUPPORT_AI_UNDER_REVIEW_WINDOW_DAYS * 86_400_000),
+        serviceLabels: citedLabels,
+      });
       const verdict = autoNoActionVerdict({ decision, config, flags, customerTexts });
       if (!verdict.pass) {
         return this.handOffChecked(scope, job, verdict, decision, produced, now, tx);
@@ -959,4 +1260,24 @@ function verdict(
   reason: BusinessHandoffReason,
 ): Extract<AutoVerdict, { pass: false }> {
   return { pass: false, guard: null, outcome, reason };
+}
+
+function failVerdict(
+  guard: SupportAiAutoGuard,
+  reason: BusinessHandoffReason,
+): Extract<AutoVerdict, { pass: false }> {
+  return { pass: false, guard, outcome: `guard_${guard}`, reason };
+}
+
+/** The labels (panel usernames) of the services a decision cites (`S…` aliases). */
+function citedServiceLabels(
+  decision: SupportAiDecision,
+  aliases: ReadonlyMap<string, string>,
+): readonly string[] {
+  return decision.factRefs
+    .filter((ref) => ref.startsWith('S'))
+    .flatMap((ref) => {
+      const label = aliases.get(ref);
+      return label === undefined ? [] : [label];
+    });
 }

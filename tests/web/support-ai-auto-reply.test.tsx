@@ -156,7 +156,8 @@ describe('the automatic-reply topics and confidence on /support-ai', () => {
   });
 
   it('keeps an untouched empty allowlist empty, and the HIGH default HIGH', async () => {
-    const api = page({ autoTopics: [], autoMinConfidence: 'HIGH' });
+    // Phase 4 PR-1: in ASSIST_ONLY — AUTO_REPLY_SAFE with no topic cannot be saved (own test).
+    const api = page({ mode: 'ASSIST_ONLY', autoTopics: [], autoMinConfidence: 'HIGH' });
     for (const topic of SUPPORT_AI_SAFE_TOPICS) {
       expect((await topicBox(topic)).checked, topic).toBe(false);
     }
@@ -252,5 +253,47 @@ describe('the automatic-reply topics and confidence on /support-ai', () => {
     expect(put.expectedVersion).toBe(8);
     expect(config.autoTopics).toEqual(['APP_SETUP']);
     expect(config.autoMinConfidence).toBe('MEDIUM');
+  });
+});
+
+describe('Phase 4 PR-1: the recommended preset, the banner and the zero-topic refusal', () => {
+  it('suggests the preset while the stored config is restrictive, and applies it to the form only', async () => {
+    const api = page({ mode: 'ASSIST_ONLY', autoTopics: [], autoMinConfidence: 'HIGH' });
+    expect(await screen.findByText(t('web.sai_preset_banner'))).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: t('web.sai_preset_apply') }));
+    for (const topic of SUPPORT_AI_SAFE_TOPICS) {
+      expect((await topicBox(topic)).checked, topic).toBe(true);
+    }
+    expect((await confidence()).value).toBe('MEDIUM');
+    // Nothing is saved until the owner saves.
+    expect(api.calls.filter((call) => call.method === 'PUT')).toHaveLength(0);
+    save();
+    const config = await sentConfig(api);
+    expect(config.autoTopics).toEqual([...SUPPORT_AI_SAFE_TOPICS]);
+    expect(config.autoMinConfidence).toBe('MEDIUM');
+    expect(config.visionEnabled).toBe(true);
+  });
+
+  it('shows no banner for the preset itself', async () => {
+    page({ autoTopics: [...SUPPORT_AI_SAFE_TOPICS], autoMinConfidence: 'MEDIUM' });
+    await topicsGroup();
+    expect(screen.queryByText(t('web.sai_preset_banner'))).toBeNull();
+  });
+
+  it('switching to automatic replies with no topic fills the preset into the form', async () => {
+    page({ mode: 'ASSIST_ONLY', autoTopics: [] }, undefined, true);
+    const radios = await screen.findAllByRole('radio');
+    fireEvent.click(
+      radios.find((radio) => (radio as HTMLInputElement).value === 'AUTO_REPLY_SAFE')!,
+    );
+    expect((await topicBox('PURCHASE_INFO')).checked).toBe(true);
+  });
+
+  it('refuses to save AUTO_REPLY_SAFE with zero topics, in Persian', async () => {
+    page({ mode: 'AUTO_REPLY_SAFE', autoTopics: ['APP_SETUP'] });
+    fireEvent.click(await topicBox('APP_SETUP'));
+    expect(await screen.findByText(t('web.sai_fault_auto_topics_required'))).toBeTruthy();
+    const button = screen.getByRole('button', { name: t('web.sai_save') }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
   });
 });

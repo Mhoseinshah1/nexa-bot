@@ -58,6 +58,7 @@ export function supportAutoOutcomeClass(outcome: SupportAiAutoOutcome): SupportA
   switch (outcome) {
     case 'sent':
     case 'sent_clarifying':
+    case 'sent_link': // Phase 4 PR-1: the bot's start link to an unlinked customer.
       return 'SENT';
     case 'dropped_mode':
     case 'dropped_epoch':
@@ -88,6 +89,8 @@ export function supportAutoOutcomeClass(outcome: SupportAiAutoOutcome): SupportA
     case 'guard_no_progress':
     case 'guard_repeated_advice':
     case 'guard_inbound_flood':
+    case 'guard_output_policy':
+    case 'guard_refusal_abuse':
       return 'HANDED_OFF';
     default: {
       // Compile-time: every outcome this release knows is listed above. Run-time: a NEWER
@@ -154,7 +157,13 @@ export function supportAutoWireOutcome(
     case 'guard_no_progress':
     case 'guard_repeated_advice':
     case 'guard_inbound_flood':
+    case 'guard_refusal_abuse':
       return 'guard_consecutive';
+    // Phase 4 PR-1: as its handoff reason goes as INSUFFICIENT_GROUNDING.
+    case 'guard_output_policy':
+      return 'guard_grounding';
+    case 'sent_link':
+      return 'sent';
     case 'no_action':
       return null;
     default:

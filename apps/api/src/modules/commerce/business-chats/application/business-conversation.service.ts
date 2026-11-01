@@ -9,6 +9,8 @@ import {
   type ActorContext,
   type AuditWriter,
   type BusinessConversationState,
+  businessHandoffKindOf,
+  type BusinessHandoffKind,
   type BusinessHandoffReason,
   type BusinessMessageOrigin,
   type BusinessOutboundOrigin,
@@ -32,6 +34,7 @@ import type { SessionRepository } from '../../../platform/identity/application/p
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { ParsedBusinessDeletion, ParsedBusinessMessage } from '../domain/telegram-business.js';
+import { autoResumeTrigger } from '../domain/auto-resume.js';
 import type { BusinessConnectionService } from './business-connection.service.js';
 import { BUSINESS_CONNECTION_SYSTEM_PERMISSION } from './business-connection.service.js';
 import type {
@@ -46,6 +49,7 @@ import type {
   BusinessMessageRepository,
   BusinessOutboundRecord,
   BusinessOutboundRepository,
+  AutoResumePolicy,
   HandbackLearningTrigger,
   HandoffDetail,
   HandoffEscalation,
@@ -84,6 +88,11 @@ export interface BusinessConversationServiceDeps {
   readonly escalations: Pick<BusinessEscalationRepository, 'forConversation'>;
   /** TB8: a handback may owe a learning job. Absent: nothing is learned from handbacks. */
   readonly learning?: HandbackLearningTrigger;
+  /**
+   * Phase 4 PR-1: a SOFT hold returns to the AI when the customer writes after the window.
+   * Absent: every hold is sticky, as before.
+   */
+  readonly autoResume?: AutoResumePolicy;
 }
 
 /** Why an AUTO row was not enqueued: the conversation moved on, or cannot send. */
@@ -472,6 +481,8 @@ export class BusinessConversationService {
         to: 'HANDOFF_REQUIRED',
         bumpEpoch: true,
         handoffReason: reason,
+        // Phase 4 PR-1: hard (sticky) or soft (returns to the AI by itself).
+        handoffKind: detail.kind ?? businessHandoffKindOf(reason, detail.topic ?? null),
         now,
       },
       tx,
@@ -738,11 +749,36 @@ export class BusinessConversationService {
     now: Date,
     tx: unknown,
   ): Promise<BusinessConversationRecord | null> {
-    if (conversation.state === 'HUMAN_ACTIVE') return null;
+    if (conversation.state === 'HUMAN_ACTIVE') {
+      // Phase 4 PR-1: an operator's explicit takeover of a conversation a person's message
+      // merely paused makes the hold sticky; nothing else about it moves.
+      if (reason === 'OPERATOR_TAKEOVER' && conversation.handoffKind === 'SOFT') {
+        await this.deps.conversations.transition(
+          scope,
+          conversation.id,
+          {
+            from: ['HUMAN_ACTIVE'],
+            to: 'HUMAN_ACTIVE',
+            bumpEpoch: false,
+            handoffKind: 'HARD',
+            now,
+          },
+          tx,
+        );
+      }
+      return null;
+    }
     const moved = await this.deps.conversations.transition(
       scope,
       conversation.id,
-      { from: NOT_HUMAN, to: 'HUMAN_ACTIVE', bumpEpoch: true, takeoverReason: reason, now },
+      {
+        from: NOT_HUMAN,
+        to: 'HUMAN_ACTIVE',
+        bumpEpoch: true,
+        takeoverReason: reason,
+        ...holdKindOf(conversation, reason),
+        now,
+      },
       tx,
     );
     if (moved === null) return null;
@@ -784,13 +820,19 @@ export class BusinessConversationService {
         },
         tx,
       );
+      // Phase 4 PR-1: a SOFT hold whose window passed returns to the AI first, so this very
+      // message is answered. Only for a NEW message: an edit never moves control.
+      const current =
+        content.contentVersion !== null && !content.edited
+          ? await this.autoResume(scope, actor, conversation, now, tx)
+          : conversation;
       // TB7: ONLY a customer's own message can start automatic work — never our echo, an
       // away message, or anything not positively attributable to the customer.
       if (content.contentVersion !== null) {
         await this.deps.autoTrigger.onInbound(
           scope,
           {
-            conversation,
+            conversation: current,
             telegramMessageId: message.messageId,
             contentVersion: content.contentVersion,
             edited: content.edited,
@@ -835,6 +877,83 @@ export class BusinessConversationService {
     // OWN_ECHO and OFFLINE: recorded, and nothing about control changes.
     await this.deps.conversations.touch(scope, conversation.id, { lastMessageAt: at, now }, tx);
     return false;
+  }
+
+  /**
+   * Phase 4 PR-1 — the automatic return of a SOFT hold to the AI (`autoResumeTrigger`), under
+   * the conversation's lock, in the inbound message's transaction: AI_ACTIVE with epoch+1 (so
+   * nothing a person queued sends afterwards), the handoff's signal recovered, audited as the
+   * system. Returns the conversation as it now is.
+   */
+  private async autoResume(
+    scope: ScopeContext,
+    actor: ActorContext,
+    conversation: BusinessConversationRecord,
+    now: Date,
+    tx: unknown,
+  ): Promise<BusinessConversationRecord> {
+    const policy = this.deps.autoResume;
+    if (policy === undefined || conversation.handoffKind !== 'SOFT') return conversation;
+    if (conversation.state !== 'HANDOFF_REQUIRED' && conversation.state !== 'HUMAN_ACTIVE') {
+      return conversation;
+    }
+    const windowMinutes = await policy.resumeAfterMinutes(scope, tx);
+    if (windowMinutes <= 0) return conversation;
+    const handedOff = conversation.state === 'HANDOFF_REQUIRED';
+    const ticketClosed =
+      handedOff && conversation.ticketId !== null
+        ? await policy.ticketClosed(scope, conversation.ticketId, tx)
+        : false;
+    const holdActivityAt = await policy.holdActivityAt(
+      scope,
+      conversation.id,
+      conversation.controlEpoch,
+      tx,
+    );
+    const trigger = autoResumeTrigger({
+      state: conversation.state,
+      handoffKind: conversation.handoffKind,
+      windowMinutes,
+      previousMessageAt: conversation.lastMessageAt,
+      lastHumanAt: conversation.lastHumanAt,
+      holdActivityAt,
+      ticketClosed,
+      now,
+    });
+    if (trigger === null) return conversation;
+    const moved = await this.deps.conversations.transition(
+      scope,
+      conversation.id,
+      {
+        from: ['HUMAN_ACTIVE', 'HANDOFF_REQUIRED'],
+        to: 'AI_ACTIVE',
+        bumpEpoch: true,
+        takeoverReason: null,
+        now,
+      },
+      tx,
+    );
+    if (moved === null) return conversation;
+    await this.deps.outbound.supersedeStale(scope, moved.id, moved.controlEpoch, now, tx);
+    if (handedOff) await this.deps.escalation.resolved(scope, moved.id, tx);
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: 'business_chat.auto_resume',
+        entityType: 'BusinessConversation',
+        entityId: moved.id,
+        before: {
+          state: conversation.state,
+          controlEpoch: conversation.controlEpoch,
+          handoffKind: conversation.handoffKind,
+        },
+        after: { state: moved.state, controlEpoch: moved.controlEpoch, trigger, windowMinutes },
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+    return moved;
   }
 
   private async insertMessage(
@@ -1047,4 +1166,21 @@ export class BusinessConversationService {
       clock: this.deps.clock,
     };
   }
+}
+
+/**
+ * Phase 4 PR-1 — the kind of the hold a human signal starts. An operator's explicit takeover is
+ * sticky. A person's message or send over a conversation the AI held pauses the AI only for
+ * `support.ai.resume_after_minutes` (SOFT); over a PAUSED one (an operator's stop) it is sticky;
+ * over a handoff it keeps the handoff's kind (no field: a hard handoff stays hard, and one
+ * from before the kind existed stays sticky).
+ */
+function holdKindOf(
+  conversation: BusinessConversationRecord,
+  reason: BusinessTakeoverReason,
+): { readonly handoffKind?: BusinessHandoffKind } {
+  if (reason === 'OPERATOR_TAKEOVER') return { handoffKind: 'HARD' };
+  if (conversation.state === 'AI_ACTIVE') return { handoffKind: 'SOFT' };
+  if (conversation.state === 'PAUSED') return { handoffKind: 'HARD' };
+  return {};
 }

@@ -67,6 +67,9 @@ export class TbSupportContextSource implements SupportContextSource {
       json: JSON.stringify(payload),
       aliases,
       knowledgeAliases,
+      unreconciledAliases: new Set(
+        payload.services.filter((service) => service.unreconciled).map((service) => service.alias),
+      ),
       linked: payload.flags.identityLinked,
       flags: payload.flags,
       // D2 telemetry: what the budget left of the selected knowledge, and the candidates.

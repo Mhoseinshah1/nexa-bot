@@ -792,7 +792,12 @@ describe('TB3 — support context', () => {
     expect(built.payload.services).toHaveLength(10);
     expect([...built.references.services.values()]).not.toContain(hidden);
     expect(built.payload.services.some((s) => s.unreconciled)).toBe(false);
-    expect(built.payload.flags.hasUnreconciledService).toBe(true);
+    // Phase 4 PR-1: the flag looks back SUPPORT_AI_UNDER_REVIEW_WINDOW_DAYS (14) — a 30-day-old
+    // unreconciled service no longer blocks the account topics.
+    expect(built.payload.flags.hasUnreconciledService).toBe(false);
+    await run(sql`UPDATE services SET created_at = now() - interval '3 days' WHERE id = ${hidden}`);
+    const recent = await ctx.container.supportContext.build(tenantA, me);
+    expect(recent.payload.flags.hasUnreconciledService).toBe(true);
     // The reader is tenant-scoped like every other.
     const reader = new DrizzleSupportContextReader(ctx.container.database.db);
     expect(await reader.anyUnreconciledService(tenantA, me)).toBe(true);
