@@ -1,3 +1,5 @@
+-- Phase 4 PR-4: the ticket_messages CHECKs are added NOT VALID, then VALIDATEd (a SHARE UPDATE
+-- EXCLUSIVE lock, not a table-blocking scan), as 0296 does.
 CREATE TABLE "support_ai_ticket_holds" (
 	"tenant_id" uuid NOT NULL,
 	"ticket_id" uuid NOT NULL,
@@ -66,7 +68,8 @@ CREATE UNIQUE INDEX "support_ai_ticket_jobs_idempotency_key" ON "support_ai_tick
 CREATE UNIQUE INDEX "support_ai_ticket_jobs_pending_key" ON "support_ai_ticket_jobs" USING btree ("tenant_id","ticket_id") WHERE state = 'QUEUED';--> statement-breakpoint
 CREATE INDEX "support_ai_ticket_jobs_due_idx" ON "support_ai_ticket_jobs" USING btree ("tenant_id","created_at") WHERE state = 'QUEUED';--> statement-breakpoint
 CREATE INDEX "support_ai_ticket_jobs_ticket_idx" ON "support_ai_ticket_jobs" USING btree ("tenant_id","ticket_id","created_at");--> statement-breakpoint
-ALTER TABLE "ticket_messages" ADD CONSTRAINT "ticket_messages_sender_check" CHECK (sender_type IN ('CUSTOMER', 'ADMIN', 'SYSTEM', 'AI'));--> statement-breakpoint
+ALTER TABLE "ticket_messages" ADD CONSTRAINT "ticket_messages_sender_check" CHECK (sender_type IN ('CUSTOMER', 'ADMIN', 'SYSTEM', 'AI')) NOT VALID;--> statement-breakpoint
+ALTER TABLE "ticket_messages" VALIDATE CONSTRAINT "ticket_messages_sender_check";--> statement-breakpoint
 ALTER TABLE "ticket_messages" ADD CONSTRAINT "ticket_messages_shape_check" CHECK (CASE sender_type
             WHEN 'CUSTOMER' THEN author_admin_id IS NULL AND system_event IS NULL
                  AND (body IS NOT NULL OR attachment_kind IS NOT NULL) AND idempotency_key IS NOT NULL
@@ -77,4 +80,5 @@ ALTER TABLE "ticket_messages" ADD CONSTRAINT "ticket_messages_shape_check" CHECK
             WHEN 'AI' THEN author_admin_id IS NULL AND system_event IS NULL
                  AND body IS NOT NULL AND attachment_kind IS NULL AND idempotency_key IS NOT NULL
             ELSE false
-          END);
+          END) NOT VALID;--> statement-breakpoint
+ALTER TABLE "ticket_messages" VALIDATE CONSTRAINT "ticket_messages_shape_check";

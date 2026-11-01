@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchSettings, saveSetting } from '../api/client';
 import { t } from '../i18n/web.fa';
 import { useSubmissionKey } from '../submission-key';
+import { queryState } from '../view-state';
 import { Badge, Banner, Card, useToast } from '../ui/kit';
 import { supportAiFault } from './support-ai';
 
@@ -68,7 +69,9 @@ export function TicketAiSwitchCard({
     >
       <div className="stack-sm" data-testid="sai-tickets-switch">
         {on && !automatic && <Banner tone="warn">{t('web.sai_tickets_needs_auto')}</Banner>}
-        {settings.isError && <Banner tone="warn">{t('web.sai_tickets_unreadable')}</Banner>}
+        {queryState(settings) === 'error' && (
+          <Banner tone="warn">{t('web.sai_tickets_unreadable')}</Banner>
+        )}
         <label className="check">
           <input
             type="checkbox"

@@ -18,7 +18,7 @@ export interface SupportTicketAiTriggerDeps {
   readonly configs: Pick<DrizzleSupportAiConfigRepository, 'get'>;
   readonly tickets: Pick<
     DrizzleSupportAiTicketRepository,
-    'hold' | 'writeHold' | 'activity' | 'queued' | 'insert' | 'finish'
+    'hold' | 'writeHold' | 'activity' | 'queued' | 'insert' | 'finish' | 'lastAiReplyAt'
   >;
   /** The Business chats' own resume window (`support.ai.resume_after_minutes`). */
   readonly resume: Pick<AutoResumePolicy, 'resumeAfterMinutes'>;
@@ -88,6 +88,9 @@ export class SupportTicketAiTrigger implements TicketSupportAiHooks {
     if (pending !== null) {
       await this.deps.tickets.finish(scope, pending.id, { outcome: 'dropped_coalesced', now }, tx);
     }
+    const lastAiAt = await this.deps.tickets.lastAiReplyAt(scope, ticket.id, tx);
+    const settle = now.getTime() + config.settleDelaySeconds * 1000;
+    const cooled = lastAiAt === null ? 0 : lastAiAt.getTime() + config.cooldownSeconds * 1000;
     await this.deps.tickets.insert(
       scope,
       {
@@ -95,7 +98,9 @@ export class SupportTicketAiTrigger implements TicketSupportAiHooks {
         ticketId: ticket.id,
         triggerMessageId: message.id,
         epoch: gate.epoch,
-        dueAt: new Date(now.getTime() + config.settleDelaySeconds * 1000),
+        // The later of the settle delay and the owner's cooldown after the AI's last answer in
+        // this ticket — the Business chats' pacing and provider-cost protection.
+        dueAt: new Date(Math.max(settle, cooled)),
         now,
       },
       tx,
