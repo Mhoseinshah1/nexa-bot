@@ -4936,3 +4936,13 @@ live; the owner decides otherwise.
   is the owner's call.
 - **OQ-SAI-3-03 — voice transcription is not built (PR-3, Blocked).** A voice message gets one
   templated request to type; transcribing it needs a provider decision (cost, privacy).
+- **OQ-SAI-6-01 — the output validator does not refuse a fabricated secret or a prompt echo
+  (PR-6).** `checkOutputPolicy` owns links, numbers, handles and promises. A made-up API-key-looking
+  string, or a verbatim echo of the system prompt, passes it: by design (cross-cutting item 2) no
+  secret is in the model's context and the prompt is declared non-secret, so nothing real can
+  leak that way. The SAI eval plants only the shapes the validator owns. Decide whether a
+  secret-shape or prompt-echo backstop is worth a false-positive cost.
+- **OQ-SAI-6-02 — the offline resolution rate is the pipeline's ceiling, not a model's (PR-6).**
+  Scripted providers answer each everyday scenario correctly, so 37/37 proves the guards, the
+  preset and the validator do not block correct answers; the real rate needs the owner's live run
+  (`docs/support-agent/sai-eval.md`). Record it in the round report when run.
