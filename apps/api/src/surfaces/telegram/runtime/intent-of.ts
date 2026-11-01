@@ -340,7 +340,9 @@ const SUPPORT_AI_DEEP_LINK_INTENTS: Readonly<Record<SupportAiDeepLinkFlow, BotIn
   changeLocation: 'SERVICE_CHANGE_LOCATION',
   rotate: 'SERVICE_ROTATE_ASK',
   service: 'SERVICE',
-  trial: 'TRIAL_CLAIM',
+  // Review of PR #369 (D12): the main menu, NOT `TRIAL_CLAIM` — opening a link must never
+  // provision a service; the customer taps the menu's own trial button to claim one.
+  trial: 'MAIN_MENU',
   topup: 'TOPUP_MENU',
 };
 

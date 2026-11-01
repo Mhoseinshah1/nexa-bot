@@ -942,4 +942,94 @@ describe('Phase 4 PR-3: tools, deep links, check-before-handoff, buttons', () =>
       { outcome: 'guard_content', handoff_reason: 'UNSUPPORTED_CONTENT' },
     ]);
   });
+
+  // --- review of PR #369 --------------------------------------------------------------------
+
+  it('a payment-status question is answered by the payment_status tool from facts, no promise', async () => {
+    await payment({ state: 'PENDING', code: 'STA23456', signalled: true });
+    const status = {
+      ...reply,
+      topic: 'PAYMENT_STATUS',
+      factRefs: [],
+      replyText: 'وضعیت پرداخت‌های اخیر شما:',
+      action: { kind: 'PAYMENT_STATUS', target: '' },
+    };
+    const id = await turn('وضعیت پرداخت من چیه؟', status);
+    expect(await autoJobs(id)).toMatchObject([
+      { state: 'SENT', outcome: 'sent', tool_action: 'PAYMENT_STATUS' },
+    ]);
+    expect(await conversation(id)).toMatchObject({ state: 'AI_ACTIVE' });
+    await deliver();
+    expect(transport.sent[0]?.text).toContain('STA23456');
+    expect(transport.sent[0]?.text).toContain('در حال بررسی');
+    expect(transport.sent[0]?.text).not.toMatch(/برمی‌گرد|بازگشت وجه|عودت/u);
+  });
+
+  it('tools off: the same payment-status question hands off as before', async () => {
+    tools = { actions: false, label: false, feedback: true };
+    const id = await turn('وضعیت پرداخت من چیه؟', {
+      ...reply,
+      topic: 'PAYMENT_STATUS',
+      factRefs: [],
+      action: { kind: 'PAYMENT_STATUS', target: '' },
+    });
+    expect(await outcomes(id)).toEqual(['guard_handoff_topic']);
+  });
+
+  it('a wallet top-up how-to gets the top-up button; a wallet balance question still hands off', async () => {
+    const topup = {
+      ...reply,
+      topic: 'WALLET',
+      factRefs: [],
+      replyText: 'با دکمهٔ زیر کیف پول را در ربات شارژ کنید.',
+      action: { kind: 'WALLET_TOPUP', target: '' },
+    };
+    const id = await turn('چطوری کیف پولمو شارژ کنم؟', topup);
+    expect(await autoJobs(id)).toMatchObject([{ outcome: 'sent', tool_action: 'WALLET_TOPUP' }]);
+    await deliver();
+    expect(transport.sent[0]?.buttons?.[0]?.[0]?.url).toBe(
+      'https://t.me/nexa_test_bot?start=sai-w',
+    );
+    const balance = await turn('موجودی کیف پولم چقدره؟', {
+      ...topup,
+      action: { kind: 'NONE', target: '' },
+    });
+    expect((await autoJobs(balance)).at(-1)).toMatchObject({ outcome: 'guard_handoff_topic' });
+  });
+
+  it('a PDF or voice answer to the receipt question goes to a person with the summary, never «please type»', async () => {
+    const id = await turn('پرداخت کردم ولی نیومد');
+    expect(await outcomes(id)).toEqual(['sent_payment_ask']);
+    await deliver();
+    await record(message({ kind: 'OTHER', text: null }));
+    await tick();
+    expect(await outcomes(id)).toEqual(['sent_payment_ask', 'handoff_payment_checked']);
+    expect(await conversation(id)).toMatchObject({
+      state: 'HANDOFF_REQUIRED',
+      handoffKind: 'HARD',
+    });
+    expect((await lastEscalation(id))?.summary).toContain('هیچ پرداختی پیدا نشد');
+    await deliver();
+    expect(transport.sent.map((m) => m.text).join('\n')).not.toContain('به‌صورت متن بنویسید');
+  });
+
+  it('the unlinked account-link reply carries the label and the human button like every reply', async () => {
+    tools = { actions: true, label: true, feedback: true };
+    flags = { ...flags, identityLinked: false };
+    const id = await turn('حجمم چقدر مونده؟', {
+      ...reply,
+      topic: 'TRAFFIC_AND_EXPIRY',
+      factRefs: [],
+      replyText: 'x',
+    });
+    expect(await outcomes(id)).toEqual(['sent_link']);
+    await deliver();
+    const [sent] = transport.sent;
+    expect(sent?.text.startsWith('🤖 پاسخ هوش مصنوعی')).toBe(true);
+    expect(sent?.text).toContain('https://t.me/nexa_test_bot?start=support');
+    expect(sent?.buttons?.flat().map((b) => b.label)).toEqual([
+      '🤖 ورود به ربات',
+      '👤 پشتیبان انسانی',
+    ]);
+  });
 });

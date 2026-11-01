@@ -33,6 +33,7 @@ import {
 } from '@nexa/contracts';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TemplateResolver } from '../../templates/application/template-resolver.js';
+import { appearanceFallbackText } from '../../../commerce/messaging/application/appearance-render.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { BusinessConversationService } from '../../../commerce/business-chats/application/business-conversation.service.js';
 import type {
@@ -466,11 +467,6 @@ export class SupportAutoReplyService {
     if (!(await this.deps.control.autoSendPossible(scope, conversation.id))) {
       return this.drop(scope, job, 'dropped_connection');
     }
-    // 3b'. Phase 4 PR-3: a voice message, sticker or non-image file gets ONE templated request to
-    // type the question; the conversation stays with the AI (no handoff, no provider call).
-    if (tools.actions && trigger !== null && trigger.kind === 'OTHER') {
-      return this.answerUnsupported(scope, job, tools);
-    }
     const botLink = await this.botLinkOf(scope, conversation.botInstanceId);
     // 3c. D9: money in what the customer wrote is a person's, whatever topic a model would pick.
     const customerTexts = customerTextsSinceReply(transcript, trigger?.text ?? null);
@@ -501,7 +497,15 @@ export class SupportAutoReplyService {
         ) {
           return this.closeAcknowledged(scope, job);
         }
+        // Review of PR #369: decided BEFORE the unsupported-content reply — a receipt sent as a
+        // PDF, a voice note or a file in answer to the ONE question goes to a person with the
+        // payment summary, never «please type», and the pending check is not lost.
         return this.paymentCheckFollowUp(scope, job, conversation, pending.outcome);
+      }
+      // 3b'. A voice message, sticker or non-image file gets ONE templated request to type the
+      // question; the conversation stays with the AI (no handoff, no provider call).
+      if (trigger !== null && trigger.kind === 'OTHER') {
+        return this.answerUnsupported(scope, job, tools);
       }
       // «Paid but not received»: still a HARD handoff — but the AI looks first.
       if (!money.pass && moneyMatterOf(moneyWindow) === 'PAID_NOT_RECEIVED') {
@@ -745,6 +749,7 @@ export class SupportAutoReplyService {
         decision,
         config,
         flags,
+        actionsEnabled: tools.actions,
         ...grounding,
         clarifyingStreak: await this.deps.jobs.clarifyingStreak(scope, {
           conversationId: conversation.id,
@@ -1113,6 +1118,8 @@ export class SupportAutoReplyService {
             decision,
             config,
             flags,
+            // Phase 4 PR-3: the switch as it is NOW, read in this transaction.
+            actionsEnabled: (await this.toolSettings(scope, tx)).actions,
             ...grounding,
             clarifyingStreak: await this.deps.jobs.clarifyingStreak(
               scope,
@@ -1273,14 +1280,39 @@ export class SupportAutoReplyService {
         tx,
       );
     }
+    // Review of PR #369: composed like every other automatic reply — the AI label when it is on,
+    // and «👤 پشتیبان انسانی» (plus the bot's open button) when the tools are on.
+    const tools = await this.toolSettings(scope, tx);
+    const open =
+      tools.actions && botUsernameOf(link) !== null
+        ? await this.button(scope, SUPPORT_AI_TEMPLATE_KEYS.buttonOpenBot, { url: link })
+        : null;
+    const message = await this.composeMessage(scope, tools, {
+      reply: text,
+      extra: null,
+      actionButton: open,
+      feedback: false,
+    });
+    if (message === 'TOO_LONG') {
+      return this.handOffChecked(
+        scope,
+        job,
+        failVerdict('identity', 'IDENTITY_UNVERIFIED'),
+        decision,
+        produced,
+        now,
+        tx,
+      );
+    }
     const queued = await this.deps.control.enqueueAutoSend(
       scope,
       {
         conversationId: job.conversationId,
         controlEpoch: job.controlEpoch ?? -1,
-        text: text.trim(),
+        text: message?.text ?? text.trim(),
         idempotencyKey: `support-ai:auto:${job.id}`,
         now,
+        ...(message === null ? {} : { id: message.rowId, buttons: message.buttons }),
       },
       tx,
     );
@@ -1337,7 +1369,10 @@ export class SupportAutoReplyService {
         undefined,
         tx,
       );
-      return text === undefined || text.trim() === '' ? null : text.trim();
+      if (text === undefined) return null;
+      // A Business message is plain text: every Appearance marker ({icon:…}) as its emoji.
+      const plain = appearanceFallbackText(text).trim();
+      return plain === '' ? null : plain;
     } catch {
       return null;
     }

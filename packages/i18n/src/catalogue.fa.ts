@@ -1291,7 +1291,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'برای دیدن سرویس، حجم، تاریخ پایان یا لینک اشتراک خودتان، لطفاً وارد ربات شوید؛ همهٔ این اطلاعات آنجا برایتان نمایش داده می‌شود:\n{botLink}',
   /* Phase 4 PR-3: the support AI's tools, deep links, check-before-handoff and buttons. */
   'bot.support.ai_subscription_link':
-    '🔗 لینک اشتراک سرویس {service}:\n{link}\n\nاین لینک را در برنامهٔ اتصال وارد کنید. لطفاً آن را در اختیار کس دیگری نگذارید.',
+    '{icon:link} لینک اشتراک سرویس {service}:\n{link}\n\nاین لینک را در برنامهٔ اتصال وارد کنید. لطفاً آن را در اختیار کس دیگری نگذارید.',
   'bot.support.ai_files_in_bot':
     'فایل‌های اتصال سرویس {service} فقط از داخل ربات دریافت می‌شوند. با دکمهٔ زیر سرویس را در ربات باز کنید و «فایل‌ها» را بزنید.',
   'bot.support.ai_payment_status_line': '• کد پیگیری {code} — {amount} — {route}: {state}',
@@ -1314,17 +1314,17 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.support.ai_feedback_handoff': 'پیام شما به همکاران پشتیبانی ارجاع شد.',
   'bot.support.ai_human_requested': 'گفتگو به پشتیبان انسانی سپرده شد.',
   'bot.support.ai_callback_stale': 'این دکمه دیگر فعال نیست.',
-  'bot.support.ai_button_human': '👤 پشتیبان انسانی',
+  'bot.support.ai_button_human': '{icon:user} پشتیبان انسانی',
   'bot.support.ai_button_yes': '👍',
   'bot.support.ai_button_no': '👎',
-  'bot.support.ai_button_buy': '🛒 خرید سرویس در ربات',
+  'bot.support.ai_button_buy': '{icon:purchase} خرید سرویس در ربات',
   'bot.support.ai_button_renew': '💊 تمدید سرویس در ربات',
   'bot.support.ai_button_add_traffic': '➕ خرید حجم اضافه در ربات',
-  'bot.support.ai_button_add_time': '⏳ خرید زمان اضافه در ربات',
-  'bot.support.ai_button_change_location': '🌍 تغییر لوکیشن در ربات',
-  'bot.support.ai_button_trial': '🎁 دریافت سرویس تست در ربات',
+  'bot.support.ai_button_add_time': '{icon:time} خرید زمان اضافه در ربات',
+  'bot.support.ai_button_change_location': '{icon:location} تغییر لوکیشن در ربات',
+  'bot.support.ai_button_trial': '{icon:trial} دریافت سرویس تست در ربات',
   'bot.support.ai_button_rotate': '⚙️ تغییر لینک در ربات',
-  'bot.support.ai_button_topup': '💰 شارژ کیف پول در ربات',
+  'bot.support.ai_button_topup': '{icon:wallet} شارژ کیف پول در ربات',
   'bot.support.ai_button_service_in_bot': '📄 باز کردن سرویس در ربات',
   'bot.support.ai_button_open_bot': '🤖 ورود به ربات',
   'bot.order.preinvoice':
