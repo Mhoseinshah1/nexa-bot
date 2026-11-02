@@ -115,6 +115,8 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
       'bot.order.pending_reminder',
       // Round N, package D: the reseller monthly minimum.
       'bot.reseller.minimum_',
+      // Round 11, C2: told once when the expiry sweep suspends a reseller.
+      'bot.reseller.expired',
       // Round 11 B6: the customer's switch for expiry / volume reminders.
       'bot.reminders.',
     ],
@@ -2684,6 +2686,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.reseller.minimum_reminder': [
     'یادآوری حداقل فروش ماهانهٔ نمایندگی',
     'چند روز پیش از پایان ماه، یک بار به نماینده‌ای که فروشش هنوز به حداقل ماهانه نرسیده فرستاده می‌شود.',
+  ],
+  'bot.reseller.expired': [
+    'پایان مهلت نمایندگی',
+    'یک بار، وقتی تاریخ انقضای نمایندگی گذشته و نماینده معلق شده است؛ قیمت‌ها به حالت عادی برمی‌گردد.',
   ],
   'bot.reseller.minimum_achieved': [
     'رسیدن به حداقل فروش ماهانه',

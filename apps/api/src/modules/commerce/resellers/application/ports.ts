@@ -92,6 +92,10 @@ export interface ResellerRecord {
    * is an explicit "no minimum for this reseller".
    */
   readonly monthlyMinimum: Money | null;
+  /** Round 11, C2: when the standing ends; null is never. */
+  readonly expiresAt: Date | null;
+  /** Round 11, C2: set when the CURRENT suspension was made by the expiry sweep. */
+  readonly expirySuspendedAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -337,6 +341,39 @@ export interface ResellerRepository {
     limit: number,
     cursor: ResellerCursor | null,
   ): Promise<{ readonly items: readonly ResellerListing[]; readonly next: ResellerCursor | null }>;
+
+  // -- Round 11, C2: expiry ---------------------------------------------------------------
+
+  /**
+   * Sets (or clears, with null) the reseller's expiry date. With `reactivate`, in the SAME
+   * statement, a reseller whose current suspension was made by the expiry becomes ACTIVE
+   * again and the mark is cleared: conditional on `status = 'SUSPENDED' AND
+   * expiry_suspended_at IS NOT NULL`, so an administrator's suspension is never lifted by a
+   * date. The caller holds the reseller row's lock. Null when the customer is no reseller.
+   */
+  setExpiry(
+    scope: TenantContext,
+    customerId: string,
+    input: { readonly expiresAt: Date | null; readonly reactivate: boolean },
+    now: Date,
+    tx: unknown,
+  ): Promise<ResellerRecord | null>;
+
+  /**
+   * The expiry sweep's one statement: ACTIVE resellers whose `expires_at <= now` become
+   * SUSPENDED and are marked as suspended by the expiry, at most `limit`, soonest first.
+   * Conditional (`WHERE status = 'ACTIVE' AND expires_at <= now`) and skipping rows an
+   * administrator's transaction holds, so a concurrent extension wins and a re-run
+   * suspends nothing twice. No ledger, no price, no other column is touched.
+   */
+  suspendExpired(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: unknown,
+  ): Promise<
+    readonly { readonly customerId: string; readonly tierId: string; readonly expiresAt: Date }[]
+  >;
 
   // -- Round N: overrides and the monthly minimum ------------------------------------
 

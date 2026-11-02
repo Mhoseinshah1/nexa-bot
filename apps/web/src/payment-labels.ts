@@ -161,6 +161,7 @@ export const CUSTOMER_NOTIFICATION_KIND_NAMES: Readonly<Record<CustomerNotificat
     SERVICE_TIME_ADDED: 'web.pay_notice_service_time_added',
     SERVICE_AUTO_RENEW_FUNDS_SHORT: 'web.pay_notice_service_auto_renew_funds_short',
     SERVICE_AUTO_RENEW_PRICE_CHANGED: 'web.pay_notice_service_auto_renew_price_changed',
+    RESELLER_EXPIRED: 'web.pay_notice_reseller_expired',
   };
 
 /**

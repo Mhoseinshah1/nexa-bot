@@ -294,6 +294,10 @@ export const CUSTOMER_NOTIFICATION_COMPACTION: Readonly<
     compact: 'RESOLVED',
     reason: 'As SERVICE_AUTO_RENEW_FUNDS_SHORT.',
   },
+  RESELLER_EXPIRED: {
+    compact: 'NEVER',
+    reason: 'Rare, and the only record that the reseller was told why their prices changed.',
+  },
 };
 
 /** The resolved states a row may be removed in. PENDING and UNCONFIRMED never. */

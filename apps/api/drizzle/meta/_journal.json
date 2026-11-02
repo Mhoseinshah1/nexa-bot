@@ -2136,6 +2136,13 @@
       "when": 1793612218085,
       "tag": "0304_customer_reminders_opt_out",
       "breakpoints": true
+    },
+    {
+      "idx": 305,
+      "version": "7",
+      "when": 1793617666551,
+      "tag": "0305_reseller_expiry",
+      "breakpoints": true
     }
   ]
 }
