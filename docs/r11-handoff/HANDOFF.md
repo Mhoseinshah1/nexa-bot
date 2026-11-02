@@ -11,7 +11,6 @@ Resume: read this block, the prompt NEXA-PHASE5-CUSTOMER.md (owner upload), then
 - Open: #381 B5 (no migration), head ba963be, @codex review posted, CI watcher running.
 - Pushed, PR waits for migration order:
   B7 feat/r11-phone-verify a2381cc (0306; opens AFTER B5 merges — payments never parallel).
-- In progress: B5 feat/r11-miniapp-stars (Opus; no migration).
 - Owner change 2026-11-02: up to 3 implementers, 3rd slot only Sonnet UI-only/no migration/no payment (B1, B4).
 - Lead decisions log: to be written into docs/round-reports/phase-5.md (D1–D20 so far).
 - Worktrees: /home/user/wt-b5, wt-b6, wt-b7, wt-c2; test DBs nexa_p5_<item>.
