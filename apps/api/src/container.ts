@@ -742,6 +742,7 @@ import { DrizzleResellerRepository } from './modules/commerce/resellers/infrastr
 import { ResellerService } from './modules/commerce/resellers/application/reseller.service.js';
 import { ResellerAdminService } from './modules/commerce/resellers/application/reseller-admin.service.js';
 import { ResellerMinimumService } from './modules/commerce/resellers/application/reseller-minimum.service.js';
+import { ResellerExpiryService } from './modules/commerce/resellers/application/reseller-expiry.service.js';
 import { TenantMonthlyPeriods } from './infrastructure/time/monthly-period.js';
 import { DrizzleAuditHistoryReader } from './modules/platform/audit/infrastructure/drizzle-audit-history.reader.js';
 import { DrizzleDiscountRepository } from './modules/commerce/pricing/infrastructure/drizzle-discount.repository.js';
@@ -5050,6 +5051,20 @@ export function createContainer(
     audit,
   });
   /*
+   * Round 11, C2: the reseller expiry sweep. A SYSTEM_JOB that suspends ACTIVE resellers
+   * whose own expiry date has passed; no setting or flag is read — an empty date is "none".
+   */
+  const resellerExpiryService = new ResellerExpiryService({
+    resellers: resellerRepository,
+    notifier: customerNotifier,
+    audit,
+    outbox,
+    scopeActivity: tenants,
+    uow,
+    clock,
+    ids,
+  });
+  /*
    * Round 10, D1: automatic renewal. Not a new money path: the sweep runs the customer's own
    * RENEW draft, confirmation and wallet settlement as a SYSTEM_JOB in the SCHEDULER
    * namespace — the same services the bot and the mini app call.
@@ -5097,6 +5112,12 @@ export function createContainer(
         name: 'reseller-monthly-minimum',
         everyMs: SERVICE_REMINDER_INTERVAL_MS,
         runOnce: async (scope) => resellerMinimumService.runOnce(scope),
+      },
+      {
+        // Round 11, C2: an expiry date is a deadline; checked on every pass.
+        name: 'reseller-expiry',
+        everyMs: 0,
+        runOnce: async (scope) => resellerExpiryService.runOnce(scope),
       },
       {
         /*

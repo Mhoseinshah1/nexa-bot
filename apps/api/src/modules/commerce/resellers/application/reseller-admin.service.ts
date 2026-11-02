@@ -738,6 +738,22 @@ export class ResellerAdminService {
         if (nextTier === null) {
           throw tierNotFound();
         }
+        /*
+         * Round 11, C2: re-activating a reseller whose expiry date has passed would be undone
+         * by the very next sweep (and tell them they were suspended again). The date is what
+         * decides, so it is extended or cleared first.
+         */
+        if (
+          input.write.status === 'ACTIVE' &&
+          before.status !== 'ACTIVE' &&
+          before.expiresAt !== null &&
+          before.expiresAt.getTime() <= now.getTime()
+        ) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+            'The reseller\u2019s expiry date has passed: extend or clear it first.',
+          );
+        }
         const previousTier =
           before.tierId === input.write.tierId
             ? nextTier
@@ -911,6 +927,115 @@ export class ResellerAdminService {
           },
           tx,
         );
+        await this.remember(scope, input.idempotencyKey, requestHash, { customerId }, tx);
+      },
+    );
+    return this.resellerListing(scope, customerId);
+  }
+
+  /**
+   * Round 11, C2: a reseller's own expiry date. Null clears it (no expiry); a date must be
+   * in the future. Setting a date on a reseller the EXPIRY suspended (and only one: an
+   * administrator's suspension is left as it is) re-activates it in the same statement —
+   * the "extend". Clearing the date never re-activates anyone. No ledger entry, no price,
+   * no customer message: the reseller is told only of the suspension, by the sweep.
+   * Under the reseller row's `FOR UPDATE`, like every other write to the row, so a
+   * concurrent sweep either skips the row or finds the new date.
+   */
+  async setExpiry(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly customerId: string;
+      readonly expiresAt: Date | null;
+    },
+  ): Promise<ResellerListing> {
+    const customerId = this.id(input.customerId, 'customer');
+    const requestHash = hashRequest({
+      customerId,
+      expiresAt: input.expiresAt === null ? null : input.expiresAt.toISOString(),
+    });
+    const denial = {
+      action: 'reseller.expiry',
+      entityType: 'Customer',
+      entityId: customerId,
+    };
+    await this.authorize(scope, actor, denial);
+
+    const replay = await this.replay<{ customerId: string }>(
+      scope,
+      input.idempotencyKey,
+      requestHash,
+    );
+    if (replay !== null) return this.resellerListing(scope, replay.customerId);
+
+    const now = this.deps.clock.now();
+    if (input.expiresAt !== null && input.expiresAt.getTime() <= now.getTime()) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'The expiry date must be in the future.',
+      );
+    }
+    await runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      RESELLERS_EDIT_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const before = await this.deps.resellers.lockByCustomer(scope, customerId, tx);
+        if (before === null) throw resellerNotFound();
+        const reactivate =
+          input.expiresAt !== null &&
+          before.status === 'SUSPENDED' &&
+          before.expirySuspendedAt !== null;
+        const after = await this.deps.resellers.setExpiry(
+          scope,
+          customerId,
+          { expiresAt: input.expiresAt, reactivate },
+          now,
+          tx,
+        );
+        if (after === null) throw resellerNotFound();
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'reseller.expiry',
+            entityType: 'Customer',
+            entityId: customerId,
+            before: {
+              expiresAt: before.expiresAt?.toISOString() ?? null,
+              status: before.status,
+              suspendedByExpiry: before.expirySuspendedAt !== null,
+            },
+            after: {
+              expiresAt: after.expiresAt?.toISOString() ?? null,
+              status: after.status,
+              suspendedByExpiry: after.expirySuspendedAt !== null,
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        if (reactivate && after.status === 'ACTIVE') {
+          const tier = await this.deps.resellers.findTier(scope, after.tierId, tx);
+          await this.deps.outbox.write(tx, actor, {
+            eventType: 'ResellerStandingChanged',
+            aggregateType: 'Customer',
+            aggregateId: customerId,
+            payload: {
+              customerId,
+              change: 'REACTIVATED',
+              fromStatus: before.status,
+              toStatus: after.status,
+              fromTierName: tier?.name ?? null,
+              toTierName: tier?.name ?? '',
+            },
+          });
+        }
         await this.remember(scope, input.idempotencyKey, requestHash, { customerId }, tx);
       },
     );
