@@ -823,6 +823,13 @@ export const MINIAPP_NOTIFICATION_PAGE_SIZE = 20;
  * neither paged through nor counted; the stored rows are kept as long as the lane keeps them.
  */
 export const MINIAPP_NOTIFICATION_WINDOW_DAYS = 60;
+/**
+ * How long the lane keeps the WORDS of a delivered message, in days from delivery. A pruning
+ * sweep then clears the stored text and the read mark (the row itself stays: its dedupe role
+ * belongs to the lane). Longer than the window the centre shows, so a message never loses its
+ * words while it can still be listed.
+ */
+export const MINIAPP_NOTIFICATION_TEXT_RETENTION_DAYS = 90;
 /** The longest text one entry carries; a longer message is cut with a visible ellipsis. */
 export const MINIAPP_NOTIFICATION_TEXT_MAX = 4096;
 
