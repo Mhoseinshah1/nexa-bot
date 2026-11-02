@@ -106,6 +106,12 @@ export const EVENT_TYPES = [
    * durable fact with a correlation id, like a block.
    */
   'CustomerMarketingOptOutChanged',
+  /**
+   * Round 11, B6: the customer (or an operator for them) turned the service expiry and volume
+   * reminders off, or back on. Like the marketing event it is a durable fact with a
+   * correlation id; the sweep reads the column, never this event.
+   */
+  'CustomerReminderOptOutChanged',
   // Customer 360 (§11.4–11.5). Ids and booleans only: never a phone number.
   'CustomerChannelMembershipExemptionChanged',
   'CustomerPhoneVerificationChanged',
@@ -382,6 +388,7 @@ export const EVENT_PAYLOAD_SCHEMAS = {
   CustomerBlocked: z.object({ reason: z.string().max(500).nullable() }),
   CustomerUnblocked: z.object({ reason: z.string().max(500).nullable() }),
   CustomerMarketingOptOutChanged: z.object({ optedOut: z.boolean() }),
+  CustomerReminderOptOutChanged: z.object({ optedOut: z.boolean() }),
   CustomerChannelMembershipExemptionChanged: z.object({ exempt: z.boolean() }),
   /** Whether a verified number is now recorded. The number itself is never in an event. */
   CustomerPhoneVerificationChanged: z.object({ verified: z.boolean() }),

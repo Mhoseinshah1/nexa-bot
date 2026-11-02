@@ -43,6 +43,7 @@ export const NOTIFICATIONS_PERMISSION: PermissionKey = 'users.notifications.edit
 /** R10 D3: a customer's personal discount percent (`permissions.ts` says why its own key). */
 export const PERSONAL_DISCOUNT_PERMISSION: PermissionKey = 'users.discount.edit';
 const PERSONAL_DISCOUNT_FLAG: FeatureFlagKey = 'personal_discount';
+const REMINDER_OPT_OUT_FLAG_KEY: FeatureFlagKey = 'customer_reminder_opt_out';
 
 /** R10 D3: a customer's personal discount, as the page shows it. */
 export interface CustomerPersonalDiscount {
@@ -61,12 +62,21 @@ export interface CustomerOverview {
   readonly terms: CustomerTermsStanding | null;
   /** R10 D3. */
   readonly personalDiscount: CustomerPersonalDiscount;
+  /**
+   * Round 11, B6: the service expiry / volume reminder switch. `enabled` is whether
+   * `customer_reminder_opt_out` is on NOW — a stored opt-out is in force only while it is.
+   */
+  readonly reminders: { readonly optOutAt: Date | null; readonly enabled: boolean };
 }
 
 export interface CustomerControlDeps {
   readonly customers: Pick<
     CustomerRepository,
-    'findById' | 'setChannelMembershipExemption' | 'setVerifiedPhone' | 'setMarketingOptOut'
+    | 'findById'
+    | 'setChannelMembershipExemption'
+    | 'setVerifiedPhone'
+    | 'setMarketingOptOut'
+    | 'setRemindersOptOut'
   >;
   readonly locationOverrides: CustomerLocationOverrideRepository;
   /** R10 D3: `customers.personal_discount_percent`, read and conditionally written. */
@@ -349,6 +359,59 @@ export class CustomerControlService {
   }
 
   /**
+   * Round 11, B6: the service expiry / volume reminders, turned off or back on by an operator
+   * for the customer — the same column and the same conditional UPDATE the customer's own
+   * switch writes, so the reminder sweep reads one fact whoever set it.
+   *
+   * `users.notifications.edit` through the guard (a denial is audited), a reason, the
+   * idempotency key under the actor's surface, and one transaction holding the scope-activity
+   * read, the conditional UPDATE, the audit row with before and after, and
+   * `CustomerReminderOptOutChanged` when it changed. Settable while the flag is off: the choice
+   * is stored and takes effect when it is on; the page says so. Only reminders change — no
+   * other notification kind reads this column.
+   */
+  async setReminderPreference(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly customerId: string;
+      readonly optedOut: boolean;
+      readonly reason: string;
+    },
+  ): Promise<{ readonly overview: CustomerOverview; readonly changed: boolean }> {
+    return this.run(scope, actor, {
+      permission: NOTIFICATIONS_PERMISSION,
+      action: input.optedOut ? 'customer.reminders_opt_out' : 'customer.reminders_opt_in',
+      idempotencyKey: input.idempotencyKey,
+      customerId: input.customerId,
+      reason: input.reason,
+      command: { remindersOptOut: input.optedOut },
+      write: async (customerId, before, now, tx) => {
+        const changed = await this.deps.customers.setRemindersOptOut(
+          scope,
+          customerId,
+          input.optedOut,
+          now,
+          tx,
+        );
+        return {
+          changed,
+          before: { remindersOptOutAt: before.remindersOptOutAt?.toISOString() ?? null },
+          after: { optedOut: input.optedOut },
+          emit: (tx) =>
+            this.deps.outbox.write(tx, actor, {
+              eventType: 'CustomerReminderOptOutChanged',
+              aggregateType: 'Customer',
+              aggregateId: customerId,
+              payload: { optedOut: input.optedOut },
+            }),
+        };
+      },
+    });
+  }
+
+  /**
    * R10 D3: set a customer's personal discount percent (0 removes it).
    *
    * Through the same skeleton as every control: `users.discount.edit` through the guard (a
@@ -538,6 +601,10 @@ export class CustomerControlService {
         percent: personal?.percent ?? 0,
         setAt: personal?.setAt ?? null,
         enabled: await this.deps.featureFlags.isEnabled(scope, PERSONAL_DISCOUNT_FLAG),
+      },
+      reminders: {
+        optOutAt: customer.remindersOptOutAt,
+        enabled: await this.deps.featureFlags.isEnabled(scope, REMINDER_OPT_OUT_FLAG_KEY),
       },
     };
   }
