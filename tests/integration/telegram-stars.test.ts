@@ -1090,6 +1090,113 @@ describe('Telegram Stars (Package A)', () => {
   });
 
   /*
+   * R11 B5: one attempt may be named by more than one invoice (the chat invoice, the mini app's
+   * link, that link on a second device). Whatever arrives, the attempt is charged once and
+   * credited once — counted in ledger rows, not read from a status.
+   */
+  describe('one attempt, one charge, one credit (R11 B5)', () => {
+    const confirmedEvents = async () =>
+      Number(
+        (
+          await rows<{ n: string }>(
+            sql`SELECT count(*)::text AS n FROM outbox_messages
+                WHERE tenant_id = ${tenantA.tenantId} AND event_type = 'PaymentConfirmed'`,
+          )
+        )[0]?.n ?? '0',
+      );
+
+    it('refuses a second pre-checkout while the first approval holds the attempt, and approves again once the hold lapsed', async () => {
+      await enableStars();
+      const { attempt, invoice, stars } = await invoicedTopup();
+      await preCheckout(invoice.provider_order_id, stars);
+      expect(lastAnswer()).toMatchObject({ ok: true });
+      await preCheckout(invoice.provider_order_id, stars);
+      expect(lastAnswer()).toMatchObject({ ok: false });
+      expect(await paymentState(attempt.payment.id)).toBe('PENDING');
+      // The first approval never became a charge: once its hold lapsed, the customer can pay.
+      await api.container.database.db.execute(
+        sql`UPDATE payments SET checkout_held_until = now() - interval '1 second' WHERE id = ${attempt.payment.id}`,
+      );
+      await preCheckout(invoice.provider_order_id, stars);
+      expect(lastAnswer()).toMatchObject({ ok: true });
+      expect(await ledger()).toEqual([]);
+    });
+
+    it('refuses the pre-checkout of an attempt whose charge is recorded but not settled yet', async () => {
+      await enableStars();
+      const { attempt, invoice, stars } = await invoicedTopup();
+      // The webhook recorded a charge and died before settling it: no hold, still PENDING.
+      await api.container.uow.run(tenantA, (tx) =>
+        new DrizzleGatewayInvoiceRepository(api.container.database.db).recordCharge(
+          tenantA,
+          attempt.payment.id as PaymentId,
+          { chargeId: 'charge-recorded', status: 'successful_payment', dueAt: new Date() },
+          new Date(),
+          tx,
+        ),
+      );
+      expect(await paymentState(attempt.payment.id)).toBe('PENDING');
+      await preCheckout(invoice.provider_order_id, stars);
+      expect(lastAnswer()).toMatchObject({ ok: false });
+      await worker();
+      expect(await ledger()).toEqual([
+        { reason: 'TOPUP_GATEWAY', amount: '100000', payment_id: attempt.payment.id },
+      ]);
+    });
+
+    it('credits a top-up once when two different charges name its attempt; the second goes to the operator with its charge id', async () => {
+      await enableStars();
+      const { attempt, invoice, stars } = await invoicedTopup();
+      await preCheckout(invoice.provider_order_id, stars);
+      await successfulPayment(invoice.provider_order_id, stars, 'charge-first');
+      await successfulPayment(invoice.provider_order_id, stars, 'charge-second');
+      await worker();
+      expect(await paymentState(attempt.payment.id)).toBe('CONFIRMED');
+      expect(await ledger()).toEqual([
+        { reason: 'TOPUP_GATEWAY', amount: '100000', payment_id: attempt.payment.id },
+      ]);
+      expect(await confirmedEvents()).toBe(1);
+      expect((await invoiceOf(attempt.payment.id)).provider_charge_id).toBe('charge-first');
+      const review = await rows<{ context: Record<string, unknown> }>(
+        sql`SELECT context FROM operational_events
+            WHERE tenant_id = ${tenantA.tenantId} AND code = 'payments.gateway_identity_mismatch'`,
+      );
+      expect(review.map((row) => row.context)).toEqual([
+        expect.objectContaining({
+          paymentId: attempt.payment.id,
+          reason: 'SECOND_CHARGE',
+          providerChargeId: 'charge-second',
+        }),
+      ]);
+    });
+
+    it('records a charge that lands after an approved checkout expired once, as a late completion, and credits nothing however often it is delivered', async () => {
+      await enableStars();
+      const { attempt, invoice, stars } = await invoicedTopup();
+      await preCheckout(invoice.provider_order_id, stars);
+      expect(lastAnswer()).toMatchObject({ ok: true });
+      await api.container.database.db.execute(
+        sql`UPDATE payments SET expires_at = now() - interval '1 minute',
+                                checkout_held_until = now() - interval '1 second'
+            WHERE id = ${attempt.payment.id}`,
+      );
+      await successfulPayment(invoice.provider_order_id, stars, 'charge-after');
+      await successfulPayment(invoice.provider_order_id, stars, 'charge-after');
+      await worker();
+      expect(await invoiceOf(attempt.payment.id)).toMatchObject({
+        provider_charge_id: 'charge-after',
+        outcome: 'LATE_COMPLETION',
+      });
+      expect(await paymentState(attempt.payment.id)).not.toBe('CONFIRMED');
+      expect(await ledger()).toEqual([]);
+      expect(await confirmedEvents()).toBe(0);
+      expect(
+        (await opsCodes()).filter((code) => code === 'payments.gateway_late_completion'),
+      ).toHaveLength(1);
+    });
+  });
+
+  /*
    * R12 F1 item 6 — Telegram's `refunded_payment`: a Stars charge refunded outside Nexa (Nexa
    * never asks Telegram to refund). Before R12 it had no handler and reached the customer turn
    * as a message; the money left outside the ledger and nobody was told.

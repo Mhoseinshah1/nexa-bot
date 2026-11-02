@@ -144,7 +144,9 @@ type RecordStep =
  * has already moved.
  *
  * - **Pre-checkout** reads and moves nothing. It approves only an attempt this bot sent,
- *   to this payer, for exactly the snapshotted Stars, still payable with a margin.
+ *   to this payer, for exactly the snapshotted Stars, still payable with a margin, and not
+ *   held by an earlier approval that Telegram is still charging (R11 B5: one attempt, one
+ *   charge, however many invoices name it).
  * - **`successful_payment`** is recorded FIRST — under the invoice's row lock, after the
  *   same identity checks, with the charge id written once and unique — and only then
  *   settled, through `GatewayPaymentService.settleRecorded` and so through
@@ -213,6 +215,23 @@ export class StarsPaymentService {
         const refusal = facts === null ? 'UNKNOWN_PAYMENT' : starsPreCheckoutRefusal(facts);
         if (refusal !== null) return refusal;
         const now = this.deps.clock.now();
+        /*
+         * R11 B5: an earlier approval of this attempt still holds it, so Telegram is charging
+         * that one. One attempt can be named by several invoices (the chat invoice, the mini
+         * app's link, the same link on a second device); approving a second checkout now would
+         * let Telegram take the Stars twice for one payment, and the second charge could then
+         * only be reported for an operator to refund. Read from the row this transaction holds
+         * FOR UPDATE, the lock the hold below is stamped under, so two pre-checkouts racing are
+         * serialised and the later one sees the earlier hold. A hold lapses after
+         * `TELEGRAM_STARS_CHECKOUT_HOLD_MS`: a customer whose approval never became a charge
+         * can pay again then.
+         */
+        if (
+          locked.checkoutHeldUntil !== null &&
+          locked.checkoutHeldUntil.getTime() > now.getTime()
+        ) {
+          return 'CHECKOUT_HELD';
+        }
         const held = await this.deps.payments.holdForCheckout(
           scope,
           invoice.paymentId as PaymentId,

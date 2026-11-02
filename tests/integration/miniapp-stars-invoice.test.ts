@@ -469,4 +469,215 @@ describe('Telegram Stars inside the mini app (R11 B5)', () => {
     const last = calls.filter((one) => one.method === 'answerPreCheckoutQuery');
     expect(last[last.length - 1]?.body).toMatchObject({ ok: false });
   });
+
+  /*
+   * R11 B5, the owner's proofs: ONE Stars payment can never be charged or settled twice, however
+   * many invoices (chat, link, link on a second device) name its attempt. Every case asserts the
+   * rows money is counted in — payments CONFIRMED, `PaymentConfirmed` outbox events, wallet
+   * ledger rows, the charge id on the invoice — never the status alone.
+   */
+  describe('one attempt, one charge, one settlement', () => {
+    const count = async (query: ReturnType<typeof sql>) =>
+      Number((await rows<{ n: string }>(query))[0]?.n ?? '0');
+
+    /** What settling the attempt wrote: CONFIRMED payments, their events, ledger rows. */
+    async function settledCounts(orderId: string) {
+      return {
+        confirmed: await count(
+          sql`SELECT count(*)::text AS n FROM payments WHERE order_id = ${orderId} AND state = 'CONFIRMED'`,
+        ),
+        confirmedEvents: await count(
+          sql`SELECT count(*)::text AS n FROM outbox_messages
+              WHERE tenant_id = ${tenantA.tenantId} AND event_type = 'PaymentConfirmed'`,
+        ),
+        // A Stars ORDER payment moves no wallet money; any row here would be a credit.
+        ledgerRows: await count(
+          sql`SELECT count(*)::text AS n FROM wallet_entries WHERE tenant_id = ${tenantA.tenantId}`,
+        ),
+      };
+    }
+
+    const lastAnswer = () => {
+      const answers = calls.filter((one) => one.method === 'answerPreCheckoutQuery');
+      return answers[answers.length - 1]?.body;
+    };
+
+    const opsEvents = (code: string) =>
+      rows<{ context: Record<string, unknown> | null; occurrence_count: number }>(
+        sql`SELECT context, occurrence_count FROM operational_events
+            WHERE tenant_id = ${tenantA.tenantId} AND code = ${code}`,
+      );
+
+    async function orderState(orderId: string) {
+      const [row] = await rows<{ state: string }>(
+        sql`SELECT state FROM orders WHERE id = ${orderId}`,
+      );
+      return row?.state;
+    }
+
+    it('double tap: two link requests for one attempt at once are one link, one attempt, one settlement', async () => {
+      await enableStars();
+      await setFlag('miniapp_stars_invoice', true);
+      const token = await session();
+      const { order, attempt } = await starsAttempt(token);
+
+      // Two taps, each with its own idempotency key, racing.
+      const [first, second] = await Promise.all([
+        askLink(token, attempt.paymentId),
+        askLink(token, attempt.paymentId),
+      ]);
+      expect(first.statusCode, first.body).toBe(201);
+      expect(second.statusCode, second.body).toBe(201);
+      const one = miniAppStarsInvoiceSchema.parse(JSON.parse(first.body));
+      expect(miniAppStarsInvoiceSchema.parse(JSON.parse(second.body))).toEqual(one);
+      expect(
+        await count(sql`SELECT count(*)::text AS n FROM payments WHERE order_id = ${order.id}`),
+      ).toBe(1);
+      expect(
+        await count(
+          sql`SELECT count(*)::text AS n FROM audit_logs
+              WHERE action = 'gateway_invoice.stars_link_created' AND entity_id = ${attempt.paymentId}`,
+        ),
+      ).toBe(1);
+
+      const invoice = await invoiceOf(attempt.paymentId);
+      await preCheckout(invoice.provider_order_id, 200);
+      expect(lastAnswer()).toMatchObject({ ok: true });
+      await successfulPayment(invoice.provider_order_id, 200, 'charge-tap');
+      expect(await settledCounts(order.id)).toEqual({
+        confirmed: 1,
+        confirmedEvents: 1,
+        ledgerRows: 0,
+      });
+      expect(await orderState(order.id)).toBe('PAID');
+    });
+
+    it('two devices: a second pre-checkout is refused while the first approval holds and after the charge; a second charge settles nothing and goes to the operator', async () => {
+      await enableStars();
+      await setFlag('miniapp_stars_invoice', true);
+      const phone = await session();
+      const { order, attempt } = await starsAttempt(phone);
+      const desktop = await session();
+      const onPhone = miniAppStarsInvoiceSchema.parse(
+        JSON.parse((await askLink(phone, attempt.paymentId)).body),
+      );
+      const onDesktop = miniAppStarsInvoiceSchema.parse(
+        JSON.parse((await askLink(desktop, attempt.paymentId)).body),
+      );
+      // The second device is handed the attempt's one link, not a second invoice.
+      expect(onDesktop).toEqual(onPhone);
+      const invoice = await invoiceOf(attempt.paymentId);
+
+      // The phone's pre-checkout is approved: Telegram is about to charge.
+      await preCheckout(invoice.provider_order_id, 200);
+      expect(lastAnswer()).toMatchObject({ ok: true });
+      // The desktop's, before that charge arrives, is refused: approving it too would let
+      // Telegram take the Stars twice for one attempt.
+      await preCheckout(invoice.provider_order_id, 200);
+      expect(lastAnswer()).toMatchObject({ ok: false });
+
+      await successfulPayment(invoice.provider_order_id, 200, 'charge-phone');
+      expect(await settledCounts(order.id)).toEqual({
+        confirmed: 1,
+        confirmedEvents: 1,
+        ledgerRows: 0,
+      });
+      // After the charge: refused (the attempt is paid).
+      await preCheckout(invoice.provider_order_id, 200);
+      expect(lastAnswer()).toMatchObject({ ok: false });
+
+      // Telegram reports a SECOND charge for the attempt all the same (a client that paid a
+      // stale approval): nothing settles it, and the operator gets its charge id to refund.
+      const second = await successfulPayment(invoice.provider_order_id, 200, 'charge-desktop');
+      expect(second.statusCode).toBeLessThan(300);
+      expect(await settledCounts(order.id)).toEqual({
+        confirmed: 1,
+        confirmedEvents: 1,
+        ledgerRows: 0,
+      });
+      expect((await invoiceOf(attempt.paymentId)).provider_charge_id).toBe('charge-phone');
+      const review = await opsEvents('payments.gateway_identity_mismatch');
+      expect(review).toHaveLength(1);
+      expect(review[0]?.context).toMatchObject({
+        paymentId: attempt.paymentId,
+        reason: 'SECOND_CHARGE',
+        providerChargeId: 'charge-desktop',
+      });
+      expect(await orderState(order.id)).toBe('PAID');
+    });
+
+    it('retry after timeout: a charge that arrives after the attempt expired is recorded once as a late completion and settles nothing', async () => {
+      await enableStars();
+      await setFlag('miniapp_stars_invoice', true);
+      const token = await session();
+      const { order, attempt } = await starsAttempt(token);
+      await askLink(token, attempt.paymentId);
+      const invoice = await invoiceOf(attempt.paymentId);
+      await preCheckout(invoice.provider_order_id, 200);
+      expect(lastAnswer()).toMatchObject({ ok: true });
+
+      // The hold lapsed and the attempt's deadline passed before Telegram's update arrived.
+      await api.container.database.db.execute(
+        sql`UPDATE payments SET expires_at = now() - interval '1 minute',
+                                checkout_held_until = now() - interval '1 second'
+            WHERE id = ${attempt.paymentId}`,
+      );
+      await successfulPayment(invoice.provider_order_id, 200, 'charge-late');
+      // ... and Telegram, not told in time, delivers it again.
+      await successfulPayment(invoice.provider_order_id, 200, 'charge-late');
+
+      const late = await rows<{
+        provider_charge_id: string | null;
+        outcome: string | null;
+        late_completion_observed_at: Date | null;
+      }>(
+        sql`SELECT provider_charge_id, outcome, late_completion_observed_at
+            FROM gateway_invoices WHERE payment_id = ${attempt.paymentId}`,
+      );
+      expect(late).toHaveLength(1);
+      expect(late[0]).toMatchObject({
+        provider_charge_id: 'charge-late',
+        outcome: 'LATE_COMPLETION',
+      });
+      expect(late[0]?.late_completion_observed_at).not.toBeNull();
+      // The Stars route has no late credit (`lateCreditSetting: null`): nothing is credited
+      // or settled, once or twice; one operator alert, raised once.
+      expect(await settledCounts(order.id)).toEqual({
+        confirmed: 0,
+        confirmedEvents: 0,
+        ledgerRows: 0,
+      });
+      const alerts = await opsEvents('payments.gateway_late_completion');
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0]?.occurrence_count).toBe(1);
+      expect(await orderState(order.id)).not.toBe('PAID');
+    });
+
+    it('successful_payment delivered twice with the same charge id settles once', async () => {
+      await enableStars();
+      await setFlag('miniapp_stars_invoice', true);
+      const token = await session();
+      const { order, attempt } = await starsAttempt(token);
+      await askLink(token, attempt.paymentId);
+      const invoice = await invoiceOf(attempt.paymentId);
+      await preCheckout(invoice.provider_order_id, 200);
+      const [a, b] = await Promise.all([
+        successfulPayment(invoice.provider_order_id, 200, 'charge-twice'),
+        successfulPayment(invoice.provider_order_id, 200, 'charge-twice'),
+      ]);
+      expect(a.statusCode).toBeLessThan(300);
+      expect(b.statusCode).toBeLessThan(300);
+      await successfulPayment(invoice.provider_order_id, 200, 'charge-twice');
+      await api.container.gatewayPayments.runOnce(tenantA);
+      expect(await settledCounts(order.id)).toEqual({
+        confirmed: 1,
+        confirmedEvents: 1,
+        ledgerRows: 0,
+      });
+      expect(await opsEvents('payments.gateway_identity_mismatch')).toEqual([]);
+      expect(await opsEvents('payments.gateway_late_completion')).toEqual([]);
+      expect(await opsEvents('payments.gateway_charge_unmatched')).toEqual([]);
+      expect(await orderState(order.id)).toBe('PAID');
+    });
+  });
 });
