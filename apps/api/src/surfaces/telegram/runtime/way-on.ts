@@ -83,6 +83,8 @@ export const WAY_ON: Readonly<Partial<Record<TemplateKey, WayOn>>> = {
   'bot.payment.unconfigured': 'MAIN',
   'bot.payment.window_too_short': 'MAIN',
   'bot.payment.withdraw_under_review': 'MAIN',
+  // R11 B7: the refusal draws «تأیید شماره تلفن» itself; the main menu is only the floor.
+  'bot.payment.phone_required': 'MAIN',
   // Wallet.
   'bot.wallet.gift_card_unavailable': 'MAIN',
   'bot.wallet.negative_balance': 'WALLET',
@@ -132,6 +134,17 @@ export const NO_WAY_ON_ALLOWED: Readonly<Partial<Record<TemplateKey, string>>> =
     'a typed answer the window keeps open: carries its own back and cancel (customServiceExitButtons)',
   'bot.custom_service.volume_unpriced':
     'a typed answer the window keeps open: carries its own back and cancel (customServiceExitButtons)',
+  // R11 B7: a reply keyboard and inline buttons cannot share a message; the keyboard is the way on.
+  'bot.phone.prompt':
+    'sets the reply keyboard (phone-verify-flow.ts): the contact keyboard with its cancel label, or the main menu keyboard back',
+  'bot.phone.verified':
+    'sets the reply keyboard (phone-verify-flow.ts): the contact keyboard with its cancel label, or the main menu keyboard back',
+  'bot.phone.not_own':
+    'sets the reply keyboard (phone-verify-flow.ts): the contact keyboard with its cancel label, or the main menu keyboard back',
+  'bot.phone.invalid':
+    'sets the reply keyboard (phone-verify-flow.ts): the contact keyboard with its cancel label, or the main menu keyboard back',
+  'bot.phone.cancelled':
+    'sets the reply keyboard (phone-verify-flow.ts): the contact keyboard with its cancel label, or the main menu keyboard back',
 };
 
 /**

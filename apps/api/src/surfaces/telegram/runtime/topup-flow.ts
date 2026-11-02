@@ -116,7 +116,7 @@ export async function topupChooser(
   scope: TenantContext,
   captureId: string,
   routes: readonly TopupRoute[],
-  /** R11 B7: whose amount this is, to offer «تأیید شماره تلفن» when it would add a route. */
+  /** R11 B7: whose amount this is, to offer the verify-phone button when it would add a route. */
   phone?: { readonly customerId: UserId; readonly amount: Money },
 ): Promise<PendingReply> {
   const close = {

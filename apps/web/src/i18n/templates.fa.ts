@@ -79,6 +79,8 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
     label: 'پرداخت کارت‌به‌کارت و رسید',
     prefixes: ['bot.payment.', 'bot.refund.'],
   },
+  // R11 B7: the customer's own-contact phone verification a payment route may require.
+  { id: 'phone', label: 'تأیید شماره تلفن', prefixes: ['bot.phone.'] },
   {
     id: 'gateway',
     label: 'درگاه آنلاین و تلگرام استارز',

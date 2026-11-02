@@ -1017,6 +1017,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.nowpayments_in_review',
       'bot.payment.nowpayments_pay_button',
       'bot.payment.nowpayments_review_unresolved',
+      // R11 B7: a route for verified numbers only, refused with the verify button under it.
+      'bot.payment.phone_required',
       'bot.payment.receipt_expired',
       'bot.payment.receipt_limit',
       'bot.payment.receipt_not_expected',
@@ -1062,6 +1064,17 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.wallet_button',
       'bot.payment.window_too_short',
       'bot.payment.withdraw_under_review',
+      /*
+       * R11 B7: the own-contact phone verification. None of them shows more than the last four
+       * digits of a number, and none promises a payment.
+       */
+      'bot.phone.cancelled',
+      'bot.phone.invalid',
+      'bot.phone.not_own',
+      'bot.phone.prompt',
+      'bot.phone.unavailable',
+      'bot.phone.verified',
+      'bot.phone.verify_button',
       // `bot.referral.button` left in F5: the wallet no longer draws a referral button.
       'bot.referral.gift_button',
       'bot.referral.gift_claimed',
@@ -1739,6 +1752,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       // redraws the persistent keyboard (and /start is answered, which the loop below checks).
       // Pinned to this one key.
       'bot.custom_button.unavailable',
+      // R11 B7: the contact keyboard's cancel label — a button that brings the main menu back.
+      'bot.phone.cancel_button',
     ]);
     for (const key of new Set([...reachable, ...sent])) {
       const body = CATALOGUE_FA[key];

@@ -1472,7 +1472,7 @@ export function PaymentGatewaysPage({
                     />
                   </Field>
                 </div>
-                {/* R11 B7: applied only while «تأیید شماره تلفن کاربران» is on (the hint says so). */}
+                {/* R11 B7: applied only while the phone_verification feature is on (the hint says so). */}
                 <ToggleRow
                   title={t('web.payment_gateway_verified_phone_only')}
                   description={t('web.payment_gateway_verified_phone_only_hint')}

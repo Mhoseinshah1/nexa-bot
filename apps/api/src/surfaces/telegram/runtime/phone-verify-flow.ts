@@ -20,7 +20,7 @@ import { mainMenuButton } from './keyboards.js';
 import type { PendingReply } from './replies.js';
 import type { BotRuntime } from '../bot-runtime.js';
 
-/** «📱 تأیید شماره تلفن»: opens the prompt. Drawn only while the feature is on. */
+/** The verify-phone button (`phone.verify`): opens the prompt. Drawn only while the feature is on. */
 export function phoneVerifyButton(): CustomerButton {
   return { ...inlineLabel('phone.verify'), data: PHONE_VERIFY_CALLBACK_DATA };
 }
