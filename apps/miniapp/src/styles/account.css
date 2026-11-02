@@ -101,3 +101,18 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
+
+/* R11 B3: the invited-friends list; a paid reward is the success twin of `.badge-warn`. */
+.badge-ok {
+  background: var(--glass-2);
+  color: var(--ok);
+}
+.friend-counts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  text-align: center;
+}
+.friend-name {
+  overflow-wrap: anywhere;
+}
