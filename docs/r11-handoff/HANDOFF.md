@@ -3,12 +3,17 @@
 Resume: read this block, the prompt NEXA-PHASE5-CUSTOMER.md (owner upload), then older blocks.
 
 - Triage: all 7 old R11 branches CONTINUE (none rebuilt).
-- Merged: #374 B4 (b1c2749) — flag `location_remaining_display` OFF; #373 B3 (7e2427e) — flag `referral_friends_list` OFF, carried phase-4.md; #375 B2 (d7f5a5c) — flag `service_usage_chart` OFF, migration 0302.
-- Open: none yet; B1 syncing with main for its PR (migration 0303).
-- Pushed, PR not opened: feat/r11-notification-centre B1 (896b2d4, migration 0303; open after #375 merges).
-- In progress: B6 feat/r11-reminder-optout (migration 0304). Not started: C2, B7 (Opus), B5 (Opus).
-- Worktrees: /home/user/wt-b1, wt-b2, wt-b3, wt-b6; test DBs nexa_p5_<item>.
-- Decisions so far: lead posts `@codex review` (prompt over pipeline §3); B4 got a switch (round rule).
+- Merged: #374 B4 (b1c2749), #373 B3 (7e2427e, carried phase-4.md), #375 B2 (d7f5a5c, 0302),
+  #377 B2 follow-up (68129b3: usage history dropped on service transfer — security review finding).
+- Open: #376 B1 (head 91fe39b, migration 0303; Codex P2 fixed in c5b9f68; CI running).
+- Pushed, PR waits for migration order: B6 feat/r11-reminder-optout 06b8dde (0304), C2 feat/r11-reseller-expiry
+  09696e0 (0305), B7 feat/r11-phone-verify a2381cc (0306; opens AFTER B5 merges — payments never parallel).
+- In progress: B5 feat/r11-miniapp-stars (Opus; no migration).
+- Owner change 2026-11-02: up to 3 implementers, 3rd slot only Sonnet UI-only/no migration/no payment (B1, B4).
+- Lead decisions log: to be written into docs/round-reports/phase-5.md (D1–D20 so far).
+- Worktrees: /home/user/wt-b1, wt-b5, wt-b6, wt-b7, wt-c2; test DBs nexa_p5_<item>.
+- Branches the session cannot delete (owner): feat/r11-location-remaining, feat/r11-referral-list,
+  feat/r11-usage-chart, fix/r11-usage-snapshots-transfer (if GitHub did not auto-delete them).
 
 ---
 
