@@ -14,6 +14,14 @@ import {
   type TenantContext,
   type UserId,
 } from '@nexa/contracts';
+import { CustomerNotificationService } from '../../apps/api/src/modules/commerce/messaging/application/customer-notification.service';
+import type { CustomerMessage } from '../../apps/api/src/modules/commerce/messaging/application/ports';
+import { DrizzleCustomerRepository } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer.repository';
+import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
+import { DrizzleWalletRepository } from '../../apps/api/src/modules/commerce/wallet/infrastructure/drizzle-wallet.repository';
+import { DrizzleNotificationSubjectReader } from '../../apps/api/src/modules/commerce/messaging/infrastructure/drizzle-notification-subject.reader';
+import { DrizzleCustomerReminderFactsReader } from '../../apps/api/src/modules/commerce/messaging/infrastructure/drizzle-customer-reminder-facts.reader';
+import { DrizzleServiceReminderSnapshotReader } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service-reminder.repository';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleCustomerNotificationRepository } from '../../apps/api/src/modules/commerce/messaging/infrastructure/drizzle-customer-notification.repository';
 import { CustomerNotifier } from '../../apps/api/src/modules/commerce/messaging/application/customer-notifier';
@@ -402,6 +410,63 @@ describe('reseller expiry (round 11, C2)', () => {
     expect(await sweep(at(nowMs() + 100 * HOUR))).toBe(1);
     expect(await notices()).toBe(2);
     expect(await expiredAudits()).toBe(2);
+  });
+
+  // ---- the send-time precondition --------------------------------------------------
+
+  function dispatcher(clock: Clock, sends: CustomerMessage[]): CustomerNotificationService {
+    const db = ctx.container.database.db;
+    const people = new DrizzleCustomerRepository(db);
+    return new CustomerNotificationService({
+      notifications: new DrizzleCustomerNotificationRepository(db),
+      refundFigures: new DrizzleWalletRepository(db),
+      paymentCredits: new DrizzleWalletRepository(db),
+      rejectionReasons: new DrizzlePaymentRepository(db),
+      reminderSnapshots: new DrizzleServiceReminderSnapshotReader(db),
+      reminderFacts: new DrizzleCustomerReminderFactsReader(db),
+      contacts: {
+        contactFor: async (scope, customerId, tx) => {
+          const found = await people.findById(scope, customerId, tx);
+          if (found === null) return { kind: 'NONE' };
+          return { kind: 'CONTACT', contact: { chatId: found.telegramUserId } };
+        },
+      },
+      subjects: new DrizzleNotificationSubjectReader(db),
+      messenger: {
+        send: async (_scope, message) => {
+          sends.push(message);
+          return { outcome: 'DELIVERED' };
+        },
+        acknowledge: async () => undefined,
+        sendFile: async () => ({ outcome: 'REFUSED' }),
+      },
+      uow: ctx.container.uow,
+      clock,
+      scopeIsActive: async () => true,
+      logger: { info: () => {}, error: () => {} },
+    });
+  }
+
+  it('sends the notice while the reseller is still suspended by the expiry', async () => {
+    await setExpiry(resellerOne, nowMs() + HOUR);
+    await sweep(at(nowMs() + 2 * HOUR));
+    const sends: CustomerMessage[] = [];
+    await dispatcher(at(nowMs() + 3 * HOUR), sends).deliverDue(tenantA, 50);
+    expect(sends.map((m) => m.templateKey)).toEqual(['bot.reseller.expired']);
+  });
+
+  it('sends nothing when an extension lands before the dispatch: the row is superseded', async () => {
+    await setExpiry(resellerOne, nowMs() + HOUR);
+    await sweep(at(nowMs() + 2 * HOUR));
+    await setExpiry(resellerOne, nowMs() + 48 * HOUR);
+    const sends: CustomerMessage[] = [];
+    await dispatcher(at(nowMs() + 3 * HOUR), sends).deliverDue(tenantA, 50);
+    expect(sends).toEqual([]);
+    expect(
+      await rows<{ state: string }>(
+        sql`SELECT state FROM customer_notifications WHERE kind = 'RESELLER_EXPIRED'`,
+      ),
+    ).toEqual([{ state: 'SUPERSEDED' }]);
   });
 
   // ---- the Web Admin command ---------------------------------------------------------
