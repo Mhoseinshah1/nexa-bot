@@ -325,6 +325,13 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
    * Round 11, C2: the notice (its subject is a per-suspension id) belongs to a customer; it
    * holds while that customer's reseller is still SUSPENDED by the expiry. An extension, a
    * manual re-activation or a cleared standing makes the sentence false, so it is not sent.
+   *
+   * It must also be THIS suspension's notice. The sweep stamps the row's `expiry_suspended_at`
+   * and queues the notice with the same clock reading in one transaction, so the notice's
+   * `created_at` is the generation marker: a reseller that expired, was extended and expired
+   * again while delivery was held has two queued notices, and only the one whose
+   * `created_at` equals the current `expiry_suspended_at` describes the suspension in force.
+   * The earlier one is superseded unsent instead of telling the reseller twice.
    */
   private async resellerExpiredHolds(tenantId: string, subjectId: string): Promise<boolean> {
     const result = await this.db.execute(sql`
@@ -336,6 +343,7 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
          AND n.subject_id = ${subjectId}
          AND r.status = 'SUSPENDED'
          AND r.expiry_suspended_at IS NOT NULL
+         AND n.created_at = r.expiry_suspended_at
        LIMIT 1`);
     return result.rows.length > 0;
   }

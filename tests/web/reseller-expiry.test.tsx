@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { ResellerExpiryCard } from '../../apps/web/src/pages/reseller-expiry';
 import { t } from '../../apps/web/src/i18n/web.fa';
+import { ResellersPage } from '../../apps/web/src/pages/resellers';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -91,5 +92,54 @@ describe('the reseller expiry card (round 11, C2)', () => {
         screen.getByText(t('web.reseller_expiry_current'), { exact: false }),
       ).toHaveTextContent(t('web.reseller_expiry_none')),
     );
+  });
+
+  it('shows the new standing in the expiry card after the reseller form saves a status', async () => {
+    const tier = {
+      id: TIER_ID,
+      name: 'Gold',
+      pricingMode: 'PERCENTAGE_DISCOUNT',
+      discountPercentage: 20,
+      creditLimit: { amount: '0', currency: 'IRT' },
+      grants: [],
+      resellerCount: 1,
+      monthlyMinimum: null,
+      createdAt: '2026-09-01T08:00:00.000Z',
+      updatedAt: '2026-09-01T08:00:00.000Z',
+    };
+    stubApi([
+      { url: '/resellers', body: { resellers: [reseller()], nextCursor: null } },
+      { url: '/reseller-tiers', body: { tiers: [tier] } },
+      {
+        url: `/resellers/${CUSTOMER_ID}`,
+        method: 'POST',
+        body: { reseller: reseller({ status: 'SUSPENDED', suspendedByExpiry: false }) },
+      },
+      {
+        url: `/resellers/${CUSTOMER_ID}`,
+        method: 'GET',
+        body: { reseller: reseller() },
+      },
+    ]);
+    renderPage(
+      <ResellersPage
+        route={{ path: '/resellers', query: new URLSearchParams() }}
+        denied={false}
+        mayEdit
+        mayViewWallet={false}
+        mayViewOrders={false}
+        mayViewAudit={false}
+      />,
+    );
+    await screen.findByText('Reza Reseller');
+    fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
+    await screen.findByText(t('web.reseller_expiry_title'));
+    expect(screen.queryByText(t('web.reseller_expiry_manual_suspended'))).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'ویرایش' }));
+    fireEvent.change(screen.getByLabelText('وضعیت'), { target: { value: 'SUSPENDED' } });
+    const save = screen.getByRole('button', { name: 'ذخیره' });
+    await waitFor(() => expect(save).not.toBeDisabled());
+    fireEvent.click(save);
+    expect(await screen.findByText(t('web.reseller_expiry_manual_suspended'))).toBeInTheDocument();
   });
 });

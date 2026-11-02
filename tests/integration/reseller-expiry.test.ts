@@ -469,6 +469,28 @@ describe('reseller expiry (round 11, C2)', () => {
     ).toEqual([{ state: 'SUPERSEDED' }]);
   });
 
+  it('delayed delivery across expire, extend, expire again sends ONE notice: the current suspension’s', async () => {
+    await setExpiry(resellerOne, nowMs() + HOUR);
+    await sweep(at(nowMs() + 2 * HOUR));
+    await setExpiry(resellerOne, nowMs() + 72 * HOUR);
+    await sweep(at(nowMs() + 100 * HOUR));
+    expect(await status(resellerOne)).toBe('SUSPENDED');
+    expect(await notices(), 'both sweeps queued a notice, neither was delivered').toBe(2);
+    const sends: CustomerMessage[] = [];
+    await dispatcher(at(nowMs() + 101 * HOUR), sends).deliverDue(tenantA, 50);
+    expect(sends.map((m) => m.templateKey)).toEqual(['bot.reseller.expired']);
+    const states = await rows<{ state: string; current: boolean }>(
+      sql`SELECT n.state, (n.created_at = r.expiry_suspended_at) AS current
+            FROM customer_notifications n
+            JOIN resellers r ON r.customer_id = n.customer_id
+           WHERE n.kind = 'RESELLER_EXPIRED' ORDER BY n.created_at`,
+    );
+    expect(states.map((r) => [r.current, r.state])).toEqual([
+      [false, 'SUPERSEDED'],
+      [true, 'DELIVERED'],
+    ]);
+  });
+
   // ---- the Web Admin command ---------------------------------------------------------
 
   it('refuses a date that is not in the future, and a write without resellers.edit (audited)', async () => {

@@ -32,7 +32,7 @@ export function ResellerExpiryCard({
   const submission = useSubmissionKey();
   const [draft, setDraft] = useState('');
   const reseller = useQuery({
-    queryKey: ['reseller-expiry', customerId],
+    queryKey: ['customer-reseller', customerId],
     queryFn: () => fetchCustomerReseller(customerId),
   });
   const row = reseller.data?.reseller;
@@ -47,7 +47,7 @@ export function ResellerExpiryCard({
     },
     onSuccess: (response, expiresAt) => {
       submission.settle();
-      queries.setQueryData(['reseller-expiry', customerId], response);
+      queries.setQueryData(['customer-reseller', customerId], response);
       void queries.invalidateQueries({ queryKey: ['resellers'] });
       void queries.invalidateQueries({ queryKey: ['reseller-policy', customerId] });
       void queries.invalidateQueries({ queryKey: ['reseller-history', customerId] });
