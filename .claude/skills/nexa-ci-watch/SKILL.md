@@ -29,9 +29,11 @@ bash $S --wait <pr> --every 60 --max 540     # bounded loop, fits one foreground
   foreground (`--max 540`). Never an agent polling in a loop; never
   `gh pr checks` (GraphQL). A scheduled check-in can lapse silently (one left a session idle for
   an hour): at most one per wait, at least 20 minutes apart, as a backstop only.
-- **One checker.** Never spawn a watcher agent per wait or per notification. If
-  the round names one CI-checking agent, it is the only one; everyone else keeps
-  working.
+- **One checker, cheapest tier.** Never spawn a watcher agent per wait or per
+  notification. If the round names one CI-checking agent, it is the only one;
+  everyone else keeps working. It makes one blocking `ci-status.sh --wait` call
+  per CI run and returns pass/fail plus the names of failed jobs. Triage of a
+  failure goes to a default-tier agent.
 - **Duplicates:** do not reply to, or act twice on, a duplicate CI or Codex
   notification. Re-run the script; if the line has not changed, do nothing.
 - **Codex**: request it yourself at once with one `@codex review` comment

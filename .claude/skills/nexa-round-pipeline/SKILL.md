@@ -12,11 +12,19 @@ The round prompt names tasks and models; the rest is here. `CLAUDE.md`,
 
 ## 1. Agents
 
+- The lead runs on the strongest tier and stays thin: it plans, delegates,
+  reviews each diff once as the money/security reviewer, merges and reports. It
+  never implements, never runs suites, never reads whole files.
 - Each implementer: own `git worktree add -b <branch> <dir> <base>`; never two
-  agents in one checkout. **At most 3 implementer agents run at the same time**
-  unless the round prompt sets another number.
-- Models come from the round prompt; **Sonnet stays the default**. Light work
-  (read-only fact collection, README, formatting): the cheapest agent.
+  agents in one checkout. **At most 2 implementer agents run at the same time**
+  unless the round prompt sets another number. **One phase per session.**
+- **Every subagent gets an explicit model tier**, never an inherited one: the
+  cheapest tier for the single CI checker and for pure lookups (read-only fact
+  collection, README, formatting); the default tier for routine implementation,
+  CI-log triage, Codex replies, PR text and report/handoff drafts; the money
+  tier only for money, guards/policy, security and customer-data access.
+  **Escalate from the default tier only after two failures.** Tiers are named
+  by role (cheapest / default / money), never by product model name.
 - Integration suites run against **separate databases**, one integration run at
   a time round-wide (§1a). Nobody idles on CI.
 - **Fresh agent per PR** for merge-main, renumber, gate and fix work, returning
@@ -45,6 +53,11 @@ background command blindly (3 min of empty output: `pgrep -af`).
 **Local gate = affected suites only** (`nexa-test-selection`: tiers, the
 `pnpm test:integration <files>` trap); the **full integration suite runs on CI
 only**. A money PR keeps `pnpm verify` once at the end and its guard suites.
+
+Scope of a local integration run: only the test files the PR added or changed,
+plus the suites the selector names for the touched modules. Everything else is
+CI's job. A mutation check runs only for money, guard or policy code, and on a
+unit test whenever the rule can be reached from one.
 
 ## 2. Lead review
 
@@ -138,11 +151,13 @@ and at ~50 % context; after a compact, re-read the round prompt and handoff.
 
 Remove every worktree and temporary test database the round created.
 
-- **Per-PR report** (link and merge commit; what changed; the Codex fixes;
-  tests and their mutation checks; decisions taken; the owner's test checklist
-  with exact `botctl` commands, ending as in §6) goes into the PR description
-  and `docs/round-reports/<round>.md`. Nothing is dropped from it.
-- The chat final message is a summary of at most 20 lines with links.
+- **Round report** (`docs/round-reports/<round>.md`): at most 150 lines. It
+  lists each PR with its link and merge commit and the owner's test checklist
+  with exact `botctl` commands, ending as in §6. The per-PR detail (what
+  changed, the Codex fixes, tests and mutation checks, decisions taken) lives in
+  each PR description; do not copy it into the report.
+- The chat final message is a summary of at most 20 lines with links. The issue
+  comment is at most 40 lines.
 - End the report file with a short **usage table**: PRs, agents used, model per
   agent (as its tier: lead / default / money; model names only in chat, never in
   the repository), CI cycles, and any usage numbers the CLI shows.
