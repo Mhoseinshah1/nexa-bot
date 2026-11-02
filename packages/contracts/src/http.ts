@@ -3588,6 +3588,16 @@ export const resellerSummarySchema = z.object({
   creditLimit: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }).nullable(),
   /** The stored own limit, else the tier's. Grants nothing; kept so stored rows read. */
   effectiveCreditLimit: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }),
+  /**
+   * Round 11, C2: when the reseller's standing ends (null: never). The expiry sweep
+   * suspends an ACTIVE reseller whose date has passed. Absent on the wire reads as none.
+   */
+  expiresAt: z.iso.datetime().nullable().default(null),
+  /**
+   * True when the CURRENT suspension was made by the expiry sweep (and not by an
+   * administrator): only such a suspension is lifted by setting a later expiry date.
+   */
+  suspendedByExpiry: z.boolean().default(false),
   /*
    * No imported purchase cap. A legacy agent's `maxbuyagent` is a credit/limit concept, and
    * reseller credit stays removed (owner decision 2026-10-01): it lives only in the import's
@@ -3818,6 +3828,17 @@ export const resellerMinimumWriteSchema = z.object({
 export type ResellerMinimumWriteRequest = z.infer<typeof resellerMinimumWriteSchema>;
 
 /**
+ * Round 11, C2: a reseller's own expiry date. NULL clears it (no expiry). A date must be in
+ * the future; setting a later date on a reseller the expiry sweep suspended re-activates it,
+ * and on one an administrator suspended changes nothing but the date.
+ */
+export const resellerExpiryWriteSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  expiresAt: z.iso.datetime().nullable(),
+});
+export type ResellerExpiryWriteRequest = z.infer<typeof resellerExpiryWriteSchema>;
+
+/**
  * One overridden dimension: the reseller's own grants of it, which REPLACE the tier's grants
  * of that whole dimension. An empty list overrides it with nothing: deny by default.
  */
@@ -4017,6 +4038,8 @@ export const RESELLER_ROUTES = {
   grants: (customerId: string) => `/resellers/${encodeURIComponent(customerId)}/grants`,
   monthlyMinimum: (customerId: string) =>
     `/resellers/${encodeURIComponent(customerId)}/monthly-minimum`,
+  // Round 11, C2.
+  expiry: (customerId: string) => `/resellers/${encodeURIComponent(customerId)}/expiry`,
 } as const;
 
 // --- Orders ------------------------------------------------------------------

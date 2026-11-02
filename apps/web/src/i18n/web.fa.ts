@@ -6283,6 +6283,21 @@ export const WEB_FA = {
   'web.reseller_minimum_problem': 'مبلغ باید عددی صحیح و نامنفی به واحد خرد و در بازهٔ مجاز باشد.',
   'web.reseller_minimum_problem_own':
     'برای حداقل اختصاصی مبلغی بزرگ‌تر از صفر وارد کنید، یا «بدون حداقل» را برگزینید.',
+  'web.reseller_expiry_title': 'مهلت نمایندگی',
+  'web.reseller_expiry_hint':
+    'تاریخ پایان نمایندگی این مشتری. پس از آن، نماینده معلق می‌شود، قیمت‌ها به حالت عادی برمی‌گردد و هیچ مبلغی جابه‌جا نمی‌شود. خالی یعنی بدون مهلت.',
+  'web.reseller_expiry_field': 'پایان نمایندگی',
+  'web.reseller_expiry_current': 'مهلت فعلی:',
+  'web.reseller_expiry_none': 'بدون مهلت',
+  'web.reseller_expiry_save': 'ذخیرهٔ مهلت',
+  'web.reseller_expiry_clear': 'حذف مهلت',
+  'web.reseller_expiry_saved': 'مهلت نمایندگی ذخیره شد.',
+  'web.reseller_expiry_cleared': 'مهلت نمایندگی حذف شد.',
+  'web.reseller_expiry_reactivates':
+    'این نماینده به‌دلیل پایان مهلت معلق شده است؛ ثبت تاریخ جدید، نمایندگی او را دوباره فعال می‌کند.',
+  'web.reseller_expiry_manual_suspended':
+    'این نماینده را مدیر معلق کرده است؛ تغییر تاریخ، وضعیت او را فعال نمی‌کند.',
+  'web.reseller_expiry_past': 'تاریخ مهلت باید در آینده باشد.',
   'web.reseller_minimum_saved': 'حداقل فروش ذخیره شد.',
   'web.reseller_minimum_save': 'ذخیرهٔ حداقل فروش',
   'web.reseller_minimum_choice_inherit': 'مطابق سطح',
@@ -11159,6 +11174,7 @@ export const WEB_FA = {
   'web.pay_notice_service_time_added': 'خرید زمان اضافه',
   'web.pay_notice_service_auto_renew_funds_short': 'کمبود موجودی برای تمدید خودکار',
   'web.pay_notice_service_auto_renew_price_changed': 'تغییر مبلغ تمدید خودکار',
+  'web.pay_notice_reseller_expired': 'پایان مهلت نمایندگی',
   'web.pay_provider_pending': 'در انتظار',
   'web.pay_provider_processing': 'در حال پردازش',
   'web.pay_provider_completed': 'تکمیل‌شده',

@@ -10,6 +10,7 @@ import {
   resellerGrantOverridesWriteSchema,
   resellerListQuerySchema,
   resellerMinimumQuerySchema,
+  resellerExpiryWriteSchema,
   resellerMinimumWriteSchema,
   resellerTierMinimumWriteSchema,
   resellerPurchaseQuerySchema,
@@ -350,6 +351,22 @@ export class ResellersController {
     return { reseller: toResellerSummary(reseller) };
   }
 
+  @Post('resellers/:customerId/expiry')
+  async setExpiry(
+    @Req() request: FastifyRequest,
+    @Param('customerId') customerId: string,
+    @Body() body: unknown,
+  ): Promise<ResellerResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    const command = resellerExpiryWriteSchema.parse(body);
+    const reseller = await this.container.resellersAdmin.setExpiry(scope, actor, {
+      idempotencyKey: command.idempotencyKey,
+      customerId,
+      expiresAt: command.expiresAt === null ? null : new Date(command.expiresAt),
+    });
+    return { reseller: toResellerSummary(reseller) };
+  }
+
   @Post('resellers/:customerId/grants')
   async replaceOverrides(
     @Req() request: FastifyRequest,
@@ -516,6 +533,8 @@ function toResellerSummary(reseller: ResellerListing): ResellerSummaryResponse {
       amount: effective.amountMinor.toString(),
       currency: effective.currency,
     },
+    expiresAt: reseller.expiresAt?.toISOString() ?? null,
+    suspendedByExpiry: reseller.expirySuspendedAt !== null,
     createdAt: reseller.createdAt.toISOString(),
     updatedAt: reseller.updatedAt.toISOString(),
   };

@@ -10306,6 +10306,19 @@ export const resellers = pgTable(
      */
     monthlyMinimumAmount: bigint('monthly_minimum_amount', { mode: 'bigint' }),
     monthlyMinimumCurrency: text('monthly_minimum_currency'),
+    /**
+     * Round 11, C2: when this reseller's standing ends. NULL (every existing row) is "never":
+     * the expiry sweep looks at no row without a date. It lives on the RESELLER row, not on
+     * the tier, because a tier is shared and expiring it would suspend everyone in it.
+     */
+    expiresAt: timestamptz('expires_at'),
+    /**
+     * Round 11, C2: set by the expiry sweep, in the same statement that suspends the
+     * reseller, and cleared by every other status write. Non-null means "the CURRENT
+     * suspension was made by the expiry": only such a suspension is lifted by setting a
+     * later `expires_at`; an administrator's suspension never is.
+     */
+    expirySuspendedAt: timestamptz('expiry_suspended_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     ...recordSourceColumns(),
@@ -10352,6 +10365,10 @@ export const resellers = pgTable(
     uniqueIndex('resellers_customer_key').on(table.tenantId, table.customerId),
     index('resellers_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
     index('resellers_tenant_tier_idx').on(table.tenantId, table.tierId),
+    /** The expiry sweep's lookup: only ACTIVE rows with a date, soonest first. */
+    index('resellers_expiry_idx')
+      .on(table.tenantId, table.expiresAt)
+      .where(sql`status = 'ACTIVE' AND expires_at IS NOT NULL`),
     check('resellers_status_check', enumCheck('status', RESELLER_STATUSES)),
     check('resellers_pricing_mode_check', enumCheck('pricing_mode', RESELLER_OVERRIDE_MODES)),
     check(
