@@ -320,6 +320,9 @@ describe('the feature flag registry', () => {
       // R10 D4: gift cards (wallet top-up codes). Off by default; the Web Admin's batches,
       // the bot's capture window and the mini app's field are reachable behind it.
       'gift_cards',
+      // R11 B4. Off by default; the remaining-changes line it switches on is drawn by the bot
+      // service card and the mini app, and only where location change is enabled with a limit.
+      'location_remaining_display',
       // Round 9, C5. Off by default; the mini app's surface, its document and the bot's
       // menu button it switches on are reachable, and with it off the bot is unchanged.
       'mini_app',

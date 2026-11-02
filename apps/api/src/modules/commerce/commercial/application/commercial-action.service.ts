@@ -52,6 +52,7 @@ import { rememberOnce } from '../../../platform/idempotency/application/remember
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
+import type { FeatureFlagResolver } from '../../../control/features/application/feature-flags.service.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { OperationalEventRecorder } from '@nexa/contracts';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
@@ -314,6 +315,8 @@ export interface CommercialActionServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   readonly outbox: OutboxWriter;
   readonly settings: SettingsResolver;
+  /** R11 B4: `location_remaining_display`, the switch for the remaining-changes line. */
+  readonly features: Pick<FeatureFlagResolver, 'isEnabled'>;
   /**
    * The pricing engine's door (WP8 P7): automatic rules and the cashback promise apply
    * to renewals and add-ons at draft time, and confirmation redeems them. Codes do not
@@ -425,7 +428,12 @@ export class CommercialActionService {
           'This service cannot be moved right now.',
         );
       }
-      return { kind, product: null, addons: [], devices: null, locations };
+      // R11 B4: the remaining-changes figure rides on the offer, so the flag withholds it here
+      // too (the bot's location screen and the mini app sheet read it from this offer).
+      const shown = (await this.deps.features.isEnabled(scope, 'location_remaining_display'))
+        ? locations
+        : { ...locations, remaining: null };
+      return { kind, product: null, addons: [], devices: null, locations: shown };
     }
 
     const offerable = await this.offerableAddons(
@@ -548,7 +556,7 @@ export class CommercialActionService {
    * R11 B4: the location changes this service has left, «۲ از ۳» — or null when the surface
    * says nothing: a custom service, a state no move is legal from, a panel that cannot move
    * accounts, a panel policy that switched `LOCATION_CHANGE` off, no enabled priced target, or
-   * no limit set.
+   * no limit set — and always while the `location_remaining_display` flag is off (default).
    *
    * The same first three gates `availableFor` applies to `CHANGE_LOCATION` (state, the panel's
    * capability, the policy row), so "enabled" means one thing; the count itself is
@@ -561,6 +569,8 @@ export class CommercialActionService {
     service: ServiceRecord,
   ): Promise<{ readonly remaining: number; readonly max: number } | null> {
     await this.deps.guard.check(scope, actor, COMMERCIAL_ACTION_PERMISSION);
+    // The switch is OFF by default: with it off nothing below is read and no surface shows a line.
+    if (!(await this.deps.features.isEnabled(scope, 'location_remaining_display'))) return null;
     if (service.productId === null) return null;
     if (!OPERATION_LEGAL_FROM.CHANGE_LOCATION.includes(service.state)) return null;
     const operable = await this.deps.panels.operability(scope, service.panelId, 'CHANGE_LOCATION');

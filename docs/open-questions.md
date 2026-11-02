@@ -4667,11 +4667,15 @@ money and sends no customer message; the owner decides otherwise.
 
 ## Round 11 B4 — the location changes a customer has left
 
-- **Decision (not a question) — no feature flag.** The line only adds text to screens the
-  existing settings already govern: it exists exactly where the `LOCATION_CHANGE` panel-policy
-  row, the service state, the panel capability, an enabled priced target and the location's (or
-  the customer's override) limit already make location change available. A flag would only let
-  the line disagree with the button. It moves no money and sends no message.
+- **Decision (lead, replaces the earlier "no feature flag") — a switch, OFF by default.** The
+  owner's round rule is that every new customer-facing feature ships behind a switch that
+  starts off, so the line has `location_remaining_display` («امکانات» in the Web Admin). The
+  condition is unchanged: the line shows only when the flag is ON and the existing settings
+  already make location change available (the `LOCATION_CHANGE` panel-policy row, the service
+  state, the panel capability, an enabled priced target) and a limit is set. Flag OFF: neither
+  the bot card, the bot's location screen, the mini app view nor its sheet carry the line, and
+  the button and every refusal are exactly as before. The flag moves no money and sends no
+  message, and changes no limit or enforcement.
 - **OQ-R11-B4-01 — targets with different limits.** The limit lives on each configured
   location (and a Customer 360 override replaces all of them). When the targets offered to one
   service carry different limits, the line shows the LARGEST remaining toward any target (it is

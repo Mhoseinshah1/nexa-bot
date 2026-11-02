@@ -204,6 +204,9 @@ describe('R11 B4: the remaining location changes', () => {
       idempotencyKey: key(),
       reason: 'mini-app location test',
     });
+    // R11 B4: the line is behind `location_remaining_display` (off by default); the cases below
+    // switch it on, and the flag cases switch it off again.
+    await setRemainingFlag(true);
     panel = await startFakeMarzban({ host: '127.0.0.2' });
     const created = await ctx.container.panels.create(tenantA, owner, {
       name: 'Marzban A',
@@ -435,6 +438,20 @@ describe('R11 B4: the remaining location changes', () => {
     return { token, customerId, serviceId };
   }
 
+  async function setRemainingFlag(enabled: boolean) {
+    const current = await ctx.container.featureFlagResolver.resolve(
+      tenantA,
+      'location_remaining_display',
+    );
+    await ctx.container.featureFlags.set(tenantA, owner, {
+      key: 'location_remaining_display',
+      enabled,
+      expectedVersion: current.version,
+      idempotencyKey: key(),
+      reason: 'b4 remaining line',
+    });
+  }
+
   // --- the cases -------------------------------------------------------------------------
 
   it('enabled and limited: shows «N از M» on the bot card, the bot screen, the mini app view and sheet, and counts down', async () => {
@@ -596,5 +613,43 @@ describe('R11 B4: the remaining location changes', () => {
     const view = await detailOf(token, serviceId);
     expect(view.locationRemaining).toBeNull();
     expect(view.canChangeLocation).toBe(false);
+  }, 90_000);
+
+  it('flag off (the default): no line on the bot card, the bot screen, the mini app view or the sheet — and the button and enforcement are untouched; on again, the line is back', async () => {
+    const { token, serviceId } = await customer();
+    await freeLocations(LIMIT_3);
+    await setRemainingFlag(false);
+
+    const shownCard = await card(serviceId);
+    expect(shownCard.text).not.toContain(REMAINING_LINE);
+    // The button is the location feature's, not this flag's.
+    expect(shownCard.callbacks.some((data) => data.startsWith('lc:'))).toBe(true);
+    const screen = await choice(serviceId);
+    expect(screen.key).toBe('bot.service.location_choice');
+    expect(screen.text).not.toContain(REMAINING_LINE);
+    expect(screen.text).toContain('لوکیشن فعلی: آلمان\n\nلوکیشن مقصد را انتخاب کنید:');
+    const view = await detailOf(token, serviceId);
+    expect(view.locationRemaining).toBeNull();
+    expect(view.canChangeLocation).toBe(true);
+    const sheet = await sheetOf(token, serviceId);
+    expect(sheet?.remaining).toBeNull();
+    expect(sheet?.targets.length).toBeGreaterThan(0);
+
+    await setRemainingFlag(true);
+    expect((await card(serviceId)).text).toContain(line(3, 3));
+    expect((await choice(serviceId)).text).toContain(line(3, 3));
+    expect((await detailOf(token, serviceId)).locationRemaining).toEqual({ remaining: 3, max: 3 });
+    expect((await sheetOf(token, serviceId))?.remaining).toEqual({ remaining: 3, max: 3 });
+  }, 90_000);
+
+  it('flag on but location change not offered or no limit: still no line (the flag adds a switch, not a condition-free line)', async () => {
+    const { token, serviceId } = await customer();
+    // Nothing configured: disabled.
+    expect((await card(serviceId)).text).not.toContain(REMAINING_LINE);
+    expect((await detailOf(token, serviceId)).locationRemaining).toBeNull();
+    // Configured without a limit.
+    await freeLocations({ cooldownHours: null, maxChanges: null, periodDays: null });
+    expect((await card(serviceId)).text).not.toContain(REMAINING_LINE);
+    expect((await detailOf(token, serviceId)).locationRemaining).toBeNull();
   }, 90_000);
 });

@@ -572,14 +572,10 @@ export async function serviceDetail(
    */
   const locationChanges = await rt.deps.commercial.locationChangesLeft(scope, actor, service);
   // The card's hint names «تغییر لینک»; on a files-only panel there is no such button.
-  const card = await serviceCardScreen(
-    rt,
-    scope,
-    service,
-    title,
-    rotation.offered && !filesOnly,
-    { ...cardExtra, locationChanges },
-  );
+  const card = await serviceCardScreen(rt, scope, service, title, rotation.offered && !filesOnly, {
+    ...cardExtra,
+    locationChanges,
+  });
   // R8-C3: the owner's order, rows and switches, over the buttons decided above.
   const layout = (await rt.deps.serviceCardLayout?.(scope)) ?? null;
   return {
