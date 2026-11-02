@@ -18,6 +18,7 @@ import {
   type UnitOfWork,
   type UserId,
 } from '@nexa/contracts';
+import type { UsageSnapshotStore } from './usage-snapshots.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import { runAuthorizedMutation } from '../../../platform/access/application/authorized-mutation.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
@@ -80,6 +81,8 @@ export interface ServiceTransferDeps {
     'findById' | 'findForCustomer' | 'lockForUpdate' | 'lockLifecycle' | 'hasActiveRefundRequest'
   >;
   readonly orders: Pick<OrderRepository, 'findById'>;
+  /** R11 B2: the usage history is the previous owner's and is dropped with the hand-over. */
+  readonly usageSnapshots: Pick<UsageSnapshotStore, 'deleteForService'>;
   readonly customers: Pick<CustomerRepository, 'findById' | 'list'>;
   readonly captures: Pick<CustomerCaptureService, 'open'>;
   readonly screens: Pick<CustomerScreenComposer, 'serviceSummary'>;
@@ -409,6 +412,10 @@ export class ServiceTransferService {
           tx,
         );
         if (!moved) throw new Error(`service ${service.id} changed owner under its row lock`);
+        // The hourly usage history was the sender's: the new owner's chart starts empty
+        // rather than opening with another customer's consumption. Same transaction, so a
+        // refused or rolled-back transfer deletes nothing.
+        await this.deps.usageSnapshots.deleteForService(scope, service.id, tx);
 
         await this.deps.audit.record(
           scope,
