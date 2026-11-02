@@ -115,6 +115,8 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
       'bot.order.pending_reminder',
       // Round N, package D: the reseller monthly minimum.
       'bot.reseller.minimum_',
+      // Round 11, C2: told once when the expiry sweep suspends a reseller.
+      'bot.reseller.expired',
     ],
   },
   { id: 'transfer', label: 'انتقال سرویس', prefixes: ['bot.service.transfer_'] },

@@ -141,6 +141,7 @@ import {
   type ResellerMinimumFilter,
   type ResellerMinimumPeriod,
   type ResellerMinimumReport,
+  type ResellerExpiryWriteRequest,
   type ResellerMinimumWriteRequest,
   type ResellerPolicyResponse,
   type ResellerTierMinimumWriteRequest,
@@ -3888,6 +3889,14 @@ export function setResellerTierMinimum(
 ): Promise<ResellerTierResponse> {
   const { id, ...body } = input;
   return post(RESELLER_TIER_ROUTES.monthlyMinimum(id), body, resellerTierResponseSchema);
+}
+
+/** Round 11, C2: a reseller's expiry date; null clears it. Extending re-activates (server). */
+export function setResellerExpiry(
+  input: ResellerExpiryWriteRequest & { customerId: string },
+): Promise<ResellerResponse> {
+  const { customerId, ...body } = input;
+  return post(RESELLER_ROUTES.expiry(customerId), body, resellerResponseSchema);
 }
 
 /** A reseller's own minimum: null inherits the tier's, a zero amount is an explicit none. */

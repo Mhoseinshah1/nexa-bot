@@ -29,6 +29,7 @@ import {
   updateReseller,
 } from '../api/client';
 import { CustomerIdentity, CustomerPicker } from './customer-picker';
+import { ResellerExpiryCard } from './reseller-expiry';
 import { useSubmissionKey, type SubmissionKey } from '../submission-key';
 import { mayRequest } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -653,6 +654,8 @@ export function ResellersPage({
                 mayViewCatalog={mayViewCatalog}
                 mayViewPanels={mayViewPanels}
               />
+              {/* Round 11, C2: the reseller's own expiry date. */}
+              <ResellerExpiryCard customerId={viewing} mayEdit={mayEdit} />
               <ResellerPurchasesCard customerId={viewing} mayViewOrders={mayViewOrders} />
               <ResellerHistoryCard customerId={viewing} mayViewAudit={mayViewAudit} />
             </>

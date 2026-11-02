@@ -2115,6 +2115,13 @@
       "when": 1793545188506,
       "tag": "0301_sai_ticket_ai",
       "breakpoints": true
+    },
+    {
+      "idx": 305,
+      "version": "7",
+      "when": 1793597714362,
+      "tag": "0305_reseller_expiry",
+      "breakpoints": true
     }
   ]
 }
