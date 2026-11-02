@@ -39,7 +39,16 @@ export function locationErrorText(error: unknown): string {
   return errorText(error);
 }
 
-export function LocationSheet({ serviceId, onClose }: { serviceId: string; onClose: () => void }) {
+export function LocationSheet({
+  serviceId,
+  onClose,
+  onRequested,
+}: {
+  serviceId: string;
+  onClose: () => void;
+  /** A free move was accepted: the page behind the sheet re-reads its remaining count. */
+  onRequested?: () => void;
+}) {
   const { api, navigate } = useApp();
   const { loaded, reload } = useLoad(
     () => api.get(MINIAPP_ROUTES.serviceLocations, { serviceId }, miniAppServiceLocationsSchema),
@@ -61,7 +70,10 @@ export function LocationSheet({ serviceId, onClose }: { serviceId: string; onClo
         { locationId },
       );
       if (result.outcome === 'ORDER') navigate({ name: 'checkout', orderId: result.order.id });
-      else setRequested(true);
+      else {
+        setRequested(true);
+        onRequested?.();
+      }
     } catch (failure) {
       setError(locationErrorText(failure));
     } finally {

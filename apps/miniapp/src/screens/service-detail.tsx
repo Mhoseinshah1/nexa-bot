@@ -38,13 +38,20 @@ export function ServiceDetail({ serviceId }: { serviceId: string }) {
   return (
     <main className="page">
       <Loading loaded={loaded} reload={reload}>
-        {(service) => <Detail service={service} />}
+        {(service) => <Detail service={service} onChanged={reload} />}
       </Loading>
     </main>
   );
 }
 
-function Detail({ service }: { service: MiniAppServiceDetail }) {
+function Detail({
+  service,
+  onChanged,
+}: {
+  service: MiniAppServiceDetail;
+  /** Re-reads the service: a location change was accepted, so the remaining count moved. */
+  onChanged: () => void;
+}) {
   const { navigate } = useApp();
   const [copied, setCopied] = useState(false);
   const [sheet, setSheet] = useState<'qr' | 'location' | null>(null);
@@ -128,7 +135,11 @@ function Detail({ service }: { service: MiniAppServiceDetail }) {
         />
       )}
       {sheet === 'location' && (
-        <LocationSheet serviceId={service.id} onClose={() => setSheet(null)} />
+        <LocationSheet
+          serviceId={service.id}
+          onClose={() => setSheet(null)}
+          onRequested={onChanged}
+        />
       )}
     </>
   );

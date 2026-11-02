@@ -648,6 +648,29 @@ describe('the location sheet', () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
+  it('R11 B4: after a move is accepted and the sheet is closed, the page shows the new count', async () => {
+    let moved = false;
+    routes['GET /services/s1'] = () => ({
+      body: service({ locationRemaining: { remaining: moved ? 2 : 3, max: 3 } }),
+    });
+    routes['GET /services/s1/locations'] = () => ({ body: offer });
+    routes['POST /services/s1/location'] = () => {
+      moved = true;
+      return { status: 201, body: { outcome: 'REQUESTED' } };
+    };
+    render(<ServiceDetail serviceId="s1" />);
+    expect(await screen.findByText(remainingText(3, 3))).toBeTruthy();
+    fireEvent.click(await screen.findByText(fa('miniapp.location_open')));
+    const dialog = await screen.findByRole('dialog', { name: fa('miniapp.location_title') });
+    fireEvent.click(await within(dialog).findByText('فنلاند'));
+    fireEvent.click(
+      within(dialog).getByText(fa('miniapp.location_move').replace('{location}', 'فنلاند')),
+    );
+    fireEvent.click(await within(dialog).findByText(fa('miniapp.sheet_close')));
+    expect(await screen.findByText(remainingText(2, 3))).toBeTruthy();
+    expect(screen.queryByText(remainingText(3, 3))).toBeNull();
+  });
+
   it('takes a priced move to the ordinary checkout', async () => {
     routes['GET /services/s1/locations'] = () => ({ body: offer });
     routes['POST /services/s1/location'] = () => ({
