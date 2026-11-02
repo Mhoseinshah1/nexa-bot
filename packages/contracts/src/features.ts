@@ -618,6 +618,21 @@ export const FEATURE_FLAGS = [
     blastRadius: 'TENANT_WIDE',
     configuredBy: ['auto_renew.lead_hours'],
   },
+  {
+    key: 'referral_friends_list',
+    description:
+      'R11 B3: the «دوستان دعوت‌شده» list on the mini app\u2019s referral screen \u2014 the ' +
+      'customer\u2019s own referees, newest first, each with a first name or a masked username ' +
+      '(never a Telegram id, phone or full name), the join date and one status: joined, first ' +
+      'purchase done, reward pending or reward paid. Read-only; no money moves and no message ' +
+      'is sent. Off by default: the screen shows its three figures and nothing else, and the ' +
+      'list route answers that the feature is off. Turning it off hides the list and changes ' +
+      'no referral, commission or balance.',
+    defaultEnabled: false,
+    // LOCAL: it adds a read-only section to one screen of the customer's own mini app.
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
 ] as const satisfies readonly FeatureFlagDefinition[];
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[number]['key'];

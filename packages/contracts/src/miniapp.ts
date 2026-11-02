@@ -125,6 +125,8 @@ export const MINIAPP_ROUTES = {
   /** R10 D4: redeem a gift card into the wallet. */
   walletGiftCard: '/wallet/gift-card',
   referral: '/referral',
+  /** R11 B3: the customer's own invited friends (a keyset page), behind `referral_friends_list`. */
+  referralFriends: '/referral/friends',
   trial: '/trial',
   ticketCategories: '/ticket-categories',
   tickets: '/tickets',
@@ -702,6 +704,68 @@ export const miniAppReferralResponseSchema = z.discriminatedUnion('active', [
   }),
 ]);
 export type MiniAppReferralResponse = z.infer<typeof miniAppReferralResponseSchema>;
+
+/**
+ * R11 B3: the invited-friends list. One page is this many friends, and there is no way to ask
+ * for more: the route takes a cursor and nothing else, so a client cannot widen it.
+ */
+export const MINIAPP_REFERRAL_FRIENDS_PAGE_SIZE = 20;
+
+/**
+ * Where one invited friend stands, as ONE word, from the customer's side. Exclusive, and in
+ * this order of precedence: a reward paid beats a reward pending beats a purchase beats the
+ * join.
+ *
+ * - `JOINED`: the friend arrived through the link and has no delivered paid purchase yet;
+ * - `PURCHASED`: the friend has a delivered paid purchase and no purchase commission is
+ *   pending or paid for them (a program that pays nothing for them, a commission voided, or
+ *   one that came to nothing);
+ * - `REWARD_PENDING`: a purchase commission is promised and waits for delivery, or for the
+ *   referrer's daily cap to roll over (`rewardNotBefore`);
+ * - `REWARD_PAID`: a purchase commission was earned and credited.
+ *
+ * Only the purchase commission is read. The membership gift is claimed by its own button and
+ * is not a status here.
+ */
+export const MINIAPP_REFERRAL_FRIEND_STATUSES = [
+  'JOINED',
+  'PURCHASED',
+  'REWARD_PENDING',
+  'REWARD_PAID',
+] as const;
+export type MiniAppReferralFriendStatus = (typeof MINIAPP_REFERRAL_FRIEND_STATUSES)[number];
+
+/**
+ * The list, or the word that the feature is off. A friend is drawn by `displayName` only: a
+ * first name, or a username with the middle hidden, or null (then the screen says «دوست
+ * شما»). There is no id, no Telegram id, no phone and no last name in this shape, so nothing
+ * on the wire can leak one. `counts` are over ALL the customer's friends, not just this page,
+ * and add up to `total`, which is the figure the screen already shows as «دعوت‌شده».
+ */
+export const miniAppReferralFriendsResponseSchema = z.discriminatedUnion('enabled', [
+  z.object({ enabled: z.literal(false) }),
+  z.object({
+    enabled: z.literal(true),
+    counts: z.object({
+      total: z.number().int(),
+      joined: z.number().int(),
+      purchased: z.number().int(),
+      rewardPending: z.number().int(),
+      rewardPaid: z.number().int(),
+    }),
+    items: z.array(
+      z.object({
+        displayName: z.string().nullable(),
+        joinedAt: isoSchema,
+        status: z.enum(MINIAPP_REFERRAL_FRIEND_STATUSES),
+        /** A pending reward held back until this instant (the referrer's daily cap), else null. */
+        rewardNotBefore: isoSchema.nullable(),
+      }),
+    ),
+    nextCursor: z.string().nullable(),
+  }),
+]);
+export type MiniAppReferralFriendsResponse = z.infer<typeof miniAppReferralFriendsResponseSchema>;
 
 export const miniAppTrialResponseSchema = z.object({
   offers: z.array(

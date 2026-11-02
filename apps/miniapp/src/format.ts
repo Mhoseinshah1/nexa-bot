@@ -1,5 +1,6 @@
 import {
   DEFAULT_TEMPLATE_PRESENTATION,
+  formatDateOnly,
   formatDateTime,
   formatMoney,
   formatTrafficLimit,
@@ -39,6 +40,13 @@ export function dateTime(iso: string | null | undefined): string {
   return iso === null || iso === undefined
     ? DASH
     : formatDateTime(new Date(iso), DEFAULT_TEMPLATE_PRESENTATION);
+}
+
+/** A day without its clock time (a join date), in the same calendar and digits as `dateTime`. */
+export function dateOnly(iso: string | null | undefined): string {
+  return iso === null || iso === undefined
+    ? DASH
+    : formatDateOnly(new Date(iso), DEFAULT_TEMPLATE_PRESENTATION);
 }
 
 /** Whole days from `now` to `iso`, never below zero. */

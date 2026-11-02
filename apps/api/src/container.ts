@@ -713,6 +713,8 @@ import { ReferralProgram } from './modules/commerce/referrals/application/referr
 import { TelegramBotUsernames } from './modules/commerce/referrals/infrastructure/telegram-bot-username.js';
 import { ReferralCommissionService } from './modules/commerce/referrals/application/referral-commission.service.js';
 import { ReferralReadService } from './modules/commerce/referrals/application/referral-read.service.js';
+import { ReferralFriendsService } from './modules/commerce/referrals/application/referral-friends.service.js';
+import { DrizzleReferralFriendsRepository } from './modules/commerce/referrals/infrastructure/drizzle-referral-friends.repository.js';
 import { ReportAccess } from './modules/commerce/reporting/application/report-access.js';
 import { ReportingService } from './modules/commerce/reporting/application/reporting.service.js';
 import { DrizzleReportingRepository } from './modules/commerce/reporting/infrastructure/drizzle-reporting.repository.js';
@@ -1339,6 +1341,8 @@ export interface Container {
   readonly referralCommissions: ReferralCommissionService;
   /** WP9: the operator's read-only view of attributions and commissions. */
   readonly referralsRead: ReferralReadService;
+  /** R11 B3: the customer's own invited-friends list (mini app), behind `referral_friends_list`. */
+  readonly referralFriends: ReferralFriendsService;
   /** WP12's business reports, Super Admin only (`docs/wp12-business-analytics-audit.md`). */
   readonly reports: ReportingService;
   /** Round W: the dashboard's operational gauges and the sidebar counters, per permission. */
@@ -3630,6 +3634,13 @@ export function createContainer(
     clock,
     ids,
     days: referralDays,
+  });
+  /** R11 B3: read-only; the flag is read inside the service, not in the surface. */
+  const referralFriendsService = new ReferralFriendsService({
+    friends: new DrizzleReferralFriendsRepository(database.db),
+    features: featureFlagResolver,
+    guard,
+    clock,
   });
 
   /*
@@ -8801,6 +8812,7 @@ export function createContainer(
     referrals: referralProgram,
     referralCommissions: referralCommissionService,
     referralsRead: referralReadService,
+    referralFriends: referralFriendsService,
     reports: reportingService,
     operationsOverview,
     referralSignupGifts: referralSignupGiftService,

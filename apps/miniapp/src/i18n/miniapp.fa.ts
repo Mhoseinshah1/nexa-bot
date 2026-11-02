@@ -347,6 +347,18 @@ export const MINIAPP_FA = {
   'miniapp.referral_step_1': 'لینک اختصاصی‌ات را برای دوستانت بفرست.',
   'miniapp.referral_step_2': 'دوستت با لینک وارد ربات می‌شود و سرویس می‌خرد.',
   'miniapp.referral_step_3': 'پاداش هر خرید به کیف پولت اضافه می‌شود.',
+  // R11 B3: the invited-friends list.
+  'miniapp.referral_friends_title': 'دوستان دعوت‌شده',
+  'miniapp.referral_friends_empty': 'هنوز کسی با لینک تو وارد نشده است.',
+  'miniapp.referral_friends_total': '{count} دوست با لینک تو آمده‌اند',
+  'miniapp.referral_friends_more': 'نمایش بیشتر',
+  'miniapp.referral_friend_unnamed': 'دوست تو',
+  'miniapp.referral_friend_joined_on': 'پیوستن: {date}',
+  'miniapp.referral_friend_status_joined': 'پیوسته',
+  'miniapp.referral_friend_status_purchased': 'خرید اول انجام شد',
+  'miniapp.referral_friend_status_reward_pending': 'پاداش در انتظار',
+  'miniapp.referral_friend_status_reward_paid': 'پاداش پرداخت شد',
+  'miniapp.referral_friend_held_until': 'پرداخت پاداش از {date}',
 
   'miniapp.trial_title': 'سرویس تست رایگان',
   'miniapp.trial_lead': 'قبل از خرید، امتحان کن',

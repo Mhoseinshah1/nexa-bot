@@ -4779,6 +4779,28 @@ live; the owner decides otherwise.
   pins this. If bot subscriptions become a product feature, the update needs its own route,
   its own contract and an owner decision about what it moves.
 
+## Round 11 B3 — the invited-friends list (mini app)
+
+- **OQ-R11-B3-01 — is the membership gift a "reward" in the friends list?** Default (built): no.
+  A friend's status reads the PURCHASE commission only (`REWARD_PENDING`: a commission still
+  PENDING, including one the R10 D5 daily cap holds until `not_before`; `REWARD_PAID`: one
+  EARNED for more than nothing). The signup gift has its own claim button and its own two sides
+  (the referrer's and the referee's share), so folding it into one word would hide which side was
+  paid. If the owner wants «هدیه» shown per friend, it is a second badge, not a new status.
+- **OQ-R11-B3-02 — how much of a friend's name the referrer sees.** Default (built): the first
+  name as stored (invisible and bidi marks dropped, ZWNJ kept, 24 characters), else the username
+  with the middle hidden (`@ab***`: two letters for five or more, one for three or four, none
+  below), else «دوست تو». Never a last name, a Telegram id or a phone. If the owner prefers the
+  initial only, or no name at all, it is `friendDisplayName` and nothing else.
+- **OQ-R11-B3-03 — a reward paid and later refunded.** Default (built): the status stays
+  `REWARD_PAID` while the commission row is EARNED for more than nothing, exactly as the gift
+  claim's "no clawback" default (OQ-D5-02): a refund's reversal debits the referrer's wallet and
+  is visible in the ledger, but does not move the friend back to a lower status. The list shows
+  no amounts, so it never states a figure that a reversal would contradict.
+- **OQ-R11-B3-04 — a friend who bought, with an imported (MIRZA) attribution.** Default (built):
+  listed, with the status the purchase gives (`PURCHASED` at most, since an imported attribution
+  is never promised a commission). Listed because the screen's own «دعوت‌شده» figure counts it.
+
 ## R11 A4 — files only, no subscription link; the RickPanel QR kind
 
 - **OQ-R11-A4-01 — files only on a panel whose customer «فایل‌های اتصال» action is switched off.**

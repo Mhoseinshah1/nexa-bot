@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MINIAPP_ROUTES } from '@nexa/contracts';
 import { MINIAPP_FA } from '../../apps/miniapp/src/i18n/miniapp.fa';
 import { ApiError } from '../../apps/miniapp/src/api';
-import { money, parseAmountInput, signedMoney } from '../../apps/miniapp/src/format';
+import { dateOnly, money, parseAmountInput, signedMoney } from '../../apps/miniapp/src/format';
 import { trialErrorText } from '../../apps/miniapp/src/screens/trial';
 import { LEDGER_REASON_KEY } from '../../apps/miniapp/src/screens/wallet-labels';
 
@@ -58,6 +58,8 @@ function serve(routes: Record<string, Handler>, me: unknown = baseMe()) {
     'GET /me': () => me,
     'GET /services': () => ({ items: [], page: 0, pages: 1, total: 0 }),
     'GET /trial': () => ({ offers: [] }),
+    // R11 B3: the invited-friends list is off unless a test turns it on.
+    'GET /referral/friends': () => ({ enabled: false }),
     ...routes,
   };
   vi.stubGlobal(
@@ -771,6 +773,153 @@ describe('referral', () => {
     fireEvent.click(await screen.findByRole('button', { name: text('miniapp.profile_referral') }));
     await screen.findByText(text('miniapp.referral_headline', { percent: 10 }));
     expect(screen.queryByText(text('miniapp.referral_stat_invited'))).toBeNull();
+  });
+
+  it('R11 B3: draws no friends section while the feature is off', async () => {
+    const calls = serve({ 'GET /referral': () => active });
+    await mount();
+    tabProfile();
+    fireEvent.click(await screen.findByRole('button', { name: text('miniapp.profile_referral') }));
+    await screen.findByText(text('miniapp.referral_headline', { percent: 10 }));
+    await waitFor(() =>
+      expect(calls.some((call) => call.route === MINIAPP_ROUTES.referralFriends)).toBe(true),
+    );
+    expect(screen.queryByText(text('miniapp.referral_friends_title'))).toBeNull();
+    expect(screen.queryByText(text('miniapp.referral_friends_empty'))).toBeNull();
+  });
+
+  describe('R11 B3: the invited friends', () => {
+    const friend = (overrides: Record<string, unknown> = {}) => ({
+      displayName: 'مهسا',
+      joinedAt: '2026-10-20T10:00:00.000Z',
+      status: 'JOINED',
+      rewardNotBefore: null,
+      ...overrides,
+    });
+    const counts = { total: 4, joined: 1, purchased: 1, rewardPending: 1, rewardPaid: 1 };
+
+    async function open() {
+      await mount();
+      tabProfile();
+      fireEvent.click(
+        await screen.findByRole('button', { name: text('miniapp.profile_referral') }),
+      );
+    }
+
+    it('draws the summary, each friend with a masked name, a date and one status, and the held date', async () => {
+      serve({
+        'GET /referral': () => active,
+        'GET /referral/friends': () => ({
+          enabled: true,
+          counts,
+          items: [
+            friend({ displayName: '@ma***', status: 'REWARD_PAID' }),
+            friend({
+              displayName: 'علی',
+              status: 'REWARD_PENDING',
+              rewardNotBefore: '2026-10-28T00:00:00.000Z',
+            }),
+            friend({ displayName: null, status: 'PURCHASED' }),
+            friend({ displayName: 'رضا', status: 'JOINED' }),
+          ],
+          nextCursor: null,
+        }),
+      });
+      await open();
+      await screen.findByText(text('miniapp.referral_friends_title'));
+      expect(screen.getByText(text('miniapp.referral_friends_total', { count: 4 }))).toBeTruthy();
+      expect(screen.getByText('@ma***')).toBeTruthy();
+      expect(screen.getByText('علی')).toBeTruthy();
+      // No name at all: the screen's own words, never a blank.
+      expect(screen.getByText(text('miniapp.referral_friend_unnamed'))).toBeTruthy();
+      // A status word is in the summary AND on the friend that has it.
+      for (const key of [
+        'miniapp.referral_friend_status_joined',
+        'miniapp.referral_friend_status_purchased',
+        'miniapp.referral_friend_status_reward_pending',
+        'miniapp.referral_friend_status_reward_paid',
+      ] as const) {
+        expect(screen.getAllByText(text(key))).toHaveLength(2);
+      }
+      expect(
+        screen.getByText(
+          text('miniapp.referral_friend_held_until', {
+            date: dateOnly('2026-10-28T00:00:00.000Z'),
+          }),
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.getAllByText(
+          text('miniapp.referral_friend_joined_on', { date: dateOnly('2026-10-20T10:00:00.000Z') }),
+        ),
+      ).toHaveLength(4);
+      // The ONLY paging control is absent when there is no further page.
+      expect(
+        screen.queryByRole('button', { name: text('miniapp.referral_friends_more') }),
+      ).toBeNull();
+    });
+
+    it('appends the next page by its cursor and then stops offering more', async () => {
+      const calls = serve({
+        'GET /referral': () => active,
+        'GET /referral/friends': (url) =>
+          url.searchParams.get('cursor') === null
+            ? {
+                enabled: true,
+                counts: { ...counts, total: 2 },
+                items: [friend({ displayName: 'اول', joinedAt: '2026-10-21T10:00:00.000Z' })],
+                nextCursor: 'cursor-1',
+              }
+            : {
+                enabled: true,
+                counts: { ...counts, total: 2 },
+                items: [friend({ displayName: 'دوم', joinedAt: '2026-10-20T10:00:00.000Z' })],
+                nextCursor: null,
+              },
+      });
+      await open();
+      await screen.findByText('اول');
+      expect(screen.queryByText('دوم')).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: text('miniapp.referral_friends_more') }));
+      await screen.findByText('دوم');
+      expect(screen.getByText('اول')).toBeTruthy();
+      expect(
+        screen.queryByRole('button', { name: text('miniapp.referral_friends_more') }),
+      ).toBeNull();
+      const asked = calls.filter((call) => call.route === MINIAPP_ROUTES.referralFriends);
+      expect(asked.map((call) => call.query)).toEqual(['', '?cursor=cursor-1']);
+    });
+
+    it('says so when nobody has joined yet', async () => {
+      serve({
+        'GET /referral': () => active,
+        'GET /referral/friends': () => ({
+          enabled: true,
+          counts: { total: 0, joined: 0, purchased: 0, rewardPending: 0, rewardPaid: 0 },
+          items: [],
+          nextCursor: null,
+        }),
+      });
+      await open();
+      await screen.findByText(text('miniapp.referral_friends_empty'));
+    });
+
+    it('keeps the rest of the screen when the list cannot be read, and can retry it', async () => {
+      let down = true;
+      serve({
+        'GET /referral': () => active,
+        'GET /referral/friends': () =>
+          down
+            ? refuse(500, 'internal.unhandled')
+            : { enabled: true, counts, items: [friend()], nextCursor: null },
+      });
+      await open();
+      await screen.findByText(text('miniapp.error'));
+      expect(screen.getByText(text('miniapp.referral_headline', { percent: 10 }))).toBeTruthy();
+      down = false;
+      fireEvent.click(screen.getByRole('button', { name: text('miniapp.retry') }));
+      await screen.findByText('مهسا');
+    });
   });
 });
 
