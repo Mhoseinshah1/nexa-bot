@@ -1,21 +1,21 @@
-# Handoff — Phase 5 (customer & mini app) — IN PROGRESS
+# Handoff — Phase 5 (customer & mini app) — DONE, STOPPED (Phase 6 next, NEW session)
 
-Resume: read this block, the prompt NEXA-PHASE5-CUSTOMER.md (owner upload), then older blocks.
+Resume: the owner starts Phase 6 in a new session. Read this block, docs/round-reports/phase-5.md (this branch),
+then older blocks.
 
-- Triage: all 7 old R11 branches CONTINUE (none rebuilt).
-- Merged: #374 B4 (b1c2749), #373 B3 (7e2427e, carried phase-4.md), #375 B2 (d7f5a5c, 0302),
-  #377 B2 follow-up (68129b3: usage history dropped on service transfer — security review finding).
-- Merged also: #376 B1 (8e409c1, 0303; Codex P2 fix c5b9f68 + CI-only label fix 19aaca3).
-- Merged also: #378 B6 (25bb8fb, 0304; Codex clean, CI 23/23).
-- Merged also: #379 C2 (739e14f, 0305; Codex 2 P2 fixed in e0567cf, CI 23/23).
-- Merged also: #381 B5 (c780b44, no migration; Codex clean on ba963be, main sync d56d7e9, CI 23/23).
-- Pushed, PR waits for migration order:
-- Open: #382 B7 (0306), head 7b7f5f2, @codex review posted, CI watcher running.
-- Owner change 2026-11-02: up to 3 implementers, 3rd slot only Sonnet UI-only/no migration/no payment (B1, B4).
-- Lead decisions log: to be written into docs/round-reports/phase-5.md (D1–D20 so far).
-- Worktrees: /home/user/wt-b5, wt-b6, wt-b7, wt-c2; test DBs nexa_p5_<item>.
-- Branches the session cannot delete (owner): feat/r11-location-remaining, feat/r11-referral-list,
-  feat/r11-usage-chart, fix/r11-usage-snapshots-transfer, feat/r11-notification-centre, feat/r11-reminder-optout, feat/r11-reseller-expiry, feat/r11-miniapp-stars (if GitHub did not auto-delete them).
+- All 9 PRs merged (merge commits, CI 23/23 on each exact head, one Codex review each):
+  #373 B3 7e2427e · #374 B4 b1c2749 · #375 B2 d7f5a5c (0302) · #377 B2 follow-up 68129b3 · #376 B1 8e409c1 (0303)
+  · #378 B6 25bb8fb (0304) · #379 C2 739e14f (0305) · #381 B5 c780b44 · #382 B7 d89af98 (0306). main = d89af98.
+- Every new customer feature is behind an OFF switch in Web Admin «قابلیت‌ها» (= «امکانات»); C2 is opt-in by date.
+- Report: docs/round-reports/phase-5.md (on this branch; carry it into main with Phase 6's first PR, as phase-4.md).
+- Decisions D1–D26: docs/r11-handoff/phase5-decisions.md (D14 = owner's 3-implementer change).
+- Persian owner report + test checklist posted on #358 (issuecomment-6579736101).
+- Open for the owner: OQ-R11-B5-04 (late Stars charge credits nothing; add a late credit?), OQ-R11-B7-01..03.
+- Clean: all Phase 5 worktrees and nexa_p5_* test DBs removed (only wt-main, wt-handoff remain).
+- Branches to delete (owner; deletion is denied in-session, all still exist): feat/r11-location-remaining,
+  feat/r11-referral-list, feat/r11-usage-chart, fix/r11-usage-snapshots-transfer, feat/r11-notification-centre,
+  feat/r11-reminder-optout, feat/r11-reseller-expiry, feat/r11-miniapp-stars, feat/r11-phone-verify.
+- Owner checklist ends with: sudo botctl roles disable provisioner monitor
 
 ---
 
