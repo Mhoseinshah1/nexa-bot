@@ -562,6 +562,22 @@ export const FEATURE_FLAGS = [
     configuredBy: ['miniapp.init_data_max_age_seconds', 'miniapp.session_ttl_minutes'],
   },
   {
+    key: 'service_usage_chart',
+    description:
+      'R11 B2: a usage chart on the mini app\u2019s service screen \u2014 used volume over the last 7 ' +
+      'or 30 days. On, every usage figure Nexa ALREADY reads from a panel (the scheduled usage ' +
+      'sync, a renewal that returns usage, a card\u2019s live check) is also kept as a snapshot, ' +
+      'at most one per service per hour, for 90 days; it adds no panel request and no polling ' +
+      'loop. Off by default: no snapshot is written, the chart is not drawn and the history ' +
+      'endpoint answers as if it did not exist. Snapshots already stored are kept (and still ' +
+      'expire after 90 days) while it is off, and the chart shows them again when it is back on.',
+    defaultEnabled: false,
+    // LOCAL: it adds a chart to one screen and one small write beside an existing one; no
+    // customer is charged, messaged or refused anything either way.
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
+  {
     key: 'gift_cards',
     description:
       'R10 D4: gift cards \u2014 wallet top-up codes an operator mints in batches in the Web ' +
@@ -619,6 +635,22 @@ export const FEATURE_FLAGS = [
     configuredBy: ['auto_renew.lead_hours'],
   },
   {
+    key: 'notification_centre',
+    description:
+      'Round 11, B1: «اعلان‌ها» in the customer mini app \u2014 a bell with an unread counter in ' +
+      'the header, and a list of the bot messages already delivered to the customer through ' +
+      'the customer notification lane (payment and order outcomes, reminders, ticket replies, ' +
+      'operator messages), newest first, with read and unread. Only the customer\u2019s own, ' +
+      'sent by the bot the mini app was opened from; an operator or ops-group message never ' +
+      'appears. Off by default: no bell is drawn, and its endpoints answer as if they did not ' +
+      'exist. Turning it off keeps what was stored and every read mark, and changes nothing in ' +
+      'the bot. It does not change which messages the bot sends.',
+    defaultEnabled: false,
+    // LOCAL: it adds one screen to the mini app and sends the customer nothing.
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
+  {
     key: 'location_remaining_display',
     description:
       'R11 B4: the line «تغییر لوکیشن باقی‌مانده: ۲ از ۳» on the bot\u2019s service card and in the ' +
@@ -630,6 +662,37 @@ export const FEATURE_FLAGS = [
     defaultEnabled: false,
     // LOCAL: it adds one line of text to two screens and moves no money.
     blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
+  {
+    key: 'referral_friends_list',
+    description:
+      'R11 B3: the «دوستان دعوت‌شده» list on the mini app\u2019s referral screen \u2014 the ' +
+      'customer\u2019s own referees, newest first, each with a first name or a masked username ' +
+      '(never a Telegram id, phone or full name), the join date and one status: joined, first ' +
+      'purchase done, reward pending or reward paid. Read-only; no money moves and no message ' +
+      'is sent. Off by default: the screen shows its three figures and nothing else, and the ' +
+      'list route answers that the feature is off. Turning it off hides the list and changes ' +
+      'no referral, commission or balance.',
+    defaultEnabled: false,
+    // LOCAL: it adds a read-only section to one screen of the customer's own mini app.
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
+  {
+    key: 'customer_reminder_opt_out',
+    description:
+      'Round 11, B6: a customer may turn OFF the expiry and volume reminders about their own ' +
+      'services (the service-expiry ladder, the «expired» notice and the three volume ' +
+      'thresholds) from the bot’s support screen or the mini app, and an operator may set ' +
+      'it from the customer’s page. Off by default. While it is off nobody is offered the ' +
+      'choice and a stored opt-out is NOT honoured: every customer is reminded exactly as ' +
+      'before; the stored choice is kept, and turning this on makes it effective again. A ' +
+      'customer who opted out is skipped by the reminder sweep alone — payment, delivery, ' +
+      'wallet, security, ticket and administrator messages are never affected.',
+    defaultEnabled: false,
+    // TENANT_WIDE: turning it off reminds every customer who had opted out, all at once.
+    blastRadius: 'TENANT_WIDE',
     configuredBy: [],
   },
 ] as const satisfies readonly FeatureFlagDefinition[];

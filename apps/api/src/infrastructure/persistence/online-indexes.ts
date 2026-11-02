@@ -703,6 +703,20 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
       'ON "order_referral_commissions" USING btree ("tenant_id","referrer_id","earned_at") ' +
       "WHERE state = 'EARNED'",
   },
+  {
+    // R11 B1, the notification centre's page: one customer's delivered messages, newest first.
+    // Ascending on purpose, as `service_refund_requests_attention_idx` is: scanned backwards it
+    // is `DESC NULLS FIRST`, which is what `ORDER BY resolved_at DESC, id DESC` means.
+    name: 'customer_notifications_centre_idx',
+    definition:
+      'ON "customer_notifications" USING btree ("tenant_id","customer_id","resolved_at","id") WHERE rendered_text IS NOT NULL',
+  },
+  {
+    // R11 B1, the bell's counter: the unread ones only.
+    name: 'customer_notifications_centre_unread_idx',
+    definition:
+      'ON "customer_notifications" USING btree ("tenant_id","customer_id","resolved_at") WHERE (rendered_text IS NOT NULL) AND (customer_read_at IS NULL)',
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */

@@ -401,6 +401,7 @@ const service = (overrides: Record<string, unknown> = {}) => ({
   canChangeLocation: true,
   locationRemaining: null,
   autoRenew: { offered: false, enabled: false, price: null, leadHours: 24 },
+  usageChart: false,
   ...overrides,
 });
 

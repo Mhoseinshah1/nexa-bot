@@ -252,7 +252,11 @@ export class DrizzleCustomerNotificationRepository implements CustomerNotificati
     scope: TenantContext,
     id: string,
     to: CustomerNotificationState,
-    stamps: { readonly resolvedAt: Date | null; readonly nextAttemptAt: Date | null },
+    stamps: {
+      readonly resolvedAt: Date | null;
+      readonly nextAttemptAt: Date | null;
+      readonly renderedText?: string | null;
+    },
     now: Date,
     tx: TransactionScope,
   ): Promise<boolean> {
@@ -265,6 +269,10 @@ export class DrizzleCustomerNotificationRepository implements CustomerNotificati
         resolvedAt: stamps.resolvedAt,
         nextAttemptAt: stamps.nextAttemptAt,
         sendStartedAt: null,
+        // R11 B1: the words of a DELIVERED message only (see `rendered_text`'s column note).
+        ...(to === 'DELIVERED' && stamps.renderedText != null
+          ? { renderedText: stamps.renderedText }
+          : {}),
         updatedAt: now,
       })
       .where(

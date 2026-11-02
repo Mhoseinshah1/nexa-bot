@@ -7,8 +7,10 @@ import {
   MINIAPP_ROUTES,
   errors,
   fromWire,
+  isNexaError,
   miniAppCursorQuerySchema,
   miniAppGiftCardRequestSchema,
+  miniAppRemindersRequestSchema,
   miniAppTicketCreateRequestSchema,
   miniAppTicketReplyRequestSchema,
   miniAppTopupQuoteRequestSchema,
@@ -19,7 +21,9 @@ import {
   type ClientAppPlatform,
   type MiniAppGiftCardResponse,
   type MiniAppGuidePlatformResponse,
+  type MiniAppReferralFriendsResponse,
   type MiniAppReferralResponse,
+  type MiniAppReminders,
   type MiniAppTicketDetail,
   type MiniAppTopupQuoteResponse,
   type MiniAppTrialResponse,
@@ -28,6 +32,7 @@ import {
   type TemplateKey,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
+import { REMINDER_OPT_OUT_DISABLED_REASON } from '../../modules/commerce/customers/application/customer.service.js';
 import type { TicketRecord } from '../../modules/commerce/tickets/application/ports.js';
 import type { WalletCursor } from '../../modules/commerce/wallet/application/ports.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from '../web/keyset-cursor.js';
@@ -196,6 +201,53 @@ export class MiniAppAccountController {
     );
   }
 
+  /**
+   * Round 11, B6: the customer's own switch for the service expiry and volume reminders.
+   * `offered` is the `customer_reminder_opt_out` flag; the row is drawn only while it is on.
+   * Whose setting it is comes from the session alone.
+   */
+  @Get(MINIAPP_ROUTES.reminders)
+  async reminders(@Req() request: FastifyRequest): Promise<MiniAppReminders> {
+    const call = await miniAppCall(this.container, request, { gated: true });
+    const { scope, customer } = call.context;
+    return {
+      offered: await this.container.customers.remindersOptOutAllowed(scope),
+      enabled: customer.remindersOptOutAt === null,
+    };
+  }
+
+  /**
+   * Switches the session's OWN customer's reminders on or off. The body names only the wanted
+   * state; no customer id is read from the request, so there is no way to name another
+   * customer. Refused (conflict, no change) while the installation does not offer the choice.
+   */
+  @Post(MINIAPP_ROUTES.reminders)
+  async setReminders(
+    @Req() request: FastifyRequest,
+    @Body() body: unknown,
+  ): Promise<MiniAppReminders> {
+    const call = await miniAppCall(this.container, request, { gated: true });
+    const input = parseWith(miniAppRemindersRequestSchema, body);
+    const { scope, customer } = call.context;
+    const unavailable = () =>
+      errors.conflict(MINIAPP_ERROR_CODES.MINIAPP_ROUTE_UNAVAILABLE, 'Not offered.');
+    if (!(await this.container.customers.remindersOptOutAllowed(scope))) throw unavailable();
+    try {
+      const result = await this.container.customers.setRemindersOptOut(scope, call.actor, {
+        idempotencyKey: miniAppKey(request, call, 'reminders'),
+        customerId: customer.id,
+        optedOut: !input.enabled,
+      });
+      return { offered: true, enabled: result.customer.remindersOptOutAt === null };
+    } catch (error) {
+      // The switch moved between the two reads: the service re-decides inside its transaction.
+      if (isNexaError(error) && error.details['reason'] === REMINDER_OPT_OUT_DISABLED_REASON) {
+        throw unavailable();
+      }
+      throw error;
+    }
+  }
+
   /** The invite: the program's terms, the customer's own link (minted once), and their figures. */
   @Get(MINIAPP_ROUTES.referral)
   async referral(@Req() request: FastifyRequest): Promise<MiniAppReferralResponse> {
@@ -219,6 +271,39 @@ export class MiniAppAccountController {
         referredPurchaseCount: stats.referredPurchaseCount,
         commissionReceivedTotal: wire(stats.commissionReceivedTotal),
       },
+    };
+  }
+
+  /**
+   * R11 B3: the customer's OWN invited friends, newest first, one bounded page per call. The
+   * referrer is the session's customer, never a parameter; the only input is the cursor. The
+   * flag `referral_friends_list` is read by the service: off answers `{ enabled: false }`.
+   */
+  @Get(MINIAPP_ROUTES.referralFriends)
+  async referralFriends(
+    @Req() request: FastifyRequest,
+    @Query() query: unknown,
+  ): Promise<MiniAppReferralFriendsResponse> {
+    const call = await miniAppCall(this.container, request, { gated: true });
+    const { cursor } = parseWith(miniAppCursorQuerySchema, query);
+    const view = await this.container.referralFriends.list(
+      call.context.scope,
+      call.actor,
+      call.context.customer.id,
+      cursor === undefined ? null : decodeKeysetCursor(cursor),
+    );
+    if (!view.enabled) return { enabled: false };
+    return {
+      enabled: true,
+      counts: view.counts,
+      items: view.items.map((friend) => ({
+        displayName: friend.displayName,
+        joinedAt: friend.joinedAt.toISOString(),
+        status: friend.status,
+        rewardNotBefore:
+          friend.rewardNotBefore === null ? null : friend.rewardNotBefore.toISOString(),
+      })),
+      nextCursor: view.next === null ? null : encodeKeysetCursor(view.next),
     };
   }
 

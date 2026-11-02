@@ -29,6 +29,7 @@ import { toProviderCredentials } from '../../../platform/panels/application/prob
 import type { PanelPolicyGate } from '../../../platform/panels/application/panel-policy.js';
 import { isConfirmedUnusable } from '../../../platform/panels/application/panel-eligibility.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
+import type { UsageSnapshotService } from './usage-snapshots.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { SafeHttpClient } from '../../../../infrastructure/net/safe-http.js';
 import { panelClient } from '../../../platform/panels/application/panel-http.js';
@@ -175,6 +176,8 @@ export interface ServiceRefreshDeps {
   readonly backgroundBudgetReserve: number;
   readonly guard: PermissionGuard;
   readonly scopeActivity: ScopeActivityReader;
+  /** R11 B2: the figure a live check just wrote, kept for the usage chart. */
+  readonly usageSnapshots: Pick<UsageSnapshotService, 'record'>;
   readonly panelPolicy: PanelPolicyGate;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
@@ -623,12 +626,21 @@ export class ServiceRefreshService {
     return this.deps.uow.run(scope, async (tx) => {
       await this.deps.rows.endUsageRefresh(scope, service.id, startedAt, tx);
       if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return false;
-      await this.deps.rows.recordUsage(
+      const recorded = await this.deps.rows.recordUsage(
         scope,
         service.id,
         { usedBytes: usage.usedBytes, syncedAt: now, lastSeen: usage.lastSeen },
         tx,
       );
+      // R11 B2: kept for the chart, from the figure this read already returned.
+      if (recorded) {
+        await this.deps.usageSnapshots.record(
+          scope,
+          service.id,
+          { usedBytes: usage.usedBytes, at: now },
+          tx,
+        );
+      }
       // R4 A2: found — back in the customer's list, whatever state the service is in now.
       await this.deps.rows.clearMissingOnPanel(scope, service.id, tx);
       await closePanelAccountMissing(this.deps, scope, service, tx);

@@ -286,6 +286,8 @@ import {
 } from './modules/platform/backup/infrastructure/drizzle-backup-password.store.js';
 import { planArchiveParts } from './modules/platform/backup/infrastructure/archive-parts.js';
 import { purgePublishedOutboxBefore } from './modules/platform/eventing/infrastructure/outbox-retention.js';
+import { MINIAPP_NOTIFICATION_TEXT_RETENTION_DAYS } from '@nexa/contracts';
+import { clearExpiredNotificationText } from './modules/commerce/messaging/infrastructure/customer-notification-text-retention.js';
 import { purgeExpiredIdempotencyBefore } from './modules/platform/idempotency/infrastructure/idempotency-retention.js';
 import { DataCompactionService } from './modules/platform/data-compaction/application/data-compaction.service.js';
 import {
@@ -713,6 +715,8 @@ import { ReferralProgram } from './modules/commerce/referrals/application/referr
 import { TelegramBotUsernames } from './modules/commerce/referrals/infrastructure/telegram-bot-username.js';
 import { ReferralCommissionService } from './modules/commerce/referrals/application/referral-commission.service.js';
 import { ReferralReadService } from './modules/commerce/referrals/application/referral-read.service.js';
+import { ReferralFriendsService } from './modules/commerce/referrals/application/referral-friends.service.js';
+import { DrizzleReferralFriendsRepository } from './modules/commerce/referrals/infrastructure/drizzle-referral-friends.repository.js';
 import { ReportAccess } from './modules/commerce/reporting/application/report-access.js';
 import { ReportingService } from './modules/commerce/reporting/application/reporting.service.js';
 import { DrizzleReportingRepository } from './modules/commerce/reporting/infrastructure/drizzle-reporting.repository.js';
@@ -810,6 +814,8 @@ import { DrizzleOperationCardRepository } from './modules/commerce/provisioning/
 import { ServiceTransferService } from './modules/commerce/provisioning/application/service-transfer.service.js';
 import { ServiceAutoRenewService } from './modules/commerce/provisioning/application/service-auto-renew.service.js';
 import { DrizzleServiceAutoRenewRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-auto-renew.repository.js';
+import { DrizzleUsageSnapshotRepository } from './modules/commerce/provisioning/infrastructure/drizzle-usage-snapshot.repository.js';
+import { UsageSnapshotService } from './modules/commerce/provisioning/application/usage-snapshots.js';
 import { DrizzleServiceTransferRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-transfer.repository.js';
 import { ServiceAdminService } from './modules/commerce/provisioning/application/service-admin.service.js';
 import { GlobalSearchService } from './modules/commerce/global-search/application/global-search.service.js';
@@ -956,6 +962,8 @@ import type { NotificationTransport } from './modules/control/notifications/appl
 import { MiniAppSessionService } from './modules/commerce/miniapp/application/miniapp-session.service.js';
 import { MiniAppReceiptService } from './modules/commerce/miniapp/application/miniapp-receipt.service.js';
 import { MiniAppRateLimiter } from './modules/commerce/miniapp/application/miniapp-rate-limiter.js';
+import { NotificationCentreService } from './modules/commerce/miniapp/application/notification-centre.service.js';
+import { DrizzleNotificationCentreRepository } from './modules/commerce/miniapp/infrastructure/drizzle-notification-centre.repository.js';
 import { CheckoutService } from './modules/commerce/checkout/application/checkout.service.js';
 import { DrizzleMiniAppSessionRepository } from './modules/commerce/miniapp/infrastructure/drizzle-miniapp-session.repository.js';
 import { TelegramReceiptUploader } from './modules/commerce/miniapp/infrastructure/telegram-receipt-uploader.js';
@@ -1030,6 +1038,8 @@ export interface MiniAppSurfaceDeps {
   readonly sessions: MiniAppSessionService;
   readonly rateLimit: MiniAppRateLimiter;
   readonly receipts: MiniAppReceiptService;
+  /** Round 11, B1: the customer's notification centre (feature `notification_centre`). */
+  readonly notificationCentre: NotificationCentreService;
   readonly checkout: CheckoutService;
   readonly topup: WalletTopupFlowService;
   readonly productDisplay: {
@@ -1110,6 +1120,8 @@ export interface Container {
   /** E3: published outbox history and interactive idempotency keys. */
   readonly outboxRetentionSweeper: RetentionSweeper;
   readonly idempotencyRetentionSweeper: RetentionSweeper;
+  /** R11 B1: clears the stored words of delivered customer messages after their retention. */
+  readonly notificationTextRetentionSweeper: RetentionSweeper;
   /** HF-A7: clears support's reply files Telegram never took, after their retention. */
   readonly ticketReplyFileSweeper: RetentionSweeper;
   /** Phase A2: clears direct-message files Telegram never took, after their retention. */
@@ -1326,6 +1338,8 @@ export interface Container {
   readonly serviceTransfers: ServiceTransferService;
   /** Round 10, D1: «تمدید خودکار» — the customer's switch and the worker's sweep. */
   readonly serviceAutoRenew: ServiceAutoRenewService;
+  /** R11 B2: the usage snapshots behind the mini app's chart (`service_usage_chart`). */
+  readonly usageSnapshots: UsageSnapshotService;
   /** WP-A7: support tickets, for the bot and the Web Admin alike. */
   readonly tickets: TicketService;
   /** WP-A7: the categories a customer files a ticket under. */
@@ -1340,6 +1354,8 @@ export interface Container {
   readonly referralCommissions: ReferralCommissionService;
   /** WP9: the operator's read-only view of attributions and commissions. */
   readonly referralsRead: ReferralReadService;
+  /** R11 B3: the customer's own invited-friends list (mini app), behind `referral_friends_list`. */
+  readonly referralFriends: ReferralFriendsService;
   /** WP12's business reports, Super Admin only (`docs/wp12-business-analytics-audit.md`). */
   readonly reports: ReportingService;
   /** Round W: the dashboard's operational gauges and the sidebar counters, per permission. */
@@ -3634,6 +3650,13 @@ export function createContainer(
     ids,
     days: referralDays,
   });
+  /** R11 B3: read-only; the flag is read inside the service, not in the surface. */
+  const referralFriendsService = new ReferralFriendsService({
+    friends: new DrizzleReferralFriendsRepository(database.db),
+    features: featureFlagResolver,
+    guard,
+    clock,
+  });
 
   /*
    * R10 D4: gift cards. One repository for the batches, the codes and the refused attempts;
@@ -5287,6 +5310,7 @@ export function createContainer(
     repository: new DrizzleServiceTransferRepository(database.db),
     services: serviceRepository,
     orders: orderRepository,
+    usageSnapshots: new DrizzleUsageSnapshotRepository(database.db),
     customers: customerRepository,
     captures: customerCaptureService,
     screens: customerScreens,
@@ -6140,6 +6164,12 @@ export function createContainer(
       },
       // B14: a wallet credit's tracking code (receipt or gateway), from the payment's own row.
       paymentReferences: paymentRepository,
+      /*
+       * R11 B1: the mini app's notification centre keeps the words of a delivered message.
+       * The tenant's own resolver, so an edited template is what is stored, exactly as it is
+       * what the messenger sent.
+       */
+      centreText: { render: (scope, key, values) => templateResolver.render(scope, key, values) },
       contacts: {
         contactFor: async (scope, customerId, tx) => {
           const customer = await customerRepository.findById(scope, customerId, tx);
@@ -6645,6 +6675,17 @@ export function createContainer(
    * `workerId` names the process instance in a claim, so an operator reading a stuck
    * `IN_FLIGHT` row can tell which replica holds it.
    */
+  /*
+   * R11 B2: kept beside the usage reads below (the provisioner's sync and renewal, the live
+   * check) and read by the mini app's chart. No panel client in it.
+   */
+  const usageSnapshotService = new UsageSnapshotService({
+    store: new DrizzleUsageSnapshotRepository(database.db),
+    features: featureFlagResolver,
+    scopeActivity: tenants,
+    clock,
+  });
+
   const provisioner = new ProvisionerService({
     operations: operationRepository,
     services: serviceRepository,
@@ -6687,6 +6728,7 @@ export function createContainer(
     conditions: new DrizzleOperationalConditionReader(database.db),
     outbox,
     scopeActivity: tenants,
+    usageSnapshots: usageSnapshotService,
     settings: settingsResolver,
     workerId: `${role}:${ids.uuid()}`,
     leaseMs: OPERATION_LEASE_SECONDS_MIN * 1000,
@@ -7821,6 +7863,22 @@ export function createContainer(
     logger,
     { intervalMs: 3_600_000, initialDelayMs: 240_000, batchSize: 5_000, maxBatchesPerTick: 200 },
   );
+  const notificationTextRetentionSweeper = new RetentionSweeper(
+    {
+      name: 'customer-notification-text',
+      purge: async (now, limit) => {
+        if (await recoveryQuiesced()) return 0;
+        return clearExpiredNotificationText(
+          database.db,
+          new Date(now.getTime() - MINIAPP_NOTIFICATION_TEXT_RETENTION_DAYS * 24 * 3_600_000),
+          limit,
+        );
+      },
+    },
+    clock,
+    logger,
+    { intervalMs: 3_600_000, initialDelayMs: 300_000, batchSize: 2_000, maxBatchesPerTick: 100 },
+  );
 
   /*
    * Round 8 B5: the CPU share (percent of one core) the backup's 7-Zip and the verification's
@@ -8689,6 +8747,18 @@ export function createContainer(
       }),
       idempotency,
     }),
+    notificationCentre: new NotificationCentreService({
+      repository: new DrizzleNotificationCentreRepository(database.db),
+      features: featureFlagResolver,
+      guard,
+      audit,
+      opsLog,
+      sessions,
+      scopeActivity: tenants,
+      uow,
+      idempotency,
+      clock,
+    }),
     // R10 B1: the checkout the bot is handed too — one instance, one set of rules.
     checkout: checkoutService,
     topup: walletTopupFlow,
@@ -8729,6 +8799,7 @@ export function createContainer(
     recoveryRequestSweeper,
     outboxRetentionSweeper,
     idempotencyRetentionSweeper,
+    notificationTextRetentionSweeper,
     ticketReplyFileSweeper,
     directMessageFileSweeper,
     paymentExpiryLoop,
@@ -8817,6 +8888,7 @@ export function createContainer(
     subscriptionFiles: subscriptionFileService,
     serviceTransfers: serviceTransferService,
     serviceAutoRenew: serviceAutoRenewService,
+    usageSnapshots: usageSnapshotService,
     tickets: ticketService,
     ticketCategories: ticketCategoryService,
     pricingRead: pricingReadService,
@@ -8824,6 +8896,7 @@ export function createContainer(
     referrals: referralProgram,
     referralCommissions: referralCommissionService,
     referralsRead: referralReadService,
+    referralFriends: referralFriendsService,
     reports: reportingService,
     operationsOverview,
     referralSignupGifts: referralSignupGiftService,
@@ -9062,6 +9135,7 @@ export function createContainer(
         backgroundBudgetReserve: usageSyncBackgroundReserve,
         guard,
         scopeActivity: tenants,
+        usageSnapshots: usageSnapshotService,
         panelPolicy: panelPolicyReader,
         uow,
         clock,
@@ -9346,6 +9420,7 @@ export function createContainer(
       await recoveryRequestSweeper.stop();
       await outboxRetentionSweeper.stop();
       await idempotencyRetentionSweeper.stop();
+      await notificationTextRetentionSweeper.stop();
       await ticketReplyFileSweeper.stop();
       await directMessageFileSweeper.stop();
       await paymentExpiryLoop.stop();

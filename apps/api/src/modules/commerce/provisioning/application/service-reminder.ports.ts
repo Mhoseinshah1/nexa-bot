@@ -61,6 +61,13 @@ export interface ServiceReminderCandidate {
    * Absent is false.
    */
   readonly importUnproven?: boolean;
+  /**
+   * Round 11, B6: the customer turned the service expiry and volume reminders off
+   * (`customers.reminders_opt_out_at IS NOT NULL`), read by the candidate query beside the
+   * row. Whether it is IN FORCE is the sweep's call (`customer_reminder_opt_out` flag).
+   * Absent is false.
+   */
+  readonly remindersOptedOut?: boolean;
 }
 
 /**
