@@ -267,6 +267,17 @@ The membership (signup) gift and its R10 D5 amendment:
   off is the old rule with nothing to undo. Open points: `open-questions.md`
   OQ-D5-01..04.
 
+The invited-friends list (R11 B3, `referral_friends_list`, default OFF): the mini app's referral
+screen lists the customer's OWN referees, newest first, in pages of 20 (the cursor is the only
+input; the referrer is the session's customer), with summary counts over all of them. Read-only —
+no money moves, nothing is sent, nothing is locked. A friend is a first name or a masked username
+(`@ab***`) or nothing, a join date and ONE status read from the purchase commission: joined, first
+purchase done (a delivered paid purchase), reward pending (a commission still PENDING, with the
+R10 D5 `not_before` shown while its day is ahead) or reward paid (EARNED for more than nothing).
+Imported (MIRZA) attributions are listed, because the screen's «دعوت‌شده» figure counts them. Never
+a Telegram id, phone or last name — they are not even read. Open points: `open-questions.md`
+OQ-R11-B3-01..04.
+
 The `/start` captcha (R10 D5 (a), `start_captcha`, default OFF): only a
 customer CREATED while it is on is asked (the row is written in the
 registration transaction); existing and imported customers never are,
