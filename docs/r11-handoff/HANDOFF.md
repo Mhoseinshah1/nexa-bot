@@ -5,7 +5,8 @@ Resume: read this block, the prompt NEXA-PHASE5-CUSTOMER.md (owner upload), then
 - Triage: all 7 old R11 branches CONTINUE (none rebuilt).
 - Merged: #374 B4 (b1c2749), #373 B3 (7e2427e, carried phase-4.md), #375 B2 (d7f5a5c, 0302),
   #377 B2 follow-up (68129b3: usage history dropped on service transfer — security review finding).
-- Open: #376 B1 (head 91fe39b, migration 0303; Codex P2 fixed in c5b9f68; CI running).
+- Merged also: #376 B1 (8e409c1, 0303; Codex P2 fix c5b9f68 + CI-only label fix 19aaca3).
+- Open: none; B6 syncing with main for its PR (0304).
 - Pushed, PR waits for migration order: B6 feat/r11-reminder-optout 06b8dde (0304), C2 feat/r11-reseller-expiry
   09696e0 (0305), B7 feat/r11-phone-verify a2381cc (0306; opens AFTER B5 merges — payments never parallel).
 - In progress: B5 feat/r11-miniapp-stars (Opus; no migration).
@@ -13,7 +14,7 @@ Resume: read this block, the prompt NEXA-PHASE5-CUSTOMER.md (owner upload), then
 - Lead decisions log: to be written into docs/round-reports/phase-5.md (D1–D20 so far).
 - Worktrees: /home/user/wt-b1, wt-b5, wt-b6, wt-b7, wt-c2; test DBs nexa_p5_<item>.
 - Branches the session cannot delete (owner): feat/r11-location-remaining, feat/r11-referral-list,
-  feat/r11-usage-chart, fix/r11-usage-snapshots-transfer (if GitHub did not auto-delete them).
+  feat/r11-usage-chart, fix/r11-usage-snapshots-transfer, feat/r11-notification-centre (if GitHub did not auto-delete them).
 
 ---
 
