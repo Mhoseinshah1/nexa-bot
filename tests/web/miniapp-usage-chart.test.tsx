@@ -53,6 +53,7 @@ const service = (overrides: Record<string, unknown> = {}) => ({
   working: false,
   actions: [],
   qr: false,
+  qrKinds: [],
   canChangeLocation: false,
   autoRenew: { offered: false, enabled: false, price: null, leadHours: 24 },
   usageChart: true,

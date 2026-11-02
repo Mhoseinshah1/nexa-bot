@@ -10,9 +10,11 @@ import {
   createAdmin,
   createTestContext,
   tenantA,
+  tenantB,
   validatePanelConnection,
   type TestContext,
 } from './harness';
+import { DrizzleUsageSnapshotRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-usage-snapshot.repository';
 import { harnessFor, rickPanel, seedFleet, seedPanelUser } from './usage-sync-fixtures';
 
 /**
@@ -232,6 +234,35 @@ describe('R11 B2: usage snapshots', () => {
     await h.executor.runOnce(tenantA);
 
     expect((await snapshots()).map((row) => row.used_bytes)).toEqual(['102', '103', '104']);
+  }, 60_000);
+
+  it("prunes only the scope it is given: another tenant's tick leaves this tenant's old rows alone", async () => {
+    await fleet(1);
+    const serviceId = await firstServiceId();
+    const old = new Date(Date.now() - (USAGE_SNAPSHOT_RETENTION_DAYS + 5) * DAY);
+    await ctx.container.database.withClient((client) =>
+      client.query(
+        `INSERT INTO service_usage_snapshots
+           (tenant_id, service_id, bucket_at, taken_at, used_bytes)
+         VALUES ($1::uuid, $2::uuid, $3::timestamptz, $3::timestamptz, 7)`,
+        [tenantA.tenantId, serviceId, old.toISOString()],
+      ),
+    );
+    const foreign = await ctx.container.uow.run(tenantB, (tx) =>
+      new DrizzleUsageSnapshotRepository(ctx.container.database.db).prune(
+        tenantB,
+        new Date(),
+        500,
+        tx,
+      ),
+    );
+    expect(foreign, 'tenant B owns no rows').toBe(0);
+    expect(await snapshots(), "tenant A's old row survives B's prune").toHaveLength(1);
+    const own = await ctx.container.uow.run(tenantA, (tx) =>
+      ctx.container.usageSnapshots.prune(tenantA, tx),
+    );
+    expect(own).toBe(1);
+    expect(await snapshots()).toHaveLength(0);
   }, 60_000);
 
   it('prunes in bounded batches, never the whole backlog in one tick', async () => {
