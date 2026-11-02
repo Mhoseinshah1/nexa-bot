@@ -15,6 +15,7 @@ import {
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { importedServiceNoticeRefused } from '../../../../infrastructure/persistence/imported-notice-guard.js';
+import { customerRemindersOptedOutRefused } from '../../../../infrastructure/persistence/reminder-opt-out-guard.js';
 import {
   customerDirectMessages,
   customerNotifications,
@@ -69,6 +70,8 @@ const ANSWERABLE_KINDS: readonly CustomerNotificationKind[] = [
   // Round 10, D1: answered from the auto-renew run, its service, the consent and the ledger.
   'SERVICE_AUTO_RENEW_FUNDS_SHORT',
   'SERVICE_AUTO_RENEW_PRICE_CHANGED',
+  // Round 11, C2: answered from the notification's customer and the reseller row.
+  'RESELLER_EXPIRED',
 ];
 
 /**
@@ -138,6 +141,7 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
     if (kind === 'DIRECT_MESSAGE' || kind === 'DIRECT_MESSAGE_MEDIA') {
       return this.directMessageFresh(tenantId, kind, subjectId, now);
     }
+    if (kind === 'RESELLER_EXPIRED') return this.resellerExpiredHolds(tenantId, subjectId);
     if (kind === 'SERVICE_AUTO_RENEW_FUNDS_SHORT' || kind === 'SERVICE_AUTO_RENEW_PRICE_CHANGED') {
       return this.autoRenewNoticeHolds(tenantId, kind, subjectId, now);
     }
@@ -242,6 +246,10 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
    *     one is what they are told. "Raised" by the dispatcher's own clock: `raised_at` is
    *     the sweep's `Clock`, so only news that exists at the moment of sending counts.
    *
+   *   - Round 11, B6: the customer has not turned the reminders off (and the installation
+   *     honours it). A reminder raised before they did, still queued, is superseded here —
+   *     `customerRemindersOptedOutRefused`.
+   *
    * A reminder row that is gone is `false`: nothing is announced about a subject that does
    * not exist.
    */
@@ -267,6 +275,7 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
         AND s.state = ANY(${sql.param([...states])}::text[])
         ${expiry ? sql`` : sql`AND r.basis_traffic_limit_bytes = s.traffic_limit_bytes`}
         AND NOT ${importedServiceNoticeRefused(expiry ? 'EXPIRY' : 'USAGE')}
+        AND NOT ${customerRemindersOptedOutRefused()}
         ${advance ? sql`AND s.expires_at > ${now}` : sql``}
         ${
           moreUrgent.length === 0
@@ -312,6 +321,33 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
    *
    * A run that is gone is `false`: nothing is announced about a subject that does not exist.
    */
+  /**
+   * Round 11, C2: the notice (its subject is a per-suspension id) belongs to a customer; it
+   * holds while that customer's reseller is still SUSPENDED by the expiry. An extension, a
+   * manual re-activation or a cleared standing makes the sentence false, so it is not sent.
+   *
+   * It must also be THIS suspension's notice. The sweep stamps the row's `expiry_suspended_at`
+   * and queues the notice with the same clock reading in one transaction, so the notice's
+   * `created_at` is the generation marker: a reseller that expired, was extended and expired
+   * again while delivery was held has two queued notices, and only the one whose
+   * `created_at` equals the current `expiry_suspended_at` describes the suspension in force.
+   * The earlier one is superseded unsent instead of telling the reseller twice.
+   */
+  private async resellerExpiredHolds(tenantId: string, subjectId: string): Promise<boolean> {
+    const result = await this.db.execute(sql`
+      SELECT 1
+        FROM customer_notifications n
+        JOIN resellers r ON r.tenant_id = n.tenant_id AND r.customer_id = n.customer_id
+       WHERE n.tenant_id = ${tenantId}
+         AND n.kind = 'RESELLER_EXPIRED'
+         AND n.subject_id = ${subjectId}
+         AND r.status = 'SUSPENDED'
+         AND r.expiry_suspended_at IS NOT NULL
+         AND n.created_at = r.expiry_suspended_at
+       LIMIT 1`);
+    return result.rows.length > 0;
+  }
+
   private async autoRenewNoticeHolds(
     tenantId: string,
     kind: 'SERVICE_AUTO_RENEW_FUNDS_SHORT' | 'SERVICE_AUTO_RENEW_PRICE_CHANGED',

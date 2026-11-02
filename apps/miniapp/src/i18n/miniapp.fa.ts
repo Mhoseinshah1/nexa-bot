@@ -16,6 +16,15 @@ export const MINIAPP_FA = {
   'miniapp.list_separator': '، ',
   'miniapp.copied': 'کپی شد',
 
+  // Round 11, B1: the notification centre (bell, list, mark read).
+  'miniapp.notifications_title': 'اعلان‌ها',
+  'miniapp.notifications_bell_unread': 'اعلان‌ها، {count} خوانده‌نشده',
+  'miniapp.notifications_read_all': 'همه خوانده شد',
+  'miniapp.notifications_empty': 'هنوز پیامی از ربات برای شما ثبت نشده است.',
+  'miniapp.notifications_more': 'نمایش پیام‌های قدیمی‌تر',
+  'miniapp.notifications_unread': 'خوانده‌نشده',
+  'miniapp.notifications_window': 'پیام‌های {days} روز اخیر نمایش داده می‌شود.',
+
   'miniapp.tab_home': 'خانه',
   'miniapp.tab_store': 'فروشگاه',
   'miniapp.tab_services': 'سرویس‌ها',
@@ -56,6 +65,16 @@ export const MINIAPP_FA = {
   'miniapp.service_action_RENEW': 'تمدید',
   'miniapp.service_action_ADD_TRAFFIC': 'حجم اضافه',
   'miniapp.service_action_ADD_TIME': 'زمان اضافه',
+  // R11 B2: «نمودار مصرف» on the service screen.
+  'miniapp.usage_title': 'نمودار مصرف',
+  'miniapp.usage_range_7': '۷ روز گذشته',
+  'miniapp.usage_range_30': '۳۰ روز گذشته',
+  'miniapp.usage_empty':
+    'هنوز عدد مصرفی برای این بازه ذخیره نشده است. عددهای مصرف همراه با به‌روزرسانی‌های معمول سرویس ذخیره می‌شوند و کمی بعد در اینجا دیده می‌شوند.',
+  'miniapp.usage_chart_label':
+    'نمودار حجم مصرف‌شده در {days} روز گذشته؛ آخرین مقدار {last} در {at}',
+  'miniapp.usage_max': 'بیشترین مصرف ثبت‌شده در این بازه: {max}',
+  'miniapp.usage_last': 'آخرین مقدار: {last} ({at})',
   'miniapp.service_offer_empty': 'فعلاً گزینه‌ای برای این کار نیست.',
   // Round 10, D1: «تمدید خودکار».
   'miniapp.auto_renew_title': 'تمدید خودکار',
@@ -336,6 +355,13 @@ export const MINIAPP_FA = {
   'miniapp.profile_wallet_history': 'تراکنش‌ها و پرداخت‌ها',
   'miniapp.profile_referral': 'دعوت دوستان',
   'miniapp.profile_trial': 'سرویس تست رایگان',
+  'miniapp.profile_reminders_title': 'یادآوری‌ها',
+  'miniapp.profile_reminders_on': 'یادآوری نزدیک شدن به پایان زمان و حجم سرویس‌های شما فعال است.',
+  'miniapp.profile_reminders_off':
+    'یادآوری پایان زمان و حجم سرویس‌های شما قطع است. پیام‌های پرداخت، تحویل سرویس و پشتیبانی همچنان ارسال می‌شود.',
+  'miniapp.profile_reminders_disable': 'قطع یادآوری',
+  'miniapp.profile_reminders_enable': 'فعال‌سازی یادآوری',
+  'miniapp.profile_reminders_unavailable': 'در حال حاضر امکان تغییر این گزینه وجود ندارد.',
 
   'miniapp.referral_title': 'دعوت دوستان',
   'miniapp.referral_inactive': 'برنامهٔ معرفی دوستان در حال حاضر فعال نیست.',

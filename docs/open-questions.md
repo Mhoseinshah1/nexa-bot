@@ -4805,6 +4805,23 @@ live; the owner decides otherwise.
   pins this. If bot subscriptions become a product feature, the update needs its own route,
   its own contract and an owner decision about what it moves.
 
+## Round 11 B1 — the mini app's notification centre
+
+- **OQ-R11-B1-01 — which "bot messages" belong in the centre.** The centre lists what the
+  customer notification lane (`customer_notifications`) delivered: payment and order outcomes,
+  reminders, ticket replies, operator direct messages, incident notices. A broadcast
+  (`broadcast_recipients`), the immediate reply to a tap and the subscription-link delivery do not
+  go through that lane and are not listed. Showing broadcasts would need a read mark of their own
+  and a decision about promotional text; nothing was added without the owner's say.
+- **OQ-R11-B1-02 — history before this release.** Messages delivered before migration 0303 carry
+  no stored words (the lane never kept them), so the centre starts empty and fills from the first
+  delivery after the release. Reconstructing old text from kind and subject would show figures the
+  customer was never sent; it is deliberately not done.
+- **OQ-R11-B1-03 — a customer who uses two bots of one tenant.** The centre shows only the
+  messages the bot the mini app was opened from sent (the lane's own rule: a customer is told from
+  the bot they wrote to). If the owner wants one merged list across a tenant's bots, that is a
+  change to the query, not to the data.
+
 ## Round 11 B3 — the invited-friends list (mini app)
 
 - **OQ-R11-B3-01 — is the membership gift a "reward" in the friends list?** Default (built): no.

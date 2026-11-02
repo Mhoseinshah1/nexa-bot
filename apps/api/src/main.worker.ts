@@ -107,6 +107,13 @@ async function main(): Promise<void> {
           true,
           () => container.idempotencyRetentionSweeper.isFresh(at),
         ],
+        // R11 B1: the notification centre's stored words. No flag: the text is kept whether
+        // the centre is on or off, so its bound must run either way.
+        [
+          'notification-text-retention-sweeper',
+          true,
+          () => container.notificationTextRetentionSweeper.isFresh(at),
+        ],
         // HF-A7: support's staged reply files. No flag: the bytes it clears count against the
         // tenant's staging bound, and a stalled sweep would refuse support's next file.
         ['ticket-reply-file-sweeper', true, () => container.ticketReplyFileSweeper.isFresh(at)],
@@ -276,6 +283,8 @@ async function main(): Promise<void> {
   // E3: the outbox's published history and the interactive idempotency keys.
   container.outboxRetentionSweeper.start();
   container.idempotencyRetentionSweeper.start();
+  // R11 B1: the words the notification centre keeps, after their retention.
+  container.notificationTextRetentionSweeper.start();
   // HF-A7: and support's reply files Telegram never took, once they are past retention.
   container.ticketReplyFileSweeper.start();
   // Phase A2: and the direct-message files Telegram never took.

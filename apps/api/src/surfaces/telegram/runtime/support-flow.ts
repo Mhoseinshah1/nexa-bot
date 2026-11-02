@@ -33,7 +33,7 @@ import { refusal, hasRefusalReply } from './refusals.js';
 import type { InboundReceiptFile } from '../../../modules/commerce/payments/application/receipt-ports.js';
 import type { CustomerCaptureRecord } from '../../../modules/commerce/customers/application/customer-capture-ports.js';
 import type { InboundTicketFile } from '../../../modules/commerce/tickets/application/ticket.service.js';
-import { marketingPreferenceButton } from './start-menu-flow.js';
+import { marketingPreferenceButton, reminderPreferenceButton } from './start-menu-flow.js';
 import type { BotRuntime } from '../bot-runtime.js';
 
 /** WP-A7: back to the customer's ticket list. */
@@ -597,6 +597,11 @@ export async function supportScreen(
     // not drawn while the installation does not let customers change it.
     ...((await rt.deps.customers.marketingOptOutAllowed(scope))
       ? [marketingPreferenceButton(customer.marketingOptOutAt !== null)]
+      : []),
+    // Round 11, B6: the expiry / volume reminder switch, beside the promotional one and
+    // under the same rule — not drawn while the installation does not offer the choice.
+    ...((await rt.deps.customers.remindersOptOutAllowed(scope))
+      ? [reminderPreferenceButton(customer.remindersOptOutAt !== null)]
       : []),
     mainMenuButton(),
   ];

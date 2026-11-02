@@ -105,6 +105,8 @@ function toReseller(row: typeof resellers.$inferSelect): ResellerRecord {
         ? null
         : money(row.creditLimitAmount, row.creditLimitCurrency as CurrencyCode),
     monthlyMinimum: minimumOf(row.monthlyMinimumAmount, row.monthlyMinimumCurrency),
+    expiresAt: row.expiresAt,
+    expirySuspendedAt: row.expirySuspendedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -561,6 +563,11 @@ export class DrizzleResellerRepository implements ResellerRepository {
         discountPercentage: input.discountPercentage,
         creditLimitAmount: input.creditLimit?.amountMinor ?? null,
         creditLimitCurrency: input.creditLimit?.currency ?? null,
+        // Round 11, C2: an operator's write takes over the standing. The mark "suspended BY
+        // EXPIRY" survives only a write that leaves the reseller suspended (a tier or limit
+        // edit); any other status ends it, so a later manual suspension is never mistaken
+        // for the expiry's.
+        expirySuspendedAt: sql`CASE WHEN ${input.status}::text = 'SUSPENDED' THEN ${resellers.expirySuspendedAt} ELSE NULL END`,
         updatedAt: input.now,
       })
       .where(and(eq(resellers.tenantId, tenantId), eq(resellers.customerId, customerId)))
@@ -850,6 +857,68 @@ export class DrizzleResellerRepository implements ResellerRepository {
       .where(and(eq(resellers.tenantId, tenantId), eq(resellers.customerId, customerId)))
       .returning();
     return row === undefined ? null : toReseller(row);
+  }
+
+  async setExpiry(
+    scope: TenantContext,
+    customerId: string,
+    input: { readonly expiresAt: Date | null; readonly reactivate: boolean },
+    now: Date,
+    tx: unknown,
+  ): Promise<ResellerRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await exec(this.db, tx)
+      .update(resellers)
+      .set({
+        expiresAt: input.expiresAt,
+        ...(input.reactivate
+          ? {
+              // Only the expiry's own suspension: the WHERE below names both halves.
+              status: sql`CASE WHEN ${resellers.status} = 'SUSPENDED' AND ${resellers.expirySuspendedAt} IS NOT NULL THEN 'ACTIVE' ELSE ${resellers.status} END`,
+              expirySuspendedAt: sql`CASE WHEN ${resellers.status} = 'SUSPENDED' THEN NULL ELSE ${resellers.expirySuspendedAt} END`,
+            }
+          : {}),
+        updatedAt: now,
+      })
+      .where(and(eq(resellers.tenantId, tenantId), eq(resellers.customerId, customerId)))
+      .returning();
+    return row === undefined ? null : toReseller(row);
+  }
+
+  async suspendExpired(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: unknown,
+  ): Promise<
+    readonly { readonly customerId: string; readonly tierId: string; readonly expiresAt: Date }[]
+  > {
+    const tenantId = requireTenantId(scope);
+    const suspended = await exec(this.db, tx).execute(sql`
+      UPDATE resellers
+         SET status = 'SUSPENDED', expiry_suspended_at = ${now}, updated_at = ${now}
+       WHERE tenant_id = ${tenantId}
+         AND status = 'ACTIVE'
+         AND expires_at IS NOT NULL
+         AND expires_at <= ${now}
+         AND id IN (
+           SELECT id FROM resellers
+            WHERE tenant_id = ${tenantId}
+              AND status = 'ACTIVE'
+              AND expires_at IS NOT NULL
+              AND expires_at <= ${now}
+            ORDER BY expires_at, id
+            LIMIT ${limit}
+            FOR UPDATE SKIP LOCKED)
+      RETURNING customer_id, tier_id, expires_at
+    `);
+    return (
+      suspended.rows as unknown as { customer_id: string; tier_id: string; expires_at: Date }[]
+    ).map((row) => ({
+      customerId: row.customer_id,
+      tierId: row.tier_id,
+      expiresAt: new Date(row.expires_at),
+    }));
   }
 
   async listAll(

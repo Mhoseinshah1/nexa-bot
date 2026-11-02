@@ -17,6 +17,7 @@ export const LOOP_LABELS_FA: Readonly<Record<string, string>> = {
   'outbox-retention-sweeper': 'پاک‌سازی صف رویدادها',
   'legacy-compaction-executor': 'فشرده‌سازی داده‌های قدیمی',
   'idempotency-retention-sweeper': 'پاک‌سازی کلیدهای جلوگیری از تکرار',
+  'notification-text-retention-sweeper': 'پاک‌سازی متن قدیمی اعلان‌های مشتری',
   'ticket-reply-file-sweeper': 'پاک‌سازی فایل‌های پاسخ پشتیبانی',
   'direct-message-file-sweeper': 'پاک‌سازی فایل‌های پیام مستقیم',
   'payment-expiry': 'انقضای پرداخت‌ها',

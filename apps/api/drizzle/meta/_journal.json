@@ -2117,9 +2117,37 @@
       "breakpoints": true
     },
     {
+      "idx": 302,
+      "version": "7",
+      "when": 1793592580388,
+      "tag": "0302_service_usage_snapshots",
+      "breakpoints": true
+    },
+    {
+      "idx": 303,
+      "version": "7",
+      "when": 1793602471785,
+      "tag": "0303_customer_notification_centre",
+      "breakpoints": true
+    },
+    {
+      "idx": 304,
+      "version": "7",
+      "when": 1793612218085,
+      "tag": "0304_customer_reminders_opt_out",
+      "breakpoints": true
+    },
+    {
+      "idx": 305,
+      "version": "7",
+      "when": 1793617666551,
+      "tag": "0305_reseller_expiry",
+      "breakpoints": true
+    },
+    {
       "idx": 306,
       "version": "7",
-      "when": 1793600393381,
+      "when": 1793624585566,
       "tag": "0306_payment_route_requires_verified_phone",
       "breakpoints": true
     }

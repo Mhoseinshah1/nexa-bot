@@ -50,6 +50,7 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import type { SafeHttpClient } from '../../../../infrastructure/net/safe-http.js';
 import { panelClient } from '../../../platform/panels/application/panel-http.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
+import type { UsageSnapshotService } from './usage-snapshots.js';
 import { checkUrl, type UrlPolicyOptions } from '../../../../infrastructure/net/url-policy.js';
 import type {
   PanelCredentialStore,
@@ -346,6 +347,11 @@ export interface ProvisionerDeps {
   readonly conditions: ServiceConditionReader;
   readonly outbox: OutboxWriter;
   readonly scopeActivity: ScopeActivityReader;
+  /**
+   * R11 B2: the usage snapshot beside every usage figure this lane writes, and the retention
+   * of the stored ones. It records what the read already returned; it never dials a panel.
+   */
+  readonly usageSnapshots: Pick<UsageSnapshotService, 'record' | 'prune'>;
   readonly workerId: string;
   readonly leaseMs: number;
   /**
@@ -532,6 +538,8 @@ export class ProvisionerService {
      * `backgroundBudgetReserve`.
      */
     await this.planUsageSyncs(scope, now);
+    // R11 B2: retention of the usage snapshots -- bounded, indexed, no panel involved.
+    await this.deps.uow.run(scope, (tx) => this.deps.usageSnapshots.prune(scope, tx));
     /*
      * And the services whose window has closed, which needs no panel at all.
      *
@@ -1932,12 +1940,21 @@ export class ProvisionerService {
         now,
         tx,
       );
-      await this.deps.services.recordUsage(
+      const recorded = await this.deps.services.recordUsage(
         scope,
         serviceId,
         { usedBytes: read.usage.usedBytes, syncedAt: now, lastSeen: read.usage.lastSeen },
         tx,
       );
+      // R11 B2: the same figure, kept for the chart -- no further panel call.
+      if (recorded) {
+        await this.deps.usageSnapshots.record(
+          scope,
+          serviceId,
+          { usedBytes: read.usage.usedBytes, at: now },
+          tx,
+        );
+      }
       // The panel answered with this account's usage: a missing-account condition about
       // it is over (Codex on #291 — otherwise the card's cache would hide it for ever).
       await closePanelAccountMissing(
@@ -2661,12 +2678,21 @@ export class ProvisionerService {
        * renewal has just revived is already ACTIVE by the time this runs.
        */
       if (usage !== null && to === 'ACTIVE') {
-        await this.deps.services.recordUsage(
+        const recorded = await this.deps.services.recordUsage(
           scope,
           serviceId,
           { usedBytes: usage.usedBytes, syncedAt: now, lastSeen: usage.lastSeen },
           tx,
         );
+        // R11 B2: the figure the renewal's answer carried, kept for the chart.
+        if (recorded) {
+          await this.deps.usageSnapshots.record(
+            scope,
+            serviceId,
+            { usedBytes: usage.usedBytes, at: now },
+            tx,
+          );
+        }
         // Track 3 §1: the panel just answered about this account, so it is there.
         await closePanelAccountMissing(
           { conditions: this.deps.conditions, opsEvents: this.deps.opsLog },
