@@ -2,6 +2,7 @@ import {
   COMMERCE_ERROR_CODES,
   errors,
   locationChangeWindow,
+  locationChangesRemaining,
   type Clock,
   type LocationChangeLimits,
   type Money,
@@ -33,6 +34,14 @@ export interface LocationOffer {
   readonly current: LocationPosition;
   /** Never empty: an offer with nothing to move to is no offer. */
   readonly targets: readonly LocationTarget[];
+  /** R11 B4: the changes left, from the same evaluation as the targets; null: say nothing. */
+  readonly remaining: LocationChangesLeft | null;
+}
+
+/** «۲ از ۳»: what is left of the limit, and the limit. */
+export interface LocationChangesLeft {
+  readonly remaining: number;
+  readonly max: number;
 }
 
 export interface LocationChangePolicyDeps {
@@ -86,11 +95,9 @@ export class LocationChangePolicy {
     tx?: unknown,
   ): Promise<LocationOffer | null> {
     // A custom service (Package D) is extended by nothing in this release, moved included.
-    if (service.productId === null) return null;
-    const rows = await this.deps.locations.forPanel(scope, service.panelId, tx);
-    const current = currentLocation(service, rows);
-    if (current === null) return null;
-    const currency = await this.salesCurrency(scope, tx);
+    const found = await this.candidates(scope, service, tx);
+    if (found === null) return null;
+    const { current, candidates } = found;
     /*
      * The cooldown and the rolling limit too, from the same history and through the same
      * `locationChangeWindow` that `decide` asks (Codex review #1 on PR #101): a target its
@@ -99,16 +106,41 @@ export class LocationChangePolicy {
      */
     const history = await this.history(scope, service, null, tx);
     const now = this.deps.clock.now();
-    const override = await this.overrideFor(scope, service, tx);
-    const targets = resolvedTargets(rows, service.productId)
-      .map((row) => withLimits(row, override))
-      .filter(
-        (row): row is LocationTarget =>
-          row.locationKey !== current.key &&
-          isOffered(row, currency) &&
-          locationChangeWindow(row.limits, history, now).ok,
-      );
-    return targets.length === 0 ? null : { current, targets };
+    const targets = candidates.filter((row) => locationChangeWindow(row.limits, history, now).ok);
+    // The figure is read from the candidates the window has NOT yet narrowed (see `leftOf`).
+    return targets.length === 0
+      ? null
+      : { current, targets, remaining: leftOf(candidates, history, now) };
+  }
+
+  /**
+   * R11 B4: how many location changes this service has left, «۲ از ۳» — or null when there
+   * is nothing to say: no known location, no enabled priced target (the feature is off for
+   * it), or a limit-free target among them.
+   *
+   * A READ through the very pieces the enforcement uses: the same targets (`resolvedTargets`
+   * with the customer's override in `withLimits`, `isOffered`), the same history
+   * (`countedRequestTimes`) and the same count (`locationChangesRemaining` shares its window
+   * with `locationChangeWindow`). No second implementation, so the figure shown is the figure
+   * `decide` will allow.
+   *
+   * It is NOT narrowed by the window the way `offer` is: at zero the service is offered
+   * nothing, and the customer must still be told «۰ از ۳», not left to guess why the button
+   * went. Limits can differ per target; the figure is the most the customer can still do toward
+   * ANY target (the largest), so it is 0 exactly when every target refuses with the limit. A
+   * target with no limit means the customer can always move there: nothing is shown.
+   * The cooldown is a different refusal and is not part of the count.
+   */
+  async remainingChanges(
+    scope: TenantContext,
+    service: ServiceRecord,
+    tx?: unknown,
+  ): Promise<LocationChangesLeft | null> {
+    const found = await this.candidates(scope, service, tx);
+    if (found === null) return null;
+    const { candidates } = found;
+    const history = await this.history(scope, service, null, tx);
+    return leftOf(candidates, history, this.deps.clock.now());
   }
 
   /**
@@ -195,6 +227,34 @@ export class LocationChangePolicy {
           );
     }
     return { current, target: chosen };
+  }
+
+  /**
+   * Where the service is and the targets configured for it — enabled, priced in the selling
+   * currency, other than where it is — with the customer's override already in their limits.
+   * NOT yet narrowed by the cooldown or the rolling limit: `offer` narrows, `remainingChanges`
+   * counts. Null with no product or no known location.
+   */
+  private async candidates(
+    scope: TenantContext,
+    service: ServiceRecord,
+    tx?: unknown,
+  ): Promise<{
+    readonly current: LocationPosition;
+    readonly candidates: readonly LocationTarget[];
+  } | null> {
+    if (service.productId === null) return null;
+    const rows = await this.deps.locations.forPanel(scope, service.panelId, tx);
+    const current = currentLocation(service, rows);
+    if (current === null) return null;
+    const currency = await this.salesCurrency(scope, tx);
+    const override = await this.overrideFor(scope, service, tx);
+    const candidates = resolvedTargets(rows, service.productId)
+      .map((row) => withLimits(row, override))
+      .filter(
+        (row): row is LocationTarget => row.locationKey !== current.key && isOffered(row, currency),
+      );
+    return { current, candidates };
   }
 
   /** The request times that still count against this service's window. */
@@ -286,6 +346,27 @@ export function resolvedTargets(
     }
   }
   return rows.filter((row) => byKey.get(row.locationKey) === row);
+}
+
+/**
+ * The changes left across the targets a service is offered (R11 B4): the most it can still
+ * make toward ANY of them, from the same history and the same count `locationChangeWindow`
+ * refuses on. Null when there is no target, or when one of them has no limit (the customer
+ * can always move there, so there is no count to show). Limits normally agree — one per
+ * location, or the customer's override for all — so this is the one figure in practice.
+ */
+function leftOf(
+  candidates: readonly LocationTarget[],
+  history: readonly Date[],
+  now: Date,
+): LocationChangesLeft | null {
+  let best: LocationChangesLeft | null = null;
+  for (const target of candidates) {
+    const left = locationChangesRemaining(target.limits, history, now);
+    if (left === null) return null;
+    if (best === null || left.remaining > best.remaining) best = left;
+  }
+  return best;
 }
 
 /** The row with the customer's override in place of its own window, when there is one. */

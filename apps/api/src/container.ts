@@ -3311,6 +3311,8 @@ export function createContainer(
     panels: panelOperability,
     panelPolicy: panelPolicyReader,
     settings: settingsResolver,
+    // R11 B4: `location_remaining_display` gates the remaining location changes line.
+    features: featureFlagResolver,
     // WP-A6: the paid location change's evaluator and its frozen change request.
     locations: locationChangePolicy,
     locationChanges: locationChangeRepository,

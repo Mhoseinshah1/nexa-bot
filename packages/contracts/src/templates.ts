@@ -7494,6 +7494,35 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.service.location_remaining',
+    description:
+      'R11 B4: the line that tells a customer how many location changes this service still ' +
+      'has, «تغییر لوکیشن باقی‌مانده: ۲ از ۳». Rendered into `locationRemaining` of the service ' +
+      'card and of the location change screen, and ONLY where location change is enabled for ' +
+      'the service AND a limit (changes per period) is set; with no limit, or with the ' +
+      'feature off, it is never rendered. Both figures come from the same window the server ' +
+      'enforces (`locationChangeWindow`), so the remaining number is what a request will be ' +
+      'allowed — 0 included, which the refusal then agrees with. A read; no money.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'remaining',
+        type: 'NUMBER',
+        description:
+          'Location changes this service may still make in the current period; 0 or more.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'max',
+        type: 'NUMBER',
+        description: 'The most location changes the period allows (the configured limit).',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.service.location_choice',
     description:
       'The location change screen: where the service is now. The targets are on the ' +
@@ -7506,6 +7535,14 @@ export const TEMPLATES = [
         type: 'STRING',
         description: 'The name of the location the service is in now, as the operator wrote it.',
         required: true,
+        repeatable: false,
+      },
+      {
+        token: 'locationRemaining',
+        type: 'STRING',
+        description:
+          'Rendered `bot.service.location_remaining`, only when a limit is set (R11 B4).',
+        required: false,
         repeatable: false,
       },
     ],
@@ -12436,6 +12473,15 @@ export const TEMPLATES = [
         token: 'rotateHint',
         type: 'STRING',
         description: 'Rendered `bot.service.rotate_hint`, only when rotation is offered.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'locationRemaining',
+        type: 'STRING',
+        description:
+          'Rendered `bot.service.location_remaining`, only when location change is enabled for ' +
+          'the service and a limit is set (R11 B4).',
         required: false,
         repeatable: false,
       },

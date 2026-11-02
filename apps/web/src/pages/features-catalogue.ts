@@ -323,6 +323,13 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: 'web.feature_service_auto_renew_off_effect',
     confirmEnable: null,
   },
+  // R11 B4: one line of text on two screens; off hides it and nothing is lost.
+  location_remaining_display: {
+    title: 'web.feature_location_remaining_display_title',
+    summary: 'web.feature_location_remaining_display_summary',
+    disableEffect: null,
+    confirmEnable: null,
+  },
 };
 
 /**

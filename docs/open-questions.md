@@ -4665,6 +4665,32 @@ money and sends no customer message; the owner decides otherwise.
   captcha row like a `/start` arrival and the mini app holds them at `CAPTCHA`, pointing to the
   bot; whether a mini-app arrival should be asked at all is the owner's call.
 
+## Round 11 B4 — the location changes a customer has left
+
+- **Decision (lead, replaces the earlier "no feature flag") — a switch, OFF by default.** The
+  owner's round rule is that every new customer-facing feature ships behind a switch that
+  starts off, so the line has `location_remaining_display` («امکانات» in the Web Admin). The
+  condition is unchanged: the line shows only when the flag is ON and the existing settings
+  already make location change available (the `LOCATION_CHANGE` panel-policy row, the service
+  state, the panel capability, an enabled priced target) and a limit is set. Flag OFF: neither
+  the bot card, the bot's location screen, the mini app view nor its sheet carry the line, and
+  the button and every refusal are exactly as before. The flag moves no money and sends no
+  message, and changes no limit or enforcement.
+- **OQ-R11-B4-01 — targets with different limits.** The limit lives on each configured
+  location (and a Customer 360 override replaces all of them). When the targets offered to one
+  service carry different limits, the line shows the LARGEST remaining toward any target (it is
+  «0» exactly when every target refuses with the limit), and a service with even one unlimited
+  target shows no line, because the customer can always move there. Is that the reading the
+  owner wants, or should the choice screen show a figure per target? Taken: one figure, no
+  money, no message.
+- **OQ-R11-B4-02 — digits.** The brief's example is «۲ از ۳»; every customer-facing template in
+  this repository renders Latin digits unless the template opts in (`digits: 'PERSIAN'`), so the
+  line reads «2 از 3» like «تا 5 کاربر دیگر قابل افزودن است». One flag on the key would switch
+  it; not taken without a decision.
+- **OQ-R11-B4-03 — the cooldown.** «باقی‌مانده» counts the rolling LIMIT only. A service inside
+  its cooldown can show «2 از 3» and still be refused with the cooldown sentence (the button is
+  withdrawn then, as before). Showing «available again in N hours» is a different feature.
+
 ## Round 11 A8 — TonPays answered HTTP 429 to invoice creates
 
 Every TonPays call now takes a token from one client-side bucket per API key inside the TonPays
