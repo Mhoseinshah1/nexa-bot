@@ -404,8 +404,29 @@ describe('the customer reminder opt-out (R11 B6)', () => {
     expect(await reminderRows(expiring)).toBeGreaterThan(0);
 
     // A threshold crossed AFTER they opted back in is told as for anyone: the one-day rung.
+    // The deadline is an hour past the start of the NEXT calendar day in the tenant's display
+    // timezone, so "expires today" (which outranks the one-day rung) is not yet due whatever
+    // the time of day; a plain `now() + 20 hours` lands on today's date between 20:30 and
+    // 00:30 UTC. That deadline can be up to 25 hours out, beyond a one-day window, so the
+    // second threshold is two days for this step (still below the first, three).
+    const secondDays = await ctx.container.settingsService.get(
+      tenantA,
+      owner,
+      'reminders.expiry_second_days',
+    );
+    await ctx.container.settingsService.set(tenantA, owner, {
+      idempotencyKey: key(),
+      key: 'reminders.expiry_second_days',
+      value: 2,
+      expectedVersion: secondDays.version,
+    });
     await ctx.container.database.db.execute(sql`
-      UPDATE services SET expires_at = now() + make_interval(hours => 20) WHERE id = ${expiring}`);
+      UPDATE services s
+      SET expires_at = (
+        date_trunc('day', now() AT TIME ZONE t.display_timezone) + interval '1 day 1 hour'
+      ) AT TIME ZONE t.display_timezone
+      FROM tenants t
+      WHERE t.id = s.tenant_id AND s.id = ${expiring}`);
     // The deadline moved: a new period, so the ladder re-arms and the customer hears again.
     expect(await servicePass()).toEqual({ expiry: 1, usage: 0 });
     expect((await toldAbout()).map((row) => row.kind)).toEqual(['SERVICE_EXPIRY_SECOND']);
