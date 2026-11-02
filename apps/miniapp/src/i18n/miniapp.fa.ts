@@ -16,6 +16,15 @@ export const MINIAPP_FA = {
   'miniapp.list_separator': '، ',
   'miniapp.copied': 'کپی شد',
 
+  // Round 11, B1: the notification centre (bell, list, mark read).
+  'miniapp.notifications_title': 'اعلان‌ها',
+  'miniapp.notifications_bell_unread': 'اعلان‌ها، {count} خوانده‌نشده',
+  'miniapp.notifications_read_all': 'همه خوانده شد',
+  'miniapp.notifications_empty': 'هنوز پیامی از ربات برای شما ثبت نشده است.',
+  'miniapp.notifications_more': 'نمایش پیام‌های قدیمی‌تر',
+  'miniapp.notifications_unread': 'خوانده‌نشده',
+  'miniapp.notifications_window': 'پیام‌های {days} روز اخیر نمایش داده می‌شود.',
+
   'miniapp.tab_home': 'خانه',
   'miniapp.tab_store': 'فروشگاه',
   'miniapp.tab_services': 'سرویس‌ها',

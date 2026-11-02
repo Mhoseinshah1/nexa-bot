@@ -76,6 +76,7 @@ import { MiniAppShopController } from './surfaces/miniapp/shop.controller.js';
 import { MiniAppPaymentsController } from './surfaces/miniapp/payments.controller.js';
 import { MiniAppServicesController } from './surfaces/miniapp/services.controller.js';
 import { MiniAppAccountController } from './surfaces/miniapp/account.controller.js';
+import { MiniAppNotificationsController } from './surfaces/miniapp/notifications.controller.js';
 import { MiniAppStaticController } from './surfaces/miniapp/static.controller.js';
 import { CorrelationMiddleware } from './surfaces/web/correlation.middleware.js';
 import { securityHeaders } from './surfaces/web/security-headers.middleware.js';
@@ -227,6 +228,7 @@ export class AppModule implements NestModule {
       MiniAppPaymentsController as never,
       MiniAppServicesController as never,
       MiniAppAccountController as never,
+      MiniAppNotificationsController as never,
       MiniAppStaticController as never,
     );
 

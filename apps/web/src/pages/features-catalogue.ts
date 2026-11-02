@@ -339,6 +339,14 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: 'web.feature_service_auto_renew_off_effect',
     confirmEnable: null,
   },
+  // Round 11, B1: the mini app's notification centre. Off hides the bell; every stored message
+  // and read mark is kept and the bot is unchanged, so nothing is lost and it does not ask.
+  notification_centre: {
+    title: 'web.feature_notification_centre_title',
+    summary: 'web.feature_notification_centre_summary',
+    disableEffect: null,
+    confirmEnable: null,
+  },
   // R11 B4: one line of text on two screens; off hides it and nothing is lost.
   location_remaining_display: {
     title: 'web.feature_location_remaining_display_title',
