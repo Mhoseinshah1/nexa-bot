@@ -7978,6 +7978,56 @@ export const serviceReminderBaselines = pgTable(
   ],
 );
 
+// --- R11 B2: usage snapshots behind the mini app's chart ---------------------------------
+
+/**
+ * One usage figure of one service, kept for the mini app's chart (R11 B2).
+ *
+ * WRITTEN BESIDE A READ THAT ALREADY HAPPENS, never by a read of its own: the scheduled
+ * `SYNC_USAGE`, a renewal whose answer carries usage and a card's live check each call
+ * `recordUsage`, and the snapshot is recorded in that same transaction when it returned true
+ * and `service_usage_chart` is on. There is no polling loop and no panel call behind this
+ * table (RickPanel load protection).
+ *
+ * `bucket_at` is `taken_at` floored to `USAGE_SNAPSHOT_BUCKET_MINUTES` and is part of the
+ * primary key: a second read inside the same hour inserts nothing (`ON CONFLICT DO NOTHING`),
+ * so the first figure of a bucket is the one kept and a burst of live checks cannot grow the
+ * table. `total_bytes` is NULL for an unlimited allowance, `expires_at` NULL for a service
+ * with no deadline -- the values the service row held when the figure was recorded.
+ * Rows older than `USAGE_SNAPSHOT_RETENTION_DAYS` are deleted by the provisioner's tick,
+ * through `(tenant_id, taken_at)`.
+ */
+export const serviceUsageSnapshots = pgTable(
+  'service_usage_snapshots',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    serviceId: uuid('service_id').notNull(),
+    bucketAt: timestamptz('bucket_at').notNull(),
+    takenAt: timestamptz('taken_at').notNull(),
+    usedBytes: bigint('used_bytes', { mode: 'bigint' }).notNull(),
+    totalBytes: bigint('total_bytes', { mode: 'bigint' }),
+    expiresAt: timestamptz('expires_at'),
+  },
+  (table) => [
+    primaryKey({
+      name: 'service_usage_snapshots_pk',
+      columns: [table.tenantId, table.serviceId, table.bucketAt],
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+      name: 'service_usage_snapshots_service_fk',
+    }),
+    index('service_usage_snapshots_taken_idx').on(table.tenantId, table.takenAt),
+    check(
+      'service_usage_snapshots_figures_check',
+      sql`${table.usedBytes} >= 0 AND (${table.totalBytes} IS NULL OR ${table.totalBytes} > 0)`,
+    ),
+  ],
+);
+
 // --- WP-A6: the configured locations a service may be moved to -------------------------
 
 /**
@@ -10641,6 +10691,28 @@ export const customerNotifications = pgTable(
      * columns that can disagree with the one that decides.
      */
     resolvedAt: timestamptz('resolved_at'),
+    /**
+     * Round 11, B1 (the mini app's notification centre): the plain text the customer was
+     * sent, exactly as it was rendered at the moment of delivery — markup removed, cut at
+     * `MINIAPP_NOTIFICATION_TEXT_MAX`.
+     *
+     * Stamped by the SAME statement that records `DELIVERED`, and by nothing else, so it
+     * is the answer to "what did this bot tell this customer" and not a second message
+     * store: the row, its owner, its bot and its moment already live here, and a kind and a
+     * subject id cannot be re-rendered into the same words later (the lane froze its
+     * figures; a balance or a status read today is not what was said). Null for every row
+     * delivered before the centre existed and for any row that never reached the customer,
+     * which is what keeps both out of the list without a backfill — and no customer is
+     * messaged about them.
+     */
+    renderedText: text('rendered_text'),
+    /**
+     * When the customer marked this delivered message read in the mini app. Null is unread.
+     * The row is already the customer's own (`customer_id`), so this is read state keyed by
+     * customer without a second table; set only where it is null, so a second tap changes
+     * nothing and keeps the first moment.
+     */
+    customerReadAt: timestamptz('customer_read_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -10650,6 +10722,21 @@ export const customerNotifications = pgTable(
       foreignColumns: [customers.tenantId, customers.id],
       name: 'customer_notifications_customer_fk',
     }),
+    /**
+     * The centre's text exists only for a delivered message, and only a message with text can
+     * have been read: the list is "delivered rows with text", so a read mark on anything else
+     * would be unreachable state.
+     */
+    check(
+      'customer_notifications_centre_check',
+      sql`(rendered_text IS NULL OR state = 'DELIVERED') AND (customer_read_at IS NULL OR rendered_text IS NOT NULL)`,
+    ),
+    /*
+     * The centre's two partial indexes (`customer_notifications_centre_idx`, the page, and
+     * `customer_notifications_centre_unread_idx`, the bell's counter) are built CONCURRENTLY
+     * by `online-indexes.ts`, not here: `customer_notifications` is a large table and a plain
+     * CREATE INDEX in the migrator's one transaction would block the lane's writes.
+     */
     check('customer_notifications_kind_check', enumCheck('kind', CUSTOMER_NOTIFICATION_KINDS)),
     check('customer_notifications_state_check', enumCheck('state', CUSTOMER_NOTIFICATION_STATES)),
     /**

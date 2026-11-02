@@ -4665,6 +4665,32 @@ money and sends no customer message; the owner decides otherwise.
   captcha row like a `/start` arrival and the mini app holds them at `CAPTCHA`, pointing to the
   bot; whether a mini-app arrival should be asked at all is the owner's call.
 
+## Round 11 B4 — the location changes a customer has left
+
+- **Decision (lead, replaces the earlier "no feature flag") — a switch, OFF by default.** The
+  owner's round rule is that every new customer-facing feature ships behind a switch that
+  starts off, so the line has `location_remaining_display` («امکانات» in the Web Admin). The
+  condition is unchanged: the line shows only when the flag is ON and the existing settings
+  already make location change available (the `LOCATION_CHANGE` panel-policy row, the service
+  state, the panel capability, an enabled priced target) and a limit is set. Flag OFF: neither
+  the bot card, the bot's location screen, the mini app view nor its sheet carry the line, and
+  the button and every refusal are exactly as before. The flag moves no money and sends no
+  message, and changes no limit or enforcement.
+- **OQ-R11-B4-01 — targets with different limits.** The limit lives on each configured
+  location (and a Customer 360 override replaces all of them). When the targets offered to one
+  service carry different limits, the line shows the LARGEST remaining toward any target (it is
+  «0» exactly when every target refuses with the limit), and a service with even one unlimited
+  target shows no line, because the customer can always move there. Is that the reading the
+  owner wants, or should the choice screen show a figure per target? Taken: one figure, no
+  money, no message.
+- **OQ-R11-B4-02 — digits.** The brief's example is «۲ از ۳»; every customer-facing template in
+  this repository renders Latin digits unless the template opts in (`digits: 'PERSIAN'`), so the
+  line reads «2 از 3» like «تا 5 کاربر دیگر قابل افزودن است». One flag on the key would switch
+  it; not taken without a decision.
+- **OQ-R11-B4-03 — the cooldown.** «باقی‌مانده» counts the rolling LIMIT only. A service inside
+  its cooldown can show «2 از 3» and still be refused with the cooldown sentence (the button is
+  withdrawn then, as before). Showing «available again in N hours» is a different feature.
+
 ## Round 11 A8 — TonPays answered HTTP 429 to invoice creates
 
 Every TonPays call now takes a token from one client-side bucket per API key inside the TonPays
@@ -4778,6 +4804,45 @@ live; the owner decides otherwise.
   idempotency row (a redelivery is ignored again); `tests/unit/telegram-unknown-update-kinds.test.ts`
   pins this. If bot subscriptions become a product feature, the update needs its own route,
   its own contract and an owner decision about what it moves.
+
+## Round 11 B1 — the mini app's notification centre
+
+- **OQ-R11-B1-01 — which "bot messages" belong in the centre.** The centre lists what the
+  customer notification lane (`customer_notifications`) delivered: payment and order outcomes,
+  reminders, ticket replies, operator direct messages, incident notices. A broadcast
+  (`broadcast_recipients`), the immediate reply to a tap and the subscription-link delivery do not
+  go through that lane and are not listed. Showing broadcasts would need a read mark of their own
+  and a decision about promotional text; nothing was added without the owner's say.
+- **OQ-R11-B1-02 — history before this release.** Messages delivered before migration 0303 carry
+  no stored words (the lane never kept them), so the centre starts empty and fills from the first
+  delivery after the release. Reconstructing old text from kind and subject would show figures the
+  customer was never sent; it is deliberately not done.
+- **OQ-R11-B1-03 — a customer who uses two bots of one tenant.** The centre shows only the
+  messages the bot the mini app was opened from sent (the lane's own rule: a customer is told from
+  the bot they wrote to). If the owner wants one merged list across a tenant's bots, that is a
+  change to the query, not to the data.
+
+## Round 11 B3 — the invited-friends list (mini app)
+
+- **OQ-R11-B3-01 — is the membership gift a "reward" in the friends list?** Default (built): no.
+  A friend's status reads the PURCHASE commission only (`REWARD_PENDING`: a commission still
+  PENDING, including one the R10 D5 daily cap holds until `not_before`; `REWARD_PAID`: one
+  EARNED for more than nothing). The signup gift has its own claim button and its own two sides
+  (the referrer's and the referee's share), so folding it into one word would hide which side was
+  paid. If the owner wants «هدیه» shown per friend, it is a second badge, not a new status.
+- **OQ-R11-B3-02 — how much of a friend's name the referrer sees.** Default (built): the first
+  name as stored (invisible and bidi marks dropped, ZWNJ kept, 24 characters), else the username
+  with the middle hidden (`@ab***`: two letters for five or more, one for three or four, none
+  below), else «دوست تو». Never a last name, a Telegram id or a phone. If the owner prefers the
+  initial only, or no name at all, it is `friendDisplayName` and nothing else.
+- **OQ-R11-B3-03 — a reward paid and later refunded.** Default (built): the status stays
+  `REWARD_PAID` while the commission row is EARNED for more than nothing, exactly as the gift
+  claim's "no clawback" default (OQ-D5-02): a refund's reversal debits the referrer's wallet and
+  is visible in the ledger, but does not move the friend back to a lower status. The list shows
+  no amounts, so it never states a figure that a reversal would contradict.
+- **OQ-R11-B3-04 — a friend who bought, with an imported (MIRZA) attribution.** Default (built):
+  listed, with the status the purchase gives (`PURCHASED` at most, since an imported attribution
+  is never promised a commission). Listed because the screen's own «دعوت‌شده» figure counts it.
 
 ## R11 A4 — files only, no subscription link; the RickPanel QR kind
 

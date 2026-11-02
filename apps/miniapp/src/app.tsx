@@ -23,6 +23,7 @@ import { Trial } from './screens/trial.js';
 import { Support } from './screens/support.js';
 import { NewTicket, Ticket } from './screens/ticket.js';
 import { Apps } from './screens/apps.js';
+import { NotificationBell, Notifications } from './screens/notifications.js';
 import { Message, TabBar } from './ui.js';
 
 /**
@@ -46,7 +47,8 @@ export type Route =
   | { readonly name: 'support' }
   | { readonly name: 'ticket-new' }
   | { readonly name: 'ticket'; readonly ticketId: string }
-  | { readonly name: 'apps' };
+  | { readonly name: 'apps' }
+  | { readonly name: 'notifications' };
 
 export type Tab = 'home' | 'store' | 'services' | 'wallet' | 'profile';
 
@@ -190,6 +192,7 @@ export function App() {
         <Gate gate={context.me.gate} />
       ) : (
         <div className="screen">
+          {tab !== null && <NotificationBell />}
           {route.name === 'home' && <Home />}
           {route.name === 'store' && <Store />}
           {route.name === 'services' && <Services />}
@@ -205,6 +208,7 @@ export function App() {
           {route.name === 'ticket-new' && <NewTicket />}
           {route.name === 'ticket' && <Ticket ticketId={route.ticketId} />}
           {route.name === 'apps' && <Apps />}
+          {route.name === 'notifications' && <Notifications />}
           {tab !== null && <TabBar current={tab} onSelect={(next) => setStack([{ name: next }])} />}
         </div>
       )}

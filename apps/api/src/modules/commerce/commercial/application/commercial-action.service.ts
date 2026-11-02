@@ -52,6 +52,7 @@ import { rememberOnce } from '../../../platform/idempotency/application/remember
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
+import type { FeatureFlagResolver } from '../../../control/features/application/feature-flags.service.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { OperationalEventRecorder } from '@nexa/contracts';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
@@ -314,6 +315,8 @@ export interface CommercialActionServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   readonly outbox: OutboxWriter;
   readonly settings: SettingsResolver;
+  /** R11 B4: `location_remaining_display`, the switch for the remaining-changes line. */
+  readonly features: Pick<FeatureFlagResolver, 'isEnabled'>;
   /**
    * The pricing engine's door (WP8 P7): automatic rules and the cashback promise apply
    * to renewals and add-ons at draft time, and confirmation redeems them. Codes do not
@@ -330,7 +333,7 @@ export interface CommercialActionServiceDeps {
    * the configured targets, the cooldown and the rolling limit — and the frozen change
    * request a paid move writes beside its order.
    */
-  readonly locations: Pick<LocationChangePolicy, 'offer' | 'decide'>;
+  readonly locations: Pick<LocationChangePolicy, 'offer' | 'decide' | 'remainingChanges'>;
   readonly locationChanges: Pick<LocationChangeRepository, 'create' | 'findByOrderId'>;
   readonly clock: Clock;
   readonly ids: IdGenerator;
@@ -425,7 +428,12 @@ export class CommercialActionService {
           'This service cannot be moved right now.',
         );
       }
-      return { kind, product: null, addons: [], devices: null, locations };
+      // R11 B4: the remaining-changes figure rides on the offer, so the flag withholds it here
+      // too (the bot's location screen and the mini app sheet read it from this offer).
+      const shown = (await this.deps.features.isEnabled(scope, 'location_remaining_display'))
+        ? locations
+        : { ...locations, remaining: null };
+      return { kind, product: null, addons: [], devices: null, locations: shown };
     }
 
     const offerable = await this.offerableAddons(
@@ -542,6 +550,34 @@ export class CommercialActionService {
       if ((await this.offerableAddons(scope, service, kind, 1)).length > 0) available.push(kind);
     }
     return available;
+  }
+
+  /**
+   * R11 B4: the location changes this service has left, «۲ از ۳» — or null when the surface
+   * says nothing: a custom service, a state no move is legal from, a panel that cannot move
+   * accounts, a panel policy that switched `LOCATION_CHANGE` off, no enabled priced target, or
+   * no limit set — and always while the `location_remaining_display` flag is off (default).
+   *
+   * The same first three gates `availableFor` applies to `CHANGE_LOCATION` (state, the panel's
+   * capability, the policy row), so "enabled" means one thing; the count itself is
+   * `LocationChangePolicy.remainingChanges`, the evaluator's own figure. A read: it stays
+   * answerable at zero remaining, where `availableFor` has already withdrawn the button.
+   */
+  async locationChangesLeft(
+    scope: TenantContext,
+    actor: ActorContext,
+    service: ServiceRecord,
+  ): Promise<{ readonly remaining: number; readonly max: number } | null> {
+    await this.deps.guard.check(scope, actor, COMMERCIAL_ACTION_PERMISSION);
+    // The switch is OFF by default: with it off nothing below is read and no surface shows a line.
+    if (!(await this.deps.features.isEnabled(scope, 'location_remaining_display'))) return null;
+    if (service.productId === null) return null;
+    if (!OPERATION_LEGAL_FROM.CHANGE_LOCATION.includes(service.state)) return null;
+    const operable = await this.deps.panels.operability(scope, service.panelId, 'CHANGE_LOCATION');
+    if (!operable.ok) return null;
+    const policy = await this.deps.panelPolicy.forPanel(scope, service.panelId);
+    if (!commercialPolicyAllows(policy, 'CHANGE_LOCATION')) return null;
+    return this.deps.locations.remainingChanges(scope, service);
   }
 
   /**
