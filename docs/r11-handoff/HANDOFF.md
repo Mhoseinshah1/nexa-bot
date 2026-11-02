@@ -8,14 +8,14 @@ Resume: read this block, the prompt NEXA-PHASE5-CUSTOMER.md (owner upload), then
 - Merged also: #376 B1 (8e409c1, 0303; Codex P2 fix c5b9f68 + CI-only label fix 19aaca3).
 - Merged also: #378 B6 (25bb8fb, 0304; Codex clean, CI 23/23).
 - Merged also: #379 C2 (739e14f, 0305; Codex 2 P2 fixed in e0567cf, CI 23/23).
-- Open: #381 B5 (no migration), head ba963be, @codex review posted, CI watcher running.
+- Merged also: #381 B5 (c780b44, no migration; Codex clean on ba963be, main sync d56d7e9, CI 23/23).
 - Pushed, PR waits for migration order:
-  B7 feat/r11-phone-verify a2381cc (0306; opens AFTER B5 merges — payments never parallel).
+  B7 feat/r11-phone-verify (0306): syncing main (Opus); PR next.
 - Owner change 2026-11-02: up to 3 implementers, 3rd slot only Sonnet UI-only/no migration/no payment (B1, B4).
 - Lead decisions log: to be written into docs/round-reports/phase-5.md (D1–D20 so far).
 - Worktrees: /home/user/wt-b5, wt-b6, wt-b7, wt-c2; test DBs nexa_p5_<item>.
 - Branches the session cannot delete (owner): feat/r11-location-remaining, feat/r11-referral-list,
-  feat/r11-usage-chart, fix/r11-usage-snapshots-transfer, feat/r11-notification-centre, feat/r11-reminder-optout, feat/r11-reseller-expiry (if GitHub did not auto-delete them).
+  feat/r11-usage-chart, fix/r11-usage-snapshots-transfer, feat/r11-notification-centre, feat/r11-reminder-optout, feat/r11-reseller-expiry, feat/r11-miniapp-stars (if GitHub did not auto-delete them).
 
 ---
 
