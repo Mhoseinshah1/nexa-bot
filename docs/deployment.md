@@ -564,6 +564,36 @@ botctl admin reset-2fa --username NAME --reason TEXT
                            owner recovery: remove two-step sign-in (audited)
 ```
 
+### Long commands run inside tmux
+
+`backup`, `restore`, `update`, `rollback`, `cutover rehearse` and `secrets rewrap` can take
+minutes to hours, and an SSH connection that drops part-way used to end them: the hang-up
+killed botctl, and its EXIT trap deleted the scratch directory a still-running one-off
+container was reading (the first `cutover rehearse` on the test server failed on `ENOENT` in
+the reconciliation exactly so). Now:
+
+- **Refused outside a multiplexer.** On an interactive terminal (stdin is a TTY) that is not
+  inside tmux, screen or mosh, a long command refuses before it changes anything and prints the
+  line to run instead, e.g.
+  `tmux new -s nexa-cutover-rehearse 'sudo botctl cutover rehearse PACKAGE --key-file KEY --owner-telegram-id N'`.
+  Detach with Ctrl-b d; after a dropped connection `tmux attach -t nexa-cutover-rehearse`.
+  tmux is detected from `TMUX`/`STY` and, because sudo's `env_reset` strips both, from the
+  process that owns the terminal. A non-interactive caller (script, cron, CI, a pipe on stdin)
+  is never refused.
+- **`--allow-foreground`** runs it on the bare terminal anyway. botctl ignores SIGHUP for the
+  whole command and copies its output to `/var/log/nexa/botctl-COMMAND-UTC-PID.log` (0600 in a
+  0700 directory), because after a hang-up the terminal is gone.
+- **The long step runs in its own process group** — the rehearsal and migration containers, the
+  restore's join and restore, `pg_dump`, the re-encryption — so the kernel's hang-up, which goes
+  to the terminal's foreground group, does not reach it. Ctrl-C and TERM still work: botctl
+  stops the step (TERM to its group), **waits for it to exit**, and only then removes its
+  scratch directory; a second Ctrl-C kills it outright. Any other signal that ends botctl runs
+  the same stop-and-wait before the cleanup.
+
+Not covered: the shorter compose steps of `update` and `rollback` (pull, `up -d`, readiness)
+stay in botctl's own process group; they inherit the ignored hang-up, but tmux, not
+`--allow-foreground`, is the supported way to run an update over SSH.
+
 `botctl restart background` is the step after a one-time import from the previous bot
 (and after a restore): it restarts only the background roles — worker, monitor and, when the
 release has one, provisioner — with `docker compose restart`, so the containers that are

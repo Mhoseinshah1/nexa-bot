@@ -139,6 +139,18 @@ botctl — operate a Nexa installation
                                            owner recovery: remove an administrator's two-step
                                            sign-in and end their sessions (audited)
 
+Long commands — backup, restore, update, rollback, cutover rehearse, secrets rewrap — refuse
+to start on an SSH terminal that is not inside tmux or screen, because a dropped connection
+would end the run part-way. Start them in tmux; botctl prints the exact line:
+
+  tmux new -s nexa-cutover-rehearse 'sudo botctl cutover rehearse PACKAGE ...'
+  tmux attach -t nexa-cutover-rehearse     # after a dropped connection
+
+`--allow-foreground` runs one anyway: botctl then ignores the hang-up, keeps the long step in
+its own process group, and copies the output to /var/log/nexa/botctl-COMMAND-TIME-PID.log.
+Ctrl-C still stops it (and cleans up once the step has exited). A script, cron job or pipe —
+stdin not a terminal — is never refused.
+
 Update, rollback and `secrets rewrap` take an exclusive lock. Rollback changes the APPLICATION
 only: it never restores a database backup, because the backup predates the
 migration and restoring it would discard every write made since.
@@ -177,6 +189,191 @@ USAGE
 require_installed() {
   [ -r "${NEXA_CONFIG_DIR}/deploy.env" ] ||
     nexa_die "no installation found at ${NEXA_CONFIG_DIR}. Run the installer first."
+}
+
+# ---------------------------------------------------------------------------
+# Long commands and a dropped SSH session
+# ---------------------------------------------------------------------------
+#
+# The incident: `sudo botctl cutover rehearse` over SSH. The import finished, the connection
+# dropped, SIGHUP killed botctl, and its EXIT trap deleted the scratch directory while the
+# one-off container was still reading it — the reconciliation then failed on ENOENT. A
+# `restore`, an `update` mid-migration or a `backup` dies the same way.
+#
+# A long command (backup, restore, update, rollback, cutover rehearse, secrets rewrap) is
+# therefore protected three ways:
+#
+#   1. On an interactive terminal (stdin is a TTY) that is not inside tmux, screen or mosh,
+#      it REFUSES before doing anything and prints the tmux command that runs it safely.
+#      `--allow-foreground` overrides that. A non-interactive caller (a script, cron, CI, a
+#      pipe) is not refused: it has no terminal to lose.
+#   2. SIGHUP is ignored for the whole command (`trap '' HUP`), so a hang-up never ends it and
+#      never fires the EXIT trap. In the `--allow-foreground` case the output is also copied
+#      to ${NEXA_LOG_DIR}: after a hang-up the terminal is gone, and the log is the record.
+#   3. The child that does the long work (the rehearsal or migration container, the restore,
+#      pg_dump, the re-encryption) runs in its OWN process group (`botctl_run_child`). The
+#      kernel's hang-up goes to the terminal's foreground group and does not reach it, and
+#      Ctrl-C (INT) or TERM reach botctl, which stops the child, WAITS for it, and only then
+#      lets the EXIT trap remove the scratch directory. A second INT/TERM kills it outright.
+#
+# tmux/screen is detected from TMUX/STY, and — because sudo's env_reset strips both — by
+# walking the process ancestry to whoever owns the terminal this runs on.
+
+BOTCTL_ALLOW_FOREGROUND=0
+BOTCTL_ARGV=()
+BOTCTL_CHILD_PID=""
+BOTCTL_CHILD_SIGNAL=""
+
+# "PPID TTY_NR" of a process. comm (field 2) may hold spaces and parentheses, so the fields
+# are read after its LAST ") ".
+botctl_proc_stat() {
+  local stat
+  stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
+  stat="${stat##*) }"
+  local -a fields
+  read -r -a fields <<<"$stat"
+  [ "${#fields[@]}" -ge 5 ] || return 1
+  printf '%s %s' "${fields[1]}" "${fields[4]}"
+}
+
+# Whether this terminal survives the SSH connection: it belongs to tmux, screen or mosh.
+# Walk up from botctl while the terminal stays the same; the first ancestor on another
+# terminal is the one that owns ours. sudo with use_pty owns a pty of its own, so the walk
+# continues on sudo's terminal.
+botctl_in_multiplexer() {
+  if [ -n "${TMUX:-}" ] || [ -n "${STY:-}" ]; then return 0; fi
+  local line ppid tty parent_ppid parent_tty comm i
+  line="$(botctl_proc_stat "$$")" || return 1
+  read -r ppid tty <<<"$line"
+  for ((i = 0; i < 64; i++)); do
+    [ "${ppid:-0}" -gt 1 ] || return 1
+    line="$(botctl_proc_stat "$ppid")" || return 1
+    read -r parent_ppid parent_tty <<<"$line"
+    if [ "$parent_tty" != "$tty" ]; then
+      comm="$(cat "/proc/${ppid}/comm" 2>/dev/null)" || return 1
+      case "$comm" in
+        tmux* | screen* | SCREEN* | mosh-server) return 0 ;;
+        sudo | su) tty="$parent_tty" ;;
+        *) return 1 ;;
+      esac
+    fi
+    ppid="$parent_ppid"
+  done
+  return 1
+}
+
+# The command a refused run should be started with instead.
+botctl_tmux_line() {
+  local session="$1" quoted="" arg prefix="botctl"
+  [ -z "${SUDO_USER:-}" ] || prefix="sudo botctl"
+  for arg in "${BOTCTL_ARGV[@]}"; do quoted+=" $(printf '%q' "$arg")"; done
+  case "$quoted" in
+    *"'"*) printf 'tmux new -s %s %s%s' "$session" "$prefix" "$quoted" ;;
+    *) printf "tmux new -s %s '%s%s'" "$session" "$prefix" "$quoted" ;;
+  esac
+}
+
+# Called by every long command once its arguments are valid and BEFORE it changes anything.
+botctl_long_command() {
+  local name="$1"
+  trap '' HUP
+  [ -t 0 ] || return 0
+  botctl_in_multiplexer && return 0
+  if [ "$BOTCTL_ALLOW_FOREGROUND" -ne 1 ]; then
+    local session="nexa-${name}"
+    cat >&2 <<REFUSAL
+error this is a long command, and this terminal is not inside tmux or screen. If the SSH
+      connection drops part-way, the run would go with it. Nothing was started. Run it in tmux:
+
+        $(botctl_tmux_line "$session")
+
+      Detach with Ctrl-b d; after a dropped connection, \`tmux attach -t ${session}\` picks
+      the run back up. To run it here anyway, add --allow-foreground: botctl then ignores
+      the hang-up and copies its output to ${NEXA_LOG_DIR}.
+REFUSAL
+    exit 1
+  fi
+  botctl_log_to_file "$name"
+}
+
+# --allow-foreground on a terminal: the output also goes to a private log file. The tees
+# ignore INT (and, from botctl, HUP): they must outlive a Ctrl-C and a dead terminal, or
+# botctl's next write would be a SIGPIPE that skips its own cleanup.
+botctl_log_to_file() {
+  local name="$1" log
+  if ! install -d -m 0700 "$NEXA_LOG_DIR" 2>/dev/null; then
+    nexa_warn "could not create ${NEXA_LOG_DIR}; this run's output is NOT copied to a file."
+    return 0
+  fi
+  log="${NEXA_LOG_DIR}/botctl-${name}-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
+  if ! (umask 077 && : >"$log") 2>/dev/null; then
+    nexa_warn "could not create ${log}; this run's output is NOT copied to a file."
+    return 0
+  fi
+  exec > >(trap '' INT && exec tee -a -- "$log") 2> >(trap '' INT && exec tee -a -- "$log" >&2)
+  nexa_warn "running in the foreground (--allow-foreground): a dropped connection does not stop this run. Its output is also written to ${log}"
+}
+
+# Run "$@" in its own process group and wait for it; returns its exit status. INT or TERM
+# stop it (TERM to its group), and botctl waits until it has exited — 130/143 then.
+botctl_run_child() {
+  local rc=0
+  BOTCTL_CHILD_SIGNAL=""
+  set -m
+  (
+    set +m
+    "$@"
+  ) &
+  BOTCTL_CHILD_PID=$!
+  set +m
+  trap 'botctl_signal_child INT' INT
+  trap 'botctl_signal_child TERM' TERM
+  while :; do
+    rc=0
+    wait "$BOTCTL_CHILD_PID" || rc=$?
+    # A trapped signal interrupts `wait` with 128+n while the child is still running.
+    if [ "$rc" -gt 128 ] && kill -0 "$BOTCTL_CHILD_PID" 2>/dev/null; then continue; fi
+    break
+  done
+  # Stopped: the group's leader is a subshell that dies at once, while what it started (the
+  # docker CLI, the container's own shutdown) may still be finishing. Wait for the whole group.
+  if [ -n "$BOTCTL_CHILD_SIGNAL" ]; then botctl_wait_group "$BOTCTL_CHILD_PID"; fi
+  trap - INT TERM
+  BOTCTL_CHILD_PID=""
+  case "$BOTCTL_CHILD_SIGNAL" in
+    INT) rc=130 ;;
+    TERM) rc=143 ;;
+  esac
+  return "$rc"
+}
+
+# shellcheck disable=SC2329 # runs from the INT/TERM trap botctl_run_child sets
+botctl_signal_child() {
+  local pid="$BOTCTL_CHILD_PID"
+  [ -n "$pid" ] || return 0
+  if [ -n "$BOTCTL_CHILD_SIGNAL" ]; then
+    kill -KILL -- "-${pid}" 2>/dev/null || true
+    return 0
+  fi
+  BOTCTL_CHILD_SIGNAL="$1"
+  printf 'botctl: %s received; stopping the running step and waiting for it to exit (again to kill it)\n' "$1" >&2 || true
+  kill -TERM -- "-${pid}" 2>/dev/null || true
+}
+
+# For an EXIT trap: never remove what the child is reading while it still runs.
+# shellcheck disable=SC2329 # runs from an EXIT trap
+botctl_reap_child() {
+  local pid="$BOTCTL_CHILD_PID"
+  [ -n "$pid" ] || return 0
+  kill -TERM -- "-${pid}" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  botctl_wait_group "$pid"
+  BOTCTL_CHILD_PID=""
+}
+
+# Until no process of the group is left.
+botctl_wait_group() {
+  while kill -0 -- "-$1" 2>/dev/null; do sleep 0.1; done
 }
 
 # ---------------------------------------------------------------------------
@@ -935,7 +1132,13 @@ cmd_status() {
 # ---------------------------------------------------------------------------
 # backup
 # ---------------------------------------------------------------------------
-#
+
+# pg_dump into gzip, run by botctl_run_child in its own process group.
+# shellcheck disable=SC2329 # run by botctl_run_child
+backup_dump() {
+  nexa_compose exec -T postgres pg_dump -U "$1" -d "$2" 2>/dev/null </dev/null | gzip -9 >"$3"
+}
+
 # A real dump through pg_dump, never a copy of the data directory: copying
 # PostgreSQL's files while it is running produces something that looks like a
 # backup and is not one.
@@ -974,7 +1177,8 @@ cmd_backup() {
   local partial="${target}.partial"
   # `-T` because there is no terminal; the password comes from the container's
   # own environment, so nothing lands on a command line.
-  if ! nexa_compose exec -T postgres pg_dump -U "$pg_user" -d "$pg_db" 2>/dev/null | gzip -9 >"$partial"; then
+  # In its own process group (botctl_run_child), so a dropped connection does not cut it.
+  if ! botctl_run_child backup_dump "$pg_user" "$pg_db" "$partial"; then
     rm -f "$partial"
     umask "$previous_umask"
     nexa_die "the backup FAILED. Nothing was written."
@@ -1071,6 +1275,7 @@ cmd_restore() {
   done
   local sorted=()
   while IFS= read -r part; do sorted+=("$part"); done < <(printf '%s\n' "${parts[@]}" | LC_ALL=C sort)
+  botctl_long_command restore
 
   local magic
   magic="$(head -c 6 "${sorted[0]}" | od -An -tx1 | tr -d ' \n')"
@@ -1086,26 +1291,43 @@ cmd_restore() {
   scratch="$(nexa_compose exec -T api mktemp -d /var/lib/nexa/backups/.cli-restore-XXXXXX)" ||
     nexa_die "could not make a scratch directory in the api container."
   scratch="$(printf '%s' "$scratch" | tr -d '\r')"
+  # Never on a hang-up, and never while the join or the restore still reads it (see
+  # botctl_run_child).
   # shellcheck disable=SC2064 # the path is fixed now, on purpose.
-  trap "nexa_compose exec -T api rm -rf '${scratch}' >/dev/null 2>&1 || true" EXIT
+  trap "botctl_reap_child; nexa_compose exec -T api rm -rf '${scratch}' >/dev/null 2>&1 || true" EXIT
 
   nexa_step "joining ${#sorted[@]} part(s) into the api container"
-  # shellcheck disable=SC2016 # "$1" expands in the container's shell, deliberately.
-  cat "${sorted[@]}" | nexa_compose exec -T api sh -c 'umask 077; cat > "$1"' sh "${scratch}/archive" ||
+  botctl_run_child restore_join_parts "${scratch}/archive" "${sorted[@]}" ||
     nexa_die "the parts could not be copied into the api container."
 
   nexa_step "restoring into ${target}"
+  botctl_run_child restore_into_target "${scratch}/archive" "$target" "$password" ||
+    nexa_die "the restore did not complete. Nothing was changed in the live database."
+  password=""
+  nexa_ok "restored into ${target}"
+}
+
+# The two long steps of a restore, each run by botctl_run_child in its own process group.
+# shellcheck disable=SC2329 # run by botctl_run_child
+restore_join_parts() {
+  local archive="$1"
+  shift
+  # shellcheck disable=SC2016 # "$1" expands in the container's shell, deliberately.
+  cat "$@" | nexa_compose exec -T api sh -c 'umask 077; cat > "$1"' sh "$archive"
+}
+
+# The password, when there is one, reaches the CLI on stdin — never as an argument of a
+# process (a shell function's argument is not one).
+# shellcheck disable=SC2329 # run by botctl_run_child
+restore_into_target() {
+  local archive="$1" target="$2" password="$3"
   if [ -n "$password" ]; then
     printf '%s' "$password" | nexa_compose exec -T api node dist/backup.cli.js restore \
-      --archive "${scratch}/archive" --target "$target" --password-stdin ||
-      nexa_die "the restore did not complete. Nothing was changed in the live database."
-    password=""
+      --archive "$archive" --target "$target" --password-stdin
   else
     nexa_compose exec -T api node dist/backup.cli.js restore \
-      --archive "${scratch}/archive" --target "$target" </dev/null ||
-      nexa_die "the restore did not complete. Nothing was changed in the live database."
+      --archive "$archive" --target "$target" </dev/null
   fi
-  nexa_ok "restored into ${target}"
 }
 
 # ---------------------------------------------------------------------------
@@ -1119,6 +1341,7 @@ cmd_update() {
   local target="${1:-}"
   [ -n "$target" ] || nexa_die "usage: botctl update VERSION"
   nexa_require_version "$target"
+  botctl_long_command update
 
   # The lock covers everything below, including the backup and the migration.
   # `-w 0`: a second update reports rather than queueing behind a long one.
@@ -1414,8 +1637,10 @@ cmd_update() {
   # which is how "the update succeeded" stops being sayable while browsers get
   # the old Web Admin.
   nexa_step "migrating with ${target}'s own migrator"
-  if ! NEXA_IMAGE="$target_image" nexa_compose run --rm --no-deps \
-    --entrypoint node api dist/infrastructure/persistence/migrate.js; then
+  # In its own process group, stdin closed: a dropped connection must not stop a migration
+  # half-way (botctl_run_child).
+  if ! NEXA_IMAGE="$target_image" botctl_run_child nexa_compose run --rm --no-deps \
+    --entrypoint node api dist/infrastructure/persistence/migrate.js </dev/null; then
     # Nothing was restarted on this path, so ${current} is still running
     # whether or not its assets went back; the warnings above say which.
     restore_host_assets || true
@@ -2081,7 +2306,11 @@ cmd_secrets() {
   # re-encryption interleaved with a migration is two writers on one database.
   # status, retire-check and shutdown-check only read.
   if [ "$action" = "rewrap" ]; then
+    botctl_long_command secrets-rewrap
     nexa_acquire_lock 0
+    botctl_run_child nexa_compose run --rm --no-deps -T --entrypoint node api \
+      dist/secrets.cli.js "$action" "$@" </dev/null
+    return
   fi
 
   nexa_compose run --rm --no-deps -T --entrypoint node api \
@@ -2689,6 +2918,18 @@ recovery
 
 REHEARSE_USAGE="usage: botctl cutover rehearse PACKAGE.nxpkg (--key-file FILE | --passphrase) --owner-telegram-id N [--database NAME] [--keep-database] [--panel-inventory FILE] [--json] [--list-differences]"
 
+# The rehearsal's one compose call. `export` inside botctl_run_child's subshell only: the
+# secret is in the environment of this one call (`-e NAME` copies it in by name) and of
+# nothing botctl runs before or after. A function argument is never on a command line.
+# shellcheck disable=SC2329 # run by botctl_run_child
+cutover_rehearse_container() {
+  local secret_env="$1" secret="$2" scratch="$3"
+  shift 3
+  export "${secret_env}=${secret}"
+  nexa_compose run --rm --no-deps -T -e "$secret_env" -v "${scratch}:/cutover:ro" \
+    --entrypoint node api dist/cutover-rehearse.cli.js "$@" </dev/null
+}
+
 cmd_cutover_rehearse() {
   require_installed
   local package="" key_file="" passphrase_prompt=0 owner_id="" database="" keep=0
@@ -2763,6 +3004,9 @@ cmd_cutover_rehearse() {
   if [ -n "$inventory" ]; then
     if [ ! -f "$inventory" ] || [ ! -r "$inventory" ]; then nexa_die "cannot read the panel inventory."; fi
   fi
+  # After validation, so the refusal's tmux line never repeats an option that was refused —
+  # and before the passphrase prompt, so it is not typed twice.
+  botctl_long_command cutover-rehearse
 
   # The secret: the key file's TEXT, or the passphrase typed on the terminal. It reaches the
   # container through the environment of the one compose call below and nowhere else.
@@ -2783,8 +3027,10 @@ cmd_cutover_rehearse() {
   local scratch
   scratch="$(mktemp -d "${TMPDIR:-/tmp}/nexa-cutover-rehearsal.XXXXXX")" ||
     nexa_die "could not make a private directory for the package."
+  # Never on a hang-up (ignored above), and never while the container still reads it:
+  # botctl_reap_child stops and waits for it first.
   # shellcheck disable=SC2064 # the path is fixed now, on purpose.
-  trap "rm -rf -- '${scratch}'" EXIT
+  trap "botctl_reap_child; rm -rf -- '${scratch}'" EXIT
   chmod 0700 "$scratch"
   cp -- "$package" "${scratch}/rehearsal.nxpkg" || nexa_die "could not copy the package."
   chmod 0400 "${scratch}/rehearsal.nxpkg"
@@ -2809,13 +3055,8 @@ cmd_cutover_rehearse() {
 
   printf '==> cutover rehearsal: a NEW database on this server, never the live one; no token, no webhook, no customer message\n' >&2
   local rc=0
-  # `export` inside the subshell only: the secret is in the environment of this one compose
-  # call (`-e NAME` copies it in by name) and of nothing botctl runs before or after.
-  (
-    export "${secret_env}=${secret}"
-    nexa_compose run --rm --no-deps -T -e "$secret_env" -v "${scratch}:/cutover:ro" \
-      --entrypoint node api dist/cutover-rehearse.cli.js "${args[@]}" </dev/null
-  ) || rc=$?
+  # In its own process group (botctl_run_child): a dropped connection does not reach it.
+  botctl_run_child cutover_rehearse_container "$secret_env" "$secret" "$scratch" "${args[@]}" || rc=$?
   secret=""
   case "$rc" in
     0) printf 'rehearsal: GO\n' >&2 ;;
@@ -2837,15 +3078,33 @@ cmd_cutover() {
 }
 
 main() {
+  # --allow-foreground, anywhere on a long command's line, is botctl's and not the command's
+  # (botctl_long_command). Everything else is kept, in order, for the refusal's tmux line.
+  case "${1:-} ${2:-}" in
+    'backup '* | 'restore '* | 'update '* | 'rollback '* | 'cutover rehearse' | 'secrets rewrap')
+      local arg kept=()
+      for arg in "$@"; do
+        if [ "$arg" = "--allow-foreground" ]; then BOTCTL_ALLOW_FOREGROUND=1; else kept+=("$arg"); fi
+      done
+      set -- "${kept[@]}"
+      ;;
+  esac
+  BOTCTL_ARGV=("$@")
   local command="${1:-}"
   shift || true
   case "$command" in
     version) cmd_version "$@" ;;
     status) cmd_status "$@" ;;
-    backup) cmd_backup ;;
+    backup)
+      botctl_long_command backup
+      cmd_backup
+      ;;
     restore) cmd_restore "$@" ;;
     update) cmd_update "$@" ;;
-    rollback) cmd_rollback "$@" ;;
+    rollback)
+      botctl_long_command rollback
+      cmd_rollback "$@"
+      ;;
     roles) cmd_roles "$@" ;;
     cutover) cmd_cutover "$@" ;;
     secrets) cmd_secrets "$@" ;;

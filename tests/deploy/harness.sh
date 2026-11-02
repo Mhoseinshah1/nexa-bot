@@ -984,6 +984,17 @@ print(json.dumps({"services": {"api": {"environment": env}}}))
               stat -c '%a' "$_mount" >"${FAKE_DIR}/rehearse_mount_mode"
               printf '%s' "$_mount" >"${FAKE_DIR}/rehearse_mount_path"
             fi
+            if [ "$(read_state rehearse_hold 0)" = "1" ]; then
+              # A rehearsal that is still running: it records its pid and process group,
+              # then holds until the test releases it (or a TERM arrives), and records
+              # whether the package it is reading was still there at that moment.
+              printf '%s %s' "$$" "$(ps -o pgid= -p "$$" | tr -d ' ')" >"${FAKE_DIR}/rehearse_running"
+              trap '[ -f "${_mount}/rehearsal.nxpkg" ] && _seen=present || _seen=missing
+                printf "%s" "$_seen" >"${FAKE_DIR}/rehearse_mount_on_term"; sleep 0.5; exit 143' TERM
+              while [ ! -e "${FAKE_DIR}/rehearse_release" ]; do sleep 0.05; done
+              if [ -f "${_mount}/rehearsal.nxpkg" ]; then _seen=present; else _seen=missing; fi
+              printf '%s' "$_seen" >"${FAKE_DIR}/rehearse_mount_after"
+            fi
             printf 'Cutover rehearsal (fake)\ngo/no-go: %s\n' "$(read_state rehearse_verdict GO)"
             exit "$(read_state rehearse_exit 0)"
             ;;

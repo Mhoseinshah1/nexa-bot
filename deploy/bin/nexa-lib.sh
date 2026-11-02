@@ -27,6 +27,9 @@ NEXA_CONFIG_DIR="${NEXA_CONFIG_DIR:-${NEXA_ROOT}/etc/nexa}"
 NEXA_STATE_DIR="${NEXA_STATE_DIR:-${NEXA_ROOT}/var/lib/nexa}"
 NEXA_BACKUP_DIR="${NEXA_BACKUP_DIR:-${NEXA_ROOT}/var/backups/nexa}"
 NEXA_BIN_DIR="${NEXA_BIN_DIR:-${NEXA_ROOT}/usr/local/bin}"
+# Where a long botctl command run in the foreground (`--allow-foreground`) copies its output,
+# so a dropped SSH session does not take the only record of the run with it.
+NEXA_LOG_DIR="${NEXA_LOG_DIR:-${NEXA_ROOT}/var/log/nexa}"
 # The lock lives in the state directory, NOT in /var/lock.
 #
 # On Ubuntu /var/lock is a symlink to /run/lock, which is mode 1777. Two things
