@@ -143,7 +143,14 @@ export function instructionWire(instruction: ManualTransferInstruction): MiniApp
   };
 }
 
-export function attemptWire(attempt: GatewayAttempt | GatewayAttemptView): MiniAppGatewayAttempt {
+/**
+ * `inAppInvoice` (R11 B5) is decided by `MiniAppStarsInvoiceService.offersInApp`, which reads
+ * the flag; a caller with no in-app payment (a top-up) passes false.
+ */
+export function attemptWire(
+  attempt: GatewayAttempt | GatewayAttemptView,
+  inAppInvoice: boolean,
+): MiniAppGatewayAttempt {
   const inChat = paysInChat(attempt.invoice.provider);
   const ready = attempt.invoice.creationState === 'CREATED';
   return {
@@ -156,6 +163,7 @@ export function attemptWire(attempt: GatewayAttempt | GatewayAttemptView): MiniA
         ? null
         : (attempt.invoice.webInvoiceUrl ?? attempt.invoice.invoiceUrl ?? null),
     paysInChat: inChat,
+    inAppInvoice,
     expiresAt: attempt.payment.expiresAt?.toISOString() ?? null,
   };
 }
