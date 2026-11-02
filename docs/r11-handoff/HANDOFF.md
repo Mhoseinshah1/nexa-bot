@@ -3,8 +3,8 @@
 Resume: read this block, the prompt NEXA-PHASE5-CUSTOMER.md (owner upload), then older blocks.
 
 - Triage: all 7 old R11 branches CONTINUE (none rebuilt).
-- Merged: #374 B4 (b1c2749) — flag `location_remaining_display` OFF.
-- Open: #373 B3 (fix head eadf5e7, needs main merged in), #375 B2 (migration 0302, fix commit in progress).
+- Merged: #374 B4 (b1c2749) — flag `location_remaining_display` OFF; #373 B3 (7e2427e) — flag `referral_friends_list` OFF, carried phase-4.md.
+- Open: #375 B2 (migration 0302, fix commit in progress).
 - Pushed, PR not opened: feat/r11-notification-centre B1 (896b2d4, migration 0303; open after #375 merges).
 - In progress: B6 feat/r11-reminder-optout (migration 0304). Not started: C2, B7 (Opus), B5 (Opus).
 - Worktrees: /home/user/wt-b1, wt-b2, wt-b3, wt-b6; test DBs nexa_p5_<item>.
