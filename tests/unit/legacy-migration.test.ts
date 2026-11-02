@@ -30,7 +30,10 @@ import {
 import {
   completedStatusOf,
   LegacyMigrationExecutor,
+  type LegacyMigrationExecutorDeps,
 } from '../../apps/api/src/modules/platform/legacy-migration/application/legacy-migration-executor';
+import { isTransientDatabaseFailure } from '../../apps/api/src/modules/platform/legacy-migration/infrastructure/transient-database-failure';
+import { DrizzleQueryError } from 'drizzle-orm';
 import {
   isTransientRunConflict,
   NxpkgMigrationAdapters,
@@ -812,7 +815,13 @@ interface ExecutorHarness {
 const PRE_BACKUP_RUN = '019600ab-cdef-7012-8345-6789abcdaaaa';
 
 function executorHarness(
-  options: { leaseOwner?: string; retainPackage?: boolean; keyIdleMs?: number } = {},
+  options: {
+    leaseOwner?: string;
+    retainPackage?: boolean;
+    keyIdleMs?: number;
+    /** Extra executor dependencies (the lease port, the transient-failure seams). */
+    deps?: Partial<LegacyMigrationExecutorDeps>;
+  } = {},
 ): ExecutorHarness {
   const repository = new InMemoryLegacyNxpkgImports();
   const workspaces = new InMemoryMigrationWorkspaces();
@@ -1045,6 +1054,7 @@ function executorHarness(
     ...(options.retainPackage === undefined ? {} : { retainPackage: options.retainPackage }),
     ...(options.keyIdleMs === undefined ? {} : { keyIdleMs: options.keyIdleMs }),
     logger: { info: log, warn: log, error: log },
+    ...options.deps,
   });
   (h as { executor: LegacyMigrationExecutor }).executor = executor;
   return h;
@@ -2542,5 +2552,202 @@ describe('no Telegram from an import (Phase 7)', () => {
     for (const event of ['CustomerImported', 'LegacyImportReviewStateChanged']) {
       expect(subscriptions.join(' '), event).not.toContain(event);
     }
+  });
+});
+
+/**
+ * The v0.9.3 field failure: the apply failed on `DrizzleQueryError` (code null) wrapping a
+ * client-side pool timeout; the lease heartbeat and release, on the same pool, failed with it.
+ */
+describe('LegacyMigrationExecutor: transient database failures', () => {
+  const SQL_AND_PARAMS = 'insert into "customers" ("telegram_id") values ($1)';
+  const poolTimeout = () =>
+    new DrizzleQueryError(
+      SQL_AND_PARAMS,
+      ['5550001234'],
+      new Error('timeout exceeded when trying to connect'),
+    );
+
+  /** An APPROVED import whose dry run is done, seeded straight in. */
+  function approved(h: ExecutorHarness): string {
+    const digest = reportDigest(dryRunReport);
+    return seed(h, {
+      status: 'APPROVED',
+      dryRunReport,
+      dryRunSha256: digest,
+      approvedDryRunSha256: digest,
+      approvedByAdminId: ADMIN,
+      approvedAt: h.now,
+    });
+  }
+
+  function failingApply(h: ExecutorHarness, failures: number, error: () => unknown = poolTimeout) {
+    let calls = 0;
+    const apply = h.runner.apply.bind(h.runner);
+    h.runner = {
+      ...h.runner,
+      apply: async (context, input) => {
+        calls += 1;
+        if (calls <= failures) throw error();
+        return apply(context, input);
+      },
+    };
+    return () => calls;
+  }
+
+  function transientHarness(
+    delays: readonly number[],
+    extra: Partial<LegacyMigrationExecutorDeps> = {},
+  ) {
+    const slept: number[] = [];
+    const h = executorHarness({
+      deps: {
+        isTransientFailure: isTransientDatabaseFailure,
+        transientRetryDelaysMs: delays,
+        releaseRetryDelaysMs: [1],
+        sleep: async (ms) => {
+          slept.push(ms);
+        },
+        ...extra,
+      },
+    });
+    return { h, slept };
+  }
+
+  const messages = (h: ExecutorHarness) => (h.logs as { message: string }[]).map((l) => l.message);
+
+  it('runs a step that met a transient failure again in place, and gives the attempt back', async () => {
+    // MUTATION: dropping the in-place retry (dispatch once) leaves the import APPLYING with
+    // the error logged; dropping the give-back leaves applyAttempts at 3.
+    const { h, slept } = transientHarness([10, 30, 60]);
+    const id = approved(h);
+    const applyCalls = failingApply(h, 2);
+    await h.executor.tick();
+    const row = h.repository.rows.get(id)!;
+    expect(row.status).toBe('COMPLETED');
+    expect(applyCalls()).toBe(3);
+    expect(slept).toEqual([10, 30]);
+    expect(row.progress.applyAttempts).toBe(1);
+    expect(messages(h)).not.toContain(
+      'a legacy migration step failed unexpectedly; it will run again',
+    );
+    const retried = (h.logs as { context: { err?: unknown }; message: string }[]).filter(
+      (l) =>
+        l.message ===
+        'a legacy migration step met a transient database failure; it runs again in place',
+    );
+    expect(retried).toHaveLength(2);
+    expect(retried[0]!.context.err).toEqual({
+      type: 'DrizzleQueryError',
+      code: null,
+      cause: [{ type: 'Error', code: null, message: 'timeout exceeded when trying to connect' }],
+    });
+  });
+
+  it("past the last pause the failure is the step's: logged with its cause, never the SQL or a value", async () => {
+    const { h, slept } = transientHarness([1, 1]);
+    const id = approved(h);
+    const applyCalls = failingApply(h, Number.POSITIVE_INFINITY);
+    await h.executor.tick();
+    const row = h.repository.rows.get(id)!;
+    expect(applyCalls()).toBe(3);
+    expect(slept).toEqual([1, 1]);
+    expect(row.status).toBe('APPLYING');
+    // The last attempt keeps its count, so the bound (LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS) holds.
+    expect(row.progress.applyAttempts).toBe(1);
+    expect(row.claimedBy).toBeNull();
+    const failed = (h.logs as { context: { err?: { cause?: unknown } }; message: string }[]).find(
+      (l) => l.message === 'a legacy migration step failed unexpectedly; it will run again',
+    );
+    expect(failed?.context.err?.cause).toEqual([
+      { type: 'Error', code: null, message: 'timeout exceeded when trying to connect' },
+    ]);
+    const logged = JSON.stringify(h.logs);
+    expect(logged).not.toContain('customers');
+    expect(logged).not.toContain('5550001234');
+  });
+
+  it('does not retry a failure that is not a connection failure', async () => {
+    const { h, slept } = transientHarness([1, 1]);
+    approved(h);
+    const applyCalls = failingApply(h, 1, () => new Error('boom'));
+    await h.executor.tick();
+    expect(applyCalls()).toBe(1);
+    expect(slept).toEqual([]);
+  });
+
+  it('retries nothing when no classifier is wired', async () => {
+    const slept: number[] = [];
+    const h = executorHarness({
+      deps: { transientRetryDelaysMs: [1], sleep: async (ms) => void slept.push(ms) },
+    });
+    approved(h);
+    const applyCalls = failingApply(h, 1);
+    await h.executor.tick();
+    expect(applyCalls()).toBe(1);
+    expect(slept).toEqual([]);
+  });
+
+  it("heartbeats and releases on the lease port, never on the step's repository", async () => {
+    // MUTATION: heartbeat or release through `deps.repository` fails this.
+    const leaseCalls: string[] = [];
+    const { h } = transientHarness([], {
+      heartbeatMs: 1,
+      leases: {
+        heartbeat: async () => {
+          leaseCalls.push('heartbeat');
+          return true;
+        },
+        release: async () => {
+          leaseCalls.push('release');
+        },
+      },
+    });
+    const id = approved(h);
+    const repositoryRelease = h.repository.release.bind(h.repository);
+    const repositoryHeartbeat = h.repository.heartbeat.bind(h.repository);
+    const viaRepository: string[] = [];
+    h.repository.release = async (input) => {
+      viaRepository.push('release');
+      return repositoryRelease(input);
+    };
+    h.repository.heartbeat = async (input) => {
+      viaRepository.push('heartbeat');
+      return repositoryHeartbeat(input);
+    };
+    h.runner = {
+      ...h.runner,
+      apply: async (_context, input) => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        throw new Error(`not transient ${String(input.mode)}`);
+      },
+    };
+    await h.executor.tick();
+    expect(h.repository.rows.get(id)!.status).toBe('APPLYING');
+    expect(leaseCalls).toContain('heartbeat');
+    expect(leaseCalls).toContain('release');
+    expect(viaRepository).toEqual([]);
+  });
+
+  it('tries a release that met a transient failure again', async () => {
+    let releases = 0;
+    const { h } = transientHarness([], {
+      releaseRetryDelaysMs: [1, 1],
+      leases: {
+        heartbeat: async () => true,
+        release: async () => {
+          releases += 1;
+          if (releases === 1) throw poolTimeout();
+        },
+      },
+    });
+    approved(h);
+    failingApply(h, 1, () => new Error('boom'));
+    await h.executor.tick();
+    expect(releases).toBe(2);
+    expect(messages(h)).toContain(
+      'a lease release met a transient database failure; it is tried again',
+    );
+    expect(messages(h)).not.toContain('a lease release failed');
   });
 });

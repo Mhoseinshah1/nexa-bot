@@ -110,13 +110,59 @@ The CLI and rehearsal path is unchanged: the `migration` role (`main.migration.t
 
 ### Configuration keys of the executor (`recovery` and `migration` roles)
 
-| Key                                                           | Default                                  | Meaning                                                                 |
-| ------------------------------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------- |
-| `LEGACY_MIGRATION_ENABLED`                                    | `true`                                   | the feature (kill switch: `false`), for the API and the executors       |
-| `LEGACY_MIGRATION_WORK_DIR`                                   | `/var/lib/nexa/legacy-migration`         | packages and private step directories                                   |
-| `LEGACY_MIGRATION_RETAIN_PACKAGE`                             | `false`                                  | keep a finished import's encrypted package and decisions file           |
-| `LEGACY_MIGRATION_KEY_IDLE_MS`                                | `86400000`                               | erase a key idle this long in VERIFIED / DRY_RUN_DONE (1 min … 30 days) |
-| `LEGACY_MIGRATION_TICK_MS`, `LEGACY_MIGRATION_HEARTBEAT_PATH` | `15000`, `/tmp/nexa-migration.heartbeat` | the loop                                                                |
+| Key                                                           | Default                                  | Meaning                                                                  |
+| ------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------ |
+| `LEGACY_MIGRATION_ENABLED`                                    | `true`                                   | the feature (kill switch: `false`), for the API and the executors        |
+| `LEGACY_MIGRATION_WORK_DIR`                                   | `/var/lib/nexa/legacy-migration`         | packages and private step directories                                    |
+| `LEGACY_MIGRATION_RETAIN_PACKAGE`                             | `false`                                  | keep a finished import's encrypted package and decisions file            |
+| `LEGACY_MIGRATION_KEY_IDLE_MS`                                | `86400000`                               | erase a key idle this long in VERIFIED / DRY_RUN_DONE (1 min … 30 days)  |
+| `LEGACY_MIGRATION_TICK_MS`, `LEGACY_MIGRATION_HEARTBEAT_PATH` | `15000`, `/tmp/nexa-migration.heartbeat` | the loop                                                                 |
+| `LEGACY_MIGRATION_DB_CONNECTION_TIMEOUT_MS`                   | `120000`                                 | how long the import may wait for a pooled connection (§ Database bounds) |
+| `LEGACY_MIGRATION_DB_STATEMENT_TIMEOUT_MS`                    | `600000`                                 | one statement of the import                                              |
+| `LEGACY_MIGRATION_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS`          | `300000`                                 | a transaction of the import open while the process computes              |
+
+### Database bounds (the import roles only)
+
+Field evidence (v0.9.3 test server, 4 vCPU / 4 GB, a 197k-customer package): the second
+`botctl cutover rehearse` passed verify and the dry run and then failed the import with
+`DrizzleQueryError` and no SQLSTATE; the lease release and the heartbeat failed the same way
+seconds later. PostgreSQL logged no timeout and no cancel — only a checkpoint that held the disk
+for 4.5 minutes (write = 269 s). The error was the client's: drizzle wraps the `pg` error, and
+only a client-side failure gives exactly that signature — `pg-pool`'s
+`timeout exceeded when trying to connect` (a checkout behind a full pool; reproduced exactly with
+a pool held full) or `Connection terminated due to connection timeout` (a new connection slower
+than the bound). The field log, which kept only the wrapper, cannot tell the two apart; both
+are the same five-second bound. The import fans out up to ten reads at once on the
+role's ten-connection pool (measured even on a 30-user package: nine checkouts queued behind a
+full pool), so under slow I/O a checkout waited past the five-second bound every process had
+(`POOL_CONNECTION_TIMEOUT_MS`, R12 F2) — a bound written for a request path.
+
+What the two roles that run the import (`migration`, and `recovery` for the restore page) now
+have — the API and every other role keep the request-path bounds unchanged:
+
+| Connection                              | Checkout wait                                       | `statement_timeout`                                | `idle_in_transaction_session_timeout`                        | `lock_timeout`                         |
+| --------------------------------------- | --------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------- |
+| the import's pool (`DATABASE_POOL_MAX`) | `LEGACY_MIGRATION_DB_CONNECTION_TIMEOUT_MS` (120 s) | `LEGACY_MIGRATION_DB_STATEMENT_TIMEOUT_MS` (600 s) | `LEGACY_MIGRATION_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS` (300 s) | `DATABASE_LOCK_TIMEOUT_MS` (unchanged) |
+| the lease pool (2 connections)          | the same, at most 60 s                              | `DATABASE_STATEMENT_TIMEOUT_MS`                    | `DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS`                    | `DATABASE_LOCK_TIMEOUT_MS`             |
+
+- The import's two `LEGACY_MIGRATION_DB_*_TIMEOUT_MS` are never applied below the installation's
+  own `DATABASE_*` values. They are still bounds: a statement or transaction that stalls for
+  good is cut off by the server, and the step fails as before.
+- **The lease pool** carries only the executor's heartbeat and lease release, so they never wait
+  behind the import they guard (`LegacyMigrationLeasePort`).
+- **A transient connection failure** — a checkout or connect that timed out, a connection
+  terminated or reset, SQLSTATE class 08, 57P01/57P02/57P03, 53300 — no longer fails the step at
+  once: it runs again in place, under the same lease, after 10 s, 30 s, 60 s, 120 s and 120 s
+  (5.5 minutes in all: more than the field stall). A retried attempt gives its count back; the
+  last one keeps it, so `LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS` still bounds a crash loop. Every
+  phase is idempotent and resumes from its bookmark — the guarantee a crash resume already relies
+  on. A statement timeout (57014), a lock timeout, a deadlock or any refusal is NOT retried.
+- **The log** now names the wrapped error: each `cause` by type and code, the message only for
+  `pg`'s own connection sentences, a network errno, or a PostgreSQL error's primary message with
+  every quoted span blanked, plus the constraint / table / column names PostgreSQL reports.
+  Never the SQL, never the parameters, never `detail` (it quotes the row).
+- On a host where the import still waits too long, raise `LEGACY_MIGRATION_DB_CONNECTION_TIMEOUT_MS`
+  first; `DATABASE_POOL_MAX` raises the import's parallelism, which a saturated disk does not want.
 
 ## 5. Owner decisions still open
 

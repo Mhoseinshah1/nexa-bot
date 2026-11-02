@@ -121,11 +121,23 @@ export type PoolErrorListener = (error: Error) => void;
 /** How long a pool checkout may wait, for a connection or for a free slot (R12 F2). */
 export const POOL_CONNECTION_TIMEOUT_MS = 5_000;
 
+export interface PoolOptions {
+  /**
+   * Overrides `POOL_CONNECTION_TIMEOUT_MS` for this pool. Only for a process that serves NO
+   * request path: the legacy-migration roles (`migration`, `recovery`), whose import is long
+   * legitimate work and must not fail because a checkout waited five seconds behind its own
+   * queries under slow I/O (`database-profile.ts`). The API keeps
+   * the five-second bound.
+   */
+  readonly connectionTimeoutMs?: number;
+}
+
 export function createDatabase(
   connectionString: string,
   poolMax: number,
   timeouts?: DatabaseTimeouts,
   onPoolError?: PoolErrorListener,
+  poolOptions: PoolOptions = {},
 ): DatabaseHandle {
   applyPgTypeParsers();
 
@@ -140,7 +152,7 @@ export function createDatabase(
      * answering. Now such a checkout rejects, the request fails and is logged, and the
      * process keeps answering everything that does not need the database.
      */
-    connectionTimeoutMillis: POOL_CONNECTION_TIMEOUT_MS,
+    connectionTimeoutMillis: poolOptions.connectionTimeoutMs ?? POOL_CONNECTION_TIMEOUT_MS,
     // Set as connection options rather than a `SET` per checkout: it costs no
     // round trip and cannot be skipped by a code path that forgot to run it.
     ...(timeouts

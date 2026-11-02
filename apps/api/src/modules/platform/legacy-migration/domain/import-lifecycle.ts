@@ -7,6 +7,7 @@ import {
   type LegacyMigrationProgress,
   type LegacyNxpkgImportStatus,
 } from '@nexa/contracts';
+import { errorDiagnostics, type ErrorDiagnostics } from './error-diagnostics.js';
 
 /**
  * Mirza `.nxpkg` importer — the lifecycle of one `legacy_nxpkg_imports` row
@@ -118,6 +119,26 @@ export const LEGACY_MIGRATION_COMMAND_FROM = LEGACY_MIGRATION_COMMAND_STATES;
  */
 export const LEGACY_MIGRATION_LEASE_MS = 5 * 60_000;
 export const LEGACY_MIGRATION_LEASE_HEARTBEAT_MS = 60_000;
+
+/**
+ * A step that failed on a TRANSIENT database failure (a connection that could not be had or was
+ * lost: `TransientFailureClassifier`) runs again IN PLACE, under the same lease, after each of
+ * these pauses in turn; past the last one the failure is the step's like any other error.
+ *
+ * Sized from the field (v0.9.3, 4 vCPU / 4 GB, 197k customers): one checkpoint held the disk
+ * saturated for 4.5 minutes (08:50:02 → 08:54:37). The pauses add up to 5.5 minutes, so a stall
+ * of that size is waited out rather than burning the apply's whole attempt bound
+ * (`LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS`) in seconds — which is what an immediate re-claim did.
+ * A retried attempt gives its count back; the last one keeps it, so the bound still holds:
+ * at most `LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS × (1 + this.length)` tries in all.
+ * The heartbeat keeps the lease meanwhile (its own connection: `LegacyMigrationLeasePort`).
+ */
+export const LEGACY_MIGRATION_TRANSIENT_RETRY_DELAYS_MS = [
+  10_000, 30_000, 60_000, 120_000, 120_000,
+] as const;
+
+/** The same for giving a lease back: short, since a held lease only delays the next claim. */
+export const LEGACY_MIGRATION_LEASE_RELEASE_RETRY_DELAYS_MS = [1_000, 5_000] as const;
 
 /**
  * Canonical JSON: object keys in UTF-16 code-unit order at every depth, no whitespace, arrays in
@@ -244,15 +265,13 @@ export const LEGACY_MIGRATION_KEY_IDLE_MS_DEFAULT = 24 * 60 * 60_000;
 export const LEGACY_MIGRATION_ORPHAN_IDLE_MS = 24 * 60 * 60_000;
 
 /**
- * What a log line may say about an error: its type and its code — never its message, which
- * for a filesystem error carries a path under `LEGACY_MIGRATION_WORK_DIR` (L3), and for an
- * importer error may carry a value from the package.
+ * What a log line may say about an error: its type and its code, and the same for every error it
+ * WRAPS (`cause`) — a message only where it is known to carry no data (a PostgreSQL primary
+ * message with its quoted spans blanked, `pg`'s own connection sentences, a network errno):
+ * `error-diagnostics.ts`. Never any other message, which for a filesystem error carries a path
+ * under `LEGACY_MIGRATION_WORK_DIR` (L3), for an importer error may carry a value from the
+ * package, and for a `DrizzleQueryError` is the SQL and its parameters.
  */
-export function errorKind(error: unknown): { readonly type: string; readonly code: string | null } {
-  if (!(error instanceof Error)) return { type: typeof error, code: null };
-  const code = (error as { code?: unknown }).code;
-  return {
-    type: error.name === 'Error' ? error.constructor.name : error.name,
-    code: typeof code === 'string' || typeof code === 'number' ? String(code) : null,
-  };
+export function errorKind(error: unknown): ErrorDiagnostics {
+  return errorDiagnostics(error);
 }
