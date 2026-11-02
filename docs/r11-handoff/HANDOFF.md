@@ -7,8 +7,8 @@ Resume: read this block, the prompt NEXA-PHASE5-CUSTOMER.md (owner upload), then
   #377 B2 follow-up (68129b3: usage history dropped on service transfer — security review finding).
 - Merged also: #376 B1 (8e409c1, 0303; Codex P2 fix c5b9f68 + CI-only label fix 19aaca3).
 - Merged also: #378 B6 (25bb8fb, 0304; Codex clean, CI 23/23).
-- Open: #379 C2 (0305): CI green on 5e88f8e; Codex 2 P2 being fixed in one commit.
-- B5 done (10dc8d8, lead-approved), syncing main before its PR.
+- Open: #379 C2 (0305): Codex 2 P2 fixed in e0567cf (replied), CI running on it.
+- Open: #381 B5 (no migration), head ba963be, @codex review posted, CI watcher running.
 - Pushed, PR waits for migration order:
   B7 feat/r11-phone-verify a2381cc (0306; opens AFTER B5 merges — payments never parallel).
 - In progress: B5 feat/r11-miniapp-stars (Opus; no migration).
