@@ -60,6 +60,20 @@ export class DrizzleUsageSnapshotRepository implements UsageSnapshotStore {
     return result.rows.length;
   }
 
+  async deleteForService(
+    scope: TenantContext,
+    serviceId: string,
+    tx: TransactionScope,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.exec(tx).execute(sql`
+      DELETE FROM service_usage_snapshots
+       WHERE tenant_id = ${tenantId} AND service_id = ${serviceId}
+      RETURNING service_id
+    `);
+    return result.rows.length;
+  }
+
   async between(
     scope: TenantContext,
     serviceId: string,
