@@ -1722,7 +1722,15 @@ export class CustomerNotificationService {
       // R11 B1: the words, rendered OUTSIDE the transaction (it reads templates) and only for a
       // delivery; null on any failure, which leaves the row delivered and out of the centre.
       const renderedText =
-        to === 'DELIVERED' ? await this.renderedTextFor(scope, row, content.values) : null;
+        to === 'DELIVERED'
+          ? await this.renderedTextFor(
+              scope,
+              row,
+              content.values,
+              content.templateKey,
+              answered !== null || content.file !== undefined,
+            )
+          : null;
       const recorded = await this.deps.uow.run(scope, async (tx) => {
         const moved = await this.deps.notifications.record(
           scope,
@@ -1788,10 +1796,17 @@ export class CustomerNotificationService {
     scope: TenantContext,
     row: CustomerNotificationRecord,
     values: TemplateValues,
+    sentKey: TemplateKey | undefined,
+    kindKeyForced: boolean,
   ): Promise<string | null> {
     if (this.deps.centreText === undefined) return null;
     try {
-      const key = CUSTOMER_NOTIFICATION_TEMPLATES[row.kind];
+      // The key the send path actually used: a text send uses `content.templateKey` when the
+      // subject names one (an AI ticket reply is `bot.ticket.ai_replied`, not the kind's own);
+      // an order-screen answer and a file caption always use the kind's key.
+      const key = kindKeyForced
+        ? CUSTOMER_NOTIFICATION_TEMPLATES[row.kind]
+        : (sentKey ?? CUSTOMER_NOTIFICATION_TEMPLATES[row.kind]);
       const rendered = await this.deps.centreText.render(scope, key, values);
       return notificationCentreText(rendered, templateDefinition(key).format);
     } catch (error: unknown) {

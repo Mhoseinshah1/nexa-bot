@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  CUSTOMER_NOTIFICATION_TEMPLATES,
   MINIAPP_API_PREFIX,
   MINIAPP_NOTIFICATION_PAGE_SIZE,
   MINIAPP_NOTIFICATION_TEXT_MAX,
@@ -236,7 +237,10 @@ describe('the mini app notification centre', () => {
       renders = 0;
     });
 
-    function lane(centre: 'real' | 'absent' | 'throwing' = 'real') {
+    function lane(
+      centre: 'real' | 'absent' | 'throwing' = 'real',
+      extra: Partial<CustomerNotificationDeps> = {},
+    ) {
       const people = new DrizzleCustomerRepository(ctx.container.database.db);
       const deps: CustomerNotificationDeps = {
         notifications: new DrizzleCustomerNotificationRepository(ctx.container.database.db),
@@ -273,10 +277,13 @@ describe('the mini app notification centre', () => {
               },
             }),
       };
-      return new CustomerNotificationService(deps);
+      return new CustomerNotificationService({ ...deps, ...extra });
     }
 
-    async function queued(telegramUserId: string): Promise<string> {
+    async function queued(
+      telegramUserId: string,
+      kind: 'SERVICE_ACTION_FAILED' | 'TICKET_REPLY' = 'SERVICE_ACTION_FAILED',
+    ): Promise<string> {
       const { customer } = await ctx.container.customers.resolveFromUpdate(
         tenantA,
         systemActor(`q-${telegramUserId}`),
@@ -295,7 +302,7 @@ describe('the mini app notification centre', () => {
             id,
             customerId: customer.id,
             botInstanceId: BOT_A1,
-            kind: 'SERVICE_ACTION_FAILED',
+            kind,
             subjectId: ctx.container.ids.uuid(),
           },
           ctx.container.clock.now(),
@@ -347,6 +354,41 @@ describe('the mini app notification centre', () => {
       const id = await queued('8005');
       await lane('absent').deliverDue(tenantA, 10);
       expect(await stored(id)).toEqual({ state: 'DELIVERED', rendered_text: null });
+    });
+
+    it("stores the words of the template actually sent: an AI ticket reply is bot.ticket.ai_replied, not the kind's own", async () => {
+      const values = { number: 1234, category: 'مالی', text: 'پاسخ دستیار پشتیبانی' };
+      const tickets = {
+        notificationFacts: async (_scope: unknown, _id: string) => ({
+          values,
+          ticketId: ctx.container.ids.uuid(),
+          templateKey: 'bot.ticket.ai_replied' as const,
+        }),
+        attachmentFacts: async () => null,
+      };
+      const ai = await queued('8006', 'TICKET_REPLY');
+      await lane('real', { tickets: tickets as never }).deliverDue(tenantA, 10);
+      const expected = await ctx.container.templateResolver.render(
+        tenantA,
+        'bot.ticket.ai_replied',
+        values as never,
+      );
+      const kindsOwn = await ctx.container.templateResolver.render(
+        tenantA,
+        CUSTOMER_NOTIFICATION_TEMPLATES.TICKET_REPLY,
+        values as never,
+      );
+      expect(expected).not.toBe(kindsOwn);
+      expect((await stored(ai))?.rendered_text).toBe(expected);
+
+      // A human reply (no key from the subject) still stores the kind's own template.
+      const human = await queued('8007', 'TICKET_REPLY');
+      const humanTickets = {
+        ...tickets,
+        notificationFacts: async () => ({ values, ticketId: ctx.container.ids.uuid() }),
+      };
+      await lane('real', { tickets: humanTickets as never }).deliverDue(tenantA, 10);
+      expect((await stored(human))?.rendered_text).toBe(kindsOwn);
     });
 
     it('ignores words offered with any outcome but DELIVERED, rather than failing the record', async () => {
