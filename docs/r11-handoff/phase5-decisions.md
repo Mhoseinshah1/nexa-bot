@@ -1,0 +1,22 @@
+# Phase 5 decisions (lead log)
+- D1 Triage (sonnet): all 7 old branches CONTINUE, none rebuilt. Order B3, B4, B2, B1, B6, C2, B7, B5.
+- D2 Prompt says post `@codex review` ourselves; nexa-round-pipeline §3 says it runs automatically, never request another. Prompt scope wins (recorded in skill via #353 too): lead posts it once per PR, max 2.
+- D3 B4 had no flag by design (OQ-R11-B4-01..03); round rule "every new customer-facing feature behind a switch OFF" wins → flag added.
+- D4 Migration numbers assigned at merge time (main ends at 0301), via renumber-migration.sh.
+- D5 #374 fix commit ran by resuming the B4 implementer while B1+B2 were active → briefly 3 implementers (a fix commit, not new work). Recorded as a deviation from "at most 2".
+- D6 #374 CI: miniapp-personal-discount web test red (PR-caused: fixture lacks new field) + Codex P2 stale remaining count → one fix commit.
+- D7 B1 renumbered to 0303 (B2 holds 0302); B1 PR opened only after #375 merges (journal-gap unit test would be red otherwise).
+- D8 B1 retention: sweeper clears rendered_text after 90 days (contract constant, not a setting); rows kept for dedupe.
+- D9 #373 unit red rickpanel-load-protection timing (13 vs 14 ms), file untouched by PR → treated as unrelated; re-checked on fix head.
+- D10 #373: merged main (#374) into B3 by the lead (features.ts both-appended conflict; kept both, sorted). Needs CI again on 0b4cf71.
+- D11 B6 reviewed: suppression is at raise (sweep) AND send (subject reader reminderHolds) — only reminder subjects; opt-in never replays passed thresholds. PR waits for 0302/0303 (migration 0304).
+- D12 C2 reading: expiry on the customer's reseller row, not on a shared tier (suspends fewest). Extend re-activates only an expiry-suspended row.
+- D13 Remote branch deletion is denied to the session (auto-mode classifier): merged branches listed for the owner.
+- D14 OWNER CHANGE (2026-11-02, mid-round): up to 3 implementers for the rest of Phase 5; the 3rd slot ONLY for Sonnet UI-only items with no migration and no payment code (owner named B1, B4). B5 still never parallel with another payment-touching PR; migrations still merge in order.
+  Application: B4 was already merged (#374). B1 is already implemented and carries migration 0303 written before the change, so the 3rd slot is used only for B1's fix/merge-sync work (no new migration, no payment code). B5, B7 and C2 (payments/money/migrations) stay in the two regular slots.
+- D15 B1 0303 SQL not byte-identical after syncing main: main's check-migration-ddl forbids plain CREATE INDEX / immediate CHECK on customer_notifications → NOT VALID+VALIDATE, indexes via online-indexes.ts CONCURRENTLY. Never ran outside test DBs.
+- D16 C2 lead finding fixed pre-PR: RESELLER_EXPIRED gets a send-time precondition (still SUSPENDED by expiry), else SUPERSEDED.
+- D17 Merge order by migration number: #376 B1 (0303) → B6 (0304) → C2 (0305) → B7 (0306); B5 (no migration) after B7 (payments not parallel).
+- D18 Security review (automated) on merged #375: after a service transfer the new owner's chart showed the previous owner's usage history. Real (minor disclosure); follow-up PR fix/r11-usage-snapshots-transfer deletes snapshots inside the transfer transaction.
+- D19 #376: B1's sync commit 6c554fc had one parent (not a real merge) → GitHub 'dirty', no CI. Lead recorded ancestry with 'git merge -s ours origin/main' (894805e, tree verified unchanged). B1's fix commit (Codex P2: store the text of the template key actually sent) runs in the 3rd slot: owner named B1 for it; no migration, no payment code.
+- D20 B7 finished (0306) while waiting on 0303–0305; B5 (no migration) starts now and merges BEFORE B7 opens its PR, so the two payment PRs are never in review/fix at the same time.
