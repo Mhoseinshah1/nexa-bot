@@ -1,5 +1,6 @@
 import {
   COMMERCE_ERROR_CODES,
+  MAX_ORDER_QUANTITY,
   PANEL_ERROR_CODES,
   PRODUCT_PAGE_DEFAULT,
   PRODUCT_PAGE_MAX,
@@ -26,6 +27,11 @@ import {
   type ResellerStanding,
 } from '../../resellers/application/reseller.service.js';
 import { catalogueScope } from '../../resellers/domain/entitlement.js';
+import type {
+  ListedPersonalDiscount,
+  PricingService,
+} from '../../pricing/application/pricing.service.js';
+import { quoteProduct } from '../../orders/application/order-pricing.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import {
   recordMutationDenial,
@@ -88,6 +94,12 @@ export interface ProductServiceDeps {
    * catalogue to build. The catalogue is a courtesy; the order paths decide for themselves.
    */
   readonly resellers: Pick<ResellerService, 'standing' | 'offeredPrices'>;
+  /**
+   * R11 A9: the personal discount a customer's list shows — `PricingService`'s own
+   * `personalListPrices`, the boundary every draft is priced at, so a listed price is the
+   * invoice's. Read only; it writes nothing.
+   */
+  readonly pricing: Pick<PricingService, 'personalListPrices'>;
   /** Membership only — see `PanelDirectory`. Never a panel projection. */
   readonly panels: PanelDirectory;
   /**
@@ -120,6 +132,17 @@ export interface ProductServiceDeps {
   readonly clock: Clock;
   readonly ids: IdGenerator;
 }
+
+/**
+ * R11 A9: a product as a customer's list shows it. `price` is what the list showed before
+ * the personal discount existed (the list price, or a reseller's offered price);
+ * `personalDiscount` is set only when the customer's personal discount wins this product's
+ * quote, and then its `price` is the total the checkout quotes — the surface shows the
+ * first struck through and the second beside it.
+ */
+export type ListedProduct = ProductRecord & {
+  readonly personalDiscount: ListedPersonalDiscount | null;
+};
 
 export interface ProductListQuery {
   readonly limit?: number;
@@ -177,7 +200,7 @@ export class ProductService {
     limit: number,
     /** The browsing customer, whose reseller standing picks the catalogue. */
     customerId?: string,
-  ): Promise<{ readonly items: readonly ProductRecord[]; readonly hasMore: boolean }> {
+  ): Promise<{ readonly items: readonly ListedProduct[]; readonly hasMore: boolean }> {
     await this.deps.guard.check(scope, actor, CATALOG_BROWSE_PERMISSION);
     const bounded = Math.min(Math.max(limit, 1), PRODUCT_PAGE_MAX);
 
@@ -220,6 +243,7 @@ export class ProductService {
       scope,
       view,
       await this.deps.repository.listCatalog(scope, bounded, view.panelIds, view.audience),
+      customerId,
     );
   }
 
@@ -285,7 +309,7 @@ export class ProductService {
     offset: number,
     /** The browsing customer, whose reseller standing picks the catalogue. */
     customerId?: string,
-  ): Promise<CustomerPage<ProductRecord>> {
+  ): Promise<CustomerPage<ListedProduct>> {
     await this.deps.guard.check(scope, actor, CATALOG_BROWSE_PERMISSION);
     const bounded = Math.min(Math.max(limit, 1), PRODUCT_PAGE_MAX);
     const view = await this.catalogueView(scope, customerId);
@@ -298,7 +322,7 @@ export class ProductService {
       view.panelIds,
       view.audience,
     );
-    return this.offered(scope, view, page);
+    return this.offered(scope, view, page, customerId);
   }
 
   /**
@@ -313,8 +337,19 @@ export class ProductService {
     scope: TenantContext,
     view: { readonly standing?: ResellerStanding },
     page: P,
-  ): Promise<P> {
-    if (view.standing === undefined) return page;
+    customerId: string | undefined,
+  ): Promise<Omit<P, 'items'> & { readonly items: readonly ListedProduct[] }> {
+    /*
+     * R11 A9: the personal discount, priced from the LIST price — the base the draft hands
+     * `PricingService.price` (`quoteProduct` over the product's own price) — never from the
+     * reseller's offered price below, which the pricing boundary applies itself.
+     */
+    const personal = await this.personalDiscounts(scope, page.items, customerId);
+    const listed = (product: ProductRecord): ListedProduct => ({
+      ...product,
+      personalDiscount: personal.get(product.id) ?? null,
+    });
+    if (view.standing === undefined) return { ...page, items: page.items.map(listed) };
     const offered = await this.deps.resellers.offeredPrices(
       scope,
       view.standing,
@@ -325,9 +360,36 @@ export class ProductService {
       ...page,
       items: page.items.flatMap((product) => {
         const price = offered.get(product.id) ?? null;
-        return price === null ? [] : [{ ...product, price }];
+        return price === null ? [] : [{ ...listed(product), price }];
       }),
     };
+  }
+
+  /** R11 A9: one `personalListPrices` read for the whole page; nothing for an anonymous one. */
+  private async personalDiscounts(
+    scope: TenantContext,
+    items: readonly ProductRecord[],
+    customerId: string | undefined,
+  ): Promise<ReadonlyMap<string, ListedPersonalDiscount>> {
+    if (customerId === undefined) return new Map();
+    const now = this.deps.clock.now();
+    return this.deps.pricing.personalListPrices(scope, {
+      purpose: 'NEW_SERVICE',
+      customerId,
+      now,
+      items: items.flatMap((product) =>
+        product.price === null
+          ? []
+          : [
+              {
+                id: product.id,
+                base: quoteProduct(product, product.price, MAX_ORDER_QUANTITY, now),
+                productId: product.id,
+                categoryId: product.categoryId,
+              },
+            ],
+      ),
+    });
   }
 
   /**
@@ -339,6 +401,29 @@ export class ProductService {
    */
   async publicCatalogue(scope: TenantContext, limit: number): Promise<CustomerPage<ProductRecord>> {
     const view = await this.catalogueView(scope, undefined);
+    if (view === null) return { items: [], hasMore: false };
+    return this.deps.repository.listCustomerVisibleProducts(
+      scope,
+      Math.max(limit, 1),
+      view.panelIds,
+      view.audience,
+    );
+  }
+
+  /**
+   * Phase 4 PR-2 (review of PR #367) — the catalogue THIS customer may buy from, for the support
+   * AI's read-only live catalogue: the browse's own view (`catalogueView` with the customer, so
+   * an ACTIVE reseller's grants narrow it to the granted panels, products and categories, and add
+   * the reseller-only plans those grants show) and the same SQL predicate as `browseCategory`.
+   * No guard: no customer is browsing; the support context builder is the caller and charges
+   * nothing (it acts as SYSTEM_JOB over a conversation it resolved). Null customer: the public view.
+   */
+  async customerCatalogue(
+    scope: TenantContext,
+    customerId: string | null,
+    limit: number,
+  ): Promise<CustomerPage<ProductRecord>> {
+    const view = await this.catalogueView(scope, customerId ?? undefined);
     if (view === null) return { items: [], hasMore: false };
     return this.deps.repository.listCustomerVisibleProducts(
       scope,

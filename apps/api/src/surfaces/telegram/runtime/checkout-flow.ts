@@ -27,13 +27,16 @@ import {
   CANCEL_ORDER_ASK_CALLBACK_PREFIX,
   GATEWAY_ROUTE_PAY_CALLBACK_PREFIX,
   MANUAL_PAY_CALLBACK_PREFIX,
+  INPUT_BACK_CALLBACK_PREFIX,
   PAY_METHODS_CLOSE_CALLBACK_PREFIX,
   WALLET_PAY_CALLBACK_PREFIX,
 } from './callbacks.js';
 import { mainMenuButton } from './keyboards.js';
+import { endedOrderScreen, liveOrderInReview, orderEndedRefusal } from './order-end-flow.js';
 import { refusal } from './refusals.js';
 import type { PendingReply } from './replies.js';
 import { gatewayAttemptScreen, payMethodsButton, topupButton } from './payment-screens.js';
+import { unreceiptedTransfer } from './card-receipt-flow.js';
 import { repricedSummary } from './purchase-flow.js';
 import type { BotRuntime } from '../bot-runtime.js';
 
@@ -81,6 +84,16 @@ function gatewayRefusal(error: unknown): PendingReply {
     return gatewayUnavailable();
   }
   return refusal(error);
+}
+
+/**
+ * R12 F3 item 7: «🔙 بازگشت به پیش‌فاکتور» under the wallet shortfall — after the customer tops
+ * up (the top-up is its own flow), the way back to the order they were paying is one tap, not a
+ * hunt through the chat. The same `ib:` route as the typed-input prompts: it closes any open
+ * text window and draws the order's current screen; it pays nothing.
+ */
+export function preinvoiceBackButton(orderId: string): CustomerButton {
+  return { ...inlineLabel('order.input_back'), data: `${INPUT_BACK_CALLBACK_PREFIX}${orderId}` };
 }
 
 /**
@@ -167,7 +180,7 @@ export async function walletPayment(
       return {
         key: 'bot.wallet.insufficient',
         values: { shortfall: paid.shortfall },
-        buttons: [topupButton(), mainMenuButton()],
+        buttons: [topupButton(), preinvoiceBackButton(orderId), mainMenuButton()],
         orderId,
         // R2: its own message, so the pre-invoice stays payable after a top-up.
         wizard: WALLET_SHORT,
@@ -204,13 +217,14 @@ export async function walletPayment(
         return {
           key: 'bot.wallet.insufficient',
           values: { shortfall },
-          buttons: [topupButton(), mainMenuButton()],
+          buttons: [topupButton(), preinvoiceBackButton(orderId), mainMenuButton()],
           orderId,
           wizard: WALLET_SHORT,
         };
       }
     }
-    return refusal(error);
+    // R11 A11: an order past its deadline, swept or cancelled — answered ON the tapped screen.
+    return (await orderEndedRefusal(rt, scope, actor, customer, orderId, error)) ?? refusal(error);
   }
 }
 
@@ -290,6 +304,12 @@ export async function paymentMethods(
       ...inlineLabel('list.close'),
       data: `${PAY_METHODS_CLOSE_CALLBACK_PREFIX}${order.id}`,
     };
+    // R11 A11: an order that ended (expired, cancelled) shows its ended screen in place.
+    const ended = endedOrderScreen(rt, order);
+    if (ended !== null) return ended;
+    // R12 F3 item 9: past its deadline only because a payment is still live — not payable again.
+    const review = await liveOrderInReview(rt, scope, actor, customer, order);
+    if (review !== null) return review;
     if (order.state !== 'DRAFT' && order.state !== 'AWAITING_PAYMENT') {
       return {
         key: 'bot.order.not_awaiting_payment',
@@ -397,6 +417,9 @@ export async function gatewayPayment(
     }
     return await gatewayAttemptReply(rt, paid.attempt, orderId, scope);
   } catch (error) {
+    // R11 A11: an order that ended is answered ON the tapped screen, not by a new message.
+    const ended = await orderEndedRefusal(rt, scope, actor, customer, orderId, error);
+    if (ended !== null) return ended;
     const refused = gatewayRefusal(error);
     return refused.key === 'bot.payment.gateway_unavailable'
       ? { ...refused, buttons: [payMethodsButton(orderId), mainMenuButton()] }
@@ -412,11 +435,29 @@ export async function gatewayPayment(
 export async function gatewayCheck(
   rt: BotRuntime,
   scope: TenantContext,
+  actor: ActorContext,
   paymentId: string,
   customer: CustomerRecord,
 ): Promise<PendingReply> {
   const view = await rt.deps.gateway.attemptFor(scope, customer.id, paymentId);
   if (view === null) {
+    /*
+     * R12 F3 (lead review): «🧾 مشاهدهٔ فاکتور باز» also names a card-to-card transfer (the
+     * pending-payment reminder's button). Its own invoice while no receipt is filed; once one
+     * is, that it was received and is being reviewed. Never a new payment.
+     */
+    const transfer = await unreceiptedTransfer(rt, scope, actor, customer, paymentId);
+    if (transfer !== null) return transfer;
+    if (
+      (await rt.deps.payments.pendingTransferForCustomer(scope, customer.id, paymentId)) !== null
+    ) {
+      return {
+        key: 'bot.payment.receipt_received',
+        values: {},
+        buttons: [mainMenuButton()],
+        orderId: null,
+      };
+    }
     return {
       key: 'bot.payment.gateway_closed',
       values: {},

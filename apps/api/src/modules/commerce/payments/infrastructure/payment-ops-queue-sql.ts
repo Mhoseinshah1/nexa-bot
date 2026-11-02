@@ -50,6 +50,8 @@ export function paymentOpsQueueCondition(queue: PaymentOpsQueue): SQL {
            AND r.payment_id = ${payments.id})`;
     case 'NEEDS_ACTION':
       return needsActionCondition();
+    case 'RECEIPT_REVIEW':
+      return receiptReviewCondition();
   }
 }
 
@@ -190,15 +192,25 @@ export function completedRefundCondition(): SQL {
  */
 function needsActionCondition(): SQL {
   return sql`(
-    (${payments.state} = 'PENDING'
+    ${receiptReviewCondition()}
+    OR ${payments.state} = 'UNKNOWN'
+    OR (${payments.state} = 'CONFIRMED' AND ${openRefundCondition()})
+  )`;
+}
+
+/**
+ * R12 F3 item 8: a card-to-card transfer waiting for its receipt to be decided — PENDING, a
+ * receipt filed, not in a provider review, not late or partial. The receipt arm of
+ * `NEEDS_ACTION`, written ONCE: that queue, the `RECEIPT_REVIEW` queue and the Web Admin's nav
+ * counter are all this predicate, so none of them can disagree about what is waiting.
+ */
+export function receiptReviewCondition(): SQL {
+  return sql`(${payments.state} = 'PENDING'
       AND ${payments.method} = 'MANUAL_TRANSFER'
       AND ${receiptFiledCondition()}
       AND ${payments.providerReviewUntil} IS NULL
       AND NOT ${paymentOpsQueueCondition('LATE_COMPLETION')}
-      AND NOT ${paymentOpsQueueCondition('PARTIAL')})
-    OR ${payments.state} = 'UNKNOWN'
-    OR (${payments.state} = 'CONFIRMED' AND ${openRefundCondition()})
-  )`;
+      AND NOT ${paymentOpsQueueCondition('PARTIAL')})`;
 }
 
 /** The payment's own `gateway_invoices` row satisfies `condition` (aliased `gi`). */

@@ -333,6 +333,9 @@ export function panel(overrides: Record<string, unknown> = {}): Record<string, u
     drain: { draining: false, since: null, reason: null },
     // In no balancing group: the explicit route (Phase C3).
     balancingGroup: null,
+    filesOnlyDelivery: false,
+    qrKind: 'SUB_LINK',
+    singboxIntervalMinutes: 360,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,

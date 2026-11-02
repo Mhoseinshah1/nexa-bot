@@ -46,19 +46,21 @@ export const BACKOFF_SCHEDULE: InquirySchedule = {
  * per tenant across replicas, and FIX-06 reserves a quarter of those for hinted rows
  * (`hintReservePerMinute`), so scheduled inquiries take at most 30 a minute.
  *
- * Every 10 s for the first two minutes (12 asks), 30 s to five minutes (6), 60 s to fifteen
- * (10), 120 s to thirty (7.5), then the old 300 s cap: about 44 asks over a 70-minute attempt,
- * about 6 a minute (7 at the jitter's edge) for one fresh invoice — so five invoices created
- * in the same minute are asked at about the full rate inside the scheduled share, and the
- * rest wait a budget deferral
- * (5 s), never a burst. The worst case without a webhook falls from 20/40/80/160/300 s to
- * 10/30/60/120/300 s (plus a 3 s pass and the jitter).
+ * Round 11 A8 (TonPays answered 429): the per-invoice interval GROWS with the invoice's age to a
+ * cap, and its fast phase is half as dense as FIX-06's 10 s. First at 15 s, every 20 s for the
+ * first two minutes (6 asks), 30 s to five minutes (6), 60 s to fifteen (10), 120 s to thirty
+ * (7.5), then the 300 s cap: about 38 asks over a 70-minute attempt and at most 3 a minute (4 at
+ * the jitter's edge) for one fresh invoice, so ten invoices opened together fit the scheduled
+ * share — and every one of those asks still takes a token from the key's pace
+ * (`TonPaysRateLimiter`). A webhook or the customer's «بررسی پرداخت» brings one forward (no
+ * sooner than 5 s after the last); the worst case without either is 20 s in the first two
+ * minutes (plus a 3 s pass and the jitter).
  */
 export const TONPAYS_INQUIRY_SCHEDULE: InquirySchedule = {
   kind: 'BANDS',
-  firstDelayMs: 10_000,
+  firstDelayMs: 15_000,
   bands: [
-    { untilMs: 120_000, intervalMs: 10_000 },
+    { untilMs: 120_000, intervalMs: 20_000 },
     { untilMs: 300_000, intervalMs: 30_000 },
     { untilMs: 900_000, intervalMs: 60_000 },
     { untilMs: 1_800_000, intervalMs: 120_000 },

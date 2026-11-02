@@ -16,6 +16,7 @@ import {
   TONPAYS_TELEGRAM_STATUS_LESS,
   TONPAYS_TELEGRAM_STATUS_MORE,
   type GatewayProviderNeedKind,
+  type PaymentGatewayProvider,
   type TemplateKey,
   type TonPaysTelegramErrorCode,
   type TonPaysTelegramReceiptMimeType,
@@ -28,6 +29,33 @@ import type {
   GatewayReceiptOutcome,
   GatewayReceiptSubmissionRecord,
 } from '../application/gateway-invoice-ports.js';
+import {
+  CANCELLED_BY_CUSTOMER_STATUS,
+  CANCELLED_BY_NEXA_STATUS,
+  failureStatusOf,
+} from './payment-failure-outcome.js';
+import { classifyTonPaysError } from './tonpays.js';
+
+/**
+ * Round 11 A8: whether a create that ended `CREATE_FAILED` with `code` was the provider's own
+ * readable rate-limit refusal on its last retry — no invoice was made, and the customer is told
+ * the gateway is busy and may try again (`bot.payment.gateway_busy`), not that it is unavailable.
+ * TonPays routes only: every other route keeps its own sentences.
+ */
+export function createEndedRateLimited(
+  provider: PaymentGatewayProvider,
+  code: string | null,
+): boolean {
+  if (code === null) return false;
+  switch (provider) {
+    case 'TONPAYS':
+      return classifyTonPaysError(code) === 'RATE_LIMITED';
+    case 'TONPAYS_TELEGRAM':
+      return classifyTonPaysTelegramError(code) === 'RATE_LIMITED';
+    default:
+      return false;
+  }
+}
 
 /**
  * The TonPays Telegram rules that decide anything, as pure functions
@@ -526,21 +554,88 @@ function receiptBusy(
 /**
  * Whether «❌ لغو فاکتور» may be drawn and accepted NOW. Only a `pending` invoice can be
  * cancelled (the provider says so, and Nexa does not ask for what it knows will be refused):
- * created, the provider's last word `pending` or none, no review started, no cancel in
- * flight, no receipt on its way — a receipt moves the invoice to `processing`, where a cancel
- * is refused. The customer window itself is checked by the caller under the payment's lock.
+ * created, the provider's last word `pending` or none, not reported paid, no review started, no
+ * cancel in flight or already applied, no receipt on its way — a receipt moves the invoice to
+ * `processing`, where a cancel is refused. The customer window itself is checked by the caller
+ * under the payment's lock.
+ *
+ * R11 A8 (owner): a cancel whose answer was LOST (`UNKNOWN`: a timeout, a 5xx, a bare 429) or
+ * that the provider rate-limited does NOT count as cancelled. While the invoice is still open as
+ * far as Nexa knows, the customer may ask again — a NEW request row, never Nexa repeating the
+ * lost one by itself (`cancelRetryNotBefore` spaces it; the in-flight index keeps one at a time;
+ * the provider refuses a second cancel of a cancelled invoice, and only the inquiry decides).
  */
 export function cancelAvailable(
-  invoice: Pick<GatewayInvoiceRecord, 'providerStatus' | 'creationState' | 'providerInvoiceId'>,
+  invoice: Pick<GatewayInvoiceRecord, 'providerStatus' | 'creationState' | 'providerInvoiceId'> &
+    Partial<Pick<GatewayInvoiceRecord, 'providerPaid'>>,
   latestCancel: Pick<GatewayProviderRequestRecord, 'state'> | null,
   submissions: readonly Pick<GatewayReceiptSubmissionRecord, 'state' | 'inquiryResolvedAt'>[],
 ): boolean {
   if (invoice.creationState !== 'CREATED' || invoice.providerInvoiceId === null) return false;
   if (invoice.providerStatus !== null && invoice.providerStatus !== 'pending') return false;
+  // Paid is never cancelled, whatever the status field says.
+  if (invoice.providerPaid === true) return false;
   if (latestCancel !== null && inFlight(latestCancel.state)) return false;
-  // A cancel whose answer was lost is never repeated by a tap: an inquiry says what became of it.
-  if (latestCancel !== null && latestCancel.state === 'UNKNOWN') return false;
+  // The provider cancelled it: there is nothing left to cancel.
+  if (latestCancel !== null && latestCancel.state === 'APPLIED') return false;
   return !receiptBusy(submissions) && !submissions.some((one) => one.state === 'ACCEPTED');
+}
+
+/**
+ * R11 A8: the spacing between a cancel that did not go through as asked (its answer lost, or
+ * the provider's own rate limit) and the customer's next one. Not a limiter — the TonPays client
+ * paces every call per credential — only the reason a retry tapped at once is not sent into the
+ * same trouble a second later.
+ */
+export const CANCEL_RETRY_BACKOFF_SECONDS = 30;
+
+/**
+ * R11 A8: when a customer's NEW cancel request may first be sent, written as the row's
+ * `claimed_until` so the worker leaves it until then; null when it may go at once. Only after a
+ * lost (`UNKNOWN`) or rate-limited previous cancel, counted from when that one was decided.
+ */
+export function cancelRetryNotBefore(
+  previous: Pick<GatewayProviderRequestRecord, 'state' | 'decidedAt' | 'requestedAt'> | null,
+  now: Date,
+): Date | null {
+  if (previous === null) return null;
+  if (previous.state !== 'UNKNOWN' && previous.state !== 'RATE_LIMITED') return null;
+  const from = (previous.decidedAt ?? previous.requestedAt).getTime();
+  const at = from + CANCEL_RETRY_BACKOFF_SECONDS * 1000;
+  return at > now.getTime() ? new Date(at) : null;
+}
+
+/**
+ * R11 A8: what a tap on a cancel button that may no longer be offered says, when it has
+ * something better to say than redrawing the screen:
+ *
+ * - `PAID`: the payment is CONFIRMED, or the provider reported the invoice paid — refused,
+ *   never cancelled, and nothing moves (`bot.payment.gateway_not_pending`).
+ * - `ALREADY_CANCELLED`: Nexa KNOWS the invoice was cancelled — a cancel the provider applied,
+ *   an inquiry that read `canceled`, or the payment failed as cancelled («فاکتور قبلاً لغو شده»).
+ *   A cancel whose answer was lost is not knowledge: it is not cancelled.
+ * - null: anything else; the caller redraws the attempt as it stands.
+ */
+export function cancelTapRefusal(
+  payment: { readonly state: string; readonly resolutionNote: string | null },
+  invoice: Pick<GatewayInvoiceRecord, 'providerStatus'> &
+    Partial<Pick<GatewayInvoiceRecord, 'providerPaid'>>,
+  latestCancel: Pick<GatewayProviderRequestRecord, 'state'> | null,
+): 'PAID' | 'ALREADY_CANCELLED' | null {
+  if (payment.state === 'CONFIRMED' || invoice.providerPaid === true) return 'PAID';
+  if (latestCancel !== null && latestCancel.state === 'APPLIED') return 'ALREADY_CANCELLED';
+  if (invoice.providerStatus === 'canceled') return 'ALREADY_CANCELLED';
+  if (payment.state === 'FAILED') {
+    const status = failureStatusOf(payment.resolutionNote);
+    if (
+      status === CANCELLED_BY_CUSTOMER_STATUS ||
+      status === CANCELLED_BY_NEXA_STATUS ||
+      status === 'canceled'
+    ) {
+      return 'ALREADY_CANCELLED';
+    }
+  }
+  return null;
 }
 
 /**

@@ -238,8 +238,9 @@ describe('X7 — linkable identifiers', () => {
     for (const selector of ['.lk', '.tbl td a:not(.btn)']) {
       expect(KIT_CSS).toContain(selector);
     }
+    // R11 (S6): the demo marks a link with a faint DASHED rule, not a text underline.
     expect(KIT_CSS).toMatch(
-      /\.lk,\n\.tbl td a:not\(\.btn\),[^{]*\{[^}]*text-decoration: underline/,
+      /\.lk,\n\.tbl td a:not\(\.btn\),[^{]*\{[^}]*text-decoration: none;[^}]*border-bottom: 1px dashed/,
     );
   });
 
@@ -445,8 +446,8 @@ describe('timestamps — the demo’s numeric shape everywhere, decided in one p
   it('formats every date-time and date as numbers, never a month name', () => {
     const at = '2026-10-06T16:00:00.000Z';
     expect(formatTimestamp(at)).toBe(formatTimestampNumeric(at));
-    expect(formatTimestamp(at)).toMatch(/^⁦[۰-۹]{4}\/[۰-۹]{2}\/[۰-۹]{2} [۰-۹]{2}:[۰-۹]{2}⁩$/);
-    expect(formatDate(at)).toMatch(/^⁦[۰-۹]{4}\/[۰-۹]{2}\/[۰-۹]{2}⁩$/);
+    expect(formatTimestamp(at)).toMatch(/^\u2066\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}\u2069$/);
+    expect(formatDate(at)).toMatch(/^\u2066\d{4}\/\d{2}\/\d{2}\u2069$/);
     expect(formatTimestamp('not a date')).toBe('not a date');
   });
 });

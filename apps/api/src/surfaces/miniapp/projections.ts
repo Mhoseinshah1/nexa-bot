@@ -5,6 +5,7 @@ import {
   toWire,
   type MiniAppCardInstruction,
   type MiniAppGatewayAttempt,
+  type MiniAppListedPersonalDiscount,
   type MiniAppOrder,
   type MiniAppProduct,
   type MiniAppServiceSummary,
@@ -13,7 +14,8 @@ import {
   type ProductDisplay,
 } from '@nexa/contracts';
 import type { OrderRecord } from '../../modules/commerce/orders/application/ports.js';
-import type { ProductRecord } from '../../modules/commerce/catalog/application/ports.js';
+import type { ListedProduct } from '../../modules/commerce/catalog/application/product.service.js';
+import type { ListedPersonalDiscount } from '../../modules/commerce/pricing/application/pricing.service.js';
 import type { ServiceRecord } from '../../modules/commerce/provisioning/application/ports.js';
 import type {
   GatewayAttempt,
@@ -36,13 +38,24 @@ export function wire(value: Money): MoneyWire {
   return toWire(value);
 }
 
-export function productWire(product: ProductRecord): MiniAppProduct | null {
+/**
+ * R11 A9: a listed line's personal discount on the wire — the percent and the total the
+ * line's quote charges (`PricingService.personalListPrices`), or null when it does not win.
+ */
+export function listedPersonalDiscountWire(
+  discount: ListedPersonalDiscount | null,
+): MiniAppListedPersonalDiscount | null {
+  return discount === null ? null : { percent: discount.percent, price: wire(discount.price) };
+}
+
+export function productWire(product: ListedProduct): MiniAppProduct | null {
   // The SQL returns only priced products; one without a price is not something a customer can consent to.
   if (product.price === null) return null;
   return {
     id: product.id,
     title: product.title,
     price: wire(product.price),
+    personalDiscount: listedPersonalDiscountWire(product.personalDiscount),
     trafficBytes: product.specification.trafficBytes.toString(),
     durationDays: product.specification.durationDays,
     deviceLimit: product.specification.deviceLimit,

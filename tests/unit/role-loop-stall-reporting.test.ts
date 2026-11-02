@@ -341,9 +341,11 @@ describe('a provider call in flight within its deadline is not a stalled provisi
 
   it('the container gives the loop the panel HTTP timeout as its in-flight allowance', () => {
     const container = readFileSync(join(__dirname, '../../apps/api/src/container.ts'), 'utf8');
+    // One named allowance since R12 F2 (the monitor's liveness slack reads it too).
     expect(container).toMatch(
-      /inFlightAllowanceMs:\s*config\.PANEL_HTTP_TIMEOUT_MS \* \(1 \+ PANEL_HTTP_RETRIES\) \* MAX_REQUESTS_PER_PROBE/,
+      /const panelExchangeAllowanceMs =\s*config\.PANEL_HTTP_TIMEOUT_MS \* \(1 \+ PANEL_HTTP_RETRIES\) \* MAX_REQUESTS_PER_PROBE/,
     );
+    expect(container).toMatch(/inFlightAllowanceMs: panelExchangeAllowanceMs,/);
   });
 
   it('reports nothing while the call is inside its deadline, and a stall once it is past it', async () => {

@@ -116,6 +116,12 @@ botctl — operate a Nexa installation
                              the MirzaBot cutover's read-only checklist: release, readiness,
                              recovery, provisioner/monitor off, migrations, a fresh backup,
                              disk, the Telegram webhook. PASS/FAIL per check; changes nothing
+  botctl cutover rehearse PACKAGE (--key-file FILE | --passphrase) --owner-telegram-id N
+                           [--database NAME] [--keep-database] [--panel-inventory FILE]
+                           [--json] [--list-differences]
+                             the whole runbook against a NEW, disposable database: import,
+                             balance/service/reseller-credit reconciliation, go/no-go. Never
+                             the live database, the token, the webhook or a customer message
 
   botctl telegram status     the local registration AND Telegram's own webhook state
   botctl telegram register   reconcile the webhook with Telegram (keeps queued updates)
@@ -145,6 +151,10 @@ ciphertext under that key.
 `telegram status` prints one word (none, incomplete, ready, unavailable) and,
 beside it, both halves: what this installation recorded and what Telegram itself
 reports (URL, pending updates, last delivery error). `ready` only when they agree.
+It also lists every bot on the installation by the webhook secret it is registered
+with: its own (per-bot) secret, or still the installation-wide one — a word, never a
+secret or a fingerprint. A bot on the installation-wide secret still receives; the
+next `telegram register` (or `botctl update`) moves the installation's bot to its own.
 
 `telegram register` never asks for a token and never replaces a stored one. It
 resumes from the encrypted token the install already holds, reads Telegram's
@@ -903,6 +913,8 @@ cmd_status() {
 
   status_secrets
   status_capabilities
+  # R12 F2: the PostgreSQL / Redis sizing this installation runs with.
+  nexa_db_tuning_report
 
   printf '\nreadiness: '
   if nexa_wait_ready 5; then
@@ -1411,6 +1423,11 @@ cmd_update() {
   fi
   nexa_ok "migrations applied"
 
+  # R12 F2: size PostgreSQL for this host before the start that applies it. Memory
+  # settings only — no data change — and a release whose compose file does not read
+  # these keys ignores them, so the back-out below and a later rollback are unaffected.
+  nexa_record_pg_tuning
+
   # 6. START the target.
   nexa_step "starting ${target}"
   if ! nexa_bring_up_with_edge "$target_image" "$target_edge"; then
@@ -1768,6 +1785,10 @@ cmd_restart() {
   local edge
   edge="$(nexa_edge_config_fingerprint)" ||
     nexa_die "cannot fingerprint the edge configuration on this host, so a restart cannot guarantee the edge serves it."
+  # R12 F2: PostgreSQL sized for this host here too. The FIRST update into a release that
+  # sizes it runs the outgoing release's botctl, which does not, so this restart — run by
+  # the new botctl — is what applies it on that installation.
+  nexa_record_pg_tuning
   nexa_bring_up_with_edge "" "$edge" ||
     nexa_die "the stack restarted but the edge did not adopt the installed configuration (${edge#sha256:}). Run 'botctl logs caddy'."
   nexa_wait_ready || nexa_die "the stack restarted but the API is not ready."
@@ -2645,12 +2666,173 @@ recovery
   return 1
 }
 
+# ---------------------------------------------------------------------------
+# cutover rehearse — the whole runbook against a DISPOSABLE database
+# ---------------------------------------------------------------------------
+#
+# `docs/cutover/12-rehearsal.md`. Runs `dist/cutover-rehearse.cli.js` in a one-off api
+# container: it creates a NEW database on this installation's PostgreSQL server, migrates it,
+# imports the package into it through the restore page's own service and executor (read-only
+# panel stand-ins inside that container, never a real panel), reconciles balances, services
+# and reseller credit against the package, prints the report and a go/no-go, and drops the
+# database it created (`--keep-database` keeps it).
+#
+# What it never does is decided in the application, not here, and tested there: the live
+# database is refused by name, a database that exists is refused, every messaging channel of
+# that process is forced off and every outbound fetch is refused. botctl adds the host half:
+# the package and the inventory are copied into a private directory the container's user can
+# read (mounted read-only), the key travels in the environment of that one call (never on a
+# command line), and nothing on the installation is touched — no lock, no `up`, `stop` or
+# `restart`, no `exec` into a running container, no Telegram command, no edit of nexa.env.
+#
+# Exit: the CLI's own — 0 GO, 2 GO_WITH_HELD, 3 NO_GO, 64 usage, 65 refused target, 1 other.
+
+REHEARSE_USAGE="usage: botctl cutover rehearse PACKAGE.nxpkg (--key-file FILE | --passphrase) --owner-telegram-id N [--database NAME] [--keep-database] [--panel-inventory FILE] [--json] [--list-differences]"
+
+cmd_cutover_rehearse() {
+  require_installed
+  local package="" key_file="" passphrase_prompt=0 owner_id="" database="" keep=0
+  local inventory="" json=0 list=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --key-file)
+        [ $# -ge 2 ] || nexa_die "--key-file needs the key file's path."
+        key_file="$2"
+        shift 2
+        ;;
+      --passphrase)
+        passphrase_prompt=1
+        shift
+        ;;
+      --owner-telegram-id)
+        [ $# -ge 2 ] || nexa_die "--owner-telegram-id needs the owner's numeric Telegram id."
+        owner_id="$2"
+        shift 2
+        ;;
+      --database)
+        [ $# -ge 2 ] || nexa_die "--database needs a name."
+        database="$2"
+        shift 2
+        ;;
+      --keep-database)
+        keep=1
+        shift
+        ;;
+      --panel-inventory)
+        [ $# -ge 2 ] || nexa_die "--panel-inventory needs a file."
+        inventory="$2"
+        shift 2
+        ;;
+      --json)
+        json=1
+        shift
+        ;;
+      --list-differences)
+        list=1
+        shift
+        ;;
+      -*)
+        # Never echoed: whatever was typed here may have been the key.
+        nexa_die "$REHEARSE_USAGE"
+        ;;
+      *)
+        [ -z "$package" ] || nexa_die "$REHEARSE_USAGE"
+        package="$1"
+        shift
+        ;;
+    esac
+  done
+  [ -n "$package" ] || nexa_die "$REHEARSE_USAGE"
+  if [ ! -f "$package" ] || [ ! -r "$package" ]; then nexa_die "cannot read the package ${package}."; fi
+  if [ -n "$key_file" ] && [ "$passphrase_prompt" -eq 1 ]; then
+    nexa_die "give the key file OR --passphrase, not both."
+  fi
+  if [ -z "$key_file" ] && [ "$passphrase_prompt" -eq 0 ]; then
+    nexa_die "the package needs its key: --key-file FILE, or --passphrase to type it."
+  fi
+  if [ -n "$key_file" ]; then
+    if [ ! -f "$key_file" ] || [ ! -r "$key_file" ]; then nexa_die "cannot read the key file."; fi
+  fi
+  case "$owner_id" in
+    '' | 0* | *[!0-9]*) nexa_die "--owner-telegram-id must be the owner's numeric Telegram id." ;;
+  esac
+  if [ -n "$database" ]; then
+    [[ "$database" =~ ^[a-z_][a-z0-9_]{0,62}$ ]] ||
+      nexa_die "--database must be a plain lowercase database name."
+  fi
+  if [ -n "$inventory" ]; then
+    if [ ! -f "$inventory" ] || [ ! -r "$inventory" ]; then nexa_die "cannot read the panel inventory."; fi
+  fi
+
+  # The secret: the key file's TEXT, or the passphrase typed on the terminal. It reaches the
+  # container through the environment of the one compose call below and nowhere else.
+  local secret_env secret
+  if [ -n "$key_file" ]; then
+    secret_env=NEXA_REHEARSAL_PACKAGE_KEY
+    secret="$(cat -- "$key_file")" || nexa_die "cannot read the key file."
+  else
+    secret_env=NEXA_REHEARSAL_PACKAGE_PASSPHRASE
+    printf 'Package passphrase: ' >&2
+    IFS= read -rs secret </dev/tty || nexa_die "could not read the passphrase."
+    printf '\n' >&2
+  fi
+  [ -n "$secret" ] || nexa_die "the package key is empty."
+
+  # The package (and the inventory) in a private directory the image's user (uid 1000) can
+  # read, mounted read-only: a root-owned 0600 file in the operator's directory is not.
+  local scratch
+  scratch="$(mktemp -d "${TMPDIR:-/tmp}/nexa-cutover-rehearsal.XXXXXX")" ||
+    nexa_die "could not make a private directory for the package."
+  # shellcheck disable=SC2064 # the path is fixed now, on purpose.
+  trap "rm -rf -- '${scratch}'" EXIT
+  chmod 0700 "$scratch"
+  cp -- "$package" "${scratch}/rehearsal.nxpkg" || nexa_die "could not copy the package."
+  chmod 0400 "${scratch}/rehearsal.nxpkg"
+  local args=(--package /cutover/rehearsal.nxpkg --owner-telegram-id "$owner_id")
+  if [ -n "$key_file" ]; then
+    args+=(--package-key-env "$secret_env")
+  else
+    args+=(--package-passphrase-env "$secret_env")
+  fi
+  if [ -n "$inventory" ]; then
+    cp -- "$inventory" "${scratch}/inventory.json" || nexa_die "could not copy the panel inventory."
+    chmod 0400 "${scratch}/inventory.json"
+    args+=(--panel-inventory /cutover/inventory.json)
+  fi
+  [ -z "$database" ] || args+=(--database "$database")
+  [ "$keep" -eq 0 ] || args+=(--keep-database)
+  [ "$json" -eq 0 ] || args+=(--json)
+  [ "$list" -eq 0 ] || args+=(--list-differences)
+  if [ "$(id -u)" -eq 0 ]; then
+    chown -R 1000:1000 "$scratch" || nexa_die "could not hand the package to the image's user."
+  fi
+
+  printf '==> cutover rehearsal: a NEW database on this server, never the live one; no token, no webhook, no customer message\n' >&2
+  local rc=0
+  # `export` inside the subshell only: the secret is in the environment of this one compose
+  # call (`-e NAME` copies it in by name) and of nothing botctl runs before or after.
+  (
+    export "${secret_env}=${secret}"
+    nexa_compose run --rm --no-deps -T -e "$secret_env" -v "${scratch}:/cutover:ro" \
+      --entrypoint node api dist/cutover-rehearse.cli.js "${args[@]}" </dev/null
+  ) || rc=$?
+  secret=""
+  case "$rc" in
+    0) printf 'rehearsal: GO\n' >&2 ;;
+    2) printf 'rehearsal: GO_WITH_HELD — sign each held class off by name\n' >&2 ;;
+    3) printf 'rehearsal: NO_GO — read the report above; nothing on the installation changed\n' >&2 ;;
+    *) printf 'rehearsal: did not complete (exit %s); nothing on the installation changed\n' "$rc" >&2 ;;
+  esac
+  return "$rc"
+}
+
 cmd_cutover() {
   local action="${1:-}"
   shift || true
   case "$action" in
     preflight) cmd_cutover_preflight "$@" ;;
-    *) nexa_die "usage: botctl cutover preflight [options]" ;;
+    rehearse) cmd_cutover_rehearse "$@" ;;
+    *) nexa_die "usage: botctl cutover preflight [options] | botctl cutover rehearse PACKAGE [options]" ;;
   esac
 }
 

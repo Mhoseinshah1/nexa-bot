@@ -39,11 +39,15 @@ import {
   Badge,
   Banner,
   Card,
+  CountedPager,
+  CursorPager,
+  LIST_PAGE_SIZE,
   Ltr,
   Num,
   PageHead,
   Pills,
   StateSwitch,
+  serverTotal,
   useUnsavedChanges,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
@@ -262,6 +266,33 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
   const firstVisible = ordered.find((template) => visible.has(template.key))?.key ?? null;
   const selected = chosen !== null && visible.has(chosen) ? chosen : firstVisible;
 
+  /*
+   * R11 (S8): the list is paged ten at a time, as the demo draws it. Every item stays mounted
+   * and only the page's are shown, for the reason the filters hide rather than unmount. With
+   * no filter the pager counts over the SERVER's `total` («1–10 of 732»); a filtered list
+   * counts nothing it was not told, so it pages under a plain «page 2 of 5».
+   */
+  const filtered =
+    search.trim() !== '' || category !== 'all' || activeGroupId !== '' || source !== 'all';
+  const pageKey = `${search}|${category}|${activeGroupId}|${source}`;
+  const [paging, setPaging] = useState({ key: pageKey, page: 1 });
+  const visibleOrdered = useMemo(
+    () => ordered.filter((template) => visible.has(template.key)),
+    [ordered, visible],
+  );
+  const pageCount = Math.max(1, Math.ceil(visibleOrdered.length / LIST_PAGE_SIZE));
+  const pageNumber = paging.key === pageKey ? Math.min(paging.page, pageCount) : 1;
+  const onPage = useMemo(
+    () =>
+      new Set(
+        visibleOrdered
+          .slice((pageNumber - 1) * LIST_PAGE_SIZE, pageNumber * LIST_PAGE_SIZE)
+          .map((template) => template.key),
+      ),
+    [visibleOrdered, pageNumber],
+  );
+  const serverCount = templates.data?.total;
+
   const { dirty, report } = useDirtySet();
   useUnsavedChanges(dirty.size > 0);
 
@@ -384,14 +415,14 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
                   <section
                     key={section.group.id}
                     aria-labelledby={`templates-group-${section.group.id}`}
-                    hidden={!section.templates.some((template) => visible.has(template.key))}
+                    hidden={!section.templates.some((template) => onPage.has(template.key))}
                   >
                     <h2 id={`templates-group-${section.group.id}`} className="content-nav-group">
                       {section.group.label}
                     </h2>
                     <ul>
                       {section.templates.map((template) => (
-                        <li key={template.key} hidden={!visible.has(template.key)}>
+                        <li key={template.key} hidden={!onPage.has(template.key)}>
                           <TemplateListItem
                             template={template}
                             current={template.key === selected}
@@ -407,6 +438,29 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
                   </section>
                 ))}
               </div>
+              {!filtered && serverCount !== undefined ? (
+                <CountedPager
+                  page={pageNumber}
+                  pageSize={LIST_PAGE_SIZE}
+                  total={serverTotal(serverCount)}
+                  onPage={(next) => setPaging({ key: pageKey, page: next })}
+                />
+              ) : (
+                visibleOrdered.length > LIST_PAGE_SIZE && (
+                  <CursorPager
+                    order="sequence"
+                    hasPrevious={pageNumber > 1}
+                    hasNext={pageNumber < pageCount}
+                    onPrevious={() => setPaging({ key: pageKey, page: pageNumber - 1 })}
+                    onNext={() => setPaging({ key: pageKey, page: pageNumber + 1 })}
+                    summary={
+                      <>
+                        {t('web.page_of')} <Num value={pageNumber} /> / <Num value={pageCount} />
+                      </>
+                    }
+                  />
+                )
+              )}
             </aside>
 
             {sheet && (

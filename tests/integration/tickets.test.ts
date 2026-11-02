@@ -311,7 +311,8 @@ describe('WP-A7 — support tickets', () => {
   const handle = (update: Envelope) =>
     ctx.container.botRuntime.handle(tenantA, systemActor('bot'), update);
 
-  const messages = () => sent.filter((one) => one.url.endsWith('/sendMessage'));
+  // A callback tap on a ticket screen now edits the tapped message in place (R12 F3 item 4).
+  const messages = () => sent.filter((one) => /\/(sendMessage|editMessageText)$/u.test(one.url));
   const lastSent = () => messages().at(-1)?.body ?? {};
   const lastText = () => String(lastSent().text ?? '');
   const callbacksOf = (body: Record<string, unknown>): string[] => {

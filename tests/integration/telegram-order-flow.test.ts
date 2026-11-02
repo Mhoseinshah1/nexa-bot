@@ -789,6 +789,43 @@ describe('the customer purchase flow over Telegram', () => {
     expect((await orders())[0]?.['total_amount']).toBe(250_000n);
   });
 
+  it('R12 F3: the code prompt carries back and cancel, and each closes its window', async () => {
+    await discount({ kind: 'CODE', code: 'SPRING', value: 20n });
+    const sellable = await product(tenantA, 'ACTIVE');
+    await tap(`p:${sellable.id}`);
+    const orderId = String((await orders())[0]?.['id']);
+    await tap(`Z:${orderId}`);
+
+    await tap(`dc:${orderId}`);
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.discount.ask']);
+    expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual([`ib:${orderId}`, 'iz:']);
+    expect(buttonsOf(lastMessage()).map((b) => b.text)).toEqual([
+      CATALOGUE_FA['bot.order.input_back_button'],
+      CATALOGUE_FA['bot.order.input_cancel_button'],
+    ]);
+
+    // Back: the pre-invoice again, unchanged, and the window is closed.
+    await tap(`ib:${orderId}`);
+    expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual([
+      `w:${orderId}`,
+      `pm:${orderId}`,
+      `dc:${orderId}`,
+      'mm:',
+    ]);
+    await command('SPRING');
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect((await orders())[0]?.['total_amount']).toBe(250_000n);
+
+    // Cancel: the main menu, window closed, order left alone.
+    await tap(`dc:${orderId}`);
+    await tap('iz:');
+    expect(String(lastMessage()?.body['text'])).toContain('خوش برگشتی');
+    await command('SPRING');
+    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
+    expect((await orders())[0]?.['state']).toBe('DRAFT');
+    expect((await orders())[0]?.['total_amount']).toBe(250_000n);
+  });
+
   it('closes a code window whose draft was confirmed from the summary still on screen', async () => {
     await discount({ kind: 'CODE', code: 'SPRING', value: 20n });
     const sellable = await product(tenantA, 'ACTIVE');
@@ -966,10 +1003,26 @@ describe('the customer purchase flow over Telegram', () => {
     const confirm = buttonsOf(lastMessage());
     expect(confirm.map((b) => b.callback_data)).toEqual([`f:${orderId}`]);
     sent = [];
+    // The order's message has been left alone past the lane's settle window (Codex, #354:
+    // within it the cancellation defers to the ORDER_CANCELLED notice instead of editing).
+    await api.container.database.db.execute(
+      sql`UPDATE telegram_wizards SET updated_at = updated_at - interval '1 hour', busy_until = NULL`,
+    );
 
     await tap(`f:${orderId}`);
 
-    expect(String(lastMessage()?.body['text'])).toBe(CATALOGUE_FA['bot.order.cancelled']);
+    /*
+     * R11 A11: the answer is the ORDER's own message, edited into the cancelled screen — the
+     * summary kept, re-order and the main menu under it, nothing that pays — and the spent
+     * question removed, rather than a «سفارش لغو شد» under a screen still offering to pay.
+     */
+    const answer = lastMessage();
+    expect(answer?.url).toContain('/editMessageText');
+    expect(String(answer?.body['text'])).toContain(
+      plain(CATALOGUE_FA['bot.order.cancelled_screen']).split('\n')[0] ?? '',
+    );
+    expect(buttonsOf(answer).map((b) => b.callback_data)).not.toContain(`w:${orderId}`);
+    expect(sent.filter((one) => one.url.includes('/deleteMessage'))).toHaveLength(1);
     const rows = await orders();
     expect(rows[0]?.['state']).toBe('CANCELLED');
     /*
@@ -998,7 +1051,8 @@ describe('the customer purchase flow over Telegram', () => {
     expect(String(lastMessage()?.body['text'])).toBe(
       CATALOGUE_FA['bot.order.not_awaiting_payment'],
     );
-    expect(buttonsOf(lastMessage())).toHaveLength(0);
+    // R12 F3 item 3: the refusal is not a dead end — «🛒 خرید سرویس» and the main menu.
+    expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual(['co:', 'mm:']);
   });
 
   it('lets a double tap of Confirm produce ONE transition and ONE event', async () => {
@@ -1159,8 +1213,12 @@ describe('the customer purchase flow over Telegram', () => {
 
     await tap(`c:${orderId}`);
     // A different message from "unavailable": nobody withdrew this, the window closed,
-    // and a customer told "cancelled" looks for what they did.
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.order.expired']);
+    // and a customer told "cancelled" looks for what they did. R11 A11: said ON the tapped
+    // pre-invoice (edited into the expired screen), never as a new message under it.
+    expect(lastMessage()?.url).toContain('/editMessageText');
+    expect(String(lastMessage()?.body['text'])).toContain(
+      plain(CATALOGUE_FA['bot.order.expired_screen']).split('\n')[0] ?? '',
+    );
     expect((await orders())[0]?.['state']).toBe('DRAFT');
     expect(await orderEvents()).toHaveLength(0);
   });

@@ -62,10 +62,18 @@ export interface EvalArgs {
   readonly only: readonly string[];
   readonly json: string | null;
   readonly timeoutMs: number;
+  /** Phase 4 PR-6: `classic` (A10), `sai` (the Support AI round corpus) or both (default). */
+  readonly suite: 'classic' | 'sai' | 'all';
+  /** `--preset recommended`: apply the recommended preset to the configuration under test. */
+  readonly preset: 'recommended' | null;
+  /** `--config-from-db <slug>`: read that tenant's stored configuration (read-only). */
+  readonly configFromDb: string | null;
+  /** `--replay <file>`: a local scrubbed export of handed-off chats (never in the repository). */
+  readonly replay: string | null;
 }
 
 export const EVAL_USAGE =
-  'usage: support-ai-eval [--live --provider OPENAI|ANTHROPIC|ZAI --model M [--model M2 ...] [--region INTERNATIONAL|CHINA]] [--only id,id] [--json report.json] [--timeout-ms N]';
+  'usage: support-ai-eval [--live --provider OPENAI|ANTHROPIC|ZAI --model M [--model M2 ...] [--region INTERNATIONAL|CHINA]] [--only id,id] [--json report.json] [--timeout-ms N] [--suite classic|sai|all] [--preset recommended] [--config-from-db TENANT_SLUG] [--replay LOCAL_FILE]';
 
 export function parseEvalArgs(argv: readonly string[]): EvalArgs {
   const models: string[] = [];
@@ -75,6 +83,10 @@ export function parseEvalArgs(argv: readonly string[]): EvalArgs {
   let only: string[] = [];
   let json: string | null = null;
   let timeoutMs = 60_000;
+  let suite: EvalArgs['suite'] = 'all';
+  let preset: EvalArgs['preset'] = null;
+  let configFromDb: string | null = null;
+  let replay: string | null = null;
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     const value = () => {
@@ -117,6 +129,25 @@ export function parseEvalArgs(argv: readonly string[]): EvalArgs {
       case '--json':
         json = value();
         break;
+      case '--suite': {
+        const named = value();
+        if (named !== 'classic' && named !== 'sai' && named !== 'all') {
+          throw new UsageError('bad --suite');
+        }
+        suite = named;
+        break;
+      }
+      case '--preset': {
+        if (value() !== 'recommended') throw new UsageError('--preset must be recommended');
+        preset = 'recommended';
+        break;
+      }
+      case '--config-from-db':
+        configFromDb = value();
+        break;
+      case '--replay':
+        replay = value();
+        break;
       case '--timeout-ms': {
         const parsed = Number(value());
         if (!Number.isInteger(parsed) || parsed < 1_000 || parsed > 300_000) {
@@ -129,7 +160,19 @@ export function parseEvalArgs(argv: readonly string[]): EvalArgs {
         throw new UsageError(EVAL_USAGE);
     }
   }
-  return { live, provider, models, region, only, json, timeoutMs };
+  return {
+    live,
+    provider,
+    models,
+    region,
+    only,
+    json,
+    timeoutMs,
+    suite,
+    preset,
+    configFromDb,
+    replay,
+  };
 }
 
 /**
@@ -149,4 +192,16 @@ export function liveRunRefusal(
   }
   if (args.provider === 'ZAI' && args.region === null) return '--region is required for ZAI';
   return null;
+}
+
+/** `--only` must select at least one scenario of an ENABLED suite (a stale id must not pass green). */
+export function checkOnlyMatches(
+  only: readonly string[],
+  suite: EvalArgs['suite'],
+  classicIds: readonly string[],
+  saiIds: readonly string[],
+): void {
+  if (only.length === 0) return;
+  const pool = [...(suite === 'sai' ? [] : classicIds), ...(suite === 'classic' ? [] : saiIds)];
+  if (!only.some((id) => pool.includes(id))) throw new UsageError('--only matched no scenario');
 }

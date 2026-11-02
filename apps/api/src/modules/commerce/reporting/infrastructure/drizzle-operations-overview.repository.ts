@@ -14,6 +14,8 @@ import {
 } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { audienceServicePredicate } from '../../audience/infrastructure/audience-sql.js';
+import { payments } from '../../../../infrastructure/persistence/schema.js';
+import { receiptReviewCondition } from '../../payments/infrastructure/payment-ops-queue-sql.js';
 import type {
   OperationsOverviewRepository,
   PanelFleetRow,
@@ -159,6 +161,16 @@ export class DrizzleOperationsOverviewRepository implements OperationsOverviewRe
         return this.count(
           capped(
             sql`SELECT 1 FROM payments p WHERE p.tenant_id = ${t} AND p.state = 'UNKNOWN'`,
+            cap,
+          ),
+        );
+      case 'receiptsAwaitingReview':
+        // R12 F3 item 8: the `RECEIPT_REVIEW` queue's own predicate — one definition, so the
+        // badge and the list it opens (`/payments?queue=RECEIPT_REVIEW`) cannot disagree.
+        return this.count(
+          capped(
+            sql`SELECT 1 FROM ${payments}
+               WHERE ${payments.tenantId} = ${t} AND ${receiptReviewCondition()}`,
             cap,
           ),
         );

@@ -187,6 +187,22 @@ export const PAY_SWITCH_CARD_CALLBACK_PREFIX = 'pk:';
  * gives at length: the message carrying the first button stays in the chat for ever.
  */
 export const CANCEL_ORDER_ASK_CALLBACK_PREFIX = 'd:';
+/**
+ * R12 F3 item 2: the buttons under a typed-input prompt. `ib:<order uuid>` is «🔙 بازگشت به
+ * پیش‌فاکتور» (and the wallet shortfall's): it closes the customer's open text window and
+ * draws the order's pre-invoice again. `iz:` is «انصراف»: it closes the window and answers
+ * the main menu. `ik:` is the custom service's «🔙 بازگشت به مکان‌ها». None of them writes
+ * anything but the window's closing; the pre-invoice they draw is read, not re-priced.
+ */
+export const INPUT_BACK_CALLBACK_PREFIX = 'ib:';
+/**
+ * R12 F3 item 9: «📊 وضعیت پرداخت» under `bot.order.payment_in_review` — `os:<order uuid>`. Reads
+ * the order's live payment and draws its own screen (a gateway attempt's status) or repeats the
+ * review sentence; it pays nothing and creates no payment.
+ */
+export const ORDER_PAYMENT_STATUS_CALLBACK_PREFIX = 'os:';
+export const INPUT_CANCEL_CALLBACK_DATA = 'iz:';
+export const CUSTOM_SERVICE_BACK_CALLBACK_DATA = 'ik:';
 export const CANCEL_ORDER_CALLBACK_PREFIX = 'f:';
 /**
  * A tap on one of the customer's own services, and a request to send its link again.
@@ -435,6 +451,11 @@ export const REFERRAL_GIFT_CALLBACK_DATA = 'rg:';
  * which is exactly what it says. Neither is a wizard button, so neither edits the message.
  */
 export const WALLET_OPEN_CALLBACK_DATA = 'wo:';
+/**
+ * R12 F3 item 7: «📜 تراکنش‌ها». `wh:` is the newest page; `wh:<keyset token>` the page after
+ * the movement the token names. Edits the tapped message, ten movements a page.
+ */
+export const WALLET_HISTORY_CALLBACK_PREFIX = 'wh:';
 export const CATALOG_OPEN_CALLBACK_DATA = 'co:';
 
 export const ADMIN_PANEL_CALLBACK_PREFIX = 'A:';
@@ -851,6 +872,13 @@ export const CATALOG_BROWSE_MAX_PAGE = 999;
  */
 export const CATALOG_PAGE_CALLBACK_PREFIX = 'cg:';
 export const CATEGORY_CALLBACK_PREFIX = 'ck:';
+/**
+ * R11 A11: «🔁 سفارش دوباره» under an ended order whose category was recorded —
+ * `ro:<category uuid>`, the category's product list as a new message. An identifier only;
+ * the list is re-read for the tapping customer. `r:` is resend's and `ro:` does not start
+ * with it.
+ */
+export const REORDER_CATEGORY_CALLBACK_PREFIX = 'ro:';
 /**
  * The catalogue's trial button (WP6-A). The WHOLE data, not a prefix: it carries no
  * id and no figure, because nothing about a trial is the client's to say. Two letters

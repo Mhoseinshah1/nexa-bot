@@ -6,6 +6,7 @@ import {
   CUSTOMER_NOTIFICATION_MAX_ATTEMPTS,
   CUSTOMER_NOTIFICATION_PRECONDITIONS,
   CUSTOMER_NOTIFICATION_SWEEP_LIMIT,
+  money,
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
@@ -65,6 +66,12 @@ describe('the customer notification lane', () => {
 
   /** Every send the fake messenger saw, in order. */
   let sends: CustomerMessage[] = [];
+  /**
+   * R11 A11: the orders an ended-order notice may name, by the state they are in. The lane
+   * renders `ORDER_EXPIRED` / `ORDER_CANCELLED` from the ORDER (its summary), and says nothing
+   * about an order it cannot read or that is not in the kind's ending.
+   */
+  let endedOrders = new Map<string, string>();
   /** What the next send returns. A queue, so one pass can see several outcomes. */
   let outcomes: CustomerSendResult[] = [];
 
@@ -81,6 +88,7 @@ describe('the customer notification lane', () => {
   beforeEach(async () => {
     await ctx.reset();
     sends = [];
+    endedOrders = new Map<string, string>();
     outcomes = [];
   });
 
@@ -137,6 +145,20 @@ describe('the customer notification lane', () => {
         },
       },
       subjects: { stillHolds: async () => options.stillHolds ?? true },
+      orderEnds: {
+        screenFor: async (_scope, orderId) => {
+          const state = endedOrders.get(orderId);
+          return state === undefined
+            ? null
+            : {
+                state,
+                screen: {
+                  values: { productName: 'پلن', total: money(250_000n, 'IRT') },
+                  reorder: { kind: 'CATALOGUE' },
+                },
+              };
+        },
+      },
       messenger: {
         send: async (_scope, message) => {
           sends.push(message);
@@ -513,14 +535,17 @@ describe('the customer notification lane', () => {
      */
     const id = await customer(tenantA, '5014');
     await enqueue(tenantA, id, 'PAYMENT_TRANSFER_RECORDED', ctx.container.ids.uuid());
-    await enqueue(tenantA, id, 'ORDER_CANCELLED', ctx.container.ids.uuid());
+    const cancelled = ctx.container.ids.uuid();
+    endedOrders.set(cancelled, 'CANCELLED');
+    await enqueue(tenantA, id, 'ORDER_CANCELLED', cancelled);
 
     const report = await sweep(lane());
 
     expect(report.delivered).toBe(2);
     expect(sends.map((one) => one.templateKey)).toEqual([
       'bot.payment.received_for_review',
-      'bot.order.cancelled',
+      // R11 A11: the cancellation's answer is the cancelled SCREEN, and so is its fallback.
+      'bot.order.cancelled_screen',
     ]);
     expect(
       (await rows(tenantA)).map((row) => row.state),
@@ -789,7 +814,9 @@ describe('the customer notification lane', () => {
      * re-reads `next_attempt_at` after the winner committed and takes nothing.
      */
     const id = await customer(tenantA, '5013');
-    await enqueue(tenantA, id, 'ORDER_EXPIRED', ctx.container.ids.uuid());
+    const expired = ctx.container.ids.uuid();
+    endedOrders.set(expired, 'EXPIRED');
+    await enqueue(tenantA, id, 'ORDER_EXPIRED', expired);
 
     const [first, second] = await Promise.all([sweep(lane()), sweep(lane())]);
     expect(first.claimed + second.claimed, 'both replicas claimed the row').toBe(1);

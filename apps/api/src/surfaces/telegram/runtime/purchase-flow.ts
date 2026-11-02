@@ -16,16 +16,20 @@ import {
 } from '../../../modules/commerce/messaging/application/inline-buttons.js';
 import type { OrderRecord } from '../../../modules/commerce/orders/application/ports.js';
 import { personalDiscountPercentOf } from '../../../modules/commerce/pricing/domain/pricing-engine.js';
+import { personalDiscountOf } from './listed-price.js';
 import type { CustomerCaptureRecord } from '../../../modules/commerce/customers/application/customer-capture-ports.js';
 import {
   CANCEL_ORDER_CALLBACK_PREFIX,
   CATALOG_BROWSE_MAX_PAGE,
   CATALOG_PAGE_CALLBACK_PREFIX,
   CATEGORY_CALLBACK_PREFIX,
+  CUSTOM_SERVICE_BACK_CALLBACK_DATA,
   CUSTOM_SERVICE_CALLBACK_DATA,
   CUSTOM_SERVICE_LOCATION_CALLBACK_PREFIX,
   DISCOUNT_CODE_ENTER_CALLBACK_PREFIX,
   DISCOUNT_CODE_REMOVE_CALLBACK_PREFIX,
+  INPUT_BACK_CALLBACK_PREFIX,
+  INPUT_CANCEL_CALLBACK_DATA,
   ORDER_CALLBACK_PREFIX,
   USERNAME_AUTOMATIC_CALLBACK_PREFIX,
   USERNAME_CUSTOM_CALLBACK_PREFIX,
@@ -36,6 +40,8 @@ import { refusal } from './refusals.js';
 import type { PendingReply } from './replies.js';
 import { payMethodsButton } from './payment-screens.js';
 import { awaitingPaymentReply, orderRouteButtons } from './checkout-flow.js';
+import { cancelledOrderReply, orderEndedRefusal } from './order-end-flow.js';
+import type { CardMessageRef } from '../../../modules/commerce/provisioning/application/operation-card.js';
 import type { BotRuntime } from '../bot-runtime.js';
 
 /**
@@ -176,6 +182,18 @@ export async function customServiceOffered(
   return (await rt.deps.customService.offeredLocations(scope, actor, customer.id)).length > 0;
 }
 
+/**
+ * R12 F3 item 2: «🔙 بازگشت به مکان‌ها» + «انصراف» under the custom service's volume and days
+ * questions. There is no pre-invoice yet at that point (the draft is made after the days), so
+ * the way back is the location list; both close the open text window first.
+ */
+function customServiceExitButtons(): readonly CustomerButton[] {
+  return [
+    { ...inlineLabel('custom_service.back'), data: CUSTOM_SERVICE_BACK_CALLBACK_DATA, row: 0 },
+    { ...inlineLabel('order.input_cancel'), data: INPUT_CANCEL_CALLBACK_DATA, row: 0 },
+  ];
+}
+
 /** The custom-service button: the locations, each by the label the operator wrote. */
 export async function customServiceMenu(
   rt: BotRuntime,
@@ -225,7 +243,7 @@ export async function customServiceLocation(
   return {
     key: 'bot.custom_service.ask_volume',
     values: { location: begun.location.label, ...volumeRangeValues(begun.range) },
-    buttons: [],
+    buttons: customServiceExitButtons(),
     orderId: null,
   };
 }
@@ -262,7 +280,7 @@ export async function customServiceFigure(
       return {
         key: 'bot.custom_service.invalid_volume',
         values: volumeRangeValues(volume.range),
-        buttons: [],
+        buttons: customServiceExitButtons(),
         orderId: null,
       };
     }
@@ -270,7 +288,7 @@ export async function customServiceFigure(
       return {
         key: 'bot.custom_service.volume_unpriced',
         values: {},
-        buttons: [],
+        buttons: customServiceExitButtons(),
         orderId: null,
       };
     }
@@ -280,7 +298,7 @@ export async function customServiceFigure(
     return {
       key: 'bot.custom_service.ask_days',
       values: { volumeBytes: volume.volumeBytes, ...daysRangeValues(volume.range) },
-      buttons: [],
+      buttons: customServiceExitButtons(),
       orderId: null,
     };
   }
@@ -293,12 +311,17 @@ export async function customServiceFigure(
       return {
         key: 'bot.custom_service.invalid_days',
         values: daysRangeValues(days.range),
-        buttons: [],
+        buttons: customServiceExitButtons(),
         orderId: null,
       };
     }
     if (days.outcome === 'UNPRICED') {
-      return { key: 'bot.custom_service.days_unpriced', values: {}, buttons: [], orderId: null };
+      return {
+        key: 'bot.custom_service.days_unpriced',
+        values: {},
+        buttons: customServiceExitButtons(),
+        orderId: null,
+      };
     }
     if (days.outcome === 'UNAVAILABLE') {
       return { key: 'bot.custom_service.unavailable', values: {}, buttons: [], orderId: null };
@@ -370,11 +393,13 @@ export async function categoryPage(
     // changed under this surface. Skipped rather than drawn without an amount,
     // because a plan whose price a customer cannot see is one they cannot consent to.
     if (product.price === null) continue;
+    // R11 A9: the price the draft will quote when the personal discount wins it.
+    const personal = product.personalDiscount;
     buttons.push({
       ...inlineDataLabel('catalog.product', {
         kind: 'TEXT',
         text: product.title,
-        amount: product.price,
+        amount: personal === null ? product.price : personal.price,
       }),
       data: `${ORDER_CALLBACK_PREFIX}${product.id}`,
       // R4 PR-F (F2): the plan table of a rich message; an ordinary message ignores it.
@@ -382,6 +407,7 @@ export async function categoryPage(
         trafficBytes: product.specification.trafficBytes,
         durationDays: product.specification.durationDays,
       },
+      ...personalDiscountOf(product),
     });
   }
   if (page > 0) {
@@ -536,6 +562,43 @@ export async function repricedSummary(
   return preinvoice(rt, scope, actor, order, customer, step.reservation?.username ?? null);
 }
 
+/**
+ * R12 F3 item 2: the back / cancel pair under a typed-input prompt. «🔙 بازگشت به پیش‌فاکتور»
+ * names the order whose pre-invoice is drawn again; «انصراف» goes to the main menu. Both close
+ * the customer's open text window first (`abandonTextEntry`), so the next plain message is not
+ * read as the answer to a question they left.
+ */
+export function inputExitButtons(orderId: string): readonly CustomerButton[] {
+  return [
+    { ...inlineLabel('order.input_back'), data: `${INPUT_BACK_CALLBACK_PREFIX}${orderId}`, row: 0 },
+    { ...inlineLabel('order.input_cancel'), data: INPUT_CANCEL_CALLBACK_DATA, row: 0 },
+  ];
+}
+
+/**
+ * Closes whichever text window the customer has open (discount code, username, a custom
+ * service's volume or days). Null once closed; a refusal reply when the service refuses (a
+ * stopped scope, a customer who may not order) — the caller then answers THAT, not the screen.
+ */
+export async function abandonTextEntry(
+  rt: BotRuntime,
+  scope: TenantContext,
+  actor: ActorContext,
+  customer: CustomerRecord,
+  input: { readonly idempotencyKey: string; readonly botInstanceId: BotInstanceId },
+): Promise<PendingReply | null> {
+  try {
+    await rt.deps.orders.abandonTextEntry(scope, actor, {
+      idempotencyKey: `${input.idempotencyKey}:abandon-text`,
+      botInstanceId: input.botInstanceId,
+      customerId: customer.id,
+    });
+    return null;
+  } catch (error) {
+    return refusal(error);
+  }
+}
+
 /** Opens the code window for one draft and asks for the code. */
 export async function enterDiscountCode(
   rt: BotRuntime,
@@ -556,7 +619,7 @@ export async function enterDiscountCode(
     return {
       key: 'bot.discount.ask',
       values: {},
-      buttons: [],
+      buttons: inputExitButtons(orderId),
       orderId,
       wizard: { kind: 'ORDER', step: 'DISCOUNT', subjectId: orderId },
     };
@@ -689,26 +752,83 @@ export async function afterDraft(
       : customUsername(rt, scope, actor, order.id, customer, botInstanceId, idempotencyKey);
   }
 
+  return usernameChoiceReply(order.id, step.modes);
+}
+
+/** The «choose how the name is made» screen: custom and/or automatic, for one draft. */
+function usernameChoiceReply(
+  orderId: string,
+  modes: readonly ('CUSTOM' | 'AUTOMATIC')[],
+): PendingReply {
   const buttons: CustomerButton[] = [];
-  if (step.modes.includes('CUSTOM')) {
+  if (modes.includes('CUSTOM')) {
     buttons.push({
       ...inlineLabel('username.custom'),
-      data: `${USERNAME_CUSTOM_CALLBACK_PREFIX}${order.id}`,
+      data: `${USERNAME_CUSTOM_CALLBACK_PREFIX}${orderId}`,
     });
   }
-  if (step.modes.includes('AUTOMATIC')) {
+  if (modes.includes('AUTOMATIC')) {
     buttons.push({
       ...inlineLabel('username.automatic'),
-      data: `${USERNAME_AUTOMATIC_CALLBACK_PREFIX}${order.id}`,
+      data: `${USERNAME_AUTOMATIC_CALLBACK_PREFIX}${orderId}`,
     });
   }
   return {
     key: 'bot.username.choose',
     values: {},
     buttons,
-    orderId: order.id,
-    wizard: { kind: 'ORDER', step: 'USERNAME', subjectId: order.id },
+    orderId,
+    wizard: { kind: 'ORDER', step: 'USERNAME', subjectId: orderId },
   };
+}
+
+/**
+ * R12 F3 item 2: «🔙 بازگشت به پیش‌فاکتور» for a DRAFT purchase — the screen the customer was
+ * on before the typed prompt, never one they could not pay from. A name already held (the
+ * discount prompt's case) or a panel that asks for none: the pre-invoice. A name still to be
+ * chosen with two ways to make one: the choice again. A name still to be chosen with ONE way
+ * (typing it) has no earlier screen at all — the prompt was the first — so the answer is `'MENU'` and the caller leaves to the main menu, rather than drawing a pre-invoice
+ * whose pay buttons the missing name would refuse. Null for anything but a draft purchase (the
+ * caller redraws the order's own current screen). Reads only.
+ */
+export async function inputBack(
+  rt: BotRuntime,
+  scope: TenantContext,
+  actor: ActorContext,
+  orderId: string,
+  customer: CustomerRecord,
+): Promise<PendingReply | 'MENU' | null> {
+  try {
+    const order = await rt.deps.orders.orderForCustomer(scope, actor, {
+      customerId: customer.id,
+      orderId,
+    });
+    if (
+      order.state !== 'DRAFT' ||
+      (order.purpose !== 'NEW_SERVICE' && order.purpose !== 'CUSTOM_SERVICE')
+    ) {
+      return null;
+    }
+    const step = await rt.deps.orders.usernameStep(scope, actor, {
+      customerId: customer.id,
+      orderId: order.id,
+    });
+    if (step.reservation !== null) {
+      return {
+        ...(await preinvoice(rt, scope, actor, order, customer, step.reservation.username)),
+        edit: true,
+      };
+    }
+    if (step.modes.length === 0) {
+      return { ...(await preinvoice(rt, scope, actor, order, customer, null)), edit: true };
+    }
+    // On the tapped prompt's own message: the screen the customer came from replaces it.
+    return step.modes.length >= 2
+      ? { ...usernameChoiceReply(order.id, step.modes), edit: true }
+      : 'MENU';
+  } catch (error) {
+    return refusal(error);
+  }
 }
 
 /** The installation draws a name, and the summary shows the one it drew. */
@@ -769,7 +889,7 @@ export async function customUsername(
     return {
       key: 'bot.username.instructions',
       values: {},
-      buttons: [],
+      buttons: inputExitButtons(orderId),
       orderId,
       wizard: { kind: 'ORDER', step: 'USERNAME', subjectId: orderId },
     };
@@ -920,7 +1040,8 @@ export async function confirm(
     );
     return awaitingPaymentReply(rt, scope, customer, order);
   } catch (error) {
-    return refusal(error);
+    // R11 A11: a draft past its hold is answered ON its pre-invoice, not by a new message.
+    return (await orderEndedRefusal(rt, scope, actor, customer, orderId, error)) ?? refusal(error);
   }
 }
 
@@ -992,6 +1113,8 @@ export async function cancelOrder(
   orderId: string,
   customer: CustomerRecord,
   idempotencyKey: string,
+  /** R11 A11: the confirmation question the customer tapped, removed once it is answered. */
+  tapped: CardMessageRef | null = null,
 ): Promise<PendingReply> {
   try {
     await rt.deps.orders.cancelByCustomer(scope, actor, {
@@ -999,18 +1122,17 @@ export async function cancelOrder(
       customerId: customer.id,
       orderId,
     });
-    return {
-      key: 'bot.order.cancelled',
-      values: {},
-      buttons: [],
-      orderId: null,
-      // The order is gone. A customer who does not learn that keeps waiting for
-      // a service that will never be made.
-      fallback: { kind: 'ORDER_CANCELLED', subjectId: orderId },
-    };
   } catch (error) {
     return refusal(error);
   }
+  /*
+   * R11 A11: the order is gone, and the customer is told so ON the order's own payment
+   * message — edited into the cancelled screen, with re-order and the main menu — rather than
+   * by a «سفارش لغو شد» under a payment screen that still offers to pay. The fallback is
+   * unchanged in purpose: a customer who does not learn the order is gone keeps waiting for a
+   * service that will never be made, so a rate-limited answer still reaches them by the lane.
+   */
+  return cancelledOrderReply(rt, scope, actor, customer, orderId, tapped);
 }
 
 function preinvoiceButtons(order: OrderRecord, routesOffered: boolean): readonly CustomerButton[] {

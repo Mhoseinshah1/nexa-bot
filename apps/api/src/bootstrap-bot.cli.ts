@@ -4,6 +4,7 @@ import { isNexaError, type TenantContext } from '@nexa/contracts';
 import type {
   BotBootstrapResult,
   BotBootstrapStatus,
+  BotWebhookSecretListing,
   BotWebhookStatusDetail,
 } from './modules/platform/tenancy/application/bot-bootstrap.service.js';
 import { bootstrapRemedy } from './telegram-bootstrap-remedy.js';
@@ -244,8 +245,13 @@ export function statusDetailLines(detail: BotWebhookStatusDetail): string[] {
             ? 'recorded for a different URL'
             : `stale (webhook secret ${local.secret.toLowerCase()})`
     }`,
-    `remote (Telegram)      ${remote.outcome}`,
   ];
+  // R12 F2 item 7: which accepted secret the registration was made with — a word, never
+  // the secret or its digest.
+  if (local.secretScope !== null) {
+    lines.push(`webhook secret         ${SECRET_WORDS[local.secretScope]}`);
+  }
+  lines.push(`remote (Telegram)      ${remote.outcome}`);
   if (remote.outcome === 'READ') {
     lines.push(
       `remote webhook URL     ${remote.url ?? '(none set)'}`,
@@ -275,6 +281,42 @@ export function statusDetailLines(detail: BotWebhookStatusDetail): string[] {
   }
   if (detail.problems.length > 0)
     lines.push(`problems               ${detail.problems.join(', ')}`);
+  return lines;
+}
+
+/** R12 F2 item 7: the words a registration's secret is shown as. Never a value. */
+const SECRET_WORDS: Readonly<Record<BotWebhookSecretListing['secret'], string>> = {
+  PER_BOT: 'own (per-bot secret)',
+  INSTALLATION:
+    'installation-wide (the rotation window: still accepted; re-registering moves it to ' +
+    'its own)',
+  OTHER: 'not accepted (registered with a secret this installation no longer holds; re-register)',
+  UNKNOWN: 'unknown (registered before the secret was recorded; re-register)',
+  NOT_REGISTERED: 'no registration recorded',
+};
+
+/**
+ * R12 F2 item 7: every bot on the installation and the secret its webhook was registered
+ * with, then how many still use the installation-wide one — the number that must reach 0
+ * before a later release may stop accepting it. STDERR, like every line but the word.
+ *
+ * Usernames and tenant slugs only: both are public. No secret, no digest, no prefix of
+ * either — a state word says everything an operator can act on.
+ */
+export function webhookSecretListingLines(rows: readonly BotWebhookSecretListing[]): string[] {
+  if (rows.length === 0) return [];
+  const lines = rows.map(
+    (row) =>
+      `secret per bot         @${row.username} (tenant ${row.tenantSlug}` +
+      `${row.status === 'ACTIVE' ? '' : `, ${row.status}`}): ${SECRET_WORDS[row.secret]}`,
+  );
+  const onMaster = rows.filter((row) => row.secret === 'INSTALLATION').length;
+  lines.push(
+    onMaster === 0
+      ? 'installation secret    no bot is registered with it'
+      : `installation secret    still registered for ${onMaster} bot(s); it stays accepted ` +
+          'until each is re-registered',
+  );
   return lines;
 }
 
@@ -394,6 +436,9 @@ async function main(): Promise<void> {
         const remedy = bootstrapRemedy(detail.remote.tokenErrorCode);
         if (remedy !== null) console.warn(remedy);
       }
+      // R12 F2 item 7: and every bot on the installation, per bot, by secret.
+      const secrets = await container.bootstrapBot.webhookSecretsByBot();
+      for (const line of webhookSecretListingLines(secrets ?? [])) console.warn(line);
       return;
     }
 

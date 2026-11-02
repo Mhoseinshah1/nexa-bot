@@ -101,18 +101,18 @@ describe('the backup schedule card', () => {
   it('shows the effective schedule in words, its source, and where backups go — never milliseconds', async () => {
     stubApi(routes());
     const { container } = renderPage(<BackupScheduleCard status={STATUS} permissions={EDIT} />);
-    await screen.findByRole('button', { name: 'هر ۶ ساعت' });
+    await screen.findByRole('button', { name: 'هر 6 ساعت' });
     const text = container.textContent ?? '';
     expect(text).toContain('پیش‌فرض نصب');
     expect(text).toContain('تاپیک «💾 بکاپ‌ها» در گروه گزارش‌های مدیریتی');
     // The owner's presets, by name.
-    for (const label of ['هر ۱ ساعت', 'هر ۳ ساعت', 'هر ۶ ساعت', 'هر ۱۲ ساعت', 'هر ۲۴ ساعت']) {
+    for (const label of ['هر 1 ساعت', 'هر 3 ساعت', 'هر 6 ساعت', 'هر 12 ساعت', 'هر 24 ساعت']) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
     }
     expect(text).not.toContain('86400000');
     expect(text).not.toMatch(/\bms\b/);
     // The current interval is the 24-hour preset, already selected.
-    expect(screen.getByRole('button', { name: 'هر ۲۴ ساعت' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'هر 24 ساعت' })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
@@ -121,7 +121,7 @@ describe('the backup schedule card', () => {
   it('saves a preset as whole minutes, with the version it read and a fresh key', async () => {
     const api = stubApi(routes());
     renderPage(<BackupScheduleCard status={STATUS} permissions={EDIT} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'هر ۳ ساعت' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'هر 3 ساعت' }));
     fireEvent.click(screen.getByRole('button', { name: 'ذخیره‌ی فاصله' }));
     await waitFor(() => expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(1));
     const write = api.calls.find((call) => call.method === 'POST');
@@ -152,7 +152,7 @@ describe('the backup schedule card', () => {
     const unit = screen.getByLabelText('واحد');
     fireEvent.change(unit, { target: { value: 'minute' } });
     fireEvent.change(value, { target: { value: '5' } });
-    expect(await screen.findByText('فاصله نمی‌تواند کمتر از ۱۵ دقیقه باشد.')).toBeInTheDocument();
+    expect(await screen.findByText('فاصله نمی‌تواند کمتر از 15 دقیقه باشد.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'ذخیره‌ی فاصله' })).toBeDisabled();
 
     fireEvent.change(unit, { target: { value: 'day' } });
@@ -167,9 +167,9 @@ describe('the backup schedule card', () => {
   it('saves a once-a-day time as HH:MM and refuses a malformed one before any request', async () => {
     const api = stubApi(routes());
     renderPage(<BackupScheduleCard status={STATUS} permissions={EDIT} />);
-    const input = await screen.findByLabelText('ساعت روزانه (مثلاً ۰۴:۰۰)');
+    const input = await screen.findByLabelText('ساعت روزانه (مثلاً 04:00)');
     fireEvent.change(input, { target: { value: '25:99' } });
-    expect(screen.getByText('ساعت را به‌صورت ۲۴ ساعته و مثل 04:00 بنویسید.')).toBeInTheDocument();
+    expect(screen.getByText('ساعت را به‌صورت 24 ساعته و مثل 04:00 بنویسید.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'ذخیره‌ی ساعت' })).toBeDisabled();
     expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(0);
 
@@ -194,7 +194,7 @@ describe('the backup schedule card', () => {
       />,
     );
     // The 24 h preset is already selected (the daily time reports a 24 h interval) ...
-    expect(await screen.findByRole('button', { name: 'هر ۲۴ ساعت' })).toHaveAttribute(
+    expect(await screen.findByRole('button', { name: 'هر 24 ساعت' })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
@@ -275,6 +275,6 @@ describe('the interval editor’s arithmetic', () => {
     expect(intervalMinutes('30', 'day')).toEqual({ ok: true, minutes: 43_200 });
     expect(intervalMinutes('31', 'day')).toEqual({ ok: false, problem: 'too_long' });
     expect(intervalMinutes('1.5', 'hour')).toEqual({ ok: false, problem: 'invalid' });
-    expect(intervalMinutes('۳', 'hour')).toEqual({ ok: true, minutes: 180 });
+    expect(intervalMinutes('3', 'hour')).toEqual({ ok: true, minutes: 180 });
   });
 });

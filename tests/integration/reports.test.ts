@@ -110,11 +110,20 @@ describe('WP12 business reports', () => {
 
   const run = (query: ReturnType<typeof sql>) => api.container.database.db.execute(query);
 
-  async function customer(tenantId: string, createdAt: string): Promise<string> {
+  /**
+   * A customer registered at `createdAt`. `MIRZA` writes one the way the legacy import leaves
+   * it: `created_at` is the import, `source = 'MIRZA'` with its `user:` ref.
+   */
+  async function customer(
+    tenantId: string,
+    createdAt: string,
+    source: 'NEXA' | 'MIRZA' = 'NEXA',
+  ): Promise<string> {
     const id = uuid();
     n += 1;
-    await run(sql`INSERT INTO customers (id, tenant_id, telegram_user_id, first_name, created_at, first_seen_at)
-      VALUES (${id}, ${tenantId}, ${`77000${n}`}, ${`Customer${n}`}, ${createdAt}::timestamptz, ${createdAt}::timestamptz)`);
+    const sourceRef = source === 'MIRZA' ? `user:${n}` : null;
+    await run(sql`INSERT INTO customers (id, tenant_id, telegram_user_id, first_name, created_at, first_seen_at, source, source_ref)
+      VALUES (${id}, ${tenantId}, ${`77000${n}`}, ${`Customer${n}`}, ${createdAt}::timestamptz, ${createdAt}::timestamptz, ${source}, ${sourceRef})`);
     return id;
   }
 
@@ -553,6 +562,36 @@ describe('WP12 business reports', () => {
     expect(body.period.timezone).toBe('Asia/Tehran');
     expect(body.period.current.start).toBe(new Date(D0).toISOString());
     expect(body.period.current.startLocal).toBe('1405/06/10');
+  });
+
+  it('counts no customer the Mirza import carried as a new user, on either side of the comparison', async () => {
+    // As the import leaves them: `created_at` is the import, here inside D and inside the
+    // day before. And one customer this installation registered on D, beside them.
+    await customer(tenantA.tenantId, at(11, 0), 'MIRZA');
+    await customer(tenantA.tenantId, at(11, 15), 'MIRZA');
+    await customer(tenantA.tenantId, at(11, 0, -1), 'MIRZA');
+    await customer(tenantA.tenantId, at(11, 30));
+
+    const body = reportSummaryResponseSchema.parse(
+      (await get(`${REPORT_ROUTES.summary}?${DAY_D}`)).json(),
+    );
+    // r2, c1 and the new one on D; c9 the day before. Not 5 against 2, so the «نسبت به
+    // دورهٔ قبل» percentage is the one the installation's own registrations make.
+    expect(body.newUsers).toEqual({ current: 3, previous: 1 });
+
+    const trend = reportTrendResponseSchema.parse(
+      (await get(`${REPORT_ROUTES.trend}?${DAY_D}&metric=NEW_USERS`)).json(),
+    );
+    const value = (series: typeof trend.current, hour: number) => series[hour]?.value;
+    expect(value(trend.current, 9)).toBe('1');
+    expect(value(trend.current, 10)).toBe('1');
+    expect(value(trend.current, 11)).toBe('1');
+    expect(value(trend.previous, 9)).toBe('1');
+    expect(value(trend.previous, 11)).toBe('0');
+    const total = (series: typeof trend.current) =>
+      series.reduce((sum, b) => sum + BigInt(b.value ?? '0'), 0n);
+    expect(total(trend.current)).toBe(3n);
+    expect(total(trend.previous)).toBe(1n);
   });
 
   it('puts a sale one second inside midnight in its day, and one on midnight in the next', async () => {

@@ -15,13 +15,11 @@ import {
   type ServiceAddonResponse,
   type ServiceAddonSummaryResponse,
   type ServiceAddonWriteRequest,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type {
   ServiceAddonCursor,
   ServiceAddonDraft,
@@ -54,7 +52,7 @@ export class ServiceAddonsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ServiceAddonListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // A repeated parameter is an ARRAY, not a string — the guard every list here uses
     // rather than trusting the schema to refuse it.
     const query = singleValued(raw);
@@ -83,7 +81,7 @@ export class ServiceAddonsController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<ServiceAddonResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = serviceAddonWriteSchema.parse(body);
     const addon = await this.container.serviceAddons.create(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -97,7 +95,7 @@ export class ServiceAddonsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<ServiceAddonResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // Not cast here: the service validates it, so a malformed path segment is a 400
     // rather than a 500 at the `uuid` cast.
     return { addon: toSummary(await this.container.serviceAddons.get(scope, actor, id)) };
@@ -109,7 +107,7 @@ export class ServiceAddonsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ServiceAddonResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = serviceAddonWriteSchema.parse(body);
     /*
      * The `kind` in the body is NOT how the edit decides what this add-on is.
@@ -133,7 +131,7 @@ export class ServiceAddonsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ServiceAddonResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = productStatusRequestSchema.parse(body);
     const addon = await this.container.serviceAddons.activate(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -148,35 +146,13 @@ export class ServiceAddonsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ServiceAddonResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = productStatusRequestSchema.parse(body);
     const addon = await this.container.serviceAddons.deactivate(scope, actor, {
       idempotencyKey: command.idempotencyKey,
       addonId: id,
     });
     return { addon: toSummary(addon) };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    // `botInstanceId: null`, for the reason products give: an add-on belongs to the
-    // TENANT, and a tenant running two bots sells one catalogue.
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

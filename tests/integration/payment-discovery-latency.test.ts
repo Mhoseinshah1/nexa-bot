@@ -543,7 +543,8 @@ describe('FIX-01: discovery, settlement and the final message, per rail, order a
         firstInquiryAt(inquiryScheduleFor('TONPAYS'), created, paymentId).getTime() -
         created.getTime();
       expect(new Date(invoice.next_inquiry_at!).getTime() - created.getTime()).toBe(firstDelay);
-      expect(firstDelay).toBeLessThanOrEqual(11_000);
+      // R11 A8: fifteen seconds (±10 %), was ten.
+      expect(firstDelay).toBeLessThanOrEqual(16_500);
 
       // The customer pays two seconds later. No webhook ever arrives.
       advance(2_000);
@@ -565,7 +566,7 @@ describe('FIX-01: discovery, settlement and the final message, per rail, order a
       await expectOrderDeliveredOnce(orderId, paymentId);
     });
 
-    it('TOPUP, callback lost, paid just after the first inquiry: discovered at the second, one schedule step (10 s since FIX-06) later', async () => {
+    it('TOPUP, callback lost, paid just after the first inquiry: discovered at the second, one schedule step (20 s since R11 A8) later', async () => {
       await enable('TONPAYS');
       const paymentId = await gatewayTopup('TONPAYS', 250_000n);
       await lane.runOnce(tenantA);
@@ -581,7 +582,7 @@ describe('FIX-01: discovery, settlement and the final message, per rail, order a
       const discoveredAt = await passesUntilConfirmed(paymentId, 10 * 60_000);
       expect(tonpays.checks).toBe(2);
       const gap = discoveredAt - approvedAt;
-      // The schedule's own next step after one inquiry (10 s ±10 %), measured from that inquiry.
+      // The schedule's own next step after one inquiry (20 s ±10 %), measured from that inquiry.
       const step =
         TONPAYS_INQUIRY_SCHEDULE.kind === 'BANDS'
           ? TONPAYS_INQUIRY_SCHEDULE.bands[0]!.intervalMs
@@ -752,7 +753,13 @@ describe('FIX-01: discovery, settlement and the final message, per rail, order a
   });
 
   describe('TONPAYS after a rate limit', () => {
-    it('Codex #265 (4): a tap between the normal step and the rate-limit floor is CUSTOMER_HINT, not SCHEDULED', async () => {
+    /*
+     * Codex #265 (4) asked that a tap between the normal step and the rate-limit floor be
+     * labelled CUSTOMER_HINT. Round 11 A8 changed what that tap DOES: a 429 now sets the row's
+     * `inquiry_not_before` even without a Retry-After, so no tap, webhook or pass can ask the
+     * provider again before the floor. The tap is still recorded; the ask waits for the floor.
+     */
+    it('R11 A8 (was Codex #265 (4)): a tap inside the rate-limit floor cannot undercut it — the approval is read at the floor, not before', async () => {
       await enable('TONPAYS');
       const paymentId = await gatewayTopup('TONPAYS', 250_000n);
       await lane.runOnce(tenantA);
@@ -771,10 +778,14 @@ describe('FIX-01: discovery, settlement and the final message, per rail, order a
       tonpays.approve(invoice.provider_invoice_id!);
       const view = await lane.attemptFor(tenantA, maryam, paymentId);
       await lane.requestCheck(tenantA, view!);
-      await passesUntilConfirmed(paymentId, 60_000);
+      const confirmedAt = await passesUntilConfirmed(paymentId, 60_000);
+      expect(confirmedAt - last, 'the tap undercut the rate-limit floor').toBeGreaterThanOrEqual(
+        60_000,
+      );
+      expect(confirmedAt - last).toBeLessThanOrEqual(60_000 + 2 * GATEWAY_PAYMENT_INTERVAL_MS);
       expectSettlementLine(paymentId, {
         kind: 'TOPUP',
-        trigger: 'CUSTOMER_HINT',
+        trigger: 'SCHEDULED',
         provider: 'TONPAYS',
       });
     });

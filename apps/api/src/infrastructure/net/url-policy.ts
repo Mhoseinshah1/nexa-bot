@@ -91,6 +91,24 @@ export interface UrlPolicyOptions {
    * list does not mention.
    */
   readonly deniedHosts?: readonly string[];
+  /**
+   * Docker's own networks, refused BY DEFAULT and re-openable by the owner (R12 F2 item 4).
+   *
+   * Every application container sits on the edge network beside Caddy, and that network's
+   * gateway — like the default bridge's `172.17.0.1` — is the HOST. "Private is allowed"
+   * therefore meant a panel URL could reach the host's own services (an SSH daemon, a
+   * panel admin bound to the bridge, a metrics port) and read the difference between a
+   * refused connection and an open port. Unlike `deniedSubnets`, an owner whose panel
+   * genuinely runs on this host can allow a target here, through `allowedPrivateTargets`.
+   */
+  readonly dockerSubnets?: readonly string[];
+  /**
+   * The owner's allow-list (the `security.outbound_private_targets` setting): addresses or
+   * CIDRs inside `dockerSubnets` that may be called anyway. A function, read on every
+   * check, because the setting changes at run time. It never re-opens `deniedSubnets` or
+   * `deniedHosts` — the installation's data network and its database and Redis.
+   */
+  readonly allowedPrivateTargets?: () => readonly string[];
 }
 
 export type UrlPolicyVerdict =
@@ -204,7 +222,19 @@ function ipv6Allowed(address: string, options: UrlPolicyOptions): boolean {
  * validating the list at boot.
  */
 function withinDeniedSubnet(address: string, options: UrlPolicyOptions): boolean {
-  const subnets = options.deniedSubnets ?? [];
+  if (withinAnySubnet(address, options.deniedSubnets ?? [])) return true;
+  // A Docker network, unless the owner allow-listed this address.
+  return (
+    withinAnySubnet(address, options.dockerSubnets ?? []) &&
+    !withinAnySubnet(address, options.allowedPrivateTargets?.() ?? [])
+  );
+}
+
+/**
+ * Whether an address falls inside one of `subnets`. An entry without a prefix is one
+ * address (`/32` or `/128`), which is how the owner's allow-list names a single gateway.
+ */
+function withinAnySubnet(address: string, subnets: readonly string[]): boolean {
   if (subnets.length === 0) return false;
 
   // IPv4-mapped IPv6 is compared as the IPv4 it is, the same unwrapping the
@@ -214,7 +244,10 @@ function withinDeniedSubnet(address: string, options: UrlPolicyOptions): boolean
   const packed = packAddress(candidate);
   if (packed === null) return false;
 
-  for (const cidr of subnets) {
+  for (const entry of subnets) {
+    const cidr = entry.includes('/')
+      ? entry
+      : `${entry.trim()}/${isIP(entry.trim()) === 6 ? 128 : 32}`;
     const parsed = parseCidr(cidr);
     if (parsed === null) continue;
     if (parsed.bytes.length !== packed.length) continue;

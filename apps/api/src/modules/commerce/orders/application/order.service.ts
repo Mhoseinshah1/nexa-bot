@@ -1024,6 +1024,26 @@ export class OrderService {
   }
 
   /**
+   * R12 F3 item 9 (OQ-R11-A11-04): is this customer's order past its deadline only because a
+   * payment of it is still LIVE — a receipt under review, a gateway attempt pending or
+   * `UNKNOWN`, a confirmed payment not yet settled — so that the expiry sweep keeps it? The
+   * payment's id when so, null otherwise (not awaiting payment, or no such payment).
+   *
+   * A READ, and the surface's only way to know: the states are the sweep's own
+   * (`OrderRepository.livePaymentOf` shares its list with `expireDue`), not a copy of its
+   * predicate. Another customer's order is UNKNOWN, as in `orderForCustomer`.
+   */
+  async livePaymentFor(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: { readonly customerId: string; readonly orderId: string },
+  ): Promise<{ readonly paymentId: string } | null> {
+    const order = await this.orderForCustomer(scope, actor, input);
+    if (order.state !== 'AWAITING_PAYMENT') return null;
+    return this.deps.repository.livePaymentOf(scope, order.id);
+  }
+
+  /**
    * What this order's username step looks like right now.
    *
    * A READ, and the one the Telegram flow asks before drawing anything: which modes the
@@ -1407,6 +1427,78 @@ export class OrderService {
           tx,
         );
         return { expiresAt: window.expiresAt };
+      },
+    );
+  }
+
+  /**
+   * R12 F3 item 2: the customer backed out of (or cancelled) a typed-input prompt — the
+   * discount code, the service username, a custom service's volume or days. Closes whichever
+   * text window this customer has open on this bot, so the next plain message is NOT read as
+   * the answer to a question they walked away from.
+   *
+   * `beginDiscountCodeEntry`'s shape, under the same window lock, and it only ever closes: no
+   * order is read or changed, nothing is priced or paid, and a customer with no window open
+   * gets the same quiet success. The windows are closed `SUPERSEDED` — the word the lane
+   * already uses for a window that was replaced by the customer moving on.
+   */
+  async abandonTextEntry(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: string;
+      readonly customerId: string;
+    },
+  ): Promise<void> {
+    const customerId = this.customerId(input.customerId);
+    const requestHash = hashRequest({ customerId, bot: input.botInstanceId, abandon: true });
+    const denial = {
+      action: 'order.text_entry.abandon',
+      entityType: 'Customer',
+      entityId: customerId,
+    };
+
+    await this.authorize(scope, actor, denial);
+
+    await runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      ORDER_PLACE_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        await this.assertCustomerMayOrder(scope, customerId, tx);
+        await this.deps.usernames.lockWindow(scope, input.botInstanceId, customerId, tx);
+        await this.supersedeDiscountCodeWindow(scope, input.botInstanceId, customerId, tx);
+        const now = this.deps.clock.now();
+        const usernameWindow = await this.deps.usernames.openWindowFor(
+          scope,
+          input.botInstanceId,
+          customerId,
+          tx,
+        );
+        if (usernameWindow !== null) {
+          await this.deps.usernames.closeWindow(scope, usernameWindow.id, 'SUPERSEDED', now, tx);
+        }
+        await this.deps.captures?.closeOpen(
+          scope,
+          input.botInstanceId as BotInstanceId,
+          customerId,
+          now,
+          tx,
+        );
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          ORDER_NAMESPACE,
+          input.idempotencyKey,
+          requestHash,
+          { abandoned: true },
+          tx,
+        );
+        return { abandoned: true };
       },
     );
   }

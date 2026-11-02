@@ -61,16 +61,16 @@ describe('the jitter', () => {
 });
 
 describe('TONPAYS: frequent while a customer is waiting, then decaying to the old cap', () => {
-  it('asks first about ten seconds after the invoice, not twenty', () => {
+  it('asks first about fifteen seconds after the invoice (R11 A8)', () => {
     const first = firstInquiryAt(TONPAYS_INQUIRY_SCHEDULE, T0, PAY).getTime() - T0.getTime();
-    expect(first).toBeGreaterThanOrEqual(9_000);
-    expect(first).toBeLessThan(11_000);
+    expect(first).toBeGreaterThanOrEqual(13_500);
+    expect(first).toBeLessThan(16_500);
   });
 
-  it('leaves no gap over 11 s in the first two minutes, 33 s to five, 66 s to fifteen, 132 s to thirty, 330 s after', () => {
+  it('leaves no gap over 22 s in the first two minutes, 33 s to five, 66 s to fifteen, 132 s to thirty, 330 s after', () => {
     const times = asks('TONPAYS', 70 * 60_000);
     const bounds: [number, number][] = [
-      [120_000, 11_000],
+      [120_000, 22_000],
       [300_000, 33_000],
       [900_000, 66_000],
       [1_800_000, 132_000],
@@ -83,19 +83,27 @@ describe('TONPAYS: frequent while a customer is waiting, then decaying to the ol
     });
   });
 
-  it('stays inside the scheduled share of the budget: at most 6 asks a minute per invoice, about 44 over 70 minutes', () => {
+  it('R11 A8: at most 4 asks a minute per invoice (3 nominal), about 38 over 70 minutes, never denser later', () => {
     const times = asks('TONPAYS', 70 * 60_000);
+    const perMinute: number[] = [];
     for (let minute = 0; minute < 70; minute += 1) {
       const inMinute = times.filter((t) => t >= minute * 60_000 && t < (minute + 1) * 60_000);
-      expect(inMinute.length).toBeLessThanOrEqual(7);
+      perMinute.push(inMinute.length);
+      expect(inMinute.length).toBeLessThanOrEqual(4);
     }
-    expect(times.length).toBeGreaterThan(35);
-    expect(times.length).toBeLessThan(55);
-    // Five fresh invoices at the full rate fit the scheduled share (40 less the reserve).
+    expect(times.length).toBeGreaterThan(30);
+    expect(times.length).toBeLessThan(45);
+    // The interval grows with age to its cap, never back: a minute is never denser than an
+    // earlier band's (the jitter aside, compared band by band).
+    const gapsOf = gaps(times);
+    const firstBand = Math.max(...gapsOf.slice(0, 4));
+    const lastBand = Math.min(...gapsOf.slice(-5));
+    expect(lastBand).toBeGreaterThan(firstBand * 10);
+    // Ten fresh invoices at the full rate fit the scheduled share (40 less the reserve).
     const scheduledShare =
       TONPAYS_INQUIRY_BUDGET_PER_MINUTE - hintReservePerMinute(TONPAYS_INQUIRY_BUDGET_PER_MINUTE);
     expect(scheduledShare).toBe(30);
-    expect(5 * 6).toBeLessThanOrEqual(scheduledShare);
+    expect(10 * 3).toBeLessThanOrEqual(scheduledShare);
   });
 
   it('measures age from the invoice, so a late hint does not reset the fast phase', () => {

@@ -9,11 +9,9 @@ import {
   updateSupportFaqRequestSchema,
   type SupportFaqListResponse,
   type SupportFaqResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import type { SupportFaqRecord } from '../../modules/control/support/application/ports.js';
 
 /**
@@ -36,14 +34,14 @@ export class SupportFaqController {
 
   @Get(SUPPORT_FAQ_ROUTES.list)
   async list(@Req() request: FastifyRequest): Promise<SupportFaqListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const items = await this.container.supportFaqs.listForOperator(scope, actor);
     return { items: items.map(toView) };
   }
 
   @Post(SUPPORT_FAQ_ROUTES.create)
   async create(@Req() request: FastifyRequest, @Body() body: unknown): Promise<SupportFaqResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = createSupportFaqRequestSchema.parse(body);
     return toView(await this.container.supportFaqs.create(scope, actor, input));
   }
@@ -54,7 +52,7 @@ export class SupportFaqController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<SupportFaqResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = updateSupportFaqRequestSchema.parse(body);
     return toView(await this.container.supportFaqs.update(scope, actor, { ...input, id }));
   }
@@ -65,31 +63,9 @@ export class SupportFaqController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<SupportFaqResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = setSupportFaqStatusRequestSchema.parse(body);
     return toView(await this.container.supportFaqs.setStatus(scope, actor, { ...input, id }));
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    // `botInstanceId: null`: the FAQ belongs to the TENANT, and a tenant running two
-    // bots answers one set of questions.
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

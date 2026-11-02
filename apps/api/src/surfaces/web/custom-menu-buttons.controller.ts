@@ -5,11 +5,9 @@ import {
   CUSTOM_MENU_BUTTON_ROUTES,
   type CustomMenuButtonListResponse,
   type CustomMenuButtonMutationResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 
 /**
  * R10 D2 — the owner's custom main-menu buttons at `/bot-menu/custom-buttons`: the list, create,
@@ -26,7 +24,7 @@ export class CustomMenuButtonsController {
 
   @Get(CUSTOM_MENU_BUTTON_ROUTES.list)
   async list(@Req() request: FastifyRequest): Promise<CustomMenuButtonListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.customMenuButtons.list(scope, actor);
   }
 
@@ -35,7 +33,7 @@ export class CustomMenuButtonsController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<CustomMenuButtonMutationResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.customMenuButtons.create(scope, actor, body);
   }
 
@@ -45,7 +43,7 @@ export class CustomMenuButtonsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CustomMenuButtonMutationResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.customMenuButtons.update(scope, actor, id, body);
   }
 
@@ -55,7 +53,7 @@ export class CustomMenuButtonsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CustomMenuButtonMutationResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.customMenuButtons.archive(scope, actor, id, body);
   }
 
@@ -65,23 +63,7 @@ export class CustomMenuButtonsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CustomMenuButtonMutationResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.customMenuButtons.setMedia(scope, actor, id, body);
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }

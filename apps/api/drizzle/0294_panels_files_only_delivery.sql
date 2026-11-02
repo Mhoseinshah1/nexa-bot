@@ -1,0 +1,1 @@
+ALTER TABLE "panels" ADD COLUMN "files_only_delivery" boolean DEFAULT false NOT NULL;

@@ -132,6 +132,11 @@ jobs:
       - name: Falsification citations
         run: pnpm check:citations
 
+      # The READMEs' botctl commands and install one-liner must match
+      # `botctl --help` and docs/deployment.md.
+      - name: README commands
+        run: pnpm check:readme
+
   # Built ONCE. Every job that needs compiled output — the unit suite runs the
   # built CLIs, the integration shards migrate with the compiled migrator —
   # downloads this artifact rather than building again, so every test job runs
@@ -677,6 +682,13 @@ jobs:
       - name: Release CI gate
         run: bash tests/deploy/release-ci-gate.test.sh
 
+      # The release's installer assets and install.sh run ALONE: the stamp is
+      # the only difference from the tagged file, the bundle is verified before
+      # it is unpacked, a tampered or unsafe one is refused, another --version
+      # is refused, and the domain and e-mail are asked at a terminal.
+      - name: Standalone installer
+        run: bash tests/deploy/standalone-installer.test.sh
+
   # The deployment, actually run. Everything above this proves the application;
   # these two prove it can be installed, updated and rolled back.
   #
@@ -709,6 +721,14 @@ jobs:
       # independent SQL check, a standard backup, and `down` keeping the volumes.
       - name: Mirza rehearsal smoke
         run: bash scripts/mirza-rehearsal-smoke.sh
+
+      # The release's install.sh downloaded alone onto a clean ubuntu:24.04
+      # container with only curl and ca-certificates added: verified with
+      # `sha256sum -c`, run as root, bundle fetched (file://, served from the
+      # assets built for HEAD), verified and its installer run with --help; a
+      # tampered bundle refused. The transcript is the step's log.
+      - name: Standalone installer on a clean Ubuntu 24.04
+        run: bash scripts/standalone-installer-smoke.sh
 
   # A -> B, a release that never becomes ready, and B -> A, against a real
   # local registry so digests are real. Most of its time is the readiness

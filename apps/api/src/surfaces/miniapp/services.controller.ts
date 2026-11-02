@@ -31,7 +31,7 @@ import {
   parseWith,
   type MiniAppCall,
 } from './miniapp-request.js';
-import { orderWire, serviceSummaryWire, wire } from './projections.js';
+import { listedPersonalDiscountWire, orderWire, serviceSummaryWire, wire } from './projections.js';
 
 /**
  * The customer's services (Round 9, C5): the list, one service's card data (the same facts
@@ -82,13 +82,27 @@ export class MiniAppServicesController {
           call.actor,
           service,
         );
+    /*
+     * R11 A4: on a «فقط فایل، بدون لینک ساب» panel the link is NOT in the payload at all —
+     * not hidden by the screen, not sent and ignored — and the QR the link would draw is
+     * not offered. The field stays in the schema as null, the answer for "no link to show".
+     */
     const deliverable = ProvisioningService.isDeliverable(service);
+    const showLink =
+      deliverable && !(await this.container.delivery.isFilesOnly(call.context.scope, service));
+    // R11 A4, «نوع بارکد»: the QRs the sheet offers (none while the link is hidden).
+    const qrKinds = deliverable
+      ? (await this.container.delivery.qrPayloadsFor(call.context.scope, service)).map(
+          (payload) => payload.kind,
+        )
+      : [];
     return {
       ...serviceSummaryWire(service, title),
-      subscriptionUrl: deliverable ? service.subscriptionUrl : null,
+      subscriptionUrl: showLink ? service.subscriptionUrl : null,
       working,
       actions: MINIAPP_SERVICE_ACTIONS.filter((kind) => offered.includes(kind)),
-      qr: deliverable,
+      qr: qrKinds.length > 0,
+      qrKinds,
       canChangeLocation: offered.includes('CHANGE_LOCATION'),
       // R11 B4: the same count the enforcement uses; null (nothing shown) with the feature off
       // or no limit set, and still answered at 0, where the button above is already gone.
@@ -139,21 +153,49 @@ export class MiniAppServicesController {
     return { ...state, price: state.price === null ? null : wire(state.price) };
   }
 
-  /** The link's QR, drawn by the one renderer every delivered QR goes through. */
+  /** The service's first QR, drawn by the one renderer every delivered QR goes through. */
   @Get(MINIAPP_ROUTES.serviceQr)
   async qr(
     @Req() request: FastifyRequest,
     @Param('serviceId') serviceId: string,
     @Res() reply: FastifyReply,
   ): Promise<void> {
+    await this.drawQr(request, serviceId, null, reply);
+  }
+
+  /** R11 A4: one named QR (`SUB_LINK` or `SINGBOX`) of a panel that offers more than one. */
+  @Get(MINIAPP_ROUTES.serviceQrKind)
+  async qrOfKind(
+    @Req() request: FastifyRequest,
+    @Param('serviceId') serviceId: string,
+    @Param('kind') kind: string,
+    @Res() reply: FastifyReply,
+  ): Promise<void> {
+    await this.drawQr(request, serviceId, kind, reply);
+  }
+
+  private async drawQr(
+    request: FastifyRequest,
+    serviceId: string,
+    kind: string | null,
+    reply: FastifyReply,
+  ): Promise<void> {
     const call = await miniAppCall(this.container, request, { gated: true });
     const service = await this.ownService(call, serviceId);
     if (!ProvisioningService.isDeliverable(service) || service.subscriptionUrl === null) {
       throw notFound();
     }
+    /*
+     * R11 A4: what may be drawn is decided by the panel — none on a files-only panel (the
+     * link is never shown, so neither is a QR of it), the plain link's, the sing-box import
+     * string, or both. A kind the panel does not offer is the same 404 as no QR.
+     */
+    const payloads = await this.container.delivery.qrPayloadsFor(call.context.scope, service);
+    const payload = kind === null ? payloads[0] : payloads.find((one) => one.kind === kind);
+    if (payload === undefined) throw notFound();
     const image = await this.container.deliveryQr.render(call.context.scope, {
       kind: 'PAYLOAD',
-      text: service.subscriptionUrl,
+      text: payload.text,
     });
     await reply.header('Content-Type', 'image/png').send(Buffer.from(image.bytes));
   }
@@ -184,6 +226,8 @@ export class MiniAppServicesController {
           planId: null,
           title: offer.product.title,
           price: wire(offer.product.price),
+          // R11 A9: the price the quote charges when the personal discount wins it.
+          personalDiscount: listedPersonalDiscountWire(offer.product.personalDiscount),
         });
       }
       for (const plan of offer.plans ?? []) {
@@ -193,6 +237,7 @@ export class MiniAppServicesController {
           planId: plan.id,
           title: plan.title,
           price: wire(plan.price),
+          personalDiscount: listedPersonalDiscountWire(plan.personalDiscount),
         });
       }
     } else {
@@ -204,6 +249,7 @@ export class MiniAppServicesController {
           planId: null,
           title: addon.title,
           price: wire(addon.price),
+          personalDiscount: listedPersonalDiscountWire(addon.personalDiscount),
         });
       }
     }

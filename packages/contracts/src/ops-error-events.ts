@@ -379,6 +379,8 @@ export const OPS_ERROR_EVENTS: readonly OpsErrorEventDefinition[] = [
   failure('payments.gateway_late_completion', 'PAYMENTS', 'PER_SUBJECT'),
   failure('payments.gateway_identity_mismatch', 'PAYMENTS', 'PER_SUBJECT'),
   failure('payments.gateway_charge_unmatched', 'PAYMENTS', 'PER_SUBJECT'),
+  // R12 F1 item 6: Telegram refunded a Stars charge outside Nexa; the operator follows it up.
+  failure('payments.gateway_charge_refunded', 'PAYMENTS', 'PER_SUBJECT'),
   failure('payments.gateway_receipt_unknown', 'PAYMENTS', 'PER_SUBJECT'),
   failure('payments.gateway_card_change_unknown', 'PAYMENTS', 'PER_SUBJECT'),
   // Round 6: a customer's cancel or refund request whose answer was lost.

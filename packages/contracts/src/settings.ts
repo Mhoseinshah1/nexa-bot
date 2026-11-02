@@ -97,6 +97,17 @@ import {
 } from './payment-gateways.js';
 import { connectionFileCaptionTemplateIssues } from './templates.js';
 import {
+  TONPAYS_CALLS_PER_MINUTE_DEFAULT,
+  TONPAYS_CALLS_PER_MINUTE_MAX,
+  TONPAYS_CALLS_PER_MINUTE_MIN,
+  TONPAYS_PACING_BURST_DEFAULT,
+  TONPAYS_PACING_BURST_MAX,
+  TONPAYS_PACING_BURST_MIN,
+  TONPAYS_PACING_BURST_SETTING_KEY,
+  TONPAYS_PACING_SETTING_KEYS,
+  TONPAYS_TELEGRAM_CALLS_PER_MINUTE_DEFAULT,
+} from './tonpays.js';
+import {
   REFERRAL_COMMISSION_PERCENT_MAX,
   REFERRAL_COMMISSION_PERCENT_MIN,
   RESELLER_MINIMUM_REMINDER_DAYS_DEFAULT,
@@ -407,6 +418,45 @@ export type ConnectionFileCaptionMode = (typeof CONNECTION_FILE_CAPTION_MODES)[n
 export const CONNECTION_FILE_CAPTION_PLACEMENTS = ['LAST_FILE', 'EVERY_FILE'] as const;
 export type ConnectionFileCaptionPlacement = (typeof CONNECTION_FILE_CAPTION_PLACEMENTS)[number];
 
+/**
+ * R12 F2: one IPv4 or IPv6 address, or a CIDR, in the owner's outbound allow-list. Loose by
+ * design for IPv6 — the URL policy parses each entry properly and an entry it cannot parse
+ * opens nothing — but strict enough that a typo is refused at the form, not ignored later.
+ */
+function isOutboundTargetEntry(entry: string): boolean {
+  const [address = '', prefix, extra] = entry.split('/');
+  if (extra !== undefined) return false;
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(address);
+  if (v4 !== null) {
+    if (v4.slice(1).some((octet) => Number(octet) > 255)) return false;
+    return prefix === undefined || (/^\d{1,2}$/.test(prefix) && Number(prefix) <= 32);
+  }
+  if (address.includes(':') && /^[0-9A-Fa-f:]{2,39}$/.test(address)) {
+    return prefix === undefined || (/^\d{1,3}$/.test(prefix) && Number(prefix) <= 128);
+  }
+  return false;
+}
+
+/** The setting key of the owner's outbound private-target allow-list (R12 F2). */
+export const OUTBOUND_PRIVATE_TARGETS_SETTING_KEY = 'security.outbound_private_targets';
+
+/**
+ * Settings whose edit is a security decision, not configuration: writing one also requires
+ * `settings.destructive` (CRITICAL), which the owner role holds and an operator with only
+ * `settings.edit` does not. A key here is one that widens what the installation will reach.
+ */
+export const OWNER_ONLY_SETTING_KEYS: readonly string[] = [OUTBOUND_PRIVATE_TARGETS_SETTING_KEY];
+
+/**
+ * Phase 4 PR-4 (review of PR #371): settings whose TURNING ON widens what the support AI may send
+ * to customers on its own, and so takes the permission that widening takes everywhere else — the
+ * owner's decision, not an operator's with `settings.edit` alone. Enforced in the settings write
+ * path, not only in a page: key → the extra permission charged when the value becomes `true`.
+ */
+export const SETTING_ENABLE_PERMISSIONS: Readonly<Record<string, string>> = {
+  'support.ai.tickets_enabled': 'support_ai.auto_reply',
+};
+
 export const SETTINGS = [
   {
     key: 'ops.notifications.telegram_chat_id',
@@ -583,6 +633,44 @@ export const SETTINGS = [
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     configures: 'ops_notifications',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * R12 F2 item 4: the owner's allow-list of private outbound targets. The panel, gateway
+   * and custom-bridge URL policy refuses Docker's own networks by default — the edge network
+   * (NEXA_EDGE_SUBNET, whose gateway is this host) and Docker's default bridge
+   * 172.17.0.0/16 — because a panel URL pointed there reaches the host's own services. An
+   * owner whose panel genuinely runs on this host behind one of those addresses lists that
+   * address (or a CIDR) here. The installation's DATA network and its database and Redis
+   * hosts are refused whatever this says. Read on the installation tenant by every role,
+   * within a minute of a change. Writing it requires settings.destructive as well.
+   */
+  {
+    key: OUTBOUND_PRIVATE_TARGETS_SETTING_KEY,
+    description:
+      'Comma-separated IPv4/IPv6 addresses or CIDRs that panels, payment gateways and custom ' +
+      'bridges may call although they are inside the Docker networks this installation ' +
+      'refuses by default (its edge network and the default bridge 172.17.0.0/16, both of ' +
+      'which reach the host itself). Empty — the default — allows none. The data network, ' +
+      'the database and Redis are never reachable, whatever this lists.',
+    schema: z
+      .string()
+      .trim()
+      .max(2000)
+      .refine(
+        (value) =>
+          value === '' ||
+          value
+            .split(',')
+            .map((entry) => entry.trim())
+            .every((entry) => entry !== '' && isOutboundTargetEntry(entry)),
+        'A comma-separated list of IP addresses or CIDRs, for example 172.17.0.1 or 172.29.0.0/24.',
+      ),
+    defaultValue: '',
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'SENSITIVE',
+    configures: null,
     consumer: 'ACTIVE',
   },
   {
@@ -890,6 +978,122 @@ export const SETTINGS = [
     consumer: 'ACTIVE',
   },
   {
+    key: 'support.ai.resume_after_minutes',
+    description:
+      'Phase 4 PR-1: how many minutes after the last word of a person (an operator, the owner ' +
+      'typing in the business account) a SOFT handoff returns the Telegram Business conversation ' +
+      'to the support AI by itself; also how long a person\u2019s message pauses the AI. Between 0 ' +
+      'and 1440. A HARD handoff (money dispute, refund, credentials, security, a request for a ' +
+      'person, abuse) never returns by itself. Read when the customer next writes, and only while ' +
+      'the support AI is in automatic-reply mode.',
+    schema: z.number().int().min(0).max(1440),
+    defaultValue: 30,
+    // 0 = never: every handoff and every person's message is sticky, as before Phase 4.
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'support.ai.handoff_alert_pct',
+    description:
+      'Phase 4 PR-1: the share (percent) of SOFT handoffs among the last 50 automatic support-AI ' +
+      'jobs above which the operations log is told «نرخ ارجاع به پشتیبان بالا است», at most once ' +
+      'every six hours, with the top three reasons. Between 0 and 100.',
+    schema: z.number().int().min(0).max(100),
+    defaultValue: 30,
+    // 0 = the alert is off.
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'support.knowledge.auto_refresh',
+    description:
+      'Phase 4 PR-2: whether the support knowledge built from NEXA\u2019s own content (plans, FAQ, ' +
+      'connection guides, client apps, locations, terms, support accounts, payment-route ' +
+      'instructions) refreshes by itself: two minutes after that content stops changing, and ' +
+      'once a night. Only those owner-owned sources are applied automatically (new, changed and ' +
+      'retired articles); an article a reviewer edited stays a conflict for a person, and a ' +
+      'lesson learned from a chat still needs approval. Off by default: the build is run and ' +
+      'applied by hand, as before.',
+    schema: z.boolean(),
+    defaultValue: false,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'support.ai.actions_enabled',
+    description:
+      'Phase 4 PR-3: whether the support AI\u2019s automatic Telegram Business replies may use its ' +
+      'read-only tools and the bot\u2019s deep links: send the customer\u2019s own subscription link ' +
+      '(as «سرویس‌های من» shows it), report the customer\u2019s own payment states, attach buttons ' +
+      'into the bot\u2019s buy, renew, add-on, location, trial, link-rotation and wallet top-up ' +
+      'flows, check the customer\u2019s payments before handing a «paid but not received» to a ' +
+      'person, draw «👤 پشتیبان انسانی» under its replies, and answer a voice message, sticker or ' +
+      'file with a request to type instead of handing off. The AI never performs any of those ' +
+      'changes itself. Off by default: replies are text only, as before.',
+    schema: z.boolean(),
+    defaultValue: false,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'support.ai.label_enabled',
+    description:
+      'Phase 4 PR-3: whether every automatic support-AI reply on Telegram Business opens with a ' +
+      'short line saying an assistant wrote it («🤖 پاسخ هوش مصنوعی»). Off by default.',
+    schema: z.boolean(),
+    defaultValue: false,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'support.ai.feedback_enabled',
+    description:
+      'Phase 4 PR-3: whether an automatic support-AI answer on Telegram Business ends with ' +
+      '«مشکل حل شد؟» and 👍 / 👎 buttons. 👎 hands the conversation to a person (soft) and records ' +
+      'a knowledge gap. Read only while the tools are on (support.ai.actions_enabled). On by ' +
+      'default (the owner\u2019s decision).',
+    schema: z.boolean(),
+    defaultValue: true,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'support.ai.tickets_enabled',
+    description:
+      'Phase 4 PR-4: whether the support AI also writes the first answers inside the bot\u2019s ' +
+      'support tickets and the Mini App\u2019s support screen, by the same pipeline, guards, ' +
+      'tools and output checks as its automatic Telegram Business replies (so it needs the ' +
+      'support AI in the automatic mode). Its replies are recorded in the ticket as the ' +
+      'assistant\u2019s, never as an administrator\u2019s, and never change the ticket\u2019s status. ' +
+      'An administrator\u2019s reply pauses the AI in that ticket for ' +
+      'support.ai.resume_after_minutes; a hard handoff stays with a person. Off by default.',
+    schema: z.boolean(),
+    defaultValue: false,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
     key: 'telegram.channels',
     description:
       'The channels shown to customers, in order, each flagged as required membership or ' +
@@ -1144,6 +1348,49 @@ export const SETTINGS = [
       'except what a webhook or an operator brings forward, as before.',
     schema: z.number().int().min(LATE_CREDIT_WINDOW_HOURS_MIN).max(LATE_CREDIT_WINDOW_HOURS_MAX),
     defaultValue: LATE_CREDIT_WINDOW_HOURS_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: TONPAYS_PACING_SETTING_KEYS.TONPAYS,
+    description:
+      'Round 11 A8: the most calls a minute this installation makes to TonPays (website) with ' +
+      'one API key — invoice creates and status checks together — paced by a token bucket in ' +
+      'the TonPays client itself, so a pass never fires a volley. A 429 from TonPays also ' +
+      'pauses every call on that key for its Retry-After (else an exponential back-off). Never ' +
+      'above the documented 60. Lower it if TonPays still answers 429.',
+    schema: z.number().int().min(TONPAYS_CALLS_PER_MINUTE_MIN).max(TONPAYS_CALLS_PER_MINUTE_MAX),
+    defaultValue: TONPAYS_CALLS_PER_MINUTE_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: TONPAYS_PACING_SETTING_KEYS.TONPAYS_TELEGRAM,
+    description:
+      'Round 11 A8: the same pace for TonPays Telegram (card-to-card): every create, check, ' +
+      'card change, receipt upload, cancel and refund with its key. Kept below the website ' +
+      'route so both together stay under 60 a minute even if TonPays counts them as one account.',
+    schema: z.number().int().min(TONPAYS_CALLS_PER_MINUTE_MIN).max(TONPAYS_CALLS_PER_MINUTE_MAX),
+    defaultValue: TONPAYS_TELEGRAM_CALLS_PER_MINUTE_DEFAULT,
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    configures: null,
+    consumer: 'ACTIVE',
+  },
+  {
+    key: TONPAYS_PACING_BURST_SETTING_KEY,
+    description:
+      'Round 11 A8: how many TonPays calls may leave back to back before the pace above applies ' +
+      '(the token bucket\u2019s size), for both TonPays routes. Small on purpose.',
+    schema: z.number().int().min(TONPAYS_PACING_BURST_MIN).max(TONPAYS_PACING_BURST_MAX),
+    defaultValue: TONPAYS_PACING_BURST_DEFAULT,
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',

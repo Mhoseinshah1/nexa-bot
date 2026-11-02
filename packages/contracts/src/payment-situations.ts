@@ -435,6 +435,7 @@ export const PAYMENT_SITUATION_CUSTOMER_TEMPLATES: Readonly<
   INVOICE_NOT_ISSUED: [
     'bot.payment.gateway_unknown',
     'bot.payment.gateway_unavailable',
+    'bot.payment.gateway_busy',
     'bot.payment.tetrapay_daily_limit',
     'bot.payment.tetrapay_amount_out_of_range',
     'bot.payment.rialit_amount_out_of_range',

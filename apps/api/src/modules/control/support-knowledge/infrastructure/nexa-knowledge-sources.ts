@@ -5,6 +5,7 @@ import {
   UNLIMITED_DURATION_DAYS,
   UNLIMITED_TRAFFIC_BYTES,
   neutralizeClientAppBareLinks,
+  normalizeClientAppUrl,
   renderClientAppGuide,
   templateDefinition,
   type ProductId,
@@ -27,6 +28,7 @@ import type {
   KnowledgeBuildSources,
 } from '../application/support-knowledge-build.service.js';
 import type { BuildItem } from '../domain/build-diff.js';
+import { builtArticleTags } from '../../../commerce/support-context/domain/persian-text.js';
 
 /**
  * TB9 — THE source allowlist, as code (ADR-0035 §5).
@@ -51,11 +53,13 @@ export const BUILD_LABELS = {
   locationsTitle: 'سرویس در چه موقعیت‌هایی ارائه می‌شود؟',
   appTitle: (name: string) => `برنامهٔ ${name}`,
   /**
-   * Built knowledge carries no link (TB9 × TB8 review: every article passes `assertClean`, and
-   * a URL is a HOST or URL_TOKEN hit). An app's links are in the bot's app list; the article
-   * says so instead of repeating them.
+   * Phase 4 PR-2: an app's official and help links ARE in its article now — the build reads
+   * through the scrubber's business allowlist, which keeps a source's public links — under
+   * these two labels, and the article still points to the bot's app list.
    */
-  appLinks: 'پیوند دانلود و راهنمای این برنامه در فهرست برنامه‌های ربات آمده است.',
+  appLinks: 'پیوند دانلود و راهنمای این برنامه در فهرست برنامه‌های ربات هم آمده است.',
+  appDownload: 'دانلود',
+  appHelp: 'راهنما',
   tutorialTitle: (platform: string) => `راهنمای اتصال در ${platform}`,
   supportTitle: 'چطور با پشتیبانی در تماس باشم؟',
   supportBody: 'حساب‌های پشتیبانی:',
@@ -114,6 +118,8 @@ function item(
   category: SupportKnowledgeCategory,
   title: string,
   body: string,
+  /** Phase 4 PR-2: the platform of an app or a guide, for its Persian tags. */
+  platform: string | null = null,
 ): Drafted | null {
   const rawTitle = title.trim();
   const rawBody = body.trim();
@@ -121,7 +127,19 @@ function item(
   const b = clip(rawBody, SUPPORT_KNOWLEDGE_LIMITS.bodyChars);
   if (t === '' || b === '') return null;
   return {
-    item: { sourceType, sourceKey, content: { title: t, body: b, category, tags: [] } },
+    item: {
+      sourceType,
+      sourceKey,
+      // Phase 4 PR-2: Persian tags customers' words meet (`builtArticleTags`).
+      content: {
+        title: t,
+        body: b,
+        category,
+        tags: builtArticleTags(sourceType, platform)
+          .map((tag) => clip(tag, SUPPORT_KNOWLEDGE_LIMITS.tagChars))
+          .slice(0, SUPPORT_KNOWLEDGE_LIMITS.tags),
+      },
+    },
     truncated: t !== rawTitle || b !== rawBody,
   };
 }
@@ -227,13 +245,20 @@ export class NexaKnowledgeSources implements KnowledgeBuildSources {
   }
 
   /**
-   * ENABLED apps: name, description and the rendered guide. The official and help links are
-   * NOT copied into the article (knowledge carries no URL); a fixed line points to the app list.
+   * ENABLED apps: name, description, the rendered guide and (Phase 4 PR-2) the official and help
+   * links, first — so a long guide clipped to the article bound never cuts the links.
    */
   private async clientApps(scope: TenantContext) {
     const rows = await this.deps.clientApps.list(scope, { status: 'ENABLED' });
     const drafts = rows.map((app) => {
+      const official = normalizeClientAppUrl(app.officialUrl);
+      const help = app.helpUrl === null ? null : normalizeClientAppUrl(app.helpUrl);
+      const links = [
+        official === null ? '' : `${BUILD_LABELS.appDownload}: ${official}`,
+        help === null ? '' : `${BUILD_LABELS.appHelp}: ${help}`,
+      ].filter((line) => line !== '');
       const body = [
+        links.join('\n'),
         neutralizeClientAppBareLinks(app.description),
         renderClientAppGuide(app.guide),
         BUILD_LABELS.appLinks,
@@ -244,6 +269,7 @@ export class NexaKnowledgeSources implements KnowledgeBuildSources {
         'APPS',
         BUILD_LABELS.appTitle(neutralizeClientAppBareLinks(app.name)),
         body.join('\n\n'),
+        app.platform,
       );
     });
     return read('CLIENT_APP', drafts);
@@ -264,6 +290,7 @@ export class NexaKnowledgeSources implements KnowledgeBuildSources {
           'CONNECTION',
           BUILD_LABELS.tutorialTitle(PLATFORM_NAMES[platform] ?? platform),
           resolved.body,
+          platform,
         ),
       );
     }

@@ -31,6 +31,7 @@ import { DashboardController } from './surfaces/web/dashboard.controller.js';
 import { TenantMediaController } from './surfaces/web/tenant-media.controller.js';
 import { ResellersController } from './surfaces/web/resellers.controller.js';
 import { OrdersController } from './surfaces/web/orders.controller.js';
+import { GlobalSearchController } from './surfaces/web/global-search.controller.js';
 import { WalletController } from './surfaces/web/wallet.controller.js';
 import { PaymentsController } from './surfaces/web/payments.controller.js';
 import { PaymentAccountsController } from './surfaces/web/payment-accounts.controller.js';
@@ -146,6 +147,7 @@ export class AppModule implements NestModule {
         TenantMediaController as never,
         ResellersController as never,
         OrdersController as never,
+        GlobalSearchController as never,
         WalletController as never,
         PaymentsController as never,
         PaymentAccountsController as never,
