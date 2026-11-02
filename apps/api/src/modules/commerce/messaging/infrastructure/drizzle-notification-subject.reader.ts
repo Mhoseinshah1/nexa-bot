@@ -15,6 +15,7 @@ import {
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { importedServiceNoticeRefused } from '../../../../infrastructure/persistence/imported-notice-guard.js';
+import { customerRemindersOptedOutRefused } from '../../../../infrastructure/persistence/reminder-opt-out-guard.js';
 import {
   customerDirectMessages,
   customerNotifications,
@@ -242,6 +243,10 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
    *     one is what they are told. "Raised" by the dispatcher's own clock: `raised_at` is
    *     the sweep's `Clock`, so only news that exists at the moment of sending counts.
    *
+   *   - Round 11, B6: the customer has not turned the reminders off (and the installation
+   *     honours it). A reminder raised before they did, still queued, is superseded here —
+   *     `customerRemindersOptedOutRefused`.
+   *
    * A reminder row that is gone is `false`: nothing is announced about a subject that does
    * not exist.
    */
@@ -267,6 +272,7 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
         AND s.state = ANY(${sql.param([...states])}::text[])
         ${expiry ? sql`` : sql`AND r.basis_traffic_limit_bytes = s.traffic_limit_bytes`}
         AND NOT ${importedServiceNoticeRefused(expiry ? 'EXPIRY' : 'USAGE')}
+        AND NOT ${customerRemindersOptedOutRefused()}
         ${advance ? sql`AND s.expires_at > ${now}` : sql``}
         ${
           moreUrgent.length === 0

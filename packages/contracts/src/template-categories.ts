@@ -120,6 +120,7 @@ export const TEMPLATE_CATEGORY_PREFIXES: Readonly<Record<TemplateCategory, reado
     'bot.incident.',
     'bot.broadcast.',
     'bot.marketing.',
+    'bot.reminders.',
     'bot.direct_message.',
   ],
   referral: ['bot.referral.'],

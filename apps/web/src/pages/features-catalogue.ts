@@ -150,6 +150,14 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: 'web.feature_customer_marketing_opt_out_off_effect',
     confirmEnable: null,
   },
+  // Round 11 B6. Off hides the buttons and stops honouring stored opt-outs, so customers who
+  // had turned reminders off are reminded again at once; their choice is kept.
+  customer_reminder_opt_out: {
+    title: 'web.feature_customer_reminder_opt_out_title',
+    summary: 'web.feature_customer_reminder_opt_out_summary',
+    disableEffect: 'web.feature_customer_reminder_opt_out_off_effect',
+    confirmEnable: null,
+  },
   // Off: an attribution is made only at registration and never afterwards, so a
   // customer who joins through a referral link while this is off is never attributed.
   referrals: {

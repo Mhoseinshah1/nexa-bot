@@ -100,6 +100,16 @@ export const customerOverviewSchema = z.object({
   locationOverride: customerLocationOverrideSchema.nullable(),
   marketingOptOutAt: z.iso.datetime().nullable(),
   /**
+   * Round 11, B6: the service expiry / volume reminders. `optOutAt` is when they were turned
+   * off (null: the customer is reminded, the default). `enabled` is whether the tenant's
+   * `customer_reminder_opt_out` flag is on NOW: a stored opt-out is honoured only while it is
+   * on, and the page says so rather than letting the setting read as in force.
+   */
+  reminders: z.object({
+    optOutAt: z.iso.datetime().nullable(),
+    enabled: z.boolean(),
+  }),
+  /**
    * R10 D3: the customer's personal discount as stored — `percent` 0 means none — and when
    * an operator last changed it (null: never). `enabled` is whether the tenant's
    * `personal_discount` flag is on NOW: a stored percent applies to nothing while it is
@@ -175,6 +185,19 @@ export const customerNotificationsRequestSchema = z.object({
   reason: reasonSchema.min(1),
 });
 export type CustomerNotificationsRequest = z.infer<typeof customerNotificationsRequestSchema>;
+
+/**
+ * Round 11, B6: turn a customer's service expiry / volume reminders off (`remindersOptedOut:
+ * true`) or back on. Same permission as the promotional preference (`users.notifications.edit`),
+ * a reason, and an idempotency key. Settable while the feature flag is off: the choice is stored
+ * and takes effect when it is on.
+ */
+export const customerRemindersRequestSchema = z.object({
+  idempotencyKey: idempotencyKeySchema,
+  remindersOptedOut: z.boolean(),
+  reason: reasonSchema.min(1),
+});
+export type CustomerRemindersRequest = z.infer<typeof customerRemindersRequestSchema>;
 
 /**
  * R10 D3: set a customer's personal discount percent; `0` removes it. A whole percent from
@@ -573,6 +596,8 @@ export const CUSTOMER_360_ROUTES = {
   phone: (id: string) => `/users/${encodeURIComponent(id)}/phone`,
   locationOverride: (id: string) => `/users/${encodeURIComponent(id)}/location-override`,
   notifications: (id: string) => `/users/${encodeURIComponent(id)}/notifications`,
+  /** Round 11 B6: the service expiry / volume reminder switch (`users.notifications.edit`). */
+  reminders: (id: string) => `/users/${encodeURIComponent(id)}/reminders`,
   /** R10 D3: the personal discount percent (`users.discount.edit`). */
   personalDiscount: (id: string) => `/users/${encodeURIComponent(id)}/personal-discount`,
   servicesToggle: (id: string) => `/users/${encodeURIComponent(id)}/services/toggle`,
