@@ -137,7 +137,7 @@ export class Customer360Controller {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<{ overview: CustomerOverviewResponse; changed: boolean }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customerRemindersRequestSchema.parse(body);
     const result = await this.container.customerControls.setReminderPreference(scope, actor, {
       idempotencyKey: command.idempotencyKey,

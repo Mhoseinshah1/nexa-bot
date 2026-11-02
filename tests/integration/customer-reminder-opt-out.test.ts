@@ -70,7 +70,7 @@ describe('the customer reminder opt-out (R11 B6)', () => {
   let alice: UserId; // opts out
   let bob: UserId; // never does
   let n = 0;
-  const key = (): string => `r11b6-${(n += 1)}`;
+  const key = (): string => `r11b6-${String((n += 1)).padStart(6, '0')}`;
 
   let sends: CustomerMessage[] = [];
   const outcomes: CustomerSendResult[] = [];
