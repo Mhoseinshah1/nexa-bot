@@ -196,6 +196,7 @@ h2 {
 }
 /* R11 B2: the usage chart on the service screen. */
 .usage-chart svg {
+  direction: ltr;
   inline-size: 100%;
   block-size: auto;
 }

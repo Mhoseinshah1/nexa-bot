@@ -265,6 +265,37 @@ describe('R11 B2: usage snapshots', () => {
     expect(await snapshots()).toHaveLength(0);
   }, 60_000);
 
+  it('reads history by the instant a snapshot was taken, so a partial first hour is not dropped', async () => {
+    await fleet(1);
+    const serviceId = await firstServiceId();
+    const takenAt = new Date('2026-10-20T10:45:00.000Z');
+    await ctx.container.database.withClient((client) =>
+      client.query(
+        `INSERT INTO service_usage_snapshots
+           (tenant_id, service_id, bucket_at, taken_at, used_bytes)
+         VALUES ($1::uuid, $2::uuid, '2026-10-20T10:00:00.000Z', $3::timestamptz, 5)`,
+        [tenantA.tenantId, serviceId, takenAt.toISOString()],
+      ),
+    );
+    const store = new DrizzleUsageSnapshotRepository(ctx.container.database.db);
+    const inside = await store.between(
+      tenantA,
+      serviceId,
+      new Date('2026-10-20T10:30:00.000Z'),
+      new Date('2026-10-20T12:00:00.000Z'),
+      10,
+    );
+    expect(inside.map((row) => row.usedBytes)).toEqual([5n]);
+    const after = await store.between(
+      tenantA,
+      serviceId,
+      new Date('2026-10-20T10:46:00.000Z'),
+      new Date('2026-10-20T12:00:00.000Z'),
+      10,
+    );
+    expect(after).toEqual([]);
+  }, 60_000);
+
   it('prunes in bounded batches, never the whole backlog in one tick', async () => {
     await fleet(1);
     const serviceId = await firstServiceId();

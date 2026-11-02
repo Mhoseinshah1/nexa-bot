@@ -44,7 +44,7 @@ export interface UsageSnapshotStore {
   ): Promise<boolean>;
   /** Deletes up to `limit` rows taken before `before`; returns how many went. */
   prune(scope: TenantContext, before: Date, limit: number, tx: TransactionScope): Promise<number>;
-  /** The service's rows with `bucket_at` in `[from, to)`, oldest first. */
+  /** The service's rows with `taken_at` in `[from, to)`, oldest first. */
   between(
     scope: TenantContext,
     serviceId: string,

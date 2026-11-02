@@ -113,7 +113,6 @@ function Chart({ history }: { history: MiniAppUsageHistory }) {
         role="img"
         aria-label={label}
         data-testid="usage-chart"
-        style={{ direction: 'ltr' }}
       >
         <line className="usage-chart-axis" x1={PAD_X} x2={WIDTH - PAD_X} y1={floor} y2={floor} />
         {points.length > 1 && <polygon className="usage-chart-area" points={area} />}

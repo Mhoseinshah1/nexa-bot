@@ -73,8 +73,8 @@ export class DrizzleUsageSnapshotRepository implements UsageSnapshotStore {
       SELECT taken_at, used_bytes, total_bytes, expires_at
         FROM service_usage_snapshots
        WHERE tenant_id = ${tenantId} AND service_id = ${serviceId}
-         AND bucket_at >= ${from} AND bucket_at < ${to}
-       ORDER BY bucket_at ASC
+         AND taken_at >= ${from} AND taken_at < ${to}
+       ORDER BY taken_at ASC
        LIMIT ${limit}
     `);
     return result.rows.map((row) => ({

@@ -117,6 +117,7 @@ describe('R11 A9: the mini app lists the personal discount the invoice charges',
       qr: false,
       qrKinds: [],
       canChangeLocation: false,
+      usageChart: false,
       autoRenew: { offered: false, enabled: false, price: null, leadHours: 24 },
     });
     routes['GET /services/s1/offers/RENEW'] = () => ({
