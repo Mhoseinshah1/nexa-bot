@@ -59,6 +59,16 @@ Precondition: the test server runs the approved release; the package and its key
 `~/cutover` (mode 0700), copied as in [`03-final-export.md`](03-final-export.md) E2/E3; room on
 Docker's data root for one more imported database, the decrypted package and two backups of it.
 
+The rehearsal runs for a long time, so it runs **inside tmux**: a dropped SSH connection then
+leaves it running, and `tmux attach -t nexa-cutover-rehearse` picks it back up. On an SSH terminal
+outside tmux or screen, botctl refuses to start it and prints the exact `tmux new -s …` line
+(the first run on the test server was lost this way: the connection dropped after the import,
+and the hang-up took the reconciliation with it).
+
+```bash
+tmux new -s nexa-cutover-rehearse          # then everything below, inside it; detach: Ctrl-b d
+```
+
 ```bash
 set -o nounset
 mkdir -p ~/cutover && chmod 700 ~/cutover && cd ~/cutover
@@ -69,6 +79,11 @@ sudo botctl cutover rehearse ~/cutover/nexa-restore-mirza-<date>.nxpkg \
 ```
 
 A passphrase instead of a key file: `--passphrase` (typed on the terminal, never on argv).
+`--allow-foreground` runs it outside tmux anyway: botctl then ignores the hang-up, keeps the
+rehearsal container out of the terminal's reach, and copies the output to
+`/var/log/nexa/botctl-cutover-rehearse-<UTC>-<pid>.log` — but `| tee rehearsal.txt` dies with
+the terminal, so tmux is the way. Ctrl-C stops the run and cleans up once the container has
+exited.
 `--json` prints one JSON document instead (`> rehearsal.json`). Other options:
 `--database NAME` (default `nexa_cutover_rehearsal_<UTC>`), `--keep-database` (keep it to
 inspect; drop it yourself afterwards), `--panel-inventory FILE` (stage B accounts for the
@@ -150,6 +165,10 @@ database refused and unchanged), `tests/unit/cutover-rehearsal.test.ts`,
 - **دستور** (فقط مالک — با تأیید صریح جداگانه، فقط روی سرور آزمایشی):
   `sudo botctl cutover rehearse <بسته>.nxpkg --key-file <کلید>.nxkey --owner-telegram-id <شناسه>`.
   گذرواژه به جای فایل کلید: `--passphrase` (روی ترمینال تایپ می‌شود، هرگز روی خط فرمان).
+- **همیشه داخل tmux:** اول `tmux new -s nexa-cutover-rehearse` و بعد دستور بالا داخل آن. اگر اتصال SSH قطع
+  شود اجرا ادامه پیدا می‌کند و با `tmux attach -t nexa-cutover-rehearse` دوباره به آن وصل می‌شوید. botctl
+  بیرون از tmux/screen روی ترمینال SSH اجرا را شروع نمی‌کند و خط دقیق `tmux new -s …` را چاپ می‌کند؛
+  `--allow-foreground` با این حال اجرا می‌کند و خروجی را در `/var/log/nexa/` هم می‌نویسد.
 - **چه می‌کند:** دیتابیس تازه می‌سازد، همهٔ مهاجرت‌ها را اجرا می‌کند، یک مستأجر اصلی (IRT) می‌سازد،
   بسته را با همان سرویس و اجراکنندهٔ صفحهٔ «بکاپ و بازیابی ← عملیات بازیابی» وارد می‌کند (پنل‌ها
   نسخهٔ جایگزین فقط‌خواندنی‌اند، هرگز پنل واقعی)، موجودی کیف پول‌ها، سرویس‌ها و اعتبار نمایندگان را

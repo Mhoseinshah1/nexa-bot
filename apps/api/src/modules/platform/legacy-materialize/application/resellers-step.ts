@@ -60,11 +60,23 @@ export class ResellersMaterializeStep implements MaterializeStep {
   ) {}
 
   private async load(ctx: MaterializeContext, tx?: TransactionScope) {
-    const [profiles, states, levels] = await Promise.all([
-      this.repository.rows(ctx.scope, ctx.packageImportId, 'agent_profile', tx),
-      this.repository.rows(ctx.scope, ctx.packageImportId, 'agent_state', tx),
-      this.repository.rows(ctx.scope, ctx.packageImportId, 'agent_price_level', tx),
-    ]);
+    // ONE AFTER ANOTHER, never `Promise.all`: with `tx` all three run on the transaction's one
+    // connection, and concurrent queries on one `pg` client are what pg@8 deprecates ("Calling
+    // client.query() when the client is already executing a query", seen in the v0.9.3 field
+    // rehearsal) and pg@9 removes.
+    const profiles = await this.repository.rows(
+      ctx.scope,
+      ctx.packageImportId,
+      'agent_profile',
+      tx,
+    );
+    const states = await this.repository.rows(ctx.scope, ctx.packageImportId, 'agent_state', tx);
+    const levels = await this.repository.rows(
+      ctx.scope,
+      ctx.packageImportId,
+      'agent_price_level',
+      tx,
+    );
     const stateOf = new Map<string, HistoryRow>();
     for (const s of states) {
       const id = agentIdOfKey(s.idempotencyKey);

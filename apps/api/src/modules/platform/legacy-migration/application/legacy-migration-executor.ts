@@ -25,6 +25,8 @@ import {
   LEGACY_MIGRATION_MAX_APPLY_ATTEMPTS,
   LEGACY_MIGRATION_MAX_STEP_ATTEMPTS,
   LEGACY_MIGRATION_ORPHAN_IDLE_MS,
+  LEGACY_MIGRATION_LEASE_RELEASE_RETRY_DELAYS_MS,
+  LEGACY_MIGRATION_TRANSIENT_RETRY_DELAYS_MS,
   phaseReached,
   reportDigest,
   digestsEqual,
@@ -45,6 +47,7 @@ import {
   type BotLinkPort,
   type FreshTargetGuard,
   type HistoryIngestPort,
+  type LegacyMigrationLeasePort,
   type LegacyNxpkgImportPatch,
   type LegacyNxpkgImportRepository,
   type LegacyNxpkgImportRow,
@@ -54,6 +57,7 @@ import {
   type MigrationWorkspaces,
   type PackageSecret,
   type PackageVerifier,
+  type TransientFailureClassifier,
 } from './ports.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
 
@@ -95,6 +99,24 @@ export interface LegacyMigrationExecutorDeps {
   readonly enabled: boolean;
   readonly leaseMs?: number;
   readonly heartbeatMs?: number;
+  /**
+   * The heartbeat and the release, on a connection the step's own work never holds
+   * (`LegacyMigrationLeasePort`). Defaults to `repository` — the shape a test without a second
+   * pool has; the container gives the import roles a dedicated pool.
+   */
+  readonly leases?: LegacyMigrationLeasePort;
+  /**
+   * Whether a step's error is a transient database failure, run again in place
+   * (`LEGACY_MIGRATION_TRANSIENT_RETRY_DELAYS_MS`). Defaults to "never": an executor that was
+   * not told how its driver fails retries nothing.
+   */
+  readonly isTransientFailure?: TransientFailureClassifier;
+  /** Test seam: the pauses before each in-place retry. */
+  readonly transientRetryDelaysMs?: readonly number[];
+  /** Test seam: the pauses before each retried lease release. */
+  readonly releaseRetryDelaysMs?: readonly number[];
+  /** Test seam: how a pause waits. Resolves early when `signal` aborts. */
+  readonly sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /**
    * `LEGACY_MIGRATION_RETAIN_PACKAGE`: keep a terminal import's encrypted package and
    * decisions file. Off (the default): the sweep deletes both.
@@ -350,7 +372,7 @@ export class LegacyMigrationExecutor {
     const abort = new AbortController();
     const beat = (): Promise<void> => {
       const now = this.deps.clock.now();
-      return this.deps.repository
+      return this.leases
         .heartbeat({
           id: row.id,
           leaseOwner: this.deps.leaseOwner,
@@ -381,31 +403,7 @@ export class LegacyMigrationExecutor {
           'removed decrypted step directories a crashed process left behind',
         );
       }
-      switch (row.status) {
-        case 'UPLOADED':
-        case 'VERIFYING':
-          await this.verify(row, abort.signal);
-          break;
-        case 'DRY_RUN_REQUESTED':
-        case 'DRY_RUN_RUNNING':
-          await this.dryRun(row, abort.signal);
-          break;
-        case 'APPROVED':
-        case 'APPLYING':
-          // Every write of the apply (the importer's, the history's, the cutover gate's) runs
-          // as this import's own writer: the only writer its APPLYING freeze lets through.
-          await this.deps.asImportWriter(row.id, () => this.apply(row, abort.signal));
-          break;
-        case 'ADOPT_REQUESTED':
-        case 'ADOPT_RUNNING':
-          // NOT as an import writer: the lane holds no freeze and passes none. While any
-          // import is APPLYING (or a restore quiesces), its writes are refused like any other.
-          await this.adopt(row, abort.signal);
-          break;
-        default:
-          // Not work (a claim predicate would have to be wrong to get here): give it back.
-          await this.release(row.id);
-      }
+      await this.dispatchRetryingTransient(row, abort.signal);
     } catch (error) {
       if (error instanceof LeaseLost || abort.signal.aborted) {
         this.deps.logger.warn(
@@ -446,6 +444,136 @@ export class LegacyMigrationExecutor {
     } finally {
       clearInterval(heartbeat);
     }
+  }
+
+  /**
+   * The claimed step, run again IN PLACE when it fails on a transient database failure
+   * (`isTransientFailure`), after each of `LEGACY_MIGRATION_TRANSIENT_RETRY_DELAYS_MS` in turn,
+   * under the same lease (the heartbeat keeps it, on its own connection). Every phase is
+   * idempotent and resumes from its bookmark — the same guarantee a crash resume relies on.
+   *
+   * A retried attempt gives back the attempt count it took (`giveBackTransientAttempt`), so a
+   * multi-minute I/O stall does not spend the whole bound; the last attempt keeps its count
+   * and its error goes to `run`'s classification like any other, so the bound still holds.
+   */
+  private async dispatchRetryingTransient(
+    claimed: LegacyNxpkgImportRow,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const delays = this.deps.transientRetryDelaysMs ?? LEGACY_MIGRATION_TRANSIENT_RETRY_DELAYS_MS;
+    const isTransient = this.deps.isTransientFailure ?? (() => false);
+    let row = claimed;
+    for (let retry = 0; ; retry += 1) {
+      try {
+        await this.dispatch(row, signal);
+        return;
+      } catch (error) {
+        const delayMs = delays[retry];
+        if (
+          delayMs === undefined ||
+          signal.aborted ||
+          error instanceof LeaseLost ||
+          !isTransient(error)
+        ) {
+          throw error;
+        }
+        this.deps.logger.warn(
+          {
+            importId: row.id,
+            status: row.status,
+            retry: retry + 1,
+            of: delays.length,
+            delayMs,
+            err: errorKind(error),
+          },
+          'a legacy migration step met a transient database failure; it runs again in place',
+        );
+        await this.sleep(delayMs, signal);
+        if (signal.aborted) throw new LeaseLost();
+        // The row as it now is (the step may have moved it, e.g. APPROVED → APPLYING). If even
+        // that cannot be read, the ORIGINAL failure is the step's: retrying on a stale row
+        // could take a moved status for a lost lease.
+        let current: LegacyNxpkgImportRow;
+        try {
+          current = await this.giveBackTransientAttempt(row);
+        } catch {
+          throw error;
+        }
+        row = current;
+      }
+    }
+  }
+
+  private async dispatch(row: LegacyNxpkgImportRow, signal: AbortSignal): Promise<void> {
+    switch (row.status) {
+      case 'UPLOADED':
+      case 'VERIFYING':
+        await this.verify(row, signal);
+        break;
+      case 'DRY_RUN_REQUESTED':
+      case 'DRY_RUN_RUNNING':
+        await this.dryRun(row, signal);
+        break;
+      case 'APPROVED':
+      case 'APPLYING':
+        // Every write of the apply (the importer's, the history's, the cutover gate's) runs
+        // as this import's own writer: the only writer its APPLYING freeze lets through.
+        await this.deps.asImportWriter(row.id, () => this.apply(row, signal));
+        break;
+      case 'ADOPT_REQUESTED':
+      case 'ADOPT_RUNNING':
+        // NOT as an import writer: the lane holds no freeze and passes none. While any
+        // import is APPLYING (or a restore quiesces), its writes are refused like any other.
+        await this.adopt(row, signal);
+        break;
+      default:
+        // Not work (a claim predicate would have to be wrong to get here): give it back.
+        await this.release(row.id);
+    }
+  }
+
+  /**
+   * After a transient failure: the row as it now is, with the attempt THIS try counted given
+   * back — every attempt counter that rose during the try, put back to what it was before it.
+   * Whether the status moved does not matter (Codex review on #380): a try that started
+   * APPROVED and failed APPLYING took `applyAttempts` 0 → 1, and one that failed while still
+   * ADOPT_REQUESTED (or DRY_RUN_REQUESTED, UPLOADED, APPROVED) counted its start all the same.
+   */
+  private async giveBackTransientAttempt(
+    before: LegacyNxpkgImportRow,
+  ): Promise<LegacyNxpkgImportRow> {
+    const now = await this.reread(before.id);
+    const raised = ATTEMPT_COUNTERS.filter(
+      (counter) => now.progress[counter] > before.progress[counter],
+    );
+    if (raised.length === 0) return now;
+    await this.uncount(
+      now,
+      Object.fromEntries(raised.map((counter) => [counter, before.progress[counter]])),
+    );
+    return this.reread(before.id);
+  }
+
+  private sleep(ms: number, signal?: AbortSignal): Promise<void> {
+    if (this.deps.sleep !== undefined) return this.deps.sleep(ms, signal);
+    return new Promise((resolve) => {
+      if (signal?.aborted === true) {
+        resolve();
+        return;
+      }
+      const timer = setTimeout(done, ms);
+      timer.unref();
+      function done(): void {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', done);
+        resolve();
+      }
+      signal?.addEventListener('abort', done, { once: true });
+    });
+  }
+
+  private get leases(): LegacyMigrationLeasePort {
+    return this.deps.leases ?? this.deps.repository;
   }
 
   // --- VERIFY ----------------------------------------------------------------------------
@@ -1193,12 +1321,36 @@ export class LegacyMigrationExecutor {
     });
   }
 
+  /**
+   * Gives the lease back, on the lease connection (`leases`), retrying a transient failure
+   * after each of `LEGACY_MIGRATION_LEASE_RELEASE_RETRY_DELAYS_MS`. A release that still fails
+   * is logged, never thrown: the lease then lapses after `LEGACY_MIGRATION_LEASE_MS` and the
+   * sweep releases it (`reclaimStale`).
+   */
   private async release(id: string): Promise<void> {
-    await this.deps.repository
-      .release({ id, leaseOwner: this.deps.leaseOwner, now: this.deps.clock.now() })
-      .catch((error: unknown) => {
-        this.deps.logger.error({ importId: id, err: errorKind(error) }, 'a lease release failed');
-      });
+    const delays = this.deps.releaseRetryDelaysMs ?? LEGACY_MIGRATION_LEASE_RELEASE_RETRY_DELAYS_MS;
+    const isTransient = this.deps.isTransientFailure ?? (() => false);
+    for (let retry = 0; ; retry += 1) {
+      try {
+        await this.leases.release({
+          id,
+          leaseOwner: this.deps.leaseOwner,
+          now: this.deps.clock.now(),
+        });
+        return;
+      } catch (error) {
+        const delayMs = delays[retry];
+        if (delayMs === undefined || !isTransient(error)) {
+          this.deps.logger.error({ importId: id, err: errorKind(error) }, 'a lease release failed');
+          return;
+        }
+        this.deps.logger.warn(
+          { importId: id, retry: retry + 1, of: delays.length, delayMs, err: errorKind(error) },
+          'a lease release met a transient database failure; it is tried again',
+        );
+        await this.sleep(delayMs);
+      }
+    }
   }
 
   private async reread(id: string): Promise<LegacyNxpkgImportRow> {
@@ -1232,3 +1384,11 @@ export function completedStatusOf(
     ? 'COMPLETED'
     : 'COMPLETED_WITH_DISCREPANCY';
 }
+
+/** The attempt counters a step takes (`LEGACY_MIGRATION_MAX_*_ATTEMPTS`). */
+const ATTEMPT_COUNTERS = [
+  'verifyAttempts',
+  'dryRunAttempts',
+  'applyAttempts',
+  'adoptAttempts',
+] as const;

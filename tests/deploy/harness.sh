@@ -984,6 +984,24 @@ print(json.dumps({"services": {"api": {"environment": env}}}))
               stat -c '%a' "$_mount" >"${FAKE_DIR}/rehearse_mount_mode"
               printf '%s' "$_mount" >"${FAKE_DIR}/rehearse_mount_path"
             fi
+            if [ "$(read_state rehearse_hold 0)" = "1" ]; then
+              # A rehearsal that is still running: it records its pid and process group,
+              # then holds until the test releases it (or a TERM arrives), and records
+              # whether the package it is reading was still there at that moment.
+              if [ "$(read_state rehearse_zombie 0)" = "1" ]; then
+                # A member of the group that dies and is never reaped: its parent leaves for a
+                # session of its own and sleeps without waiting — what a PID 1 that does not reap
+                # makes of an orphan. The file holds the parent's pid, then the zombie's.
+                bash -c '/bin/sleep 0 & printf "%s %s" "$$" "$!" >"$1"; exec setsid sleep 600' \
+                  _ "${FAKE_DIR}/rehearse_zombie" </dev/null >/dev/null 2>&1 &
+              fi
+              printf '%s %s' "$$" "$(ps -o pgid= -p "$$" | tr -d ' ')" >"${FAKE_DIR}/rehearse_running"
+              trap '[ -f "${_mount}/rehearsal.nxpkg" ] && _seen=present || _seen=missing
+                printf "%s" "$_seen" >"${FAKE_DIR}/rehearse_mount_on_term"; sleep 0.5; exit 143' TERM
+              while [ ! -e "${FAKE_DIR}/rehearse_release" ]; do sleep 0.05; done
+              if [ -f "${_mount}/rehearsal.nxpkg" ]; then _seen=present; else _seen=missing; fi
+              printf '%s' "$_seen" >"${FAKE_DIR}/rehearse_mount_after"
+            fi
             printf 'Cutover rehearsal (fake)\ngo/no-go: %s\n' "$(read_state rehearse_verdict GO)"
             exit "$(read_state rehearse_exit 0)"
             ;;

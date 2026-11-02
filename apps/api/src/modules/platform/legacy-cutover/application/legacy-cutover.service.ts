@@ -473,12 +473,12 @@ export class LegacyCutoverService {
     tx: TransactionScope,
   ): Promise<CutoverDecision> {
     const source = input.expectation.sourceFingerprint;
-    const [approvals, applyRuns] = await Promise.all([
-      source === null
-        ? Promise.resolve([])
-        : this.deps.repository.approvalsForSource(scope, source, tx),
-      this.deps.repository.applyRuns(scope, tx),
-    ]);
+    // One after another: both run on the caller's transaction, i.e. ONE `pg` client, which
+    // must never be given a second query while the first runs (pg@8 deprecates it, pg@9
+    // removes it).
+    const approvals =
+      source === null ? [] : await this.deps.repository.approvalsForSource(scope, source, tx);
+    const applyRuns = await this.deps.repository.applyRuns(scope, tx);
     const decision = decideCutoverImport({
       expectation: input.expectation,
       approvals: approvals.map((row) => ({ ...row, revoked: row.revocation !== null })),
