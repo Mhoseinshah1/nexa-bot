@@ -858,6 +858,38 @@ export const configSchema = z
     /** How often the `migration` role asks whether an import has work for it. */
     LEGACY_MIGRATION_TICK_MS: z.coerce.number().int().min(1_000).max(600_000).default(15_000),
     /**
+     * The database bounds of the two roles that run the import (`migration`, `recovery`) — and
+     * of no other process: the API keeps `POOL_CONNECTION_TIMEOUT_MS` and the
+     * `DATABASE_*_TIMEOUT_MS` above. `docs/legacy-migration/nxpkg-activation.md` § Database
+     * bounds.
+     *
+     * Field evidence (v0.9.3, 4 vCPU / 4 GB, 197k customers): the import's own fan-out
+     * (up to ten reads at once) filled its ten-connection pool while a checkpoint held the
+     * disk for 4.5 minutes; a checkout waited more than five seconds and failed client-side
+     * (`timeout exceeded when trying to connect`), and with it the import. Waiting for a
+     * connection is not a fault of a background import, so it waits this long.
+     */
+    LEGACY_MIGRATION_DB_CONNECTION_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(5_000)
+      .max(600_000)
+      .default(120_000),
+    /** One statement of the import (an aggregate over every imported customer, under slow I/O). */
+    LEGACY_MIGRATION_DB_STATEMENT_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(15_000)
+      .max(3_600_000)
+      .default(600_000),
+    /** A transaction of the import held open while the process computes between statements. */
+    LEGACY_MIGRATION_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(30_000)
+      .max(3_600_000)
+      .default(300_000),
+    /**
      * Whether a FINISHED import (any terminal state) keeps its encrypted package and its
      * ownership decisions file on disk. Off by default: the `migration` role deletes both
      * once the import is terminal (the backup it took and the import row are the record).

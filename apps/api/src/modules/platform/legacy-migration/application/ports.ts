@@ -250,6 +250,25 @@ export interface LegacyNxpkgImportRepository {
 
 // --- the filesystem ---------------------------------------------------------------------------
 
+/**
+ * The lease bookkeeping that must NEVER queue behind the import it guards: the heartbeat and
+ * the release. Implemented by the same repository class as `LegacyNxpkgImportRepository`,
+ * over its OWN small connection pool (`container.ts`, `leaseDatabase`): in the
+ * field (v0.9.3) the heartbeat and the release shared the import's pool, waited behind it for
+ * a connection under slow I/O, and failed with it — so a healthy import could lose its lease
+ * and a failed one could not give it back.
+ */
+export type LegacyMigrationLeasePort = Pick<LegacyNxpkgImportRepository, 'heartbeat' | 'release'>;
+
+/**
+ * Whether a step's error is a TRANSIENT infrastructure failure — a database connection that
+ * could not be had or was lost — rather than anything the import itself did. Such a step is
+ * run again in place, a bounded number of times (`LEGACY_MIGRATION_TRANSIENT_RETRY_DELAYS_MS`):
+ * every phase is idempotent and resumes from its bookmark. Infrastructure decides (it knows
+ * the driver's errors): `infrastructure/transient-database-failure.ts`.
+ */
+export type TransientFailureClassifier = (error: unknown) => boolean;
+
 /** Where one import's files live. Paths are built from the validated import id only. */
 export interface MigrationImportFiles {
   readonly directory: string;

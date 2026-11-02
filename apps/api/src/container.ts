@@ -167,6 +167,12 @@ import {
   stderrLogDestination,
 } from './infrastructure/logging/logger.js';
 import { createDatabase, type DatabaseHandle } from './infrastructure/persistence/database.js';
+import {
+  databaseProfileFor,
+  isImportRole,
+  LEASE_POOL_MAX,
+  leaseDatabaseProfile,
+} from './infrastructure/persistence/database-profile.js';
 import { createRedis, type RedisHandle } from './infrastructure/redis/redis.js';
 import { RedisInteractionCounter } from './infrastructure/redis/redis-interaction-counter.js';
 import { AntiSpamService } from './modules/commerce/customers/application/anti-spam.service.js';
@@ -259,6 +265,7 @@ import { RecoveryExecutor } from './modules/platform/recovery/application/recove
 import { LegacyMigrationService } from './modules/platform/legacy-migration/application/legacy-migration.service.js';
 import { LegacyMigrationExecutor } from './modules/platform/legacy-migration/application/legacy-migration-executor.js';
 import { DrizzleLegacyNxpkgImportRepository } from './modules/platform/legacy-migration/infrastructure/drizzle-legacy-nxpkg-import.repository.js';
+import { isTransientDatabaseFailure } from './modules/platform/legacy-migration/infrastructure/transient-database-failure.js';
 import { FilesystemMigrationWorkspaces } from './modules/platform/legacy-migration/infrastructure/filesystem-migration-workspaces.js';
 import { PipelineBackupPort } from './modules/platform/legacy-migration/infrastructure/migration-adapters.js';
 import { NxpkgMigrationAdapters } from './modules/platform/legacy-migration/infrastructure/nxpkg-migration-adapters.js';
@@ -1904,25 +1911,41 @@ export function createContainer(
   const cipher = new AesGcmSecretCipher(keyring, acceptsV1(config, configuredKeyring));
   const translator = createTranslator();
 
+  // Through the process logger rather than the default stderr line, so a
+  // connection death is one structured record beside everything else this
+  // process says. See `PoolErrorListener`: without a listener at all, `pg`
+  // turns this into an uncaught exception and the process dies.
+  const onPoolError = (error: Error): void => {
+    logger.error({ err: error.message }, 'a pooled PostgreSQL connection was closed by the server');
+  };
+  // The request path's bounds for every role but the two that run the Mirza import, whose
+  // one long import gets bounds sized for it (`database-profile.ts`).
+  const databaseProfile = databaseProfileFor(role, config);
   const database = createDatabase(
     config.DATABASE_URL,
     config.DATABASE_POOL_MAX,
-    {
-      statementTimeoutMs: config.DATABASE_STATEMENT_TIMEOUT_MS,
-      lockTimeoutMs: config.DATABASE_LOCK_TIMEOUT_MS,
-      idleInTransactionTimeoutMs: config.DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS,
-    },
-    // Through the process logger rather than the default stderr line, so a
-    // connection death is one structured record beside everything else this
-    // process says. See `PoolErrorListener`: without a listener at all, `pg`
-    // turns this into an uncaught exception and the process dies.
-    (error) => {
-      logger.error(
-        { err: error.message },
-        'a pooled PostgreSQL connection was closed by the server',
-      );
-    },
+    databaseProfile.timeouts,
+    onPoolError,
+    databaseProfile.pool,
   );
+  /*
+   * The import roles' LEASE connection: the executor's heartbeat and release, on a pool the
+   * import's own work never holds, so they never queue behind it (field, v0.9.3: both waited
+   * behind the import for a connection and failed with it). Lazy: `pg` connects on first use.
+   * Other roles run no executor step and pass none (the executor then uses `repository`).
+   */
+  const leaseDatabase = isImportRole(role)
+    ? (() => {
+        const profile = leaseDatabaseProfile(config);
+        return createDatabase(
+          config.DATABASE_URL,
+          LEASE_POOL_MAX,
+          profile.timeouts,
+          onPoolError,
+          profile.pool,
+        );
+      })()
+    : null;
   const redis = createRedis(config.REDIS_URL);
   /*
    * Anti-spam's counter (WP20), on its own connection: the shared client waits for ever on
@@ -8452,6 +8475,10 @@ export function createContainer(
     enabled: config.LEGACY_MIGRATION_ENABLED,
     retainPackage: config.LEGACY_MIGRATION_RETAIN_PACKAGE,
     keyIdleMs: config.LEGACY_MIGRATION_KEY_IDLE_MS,
+    ...(leaseDatabase === null
+      ? {}
+      : { leases: new DrizzleLegacyNxpkgImportRepository(leaseDatabase.db) }),
+    isTransientFailure: isTransientDatabaseFailure,
     logger,
   });
   const backupScheduler = new BackupScheduler({
@@ -9428,6 +9455,7 @@ export function createContainer(
       await miniAppCounter.close();
       await redis.close();
       await database.close();
+      await leaseDatabase?.close();
     },
   };
   // R3 item 10: the card renderer the provisioner's card editor draws with (above).
