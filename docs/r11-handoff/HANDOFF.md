@@ -10,7 +10,7 @@ Resume: read this block, the prompt NEXA-PHASE5-CUSTOMER.md (owner upload), then
 - Merged also: #379 C2 (739e14f, 0305; Codex 2 P2 fixed in e0567cf, CI 23/23).
 - Merged also: #381 B5 (c780b44, no migration; Codex clean on ba963be, main sync d56d7e9, CI 23/23).
 - Pushed, PR waits for migration order:
-  B7 feat/r11-phone-verify (0306): syncing main (Opus); PR next.
+- Open: #382 B7 (0306), head 7b7f5f2, @codex review posted, CI watcher running.
 - Owner change 2026-11-02: up to 3 implementers, 3rd slot only Sonnet UI-only/no migration/no payment (B1, B4).
 - Lead decisions log: to be written into docs/round-reports/phase-5.md (D1–D20 so far).
 - Worktrees: /home/user/wt-b5, wt-b6, wt-b7, wt-c2; test DBs nexa_p5_<item>.
