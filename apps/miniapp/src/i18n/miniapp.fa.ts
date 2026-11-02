@@ -83,6 +83,7 @@ export const MINIAPP_FA = {
   'miniapp.store_category_empty': 'در این دسته پلنی نیست.',
   'miniapp.store_more': 'بیشتر',
   'miniapp.store_continue': 'ادامه و پیش‌فاکتور',
+  'miniapp.personal_discount_tag': 'تخفیف شخصی {percent}٪',
 
   'miniapp.checkout_title': 'پیش‌فاکتور',
   'miniapp.checkout_order': 'سفارش',
@@ -112,6 +113,11 @@ export const MINIAPP_FA = {
   'miniapp.checkout_no_routes': 'روش پرداخت دیگری فعال نیست.',
   'miniapp.checkout_pay': 'پرداخت',
   'miniapp.checkout_cancel': 'لغو سفارش',
+  // R12 F3 item 5: the cancel asks first, in the bot's own words (`bot.order.cancel_confirm`).
+  'miniapp.checkout_cancel_title': 'لغو سفارش',
+  'miniapp.checkout_cancel_question':
+    'آیا از لغو این سفارش مطمئن هستید؟ این کار برگشت‌پذیر نیست و قیمت فعلی شما از بین می‌رود؛ سفارش بعدی با قیمت روز ثبت می‌شود.',
+  'miniapp.checkout_cancel_yes': 'بله، سفارش را لغو کن',
   'miniapp.checkout_expires': 'این پیش‌فاکتور تا {at} معتبر است.',
   'miniapp.checkout_not_payable': 'این سفارش دیگر قابل پرداخت نیست.',
 
@@ -171,6 +177,8 @@ export const MINIAPP_FA = {
   'miniapp.service_guide': 'آموزش اتصال',
   'miniapp.service_support': 'مشکل دارم، پشتیبانی',
   'miniapp.service_qr_title': 'QR و لینک اشتراک',
+  'miniapp.service_qr_sublink': 'QR لینک اشتراک',
+  'miniapp.service_qr_singbox': 'QR مخصوص sing-box',
   'miniapp.service_qr_hint': 'در برنامه «افزودن از QR» را بزنید و این کد را اسکن کنید.',
   'miniapp.service_qr_failed': 'ساخت تصویر QR انجام نشد.',
   'miniapp.service_copy_failed': 'کپی انجام نشد؛ لینک را نگه دارید و کپی کنید.',
@@ -218,6 +226,7 @@ export const MINIAPP_FA = {
   'miniapp.ticket_reply_send': 'ارسال',
   'miniapp.ticket_author_CUSTOMER': 'شما',
   'miniapp.ticket_author_SUPPORT': 'پشتیبانی',
+  'miniapp.ticket_author_AI': 'هوش مصنوعی',
   'miniapp.ticket_attachment': 'این پیام پیوست دارد؛ پیوست در ربات دیده می‌شود.',
   'miniapp.ticket_closed': 'این تیکت بسته شده است. برای ادامه یک تیکت تازه ثبت کنید.',
   'miniapp.ticket_open_limit':

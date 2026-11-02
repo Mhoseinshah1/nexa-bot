@@ -301,18 +301,18 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
   // =====================================================================================
 
   describe('the schedule', () => {
-    it('asks TonPays first about ten seconds after the invoice, at the jitter the payment names', async () => {
+    it('asks TonPays first about fifteen seconds after the invoice, at the jitter the payment names (R11 A8)', async () => {
       const { paymentId, invoice } = await createdTopup();
       const created = new Date(invoice.created_invoice_at!);
       expect(new Date(invoice.next_inquiry_at!).getTime()).toBe(
         firstInquiryAt(TONPAYS_INQUIRY_SCHEDULE, created, paymentId).getTime(),
       );
       const delay = new Date(invoice.next_inquiry_at!).getTime() - created.getTime();
-      expect(delay).toBeGreaterThanOrEqual(9_000);
-      expect(delay).toBeLessThanOrEqual(11_000);
+      expect(delay).toBeGreaterThanOrEqual(13_500);
+      expect(delay).toBeLessThanOrEqual(16_500);
     });
 
-    it('a lost callback is still discovered inside the early window: paid just after an ask, seen within one 10 s step', async () => {
+    it('a lost callback is still discovered inside the early window: paid just after an ask, seen within one 20 s step (R11 A8)', async () => {
       const { paymentId, invoice } = await createdTopup();
       // The lane at its interval until its first ask, which finds the invoice unpaid.
       while (tonpays.checks() === 0) {
@@ -325,8 +325,9 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
       tonpays.set(invoice.provider_invoice_id!, 'completed', true);
       const paidAt = now;
       const seenAt = await passesUntilConfirmed(paymentId, 5 * 60_000);
-      // One band step (10 s, +10 % jitter) and one pass, where the old schedule waited 40 s.
-      expect(seenAt - paidAt).toBeLessThanOrEqual(11_000 + GATEWAY_PAYMENT_INTERVAL_MS);
+      // One band step (20 s since R11 A8, +10 % jitter) and one pass, where the pre-FIX-06
+      // schedule waited 40 s.
+      expect(seenAt - paidAt).toBeLessThanOrEqual(22_000 + GATEWAY_PAYMENT_INTERVAL_MS);
       expect(tonpays.checks()).toBe(2);
       expect(await credits(paymentId)).toHaveLength(1);
     });
@@ -368,14 +369,14 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
         ['processing', true],
       ] as const) {
         tonpays.set(invoice.provider_invoice_id!, status, paid);
-        advance(11_000);
+        advance(23_000);
         await lane.runOnce(tenantA);
         expect(await stateOf(paymentId), `${status}/${String(paid)}`).toBe('PENDING');
       }
       // A lost answer is UNKNOWN, never success.
       tonpays.set(invoice.provider_invoice_id!, 'completed', true);
       tonpays.checkMode = 'LOST';
-      advance(11_000);
+      advance(23_000);
       await lane.runOnce(tenantA);
       expect(await stateOf(paymentId)).toBe('PENDING');
       expect(await credits(paymentId)).toEqual([]);
@@ -385,7 +386,7 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
       const { paymentId, invoice } = await createdTopup();
       tonpays.set(invoice.provider_invoice_id!, 'completed', true);
       tonpays.checkMode = 'RATE_LIMITED';
-      advance(11_000);
+      advance(23_000);
       await lane.runOnce(tenantA);
       expect(tonpays.checks()).toBe(1);
       const next = new Date((await invoiceOf(paymentId)).next_inquiry_at!).getTime();
@@ -409,8 +410,16 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
         sql`UPDATE payments SET expires_at = ${new Date(now + 15_000)} WHERE id = ${paymentId}`,
       );
       tonpays.set(invoice.provider_invoice_id!, 'completed', true);
-      advance(16_000);
+      /*
+       * Past the deadline AND the row's own first ask. Since R11 A10 that ask falls 13.5–16.5 s
+       * after the invoice (15 s ±10 %, seeded by the random payment id), so a fixed 16 s left
+       * about one run in six with nothing asked and no outcome (main's push CI, a8daa8b).
+       */
+      const firstAsk = new Date(invoice.next_inquiry_at!).getTime();
+      advance(Math.max(16_000, firstAsk - now));
+      expect(now).toBeGreaterThanOrEqual(firstAsk);
       await lane.runOnce(tenantA);
+      expect(tonpays.checks()).toBe(1);
       expect(await credits(paymentId)).toEqual([]);
       expect((await invoiceOf(paymentId)).outcome).toBe('LATE_COMPLETION');
     });
@@ -421,7 +430,7 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
       const reserve = hintReservePerMinute(TONPAYS_INQUIRY_BUDGET_PER_MINUTE);
       const { paymentId, invoice } = await createdTopup();
       tonpays.set(invoice.provider_invoice_id!, 'completed', true);
-      advance(11_000);
+      advance(23_000);
       // Every scheduled call this minute already spent.
       await budgetUsed(TONPAYS_INQUIRY_BUDGET_PER_MINUTE - reserve);
       const report = await lane.runOnce(tenantA);
@@ -528,7 +537,7 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
       const backlog: PaymentId[] = [];
       for (let i = 0; i < 12; i += 1) backlog.push(await topup(251_000n + BigInt(i) * 1_000n));
       const hintedId = await topup(400_000n);
-      // Every invoice made at one instant: every first ask is about ten seconds out.
+      // Every invoice made at one instant: every first ask is about fifteen seconds out (R11 A8).
       for (let i = 0; i < 3; i += 1) await lane.runOnce(tenantA);
       const hinted = await invoiceOf(hintedId);
       expect(hinted.provider_invoice_id).not.toBeNull();
@@ -574,7 +583,7 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
       const tappedId = await topup(400_000n);
       const backlog: PaymentId[] = [];
       for (let i = 0; i < 12; i += 1) backlog.push(await topup(251_000n + BigInt(i) * 1_000n));
-      // Every invoice made at one instant, so every first ask is about ten seconds out.
+      // Every invoice made at one instant, so every first ask is about fifteen seconds out (R11 A8).
       for (let i = 0; i < 3; i += 1) await lane.runOnce(tenantA);
       expect(tonpays.checks()).toBe(0);
       const tapped = await invoiceOf(tappedId);
@@ -612,7 +621,7 @@ describe('FIX-06: the inquiry schedule, the hint reserve and the pass order', ()
       const { paymentId, invoice } = await createdTopup();
       await topup(300_000n);
       tonpays.calls.length = 0;
-      advance(11_000);
+      advance(23_000);
       await lane.runOnce(tenantA);
       expect(tonpays.calls).toEqual(['create', `check:${invoice.provider_invoice_id!}`]);
       expect(await stateOf(paymentId)).toBe('PENDING');

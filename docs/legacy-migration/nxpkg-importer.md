@@ -82,10 +82,34 @@ readOnlyProof: {kind: 'NOT_APPLICABLE'}}`;
 - `columns()`, `tables()`, `catalogColumns()`, `countRows()` from `source/catalog.json`;
 - `rows()` / `readSetRows()` from `source/tables/<table>.jsonl`, in primary-key byte order,
   refusing a table outside the snapshot or a column the snapshot does not carry;
+- `readableColumns(table)`: the rows file's columns. The catalogue describes the dumped table
+  (every column; the schema hash is over it), the rows file carries only the converter's
+  `ALLOWLIST`. The importer (`resolveReadColumns`) reads an **optional** column the rows file
+  does not carry as absent — as a source without it (converter 0.8.0 omitted
+  `user.roll_Status`: everybody imports as "rules not accepted") — and refuses a **required**
+  one before any row with `SOURCE_SCHEMA_MISSING_COLUMN`, naming `table.column`. The migration
+  row shows it in its refusal counts (`SOURCE_SCHEMA_MISSING_COLUMN:user.Balance`), and so does
+  `botctl cutover rehearse`'s failed step;
 - `aggregate()` throws `EvidenceUnsupported`; `syntheticMarker()` returns the package's synthetic
   marker (`source/catalog.json.synthetic_marker`, null for a real backup).
 
 CLI: `legacy-import ... --source nxpkg:<path> --package-key-env <NAME>` (key never on argv).
+
+### 3a. The converter's snapshot allowlist (contract guard)
+
+`tests/unit/nxpkg-converter-allowlist.test.ts` compares every column (required and optional)
+of every read NEXA makes of `user`, `invoice` and `product` — the v1 vocabulary
+(`IMPORT_READ_SET_V1`) and every `defineLegacyReadSet` — with a vendored copy of the
+converter's `ALLOWLIST`, `tests/fixtures/legacy/converter-allowlist.json`. A column NEXA reads
+that the converter does not carry fails CI ("add it to mirza-to-nexa ALLOWLIST"), before a
+real package meets it. To refresh it from a new converter release:
+
+1. In `mirza-to-nexa` at the release tag, copy `ALLOWLIST` from
+   `src/mirza2nexa/source_snapshot.py`, verbatim and in its order, into the fixture's
+   `allowlist`, and set `version` to the release.
+2. `pnpm exec vitest run --project unit tests/unit/nxpkg-converter-allowlist.test.ts`.
+3. A failure means the release dropped a column NEXA reads: fix the converter, never the
+   fixture. A NEXA read that gains a column needs the converter release that carries it first.
 
 For an `nxpkg:` source `runMode` — the one path the operator's CLI and the migration worker
 share — adds, before the snapshot is read:

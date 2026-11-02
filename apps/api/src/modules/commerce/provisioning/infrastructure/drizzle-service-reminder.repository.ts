@@ -520,12 +520,15 @@ export class DrizzleServiceReminderSnapshotReader implements ServiceReminderSnap
     | (ServiceReminderSnapshot & {
         readonly basisExpiresAt: Date | null;
         readonly basisTrafficLimitBytes: bigint;
+        /** R12 F3 item 1: the service the reminder is about, for the button under it. */
+        readonly serviceId?: string;
       })
     | null
   > {
     const tenantId = requireTenantId(scope);
     const [row] = await this.db
       .select({
+        serviceId: serviceReminders.serviceId,
         serviceLabel: serviceReminders.snapshotServiceLabel,
         remainingDays: serviceReminders.snapshotRemainingDays,
         usedBytes: serviceReminders.snapshotUsedBytes,

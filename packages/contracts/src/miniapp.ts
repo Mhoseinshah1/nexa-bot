@@ -8,6 +8,7 @@ import { TICKET_MESSAGE_MAX_LENGTH, TICKET_STATUSES } from './tickets.js';
 import { CLIENT_APP_PLATFORMS } from './client-apps.js';
 import { LEDGER_DIRECTIONS, LEDGER_REASONS } from './ledger.js';
 import { GIFT_CARD_CODE_INPUT_MAX_LENGTH } from './gift-cards.js';
+import { QR_PAYLOAD_KINDS } from './panel-qr.js';
 
 /**
  * The customer's Telegram Mini App (Round 9, C5): its paths, its wire shapes and its bounds.
@@ -109,6 +110,8 @@ export const MINIAPP_ROUTES = {
   services: '/services',
   service: '/services/:serviceId',
   serviceQr: '/services/:serviceId/qr',
+  // R11 A4: one named QR of a service (`SUB_LINK` or `SINGBOX`) on a panel that offers both.
+  serviceQrKind: '/services/:serviceId/qr/:kind',
   serviceOffer: '/services/:serviceId/offers/:kind',
   serviceQuote: '/services/:serviceId/quotes',
   serviceLocations: '/services/:serviceId/locations',
@@ -231,10 +234,25 @@ export const miniAppCategoriesResponseSchema = z.object({
 });
 export type MiniAppCategoriesResponse = z.infer<typeof miniAppCategoriesResponseSchema>;
 
+/**
+ * R11 A9: the personal discount a listed line carries (R10 D3) — set only when the
+ * customer's personal discount wins that line's quote at the pricing boundary, and then
+ * `price` is the total the checkout quotes. The line's own `price` stays what the list
+ * showed before (struck through beside this one). Null everywhere else: no percent, the
+ * flag off, a purpose it does not apply to, or another single discount as large or larger.
+ */
+export const miniAppListedPersonalDiscountSchema = z.object({
+  percent: z.number().int().min(1).max(100),
+  price: moneySchema,
+});
+export type MiniAppListedPersonalDiscount = z.infer<typeof miniAppListedPersonalDiscountSchema>;
+
 export const miniAppProductSchema = z.object({
   id: idSchema,
   title: z.string(),
   price: moneySchema,
+  /** R11 A9. Defaulted so a client meeting an older server reads "none". */
+  personalDiscount: miniAppListedPersonalDiscountSchema.nullable().default(null),
   trafficBytes: bytesSchema,
   durationDays: z.number().int(),
   /** The device limit the plan is sold with; null when the plan does not limit devices. */
@@ -539,6 +557,12 @@ export const miniAppServiceDetailSchema = miniAppServiceSummarySchema.extend({
   actions: z.array(z.enum(MINIAPP_SERVICE_ACTIONS)),
   /** Whether a QR of the link can be fetched (`MINIAPP_ROUTES.serviceQr`). */
   qr: z.boolean(),
+  /**
+   * R11 A4: the QRs the sheet shows, in order — `SUB_LINK`, `SINGBOX`, both or none (none on a
+   * files-only panel). Each is fetched from `MINIAPP_ROUTES.serviceQrKind`. `qr` above stays
+   * true exactly when this is not empty.
+   */
+  qrKinds: z.array(z.enum(QR_PAYLOAD_KINDS)),
   /** Whether the location sheet has anything to offer now (`CHANGE_LOCATION` is available). */
   canChangeLocation: z.boolean(),
   /** Round 10, D1: «تمدید خودکار» for this service (`MINIAPP_ROUTES.serviceAutoRenew`). */
@@ -555,6 +579,8 @@ export const miniAppServiceOfferSchema = z.object({
       planId: idSchema.nullable(),
       title: z.string(),
       price: moneySchema,
+      /** R11 A9, as on a product. Defaulted so a client meeting an older server reads "none". */
+      personalDiscount: miniAppListedPersonalDiscountSchema.nullable().default(null),
     }),
   ),
 });
@@ -734,8 +760,8 @@ export const miniAppTicketsResponseSchema = z.object({
 export const miniAppTicketDetailSchema = miniAppTicketSummarySchema.extend({
   messages: z.array(
     z.object({
-      /** Who wrote it: the customer, or support. */
-      author: z.enum(['CUSTOMER', 'SUPPORT']),
+      /** Who wrote it: the customer, support, or (Phase 4 PR-4) the support assistant. */
+      author: z.enum(['CUSTOMER', 'SUPPORT', 'AI']),
       text: z.string().nullable(),
       /** A Telegram file was attached; it is seen in the bot, not here. */
       hasAttachment: z.boolean(),

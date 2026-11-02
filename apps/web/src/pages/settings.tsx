@@ -146,13 +146,15 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
                 </div>
               </header>
               <div className="settings-rows">
-                {members.map((setting) => (
-                  <SettingRow
+                {members.map((setting, index) => (
+                  <SettingFold
                     key={setting.key}
                     setting={setting}
-                    mayEdit={mayEdit}
-                    salesCurrency={salesCurrency}
-                  />
+                    first={index === 0}
+                    unsaved={dirty.has(setting.key)}
+                  >
+                    <SettingRow setting={setting} mayEdit={mayEdit} salesCurrency={salesCurrency} />
+                  </SettingFold>
                 ))}
               </div>
             </section>
@@ -160,6 +162,50 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
         </DirtyScope>
       </StateSwitch>
     </>
+  );
+}
+
+/**
+ * One setting as an accordion (R11): a tab of ten editors is no longer a ten-screen wall. The
+ * closed row says what the setting is and what it is NOW; the editor — with its own draft, save
+ * and technical details — is the same `SettingRow`, which stays MOUNTED while folded, so a
+ * half-typed value survives folding it. The first row of a tab starts open, and a row with
+ * unsaved work says so on its summary.
+ */
+export function SettingFold({
+  setting,
+  first,
+  unsaved,
+  children,
+}: {
+  setting: ResolvedSettingResponse;
+  first: boolean;
+  unsaved: boolean;
+  children: ReactNode;
+}) {
+  const presentation = settingPresentation(setting.key);
+  return (
+    <Disclosure
+      className="set-fold"
+      defaultOpen={first}
+      summary={
+        <>
+          <span className="set-fold-title">
+            {presentation === null ? t('web.settings_unknown_title') : t(presentation.title)}
+          </span>
+          <span className="set-fold-value small">
+            <CurrentValue control={presentation?.control ?? null} value={setting.value} />
+          </span>
+          {unsaved && (
+            <Badge tone="warn" dot>
+              {t('web.ob_unsaved_row')}
+            </Badge>
+          )}
+        </>
+      }
+    >
+      {children}
+    </Disclosure>
   );
 }
 

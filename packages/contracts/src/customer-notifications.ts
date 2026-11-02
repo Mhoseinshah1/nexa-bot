@@ -803,7 +803,11 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
 > = {
   PAYMENT_REJECTED: 'bot.payment.rejected',
   PAYMENT_EXPIRED: 'bot.payment.expired',
-  ORDER_EXPIRED: 'bot.order.expired',
+  /*
+   * R11 A11: the order's own payment message, edited into its expired state (summary kept,
+   * nothing that pays). `bot.order.expired` stays the REFUSAL of a draft past its hold.
+   */
+  ORDER_EXPIRED: 'bot.order.expired_screen',
   SERVICE_ACTION_SUCCEEDED: 'bot.service.action_succeeded',
   SERVICE_ACTION_FAILED: 'bot.service.action_failed',
   SERVICE_PROVISION_DELAYED: 'bot.service.provision_delayed',
@@ -815,7 +819,11 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
    * customer who hit the rate limit read different words from one who did not.
    */
   PAYMENT_TRANSFER_RECORDED: 'bot.payment.received_for_review',
-  ORDER_CANCELLED: 'bot.order.cancelled',
+  /*
+   * R11 A11: the interactive answer is now the cancelled SCREEN edited onto the order's
+   * message, so the fallback renders that same screen (the rule above: one wording).
+   */
+  ORDER_CANCELLED: 'bot.order.cancelled_screen',
   WALLET_TOPUP_CREDITED: 'bot.wallet.topup_credited',
   ORDER_REFUNDED_TO_WALLET: 'bot.order.refunded_to_wallet',
   /*

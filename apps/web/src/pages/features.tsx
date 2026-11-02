@@ -6,7 +6,18 @@ import { formatNumber, formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { t } from '../i18n/web.fa';
 import { ConfirmDialog, confirmDialogOpen } from '../ui/confirm-dialog';
-import { Badge, Button, Card, Ltr, PageHead, StateSwitch, Switch } from '../ui/kit';
+import {
+  Badge,
+  Button,
+  Card,
+  CountedPager,
+  LIST_PAGE_SIZE,
+  Ltr,
+  PageHead,
+  StateSwitch,
+  Switch,
+  serverTotal,
+} from '../ui/kit';
 import { featurePresentation } from './features-catalogue';
 import { ErrorReport, registryLabel } from './settings';
 import { TechnicalDetails } from '../ui/technical-details';
@@ -35,7 +46,18 @@ export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
   const rows = flags.data?.flags ?? [];
 
   const [showAll, setShowAll] = useState(false);
-  const shown = showAll ? rows : rows.slice(0, FEATURE_ROWS_SHOWN);
+  /*
+   * R11: with the server's `total` the list is paged ten at a time under the demo's numbered
+   * pager; an answer without one (an older server) keeps the first ten and the button.
+   */
+  const total = flags.data?.total;
+  const [page, setPage] = useState(1);
+  const shown =
+    total !== undefined
+      ? rows.slice((page - 1) * LIST_PAGE_SIZE, page * LIST_PAGE_SIZE)
+      : showAll
+        ? rows
+        : rows.slice(0, FEATURE_ROWS_SHOWN);
   const enabledCount = rows.filter((flag) => flag.enabled).length;
 
   return (
@@ -52,17 +74,20 @@ export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
           }
           tight
         >
-          {/*
-           * The demo pages this list ten at a time; the endpoint returns no total, so the
-           * whole list sits in a height-limited pane instead (nexa-web-design: counted
-           * pagers only over a server total).
-           */}
           <ul className="feature-list">
             {shown.map((flag) => (
               <FlagCard key={flag.key} flag={flag} mayEdit={mayEdit} />
             ))}
           </ul>
-          {rows.length > FEATURE_ROWS_SHOWN && (
+          {total !== undefined && (
+            <CountedPager
+              page={page}
+              pageSize={LIST_PAGE_SIZE}
+              total={serverTotal(total)}
+              onPage={setPage}
+            />
+          )}
+          {total === undefined && rows.length > FEATURE_ROWS_SHOWN && (
             <div className="feature-more">
               <Button size="sm" onClick={() => setShowAll((open) => !open)} aria-expanded={showAll}>
                 {showAll

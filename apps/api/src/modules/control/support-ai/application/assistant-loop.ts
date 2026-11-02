@@ -1,4 +1,5 @@
 import {
+  SUPPORT_AI_GENERATIONS_PER_JOB,
   SUPPORT_AI_LIMITS,
   SUPPORT_AI_VISION_FETCH_TIMEOUT_MS,
   SUPPORT_AI_VISION_MAX_IMAGES,
@@ -8,12 +9,14 @@ import {
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 import type { SupportAssistService } from './support-assist.service.js';
 import type { SupportAutoReplyService } from './support-auto-reply.service.js';
+import type { SupportTicketAiService } from './support-ticket-ai.service.js';
 import type { SupportLearningService } from '../../support-knowledge/application/support-learning.service.js';
 import {
   SUPPORT_ASSISTANT_WATCH_INTERVAL_MS,
   type SupportAssistantLiveness,
 } from './assistant-watch.js';
 import { guardedTick } from '../../../../infrastructure/lifecycle/loop-guard.js';
+import type { SupportHandoffRateAlert } from './handoff-rate-alert.js';
 
 export const ASSISTANT_INTERVAL_MS = 2_000;
 /** The bounds a job's worst case is derived from. */
@@ -25,16 +28,22 @@ export interface AssistantJobBounds {
   /** TB6: customer images fetched per job, each in two Telegram legs (`getFile`, the file). */
   readonly visionMaxImages: number;
   readonly visionFetchTimeoutMs: number;
+  /**
+   * Phase 4 PR-1 (review of PR #365): how many times one job may walk the provider chain — the
+   * first answer, and ONE regeneration after a refused or repeated reply.
+   */
+  readonly generations: number;
 }
 
 /**
  * The worst case of producing ONE job: every step of the chain (the primary and up to
- * `maxFallbacks` fallbacks) timing out at the longest timeout the configuration allows, after
+ * `maxFallbacks` fallbacks) timing out at the longest timeout the configuration allows, on
+ * every generation the job may make (Phase 4 PR-1: the answer and one regeneration), after
  * every image download has spent both of its legs' timeouts (PR #201 review, N2).
  */
 export function assistantJobWorstCaseMs(bounds: AssistantJobBounds): number {
   return (
-    (1 + bounds.maxFallbacks) * bounds.providerTimeoutMs +
+    bounds.generations * (1 + bounds.maxFallbacks) * bounds.providerTimeoutMs +
     bounds.visionMaxImages * 2 * bounds.visionFetchTimeoutMs
   );
 }
@@ -53,6 +62,7 @@ export const ASSISTANT_JOB_BOUNDS: AssistantJobBounds = {
   providerTimeoutMs: SUPPORT_AI_LIMITS.timeoutMs.max,
   visionMaxImages: SUPPORT_AI_VISION_MAX_IMAGES,
   visionFetchTimeoutMs: SUPPORT_AI_VISION_FETCH_TIMEOUT_MS,
+  generations: SUPPORT_AI_GENERATIONS_PER_JOB,
 };
 export const ASSISTANT_JOB_WORST_CASE_MS = assistantJobWorstCaseMs(ASSISTANT_JOB_BOUNDS);
 export const ASSISTANT_LEASE_MS = assistantLeaseMs(ASSISTANT_JOB_BOUNDS);
@@ -63,6 +73,8 @@ export const ASSISTANT_MAX_ATTEMPTS = 3;
 /** TB8: learning jobs per pass. Lower than drafts: nobody is waiting on a lesson. */
 export const ASSISTANT_LEARNING_BATCH = 2;
 const RETENTION_INTERVAL_MS = 10 * 60_000;
+/** Phase 4 PR-1 item 9: how often the handoff-rate alert is evaluated. */
+export const HANDOFF_RATE_INTERVAL_MS = 10 * 60_000;
 
 /**
  * TB5 — the `assistant` process role's loop (ADR-0034 §7).
@@ -79,6 +91,7 @@ export class AssistantLoop {
   private running = false;
   private lastRetentionAt = 0;
   private lastAliveAt = 0;
+  private lastHandoffRateAt = 0;
   private reportedNoScope = false;
   private readonly progress: LoopProgress;
 
@@ -89,7 +102,19 @@ export class AssistantLoop {
     >,
     private readonly options: {
       /** TB7: the producer of AUTO_DECISION jobs. Without it, such a job is never claimed. */
-      readonly auto?: Pick<SupportAutoReplyService, 'produce' | 'giveUp'>;
+      readonly auto?: Pick<SupportAutoReplyService, 'produce' | 'giveUp'> &
+        Partial<Pick<SupportAutoReplyService, 'recoverFromException'>>;
+      /**
+       * Phase 4 PR-4: the producer of TICKET jobs (`support_ai_ticket_jobs`). A table, a claim and
+       * a producer of their own: a ticket job is never claimed by, or produced as, a Business
+       * one. Without it, no ticket job is ever claimed.
+       */
+      readonly tickets?: Pick<
+        SupportTicketAiService,
+        'claimNext' | 'produce' | 'giveUp' | 'recoverFromException'
+      >;
+      /** Phase 4 PR-1 item 9: the handoff-rate alert, checked every `HANDOFF_RATE_INTERVAL_MS`. */
+      readonly handoffRate?: Pick<SupportHandoffRateAlert, 'check'>;
       /** TB8: the producer of learning jobs. Without it, no learning job is ever claimed. */
       readonly learning?: Pick<SupportLearningService, 'runDue' | 'purge'>;
       /** D5: closes the worker's "assistant stalled" condition once a pass completes. */
@@ -162,26 +187,81 @@ export class AssistantLoop {
         );
         if (job === null) break;
         claimed += 1;
-        if (job.kind === 'AUTO_DECISION' && auto !== undefined) {
-          // A job that keeps dying mid-call is repeated failure: it hands off, never loops.
-          const outcome =
-            job.attempts > ASSISTANT_MAX_ATTEMPTS
-              ? await auto.giveUp(scope, job)
-              : await auto.produce(scope, job);
-          counts[outcome] = (counts[outcome] ?? 0) + 1;
-          this.progress.record(this.options.now().getTime());
-          // A stopped tenant: the job was left untouched, and so is the rest of the pass.
-          if (outcome === 'INACTIVE') break;
-          continue;
+        // Phase 4 PR-1 item 8: one job that throws never ends the pass. The error is logged, an
+        // automatic job is released for one retry (then handed off), and the next job runs.
+        let result: string;
+        try {
+          if (job.kind === 'AUTO_DECISION' && auto !== undefined) {
+            // A job that keeps dying mid-call is repeated failure: it hands off, never loops.
+            result =
+              job.attempts > ASSISTANT_MAX_ATTEMPTS
+                ? await auto.giveUp(scope, job)
+                : await auto.produce(scope, job);
+          } else {
+            // `attempts` already counts this claim: a job that keeps dying mid-call fails instead.
+            result =
+              job.attempts > ASSISTANT_MAX_ATTEMPTS
+                ? await this.assist.abandon(scope, job)
+                : await this.assist.produce(scope, job);
+          }
+        } catch (error: unknown) {
+          this.options.logger.error({ err: error, jobId: job.id }, 'assistant: a job failed');
+          result = 'exception';
+          if (job.kind === 'AUTO_DECISION' && auto?.recoverFromException !== undefined) {
+            try {
+              await auto.recoverFromException(scope, job);
+            } catch (recovery: unknown) {
+              this.options.logger.error(
+                { err: recovery, jobId: job.id },
+                'assistant: a failed job could not be released',
+              );
+            }
+          }
         }
-        // `attempts` already counts this claim: a job that keeps dying mid-call fails instead.
-        const state =
-          job.attempts > ASSISTANT_MAX_ATTEMPTS
-            ? await this.assist.abandon(scope, job)
-            : await this.assist.produce(scope, job);
-        counts[state] = (counts[state] ?? 0) + 1;
+        counts[result] = (counts[result] ?? 0) + 1;
         this.progress.record(this.options.now().getTime());
-        if (state === 'INACTIVE') break;
+        // A stopped tenant: the job was left untouched, and so is the rest of the pass.
+        if (result === 'INACTIVE') break;
+      }
+      // Phase 4 PR-4: ticket jobs, claimed and produced ONE at a time like the conversations'.
+      const tickets = this.options.tickets;
+      if (tickets !== undefined) {
+        let ticketClaimed = 0;
+        while (ticketClaimed < ASSISTANT_BATCH) {
+          const at = this.options.now();
+          const job = await tickets.claimNext(
+            scope,
+            at,
+            new Date(at.getTime() + ASSISTANT_LEASE_MS),
+          );
+          if (job === null) break;
+          ticketClaimed += 1;
+          claimed += 1;
+          let result: string;
+          try {
+            result =
+              job.attempts > ASSISTANT_MAX_ATTEMPTS
+                ? await tickets.giveUp(scope, job)
+                : await tickets.produce(scope, job);
+          } catch (error: unknown) {
+            this.options.logger.error(
+              { err: error, jobId: job.id },
+              'assistant: a ticket job failed',
+            );
+            result = 'exception';
+            try {
+              await tickets.recoverFromException(scope, job);
+            } catch (recovery: unknown) {
+              this.options.logger.error(
+                { err: recovery, jobId: job.id },
+                'assistant: a failed ticket job could not be released',
+              );
+            }
+          }
+          counts[`ticket_${result}`] = (counts[`ticket_${result}`] ?? 0) + 1;
+          this.progress.record(this.options.now().getTime());
+          if (result === 'INACTIVE') break;
+        }
       }
       // TB8: learning jobs, after the conversations' own jobs — a customer waits on those. ONE
       // per claim, each leased from the moment it is claimed (TB5 review, finding 4): a batch
@@ -207,6 +287,17 @@ export class AssistantLoop {
         }
       }
       const now = this.options.now();
+      if (
+        this.options.handoffRate !== undefined &&
+        now.getTime() - this.lastHandoffRateAt >= HANDOFF_RATE_INTERVAL_MS
+      ) {
+        this.lastHandoffRateAt = now.getTime();
+        try {
+          await this.options.handoffRate.check(scope);
+        } catch (error: unknown) {
+          this.options.logger.error({ err: error }, 'assistant: the handoff-rate check failed');
+        }
+      }
       if (now.getTime() - this.lastRetentionAt >= RETENTION_INTERVAL_MS) {
         counts.purged = await this.assist.purgeExpired(scope, now);
         if (learning !== undefined) counts.purged_candidates = await learning.purge(scope, now);

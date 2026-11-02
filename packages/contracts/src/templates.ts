@@ -1784,6 +1784,130 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  /*
+   * R11 A11 (owner request: order-expiry edit-in-place). The order's OWN payment message,
+   * edited into its end state instead of a new message under it. Two keys, because the two
+   * ends say different things (`bot.order.expired` vs `bot.order.cancelled` above), and both
+   * keep the order summary — code, product, amount — so the edited message is still the
+   * record of what was ordered once the card number, the copy buttons and the pay buttons
+   * are gone. Neither says "no money was taken": the owner removed that line.
+   */
+  {
+    key: 'bot.order.expired_screen',
+    description:
+      'R11 A11: what an unpaid order\u2019s payment message becomes when its window closes — ' +
+      'the `ORDER_EXPIRED` notice, EDITED onto the message that offered to pay (or sent once, ' +
+      'when that message cannot be edited or is not known), and the answer to a tap on a stale ' +
+      'pay button of an expired order. Keeps the order summary; carries the re-order and ' +
+      'main-menu buttons and nothing that pays. Says nothing about money having been taken.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'orderCode',
+        type: 'STRING',
+        description:
+          'The order\u2019s 8-character public code (`orderCodeOf`). Absent for a row the code backfill has not reached, and the line is dropped.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'productName',
+        type: 'STRING',
+        description:
+          'What the order was for: the order line\u2019s own title, frozen at the draft.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'The amount the order asked for (its frozen total).',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.order.cancelled_screen',
+    description:
+      'R11 A11: what an order\u2019s payment message becomes when the customer cancels it — ' +
+      'edited onto that message (or sent once, as the `ORDER_CANCELLED` lane fallback, when it ' +
+      'cannot be edited). The customer\u2019s own decision, so distinct from ' +
+      '`bot.order.expired_screen`. Keeps the order summary; carries the re-order and main-menu ' +
+      'buttons and nothing that pays.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'orderCode',
+        type: 'STRING',
+        description:
+          'The order\u2019s 8-character public code (`orderCodeOf`). Absent for a row the code backfill has not reached, and the line is dropped.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'productName',
+        type: 'STRING',
+        description:
+          'What the order was for: the order line\u2019s own title, frozen at the draft.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'The amount the order asked for (its frozen total).',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.order.reorder_button',
+    description:
+      'R11 A11: «سفارش دوباره» under an expired or cancelled order. Opens the same product\u2019s ' +
+      'purchase flow at its read-only entry (its category\u2019s product list, or the catalogue); ' +
+      'no order exists until the customer confirms a new one.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.order.main_menu_button',
+    description:
+      'R11 A11: «منوی اصلی» under an expired or cancelled order. Its own key, not ' +
+      '`bot.menu.main_button`, because the owner worded this one differently and no two ' +
+      'inline buttons share a label template.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.order.payment_in_review',
+    description:
+      'R12 F3 (OQ-R11-A11-04): the answer to a pay tap on an order whose deadline passed but whose payment is still live (a receipt under review, a gateway attempt pending or UNKNOWN, a confirmed payment not yet settled) — the sweep keeps such an order. Tells the customer the payment is being checked, not to pay again, and that the result comes in the bot. `bot.order.expired` stays the answer for a draft past its price hold, which has no payment.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.order.payment_status_button',
+    description:
+      'R12 F3: «وضعیت پرداخت» under `bot.order.payment_in_review`. Opens the live payment’s own screen (a gateway attempt’s status) or repeats the review sentence; it pays nothing and creates no payment.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.order.input_back_button',
+    description:
+      'R12 F3: «بازگشت به پیش‌فاکتور» under a typed-input prompt (discount code, service username) and under the wallet shortfall. Re-draws the order’s pre-invoice and closes the open text window; it writes nothing else.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.order.input_cancel_button',
+    description:
+      'R12 F3: «انصراف» under a typed-input prompt (discount code, service username, custom-service volume and days). Closes the open text window and returns to the main menu; the draft order is left as it is and lapses by its own deadline.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.order.refunded_to_wallet',
     description:
@@ -1919,6 +2043,92 @@ export const TEMPLATES = [
       'new message. Shown under the wallet-credit messages.',
     format: 'PLAIN_TEXT',
     placeholders: [],
+  },
+  {
+    key: 'bot.wallet.history_button',
+    description:
+      'R12 F3: «تراکنش‌ها» under the wallet balance. Opens the customer’s last ledger movements (ten per page), edited in place.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.history',
+    description:
+      'R12 F3: the customer’s last wallet movements, newest first, ten per page; one line per movement (date, signed amount, what it was). Read from the ledger; nothing here changes a balance.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'lines',
+        type: 'STRING',
+        description: 'The page’s movement lines, already formatted, one per line.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.wallet.history_empty',
+    description: 'R12 F3: the wallet has no movement yet.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.wallet.history_line_credit',
+    description:
+      'R12 F3: one line of the wallet history for money that CAME IN (amount, what it was, when). Composed into `bot.wallet.history`’s `{lines}`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'The movement’s amount in the selling currency, positive.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reason',
+        type: 'STRING',
+        description: 'What the movement was, in the customer’s words (from the ledger reason).',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When the movement was recorded.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.wallet.history_line_debit',
+    description:
+      'R12 F3: one line of the wallet history for money that WENT OUT (amount, what it was, when). Composed into `bot.wallet.history`’s `{lines}`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'The movement’s amount in the selling currency, positive.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reason',
+        type: 'STRING',
+        description: 'What the movement was, in the customer’s words (from the ledger reason).',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When the movement was recorded.',
+        required: true,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.catalog.open_button',
@@ -5615,6 +5825,13 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.payment.retry_button',
+    description:
+      'R12 F3: «پرداخت دوباره» under the rejected-payment and expired-payment notices. Opens the order’s payment-method selector (or the wallet top-up for a top-up payment); it pays nothing itself and re-decides on the tap whether the order may still be paid.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.request_unavailable',
     description:
       'The truthful generic refusal, for the causes a customer can neither act on nor ' +
@@ -6042,6 +6259,138 @@ export const TEMPLATES = [
         type: 'NUMBER',
         description:
           'services.link_rotation_cooldown_hours, as it stands when the screen is drawn.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  /*
+   * R11 A4 — «فقط فایل، بدون لینک ساب». On a panel with that option on, a service's
+   * subscription link is never shown to its customer; these are the texts that replace
+   * the ones that carry it. None of them has a link placeholder, and a test pins that.
+   */
+  {
+    key: 'bot.service.delivered_files_only',
+    description:
+      'R11 A4: the delivery card on a panel set to «فقط فایل، بدون لینک ساب»: the service ' +
+      'details and a line saying the connection files follow in the next messages. Carries ' +
+      'NO link and is sent with no QR code. Only the username is required; a missing fact ' +
+      'drops its line.',
+    format: 'TELEGRAM_HTML',
+    placeholders: [
+      {
+        token: 'serviceUsername',
+        type: 'STRING',
+        description: 'The service’s username on the panel.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'productName',
+        type: 'STRING',
+        description: 'The product’s public name, frozen on the order.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'serviceLocation',
+        type: 'STRING',
+        description: 'The product’s service-location label, when configured.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'durationDays',
+        type: 'DURATION_DAYS',
+        description: 'The plan’s validity in days; 0 is unlimited.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'trafficBytes',
+        type: 'TRAFFIC_LIMIT',
+        description: 'The plan’s traffic allowance; 0 is unlimited.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.files_renewed',
+    description:
+      'R11 A4: the answer to a customer’s «دریافت فایل‌های جدید» on a files-only panel, ' +
+      'shown on the service card: the files were renewed, the old ones should be replaced, ' +
+      'the new files follow. Carries no link. Replaces `bot.service.link_rotated` there.',
+    format: 'TELEGRAM_HTML',
+    placeholders: [
+      {
+        token: 'serviceUsername',
+        type: 'STRING',
+        description: 'The service’s username on the panel.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.qr_caption_sublink',
+    description:
+      'R11 A4: the one-line caption under the plain subscription-link QR when a RickPanel ' +
+      'panel is set to show BOTH QR kinds («نوع بارکد»). Carries no link.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.qr_caption_singbox',
+    description:
+      'R11 A4: the one-line caption under the sing-box import QR when a RickPanel panel is ' +
+      'set to show BOTH QR kinds («نوع بارکد»). Carries no link.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.files_new_button',
+    description:
+      'R11 A4: the button on a files-only service that asks for new connection files. ' +
+      'Takes the place of «تغییر لینک» (same slot, same conditions).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.files_new_ask',
+    description:
+      'R11 A4: the confirmation before new connection files are made on a files-only panel. ' +
+      'Says the files are renewed and have to be replaced in the customer’s apps, and how ' +
+      'long until they may ask again. Says nothing about the old files stopping (OQ-RP-07).',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'cooldownHours',
+        type: 'NUMBER',
+        description:
+          'services.link_rotation_cooldown_hours, as it stands when the screen is drawn.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.files_new_confirm_button',
+    description: 'R11 A4: the button on the confirmation screen that asks for the new files.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.files_new_cooldown',
+    description:
+      'R11 A4: the refusal a customer on a files-only panel sees when they asked for new ' +
+      'files too recently. Names the instant another request will be accepted.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'availableAt',
+        type: 'DATETIME',
+        description: 'The first instant another request for this service will be accepted.',
         required: true,
         repeatable: false,
       },
@@ -7941,6 +8290,13 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.custom_service.back_button',
+    description:
+      'R12 F3: «بازگشت به مکان‌ها» under the custom-service volume and days questions. There is no pre-invoice yet at that point, so it re-opens the location list and closes the open text window.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.custom_service.locations',
     description:
       'Asks the customer to choose a location for a custom service. The buttons below are ' +
@@ -8656,6 +9012,316 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.support.ai_link_account',
+    description:
+      'Phase 4 PR-1: what the support AI sends, instead of handing off, when a Telegram Business customer NEXA cannot link to an account asks about their own service, traffic, expiry or link: one message with the bot\u2019s start link, where they sign in and see it themselves.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'botLink',
+        type: 'STRING',
+        description: 'The bot\u2019s start link (https://t.me/<bot>?start=support).',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.support.ai_subscription_link',
+    description:
+      'Phase 4 PR-3: the customer’s own subscription link as the support AI sends it in a Telegram Business chat (get_subscription_link) — the same link «سرویس\u200cهای من» shows, as plain text (a Business message has no HTML), only to a linked customer and only for their own service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The service’s panel username, as the service card shows it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'link',
+        type: 'STRING',
+        description: 'The service’s subscription link.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.support.ai_files_in_bot',
+    description:
+      'Phase 4 PR-3: instead of a link, for a service on a «فقط فایل، بدون لینک ساب» panel: the connection files are taken in the bot (a button opens that service there).',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The service’s panel username.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.support.ai_payment_status_line',
+    description:
+      'Phase 4 PR-3: one of the customer’s own latest payments, as the support AI reports it (payment_status): tracking code, amount, state and route, never a promise.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'code',
+        type: 'STRING',
+        description: 'The payment’s tracking code.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'amount',
+        type: 'STRING',
+        description: 'The amount, formatted.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'state',
+        type: 'STRING',
+        description: 'The payment’s state in Persian.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'route',
+        type: 'STRING',
+        description: 'How it was paid, in Persian.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.support.ai_payment_status_none',
+    description:
+      'Phase 4 PR-3: payment_status found no payment of this customer in the last two weeks.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_payment_under_review',
+    description:
+      'Phase 4 PR-3, check-before-handoff: a «paid but not received» customer whose payment is under review or waiting for the gateway — said once, no outcome promised, then a person takes over.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'code',
+        type: 'STRING',
+        description: 'The payment’s tracking code.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'amount',
+        type: 'STRING',
+        description: 'The amount, formatted.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.support.ai_payment_delivered',
+    description:
+      'Phase 4 PR-3, check-before-handoff: the payment is confirmed and its service delivered; the service’s link or files button follows, with «مشکل حل شد؟».',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'code',
+        type: 'STRING',
+        description: 'The payment’s tracking code.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The delivered service’s panel username.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.support.ai_payment_settled_pending',
+    description:
+      'Phase 4 PR-3, check-before-handoff: the payment is confirmed but its service is not delivered yet (or it settled something else) — said once, no outcome promised, then a person takes over.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'code',
+        type: 'STRING',
+        description: 'The payment’s tracking code.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'amount',
+        type: 'STRING',
+        description: 'The amount, formatted.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.support.ai_payment_not_found',
+    description:
+      'Phase 4 PR-3, check-before-handoff: no matching payment was found; asks ONCE for the receipt, the tracking code or the amount and time. The next message goes to a person.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_payment_unlinked',
+    description:
+      'Phase 4 PR-3, check-before-handoff: a «paid but not received» customer NEXA cannot link to an account — the bot link, and a person takes over.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'botLink',
+        type: 'STRING',
+        description: 'The bot’s start link.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.support.ai_unsupported_content',
+    description:
+      'Phase 4 PR-3: a voice message, sticker or non-image file in a Telegram Business chat: the support AI asks the customer to type the question (it cannot listen to voice). The conversation stays with the AI.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_label',
+    description:
+      'Phase 4 PR-3: the first line of an automatic reply when support.ai.label_enabled is on — says an assistant wrote it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_feedback_question',
+    description:
+      'Phase 4 PR-3: the last line of an automatic answer when support.ai.feedback_enabled is on, above 👍 / 👎.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_feedback_thanks',
+    description: 'Phase 4 PR-3: the short notice a 👍 tap gets.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_feedback_handoff',
+    description: 'Phase 4 PR-3: the short notice a 👎 tap gets — a person will look.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_human_requested',
+    description: 'Phase 4 PR-3: the short notice a «👤 پشتیبان انسانی» tap gets.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_callback_stale',
+    description:
+      'Phase 4 PR-3: the short notice a support-AI button gets when it no longer applies (the conversation moved on, or the tap is not from this chat).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_human',
+    description:
+      'Phase 4 PR-3: the button under an automatic reply that hands the conversation to a person.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_yes',
+    description: 'Phase 4 PR-3: 👍 under «مشکل حل شد؟».',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_no',
+    description: 'Phase 4 PR-3: 👎 under «مشکل حل شد؟».',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_buy',
+    description: 'Phase 4 PR-3: a URL button into the bot’s catalogue.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_renew',
+    description: 'Phase 4 PR-3: a URL button into the bot’s renewal of one service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_add_traffic',
+    description: 'Phase 4 PR-3: a URL button into the bot’s traffic packages for one service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_add_time',
+    description: 'Phase 4 PR-3: a URL button into the bot’s time packages for one service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_change_location',
+    description: 'Phase 4 PR-3: a URL button into the bot’s location change for one service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_trial',
+    description:
+      'Phase 4 PR-3: a URL button into the bot’s free trial (shown only to an eligible customer).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_rotate',
+    description:
+      'Phase 4 PR-3: a URL button into the bot’s link change for one service (the bot asks to confirm).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_topup',
+    description: 'Phase 4 PR-3: a URL button into the bot’s wallet top-up.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_service_in_bot',
+    description: 'Phase 4 PR-3: a URL button opening one service’s card in the bot (its files).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.ai_button_open_bot',
+    description: 'Phase 4 PR-3: a URL button opening the bot.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.order.preinvoice',
     description:
       'The pre-invoice a customer pays from. B1: the product is described to the customer ' +
@@ -9001,6 +9667,46 @@ export const TEMPLATES = [
         token: 'subtotal',
         type: 'MONEY',
         description: 'The list price the percent was taken from.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.pricing.personal_discount_tag',
+    description:
+      'R11 A9: the short tag beside a price a customer is LISTED with their personal ' +
+      'discount (R10 D3) in the rich plan table, before any order exists. Shown only when ' +
+      'the personal discount wins that line’s quote, after the struck-through price it ' +
+      'replaces and the discounted price, so the figure on the list is the figure on the ' +
+      'invoice. Never shown otherwise. A button carries `bot.pricing.' +
+      'personal_discount_button_suffix` instead (R11 hotfix).',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'percent',
+        type: 'NUMBER',
+        description: 'The personal discount percent, 1 to 100.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.pricing.personal_discount_button_suffix',
+    description:
+      'R11 hotfix: what follows the discounted price on a plan, renewal or package BUTTON ' +
+      'a customer is listed with their personal discount (R10 D3) — «(20٪ تخفیف)». A ' +
+      'button is plain text (no entities), so it shows ONE price, the one the invoice ' +
+      'charges, and never the struck-through price it replaces: combining strike marks ' +
+      'inside a right-to-left label split the figure into reversed runs. Shown only when ' +
+      'the personal discount wins that line’s quote. Never shown otherwise.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'percent',
+        type: 'NUMBER',
+        description: 'The personal discount percent, 1 to 100.',
         required: true,
         repeatable: false,
       },
@@ -9804,6 +10510,31 @@ export const TEMPLATES = [
         type: 'STRING',
         description:
           'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
+          'Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  /*
+   * Round 11 A8: the gateway said in so many words that it is rate limited (a readable
+   * rate-limit code), Nexa asked again with the SAME order id and was refused each time, so the
+   * attempt ended with NO invoice. Retryable: a new tap opens a new attempt, and since this one
+   * provably created nothing, the customer cannot end up with two invoices.
+   */
+  {
+    key: 'bot.payment.gateway_busy',
+    description:
+      'The gateway is busy (it refused to create the invoice because of its own rate limit), ' +
+      'so no invoice was made and nothing was charged. The customer may try again in a minute. ' +
+      'Never phrased as the customer\u2019s payment failing.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment\u2019s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. ' +
           'Optional: a line holding only it is dropped where no payment is in hand.',
         required: false,
         repeatable: false,
@@ -10865,6 +11596,61 @@ export const TEMPLATES = [
     key: 'bot.payment.gateway_cancel_unknown',
     description:
       'TonPays Telegram: the answer to the cancel request was lost. It is never sent again automatically.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (8 characters since PR-C), `paymentTrackingCode` of the payment. Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_cancel_rate_limited',
+    description:
+      'R12 F3 (R11 A8 follow-up): the customer’s cancel was NOT processed because TonPays rate-limited it (a readable RATE_LIMIT_EXCEEDED, or Nexa’s own limiter held it past the customer window). Unlike `gateway_cancel_unknown` the provider’s answer is known: it did nothing. The invoice is not cancelled yet; the cancel button stays so the customer may ask again; do not pay again.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (`paymentTrackingCode`). Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.gateway_cancel_rate_limited_closed',
+    description:
+      'R12 F3 lead review: `gateway_cancel_rate_limited` for an invoice whose cancel button is NOT on offer any more (its window closed, a receipt is on its way). The same facts — not processed, not cancelled, do not pay again, send the receipt if paid — WITHOUT the sentence that asks the customer to tap «❌ لغو فاکتور» again, which would point at a button that is not there.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The payment’s public tracking code (`paymentTrackingCode`). Optional: a line holding only it is dropped where no payment is in hand.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  /*
+   * Round 11 A8 (owner): a cancel whose answer was lost does not count as cancelled, so the
+   * customer may ask again. When Nexa has since LEARNED that the invoice was cancelled (the
+   * applied cancel, an inquiry that read `canceled`, or the payment failed as cancelled), a tap
+   * on a cancel button still on screen is answered with this sentence — never with the generic
+   * "closed" one, which does not say the cancel the customer asked for happened.
+   */
+  {
+    key: 'bot.payment.gateway_cancel_already_cancelled',
+    description:
+      'TonPays Telegram: the customer tapped «❌ لغو فاکتور» on an invoice Nexa already knows was cancelled. Nothing is sent to the provider and nothing changes.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
@@ -13245,6 +14031,28 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.ticket.line_ai',
+    description:
+      "Phase 4 PR-4: one of the support assistant's (AI) messages in the conversation view. Never shown as an administrator's.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When it was sent.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'text',
+        type: 'STRING',
+        description: 'The message, possibly shortened.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.ticket.line_closed_by_customer',
     description: 'WP-A7: the conversation records that the customer closed the ticket.',
     format: 'PLAIN_TEXT',
@@ -13414,6 +14222,50 @@ export const TEMPLATES = [
         token: 'text',
         type: 'STRING',
         description: "Support's reply, exactly as stored in the ticket.",
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.ai_replied',
+    description:
+      "Phase 4 PR-4: the customer notification for the support assistant's (AI) answer in a ticket (TICKET_REPLY on a message the assistant wrote). Every value is read at send time from the ticket message the notification names; the one button opens the ticket.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'category',
+        type: 'STRING',
+        description: "The ticket's category title.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'text',
+        type: 'STRING',
+        description: "The assistant's reply, exactly as stored in the ticket.",
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.ai_open_in_bot',
+    description:
+      "Phase 4 PR-4: the line the support assistant's ticket answer ends with when it points the customer at one of the bot's own flows (buy, renew, add-on, location, trial, link rotation, wallet top-up, or a service's card). A ticket reply has no buttons of its own, so the bot link, built by NEXA and never written by the model, is the text.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'link',
+        type: 'STRING',
+        description: "NEXA\\'s deep link into the bot (https://t.me/<bot>?start=sai-…).",
         required: true,
         repeatable: false,
       },

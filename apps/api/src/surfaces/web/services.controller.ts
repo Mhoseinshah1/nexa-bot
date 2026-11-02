@@ -29,10 +29,9 @@ import {
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import type { PublicLabels } from '../../modules/commerce/public-codes/application/public-labels.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin, type adminActor } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type {
   OperationRecord,
   ServiceCursor,
@@ -87,7 +86,7 @@ export class ServicesController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ServiceListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // A repeated parameter is an ARRAY, not a string — the guard every list here uses.
     const query = singleValued(raw);
     const page = serviceListQuerySchema.parse({
@@ -165,7 +164,7 @@ export class ServicesController {
 
   @Get('services/:id')
   async detail(@Req() request: FastifyRequest, @Param('id') id: string): Promise<ServiceResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const found = await this.container.serviceAdmin.detail(scope, actor, id);
     return { service: await this.detailOf(scope, actor, found) };
   }
@@ -224,7 +223,7 @@ export class ServicesController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<ServiceOperationsResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const history = await this.container.serviceAdmin.operations(scope, actor, id);
     /*
      * `limit` and `hasMore` travel with the rows, and both are the SERVER's.
@@ -312,7 +311,7 @@ export class ServicesController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ServiceActionResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = serviceTerminateRequestSchema.parse(body);
     /*
      * The phrase, compared after trimming and in full.
@@ -352,7 +351,7 @@ export class ServicesController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ServiceActionResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = serviceGrantRequestSchema.parse(body);
     const operation = await this.container.serviceGrants.grant(scope, actor, id, input);
     return this.answer(scope, actor, id, operation);
@@ -364,7 +363,7 @@ export class ServicesController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<ServiceLocationTargetsResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const found = await this.container.locationChanges.operatorTargets(scope, actor, id);
     return {
       current: found.current,
@@ -387,7 +386,7 @@ export class ServicesController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ServiceActionResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = serviceChangeLocationRequestSchema.parse(body);
     const result = await this.container.locationChanges.requestFromOperator(scope, actor, {
       serviceId: id,
@@ -417,7 +416,7 @@ export class ServicesController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ServiceActionResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = serviceActionRequestSchema.parse(body);
     const operation = await this.container.provisioning.retryProvisioning(scope, actor, id, {
       idempotencyKey: input.idempotencyKey,
@@ -439,7 +438,7 @@ export class ServicesController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ServiceActionResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     serviceActionRequestSchema.parse(body);
     await this.container.delivery.resendForOperator(scope, actor, id);
     return this.answer(scope, actor, id, null);
@@ -451,7 +450,7 @@ export class ServicesController {
     body: unknown,
     type: OperatorServiceOperation,
   ): Promise<ServiceActionResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = serviceActionRequestSchema.parse(body);
     const operation = await this.container.provisioning.requestFromOperator(
       scope,
@@ -484,28 +483,6 @@ export class ServicesController {
       service: await this.detailOf(scope, actor, found),
       operation: operation === null ? null : toOperation(operation),
     };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (options.write) {
-      // Cookie-authenticated writes only from a configured origin, exactly as every
-      // other write surface here does it.
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

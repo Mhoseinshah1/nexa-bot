@@ -24,6 +24,7 @@ import {
   sanitizedErrorCode,
 } from '../../../platform/opslog/application/error-events.js';
 import type { OpsLogFacts, OpsLogWords } from './ports.js';
+import { STARS_CHARGE_REFUNDED_CODE } from '../../payments/application/telegram-stars-payment.service.js';
 import { identityOf, serviceUsernameValue, stalledReport, technicalLine } from './presenters.js';
 import {
   PROVISIONING_DELIVERED_CODE,
@@ -126,7 +127,22 @@ export class OperationalEventPresenter implements OpsEventPresenter {
     tx: unknown,
   ): Promise<string | null> {
     const serviceId = safeIdentifier(input.context?.['serviceId']);
-    if (serviceId === null) return null;
+    if (serviceId === null) {
+      /*
+       * R12 F1 item 6: a refunded Stars charge names the ORDER it paid for, which is what is
+       * known when it is recorded; the service's panel account is read through it (a purchase's
+       * service or reservation, a renewal's service). Only for that code: no other event that
+       * carries an order id grows a line it did not have.
+       */
+      const orderId =
+        input.code === STARS_CHARGE_REFUNDED_CODE
+          ? safeIdentifier(input.context?.['orderId'])
+          : null;
+      if (orderId === null) return null;
+      return serviceUsernameValue(
+        await this.deps.facts.serviceUsernameOfOrder(scope, orderId, tx as TransactionScope),
+      );
+    }
     const service = await this.deps.facts.service(scope, serviceId, tx as TransactionScope);
     return serviceUsernameValue(service?.providerUsername);
   }

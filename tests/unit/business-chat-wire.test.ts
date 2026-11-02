@@ -118,9 +118,13 @@ describe('the handoff-reason follow-up to CX1 — reasons and outcomes a pre-A3 
       const wire = businessHandoffWireReason(reason);
       expect((MAIN_HANDOFF_REASONS as readonly string[]).includes(wire), reason).toBe(true);
       expect(wire, reason).toBe(
-        ['NO_PROGRESS', 'REPEATED_ADVICE', 'INBOUND_FLOOD'].includes(reason)
+        ['NO_PROGRESS', 'REPEATED_ADVICE', 'INBOUND_FLOOD', 'SUSPICIOUS_PROBING'].includes(reason)
           ? 'LOOP_GUARD'
-          : reason,
+          : // Phase 4 PR-1: a reply naming what the facts do not hold is a grounding failure;
+            // Phase 4 PR-3: so is an answer the customer said did not help (👎).
+            reason === 'OUTPUT_POLICY' || reason === 'CUSTOMER_UNSATISFIED'
+            ? 'INSUFFICIENT_GROUNDING'
+            : reason,
       );
       expect(businessHandoffReasonOf(wire, reason)).toBe(reason);
     }
@@ -158,12 +162,14 @@ describe('the handoff-reason follow-up to CX1 — reasons and outcomes a pre-A3 
     );
     const old = frozenPreA3Analytics.safeParse(JSON.parse(JSON.stringify(result)) as unknown);
     expect(old.success, JSON.stringify(old.error?.issues)).toBe(true);
-    // Folded: LOOP_GUARD carries its own handoff and the three guards'; the sum is unchanged.
-    expect(result.handoffsByReason.find((row) => row.reason === 'LOOP_GUARD')?.count).toBe(4);
+    // Folded: LOOP_GUARD carries its own handoff, the three guards' and (Phase 4 PR-1) the
+    // probing one; the sum is unchanged.
+    expect(result.handoffsByReason.find((row) => row.reason === 'LOOP_GUARD')?.count).toBe(5);
     const sum = (rows: readonly { count: number }[]) => rows.reduce((n, row) => n + row.count, 0);
     expect(sum(result.handoffsByReason)).toBe(BUSINESS_HANDOFF_REASONS.length);
     expect(supportHandoffCountsOf(result)).toHaveLength(BUSINESS_HANDOFF_REASONS.length);
-    expect(result.auto.byOutcome.find((row) => row.outcome === 'guard_consecutive')?.count).toBe(4);
+    // Phase 4 PR-3: the tool-call limit is the loop guard too.
+    expect(result.auto.byOutcome.find((row) => row.outcome === 'guard_consecutive')?.count).toBe(6);
     // no_action is left out of the folded list only; the detail and the totals keep it.
     expect(sum(result.auto.byOutcome)).toBe(SUPPORT_AI_AUTO_OUTCOMES.length - 1);
     expect(supportAutoOutcomeCountsOf(result)).toHaveLength(SUPPORT_AI_AUTO_OUTCOMES.length);

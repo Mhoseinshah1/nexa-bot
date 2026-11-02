@@ -12,6 +12,7 @@ import {
   type CorrelationId,
   type TenantContext,
 } from '@nexa/contracts';
+import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 
 /**
  * Turning an HTTP request into an authenticated actor.
@@ -122,6 +123,53 @@ export function assertOriginAllowed(
       'The request origin is not permitted for this write.',
     );
   }
+}
+
+/**
+ * What `authenticateAdmin` needs from the container, named so this file does not import it.
+ */
+export interface AdminRequestAuthenticator {
+  readonly config: {
+    readonly NODE_ENV: string;
+    readonly WEB_ADMIN_ORIGINS: readonly string[];
+  };
+  readonly auth: {
+    authenticate(token: string): Promise<{ readonly admin: Admin; readonly session: AdminSession }>;
+  };
+  readonly ids: { uuid(): string };
+}
+
+/**
+ * THE way a Web Admin controller turns a request into a tenant scope and an actor (R12 F2).
+ *
+ * There used to be sixty-one copies of this as a `private authenticate()` on each
+ * controller, and the Origin check — the server-side half of the CSRF defence — ran only
+ * when a call site remembered to pass `{ write: true }`. Fourteen controllers never did
+ * (bots and the token route, wallet adjustments, refunds, payment-gateway credentials, gift
+ * cards, resellers, …) and two refund-request decisions forgot it on a controller that knew.
+ *
+ * So the check is no longer an option a caller can forget: it ALWAYS runs, and
+ * `assertOriginAllowed` itself lets GET/HEAD/OPTIONS through. A write is a write because of
+ * its method, never because a call site said so. `tests/integration/web-route-origin.test.ts`
+ * enumerates every registered route and proves it.
+ *
+ * Order: the cookie is read first (no cookie is a 401 whatever the Origin), then the Origin
+ * (a forged write is refused before the session is even looked up), then the session.
+ */
+export async function authenticateAdmin(
+  container: AdminRequestAuthenticator,
+  request: FastifyRequest,
+): Promise<{ scope: TenantContext; actor: ActorContext }> {
+  const token = requireSessionToken(request, container.config.NODE_ENV === 'production');
+  assertOriginAllowed(request, container.config.WEB_ADMIN_ORIGINS);
+  const { admin, session } = await container.auth.authenticate(token);
+  const correlationId = currentCorrelationId() ?? newCorrelationId(container.ids.uuid());
+  // `botInstanceId: null`: every Web Admin record belongs to the TENANT — a tenant running
+  // two bots administers one catalogue, one wallet, one set of panels.
+  return {
+    scope: { tenantId: admin.tenantId, botInstanceId: null },
+    actor: adminActor(admin, correlationId, request, session.id),
+  };
 }
 
 /**

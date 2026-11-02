@@ -4,7 +4,9 @@ import {
   EMPTY_PRODUCT_DISPLAY,
   isNexaError,
   money,
+  systemJobActor,
   type ActorContext,
+  type CorrelationId,
   type PanelId,
   type ProductCategoryId,
   type ProductId,
@@ -17,6 +19,10 @@ import {
 } from '../../apps/api/src/modules/control/support-knowledge/application/support-knowledge-build.service';
 import { DrizzleSupportKnowledgeRepository } from '../../apps/api/src/modules/control/support-knowledge/infrastructure/drizzle-support-knowledge.repository';
 import { buildView } from '../../apps/api/src/surfaces/web/support-knowledge.controller';
+import {
+  SUPPORT_KNOWLEDGE_REFRESH_JOB,
+  SupportKnowledgeRefreshLoop,
+} from '../../apps/api/src/modules/control/support-knowledge/application/support-knowledge-refresh';
 import {
   SEED_IDS,
   adminActorFor,
@@ -360,12 +366,14 @@ describe('the knowledge build (TB9)', () => {
   });
 
   /*
-   * TB9 × TB8 (PR #203): every article passes `assertClean`, and a URL is a HOST or URL_TOKEN
-   * hit. Fail closed: the build never copies an app's links into knowledge (a fixed line points
-   * to the app list), a source item the scrubber still matches is EXCLUDED from the change-set
-   * (only its count and kinds are audited), and apply refuses unclean text as a backstop.
+   * Phase 4 PR-2 (item 3) — the scrubber's BUSINESS ALLOWLIST. The tenant's own published content
+   * keeps what it shows customers: an app's official and help links are copied into its article,
+   * a FAQ with a link is proposed and applied, a payment route's instructions keep the card number
+   * customers pay to. What is never published anywhere still excludes the item (a phone, a
+   * subscription link, a card number outside a payment route), and apply still refuses unclean
+   * text as the backstop. (TB9 × TB8 built knowledge with no link at all.)
    */
-  it('built knowledge carries no link: app URLs are not copied, a linked FAQ is excluded, apply refuses', async () => {
+  it('PR-2: published links, prices and a payment route’s card are kept; a phone or stray card is not', async () => {
     const c = ctx.container;
     await c.clientApps.create(tenantA, owner, {
       idempotencyKey: key('app'),
@@ -385,38 +393,62 @@ describe('the knowledge build (TB9)', () => {
     await c.supportFaqs.create(tenantA, owner, {
       idempotencyKey: key('faq'),
       question: 'راهنمای کامل کجاست؟',
-      answer: 'راهنما در https://help.example.com/full است.',
+      answer: 'راهنما در https://help.example.com/full است. هزینه پلن پایه 150,000 تومان است.',
       sortOrder: 1,
     });
+    await c.supportFaqs.create(tenantA, owner, {
+      idempotencyKey: key('faq'),
+      question: 'شماره کارت چیست؟',
+      answer: 'به کارت 6037-9975-1234-5678 واریز کنید.',
+      sortOrder: 2,
+    });
+    await c.supportFaqs.create(tenantA, owner, {
+      idempotencyKey: key('faq'),
+      question: 'تلفن پشتیبانی؟',
+      answer: 'با 09121234567 تماس بگیرید.',
+      sortOrder: 3,
+    });
+    await c.database.db.execute(sql`
+      UPDATE payment_gateways SET status = 'ACTIVE', display_name = 'کارت به کارت',
+             instructions = 'مبلغ را به کارت 6037-9975-1234-5678 به نام فروشگاه واریز کنید.'
+       WHERE tenant_id = ${tenantA.tenantId} AND provider = 'MANUAL_TRANSFER'`);
     const detail = await build();
-    const stored = JSON.stringify(
-      (
-        await c.database.db.execute(
-          sql`SELECT title, body, tags::text AS tags FROM support_knowledge_build_proposals`,
-        )
-      ).rows,
-    );
-    for (const leaked of ['example.com', 'https://', 'downloads.', 'help.example']) {
-      expect(stored, leaked).not.toContain(leaked);
-    }
+    const titles = detail.proposals.map((p) => p.content.title);
     const app = detail.proposals.find((p) => p.sourceType === 'CLIENT_APP');
-    expect(app?.content.body).toContain('فهرست برنامه‌های ربات');
-    expect(detail.proposals.map((p) => p.content.title)).not.toContain('راهنمای کامل کجاست؟');
-    expect(detail.proposals.map((p) => p.content.title)).toContain('چطور وصل شوم؟');
+    expect(app?.content.body).toContain('https://downloads.example.com/app.apk');
+    expect(app?.content.body).toContain('https://help.example.com/guide');
+    expect(app?.content.tags).toEqual(expect.arrayContaining(['اندروید', 'android']));
+    expect(titles).toContain('راهنمای کامل کجاست؟');
+    expect(titles).toContain('چطور وصل شوم؟');
+    // A card number is published only by a payment route; a FAQ carrying one, or a phone, is not.
+    expect(titles).not.toContain('شماره کارت چیست؟');
+    expect(titles).not.toContain('تلفن پشتیبانی؟');
+    const route = detail.proposals.find((p) => p.sourceType === 'PAYMENT_METHOD');
+    expect(route?.content.body).toContain('6037-9975-1234-5678');
+    expect(route?.content.tags).toEqual(expect.arrayContaining(['پرداخت']));
     const [audit] = (
       await c.database.db.execute(
         sql`SELECT after FROM audit_logs WHERE action = 'support_knowledge.build.run' ORDER BY occurred_at DESC LIMIT 1`,
       )
     ).rows as { after: { excluded: { count: number; kinds: string[] } } }[];
-    expect(audit!.after.excluded).toEqual({ count: 1, kinds: ['HOST'] });
+    expect(audit!.after.excluded).toEqual({ count: 2, kinds: ['CARD', 'PHONE'] });
 
     // The backstop: a proposal whose text is not clean is never published, by apply-all or a choice.
     await c.database.db.execute(
-      sql`UPDATE support_knowledge_build_proposals SET body = body || ' https://x.example.org'
-          WHERE source_type = 'FAQ'`,
+      sql`UPDATE support_knowledge_build_proposals SET body = body || ' 09121234567'
+          WHERE build_id = ${detail.build.id} AND title = 'راهنمای کامل کجاست؟'`,
     );
     await expectCode(applyAll(detail.build.id), 'support_knowledge.sensitive_content');
     expect(await builtArticles()).toEqual([]);
+    await c.database.db.execute(
+      sql`UPDATE support_knowledge_build_proposals SET body = replace(body, ' 09121234567', '')
+          WHERE build_id = ${detail.build.id} AND title = 'راهنمای کامل کجاست؟'`,
+    );
+    await applyAll(detail.build.id);
+    const bodies = (await builtArticles()).map((a) => a.body).join('\n');
+    expect(bodies).toContain('https://help.example.com/full');
+    expect(bodies).toContain('150,000 تومان');
+    expect(bodies).toContain('https://downloads.example.com/app.apk');
   });
 
   it('L3: the support-accounts source is proposed and applied; any other handle is still excluded', async () => {
@@ -891,5 +923,186 @@ describe('the knowledge build (TB9)', () => {
       )
     ).rows as { after: { truncated: number; capped: number } }[];
     expect([audit!.after.truncated, audit!.after.capped]).toEqual([1, 3]);
+  });
+  // --- Phase 4 PR-2 item 4: the automatic refresh ------------------------------------------
+
+  const job = () => systemJobActor(SUPPORT_KNOWLEDGE_REFRESH_JOB, key('corr') as CorrelationId);
+
+  /** Turns `support.knowledge.auto_refresh` on (once per case: the database is reset). */
+  async function autoRefreshOn() {
+    await ctx.container.settingsService.set(tenantA, owner, {
+      idempotencyKey: key('auto'),
+      key: 'support.knowledge.auto_refresh',
+      value: true,
+      expectedVersion: null,
+    });
+  }
+
+  it('PR-2 auto refresh: off by default; on, it builds AND applies as SYSTEM_JOB, audited, idempotent', async () => {
+    const service = ctx.container.supportKnowledgeBuild;
+    expect(await service.autoRefresh(tenantA, job())).toEqual({ outcome: 'OFF' });
+    expect(await service.pendingRefreshSignature(tenantA)).toBeNull();
+    expect(await builtArticles()).toEqual([]);
+
+    await autoRefreshOn();
+    const signature = await service.pendingRefreshSignature(tenantA);
+    expect(signature).not.toBeNull();
+    const result = await service.autoRefresh(tenantA, job());
+    expect(result).toMatchObject({ outcome: 'REFRESHED', conflicted: 0, skipped: 0 });
+    const articles = await builtArticles();
+    expect(articles.map((a) => a.title)).toEqual(
+      expect.arrayContaining(['چطور وصل شوم؟', 'پلن عمومی']),
+    );
+    expect(articles.every((a) => a.state === 'APPROVED')).toBe(true);
+    // No admin is named for a job; the audit row names the job.
+    const builds = await ctx.container.database.db.execute(
+      sql`SELECT created_by_admin_id FROM support_knowledge_builds WHERE tenant_id = ${tenantA.tenantId}`,
+    );
+    expect(builds.rows).toEqual([{ created_by_admin_id: null }]);
+    const audits = await ctx.container.database.db.execute(
+      sql`SELECT actor_type FROM audit_logs WHERE action = 'support_knowledge.build.auto_refresh'`,
+    );
+    expect(audits.rows).toEqual([{ actor_type: 'SYSTEM_JOB' }]);
+    // Nothing left to change: nothing is written.
+    expect(await service.pendingRefreshSignature(tenantA)).toBeNull();
+    expect(await service.autoRefresh(tenantA, job())).toEqual({ outcome: 'UNCHANGED' });
+    const count = await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM support_knowledge_builds`,
+    );
+    expect((count.rows[0] as { n: number }).n).toBe(1);
+  });
+
+  it('PR-2 auto refresh: a changed source updates; a reviewer-edited article stays a CONFLICT', async () => {
+    await autoRefreshOn();
+    const service = ctx.container.supportKnowledgeBuild;
+    await service.autoRefresh(tenantA, job());
+    // The owner changes the FAQ: applied by itself.
+    await editFaqSource('پاسخ تازه.', 1);
+    expect(await service.autoRefresh(tenantA, job())).toMatchObject({
+      outcome: 'REFRESHED',
+      applied: 1,
+    });
+    expect((await faqArticle()).body).toBe('پاسخ تازه.');
+    // A reviewer edits the article, then the source changes again: never overwritten.
+    await editArticle('متن دستی اپراتور.');
+    await editFaqSource('باز هم تازه.', 2);
+    const result = await service.autoRefresh(tenantA, job());
+    expect(result).toMatchObject({ outcome: 'REFRESHED', applied: 0, conflicted: 1 });
+    expect((await faqArticle()).body).toBe('متن دستی اپراتور.');
+    const latest = (await service.latest(tenantA, owner))!;
+    expect(latest.proposals.find((p) => p.sourceType === 'FAQ')).toMatchObject({
+      kind: 'CONFLICT',
+      state: 'PENDING',
+    });
+    // The same pending conflict is not rewritten pass after pass.
+    expect(await service.autoRefresh(tenantA, job())).toEqual(result);
+  });
+
+  it('PR-2 auto refresh: a withdrawn source is retired automatically', async () => {
+    await autoRefreshOn();
+    const service = ctx.container.supportKnowledgeBuild;
+    await service.autoRefresh(tenantA, job());
+    await ctx.container.database.db.execute(
+      sql`UPDATE products SET audience = 'RESELLERS_ONLY' WHERE id = ${productId}`,
+    );
+    expect(await service.autoRefresh(tenantA, job())).toMatchObject({ outcome: 'REFRESHED' });
+    const retired = await ctx.container.supportKnowledge.listArticles(tenantA, owner, {
+      source: 'NEXA_BUILD',
+      state: 'RETIRED',
+    });
+    expect(retired.map((a) => a.title)).toContain('پلن عمومی');
+  });
+
+  it('PR-2 auto refresh: a stopped tenant is left alone; a job without maintenance.run is refused', async () => {
+    await autoRefreshOn();
+    await ctx.container.database.db.execute(
+      sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}`,
+    );
+    try {
+      expect(await ctx.container.supportKnowledgeBuild.autoRefresh(tenantA, job())).toEqual({
+        outcome: 'INACTIVE',
+      });
+    } finally {
+      await ctx.container.database.db.execute(
+        sql`UPDATE tenants SET status = 'ACTIVE' WHERE id = ${tenantA.tenantId}`,
+      );
+    }
+    expect(await builtArticles()).toEqual([]);
+    // A customer-type actor holds no maintenance.run: denied by default, audited.
+    await expectCode(
+      ctx.container.supportKnowledgeBuild.autoRefresh(tenantA, {
+        type: 'CUSTOMER',
+        id: 'c1',
+        label: 'customer',
+        surface: 'TELEGRAM',
+        correlationId: key('c') as CorrelationId,
+      }),
+      'platform.permission_denied',
+    );
+    expect(await builtArticles()).toEqual([]);
+  });
+
+  it('PR-2 the refresh loop: waits two minutes after the last change, then applies; nightly at once', async () => {
+    await autoRefreshOn();
+    let now = new Date('2026-11-01T10:00:00.000Z');
+    const logs: string[] = [];
+    const loop = new SupportKnowledgeRefreshLoop(ctx.container.supportKnowledgeBuild, {
+      scope: () => tenantA,
+      intervalMs: 60_000,
+      now: () => now,
+      correlationId: () => key('loop'),
+      logger: { info: (_c, m) => logs.push(m), error: (_c, m) => logs.push(m) },
+    });
+    expect(await loop.tick()).toMatchObject({ action: 'WAITING' });
+    now = new Date(now.getTime() + 60_000);
+    expect(await loop.tick()).toMatchObject({ action: 'WAITING' });
+    expect(await builtArticles()).toEqual([]);
+    now = new Date(now.getTime() + 60_000);
+    expect(await loop.tick()).toMatchObject({
+      action: 'REFRESHED',
+      result: { outcome: 'REFRESHED' },
+    });
+    expect((await builtArticles()).length).toBeGreaterThan(0);
+    expect(await loop.tick()).toEqual({ action: 'IDLE' });
+    // Nightly: a change is applied on the first tick of the nightly hour, without waiting.
+    await editFaqSource('شبانه.', 1);
+    now = new Date('2026-11-01T23:00:30.000Z');
+    expect(await loop.tick()).toMatchObject({ action: 'REFRESHED' });
+    expect((await faqArticle()).body).toBe('شبانه.');
+    expect(logs).not.toContain('support knowledge refresh pass failed');
+  });
+  it('review of PR #367: an automatically retired source that returns is reinstated; a reviewer’s retirement is not', async () => {
+    await autoRefreshOn();
+    const service = ctx.container.supportKnowledgeBuild;
+    await service.autoRefresh(tenantA, job());
+    const productArticle = async () =>
+      (await builtArticles()).find((a) => a.sourceType === 'PRODUCT' && a.title === 'پلن عمومی')!;
+    // The product leaves the public catalogue: retired by the refresh.
+    await ctx.container.database.db.execute(
+      sql`UPDATE products SET audience = 'RESELLERS_ONLY' WHERE id = ${productId}`,
+    );
+    await service.autoRefresh(tenantA, job());
+    expect((await productArticle()).state).toBe('RETIRED');
+    // It comes back: the next refresh reinstates it, as the next revision.
+    await ctx.container.database.db.execute(
+      sql`UPDATE products SET audience = 'EVERYONE' WHERE id = ${productId}`,
+    );
+    expect(await service.pendingRefreshSignature(tenantA)).not.toBeNull();
+    expect(await service.autoRefresh(tenantA, job())).toMatchObject({
+      outcome: 'REFRESHED',
+      reinstated: 1,
+    });
+    const back = await productArticle();
+    expect(back.state).toBe('APPROVED');
+    expect(back.revision).toBe(2);
+    expect(await service.pendingRefreshSignature(tenantA)).toBeNull();
+    // A reviewer's own retirement, with the source still present, is never undone.
+    await ctx.container.supportKnowledge.retireArticle(tenantA, owner, back.id, {
+      idempotencyKey: key('retire'),
+      expectedVersion: back.version,
+    });
+    expect(await service.pendingRefreshSignature(tenantA)).toBeNull();
+    expect(await service.autoRefresh(tenantA, job())).toEqual({ outcome: 'UNCHANGED' });
+    expect((await productArticle()).state).toBe('RETIRED');
   });
 });

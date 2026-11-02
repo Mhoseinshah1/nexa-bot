@@ -19,7 +19,10 @@ import type { CustomerRecord } from '../../../modules/commerce/customers/applica
 import { inlineLabel } from '../../../modules/commerce/messaging/application/inline-buttons.js';
 import type { ManualTransferInstruction } from '../../../modules/commerce/payments/application/payment.service.js';
 import type { GatewayAttemptView } from '../../../modules/commerce/payments/application/gateway-payment.service.js';
-import { decideCardChange } from '../../../modules/commerce/payments/domain/tonpays-telegram.js';
+import {
+  cancelTapRefusal,
+  decideCardChange,
+} from '../../../modules/commerce/payments/domain/tonpays-telegram.js';
 import { amountToTransfer } from '../../../modules/commerce/payments/domain/amount-to-transfer.js';
 import {
   CARD_INVOICE_ROW,
@@ -42,6 +45,7 @@ import { refusal } from './refusals.js';
 import { editSent, type PendingReply, staleCallbackReply } from './replies.js';
 import { cardCheck } from './payment-screens.js';
 import { gatewayAttemptReply } from './checkout-flow.js';
+import { orderEndedRefusal } from './order-end-flow.js';
 import type { BotRuntime } from '../bot-runtime.js';
 
 /**
@@ -139,7 +143,8 @@ export async function manualPayment(
     );
     return transferInstruction(rt, scope, instruction, orderId);
   } catch (error) {
-    return refusal(error);
+    // R11 A11: an order that ended is answered ON the tapped screen, not by a new message.
+    return (await orderEndedRefusal(rt, scope, actor, customer, orderId, error)) ?? refusal(error);
   }
 }
 
@@ -296,7 +301,7 @@ export async function gatewayCancelAsk(
     paymentId: view.payment.id,
     botInstanceId,
   });
-  if (!offered) return refusedCardTap(rt, scope, view);
+  if (!offered) return refusedCancelTap(rt, scope, view);
   return {
     key: 'bot.payment.gateway_cancel_confirm',
     values: { reference: paymentTrackingCode(view.payment) },
@@ -352,7 +357,41 @@ export async function gatewayCancel(
   const fresh = (await rt.deps.gateway.attemptFor(scope, customer.id, paymentId)) ?? view;
   return requested
     ? gatewayAttemptReply(rt, { ...fresh, reissued: true }, fresh.payment.orderId, scope)
-    : refusedCardTap(rt, scope, fresh);
+    : refusedCancelTap(rt, scope, fresh);
+}
+
+/**
+ * R11 A8: a cancel tap that was refused (`gq:` or `gz:`). A cancel button may still be on screen
+ * after the invoice's fate is known — a lost cancel answer keeps it drawn (owner), and an older
+ * message keeps whatever it had. A PAID invoice is refused in so many words and nothing moves;
+ * one Nexa KNOWS was cancelled says «فاکتور قبلاً لغو شده»; anything else redraws the attempt
+ * as it stands. Reads only: the refusal itself was decided under the payment's lock.
+ */
+async function refusedCancelTap(
+  rt: BotRuntime,
+  scope: TenantContext,
+  view: GatewayAttemptView,
+): Promise<PendingReply> {
+  const facts = await rt.deps.gateway.cardFactsFor(scope, view.invoice);
+  const reference = paymentTrackingCode(view.payment);
+  switch (cancelTapRefusal(view.payment, view.invoice, facts?.latestCancel ?? null)) {
+    case 'PAID':
+      return {
+        key: 'bot.payment.gateway_not_pending',
+        values: { reference },
+        buttons: [cardCheck(view.payment.id), mainMenuButton()],
+        orderId: null,
+      };
+    case 'ALREADY_CANCELLED':
+      return {
+        key: 'bot.payment.gateway_cancel_already_cancelled',
+        values: { reference },
+        buttons: [mainMenuButton()],
+        orderId: null,
+      };
+    case null:
+      return refusedCardTap(rt, scope, view);
+  }
 }
 
 /**
@@ -569,6 +608,36 @@ export async function ownedTrackingCode(
   const view = await rt.deps.gateway.attemptFor(scope, customer.id, paymentId);
   if (view === null || view.invoice.botInstanceId !== botInstanceId) return {};
   return { reference: paymentTrackingCode(view.payment) };
+}
+
+/**
+ * R12 F3 (lead review): a customer's own PENDING card-to-card transfer with NO receipt filed,
+ * drawn as its own invoice again — the amount, the card and «📤 ارسال رسید» — so a customer who
+ * may already have transferred sends the receipt for THIS payment instead of being told it is
+ * "being checked" (nothing is) or being handed a second reference. Null for every other
+ * payment: a gateway attempt, one with a receipt filed, one no longer pending, another
+ * customer's. Reads only; the invoice is read from the payment's own issued snapshot.
+ */
+export async function unreceiptedTransfer(
+  rt: BotRuntime,
+  scope: TenantContext,
+  actor: ActorContext,
+  customer: Pick<CustomerRecord, 'id'>,
+  paymentId: string,
+): Promise<PendingReply | null> {
+  const instruction = await rt.deps.payments.pendingTransferInstructionForCustomer(
+    scope,
+    customer.id,
+    paymentId,
+  );
+  if (instruction === null) return null;
+  const filed = await rt.deps.receipts.filedForCustomer(
+    scope,
+    actor,
+    customer.id,
+    instruction.payment.id,
+  );
+  return filed ? null : transferInstruction(rt, scope, instruction, instruction.payment.orderId);
 }
 
 /**

@@ -244,9 +244,11 @@ export class WizardInvoiceScreens implements InvoiceScreensPort {
     orderId: string,
     destination: { readonly chatId: string; readonly botInstanceId: BotInstanceId },
     settleMs: number,
+    /** R11 A11: `ORDER_END_ANSWER_STEPS` for an ended order; FIX-08's set otherwise. */
+    steps?: readonly TelegramWizardStep[],
   ): Promise<OrderScreenReadiness> {
     const latest = await this.deps.state.latestForSubject(scope, orderId);
-    return orderScreenReadiness(latest, destination, this.deps.clock.now(), settleMs);
+    return orderScreenReadiness(latest, destination, this.deps.clock.now(), settleMs, steps);
   }
 
   /**
@@ -281,8 +283,9 @@ export class WizardInvoiceScreens implements InvoiceScreensPort {
       readonly values: TemplateValues;
       readonly buttons: readonly CustomerButton[];
     },
+    steps?: readonly TelegramWizardStep[],
   ): Promise<CustomerSendResult | OrderScreenWait | null> {
-    const ready = await this.orderReadiness(scope, orderId, destination, settleMs);
+    const ready = await this.orderReadiness(scope, orderId, destination, settleMs, steps);
     if (ready.kind === 'WAIT') return ready;
     if (ready.kind !== 'READY') return null;
     const [taken] = await this.deps.state.moveAll(

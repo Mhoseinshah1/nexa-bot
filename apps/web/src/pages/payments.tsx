@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
 import {
@@ -66,6 +66,8 @@ import {
 } from '../ui/record-ref';
 import { messageFor } from './settings';
 import { PaymentTimelineCard } from './payment-timeline';
+import { ReceiptReviewCard } from './payment-receipt-review';
+import { RowExportBar, selectColumn, useRowSelection, type ExportColumn } from '../ui/row-export';
 import { Modal } from '../ui/overlays';
 import { CodeName } from './code-name';
 import { queryChipFilter } from './money-filters';
@@ -181,6 +183,13 @@ const REFUND_REFUSAL_TEXT: Readonly<Record<RefundRefusalReason, WebKey>> = {
   CURRENCY_MISMATCH: 'web.refund_refusal_currency',
   DELIVERY_IN_PROGRESS: 'web.refund_refusal_delivery',
 };
+
+/** R12 F1 item 3: the purposes whose FULL refund suspends the order's service (the server's list). */
+const REFUND_SUSPENDS_PURPOSES: ReadonlySet<string> = new Set([
+  'NEW_SERVICE',
+  'CUSTOM_SERVICE',
+  'RENEW',
+]);
 
 const REFUND_CHANNEL_LABELS: Readonly<Record<RefundChannel, WebKey>> = {
   WALLET_CREDIT: 'web.refund_channel_wallet',
@@ -667,6 +676,7 @@ const QUEUE_LABELS: Readonly<Record<PaymentOpsQueue, WebKey>> = {
   PROVIDER_ERROR: 'web.payment_ops_queue_provider_error',
   REFUND_RELATED: 'web.payment_ops_queue_refund_related',
   NEEDS_ACTION: 'web.payment_ops_queue_needs_action',
+  RECEIPT_REVIEW: 'web.payment_ops_queue_receipt_review',
 };
 
 const QUEUE_HINTS: Readonly<Record<PaymentOpsQueue, WebKey>> = {
@@ -679,6 +689,7 @@ const QUEUE_HINTS: Readonly<Record<PaymentOpsQueue, WebKey>> = {
   PROVIDER_ERROR: 'web.payment_ops_queue_hint_provider_error',
   REFUND_RELATED: 'web.payment_ops_queue_hint_refund_related',
   NEEDS_ACTION: 'web.payment_ops_queue_hint_needs_action',
+  RECEIPT_REVIEW: 'web.payment_ops_queue_hint_receipt_review',
 };
 
 /** The created-at presets the workspace offers; the server resolves each in the tenant calendar. */
@@ -897,6 +908,19 @@ export function PaymentsPage({
   });
   const counts = queueCountsFor(attention.data, gateway);
 
+  // R12 F3 item 8: the ticked rows of this page, exported as the columns below print them.
+  const paymentRows = payments.data?.payments ?? [];
+  const paymentKey = useCallback((row: PaymentSummaryResponse) => row.id, []);
+  const selection = useRowSelection(paymentRows, paymentKey);
+  const exportColumns: readonly ExportColumn<PaymentSummaryResponse>[] = [
+    { header: t('web.payment_reference'), value: (row) => paymentTrackingCode(row) },
+    { header: t('web.payment_state'), value: (row) => t(STATE_LABELS[row.state]) },
+    { header: t('web.payment_method'), value: (row) => t(METHOD_LABELS[row.method]) },
+    { header: t('web.payment_amount'), value: (row) => row.amount },
+    { header: t('web.payment_currency'), value: (row) => row.currency },
+    { header: t('web.order_created_at'), value: (row) => formatTimestamp(row.createdAt) },
+  ];
+
   const columns: readonly Column<PaymentSummaryResponse>[] = [
     {
       /*
@@ -981,6 +1005,7 @@ export function PaymentsPage({
       align: 'end',
       render: (row) => <Money value={{ amountMinor: row.amount, currency: row.currency }} />,
     },
+    selectColumn(selection, paymentKey),
   ];
 
   /*
@@ -1177,6 +1202,14 @@ export function PaymentsPage({
                 rowKey={(row) => row.id}
                 dense
                 sticky
+                toolbar={
+                  <RowExportBar
+                    selection={selection}
+                    columns={exportColumns}
+                    filename="payments"
+                    allowed={!denied}
+                  />
+                }
                 detail={{ label: t('web.payment_row_detail'), render: rowDetail }}
               />
               {/* An ascending keyset (created_at, id) with the cursor in the URL: "newer" is
@@ -1416,6 +1449,14 @@ function RefundsCard({
     enabled: mayViewOrders && orderId !== null,
   });
   const orderRefunded = order.data?.order.state === 'REFUNDED';
+  /*
+   * R12 F1 item 3: a refund that makes a service purchase or renewal whole SUSPENDS that
+   * service on the panel. Warned before the operator confirms — and when the order cannot be
+   * read (no `orders.view`), warned anyway: the server decides from the order, not this page.
+   */
+  const refundMaySuspendService =
+    orderId !== null &&
+    (order.data === undefined || REFUND_SUSPENDS_PURPOSES.has(order.data.order.purpose));
 
   const refresh = (response: RefundResponse) => {
     void response;
@@ -1778,6 +1819,9 @@ function RefundsCard({
               }
             >
               <p className="muted small">{t('web.refund_request_hint')}</p>
+              {refundMaySuspendService && (
+                <Banner tone="warn">{t('web.refund_full_suspends_service')}</Banner>
+              )}
               <KV
                 inline
                 items={[
@@ -1915,6 +1959,10 @@ function RefundsCard({
                   </Field>
                 )}
               </div>
+              {/* R12 F1: the completion that makes the payment whole suspends the service too. */}
+              {answerKind === 'complete' && refundMaySuspendService && (
+                <Banner tone="warn">{t('web.refund_full_suspends_service')}</Banner>
+              )}
               {complete.error !== null && (
                 <Banner tone="danger">
                   {refundMessageFor(complete.error)}
@@ -1944,6 +1992,8 @@ export function PaymentDetailPage({
   mayViewWallet = false,
   mayViewAudit = false,
   mayReconcile = false,
+  mayReviewReceipts = false,
+  mayCreditWallet = false,
   denied,
 }: {
   id: string;
@@ -1976,6 +2026,13 @@ export function PaymentDetailPage({
    * are drawn, and without it the card names the permission instead.
    */
   mayReconcile?: boolean;
+  /**
+   * R12 F3 item 8: `receipts.review` — approving or rejecting a card-to-card receipt here (the
+   * owner decided review happens in both the Web Admin and Telegram). The server charges it.
+   */
+  mayReviewReceipts?: boolean;
+  /** `users.wallet.credit`: the credit-to-wallet disposition also needs this key. */
+  mayCreditWallet?: boolean;
   denied: boolean;
 }) {
   const onLink = useLinkHandler();
@@ -2040,15 +2097,19 @@ export function PaymentDetailPage({
                     <ReconcileCard payment={row} mayReconcile={mayReconcile} />
                   )}
                   {/*
-              Card-to-card review is Telegram's alone (Payment File 02 §10, D3): approve,
-              reject and credit-to-wallet are decided there, and this page shows what was
-              decided and offers none of them. A PENDING transfer says where to go
-              rather than drawing a control the server has no route for.
+              Card-to-card review (R12 F3 item 8): approve, reject and credit-to-wallet are
+              also decided here, through the SAME services as the Telegram panel; the card
+              asks first and draws only the controls the viewer's permissions allow.
             */}
                   {row.state === 'PENDING' && row.method === 'MANUAL_TRANSFER' && (
-                    <Card title={t('web.payment_confirm_title')}>
-                      <p className="muted">{t('web.payment_review_in_telegram')}</p>
-                    </Card>
+                    <ReceiptReviewCard
+                      paymentId={row.id}
+                      amountMinor={row.amount}
+                      payableMinor={row.customerFee?.payable ?? null}
+                      currency={row.currency}
+                      mayReview={mayReviewReceipts}
+                      mayCredit={mayCreditWallet}
+                    />
                   )}
                   {/*
               WHERE the customer was told to send it.

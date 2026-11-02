@@ -27,7 +27,9 @@ import { DrizzleCustomerRepository } from '../../apps/api/src/modules/commerce/c
 import { DrizzleGatewayInvoiceRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-invoice.repository';
 import { DrizzleGatewayProviderRequestRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-provider-request.repository';
 import { DrizzleServiceRefundRequestRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-service-refund-request.repository';
+import { TonPaysRateLimiter } from '../../apps/api/src/modules/commerce/payments/infrastructure/tonpays-rate-limiter';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
+import { attemptWire } from '../../apps/api/src/surfaces/miniapp/projections';
 import {
   adminActorFor,
   createAdmin,
@@ -654,7 +656,7 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     }
   });
 
-  it('cancel: a cancel whose answer is lost is UNKNOWN, never sent again, and the next inquiry says what the invoice is', async () => {
+  it('cancel: a cancel whose answer is lost is UNKNOWN, never sent again by Nexa itself, and the next inquiry says what the invoice is', async () => {
     const { paymentId, message } = await cardOnScreen();
     fake.cancelMode = 'TIMEOUT';
     await tapOn(message, `gz:${paymentId}`);
@@ -1380,5 +1382,438 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     expect(await requests(attempt.payment.id, 'CANCEL')).toMatchObject([
       { state: 'REFUSED', error_code: 'nexa.not_pending' },
     ]);
+  });
+
+  // ------------------------------------------------------------------------------------
+  // R11 A8 (owner bug): a cancel whose answer was lost may be asked again
+  // ------------------------------------------------------------------------------------
+
+  /** The cancel's answer is lost (a timeout): one call, one UNKNOWN row. */
+  const lostCancel = async (paymentId: string, message: number) => {
+    fake.cancelMode = 'TIMEOUT';
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    await lane.runOnce(tenantA);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([{ state: 'UNKNOWN' }]);
+    expect(fake.cancels).toHaveLength(1);
+    fake.cancelMode = 'OK';
+  };
+  /** The spacing a retry waits for (`CANCEL_RETRY_BACKOFF_SECONDS`), and a little more. */
+  const pastRetrySpacing = () => clock.shift(31_000);
+  const UNKNOWN_PHRASE = 'پاسخ تون‌پی به درخواست لغو دریافت نشد';
+  // R12 F3 item 10: a rate-limited cancel is a KNOWN "not processed", told apart from a lost answer.
+  const RATE_LIMITED_PHRASE = 'درخواست لغو فاکتور فعلاً توسط تون‌پی پذیرفته نشد';
+
+  it('R11 A8: a lost cancel keeps «❌ لغو فاکتور» on its notice and on the invoice; the retry is a NEW row, held for the spacing, sent ONCE, and cancels', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    await lostCancel(paymentId, message);
+    // The notice the worker edits in: the lost answer, and the button to ask again.
+    expect(String(lastOn(message)?.['text'])).toContain(UNKNOWN_PHRASE);
+    expect(markupOf(lastOn(message))).toContain(`gq:${paymentId}`);
+    // The provider still says pending: the owner's screen — copy amount, copy card AND cancel.
+    await inquireNow();
+    await tapOn(message, `gc:${paymentId}`);
+    expect(String(lastOn(message)?.['text'])).not.toContain(UNKNOWN_PHRASE);
+    expect(markupOf(lastOn(message))).toContain('copy_text');
+    expect(markupOf(lastOn(message))).toContain(`gq:${paymentId}`);
+    expect((await paymentOf(paymentId)).state).toBe('PENDING');
+
+    expect((await tapOn(message, `gq:${paymentId}`)).replyKey).toBe(
+      'bot.payment.gateway_cancel_confirm',
+    );
+    await tapOn(message, `gz:${paymentId}`);
+    expect(String(lastOn(message)?.['text'])).toContain('درخواست لغو');
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'UNKNOWN' },
+      { state: 'REQUESTED' },
+    ]);
+    // Within the spacing from the lost answer the worker leaves it.
+    const [held] = await rows<{ claimed_until: string | null }>(
+      sql`SELECT claimed_until FROM gateway_provider_requests
+           WHERE payment_id = ${paymentId} AND state = 'REQUESTED'`,
+    );
+    expect(held!.claimed_until).not.toBeNull();
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(1);
+    pastRetrySpacing();
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'UNKNOWN' },
+      { state: 'APPLIED' },
+    ]);
+    expect((await paymentOf(paymentId)).state).toBe('FAILED');
+    expect(String(lastOn(message)?.['text'])).toContain('فاکتور لغو شد');
+    expect(await walletEntries(paymentId)).toEqual([]);
+    // The retry's audit row names the lost cancel it follows.
+    const audits = await rows<{ after: { retryOf: string | null } }>(
+      sql`SELECT after FROM audit_logs WHERE action = 'gateway_invoice.cancel_requested'
+           AND entity_id = ${paymentId} ORDER BY occurred_at`,
+    );
+    expect(audits).toHaveLength(2);
+    expect(audits[0]!.after.retryOf).toBeNull();
+    expect(audits[1]!.after.retryOf).not.toBeNull();
+
+    /*
+     * A cancel button still on another message (one the worker did not edit — the tapped
+     * message itself is now a notice, whose old keyboard is stale and swallowed):
+     * «فاکتور قبلاً لغو شده», and nothing is sent.
+     */
+    const older = await tapOn(null, `gq:${paymentId}`);
+    expect(older.replyKey).toBe('bot.payment.gateway_cancel_already_cancelled');
+    expect((await tapOn(null, `gz:${paymentId}`)).replyKey).toBe(
+      'bot.payment.gateway_cancel_already_cancelled',
+    );
+    expect(String(lastOn(updateSeq)?.['text'])).toContain('فاکتور قبلاً لغو شده');
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+    expect(await requests(paymentId, 'CANCEL')).toHaveLength(2);
+  });
+
+  it('R11 A8: a cancel TonPays rate-limited (429 RATE_LIMIT_EXCEEDED) says not-cancelled-yet (R12 F3 item 10, not "lost"), keeps the button, and the retry cancels', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    fake.cancelMode = { code: 'RATE_LIMIT_EXCEEDED', status: 429 };
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    await lane.runOnce(tenantA);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'RATE_LIMITED', error_code: 'RATE_LIMIT_EXCEEDED' },
+    ]);
+    expect(String(lastOn(message)?.['text'])).toContain(RATE_LIMITED_PHRASE);
+    expect(String(lastOn(message)?.['text'])).not.toContain(UNKNOWN_PHRASE);
+    expect(markupOf(lastOn(message))).toContain(`gq:${paymentId}`);
+    fake.cancelMode = 'OK';
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    // Spaced from the rate-limited one like a retry after a lost answer.
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(1);
+    pastRetrySpacing();
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'RATE_LIMITED' },
+      { state: 'APPLIED' },
+    ]);
+    expect((await paymentOf(paymentId)).state).toBe('FAILED');
+  });
+
+  it("R11 A8: a retry the TonPays client HELD (the key paused by the 429's Retry-After) is not spent — it waits as asked and is sent ONCE when the key may be used", async () => {
+    const { paymentId, message } = await cardOnScreen();
+    // The production adapters' shared limiter: a 429 pauses the key; a call in the pause is HELD.
+    lane = telegramLaneWith(ctx, fake, {
+      invoiceScreens: ctx.container.wizardScreens,
+      providerRequests: true,
+      limiter: new TonPaysRateLimiter({
+        clock: ctx.container.clock,
+        sleep: () => Promise.resolve(),
+        random: () => 0.5,
+      }),
+    });
+    // TonPays: 429 RATE_LIMIT_EXCEEDED, «retry after 120 s» — the key pauses for two minutes.
+    fake.cancelMode = { code: 'RATE_LIMIT_EXCEEDED', status: 429, retryAfter: '120' };
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(1);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([{ state: 'RATE_LIMITED' }]);
+    fake.cancelMode = 'OK';
+    // The customer asks again after Nexa's 30 s spacing, still inside the key's pause.
+    pastRetrySpacing();
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    await lane.runOnce(tenantA);
+    // HELD: nothing sent, nothing decided — the request stands as the customer asked it.
+    expect(fake.cancels).toHaveLength(1);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'RATE_LIMITED' },
+      { state: 'REQUESTED', error_code: null },
+    ]);
+    const [waiting] = await rows<{ sent_at: string | null; claimed_until: string | null }>(
+      sql`SELECT sent_at, claimed_until FROM gateway_provider_requests
+           WHERE payment_id = ${paymentId} AND state = 'REQUESTED'`,
+    );
+    expect(waiting!.sent_at).toBeNull();
+    // Due when the pause ends, not a pass later and not a whole spacing later.
+    const dueIn = new Date(waiting!.claimed_until!).getTime() - clock.now().getTime();
+    expect(dueIn).toBeGreaterThan(60_000);
+    expect(dueIn).toBeLessThanOrEqual(120_000);
+    // It reads "cancelling…" with no cancel button: the customer need not (and cannot) tap again.
+    expect(String(lastOn(message)?.['text'])).not.toContain(UNKNOWN_PHRASE);
+    expect(String(lastOn(message)?.['text'])).toContain('درخواست لغو');
+    expect(markupOf(lastOn(message))).not.toContain(`gq:${paymentId}`);
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(1);
+    // The pause over: sent once, applied, the payment closed, no money moved.
+    clock.shift(125_000);
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'RATE_LIMITED' },
+      { state: 'APPLIED' },
+    ]);
+    expect((await paymentOf(paymentId)).state).toBe('FAILED');
+    expect(await walletEntries(paymentId)).toEqual([]);
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+  });
+
+  it('R11 A8: a HELD retry that would only be due after the customer window is decided rate-limited, so the expiry cancel still follows', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    lane = telegramLaneWith(ctx, fake, {
+      invoiceScreens: ctx.container.wizardScreens,
+      providerRequests: true,
+      limiter: new TonPaysRateLimiter({
+        clock: ctx.container.clock,
+        sleep: () => Promise.resolve(),
+        random: () => 0.5,
+      }),
+    });
+    // Nexa's deadline in 100 s; TonPays pauses the key for 120 s.
+    await ctx.container.database.db.execute(
+      sql`UPDATE payments SET expires_at = ${new Date(clock.now().getTime() + 100_000)}
+           WHERE id = ${paymentId}`,
+    );
+    fake.cancelMode = { code: 'RATE_LIMIT_EXCEEDED', status: 429, retryAfter: '120' };
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    await lane.runOnce(tenantA);
+    fake.cancelMode = 'OK';
+    pastRetrySpacing();
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    await lane.runOnce(tenantA);
+    // HELD, and the pause outlasts the window: not put back — nothing sent, decided.
+    expect(fake.cancels).toHaveLength(1);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'RATE_LIMITED', error_code: 'RATE_LIMIT_EXCEEDED' },
+      { state: 'RATE_LIMITED', error_code: 'nexa.rate_limited_locally' },
+    ]);
+    // Nexa's deadline expires the attempt; nothing stands in the way of its own cancel.
+    clock.shift(130_000);
+    await ctx.container.paymentExpirySweep.runOnce(tenantA);
+    expect((await paymentOf(paymentId)).state).toBe('EXPIRED');
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'RATE_LIMITED' },
+      { state: 'RATE_LIMITED' },
+      { state: 'REQUESTED' },
+    ]);
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'RATE_LIMITED' },
+      { state: 'RATE_LIMITED' },
+      { state: 'APPLIED' },
+    ]);
+    expect(await walletEntries(paymentId)).toEqual([]);
+  });
+
+  it('R11 A8 (Codex #356): a retry whose spacing would end after the customer window writes no row, so the expiry cancel follows', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    fake.cancelMode = { code: 'RATE_LIMIT_EXCEEDED', status: 429 };
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    await lane.runOnce(tenantA);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([{ state: 'RATE_LIMITED' }]);
+    fake.cancelMode = 'OK';
+    // Nexa's deadline is 10 s away: the 30 s spacing would end after it.
+    await ctx.container.database.db.execute(
+      sql`UPDATE payments SET expires_at = ${new Date(clock.now().getTime() + 10_000)}
+           WHERE id = ${paymentId}`,
+    );
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    expect(await requests(paymentId, 'CANCEL')).toHaveLength(1);
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(1);
+    // At the deadline the expiry cancel is written, and sent once.
+    clock.shift(15_000);
+    await ctx.container.paymentExpirySweep.runOnce(tenantA);
+    expect((await paymentOf(paymentId)).state).toBe('EXPIRED');
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'RATE_LIMITED' },
+      { state: 'REQUESTED' },
+    ]);
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'RATE_LIMITED' },
+      { state: 'APPLIED' },
+    ]);
+    expect(firstInvoice().status).toBe('canceled');
+    expect(await walletEntries(paymentId)).toEqual([]);
+  });
+
+  it('R11 A8: requeueUnsentCancel takes back only the stamp it is given, and only from SENT', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    const repo = new DrizzleGatewayProviderRequestRepository(ctx.container.database.db);
+    const [row] = await rows<{ id: string }>(
+      sql`SELECT id FROM gateway_provider_requests WHERE payment_id = ${paymentId}`,
+    );
+    const stamp = new Date(Math.floor(clock.now().getTime() / 1000) * 1000);
+    const notBefore = new Date(stamp.getTime() + 90_000);
+    // Never sent: there is no stamp to take back.
+    expect(await repo.requeueUnsentCancel(tenantA, row!.id, stamp, notBefore, undefined)).toBe(
+      false,
+    );
+    expect(await repo.markSent(tenantA, row!.id, stamp, undefined)).toBe(true);
+    // A stamp that is not this one (another send) is never taken back.
+    expect(
+      await repo.requeueUnsentCancel(
+        tenantA,
+        row!.id,
+        new Date(stamp.getTime() + 1),
+        notBefore,
+        undefined,
+      ),
+    ).toBe(false);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([{ state: 'SENT' }]);
+    expect(await repo.requeueUnsentCancel(tenantA, row!.id, stamp, notBefore, undefined)).toBe(
+      true,
+    );
+    const [back] = await rows<{ state: string; sent_at: string | null; claimed_until: string }>(
+      sql`SELECT state, sent_at, claimed_until FROM gateway_provider_requests WHERE id = ${row!.id}`,
+    );
+    expect(back!.state).toBe('REQUESTED');
+    expect(back!.sent_at).toBeNull();
+    expect(new Date(back!.claimed_until).getTime()).toBe(notBefore.getTime());
+    // A decided row is never moved back either.
+    expect(await repo.markSent(tenantA, row!.id, stamp, undefined)).toBe(true);
+    expect(await repo.decide(tenantA, row!.id, 'UNKNOWN', 'http.timeout', stamp, undefined)).toBe(
+      true,
+    );
+    expect(await repo.requeueUnsentCancel(tenantA, row!.id, stamp, notBefore, undefined)).toBe(
+      false,
+    );
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([{ state: 'UNKNOWN' }]);
+  });
+
+  it('R11 A8: the lost cancel HAD cancelled it — the retry meets NOT_PENDING, the inquiry reads canceled, and the next tap says «فاکتور قبلاً لغو شده»', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    await lostCancel(paymentId, message);
+    // TonPays did cancel it; Nexa does not know yet (the next inquiry is not due).
+    firstInvoice().status = 'canceled';
+    await ctx.container.database.db.execute(
+      sql`UPDATE gateway_invoices SET next_inquiry_at = now() + interval '1 hour'
+           WHERE payment_id = ${paymentId}`,
+    );
+    await tapOn(message, `gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    pastRetrySpacing();
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'UNKNOWN' },
+      { state: 'REFUSED', error_code: 'NOT_PENDING' },
+    ]);
+    // A refusal is not an approval and not a cancellation: still open until the inquiry says.
+    expect((await paymentOf(paymentId)).state).toBe('PENDING');
+    await inquireNow();
+    expect((await paymentOf(paymentId)).state).toBe('FAILED');
+    expect(await rows(sql`SELECT resolution_note FROM payments WHERE id = ${paymentId}`)).toEqual([
+      { resolution_note: 'tonpays_telegram:canceled' },
+    ]);
+    expect(await walletEntries(paymentId)).toEqual([]);
+    // The worker edited the attempt into "cancelled" (the customer asked), not "failed".
+    expect(String(lastOn(message)?.['text'])).toContain('فاکتور لغو شد');
+    // A cancel button still on another message: «فاکتور قبلاً لغو شده».
+    expect((await tapOn(null, `gq:${paymentId}`)).replyKey).toBe(
+      'bot.payment.gateway_cancel_already_cancelled',
+    );
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+  });
+
+  it('R11 A8: two confirm taps at once after a lost cancel write ONE request and TonPays is asked ONCE more', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    await lostCancel(paymentId, message);
+    // One tap on the invoice and one on another message carrying the button: two turns that
+    // the wizard does not merge, so only the payment's lock and the in-flight index decide.
+    await Promise.all([tapOn(message, `gz:${paymentId}`), tapOn(null, `gz:${paymentId}`)]);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'UNKNOWN' },
+      { state: 'REQUESTED' },
+    ]);
+    pastRetrySpacing();
+    await lane.runOnce(tenantA);
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([
+      { state: 'UNKNOWN' },
+      { state: 'APPLIED' },
+    ]);
+    expect((await paymentOf(paymentId)).state).toBe('FAILED');
+    // One effect: the payment failed once.
+    expect(
+      await rows(
+        sql`SELECT id FROM outbox_messages
+             WHERE event_type = 'PaymentFailed' AND aggregate_id = ${paymentId}`,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('R11 A8: after PAID a cancel tap is refused in Persian, nothing is sent and nothing moves', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    await lostCancel(paymentId, message);
+    firstInvoice().status = 'completed';
+    firstInvoice().paid = true;
+    await inquireNow();
+    expect((await paymentOf(paymentId)).state).toBe('CONFIRMED');
+    const before = await walletEntries(paymentId);
+    // A cancel button still on another message (the tapped one now says paid, and is closed).
+    for (const data of [`gq:${paymentId}`, `gz:${paymentId}`]) {
+      expect((await tapOn(null, data)).replyKey, data).toBe('bot.payment.gateway_not_pending');
+      expect(String(lastOn(updateSeq)?.['text']), data).toContain('دیگر در انتظار پرداخت نیست');
+    }
+    pastRetrySpacing();
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(1);
+    expect(await requests(paymentId, 'CANCEL')).toMatchObject([{ state: 'UNKNOWN' }]);
+    expect((await paymentOf(paymentId)).state).toBe('CONFIRMED');
+    expect(await walletEntries(paymentId)).toEqual(before);
+  });
+
+  it('R11 A8: a card change whose answer was lost keeps the card change and the cancel; both can be asked again', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    clock.shift(61_000);
+    fake.changeMode = 'TIMEOUT';
+    await tapOn(message, `gk:${paymentId}`);
+    await lane.runOnce(tenantA);
+    fake.changeMode = 'OK';
+    await tapOn(message, `gc:${paymentId}`);
+    // No card is shown (the change may have happened); the change and the cancel stay.
+    expect(markupOf(lastOn(message))).toContain(`gk:${paymentId}`);
+    expect(markupOf(lastOn(message))).toContain(`gq:${paymentId}`);
+    clock.shift(2 * 61_000);
+    await tapOn(message, `gk:${paymentId}`);
+    await lane.runOnce(tenantA);
+    expect(fake.changes).toHaveLength(2);
+    // And the cancel after a lost change, then a lost cancel, still goes through.
+    await lostCancel(paymentId, message);
+    expect(markupOf(lastOn(message))).toContain(`gq:${paymentId}`);
+    await tapOn(message, `gz:${paymentId}`);
+    clock.shift(2 * 61_000 + 31_000);
+    await lane.runOnce(tenantA);
+    expect(fake.cancels).toHaveLength(2);
+    expect((await paymentOf(paymentId)).state).toBe('FAILED');
+  });
+
+  it('R11 A8 (mini app): a lost cancel leaves the payment open there too — paid in the bot, where the cancel is; the applied retry closes it', async () => {
+    const { paymentId, message } = await cardOnScreen();
+    await lostCancel(paymentId, message);
+    const open = await lane.attemptFor(tenantA, maryam, paymentId);
+    expect(open?.payment.state).toBe('PENDING');
+    expect(attemptWire(open!)).toMatchObject({
+      paysInChat: true,
+      invoiceReady: true,
+      payUrl: null,
+    });
+    await tapOn(message, `gz:${paymentId}`);
+    pastRetrySpacing();
+    await lane.runOnce(tenantA);
+    const closed = await lane.attemptFor(tenantA, maryam, paymentId);
+    expect(closed?.payment.state).toBe('FAILED');
   });
 });

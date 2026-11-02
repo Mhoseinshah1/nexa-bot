@@ -161,26 +161,72 @@ export function legacyRowChecksum(kind: string, facts: readonly LegacyCell[]): s
   return sha256Hex(`${kind}:${JSON.stringify(facts)}`);
 }
 
-/** Which of a table's wanted columns the source has; a missing REQUIRED one is refused. */
-export function presentColumns(
-  columns: readonly LegacySchemaColumn[],
-  table: LegacySourceTableName,
+/**
+ * The columns a read takes from one table: every `required` one, then each `optional` one
+ * the source can READ. `have` is the table's columns as the source describes them (its
+ * catalogue: what the schema hash is over); `readable` is what the session can actually read
+ * of them (`LegacySourceSession.readableColumns`), null when that is all of them (MySQL, a
+ * fixture). For a `.nxpkg` source the two differ when the converter's snapshot allowlist
+ * carries fewer columns than the dumped table had:
+ *
+ * - an OPTIONAL column outside the rows file is ABSENT — left out of the read and of the
+ *   digest header exactly as a column the source does not have, so its consumer takes its
+ *   documented absent default (e.g. `roll_Status`: nobody accepted). Never refused;
+ * - a REQUIRED column is refused (`SOURCE_SCHEMA_MISSING_COLUMN`) whether the source lacks it
+ *   or only its rows file does, before any row is read; the detail names every
+ *   `table.column` (a name, never a value) so the owner's report says which.
+ */
+export function resolveReadColumns(
+  table: string,
+  have: ReadonlySet<string>,
+  readable: ReadonlySet<string> | null,
+  required: readonly string[],
+  optional: readonly string[],
 ): readonly string[] {
-  const have = new Set(columns.filter((c) => c.table === table).map((c) => c.column));
   if (have.size === 0) {
     throw new LegacySourceRefused('SOURCE_SCHEMA_MISSING_TABLE', `table ${table} is absent`);
   }
-  const missing = LEGACY_REQUIRED_COLUMNS[table].filter((c) => !have.has(c));
-  if (missing.length > 0) {
+  const canRead = (c: string) => have.has(c) && (readable === null || readable.has(c));
+  const absent = required.filter((c) => !have.has(c));
+  const notCarried = required.filter((c) => have.has(c) && !canRead(c));
+  if (absent.length > 0 || notCarried.length > 0) {
+    const names = (cs: readonly string[]) => cs.map((c) => `${table}.${c}`).join(', ');
+    const parts = [
+      ...(absent.length > 0 ? [`${names(absent)} (not in the source)`] : []),
+      ...(notCarried.length > 0
+        ? [`${names(notCarried)} (in the source catalogue, not in the package's rows file)`]
+        : []),
+    ];
     throw new LegacySourceRefused(
       'SOURCE_SCHEMA_MISSING_COLUMN',
-      `${table}: ${missing.map((m) => `${table}.${m}`).join(', ')}`,
+      `${table}: required column ${parts.join('; ')}`,
+      [...absent, ...notCarried].map((c) => `${table}.${c}`),
     );
   }
-  return [
-    ...LEGACY_REQUIRED_COLUMNS[table],
-    ...LEGACY_OPTIONAL_COLUMNS[table].filter((c) => have.has(c)),
-  ];
+  return [...required, ...optional.filter(canRead)];
+}
+
+/** The `table.column`s a session can read of `table`, or null when it can read all of them. */
+export function readableColumnsOf(
+  session: LegacySourceSession,
+  table: string,
+): ReadonlySet<string> | null {
+  return session.readableColumns?.(table) ?? null;
+}
+
+/** Which of a v1 table's wanted columns the source can read; a missing REQUIRED one is refused. */
+export function presentColumns(
+  columns: readonly LegacySchemaColumn[],
+  table: LegacySourceTableName,
+  readable: ReadonlySet<string> | null = null,
+): readonly string[] {
+  return resolveReadColumns(
+    table,
+    new Set(columns.filter((c) => c.table === table).map((c) => c.column)),
+    readable,
+    LEGACY_REQUIRED_COLUMNS[table],
+    LEGACY_OPTIONAL_COLUMNS[table],
+  );
 }
 
 /**
@@ -305,9 +351,9 @@ export async function readFromSession(
   const schema = await session.columns();
   const syntheticLabel = await session.syntheticMarker();
   const schemaHash = legacySchemaHash(schema);
-  const userColumns = presentColumns(schema, 'user');
-  const invoiceColumns = presentColumns(schema, 'invoice');
-  const productColumns = presentColumns(schema, 'product');
+  const userColumns = presentColumns(schema, 'user', readableColumnsOf(session, 'user'));
+  const invoiceColumns = presentColumns(schema, 'invoice', readableColumnsOf(session, 'invoice'));
+  const productColumns = presentColumns(schema, 'product', readableColumnsOf(session, 'product'));
 
   const users: LegacyUserRow[] = [];
   const userEvidence = await digestV1Table(session, 'user', userColumns, (row) => {
@@ -450,9 +496,9 @@ export async function readImportV1Identity(
   const schema = await session.columns();
   const syntheticLabel = await session.syntheticMarker();
   const schemaHash = legacySchemaHash(schema);
-  const userColumns = presentColumns(schema, 'user');
-  const invoiceColumns = presentColumns(schema, 'invoice');
-  const productColumns = presentColumns(schema, 'product');
+  const userColumns = presentColumns(schema, 'user', readableColumnsOf(session, 'user'));
+  const invoiceColumns = presentColumns(schema, 'invoice', readableColumnsOf(session, 'invoice'));
+  const productColumns = presentColumns(schema, 'product', readableColumnsOf(session, 'product'));
   const tables = {
     user: await digestV1Table(session, 'user', userColumns),
     invoice: await digestV1Table(session, 'invoice', invoiceColumns),

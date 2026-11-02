@@ -36,6 +36,7 @@ exports are re-exported from it, because tests and `container.ts` import them fr
 | `replies.ts`               | `PendingReply`, `BotTurnResult`, `replyFor`, the blocked and stale replies.                                             |
 | `refusals.ts`              | `refusal(error)` and `REFUSAL_REPLIES`: an error code to one customer sentence.                                         |
 | `keyboards.ts`             | The main-menu button and the notification lane's buttons.                                                               |
+| `listed-price.ts`          | R11 A9: how a price-list button carries a line its personal discount wins (the figures are `PricingService`'s).         |
 | `start-menu-flow.ts`       | `/start` greeting, membership and terms replies, marketing opt-in/out.                                                  |
 | `captcha-flow.ts`          | R10 D5: the `/start` captcha gate (`captchaGate`, first check of `guardedAct`), its replies and answer buttons (`hc:`). |
 | `purchase-flow.ts`         | Catalogue, categories, the custom service, draft, username, discount code, pre-invoice, order cancel.                   |

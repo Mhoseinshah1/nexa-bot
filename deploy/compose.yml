@@ -47,6 +47,11 @@ x-app-common: &app-common
     # the protection without copying the value into a second file. Extra
     # networks an operator wants refused go in PANEL_HTTP_DENIED_SUBNETS.
     NEXA_DATA_SUBNET: ${NEXA_DATA_SUBNET:-172.29.1.0/24}
+    # The EDGE network, by the same rule (R12 F2): every application role sits on
+    # it beside Caddy, and its gateway is this host. The outbound URL policy
+    # refuses it — and Docker's default bridge — for panels, gateways and custom
+    # bridges unless the owner allow-lists a target in the Web Admin.
+    NEXA_EDGE_SUBNET: ${NEXA_EDGE_SUBNET:-172.29.0.0/24}
     # PINNED, for every application role (each one merges this anchor and none
     # overrides `environment`). FIX-04 (S2): `environment` wins over `env_file`,
     # so a `NODE_ENV=development` left in nexa.env no longer turns a public
@@ -78,38 +83,46 @@ x-app-common: &app-common
       condition: service_healthy
     redis:
       condition: service_healthy
-  volumes:
-    # THE ARCHIVES, on a named volume shared by every role that touches them.
-    #
-    # Not container-local, and this is load-bearing rather than tidy. The
-    # archive is written by whichever role took the backup — the SCHEDULER runs
-    # in the worker, the operator's button in the api, the pre-restore backup in
-    # the recovery executor — and it is read by the api, which serves the
-    # download, and by the executor, which restores from it. On container-local
-    # disk every one of those crossings fails: a scheduled backup's archive is
-    # invisible to the download that offers it, an uploaded archive is invisible
-    # to the only process that can restore it, and all of it is deleted by the
-    # next `docker compose up -d` that recreates a container.
-    #
-    # The Web Admin would report this truthfully — «فایل محلی دیگر موجود نیست»
-    # for every scheduled backup — which is the honest surface of a broken
-    # deployment rather than a substitute for fixing it.
-    - backups:/var/lib/nexa/backups
-    # The recovery workspace: uploads, and the plaintext a verification decrypts
-    # before it removes it. Separate from the archives because it holds a
-    # DIFFERENT thing with a different lifetime, and ADR-0028 keeps them apart so
-    # a retention pass over one can never reach the other.
-    - recovery:/var/lib/nexa/recovery
-    # Phase 7: the Mirza `.nxpkg` workspace (LEGACY_MIGRATION_WORK_DIR). The api streams an
-    # uploaded package here from the restore page and the recovery role's executor opens it,
-    # so — like the recovery workspace — it must be one volume every app role sees. Its OWN
-    # volume: the import's sweep must never reach a recovery upload or an archive.
-    - legacymigration:/var/lib/nexa/legacy-migration
+  # NO volumes here (R12 F2 item 6): the archive, recovery and Mirza workspaces are
+  # mounted only into the roles that read or write them — api, worker, recovery —
+  # through `x-app-volumes` below. The monitor, the provisioner and the assistant
+  # touch none of them, so a compromise of one of those is not a read of every
+  # backup this installation has.
   logging:
     driver: json-file
     options:
       max-size: '10m'
       max-file: '5'
+
+# The shared workspaces, for the roles that use them (R12 F2 item 6). Each of api,
+# worker and recovery says `volumes: *app-volumes`; nothing else mounts them.
+x-app-volumes: &app-volumes
+  # THE ARCHIVES, on a named volume shared by every role that touches them.
+  #
+  # Not container-local, and this is load-bearing rather than tidy. The
+  # archive is written by whichever role took the backup — the SCHEDULER runs
+  # in the worker, the operator's button in the api, the pre-restore backup in
+  # the recovery executor — and it is read by the api, which serves the
+  # download, and by the executor, which restores from it. On container-local
+  # disk every one of those crossings fails: a scheduled backup's archive is
+  # invisible to the download that offers it, an uploaded archive is invisible
+  # to the only process that can restore it, and all of it is deleted by the
+  # next `docker compose up -d` that recreates a container.
+  #
+  # The Web Admin would report this truthfully — «فایل محلی دیگر موجود نیست»
+  # for every scheduled backup — which is the honest surface of a broken
+  # deployment rather than a substitute for fixing it.
+  - backups:/var/lib/nexa/backups
+  # The recovery workspace: uploads, and the plaintext a verification decrypts
+  # before it removes it. Separate from the archives because it holds a
+  # DIFFERENT thing with a different lifetime, and ADR-0028 keeps them apart so
+  # a retention pass over one can never reach the other.
+  - recovery:/var/lib/nexa/recovery
+  # Phase 7: the Mirza `.nxpkg` workspace (LEGACY_MIGRATION_WORK_DIR). The api streams an
+  # uploaded package here from the restore page and the recovery role's executor opens it,
+  # so — like the recovery workspace — it must be one volume both of them see. Its OWN
+  # volume: the import's sweep must never reach a recovery upload or an archive.
+  - legacymigration:/var/lib/nexa/legacy-migration
 
 services:
   postgres:
@@ -141,6 +154,30 @@ services:
       - FOWNER
       - SETGID
       - SETUID
+    # R12 F2: sized for the host. botctl writes the NEXA_PG_* values into deploy.env
+    # from the host's memory at install and at every update (`nexa_pg_tuning`); the
+    # defaults after `:-` are PostgreSQL's own, so a deploy.env that predates them
+    # runs exactly as before. Memory settings only — nothing in the data directory
+    # changes, and `botctl status` prints what is recorded. pg_stat_statements is
+    # preloaded so a slow query can be found (`CREATE EXTENSION pg_stat_statements`
+    # in psql to read it); the image ships the module.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${NEXA_PG_SHARED_BUFFERS:-128MB}
+      - -c
+      - effective_cache_size=${NEXA_PG_EFFECTIVE_CACHE_SIZE:-4GB}
+      - -c
+      - work_mem=${NEXA_PG_WORK_MEM:-4MB}
+      - -c
+      - max_connections=${NEXA_PG_MAX_CONNECTIONS:-100}
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=top
+    # Docker's 64 MB /dev/shm is too small for parallel query's shared memory, which
+    # fails with "could not resize shared memory segment" under load.
+    shm_size: 512m
     healthcheck:
       # The credentials come from the environment inside the container, so
       # nothing here lands in the command line.
@@ -201,7 +238,7 @@ services:
       - |
         set -e
         umask 077
-        printf 'requirepass "%s"\nsave ""\nappendonly no\n' "$$REDIS_PASSWORD" >/tmp/redis.conf
+        printf 'requirepass "%s"\nsave ""\nappendonly no\nmaxmemory 64mb\nmaxmemory-policy allkeys-lru\n' "$$REDIS_PASSWORD" >/tmp/redis.conf
         exec redis-server /tmp/redis.conf
     env_file:
       - ${NEXA_CONFIG_DIR:-/etc/nexa}/redis.env
@@ -296,6 +333,7 @@ services:
 
   api:
     <<: *app-common
+    volumes: *app-volumes
     command: ['node', 'dist/main.js']
     healthcheck:
       # Node's global fetch — the runtime image carries no curl and does not
@@ -315,6 +353,7 @@ services:
 
   worker:
     <<: *app-common
+    volumes: *app-volumes
     command: ['node', 'dist/main.worker.js']
     # A real signal, not "is the process running". The worker serves no HTTP,
     # so it writes a heartbeat file every WORKER_HEARTBEAT_INTERVAL_MS (10s by
@@ -476,6 +515,7 @@ services:
   # partial unique index, not by there being one container.
   recovery:
     <<: *app-common
+    volumes: *app-volumes
     command: ['node', 'dist/main.recovery.js']
     # The same heartbeat shape the worker and monitor use, for the same reason:
     # this process serves no HTTP, so "the container is running" says nothing
@@ -540,6 +580,9 @@ services:
       # predates this has no such key and must still start; it compares unequal
       # to every real fingerprint, so the first update recreates the edge once.
       NEXA_EDGE_CONFIG: ${NEXA_EDGE_CONFIG:-unset}
+      # routes.caddy answers /health/ready only from loopback and this network
+      # (R12 F2); the same expression that creates the network below.
+      NEXA_EDGE_SUBNET: ${NEXA_EDGE_SUBNET:-172.29.0.0/24}
     volumes:
       # The whole directory, read-only: the Caddyfile imports routes.caddy
       # beside it, and a single-file mount would leave that import dangling.

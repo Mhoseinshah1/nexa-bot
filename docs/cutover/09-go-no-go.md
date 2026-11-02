@@ -10,6 +10,7 @@ explicit approval for that run.
 
 - [ ] P1–P10 all green ([`01-preconditions.md`](01-preconditions.md)) — evidence: the gate table
 - [ ] Rehearsal `cutover-reconcile` exit 0, or exit 2 with every held class accepted by name — `rehearsal-reconcile.txt`
+- [ ] `sudo botctl cutover rehearse` on the test server: exit 0 `GO`, or exit 2 `GO_WITH_HELD` with every held class (balances and services) accepted by name; `no-messages` PASS; `token-handover` SKIP — `rehearsal.txt` ([`12-rehearsal.md`](12-rehearsal.md))
 - [ ] Import duration ≤ half the window — rehearsal record
 - [ ] `sudo botctl cutover preflight --expect-version <vX.Y.Z> --expect-telegram none` is `PASS (8 checks)` — 0.4 output
 - [ ] Mirza freeze, unfreeze and webhook re-registration commands written (P9, OQ-CUT-02) — `02-freeze.md` F2, `08-rollback.md` R0/R1

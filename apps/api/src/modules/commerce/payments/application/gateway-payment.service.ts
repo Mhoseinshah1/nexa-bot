@@ -81,6 +81,7 @@ import type {
   GatewayWebhookHint,
   RefundCardSealer,
 } from './gateway-invoice-ports.js';
+import { GATEWAY_HELD_RETRY_MIN_MS } from './gateway-invoice-ports.js';
 import { GatewayProviderRequestLane } from './gateway-provider-request.lane.js';
 import type { PaymentRecord, PaymentRepository } from './ports.js';
 import type { GatewayConfirmation, PaymentService } from './payment.service.js';
@@ -99,6 +100,7 @@ import {
 import { GatewayInquiryHealth } from './gateway-inquiry-health.js';
 import { readCardSwitchLimits } from './card-switch-limits.js';
 import {
+  cancelledAttemptPollingOpen,
   lateCreditPollAt,
   lateCreditPollingOpen,
   type LateCreditPolicy,
@@ -280,6 +282,12 @@ export const RECORDED_OUTCOME_RETRY_MS = 60_000;
  * and this. Shared with the FIX-01 evidence, which must know the row's real schedule.
  */
 export const INQUIRY_RATE_LIMIT_RETRY_MS = 60_000;
+
+/**
+ * Round 11 A8: the soonest a call the adapter's own limiter HELD (nothing sent) is tried again.
+ * Defined beside the ports since R11 A8 (cancel retry): the cancel lane uses it too.
+ */
+export { GATEWAY_HELD_RETRY_MIN_MS };
 
 /**
  * FIX10 BUG-1: how soon a row whose processing THREW is due again. Measured from the last
@@ -1519,8 +1527,10 @@ export class GatewayPaymentService {
      * customer got a usable invoice, or when a rate limit will be asked again (a retry in
      * progress is nothing an operator can act on yet).
      */
+    // Round 11 A8: a create the adapter's own limiter held was never sent, and never final.
+    const heldLocally = outcome.kind === 'RATE_LIMITED' && outcome.notSent === true;
     const linkFailure = paymentLinkFailureOf(outcome, descriptor.invoiceForm, {
-      rateLimitIsFinal: invoice.creationAttempts + 1 >= TONPAYS_CREATE_MAX_ATTEMPTS,
+      rateLimitIsFinal: !heldLocally && invoice.creationAttempts + 1 >= TONPAYS_CREATE_MAX_ATTEMPTS,
     });
     const logContext = {
       paymentId: invoice.paymentId,
@@ -1607,6 +1617,29 @@ export class GatewayPaymentService {
         return 'created';
       }
       case 'RATE_LIMITED': {
+        /*
+         * Round 11 A8: held by the adapter's own rate limiter — the request never left the
+         * process, so no invoice can exist. Deferred until the limiter would let it go, the
+         * stamp given back and the attempt NOT counted: Nexa's own pacing never uses up the
+         * customer's retries. The same order id is sent when it is. Bounded by the attempt's
+         * deadline like every deferral.
+         */
+        if (outcome.notSent === true) {
+          await this.deps.uow.run(scope, (tx) =>
+            this.deps.invoices.deferCreation(
+              scope,
+              invoice.paymentId,
+              outcome.code,
+              new Date(
+                at.getTime() + Math.max(GATEWAY_HELD_RETRY_MIN_MS, outcome.retryAfterMs ?? 0),
+              ),
+              at,
+              tx,
+              { notSent: true },
+            ),
+          );
+          return 'createDeferred';
+        }
         if (invoice.creationAttempts + 1 < TONPAYS_CREATE_MAX_ATTEMPTS) {
           await this.deps.uow.run(scope, (tx) =>
             this.deps.invoices.deferCreation(
@@ -1738,7 +1771,18 @@ export class GatewayPaymentService {
     });
     let eligible =
       paymentState === 'PENDING' && expiresAt !== null && now.getTime() < expiresAt.getTime();
-    let postDeadline = !eligible;
+    /*
+     * R12 F1: an attempt Nexa CANCELLED (its order paid from the wallet or withdrawn) is still
+     * payable at the provider until its own deadline, so it is asked about on the ordinary
+     * schedule until then — never settled (`eligible` stays false), and money it reports is
+     * returned to the wallet by the credit path. Whatever the late-credit switch says.
+     */
+    let cancelledOpen = cancelledAttemptPollingOpen({
+      state: paymentState,
+      now,
+      deadline: expiresAt,
+    });
+    let postDeadline = !eligible && !cancelledOpen;
     // An operator's "ask again" on an UNKNOWN payment lets ONE inquiry past the bound.
     const operatorAsked = invoice.reconcileInquiryRequestedAt !== null;
     /*
@@ -1906,7 +1950,12 @@ export class GatewayPaymentService {
       expiresAt = gatewaySettlementDeadline(current);
       eligible =
         paymentState === 'PENDING' && expiresAt !== null && at.getTime() < expiresAt.getTime();
-      postDeadline = !eligible;
+      cancelledOpen = cancelledAttemptPollingOpen({
+        state: paymentState,
+        now: at,
+        deadline: expiresAt,
+      });
+      postDeadline = !eligible && !cancelledOpen;
     }
     const next = postDeadline
       ? null
@@ -1941,15 +1990,38 @@ export class GatewayPaymentService {
         : lateNext;
 
     if (outcome.kind !== 'OBSERVED') {
+      /*
+       * Round 11 A8: a rate limit only DELAYS. It never changes the attempt: no state, no
+       * deadline moved, no post-deadline allowance spent and an operator's request left
+       * standing (`rateLimited` below).
+       *
+       * - Provider 429: not before the later of 60 s and what the limiter now pauses the key for
+       *   (the provider's `Retry-After`, else the back-off, which grows with each consecutive
+       *   429), and never sooner than the row's own next step.
+       * - Held by the adapter's own limiter (`notSent`): nothing was asked, so the row is due
+       *   again as soon as the limiter would let it go — not a whole step later.
+       *
+       * `notBefore` binds every path that could ask again (a tap, a webhook, the worker).
+       */
+      const rateLimitedForMs =
+        outcome.kind !== 'RATE_LIMITED'
+          ? null
+          : outcome.notSent === true
+            ? Math.max(GATEWAY_HELD_RETRY_MIN_MS, outcome.retryAfterMs ?? 0)
+            : Math.max(INQUIRY_RATE_LIMIT_RETRY_MS, outcome.retryAfterMs ?? 0);
+      const notBefore =
+        rateLimitedForMs === null ? null : new Date(at.getTime() + rateLimitedForMs);
       const retry =
-        outcome.kind === 'RATE_LIMITED' && next !== null
-          ? new Date(
-              Math.max(
-                next.getTime(),
-                at.getTime() + Math.max(INQUIRY_RATE_LIMIT_RETRY_MS, outcome.retryAfterMs ?? 0),
-              ),
-            )
-          : next;
+        notBefore === null || next === null
+          ? next
+          : outcome.kind === 'RATE_LIMITED' && outcome.notSent === true
+            ? notBefore
+            : new Date(Math.max(next.getTime(), notBefore.getTime()));
+      /*
+       * `next` is always inside the deadline (its last step is fifteen seconds before it), so a
+       * rate limit moves the row past the deadline only when the provider's own pause runs past
+       * it — then nothing can be asked before it anyway, and the late poll takes over.
+       */
       const scheduled = retry !== null && expiresAt !== null && retry >= expiresAt ? null : retry;
       /*
        * Codex on #277 (#269): an approval already recorded on this row whose decision never
@@ -1964,9 +2036,16 @@ export class GatewayPaymentService {
        * `POST_DEADLINE_INQUIRY_MAX + GATEWAY_DECISION_RETRY_MAX`.
        */
       const nextInquiryAt =
-        scheduled === null && approvalUndecided
-          ? new Date(at.getTime() + RECORDED_OUTCOME_RETRY_MS)
-          : (scheduled ?? lateNextAllowed);
+        scheduled !== null
+          ? scheduled
+          : // Round 11 A8: an operator's "ask again" that met a rate limit is asked once allowed.
+            operatorAsked && notBefore !== null
+            ? notBefore
+            : approvalUndecided
+              ? new Date(
+                  Math.max(at.getTime() + RECORDED_OUTCOME_RETRY_MS, notBefore?.getTime() ?? 0),
+                )
+              : lateNextAllowed;
       const kept = await this.deps.uow.run(scope, (tx) =>
         this.deps.invoices.recordInquiry(
           scope,
@@ -1983,10 +2062,10 @@ export class GatewayPaymentService {
             nextInquiryAt,
             postDeadline,
             // A provider's Retry-After binds EVERY path that could ask again (customer check,
-            // webhook hint, the worker), not only this row's next scheduled time.
-            ...(outcome.kind === 'RATE_LIMITED' && outcome.retryAfterMs !== undefined
-              ? { notBefore: new Date(at.getTime() + outcome.retryAfterMs) }
-              : {}),
+            // webhook hint, the worker), not only this row's next scheduled time. Round 11 A8:
+            // so does Nexa's own back-off when the provider sent none.
+            ...(notBefore === null ? {} : { notBefore }),
+            rateLimited: outcome.kind === 'RATE_LIMITED',
             claimedUntil: leaseUntil,
           },
           at,
@@ -1997,7 +2076,12 @@ export class GatewayPaymentService {
       if (outcome.kind === 'CONFIGURATION') {
         await this.inquiryMisconfigured(scope, invoice.provider, outcome.code);
       }
-      if (outcome.kind === 'FAILED' || outcome.kind === 'RATE_LIMITED') {
+      // Round 11 A8: a call Nexa's own limiter held never reached the provider, so it says
+      // nothing about whether the provider answers; the 429 that caused a pause was counted.
+      if (
+        outcome.kind === 'FAILED' ||
+        (outcome.kind === 'RATE_LIMITED' && outcome.notSent !== true)
+      ) {
         await this.inquiryFailed(scope, invoice.provider, outcome.kind, outcome.code, at);
       }
       return 'ERROR';
@@ -2200,7 +2284,12 @@ export class GatewayPaymentService {
           current !== null &&
           (await this.deps.scopeActivity.scopeIsActive(scope, tx))
         ) {
-          announced = need;
+          /*
+           * R12 F1: a CANCELLED attempt is still asked about until its deadline, and an ask
+           * the provider makes of it reaches the operations log — but the customer is never
+           * sent a new message asking them to pay more on an attempt Nexa withdrew.
+           */
+          if (paymentState !== 'CANCELLED') announced = need;
           await this.deps.outbox.write(tx, actor, {
             eventType: 'GatewayPaymentAttentionRaised',
             aggregateType: 'Payment',
@@ -2470,6 +2559,10 @@ export class GatewayPaymentService {
           at,
         );
         await this.deps.invoices.recordOutcome(scope, invoice.paymentId, 'SETTLED', at);
+        // R12 F1: the order's other link attempts were closed with it; their messages say so.
+        for (const siblingId of confirmation.closedSiblings ?? []) {
+          await this.refreshScreens(scope, siblingId);
+        }
         return 'SETTLED';
       case 'ALREADY_CONFIRMED':
         await this.deps.invoices.recordOutcome(scope, invoice.paymentId, 'ALREADY_SETTLED', at);
@@ -2494,6 +2587,12 @@ export class GatewayPaymentService {
           lateCreditInput !== null &&
           (confirmation.reason === 'DEADLINE_PASSED' ||
             confirmation.reason === 'PAYMENT_NOT_PENDING' ||
+            /*
+             * R12 F1: money for an order another payment already settled (a second provider,
+             * the wallet). It can never pay the order; the credit path returns it to the wallet
+             * under the payment's lock, whatever the late-credit switch says.
+             */
+            confirmation.reason === 'ORDER_NOT_AWAITING_PAYMENT' ||
             // Already credited: the credit path answers CREDITED again and records the outcome.
             confirmation.reason === 'LATE_CREDIT_ALREADY_APPLIED')
         ) {
@@ -3646,15 +3745,24 @@ export class GatewayPaymentService {
       }
       case 'RATE_LIMITED': {
         // Definitely not processed (a 4xx): the same photo is queued again, bounded.
-        if (submission.attempts + 1 < TONPAYS_TELEGRAM_RECEIPT_MAX_ATTEMPTS) {
+        // Round 11 A8: one the adapter's own limiter held was never sent — queued again when
+        // the limiter allows, without spending one of its attempts.
+        const held = outcome.notSent === true;
+        if (held || submission.attempts + 1 < TONPAYS_TELEGRAM_RECEIPT_MAX_ATTEMPTS) {
           await this.deps.uow.run(scope, (tx) =>
             cards.requeueSubmission(
               scope,
               submission.id,
               outcome.code,
-              new Date(at.getTime() + RECEIPT_RATE_LIMIT_RETRY_MS),
+              new Date(
+                at.getTime() +
+                  (held
+                    ? Math.max(GATEWAY_HELD_RETRY_MIN_MS, outcome.retryAfterMs ?? 0)
+                    : Math.max(RECEIPT_RATE_LIMIT_RETRY_MS, outcome.retryAfterMs ?? 0)),
+              ),
               at,
               tx,
+              { notSent: held },
             ),
           );
         } else {

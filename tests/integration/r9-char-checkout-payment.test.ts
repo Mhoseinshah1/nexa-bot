@@ -228,11 +228,17 @@ function expectedViews(): Record<string, View> {
         [['🏠 بازگشت به منوی اصلی', 'mm:']],
       ],
     },
+    // R11 A11: a cancelled order's selector tap shows the order's cancelled screen in place.
     'cancelled.methods': {
       intent: 'PAY_METHODS',
-      key: 'bot.order.not_awaiting_payment',
-      text: 'این سفارش دیگر در انتظار پرداخت نیست.',
-      buttons: [[['🏠 بازگشت به منوی اصلی', 'mm:']]],
+      key: 'bot.order.cancelled_screen',
+      text: 'ℹ️ این سفارش لغو شد.\n\n🔖 کد سفارش: <code>\n📦 سرویس: پلن پایه\n💵 مبلغ سفارش: 250,000 تومان\n\nبرای خرید دوباره از دکمهٔ زیر استفاده کنید.',
+      buttons: [
+        [
+          ['🔁 سفارش دوباره', 'ro:<id>'],
+          ['🏠 منوی اصلی', 'mm:'],
+        ],
+      ],
     },
     'cancelled.close': {
       intent: 'PAY_METHODS_CLOSE',

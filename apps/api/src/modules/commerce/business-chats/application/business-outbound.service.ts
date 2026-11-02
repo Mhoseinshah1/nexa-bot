@@ -327,6 +327,7 @@ export class BusinessOutboundService {
       connectionRowId: decision.conversation.connectionRowId,
       chatId: decision.conversation.chatId,
       text: decision.text,
+      ...(row.buttons === null ? {} : { buttons: row.buttons }),
     });
 
     return this.deps.uow.run(scope, async (tx): Promise<Outcome> => {

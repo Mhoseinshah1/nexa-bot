@@ -110,7 +110,8 @@ Production is `nexa` (restored). The original is `nexa_pre_restore_<sid>`.
    ```bash
    $C start api worker monitor provisioner assistant recovery
    sudo botctl status
-   curl -s https://<admin host>/health/ready
+   # /health/ready answers only on the host since R12 F2 (docs/deployment.md):
+   $C exec api node -e "fetch('http://127.0.0.1:3000/health/ready').then(async r=>console.log(r.status, await r.text()))"
    ```
 
 5. **Close the recovery row in the original database, if the executor does not.**

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   dayNumberToGregorian,
   dayNumberToJalali,
-  faDigits,
+  plainDigits,
   formatIsoDay,
   gregorianToDayNumber,
   isJalaliLeapYear,
@@ -116,8 +116,9 @@ describe('the wire values', () => {
     expect(parseTime('9:00')).toBeNull();
   });
 
-  it('writes Persian digits without grouping, and reads them back', () => {
-    expect(faDigits(1405)).toBe('۱۴۰۵');
-    expect(latinDigits(faDigits('09:30'))).toBe('09:30');
+  it('writes Latin digits without grouping, and reads typed Persian digits back', () => {
+    expect(plainDigits(1405)).toBe('1405');
+    expect(plainDigits('۱۴۰۵')).toBe('1405');
+    expect(latinDigits(plainDigits('09:30'))).toBe('09:30');
   });
 });

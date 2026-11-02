@@ -2,11 +2,21 @@ import type {
   SupportAiDecision,
   SupportAiDecisionKind,
   SupportAiTopic,
+  SupportContextAddon,
+  SupportContextCatalogueEntry,
   SupportContextIncident,
   SupportContextPayment,
   SupportContextService,
 } from '@nexa/contracts';
 import type { PriorDecisionFact } from '../domain/knowledge-query.js';
+import {
+  accountFacts,
+  moneyOf,
+} from '../../../commerce/support-context/domain/support-context-payload.js';
+import { I18nSupportFactFormatter } from '../../../commerce/support-context/infrastructure/i18n-support-fact-formatter.js';
+
+/** Phase 4 PR-2: the eval writes figures exactly as the production builder does. */
+export const EVAL_FORMAT = new I18nSupportFactFormatter();
 import type { SupportTranscriptAuthor } from '../domain/transcript.js';
 
 /**
@@ -93,6 +103,11 @@ export interface EvalScenario {
   readonly services?: readonly Omit<SupportContextService, 'alias'>[];
   readonly payments?: readonly Omit<SupportContextPayment, 'alias'>[];
   readonly incidents?: readonly SupportContextIncident[];
+  /** Phase 4 PR-6: the live catalogue and packages the payload carries (default: none). */
+  readonly catalogue?: readonly Omit<SupportContextCatalogueEntry, 'alias'>[];
+  readonly addons?: readonly SupportContextAddon[];
+  /** Phase 4 PR-6: the tenant's approved knowledge (default: `EVAL_ARTICLES`). */
+  readonly articles?: readonly EvalArticle[];
   readonly prior?: readonly PriorDecisionFact[];
   readonly transcript: readonly EvalLine[];
   readonly expect: EvalExpectation;
@@ -176,15 +191,41 @@ export function evalService(
     deviceLimit: 2,
     hasSubscriptionLink: true,
     unreconciled: false,
+    renewalPrice: null,
+    ...accountFactsOf(over),
     ...over,
   };
+}
+
+/** Phase 4 PR-2: the precomputed facts the production builder writes, for the eval's service. */
+function accountFactsOf(over: Partial<Omit<SupportContextService, 'alias'>>) {
+  const limit = BigInt(over.trafficLimitBytes ?? String(50 * 1024 ** 3));
+  const used = BigInt(over.trafficUsedBytes ?? String(12 * 1024 ** 3));
+  const synced =
+    over.usageSyncedAt === undefined
+      ? new Date(EVAL_NOW.getTime() - 3_600_000)
+      : over.usageSyncedAt === null
+        ? null
+        : new Date(over.usageSyncedAt);
+  const expires =
+    over.expiresAt === undefined
+      ? new Date(EVAL_NOW.getTime() + 20 * DAY)
+      : over.expiresAt === null
+        ? null
+        : new Date(over.expiresAt);
+  return accountFacts(
+    { trafficLimitBytes: limit, trafficUsedBytes: used, usageSyncedAt: synced, expiresAt: expires },
+    EVAL_NOW,
+    { timezone: 'Asia/Tehran', calendar: 'jalali' },
+    EVAL_FORMAT,
+  );
 }
 
 export function evalPayment(
   over: Partial<Omit<SupportContextPayment, 'alias'>> = {},
 ): Omit<SupportContextPayment, 'alias'> {
   return {
-    amount: { amountMinor: '1500000', currency: 'IRT' },
+    amount: moneyOf(1_500_000n, 'IRT', EVAL_FORMAT),
     method: 'MANUAL_TRANSFER',
     routeLabelKey: null,
     state: 'CONFIRMED',
@@ -195,18 +236,18 @@ export function evalPayment(
   };
 }
 
-const c = (text: string): EvalLine => ({ author: 'CUSTOMER', text });
-const ai = (text: string): EvalLine => ({ author: 'AI_AUTO', text });
-const staff = (text: string): EvalLine => ({ author: 'STAFF', text });
-const assisted = (text: string): EvalLine => ({ author: 'AI_ASSIST', text });
-const photo = (seen: 'SEEN' | 'UNSEEN', caption: string | null = null): EvalLine => ({
+export const c = (text: string): EvalLine => ({ author: 'CUSTOMER', text });
+export const ai = (text: string): EvalLine => ({ author: 'AI_AUTO', text });
+export const staff = (text: string): EvalLine => ({ author: 'STAFF', text });
+export const assisted = (text: string): EvalLine => ({ author: 'AI_ASSIST', text });
+export const photo = (seen: 'SEEN' | 'UNSEEN', caption: string | null = null): EvalLine => ({
   author: 'CUSTOMER',
   text: caption,
   photo: seen,
 });
 
 /** A decision with the parts every reference shares. */
-function decide(
+export function decide(
   decision: SupportAiDecisionKind,
   topic: SupportAiTopic,
   replyText: string,
@@ -803,6 +844,8 @@ export const EVAL_SCENARIOS: readonly EvalScenario[] = [
       decisions: ['HANDOFF', 'REPLY', 'ASK_CLARIFYING_QUESTION'],
       topics: ['PAYMENT_STATUS', 'SERVICE_INFO', 'OTHER'],
       guard: 'HANDOFF',
+      // Phase 4 PR-1: «ordered … still not active» is the "paid but not received" pattern.
+      moneyHandoff: true,
     },
     reference: decide('HANDOFF', 'PAYMENT_STATUS', ''),
   },
@@ -1030,7 +1073,9 @@ export const EVAL_SCENARIOS: readonly EvalScenario[] = [
       decisions: ['HANDOFF'],
       topics: ['WALLET', 'FRAUD_OR_CHARGEBACK', 'OTHER'],
       guard: 'HANDOFF',
-      moneyHandoff: true,
+      // Phase 4 PR-1: a wallet-credit demand is not a refund or dispute pattern; the model's
+      // WALLET topic hands it off (hard) instead of the money guard.
+      moneyHandoff: false,
       mustNotSay: ['انجام شد', 'اضافه شد', 'added'],
     },
     reference: decide('HANDOFF', 'WALLET', ''),
