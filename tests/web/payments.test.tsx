@@ -365,15 +365,15 @@ describe('the payment detail', () => {
     expect(screen.getByText('زمان تأیید')).toBeInTheDocument();
   });
 
-  it('draws no approve, reject or credit for a pending transfer, and says review is in Telegram', async () => {
+  it('draws no approve, reject or credit for a viewer without receipts.review, and says what is needed', async () => {
     /*
-     * Payment File 02 §10 (D3). The server has no route for any of the three, and a
-     * drawn control would be a button that answers 404. What the page owes the operator
-     * is where the decision IS taken.
+     * R12 F3 item 8 supersedes Payment File 02 §10 (D3): the decision is also taken here, but
+     * only by who holds `receipts.review`. This page is handed neither permission, so it
+     * draws no control and says which permission it would take.
      */
     const view = render({ state: 'PENDING', method: 'MANUAL_TRANSFER' });
     await screen.findByText('بررسی رسید');
-    expect(view.container.textContent).toContain('فقط از پنل مدیریت تلگرام');
+    expect(view.container.textContent).toContain(t('web.receipt_denied'));
     expect(view.container.querySelector('#payment-note')).toBeNull();
     expect(view.container.querySelector('#payment-reason')).toBeNull();
     for (const label of ['تأیید دریافت', 'رد رسید', 'واریز به کیف پول']) {
@@ -472,25 +472,47 @@ describe('the payments route', () => {
   });
 
   /*
-   * The ROUTE, not a page handed props: even an operator holding `receipts.review` is
-   * offered no decision on the Web Admin (Payment File 02 §10, D3).
+   * The ROUTE, not a page handed props (R12 F3 item 8): an operator holding `receipts.review`
+   * is offered the decision, and the credit only with `users.wallet.credit` too.
    */
-  it('offers no card-to-card decision even to receipts.review', async () => {
+  it('offers the card-to-card decision to receipts.review, the credit only with the wallet permission', async () => {
     stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
     const approver = resolve({ path: `/payments/${ROW_ID}`, query: new URLSearchParams() }, [
       'payments.view',
       'receipts.review',
-      'users.wallet.credit',
     ]);
     const view = renderPage(approver.element as ReactElement);
     await screen.findByText('بررسی رسید');
-    expect(view.queryByText('تأیید دریافت')).toBeNull();
-    expect(view.queryByText('رد رسید')).toBeNull();
-    const labels = [...view.container.querySelectorAll('button')]
-      .map((b) => b.textContent?.trim())
-      // The history's refresh only reads again; it is not a control over the payment.
-      .filter((label) => label !== '' && label !== t('web.refresh'));
-    expect(labels, 'the payment page draws a control').toEqual([]);
+    expect(view.queryByRole('button', { name: t('web.receipt_approve') })).not.toBeNull();
+    expect(view.queryByRole('button', { name: t('web.receipt_reject') })).not.toBeNull();
+    expect(view.queryByRole('button', { name: t('web.receipt_credit') })).toBeNull();
+    view.unmount();
+
+    stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
+    const both = resolve({ path: `/payments/${ROW_ID}`, query: new URLSearchParams() }, [
+      'payments.view',
+      'receipts.review',
+      'users.wallet.credit',
+    ]);
+    const full = renderPage(both.element as ReactElement);
+    await screen.findByText('بررسی رسید');
+    expect(full.queryByRole('button', { name: t('web.receipt_credit') })).not.toBeNull();
+  });
+
+  it('offers no decision to payments.view alone', async () => {
+    stubApi(detail(payment({ state: 'PENDING', method: 'MANUAL_TRANSFER' })));
+    const viewer = resolve({ path: `/payments/${ROW_ID}`, query: new URLSearchParams() }, [
+      'payments.view',
+    ]);
+    const view = renderPage(viewer.element as ReactElement);
+    await screen.findByText('بررسی رسید');
+    for (const name of [
+      'web.receipt_approve',
+      'web.receipt_reject',
+      'web.receipt_credit',
+    ] as const) {
+      expect(view.queryByRole('button', { name: t(name) }), name).toBeNull();
+    }
   });
 
   it('refuses the page to an operator without payments.view', async () => {
@@ -1651,26 +1673,26 @@ describe('the payment diagnostics (§21)', () => {
 });
 
 /**
- * §10 at the wire: the Web Admin has NO way to confirm, reject or credit a card-to-card
- * payment. Not a hidden button — no contract route and no client function exists, so a
- * page cannot grow one by accident without this failing.
+ * R12 F3 item 8 at the wire: the Web Admin's card-to-card decisions are exactly three named
+ * routes and three client functions, each through the existing services on the server. A fourth
+ * (a dismiss, a bulk decide) cannot appear by accident without this failing.
  */
-describe('no card-to-card mutation in the Web Admin (§10)', () => {
-  it('names no confirm, reject or credit route in the payment contract', () => {
+describe('the card-to-card decisions in the Web Admin (R12 F3 item 8)', () => {
+  it('names exactly approve, reject and credit in the payment contract', () => {
     expect(
-      Object.keys(PAYMENT_ROUTES).filter((key) =>
-        /confirm|reject|credit|approve|dismiss/iu.test(key),
-      ),
-    ).toEqual([]);
+      Object.keys(PAYMENT_ROUTES)
+        .filter((key) => /confirm|reject|credit|approve|dismiss/iu.test(key))
+        .sort(),
+    ).toEqual(['receiptApprove', 'receiptCredit', 'receiptReject']);
   });
 
-  it('exports no client function that decides a payment', () => {
+  it('exports exactly the three client functions that decide a payment', () => {
     const deciding = Object.keys(client).filter((name) =>
-      /^(confirm|reject|approve|dismiss|credit).*payment|payment.*(confirm|reject|credit)|receipt.*credit|credit.*receipt/iu.test(
+      /^(confirm|reject|approve|dismiss|credit).*payment|payment.*(confirm|reject|credit)|receipt.*credit|credit.*receipt|^(approve|reject)Receipt$/iu.test(
         name,
       ),
     );
-    expect(deciding).toEqual([]);
+    expect(deciding.sort()).toEqual(['approveReceipt', 'creditReceipt', 'rejectReceipt']);
   });
 });
 

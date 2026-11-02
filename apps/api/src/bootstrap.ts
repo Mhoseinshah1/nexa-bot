@@ -22,6 +22,10 @@ import {
 import { AppModule } from './app.module.js';
 import { installRawBodyCapture } from './surfaces/gateway/raw-body.js';
 import {
+  AnonymousRateLimiter,
+  installAnonymousRateLimit,
+} from './surfaces/web/anonymous-rate-limit.js';
+import {
   TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES,
   TELEGRAM_WEBHOOK_ROUTE_PREFIX,
 } from './surfaces/telegram/webhook.controller.js';
@@ -91,6 +95,8 @@ const CUSTOM_MENU_BUTTON_BODY_LIMIT_BYTES =
  */
 /** How often every process re-reads `installation_keys`. */
 export const INSTALLATION_KEY_REFRESH_MS = 60_000;
+/** How often every process re-reads the owner's outbound allow-list (R12 F2). */
+export const OUTBOUND_ALLOW_LIST_REFRESH_MS = 60_000;
 
 /**
  * The stalled-loop reporter of one background role (FIX-05; every role since FIX-03 of
@@ -159,6 +165,12 @@ export async function resolveInstallationTenant(container: Container): Promise<v
   const primary = await container.tenants.findPrimary();
   container.setInstallationTenant(primary?.id ?? null);
 
+  // R12 F2 item 4: the owner's outbound allow-list, read on the tenant just resolved and
+  // kept fresh on a timer in every role, so a change in the Web Admin reaches the monitor,
+  // the provisioner and the worker within one interval. Fails closed: unread is empty.
+  await container.outboundAllowList.refreshQuietly();
+  container.outboundAllowList.start(OUTBOUND_ALLOW_LIST_REFRESH_MS);
+
   if (primary === null) return;
 
   // Create any system role this installation does not have yet.
@@ -226,9 +238,22 @@ export async function resolveInstallationTenant(container: Container): Promise<v
   });
 }
 
+/** One route as Fastify registered it: the method(s) and the URL pattern. */
+export interface RegisteredRoute {
+  readonly methods: readonly string[];
+  readonly url: string;
+}
+
 export interface ApiApp {
   readonly app: NestFastifyApplication;
   readonly container: Container;
+  /**
+   * Every route this application registered, in registration order (R12 F2). Recorded by
+   * the same `onRoute` hook that sets body limits, so a suite can enumerate the WHOLE
+   * surface — the Origin/401 sweep walks it — instead of a hand-kept list that a new
+   * controller is never added to.
+   */
+  readonly routes: readonly RegisteredRoute[];
   close(): Promise<void>;
 }
 
@@ -306,7 +331,21 @@ export async function createApiApp(config: AppConfig = loadConfig()): Promise<Ap
    */
   installRawBodyCapture(fastify, GATEWAY_WEBHOOK_ROUTE_PREFIX, GATEWAY_WEBHOOK_BODY_LIMIT_BYTES);
 
+  // R12 F2: a per-address budget for the routes anyone can call without a session.
+  installAnonymousRateLimit(
+    fastify,
+    new AnonymousRateLimiter({
+      limitPerWindow: config.ANONYMOUS_RATE_LIMIT_PER_MINUTE,
+      now: () => container.clock.now().getTime(),
+    }),
+  );
+
+  const routes: RegisteredRoute[] = [];
   fastify.addHook('onRoute', (route) => {
+    routes.push({
+      methods: Array.isArray(route.method) ? [...route.method] : [route.method],
+      url: route.url,
+    });
     if (route.url.startsWith(TELEGRAM_WEBHOOK_ROUTE_PREFIX)) {
       route.bodyLimit = TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES;
     }
@@ -389,6 +428,7 @@ export async function createApiApp(config: AppConfig = loadConfig()): Promise<Ap
   return {
     app,
     container,
+    routes,
     async close() {
       await app.close();
       await container.shutdown();

@@ -33,6 +33,7 @@ import type {
 import {
   cancelAvailable,
   cardChangeOffered,
+  createEndedRateLimited,
   customerMessageKeyOfError,
   isBuyerConflictCode,
   receiptUploadAvailable,
@@ -40,6 +41,7 @@ import {
   remainderReceiptAvailable,
 } from '../../../modules/commerce/payments/domain/tonpays-telegram.js';
 import { gatewaySettlementDeadline } from '../../../modules/commerce/payments/domain/settlement.js';
+import { failureStatusOf } from '../../../modules/commerce/payments/domain/payment-failure-outcome.js';
 import { rialitLinkDeadline } from '../../../modules/commerce/payments/domain/rialit.js';
 import {
   CARD_INVOICE_ROW,
@@ -213,6 +215,8 @@ function cardTransferScreen(
    * (`changeAllowance`) bound it like the manual switch.
    */
   const menu = mainMenuButton();
+  const cancelOffered =
+    facts !== null && windowOpen && cancelAvailable(invoice, cancelRequest, submissions);
   const actions = [
     copyExact,
     ...(copyCard === null ? [] : [copyCard]),
@@ -224,9 +228,7 @@ function cardTransferScreen(
     ...(facts !== null && windowOpen && receiptUploadAvailable(invoice, submissions)
       ? [receipt]
       : []),
-    ...(facts !== null && windowOpen && cancelAvailable(invoice, cancelRequest, submissions)
-      ? [cancel]
-      : []),
+    ...(cancelOffered ? [cancel] : []),
     menu,
   ];
   const copies = (button: CustomerButton): boolean => button !== copyExact && button !== copyCard;
@@ -242,10 +244,34 @@ function cardTransferScreen(
   if (cancelRequest !== null) {
     const cancelKey = cancelNoticeKey(cancelRequest, invoice);
     if (cancelKey !== null) {
+      /*
+       * R11 A8 (owner): a LOST answer is not a cancellation. While the invoice is still open as
+       * far as Nexa knows, the notice keeps «❌ لغو فاکتور» so the customer can ask again (the
+       * tap asks first, and re-decides under the payment's lock).
+       */
+      const retry =
+        (cancelKey === 'bot.payment.gateway_cancel_unknown' ||
+          cancelKey === 'bot.payment.gateway_cancel_rate_limited') &&
+        cancelOffered
+          ? [
+              {
+                ...inlineLabel('payment.gateway_cancel'),
+                data: `${GATEWAY_CANCEL_ASK_CALLBACK_PREFIX}${payment.id}`,
+              },
+            ]
+          : [];
+      /*
+       * R12 F3 lead review: the rate-limited notice asks the customer to tap «❌ لغو فاکتور»
+       * again — true only while that button is offered. Otherwise the same notice without it.
+       */
+      const shownKey =
+        cancelKey === 'bot.payment.gateway_cancel_rate_limited' && !cancelOffered
+          ? 'bot.payment.gateway_cancel_rate_limited_closed'
+          : cancelKey;
       return {
-        key: cancelKey,
+        key: shownKey,
         values: { reference },
-        buttons: [cardCheck(payment.id), mainMenuButton()],
+        buttons: [...retry, cardCheck(payment.id), mainMenuButton()],
         orderId,
         wizard,
       };
@@ -358,7 +384,8 @@ function cardTransferScreen(
  * The notice a customer's cancel request leaves on the invoice (Round 6): "cancelling…" while
  * it is with the provider; the provider's refusal or a lost answer until the next inquiry has
  * answered (that inquiry says what the invoice is now, and replaces the notice). A request that
- * was applied, rate-limited, or answered before the latest inquiry leaves none.
+ * was applied, or answered before the latest inquiry, leaves none; since R11 A8 the customer's
+ * rate-limited one reads as a lost answer.
  */
 function cancelNoticeKey(
   request: GatewayProviderRequestRecord,
@@ -373,6 +400,22 @@ function cancelNoticeKey(
     invoice.lastInquiryAt.getTime() >= request.decidedAt.getTime();
   if (answeredSince) return null;
   if (request.state === 'UNKNOWN') return 'bot.payment.gateway_cancel_unknown';
+  /*
+   * R11 A8: the customer's cancel that TonPays rate-limited did not go through either (one the
+   * TonPays client's own limiter HELD is not decided at all: the lane puts it back and sends it
+   * when the key may be used, so it reads "cancelling…" meanwhile), with the same way on as a
+   * lost answer: the cancel button, which `cancelAvailable` keeps. Nexa's own rate-limited cancel
+   * (before a new create) is asked again by Nexa and says nothing here.
+   *
+   * R12 F3 item 10: but it is NOT a lost answer. A readable RATE_LIMIT_EXCEEDED (or a cancel
+   * Nexa's limiter held past the customer window) is the provider's — or our own — definite
+   * "not processed": the answer is known, and `gateway_cancel_unknown` («پاسخ تون‌پی دریافت نشد»)
+   * would say the opposite. Its own sentence: not cancelled yet, may be asked again, do not pay
+   * again. A genuinely lost answer (`UNKNOWN`: timeout, 5xx, a bare 429) keeps the old key.
+   */
+  if (request.state === 'RATE_LIMITED' && request.requestedByNexa !== true) {
+    return 'bot.payment.gateway_cancel_rate_limited';
+  }
   if (request.state === 'REFUSED') {
     const key = customerMessageKeyOfError(request.errorCode);
     // Only the cancel refusals have a sentence of their own here; others change nothing.
@@ -583,6 +626,19 @@ function failedCardScreen(
   const retry: CustomerButton =
     payment.orderId === null ? topupButton() : payMethodsButton(payment.orderId);
   if (facts?.latestCancel?.state === 'APPLIED') {
+    return screen('bot.payment.gateway_cancelled', [retry], 'NOTICE');
+  }
+  /*
+   * R11 A8: the customer's cancel whose answer was lost (or the retry the provider then refused
+   * as no longer pending) DID cancel it — the inquiry read `canceled` and failed the payment.
+   * The customer asked for exactly that, so it reads "cancelled", not "failed".
+   */
+  const asked = facts?.latestCancel ?? null;
+  if (
+    asked !== null &&
+    asked.requestedByNexa !== true &&
+    failureStatusOf(payment.resolutionNote) === 'canceled'
+  ) {
     return screen('bot.payment.gateway_cancelled', [retry], 'NOTICE');
   }
   if (invoice.creationState === 'CREATE_FAILED' && isBuyerConflictCode(invoice.creationErrorCode)) {
@@ -889,10 +945,13 @@ export function gatewayAttemptScreen(
     // Round 6: the customer's own cancel, a rejection with reasons, a buyer with another invoice.
     const failed = failedCardScreen(payment, invoice, orderId, cardFacts, screen);
     if (failed !== null) return failed;
-    // A create the gateway refused is "unavailable"; an invoice it did not approve failed.
+    // A create the gateway refused is "unavailable" — or, Round 11 A8, "busy" when it was the
+    // provider's own rate limit; an invoice it did not approve failed.
     return screen(
       invoice.creationState === 'CREATE_FAILED'
-        ? 'bot.payment.gateway_unavailable'
+        ? createEndedRateLimited(invoice.provider, invoice.creationErrorCode)
+          ? 'bot.payment.gateway_busy'
+          : 'bot.payment.gateway_unavailable'
         : 'bot.payment.gateway_failed',
       [retry],
       'NOTICE',
@@ -951,7 +1010,13 @@ export function gatewayAttemptScreen(
   if (invoice.creationState === 'CREATE_FAILED') {
     const failed = failedCardScreen(payment, invoice, orderId, cardFacts, screen);
     if (failed !== null) return failed;
-    return screen('bot.payment.gateway_unavailable', [retry], 'NOTICE');
+    return screen(
+      createEndedRateLimited(invoice.provider, invoice.creationErrorCode)
+        ? 'bot.payment.gateway_busy'
+        : 'bot.payment.gateway_unavailable',
+      [retry],
+      'NOTICE',
+    );
   }
   if (
     PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].invoiceForm === 'CARD_TRANSFER' &&

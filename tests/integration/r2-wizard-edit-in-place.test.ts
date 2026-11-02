@@ -500,6 +500,176 @@ describe('the wizard is one message, edited in place', () => {
   });
 
   /*
+   * R12 F3 item 2 + 7: a typed-input prompt is not a dead end. «🔙 بازگشت به پیش‌فاکتور» draws
+   * the pre-invoice again ON THE SAME MESSAGE and closes the open window, so the next plain
+   * message is not read as the answer to a question the customer left; «انصراف» does the
+   * same and answers the main menu. The wallet shortfall carries the same way back.
+   */
+  it('R12 F3: the username prompt carries back and cancel; each closes its window', async () => {
+    const productId = await product('exit');
+    const wizard = 740;
+    await tapOn(wizard, `ck:${SEED_IDS.categoryA}.0`);
+    await tapOn(wizard, `p:${productId}`);
+    const [order] = await draftOrders();
+    if (order === undefined) throw new Error('no draft');
+
+    await tapOn(wizard, `j:${order.id}`);
+    expect(buttonsOf(edited(wizard).at(-1))).toEqual([`ib:${order.id}`, 'iz:']);
+
+    // Back is the screen before the prompt — the choice of how the name is made — never a
+    // pre-invoice whose pay buttons a missing name would refuse.
+    const back = await tapOn(wizard, `ib:${order.id}`);
+    expect(back.replyKey).toBe('bot.username.choose');
+    expect(buttonsOf(edited(wizard).at(-1))).toEqual([`j:${order.id}`, `Z:${order.id}`]);
+    // The window is closed: a name typed now is an ordinary message, and no username is held.
+    const stray = await type('maryam2026', 4301);
+    expect(stray.replyKey).toBe('bot.unknown_command');
+    expect(
+      await rows(
+        sql`SELECT 1 FROM service_username_reservations WHERE tenant_id = ${tenantA.tenantId}
+            AND order_id = ${order.id}`,
+      ),
+    ).toEqual([]);
+
+    // The same, through «انصراف»: the main menu, and the window is closed.
+    await tapOn(wizard, `j:${order.id}`);
+    const cancelled = await tapOn(wizard, 'iz:');
+    expect(cancelled.replyKey).toBe('bot.start.welcome_back');
+    const strayAgain = await type('maryam2027', 4302);
+    expect(strayAgain.replyKey).toBe('bot.unknown_command');
+    // Nothing was paid or cancelled by leaving the prompt.
+    expect((await draftOrders()).map((o) => o.state)).toEqual(['DRAFT']);
+    expect(await debits()).toBe(0);
+  });
+
+  it('R12 F3 (Codex, #362): Back from the code prompt lands the wizard on the pre-invoice, and its pay button works', async () => {
+    // The tracked message was left at DISCOUNT by an ungated Back, so the pre-invoice's own
+    // buttons (gated on PREINVOICE) were swallowed as stale: the wallet tap did nothing.
+    const productId = await product('back-pay');
+    await fund(1_000_000n, 'back-pay');
+    const wizard = 745;
+    await tapOn(wizard, `ck:${SEED_IDS.categoryA}.0`);
+    await tapOn(wizard, `p:${productId}`);
+    const [order] = await draftOrders();
+    if (order === undefined) throw new Error('no draft');
+    if (buttonsOf(edited(wizard).at(-1)).includes(`Z:${order.id}`)) {
+      await tapOn(wizard, `Z:${order.id}`);
+    }
+    await tapOn(wizard, `dc:${order.id}`);
+    expect(buttonsOf(edited(wizard).at(-1))).toEqual([`ib:${order.id}`, 'iz:']);
+
+    const back = await tapOn(wizard, `ib:${order.id}`);
+    expect(back.replyKey).toBe('bot.order.preinvoice');
+    expect(buttonsOf(edited(wizard).at(-1))).toContain(`w:${order.id}`);
+
+    const paid = await tapOn(wizard, `w:${order.id}`);
+    expect(paid.replyKey, 'the pre-invoice pay tap is honoured, not swallowed').not.toBeNull();
+    expect(await debits()).toBe(1);
+  });
+
+  it('R12 F3: the wallet shortfall carries a way back to the pre-invoice', async () => {
+    const productId = await product('short');
+    await fund(1_000n, 'short');
+    const wizard = 750;
+    await tapOn(wizard, `ck:${SEED_IDS.categoryA}.0`);
+    await tapOn(wizard, `p:${productId}`);
+    const [order] = await draftOrders();
+    if (order === undefined) throw new Error('no draft');
+    await tapOn(wizard, `Z:${order.id}`);
+
+    const short = await tapOn(wizard, `w:${order.id}`);
+    expect(short.replyKey).toBe('bot.wallet.insufficient');
+    // Its own message (R2: the pre-invoice above stays payable after a top-up).
+    expect(buttonsOf(calls.find((call) => call.method === 'sendMessage'))).toEqual([
+      'o:',
+      `ib:${order.id}`,
+      'mm:',
+    ]);
+    expect(await debits()).toBe(0);
+
+    // «🔙 بازگشت به پیش‌فاکتور», tapped on the shortfall's own message, draws the pre-invoice there.
+    const shortfallMessage = 751;
+    const back = await tapOn(shortfallMessage, `ib:${order.id}`);
+    expect(back.replyKey).toBe('bot.order.preinvoice');
+    expect(buttonsOf(edited(shortfallMessage).at(-1))).toContain(`w:${order.id}`);
+    expect((await draftOrders()).map((o) => o.state)).toEqual(['DRAFT']);
+    expect(await debits()).toBe(0);
+  });
+
+  /*
+   * R12 F3 item 7: «📜 تراکنش‌ها» — the wallet's last movements, ten a page, edited in place.
+   */
+  it('R12 F3: the wallet’s «📜 تراکنش‌ها» pages ten movements at a time, on the same message', async () => {
+    for (let n = 1; n <= 12; n += 1) await fund(BigInt(n) * 1_000n, `hist-${String(n)}`);
+    const wallet = 760;
+    await tapOn(wallet, 'wo:');
+    const opened = calls.find(
+      (call) => call.method === 'sendMessage' || call.method === 'editMessageText',
+    );
+    expect(buttonsOf(opened)).toContain('wh:');
+
+    const first = await tapOn(wallet, 'wh:');
+    expect(first.replyKey).toBe('bot.wallet.history');
+    expect(methods()).not.toContain('sendMessage');
+    const page1 = edited(wallet)[0];
+    const lines1 = String(page1?.body['text'])
+      .split('\n')
+      .filter((line) => line.startsWith('➕'));
+    expect(lines1).toHaveLength(10);
+    // Newest first: the last top-up (12 000 تومان) leads; each line names what it was.
+    expect(lines1[0]).toContain('افزایش توسط مدیر');
+    const next = buttonsOf(page1).find((data) => data.startsWith('wh:') && data !== 'wh:');
+    expect(next, 'a next page exists').toBeDefined();
+    expect(buttonsOf(page1)).toEqual([next, 'wo:', 'mm:']);
+
+    const second = await tapOn(wallet, next as string);
+    expect(second.replyKey).toBe('bot.wallet.history');
+    expect(methods()).not.toContain('sendMessage');
+    const page2 = edited(wallet)[0];
+    expect(
+      String(page2?.body['text'])
+        .split('\n')
+        .filter((line) => line.startsWith('➕')),
+    ).toHaveLength(2);
+    // No third page; the way back to the newest page, the wallet and the menu.
+    expect(buttonsOf(page2)).toEqual(['wh:', 'wo:', 'mm:']);
+    // Reading the history moved nothing.
+    expect(await debits()).toBe(0);
+  });
+
+  it('R12 F3: an empty wallet history says so and keeps a way on', async () => {
+    const wallet = 761;
+    const answered = await tapOn(wallet, 'wh:');
+    expect(answered.replyKey).toBe('bot.wallet.history_empty');
+    expect(buttonsOf(edited(wallet)[0])).toEqual(['wo:', 'mm:']);
+  });
+
+  /*
+   * R12 F3 item 4 (the owner's edit-in-place rule): the screens a tapped button opens in the
+   * support, tutorial and referral flows replace the message they were tapped on.
+   */
+  it('R12 F3: tickets, tutorial and referral taps edit the tapped message, never add a new one', async () => {
+    for (const [message, data] of [
+      [770, 'tkl:'],
+      [771, 'tkn:'],
+      [772, 'to:ANDROID'],
+      [773, 'rg:'],
+    ] as const) {
+      const answered = await tapOn(message, data);
+      expect(answered.replyKey, data).not.toBeNull();
+      expect(edited(message), data).toHaveLength(1);
+      expect(methods(), data).not.toContain('sendMessage');
+    }
+  });
+
+  it('R12 F3: a stray message carries the main menu (no reply is a dead end)', async () => {
+    const stray = await type('چیزی نامفهوم', 4310);
+    expect(stray.replyKey).toBe('bot.unknown_command');
+    const sent = calls.find((call) => call.method === 'sendMessage');
+    expect(buttonsOf(sent)).toEqual(['mm:']);
+  });
+
+  /*
    * FIX-10 (batch 2026-10-10): the owner's rule end to end, through the bot and the server
    * together — the bot carries the raw text, the server judges it with the one contract
    * function, and every refusal is the same sentence. Uppercase is folded, never refused,

@@ -1,5 +1,5 @@
 {
-  "id": "619ad954-90e2-486d-a028-c993fd2ef356",
+  "id": "a392202f-62c6-402d-98f6-8fc3124c016a",
   "prevId": "0ea936cb-6b5f-449f-9292-99073ccb6ada",
   "version": "7",
   "dialect": "postgresql",
@@ -25114,6 +25114,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "files_only_delivery": {
+          "name": "files_only_delivery",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -26125,13 +26132,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": true
-        },
-        "requires_verified_phone": {
-          "name": "requires_verified_phone",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
         },
         "provider_unit_rate_minor": {
           "name": "provider_unit_rate_minor",

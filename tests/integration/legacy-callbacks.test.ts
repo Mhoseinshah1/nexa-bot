@@ -392,7 +392,8 @@ describe('Item 12: an old MirzaBot button, through the webhook', () => {
     expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
 
     // A message with no text at all (a sticker) is UNSUPPORTED like an unreadable tap, and
-    // still is not a tap: no stale sentence, no main-menu button.
+    // still is not a tap: no stale sentence. (R12 F3 item 3, "no dead ends", gives the
+    // unknown-command answer its main-menu button — the same way on, not the stale answer.)
     sent = [];
     const id = (updateId += 1);
     await inject({
@@ -411,7 +412,7 @@ describe('Item 12: an old MirzaBot button, through the webhook', () => {
       },
     });
     expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.unknown_command']);
-    expect(buttonsOf(lastMessage())).toEqual([]);
+    expect(buttonsOf(lastMessage()).map((button) => button.callback_data)).toEqual(['mm:']);
   });
 
   it('leaves a customer’s order in flight untouched by a legacy tap, and the order still payable', async () => {

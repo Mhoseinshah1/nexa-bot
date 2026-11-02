@@ -18,6 +18,7 @@ import {
   TELEGRAM_WEBHOOK_BODY_LIMIT_BYTES,
   telegramUpdateKey,
 } from '../../apps/api/src/surfaces/telegram/webhook.controller';
+import { perBotWebhookSecret } from '../../apps/api/src/modules/platform/tenancy/application/webhook-secret';
 
 const WEBHOOK_SECRET = 'a-sufficiently-long-secret';
 
@@ -177,6 +178,31 @@ describe('HTTP surface', () => {
         payload: { update_id: 2 },
       });
       expect(response.statusCode).toBe(401);
+    });
+
+    it("R12 F2: accepts the bot's own derived secret, and only for that bot", async () => {
+      // Past authentication, an empty body is refused by the schema (400) and writes
+      // nothing — so a 400 says the secret was accepted, a 401 that it was not.
+      const post = (botInstanceId: string, secret: string) =>
+        inject({
+          method: 'POST',
+          url: webhookUrl(botInstanceId),
+          headers: { [TELEGRAM_SECRET_TOKEN_HEADER]: secret, 'content-type': 'application/json' },
+          payload: '{}',
+        });
+      const own = perBotWebhookSecret(WEBHOOK_SECRET, BOT_A);
+      expect(own).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect((await post(BOT_A, own)).statusCode).toBe(400);
+      // The installation-wide secret still works: every existing registration uses it.
+      expect((await post(BOT_A, WEBHOOK_SECRET)).statusCode).toBe(400);
+      // Another bot's derived secret does not.
+      const other = perBotWebhookSecret(WEBHOOK_SECRET, SEED_IDS.botB1);
+      expect(other).not.toBe(own);
+      expect((await post(BOT_A, other)).statusCode).toBe(401);
+      // Nor does a secret derived from a different master.
+      expect(
+        (await post(BOT_A, perBotWebhookSecret('another-master-secret', BOT_A))).statusCode,
+      ).toBe(401);
     });
 
     it('refuses a malformed update before it reaches the write path', async () => {
@@ -376,7 +402,9 @@ describe('readiness when a dependency is down', () => {
   const ORIGIN = 'http://localhost:5173';
 
   beforeAll(async () => {
-    const config = testConfig();
+    // These cases watch readiness change from one request to the next; the anonymous
+    // verdict's reuse window is pinned by tests/unit/readiness-verdict-cache.test.ts.
+    const config = testConfig({ READINESS_CACHE_MS: '0' });
     await migrateOnce(config.DATABASE_URL);
     // An unreachable Redis, rather than stopping the shared one out from under
     // the other tests.

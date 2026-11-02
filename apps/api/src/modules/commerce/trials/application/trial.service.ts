@@ -221,6 +221,18 @@ export class TrialService {
   }
 
   /**
+   * Phase 4 PR-3 — whether the support AI may OFFER this customer the trial's deep link: the same
+   * rule as `availabilityFor` (the one allowance evaluator, a blocked customer refused, a panel
+   * that offers one), read-only. No permission is charged: like the support context's reads it is
+   * a READ about the conversation's own customer, made by `SYSTEM_JOB`, which holds no customer
+   * permission to borrow — and it decides nothing: the bot's `claim` decides again on the tap.
+   */
+  async eligibleForSupportOffer(scope: TenantContext, customerId: UserId): Promise<boolean> {
+    if ((await this.refusalBeforeWriting(scope, customerId)) !== null) return false;
+    return (await trialOffersFor(this.deps, scope)).length > 0;
+  }
+
+  /**
    * Take a trial for this customer. Idempotent by `idempotencyKey`.
    *
    * Every refusal is an ANSWER, not an error: the surface says one sentence for all of

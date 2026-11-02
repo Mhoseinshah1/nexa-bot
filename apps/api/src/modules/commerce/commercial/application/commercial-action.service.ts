@@ -52,6 +52,7 @@ import { rememberOnce } from '../../../platform/idempotency/application/remember
 import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
+import type { FeatureFlagResolver } from '../../../control/features/application/feature-flags.service.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { OperationalEventRecorder } from '@nexa/contracts';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
@@ -86,7 +87,10 @@ import {
   tierPriceGateOf,
   type ResellerService,
 } from '../../resellers/application/reseller.service.js';
-import type { PricingService } from '../../pricing/application/pricing.service.js';
+import type {
+  ListedPersonalDiscount,
+  PricingService,
+} from '../../pricing/application/pricing.service.js';
 import type { ServiceRecord, ServiceRepository } from '../../provisioning/application/ports.js';
 import { OPERATION_LEGAL_FROM } from '../../provisioning/application/provision-executor.js';
 import type { CommercialActionRecord, CommercialActionRepository } from './ports.js';
@@ -235,18 +239,27 @@ function withinPanelCap(
  * is read by id from the row the customer owns, the product or add-on is read from the
  * catalogue, and the amount comes out of `quoteProduct` with its mandatory trace.
  */
+/**
+ * R11 A9: an offered line with the personal discount its quote would carry — set only when
+ * the customer's personal discount wins that line's quote (`PricingService.
+ * personalListPrices`), and then `personalDiscount.price` is the total the quote charges.
+ * `price` stays what the offer showed before (the list price, or a reseller's offered
+ * price): the surface strikes it through beside the discounted one.
+ */
+export type Listed<T> = T & { readonly personalDiscount: ListedPersonalDiscount | null };
+
 export interface CommercialOffer {
   readonly kind: CommercialKind;
   /** The renewal's product, when this is a renewal of the service's own product. */
-  readonly product: ProductRecord | null;
+  readonly product: Listed<ProductRecord> | null;
   /**
    * An imported service's renewal (`renewsFromPanelPlans`): its panel's current sellable plans
    * the customer chooses from — possibly none, which the surface says in a sentence. Absent
    * for every other offer.
    */
-  readonly plans?: readonly ProductRecord[];
+  readonly plans?: readonly Listed<ProductRecord>[];
   /** The quantities on offer, when this is a quantity purchase. */
-  readonly addons: readonly ServiceAddonRecord[];
+  readonly addons: readonly Listed<ServiceAddonRecord>[];
   /** WP-A5: the extra-users offer, when this is one; null for every other kind. */
   readonly devices: DeviceOffer | null;
   /**
@@ -302,12 +315,14 @@ export interface CommercialActionServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   readonly outbox: OutboxWriter;
   readonly settings: SettingsResolver;
+  /** R11 B4: `location_remaining_display`, the switch for the remaining-changes line. */
+  readonly features: Pick<FeatureFlagResolver, 'isEnabled'>;
   /**
    * The pricing engine's door (WP8 P7): automatic rules and the cashback promise apply
    * to renewals and add-ons at draft time, and confirmation redeems them. Codes do not
    * reach this service — the commercial evidence row is written with the draft.
    */
-  readonly pricing: Pick<PricingService, 'price' | 'redeem'>;
+  readonly pricing: Pick<PricingService, 'price' | 'redeem' | 'personalListPrices'>;
   /** A buyer's reseller standing and entitlements (`docs/wp9-reseller-audit.md` R5, R6). */
   readonly resellers: Pick<
     ResellerService,
@@ -318,7 +333,7 @@ export interface CommercialActionServiceDeps {
    * the configured targets, the cooldown and the rolling limit — and the frozen change
    * request a paid move writes beside its order.
    */
-  readonly locations: Pick<LocationChangePolicy, 'offer' | 'decide'>;
+  readonly locations: Pick<LocationChangePolicy, 'offer' | 'decide' | 'remainingChanges'>;
   readonly locationChanges: Pick<LocationChangeRepository, 'create' | 'findByOrderId'>;
   readonly clock: Clock;
   readonly ids: IdGenerator;
@@ -376,14 +391,14 @@ export class CommercialActionService {
     if (kind === 'RENEW') {
       if (renewsFromPanelPlans(service)) {
         // An empty list is an answer, not a refusal: the surface says no plan is available.
-        const plans = await this.offeredRenewals(
+        const plans = await this.listedRenewals(
           scope,
           service,
           await this.panelRenewalPlans(scope, service),
         );
         return { kind, product: null, plans, addons: [], devices: null };
       }
-      const [product] = await this.offeredRenewals(scope, service, [
+      const [product] = await this.listedRenewals(scope, service, [
         await this.renewableProduct(scope, service),
       ]);
       return { kind, product: product ?? null, addons: [], devices: null };
@@ -397,7 +412,12 @@ export class CommercialActionService {
           'This service cannot be given more users right now.',
         );
       }
-      return { kind, product: null, addons: [devices.addon], devices };
+      return {
+        kind,
+        product: null,
+        addons: [{ ...devices.addon, personalDiscount: null }],
+        devices,
+      };
     }
 
     if (kind === 'CHANGE_LOCATION') {
@@ -408,7 +428,12 @@ export class CommercialActionService {
           'This service cannot be moved right now.',
         );
       }
-      return { kind, product: null, addons: [], devices: null, locations };
+      // R11 B4: the remaining-changes figure rides on the offer, so the flag withholds it here
+      // too (the bot's location screen and the mini app sheet read it from this offer).
+      const shown = (await this.deps.features.isEnabled(scope, 'location_remaining_display'))
+        ? locations
+        : { ...locations, remaining: null };
+      return { kind, product: null, addons: [], devices: null, locations: shown };
     }
 
     const offerable = await this.offerableAddons(
@@ -423,7 +448,12 @@ export class CommercialActionService {
         'Nothing of that kind is offered.',
       );
     }
-    return { kind, product: null, addons: offerable, devices: null };
+    return {
+      kind,
+      product: null,
+      addons: await this.listedAddons(scope, service, kind, offerable),
+      devices: null,
+    };
   }
 
   /**
@@ -520,6 +550,34 @@ export class CommercialActionService {
       if ((await this.offerableAddons(scope, service, kind, 1)).length > 0) available.push(kind);
     }
     return available;
+  }
+
+  /**
+   * R11 B4: the location changes this service has left, «۲ از ۳» — or null when the surface
+   * says nothing: a custom service, a state no move is legal from, a panel that cannot move
+   * accounts, a panel policy that switched `LOCATION_CHANGE` off, no enabled priced target, or
+   * no limit set — and always while the `location_remaining_display` flag is off (default).
+   *
+   * The same first three gates `availableFor` applies to `CHANGE_LOCATION` (state, the panel's
+   * capability, the policy row), so "enabled" means one thing; the count itself is
+   * `LocationChangePolicy.remainingChanges`, the evaluator's own figure. A read: it stays
+   * answerable at zero remaining, where `availableFor` has already withdrawn the button.
+   */
+  async locationChangesLeft(
+    scope: TenantContext,
+    actor: ActorContext,
+    service: ServiceRecord,
+  ): Promise<{ readonly remaining: number; readonly max: number } | null> {
+    await this.deps.guard.check(scope, actor, COMMERCIAL_ACTION_PERMISSION);
+    // The switch is OFF by default: with it off nothing below is read and no surface shows a line.
+    if (!(await this.deps.features.isEnabled(scope, 'location_remaining_display'))) return null;
+    if (service.productId === null) return null;
+    if (!OPERATION_LEGAL_FROM.CHANGE_LOCATION.includes(service.state)) return null;
+    const operable = await this.deps.panels.operability(scope, service.panelId, 'CHANGE_LOCATION');
+    if (!operable.ok) return null;
+    const policy = await this.deps.panelPolicy.forPanel(scope, service.panelId);
+    if (!commercialPolicyAllows(policy, 'CHANGE_LOCATION')) return null;
+    return this.deps.locations.remainingChanges(scope, service);
   }
 
   /**
@@ -1788,6 +1846,76 @@ export class CommercialActionService {
       const price = offered.get(product.id) ?? null;
       return price === null ? [] : [{ ...product, price }];
     });
+  }
+
+  /**
+   * R11 A9: the renewal offer with the personal discount each line's quote would carry.
+   *
+   * Priced from each product's LIST price — the base `quoteRenewal` hands
+   * `PricingService.price` — in one `personalListPrices` read for the whole offer, and
+   * joined onto `offeredRenewals`' lines (which may carry a reseller's offered price) by id.
+   */
+  private async listedRenewals(
+    scope: TenantContext,
+    service: ServiceRecord,
+    items: readonly ProductRecord[],
+  ): Promise<readonly Listed<ProductRecord>[]> {
+    const now = this.deps.clock.now();
+    const personal = await this.deps.pricing.personalListPrices(scope, {
+      purpose: 'RENEW',
+      customerId: service.customerId,
+      now,
+      items: items.flatMap((product) =>
+        product.price === null
+          ? []
+          : [
+              {
+                id: product.id,
+                base: quoteProduct(product, product.price, MAX_ORDER_QUANTITY, now),
+                productId: product.id,
+                categoryId: product.categoryId,
+              },
+            ],
+      ),
+    });
+    return (await this.offeredRenewals(scope, service, items)).map((product) => ({
+      ...product,
+      personalDiscount: personal.get(product.id) ?? null,
+    }));
+  }
+
+  /**
+   * R11 A9: the traffic / time packages with the personal discount each one's quote would
+   * carry, priced exactly as `quoteAddon` prices the draft — `quoteAddon(price)`, no product,
+   * no category. `PERSONAL_DISCOUNT_PURPOSES` holds neither kind today (OQ-R10-D3-02), so
+   * the boundary answers "none" without a read and the list is unchanged; asked anyway, so
+   * the list follows the invoice the day the owner widens it.
+   */
+  private async listedAddons(
+    scope: TenantContext,
+    service: ServiceRecord,
+    kind: 'ADD_TRAFFIC' | 'ADD_TIME',
+    addons: readonly ServiceAddonRecord[],
+  ): Promise<readonly Listed<ServiceAddonRecord>[]> {
+    const now = this.deps.clock.now();
+    const personal = await this.deps.pricing.personalListPrices(scope, {
+      purpose: kind,
+      customerId: service.customerId,
+      now,
+      items: addons.flatMap((addon) =>
+        addon.price === null
+          ? []
+          : [
+              {
+                id: addon.id,
+                base: quoteAddon(addon.price, now),
+                productId: null,
+                categoryId: null,
+              },
+            ],
+      ),
+    });
+    return addons.map((addon) => ({ ...addon, personalDiscount: personal.get(addon.id) ?? null }));
   }
 
   /**

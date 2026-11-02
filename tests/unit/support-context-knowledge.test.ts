@@ -1,3 +1,4 @@
+import { I18nSupportFactFormatter } from '../../apps/api/src/modules/commerce/support-context/infrastructure/i18n-support-fact-formatter';
 import { describe, expect, it } from 'vitest';
 import {
   SUPPORT_CONTEXT_KNOWLEDGE_RESERVE_BYTES,
@@ -138,6 +139,7 @@ function deps(over: {
       activeForContext: async (_scope, limit) => (over.articles ?? []).slice(0, limit),
     },
     settings: { valueOf: async <T>() => ['@support'] as unknown as T },
+    format: new I18nSupportFactFormatter(),
     clock,
   } as SupportContextBuilderDeps;
 }
@@ -206,7 +208,7 @@ describe('D2 — the knowledge reserve in the byte budget', () => {
         state: 'PAID' as const,
         purpose: 'NEW_SERVICE' as const,
         title: 'ب'.repeat(256),
-        total: { amountMinor: '250000', currency: 'IRT' as const },
+        total: { amountMinor: '250000', currency: 'IRT' as const, formatted: '250,000 تومان' },
         createdAt: NOW.toISOString(),
         settledAt: null,
         expiresAt: null,
@@ -218,8 +220,11 @@ describe('D2 — the knowledge reserve in the byte budget', () => {
         alias: `K${String(i + 1)}`,
         source: 'KNOWLEDGE' as const,
         question: `k${String(i)}`,
-        answer: persian('متن', 2500),
+        // Phase 4 PR-2: the budget is 44 KiB, so the answers are long enough to overflow it.
+        answer: persian('متن', 4000),
       })),
+      catalogue: [],
+      addons: [],
       supportAccounts: [],
       flags: {
         hasUnderReviewPayment: false,
@@ -244,8 +249,9 @@ describe('D2 — the knowledge reserve in the byte budget', () => {
 
   it('under a budget that holds only the reserve, every other family goes first', () => {
     const big = bigPayload();
-    const fitted = fitPayload(big, 10 * 1024);
-    expect(payloadBytes(fitted)).toBeLessThanOrEqual(10 * 1024);
+    // Phase 4 PR-2: a budget just under the reserve plus the orders (the reserve is 26 KiB).
+    const fitted = fitPayload(big, 24 * 1024);
+    expect(payloadBytes(fitted)).toBeLessThanOrEqual(24 * 1024);
     // The orders gave way, and knowledge stopped at its reserve: the largest prefix within it.
     expect(fitted.orders.length).toBeLessThan(big.orders.length);
     const bytes = (n: number) =>
@@ -301,7 +307,8 @@ describe('D2 — the builder over realistic sizes', () => {
   it('the budget was really under pressure: the uncut candidates do not fit', async () => {
     const all = realisticArticles();
     const raw = new TextEncoder().encode(JSON.stringify(all)).length;
-    expect(raw).toBeGreaterThan(SUPPORT_CONTEXT_MAX_BYTES * 2);
+    // Phase 4 PR-2: the budget is 44 KiB (was 24); twenty 1,500-character articles still overflow it.
+    expect(raw).toBeGreaterThan(SUPPORT_CONTEXT_MAX_BYTES);
   });
 
   it('a client app whose guide a selected article carries is sent without its guide', async () => {

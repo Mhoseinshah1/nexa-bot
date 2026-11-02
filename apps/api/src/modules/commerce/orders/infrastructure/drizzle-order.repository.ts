@@ -58,6 +58,33 @@ import type {
 } from '../application/ports.js';
 
 /**
+ * The payment states that keep an `AWAITING_PAYMENT` order OPEN past its deadline — ONE list,
+ * read by the expiry sweep (`expireDue`) and by `livePaymentOf`, so what the sweep keeps and
+ * what a customer is told about it can never be two answers (R12 F3 item 9, OQ-R11-A11-04).
+ *
+ * `settled`: a confirmed payment (its settlement is the same transaction's business).
+ * `live`: a payment still in flight — a transfer whose receipt is under review, a provider
+ * attempt pending, an `UNKNOWN` (money very probably sent, waiting for an operator).
+ */
+export const ORDER_HELD_OPEN_BY_PAYMENT = {
+  settled: ['CONFIRMED'],
+  live: ['PENDING', 'UNKNOWN'],
+} as const;
+
+/** `EXISTS` a payment of the outer `orders` row in one of `states`. */
+function orderHasPaymentIn(states: readonly string[]): SQL {
+  return sql`EXISTS (
+      SELECT 1 FROM payments held
+       WHERE held.tenant_id = ${orders.tenantId}
+         AND held.order_id = ${orders.id}
+         AND held.state IN (${sql.join(
+           states.map((state) => sql`${state}`),
+           sql`, `,
+         )})
+    )`;
+}
+
+/**
  * Orders, in PostgreSQL.
  *
  * Every query carries `eq(orders.tenantId, …)`, primary-key lookups included, for the
@@ -321,6 +348,30 @@ export class DrizzleOrderRepository implements OrderRepository {
     return rows.length > 0;
   }
 
+  /** R12 F3 item 9: the payment that keeps an order open past its deadline (see the port). */
+  async livePaymentOf(
+    scope: TenantContext,
+    orderId: OrderId,
+    tx?: unknown,
+  ): Promise<{ readonly paymentId: string } | null> {
+    const tenantId = requireTenantId(scope);
+    const states = [...ORDER_HELD_OPEN_BY_PAYMENT.settled, ...ORDER_HELD_OPEN_BY_PAYMENT.live];
+    // The same states the sweep keeps an order for, newest first: a confirmed payment is the
+    // one the order is waiting on, otherwise the latest one still in flight.
+    const result = await this.exec(tx).execute(sql`
+      SELECT p.id FROM payments p
+       WHERE p.tenant_id = ${tenantId}
+         AND p.order_id = ${orderId}
+         AND p.state IN (${sql.join(
+           states.map((state) => sql`${state}`),
+           sql`, `,
+         )})
+       ORDER BY (p.state = 'CONFIRMED') DESC, p.created_at DESC, p.id DESC
+       LIMIT 1`);
+    const row = result.rows[0] as { id: string } | undefined;
+    return row === undefined ? null : { paymentId: row.id };
+  }
+
   /**
    * The `EXPIRE` edge from `AWAITING_PAYMENT`, as a bounded set. The sweep's half.
    *
@@ -345,12 +396,7 @@ export class DrizzleOrderRepository implements OrderRepository {
     const tenantId = requireTenantId(scope);
     if (limit <= 0) return [];
 
-    const noConfirmedPayment = sql`NOT EXISTS (
-      SELECT 1 FROM payments settled
-       WHERE settled.tenant_id = ${orders.tenantId}
-         AND settled.order_id = ${orders.id}
-         AND settled.state = 'CONFIRMED'
-    )`;
+    const noConfirmedPayment = sql`NOT ${orderHasPaymentIn(ORDER_HELD_OPEN_BY_PAYMENT.settled)}`;
 
     /*
      * An order with a payment still live is NOT expired, and this is what makes the
@@ -381,12 +427,7 @@ export class DrizzleOrderRepository implements OrderRepository {
      * order would release its username hold and leave that confirmation nothing to settle.
      * Nothing else produces `UNKNOWN`, so every other route is unchanged.
      */
-    const noLivePayment = sql`NOT EXISTS (
-      SELECT 1 FROM payments live
-       WHERE live.tenant_id = ${orders.tenantId}
-         AND live.order_id = ${orders.id}
-         AND live.state IN ('PENDING', 'UNKNOWN')
-    )`;
+    const noLivePayment = sql`NOT ${orderHasPaymentIn(ORDER_HELD_OPEN_BY_PAYMENT.live)}`;
 
     const due = this.exec(tx)
       .select({ id: orders.id })

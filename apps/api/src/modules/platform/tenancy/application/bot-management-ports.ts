@@ -25,9 +25,11 @@ export interface BotManagementRecord {
   readonly webhookRegisteredAt: Date | null;
   readonly webhookUrl: string | null;
   /**
-   * Whether the registered secret's digest equals `currentFingerprint`, computed in SQL.
+   * Whether the registered secret's digest is one the receiver accepts for THIS bot now —
+   * its own (`perBotWebhookSecret`) or, in the rotation window, the installation-wide one
+   * (R12 F2 item 7) — computed in SQL.
    *
-   * The repository is handed the current digest and answers with the comparison, so the
+   * The repository is handed the expected digests and answers with the comparison, so the
    * stored digest never leaves the database. NULL when the column is NULL (unknown).
    */
   readonly webhookSecretMatches: boolean | null;
@@ -43,16 +45,27 @@ export interface BotManagementRecord {
   };
 }
 
+/**
+ * The digests a registered secret is compared with (R12 F2 item 7). Digests only: the
+ * secrets themselves never reach the repository.
+ */
+export interface ExpectedWebhookSecretDigests {
+  /** The installation-wide secret's digest: what a registration made before R12 records. */
+  readonly installation: string;
+  /** The digest of this bot's OWN secret: what every registration since records. */
+  readonly perBot: (botInstanceId: BotInstanceId) => string;
+}
+
 export interface BotManagementRepository {
   /** The tenant's bots, oldest first — the order `activeTokenForTenant` resolves in. */
   listManaged(
     scope: ScopeContext,
-    currentFingerprint: string | null,
+    expected: ExpectedWebhookSecretDigests | null,
   ): Promise<BotManagementRecord[]>;
   findManaged(
     scope: ScopeContext,
     id: BotInstanceId,
-    currentFingerprint: string | null,
+    expected: ExpectedWebhookSecretDigests | null,
     tx?: unknown,
   ): Promise<BotManagementRecord | null>;
   /** Takes the bot row `FOR UPDATE` and answers its status and identity under the lock. */

@@ -324,11 +324,26 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: null,
     confirmEnable: null,
   },
+  // R11 B3: the mini app's invited-friends list. Read-only, no money moves and nothing is sent, so
+  // neither switching it on nor off asks, and off only hides the section.
+  referral_friends_list: {
+    title: 'web.feature_referral_friends_list_title',
+    summary: 'web.feature_referral_friends_list_summary',
+    disableEffect: null,
+    confirmEnable: null,
+  },
   // Round 10, D1: off stops every automatic renewal at once; customers who opted in are not renewed.
   service_auto_renew: {
     title: 'web.feature_service_auto_renew_title',
     summary: 'web.feature_service_auto_renew_summary',
     disableEffect: 'web.feature_service_auto_renew_off_effect',
+    confirmEnable: null,
+  },
+  // R11 B4: one line of text on two screens; off hides it and nothing is lost.
+  location_remaining_display: {
+    title: 'web.feature_location_remaining_display_title',
+    summary: 'web.feature_location_remaining_display_summary',
+    disableEffect: null,
     confirmEnable: null,
   },
 };

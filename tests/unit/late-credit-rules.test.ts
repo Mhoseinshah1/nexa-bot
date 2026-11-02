@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PAYMENT_GATEWAY_DESCRIPTORS, PAYMENT_GATEWAY_PROVIDERS } from '@nexa/contracts';
 import {
+  cancelledAttemptPollingOpen,
   LATE_CREDIT_POLL_BACKOFF_MS,
   lateCreditAmountMatches,
   lateCreditPollAt,
@@ -29,11 +30,23 @@ describe('lateCreditStateDecision', () => {
   const at = (
     state: Parameters<typeof lateCreditStateDecision>[0]['state'],
     deadline: Date | null,
-  ) => lateCreditStateDecision({ state, deadline, now: T0 });
+    orderAwaitingPayment?: boolean | null,
+  ) =>
+    lateCreditStateDecision(
+      orderAwaitingPayment === undefined
+        ? { state, deadline, now: T0 }
+        : { state, deadline, now: T0, orderAwaitingPayment },
+    );
 
-  it('credits an EXPIRED or UNKNOWN payment', () => {
-    expect(at('EXPIRED', new Date(T0.getTime() - 1))).toEqual({ creditable: true });
-    expect(at('UNKNOWN', new Date(T0.getTime() + HOUR))).toEqual({ creditable: true });
+  it('credits an EXPIRED or UNKNOWN payment as a LATE approval (behind the switch)', () => {
+    expect(at('EXPIRED', new Date(T0.getTime() - 1))).toEqual({
+      creditable: true,
+      basis: 'LATE_APPROVAL',
+    });
+    expect(at('UNKNOWN', new Date(T0.getTime() + HOUR))).toEqual({
+      creditable: true,
+      basis: 'LATE_APPROVAL',
+    });
   });
 
   it('credits a PENDING payment only once its deadline has passed — at it counts as past', () => {
@@ -41,16 +54,61 @@ describe('lateCreditStateDecision', () => {
       creditable: false,
       reason: 'STILL_PAYABLE',
     });
-    expect(at('PENDING', T0)).toEqual({ creditable: true });
-    expect(at('PENDING', new Date(T0.getTime() - 1))).toEqual({ creditable: true });
+    expect(at('PENDING', T0)).toEqual({ creditable: true, basis: 'LATE_APPROVAL' });
+    expect(at('PENDING', new Date(T0.getTime() - 1))).toEqual({
+      creditable: true,
+      basis: 'LATE_APPROVAL',
+    });
     // A null deadline is "past", never "none".
-    expect(at('PENDING', null)).toEqual({ creditable: true });
+    expect(at('PENDING', null)).toEqual({ creditable: true, basis: 'LATE_APPROVAL' });
   });
 
-  it('never credits a CONFIRMED, FAILED or CANCELLED payment', () => {
+  it('R12 F1: RETURNS the money of a CANCELLED attempt, before or after its deadline', () => {
+    expect(at('CANCELLED', new Date(T0.getTime() + HOUR))).toEqual({
+      creditable: true,
+      basis: 'RETURNED',
+    });
+    expect(at('CANCELLED', new Date(T0.getTime() - HOUR))).toEqual({
+      creditable: true,
+      basis: 'RETURNED',
+    });
+    expect(at('CANCELLED', null)).toEqual({ creditable: true, basis: 'RETURNED' });
+  });
+
+  it('R12 F1: RETURNS a PENDING payment inside its deadline only when its order no longer awaits payment', () => {
+    const inside = new Date(T0.getTime() + HOUR);
+    expect(at('PENDING', inside, false)).toEqual({ creditable: true, basis: 'RETURNED' });
+    // Awaiting payment: the ordinary settlement owns it. Not read (a top-up): never "not awaiting".
+    for (const awaiting of [true, null, undefined]) {
+      expect(at('PENDING', inside, awaiting)).toEqual({
+        creditable: false,
+        reason: 'STILL_PAYABLE',
+      });
+    }
+    // Past its deadline it is a late approval whatever the order says.
+    expect(at('PENDING', T0, false)).toEqual({ creditable: true, basis: 'LATE_APPROVAL' });
+  });
+
+  it('never credits a CONFIRMED or FAILED payment', () => {
     expect(at('CONFIRMED', null)).toEqual({ creditable: false, reason: 'ALREADY_CONFIRMED' });
     expect(at('FAILED', null)).toEqual({ creditable: false, reason: 'PAYMENT_CLOSED' });
-    expect(at('CANCELLED', null)).toEqual({ creditable: false, reason: 'PAYMENT_CLOSED' });
+    expect(at('FAILED', null, false)).toEqual({ creditable: false, reason: 'PAYMENT_CLOSED' });
+  });
+});
+
+describe('cancelledAttemptPollingOpen (R12 F1)', () => {
+  it('asks about a CANCELLED attempt until its own deadline, and no longer', () => {
+    const deadline = new Date(T0.getTime() + HOUR);
+    expect(cancelledAttemptPollingOpen({ state: 'CANCELLED', now: T0, deadline })).toBe(true);
+    expect(cancelledAttemptPollingOpen({ state: 'CANCELLED', now: deadline, deadline })).toBe(
+      false,
+    );
+    expect(cancelledAttemptPollingOpen({ state: 'CANCELLED', now: T0, deadline: null })).toBe(
+      false,
+    );
+    for (const state of ['PENDING', 'EXPIRED', 'FAILED', 'CONFIRMED', 'UNKNOWN']) {
+      expect(cancelledAttemptPollingOpen({ state, now: T0, deadline })).toBe(false);
+    }
   });
 });
 

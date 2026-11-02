@@ -15,6 +15,15 @@
  * simple rule can make them.
  */
 
+import { expandQueryText, normalizePersian, PROTECTED_WORDS } from './persian-text.js';
+
+/**
+ * Phase 4 PR-2: the folding is `normalizePersian` (shared with the learning dedupe); a protected
+ * word is never stemmed («کارت» stays «کارت», never «کار»); and a QUERY's text is expanded with
+ * its Finglish words' Persian forms and the VPN synonym groups before it is split
+ * (`expandQueryText`), so «vasl nemishe», «کار نمی‌کنه» and «قطعه» meet the connection article.
+ */
+
 /**
  * A8 — one part of a weighted query: its text and how much a term of it counts. A term in two
  * parts counts at the higher weight, once. `titleAndTagsOnly` (PR #236 review, N4): the part's
@@ -56,7 +65,7 @@ function queryTerms(query: KnowledgeQuery): ReadonlyMap<string, QueryTerm> {
     .map((part) => ({
       weight: part.weight,
       body: part.titleAndTagsOnly !== true,
-      terms: [...matchTerms(part.text)],
+      terms: [...matchTerms(expandQueryText(part.text))],
     }));
   const terms = new Map<string, QueryTerm>();
   const take = (part: (typeof parts)[number], limit: number) => {
@@ -210,27 +219,14 @@ const SUFFIXES = [
 /** Verb prefixes stripped from the START: «نمی‌شود» → «شود», «می‌زنم» → «زنم». */
 const PREFIXES = ['نمی', 'می'];
 
-/** A text folded for matching: lower case, Persian letters, no joiners, no diacritics. */
+/** A text folded for matching: Phase 4 PR-2, the one shared normaliser (`normalizePersian`). */
 export function foldForMatching(text: string): string {
-  return (
-    text
-      .normalize('NFKC')
-      .toLowerCase()
-      // Arabic yeh and alef maksura, kaf, teh marbuta, hamza-carrying alefs → Persian forms.
-      .replace(/[\u064A\u0649]/gu, '\u06CC')
-      .replace(/\u0643/gu, '\u06A9')
-      .replace(/\u0629/gu, '\u0647')
-      .replace(/[\u0622\u0623\u0625\u0671]/gu, '\u0627')
-      // Diacritics, tatweel, ZWNJ and the other zero-width characters.
-      .replace(/[\u064B-\u065F\u0670\u0640]/gu, '')
-      .replace(/[\u200B-\u200F\u2060\uFEFF]/gu, '')
-      // Persian and Arabic-Indic digits to ASCII.
-      .replace(/[\u06F0-\u06F9]/gu, (d) => String(d.charCodeAt(0) - 0x06f0))
-      .replace(/[\u0660-\u0669]/gu, (d) => String(d.charCodeAt(0) - 0x0660))
-  );
+  return normalizePersian(text);
 }
 
-function stem(word: string): string {
+export function stem(word: string): string {
+  // Phase 4 PR-2: an ending that is part of the word is not an inflection.
+  if (PROTECTED_WORDS.has(word)) return word;
   let out = word;
   for (const prefix of PREFIXES) {
     if (out.startsWith(prefix) && out.length - prefix.length >= 3) {
@@ -238,8 +234,16 @@ function stem(word: string): string {
       break;
     }
   }
+  // A prefix strip may uncover a protected word: «نمی‌پرداخت» → «پرداخت», kept whole.
+  if (PROTECTED_WORDS.has(out)) return out;
   for (const suffix of SUFFIXES) {
     if (out.endsWith(suffix) && out.length - suffix.length >= 3) {
+      // «کارتم» → «کارت», never «کارت» → «کار»: a strip that would cut into a protected word
+      // stops at it.
+      const cut = out.slice(0, -suffix.length);
+      if ([...PROTECTED_WORDS].some((word) => out.startsWith(word) && cut.length < word.length)) {
+        continue;
+      }
       out = out.slice(0, -suffix.length);
       break;
     }

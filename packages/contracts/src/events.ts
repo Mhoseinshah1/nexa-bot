@@ -508,6 +508,14 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     entryId: z.string(),
     amountMinor: z.string(),
     currency: z.string(),
+    /*
+     * R12 F1: WHY the money went to the wallet. `LATE_APPROVAL` is R5A's late credit (behind the
+     * route's switch); `RETURNED` is money the provider confirmed for an attempt that could no
+     * longer pay its order — the attempt was cancelled, or the order was already paid another
+     * way — returned whatever the switch says. Optional: an event written before R12 is a
+     * `LATE_APPROVAL`, and an older consumer ignores the field.
+     */
+    basis: z.enum(['LATE_APPROVAL', 'RETURNED']).optional(),
   }),
   /*
    * R9 C1. Ids and closed vocabularies only — never an amount the provider reported, a card
@@ -699,7 +707,7 @@ export const EVENT_PAYLOAD_SCHEMAS = {
   TicketMessagePosted: z.object({
     ticketId: z.string(),
     messageId: z.string(),
-    senderType: z.enum(['CUSTOMER', 'ADMIN']),
+    senderType: z.enum(['CUSTOMER', 'ADMIN', 'AI']),
   }),
   TicketStatusChanged: z.object({
     ticketId: z.string(),

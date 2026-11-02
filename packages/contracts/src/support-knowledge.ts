@@ -305,6 +305,17 @@ export const supportLearningCandidateViewSchema = z.object({
   provider: z.enum(SUPPORT_AI_PROVIDERS).nullable(),
   model: z.string().nullable(),
   articleId: z.string().nullable(),
+  /**
+   * Phase 4 PR-2 «جایگزین پاسخ تأییدشده»: the approved LEARNED article this lesson would
+   * replace — the same lesson (by normalised title) was approved before. Approving the candidate
+   * writes a new revision of that article instead of a second one; null for a new lesson.
+   */
+  replacesArticleId: z.string().nullable(),
+  /**
+   * Phase 4 PR-2: the source reply was an AI draft a person sent (Assist), not a person's own
+   * words — flagged so the reviewer checks it is not the AI teaching itself.
+   */
+  assisted: z.boolean(),
   version: z.number().int().min(1),
   createdAt: z.string(),
   reviewedAt: z.string().nullable(),

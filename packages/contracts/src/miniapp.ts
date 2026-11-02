@@ -8,6 +8,7 @@ import { TICKET_MESSAGE_MAX_LENGTH, TICKET_STATUSES } from './tickets.js';
 import { CLIENT_APP_PLATFORMS } from './client-apps.js';
 import { LEDGER_DIRECTIONS, LEDGER_REASONS } from './ledger.js';
 import { GIFT_CARD_CODE_INPUT_MAX_LENGTH } from './gift-cards.js';
+import { QR_PAYLOAD_KINDS } from './panel-qr.js';
 
 /**
  * The customer's Telegram Mini App (Round 9, C5): its paths, its wire shapes and its bounds.
@@ -109,6 +110,8 @@ export const MINIAPP_ROUTES = {
   services: '/services',
   service: '/services/:serviceId',
   serviceQr: '/services/:serviceId/qr',
+  // R11 A4: one named QR of a service (`SUB_LINK` or `SINGBOX`) on a panel that offers both.
+  serviceQrKind: '/services/:serviceId/qr/:kind',
   serviceOffer: '/services/:serviceId/offers/:kind',
   serviceQuote: '/services/:serviceId/quotes',
   serviceLocations: '/services/:serviceId/locations',
@@ -122,6 +125,8 @@ export const MINIAPP_ROUTES = {
   /** R10 D4: redeem a gift card into the wallet. */
   walletGiftCard: '/wallet/gift-card',
   referral: '/referral',
+  /** R11 B3: the customer's own invited friends (a keyset page), behind `referral_friends_list`. */
+  referralFriends: '/referral/friends',
   trial: '/trial',
   ticketCategories: '/ticket-categories',
   tickets: '/tickets',
@@ -221,10 +226,25 @@ export const miniAppCategoriesResponseSchema = z.object({
 });
 export type MiniAppCategoriesResponse = z.infer<typeof miniAppCategoriesResponseSchema>;
 
+/**
+ * R11 A9: the personal discount a listed line carries (R10 D3) — set only when the
+ * customer's personal discount wins that line's quote at the pricing boundary, and then
+ * `price` is the total the checkout quotes. The line's own `price` stays what the list
+ * showed before (struck through beside this one). Null everywhere else: no percent, the
+ * flag off, a purpose it does not apply to, or another single discount as large or larger.
+ */
+export const miniAppListedPersonalDiscountSchema = z.object({
+  percent: z.number().int().min(1).max(100),
+  price: moneySchema,
+});
+export type MiniAppListedPersonalDiscount = z.infer<typeof miniAppListedPersonalDiscountSchema>;
+
 export const miniAppProductSchema = z.object({
   id: idSchema,
   title: z.string(),
   price: moneySchema,
+  /** R11 A9. Defaulted so a client meeting an older server reads "none". */
+  personalDiscount: miniAppListedPersonalDiscountSchema.nullable().default(null),
   trafficBytes: bytesSchema,
   durationDays: z.number().int(),
   /** The device limit the plan is sold with; null when the plan does not limit devices. */
@@ -520,6 +540,18 @@ export const miniAppAutoRenewRequestSchema = z.object({
   expected: moneySchema.optional(),
 });
 
+/**
+ * R11 B4: how many location changes a service still has, «۲ از ۳». Present ONLY where location
+ * change is enabled for the service AND a limit (changes per period) is set; null otherwise, and
+ * the app then says nothing about it. `remaining` is read through the same window the server
+ * enforces a request with, so 0 means the next request is refused with the limit sentence.
+ */
+export const miniAppLocationRemainingSchema = z.object({
+  remaining: z.number().int().min(0),
+  max: z.number().int().min(0),
+});
+export type MiniAppLocationRemaining = z.infer<typeof miniAppLocationRemainingSchema>;
+
 export const miniAppServiceDetailSchema = miniAppServiceSummarySchema.extend({
   /** The subscription link, only while the service is deliverable. A secret: never logged. */
   subscriptionUrl: z.string().nullable(),
@@ -529,8 +561,16 @@ export const miniAppServiceDetailSchema = miniAppServiceSummarySchema.extend({
   actions: z.array(z.enum(MINIAPP_SERVICE_ACTIONS)),
   /** Whether a QR of the link can be fetched (`MINIAPP_ROUTES.serviceQr`). */
   qr: z.boolean(),
+  /**
+   * R11 A4: the QRs the sheet shows, in order — `SUB_LINK`, `SINGBOX`, both or none (none on a
+   * files-only panel). Each is fetched from `MINIAPP_ROUTES.serviceQrKind`. `qr` above stays
+   * true exactly when this is not empty.
+   */
+  qrKinds: z.array(z.enum(QR_PAYLOAD_KINDS)),
   /** Whether the location sheet has anything to offer now (`CHANGE_LOCATION` is available). */
   canChangeLocation: z.boolean(),
+  /** R11 B4: the remaining location changes, or null (disabled, or no limit set). */
+  locationRemaining: miniAppLocationRemainingSchema.nullable(),
   /** Round 10, D1: «تمدید خودکار» for this service (`MINIAPP_ROUTES.serviceAutoRenew`). */
   autoRenew: miniAppAutoRenewSchema,
 });
@@ -545,6 +585,8 @@ export const miniAppServiceOfferSchema = z.object({
       planId: idSchema.nullable(),
       title: z.string(),
       price: moneySchema,
+      /** R11 A9, as on a product. Defaulted so a client meeting an older server reads "none". */
+      personalDiscount: miniAppListedPersonalDiscountSchema.nullable().default(null),
     }),
   ),
 });
@@ -559,11 +601,13 @@ export const miniAppServiceQuoteRequestSchema = z.object({
 /**
  * The location sheet's read: where the service is and the configured targets it may be moved
  * to, each with its price (zero is free). The server's offer already leaves out every target
- * the cooldown and the rolling limit refuse; it exposes no remaining count, no
- * recommendation and no per-target capacity, and neither does this.
+ * the cooldown and the rolling limit refuse. R11 B4 adds the remaining count
+ * (`remaining`, null when no limit is set); it still exposes no recommendation and no per-target
+ * capacity, and neither does this.
  */
 export const miniAppServiceLocationsSchema = z.object({
   current: z.object({ label: z.string() }),
+  remaining: miniAppLocationRemainingSchema.nullable(),
   targets: z.array(z.object({ id: idSchema, label: z.string(), price: moneySchema })),
 });
 export type MiniAppServiceLocations = z.infer<typeof miniAppServiceLocationsSchema>;
@@ -677,6 +721,68 @@ export const miniAppReferralResponseSchema = z.discriminatedUnion('active', [
 ]);
 export type MiniAppReferralResponse = z.infer<typeof miniAppReferralResponseSchema>;
 
+/**
+ * R11 B3: the invited-friends list. One page is this many friends, and there is no way to ask
+ * for more: the route takes a cursor and nothing else, so a client cannot widen it.
+ */
+export const MINIAPP_REFERRAL_FRIENDS_PAGE_SIZE = 20;
+
+/**
+ * Where one invited friend stands, as ONE word, from the customer's side. Exclusive, and in
+ * this order of precedence: a reward paid beats a reward pending beats a purchase beats the
+ * join.
+ *
+ * - `JOINED`: the friend arrived through the link and has no delivered paid purchase yet;
+ * - `PURCHASED`: the friend has a delivered paid purchase and no purchase commission is
+ *   pending or paid for them (a program that pays nothing for them, a commission voided, or
+ *   one that came to nothing);
+ * - `REWARD_PENDING`: a purchase commission is promised and waits for delivery, or for the
+ *   referrer's daily cap to roll over (`rewardNotBefore`);
+ * - `REWARD_PAID`: a purchase commission was earned and credited.
+ *
+ * Only the purchase commission is read. The membership gift is claimed by its own button and
+ * is not a status here.
+ */
+export const MINIAPP_REFERRAL_FRIEND_STATUSES = [
+  'JOINED',
+  'PURCHASED',
+  'REWARD_PENDING',
+  'REWARD_PAID',
+] as const;
+export type MiniAppReferralFriendStatus = (typeof MINIAPP_REFERRAL_FRIEND_STATUSES)[number];
+
+/**
+ * The list, or the word that the feature is off. A friend is drawn by `displayName` only: a
+ * first name, or a username with the middle hidden, or null (then the screen says «دوست
+ * شما»). There is no id, no Telegram id, no phone and no last name in this shape, so nothing
+ * on the wire can leak one. `counts` are over ALL the customer's friends, not just this page,
+ * and add up to `friends`, which is the figure the screen already shows as «دعوت‌شده».
+ */
+export const miniAppReferralFriendsResponseSchema = z.discriminatedUnion('enabled', [
+  z.object({ enabled: z.literal(false) }),
+  z.object({
+    enabled: z.literal(true),
+    counts: z.object({
+      friends: z.number().int(),
+      joined: z.number().int(),
+      purchased: z.number().int(),
+      rewardPending: z.number().int(),
+      rewardPaid: z.number().int(),
+    }),
+    items: z.array(
+      z.object({
+        displayName: z.string().nullable(),
+        joinedAt: isoSchema,
+        status: z.enum(MINIAPP_REFERRAL_FRIEND_STATUSES),
+        /** A pending reward held back until this instant (the referrer's daily cap), else null. */
+        rewardNotBefore: isoSchema.nullable(),
+      }),
+    ),
+    nextCursor: z.string().nullable(),
+  }),
+]);
+export type MiniAppReferralFriendsResponse = z.infer<typeof miniAppReferralFriendsResponseSchema>;
+
 export const miniAppTrialResponseSchema = z.object({
   offers: z.array(
     z.object({
@@ -724,8 +830,8 @@ export const miniAppTicketsResponseSchema = z.object({
 export const miniAppTicketDetailSchema = miniAppTicketSummarySchema.extend({
   messages: z.array(
     z.object({
-      /** Who wrote it: the customer, or support. */
-      author: z.enum(['CUSTOMER', 'SUPPORT']),
+      /** Who wrote it: the customer, support, or (Phase 4 PR-4) the support assistant. */
+      author: z.enum(['CUSTOMER', 'SUPPORT', 'AI']),
       text: z.string().nullable(),
       /** A Telegram file was attached; it is seen in the bot, not here. */
       hasAttachment: z.boolean(),

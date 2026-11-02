@@ -104,9 +104,11 @@ them with the rest. See `docs/deployment.md`.
   provider's breaker for five minutes. The chain skips it and uses the next step.
 - After five minutes ONE caller probes it. An `OK` closes the breaker. A failure re-opens it.
 - With no provider answering, Assist drafts fail («این بار پیش‌نویسی آماده نشد»). Every automatic job
-  hands off (`AI_UNAVAILABLE`) and a person answers. Nothing is queued to be sent later, and
-  **the customer is sent nothing at all** — no automatic «a colleague will answer» message
-  exists. They wait, in silence, for a person.
+  hands off (`AI_UNAVAILABLE`) and a person answers. Nothing is queued to be sent later. **The
+  customer IS told once:** every handoff, this one included, sends the template
+  `bot.support.handoff_notice` («پیامت برای بررسی دقیق‌تر به پشتیبان منتقل شد…», §16) from the
+  business account — unless a person took the conversation first, the mode was switched OFF, or
+  it is held past 10 minutes. Beyond that notice nothing more is sent: they wait for a person.
 
 **What to do:**
 
@@ -558,3 +560,46 @@ SELECT created_at, control_epoch, state, failure_code, template_key
  WHERE origin = 'HANDOFF_NOTICE' AND conversation_id = '<conversation id>'
  ORDER BY created_at;
 ```
+
+## 17. Readiness, the test console, automatic drafts and the bulk return (Phase 4 PR-5)
+
+Owner-facing walkthrough in Persian: [owner-setup-guide.fa.md](owner-setup-guide.fa.md).
+
+- **Readiness card** (`/support-ai`, `support_ai.configure`): eight lines from facts the server can
+  see - the Business connection and its reply right; `support.accounts` against the connected
+  account's username (known only when that account has written to the bot once, so a missing
+  username is a reminder, not a failure); the primary provider's key and breaker; the capability
+  test's last outcome; the `assistant` role's `process_runs` row (never started, stopped,
+  restarting) and the `support.assistant.stalled` condition; the automatic topics; approved
+  knowledge; vision. The assistant line cannot tell a running role from one that was enabled and
+  never used: a role that started and has not stopped reads as running.
+- **Test console** («امتحان یک سؤال», `support_ai.configure`; a run on a real customer also needs
+  `users.view`): runs the STORED configuration through the same context, prompt, chain, strict
+  parse, money guard, decision guards and output validator, and shows what would happen. It sends
+  nothing: no outbound row, no conversation or ticket change, no draft. Each call is a paid
+  provider call recorded as operation `TEST_CONSOLE` in «مصرف» and audited as
+  `support_ai.test_console.run` (verdict and topic; never the question). It does not run the
+  guards that need a conversation (loop, flood, no-progress, repeated advice, cooldown), nor the
+  one regeneration after an output-validator refusal (reported as such), nor vision. Refused
+  while the mode is `OFF`.
+- **ASSIST_ONLY drafts by itself.** Every inbound customer message queues one `ASSIST_DRAFT`
+  job with no requesting admin (idempotent on the message; a newer message replaces the open
+  draft), whoever holds the conversation. The `assistant` role produces it; a person edits and
+  sends it through the ordinary send path. Cost: one provider call per message while the mode is
+  `ASSIST_ONLY`. Switch to `OFF` to stop it.
+- **«بازگرداندن همه به هوش مصنوعی»** (`/business-chats`, `business_chats.reply`): each conversation
+  goes through the same single resume (own audit entry, idempotency key `<key>:<id>`). Hard holds
+  - kind `HARD`, no recorded kind, `PAUSED` - are counted and left alone unless the operator ticks
+    the box. At most 100 conversations per request.
+- **Reports with customer text.** On `/support-analytics`, «دیدن سؤال‌ها» and «شکاف‌های دانش» show
+  the customer's last message before a handoff (truncated, 30 days) and need
+  `support_ai.configure` AND `business_chats.view`. The counts above them read no text.
+
+## Evaluating the recommended preset (Phase 4 PR-6)
+
+Before and after «اعمال تنظیمات پیشنهادی», run the SAI suite as the owner, with a TEST key, never in
+CI: `support-ai-eval --suite sai --config-from-db <slug> [--preset recommended] [--live …]`, and
+replay your own scrubbed handed-off chats with `--replay <file outside the repo>`. Targets:
+
+> = 90 % of everyday scenarios without a handoff, 0 hard-set failures, 0 attack leaks/promises.
+> Full command lines and what each number means: `docs/support-agent/sai-eval.md`.

@@ -23,11 +23,9 @@ import {
   type CustomerTransferResultResponse,
   type LedgerDirection,
   type LedgerReason,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import type { CustomerOverview } from '../../modules/commerce/customers/application/customer-control.service.js';
 import type { CustomerRecord } from '../../modules/commerce/customers/application/ports.js';
 import type {
@@ -55,7 +53,7 @@ export class Customer360Controller {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<{ overview: CustomerOverviewResponse }> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return {
       overview: toOverview(await this.container.customerControls.overview(scope, actor, id)),
     };
@@ -67,7 +65,7 @@ export class Customer360Controller {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<{ overview: CustomerOverviewResponse; changed: boolean }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customerChannelExemptionRequestSchema.parse(body);
     const result = await this.container.customerControls.setChannelExemption(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -84,7 +82,7 @@ export class Customer360Controller {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<{ overview: CustomerOverviewResponse; changed: boolean }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customerPhoneVerificationRequestSchema.parse(body);
     const result = await this.container.customerControls.setVerifiedPhone(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -101,7 +99,7 @@ export class Customer360Controller {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<{ overview: CustomerOverviewResponse; changed: boolean }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customerLocationOverrideRequestSchema.parse(body);
     const result = await this.container.customerControls.setLocationOverride(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -118,7 +116,7 @@ export class Customer360Controller {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<{ overview: CustomerOverviewResponse; changed: boolean }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customerNotificationsRequestSchema.parse(body);
     const result = await this.container.customerControls.setMarketingPreference(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -136,7 +134,7 @@ export class Customer360Controller {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<{ overview: CustomerOverviewResponse; changed: boolean }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customerPersonalDiscountRequestSchema.parse(body);
     const result = await this.container.customerControls.setPersonalDiscount(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -153,7 +151,7 @@ export class Customer360Controller {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CustomerServicesToggleResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customerServicesToggleRequestSchema.parse(body);
     const results = await this.container.customerServicesToggle.toggle(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -170,7 +168,7 @@ export class Customer360Controller {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<{ preview: CustomerTransferPreviewResponse }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customerTransferPreviewRequestSchema.parse(body);
     const plan = await this.container.customerAccountTransfers.preview(scope, actor, {
       sourceId: id,
@@ -185,7 +183,7 @@ export class Customer360Controller {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<{ transfer: CustomerTransferResultResponse }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customerTransferRequestSchema.parse(body);
     const result = await this.container.customerAccountTransfers.transfer(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -204,7 +202,7 @@ export class Customer360Controller {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CustomerManualOrderResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customerManualOrderRequestSchema.parse(body);
     const { order, payment } = await this.container.manualOrders.place(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -231,7 +229,7 @@ export class Customer360Controller {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<{ workspace: CustomerWorkspaceResponse }> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const found = await this.container.customerInsights.workspace(scope, actor, id);
     return {
       workspace: {
@@ -280,7 +278,7 @@ export class Customer360Controller {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<{ summary: CustomerFinancialSummaryResponse }> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const summary = await this.container.customerInsights.financialSummary(scope, actor, id);
     const perCurrency = (
       rows: readonly { currency: string; count: number; amount: bigint }[],
@@ -337,7 +335,7 @@ export class Customer360Controller {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<CustomerTimelineResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const rows = await this.container.customerInsights.timeline(scope, actor, id);
     return {
       entries: rows.map((row) => ({
@@ -353,27 +351,6 @@ export class Customer360Controller {
         after: row.after === null ? null : { ...row.after },
       })),
     };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      // A customer belongs to the TENANT, not to a bot: see `CustomersController`.
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

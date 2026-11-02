@@ -59,6 +59,8 @@ const candidate = (overrides: Record<string, unknown> = {}) => ({
   provider: 'OPENAI',
   model: 'gpt-test',
   articleId: null,
+  replacesArticleId: null,
+  assisted: false,
   version: 3,
   createdAt: '2026-10-03T09:00:00.000Z',
   reviewedAt: null,

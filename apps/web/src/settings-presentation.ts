@@ -4,6 +4,8 @@ import {
   LATE_CREDIT_SETTING_KEYS,
   LATE_CREDIT_WINDOW_SETTING_KEY,
   PANEL_SETTING_KEYS,
+  TONPAYS_PACING_BURST_SETTING_KEY,
+  TONPAYS_PACING_SETTING_KEYS,
   isSettingKey,
   settingIntegerRange,
   type DataCompactionMode,
@@ -307,6 +309,25 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'sales',
     control: { kind: 'integer', unit: 'web.unit_hours' },
   },
+  // Round 11 A8: the TonPays pace — calls a minute per key, and how many may leave together.
+  [TONPAYS_PACING_SETTING_KEYS.TONPAYS]: {
+    title: 'web.tonpays_pace_title',
+    description: 'web.tonpays_pace_hint',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_times' },
+  },
+  [TONPAYS_PACING_SETTING_KEYS.TONPAYS_TELEGRAM]: {
+    title: 'web.tonpays_telegram_pace_title',
+    description: 'web.tonpays_pace_hint',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_times' },
+  },
+  [TONPAYS_PACING_BURST_SETTING_KEY]: {
+    title: 'web.tonpays_burst_title',
+    description: 'web.tonpays_burst_hint',
+    group: 'sales',
+    control: { kind: 'integer', unit: 'web.unit_times' },
+  },
   // R5A-2 item 5: the emergency switch for automated customer messages.
   'customer_notices.pause_automated': {
     title: 'web.cn_pause_title',
@@ -341,6 +362,16 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
   'ops.log.admin_base_url': {
     title: 'web.opslog_admin_url',
     description: 'web.opslog_admin_url_hint',
+    group: 'ops',
+    control: { kind: 'text' },
+  },
+  /*
+   * R12 F2 item 4: the owner's outbound allow-list. The description is the warning: each
+   * address here is one a panel URL may point at although it reaches this server itself.
+   */
+  'security.outbound_private_targets': {
+    title: 'web.setting_outbound_private_targets',
+    description: 'web.setting_outbound_private_targets_desc',
     group: 'ops',
     control: { kind: 'text' },
   },
@@ -448,6 +479,48 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     description: 'web.setting_support_accounts_desc',
     group: 'support',
     control: { kind: 'handle_list' },
+  },
+  'support.ai.resume_after_minutes': {
+    title: 'web.setting_support_ai_resume_after_minutes',
+    description: 'web.setting_support_ai_resume_after_minutes_desc',
+    group: 'support',
+    control: { kind: 'integer' },
+  },
+  'support.ai.handoff_alert_pct': {
+    title: 'web.setting_support_ai_handoff_alert_pct',
+    description: 'web.setting_support_ai_handoff_alert_pct_desc',
+    group: 'support',
+    control: { kind: 'integer' },
+  },
+  'support.ai.actions_enabled': {
+    title: 'web.setting_support_ai_actions_enabled',
+    description: 'web.setting_support_ai_actions_enabled_desc',
+    group: 'support',
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
+  },
+  'support.ai.tickets_enabled': {
+    title: 'web.setting_support_ai_tickets_enabled',
+    description: 'web.setting_support_ai_tickets_enabled_desc',
+    group: 'support',
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
+  },
+  'support.ai.label_enabled': {
+    title: 'web.setting_support_ai_label_enabled',
+    description: 'web.setting_support_ai_label_enabled_desc',
+    group: 'support',
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
+  },
+  'support.ai.feedback_enabled': {
+    title: 'web.setting_support_ai_feedback_enabled',
+    description: 'web.setting_support_ai_feedback_enabled_desc',
+    group: 'support',
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
+  },
+  'support.knowledge.auto_refresh': {
+    title: 'web.setting_support_knowledge_auto_refresh',
+    description: 'web.setting_support_knowledge_auto_refresh_desc',
+    group: 'support',
+    control: { kind: 'boolean', on: 'web.backup_schedule_on', off: 'web.backup_schedule_off' },
   },
   'telegram.channels': {
     title: 'web.setting_telegram_channels',

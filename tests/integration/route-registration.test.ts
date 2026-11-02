@@ -262,6 +262,9 @@ describe('dynamic route registration', () => {
    * that confirmed and rejected a transfer — and the withdrawn late-review lane's two —
    * are NOT registered, and this is the check that notices one coming back. The reads
    * beside them, the compensation list (D7) included, still route.
+   *
+   * R12 F3 item 8 (owner decision: review in BOTH places) added exactly three receipt routes,
+   * under `/receipt/`; they route, and nothing else of that family does.
    */
   it('registers no card-to-card mutation, and routes every payment read', async () => {
     const id = ACCOUNT_ID;
@@ -280,6 +283,13 @@ describe('dynamic route registration', () => {
       COMPENSATION_ROUTES.list,
     ]) {
       await reaches('GET', `${API_PREFIX}${path}`);
+    }
+    for (const path of [
+      PAYMENT_ROUTES.receiptApprove(id),
+      PAYMENT_ROUTES.receiptReject(id),
+      PAYMENT_ROUTES.receiptCredit(id),
+    ]) {
+      await reaches('POST', `${API_PREFIX}${path}`);
     }
   });
 

@@ -34,12 +34,10 @@ import {
   type RecoveryRequestSummary,
   type RunBackupResponse,
   type SetBackupArchivePasswordResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import { singleValued } from './query.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type { BackupRunView } from '../../modules/platform/recovery/application/backup-admin.service.js';
 import type { RecoveryRequestRow } from '../../modules/platform/recovery/application/ports.js';
 import type { LegacyCompactionRow } from '../../modules/platform/legacy-compaction/application/ports.js';
@@ -87,15 +85,11 @@ import type { LegacyCompactionRow } from '../../modules/platform/legacy-compacti
 export class RecoveryController {
   constructor(@Inject(CONTAINER) private readonly container: Container) {}
 
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
-  }
-
   // --- Backups -------------------------------------------------------------
 
   @Get(BACKUP_ROUTES.status)
   async backupStatus(@Req() request: FastifyRequest): Promise<BackupStatusResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const status = await this.container.backupAdmin.status(scope, actor);
     return {
       scheduleEnabled: status.scheduleEnabled,
@@ -132,7 +126,7 @@ export class RecoveryController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<SetBackupArchivePasswordResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = setBackupArchivePasswordRequestSchema.parse(body);
     const result = await this.container.backupPasswords.set(
       scope,
@@ -158,7 +152,7 @@ export class RecoveryController {
     @Req() request: FastifyRequest,
     @Query() query: unknown,
   ): Promise<BackupHistoryResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // `singleValued` first, for every parameter at once: Fastify yields an ARRAY
     // when a key repeats, and a repeated key is a malformed request rather than
     // something to pick a value out of.
@@ -178,7 +172,7 @@ export class RecoveryController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<BackupRunDetailResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { run: toRunSummary(await this.container.backupAdmin.detail(scope, actor, id)) };
   }
 
@@ -187,7 +181,7 @@ export class RecoveryController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<RunBackupResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = runBackupRequestSchema.parse(body);
     const outcome = await this.container.backupAdmin.run(scope, actor, command);
     return { outcome: outcome.outcome, run: toRunSummary(outcome.run) };
@@ -212,7 +206,7 @@ export class RecoveryController {
     @Res() reply: FastifyReply,
     @Param('id') id: string,
   ): Promise<void> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // `?part=N` is one part of a split archive, byte for byte as it was delivered (E4).
     const params = singleValued((request.query ?? {}) as Record<string, unknown>);
     const rawPart = params.part;
@@ -250,7 +244,7 @@ export class RecoveryController {
   async legacyCompactionStatus(
     @Req() request: FastifyRequest,
   ): Promise<LegacyCompactionStatusResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const status = await this.container.legacyCompaction.status(scope, actor);
     return {
       available: status.available,
@@ -267,7 +261,7 @@ export class RecoveryController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<LegacyCompactionStatusResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = requestLegacyCompactionSchema.parse(body);
     const run = await this.container.legacyCompaction.request(scope, actor, command);
     return { available: false, run: toCompactionRun(run) };
@@ -282,7 +276,7 @@ export class RecoveryController {
    */
   @Get(DATA_COMPACTION_ROUTES.preview)
   async dataCompactionPreview(@Req() request: FastifyRequest): Promise<DataCompactionPreview> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.dataCompaction.preview(scope, actor);
   }
 
@@ -293,7 +287,7 @@ export class RecoveryController {
     // Authenticated, but not permission-gated: this document says what the
     // SERVER can do, not what this actor may do, and the Web Admin needs it to
     // render the refusals truthfully even for an actor who may do none of it.
-    await this.authenticate(request);
+    await authenticateAdmin(this.container, request);
     return {
       uploadEnabled: this.container.config.RECOVERY_UPLOAD_ENABLED,
       maxUploadBytes: this.container.config.RECOVERY_UPLOAD_MAX_BYTES,
@@ -311,7 +305,7 @@ export class RecoveryController {
     @Req() request: FastifyRequest,
     @Query() query: unknown,
   ): Promise<RecoveryListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const params = singleValued(query as Record<string, unknown>);
     const page = await this.container.recoveryService.list(scope, actor, {
       limit: pageLimit(params),
@@ -328,7 +322,7 @@ export class RecoveryController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<RecoveryDetailResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return {
       recovery: toRecoverySummary(await this.container.recoveryService.get(scope, actor, id)),
     };
@@ -353,7 +347,7 @@ export class RecoveryController {
    */
   @Post(RECOVERY_ROUTES.upload)
   async upload(@Req() request: FastifyRequest): Promise<RecoveryDetailResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     if (!this.container.config.RECOVERY_UPLOAD_ENABLED) {
       throw errors.validation(
         PLATFORM_ERROR_CODES.RECOVERY_REFUSED,
@@ -440,7 +434,7 @@ export class RecoveryController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<RecoveryDetailResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // E4: the optional password of an uploaded 7-Zip archive. Used for this verification
     // only — never stored, never logged, never echoed.
     const command = recoveryVerifyRequestSchema.parse(body ?? {});
@@ -463,37 +457,13 @@ export class RecoveryController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<RecoveryDetailResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = recoveryConfirmationSchema.parse(body);
     const confirmed = await this.container.recoveryService.confirm(scope, actor, id, {
       phrase: command.phrase,
       artifactChecksum: command.artifactChecksum,
     });
     return { recovery: toRecoverySummary(confirmed) };
-  }
-
-  /**
-   * Authentication, and the scope every method here runs in.
-   *
-   * The INSTALLATION's primary tenant is what the session resolves to — the same
-   * `admin.tenantId` every other controller uses — and the services refuse a
-   * non-primary scope by returning not-found. Deciding that here would put a
-   * scoping rule in a surface; the repository's predicate is what enforces it.
-   */
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (options.write) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
   }
 }
 

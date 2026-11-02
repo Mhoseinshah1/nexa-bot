@@ -280,6 +280,22 @@ export class DrizzleServiceRepository implements ServiceRepository {
     return row === undefined ? null : toRecord(row);
   }
 
+  /**
+   * R12 F1 (Codex on #360): `lockForUpdate`'s row lock, taken only if nobody holds it —
+   * `SKIP LOCKED`, never a wait. True when this transaction now holds the row; false when the
+   * row is held elsewhere (or absent). For a caller that already holds locks a holder of this
+   * row may want next, where waiting would be a cycle.
+   */
+  async tryLockForUpdate(scope: TenantContext, id: string, tx: TransactionScope): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: services.id })
+      .from(services)
+      .where(and(eq(services.tenantId, tenantId), eq(services.id, id)))
+      .for('no key update', { skipLocked: true });
+    return rows.length > 0;
+  }
+
   async lockForUpdate(
     scope: TenantContext,
     id: string,

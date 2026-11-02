@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { STARS_REFUNDED_STATUS } from '../domain/telegram-stars.js';
 import type {
   FxBaseAsset,
   FxSource,
@@ -432,6 +433,70 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     return rows.length > 0;
   }
 
+  async markChargeRefunded(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    chargeId: string,
+    now: Date,
+    tx: unknown,
+  ): Promise<{
+    readonly marked: boolean;
+    readonly before: {
+      readonly providerStatus: string | null;
+      readonly providerPaid: boolean | null;
+      readonly outcome: string | null;
+    } | null;
+  }> {
+    const tenantId = requireTenantId(scope);
+    /*
+     * This charge's row — or the attempt's row with NO charge recorded yet (Codex on #360): the
+     * refund then records the charge itself, refunded, and the write-once charge id makes the
+     * later `successful_payment` of the same charge a duplicate of a refunded charge.
+     */
+    const identity = and(
+      eq(gatewayInvoices.tenantId, tenantId),
+      eq(gatewayInvoices.paymentId, paymentId),
+      or(eq(gatewayInvoices.providerChargeId, chargeId), isNull(gatewayInvoices.providerChargeId)),
+    );
+    // The row as it stood, locked: the evidence the audit row keeps.
+    const [current] = await this.exec(tx)
+      .select({
+        providerStatus: gatewayInvoices.providerStatus,
+        providerPaid: gatewayInvoices.providerPaid,
+        outcome: gatewayInvoices.outcome,
+      })
+      .from(gatewayInvoices)
+      .where(identity)
+      .for('update');
+    if (current === undefined) return { marked: false, before: null };
+    const rows = await this.exec(tx)
+      .update(gatewayInvoices)
+      .set({
+        providerChargeId: chargeId,
+        providerStatus: STARS_REFUNDED_STATUS,
+        providerPaid: false,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          identity,
+          or(
+            isNull(gatewayInvoices.providerStatus),
+            sql`${gatewayInvoices.providerStatus} <> ${STARS_REFUNDED_STATUS}`,
+          ),
+        ),
+      )
+      .returning({ paymentId: gatewayInvoices.paymentId });
+    return {
+      marked: rows.length > 0,
+      before: {
+        providerStatus: current.providerStatus,
+        providerPaid: current.providerPaid,
+        outcome: current.outcome,
+      },
+    };
+  }
+
   async claimCreating(
     scope: TenantContext,
     now: Date,
@@ -767,14 +832,20 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     retryAt: Date,
     now: Date,
     tx?: unknown,
+    options?: { readonly notSent?: boolean },
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
     const rows = await this.exec(tx)
       .update(gatewayInvoices)
       .set({
         // Cleared ONLY here, where the provider said in so many words that it did not
-        // process the request. Anywhere else a stamped send means the answer is unknown.
+        // process the request — or (Round 11 A8) where it was never asked: the adapter's own
+        // limiter held it. Anywhere else a stamped send means the answer is unknown.
         creationSentAt: null,
+        // Round 11 A8: a send that never left gives back the attempt its stamp counted.
+        ...(options?.notSent === true
+          ? { creationAttempts: sql`GREATEST(${gatewayInvoices.creationAttempts} - 1, 0)` }
+          : {}),
         creationClaimedUntil: null,
         creationRetryAt: retryAt,
         creationErrorCode: errorCode,
@@ -1056,6 +1127,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly crypto?: GatewayCryptoFigures | null;
       readonly method?: string | null;
       readonly notBefore?: Date | null;
+      readonly rateLimited?: boolean;
       readonly claimedUntil?: Date;
     },
     now: Date,
@@ -1110,13 +1182,15 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         lastInquiryAt: now,
         lastInquiryErrorCode: result.errorCode,
         inquiryAttempts: sql`${gatewayInvoices.inquiryAttempts} + 1`,
-        ...(result.postDeadline
+        // Round 11 A8: a rate-limited inquiry asked nothing, so it spends none of the
+        // post-deadline allowance and leaves an operator's request standing.
+        ...(result.postDeadline && result.rateLimited !== true
           ? { postDeadlineInquiries: sql`${gatewayInvoices.postDeadlineInquiries} + 1` }
           : {}),
         nextInquiryAt: result.nextInquiryAt,
         inquiryClaimedUntil: null,
         // An operator's request is answered by the inquiry it let through.
-        reconcileInquiryRequestedAt: null,
+        ...(result.rateLimited === true ? {} : { reconcileInquiryRequestedAt: null }),
         updatedAt: now,
       })
       .where(

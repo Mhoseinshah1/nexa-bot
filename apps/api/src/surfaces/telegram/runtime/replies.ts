@@ -306,6 +306,29 @@ export function toastReply(key: TemplateKey): PendingReply {
   return { key: null, values: {}, buttons: [], orderId: null, toast: { key, values: {} } };
 }
 
+/**
+ * R12 F3 item 4 (the owner's edit-in-place rule): a screen a tapped button opened replaces the
+ * message it was tapped on, instead of adding another beneath it. Only a callback carries a
+ * message to edit — `edit` is ignored for a typed turn — and a reply that sends something
+ * besides its own text (a lead message, a file, a reply keyboard, a tracked wizard step) is
+ * left exactly as it was: those have their own placement.
+ */
+export function inPlace(reply: PendingReply): PendingReply {
+  if (
+    reply.key === null ||
+    reply.edit === true ||
+    reply.lead !== undefined ||
+    reply.media !== undefined ||
+    reply.mediaBytes !== undefined ||
+    reply.attachments !== undefined ||
+    reply.keyboard !== undefined ||
+    reply.wizard !== undefined
+  ) {
+    return reply;
+  }
+  return { ...reply, edit: true };
+}
+
 /** An ordinary one-line reply with no buttons. */
 export function plainReply(key: TemplateKey): PendingReply {
   return { key, values: {}, buttons: [], orderId: null };

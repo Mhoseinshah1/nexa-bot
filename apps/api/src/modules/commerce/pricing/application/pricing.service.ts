@@ -10,6 +10,7 @@ import {
   type DiscountablePurpose,
   type FeatureFlagKey,
   type IdGenerator,
+  type Money,
   type TenantContext,
 } from '@nexa/contracts';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
@@ -18,7 +19,11 @@ import type { OrderRecord, OrderTotalsRecord } from '../../orders/application/po
 import {
   FIRST_PURCHASE_PURPOSES,
   applyAdjustments,
+  personalDiscountPercentOf,
   redemptionRefusal,
+  type CashbackRule,
+  type DiscountRule,
+  type DiscountUsage,
   type PricingResult,
 } from '../domain/pricing-engine.js';
 import type {
@@ -65,6 +70,14 @@ export interface PricingServiceDeps {
       },
       tx?: unknown,
     ): Promise<ResellerPricingTerms | null>;
+    /** R11 A9: `pricingTerms` for every line of a price list, in one read of the table. */
+    pricingTermsForItems(
+      scope: TenantContext,
+      customerId: string,
+      purpose: DiscountablePurpose,
+      items: readonly { readonly productId: string | null; readonly currency: CurrencyCode }[],
+      tx?: unknown,
+    ): Promise<readonly (ResellerPricingTerms | 'UNSELLABLE')[] | null>;
     recordPurchase(
       scope: TenantContext,
       order: OrderRecord,
@@ -113,6 +126,85 @@ export interface PriceRequest {
 }
 
 /**
+ * R11 A9: one line of a customer-facing price list, as `personalListPrices` prices it — the
+ * same base, product and category its draft would hand `price`. `id` keys the answer.
+ */
+export interface ListPriceItem {
+  readonly id: string;
+  readonly base: OrderTotalsRecord;
+  readonly productId: string | null;
+  readonly categoryId: string | null;
+}
+
+/** R11 A9: a whole price list, for ONE customer and ONE purpose. */
+export interface ListPriceRequest {
+  readonly purpose: DiscountablePurpose;
+  readonly customerId: string;
+  readonly now: Date;
+  readonly items: readonly ListPriceItem[];
+}
+
+/**
+ * R11 A9: what a list shows for a line the personal discount wins: the percent, and the
+ * total the line's checkout quotes — the figure the invoice will carry.
+ */
+export interface ListedPersonalDiscount {
+  readonly percent: number;
+  readonly price: Money;
+}
+
+/** The facts `price` gathers besides the reseller layer and the personal percent. */
+interface PricingFacts {
+  readonly automatic: readonly DiscountRule[];
+  readonly coded?: DiscountRule | null;
+  readonly usage: ReadonlyMap<string, DiscountUsage>;
+  readonly isFirstPurchase: boolean | null;
+  readonly cashbackRules: readonly CashbackRule[];
+}
+
+/**
+ * Whether the reseller layer is asked for at all: only for a customer, and never for a
+ * custom service, which is priced by its own tier rules — the reseller layer on top would
+ * be a second answer to what a reseller pays (Package D §7).
+ */
+function resellerLayerApplies(
+  request: Pick<PriceRequest, 'purpose' | 'customerId'>,
+): request is Pick<PriceRequest, 'purpose'> & { readonly customerId: string } {
+  return request.customerId !== null && request.purpose !== 'CUSTOM_SERVICE';
+}
+
+/**
+ * The ONE composition of a quote from its facts: the reseller layer over the list base,
+ * then the engine (`applyAdjustments`) with the promotions, the cashback rules and the
+ * personal percent taken off the LIST base. `price` ends here, and so does every line of
+ * `personalListPrices` — the reason a listed price and its invoice cannot disagree.
+ */
+function quoteWith(
+  request: PriceRequest,
+  terms: ResellerPricingTerms | null,
+  facts: PricingFacts,
+  personalPercent: number | null,
+): PricingResult {
+  const base = terms === null ? request.base : applyResellerLayer(request.base, terms);
+  return applyAdjustments({
+    base,
+    subject: {
+      purpose: request.purpose,
+      productId: request.productId,
+      categoryId: request.categoryId,
+      customerId: request.customerId,
+      isFirstPurchase: facts.isFirstPurchase,
+      now: request.now,
+    },
+    automatic: facts.automatic,
+    ...(facts.coded === undefined ? {} : { coded: facts.coded }),
+    usage: facts.usage,
+    cashbackRules: facts.cashbackRules,
+    personal: personalPercent === null ? null : { percent: personalPercent, list: request.base },
+  });
+}
+
+/**
  * The one door into the pricing engine (`docs/wp8-pricing-audit.md` P1, P6, P8).
  *
  * `price` gathers the facts — the live rules, the entered code's rule, the live usage,
@@ -132,26 +224,176 @@ export class PricingService {
      * subtotal, and every promotion below is taken off the reseller price. Only for a
      * customer: the operator's preview without one prices the list.
      */
-    const terms =
-      request.customerId === null ||
-      // A custom service is priced by its own tier rules; the reseller layer on top would
-      // be a second answer to what a reseller pays (Package D §7).
-      request.purpose === 'CUSTOM_SERVICE'
-        ? null
-        : await this.deps.resellers.pricingTerms(
-            scope,
-            request.customerId,
-            // Round 4 PR-G: a price-table tier prices the PRODUCT, so the layer is asked for
-            // this product and purpose — and refuses one its table does not sell.
-            {
-              purpose: request.purpose,
-              productId: request.productId,
-              currency: request.base.currency,
-            },
-            tx,
-          );
-    const base = terms === null ? request.base : applyResellerLayer(request.base, terms);
+    const terms = !resellerLayerApplies(request)
+      ? null
+      : await this.deps.resellers.pricingTerms(
+          scope,
+          request.customerId,
+          // Round 4 PR-G: a price-table tier prices the PRODUCT, so the layer is asked for
+          // this product and purpose — and refuses one its table does not sell.
+          {
+            purpose: request.purpose,
+            productId: request.productId,
+            currency: request.base.currency,
+          },
+          tx,
+        );
+    const facts = await this.factsFor(scope, request, tx);
+    const personal = await this.personalPercentFor(scope, request, tx);
+    return quoteWith(request, terms, facts, personal);
+  }
 
+  /**
+   * R11 A9 — what a customer-facing price LIST shows for the personal discount: for each
+   * line, the percent and the total the checkout of that line would quote, or nothing.
+   *
+   * Not a second pricing implementation: every line is priced by `quoteWith`, the function
+   * `price` ends in, over the same facts `price` gathers — the reseller layer
+   * (`ResellerService.pricingTermsForItems`, the statement `pricingTerms` itself uses), the
+   * live automatic rules, their usage, the first-purchase answer, the cashback rules and
+   * the customer's percent — so "the larger single discount wins" and the reseller tiers
+   * decide a listed figure exactly as they decide the invoice. The facts are read ONCE per
+   * list, never per line: the reseller's price table in one query, everything else is the
+   * customer's and the tenant's, the same for every line.
+   *
+   * A line is in the answer only when the personal discount WINS its quote
+   * (`personalDiscountPercentOf`); everywhere else the list shows what it showed before —
+   * the flag off, no percent, a purpose it does not apply to, or another single discount as
+   * large or larger (a reseller's tier price, an automatic rule). A line the reseller's
+   * table does not sell is left out, as the draft would refuse it.
+   *
+   * A READ: no quote, no order, no row, no lock (outside a transaction, like the operator's
+   * preview); with no code, exactly as a draft is priced before a code is entered. The
+   * figure is a courtesy — the draft prices again at `price` and its quote is the one
+   * honoured — but it is the same figure, because it is the same function.
+   */
+  async personalListPrices(
+    scope: TenantContext,
+    request: ListPriceRequest,
+  ): Promise<ReadonlyMap<string, ListedPersonalDiscount>> {
+    const listed = new Map<string, ListedPersonalDiscount>();
+    if (request.items.length === 0) return listed;
+    const context = { purpose: request.purpose, customerId: request.customerId };
+    /*
+     * The personal percent first: with none (the flag off, no percent, a purpose it does not
+     * apply to) no line can carry one, and the list costs one flag read and nothing else.
+     */
+    const personal = await this.personalPercentFor(scope, context);
+    if (personal === null) return listed;
+
+    const terms = !resellerLayerApplies(context)
+      ? null
+      : await this.deps.resellers.pricingTermsForItems(
+          scope,
+          request.customerId,
+          request.purpose,
+          request.items.map((item) => ({
+            productId: item.productId,
+            currency: item.base.currency,
+          })),
+        );
+    const facts = await this.factsFor(scope, context);
+    request.items.forEach((item, index) => {
+      const layer = terms === null ? null : terms[index];
+      // The draft refuses a line its reseller's table does not sell: never listed at a price.
+      if (layer === undefined || layer === 'UNSELLABLE') return;
+      const result = quoteWith(
+        {
+          base: item.base,
+          purpose: request.purpose,
+          productId: item.productId,
+          categoryId: item.categoryId,
+          customerId: request.customerId,
+          now: request.now,
+        },
+        layer,
+        facts,
+        personal,
+      );
+      const percent = personalDiscountPercentOf(result.totals.quote);
+      if (percent !== null) listed.set(item.id, { percent, price: result.totals.total });
+    });
+    return listed;
+  }
+
+  /**
+   * Phase 4 PR-2 — the TOTAL every line of a price list would be quoted at its checkout, for the
+   * support AI's live catalogue: the figure the invoice of that line will carry.
+   *
+   * Not a second pricing implementation, exactly as `personalListPrices` is not: every line is
+   * priced by `quoteWith`, the function `price` ends in, over the facts `price` gathers — the
+   * reseller layer (`pricingTermsForItems`), the live automatic rules and their usage, the
+   * first-purchase answer, the cashback rules and the customer's personal percent — read ONCE
+   * for the list. Where `personalListPrices` answers only for the lines the personal discount
+   * wins, this answers for every line, so an automatic promotion that wins is quoted too.
+   *
+   * `customerId` null (an unlinked conversation): no reseller layer and no personal percent —
+   * what the operator's preview without a customer prices. A line the reseller's table does
+   * not sell is left out, as its draft would refuse it.
+   *
+   * A READ: no quote is stored, no order, no row, no lock, no code — exactly as a draft is
+   * priced before a code is entered. The draft still prices again at `price`, and its quote is
+   * the one honoured; it is the same figure because it is the same function over the same facts.
+   */
+  async quoteListPrices(
+    scope: TenantContext,
+    request: Omit<ListPriceRequest, 'customerId'> & { readonly customerId: string | null },
+  ): Promise<
+    ReadonlyMap<string, { readonly total: Money; readonly personalPercent: number | null }>
+  > {
+    const quoted = new Map<
+      string,
+      { readonly total: Money; readonly personalPercent: number | null }
+    >();
+    if (request.items.length === 0) return quoted;
+    const context = { purpose: request.purpose, customerId: request.customerId };
+    const personal = await this.personalPercentFor(scope, context);
+    const terms = !resellerLayerApplies(context)
+      ? null
+      : await this.deps.resellers.pricingTermsForItems(
+          scope,
+          context.customerId,
+          request.purpose,
+          request.items.map((item) => ({
+            productId: item.productId,
+            currency: item.base.currency,
+          })),
+        );
+    const facts = await this.factsFor(scope, context);
+    request.items.forEach((item, index) => {
+      const layer = terms === null ? null : terms[index];
+      if (layer === undefined || layer === 'UNSELLABLE') return;
+      const result = quoteWith(
+        {
+          base: item.base,
+          purpose: request.purpose,
+          productId: item.productId,
+          categoryId: item.categoryId,
+          customerId: request.customerId,
+          now: request.now,
+        },
+        layer,
+        facts,
+        personal,
+      );
+      quoted.set(item.id, {
+        total: result.totals.total,
+        personalPercent: personalDiscountPercentOf(result.totals.quote),
+      });
+    });
+    return quoted;
+  }
+
+  /**
+   * Every fact `price` hands the engine except the reseller layer and the personal percent:
+   * the live automatic rules, the entered code's rule, their live usage, the first-purchase
+   * answer and the cashback rules. One statement for `price` and `personalListPrices`.
+   */
+  private async factsFor(
+    scope: TenantContext,
+    request: Pick<PriceRequest, 'purpose' | 'customerId' | 'code' | 'orderId'>,
+    tx?: unknown,
+  ): Promise<PricingFacts> {
     const automatic = await this.deps.discounts.listLiveAutomatic(scope, tx);
     const coded =
       request.code === undefined
@@ -187,39 +429,28 @@ export class PricingService {
           : false;
     }
     const cashbackRules = await this.deps.cashbackRules.listLive(scope, tx);
-    const personal = await this.personalCandidate(scope, request, tx);
-
-    return applyAdjustments({
-      base,
-      subject: {
-        purpose: request.purpose,
-        productId: request.productId,
-        categoryId: request.categoryId,
-        customerId: request.customerId,
-        isFirstPurchase,
-        now: request.now,
-      },
+    return {
       automatic,
       ...(coded === undefined ? {} : { coded }),
       usage,
+      isFirstPurchase,
       cashbackRules,
-      personal,
-    });
+    };
   }
 
   /**
-   * The personal discount that takes part in this price (R10 D3), or null.
+   * The personal discount percent that takes part in this price (R10 D3), or null.
    *
    * Only for a customer (the operator's preview without one prices no customer's percent),
    * only for `PERSONAL_DISCOUNT_PURPOSES`, only while the flag is on, and only for a
-   * non-zero percent. The list base handed over is `request.base` — the list price, before
-   * the reseller layer — because the percent is never taken off a reseller's price.
+   * non-zero percent. `quoteWith` hands the engine `request.base` with it — the list price,
+   * before the reseller layer — because the percent is never taken off a reseller's price.
    */
-  private async personalCandidate(
+  private async personalPercentFor(
     scope: TenantContext,
-    request: PriceRequest,
+    request: Pick<PriceRequest, 'purpose' | 'customerId'>,
     tx?: unknown,
-  ): Promise<{ readonly percent: number; readonly list: OrderTotalsRecord } | null> {
+  ): Promise<number | null> {
     if (request.customerId === null || !personalDiscountApplies(request.purpose)) return null;
     if (!(await this.deps.featureFlags.isEnabled(scope, PERSONAL_DISCOUNT_FEATURE, tx))) {
       return null;
@@ -231,7 +462,7 @@ export class PricingService {
       tx,
     );
     if (percent === null || percent <= 0) return null;
-    return { percent, list: request.base };
+    return percent;
   }
 
   /**

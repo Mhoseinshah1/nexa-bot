@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
 import { uuidV7Schema, type CustomerStatus, type CustomerSummaryResponse } from '@nexa/contracts';
@@ -9,6 +9,7 @@ import { t } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { ListFreshness, ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
+import { RowExportBar, selectColumn, useRowSelection, type ExportColumn } from '../ui/row-export';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
 import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
 import { ChipGroup, useListClearAll } from './commerce-parts';
@@ -208,6 +209,25 @@ export function UsersPage({
   const rows = customers.data?.customers ?? [];
   const nextCursor = customers.data?.nextCursor ?? null;
 
+  // R12 F3 item 8: the ticked rows of this page, exported as the columns below print them.
+  const userKey = useCallback((row: CustomerSummaryResponse) => row.id, []);
+  const selection = useRowSelection(rows, userKey);
+  const exportColumns: readonly ExportColumn<CustomerSummaryResponse>[] = [
+    { header: t('web.user_telegram_id'), value: (row) => row.telegramUserId },
+    {
+      header: t('web.user_username'),
+      value: (row) => (row.username === null ? '' : `@${row.username}`),
+    },
+    { header: t('web.user_name'), value: (row) => displayName(row) ?? '' },
+    {
+      header: t('web.status'),
+      value: (row) =>
+        t(row.status === 'ACTIVE' ? 'web.user_status_active' : 'web.user_status_blocked'),
+    },
+    { header: t('web.user_first_seen'), value: (row) => formatTimestamp(row.firstSeenAt) },
+    { header: t('web.user_last_seen'), value: (row) => formatTimestamp(row.lastSeenAt) },
+  ];
+
   const columns: readonly Column<CustomerSummaryResponse>[] = [
     {
       key: 'telegram',
@@ -258,6 +278,7 @@ export function UsersPage({
       header: t('web.user_last_seen'),
       render: (row) => <span className="nowrap">{formatTimestamp(row.lastSeenAt)}</span>,
     },
+    selectColumn(selection, userKey),
   ];
 
   /*
@@ -426,6 +447,14 @@ export function UsersPage({
             rows={rows}
             rowKey={(row) => row.id}
             sticky
+            toolbar={
+              <RowExportBar
+                selection={selection}
+                columns={exportColumns}
+                filename="users"
+                allowed={!denied}
+              />
+            }
           />
         </StateSwitch>
 

@@ -22,7 +22,6 @@ import {
   type SystemReadinessResponse,
   type MonitorProfileResponse,
   type SystemDiagnosticsResponse,
-  type TenantContext,
   uuidV7Schema,
   notificationListQuerySchema,
   NOTIFICATION_PAGE_DEFAULT,
@@ -31,8 +30,7 @@ import {
 import { CONTAINER, type Container } from '../../container.js';
 import { singleValued } from './query.js';
 import { ReadinessProbe } from './readiness.probe.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import type { ResolvedSetting } from '../../modules/control/settings/application/settings-resolver.js';
 import type { ResolvedFeatureFlag } from '../../modules/control/features/application/feature-flags.service.js';
 import type { TemplateView } from '../../modules/control/templates/application/template-management.service.js';
@@ -71,15 +69,11 @@ export class ControlController {
     @Inject(ReadinessProbe) private readonly probe: ReadinessProbe,
   ) {}
 
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
-  }
-
   // --- Settings ------------------------------------------------------------
 
   @Get('settings')
   async settings(@Req() request: FastifyRequest): Promise<SettingListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const settings = await this.container.settingsService.list(scope, actor);
     return { settings: settings.map(toSettingResponse) };
   }
@@ -90,7 +84,7 @@ export class ControlController {
     @Param('key') key: string,
     @Body() body: unknown,
   ): Promise<SettingWriteResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const result = await this.container.settingsService.set(scope, actor, {
       ...(body as Record<string, unknown>),
       key,
@@ -106,7 +100,7 @@ export class ControlController {
 
   @Get('features')
   async features(@Req() request: FastifyRequest): Promise<FeatureFlagListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const flags = await this.container.featureFlags.list(scope, actor);
     return { flags: flags.map(toFlagResponse), total: flags.length };
   }
@@ -117,7 +111,7 @@ export class ControlController {
     @Param('key') key: string,
     @Body() body: unknown,
   ): Promise<FeatureFlagWriteResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const result = await this.container.featureFlags.set(scope, actor, {
       ...(body as Record<string, unknown>),
       key,
@@ -129,7 +123,7 @@ export class ControlController {
 
   @Get('templates')
   async templates(@Req() request: FastifyRequest): Promise<TemplateListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const templates = await this.container.templatesService.list(scope, actor);
     return { templates: templates.map(toTemplateResponse), total: templates.length };
   }
@@ -139,7 +133,7 @@ export class ControlController {
     @Req() request: FastifyRequest,
     @Param('key') key: string,
   ): Promise<TemplateViewResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return toTemplateResponse(await this.container.templatesService.get(scope, actor, key));
   }
 
@@ -148,7 +142,7 @@ export class ControlController {
     @Req() request: FastifyRequest,
     @Param('key') key: string,
   ): Promise<TemplateRevisionListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const revisions = await this.container.templatesService.revisions(scope, actor, key);
     return {
       revisions: revisions.map((revision) => ({
@@ -167,7 +161,7 @@ export class ControlController {
     @Param('key') key: string,
     @Body() body: unknown,
   ): Promise<TemplateWriteResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const result = await this.container.templatesService.set(scope, actor, {
       ...(body as Record<string, unknown>),
       key,
@@ -185,7 +179,7 @@ export class ControlController {
     @Param('key') key: string,
     @Body() body: unknown,
   ): Promise<TemplateWriteResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const result = await this.container.templatesService.revert(scope, actor, {
       ...(body as Record<string, unknown>),
       key,
@@ -215,7 +209,7 @@ export class ControlController {
     // carrying a session cookie, and the cost of exempting it is a route that
     // has to be re-reasoned about every time somebody asks whether the CSRF
     // rule is "writes only" or "POSTs".
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const result = await this.container.templatesService.preview(scope, actor, {
       ...(body as Record<string, unknown>),
       key,
@@ -239,7 +233,7 @@ export class ControlController {
    */
   @Get('system/readiness')
   async systemReadiness(@Req() request: FastifyRequest): Promise<SystemReadinessResponse> {
-    await this.authenticate(request);
+    await authenticateAdmin(this.container, request);
     const { degraded, dependencies } = await this.probe.run();
     // 200 even when degraded. A 503 here would be a broken API call to the
     // screen asking the question, and that screen's job is to display the bad
@@ -257,7 +251,7 @@ export class ControlController {
    */
   @Get('system/monitor')
   async systemMonitor(@Req() request: FastifyRequest): Promise<MonitorProfileResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { monitor: await this.container.monitorProfileService.read(scope, actor) };
   }
 
@@ -267,7 +261,7 @@ export class ControlController {
    */
   @Get('system/diagnostics')
   async systemDiagnostics(@Req() request: FastifyRequest): Promise<SystemDiagnosticsResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const found = await this.container.diagnostics.read(scope, actor);
     return {
       generatedAt: found.generatedAt.toISOString(),
@@ -311,7 +305,7 @@ export class ControlController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<OperationalEventListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = singleValued(raw);
     // The size the caller asked for, so the OVER-FETCH below can tell a full
     // last page from a full page with more behind it. Kept in one place: a
@@ -389,7 +383,7 @@ export class ControlController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<NotificationListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = singleValued(raw);
     // Parsed, not coerced-then-clamped. `Number('abc')` is NaN, and the
     // service's `Math.min(Math.max(NaN, 1), 200)` is still NaN, which reached
@@ -428,7 +422,7 @@ export class ControlController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<NotificationDetailResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // Validated before it can reach a UUID column. An arbitrary string was
     // compared against `notifications.id`, PostgreSQL rejected it with 22P02,
     // and a malformed identifier surfaced as a 500 rather than a bad request.
@@ -458,7 +452,7 @@ export class ControlController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<SendTestNotificationResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // The command returns its own attempts. Reading them through `get` here
     // needed `opslog.view`, which this endpoint does not require — so an
     // administrator holding only `settings.edit` had their test queued and was
@@ -471,30 +465,6 @@ export class ControlController {
       releasedClaims: releasedClaims.map(toReleasedClaimResponse),
       created,
       replayed,
-    };
-  }
-
-  /**
-   * Resolves the session into a scope and an actor.
-   *
-   * The tenant comes from the SESSION, never from the request: a caller-supplied
-   * tenant id is how one administrator reads another tenant's data.
-   */
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (options.write) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
     };
   }
 }

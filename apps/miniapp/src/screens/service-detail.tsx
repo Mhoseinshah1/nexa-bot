@@ -12,7 +12,7 @@ import {
 import { useApp } from '../app.js';
 import { t } from '../i18n/t.js';
 import { dateTime, money, traffic } from '../format.js';
-import { Button, Card, Loading, Ltr, errorText, useLoad } from '../ui.js';
+import { Button, Card, Loading, Ltr, PersonalPrice, errorText, useLoad } from '../ui.js';
 import { ServiceCard } from './service-card.js';
 import { QrSheet } from './qr-sheet.js';
 import { LocationSheet } from './location-sheet.js';
@@ -38,13 +38,20 @@ export function ServiceDetail({ serviceId }: { serviceId: string }) {
   return (
     <main className="page">
       <Loading loaded={loaded} reload={reload}>
-        {(service) => <Detail service={service} />}
+        {(service) => <Detail service={service} onChanged={reload} />}
       </Loading>
     </main>
   );
 }
 
-function Detail({ service }: { service: MiniAppServiceDetail }) {
+function Detail({
+  service,
+  onChanged,
+}: {
+  service: MiniAppServiceDetail;
+  /** Re-reads the service: a location change was accepted, so the remaining count moved. */
+  onChanged: () => void;
+}) {
   const { navigate } = useApp();
   const [copied, setCopied] = useState(false);
   const [sheet, setSheet] = useState<'qr' | 'location' | null>(null);
@@ -101,6 +108,14 @@ function Detail({ service }: { service: MiniAppServiceDetail }) {
         <AutoRenew serviceId={service.id} initial={service.autoRenew} />
       )}
       <Card>
+        {service.locationRemaining !== null && (
+          <p className="muted">
+            {t('miniapp.location_remaining', {
+              remaining: service.locationRemaining.remaining,
+              max: service.locationRemaining.max,
+            })}
+          </p>
+        )}
         <div className="actions">
           {service.canChangeLocation && (
             <Button onClick={() => setSheet('location')}>{t('miniapp.location_open')}</Button>
@@ -115,11 +130,16 @@ function Detail({ service }: { service: MiniAppServiceDetail }) {
         <QrSheet
           serviceId={service.id}
           link={service.subscriptionUrl}
+          kinds={service.qrKinds}
           onClose={() => setSheet(null)}
         />
       )}
       {sheet === 'location' && (
-        <LocationSheet serviceId={service.id} onClose={() => setSheet(null)} />
+        <LocationSheet
+          serviceId={service.id}
+          onClose={() => setSheet(null)}
+          onRequested={onChanged}
+        />
       )}
     </>
   );
@@ -160,7 +180,11 @@ function Offer({ serviceId, kind }: { serviceId: string; kind: MiniAppServiceAct
               onClick={() => void quote(option)}
             >
               <strong>{option.title}</strong>
-              <span>{money(option.price)}</span>
+              {option.personalDiscount === null ? (
+                <span>{money(option.price)}</span>
+              ) : (
+                <PersonalPrice price={option.price} discount={option.personalDiscount} />
+              )}
             </button>
           ))}
           {error !== null && <p className="error">{error}</p>}

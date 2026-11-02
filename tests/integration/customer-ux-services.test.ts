@@ -313,7 +313,7 @@ describe('a customer looks after the services they bought', () => {
       expect(markup).toContain(`"text":"🟢 ${service.username}"`);
       expect(markup).toContain('"style":"success"');
       expect(buttonsOf(markup)).toEqual([`sv:${service.id}`, 'ss:', 'ss:', 'sl:1', 'mm:']);
-      expect(markup).toContain('جستجو نام کاربری');
+      expect(markup).toContain('جستجوی نام کاربری');
       expect(markup).toContain('🔎 جستجو');
       expect(markup).toContain('1/1');
       expect(markup).toContain('🔙 بازگشت به منوی اصلی');
@@ -521,7 +521,7 @@ describe('a customer looks after the services they bought', () => {
       expect(body).toContain('🗂 حجم کل: 50 گیگابایت');
       // The create returned the panel's figure, so usage is KNOWN (0), not unread.
       expect(body).toContain('📥 حجم مصرفی: 0 گیگابایت');
-      expect(body).toContain('💢 حجم باقی‌مانده: 50 گیگابایت (100%)');
+      expect(body).toContain('💢 حجم باقی‌مانده: 50 گیگابایت (100٪)');
       expect(body).toMatch(/📅 تاریخ اتمام: 14\d\d\/\d\d\/\d\d \d\d:\d\d \(30 روز\)/u);
       expect(body).toContain('📶 آخرین زمان اتصال شما: در دسترس نیست');
       expect(body).not.toContain('متصل نشده');
@@ -1706,7 +1706,8 @@ describe('a customer looks after the services they bought', () => {
 
       const guide = await handle(tap('tu:'));
       expect(guide.replyKey).toBe('bot.tutorial.choose');
-      expect(buttonsOf(lastMarkup())).toEqual([
+      // R12 F3 item 4: the guide's platform choice EDITS the tapped message.
+      expect(buttonsOf(lastDrawnMarkup())).toEqual([
         'to:ANDROID',
         'to:IOS',
         'to:WINDOWS',

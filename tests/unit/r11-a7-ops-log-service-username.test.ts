@@ -14,6 +14,7 @@ import {
 import { CATALOGUE_FA, DEFAULT_TEMPLATE_PRESENTATION, renderTemplateBody } from '@nexa/i18n';
 import { i18nOpsLogWords as words } from '../../apps/api/src/modules/commerce/ops-log/infrastructure/i18n-ops-log-words';
 import { OperationalEventPresenter } from '../../apps/api/src/modules/commerce/ops-log/application/event-presenter';
+import { STARS_CHARGE_REFUNDED_CODE } from '../../apps/api/src/modules/commerce/payments/application/telegram-stars-payment.service';
 import {
   linkChanged,
   operationFailure,
@@ -488,6 +489,43 @@ describe('R11 A7 — an operational event about a service (the generic layout)',
   });
 });
 
+describe('R12 F1 item 6 — a refunded Stars charge names its ORDER; the line is read through it', () => {
+  const presenterWith = (username: string | null) =>
+    new OperationalEventPresenter({
+      facts: { serviceUsernameOfOrder: async () => username } as unknown as OpsLogFacts,
+      words,
+    });
+  const input = (code: string): OperationalEventInput => ({
+    code,
+    severity: 'ERROR',
+    message: 'refunded',
+    context: { orderId: '01900000-0000-7000-8000-0000000000ab', paymentId: 'p-1' },
+  });
+
+  it('prints the order’s service username for payments.gateway_charge_refunded', async () => {
+    expect(
+      await presenterWith('nx7k2m9q').serviceUsernameOf(
+        tenant,
+        input(STARS_CHARGE_REFUNDED_CODE),
+        {},
+      ),
+    ).toBe('nx7k2m9q');
+    expect(
+      await presenterWith(null).serviceUsernameOf(tenant, input(STARS_CHARGE_REFUNDED_CODE), {}),
+    ).toBeNull();
+  });
+
+  it('gives no other event that carries an order id a line it did not have', async () => {
+    expect(
+      await presenterWith('nx7k2m9q').serviceUsernameOf(
+        tenant,
+        input('payments.gateway_late_completion'),
+        {},
+      ),
+    ).toBeNull();
+  });
+});
+
 describe('R11 A7 — L22 a payment link that could not be made, for an order tied to a service', () => {
   const recorded = {
     id: 'ev-2',
@@ -639,6 +677,7 @@ describe('R11 A7 — the declaration and the default bodies agree', () => {
     'ops.financial.payment_overpaid',
     'ops.financial.late_completion',
     'ops.financial.late_credit',
+    'ops.financial.late_credit_returned',
     'ops.financial.outcome_unknown',
     'ops.financial.credit_amount_mismatch',
     'ops.financial.refund_completed',

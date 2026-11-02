@@ -254,14 +254,14 @@ describe('the support AI configuration (TB4)', () => {
       service.update(tenantA, configurer, {
         idempotencyKey: key('b'),
         expectedVersion: 1,
-        config: assist({ mode: 'AUTO_REPLY_SAFE' }),
+        config: assist({ mode: 'AUTO_REPLY_SAFE', autoTopics: ['APP_SETUP'] }),
       }),
     ).rejects.toSatisfy(isNexaError);
     // The owner may enter it…
     await service.update(tenantA, owner, {
       idempotencyKey: key('c'),
       expectedVersion: 1,
-      config: assist({ mode: 'AUTO_REPLY_SAFE' }),
+      config: assist({ mode: 'AUTO_REPLY_SAFE', autoTopics: ['APP_SETUP'] }),
     });
     // …and the configurer may leave it.
     const left = await service.update(tenantA, configurer, {
@@ -270,6 +270,26 @@ describe('the support AI configuration (TB4)', () => {
       config: assist(),
     });
     expect(left.config.mode).toBe('ASSIST_ONLY');
+  });
+
+  it('Phase 4 PR-1: refuses AUTO_REPLY_SAFE with no topic, and never rewrites a stored one', async () => {
+    await service.update(tenantA, owner, {
+      idempotencyKey: key('a'),
+      expectedVersion: null,
+      config: assist(),
+    });
+    await expect(
+      service.update(tenantA, owner, {
+        idempotencyKey: key('b'),
+        expectedVersion: 1,
+        config: assist({ mode: 'AUTO_REPLY_SAFE', autoTopics: [] }),
+      }),
+    ).rejects.toMatchObject({ code: 'support_ai.auto_topics_required' });
+    // Nothing was written: the stored configuration is the one saved before.
+    const view = await service.view(tenantA, owner);
+    expect(view.version).toBe(1);
+    expect(view.config.mode).toBe('ASSIST_ONLY');
+    expect(view.config.autoTopics).toEqual([]);
   });
 
   it('refuses configuration to a role without support_ai.configure', async () => {
@@ -715,7 +735,7 @@ describe('the support AI configuration (TB4)', () => {
       service.update(tenantA, configurer, {
         idempotencyKey: key('b'),
         expectedVersion: 1,
-        config: assist({ mode: 'AUTO_REPLY_SAFE' }),
+        config: assist({ mode: 'AUTO_REPLY_SAFE', autoTopics: ['APP_SETUP'] }),
       }),
     ).rejects.toSatisfy(isNexaError);
     const trail = (

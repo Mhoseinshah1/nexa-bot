@@ -123,7 +123,7 @@ export interface TicketReplyFileRecord {
 export interface TicketMessageListItem {
   readonly message: TicketMessageRecord;
   readonly authorUsername: string | null;
-  /** The `TICKET_REPLY` notification's state, for an ADMIN message; null otherwise. */
+  /** The `TICKET_REPLY` notification's state, for an ADMIN or AI message; null otherwise. */
   readonly delivery: CustomerNotificationState | null;
   /** HF-A7: support's file on this message, when it sent one. */
   readonly replyFile: TicketReplyFileRecord | null;
@@ -159,6 +159,12 @@ export interface TicketListFilter {
    * id, so neither reading is dropped.
    */
   readonly code?: string;
+  /**
+   * R12 F3 item 8: the ticket's per-tenant number (the «#1042» an operator quotes). Matches OR
+   * the customer / code above, the way `code` does, so the global search can find a ticket by
+   * either of the two things it is called.
+   */
+  readonly number?: number;
   /** An administrator's id, or `null` for "unassigned". */
   readonly assignedAdminId?: AdminId | null;
   /** Half-open `[from, to)` on `created_at`. */
@@ -444,3 +450,28 @@ export interface TicketContextReader {
     tx?: unknown,
   ): Promise<UserId | null>;
 }
+
+/**
+ * Phase 4 PR-4 — what the ticket service tells the support AI. Called in the customer's own
+ * transaction, after the message is written, so the AI's job exists only if the message does.
+ * The AI module implements it; this module never imports that one.
+ */
+export interface TicketSupportAiHooks {
+  customerMessagePosted(
+    scope: TenantContext,
+    input: { readonly ticket: TicketRecord; readonly message: TicketMessageRecord },
+    tx: unknown,
+  ): Promise<void>;
+}
+
+/** Phase 4 PR-4 — the result of writing the support AI's answer into a ticket. */
+export type TicketAiReplyResult =
+  | {
+      readonly outcome: 'POSTED';
+      readonly message: TicketMessageRecord;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly outcome: 'REFUSED';
+      readonly reason: 'SCOPE_INACTIVE' | 'NOT_FOUND' | 'CLOSED' | 'BLOCKED' | 'INVALID' | 'FULL';
+    };

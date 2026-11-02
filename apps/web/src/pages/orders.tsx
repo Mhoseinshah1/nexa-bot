@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { keepPageWhileTurning } from '../ui/paging';
 import {
@@ -30,6 +30,7 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { ListFreshness, ListSearchBox, appliedListSearch } from '../ui/list-search';
 import { ListFilterBar, type ListFilter } from '../ui/filter-bar';
+import { RowExportBar, selectColumn, useRowSelection, type ExportColumn } from '../ui/row-export';
 import { SavedViewsMenu } from '../ui/saved-views-menu';
 import { routeViewRegistration, type ViewPreset } from '../ui/saved-views';
 import { CustomerIdentityLink } from '../ui/customer-identity';
@@ -254,6 +255,23 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
   const nextCursor = orders.data?.nextCursor ?? null;
   const filtering = appliedSearch !== '';
 
+  // R12 F3 item 8: the ticked rows of this page, exported as the columns below print them.
+  const orderKey = useCallback((row: OrderSummaryResponse) => row.id, []);
+  const selection = useRowSelection(rows, orderKey);
+  const exportColumns: readonly ExportColumn<OrderSummaryResponse>[] = [
+    { header: t('web.record_code'), value: (row) => row.code ?? '' },
+    { header: t('web.order_line'), value: (row) => row.lineTitle },
+    { header: t('web.status'), value: (row) => t(STATE_LABELS[row.state]) },
+    { header: t('web.order_total'), value: (row) => row.totalAmount },
+    { header: t('web.payment_currency'), value: (row) => row.currency },
+    { header: t('web.order_customer'), value: (row) => row.customerTelegramUserId ?? '' },
+    { header: t('web.order_created_at'), value: (row) => formatTimestampNumeric(row.createdAt) },
+    {
+      header: t('web.order_expires_at'),
+      value: (row) => (row.expiresAt === null ? '' : formatTimestampNumeric(row.expiresAt)),
+    },
+  ];
+
   const columns: readonly Column<OrderSummaryResponse>[] = [
     {
       key: 'title',
@@ -306,6 +324,7 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
           <span className="nowrap">{formatTimestampNumeric(row.expiresAt)}</span>
         ),
     },
+    selectColumn(selection, orderKey),
   ];
 
   // Hidden while the list cannot answer: a control that mints a new query key is
@@ -401,6 +420,14 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
             rowKey={(row) => row.id}
             dense
             sticky
+            toolbar={
+              <RowExportBar
+                selection={selection}
+                columns={exportColumns}
+                filename="orders"
+                allowed={!denied}
+              />
+            }
           />
         </StateSwitch>
 

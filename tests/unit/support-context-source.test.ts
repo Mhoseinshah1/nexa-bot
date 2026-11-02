@@ -8,17 +8,25 @@ import {
 /** TB5 — the Assist view of the TB3 context: labels for the operator, never a row id. */
 describe('TbSupportContextSource', () => {
   const payload = {
-    services: [{ alias: 'S1', label: 'user123' }],
-    orders: [{ alias: 'O1', title: 'سرویس یک‌ماهه' }],
+    services: [{ alias: 'S1', label: 'user123', renewalPrice: null }],
+    orders: [
+      {
+        alias: 'O1',
+        title: 'سرویس یک‌ماهه',
+        total: { amountMinor: '150000', currency: 'IRT', formatted: '150,000 تومان' },
+      },
+    ],
     payments: [
       {
         alias: 'P1',
         method: 'MANUAL_TRANSFER',
         routeLabelKey: 'bot.payment.route_name_manual_transfer',
-        amount: { amountMinor: '150000', currency: 'IRR' },
+        amount: { amountMinor: '150000', currency: 'IRR', formatted: '150,000 ریال' },
       },
     ],
     knowledge: [{ alias: 'K1', source: 'KNOWLEDGE', question: 'سرویس وصل نمی‌شود', answer: 'a' }],
+    catalogue: [],
+    addons: [],
     flags: { identityLinked: false },
   };
   const build = {
@@ -71,14 +79,14 @@ describe('TbSupportContextSource', () => {
       paymentLabel({
         method: 'WALLET',
         routeLabelKey: null,
-        amount: { amountMinor: '2500000', currency: 'IRT' },
+        amount: { amountMinor: '2500000', currency: 'IRT', formatted: '2,500,000 تومان' },
       }),
     ).toBe('کیف پول 2,500,000 تومان');
     expect(
       paymentLabel({
         method: 'GATEWAY',
         routeLabelKey: 'bot.payment.route_name_tonpays',
-        amount: { amountMinor: '1250', currency: 'USD' },
+        amount: { amountMinor: '1250', currency: 'USD', formatted: '12.50 دلار' },
       }),
     ).toBe('درگاه پرداخت تون پی وبسایت 12.50 دلار');
     // A route with no name of its own falls back to the method's.
@@ -86,7 +94,7 @@ describe('TbSupportContextSource', () => {
       paymentLabel({
         method: 'GATEWAY',
         routeLabelKey: null,
-        amount: { amountMinor: '1000', currency: 'IRT' },
+        amount: { amountMinor: '1000', currency: 'IRT', formatted: '1,000 تومان' },
       }),
     ).toBe('درگاه پرداخت 1,000 تومان');
   });

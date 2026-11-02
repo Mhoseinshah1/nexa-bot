@@ -15,7 +15,6 @@ import {
   type PanelResponse,
   type PanelSummaryResponse,
   type ProviderListResponse,
-  type TenantContext,
   type TestPanelResponse,
 } from '@nexa/contracts';
 import {
@@ -23,10 +22,9 @@ import {
   providerAdapter,
 } from '../../modules/platform/providers/infrastructure/adapter-registry.js';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type { PanelView } from '../../modules/platform/panels/application/ports.js';
 import type { PanelWithCapacity } from '../../modules/platform/panels/application/capacity-ports.js';
 import { readHealth } from '../../modules/platform/panels/application/panel-health-view.js';
@@ -65,7 +63,7 @@ export class PanelsController {
     // No permission beyond a session: it is a catalogue of code, and a permission
     // nobody can be denied is a permission that exists to be looked at rather than
     // enforced.
-    const { scope } = await this.authenticate(request);
+    const { scope } = await authenticateAdmin(this.container, request);
     // Only the types this release has an ADAPTER for. The descriptor catalogue
     // is the frozen contract and lists `sanaei`, whose adapter is Phase 3B; a
     // client shown it would offer a configuration that every create rejects
@@ -104,7 +102,7 @@ export class PanelsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<PanelListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // A repeated parameter is an ARRAY, not a string. Nothing here calls a
     // string method on one — `panelListQuerySchema` refuses it — so this is
     // not the 500 the ops-log reader had. It is the same lie in the same
@@ -138,7 +136,7 @@ export class PanelsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<PanelHealthDashboardResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = singleValued(raw);
     const page = panelListQuerySchema.parse({
       ...(query.limit === undefined ? {} : { limit: query.limit }),
@@ -175,7 +173,7 @@ export class PanelsController {
 
   @Get('panels/:id')
   async detail(@Req() request: FastifyRequest, @Param('id') id: string): Promise<PanelResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { panel: this.toSummary(await this.container.panels.get(scope, actor, id)) };
   }
 
@@ -188,7 +186,7 @@ export class PanelsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<PanelAdvancedResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.panelAdvanced.advanced(scope, actor, id);
   }
 
@@ -199,7 +197,7 @@ export class PanelsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<UpdatePanelPolicyResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.panelAdvanced.updatePolicy(scope, actor, id, body);
   }
 
@@ -212,13 +210,13 @@ export class PanelsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<PanelTechnicalResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.panelAdvanced.technical(scope, actor, id);
   }
 
   @Post(PANEL_ROUTES.create)
   async create(@Req() request: FastifyRequest, @Body() body: unknown): Promise<PanelResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const result = await this.container.panels.create(scope, actor, body);
     return { panel: this.toSummary(result.view) };
   }
@@ -229,7 +227,7 @@ export class PanelsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<PanelResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const view = await this.container.panels.update(scope, actor, id, body);
     return { panel: this.toSummary(view) };
   }
@@ -240,7 +238,7 @@ export class PanelsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<PanelResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const view = await this.container.panels.setCredentials(scope, actor, id, body);
     return { panel: this.toSummary(view) };
   }
@@ -251,7 +249,7 @@ export class PanelsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<PanelResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const view = await this.container.panels.setStatus(scope, actor, id, body);
     return { panel: this.toSummary(view) };
   }
@@ -263,7 +261,7 @@ export class PanelsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<PanelResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const view = await this.container.panels.setDrain(scope, actor, id, body);
     return { panel: this.toSummary(view) };
   }
@@ -274,7 +272,7 @@ export class PanelsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<TestPanelResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const result = await this.container.panels.testConnection(scope, actor, id, body);
     return { panel: this.toSummary(result.view), probed: result.probed };
   }
@@ -345,6 +343,9 @@ export class PanelsController {
         reason: view.panel.drain?.reason ?? null,
       },
       balancingGroup: view.panel.balancingGroup,
+      filesOnlyDelivery: view.panel.filesOnlyDelivery,
+      qrKind: view.panel.qrKind,
+      singboxIntervalMinutes: view.panel.singboxIntervalMinutes,
       createdAt: view.panel.createdAt.toISOString(),
       updatedAt: view.panel.updatedAt.toISOString(),
     };
@@ -381,26 +382,6 @@ export class PanelsController {
       lastHealthyAt: view.health?.lastHealthyAt?.toISOString() ?? null,
       unusableStreak: view.health?.unusableStreak ?? null,
       stale: reading.stale,
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
     };
   }
 }

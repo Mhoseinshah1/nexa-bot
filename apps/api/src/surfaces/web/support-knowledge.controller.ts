@@ -15,11 +15,9 @@ import {
   type SupportKnowledgeProposalView,
   type SupportKnowledgeRevisionView,
   type SupportLearningCandidateView,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import type { KnowledgeBuildDetail } from '../../modules/control/support-knowledge/application/support-knowledge-build.service.js';
 import type {
   KnowledgeArticleRecord,
@@ -49,7 +47,7 @@ export class SupportKnowledgeController {
     @Req() request: FastifyRequest,
     @Query() query: unknown,
   ): Promise<{ articles: SupportKnowledgeArticleView[] }> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const filter = articleFilterSchema.parse(query ?? {});
     const rows = await this.container.supportKnowledge.listArticles(scope, actor, filter);
     return { articles: rows.map(articleView) };
@@ -60,7 +58,7 @@ export class SupportKnowledgeController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<SupportKnowledgeArticleView> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return articleView(await this.container.supportKnowledge.createArticle(scope, actor, body));
   }
 
@@ -70,7 +68,7 @@ export class SupportKnowledgeController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<SupportKnowledgeArticleView> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return articleView(await this.container.supportKnowledge.updateArticle(scope, actor, id, body));
   }
 
@@ -79,7 +77,7 @@ export class SupportKnowledgeController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<{ revisions: SupportKnowledgeRevisionView[] }> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const rows = await this.container.supportKnowledge.revisions(scope, actor, id);
     return {
       revisions: rows.map((row) => ({
@@ -101,7 +99,7 @@ export class SupportKnowledgeController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<SupportKnowledgeArticleView> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return articleView(
       await this.container.supportKnowledge.publishArticle(scope, actor, id, body),
     );
@@ -113,7 +111,7 @@ export class SupportKnowledgeController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<SupportKnowledgeArticleView> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return articleView(await this.container.supportKnowledge.retireArticle(scope, actor, id, body));
   }
 
@@ -123,7 +121,7 @@ export class SupportKnowledgeController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<SupportKnowledgeArticleView> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return articleView(await this.container.supportKnowledge.setEnabled(scope, actor, id, body));
   }
 
@@ -132,7 +130,7 @@ export class SupportKnowledgeController {
     @Req() request: FastifyRequest,
     @Query() query: unknown,
   ): Promise<{ candidates: SupportLearningCandidateView[] }> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const filter = candidateFilterSchema.parse(query ?? {});
     const rows = await this.container.supportKnowledge.listCandidates(scope, actor, filter);
     return { candidates: rows.map(candidateView) };
@@ -144,7 +142,7 @@ export class SupportKnowledgeController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<SupportLearningCandidateView> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return candidateView(
       await this.container.supportKnowledge.approveCandidate(scope, actor, id, body),
     );
@@ -156,7 +154,7 @@ export class SupportKnowledgeController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<SupportLearningCandidateView> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return candidateView(
       await this.container.supportKnowledge.rejectCandidate(scope, actor, id, body),
     );
@@ -169,7 +167,7 @@ export class SupportKnowledgeController {
     @Param('conversationId') conversationId: string,
     @Body() body: unknown,
   ): Promise<{ jobId: string; state: string }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const job = await this.container.supportLearning.propose(scope, actor, conversationId, body);
     return { jobId: job.id, state: job.state };
   }
@@ -179,7 +177,7 @@ export class SupportKnowledgeController {
   async latestBuild(
     @Req() request: FastifyRequest,
   ): Promise<{ build: SupportKnowledgeBuildView | null }> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const detail = await this.container.supportKnowledgeBuild.latest(scope, actor);
     return { build: detail === null ? null : buildView(detail) };
   }
@@ -190,7 +188,7 @@ export class SupportKnowledgeController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<{ build: SupportKnowledgeBuildView }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { build: buildView(await this.container.supportKnowledgeBuild.run(scope, actor, body)) };
   }
 
@@ -200,7 +198,7 @@ export class SupportKnowledgeController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<SupportKnowledgeBuildApplyResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.supportKnowledgeBuild.apply(scope, actor, id, body);
   }
 
@@ -210,23 +208,8 @@ export class SupportKnowledgeController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<SupportKnowledgeProposalView> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return proposalView(await this.container.supportKnowledgeBuild.resolve(scope, actor, id, body));
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.container.config.NODE_ENV === 'production');
-    if (options.write === true)
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
   }
 }
 
@@ -264,6 +247,8 @@ export function candidateView(row: LearningCandidateRecord): SupportLearningCand
     provider: row.provider,
     model: row.model,
     articleId: row.articleId,
+    replacesArticleId: row.replacesArticleId,
+    assisted: row.assisted,
     version: row.version,
     createdAt: row.createdAt.toISOString(),
     reviewedAt: row.reviewedAt?.toISOString() ?? null,

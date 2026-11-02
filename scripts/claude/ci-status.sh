@@ -26,7 +26,8 @@ const [mode, ...args] = process.argv.slice(1);
 const read = () => { try { return JSON.parse(fs.readFileSync(0, 'utf8') || 'null'); } catch { return null; } };
 // `gh api --paginate` prints one JSON array per page back to back ("[..][..]"), or a single
 // merged array; accept both, and flatten them into one array. null when nothing parses.
-const readPages = (file) => {
+// objects=true: endpoints that page as objects ({total_count, check_suites}), returned as a list.
+const readPages = (file, objects = false) => {
   let text; try { text = fs.readFileSync(file, 'utf8'); } catch { return null; }
   const pages = []; let depth = 0, inStr = false, esc = false, start = -1;
   for (let i = 0; i < text.length; i++) {
@@ -39,7 +40,9 @@ const readPages = (file) => {
       else if (depth < 0) return null;
     }
   }
-  if (depth !== 0 || !pages.length || !pages.every(Array.isArray)) return null;
+  if (depth !== 0 || !pages.length) return null;
+  if (objects) return pages;
+  if (!pages.every(Array.isArray)) return null;
   return pages.flat();
 };
 const RED = ['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure', 'stale'];
@@ -102,6 +105,44 @@ else if (mode === "gate") {
     if (state.has_any_findings === false) extra += ' findings=none';
     else if (state.has_any_findings === true) extra += ' findings=yes';
     if (state.status) extra += ` status=${state.status}`;
+  }
+  // The receipt Codex posts when a review finishes: "Didn't find any major issues" (clean) and
+  // "**Reviewed commit:** `<sha>`". A head can get two reviews (the automatic one and the
+  // requested one); the FIRST receipt for the head is the one acted on, so it is the one
+  // reported. No receipt for the head: the first receipt of the latest reviewed commit.
+  let receipt = null;
+  if (Array.isArray(iss)) {
+    const receipts = [];
+    for (const c of iss.filter(isCodex).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))) {
+      const b = String(c.body || '');
+      if (!/codex-review-receipt:v1/.test(b)) continue;
+      const m = b.match(/Reviewed commit:\**\s*`([0-9a-f]{7,40})`/i);
+      if (m) receipts.push({ sha: m[1].slice(0, 8), clean: /Didn['\u2019]t find any major issues/i.test(b) });
+    }
+    const forHead = receipts.filter((r) => head8 && r.sha === head8.slice(0, r.sha.length));
+    const pool = forHead.length ? forHead : receipts.filter((r) => receipts.length && r.sha === receipts[receipts.length - 1].sha);
+    receipt = pool[0] || null;
+  }
+  if (receipt) {
+    if (!state) { rev = receipt.sha; if (receipt.clean) extra += ' findings=none'; }
+    extra += ` receipt=${receipt.sha}:${receipt.clean ? 'clean' : 'findings'}`;
+  }
+  // Codex's 👍 on the PR means "reviewed, nothing found". A reaction carries no commit, and a
+  // commit's own date says nothing about when it became the head (it may be pushed much later).
+  // So it counts for the head only when it is newer than the head's FIRST check suite, which
+  // GitHub creates when that commit is pushed (thumbsup=head); older = stale; no suite = unknown.
+  // The reactions API reports the app's user as type User; its exact "[bot]" login cannot be
+  // taken by a person, so the login alone identifies it here.
+  const reactions = args[3] ? readPages(args[3]) : null;
+  if (Array.isArray(reactions)) {
+    const ups = reactions.filter((r) => r && r.content === '+1' && r.user && r.user.login === 'chatgpt-codex-connector[bot]');
+    if (ups.length) {
+      const suites = args[4] ? readPages(args[4], true) : null;
+      const list = Array.isArray(suites) ? suites.flatMap((x) => (x && Array.isArray(x.check_suites) ? x.check_suites : [x])) : [];
+      const pushedAt = list.map((x) => x && String(x.created_at || '')).filter(Boolean).sort()[0] || '';
+      const last = ups.map((r) => String(r.created_at)).sort().pop();
+      extra += !pushedAt ? ' thumbsup=unknown' : last > pushedAt ? ' thumbsup=head' : ' thumbsup=stale';
+    }
   }
   console.log(`codex comments=${comments.length} ${tpart} reviewed=${rev} head=${head8 || 'unknown'}${extra}`);
   for (const c of comments) {
@@ -224,7 +265,10 @@ codex_report() {
   # so a summary past the first 100 comments is seen. Unreadable is not fatal; the review
   # comments above still say what they say.
   api "repos/$R/issues/$pr/comments?per_page=100" --paginate >"$tdir/issue.json" 2>/dev/null || : >"$tdir/issue.json"
-  jx codex "${head:0:8}" "$tdir/issue.json" "$tdir/threads.json" <<<"$comments" || { rm -rf "$tdir"; return 1; }
+  # Codex's 👍 reaction, and the head's check suites (created when the head was pushed).
+  api "repos/$R/issues/$pr/reactions?per_page=100" --paginate >"$tdir/reactions.json" 2>/dev/null || : >"$tdir/reactions.json"
+  api "repos/$R/commits/$head/check-suites?per_page=100" --paginate >"$tdir/suites.json" 2>/dev/null || : >"$tdir/suites.json"
+  jx codex "${head:0:8}" "$tdir/issue.json" "$tdir/threads.json" "$tdir/reactions.json" "$tdir/suites.json" <<<"$comments" || { rm -rf "$tdir"; return 1; }
   rm -rf "$tdir"
 }
 

@@ -45,6 +45,8 @@ export const CAPABILITY_TEST_CONTEXT: SupportContextPayload = {
         'برنامه را کامل ببندید، اینترنت گوشی را یک بار خاموش و روشن کنید، لینک اشتراک را در برنامه به‌روزرسانی کنید و دوباره وصل شوید.',
     },
   ],
+  catalogue: [],
+  addons: [],
   supportAccounts: [],
   flags: {
     hasUnderReviewPayment: false,

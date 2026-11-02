@@ -1716,6 +1716,17 @@ export function supportsCapability(
 }
 
 /**
+ * R11 A4: whether a provider type hands over ready-made connection files — the descriptor
+ * declares `SUBSCRIPTION_FILES`. The one question both the Web Admin (whether to draw
+ * «فقط فایل، بدون لینک ساب») and the server (whether to accept it) ask, so the two cannot
+ * disagree. The server additionally asks the adapter that it implements the method.
+ */
+export function providerDeliversConnectionFiles(providerType: string): boolean {
+  const descriptor = providerDescriptor(providerType);
+  return descriptor?.capabilities.includes('SUBSCRIPTION_FILES') ?? false;
+}
+
+/**
  * Marzban.
  *
  * Username and password, exchanged for a bearer token at `/api/admin/token`.

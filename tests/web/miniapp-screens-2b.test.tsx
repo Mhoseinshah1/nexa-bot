@@ -397,7 +397,9 @@ const service = (overrides: Record<string, unknown> = {}) => ({
   working: false,
   actions: [],
   qr: true,
+  qrKinds: ['SUB_LINK'],
   canChangeLocation: true,
+  locationRemaining: null,
   autoRenew: { offered: false, enabled: false, price: null, leadHours: 24 },
   ...overrides,
 });
@@ -418,7 +420,7 @@ describe('the QR and link sheet', () => {
 
   it('draws the server’s QR, copies the link, and closes with Escape', async () => {
     routes['GET /services/s1'] = () => ({ body: service() });
-    routes['GET /services/s1/qr'] = () => ({ body: {} });
+    routes['GET /services/s1/qr/SUB_LINK'] = () => ({ body: {} });
     render(<ServiceDetail serviceId="s1" />);
     fireEvent.click(await screen.findByText(fa('miniapp.service_show_qr')));
     const dialog = await screen.findByRole('dialog', { name: fa('miniapp.service_qr_title') });
@@ -438,10 +440,32 @@ describe('the QR and link sheet', () => {
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:qr');
   });
 
+  it('R11 A4: draws both QRs of a BOTH panel, each under its own caption', async () => {
+    routes['GET /services/s1'] = () => ({ body: service({ qrKinds: ['SUB_LINK', 'SINGBOX'] }) });
+    routes['GET /services/s1/qr/SUB_LINK'] = () => ({ body: {} });
+    routes['GET /services/s1/qr/SINGBOX'] = () => ({ body: {} });
+    render(<ServiceDetail serviceId="s1" />);
+    fireEvent.click(await screen.findByText(fa('miniapp.service_show_qr')));
+    const dialog = await screen.findByRole('dialog', { name: fa('miniapp.service_qr_title') });
+    expect(await within(dialog).findAllByAltText(fa('miniapp.service_qr_alt'))).toHaveLength(2);
+    expect(within(dialog).getByText(fa('miniapp.service_qr_sublink'))).toBeTruthy();
+    expect(within(dialog).getByText(fa('miniapp.service_qr_singbox'))).toBeTruthy();
+  });
+
+  it('a single QR carries no kind caption', async () => {
+    routes['GET /services/s1'] = () => ({ body: service() });
+    routes['GET /services/s1/qr/SUB_LINK'] = () => ({ body: {} });
+    render(<ServiceDetail serviceId="s1" />);
+    fireEvent.click(await screen.findByText(fa('miniapp.service_show_qr')));
+    const dialog = await screen.findByRole('dialog', { name: fa('miniapp.service_qr_title') });
+    expect(await within(dialog).findAllByAltText(fa('miniapp.service_qr_alt'))).toHaveLength(1);
+    expect(within(dialog).queryByText(fa('miniapp.service_qr_sublink'))).toBeNull();
+  });
+
   it('says so when the image cannot be made, and when the clipboard refuses', async () => {
     write.mockRejectedValue(new DOMException('denied', 'NotAllowedError'));
     routes['GET /services/s1'] = () => ({ body: service() });
-    routes['GET /services/s1/qr'] = () => ({ status: 500, body: {} });
+    routes['GET /services/s1/qr/SUB_LINK'] = () => ({ status: 500, body: {} });
     render(<ServiceDetail serviceId="s1" />);
     fireEvent.click(await screen.findByText(fa('miniapp.service_show_qr')));
     const dialog = await screen.findByRole('dialog');
@@ -451,7 +475,9 @@ describe('the QR and link sheet', () => {
   });
 
   it('is not offered when the service has no QR', async () => {
-    routes['GET /services/s1'] = () => ({ body: service({ qr: false, subscriptionUrl: null }) });
+    routes['GET /services/s1'] = () => ({
+      body: service({ qr: false, qrKinds: [], subscriptionUrl: null }),
+    });
     render(<ServiceDetail serviceId="s1" />);
     await screen.findByText('پلن پایه');
     expect(screen.queryByText(fa('miniapp.service_show_qr'))).toBeNull();
@@ -538,6 +564,7 @@ describe('the location sheet', () => {
       { id: 'l-nl', label: 'هلند', price: money('30000') },
       { id: 'l-fi', label: 'فنلاند', price: money('0') },
     ],
+    remaining: null,
   };
 
   async function openSheet() {
@@ -551,6 +578,41 @@ describe('the location sheet', () => {
     routes['GET /services/s1'] = () => ({ body: service({ canChangeLocation: false }) });
     render(<ServiceDetail serviceId="s1" />);
     await screen.findByText('پلن پایه');
+    expect(screen.queryByText(fa('miniapp.location_open'))).toBeNull();
+  });
+
+  const remainingText = (remaining: number, max: number) =>
+    fa('miniapp.location_remaining')
+      .replace('{remaining}', String(remaining))
+      .replace('{max}', String(max));
+
+  it('R11 B4: says nothing about what remains when the server sends no limit', async () => {
+    routes['GET /services/s1/locations'] = () => ({ body: offer });
+    const dialog = await openSheet();
+    await within(dialog).findByText('هلند');
+    expect(screen.queryByText(/تغییر لوکیشن باقی‌مانده/u)).toBeNull();
+  });
+
+  it('R11 B4: says how many changes are left on the service view and on the sheet', async () => {
+    routes['GET /services/s1'] = () => ({
+      body: service({ locationRemaining: { remaining: 2, max: 3 } }),
+    });
+    routes['GET /services/s1/locations'] = () => ({
+      body: { ...offer, remaining: { remaining: 2, max: 3 } },
+    });
+    render(<ServiceDetail serviceId="s1" />);
+    expect(await screen.findByText(remainingText(2, 3))).toBeTruthy();
+    fireEvent.click(await screen.findByText(fa('miniapp.location_open')));
+    const dialog = await screen.findByRole('dialog', { name: fa('miniapp.location_title') });
+    expect(await within(dialog).findByText(remainingText(2, 3))).toBeTruthy();
+  });
+
+  it('R11 B4: at zero the view still says «0 از 3», and offers no way into the sheet', async () => {
+    routes['GET /services/s1'] = () => ({
+      body: service({ canChangeLocation: false, locationRemaining: { remaining: 0, max: 3 } }),
+    });
+    render(<ServiceDetail serviceId="s1" />);
+    expect(await screen.findByText(remainingText(0, 3))).toBeTruthy();
     expect(screen.queryByText(fa('miniapp.location_open'))).toBeNull();
   });
 
@@ -584,6 +646,29 @@ describe('the location sheet', () => {
     expect(post?.body).toEqual({ locationId: 'l-fi' });
     expect(post?.headers['idempotency-key']).toMatch(/^[0-9a-f-]{36}$/u);
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('R11 B4: after a move is accepted and the sheet is closed, the page shows the new count', async () => {
+    let moved = false;
+    routes['GET /services/s1'] = () => ({
+      body: service({ locationRemaining: { remaining: moved ? 2 : 3, max: 3 } }),
+    });
+    routes['GET /services/s1/locations'] = () => ({ body: offer });
+    routes['POST /services/s1/location'] = () => {
+      moved = true;
+      return { status: 201, body: { outcome: 'REQUESTED' } };
+    };
+    render(<ServiceDetail serviceId="s1" />);
+    expect(await screen.findByText(remainingText(3, 3))).toBeTruthy();
+    fireEvent.click(await screen.findByText(fa('miniapp.location_open')));
+    const dialog = await screen.findByRole('dialog', { name: fa('miniapp.location_title') });
+    fireEvent.click(await within(dialog).findByText('فنلاند'));
+    fireEvent.click(
+      within(dialog).getByText(fa('miniapp.location_move').replace('{location}', 'فنلاند')),
+    );
+    fireEvent.click(await within(dialog).findByText(fa('miniapp.sheet_close')));
+    expect(await screen.findByText(remainingText(2, 3))).toBeTruthy();
+    expect(screen.queryByText(remainingText(3, 3))).toBeNull();
   });
 
   it('takes a priced move to the ordinary checkout', async () => {

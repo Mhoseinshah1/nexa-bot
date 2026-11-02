@@ -84,7 +84,7 @@ function toReferral(row: typeof referrals.$inferSelect): ReferralRecord {
  * column objects: a single-table select renders those unqualified, and inside this subquery
  * a bare "tenant_id" would bind to the order's or the operation's, not the referral's.
  */
-function refereeQualified() {
+export function refereeQualified() {
   const purchasedAs = sql.join(
     Object.entries(PURCHASED_AS).map(([purpose, type]) => sql`WHEN ${purpose} THEN ${type}`),
     sql` `,

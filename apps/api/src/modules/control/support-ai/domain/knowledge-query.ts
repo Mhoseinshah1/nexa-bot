@@ -75,6 +75,15 @@ export const TOPIC_QUERY_TERMS: Readonly<Partial<Record<SupportAiTopic, string>>
   TRAFFIC_AND_EXPIRY: 'حجم ترافیک انقضا',
   PLAN_INFO: 'پلن تعرفه',
   KNOWN_ERROR: 'خطا',
+  // Phase 4 PR-1: the new safe topics.
+  PURCHASE_INFO: 'خرید قیمت تعرفه',
+  RENEWAL_INFO: 'تمدید',
+  ADDON_INFO: 'حجم اضافه زمان',
+  TRIAL_INFO: 'تست آزمایشی',
+  LOCATION_INFO: 'لوکیشن کشور',
+  SPEED_QUALITY: 'سرعت کیفیت',
+  GET_SUBSCRIPTION_LINK: 'لینک اشتراک',
+  PAYMENT_HOWTO: 'پرداخت روش',
 };
 
 /**

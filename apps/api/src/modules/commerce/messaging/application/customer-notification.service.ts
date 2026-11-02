@@ -11,6 +11,7 @@ import {
   type BotInstanceId,
   type Clock,
   type CustomerNotificationKind,
+  type TelegramWizardStep,
   type TemplateKey,
   type TemplateValues,
   type TicketAttachmentKind,
@@ -26,7 +27,16 @@ import type {
   CustomerNotificationRepository,
   CustomerSendResult,
 } from './ports.js';
-import type { OrderScreenReadiness, OrderScreenWait } from './order-screen-answer.js';
+import {
+  ORDER_END_ANSWER_STEPS,
+  type OrderScreenReadiness,
+  type OrderScreenWait,
+} from './order-screen-answer.js';
+import {
+  ORDER_END_STATES,
+  type OrderEndScreen,
+  type OrderReorderTarget,
+} from './order-end-screen.js';
 import type { ServiceReminderSnapshotReader } from '../../provisioning/application/service-reminder.ports.js';
 import {
   REMINDER_KIND_FLAGS,
@@ -347,6 +357,14 @@ export interface CustomerNotificationDeps {
    */
   readonly paymentReferences?: {
     trackingCodeFor: (scope: TenantContext, paymentId: string) => Promise<string | null>;
+    /**
+     * R12 F3 item 1: the order a payment pays for (null for a top-up), read at send time so a
+     * payment notice's button can open that order's payment methods. Absent, no such button.
+     */
+    orderIdFor?: (
+      scope: TenantContext,
+      paymentId: string,
+    ) => Promise<{ readonly orderId: string | null } | null>;
   };
   /**
    * Package F: what `SERVICE_TRANSFER_RECEIVED` renders — the service's name, location and
@@ -395,8 +413,33 @@ export interface CustomerNotificationDeps {
    */
   readonly buttonsFor?: (
     kind: CustomerNotificationKind,
-    subject: { readonly serviceId?: string; readonly ticketId?: string },
+    subject: {
+      readonly serviceId?: string;
+      readonly ticketId?: string;
+      /** R11 A11: where an ended order's «🔁 سفارش دوباره» leads. */
+      readonly reorder?: OrderReorderTarget;
+      /** R12 F3 item 1: the order a pending-order reminder is about. */
+      readonly orderId?: string;
+      /**
+       * R12 F3 item 1: the payment a payment notice is about, with the order it pays for —
+       * null for a wallet top-up, whose way on is the top-up menu.
+       */
+      readonly payment?: { readonly orderId: string | null; readonly paymentId?: string };
+    },
   ) => readonly CustomerButton[];
+  /**
+   * R11 A11: what an ended order's screen renders (`ORDER_EXPIRED`, `ORDER_CANCELLED`) — the
+   * order's summary and where re-ordering leads, read at send time from the ORDER the row
+   * names (`orderEndScreen`), with the order's state, which must be the ending the kind
+   * states. A reader, not a payload (ADR 0030 §1). Absent, or null (no such order), sends
+   * nothing.
+   */
+  readonly orderEnds?: {
+    screenFor(
+      scope: TenantContext,
+      orderId: string,
+    ): Promise<{ readonly state: string; readonly screen: OrderEndScreen } | null>;
+  };
   /**
    * WP-A7: what `TICKET_REPLY` renders — the ticket's number and category and support's
    * reply, read at send time from the MESSAGE ROW the notification names, and the ticket
@@ -407,7 +450,12 @@ export interface CustomerNotificationDeps {
     notificationFacts(
       scope: TenantContext,
       messageId: string,
-    ): Promise<{ readonly values: TemplateValues; readonly ticketId: string } | null>;
+    ): Promise<{
+      readonly values: TemplateValues;
+      readonly ticketId: string;
+      /** Phase 4 PR-4: the template of an AI answer (labelled as the assistant's); else the kind's. */
+      readonly templateKey?: TemplateKey;
+    } | null>;
     /**
      * HF-A7: what `TICKET_REPLY_ATTACHMENT` sends — support's file and its caption's values,
      * read at send time from the file row the MESSAGE id names. A reader, not a payload.
@@ -504,6 +552,8 @@ export interface CustomerNotificationDeps {
       scope: TenantContext,
       orderId: string,
       destination: { readonly chatId: string; readonly botInstanceId: BotInstanceId },
+      /** R11 A11: the screens that may be answered on, when not the default set. */
+      steps?: readonly TelegramWizardStep[],
     ): Promise<OrderScreenReadiness>;
     answer?(
       scope: TenantContext,
@@ -514,6 +564,7 @@ export interface CustomerNotificationDeps {
         readonly values: TemplateValues;
         readonly buttons: readonly CustomerButton[];
       },
+      steps?: readonly TelegramWizardStep[],
     ): Promise<CustomerSendResult | OrderScreenWait | null>;
   };
   /**
@@ -865,12 +916,16 @@ export class CustomerNotificationService {
     readonly buttons: readonly CustomerButton[];
     /** HF-A7: a file to send, with the kind's template as its caption, instead of text. */
     readonly file?: NotificationFile;
+    /** Phase 4 PR-4: a template other than the kind's own (an AI answer in a ticket). */
+    readonly templateKey?: TemplateKey;
     /**
      * The order this outcome belongs to (R2; FIX-08): its payment message is where the
      * outcome is EDITED when it can be, and whose screens are closed before it is sent
      * when it cannot.
      */
     readonly closesOrder?: string;
+    /** R11 A11: the screens `closesOrder` may be answered on, when not FIX-08's default. */
+    readonly answerSteps?: readonly TelegramWizardStep[];
     /**
      * Where a delivered file's handle is stamped and its staged bytes cleared, in the
      * transaction that records the delivery — the subject's own owner (HF-A7, Phase A2).
@@ -881,6 +936,31 @@ export class CustomerNotificationService {
       tx: TransactionScope,
     ) => Promise<boolean>;
   } | null> {
+    /*
+     * R11 A11: an unpaid order that ENDED — its window closed, or the customer cancelled it —
+     * is answered ON the order's own payment message (`closesOrder`, FIX-08's edit-in-place):
+     * that message is edited into the summary with «🔁 سفارش دوباره» and «🏠 منوی اصلی», and
+     * loses its card, copy and pay buttons. Only when it cannot be edited (none known — a
+     * mini-app order —, deleted, too old) is this sent, ONCE: the row is the dedupe, one per
+     * order and kind (`customer_notifications_subject_key`), and the lane's stamp makes two
+     * dispatchers one answer.
+     *
+     * Null — nothing sent, nothing edited — unless the order is IN the ending the kind
+     * states: an order paid just before its deadline never reaches `EXPIRED` (the sweep's
+     * UPDATE names its source state), and a row that somehow names one must not tell its
+     * customer it lapsed.
+     */
+    if (row.kind === 'ORDER_EXPIRED' || row.kind === 'ORDER_CANCELLED') {
+      if (this.deps.orderEnds === undefined) return null;
+      const ended = await this.deps.orderEnds.screenFor(scope, row.subjectId);
+      if (ended === null || ended.state !== ORDER_END_STATES[row.kind]) return null;
+      return {
+        values: ended.screen.values,
+        buttons: this.deps.buttonsFor?.(row.kind, { reorder: ended.screen.reorder }) ?? [],
+        closesOrder: row.subjectId,
+        answerSteps: ORDER_END_ANSWER_STEPS,
+      };
+    }
     if (row.kind === 'SERVICE_RENEWED') {
       if (this.deps.renewals === undefined) return null;
       const facts = await this.deps.renewals.notificationFacts(scope, row.subjectId);
@@ -1013,13 +1093,54 @@ export class CustomerNotificationService {
       if (facts === null) return null;
       return {
         values: facts.values,
+        ...(facts.templateKey === undefined ? {} : { templateKey: facts.templateKey }),
         buttons: this.deps.buttonsFor?.(row.kind, { ticketId: facts.ticketId }) ?? [],
       };
     }
     const values = await this.reminderValues(scope, row);
-    // Owner spec §2.1/§2.2: a kind's buttons, derived from the KIND alone (no subject): the
-    // low-balance alert's top-up, a wallet credit's wallet and catalogue. Still no payload.
-    return values === null ? null : { values, buttons: this.deps.buttonsFor?.(row.kind, {}) ?? [] };
+    if (values === null) return null;
+    /*
+     * Owner spec §2.1/§2.2: a kind's buttons, derived from the KIND alone: the low-balance
+     * alert's top-up, a wallet credit's wallet and catalogue. R12 F3 item 1: the kinds that
+     * point at a service, an order or a payment read that id back from the subject row (below)
+     * — still a reader, never a payload.
+     */
+    return {
+      values,
+      buttons: this.deps.buttonsFor?.(row.kind, await this.buttonSubject(scope, row)) ?? [],
+    };
+  }
+
+  /**
+   * R12 F3 item 1: what a reminder or payment notice's button needs from its subject — the
+   * service a reminder is about, the order a pending reminder names, the order a payment pays
+   * for. Empty for every other kind (their buttons are derived from the kind alone). A subject
+   * that cannot be read yields no id and so no button, never a guessed one.
+   */
+  private async buttonSubject(
+    scope: TenantContext,
+    row: CustomerNotificationRecord,
+  ): Promise<{
+    readonly serviceId?: string;
+    readonly orderId?: string;
+    readonly payment?: { readonly orderId: string | null; readonly paymentId?: string };
+  }> {
+    if (REMINDER_NOTIFICATION_KINDS.has(row.kind)) {
+      const snapshot = await this.deps.reminderSnapshots.snapshotOf(scope, row.subjectId);
+      return snapshot?.serviceId === undefined ? {} : { serviceId: snapshot.serviceId };
+    }
+    if (row.kind === 'ORDER_PENDING_REMINDER') return { orderId: row.subjectId };
+    if (
+      row.kind === 'PAYMENT_PENDING_REMINDER' ||
+      row.kind === 'PAYMENT_REJECTED' ||
+      row.kind === 'PAYMENT_EXPIRED'
+    ) {
+      const paid = await this.deps.paymentReferences?.orderIdFor?.(scope, row.subjectId);
+      return paid === null || paid === undefined
+        ? {}
+        : { payment: { orderId: paid.orderId, paymentId: row.subjectId } };
+    }
+    return {};
   }
 
   /** The payment's tracking code (`payments.reference`), or null when it cannot be read. */
@@ -1420,7 +1541,12 @@ export class CustomerNotificationService {
           ? content.closesOrder
           : null;
       if (answersOrder !== null) {
-        const ready = await this.deps.orderScreens?.readiness?.(scope, answersOrder, destination);
+        const ready = await this.deps.orderScreens?.readiness?.(
+          scope,
+          answersOrder,
+          destination,
+          content.answerSteps,
+        );
         if (ready?.kind === 'WAIT') {
           const at = this.deps.clock.now();
           await this.deps.uow.run(scope, async (tx) =>
@@ -1456,11 +1582,17 @@ export class CustomerNotificationService {
       let answer: CustomerSendResult | OrderScreenWait | null = null;
       if (answersOrder !== null && this.deps.orderScreens?.answer !== undefined) {
         try {
-          answer = await this.deps.orderScreens.answer(scope, answersOrder, destination, {
-            templateKey: CUSTOMER_NOTIFICATION_TEMPLATES[row.kind],
-            values: content.values,
-            buttons: content.buttons,
-          });
+          answer = await this.deps.orderScreens.answer(
+            scope,
+            answersOrder,
+            destination,
+            {
+              templateKey: CUSTOMER_NOTIFICATION_TEMPLATES[row.kind],
+              values: content.values,
+              buttons: content.buttons,
+            },
+            content.answerSteps,
+          );
         } catch (error: unknown) {
           answer = null;
           this.deps.logger.error(
@@ -1520,7 +1652,7 @@ export class CustomerNotificationService {
             ? await this.deps.messenger.send(scope, {
                 chatId: lookup.contact.chatId,
                 botInstanceId: row.botInstanceId,
-                templateKey: CUSTOMER_NOTIFICATION_TEMPLATES[row.kind],
+                templateKey: content.templateKey ?? CUSTOMER_NOTIFICATION_TEMPLATES[row.kind],
                 values: content.values,
                 // Absent rather than empty: Telegram draws an empty keyboard as a blank attachment.
                 ...(content.buttons.length === 0 ? {} : { buttons: content.buttons }),

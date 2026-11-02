@@ -26,13 +26,11 @@ import {
   type ReportSummaryResponse,
   type ReportTrendResponse,
   type ReportWalletResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type { ReportRangeRequest } from '../../modules/commerce/reporting/application/reporting.service.js';
 import type { KeysetPosition } from '../../modules/commerce/reporting/application/ports.js';
 
@@ -53,7 +51,7 @@ export class ReportsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ReportSummaryResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.reports.summary(scope, actor, rangeOf(raw));
   }
 
@@ -62,7 +60,7 @@ export class ReportsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ReportTrendResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = reportTrendQuerySchema.parse(pick(raw, ['metric', 'currency']));
     return this.container.reports.trend(scope, actor, rangeOf(raw), query.metric, query.currency);
   }
@@ -73,7 +71,7 @@ export class ReportsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ReportFinancialResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = reportFinancialQuerySchema.parse(pick(raw, ['granularity']));
     return this.container.reports.financial(scope, actor, rangeOf(raw), query.granularity);
   }
@@ -83,7 +81,7 @@ export class ReportsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ReportProductsResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = reportProductsQuerySchema.parse(pick(raw, ['by', 'limit', 'page']));
     return this.container.reports.products(scope, actor, rangeOf(raw), query.by, {
       ...(query.limit === undefined ? {} : { limit: query.limit }),
@@ -96,7 +94,7 @@ export class ReportsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ReportServicesResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.reports.services(scope, actor, rangeOf(raw));
   }
 
@@ -105,7 +103,7 @@ export class ReportsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ReportInfrastructureResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.reports.infrastructure(scope, actor, rangeOf(raw));
   }
 
@@ -114,7 +112,7 @@ export class ReportsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ReportPaymentsResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.reports.payments(scope, actor, rangeOf(raw));
   }
 
@@ -123,7 +121,7 @@ export class ReportsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ReportWalletResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.reports.wallet(scope, actor, rangeOf(raw));
   }
 
@@ -132,7 +130,7 @@ export class ReportsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ReportReferralsResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = reportReferralsQuerySchema.parse(pick(raw, ['by', 'limit', 'page']));
     return this.container.reports.referrals(scope, actor, rangeOf(raw), query.by ?? 'SIGNUPS', {
       ...(query.limit === undefined ? {} : { limit: query.limit }),
@@ -145,7 +143,7 @@ export class ReportsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ReportResellersResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.reports.resellers(scope, actor, rangeOf(raw));
   }
 
@@ -154,7 +152,7 @@ export class ReportsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ReportFailuresResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.reports.failures(scope, actor, rangeOf(raw));
   }
 
@@ -163,7 +161,7 @@ export class ReportsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ReportOrdersResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = reportOrdersQuerySchema.parse(
       pick(raw, ['purpose', 'productId', 'limit', 'cursor']),
     );
@@ -181,7 +179,7 @@ export class ReportsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ReportPaymentAttemptsResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = reportPaymentAttemptsQuerySchema.parse(
       pick(raw, ['method', 'provider', 'kind', 'state', 'limit', 'cursor']),
     );
@@ -201,7 +199,7 @@ export class ReportsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ReportOperationsResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = reportOperationsQuerySchema.parse(pick(raw, ['group', 'limit', 'cursor']));
     const result = await this.container.reports.operations(scope, actor, rangeOf(raw), {
       ...(query.group === undefined ? {} : { group: query.group }),
@@ -226,7 +224,7 @@ export class ReportsController {
     @Res() reply: FastifyReply,
     @Query() raw: Record<string, unknown>,
   ): Promise<void> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = reportExportQuerySchema.parse(pick(raw, ['report', 'format', 'granularity']));
     const file = await this.container.reports.export(
       scope,
@@ -243,23 +241,6 @@ export class ReportsController {
       .header('content-length', String(file.bytes.byteLength))
       .header('cache-control', 'no-store')
       .send(Buffer.from(file.bytes));
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    // A report is the TENANT's: every bot it runs sells into the same orders.
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

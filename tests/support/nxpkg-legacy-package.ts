@@ -142,6 +142,62 @@ export function snapshotOfDataset(
   };
 }
 
+/**
+ * Adds `table.column` to the source CATALOGUE only, not to the snapshot's rows file: what a
+ * converter whose allowlist omits a column the dumped table had writes (mirza-to-nexa 0.8.0
+ * and `user.roll_Status`).
+ */
+export function listInCatalogueOnly(
+  parts: SnapshotParts,
+  table: string,
+  column: string,
+  dataType: string,
+): void {
+  const described = catalogueTable(parts, table);
+  const ordinal = Math.max(0, ...described.columns.map((c) => c.ordinal)) + 1;
+  described.columns.push({ column, data_type: dataType, ordinal, charset: null });
+}
+
+/** Drops `table.column` from the snapshot's rows file (header and every row), not the catalogue. */
+export function dropSnapshotColumn(
+  parts: SnapshotParts,
+  table: LegacySourceTableName,
+  column: string,
+): void {
+  const snapshot = (parts.catalog['snapshot_tables'] as Record<string, { columns: string[] }>)[
+    table
+  ];
+  const at = snapshot?.columns.indexOf(column) ?? -1;
+  if (snapshot === undefined || at === -1) throw new Error(`${table}.${column} is not carried`);
+  snapshot.columns.splice(at, 1);
+  const [header, ...rows] = parts.tables[table];
+  (header as { columns: string[] }).columns = [...snapshot.columns];
+  for (const row of rows) (row as { c: unknown[] }).c.splice(at, 1);
+}
+
+/** Drops `table.column` from the source catalogue (ordinals renumbered 1..n). */
+export function dropCatalogueColumn(parts: SnapshotParts, table: string, column: string): void {
+  const described = catalogueTable(parts, table);
+  described.columns = described.columns
+    .filter((c) => c.column !== column)
+    .map((c, i) => ({ ...c, ordinal: i + 1 }));
+}
+
+interface CatalogueColumn {
+  column: string;
+  data_type: string;
+  ordinal: number;
+  charset: string | null;
+}
+
+function catalogueTable(parts: SnapshotParts, table: string): { columns: CatalogueColumn[] } {
+  const described = (
+    parts.catalog['tables'] as { name: string; columns: CatalogueColumn[] }[]
+  ).find((t) => t.name === table);
+  if (described === undefined) throw new Error(`the catalogue has no table ${table}`);
+  return described;
+}
+
 /** The writer's `files` for a package carrying `parts` (plus any other files given). */
 export function snapshotPackageFiles(
   parts: SnapshotParts,
