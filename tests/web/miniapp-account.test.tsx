@@ -796,7 +796,7 @@ describe('referral', () => {
       rewardNotBefore: null,
       ...overrides,
     });
-    const counts = { total: 4, joined: 1, purchased: 1, rewardPending: 1, rewardPaid: 1 };
+    const counts = { friends: 4, joined: 1, purchased: 1, rewardPending: 1, rewardPaid: 1 };
 
     async function open() {
       await mount();
@@ -866,13 +866,13 @@ describe('referral', () => {
           url.searchParams.get('cursor') === null
             ? {
                 enabled: true,
-                counts: { ...counts, total: 2 },
+                counts: { ...counts, friends: 2 },
                 items: [friend({ displayName: 'اول', joinedAt: '2026-10-21T10:00:00.000Z' })],
                 nextCursor: 'cursor-1',
               }
             : {
                 enabled: true,
-                counts: { ...counts, total: 2 },
+                counts: { ...counts, friends: 2 },
                 items: [friend({ displayName: 'دوم', joinedAt: '2026-10-20T10:00:00.000Z' })],
                 nextCursor: null,
               },
@@ -890,12 +890,35 @@ describe('referral', () => {
       expect(asked.map((call) => call.query)).toEqual(['', '?cursor=cursor-1']);
     });
 
+    it('hides the whole list when the switch went off before “show more” answered', async () => {
+      serve({
+        'GET /referral': () => active,
+        'GET /referral/friends': (url) =>
+          url.searchParams.get('cursor') === null
+            ? {
+                enabled: true,
+                counts: { ...counts, friends: 2 },
+                items: [friend({ displayName: 'اول', joinedAt: '2026-10-21T10:00:00.000Z' })],
+                nextCursor: 'cursor-1',
+              }
+            : { enabled: false },
+      });
+      await open();
+      await screen.findByText('اول');
+      fireEvent.click(screen.getByRole('button', { name: text('miniapp.referral_friends_more') }));
+      await waitFor(() => {
+        expect(screen.queryByText('اول')).toBeNull();
+      });
+      expect(screen.queryByText(text('miniapp.referral_friends_title'))).toBeNull();
+      expect(screen.queryByText(text('miniapp.referral_friends_total', { count: 2 }))).toBeNull();
+    });
+
     it('says so when nobody has joined yet', async () => {
       serve({
         'GET /referral': () => active,
         'GET /referral/friends': () => ({
           enabled: true,
-          counts: { total: 0, joined: 0, purchased: 0, rewardPending: 0, rewardPaid: 0 },
+          counts: { friends: 0, joined: 0, purchased: 0, rewardPending: 0, rewardPaid: 0 },
           items: [],
           nextCursor: null,
         }),

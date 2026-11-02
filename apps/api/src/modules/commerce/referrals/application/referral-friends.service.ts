@@ -40,7 +40,7 @@ export type ReferralFriendsView =
   | { readonly enabled: false }
   | {
       readonly enabled: true;
-      readonly counts: ReferralFriendCounts & { readonly total: number };
+      readonly counts: ReferralFriendCounts & { readonly friends: number };
       readonly items: readonly ReferralFriendView[];
       readonly next: ReferralCursor | null;
     };
@@ -78,7 +78,7 @@ export class ReferralFriendsService {
       enabled: true,
       counts: {
         ...counts,
-        total: counts.joined + counts.purchased + counts.rewardPending + counts.rewardPaid,
+        friends: counts.joined + counts.purchased + counts.rewardPending + counts.rewardPaid,
       },
       items: page.items.map((row) => ({
         displayName: friendDisplayName(row.firstName, row.username),

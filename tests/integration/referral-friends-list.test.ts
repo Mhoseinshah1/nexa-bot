@@ -308,7 +308,7 @@ describe('the mini app invited-friends list (R11 B3)', () => {
 
     await setFlag('referral_friends_list', true);
     const on = await friends(mine.token);
-    expect(on.enabled && on.counts.total).toBe(1);
+    expect(on.enabled && on.counts.friends).toBe(1);
 
     // Off again: the section goes, no referral row is touched.
     await setFlag('referral_friends_list', false);
@@ -330,7 +330,7 @@ describe('the mini app invited-friends list (R11 B3)', () => {
       'رضا',
       'علی',
     ]);
-    expect(mine.enabled && mine.counts.total).toBe(2);
+    expect(mine.enabled && mine.counts.friends).toBe(2);
     const theirs = await friends(second.token);
     expect(theirs.enabled && theirs.items.map((item) => item.displayName)).toEqual(['نگار']);
 
@@ -342,7 +342,7 @@ describe('the mini app invited-friends list (R11 B3)', () => {
     );
     const friendToken = await session(Number(friendRow?.telegram_user_id));
     const own = await friends(friendToken);
-    expect(own.enabled && [own.items.length, own.counts.total]).toEqual([0, 0]);
+    expect(own.enabled && [own.items.length, own.counts.friends]).toEqual([0, 0]);
 
     // The same referrer id asked in ANOTHER tenant finds nothing: the tenant is in the WHERE.
     const repository = new DrizzleReferralFriendsRepository(db());
@@ -410,7 +410,7 @@ describe('the mini app invited-friends list (R11 B3)', () => {
     expect(by('گذشته')).toMatchObject({ status: 'REWARD_PENDING', rewardNotBefore: null });
     expect(by('پرداخت‌شده')).toMatchObject({ status: 'REWARD_PAID', rewardNotBefore: null });
     expect(response.counts).toEqual({
-      total: 8,
+      friends: 8,
       joined: 2,
       purchased: 2,
       rewardPending: 3,
@@ -418,7 +418,7 @@ describe('the mini app invited-friends list (R11 B3)', () => {
     });
     // The list's total is the very figure the screen already shows as «دعوت‌شده».
     const stats = await api.container.referralSignupGifts.stats(tenantA, mine.id);
-    expect(response.counts.total).toBe(stats.referralCount);
+    expect(response.counts.friends).toBe(stats.referralCount);
   });
 
   it('a pending reward with ONE commission waiting for delivery is not “held until” a day', async () => {
@@ -520,8 +520,8 @@ describe('the mini app invited-friends list (R11 B3)', () => {
     const times = seen.map((item) => Date.parse(item.joinedAt));
     expect(times).toEqual([...times].sort((a, b) => b - a));
     // The counts are over every friend, not the page.
-    expect(one.counts.total).toBe(total);
-    expect(two.counts.total).toBe(total);
+    expect(one.counts.friends).toBe(total);
+    expect(two.counts.friends).toBe(total);
 
     for (const bad of ['not-a-cursor', '']) {
       const refused = await friendsRaw(mine.token, bad);
@@ -547,7 +547,7 @@ describe('the mini app invited-friends list (R11 B3)', () => {
       ['تازه', 'واردشده'].sort(),
     );
     const stats = await api.container.referralSignupGifts.stats(tenantA, mine.id);
-    expect(response.counts.total).toBe(stats.referralCount);
+    expect(response.counts.friends).toBe(stats.referralCount);
     expect(stats.referralCount).toBe(2);
   });
 });

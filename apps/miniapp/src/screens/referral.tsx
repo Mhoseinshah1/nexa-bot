@@ -62,6 +62,7 @@ function FriendsList({
   const [extra, setExtra] = useState<EnabledFriends['items']>([]);
   const [next, setNext] = useState(first.nextCursor);
   const [busy, setBusy] = useState(false);
+  const [off, setOff] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const more = async () => {
     if (next === null) return;
@@ -73,7 +74,8 @@ function FriendsList({
         setExtra((current) => [...current, ...page.items]);
         setNext(page.nextCursor);
       } else {
-        setNext(null);
+        // The switch went off after the first page: nothing of the list stays on screen.
+        setOff(true);
       }
     } catch (failure) {
       setError(errorText(failure));
@@ -81,6 +83,7 @@ function FriendsList({
       setBusy(false);
     }
   };
+  if (off) return null;
   const items = [...first.items, ...extra];
   const counts: readonly [MiniAppReferralFriendStatus, number][] = [
     ['JOINED', first.counts.joined],
@@ -91,7 +94,9 @@ function FriendsList({
   return (
     <Card>
       <h2 className="lead">{t('miniapp.referral_friends_title')}</h2>
-      <p className="muted">{t('miniapp.referral_friends_total', { count: first.counts.total })}</p>
+      <p className="muted">
+        {t('miniapp.referral_friends_total', { count: first.counts.friends })}
+      </p>
       <div className="friend-counts">
         {counts.map(([status, count]) => (
           <span key={status} className="stat">

@@ -740,14 +740,14 @@ export type MiniAppReferralFriendStatus = (typeof MINIAPP_REFERRAL_FRIEND_STATUS
  * first name, or a username with the middle hidden, or null (then the screen says «دوست
  * شما»). There is no id, no Telegram id, no phone and no last name in this shape, so nothing
  * on the wire can leak one. `counts` are over ALL the customer's friends, not just this page,
- * and add up to `total`, which is the figure the screen already shows as «دعوت‌شده».
+ * and add up to `friends`, which is the figure the screen already shows as «دعوت‌شده».
  */
 export const miniAppReferralFriendsResponseSchema = z.discriminatedUnion('enabled', [
   z.object({ enabled: z.literal(false) }),
   z.object({
     enabled: z.literal(true),
     counts: z.object({
-      total: z.number().int(),
+      friends: z.number().int(),
       joined: z.number().int(),
       purchased: z.number().int(),
       rewardPending: z.number().int(),
