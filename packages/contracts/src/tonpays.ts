@@ -122,6 +122,40 @@ export const TONPAYS_CALL_BUDGET_PER_MINUTE = 50;
 export const TONPAYS_INQUIRY_BUDGET_PER_MINUTE = 40;
 
 /**
+ * Round 11 A8 (owner report: TonPays answered HTTP 429 to invoice creates twice in one minute).
+ *
+ * Nexa decision: every TonPays call — create, check, change card, receipt, cancel, refund, on
+ * either route — first takes a token from ONE client-side token bucket per API key, in the
+ * TonPays HTTP client itself, so no caller can reach the provider around it. The bucket refills
+ * at `calls_per_minute` and holds at most `burst` tokens; a 429 from the provider closes it for
+ * the provider's `Retry-After`, else an exponential, jittered back-off
+ * (`TONPAYS_RATE_LIMIT_BACKOFF_*`). The per-minute budget above stays as the cross-replica bound.
+ *
+ * Conservative defaults: the two routes together (30 + 15) stay under the documented 60 a minute
+ * even if TonPays counts both keys against one account (`OQ-WP11A-02`: per key, store or account
+ * is undocumented), and a burst of three keeps one worker pass from firing a volley.
+ */
+export const TONPAYS_PACING_SETTING_KEYS = {
+  TONPAYS: 'payments.tonpays.calls_per_minute',
+  TONPAYS_TELEGRAM: 'payments.tonpays_telegram.calls_per_minute',
+} as const;
+export const TONPAYS_PACING_BURST_SETTING_KEY = 'payments.tonpays.burst' as const;
+export const TONPAYS_CALLS_PER_MINUTE_MIN = 1;
+/** Never above the documented ceiling. */
+export const TONPAYS_CALLS_PER_MINUTE_MAX = TONPAYS_DOCUMENTED_REQUESTS_PER_MINUTE;
+export const TONPAYS_CALLS_PER_MINUTE_DEFAULT = 30;
+export const TONPAYS_TELEGRAM_CALLS_PER_MINUTE_DEFAULT = 15;
+export const TONPAYS_PACING_BURST_MIN = 1;
+export const TONPAYS_PACING_BURST_MAX = 10;
+export const TONPAYS_PACING_BURST_DEFAULT = 3;
+/** A 429 with no `Retry-After`: 5 s, doubling per consecutive 429, at most five minutes, ±20 %. */
+export const TONPAYS_RATE_LIMIT_BACKOFF_BASE_MS = 5_000;
+export const TONPAYS_RATE_LIMIT_BACKOFF_CAP_MS = 5 * 60_000;
+export const TONPAYS_RATE_LIMIT_BACKOFF_JITTER_RATIO = 0.2;
+/** The longest `Retry-After` honoured: a provider cannot park the route for longer. */
+export const TONPAYS_RETRY_AFTER_MAX_MS = 60 * 60_000;
+
+/**
  * Nexa decision (brief §3): a TonPays attempt lives exactly seventy minutes from the
  * creation of the internal payment, with no grace period. After it, nothing settles
  * automatically.

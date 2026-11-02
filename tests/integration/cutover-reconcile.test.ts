@@ -13,6 +13,7 @@ import {
   MigrationRig,
   TENANT,
   generateDataset,
+  mirzaAgentRecords,
   rigExecutor,
   writeMigrationPackage,
   type GeneratedDataset,
@@ -38,66 +39,6 @@ const AGENTS = [
   { i: 1, tier: 'n', cap: '5000000' },
   { i: 4, tier: 'n2', cap: null },
 ] as const;
-
-const flagsOff = {
-  affects_wallet: false,
-  applies_to_live_state: false,
-  grants_credit: false,
-  activates_role: false,
-  redeemable: false,
-  auto_create: false,
-};
-
-function agentRecords(users: readonly Record<string, unknown>[]) {
-  const customer = (tg: string) => ({
-    raw_id: tg,
-    telegram_user_id: tg,
-    decision: 'IMPORT',
-    valid: true,
-  });
-  return {
-    profiles: AGENTS.map((a) => {
-      const tg = String(users[a.i]!['id']);
-      return {
-        record_type: 'legacy_agent_profile',
-        schema: 'm2n.agents.profile.v1',
-        idempotency_key: `legacy:agents:profile:${tg}`,
-        customer: customer(tg),
-        tier: a.tier,
-        status: 'ARCHIVED_NOT_ACTIVATED',
-        limits_and_credit: 'RAW_ONLY_NOT_APPLIED',
-        ...flagsOff,
-      };
-    }),
-    states: AGENTS.map((a) => {
-      const tg = String(users[a.i]!['id']);
-      return {
-        record_type: 'legacy_agent_state',
-        schema: 'm2n.agents.state.v1',
-        idempotency_key: `legacy:agents:state:${tg}`,
-        customer: customer(tg),
-        credit_debt: {
-          overdraft_limit_raw: a.cap,
-          overdraft_limit_staged: true,
-          credit_granted: false,
-          values: 'RAW_ONLY_NOT_APPLIED',
-        },
-        pricing: {
-          percent_discount_raw: null,
-          percent_discount_staged: false,
-          applies_price: false,
-        },
-        current_status: {
-          agent_expiry: null,
-          agent_expiry_raw: null,
-          agent_expiry_note: 'NO_EXPIRY',
-        },
-        role_active: false,
-        ...flagsOff,
-      };
-    }),
-  };
-}
 
 describe('cutover-reconcile over an imported .nxpkg', () => {
   let ctx: TestContext;
@@ -173,7 +114,7 @@ describe('cutover-reconcile over an imported .nxpkg', () => {
     generated = generateDataset({ users: USERS, invoices: INVOICES });
     // Mirza marks an agent in `user.agent` with its tier, as the deployed bot does.
     for (const a of AGENTS) (generated.users[a.i] as Record<string, unknown>)['agent'] = a.tier;
-    const agents = agentRecords(generated.users);
+    const agents = mirzaAgentRecords(generated.users, AGENTS);
     pkg = await writeMigrationPackage(join(work, 'mirza.nxpkg'), {
       dataset: generated.dataset,
       invoices: generated.invoices,

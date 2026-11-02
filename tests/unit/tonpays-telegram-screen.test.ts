@@ -654,6 +654,129 @@ describe('the TonPays Telegram payment screen', () => {
     expect(cancelled.key).toBe('bot.payment.gateway_cancelled');
   });
 
+  it('R11 A8: a lost cancel answer keeps «❌ لغو فاکتور» — on its notice, and on the invoice once an inquiry has answered', () => {
+    const decidedAt = new Date(AT.getTime() - 1_000);
+    const lost = withFacts({ latestCancel: request('CANCEL', 'UNKNOWN', { decidedAt }) });
+    // The notice: the retry, the status check and the main menu.
+    const notice = screenOf('pending', lost);
+    expect(notice.key).toBe('bot.payment.gateway_cancel_unknown');
+    expect(data(notice)).toEqual([`gq:${PAYMENT_ID}`, `gc:${PAYMENT_ID}`, 'mm:']);
+    // The owner's screen: the invoice back, its copy buttons AND the cancel button.
+    const back = screenOf('pending', lost, {}, { lastInquiryAt: AT });
+    expect(back.key).toBe('bot.payment.gateway_card_invoice');
+    expect(copies(back)).toHaveLength(2);
+    expect(data(back)).toContain(`gq:${PAYMENT_ID}`);
+    // A rate-limited cancel (TonPays' 429, or held by the client's own limiter) keeps the same
+    // retry — but R12 F3 item 10: it is not a LOST answer, so it has its own sentence («not
+    // processed, not cancelled yet, do not pay again»), never «پاسخ تون‌پی دریافت نشد».
+    // Nexa's own rate-limited cancel says nothing.
+    const limited = request('CANCEL', 'RATE_LIMITED', {
+      decidedAt,
+      errorCode: 'nexa.rate_limited_locally',
+    });
+    const busy = screenOf('pending', withFacts({ latestCancel: limited }));
+    expect(busy.key).toBe('bot.payment.gateway_cancel_rate_limited');
+    expect(data(busy)).toEqual([`gq:${PAYMENT_ID}`, `gc:${PAYMENT_ID}`, 'mm:']);
+    const readable = request('CANCEL', 'RATE_LIMITED', {
+      decidedAt,
+      errorCode: 'RATE_LIMIT_EXCEEDED',
+    });
+    expect(screenOf('pending', withFacts({ latestCancel: readable })).key).toBe(
+      'bot.payment.gateway_cancel_rate_limited',
+    );
+    // R12 F3 lead review: its «tap ❌ لغو فاکتور again» sentence only while that button is
+    // offered. A receipt on its way withdraws the button, so the notice drops the sentence.
+    const noButton = screenOf(
+      'pending',
+      withFacts({ latestCancel: readable, submissions: [submission('QUEUED')] }),
+    );
+    expect(noButton.key).toBe('bot.payment.gateway_cancel_rate_limited_closed');
+    expect(data(noButton)).not.toContain(`gq:${PAYMENT_ID}`);
+    // A genuinely lost answer (UNKNOWN: a timeout, a 5xx, a bare 429) keeps the old sentence.
+    expect(
+      screenOf('pending', withFacts({ latestCancel: request('CANCEL', 'UNKNOWN', { decidedAt }) }))
+        .key,
+    ).toBe('bot.payment.gateway_cancel_unknown');
+    const ours = screenOf(
+      'pending',
+      withFacts({ latestCancel: { ...limited, requestedByNexa: true } }),
+    );
+    expect(ours.key).toBe('bot.payment.gateway_card_invoice');
+    expect(data(ours)).toContain(`gq:${PAYMENT_ID}`);
+    // Not once the invoice moved on, was reported paid, or the customer window closed.
+    expect(data(screenOf('processing', lost))).not.toContain(`gq:${PAYMENT_ID}`);
+    expect(data(screenOf('pending', lost, {}, { providerPaid: true }))).not.toContain(
+      `gq:${PAYMENT_ID}`,
+    );
+    expect(
+      data(screenOf('pending', lost, {}, {}, new Date(EXPIRES_AT.getTime() + 1_000))),
+    ).not.toContain(`gq:${PAYMENT_ID}`);
+    // Nor while a retry is with the provider: "cancelling…", no button.
+    const again = screenOf('pending', withFacts({ latestCancel: request('CANCEL', 'REQUESTED') }));
+    expect(again.key).toBe('bot.payment.gateway_cancel_requested');
+    expect(data(again)).not.toContain(`gq:${PAYMENT_ID}`);
+  });
+
+  it('R11 A8: a card change whose answer was lost hides the card and keeps both the card change and the cancel', () => {
+    const changeLost: GatewayCardFacts['latestChange'] = {
+      id: 'k1',
+      paymentId: PAYMENT_ID,
+      botInstanceId: 'b',
+      customerId: 'c',
+      state: 'UNKNOWN',
+      requestedAt: new Date(AT.getTime() - 120_000),
+      sentAt: new Date(AT.getTime() - 120_000),
+      decidedAt: new Date(AT.getTime() - 120_000),
+      errorCode: 'http.timeout',
+    };
+    const reply = screenOf(
+      'pending',
+      withFacts({ latestChange: changeLost }),
+      {},
+      { cardNumber: null },
+    );
+    expect(reply.key).toBe('bot.payment.gateway_card_unconfirmed');
+    expect(data(reply)).toContain(`gk:${PAYMENT_ID}`);
+    expect(data(reply)).toContain(`gq:${PAYMENT_ID}`);
+    // Both lost at once: still both.
+    const both = screenOf(
+      'pending',
+      withFacts({
+        latestChange: changeLost,
+        latestCancel: request('CANCEL', 'UNKNOWN', { decidedAt: new Date(AT.getTime() - 1_000) }),
+      }),
+      {},
+      { cardNumber: null, lastInquiryAt: AT },
+    );
+    expect(data(both)).toContain(`gk:${PAYMENT_ID}`);
+    expect(data(both)).toContain(`gq:${PAYMENT_ID}`);
+  });
+
+  it('R11 A8: the customer’s cancel that the inquiry found applied reads "cancelled", not "failed"; Nexa’s own or none keeps "failed"', () => {
+    const failed = { state: 'FAILED' as const, resolutionNote: 'tonpays_telegram:canceled' };
+    const refused = request('CANCEL', 'REFUSED', { errorCode: 'NOT_PENDING', decidedAt: AT });
+    expect(screenOf('canceled', withFacts({ latestCancel: refused }), failed).key).toBe(
+      'bot.payment.gateway_cancelled',
+    );
+    expect(
+      screenOf('canceled', withFacts({ latestCancel: request('CANCEL', 'UNKNOWN') }), failed).key,
+    ).toBe('bot.payment.gateway_cancelled');
+    expect(
+      screenOf(
+        'canceled',
+        withFacts({ latestCancel: { ...refused, requestedByNexa: true } }),
+        failed,
+      ).key,
+    ).toBe('bot.payment.gateway_failed');
+    expect(screenOf('canceled', NO_FACTS, failed).key).toBe('bot.payment.gateway_failed');
+    expect(
+      screenOf('rejected', withFacts({ latestCancel: refused }), {
+        state: 'FAILED',
+        resolutionNote: 'tonpays_telegram:rejected',
+      }).key,
+    ).toBe('bot.payment.gateway_failed');
+  });
+
   it('reject_reasons are shown to the customer on a rejected payment, and a payment without any keeps the generic sentence', () => {
     const reasons = ['رسید خوانا نبود', 'نام مطابقت ندارد'];
     const rejected = screenOf(

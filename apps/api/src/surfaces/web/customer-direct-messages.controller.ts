@@ -8,11 +8,9 @@ import {
   type DirectMessageListResponse,
   type DirectMessageResponse,
   type DirectMessageResponseItem,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import type { DirectMessageHistoryRow } from '../../modules/commerce/direct-messages/application/ports.js';
 
 /**
@@ -34,7 +32,7 @@ export class CustomerDirectMessagesController {
     @Param('id') id: string,
     @Query() query: unknown,
   ): Promise<DirectMessageListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const parsed = directMessageListQuerySchema.parse(query);
     const before =
       parsed.beforeAt === undefined || parsed.beforeId === undefined
@@ -62,7 +60,7 @@ export class CustomerDirectMessagesController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<DirectMessageResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = sendDirectMessageRequestSchema.parse(body);
     const sent = await this.container.customerDirectMessages.send(scope, actor, {
       customerId: id,
@@ -71,23 +69,6 @@ export class CustomerDirectMessagesController {
       file: command.file,
     });
     return { message: toItem(sent.row), replayed: sent.replayed };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.container.config.NODE_ENV === 'production');
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      // A customer belongs to the TENANT, not to a bot: see `CustomersController`.
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
   }
 }
 

@@ -651,7 +651,13 @@ export function resolve(
   // TB2: Telegram Business conversations and one conversation (ADR-0033).
   if (route.path === '/business-chats') {
     return {
-      element: <BusinessChatsPage route={route} denied={!may('business_chats.view')} />,
+      element: (
+        <BusinessChatsPage
+          route={route}
+          denied={!may('business_chats.view')}
+          mayReply={may('business_chats.reply')}
+        />
+      ),
       crumbs: [{ label: t('web.bchats_title') }],
       title: t('web.bchats_title'),
     };
@@ -684,6 +690,7 @@ export function resolve(
         <SupportKnowledgePage
           denied={!may('support_knowledge.view')}
           mayReview={may('support_knowledge.review')}
+          route={route}
         />
       ),
       crumbs: [{ label: t('web.sk_title') }],
@@ -721,6 +728,7 @@ export function resolve(
         <SupportAiPage
           denied={!may('support_ai.configure')}
           mayAutoReply={may('support_ai.auto_reply')}
+          maySearchCustomers={may('users.view') && may('users.search')}
         />
       ),
       crumbs: [{ label: t('web.sai_title') }],
@@ -731,7 +739,13 @@ export function resolve(
   // TB10: support analytics over a report range (`support_ai.configure`).
   if (route.path === '/support-analytics') {
     return {
-      element: <SupportAnalyticsPage route={route} denied={!may('support_ai.configure')} />,
+      element: (
+        <SupportAnalyticsPage
+          route={route}
+          denied={!may('support_ai.configure')}
+          mayReadText={may('business_chats.view')}
+        />
+      ),
       crumbs: [{ label: t('web.sa_title') }],
       title: t('web.sa_title'),
     };
@@ -1036,8 +1050,9 @@ export function resolve(
           key={payment['id'] ?? ''}
           id={payment['id'] ?? ''}
           /*
-           * No review permission is passed: card-to-card review is Telegram's alone
-           * (Payment File 02 §10), and this page draws no decision for anybody.
+           * R12 F3 item 8: card-to-card review is in BOTH places now (owner decision, reversing
+           * Payment File 02 §10). The decision controls are drawn for `receipts.review`; the
+           * server charges it again, and the credit needs `users.wallet.credit` as well.
            */
           mayViewReceipts={may('receipts.view')}
           /*
@@ -1052,6 +1067,9 @@ export function resolve(
           mayViewRefunds={may('refunds.view')}
           // TonPays Telegram §9.6.4: resolving an UNKNOWN gateway payment from recorded evidence.
           mayReconcile={may('payments.reconcile')}
+          // R12 F3 item 8: card-to-card review in the Web Admin as well as Telegram.
+          mayReviewReceipts={may('receipts.review')}
+          mayCreditWallet={may('users.wallet.credit')}
           mayIssueRefunds={may('refunds.issue')}
           mayViewWallet={may('users.view')}
           /*

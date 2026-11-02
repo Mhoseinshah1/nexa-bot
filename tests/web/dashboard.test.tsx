@@ -839,7 +839,7 @@ describe('the sidebar counters', () => {
       ),
     ).toEqual({
       alerts: { count: 3, tone: 'warn' },
-      tickets: { count: 5 },
+      tickets: { count: 5, tone: 'warn' },
       panels: { count: 2, tone: 'danger' },
       payments: { count: 1, tone: 'warn' },
       services: { count: 3, tone: 'danger' },
@@ -872,7 +872,7 @@ describe('the sidebar counters', () => {
       ),
     ).toEqual({
       alerts: { count: COUNTER_CAP, tone: 'warn', atLeast: true },
-      tickets: { count: COUNTER_CAP - 1 },
+      tickets: { count: COUNTER_CAP - 1, tone: 'warn' },
       services: { count: COUNTER_CAP + 3, tone: 'danger', atLeast: true },
     });
     expect(navCountersFrom(counters({ unreconciledServices: COUNTER_CAP }))).toEqual({

@@ -1,0 +1,54 @@
+{
+  "converter": "mirza-to-nexa",
+  "version": "0.8.1",
+  "source": "src/mirza2nexa/source_snapshot.py ALLOWLIST",
+  "allowlist": {
+    "user": [
+      "id",
+      "Balance",
+      "limit_usertest",
+      "agent",
+      "number",
+      "username",
+      "User_Status",
+      "roll_Status"
+    ],
+    "invoice": [
+      "id_invoice",
+      "id_user",
+      "username",
+      "Status",
+      "is_test",
+      "code_panel",
+      "code_product",
+      "Volume",
+      "Service_time",
+      "time_unit",
+      "is_custom",
+      "price_product",
+      "Service_location",
+      "time_sell",
+      "name_product",
+      "note",
+      "refral",
+      "time_cron",
+      "notifctions"
+    ],
+    "product": [
+      "id",
+      "code_product",
+      "name_product",
+      "price_product",
+      "Volume_constraint",
+      "Service_time",
+      "Location",
+      "Category",
+      "category",
+      "agent",
+      "note",
+      "data_limit_reset",
+      "one_buy_status",
+      "hide_panel"
+    ]
+  }
+}

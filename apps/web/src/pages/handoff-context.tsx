@@ -36,7 +36,7 @@ export function HandoffContextView({
       )}
       {stepsTried != null && (
         <li>
-          {t('web.bchat_handoff_context_steps')} {stepsTried.toLocaleString('fa-IR')}
+          {t('web.bchat_handoff_context_steps')} {stepsTried.toLocaleString('fa-IR-u-nu-latn')}
         </li>
       )}
     </ul>

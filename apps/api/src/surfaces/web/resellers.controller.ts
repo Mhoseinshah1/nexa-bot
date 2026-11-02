@@ -39,13 +39,11 @@ import {
   type ResellerTierProductPricesWriteResponse,
   type ResellerTierResponse,
   type ResellerTierSummaryResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type {
   ResellerListing,
   ResellerPurchaseRecord,
@@ -74,7 +72,7 @@ export class ResellersController {
 
   @Get(RESELLER_TIER_ROUTES.list)
   async tiers(@Req() request: FastifyRequest): Promise<ResellerTierListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const tiers = await this.container.resellersAdmin.listTiers(scope, actor);
     return { tiers: tiers.map(toTierSummary) };
   }
@@ -84,7 +82,7 @@ export class ResellersController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<ResellerTierResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = resellerTierWriteSchema.parse(body);
     const tier = await this.container.resellersAdmin.createTier(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -98,7 +96,7 @@ export class ResellersController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<ResellerTierResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { tier: toTierSummary(await this.container.resellersAdmin.getTier(scope, actor, id)) };
   }
 
@@ -108,7 +106,7 @@ export class ResellersController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ResellerTierResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = resellerTierWriteSchema.parse(body);
     const tier = await this.container.resellersAdmin.updateTier(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -124,7 +122,7 @@ export class ResellersController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ResellerTierResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = resellerTierGrantsWriteSchema.parse(body);
     const tier = await this.container.resellersAdmin.replaceGrants(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -141,7 +139,7 @@ export class ResellersController {
     @Param('id') id: string,
     @Query() raw: Record<string, unknown>,
   ): Promise<ResellerTierProductPricesPage> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = resellerTierProductPricesQuerySchema.parse(singleValued(raw));
     const page = await this.container.resellersAdmin.productPriceTable(scope, actor, id, {
       ...(query.limit === undefined ? {} : { limit: query.limit }),
@@ -162,7 +160,7 @@ export class ResellersController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ResellerTierProductPricesWriteResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = resellerTierProductPricesWriteSchema.parse(body);
     return this.container.resellersAdmin.setProductPrices(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -179,7 +177,7 @@ export class ResellersController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ResellerListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = singleValued(raw);
     const page = resellerListQuerySchema.parse({
       ...(query.limit === undefined ? {} : { limit: query.limit }),
@@ -209,7 +207,7 @@ export class ResellersController {
 
   @Post(RESELLER_ROUTES.register)
   async register(@Req() request: FastifyRequest, @Body() body: unknown): Promise<ResellerResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = resellerRegisterSchema.parse(body);
     const reseller = await this.container.resellersAdmin.register(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -229,7 +227,7 @@ export class ResellersController {
     @Req() request: FastifyRequest,
     @Param('customerId') customerId: string,
   ): Promise<ResellerResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return {
       reseller: toResellerSummary(
         await this.container.resellersAdmin.get(scope, actor, customerId),
@@ -243,7 +241,7 @@ export class ResellersController {
     @Param('customerId') customerId: string,
     @Body() body: unknown,
   ): Promise<ResellerResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = resellerUpdateSchema.parse(body);
     const reseller = await this.container.resellersAdmin.update(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -264,7 +262,7 @@ export class ResellersController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<ResellerHistoryResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const entries = await this.container.resellersAdmin.tierHistory(scope, actor, id);
     return { entries: entries.map(toHistoryEntry) };
   }
@@ -274,7 +272,7 @@ export class ResellersController {
     @Req() request: FastifyRequest,
     @Param('customerId') customerId: string,
   ): Promise<ResellerCreditResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return {
       credit: toCreditStanding(
         await this.container.resellersAdmin.creditStanding(scope, actor, customerId),
@@ -288,7 +286,7 @@ export class ResellersController {
     @Param('customerId') customerId: string,
     @Query() raw: Record<string, unknown>,
   ): Promise<ResellerPurchasePage> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = singleValued(raw);
     const page = resellerPurchaseQuerySchema.parse({
       ...(query.limit === undefined ? {} : { limit: query.limit }),
@@ -313,7 +311,7 @@ export class ResellersController {
     @Req() request: FastifyRequest,
     @Param('customerId') customerId: string,
   ): Promise<ResellerHistoryResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const entries = await this.container.resellersAdmin.history(scope, actor, customerId);
     return { entries: entries.map(toHistoryEntry) };
   }
@@ -326,7 +324,7 @@ export class ResellersController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ResellerTierResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = resellerTierMinimumWriteSchema.parse(body);
     const tier = await this.container.resellersAdmin.setTierMinimum(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -342,7 +340,7 @@ export class ResellersController {
     @Param('customerId') customerId: string,
     @Body() body: unknown,
   ): Promise<ResellerResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = resellerMinimumWriteSchema.parse(body);
     const reseller = await this.container.resellersAdmin.setMinimum(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -358,7 +356,7 @@ export class ResellersController {
     @Param('customerId') customerId: string,
     @Body() body: unknown,
   ): Promise<ResellerPolicyResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = resellerGrantOverridesWriteSchema.parse(body);
     const policy = await this.container.resellersAdmin.replaceOverrides(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -376,7 +374,7 @@ export class ResellersController {
     @Req() request: FastifyRequest,
     @Param('customerId') customerId: string,
   ): Promise<ResellerPolicyResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return {
       policy: toPolicy(await this.container.resellersAdmin.policy(scope, actor, customerId)),
     };
@@ -387,7 +385,7 @@ export class ResellersController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ResellerMinimumReport> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = singleValued(raw);
     const parsed = resellerMinimumQuerySchema.parse({
       ...(query.period === undefined ? {} : { period: query.period }),
@@ -399,23 +397,6 @@ export class ResellersController {
         ...(parsed.filter === undefined ? {} : { filter: parsed.filter }),
       }),
     );
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    // A reseller belongs to the TENANT, whichever bot they buy through.
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

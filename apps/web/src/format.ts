@@ -30,7 +30,7 @@ import { t, type WebKey } from './i18n/web.fa';
 
 /**
  * An ISO timestamp as a Jalali date and time in the viewer's own zone, in the approved
- * demo's numeric shape — `۱۴۰۵/۰۷/۱۴ ۱۹:۳۰` (`formatTimestampNumeric`). The demo draws every
+ * demo's numeric shape — `1405/07/14 19:30` (`formatTimestampNumeric`). The demo draws every
  * date-time this way on every page (measured on 35 routes: no month name anywhere), so this
  * is the ONE place the shape is decided; a page never picks its own.
  *
@@ -44,7 +44,7 @@ export function formatTimestamp(iso: string): string {
 }
 
 /**
- * «۵ روز پیش»: how long before `nowMs` an ISO timestamp was, in Persian digits — the demo's
+ * «5 روز پیش»: how long before `nowMs` an ISO timestamp was, in Latin digits — the demo's
  * relative cells. Past a month, or for a time in the future or an unparseable string, the
  * absolute `formatTimestamp` is returned instead; callers keep that as the cell's title.
  * `nowMs` is the clock the caller already reads (`Date.now()`, frozen in the shots).
@@ -62,7 +62,7 @@ export function formatRelative(iso: string, nowMs: number = Date.now()): string 
   return formatTimestamp(iso);
 }
 
-const DATE_TIME_NUMERIC = new Intl.DateTimeFormat('fa-IR', {
+const DATE_TIME_NUMERIC = new Intl.DateTimeFormat('fa-IR-u-nu-latn', {
   year: 'numeric',
   month: '2-digit',
   day: '2-digit',
@@ -72,9 +72,9 @@ const DATE_TIME_NUMERIC = new Intl.DateTimeFormat('fa-IR', {
 });
 
 /**
- * An ISO timestamp as the approved demo's list cells draw one — `۱۴۰۵/۰۷/۱۴ ۱۹:۳۰`: the Jalali
- * date in numbers, then the 24-hour time, in Persian digits (the demo's Latin digits are not
- * part of the spec). `formatTimestamp` is this shape too; the name stays for the callers that
+ * An ISO timestamp as the approved demo's list cells draw one — `1405/07/14 19:30`: the Jalali
+ * date in numbers, then the 24-hour time, in Latin digits (the owner's R11 decision, matching
+ * the approved demo). `formatTimestamp` is this shape too; the name stays for the callers that
  * ask for the numeric form explicitly.
  */
 export function formatTimestampNumeric(iso: string): string {
@@ -89,7 +89,7 @@ export function formatTimestampNumeric(iso: string): string {
   return `\u2066${part('year')}/${part('month')}/${part('day')} ${part('hour')}:${part('minute')}\u2069`;
 }
 
-const DATE_ONLY_NUMERIC = new Intl.DateTimeFormat('fa-IR', {
+const DATE_ONLY_NUMERIC = new Intl.DateTimeFormat('fa-IR-u-nu-latn', {
   year: 'numeric',
   month: '2-digit',
   day: '2-digit',
@@ -97,7 +97,7 @@ const DATE_ONLY_NUMERIC = new Intl.DateTimeFormat('fa-IR', {
 
 /**
  * An ISO timestamp as a Jalali DATE alone, in the viewer's own zone and the demo's numeric
- * shape (`۱۴۰۵/۰۶/۲۸`) — for a fact that is a day rather than an instant, such as the
+ * shape (`1405/06/28`) — for a fact that is a day rather than an instant, such as the
  * original purchase of an imported service. The same unparseable-string rule as
  * `formatTimestamp`.
  */
@@ -126,8 +126,9 @@ export function formatDate(iso: string): string {
  * ONE formatter, because the failure this prevents is two of them: the legacy
  * system renders the same figure differently on two screens, and a
  * reconciliation that has to guess which surface is lying is a reconciliation
- * nobody does. Dates stay `fa-IR` — a Jalali calendar is what an operator
- * reads — and that asymmetry is deliberate rather than an oversight.
+ * nobody does. Dates use the Jalali calendar (`fa-IR-u-nu-latn`): the calendar is what an
+ * operator reads, the digits are Latin everywhere (owner decision, R11 — it reverses the
+ * earlier "dates in Persian digits" choice, so one screen never mixes the two).
  */
 const GROUPED = new Intl.NumberFormat('en-US', { useGrouping: true });
 

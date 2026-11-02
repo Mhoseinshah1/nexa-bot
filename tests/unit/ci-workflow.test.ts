@@ -471,6 +471,7 @@ describe('the CI workflow', () => {
     expect(smoke.steps.map((s) => s.run).filter(Boolean)).toEqual([
       'bash scripts/deployment-smoke.sh',
       'bash scripts/mirza-rehearsal-smoke.sh',
+      'bash scripts/standalone-installer-smoke.sh',
     ]);
     expect(update.needs).toBe('changes');
     expect(smoke.needs).toBe('changes');
@@ -545,6 +546,7 @@ describe('the CI workflow', () => {
       'pnpm check:boundaries',
       'pnpm check:i18n',
       'pnpm check:citations',
+      'pnpm check:readme',
       'pnpm build',
       'pnpm check:runtime',
       'pnpm test\n',
@@ -556,7 +558,9 @@ describe('the CI workflow', () => {
       'bash tests/deploy/botctl.test.sh',
       'bash tests/deploy/check-shell.test.sh',
       'bash tests/deploy/release-ci-gate.test.sh',
+      'bash tests/deploy/standalone-installer.test.sh',
       'bash scripts/deployment-smoke.sh',
+      'bash scripts/standalone-installer-smoke.sh',
       'bash scripts/deployment-update-smoke.sh',
       'bash scripts/mirza-rehearsal-smoke.sh',
       'pnpm audit --prod --audit-level high',

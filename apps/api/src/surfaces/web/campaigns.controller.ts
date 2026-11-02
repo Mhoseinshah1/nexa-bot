@@ -18,13 +18,11 @@ import {
   type CampaignTally,
   type CurrencyCode,
   type MoneyWire,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type {
   CampaignDetail,
   CampaignDraftInput,
@@ -52,7 +50,7 @@ export class CampaignsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<CampaignListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = campaignListQuerySchema.parse(singleValued(raw));
     const page = await this.container.campaigns.list(scope, actor, {
       ...(query.limit === undefined ? {} : { limit: query.limit }),
@@ -70,7 +68,7 @@ export class CampaignsController {
 
   @Post(CAMPAIGN_ROUTES.create)
   async create(@Req() request: FastifyRequest, @Body() body: unknown): Promise<CampaignResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = campaignCreateRequestSchema.parse(body);
     const detail = await this.container.campaigns.createDraft(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -81,7 +79,7 @@ export class CampaignsController {
 
   @Get('campaigns/:id')
   async one(@Req() request: FastifyRequest, @Param('id') id: string): Promise<CampaignResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.responseOf(await this.container.campaigns.get(scope, actor, id));
   }
 
@@ -91,7 +89,7 @@ export class CampaignsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CampaignResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = campaignUpdateRequestSchema.parse(body);
     const detail = await this.container.campaigns.updateDraft(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -107,7 +105,7 @@ export class CampaignsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<CampaignPreviewResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const preview = await this.container.campaigns.preview(scope, actor, id);
     const gift = (kind: 'WALLET_GIFT' | 'TRAFFIC_GIFT' | 'TIME_GIFT') => {
       const found = preview.gifts[kind];
@@ -142,7 +140,7 @@ export class CampaignsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CampaignResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = campaignScheduleRequestSchema.parse(body);
     const detail = await this.container.campaigns.schedule(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -164,7 +162,7 @@ export class CampaignsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CampaignResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     campaignCommandRequestSchema.parse(body);
     return this.responseOf(await this.container.campaigns.launchPending(scope, actor, id));
   }
@@ -175,7 +173,7 @@ export class CampaignsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CampaignResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = campaignCommandRequestSchema.parse(body);
     return this.responseOf(
       await this.container.campaigns.pause(scope, actor, {
@@ -191,7 +189,7 @@ export class CampaignsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CampaignResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = campaignCommandRequestSchema.parse(body);
     return this.responseOf(
       await this.container.campaigns.resume(scope, actor, {
@@ -207,7 +205,7 @@ export class CampaignsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CampaignResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = campaignCommandRequestSchema.parse(body);
     return this.responseOf(
       await this.container.campaigns.cancel(scope, actor, {
@@ -222,7 +220,7 @@ export class CampaignsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<CampaignResultsResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const results = await this.container.campaigns.results(scope, actor, id);
     return {
       targeted: results.targeted,
@@ -277,27 +275,6 @@ export class CampaignsController {
       },
       presentation: detail.presentation,
     };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    // A campaign belongs to the TENANT, like the rules and the audience it composes.
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

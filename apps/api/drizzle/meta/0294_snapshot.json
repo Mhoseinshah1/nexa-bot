@@ -1,5 +1,5 @@
 {
-  "id": "87296656-120c-4af6-a5b1-99ae685a557a",
+  "id": "a392202f-62c6-402d-98f6-8fc3124c016a",
   "prevId": "0ea936cb-6b5f-449f-9292-99073ccb6ada",
   "version": "7",
   "dialect": "postgresql",
@@ -25114,6 +25114,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "files_only_delivery": {
+          "name": "files_only_delivery",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -34395,126 +34402,6 @@
         "service_reminders_basis_check": {
           "name": "service_reminders_basis_check",
           "value": "\"service_reminders\".\"basis_traffic_limit_bytes\" >= 0"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.service_usage_snapshots": {
-      "name": "service_usage_snapshots",
-      "schema": "",
-      "columns": {
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "service_id": {
-          "name": "service_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "bucket_at": {
-          "name": "bucket_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "taken_at": {
-          "name": "taken_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "used_bytes": {
-          "name": "used_bytes",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "total_bytes": {
-          "name": "total_bytes",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "service_usage_snapshots_taken_idx": {
-          "name": "service_usage_snapshots_taken_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "taken_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "service_usage_snapshots_tenant_id_tenants_id_fk": {
-          "name": "service_usage_snapshots_tenant_id_tenants_id_fk",
-          "tableFrom": "service_usage_snapshots",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "service_usage_snapshots_service_fk": {
-          "name": "service_usage_snapshots_service_fk",
-          "tableFrom": "service_usage_snapshots",
-          "tableTo": "services",
-          "columnsFrom": [
-            "tenant_id",
-            "service_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "service_usage_snapshots_pk": {
-          "name": "service_usage_snapshots_pk",
-          "columns": [
-            "tenant_id",
-            "service_id",
-            "bucket_at"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "service_usage_snapshots_figures_check": {
-          "name": "service_usage_snapshots_figures_check",
-          "value": "\"service_usage_snapshots\".\"used_bytes\" >= 0 AND (\"service_usage_snapshots\".\"total_bytes\" IS NULL OR \"service_usage_snapshots\".\"total_bytes\" > 0)"
         }
       },
       "isRLSEnabled": false

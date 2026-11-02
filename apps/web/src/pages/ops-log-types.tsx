@@ -11,7 +11,7 @@ import { fetchSettings, saveSetting } from '../api/client';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { messageFor } from './settings';
-import { Banner, Card, Field, StateSwitch, ToggleRow, useToast } from '../ui/kit';
+import { Banner, Card, Disclosure, Field, Num, StateSwitch, ToggleRow, useToast } from '../ui/kit';
 import { ErrorRef } from '../ui/technical-details';
 
 /**
@@ -141,27 +141,56 @@ function Switches({ rows, mayManage }: { rows: readonly SettingRow[]; mayManage:
 
   return (
     <div className="ops-log-types" data-testid="ops-log-types">
-      {opsLogTypesByTopic().map((group) => (
-        <section key={group.topic} aria-label={t(TOPIC_NAME[group.topic])}>
-          <h4>{t(TOPIC_NAME[group.topic])}</h4>
-          {group.types.map((id) => (
-            <ToggleRow
-              key={id}
-              title={t(OPS_LOG_TYPE_LABEL[id])}
-              checked={!disabled.includes(id)}
-              onChange={(on) => toggle(id, on)}
-              disabled={!mayManage || save.isPending}
-            />
-          ))}
-        </section>
-      ))}
+      {/*
+        Demo parity (R11): about forty switches are no longer an open wall. Each topic is an
+        accordion, closed, whose summary says how many of its report types are on; the switches
+        are the same rows with the same saving.
+      */}
+      {opsLogTypesByTopic().map((group) => {
+        const on = group.types.filter((id) => !disabled.includes(id)).length;
+        return (
+          <Disclosure
+            key={group.topic}
+            className="ops-log-topic"
+            size="sm"
+            variant="boxed"
+            summary={
+              <>
+                <span className="ops-log-topic-name">{t(TOPIC_NAME[group.topic])}</span>
+                <span className="ops-log-topic-count muted small">
+                  <Num value={on} /> / <Num value={group.types.length} />
+                </span>
+              </>
+            }
+          >
+            <section aria-label={t(TOPIC_NAME[group.topic])}>
+              {group.types.map((id) => (
+                <ToggleRow
+                  key={id}
+                  title={t(OPS_LOG_TYPE_LABEL[id])}
+                  checked={!disabled.includes(id)}
+                  onChange={(next) => toggle(id, next)}
+                  disabled={!mayManage || save.isPending}
+                />
+              ))}
+            </section>
+          </Disclosure>
+        );
+      })}
       {save.error != null && (
         <Banner tone="danger">
           {messageFor(save.error)}
           <ErrorRef error={save.error} />
         </Banner>
       )}
-      <LogOptions rows={rows} mayManage={mayManage} />
+      <Disclosure
+        className="ops-log-topic"
+        size="sm"
+        variant="boxed"
+        summary={<span className="ops-log-topic-name">{t('web.opslog_options_title')}</span>}
+      >
+        <LogOptions rows={rows} mayManage={mayManage} />
+      </Disclosure>
     </div>
   );
 }

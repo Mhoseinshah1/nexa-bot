@@ -14,6 +14,7 @@ import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
   SUPPORT_AI_ASSIST_ROUTES,
+  SUPPORT_AI_CONSOLE_ROUTES,
   SUPPORT_AI_ROUTES,
   SUPPORT_ANALYTICS_ROUTES,
   routePattern,
@@ -23,14 +24,16 @@ import {
   type SupportAiConfigResponse,
   type SupportAiDraftView,
   type SupportAiTestResponse,
+  type SupportHandoffQuestionsResponse,
+  type SupportKnowledgeGapsResponse,
+  type SupportReadinessResponse,
+  type SupportTestConsoleResponse,
   type SupportAiUsageResponse,
   type SupportAnalyticsResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import { singleValued } from './query.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type { SupportAiDraftRecord } from '../../modules/control/support-ai/application/support-assist.service.js';
 
 /**
@@ -45,7 +48,7 @@ export class SupportAiController {
 
   @Get(SUPPORT_AI_ROUTES.config)
   async view(@Req() request: FastifyRequest): Promise<SupportAiConfigResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.supportAiConfig.view(scope, actor);
   }
 
@@ -54,7 +57,7 @@ export class SupportAiController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<{ version: number }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const saved = await this.container.supportAiConfig.update(scope, actor, body);
     return { version: saved.version };
   }
@@ -65,7 +68,7 @@ export class SupportAiController {
     @Param('provider') provider: string,
     @Body() body: unknown,
   ): Promise<{ replaced: boolean }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.supportAiConfig.setCredential(scope, actor, provider, body);
   }
 
@@ -75,7 +78,7 @@ export class SupportAiController {
     @Param('provider') provider: string,
     @Query() query: unknown,
   ): Promise<{ removed: boolean }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const { idempotencyKey } = supportAiControlRequestSchema.parse(query ?? {});
     return this.container.supportAiConfig.deleteCredential(scope, actor, provider, idempotencyKey);
   }
@@ -86,13 +89,13 @@ export class SupportAiController {
     @Param('provider') provider: string,
     @Body() body: unknown,
   ): Promise<SupportAiTestResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.supportAiConfig.test(scope, actor, provider, body);
   }
 
   @Get(SUPPORT_AI_ROUTES.usage)
   async usage(@Req() request: FastifyRequest): Promise<SupportAiUsageResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.supportAiConfig.usage(scope, actor);
   }
 
@@ -106,11 +109,53 @@ export class SupportAiController {
     @Req() request: FastifyRequest,
     @Query() query: unknown,
   ): Promise<SupportAnalyticsResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = supportAnalyticsQuerySchema.parse(
       singleValued((query ?? {}) as Record<string, unknown>),
     );
     return this.container.supportAnalytics.analytics(scope, actor, input);
+  }
+
+  /** Phase 4 PR-5: the readiness card (`support_ai.configure`); read-only. */
+  @Get(SUPPORT_AI_CONSOLE_ROUTES.readiness)
+  async readiness(@Req() request: FastifyRequest): Promise<SupportReadinessResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    return this.container.supportInsights.readiness(scope, actor);
+  }
+
+  /**
+   * Phase 4 PR-5: «امتحان یک سؤال». Runs the stored configuration through the decision
+   * pipeline and its guards and reports what WOULD happen. Sends nothing to anyone; the service
+   * has no outbound port. `support_ai.configure`, audited.
+   */
+  @Post(SUPPORT_AI_CONSOLE_ROUTES.testConsole)
+  async testConsole(
+    @Req() request: FastifyRequest,
+    @Body() body: unknown,
+  ): Promise<SupportTestConsoleResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    return this.container.supportTestConsole.run(scope, actor, body);
+  }
+
+  /** Phase 4 PR-5: the customers' questions behind one handoff reason (last 30 days). */
+  @Get(SUPPORT_AI_CONSOLE_ROUTES.handoffQuestions)
+  async handoffQuestions(
+    @Req() request: FastifyRequest,
+    @Query() query: unknown,
+  ): Promise<SupportHandoffQuestionsResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    return this.container.supportInsights.handoffQuestions(
+      scope,
+      actor,
+      singleValued((query ?? {}) as Record<string, unknown>),
+    );
+  }
+
+  /** Phase 4 PR-5: clustered questions the AI could not answer from approved content. */
+  @Get(SUPPORT_AI_CONSOLE_ROUTES.knowledgeGaps)
+  async knowledgeGaps(@Req() request: FastifyRequest): Promise<SupportKnowledgeGapsResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    return this.container.supportInsights.knowledgeGaps(scope, actor);
   }
 
   /** TB5: the recent drafts of one conversation (`support_ai.assist`). */
@@ -119,7 +164,7 @@ export class SupportAiController {
     @Req() request: FastifyRequest,
     @Param('conversationId') conversationId: string,
   ): Promise<{ drafts: SupportAiDraftView[] }> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const drafts = await this.container.supportAssist.drafts(scope, actor, conversationId);
     return { drafts: drafts.map(draftView) };
   }
@@ -131,7 +176,7 @@ export class SupportAiController {
     @Param('conversationId') conversationId: string,
     @Body() body: unknown,
   ): Promise<SupportAiDraftView> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const { idempotencyKey } = supportAiDraftRequestSchema.parse(body);
     const job = await this.container.supportAssist.request(scope, actor, {
       conversationId,
@@ -148,7 +193,7 @@ export class SupportAiController {
     @Param('draftId') draftId: string,
     @Body() body: unknown,
   ): Promise<{ outboundId: string }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.supportAssist.send(scope, actor, draftId, body);
   }
 
@@ -157,23 +202,8 @@ export class SupportAiController {
     @Req() request: FastifyRequest,
     @Param('draftId') draftId: string,
   ): Promise<{ discarded: boolean }> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.supportAssist.discard(scope, actor, draftId);
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.container.config.NODE_ENV === 'production');
-    if (options.write === true)
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
   }
 }
 

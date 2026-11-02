@@ -65,6 +65,8 @@ export const OPERATIONAL_EVENT_MESSAGES_FA: Readonly<Record<string, string>> = {
     'پرداخت تأییدشدهٔ درگاه تسویه نشد؛ چیزی اعتبار داده نشد و دوباره بررسی می‌شود.',
   'payments.gateway_charge_unmatched':
     'پرداخت تلگرام (ستاره) به هیچ تلاشی وصل نشد؛ چیزی تسویه نشد.',
+  'payments.gateway_charge_refunded':
+    'تلگرام یک پرداخت ستاره را بازپرداخت کرد؛ پرداخت علامت خورد، سرویس و کیف پول تغییر نکرد و مدیر باید تصمیم بگیرد.',
   'internal.unhandled': 'یک درخواست API با خطای داخلی ناموفق شد.',
   'settings.stored_value_invalid':
     'مقدار ذخیره‌شدهٔ یک تنظیم با تعریفش نمی‌خواند؛ مقدار پیش‌فرض اعمال است.',
@@ -109,6 +111,17 @@ export const OPERATIONAL_EVENT_MESSAGES_FA: Readonly<Record<string, string>> = {
   'support.ai_provider.credential_rejected': 'یک ارائه‌دهندهٔ هوش مصنوعی کلید را نپذیرفت.',
   'support.ai_provider.unavailable':
     'هیچ ارائه‌دهندهٔ هوش مصنوعی پاسخ نداد؛ گفتگوهای پشتیبانی تا برگشت به اپراتور سپرده می‌شوند.',
+  'support.ai_provider.config_invalid':
+    'پیکربندی هوش مصنوعی نامعتبر است: ارائه‌دهنده درخواست را نپذیرفت؛ ارائه‌دهندهٔ بعدی استفاده می‌شود.',
+  'support.ai_provider.config_valid': 'ارائه‌دهندهٔ هوش مصنوعی دوباره درخواست را پذیرفت.',
+  'support.ai.handoff_rate_high':
+    'نرخ ارجاع به پشتیبان بالا است؛ بیشتر پاسخ‌های خودکار اخیر به پشتیبان سپرده شده‌اند.',
+  'support.ai.job_exception':
+    'یک کار دستیار پشتیبانی با خطا متوقف شد و یک بار دوباره امتحان می‌شود.',
+  'support.ai.suspicious_probing':
+    'تلاش مشکوک برای گرفتن اطلاعات: گفتگو پس از چند درخواست ردشده به پشتیبان سپرده شد.',
+  'support.ai.subscription_link_sent':
+    'هوش مصنوعی لینک اشتراک (یا دکمهٔ فایل‌ها) را برای سرویس خود مشتری در گفتگوی حساب تجاری فرستاد.',
   'support.assistant.running': 'دستیار پشتیبانی دوباره کار می‌کند.',
   'support.assistant.stalled':
     'دستیار پشتیبانی کار نمی‌کند و پیش‌نویس‌ها و پاسخ‌های خودکار بی‌صاحب مانده‌اند.',

@@ -14,14 +14,17 @@ import {
   sql,
   type SQL,
 } from 'drizzle-orm';
-import { BUSINESS_ESCALATION_SUMMARY_MAX } from '@nexa/contracts';
+import { BUSINESS_ESCALATION_SUMMARY_MAX, businessOutboundButtonsSchema } from '@nexa/contracts';
 import type {
   BusinessBotRight,
   BusinessConversationState,
   BusinessEscalationTicketOutcome,
+  BusinessHandoffKind,
   BusinessHandoffReason,
   BusinessMessageKind,
   BusinessMessageOrigin,
+  BusinessOutboundButtons,
+  BusinessOutboundFeedback,
   BusinessOutboundOrigin,
   BusinessOutboundState,
   BusinessTakeoverReason,
@@ -82,6 +85,7 @@ function toConversation(row: ConversationRow): BusinessConversationRecord {
     controlEpoch: row.controlEpoch,
     takeoverReason: row.takeoverReason as BusinessTakeoverReason | null,
     handoffReason: row.handoffReason as BusinessHandoffReason | null,
+    handoffKind: row.handoffKind as BusinessHandoffKind | null,
     lastMessageAt: row.lastMessageAt,
     lastInboundAt: row.lastInboundAt,
     lastHumanAt: row.lastHumanAt,
@@ -136,8 +140,17 @@ function toOutbound(row: OutboundRow): BusinessOutboundRecord {
     resolvedAt: row.resolvedAt,
     telegramMessageId: row.telegramMessageId,
     failureCode: row.failureCode,
+    buttons: buttonsOf(row.buttons),
+    feedback: (row.feedback as BusinessOutboundFeedback | null) ?? null,
     createdAt: row.createdAt,
   };
+}
+
+/** Phase 4 PR-3: a stored keyboard read back through its schema; anything else is none. */
+function buttonsOf(value: unknown): BusinessOutboundButtons | null {
+  if (value === null || value === undefined) return null;
+  const parsed = businessOutboundButtonsSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 const PREVIEW_CHARS = 120;
@@ -289,6 +302,12 @@ export class DrizzleBusinessConversationRepository implements BusinessConversati
           : { takeoverReason: transition.takeoverReason }),
         handoffReason:
           transition.to === 'HANDOFF_REQUIRED' ? (transition.handoffReason ?? null) : null,
+        // Phase 4 PR-1: AI_ACTIVE never has a kind; otherwise an absent kind keeps the stored one.
+        ...(transition.to === 'AI_ACTIVE'
+          ? { handoffKind: null }
+          : transition.handoffKind === undefined
+            ? {}
+            : { handoffKind: transition.handoffKind }),
         version: sql`${businessConversations.version} + 1`,
         updatedAt: transition.now,
       })
@@ -712,6 +731,11 @@ export class DrizzleBusinessOutboundRepository implements BusinessOutboundReposi
         origin: row.origin,
         body: row.body,
         templateKey: row.templateKey ?? null,
+        // Parsed before it is stored: a keyboard outside its bounds is a bug, never a row.
+        buttons:
+          row.buttons === undefined || row.buttons === null
+            ? null
+            : businessOutboundButtonsSchema.parse(row.buttons),
         createdByAdminId: row.createdByAdminId,
         controlEpoch: row.controlEpoch,
         idempotencyKey: row.idempotencyKey,
@@ -723,6 +747,29 @@ export class DrizzleBusinessOutboundRepository implements BusinessOutboundReposi
     if (inserted === undefined)
       throw new Error('business_outbound_messages: insert returned nothing.');
     return toOutbound(inserted);
+  }
+
+  async recordFeedback(
+    scope: ScopeContext,
+    id: string,
+    feedback: BusinessOutboundFeedback,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await executorOf(this.db, tx)
+      .update(businessOutboundMessages)
+      .set({ feedback, updatedAt: now })
+      .where(
+        and(
+          eq(businessOutboundMessages.tenantId, tenantId),
+          eq(businessOutboundMessages.id, id),
+          eq(businessOutboundMessages.origin, 'AUTO'),
+          isNull(businessOutboundMessages.feedback),
+        ),
+      )
+      .returning({ id: businessOutboundMessages.id });
+    return rows.length === 1;
   }
 
   async findByIdempotencyKey(
@@ -1080,7 +1127,7 @@ export class DrizzleBusinessOutboundRepository implements BusinessOutboundReposi
       .limit(limit);
     const rows = await executorOf(this.db, tx)
       .update(businessOutboundMessages)
-      .set({ body: null, bodyPurgedAt: now, updatedAt: now })
+      .set({ body: null, buttons: null, bodyPurgedAt: now, updatedAt: now })
       .where(
         and(
           eq(businessOutboundMessages.tenantId, tenantId),
@@ -1168,6 +1215,7 @@ export class DrizzleBusinessEscalationRepository implements BusinessEscalationRe
         contextFrom: row.contextFrom,
         ticketId: row.ticketId,
         ticketOutcome: row.ticketOutcome,
+        handoffKind: row.handoffKind ?? null,
         jobId: row.jobId,
         createdAt: row.now,
       })

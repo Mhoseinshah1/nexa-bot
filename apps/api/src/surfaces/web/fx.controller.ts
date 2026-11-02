@@ -8,11 +8,9 @@ import {
   rateToDecimalText,
   type FxRefreshResponse,
   type FxStatusResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import type { FxStatus } from '../../modules/commerce/fx/application/fx.service.js';
 
 /** The one asset this release quotes; the section is about it. */
@@ -33,35 +31,19 @@ export class FxController {
 
   @Get(FX_ROUTES.status)
   async status(@Req() request: FastifyRequest): Promise<FxStatusResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return toView(await this.container.fx.status(scope, actor, BASE_ASSET));
   }
 
   @Post(FX_ROUTES.refresh)
   async refresh(@Req() request: FastifyRequest): Promise<FxRefreshResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const { outcome, reason, status } = await this.container.fx.refresh(scope, actor, BASE_ASSET);
     return {
       outcome: outcome === 'NOT_DUE' ? 'REFRESHED' : outcome,
       reason,
       status: toView(status),
     };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

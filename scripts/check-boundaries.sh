@@ -817,6 +817,21 @@ if [ -f "$MONITOR_FILE" ]; then
   fi
 fi
 
+# A migration that would take a long blocking lock on a large table (R12 F2 item 8).
+#
+# `botctl update` migrates inside one transaction while the outgoing release is still
+# serving, so a non-CONCURRENTLY index or a validated-at-once constraint on a big table
+# is an outage on a busy installation — and before this rule 521 statements in the
+# history did one or the other (only migrations above the baseline are held to it). The
+# table list is scripts/large-tables.txt; an intentional exception is annotated
+# `-- nexa:blocking-ddl-ok <reason>` on the statement.
+if DDL_PROBLEMS=$(node scripts/check-migration-ddl.mjs 2>&1); then
+  pass "no new migration blocks a large table (non-CONCURRENTLY index, constraint without NOT VALID)"
+else
+  fail "A migration takes a blocking lock on a large table" "$DDL_PROBLEMS" \
+       "Build the index in apps/api/src/infrastructure/persistence/online-indexes.ts; add a constraint NOT VALID and VALIDATE it separately."
+fi
+
 echo
 if [ "$FAILED" -ne 0 ]; then
   echo "Boundary checks failed."

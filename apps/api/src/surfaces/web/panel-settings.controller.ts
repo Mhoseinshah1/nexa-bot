@@ -5,11 +5,9 @@ import {
   type PanelSettingListResponse,
   type PanelSettingWriteResponse,
   type ResolvedPanelSettingResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import type { ResolvedPanelSetting } from '../../modules/control/settings/application/panel-settings-resolver.js';
 
 /**
@@ -29,7 +27,7 @@ export class PanelSettingsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<PanelSettingListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const settings = await this.container.panelSettings.list(scope, actor, id);
     return { settings: settings.map(toResponse) };
   }
@@ -41,27 +39,10 @@ export class PanelSettingsController {
     @Param('key') key: string,
     @Body() body: unknown,
   ): Promise<PanelSettingWriteResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const result = await this.container.panelSettings.set(scope, actor, id, key, body);
     // The persisted row, re-read inside the transaction, and whether it changed anything.
     return { setting: toResponse(result.setting), changed: result.changed };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.container.config.NODE_ENV === 'production');
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      // A panel belongs to the TENANT, not to a bot.
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
   }
 }
 

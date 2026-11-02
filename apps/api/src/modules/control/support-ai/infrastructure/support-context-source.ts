@@ -17,6 +17,7 @@ import {
   type PriorDecisionFact,
 } from '../domain/knowledge-query.js';
 import type { SupportTranscriptLine } from '../domain/transcript.js';
+import { livePriceFamily } from '../domain/price-family.js';
 
 /** A8: the conversation's latest decided jobs, newest first (`priorDecisions`). */
 export interface PriorDecisionReader {
@@ -50,15 +51,21 @@ export class TbSupportContextSource implements SupportContextSource {
       readonly transcript?: readonly SupportTranscriptLine[];
     } = {},
   ) {
-    const { payload, knowledgeAvailable } = await this.builder.build(tenantOf(scope), customerId, {
-      query: await this.queryFor(scope, options),
-    });
+    const { payload, knowledgeAvailable, references } = await this.builder.build(
+      tenantOf(scope),
+      customerId,
+      {
+        query: await this.queryFor(scope, options),
+      },
+    );
     const aliases = new Map<string, string>();
     for (const service of payload.services) aliases.set(service.alias, service.label);
     for (const order of payload.orders) aliases.set(order.alias, order.title);
     for (const payment of payload.payments) {
       aliases.set(payment.alias, paymentLabel(payment));
     }
+    // Phase 4 PR-2: a catalogue plan is a fact a price reply cites (`C1`), labelled by title.
+    for (const plan of payload.catalogue) aliases.set(plan.alias, plan.title);
     // Knowledge is cited apart from the facts (`knowledgeRefs`), and labelled by its question.
     const knowledgeAliases = new Map<string, string>(
       payload.knowledge.map((entry) => [entry.alias, entry.question]),
@@ -67,10 +74,18 @@ export class TbSupportContextSource implements SupportContextSource {
       json: JSON.stringify(payload),
       aliases,
       knowledgeAliases,
+      unreconciledAliases: new Set(
+        payload.services.filter((service) => service.unreconciled).map((service) => service.alias),
+      ),
       linked: payload.flags.identityLinked,
       flags: payload.flags,
       // D2 telemetry: what the budget left of the selected knowledge, and the candidates.
       knowledge: { sent: payload.knowledge.length, available: knowledgeAvailable },
+      // Phase 4 PR-2: the amounts a reply may quote — what survived the byte budget, only.
+      priceFamily: livePriceFamily(payload),
+      // Phase 4 PR-3: what each alias names, kept on the server — the ONLY way a tool's target
+      // becomes a row (cross-cutting item 1). Never part of the JSON the model reads.
+      references: { services: references.services, catalogue: references.catalogue },
     };
   }
 

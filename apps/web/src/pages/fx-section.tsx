@@ -9,7 +9,7 @@ import { fetchFxStatus, fetchSettings, refreshFx, saveSetting } from '../api/cli
 import { errorCodeLabel } from '../ops-code-labels';
 import { errorText } from '../error-text';
 import { useSubmissionKey } from '../submission-key';
-import { currencyLabel, formatNumber, formatTimestamp } from '../format';
+import { currencyLabel, formatDecimalText, formatNumber, formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { messageFor } from './settings';
 import {
@@ -290,7 +290,7 @@ export function FxSection({
                 status.data.quote === null ? (
                   <span className="muted small">{t('web.fx_no_quote')}</span>
                 ) : (
-                  <Num value={status.data.quote.rate} />
+                  <Num value={formatDecimalText(status.data.quote.rate)} />
                 )
               }
               {...(status.data.quote === null
@@ -383,7 +383,7 @@ export function FxSection({
                         {t('web.fx_stars_ratio_unset')}
                       </span>
                     ) : (
-                      <Num key="ra" value={status.data.stars.starsPerUsdt} />
+                      <Num key="ra" value={formatDecimalText(status.data.stars.starsPerUsdt)} />
                     ),
                   ],
                   [
@@ -394,7 +394,7 @@ export function FxSection({
                       </span>
                     ) : (
                       <span key="cr">
-                        <Num value={status.data.stars.centralRatePerStar} />{' '}
+                        <Num value={formatDecimalText(status.data.stars.centralRatePerStar)} />{' '}
                         {currencyLabel(status.data.quoteCurrency)}
                       </span>
                     ),

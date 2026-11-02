@@ -6,13 +6,11 @@ import {
   auditLogExportQuerySchema,
   auditLogListQuerySchema,
   type AuditLogListResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type { AuditLogQuery } from '../../modules/platform/audit/application/audit-log.service.js';
 
 /**
@@ -32,7 +30,7 @@ export class AuditLogController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<AuditLogListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = auditLogListQuerySchema.parse(singleValued(raw));
     // The cursor is decoded only after the session and the schema: an unreadable one is a
     // 400 (`keyset-cursor.ts`), never page one.
@@ -62,7 +60,7 @@ export class AuditLogController {
     @Res() reply: FastifyReply,
     @Query() raw: Record<string, unknown>,
   ): Promise<void> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = auditLogExportQuerySchema.parse(singleValued(raw));
     const file = await this.container.auditLog.export(scope, actor, filtersOf(query));
     await reply
@@ -72,23 +70,6 @@ export class AuditLogController {
       .header('content-length', String(file.bytes.byteLength))
       .header('cache-control', 'no-store')
       .send(Buffer.from(file.bytes));
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    // The log is the TENANT's: every bot it runs writes into the same trail.
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

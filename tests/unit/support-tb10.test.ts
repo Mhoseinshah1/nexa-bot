@@ -139,8 +139,15 @@ describe('the automatic outcome classes', () => {
   it('classifies every outcome: sent, every guard and handoff as HANDED_OFF, every drop as DROPPED', () => {
     for (const outcome of SUPPORT_AI_AUTO_OUTCOMES) {
       const expected =
-        // A sent clarifying question (hotfix 2026-10-06) is a send too.
-        outcome === 'sent' || outcome === 'sent_clarifying'
+        // A sent clarifying question (hotfix 2026-10-06) is a send too, and so is the bot's
+        // start link to an unlinked customer (Phase 4 PR-1).
+        // Phase 4 PR-3: the messages that keep the conversation with the AI are sends too.
+        outcome === 'sent' ||
+        outcome === 'sent_clarifying' ||
+        outcome === 'sent_link' ||
+        outcome === 'sent_payment_delivered' ||
+        outcome === 'sent_payment_ask' ||
+        outcome === 'sent_unsupported_content'
           ? 'SENT'
           : // Roadmap A6: a closed matter ended silently — nothing sent, nobody handed off.
             outcome.startsWith('dropped_') || outcome === 'no_action'

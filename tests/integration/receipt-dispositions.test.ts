@@ -353,6 +353,8 @@ describe('a submitted receipt and its three dispositions', () => {
       expect((await paymentRow(paymentId))?.state).toBe('PENDING');
       expect(await orderState(order.id)).toBe('AWAITING_PAYMENT');
       expect(await notices('PAYMENT_EXPIRED')).toEqual([]);
+      // R11 A11: and the order's one expiry notice is not raised either — it did not expire.
+      expect(await notices('ORDER_EXPIRED')).toEqual([]);
       // And a second pass an hour later decides nothing either.
       expect(await ctx.container.paymentExpirySweep.runOnce(tenantA)).toEqual({
         payments: 0,
@@ -474,7 +476,7 @@ describe('a submitted receipt and its three dispositions', () => {
       expect(withdrawn.state).toBe('CANCELLED');
     });
 
-    it('still expires a transfer with no receipt — a signal alone — and says PAYMENT_EXPIRED', async () => {
+    it('still expires a transfer with no receipt — a signal alone — and says so through the ORDER’s one notice', async () => {
       const order = await awaitingPayment('d1-6');
       const { payment } = await ctx.container.payments.requestManualTransfer(
         tenantA,
@@ -493,7 +495,13 @@ describe('a submitted receipt and its three dispositions', () => {
 
       expect(report).toMatchObject({ payments: 1, orders: 1 });
       expect((await paymentRow(payment.id))?.state).toBe('EXPIRED');
-      expect(await notices('PAYMENT_EXPIRED')).toEqual([{ subject_id: payment.id }]);
+      /*
+       * R11 A11: one expiry notice per ORDER — `ORDER_EXPIRED`, edited onto the order's own
+       * payment message — and none of its own for a payment against an order, which an order
+       * with several attempts used to receive once per attempt, minutes apart.
+       */
+      expect(await notices('ORDER_EXPIRED')).toEqual([{ subject_id: order.id }]);
+      expect(await notices('PAYMENT_EXPIRED')).toEqual([]);
     });
 
     it('hands the receipted transfer back to a customer who asks to pay by transfer again', async () => {

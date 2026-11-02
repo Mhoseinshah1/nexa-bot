@@ -467,7 +467,12 @@ describe('the customer payment flow over Telegram', () => {
     expect(await entries()).toHaveLength(1);
     expect(await payments()).toHaveLength(0);
     expect((await orders())[0]?.['state']).toBe('AWAITING_PAYMENT');
-    expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual(['o:', 'mm:']);
+    // R12 F3 item 7: and the way back to this order's pre-invoice once topped up.
+    expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual([
+      'o:',
+      `ib:${orderId}`,
+      'mm:',
+    ]);
   });
 
   it('treats a REDELIVERED settlement tap as a replay: one debit, one payment', async () => {
@@ -862,7 +867,7 @@ describe('the customer payment flow over Telegram', () => {
     expect((await payments())[0]?.['state']).toBe('PENDING');
   });
 
-  it('answers a late receipt for a payment that can no longer take one with not_pending, and no button (E6)', async () => {
+  it('answers a late receipt for a payment that can no longer take one with not_pending, and no pay button (E6)', async () => {
     const { payment } = await atReceiptPrompt();
     await api.container.database.db.execute(sql`
       UPDATE receipt_captures
@@ -878,7 +883,8 @@ describe('the customer payment flow over Telegram', () => {
     expect(String(newMessages()[0]?.body['text'])).toBe(
       plain(CATALOGUE_FA['bot.payment.not_pending']),
     );
-    expect(buttonsOf(newMessages()[0])).toEqual([]);
+    // Nothing that pays again; only the main menu (R12 F3 item 3: no reply is a dead end).
+    expect(buttonsOf(newMessages()[0]).map((b) => b.callback_data)).toEqual(['mm:']);
     expect(await receiptsFiled(payment)).toBe(0);
   });
 

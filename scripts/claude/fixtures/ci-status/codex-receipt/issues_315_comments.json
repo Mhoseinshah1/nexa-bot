@@ -1,0 +1,12 @@
+[
+  {
+    "user": { "login": "chatgpt-codex-connector[bot]", "type": "Bot" },
+    "created_at": "2026-01-03T00:00:00Z",
+    "body": "<!-- codex-review-receipt:v1 -->\n\nCodex Review: Didn't find any major issues. Swish!\n\n**Reviewed commit:** `abcdef0123`\n"
+  },
+  {
+    "user": { "login": "codex-fan", "type": "User" },
+    "created_at": "2026-01-04T00:00:00Z",
+    "body": "<!-- codex-review-receipt:v1 -->\n\nCodex Review: found issues.\n\n**Reviewed commit:** `9999999999`\n"
+  }
+]

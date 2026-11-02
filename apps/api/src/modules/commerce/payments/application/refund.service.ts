@@ -25,6 +25,7 @@ import {
   type OperationalEventRecorder,
   type OrderId,
   type OrderPurpose,
+  type UserId,
   type PaymentId,
   type PermissionKey,
   type RefundChannel,
@@ -141,6 +142,41 @@ export interface RefundServiceDeps {
       tx?: unknown,
     ): Promise<boolean>;
   };
+  /**
+   * R12 F1 item 3: the SUSPEND an operator's FULL refund of a service purchase or renewal plans
+   * on that order's service, in the refund's own transaction — the provisioning planner an
+   * operator's suspend uses (`ProvisioningService.planStatusWithin`), bound in the container.
+   * A verdict, never a throw: a service that is not ACTIVE, or whose panel cannot suspend, is
+   * NOT_PLANNED and the refund still completes (the money is owed either way); the order's
+   * audit row says which.
+   */
+  readonly serviceSuspension: {
+    suspendForFullRefund(
+      scope: TenantContext,
+      actor: ActorContext,
+      input: {
+        readonly orderId: OrderId;
+        readonly purpose: OrderPurpose;
+        /** The refunded customer: a service that has since changed hands is not suspended. */
+        readonly customerId: UserId;
+        /** The refund that made the payment whole: the planned operation's idempotency stem. */
+        readonly refundId: string;
+      },
+      now: Date,
+      tx: TransactionScope,
+    ): Promise<
+      | {
+          readonly outcome: 'PLANNED';
+          readonly serviceId: string;
+          readonly operationId: string;
+        }
+      | {
+          readonly outcome: 'NOT_PLANNED';
+          readonly serviceId: string | null;
+          readonly reason: string;
+        }
+    >;
+  };
   /** `WalletEntryRecorded` for every REFUND credit, and `OrderRefunded` (P3, P4). */
   readonly outbox: OutboxWriter;
   /** `REFUND_COMPLETED`, in the transaction that completes the refund (P3). */
@@ -229,6 +265,17 @@ function currencyWitness(
     ? 'CURRENCY_MISMATCH'
     : null;
 }
+
+/**
+ * R12 F1 item 3: the purposes whose FULL refund suspends the order's service — a purchase
+ * (`NEW_SERVICE`, `CUSTOM_SERVICE`) or a renewal (`RENEW`). A trial is never paid; an add-on's
+ * refund takes back only what it added.
+ */
+const FULL_REFUND_SUSPENDS: ReadonlySet<OrderPurpose> = new Set<OrderPurpose>([
+  'NEW_SERVICE',
+  'CUSTOM_SERVICE',
+  'RENEW',
+]);
 
 export class RefundService {
   constructor(private readonly deps: RefundServiceDeps) {}
@@ -1194,6 +1241,42 @@ export class RefundService {
     // Not PAID any more — already REFUNDED by the other lane. One transition, one event.
     if (!moved) return;
 
+    /*
+     * R12 F1 item 3: a FULL refund of a service purchase or renewal no longer leaves that
+     * service live on the panel. Its SUSPEND is planned in THIS transaction — reversible (an
+     * operator may resume it), never a deletion — through the operator's own suspend planner.
+     * Not for a service refund request, whose deletion already SUCCEEDED; not for an add-on
+     * (traffic, time, users, a location change), whose refund takes back what it added and
+     * leaves the service the customer already paid for. Before this the audit said only
+     * `serviceLeftUntouched`, and the customer kept the service and the money.
+     */
+    let serviceSuspension: Record<string, unknown> | null = null;
+    if (options.serviceRemoved !== true) {
+      const order = await this.deps.orders.findById(scope, payment.orderId, tx);
+      if (order !== null && FULL_REFUND_SUSPENDS.has(order.purpose)) {
+        const planned = await this.deps.serviceSuspension.suspendForFullRefund(
+          scope,
+          actor,
+          {
+            orderId: order.id,
+            purpose: order.purpose,
+            customerId: refund.customerId,
+            refundId: refund.id,
+          },
+          now,
+          tx,
+        );
+        serviceSuspension =
+          planned.outcome === 'PLANNED'
+            ? {
+                planned: true,
+                serviceId: planned.serviceId,
+                operationId: planned.operationId,
+              }
+            : { planned: false, serviceId: planned.serviceId, reason: planned.reason };
+      }
+    }
+
     await this.deps.audit.record(
       scope,
       actor,
@@ -1207,11 +1290,16 @@ export class RefundService {
           paymentId: payment.id,
           refundedMinor: refunded.toString(),
           currency: payment.amount.currency,
-          // Said because it is the surprising part: nothing was done to the service — except
-          // for a service refund request, which is settled only after its deletion succeeded.
+          // What was done to the service: removed (a service refund request, settled only after
+          // its deletion succeeded), its SUSPEND planned (R12 F1), or nothing — said with why.
           ...(options.serviceRemoved === true
             ? { serviceRemovedByRequest: true }
-            : { serviceLeftUntouched: true }),
+            : serviceSuspension !== null && serviceSuspension['planned'] === true
+              ? { serviceSuspension }
+              : {
+                  serviceLeftUntouched: true,
+                  ...(serviceSuspension === null ? {} : { serviceSuspension }),
+                }),
         },
         result: 'SUCCESS',
       },

@@ -214,6 +214,25 @@ export class ResellerService {
   }
 
   /**
+   * `pricingTerms` for a whole price LIST at once (R11 A9): the same standing, ONE read of
+   * the tier's price table for every product on the list, and the same `termsFrom` per line
+   * — so a list priced through `PricingService.personalListPrices` carries the reseller
+   * layer the draft of any one of its lines would. Null for an ordinary customer (and a
+   * SUSPENDED reseller); otherwise one answer per item, in order, `UNSELLABLE` where the
+   * draft would refuse with `tierPriceMissing`. Outside a transaction it holds nothing.
+   */
+  async pricingTermsForItems(
+    scope: TenantContext,
+    customerId: string,
+    purpose: DiscountablePurpose,
+    items: readonly { readonly productId: string | null; readonly currency: CurrencyCode }[],
+    tx?: unknown,
+  ): Promise<readonly (ResellerPricingTerms | 'UNSELLABLE')[] | null> {
+    const standing = await this.standing(scope, customerId, tx);
+    return standing === null ? null : this.termsForItems(scope, standing, purpose, items, tx);
+  }
+
+  /**
    * The price this reseller would be quoted, before promotions, for each product — what a
    * catalogue or a renewal menu SHOWS (Round 4 PR-G), from `resellerCostMinor`, the function
    * the quote itself uses. Null for a product a price-table tier does not sell. A courtesy:
@@ -225,29 +244,27 @@ export class ResellerService {
     purpose: DiscountablePurpose,
     items: readonly { readonly id: string; readonly price: Money | null }[],
   ): Promise<ReadonlyMap<string, Money | null>> {
-    const gate = tierPriceGateOf(standing);
-    const table =
-      gate === null || !isResellerTierPricePurpose(purpose)
-        ? new Map<string, { readonly price: Money }>()
-        : await this.deps.resellers.tierPricesFor(
-            scope,
-            gate.tierId,
-            items.map((i) => i.id),
-          );
+    const priced = items.flatMap((item) =>
+      item.price === null ? [] : [{ id: item.id, price: item.price }],
+    );
+    const terms = await this.termsForItems(
+      scope,
+      standing,
+      purpose,
+      priced.map((item) => ({ productId: item.id, currency: item.price.currency })),
+      undefined,
+    );
     const offered = new Map<string, Money | null>();
-    for (const item of items) {
-      if (item.price === null) {
-        offered.set(item.id, null);
-        continue;
-      }
-      const terms = this.termsFrom(standing, purpose, item.price.currency, table.get(item.id));
+    for (const item of items) offered.set(item.id, null);
+    priced.forEach((item, index) => {
+      const decided = terms[index];
       offered.set(
         item.id,
-        terms === 'UNSELLABLE'
+        decided === undefined || decided === 'UNSELLABLE'
           ? null
-          : money(resellerCostMinor(item.price.amountMinor, terms), item.price.currency),
+          : money(resellerCostMinor(item.price.amountMinor, decided), item.price.currency),
       );
-    }
+    });
     return offered;
   }
 
@@ -257,16 +274,40 @@ export class ResellerService {
     subject: ResellerPricingSubject,
     tx: unknown,
   ): Promise<ResellerPricingTerms> {
-    const gate = tierPriceGateOf(standing);
-    const row =
-      gate === null || !isResellerTierPricePurpose(subject.purpose) || subject.productId === null
-        ? undefined
-        : (
-            await this.deps.resellers.tierPricesFor(scope, gate.tierId, [subject.productId], tx)
-          ).get(subject.productId);
-    const terms = this.termsFrom(standing, subject.purpose, subject.currency, row);
-    if (terms === 'UNSELLABLE') throw tierPriceMissing(standing.tier.id);
+    const [terms] = await this.termsForItems(scope, standing, subject.purpose, [subject], tx);
+    if (terms === undefined || terms === 'UNSELLABLE') throw tierPriceMissing(standing.tier.id);
     return terms;
+  }
+
+  /**
+   * The ONE statement of a standing's terms for a list of subjects (R11 A9): the tier's
+   * price table read once for every product among them (none at all when the standing has
+   * no table, or the purpose is not one it prices), then `termsFrom` per subject. The draft
+   * (`termsFor`, a list of one), the catalogue courtesy (`offeredPrices`) and the price
+   * lists (`pricingTermsForItems`) all come through here, so none of them can read a
+   * reseller's layer differently from the others.
+   */
+  private async termsForItems(
+    scope: TenantContext,
+    standing: ResellerStanding,
+    purpose: DiscountablePurpose,
+    items: readonly { readonly productId: string | null; readonly currency: CurrencyCode }[],
+    tx: unknown,
+  ): Promise<readonly (ResellerPricingTerms | 'UNSELLABLE')[]> {
+    const gate = tierPriceGateOf(standing);
+    const productIds = items.flatMap((item) => (item.productId === null ? [] : [item.productId]));
+    const table =
+      gate === null || !isResellerTierPricePurpose(purpose) || productIds.length === 0
+        ? new Map<string, { readonly price: Money }>()
+        : await this.deps.resellers.tierPricesFor(scope, gate.tierId, productIds, tx);
+    return items.map((item) =>
+      this.termsFrom(
+        standing,
+        purpose,
+        item.currency,
+        item.productId === null ? undefined : table.get(item.productId),
+      ),
+    );
   }
 
   /** The one statement of a standing's terms for one subject, from the row already read. */

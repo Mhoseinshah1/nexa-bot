@@ -1,3 +1,8 @@
+import { SupportHandoffRateAlert } from './modules/control/support-ai/application/handoff-rate-alert.js';
+import { SupportAutoResumePolicy } from './modules/control/support-ai/infrastructure/support-auto-resume.policy.js';
+import { DrizzleSupportAiTicketRepository } from './modules/control/support-ai/infrastructure/drizzle-support-ai-ticket.repository.js';
+import { SupportTicketAiTrigger } from './modules/control/support-ai/application/support-ticket-ai.trigger.js';
+import { SupportTicketAiService } from './modules/control/support-ai/application/support-ticket-ai.service.js';
 import { CustomerDirectMessageService } from './modules/commerce/direct-messages/application/customer-direct-message.service.js';
 import { LegacyMaterializeService } from './modules/platform/legacy-materialize/application/materialize.service.js';
 import { CustomerSourceStep } from './modules/platform/legacy-materialize/application/customers-source.step.js';
@@ -51,11 +56,14 @@ import {
   CUSTOMER_NOTIFICATION_AUTOMATED,
   CUSTOMER_NOTIFICATION_KINDS,
   CUSTOMER_NOTICES_PAUSE_SETTING_KEY,
+  TONPAYS_PACING_BURST_SETTING_KEY,
+  TONPAYS_PACING_SETTING_KEYS,
   type PanelBalancingStrategy,
 } from '@nexa/contracts';
 import type {
   AdminId,
   OrderId,
+  OrderPurpose,
   TemplateKey,
   ProductDisplay,
   AuditWriter,
@@ -76,7 +84,9 @@ import {
   createTranslator,
   DEFAULT_TEMPLATE_PRESENTATION,
   formatDateTime,
+  LEDGER_REASON_LABELS_FA,
   rejectReasonFa,
+  SUPPORT_HANDOFF_REASON_LABELS_FA,
 } from '@nexa/i18n';
 import type {
   OperationType,
@@ -93,6 +103,10 @@ import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema
 import { readFileSync } from 'node:fs';
 import { rename, stat } from 'node:fs/promises';
 import { panelUrlPolicy } from './infrastructure/net/installation-policy.js';
+import {
+  OutboundAllowList,
+  settingAllowListSource,
+} from './infrastructure/net/outbound-allow-list.js';
 import { SafeHttpClient } from './infrastructure/net/safe-http.js';
 import { checkUrl } from './infrastructure/net/url-policy.js';
 import { matchesTrustedEntry } from './infrastructure/trusted-proxy.js';
@@ -125,6 +139,10 @@ import {
 // WP-A8: advanced provider settings.
 import { PanelAdvancedService } from './modules/platform/panels/application/panel-advanced.service.js';
 import { PanelPolicyReader } from './modules/platform/panels/application/panel-policy.js';
+import {
+  PanelFilesOnlyReader,
+  PanelQrOptionsReader,
+} from './modules/platform/panels/application/panel-files-only.js';
 import { DrizzlePanelPolicyRepository } from './modules/platform/panels/infrastructure/drizzle-panel-policy.repository.js';
 import { PROVIDER_RULES } from './modules/platform/providers/infrastructure/provider-rules.js';
 import { SystemClock } from './infrastructure/clock.js';
@@ -294,6 +312,12 @@ import { IncidentService } from './modules/platform/incidents/application/incide
 import { IncidentSchedulerLoop } from './modules/platform/incidents/application/incident-scheduler-loop.js';
 import { DrizzleIncidentRepository } from './modules/platform/incidents/infrastructure/drizzle-incident.repository.js';
 import { SupportContextBuilder } from './modules/commerce/support-context/application/support-context.builder.js';
+import {
+  SUPPORT_KNOWLEDGE_REFRESH_INTERVAL_MS,
+  SupportKnowledgeRefreshLoop,
+} from './modules/control/support-knowledge/application/support-knowledge-refresh.js';
+import { I18nSupportFactFormatter } from './modules/commerce/support-context/infrastructure/i18n-support-fact-formatter.js';
+import { SupportCatalogueReader } from './modules/commerce/support-context/application/support-catalogue.js';
 import { DrizzleSupportContextReader } from './modules/commerce/support-context/infrastructure/drizzle-support-context.reader.js';
 import { ModuleIncidentEffects } from './modules/platform/incidents/infrastructure/incident-effects.js';
 import { NotificationCenterService } from './modules/platform/opslog/application/notification-center.service.js';
@@ -597,6 +621,10 @@ import {
   TONPAYS_TIMEOUT_MS,
   TonPaysAdapter,
 } from './modules/commerce/payments/infrastructure/tonpays-adapter.js';
+import {
+  TONPAYS_PACING_MAX_WAIT_MS,
+  TonPaysRateLimiter,
+} from './modules/commerce/payments/infrastructure/tonpays-rate-limiter.js';
 import { DrizzleGatewayInvoiceRepository } from './modules/commerce/payments/infrastructure/drizzle-gateway-invoice.repository.js';
 import type {
   CardTransferGatewayAdapter,
@@ -785,6 +813,14 @@ import { DrizzleUsageSnapshotRepository } from './modules/commerce/provisioning/
 import { UsageSnapshotService } from './modules/commerce/provisioning/application/usage-snapshots.js';
 import { DrizzleServiceTransferRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-transfer.repository.js';
 import { ServiceAdminService } from './modules/commerce/provisioning/application/service-admin.service.js';
+import { GlobalSearchService } from './modules/commerce/global-search/application/global-search.service.js';
+import {
+  ListBackedCustomerSource,
+  ListBackedOrderSource,
+  ListBackedServiceSource,
+  ListBackedPaymentSource,
+  ListBackedTicketSource,
+} from './modules/commerce/global-search/application/list-backed-sources.js';
 import { ServiceGrantService } from './modules/commerce/provisioning/application/service-grant.service.js';
 import { decideOperability } from './modules/commerce/provisioning/application/panel-operability.js';
 import {
@@ -812,6 +848,7 @@ import { parseCustomerAmount } from './modules/commerce/payments/domain/customer
 import { composeFaqScreen } from './modules/control/support/application/faq-screen.js';
 import { CustomerNotificationService } from './modules/commerce/messaging/application/customer-notification.service.js';
 import { orderScreenSettleMs } from './modules/commerce/messaging/application/order-screen-answer.js';
+import { orderEndScreen } from './modules/commerce/messaging/application/order-end-screen.js';
 import {
   CustomerNotificationLoop,
   CUSTOMER_NOTIFICATION_INTERVAL_MS,
@@ -846,6 +883,11 @@ import {
   SupportAutoReplyService,
 } from './modules/control/support-ai/application/support-auto-reply.service.js';
 import { SupportHandoffContext } from './modules/control/support-ai/application/support-handoff-context.js';
+import { SupportAiCallbackService } from './modules/control/support-ai/application/support-ai-callback.service.js';
+import {
+  DrizzleSupportAiToolReader,
+  SettingsSupportAiToolSettings,
+} from './modules/control/support-ai/infrastructure/drizzle-support-ai-tools.reader.js';
 import { BusinessEscalationService } from './modules/commerce/business-chats/application/business-escalation.service.js';
 import {
   AssistantLoop,
@@ -861,6 +903,9 @@ import { DrizzleSupportAiJobRepository } from './modules/control/support-ai/infr
 import { TelegramSupportImageSource } from './modules/control/support-ai/infrastructure/telegram-support-image-source.js';
 import { TbSupportContextSource } from './modules/control/support-ai/infrastructure/support-context-source.js';
 import { SupportAnalyticsService } from './modules/control/support-ai/application/support-analytics.service.js';
+import { SupportInsightsService } from './modules/control/support-ai/application/support-insights.service.js';
+import { SupportTestConsoleService } from './modules/control/support-ai/application/support-test-console.service.js';
+import { DrizzleSupportInsightsReader } from './modules/control/support-ai/infrastructure/drizzle-support-insights.reader.js';
 import { DrizzleSupportAnalyticsReader } from './modules/control/support-ai/infrastructure/drizzle-support-analytics.reader.js';
 import { SupportAiConfigService } from './modules/control/support-ai/application/support-ai-config.service.js';
 import type { SupportAiAdapter } from './modules/control/support-ai/application/ports.js';
@@ -1514,6 +1559,8 @@ export interface Container {
    * operation from a GET.
    */
   readonly serviceAdmin: ServiceAdminService;
+  /** R11 A1: the top-bar search over customers, orders and services. */
+  readonly globalSearch: GlobalSearchService;
   /** Program §13: an operator's free traffic or time grant to one service. */
   readonly serviceGrants: ServiceGrantService;
   /** The lane that creates services on panels. Driven by the `provisioner` role. */
@@ -1529,6 +1576,12 @@ export interface Container {
   readonly delivery: DeliveryService;
   /** The timer that drives it, and the readiness signal that timer earns. */
   readonly provisionerLoop: ProvisionerLoop;
+  /**
+   * The longest one provider exchange may legitimately take: the panel HTTP timeout x
+   * attempts x the most requests a registered provider makes in one exchange. The
+   * provisioner's in-flight allowance and (R12 F2) the monitor's liveness slack.
+   */
+  readonly panelExchangeAllowanceMs: number;
   readonly settingsService: SettingsService;
   readonly settingsResolver: SettingsResolver;
   readonly featureFlags: FeatureFlagsService;
@@ -1576,6 +1629,8 @@ export interface Container {
   readonly businessOutboundLoop: BusinessOutboundLoop;
   /** D5: the worker's watch for a stalled `assistant` role. */
   readonly supportAssistantWatchLoop: SupportAssistantWatchLoop;
+  /** Phase 4 PR-2: the debounced and nightly refresh of the knowledge built from owner content. */
+  readonly supportKnowledgeRefreshLoop: SupportKnowledgeRefreshLoop;
   /** TB3: the support agent's read-only, allowlisted context for one conversation. */
   readonly supportContext: SupportContextBuilder;
   /** TB4: the support AI's configuration, keys and provider chain (ADR-0034). */
@@ -1585,10 +1640,19 @@ export interface Container {
   readonly supportAnalytics: SupportAnalyticsService;
   /** TB5: Assist Mode — drafts an operator may edit and send (ADR-0034 §7). */
   readonly supportAssist: SupportAssistService;
+  /** Phase 4 PR-5: readiness card, handoff questions and knowledge gaps (read-only). */
+  readonly supportInsights: SupportInsightsService;
+  /** Phase 4 PR-5: «امتحان یک سؤال» — the real config through the real guards, sends nothing. */
+  readonly supportTestConsole: SupportTestConsoleService;
   /** TB5: produces drafts. Built in every role, STARTED only by the `assistant` role. */
   readonly assistantLoop: AssistantLoop;
   /** TB7: AUTO_REPLY_SAFE's producer (the `assistant` role runs it through the loop). */
   readonly supportAutoReply: SupportAutoReplyService;
+  /** Phase 4 PR-4: the support AI's producer for tickets, and its trigger. */
+  readonly supportTicketAi: SupportTicketAiService;
+  readonly supportAiTickets: DrizzleSupportAiTicketRepository;
+  /** Phase 4 PR-3: taps on the support AI's buttons under a Business message. */
+  readonly supportAiCallbacks: SupportAiCallbackService;
   /** TB8: support knowledge and its review, and controlled learning (ADR-0035). */
   readonly supportKnowledge: SupportKnowledgeService;
   readonly supportLearning: SupportLearningService;
@@ -1679,6 +1743,8 @@ export interface Container {
    */
   readonly keyring: InstallationKeyring;
   readonly installationKeyLoader: InstallationKeyLoader;
+  /** R12 F2: the owner's outbound allow-list the URL policy consults (refreshed per role). */
+  readonly outboundAllowList: OutboundAllowList;
   readonly installationKeyRepository: DrizzleInstallationKeyRepository;
   readonly installationKeys: InstallationKeyService;
   /**
@@ -2292,6 +2358,7 @@ export function createContainer(
     logger,
     clock,
     maxOutboxLagMs: config.OUTBOX_RELAY_MAX_LAG_MS,
+    verdictCacheMs: config.READINESS_CACHE_MS,
   });
 
   // Comfortably past the longest window plus lockout the schema permits, so a
@@ -2379,6 +2446,18 @@ export function createContainer(
 
   const settingRepository = new DrizzleSettingRepository(database.db);
   const settingsResolver = new SettingsResolver(settingRepository, opsLog);
+  // R12 F2 item 4: the owner's outbound allow-list, read on the installation tenant and kept
+  // in memory for the synchronous URL policy (refreshed by `resolveInstallationTenant`).
+  const outboundAllowList = new OutboundAllowList(
+    settingAllowListSource({
+      installationTenant: () =>
+        installationTenantId === null
+          ? null
+          : { tenantId: installationTenantId, botInstanceId: null },
+      valueOf: (scope, key) => settingsResolver.valueOf(scope, key),
+    }),
+    logger,
+  );
   // Track 3 §2: the PANEL-scoped settings (a panel's connection-file caption).
   const panelSettingRepository = new DrizzlePanelSettingRepository(database.db);
   const panelSettingsResolver = new PanelSettingsResolver(panelSettingRepository, opsLog);
@@ -2516,6 +2595,9 @@ export function createContainer(
    */
   const panelPolicyRepository = new DrizzlePanelPolicyRepository(database.db);
   const panelPolicyReader = new PanelPolicyReader(panelPolicyRepository);
+  // R11 A4: «فقط فایل، بدون لینک ساب» — the one reader every link-showing place asks.
+  const panelFilesOnlyReader = new PanelFilesOnlyReader(panelRepository);
+  const panelQrOptionsReader = new PanelQrOptionsReader(panelRepository);
   const panelSalesGate = new PanelSalesGate({
     panels: panelRepository,
     capacity: panelCapacity,
@@ -2557,8 +2639,28 @@ export function createContainer(
    */
   const productCategoryRepository = new DrizzleProductCategoryRepository(database.db);
 
+  /*
+   * Built before the catalogue (R11 A9): `ProductService` lists a customer's personal
+   * discount through `personalListPrices`, the same boundary every draft is priced at.
+   */
+  const discountRepository = new DrizzleDiscountRepository(database.db);
+  const cashbackRuleRepository = new DrizzleCashbackRuleRepository(database.db);
+  const orderCashbackRepository = new DrizzleOrderCashbackRepository(database.db);
+  const pricingService = new PricingService({
+    referrals: referralProgram,
+    resellers: resellerService,
+    discounts: discountRepository,
+    cashbackRules: cashbackRuleRepository,
+    orderCashback: orderCashbackRepository,
+    outbox,
+    ids,
+    // R10 D3: the customer's personal discount, behind `personal_discount`.
+    personalDiscounts: personalDiscountRepository,
+    featureFlags: featureFlagResolver,
+  });
   const productService = new ProductService({
     resellers: resellerService,
+    pricing: pricingService,
     panelSales: panelSalesGate,
     placement: panelPlacement,
     repository: productRepository,
@@ -2936,21 +3038,6 @@ export function createContainer(
     auditHistory: new DrizzleAuditHistoryReader(database.db),
     outbox,
   });
-  const discountRepository = new DrizzleDiscountRepository(database.db);
-  const cashbackRuleRepository = new DrizzleCashbackRuleRepository(database.db);
-  const orderCashbackRepository = new DrizzleOrderCashbackRepository(database.db);
-  const pricingService = new PricingService({
-    referrals: referralProgram,
-    resellers: resellerService,
-    discounts: discountRepository,
-    cashbackRules: cashbackRuleRepository,
-    orderCashback: orderCashbackRepository,
-    outbox,
-    ids,
-    // R10 D3: the customer's personal discount, behind `personal_discount`.
-    personalDiscounts: personalDiscountRepository,
-    featureFlags: featureFlagResolver,
-  });
   /*
    * The operator's half of pricing (P12): the two rule catalogues and the read-only
    * preview. The preview is handed `pricingService` itself, so what an operator is
@@ -3301,14 +3388,34 @@ export function createContainer(
    * the only code that speaks its HTTP. Everything else asks through the provider-neutral
    * port. The callback URL is generated from the tenant's registered public origin.
    */
-  const tonpaysAdapter = new TonPaysAdapter();
+  /*
+   * Round 11 A8: ONE rate limiter for both TonPays adapters — a token bucket per API key, inside
+   * the TonPays HTTP client, so every TonPays endpoint (create, check, card change, receipt,
+   * cancel, refund) is paced and a 429 pauses the key. Its pace is the installation tenant's
+   * settings (the tenant the worker serves), re-read at most once a minute; until a tenant is
+   * provisioned, or if a read fails, the conservative defaults.
+   */
+  const tonpaysLimiter = new TonPaysRateLimiter({
+    clock,
+    logger,
+    pacingFor: async (route) => {
+      if (installationTenantId === null) return {};
+      const scope = { tenantId: installationTenantId, botInstanceId: null };
+      const [callsPerMinute, burst] = await Promise.all([
+        settingsResolver.valueOf<number>(scope, TONPAYS_PACING_SETTING_KEYS[route]),
+        settingsResolver.valueOf<number>(scope, TONPAYS_PACING_BURST_SETTING_KEY),
+      ]);
+      return { callsPerMinute, burst };
+    },
+  });
+  const tonpaysAdapter = new TonPaysAdapter({ limiter: tonpaysLimiter });
   /*
    * TonPays Telegram (`docs/tonpays-telegram-gateway-audit.md`): a SEPARATE adapter for the
    * custom API — its own paths, its own key, a payee card instead of a link, a card change
    * and a receipt upload. It shares the website adapter's request and classifier, never a
    * key. Not accepted against the real provider yet (`OQ-WP10-01`).
    */
-  const tonpaysTelegramAdapter = new TonPaysTelegramAdapter();
+  const tonpaysTelegramAdapter = new TonPaysTelegramAdapter({ limiter: tonpaysLimiter });
   /*
    * NOWPayments (`docs/nowpayments-gateway-audit.md`): the hosted crypto invoice. Its own
    * adapter, the only code that speaks its HTTP; priced from the central USDT quote; its IPN
@@ -3343,7 +3450,7 @@ export function createContainer(
    * same CA bundle as the panel calls, the protocol's 15 s budget and 64 KiB cap, and no retry
    * (a create is never re-sent; an inquiry is re-asked by the lane's own schedule).
    */
-  const customGatewayUrlPolicy = panelUrlPolicy(config);
+  const customGatewayUrlPolicy = panelUrlPolicy(config, outboundAllowList);
   const customGatewayHttp = new SafeHttpClient({
     ...customGatewayUrlPolicy,
     ...(config.PANEL_HTTP_CA_FILE === undefined
@@ -3605,6 +3712,16 @@ export function createContainer(
   );
   const deliveryQrPreview = new QrTemplatePreviewService(guard, deliveryQrRenderer);
 
+  /** R12 F1 item 3: the service a refund of this order concerns — the purchase's, or the renewal's. */
+  const refundServiceIdOf = async (
+    scope: TenantContext,
+    input: { readonly orderId: OrderId; readonly purpose: OrderPurpose },
+    tx: TransactionScope,
+  ): Promise<string | null> =>
+    input.purpose === 'RENEW'
+      ? ((await commercialActionRepository.findByOrderId(scope, input.orderId, tx))?.serviceId ??
+        null)
+      : ((await serviceRepository.findByOrderId(scope, input.orderId, tx))?.id ?? null);
   const refundService = new RefundService({
     cashback: cashbackService,
     referrals: referralCommissionService,
@@ -3649,6 +3766,49 @@ export function createContainer(
     scopeActivity: tenants,
     clock,
     ids,
+    /*
+     * R12 F1 item 3: a FULL refund of a purchase or renewal suspends the order's service —
+     * planned in the refund's transaction by the operator's own suspend planner. The service
+     * is the order's (a purchase) or its commercial action's (a renewal), and only while the
+     * refunded customer still owns it.
+     */
+    serviceSuspension: {
+      suspendForFullRefund: async (scope, actor, input, now, tx) => {
+        const serviceId = await refundServiceIdOf(scope, input, tx);
+        if (serviceId === null) {
+          return { outcome: 'NOT_PLANNED', serviceId: null, reason: 'NO_SERVICE' };
+        }
+        /*
+         * Codex on #360: the service's ROW, the lock a transfer holds from its first statement
+         * to its commit — taken WITHOUT waiting. Held, it serialises this refund with any
+         * transfer: one committed before is seen (the owner `planStatusWithin` re-reads below,
+         * under this lock, is the one that holds), and none can commit before this refund does.
+         * Not waiting is what keeps it from a lock cycle: this transaction already holds the
+         * payment (and on a wallet refund the customer), and a transfer, a refund request's
+         * filing or its approval take the row first and the payment or the customer after. A
+         * row someone else holds right now is left alone and the audit says so (`SERVICE_BUSY`):
+         * an operator suspends it by hand rather than the refund guessing whose it is.
+         */
+        if (!(await serviceRepository.tryLockForUpdate(scope, serviceId, tx))) {
+          return { outcome: 'NOT_PLANNED', serviceId, reason: 'SERVICE_BUSY' };
+        }
+        const planned = await provisioningService.planStatusWithin(
+          scope,
+          actor,
+          {
+            serviceId,
+            customerId: input.customerId,
+            type: 'SUSPEND',
+            key: `refund:${input.refundId}:suspend`,
+          },
+          now,
+          tx,
+        );
+        return planned.outcome === 'PLANNED'
+          ? { outcome: 'PLANNED', serviceId, operationId: planned.operation.id }
+          : { outcome: 'NOT_PLANNED', serviceId, reason: planned.reason };
+      },
+    },
   });
 
   /**
@@ -3973,7 +4133,9 @@ export function createContainer(
      * provider's is TONPAYS_TIMEOUT_MS) and up to three Telegram calls around it (a
      * receipt's getFile and file, the invoice screen's edit). The lease covers it.
      */
-    rowBoundMs: TONPAYS_TIMEOUT_MS + 3 * config.NOTIFICATION_SEND_TIMEOUT_MS,
+    // Round 11 A8: plus the longest a TonPays call waits for its token.
+    rowBoundMs:
+      TONPAYS_PACING_MAX_WAIT_MS + TONPAYS_TIMEOUT_MS + 3 * config.NOTIFICATION_SEND_TIMEOUT_MS,
     /*
      * R5A item 4: a late approval the provider's inquiry re-verified is credited to the
      * customer's wallet, by the payment service's one path, when the route's switch is on.
@@ -4041,7 +4203,7 @@ export function createContainer(
         GATEWAY_CARD_CHANGE_BATCH +
         GATEWAY_PROVIDER_REQUEST_BATCH +
         GATEWAY_RECEIPT_BATCH) *
-        (TONPAYS_TIMEOUT_MS + config.NOTIFICATION_SEND_TIMEOUT_MS) +
+        (TONPAYS_PACING_MAX_WAIT_MS + TONPAYS_TIMEOUT_MS + config.NOTIFICATION_SEND_TIMEOUT_MS) +
       // TonPays Telegram: each receipt is first fetched from Telegram (getFile, then the file).
       GATEWAY_RECEIPT_BATCH * 2 * config.NOTIFICATION_SEND_TIMEOUT_MS,
     now: () => clock.now().getTime(),
@@ -4154,7 +4316,7 @@ export function createContainer(
   // extra networks the operator listed — see `panelUrlPolicy`, which the
   // deployment smoke test runs inside the real container against the real
   // environment.
-  const urlPolicy = panelUrlPolicy(config);
+  const urlPolicy = panelUrlPolicy(config, outboundAllowList);
 
   const panelCredentials = new DrizzlePanelCredentialStore(database.db, cipher);
 
@@ -5095,7 +5257,7 @@ export function createContainer(
     terms: orderCustomServiceTermsRepository,
     guard,
   });
-  const customerScreens = new CustomerScreenComposer(templateResolver);
+  const customerScreens = new CustomerScreenComposer(templateResolver, LEDGER_REASON_LABELS_FA);
   /**
    * Package F — a customer hands one of their services to another customer of the tenant.
    * Only ownership moves: no provider is called, and the order, payment and ledger are left
@@ -5335,7 +5497,14 @@ export function createContainer(
   });
   // TB7: the business-chat handoffs a ticket carries (written by business-chats below).
   const businessEscalationRepository = new DrizzleBusinessEscalationRepository(database.db);
+  // Phase 4 PR-4: the support AI's ticket trigger, bound once the support AI is built below.
+  const ticketAiRef: { current: SupportTicketAiTrigger | null } = { current: null };
   const ticketService = new TicketService({
+    supportAi: {
+      customerMessagePosted: async (scope, input, tx) => {
+        await ticketAiRef.current?.customerMessagePosted(scope, input, tx);
+      },
+    },
     tickets: ticketRepository,
     categories: ticketCategoryRepository,
     escalations: businessEscalationRepository,
@@ -5919,6 +6088,16 @@ export function createContainer(
       incidents: incidentService,
       buttonsFor: notificationButtons,
       /*
+       * R11 A11: an ended order's screen — its summary and where re-ordering leads — read from
+       * the order the notification names, with the state the lane checks against the kind.
+       */
+      orderEnds: {
+        screenFor: async (scope, orderId) => {
+          const order = await orderRepository.findById(scope, orderId as OrderId);
+          return order === null ? null : { state: order.state, screen: orderEndScreen(order) };
+        },
+      },
+      /*
        * The ledger reader the refund sentence renders from. The wallet repository
        * itself, because both figures are derived from `wallet_entries` and a
        * second implementation would be a second answer to "how much did we give
@@ -5976,20 +6155,22 @@ export function createContainer(
        */
       orderScreens: {
         close: (scope, orderId) => wizardScreens.closeOrder(scope, orderId),
-        readiness: (scope, orderId, destination) =>
+        readiness: (scope, orderId, destination, steps) =>
           wizardScreens.orderReadiness(
             scope,
             orderId,
             destination,
             orderScreenSettleMs(config.NOTIFICATION_SEND_TIMEOUT_MS),
+            steps,
           ),
-        answer: (scope, orderId, destination, content) =>
+        answer: (scope, orderId, destination, content, steps) =>
           wizardScreens.answerOrder(
             scope,
             orderId,
             destination,
             orderScreenSettleMs(config.NOTIFICATION_SEND_TIMEOUT_MS),
             content,
+            steps,
           ),
       },
       // HF-A9: reminders claimed inside the tenant's quiet window wait for its end.
@@ -6380,6 +6561,8 @@ export function createContainer(
     clock,
     guard,
     panelPolicy: panelPolicyReader,
+    filesOnly: panelFilesOnlyReader,
+    qrOptions: panelQrOptionsReader,
     /*
      * R3 item 6: every connection file, right after a delivered link, for any purchase
      * kind. `subscriptionFileService` is built further down (it needs the provisioning
@@ -6671,6 +6854,8 @@ export function createContainer(
   /** TB8: the one home of support knowledge; the context reads only what was approved. */
   const supportKnowledgeRepository = new DrizzleSupportKnowledgeRepository(database.db);
   const supportContextReader = new DrizzleSupportContextReader(database.db);
+  /** Phase 4 PR-2: the bot's own formatters for the support context's figures. */
+  const supportFactFormatter = new I18nSupportFactFormatter();
   const supportContext = new SupportContextBuilder({
     customers: customerRepository,
     services: provisioningService,
@@ -6681,6 +6866,20 @@ export function createContainer(
     knowledge: supportKnowledgeRepository,
     settings: settingsResolver,
     clock,
+    /*
+     * Phase 4 PR-2: the live catalogue, priced by `PricingService.quoteListPrices` — the
+     * checkout's own boundary (personal discount, promotions, reseller tiers) — read-only.
+     */
+    catalogue: new SupportCatalogueReader({
+      catalogue: productService,
+      products: productRepository,
+      addons: serviceAddonRepository,
+      pricing: pricingService,
+      settings: settingsResolver,
+      format: supportFactFormatter,
+    }),
+    presentation: templatePresentation,
+    format: supportFactFormatter,
   });
 
   /**
@@ -6777,6 +6976,8 @@ export function createContainer(
     clock,
   });
 
+  const panelExchangeAllowanceMs =
+    config.PANEL_HTTP_TIMEOUT_MS * (1 + PANEL_HTTP_RETRIES) * MAX_REQUESTS_PER_PROBE;
   const provisionerLoop = new ProvisionerLoop(provisioner, deliveryService, outcomeAnnouncer, {
     cards: operationCardEditor,
     cashback: cashbackService,
@@ -6812,8 +7013,7 @@ export function createContainer(
      * requests a registered provider makes in one exchange — so a call still inside its
      * own deadline is never reported as a stalled provisioner.
      */
-    inFlightAllowanceMs:
-      config.PANEL_HTTP_TIMEOUT_MS * (1 + PANEL_HTTP_RETRIES) * MAX_REQUESTS_PER_PROBE,
+    inFlightAllowanceMs: panelExchangeAllowanceMs,
     now: () => clock.now().getTime(),
     logger,
   });
@@ -6947,6 +7147,8 @@ export function createContainer(
     conversations: businessConversationRepository,
     messages: businessMessageRepository,
     outbound: businessOutboundRepository,
+    // Review of PR #367: a handback learns only from the current episode (since its handoff).
+    escalations: businessEscalationRepository,
     guard,
     uow,
     audit,
@@ -6997,6 +7199,20 @@ export function createContainer(
     clock,
     ids,
   });
+  /*
+   * Phase 4 PR-2: the automatic refresh, in the worker (`support.knowledge.auto_refresh`, off
+   * by default): two minutes after the owner's content stops changing, and nightly.
+   */
+  const supportKnowledgeRefreshLoop = new SupportKnowledgeRefreshLoop(supportKnowledgeBuild, {
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    intervalMs: SUPPORT_KNOWLEDGE_REFRESH_INTERVAL_MS,
+    now: () => clock.now(),
+    correlationId: () => ids.uuid(),
+    logger,
+  });
   const businessConversations = new BusinessConversationService({
     conversations: businessConversationRepository,
     messages: businessMessageRepository,
@@ -7016,6 +7232,12 @@ export function createContainer(
     escalation: businessEscalation,
     escalations: businessEscalationRepository,
     learning: supportLearning,
+    // Phase 4 PR-1: a SOFT hold returns to the AI after `support.ai.resume_after_minutes`.
+    autoResume: new SupportAutoResumePolicy({
+      db: database.db,
+      configs: supportAiConfigs,
+      settings: settingsResolver,
+    }),
   });
   // A8: the knowledge query also reads the conversation's earlier decisions.
   const supportContextSource = new TbSupportContextSource(supportContext, supportAiJobs);
@@ -7039,6 +7261,113 @@ export function createContainer(
     facts: supportContextReader,
     control: businessConversations,
     uow,
+    scopeActivity: tenants,
+    clock,
+    // Phase 4 PR-1: the logger (was not passed), the operations log, and the start-link message.
+    logger,
+    opsLog,
+    templates: templateResolver,
+    bots: {
+      usernameOf: async (scope, botInstanceId) =>
+        (await botInstances.findById(botInstanceId as BotInstanceId))?.username ?? null,
+    },
+    // Phase 4 PR-3: the read-only tools, deep links and check-before-handoff (off by default).
+    tools: {
+      reader: new DrizzleSupportAiToolReader({
+        db: database.db,
+        filesOnly: panelFilesOnlyReader,
+        trials: trialService,
+        products: productRepository,
+      }),
+      settings: new SettingsSupportAiToolSettings(settingsResolver),
+      jobs: supportAiJobs,
+    },
+  });
+  /*
+   * Phase 4 PR-4: the support AI inside tickets. Its own storage (`support_ai_ticket_*`), trigger
+   * and producer; the pipeline's pieces — the chain, the context, the guards' facts, the tool
+   * reader and the settings — are the Business auto-reply's own instances.
+   */
+  const supportAiTickets = new DrizzleSupportAiTicketRepository(database.db);
+  const ticketAiResume = new SupportAutoResumePolicy({
+    db: database.db,
+    configs: supportAiConfigs,
+    settings: settingsResolver,
+  });
+  ticketAiRef.current = new SupportTicketAiTrigger({
+    settings: settingsResolver,
+    configs: supportAiConfigs,
+    tickets: supportAiTickets,
+    resume: ticketAiResume,
+    ids,
+    clock,
+  });
+  const supportTicketAi = new SupportTicketAiService({
+    tickets: supportAiTickets,
+    configs: supportAiConfigs,
+    chain: supportAiChain,
+    context: supportContextSource,
+    facts: supportContextReader,
+    ticketService,
+    settings: settingsResolver,
+    resume: ticketAiResume,
+    audit,
+    opsLog,
+    templates: templateResolver,
+    bots: {
+      usernameOf: async (scope, botInstanceId) =>
+        (await botInstances.findById(botInstanceId as BotInstanceId))?.username ?? null,
+    },
+    tools: {
+      reader: new DrizzleSupportAiToolReader({
+        db: database.db,
+        filesOnly: panelFilesOnlyReader,
+        trials: trialService,
+        products: productRepository,
+      }),
+      settings: new SettingsSupportAiToolSettings(settingsResolver),
+    },
+    uow,
+    scopeActivity: tenants,
+    clock,
+  });
+  // Phase 4 PR-3: the support AI's own buttons under a Business message (bound to their row).
+  const supportAiCallbacks = new SupportAiCallbackService({
+    outbound: businessOutboundRepository,
+    conversations: businessConversationRepository,
+    connections: businessConnectionRepository,
+    jobs: supportAiJobs,
+    control: businessConversations,
+    acknowledge: (scope, input) =>
+      customerMessenger.acknowledge(scope as TenantContext, {
+        callbackQueryId: input.callbackQueryId,
+        botInstanceId: input.botInstanceId as BotInstanceId,
+        toast: { templateKey: input.toastKey, values: {} },
+      }),
+    uow,
+    scopeActivity: tenants,
+    clock,
+  });
+  // Phase 4 PR-5: the support pages' read-only insights, and the test console (no outbound port).
+  const supportInsights = new SupportInsightsService({
+    guard,
+    reader: new DrizzleSupportInsightsReader(database.db),
+    config: supportAiConfig,
+    configs: supportAiConfigs,
+    connections: businessConnections,
+    settings: settingsResolver,
+    conditions: supportAiConditions,
+    clock,
+  });
+  const supportTestConsole = new SupportTestConsoleService({
+    configs: supportAiConfigs,
+    chain: supportAiChain,
+    context: supportContextSource,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    idempotency,
     scopeActivity: tenants,
     clock,
   });
@@ -7069,6 +7398,14 @@ export function createContainer(
   });
   const assistantLoop = new AssistantLoop(supportAssist, {
     auto: supportAutoReply,
+    tickets: supportTicketAi,
+    handoffRate: new SupportHandoffRateAlert({
+      jobs: supportAiJobs,
+      settings: settingsResolver,
+      opsLog,
+      clock,
+      reasonLabel: (reason) => SUPPORT_HANDOFF_REASON_LABELS_FA[reason] ?? reason,
+    }),
     learning: supportLearning,
     // D5: the assistant closes the worker's "stalled" condition itself.
     liveness: new SupportAssistantLiveness({
@@ -8551,9 +8888,20 @@ export function createContainer(
     receiptFiles,
     provisioning: provisioningService,
     serviceAdmin,
+    globalSearch: new GlobalSearchService({
+      guard,
+      sources: {
+        CUSTOMER: new ListBackedCustomerSource(customerService),
+        ORDER: new ListBackedOrderSource(orderService),
+        SERVICE: new ListBackedServiceSource(serviceAdmin),
+        PAYMENT: new ListBackedPaymentSource(paymentService),
+        TICKET: new ListBackedTicketSource(ticketService),
+      },
+    }),
     serviceGrants: serviceGrantService,
     provisioner,
     provisionerLoop,
+    panelExchangeAllowanceMs,
     delivery: deliveryService,
     orders: orderService,
     publicLabels: new PublicLabelService({
@@ -8736,6 +9084,8 @@ export function createContainer(
       // R2 (items 3–5): edit-in-place state for wizards and receipt reviews.
       messageState: telegramMessageState,
       invoiceScreens: wizardScreens,
+      // R11 A11 (Codex, #354): a cancellation edits the order's message under the lane's rule.
+      orderScreenSettleMs: orderScreenSettleMs(config.NOTIFICATION_SEND_TIMEOUT_MS),
       // R2: which order an open typed-answer window names, so a refusal edits ITS wizard.
       answerWindowOrder: async (scope, botInstanceId, customerId, window) => {
         const open =
@@ -8866,13 +9216,19 @@ export function createContainer(
     businessConversations,
     businessOutboundLoop,
     supportAssistantWatchLoop,
+    supportKnowledgeRefreshLoop,
     supportContext,
     supportAiConfig,
     supportAiChain,
     supportAnalytics,
     supportAssist,
+    supportInsights,
+    supportTestConsole,
     assistantLoop,
     supportAutoReply,
+    supportTicketAi,
+    supportAiTickets,
+    supportAiCallbacks,
     supportKnowledge,
     supportLearning,
     supportKnowledgeBuild,
@@ -8909,6 +9265,7 @@ export function createContainer(
     migrationWorkspaces,
     keyring,
     installationKeyLoader,
+    outboundAllowList,
     installationKeyRepository,
     installationKeys,
     legacyPanelInventory: (options = {}) => legacyInventory(options),
@@ -8956,6 +9313,7 @@ export function createContainer(
     },
     async shutdown() {
       installationKeyLoader.stop();
+      outboundAllowList.stop();
       // Round 8 (B1): the in-flight backup dies with this process; its plaintext goes now
       // rather than waiting for a sweep to find the run abandoned. Never its archive.
       await backup.discardInFlightPlaintext().then(
@@ -9000,6 +9358,7 @@ export function createContainer(
       // TB2: a stamped business send is recorded before the pool closes.
       await businessOutboundLoop.stop();
       await supportAssistantWatchLoop.stop();
+      await supportKnowledgeRefreshLoop.stop();
       // Round N: and the broadcast lane, for the same reason — a stamped send is recorded.
       await broadcastLoop.stop();
       await incidentSchedulerLoop.stop();

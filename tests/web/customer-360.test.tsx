@@ -196,14 +196,14 @@ describe('Customer 360 — the customer page', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'تعیین درصد' }));
     const confirm = screen.getByRole('button', { name: 'تأیید' });
     fireEvent.change(screen.getByLabelText('دلیل (اجباری)'), { target: { value: 'وفادار' } });
-    const percent = screen.getByLabelText('درصد تخفیف شخصی (۰ تا ۱۰۰)');
+    const percent = screen.getByLabelText('درصد تخفیف شخصی (0 تا 100)');
     // Out of range: the Persian sentence, and nothing can be sent.
     fireEvent.change(percent, { target: { value: '۱۵۰' } });
-    expect(screen.getByText('درصد باید یک عدد صحیح از ۰ تا ۱۰۰ باشد.')).toBeTruthy();
+    expect(screen.getByText('درصد باید یک عدد صحیح از 0 تا 100 باشد.')).toBeTruthy();
     expect(confirm).toBeDisabled();
     // Persian digits are read as the number they are.
     fireEvent.change(percent, { target: { value: '۲۵' } });
-    expect(screen.queryByText('درصد باید یک عدد صحیح از ۰ تا ۱۰۰ باشد.')).toBeNull();
+    expect(screen.queryByText('درصد باید یک عدد صحیح از 0 تا 100 باشد.')).toBeNull();
     expect(confirm).not.toBeDisabled();
     fireEvent.click(confirm);
     await waitFor(() =>

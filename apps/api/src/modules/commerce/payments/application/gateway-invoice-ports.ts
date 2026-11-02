@@ -167,6 +167,11 @@ export type GatewayCreateOutcome =
       readonly httpStatus?: number;
       /** The provider's `Retry-After`, in ms, when it sent a readable one. Honoured, bounded. */
       readonly retryAfterMs?: number;
+      /**
+       * Round 11 A8: the request never left the process — the adapter's own rate limiter held
+       * it. Certainly not created, so the attempt is deferred without spending a retry.
+       */
+      readonly notSent?: true;
     }
   | { readonly kind: 'AMBIGUOUS'; readonly code: string; readonly httpStatus?: number }
   | { readonly kind: 'UNKNOWN'; readonly code: string; readonly httpStatus?: number };
@@ -192,6 +197,18 @@ export interface GatewayCardChangePolicy {
  * readable refusal, the provider's own rate limit, an invoice it does not know, or no
  * readable answer — after which the current card is no longer shown.
  */
+/**
+ * Round 11 A8: a write the provider refused for its rate limit (it did nothing), or one the
+ * adapter's own limiter held (`notSent`: nothing left the process). `retryAfterMs` is how long
+ * every call on that credential now waits — the provider's `Retry-After` or the back-off.
+ */
+export interface GatewayRateLimitedOutcome {
+  readonly kind: 'RATE_LIMITED';
+  readonly code: string;
+  readonly retryAfterMs?: number;
+  readonly notSent?: true;
+}
+
 export type GatewayCardChangeOutcome =
   | {
       readonly kind: 'CHANGED';
@@ -201,7 +218,7 @@ export type GatewayCardChangeOutcome =
       readonly finalAmount?: bigint | null;
     }
   | { readonly kind: 'REFUSED'; readonly code: string; readonly configuration: boolean }
-  | { readonly kind: 'RATE_LIMITED'; readonly code: string }
+  | GatewayRateLimitedOutcome
   | { readonly kind: 'NOT_FOUND'; readonly code: string }
   | { readonly kind: 'UNKNOWN'; readonly code: string };
 
@@ -225,7 +242,7 @@ export type GatewayReceiptOutcome =
       /** The provider refused the IMAGE (type, size): the customer may send another. */
       readonly receiptRefused: boolean;
     }
-  | { readonly kind: 'RATE_LIMITED'; readonly code: string }
+  | GatewayRateLimitedOutcome
   | { readonly kind: 'NOT_FOUND'; readonly code: string }
   | { readonly kind: 'UNKNOWN'; readonly code: string };
 
@@ -237,7 +254,7 @@ export type GatewayReceiptOutcome =
 export type GatewayCancelOutcome =
   | { readonly kind: 'CANCELLED' }
   | { readonly kind: 'REFUSED'; readonly code: string; readonly configuration: boolean }
-  | { readonly kind: 'RATE_LIMITED'; readonly code: string }
+  | GatewayRateLimitedOutcome
   | { readonly kind: 'NOT_FOUND'; readonly code: string }
   | { readonly kind: 'UNKNOWN'; readonly code: string };
 
@@ -255,7 +272,7 @@ export interface GatewayRefundCard {
 export type GatewayRefundOutcome =
   | { readonly kind: 'ACCEPTED' }
   | { readonly kind: 'REFUSED'; readonly code: string; readonly configuration: boolean }
-  | { readonly kind: 'RATE_LIMITED'; readonly code: string }
+  | GatewayRateLimitedOutcome
   | { readonly kind: 'NOT_FOUND'; readonly code: string }
   | { readonly kind: 'UNKNOWN'; readonly code: string };
 
@@ -376,6 +393,8 @@ export type GatewayInquiryOutcome =
       readonly code: string;
       /** The provider's `Retry-After`, in ms, when it sent a readable one. Honoured, bounded. */
       readonly retryAfterMs?: number;
+      /** Round 11 A8: held by the adapter's own rate limiter; the provider was not asked. */
+      readonly notSent?: true;
     }
   | { readonly kind: 'CONFIGURATION'; readonly code: string }
   | { readonly kind: 'FAILED'; readonly code: string };
@@ -736,6 +755,30 @@ export interface GatewayInvoiceRepository {
   ): Promise<boolean>;
 
   /**
+   * R12 F1 item 6: Telegram REFUNDED this Stars charge (`refunded_payment`). Marks the invoice
+   * `provider_status = 'refunded_payment'` and `provider_paid = false`, conditional on this very
+   * charge id (or on no charge recorded yet, which then records this one, refunded — Codex on
+   * #360) and on not being marked already — so a charge that has not settled can no longer
+   * settle (nothing recorded is nothing approved), and a redelivered update changes nothing. The payment's own state, the ledger and the order are untouched:
+   * what happens to the service or the wallet is an operator's decision. Returns whether this
+   * call marked it, and what the row said before.
+   */
+  markChargeRefunded(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    chargeId: string,
+    now: Date,
+    tx: unknown,
+  ): Promise<{
+    readonly marked: boolean;
+    readonly before: {
+      readonly providerStatus: string | null;
+      readonly providerPaid: boolean | null;
+      readonly outcome: string | null;
+    } | null;
+  }>;
+
+  /**
    * Claims up to `limit` CREATING rows whose payment is still PENDING, taking a lease.
    * `SKIP LOCKED` plus a conditional lease, so two worker replicas never claim one row.
    */
@@ -806,7 +849,11 @@ export interface GatewayInvoiceRepository {
     tx: unknown,
   ): Promise<boolean>;
 
-  /** A rate-limited create: stays CREATING, send stamp cleared, retried later. */
+  /**
+   * A rate-limited create: stays CREATING, send stamp cleared, retried later. `notSent`
+   * (Round 11 A8): the request never left the process (the adapter's limiter held it), so the
+   * send this pass stamped is given back — it does not count toward the create's retries.
+   */
   deferCreation(
     scope: TenantContext,
     paymentId: PaymentId,
@@ -814,6 +861,7 @@ export interface GatewayInvoiceRepository {
     retryAt: Date,
     now: Date,
     tx?: unknown,
+    options?: { readonly notSent?: boolean },
   ): Promise<boolean>;
 
   /** Claims up to `limit` rows whose next inquiry is due, taking a lease. */
@@ -937,6 +985,12 @@ export interface GatewayInvoiceRepository {
       readonly method?: string | null;
       /** The provider's "not before" for the next inquiry (its Retry-After); cleared when absent. */
       readonly notBefore?: Date | null;
+      /**
+       * Round 11 A8: the inquiry was rate limited (by the provider, or held by Nexa's own
+       * limiter). It asked nothing and decided nothing, so it spends none of the attempt's
+       * post-deadline allowance and does not answer an operator's "ask again".
+       */
+      readonly rateLimited?: boolean;
       /**
        * FIX10 R1: the claim's lease this answer was asked under. When given, the answer is
        * recorded only while `inquiry_claimed_until` still carries it — a replica whose lease
@@ -1426,7 +1480,11 @@ export interface GatewayCardTransferRepository {
     now: Date,
     tx: unknown,
   ): Promise<boolean>;
-  /** A provider rate limit: `SENDING -> QUEUED`, send stamp cleared, retried at `retryAt`. */
+  /**
+   * A provider rate limit: `SENDING -> QUEUED`, send stamp cleared, retried at `retryAt`.
+   * `notSent` (Round 11 A8): the adapter's own limiter held it, so the attempt the send stamp
+   * counted is given back.
+   */
   requeueSubmission(
     scope: TenantContext,
     id: string,
@@ -1434,6 +1492,7 @@ export interface GatewayCardTransferRepository {
     retryAt: Date,
     now: Date,
     tx: unknown,
+    options?: { readonly notSent?: boolean },
   ): Promise<boolean>;
   /** The ACCEPTED submission whose acknowledgement opened the review. Once per payment. */
   markOpenedReview(scope: TenantContext, id: string, tx: unknown): Promise<boolean>;
@@ -1505,6 +1564,12 @@ export interface GatewayProviderRequestRecord {
    */
   readonly requestedOnExpiry?: boolean;
 }
+
+/**
+ * Round 11 A8: the soonest a call the adapter's own limiter HELD (nothing sent) is tried again.
+ * The limiter says when a token will be there; this only stops a zero from spinning the lane.
+ */
+export const GATEWAY_HELD_RETRY_MIN_MS = 1_000;
 
 /** The idempotency-key prefix of a cancel Nexa asks for itself (`cancelNow`). */
 export const NEXA_CANCEL_KEY_PREFIX = 'sibling-cancel:';
@@ -1595,6 +1660,19 @@ export interface GatewayProviderRequestRepository {
   ): Promise<ClaimedProviderRequest | null>;
   /** `REQUESTED -> SENT`, stamped BEFORE the call; the sealed card is wiped in the same statement. */
   markSent(scope: TenantContext, id: string, now: Date, tx: unknown): Promise<boolean>;
+  /**
+   * R11 A8: `SENT -> REQUESTED` for a CANCEL whose call the TonPays client's own limiter HELD —
+   * it never left the process. Only the very stamp this pass wrote (`sentAt`) is taken back,
+   * and the row is left to the worker until `notBefore`. Never for a refund (its sealed card
+   * went with the stamp) and never for a call that may have reached the provider.
+   */
+  requeueUnsentCancel(
+    scope: TenantContext,
+    id: string,
+    sentAt: Date,
+    notBefore: Date,
+    tx: unknown,
+  ): Promise<boolean>;
   /** `REQUESTED | SENT -> APPLIED | REFUSED | RATE_LIMITED | UNKNOWN`; wipes any sealed card. */
   decide(
     scope: TenantContext,

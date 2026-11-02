@@ -11,11 +11,9 @@ import {
   type LegacyCutoverApprovalResponse,
   type LegacyCutoverApprovalView,
   type LegacyCutoverReadSetListResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import type { LegacyCutoverApprovalRecord } from '../../modules/platform/legacy-cutover/application/ports.js';
 
 /**
@@ -36,7 +34,7 @@ export class LegacyCutoverController {
     @Req() request: FastifyRequest,
     @Query() query: unknown,
   ): Promise<LegacyCutoverApprovalListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = legacyCutoverListQuerySchema.parse(query ?? {});
     const page = await this.service.listApprovals(scope, actor, input);
     return { approvals: page.items.map(toView), nextCursor: page.nextCursor };
@@ -47,7 +45,7 @@ export class LegacyCutoverController {
     @Req() request: FastifyRequest,
     @Query() query: unknown,
   ): Promise<LegacyCutoverReadSetListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = legacyCutoverListQuerySchema.parse(query ?? {});
     const page = await this.service.listReadSets(scope, actor, input);
     return {
@@ -71,7 +69,7 @@ export class LegacyCutoverController {
     @Req() request: FastifyRequest,
     @Query() query: unknown,
   ): Promise<LegacyCutoverApplyRunListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = legacyCutoverListQuerySchema.parse(query ?? {});
     const page = await this.service.listApplyRuns(scope, actor, input);
     return {
@@ -91,7 +89,7 @@ export class LegacyCutoverController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<LegacyCutoverApprovalResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { approval: toView(await this.service.approve(scope, actor, body)) };
   }
 
@@ -101,7 +99,7 @@ export class LegacyCutoverController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<LegacyCutoverApprovalResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return {
       approval: toView(await this.service.revoke(scope, actor, uuidV7Schema.parse(id), body)),
     };
@@ -109,20 +107,6 @@ export class LegacyCutoverController {
 
   private get service() {
     return this.container.legacyCutover;
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.container.config.NODE_ENV === 'production');
-    if (options.write) assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
   }
 }
 
