@@ -7,14 +7,12 @@ import {
   publishTermsDraftRequestSchema,
   routePattern,
   updateTermsDraftRequestSchema,
-  type TenantContext,
   type TermsOverviewResponse,
   type TermsVersionResponse,
   type TermsVersionWriteResponse,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import type { TermsVersionRecord } from '../../modules/control/terms/application/ports.js';
 
 /**
@@ -30,7 +28,7 @@ export class TermsController {
 
   @Get(TERMS_ROUTES.overview)
   async overview(@Req() request: FastifyRequest): Promise<TermsOverviewResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const overview = await this.container.terms.overview(scope, actor);
     const counts = overview.acceptanceCounts;
     const currentId = overview.history[0]?.id ?? null;
@@ -54,7 +52,7 @@ export class TermsController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<TermsVersionWriteResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = createTermsDraftRequestSchema.parse(body);
     return {
       version: toView(await this.container.terms.createDraft(scope, actor, input), null, 0),
@@ -67,7 +65,7 @@ export class TermsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<TermsVersionWriteResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = updateTermsDraftRequestSchema.parse(body);
     const row = await this.container.terms.updateDraft(scope, actor, { ...input, id });
     return { version: toView(row, null, 0) };
@@ -79,32 +77,11 @@ export class TermsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<TermsVersionWriteResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = publishTermsDraftRequestSchema.parse(body);
     const row = await this.container.terms.publish(scope, actor, { ...input, id });
     // Just published, so it is the current version, and nobody has accepted it yet.
     return { version: toView(row, row.id, 0) };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    // The rules belong to the TENANT: a tenant running two bots asks one set of rules.
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

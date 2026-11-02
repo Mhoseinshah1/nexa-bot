@@ -42,6 +42,12 @@ export {
   processRoleLabelFa,
 } from './loop-labels.fa.js';
 export { CUSTOMER_NOTIFICATION_KIND_NAMES_FA } from './customer-notification-kinds.fa.js';
+export { LEDGER_REASON_LABELS_FA } from './ledger-reasons.fa.js';
+export { SUPPORT_HANDOFF_REASON_LABELS_FA } from './support-handoff-reasons.fa.js';
+export {
+  SUPPORT_PAYMENT_STATE_LABELS_FA,
+  SUPPORT_PAYMENT_UNDER_REVIEW_FA,
+} from './support-payment-states.fa.js';
 export { TONPAYS_REJECT_REASONS_FA, rejectReasonFa } from './gateway-reject-reasons.fa.js';
 import { clipEntities, parseCaptionMarkup, type CaptionMarkup } from './caption-markup.js';
 
@@ -80,6 +86,31 @@ export class MissingTranslationError extends Error {
  * templates whose copy says تومان and ریال for the same `{price}` token.
  */
 export function formatMoney(value: Money, locale: Locale = DEFAULT_LOCALE): string {
+  const { figure, unit } = moneyParts(value, locale);
+  return `${figure} ${unit}`;
+}
+
+/** U+2066 LEFT-TO-RIGHT ISOLATE … U+2069 POP DIRECTIONAL ISOLATE. */
+export const LTR_ISOLATE = '\u2066';
+export const POP_DIRECTIONAL_ISOLATE = '\u2069';
+
+/**
+ * `formatMoney`, with the figure — sign, digits, group and decimal separators — wrapped in a
+ * left-to-right isolate (R11 hotfix): U+2066, «104,000», U+2069, then « تومان». The same
+ * figure and the same unit; only the two invisible marks are added.
+ *
+ * For text that carries no formatting and sits in a right-to-left line: an inline-keyboard
+ * button, whose text the Bot API takes as plain text. The isolate keeps the figure one
+ * left-to-right run in logical order whatever surrounds it, so its digit groups can never be
+ * reordered and the unit stays after it. Everywhere else `formatMoney` is used as it is.
+ */
+export function formatMoneyIsolated(value: Money, locale: Locale = DEFAULT_LOCALE): string {
+  const { figure, unit } = moneyParts(value, locale);
+  return `${LTR_ISOLATE}${figure}${POP_DIRECTIONAL_ISOLATE} ${unit}`;
+}
+
+/** The one place a money figure and its unit are worked out, for both formatters above. */
+function moneyParts(value: Money, locale: Locale): { figure: string; unit: string } {
   const exponent = CURRENCY_EXPONENT[value.currency];
   const negative = value.amountMinor < 0n;
   const digits = (negative ? -value.amountMinor : value.amountMinor).toString();
@@ -95,7 +126,7 @@ export function formatMoney(value: Money, locale: Locale = DEFAULT_LOCALE): stri
   const grouped = major.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   const amount = minor ? `${grouped}.${minor}` : grouped;
   const unit = CURRENCY_UNIT[locale][value.currency] ?? value.currency;
-  return `${negative ? '-' : ''}${amount} ${unit}`;
+  return { figure: `${negative ? '-' : ''}${amount}`, unit };
 }
 
 const CURRENCY_UNIT: Record<Locale, Partial<Record<Money['currency'], string>>> = {

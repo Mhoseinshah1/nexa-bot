@@ -6,11 +6,9 @@ import {
   type DeleteRoleResponse,
   type RoleMutationResponse,
   type RoleViewListResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 
 /**
  * Role management over HTTP (Phase D3). Routes in `RBAC_ROUTES`.
@@ -24,13 +22,9 @@ import { adminActor, assertOriginAllowed, requireSessionToken } from './authenti
 export class RbacController {
   constructor(@Inject(CONTAINER) private readonly container: Container) {}
 
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
-  }
-
   @Get('roles')
   async roles(@Req() request: FastifyRequest): Promise<RoleViewListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { roles: await this.container.adminManagement.listManagedRoles(scope, actor) };
   }
 
@@ -39,7 +33,7 @@ export class RbacController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<RoleMutationResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { role: await this.container.adminManagement.createRole(scope, actor, body) };
   }
 
@@ -50,7 +44,7 @@ export class RbacController {
     @Param('key') key: string,
     @Body() body: unknown,
   ): Promise<RoleMutationResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const roleKey = roleKeySchema.parse(key);
     return { role: await this.container.adminManagement.updateRole(scope, actor, roleKey, body) };
   }
@@ -62,22 +56,8 @@ export class RbacController {
     @Param('key') key: string,
     @Body() body: unknown,
   ): Promise<DeleteRoleResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const roleKey = roleKeySchema.parse(key);
     return this.container.adminManagement.deleteRole(scope, actor, roleKey, body);
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (options.write) assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
   }
 }

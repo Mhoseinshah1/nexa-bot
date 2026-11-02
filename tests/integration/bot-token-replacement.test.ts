@@ -23,6 +23,7 @@ import {
 } from '../../apps/api/src/modules/platform/tenancy/application/bot-management.service';
 import { startFakeTelegramBotApi, type FakeTelegramBotApi } from '../support/fake-telegram-bot-api';
 import { createAdmin, migrateOnce, resetDatabase, SEED_IDS, tenantA, testConfig } from './harness';
+import { perBotWebhookSecret } from '../../apps/api/src/modules/platform/tenancy/application/webhook-secret';
 
 /**
  * R4 (item 12) — replacing a bot's token leaves the bot able to receive updates, or
@@ -43,7 +44,14 @@ const BOT_A1 = SEED_IDS.botA1 as BotInstanceId;
 const TELEGRAM_ID = 7000000001;
 /** What the installer registered for BOT_A1: its public origin, then the route and the id. */
 const EXPECTED_URL = `https://bot.example.test/telegram/webhook/${BOT_A1}`;
-const FINGERPRINT = createHash('sha256').update(WEBHOOK_SECRET, 'utf8').digest('hex');
+/**
+ * R12 F2 item 7: what every registration this installation makes for BOT_A1 sends Telegram —
+ * its OWN derived secret, never the installation-wide one — and so what the seed records:
+ * the steady state after R12. (A bot still on the master is re-registered without the
+ * read-first step these cases are about; `telegram-multi-bot.test.ts` covers that move.)
+ */
+const BOT_A1_SECRET = perBotWebhookSecret(WEBHOOK_SECRET, BOT_A1);
+const FINGERPRINT = createHash('sha256').update(BOT_A1_SECRET, 'utf8').digest('hex');
 
 describe('R4 — Telegram bot token replacement registers and verifies the webhook', () => {
   let api: ApiApp;
@@ -296,7 +304,7 @@ describe('R4 — Telegram bot token replacement registers and verifies the webho
     const set = telegram.calls.find((call) => call.method === 'setWebhook');
     expect(set?.body).toEqual({
       url: EXPECTED_URL,
-      secret_token: WEBHOOK_SECRET,
+      secret_token: BOT_A1_SECRET,
       // Customers' messages queued while the bot was silent are delivered, not dropped.
       drop_pending_updates: false,
       // The documented reset to the default update set.
@@ -305,7 +313,7 @@ describe('R4 — Telegram bot token replacement registers and verifies the webho
     // What Telegram now holds, including the secret it never reports.
     expect(telegram.registration(TELEGRAM_ID)).toMatchObject({
       url: EXPECTED_URL,
-      secretToken: WEBHOOK_SECRET,
+      secretToken: BOT_A1_SECRET,
       allowedUpdates: null,
     });
 
@@ -729,6 +737,7 @@ describe('R4 — Telegram bot token replacement registers and verifies the webho
     expect(text).not.toContain(oldToken);
     expect(text).not.toContain(newToken);
     expect(text).not.toContain(WEBHOOK_SECRET);
+    expect(text).not.toContain(BOT_A1_SECRET);
     // Status is read-only: no registration was attempted.
     expect(webhookBodies()).toEqual([]);
   });
@@ -755,7 +764,7 @@ describe('R4 — Telegram bot token replacement registers and verifies the webho
     for (const body of webhookBodies()) expect(body['drop_pending_updates']).toBe(false);
     expect(telegram.registration(TELEGRAM_ID)).toMatchObject({
       url: EXPECTED_URL,
-      secretToken: WEBHOOK_SECRET,
+      secretToken: BOT_A1_SECRET,
     });
     const after = await bootstrapStatus();
     expect(after.state).toBe('ready');

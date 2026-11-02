@@ -55,6 +55,9 @@ export class OpenAiAdapter implements SupportAiAdapter {
             json_schema: { name: request.schemaName, schema: request.jsonSchema, strict: true },
           },
           max_completion_tokens: outputTokenBudget(request.maxOutputTokens),
+          // Phase 4 PR-1: a reasoning model thinks little before a support decision. Sent only
+          // to the reasoning families that accept it — any other model refuses the parameter.
+          ...(openAiReasoningModel(request.model) ? { reasoning_effort: 'low' } : {}),
         },
       },
       this.options.fetch,
@@ -78,6 +81,11 @@ export class OpenAiAdapter implements SupportAiAdapter {
     );
     return readListing(result, this.options.now?.() ?? Date.now(), model, 'openai');
   }
+}
+
+/** Phase 4 PR-1: the OpenAI model families that accept `reasoning_effort` (o-series, GPT-5). */
+export function openAiReasoningModel(model: string): boolean {
+  return /^(?:o[1-9](?:$|[-.])|gpt-5)/u.test(model.toLowerCase());
 }
 
 /** OpenAI-shaped messages: Z.AI reuses this. */

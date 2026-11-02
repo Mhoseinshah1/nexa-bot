@@ -39,17 +39,41 @@ export const SUPPORT_CONTEXT_LIMITS = {
    * relevance, and the byte budget cut most of them anyway.
    */
   knowledge: 8,
+  /**
+   * Phase 4 PR-2: the live catalogue — the customer-visible plans with the price the checkout of
+   * each would quote for THIS customer (`PricingService.quoteListPrices`, the same boundary as
+   * the invoice) — and the traffic / time packages.
+   */
+  catalogue: 20,
+  addons: 10,
 } as const;
+
+/**
+ * Phase 4 PR-2: a knowledge entry's answer is cut to this many characters in the payload (an
+ * ellipsis marks a cut), so at least five articles fit the knowledge reserve. An article body
+ * may hold up to 4000 characters; the reviewer's full text stays in the knowledge base.
+ */
+export const SUPPORT_CONTEXT_KNOWLEDGE_ANSWER_CHARS = 2400;
+
+/**
+ * Phase 4 PR-2: when no knowledge entry matches the conversation at all, this many GENERAL
+ * entries (the newest approved articles, then the FAQ) are sent instead of none — a question
+ * nothing matched used to carry no knowledge, and the model could only hand off.
+ */
+export const SUPPORT_CONTEXT_FALLBACK_KNOWLEDGE = 3;
 
 /** A client app's rendered guide is cut to this many characters (an ellipsis marks a cut). */
 export const SUPPORT_CONTEXT_GUIDE_MAX_CHARS = 1500;
 
 /**
+ * Phase 4 PR-2: 44 KiB (was 24): the live catalogue, the precomputed account facts and a
+ * knowledge reserve that holds at least five articles.
+ *
  * The serialised payload's budget, in UTF-8 bytes. A payload over it is cut by dropping
  * whole entries from the TAIL of each family, in `SUPPORT_CONTEXT_TRUNCATION_ORDER`, until
  * it fits. Flags are computed before any cut, so a dropped entry never clears a flag.
  */
-export const SUPPORT_CONTEXT_MAX_BYTES = 24 * 1024;
+export const SUPPORT_CONTEXT_MAX_BYTES = 44 * 1024;
 
 /**
  * Which family gives way first (D2). Client apps first: they are long, and an app whose guide
@@ -57,13 +81,19 @@ export const SUPPORT_CONTEXT_MAX_BYTES = 24 * 1024;
  * down to `SUPPORT_CONTEXT_KNOWLEDGE_RESERVE_BYTES`; then the account facts; an incident
  * affecting this customer last; and the knowledge reserve only after everything else is gone.
  *
+ * Phase 4 PR-2: before a client app ENTRY is dropped, every app's guide text is emptied (the
+ * long part); an app's official and help links are never cut while the app is listed. The
+ * packages give way before knowledge, the catalogue after it (prices the customer asks about).
+ *
  * Knowledge used to give way FIRST, on the grounds that it was "retrievable again" — nothing
  * retrieved it, and in a realistic installation (six apps, twenty articles) no article reached
  * the model at all.
  */
 export const SUPPORT_CONTEXT_TRUNCATION_ORDER = [
   'clientApps',
+  'addons',
   'knowledge',
+  'catalogue',
   'orders',
   'payments',
   'services',
@@ -75,9 +105,10 @@ export const SUPPORT_CONTEXT_TRUNCATION_ORDER = [
  * the knowledge array's JSON. Knowledge is cut in its turn only down to this, and never below
  * its first (most relevant) entry; the rest of it gives way only once every other family is
  * empty. A8 (2026-10-07): half of the 24 KiB budget, about three full Persian articles (it was
- * 6 KiB of 16 KiB, about two).
+ * 6 KiB of 16 KiB, about two). Phase 4 PR-2: 26 KiB — five answers at
+ * `SUPPORT_CONTEXT_KNOWLEDGE_ANSWER_CHARS` of Persian text fit.
  */
-export const SUPPORT_CONTEXT_KNOWLEDGE_RESERVE_BYTES = 12 * 1024;
+export const SUPPORT_CONTEXT_KNOWLEDGE_RESERVE_BYTES = 26 * 1024;
 export type SupportContextFamily = (typeof SUPPORT_CONTEXT_TRUNCATION_ORDER)[number];
 
 /**
@@ -100,8 +131,13 @@ const integerString = z.string().regex(/^-?(0|[1-9][0-9]*)$/u);
 const byteString = z.string().regex(/^(0|[1-9][0-9]*)$/u);
 const text = (max: number) => z.string().max(max);
 
+/**
+ * Phase 4 PR-2: `formatted` is the amount as the bot's one money formatter (`formatMoney`)
+ * renders it — «150,000 تومان» — so the model quotes the customer's own figure and never
+ * converts minor units itself.
+ */
 export const supportContextMoneySchema = z
-  .object({ amountMinor: integerString, currency: z.enum(CURRENCY_CODES) })
+  .object({ amountMinor: integerString, currency: z.enum(CURRENCY_CODES), formatted: text(64) })
   .strict();
 export type SupportContextMoney = z.infer<typeof supportContextMoneySchema>;
 
@@ -136,6 +172,56 @@ export const supportContextServiceSchema = z
     /** The customer can be re-sent a working link — never the link itself. */
     hasSubscriptionLink: z.boolean(),
     unreconciled: z.boolean(),
+    /**
+     * Phase 4 PR-2 — precomputed for the customer, never computed by the model: what is left of
+     * the allowance in gigabytes («12.5 گیگابایت», `formatBytes`; null when unknown or
+     * unlimited, like `remainingTrafficBytes`), whole days left (null without an expiry; 0 once
+     * past it), the expiry date in the tenant's calendar («1405/08/20»), and how old the usage
+     * figure is («به‌روزشده ۵ دقیقه پیش»; null when usage was never read).
+     */
+    remainingTraffic: text(64).nullable(),
+    daysLeft: z.number().int().nonnegative().nullable(),
+    expiresOn: text(32).nullable(),
+    usageAge: text(64).nullable(),
+    /**
+     * What renewing this service on its own plan costs THIS customer: the checkout's quote
+     * (`PricingService.quoteListPrices`, purpose RENEW). Null when the plan cannot be renewed
+     * from (withdrawn, unpriced, a custom or imported service).
+     */
+    renewalPrice: supportContextMoneySchema.nullable(),
+  })
+  .strict();
+
+/**
+ * Phase 4 PR-2 — one plan of the live catalogue: what the customer catalogue lists (title,
+ * duration, traffic, users, the display locations) and the price the checkout of that plan would
+ * quote THIS customer — their personal discount, an automatic promotion and a reseller's tier
+ * included, through `PricingService.quoteListPrices`, the boundary the invoice is priced at. Never
+ * the panel, never a cost, never a rule's name.
+ */
+export const supportContextCatalogueSchema = z
+  .object({
+    alias: z.string().regex(/^C[1-9][0-9]?$/u),
+    title: text(256),
+    duration: text(64),
+    traffic: text(64),
+    deviceLimit: z.number().int().nonnegative().nullable(),
+    locations: text(512).nullable(),
+    price: supportContextMoneySchema,
+    /** The same plan bought as a renewal of an existing service (purpose RENEW). */
+    renewalPrice: supportContextMoneySchema.nullable(),
+    /** The customer's personal discount percent when it decides `price`; null otherwise. */
+    personalDiscountPercent: z.number().int().min(1).max(100).nullable(),
+  })
+  .strict();
+
+/** Phase 4 PR-2 — one traffic or time package, priced like `supportContextCatalogueSchema`. */
+export const SUPPORT_CONTEXT_ADDON_KINDS = ['ADD_TRAFFIC', 'ADD_TIME'] as const;
+export const supportContextAddonSchema = z
+  .object({
+    kind: z.enum(SUPPORT_CONTEXT_ADDON_KINDS),
+    title: text(256),
+    price: supportContextMoneySchema,
   })
   .strict();
 
@@ -242,6 +328,8 @@ export const supportContextPayloadSchema = z
     clientApps: z.array(supportContextClientAppSchema).max(SUPPORT_CONTEXT_LIMITS.clientApps),
     incidents: z.array(supportContextIncidentSchema).max(SUPPORT_CONTEXT_LIMITS.incidents),
     knowledge: z.array(supportContextKnowledgeSchema).max(SUPPORT_CONTEXT_LIMITS.knowledge),
+    catalogue: z.array(supportContextCatalogueSchema).max(SUPPORT_CONTEXT_LIMITS.catalogue),
+    addons: z.array(supportContextAddonSchema).max(SUPPORT_CONTEXT_LIMITS.addons),
     /** The `support.accounts` setting: the Telegram handles customers are pointed at. */
     supportAccounts: z.array(text(64)).max(10),
     flags: supportContextFlagsSchema,
@@ -257,3 +345,5 @@ export type SupportContextIncident = z.infer<typeof supportContextIncidentSchema
 export type SupportContextKnowledge = z.infer<typeof supportContextKnowledgeSchema>;
 export type SupportContextCustomer = z.infer<typeof supportContextCustomerSchema>;
 export type SupportContextFlags = z.infer<typeof supportContextFlagsSchema>;
+export type SupportContextCatalogueEntry = z.infer<typeof supportContextCatalogueSchema>;
+export type SupportContextAddon = z.infer<typeof supportContextAddonSchema>;

@@ -12,7 +12,7 @@ import {
 import { useApp } from '../app.js';
 import { t } from '../i18n/t.js';
 import { dateTime, money, traffic } from '../format.js';
-import { Button, Card, Loading, Ltr, errorText, useLoad } from '../ui.js';
+import { Button, Card, Loading, Ltr, PersonalPrice, errorText, useLoad } from '../ui.js';
 import { ServiceCard } from './service-card.js';
 import { QrSheet } from './qr-sheet.js';
 import { LocationSheet } from './location-sheet.js';
@@ -115,6 +115,7 @@ function Detail({ service }: { service: MiniAppServiceDetail }) {
         <QrSheet
           serviceId={service.id}
           link={service.subscriptionUrl}
+          kinds={service.qrKinds}
           onClose={() => setSheet(null)}
         />
       )}
@@ -160,7 +161,11 @@ function Offer({ serviceId, kind }: { serviceId: string; kind: MiniAppServiceAct
               onClick={() => void quote(option)}
             >
               <strong>{option.title}</strong>
-              <span>{money(option.price)}</span>
+              {option.personalDiscount === null ? (
+                <span>{money(option.price)}</span>
+              ) : (
+                <PersonalPrice price={option.price} discount={option.personalDiscount} />
+              )}
             </button>
           ))}
           {error !== null && <p className="error">{error}</p>}

@@ -501,7 +501,8 @@ describe('Assist Mode (TB5)', () => {
       knowledgeAvailable: 2,
     });
 
-    // Without the conversation's memory, the same words match nothing and carry no knowledge.
+    // Without the conversation's memory, the same words match nothing: Phase 4 PR-2 then sends
+    // the general entries (the fallback), never the one article the conversation is about first.
     const forgetful = build({ context: new TbSupportContextSource(c.supportContext) });
     const forgetfulLoop = new AssistantLoop(forgetful, {
       scope: () => scopeA,
@@ -510,8 +511,8 @@ describe('Assist Mode (TB5)', () => {
       logger: c.logger,
     });
     const third = await readyDraft(forgetful, forgetfulLoop);
-    expect(chainSystems.at(-1)).not.toContain('اینترنت وصل نمی‌شود');
-    expect(await jobs.findById(scopeA, third.id)).toMatchObject({ knowledgeSent: 0 });
+    expect(chainSystems.at(-1)).toContain('تمدید سرویس');
+    expect(await jobs.findById(scopeA, third.id)).toMatchObject({ knowledgeSent: 2 });
   });
 
   it('PR #236 review N5: the ASSEMBLED container gives both AI paths a context source with memory', async () => {
@@ -893,7 +894,9 @@ describe('Assist Mode (TB5)', () => {
     const figures = await ctx.container.supportAnalytics.analytics(tenantA as never, owner, {
       range: 'TODAY',
     });
-    expect(figures.assist).toMatchObject({ requested: 2, discarded: 1, superseded: 1 });
+    // Phase 4 PR-5: ASSIST_ONLY prepared its own draft for the customer's message; the first
+    // request replaced it, and the second replaced the first.
+    expect(figures.assist).toMatchObject({ requested: 3, discarded: 1, superseded: 2 });
   });
 
   it('refuses a draft while the support AI is OFF', async () => {
@@ -1114,7 +1117,13 @@ describe('Assist Mode (TB5)', () => {
       await expect(
         service.request(scopeA, operator, { conversationId: other, idempotencyKey: requestKey }),
       ).rejects.toMatchObject({ code: PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH });
-      expect(await service.drafts(scopeA, operator, other)).toEqual([]);
+      // The refused request left nothing behind: only the draft ASSIST_ONLY prepared by itself
+      // for that conversation's own message (Phase 4 PR-5) - no requested draft.
+      expect(
+        (await service.drafts(scopeA, operator, other)).filter(
+          (draft) => draft.requestedByAdminId !== null,
+        ),
+      ).toEqual([]);
     });
   });
 

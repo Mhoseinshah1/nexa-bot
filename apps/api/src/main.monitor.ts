@@ -90,6 +90,9 @@ async function main(): Promise<void> {
   const heartbeat = startHeartbeat({
     path: config.PANEL_MONITOR_HEARTBEAT_PATH,
     intervalMs: config.WORKER_HEARTBEAT_INTERVAL_MS,
+    // R12 F2: N missed beats and the role leaves, so Docker restarts it (liveness-watchdog.ts).
+    exitAfterMissed: config.HEARTBEAT_EXIT_AFTER_MISSED,
+    role: 'monitor',
     now: () => container.clock.now().getTime(),
     logger: container.logger,
     check: async () => {
@@ -119,7 +122,14 @@ async function main(): Promise<void> {
       // nothing. It must not report itself unhealthy and be restarted for ever
       // by the container runtime — the operator turned it off on purpose.
       if (!config.PANEL_MONITOR_ENABLED) return true;
-      return fresh;
+      // R12 F2 (Codex P1 on #359): unready after three silent intervals, as before — but
+      // alive while the last finished panel is within one provider exchange's allowance
+      // beyond that, so a sweep blocked on a slow panel inside its own deadline is not
+      // killed. Progress is per panel, so a sweep that keeps finishing panels stays alive.
+      return {
+        healthy: fresh,
+        alive: container.panelMonitor.iterationIsFresh(now - container.panelExchangeAllowanceMs),
+      };
     },
   });
 

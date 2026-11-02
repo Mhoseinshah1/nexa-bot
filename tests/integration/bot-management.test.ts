@@ -28,6 +28,7 @@ import type {
   BotWebhookRead,
 } from '../../apps/api/src/modules/platform/tenancy/application/bot-management-ports';
 import type { BotIdentityProbe } from '../../apps/api/src/modules/platform/tenancy/application/ports';
+import { perBotWebhookSecretFingerprint } from '../../apps/api/src/modules/platform/tenancy/application/webhook-secret';
 import { DrizzleBotManagementRepository } from '../../apps/api/src/modules/platform/tenancy/infrastructure/drizzle-bot-management.repository';
 import { currentTransactionLabel } from '../../apps/api/src/infrastructure/transaction-boundary';
 import {
@@ -202,6 +203,48 @@ describe('WP13 bot management', () => {
         causes: ['WEBHOOK_SECRET_CHANGED'],
       });
       expect(response.body).not.toContain(current);
+    });
+
+    it('R12 F2: a bot on its OWN secret is current, never WEBHOOK_SECRET_CHANGED; another bot’s is', async () => {
+      // A1 re-registered with its own derived secret; A2 still on the installation-wide one
+      // (the rotation window). Both receive, and both must read as current — in the LIST
+      // (one query, each row compared with its own digest) and in the single-bot read.
+      const master = createHash('sha256').update(WEBHOOK_SECRET, 'utf8').digest('hex');
+      const ownA1 = perBotWebhookSecretFingerprint(WEBHOOK_SECRET, BOT_A1);
+      await db().execute(sql`
+        UPDATE bot_instances
+           SET webhook_registered_at = now(),
+               webhook_url = 'https://bot.example.test/telegram/webhook/x',
+               webhook_secret_fingerprint = CASE id WHEN ${BOT_A1} THEN ${ownA1} ELSE ${master} END,
+               status = 'ACTIVE'
+         WHERE id IN (${BOT_A1}, ${BOT_A2})`);
+      const listed = botListResponseSchema.parse(
+        (await get(BOT_ROUTES.list, await ownerCookie())).json(),
+      );
+      for (const id of [BOT_A1, BOT_A2]) {
+        const bot = listed.bots.find((candidate) => candidate.id === id);
+        expect(bot?.webhook.secret, id).toBe('MATCHES');
+        expect(bot?.readiness, id).toEqual({ state: 'REGISTERED', causes: [] });
+      }
+      const detail = botMutationResponseSchema
+        .omit({ changed: true })
+        .parse((await get(BOT_ROUTES.detail(BOT_A1), await ownerCookie())).json());
+      expect(detail.bot.readiness).toEqual({ state: 'REGISTERED', causes: [] });
+
+      // A2's row recording A1's secret: a secret the receiver refuses for A2.
+      await db().execute(sql`
+        UPDATE bot_instances SET webhook_secret_fingerprint = ${ownA1} WHERE id = ${BOT_A2}`);
+      const crossed = botListResponseSchema.parse(
+        (await get(BOT_ROUTES.list, await ownerCookie())).json(),
+      );
+      const a2 = crossed.bots.find((candidate) => candidate.id === BOT_A2);
+      expect(a2?.webhook.secret).toBe('DIFFERS');
+      expect(a2?.readiness.causes).toContain('WEBHOOK_SECRET_CHANGED');
+      const a2Detail = botMutationResponseSchema
+        .omit({ changed: true })
+        .parse((await get(BOT_ROUTES.detail(BOT_A2), await ownerCookie())).json());
+      expect(a2Detail.bot.webhook.secret).toBe('DIFFERS');
+      expect(JSON.stringify(crossed)).not.toContain(ownA1);
     });
 
     it("answers another tenant's bot as unknown", async () => {

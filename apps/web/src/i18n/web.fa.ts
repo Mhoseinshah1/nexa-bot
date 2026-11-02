@@ -189,6 +189,9 @@ export const WEB_FA = {
   'web.setting_backup_keep_days': 'مدت نگهداری آرشیوهای بکاپ',
   'web.setting_backup_keep_days_desc':
     'هر آرشیو بکاپ دست‌کم این تعداد روز پس از پایان روی سرور می‌ماند. آرشیوی که بازیابیِ در جریان به آن نیاز دارد یا ارسالش نامعلوم مانده هرگز پاک نمی‌شود.',
+  'web.setting_outbound_private_targets': 'نشانی‌های داخلی مجاز برای پنل و درگاه (فقط مالک)',
+  'web.setting_outbound_private_targets_desc':
+    '⚠️ هشدار امنیتی: نشانی‌هایی که اینجا وارد می‌کنید به خودِ این سرور و شبکه‌های داخلی داکرِ آن می‌رسند. ربات به‌طور پیش‌فرض اجازه نمی‌دهد آدرس پنل، درگاه پرداخت یا پل اختصاصی به این شبکه‌ها (شبکهٔ لبهٔ نصب و ‎172.17.0.0/16‎) اشاره کند، چون از آن راه می‌شود به سرویس‌های داخلی سرور دسترسی گرفت. فقط اگر پنل شما واقعاً روی همین سرور و پشت یکی از این نشانی‌ها اجرا می‌شود، همان نشانی را (مثلاً ‎172.17.0.1‎ یا ‎172.29.0.0/24‎) با کاما جدا کنید. خالی یعنی هیچ‌کدام. پایگاه داده و ردیسِ نصب هرگز در دسترس نیستند. تغییر حداکثر تا یک دقیقه در همهٔ بخش‌ها اعمال می‌شود.',
   'web.setting_ops_max_per_minute': 'سقف ارسال گزارش در هر دقیقه',
   'web.setting_ops_max_per_minute_desc':
     'بیشترین تعداد گزارش مدیریتی که در یک دقیقه به تلگرام فرستاده می‌شود. گزارش‌های بیشتر حذف نمی‌شوند؛ در صف می‌مانند و در دقیقه‌های بعد فرستاده می‌شوند.',
@@ -197,6 +200,27 @@ export const WEB_FA = {
   'web.setting_sales_currency_refused':
     'تا وقتی پرداخت‌های قابل بازپرداختی به واحد پول فعلی وجود دارد، واحد پول فروشگاه را نمی‌توان تغییر داد. ابتدا آن پرداخت‌ها را تسویه یا بازپرداخت کنید.',
   'web.setting_support_accounts': 'حساب‌های پشتیبانی',
+  'web.setting_support_ai_resume_after_minutes': 'بازگشت خودکار به هوش مصنوعی (دقیقه)',
+  'web.setting_support_ai_resume_after_minutes_desc':
+    'اگر پس از ارجاع عادی یا پیام شما در گفتگو، این مدت کسی از پشتیبانی چیزی ننویسد، هوش مصنوعی دوباره پاسخ می‌دهد. ارجاع‌های حساس (بازپرداخت، اختلاف پرداخت، امنیت، درخواست پشتیبان انسانی) هرگز خودکار برنمی‌گردند. 0 یعنی هرگز.',
+  'web.setting_support_ai_handoff_alert_pct': 'آستانهٔ هشدار نرخ ارجاع (درصد)',
+  'web.setting_support_ai_handoff_alert_pct_desc':
+    'اگر سهم ارجاع‌های عادی در 50 پاسخ خودکار اخیر از این درصد بیشتر شود، در گروه گزارش‌ها هشدار داده می‌شود (حداکثر هر 6 ساعت یک بار). 0 یعنی خاموش.',
+  'web.setting_support_knowledge_auto_refresh': 'به‌روزرسانی خودکار دانش پشتیبان',
+  'web.setting_support_knowledge_auto_refresh_desc':
+    'اگر روشن باشد، دانش ساخته‌شده از اطلاعات خود فروشگاه (پلن‌ها، پرسش‌های متداول، راهنماهای اتصال، برنامه‌ها، موقعیت‌ها، قوانین، حساب‌های پشتیبانی و راهنمای روش‌های پرداخت) دو دقیقه پس از آخرین تغییر و هر شب یک بار خودکار به‌روز می‌شود. مقاله‌ای که خودتان ویرایش کرده‌اید به‌عنوان تعارض برای بررسی می‌ماند و درس‌های آموخته از گفتگوها همچنان به تأیید شما نیاز دارند.',
+  'web.setting_support_ai_actions_enabled': 'ابزارها و دکمه‌های هوش مصنوعی',
+  'web.setting_support_ai_actions_enabled_desc':
+    'اگر روشن باشد، هوش مصنوعی در گفتگوی حساب تجاری می‌تواند لینک اشتراک خود مشتری را بفرستد، وضعیت پرداخت‌های خودش را بگوید، دکمهٔ ورود به خرید، تمدید، حجم و زمان اضافه، تغییر لوکیشن، سرویس تست، تغییر لینک و شارژ کیف پول در ربات را بگذارد، پیش از ارجاع «پرداخت کردم ولی نیومد» پرداخت‌ها را بررسی کند، دکمهٔ «👤 پشتیبان انسانی» را زیر پاسخ‌ها بگذارد و به پیام صوتی یا فایل با درخواست نوشتن پاسخ دهد. هوش مصنوعی هیچ‌کدام از این کارها را خودش انجام نمی‌دهد؛ مشتری در ربات انجام می‌دهد.',
+  'web.setting_support_ai_tickets_enabled': 'پاسخ هوش مصنوعی در تیکت‌های ربات',
+  'web.setting_support_ai_tickets_enabled_desc':
+    'اگر روشن باشد (و هوش مصنوعی در حالت پاسخ خودکار باشد)، هوش مصنوعی اولین پاسخ را در تیکت‌های ربات و بخش پشتیبانی مینی‌اپ هم می‌نویسد؛ با همان محافظ‌ها و بررسی‌های پاسخ‌های حساب تجاری. پاسخ او در تیکت با برچسب «هوش مصنوعی» ثبت می‌شود و وضعیت تیکت را تغییر نمی‌دهد. با پاسخ یک پشتیبان، هوش مصنوعی در همان تیکت کنار می‌رود و پس از مدت «بازگشت خودکار» برمی‌گردد؛ ارجاع سخت (پول، امنیت، درخواست انسان) تا بازگرداندن دستی نزد پشتیبان می‌ماند.',
+  'web.setting_support_ai_label_enabled': 'برچسب «پاسخ هوش مصنوعی»',
+  'web.setting_support_ai_label_enabled_desc':
+    'اگر روشن باشد، هر پاسخ خودکار در حساب تجاری با سطر «🤖 پاسخ هوش مصنوعی» شروع می‌شود.',
+  'web.setting_support_ai_feedback_enabled': 'پرسش «مشکل حل شد؟»',
+  'web.setting_support_ai_feedback_enabled_desc':
+    'اگر روشن باشد (و ابزارهای هوش مصنوعی هم روشن باشند)، زیر پاسخ خودکار «مشکل حل شد؟» با دکمه‌های 👍 و 👎 می‌آید. 👎 گفتگو را به پشتیبان می‌سپارد و یک کمبود دانش ثبت می‌کند.',
   'web.setting_support_accounts_desc':
     'حساب‌های تلگرامی پشتیبانی که به مشتری معرفی می‌شوند، به همین ترتیب. دکمهٔ تماس با پشتیبانی به نخستین حساب باز می‌شود و اگر فهرست خالی باشد نمایش داده نمی‌شود.',
   'web.setting_telegram_channels': 'کانال‌های ربات',
@@ -1092,6 +1116,13 @@ export const WEB_FA = {
   'web.late_credit_switch_hint':
     'روشن: اگر استعلام خود درگاه تأیید کند که پرداخت انجام شده و مبلغ با فاکتور یکی است، همان مبلغ فقط یک بار به کیف پول مشتری واریز می‌شود و به مشتری پیام می‌رود. سفارش دوباره باز نمی‌شود و سرویسی ساخته نمی‌شود. خاموش: مثل قبل فقط ثبت می‌شود و مدیر تصمیم می‌گیرد.',
   'web.late_credit_window': 'مدت پیگیری پرداخت دیرهنگام (ساعت)',
+  'web.tonpays_pace_title': 'سقف درخواست به تون‌پیز در هر دقیقه (درگاه وب‌سایت)',
+  'web.tonpays_telegram_pace_title': 'سقف درخواست به تون‌پیز در هر دقیقه (کارت‌به‌کارت تلگرام)',
+  'web.tonpays_pace_hint':
+    'همهٔ درخواست‌ها با یک کلید (ساخت فاکتور، استعلام، تغییر کارت، رسید، لغو و استرداد) با این آهنگ و یکی‌یکی فرستاده می‌شوند. اگر تون‌پیز پاسخ «محدودیت تعداد درخواست» (429) بدهد، همهٔ درخواست‌های آن کلید تا زمانی که درگاه گفته (یا با تأخیر فزاینده) متوقف می‌شوند. بین 1 تا 60؛ اگر هنوز 429 می‌گیرید کمترش کنید.',
+  'web.tonpays_burst_title': 'تعداد درخواست پشت‌سرهم به تون‌پیز',
+  'web.tonpays_burst_hint':
+    'حداکثر چند درخواست تون‌پیز می‌تواند بدون فاصله پشت سر هم برود، پیش از آنکه سقف دقیقه‌ای اعمال شود. برای هر دو مسیر تون‌پیز. بین 1 تا 10.',
   'web.late_credit_window_hint':
     'پس از بسته‌شدن پرداخت، فاکتور باز درگاه به‌آهستگی (5 دقیقه، 15 دقیقه، سپس ساعتی) پیگیری می‌شود تا تأیید دیرهنگام بدون وبهوک هم دیده شود. بین 1 تا 720 ساعت.',
   'web.late_credit_window_invalid': 'یک عدد صحیح بین 1 تا 720 بنویسید.',
@@ -2730,11 +2761,54 @@ export const WEB_FA = {
     'تأیید یک پرداخت فقط از راه تسویه و با مدرک انجام می‌شود. برای نامعلوم‌ها «استعلام دوباره» و سپس تطبیق در صفحهٔ پرداخت؛ برای برگشت پول، کارت بازپرداخت همان صفحه.',
   'web.payment_confirm_title': 'بررسی رسید',
   /*
-   * Payment File 02 §10: card-to-card review is Telegram's alone. The Web Admin says
-   * where the decision is taken rather than drawing a control it has no route for.
+   * R12 F3 item 8: card-to-card review is in BOTH places (owner decision, reversing Payment File
+   * 02 §10's "Telegram only"). The same three dispositions, through the same application methods.
    */
-  'web.payment_review_in_telegram':
-    'این کارت‌به‌کارت در انتظار بررسی است. تأیید، رد یا واریز به کیف پول فقط از پنل مدیریت تلگرام انجام می‌شود و این صفحه تنها نتیجه را نمایش می‌دهد.',
+  'web.receipt_review_hint':
+    'رسید را ببینید و یکی از تصمیم‌ها را ثبت کنید: تأیید، رد یا واریز به کیف پول. همین تصمیم‌ها در ربات تلگرام هم انجام می‌شود و تصمیمِ اول معتبر است.',
+  'web.receipt_note': 'یادداشت (اختیاری)',
+  'web.receipt_approve': 'تأیید پرداخت',
+  'web.receipt_approve_title': 'تأیید پرداخت کارت‌به‌کارت',
+  'web.receipt_approve_body':
+    'با تأیید، پرداخت به مبلغ زیر ثبت و نهایی می‌شود و سفارش یا شارژ مشتری ادامه پیدا می‌کند. این کار برگشت‌پذیر نیست.',
+  'web.receipt_approve_check': 'مبلغ رسید را با حساب بانکی تطبیق داده‌ام',
+  'web.receipt_approve_confirm': 'تأیید و ثبت پرداخت',
+  'web.receipt_done_approved': 'پرداخت تأیید شد.',
+  'web.receipt_reject': 'رد رسید',
+  'web.receipt_reject_title': 'رد رسید',
+  'web.receipt_reject_body':
+    'دلیل رد به مشتری اعلام می‌شود. با رد رسید، این پرداخت بسته می‌شود و مشتری باید دوباره پرداخت کند.',
+  'web.receipt_reject_reason': 'دلیل رد (به مشتری گفته می‌شود)',
+  'web.receipt_reject_confirm': 'رد رسید',
+  'web.receipt_done_rejected': 'رسید رد شد و دلیل آن به مشتری اعلام می‌شود.',
+  'web.receipt_credit': 'واریز به کیف پول',
+  'web.receipt_credit_title': 'واریز به کیف پول مشتری',
+  'web.receipt_credit_hint':
+    'مبلغی را که واقعاً به حساب رسیده به کیف پول مشتری اضافه می‌کند. سفارش پرداخت‌شده حساب نمی‌شود و هدیهٔ شارژ ندارد؛ مشتری می‌تواند با کیف پول پرداخت کند.',
+  'web.receipt_credit_amount': 'مبلغ رسیده، به واحد پایه',
+  'web.receipt_credit_invalid': 'مبلغ باید عدد صحیح مثبت باشد.',
+  'web.receipt_credit_will_add': 'به کیف پول اضافه می‌شود',
+  'web.receipt_credit_check': 'مبلغ رسیده را با حساب بانکی تطبیق داده‌ام',
+  'web.receipt_credit_confirm': 'واریز به کیف پول',
+  'web.receipt_done_credited': 'مبلغ به کیف پول مشتری واریز شد.',
+  'web.receipt_denied':
+    'بررسی رسید به دسترسی receipts.review نیاز دارد. در ربات تلگرام هم قابل انجام است.',
+  'web.receipt_credit_denied': 'واریز به کیف پول به دسترسی users.wallet.credit هم نیاز دارد.',
+  'web.payment_ops_queue_receipt_review': 'رسید در انتظار بررسی',
+  'web.payment_ops_queue_hint_receipt_review':
+    'کارت‌به‌کارت‌هایی که مشتری رسید فرستاده و هنوز کسی تأیید یا رد نکرده است.',
+  'web.dash_attn_receipts_review': 'رسید کارت‌به‌کارت در انتظار بررسی',
+  // R12 F3 item 8: row selection and CSV export on the users, orders and payments lists.
+  'web.export_bar': 'خروجی ردیف‌های انتخاب‌شده',
+  'web.export_select': 'انتخاب',
+  'web.export_select_row': 'انتخاب این ردیف',
+  'web.export_select_all': 'انتخاب همهٔ ردیف‌های این صفحه',
+  'web.export_selected': 'انتخاب‌شده:',
+  'web.export_csv': 'خروجی CSV',
+  'web.export_cap': 'حداکثر ردیف در هر فایل:',
+  'web.payment_currency': 'واحد پول',
+  'web.search_group_payment': 'پرداخت‌ها',
+  'web.search_group_ticket': 'تیکت‌ها',
   // Payment accounts — the destination an out-of-band transfer is told to go to.
   // The screen that replaces editing a message template to change a card number.
   // UX Batch 01, item 7: the cards of the card-to-card method, managed on its own view
@@ -3670,6 +3744,9 @@ export const WEB_FA = {
    */
   'web.refund_request_hint':
     'مبلغ در سرور و بر پایهٔ همین پرداخت محدود می‌شود؛ رقم این فرم پیشنهاد است. بازگشت به کیف پول در همین لحظه ثبت و اعتبار افزوده می‌شود، اما بازگشت واریز دستی تا زمانی که اپراتور واریز را تأیید نکند «انجام‌شده» به حساب نمی‌آید.',
+  // R12 F1 item 3: said before the operator confirms a refund of a service purchase or renewal.
+  'web.refund_full_suspends_service':
+    'هشدار: اگر با این بازپرداخت کل مبلغ این پرداخت برگردد، سرویسی که این سفارش خریده یا تمدید کرده روی پنل معلق می‌شود (مدیر می‌تواند دوباره فعالش کند). بازپرداخت بخشی از مبلغ سرویس را تغییر نمی‌دهد.',
   'web.refund_amount_minor': 'مبلغ (به کوچک‌ترین یکای پول)',
   'web.refund_amount_all': 'کل باقی‌ماندهٔ قابل بازگشت',
   'web.refund_request': 'ثبت درخواست',
@@ -4918,6 +4995,15 @@ export const WEB_FA = {
   'web.ib_button_discount_remove': 'حذف کد تخفیف',
   'web.ib_button_order_cancel': 'لغو سفارش',
   'web.ib_button_order_cancel_confirm': 'تأیید لغو سفارش',
+  'web.ib_button_order_reorder': 'سفارش دوباره (زیر سفارش منقضی یا لغوشده)',
+  'web.ib_button_order_main_menu': 'منوی اصلی (زیر سفارش منقضی یا لغوشده)',
+  'web.ib_button_order_payment_status': 'وضعیت پرداخت (زیر «پرداخت شما در حال بررسی است»)',
+  'web.ib_button_order_input_back':
+    'بازگشت به پیش‌فاکتور (زیر پرسش کد تخفیف و نام کاربری و کمبود موجودی)',
+  'web.ib_button_order_input_cancel': 'انصراف (زیر پرسش‌هایی که مشتری باید متن تایپ کند)',
+  'web.ib_button_custom_service_back': 'بازگشت به مکان‌ها (زیر پرسش حجم و روز سرویس دلخواه)',
+  'web.ib_button_wallet_history': 'تراکنش‌ها (زیر موجودی کیف پول)',
+  'web.ib_button_payment_retry': 'پرداخت دوباره (زیر اعلان پرداخت ردشده یا منقضی)',
   'web.ib_button_payment_wallet': 'پرداخت از کیف پول',
   'web.ib_button_payment_methods': 'ثبت پرداخت (انتخاب روش)',
   'web.ib_button_payment_route': 'روش‌های پرداخت',
@@ -4965,6 +5051,8 @@ export const WEB_FA = {
   'web.ib_button_service_link': 'دریافت لینک اتصال',
   'web.ib_button_service_rotate': 'تغییر لینک',
   'web.ib_button_service_rotate_confirm': 'تأیید تغییر لینک',
+  'web.ib_button_service_files_new': 'دریافت فایل‌های جدید (پنل فقط‌فایل)',
+  'web.ib_button_service_files_new_confirm': 'تأیید دریافت فایل‌های جدید (پنل فقط‌فایل)',
   'web.ib_button_service_note': 'یادداشت',
   'web.ib_button_service_renew': 'تمدید سرویس',
   'web.ib_button_service_renew_option': 'گزینه‌های تمدید',
@@ -7115,6 +7203,10 @@ export const WEB_FA = {
   // Roadmap A3–A5 (2026-10-07).
   'web.bchat_handoff_no_progress': 'مشتری چند بار گفت راهنمایی هوش مصنوعی جواب نداد',
   'web.bchat_handoff_repeated_advice': 'هوش مصنوعی همان راهنمایی قبلی را تکرار می‌کرد',
+  'web.bchat_handoff_output_policy':
+    'پاسخ هوش مصنوعی پیوند، مبلغ یا وعده‌ای داشت که در اطلاعات تأییدشده نبود',
+  'web.bchat_handoff_suspicious_probing': 'چند درخواست پیاپی برای اطلاعات غیرمجاز رد شد',
+  'web.bchat_handoff_customer_unsatisfied': 'مشتری گفت پاسخ هوش مصنوعی مشکل را حل نکرد (👎)',
   'web.bchat_handoff_inbound_flood': 'مشتری پیام تکراری یا پیام‌های پشت‌سرهم زیادی فرستاد',
   'web.bchat_handoff_context_topic': 'موضوع:',
   'web.bchat_handoff_context_intent': 'خواستهٔ مشتری به برداشت هوش مصنوعی:',
@@ -7296,6 +7388,21 @@ export const WEB_FA = {
   'web.ticket_conversation_hint': 'همهٔ پیام‌ها به ترتیب زمان. پیام‌ها ویرایش یا حذف نمی‌شوند.',
   'web.ticket_sender_customer': 'مشتری',
   'web.ticket_sender_support': 'پشتیبانی',
+  'web.ticket_sender_ai': 'هوش مصنوعی',
+  'web.sai_tickets_title': 'پاسخ هوش مصنوعی در تیکت‌های ربات',
+  'web.sai_tickets_hint':
+    'اگر روشن شود، هوش مصنوعی اولین پاسخ را در تیکت‌های ربات و بخش پشتیبانی مینی‌اپ هم می‌نویسد؛ با همان محافظ‌ها، ابزارها و بررسی پاسخ‌های حساب تجاری.',
+  'web.sai_tickets_label': 'پاسخ هوش مصنوعی در تیکت‌های ربات فعال باشد',
+  'web.sai_tickets_on': 'روشن',
+  'web.sai_tickets_off': 'خاموش',
+  'web.sai_tickets_now_on': 'پاسخ هوش مصنوعی در تیکت‌ها روشن شد.',
+  'web.sai_tickets_now_off': 'پاسخ هوش مصنوعی در تیکت‌ها خاموش شد.',
+  'web.sai_tickets_needs_auto':
+    'این کلید فقط وقتی کار می‌کند که حالت هوش مصنوعی «پاسخ خودکار» باشد؛ فعلاً در تیکت‌ها پاسخی نوشته نمی‌شود.',
+  'web.sai_tickets_unreadable': 'وضعیت این کلید خوانده نشد؛ صفحه را دوباره باز کنید.',
+  'web.sai_tickets_pause_note':
+    'پاسخ پشتیبان در یک تیکت، هوش مصنوعی را در همان تیکت کنار می‌گذارد و پس از مدت «بازگشت خودکار» (در تنظیمات پشتیبان) برمی‌گرداند. ارجاع سخت (پول، امنیت، درخواست انسان) تا بازگرداندن دستی نزد پشتیبان می‌ماند. پاسخ هوش مصنوعی در تیکت با برچسب «هوش مصنوعی» ثبت می‌شود و وضعیت تیکت را تغییر نمی‌دهد.',
+  'web.sai_tickets_no_permission': 'برای تغییر این کلید دسترسی ویرایش تنظیمات لازم است.',
   'web.ticket_attachment': 'پیوست',
   'web.ticket_attachment_photo': 'تصویر',
   'web.ticket_attachment_document': 'فایل',
@@ -8014,6 +8121,7 @@ export const WEB_FA = {
   'web.nc_t_late_completion': 'پرداختی پس از مهلت تأیید شد',
   'web.nc_t_identity_mismatch': 'هویت پرداخت با سفارش نمی‌خواند',
   'web.nc_t_charge_unmatched': 'پرداختی بدون فاکتور مطابق دریافت شد',
+  'web.nc_t_charge_refunded': 'پرداخت ستارهٔ تلگرام بازپرداخت شد',
   'web.nc_t_receipt_push_failed': 'رسید در انتظار بررسی به بررسی‌کننده‌ها نرسید',
   'web.nc_t_refund_push_failed': 'درخواست بازگشت وجه به مدیران نرسید',
   'web.nc_t_gateway_misconfigured': 'درگاه پرداخت درست پیکربندی نشده است',
@@ -8762,6 +8870,20 @@ export const WEB_FA = {
   'web.sai_auto_topic_traffic_and_expiry': 'حجم و تاریخ انقضا',
   'web.sai_auto_topic_plan_info': 'اطلاعات پلن',
   'web.sai_auto_topic_known_error': 'خطای شناخته‌شده',
+  'web.sai_auto_topic_purchase_info': 'اطلاعات خرید سرویس',
+  'web.sai_auto_topic_renewal_info': 'اطلاعات تمدید',
+  'web.sai_auto_topic_addon_info': 'اطلاعات حجم و زمان اضافه',
+  'web.sai_auto_topic_trial_info': 'اطلاعات سرویس تست',
+  'web.sai_auto_topic_location_info': 'اطلاعات لوکیشن',
+  'web.sai_auto_topic_speed_quality': 'سرعت و کیفیت اتصال',
+  'web.sai_auto_topic_get_subscription_link': 'دریافت لینک اشتراک',
+  'web.sai_auto_topic_payment_howto': 'راهنمای روش پرداخت',
+  'web.sai_auto_topic_policy_refusal': 'رد مؤدبانهٔ درخواست غیرمجاز',
+  'web.sai_fault_auto_topics_required':
+    'پاسخ خودکار بدون هیچ موضوعی به هیچ پیامی پاسخ نمی‌دهد؛ دست‌کم یک موضوع را انتخاب کنید یا «اعمال تنظیمات پیشنهادی» را بزنید.',
+  'web.sai_preset_banner':
+    'تنظیمات فعلی پاسخ خودکار محدود است و بیشتر گفتگوها به پشتیبان ارجاع می‌شوند. تنظیمات پیشنهادی همهٔ موضوع‌های امن را با اطمینان متوسط فعال می‌کند؛ پیش از ذخیره می‌توانید آن را تغییر دهید.',
+  'web.sai_preset_apply': 'اعمال تنظیمات پیشنهادی',
   'web.sai_auto_topic_greeting': 'سلام و احوالپرسی',
   'web.sai_auto_min_confidence': 'حداقل اطمینان برای پاسخ خودکار',
   'web.sai_auto_min_confidence_hint':
@@ -8834,7 +8956,8 @@ export const WEB_FA = {
   'web.sai_breaker_until': 'کنار گذاشته تا',
   'web.nav_support_analytics': 'آمار پشتیبانی',
   'web.sa_title': 'آمار پشتیبانی هوشمند',
-  'web.sa_intro': 'شمارش‌ها از رخدادهای ثبت‌شده؛ هیچ متنی از گفت‌وگوها خوانده نمی‌شود.',
+  'web.sa_intro_counts_and_text':
+    'شمارش‌ها از رخدادهای ثبت‌شده است و متنی نمی‌خواند؛ فقط «دیدن سؤال‌ها» و «شکاف‌های دانش» برای کسی که اجازهٔ دیدن گفتگوهای بیزینس دارد، آخرین پیام مشتری پیش از هر ارجاع را نشان می‌دهند.',
   'web.sa_period_from': 'از',
   'web.sa_period_to': 'تا پیش از',
   'web.sa_range': 'بازه',
@@ -8901,6 +9024,15 @@ export const WEB_FA = {
   'web.sa_auto_guard_no_progress': 'راهنمایی جواب نداد (سه بار پیاپی)',
   'web.sa_auto_guard_repeated_advice': 'پاسخ تکراری فرستاده نشد',
   'web.sa_auto_guard_inbound_flood': 'پیام تکراری یا پیام‌های پشت‌سرهم مشتری',
+  'web.sa_auto_guard_output_policy': 'پاسخ از بررسی خروجی رد شد',
+  'web.sa_auto_guard_refusal_abuse': 'درخواست‌های ردشدهٔ پیاپی',
+  'web.sa_auto_sent_link': 'لینک ورود به ربات فرستاده شد',
+  'web.sa_auto_guard_tool_scope': 'ابزار برای موردی خارج از حساب همین مشتری خواسته شد',
+  'web.sa_auto_guard_tool_rate_limit': 'استفادهٔ بیش از حد از ابزارها در یک گفتگو',
+  'web.sa_auto_sent_payment_delivered': 'پرداخت تأییدشده؛ لینک سرویس فرستاده شد',
+  'web.sa_auto_sent_payment_ask': 'رسید یا کد پیگیری پرداخت خواسته شد',
+  'web.sa_auto_handoff_payment_checked': 'وضعیت پرداخت گفته شد و به پشتیبان سپرده شد',
+  'web.sa_auto_sent_unsupported_content': 'از مشتری خواسته شد پیام را بنویسد',
   'web.sa_auto_no_action': 'بی‌پاسخ بسته شد (تشکر یا حل شد)',
   'web.sa_auto_handoff_ai_requested': 'مدل خواست به همکار سپرده شود',
   'web.sa_auto_handoff_output_invalid': 'خروجی مدل نامعتبر بود',
@@ -8985,6 +9117,7 @@ export const WEB_FA = {
   'web.sai_operation_auto_decision': 'تصمیم خودکار',
   'web.sai_operation_summary': 'خلاصه',
   'web.sai_operation_learning_extract': 'استخراج دانش',
+  'web.sai_operation_test_console': 'امتحان یک سؤال',
   'web.sai_calls': 'فراخوانی',
   'web.sai_failures': 'ناموفق',
   'web.sai_input_tokens': 'توکن ورودی',
@@ -9072,6 +9205,15 @@ export const WEB_FA = {
   'web.assist_topic_fraud': 'تقلب یا برگشت وجه',
   'web.assist_topic_legal': 'حقوقی یا ایمنی',
   'web.assist_topic_human_requested': 'درخواست گفتگو با انسان',
+  'web.assist_topic_purchase_info': 'اطلاعات خرید سرویس',
+  'web.assist_topic_renewal_info': 'اطلاعات تمدید',
+  'web.assist_topic_addon_info': 'اطلاعات حجم و زمان اضافه',
+  'web.assist_topic_trial_info': 'اطلاعات سرویس تست',
+  'web.assist_topic_location_info': 'اطلاعات لوکیشن',
+  'web.assist_topic_speed_quality': 'سرعت و کیفیت اتصال',
+  'web.assist_topic_get_subscription_link': 'دریافت لینک اشتراک',
+  'web.assist_topic_payment_howto': 'راهنمای روش پرداخت',
+  'web.assist_topic_policy_refusal': 'رد مؤدبانهٔ درخواست غیرمجاز',
   'web.assist_topic_other': 'سایر',
   // TB8: support knowledge and the learning-candidate queue.
   'web.nav_support_knowledge': 'دانش پشتیبان',
@@ -9145,6 +9287,8 @@ export const WEB_FA = {
   'web.sk_cand_rationale': 'دلیل',
   'web.sk_cand_confidence': 'اطمینان',
   'web.sk_cand_sources': 'تعداد منبع',
+  'web.sk_cand_replaces': 'جایگزین پاسخ تأییدشده',
+  'web.sk_cand_assisted': 'از پیش‌نویس هوش مصنوعی — با دقت بررسی شود',
   'web.sk_cand_purged': 'متن این پیشنهاد طبق سیاست نگهداری پاک شده است.',
   'web.sk_cand_title_purged': 'عنوان پاک شده',
   'web.sk_cand_auto_rejected': 'خودکار رد شد: اطلاعات حساس',
@@ -9204,6 +9348,8 @@ export const WEB_FA = {
   'web.kb_bounds': 'محدودیت‌های ساخت',
   'web.kb_truncated': 'متن کوتاه‌شده',
   'web.kb_capped': 'موارد خارج از سقف',
+  'web.kb_capped_warning':
+    'بخشی از اطلاعات به دلیل سقف تعداد در این ساخت نیامد (هر منبع حداکثر 100 مورد و هر ساخت حداکثر 400 پیشنهاد). مقاله‌های آن منابع بازنشسته نمی‌شوند؛ برای پوشش کامل، موارد قدیمی یا غیرفعال را کم کنید.',
   'web.kb_fault_running': 'ساخت دیگری هم‌زمان اجرا شد. آخرین ساخت را بررسی کنید.',
   'web.kb_state_applied': 'اعمال شد',
   'web.kb_state_skipped': 'کنار گذاشته شد',
@@ -10709,6 +10855,26 @@ export const WEB_FA = {
   'web.err_panel_credential_too_short':
     'کلید وارد‌شده کوتاه‌تر از کمترین طولی است که این نوع پنل می‌پذیرد.',
   'web.err_panel_credential_unsupported': 'این نوع اطلاعات ورود برای این پنل پشتیبانی نمی‌شود.',
+  'web.delivery_options_title': 'تحویل به مشتری',
+  'web.delivery_options_hint':
+    'تعیین می‌کند مشتری این پنل چه چیزی از اتصال خود می‌بیند. با ذخیره‌کردن چیزی برای مشتری فرستاده نمی‌شود.',
+  'web.files_only_title': 'فقط فایل، بدون لینک ساب',
+  'web.files_only_hint':
+    'اگر روشن باشد، مشتری این پنل هرگز لینک اشتراک، QR یا دکمهٔ کپی نمی‌بیند؛ فقط فایل‌های اتصال را می‌گیرد و «تغییر لینک» برایش «دریافت فایل‌های جدید» می‌شود.',
+  'web.qr_kind_label': 'نوع بارکد',
+  'web.qr_kind_hint': 'QR که مشتری می‌بیند: لینک اشتراک، واردکردن در sing-box یا هر دو.',
+  'web.qr_kind_sub_link': 'QR لینک اشتراک (پیش‌فرض)',
+  'web.qr_kind_singbox': 'QR مخصوص sing-box',
+  'web.qr_kind_both': 'هر دو QR',
+  'web.singbox_interval_label': 'فاصلهٔ به‌روزرسانی خودکار sing-box (دقیقه)',
+  'web.singbox_interval_hint': 'عدد صحیح بین {min} و {max}. پیش‌فرض 360 دقیقه.',
+  'web.singbox_interval_invalid': 'فاصله باید عددی صحیح در بازهٔ مجاز باشد.',
+  'web.qr_kind_files_only_note':
+    'تا وقتی «فقط فایل، بدون لینک ساب» روشن است هیچ QR نشان داده نمی‌شود.',
+  'web.err_panel_qr_kind_unsupported':
+    'نوع بارکد فقط برای پنل‌های ریک‌پنل قابل تنظیم است؛ این پنل فقط QR لینک اشتراک دارد.',
+  'web.err_panel_files_only_unsupported':
+    'این پنل فایل اتصال تحویل نمی‌دهد؛ گزینهٔ «فقط فایل، بدون لینک ساب» فقط برای پنل‌هایی ممکن است که فایل اتصال دارند.',
   'web.err_panel_credentials_missing': 'اطلاعات ورود پنل وارد نشده است.',
   'web.err_panel_delivery_tutorial_stale':
     'راهنمای تحویل در همین فاصله تغییر کرده است. صفحه را تازه کنید.',
@@ -10733,6 +10899,8 @@ export const WEB_FA = {
   'web.err_platform_idempotency_in_flight': 'همین درخواست هنوز در حال انجام است. کمی صبر کنید.',
   'web.err_platform_idempotency_payload_mismatch':
     'این درخواست با درخواست قبلی همین فرم نمی‌خواند. فرم را دوباره باز کنید.',
+  'web.err_platform_request_rate_limited':
+    'از این نشانی در این دقیقه درخواست‌های زیادی رسیده است. یک دقیقه صبر کنید و دوباره تلاش کنید.',
   'web.err_platform_secret_auth_failed': 'رمزگشایی دادهٔ محرمانه انجام نشد.',
   'web.err_platform_secret_key_id_mismatch': 'شناسهٔ کلید رمزنگاری با داده نمی‌خواند.',
   'web.err_platform_secret_key_unknown': 'کلید رمزنگاری این داده در این نصب نیست.',
@@ -11593,6 +11761,233 @@ export const WEB_FA = {
   'web.aq_from': 'از {a}',
 
   // --- «سوابق و تنظیمات میرزا»: the whole Mirza history archive, read only -------------------
+
+  // --- Phase 4 PR-5: the support pages (readiness, test console, analytics, inbox).
+  'web.sair_title': 'آمادگی دستیار',
+  'web.sair_hint':
+    'هشت چیزی که باید درست باشد تا هوش مصنوعی در گفتگوهای واقعی کار کند. هر مورد ناقص یک راه‌حل کوتاه دارد.',
+  'web.sair_all_ready': 'همه‌چیز آماده است.',
+  'web.sair_some_warn': 'مورد نیاز به توجه دارد.',
+  'web.sair_ok': 'آماده',
+  'web.sair_warn': 'نیاز به اقدام',
+  'web.sair_fix_label': 'راه‌حل:',
+  'web.sair_run_test': 'اجرای آزمایش',
+  'web.sair_test_ok': 'آزمایش موفق بود.',
+  'web.sair_test_not_ok': 'آزمایش ناموفق بود؛ جزئیات را در بخش کلیدها ببینید.',
+  'web.sair_check_business_connection': 'اتصال تلگرام بیزینس',
+  'web.sair_check_support_handle': 'هندل پشتیبانی',
+  'web.sair_check_provider_key': 'کلید ارائه‌دهنده',
+  'web.sair_check_structured_output': 'پاسخ ساختاریافتهٔ مدل',
+  'web.sair_check_assistant_role': 'سرویس دستیار',
+  'web.sair_check_topics': 'موضوع‌های پاسخ خودکار',
+  'web.sair_check_knowledge': 'پایگاه دانش',
+  'web.sair_check_vision': 'دیدن تصویر',
+  'web.sair_connected': 'حساب بیزینس متصل است و ربات اجازهٔ پاسخ دادن دارد.',
+  'web.sair_no_connection': 'هیچ حساب بیزینسی به ربات وصل نیست.',
+  'web.sair_connection_disabled': 'اتصال بیزینس غیرفعال شده است.',
+  'web.sair_cannot_reply': 'ربات اجازهٔ پاسخ دادن به پیام‌ها را ندارد.',
+  'web.sair_handle_matches': 'هندل پشتیبانی با حساب بیزینس متصل یکی است:',
+  'web.sair_handle_missing':
+    'هندل پشتیبانی تنظیم نشده؛ هوش مصنوعی نمی‌داند مشتری را به چه کسی ارجاع دهد.',
+  'web.sair_handle_mismatch': 'هندل پشتیبانی با نام کاربری حساب بیزینس متصل یکی نیست:',
+  'web.sair_handle_unverified':
+    'نام کاربری حساب بیزینس برای ربات معلوم نیست و تطبیق خودکار ممکن نیست. هندل تنظیم‌شده:',
+  'web.sair_key_ok': 'کلید ارائه‌دهندهٔ اصلی ثبت شده و پذیرفته شده است.',
+  'web.sair_no_primary': 'ارائه‌دهندهٔ اصلی انتخاب نشده است.',
+  'web.sair_no_key': 'برای ارائه‌دهندهٔ اصلی کلیدی ثبت نشده است.',
+  'web.sair_key_rejected': 'ارائه‌دهنده کلید را رد کرده است.',
+  'web.sair_breaker_open': 'ارائه‌دهنده به‌خاطر خطاهای پیاپی موقتاً کنار گذاشته شده است.',
+  'web.sair_test_passed': 'مدل در آزمایش، پاسخ ساختاریافتهٔ درست داد.',
+  'web.sair_not_tested': 'هنوز آزمایش پاسخ ساختاریافته اجرا نشده است.',
+  'web.sair_test_failed': 'آخرین آزمایش ناموفق بود.',
+  'web.sair_unsupported': 'این ارائه‌دهنده پاسخ ساختاریافته را پشتیبانی نمی‌کند.',
+  'web.sair_running': 'سرویس دستیار در حال اجراست.',
+  'web.sair_never_started': 'سرویس دستیار هنوز روی این سرور اجرا نشده است.',
+  'web.sair_stopped': 'سرویس دستیار متوقف شده است.',
+  'web.sair_restarting': 'سرویس دستیار مدام دوباره راه‌اندازی می‌شود.',
+  'web.sair_stalled': 'سرویس دستیار کارهای معوق را برنمی‌دارد.',
+  'web.sair_topics_selected': '{n} موضوع برای پاسخ خودکار انتخاب شده است.',
+  'web.sair_no_topics':
+    'هیچ موضوعی برای پاسخ خودکار انتخاب نشده؛ در حالت خودکار هیچ پاسخی فرستاده نمی‌شود.',
+  'web.sair_knowledge_ready': '{n} مقالهٔ تأییدشده در پایگاه دانش هست.',
+  'web.sair_no_knowledge':
+    'پایگاه دانش مقالهٔ تأییدشده ندارد؛ پاسخ‌ها فقط بر اطلاعات خود NEXA تکیه می‌کنند.',
+  'web.sair_vision_on': 'دیدن تصویر روشن است و مدل اصلی تصویر را می‌بیند.',
+  'web.sair_vision_off': 'دیدن تصویر خاموش است؛ پیام‌های تصویری به پشتیبان سپرده می‌شوند.',
+  'web.sair_vision_unsupported': 'دیدن تصویر روشن است اما مدل اصلی تصویر نمی‌بیند.',
+  'web.sair_fix_no_connection':
+    'در تلگرام: تنظیمات ← بیزینس ← چت‌بات، ربات را انتخاب کنید و حق پاسخ دادن را بدهید.',
+  'web.sair_fix_connection_disabled':
+    'در تلگرام: تنظیمات ← بیزینس ← چت‌بات، اتصال ربات را دوباره روشن کنید.',
+  'web.sair_fix_cannot_reply':
+    'در تنظیمات چت‌بات بیزینس، گزینهٔ پاسخ دادن به پیام‌ها را برای ربات روشن کنید.',
+  'web.sair_fix_handle_missing': 'در تنظیمات، «حساب‌های پشتیبانی» را با هندل حساب بیزینس پر کنید.',
+  'web.sair_fix_handle_mismatch':
+    'هندل «حساب‌های پشتیبانی» در تنظیمات را با نام کاربری همان حساب بیزینس یکی کنید.',
+  'web.sair_fix_handle_unverified':
+    'یک بار از همان حساب بیزینس به ربات /start بزنید تا نام کاربری‌اش دیده شود؛ اگر هندل را مطمئن می‌دانید، این هشدار فقط یک یادآوری است.',
+  'web.sair_fix_no_primary': 'در بخش پیکربندی، ارائه‌دهنده و مدل را انتخاب و ذخیره کنید.',
+  'web.sair_fix_no_key': 'در بخش کلیدها و آزمایش اتصال، کلید API را ثبت کنید.',
+  'web.sair_fix_key_rejected':
+    'کلید را در سایت ارائه‌دهنده بررسی یا دوباره بسازید و اینجا جایگزین کنید.',
+  'web.sair_fix_breaker_open':
+    'چند دقیقه صبر کنید و آزمایش اتصال را بزنید؛ اگر ادامه داشت علت را در بخش مصرف و خطاها ببینید.',
+  'web.sair_fix_not_tested': 'دکمهٔ «اجرای آزمایش» را بزنید.',
+  'web.sair_fix_test_failed':
+    'علت را در بخش آزمایش اتصال ببینید؛ اغلب باید مدل دیگری برگزینید. سپس دوباره آزمایش کنید.',
+  'web.sair_fix_unsupported': 'ارائه‌دهنده یا مدل دیگری انتخاب کنید.',
+  'web.sair_fix_never_started': 'روی سرور این دستور را بزنید و بعد وضعیت را ببینید:',
+  'web.sair_fix_stopped': 'روی سرور این دستور را بزنید:',
+  'web.sair_fix_restarting': 'لاگ سرویس را ببینید و علت را پیدا کنید:',
+  'web.sair_fix_stalled': 'وضعیت نقش‌ها را ببینید:',
+  'web.sair_fix_no_topics': 'دکمهٔ «اعمال تنظیمات پیشنهادی» را بزنید و ذخیره کنید.',
+  'web.sair_fix_no_knowledge': 'در پایگاه دانش مقاله بنویسید یا پیشنهادهای یادگیری را تأیید کنید.',
+  'web.sair_fix_vision_unsupported':
+    'مدلی انتخاب کنید که تصویر را می‌بیند یا دیدن تصویر را خاموش کنید.',
+  'web.saic_title': 'امتحان یک سؤال',
+  'web.saic_hint':
+    'سؤالی را بنویسید که مشتری می‌پرسد و ببینید پیکربندی ذخیره‌شدهٔ شما با آن چه می‌کرد.',
+  'web.saic_sends_nothing':
+    'این امتحان هیچ پیامی برای هیچ مشتری نمی‌فرستد و گفتگو، تیکت یا پیش‌نویسی نمی‌سازد. فقط هزینهٔ یک فراخوانی ارائه‌دهنده دارد.',
+  'web.saic_off':
+    'هوش مصنوعی خاموش است. برای امتحان، حالت را روی «فقط دستیار» بگذارید و ذخیره کنید.',
+  'web.saic_question': 'سؤال مشتری',
+  'web.saic_customer': 'مشتری امتحان',
+  'web.saic_customer_hint': 'پاسخ می‌تواند از سرویس‌ها و اطلاعات همین مشتری استفاده کند.',
+  'web.saic_unlinked_hint': 'اگر مشتری انتخاب نکنید، مثل مشتریِ ناشناس امتحان می‌شود.',
+  'web.saic_run': 'امتحان کن',
+  'web.saic_running': 'در حال امتحان…',
+  'web.saic_verdict_would_send': 'همین پاسخ فرستاده می‌شد',
+  'web.saic_verdict_would_send_link': 'پیام لینک ورود به ربات فرستاده می‌شد',
+  'web.saic_verdict_would_close': 'بی‌صدا بسته می‌شد (چیزی فرستاده نمی‌شد)',
+  'web.saic_verdict_would_hand_off': 'به پشتیبان سپرده می‌شد',
+  'web.saic_verdict_not_asked': 'پیش از پرسیدن از مدل متوقف می‌شد',
+  'web.saic_verdict_no_answer': 'مدل پاسخی نداد',
+  'web.saic_assist_note':
+    'حالت فعلی «فقط دستیار» است: در عمل این متن فقط پیش‌نویس می‌شد. نتیجه نشان می‌دهد در حالت خودکار چه می‌شد.',
+  'web.saic_blocked_by': 'این محافظ جلوی ارسال را می‌گرفت',
+  'web.saic_handoff_reason': 'دلیل سپردن به پشتیبان',
+  'web.saic_kind_hard': 'سخت: فقط دستی برمی‌گردد',
+  'web.saic_kind_soft': 'موقت: خودکار برمی‌گردد',
+  'web.saic_link_note':
+    'مشتری به حسابی در ربات متصل نیست و دربارهٔ حساب پرسیده؛ به‌جای پاسخ مدل، پیام قالب‌بندی‌شدهٔ لینک ورود به ربات فرستاده می‌شد.',
+  'web.saic_no_answer':
+    'ارائه‌دهنده پاسخ قابل‌استفاده‌ای نداد. علت را در بخش آزمایش اتصال و مصرف ببینید.',
+  'web.saic_answer': 'پاسخ',
+  'web.saic_answer_held': 'پاسخی که مدل نوشت (ارسال نمی‌شد)',
+  'web.saic_topic': 'موضوع',
+  'web.saic_confidence': 'اطمینان',
+  'web.saic_knowledge_sent': 'مقاله‌های فرستاده‌شده به مدل از میان موجود',
+  'web.saic_knowledge_used': 'مقاله‌های استفاده‌شده',
+  'web.saic_facts_used': 'اطلاعات مشتری که پاسخ به آن‌ها تکیه کرد',
+  'web.saic_none': 'هیچ',
+  'web.saic_tokens': 'توکن ورودی / خروجی',
+  'web.sai_model_choose': 'یک مدل انتخاب کنید',
+  'web.sai_model_other': 'سایر…',
+  'web.sai_model_other_id': 'شناسهٔ مدل دیگر',
+  'web.sai_advanced': 'تنظیمات پیشرفته',
+  'web.sai_advanced_hint':
+    'هفت سقف و مهلت که پیش‌فرض‌هایشان برای بیشتر مجموعه‌ها درست است. جز با دلیل تغییرشان ندهید.',
+  'web.sai_timeout_ms_hint':
+    'اگر ارائه‌دهنده در این مدت پاسخ ندهد، درخواست قطع می‌شود و ارائه‌دهندهٔ بعدی زنجیره امتحان می‌شود.',
+  'web.sai_max_output_chars_hint':
+    'پاسخ‌های بلندتر از این فرستاده نمی‌شوند و به پشتیبان سپرده می‌شوند.',
+  'web.sai_cooldown_seconds_hint':
+    'کمترین فاصله بین دو پاسخ خودکار به یک گفتگو؛ از پشت‌سرهم فرستادن پاسخ جلوگیری می‌کند.',
+  'web.sai_settle_delay_seconds_hint':
+    'پس از پیام مشتری این‌قدر صبر می‌شود تا اگر چند خط پشت‌سرهم نوشت، یک پاسخ به همه داده شود و اگر همکار وارد شد، هوش مصنوعی کنار برود.',
+  'web.sai_mode_off_consequence':
+    'پیام مشتری‌ها به هیچ ارائه‌دهنده‌ای نمی‌رود و هزینه‌ای ندارد؛ فقط همکاران پاسخ می‌دهند.',
+  'web.sai_mode_assist_only_consequence':
+    'برای هر پیام مشتری خودکار یک پیش‌نویس در صفحهٔ همان گفتگو آماده می‌شود. هیچ چیز به مشتری نمی‌رسد تا شما بخوانید و بفرستید. برای هر پیام هزینهٔ یک فراخوانی دارد.',
+  'web.sai_mode_auto_reply_safe_consequence':
+    'به موضوع‌های انتخاب‌شده بدون بازبینی شما پاسخ می‌دهد و بقیه را به پشتیبان می‌سپارد. بازپرداخت، «پرداخت کردم»، شکایت و موضوع‌های مالی همیشه به انسان می‌رسد. برای هر پیام هزینه دارد.',
+  'web.sai_fault_test_console_off':
+    'هوش مصنوعی خاموش است؛ برای امتحان حالت را روی «فقط دستیار» بگذارید و ذخیره کنید.',
+  'web.sai_fault_test_console_replay':
+    'این امتحان همین الان اجرا شده است؛ دوباره «امتحان کن» را بزنید.',
+  'web.sai_fault_customer_not_found': 'این مشتری پیدا نشد.',
+  'web.sai_failure_what_to_do': 'چه کنم',
+  'web.sai_failure_action_request_rejected':
+    'مدل یا تنظیم درخواست را ارائه‌دهنده نپذیرفت؛ مدل دیگری انتخاب کنید و دوباره آزمایش کنید.',
+  'web.sai_failure_action_unsupported_capability':
+    'این مدل پاسخ ساختاریافته یا تصویر را پشتیبانی نمی‌کند؛ مدل دیگری انتخاب کنید.',
+  'web.sai_failure_action_auth':
+    'کلید رد شده است؛ در سایت ارائه‌دهنده کلید تازه بسازید و اینجا جایگزین کنید.',
+  'web.sai_failure_action_quota':
+    'اعتبار حساب ارائه‌دهنده تمام شده؛ آن را در سایت ارائه‌دهنده شارژ کنید.',
+  'web.sai_failure_action_rate_limited':
+    'ارائه‌دهنده موقتاً درخواست‌ها را محدود کرده؛ چند دقیقه صبر کنید یا ارائه‌دهندهٔ پشتیبان اضافه کنید.',
+  'web.sai_failure_action_timeout':
+    'ارائه‌دهنده دیر پاسخ داد؛ مهلت را در تنظیمات پیشرفته بیشتر کنید یا مدل سریع‌تری بگیرید.',
+  'web.sai_failure_action_network':
+    'اتصال سرور به ارائه‌دهنده برقرار نشد؛ اینترنت و فایروال سرور را بررسی کنید.',
+  'web.sai_failure_action_provider_error':
+    'مشکل از سمت ارائه‌دهنده است؛ کمی بعد دوباره امتحان کنید یا ارائه‌دهندهٔ پشتیبان اضافه کنید.',
+  'web.sai_failure_action_refused':
+    'ارائه‌دهنده پاسخ را به‌خاطر پالایش محتوا نداد؛ معمولاً با پیام دیگری برطرف می‌شود، اگر تکرار شد مدل دیگری بگیرید.',
+  'web.sai_failure_action_no_content':
+    'مدل پاسخ خالی داد؛ دوباره امتحان کنید یا مدل دیگری انتخاب کنید.',
+  'web.sai_failure_action_truncated':
+    'پاسخ مدل نیمه‌کاره ماند؛ بیشترین طول پاسخ را در تنظیمات پیشرفته کمتر کنید یا مدل دیگری بگیرید.',
+  'web.sai_failure_action_not_json':
+    'مدل خروجی ساختاریافته نداد؛ مدل دیگری انتخاب کنید و آزمایش را بزنید.',
+  'web.sai_failure_action_schema_invalid':
+    'مدل ساختار تصمیم را رعایت نکرد؛ مدل قوی‌تری انتخاب کنید و آزمایش را بزنید.',
+  'web.sai_failure_action_reply_too_long':
+    'پاسخ از حد مجاز بلندتر بود؛ بیشترین طول پاسخ را در تنظیمات پیشرفته بیشتر کنید یا دستور لحن را کوتاه‌گویی کنید.',
+  'web.sai_failure_action_no_provider':
+    'هیچ ارائه‌دهنده‌ای آماده نبود؛ در بخش کلیدها، کلید ارائه‌دهندهٔ اصلی را ثبت کنید و آزمایش اتصال بزنید.',
+  'web.bchat_state_ai_assist': 'فعال — فقط پیش‌نویس',
+  'web.bchat_state_ai_off': 'هوش مصنوعی خاموش است — کسی پاسخ نمی‌دهد',
+  'web.bchat_mode_off_note':
+    'هوش مصنوعی خاموش است. گفتگوهای «در اختیار هوش مصنوعی» پاسخ خودکار و حتی پیش‌نویس نمی‌گیرند؛ باید دستی پاسخ داده شوند.',
+  'web.bchat_mode_assist_note':
+    'حالت «فقط دستیار» فعال است: برای هر پیام مشتری پیش‌نویس آماده می‌شود و ارسالش با شماست. هوش مصنوعی خودش چیزی نمی‌فرستد.',
+  'web.bchat_kind_hard': 'سخت',
+  'web.bchat_kind_soft': 'موقت',
+  'web.bchat_kind_hard_hint': 'فقط وقتی دستی به هوش مصنوعی برگردانده شود برمی‌گردد.',
+  'web.bchat_kind_soft_hint':
+    'اگر مشتری دوباره بنویسد و همکاری پاسخ ندهد، خودکار به هوش مصنوعی برمی‌گردد.',
+  'web.bchat_hold_kind': 'نوع نگه‌داشتن',
+  'web.bchat_resume_all': 'بازگرداندن همه به هوش مصنوعی',
+  'web.bchat_resume_all_title': 'بازگرداندن همه به هوش مصنوعی؟',
+  'web.bchat_resume_all_body':
+    'هر گفتگویی که الان دست همکار یا در انتظار پشتیبان است، همان‌طور که با دکمهٔ «سپردن دوباره به هوش مصنوعی» در صفحهٔ خودش، به هوش مصنوعی برمی‌گردد (حداکثر 100 گفتگو در هر بار). پاسخ‌های در صف همکار لغو می‌شود. پیش‌فرض فقط ارجاع‌های موقت را برمی‌گرداند.',
+  'web.bchat_resume_all_hard':
+    'ارجاع‌های سخت را هم برگردان (مالی، درخواست صریح مشتری برای انسان، گرفتن گفتگو توسط اپراتور و نگه‌داشتن‌های قدیمی بدون نوع)',
+  'web.bchat_resume_all_confirm': 'بله، برگردان',
+  'web.bchat_resume_all_done': 'برگردانده شد:',
+  'web.bchat_resume_all_skipped': 'سخت و دست‌نخورده:',
+  'web.bchat_resume_all_failed': 'ناموفق:',
+  'web.bchat_resume_all_more': 'گفتگوهای بیشتری مانده؛ دوباره بزنید.',
+  'web.sa_resolution_rate': 'نرخ پاسخ خودکار',
+  'web.sa_resolution_rate_hint':
+    'سهم گفتگوهایی که هوش مصنوعی خودش پاسخ داد از مجموع «پاسخ داده شد» و «به پشتیبان سپرده شد». به معنی رضایت مشتری نیست؛ حل‌شدن گفتگو ثبت نمی‌شود.',
+  'web.sa_tokens_total': 'توکن مصرف‌شده',
+  'web.sa_tokens_hint':
+    'ورودی و خروجی همهٔ فراخوانی‌ها. قیمتی ثبت نشده، پس هزینه‌ای تخمین زده نمی‌شود.',
+  'web.sa_fix': 'رفع',
+  'web.sa_fix_topic': 'فعال‌کردن موضوع در تنظیمات',
+  'web.sa_fix_confidence': 'پایین آوردن حداقل اطمینان',
+  'web.sa_fix_article': 'افزودن مقاله به پایگاه دانش',
+  'web.sa_fix_vision': 'روشن‌کردن دیدن تصویر',
+  'web.sa_fix_failures': 'دیدن علت خطاها',
+  'web.sa_fix_length': 'بیشتر کردن بیشترین طول پاسخ',
+  'web.sa_fix_clarifying': 'بیشتر کردن سقف سؤال تکمیلی',
+  'web.sa_fix_limits': 'بررسی سقف‌های پاسخ',
+  'web.sa_questions_show': 'دیدن سؤال‌ها',
+  'web.sa_questions_hide': 'بستن',
+  'web.sa_questions_empty': 'سؤالی برای این دلیل در 30 روز اخیر نمانده است.',
+  'web.sa_open_chat': 'باز کردن گفتگو',
+  'web.sa_gaps': 'شکاف‌های دانش',
+  'web.sa_gaps_hint':
+    'سؤال‌هایی که هوش مصنوعی از روی محتوای تأییدشده نتوانست جواب دهد (30 روز اخیر)، دسته‌بندی‌شده بر اساس برداشت خود هوش مصنوعی از خواستهٔ مشتری. برخلاف شمارش‌های این صفحه، این بخش و «دیدن سؤال‌ها» متن پیام مشتری را نشان می‌دهند.',
+  'web.sa_gaps_denied':
+    'دیدن این گزارش به اجازهٔ «دیدن گفتگوهای تلگرام بیزینس» نیاز دارد، چون متن سؤال‌های مشتری را نشان می‌دهد.',
+  'web.sa_gaps_empty': 'در 30 روز اخیر شکاف تازه‌ای دیده نشد.',
+  'web.sa_gap_no_label': 'بدون برچسب',
+  'web.sa_gap_build': 'ساخت مقاله از این',
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;

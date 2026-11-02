@@ -84,7 +84,10 @@ export function serviceCardSlotOf(inlineKey: string): ServiceCardButton | null {
       ? 'service.suspend'
       : inlineKey === 'service.auto_renew_disable'
         ? 'service.auto_renew_enable'
-        : inlineKey;
+        : // R11 A4: «دریافت فایل‌های جدید» takes the place of «تغییر لینک» on a files-only panel.
+          inlineKey === 'service.files_new'
+          ? 'service.rotate'
+          : inlineKey;
   return (SERVICE_CARD_BUTTONS as readonly string[]).includes(slot)
     ? (slot as ServiceCardButton)
     : null;

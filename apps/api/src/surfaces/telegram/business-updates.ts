@@ -5,6 +5,7 @@ import {
 } from '@nexa/contracts';
 import type { Container } from '../../container.js';
 import {
+  parseBusinessCallback,
   parseBusinessConnection,
   parseBusinessDeletion,
   parseBusinessMessage,
@@ -29,7 +30,10 @@ import {
  * to send a different body, so a non-2xx would only loop.
  */
 export async function handleBusinessUpdate(
-  container: Pick<Container, 'businessConnections' | 'businessConversations' | 'opsLog'>,
+  container: Pick<
+    Container,
+    'businessConnections' | 'businessConversations' | 'opsLog' | 'supportAiCallbacks'
+  >,
   scope: TenantContext,
   actor: ActorContext,
   input: {
@@ -94,6 +98,24 @@ export async function handleBusinessUpdate(
         // Guarded: a failed report must not turn a swallowed message failure into a non-2xx
         // and an unbounded redelivery loop (TB1 review S3).
         await report('MESSAGE_NOT_ROUTED', error).catch(() => undefined);
+      }
+      return;
+    }
+    case 'CALLBACK': {
+      // Phase 4 PR-3: a tap on the support AI's own button. Answered 2xx whatever happens, like
+      // a message: a tap is not a fact Telegram must tell again, and a redelivery loop helps nobody.
+      const parsed = parseBusinessCallback(input.update.payload);
+      if (parsed === null) {
+        await report('MALFORMED').catch(() => undefined);
+        return;
+      }
+      try {
+        await container.supportAiCallbacks.handle(scope, {
+          botInstanceId: input.botInstanceId,
+          callback: parsed,
+        });
+      } catch (error) {
+        await report('CALLBACK_NOT_APPLIED', error).catch(() => undefined);
       }
       return;
     }

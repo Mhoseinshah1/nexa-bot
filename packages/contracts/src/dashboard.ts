@@ -238,6 +238,7 @@ export const NAV_COUNTER_KEYS = [
   'refundRequestsAwaiting',
   'paymentsUnknown',
   'businessHandoffs',
+  'receiptsAwaitingReview',
 ] as const;
 export type NavCounterKey = (typeof NAV_COUNTER_KEYS)[number];
 
@@ -259,6 +260,12 @@ export const NAV_COUNTER_PERMISSIONS: Readonly<Record<NavCounterKey, PermissionK
    * agent stood down and a person must answer (roadmap B6, "support handoffs").
    */
   businessHandoffs: 'business_chats.view',
+  /**
+   * R12 F3 item 8, `/payments`: card-to-card transfers PENDING with a filed receipt — what a
+   * reviewer must approve, reject or credit (`paymentNeedsAction`'s receipt half). Withheld
+   * from a viewer who cannot review receipts: the count is the work of someone who can act.
+   */
+  receiptsAwaitingReview: 'receipts.review',
 };
 
 /** A ticket whose next word is support's: nobody has answered yet, or the customer has. */
@@ -294,6 +301,8 @@ export const navCountersResponseSchema = z.object({
      * Absent means "not counted", which is already what `null` means.
      */
     businessHandoffs: counter.optional().transform((value) => value ?? null),
+    /* OPTIONAL on the wire for the same rolling-update reason (R12 F3 item 8). */
+    receiptsAwaitingReview: counter.optional().transform((value) => value ?? null),
   }),
 });
 export type NavCountersResponse = z.infer<typeof navCountersResponseSchema>;

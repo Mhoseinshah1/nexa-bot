@@ -61,10 +61,14 @@ import {
  *   catalogue. Nothing is held in memory but the previous key;
  * - only the snapshot's tables and columns: a table the snapshot does not carry, a column its
  *   rows file does not list, a table the table catalogue does not let a read set read
- *   (`isLegacyTableRowReadable`) and a non-identifier are refused — never answered with NULLs.
- *   A column the CATALOGUE lists but the rows file does not carry is refused too: the importer
- *   asks only for columns `columns()` reports (`presentColumns`), and a column it is told
- *   exists must be read, not invented;
+ *   (`isLegacyTableRowReadable`) and a non-identifier are refused — never answered with NULLs;
+ * - the catalogue describes the dumped table (every column: the schema hash is over it), the
+ *   rows file carries the converter's allowlist of it. `readableColumns()` reports the rows
+ *   file's columns, so the importer (`resolveReadColumns`) reads an OPTIONAL column the rows
+ *   file does not carry as ABSENT — exactly as a source without it (converter 0.8.0 dropped
+ *   `user.roll_Status`) — and refuses a REQUIRED one (`SOURCE_SCHEMA_MISSING_COLUMN`, the
+ *   `table.column` named) before any row. A column asked for anyway is refused here, never
+ *   invented;
  * - `aggregate` throws `EvidenceUnsupported` (a package has no SQL engine);
  * - `syntheticMarker()` is the catalogue's `synthetic_marker`: the label of NEXA's marker
  *   table when the dumped database had one, null for a real backup. The snapshot's synthetic
@@ -218,6 +222,7 @@ export class NxpkgLegacySourceConnector implements LegacySourceConnector {
           throw new LegacySourceRefused(
             'SOURCE_SCHEMA_MISSING_COLUMN',
             `${spec.table}.${c} is not in the package's rows file`,
+            [`${spec.table}.${c}`],
           );
         }
         return index;
@@ -334,6 +339,13 @@ export class NxpkgLegacySourceConnector implements LegacySourceConnector {
           );
         }
         return streamRows(files, spec, projection(spec, columns), live);
+      },
+      readableColumns: (table: string) => {
+        live();
+        const spec = (LEGACY_SOURCE_TABLES as readonly string[]).includes(table)
+          ? catalog.snapshotTables.get(table as LegacySourceTableName)
+          : undefined;
+        return spec === undefined ? null : new Set(spec.columns);
       },
       aggregate: () => Promise.reject(new EvidenceUnsupported()),
       syntheticMarker: () => {

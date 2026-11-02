@@ -31,8 +31,7 @@ import {
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import type { PublicLabels } from '../../modules/commerce/public-codes/application/public-labels.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin, type adminActor } from './authenticated-request.js';
 import type {
   TicketCategoryRecord,
   TicketListItem,
@@ -57,7 +56,7 @@ export class TicketsController {
 
   @Get(TICKET_ROUTES.list)
   async list(@Req() request: FastifyRequest, @Query() query: unknown): Promise<TicketListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = ticketListQuerySchema.parse(query ?? {});
     const limit = input.limit ?? 50;
     // One row past the page, so "there is another page" is read, never guessed.
@@ -93,7 +92,7 @@ export class TicketsController {
 
   @Get(TICKET_ROUTES.assignees)
   async assignees(@Req() request: FastifyRequest): Promise<TicketAssigneesResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const admins = await this.container.tickets.assignees(scope, actor);
     return {
       admins: admins.map((admin) => ({
@@ -109,7 +108,7 @@ export class TicketsController {
     @Req() request: FastifyRequest,
     @Param('ticketId') ticketId: string,
   ): Promise<TicketDetailResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const found = await this.container.tickets.detail(scope, actor, ticketId);
     const customer = found.customer;
     return {
@@ -145,7 +144,7 @@ export class TicketsController {
     @Param('ticketId') ticketId: string,
     @Body() body: unknown,
   ): Promise<TicketReplyResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = ticketReplyRequestSchema.parse(body);
     const posted = await this.container.tickets.reply(scope, actor, {
       ticketId,
@@ -169,7 +168,7 @@ export class TicketsController {
     @Param('ticketId') ticketId: string,
     @Body() body: unknown,
   ): Promise<TicketMutationResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = ticketStatusRequestSchema.parse(body);
     const result = await this.container.tickets.setStatus(scope, actor, {
       ticketId,
@@ -184,7 +183,7 @@ export class TicketsController {
     @Param('ticketId') ticketId: string,
     @Body() body: unknown,
   ): Promise<TicketMutationResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = ticketAssignRequestSchema.parse(body);
     const result = await this.container.tickets.assign(scope, actor, {
       ticketId,
@@ -199,7 +198,7 @@ export class TicketsController {
     @Param('ticketId') ticketId: string,
     @Body() body: unknown,
   ): Promise<TicketMutationResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = ticketPriorityRequestSchema.parse(body);
     const result = await this.container.tickets.setPriority(scope, actor, {
       ticketId,
@@ -214,7 +213,7 @@ export class TicketsController {
     @Param('ticketId') ticketId: string,
     @Body() body: unknown,
   ): Promise<TicketMutationResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = ticketLinksRequestSchema.parse(body);
     const result = await this.container.tickets.setLinks(scope, actor, { ticketId, ...input });
     return this.mutation(scope, actor, result);
@@ -237,7 +236,7 @@ export class TicketsController {
     @Res() reply: FastifyReply,
     @Param('messageId') messageId: string,
   ): Promise<void> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const { message, source } = await this.container.tickets.attachmentOf(scope, actor, messageId);
     let bytes: Uint8Array;
     if (source.kind === 'STORED') {
@@ -264,7 +263,7 @@ export class TicketsController {
 
   @Get(TICKET_ROUTES.categories)
   async categories(@Req() request: FastifyRequest): Promise<TicketCategoryListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const categories = await this.container.ticketCategories.list(scope, actor);
     return { categories: categories.map(toCategoryView) };
   }
@@ -274,7 +273,7 @@ export class TicketsController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<TicketCategoryResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = ticketCategoryCreateRequestSchema.parse(body);
     const result = await this.container.ticketCategories.create(scope, actor, input);
     return { category: toCategoryView(result.category), changed: result.changed };
@@ -286,7 +285,7 @@ export class TicketsController {
     @Param('categoryId') categoryId: string,
     @Body() body: unknown,
   ): Promise<TicketCategoryResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = ticketCategoryUpdateRequestSchema.parse(body);
     const result = await this.container.ticketCategories.update(scope, actor, categoryId, {
       ...(input.title === undefined ? {} : { title: input.title }),
@@ -317,26 +316,6 @@ export class TicketsController {
       orderIds: tickets.map((ticket) => ticket.orderId),
       paymentIds: tickets.map((ticket) => ticket.paymentId),
     });
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 
@@ -412,7 +391,7 @@ function toMessageView(item: TicketMessageListItem): TicketMessageView {
               fileSize: item.replyFile.byteLength,
             }
           : null,
-    delivery: message.senderType === 'ADMIN' ? item.delivery : null,
+    delivery: message.senderType === 'ADMIN' || message.senderType === 'AI' ? item.delivery : null,
     attachmentDelivery: item.replyFile === null ? null : item.attachmentDelivery,
     createdAt: message.createdAt.toISOString(),
   };

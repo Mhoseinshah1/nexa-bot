@@ -10,14 +10,12 @@ import {
   type CustomerListResponse,
   type CustomerResponse,
   type CustomerSummaryResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import type { UserId } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type {
   CustomerCursor,
   CustomerRecord,
@@ -59,7 +57,7 @@ export class CustomersController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<CustomerListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // A repeated parameter is an ARRAY, not a string. Through the same guard every
     // other list on this surface uses, rather than relying on the schema to refuse it.
     const query = singleValued(raw);
@@ -97,7 +95,7 @@ export class CustomersController {
 
   @Get('users/:id')
   async detail(@Req() request: FastifyRequest, @Param('id') id: string): Promise<CustomerResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // The id is NOT cast here. `CustomerService.get` validates it, so a Telegram admin
     // surface added later cannot reach the repository with `not-a-uuid` and turn a
     // malformed request into a 500 at the `uuid` cast.
@@ -110,7 +108,7 @@ export class CustomersController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CustomerResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // The reason is REQUIRED here (WP10G, closing OQ-WP10F-03): a block without one is a 400
     // before the service, and the service refuses it again for any caller that skips this.
     const command = blockCustomerRequestSchema.parse(body);
@@ -128,7 +126,7 @@ export class CustomersController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CustomerResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     // Its own schema (WP10G): the block's reason is mandatory, the unblock's stays optional.
     const command = unblockCustomerRequestSchema.parse(body);
     const customer = await this.container.customers.unblock(scope, actor, {
@@ -142,30 +140,6 @@ export class CustomersController {
       reason: command.reason ?? null,
     });
     return { customer: toSummary(customer) };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      // `botInstanceId: null` deliberately. A customer belongs to the TENANT, not to the
-      // bot they first wrote to — `first_bot_instance_id` records where they arrived and
-      // is not a scope. A tenant with two bots has one customer list, which is what an
-      // operator answering a support message needs.
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

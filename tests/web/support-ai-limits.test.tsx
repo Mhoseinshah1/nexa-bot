@@ -19,6 +19,8 @@ const configResponse = (config: Record<string, unknown> = {}, version = 7) => ({
     ...SUPPORT_AI_DEFAULT_CONFIG,
     mode: 'AUTO_REPLY_SAFE',
     primary: { provider: 'OPENAI', model: 'gpt-test-1' },
+    // Phase 4 PR-1: AUTO_REPLY_SAFE with no topic cannot be saved.
+    autoTopics: ['APP_SETUP'],
     ...config,
   },
   version,

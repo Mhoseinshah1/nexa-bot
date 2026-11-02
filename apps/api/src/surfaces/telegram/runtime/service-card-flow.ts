@@ -412,7 +412,13 @@ export async function serviceDetail(
       row: 0,
     });
   }
-  if (ProvisioningService.isDeliverable(service)) {
+  /*
+   * R11 A4: on a «فقط فایل، بدون لینک ساب» panel there is no «🔗 لینک اشتراک» (no QR, no
+   * copy: the link view is the only place the card showed one) and «⚙️ تغییر لینک» is
+   * «⚙️ دریافت فایل‌های جدید» — the same tap, the same slot, the same rotation behind it.
+   */
+  const filesOnly = await rt.deps.delivery.isFilesOnly(scope, service);
+  if (ProvisioningService.isDeliverable(service) && !filesOnly) {
     buttons.push({
       ...inlineLabel('service.link'),
       data: `${SERVICE_RESEND_CALLBACK_PREFIX}${service.id}`,
@@ -422,7 +428,7 @@ export async function serviceDetail(
   const rotation = await rt.deps.services.customerRotationFor(scope, service);
   if (rotation.offered) {
     buttons.push({
-      ...inlineLabel('service.rotate'),
+      ...inlineLabel(filesOnly ? 'service.files_new' : 'service.rotate'),
       data: `${SERVICE_ROTATE_ASK_CALLBACK_PREFIX}${service.id}`,
       row: 1,
     });
@@ -558,7 +564,15 @@ export async function serviceDetail(
     row: 5,
   });
 
-  const card = await serviceCardScreen(rt, scope, service, title, rotation.offered, cardExtra);
+  // The card's hint names «تغییر لینک»; on a files-only panel there is no such button.
+  const card = await serviceCardScreen(
+    rt,
+    scope,
+    service,
+    title,
+    rotation.offered && !filesOnly,
+    cardExtra,
+  );
   // R8-C3: the owner's order, rows and switches, over the buttons decided above.
   const layout = (await rt.deps.serviceCardLayout?.(scope)) ?? null;
   return {
@@ -616,6 +630,7 @@ export async function renewMenuShowsTime(rt: BotRuntime, scope: TenantContext): 
 export async function serviceResend(
   rt: BotRuntime,
   scope: TenantContext,
+  actor: ActorContext,
   customer: CustomerRecord,
   serviceId: string,
   input: {
@@ -627,6 +642,14 @@ export async function serviceResend(
   const service = await ownedService(rt, scope, customer, serviceId);
   if (service === null) {
     return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+  }
+  /*
+   * R11 A4: a stale «🔗 لینک اشتراک» (a message from before the panel was set to files only)
+   * is answered with the FILES, never the link. `DeliveryService.deliver` refuses the link
+   * view on such a panel as well, so this is the courtesy and that is the rule.
+   */
+  if (await rt.deps.delivery.isFilesOnly(scope, service)) {
+    return serviceFiles(rt, scope, actor, customer, serviceId, input);
   }
   const chatId = privateChatIdOf(input.update);
   if (chatId === null) {
@@ -710,18 +733,23 @@ export async function serviceFiles(
       return {
         key: 'bot.service.files_rate_limited',
         values: { seconds: result.retryAfterSeconds },
-        buttons: [],
+        buttons: [backToCardButton(serviceId)],
         orderId: null,
       };
     case 'UNAVAILABLE':
-      return { key: 'bot.service.files_unavailable', values: {}, buttons: [], orderId: null };
+      return {
+        key: 'bot.service.files_unavailable',
+        values: {},
+        buttons: [backToCardButton(serviceId)],
+        orderId: null,
+      };
     case 'SENT':
       return result.failed === 0
         ? { key: null, values: {}, buttons: [], orderId: null }
         : {
             key: 'bot.service.files_partial',
             values: { failed: result.failed },
-            buttons: [],
+            buttons: [backToCardButton(serviceId)],
             orderId: null,
           };
     case 'STOPPED':

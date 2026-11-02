@@ -139,7 +139,7 @@ function expectedViews(): Record<string, View> {
       intent: 'TRIAL_CLAIM',
       key: 'bot.trial.issued',
       text: '🧪 سرویس تست شما در حال ساخته شدن است. لینک اتصال به\u200cمحض آماده شدن برایتان ارسال می\u200cشود.',
-      buttons: [],
+      buttons: [[['🏠 بازگشت به لیست سرویس ها', 'sl:1']], [['🏠 بازگشت به منوی اصلی', 'mm:']]],
     },
     'trial.single_second_refused': {
       intent: 'TRIAL_CLAIM',
@@ -161,7 +161,7 @@ function expectedViews(): Record<string, View> {
       intent: 'TRIAL_PANEL',
       key: 'bot.trial.issued',
       text: '🧪 سرویس تست شما در حال ساخته شدن است. لینک اتصال به\u200cمحض آماده شدن برایتان ارسال می\u200cشود.',
-      buttons: [],
+      buttons: [[['🏠 بازگشت به لیست سرویس ها', 'sl:1']], [['🏠 بازگشت به منوی اصلی', 'mm:']]],
     },
     'trial.chosen_second_refused': {
       intent: 'TRIAL_PANEL',
@@ -185,7 +185,7 @@ function expectedViews(): Record<string, View> {
       intent: 'TRIAL_CLAIM',
       key: 'bot.trial.issued',
       text: '🧪 سرویس تست شما در حال ساخته شدن است. لینک اتصال به\u200cمحض آماده شدن برایتان ارسال می\u200cشود.',
-      buttons: [],
+      buttons: [[['🏠 بازگشت به لیست سرویس ها', 'sl:1']], [['🏠 بازگشت به منوی اصلی', 'mm:']]],
     },
   };
 }

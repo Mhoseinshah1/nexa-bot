@@ -118,6 +118,9 @@ export interface DatabaseTimeouts {
  */
 export type PoolErrorListener = (error: Error) => void;
 
+/** How long a pool checkout may wait, for a connection or for a free slot (R12 F2). */
+export const POOL_CONNECTION_TIMEOUT_MS = 5_000;
+
 export function createDatabase(
   connectionString: string,
   poolMax: number,
@@ -129,6 +132,15 @@ export function createDatabase(
   const pool = new Pool({
     connectionString,
     max: poolMax,
+    /*
+     * R12 F2: a checkout waits at most this long — for a new connection to be established,
+     * AND for a busy pool to hand one back. `pg-pool`'s default is 0, which means for ever:
+     * a pool exhausted by stuck queries (or a flood of anonymous readiness probes) used to
+     * queue every later request behind it with no bound, so the API hung instead of
+     * answering. Now such a checkout rejects, the request fails and is logged, and the
+     * process keeps answering everything that does not need the database.
+     */
+    connectionTimeoutMillis: POOL_CONNECTION_TIMEOUT_MS,
     // Set as connection options rather than a `SET` per checkout: it costs no
     // round trip and cannot be skipped by a code path that forgot to run it.
     ...(timeouts

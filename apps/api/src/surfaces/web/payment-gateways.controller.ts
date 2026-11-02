@@ -25,8 +25,7 @@ import {
   takesFixedRate,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import type { PaymentGatewayRecord } from '../../modules/commerce/payments/application/gateway-ports.js';
 import type { GatewayOperatorFacts } from '../../modules/commerce/payments/application/payment-gateway.service.js';
 import type { GatewayHealthEntry } from '../../modules/commerce/payments/application/gateway-health.service.js';
@@ -62,7 +61,7 @@ export class PaymentGatewaysController {
 
   @Get(PAYMENT_GATEWAY_ROUTES.list)
   async list(@Req() request: FastifyRequest): Promise<PaymentGatewayListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const { gateways, currency, facts, walletTopup } = await this.container.paymentGateways.list(
       scope,
       actor,
@@ -92,7 +91,7 @@ export class PaymentGatewaysController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<GatewayHealthResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = singleValued(raw);
     const input = gatewayHealthQuerySchema.parse({
       ...(query.range === undefined ? {} : { range: query.range }),
@@ -117,7 +116,7 @@ export class PaymentGatewaysController {
     @Param('provider') provider: string,
     @Body() body: unknown,
   ): Promise<PaymentGatewayResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = updatePaymentGatewayRequestSchema.parse(body);
     /*
      * TWO parses, and the second is the one that matters.
@@ -177,7 +176,7 @@ export class PaymentGatewaysController {
     @Param('provider') provider: string,
     @Body() body: unknown,
   ): Promise<PaymentGatewayResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = setPaymentGatewayStatusRequestSchema.parse(body);
     const gateway = await this.container.paymentGateways.setStatus(scope, actor, {
       idempotencyKey: input.idempotencyKey,
@@ -198,7 +197,7 @@ export class PaymentGatewaysController {
     @Param('provider') provider: string,
     @Body() body: unknown,
   ): Promise<PaymentGatewayResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = setPaymentGatewayCredentialRequestSchema.parse(body);
     const gateway = await this.container.paymentGateways.setCredential(scope, actor, {
       idempotencyKey: input.idempotencyKey,
@@ -218,7 +217,7 @@ export class PaymentGatewaysController {
     @Param('provider') provider: string,
     @Body() body: unknown,
   ): Promise<PaymentGatewayResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = setPaymentGatewayWebhookSecretRequestSchema.parse(body);
     const gateway = await this.container.paymentGateways.setWebhookSecret(scope, actor, {
       idempotencyKey: input.idempotencyKey,
@@ -238,7 +237,7 @@ export class PaymentGatewaysController {
     @Param('provider') provider: string,
     @Body() body: unknown,
   ): Promise<PaymentGatewayResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = setPaymentGatewayVerifyKeyRequestSchema.parse(body);
     const gateway = await this.container.paymentGateways.setVerifyKey(scope, actor, {
       idempotencyKey: input.idempotencyKey,
@@ -259,7 +258,7 @@ export class PaymentGatewaysController {
     @Param('provider') provider: string,
     @Body() body: unknown,
   ): Promise<PaymentGatewayResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = setPaymentGatewayEndpointRequestSchema.parse(body);
     const gateway = await this.container.paymentGateways.setEndpoint(scope, actor, {
       idempotencyKey: input.idempotencyKey,
@@ -280,7 +279,7 @@ export class PaymentGatewaysController {
     @Param('provider') provider: string,
     @Body() body: unknown,
   ): Promise<PaymentGatewayResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = checkPaymentGatewayCredentialRequestSchema.parse(body);
     const gateway = await this.container.paymentGateways.checkCredential(scope, actor, {
       idempotencyKey: input.idempotencyKey,
@@ -298,22 +297,6 @@ export class PaymentGatewaysController {
       this.container.paymentGateways.factsFor(scope, gateway.provider),
     ]);
     return { gateway: toView(gateway, currency, facts) };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

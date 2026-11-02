@@ -420,11 +420,13 @@ export class DrizzleSupportAiCredentialStore {
     outcome: SupportAiOutcomeKind,
     now: Date,
     failureClass: SupportAiFailureClass | null = null,
+    model: string | null = null,
   ): Promise<void> {
     const tenantId = requireTenantId(scope);
     await this.db
       .update(supportAiProviderCredentials)
       .set({
+        lastTestedModel: model,
         lastTestOutcome: outcome,
         lastTestFailureClass: outcome === 'OK' ? null : failureClass,
         lastTestedAt: now,

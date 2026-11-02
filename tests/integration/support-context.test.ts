@@ -584,7 +584,8 @@ describe('TB3 — support context', () => {
   it('references hold only the aliases that survived the byte budget', async () => {
     const panel = await fx.panel();
     const me = await customer('900200');
-    const longLabel = 'ل'.repeat(200);
+    // Phase 4 PR-2: the budget is 44 KiB (was 24), so every family is at its bound here.
+    const longLabel = 'ل'.repeat(256);
     for (let i = 0; i < 10; i += 1) await liveService(me, panel);
     await run(
       sql`UPDATE services SET location_key = 'far', location_label = ${longLabel} WHERE customer_id = ${me}`,
@@ -592,16 +593,17 @@ describe('TB3 — support context', () => {
     for (let i = 0; i < 5; i += 1) await payment(me, { state: 'CONFIRMED', minutesAgo: i + 1 });
     for (let i = 0; i < 3; i += 1) await incident({ message: 'پ'.repeat(1500) });
     // A8: relevant knowledge inside its reserve holds its share, so the account facts must give way.
-    for (let i = 0; i < 3; i += 1) {
+    for (let i = 0; i < 7; i += 1) {
       await run(sql`INSERT INTO support_faqs (id, tenant_id, question, answer, status, sort_order,
                                               version, created_at, updated_at)
                     VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${`اتصال ${String(i)}`},
-                            ${'ج'.repeat(1500)}, 'ACTIVE', ${i + 1}, 1, now(), now())`);
+                            ${'ج'.repeat(2000)}, 'ACTIVE', ${i + 1}, 1, now(), now())`);
     }
 
     const built = await ctx.container.supportContext.build(tenantA, me, { query: 'اتصال' });
     const { payload, references } = built;
-    expect(payload.knowledge).toHaveLength(3);
+    // Seven match; six fit the 26 KiB knowledge reserve.
+    expect(payload.knowledge).toHaveLength(6);
     expect(new TextEncoder().encode(JSON.stringify(payload)).length).toBeLessThanOrEqual(
       SUPPORT_CONTEXT_MAX_BYTES,
     );
@@ -792,7 +794,12 @@ describe('TB3 — support context', () => {
     expect(built.payload.services).toHaveLength(10);
     expect([...built.references.services.values()]).not.toContain(hidden);
     expect(built.payload.services.some((s) => s.unreconciled)).toBe(false);
-    expect(built.payload.flags.hasUnreconciledService).toBe(true);
+    // Phase 4 PR-1: the flag looks back SUPPORT_AI_UNDER_REVIEW_WINDOW_DAYS (14) — a 30-day-old
+    // unreconciled service no longer blocks the account topics.
+    expect(built.payload.flags.hasUnreconciledService).toBe(false);
+    await run(sql`UPDATE services SET created_at = now() - interval '3 days' WHERE id = ${hidden}`);
+    const recent = await ctx.container.supportContext.build(tenantA, me);
+    expect(recent.payload.flags.hasUnreconciledService).toBe(true);
     // The reader is tenant-scoped like every other.
     const reader = new DrizzleSupportContextReader(ctx.container.database.db);
     expect(await reader.anyUnreconciledService(tenantA, me)).toBe(true);

@@ -68,7 +68,7 @@ describe('the service card', () => {
         '',
         '🗂 حجم کل: 50 گیگابایت',
         '📥 حجم مصرفی: 10 گیگابایت',
-        '💢 حجم باقی‌مانده: 40 گیگابایت (80%)',
+        '💢 حجم باقی‌مانده: 40 گیگابایت (80٪)',
         '',
         '📅 تاریخ اتمام: 1405/08/02 22:00 (30 روز)',
         '',
@@ -125,7 +125,7 @@ describe('the service card', () => {
       expiresAt: new Date('2026-09-20T00:00:00Z'),
     });
     const text = render(overrun.key, overrun.values);
-    expect(text).toContain('💢 حجم باقی‌مانده: 0 گیگابایت (0%)');
+    expect(text).toContain('💢 حجم باقی‌مانده: 0 گیگابایت (0٪)');
     expect(text).toContain('(0 روز)');
     expect(text).not.toContain('نامحدود');
   });

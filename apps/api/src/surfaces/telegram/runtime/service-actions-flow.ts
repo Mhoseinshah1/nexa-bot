@@ -45,6 +45,7 @@ import type { CommercialActionService } from '../../../modules/commerce/commerci
 import { preinvoice } from './purchase-flow.js';
 import { awaitingPaymentReply } from './checkout-flow.js';
 import type { BotRuntime } from '../bot-runtime.js';
+import { listedPrice, personalDiscountOf } from './listed-price.js';
 
 /**
  * How many targets one choice screen draws: every one a panel may hold. The admin refuses a
@@ -115,8 +116,13 @@ export async function addonChoice(
           // put on a label that carried none, so the resolver threw and the screen
           // never sent; the label type carries values now and the messenger renders
           // them. A MONEY value, so the currency is the catalogue's, never typed.
-          ...inlineLabel('service.addon_option', { title: addon.title, price: addon.price }),
+          // R11 A9: the price its quote charges when the personal discount wins it.
+          ...inlineLabel('service.addon_option', {
+            title: addon.title,
+            price: listedPrice(addon),
+          }),
           data: `${prefix}${encodeIdPair(serviceId, addon.id)}`,
+          ...personalDiscountOf(addon),
         })),
       backToServiceButton(serviceId),
     ],
@@ -465,12 +471,14 @@ export async function serviceRotateAsk(
    * confirmation then puts the card back (`serviceRotate`), so the change of link is
    * one message throughout rather than a new one per step.
    */
+  // R11 A4: on a files-only panel the same question is about new FILES, never a link.
+  const filesOnly = await rt.deps.delivery.isFilesOnly(scope, service);
   return {
-    key: 'bot.service.rotate_ask',
+    key: filesOnly ? 'bot.service.files_new_ask' : 'bot.service.rotate_ask',
     values: { cooldownHours: offer.cooldownHours },
     buttons: [
       {
-        ...inlineLabel('service.rotate_confirm'),
+        ...inlineLabel(filesOnly ? 'service.files_new_confirm' : 'service.rotate_confirm'),
         data: `${SERVICE_ROTATE_CALLBACK_PREFIX}${service.id}`,
         row: 0,
       },
@@ -541,8 +549,10 @@ export async function serviceRotate(
         'availableAt'
       ];
       if (typeof at === 'string') {
+        const owned = await ownedService(rt, scope, customer, serviceId);
+        const filesOnly = owned !== null && (await rt.deps.delivery.isFilesOnly(scope, owned));
         return {
-          key: 'bot.service.rotate_cooldown',
+          key: filesOnly ? 'bot.service.files_new_cooldown' : 'bot.service.rotate_cooldown',
           values: { availableAt: new Date(at) },
           buttons: [backToCardButton(serviceId)],
           orderId: null,
@@ -608,10 +618,15 @@ export async function renewMenu(
   if (offered.includes('RENEW')) {
     const renewal = await offerOrNull(rt, scope, actor, customer, service.id, 'RENEW');
     const product = renewal?.product ?? null;
+    // R11 A9: each line at the price its quote charges when the personal discount wins it.
     if (product !== null && product.price !== null) {
       buttons.push({
-        ...inlineLabel('service.renew_option', { title: product.title, price: product.price }),
+        ...inlineLabel('service.renew_option', {
+          title: product.title,
+          price: listedPrice({ ...product, price: product.price }),
+        }),
         data: `${SERVICE_RENEW_QUOTE_CALLBACK_PREFIX}${service.id}`,
+        ...personalDiscountOf(product),
       });
     }
     if (renewal?.plans !== undefined) {
@@ -620,8 +635,12 @@ export async function renewMenu(
         if (plan.price === null) continue;
         panelPlans += 1;
         buttons.push({
-          ...inlineLabel('service.renew_option', { title: plan.title, price: plan.price }),
+          ...inlineLabel('service.renew_option', {
+            title: plan.title,
+            price: listedPrice({ ...plan, price: plan.price }),
+          }),
           data: `${SERVICE_RENEW_PLAN_CALLBACK_PREFIX}${encodeIdPair(service.id, plan.id)}`,
+          ...personalDiscountOf(plan),
         });
       }
     }
@@ -632,8 +651,12 @@ export async function renewMenu(
     for (const addon of packages?.addons ?? []) {
       if (addon.price === null) continue;
       buttons.push({
-        ...inlineLabel('service.addon_option', { title: addon.title, price: addon.price }),
+        ...inlineLabel('service.addon_option', {
+          title: addon.title,
+          price: listedPrice({ ...addon, price: addon.price }),
+        }),
         data: `${SERVICE_BUY_TIME_CALLBACK_PREFIX}${encodeIdPair(service.id, addon.id)}`,
+        ...personalDiscountOf(addon),
       });
     }
   }

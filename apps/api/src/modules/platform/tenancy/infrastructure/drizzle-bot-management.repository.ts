@@ -18,6 +18,7 @@ import {
 import type {
   BotManagementRecord,
   BotManagementRepository,
+  ExpectedWebhookSecretDigests,
 } from '../application/bot-management-ports.js';
 import type { DrizzleBotInstanceRepository } from './drizzle-tenant.repository.js';
 
@@ -30,7 +31,8 @@ function executorOf(db: Database, tx?: unknown): Executor {
  *
  * Every SELECT here names its columns. `token_ciphertext`, `token_key_id` and the stored
  * `webhook_secret_fingerprint` are never among them: the fingerprint is COMPARED in SQL
- * against the digest the caller hands in, and only the boolean comes back. So no view
+ * against the digests the caller hands in (the bot's own, and the installation-wide one
+ * for the rotation window — R12 F2 item 7), and only the boolean comes back. So no view
  * built from this repository can carry a credential or a value derived from one — the
  * panel-credential rule (ADR-0023), applied to the other credential this installation
  * holds.
@@ -51,11 +53,27 @@ export class DrizzleBotManagementRepository implements BotManagementRepository {
 
   async listManaged(
     scope: ScopeContext,
-    currentFingerprint: string | null,
+    expected: ExpectedWebhookSecretDigests | null,
   ): Promise<BotManagementRecord[]> {
     const tenantId = requireTenantId(scope);
+    // Each bot's own expected digest depends on its id, so the ids are read first; the
+    // digests then go into the comparison as one id-keyed map. A bot created between the
+    // two reads has no entry and compares as NULL-safe `false` against its own digest —
+    // it has no registration yet anyway.
+    const ids =
+      expected === null
+        ? []
+        : await this.db
+            .select({ id: botInstances.id })
+            .from(botInstances)
+            .where(eq(botInstances.tenantId, tenantId));
     const rows = await this.db
-      .select(this.columns(currentFingerprint))
+      .select(
+        this.columns(
+          expected,
+          ids.map((row) => asId<'BotInstanceId'>(row.id)),
+        ),
+      )
       .from(botInstances)
       .innerJoin(tenants, eq(tenants.id, botInstances.tenantId))
       .where(eq(botInstances.tenantId, tenantId))
@@ -66,12 +84,12 @@ export class DrizzleBotManagementRepository implements BotManagementRepository {
   async findManaged(
     scope: ScopeContext,
     id: BotInstanceId,
-    currentFingerprint: string | null,
+    expected: ExpectedWebhookSecretDigests | null,
     tx?: unknown,
   ): Promise<BotManagementRecord | null> {
     const tenantId = requireTenantId(scope);
     const [row] = await executorOf(this.db, tx)
-      .select(this.columns(currentFingerprint))
+      .select(this.columns(expected, [id]))
       .from(botInstances)
       .innerJoin(tenants, eq(tenants.id, botInstances.tenantId))
       .where(and(eq(botInstances.tenantId, tenantId), eq(botInstances.id, id)))
@@ -209,7 +227,15 @@ export class DrizzleBotManagementRepository implements BotManagementRepository {
     return this.bots.tokenForBotInstance(scope, id);
   }
 
-  private columns(currentFingerprint: string | null) {
+  /**
+   * `ids`: the bots whose OWN expected digest goes into the comparison — every row the
+   * query can return. The map is keyed by id, so a row is only ever compared with its own
+   * digest: bot A's secret recorded on bot B's row is `false`, never a match.
+   */
+  private columns(expected: ExpectedWebhookSecretDigests | null, ids: readonly BotInstanceId[]) {
+    const perBot = JSON.stringify(
+      Object.fromEntries(expected === null ? [] : ids.map((id) => [id, expected.perBot(id)])),
+    );
     return {
       id: botInstances.id,
       username: botInstances.username,
@@ -219,9 +245,13 @@ export class DrizzleBotManagementRepository implements BotManagementRepository {
       webhookUrl: botInstances.webhookUrl,
       // The comparison, never the digest. NULL stays NULL (unknown); with no current
       // secret configured the answer is irrelevant and the service reports NOT_CONFIGURED.
+      // R12 F2 item 7: this bot's OWN digest, or the installation-wide one (the rotation
+      // window). `IS TRUE` keeps a missing map entry a plain `false`.
       webhookSecretMatches: sql<boolean | null>`CASE
           WHEN ${botInstances.webhookSecretFingerprint} IS NULL THEN NULL
-          ELSE ${botInstances.webhookSecretFingerprint} = ${currentFingerprint ?? ''}
+          ELSE (${botInstances.webhookSecretFingerprint} = ${expected?.installation ?? ''}
+                OR ${botInstances.webhookSecretFingerprint}
+                   = (${perBot}::jsonb ->> ${botInstances.id}::text)) IS TRUE
         END`,
       commandsRevision: botInstances.commandsRevision,
       createdAt: botInstances.createdAt,

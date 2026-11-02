@@ -54,6 +54,9 @@ async function main(): Promise<void> {
   const heartbeat = startHeartbeat({
     path: config.WORKER_HEARTBEAT_PATH,
     intervalMs: config.WORKER_HEARTBEAT_INTERVAL_MS,
+    // R12 F2: N missed beats and the role leaves, so Docker restarts it (liveness-watchdog.ts).
+    exitAfterMissed: config.HEARTBEAT_EXIT_AFTER_MISSED,
+    role: 'worker',
     now: () => container.clock.now().getTime(),
     logger: container.logger,
     check: async () => {
@@ -84,85 +87,81 @@ async function main(): Promise<void> {
       // empty array — a worker that reports healthy whatever its loops are
       // doing — left the whole suite green.
       const now = container.clock.now().getTime();
-      const loops: readonly LoopHealth[] = [
-        ['relay', config.OUTBOX_RELAY_ENABLED, () => container.relay.isFresh(now)],
+      const loopsAt = (at: number): readonly LoopHealth[] => [
+        ['relay', config.OUTBOX_RELAY_ENABLED, () => container.relay.isFresh(at)],
         // No flag: the sweepers always run.
-        ['throttle-sweeper', true, () => container.throttleSweeper.isFresh(now)],
-        ['session-sweeper', true, () => container.sessionSweeper.isFresh(now)],
+        ['throttle-sweeper', true, () => container.throttleSweeper.isFresh(at)],
+        ['session-sweeper', true, () => container.sessionSweeper.isFresh(at)],
         // The backup run table's retention. No flag: it bounds a table that
         // gains rows from manual backups whether the schedule is on or not.
-        ['backup-run-sweeper', true, () => container.backupRunSweeper.isFresh(now)],
+        ['backup-run-sweeper', true, () => container.backupRunSweeper.isFresh(at)],
         // The recovery request table's retention. No flag, for the same reason as
         // the line above: it bounds a table that gains rows whenever an operator
         // uploads an archive, which has nothing to do with any schedule.
-        ['recovery-request-sweeper', true, () => container.recoveryRequestSweeper.isFresh(now)],
-        ['outbox-retention-sweeper', true, () => container.outboxRetentionSweeper.isFresh(now)],
+        ['recovery-request-sweeper', true, () => container.recoveryRequestSweeper.isFresh(at)],
+        ['outbox-retention-sweeper', true, () => container.outboxRetentionSweeper.isFresh(at)],
         // E1: the legacy-data compaction executor; idle (and fresh) unless one was requested.
-        ['legacy-compaction-executor', true, () => container.legacyCompactionExecutor.isFresh(now)],
+        ['legacy-compaction-executor', true, () => container.legacyCompactionExecutor.isFresh(at)],
         [
           'idempotency-retention-sweeper',
           true,
-          () => container.idempotencyRetentionSweeper.isFresh(now),
+          () => container.idempotencyRetentionSweeper.isFresh(at),
         ],
         // HF-A7: support's staged reply files. No flag: the bytes it clears count against the
         // tenant's staging bound, and a stalled sweep would refuse support's next file.
-        ['ticket-reply-file-sweeper', true, () => container.ticketReplyFileSweeper.isFresh(now)],
+        ['ticket-reply-file-sweeper', true, () => container.ticketReplyFileSweeper.isFresh(at)],
         // Phase A2: direct-message files, for the same reason as the line above.
-        [
-          'direct-message-file-sweeper',
-          true,
-          () => container.directMessageFileSweeper.isFresh(now),
-        ],
+        ['direct-message-file-sweeper', true, () => container.directMessageFileSweeper.isFresh(at)],
         // The lane that closes an unpaid payment and the order it was against.
         // No flag: a payment nothing expires is the defect it exists to close, and an
         // installation that could switch it off would be one whose orders say they
         // are awaiting payment for ever. A pass that finds nothing still counts as
         // progress — see `PaymentExpiryLoop`, where "nothing was due" is the healthy
         // answer most of the time.
-        ['payment-expiry', true, () => container.paymentExpiryLoop.isFresh(now)],
+        ['payment-expiry', true, () => container.paymentExpiryLoop.isFresh(at)],
         // The external payment gateway lane (WP11A). No flag: an attempt nobody creates
         // or asks about is a customer who paid and was never credited, and silence is
         // exactly what a stalled lane looks like.
-        ['gateway-payments', true, () => container.gatewayPaymentLoop.isFresh(now)],
+        ['gateway-payments', true, () => container.gatewayPaymentLoop.isFresh(at)],
         // Package FX: the central exchange rate's refresh. No flag on the LOOP: a pass
         // reads the feature inside and does nothing while it is off, so a stalled lane is
         // visible whatever an operator has switched on. Its failure mode is a quote that
         // silently goes stale and then refuses every central-rate invoice.
-        ['fx-refresh', true, () => container.fxRefreshLoop.isFresh(now)],
+        ['fx-refresh', true, () => container.fxRefreshLoop.isFresh(at)],
         // The lane that warns a customer before their service runs out of days or
         // traffic. No flag, and for the reason the two either side of it have none:
         // the alternative to warning them is finding out when it has already
         // happened, and an installation that could switch it off would be one whose
         // customers are told nothing until their configuration stops working. Its
         // failure mode is silence, so it is health-checked rather than trusted.
-        ['service-reminders', true, () => container.serviceReminderLoop.isFresh(now)],
+        ['service-reminders', true, () => container.serviceReminderLoop.isFresh(at)],
         // Round 4 PR-D: the nightly reports to the REPORTS topic. No flag on the loop: a
         // pass reads the lane's own flag and the report switches inside and does nothing
         // while they are off, so a stalled lane is visible whatever an operator switched.
-        ['nightly-reports', true, () => container.nightlyReportLoop.isFresh(now)],
-        ['data-compaction', true, () => container.dataCompactionLoop.isFresh(now)],
+        ['nightly-reports', true, () => container.nightlyReportLoop.isFresh(at)],
+        ['data-compaction', true, () => container.dataCompactionLoop.isFresh(at)],
         // WP-A9: pending-payment and wallet low-balance reminders. Always running — each
         // sweep reads its own flag inside its transaction and does nothing when it is off —
         // so a stalled loop is visible whatever an operator has switched on.
-        ['customer-reminders', true, () => container.customerReminderLoop.isFresh(now)],
+        ['customer-reminders', true, () => container.customerReminderLoop.isFresh(at)],
         // Round N, C1: the lane that starts and completes campaigns on their window. No flag:
         // a campaign that never reads ACTIVE or COMPLETED is an operator told the wrong
         // thing, and silence is what a stalled lane looks like. Its prices do not depend on
         // it (the rules carry their own window), which is why it is watched, not trusted.
-        ['campaign-schedule', true, () => container.campaignScheduleLoop.isFresh(now)],
+        ['campaign-schedule', true, () => container.campaignScheduleLoop.isFresh(at)],
         // Telegram message-state retention. No flag: it bounds two tables every chat grows.
         [
           'telegram-message-retention',
           true,
-          () => container.telegramMessageRetentionLoop.isFresh(now),
+          () => container.telegramMessageRetentionLoop.isFresh(at),
         ],
         // R10 D4: the gift-card sweep. No flag: an expired export must be purged whether or not
         // the feature is on now, because the plaintext codes inside it outlive the switch.
-        ['gift-card-sweep', true, () => container.giftCardSweepLoop.isFresh(now)],
+        ['gift-card-sweep', true, () => container.giftCardSweepLoop.isFresh(at)],
         // Round P: the command-menu sync lane. No flag: a menu nobody registers is a bot
         // whose customers type what they should be able to tap, and silence is what a
         // stalled lane looks like. The menu is a convenience, so it is watched, not trusted.
-        ['bot-command-sync', true, () => container.botCommandSyncLoop.isFresh(now)],
+        ['bot-command-sync', true, () => container.botCommandSyncLoop.isFresh(at)],
         // The lane that tells a customer something they did not ask for. No flag, for
         // the same reason as the line above: before Phase 4H an operator's rejection and
         // the expiry sweep both happened while the customer was not looking and nothing
@@ -170,41 +169,49 @@ async function main(): Promise<void> {
         // silently went back to that. Its failure mode is the dispatcher's — silence
         // that looks exactly like nothing being wrong — so it is health-checked rather
         // than trusted.
-        ['customer-notifications', true, () => container.customerNotificationLoop.isFresh(now)],
+        ['customer-notifications', true, () => container.customerNotificationLoop.isFresh(at)],
         // TB2: the business outbound lane. A stalled one is an operator's reply that never
         // leaves, which looks exactly like nothing being wrong.
-        ['business-outbound', true, () => container.businessOutboundLoop.isFresh(now)],
+        ['business-outbound', true, () => container.businessOutboundLoop.isFresh(at)],
         // D5: and the watch that raises a stalled assistant role.
-        ['support-assistant-watch', true, () => container.supportAssistantWatchLoop.isFresh(now)],
+        ['support-assistant-watch', true, () => container.supportAssistantWatchLoop.isFresh(at)],
+        // Phase 4 PR-2: the knowledge refresh. No flag on the loop: with the setting off a pass
+        // reads one setting and does nothing, and still progresses.
+        [
+          'support-knowledge-refresh',
+          true,
+          () => container.supportKnowledgeRefreshLoop.isFresh(at),
+        ],
         // Round N: the broadcast lane. No flag: a confirmed broadcast nobody sends is a
         // report that says "sending" for ever, and silence is what a stalled lane looks like.
-        ['broadcasts', true, () => container.broadcastLoop.isFresh(now)],
+        ['broadcasts', true, () => container.broadcastLoop.isFresh(at)],
         // Phase E3: scheduled maintenance windows start on time.
-        ['incident-scheduler', true, () => container.incidentSchedulerLoop.isFresh(now)],
+        ['incident-scheduler', true, () => container.incidentSchedulerLoop.isFresh(at)],
         // Round N: and the mass-operation lane, for the same reason.
-        ['bulk-operations', true, () => container.bulkOperationLoop.isFresh(now)],
+        ['bulk-operations', true, () => container.bulkOperationLoop.isFresh(at)],
         // The administrators' receipt push (ADR-0031). No flag, for the customer lane's
         // reason: a receipt nobody is told about is a customer waiting on a reviewer who
         // does not know, and silence is exactly what a stalled lane looks like.
-        ['receipt-review-push', true, () => container.receiptReviewPushLoop.isFresh(now)],
+        ['receipt-review-push', true, () => container.receiptReviewPushLoop.isFresh(at)],
         // WP-A4: the operations log group's checks and topics. No flag, for the reason the
         // dispatcher below is watched: a group nobody checks is a group that silently stops
         // receiving the reports, and the symptom is silence.
-        ['ops-group', true, () => container.opsGroupMaintainer.isFresh(now)],
+        ['ops-group', true, () => container.opsGroupMaintainer.isFresh(at)],
         [
           'notification-dispatcher',
           config.NOTIFICATION_DISPATCH_ENABLED,
-          () => container.notificationDispatcher.isFresh(now),
+          () => container.notificationDispatcher.isFresh(at),
         ],
         // Always running since spec §13.2: whether a backup is TAKEN is a setting read on
         // every tick, so a stalled loop is visible whatever the schedule says. Fresh from
         // `start()` for one slack window, and an immediate first tick — so readiness no
         // longer waits on a first tick a whole `BACKUP_TICK_MS` away (spec §14).
-        ['backup-scheduler', true, () => container.backupScheduler.isFresh(now)],
+        ['backup-scheduler', true, () => container.backupScheduler.isFresh(at)],
         // E5: archive retention, plaintext debris, disk space and the overdue alert. No
         // flag: the volume fills and the plaintext lingers whether the schedule is on or not.
-        ['backup-housekeeping', true, () => container.backupHousekeeping.isFresh(now)],
+        ['backup-housekeeping', true, () => container.backupHousekeeping.isFresh(at)],
       ];
+      const loops = loopsAt(now);
       const stalled = stalledLoops(loops);
       // Not awaited, and it never throws: reporting must not slow or fail the heartbeat.
       // Every loop, disabled ones as not stalled, so switching one off closes its condition.
@@ -213,7 +220,16 @@ async function main(): Promise<void> {
         // Named, because "the worker is unhealthy" sends an operator looking at
         // the whole process when one loop is the answer.
         container.logger.error({ stalled }, 'worker loops have stopped making progress');
-        return false;
+        // R12 F2 (Codex P1 on #359): unhealthy, as before — but the liveness watchdog
+        // exits the worker only when a loop has made no progress for its window PLUS
+        // HEARTBEAT_LIVENESS_ALLOWANCE_MS. A loop tick progresses only when it completes,
+        // so a long legitimate tick (a provider inquiry at its timeout, a slow Telegram
+        // send batch) is stale for readiness long before it is hung. A backup in flight
+        // is already fresh for as long as its lease heartbeats.
+        return {
+          healthy: false,
+          alive: stalledLoops(loopsAt(now - config.HEARTBEAT_LIVENESS_ALLOWANCE_MS)).length === 0,
+        };
       }
       return true;
     },
@@ -301,6 +317,9 @@ async function main(): Promise<void> {
   // D5: and the watch over the `assistant` role, which no other signal covers: due AI work left
   // unclaimed raises `support.assistant.stalled`, and the assistant closes it once it runs.
   container.supportAssistantWatchLoop.start();
+  // Phase 4 PR-2: and the automatic knowledge refresh (debounced 2 min + nightly), off until the
+  // owner turns `support.knowledge.auto_refresh` on; it never messages a customer.
+  container.supportKnowledgeRefreshLoop.start();
   // Round N: and the broadcast lane — frozen recipients, paced per bot, at most once.
   container.broadcastLoop.start();
   container.incidentSchedulerLoop.start();

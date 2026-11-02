@@ -21,17 +21,24 @@ import type {
   ExternalGatewayAdapter,
   GatewayCreateOutcome,
   GatewayCreateRequest,
+  GatewayInquiryContext,
   GatewayInquiryOutcome,
   GatewayWebhookHint,
 } from '../application/gateway-invoice-ports.js';
 import {
+  TONPAYS_HELD_CODE,
   TONPAYS_ORDER_ID_RANDOM_BYTES,
   classifyTonPaysError,
   tomanAmountOf,
   tonpaysOrderId,
-  tonpaysVerdict,
+  tonpaysInquiryVerdict,
 } from '../domain/tonpays.js';
 import { verifyTonPaysWebhook } from './tonpays-signature.js';
+import {
+  tonpaysRetryAfterMs,
+  type TonPaysRateLimiter,
+  type TonPaysRoute,
+} from './tonpays-rate-limiter.js';
 
 /**
  * TonPays over HTTP, and the only code in the installation that speaks it (WP11A).
@@ -177,10 +184,48 @@ export function boundedCode(code: string): string {
  */
 export type UnreadableShape = 'html' | 'text' | 'empty' | 'too_large' | 'stream';
 
+/*
+ * Round 11 A8: `retryAfterMs` rides on an answer whose status was 429 — how long every call on
+ * this key now waits (the provider's `Retry-After`, else the limiter's back-off).
+ */
 export type Raw =
-  | { readonly kind: 'BODY'; readonly status: number; readonly body: unknown }
-  | { readonly kind: 'UNREADABLE'; readonly status: number; readonly shape: UnreadableShape }
+  | {
+      readonly kind: 'BODY';
+      readonly status: number;
+      readonly body: unknown;
+      readonly retryAfterMs?: number;
+    }
+  | {
+      readonly kind: 'UNREADABLE';
+      readonly status: number;
+      readonly shape: UnreadableShape;
+      readonly retryAfterMs?: number;
+    }
   | { readonly kind: 'NO_RESPONSE'; readonly reason: string };
+
+/** What a TonPays request produced: an answer, none, or — Round 11 A8 — HELD, never sent. */
+export type TonPaysRaw = Raw | { readonly kind: 'HELD'; readonly retryAfterMs: number };
+
+/** What a TonPays adapter is built with. `limiter` is the shared one (Round 11 A8). */
+export interface TonPaysClientOptions {
+  readonly fetch?: FetchLike;
+  readonly timeoutMs?: number;
+  readonly random?: (size: number) => Uint8Array;
+  readonly limiter?: TonPaysRateLimiter;
+}
+
+/**
+ * The fields a RATE_LIMITED outcome takes from a held call or a 429: how long to wait, and —
+ * only for a call the limiter held — that nothing was sent.
+ */
+export function rateLimitFacts(raw: TonPaysRaw): {
+  readonly retryAfterMs?: number;
+  readonly notSent?: true;
+} {
+  if (raw.kind === 'HELD') return { retryAfterMs: raw.retryAfterMs, notSent: true };
+  if (raw.kind === 'NO_RESPONSE' || raw.retryAfterMs === undefined) return {};
+  return { retryAfterMs: raw.retryAfterMs };
+}
 
 /** Why a request got no answer, from the error alone and never from its message text. */
 export function transportReason(error: unknown, aborted: boolean): string {
@@ -308,13 +353,7 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
   readonly callBudgetPerMinute = TONPAYS_CALL_BUDGET_PER_MINUTE;
   readonly inquiryBudgetPerMinute = TONPAYS_INQUIRY_BUDGET_PER_MINUTE;
 
-  constructor(
-    private readonly options: {
-      readonly fetch?: FetchLike;
-      readonly timeoutMs?: number;
-      readonly random?: (size: number) => Uint8Array;
-    } = {},
-  ) {}
+  constructor(private readonly options: TonPaysClientOptions = {}) {}
 
   /** TonPays bills in Toman: the same unit, or no amount. It never converts by a rate. */
   providerAmountOf(amount: Money, conversion: ResolvedConversion): bigint | null {
@@ -352,6 +391,10 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
     }
 
     const raw = await this.call('POST', TONPAYS_CREATE_PATH, apiKey, body);
+    // Held by Nexa's own limiter: never sent, so certainly not created — retried, same order id.
+    if (raw.kind === 'HELD') {
+      return { kind: 'RATE_LIMITED', code: TONPAYS_HELD_CODE, ...rateLimitFacts(raw) };
+    }
     if (raw.kind === 'NO_RESPONSE') return { kind: 'UNKNOWN', code: `http.${raw.reason}` };
     if (raw.kind === 'UNREADABLE') {
       return { kind: 'UNKNOWN', code: boundedCode(unreadableCode(raw)) };
@@ -401,7 +444,12 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
       case 'CONFIGURATION':
         return { kind: 'REFUSED', code: boundedCode(code), configuration: true, httpStatus };
       case 'RATE_LIMITED':
-        return { kind: 'RATE_LIMITED', code: boundedCode(code), httpStatus };
+        return {
+          kind: 'RATE_LIMITED',
+          code: boundedCode(code),
+          httpStatus,
+          ...rateLimitFacts(raw),
+        };
       case 'AMBIGUOUS':
         return { kind: 'AMBIGUOUS', code: boundedCode(code), httpStatus };
       case 'NOT_FOUND':
@@ -410,9 +458,16 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
     }
   }
 
-  async inquire(apiKey: string, invoiceId: string): Promise<GatewayInquiryOutcome> {
+  async inquire(
+    apiKey: string,
+    invoiceId: string,
+    context?: GatewayInquiryContext,
+  ): Promise<GatewayInquiryOutcome> {
     // The documented POST form, so the invoice id travels in the body rather than a path.
     const raw = await this.call('POST', TONPAYS_CHECK_PATH, apiKey, { invoice_id: invoiceId });
+    if (raw.kind === 'HELD') {
+      return { kind: 'RATE_LIMITED', code: TONPAYS_HELD_CODE, ...rateLimitFacts(raw) };
+    }
     if (raw.kind === 'NO_RESPONSE') return { kind: 'FAILED', code: `http.${raw.reason}` };
     if (raw.kind === 'UNREADABLE') {
       return { kind: 'FAILED', code: boundedCode(unreadableCode(raw)) };
@@ -427,28 +482,40 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
           ),
         };
       }
+      const requestAmount = metadataAmount(parsed.data.request_amount);
+      /*
+       * R12 F1 item 5: an approval whose `request_amount` is present and is not the amount
+       * Nexa sent (Toman, the provider's unit) is a MISMATCH, held and never settled.
+       */
+      const judged = tonpaysInquiryVerdict({
+        status: parsed.data.status,
+        paid: parsed.data.paid,
+        requestAmount,
+        sentAmount: context?.sentAmount ?? null,
+      });
       return {
         kind: 'OBSERVED',
         invoiceId: parsed.data.invoice_id,
         orderId: parsed.data.order_id,
         status: parsed.data.status,
         paid: typeof parsed.data.paid === 'boolean' ? parsed.data.paid : null,
-        verdict: tonpaysVerdict(parsed.data.status, parsed.data.paid),
-        requestAmount: metadataAmount(parsed.data.request_amount),
+        verdict: judged.verdict,
+        requestAmount,
         finalAmount: metadataAmount(parsed.data.final_amount),
+        ...(judged.mismatchReason === null ? {} : { mismatchReason: judged.mismatchReason }),
       };
     }
     const code = this.errorCodeOf(raw.body);
     if (code === null) {
       return raw.status === 429
-        ? { kind: 'RATE_LIMITED', code: 'http.429' }
+        ? { kind: 'RATE_LIMITED', code: 'http.429', ...rateLimitFacts(raw) }
         : { kind: 'FAILED', code: `http.${String(raw.status)}` };
     }
     switch (classifyTonPaysError(code)) {
       case 'CONFIGURATION':
         return { kind: 'CONFIGURATION', code: boundedCode(code) };
       case 'RATE_LIMITED':
-        return { kind: 'RATE_LIMITED', code: boundedCode(code) };
+        return { kind: 'RATE_LIMITED', code: boundedCode(code), ...rateLimitFacts(raw) };
       case 'NOT_FOUND':
         return { kind: 'NOT_FOUND', code: boundedCode(code) };
       case 'AMBIGUOUS':
@@ -504,12 +571,13 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
     path: string,
     apiKey: string,
     body: Record<string, unknown>,
-  ): Promise<Raw> {
+  ): Promise<TonPaysRaw> {
     return tonpaysRequest(this.options, {
       method,
       url: `${TONPAYS_BASE_URL}${path}`,
       apiKey,
       body: { kind: 'JSON', value: body },
+      route: 'TONPAYS',
     });
   }
 }
@@ -518,22 +586,68 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
  * ONE TonPays HTTP request, for both adapters: the key in its header and nowhere else,
  * `redirect: 'error'`, the timeout, the bounded streaming read and the transport classifier.
  * Refuses to run inside a database transaction.
+ *
+ * Round 11 A8: with a limiter, every request first takes a token from its key's bucket (or is
+ * HELD, unsent), and a 429 — readable or not — pauses the key and carries the pause back as
+ * `retryAfterMs`. Every TonPays endpoint dials through here, so none can skip it.
  */
 export async function tonpaysRequest(
-  options: { readonly fetch?: FetchLike; readonly timeoutMs?: number },
-  request: {
-    readonly method: 'GET' | 'POST';
-    readonly url: string;
-    readonly apiKey: string;
-    readonly body:
-      | { readonly kind: 'JSON'; readonly value: Record<string, unknown> }
-      | { readonly kind: 'MULTIPART'; readonly contentType: string; readonly bytes: Uint8Array }
-      | { readonly kind: 'NONE' };
+  options: {
+    readonly fetch?: FetchLike;
+    readonly timeoutMs?: number;
+    readonly limiter?: TonPaysRateLimiter;
   },
-): Promise<Raw> {
+  request: TonPaysHttpRequest,
+): Promise<TonPaysRaw> {
   // The provider is dialled only after the caller has committed. A call inside a
   // transaction could not be rolled back, and would hold a connection for its length.
   assertOutsideTransaction('A TonPays call');
+  const limiter = options.limiter;
+  if (limiter !== undefined) {
+    const gate = await limiter.acquire(request.route, request.apiKey);
+    if (gate.kind === 'HELD') return { kind: 'HELD', retryAfterMs: gate.retryAfterMs };
+  }
+  /*
+   * Codex P2 on #351: the pause is taken the moment the STATUS and headers arrive, not after
+   * the body. A 429 whose body then stalls until the timeout is NO_RESPONSE (a create stays
+   * UNKNOWN), but the key is paused all the same — otherwise the next row hits it at once.
+   */
+  let retryAfterMs: number | undefined;
+  const raw = await tonpaysSend(options, request, (status, retryAfter) => {
+    if (status !== 429) {
+      limiter?.answered(request.apiKey);
+      return;
+    }
+    retryAfterMs =
+      limiter !== undefined
+        ? limiter.rateLimited(request.route, request.apiKey, retryAfter)
+        : (tonpaysRetryAfterMs(retryAfter, new Date()) ?? undefined);
+  });
+  if (raw.kind === 'NO_RESPONSE' || raw.status !== 429 || retryAfterMs === undefined) return raw;
+  return { ...raw, retryAfterMs };
+}
+
+export interface TonPaysHttpRequest {
+  readonly method: 'GET' | 'POST';
+  readonly url: string;
+  readonly apiKey: string;
+  readonly body:
+    | { readonly kind: 'JSON'; readonly value: Record<string, unknown> }
+    | { readonly kind: 'MULTIPART'; readonly contentType: string; readonly bytes: Uint8Array }
+    | { readonly kind: 'NONE' };
+  /** Whose pace the call takes: the route the key belongs to (Round 11 A8). */
+  readonly route: TonPaysRoute;
+}
+
+/**
+ * The request itself. `onHeaders` is told the status and a 429's `Retry-After` as soon as the
+ * headers arrive, before the body is read.
+ */
+async function tonpaysSend(
+  options: { readonly fetch?: FetchLike; readonly timeoutMs?: number },
+  request: TonPaysHttpRequest,
+  onHeaders: (status: number, retryAfter: string | null) => void,
+): Promise<Raw> {
   const doFetch: FetchLike = options.fetch ?? ((url, init) => fetch(url, init));
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? TONPAYS_TIMEOUT_MS);
@@ -568,6 +682,10 @@ export async function tonpaysRequest(
        */
       return { kind: 'NO_RESPONSE', reason: transportReason(error, controller.signal.aborted) };
     }
+    onHeaders(
+      response.status,
+      response.status === 429 ? response.headers.get('retry-after') : null,
+    );
     let text: string | null;
     try {
       text = await readBounded(response, MAX_RESPONSE_BYTES);
@@ -576,9 +694,15 @@ export async function tonpaysRequest(
         ? { kind: 'NO_RESPONSE', reason: 'timeout' }
         : { kind: 'UNREADABLE', status: response.status, shape: 'stream' };
     }
-    if (text === null) return { kind: 'UNREADABLE', status: response.status, shape: 'too_large' };
+    if (text === null) {
+      return { kind: 'UNREADABLE', status: response.status, shape: 'too_large' };
+    }
     try {
-      return { kind: 'BODY', status: response.status, body: JSON.parse(text) as unknown };
+      return {
+        kind: 'BODY',
+        status: response.status,
+        body: JSON.parse(text) as unknown,
+      };
     } catch {
       const trimmed = text.trimStart();
       const contentType = response.headers.get('content-type') ?? '';

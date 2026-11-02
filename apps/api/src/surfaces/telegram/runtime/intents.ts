@@ -32,6 +32,13 @@ export const BOT_INTENTS = [
   'CATALOG_PAGE',
   'CATEGORY',
   /*
+   * R11 A11: «🔁 سفارش دوباره» under an expired or cancelled order — the order's category's
+   * product list, as a NEW message. Its own intent rather than `CATEGORY`, which is gated to a
+   * message still showing the catalogue: the button sits on an ENDED order's closed screen.
+   * Read-only: nothing is drafted until a plan is tapped, and nothing ordered until confirmed.
+   */
+  'REORDER_CATEGORY',
+  /*
    * Take a free trial (WP6-A; R1). Carries nothing: which panels offer one, the limit and
    * the panel are all decided on the server when the tap arrives — straight to the claim
    * when one panel offers a trial, to a choice when several do.
@@ -98,6 +105,18 @@ export const BOT_INTENTS = [
    */
   'REFERRAL_INVITE',
   'ORDER_CANCEL_ASK',
+  /* R12 F3 item 7: the wallet's last movements, a page at a time (`wh:` + optional keyset token). */
+  'WALLET_HISTORY',
+  /*
+   * R12 F3 item 2: leaving a typed-input prompt. INPUT_BACK names the order whose pre-invoice
+   * is drawn again; INPUT_CANCEL goes to the main menu; CUSTOM_SERVICE_BACK to the locations.
+   * Each closes the customer's open text window first and writes nothing else.
+   */
+  'INPUT_BACK',
+  /* R12 F3 item 9: the status of the live payment an order past its deadline is waiting on. */
+  'ORDER_PAYMENT_STATUS',
+  'INPUT_CANCEL',
+  'CUSTOM_SERVICE_BACK',
   'ORDER_CANCEL',
   'SERVICES',
   /*

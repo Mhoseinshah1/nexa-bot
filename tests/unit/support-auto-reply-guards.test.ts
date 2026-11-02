@@ -18,10 +18,13 @@ import {
   autoPreflight,
   clarifyingStreakOf,
   customerTextsSinceReply,
+  moneyGuardWindow,
+  otherStreakOf,
   foldCustomerText,
   mentionsMoneyTopic,
   type AutoContextFlags,
 } from '../../apps/api/src/modules/control/support-ai/domain/auto-reply-guards';
+import { SUPPORT_AI_ACCOUNT_REVIEW_TOPICS, businessHandoffKindOf } from '@nexa/contracts';
 
 /**
  * TB7 — the pure guard evaluator (program §26). Every guard must pass for an automatic reply,
@@ -59,6 +62,7 @@ const guards = (over: {
   config?: Partial<typeof config>;
   flags?: Partial<AutoContextFlags>;
   clarifyingStreak?: number;
+  otherStreak?: number;
 }) =>
   autoDecisionGuards({
     decision: { ...decision, ...over.decision },
@@ -67,6 +71,7 @@ const guards = (over: {
     knownAliases: known,
     knownKnowledgeAliases: knownKnowledge,
     clarifyingStreak: over.clarifyingStreak ?? 0,
+    otherStreak: over.otherStreak ?? 0,
   });
 
 /** A safe clarifying question (hotfix 2026-10-06): the question is `replyText`. */
@@ -171,25 +176,27 @@ describe('automatic-reply guards (TB7)', () => {
       outcome: 'guard_topic_allowlist',
       reason: 'TOPIC_NOT_ALLOWED',
     });
-    // a hard topic, and a person asked for, whatever the decision kind
+    // a hard topic, and a person asked for, whatever the decision kind (Phase 4 PR-1: OTHER
+    // gets one clarifying question first; the second in a row hands off)
     for (const topic of SUPPORT_AI_HANDOFF_TOPICS) {
-      expect(guards({ decision: askWith({ topic }) }), topic).toMatchObject({
+      expect(guards({ decision: askWith({ topic }), otherStreak: 1 }), topic).toMatchObject({
         pass: false,
         outcome: topic === 'HUMAN_REQUESTED' ? 'guard_human_requested' : 'guard_handoff_topic',
       });
     }
-    // identity: an unlinked customer is asked only on a general topic
+    // identity: an unlinked customer's account question gets the bot link (Phase 4 PR-1)
     expect(
       guards({ decision: askWith({ topic: 'SERVICE_INFO' }), flags: { identityLinked: false } }),
-    ).toMatchObject({ outcome: 'guard_identity', reason: 'IDENTITY_UNVERIFIED' });
+    ).toMatchObject({ outcome: 'sent_link', reason: 'IDENTITY_UNVERIFIED', sendLink: true });
     expect(guards({ decision: ask, flags: { identityLinked: false } })).toEqual({ pass: true });
-    // account review
-    expect(guards({ decision: ask, flags: { hasUnderReviewPayment: true } })).toMatchObject({
+    // account review (Phase 4 PR-1: only the account topics)
+    const askAccount = askWith({ topic: 'SERVICE_INFO' });
+    expect(guards({ decision: askAccount, flags: { hasUnderReviewPayment: true } })).toMatchObject({
       outcome: 'guard_account_review',
     });
-    expect(guards({ decision: ask, flags: { hasUnreconciledService: true } })).toMatchObject({
-      outcome: 'guard_account_review',
-    });
+    expect(guards({ decision: askAccount, flags: { hasUnreconciledService: true } })).toMatchObject(
+      { outcome: 'guard_account_review' },
+    );
     // confidence
     expect(guards({ decision: askWith({ confidence: 'MEDIUM' }) })).toMatchObject({
       outcome: 'guard_confidence',
@@ -315,18 +322,115 @@ describe('automatic-reply guards (TB7)', () => {
         flags: { identityLinked: false },
       });
       expect(verdict.pass, topic).toBe(general);
+      // Phase 4 PR-1: an account topic is answered with the bot's start link, not handed off.
       if (!general)
-        expect(verdict).toMatchObject({ outcome: 'guard_identity', reason: 'IDENTITY_UNVERIFIED' });
+        expect(verdict).toMatchObject({
+          outcome: 'sent_link',
+          reason: 'IDENTITY_UNVERIFIED',
+          sendLink: true,
+        });
     }
   });
 
-  it('a payment under review or an unreconciled service hands off', () => {
-    expect(guards({ flags: { hasUnderReviewPayment: true } })).toMatchObject({
+  it('a payment under review or an unreconciled service hands off — on an account topic', () => {
+    const account = { topic: 'TRAFFIC_AND_EXPIRY' as const, factRefs: [] };
+    expect(guards({ decision: account, flags: { hasUnderReviewPayment: true } })).toMatchObject({
       outcome: 'guard_account_review',
     });
-    expect(guards({ flags: { hasUnreconciledService: true } })).toMatchObject({
+    expect(guards({ decision: account, flags: { hasUnreconciledService: true } })).toMatchObject({
       outcome: 'guard_account_review',
     });
+  });
+
+  it('Phase 4 PR-1: the account-review guard reads only the four account topics', () => {
+    for (const topic of SUPPORT_AI_SAFE_TOPICS) {
+      const verdict = guards({
+        decision: { topic, factRefs: [] },
+        flags: { hasUnderReviewPayment: true, hasUnreconciledService: true },
+      });
+      const account = (SUPPORT_AI_ACCOUNT_REVIEW_TOPICS as readonly string[]).includes(topic);
+      expect(verdict.pass, topic).toBe(!account);
+    }
+    // App setup with a payment under review goes through.
+    expect(
+      guards({ decision: { topic: 'APP_SETUP' }, flags: { hasUnderReviewPayment: true } }),
+    ).toEqual({ pass: true });
+  });
+
+  it('Phase 4 PR-1: a cited service decides, not every historical one', () => {
+    const cited = { topic: 'SERVICE_INFO' as const, factRefs: ['S1'] };
+    // The cited service is fine; an old unreconciled one elsewhere does not block.
+    expect(
+      guards({
+        decision: cited,
+        flags: { hasUnreconciledService: true, unreconciledCited: false },
+      }),
+    ).toEqual({ pass: true });
+    // The cited service is unreconciled: blocked.
+    expect(
+      guards({
+        decision: cited,
+        flags: { hasUnreconciledService: false, unreconciledCited: true },
+      }),
+    ).toMatchObject({ outcome: 'guard_account_review' });
+    // Citing none: a recent unreconciled service blocks.
+    expect(
+      guards({
+        decision: { topic: 'SERVICE_INFO', factRefs: [] },
+        flags: { hasUnreconciledService: true },
+      }),
+    ).toMatchObject({ outcome: 'guard_account_review' });
+  });
+
+  it('Phase 4 PR-1: OTHER — one clarifying question, the second in a row hands off (soft)', () => {
+    const other = askWith({ topic: 'OTHER' });
+    expect(guards({ decision: other, otherStreak: 0 })).toEqual({ pass: true });
+    // Even when OTHER is not an allowlisted topic (it never can be).
+    expect(guards({ decision: other, otherStreak: 0, config: { autoTopics: [] } })).toEqual({
+      pass: true,
+    });
+    expect(guards({ decision: other, otherStreak: 1 })).toMatchObject({
+      outcome: 'guard_handoff_topic',
+      reason: 'HANDOFF_TOPIC',
+    });
+    // A REPLY labelled OTHER is not a question: it hands off.
+    expect(guards({ decision: { topic: 'OTHER' }, otherStreak: 0 })).toMatchObject({
+      outcome: 'guard_handoff_topic',
+    });
+    expect(businessHandoffKindOf('HANDOFF_TOPIC', 'OTHER')).toBe('SOFT');
+    expect(otherStreakOf([{ decision: 'ASK_CLARIFYING_QUESTION', topic: 'OTHER' }])).toBe(1);
+    expect(
+      otherStreakOf([
+        { decision: 'REPLY', topic: 'APP_SETUP' },
+        { decision: 'ASK_CLARIFYING_QUESTION', topic: 'OTHER' },
+      ]),
+    ).toBe(0);
+  });
+
+  it('Phase 4 PR-1: the hard list is sticky, the rest soft', () => {
+    for (const reason of ['HUMAN_REQUESTED', 'CUSTOMER_BLOCKED', 'SEND_OUTCOME_UNKNOWN'] as const) {
+      expect(businessHandoffKindOf(reason), reason).toBe('HARD');
+    }
+    // The money guard (no topic) and every hard topic.
+    expect(businessHandoffKindOf('HANDOFF_TOPIC', null)).toBe('HARD');
+    expect(businessHandoffKindOf('HANDOFF_TOPIC', 'REFUND')).toBe('HARD');
+    expect(businessHandoffKindOf('AI_REQUESTED', 'CREDENTIALS')).toBe('HARD');
+    expect(businessHandoffKindOf('AI_REQUESTED', 'APP_SETUP')).toBe('SOFT');
+    for (const reason of [
+      'TOPIC_NOT_ALLOWED',
+      'LOW_CONFIDENCE',
+      'INSUFFICIENT_GROUNDING',
+      'NO_PROGRESS',
+      'INBOUND_FLOOD',
+      'REPEATED_ADVICE',
+      'AI_OUTPUT_INVALID',
+      'UNSUPPORTED_CONTENT',
+      'REPLY_STALE',
+      'OUTPUT_POLICY',
+      'SUSPICIOUS_PROBING',
+    ] as const) {
+      expect(businessHandoffKindOf(reason), reason).toBe('SOFT');
+    }
   });
 
   it('confidence below the configured minimum hands off; LOW never passes', () => {
@@ -495,7 +599,7 @@ describe('automatic-reply guards (TB7)', () => {
  * D9 — the deterministic money guard over what the customer wrote. A table, so a term that
  * stops matching (or a troubleshooting phrase that starts to) fails one named row.
  */
-describe('automatic-reply money guard (D9)', () => {
+describe('automatic-reply money guard (D9, narrowed by Phase 4 PR-1)', () => {
   const ZWNJ = '\u200c';
   const money: readonly string[] = [
     'وصل نمیشه، پولمو پس بدید',
@@ -519,40 +623,49 @@ describe('automatic-reply money guard (D9)', () => {
     'پرداخت کردم ولی سرویس نیومد',
     'پرداختم انجام نشد',
     'واریز کردم',
-    'تراکنش ناموفق بود',
     'کارت به کارت کردم',
     'فیش واریزی رو فرستادم',
     'پول از حسابم کسر شد',
     'از کارتم برداشت شد',
-    'موجودی کیف پولم چقدره',
-    'کیف پول',
-    'كيف پول', // Arabic kaf and yeh
-    'شارژ حساب',
     'وجهم رو برگردونید',
     'I want a refund',
     'REFUND please',
     'give my money back',
     'I paid twice',
-    'payment failed',
-    'my wallet balance',
     'chargeback',
-    'transaction declined',
     'poolamo pas bedid',
     'pardakht kardam',
     // B2: ZWNJ compounds.
     `کیف${ZWNJ}پولم خالی شد`,
-    `کیف${ZWNJ}پولم`,
-    `پول${ZWNJ}مو`,
     `پس${ZWNJ}بدید`,
     // Review item 3: currency, money taken from the account, a top-up, Finglish, accents.
     'صد تومن کم شد',
-    '۵۰ هزار تومان',
-    'ریال',
     'از حسابم کم شد',
     'شارژ کردم ولی نیومد',
     'pulamo bedid',
     're fund',
     'réfund please',
+    // Phase 4 PR-1: the narrowed guard — refund, dispute, deduction, «I paid».
+    'پول کم شد ولی سرویس نیومد',
+    'خرید کردم ولی هنوز لینک نیومد',
+    'سفارش دادم اما سرویس فعال نشد',
+    'دو بار از حسابم پول کم شد',
+    'کلاهبرداری کردید',
+    'شکایت میکنم',
+    'اعتراض به تراکنش دارم',
+    'پول ریختم ولی خبری نیست',
+    'vasl nemishe pardakht kardam vali nayomad',
+    'kharid kardam vali hanooz link nayomad',
+    'pool az hesabam kam shod',
+    'poolam ro bargardoonid',
+    'kolahbardari',
+    'variz kardam',
+    'I have paid but did not receive the service',
+    'money was deducted and nothing came',
+    'this is a scam',
+    'I want to dispute this charge',
+    'charged but no service',
+    'I transferred the money yesterday',
   ];
   const safe: readonly (string | null)[] = [
     'سلام، سرویس من وصل نمیشه',
@@ -579,6 +692,37 @@ describe('automatic-reply money guard (D9)', () => {
     'sing-box connection error',
     'خطای اتصال میده',
     null,
+    // Phase 4 PR-1: a price, how to pay, how to top up, which methods — the model's.
+    'چند تومنه؟',
+    'قیمت سرویس یک ماهه چقدره',
+    'سرویس ۵۰ گیگ چند تومن میشه',
+    'چطوری پرداخت کنم؟',
+    'کارت به کارت میشه پرداخت کرد؟',
+    'با ارز دیجیتال میشه پرداخت کرد',
+    'کیف پولمو چطوری شارژ کنم',
+    'حداقل مبلغ شارژ چقدره',
+    'درگاه پرداخت دارید؟',
+    'میخوام پرداخت کنم',
+    'تمدید چند تومن میشه',
+    'تومن یا ریال؟',
+    'موجودی کیف پولم چقدره',
+    'کیف پول',
+    `کیف${ZWNJ}پولم`,
+    'شارژ حساب',
+    '۵۰ هزار تومان',
+    'حجمم کم شد',
+    'سرعتم کم شده',
+    'chand toman e?',
+    'gheymat chande',
+    'chetori pardakht konam',
+    'pardakht ba kart be kart mishe?',
+    'kife pool ro chetor sharj konam',
+    'how much is it',
+    'how do I pay',
+    'can I pay with crypto',
+    'what is the price of a 3 month plan',
+    'how do I top up my wallet',
+    'payment methods?',
   ] as const;
 
   it.each(money)('hands off «%s»', (text) => {
@@ -645,6 +789,42 @@ describe('automatic-reply money guard (D9)', () => {
       'پولمو پس بدید',
     ]);
     expect(autoMoneyGuard(customerTextsSinceReply(lines, 'وصل نمیشه')).pass).toBe(false);
+  });
+
+  it('Phase 4 PR-1: has at least 30 phrasings on each side', () => {
+    expect(money.length).toBeGreaterThanOrEqual(30);
+    expect(safe.filter((text) => text !== null).length).toBeGreaterThanOrEqual(30);
+  });
+
+  it('Phase 4 PR-1: the window is the trigger and the previous two customer lines only', () => {
+    const lines = [
+      { origin: 'INBOUND' as const, text: 'پولمو پس بدید' },
+      { origin: 'HUMAN' as const, text: 'انجام شد' },
+      { origin: 'INBOUND' as const, text: 'مرسی' },
+      { origin: 'INBOUND' as const, text: 'یک سؤال دیگه' },
+      { origin: 'INBOUND' as const, text: 'وصل نمیشه' },
+    ];
+    // The refund three lines back is outside the window.
+    expect(moneyGuardWindow(lines, 'وصل نمیشه')).not.toContain('پولمو پس بدید');
+    expect(autoMoneyGuard(moneyGuardWindow(lines, 'وصل نمیشه')).pass).toBe(true);
+    // Two lines back it is inside.
+    const near = [lines[0]!, lines[3]!, lines[4]!];
+    expect(autoMoneyGuard(moneyGuardWindow(near, 'وصل نمیشه')).pass).toBe(false);
+  });
+
+  it('review of PR #365: the window stops at the business’s last reply', () => {
+    const handled = [
+      { origin: 'INBOUND' as const, text: 'پولمو پس بدید' },
+      { origin: 'HUMAN' as const, text: 'بازگشت داده شد' },
+      { origin: 'INBOUND' as const, text: 'وصل نمیشه' },
+    ];
+    expect(moneyGuardWindow(handled, 'وصل نمیشه')).toEqual(['وصل نمیشه', 'وصل نمیشه']);
+    expect(autoMoneyGuard(moneyGuardWindow(handled, 'وصل نمیشه')).pass).toBe(true);
+    // Our own reply (an echo) ends it too; an away message does not.
+    const echoed = [handled[0]!, { origin: 'OWN_ECHO' as const, text: 'x' }, handled[2]!];
+    expect(autoMoneyGuard(moneyGuardWindow(echoed, 'وصل نمیشه')).pass).toBe(true);
+    const away = [handled[0]!, { origin: 'OFFLINE' as const, text: 'x' }, handled[2]!];
+    expect(autoMoneyGuard(moneyGuardWindow(away, 'وصل نمیشه')).pass).toBe(false);
   });
 
   it('folds Arabic letters, joiners and diacritics', () => {

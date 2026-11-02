@@ -49,6 +49,11 @@ export function rehearsalEnvironment(
     ...base,
     ...REHEARSAL_FORCED_SETTINGS,
     DATABASE_URL: input.databaseUrl,
+    // R12 F2: the rehearsal's stand-in panels listen on THIS one-off container's edge
+    // address (`standinAddress`), and the URL policy refuses the edge network by default.
+    // The rehearsal is disposable and isolated, and its own stand-in is the one panel it
+    // calls, so its process does not carry the edge refusal. The data network still does.
+    NEXA_EDGE_SUBNET: undefined,
     BACKUP_WORK_DIR: `${input.workDir}/backups`,
     RECOVERY_WORK_DIR: `${input.workDir}/recovery`,
     LEGACY_MIGRATION_WORK_DIR: `${input.workDir}/legacy-migration`,

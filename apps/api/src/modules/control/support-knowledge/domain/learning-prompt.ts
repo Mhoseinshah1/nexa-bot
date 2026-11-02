@@ -1,5 +1,5 @@
 import { SUPPORT_KNOWLEDGE_CATEGORIES, SUPPORT_KNOWLEDGE_LIMITS } from '@nexa/contracts';
-import { REDACTION_MARK, scrubSensitive } from './scrubber.js';
+import { LEARNING_PLACEHOLDERS, REDACTION_MARK, scrubSensitive } from './scrubber.js';
 
 /**
  * TB8 — the `LEARNING_EXTRACT` prompt (ADR-0035 §2).
@@ -12,7 +12,7 @@ import { REDACTION_MARK, scrubSensitive } from './scrubber.js';
  *
  * Bump `SUPPORT_LEARNING_POLICY_VERSION` whenever the text below changes.
  */
-export const SUPPORT_LEARNING_POLICY_VERSION = 'tb8-2026-10-04';
+export const SUPPORT_LEARNING_POLICY_VERSION = 'sai6l-2026-11-01';
 
 /** The bounded window of the conversation the extractor reads, and the per-line bound. */
 export const SUPPORT_LEARNING_TRANSCRIPT_MESSAGES = 12;
@@ -27,6 +27,7 @@ export function learningSystemPrompt(): string {
     '2. Propose a lesson ONLY when the reply states something true for every customer: how to set up or fix an app, what a plan or feature means in general, where to find something in the bot, a general policy. Otherwise answer proposal NONE.',
     '3. Answer NONE for: a one-off decision about one customer (a refund, a credit, a discount, an exception, an extension, a compensation, a manual fix); anything about one specific account, service, order, payment or person; internal or operator-only notes; a guess, a promise or anything the reply does not clearly state; a greeting or small talk.',
     `4. NEVER include personal or secret data: no names, phone numbers, e-mail addresses, Telegram usernames or ids, card or IBAN numbers, links, server addresses, ids, passwords, keys, amounts of money or prices. Values in the conversation already replaced by [${REDACTION_MARK}:…] must not be reproduced in any form; if the lesson needs them, answer NONE.`,
+    `4a. An amount of money in the conversation appears as ${LEARNING_PLACEHOLDERS.AMOUNT} and a public link as ${LEARNING_PLACEHOLDERS.LINK}. A lesson may keep these two placeholders exactly as written where the figure or link belongs (the live price list and links fill them later); never write a figure or a link instead of them.`,
     '5. Write the title as the customer\'s question and the body as the general answer, both in Persian (Farsi), concise and step by step, without referring to "this customer" or "the agent".',
     `6. category is one of: ${SUPPORT_KNOWLEDGE_CATEGORIES.join(', ')}. tags are at most ${String(SUPPORT_KNOWLEDGE_LIMITS.tags)} short Persian or English keywords. rationale is one short sentence for the reviewer: why this is general. confidence is how sure you are that the lesson is correct and general.`,
     `7. title at most ${String(SUPPORT_KNOWLEDGE_LIMITS.titleChars)} characters, body at most ${String(SUPPORT_KNOWLEDGE_LIMITS.bodyChars)}. For NONE, leave title and body empty and say why in rationale.`,
@@ -49,7 +50,8 @@ export function learningUserMessage(input: {
 }): { readonly text: string; readonly scrubbedKinds: readonly string[] } {
   const kinds = new Set<string>();
   const scrub = (value: string, max: number) => {
-    const result = scrubSensitive(value.slice(0, max));
+    // Phase 4 PR-2: amounts and public links become placeholders, not redaction markers.
+    const result = scrubSensitive(value.slice(0, max), { placeholders: true });
     for (const kind of result.kinds) kinds.add(kind);
     return result.text;
   };

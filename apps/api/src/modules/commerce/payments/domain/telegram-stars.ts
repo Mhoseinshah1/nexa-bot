@@ -1,6 +1,13 @@
 import { TELEGRAM_STARS_CURRENCY, TELEGRAM_STARS_PRE_CHECKOUT_MARGIN_MS } from '@nexa/contracts';
 
 /**
+ * R12 F1 item 6: the provider status a recorded Stars charge carries once Telegram reported it
+ * REFUNDED (`message.refunded_payment`) — Telegram's own name for the update. With it the
+ * invoice's `provider_paid` is false: a refunded charge is never an approval.
+ */
+export const STARS_REFUNDED_STATUS = 'refunded_payment';
+
+/**
  * What a Stars payment update is checked against (Package A, audit §2.5–§2.6). Every
  * value is Nexa's own row except `update`, which is what Telegram sent.
  */

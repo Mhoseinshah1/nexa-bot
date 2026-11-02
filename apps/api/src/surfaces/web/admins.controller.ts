@@ -12,12 +12,10 @@ import {
   type ResetAdminSecondFactorResponse,
   type RevokeAdminSessionsResponse,
   type RoleListResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import { ipThrottleSubject } from '../../infrastructure/trusted-proxy.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import { toSummary } from './auth.controller.js';
 
 /**
@@ -40,14 +38,14 @@ export class AdminsController {
 
   @Get('admins')
   async list(@Req() request: FastifyRequest): Promise<AdminListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const found = await this.container.adminManagement.list(scope, actor);
     return { admins: found.map((entry) => toSummary(entry.admin, entry.roleKeys)) };
   }
 
   @Get('roles')
   async roles(@Req() request: FastifyRequest): Promise<RoleListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const found = await this.container.adminManagement.listRoles(scope, actor);
     return {
       roles: found.map((role) => ({
@@ -61,7 +59,7 @@ export class AdminsController {
 
   @Post('admins')
   async create(@Req() request: FastifyRequest, @Body() body: unknown): Promise<AdminSummary> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const created = await this.container.adminManagement.create(scope, actor, body);
     return toSummary(created.admin, created.roleKeys);
   }
@@ -72,7 +70,7 @@ export class AdminsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<AdminSummary> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const targetId = uuidV7Schema.parse(id) as AdminId;
     const updated = await this.container.adminManagement.setStatus(scope, actor, targetId, body);
     return toSummary(updated.admin, updated.roleKeys);
@@ -84,7 +82,7 @@ export class AdminsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<AdminSummary> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const targetId = uuidV7Schema.parse(id) as AdminId;
     const updated = await this.container.adminManagement.setRoles(scope, actor, targetId, body);
     return toSummary(updated.admin, updated.roleKeys);
@@ -107,7 +105,7 @@ export class AdminsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<AdminSummary> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const targetId = uuidV7Schema.parse(id) as AdminId;
     const updated = await this.container.adminManagement.setTelegramBinding(
       scope,
@@ -136,7 +134,7 @@ export class AdminsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ResetAdminPasswordResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const targetId = uuidV7Schema.parse(id) as AdminId;
     const result = await this.container.adminManagement.resetPassword(
       scope,
@@ -161,7 +159,7 @@ export class AdminsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<ResetAdminSecondFactorResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const targetId = uuidV7Schema.parse(id) as AdminId;
     const result = await this.container.adminManagement.resetSecondFactor(
       scope,
@@ -186,7 +184,7 @@ export class AdminsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<EffectivePermissionsResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const targetId = uuidV7Schema.parse(id) as AdminId;
     return this.container.adminManagement.effectivePermissions(scope, actor, targetId);
   }
@@ -197,7 +195,7 @@ export class AdminsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<AdminSessionListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const targetId = uuidV7Schema.parse(id) as AdminId;
     return {
       sessions: [...(await this.container.adminManagement.listSessions(scope, actor, targetId))],
@@ -211,34 +209,10 @@ export class AdminsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<RevokeAdminSessionsResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const targetId = uuidV7Schema.parse(id) as AdminId;
     return {
       revoked: await this.container.adminManagement.revokeSessions(scope, actor, targetId, body),
-    };
-  }
-
-  /**
-   * Resolves the session into a scope and an actor.
-   *
-   * The tenant comes from the SESSION, never from the request: a caller-supplied
-   * tenant id is how one administrator reads another tenant's data.
-   */
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (options.write) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
     };
   }
 }

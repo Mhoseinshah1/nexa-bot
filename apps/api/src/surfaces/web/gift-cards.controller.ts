@@ -10,13 +10,11 @@ import {
   type GiftCardBatchWire,
   type GiftCardDisablePreviewResponse,
   type GiftCardDisableResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type { GiftCardBatchView } from '../../modules/commerce/gift-cards/application/gift-card-admin.service.js';
 
 /**
@@ -34,7 +32,7 @@ export class GiftCardsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<GiftCardBatchListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = singleValued(raw);
     const page = giftCardBatchListQuerySchema.parse({
       ...(query.limit === undefined ? {} : { limit: query.limit }),
@@ -61,7 +59,7 @@ export class GiftCardsController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<GiftCardBatchResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = giftCardBatchCreateRequestSchema.parse(body);
     const view = await this.container.giftCards.create(scope, actor, {
       idempotencyKey: input.idempotencyKey,
@@ -83,7 +81,7 @@ export class GiftCardsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<GiftCardBatchResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { batch: toWire(await this.container.giftCards.get(scope, actor, id)) };
   }
 
@@ -99,7 +97,7 @@ export class GiftCardsController {
     @Res() reply: FastifyReply,
     @Param('id') id: string,
   ): Promise<void> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const file = await this.container.giftCards.exportCodes(scope, actor, id);
     const bytes = Buffer.from(file.content, 'utf8');
     await reply
@@ -116,7 +114,7 @@ export class GiftCardsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<GiftCardDisablePreviewResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const preview = await this.container.giftCards.disablePreview(scope, actor, id);
     return {
       batchId: preview.batch.id,
@@ -131,7 +129,7 @@ export class GiftCardsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<GiftCardDisableResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = giftCardDisableRequestSchema.parse(body);
     const result = await this.container.giftCards.disable(scope, actor, id, {
       idempotencyKey: input.idempotencyKey,
@@ -143,23 +141,6 @@ export class GiftCardsController {
       codesDisabled: result.codesDisabled,
       changed: result.changed,
     };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    // A gift card belongs to the TENANT: one wallet, whichever bot the customer uses.
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

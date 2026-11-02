@@ -1,5 +1,6 @@
 import type {
   StarsPreCheckoutUpdate,
+  StarsRefundedPaymentUpdate,
   StarsSuccessfulPaymentUpdate,
 } from '../../modules/commerce/payments/application/telegram-stars-payment.service.js';
 
@@ -88,6 +89,47 @@ export function starsSuccessfulPaymentOf(update: unknown): StarsSuccessfulPaymen
   const totalAmount = starsAmountOf(payment.total_amount);
   const payload = boundedString(payment.invoice_payload, PAYLOAD_MAX);
   const chargeId = boundedString(payment.telegram_payment_charge_id, CHARGE_ID_MAX);
+  if (
+    payer === null ||
+    currency === null ||
+    totalAmount === null ||
+    payload === null ||
+    chargeId === null
+  ) {
+    return null;
+  }
+  return { payerTelegramUserId: payer, currency, totalAmount, payload, chargeId };
+}
+
+/**
+ * R12 F1 item 6: whether the update carries a `refunded_payment` (Telegram's service message
+ * about a refunded payment) at all, well-formed or not.
+ */
+export function hasRefundedPayment(update: unknown): boolean {
+  const message = (update as { message?: { refunded_payment?: unknown } } | null)?.message;
+  return (
+    message?.refunded_payment !== undefined &&
+    message.refunded_payment !== null &&
+    typeof message.refunded_payment === 'object'
+  );
+}
+
+/** A `refunded_payment`, read by type like `successful_payment`; null when it is not one. */
+export function starsRefundedPaymentOf(update: unknown): StarsRefundedPaymentUpdate | null {
+  const message = (update as { message?: { from?: unknown; refunded_payment?: unknown } } | null)
+    ?.message;
+  if (!hasRefundedPayment(update) || message === undefined) return null;
+  const refund = message.refunded_payment as {
+    currency?: unknown;
+    total_amount?: unknown;
+    invoice_payload?: unknown;
+    telegram_payment_charge_id?: unknown;
+  };
+  const payer = payerOf(message.from);
+  const currency = boundedString(refund.currency, 16);
+  const totalAmount = starsAmountOf(refund.total_amount);
+  const payload = boundedString(refund.invoice_payload, PAYLOAD_MAX);
+  const chargeId = boundedString(refund.telegram_payment_charge_id, CHARGE_ID_MAX);
   if (
     payer === null ||
     currency === null ||

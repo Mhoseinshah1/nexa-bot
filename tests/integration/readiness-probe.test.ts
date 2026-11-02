@@ -153,6 +153,7 @@ describe('a readiness timeout stops the query it was waiting on', () => {
         logger: ctx.container.logger,
         clock: ctx.container.clock,
         maxOutboxLagMs: ctx.container.config.OUTBOX_RELAY_MAX_LAG_MS,
+        verdictCacheMs: ctx.container.config.READINESS_CACHE_MS,
       }),
     };
   };

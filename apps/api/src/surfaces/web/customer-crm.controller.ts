@@ -17,13 +17,11 @@ import {
   type CustomerTagResponse,
   type CustomerTagsResponse,
   type CustomerTagWriteResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type {
   CustomerAssignedTagRecord,
   CustomerNoteRecord,
@@ -50,7 +48,7 @@ export class CustomerCrmController {
 
   @Get('customer-tags')
   async listTags(@Req() request: FastifyRequest): Promise<CustomerTagListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const tags = await this.container.customerCrm.listTags(scope, actor);
     return { tags: tags.map(toTag) };
   }
@@ -60,7 +58,7 @@ export class CustomerCrmController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<CustomerTagWriteResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customerTagCreateRequestSchema.parse(body);
     const result = await this.container.customerCrm.createTag(scope, actor, command);
     return { tag: toTag(result.tag), changed: result.changed };
@@ -72,7 +70,7 @@ export class CustomerCrmController {
     @Param('tagId') tagId: string,
     @Body() body: unknown,
   ): Promise<CustomerTagWriteResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customerTagUpdateRequestSchema.parse(body);
     const result = await this.container.customerCrm.updateTag(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -89,7 +87,7 @@ export class CustomerCrmController {
     @Param('tagId') tagId: string,
     @Body() body: unknown,
   ): Promise<CustomerTagWriteResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customerTagArchiveRequestSchema.parse(body);
     const result = await this.container.customerCrm.setTagArchived(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -106,7 +104,7 @@ export class CustomerCrmController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<CustomerTagsResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const tags = await this.container.customerCrm.tagsOf(scope, actor, id);
     return { tags: tags.map(toAssigned) };
   }
@@ -117,7 +115,7 @@ export class CustomerCrmController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CustomerTagAssignmentResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customerTagAssignmentRequestSchema.parse(body);
     const result = await this.container.customerCrm.assignTag(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -133,7 +131,7 @@ export class CustomerCrmController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CustomerTagAssignmentResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customerTagAssignmentRequestSchema.parse(body);
     const result = await this.container.customerCrm.removeTag(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -151,7 +149,7 @@ export class CustomerCrmController {
     @Param('id') id: string,
     @Query() raw: Record<string, unknown>,
   ): Promise<CustomerNoteListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = customerNoteListQuerySchema.parse(singleValued(raw));
     const page = await this.container.customerCrm.notesOf(scope, actor, {
       customerId: id,
@@ -170,7 +168,7 @@ export class CustomerCrmController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CustomerNoteCreateResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customerNoteCreateRequestSchema.parse(body);
     const result = await this.container.customerCrm.addNote(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -178,27 +176,6 @@ export class CustomerCrmController {
       body: command.body,
     });
     return { note: toNote(result.note), created: result.created };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      // A customer belongs to the TENANT, not to a bot: see `CustomersController`.
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

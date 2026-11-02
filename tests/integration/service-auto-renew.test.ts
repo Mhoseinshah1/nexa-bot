@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { sql } from 'drizzle-orm';
+import { Client } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   COMMERCE_ERROR_CODES,
@@ -15,7 +16,10 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
-import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
+import {
+  DrizzleServiceRepository,
+  SERVICE_LIFECYCLE_LOCK_CLASS,
+} from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { DrizzleServiceTransferRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service-transfer.repository';
 import { DrizzleNotificationSubjectReader } from '../../apps/api/src/modules/commerce/messaging/infrastructure/drizzle-notification-subject.reader';
 import { DrizzleOpsLogFacts } from '../../apps/api/src/modules/commerce/ops-log/infrastructure/drizzle-ops-log-facts';
@@ -600,6 +604,100 @@ describe('R10 D1 — automatic renewal', () => {
       expect.objectContaining({ state: 'REFUSED', refusal: 'NOT_RENEWABLE', order_id: null }),
     ]);
     expect(await renewOrders(serviceId)).toEqual([expect.objectContaining({ state: 'CANCELLED' })]);
+  });
+
+  /*
+   * R12 F1 item 4, after Codex on #360: the renewal locks the service's ROW first in its
+   * settling transaction and checks it there. A TERMINATE being planned takes the row and then
+   * the lifecycle lock (`ProvisioningService.planWithin`); the renewal used to take the
+   * lifecycle lock (`prepareCommercialAction`) and then the row — a lock cycle. Here a planner
+   * holds the row, the renewal waits for it, the planner takes the lifecycle lock and commits
+   * the termination: no deadlock, and the renewal debits nothing.
+   */
+  const lockWaiters = async (): Promise<number> =>
+    Number(
+      (
+        await rows(sql`SELECT count(*)::int AS n FROM pg_stat_activity
+                        WHERE datname = current_database() AND wait_event_type = 'Lock'`)
+      )[0]?.['n'] ?? 0,
+    );
+
+  it('R12 F1: a renewal racing a TERMINATE being planned takes the row first — no deadlock, no debit', async () => {
+    const serviceId = await activeService(customerA);
+    await optIn(customerA, serviceId);
+    await credit(customerA, PRICE);
+    const planner = new Client({ connectionString: process.env['TEST_DATABASE_URL'] });
+    await planner.connect();
+    let report: unknown;
+    try {
+      // The planner's order: the service row, then the lifecycle lock.
+      await planner.query('BEGIN');
+      await planner.query('SELECT id FROM services WHERE id = $1 FOR NO KEY UPDATE', [serviceId]);
+      let done = false;
+      const renewing = ctx.container.serviceAutoRenew.runOnce(tenantA).then(
+        (value) => {
+          done = true;
+          return value;
+        },
+        (error: unknown) => {
+          done = true;
+          throw error;
+        },
+      );
+      // The renewal reaches its settlement and waits on a lock the planner holds.
+      for (let i = 0; i < 200 && !done && (await lockWaiters()) === 0; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      await planner.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [
+        SERVICE_LIFECYCLE_LOCK_CLASS,
+        `${tenantA.tenantId}:${serviceId}`,
+      ]);
+      await planner.query(
+        `UPDATE services SET state = 'TERMINATED', terminated_at = now() WHERE id = $1`,
+        [serviceId],
+      );
+      await planner.query('COMMIT');
+      report = await renewing;
+    } finally {
+      await planner.end();
+    }
+    expect(report).toEqual({ renewed: 0, short: 0, refused: 1 });
+    expect(await purchases(customerA), 'only the original purchase').toHaveLength(1);
+    expect(await balance(customerA)).toBe(PRICE);
+    expect(await runsOf(serviceId)).toEqual([
+      expect.objectContaining({ state: 'REFUSED', refusal: 'NOT_RENEWABLE', order_id: null }),
+    ]);
+  });
+
+  it('R12 F1: the settlement already refuses a service terminated before it starts', async () => {
+    /*
+     * Found on main: `prepareCommercialAction` checks the owner and the state under the
+     * lifecycle lock. Pinned here so the period check is not the only line of defence. (A
+     * transfer racing the settlement was not reproducible this way: moving `customer_id` waited
+     * on the settling transaction's own locks on the service row until it ended.)
+     */
+    const serviceId = await activeService(customerA);
+    await optIn(customerA, serviceId);
+    await credit(customerA, PRICE);
+    const base = deps();
+    const racing = new ServiceAutoRenewService({
+      ...base,
+      commercial: {
+        renewalQuote: (...args) => base.commercial.renewalQuote(...args),
+        draft: (...args) => base.commercial.draft(...args),
+        confirm: async (...args) => {
+          const confirmed = await base.commercial.confirm(...args);
+          await run(
+            sql`UPDATE services SET state = 'TERMINATED', terminated_at = now()
+                 WHERE id = ${serviceId}`,
+          );
+          return confirmed;
+        },
+      },
+    });
+    expect(await racing.runOnce(tenantA)).toEqual({ renewed: 0, short: 0, refused: 1 });
+    expect(await purchases(customerA)).toHaveLength(1);
+    expect(await balance(customerA)).toBe(PRICE);
   });
 
   it('the run row refuses an incoherent state', async () => {

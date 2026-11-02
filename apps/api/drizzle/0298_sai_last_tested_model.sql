@@ -1,0 +1,1 @@
+ALTER TABLE "support_ai_provider_credentials" ADD COLUMN "last_tested_model" text;

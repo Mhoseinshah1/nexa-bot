@@ -5,6 +5,9 @@ import {
   API_PREFIX,
   AUTH_ROUTES,
   COMMERCE_ERROR_CODES,
+  GIFT_CARD_CODE_ALPHABET,
+  GIFT_CARD_CODE_GROUP_SIZE,
+  GIFT_CARD_CODE_LENGTH,
   GIFT_CARD_ROUTES,
   MINIAPP_API_PREFIX,
   MINIAPP_ROUTES,
@@ -143,6 +146,19 @@ describe('gift cards over HTTP', () => {
   const errorCode = (body: string): string =>
     (JSON.parse(body) as { error: { code: string } }).error.code;
 
+  const CODE_SYMBOLS = `[${GIFT_CARD_CODE_ALPHABET}]`;
+  const CODE_SHAPE = new RegExp(
+    `^${CODE_SYMBOLS}{4}(?:-${CODE_SYMBOLS}{4}){${GIFT_CARD_CODE_LENGTH / GIFT_CARD_CODE_GROUP_SIZE - 1}}$`,
+    'u',
+  );
+  /** Every string in a parsed JSON value, keys excluded. */
+  const stringValues = (node: unknown): string[] =>
+    typeof node === 'string'
+      ? [node]
+      : node !== null && typeof node === 'object'
+        ? Object.values(node).flatMap(stringValues)
+        : [];
+
   const createBody = (count = 3) => ({
     idempotencyKey: key(),
     label: 'نوروز',
@@ -168,9 +184,6 @@ describe('gift cards over HTTP', () => {
       state: 'ACTIVE',
     });
     expect(batch.exportAvailableUntil).not.toBeNull();
-    // The answer carries no code.
-    expect(created.body).not.toMatch(/[2-9A-HJKMNP-TV-Z]{4}-[2-9A-HJKMNP-TV-Z]{4}/u);
-
     const listed = await get(GIFT_CARD_ROUTES.batches, ownerCookie);
     expect(listed.statusCode, listed.body).toBe(200);
     const list = giftCardBatchListResponseSchema.parse(JSON.parse(listed.body));
@@ -186,6 +199,28 @@ describe('gift cards over HTTP', () => {
       /^attachment; filename="gift-cards-[0-9a-f]{8}\.csv"$/u,
     );
     expect(file.body.trimEnd().split('\r\n')).toHaveLength(4);
+
+    // The answer to the create carries no code. The check is exact: the codes this batch
+    // minted are read from its own export, and no string in the parsed answer may contain
+    // one (hyphenated or compact) or be shaped like one. A regex over the raw body is not
+    // used: the lowercase UUID ids are full of digit groups ("9452-7982") that the code
+    // alphabet shares, and it failed about one run in a hundred for that reason alone.
+    const minted = file.body
+      .trimEnd()
+      .split('\r\n')
+      .slice(1)
+      .map((row) => (row.split(',')[0] ?? '').replaceAll('"', ''));
+    expect(minted).toHaveLength(3);
+    for (const code of minted) expect(code, 'export row').toMatch(CODE_SHAPE);
+    const values = stringValues(JSON.parse(created.body));
+    expect(values.length).toBeGreaterThan(5);
+    for (const value of values) {
+      expect(value).not.toMatch(CODE_SHAPE);
+      for (const code of minted) {
+        expect(value).not.toContain(code);
+        expect(value).not.toContain(code.replaceAll('-', ''));
+      }
+    }
 
     for (const refused of [
       await post(GIFT_CARD_ROUTES.batches, technicalCookie, createBody()),

@@ -1944,7 +1944,11 @@ describe('the referral surfaces: HTTP for the operator, Telegram for the custome
       });
     };
 
-    const lastMessage = () => sent.filter((one) => one.url.includes('/sendMessage')).at(-1);
+    // A tap's single-message answer may edit the tapped message (R12 F3 item 4).
+    const lastMessage = () =>
+      sent
+        .filter((one) => one.url.includes('/sendMessage') || one.url.includes('/editMessageText'))
+        .at(-1);
     const buttons = () => {
       const markup = lastMessage()?.body['reply_markup'] as
         { inline_keyboard?: { text: string; callback_data?: string }[][] } | undefined;
@@ -2024,7 +2028,8 @@ describe('the referral surfaces: HTTP for the operator, Telegram for the custome
           expect(button.copy_text.text).toBe(String(REFERRER_TELEGRAM_ID));
           continue;
         }
-        expect(['o:', 'mm:'], button.text).toContain(button.callback_data);
+        // R12 F3 item 7 added «📜 تراکنش‌ها» (`wh:`).
+        expect(['o:', 'wh:', 'mm:'], button.text).toContain(button.callback_data);
       }
 
       // The referral program is its own place: `/referral` opens it, invite first.

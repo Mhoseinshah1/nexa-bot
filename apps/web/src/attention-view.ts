@@ -122,6 +122,16 @@ export function dashboardAttentionItems(sources: AttentionSources): AttentionIte
     '/payments?queue=UNKNOWN',
     COUNTER_CAP,
   );
+  // R12 F3 item 8: card-to-card receipts a reviewer must decide — the `RECEIPT_REVIEW` queue's
+  // own predicate, so the tile and the list it opens are one question.
+  add(
+    'receiptsAwaitingReview',
+    'web.dash_attn_receipts_review',
+    c?.receiptsAwaitingReview,
+    'warn',
+    '/payments?queue=RECEIPT_REVIEW',
+    COUNTER_CAP,
+  );
   add(
     'paymentsReconcilable',
     'web.dash_attn_payments_reconcilable',

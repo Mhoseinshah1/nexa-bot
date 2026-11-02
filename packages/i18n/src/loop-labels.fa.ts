@@ -33,6 +33,7 @@ export const LOOP_LABELS_FA: Readonly<Record<string, string>> = {
   'customer-notifications': 'پیام‌های خودکار مشتری',
   'business-outbound': 'ارسال پیام‌های تلگرام بیزنس',
   'support-assistant-watch': 'پایش دستیار پشتیبانی',
+  'support-knowledge-refresh': 'به‌روزرسانی خودکار دانش پشتیبان',
   broadcasts: 'ارسال همگانی',
   'incident-scheduler': 'زمان‌بندی دورهٔ نگهداری',
   'bulk-operations': 'عملیات گروهی',

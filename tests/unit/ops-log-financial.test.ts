@@ -827,6 +827,34 @@ describe('R11 A7 — payment logs of an order tied to a service name its panel a
       },
     },
     {
+      // R12 F1: money returned for a cancelled attempt / an order paid another way.
+      name: 'L5 late credit returned',
+      template: 'ops.financial.late_credit_returned',
+      setup: base,
+      run: async (h) => {
+        h.ledger.push({
+          id: 'e1',
+          paymentId: 'pay-1',
+          orderId: 'ord-1',
+          signed: 250_000n,
+          reason: 'GATEWAY_LATE_CREDIT',
+          at: 1,
+        });
+        await h.consumer.handle(
+          h.event('PaymentLateCredited', {
+            customerId: 'cust-1',
+            orderId: 'ord-1',
+            provider: 'TONPAYS',
+            entryId: 'e1',
+            amountMinor: '250000',
+            currency: 'IRT',
+            basis: 'RETURNED',
+          }),
+          TX,
+        );
+      },
+    },
+    {
       name: 'L6 refund completed',
       template: 'ops.financial.refund_completed',
       setup: base,

@@ -4,10 +4,12 @@ import {
   isNexaError,
   NexaError,
   PLATFORM_ERROR_CODES,
+  systemContext,
   systemJobActor,
   type ActorContext,
   type AuditWriter,
   type BotInstanceId,
+  type BotInstanceStatus,
   type BotLiveProblem,
   type BotWebhookSecretState,
   type Clock,
@@ -31,6 +33,11 @@ import type {
 } from './ports.js';
 import type { BotWebhookRead } from './bot-management-ports.js';
 import { webhookSecretFingerprint } from './webhook-fingerprint.js';
+import {
+  perBotWebhookSecret,
+  webhookSecretRegistration,
+  type WebhookSecretRegistration,
+} from './webhook-secret.js';
 import { commandMenuHash, revisionHasMiniAppButton, type CommandMenu } from './command-menu.js';
 import { tokenReplacementLeaseMs } from '../domain/token-replacement-lease.js';
 import { liveProblems } from '../domain/bot-readiness.js';
@@ -127,6 +134,13 @@ export interface BotWebhookStatusDetail {
     readonly recordedUrl: string | null;
     readonly registeredAt: Date | null;
     readonly secret: Exclude<BotWebhookSecretState, 'NOT_CONFIGURED'>;
+    /**
+     * R12 F2 item 7: WHICH accepted secret the marker records — the bot's own (`PER_BOT`)
+     * or the installation-wide one a registration made before R12 used (`INSTALLATION`,
+     * the rotation window). Null when the secret does not match or is unknown (`secret`
+     * says which). A word, never a digest.
+     */
+    readonly secretScope: Exclude<WebhookSecretRegistration, 'OTHER'> | null;
   };
   readonly remote: {
     readonly outcome: BotRemoteWebhookOutcome;
@@ -164,6 +178,28 @@ export interface BotBootstrapStatusReport {
   readonly reason: string | null;
   /** Null when there is no bot to look at, or a scope-level cause stopped the check first. */
   readonly detail: BotWebhookStatusDetail | null;
+}
+
+/**
+ * R12 F2 item 7: one bot's webhook secret, as `botctl telegram status` lists it for EVERY
+ * bot on the installation — the evidence for retiring the installation-wide secret.
+ *
+ *  - `PER_BOT`        — registered with its own secret: done;
+ *  - `INSTALLATION`   — registered with the master: still receiving (the rotation window),
+ *                       moved by the next re-registration;
+ *  - `OTHER`          — registered with a secret the receiver refuses now (the master was
+ *                       rotated since): re-register it;
+ *  - `UNKNOWN`        — registered before the fingerprint column existed;
+ *  - `NOT_REGISTERED` — no registration recorded.
+ *
+ * Words only: never a secret and never a digest.
+ */
+export interface BotWebhookSecretListing {
+  readonly botInstanceId: BotInstanceId;
+  readonly tenantSlug: string;
+  readonly username: string;
+  readonly status: BotInstanceStatus;
+  readonly secret: WebhookSecretRegistration | 'UNKNOWN' | 'NOT_REGISTERED';
 }
 
 export interface BotBootstrapInput {
@@ -346,6 +382,32 @@ export class BotBootstrapService {
   }
 
   /**
+   * R12 F2 item 7: every bot on the installation, and which secret its webhook is
+   * registered with. Read-only, no Telegram call. Null when no usable webhook secret is
+   * configured — then there is nothing to compare against, and `statusWithReason` has
+   * already said why.
+   */
+  async webhookSecretsByBot(): Promise<BotWebhookSecretListing[] | null> {
+    const master = this.deps.webhookSecret();
+    if (master.length < 16) return null;
+    const records = await this.deps.bots.listWebhookSecretRecords(
+      systemContext('botctl telegram status: webhook secret per bot'),
+    );
+    return records.map((record) => ({
+      botInstanceId: record.id,
+      tenantSlug: record.tenantSlug,
+      username: record.username,
+      status: record.status,
+      secret:
+        record.webhookRegisteredAt === null
+          ? 'NOT_REGISTERED'
+          : record.webhookSecretFingerprint === null
+            ? 'UNKNOWN'
+            : webhookSecretRegistration(record.webhookSecretFingerprint, master, record.id),
+    }));
+  }
+
+  /**
    * The local half: the scope-level causes, the row, and whether the marker is current.
    * `view` and `url` are present only for an ACTIVE bot in an active scope.
    */
@@ -434,6 +496,7 @@ export class BotBootstrapService {
       recordedUrl: view.webhookUrl,
       registeredAt: view.webhookRegisteredAt,
       secret: this.localSecretState(view),
+      secretScope: this.secretScopeOf(view),
     };
     const unread = {
       url: null,
@@ -543,7 +606,9 @@ export class BotBootstrapService {
         pendingUpdateCount: held.pendingUpdateCount,
         lastErrorAt: held.lastErrorAt,
         lastErrorMessage:
-          held.lastErrorMessage === null ? null : this.telegramText(held.lastErrorMessage, token),
+          held.lastErrorMessage === null
+            ? null
+            : this.telegramText(held.lastErrorMessage, token, view.id),
         tokenErrorCode: null,
       },
       probe,
@@ -643,24 +708,57 @@ export class BotBootstrapService {
     };
   }
 
-  /** Whether the marker's secret fingerprint is the one held now. */
+  /**
+   * Whether the marker's secret fingerprint names a secret the receiver accepts for THIS bot
+   * now: its own (`perBotWebhookSecret`) or, in the rotation window, the installation-wide
+   * one. R12 F2 item 7: compared with the bot's OWN expected digest, not one installation
+   * digest — a registration made with this bot's secret is the steady state, and reading it
+   * as `DIFFERS` would report every re-registered bot as a changed secret.
+   */
   private localSecretState(
     view: BotBootstrapView,
   ): Exclude<BotWebhookSecretState, 'NOT_CONFIGURED'> {
-    if (view.webhookSecretFingerprint === null) return 'UNKNOWN';
-    return view.webhookSecretFingerprint === webhookSecretFingerprint(this.requireWebhookSecret())
-      ? 'MATCHES'
-      : 'DIFFERS';
+    const registration = this.secretRegistrationOf(view);
+    if (registration === null) return 'UNKNOWN';
+    return registration === 'OTHER' ? 'DIFFERS' : 'MATCHES';
+  }
+
+  /** Which accepted secret the marker records; null when none (see `secretScope`). */
+  private secretScopeOf(
+    view: BotBootstrapView,
+  ): Exclude<WebhookSecretRegistration, 'OTHER'> | null {
+    const registration = this.secretRegistrationOf(view);
+    return registration === null || registration === 'OTHER' ? null : registration;
+  }
+
+  /** The recorded digest against this bot's two accepted secrets. Null: none recorded. */
+  private secretRegistrationOf(view: BotBootstrapView): WebhookSecretRegistration | null {
+    if (view.webhookSecretFingerprint === null) return null;
+    return webhookSecretRegistration(
+      view.webhookSecretFingerprint,
+      this.requireWebhookSecret(),
+      view.id,
+    );
   }
 
   /**
    * Telegram's own text, as far as it may be shown: without the token or the webhook
    * secret (should either ever be echoed), redacted by content, bounded.
    */
-  private telegramText(text: string, token: string): string {
+  private telegramText(
+    text: string,
+    token: string,
+    botInstanceId: BotInstanceId | null = null,
+  ): string {
     let scrubbed = text.split(token).join('[redacted]');
     const secret = this.deps.webhookSecret();
-    if (secret !== '') scrubbed = scrubbed.split(secret).join('[redacted]');
+    if (secret !== '') {
+      // Both secrets this bot could have been registered with: its own and the master.
+      if (botInstanceId !== null) {
+        scrubbed = scrubbed.split(perBotWebhookSecret(secret, botInstanceId)).join('[redacted]');
+      }
+      scrubbed = scrubbed.split(secret).join('[redacted]');
+    }
     return redactSecretText(scrubbed).slice(0, BOT_WEBHOOK_ERROR_MESSAGE_MAX);
   }
 
@@ -743,10 +841,26 @@ export class BotBootstrapService {
     );
   }
 
+  /**
+   * Whether the marker says Telegram delivers here with a secret the receiver accepts now —
+   * the bot's own, or (the rotation window, R12 F2 item 7) the installation-wide one. This
+   * is what `status` reports as `ready`: a bot still registered with the master RECEIVES,
+   * and calling it `incomplete` would tell an operator a working bot is broken.
+   */
   private registrationIsCurrent(view: BotBootstrapView, url: string): boolean {
     if (view.webhookRegisteredAt === null || view.webhookUrl !== url) return false;
-    if (view.webhookSecretFingerprint === null) return false;
-    return view.webhookSecretFingerprint === webhookSecretFingerprint(this.requireWebhookSecret());
+    const registration = this.secretRegistrationOf(view);
+    return registration === 'PER_BOT' || registration === 'INSTALLATION';
+  }
+
+  /**
+   * The stricter question `execute` asks before answering ALREADY_COMPLETE: current AND
+   * made with this bot's own secret. A bot still on the master is re-registered — keeping
+   * its queue, like every reconcile — which is how the rotation window empties: the next
+   * `botctl update`, `botctl telegram register` or installer rerun moves it.
+   */
+  private registrationIsFinal(view: BotBootstrapView, url: string): boolean {
+    return this.registrationIsCurrent(view, url) && this.secretRegistrationOf(view) === 'PER_BOT';
   }
 
   async execute(scope: TenantContext, input: BotBootstrapInput): Promise<BotBootstrapResult> {
@@ -838,7 +952,7 @@ export class BotBootstrapService {
      * updates" about a state nobody could see (incident A, 2026-10-07).
      */
     const holds =
-      !ensured.createdNow && this.registrationIsCurrent(view, url)
+      !ensured.createdNow && this.registrationIsFinal(view, url)
         ? await this.telegramHolds(token, url)
         : 'DIFFERS';
     if (holds === 'UNKNOWN') {
@@ -910,7 +1024,9 @@ export class BotBootstrapService {
      * only when the two use DIFFERENT origins. `docs/open-questions.md` OQ-TG-03
      * carries it rather than this comment implying it is closed.
      */
-    const secretToken = this.requireWebhookSecret();
+    // R12 F2 item 7: THIS bot's own secret, never the installation-wide one, so a secret
+    // leaked from this registration authenticates this bot and no other.
+    const secretToken = perBotWebhookSecret(this.requireWebhookSecret(), view.id);
     /*
      * R4 — the SAME claim a Web Admin token replacement takes, so `botctl telegram
      * register` and a replacement cannot interleave their `setWebhook` calls and markers.
@@ -961,10 +1077,10 @@ export class BotBootstrapService {
           outcome: registered.outcome,
           expectedUrl: url,
           remoteUrl: null,
-          telegramReason: this.telegramText(registered.detail, token),
+          telegramReason: this.telegramText(registered.detail, token, view.id),
           dropPendingUpdates,
         });
-        throw this.webhookFailure(registered, token);
+        throw this.webhookFailure(registered, token, view.id);
       }
 
       /*
@@ -1763,9 +1879,14 @@ export class BotBootstrapService {
   private webhookFailure(
     registration: Exclude<WebhookRegistration, { outcome: 'REGISTERED' }>,
     token: string,
+    botInstanceId: BotInstanceId,
   ): Error {
-    // Telegram's text, without the token should it ever be echoed, redacted and bounded.
-    const outcome = { ...registration, detail: this.telegramText(registration.detail, token) };
+    // Telegram's text, without the token or a webhook secret should either ever be echoed,
+    // redacted and bounded.
+    const outcome = {
+      ...registration,
+      detail: this.telegramText(registration.detail, token, botInstanceId),
+    };
     const intact =
       'The bot instance and its encrypted token are stored and correct; nothing was undone.';
     if (outcome.outcome === 'REFUSED') {

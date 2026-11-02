@@ -14,7 +14,7 @@ bash $S <pr|sha>                 # one line; exit 0 green, 1 red, 2 pending
 bash $S <pr> --fail-logs         # ≤20 lines around the first error, per red job
 bash $S <pr> --gate              # gate red while every job it needs is green?
 bash $S --codex <pr>             # Codex comments, threads, findings; reviewed=/findings=none read its issue-comment marker
-bash $S --wait <pr> --every 300 --max 5400   # bounded loop; returns on completion
+bash $S --wait <pr> --every 60 --max 540     # bounded loop, fits one foreground call
 ```
 
 ## Rules
@@ -24,18 +24,23 @@ bash $S --wait <pr> --every 300 --max 5400   # bounded loop; returns on completi
   the proxy blocks the blob host it redirects to, so when it prints an
   `mcp__github__get_job_logs` call, make that call (with `tail_lines`), not a
   full-log fetch.
-- **Waiting:** the bounded `--wait` loop inside the session is the primary
-  mechanism — a scheduled check-in can lapse silently (one left a session idle
-  for an hour). At most one scheduled check-in per wait, at least 20 minutes
-  apart, as a backstop only.
+- **Waiting** is ONE foreground blocking call with a timeout: the bounded
+  `--wait` loop, with `--max` under the Bash tool's 600 s limit in the
+  foreground (`--max 540`). Never an agent polling in a loop; never
+  `gh pr checks` (GraphQL). A scheduled check-in can lapse silently (one left a session idle for
+  an hour): at most one per wait, at least 20 minutes apart, as a backstop only.
 - **One checker.** Never spawn a watcher agent per wait or per notification. If
   the round names one CI-checking agent, it is the only one; everyone else keeps
   working.
 - **Duplicates:** do not reply to, or act twice on, a duplicate CI or Codex
   notification. Re-run the script; if the line has not changed, do nothing.
-- **Codex** reviews automatically when the PR opens. Never request it again.
-  Read the existing review with `--codex`; if `reviewed` ≠ `head`, say in the
-  report that it reviewed an older head. No second review.
+- **Codex**: request it yourself at once with one `@codex review` comment
+  (when, how, the 2-comment cap: `nexa-round-pipeline` §3). Read it with
+  `--codex`: `receipt=<sha>:clean|findings` is Codex's "Reviewed commit"
+  receipt (the FIRST one for the head); `thumbsup=head` is its 👍 newer than
+  the head's push (first check suite; `stale` older, `unknown` no suite). Clean
+  on the head = findings=none. If `reviewed` ≠ `head`, it
+  reviewed an older head. Act on the first complete review of a head only.
 - **Re-runs:** once, and only when the failure is in a test this PR does not
   touch (or `--gate` reports gate-only-red, using the exact command it prints).
   A second failure is real: investigate. "Flake" is not a root cause.

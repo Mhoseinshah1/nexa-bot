@@ -1,5 +1,5 @@
 {
-  "id": "de900e9b-3ad6-4073-851f-6d648b5be17f",
+  "id": "a392202f-62c6-402d-98f6-8fc3124c016a",
   "prevId": "0ea936cb-6b5f-449f-9292-99073ccb6ada",
   "version": "7",
   "dialect": "postgresql",
@@ -10052,12 +10052,6 @@
         },
         "marketing_opt_out_at": {
           "name": "marketing_opt_out_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "reminders_opt_out_at": {
-          "name": "reminders_opt_out_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
@@ -25119,6 +25113,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "files_only_delivery": {
+          "name": "files_only_delivery",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "created_at": {
           "name": "created_at",

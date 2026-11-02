@@ -69,7 +69,11 @@ export class TicketScreenComposer {
       lines.push(
         await this.templates.render(
           scope,
-          message.senderType === 'ADMIN' ? 'bot.ticket.line_support' : 'bot.ticket.line_customer',
+          message.senderType === 'ADMIN'
+            ? 'bot.ticket.line_support'
+            : message.senderType === 'AI'
+              ? 'bot.ticket.line_ai'
+              : 'bot.ticket.line_customer',
           { at: message.createdAt, text },
         ),
       );
