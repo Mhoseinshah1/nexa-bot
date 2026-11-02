@@ -74,6 +74,10 @@ Do not add unapproved design files here.
   conflicts with a tested rule of `SKILL.md` (counted pagers without a server total, client-side paging or
   counts, sample data, `style=` attributes), the rule wins and `AUDIT.md` records the item as ⛔ with the rule.
 - **Not carried over:** the quick receipt review banner (on hold), the demo-only state bar and «داده نمونه»
-  badge, the incident banner's sample content, the demo's Latin digits, and any figure the API has no field for.
+  badge, the incident banner's sample content, and any figure the API has no field for.
 - Every item's outcome is in `docs/web-redesign/demo-parity/AUDIT.md`. Do not merge without the owner's
   visual review.
+- **Latin digits (owner decision, R11 — reverses the earlier "Persian digits" choice):** every number
+  and date the admin draws uses Latin digits (`1,250,000`, `1405/07/14 19:30`); `font-feature-settings:
+'ss01'` is gone and every formatter is `fa-IR-u-nu-latn`. The Jalali CALENDAR stays. A web test
+  (`tests/web/latin-digits.test.tsx`) fails if U+06F0-U+06F9 appear in rendered DOM.

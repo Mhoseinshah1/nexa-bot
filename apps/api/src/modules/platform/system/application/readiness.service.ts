@@ -88,6 +88,16 @@ export interface ReadinessDeps {
   readonly clock: Clock;
   /** Above this, the outbox is reported down. */
   readonly maxOutboxLagMs: number;
+  /**
+   * How long the anonymous verdict (`verdict()`) is reused, in milliseconds. 0 recomputes
+   * it on every call, which only a test that watches readiness change wants.
+   */
+  readonly verdictCacheMs: number;
+}
+
+export interface ReadinessVerdict {
+  readonly degraded: boolean;
+  readonly dependencies: DependencyStatus[];
 }
 
 /**
@@ -101,9 +111,49 @@ export interface ReadinessDeps {
  * and the disagreement would be an outage nobody could explain.
  */
 export class ReadinessService {
+  /** The last computed verdict and when it was finished, for `verdict()`. */
+  private cached: { readonly at: number; readonly value: ReadinessVerdict } | null = null;
+  /** The computation in flight, shared by every caller that arrives while it runs. */
+  private inFlight: Promise<ReadinessVerdict> | null = null;
+
   constructor(private readonly deps: ReadinessDeps) {}
 
-  async run(): Promise<{ degraded: boolean; dependencies: DependencyStatus[] }> {
+  /**
+   * The verdict for the ANONYMOUS `/health/ready` (R12 F2 item 2): at most one computation
+   * in flight, and its answer reused for `verdictCacheMs`.
+   *
+   * `/health/ready` used to call `run()` per request, and every call checks out pool
+   * connections for three probes. Anyone who could reach the route could therefore hold
+   * the API's pool — the one serving operators and the bot — with a loop of anonymous GETs,
+   * and a stalled database made each of them hold a connection for the whole probe timeout.
+   * Now a burst of N callers costs ONE computation: those arriving while it runs share its
+   * promise, and those arriving within the window after it read the stored answer. A
+   * degraded answer is cached exactly like a healthy one, because the degraded case — the
+   * probes timing out — is the expensive one.
+   *
+   * The authenticated `system/readiness` keeps calling `run()`: an administrator asking for
+   * the reasons gets them fresh, and that route is behind a session.
+   */
+  verdict(): Promise<ReadinessVerdict> {
+    const now = this.deps.clock.now().getTime();
+    const cached = this.cached;
+    if (cached !== null && now - cached.at < this.deps.verdictCacheMs) {
+      return Promise.resolve(cached.value);
+    }
+    if (this.inFlight !== null) return this.inFlight;
+    const computation = this.run()
+      .then((value) => {
+        this.cached = { at: this.deps.clock.now().getTime(), value };
+        return value;
+      })
+      .finally(() => {
+        this.inFlight = null;
+      });
+    this.inFlight = computation;
+    return computation;
+  }
+
+  async run(): Promise<ReadinessVerdict> {
     const dependencies = await Promise.all([
       this.checkDatabase(),
       this.checkCache(),

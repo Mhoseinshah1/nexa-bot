@@ -12,7 +12,6 @@ import {
   type CustomerTrialResponse,
   type PanelTrialOverviewResponse,
   type PanelTrialResponse,
-  type TenantContext,
   type UpdatePanelTrialResponse,
   type TrialOverrideListResponse,
   type TrialResetListResponse,
@@ -20,10 +19,9 @@ import {
   type TrialResetResponse,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type { TrialAllowance } from '../../modules/commerce/trials/application/trial-allowance.js';
 import type {
   TrialOverrideListRow,
@@ -49,7 +47,7 @@ export class TrialsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<CustomerTrialResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { trial: toAllowance(await this.container.trialAdmin.allowance(scope, actor, id)) };
   }
 
@@ -59,7 +57,7 @@ export class TrialsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CustomerTrialResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = setTrialOverrideRequestSchema.parse(body);
     const allowance = await this.container.trialAdmin.setOverride(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -76,7 +74,7 @@ export class TrialsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<CustomerTrialResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = removeTrialOverrideRequestSchema.parse(body);
     const allowance = await this.container.trialAdmin.removeOverride(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -95,7 +93,7 @@ export class TrialsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<PanelTrialResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { trial: await this.container.panelTrials.get(scope, actor, id) };
   }
 
@@ -105,14 +103,14 @@ export class TrialsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<UpdatePanelTrialResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.panelTrials.update(scope, actor, id, body);
   }
 
   /** R1: every configured panel's trial and whether a customer is offered it now. */
   @Get('trials/panels')
   async panelTrials(@Req() request: FastifyRequest): Promise<PanelTrialOverviewResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.panelTrials.overview(scope, actor);
   }
 
@@ -121,7 +119,7 @@ export class TrialsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<TrialOverrideListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = singleValued(raw);
     const page = trialOverrideListQuerySchema.parse({
       ...(query.limit === undefined ? {} : { limit: query.limit }),
@@ -151,13 +149,13 @@ export class TrialsController {
    */
   @Get('trials/reset/preview')
   async preview(@Req() request: FastifyRequest): Promise<TrialResetPreviewResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { preview: toPreview(await this.container.trialAdmin.previewReset(scope, actor)) };
   }
 
   @Post('trials/resets')
   async reset(@Req() request: FastifyRequest, @Body() body: unknown): Promise<TrialResetResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = executeTrialResetRequestSchema.parse(body);
     const recorded = await this.container.trialAdmin.executeReset(scope, actor, {
       idempotencyKey: command.idempotencyKey,
@@ -173,7 +171,7 @@ export class TrialsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<TrialResetListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = singleValued(raw);
     const page = trialResetListQuerySchema.parse({
       ...(query.limit === undefined ? {} : { limit: query.limit }),
@@ -186,24 +184,6 @@ export class TrialsController {
     return {
       resets: result.items.map(toReset),
       nextCursor: result.nextCursor === null ? null : encodeKeysetCursor(result.nextCursor),
-    };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.container.config.NODE_ENV === 'production');
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      // A customer, and so a trial, belongs to the TENANT, not to a bot. See
-      // `CustomersController.authenticate`.
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
     };
   }
 }

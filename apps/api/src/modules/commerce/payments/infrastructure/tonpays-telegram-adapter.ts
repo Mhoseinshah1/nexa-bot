@@ -41,6 +41,7 @@ import type {
   GatewayWebhookHint,
 } from '../application/gateway-invoice-ports.js';
 import {
+  TONPAYS_HELD_CODE,
   TONPAYS_ORDER_ID_RANDOM_BYTES,
   tomanAmountOf,
   tonpaysOrderId,
@@ -65,8 +66,9 @@ import {
   tonpaysWriteAnswer,
   unreadableCode,
   errorBodySchema,
-  type FetchLike,
-  type Raw,
+  rateLimitFacts,
+  type TonPaysClientOptions,
+  type TonPaysRaw,
 } from './tonpays-adapter.js';
 
 /**
@@ -261,14 +263,13 @@ export class TonPaysTelegramAdapter implements CardTransferGatewayAdapter {
   /** The website adapter, for the one shared parse: the documented webhook body. */
   private readonly website: TonPaysAdapter;
 
-  constructor(
-    private readonly options: {
-      readonly fetch?: FetchLike;
-      readonly timeoutMs?: number;
-      readonly random?: (size: number) => Uint8Array;
-    } = {},
-  ) {
-    this.website = new TonPaysAdapter(options);
+  constructor(private readonly options: TonPaysClientOptions = {}) {
+    // Only for the shared webhook parse and signature: it never dials, so it takes no limiter.
+    this.website = new TonPaysAdapter({
+      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+      ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+      ...(options.random === undefined ? {} : { random: options.random }),
+    });
   }
 
   /** TonPays bills in Toman: the same unit, or no amount. */
@@ -359,6 +360,9 @@ export class TonPaysTelegramAdapter implements CardTransferGatewayAdapter {
       apiKey,
       { kind: 'NONE' },
     );
+    if (raw.kind === 'HELD') {
+      return { kind: 'RATE_LIMITED', code: TONPAYS_HELD_CODE, ...rateLimitFacts(raw) };
+    }
     if (raw.kind === 'NO_RESPONSE') return { kind: 'FAILED', code: `http.${raw.reason}` };
     if (raw.kind === 'UNREADABLE')
       return { kind: 'FAILED', code: boundedCode(unreadableCode(raw)) };
@@ -393,7 +397,7 @@ export class TonPaysTelegramAdapter implements CardTransferGatewayAdapter {
     const code = errorBodySchema.safeParse(raw.body);
     if (!code.success) {
       return raw.status === 429
-        ? { kind: 'RATE_LIMITED', code: 'http.429' }
+        ? { kind: 'RATE_LIMITED', code: 'http.429', ...rateLimitFacts(raw) }
         : { kind: 'FAILED', code: `http.${String(raw.status)}` };
     }
     const value = boundedCode(code.data.detail.code);
@@ -402,7 +406,7 @@ export class TonPaysTelegramAdapter implements CardTransferGatewayAdapter {
         return { kind: 'CONFIGURATION', code: value };
       case 'RATE_LIMITED':
         return raw.status < 500
-          ? { kind: 'RATE_LIMITED', code: value }
+          ? { kind: 'RATE_LIMITED', code: value, ...rateLimitFacts(raw) }
           : { kind: 'FAILED', code: value };
       case 'NOT_FOUND':
         return { kind: 'NOT_FOUND', code: value };
@@ -598,17 +602,29 @@ export class TonPaysTelegramAdapter implements CardTransferGatewayAdapter {
    * (`tonpaysWriteAnswer`): a 5xx and a 4xx with no readable code are UNKNOWN; only a 4xx
    * carrying a documented code is taken at its word.
    */
-  private writeOutcome(raw: Raw):
+  private writeOutcome(raw: TonPaysRaw):
     | { readonly kind: 'BODY'; readonly status: number; readonly body: unknown }
     | {
         readonly kind: 'OUTCOME';
         readonly outcome:
           | { readonly kind: 'REFUSED'; readonly code: string; readonly configuration: boolean }
-          | { readonly kind: 'RATE_LIMITED'; readonly code: string }
+          | {
+              readonly kind: 'RATE_LIMITED';
+              readonly code: string;
+              readonly retryAfterMs?: number;
+              readonly notSent?: true;
+            }
           | { readonly kind: 'AMBIGUOUS'; readonly code: string }
           | { readonly kind: 'NOT_FOUND'; readonly code: string }
           | { readonly kind: 'UNKNOWN'; readonly code: string };
       } {
+    // Held by Nexa's own limiter: nothing was sent, so nothing can have been done.
+    if (raw.kind === 'HELD') {
+      return {
+        kind: 'OUTCOME',
+        outcome: { kind: 'RATE_LIMITED', code: TONPAYS_HELD_CODE, ...rateLimitFacts(raw) },
+      };
+    }
     if (raw.kind === 'NO_RESPONSE') {
       return { kind: 'OUTCOME', outcome: { kind: 'UNKNOWN', code: `http.${raw.reason}` } };
     }
@@ -628,7 +644,10 @@ export class TonPaysTelegramAdapter implements CardTransferGatewayAdapter {
       case 'CONFIGURATION':
         return { kind: 'OUTCOME', outcome: { kind: 'REFUSED', code, configuration: true } };
       case 'RATE_LIMITED':
-        return { kind: 'OUTCOME', outcome: { kind: 'RATE_LIMITED', code } };
+        return {
+          kind: 'OUTCOME',
+          outcome: { kind: 'RATE_LIMITED', code, ...rateLimitFacts(raw) },
+        };
       case 'AMBIGUOUS':
         return { kind: 'OUTCOME', outcome: { kind: 'AMBIGUOUS', code } };
       case 'NOT_FOUND':
@@ -647,12 +666,13 @@ export class TonPaysTelegramAdapter implements CardTransferGatewayAdapter {
       | { readonly kind: 'JSON'; readonly value: Record<string, unknown> }
       | { readonly kind: 'MULTIPART'; readonly contentType: string; readonly bytes: Uint8Array }
       | { readonly kind: 'NONE' },
-  ): Promise<Raw> {
+  ): Promise<TonPaysRaw> {
     return tonpaysRequest(this.options, {
       method,
       url: `${TONPAYS_TELEGRAM_BASE_URL}${path}`,
       apiKey,
       body,
+      route: 'TONPAYS_TELEGRAM',
     });
   }
 }

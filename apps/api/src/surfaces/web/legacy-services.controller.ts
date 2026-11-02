@@ -11,11 +11,9 @@ import {
   type LegacyServiceCandidateResponse,
   type LegacyServiceCandidateSummaryResponse,
   type LegacyServiceCandidateView,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import type { LegacyServiceCandidateRecord } from '../../modules/platform/legacy-service-review/application/ports.js';
 
 /**
@@ -38,7 +36,7 @@ export class LegacyServicesController {
     @Req() request: FastifyRequest,
     @Query() query: unknown,
   ): Promise<LegacyServiceCandidateListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = legacyServiceCandidateListQuerySchema.parse(query ?? {});
     const page = await this.service.list(scope, actor, input);
     return { candidates: page.items.map(toView), nextCursor: page.nextCursor };
@@ -46,7 +44,7 @@ export class LegacyServicesController {
 
   @Get(LEGACY_SERVICE_REVIEW_ROUTES.summary)
   async summary(@Req() request: FastifyRequest): Promise<LegacyServiceCandidateSummaryResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.service.summary(scope, actor);
   }
 
@@ -55,7 +53,7 @@ export class LegacyServicesController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<LegacyServiceCandidateDetailResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const d = await this.service.get(scope, actor, uuidV7Schema.parse(id));
     return {
       candidate: toView(d.candidate),
@@ -86,7 +84,7 @@ export class LegacyServicesController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<LegacyServiceCandidateResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return {
       candidate: toView(await this.service.decide(scope, actor, uuidV7Schema.parse(id), body)),
     };
@@ -98,7 +96,7 @@ export class LegacyServicesController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<LegacyServiceCandidateResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return {
       candidate: toView(
         await this.service.approveAdoption(scope, actor, uuidV7Schema.parse(id), body),
@@ -112,7 +110,7 @@ export class LegacyServicesController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<LegacyServiceCandidateResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return {
       candidate: toView(await this.service.reopen(scope, actor, uuidV7Schema.parse(id), body)),
     };
@@ -120,20 +118,6 @@ export class LegacyServicesController {
 
   private get service() {
     return this.container.legacyServiceReview;
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.container.config.NODE_ENV === 'production');
-    if (options.write) assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
   }
 }
 

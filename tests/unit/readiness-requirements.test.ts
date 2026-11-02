@@ -48,6 +48,7 @@ describe('readiness requirements', () => {
       clock: clock as never,
       logger: logger as never,
       maxOutboxLagMs: 60_000,
+      verdictCacheMs: 0,
       probes: {
         database: async () => {
           if (answers.database === false) throw new Error('the database is unreachable');

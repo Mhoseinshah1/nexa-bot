@@ -222,11 +222,13 @@ export const JALALI_WEEKDAY_KEYS: readonly WebKey[] = [
   'web.jalali_wd_fri',
 ];
 
-const FA_DIGIT = new Intl.NumberFormat('fa-IR', { useGrouping: false });
-
-/** Latin digits in a text, as Persian digits (a year reads as four digits, never grouped). */
-export function faDigits(value: number | string): string {
-  return String(value).replace(/\d/gu, (digit) => FA_DIGIT.format(Number(digit)));
+/**
+ * A number or text as the admin draws digits: Latin, never grouped (a year reads as four digits).
+ * The owner's decision (R11): Latin digits everywhere; only the Jalali CALENDAR stays. Any
+ * Persian digit that reaches here is normalised, so a date field never draws U+06F0-U+06F9.
+ */
+export function plainDigits(value: number | string): string {
+  return latinDigits(String(value));
 }
 
 /** Persian or Arabic-Indic digits back to Latin ones, for typed input. */

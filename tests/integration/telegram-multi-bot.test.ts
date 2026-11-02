@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import type { BotInstanceId, TenantContext } from '@nexa/contracts';
+import {
+  TELEGRAM_SECRET_TOKEN_HEADER,
+  type BotInstanceId,
+  type TenantContext,
+} from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { TelegramCustomerMessenger } from '../../apps/api/src/modules/commerce/messaging/infrastructure/telegram-customer-messenger';
@@ -9,6 +13,10 @@ import { TelegramBroadcastTransport } from '../../apps/api/src/modules/commerce/
 import { TelegramNotificationTransport } from '../../apps/api/src/modules/control/notifications/infrastructure/telegram-transport';
 import { DrizzleOperationalConditionReader } from '../../apps/api/src/modules/platform/opslog/infrastructure/drizzle-operational-event.reader';
 import { startFakeTelegramBotApi, type FakeTelegramBotApi } from '../support/fake-telegram-bot-api';
+import {
+  perBotWebhookSecret,
+  perBotWebhookSecretFingerprint,
+} from '../../apps/api/src/modules/platform/tenancy/application/webhook-secret';
 import { migrateOnce, resetDatabase, SEED_IDS, tenantA, testConfig } from './harness';
 
 /**
@@ -37,7 +45,10 @@ const TG_B1 = 7000000201;
 const PLAIN_KEY = 'bot.admin.receipt' as const;
 const WEBHOOK_SECRET = 'multi-bot-integration-webhook-secret';
 const ORIGIN = 'https://bot.example.test';
-const FINGERPRINT = createHash('sha256').update(WEBHOOK_SECRET, 'utf8').digest('hex');
+/** The installation-wide secret's digest: what a registration made before R12 records. */
+const MASTER_FINGERPRINT = createHash('sha256').update(WEBHOOK_SECRET, 'utf8').digest('hex');
+/** R12 F2 item 7: what A1's registration records from R12 on — its OWN secret's digest. */
+const FINGERPRINT = perBotWebhookSecretFingerprint(WEBHOOK_SECRET, BOT_A1);
 
 describe('roadmap D1–D3 — the right bot for every send, and no blind retry', () => {
   let api: ApiApp;
@@ -403,5 +414,70 @@ describe('roadmap D1–D3 — the right bot for every send, and no blind retry',
     const audits = await db().execute<{ result: string }>(sql`
       SELECT result FROM audit_logs WHERE action = 'bot_instance.username_reconciled'`);
     expect(audits.rows).toEqual([{ result: 'FAILED' }]);
+  });
+
+  // ------------------------------------------- R12 F2 item 7: the per-bot webhook secret
+
+  it('R12 F2: a bot registered with the master is moved to its own secret; then A’s secret is refused for B', async () => {
+    const url = `${ORIGIN}/telegram/webhook/${BOT_A1}`;
+    // The state every installation is in before R12: registered with the installation-wide
+    // secret, Telegram holding it with 5 updates queued.
+    await db().execute(sql`
+      UPDATE bot_instances
+         SET webhook_url = ${url},
+             webhook_registered_at = '2026-09-01T10:00:00Z',
+             webhook_secret_fingerprint = ${MASTER_FINGERPRINT}
+       WHERE id = ${BOT_A1}`);
+    telegram.setWebhookDirectly(TG_A1, { url });
+    telegram.setPending(TG_A1, 5);
+    const tenantScope = { tenantId: tenantA.tenantId, botInstanceId: null } as TenantContext;
+
+    // The rotation window: it RECEIVES, so it is `ready` — named as on the master, not broken.
+    const before = await api.container.bootstrapBot.statusWithReason(tenantScope, ORIGIN);
+    expect(before.state).toBe('ready');
+    expect(before.detail?.local).toMatchObject({ secret: 'MATCHES', secretScope: 'INSTALLATION' });
+    expect(before.detail?.problems).toEqual([]);
+    const listedBefore = await api.container.bootstrapBot.webhookSecretsByBot();
+    expect(listedBefore?.find((row) => row.botInstanceId === BOT_A1)?.secret).toBe('INSTALLATION');
+
+    // The existing re-registration path (`botctl telegram register`, `botctl update`).
+    const result = await api.container.bootstrapBot.execute(tenantScope, {
+      token: null,
+      publicBaseUrl: ORIGIN,
+    });
+    expect(result.kind).toBe('RECONCILED');
+    const ownA1 = perBotWebhookSecret(WEBHOOK_SECRET, BOT_A1);
+    expect(telegram.registration(TG_A1)).toMatchObject({ url, secretToken: ownA1 });
+    const set = calls('setWebhook');
+    expect(set).toHaveLength(1);
+    expect(set[0]?.body).toMatchObject({ secret_token: ownA1, drop_pending_updates: false });
+
+    const after = await api.container.bootstrapBot.statusWithReason(tenantScope, ORIGIN);
+    expect(after.state).toBe('ready');
+    expect(after.detail?.local.secretScope).toBe('PER_BOT');
+    expect(after.detail?.remote.pendingUpdateCount).toBe(5);
+    const listedAfter = await api.container.bootstrapBot.webhookSecretsByBot();
+    expect(listedAfter?.find((row) => row.botInstanceId === BOT_A1)?.secret).toBe('PER_BOT');
+    expect(JSON.stringify([before, after, listedAfter])).not.toContain(ownA1);
+    expect(JSON.stringify([before, after, listedAfter])).not.toContain(WEBHOOK_SECRET);
+
+    // What Telegram now signs A1's updates with authenticates A1 and no other bot. Past
+    // authentication an empty update is refused by the schema (400) and writes nothing, so
+    // 400 means "the secret was accepted" and 401 that it was not.
+    const post = (botInstanceId: BotInstanceId, secret: string) =>
+      api.app
+        .getHttpAdapter()
+        .getInstance()
+        .inject({
+          method: 'POST',
+          url: `/telegram/webhook/${botInstanceId}`,
+          headers: { [TELEGRAM_SECRET_TOKEN_HEADER]: secret, 'content-type': 'application/json' },
+          payload: '{}',
+        } as never);
+    expect((await post(BOT_A1, ownA1)).statusCode).toBe(400);
+    expect((await post(BOT_A2, ownA1)).statusCode).toBe(401);
+    expect((await post(BOT_B1, ownA1)).statusCode).toBe(401);
+    // The master stays accepted for this release (the rotation window, see `webhook-secret.ts`).
+    expect((await post(BOT_A2, WEBHOOK_SECRET)).statusCode).toBe(400);
   });
 });

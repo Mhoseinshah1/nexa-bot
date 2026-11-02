@@ -46,6 +46,40 @@ export function tonpaysVerdict(status: string, paid: unknown): GatewayApprovalVe
 }
 
 /**
+ * R12 F1 item 5: the verdict of a TonPays (website) inquiry, the AMOUNT included.
+ *
+ * `tonpaysVerdict` decides by `status` and `paid`; an approval it gives stands only when the
+ * provider's `request_amount` — its echo of what Nexa asked for, in Toman, the provider's unit
+ * — is ABSENT or EQUAL to the amount Nexa sent. A present echo that differs means the invoice
+ * is not provably this attempt's: the answer is a MISMATCH (`PROVIDER_AMOUNT_MISMATCH`), held
+ * for an operator and never settled. The same rule the late credit applies
+ * (`lateCreditAmountMatches`), now applied to the ordinary settlement too. `final_amount` is
+ * still metadata (a unique transfer figure, a fee) and is never compared.
+ *
+ * `sentAmount` null (an inquiry with no attempt context) compares nothing: the status decides.
+ */
+export function tonpaysInquiryVerdict(input: {
+  readonly status: string;
+  readonly paid: unknown;
+  readonly requestAmount: bigint | null;
+  readonly sentAmount: bigint | null;
+}): {
+  readonly verdict: GatewayApprovalVerdict;
+  readonly mismatchReason: 'PROVIDER_AMOUNT_MISMATCH' | null;
+} {
+  const verdict = tonpaysVerdict(input.status, input.paid);
+  if (
+    verdict === 'APPROVED' &&
+    input.sentAmount !== null &&
+    input.requestAmount !== null &&
+    input.requestAmount !== input.sentAmount
+  ) {
+    return { verdict: 'MISMATCH', mismatchReason: 'PROVIDER_AMOUNT_MISMATCH' };
+  }
+  return { verdict, mismatchReason: null };
+}
+
+/**
  * The payment's amount in TOMAN, or null when it has no exact Toman value.
  *
  * TonPays documents `amount` as an integer number of Toman. `IRT` is Toman in whole
@@ -165,6 +199,13 @@ export function inquiryBackoffMs(attempts: number): number {
 
 /** The first inquiry after an invoice is created: long enough for a customer to open it. */
 export const FIRST_INQUIRY_DELAY_MS = 20_000;
+
+/**
+ * Round 11 A8: the code of a TonPays call Nexa's own limiter HELD — it never left the process
+ * (`TonPaysRateLimiter`). A create held this way provably created nothing, so it is deferred
+ * without spending one of its `TONPAYS_CREATE_MAX_ATTEMPTS`.
+ */
+export const TONPAYS_HELD_CODE = 'nexa.rate_limited_locally';
 
 /** A rate-limited create is retried with the SAME order id, at most this many times. */
 export const TONPAYS_CREATE_MAX_ATTEMPTS = 3;

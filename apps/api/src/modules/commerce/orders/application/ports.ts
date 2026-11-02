@@ -312,6 +312,18 @@ export interface OrderRepository {
   ): Promise<readonly OrderRecord[]>;
 
   /**
+   * R12 F3 item 9 (OQ-R11-A11-04): the payment that keeps this order open past its deadline —
+   * the newest one in a state `expireDue` itself keeps an order for (`ORDER_HELD_OPEN_BY_PAYMENT`:
+   * CONFIRMED, PENDING, UNKNOWN) — or null when none does. One list for the sweep and for this
+   * read, so a customer is told about exactly the orders the sweep leaves alone. A read.
+   */
+  livePaymentOf(
+    scope: TenantContext,
+    orderId: OrderId,
+    tx?: unknown,
+  ): Promise<{ readonly paymentId: string } | null>;
+
+  /**
    * Replaces a DRAFT's quote and its entered code (WP8 P6), and reports whether it did.
    *
    * Conditional on `state = 'DRAFT' AND confirmed_at IS NULL`: the snapshot guard would

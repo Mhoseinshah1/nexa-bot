@@ -263,6 +263,17 @@ describe('the Build-from-NEXA page', () => {
     expect(bounds.textContent).toBe(`${t('web.kb_truncated')}: 2 · ${t('web.kb_capped')}: 3`);
   });
 
+  it('PR-2: a cap is never silent — a Persian warning says what it left out; none without one', async () => {
+    page(buildOf({ truncated: 2, capped: 3 }));
+    expect(await screen.findByText(t('web.kb_capped_warning'))).toBeTruthy();
+  });
+
+  it('PR-2: … and no warning when no bound dropped anything', async () => {
+    page(buildOf({ truncated: 2, capped: 0 }));
+    await screen.findByLabelText(t('web.kb_bounds'));
+    expect(screen.queryByText(t('web.kb_capped_warning'))).toBeNull();
+  });
+
   it('N1: a concurrent run is shown as that', async () => {
     stubApi([
       { url: '/support-knowledge/builds/latest', method: 'GET', body: { build: null } },

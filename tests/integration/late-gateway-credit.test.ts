@@ -768,8 +768,13 @@ describe('a late gateway approval, credited to the wallet', () => {
       sql`SELECT code, context->>'reason' AS reason FROM operational_events
            WHERE tenant_id = ${tenantA.tenantId} AND code = 'payments.gateway_late_completion'`,
     );
+    /*
+     * R12 F1 item 5: the TonPays adapter itself now answers such an approval MISMATCH (its
+     * `request_amount` is not what Nexa sent), so the lane records it as a late completion
+     * before the credit is ever asked — with the provider's reason rather than the credit's.
+     */
     expect(alerts).toEqual([
-      { code: 'payments.gateway_late_completion', reason: 'LATE_CREDIT_AMOUNT_MISMATCH' },
+      { code: 'payments.gateway_late_completion', reason: 'PROVIDER_AMOUNT_MISMATCH' },
     ]);
     expect(await orderState(orderId)).toBe('AWAITING_PAYMENT');
     expect(await notices(paymentId)).toEqual([]);

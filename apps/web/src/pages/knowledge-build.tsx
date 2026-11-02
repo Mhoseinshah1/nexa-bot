@@ -269,6 +269,8 @@ function BuildCard({
       <p className="small" aria-label={t('web.kb_counts')}>
         {`${t('web.kb_kind_add')}: ${String(build.counts.add)} · ${t('web.kb_kind_update')}: ${String(build.counts.update)} · ${t('web.kb_kind_conflict')}: ${String(build.counts.conflict)} · ${t('web.kb_kind_retire')}: ${String(build.counts.retire)} · ${t('web.kb_kind_unchanged')}: ${String(build.counts.unchanged)}`}
       </p>
+      {/* Phase 4 PR-2: a cap is never silent — a Persian warning says what it left out. */}
+      {build.capped > 0 && <Banner tone="warn">{t('web.kb_capped_warning')}</Banner>}
       {(build.truncated > 0 || build.capped > 0) && (
         <p className="small muted" aria-label={t('web.kb_bounds')}>
           {`${t('web.kb_truncated')}: ${String(build.truncated)} · ${t('web.kb_capped')}: ${String(build.capped)}`}

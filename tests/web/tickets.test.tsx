@@ -470,6 +470,38 @@ describe('one ticket', () => {
     expect(screen.queryByRole('button', { name: t('web.ticket_action_close') })).toBeNull();
   });
 
+  it('labels the support assistant’s answer as the AI’s — never as an administrator’s — with its delivery', async () => {
+    stubApi([
+      {
+        url: `/tickets/${TICKET_ID}`,
+        body: detail({}, [
+          message(),
+          message({
+            id: '019340ab-cdef-7012-8345-6789abcdef0a',
+            senderType: 'AI',
+            body: 'برای اتصال برنامه را به‌روزرسانی کنید.',
+            delivery: 'DELIVERED',
+            createdAt: '2026-09-20T10:05:00.000Z',
+          }),
+        ]),
+      },
+    ]);
+    renderPage(
+      <TicketDetailPage
+        id={TICKET_ID}
+        denied={false}
+        mayReply={false}
+        mayAssign={false}
+        mayClose={false}
+      />,
+    );
+    expect(await screen.findByText('برای اتصال برنامه را به‌روزرسانی کنید.')).toBeTruthy();
+    expect(screen.getByText(t('web.ticket_sender_ai'))).toBeTruthy();
+    // No administrator is named for it, and it is not support's own sender label.
+    expect(screen.queryByText(new RegExp(`^${t('web.ticket_sender_support')}`, 'u'))).toBeNull();
+    expect(screen.getByText(t('web.ticket_delivery_delivered'))).toBeTruthy();
+  });
+
   it('sends a reply with its idempotency key, and asks for no reason', async () => {
     const api = stubApi([
       { url: `/tickets/${TICKET_ID}`, body: detail() },

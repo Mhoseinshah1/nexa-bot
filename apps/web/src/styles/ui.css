@@ -755,6 +755,18 @@
     display: flex;
     flex-wrap: wrap;
   }
+  /* The demo's phone search is full width with its buttons UNDER it; beside the buttons the box
+     shrank to a few characters and cut its placeholder («شناسهٔ عددی تلگرام، ش…»). */
+  .ca-search.slim {
+    flex-wrap: wrap;
+  }
+  .ca-search.slim .ca-search-main,
+  .list-filter-bar.with-saved .lfb-search > .ca-search.slim > .ca-search-main {
+    flex: 1 1 100%;
+  }
+  .ca-search.slim .field input {
+    text-overflow: ellipsis;
+  }
   .list-filter-bar.with-saved .lfb-line,
   .lfb-saved {
     grid-column: 1;

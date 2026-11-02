@@ -10,13 +10,11 @@ import {
   type ReferralCommissionSummaryResponse,
   type ReferralListResponse,
   type ReferralSummaryResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, requireSessionToken } from './authenticated-request.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import { singleValued } from './query.js';
 import { decodeKeysetCursor, encodeKeysetCursor } from './keyset-cursor.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
 import type {
   ReferralCommissionListing,
   ReferralCursor,
@@ -41,7 +39,7 @@ export class ReferralsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ReferralListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = singleValued(raw);
     const page = referralListQuerySchema.parse({
       ...(query.limit === undefined ? {} : { limit: query.limit }),
@@ -64,7 +62,7 @@ export class ReferralsController {
     @Req() request: FastifyRequest,
     @Query() raw: Record<string, unknown>,
   ): Promise<ReferralCommissionListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const query = singleValued(raw);
     const page = referralCommissionListQuerySchema.parse({
       ...(query.limit === undefined ? {} : { limit: query.limit }),
@@ -89,7 +87,7 @@ export class ReferralsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<CustomerReferralResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const summary = await this.container.referralsRead.customer(scope, actor, id);
     return {
       customerId: summary.customerId,
@@ -104,23 +102,6 @@ export class ReferralsController {
         unrecoveredAmount: t.unrecovered.toString(),
       })),
     };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.isProduction);
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    // A referral belongs to the TENANT: one program for every bot the tenant runs.
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
-  }
-
-  private get isProduction(): boolean {
-    return this.container.config.NODE_ENV === 'production';
   }
 }
 

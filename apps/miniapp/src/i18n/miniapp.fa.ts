@@ -56,6 +56,16 @@ export const MINIAPP_FA = {
   'miniapp.service_action_RENEW': 'تمدید',
   'miniapp.service_action_ADD_TRAFFIC': 'حجم اضافه',
   'miniapp.service_action_ADD_TIME': 'زمان اضافه',
+  // R11 B2: «نمودار مصرف» on the service screen.
+  'miniapp.usage_title': 'نمودار مصرف',
+  'miniapp.usage_range_7': '۷ روز گذشته',
+  'miniapp.usage_range_30': '۳۰ روز گذشته',
+  'miniapp.usage_empty':
+    'هنوز عدد مصرفی برای این بازه ذخیره نشده است. عددهای مصرف همراه با به‌روزرسانی‌های معمول سرویس ذخیره می‌شوند و کمی بعد در اینجا دیده می‌شوند.',
+  'miniapp.usage_chart_label':
+    'نمودار حجم مصرف‌شده در {days} روز گذشته؛ آخرین مقدار {last} در {at}',
+  'miniapp.usage_max': 'بیشترین مصرف ثبت‌شده در این بازه: {max}',
+  'miniapp.usage_last': 'آخرین مقدار: {last} ({at})',
   'miniapp.service_offer_empty': 'فعلاً گزینه‌ای برای این کار نیست.',
   // Round 10, D1: «تمدید خودکار».
   'miniapp.auto_renew_title': 'تمدید خودکار',
@@ -74,6 +84,7 @@ export const MINIAPP_FA = {
   'miniapp.store_category_empty': 'در این دسته پلنی نیست.',
   'miniapp.store_more': 'بیشتر',
   'miniapp.store_continue': 'ادامه و پیش‌فاکتور',
+  'miniapp.personal_discount_tag': 'تخفیف شخصی {percent}٪',
 
   'miniapp.checkout_title': 'پیش‌فاکتور',
   'miniapp.checkout_order': 'سفارش',
@@ -104,6 +115,11 @@ export const MINIAPP_FA = {
   'miniapp.checkout_no_routes': 'روش پرداخت دیگری فعال نیست.',
   'miniapp.checkout_pay': 'پرداخت',
   'miniapp.checkout_cancel': 'لغو سفارش',
+  // R12 F3 item 5: the cancel asks first, in the bot's own words (`bot.order.cancel_confirm`).
+  'miniapp.checkout_cancel_title': 'لغو سفارش',
+  'miniapp.checkout_cancel_question':
+    'آیا از لغو این سفارش مطمئن هستید؟ این کار برگشت‌پذیر نیست و قیمت فعلی شما از بین می‌رود؛ سفارش بعدی با قیمت روز ثبت می‌شود.',
+  'miniapp.checkout_cancel_yes': 'بله، سفارش را لغو کن',
   'miniapp.checkout_expires': 'این پیش‌فاکتور تا {at} معتبر است.',
   'miniapp.checkout_not_payable': 'این سفارش دیگر قابل پرداخت نیست.',
 
@@ -169,6 +185,8 @@ export const MINIAPP_FA = {
   'miniapp.service_guide': 'آموزش اتصال',
   'miniapp.service_support': 'مشکل دارم، پشتیبانی',
   'miniapp.service_qr_title': 'QR و لینک اشتراک',
+  'miniapp.service_qr_sublink': 'QR لینک اشتراک',
+  'miniapp.service_qr_singbox': 'QR مخصوص sing-box',
   'miniapp.service_qr_hint': 'در برنامه «افزودن از QR» را بزنید و این کد را اسکن کنید.',
   'miniapp.service_qr_failed': 'ساخت تصویر QR انجام نشد.',
   'miniapp.service_copy_failed': 'کپی انجام نشد؛ لینک را نگه دارید و کپی کنید.',
@@ -176,6 +194,7 @@ export const MINIAPP_FA = {
   'miniapp.location_open': 'تغییر لوکیشن',
   'miniapp.location_title': 'تغییر لوکیشن',
   'miniapp.location_current': 'فعلی',
+  'miniapp.location_remaining': 'تغییر لوکیشن باقی‌مانده: {remaining} از {max}',
   'miniapp.location_free': 'رایگان',
   'miniapp.location_pick': 'لوکیشن مقصد را انتخاب کنید.',
   'miniapp.location_note':
@@ -216,6 +235,7 @@ export const MINIAPP_FA = {
   'miniapp.ticket_reply_send': 'ارسال',
   'miniapp.ticket_author_CUSTOMER': 'شما',
   'miniapp.ticket_author_SUPPORT': 'پشتیبانی',
+  'miniapp.ticket_author_AI': 'هوش مصنوعی',
   'miniapp.ticket_attachment': 'این پیام پیوست دارد؛ پیوست در ربات دیده می‌شود.',
   'miniapp.ticket_closed': 'این تیکت بسته شده است. برای ادامه یک تیکت تازه ثبت کنید.',
   'miniapp.ticket_open_limit':
@@ -345,6 +365,18 @@ export const MINIAPP_FA = {
   'miniapp.referral_step_1': 'لینک اختصاصی‌ات را برای دوستانت بفرست.',
   'miniapp.referral_step_2': 'دوستت با لینک وارد ربات می‌شود و سرویس می‌خرد.',
   'miniapp.referral_step_3': 'پاداش هر خرید به کیف پولت اضافه می‌شود.',
+  // R11 B3: the invited-friends list.
+  'miniapp.referral_friends_title': 'دوستان دعوت‌شده',
+  'miniapp.referral_friends_empty': 'هنوز کسی با لینک تو وارد نشده است.',
+  'miniapp.referral_friends_total': '{count} دوست با لینک تو آمده‌اند',
+  'miniapp.referral_friends_more': 'نمایش بیشتر',
+  'miniapp.referral_friend_unnamed': 'دوست تو',
+  'miniapp.referral_friend_joined_on': 'پیوستن: {date}',
+  'miniapp.referral_friend_status_joined': 'پیوسته',
+  'miniapp.referral_friend_status_purchased': 'خرید اول انجام شد',
+  'miniapp.referral_friend_status_reward_pending': 'پاداش در انتظار',
+  'miniapp.referral_friend_status_reward_paid': 'پاداش پرداخت شد',
+  'miniapp.referral_friend_held_until': 'پرداخت پاداش از {date}',
 
   'miniapp.trial_title': 'سرویس تست رایگان',
   'miniapp.trial_lead': 'قبل از خرید، امتحان کن',

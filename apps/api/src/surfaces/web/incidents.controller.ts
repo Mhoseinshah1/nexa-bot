@@ -14,11 +14,9 @@ import {
   type IncidentNoticePreviewResponse,
   type IncidentNoticeResponse,
   type IncidentResponse,
-  type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import type { IncidentView } from '../../modules/platform/incidents/application/incident.service.js';
 
 /**
@@ -37,7 +35,7 @@ export class IncidentsController {
     @Req() request: FastifyRequest,
     @Query() query: unknown,
   ): Promise<IncidentListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const { cursor } = incidentListQuerySchema.parse(query ?? {});
     const page = await this.container.incidents.list(scope, actor, cursor ?? null);
     return { incidents: page.incidents.map(toItem), nextCursor: page.nextCursor };
@@ -45,7 +43,7 @@ export class IncidentsController {
 
   @Get('incidents/banner')
   async banner(@Req() request: FastifyRequest): Promise<IncidentBannerResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const rows = await this.container.incidents.banner(scope, actor);
     return {
       incidents: rows.map((row) => ({
@@ -64,7 +62,7 @@ export class IncidentsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<IncidentDetailResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const view = await this.container.incidents.get(scope, actor, id);
     return {
       incident: toItem(view),
@@ -80,7 +78,7 @@ export class IncidentsController {
 
   @Post('incidents')
   async create(@Req() request: FastifyRequest, @Body() body: unknown): Promise<IncidentResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = createIncidentRequestSchema.parse(body);
     return { incident: toItem(await this.container.incidents.create(scope, actor, command)) };
   }
@@ -91,7 +89,7 @@ export class IncidentsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<IncidentResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = updateIncidentRequestSchema.parse(body);
     return { incident: toItem(await this.container.incidents.update(scope, actor, id, command)) };
   }
@@ -102,7 +100,7 @@ export class IncidentsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<IncidentResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = incidentActionRequestSchema.parse(body);
     return { incident: toItem(await this.container.incidents.start(scope, actor, id, command)) };
   }
@@ -113,7 +111,7 @@ export class IncidentsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<IncidentResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = incidentActionRequestSchema.parse(body);
     return { incident: toItem(await this.container.incidents.resolve(scope, actor, id, command)) };
   }
@@ -124,7 +122,7 @@ export class IncidentsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<IncidentResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = incidentActionRequestSchema.parse(body);
     return { incident: toItem(await this.container.incidents.cancel(scope, actor, id, command)) };
   }
@@ -135,7 +133,7 @@ export class IncidentsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<IncidentResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return { incident: toItem(await this.container.incidents.applyEffects(scope, actor, id)) };
   }
 
@@ -144,7 +142,7 @@ export class IncidentsController {
     @Req() request: FastifyRequest,
     @Param('id') id: string,
   ): Promise<IncidentNoticePreviewResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     return this.container.incidents.noticePreview(scope, actor, id);
   }
 
@@ -154,26 +152,10 @@ export class IncidentsController {
     @Param('id') id: string,
     @Body() body: unknown,
   ): Promise<IncidentNoticeResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = incidentNoticeRequestSchema.parse(body);
     const result = await this.container.incidents.notify(scope, actor, id, command);
     return { incident: toItem(result), queued: result.queued };
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.container.config.NODE_ENV === 'production');
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
   }
 }
 

@@ -6,7 +6,7 @@ import { t } from './i18n/web.fa';
  * the page wrote before.
  */
 
-const DAY = new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium' });
+const DAY = new Intl.DateTimeFormat('fa-IR-u-nu-latn', { dateStyle: 'medium' });
 
 /** A `YYYY-MM-DD` as a Jalali day; anything else is returned unchanged, never blank. */
 export function dayLabel(day: string): string {

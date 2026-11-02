@@ -1,7 +1,15 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { productCode, productCodeNumberFromSearch, publicCodeFromSearch } from '@nexa/contracts';
-import { fetchInfo } from './api/client';
+import { fetchGlobalSearch, fetchInfo } from './api/client';
+import {
+  GLOBAL_SEARCH_DEBOUNCE_MS,
+  GLOBAL_SEARCH_MIN_CHARS,
+  searchGroupLabel,
+  searchHitPath,
+  searchHitStateLabel,
+  useDebouncedValue,
+} from './global-search';
 import { t, type WebKey } from './i18n/web.fa';
 import { navigate, useLinkHandler } from './router';
 import type { ThemeChoice } from './theme';
@@ -614,11 +622,15 @@ export function codeSearchEntries(query: string, entries: readonly NavEntry[]): 
 }
 
 /**
- * Ctrl+K: go to any page this operator may see, by typing part of its name.
+ * Ctrl+K: the top-bar search. It does two things for one string.
  *
- * Client-side over the SAME entries the sidebar draws — so it offers exactly
- * the links the operator already has, never a page the navigation hides and
- * never a record it would have to fetch to find.
+ * PAGES: client-side over the SAME entries the sidebar draws — exactly the links the operator
+ * already has, never a page the navigation hides.
+ *
+ * RECORDS (R11 A1): customers, orders and services, from `GET /search`. The server returns only
+ * the kinds this operator may read (each kind's own list permission); a kind that is absent is
+ * not drawn and nothing here derives a permission. The request starts at two characters, after
+ * a short pause, and a failure only says the record search did not run — the pages still work.
  */
 export function CommandSearch({
   entries,
@@ -649,10 +661,34 @@ export function CommandSearch({
     ];
   }, [entries, query]);
 
+  const settled = useDebouncedValue(query.trim(), GLOBAL_SEARCH_DEBOUNCE_MS);
+  const searchable = settled.length >= GLOBAL_SEARCH_MIN_CHARS;
+  const records = useQuery({
+    queryKey: ['global-search', settled],
+    queryFn: () => fetchGlobalSearch(settled),
+    enabled: searchable,
+    staleTime: 15_000,
+    retry: false,
+  });
+  // Only an answer for the text that is still in the box is drawn.
+  const groups = searchable && query.trim() === settled ? (records.data?.groups ?? []) : [];
+  const recordOptions = groups.flatMap((group) =>
+    group.hits.map((hit) => ({ kind: group.kind, hit, path: searchHitPath(group.kind, hit.id) })),
+  );
+  const optionCount = results.length + recordOptions.length;
+
+  const goTo = (path: string) => {
+    onClose();
+    navigate(path);
+  };
   const go = (entry: NavEntry | undefined) => {
     if (entry === undefined) return;
-    onClose();
-    navigate(entry.path);
+    goTo(entry.path);
+  };
+  const goActive = () => {
+    const record = recordOptions[active - results.length];
+    if (active < results.length) go(results[active]);
+    else if (record !== undefined) goTo(record.path);
   };
 
   const optionId = (index: number) => `${listId}-${index}`;
@@ -681,7 +717,7 @@ export function CommandSearch({
             aria-controls={listId}
             aria-autocomplete="list"
             aria-label={t('web.search_label')}
-            {...(results.length > 0 ? { 'aria-activedescendant': optionId(active) } : {})}
+            {...(optionCount > 0 ? { 'aria-activedescendant': optionId(active) } : {})}
             placeholder={t('web.search_placeholder')}
             value={query}
             onChange={(event) => {
@@ -691,19 +727,19 @@ export function CommandSearch({
             onKeyDown={(event) => {
               if (event.key === 'ArrowDown') {
                 event.preventDefault();
-                setActive((at) => Math.min(results.length - 1, at + 1));
+                setActive((at) => Math.min(optionCount - 1, at + 1));
               } else if (event.key === 'ArrowUp') {
                 event.preventDefault();
                 setActive((at) => Math.max(0, at - 1));
               } else if (event.key === 'Enter') {
                 event.preventDefault();
-                go(results[active]);
+                goActive();
               }
             }}
           />
           <kbd className="ltr">Esc</kbd>
         </div>
-        {results.length === 0 ? (
+        {optionCount === 0 && !(searchable && records.isFetching) ? (
           <p className="none">{t('web.search_none')}</p>
         ) : (
           <ul className="list" id={listId} role="listbox" aria-label={t('web.search_pages')}>
@@ -729,7 +765,71 @@ export function CommandSearch({
                 </a>
               </li>
             ))}
+            {groups.map((group) => (
+              <Fragment key={group.kind}>
+                <li role="presentation" className="head" data-search-group={group.kind}>
+                  {searchGroupLabel(group.kind)}
+                </li>
+                {group.hits.map((hit) => {
+                  const index =
+                    results.length +
+                    recordOptions.findIndex(
+                      (one) => one.kind === group.kind && one.hit.id === hit.id,
+                    );
+                  const path = searchHitPath(group.kind, hit.id);
+                  const state = searchHitStateLabel(group.kind, hit);
+                  return (
+                    <li key={`${group.kind}:${hit.id}`} role="presentation">
+                      <a
+                        id={optionId(index)}
+                        role="option"
+                        aria-selected={index === active}
+                        href={path}
+                        tabIndex={-1}
+                        onMouseEnter={() => setActive(index)}
+                        onClick={(event) => {
+                          if (
+                            event.button !== 0 ||
+                            event.metaKey ||
+                            event.ctrlKey ||
+                            event.shiftKey
+                          )
+                            return;
+                          event.preventDefault();
+                          goTo(path);
+                        }}
+                      >
+                        <span className="hit-title">
+                          <bdi>{hit.title}</bdi>
+                        </span>
+                        {hit.subtitle !== null && (
+                          <span className="sub hit-sub">
+                            <bdi>{hit.subtitle}</bdi>
+                          </span>
+                        )}
+                        {state !== null && <span className="sub hit-state">{state}</span>}
+                      </a>
+                    </li>
+                  );
+                })}
+                {group.hasMore && (
+                  <li role="presentation" className="head">
+                    {t('web.search_more')}
+                  </li>
+                )}
+              </Fragment>
+            ))}
           </ul>
+        )}
+        {searchable && records.isFetching && (
+          <p className="none" role="status">
+            {t('web.search_loading')}
+          </p>
+        )}
+        {searchable && records.isError && (
+          <p className="none" role="status">
+            {t('web.search_failed')}
+          </p>
         )}
       </div>
     </div>

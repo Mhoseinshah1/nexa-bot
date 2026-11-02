@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   SUPPORT_AI_AVAILABLE_CODE,
+  SUPPORT_AI_CONFIG_INVALID_CODE,
+  SUPPORT_AI_CONFIG_VALID_CODE,
   SUPPORT_AI_CREDENTIAL_ACCEPTED_CODE,
   SUPPORT_AI_CREDENTIAL_REJECTED_CODE,
   SUPPORT_AI_DEFAULT_CONFIG,
@@ -9,7 +11,17 @@ import {
   type SupportAiOutcome,
   type SupportAiProvider,
 } from '@nexa/contracts';
-import { SupportAiChain } from '../../apps/api/src/modules/control/support-ai/application/support-ai-chain';
+import {
+  SupportAiChain,
+  supportAiConfigRejection,
+} from '../../apps/api/src/modules/control/support-ai/application/support-ai-chain';
+import {
+  OpenAiAdapter,
+  openAiReasoningModel,
+} from '../../apps/api/src/infrastructure/ai/openai-adapter';
+import { AnthropicAdapter } from '../../apps/api/src/infrastructure/ai/anthropic-adapter';
+import { ZaiAdapter } from '../../apps/api/src/infrastructure/ai/zai-adapter';
+import type { AiFetch } from '../../apps/api/src/infrastructure/ai/ai-http';
 import type { SupportAiAdapter } from '../../apps/api/src/modules/control/support-ai/application/ports';
 
 /**
@@ -479,5 +491,108 @@ describe('the chain records WHY a call failed (program §A3)', () => {
         }),
       }),
     ]);
+  });
+});
+
+/**
+ * Phase 4 PR-1 item 8 — a provider refusing the REQUEST (HTTP 400/404/422: a wrong model id, an
+ * unsupported parameter) is configuration, not the model's answer: the chain falls back to the
+ * next provider and raises one rolled-up `support.ai_provider.config_invalid` per provider,
+ * closed when that provider answers again. Each REAL adapter's 400 is driven through the chain.
+ */
+describe('Phase 4 PR-1: a 400 from each adapter falls back', () => {
+  const rejecting =
+    (status: number, body: unknown): AiFetch =>
+    async () =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { 'content-type': 'application/json' },
+      });
+  const cases: { name: string; make: (fetch: AiFetch) => SupportAiAdapter }[] = [
+    { name: 'OpenAI', make: (fetch) => new OpenAiAdapter({ fetch, now: () => 0 }) },
+    { name: 'Anthropic', make: (fetch) => new AnthropicAdapter({ fetch, now: () => 0 }) },
+    { name: 'Z.AI', make: (fetch) => new ZaiAdapter({ fetch, now: () => 0 }) },
+  ];
+  for (const { name, make } of cases) {
+    for (const status of [400, 404, 422]) {
+      it(`${name} ${String(status)} → the next provider answers, one config alert`, async () => {
+        const real = make(
+          rejecting(status, {
+            error: { type: 'invalid_request_error', code: 'model_not_found', param: 'model' },
+          }),
+        );
+        const fallback = adapter(real.provider === 'OPENAI' ? 'ANTHROPIC' : 'OPENAI', [ok('f')]);
+        const { generate, events } = chainWith({ adapters: [real, fallback] });
+        const result = await generate();
+        expect(result.outcome.outcome).toBe('OK');
+        expect(result.step?.provider).toBe(fallback.provider);
+        expect(fallback.calls).toBe(1);
+        const config = events().filter((event) => event.code === SUPPORT_AI_CONFIG_INVALID_CODE);
+        expect(config).toHaveLength(1);
+        expect(config[0]?.dedupeKey).toBe(`${SUPPORT_AI_CONFIG_INVALID_CODE}:${real.provider}`);
+      });
+    }
+  }
+
+  it('an answer that is not a decision still STOPS the chain (never laundered)', async () => {
+    const primary = adapter('OPENAI', [
+      {
+        outcome: 'INVALID_OUTPUT',
+        code: 'openai.not_json',
+        detail: {
+          failureClass: 'not_json',
+          httpStatus: 200,
+          providerErrorCode: null,
+          providerErrorType: null,
+          providerErrorParam: null,
+        },
+      },
+    ]);
+    const fallback = adapter('ANTHROPIC', [ok()]);
+    const result = await chainWith({ adapters: [primary, fallback] }).generate();
+    expect(result.outcome.outcome).toBe('INVALID_OUTPUT');
+    expect(fallback.calls).toBe(0);
+  });
+
+  it('closes the provider’s config alert when it answers again', async () => {
+    const key = `${SUPPORT_AI_CONFIG_INVALID_CODE}:OPENAI`;
+    const { generate, codes } = chainWith({
+      adapters: [adapter('OPENAI', [ok()])],
+      openAlerts: [key],
+    });
+    await generate();
+    expect(codes()).toContain(SUPPORT_AI_CONFIG_VALID_CODE);
+  });
+
+  it('supportAiConfigRejection reads the adapter’s own HTTP detail only', () => {
+    const detail = (
+      failureClass: 'request_rejected' | 'schema_invalid',
+      httpStatus: number | null,
+    ) =>
+      ({
+        outcome: 'INVALID_OUTPUT',
+        code: 'x',
+        detail: {
+          failureClass,
+          httpStatus,
+          providerErrorCode: null,
+          providerErrorType: null,
+          providerErrorParam: null,
+        },
+      }) as const;
+    expect(supportAiConfigRejection(detail('request_rejected', 400))).toBe(true);
+    expect(supportAiConfigRejection(detail('request_rejected', null))).toBe(false);
+    expect(supportAiConfigRejection(detail('schema_invalid', 400))).toBe(false);
+    expect(supportAiConfigRejection({ outcome: 'INVALID_OUTPUT', code: 'openai.http_400' })).toBe(
+      false,
+    );
+  });
+
+  it('OpenAI sends low reasoning effort to reasoning models only', () => {
+    expect(openAiReasoningModel('o3-mini')).toBe(true);
+    expect(openAiReasoningModel('gpt-5')).toBe(true);
+    expect(openAiReasoningModel('gpt-5-mini')).toBe(true);
+    expect(openAiReasoningModel('gpt-4o')).toBe(false);
+    expect(openAiReasoningModel('gpt-4.1-mini')).toBe(false);
   });
 });

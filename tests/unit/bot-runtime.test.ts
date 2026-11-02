@@ -822,6 +822,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       // Package D: the custom-service flow, from the catalogue button to its refusals.
       'bot.custom_service.ask_days',
       'bot.custom_service.ask_volume',
+      // R12 F3: «بازگشت به مکان‌ها» under the volume and days questions; re-opens the location list (`ik:`) and names no pre-invoice that does not exist yet.
+      'bot.custom_service.back_button',
       'bot.custom_service.button',
       'bot.custom_service.days_unpriced',
       'bot.custom_service.invalid_days',
@@ -862,8 +864,26 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.order.cancel_confirm',
       'bot.order.cancel_confirm_button',
       'bot.order.cancelled',
+      /*
+       * R11 A11: an ended order's own message, edited into its end state, and its two buttons.
+       * Reviewed: each keeps only the order's summary, promises nothing this head does not do —
+       * «🔁 سفارش دوباره» opens a read-only list of plans (`ro:`, `cu:` or `co:`, all parsed) and
+       * «🏠 منوی اصلی» is `mm:` — and none says money was or was not taken.
+       */
+      'bot.order.cancelled_screen',
       'bot.order.expired',
+      'bot.order.expired_screen',
+      // R12 F3: «بازگشت به پیش‌فاکتور» (`ib:`) re-draws the order’s current screen and closes the text window; pays nothing.
+      'bot.order.input_back_button',
+      // R12 F3: «انصراف» (`iz:`) closes the text window and answers the main menu; moves nothing.
+      'bot.order.input_cancel_button',
+      'bot.order.main_menu_button',
       'bot.order.not_awaiting_payment',
+      // R12 F3 (OQ-R11-A11-04): a pay tap on an order past its deadline whose payment is still live. Reviewed: says only that the payment is being checked, tells the customer NOT to pay again and that the result comes in the bot — all true on this head (the sweep keeps such an order; the notification lane answers when the review ends). Offers a status button and the main menu; promises no outcome.
+      'bot.order.payment_in_review',
+      // R12 F3: «وضعیت پرداخت» (`os:`) draws the live payment’s own screen or repeats the review sentence; creates and pays nothing.
+      'bot.order.payment_status_button',
+      'bot.order.reorder_button',
       'bot.order.settled',
       'bot.order.terms_changed',
       'bot.order.transfer_under_review',
@@ -906,9 +926,24 @@ describe('profile metadata, normalised before it is ever stored', () => {
        * receipt-empty screens. Reviewed: the worker performs every provider call (cancel,
        * refund card, remainder receipt) and none of these says paid.
        */
+      /*
+       * Round 11 A8: a create the provider refused for its rate limit on every retry. Reviewed:
+       * it says no invoice was made and nothing was charged, and its retry opens a new attempt.
+       */
+      'bot.payment.gateway_busy',
+      /*
+       * R11 A8, reviewed: a cancel tap on an invoice Nexa already knows was cancelled. It says
+       * only that, and invites a new payment — which this head offers (the order's method
+       * selector or the top-up). Nothing is sent to the provider when it is shown.
+       */
+      'bot.payment.gateway_cancel_already_cancelled',
       'bot.payment.gateway_cancel_button',
       'bot.payment.gateway_cancel_confirm',
       'bot.payment.gateway_cancel_confirm_button',
+      // R12 F3 item 10: TonPays rate-limited the cancel. Reviewed: says the cancel was NOT processed, the invoice is NOT cancelled, the cancel button may be tapped again later, a receipt should be sent if money was paid, and not to pay again. Claims no automatic retry (none exists for this state).
+      'bot.payment.gateway_cancel_rate_limited',
+      // R12 F3 lead review: the same where the cancel button is gone. Reviewed: no «tap cancel again» sentence; not cancelled, send the receipt if paid, do not pay again.
+      'bot.payment.gateway_cancel_rate_limited_closed',
       'bot.payment.gateway_cancel_requested',
       'bot.payment.gateway_cancel_unknown',
       'bot.payment.gateway_cancelled',
@@ -988,6 +1023,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.receipt_prompt',
       'bot.payment.receipt_received',
       'bot.payment.received_for_review',
+      // R12 F3: «پرداخت دوباره» under a rejected / expired payment: opens the payment methods (`pm:`) or the top-up menu (`o:`); the tap re-decides whether the order may still be paid.
+      'bot.payment.retry_button',
       /*
        * Rialit (`docs/rialit-gateway-audit.md`): the two create refusals (the payable outside
        * Rialit's range, refused before any call; a misconfiguration — both sides charging a fee
@@ -1084,6 +1121,11 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.devices_option',
       // Package E: the connection-files button and its three answers.
       'bot.service.files_button',
+      // R11 A4: «دریافت فایل‌های جدید» on a files-only panel — its button, ask, confirm, cooldown.
+      'bot.service.files_new_ask',
+      'bot.service.files_new_button',
+      'bot.service.files_new_confirm_button',
+      'bot.service.files_new_cooldown',
       'bot.service.files_partial',
       'bot.service.files_rate_limited',
       'bot.service.files_unavailable',
@@ -1279,6 +1321,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.wallet.gift_card_redeemed',
       'bot.wallet.gift_card_rejected',
       'bot.wallet.gift_card_unavailable',
+      // R12 F3: «تراکنش‌ها» (`wh:`) opens the read-only list of the wallet’s last movements.
+      'bot.wallet.history_button',
       'bot.wallet.insufficient',
       'bot.wallet.negative_balance',
       // Owner spec §2.2: a button label under a wallet credit, opening the wallet screen.
@@ -1685,6 +1729,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
     const menuButtons: ReadonlySet<TemplateKey> = new Set<TemplateKey>([
       'bot.menu.main_button',
       'bot.service.back_to_menu_button',
+      // R11 A11: the owner's «🏠 منوی اصلی» under an ended order — a button that goes to it (`mm:`).
+      'bot.order.main_menu_button',
       // R6 item 3: the owner's welcome points at the persistent bottom menu AND names its
       // real buttons («🛒 خرید اشتراک», «🧪 سرویس تست»), which is the menu that exists — not
       // the prose "use the menu" this rule refuses. Pinned to this one key.

@@ -33,6 +33,7 @@ import {
   DrizzlePublicOriginReader,
 } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-credentials';
 import { tonpaysSignatureOf } from '../../apps/api/src/modules/commerce/payments/infrastructure/tonpays-signature';
+import { TonPaysRateLimiter } from '../../apps/api/src/modules/commerce/payments/infrastructure/tonpays-rate-limiter';
 import {
   TonPaysAdapter,
   type FetchLike,
@@ -133,6 +134,8 @@ class FakeTonPays {
   readonly creates: { body: Record<string, unknown>; headers: Record<string, string> }[] = [];
   readonly checks: string[] = [];
   createMode: CreateMode = 'OK';
+  /** Round 11 A8: the check endpoint answers 429 (no Retry-After) while this is set. */
+  checkRateLimited = false;
   private seq = 0;
 
   readonly fetch: FetchLike = async (url, init) => {
@@ -203,6 +206,9 @@ class FakeTonPays {
     if (url.endsWith('/api/v1/invoices/check')) {
       const invoiceId = String(body.invoice_id);
       this.checks.push(invoiceId);
+      if (this.checkRateLimited) {
+        return json(429, { detail: { code: 'RATE_LIMIT_EXCEEDED', message: 'slow down' } });
+      }
       const invoice = this.invoices.get(invoiceId);
       if (invoice === undefined) {
         return json(404, { detail: { code: 'INVOICE_NOT_FOUND', message: 'x' } });
@@ -3285,6 +3291,166 @@ describe('TonPays, through the one settlement path', () => {
         );
         expect(dump!.text, table).not.toContain(WHSEC);
       }
+    });
+  });
+
+  // =====================================================================================
+  // Round 11 A8: TonPays answered 429. A rate limit only DELAYS: no second invoice, no lost
+  // create, no state change, and the customer is told plainly when a create ran out of retries.
+  // =====================================================================================
+
+  describe('R11 A8 — the provider’s rate limit', () => {
+    async function invoiceFacts(paymentId: string) {
+      const [row] = await rows<{
+        creation_state: string;
+        creation_attempts: number;
+        creation_sent_at: string | null;
+        creation_retry_at: string | null;
+        creation_error_code: string | null;
+        inquiry_not_before: string | null;
+        next_inquiry_at: string | null;
+        post_deadline_inquiries: number;
+        reconcile_inquiry_requested_at: string | null;
+        last_inquiry_error_code: string | null;
+      }>(sql`SELECT * FROM gateway_invoices WHERE payment_id = ${paymentId}`);
+      if (row === undefined) throw new Error('no invoice row');
+      return row;
+    }
+
+    /** A lane whose TonPays adapter carries the real limiter, on the lane's own clock. */
+    function pacedLane(): { lane: GatewayPaymentService; limiter: TonPaysRateLimiter } {
+      const clock = { now: () => new Date(Date.now() + offsetMs) };
+      const limiter = new TonPaysRateLimiter({
+        clock,
+        sleep: (ms) => {
+          offsetMs += ms;
+          return Promise.resolve();
+        },
+        random: () => 0.5,
+      });
+      return {
+        limiter,
+        lane: laneWith(tonpays, {
+          adapter: new TonPaysAdapter({ fetch: tonpays.fetch, limiter }),
+          clock,
+        }),
+      };
+    }
+
+    it('a create the limiter HOLDS is never sent, keeps its order id, spends no retry, and makes exactly ONE invoice', async () => {
+      await enableTonPays();
+      const paced = pacedLane();
+      lane = paced.lane;
+      const orderId = await draftOrder();
+      const { paymentId } = await payWithGateway(orderId);
+      // More holds than a create has retries: none of them may count.
+      for (let i = 0; i < 4; i += 1) {
+        // An earlier 429 on this key (another attempt's) pauses it for 30 s.
+        paced.limiter.rateLimited('TONPAYS', API_KEY, '30');
+        await pass();
+        const held = await invoiceFacts(paymentId);
+        expect(held.creation_state).toBe('CREATING');
+        expect(held.creation_attempts).toBe(0);
+        expect(held.creation_sent_at).toBeNull();
+        expect(held.creation_error_code).toBe('nexa.rate_limited_locally');
+        // Deferred to when the key may be used again, never sooner.
+        expect(new Date(held.creation_retry_at!).getTime()).toBeGreaterThanOrEqual(
+          Date.now() + offsetMs + 29_000,
+        );
+        offsetMs += 31_000;
+      }
+      expect(tonpays.creates).toHaveLength(0);
+      expect((await paymentOf(paymentId)).state).toBe('PENDING');
+
+      await pass();
+      expect(tonpays.creates).toHaveLength(1);
+      const created = await invoiceFacts(paymentId);
+      expect(created.creation_state).toBe('CREATED');
+      expect(created.creation_attempts).toBe(1);
+      expect(tonpays.invoices.size).toBe(1);
+    });
+
+    it('a create rate limited on every retry ends with NO invoice, says “busy” in Persian, and the retry opens a NEW attempt — one invoice in all', async () => {
+      await enableTonPays();
+      const orderId = await draftOrder();
+      tonpays.createMode = { code: 'RATE_LIMIT_EXCEEDED', status: 429 };
+      const { paymentId } = await payWithGateway(orderId);
+      for (let i = 0; i < 3; i += 1) {
+        await pass();
+        offsetMs += 20_000;
+      }
+      // Three sends of the SAME order id, each refused in so many words: nothing was created.
+      expect(tonpays.creates).toHaveLength(3);
+      expect(new Set(tonpays.creates.map((create) => create.body.order_id)).size).toBe(1);
+      expect(tonpays.invoices.size).toBe(0);
+      expect((await invoiceFacts(paymentId)).creation_state).toBe('CREATE_FAILED');
+      expect((await paymentOf(paymentId)).state).toBe('FAILED');
+      expect(await ledger()).toEqual([]);
+      // Never told their payment failed: a capacity refusal is not the customer's payment.
+      expect(await notified(paymentId)).toEqual([]);
+
+      await tap(`gc:${paymentId}`);
+      expect(lastText()).toContain('درگاه پرداخت در این لحظه شلوغ است');
+      expect(lastText()).not.toContain('در دسترس نیست');
+
+      // The customer tries again: a new attempt with a new order id, created once.
+      tonpays.createMode = 'OK';
+      await tap(`g:${orderId}`);
+      await pass();
+      expect(tonpays.creates).toHaveLength(4);
+      expect(tonpays.creates[3]!.body.order_id).not.toBe(tonpays.creates[0]!.body.order_id);
+      expect(tonpays.invoices.size).toBe(1);
+    });
+
+    it('an inquiry 429 with no Retry-After changes nothing but WHEN: still PENDING, and no tap or webhook can ask before the back-off', async () => {
+      const { paymentId, invoice } = await createdAttempt();
+      tonpays.checkRateLimited = true;
+      await inquireNow();
+      const after = await invoiceFacts(paymentId);
+      expect(after.last_inquiry_error_code).toBe('RATE_LIMIT_EXCEEDED');
+      expect((await paymentOf(paymentId)).state).toBe('PENDING');
+      const askedAt = Date.now() + offsetMs;
+      // Without a Retry-After the floor still binds every path: at least a minute.
+      expect(new Date(after.inquiry_not_before!).getTime()).toBeGreaterThanOrEqual(
+        askedAt + 55_000,
+      );
+      const checks = tonpays.checks.length;
+      await tap(`gc:${paymentId}`);
+      await webhook(invoice, 'completed', 'r11-a8-hint');
+      offsetMs += 10_000;
+      await pass();
+      expect(tonpays.checks.length).toBe(checks);
+
+      // Once the back-off has passed and TonPays answers, the approval settles as usual.
+      tonpays.checkRateLimited = false;
+      tonpays.set(invoice.provider_invoice_id!, 'completed', true);
+      offsetMs += 60_000;
+      await pass();
+      expect((await paymentOf(paymentId)).state).toBe('CONFIRMED');
+    });
+
+    it('a post-deadline inquiry that meets a 429 spends none of the bounded allowance and leaves an operator’s request standing', async () => {
+      const { paymentId, invoice } = await createdAttempt();
+      await ctx.container.database.db.execute(
+        sql`UPDATE payments SET expires_at = now() - interval '1 second' WHERE id = ${paymentId}`,
+      );
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET reconcile_inquiry_requested_at = now() WHERE payment_id = ${paymentId}`,
+      );
+      tonpays.checkRateLimited = true;
+      await webhook(invoice, 'completed', 'r11-a8-late');
+      offsetMs += 6_000;
+      await pass();
+      const after = await invoiceFacts(paymentId);
+      expect(after.last_inquiry_error_code).toBe('RATE_LIMIT_EXCEEDED');
+      expect(after.post_deadline_inquiries).toBe(0);
+      expect(after.reconcile_inquiry_requested_at).not.toBeNull();
+      // The operator's question is asked again once the back-off allows, not dropped.
+      expect(after.next_inquiry_at).not.toBeNull();
+      expect(new Date(after.next_inquiry_at!).getTime()).toBe(
+        new Date(after.inquiry_not_before!).getTime(),
+      );
+      expect((await paymentOf(paymentId)).state).toBe('PENDING');
     });
   });
 });

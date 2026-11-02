@@ -1242,7 +1242,12 @@ function expectedViews(): Record<string, View> {
       intent: 'PAY_WALLET',
       key: 'bot.wallet.insufficient',
       text: '⚠️ موجودی کیف پول کافی نیست. کمبود: 150,000 تومان',
-      buttons: [[['💰 افزایش موجودی', 'o:']], [['🏠 بازگشت به منوی اصلی', 'mm:']]],
+      // R12 F3 item 7: the shortfall carries the way back to the pre-invoice.
+      buttons: [
+        [['💰 افزایش موجودی', 'o:']],
+        [['🔙 بازگشت به پیش‌فاکتور', 'ib:<id>']],
+        [['🏠 بازگشت به منوی اصلی', 'mm:']],
+      ],
     },
     'wallet.settled': {
       intent: 'PAY_WALLET',
@@ -1294,7 +1299,13 @@ function expectedViews(): Record<string, View> {
       intent: 'DISCOUNT_CODE_ENTER',
       key: 'bot.discount.ask',
       text: 'کد تخفیف خود را ارسال کنید',
-      buttons: [],
+      // R12 F3 item 2: a typed prompt carries back and cancel.
+      buttons: [
+        [
+          ['🔙 بازگشت به پیش‌فاکتور', 'ib:<id>'],
+          ['انصراف', 'iz:'],
+        ],
+      ],
     },
     'discount.preinvoice': {
       intent: 'USERNAME_TEXT',
@@ -1327,7 +1338,12 @@ function expectedViews(): Record<string, View> {
       intent: 'PAY_WALLET',
       key: 'bot.wallet.insufficient',
       text: '⚠️ موجودی کیف پول کافی نیست. کمبود: 250,000 تومان',
-      buttons: [[['💰 افزایش موجودی', 'o:']], [['🏠 بازگشت به منوی اصلی', 'mm:']]],
+      // R12 F3 item 7: the shortfall carries the way back to the pre-invoice.
+      buttons: [
+        [['💰 افزایش موجودی', 'o:']],
+        [['🔙 بازگشت به پیش‌فاکتور', 'ib:<id>']],
+        [['🏠 بازگشت به منوی اصلی', 'mm:']],
+      ],
     },
     'renew.gateway': {
       intent: 'PAY_GATEWAY',
@@ -1359,7 +1375,8 @@ function expectedViews(): Record<string, View> {
       intent: 'CONFIRM',
       key: 'bot.order.unavailable',
       text: '⚠️ این سرویس در حال حاضر قابل خرید نیست.',
-      buttons: [],
+      // R12 F3 item 3 (no dead ends): the refusal's way on is «🛒 خرید سرویس» and the main menu.
+      buttons: [[['🛒 خرید سرویس', 'co:']], [['🏠 بازگشت به منوی اصلی', 'mm:']]],
     },
   };
 }

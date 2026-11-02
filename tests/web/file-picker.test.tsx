@@ -94,10 +94,10 @@ describe('the file picker', () => {
     expect(screen.getByLabelText('backup')).toHaveAccessibleDescription('only .nxb');
   });
 
-  it('writes sizes in Persian digits and units', () => {
-    expect(formatFileSize(812)).toBe(t('web.file_bytes').replace('{n}', '۸۱۲'));
-    expect(formatFileSize(249_856)).toBe(t('web.file_kb').replace('{n}', '۲۴۴'));
-    expect(formatFileSize(3_355_443)).toBe(t('web.file_mb').replace('{n}', '۳٫۲'));
+  it('writes sizes in Latin digits and units', () => {
+    expect(formatFileSize(812)).toBe(t('web.file_bytes').replace('{n}', '812'));
+    expect(formatFileSize(249_856)).toBe(t('web.file_kb').replace('{n}', '244'));
+    expect(formatFileSize(3_355_443)).toBe(t('web.file_mb').replace('{n}', '3.2'));
   });
 
   it('draws no remove button when the page cannot clear', () => {

@@ -17,6 +17,7 @@ import type { ScopeActivityReader } from '../../../platform/system/application/r
 import type { CustomerRepository } from '../../customers/application/ports.js';
 import type { OrderRepository } from '../../orders/application/ports.js';
 import {
+  STARS_REFUNDED_STATUS,
   starsIdentityMismatch,
   starsPreCheckoutRefusal,
   type StarsCheckFacts,
@@ -30,6 +31,9 @@ import type { PaymentRepository } from './ports.js';
 
 const PROVIDER = 'TELEGRAM_STARS' as const;
 
+/** R12 F1 item 6: the audit action of a Stars charge Telegram reported refunded. */
+export const STARS_CHARGE_REFUNDED_ACTION = 'gateway_invoice.charge_refunded';
+
 /**
  * A charge Telegram reports that no attempt of this installation can own: a payload that
  * names no attempt, a charge id already attached to another attempt, or a scope that had
@@ -37,6 +41,14 @@ const PROVIDER = 'TELEGRAM_STARS' as const;
  * the charge id is what Telegram's own refund would need. Part of the schema once shipped.
  */
 export const STARS_CHARGE_UNMATCHED_CODE = 'payments.gateway_charge_unmatched';
+
+/**
+ * R12 F1 item 6: Telegram REFUNDED a Stars charge (`message.refunded_payment`) — money that
+ * left outside the ledger, since Nexa never calls Telegram's refund itself. Per charge id; it
+ * stays open for an operator, who decides what the refund means for the service or the wallet
+ * the charge paid for. Part of the schema once shipped.
+ */
+export const STARS_CHARGE_REFUNDED_CODE = 'payments.gateway_charge_refunded';
 
 /** One `pre_checkout_query`, as the webhook read it. Telegram's shapes stop at the boundary. */
 export interface StarsPreCheckoutUpdate {
@@ -46,6 +58,22 @@ export interface StarsPreCheckoutUpdate {
   readonly totalAmount: bigint;
   readonly payload: string;
 }
+
+/**
+ * R12 F1 item 6: one `message.refunded_payment`, as the webhook read it — the same five facts
+ * a `successful_payment` carries (Telegram's `RefundedPayment`: currency, total amount, the
+ * invoice payload and the charge id). The charge id is what names the charge refunded.
+ */
+export interface StarsRefundedPaymentUpdate {
+  readonly payerTelegramUserId: string;
+  readonly currency: string;
+  readonly totalAmount: bigint;
+  readonly payload: string;
+  readonly chargeId: string;
+}
+
+/** What recording a `refunded_payment` did. Only MARKED changed anything. */
+export type StarsRefundResult = 'MARKED' | 'DUPLICATE' | 'UNMATCHED' | 'SCOPE_INACTIVE';
 
 /** One `message.successful_payment`, as the webhook read it. */
 export interface StarsSuccessfulPaymentUpdate {
@@ -72,7 +100,11 @@ export interface StarsCheckoutAnswerer {
 export interface StarsPaymentServiceDeps {
   readonly invoices: Pick<
     GatewayInvoiceRepository,
-    'findByProviderOrderId' | 'lockByProviderOrderId' | 'findByChargeId' | 'recordCharge'
+    | 'findByProviderOrderId'
+    | 'lockByProviderOrderId'
+    | 'findByChargeId'
+    | 'recordCharge'
+    | 'markChargeRefunded'
   >;
   readonly payments: Pick<PaymentRepository, 'findById' | 'findByIdForUpdate' | 'holdForCheckout'>;
   readonly customers: Pick<CustomerRepository, 'findById'>;
@@ -338,6 +370,187 @@ export class StarsPaymentService {
         });
         return step.kind === 'SCOPE_INACTIVE' ? 'SCOPE_INACTIVE' : 'UNMATCHED';
     }
+  }
+
+  /**
+   * R12 F1 item 6 — Telegram says it REFUNDED a Stars charge.
+   *
+   * Nexa never refunds Stars itself, so this is money that left outside the ledger (the bot's
+   * owner refunded it, or Telegram did). Recorded, under the payment's lock:
+   *
+   * - the charge's invoice is MARKED `refunded_payment` with `provider_paid = false`, so a
+   *   recorded charge that has not settled yet never settles (and `confirmGatewayPayment`
+   *   re-reads that under the same lock), and the Web Admin shows the charge as refunded;
+   * - an audit row with the invoice and the payment as they stood;
+   * - and `payments.gateway_charge_refunded`, open per charge id, for an OPERATOR to follow
+   *   up — with the order (and so the service's panel username) it paid for.
+   *
+   * Nothing else moves: the payment's state, the ledger, the order and the service are left as
+   * they are. Whether the service is suspended or the wallet debited is the operator's call
+   * (`docs/open-questions.md`, OQ-R12-F1-02); no existing refund path does it safely here.
+   * The customer is told nothing by Nexa — Telegram told them. A charge that names no attempt
+   * of this installation, or a stopped scope, is alerted under the same code and marks nothing.
+   *
+   * Throws only when the record could not be written; the caller answers Telegram non-2xx.
+   */
+  async recordRefundedPayment(
+    scope: TenantContext,
+    botInstanceId: string,
+    update: StarsRefundedPaymentUpdate,
+  ): Promise<StarsRefundResult> {
+    const actor = systemJobActor('gateway-payments', this.deps.ids.uuid() as CorrelationId);
+    const now = this.deps.clock.now();
+    return this.deps.uow.run(scope, async (tx): Promise<StarsRefundResult> => {
+      const alert = async (
+        reason: string,
+        context: Record<string, string | number | boolean | null>,
+      ): Promise<void> => {
+        await this.deps.opsLog.record(
+          scope,
+          {
+            code: STARS_CHARGE_REFUNDED_CODE,
+            severity: 'ERROR',
+            message:
+              reason === 'SETTLED_THEN_REFUNDED' ||
+              reason === 'REFUNDED_UNSETTLED' ||
+              reason === 'REFUNDED_BEFORE_RECORDED'
+                ? 'Telegram refunded a Stars charge outside this installation. The payment is ' +
+                  'marked refunded; the service and the wallet were not changed. Decide what it means.'
+                : 'Telegram refunded a Stars charge this installation could not attach to an ' +
+                  'attempt. Nothing was marked; find it by its charge id.',
+            dedupeKey: `${STARS_CHARGE_REFUNDED_CODE}:${update.chargeId}`,
+            context: {
+              provider: PROVIDER,
+              reason,
+              providerChargeId: update.chargeId,
+              botInstanceId,
+              ...context,
+            },
+          },
+          tx,
+        );
+      };
+      // A stopped scope accepts no new work: nothing is marked, the operator is still told.
+      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
+        await alert('SCOPE_INACTIVE', {});
+        return 'SCOPE_INACTIVE';
+      }
+      /*
+       * Codex on #360: the invoice's row LOCK, the one `recordSuccessfulPayment` records the
+       * charge under — so a refund that arrives while that charge is being recorded waits for
+       * it and then sees it, instead of reading "not recorded" and being answered as unmatched
+       * while the charge commits and settles. Invoice first, then the payment: the order the
+       * charge's own recording and its pre-checkout hold take them in.
+       */
+      const found = await this.deps.invoices.lockByProviderOrderId(
+        scope,
+        PROVIDER,
+        update.payload,
+        tx,
+      );
+      if (found === null) {
+        await alert('UNMATCHED', {});
+        return 'UNMATCHED';
+      }
+      /*
+       * Codex on #360: a refund of a charge this attempt has NOT recorded yet — its
+       * `successful_payment` failed to record and Telegram will deliver it again, or it is
+       * still on its way. The refund is recorded as that charge's, refunded (the charge id is
+       * written once, `provider_paid = false`), so the success that arrives later finds its own
+       * charge already recorded and refunded and never settles it. Only for the bot the attempt
+       * was sent through, and only for a charge id no other attempt holds; anything else is
+       * reported and marks nothing. A refund naming a DIFFERENT charge than the one recorded is
+       * not this attempt's either.
+       */
+      const beforeRecorded = found.providerChargeId === null;
+      if (beforeRecorded) {
+        const elsewhere = await this.deps.invoices.findByChargeId(
+          scope,
+          PROVIDER,
+          update.chargeId,
+          tx,
+        );
+        if (
+          (found.botInstanceId !== null && found.botInstanceId !== botInstanceId) ||
+          elsewhere !== null
+        ) {
+          await alert('UNMATCHED', {});
+          return 'UNMATCHED';
+        }
+      } else if (found.providerChargeId !== update.chargeId) {
+        await alert('UNMATCHED', {});
+        return 'UNMATCHED';
+      }
+      const payment = await this.deps.payments.findByIdForUpdate(
+        scope,
+        found.paymentId as PaymentId,
+        tx,
+      );
+      if (payment === null) {
+        await alert('UNMATCHED', {});
+        return 'UNMATCHED';
+      }
+      const marked = await this.deps.invoices.markChargeRefunded(
+        scope,
+        found.paymentId as PaymentId,
+        update.chargeId,
+        now,
+        tx,
+      );
+      if (!marked.marked) return 'DUPLICATE';
+      await this.deps.audit.record(
+        scope,
+        actor,
+        {
+          action: STARS_CHARGE_REFUNDED_ACTION,
+          entityType: 'Payment',
+          entityId: payment.id,
+          before: {
+            paymentState: payment.state,
+            providerStatus: marked.before?.providerStatus ?? null,
+            providerPaid: marked.before?.providerPaid ?? null,
+            outcome: marked.before?.outcome ?? null,
+          },
+          after: {
+            paymentState: payment.state,
+            providerStatus: STARS_REFUNDED_STATUS,
+            providerPaid: false,
+            provider: PROVIDER,
+            providerChargeId: update.chargeId,
+            // Codex on #360: the charge was recorded BY this refund (its success had not been).
+            chargeRecordedByRefund: beforeRecorded,
+            refundedAmount: update.totalAmount.toString(),
+            refundedCurrency: update.currency,
+            orderId: payment.orderId,
+            // Nothing else was changed: the operator decides (OQ-R12-F1-02).
+            serviceChanged: false,
+            walletChanged: false,
+          },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+      await alert(
+        payment.state === 'CONFIRMED'
+          ? 'SETTLED_THEN_REFUNDED'
+          : beforeRecorded
+            ? 'REFUNDED_BEFORE_RECORDED'
+            : 'REFUNDED_UNSETTLED',
+        {
+          paymentId: payment.id,
+          customerId: payment.customerId,
+          orderId: payment.orderId,
+          paymentState: payment.state,
+          refundedAmount: update.totalAmount.toString(),
+          refundedCurrency: update.currency,
+        },
+      );
+      this.deps.logger.info(
+        { paymentId: payment.id, provider: PROVIDER, paymentState: payment.state },
+        'stars charge refunded by telegram',
+      );
+      return 'MARKED';
+    });
   }
 
   private async factsFor(

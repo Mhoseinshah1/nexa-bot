@@ -54,6 +54,11 @@ import { ErrorRef } from '../ui/technical-details';
 
 /** How often the drafts are read again while one is still QUEUED. */
 export const ASSIST_POLL_MS = 3_000;
+/**
+ * Phase 4 PR-5: ASSIST_ONLY prepares a draft for every customer message by itself, so an open
+ * conversation looks for a new one at this pace even when nothing is waiting.
+ */
+export const ASSIST_DISCOVER_MS = 10_000;
 
 /**
  * How long the screen waits on a QUEUED draft: the server's unclaimed bound plus two polls'
@@ -113,6 +118,15 @@ export const ASSIST_TOPIC_LABELS: Readonly<Record<SupportAiTopic, WebKey>> = {
   PLAN_INFO: 'web.assist_topic_plan_info',
   KNOWN_ERROR: 'web.assist_topic_known_error',
   GREETING: 'web.assist_topic_greeting',
+  PURCHASE_INFO: 'web.assist_topic_purchase_info',
+  RENEWAL_INFO: 'web.assist_topic_renewal_info',
+  ADDON_INFO: 'web.assist_topic_addon_info',
+  TRIAL_INFO: 'web.assist_topic_trial_info',
+  LOCATION_INFO: 'web.assist_topic_location_info',
+  SPEED_QUALITY: 'web.assist_topic_speed_quality',
+  GET_SUBSCRIPTION_LINK: 'web.assist_topic_get_subscription_link',
+  PAYMENT_HOWTO: 'web.assist_topic_payment_howto',
+  POLICY_REFUSAL: 'web.assist_topic_policy_refusal',
   REFUND: 'web.assist_topic_refund',
   WALLET: 'web.assist_topic_wallet',
   PAYMENT_DISPUTE: 'web.assist_topic_payment_dispute',
@@ -167,6 +181,7 @@ export function AssistCard({
     refetchInterval: pollUnlessFinalWhile<{ drafts: SupportAiDraftView[] }>(
       ASSIST_POLL_MS,
       (data) => data.drafts.some((draft) => awaitingDraft(draft)),
+      ASSIST_DISCOVER_MS,
     ),
   });
   const request = useMutation({

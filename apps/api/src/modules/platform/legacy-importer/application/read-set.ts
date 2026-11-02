@@ -14,6 +14,8 @@ import {
 import {
   TableDigest,
   readImportV1Identity,
+  readableColumnsOf,
+  resolveReadColumns,
   sha256Hex,
   type LegacyImportV1Identity,
   type LegacyTableEvidence,
@@ -77,7 +79,11 @@ export interface LegacyReadSetTableSpec {
   readonly primaryKey: string;
   /** Read always; a source missing one is refused (`SOURCE_SCHEMA_MISSING_COLUMN`). */
   readonly columns: readonly string[];
-  /** Read when the source has them; absent ones are left out of the digest's header. */
+  /**
+   * Read when the source can read them (`resolveReadColumns`); absent ones — including, for
+   * a `.nxpkg` source, one its snapshot rows file does not carry — are left out of the read
+   * and of the digest's header, never refused.
+   */
   readonly optionalColumns?: readonly string[];
 }
 
@@ -291,18 +297,13 @@ async function scanReadSet(
   const schemaHash = readSetSchemaHash(definition, catalog);
 
   const plan = definition.tables.map((spec) => {
-    const have = new Set(catalog.filter((c) => c.table === spec.table).map((c) => c.column));
-    if (have.size === 0) {
-      throw new LegacySourceRefused('SOURCE_SCHEMA_MISSING_TABLE', `table ${spec.table} is absent`);
-    }
-    const missing = spec.columns.filter((c) => !have.has(c));
-    if (missing.length > 0) {
-      throw new LegacySourceRefused(
-        'SOURCE_SCHEMA_MISSING_COLUMN',
-        `${spec.table}: ${missing.map((m) => `${spec.table}.${m}`).join(', ')}`,
-      );
-    }
-    const columns = [...spec.columns, ...(spec.optionalColumns ?? []).filter((c) => have.has(c))];
+    const columns = resolveReadColumns(
+      spec.table,
+      new Set(catalog.filter((c) => c.table === spec.table).map((c) => c.column)),
+      readableColumnsOf(session, spec.table),
+      spec.columns,
+      spec.optionalColumns ?? [],
+    );
     return { spec, columns };
   });
 

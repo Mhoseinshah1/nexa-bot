@@ -52,7 +52,10 @@ Domain invariants (Payments, Money) first. Paths: `PAY` =
 
 - [ ] Late approval → wallet credit with reference `<paymentId>:late-credit`,
       ledger reason `GATEWAY_LATE_CREDIT`, behind the provider's late-credit
-      setting (or `lateCreditSetting: null` = none).
+      setting (or `lateCreditSetting: null` = none). Money confirmed for a
+      CANCELLED attempt, or for an order another payment already settled, is
+      RETURNED through the same credit whatever the setting (R12 F1); a
+      cancelled attempt is still asked about until its own deadline.
 - [ ] Cancel/refund via the provider exists only as request rows
       (`gateway_provider_requests`): conditional-UPDATE state machine, in-flight
       unique index, send stamped before the call, sealed refund card whose AAD

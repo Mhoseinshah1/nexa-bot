@@ -209,7 +209,9 @@ export function ServiceLocationsPage({
   /** Edit or Add replaces the form's contents: asked first while they are unsaved. */
   const discard = useDiscardGuard(dirty);
 
-  const panelName = (id: string): string => panels.data?.find((one) => one.id === id)?.name ?? id;
+  /** The panel's name; an unreadable or unlisted panel is said so, never drawn as its uuid. */
+  const panelName = (id: string): string =>
+    panels.data?.find((one) => one.id === id)?.name ?? t('web.panel_name_unknown');
   const productName = (id: string | null): string =>
     id === null
       ? t('web.service_locations_all_products')

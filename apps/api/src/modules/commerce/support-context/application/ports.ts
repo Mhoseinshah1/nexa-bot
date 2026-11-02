@@ -39,13 +39,20 @@ export interface SupportContextReader {
     scope: TenantContext,
     customerId: UserId,
     limit: number,
+    /** Phase 4 PR-1: `anyUnderReview` counts only payments created at or after this. */
+    reviewSince?: Date,
   ): Promise<{ readonly items: readonly SupportPaymentFact[]; readonly anyUnderReview: boolean }>;
 
   /**
    * L4: whether ANY of the customer's services is UNRECONCILED — over all of them, not the page
    * the payload shows (`hasUnreconciledService`).
    */
-  anyUnreconciledService(scope: TenantContext, customerId: UserId): Promise<boolean>;
+  anyUnreconciledService(
+    scope: TenantContext,
+    customerId: UserId,
+    /** Phase 4 PR-1: only services created at or after this — not every historical one. */
+    since?: Date,
+  ): Promise<boolean>;
 
   /**
    * ACTIVE incidents with a customer message that reach this customer under the notice

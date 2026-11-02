@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   locationChangeWindow,
+  locationChangesRemaining,
   locationReached,
   money,
   serviceLocationWriteSchema,
@@ -54,6 +55,61 @@ describe('locationChangeWindow', () => {
     expect(locationChangeWindow(limits, [ago(1 * DAY), ago(30 * DAY + 1)], NOW)).toEqual({
       ok: true,
     });
+  });
+});
+
+/**
+ * R11 B4: the figure a customer is shown is the figure the window enforces. Both read one
+ * count, so this table walks the boundary cases of the one against the other.
+ */
+describe('locationChangesRemaining', () => {
+  const LIMIT = { cooldownHours: null, maxChanges: 3, periodDays: 30 };
+
+  it('says nothing without a limit: either half of the pair missing is no limit', () => {
+    expect(locationChangesRemaining(NONE, [ago(1)], NOW)).toBeNull();
+    expect(
+      locationChangesRemaining({ cooldownHours: 24, maxChanges: null, periodDays: null }, [], NOW),
+    ).toBeNull();
+    expect(
+      locationChangesRemaining({ cooldownHours: null, maxChanges: 3, periodDays: null }, [], NOW),
+    ).toBeNull();
+  });
+
+  it('is the maximum less what the period counted, and never below zero', () => {
+    expect(locationChangesRemaining(LIMIT, [], NOW)).toEqual({ remaining: 3, max: 3 });
+    expect(locationChangesRemaining(LIMIT, [ago(1 * DAY)], NOW)).toEqual({ remaining: 2, max: 3 });
+    expect(
+      locationChangesRemaining(LIMIT, [ago(1 * DAY), ago(2 * DAY), ago(3 * DAY)], NOW),
+    ).toEqual({ remaining: 0, max: 3 });
+    // More counted than allowed (a limit lowered since): still 0, not -1.
+    expect(
+      locationChangesRemaining(
+        LIMIT,
+        [1, 2, 3, 4, 5].map((day) => ago(day * DAY)),
+        NOW,
+      ),
+    ).toEqual({ remaining: 0, max: 3 });
+  });
+
+  it('counts the period exactly as the window does: inclusive at its start, a change just outside is free again', () => {
+    expect(locationChangesRemaining(LIMIT, [ago(30 * DAY)], NOW)).toEqual({ remaining: 2, max: 3 });
+    expect(locationChangesRemaining(LIMIT, [ago(30 * DAY + 1)], NOW)).toEqual({
+      remaining: 3,
+      max: 3,
+    });
+  });
+
+  it('is 0 exactly when the window refuses with LIMIT, for every history size and age', () => {
+    for (let count = 0; count <= 5; count += 1) {
+      for (const age of [1 * DAY, 29 * DAY, 30 * DAY, 30 * DAY + 1, 60 * DAY]) {
+        const history = Array.from({ length: count }, () => ago(age));
+        const verdict = locationChangeWindow(LIMIT, history, NOW);
+        const left = locationChangesRemaining(LIMIT, history, NOW);
+        expect(left?.remaining === 0, `${String(count)} changes ${String(age)}ms ago`).toBe(
+          !verdict.ok && verdict.reason === 'LIMIT',
+        );
+      }
+    }
   });
 });
 

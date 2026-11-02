@@ -1,5 +1,7 @@
 import {
   UNLIMITED_TRAFFIC_BYTES,
+  type LedgerDirection,
+  type LedgerReason,
   type Money,
   type PaymentGatewayProvider,
   type ReferralCommissionScope,
@@ -116,6 +118,14 @@ export interface WalletSummaryFacts {
   readonly now: Date;
 }
 
+/** R12 F3 item 7: one wallet movement as the history list draws it. */
+export interface WalletHistoryEntry {
+  readonly direction: LedgerDirection;
+  readonly reason: LedgerReason;
+  readonly amount: Money;
+  readonly createdAt: Date;
+}
+
 export interface ServiceCardFacts {
   readonly state: ServiceState;
   readonly serviceUsername: string;
@@ -149,6 +159,18 @@ export interface ServiceCardFacts {
    * read (the traffic lines already say «unknown» then).
    */
   readonly lastUpdatedAt?: Date;
+  /**
+   * R11 B4: the location changes left, «۲ از ۳». Absent or null draws nothing: the feature is
+   * off for this service, or no limit is set.
+   */
+  readonly locationChanges?: { readonly remaining: number; readonly max: number } | null;
+}
+
+/** What the location change screen shows (WP-A6 / R11 B4). */
+export interface LocationChoiceFacts {
+  readonly currentLocation: string;
+  /** Absent or null draws no remaining line: no limit is set. */
+  readonly locationChanges?: { readonly remaining: number; readonly max: number } | null;
 }
 
 /** What a transfer's summary shows of a service (Package F). */
@@ -212,7 +234,14 @@ export const ROUTE_NAME_KEYS: Readonly<Record<PaymentGatewayProvider, TemplateKe
 };
 
 export class CustomerScreenComposer {
-  constructor(private readonly templates: Pick<TemplateResolver, 'render'>) {}
+  constructor(
+    private readonly templates: Pick<TemplateResolver, 'render'>,
+    /**
+     * The customer-facing name of each ledger reason (the wallet history). A port filled by the
+     * composition root from the catalogue, because an application file never imports it.
+     */
+    private readonly ledgerReasonLabels: Readonly<Partial<Record<LedgerReason, string>>> = {},
+  ) {}
 
   async preinvoice(scope: ScopeContext, facts: PreinvoiceFacts): Promise<ComposedScreen> {
     const lines = (items: readonly string[]) => items.join('\n');
@@ -346,6 +375,36 @@ export class CustomerScreenComposer {
     };
   }
 
+  /**
+   * R12 F3 item 7: the customer's last wallet movements, newest first — one line each from
+   * `bot.wallet.history_line_credit` / `_debit`, the reason in the customer's own word
+   * (the `ledgerReasonLabels` port). Read-only: the entries are the ledger's, in the selling
+   * currency the balance above is derived in, and nothing here changes a balance.
+   */
+  async walletHistory(
+    scope: ScopeContext,
+    entries: readonly WalletHistoryEntry[],
+  ): Promise<ComposedScreen> {
+    if (entries.length === 0) return { key: 'bot.wallet.history_empty', values: {} };
+    const lines: string[] = [];
+    for (const entry of entries) {
+      lines.push(
+        await this.templates.render(
+          scope,
+          entry.direction === 'CREDIT'
+            ? 'bot.wallet.history_line_credit'
+            : 'bot.wallet.history_line_debit',
+          {
+            amount: entry.amount,
+            reason: this.ledgerReasonLabels[entry.reason] ?? entry.reason,
+            at: entry.createdAt,
+          },
+        ),
+      );
+    }
+    return { key: 'bot.wallet.history', values: { lines: lines.join('\n') } };
+  }
+
   async serviceCard(scope: ScopeContext, facts: ServiceCardFacts): Promise<ComposedScreen> {
     const known = facts.usageSyncedAt !== null;
     const usedTraffic = known
@@ -380,7 +439,36 @@ export class CustomerScreenComposer {
         ...(facts.rotateOffered
           ? { rotateHint: await this.templates.render(scope, 'bot.service.rotate_hint', {}) }
           : {}),
+        ...(await this.locationRemaining(scope, facts.locationChanges)),
       },
+    };
+  }
+
+  /**
+   * The location change screen: where the service is, and — only where a limit is set — how
+   * many changes it has left (R11 B4). The targets are the buttons.
+   */
+  async locationChoice(scope: ScopeContext, facts: LocationChoiceFacts): Promise<ComposedScreen> {
+    return {
+      key: 'bot.service.location_choice',
+      values: {
+        currentLocation: facts.currentLocation,
+        ...(await this.locationRemaining(scope, facts.locationChanges)),
+      },
+    };
+  }
+
+  /** The optional `locationRemaining` value: the rendered line, or nothing (the line drops). */
+  private async locationRemaining(
+    scope: ScopeContext,
+    left: { readonly remaining: number; readonly max: number } | null | undefined,
+  ): Promise<TemplateValues> {
+    if (left === null || left === undefined) return {};
+    return {
+      locationRemaining: await this.templates.render(scope, 'bot.service.location_remaining', {
+        remaining: left.remaining,
+        max: left.max,
+      }),
     };
   }
 

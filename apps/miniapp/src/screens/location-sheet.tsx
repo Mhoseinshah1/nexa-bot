@@ -17,8 +17,8 @@ import { Button, errorText, useLoad } from '../ui.js';
  * priced. A free target is requested at once (the customer confirms on this sheet first); a
  * priced one becomes the ordinary pre-invoice and goes through checkout.
  *
- * Not drawn, because the service exposes nothing behind them: the remaining changes this
- * month (the cooldown and the rolling limit are enforced and arrive as a refusal), a
+ * R11 B4 draws the changes left («۲ از ۳») when a limit is set. Not drawn, because the service
+ * exposes nothing behind them: the cooldown (enforced, and it arrives as a refusal), a
  * «پیشنهادی» tag, and a «ظرفیت تکمیل» state per target (a full target is refused on request).
  */
 const LOCATION_ERRORS: Readonly<Record<string, MiniAppKey>> = {
@@ -39,7 +39,16 @@ export function locationErrorText(error: unknown): string {
   return errorText(error);
 }
 
-export function LocationSheet({ serviceId, onClose }: { serviceId: string; onClose: () => void }) {
+export function LocationSheet({
+  serviceId,
+  onClose,
+  onRequested,
+}: {
+  serviceId: string;
+  onClose: () => void;
+  /** A free move was accepted: the page behind the sheet re-reads its remaining count. */
+  onRequested?: () => void;
+}) {
   const { api, navigate } = useApp();
   const { loaded, reload } = useLoad(
     () => api.get(MINIAPP_ROUTES.serviceLocations, { serviceId }, miniAppServiceLocationsSchema),
@@ -61,7 +70,10 @@ export function LocationSheet({ serviceId, onClose }: { serviceId: string; onClo
         { locationId },
       );
       if (result.outcome === 'ORDER') navigate({ name: 'checkout', orderId: result.order.id });
-      else setRequested(true);
+      else {
+        setRequested(true);
+        onRequested?.();
+      }
     } catch (failure) {
       setError(locationErrorText(failure));
     } finally {
@@ -149,6 +161,14 @@ function Choice({
           </li>
         ))}
       </ul>
+      {offer.remaining !== null && (
+        <p className="muted">
+          {t('miniapp.location_remaining', {
+            remaining: offer.remaining.remaining,
+            max: offer.remaining.max,
+          })}
+        </p>
+      )}
       <p className="muted">{t('miniapp.location_note')}</p>
       {error !== null && <p className="error">{error}</p>}
       <div className="sheet-actions">

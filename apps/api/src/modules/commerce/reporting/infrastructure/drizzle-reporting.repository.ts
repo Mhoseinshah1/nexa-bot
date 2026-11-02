@@ -128,7 +128,8 @@ export class DrizzleReportingRepository implements ReportingRepository {
   async newCustomers(scope: TenantContext, window: Window): Promise<number> {
     const [row] = await this.rows<{ n: number }>(sql`
       SELECT count(*)::int AS n FROM customers c
-       WHERE c.tenant_id = ${tenant(scope)} AND ${within(sql`c.created_at`, window)}`);
+       WHERE c.tenant_id = ${tenant(scope)} AND ${nexaCustomer}
+         AND ${within(sql`c.created_at`, window)}`);
     return row?.n ?? 0;
   }
 
@@ -243,7 +244,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
           return {
             ts: sql`c.created_at`,
             value: sql`count(*)`,
-            from: sql`customers c WHERE c.tenant_id = ${tenant(scope)}`,
+            from: sql`customers c WHERE c.tenant_id = ${tenant(scope)} AND ${nexaCustomer}`,
           };
         default: {
           const unreachable: never = metric;
@@ -1452,6 +1453,18 @@ const saleOrigin: SQL = sql`o.origin = ANY(${text(SALE_ORDER_ORIGINS)})`;
  * ones out, which have no evidence.
  */
 const notLegacyImport: SQL = sql`p.source <> 'MIRZA'`;
+
+/**
+ * A customer this installation registered (R11 A1.1). The Mirza import writes each customer
+ * it carries with `created_at = first_seen_at =` the moment of the import and then marks it
+ * `source = 'MIRZA'` (`drizzle-customer-source-marker.ts`), so a `created_at` window that
+ * holds the import day would otherwise call every imported customer "new" — the dashboard's
+ * «مشتری جدید», the reports' «کاربر جدید», its previous-period comparison and the NEW_USERS
+ * series alike. The nightly report counts its new customers the same way
+ * (`drizzle-nightly-report.reader.ts`). A customer who was already NEXA's when the import ran
+ * (`EXISTING_CUSTOMER`) keeps `source = 'NEXA'` and its own `created_at`, and still counts.
+ */
+const nexaCustomer: SQL = sql`c.source = 'NEXA'`;
 
 function tenant(scope: TenantContext): SQL {
   return sql`${scope.tenantId}::uuid`;

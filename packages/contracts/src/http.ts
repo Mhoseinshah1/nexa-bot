@@ -14,6 +14,11 @@ import {
   USERNAME_TEMPLATE_MAX_LENGTH,
 } from './service-username.js';
 import { paymentAccountInputSchema } from './payment-accounts.js';
+import {
+  PANEL_QR_KINDS,
+  SINGBOX_INTERVAL_MAX_MINUTES,
+  SINGBOX_INTERVAL_MIN_MINUTES,
+} from './panel-qr.js';
 import { REFUND_REFUSAL_REASONS, refundChannelSchema, refundStateSchema } from './refunds.js';
 import {
   serviceRefundRequestStateSchema,
@@ -967,7 +972,15 @@ export const featureFlagSchema = z.object({
 });
 export type FeatureFlagResponse = z.infer<typeof featureFlagSchema>;
 
-export const featureFlagListResponseSchema = z.object({ flags: z.array(featureFlagSchema) });
+/**
+ * `total` (R11 A1): how many flags the server holds for the tenant — the figure a counted pager
+ * may print (the list is not cursor-paged, so a page cannot count its own rows). Optional on the
+ * wire so an older server's answer still parses; a client draws no «of N» without it.
+ */
+export const featureFlagListResponseSchema = z.object({
+  flags: z.array(featureFlagSchema),
+  total: z.number().int().nonnegative().optional(),
+});
 export type FeatureFlagListResponse = z.infer<typeof featureFlagListResponseSchema>;
 
 export const featureFlagWriteResponseSchema = z.object({
@@ -1027,7 +1040,15 @@ export const templateViewSchema = z.object({
 });
 export type TemplateViewResponse = z.infer<typeof templateViewSchema>;
 
-export const templateListResponseSchema = z.object({ templates: z.array(templateViewSchema) });
+/**
+ * `total` (R11 A1): how many texts the server holds for the tenant — the figure the counted pager
+ * prints («1–10 of 732»). The catalogue is returned whole, so a client could count it, but the
+ * Web Admin states only totals the server sent. Optional so an older server's answer still parses.
+ */
+export const templateListResponseSchema = z.object({
+  templates: z.array(templateViewSchema),
+  total: z.number().int().nonnegative().optional(),
+});
 export type TemplateListResponse = z.infer<typeof templateListResponseSchema>;
 
 /**
@@ -1620,6 +1641,19 @@ export const panelSummarySchema = z.object({
    * group is only ever sold onto through the products bound to it.
    */
   balancingGroup: z.string().nullable(),
+  /**
+   * R11 A4: «فقط فایل، بدون لینک ساب». When true, the subscription link of a service on this
+   * panel is never shown to its customer (the bot, «سرویس‌های من», the mini app): they get the
+   * connection files only. Possible only on a panel whose provider hands over files; false
+   * everywhere else and by default.
+   */
+  filesOnlyDelivery: z.boolean(),
+  /**
+   * R11 A4: «نوع بارکد» — which QR a customer of this panel is shown (RickPanel only; SUB_LINK
+   * everywhere else) and how often a sing-box profile refreshes itself, in minutes.
+   */
+  qrKind: z.enum(PANEL_QR_KINDS),
+  singboxIntervalMinutes: z.number().int(),
   createdAt: isoTimestamp,
   updatedAt: isoTimestamp,
 });
@@ -1898,6 +1932,25 @@ export const updatePanelRequestSchema = z.object({
    * never what anything costs. Lower case, so two spellings cannot be two groups.
    */
   balancingGroup: panelBalancingGroupInputSchema.nullable().optional(),
+  /**
+   * R11 A4: switch «فقط فایل، بدون لینک ساب» on or off. `panels.edit`, alongside the name: it
+   * decides what a customer is shown, never what anything costs. Refused with
+   * `PANEL_FILES_ONLY_UNSUPPORTED` (on) for a panel whose provider hands over no files.
+   */
+  filesOnlyDelivery: z.boolean().optional(),
+  /**
+   * R11 A4: «نوع بارکد». `panels.edit`, alongside the name. A kind other than SUB_LINK, or a
+   * changed interval, is refused with `PANEL_QR_KIND_UNSUPPORTED` for a panel that is not a
+   * RickPanel. The interval is whole minutes in `[SINGBOX_INTERVAL_MIN_MINUTES,
+   * SINGBOX_INTERVAL_MAX_MINUTES]`.
+   */
+  qrKind: z.enum(PANEL_QR_KINDS).optional(),
+  singboxIntervalMinutes: z
+    .number()
+    .int()
+    .min(SINGBOX_INTERVAL_MIN_MINUTES)
+    .max(SINGBOX_INTERVAL_MAX_MINUTES)
+    .optional(),
   idempotencyKey: z.string().min(8).max(255),
 });
 export type UpdatePanelRequest = z.infer<typeof updatePanelRequestSchema>;
@@ -4838,6 +4891,39 @@ export const paymentReconcileRequestSchema = z.object({
 });
 export type PaymentReconcileRequest = z.infer<typeof paymentReconcileRequestSchema>;
 
+/**
+ * R12 F3 item 8: approving a card-to-card receipt. `confirm: true` is the explicit final
+ * confirmation (the Web Admin asks first), stated in the body so a request that omits it is
+ * refused at the schema rather than executed. The server settles the payment's OWN amount —
+ * nothing the client types decides how much arrives; the note is the reviewer's, optional.
+ */
+export const paymentReceiptApproveRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  confirm: z.literal(true),
+  note: z.string().trim().max(500).optional(),
+});
+export type PaymentReceiptApproveRequest = z.infer<typeof paymentReceiptApproveRequestSchema>;
+
+/** R12 F3 item 8: rejecting one. The reason is MANDATORY — the customer is told it. */
+export const paymentReceiptRejectRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  reason: z.string().trim().min(1).max(500),
+});
+export type PaymentReceiptRejectRequest = z.infer<typeof paymentReceiptRejectRequestSchema>;
+
+/**
+ * R12 F3 item 8: crediting what the reviewer judged arrived to the customer's wallet. The
+ * amount is minor units as a decimal string (bounded by the ledger on the server); `confirm:
+ * true` because it moves money.
+ */
+export const paymentReceiptCreditRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  amountMinor: z.string().regex(/^[0-9]{1,19}$/u),
+  confirm: z.literal(true),
+  note: z.string().trim().max(500).optional(),
+});
+export type PaymentReceiptCreditRequest = z.infer<typeof paymentReceiptCreditRequestSchema>;
+
 /** "Ask the provider again" on an `UNKNOWN` gateway payment: a database write only. */
 export const paymentReinquireRequestSchema = z.object({
   idempotencyKey: z.string().min(8).max(255),
@@ -5197,6 +5283,19 @@ export const PAYMENT_ROUTES = {
   reconcile: (id: string) => `/payments/${encodeURIComponent(id)}/reconcile`,
   /** Bring the next provider inquiry of an `UNKNOWN` gateway payment forward: a row write only. */
   reinquire: (id: string) => `/payments/${encodeURIComponent(id)}/reinquire`,
+  /*
+   * R12 F3 item 8 (owner decision: card-to-card review happens in BOTH places — this reverses
+   * Payment File 02 §10's "Telegram only"). The three dispositions of a card-to-card receipt,
+   * each through the SAME application method the Telegram panel calls
+   * (`PaymentService.confirmManualTransfer`, `rejectManualTransfer`,
+   * `ReceiptDispositionService.creditToWallet`): no parallel settlement, the same permissions
+   * (`receipts.review`; the credit also `users.wallet.credit`), the same audit, the same
+   * idempotency namespace and the same conditional PENDING edge, so a decision taken here and
+   * one taken in Telegram are mutually exclusive and the loser is told which won.
+   */
+  receiptApprove: (id: string) => `/payments/${encodeURIComponent(id)}/receipt/approve`,
+  receiptReject: (id: string) => `/payments/${encodeURIComponent(id)}/receipt/reject`,
+  receiptCredit: (id: string) => `/payments/${encodeURIComponent(id)}/receipt/credit`,
 } as const;
 
 /**

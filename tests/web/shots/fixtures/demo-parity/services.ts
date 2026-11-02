@@ -1,6 +1,8 @@
 import {
   bulkOperationListResponseSchema,
   compensationListResponseSchema,
+  customServiceLocationListResponseSchema,
+  customServiceRuleListResponseSchema,
   orderListResponseSchema,
   serviceAddonListResponseSchema,
   serviceListResponseSchema,
@@ -414,10 +416,25 @@ const DEMO_LOCATIONS: readonly (readonly [
   ['🇺🇸 آمریکا — نیویورک', 'us-nyc', true, null, null, null, null, false],
 ];
 
+/** The demo fleet's panel (`/panels`) a location key belongs to: `de-*` → DE-1, `tr-*` → TR-1. */
+function panelOfLocation(key: string): string {
+  const prefix = key.split('-')[0] as 'de' | 'nl' | 'tr' | 'fi' | 'us';
+  const map = {
+    de: DEMO_PANEL_IDS.de1,
+    nl: DEMO_PANEL_IDS.nl1,
+    tr: DEMO_PANEL_IDS.tr1,
+    fi: DEMO_PANEL_IDS.fi1,
+    us: DEMO_PANEL_IDS.us1,
+  } as const;
+  return map[prefix];
+}
+
 const LOCATIONS: readonly Json[] = DEMO_LOCATIONS.map(
   ([label, key, initial, price, cooldown, changes, period, on], index) => ({
     ...BASE_LOCATIONS[index % BASE_LOCATIONS.length],
     id: `0192c0de-0000-7000-8000-0000000003${String(index + 1).padStart(2, '0')}`,
+    // The location's panel is one of the demo fleet's, so the table draws its NAME (DE-1).
+    panelId: panelOfLocation(key),
     locationKey: key,
     label,
     initial,
@@ -523,6 +540,21 @@ export const DEMO_SERVICES_FAMILY: readonly ShotFixture[] = [
   fixture('/trials/resets', trialResetListResponseSchema, { resets: RESETS, nextCursor: null }),
   fixture('/service-addons', serviceAddonListResponseSchema, { addons: ADDONS, nextCursor: null }),
   fixture('/service-locations', serviceLocationListResponseSchema, { locations: LOCATIONS }),
+  // `/custom-service`: its rules and locations name the demo fleet's panels, not the default
+  // fixture's, so the table resolves a panel NAME where the fixture used to leave a raw id.
+  fixture('/custom-service/rules', customServiceRuleListResponseSchema, {
+    rules: rows(base(COMMERCE_B, '/custom-service/rules'), 'rules').map((rule) => ({
+      ...rule,
+      panelId: rule['panelId'] === null ? null : DEMO_PANEL_IDS.de1,
+    })),
+  }),
+  fixture('/custom-service/locations', customServiceLocationListResponseSchema, {
+    locations: rows(base(COMMERCE_B, '/custom-service/locations'), 'locations').map((row) => ({
+      ...row,
+      panelId: DEMO_PANEL_IDS.de1,
+      panelName: 'DE-1',
+    })),
+  }),
   fixture('/bulk-operations', bulkOperationListResponseSchema, {
     operations: BULK,
     nextCursor: null,

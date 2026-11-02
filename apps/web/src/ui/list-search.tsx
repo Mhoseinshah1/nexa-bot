@@ -291,7 +291,7 @@ export function ListSearchBox({
 }
 
 /** Time with seconds: a refresh within the same minute must still visibly change. */
-const READ_AT = new Intl.DateTimeFormat('fa-IR', {
+const READ_AT = new Intl.DateTimeFormat('fa-IR-u-nu-latn', {
   dateStyle: 'medium',
   timeStyle: 'medium',
 });

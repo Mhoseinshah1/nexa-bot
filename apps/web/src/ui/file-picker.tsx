@@ -47,8 +47,8 @@ export interface FilePickerProps {
   describedBy?: string;
 }
 
-const SIZE_ONE = new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 1 });
-const SIZE_WHOLE = new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 0 });
+const SIZE_ONE = new Intl.NumberFormat('fa-IR-u-nu-latn', { maximumFractionDigits: 1 });
+const SIZE_WHOLE = new Intl.NumberFormat('fa-IR-u-nu-latn', { maximumFractionDigits: 0 });
 
 /** A byte count in Persian digits and units (bytes, kilobytes, megabytes). */
 export function formatFileSize(bytes: number): string {

@@ -264,7 +264,9 @@ function ToggleLine({
  * row's hover or the button's focus at desktop, always on a phone (`.cs-cards`, commerce-b.css).
  */
 function Reference({ id, name }: { id: string; name: string | undefined }) {
-  return name === undefined ? <Copyable value={id} /> : <Copyable value={id} display={name} />;
+  // A name is always drawn: an unlisted panel or tier says so instead of showing its uuid (the
+  // id stays one click away — it is what the button copies).
+  return <Copyable value={id} display={name ?? t('web.reference_name_unknown')} />;
 }
 
 // ---------------------------------------------------------------------------

@@ -42,6 +42,7 @@ import {
   type TranscriptLine,
 } from '../domain/prompt.js';
 import { planVision } from '../domain/vision.js';
+import type { OutputPriceFamily } from '../domain/output-policy.js';
 import type { SupportTranscriptLine } from '../domain/transcript.js';
 import { decisionOutputTokens, parseSupportDecision } from '../domain/decision.js';
 import type {
@@ -106,11 +107,27 @@ export interface SupportContextSource {
      * `knowledgeRefs` alias in these (hotfix 2026-10-06).
      */
     readonly knowledgeAliases?: ReadonlyMap<string, string>;
+    /** Phase 4 PR-1: the service aliases (`S…`) whose service is UNRECONCILED. */
+    readonly unreconciledAliases?: ReadonlySet<string>;
     readonly linked: boolean;
     /** TB7: the payload's flags, which the automatic-reply guards read. */
     readonly flags: AutoContextFlags;
     /** D2 telemetry: knowledge entries sent, and how many there were to choose from. */
     readonly knowledge?: KnowledgeCounts;
+    /**
+     * Phase 4 PR-2: the live price family of THIS payload (`livePriceFamily`) — the amounts the
+     * output validator lets a reply quote. Absent: only the payload's own numbers are allowed.
+     */
+    readonly priceFamily?: OutputPriceFamily;
+    /**
+     * Phase 4 PR-3: alias → row id for the services (`S…`) and catalogue plans (`C…`) the payload
+     * SHOWED, server-side only. A tool's target is resolved here and nowhere else; absent, every
+     * target is refused.
+     */
+    readonly references?: {
+      readonly services: ReadonlyMap<string, string>;
+      readonly catalogue: ReadonlyMap<string, string>;
+    };
   }>;
 }
 

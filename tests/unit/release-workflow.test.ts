@@ -104,7 +104,7 @@ describe('the release workflow', () => {
     // A tag is a mutable pointer. If each job resolves it separately, the job
     // that checked CI and the job that builds can legitimately see different
     // commits — and only one of them passed.
-    for (const job of ['publish', 'verify']) {
+    for (const job of ['publish', 'verify', 'installer']) {
       const steps = workflow.jobs[job]?.steps ?? [];
       const checkout = steps.find((s) => s.uses?.startsWith('actions/checkout'));
       expect(checkout?.with?.ref, `${job} re-resolves the tag`).toBe(
@@ -209,6 +209,93 @@ describe('the release workflow', () => {
     // The loop must be able to fail.
     const loop = verify.slice(verify.indexOf('for required in'));
     expect(loop).toContain('exit 1');
+  });
+
+  it('attaches the installer only for a verified image, with only the permissions it needs', () => {
+    // An installer pointing at an image nobody verified would be the first
+    // thing an operator runs. And nothing but this job may write to the
+    // repository or mint an OIDC token.
+    expect(needsOf('installer')).toEqual(expect.arrayContaining(['gate', 'publish', 'verify']));
+    expect(workflow.jobs.installer?.permissions).toEqual({
+      contents: 'write',
+      'id-token': 'write',
+      attestations: 'write',
+    });
+    for (const [name, job] of Object.entries(workflow.jobs)) {
+      if (name === 'installer') continue;
+      expect(job.permissions?.contents, `${name} can write to the repository`).not.toBe('write');
+      expect(job.permissions?.['id-token'], `${name} can mint an OIDC token`).toBeUndefined();
+      expect(job.permissions?.attestations, `${name} can write attestations`).toBeUndefined();
+    }
+  });
+
+  it('builds the installer assets from the gate SHA, attests them, then attaches all three', () => {
+    const steps = workflow.jobs.installer?.steps ?? [];
+    const checkout = steps.find((s) => s.uses?.startsWith('actions/checkout'));
+    expect(checkout?.with?.ref).toBe('${{ needs.gate.outputs.sha }}');
+    expect(checkout?.with?.['persist-credentials']).toBe(false);
+
+    const build = steps.findIndex((s) => s.name === 'Build the installer assets');
+    expect(build, 'no build step').toBeGreaterThan(-1);
+    expect(steps[build]?.run?.trim()).toBe(
+      'bash scripts/release-installer-assets.sh build "$TAG" "$REPO" "$SHA" release-assets',
+    );
+    expect(steps[build]?.env?.SHA).toBe('${{ needs.gate.outputs.sha }}');
+    expect(steps[build]?.env?.TAG).toBe('${{ needs.gate.outputs.tag }}');
+
+    // Keyless: the attestation action and the job's OIDC token, never a key.
+    const attest = steps.findIndex((s) => s.uses?.startsWith('actions/attest-build-provenance@'));
+    expect(attest, 'no provenance attestation').toBeGreaterThan(build);
+    const subjects = String(steps[attest]?.with?.['subject-path'] ?? '');
+    expect(subjects).toContain('release-assets/install.sh');
+    expect(subjects).toContain('release-assets/nexa-deploy-');
+    expect(steps[attest]?.with ?? {}).not.toHaveProperty('github-token');
+    expect(
+      JSON.stringify(workflow.jobs.installer),
+      'a secret reaches the installer job',
+    ).not.toMatch(/secrets\./);
+
+    const attach = steps.findIndex((s) => s.name === 'Attach the assets to the release');
+    expect(attach, 'assets are attached before they are attested').toBeGreaterThan(attest);
+    const run = steps[attach]?.run ?? '';
+    for (const asset of [
+      '"release-assets/install.sh"',
+      '"release-assets/install.sh.sha256"',
+      '"release-assets/nexa-deploy-${TAG}.tar.gz"',
+    ]) {
+      expect(run, `${asset} is not attached`).toContain(asset);
+    }
+    // An existing release (the owner's) gets its assets added or replaced;
+    // otherwise one is created for the pushed tag, never for a new tag.
+    expect(run).toContain('gh release upload "$TAG" "${assets[@]}" --clobber');
+    expect(run).toMatch(/gh release create "\$TAG" --verify-tag [^\n]*"\$\{assets\[@\]\}"/);
+    // Only a definite "not found" means "create"; anything else stops.
+    const unresolved = run.slice(run.indexOf('could not determine whether release'));
+    expect(run).toContain('*"release not found"*');
+    expect(unresolved.slice(0, unresolved.indexOf(';;'))).toContain('exit 1');
+    expect(steps[attach]?.env?.SHA).toBe('${{ needs.gate.outputs.sha }}');
+    // The tag must still name the commit the assets came from, checked BEFORE
+    // the attestation, so a tag that moved leaves no attestation behind.
+    const tagCheck = steps.findIndex(
+      (s) => s.name === 'Require the tag to still name the gate SHA',
+    );
+    expect(tagCheck, 'no tag check').toBeGreaterThan(build);
+    expect(tagCheck, 'the tag is checked after the attestation').toBeLessThan(attest);
+    expect(steps[tagCheck]?.run ?? '').toContain('if [ "$object" != "commit ${SHA}" ]; then');
+    expect(steps[tagCheck]?.run ?? '').toMatch(/refusing: tag[^\n]*\n\s*exit 1/);
+    expect(steps[tagCheck]?.env?.SHA).toBe('${{ needs.gate.outputs.sha }}');
+    expect(steps[tagCheck]?.env?.TAG).toBe('${{ needs.gate.outputs.tag }}');
+  });
+
+  it('passes every expression to a run block through env, never by interpolation', () => {
+    for (const [name, job] of Object.entries(workflow.jobs)) {
+      for (const step of job.steps) {
+        if (step.run === undefined) continue;
+        expect(step.run, `${name}: "${step.name ?? step.run}" interpolates \${{ }}`).not.toContain(
+          '${{',
+        );
+      }
+    }
   });
 
   it('pins every third-party action to an immutable commit', () => {

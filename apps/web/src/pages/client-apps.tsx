@@ -728,7 +728,7 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
       key: 'name',
       header: t('web.client_apps_name'),
       render: (row) => (
-        // A product name keeps the digits it was typed with («v2rayNG», not «v۲rayNG»).
+        // A product name keeps the digits it was typed with («v2rayNG»).
         <span className="strong ca-name">
           {row.icon === null ? row.name : `${row.icon} ${row.name}`}
         </span>

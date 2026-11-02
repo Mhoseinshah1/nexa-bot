@@ -19,6 +19,7 @@ import {
   type ClientAppPlatform,
   type MiniAppGiftCardResponse,
   type MiniAppGuidePlatformResponse,
+  type MiniAppReferralFriendsResponse,
   type MiniAppReferralResponse,
   type MiniAppTicketDetail,
   type MiniAppTopupQuoteResponse,
@@ -223,6 +224,39 @@ export class MiniAppAccountController {
     };
   }
 
+  /**
+   * R11 B3: the customer's OWN invited friends, newest first, one bounded page per call. The
+   * referrer is the session's customer, never a parameter; the only input is the cursor. The
+   * flag `referral_friends_list` is read by the service: off answers `{ enabled: false }`.
+   */
+  @Get(MINIAPP_ROUTES.referralFriends)
+  async referralFriends(
+    @Req() request: FastifyRequest,
+    @Query() query: unknown,
+  ): Promise<MiniAppReferralFriendsResponse> {
+    const call = await miniAppCall(this.container, request, { gated: true });
+    const { cursor } = parseWith(miniAppCursorQuerySchema, query);
+    const view = await this.container.referralFriends.list(
+      call.context.scope,
+      call.actor,
+      call.context.customer.id,
+      cursor === undefined ? null : decodeKeysetCursor(cursor),
+    );
+    if (!view.enabled) return { enabled: false };
+    return {
+      enabled: true,
+      counts: view.counts,
+      items: view.items.map((friend) => ({
+        displayName: friend.displayName,
+        joinedAt: friend.joinedAt.toISOString(),
+        status: friend.status,
+        rewardNotBefore:
+          friend.rewardNotBefore === null ? null : friend.rewardNotBefore.toISOString(),
+      })),
+      nextCursor: view.next === null ? null : encodeKeysetCursor(view.next),
+    };
+  }
+
   @Get(MINIAPP_ROUTES.trial)
   async trial(@Req() request: FastifyRequest): Promise<MiniAppTrialResponse> {
     const call = await miniAppCall(this.container, request, { gated: true });
@@ -407,7 +441,12 @@ export class MiniAppAccountController {
       messages: found.messages
         .filter((message) => message.senderType !== 'SYSTEM')
         .map((message) => ({
-          author: message.senderType === 'CUSTOMER' ? ('CUSTOMER' as const) : ('SUPPORT' as const),
+          author:
+            message.senderType === 'CUSTOMER'
+              ? ('CUSTOMER' as const)
+              : message.senderType === 'AI'
+                ? ('AI' as const)
+                : ('SUPPORT' as const),
           text: message.body,
           hasAttachment: message.attachment !== null || found.filed.has(message.id),
           createdAt: message.createdAt.toISOString(),

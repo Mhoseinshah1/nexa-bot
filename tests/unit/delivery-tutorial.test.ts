@@ -381,6 +381,8 @@ function sweep(options: { rotated?: boolean; card?: CustomerSendResult } = {}) {
     panelPolicy: {
       forPanel: async () => resolvePanelPolicy({ delivery: { mode: 'CARD_TEXT' }, actions: {} }),
     },
+    filesOnly: { isFilesOnly: async () => false },
+    qrOptions: { qrOptionsOf: async () => ({ kind: 'SUB_LINK' as const, intervalMinutes: 360 }) },
     files: {
       afterDelivery: async () => {
         calls.push('files');

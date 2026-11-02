@@ -39,6 +39,7 @@ export * from './provider.js';
 export * from './panels.js';
 /** WP-A8: the capability registry, the per-panel policy and panel diagnostics. */
 export * from './panel-advanced.js';
+export * from './panel-qr.js';
 /** R1: the per-panel trial configuration, independent of the catalogue. */
 export * from './panel-trial.js';
 export * from './delivery-tutorial.js';
@@ -54,6 +55,8 @@ export * from './pricing.js';
 export * from './customer.js';
 // Spec §10: the one free-text search a Web Admin list page draws.
 export * from './list-search.js';
+// R11 A1: the top-bar search over customers, orders and services (no new permission).
+export * from './global-search.js';
 export * from './catalog.js';
 export * from './traffic-input.js';
 export * from './commerce.js';
@@ -194,6 +197,8 @@ export * from './support-ai.js';
 export * from './support-knowledge.js';
 /** TB10: read-only support analytics over a half-open report window. */
 export * from './support-analytics.js';
+/** Phase 4 PR-5: readiness card, test console (sends nothing), handoff-text reports. */
+export * from './support-ai-console.js';
 /** FIX-04/05: the one taxonomy of reportable operational events and their group presentation. */
 export * from './ops-error-events.js';
 /** The one-time Mirza import: which rows of the normal tables came from Mirza. */

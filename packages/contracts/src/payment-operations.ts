@@ -45,6 +45,10 @@ import { REPORT_RANGES, reportLocalDateSchema } from './reporting.js';
  *   (`OQ-WP11A-03`) and stays in its own facet. Listed oldest first, like every queue, which
  *   is the attention order: the oldest unresolved is the most at risk. An integration test
  *   holds the SQL and the classifier to the same answer.
+ * - `RECEIPT_REVIEW` — R12 F3 item 8: the receipt arm of `NEEDS_ACTION` on its own — a PENDING
+ *   manual transfer holding a filed receipt that nobody has decided yet (not in a provider
+ *   review, not late or partial). What the Web Admin's nav counter and dashboard tile count and
+ *   open; the SAME predicate as that arm (one function in SQL), so the count and the list agree.
  */
 export const PAYMENT_OPS_QUEUES = [
   'PENDING',
@@ -56,6 +60,7 @@ export const PAYMENT_OPS_QUEUES = [
   'PROVIDER_ERROR',
   'REFUND_RELATED',
   'NEEDS_ACTION',
+  'RECEIPT_REVIEW',
 ] as const;
 export type PaymentOpsQueue = (typeof PAYMENT_OPS_QUEUES)[number];
 export const paymentOpsQueueSchema = z.enum(PAYMENT_OPS_QUEUES);

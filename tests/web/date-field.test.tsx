@@ -5,7 +5,7 @@ import { DateField, type DateFieldMode } from '../../apps/web/src/ui/date-field'
 import { Drawer, Field } from '../../apps/web/src/ui/kit';
 import { ListFilterBar } from '../../apps/web/src/ui/filter-bar';
 import { t } from '../../apps/web/src/i18n/web.fa';
-import { faDigits } from '../../apps/web/src/ui/jalali';
+import { plainDigits } from '../../apps/web/src/ui/jalali';
 import { openFilterPanel, setDateField } from './ui-helpers';
 
 /**
@@ -70,11 +70,13 @@ describe('the trigger', () => {
     expect(field()).toHaveTextContent(t('web.date_pick'));
     unmount();
     const second = render(<Harness initial="2026-10-16" />);
-    expect(field()).toHaveTextContent(`${faDigits(24)} ${t('web.jalali_m7')} ${faDigits(1405)}`);
+    expect(field()).toHaveTextContent(
+      `${plainDigits(24)} ${t('web.jalali_m7')} ${plainDigits(1405)}`,
+    );
     second.unmount();
     render(<Harness mode="datetime" initial="2026-10-16T23:34" />);
     expect(field()).toHaveTextContent(
-      `${faDigits(24)} ${t('web.jalali_m7')} ${faDigits(1405)} — ${faDigits('23:34')}`,
+      `${plainDigits(24)} ${t('web.jalali_m7')} ${plainDigits(1405)} — ${plainDigits('23:34')}`,
     );
   });
 
@@ -229,7 +231,7 @@ describe('date and time', () => {
     fireEvent.click(day(25));
     expect(seen).toEqual([]);
     fireEvent.change(within(popover()).getByLabelText(t('web.date_hour')), {
-      target: { value: faDigits('08') },
+      target: { value: plainDigits('08') },
     });
     fireEvent.change(within(popover()).getByLabelText(t('web.date_minute')), {
       target: { value: '05' },
@@ -262,7 +264,7 @@ describe('date and time', () => {
   it('time only: quick picks, wrap-around steps and «تأیید»', () => {
     const seen: string[] = [];
     render(<Harness mode="time" initial="23:10" onValue={(value) => seen.push(value)} />);
-    expect(field()).toHaveTextContent(faDigits('23:10'));
+    expect(field()).toHaveTextContent(plainDigits('23:10'));
     fireEvent.click(field());
     fireEvent.click(within(popover()).getByRole('button', { name: t('web.date_hour_up') }));
     fireEvent.click(within(popover()).getByRole('button', { name: t('web.date_confirm') }));

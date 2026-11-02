@@ -1,5 +1,7 @@
 import {
   SUPPORT_AI_AVAILABLE_CODE,
+  SUPPORT_AI_CONFIG_INVALID_CODE,
+  SUPPORT_AI_CONFIG_VALID_CODE,
   SUPPORT_AI_UNAVAILABLE_CODE,
   SUPPORT_AI_VISION_MAX_IMAGES,
   SUPPORT_AI_VISION_MAX_TOTAL_BYTES,
@@ -314,7 +316,16 @@ export class SupportAiChain {
       last = { outcome, step, attempts, exhausted: null, imagesSent, sight };
       if (outcome.outcome === 'OK') {
         await this.recoverUnavailable(scope);
+        await this.recoverConfig(scope, step.provider);
         return last;
+      }
+      // Phase 4 PR-1: the provider refused the REQUEST (a wrong model id, an unsupported
+      // parameter or capability): configuration, not the model's answer. It falls back to the
+      // next provider — the next one did not see this request, so nothing is laundered — and
+      // raises one rolled-up condition per provider until that provider answers again.
+      if (supportAiConfigRejection(outcome)) {
+        await this.reportConfigInvalid(scope, step, outcome);
+        continue;
       }
       if (!supportAiOutcomeFallsBack(outcome.outcome)) return last;
     }
@@ -405,6 +416,43 @@ export class SupportAiChain {
     await this.deps.credentials.recordResult(scope, provider, keySetAt, 'TRANSIENT_FAILURE', now);
   }
 
+  /** Phase 4 PR-1: «پیکربندی هوش مصنوعی نامعتبر است», one open condition per provider. */
+  private async reportConfigInvalid(
+    scope: ScopeContext,
+    step: SupportAiProviderStep,
+    outcome: SupportAiOutcome,
+  ): Promise<void> {
+    const detail = supportAiFailureDetailOf(outcome);
+    await this.deps.opsLog.record(scope, {
+      code: SUPPORT_AI_CONFIG_INVALID_CODE,
+      severity: 'ERROR',
+      message:
+        'An AI provider refused the request itself (model id or parameter); the next configured provider is used. Check the model in the support AI settings.',
+      dedupeKey: configDedupeKey(step.provider),
+      context: {
+        provider: step.provider,
+        model: step.model,
+        httpStatus: detail?.httpStatus ?? null,
+        failureClass: detail?.failureClass ?? null,
+        providerErrorCode: detail?.providerErrorCode ?? null,
+        providerErrorParam: detail?.providerErrorParam ?? null,
+      },
+    });
+  }
+
+  private async recoverConfig(scope: ScopeContext, provider: SupportAiProvider): Promise<void> {
+    const key = configDedupeKey(provider);
+    if (!(await this.deps.conditions.conditionIsOpen(scope, key))) return;
+    await this.deps.opsLog.record(scope, {
+      code: SUPPORT_AI_CONFIG_VALID_CODE,
+      severity: 'INFO',
+      message: 'An AI provider accepted the request again.',
+      dedupeKey: `${SUPPORT_AI_CONFIG_VALID_CODE}:${provider}`,
+      recoversCode: SUPPORT_AI_CONFIG_INVALID_CODE,
+      recoversDedupeKey: key,
+    });
+  }
+
   private async recoverUnavailable(scope: ScopeContext): Promise<void> {
     const tenantId = 'tenantId' in scope ? scope.tenantId : null;
     if (
@@ -460,4 +508,23 @@ export class SupportAiChain {
   private wallMs(): number {
     return this.deps.nowMs?.() ?? this.deps.clock.now().getTime();
   }
+}
+
+function configDedupeKey(provider: SupportAiProvider): string {
+  return `${SUPPORT_AI_CONFIG_INVALID_CODE}:${provider}`;
+}
+
+/**
+ * Phase 4 PR-1 — a CONFIG failure: the provider answered HTTP 400/404/422 about the request
+ * itself (`request_rejected`, `unsupported_capability`). Only an adapter's own detail with that
+ * status counts: an answer that failed NEXA's schema is `INVALID_OUTPUT` with no HTTP status and
+ * never falls back.
+ */
+export function supportAiConfigRejection(outcome: SupportAiOutcome): boolean {
+  if (outcome.outcome !== 'INVALID_OUTPUT' || outcome.detail === undefined) return false;
+  const { failureClass, httpStatus } = outcome.detail;
+  return (
+    (failureClass === 'request_rejected' || failureClass === 'unsupported_capability') &&
+    (httpStatus === 400 || httpStatus === 404 || httpStatus === 422)
+  );
 }

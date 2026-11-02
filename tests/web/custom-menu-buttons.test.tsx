@@ -382,7 +382,7 @@ describe('the panel that defines the buttons', () => {
     expect(within(list).getByText('کانال ما')).toBeTruthy();
     expect(within(list).getByText(t('web.cmb_kind_link'))).toBeTruthy();
     expect(within(list).getByText(/acme_store_bot/u)).toBeTruthy();
-    expect(screen.getByTestId('cmb-storage').textContent).toContain('۰');
+    expect(screen.getByTestId('cmb-storage').textContent).toContain('0');
     expect(CUSTOM_MENU_STORAGE_MAX_BYTES).toBeGreaterThan(0);
   });
 

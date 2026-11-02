@@ -24,6 +24,39 @@
 .settings-group {
   scroll-margin-top: 16px;
 }
+.set-fold {
+  border-bottom: 1px solid var(--line);
+}
+.set-fold:last-child {
+  border-bottom: none;
+}
+.set-fold > summary {
+  width: 100%;
+  gap: 10px;
+  padding: 12px 18px;
+}
+.set-fold > summary:hover .set-fold-title {
+  color: var(--accent);
+}
+.set-fold-title {
+  font-weight: 600;
+}
+/* What the setting is NOW, at the end of the line: the closed row says all it needs to. */
+.set-fold-value {
+  margin-inline-start: auto;
+  color: var(--fg-2);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.set-fold[open] > summary .set-fold-value {
+  display: none;
+}
+.set-fold > .set-row {
+  margin-top: 0;
+  border-top: 1px solid var(--line);
+}
 .set-row {
   padding: 14px 18px;
   border-bottom: 1px solid var(--line);
@@ -860,6 +893,21 @@ form.set-row > * + * {
 }
 .ops-group-code p {
   margin: 0;
+}
+.ops-log-types {
+  display: grid;
+  gap: 8px;
+}
+/* One accordion per topic of report types: the name at the start, how many are on at the end. */
+.ops-log-topic > summary {
+  width: 100%;
+}
+.ops-log-topic-name {
+  color: var(--fg);
+  font-weight: 600;
+}
+.ops-log-topic-count {
+  margin-inline-start: auto;
 }
 .ops-group-advanced {
   padding: 12px 16px;

@@ -870,7 +870,12 @@ describe('client apps — what a customer is shown', () => {
     );
   const handle = (update: ReturnType<typeof customerUpdate>) =>
     ctx.container.botRuntime.handle(tenantA, systemActor('bot'), update);
-  const last = () => sent.filter((one) => one.url.includes('/sendMessage')).at(-1);
+  // R12 F3 item 4: a tutorial tap (`tu:`, `to:`) edits the tapped message; an app's own
+  // screen (`ca:`) is still a new message (spec A4).
+  const last = () =>
+    sent
+      .filter((one) => one.url.includes('/sendMessage') || one.url.includes('/editMessageText'))
+      .at(-1);
   const lastText = () => String(last()?.body['text'] ?? '');
   const lastMarkup = () => JSON.stringify(last()?.body['reply_markup'] ?? {});
   const callbacks = () =>

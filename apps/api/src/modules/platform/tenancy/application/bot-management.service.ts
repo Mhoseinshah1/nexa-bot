@@ -57,11 +57,13 @@ import type {
   BotManagementRepository,
   BotManagementTelegram,
   BotWebhookRead,
+  ExpectedWebhookSecretDigests,
 } from './bot-management-ports.js';
 import type { BotIdentityProbe } from './ports.js';
 import type { BotCommandSyncService } from './bot-command-sync.service.js';
 import type { CommandMenu } from './command-menu.js';
 import { webhookSecretFingerprint } from './webhook-fingerprint.js';
+import { perBotWebhookSecret, perBotWebhookSecretFingerprint } from './webhook-secret.js';
 
 /**
  * The three permissions, each an existing key (`docs/wp13-bots-management-audit.md` D3–D6).
@@ -220,7 +222,7 @@ export class BotManagementService {
     actor: ActorContext,
   ): Promise<{ readonly bots: BotInstanceView[]; readonly installation: BotInstallationView }> {
     await this.deps.guard.check(scope, actor, BOTS_VIEW_PERMISSION);
-    const records = await this.deps.repository.listManaged(scope, this.currentFingerprint());
+    const records = await this.deps.repository.listManaged(scope, this.expectedDigests());
     const desired = await this.desiredHash(scope);
     return {
       bots: records.map((record) => this.view(record, desired)),
@@ -611,10 +613,11 @@ export class BotManagementService {
     // Step 7 — register. `dropPendingUpdates: false`: whatever Telegram queued while the
     // bot was silent is real customers' messages, and they are delivered, not discarded.
     progress.stage = 'SET_WEBHOOK';
+    // R12 F2 item 7: THIS bot's own secret, never the installation-wide one.
     const registered = await this.deps.telegram.registerWebhook({
       token,
       url: expectedUrl,
-      secretToken: secret,
+      secretToken: perBotWebhookSecret(secret, botId),
       dropPendingUpdates: false,
       resetAllowedUpdates: true,
     });
@@ -711,7 +714,7 @@ export class BotManagementService {
               telegramBotId: identity,
               username: probe.username,
               webhookUrl: expectedUrl,
-              webhookSecretFingerprint: webhookSecretFingerprint(secret),
+              webhookSecretFingerprint: perBotWebhookSecretFingerprint(secret, botId),
               now,
             },
             tx,
@@ -1169,9 +1172,19 @@ export class BotManagementService {
     };
   }
 
-  private currentFingerprint(): string | null {
+  /**
+   * R12 F2 item 7: what a bot's registered digest is compared with — its OWN secret's digest
+   * and, for the rotation window, the installation-wide one. Comparing with the master's
+   * digest alone (as before) would read every bot registered with its own secret as
+   * `WEBHOOK_SECRET_CHANGED`. Null when no secret is configured (`NOT_CONFIGURED`).
+   */
+  private expectedDigests(): ExpectedWebhookSecretDigests | null {
     const secret = this.deps.webhookSecret();
-    return secret === '' ? null : webhookSecretFingerprint(secret);
+    if (secret === '') return null;
+    return {
+      installation: webhookSecretFingerprint(secret),
+      perBot: (botInstanceId) => perBotWebhookSecretFingerprint(secret, botInstanceId),
+    };
   }
 
   /**
@@ -1194,7 +1207,7 @@ export class BotManagementService {
   }
 
   private async require(scope: TenantContext, botId: BotInstanceId): Promise<BotManagementRecord> {
-    const record = await this.deps.repository.findManaged(scope, botId, this.currentFingerprint());
+    const record = await this.deps.repository.findManaged(scope, botId, this.expectedDigests());
     if (record === null) throw this.notFound();
     return record;
   }
@@ -1275,12 +1288,7 @@ export class BotManagementService {
     verificationOf: (record: BotManagementRecord) => BotDiagnostic,
     tx: TransactionScope,
   ): Promise<BotTokenReplacementOutcome> {
-    const record = await this.deps.repository.findManaged(
-      scope,
-      botId,
-      this.currentFingerprint(),
-      tx,
-    );
+    const record = await this.deps.repository.findManaged(scope, botId, this.expectedDigests(), tx);
     if (record === null) throw this.notFound();
     const outcome: BotTokenReplacementOutcome = {
       bot: this.view(record, await this.desiredHash(scope, tx)),
@@ -1331,12 +1339,7 @@ export class BotManagementService {
     // WITHOUT charging `settings.view`: the caller was just authorized for something
     // stronger, and a custom role holding `settings.edit` without the view key must not
     // have its committed stop answered with a 403.
-    const record = await this.deps.repository.findManaged(
-      scope,
-      botId,
-      this.currentFingerprint(),
-      tx,
-    );
+    const record = await this.deps.repository.findManaged(scope, botId, this.expectedDigests(), tx);
     if (record === null) throw this.notFound();
     const outcome: BotMutationOutcome = {
       bot: this.view(record, await this.desiredHash(scope, tx)),

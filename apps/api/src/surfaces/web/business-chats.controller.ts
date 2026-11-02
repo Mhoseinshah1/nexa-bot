@@ -6,6 +6,7 @@ import {
   BUSINESS_CHAT_ROUTES,
   businessChatControlRequestSchema,
   businessChatListQuerySchema,
+  businessChatResumeAllRequestSchema,
   businessChatSendRequestSchema,
   businessConnectionStatus,
   businessHandoffWireReason,
@@ -16,15 +17,14 @@ import {
   type BusinessChatControlResponse,
   type BusinessChatDetailResponse,
   type BusinessChatListResponse,
+  type BusinessChatResumeAllResponse,
   type BusinessChatSendResponse,
   type BusinessConnectionListResponse,
   type BusinessConversationSummary,
-  type TenantContext,
 } from '@nexa/contracts';
 import { z } from 'zod';
 import { CONTAINER, type Container } from '../../container.js';
-import { adminActor, assertOriginAllowed, requireSessionToken } from './authenticated-request.js';
-import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { authenticateAdmin } from './authenticated-request.js';
 import type { BusinessConversationListItem } from '../../modules/commerce/business-chats/application/ports.js';
 
 /**
@@ -44,7 +44,7 @@ export class BusinessChatsController {
     @Req() request: FastifyRequest,
     @Query() query: unknown,
   ): Promise<BusinessChatListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const input = businessChatListQuerySchema.parse(query ?? {});
     const before = decodeCursor(input.cursor);
     const items = await this.container.businessConversations.list(scope, actor, {
@@ -58,12 +58,14 @@ export class BusinessChatsController {
       conversations: page.map(toSummary),
       nextCursor:
         items.length > BUSINESS_CHAT_LIST_LIMIT && last !== undefined ? encodeCursor(last) : null,
+      // Phase 4 PR-5: what the AI really does, beside the state each conversation is in.
+      aiMode: await this.container.supportInsights.aiMode(scope),
     };
   }
 
   @Get(BUSINESS_CHAT_ROUTES.connections)
   async connections(@Req() request: FastifyRequest): Promise<BusinessConnectionListResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const rows = await this.container.businessConversations.connections(scope, actor);
     return {
       connections: rows.map((row) => ({
@@ -83,7 +85,7 @@ export class BusinessChatsController {
     @Req() request: FastifyRequest,
     @Param('conversationId') conversationId: string,
   ): Promise<BusinessChatDetailResponse> {
-    const { scope, actor } = await this.authenticate(request);
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const found = await this.container.businessConversations.detail(scope, actor, conversationId);
     const summary = toSummary(found.item);
     // Why the AI failed, beside each handoff an automatic job made (classes, never text).
@@ -125,6 +127,7 @@ export class BusinessChatsController {
       // CX1 (review of PR #248): the one projection, which keeps `origin` readable by the
       // pre-A4 bundle a rolling deploy can still be serving.
       outbound: found.outbound.map(businessOutboundView),
+      aiMode: await this.container.supportInsights.aiMode(scope),
     };
   }
 
@@ -134,7 +137,7 @@ export class BusinessChatsController {
     @Param('conversationId') conversationId: string,
     @Body() body: unknown,
   ): Promise<BusinessChatSendResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = businessChatSendRequestSchema.parse(body);
     const row = await this.container.businessConversations.send(scope, actor, {
       conversationId,
@@ -150,12 +153,26 @@ export class BusinessChatsController {
     @Param('conversationId') conversationId: string,
     @Body() body: unknown,
   ): Promise<BusinessChatControlResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = businessChatControlRequestSchema.parse(body);
     return this.container.businessConversations.takeOver(scope, actor, {
       conversationId,
       idempotencyKey: command.idempotencyKey,
     });
+  }
+
+  /**
+   * Phase 4 PR-5: «بازگرداندن همه به هوش مصنوعی». Each conversation goes through the existing
+   * `resume` (same permission, audit and idempotency); `includeHard` is the operator's choice.
+   */
+  @Post(BUSINESS_CHAT_ROUTES.resumeAll)
+  async resumeAll(
+    @Req() request: FastifyRequest,
+    @Body() body: unknown,
+  ): Promise<BusinessChatResumeAllResponse> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    const command = businessChatResumeAllRequestSchema.parse(body);
+    return this.container.businessConversations.resumeAll(scope, actor, command);
   }
 
   @Post(routePattern(BUSINESS_CHAT_ROUTES.resume, 'conversationId'))
@@ -164,28 +181,12 @@ export class BusinessChatsController {
     @Param('conversationId') conversationId: string,
     @Body() body: unknown,
   ): Promise<BusinessChatControlResponse> {
-    const { scope, actor } = await this.authenticate(request, { write: true });
+    const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = businessChatControlRequestSchema.parse(body);
     return this.container.businessConversations.resume(scope, actor, {
       conversationId,
       idempotencyKey: command.idempotencyKey,
     });
-  }
-
-  private async authenticate(
-    request: FastifyRequest,
-    options: { write?: boolean } = {},
-  ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
-    const token = requireSessionToken(request, this.container.config.NODE_ENV === 'production');
-    if (options.write === true) {
-      assertOriginAllowed(request, this.container.config.WEB_ADMIN_ORIGINS);
-    }
-    const { admin, session } = await this.container.auth.authenticate(token);
-    const correlationId = currentCorrelationId() ?? newCorrelationId(this.container.ids.uuid());
-    return {
-      scope: { tenantId: admin.tenantId, botInstanceId: null },
-      actor: adminActor(admin, correlationId, request, session.id),
-    };
   }
 }
 
@@ -200,6 +201,7 @@ function toSummary(item: BusinessConversationListItem): BusinessConversationSumm
         ? null
         : businessHandoffWireReason(conversation.handoffReason),
     handoffReasonDetail: conversation.handoffReason,
+    handoffKind: conversation.handoffKind,
     peerTelegramUserId: conversation.peerTelegramUserId,
     customer: item.customer,
     connectionStatus: businessConnectionStatus(item.connection),

@@ -555,12 +555,12 @@ describe('wallet and payment HTTP surfaces', () => {
   });
 
   /*
-   * Payment File 02 §10 (D3): card-to-card review is Telegram's, and the Web Admin is
-   * read-only for it. The two routes that used to confirm and reject are GONE — not
-   * refused by a permission, absent — so even the owner, who holds every key, reaches
-   * nothing, and the payment and its order are untouched.
+   * Payment File 02 §10 (D3) once made card-to-card review Telegram-only. R12 F3 item 8 (owner
+   * decision: review in BOTH places) added the three receipt routes below; the OLD route shapes
+   * (`/confirm`, `/reject`, `/receipt-credit`, the late-credit pair) stay absent — not refused by
+   * a permission, absent — so even the owner reaches nothing at them.
    */
-  it('offers no way to confirm or reject a card-to-card payment over HTTP, even to the owner', async () => {
+  it('keeps the old confirm / reject / credit route shapes absent, even for the owner', async () => {
     const order = await awaitingPayment(tenantA, customerA, panelA, 'http-pay-3');
     const pending = await api.container.payments
       .requestManualTransfer(tenantA, systemActor('http-pay-3'), customerA, {
@@ -591,6 +591,253 @@ describe('wallet and payment HTTP surfaces', () => {
       sql`SELECT state FROM orders WHERE id = ${order.id}` as never,
     )) as unknown as { rows: { state: string }[] };
     expect(rows.rows[0]?.state).toBe('AWAITING_PAYMENT');
+  });
+
+  // -------------------------------------------------------------------------
+  // R12 F3 item 8: the three dispositions of a card-to-card receipt, in the Web Admin
+  // -------------------------------------------------------------------------
+
+  describe('R12 F3: a receipt is decided from the Web Admin through the same services Telegram calls', () => {
+    /** A pending transfer carrying a filed receipt: what a reviewer is asked to decide. */
+    async function receipted(key: string, withReceipt = true) {
+      const order = await awaitingPayment(tenantA, customerA, panelA, key);
+      const { payment } = await api.container.payments.requestManualTransfer(
+        tenantA,
+        systemActor(key),
+        customerA,
+        { idempotencyKey: `${key}-manual`, orderId: order.id },
+      );
+      await api.container.payments.signalTransferSent(tenantA, systemActor(key), customerA, {
+        idempotencyKey: `${key}-signal`,
+        paymentId: payment.id,
+        botInstanceId: SEED_IDS.botA1 as BotInstanceId,
+      });
+      if (withReceipt) {
+        await api.container.receipts.submit(tenantA, systemActor(key), customerA, {
+          idempotencyKey: `${key}-file`,
+          botInstanceId: SEED_IDS.botA1 as BotInstanceId,
+          file: {
+            kind: 'PHOTO',
+            fileId: `file-${key}`,
+            fileUniqueId: `u-${key}`,
+            mimeType: null,
+            fileSize: 1_024n,
+            fileName: null,
+            telegramMessageId: 9n,
+            caption: null,
+          },
+        });
+      }
+      return { paymentId: payment.id, orderId: order.id };
+    }
+    const stateOf = async (paymentId: string) =>
+      paymentResponseSchema.parse(
+        JSON.parse((await get(PAYMENT_ROUTES.detail(paymentId), ownerCookie)).body),
+      ).payment;
+    const orderState = async (orderId: string) =>
+      (
+        (await api.container.database.db.execute(
+          sql`SELECT state FROM orders WHERE id = ${orderId}` as never,
+        )) as unknown as { rows: { state: string }[] }
+      ).rows[0]?.state;
+    const walletCredits = async (paymentId: string) =>
+      (
+        (await api.container.database.db.execute(
+          sql`SELECT amount::text AS amount FROM wallet_entries
+               WHERE tenant_id = ${tenantA.tenantId} AND payment_id = ${paymentId}` as never,
+        )) as unknown as { rows: { amount: string }[] }
+      ).rows;
+
+    it('APPROVES: settles the payment’s own amount once, and a repeated key is a replay', async () => {
+      const { paymentId, orderId } = await receipted('r12-approve');
+      const body = { idempotencyKey: 'r12-approve-key-1', confirm: true };
+      const approved = await post(PAYMENT_ROUTES.receiptApprove(paymentId), financeCookie, body);
+      expect(approved.statusCode).toBe(201);
+      const detail = paymentResponseSchema.parse(JSON.parse(approved.body)).payment;
+      expect(detail).toMatchObject({
+        state: 'CONFIRMED',
+        receiptDisposition: 'APPROVED',
+        amount: '250000',
+      });
+      expect(await orderState(orderId)).toBe('PAID');
+      // The audit note names the surface the decision was taken in.
+      expect(detail.evidenceNote ?? '').toContain('Web Admin');
+
+      const replay = await post(PAYMENT_ROUTES.receiptApprove(paymentId), financeCookie, body);
+      expect(replay.statusCode).toBe(201);
+      expect((await stateOf(paymentId)).state).toBe('CONFIRMED');
+      // A second decision on the decided payment is refused, and says so.
+      const second = await post(PAYMENT_ROUTES.receiptReject(paymentId), financeCookie, {
+        idempotencyKey: 'r12-approve-key-2',
+        reason: 'late',
+      });
+      expect(second.statusCode).toBe(409);
+      expect(errorOf(second.body).code).toBe(COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID);
+    });
+
+    it('refuses an approval that omits its confirmation, and one without a stored receipt', async () => {
+      const { paymentId } = await receipted('r12-noconfirm');
+      const bare = await post(PAYMENT_ROUTES.receiptApprove(paymentId), financeCookie, {
+        idempotencyKey: 'r12-noconfirm-key-1',
+      });
+      expect(bare.statusCode).toBeGreaterThanOrEqual(400);
+      expect((await stateOf(paymentId)).state).toBe('PENDING');
+
+      const unreceipted = await receipted('r12-noreceipt', false);
+      const refused = await post(
+        PAYMENT_ROUTES.receiptApprove(unreceipted.paymentId),
+        financeCookie,
+        {
+          idempotencyKey: 'r12-noreceipt-key-1',
+          confirm: true,
+        },
+      );
+      expect(refused.statusCode).toBe(409);
+      expect((await stateOf(unreceipted.paymentId)).state).toBe('PENDING');
+    });
+
+    it('REJECTS with a mandatory reason, closes the payment and settles nothing', async () => {
+      const { paymentId, orderId } = await receipted('r12-reject');
+      const empty = await post(PAYMENT_ROUTES.receiptReject(paymentId), financeCookie, {
+        idempotencyKey: 'r12-reject-key-1',
+        reason: '   ',
+      });
+      expect(empty.statusCode).toBeGreaterThanOrEqual(400);
+      expect((await stateOf(paymentId)).state).toBe('PENDING');
+
+      const rejected = await post(PAYMENT_ROUTES.receiptReject(paymentId), financeCookie, {
+        idempotencyKey: 'r12-reject-key-2',
+        reason: 'مبلغ واریزی با رسید نمی‌خواند',
+      });
+      expect(rejected.statusCode).toBe(201);
+      const detail = paymentResponseSchema.parse(JSON.parse(rejected.body)).payment;
+      expect(detail).toMatchObject({ state: 'FAILED', receiptDisposition: 'REJECTED' });
+      expect(detail.resolutionNote).toBe('مبلغ واریزی با رسید نمی‌خواند');
+      expect(await orderState(orderId)).toBe('AWAITING_PAYMENT');
+      expect(await walletCredits(paymentId)).toEqual([]);
+    });
+
+    it('CREDITS the typed amount to the wallet once, never settling the order', async () => {
+      const { paymentId, orderId } = await receipted('r12-credit');
+      const credited = await post(PAYMENT_ROUTES.receiptCredit(paymentId), financeCookie, {
+        idempotencyKey: 'r12-credit-key-1',
+        amountMinor: '240000',
+        confirm: true,
+        note: 'کمتر واریز شده',
+      });
+      expect(credited.statusCode).toBe(201);
+      const detail = paymentResponseSchema.parse(JSON.parse(credited.body)).payment;
+      expect(detail).toMatchObject({ state: 'FAILED', receiptDisposition: 'CREDITED_TO_WALLET' });
+      expect(detail.receiptCredit).toMatchObject({ amountMinor: '240000', currency: 'IRT' });
+      expect(await walletCredits(paymentId)).toEqual([{ amount: '240000' }]);
+      expect(await orderState(orderId)).toBe('AWAITING_PAYMENT');
+
+      // A replay credits nothing more; a different key on the decided payment is refused.
+      await post(PAYMENT_ROUTES.receiptCredit(paymentId), financeCookie, {
+        idempotencyKey: 'r12-credit-key-1',
+        amountMinor: '240000',
+        confirm: true,
+      });
+      const again = await post(PAYMENT_ROUTES.receiptCredit(paymentId), financeCookie, {
+        idempotencyKey: 'r12-credit-key-2',
+        amountMinor: '240000',
+        confirm: true,
+      });
+      expect(again.statusCode).toBe(409);
+      expect(await walletCredits(paymentId)).toEqual([{ amount: '240000' }]);
+    });
+
+    it('charges the same permissions as Telegram: a reader decides nothing, and the credit needs both keys', async () => {
+      const { paymentId } = await receipted('r12-perm');
+      for (const [route, body] of [
+        [
+          PAYMENT_ROUTES.receiptApprove(paymentId),
+          { idempotencyKey: 'r12-perm-a-1', confirm: true },
+        ],
+        [PAYMENT_ROUTES.receiptReject(paymentId), { idempotencyKey: 'r12-perm-r-1', reason: 'x' }],
+        [
+          PAYMENT_ROUTES.receiptCredit(paymentId),
+          { idempotencyKey: 'r12-perm-c-1', amountMinor: '1000', confirm: true },
+        ],
+      ] as const) {
+        const refused = await post(route, viewerCookie, body);
+        expect(refused.statusCode, route).toBe(403);
+      }
+      expect((await stateOf(paymentId)).state).toBe('PENDING');
+
+      // `receipt_reviewer` holds receipts.review and NOT users.wallet.credit: it may approve
+      // or reject, and the credit is refused (the service takes both keys, deny by default).
+      await createAdmin(api.container, tenantA, {
+        username: 'reviewer',
+        password: 'the-reviewers-password',
+        roleKeys: ['receipt_reviewer'],
+      });
+      const reviewerCookie = await cookieFor('reviewer', 'the-reviewers-password');
+      const credit = await post(PAYMENT_ROUTES.receiptCredit(paymentId), reviewerCookie, {
+        idempotencyKey: 'r12-perm-c-2',
+        amountMinor: '1000',
+        confirm: true,
+      });
+      expect(credit.statusCode).toBe(403);
+      expect((await stateOf(paymentId)).state).toBe('PENDING');
+      expect(await walletCredits(paymentId)).toEqual([]);
+      const approve = await post(PAYMENT_ROUTES.receiptApprove(paymentId), reviewerCookie, {
+        idempotencyKey: 'r12-perm-a-2',
+        confirm: true,
+      });
+      expect(approve.statusCode).toBe(201);
+    });
+
+    it('is mutually exclusive with Telegram’s decision: the loser is told, and nothing of it commits', async () => {
+      const { paymentId } = await receipted('r12-race');
+      const finance = adminActorFor(
+        await createAdmin(api.container, tenantA, {
+          username: 'finance-race',
+          roleKeys: ['finance'],
+        }),
+      );
+      // Telegram's panel calls the SAME method; it wins first.
+      await api.container.payments.rejectManualTransfer(tenantA, finance, paymentId, {
+        idempotencyKey: 'r12-race-telegram',
+        note: 'rejected in Telegram',
+        requireReceipt: true,
+      });
+      const web = await post(PAYMENT_ROUTES.receiptApprove(paymentId), financeCookie, {
+        idempotencyKey: 'r12-race-web',
+        confirm: true,
+      });
+      expect(web.statusCode).toBe(409);
+      expect(errorOf(web.body).code).toBe(COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID);
+      expect(await stateOf(paymentId)).toMatchObject({
+        state: 'FAILED',
+        receiptDisposition: 'REJECTED',
+      });
+    });
+
+    it('counts the receipts waiting for the sidebar, withheld from a viewer, and lists exactly them', async () => {
+      const waiting = await receipted('r12-count-1');
+      await receipted('r12-count-2');
+      await receipted('r12-count-3', false); // signalled, no receipt: not "awaiting review"
+      const countersOf = async (cookie: string) =>
+        (
+          JSON.parse((await get('/nav-counters', cookie)).body) as {
+            counters: { receiptsAwaitingReview: number | null; paymentsUnknown: number | null };
+          }
+        ).counters;
+      expect((await countersOf(financeCookie)).receiptsAwaitingReview).toBe(2);
+      // The viewer holds payments.view but not receipts.review: the count is withheld, not zero.
+      expect((await countersOf(viewerCookie)).receiptsAwaitingReview).toBeNull();
+
+      const listed = paymentListResponseSchema.parse(
+        JSON.parse((await get(`${PAYMENT_ROUTES.list}?queue=RECEIPT_REVIEW`, ownerCookie)).body),
+      );
+      expect(listed.payments).toHaveLength(2);
+      await post(PAYMENT_ROUTES.receiptApprove(waiting.paymentId), financeCookie, {
+        idempotencyKey: 'r12-count-approve',
+        confirm: true,
+      });
+      expect((await countersOf(financeCookie)).receiptsAwaitingReview).toBe(1);
+    });
   });
 
   it('lists only this tenant’s payments', async () => {

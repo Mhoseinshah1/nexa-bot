@@ -196,6 +196,74 @@ export function generateDataset(options: {
 
 // --- records --------------------------------------------------------------------------------
 
+const AGENT_FLAGS_OFF = {
+  affects_wallet: false,
+  applies_to_live_state: false,
+  grants_credit: false,
+  activates_role: false,
+  redeemable: false,
+  auto_create: false,
+};
+
+/**
+ * The converter's `records/agents/{profiles,state}.jsonl` for `agents` (each the index of a
+ * generated user, its Mirza tier and its raw credit cap): the agent side of a Mirza package,
+ * archived and never applied — the cutover reconciliation lists the cap and credits nothing.
+ */
+export function mirzaAgentRecords(
+  users: readonly Record<string, unknown>[],
+  agents: readonly { readonly i: number; readonly tier: string; readonly cap: string | null }[],
+) {
+  const customer = (tg: string) => ({
+    raw_id: tg,
+    telegram_user_id: tg,
+    decision: 'IMPORT',
+    valid: true,
+  });
+  return {
+    profiles: agents.map((a) => {
+      const tg = String(users[a.i]!['id']);
+      return {
+        record_type: 'legacy_agent_profile',
+        schema: 'm2n.agents.profile.v1',
+        idempotency_key: `legacy:agents:profile:${tg}`,
+        customer: customer(tg),
+        tier: a.tier,
+        status: 'ARCHIVED_NOT_ACTIVATED',
+        limits_and_credit: 'RAW_ONLY_NOT_APPLIED',
+        ...AGENT_FLAGS_OFF,
+      };
+    }),
+    states: agents.map((a) => {
+      const tg = String(users[a.i]!['id']);
+      return {
+        record_type: 'legacy_agent_state',
+        schema: 'm2n.agents.state.v1',
+        idempotency_key: `legacy:agents:state:${tg}`,
+        customer: customer(tg),
+        credit_debt: {
+          overdraft_limit_raw: a.cap,
+          overdraft_limit_staged: true,
+          credit_granted: false,
+          values: 'RAW_ONLY_NOT_APPLIED',
+        },
+        pricing: {
+          percent_discount_raw: null,
+          percent_discount_staged: false,
+          applies_price: false,
+        },
+        current_status: {
+          agent_expiry: null,
+          agent_expiry_raw: null,
+          agent_expiry_note: 'NO_EXPIRY',
+        },
+        role_active: false,
+        ...AGENT_FLAGS_OFF,
+      };
+    }),
+  };
+}
+
 export const ownershipRecord = (
   invoice: { readonly id: string; readonly idUser: string | null },
   decision = 'CONFIRMED_CURRENT_OWNER',

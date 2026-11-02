@@ -18,7 +18,7 @@ import {
   dayNumberOfDate,
   dayNumberToGregorian,
   dayNumberToJalali,
-  faDigits,
+  plainDigits,
   formatIsoDay,
   formatTime,
   gregorianToDayNumber,
@@ -92,7 +92,7 @@ function partsOf(mode: DateFieldMode, value: string): Parts {
 /** A day number as the field shows it: day, Persian month name, year, in Persian digits. */
 export function jalaliDayLabel(day: number): string {
   const j = dayNumberToJalali(day);
-  return `${faDigits(j.jd)} ${t(JALALI_MONTH_KEYS[j.jm - 1] ?? 'web.jalali_m1')} ${faDigits(j.jy)}`;
+  return `${plainDigits(j.jd)} ${t(JALALI_MONTH_KEYS[j.jm - 1] ?? 'web.jalali_m1')} ${plainDigits(j.jy)}`;
 }
 
 /**
@@ -101,11 +101,11 @@ export function jalaliDayLabel(day: number): string {
  */
 export function formatDateFieldValue(mode: DateFieldMode, value: string): string | null {
   const parts = partsOf(mode, value);
-  if (mode === 'time') return parts.time === null ? null : faDigits(formatTime(parts.time));
+  if (mode === 'time') return parts.time === null ? null : plainDigits(formatTime(parts.time));
   if (parts.day === null) return null;
   const day = jalaliDayLabel(parts.day);
   return mode === 'datetime' && parts.time !== null
-    ? `${day} — ${faDigits(formatTime(parts.time))}`
+    ? `${day} — ${plainDigits(formatTime(parts.time))}`
     : day;
 }
 
@@ -417,7 +417,7 @@ function DatePopover({
           label={t('web.date_hour')}
           up={t('web.date_hour_up')}
           down={t('web.date_hour_down')}
-          text={hourText ?? faDigits(String(time.h).padStart(2, '0'))}
+          text={hourText ?? plainDigits(String(time.h).padStart(2, '0'))}
           onText={(text) => {
             setHourText(text);
             const n = readTyped(text, 23);
@@ -438,7 +438,7 @@ function DatePopover({
           label={t('web.date_minute')}
           up={t('web.date_minute_up')}
           down={t('web.date_minute_down')}
-          text={minuteText ?? faDigits(String(time.m).padStart(2, '0'))}
+          text={minuteText ?? plainDigits(String(time.m).padStart(2, '0'))}
           onText={(text) => {
             setMinuteText(text);
             const n = readTyped(text, 59);
@@ -581,10 +581,10 @@ function DatePopover({
           onClick={() => setMonths(!months)}
         >
           {months ? (
-            faDigits(view.jy)
+            plainDigits(view.jy)
           ) : (
             <>
-              {t(JALALI_MONTH_KEYS[view.jm - 1] ?? 'web.jalali_m1')} <b>{faDigits(view.jy)}</b>
+              {t(JALALI_MONTH_KEYS[view.jm - 1] ?? 'web.jalali_m1')} <b>{plainDigits(view.jy)}</b>
             </>
           )}
           <Icon name="chevron" size={12} />
@@ -734,13 +734,13 @@ function DayGrid({
               data-day={jd}
               data-focus-day={day === stop}
               tabIndex={day === stop ? 0 : -1}
-              aria-label={`${faDigits(jd)} ${monthName} ${faDigits(view.jy)}`}
+              aria-label={`${plainDigits(jd)} ${monthName} ${plainDigits(view.jy)}`}
               aria-pressed={day === selected}
               aria-disabled={blocked || undefined}
               {...(day === today ? { 'aria-current': 'date' as const } : {})}
               onClick={() => onPick(day)}
             >
-              {faDigits(jd)}
+              {plainDigits(jd)}
             </button>
           );
         })}
