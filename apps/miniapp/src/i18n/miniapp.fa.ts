@@ -56,6 +56,16 @@ export const MINIAPP_FA = {
   'miniapp.service_action_RENEW': 'تمدید',
   'miniapp.service_action_ADD_TRAFFIC': 'حجم اضافه',
   'miniapp.service_action_ADD_TIME': 'زمان اضافه',
+  // R11 B2: «نمودار مصرف» on the service screen.
+  'miniapp.usage_title': 'نمودار مصرف',
+  'miniapp.usage_range_7': '۷ روز گذشته',
+  'miniapp.usage_range_30': '۳۰ روز گذشته',
+  'miniapp.usage_empty':
+    'هنوز عدد مصرفی برای این بازه ذخیره نشده است. عددهای مصرف همراه با به‌روزرسانی‌های معمول سرویس ذخیره می‌شوند و کمی بعد در اینجا دیده می‌شوند.',
+  'miniapp.usage_chart_label':
+    'نمودار حجم مصرف‌شده در {days} روز گذشته؛ آخرین مقدار {last} در {at}',
+  'miniapp.usage_max': 'بیشترین مصرف ثبت‌شده در این بازه: {max}',
+  'miniapp.usage_last': 'آخرین مقدار: {last} ({at})',
   'miniapp.service_offer_empty': 'فعلاً گزینه‌ای برای این کار نیست.',
   // Round 10, D1: «تمدید خودکار».
   'miniapp.auto_renew_title': 'تمدید خودکار',
