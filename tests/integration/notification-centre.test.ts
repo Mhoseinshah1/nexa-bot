@@ -6,6 +6,7 @@ import {
   MINIAPP_NOTIFICATION_PAGE_SIZE,
   MINIAPP_NOTIFICATION_TEXT_MAX,
   MINIAPP_NOTIFICATION_WINDOW_DAYS,
+  MINIAPP_NOTIFICATION_TEXT_RETENTION_DAYS,
   MINIAPP_ROUTES,
   miniAppMeResponseSchema,
   miniAppNotificationReadResponseSchema,
@@ -18,6 +19,7 @@ import {
 } from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { miniAppActor } from '../../apps/api/src/modules/commerce/miniapp/application/miniapp-session.service';
+import { clearExpiredNotificationText } from '../../apps/api/src/modules/commerce/messaging/infrastructure/customer-notification-text-retention';
 import { DrizzleNotificationCentreRepository } from '../../apps/api/src/modules/commerce/miniapp/infrastructure/drizzle-notification-centre.repository';
 import { DrizzleCustomerNotificationRepository } from '../../apps/api/src/modules/commerce/messaging/infrastructure/drizzle-customer-notification.repository';
 import {
@@ -293,7 +295,7 @@ describe('the mini app notification centre', () => {
             id,
             customerId: customer.id,
             botInstanceId: BOT_A1,
-            kind: 'ORDER_CANCELLED',
+            kind: 'SERVICE_ACTION_FAILED',
             subjectId: ctx.container.ids.uuid(),
           },
           ctx.container.clock.now(),
@@ -315,8 +317,10 @@ describe('the mini app notification centre', () => {
       await lane().deliverDue(tenantA, 10);
       const after = await stored(id);
       expect(after?.state).toBe('DELIVERED');
-      // The tenant's own rendering of the kind's template: «سفارش لغو شد.»
-      expect(after?.rendered_text).toBe('سفارش لغو شد.');
+      // The tenant's own rendering of the kind's template: «❌ درخواست شما اعمال نشد…»
+      expect(after?.rendered_text).toBe(
+        '❌ درخواست شما اعمال نشد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.',
+      );
       expect(renders).toBe(1);
     });
 
@@ -754,6 +758,100 @@ describe('the mini app notification centre', () => {
 
     /** A customer with a session, by Telegram id: the mini app creates it at first launch. */
     async function seeded(telegramUserId: number): Promise<number> {
+      await sessionFor(telegramUserId);
+      return telegramUserId;
+    }
+  });
+
+  // =====================================================================================
+  // Stored words are bounded: a pruning sweep clears them after the retention
+  // =====================================================================================
+
+  describe('retention of the stored words', () => {
+    const DAY_MINUTES = 24 * 60;
+    const textOf = async (id: string) => {
+      const result = await ctx.container.database.db.execute<{
+        rendered_text: string | null;
+        customer_read_at: Date | null;
+        state: string;
+      }>(
+        sql`SELECT rendered_text, customer_read_at, state FROM customer_notifications WHERE id = ${id}`,
+      );
+      return result.rows[0];
+    };
+
+    it('clears the words and the read mark of a message past the retention, keeps the row, and spares the recent', async () => {
+      await setFlag('notification_centre', true);
+      const token = await sessionFor(8401);
+      const mine = await customerIdOf(8401);
+      const old = await row(mine, {
+        text: 'قدیمی',
+        minutesAgo: (MINIAPP_NOTIFICATION_TEXT_RETENTION_DAYS + 1) * DAY_MINUTES,
+        read: true,
+      });
+      const oldUnread = await row(mine, {
+        text: 'قدیمی خوانده‌نشده',
+        minutesAgo: (MINIAPP_NOTIFICATION_TEXT_RETENTION_DAYS + 5) * DAY_MINUTES,
+      });
+      const recent = await row(mine, {
+        text: 'تازه',
+        minutesAgo: (MINIAPP_NOTIFICATION_TEXT_RETENTION_DAYS - 1) * DAY_MINUTES,
+        read: true,
+      });
+      const pending = await row(mine, { text: null, state: 'PENDING' });
+
+      const cutoff = new Date(
+        ctx.container.clock.now().getTime() -
+          MINIAPP_NOTIFICATION_TEXT_RETENTION_DAYS * 24 * 3_600_000,
+      );
+      expect(await clearExpiredNotificationText(ctx.container.database.db, cutoff, 100)).toBe(2);
+
+      for (const id of [old, oldUnread]) {
+        expect(await textOf(id)).toMatchObject({
+          rendered_text: null,
+          customer_read_at: null,
+          state: 'DELIVERED',
+        });
+      }
+      expect(await textOf(recent)).toMatchObject({ rendered_text: 'تازه' });
+      expect((await textOf(recent))?.customer_read_at).not.toBeNull();
+      expect((await textOf(pending))?.state).toBe('PENDING');
+      // Both cleared messages are gone from the list; the 89-day-old one is past the 60-day window.
+      expect((await listOf(token)).items).toEqual([]);
+      // A second pass finds nothing, and a batch limit is honoured.
+      expect(await clearExpiredNotificationText(ctx.container.database.db, cutoff, 100)).toBe(0);
+    });
+
+    it('honours the batch limit', async () => {
+      const mine = await customerIdOf(await seededCustomer(8402));
+      for (let i = 0; i < 3; i += 1) {
+        await row(mine, {
+          text: `قدیمی ${i}`,
+          minutesAgo: (MINIAPP_NOTIFICATION_TEXT_RETENTION_DAYS + 1) * DAY_MINUTES,
+        });
+      }
+      const cutoff = new Date(
+        ctx.container.clock.now().getTime() -
+          MINIAPP_NOTIFICATION_TEXT_RETENTION_DAYS * 24 * 3_600_000,
+      );
+      expect(await clearExpiredNotificationText(ctx.container.database.db, cutoff, 2)).toBe(2);
+      expect(await clearExpiredNotificationText(ctx.container.database.db, cutoff, 2)).toBe(1);
+    });
+
+    it('is wired into the worker as a sweeper that runs', async () => {
+      ctx.container.setInstallationTenant(tenantA.tenantId);
+      const mine = await customerIdOf(await seededCustomer(8403));
+      const old = await row(mine, {
+        text: 'قدیمی',
+        minutesAgo: (MINIAPP_NOTIFICATION_TEXT_RETENTION_DAYS + 2) * DAY_MINUTES,
+      });
+      expect(await ctx.container.notificationTextRetentionSweeper.sweep()).toBeGreaterThanOrEqual(
+        1,
+      );
+      expect((await textOf(old))?.rendered_text).toBeNull();
+    });
+
+    async function seededCustomer(telegramUserId: number): Promise<number> {
       await sessionFor(telegramUserId);
       return telegramUserId;
     }

@@ -575,7 +575,7 @@ A bell with an unread counter in the mini app's header, and «اعلان‌ها�
 «همه خوانده شد» marks every one.
 
 - **Source of truth: the customer notification lane's own record.** `customer_notifications`
-  (ADR 0030) is the only store; no second message table exists. Migration 0294 adds two nullable
+  (ADR 0030) is the only store; no second message table exists. Migration 0303 adds two nullable
   columns to it: `rendered_text` (the plain words the customer was sent, stamped by the same
   statement that records `DELIVERED`, and by nothing else) and `customer_read_at` (null is unread).
   A CHECK keeps text to `DELIVERED` rows and a read mark to rows that have text.
@@ -597,6 +597,12 @@ A bell with an unread counter in the mini app's header, and «اعلان‌ها�
   reach back `MINIAPP_NOTIFICATION_WINDOW_DAYS` (60) from delivery. «همه خوانده شد» marks every
   unread message of the customer, including any older than the window, so nothing is left unread
   out of sight.
+- **Stored words are bounded.** A worker sweeper (`customer-notification-text`, hourly, no flag,
+  idle during a recovery) clears `rendered_text` and `customer_read_at` of every row delivered
+  more than `MINIAPP_NOTIFICATION_TEXT_RETENTION_DAYS` (90) ago, in one statement because the
+  CHECK forbids a read mark without text. The row stays (its told-once role and its compaction
+  belong to the lane); nothing is sent. 90 exceeds the 60-day window, so a listed message never
+  loses its words.
 - **Idempotent.** A mark is a conditional UPDATE naming `customer_read_at IS NULL`: a second tap
   changes nothing, answers `marked: 0` and keeps the first moment. The mini app's idempotency key
   replays a request's own first answer, and a key reused for a different message is a 409.
@@ -608,7 +614,7 @@ A bell with an unread counter in the mini app's header, and «اعلان‌ها�
   (`maintenance.run` for the mini app's session job), with the scope-activity check and the flag
   read **inside** the transaction. Marking read is a per-customer view preference, not a business
   fact, so it writes no audit row and no outbox event; a denial is audited like any other.
-- **No customer message from the migration.** Rows delivered before 0294 have no text and are not
+- **No customer message from the migration.** Rows delivered before 0303 have no text and are not
   listed; nothing is backfilled and nobody is told anything.
 - **Not in the centre (by construction):** a broadcast, a direct reply to a button tap, the
   subscription link's own delivery lane and anything else that does not go through
