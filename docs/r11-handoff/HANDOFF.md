@@ -6,8 +6,8 @@ Resume: read this block, the prompt NEXA-PHASE5-CUSTOMER.md (owner upload), then
 - Merged: #374 B4 (b1c2749), #373 B3 (7e2427e, carried phase-4.md), #375 B2 (d7f5a5c, 0302),
   #377 B2 follow-up (68129b3: usage history dropped on service transfer — security review finding).
 - Merged also: #376 B1 (8e409c1, 0303; Codex P2 fix c5b9f68 + CI-only label fix 19aaca3).
-- Open: none; B6 syncing with main for its PR (0304).
-- Pushed, PR waits for migration order: B6 feat/r11-reminder-optout 06b8dde (0304), C2 feat/r11-reseller-expiry
+- Open: #378 B6 (0304), head d67dec5, @codex review posted, CI watcher running.
+- Pushed, PR waits for migration order: C2 feat/r11-reseller-expiry
   09696e0 (0305), B7 feat/r11-phone-verify a2381cc (0306; opens AFTER B5 merges — payments never parallel).
 - In progress: B5 feat/r11-miniapp-stars (Opus; no migration).
 - Owner change 2026-11-02: up to 3 implementers, 3rd slot only Sonnet UI-only/no migration/no payment (B1, B4).
