@@ -59,4 +59,5 @@ export const CUSTOMER_NOTIFICATION_KIND_NAMES_FA: Readonly<
   SERVICE_TIME_ADDED: 'خرید زمان اضافه',
   SERVICE_AUTO_RENEW_FUNDS_SHORT: 'کمبود موجودی برای تمدید خودکار',
   SERVICE_AUTO_RENEW_PRICE_CHANGED: 'تغییر مبلغ تمدید خودکار',
+  RESELLER_EXPIRED: 'پایان مهلت نمایندگی',
 };

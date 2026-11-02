@@ -405,6 +405,14 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    */
   'SERVICE_AUTO_RENEW_FUNDS_SHORT',
   'SERVICE_AUTO_RENEW_PRICE_CHANGED',
+  /*
+   * Round 11, C2: a reseller's expiry date passed and the expiry sweep suspended the
+   * reseller: prices are the normal ones again, and nothing was charged or credited. The
+   * subject is a fresh id minted by the sweep for this one suspension (a reseller may expire,
+   * be extended and expire again, so the reseller's own id cannot be the subject). There are
+   * no placeholders: the sentence carries no figure, so there is no reader and no payload.
+   */
+  'RESELLER_EXPIRED',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -485,6 +493,8 @@ export const CUSTOMER_NOTIFICATION_AUTOMATED: Readonly<Record<CustomerNotificati
     // Round 10, D1: raised by the auto-renew sweep, not by anything the customer did then.
     SERVICE_AUTO_RENEW_FUNDS_SHORT: true,
     SERVICE_AUTO_RENEW_PRICE_CHANGED: true,
+    // Round 11, C2: raised by the expiry sweep, not by anything the reseller did then.
+    RESELLER_EXPIRED: true,
   };
 
 /**
@@ -694,6 +704,12 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    */
   SERVICE_AUTO_RENEW_FUNDS_SHORT: true,
   SERVICE_AUTO_RENEW_PRICE_CHANGED: true,
+  /*
+   * Round 11, C2: `false`. The suspension is a committed fact and the sentence says so; an
+   * extension that follows does not make "your reseller access ended" false, it is a later
+   * event. A late copy is still the truthful account of what happened at the time.
+   */
+  RESELLER_EXPIRED: false,
 };
 
 /**
@@ -784,6 +800,8 @@ export const CUSTOMER_NOTIFICATION_QUIET_HOURS: Readonly<
   // Round 10, D1: a sweep's notice, held like every reminder.
   SERVICE_AUTO_RENEW_FUNDS_SHORT: true,
   SERVICE_AUTO_RENEW_PRICE_CHANGED: true,
+  // Round 11, C2: an account-standing fact, told when it happens (as ACCOUNT_UNBLOCKED is).
+  RESELLER_EXPIRED: false,
 };
 
 /**
@@ -881,6 +899,8 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   // Round 10, D1: values read at send time from the run row's snapshot.
   SERVICE_AUTO_RENEW_FUNDS_SHORT: 'bot.service.auto_renew_funds_short',
   SERVICE_AUTO_RENEW_PRICE_CHANGED: 'bot.service.auto_renew_price_changed',
+  // Round 11, C2: no values; the sentence names nothing but the standing.
+  RESELLER_EXPIRED: 'bot.reseller.expired',
 };
 
 /**

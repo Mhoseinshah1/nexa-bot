@@ -8088,6 +8088,16 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.reseller.expired',
+    description:
+      'Round 11, C2: sent once, through the customer notification lane, when a reseller\u2019s ' +
+      'expiry date has passed and the expiry sweep suspended the reseller. Prices are the ' +
+      'normal ones again; nothing was charged, credited or refunded. An administrator who ' +
+      'extends the expiry date in the Web Admin re-activates the reseller.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.reseller.minimum_achieved',
     description:
       'Sent once a month to an active reseller whose sales this month reached their monthly ' +
