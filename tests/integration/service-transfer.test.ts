@@ -1224,6 +1224,81 @@ describe('Package F — a customer transfers a service to another customer', () 
     expect(JSON.stringify(sent)).not.toContain(note);
   });
 
+  // R11 B2 follow-up: the hourly usage history is the sender's own. A new owner's chart must
+  // open empty, not with another customer's consumption.
+  describe('the usage-chart history', () => {
+    const HOUR_MS = 3_600_000;
+
+    async function enableChart(): Promise<void> {
+      const current = await ctx.container.featureFlagResolver.resolve(
+        tenantA,
+        'service_usage_chart',
+      );
+      await ctx.container.featureFlags.set(tenantA, owner, {
+        key: 'service_usage_chart',
+        enabled: true,
+        expectedVersion: current.version,
+        idempotencyKey: key('chart-flag'),
+        reason: 'usage history transfer test',
+      });
+    }
+
+    async function snapshot(serviceId: string, hoursAgo: number, usedBytes: number): Promise<void> {
+      const takenAt = new Date(Math.floor(Date.now() / HOUR_MS) * HOUR_MS - hoursAgo * HOUR_MS);
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO service_usage_snapshots
+          (tenant_id, service_id, bucket_at, taken_at, used_bytes, total_bytes, expires_at)
+        VALUES (${tenantA.tenantId}, ${serviceId}, ${takenAt}, ${takenAt}, ${usedBytes},
+                53687091200, NULL)`);
+    }
+
+    const stored = (serviceId: string) =>
+      count(
+        sql`SELECT count(*)::int AS n FROM service_usage_snapshots WHERE service_id = ${serviceId}`,
+      );
+
+    it('starts the new owner’s chart empty, and leaves other services’ history alone', async () => {
+      await enableChart();
+      const moved = await deliveredService('chart-moved');
+      const kept = await deliveredService('chart-kept');
+      await snapshot(moved.id, 30, 100);
+      await snapshot(moved.id, 5, 200);
+      await snapshot(kept.id, 5, 300);
+      expect(
+        (await ctx.container.usageSnapshots.history(tenantA, moved.id, 7))?.points,
+      ).toHaveLength(2);
+
+      await transfer(moved.id, RECIPIENT_TG);
+      expect(await ownerOf(moved.id)).toBe(recipient);
+
+      const after = await ctx.container.usageSnapshots.history(tenantA, moved.id, 30);
+      expect(after?.points).toEqual([]);
+      expect(await stored(moved.id)).toBe(0);
+      expect(await stored(kept.id)).toBe(1);
+
+      // What the new owner's own reads record from here on is theirs.
+      await snapshot(moved.id, 0, 400);
+      expect(
+        (await ctx.container.usageSnapshots.history(tenantA, moved.id, 7))?.points,
+      ).toHaveLength(1);
+    });
+
+    it('deletes nothing when the transfer is refused', async () => {
+      await enableChart();
+      const service = await deliveredService('chart-refused');
+      await snapshot(service.id, 5, 200);
+      await refusalOf(transfer(service.id, SENDER_TG));
+      expect(await ownerOf(service.id)).toBe(sender);
+      expect(await stored(service.id)).toBe(1);
+
+      await ctx.container.database.db.execute(
+        sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}`,
+      );
+      await refusalOf(transfer(service.id, RECIPIENT_TG));
+      expect(await stored(service.id)).toBe(1);
+    });
+  });
+
   it('refuses the recipient a refund of money somebody else paid', async () => {
     const service = await deliveredService('recipient-refund');
     await transfer(service.id, RECIPIENT_TG);

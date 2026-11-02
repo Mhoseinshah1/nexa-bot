@@ -5289,6 +5289,7 @@ export function createContainer(
     repository: new DrizzleServiceTransferRepository(database.db),
     services: serviceRepository,
     orders: orderRepository,
+    usageSnapshots: new DrizzleUsageSnapshotRepository(database.db),
     customers: customerRepository,
     captures: customerCaptureService,
     screens: customerScreens,
