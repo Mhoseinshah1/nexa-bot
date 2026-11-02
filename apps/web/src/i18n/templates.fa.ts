@@ -377,6 +377,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   lines: 'فهرست خط‌به‌خط',
   location: 'لوکیشن',
   locationChangeBlock: 'بخش تغییر لوکیشن',
+  locationRemaining: 'خط تغییر لوکیشن باقی‌مانده',
   locationsBlock: 'بخش لوکیشن‌ها',
   max: 'حداکثر تعداد نویسه',
   maxBytes: 'حداکثر حجم فایل',
@@ -794,6 +795,10 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
     marker: 'نشانگر وضعیت سرویس (خودکار)',
   },
   'bot.service.card': { lastSeen: 'آخرین اتصال', status: 'وضعیت سرویس' },
+  'bot.service.location_remaining': {
+    remaining: 'تعداد تغییر لوکیشن باقی‌مانده',
+    max: 'سقف تعداد تغییر لوکیشن در بازه',
+  },
   'bot.service.remaining_value': { percent: 'درصد باقی‌مانده' },
   'bot.wallet.topup_method_button': { name: 'نام روش پرداخت' },
   'bot.wallet.topup_method_gift_button': { name: 'نام روش پرداخت', percent: 'درصد هدیهٔ شارژ' },
@@ -2774,6 +2779,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.service.location_cooldown': [
     'تغییر لوکیشن زودتر از فاصلهٔ مجاز',
     'از آخرین تغییر لوکیشن کمتر از فاصلهٔ تعیین‌شدهٔ مدیر گذشته است؛ چیزی تغییر نکرد و مبلغی کسر نشد.',
+  ],
+  'bot.service.location_remaining': [
+    'تغییر لوکیشن باقی‌مانده',
+    'خطی که در کارت سرویس و صفحهٔ تغییر لوکیشن می‌گوید این سرویس هنوز چند بار می‌تواند لوکیشن عوض کند (مثلاً «۲ از ۳»). فقط وقتی دیده می‌شود که تغییر لوکیشن برای سرویس فعال باشد و سقف تعداد در بازه تعیین شده باشد؛ بدون سقف یا با خاموش بودن تغییر لوکیشن اصلاً نمایش داده نمی‌شود. عدد همان است که سرور هنگام درخواست اعمال می‌کند.',
   ],
   'bot.service.location_limit': [
     'سقف دفعات تغییر لوکیشن',

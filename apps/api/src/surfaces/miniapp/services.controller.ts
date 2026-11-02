@@ -104,6 +104,13 @@ export class MiniAppServicesController {
       qr: qrKinds.length > 0,
       qrKinds,
       canChangeLocation: offered.includes('CHANGE_LOCATION'),
+      // R11 B4: the same count the enforcement uses; null (nothing shown) with the feature off
+      // or no limit set, and still answered at 0, where the button above is already gone.
+      locationRemaining: await this.container.commercialActions.locationChangesLeft(
+        call.context.scope,
+        call.actor,
+        service,
+      ),
       autoRenew: await this.autoRenewOf(call, service),
     };
   }
@@ -290,7 +297,8 @@ export class MiniAppServicesController {
    * The location sheet's read: where the service is and what it may be moved to, priced.
    * `CommercialActionService.offer` is the bot's own read and refuses for every reason a
    * move would (state, panel, policy, nothing configured); the cooldown and the rolling
-   * limit have already removed the targets they refuse. Nothing else is exposed.
+   * limit have already removed the targets they refuse. R11 B4 adds the changes left, from
+   * the offer's own evaluation (null with no limit set). Nothing else is exposed.
    */
   @Get(MINIAPP_ROUTES.serviceLocations)
   async locations(
@@ -315,6 +323,7 @@ export class MiniAppServicesController {
     }
     return {
       current: { label: locations.current.label },
+      remaining: locations.remaining,
       targets: locations.targets.map((target) => ({
         id: target.id,
         label: target.label,

@@ -216,12 +216,12 @@ export async function locationChoice(
     row: index,
   }));
   buttons.push({ ...backToServiceButton(serviceId), row: shown.length });
-  return {
-    key: 'bot.service.location_choice',
-    values: { currentLocation: locations.current.label },
-    buttons,
-    orderId: null,
-  };
+  // R11 B4: the remaining line comes from the offer's own evaluation, never a second count.
+  const screen = await rt.deps.screens.locationChoice(scope, {
+    currentLocation: locations.current.label,
+    locationChanges: locations.remaining,
+  });
+  return { key: 'bot.service.location_choice', values: screen.values, buttons, orderId: null };
 }
 
 /**

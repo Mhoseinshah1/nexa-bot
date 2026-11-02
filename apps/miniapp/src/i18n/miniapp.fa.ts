@@ -177,6 +177,7 @@ export const MINIAPP_FA = {
   'miniapp.location_open': 'تغییر لوکیشن',
   'miniapp.location_title': 'تغییر لوکیشن',
   'miniapp.location_current': 'فعلی',
+  'miniapp.location_remaining': 'تغییر لوکیشن باقی‌مانده: {remaining} از {max}',
   'miniapp.location_free': 'رایگان',
   'miniapp.location_pick': 'لوکیشن مقصد را انتخاب کنید.',
   'miniapp.location_note':

@@ -619,6 +619,20 @@ export const FEATURE_FLAGS = [
     configuredBy: ['auto_renew.lead_hours'],
   },
   {
+    key: 'location_remaining_display',
+    description:
+      'R11 B4: the line «تغییر لوکیشن باقی‌مانده: ۲ از ۳» on the bot\u2019s service card and in the ' +
+      'mini app. On, a customer sees how many location changes they have left \u2014 only where ' +
+      'location change is enabled for the service AND a limit is set. Off by default, because ' +
+      'every new customer-facing feature ships behind a switch that starts off: off, neither ' +
+      'surface shows the line and both are exactly as before. Turning it off changes no limit ' +
+      'and no enforcement; the count a move is refused with is the same.',
+    defaultEnabled: false,
+    // LOCAL: it adds one line of text to two screens and moves no money.
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
+  {
     key: 'referral_friends_list',
     description:
       'R11 B3: the «دوستان دعوت‌شده» list on the mini app\u2019s referral screen \u2014 the ' +

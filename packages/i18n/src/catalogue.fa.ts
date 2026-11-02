@@ -1056,7 +1056,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // WP-A6: location change, shown only where the panel can really move the account.
   'bot.service.change_location_button': '🌍 تغییر لوکیشن',
   'bot.service.location_choice':
-    '{icon:location} تغییر لوکیشن سرویس\n\n📍 لوکیشن فعلی: {currentLocation}\n\nلوکیشن مقصد را انتخاب کنید:',
+    '{icon:location} تغییر لوکیشن سرویس\n\n📍 لوکیشن فعلی: {currentLocation}\n{locationRemaining}\n\nلوکیشن مقصد را انتخاب کنید:',
+  // R11 B4: the line both screens above carry where a limit is set.
+  'bot.service.location_remaining': '{icon:location} تغییر لوکیشن باقی‌مانده: {remaining} از {max}',
   'bot.service.location_option': '📍 {location} — {price}',
   'bot.service.location_option_free': '📍 {location} — رایگان',
   'bot.service.location_confirm_free':
@@ -1553,7 +1555,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.search_none': 'سرویسی با این نام کاربری در میان سرویس‌های شما پیدا نشد.',
   'bot.service.search_invalid': 'عبارت جستجو معتبر نیست.',
   'bot.service.card':
-    'وضعیت سرویس: {status}\n{icon:user} نام کاربری: {serviceUsername}\n\n{icon:location} موقعیت سرویس: {serviceLocation}\n📦 نام محصول: {productName}\n\n🗂 حجم کل: {trafficBytes}\n📥 حجم مصرفی: {usedTraffic}\n💢 حجم باقی‌مانده: {remainingTraffic}\n\n{icon:date} تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\n📶 آخرین زمان اتصال شما: {lastSeen}\n\n📝 یادداشت: {note}\n\n{rotateHint}',
+    'وضعیت سرویس: {status}\n{icon:user} نام کاربری: {serviceUsername}\n\n{icon:location} موقعیت سرویس: {serviceLocation}\n📦 نام محصول: {productName}\n\n🗂 حجم کل: {trafficBytes}\n📥 حجم مصرفی: {usedTraffic}\n💢 حجم باقی‌مانده: {remainingTraffic}\n\n{icon:date} تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\n📶 آخرین زمان اتصال شما: {lastSeen}\n\n📝 یادداشت: {note}\n\n{locationRemaining}\n\n{rotateHint}',
   // Round N (F4): the card while a change is applied, and its one-line notice.
   'bot.service.state_working': '{icon:time} در حال اعمال درخواست شما روی سرور…',
   'bot.service.status_with_notice': '{status}\n{notice}',
