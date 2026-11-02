@@ -329,6 +329,9 @@ describe('the feature flag registry', () => {
       // Round 9, C5. Off by default; the mini app's surface, its document and the bot's
       // menu button it switches on are reachable, and with it off the bot is unchanged.
       'mini_app',
+      // R11 B5. Off by default; the mini app's in-app Stars invoice link it switches on is
+      // reachable, and with it off the link endpoint refuses and the chat invoice is unchanged.
+      'miniapp_stars_invoice',
       // Round 11, B1. Off by default; the mini app's bell, its list and the endpoints behind
       // them are reachable, and with it off the mini app and the bot are exactly as before.
       'notification_centre',

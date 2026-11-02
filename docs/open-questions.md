@@ -4805,6 +4805,39 @@ live; the owner decides otherwise.
   pins this. If bot subscriptions become a product feature, the update needs its own route,
   its own contract and an owner decision about what it moves.
 
+## Round 11 B5 — Telegram Stars paid inside the mini app
+
+- **OQ-R11-B5-01 — two invoices for one attempt (RESOLVED by the owner's B5 spec).** With
+  `miniapp_stars_invoice` on, a Stars order attempt has two ways to be paid: the chat invoice the
+  worker sends (the bot path) and the `createInvoiceLink` link the mini app opens (one per attempt,
+  the same on every device). Both carry the SAME payload and Stars and are decided by the one
+  pre-checkout on the bot's webhook. Built: pre-checkout now also refuses while an earlier
+  approval's hold is live (`CHECKOUT_HELD`, read under the payment's row lock), so two checkouts
+  approved seconds apart can no longer both be charged; after the charge it refuses
+  (`ALREADY_PAID` / `NOT_PENDING`). Cost: a customer whose approved checkout never became a charge
+  waits for the hold (`TELEGRAM_STARS_CHECKOUT_HOLD_MS`, 2 minutes) before paying again. A second
+  charge that arrives anyway is recorded as `SECOND_CHARGE` on
+  `payments.gateway_identity_mismatch` with its charge id and settles nothing; the operator refunds
+  it (Nexa never calls Telegram's Star refund). Proven by `tests/integration/miniapp-stars-invoice.test.ts`
+  and `tests/integration/telegram-stars.test.ts` («one attempt, one charge …»).
+- **OQ-R11-B5-02 — wallet top-ups.** The in-app invoice is offered for ORDER attempts only; a Stars
+  top-up from the mini app keeps its invoice in the bot's chat, as before. Default: unchanged.
+  Extending it is the same endpoint with the top-up route's eligibility instead of the order's.
+- **OQ-R11-B5-03 — `openInvoice` and origin protection.** The mini app now calls
+  `Telegram.WebApp.openInvoice` (Bot API 6.1+) from its own document, beside `openLink` and
+  `openTelegramLink`; OQ-R11-A5-01's unverified origin rule applies to it the same way. A client
+  without the method is told to pay the chat invoice.
+- **OQ-R11-B5-04 — a Stars charge that lands after the attempt's deadline is not credited.** The
+  B5 brief describes a late `successful_payment` as going "through the late-credit path, exactly one
+  credit". The code defines the Stars route with no late credit (`lateCreditSetting: null`;
+  `settleRecorded` passes no late-credit input and treats a credit as impossible): a late charge is
+  recorded once, its invoice marked `LATE_COMPLETION`, one `payments.gateway_late_completion`
+  alert opened for the operator, and nothing is credited or settled, however often Telegram
+  delivers it. Kept as built (the reading that moves no money); the hold makes it rare, since a
+  pre-checkout approves only two minutes or more before the deadline. Owner: should a late Stars
+  charge credit the wallet like TonPays' late credit (a new setting, a contract change), or stay an
+  operator refund?
+
 ## Round 11 B1 — the mini app's notification centre
 
 - **OQ-R11-B1-01 — which "bot messages" belong in the centre.** The centre lists what the

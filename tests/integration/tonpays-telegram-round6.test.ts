@@ -1805,7 +1805,7 @@ describe('TonPays Telegram Round 6: remainder, refund, cancel', () => {
     await lostCancel(paymentId, message);
     const open = await lane.attemptFor(tenantA, maryam, paymentId);
     expect(open?.payment.state).toBe('PENDING');
-    expect(attemptWire(open!)).toMatchObject({
+    expect(attemptWire(open!, false)).toMatchObject({
       paysInChat: true,
       invoiceReady: true,
       payUrl: null,
