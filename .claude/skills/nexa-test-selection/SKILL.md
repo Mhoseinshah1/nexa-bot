@@ -72,7 +72,7 @@ tier 3 locally. When unsure, it is a money PR.
 - `apps/api/drizzle`, `schema.ts`, `online-indexes.ts` → `pnpm db:check` +
   `tests/integration/migration-*` (`nexa-migrations`).
 - identity, access, auth controllers, crypto, redaction → auth/admin-security
-  suites. Backup, recovery, `main.recovery.ts` → backup-_ and recovery-_.
+  suites. Backup, recovery, `main.recovery.ts` → `backup-*` and `recovery-*`.
 - `platform/legacy-*`, `infrastructure/nxpkg`, `main.migration.ts` →
   `legacy-migration*` suites (CI adds MySQL/MariaDB and the rehearsal).
 - `deploy/`, `scripts/*.sh`, `Dockerfile` → `pnpm check:shell && pnpm test:deploy`.
