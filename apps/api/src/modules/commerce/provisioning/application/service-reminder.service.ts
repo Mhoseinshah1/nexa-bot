@@ -245,8 +245,19 @@ export class ServiceReminderService {
         return { expiry: 0, usage: 0 };
       }
       const thresholds = await this.thresholds(scope, tx);
-      const expiry = await this.sweepExpiry(scope, now, thresholds, tx);
-      const usage = await this.sweepUsage(scope, now, thresholds, tx);
+      /*
+       * Round 11, B6: whether a customer's stored reminder opt-out is in force. Read in the
+       * pass's own transaction, with the other switches, so a flag turned off mid-pass cannot
+       * leave a pass honouring what the installation no longer offers. Off: every customer is
+       * reminded exactly as before the feature existed.
+       */
+      const optOutHonoured = await this.deps.features.isEnabled(
+        scope,
+        'customer_reminder_opt_out',
+        tx,
+      );
+      const expiry = await this.sweepExpiry(scope, now, thresholds, optOutHonoured, tx);
+      const usage = await this.sweepUsage(scope, now, thresholds, optOutHonoured, tx);
       return { expiry, usage };
     });
   }
@@ -674,6 +685,7 @@ export class ServiceReminderService {
     scope: TenantContext,
     now: Date,
     thresholds: ServiceReminderThresholds,
+    optOutHonoured: boolean,
     tx: TransactionScope,
   ): Promise<number> {
     /* Every switch off: no query, no candidates, nothing to be made stale. */
@@ -760,7 +772,17 @@ export class ServiceReminderService {
       const historical =
         candidate.importUnproven === true ||
         importedReminderKinds(candidate, thresholds).expiry.includes(due);
-      const announce = enabled && !historical;
+      /*
+       * Round 11, B6: a customer who turned expiry reminders off (and the installation honours
+       * it) is RECORDED and not told — the same treatment a switched-off kind gets, and for
+       * the same reason: skipping would leave the service a candidate for ever, and recording
+       * settles a later opt-in the way the customer would want (no burst of reminders for
+       * thresholds that passed while they had asked for silence). The sweep is the one place
+       * recipients are decided; the notification lane re-checks at send time for a message
+       * already queued.
+       */
+      const optedOut = optOutHonoured && candidate.remindersOptedOut === true;
+      const announce = enabled && !historical && !optedOut;
       if (await this.raise(scope, candidate, upTo, announce ? due : null, now, tx)) sent += 1;
     }
     return sent;
@@ -771,6 +793,7 @@ export class ServiceReminderService {
     scope: TenantContext,
     now: Date,
     thresholds: ServiceReminderThresholds,
+    optOutHonoured: boolean,
     tx: TransactionScope,
   ): Promise<number> {
     /* Off means no query at all, for the reason the expiry half gives. */
@@ -816,7 +839,11 @@ export class ServiceReminderService {
         candidate.importUnproven === true ||
         unmeasuredImport ||
         importedReminderKinds(candidate, thresholds).usage.includes(due);
-      if (await this.raise(scope, candidate, reached, historical ? null : due, now, tx)) {
+      /* Round 11, B6: recorded and not told for an opted-out customer; see `sweepExpiry`. */
+      const optedOut = optOutHonoured && candidate.remindersOptedOut === true;
+      if (
+        await this.raise(scope, candidate, reached, historical || optedOut ? null : due, now, tx)
+      ) {
         sent += 1;
       }
     }

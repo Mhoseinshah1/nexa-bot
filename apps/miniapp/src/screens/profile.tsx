@@ -1,19 +1,23 @@
+import { useState } from 'react';
+import { MINIAPP_ROUTES, miniAppRemindersSchema, type MiniAppReminders } from '@nexa/contracts';
+import { ApiError } from '../api.js';
 import { useApp } from '../app.js';
 import { t } from '../i18n/t.js';
-import { Card, Ltr } from '../ui.js';
+import { Button, Card, Ltr, errorText, useLoad } from '../ui.js';
 import { useTrialOffers } from './entry-points.js';
 
 /**
  * پروفایل: who the bot knows the customer as (name and username from the Telegram profile
  * the launch carried), the reseller tier when the customer is an ACTIVE reseller, and the
  * ways into the wallet history, the referral program and — only while a panel offers one,
- * and only once that read succeeded — the free trial (a failed read hides that one row).
+ * and only once that read succeeded — the free trial (a failed read hides that one row),
+ * and — Round 11 B6, only while the installation offers it (`customer_reminder_opt_out`) —
+ * the customer's own switch for the expiry and volume reminders.
  *
  * Not drawn, because nothing backs them: the default service username (the username is
  * chosen per order), the notifications row and its unread count (there is no in-app
  * notification store), «کدهای تخفیف من» (codes are typed at checkout, never listed), the
- * order count (no customer-own count), the reminder switch (no per-customer preference), the
- * marketing switch (no mini-app endpoint), the required-channels status (only missing
+ * order count (no customer-own count), the marketing switch (no mini-app endpoint), the required-channels status (only missing
  * channels are returned), the terms row (the published terms are read only at the gate),
  * and the reseller panel (credit was removed; there is no sales or customer read) — the
  * tier is a label here, never a door.
@@ -66,6 +70,58 @@ export function Profile() {
           {t('miniapp.apps_title')}
         </button>
       </Card>
+      <Reminders />
     </main>
+  );
+}
+
+/**
+ * Round 11, B6: the customer's own expiry / volume reminder switch. Drawn only once the read
+ * succeeded AND says it is offered — a failed read or an installation that does not offer the
+ * choice shows nothing, like the trial row. The write names only the wanted state: the server
+ * reads whose setting it is from the session.
+ */
+function Reminders() {
+  const { api } = useApp();
+  const { loaded } = useLoad(
+    () => api.get(MINIAPP_ROUTES.reminders, {}, miniAppRemindersSchema),
+    [api],
+  );
+  const [changed, setChanged] = useState<MiniAppReminders | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (loaded.state !== 'ready') return null;
+  const state = changed ?? loaded.data;
+  if (!state.offered) return null;
+  const set = async (enabled: boolean) => {
+    setError(null);
+    setBusy(true);
+    try {
+      setChanged(await api.post(MINIAPP_ROUTES.reminders, {}, miniAppRemindersSchema, { enabled }));
+    } catch (failure) {
+      setError(
+        failure instanceof ApiError && failure.code === 'miniapp.route_unavailable'
+          ? t('miniapp.profile_reminders_unavailable')
+          : errorText(failure),
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card>
+      <h2>{t('miniapp.profile_reminders_title')}</h2>
+      <p>{t(state.enabled ? 'miniapp.profile_reminders_on' : 'miniapp.profile_reminders_off')}</p>
+      <div className="actions">
+        <Button disabled={busy} onClick={() => void set(!state.enabled)}>
+          {t(
+            state.enabled
+              ? 'miniapp.profile_reminders_disable'
+              : 'miniapp.profile_reminders_enable',
+          )}
+        </Button>
+      </div>
+      {error !== null && <p className="error">{error}</p>}
+    </Card>
   );
 }

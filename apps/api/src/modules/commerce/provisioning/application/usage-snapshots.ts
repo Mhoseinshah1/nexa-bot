@@ -44,6 +44,12 @@ export interface UsageSnapshotStore {
   ): Promise<boolean>;
   /** Deletes up to `limit` rows taken before `before`; returns how many went. */
   prune(scope: TenantContext, before: Date, limit: number, tx: TransactionScope): Promise<number>;
+  /**
+   * Deletes EVERY snapshot of one service and returns how many went. Called inside the
+   * transaction that hands the service to another customer: the history is the previous
+   * owner's, and the new owner's chart must not open with it.
+   */
+  deleteForService(scope: TenantContext, serviceId: string, tx: TransactionScope): Promise<number>;
   /** The service's rows with `taken_at` in `[from, to)`, oldest first. */
   between(
     scope: TenantContext,

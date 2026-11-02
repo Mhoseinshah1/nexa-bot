@@ -651,6 +651,22 @@ export const FEATURE_FLAGS = [
     configuredBy: [],
   },
   {
+    key: 'notification_centre',
+    description:
+      'Round 11, B1: «اعلان‌ها» in the customer mini app \u2014 a bell with an unread counter in ' +
+      'the header, and a list of the bot messages already delivered to the customer through ' +
+      'the customer notification lane (payment and order outcomes, reminders, ticket replies, ' +
+      'operator messages), newest first, with read and unread. Only the customer\u2019s own, ' +
+      'sent by the bot the mini app was opened from; an operator or ops-group message never ' +
+      'appears. Off by default: no bell is drawn, and its endpoints answer as if they did not ' +
+      'exist. Turning it off keeps what was stored and every read mark, and changes nothing in ' +
+      'the bot. It does not change which messages the bot sends.',
+    defaultEnabled: false,
+    // LOCAL: it adds one screen to the mini app and sends the customer nothing.
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
+  {
     key: 'location_remaining_display',
     description:
       'R11 B4: the line «تغییر لوکیشن باقی‌مانده: ۲ از ۳» on the bot\u2019s service card and in the ' +
@@ -677,6 +693,22 @@ export const FEATURE_FLAGS = [
     defaultEnabled: false,
     // LOCAL: it adds a read-only section to one screen of the customer's own mini app.
     blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
+  {
+    key: 'customer_reminder_opt_out',
+    description:
+      'Round 11, B6: a customer may turn OFF the expiry and volume reminders about their own ' +
+      'services (the service-expiry ladder, the «expired» notice and the three volume ' +
+      'thresholds) from the bot’s support screen or the mini app, and an operator may set ' +
+      'it from the customer’s page. Off by default. While it is off nobody is offered the ' +
+      'choice and a stored opt-out is NOT honoured: every customer is reminded exactly as ' +
+      'before; the stored choice is kept, and turning this on makes it effective again. A ' +
+      'customer who opted out is skipped by the reminder sweep alone — payment, delivery, ' +
+      'wallet, security, ticket and administrator messages are never affected.',
+    defaultEnabled: false,
+    // TENANT_WIDE: turning it off reminds every customer who had opted out, all at once.
+    blastRadius: 'TENANT_WIDE',
     configuredBy: [],
   },
 ] as const satisfies readonly FeatureFlagDefinition[];

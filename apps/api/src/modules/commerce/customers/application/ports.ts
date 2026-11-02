@@ -42,6 +42,12 @@ export interface CustomerRecord {
    */
   readonly marketingOptOutAt: Date | null;
   /**
+   * Round 11, B6: when the customer (or an operator for them) turned the service expiry and
+   * volume reminders off; null while they are reminded (the default). Governs those reminders
+   * alone, and only while `customer_reminder_opt_out` is on.
+   */
+  readonly remindersOptOutAt: Date | null;
+  /**
    * Customer 360 (§11.4): when an operator exempted this customer from mandatory channel
    * membership; null while the gate applies. The Telegram gate reads it from the row it
    * resolved for the update, so the exemption is enforced where membership is.
@@ -215,6 +221,19 @@ export interface CustomerRepository {
    * double tap change the row once and answer `false` the second time.
    */
   setMarketingOptOut(
+    scope: TenantContext,
+    id: UserId,
+    optedOut: boolean,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean>;
+
+  /**
+   * Round 11, B6: the service expiry / volume reminder opt-out, the same conditional UPDATE
+   * as the promotional one — opted in when opting out, opted out when opting back in — so a
+   * replay and a double tap change the row once and answer `false` the second time.
+   */
+  setRemindersOptOut(
     scope: TenantContext,
     id: UserId,
     optedOut: boolean,

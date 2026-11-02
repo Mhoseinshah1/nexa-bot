@@ -317,6 +317,9 @@ describe('the feature flag registry', () => {
       // WP19. Off by default; the customer's refund-request path it switches on is
       // reachable, and requests already filed stay decidable when it is turned off.
       'customer_refund_requests',
+      // Round 11 B6. Off by default; the reminder switch it offers is reachable, and a stored
+      // opt-out is honoured only while it is on.
+      'customer_reminder_opt_out',
       // R10 D4: gift cards (wallet top-up codes). Off by default; the Web Admin's batches,
       // the bot's capture window and the mini app's field are reachable behind it.
       'gift_cards',
@@ -329,6 +332,9 @@ describe('the feature flag registry', () => {
       // R11 B5. Off by default; the mini app's in-app Stars invoice link it switches on is
       // reachable, and with it off the link endpoint refuses and the chat invoice is unchanged.
       'miniapp_stars_invoice',
+      // Round 11, B1. Off by default; the mini app's bell, its list and the endpoints behind
+      // them are reachable, and with it off the mini app and the bot are exactly as before.
+      'notification_centre',
       'ops_notifications',
       // Phase C3. Off by default; draft placement over a panel's balancing group is
       // reachable, and a panel in no group is routed exactly as before while it is on.

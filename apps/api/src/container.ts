@@ -286,6 +286,8 @@ import {
 } from './modules/platform/backup/infrastructure/drizzle-backup-password.store.js';
 import { planArchiveParts } from './modules/platform/backup/infrastructure/archive-parts.js';
 import { purgePublishedOutboxBefore } from './modules/platform/eventing/infrastructure/outbox-retention.js';
+import { MINIAPP_NOTIFICATION_TEXT_RETENTION_DAYS } from '@nexa/contracts';
+import { clearExpiredNotificationText } from './modules/commerce/messaging/infrastructure/customer-notification-text-retention.js';
 import { purgeExpiredIdempotencyBefore } from './modules/platform/idempotency/infrastructure/idempotency-retention.js';
 import { DataCompactionService } from './modules/platform/data-compaction/application/data-compaction.service.js';
 import {
@@ -961,6 +963,8 @@ import { MiniAppReceiptService } from './modules/commerce/miniapp/application/mi
 import { MiniAppStarsInvoiceService } from './modules/commerce/miniapp/application/miniapp-stars-invoice.service.js';
 import { TelegramStarsInvoiceLinkCreator } from './modules/commerce/miniapp/infrastructure/telegram-stars-invoice-link.js';
 import { MiniAppRateLimiter } from './modules/commerce/miniapp/application/miniapp-rate-limiter.js';
+import { NotificationCentreService } from './modules/commerce/miniapp/application/notification-centre.service.js';
+import { DrizzleNotificationCentreRepository } from './modules/commerce/miniapp/infrastructure/drizzle-notification-centre.repository.js';
 import { CheckoutService } from './modules/commerce/checkout/application/checkout.service.js';
 import { DrizzleMiniAppSessionRepository } from './modules/commerce/miniapp/infrastructure/drizzle-miniapp-session.repository.js';
 import { TelegramReceiptUploader } from './modules/commerce/miniapp/infrastructure/telegram-receipt-uploader.js';
@@ -1035,6 +1039,8 @@ export interface MiniAppSurfaceDeps {
   readonly sessions: MiniAppSessionService;
   readonly rateLimit: MiniAppRateLimiter;
   readonly receipts: MiniAppReceiptService;
+  /** Round 11, B1: the customer's notification centre (feature `notification_centre`). */
+  readonly notificationCentre: NotificationCentreService;
   readonly checkout: CheckoutService;
   /** R11 B5: Telegram Stars paid inside the mini app (`openInvoice`). */
   readonly starsInvoice: MiniAppStarsInvoiceService;
@@ -1117,6 +1123,8 @@ export interface Container {
   /** E3: published outbox history and interactive idempotency keys. */
   readonly outboxRetentionSweeper: RetentionSweeper;
   readonly idempotencyRetentionSweeper: RetentionSweeper;
+  /** R11 B1: clears the stored words of delivered customer messages after their retention. */
+  readonly notificationTextRetentionSweeper: RetentionSweeper;
   /** HF-A7: clears support's reply files Telegram never took, after their retention. */
   readonly ticketReplyFileSweeper: RetentionSweeper;
   /** Phase A2: clears direct-message files Telegram never took, after their retention. */
@@ -5287,6 +5295,7 @@ export function createContainer(
     repository: new DrizzleServiceTransferRepository(database.db),
     services: serviceRepository,
     orders: orderRepository,
+    usageSnapshots: new DrizzleUsageSnapshotRepository(database.db),
     customers: customerRepository,
     captures: customerCaptureService,
     screens: customerScreens,
@@ -6140,6 +6149,12 @@ export function createContainer(
       },
       // B14: a wallet credit's tracking code (receipt or gateway), from the payment's own row.
       paymentReferences: paymentRepository,
+      /*
+       * R11 B1: the mini app's notification centre keeps the words of a delivered message.
+       * The tenant's own resolver, so an edited template is what is stored, exactly as it is
+       * what the messenger sent.
+       */
+      centreText: { render: (scope, key, values) => templateResolver.render(scope, key, values) },
       contacts: {
         contactFor: async (scope, customerId, tx) => {
           const customer = await customerRepository.findById(scope, customerId, tx);
@@ -7833,6 +7848,22 @@ export function createContainer(
     logger,
     { intervalMs: 3_600_000, initialDelayMs: 240_000, batchSize: 5_000, maxBatchesPerTick: 200 },
   );
+  const notificationTextRetentionSweeper = new RetentionSweeper(
+    {
+      name: 'customer-notification-text',
+      purge: async (now, limit) => {
+        if (await recoveryQuiesced()) return 0;
+        return clearExpiredNotificationText(
+          database.db,
+          new Date(now.getTime() - MINIAPP_NOTIFICATION_TEXT_RETENTION_DAYS * 24 * 3_600_000),
+          limit,
+        );
+      },
+    },
+    clock,
+    logger,
+    { intervalMs: 3_600_000, initialDelayMs: 300_000, batchSize: 2_000, maxBatchesPerTick: 100 },
+  );
 
   /*
    * Round 8 B5: the CPU share (percent of one core) the backup's 7-Zip and the verification's
@@ -8701,6 +8732,18 @@ export function createContainer(
       }),
       idempotency,
     }),
+    notificationCentre: new NotificationCentreService({
+      repository: new DrizzleNotificationCentreRepository(database.db),
+      features: featureFlagResolver,
+      guard,
+      audit,
+      opsLog,
+      sessions,
+      scopeActivity: tenants,
+      uow,
+      idempotency,
+      clock,
+    }),
     // R10 B1: the checkout the bot is handed too — one instance, one set of rules.
     checkout: checkoutService,
     // R11 B5: the Stars invoice link of an order attempt, for `openInvoice` in the mini app.
@@ -8766,6 +8809,7 @@ export function createContainer(
     recoveryRequestSweeper,
     outboxRetentionSweeper,
     idempotencyRetentionSweeper,
+    notificationTextRetentionSweeper,
     ticketReplyFileSweeper,
     directMessageFileSweeper,
     paymentExpiryLoop,
@@ -9386,6 +9430,7 @@ export function createContainer(
       await recoveryRequestSweeper.stop();
       await outboxRetentionSweeper.stop();
       await idempotencyRetentionSweeper.stop();
+      await notificationTextRetentionSweeper.stop();
       await ticketReplyFileSweeper.stop();
       await directMessageFileSweeper.stop();
       await paymentExpiryLoop.stop();

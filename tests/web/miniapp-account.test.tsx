@@ -11,8 +11,10 @@ import { LEDGER_REASON_KEY } from '../../apps/miniapp/src/screens/wallet-labels'
  * Round 9, C5 part 2a: the wallet, profile, referral and trial screens of the customer mini
  * app, rendered from mocked API answers through the whole shell (handshake, tab bar, stack).
  *
- * The notification centre and the reseller panel have no capability behind them, so the
- * tests also pin that nothing in the shell reaches either.
+ * The reseller panel has no capability behind it, so the tests also pin that nothing in the
+ * shell reaches it. The notification centre has one since Round 11 (B1), behind the feature
+ * `notification_centre`: with it off (the default, and `/me`'s `notifications` null) nothing
+ * of it is drawn, which these tests also pin; its own screens are in `miniapp-notifications`.
  */
 
 const BOT = '01900000-0000-7000-8000-00000000a001';
@@ -662,6 +664,66 @@ describe('profile', () => {
     expect(screen.queryByText(text('miniapp.profile_trial'))).toBeNull();
   });
 
+  it('R11 B6: draws the reminder switch only while the installation offers it', async () => {
+    serve({ 'GET /preferences/reminders': () => ({ offered: false, enabled: true }) });
+    await mount();
+    tabProfile();
+    await screen.findByText(text('miniapp.profile_wallet_history'));
+    expect(screen.queryByText(text('miniapp.profile_reminders_title'))).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: text('miniapp.profile_reminders_disable') }),
+    ).toBeNull();
+  });
+
+  it('R11 B6: a failed reminder read hides only that row', async () => {
+    serve({ 'GET /preferences/reminders': () => refuse(500, 'internal.unhandled') });
+    await mount();
+    tabProfile();
+    await screen.findByText(text('miniapp.profile_wallet_history'));
+    expect(screen.queryByText(text('miniapp.profile_reminders_title'))).toBeNull();
+  });
+
+  it('R11 B6: switches the reminders off and on, sending only the wanted state', async () => {
+    let enabled = true;
+    const calls = serve({
+      'GET /preferences/reminders': () => ({ offered: true, enabled }),
+      'POST /preferences/reminders': (_url, init) => {
+        enabled = (JSON.parse(String(init.body)) as { enabled: boolean }).enabled;
+        return { offered: true, enabled };
+      },
+    });
+    await mount();
+    tabProfile();
+    await screen.findByText(text('miniapp.profile_reminders_on'));
+    fireEvent.click(
+      screen.getByRole('button', { name: text('miniapp.profile_reminders_disable') }),
+    );
+    await screen.findByText(text('miniapp.profile_reminders_off'));
+    // Only the wanted state travels: whose setting it is comes from the session.
+    expect(
+      calls.filter((call) => call.method === 'POST' && call.route === '/preferences/reminders')[0]
+        ?.body,
+    ).toEqual({
+      enabled: false,
+    });
+    fireEvent.click(screen.getByRole('button', { name: text('miniapp.profile_reminders_enable') }));
+    await screen.findByText(text('miniapp.profile_reminders_on'));
+  });
+
+  it('R11 B6: says so when the choice stopped being offered between the read and the tap', async () => {
+    serve({
+      'GET /preferences/reminders': () => ({ offered: true, enabled: true }),
+      'POST /preferences/reminders': () => refuse(409, 'miniapp.route_unavailable'),
+    });
+    await mount();
+    tabProfile();
+    fireEvent.click(
+      await screen.findByRole('button', { name: text('miniapp.profile_reminders_disable') }),
+    );
+    expect(await screen.findByText(text('miniapp.profile_reminders_unavailable'))).toBeTruthy();
+    expect(screen.getByText(text('miniapp.profile_reminders_on'))).toBeTruthy();
+  });
+
   it('opens the wallet and the referral screens from its rows', async () => {
     serve({
       'GET /wallet': () => wallet(),
@@ -703,14 +765,10 @@ describe('home', () => {
     ).toBeTruthy();
   });
 
-  it('reaches no screen for notifications or the reseller panel', () => {
+  it('reaches no screen for the reseller panel', () => {
     const keys = Object.keys(MINIAPP_FA);
-    expect(
-      keys.filter((key) => /notification|reseller_panel|reseller_dashboard/u.test(key)),
-    ).toEqual([]);
-    expect(
-      Object.keys(MINIAPP_ROUTES).filter((key) => /notification|reseller/iu.test(key)),
-    ).toEqual([]);
+    expect(keys.filter((key) => /reseller_panel|reseller_dashboard/u.test(key))).toEqual([]);
+    expect(Object.keys(MINIAPP_ROUTES).filter((key) => /reseller/iu.test(key))).toEqual([]);
   });
 });
 

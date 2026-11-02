@@ -16,6 +16,15 @@ export const MINIAPP_FA = {
   'miniapp.list_separator': '، ',
   'miniapp.copied': 'کپی شد',
 
+  // Round 11, B1: the notification centre (bell, list, mark read).
+  'miniapp.notifications_title': 'اعلان‌ها',
+  'miniapp.notifications_bell_unread': 'اعلان‌ها، {count} خوانده‌نشده',
+  'miniapp.notifications_read_all': 'همه خوانده شد',
+  'miniapp.notifications_empty': 'هنوز پیامی از ربات برای شما ثبت نشده است.',
+  'miniapp.notifications_more': 'نمایش پیام‌های قدیمی‌تر',
+  'miniapp.notifications_unread': 'خوانده‌نشده',
+  'miniapp.notifications_window': 'پیام‌های {days} روز اخیر نمایش داده می‌شود.',
+
   'miniapp.tab_home': 'خانه',
   'miniapp.tab_store': 'فروشگاه',
   'miniapp.tab_services': 'سرویس‌ها',
@@ -350,6 +359,13 @@ export const MINIAPP_FA = {
   'miniapp.profile_wallet_history': 'تراکنش‌ها و پرداخت‌ها',
   'miniapp.profile_referral': 'دعوت دوستان',
   'miniapp.profile_trial': 'سرویس تست رایگان',
+  'miniapp.profile_reminders_title': 'یادآوری‌ها',
+  'miniapp.profile_reminders_on': 'یادآوری نزدیک شدن به پایان زمان و حجم سرویس‌های شما فعال است.',
+  'miniapp.profile_reminders_off':
+    'یادآوری پایان زمان و حجم سرویس‌های شما قطع است. پیام‌های پرداخت، تحویل سرویس و پشتیبانی همچنان ارسال می‌شود.',
+  'miniapp.profile_reminders_disable': 'قطع یادآوری',
+  'miniapp.profile_reminders_enable': 'فعال‌سازی یادآوری',
+  'miniapp.profile_reminders_unavailable': 'در حال حاضر امکان تغییر این گزینه وجود ندارد.',
 
   'miniapp.referral_title': 'دعوت دوستان',
   'miniapp.referral_inactive': 'برنامهٔ معرفی دوستان در حال حاضر فعال نیست.',
