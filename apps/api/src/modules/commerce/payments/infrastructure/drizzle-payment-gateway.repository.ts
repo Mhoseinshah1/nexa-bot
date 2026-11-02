@@ -45,6 +45,7 @@ const COLUMNS = {
   providerUnitRateMinor: paymentGateways.providerUnitRateMinor,
   allowServicePurchase: paymentGateways.allowServicePurchase,
   allowWalletTopup: paymentGateways.allowWalletTopup,
+  requiresVerifiedPhone: paymentGateways.requiresVerifiedPhone,
   hiddenUntil: paymentGateways.hiddenUntil,
   endpointBaseUrl: paymentGateways.endpointBaseUrl,
   webhookIpAllowlist: paymentGateways.webhookIpAllowlist,
@@ -70,6 +71,7 @@ interface Row {
   readonly providerUnitRateMinor: bigint | null;
   readonly allowServicePurchase: boolean;
   readonly allowWalletTopup: boolean;
+  readonly requiresVerifiedPhone: boolean;
   readonly hiddenUntil: Date | null;
   readonly endpointBaseUrl: string | null;
   readonly webhookIpAllowlist: string[] | null;
@@ -102,6 +104,7 @@ function toRecord(row: Row): PaymentGatewayRecord {
     providerUnitRateMinor: row.providerUnitRateMinor,
     allowServicePurchase: row.allowServicePurchase,
     allowWalletTopup: row.allowWalletTopup,
+    requiresVerifiedPhone: row.requiresVerifiedPhone,
     hiddenUntil: row.hiddenUntil,
     endpointBaseUrl: row.endpointBaseUrl,
     webhookIpAllowlist: row.webhookIpAllowlist ?? [],
@@ -278,6 +281,7 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
         providerUnitRateMinor: config.providerUnitRateMinor,
         allowServicePurchase: config.allowServicePurchase,
         allowWalletTopup: config.allowWalletTopup,
+        requiresVerifiedPhone: config.requiresVerifiedPhone,
         updatedAt: now,
       })
       .where(and(eq(paymentGateways.tenantId, tenantId), eq(paymentGateways.provider, provider)))
@@ -445,5 +449,15 @@ export class DrizzleGatewayAudienceReader implements GatewayAudienceReader {
       .where(and(eq(customers.tenantId, tenantId), eq(customers.id, customerId)))
       .limit(1);
     return rows[0]?.firstSeenAt ?? null;
+  }
+
+  async phoneVerified(scope: TenantContext, customerId: UserId, tx?: unknown): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ verifiedAt: customers.phoneVerifiedAt })
+      .from(customers)
+      .where(and(eq(customers.tenantId, tenantId), eq(customers.id, customerId)))
+      .limit(1);
+    return (rows[0]?.verifiedAt ?? null) !== null;
   }
 }

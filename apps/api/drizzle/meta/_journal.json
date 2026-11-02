@@ -2143,6 +2143,13 @@
       "when": 1793617666551,
       "tag": "0305_reseller_expiry",
       "breakpoints": true
+    },
+    {
+      "idx": 306,
+      "version": "7",
+      "when": 1793624585566,
+      "tag": "0306_payment_route_requires_verified_phone",
+      "breakpoints": true
     }
   ]
 }

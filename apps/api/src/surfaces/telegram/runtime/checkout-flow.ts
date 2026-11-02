@@ -34,6 +34,7 @@ import {
 import { mainMenuButton } from './keyboards.js';
 import { endedOrderScreen, liveOrderInReview, orderEndedRefusal } from './order-end-flow.js';
 import { refusal } from './refusals.js';
+import { phoneUnlocksRoutes, phoneVerifyButton } from './phone-verify-flow.js';
 import type { PendingReply } from './replies.js';
 import { gatewayAttemptScreen, payMethodsButton, topupButton } from './payment-screens.js';
 import { unreceiptedTransfer } from './card-receipt-flow.js';
@@ -129,7 +130,9 @@ export async function awaitingPaymentReply(
     },
     buttons: paymentButtons(
       order.id,
-      (await orderRouteButtons(rt, scope, customer.id, order.id, order.totals.total)).length > 0,
+      (await orderRouteButtons(rt, scope, customer.id, order.id, order.totals.total)).length > 0 ||
+        // R11 B7: the selector also carries «تأیید شماره تلفن» when that would add a route.
+        (await phoneUnlocksRoutes(rt, scope, customer.id, 'SERVICE_PURCHASE', order.totals.total)),
     ),
     orderId: order.id,
     wizard: { kind: 'ORDER', step: 'AWAITING_PAYMENT', subjectId: order.id },
@@ -319,11 +322,21 @@ export async function paymentMethods(
       };
     }
     const routes = await orderRouteButtons(rt, scope, customer.id, order.id, order.totals.total);
+    // R11 B7: «تأیید شماره تلفن» when a verified number would add a route for this order.
+    const verify = (await phoneUnlocksRoutes(
+      rt,
+      scope,
+      customer.id,
+      'SERVICE_PURCHASE',
+      order.totals.total,
+    ))
+      ? [phoneVerifyButton()]
+      : [];
     if (routes.length === 0) {
       return {
-        key: 'bot.wallet.topup_none_available',
+        key: verify.length > 0 ? 'bot.payment.phone_required' : 'bot.wallet.topup_none_available',
         values: {},
-        buttons: [close],
+        buttons: [...verify, close],
         orderId: order.id,
         wizard: { kind: 'ORDER', step: 'METHODS', subjectId: order.id },
       };
@@ -331,7 +344,7 @@ export async function paymentMethods(
     return {
       key: 'bot.wallet.topup_method_prompt',
       values: {},
-      buttons: [...routes, close],
+      buttons: [...routes, ...verify, close],
       orderId: order.id,
       wizard: { kind: 'ORDER', step: 'METHODS', subjectId: order.id },
     };

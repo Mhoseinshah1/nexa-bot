@@ -104,7 +104,13 @@ describe('Customer 360 — the customer page', () => {
     stubApi(
       routes(
         [],
-        overview({ phone: { number: '+989121234567', verifiedAt: '2026-09-01T00:00:00.000Z' } }),
+        overview({
+          phone: {
+            number: '+989121234567',
+            masked: '\u20264567',
+            verifiedAt: '2026-09-01T00:00:00.000Z',
+          },
+        }),
       ),
     );
     const { container } = renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
@@ -116,7 +122,8 @@ describe('Customer 360 — the customer page', () => {
     expect(within(head).getByText('5551234567')).toBeTruthy();
     // The internal uuid is never the operator's identity on the page head.
     expect(head.textContent ?? '').not.toContain(ID);
-    expect((await screen.findAllByText('+989121234567')).length).toBeGreaterThan(0);
+    // R11 B7: the identity card shows the masked number; the full one only in the controls.
+    expect((await screen.findAllByText('\u20264567')).length).toBeGreaterThan(0);
     // W5: a server without the terms domain shows a dash, never a «not built» note.
     expect(screen.queryByText(/در این نسخه پیاده نشده/)).toBeNull();
     // Exact aggregates only: the purchase count, from the server's summary — in the stat strip
@@ -130,6 +137,47 @@ describe('Customer 360 — the customer page', () => {
       // DOCUMENT_POSITION_FOLLOWING: the strip comes after the panel.
       expect(panel.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
+  });
+
+  it('R11 B7: says verified with the MASKED number when the server withholds the full one', async () => {
+    stubApi(
+      routes(
+        [],
+        overview({
+          phone: { number: null, masked: '\u20264567', verifiedAt: '2026-09-01T00:00:00.000Z' },
+        }),
+      ),
+    );
+    renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
+    expect((await screen.findAllByText('\u20264567')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(t('web.c360_phone_verified')).length).toBeGreaterThan(0);
+    expect(document.body.textContent ?? '').not.toContain('+98912');
+  });
+
+  it('R11 B7: shows the full number in the phone control to its editor (users.phone.verify)', async () => {
+    stubApi(
+      routes(
+        [],
+        overview({
+          phone: {
+            number: '+989121234567',
+            masked: '\u20264567',
+            verifiedAt: '2026-09-01T00:00:00.000Z',
+          },
+        }),
+      ),
+    );
+    renderPage(<UserDetailPage id={ID} {...OFF} mayVerifyPhone denied={false} />);
+    await openC360Tab('controls');
+    expect((await screen.findAllByText('+989121234567')).length).toBeGreaterThan(0);
+  });
+
+  it('R11 B7: says not verified when there is no verified number', async () => {
+    stubApi(routes());
+    renderPage(<UserDetailPage id={ID} {...OFF} denied={false} />);
+    expect((await screen.findAllByText(t('web.c360_phone_not_verified'))).length).toBeGreaterThan(
+      0,
+    );
   });
 
   it('draws no control and no dangerous operation without their permissions', async () => {

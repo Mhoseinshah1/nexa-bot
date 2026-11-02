@@ -4,12 +4,47 @@ import {
   type PaymentGatewayStatus,
 } from '@nexa/contracts';
 
+/** R11 B7: the switch that makes a route's verified-phone rule, and the bot's flow, exist. */
+export const PHONE_VERIFICATION_FLAG = 'phone_verification' as const;
+
+/**
+ * R11 B7: what the verified-phone rule may know about the customer.
+ *
+ * `NOT_ENFORCED` while the `phone_verification` flag is off: the rule is then treated as
+ * not configured on any route, whatever the customer's number. Otherwise whether their
+ * phone number is verified.
+ */
+export type GatewayPhoneStanding = 'NOT_ENFORCED' | 'VERIFIED' | 'UNVERIFIED';
+
 /** What the evaluator is told about the customer, and nothing else. */
 export interface GatewayAudience {
   /** Confirmed payments this customer has made. Never pending ones — see below. */
   readonly confirmedPayments: number;
   /** Whole days between the customer being first seen and now, floored. */
   readonly accountAgeDays: number;
+  /**
+   * R11 B7. Absent is `NOT_ENFORCED`, so a caller that never heard of the rule changes no
+   * answer; the production audience (`PaymentGatewayService.audienceFor`) always sets it.
+   */
+  readonly phone?: GatewayPhoneStanding;
+}
+
+/** R11 B7: the standing the flag and the customer row give. */
+export function phoneStandingOf(enforced: boolean, verified: boolean): GatewayPhoneStanding {
+  if (!enforced) return 'NOT_ENFORCED';
+  return verified ? 'VERIFIED' : 'UNVERIFIED';
+}
+
+/**
+ * R11 B7: whether the route's verified-phone rule refuses this customer — the ONE predicate,
+ * used by the evaluator below and by the order card-to-card path, which applies no other
+ * threshold (`OQ-5C-01`) but does apply this one.
+ */
+export function phoneRuleRefuses(
+  eligibility: Pick<PaymentGatewayEligibility, 'requiresVerifiedPhone'>,
+  phone: GatewayPhoneStanding | undefined,
+): boolean {
+  return eligibility.requiresVerifiedPhone === true && phone === 'UNVERIFIED';
 }
 
 /** Offered, or refused with the reason an operator can act on. */
@@ -68,6 +103,13 @@ export function evaluateGatewayEligibility(
   }
   if (activateAfterAccountDays > 0 && audience.accountAgeDays < activateAfterAccountDays) {
     return { eligible: false, reason: 'ACCOUNT_TOO_NEW' };
+  }
+  /*
+   * R11 B7, LAST: the one refusal the customer can lift themselves, so an operator reading
+   * the reasons sees their own thresholds first.
+   */
+  if (phoneRuleRefuses(eligibility, audience.phone)) {
+    return { eligible: false, reason: 'PHONE_NOT_VERIFIED' };
   }
   return { eligible: true };
 }

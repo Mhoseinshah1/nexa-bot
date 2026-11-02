@@ -1,0 +1,1 @@
+ALTER TABLE "payment_gateways" ADD COLUMN "requires_verified_phone" boolean DEFAULT false NOT NULL;

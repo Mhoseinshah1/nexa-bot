@@ -9,6 +9,8 @@ import {
   isNexaError,
 } from '@nexa/contracts';
 import type { PendingReply } from './replies.js';
+import { inlineLabel } from '../../../modules/commerce/messaging/application/inline-buttons.js';
+import { PHONE_VERIFY_CALLBACK_DATA } from './callbacks.js';
 
 /**
  * A refusal the customer can be told about.
@@ -347,6 +349,11 @@ export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
   // R10 D4: gift cards switched off between the button and the code.
   [COMMERCE_ERROR_CODES.GIFT_CARDS_DISABLED]: 'bot.wallet.gift_card_unavailable',
   [COMMERCE_ERROR_CODES.CAPTURE_NOT_OPEN]: 'bot.wallet.topup_expired',
+  /*
+   * R11 B7: a route held back by its verified-phone rule. The one refusal here the customer
+   * lifts themselves, so `refusal` puts the «تأیید شماره تلفن» button under it.
+   */
+  [COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED]: 'bot.payment.phone_required',
 };
 
 /**
@@ -396,5 +403,13 @@ export function isExpectedRefreshRefusal(error: unknown): boolean {
 export function refusal(error: unknown): PendingReply {
   const key = isNexaError(error) ? REFUSAL_REPLIES[error.code] : undefined;
   if (key === undefined) throw error;
-  return { key, values: refusalValuesFor(key), buttons: [], orderId: null };
+  return {
+    key,
+    values: refusalValuesFor(key),
+    buttons:
+      key === 'bot.payment.phone_required'
+        ? [{ ...inlineLabel('phone.verify'), data: PHONE_VERIFY_CALLBACK_DATA }]
+        : [],
+    orderId: null,
+  };
 }

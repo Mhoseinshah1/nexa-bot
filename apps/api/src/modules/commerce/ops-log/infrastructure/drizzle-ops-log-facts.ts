@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { money, type CurrencyCode, type TenantContext } from '@nexa/contracts';
+import { maskPhoneNumber, money, type CurrencyCode, type TenantContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   requireTenantId,
@@ -85,7 +85,8 @@ export class DrizzleOpsLogFacts implements OpsLogFacts {
       username: str(row['username']),
       firstName: str(row['first_name']),
       lastName: str(row['last_name']),
-      phone: str(row['phone_number']),
+      // R11 B7: the operations group is a chat other people read — never the full number.
+      phone: maskedPhone(str(row['phone_number'])),
       source: String(row['source']),
       status: String(row['status']),
       blockedReason: str(row['blocked_reason']),
@@ -779,4 +780,9 @@ export class DrizzleOpsLogFacts implements OpsLogFacts {
     );
     return row === undefined ? 0 : Number(row['n']);
   }
+}
+
+/** R11 B7: a verified number as the operations log may carry it (`maskPhoneNumber`). */
+function maskedPhone(phone: string | null): string | null {
+  return phone === null ? null : maskPhoneNumber(phone);
 }

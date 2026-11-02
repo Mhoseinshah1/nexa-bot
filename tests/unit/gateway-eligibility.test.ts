@@ -11,6 +11,8 @@ import {
 import {
   accountAgeInDays,
   evaluateGatewayEligibility,
+  phoneRuleRefuses,
+  phoneStandingOf,
 } from '../../apps/api/src/modules/commerce/payments/domain/gateway-eligibility.js';
 
 /** Every condition off, so each case below turns on exactly the one it is about. */
@@ -130,6 +132,75 @@ describe('gateway eligibility', () => {
       'activateAfterPayments',
       'deactivateAfterPayments',
     ]);
+  });
+});
+
+/**
+ * R11 B7: the verified-phone rule. One predicate (`phoneRuleRefuses`) shared by the evaluator
+ * and the order card-to-card path; `NOT_ENFORCED` (the `phone_verification` flag off) makes
+ * the rule as if it were not configured.
+ */
+describe('the verified-phone rule (R11 B7)', () => {
+  const PHONE: PaymentGatewayEligibility = { ...OFF, requiresVerifiedPhone: true };
+
+  it('refuses an UNVERIFIED customer a route that requires a verified number', () => {
+    expect(
+      evaluateGatewayEligibility('ACTIVE', PHONE, {
+        confirmedPayments: 0,
+        accountAgeDays: 0,
+        phone: 'UNVERIFIED',
+      }),
+    ).toEqual({ eligible: false, reason: 'PHONE_NOT_VERIFIED' });
+    expect(phoneRuleRefuses(PHONE, 'UNVERIFIED')).toBe(true);
+  });
+
+  it('offers it to a VERIFIED customer', () => {
+    expect(
+      evaluateGatewayEligibility('ACTIVE', PHONE, {
+        confirmedPayments: 0,
+        accountAgeDays: 0,
+        phone: 'VERIFIED',
+      }),
+    ).toEqual({ eligible: true });
+    expect(phoneRuleRefuses(PHONE, 'VERIFIED')).toBe(false);
+  });
+
+  it('ignores the rule while the feature is off (NOT_ENFORCED), and when no standing is given', () => {
+    for (const phone of ['NOT_ENFORCED', undefined] as const) {
+      expect(
+        evaluateGatewayEligibility('ACTIVE', PHONE, {
+          confirmedPayments: 0,
+          accountAgeDays: 0,
+          ...(phone === undefined ? {} : { phone }),
+        }),
+      ).toEqual({ eligible: true });
+      expect(phoneRuleRefuses(PHONE, phone)).toBe(false);
+    }
+    expect(phoneStandingOf(false, false)).toBe('NOT_ENFORCED');
+    expect(phoneStandingOf(false, true)).toBe('NOT_ENFORCED');
+    expect(phoneStandingOf(true, false)).toBe('UNVERIFIED');
+    expect(phoneStandingOf(true, true)).toBe('VERIFIED');
+  });
+
+  it('refuses nobody on a route without the rule', () => {
+    expect(phoneRuleRefuses(OFF, 'UNVERIFIED')).toBe(false);
+    expect(
+      evaluateGatewayEligibility('ACTIVE', OFF, {
+        confirmedPayments: 0,
+        accountAgeDays: 0,
+        phone: 'UNVERIFIED',
+      }),
+    ).toEqual({ eligible: true });
+  });
+
+  it('names the operator’s own thresholds before the phone rule', () => {
+    expect(
+      evaluateGatewayEligibility(
+        'ACTIVE',
+        { ...PHONE, activateAfterAccountDays: 7 },
+        { confirmedPayments: 0, accountAgeDays: 1, phone: 'UNVERIFIED' },
+      ),
+    ).toEqual({ eligible: false, reason: 'ACCOUNT_TOO_NEW' });
   });
 });
 

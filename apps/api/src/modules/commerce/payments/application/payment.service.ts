@@ -243,6 +243,7 @@ export interface PaymentServiceDeps {
     | 'methodIsOffered'
     | 'routesFor'
     | 'manualTransferFeeBasisPoints'
+    | 'phoneVerificationRequired'
   >;
   /** Freezes that destination onto the payment, in the same transaction. */
   readonly destinations: PaymentDestinationRepository;
@@ -1604,6 +1605,27 @@ export class PaymentService {
             'This installation is not accepting transfers right now.',
           );
         }
+        /*
+         * R11 B7: the route's verified-phone rule DOES apply to an order's transfer, unlike
+         * its customer thresholds (`OQ-5C-01` above) — it is not a figure that could make a
+         * product unbuyable, it is one step the customer can take. Decided here, inside the
+         * transaction, whatever the screen drew; create path only, like the two checks
+         * beside it, so a customer already holding a reference gets it back.
+         */
+        if (
+          already === undefined &&
+          (await this.deps.gateways.phoneVerificationRequired(
+            scope,
+            customerId,
+            'MANUAL_TRANSFER',
+            tx,
+          ))
+        ) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED,
+            'This payment route is offered only to customers with a verified phone number.',
+          );
+        }
 
         /*
          * The destination is chosen INSIDE the transaction, and its absence is a refusal.
@@ -2354,6 +2376,7 @@ export class PaymentService {
     );
     const chosen = routes.find((route) => route.provider === provider);
     if (chosen === undefined) {
+      await this.refuseUnverifiedPhone(scope, customerId, provider, tx);
       throw errors.conflict(
         COMMERCE_ERROR_CODES.TOPUP_NOT_OFFERED,
         'That payment route is not offered for this top-up.',
@@ -4982,6 +5005,25 @@ export class PaymentService {
   }
 
   /**
+   * R11 B7: a route the customer chose and was NOT offered, refused for the one reason they
+   * can act on when that is the reason: its verified-phone rule (flag on, number not
+   * verified). Otherwise returns, and the caller refuses it as "not offered" as before.
+   */
+  private async refuseUnverifiedPhone(
+    scope: TenantContext,
+    customerId: UserId,
+    provider: PaymentGatewayProvider,
+    tx: TransactionScope,
+  ): Promise<void> {
+    if (await this.deps.gateways.phoneVerificationRequired(scope, customerId, provider, tx)) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED,
+        'This payment route is offered only to customers with a verified phone number.',
+      );
+    }
+  }
+
+  /**
    * The route a gateway attempt is issued against, re-decided inside the transaction:
    * offered for this purpose, customer and amount, and settling through `GATEWAY` with an
    * adapter behind it and a stored key.
@@ -5001,6 +5043,7 @@ export class PaymentService {
   }> {
     const routes = await this.deps.gateways.routesFor(scope, customerId, purpose, amount, tx);
     const chosen = routes.find((route) => route.provider === provider);
+    if (chosen === undefined) await this.refuseUnverifiedPhone(scope, customerId, provider, tx);
     if (chosen === undefined || chosen.descriptor.settlesVia !== 'GATEWAY') {
       throw errors.conflict(
         purpose === 'WALLET_TOPUP'

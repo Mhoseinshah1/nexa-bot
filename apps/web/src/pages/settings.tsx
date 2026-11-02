@@ -300,6 +300,8 @@ const FLAG_LABELS: Readonly<Record<string, WebKey>> = {
   // R10 D5.
   referral_abuse_guard: 'web.flag_referral_abuse_guard',
   start_captcha: 'web.flag_start_captcha',
+  // R11 B7.
+  phone_verification: 'web.flag_phone_verification',
   custom_service: 'web.flag_custom_service',
   panel_auto_balancing: 'web.flag_panel_auto_balancing',
   // R10 C2.

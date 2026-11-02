@@ -15,7 +15,7 @@ import type {
   CustomerMessenger,
   CustomerSendOutcome,
   CustomerSendResult,
-  MainMenuVariant,
+  CustomerReplyKeyboard,
 } from '../../../modules/commerce/messaging/application/ports.js';
 import type { CustomerRecord } from '../../../modules/commerce/customers/application/ports.js';
 import { inlineLabel } from '../../../modules/commerce/messaging/application/inline-buttons.js';
@@ -111,7 +111,7 @@ export interface PendingReply {
    * keyboard the customer already has, and would fight with the inline keyboards the
    * contextual flows attach.
    */
-  readonly keyboard?: MainMenuVariant;
+  readonly keyboard?: CustomerReplyKeyboard;
   /**
    * Send this reply AS a file, with `key`/`values` as its caption and `buttons` on it.
    *

@@ -65,6 +65,7 @@ import * as orderEndFlow from './runtime/order-end-flow.js';
 import { withWayOn } from './runtime/way-on.js';
 import * as startMenuFlow from './runtime/start-menu-flow.js';
 import * as captchaFlow from './runtime/captcha-flow.js';
+import * as phoneVerifyFlow from './runtime/phone-verify-flow.js';
 import { CAPTCHA_EXEMPT_INTENTS } from './runtime/captcha-flow.js';
 import {
   MEMBERSHIP_EXEMPT_INTENTS,
@@ -181,6 +182,7 @@ export {
   REMINDERS_OPT_OUT_CALLBACK_DATA,
   REMINDERS_OPT_IN_CALLBACK_DATA,
   MEMBERSHIP_CHECK_CALLBACK_DATA,
+  PHONE_VERIFY_CALLBACK_DATA,
   TERMS_ACCEPT_CALLBACK_PREFIX,
   START_CAPTCHA_CALLBACK_PREFIX,
   TUTORIAL_PLATFORM_CALLBACK_PREFIX,
@@ -1467,6 +1469,24 @@ export class BotRuntime {
       }
     }
     if (command.intent === 'WALLET') return topupFlow.walletBalance(this, scope, actor, customer);
+    // R11 B7: phone verification — the button, a shared contact, the cancel label.
+    if (command.intent === 'PHONE_VERIFY') return phoneVerifyFlow.phoneVerifyPrompt(this, scope);
+    if (command.intent === 'PHONE_CONTACT' && command.contact != null) {
+      return phoneVerifyFlow.phoneContactShared(
+        this,
+        scope,
+        actor,
+        customer,
+        command.contact,
+        input.idempotencyKey,
+        (await this.isAdmin(scope, actor, input)) ? 'MAIN_MENU_ADMIN' : 'MAIN_MENU',
+      );
+    }
+    if (command.intent === 'PHONE_VERIFY_CANCEL') {
+      return phoneVerifyFlow.phoneVerifyCancelled(
+        (await this.isAdmin(scope, actor, input)) ? 'MAIN_MENU_ADMIN' : 'MAIN_MENU',
+      );
+    }
     if (command.intent === 'WALLET_HISTORY') {
       return topupFlow.walletHistory(this, scope, actor, customer, command.cursor ?? null);
     }

@@ -29,7 +29,11 @@ export interface CustomerFact {
   readonly username: string | null;
   readonly firstName: string | null;
   readonly lastName: string | null;
-  /** A VERIFIED phone number only; null when nobody verified one. */
+  /**
+   * A VERIFIED phone number only, MASKED (`maskPhoneNumber`, R11 B7) — the operations group
+   * is a chat other people read, so a log never carries the full number; null when nobody
+   * verified one.
+   */
   readonly phone: string | null;
   /** `NEXA`, or the legacy bot's name for an imported row — an imported row never logs. */
   readonly source: string;

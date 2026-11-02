@@ -1,4 +1,6 @@
 import {
+  COMMERCE_ERROR_CODES,
+  errors,
   money,
   type ActorContext,
   type BotInstanceId,
@@ -32,6 +34,15 @@ export interface TopupRouteSource {
     amount: Money | null,
     tx?: unknown,
   ): Promise<readonly TopupRoute[]>;
+  /**
+   * R11 B7: whether this route's verified-phone rule refuses the customer now. Optional so a
+   * narrow wiring need not supply it; absent, a route not offered is answered as before.
+   */
+  phoneVerificationRequired?(
+    scope: TenantContext,
+    customerId: UserId,
+    provider: PaymentGatewayProvider,
+  ): Promise<boolean>;
 }
 
 export interface TypedTopupRequester {
@@ -272,6 +283,23 @@ export class WalletTopupFlowService {
     );
     const chosen = routes.find((route) => route.provider === input.provider);
     if (chosen === undefined) {
+      /*
+       * R11 B7: a route held back by its verified-phone rule is refused with the one step the
+       * customer can take, rather than redrawn without it (the request below would refuse
+       * it the same way inside its transaction).
+       */
+      if (
+        (await this.deps.routes.phoneVerificationRequired?.(
+          scope,
+          input.customerId,
+          input.provider,
+        )) === true
+      ) {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED,
+          'This payment route is offered only to customers with a verified phone number.',
+        );
+      }
       return { outcome: 'NOT_OFFERED', amount, routes };
     }
     // The request first, keyed by the capture: a double tap replays the same payment.
