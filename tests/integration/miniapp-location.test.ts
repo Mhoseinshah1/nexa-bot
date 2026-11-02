@@ -385,8 +385,10 @@ describe('the mini app location change', () => {
       ['هلند', '30000'],
       ['فنلاند', '0'],
     ]);
-    // Nothing the service does not expose: no remaining count, no capacity, no tag.
-    expect(Object.keys(offer).sort()).toEqual(['current', 'targets']);
+    // Nothing the service does not expose: no capacity, no tag. R11 B4 adds the remaining
+    // count, which is null with no limit set (as here).
+    expect(offer.remaining).toBeNull();
+    expect(Object.keys(offer).sort()).toEqual(['current', 'remaining', 'targets']);
     expect(Object.keys(offer.targets[0] ?? {}).sort()).toEqual(['id', 'label', 'price']);
   }, 60_000);
 

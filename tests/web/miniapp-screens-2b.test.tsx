@@ -399,6 +399,7 @@ const service = (overrides: Record<string, unknown> = {}) => ({
   qr: true,
   qrKinds: ['SUB_LINK'],
   canChangeLocation: true,
+  locationRemaining: null,
   autoRenew: { offered: false, enabled: false, price: null, leadHours: 24 },
   ...overrides,
 });
@@ -563,6 +564,7 @@ describe('the location sheet', () => {
       { id: 'l-nl', label: 'هلند', price: money('30000') },
       { id: 'l-fi', label: 'فنلاند', price: money('0') },
     ],
+    remaining: null,
   };
 
   async function openSheet() {
@@ -576,6 +578,41 @@ describe('the location sheet', () => {
     routes['GET /services/s1'] = () => ({ body: service({ canChangeLocation: false }) });
     render(<ServiceDetail serviceId="s1" />);
     await screen.findByText('پلن پایه');
+    expect(screen.queryByText(fa('miniapp.location_open'))).toBeNull();
+  });
+
+  const remainingText = (remaining: number, max: number) =>
+    fa('miniapp.location_remaining')
+      .replace('{remaining}', String(remaining))
+      .replace('{max}', String(max));
+
+  it('R11 B4: says nothing about what remains when the server sends no limit', async () => {
+    routes['GET /services/s1/locations'] = () => ({ body: offer });
+    const dialog = await openSheet();
+    await within(dialog).findByText('هلند');
+    expect(screen.queryByText(/تغییر لوکیشن باقی‌مانده/u)).toBeNull();
+  });
+
+  it('R11 B4: says how many changes are left on the service view and on the sheet', async () => {
+    routes['GET /services/s1'] = () => ({
+      body: service({ locationRemaining: { remaining: 2, max: 3 } }),
+    });
+    routes['GET /services/s1/locations'] = () => ({
+      body: { ...offer, remaining: { remaining: 2, max: 3 } },
+    });
+    render(<ServiceDetail serviceId="s1" />);
+    expect(await screen.findByText(remainingText(2, 3))).toBeTruthy();
+    fireEvent.click(await screen.findByText(fa('miniapp.location_open')));
+    const dialog = await screen.findByRole('dialog', { name: fa('miniapp.location_title') });
+    expect(await within(dialog).findByText(remainingText(2, 3))).toBeTruthy();
+  });
+
+  it('R11 B4: at zero the view still says «0 از 3», and offers no way into the sheet', async () => {
+    routes['GET /services/s1'] = () => ({
+      body: service({ canChangeLocation: false, locationRemaining: { remaining: 0, max: 3 } }),
+    });
+    render(<ServiceDetail serviceId="s1" />);
+    expect(await screen.findByText(remainingText(0, 3))).toBeTruthy();
     expect(screen.queryByText(fa('miniapp.location_open'))).toBeNull();
   });
 

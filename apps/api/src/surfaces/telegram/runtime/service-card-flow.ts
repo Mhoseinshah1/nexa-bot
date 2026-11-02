@@ -564,15 +564,18 @@ export async function serviceDetail(
     row: 5,
   });
 
+  /*
+   * R11 B4: «تغییر لوکیشن باقی‌مانده: ۲ از ۳», only where location change is enabled for this
+   * service and a limit is set. Read through the commercial service, which applies the same
+   * state / panel / policy gates as the button and the policy's own count; it is asked even at
+   * zero, where the button is already gone.
+   */
+  const locationChanges = await rt.deps.commercial.locationChangesLeft(scope, actor, service);
   // The card's hint names «تغییر لینک»; on a files-only panel there is no such button.
-  const card = await serviceCardScreen(
-    rt,
-    scope,
-    service,
-    title,
-    rotation.offered && !filesOnly,
-    cardExtra,
-  );
+  const card = await serviceCardScreen(rt, scope, service, title, rotation.offered && !filesOnly, {
+    ...cardExtra,
+    locationChanges,
+  });
   // R8-C3: the owner's order, rows and switches, over the buttons decided above.
   const layout = (await rt.deps.serviceCardLayout?.(scope)) ?? null;
   return {
@@ -594,6 +597,8 @@ export async function serviceCardScreen(
     readonly working?: boolean;
     readonly notice?: TemplateKey;
     readonly lastUpdatedAt?: Date;
+    /** R11 B4: the location changes left; drawn only on the ordinary card. */
+    readonly locationChanges?: { readonly remaining: number; readonly max: number } | null;
   },
 ): Promise<{ readonly key: TemplateKey; readonly values: TemplateValues }> {
   const display = await rt.deps.productDisplay.displayFor(scope, service.productId);

@@ -159,6 +159,18 @@ export interface ServiceCardFacts {
    * read (the traffic lines already say «unknown» then).
    */
   readonly lastUpdatedAt?: Date;
+  /**
+   * R11 B4: the location changes left, «۲ از ۳». Absent or null draws nothing: the feature is
+   * off for this service, or no limit is set.
+   */
+  readonly locationChanges?: { readonly remaining: number; readonly max: number } | null;
+}
+
+/** What the location change screen shows (WP-A6 / R11 B4). */
+export interface LocationChoiceFacts {
+  readonly currentLocation: string;
+  /** Absent or null draws no remaining line: no limit is set. */
+  readonly locationChanges?: { readonly remaining: number; readonly max: number } | null;
 }
 
 /** What a transfer's summary shows of a service (Package F). */
@@ -427,7 +439,36 @@ export class CustomerScreenComposer {
         ...(facts.rotateOffered
           ? { rotateHint: await this.templates.render(scope, 'bot.service.rotate_hint', {}) }
           : {}),
+        ...(await this.locationRemaining(scope, facts.locationChanges)),
       },
+    };
+  }
+
+  /**
+   * The location change screen: where the service is, and — only where a limit is set — how
+   * many changes it has left (R11 B4). The targets are the buttons.
+   */
+  async locationChoice(scope: ScopeContext, facts: LocationChoiceFacts): Promise<ComposedScreen> {
+    return {
+      key: 'bot.service.location_choice',
+      values: {
+        currentLocation: facts.currentLocation,
+        ...(await this.locationRemaining(scope, facts.locationChanges)),
+      },
+    };
+  }
+
+  /** The optional `locationRemaining` value: the rendered line, or nothing (the line drops). */
+  private async locationRemaining(
+    scope: ScopeContext,
+    left: { readonly remaining: number; readonly max: number } | null | undefined,
+  ): Promise<TemplateValues> {
+    if (left === null || left === undefined) return {};
+    return {
+      locationRemaining: await this.templates.render(scope, 'bot.service.location_remaining', {
+        remaining: left.remaining,
+        max: left.max,
+      }),
     };
   }
 

@@ -101,6 +101,14 @@ function Detail({ service }: { service: MiniAppServiceDetail }) {
         <AutoRenew serviceId={service.id} initial={service.autoRenew} />
       )}
       <Card>
+        {service.locationRemaining !== null && (
+          <p className="muted">
+            {t('miniapp.location_remaining', {
+              remaining: service.locationRemaining.remaining,
+              max: service.locationRemaining.max,
+            })}
+          </p>
+        )}
         <div className="actions">
           {service.canChangeLocation && (
             <Button onClick={() => setSheet('location')}>{t('miniapp.location_open')}</Button>
