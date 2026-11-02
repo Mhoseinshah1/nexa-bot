@@ -512,6 +512,22 @@ export const USAGE_SYNC_MINUTES_MIN = 15;
 export const USAGE_SYNC_MINUTES_MAX = 1440;
 
 /**
+ * R11 B2: the usage snapshots behind the mini app's chart (`service_usage_snapshots`).
+ *
+ * One snapshot per service per BUCKET (a unique index), so the usage reads Nexa already makes
+ * -- the scheduled sync, a renewal that returns usage, a card's live check -- can never
+ * multiply the rows: the first read of an hour is kept, the rest of that hour is not. The
+ * chart's resolution is therefore at best one point an hour and at worst the usage sync's own
+ * cadence (`provisioning.usage_sync_minutes`, four hours by default). Rows older than the
+ * retention are deleted by the provisioner's own tick, in bounded batches.
+ */
+export const USAGE_SNAPSHOT_BUCKET_MINUTES = 60;
+export const USAGE_SNAPSHOT_RETENTION_DAYS = 90;
+/** The ranges the chart offers, in days; the endpoint refuses any other. */
+export const USAGE_CHART_RANGES_DAYS = [7, 30] as const;
+export type UsageChartRangeDays = (typeof USAGE_CHART_RANGES_DAYS)[number];
+
+/**
  * Bounds of `services.link_rotation_cooldown_hours` (WP6-C, `docs/wp6c-audit.md` C2).
  *
  * The floor is one hour, not zero: a customer rotation is an outbound call to somebody's

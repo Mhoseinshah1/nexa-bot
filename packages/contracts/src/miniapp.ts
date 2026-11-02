@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { moneySchema } from './money.js';
 import { ORDER_PURPOSES, ORDER_STATES } from './commerce.js';
-import { SERVICE_STATES } from './provisioning.js';
+import { SERVICE_STATES, USAGE_CHART_RANGES_DAYS } from './provisioning.js';
 import { PAYMENT_GATEWAY_PROVIDERS } from './payment-gateways.js';
 import { PAYMENT_METHODS, PAYMENT_STATES } from './payment.js';
 import { TICKET_MESSAGE_MAX_LENGTH, TICKET_STATUSES } from './tickets.js';
@@ -118,6 +118,8 @@ export const MINIAPP_ROUTES = {
   serviceLocation: '/services/:serviceId/location',
   // Round 10, D1: switch automatic renewal on or off for one service.
   serviceAutoRenew: '/services/:serviceId/auto-renew',
+  // R11 B2: the used volume over the last 7 or 30 days, from the stored usage snapshots.
+  serviceUsage: '/services/:serviceId/usage',
   wallet: '/wallet',
   walletEntries: '/wallet/entries',
   walletTopupQuote: '/wallet/topup/quote',
@@ -125,6 +127,8 @@ export const MINIAPP_ROUTES = {
   /** R10 D4: redeem a gift card into the wallet. */
   walletGiftCard: '/wallet/gift-card',
   referral: '/referral',
+  /** R11 B3: the customer's own invited friends (a keyset page), behind `referral_friends_list`. */
+  referralFriends: '/referral/friends',
   trial: '/trial',
   ticketCategories: '/ticket-categories',
   tickets: '/tickets',
@@ -548,6 +552,47 @@ export const miniAppAutoRenewRequestSchema = z.object({
   expected: moneySchema.optional(),
 });
 
+/**
+ * R11 B2: one point of the usage chart -- the used volume the panel reported at `at`. Never a
+ * connected-device count, never a rate: only the figure Nexa stored.
+ */
+export const miniAppUsagePointSchema = z.object({ at: isoSchema, usedBytes: bytesSchema });
+
+export const miniAppUsageQuerySchema = z.object({
+  days: z.coerce
+    .number()
+    .int()
+    .refine((value) => (USAGE_CHART_RANGES_DAYS as readonly number[]).includes(value))
+    .default(7),
+});
+
+/**
+ * The chart's data: points oldest first inside `[from, to)`. `totalBytes` and `expiresAt` are
+ * the allowance and deadline of the NEWEST point (null = unlimited / no deadline), so the chart
+ * can draw its ceiling.
+ */
+export const miniAppUsageHistorySchema = z.object({
+  days: z.number().int(),
+  from: isoSchema,
+  to: isoSchema,
+  points: z.array(miniAppUsagePointSchema),
+  totalBytes: bytesSchema.nullable(),
+  expiresAt: isoSchema.nullable(),
+});
+export type MiniAppUsageHistory = z.infer<typeof miniAppUsageHistorySchema>;
+
+/**
+ * R11 B4: how many location changes a service still has, «۲ از ۳». Present ONLY where location
+ * change is enabled for the service AND a limit (changes per period) is set; null otherwise, and
+ * the app then says nothing about it. `remaining` is read through the same window the server
+ * enforces a request with, so 0 means the next request is refused with the limit sentence.
+ */
+export const miniAppLocationRemainingSchema = z.object({
+  remaining: z.number().int().min(0),
+  max: z.number().int().min(0),
+});
+export type MiniAppLocationRemaining = z.infer<typeof miniAppLocationRemainingSchema>;
+
 export const miniAppServiceDetailSchema = miniAppServiceSummarySchema.extend({
   /** The subscription link, only while the service is deliverable. A secret: never logged. */
   subscriptionUrl: z.string().nullable(),
@@ -565,8 +610,12 @@ export const miniAppServiceDetailSchema = miniAppServiceSummarySchema.extend({
   qrKinds: z.array(z.enum(QR_PAYLOAD_KINDS)),
   /** Whether the location sheet has anything to offer now (`CHANGE_LOCATION` is available). */
   canChangeLocation: z.boolean(),
+  /** R11 B4: the remaining location changes, or null (disabled, or no limit set). */
+  locationRemaining: miniAppLocationRemainingSchema.nullable(),
   /** Round 10, D1: «تمدید خودکار» for this service (`MINIAPP_ROUTES.serviceAutoRenew`). */
   autoRenew: miniAppAutoRenewSchema,
+  /** R11 B2: whether the usage chart is drawn (`service_usage_chart` is on). */
+  usageChart: z.boolean(),
 });
 export type MiniAppServiceDetail = z.infer<typeof miniAppServiceDetailSchema>;
 
@@ -595,11 +644,13 @@ export const miniAppServiceQuoteRequestSchema = z.object({
 /**
  * The location sheet's read: where the service is and the configured targets it may be moved
  * to, each with its price (zero is free). The server's offer already leaves out every target
- * the cooldown and the rolling limit refuse; it exposes no remaining count, no
- * recommendation and no per-target capacity, and neither does this.
+ * the cooldown and the rolling limit refuse. R11 B4 adds the remaining count
+ * (`remaining`, null when no limit is set); it still exposes no recommendation and no per-target
+ * capacity, and neither does this.
  */
 export const miniAppServiceLocationsSchema = z.object({
   current: z.object({ label: z.string() }),
+  remaining: miniAppLocationRemainingSchema.nullable(),
   targets: z.array(z.object({ id: idSchema, label: z.string(), price: moneySchema })),
 });
 export type MiniAppServiceLocations = z.infer<typeof miniAppServiceLocationsSchema>;
@@ -712,6 +763,68 @@ export const miniAppReferralResponseSchema = z.discriminatedUnion('active', [
   }),
 ]);
 export type MiniAppReferralResponse = z.infer<typeof miniAppReferralResponseSchema>;
+
+/**
+ * R11 B3: the invited-friends list. One page is this many friends, and there is no way to ask
+ * for more: the route takes a cursor and nothing else, so a client cannot widen it.
+ */
+export const MINIAPP_REFERRAL_FRIENDS_PAGE_SIZE = 20;
+
+/**
+ * Where one invited friend stands, as ONE word, from the customer's side. Exclusive, and in
+ * this order of precedence: a reward paid beats a reward pending beats a purchase beats the
+ * join.
+ *
+ * - `JOINED`: the friend arrived through the link and has no delivered paid purchase yet;
+ * - `PURCHASED`: the friend has a delivered paid purchase and no purchase commission is
+ *   pending or paid for them (a program that pays nothing for them, a commission voided, or
+ *   one that came to nothing);
+ * - `REWARD_PENDING`: a purchase commission is promised and waits for delivery, or for the
+ *   referrer's daily cap to roll over (`rewardNotBefore`);
+ * - `REWARD_PAID`: a purchase commission was earned and credited.
+ *
+ * Only the purchase commission is read. The membership gift is claimed by its own button and
+ * is not a status here.
+ */
+export const MINIAPP_REFERRAL_FRIEND_STATUSES = [
+  'JOINED',
+  'PURCHASED',
+  'REWARD_PENDING',
+  'REWARD_PAID',
+] as const;
+export type MiniAppReferralFriendStatus = (typeof MINIAPP_REFERRAL_FRIEND_STATUSES)[number];
+
+/**
+ * The list, or the word that the feature is off. A friend is drawn by `displayName` only: a
+ * first name, or a username with the middle hidden, or null (then the screen says «دوست
+ * شما»). There is no id, no Telegram id, no phone and no last name in this shape, so nothing
+ * on the wire can leak one. `counts` are over ALL the customer's friends, not just this page,
+ * and add up to `friends`, which is the figure the screen already shows as «دعوت‌شده».
+ */
+export const miniAppReferralFriendsResponseSchema = z.discriminatedUnion('enabled', [
+  z.object({ enabled: z.literal(false) }),
+  z.object({
+    enabled: z.literal(true),
+    counts: z.object({
+      friends: z.number().int(),
+      joined: z.number().int(),
+      purchased: z.number().int(),
+      rewardPending: z.number().int(),
+      rewardPaid: z.number().int(),
+    }),
+    items: z.array(
+      z.object({
+        displayName: z.string().nullable(),
+        joinedAt: isoSchema,
+        status: z.enum(MINIAPP_REFERRAL_FRIEND_STATUSES),
+        /** A pending reward held back until this instant (the referrer's daily cap), else null. */
+        rewardNotBefore: isoSchema.nullable(),
+      }),
+    ),
+    nextCursor: z.string().nullable(),
+  }),
+]);
+export type MiniAppReferralFriendsResponse = z.infer<typeof miniAppReferralFriendsResponseSchema>;
 
 export const miniAppTrialResponseSchema = z.object({
   offers: z.array(

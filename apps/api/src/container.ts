@@ -715,6 +715,8 @@ import { ReferralProgram } from './modules/commerce/referrals/application/referr
 import { TelegramBotUsernames } from './modules/commerce/referrals/infrastructure/telegram-bot-username.js';
 import { ReferralCommissionService } from './modules/commerce/referrals/application/referral-commission.service.js';
 import { ReferralReadService } from './modules/commerce/referrals/application/referral-read.service.js';
+import { ReferralFriendsService } from './modules/commerce/referrals/application/referral-friends.service.js';
+import { DrizzleReferralFriendsRepository } from './modules/commerce/referrals/infrastructure/drizzle-referral-friends.repository.js';
 import { ReportAccess } from './modules/commerce/reporting/application/report-access.js';
 import { ReportingService } from './modules/commerce/reporting/application/reporting.service.js';
 import { DrizzleReportingRepository } from './modules/commerce/reporting/infrastructure/drizzle-reporting.repository.js';
@@ -811,6 +813,8 @@ import { DrizzleOperationCardRepository } from './modules/commerce/provisioning/
 import { ServiceTransferService } from './modules/commerce/provisioning/application/service-transfer.service.js';
 import { ServiceAutoRenewService } from './modules/commerce/provisioning/application/service-auto-renew.service.js';
 import { DrizzleServiceAutoRenewRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-auto-renew.repository.js';
+import { DrizzleUsageSnapshotRepository } from './modules/commerce/provisioning/infrastructure/drizzle-usage-snapshot.repository.js';
+import { UsageSnapshotService } from './modules/commerce/provisioning/application/usage-snapshots.js';
 import { DrizzleServiceTransferRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-transfer.repository.js';
 import { ServiceAdminService } from './modules/commerce/provisioning/application/service-admin.service.js';
 import { GlobalSearchService } from './modules/commerce/global-search/application/global-search.service.js';
@@ -1333,6 +1337,8 @@ export interface Container {
   readonly serviceTransfers: ServiceTransferService;
   /** Round 10, D1: «تمدید خودکار» — the customer's switch and the worker's sweep. */
   readonly serviceAutoRenew: ServiceAutoRenewService;
+  /** R11 B2: the usage snapshots behind the mini app's chart (`service_usage_chart`). */
+  readonly usageSnapshots: UsageSnapshotService;
   /** WP-A7: support tickets, for the bot and the Web Admin alike. */
   readonly tickets: TicketService;
   /** WP-A7: the categories a customer files a ticket under. */
@@ -1347,6 +1353,8 @@ export interface Container {
   readonly referralCommissions: ReferralCommissionService;
   /** WP9: the operator's read-only view of attributions and commissions. */
   readonly referralsRead: ReferralReadService;
+  /** R11 B3: the customer's own invited-friends list (mini app), behind `referral_friends_list`. */
+  readonly referralFriends: ReferralFriendsService;
   /** WP12's business reports, Super Admin only (`docs/wp12-business-analytics-audit.md`). */
   readonly reports: ReportingService;
   /** Round W: the dashboard's operational gauges and the sidebar counters, per permission. */
@@ -3319,6 +3327,8 @@ export function createContainer(
     panels: panelOperability,
     panelPolicy: panelPolicyReader,
     settings: settingsResolver,
+    // R11 B4: `location_remaining_display` gates the remaining location changes line.
+    features: featureFlagResolver,
     // WP-A6: the paid location change's evaluator and its frozen change request.
     locations: locationChangePolicy,
     locationChanges: locationChangeRepository,
@@ -3638,6 +3648,13 @@ export function createContainer(
     clock,
     ids,
     days: referralDays,
+  });
+  /** R11 B3: read-only; the flag is read inside the service, not in the surface. */
+  const referralFriendsService = new ReferralFriendsService({
+    friends: new DrizzleReferralFriendsRepository(database.db),
+    features: featureFlagResolver,
+    guard,
+    clock,
   });
 
   /*
@@ -6636,6 +6653,17 @@ export function createContainer(
    * `workerId` names the process instance in a claim, so an operator reading a stuck
    * `IN_FLIGHT` row can tell which replica holds it.
    */
+  /*
+   * R11 B2: kept beside the usage reads below (the provisioner's sync and renewal, the live
+   * check) and read by the mini app's chart. No panel client in it.
+   */
+  const usageSnapshotService = new UsageSnapshotService({
+    store: new DrizzleUsageSnapshotRepository(database.db),
+    features: featureFlagResolver,
+    scopeActivity: tenants,
+    clock,
+  });
+
   const provisioner = new ProvisionerService({
     operations: operationRepository,
     services: serviceRepository,
@@ -6678,6 +6706,7 @@ export function createContainer(
     conditions: new DrizzleOperationalConditionReader(database.db),
     outbox,
     scopeActivity: tenants,
+    usageSnapshots: usageSnapshotService,
     settings: settingsResolver,
     workerId: `${role}:${ids.uuid()}`,
     leaseMs: OPERATION_LEASE_SECONDS_MIN * 1000,
@@ -8837,6 +8866,7 @@ export function createContainer(
     subscriptionFiles: subscriptionFileService,
     serviceTransfers: serviceTransferService,
     serviceAutoRenew: serviceAutoRenewService,
+    usageSnapshots: usageSnapshotService,
     tickets: ticketService,
     ticketCategories: ticketCategoryService,
     pricingRead: pricingReadService,
@@ -8844,6 +8874,7 @@ export function createContainer(
     referrals: referralProgram,
     referralCommissions: referralCommissionService,
     referralsRead: referralReadService,
+    referralFriends: referralFriendsService,
     reports: reportingService,
     operationsOverview,
     referralSignupGifts: referralSignupGiftService,
@@ -9082,6 +9113,7 @@ export function createContainer(
         backgroundBudgetReserve: usageSyncBackgroundReserve,
         guard,
         scopeActivity: tenants,
+        usageSnapshots: usageSnapshotService,
         panelPolicy: panelPolicyReader,
         uow,
         clock,

@@ -7968,6 +7968,56 @@ export const serviceReminderBaselines = pgTable(
   ],
 );
 
+// --- R11 B2: usage snapshots behind the mini app's chart ---------------------------------
+
+/**
+ * One usage figure of one service, kept for the mini app's chart (R11 B2).
+ *
+ * WRITTEN BESIDE A READ THAT ALREADY HAPPENS, never by a read of its own: the scheduled
+ * `SYNC_USAGE`, a renewal whose answer carries usage and a card's live check each call
+ * `recordUsage`, and the snapshot is recorded in that same transaction when it returned true
+ * and `service_usage_chart` is on. There is no polling loop and no panel call behind this
+ * table (RickPanel load protection).
+ *
+ * `bucket_at` is `taken_at` floored to `USAGE_SNAPSHOT_BUCKET_MINUTES` and is part of the
+ * primary key: a second read inside the same hour inserts nothing (`ON CONFLICT DO NOTHING`),
+ * so the first figure of a bucket is the one kept and a burst of live checks cannot grow the
+ * table. `total_bytes` is NULL for an unlimited allowance, `expires_at` NULL for a service
+ * with no deadline -- the values the service row held when the figure was recorded.
+ * Rows older than `USAGE_SNAPSHOT_RETENTION_DAYS` are deleted by the provisioner's tick,
+ * through `(tenant_id, taken_at)`.
+ */
+export const serviceUsageSnapshots = pgTable(
+  'service_usage_snapshots',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    serviceId: uuid('service_id').notNull(),
+    bucketAt: timestamptz('bucket_at').notNull(),
+    takenAt: timestamptz('taken_at').notNull(),
+    usedBytes: bigint('used_bytes', { mode: 'bigint' }).notNull(),
+    totalBytes: bigint('total_bytes', { mode: 'bigint' }),
+    expiresAt: timestamptz('expires_at'),
+  },
+  (table) => [
+    primaryKey({
+      name: 'service_usage_snapshots_pk',
+      columns: [table.tenantId, table.serviceId, table.bucketAt],
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+      name: 'service_usage_snapshots_service_fk',
+    }),
+    index('service_usage_snapshots_taken_idx').on(table.tenantId, table.takenAt),
+    check(
+      'service_usage_snapshots_figures_check',
+      sql`${table.usedBytes} >= 0 AND (${table.totalBytes} IS NULL OR ${table.totalBytes} > 0)`,
+    ),
+  ],
+);
+
 // --- WP-A6: the configured locations a service may be moved to -------------------------
 
 /**
@@ -10672,17 +10722,11 @@ export const customerNotifications = pgTable(
       sql`(rendered_text IS NULL OR state = 'DELIVERED') AND (customer_read_at IS NULL OR rendered_text IS NOT NULL)`,
     ),
     /*
-     * The centre's page: one customer's delivered messages, newest first. Ascending on
-     * purpose, as `service_refund_requests_attention_idx` is: scanned backwards it is
-     * `DESC NULLS FIRST`, which is what `ORDER BY resolved_at DESC, id DESC` means.
+     * The centre's two partial indexes (`customer_notifications_centre_idx`, the page, and
+     * `customer_notifications_centre_unread_idx`, the bell's counter) are built CONCURRENTLY
+     * by `online-indexes.ts`, not here: `customer_notifications` is a large table and a plain
+     * CREATE INDEX in the migrator's one transaction would block the lane's writes.
      */
-    index('customer_notifications_centre_idx')
-      .on(table.tenantId, table.customerId, table.resolvedAt, table.id)
-      .where(sql`rendered_text IS NOT NULL`),
-    /** The bell's counter: the unread ones only. */
-    index('customer_notifications_centre_unread_idx')
-      .on(table.tenantId, table.customerId, table.resolvedAt)
-      .where(sql`rendered_text IS NOT NULL AND customer_read_at IS NULL`),
     check('customer_notifications_kind_check', enumCheck('kind', CUSTOMER_NOTIFICATION_KINDS)),
     check('customer_notifications_state_check', enumCheck('state', CUSTOMER_NOTIFICATION_STATES)),
     /**

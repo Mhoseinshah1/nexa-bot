@@ -189,3 +189,25 @@ bucket must not fall below the sweep floor except by paid/interactive spends.
 - Operability ignores health by design, so reads against a panel that is down still spend tokens (above
   the floor) until they retire.
 - One provisioner replica's ceiling is 2 ops/s (`DRAIN_LIMIT` / tick); it is shared by paid and sweep work.
+
+## 8. R11 B2: the usage chart rides on these reads and adds none
+
+The mini app's usage chart (`service_usage_chart`, OFF by default) stores a snapshot of each usage
+figure Nexa already reads, in `service_usage_snapshots` (migration 0294). It adds no panel call and no
+loop:
+
+- **Where a snapshot is written.** Beside the three places that call `ServiceRepository.recordUsage`: the
+  scheduled `SYNC_USAGE` (`finishUsageSync`), a renewal / extra-traffic / extra-time whose panel answer
+  carries usage, and the card's live check on opening (`ServiceRefreshService.recordFound`). It is
+  written in the same transaction, only when `recordUsage` reported the ACTIVE row moved, and only while
+  the flag is on. The bot's «♻️» tap is the live check, so it is covered too.
+- **Cadence you get.** The sync's own cadence, `provisioning.usage_sync_minutes` (240 by default, 15 at
+  the least), plus a point whenever a customer opens or refreshes a card (the live check's cache window
+  still applies, so a card cannot cause a read more often than before). The table keeps at most ONE row
+  per service per UTC hour (`bucket_at` is in the primary key; `ON CONFLICT DO NOTHING`, so the first
+  figure of an hour stays). At the default cadence a service gets about six points a day from the sync.
+- **Retention.** 90 days. The provisioner's tick deletes at most 500 expired rows per tick through
+  `(tenant_id, taken_at)`, whatever the flag says. It is not part of the data compaction (which ships in
+  DRY_RUN) because retention here is a rule, not an operator option.
+- **Reading.** `GET /miniapp/api/v1/services/:id/usage?days=7|30` reads stored rows only, for the
+  customer's own service, and answers "not found" while the flag is off.

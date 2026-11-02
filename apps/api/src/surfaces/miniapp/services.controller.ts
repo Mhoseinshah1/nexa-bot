@@ -11,6 +11,7 @@ import {
   miniAppPageQuerySchema,
   miniAppServiceLocationRequestSchema,
   miniAppServiceQuoteRequestSchema,
+  miniAppUsageQuerySchema,
   type MiniAppAutoRenew,
   type MiniAppOrder,
   type MiniAppServiceAction,
@@ -19,6 +20,8 @@ import {
   type MiniAppServiceLocations,
   type MiniAppServiceOffer,
   type MiniAppServicesResponse,
+  type MiniAppUsageHistory,
+  type UsageChartRangeDays,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { ProvisioningService } from '../../modules/commerce/provisioning/application/provisioning.service.js';
@@ -104,7 +107,50 @@ export class MiniAppServicesController {
       qr: qrKinds.length > 0,
       qrKinds,
       canChangeLocation: offered.includes('CHANGE_LOCATION'),
+      // R11 B4: the same count the enforcement uses; null (nothing shown) with the feature off
+      // or no limit set, and still answered at 0, where the button above is already gone.
+      locationRemaining: await this.container.commercialActions.locationChangesLeft(
+        call.context.scope,
+        call.actor,
+        service,
+      ),
       autoRenew: await this.autoRenewOf(call, service),
+      usageChart: await this.container.usageSnapshots.chartEnabled(call.context.scope),
+    };
+  }
+
+  /**
+   * R11 B2: the used volume of ONE of the customer's own services over the last 7 or 30 days,
+   * from the snapshots Nexa stored beside the usage reads it already makes. Another customer's
+   * service is "not found" exactly as on the detail route (`ownService`), and with
+   * `service_usage_chart` off the route answers as if it did not exist. Reads nothing from a
+   * panel. Points carry the used volume only -- no connected-device count.
+   */
+  @Get(MINIAPP_ROUTES.serviceUsage)
+  async usage(
+    @Req() request: FastifyRequest,
+    @Param('serviceId') serviceId: string,
+    @Query() query: unknown,
+  ): Promise<MiniAppUsageHistory> {
+    const call = await miniAppCall(this.container, request, { gated: true });
+    const { days } = parseWith(miniAppUsageQuerySchema, query);
+    const service = await this.ownService(call, serviceId);
+    const history = await this.container.usageSnapshots.history(
+      call.context.scope,
+      service.id,
+      days as UsageChartRangeDays,
+    );
+    if (history === null) throw notFound();
+    return {
+      days: history.days,
+      from: history.from.toISOString(),
+      to: history.to.toISOString(),
+      points: history.points.map((point) => ({
+        at: point.at.toISOString(),
+        usedBytes: point.usedBytes.toString(),
+      })),
+      totalBytes: history.totalBytes === null ? null : history.totalBytes.toString(),
+      expiresAt: history.expiresAt === null ? null : history.expiresAt.toISOString(),
     };
   }
 
@@ -290,7 +336,8 @@ export class MiniAppServicesController {
    * The location sheet's read: where the service is and what it may be moved to, priced.
    * `CommercialActionService.offer` is the bot's own read and refuses for every reason a
    * move would (state, panel, policy, nothing configured); the cooldown and the rolling
-   * limit have already removed the targets they refuse. Nothing else is exposed.
+   * limit have already removed the targets they refuse. R11 B4 adds the changes left, from
+   * the offer's own evaluation (null with no limit set). Nothing else is exposed.
    */
   @Get(MINIAPP_ROUTES.serviceLocations)
   async locations(
@@ -315,6 +362,7 @@ export class MiniAppServicesController {
     }
     return {
       current: { label: locations.current.label },
+      remaining: locations.remaining,
       targets: locations.targets.map((target) => ({
         id: target.id,
         label: target.label,

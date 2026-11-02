@@ -2117,9 +2117,16 @@
       "breakpoints": true
     },
     {
+      "idx": 302,
+      "version": "7",
+      "when": 1793592580388,
+      "tag": "0302_service_usage_snapshots",
+      "breakpoints": true
+    },
+    {
       "idx": 303,
       "version": "7",
-      "when": 1793593050139,
+      "when": 1793602471785,
       "tag": "0303_customer_notification_centre",
       "breakpoints": true
     }

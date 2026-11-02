@@ -562,6 +562,22 @@ export const FEATURE_FLAGS = [
     configuredBy: ['miniapp.init_data_max_age_seconds', 'miniapp.session_ttl_minutes'],
   },
   {
+    key: 'service_usage_chart',
+    description:
+      'R11 B2: a usage chart on the mini app\u2019s service screen \u2014 used volume over the last 7 ' +
+      'or 30 days. On, every usage figure Nexa ALREADY reads from a panel (the scheduled usage ' +
+      'sync, a renewal that returns usage, a card\u2019s live check) is also kept as a snapshot, ' +
+      'at most one per service per hour, for 90 days; it adds no panel request and no polling ' +
+      'loop. Off by default: no snapshot is written, the chart is not drawn and the history ' +
+      'endpoint answers as if it did not exist. Snapshots already stored are kept (and still ' +
+      'expire after 90 days) while it is off, and the chart shows them again when it is back on.',
+    defaultEnabled: false,
+    // LOCAL: it adds a chart to one screen and one small write beside an existing one; no
+    // customer is charged, messaged or refused anything either way.
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
+  {
     key: 'gift_cards',
     description:
       'R10 D4: gift cards \u2014 wallet top-up codes an operator mints in batches in the Web ' +
@@ -631,6 +647,35 @@ export const FEATURE_FLAGS = [
       'the bot. It does not change which messages the bot sends.',
     defaultEnabled: false,
     // LOCAL: it adds one screen to the mini app and sends the customer nothing.
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
+  {
+    key: 'location_remaining_display',
+    description:
+      'R11 B4: the line «تغییر لوکیشن باقی‌مانده: ۲ از ۳» on the bot\u2019s service card and in the ' +
+      'mini app. On, a customer sees how many location changes they have left \u2014 only where ' +
+      'location change is enabled for the service AND a limit is set. Off by default, because ' +
+      'every new customer-facing feature ships behind a switch that starts off: off, neither ' +
+      'surface shows the line and both are exactly as before. Turning it off changes no limit ' +
+      'and no enforcement; the count a move is refused with is the same.',
+    defaultEnabled: false,
+    // LOCAL: it adds one line of text to two screens and moves no money.
+    blastRadius: 'LOCAL',
+    configuredBy: [],
+  },
+  {
+    key: 'referral_friends_list',
+    description:
+      'R11 B3: the «دوستان دعوت‌شده» list on the mini app\u2019s referral screen \u2014 the ' +
+      'customer\u2019s own referees, newest first, each with a first name or a masked username ' +
+      '(never a Telegram id, phone or full name), the join date and one status: joined, first ' +
+      'purchase done, reward pending or reward paid. Read-only; no money moves and no message ' +
+      'is sent. Off by default: the screen shows its three figures and nothing else, and the ' +
+      'list route answers that the feature is off. Turning it off hides the list and changes ' +
+      'no referral, commission or balance.',
+    defaultEnabled: false,
+    // LOCAL: it adds a read-only section to one screen of the customer's own mini app.
     blastRadius: 'LOCAL',
     configuredBy: [],
   },
