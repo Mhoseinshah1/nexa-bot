@@ -2644,6 +2644,38 @@ describe('LegacyMigrationExecutor: transient database failures', () => {
     });
   });
 
+  it('gives back an attempt counted while the step was still in its requested status', async () => {
+    // Codex review on #380. MUTATION: giving back only the counter of the status the row is
+    // NOW in (ADOPT_RUNNING → adoptAttempts) leaves each start of an ADOPT_REQUESTED try
+    // counted, and the fifth retry finds the bound spent: FAILED IMPORT_FAILED.
+    const { h, slept } = transientHarness([1, 1, 1, 1, 1, 1]);
+    finishedImport((row) => h.repository.put(row));
+    const id = seed(h, {
+      status: 'ADOPT_REQUESTED',
+      verifyReport,
+      packageSourceFingerprint: LANE_SOURCE,
+      createdAt: new Date('2026-10-10T09:30:00.000Z'),
+    });
+    let prechecks = 0;
+    const precheck = h.runner.precheck.bind(h.runner);
+    h.runner = {
+      ...h.runner,
+      precheck: async (context, step) => {
+        if (step === 'ADOPT') {
+          prechecks += 1;
+          if (prechecks <= 6) throw poolTimeout();
+        }
+        return precheck(context, step);
+      },
+    };
+    await h.executor.tick();
+    expect(prechecks).toBe(7);
+    expect(slept).toHaveLength(6);
+    const row = h.repository.rows.get(id)!;
+    expect(row.status).toBe('ADOPT_DONE');
+    expect(row.progress.adoptAttempts).toBe(1);
+  });
+
   it("past the last pause the failure is the step's: logged with its cause, never the SQL or a value", async () => {
     const { h, slept } = transientHarness([1, 1]);
     const id = approved(h);

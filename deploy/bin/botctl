@@ -371,9 +371,30 @@ botctl_reap_child() {
   BOTCTL_CHILD_PID=""
 }
 
-# Until no process of the group is left.
+# Until no LIVE process of the group is left. `kill -0 -- -PGID` also succeeds on a zombie,
+# and a member whose parent never reaps it (a PID 1 that does not reap, in a container) stays
+# one for ever: waiting on it hung botctl (Codex review on #380). So the group is read from
+# /proc — state and process group follow the last ") " of /proc/PID/stat, since the command
+# name before it may hold spaces and parentheses — and zombies (Z) and dead entries (X) are
+# not waited for. Without a readable /proc, `kill -0` is all there is.
+botctl_group_has_live_member() {
+  local pgid="$1" stat line rest state pgrp
+  kill -0 -- "-${pgid}" 2>/dev/null || return 1
+  [ -r /proc/self/stat ] || return 0
+  for stat in /proc/[0-9]*/stat; do
+    { IFS= read -r line <"$stat"; } 2>/dev/null || continue
+    rest="${line##*) }"
+    state="${rest%% *}"
+    rest="${rest#* }" # ppid
+    rest="${rest#* }"
+    pgrp="${rest%% *}"
+    if [ "$pgrp" = "$pgid" ] && [ "$state" != Z ] && [ "$state" != X ]; then return 0; fi
+  done
+  return 1
+}
+
 botctl_wait_group() {
-  while kill -0 -- "-$1" 2>/dev/null; do sleep 0.1; done
+  while botctl_group_has_live_member "$1"; do sleep 0.1; done
 }
 
 # ---------------------------------------------------------------------------

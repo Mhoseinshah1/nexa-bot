@@ -534,19 +534,24 @@ export class LegacyMigrationExecutor {
 
   /**
    * After a transient failure: the row as it now is, with the attempt THIS try counted given
-   * back — the counter of the status the row is now in, put back to what it was before the try
-   * (a try that started APPROVED and failed APPLYING took `applyAttempts` 0 → 1).
+   * back — every attempt counter that rose during the try, put back to what it was before it.
+   * Whether the status moved does not matter (Codex review on #380): a try that started
+   * APPROVED and failed APPLYING took `applyAttempts` 0 → 1, and one that failed while still
+   * ADOPT_REQUESTED (or DRY_RUN_REQUESTED, UPLOADED, APPROVED) counted its start all the same.
    */
   private async giveBackTransientAttempt(
     before: LegacyNxpkgImportRow,
   ): Promise<LegacyNxpkgImportRow> {
     const now = await this.reread(before.id);
-    const counter = ATTEMPT_COUNTER_OF[now.status];
-    if (counter !== undefined && now.progress[counter] > before.progress[counter]) {
-      await this.uncount(now, { [counter]: before.progress[counter] });
-      return this.reread(before.id);
-    }
-    return now;
+    const raised = ATTEMPT_COUNTERS.filter(
+      (counter) => now.progress[counter] > before.progress[counter],
+    );
+    if (raised.length === 0) return now;
+    await this.uncount(
+      now,
+      Object.fromEntries(raised.map((counter) => [counter, before.progress[counter]])),
+    );
+    return this.reread(before.id);
   }
 
   private sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -1380,15 +1385,10 @@ export function completedStatusOf(
     : 'COMPLETED_WITH_DISCREPANCY';
 }
 
-/** Which attempt counter a status's step takes (`LEGACY_MIGRATION_MAX_*_ATTEMPTS`). */
-const ATTEMPT_COUNTER_OF: Partial<
-  Record<
-    LegacyNxpkgImportStatus,
-    'verifyAttempts' | 'dryRunAttempts' | 'applyAttempts' | 'adoptAttempts'
-  >
-> = {
-  VERIFYING: 'verifyAttempts',
-  DRY_RUN_RUNNING: 'dryRunAttempts',
-  APPLYING: 'applyAttempts',
-  ADOPT_RUNNING: 'adoptAttempts',
-};
+/** The attempt counters a step takes (`LEGACY_MIGRATION_MAX_*_ATTEMPTS`). */
+const ATTEMPT_COUNTERS = [
+  'verifyAttempts',
+  'dryRunAttempts',
+  'applyAttempts',
+  'adoptAttempts',
+] as const;

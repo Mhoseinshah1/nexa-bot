@@ -111,13 +111,18 @@ export function causeChain(error: unknown): unknown[] {
   return chain;
 }
 
-/** One line, quoted spans blanked, truncated. */
+/**
+ * Quoted spans blanked, then one line, truncated. The WHOLE message is blanked before its first
+ * line is taken (Codex review on #380): a quoted value holding a line break otherwise lost its
+ * closing quote with the second line and kept its first line. A quote that never closes is
+ * blanked to the end of the message.
+ */
 export function sanitizeMessage(message: string): string {
-  const firstLine = message.split(/\r?\n/u, 1)[0] ?? '';
-  const blanked = firstLine
-    .replace(/"(?:[^"\\]|\\.)*"/gu, '"…"')
-    .replace(/'(?:[^'\\]|\\.)*'/gu, "'…'")
+  const blankedMessage = message
+    .replace(/"(?:[^"\\]|\\[\s\S])*(?:"|\\?$)/gu, '"…"')
+    .replace(/'(?:[^'\\]|\\[\s\S])*(?:'|\\?$)/gu, "'…'")
     .replace(/\(([^()]*)\)=\(([^()]*)\)/gu, '(…)=(…)');
+  const blanked = blankedMessage.split(/\r?\n/u, 1)[0] ?? '';
   return blanked.length > ERROR_MESSAGE_MAX_LENGTH
     ? `${blanked.slice(0, ERROR_MESSAGE_MAX_LENGTH - 1)}…`
     : blanked;

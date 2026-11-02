@@ -115,6 +115,21 @@ describe('legacy-migration error diagnostics', () => {
     (a as { cause?: unknown }).cause = b;
     expect(errorDiagnostics(a).cause).toHaveLength(1);
   });
+
+  it('blanks quoted values across line breaks before it takes the first line (Codex review on #380)', () => {
+    // MUTATION: taking the first line before blanking leaves `"customer-private-value` in it.
+    expect(
+      sanitizeMessage('invalid input syntax for type uuid: "customer-private-value\nrest"'),
+    ).toBe('invalid input syntax for type uuid: "…"');
+    expect(sanitizeMessage("value 'private-a\nprivate-b' and more")).toBe("value '…' and more");
+    // A quote that never closes: blanked from the opening quote to the end of the message.
+    // MUTATION: requiring the closing quote leaves the value in the line.
+    expect(sanitizeMessage('invalid input syntax for type uuid: "customer-private-value')).toBe(
+      'invalid input syntax for type uuid: "…"',
+    );
+    expect(sanitizeMessage("bad value 'customer-private-value\nmore\nlines")).toBe("bad value '…'");
+    expect(sanitizeMessage('key "a" then "customer-private\\"value')).toBe('key "…" then "…"');
+  });
 });
 
 describe('isTransientDatabaseFailure', () => {

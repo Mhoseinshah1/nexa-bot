@@ -176,6 +176,18 @@ wait_for_file() {
   return 1
 }
 
+# A process that runs: not gone, and not a zombie. `kill -0` succeeds on a zombie, and where PID 1
+# does not reap (some containers), the rehearsal that ended stays one: it is not running.
+process_live() {
+  local stat
+  stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
+  stat="${stat##*) }"
+  case "${stat%% *}" in
+    Z | X | '') return 1 ;;
+  esac
+  return 0
+}
+
 # Wait for botctl, but never for ever: a botctl that does not stop is a failure, not a hang.
 wait_held() {
   local i
@@ -196,6 +208,7 @@ wait_held() {
 start_held_rehearsal() {
   installation
   fake_set rehearse_hold 1
+  fake_set rehearse_zombie "${HELD_ZOMBIE:-0}"
   setsid "$BOTCTL" cutover rehearse "${WORK}/final.nxpkg" --key-file "${WORK}/final.nxkey" \
     --owner-telegram-id 900000001 >"${WORK}/botctl.out" 2>&1 </dev/null &
   HELD_PID=$!
@@ -214,7 +227,7 @@ kill -HUP -- "-${HELD_PID}" 2>/dev/null # the kernel: the terminal's foreground 
 kill -HUP "$HELD_PID" 2>/dev/null       # the login shell and sudo, relaying it
 sleep 0.5
 assert_ok 'botctl died of the hang-up' kill -0 "$HELD_PID"
-assert_ok 'the rehearsal died of the hang-up' kill -0 "$HELD_CHILD"
+assert_ok 'the rehearsal died of the hang-up' process_live "$HELD_CHILD"
 assert_ok 'the package was removed while the rehearsal still read it' test -f "${HELD_MOUNT}/rehearsal.nxpkg"
 touch "${FAKE_DIR}/rehearse_release"
 wait_held
@@ -232,7 +245,7 @@ wait_held
 assert_equals 'a stopped rehearsal did not exit 143' 143 "$HELD_STATUS"
 assert_equals 'the package was gone before the rehearsal had stopped' present \
   "$(cat "${FAKE_DIR}/rehearse_mount_on_term" 2>/dev/null)"
-assert_fails 'botctl exited while the rehearsal was still running' kill -0 "$HELD_CHILD"
+assert_fails 'botctl exited while the rehearsal was still running' process_live "$HELD_CHILD"
 assert_fails 'the private directory was left behind after a stop' test -e "$HELD_MOUNT"
 assert_contains 'the stop was not reported' "$(cat "${WORK}/botctl.out")" 'did not complete (exit 143)'
 teardown_root
@@ -246,9 +259,32 @@ wait_held
 assert_fails 'botctl survived USR1' test "$HELD_STATUS" -eq 0
 assert_equals 'the package was gone before the rehearsal had stopped' present \
   "$(cat "${FAKE_DIR}/rehearse_mount_on_term" 2>/dev/null)"
-assert_fails 'botctl exited while the rehearsal was still running' kill -0 "$HELD_CHILD"
+assert_fails 'botctl exited while the rehearsal was still running' process_live "$HELD_CHILD"
 assert_fails 'the private directory was left behind' test -e "$HELD_MOUNT"
 teardown_root
+
+# `kill -0 -- -PGID` succeeds while any member of the group is a zombie, and in a container
+# whose PID 1 does not reap, an orphan stays one for ever: botctl waited on it and hung (Codex
+# review on #380). It waits for the LIVE members only, after a stop and in its EXIT trap alike.
+for zombie_signal in TERM USR1; do
+  test_case "cutover rehearse: a ${zombie_signal} with a never-reaped zombie left in the group does not hang botctl"
+  HELD_ZOMBIE=1 start_held_rehearsal
+  wait_for_file "${FAKE_DIR}/rehearse_zombie" || fail_test 'the zombie was never made'
+  sleep 0.2
+  read -r zombie_parent zombie_pid <"${FAKE_DIR}/rehearse_zombie"
+  zombie_stat="$(cat "/proc/${zombie_pid}/stat" 2>/dev/null)"
+  zombie_stat="${zombie_stat##*) }"
+  read -r zombie_state _ zombie_pgrp _ <<<"$zombie_stat"
+  assert_equals 'the test made no zombie' Z "$zombie_state"
+  assert_equals "the zombie is not in the rehearsal's process group" "$HELD_CHILD_PGID" "$zombie_pgrp"
+  kill "-${zombie_signal}" "$HELD_PID"
+  wait_held
+  assert_fails "botctl survived ${zombie_signal}" test "$HELD_STATUS" -eq 0
+  assert_fails 'botctl exited while the rehearsal was still running' process_live "$HELD_CHILD"
+  assert_fails 'the private directory was left behind' test -e "$HELD_MOUNT"
+  kill "$zombie_parent" 2>/dev/null
+  teardown_root
+done
 
 # --- On a terminal: refused outside tmux/screen, unless --allow-foreground ----------------
 #
@@ -290,7 +326,7 @@ assert_file_mode 'the log file is not private' "$log_file" 600
 assert_file_mode 'the log directory is not private' "${NEXA_ROOT}/var/log/nexa" 700
 
 test_case 'cutover rehearse: inside tmux it runs without --allow-foreground'
-TTY_ENV=(TMUX=/tmp/tmux-0/default,1,0)
+TTY_ENV=('TMUX=/tmp/tmux-0/default,1,0')
 tty_rehearse
 assert_equals 'a rehearsal with TMUX set was refused' 0 "$BOTCTL_STATUS"
 TTY_ENV=()
