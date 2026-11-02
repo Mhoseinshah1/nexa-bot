@@ -705,11 +705,13 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
   SERVICE_AUTO_RENEW_FUNDS_SHORT: true,
   SERVICE_AUTO_RENEW_PRICE_CHANGED: true,
   /*
-   * Round 11, C2: `false`. The suspension is a committed fact and the sentence says so; an
-   * extension that follows does not make "your reseller access ended" false, it is a later
-   * event. A late copy is still the truthful account of what happened at the time.
+   * Round 11, C2: `true`. "Your reseller standing was suspended" stops being true when an
+   * administrator extends the date before the message leaves: the reader holds only while the
+   * reseller is still SUSPENDED with the expiry's own mark; otherwise the row is SUPERSEDED
+   * unsent. (Lead finding on the first version, which declared `false` and could send that
+   * false message after a quick extension.)
    */
-  RESELLER_EXPIRED: false,
+  RESELLER_EXPIRED: true,
 };
 
 /**
