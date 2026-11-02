@@ -569,6 +569,18 @@ export const miniAppUsageHistorySchema = z.object({
 });
 export type MiniAppUsageHistory = z.infer<typeof miniAppUsageHistorySchema>;
 
+/**
+ * R11 B4: how many location changes a service still has, «۲ از ۳». Present ONLY where location
+ * change is enabled for the service AND a limit (changes per period) is set; null otherwise, and
+ * the app then says nothing about it. `remaining` is read through the same window the server
+ * enforces a request with, so 0 means the next request is refused with the limit sentence.
+ */
+export const miniAppLocationRemainingSchema = z.object({
+  remaining: z.number().int().min(0),
+  max: z.number().int().min(0),
+});
+export type MiniAppLocationRemaining = z.infer<typeof miniAppLocationRemainingSchema>;
+
 export const miniAppServiceDetailSchema = miniAppServiceSummarySchema.extend({
   /** The subscription link, only while the service is deliverable. A secret: never logged. */
   subscriptionUrl: z.string().nullable(),
@@ -586,6 +598,8 @@ export const miniAppServiceDetailSchema = miniAppServiceSummarySchema.extend({
   qrKinds: z.array(z.enum(QR_PAYLOAD_KINDS)),
   /** Whether the location sheet has anything to offer now (`CHANGE_LOCATION` is available). */
   canChangeLocation: z.boolean(),
+  /** R11 B4: the remaining location changes, or null (disabled, or no limit set). */
+  locationRemaining: miniAppLocationRemainingSchema.nullable(),
   /** Round 10, D1: «تمدید خودکار» for this service (`MINIAPP_ROUTES.serviceAutoRenew`). */
   autoRenew: miniAppAutoRenewSchema,
   /** R11 B2: whether the usage chart is drawn (`service_usage_chart` is on). */
@@ -618,11 +632,13 @@ export const miniAppServiceQuoteRequestSchema = z.object({
 /**
  * The location sheet's read: where the service is and the configured targets it may be moved
  * to, each with its price (zero is free). The server's offer already leaves out every target
- * the cooldown and the rolling limit refuse; it exposes no remaining count, no
- * recommendation and no per-target capacity, and neither does this.
+ * the cooldown and the rolling limit refuse. R11 B4 adds the remaining count
+ * (`remaining`, null when no limit is set); it still exposes no recommendation and no per-target
+ * capacity, and neither does this.
  */
 export const miniAppServiceLocationsSchema = z.object({
   current: z.object({ label: z.string() }),
+  remaining: miniAppLocationRemainingSchema.nullable(),
   targets: z.array(z.object({ id: idSchema, label: z.string(), price: moneySchema })),
 });
 export type MiniAppServiceLocations = z.infer<typeof miniAppServiceLocationsSchema>;
