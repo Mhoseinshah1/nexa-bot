@@ -97,6 +97,19 @@ each a way to credit money nobody approved:
 - **A create whose answer was lost is never retried and never re-keyed.** The send is
   stamped before the call; only the provider's own `RATE_LIMIT_EXCEEDED` clears it.
 
+**Card-to-card receipt review happens in BOTH places** (owner, R12 F3 item 8, reversing Payment File
+02 §10). The Web Admin approves, rejects or credits to the wallet through the SAME application
+methods Telegram uses (`confirmManualTransfer`, `rejectManualTransfer`,
+`ReceiptDispositionService.creditToWallet`): no second settlement path; `receipts.review` (the
+credit also `users.wallet.credit`); approve asks first. A decision in one place excludes a decision
+in the other.
+
+**A TonPays Telegram cancel whose answer was lost is not a cancellation** (owner, Round 11 A8).
+While the invoice is open as far as Nexa knows, «❌ لغو فاکتور» stays and the customer may ask
+again — a new request row, one in flight at a time, spaced from the lost one; Nexa never repeats
+it by itself. A tap once Nexa knows it was cancelled says «فاکتور قبلاً لغو شده»; a paid invoice
+is never cancelled (`docs/tonpays-telegram-gateway-audit.md` §21).
+
 **The custom gateway (Round 10 C1) is built and NOT yet accepted against a real bridge**
 (`docs/protocols/custom-gateway.md`, `docs/custom-gateway-audit.md`, `OQ-CG-01`). It is Nexa's
 OWN protocol — one code-backed type, `CUSTOM`, that a third-party bridge implements; an operator
@@ -357,6 +370,41 @@ Four Phase 4 rules that are easy to break by accident:
   and that is a stated exception with a bound and a test — see
   `docs/conventions.md`. Everything else reads `ScopeActivityReader` inside its
   transaction.
+
+## An ended order is answered on its own message (Round 11, A11)
+
+Owner request: when an unpaid order expires or is cancelled, Nexa **edits the order's own
+payment message** into the ended screen instead of sending a new «مهلت این سفارش به پایان
+رسیده است». Binding rules:
+
+- **One expiry notice per order, ever:** `ORDER_EXPIRED`, unique per order and kind by
+  `customer_notifications_subject_key`. A payment against an order is told nothing of its own
+  (`PaymentExpiryService`); only a top-up's payment keeps `PAYMENT_EXPIRED`. Before this an order
+  with several attempts got one `PAYMENT_EXPIRED` per attempt, minutes apart (a gateway attempt's
+  lifetime runs from its own creation), plus the order's.
+- The ended screen (`bot.order.expired_screen` / `bot.order.cancelled_screen`) keeps the order
+  summary (code, product, amount), carries **nothing that pays** (no card, no copy button, no
+  pay or receipt button), shows «🔁 سفارش دوباره» and «🏠 منوی اصلی», and has **no "no money
+  was taken" line**. Re-order is a read-only entry (the order's category, the custom-service
+  menu or the catalogue); nothing is ordered until the customer confirms again.
+- It is EDITED onto the order's latest screen (FIX-08's `answerOrder`, plus the receipt prompt
+  `RECEIPT_WAIT`). A new message only when that message cannot be edited (deleted, too old) or
+  is not known (a mini-app order) — once, recorded by the notification row. «message is not
+  modified» counts as delivered; an unknown edit is never repeated.
+- A tap on a stale pay/confirm button of an ended order is answered by editing THAT message into
+  the ended screen, never by a new refusal message. A cancellation edits the order's message and
+  removes the confirmation question.
+- **Ended means the sweep ended it** (Codex, #354): an `AWAITING_PAYMENT` order past its deadline
+  is not shown as expired until `expireDue` has moved it — the sweep keeps an order whose payment
+  is still live (a receipt under review, a provider review, `UNKNOWN`), and a customer who may
+  have paid is never offered «🔁 سفارش دوباره». Only a DRAFT past its hold (never swept) is read
+  from its deadline.
+- **A cancellation respects the settle window** (Codex, #354): while another writer may still be
+  editing the order's message, the turn does not touch it; the `ORDER_CANCELLED` row is queued
+  for the window's end and the lane edits the message (or sends once).
+- **A definite 429 on an ended screen leaves the screen tappable** (Codex, #354): the wizard goes
+  back to the step it was tapped at, so the next tap answers it; nothing else would for a draft.
+- No customer message from a migration or backfill; nothing here has one.
 
 ## Automatic renewal (Round 10, D1)
 

@@ -168,13 +168,13 @@ function expectedViews(): Record<string, View> {
       intent: 'USERNAME_TEXT',
       key: 'bot.unknown_command',
       text: 'این دستور شناخته نشد. برای دیدن فهرست دستورها /help را بفرستید.',
-      buttons: [],
+      buttons: [[['🏠 بازگشت به منوی اصلی', 'mm:']]],
     },
     'unknown.command': {
       intent: 'USERNAME_TEXT',
       key: 'bot.unknown_command',
       text: 'این دستور شناخته نشد. برای دیدن فهرست دستورها /help را بفرستید.',
-      buttons: [],
+      buttons: [[['🏠 بازگشت به منوی اصلی', 'mm:']]],
     },
     'unknown.callback': {
       intent: 'UNSUPPORTED',

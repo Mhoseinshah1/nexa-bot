@@ -953,6 +953,7 @@ export function Disclosure({
   variant = 'plain',
   className,
   onToggle,
+  defaultOpen = false,
 }: {
   summary: ReactNode;
   children?: ReactNode;
@@ -960,6 +961,8 @@ export function Disclosure({
   variant?: 'plain' | 'boxed';
   className?: string;
   onToggle?: (open: boolean) => void;
+  /** Starts open (a list's first accordion); afterwards the reader decides. */
+  defaultOpen?: boolean;
 }) {
   const classes = ['disclosure'];
   if (size === 'sm') classes.push('sm');
@@ -968,6 +971,7 @@ export function Disclosure({
   return (
     <details
       className={classes.join(' ')}
+      {...(defaultOpen ? { open: true } : {})}
       {...(onToggle === undefined
         ? {}
         : { onToggle: (event) => onToggle(event.currentTarget.open) })}
@@ -2591,7 +2595,16 @@ export function Breadcrumbs({ items }: { items: readonly Crumb[] }) {
 
 /* Re-exported so a page imports its whole kit from one module. */
 export { Modal, Drawer, Menu, useFocusTrap } from './overlays';
-export { ChartCard, Sparkline, BarChart, LineChart, Donut, Legend, axisLabelSlots } from './charts';
+export {
+  ChartCard,
+  Sparkline,
+  BarChart,
+  LineChart,
+  Donut,
+  Legend,
+  axisLabelSlots,
+  compactAxis,
+} from './charts';
 export {
   useUnsavedChanges,
   useConfirmedClose,

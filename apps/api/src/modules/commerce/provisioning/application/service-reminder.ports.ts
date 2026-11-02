@@ -265,6 +265,8 @@ export interface ServiceReminderSnapshotReader {
     | (ServiceReminderSnapshot & {
         readonly basisExpiresAt: Date | null;
         readonly basisTrafficLimitBytes: bigint;
+        /** R12 F3 item 1: the service the reminder is about, for the button under it. */
+        readonly serviceId?: string;
       })
     | null
   >;

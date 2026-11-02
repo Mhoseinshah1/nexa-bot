@@ -1594,7 +1594,10 @@ function TicketMessageItem({ message }: { message: TicketMessageView }) {
       </li>
     );
   }
-  const support = message.senderType === 'ADMIN';
+  // Phase 4 PR-4: the support assistant's answer sits on support's side, but is labelled as the
+  // assistant's and never carries an administrator's name.
+  const ai = message.senderType === 'AI';
+  const support = message.senderType === 'ADMIN' || ai;
   return (
     <li className={`ticket-message ${support ? 'support' : 'customer'}`}>
       <div className="ticket-message-head">
@@ -1605,9 +1608,11 @@ function TicketMessageItem({ message }: { message: TicketMessageView }) {
           <Icon name={support ? 'help' : 'user'} size={13} />
         </span>
         <strong>
-          {support
-            ? `${t('web.ticket_sender_support')}${message.authorAdminUsername === null ? '' : ` (@${message.authorAdminUsername})`}`
-            : t('web.ticket_sender_customer')}
+          {ai
+            ? t('web.ticket_sender_ai')
+            : support
+              ? `${t('web.ticket_sender_support')}${message.authorAdminUsername === null ? '' : ` (@${message.authorAdminUsername})`}`
+              : t('web.ticket_sender_customer')}
         </strong>
         <span className="muted small">{formatTimestamp(message.createdAt)}</span>
         {support &&

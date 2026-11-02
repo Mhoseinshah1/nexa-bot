@@ -16,6 +16,7 @@
     "format:check": "prettier --check .",
     "check:boundaries": "bash scripts/check-boundaries.sh",
     "check:citations": "node scripts/check-falsification-citations.mjs",
+    "check:readme": "node scripts/check-readme.mjs",
     "check:i18n": "node scripts/check-i18n-keys.mjs",
     "check:shell": "bash scripts/check-shell.sh",
     "web:shots": "node scripts/web-shots/shots.mjs",
@@ -41,7 +42,7 @@
     "admin:2fa-reset": "pnpm --filter @nexa/api admin:2fa-reset",
     "provision": "pnpm --filter @nexa/api provision",
     "check:runtime": "bash scripts/check-runtime-cli.sh",
-    "test:deploy": "bash tests/deploy/botctl.test.sh && bash tests/deploy/cutover-preflight.test.sh && bash tests/deploy/check-shell.test.sh && bash tests/deploy/release-ci-gate.test.sh",
+    "test:deploy": "bash tests/deploy/botctl.test.sh && bash tests/deploy/cutover-preflight.test.sh && bash tests/deploy/cutover-rehearse.test.sh && bash tests/deploy/check-shell.test.sh && bash tests/deploy/release-ci-gate.test.sh && bash tests/deploy/standalone-installer.test.sh",
     "test:exhaustive": "vitest run --project exhaustive",
     "test:migration-scale": "vitest run --project migration-scale",
     "db:migrate:dev": "pnpm --filter @nexa/api db:migrate:dev",
@@ -60,12 +61,14 @@
     "legacy-money-report:dev": "pnpm --filter @nexa/api legacy-money-report:dev",
     "cutover-reconcile": "pnpm --filter @nexa/api cutover-reconcile",
     "cutover-reconcile:dev": "pnpm --filter @nexa/api cutover-reconcile:dev",
+    "cutover-rehearse": "pnpm --filter @nexa/api cutover-rehearse",
+    "cutover-rehearse:dev": "pnpm --filter @nexa/api cutover-rehearse:dev",
     "customers-link-bot": "pnpm --filter @nexa/api customers-link-bot",
     "customers-link-bot:dev": "pnpm --filter @nexa/api customers-link-bot:dev",
     "data-compaction": "pnpm --filter @nexa/api data-compaction",
     "data-compaction:dev": "pnpm --filter @nexa/api data-compaction:dev",
     "dev:services": "bash scripts/dev-services.sh",
-    "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm check:boundaries && pnpm check:i18n && pnpm check:citations && pnpm check:shell && pnpm test && pnpm test:web && pnpm test:deploy && pnpm build"
+    "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm check:boundaries && pnpm check:i18n && pnpm check:citations && pnpm check:readme && pnpm check:shell && pnpm test && pnpm test:web && pnpm test:deploy && pnpm build"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

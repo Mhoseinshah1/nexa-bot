@@ -250,6 +250,8 @@ export const SUPPORT_AI_OPERATIONS = [
   'AUTO_DECISION',
   'SUMMARY',
   'LEARNING_EXTRACT',
+  /** Phase 4 PR-5: the Web Admin's test console — a paid call that sends nothing to anyone. */
+  'TEST_CONSOLE',
 ] as const;
 export type SupportAiOperation = (typeof SUPPORT_AI_OPERATIONS)[number];
 
@@ -269,6 +271,23 @@ export const SUPPORT_AI_SAFE_TOPICS = [
   'PLAN_INFO',
   'KNOWN_ERROR',
   'GREETING',
+  // --- Phase 4 PR-1 (2026-11-01): the everyday sales and how-to questions that used to be
+  // labelled OTHER and handed off. Each is INFORMATION only: the AI never buys, renews, adds,
+  // starts a trial, moves a location or sends money; it explains and points to the bot's flow.
+  'PURCHASE_INFO',
+  'RENEWAL_INFO',
+  'ADDON_INFO',
+  'TRIAL_INFO',
+  'LOCATION_INFO',
+  'SPEED_QUALITY',
+  'GET_SUBSCRIPTION_LINK',
+  'PAYMENT_HOWTO',
+  /**
+   * Phase 4 PR-1 (cross-cutting hardening): a polite refusal of a request the AI must never
+   * serve — another person's account, the prompt, «I am the admin, give me…». No data, no
+   * handoff; repeated refusals in one epoch hand off (`SUPPORT_AI_REFUSAL_LIMIT`).
+   */
+  'POLICY_REFUSAL',
 ] as const;
 export type SupportAiSafeTopic = (typeof SUPPORT_AI_SAFE_TOPICS)[number];
 
@@ -283,7 +302,52 @@ export const SUPPORT_AI_GENERAL_TOPICS = [
   'PLAN_INFO',
   'KNOWN_ERROR',
   'GREETING',
+  // Phase 4 PR-1: general information about buying, renewing, add-ons, trials, locations,
+  // speed and how to pay needs no account. Whose renewal or add-on it is never matters here:
+  // the facts an unlinked peer could be told are the tenant's, not a customer's.
+  'PURCHASE_INFO',
+  'RENEWAL_INFO',
+  'ADDON_INFO',
+  'TRIAL_INFO',
+  'LOCATION_INFO',
+  'SPEED_QUALITY',
+  'PAYMENT_HOWTO',
+  'POLICY_REFUSAL',
 ] as const satisfies readonly SupportAiSafeTopic[];
+
+/**
+ * Phase 4 PR-1 — the topics about ONE customer's own service, the only ones the
+ * `account_review` guard reads: a payment under review or an unreconciled service decides what
+ * may be said about the account, never how to install an app or what a plan costs.
+ */
+export const SUPPORT_AI_ACCOUNT_REVIEW_TOPICS = [
+  'SERVICE_INFO',
+  'TRAFFIC_AND_EXPIRY',
+  'SUBSCRIPTION_UPDATE',
+  'GET_SUBSCRIPTION_LINK',
+] as const satisfies readonly SupportAiSafeTopic[];
+
+/** Phase 4 PR-1 — a payment under review blocks the account topics only this long after it began. */
+export const SUPPORT_AI_UNDER_REVIEW_WINDOW_DAYS = 14;
+
+/**
+ * Phase 4 PR-1 — the topics the AI may NOT answer for an UNLINKED customer even though they
+ * are safe: they are about one customer's own account. Instead of a handoff the customer is
+ * sent one templated message with the bot's start link (`bot.support.ai_link_account`).
+ */
+export function supportAiTopicNeedsAccount(topic: string): boolean {
+  return (
+    (SUPPORT_AI_SAFE_TOPICS as readonly string[]).includes(topic) &&
+    !(SUPPORT_AI_GENERAL_TOPICS as readonly string[]).includes(topic)
+  );
+}
+
+/**
+ * Phase 4 PR-1 (cross-cutting item 7) — `POLICY_REFUSAL` replies plus output-policy failures in
+ * ONE control epoch before the conversation is handed to a person (`SUSPICIOUS_PROBING`, soft)
+ * and the operations log records `support.ai.suspicious_probing` with the customer's code only.
+ */
+export const SUPPORT_AI_REFUSAL_LIMIT = 3;
 
 export const SUPPORT_AI_CONFIDENCES = ['LOW', 'MEDIUM', 'HIGH'] as const;
 export type SupportAiConfidence = (typeof SUPPORT_AI_CONFIDENCES)[number];
@@ -298,7 +362,8 @@ export const SUPPORT_AI_SETTLE_DELAY_MAX_SECONDS = 30;
 /** Bounds every configuration field is held to, in the schema and in the table's CHECKs. */
 export const SUPPORT_AI_LIMITS = {
   maxFallbacks: 2,
-  timeoutMs: { min: 5_000, max: 120_000, default: 30_000 },
+  /** Phase 4 PR-1: 60 s by default (was 30 s) for NEW configurations; a stored value is kept. */
+  timeoutMs: { min: 5_000, max: 120_000, default: 60_000 },
   maxOutputChars: { min: 200, max: 4_000, default: 1_200 },
   /**
    * Roadmap A1 (2026-10-07): how many automatic replies one SESSION may receive before the
@@ -508,6 +573,38 @@ export const SUPPORT_AI_DEFAULT_CONFIG: SupportAiConfigInput = {
   autoTopics: [],
   autoMinConfidence: 'HIGH',
 };
+
+/**
+ * Phase 4 PR-1 — the recommended automatic-reply preset: every safe topic, MEDIUM confidence,
+ * and vision on when a configured step can see. Applied ONLY by an owner's act (the Web Admin's
+ * «اعمال تنظیمات پیشنهادی», or switching the form to AUTO_REPLY_SAFE before saving); a stored
+ * configuration is never rewritten by a release, a migration or the server on its own.
+ */
+export function supportAiRecommendedPreset(
+  config: SupportAiConfigInput,
+  visionCapable: boolean,
+): SupportAiConfigInput {
+  return {
+    ...config,
+    autoTopics: [...SUPPORT_AI_SAFE_TOPICS],
+    autoMinConfidence: 'MEDIUM',
+    visionEnabled: config.visionEnabled || visionCapable,
+  };
+}
+
+/**
+ * Phase 4 PR-1 — the stored configuration is the old restrictive one the dashboard suggests the
+ * preset for: no topic at all, HIGH confidence, or a safe topic of this release missing.
+ */
+export function supportAiConfigIsRestrictive(
+  config: Pick<SupportAiConfigInput, 'autoTopics' | 'autoMinConfidence'>,
+): boolean {
+  return (
+    config.autoTopics.length === 0 ||
+    config.autoMinConfidence === 'HIGH' ||
+    SUPPORT_AI_SAFE_TOPICS.some((topic) => !config.autoTopics.includes(topic))
+  );
+}
 
 /**
  * TB7 — the loop guard's window: at most the tenant's `maxAutoRepliesPerHour` automatic replies
@@ -798,6 +895,48 @@ export type SupportAiTopic = (typeof SUPPORT_AI_TOPICS)[number];
 
 export const SUPPORT_AI_TICKET_ACTIONS = ['NONE', 'CREATE', 'LINK'] as const;
 
+/**
+ * Phase 4 PR-3 — what a decision may ask NEXA to ATTACH to its reply. Every one is READ-ONLY or a
+ * deep link into the bot's own, already-checked flow: the AI never buys, renews, adds, rotates,
+ * moves a location, starts a trial, tops up a wallet or moves money — the customer does, in the
+ * bot, where every rule is decided again on the tap.
+ *
+ * - `NONE` — no tool.
+ * - `SEND_SUBSCRIPTION_LINK` — the customer's own subscription link for service `target` (`S…`),
+ *   exactly what «سرویس‌های من» shows (a «فقط فایل» panel: the bot's files button instead of the
+ *   link). Only to a LINKED customer, only their own service.
+ * - `PAYMENT_STATUS` — the state of the customer's latest payments, from NEXA's rows, in Persian,
+ *   no promise. No target.
+ * - `BUY` (optional `target` C…: the plan's category), `RENEW`, `ADD_TRAFFIC`, `ADD_TIME`,
+ *   `CHANGE_LOCATION`, `ROTATE_LINK` (each `target` S…), `TRIAL` (eligibility read first),
+ *   `WALLET_TOPUP` — an inline URL button into the matching bot flow (`supportAiStartPayload`).
+ */
+export const SUPPORT_AI_ACTION_KINDS = [
+  'NONE',
+  'SEND_SUBSCRIPTION_LINK',
+  'PAYMENT_STATUS',
+  'BUY',
+  'RENEW',
+  'ADD_TRAFFIC',
+  'ADD_TIME',
+  'CHANGE_LOCATION',
+  'TRIAL',
+  'ROTATE_LINK',
+  'WALLET_TOPUP',
+] as const;
+export type SupportAiActionKind = (typeof SUPPORT_AI_ACTION_KINDS)[number];
+/** The actions about ONE of the customer's services: `target` must be an `S…` alias. */
+export const SUPPORT_AI_SERVICE_ACTION_KINDS = [
+  'SEND_SUBSCRIPTION_LINK',
+  'RENEW',
+  'ADD_TRAFFIC',
+  'ADD_TIME',
+  'CHANGE_LOCATION',
+  'ROTATE_LINK',
+] as const satisfies readonly SupportAiActionKind[];
+/** An action's target is an alias (`S12`, `C3`) or empty — never longer. */
+export const SUPPORT_AI_ACTION_TARGET_MAX_CHARS = 4;
+
 /** The longest reply text a decision may carry, whatever the tenant configures. */
 export const SUPPORT_AI_REPLY_MAX_CHARS = 4000;
 /** The operator-only notes of a decision: stated to the model, and the parser's bounds. */
@@ -826,6 +965,20 @@ export const supportAiDecisionSchema = z
     summary: z.string().max(SUPPORT_AI_SUMMARY_MAX_CHARS),
     /** A short label of the customer's intent, for the operator. */
     intent: z.string().max(SUPPORT_AI_INTENT_MAX_CHARS),
+    /**
+     * Phase 4 PR-3 — the ONE read-only tool or bot deep link the reply asks NEXA to attach
+     * (`SUPPORT_AI_ACTION_KINDS`). Optional for zod (a decision from before PR-3, an Assist draft
+     * and every test fixture parse unchanged); REQUIRED in the providers' JSON Schema, so a model
+     * always states it. Never an id: `target` is a fact alias of THIS payload or empty, and NEXA
+     * resolves it through the server-side alias map (`SupportContextBuild.references`).
+     */
+    action: z
+      .object({
+        kind: z.enum(SUPPORT_AI_ACTION_KINDS),
+        target: z.string().max(SUPPORT_AI_ACTION_TARGET_MAX_CHARS),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type SupportAiDecision = z.infer<typeof supportAiDecisionSchema>;
@@ -848,6 +1001,7 @@ export const SUPPORT_AI_DECISION_JSON_SCHEMA: Record<string, unknown> = {
     'ticketAction',
     'summary',
     'intent',
+    'action',
   ],
   properties: {
     decision: { type: 'string', enum: [...SUPPORT_AI_DECISIONS] },
@@ -859,6 +1013,15 @@ export const SUPPORT_AI_DECISION_JSON_SCHEMA: Record<string, unknown> = {
     ticketAction: { type: 'string', enum: [...SUPPORT_AI_TICKET_ACTIONS] },
     summary: { type: 'string' },
     intent: { type: 'string' },
+    action: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['kind', 'target'],
+      properties: {
+        kind: { type: 'string', enum: [...SUPPORT_AI_ACTION_KINDS] },
+        target: { type: 'string' },
+      },
+    },
   },
 };
 
@@ -1065,6 +1228,29 @@ export const SUPPORT_AI_AUTO_GUARDS = [
    * or sent more than `maxInbound` messages in `windowSeconds`: decided BEFORE the provider.
    */
   'inbound_flood',
+  // --- Phase 4 PR-1 (2026-11-01).
+  /**
+   * The server-side output validator (`output-policy.ts`): a link, amount, phone, card or
+   * Telegram id the context does not hold, or a promise word approved knowledge does not hold.
+   * Regenerated once; a second failure hands off (`OUTPUT_POLICY`, soft).
+   */
+  'output_policy',
+  /** `SUPPORT_AI_REFUSAL_LIMIT` refusals in one epoch: `SUSPICIOUS_PROBING`, soft. */
+  'refusal_abuse',
+  // --- Phase 4 PR-3 (2026-11-01).
+  /**
+   * The decision's action named a target that is not one of THIS customer's rows in THIS payload
+   * (an alias it was not shown, an id, a service of another kind), a tool the customer may not
+   * use (a link for an unlinked customer, a trial they are not eligible for), or a button with no
+   * bot to open. Nothing is attached; regenerated once, then a soft handoff
+   * (`INSUFFICIENT_GROUNDING`).
+   */
+  'tool_scope',
+  /**
+   * More than `SUPPORT_AI_TOOL_CALL_LIMIT` tool calls in one epoch: tools stop, a soft handoff
+   * (`SUSPICIOUS_PROBING`) and `support.ai.suspicious_probing` with the customer's code only.
+   */
+  'tool_rate_limit',
 ] as const;
 export type SupportAiAutoGuard = (typeof SUPPORT_AI_AUTO_GUARDS)[number];
 
@@ -1122,6 +1308,39 @@ export const SUPPORT_AI_AUTO_OUTCOMES = [
    * stays `AI_ACTIVE` and the customer's next message is answered as usual.
    */
   'no_action',
+  // --- Phase 4 PR-1 (2026-11-01).
+  'guard_output_policy',
+  'guard_refusal_abuse',
+  /**
+   * An UNLINKED customer asked about an account topic: instead of a handoff, ONE templated
+   * message with the bot's start link (`bot.support.ai_link_account`) was enqueued.
+   */
+  'sent_link',
+  // --- Phase 4 PR-3 (2026-11-01).
+  'guard_tool_scope',
+  'guard_tool_rate_limit',
+  /**
+   * Check-before-handoff («paid but not received»): the customer's payment is CONFIRMED and its
+   * service delivered — that service's link (or files button) was sent with «مشکل حل شد؟». No
+   * handoff yet: a confirmation closes the matter, anything else hands off, HARD.
+   */
+  'sent_payment_delivered',
+  /**
+   * Check-before-handoff: no matching payment was found — ONE message asked for the receipt, the
+   * tracking code or the amount and time. The customer's next message hands off, HARD, with it.
+   */
+  'sent_payment_ask',
+  /**
+   * Check-before-handoff: the facts NEXA read (a payment under review or waiting for the gateway,
+   * confirmed without a delivered service, or an unlinked customer) were told in ONE message and
+   * the conversation handed off, HARD, with a Persian summary for the person.
+   */
+  'handoff_payment_checked',
+  /**
+   * A voice message, a sticker or a non-image file: ONE templated message asking the customer to
+   * type the question. The conversation stays with the AI (no handoff).
+   */
+  'sent_unsupported_content',
 ] as const;
 export type SupportAiAutoOutcome = (typeof SUPPORT_AI_AUTO_OUTCOMES)[number];
 
@@ -1151,3 +1370,224 @@ export const SUPPORT_ASSISTANT_STALLED_CODE = 'support.assistant.stalled';
 export const SUPPORT_ASSISTANT_RUNNING_CODE = 'support.assistant.running';
 /** How long due AI work may wait unclaimed before the worker raises the condition. */
 export const SUPPORT_ASSISTANT_STALL_SECONDS = 120;
+
+// ---------------------------------------------------------------------------
+// Phase 4 PR-1 (2026-11-01) — operational-event codes. A CODE IS SCHEMA: named once, here.
+// ---------------------------------------------------------------------------
+
+/**
+ * A provider refused the REQUEST itself (HTTP 400/404/422: a model id, an unsupported
+ * parameter or capability). The chain falls back to the next provider; one condition per
+ * tenant and provider, closed by `…config_valid` when that provider answers again.
+ */
+export const SUPPORT_AI_CONFIG_INVALID_CODE = 'support.ai_provider.config_invalid';
+export const SUPPORT_AI_CONFIG_VALID_CODE = 'support.ai_provider.config_valid';
+/**
+ * Soft handoffs exceed `support.ai.handoff_alert_pct` of the last
+ * `SUPPORT_AI_HANDOFF_RATE_WINDOW` automatic jobs; at most once per
+ * `SUPPORT_AI_HANDOFF_RATE_ALERT_HOURS` (one row per window of that length), with the top
+ * three reasons.
+ */
+export const SUPPORT_AI_HANDOFF_RATE_HIGH_CODE = 'support.ai.handoff_rate_high';
+export const SUPPORT_AI_HANDOFF_RATE_WINDOW = 50;
+export const SUPPORT_AI_HANDOFF_RATE_ALERT_HOURS = 6;
+/**
+ * Phase 4 PR-1 — the provider chain is walked at most this many times for one automatic job:
+ * the answer, and ONE regeneration after the output validator refused it or it repeated
+ * earlier advice. The assistant's lease and liveness bounds are derived from it.
+ */
+export const SUPPORT_AI_GENERATIONS_PER_JOB = 2;
+/** One automatic job threw while it was produced: its lease was released for one retry. */
+export const SUPPORT_AI_JOB_EXCEPTION_CODE = 'support.ai.job_exception';
+/** A thrown job is retried this long after the throw, once. */
+export const SUPPORT_AI_JOB_RETRY_DELAY_MS = 15_000;
+/** Repeated refusals in one epoch (`SUPPORT_AI_REFUSAL_LIMIT`); the customer's code only. */
+export const SUPPORT_AI_SUSPICIOUS_PROBING_CODE = 'support.ai.suspicious_probing';
+
+/** Phase 4 PR-1 — the deep-link message an unlinked customer gets for an account topic. */
+export const SUPPORT_AI_LINK_ACCOUNT_TEMPLATE_KEY = 'bot.support.ai_link_account';
+
+// ---------------------------------------------------------------------------
+// Phase 4 PR-3 (2026-11-01) — read-only tools, deep links, check-before-handoff.
+// ---------------------------------------------------------------------------
+
+/**
+ * More than this many tool calls (`action` other than `NONE`, a payment check included) in ONE
+ * control epoch stop the tools: a soft handoff (`SUSPICIOUS_PROBING`) and the operations log's
+ * `support.ai.suspicious_probing` with the customer's code only, never a word of what was asked.
+ */
+export const SUPPORT_AI_TOOL_CALL_LIMIT = 6;
+/**
+ * One subscription link (or files button) the support AI sent a customer: the operations log
+ * names the service by its panel username (the ops-log rule) and the customer by its code.
+ */
+export const SUPPORT_AI_LINK_SENT_CODE = 'support.ai.subscription_link_sent';
+/**
+ * The payments check-before-handoff reads: this customer's, created this many days back at most
+ * (the account-review window). A pending check (a link sent, or the one question asked) lasts
+ * one session (`SUPPORT_AI_SESSION_INACTIVITY_SECONDS`).
+ */
+export const SUPPORT_AI_PAYMENT_CHECK_WINDOW_DAYS = 14;
+
+/** The customer-facing template keys of PR-3 (each Persian, in the catalogue). */
+export const SUPPORT_AI_TEMPLATE_KEYS = {
+  subscriptionLink: 'bot.support.ai_subscription_link',
+  filesInBot: 'bot.support.ai_files_in_bot',
+  paymentStatusLine: 'bot.support.ai_payment_status_line',
+  paymentStatusNone: 'bot.support.ai_payment_status_none',
+  paymentUnderReview: 'bot.support.ai_payment_under_review',
+  paymentDelivered: 'bot.support.ai_payment_delivered',
+  paymentSettledPending: 'bot.support.ai_payment_settled_pending',
+  paymentNotFound: 'bot.support.ai_payment_not_found',
+  paymentUnlinked: 'bot.support.ai_payment_unlinked',
+  unsupportedContent: 'bot.support.ai_unsupported_content',
+  label: 'bot.support.ai_label',
+  feedbackQuestion: 'bot.support.ai_feedback_question',
+  feedbackThanks: 'bot.support.ai_feedback_thanks',
+  feedbackHandoff: 'bot.support.ai_feedback_handoff',
+  humanRequested: 'bot.support.ai_human_requested',
+  callbackStale: 'bot.support.ai_callback_stale',
+  buttonHuman: 'bot.support.ai_button_human',
+  buttonYes: 'bot.support.ai_button_yes',
+  buttonNo: 'bot.support.ai_button_no',
+  buttonBuy: 'bot.support.ai_button_buy',
+  buttonRenew: 'bot.support.ai_button_renew',
+  buttonAddTraffic: 'bot.support.ai_button_add_traffic',
+  buttonAddTime: 'bot.support.ai_button_add_time',
+  buttonChangeLocation: 'bot.support.ai_button_change_location',
+  buttonTrial: 'bot.support.ai_button_trial',
+  buttonRotate: 'bot.support.ai_button_rotate',
+  buttonTopup: 'bot.support.ai_button_topup',
+  buttonServiceInBot: 'bot.support.ai_button_service_in_bot',
+  buttonOpenBot: 'bot.support.ai_button_open_bot',
+} as const;
+
+/**
+ * The bot flows a support-AI deep link opens, each an EXISTING flow of the bot (its own
+ * intent), reached by `https://t.me/<bot>?start=<payload>`. The payload names the flow and, for
+ * a service or a category, its id: the bot decides ownership, availability and every rule again
+ * when the customer taps, exactly as for its own buttons. Nothing is done by opening one except
+ * showing that flow's first screen (the trial's link opens the main menu).
+ */
+export const SUPPORT_AI_DEEP_LINK_FLOWS = {
+  /** The catalogue (`CATALOG`). */
+  buy: 'b',
+  /** A category's plans (`REORDER_CATEGORY`), id required. */
+  category: 'c',
+  /** The service's renewal menu (`SERVICE_RENEW`). */
+  renew: 'rn',
+  /** Traffic packages (`SERVICE_ADD_TRAFFIC`). */
+  addTraffic: 'at',
+  /** Time packages (`SERVICE_ADD_TIME`). */
+  addTime: 'am',
+  /** The location choice (`SERVICE_CHANGE_LOCATION`). */
+  changeLocation: 'lc',
+  /** The rotation's confirmation question (`SERVICE_ROTATE_ASK`) — the bot asks before acting. */
+  rotate: 'ro',
+  /** The service card (`SERVICE`), where «📄 فایل‌ها» sends a «فقط فایل» panel's files. */
+  service: 'sv',
+  /**
+   * The main menu (`MAIN_MENU`), where the customer taps the bot's own trial button: opening the
+   * link claims nothing (review of PR #369).
+   */
+  trial: 't',
+  /** The wallet top-up (`TOPUP_MENU`). */
+  topup: 'w',
+} as const;
+export type SupportAiDeepLinkFlow = keyof typeof SUPPORT_AI_DEEP_LINK_FLOWS;
+const DEEP_LINK_PREFIX = 'sai-';
+const DEEP_LINK_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const FLOWS_WITH_ID: readonly SupportAiDeepLinkFlow[] = [
+  'category',
+  'renew',
+  'addTraffic',
+  'addTime',
+  'changeLocation',
+  'rotate',
+  'service',
+];
+
+/**
+ * The `/start` payload of a deep link: `sai-<flow>` or `sai-<flow>-<uuid>` — at most 43
+ * characters of `[A-Za-z0-9_-]`, inside Telegram's 64. Throws on a flow that needs an id and
+ * has none (or the reverse), or an id that is not a lower-case UUID: a payload is never built
+ * from anything but a row id the server resolved.
+ */
+export function supportAiStartPayload(flow: SupportAiDeepLinkFlow, id: string | null): string {
+  const needsId = FLOWS_WITH_ID.includes(flow);
+  if (needsId !== (id !== null) || (id !== null && !DEEP_LINK_ID.test(id))) {
+    throw new Error(`support AI deep link ${flow}: bad id`);
+  }
+  const code = SUPPORT_AI_DEEP_LINK_FLOWS[flow];
+  return id === null ? `${DEEP_LINK_PREFIX}${code}` : `${DEEP_LINK_PREFIX}${code}-${id}`;
+}
+
+/** The flow and id a `/start` payload names, or null when it is not a support-AI deep link. */
+export function parseSupportAiStartPayload(
+  payload: string | null,
+): { readonly flow: SupportAiDeepLinkFlow; readonly id: string | null } | null {
+  if (payload === null || !payload.startsWith(DEEP_LINK_PREFIX)) return null;
+  const rest = payload.slice(DEEP_LINK_PREFIX.length);
+  const dash = rest.indexOf('-');
+  const code = dash === -1 ? rest : rest.slice(0, dash);
+  const id = dash === -1 ? null : rest.slice(dash + 1);
+  const flow = (Object.keys(SUPPORT_AI_DEEP_LINK_FLOWS) as SupportAiDeepLinkFlow[]).find(
+    (key) => SUPPORT_AI_DEEP_LINK_FLOWS[key] === code,
+  );
+  if (flow === undefined) return null;
+  if (FLOWS_WITH_ID.includes(flow) !== (id !== null)) return null;
+  if (id !== null && !DEEP_LINK_ID.test(id)) return null;
+  return { flow, id };
+}
+
+/**
+ * The callback data of the support AI's own buttons on a Business message: `sai:<a>:<row id>`,
+ * the row id of the outbound message the button sits on. NOT an authority: the handler accepts
+ * a tap only when the row's conversation is the chat the tap came from, on the same connection,
+ * from that chat's customer, on that very message (`SupportAiCallbackService`), so data forged
+ * for another chat's row is refused.
+ */
+export const SUPPORT_AI_CALLBACK_ACTIONS = { human: 'h', yes: 'y', no: 'n' } as const;
+export type SupportAiCallbackAction = keyof typeof SUPPORT_AI_CALLBACK_ACTIONS;
+export function supportAiCallbackData(action: SupportAiCallbackAction, rowId: string): string {
+  if (!DEEP_LINK_ID.test(rowId)) throw new Error('support AI callback: bad row id');
+  return `sai:${SUPPORT_AI_CALLBACK_ACTIONS[action]}:${rowId}`;
+}
+export function parseSupportAiCallbackData(
+  data: string | null,
+): { readonly action: SupportAiCallbackAction; readonly rowId: string } | null {
+  if (data === null) return null;
+  const match = /^sai:([a-z]):([0-9a-f-]{36})$/u.exec(data);
+  if (match === null) return null;
+  const action = (Object.keys(SUPPORT_AI_CALLBACK_ACTIONS) as SupportAiCallbackAction[]).find(
+    (key) => SUPPORT_AI_CALLBACK_ACTIONS[key] === match[1],
+  );
+  const rowId = match[2] ?? '';
+  if (action === undefined || !DEEP_LINK_ID.test(rowId)) return null;
+  return { action, rowId };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4 PR-4 (2026-11-01) — the support AI inside bot and Mini App tickets.
+// ---------------------------------------------------------------------------
+
+/**
+ * A ticket job's life: `QUEUED` until the assistant produces it, `DONE` once it came to an
+ * outcome (the outcome is `SUPPORT_AI_AUTO_OUTCOMES`, the same closed set a Business job uses).
+ */
+export const SUPPORT_AI_TICKET_JOB_STATES = ['QUEUED', 'DONE'] as const;
+export type SupportAiTicketJobState = (typeof SUPPORT_AI_TICKET_JOB_STATES)[number];
+
+/**
+ * Who holds a ticket's AI answers, with the SAME names a Business conversation uses so the one
+ * resume rule (`autoResumeTrigger`) reads both: `AI_ACTIVE` — the AI answers; `HANDOFF_REQUIRED`
+ * — the AI handed the ticket to a person; `HUMAN_ACTIVE` — a person replied. A ticket with no
+ * row is `AI_ACTIVE`. A SOFT hold ends after `support.ai.resume_after_minutes` without a person;
+ * a HARD one only when an operator returns the ticket (never from a ticket's own message).
+ */
+export const SUPPORT_AI_TICKET_HOLD_STATES = [
+  'AI_ACTIVE',
+  'HANDOFF_REQUIRED',
+  'HUMAN_ACTIVE',
+] as const;
+export type SupportAiTicketHoldState = (typeof SUPPORT_AI_TICKET_HOLD_STATES)[number];

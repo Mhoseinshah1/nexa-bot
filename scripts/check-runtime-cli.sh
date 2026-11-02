@@ -39,6 +39,8 @@ ENTRYPOINTS=(
   "apps/api/dist/legacy-import.cli.js"
   # Gate G6: the read-only RickPanel probe runs from the runtime image on staging.
   "apps/api/dist/rickpanel-probe.cli.js"
+  # Round 11 A2: `botctl cutover rehearse` runs it from the runtime image on the test server.
+  "apps/api/dist/cutover-rehearse.cli.js"
 )
 
 # 1. The compiled entrypoints exist.
@@ -63,6 +65,7 @@ node --input-type=module -e "
   const reset2fa = await import('./apps/api/dist/admin-2fa-reset.cli.js');
   const legacyImport = await import('./apps/api/dist/legacy-import.cli.js');
   const probe = await import('./apps/api/dist/rickpanel-probe.cli.js');
+  const rehearse = await import('./apps/api/dist/cutover-rehearse.cli.js');
 
   const problems = [];
   if (typeof migrate.runMigrations !== 'function') problems.push('migrate.runMigrations');
@@ -83,6 +86,8 @@ node --input-type=module -e "
   if (typeof legacyImport.parseArgs !== 'function') problems.push('legacyImport.parseArgs');
   if (typeof legacyImport.guardTarget !== 'function') problems.push('legacyImport.guardTarget');
   if (typeof probe.parseProbeArgs !== 'function') problems.push('probe.parseProbeArgs');
+  if (typeof rehearse.parseRehearseArgs !== 'function') problems.push('rehearse.parseRehearseArgs');
+  if (typeof rehearse.rehearsalTarget !== 'function') problems.push('rehearse.rehearsalTarget');
 
   // The migrations have to be reachable FROM DIST. The folder is resolved
   // relative to the module, so a compiled layout that nests one level deeper

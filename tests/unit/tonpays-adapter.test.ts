@@ -19,6 +19,7 @@ import {
   inquiryBackoffMs,
   tomanAmountOf,
   tonpaysOrderId,
+  tonpaysInquiryVerdict,
   tonpaysVerdict,
   TONPAYS_ORDER_ID_RANDOM_BYTES,
 } from '../../apps/api/src/modules/commerce/payments/domain/tonpays';
@@ -546,6 +547,56 @@ describe('the TonPays inquiry', () => {
     }
   });
 
+  it('R12 F1: an approval whose request_amount is not what Nexa sent is a MISMATCH, never an approval', async () => {
+    const context = { providerOrderId: 'NX1', sentAmount: 250_000n, hintedPaymentId: null };
+    const answer = (requestAmount: unknown) =>
+      fakeFetch(() =>
+        json(200, {
+          invoice_id: 'TP-ABC123XYZ0',
+          order_id: 'NX1',
+          ...(requestAmount === undefined ? {} : { request_amount: requestAmount }),
+          // Metadata: a unique transfer figure; never compared.
+          final_amount: 250_037,
+          status: 'completed',
+          paid: true,
+        }),
+      ).fetch;
+    const ask = (requestAmount: unknown) =>
+      new TonPaysAdapter({ fetch: answer(requestAmount) }).inquire(
+        API_KEY,
+        'TP-ABC123XYZ0',
+        context,
+      );
+    // The figure Nexa sent, or no echo at all: approved.
+    expect(await ask(250_000)).toMatchObject({ verdict: 'APPROVED', requestAmount: 250_000n });
+    expect(await ask('250000')).toMatchObject({ verdict: 'APPROVED' });
+    expect(await ask(undefined)).toMatchObject({ verdict: 'APPROVED', requestAmount: null });
+    expect((await ask(250_000)) as { mismatchReason?: unknown }).not.toHaveProperty(
+      'mismatchReason',
+    );
+    // Any other figure, high or low: held, with its reason.
+    for (const other of [250_001, 249_999, 1, 0, 2_500_000]) {
+      expect(await ask(other), String(other)).toMatchObject({
+        kind: 'OBSERVED',
+        verdict: 'MISMATCH',
+        mismatchReason: 'PROVIDER_AMOUNT_MISMATCH',
+      });
+    }
+    // A differing echo on an answer that approves nothing changes nothing.
+    const pending = fakeFetch(() =>
+      json(200, {
+        invoice_id: 'TP-ABC123XYZ0',
+        order_id: 'NX1',
+        request_amount: 1,
+        status: 'pending',
+        paid: false,
+      }),
+    ).fetch;
+    expect(
+      await new TonPaysAdapter({ fetch: pending }).inquire(API_KEY, 'TP-ABC123XYZ0', context),
+    ).toMatchObject({ verdict: 'OPEN' });
+  });
+
   it('keeps INVOICE_NOT_FOUND, a rate limit and a configuration error apart, none of them a verdict', async () => {
     expect(
       (await inquire({ detail: { code: 'INVOICE_NOT_FOUND', message: 'x' } }, 404)).outcome,
@@ -629,6 +680,25 @@ describe('the TonPays rules', () => {
     // `paid: true` does not approve anything but `completed`, and an unknown status is open.
     expect(tonpaysVerdict('pending', true)).toBe('OPEN');
     expect(tonpaysVerdict('refunded', true)).toBe('OPEN');
+  });
+
+  it('R12 F1: tonpaysInquiryVerdict compares the request echo with what Nexa sent, and only for an approval', () => {
+    const judge = (requestAmount: bigint | null, sentAmount: bigint | null, status = 'completed') =>
+      tonpaysInquiryVerdict({ status, paid: true, requestAmount, sentAmount });
+    expect(judge(500n, 500n)).toEqual({ verdict: 'APPROVED', mismatchReason: null });
+    expect(judge(null, 500n)).toEqual({ verdict: 'APPROVED', mismatchReason: null });
+    // No attempt context: the status decides, as before.
+    expect(judge(1n, null)).toEqual({ verdict: 'APPROVED', mismatchReason: null });
+    expect(judge(501n, 500n)).toEqual({
+      verdict: 'MISMATCH',
+      mismatchReason: 'PROVIDER_AMOUNT_MISMATCH',
+    });
+    expect(judge(499n, 500n)).toEqual({
+      verdict: 'MISMATCH',
+      mismatchReason: 'PROVIDER_AMOUNT_MISMATCH',
+    });
+    expect(judge(1n, 500n, 'rejected')).toEqual({ verdict: 'UNSUCCESSFUL', mismatchReason: null });
+    expect(judge(1n, 500n, 'pending')).toEqual({ verdict: 'OPEN', mismatchReason: null });
   });
 
   it('makes a 20-character order id from random bytes, never from anything else', () => {

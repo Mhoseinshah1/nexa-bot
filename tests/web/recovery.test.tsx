@@ -435,13 +435,13 @@ describe('the recovery page', () => {
       fireEvent.change(within(dialog).getByLabelText('رمز ورود حساب شما'), {
         target: { value: 'my-account-password' },
       });
-      fireEvent.change(screen.getByLabelText('رمز کیت (دست‌کم ۱۲ نویسه)'), {
+      fireEvent.change(screen.getByLabelText('رمز کیت (دست‌کم 12 نویسه)'), {
         target: { value: 'short' },
       });
       expect(
-        await screen.findByText('رمز کیت باید دست‌کم ۱۲ نویسه باشد و با فاصله شروع یا تمام نشود.'),
+        await screen.findByText('رمز کیت باید دست‌کم 12 نویسه باشد و با فاصله شروع یا تمام نشود.'),
       ).toBeInTheDocument();
-      fireEvent.change(screen.getByLabelText('رمز کیت (دست‌کم ۱۲ نویسه)'), {
+      fireEvent.change(screen.getByLabelText('رمز کیت (دست‌کم 12 نویسه)'), {
         target: { value: 'a long enough passphrase' },
       });
       fireEvent.change(screen.getByLabelText('تکرار رمز کیت'), {

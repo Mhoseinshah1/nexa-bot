@@ -273,6 +273,30 @@ export class DrizzleGatewayProviderRequestRepository implements GatewayProviderR
     return rows.length > 0;
   }
 
+  async requeueUnsentCancel(
+    scope: TenantContext,
+    id: string,
+    sentAt: Date,
+    notBefore: Date,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(gatewayProviderRequests)
+      .set({ state: 'REQUESTED', sentAt: null, claimedUntil: notBefore })
+      .where(
+        and(
+          eq(gatewayProviderRequests.tenantId, tenantId),
+          eq(gatewayProviderRequests.id, id),
+          eq(gatewayProviderRequests.kind, 'CANCEL'),
+          eq(gatewayProviderRequests.state, 'SENT'),
+          eq(gatewayProviderRequests.sentAt, sentAt),
+        ),
+      )
+      .returning({ id: gatewayProviderRequests.id });
+    return rows.length > 0;
+  }
+
   async decide(
     scope: TenantContext,
     id: string,

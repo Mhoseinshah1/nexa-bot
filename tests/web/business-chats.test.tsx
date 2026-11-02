@@ -444,6 +444,17 @@ describe('one business conversation', () => {
     expect(screen.queryByLabelText(t('web.bchat_reply_text'))).toBeNull();
   });
 
+  it('Phase 4 PR-1: a SOFT person hold can be taken over (made sticky); a HARD one cannot', async () => {
+    page({ state: 'HUMAN_ACTIVE', handoffReason: null, handoffKind: 'SOFT' });
+    expect(await screen.findByRole('button', { name: t('web.bchat_takeover') })).toBeTruthy();
+  });
+
+  it('Phase 4 PR-1: no takeover button on a sticky (HARD) human hold', async () => {
+    page({ state: 'HUMAN_ACTIVE', handoffReason: null, handoffKind: 'HARD' });
+    await screen.findByRole('button', { name: t('web.bchat_resume') });
+    expect(screen.queryByRole('button', { name: t('web.bchat_takeover') })).toBeNull();
+  });
+
   it('takes the conversation over through its own route, with an idempotency key', async () => {
     const api = page();
     fireEvent.click(await screen.findByRole('button', { name: t('web.bchat_takeover') }));

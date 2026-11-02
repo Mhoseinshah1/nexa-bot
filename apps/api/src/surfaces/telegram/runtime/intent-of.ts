@@ -13,8 +13,10 @@ import {
   clientAppPlatformSchema,
   customMenuIdOfRoute,
   normalizeReceiptCaption,
+  parseSupportAiStartPayload,
   paymentGatewayProviderSchema,
   uuidV7Schema,
+  type SupportAiDeepLinkFlow,
 } from '@nexa/contracts';
 import type { InboundReceiptFile } from '../../../modules/commerce/payments/application/receipt-ports.js';
 import { paymentIdOfTetrapayStart } from '../../../modules/commerce/payments/domain/tetrapay.js';
@@ -88,6 +90,10 @@ import {
   ADMIN_USERNAME_TOGGLE_CALLBACK_PREFIX,
   CANCEL_ORDER_ASK_CALLBACK_PREFIX,
   CANCEL_ORDER_CALLBACK_PREFIX,
+  CUSTOM_SERVICE_BACK_CALLBACK_DATA,
+  INPUT_BACK_CALLBACK_PREFIX,
+  INPUT_CANCEL_CALLBACK_DATA,
+  ORDER_PAYMENT_STATUS_CALLBACK_PREFIX,
   CANCEL_PAY_ASK_CALLBACK_PREFIX,
   CANCEL_PAY_CALLBACK_PREFIX,
   CATALOG_OPEN_CALLBACK_DATA,
@@ -113,6 +119,7 @@ import {
   MARKETING_OPT_OUT_CALLBACK_DATA,
   MEMBERSHIP_CHECK_CALLBACK_DATA,
   ORDER_CALLBACK_PREFIX,
+  REORDER_CATEGORY_CALLBACK_PREFIX,
   PAY_METHODS_CALLBACK_PREFIX,
   PAY_METHODS_CLOSE_CALLBACK_PREFIX,
   PAY_SENT_CALLBACK_PREFIX,
@@ -175,6 +182,7 @@ import {
   TUTORIAL_PLATFORM_CALLBACK_PREFIX,
   USERNAME_AUTOMATIC_CALLBACK_PREFIX,
   USERNAME_CUSTOM_CALLBACK_PREFIX,
+  WALLET_HISTORY_CALLBACK_PREFIX,
   WALLET_OPEN_CALLBACK_DATA,
   WALLET_PAY_CALLBACK_PREFIX,
   decodeAutoRenewConfirm,
@@ -319,6 +327,36 @@ export function startPayloadOf(update: unknown): string | null {
 }
 
 /**
+ * Phase 4 PR-3 — the bot intent a support-AI deep link opens: an EXISTING intent each, with the
+ * id the link carries as its target. Null when the payload is not one (an ordinary `/start`, a
+ * referral code, anything malformed): the customer gets the start screen as before.
+ */
+const SUPPORT_AI_DEEP_LINK_INTENTS: Readonly<Record<SupportAiDeepLinkFlow, BotIntent>> = {
+  buy: 'CATALOG',
+  category: 'REORDER_CATEGORY',
+  renew: 'SERVICE_RENEW',
+  addTraffic: 'SERVICE_ADD_TRAFFIC',
+  addTime: 'SERVICE_ADD_TIME',
+  changeLocation: 'SERVICE_CHANGE_LOCATION',
+  rotate: 'SERVICE_ROTATE_ASK',
+  service: 'SERVICE',
+  // Review of PR #369 (D12): the main menu, NOT `TRIAL_CLAIM` — opening a link must never
+  // provision a service; the customer taps the menu's own trial button to claim one.
+  trial: 'MAIN_MENU',
+  topup: 'TOPUP_MENU',
+};
+
+export function supportAiStartCommandOf(payload: string | null): BotCommand | null {
+  const link = parseSupportAiStartPayload(payload);
+  if (link === null) return null;
+  return {
+    intent: SUPPORT_AI_DEEP_LINK_INTENTS[link.flow],
+    targetId: link.id,
+    callbackQueryId: null,
+  };
+}
+
+/**
  * The update's Telegram `update_id`, which increases per bot (WP19). A refund-request prompt
  * reads only messages newer than the tap that opened it, so a redelivered older message can
  * never become its amount or reason. Undefined when absent or not a non-negative integer.
@@ -389,6 +427,11 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
       if (page === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
       return { intent: 'CATALOG_PAGE', targetId: null, page, callbackQueryId: id };
     }
+    if (data.startsWith(REORDER_CATEGORY_CALLBACK_PREFIX)) {
+      const category = uuidV7Schema.safeParse(data.slice(REORDER_CATEGORY_CALLBACK_PREFIX.length));
+      if (!category.success) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      return { intent: 'REORDER_CATEGORY', targetId: category.data, callbackQueryId: id };
+    }
     if (data.startsWith(CATEGORY_CALLBACK_PREFIX)) {
       const [rawId, rawPage, ...rest] = data.slice(CATEGORY_CALLBACK_PREFIX.length).split('.');
       const page = rawPage === undefined ? null : parseCatalogPage(rawPage);
@@ -411,6 +454,33 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     }
     if (data === MAIN_MENU_CALLBACK_DATA) {
       return { intent: 'MAIN_MENU', targetId: null, callbackQueryId: id };
+    }
+    // R12 F3 item 2: the buttons under a typed-input prompt.
+    if (data === INPUT_CANCEL_CALLBACK_DATA) {
+      return { intent: 'INPUT_CANCEL', targetId: null, callbackQueryId: id };
+    }
+    if (data === CUSTOM_SERVICE_BACK_CALLBACK_DATA) {
+      return { intent: 'CUSTOM_SERVICE_BACK', targetId: null, callbackQueryId: id };
+    }
+    if (data.startsWith(ORDER_PAYMENT_STATUS_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'ORDER_PAYMENT_STATUS',
+        data.slice(ORDER_PAYMENT_STATUS_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(INPUT_BACK_CALLBACK_PREFIX)) {
+      return callbackCommand('INPUT_BACK', data.slice(INPUT_BACK_CALLBACK_PREFIX.length), id);
+    }
+    // R12 F3 item 7: the wallet history, its newest page or the page after a keyset token.
+    if (data.startsWith(WALLET_HISTORY_CALLBACK_PREFIX)) {
+      const token = data.slice(WALLET_HISTORY_CALLBACK_PREFIX.length);
+      if (token === '') {
+        return { intent: 'WALLET_HISTORY', targetId: null, callbackQueryId: id };
+      }
+      const cursor = decodeKeysetToken(token);
+      if (cursor === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      return { intent: 'WALLET_HISTORY', targetId: null, cursor, callbackQueryId: id };
     }
     // Owner spec §2.2: the wallet-credit message's two next actions.
     if (data === WALLET_OPEN_CALLBACK_DATA) {
@@ -1248,6 +1318,14 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     if (returned !== null) {
       return { intent: 'GATEWAY_RETURN', targetId: returned, callbackQueryId: null };
     }
+    /*
+     * Phase 4 PR-3 — a support-AI deep link (`sai-<flow>[-<uuid>]`): the Business chat's button
+     * opens the bot's OWN flow for it, as its own button would. Parsed strictly; the id is only
+     * an identifier — ownership, availability and every rule are decided by that flow's handler
+     * exactly as for a tap, and nothing is done but showing its first screen.
+     */
+    const deepLink = supportAiStartCommandOf(startPayloadOf(update));
+    if (deepLink !== null) return deepLink;
     return { intent: 'START', targetId: null, callbackQueryId: null };
   }
   if (command === '/catalog') return { intent: 'CATALOG', targetId: null, callbackQueryId: null };

@@ -397,6 +397,7 @@ const service = (overrides: Record<string, unknown> = {}) => ({
   working: false,
   actions: [],
   qr: true,
+  qrKinds: ['SUB_LINK'],
   canChangeLocation: true,
   autoRenew: { offered: false, enabled: false, price: null, leadHours: 24 },
   ...overrides,
@@ -418,7 +419,7 @@ describe('the QR and link sheet', () => {
 
   it('draws the server’s QR, copies the link, and closes with Escape', async () => {
     routes['GET /services/s1'] = () => ({ body: service() });
-    routes['GET /services/s1/qr'] = () => ({ body: {} });
+    routes['GET /services/s1/qr/SUB_LINK'] = () => ({ body: {} });
     render(<ServiceDetail serviceId="s1" />);
     fireEvent.click(await screen.findByText(fa('miniapp.service_show_qr')));
     const dialog = await screen.findByRole('dialog', { name: fa('miniapp.service_qr_title') });
@@ -438,10 +439,32 @@ describe('the QR and link sheet', () => {
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:qr');
   });
 
+  it('R11 A4: draws both QRs of a BOTH panel, each under its own caption', async () => {
+    routes['GET /services/s1'] = () => ({ body: service({ qrKinds: ['SUB_LINK', 'SINGBOX'] }) });
+    routes['GET /services/s1/qr/SUB_LINK'] = () => ({ body: {} });
+    routes['GET /services/s1/qr/SINGBOX'] = () => ({ body: {} });
+    render(<ServiceDetail serviceId="s1" />);
+    fireEvent.click(await screen.findByText(fa('miniapp.service_show_qr')));
+    const dialog = await screen.findByRole('dialog', { name: fa('miniapp.service_qr_title') });
+    expect(await within(dialog).findAllByAltText(fa('miniapp.service_qr_alt'))).toHaveLength(2);
+    expect(within(dialog).getByText(fa('miniapp.service_qr_sublink'))).toBeTruthy();
+    expect(within(dialog).getByText(fa('miniapp.service_qr_singbox'))).toBeTruthy();
+  });
+
+  it('a single QR carries no kind caption', async () => {
+    routes['GET /services/s1'] = () => ({ body: service() });
+    routes['GET /services/s1/qr/SUB_LINK'] = () => ({ body: {} });
+    render(<ServiceDetail serviceId="s1" />);
+    fireEvent.click(await screen.findByText(fa('miniapp.service_show_qr')));
+    const dialog = await screen.findByRole('dialog', { name: fa('miniapp.service_qr_title') });
+    expect(await within(dialog).findAllByAltText(fa('miniapp.service_qr_alt'))).toHaveLength(1);
+    expect(within(dialog).queryByText(fa('miniapp.service_qr_sublink'))).toBeNull();
+  });
+
   it('says so when the image cannot be made, and when the clipboard refuses', async () => {
     write.mockRejectedValue(new DOMException('denied', 'NotAllowedError'));
     routes['GET /services/s1'] = () => ({ body: service() });
-    routes['GET /services/s1/qr'] = () => ({ status: 500, body: {} });
+    routes['GET /services/s1/qr/SUB_LINK'] = () => ({ status: 500, body: {} });
     render(<ServiceDetail serviceId="s1" />);
     fireEvent.click(await screen.findByText(fa('miniapp.service_show_qr')));
     const dialog = await screen.findByRole('dialog');
@@ -451,7 +474,9 @@ describe('the QR and link sheet', () => {
   });
 
   it('is not offered when the service has no QR', async () => {
-    routes['GET /services/s1'] = () => ({ body: service({ qr: false, subscriptionUrl: null }) });
+    routes['GET /services/s1'] = () => ({
+      body: service({ qr: false, qrKinds: [], subscriptionUrl: null }),
+    });
     render(<ServiceDetail serviceId="s1" />);
     await screen.findByText('پلن پایه');
     expect(screen.queryByText(fa('miniapp.service_show_qr'))).toBeNull();

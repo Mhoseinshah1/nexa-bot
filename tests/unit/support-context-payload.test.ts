@@ -1,3 +1,4 @@
+import { I18nSupportFactFormatter } from '../../apps/api/src/modules/commerce/support-context/infrastructure/i18n-support-fact-formatter';
 import { describe, expect, it } from 'vitest';
 /** A zod schema seen structurally: the root test project does not resolve `zod` itself. */
 type ZodLike = object;
@@ -64,6 +65,11 @@ function payload(overrides: Partial<SupportContextPayload> = {}): SupportContext
         deviceLimit: 2,
         hasSubscriptionLink: true,
         unreconciled: false,
+        remainingTraffic: '0 گیگابایت',
+        daysLeft: 0,
+        expiresOn: '1405/07/12',
+        usageAge: 'به‌روزشده همین الان',
+        renewalPrice: null,
       },
     ],
     orders: [
@@ -72,7 +78,7 @@ function payload(overrides: Partial<SupportContextPayload> = {}): SupportContext
         state: 'PAID',
         purpose: 'NEW_SERVICE',
         title: 'Plan',
-        total: { amountMinor: '250000', currency: 'IRT' },
+        total: { amountMinor: '250000', currency: 'IRT', formatted: '250,000 تومان' },
         createdAt: NOW.toISOString(),
         settledAt: NOW.toISOString(),
         expiresAt: null,
@@ -81,7 +87,7 @@ function payload(overrides: Partial<SupportContextPayload> = {}): SupportContext
     payments: [
       {
         alias: 'P1',
-        amount: { amountMinor: '250000', currency: 'IRT' },
+        amount: { amountMinor: '250000', currency: 'IRT', formatted: '250,000 تومان' },
         method: 'GATEWAY',
         routeLabelKey: 'bot.payment.route_name_tonpays',
         state: 'UNKNOWN',
@@ -102,6 +108,26 @@ function payload(overrides: Partial<SupportContextPayload> = {}): SupportContext
     ],
     incidents: [{ customerMessage: 'down', startedAt: NOW.toISOString(), scheduledEndAt: null }],
     knowledge: [{ alias: 'K1', source: 'FAQ', question: 'q', answer: 'a' }],
+    catalogue: [
+      {
+        alias: 'C1',
+        title: 'Plan',
+        duration: '30 روز',
+        traffic: '50 گیگابایت',
+        deviceLimit: 2,
+        locations: null,
+        price: { amountMinor: '150000', currency: 'IRT', formatted: '150,000 تومان' },
+        renewalPrice: null,
+        personalDiscountPercent: null,
+      },
+    ],
+    addons: [
+      {
+        kind: 'ADD_TRAFFIC',
+        title: '10 GB',
+        price: { amountMinor: '50000', currency: 'IRT', formatted: '50,000 تومان' },
+      },
+    ],
     supportAccounts: ['@support'],
     flags: {
       hasUnderReviewPayment: true,
@@ -159,6 +185,14 @@ describe('TB3 support context — the payload contract', () => {
         'services[].deviceLimit',
         'services[].hasSubscriptionLink',
         'services[].unreconciled',
+        'services[].remainingTraffic',
+        'services[].daysLeft',
+        'services[].expiresOn',
+        'services[].usageAge',
+        'services[].renewalPrice',
+        'services[].renewalPrice.amountMinor',
+        'services[].renewalPrice.currency',
+        'services[].renewalPrice.formatted',
         'orders',
         'orders[].alias',
         'orders[].state',
@@ -167,6 +201,7 @@ describe('TB3 support context — the payload contract', () => {
         'orders[].total',
         'orders[].total.amountMinor',
         'orders[].total.currency',
+        'orders[].total.formatted',
         'orders[].createdAt',
         'orders[].settledAt',
         'orders[].expiresAt',
@@ -175,6 +210,7 @@ describe('TB3 support context — the payload contract', () => {
         'payments[].amount',
         'payments[].amount.amountMinor',
         'payments[].amount.currency',
+        'payments[].amount.formatted',
         'payments[].method',
         'payments[].routeLabelKey',
         'payments[].state',
@@ -197,6 +233,29 @@ describe('TB3 support context — the payload contract', () => {
         'knowledge[].source',
         'knowledge[].question',
         'knowledge[].answer',
+        'catalogue',
+        'catalogue[].alias',
+        'catalogue[].title',
+        'catalogue[].duration',
+        'catalogue[].traffic',
+        'catalogue[].deviceLimit',
+        'catalogue[].locations',
+        'catalogue[].price',
+        'catalogue[].price.amountMinor',
+        'catalogue[].price.currency',
+        'catalogue[].price.formatted',
+        'catalogue[].renewalPrice',
+        'catalogue[].renewalPrice.amountMinor',
+        'catalogue[].renewalPrice.currency',
+        'catalogue[].renewalPrice.formatted',
+        'catalogue[].personalDiscountPercent',
+        'addons',
+        'addons[].kind',
+        'addons[].title',
+        'addons[].price',
+        'addons[].price.amountMinor',
+        'addons[].price.currency',
+        'addons[].price.formatted',
         'supportAccounts',
         'flags',
         'flags.hasUnderReviewPayment',
@@ -255,7 +314,10 @@ describe('TB3 support context — the payload contract', () => {
       'incidents[].description',
       (p) => ({ ...p, incidents: [{ ...p.incidents[0], description: 'x' }] }),
     ],
-    ['walletBalance', (p) => ({ ...p, walletBalance: { amountMinor: '1', currency: 'IRT' } })],
+    [
+      'walletBalance',
+      (p) => ({ ...p, walletBalance: { amountMinor: '1', currency: 'IRT', formatted: '1 تومان' } }),
+    ],
     ['ledger', (p) => ({ ...p, ledger: [] })],
     ['flags.extra', (p) => ({ ...p, flags: { ...p.flags, isAdmin: true } })],
   ];
@@ -329,7 +391,9 @@ describe('TB3 support context — pure helpers', () => {
   it('truncation drops whole entries from the tail, family by family, in the documented order', () => {
     expect([...SUPPORT_CONTEXT_TRUNCATION_ORDER]).toEqual([
       'clientApps',
+      'addons',
       'knowledge',
+      'catalogue',
       'orders',
       'payments',
       'services',
@@ -340,14 +404,17 @@ describe('TB3 support context — pure helpers', () => {
         alias: `K${String(i + 1)}`,
         source: 'FAQ' as const,
         question: `q${String(i)}`,
-        answer: 'ا'.repeat(2000), // 4000 UTF-8 bytes each
+        answer: 'ا'.repeat(4000), // 8000 UTF-8 bytes each (Phase 4 PR-2: the budget is 44 KiB)
       })),
     });
     expect(payloadBytes(big)).toBeGreaterThan(SUPPORT_CONTEXT_MAX_BYTES);
     const fitted = fitPayload(big);
     expect(payloadBytes(fitted)).toBeLessThanOrEqual(SUPPORT_CONTEXT_MAX_BYTES);
-    // The client apps gave way first, then knowledge, from the tail: the first entries survive.
+    // The client apps gave way first, then the packages, then knowledge, from the tail: the
+    // first entries survive, and the catalogue is untouched.
     expect(fitted.clientApps).toEqual([]);
+    expect(fitted.addons).toEqual([]);
+    expect(fitted.catalogue).toEqual(big.catalogue);
     expect(fitted.knowledge.length).toBeGreaterThan(0);
     expect(fitted.knowledge.length).toBeLessThan(SUPPORT_CONTEXT_LIMITS.knowledge);
     expect(fitted.knowledge[0]?.question).toBe('q0');
@@ -456,6 +523,7 @@ describe('TB3 support context — the builder over fakes', () => {
       faqs: { list: async () => [] },
       knowledge: { activeForContext: async () => [] },
       settings: { valueOf: async <T>() => ['@support'] as unknown as T },
+      format: new I18nSupportFactFormatter(),
       clock,
       ...overrides,
     };
@@ -468,10 +536,13 @@ describe('TB3 support context — the builder over fakes', () => {
     expect(built.references.services.get('S2')).toBe('svc-b');
     expect(built.payload.flags).toEqual({
       hasUnderReviewPayment: true,
-      hasUnreconciledService: true,
+      // Phase 4 PR-1: the flag is the reader's RECENT unreconciled service (none here); the
+      // unreconciled service on the page is judged by its own entry when a reply cites it.
+      hasUnreconciledService: false,
       identityLinked: true,
       customerBlocked: false,
     });
+    expect(built.payload.services.some((service) => service.unreconciled)).toBe(true);
     expect(built.payload.clientApps[0]?.guide.length).toBeLessThanOrEqual(1500);
     const json = JSON.stringify(built.payload);
     for (const secret of [

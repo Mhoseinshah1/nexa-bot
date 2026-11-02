@@ -119,6 +119,7 @@ const INLINE_BUTTON_SUGGESTED_STYLES: Readonly<
   'payment.centralpay_open': 'success',
   'service.renew_option': 'success',
   'service.rotate_confirm': 'success',
+  'service.files_new_confirm': 'success',
   'service.location_confirm': 'success',
   'service.resume_confirm': 'success',
   'service.transfer_confirm': 'success',
@@ -157,6 +158,8 @@ export const INLINE_BUTTONS = [
   // Wallet
   button('wallet.open', 'WALLET', 'bot.wallet.open_button'),
   button('wallet.topup', 'WALLET', 'bot.wallet.topup_button'),
+  // R12 F3: «📜 تراکنش‌ها» under the balance.
+  button('wallet.history', 'WALLET', 'bot.wallet.history_button'),
   button('wallet.topup_amount', 'WALLET', null),
   // R10 D4: «🎁 کارت هدیه» under the balance, while the gift_cards feature is on.
   button('wallet.gift_card', 'WALLET', 'bot.wallet.gift_card_button'),
@@ -179,6 +182,15 @@ export const INLINE_BUTTONS = [
   button('discount.remove', 'PURCHASE', 'bot.discount.remove_button'),
   button('order.cancel', 'PURCHASE', 'bot.order.cancel_button'),
   button('order.cancel_confirm', 'PURCHASE', 'bot.order.cancel_confirm_button'),
+  // R11 A11: under an expired or cancelled order's edited payment message.
+  button('order.reorder', 'PURCHASE', 'bot.order.reorder_button'),
+  button('order.main_menu', 'PURCHASE', 'bot.order.main_menu_button'),
+  // R12 F3: the status button of `bot.order.payment_in_review`, and the back / cancel pair under
+  // a typed-input prompt (also «بازگشت به پیش‌فاکتور» under the wallet shortfall).
+  button('order.payment_status', 'PURCHASE', 'bot.order.payment_status_button'),
+  button('order.input_back', 'PURCHASE', 'bot.order.input_back_button'),
+  button('order.input_cancel', 'PURCHASE', 'bot.order.input_cancel_button'),
+  button('custom_service.back', 'PURCHASE', 'bot.custom_service.back_button'),
 
   // Payment
   button('payment.wallet', 'PAYMENT', 'bot.payment.wallet_button'),
@@ -196,6 +208,8 @@ export const INLINE_BUTTONS = [
     'COPY',
   ),
   button('payment.sent', 'PAYMENT', 'bot.payment.sent_button'),
+  // R12 F3: under a rejected or expired payment's notice.
+  button('payment.retry', 'PAYMENT', 'bot.payment.retry_button'),
   button('payment.cancel', 'PAYMENT', 'bot.payment.cancel_button'),
   button('payment.cancel_confirm', 'PAYMENT', 'bot.payment.cancel_confirm_button'),
   button('payment.gateway_pay', 'PAYMENT', 'bot.payment.gateway_pay_button', 'URL'),
@@ -248,6 +262,9 @@ export const INLINE_BUTTONS = [
   button('service.link', 'SERVICE_ACTIONS', 'bot.service.link_button'),
   button('service.rotate', 'SERVICE_ACTIONS', 'bot.service.rotate_button'),
   button('service.rotate_confirm', 'SERVICE_ACTIONS', 'bot.service.rotate_confirm_button'),
+  // R11 A4: on a files-only panel «تغییر لینک» is «دریافت فایل‌های جدید» (same slot, same tap).
+  button('service.files_new', 'SERVICE_ACTIONS', 'bot.service.files_new_button'),
+  button('service.files_new_confirm', 'SERVICE_ACTIONS', 'bot.service.files_new_confirm_button'),
   button('service.note', 'SERVICE_ACTIONS', 'bot.service.note_button'),
   button('service.renew', 'SERVICE_ACTIONS', 'bot.service.renew_button'),
   button('service.renew_option', 'SERVICE_ACTIONS', 'bot.service.renew_option_button'),

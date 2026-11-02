@@ -1559,12 +1559,37 @@ export function businessTextMessageBody(input: {
   readonly chatId: string;
   readonly text: string;
   readonly replyToMessageId?: number;
+  /**
+   * Phase 4 PR-3: an inline keyboard — URL buttons (deep links into the bot) and the support
+   * AI's callback buttons. Telegram accepts inline keyboards on messages sent on behalf of a
+   * business account; the taps arrive as ordinary `callback_query` updates for the bot.
+   */
+  readonly buttons?:
+    | null
+    | readonly (readonly {
+        readonly label: string;
+        readonly url: string | null;
+        readonly callbackData: string | null;
+      }[])[];
 }): Record<string, unknown> {
   return {
     business_connection_id: input.businessConnectionId,
     chat_id: input.chatId,
     text: input.text,
     link_preview_options: { is_disabled: true },
+    ...(input.buttons === undefined || input.buttons === null || input.buttons.length === 0
+      ? {}
+      : {
+          reply_markup: {
+            inline_keyboard: input.buttons.map((row) =>
+              row.map((button) =>
+                button.url !== null
+                  ? { text: button.label, url: button.url }
+                  : { text: button.label, callback_data: button.callbackData ?? '' },
+              ),
+            ),
+          },
+        }),
     ...(input.replyToMessageId === undefined
       ? {}
       : {

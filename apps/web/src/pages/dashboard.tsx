@@ -44,6 +44,7 @@ import { BUSINESS_REFRESH_MS, rangeIsComplete } from '../report-view';
 import { setQueries, useLinkHandler, type Route } from '../router';
 import {
   BarChart,
+  compactAxis,
   Badge,
   Card,
   ChartCard,
@@ -882,6 +883,8 @@ function RevenueChart({ data, compare }: { data: DashboardSummaryResponse; compa
         ) : (
           <LineChart
             gradient
+            tight
+            axisFormat={compactAxis}
             width={box.width}
             height={box.width < 560 ? 220 : 250}
             labels={series.current.map((bucket) => axisLabel(bucket.label))}
@@ -964,6 +967,7 @@ function SalesByKindChart({ data }: { data: DashboardSummaryResponse }) {
         ) : (
           <BarChart
             stacked
+            tight
             width={box.width}
             height={250}
             ticks={[0, 0.25, 0.5, 0.75, 1]}
@@ -1015,6 +1019,7 @@ function PaymentMethods({
         empty={<ChartNothing hint={t('web.dashboard_methods_empty')} />}
       >
         <Donut
+          shares={false}
           caption={t('web.dashboard_methods')}
           slices={confirmed.map((row) => ({
             key: row.method,

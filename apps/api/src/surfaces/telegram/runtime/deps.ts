@@ -578,6 +578,7 @@ export interface BotRuntimeDeps {
     | 'move'
     | 'register'
     | 'moveAll'
+    | 'moveBack'
     | 'recordReview'
     | 'findReview'
     | 'reviewTapIsRetired'
@@ -586,6 +587,13 @@ export interface BotRuntimeDeps {
   >;
   /** R2 (item 4): the invoice screens the gateway worker edits too. */
   readonly invoiceScreens?: InvoiceScreensPort;
+  /**
+   * R11 A11 (Codex, #354): how long the order's payment message must be left alone before this
+   * turn edits it into an ended screen — the lane's own settle window
+   * (`orderScreenSettleMs` of the messenger's request timeout), so a cancellation never lands
+   * under another writer's edit still in flight. Absent (a stand-in): the margin alone.
+   */
+  readonly orderScreenSettleMs?: number;
   /**
    * R2: the order a customer's open typed-answer window names — a username or a discount
    * code — or null. Read AFTER a typed answer was refused (the refusal rolled back its own

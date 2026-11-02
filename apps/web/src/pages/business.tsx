@@ -38,7 +38,7 @@ import {
   reportExportUrl,
   type ReportRangeSelection,
 } from '../api/client';
-import { formatMoney, formatNumber, formatTrafficGbText } from '../format';
+import { formatMoney, formatTrafficGbText } from '../format';
 import { LEDGER_REASON_LABELS } from './mirza-labels';
 import { t, type WebKey } from '../i18n/web.fa';
 import { RecordLink, recordHref } from '../ui/record-ref';
@@ -69,6 +69,7 @@ import {
   TabPanel,
   Tabs,
   BarChart,
+  compactAxis,
   ButtonGroup,
   ChartCard,
   CountedPager,
@@ -596,12 +597,16 @@ function TrendCard({ selection }: { selection: ReportRangeSelection }) {
               previous={data.previous}
               format={format}
               axisFormat={(value) =>
-                currency === null
-                  ? formatNumber(Math.round(value))
-                  : formatMoney({
-                      amountMinor: BigInt(Math.round(value)).toString(),
-                      currency,
-                    }).amount
+                compactAxis(
+                  currency === null
+                    ? value
+                    : Number(
+                        formatMoney({
+                          amountMinor: BigInt(Math.round(value)).toString(),
+                          currency,
+                        }).amount.replace(/,/gu, ''),
+                      ),
+                )
               }
               caption={t(METRIC_LABELS[metric])}
             />

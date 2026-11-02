@@ -357,3 +357,68 @@
 .sai-config > .form-actions {
   justify-content: flex-end;
 }
+
+/* Phase 4 PR-5: the readiness card, the test console, and the mode consequences. */
+.sai-config fieldset.field .sai-mode-consequence {
+  display: block;
+  margin-inline-start: 26px;
+  margin-block-start: 2px;
+  max-inline-size: 70ch;
+}
+.sai-step .sai-model {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.sai-readiness {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}
+.sai-readiness-line {
+  display: grid;
+  gap: 4px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--panel-row);
+}
+.sai-readiness-line[data-status='WARN'] {
+  border-inline-start: 3px solid var(--warn);
+}
+.sai-readiness-line > .btn {
+  justify-self: start;
+}
+.sai-console-answer {
+  margin: 0;
+  padding: 10px 14px;
+  border-inline-start: 3px solid var(--line);
+  background: var(--panel-row);
+  border-radius: var(--radius-ctl);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.sai-console-result[data-verdict='WOULD_SEND'] .sai-console-answer {
+  border-inline-start-color: var(--ok);
+}
+.sa-reasons,
+.sa-gaps,
+.sa-questions {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}
+.sa-reason,
+.sa-gap {
+  display: grid;
+  gap: 6px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--panel-row);
+}
+.sa-reason .row,
+.sa-gap .row {
+  flex-wrap: wrap;
+}

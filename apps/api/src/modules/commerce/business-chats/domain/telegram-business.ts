@@ -80,8 +80,34 @@ const businessMessageSchema = z
     text: z.string().optional(),
     caption: z.string().optional(),
     photo: z.array(z.unknown()).optional(),
+    document: z.unknown().optional(),
   })
   .passthrough();
+
+/**
+ * Phase 4 PR-2: the image types a DOCUMENT may carry and still be read as a photo — a customer
+ * who sends a screenshot «as a file» sends the same picture. The declared type only selects the
+ * candidate: the support AI's image source still decides by the magic bytes (JPEG, PNG, WEBP).
+ */
+export const BUSINESS_IMAGE_DOCUMENT_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+
+const imageDocumentSchema = z.object({
+  file_id: z.string().min(1).max(256),
+  file_unique_id: z.string().min(1).max(128),
+  file_size: z.number().int().nonnegative().safe().optional(),
+  mime_type: z.enum(BUSINESS_IMAGE_DOCUMENT_TYPES),
+});
+
+/** A document that is a JPEG, PNG or WEBP image, as a photo reference; null for anything else. */
+export function imageDocumentReference(raw: unknown): BusinessPhotoReference | null {
+  const parsed = imageDocumentSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  return {
+    fileId: parsed.data.file_id,
+    fileUniqueId: parsed.data.file_unique_id,
+    fileSize: parsed.data.file_size ?? null,
+  };
+}
 
 /** One business message: its routing facts, and (TB2) its bounded text and kind. */
 export interface ParsedBusinessMessage {
@@ -153,6 +179,11 @@ export function parseBusinessMessage(raw: unknown): ParsedBusinessMessage | null
   const parsed = businessMessageSchema.safeParse(raw);
   if (!parsed.success) return null;
   const message = parsed.data;
+  // Phase 4 PR-2: an image sent as a document (jpg/png/webp) counts as a photo.
+  const imageDocument =
+    message.photo === undefined && message.document !== undefined
+      ? imageDocumentReference(message.document)
+      : null;
   return {
     connectionId: message.business_connection_id,
     chatId: String(message.chat.id),
@@ -164,9 +195,14 @@ export function parseBusinessMessage(raw: unknown): ParsedBusinessMessage | null
     isFromOffline: message.is_from_offline === true,
     sentAt: new Date(message.date * 1000),
     editedAt: message.edit_date === undefined ? null : new Date(message.edit_date * 1000),
-    kind: message.photo !== undefined ? 'PHOTO' : message.text !== undefined ? 'TEXT' : 'OTHER',
+    kind:
+      message.photo !== undefined || imageDocument !== null
+        ? 'PHOTO'
+        : message.text !== undefined
+          ? 'TEXT'
+          : 'OTHER',
     text: boundedText(message.text ?? message.caption),
-    photo: message.photo === undefined ? null : largestPhotoSize(message.photo),
+    photo: message.photo !== undefined ? largestPhotoSize(message.photo) : imageDocument,
   };
 }
 
@@ -203,7 +239,49 @@ export type BusinessUpdate =
   | { readonly kind: 'CONNECTION'; readonly payload: unknown }
   | { readonly kind: 'MESSAGE'; readonly payload: unknown }
   | { readonly kind: 'EDITED_MESSAGE'; readonly payload: unknown }
-  | { readonly kind: 'DELETED_MESSAGES'; readonly payload: unknown };
+  | { readonly kind: 'DELETED_MESSAGES'; readonly payload: unknown }
+  /**
+   * Phase 4 PR-3 — a tap on an inline button of a message sent ON BEHALF OF the business
+   * account (its `message.business_connection_id`): the support AI's own buttons. Never the
+   * customer turn: the tap is in the business account's chat, not the bot's.
+   */
+  | { readonly kind: 'CALLBACK'; readonly payload: unknown };
+
+/** Phase 4 PR-3 — a tap on a business message's button, read strictly. */
+export interface ParsedBusinessCallback {
+  readonly callbackQueryId: string;
+  readonly data: string | null;
+  /** Who tapped (`callback_query.from.id`). */
+  readonly fromUserId: string;
+  /** The chat and message the tapped button sits on, and its business connection. */
+  readonly chatId: string;
+  readonly messageId: number;
+  readonly connectionId: string;
+}
+
+const callbackSchema = z.object({
+  id: z.string().min(1),
+  data: z.string().max(64).optional(),
+  from: z.object({ id: z.number().int() }),
+  message: z.object({
+    message_id: z.number().int(),
+    chat: z.object({ id: z.number().int() }),
+    business_connection_id: z.string().min(1),
+  }),
+});
+
+export function parseBusinessCallback(raw: unknown): ParsedBusinessCallback | null {
+  const parsed = callbackSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  return {
+    callbackQueryId: parsed.data.id,
+    data: parsed.data.data ?? null,
+    fromUserId: String(parsed.data.from.id),
+    chatId: String(parsed.data.message.chat.id),
+    messageId: parsed.data.message.message_id,
+    connectionId: parsed.data.message.business_connection_id,
+  };
+}
 
 export function businessUpdateOf(update: unknown): BusinessUpdate | null {
   if (typeof update !== 'object' || update === null) return null;
@@ -216,6 +294,14 @@ export function businessUpdateOf(update: unknown): BusinessUpdate | null {
   }
   if ('deleted_business_messages' in shaped) {
     return { kind: 'DELETED_MESSAGES', payload: shaped.deleted_business_messages };
+  }
+  // Phase 4 PR-3: a button tap on a message the bot sent for the business account.
+  const callback = shaped.callback_query;
+  if (typeof callback === 'object' && callback !== null) {
+    const message = (callback as { message?: unknown }).message;
+    if (typeof message === 'object' && message !== null && 'business_connection_id' in message) {
+      return { kind: 'CALLBACK', payload: callback };
+    }
   }
   return null;
 }

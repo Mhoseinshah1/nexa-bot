@@ -440,7 +440,12 @@ export class MiniAppAccountController {
       messages: found.messages
         .filter((message) => message.senderType !== 'SYSTEM')
         .map((message) => ({
-          author: message.senderType === 'CUSTOMER' ? ('CUSTOMER' as const) : ('SUPPORT' as const),
+          author:
+            message.senderType === 'CUSTOMER'
+              ? ('CUSTOMER' as const)
+              : message.senderType === 'AI'
+                ? ('AI' as const)
+                : ('SUPPORT' as const),
           text: message.body,
           hasAttachment: message.attachment !== null || found.filed.has(message.id),
           createdAt: message.createdAt.toISOString(),

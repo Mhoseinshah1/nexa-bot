@@ -57,6 +57,39 @@ if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
   });
 }
 
+/**
+ * Latin digits everywhere (owner decision, R11): after EVERY web test, the document the test
+ * rendered must hold no Persian digit (U+06F0-U+06F9), in text or in an attribute (`title`,
+ * `aria-label`, `placeholder`...). This is the rule's guard: a formatter, a catalogue string or
+ * a stylesheet-free page that reintroduces one fails the test that rendered it. A test that
+ * renders typed Persian digits on purpose (to prove they are normalised) opts out for itself
+ * with `globalThis.__NEXA_ALLOW_PERSIAN_DIGITS__ = true`; the flag resets after each test.
+ */
+const PERSIAN_DIGIT = /[\u06f0-\u06f9]/u;
+afterEach(() => {
+  const flags = globalThis as { __NEXA_ALLOW_PERSIAN_DIGITS__?: boolean };
+  const allowed = flags.__NEXA_ALLOW_PERSIAN_DIGITS__ === true;
+  flags.__NEXA_ALLOW_PERSIAN_DIGITS__ = false;
+  if (allowed || typeof document === 'undefined') return;
+  const found: string[] = [];
+  if (PERSIAN_DIGIT.test(document.body.textContent ?? '')) found.push('text');
+  for (const element of Array.from(document.body.querySelectorAll('*'))) {
+    for (const attribute of Array.from(element.attributes)) {
+      // A typed `value` is the operator's own input, normalised on the way out, not drawn text.
+      if (attribute.name !== 'value' && PERSIAN_DIGIT.test(attribute.value)) {
+        found.push(`${element.tagName.toLowerCase()}[${attribute.name}]`);
+      }
+    }
+  }
+  if (found.length > 0) {
+    cleanup();
+    throw new Error(
+      `Persian digits (U+06F0-U+06F9) were rendered into the DOM (${found.slice(0, 5).join(', ')}); ` +
+        'the admin draws Latin digits everywhere.',
+    );
+  }
+});
+
 afterEach(() => {
   cleanup();
   /*

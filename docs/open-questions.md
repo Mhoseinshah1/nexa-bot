@@ -4442,6 +4442,12 @@ error text; what follows is only what it does not settle.
   `/cancel` once when its deadline expires a `pending` attempt; a customer who transferred but never
   sent the receipt before the deadline has money on the card and no invoice. That case was already
   stranded before (Nexa's receipt window had closed); it needs an operator either way.
+- **OQ-TPTG-30 — what `/cancel` answers for an invoice that is already cancelled** (Round 11 A8).
+  A customer may now ask again after a cancel whose answer was lost, so the second request may
+  reach an invoice the first one did cancel. The document gives no response for that case. Nexa
+  reads a 2xx as cancelled (as for any cancel) and `NOT_PENDING` / any refusal as a refusal only;
+  the inquiry brought forward then says `canceled` and closes the payment, and the customer's next
+  tap says «فاکتور قبلاً لغو شده». If TonPays has a distinct code for it, it can be mapped then.
 
 ## Round 10 D4 — gift cards (wallet top-up codes)
 
@@ -4493,6 +4499,49 @@ quote. What it does not settle:
 - **OQ-R10-D3-06 — the legacy per-user discount (UBR-004).** The Mirza per-user percent kept in
   `resellers.source_detail` is not imported into the new column; whether to backfill it (silently,
   no customer message) is the owner's call.
+
+## Round 11 A9 — price lists show the personal discount
+
+Owner bug: with `personal_discount` on and a percent set, every price list still showed the
+undiscounted price. Fixed by pricing each listed line through `PricingService.
+personalListPrices` — the same facts and the same `quoteWith` composition `PricingService.price`
+ends in — so a listed personal price IS the invoice's (bot plan list, renewal menu, package
+lists; mini app store and service offers). Each decided the way that moves no money:
+
+- **OQ-R11-A9-01 — packages are listed at their own price.** The owner listed «extra traffic /
+  extra time» among the lists that must show the discount, but R10 D3 applies the personal
+  discount to purchases and renewals only (`PERSONAL_DISCOUNT_PURPOSES`, OQ-R10-D3-02), so the
+  invoice of a package is undiscounted. A list that showed a discount the invoice does not
+  charge would break the rule this fix exists for, so the package lists ask the same boundary
+  and are unchanged. Widening the purposes (a contract change the owner decides) makes them
+  follow with no further change. Extra users and a paid location change are likewise outside
+  the purposes and are not routed through it.
+- **OQ-R11-A9-02 — a Telegram button cannot carry `<s>`.** Every bot price list is an inline
+  keyboard, and the Bot API takes a button's text as plain text (no `parse_mode`, no entities).
+  The old price on a button is therefore struck with U+0336 (`strikeThroughText`); the rich plan
+  table (rich messages on) uses a real `strikethrough`. Some Telegram clients draw U+0336 less
+  cleanly over Persian text; the owner may prefer the old price without a strike there.
+  **Decided by the owner (R11 hotfix):** the U+0336 strike broke the right-to-left button —
+  the combining marks split the figure into separate bidi runs («104,000 تومان 000,130 تومان
+  تخفیف شخصی 20٪»). A discounted button now shows one price, the invoice's, its figure in a
+  left-to-right isolate (`formatMoneyIsolated`), then «(20٪ تخفیف)»
+  (`bot.pricing.personal_discount_button_suffix`): «20 گیگ 60 روزه — 104,000 تومان (20٪ تخفیف)».
+  The struck price stays only where real formatting exists (the rich plan table, the
+  pre-invoice, the mini app); `strikeThroughText` is removed.
+- **OQ-R11-A9-03 — a list does not show automatic rules, as before.** A list has never shown an
+  automatic promotion. When an automatic rule beats the personal discount, the list shows what
+  it always showed and the invoice the rule's price; when the personal discount wins, the list
+  shows the invoice's figure. Showing every automatic rule on every list is a separate change.
+- **OQ-R11-A9-05 — a reseller's package list shows the package's own price.** Found by this
+  round's test, and older than it: a rate tier's percent is taken off a package at checkout
+  (`PricingService.price` applies the reseller layer to every purpose), but the package lists
+  have never applied it, so a 20 % reseller is listed a 50 000 package and invoiced 40 000 — in
+  the customer's favour. Left as it was (the brief: an undiscounted list shows what it showed);
+  showing the reseller's package price is a one-line change through the same boundary, and the
+  owner's call. `tests/integration/r11-personal-discount-listing.test.ts` pins it.
+- **OQ-R11-A9-04 — digits.** The tag renders its percent in Latin digits («تخفیف شخصی 20٪»), as
+  every customer-facing template and D3's pre-invoice line do; Persian digits would be a
+  catalogue-wide decision.
 
 ## Round 10 D1 — automatic renewal (تمدید خودکار)
 
@@ -4616,6 +4665,77 @@ money and sends no customer message; the owner decides otherwise.
   captcha row like a `/start` arrival and the mini app holds them at `CAPTCHA`, pointing to the
   bot; whether a mini-app arrival should be asked at all is the owner's call.
 
+## Round 11 A8 — TonPays answered HTTP 429 to invoice creates
+
+Every TonPays call now takes a token from one client-side bucket per API key inside the TonPays
+HTTP client (`tonpays-rate-limiter.ts`; settings `payments.tonpays.calls_per_minute` 30,
+`payments.tonpays_telegram.calls_per_minute` 15, `payments.tonpays.burst` 3), and a 429 pauses the
+key for its `Retry-After`, else 5 s doubling to 5 min, ±20 %. Defaults that move no money:
+
+- **OQ-R11-A8-01 — does a 429 WITHOUT a readable `detail.code` mean "not created"?** The
+  documentation names `RATE_LIMIT_EXCEEDED` (in `{ detail: { code } }`) as the rate-limit answer,
+  and only that readable code is taken to mean the invoice was not made (the same order id is sent
+  again, at most three times). A bare 429 — an empty or HTML body, as a proxy or edge in front of
+  TonPays would send — is still `CREATE_UNKNOWN`: never re-sent, never re-keyed, the lost-create
+  rule. It now also pauses the key. **Ask TonPays** whether their own 429 always carries
+  `RATE_LIMIT_EXCEEDED`, and whether anything in front of the API can answer 429 after the
+  request reached it. **Check the owner's two 429s**: a create deferred with
+  `creation_error_code = RATE_LIMIT_EXCEEDED` was the readable code; one that ended
+  `CREATE_UNKNOWN` with `http.429` (or `http.429.unreadable.*`) was not.
+- **OQ-R11-A8-02 — the real limit, its scope, and `Retry-After`.** Documented: 60 create/check
+  requests a minute and 120 per IP. Undocumented: whether it is per key, store or account
+  (`OQ-WP11A-02`) and whether a 429 carries `Retry-After` (honoured when present). The defaults
+  (30 + 15 a minute, burst 3) stay under 60 even if both routes' keys count against one account.
+  The bucket is per worker process; the per-minute budget (`payment_gateway_call_budgets`, a
+  FIXED window of 50) remains the only cross-replica bound and can grant up to twice its limit
+  across a window edge — harmless with one worker (the bucket is stricter), worth a sliding
+  window if the worker is ever scaled out. **Decide** with the real provider: record the limit
+  and its scope, and set the two settings from it.
+
+## Round 11 A1 — Web Admin vs the approved demo
+
+- **OQ-R11-A1-01 — a numbered pager («1–10 of 732 · page 1 of 74») on the cursor-paged lists.**
+  The demo draws it on every list; the keyset lists (`/orders`, `/payments`, `/users`, `/services`,
+  …) return a cursor and no total, and the Web Admin prints only totals the server sent. Built
+  where the list already holds all its rows and a server `total` was cheap: `/content`
+  (`GET /templates`) and `/features` (`GET /features`) gained an optional `total`. Default for the
+  rest: the existing «قبلی / بعدی» keyset pager. A `total` on each cursor list is a count query per
+  request (filtered, tenant-scoped, on large tables); the owner decides which lists are worth it.
+- **OQ-R11-A1-02 — global search beyond customers, orders and services.** `GET /search` covers
+  those three kinds, each under its own list permission. Payments, tickets and products are not
+  searched (the demo's grouped results show three kinds); adding one is a new source plus its own
+  permission row in `GLOBAL_SEARCH_KIND_PERMISSIONS`, no new permission. A service is found by its
+  exact panel username or its 8-character code, as the services list's own search finds it.
+- **OQ-R11-A1-03 — Persian digits in text the server writes.** The owner's Latin-digit rule is
+  applied to the Web Admin's own catalogue (`apps/web/src/i18n/web.fa.ts`) and every formatter.
+  Text that arrives from the server or from the shared catalogue (`packages/i18n`: ops-log and
+  report messages, bot template previews on `/content`) still carries the digits it was written
+  with, because the same strings are customer-facing in Telegram. Default: unchanged; normalising
+  them for display only is a separate decision.
+
+## Round 11 A2 — the cutover rehearsal (`docs/cutover/12-rehearsal.md`)
+
+`botctl cutover rehearse` runs the runbook's data steps against a disposable database on the
+test server. Each default below moves no money, sends no customer message and touches nothing
+live; the owner decides otherwise.
+
+- **OQ-R11-A2-01 — tariff products in the disposable database.** The rehearsal creates none and
+  copies none from the live tenant (that would be touching it), so a Mirza service found on a
+  stand-in can still be held for want of a product to adopt it into; the money reconciliation is
+  complete without them. Whether the rehearsal should take a products file (as it takes
+  `--panel-inventory`) so the adoption counts are real is the owner's call.
+- **OQ-R11-A2-02 — where it may run.** It is written and documented for the test server. It
+  refuses the live database, a production-like name and an existing database wherever it runs,
+  but does not refuse the production host itself (as the isolated kit does): on production it
+  would create, fill and drop one more database on that server, like `nexa_cutover_scratch` at C2.
+  Whether it should refuse a production host outright is the owner's call.
+- **OQ-R11-A2-03 — the approver.** The import's approval is an administrator's act, so the
+  rehearsal creates the rehearsing owner in the DISPOSABLE database through the installer's own
+  `BootstrapOwnerService` (the `--owner-telegram-id` the operator gives, a random password nobody
+  sees) and records the approval under it, as a `WEB_ADMIN` actor with no session — the only
+  administrator actor type there is. It never exists outside that database, and the database is
+  dropped. Decision taken; recorded here for the owner to confirm.
+
 ## Round 11 A7 — the service's panel username in the operations log
 
 - **OQ-R11-A7-01 — the referral-commission message (L8).** A commission is earned on a buyer's
@@ -4680,3 +4800,180 @@ money and sends no customer message; the owner decides otherwise.
 - **OQ-R11-B3-04 — a friend who bought, with an imported (MIRZA) attribution.** Default (built):
   listed, with the status the purchase gives (`PURCHASED` at most, since an imported attribution
   is never promised a commission). Listed because the screen's own «دعوت‌شده» figure counts it.
+
+## R11 A4 — files only, no subscription link; the RickPanel QR kind
+
+- **OQ-R11-A4-01 — files only on a panel whose customer «فایل‌های اتصال» action is switched off.**
+  A panel policy may switch off the customer `SUBSCRIPTION_FILES` action; with «فقط فایل، بدون
+  لینک ساب» on, such a customer then has neither the link nor the files. Not guarded: the two
+  settings are saved independently. Default: left as is; refusing the combination in the policy
+  save (and warning on the switch) is a small follow-up if the owner wants it.
+- **OQ-R11-A4-02 — a mini-app customer of a files-only panel.** The mini app has no files screen,
+  so such a customer sees no link and no QR there and is not shown how to get the files. Default:
+  nothing new is added; the bot's «📁 دریافت فایل‌های اتصال» is where the files are.
+- **OQ-R11-A4-03 — the panel's own per-file captions.** RickPanel may write the subscription link
+  into the caption it sends with a file. The bot passes that caption through; on a files-only panel
+  it cannot know whether it names the link. Default: unchanged.
+- **OQ-R11-A4-04 — the sing-box import string on iOS and desktop.** The format
+  `sing-box://import-remote-profile?url=…&autoUpdate=true&autoUpdateInterval=…` is the owner's;
+  which clients honour `autoUpdate*` has not been measured against a real client.
+
+## Round 11 A11 — an ended order is answered on its own message
+
+- **OQ-R11-A11-01 — a payment attempt that lapses while its order is still payable.** With
+  `sales.order_expiry_minutes` longer than an attempt's window (up to 14 days vs at most 60
+  minutes), an attempt can expire while its order stays `AWAITING_PAYMENT`. Default (the owner's
+  "one expiry notice per order"): nothing is sent for that attempt; its invoice message keeps its
+  text and each of its buttons re-checks the payment on a tap; the order's own `ORDER_EXPIRED`
+  later edits the order's latest screen. Whether such an attempt's message should also be edited
+  in place (no new message) is the owner's call.
+- **OQ-R11-A11-02 — re-order for a renewal or an add-on.** «🔁 سفارش دوباره» opens the catalogue for
+  those (the service is reached from «سرویس‌های من»); a new service opens its category's plans, a
+  custom service its location menu. A button straight to the service's renewal would need the
+  service id read from the order; the owner decides whether that is wanted.
+- **OQ-R11-A11-03 — three expiry messages minutes apart.** Read from the code (no production data):
+  one order produced several only through one `PAYMENT_EXPIRED` per payment attempt (fixed) and one
+  new `bot.order.expired` per tap on a stale pay/confirm button (fixed). Three orders, each told
+  once, are also possible: every confirmed pre-invoice is its own order with its own window, and
+  tapping a plan again starts a new draft — order creation is unchanged.
+- **OQ-R11-A11-04 — the bare refusal on a live order past its deadline.** An `AWAITING_PAYMENT`
+  order past its deadline whose payment is still live (receipt under review, provider review,
+  `UNKNOWN`) is not shown the ended screen (Codex, #354), so a pay tap on it is answered by the
+  refusal it always got, `bot.order.expired` («… لطفاً دوباره سفارش دهید.»). That text predates
+  A11 and is left unchanged (no copy rewrite outside the spec). Default: unchanged; whether such a
+  customer should instead be told their payment is still being checked is the owner's call.
+  **Answered 2026-10-31 (R12 F3 item 9):** yes — a pay tap on such an order (or its method list)
+  gets the new `bot.order.payment_in_review` («پرداخت شما هنوز در حال بررسی است، دوباره پرداخت
+  نکنید؛ نتیجه در همین ربات اعلام می‌شود») with a «📊 وضعیت پرداخت» button. The live payment is read
+  from `OrderService.livePaymentFor`, whose states are the sweep's own
+  (`ORDER_HELD_OPEN_BY_PAYMENT`). `bot.order.expired` is unchanged. Still open: the mini app maps
+  `ORDER_EXPIRED` to the same old sentence, so the same order shows it there.
+
+## Round 12 F3 — UX quick wins: what was decided, what is left
+
+- **OQ-R12-F3-01 — the welcome's brand and trial lines (OPEN).** The spec asks for a name variable
+  in `bot.start.welcome` and the trial line (and its «🧪» mention) only when the trial is on. Not
+  built: there is no business/brand name to fill the variable from (a bot instance has only its
+  username), and a conditional line is a new placeholder or a second template key plus a
+  trial-enabled read in the start flow. The text is UNCHANGED («ZED PROXY» and the trial line stay
+  for every tenant) until the owner names the source of the name.
+- **OQ-R12-F3-02 — a rate-limited TonPays cancel is not retried automatically.** The owner asked
+  for «در صف است و خودکار دوباره تلاش می‌شود». That is true of a cancel the client's limiter HELD and
+  requeued (it reads «در حال لغو» as before) but not of one the provider answered with a readable
+  `RATE_LIMIT_EXCEEDED` (decided `RATE_LIMITED`; only the customer's next tap asks again). The new
+  `bot.payment.gateway_cancel_rate_limited` says what is true for that state (not cancelled yet,
+  ask again later, do not pay again). A held-and-requeued row is indistinguishable from a fresh
+  one in the stored columns (both `REQUESTED` with a claim time), so it keeps the «در حال لغو»
+  sentence. Telling them apart needs a column.
+- **OQ-R12-F3-03 — «پرداخت مابه‌التفاوت» at a short balance.** Not built: a top-up of exactly the
+  shortfall is a new money path (the top-up flow matches presets, not an amount tied to an
+  order). The shortfall screen offers «🔙 بازگشت به پیش‌فاکتور» after the customer tops up.
+- **OQ-R12-F3-04 — CSV export is of the ticked rows, in the browser.** Users, orders and payments
+  lists export the rows already shown and ticked (at most 200, the columns the list prints, formula
+  cells defanged). A server-side export of a whole filtered list would need a counted preview, an
+  audit row and its own permission; not built.
+- **OQ-R12-F3-05 — Telegram review messages after a Web decision.** A receipt decided in the Web
+  Admin leaves the administrators' Telegram review messages with their buttons; a tap on one is
+  answered «decided» (the conditional edge refuses), as for two reviewers racing in Telegram. They
+  are not edited in place by a Web decision.
+
+## R12 F1 — money edges (`fix/r12-money-edges`)
+
+- **OQ-R12-F1-01 — what a full operator refund does to the service.** Implemented: the refund that
+  makes a NEW_SERVICE / CUSTOM_SERVICE / RENEW payment whole plans a **SUSPEND** of the order's
+  service in the same transaction (reversible; an operator may resume it), with a Persian warning
+  in the Web Admin before confirming. Not chosen: TERMINATE for a purchase (destroys the panel
+  account and cannot be undone), or routing the refund through the service-refund-request path
+  (its approval DELETES the account first and credits only afterwards — a different product for a
+  different request). For a RENEW the whole service is suspended, including any time the customer
+  had bought before that renewal; rolling back only the renewed period has no planner today. A
+  service that has changed hands since the purchase, or is not ACTIVE, is left as it is and the
+  order's audit row says why. The owner decides whether TERMINATE (or a renewal roll-back) is
+  wanted instead.
+- **OQ-R12-F1-02 — a Stars charge Telegram refunded.** Implemented: `refunded_payment` marks the
+  charge's invoice `refunded_payment` / `provider_paid = false` (a charge refunded before it
+  settled never settles), writes an audit row and opens `payments.gateway_charge_refunded` for an
+  operator (with «👤 نام کاربری سرویس» when the charge paid an order). Nothing is done to the
+  service or the wallet automatically: the service a refunded charge paid for stays live, and a
+  top-up a refunded charge credited stays in the wallet, until an operator suspends it or debits
+  the wallet by hand. Whether Nexa should do either by itself (and whether the payment should get a
+  refund row and its order go REFUNDED) is the owner's call.
+- **OQ-R12-F1-03 — late money for a cancelled attempt after its deadline.** A cancelled attempt is
+  asked about on its ordinary schedule until its own deadline and no longer (the provider's invoice
+  is not payable after it). Money the provider confirms for it is returned to the wallet whatever
+  the late-credit switch says — including when such an answer arrives later (an operator's
+  re-inquiry, a webhook within the post-deadline allowance). Whether a cancelled attempt should also
+  be polled through the late-credit window when the switch is ON is the owner's call; today it is
+  not.
+- **OQ-R12-F1-04 — TonPays Telegram and `request_amount`.** Item 5 makes a TonPays (website)
+  approval whose `request_amount` differs from what Nexa sent a MISMATCH. The TonPays Telegram
+  route is unchanged: what its `request_amount` means for a card transfer is still OQ-TPTG-03.
+
+## Phase 4 PR-5 (Web Admin support pages) - 2026-11-01
+
+- **OQ-SAI-5-01 - verifying the support handle against the connected account.**
+  `telegram_business_connections` stores the owner's Telegram id, not their username, so the
+  readiness card compares `support.accounts` with a username only when a `customers` row for that
+  id exists (the owner once wrote to the bot). Otherwise it says "cannot verify" with the fix
+  "send /start from that account". Storing the username from `BusinessConnection.user` at report
+  time would make it exact; that is a schema change in business-chats, not done here.
+- **OQ-SAI-5-02 - a cost estimate.** The analytics page shows the token total and no money:
+  there is still no price source (OQ-TB-07), and a price this page invented would be a number
+  nobody approved. Needs an owner-entered price per million tokens per model.
+- **OQ-SAI-5-03 - bulk return and a long hard queue.** «بازگرداندن همه» reads the first 100
+  conversations of each of the three states. With `includeHard` off, more than 100 HARD holds in
+  front of a state's list hide the soft ones behind them until those are handled; `more` is then
+  true. A keyset walk over the soft holds only needs a repository filter on `handoff_kind`.
+- **OQ-SAI-5-04 - ASSIST_ONLY drafting cost.** One draft per inbound message, no settle delay
+  (the `support_ai_jobs` shape CHECK allows `due_at` only on AUTO_DECISION), so three quick lines
+  make up to three provider calls, two of them discarded. A debounce needs a migration relaxing
+  that CHECK.
+- **OQ-SAI-5-05 - the analytics intro - CLOSED.** The old sentence (no text is read) was no longer
+  true; the page now uses a new key that says counts read no text and names the two views that
+  show the customer's last message (`business_chats.view`).
+- **OQ-SAI-5-06 - the model dropdown.** The known-model list (`support-ai-models.ts`) is a
+  convenience, not a guarantee; the capability test is the check. It needs a refresh when a
+  provider retires a model.
+- **OQ-SAI-2-01 — live usage refresh for the asked service (Phase 4 PR-2, item 2, optional).** The
+  support context now carries `usageAge` («به‌روزشده N دقیقه پیش») beside the stored usage, but
+  does NOT call the panel when the figure is older than 10 minutes: the assistant role holds no
+  panel client today, and a panel call from it would be a new outbound path with its own
+  credential handling. Whether to add a bounded (≤ 2 s, fall back to stored) read is the owner's
+  call.
+- **OQ-SAI-2-02 — CLOSED by the review of PR #367.** The live catalogue is now the customer's own
+  catalogue (`ProductService.customerCatalogue`, the browse's view): an ACTIVE reseller sees what
+  their grants show (granted panels, products, categories, reseller-only plans included).
+- **OQ-SAI-2-03 — packages are listed without one panel's per-purchase cap (PR-2, item 1).** The
+  traffic/time packages in the context are the tenant's offerable ones in the sales currency; a
+  panel's policy cap is re-decided by the bot when the customer opens the offer for a service.
+- **OQ-SAI-3-01 — inline buttons and their taps on Business messages are assumed, not observed
+  live (PR-3).** The Bot API accepts `reply_markup` on a message sent with
+  `business_connection_id`, and a tap is expected as an ordinary `callback_query` whose `message`
+  carries the `business_connection_id` (that is how NEXA routes it). Verify on the test server
+  with a real Business account before turning `support.ai.actions_enabled` on; if taps never
+  arrive, the URL buttons still work and «👤 پشتیبان انسانی» / 👍 / 👎 do nothing.
+- **OQ-SAI-3-02 — the customer's link is sent as plain text, no QR, in the Business chat (PR-3).**
+  «سرویس‌های من» shows the link as a QR photo with the link in its caption; the Business lane sends
+  text only, so the AI sends the same link without the QR. Whether to add a Business photo send
+  is the owner's call.
+- **OQ-SAI-3-03 — voice transcription is not built (PR-3, Blocked).** A voice message gets one
+  templated request to type; transcribing it needs a provider decision (cost, privacy).
+- **OQ-SAI-4-01 — no operator action returns a HARD-held ticket to the AI (PR-4).** A HARD
+  handoff in a ticket (money, security, an explicit request for a person…) is sticky by design, and
+  unlike a Business conversation there is no «سپردن دوباره به هوش مصنوعی» for a ticket yet. A ticket
+  held HARD stays with people until it is closed. Whether to add that action (and its permission)
+  is the owner's call.
+- **OQ-SAI-4-02 — analytics and the failure page do not list ticket jobs (PR-4).** The ticket AI's
+  jobs live in `support_ai_ticket_jobs`, not `support_ai_jobs`, so the resolution rate, handoff
+  reasons, knowledge-gaps report and failure page count Business chats only. Reading both tables
+  into those pages is follow-up work.
+- **OQ-SAI-6-01 — the output validator does not refuse a fabricated secret or a prompt echo
+  (PR-6).** `checkOutputPolicy` owns links, numbers, handles and promises. A made-up API-key-looking
+  string, or a verbatim echo of the system prompt, passes it: by design (cross-cutting item 2) no
+  secret is in the model's context and the prompt is declared non-secret, so nothing real can
+  leak that way. The SAI eval plants only the shapes the validator owns. Decide whether a
+  secret-shape or prompt-echo backstop is worth a false-positive cost.
+- **OQ-SAI-6-02 — the offline resolution rate is the pipeline's ceiling, not a model's (PR-6).**
+  Scripted providers answer each everyday scenario correctly, so 37/37 proves the guards, the
+  preset and the validator do not block correct answers; the real rate needs the owner's live run
+  (`docs/support-agent/sai-eval.md`). Record it in the round report when run.

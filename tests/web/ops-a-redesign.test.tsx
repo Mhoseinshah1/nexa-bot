@@ -466,8 +466,8 @@ describe('the FX section', () => {
     const strip = await screen.findByTestId('fx-strip');
     expect(within(strip).getByText(t('web.fx_state_fresh')).closest('.badge')).toHaveClass('ok');
     // A rate is a quantity: the body's digit shapes, not a technical Latin run.
-    expect(within(strip).getByText('104250')).toHaveClass('num');
-    expect(within(strip).getByText('104250')).not.toHaveClass('ltr');
+    expect(within(strip).getByText('104,250')).toHaveClass('num');
+    expect(within(strip).getByText('104,250')).not.toHaveClass('ltr');
     expect(within(strip).getByText(t('web.fx_age'))).toBeInTheDocument();
     expect(within(strip).getByText(t('web.fx_last_refresh'))).toBeInTheDocument();
   });

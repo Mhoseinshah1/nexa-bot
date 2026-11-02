@@ -185,11 +185,6 @@
 
 /* --- Client apps (`#/client-apps`) ------------------------------------------------------ */
 
-/* An app's name keeps its typed digits: the body's stylistic set would draw «v۲rayNG». */
-.ca-name {
-  font-feature-settings: normal;
-}
-
 /* --- Reminders (`#/reminders`) ---------------------------------------------------------- */
 
 /* The family's switch and its pill sit in the card header, opposite the title. */

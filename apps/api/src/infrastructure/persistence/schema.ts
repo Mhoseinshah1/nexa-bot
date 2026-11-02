@@ -309,9 +309,11 @@ import {
   BUSINESS_BOT_RIGHTS,
   BUSINESS_CONVERSATION_STATES,
   BUSINESS_HANDOFF_REASONS,
+  BUSINESS_HANDOFF_KINDS,
   BUSINESS_MESSAGE_KINDS,
   BUSINESS_MESSAGE_ORIGINS,
   BUSINESS_OUTBOUND_ORIGINS,
+  BUSINESS_OUTBOUND_FEEDBACK,
   BUSINESS_OUTBOUND_STATES,
   BUSINESS_TAKEOVER_REASONS,
   SUPPORT_AI_MODES,
@@ -330,6 +332,9 @@ import {
   SUPPORT_AI_SAFE_TOPICS,
   SUPPORT_AI_AUTO_MIN_CONFIDENCES,
   SUPPORT_AI_AUTO_OUTCOMES,
+  SUPPORT_AI_ACTION_KINDS,
+  SUPPORT_AI_TICKET_JOB_STATES,
+  SUPPORT_AI_TICKET_HOLD_STATES,
   BUSINESS_ESCALATION_TICKET_OUTCOMES,
   // TB8: support knowledge and controlled learning.
   SUPPORT_KNOWLEDGE_ARTICLE_STATES,
@@ -381,6 +386,8 @@ import {
   GIFT_CARD_BATCH_STATES,
   GIFT_CARD_CODE_STATES,
   GIFT_CARD_REJECTIONS,
+  // R11 A4: «نوع بارکد».
+  PANEL_QR_KINDS,
 } from '@nexa/contracts';
 
 /**
@@ -2209,12 +2216,37 @@ export const panels = pgTable(
      * catalogue's reach, never by anything that operates an existing service.
      */
     balancingGroup: text('balancing_group'),
+    /**
+     * R11 A4: «فقط فایل، بدون لینک ساب» — the subscription link of a service on this panel
+     * is never shown to its customer (bot card, «سرویس‌های من», mini app); they get the
+     * connection files only, and «تغییر لینک» becomes «دریافت فایل‌های جدید».
+     *
+     * NOT NULL with default false, so every panel that exists when the migration runs keeps
+     * showing its link and nothing changes underneath an operator. Possible only on a panel
+     * whose provider hands over connection files; `PanelService.update` refuses it on any
+     * other (a CHECK cannot know which provider can). Nothing is sent to a customer when it
+     * is switched, and no service row is touched.
+     */
+    filesOnlyDelivery: boolean('files_only_delivery').notNull().default(false),
+    /**
+     * R11 A4: «نوع بارکد» — which QR a customer of this panel is shown. RickPanel panels only
+     * (`PanelService.update` refuses another provider; a CHECK cannot know which provider a
+     * row is). `SUB_LINK` is the default and exactly what every panel drew before.
+     */
+    qrKind: text('qr_kind').notNull().default('SUB_LINK'),
+    /** The refresh interval written into a sing-box import QR, in minutes. */
+    singboxIntervalMinutes: integer('singbox_interval_minutes').notNull().default(360),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
     index('panels_tenant_status_idx').on(table.tenantId, table.status),
     /** A drain and its reason, or neither — the same biconditional shape as the username policy. */
+    check('panels_qr_kind_check', enumCheck('qr_kind', PANEL_QR_KINDS)),
+    check(
+      'panels_singbox_interval_check',
+      sql`${table.singboxIntervalMinutes} BETWEEN 1 AND 10080`,
+    ),
     check(
       'panels_balancing_group_check',
       sql`${table.balancingGroup} IS NULL OR ${table.balancingGroup} ~ '^[a-z0-9][a-z0-9_-]{0,39}$'`,
@@ -12267,6 +12299,8 @@ export const ticketMessages = pgTable(
                  AND body IS NOT NULL AND attachment_kind IS NULL AND idempotency_key IS NOT NULL
             WHEN 'SYSTEM' THEN author_admin_id IS NULL AND system_event IS NOT NULL
                  AND body IS NULL AND attachment_kind IS NULL
+            WHEN 'AI' THEN author_admin_id IS NULL AND system_event IS NULL
+                 AND body IS NOT NULL AND attachment_kind IS NULL AND idempotency_key IS NOT NULL
             ELSE false
           END`,
     ),
@@ -15732,6 +15766,12 @@ export const businessConversations = pgTable(
     controlEpoch: integer('control_epoch').notNull().default(0),
     takeoverReason: text('takeover_reason'),
     handoffReason: text('handoff_reason'),
+    /**
+     * Phase 4 PR-1 — how the current human hold ends (`BUSINESS_HANDOFF_KINDS`): HARD is sticky,
+     * SOFT returns to the AI by itself. NULL on AI_ACTIVE, and on every hold from before this
+     * column, which stays sticky.
+     */
+    handoffKind: text('handoff_kind'),
     lastMessageAt: timestamptz('last_message_at'),
     lastInboundAt: timestamptz('last_inbound_at'),
     lastHumanAt: timestamptz('last_human_at'),
@@ -15793,6 +15833,15 @@ export const businessConversations = pgTable(
     check(
       'business_conversations_handoff_shape_check',
       sql`(state = 'HANDOFF_REQUIRED') = (handoff_reason IS NOT NULL)`,
+    ),
+    check(
+      'business_conversations_handoff_kind_check',
+      enumCheck('handoff_kind', BUSINESS_HANDOFF_KINDS),
+    ),
+    // Only a person's hold has a kind.
+    check(
+      'business_conversations_handoff_kind_shape_check',
+      sql`state <> 'AI_ACTIVE' OR handoff_kind IS NULL`,
     ),
     check('business_conversations_epoch_check', sql`control_epoch >= 0`),
     check('business_conversations_chat_check', sql`chat_id ~ '^-?[1-9][0-9]{0,31}$'`),
@@ -15918,6 +15967,14 @@ export const businessOutboundMessages = pgTable(
      * text is rendered when the row is sent, never stored (CLAUDE.md, Phase 2).
      */
     templateKey: text('template_key'),
+    /**
+     * Phase 4 PR-3: the inline keyboard of an automatic message or a handoff notice
+     * (`businessOutboundButtonsSchema`): deep links into the bot and the support AI's own
+     * callbacks, labels rendered from templates when the row was enqueued. Purged with the body.
+     */
+    buttons: jsonb('buttons'),
+    /** Phase 4 PR-3: the customer's 👍 / 👎 under an automatic answer; the first tap wins. */
+    feedback: text('feedback'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -15961,10 +16018,24 @@ export const businessOutboundMessages = pgTable(
       'business_outbound_messages_author_check',
       sql`(origin IN ('AUTO', 'HANDOFF_NOTICE')) = (created_by_admin_id IS NULL)`,
     ),
-    // Roadmap A4: the notice, and only the notice, is a template with no stored body.
+    /*
+     * Roadmap A4: only the notice is a template, and a template has no stored body. Phase 4
+     * PR-3: a notice may instead carry a rendered body — check-before-handoff's facts message,
+     * which IS the notice of that handoff — never both (a purged body leaves neither; the lane
+     * sends only a row with one).
+     */
     check(
       'business_outbound_messages_template_check',
-      sql`(origin = 'HANDOFF_NOTICE') = (template_key IS NOT NULL) AND (template_key IS NULL OR body IS NULL)`,
+      sql`(origin = 'HANDOFF_NOTICE' OR template_key IS NULL) AND (template_key IS NULL OR body IS NULL)`,
+    ),
+    // Phase 4 PR-3: buttons only on what the support AI sends; feedback only on its replies.
+    check(
+      'business_outbound_messages_buttons_check',
+      sql`buttons IS NULL OR origin IN ('AUTO', 'HANDOFF_NOTICE')`,
+    ),
+    check(
+      'business_outbound_messages_feedback_check',
+      sql`feedback IS NULL OR (origin = 'AUTO' AND ${enumCheck('feedback', BUSINESS_OUTBOUND_FEEDBACK)})`,
     ),
     // Resolved exactly when not PENDING; a delivered row knows its Telegram message.
     check(
@@ -16012,6 +16083,8 @@ export const businessConversationEscalations = pgTable(
     contextFrom: timestamptz('context_from'),
     ticketId: uuid('ticket_id'),
     ticketOutcome: text('ticket_outcome').notNull(),
+    /** Phase 4 PR-1 — the handoff's kind (`BUSINESS_HANDOFF_KINDS`); NULL before this column. */
+    handoffKind: text('handoff_kind'),
     jobId: uuid('job_id'),
     textPurgedAt: timestamptz('text_purged_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
@@ -16061,6 +16134,10 @@ export const businessConversationEscalations = pgTable(
     check(
       'business_conversation_escalations_steps_check',
       sql`steps_tried IS NULL OR steps_tried >= 0`,
+    ),
+    check(
+      'business_conversation_escalations_handoff_kind_check',
+      enumCheck('handoff_kind', BUSINESS_HANDOFF_KINDS),
     ),
     check('business_conversation_escalations_epoch_check', sql`control_epoch >= 1`),
   ],
@@ -16211,6 +16288,8 @@ export const supportAiProviderCredentials = pgTable(
     /** Why the last capability test was not OK: its first failing check's class. */
     lastTestFailureClass: text('last_test_failure_class'),
     lastTestedAt: timestamptz('last_tested_at'),
+    /** Phase 4 PR-5: the model that capability test ran on (readiness compares it to the primary's). */
+    lastTestedModel: text('last_tested_model'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -16418,6 +16497,12 @@ export const supportAiJobs = pgTable(
      */
     knowledgeSent: integer('knowledge_sent'),
     knowledgeAvailable: integer('knowledge_available'),
+    /**
+     * Phase 4 PR-3: the tool this automatic job used or asked for (`SUPPORT_AI_ACTION_KINDS`,
+     * never `NONE`; `PAYMENT_STATUS` for a check-before-handoff), null for none — what the
+     * per-epoch tool-call limit counts.
+     */
+    toolAction: text('tool_action'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -16493,6 +16578,10 @@ export const supportAiJobs = pgTable(
     ),
     check('support_ai_jobs_outcome_check', nullableEnumCheck('outcome', SUPPORT_AI_AUTO_OUTCOMES)),
     check(
+      'support_ai_jobs_tool_action_check',
+      sql`tool_action IS NULL OR (tool_action <> 'NONE' AND ${enumCheck('tool_action', SUPPORT_AI_ACTION_KINDS)})`,
+    ),
+    check(
       'support_ai_jobs_failure_class_check',
       nullableEnumCheck('failure_class', SUPPORT_AI_FAILURE_CLASSES),
     ),
@@ -16513,6 +16602,160 @@ export const supportAiJobs = pgTable(
           AND (kind = 'AUTO_DECISION') = (trigger_content_version IS NOT NULL)
           AND (kind <> 'AUTO_DECISION' OR requested_by_admin_id IS NULL)
           AND (kind = 'AUTO_DECISION' OR outcome IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * Phase 4 PR-4 — the support AI's jobs for TICKETS. Its own table, never `support_ai_jobs`: a
+ * ticket job has no Business conversation, no connection and no outbound lane, so it cannot
+ * name, claim or send into one (isolation by construction — the Business job table's foreign
+ * key is to `business_conversations`, this one's to `tickets`).
+ *
+ * One QUEUED job per ticket at a time (a second customer message while one waits is covered by
+ * it: the producer answers the ticket's latest customer message, `trigger_message_id` is only
+ * the first). `epoch` is the ticket hold's epoch when the job was enqueued; a person speaking
+ * or a handoff moves the hold, and a job of an older epoch is dropped. The reply, when there is
+ * one, is a `ticket_messages` row of sender `AI` named by `reply_message_id`.
+ */
+export const supportAiTicketJobs = pgTable(
+  'support_ai_ticket_jobs',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    ticketId: uuid('ticket_id').notNull(),
+    /** The customer message that caused the job (`ticket_messages.id`). */
+    triggerMessageId: uuid('trigger_message_id').notNull(),
+    epoch: integer('epoch').notNull().default(0),
+    /** `ticket-ai:<ticket id>:<trigger message id>`: a redelivered update enqueues once. */
+    idempotencyKey: text('idempotency_key').notNull(),
+    state: text('state').notNull().default('QUEUED'),
+    attempts: integer('attempts').notNull().default(0),
+    claimedUntil: timestamptz('claimed_until'),
+    /** Not claimed before this instant (the settle delay). */
+    dueAt: timestamptz('due_at').notNull(),
+    /** What became of it (`SUPPORT_AI_AUTO_OUTCOMES`, the Business jobs' closed set). */
+    outcome: text('outcome'),
+    decision: text('decision'),
+    topic: text('topic'),
+    confidence: text('confidence'),
+    handoffReason: text('handoff_reason'),
+    failureClass: text('failure_class'),
+    /** The tool this job used or asked for (never `NONE`) — what the tool-call limit counts. */
+    toolAction: text('tool_action'),
+    provider: text('provider'),
+    model: text('model'),
+    /** The AI's message in the ticket (`ticket_messages.id`), when one was written. */
+    replyMessageId: uuid('reply_message_id'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('support_ai_ticket_jobs_tenant_id_key').on(table.tenantId, table.id),
+    uniqueIndex('support_ai_ticket_jobs_idempotency_key').on(table.tenantId, table.idempotencyKey),
+    /** Coalescing's backstop: never two pending jobs for one ticket. */
+    uniqueIndex('support_ai_ticket_jobs_pending_key')
+      .on(table.tenantId, table.ticketId)
+      .where(sql`state = 'QUEUED'`),
+    index('support_ai_ticket_jobs_due_idx')
+      .on(table.tenantId, table.createdAt)
+      .where(sql`state = 'QUEUED'`),
+    index('support_ai_ticket_jobs_ticket_idx').on(table.tenantId, table.ticketId, table.createdAt),
+    foreignKey({
+      columns: [table.tenantId, table.ticketId],
+      foreignColumns: [tickets.tenantId, tickets.id],
+      name: 'support_ai_ticket_jobs_ticket_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.triggerMessageId],
+      foreignColumns: [ticketMessages.tenantId, ticketMessages.id],
+      name: 'support_ai_ticket_jobs_trigger_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.replyMessageId],
+      foreignColumns: [ticketMessages.tenantId, ticketMessages.id],
+      name: 'support_ai_ticket_jobs_reply_fk',
+    }),
+    check('support_ai_ticket_jobs_state_check', enumCheck('state', SUPPORT_AI_TICKET_JOB_STATES)),
+    check(
+      'support_ai_ticket_jobs_outcome_check',
+      nullableEnumCheck('outcome', SUPPORT_AI_AUTO_OUTCOMES),
+    ),
+    check('support_ai_ticket_jobs_decision_check', enumCheck('decision', SUPPORT_AI_DECISIONS)),
+    check('support_ai_ticket_jobs_topic_check', enumCheck('topic', SUPPORT_AI_TOPICS)),
+    check(
+      'support_ai_ticket_jobs_confidence_check',
+      enumCheck('confidence', SUPPORT_AI_CONFIDENCES),
+    ),
+    check('support_ai_ticket_jobs_provider_check', enumCheck('provider', SUPPORT_AI_PROVIDERS)),
+    check(
+      'support_ai_ticket_jobs_handoff_reason_check',
+      nullableEnumCheck('handoff_reason', BUSINESS_HANDOFF_REASONS),
+    ),
+    check(
+      'support_ai_ticket_jobs_failure_class_check',
+      nullableEnumCheck('failure_class', SUPPORT_AI_FAILURE_CLASSES),
+    ),
+    check(
+      'support_ai_ticket_jobs_tool_action_check',
+      sql`tool_action IS NULL OR (tool_action <> 'NONE' AND ${enumCheck('tool_action', SUPPORT_AI_ACTION_KINDS)})`,
+    ),
+    check('support_ai_ticket_jobs_attempts_check', sql`attempts >= 0 AND epoch >= 0`),
+    /** Done iff it has an outcome; a sent reply names its message. */
+    check(
+      'support_ai_ticket_jobs_done_check',
+      sql`(state = 'DONE') = (outcome IS NOT NULL) AND (reply_message_id IS NULL OR state = 'DONE')`,
+    ),
+    check('support_ai_ticket_jobs_key_check', sql`length(idempotency_key) BETWEEN 1 AND 300`),
+  ],
+);
+
+/**
+ * Phase 4 PR-4 — who holds a ticket's AI answers. No row: the AI answers (epoch 0). A row is
+ * written when a person replies in the ticket (`HUMAN_ACTIVE`, SOFT) or the AI hands it off
+ * (`HANDOFF_REQUIRED`, HARD or SOFT by `businessHandoffKindOf`), and again when the AI takes the
+ * ticket back (`AI_ACTIVE`, epoch + 1: the earlier epoch's jobs no longer count and are
+ * dropped). `last_human_at` is the last administrator reply; `held_at` when the hold began.
+ * The resume rule is the Business chats' own (`autoResumeTrigger`).
+ */
+export const supportAiTicketHolds = pgTable(
+  'support_ai_ticket_holds',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    ticketId: uuid('ticket_id').notNull(),
+    state: text('state').notNull(),
+    epoch: integer('epoch').notNull().default(0),
+    handoffKind: text('handoff_kind'),
+    handoffReason: text('handoff_reason'),
+    heldAt: timestamptz('held_at').notNull(),
+    lastHumanAt: timestamptz('last_human_at'),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.ticketId], name: 'support_ai_ticket_holds_pkey' }),
+    foreignKey({
+      columns: [table.tenantId, table.ticketId],
+      foreignColumns: [tickets.tenantId, tickets.id],
+      name: 'support_ai_ticket_holds_ticket_fk',
+    }),
+    check('support_ai_ticket_holds_state_check', enumCheck('state', SUPPORT_AI_TICKET_HOLD_STATES)),
+    check(
+      'support_ai_ticket_holds_kind_check',
+      nullableEnumCheck('handoff_kind', BUSINESS_HANDOFF_KINDS),
+    ),
+    check(
+      'support_ai_ticket_holds_reason_check',
+      nullableEnumCheck('handoff_reason', BUSINESS_HANDOFF_REASONS),
+    ),
+    check('support_ai_ticket_holds_epoch_check', sql`epoch >= 0`),
+    /** A hold that ended has no kind; one that is held always has one. */
+    check(
+      'support_ai_ticket_holds_shape_check',
+      sql`(state = 'AI_ACTIVE') = (handoff_kind IS NULL)`,
     ),
   ],
 );
@@ -16632,6 +16875,13 @@ export const supportLearningCandidates = pgTable(
     provider: text('provider'),
     model: text('model'),
     articleId: uuid('article_id'),
+    /**
+     * Phase 4 PR-2 «جایگزین پاسخ تأییدشده»: the approved LEARNED article this lesson re-proposes
+     * (the same normalised title was approved before). Approval writes a new revision of it.
+     */
+    replacesArticleId: uuid('replaces_article_id'),
+    /** Phase 4 PR-2: the source reply was an AI draft a person sent (Assist). */
+    assisted: boolean('assisted').notNull().default(false),
     reviewedByAdminId: uuid('reviewed_by_admin_id'),
     reviewedAt: timestamptz('reviewed_at'),
     textPurgedAt: timestamptz('text_purged_at'),
@@ -16642,12 +16892,14 @@ export const supportLearningCandidates = pgTable(
   (table) => [
     unique('support_learning_candidates_tenant_id_key').on(table.tenantId, table.id),
     /*
-     * A lesson the scrubber rejected is not a decision about the lesson: it holds no title for
-     * the exact-duplicate rule, so the same lesson proposed cleanly later is its own candidate.
+     * Phase 4 PR-2: the exact-duplicate rule holds among PENDING candidates only. A lesson that
+     * was rejected, or approved, is a decision about THAT text: the same lesson proposed again
+     * is a new candidate for a reviewer (for an approved one, a replacement of its article),
+     * never silently merged into a decision already taken.
      */
     uniqueIndex('support_learning_candidates_title_key')
       .on(table.tenantId, table.normalizedTitle)
-      .where(sql`reject_reason IS DISTINCT FROM 'SENSITIVE_CONTENT'`),
+      .where(sql`state = 'PENDING'`),
     /** The review queue: by state, newest first. */
     index('support_learning_candidates_queue_idx').on(table.tenantId, table.state, table.createdAt),
     /*
