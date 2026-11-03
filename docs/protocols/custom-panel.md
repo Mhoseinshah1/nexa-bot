@@ -74,7 +74,7 @@ URL-safe and is sent unencoded. A bridge MUST treat it as case-sensitive and exa
   (`Content-Encoding: gzip`, `deflate` or `br`); the signature covers the body **after**
   decoding.
 - Header names are case-insensitive, as HTTP says; Nexa sends them in lower case.
-- Response size: Nexa reads at most the installation's panel response cap (default 1 MiB);
+- Response size: Nexa reads at most the installation's panel response cap (`PANEL_HTTP_MAX_RESPONSE_BYTES`, default 512 KiB, at most 8 MiB);
   a larger response is a failure.
 - Redirects (3xx) are never followed and are treated as a failure.
 - Unknown request fields: a bridge MUST ignore fields it does not recognise. Unknown response
@@ -529,7 +529,9 @@ How Nexa reads an answer (bridge content is **untrusted**):
   only dots becomes `subscription-<n>`. Nexa never executes, opens or unpacks a file, and never
   logs or stores its content — it exists in memory between the bridge's answer and Telegram's.
 - The whole answer is bounded first by the installation's panel response cap (§2): a larger
-  answer is a failure, and nothing is sent.
+  answer is a failure, and nothing is sent. A files answer larger than that cap is therefore
+  refused as a whole, not trimmed: an operator who expects large files raises
+  `PANEL_HTTP_MAX_RESPONSE_BYTES` (the same holds for RickPanel).
 - Errors: `404 ACCOUNT_NOT_FOUND` (nothing is sent), `501 UNSUPPORTED_OPERATION` (read as
   unsupported), and every other code as §7.2. MUST NOT change state.
 - A bridge SHOULD answer within 5 s like every other read; the request timeout is the same
