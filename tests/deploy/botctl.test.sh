@@ -6357,6 +6357,9 @@ assert_contains 'max_wal_size not recorded' "$deploy_env" 'NEXA_PG_MAX_WAL_SIZE=
 assert_contains 'checkpoint_timeout not recorded' "$deploy_env" 'NEXA_PG_CHECKPOINT_TIMEOUT=15min'
 assert_contains 'maintenance_work_mem not recorded' "$deploy_env" 'NEXA_PG_MAINTENANCE_WORK_MEM=250MB'
 assert_contains 'wal_compression not recorded' "$deploy_env" 'NEXA_PG_WAL_COMPRESSION=lz4'
+# v0.9.7: and the backup-verify limits (nothing stored: the setting's default share).
+assert_contains 'the update did not cap backup-verify' "$deploy_env" 'NEXA_BACKUP_VERIFY_CPUS=0.70'
+assert_contains 'the update did not size backup-verify' "$deploy_env" 'NEXA_BACKUP_VERIFY_MEMORY=1000m'
 assert_contains 'the image was lost' "$deploy_env" "NEXA_IMAGE="
 run_botctl status
 assert_contains 'status does not show shared_buffers' "$BOTCTL_OUTPUT" 'NEXA_PG_SHARED_BUFFERS         2000MB'
@@ -6364,6 +6367,47 @@ assert_contains 'status does not show max_wal_size' "$BOTCTL_OUTPUT" 'NEXA_PG_MA
 assert_contains 'status does not show wal_compression' "$BOTCTL_OUTPUT" 'NEXA_PG_WAL_COMPRESSION        lz4'
 assert_contains 'status has no database tuning heading' "$BOTCTL_OUTPUT" 'database tuning'
 assert_contains 'status does not show the redis bound' "$BOTCTL_OUTPUT" 'maxmemory 64mb, allkeys-lru'
+
+test_case 'backup verify: cpus is percent/100 of one core, memory 1/8 of RAM within 512 MB..2 GB'
+assert_equals 'the default' 'NEXA_BACKUP_VERIFY_CPUS=0.70' "$(nexa_backup_verify_limits '' '')"
+assert_equals 'a stored 35' 'NEXA_BACKUP_VERIFY_CPUS=0.35' "$(nexa_backup_verify_limits 35 '')"
+assert_equals 'a stored 100' 'NEXA_BACKUP_VERIFY_CPUS=1.00' "$(nexa_backup_verify_limits 100 '')"
+assert_equals 'a stored 10' 'NEXA_BACKUP_VERIFY_CPUS=0.10' "$(nexa_backup_verify_limits 10 '')"
+assert_equals 'out of the setting bounds is the default' 'NEXA_BACKUP_VERIFY_CPUS=0.70' "$(nexa_backup_verify_limits 250 '')"
+assert_equals 'not a number is the default' 'NEXA_BACKUP_VERIFY_CPUS=0.70' "$(nexa_backup_verify_limits 'x7' '')"
+assert_equals '16 GB host' "$(printf 'NEXA_BACKUP_VERIFY_CPUS=0.70\nNEXA_BACKUP_VERIFY_MEMORY=2000m')" \
+  "$(nexa_backup_verify_limits 70 16000)"
+assert_contains '8 GB host' "$(nexa_backup_verify_limits 70 8000)" 'NEXA_BACKUP_VERIFY_MEMORY=1000m'
+assert_contains '2 GB host keeps the floor' "$(nexa_backup_verify_limits 70 2000)" 'NEXA_BACKUP_VERIFY_MEMORY=512m'
+assert_contains '64 GB host is capped' "$(nexa_backup_verify_limits 70 64000)" 'NEXA_BACKUP_VERIFY_MEMORY=2048m'
+
+test_case 'backup verify: a restart records the limits from the stored setting, and status shows them'
+fake_set backup_cpu_percent 40
+run_botctl restart
+assert_equals 'the restart failed' 0 "$BOTCTL_STATUS"
+deploy_env="$(cat "${NEXA_CONFIG_DIR}/deploy.env")"
+assert_contains 'cpus not recorded from the setting' "$deploy_env" 'NEXA_BACKUP_VERIFY_CPUS=0.40'
+assert_contains 'memory not recorded from the host' "$deploy_env" 'NEXA_BACKUP_VERIFY_MEMORY=1000m'
+fake_set verify_nanocpus 400000000
+fake_set verify_memory 1048576000
+run_botctl status
+assert_contains 'status has no backup verification heading' "$BOTCTL_OUTPUT" 'backup verification (backup-verify'
+assert_contains 'status does not show the recorded cpus' "$BOTCTL_OUTPUT" 'NEXA_BACKUP_VERIFY_CPUS        0.40'
+assert_contains 'status does not show the recorded memory' "$BOTCTL_OUTPUT" 'NEXA_BACKUP_VERIFY_MEMORY      1000m'
+assert_contains 'status does not show the setting' "$BOTCTL_OUTPUT" 'backup.cpu_limit_percent       40% of one core'
+assert_contains 'status does not show the running limits' "$BOTCTL_OUTPUT" 'running container              cpus 0.40, memory 1000m'
+assert_not_contains 'status warned about agreeing limits' "$BOTCTL_OUTPUT" "'botctl restart' applies it"
+
+test_case 'backup verify: status warns when the setting moved since the container was created'
+fake_set backup_cpu_percent 25
+run_botctl status
+assert_contains 'no warning for a changed setting' "$BOTCTL_OUTPUT" "asks for 0.25 of a core and backup-verify is recorded at 0.40"
+test_case 'backup verify: a database that does not answer is the default, and never a warning'
+fake_set backup_cpu_query_fails 1
+run_botctl status
+assert_contains 'the default is not shown' "$BOTCTL_OUTPUT" '70% of one core (the default'
+assert_not_contains 'warned without a reading' "$BOTCTL_OUTPUT" "'botctl restart' applies it"
+fake_set backup_cpu_query_fails 0
 
 test_case 'db tuning: a restart records it too (the first update into R12 runs the old botctl)'
 printf 'MemTotal:       4096000 kB\n' >"$MEMINFO_FIXTURE"
@@ -6395,6 +6439,7 @@ for unsafe in 'fsync=' 'full_page_writes=' 'synchronous_commit='; do
   assert_not_contains "compose.yml sets ${unsafe}" "$compose_file" "$unsafe"
 done
 assert_contains 'the installer does not size PostgreSQL' "$(cat "${REPO}/deploy/install.sh")" 'nexa_record_pg_tuning'
+assert_contains 'the installer does not cap backup-verify' "$(cat "${REPO}/deploy/install.sh")" 'nexa_record_backup_verify_limits'
 assert_contains 'docs/deployment.md does not document the sizing' \
   "$(cat "${REPO}/docs/deployment.md")" 'NEXA_PG_SHARED_BUFFERS'
 

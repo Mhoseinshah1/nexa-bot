@@ -1048,6 +1048,108 @@ nexa_record_pg_tuning() {
   nexa_ok "PostgreSQL sized for this host: $(printf '%s' "$values" | tr '\n' ' ')"
 }
 
+# v0.9.7: the Docker limits of the `backup-verify` service, where the backup's verification
+# restore runs (deploy/compose.yml). Two values in deploy.env:
+#
+#   NEXA_BACKUP_VERIFY_CPUS    backup.cpu_limit_percent / 100 of ONE core — the share the owner
+#                              sets in the Web Admin, which the client tools (7-Zip, pg_dump,
+#                              pg_restore) already follow at every spawn; here it caps the
+#                              verification SERVER too. 70 (the setting's default) -> 0.70.
+#   NEXA_BACKUP_VERIFY_MEMORY  1/8 of the host's RAM, at least 512 MB, at most 2 GB: the server
+#                              runs with shared_buffers=64MB and maintenance_work_mem=64MB, so
+#                              this is room for one restore's index builds, not a cache.
+#
+# The percent is read from the database (the primary tenant's stored value) when postgres
+# answers, and is the setting's default otherwise — at install, before the first start. Docker
+# applies a container's limits when it is created, so a change in the Web Admin reaches the
+# server at the next `botctl restart` or `botctl update`; `botctl status` says when the two
+# differ. NEXA_MEMINFO (via nexa_host_memory_mb) exists for the tests.
+NEXA_BACKUP_CPU_LIMIT_DEFAULT=70
+
+# The stored backup.cpu_limit_percent, or nothing (exit 1) when it cannot be read or was never
+# stored. Read-only: one SELECT through the postgres container's own client.
+nexa_backup_cpu_percent_setting() {
+  local pg_user pg_db value
+  pg_user="$(nexa_env_value "${NEXA_CONFIG_DIR}/postgres.env" POSTGRES_USER 2>/dev/null)" || return 1
+  pg_db="$(nexa_env_value "${NEXA_CONFIG_DIR}/postgres.env" POSTGRES_DB 2>/dev/null)" || return 1
+  value="$(nexa_compose exec -T postgres psql -U "$pg_user" -d "$pg_db" -XAtq -c \
+    "SELECT sv.value #>> '{}' FROM setting_values sv JOIN tenants t ON t.id = sv.tenant_id WHERE sv.setting_key = 'backup.cpu_limit_percent' AND t.kind = 'PRIMARY' ORDER BY t.created_at, t.id LIMIT 1" \
+    </dev/null 2>/dev/null)" || return 1
+  case "$value" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  printf '%s\n' "$value"
+}
+
+# The limits for a percent (empty: the default) and a host memory in MB (empty: not printed).
+# Pure, so the arithmetic is tested without Docker.
+nexa_backup_verify_limits() {
+  local percent="${1:-}" mb="${2:-}" mem
+  case "$percent" in
+    '' | *[!0-9]*) percent="$NEXA_BACKUP_CPU_LIMIT_DEFAULT" ;;
+  esac
+  # The setting's own bounds (10-100); anything else is not a value the Web Admin can store.
+  if [ "$percent" -lt 10 ] || [ "$percent" -gt 100 ]; then percent="$NEXA_BACKUP_CPU_LIMIT_DEFAULT"; fi
+  printf 'NEXA_BACKUP_VERIFY_CPUS=%d.%02d\n' "$((percent / 100))" "$((percent % 100))"
+  case "$mb" in
+    '' | *[!0-9]*) return 0 ;;
+  esac
+  mem=$((mb / 8))
+  [ "$mem" -ge 512 ] || mem=512
+  [ "$mem" -le 2048 ] || mem=2048
+  printf 'NEXA_BACKUP_VERIFY_MEMORY=%sm\n' "$mem"
+}
+
+# Records the limits in deploy.env. Never fatal, like nexa_record_pg_tuning: an unreadable
+# setting is the default, an unreadable host memory keeps what deploy.env already has.
+nexa_record_backup_verify_limits() {
+  local percent mb values
+  percent="$(nexa_backup_cpu_percent_setting 2>/dev/null || true)"
+  mb="$(nexa_host_memory_mb 2>/dev/null || true)"
+  values="$(nexa_backup_verify_limits "$percent" "$mb")"
+  # shellcheck disable=SC2086 # one KEY=VALUE per word, none containing a space.
+  nexa_set_deploy_values $values
+  nexa_ok "backup verification capped: $(printf '%s' "$values" | tr '\n' ' ')"
+}
+
+# The limits as status prints them: what deploy.env records, what the running container was
+# created with, and the Web Admin setting they come from — with a warning when they differ.
+nexa_backup_verify_report() {
+  local file="${NEXA_CONFIG_DIR}/deploy.env" cpus memory percent expected id running=""
+  cpus="$(nexa_env_value "$file" NEXA_BACKUP_VERIFY_CPUS 2>/dev/null || true)"
+  memory="$(nexa_env_value "$file" NEXA_BACKUP_VERIFY_MEMORY 2>/dev/null || true)"
+  printf '\nbackup verification (backup-verify; deploy.env, applied when it is next recreated):\n'
+  printf '  %-30s %s\n' NEXA_BACKUP_VERIFY_CPUS "${cpus:-0.70 (not recorded; compose default)}"
+  printf '  %-30s %s\n' NEXA_BACKUP_VERIFY_MEMORY "${memory:-512m (not recorded; compose default)}"
+  if percent="$(nexa_backup_cpu_percent_setting 2>/dev/null)"; then
+    printf '  %-30s %s%% of one core (Web Admin; 7-Zip, pg_dump and pg_restore follow it at once)\n' \
+      backup.cpu_limit_percent "$percent"
+  else
+    percent=""
+    printf '  %-30s %s%% of one core (the default; nothing stored, or the database did not answer)\n' \
+      backup.cpu_limit_percent "$NEXA_BACKUP_CPU_LIMIT_DEFAULT"
+  fi
+  id="$(nexa_compose ps -q backup-verify 2>/dev/null || true)"
+  if [ -n "$id" ]; then
+    running="$(docker inspect "$id" --format '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}}' 2>/dev/null || true)"
+  fi
+  if [ -n "$running" ]; then
+    local nano bytes
+    read -r nano bytes <<<"$running"
+    printf '  %-30s cpus %d.%02d, memory %sm\n' 'running container' \
+      "$((nano / 1000000000))" "$(((nano % 1000000000) / 10000000))" "$((bytes / 1048576))"
+  else
+    printf '  %-30s %s\n' 'running container' 'not running'
+  fi
+  # Compared only against a value the database actually answered with.
+  [ -n "$percent" ] || return 0
+  expected="$(nexa_backup_verify_limits "$percent" "")"
+  expected="${expected#NEXA_BACKUP_VERIFY_CPUS=}"
+  if [ -n "$cpus" ] && [ "$cpus" != "$expected" ]; then
+    nexa_warn "the backup CPU setting asks for ${expected} of a core and backup-verify is recorded at ${cpus}; 'botctl restart' applies it."
+  fi
+}
+
 # The sizing as status prints it: what deploy.env names, or the default compose uses.
 nexa_db_tuning_report() {
   local file="${NEXA_CONFIG_DIR}/deploy.env" pair key value default

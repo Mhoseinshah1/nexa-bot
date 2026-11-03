@@ -1011,6 +1011,9 @@ write_deploy_env() {
   nexa_ok "deployment settings recorded"
   # R12 F2: PostgreSQL's memory settings, from this host's RAM (botctl update redoes it).
   nexa_record_pg_tuning
+  # v0.9.7: the backup-verify service's CPU (the backup CPU setting's default here, before
+  # the database exists) and memory limits; botctl update and restart redo it.
+  nexa_record_backup_verify_limits
 }
 
 # ---------------------------------------------------------------------------
