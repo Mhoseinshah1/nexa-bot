@@ -1,3 +1,4 @@
+import { readNexaCutoverState } from '../../apps/api/src/modules/platform/legacy-cutover/infrastructure/pg-cutover-reconciliation.reader';
 import { createHash, randomBytes } from 'node:crypto';
 import { copyFile, readFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -806,6 +807,13 @@ export function rigExecutor(
     },
     history: () => container.legacyHistoryIngest,
     cutover: () => container.legacyCutover,
+    // v0.9.7: as the container wires it — the apply records its balance reconciliation.
+    nexaCutoverState: (tenantId) =>
+      readNexaCutoverState(container.database, {
+        tenantSlug: null,
+        tenantId,
+        statementTimeoutMs: 600_000,
+      }),
     uow: container.uow,
     // A development database name: not production-like (the guard's own classification).
     target: { host: '127.0.0.1', port: '5432', database: 'nexa_test' },

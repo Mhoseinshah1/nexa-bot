@@ -18,6 +18,7 @@ This file was moved verbatim out of `CLAUDE.md` on 2026-10-24. It holds project 
 - [Phase 6 capacity and usernames](#phase-6-capacity-and-usernames)
 - [Deployment](#deployment)
 - [Backup](#backup)
+- [Cleanup after a Mirza import (v0.9.7)](#cleanup-after-a-mirza-import-v097)
 - [Recovery](#recovery)
 - [Real-panel acceptance](#real-panel-acceptance)
 - [Operational events](#operational-events)
@@ -579,6 +580,26 @@ looks like a backup and is not:
   replicas is normal on every rolling update. A stale lease is taken over by
   FAILING the abandoned run, never by adopting it: its files belong to a process
   that may still be writing them.
+
+## Cleanup after a Mirza import (v0.9.7)
+
+Owner decisions (round NEXA-FIX-V097, PR-1; detail in `docs/legacy-migration/compaction.md`):
+
+- **Automatic, no button.** Once an import is `COMPLETED` / `COMPLETED_WITH_DISCREPANCY` /
+  `ADOPT_DONE` and its recorded balance reconciliation shows no `BALANCE_DIFFERS`,
+  `MISSING_IN_NEXA` or `AGENT_CREDIT_IN_WALLET`, the worker cleans up by itself. A missing
+  reconciliation is never read as a clean one. No backup destination → nothing deleted, one
+  ops condition, re-checked daily. Nothing is deleted before the «آرشیو ربات قبلی» archive
+  reached Telegram in every part (unchanged).
+- **Dropped:** unread `legacy_history_records` types, `legacy_import_map`,
+  `legacy_service_candidates` (the owner does not review held services),
+  `legacy_invoice_archive_staging` of finished runs, `legacy_trial_eligibility`. **Kept:**
+  `legacy_invoice_archive`, customers, wallets and the ledger, services, resellers, products,
+  orders, payments, `wallet_history_imports`, and every type the money-history reader or the
+  customer's history card reads.
+- **An imported customer MAY take a Nexa trial again.** The cleanup lifts the limit of 0 the
+  import imposed (never an operator's own override). Until the cleanup runs, the import's
+  limit stands.
 
 ## Recovery
 

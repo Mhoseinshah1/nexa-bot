@@ -389,13 +389,15 @@ export class DrizzleTermsRepository implements TermsRepository {
   ): Promise<TermsExemptionReason | null> {
     const tenantId = requireTenantId(scope);
     const result = await this.exec(tx).execute<{ imported: boolean; predates: boolean }>(sql`
-      SELECT EXISTS (
+      -- v0.9.7: the cleanup after an import empties legacy_import_map; the customer's own
+      -- source mark (set by the import for every customer it created) still says imported.
+      SELECT (c.source = 'MIRZA' OR EXISTS (
                SELECT 1 FROM legacy_import_map m
                 WHERE m.tenant_id = c.tenant_id
                   AND m.entity_type = 'CUSTOMER'
                   AND m.status = 'IMPORTED'
                   AND m.entity_id = c.id
-             ) AS imported,
+             )) AS imported,
              COALESCE(c.created_at < t.rules_first_enforced_at, false) AS predates
         FROM customers c
         JOIN tenants t ON t.id = c.tenant_id

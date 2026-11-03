@@ -61,6 +61,8 @@ export const DETAIL_KEYS: readonly string[] = [
   'attempt',
   'attemptNumber',
   'httpStatus',
+  // v0.9.7: the legacy cleanup's before → after table sizes (MiB). Sizes only, never a value.
+  'sizes',
 ];
 
 /**

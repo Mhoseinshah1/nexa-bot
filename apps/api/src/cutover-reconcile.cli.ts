@@ -2,8 +2,6 @@ import { tmpdir } from 'node:os';
 import type { NxpkgSecret } from './infrastructure/nxpkg/index.js';
 import { createDatabase } from './infrastructure/persistence/database.js';
 import {
-  agentProfileIdOf,
-  agentStateOf,
   cutoverExitCode,
   cutoverReportJson,
   cutoverReportText,
@@ -19,10 +17,7 @@ import {
   classifyTarget,
   type TargetIdentity,
 } from './modules/platform/legacy-importer/application/production-guard.js';
-import {
-  readLegacySnapshot,
-  serviceCandidateInvoices,
-} from './modules/platform/legacy-importer/application/source-snapshot.js';
+import { readMirzaCutoverSide } from './modules/platform/legacy-cutover/infrastructure/mirza-cutover-side.js';
 import type { MirzaServiceInvoice } from './modules/platform/legacy-cutover/application/cutover-service-reconciliation.js';
 import { nxpkgSourceConnector } from './modules/platform/legacy-importer/infrastructure/nxpkg-legacy-source.js';
 
@@ -208,30 +203,7 @@ export async function readMirzaSide(
 }> {
   const connector = await nxpkgSourceConnector(packagePath, secret, workDir);
   try {
-    const snapshot = await readLegacySnapshot(connector);
-    const users = snapshot.users.map((u) => ({ id: u.id, balance: u.balance, agent: u.agent }));
-    const serviceInvoices = serviceCandidateInvoices(snapshot).map((invoice) => ({
-      invoiceKey: invoice.idInvoice,
-      ownerTelegramId: invoice.idUser,
-    }));
-    const agentStates: MirzaAgentState[] = [];
-    const pkg = connector.pkg;
-    const agentProfileIds = new Set<string>();
-    const statePath = 'records/agents/state.jsonl';
-    const profilePath = 'records/agents/profiles.jsonl';
-    if (pkg !== null && pkg.has(statePath)) {
-      for await (const record of pkg.iterJsonl(statePath)) {
-        const state = agentStateOf(record);
-        if (state !== null) agentStates.push(state);
-      }
-    }
-    if (pkg !== null && pkg.has(profilePath)) {
-      for await (const record of pkg.iterJsonl(profilePath)) {
-        const id = agentProfileIdOf(record);
-        if (id !== null) agentProfileIds.add(id);
-      }
-    }
-    return { users, agentStates, agentProfileIds, serviceInvoices };
+    return await readMirzaCutoverSide(connector);
   } finally {
     await connector.close();
   }

@@ -19,6 +19,7 @@ import {
   validInventoryHold,
   type ActorContext,
   type LegacyInventoryPanelDiagnostics,
+  type LegacyBalanceReconciliation,
   type LegacyMigrationAdoptReport,
   type LegacyMigrationApplyReport,
   type LegacyMigrationCodeCount,
@@ -44,6 +45,9 @@ import { runInventory } from '../../../../legacy-import-inventory.js';
 import { freshCutoverFingerprints } from '../../../../legacy-import-cutover.js';
 import type { LegacyCutoverService } from '../../legacy-cutover/application/legacy-cutover.service.js';
 import { stopSalesHolds } from '../../legacy-cutover/domain/cutover-rules.js';
+import { reconcileCutover } from '../../legacy-cutover/application/cutover-reconciliation.js';
+import type { NexaCutoverState } from '../../legacy-cutover/infrastructure/pg-cutover-reconciliation.reader.js';
+import { readMirzaCutoverSide } from '../../legacy-cutover/infrastructure/mirza-cutover-side.js';
 import {
   classifyTarget,
   evaluateProductionGuard,
@@ -164,6 +168,12 @@ export interface NxpkgMigrationAdapterDeps {
     readonly NODE_ENV?: string | undefined;
     readonly [TARGET_ACK_ENV]?: string | undefined;
   };
+  /**
+   * v0.9.7: what the NEXA side of the cutover's balance reconciliation reads for a tenant
+   * (`readNexaCutoverState`, read-only by the server's rule). Absent: the apply records no
+   * balance reconciliation, and the automatic cleanup never runs for it.
+   */
+  readonly nexaCutoverState?: (tenantId: string) => Promise<NexaCutoverState>;
   /** Reads the decisions file. Injected so a test can give bytes without a disk. */
   readonly readDecisions?: (path: string) => Promise<Uint8Array>;
   readonly logger: {
@@ -692,7 +702,9 @@ export class NxpkgMigrationAdapters
         v2?.verdict?.holds === true &&
         typeof run.report.verdict === 'string' &&
         !run.report.verdict.endsWith('_WITH_DISCREPANCY');
+      const balanceReconciliation = await this.balanceReconciliationOf(context, opened);
       return {
+        ...(balanceReconciliation === undefined ? {} : { balanceReconciliation }),
         importerVerdict: input.importerVerdict,
         reconcileVerdict: input.reconcileVerdict,
         reportHolds: holds,
@@ -726,6 +738,37 @@ export class NxpkgMigrationAdapters
   }
 
   // --- internals --------------------------------------------------------------------------
+
+  /**
+   * v0.9.7: the cutover's balance reconciliation (`reconcileCutover`), run by the apply's
+   * REPORT step while the package is open and the installation still frozen — the moment the
+   * wallets can only hold what the import posted. Counts by kind only, for the import row;
+   * the automatic cleanup reads it (`balanceReconciliationClean`). A failure to compute it is
+   * not a verdict on the import: it is logged and left out, and the cleanup then never runs
+   * by itself (a missing reconciliation is never read as a clean one).
+   */
+  private async balanceReconciliationOf(
+    context: Context,
+    opened: Opened,
+  ): Promise<LegacyBalanceReconciliation | undefined> {
+    const read = this.deps.nexaCutoverState;
+    if (read === undefined) return undefined;
+    try {
+      const mirza = await readMirzaCutoverSide(opened.connector);
+      const nexa = await read(context.scope.tenantId);
+      const result = reconcileCutover({ ...mirza, ...nexa });
+      return { verdict: result.verdict, differences: { ...result.differenceCounts } };
+    } catch (error) {
+      this.deps.logger.warn(
+        {
+          importId: context.importId,
+          err: error instanceof Error ? error.message : String(error),
+        },
+        'the balance reconciliation could not be computed; the automatic cleanup will not run for this import',
+      );
+      return undefined;
+    }
+  }
 
   private async withPackage<T>(context: Context, fn: (opened: Opened) => Promise<T>): Promise<T> {
     let connector: NxpkgLegacySourceConnector;

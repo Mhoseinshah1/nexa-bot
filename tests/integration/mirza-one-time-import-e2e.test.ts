@@ -16,6 +16,9 @@ import {
   type GeneratedDataset,
   type MigrationPackage,
 } from '../support/legacy-migration-rig';
+import { LegacyCleanupScheduler } from '../../apps/api/src/modules/platform/legacy-compaction/application/legacy-cleanup.scheduler';
+import { LegacyCompactionExecutor } from '../../apps/api/src/modules/platform/legacy-compaction/application/legacy-compaction.executor';
+import { DrizzleLegacyCompactionRepository } from '../../apps/api/src/modules/platform/legacy-compaction/infrastructure/drizzle-legacy-compaction.repository';
 
 /**
  * The one-time Mirza import, end to end (owner decision 2026-10-17,
@@ -217,6 +220,14 @@ describe('the one-time Mirza import, end to end', () => {
     }
     for (const row of report?.exactMatch?.rows ?? [])
       expect(row.holds, JSON.stringify(row)).toBe(true);
+    // v0.9.7: the apply recorded the cutover's balance reconciliation, and it is clean — what
+    // lets the automatic cleanup run.
+    expect(
+      report?.balanceReconciliation,
+      JSON.stringify(report?.balanceReconciliation),
+    ).toMatchObject({
+      differences: { BALANCE_DIFFERS: 0, MISSING_IN_NEXA: 0, AGENT_CREDIT_IN_WALLET: 0 },
+    });
   });
 
   it('every final wallet balance is exactly the Mirza Balance, negative and zero included', async () => {
@@ -339,4 +350,75 @@ describe('the one-time Mirza import, end to end', () => {
     expect(await footprint()).toEqual(before);
     expect(await balances()).toEqual(balancesBefore);
   });
+
+  /*
+   * v0.9.7: after the clean import, the AUTOMATIC cleanup runs (the archive backup is
+   * substituted: `legacy-import-cleanup.test.ts` holds its gate) and drops the import's
+   * working tables — and not one customer, balance, order, service, payment or notification
+   * changes. Runs last: it empties what the tests above read.
+   */
+  it('the automatic cleanup then runs, and changes no count, sum or balance', async () => {
+    const before = await footprint();
+    const balancesBefore = await balances();
+    const c = ctx.container;
+    const actor = systemJobActor('mirza-e2e-cleanup', 'corr-mirza-e2e' as CorrelationId);
+    const scheduler = new LegacyCleanupScheduler({
+      repository: new DrizzleLegacyCompactionRepository(c.database.db),
+      service: c.legacyCompaction,
+      backupDestination: async () => 'DEDICATED_CHAT',
+      opsLog: c.opsLog,
+      clock: c.clock,
+      actor: () => actor,
+      logger: { info() {}, warn() {} },
+    });
+    await scheduler.tick();
+    const backupId = '00000000-0000-4000-8000-00000000e2e1';
+    const executor = new LegacyCompactionExecutor({
+      repository: new DrizzleLegacyCompactionRepository(c.database.db),
+      uow: c.uow,
+      audit: c.audit,
+      opsLog: c.opsLog,
+      scopeActivity: c.tenants,
+      clock: c.clock,
+      backup: {
+        run: async () =>
+          ({
+            kind: 'COMPLETED',
+            run: { id: backupId, state: 'SUCCEEDED', verifiedAt: new Date(), failureCode: null },
+          }) as never,
+      },
+      backupParts: async () => [
+        {
+          backupId,
+          partNumber: 1,
+          filename: 'a.7z.001',
+          bytes: 1n,
+          sha256: 'a'.repeat(64),
+          deliveryState: 'SUCCEEDED',
+          deliveryAttemptedAt: new Date(),
+          telegramMessageId: 1n,
+          deliveryDetail: null,
+        },
+      ],
+      quiesced: async () => false,
+      actor: () => actor,
+      leaseOwner: 'mirza-e2e:cleanup',
+      batchSize: 500,
+      tickIntervalMs: 60_000,
+      logger: { info() {}, warn() {}, error() {} },
+    });
+    const ended = await executor.tick();
+    expect(ended?.state, String(ended?.failureCode)).toBe('COMPLETED');
+    for (const table of [
+      'legacy_import_map',
+      'legacy_service_candidates',
+      'legacy_trial_eligibility',
+    ] as const) {
+      expect(Number(ended?.before?.tables[table]), table).toBeGreaterThan(0);
+      expect(await rig.count(table), table).toBe(0);
+    }
+    expect(await rig.count('legacy_invoice_archive')).toBeGreaterThan(0);
+    expect(await footprint()).toEqual(before);
+    expect(await balances()).toEqual(balancesBefore);
+  }, 300_000);
 });
