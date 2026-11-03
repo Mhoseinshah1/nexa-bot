@@ -544,11 +544,19 @@ describe('the enable-confirmation policy', () => {
     // R4 A4: turning the re-prompt ON also stops every customer who accepted an older version.
     // R10 D5 (b): turning the referral guard ON makes every unclaimed gift wait for a purchase
     // at once (no balance moves, but customers stop being able to claim), so it asks too.
+    // NEXA v095 PR-4 A: turning the phone verification ON makes it mandatory for every
+    // customer with no verified number at once, so it asks too.
     expect(asking).toEqual([
+      'phone_verification',
       'referral_abuse_guard',
       'terms_enforcement',
       'terms_reprompt_on_new_version',
     ]);
+    expect(FEATURE_PRESENTATION.phone_verification.confirmEnable).toEqual({
+      question: 'web.feature_phone_verification_confirm_question',
+      detail: 'web.feature_phone_verification_confirm_detail',
+      confirmLabel: 'web.feature_phone_verification_confirm',
+    });
     expect(FEATURE_PRESENTATION.referral_abuse_guard.confirmEnable).toEqual({
       question: 'web.referral_abuse_guard_confirm_question',
       detail: 'web.referral_abuse_guard_confirm_detail',
