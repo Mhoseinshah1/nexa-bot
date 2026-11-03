@@ -1,8 +1,20 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
-import type { ProviderFailureKind, ProviderLastSeen } from '@nexa/contracts';
+import {
+  SUBSCRIPTION_FILES_MAX_COUNT,
+  SUBSCRIPTION_FILES_MAX_TOTAL_BYTES,
+  SUBSCRIPTION_FILE_MAX_BYTES,
+  SUBSCRIPTION_FILE_MEDIA_TYPES,
+  type ProviderAnnounceableCapability,
+  type ProviderFailureKind,
+  type ProviderLastSeen,
+  type ProviderSubscriptionFile,
+  type SubscriptionFileMediaType,
+} from '@nexa/contracts';
+import { decodeStrictBase64, safeFileName } from './subscription-files.js';
 
 /**
- * The wire half of Nexa's own bridge protocol, v1 (R10 C2).
+ * The wire half of Nexa's own bridge protocol, v1 (R10 C2), revision 1.1 (v0.9.5: the
+ * optional, announced `files` operation).
  *
  * `docs/protocols/custom-panel.md` IS the specification, and this module is its
  * transcription: the paths, the canonical strings, the error-code table and the strict
@@ -31,6 +43,8 @@ export const ACCOUNT_SUFFIX = {
   delete: 'delete',
   rotateLink: 'rotate-link',
   links: 'links',
+  /** v1.1, optional: called only while health announces `files` (§5.10). */
+  files: 'files',
 } as const;
 
 /**
@@ -50,7 +64,29 @@ export const CUSTOM_ENDPOINTS: readonly {
   { method: 'POST', path: `/${ACCOUNTS_PATH}/{username}/${ACCOUNT_SUFFIX.delete}` },
   { method: 'POST', path: `/${ACCOUNTS_PATH}/{username}/${ACCOUNT_SUFFIX.rotateLink}` },
   { method: 'GET', path: `/${ACCOUNTS_PATH}/{username}/${ACCOUNT_SUFFIX.links}` },
+  { method: 'GET', path: `/${ACCOUNTS_PATH}/{username}/${ACCOUNT_SUFFIX.files}` },
 ];
+
+/**
+ * v1.1: the optional operations a bridge may announce in health's `capabilities`, and the
+ * Nexa capability each one is (§5.1's table, `custom-panel-protocol-doc.test.ts`).
+ */
+export const BRIDGE_CAPABILITIES: Readonly<Record<string, ProviderAnnounceableCapability>> = {
+  files: 'SUBSCRIPTION_FILES',
+};
+
+/**
+ * What a health answer announced, read leniently: absent, not an array, or holding
+ * anything but strings is NONE (the v1.0 behaviour, never a failed health check); a value
+ * outside `BRIDGE_CAPABILITIES` is ignored. Deduplicated, in the table's order.
+ */
+export function parseAnnouncedCapabilities(value: unknown): ProviderAnnounceableCapability[] {
+  if (!Array.isArray(value) || value.some((one) => typeof one !== 'string')) return [];
+  const named = new Set(value as string[]);
+  return Object.entries(BRIDGE_CAPABILITIES)
+    .filter(([wire]) => named.has(wire))
+    .map(([, capability]) => capability);
+}
 
 /** The account's path RELATIVE to the base URL — what the HTTP client resolves. */
 export function accountPath(username: string, suffix?: string): string {
@@ -371,4 +407,78 @@ export function parseJsonObject(bodyText: string): Record<string, unknown> | nul
   } catch {
     return null;
   }
+}
+
+// --- Files (§5.10, v1.1) -------------------------------------------------------------
+
+/**
+ * A bridge's `contentType`, only if it is EXACTLY one of the closed set RickPanel's files
+ * are typed into (`SUBSCRIPTION_FILE_MEDIA_TYPES`) — lowercase, no parameters. Anything
+ * else is null and the entry is refused: a protocol Nexa wrote has no reason to accept a
+ * type it did not list, and `application/octet-stream` is in the list for everything else.
+ */
+export function bridgeMediaType(value: unknown): SubscriptionFileMediaType | null {
+  return typeof value === 'string' &&
+    (SUBSCRIPTION_FILE_MEDIA_TYPES as readonly string[]).includes(value)
+    ? (value as SubscriptionFileMediaType)
+    : null;
+}
+
+/** A files answer, read: the account it is about, and the files that passed every bound. */
+export interface CustomAccountFiles {
+  readonly username: string;
+  readonly nexaRef: string | null;
+  readonly files: readonly ProviderSubscriptionFile[];
+  /** Entries refused here (type, Base64, size, running total, not an object). */
+  readonly refused: number;
+}
+
+/**
+ * One signed 2xx `files` body (§5.10), strictly, or null when it is malformed.
+ *
+ * Untrusted content, bounded with RickPanel's limits (`subscription-files.ts`, the
+ * contracts' `SUBSCRIPTION_FILE*` constants) and its file-name cleaner: more entries
+ * than `SUBSCRIPTION_FILES_MAX_COUNT` is malformed, never truncated; one entry with an
+ * unlisted type, bad Base64, no bytes, too many bytes, or bytes past the running total is
+ * REFUSED — counted, not sent — and the rest are kept. Nothing here logs, throws with, or
+ * keeps a copy of a file's content.
+ */
+export function parseAccountFiles(
+  body: Readonly<Record<string, unknown>> | null,
+  expectedUsername: string,
+): CustomAccountFiles | null {
+  if (body === null) return null;
+  const username = body['username'];
+  if (typeof username !== 'string' || username !== expectedUsername) return null;
+  const nexaRef = body['nexaRef'];
+  if (!(nexaRef === null || (typeof nexaRef === 'string' && NEXA_REF.test(nexaRef)))) return null;
+  const entries = body['files'];
+  if (!Array.isArray(entries) || entries.length > SUBSCRIPTION_FILES_MAX_COUNT) return null;
+  if (
+    entries.some((entry) => typeof entry !== 'object' || entry === null || Array.isArray(entry))
+  ) {
+    return null;
+  }
+
+  const files: ProviderSubscriptionFile[] = [];
+  let refused = 0;
+  let total = 0;
+  (entries as Record<string, unknown>[]).forEach((entry, index) => {
+    const mediaType = bridgeMediaType(entry['contentType']);
+    const content = entry['contentBase64'];
+    const bytes = typeof content === 'string' ? decodeStrictBase64(content) : null;
+    if (
+      mediaType === null ||
+      bytes === null ||
+      bytes.byteLength === 0 ||
+      bytes.byteLength > SUBSCRIPTION_FILE_MAX_BYTES ||
+      total + bytes.byteLength > SUBSCRIPTION_FILES_MAX_TOTAL_BYTES
+    ) {
+      refused += 1;
+      return;
+    }
+    total += bytes.byteLength;
+    files.push({ fileName: safeFileName(entry['name'], index), mediaType, bytes, caption: null });
+  });
+  return { username, nexaRef, files, refused };
 }

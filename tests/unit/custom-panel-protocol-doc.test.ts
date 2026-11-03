@@ -1,16 +1,22 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type {
-  ProviderHttpClient,
-  ProviderHttpRequest,
-  ProviderHttpResult,
-  ProviderServiceTarget,
-  ServiceId,
+import {
+  SUBSCRIPTION_FILES_MAX_COUNT,
+  SUBSCRIPTION_FILES_MAX_TOTAL_BYTES,
+  SUBSCRIPTION_FILE_MAX_BYTES,
+  SUBSCRIPTION_FILE_MEDIA_TYPES,
+  SUBSCRIPTION_FILE_NAME_MAX_LENGTH,
+  type ProviderHttpClient,
+  type ProviderHttpRequest,
+  type ProviderHttpResult,
+  type ProviderServiceTarget,
+  type ServiceId,
 } from '@nexa/contracts';
 import { CustomPanelAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/custom-panel.adapter';
 import {
   ACCOUNT_STATUSES,
+  BRIDGE_CAPABILITIES,
   CUSTOM_ENDPOINTS,
   CUSTOM_ERROR_CODES,
   EMPTY_BODY_SHA256,
@@ -78,8 +84,43 @@ describe('the protocol document and the adapter agree', () => {
       method: cells[2],
       path: `/${backticked(cells[3] ?? '') ?? ''}`,
     }));
-    expect(table).toHaveLength(9);
+    expect(table).toHaveLength(10);
     expect(table).toEqual(CUSTOM_ENDPOINTS.map((one) => ({ method: one.method, path: one.path })));
+  });
+
+  it('v1.1 — names itself, and keeps every v1.0 bridge working', () => {
+    expect(DOC).toContain('revision 1.1');
+    const overview = section('## 1. Overview');
+    expect(overview).toMatch(/\|\s*10\s*\|[^\n]*`v1\/accounts\/\{username\}\/files`[^\n]*optional/);
+    expect(section('### 5.1 Health')).toContain('Absent, `[]`, or anything that is not an array');
+    expect(section('## 9. Versioning')).toContain('A v1.0 bridge needs');
+  });
+
+  it('§5.1 — the capabilities a bridge may announce, and what each is to Nexa', () => {
+    const table = Object.fromEntries(
+      rows(section('### 5.1 Health')).map((cells) => [
+        backticked(cells[0] ?? ''),
+        backticked(cells[1] ?? ''),
+      ]),
+    );
+    expect(Object.keys(table)).toEqual(Object.keys(BRIDGE_CAPABILITIES));
+    expect(table['files']).toBe('GET v1/accounts/{username}/files');
+  });
+
+  it('§5.10 — the files limits are RickPanel’s, the contracts’ constants, to the byte', () => {
+    const text = section('### 5.10 Get account files');
+    const limits = Object.fromEntries(
+      rows(text.slice(text.indexOf('| Limit'))).map((cells) => [cells[0], cells[1] ?? '']),
+    );
+    const first = (cell: string | undefined) => Number(backticked(cell ?? '') ?? NaN);
+    expect(first(limits['Entries per answer'])).toBe(SUBSCRIPTION_FILES_MAX_COUNT);
+    expect(Number(/to `(\d+)`/.exec(limits['Bytes per file (decoded)'] ?? '')?.[1] ?? NaN)).toBe(
+      SUBSCRIPTION_FILE_MAX_BYTES,
+    );
+    expect(first(limits['Bytes per answer (decoded)'])).toBe(SUBSCRIPTION_FILES_MAX_TOTAL_BYTES);
+    expect(first(limits['`name`'])).toBe(SUBSCRIPTION_FILE_NAME_MAX_LENGTH);
+    const types = [...(limits['`contentType`'] ?? '').matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+    expect(types).toEqual([...SUBSCRIPTION_FILE_MEDIA_TYPES]);
   });
 
   it('§4.2 — the account statuses', () => {
@@ -110,7 +151,11 @@ const vectors = (() => {
   };
   const a = text.slice(text.indexOf('**Vector A'), text.indexOf('**Vector B'));
   const b = text.slice(text.indexOf('**Vector B'), text.indexOf('**Vector C'));
-  const c = text.slice(text.indexOf('**Vector C'));
+  const c = text.slice(text.indexOf('**Vector C'), text.indexOf('**Vector D'));
+  const d = text.slice(text.indexOf('**Vector D'), text.indexOf('**Vector E'));
+  const e = text.slice(text.indexOf('**Vector E'));
+  const inD = (pattern: RegExp) => pattern.exec(d)?.[1] ?? '';
+  const inE = (pattern: RegExp) => pattern.exec(e)?.[1] ?? '';
   const inA = (pattern: RegExp) => pattern.exec(a)?.[1] ?? '';
   const inB = (pattern: RegExp) => pattern.exec(b)?.[1] ?? '';
   const inC = (pattern: RegExp) => pattern.exec(c)?.[1] ?? '';
@@ -136,15 +181,58 @@ const vectors = (() => {
       bodySha: inC(/SHA-256\s+`([0-9a-f]{64})`/),
       signature: inC(/X-Nexa-Bridge-Signature: (v1=[0-9a-f]{64})/),
     },
+    d: {
+      path: inD(/`GET ([^`]+)`/),
+      timestamp: inD(/timestamp `(\d+)`/),
+      nonce: inD(/nonce\s+`([0-9a-f]{32})`/),
+      signature: inD(/X-Nexa-Signature: (v1=[0-9a-f]{64})/),
+    },
+    e: {
+      status: Number(inE(/Status `(\d{3})`/)),
+      body: inE(/```\n(.+)\n```/),
+      bodySha: inE(/body SHA-256: `([0-9a-f]{64})`/),
+      signature: inE(/X-Nexa-Bridge-Signature: (v1=[0-9a-f]{64})/),
+    },
   };
 })();
 
 describe('§3.5 — the signature vectors', () => {
-  it('reads all three vectors out of the document', () => {
+  it('reads all five vectors out of the document', () => {
     expect(vectors.secret.length).toBeGreaterThanOrEqual(32);
     expect(vectors.a.body.startsWith('{"operationId"')).toBe(true);
     expect(vectors.b.path).toBe('/v1/accounts/nx7k2m9p4qwe');
     expect(vectors.c.status).toBe(404);
+    expect(vectors.d.path).toBe('/v1/accounts/nx7k2m9p4qwe/files');
+    expect(vectors.e.status).toBe(200);
+    expect(vectors.e.body.startsWith('{"username"')).toBe(true);
+  });
+
+  it('D — the files request signs the hash of the empty body', () => {
+    expect(
+      sign(
+        vectors.secret,
+        canonicalRequest({
+          method: 'GET',
+          protocolPath: vectors.d.path,
+          timestamp: vectors.d.timestamp,
+          nonce: vectors.d.nonce,
+          bodySha256: EMPTY_BODY_SHA256,
+        }),
+      ),
+    ).toBe(vectors.d.signature);
+  });
+
+  it('E — the signed files answer verifies for D’s nonce only', () => {
+    expect(sha256Hex(vectors.e.body)).toBe(vectors.e.bodySha);
+    const answer = { status: 200, nonce: vectors.d.nonce, bodyText: vectors.e.body };
+    expect(responseSignatureValid(vectors.secret, answer, vectors.e.signature)).toBe(true);
+    expect(
+      responseSignatureValid(
+        vectors.secret,
+        { ...answer, nonce: vectors.b.nonce },
+        vectors.e.signature,
+      ),
+    ).toBe(false);
   });
 
   it('A — the body hash, the six-line canonical string and the signature', () => {
@@ -298,5 +386,28 @@ describe('the ADAPTER reproduces the vectors (clock and nonce pinned)', () => {
       failure: 'MALFORMED_RESPONSE',
       status: 404,
     });
+  });
+
+  it('D + E — its files read signs vector D and reads vector E as that account’s one file', async () => {
+    const answered = recording(() => ({
+      ok: true,
+      status: vectors.e.status,
+      headers: { 'x-nexa-bridge-signature': vectors.e.signature },
+      bodyText: vectors.e.body,
+      setCookie: [],
+    }));
+    const outcome = await pinned(vectors.d.nonce).fetchSubscriptionFiles(target, answered.client, {
+      username: 'nx7k2m9p4qwe',
+      subscriptionRef: 'unused',
+      clientId: '5f0c9a7e-2b1d-4e6f-8a3c-9d2e1f0a7b6c',
+    });
+    expect(answered.sent[0]?.path).toBe('v1/accounts/nx7k2m9p4qwe/files');
+    expect(answered.sent[0]?.headers?.['x-nexa-signature']).toBe(vectors.d.signature);
+    if (!outcome.ok || !outcome.found) throw new Error('vector E did not read as files');
+    expect(outcome.failed).toBe(0);
+    expect(outcome.files).toHaveLength(1);
+    expect(outcome.files[0]?.fileName).toBe('nx7k2m9p4qwe.json');
+    expect(outcome.files[0]?.mediaType).toBe('application/json');
+    expect(Buffer.from(outcome.files[0]!.bytes).toString('utf8')).toBe('{"outbounds":[]}\n');
   });
 });
