@@ -14,7 +14,6 @@ import {
   isSystemContext,
   type ActorContext,
   type AuditWriter,
-  type FeatureFlagKey,
   type Clock,
   type IdGenerator,
   type IdempotencyStore,
@@ -225,14 +224,6 @@ export interface PanelServiceDeps {
   readonly ids: IdGenerator;
   readonly http: SafeHttpClient;
   readonly urlPolicy: UrlPolicyOptions;
-  /**
-   * Whether a feature is on for the tenant (R10 C2). Read for the ONE gate a provider
-   * descriptor may declare on creation, `requiresFeature`, inside the create's
-   * transaction — the same place scope activity is read, for the same reason.
-   */
-  readonly features: {
-    isEnabled(scope: ScopeContext, key: FeatureFlagKey, tx?: unknown): Promise<boolean>;
-  };
   /**
    * Which adapter operates a provider type.
    *
@@ -789,52 +780,6 @@ export class PanelService {
     }
   }
 
-  /**
-   * `requiresFeature` — a NEW panel of a gated type needs the tenant's flag on.
-   *
-   * Creation only, by the lead's decision for R10 C2: a flag switched off after panels of
-   * the type exist does not stop them being operated, edited, tested or re-keyed — their
-   * services were paid for. Read inside the create's transaction, like scope activity:
-   * a switch-off that commits between the request arriving and this write still stops it.
-   */
-  private async assertProviderFeature(
-    scope: ScopeContext,
-    providerType: string,
-    tx: TransactionScope,
-  ): Promise<void> {
-    const key = providerDescriptor(providerType)?.requiresFeature;
-    if (key === undefined) return;
-    if (!(await this.deps.features.isEnabled(scope, key, tx))) {
-      throw errors.preconditionFailed(
-        PANEL_ERROR_CODES.PROVIDER_FEATURE_DISABLED,
-        'This provider type is switched off for this tenant. Turn its feature on to add a panel of it.',
-        { feature: key },
-      );
-    }
-  }
-
-  /**
-   * The provider types the panel form may OFFER this tenant (R10 C2): every type in
-   * `types` whose descriptor declares no `requiresFeature`, or whose feature is on.
-   *
-   * A courtesy for `GET /providers`, which authenticates and checks no permission — it
-   * is a catalogue of code — so this reads flags and nothing else. It is NOT the
-   * enforcement: `create` re-reads the flag inside its own transaction.
-   */
-  async offeredProviderTypes(
-    scope: TenantContext,
-    types: readonly ProviderType[],
-  ): Promise<ProviderType[]> {
-    const offered: ProviderType[] = [];
-    for (const type of types) {
-      const feature = providerDescriptor(type)?.requiresFeature;
-      if (feature === undefined || (await this.deps.features.isEnabled(scope, feature))) {
-        offered.push(type);
-      }
-    }
-    return offered;
-  }
-
   async create(
     scope: ScopeContext,
     actor: ActorContext,
@@ -1047,7 +992,6 @@ export class PanelService {
         denial,
         async (tx) => {
           await this.requireActiveScope(scope, tx);
-          await this.assertProviderFeature(scope, providerType, tx);
           /*
            * The CRITICAL permission, re-checked INSIDE the transaction like the
            * edit permission above it. `runAuthorizedMutation` re-runs only the
