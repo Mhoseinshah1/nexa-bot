@@ -76,5 +76,8 @@ describe('the legacy service review boundary', () => {
     // The only adoption call is the P6 seam.
     expect(importer.match(/\.adopt\(/gu)?.length).toBe(1);
     expect(importer).toMatch(/this\.deps\.adoption\.adopt\(/u);
+    // NEXA v096 PR-2: and its batch form, once, on the same port.
+    expect(importer.match(/\.adoptMany\(/gu)?.length).toBe(1);
+    expect(importer).toMatch(/const port = this\.deps\.adoption;/u);
   });
 });

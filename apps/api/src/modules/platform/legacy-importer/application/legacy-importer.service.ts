@@ -2918,7 +2918,7 @@ export class LegacyImporterService {
             await turn();
             outcomes = [];
             for (const candidate of candidates) {
-              outcomes.push(await port.adopt(scope, actor, candidate));
+              outcomes.push(await this.adoptCandidate(scope, actor, candidate));
             }
           } else {
             outcomes = await port.adoptMany(scope, actor, candidates, { beforePanelLock: turn });
@@ -3184,8 +3184,17 @@ export class LegacyImporterService {
     actor: ActorContext,
     ...args: Parameters<LegacyImporterService['candidateOf']>
   ): Promise<LegacyAdoptionOutcome> {
+    return this.adoptCandidate(scope, actor, this.candidateOf(...args));
+  }
+
+  /** The one call of P6's single adoption (the review boundary test pins it). */
+  private async adoptCandidate(
+    scope: TenantContext,
+    actor: ActorContext,
+    candidate: LegacyAdoptionCandidate,
+  ): Promise<LegacyAdoptionOutcome> {
     if (this.deps.adoption === null) throw new Error('unreachable: the adoption step is not wired');
-    return this.deps.adoption.adopt(scope, actor, this.candidateOf(...args));
+    return this.deps.adoption.adopt(scope, actor, candidate);
   }
 
   /** The P6 candidate of one ELIGIBLE invoice (`adoptEligible`, and the apply's batches). */
