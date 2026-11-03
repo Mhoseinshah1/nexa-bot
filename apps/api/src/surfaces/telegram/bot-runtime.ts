@@ -1289,8 +1289,9 @@ export class BotRuntime {
    * reached only through it. While `phone_verification` is on, a customer with neither a
    * verified number nor an exemption («معاف از تأیید شماره») is answered with the contact
    * screen whatever they asked for: `/start`, a button, a message, a command, a deep link.
-   * Exempt: the verification's own steps, the promotional opt-out/in, the management panel; a
-   * bound administrator is never stopped. Only turns pass here — payment webhooks and
+   * Exempt: the verification's own steps, and what the channel and terms gates let through —
+   * support, help and the promotional opt-out/in (owner, OQ-V095-P4-01) — and the management
+   * panel; a bound administrator is never stopped. Only turns pass here — payment webhooks and
    * inquiries, provisioning, reminders and the outbox never do.
    *
    * The held action is remembered (`phoneHold`), as is a tap a payment route's verified-phone

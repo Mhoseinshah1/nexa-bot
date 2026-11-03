@@ -2415,6 +2415,9 @@ export const WEB_FA = {
   'web.c360_transfer_stays_orders': 'سفارش‌ها (سابقه، می‌مانند)',
   'web.c360_transfer_stays_payments': 'پرداخت‌ها (سابقه، می‌مانند)',
   'web.c360_transfer_stays_referrals': 'کاربران معرفی‌شده (می‌مانند)',
+  'web.c360_transfer_stays_channel_exemption': 'معافیت از عضویت اجباری کانال (می‌ماند)',
+  'web.c360_transfer_stays_phone_exemption': 'معافیت از تأیید شماره (می‌ماند)',
+  'web.c360_transfer_stays_held': 'دارد؛ به حساب مقصد منتقل نمی‌شود',
   'web.c360_transfer_services_list': 'فهرست سرویس‌های منتقل‌شونده',
   'web.c360_transfer_blocked': 'انتقال اکنون ممکن نیست',
   'web.c360_transfer_history_stays':

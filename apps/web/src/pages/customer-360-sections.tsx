@@ -1434,6 +1434,20 @@ function TransferModal({ customerId, onClose }: { customerId: string; onClose: (
 
 function TransferPreview({ preview }: { preview: CustomerTransferPreviewResponse }) {
   const destination = preview.destination;
+  // NEXA v096 (OQ-V095-P4-03): the source's exemptions stay with it; each is named when held.
+  const exemptionsStay: [ReactNode, ReactNode][] = [];
+  if (preview.stays.channelExemption) {
+    exemptionsStay.push([
+      t('web.c360_transfer_stays_channel_exemption'),
+      <span key="ce">{t('web.c360_transfer_stays_held')}</span>,
+    ]);
+  }
+  if (preview.stays.phoneExemption) {
+    exemptionsStay.push([
+      t('web.c360_transfer_stays_phone_exemption'),
+      <span key="pe">{t('web.c360_transfer_stays_held')}</span>,
+    ]);
+  }
   return (
     <div className="stack">
       <KV
@@ -1471,6 +1485,7 @@ function TransferPreview({ preview }: { preview: CustomerTransferPreviewResponse
             t('web.c360_transfer_stays_referrals'),
             <Num key="r" value={preview.stays.referredCustomers} />,
           ],
+          ...exemptionsStay,
         ]}
       />
       {preview.moves.services.length > 0 && (

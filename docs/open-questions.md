@@ -4840,8 +4840,8 @@ live; the owner decides otherwise.
   `openTelegramLink`; OQ-R11-A5-01's unverified origin rule applies to it the same way. A client
   without the method is told to pay the chat invoice.
 - **OQ-R11-B5-04 — CLOSED by the owner (NEXA v095 PR-4 G):** a late Stars charge is accepted and
-  credited once to the wallet through the late-credit path TonPays uses; see OQ-V095-P4-02 for
-  what is still open. The original question, for the record:
+  credited once to the wallet through the late-credit path TonPays uses; OQ-V095-P4-02 (closed
+  in NEXA v096) returns the RETURNED case too. The original question, for the record:
   **a Stars charge that lands after the attempt's deadline is not credited.** The
   B5 brief describes a late `successful_payment` as going "through the late-credit path, exactly one
   credit". The code defines the Stars route with no late credit (`lateCreditSetting: null`;
@@ -5095,7 +5095,7 @@ live; the owner decides otherwise.
 
 ## v0.9.5 PR-6 — reseller edit page
 
-- **OQ-V095-01 — ANSWERED: YES (owner, NEXA-FIX-V096; PR: (this PR)).**
+- **OQ-V095-01 — ANSWERED: YES (owner, NEXA-FIX-V096; PR: https://github.com/Mhoseinshah1/nexa-bot/pull/391).**
   Suspending a reseller, demoting one to a normal customer and a manual change of reseller credit
   each require a written reason of 3 to 500 characters. Built: `reason` on the reseller update
   command (`commerce.reseller_reason_required` without one, decided against the locked row after the
@@ -5116,25 +5116,35 @@ live; the owner decides otherwise.
 
 ## NEXA v095 PR-4 — phone verification, exemptions, late Stars
 
-- **OQ-V095-P4-01 — the mandatory gate holds support and help too.** The owner's text is "can do
-  nothing in the bot until they verify"; the gate therefore exempts only the verification's own
-  steps and the promotional opt-out/in (as the captcha does), not «پشتیبانی» or `/help` (which the
-  channel and terms gates let through). A customer who will not share a number cannot reach
-  support in the bot. Owner: should support/help stay reachable behind the phone gate?
-- **OQ-V095-P4-02 — a Stars charge for an attempt that can no longer pay its order.** G credits a
-  LATE Stars charge (after the deadline, or on an EXPIRED payment). A charge recorded for a
-  CANCELLED attempt, or for an order another payment already settled (R12 F1's `RETURNED` basis,
-  which inquiry routes return to the wallet whatever the switch says), stays a late completion
-  for an operator on the Stars route, as before — the reading that moves no money the owner did
-  not name. Owner: should those be returned to the wallet too?
-- **OQ-V095-P4-03 — the phone exemption does not move with an account transfer.** The channel
-  exemption is reported on the transfer preview; the new phone exemption is not carried or
-  reported. Owner: should it be?
-- **OQ-V095-P4-04 — the allowed numbers apply with the bot-wide switch off.** B says the setting
-  is shown only while A is on and applies to every verification, including a route's rule (C),
-  which works with A off. Built as: the stored value applies to every verification whatever A
-  says; the Settings page always lists it (with the "needs the feature" note) so it can be changed.
-- **OQ-V095-P4-05 — the mini app's contact lands in the bot's chat.** `requestContact()` sends the
-  contact to the bot as a message, so the bot answers there («شمارهٔ شما تأیید شد» and the main
-  menu, or the resumed action of a tap made in the bot) while the customer is in the mini app.
-  Owner: acceptable, or should a mini-app share be answered silently?
+- **OQ-V095-P4-01 — CLOSED by the owner (NEXA v096): support and help stay reachable.** With
+  the bot-wide phone verification mandatory, «پشتیبانی» and `/help` (and `/paysupport`, which
+  opens the same screen) stay reachable exactly as the channel and terms gates allow them —
+  `PHONE_GATE_EXEMPT_INTENTS` is the verification's own steps plus `MEMBERSHIP_EXEMPT_INTENTS`;
+  everything else stays held until the customer verifies. PR: https://github.com/Mhoseinshah1/nexa-bot/pull/393. The original question,
+  for the record: the gate exempted only the verification's own steps and the promotional
+  opt-out/in, not «پشتیبانی» or `/help`, so a customer who would not share a number could not
+  reach support in the bot.
+- **OQ-V095-P4-02 — CLOSED by the owner (NEXA v096): returned to the wallet.** A Stars charge
+  recorded for a CANCELLED attempt, or for an order another payment already settled, is returned
+  to the customer's wallet exactly once through the path every gateway's returned money takes
+  (R12 F1 `RETURNED`: `creditLateGatewayApproval`, `GATEWAY_LATE_CREDIT` under
+  `<paymentId>:late-credit`, the `GATEWAY_LATE_PAYMENT_CREDITED` notice and
+  `ops.financial.late_credit_returned`), idempotent per `telegram_payment_charge_id`; a second
+  charge for the same attempt stays the operator's identity mismatch. No new ledger reason or
+  setting. PR: https://github.com/Mhoseinshah1/nexa-bot/pull/393. The original question, for the record: such a charge stayed a late
+  completion for an operator on the Stars route.
+- **OQ-V095-P4-03 — CLOSED by the owner (NEXA v096): it follows the channel exemption.** On an
+  account transfer the phone exemption does exactly what the channel exemption does: it stays
+  with the source (the source's own setting; nothing of the destination is written), the
+  preview reports it (`stays.phoneExemption`, the `SOURCE_OVERRIDES_STAY` warning, and a row
+  on the Web Admin preview) and both transfer audit rows record it
+  (`sourceKeeps.phoneExemption`, beside `channelExemption`). PR: https://github.com/Mhoseinshah1/nexa-bot/pull/393. The original
+  question, for the record: the new phone exemption was not carried or reported.
+- **OQ-V095-P4-04 — CLOSED, owner: keep.** The allowed numbers (B) apply to every verification
+  whatever the bot-wide switch says, including a route's rule (C), and the Settings page always
+  lists the setting with the "needs the feature" note. The original question, for the record: B
+  says the setting is shown only while A is on and applies to every verification, including a
+  route's rule (C), which works with A off.
+- **OQ-V095-P4-05 — CLOSED, owner: keep.** The mini app's `requestContact()` sends the contact to
+  the bot as a message, and the bot answers there («شمارهٔ شما تأیید شد» and the main menu, or the
+  resumed action of a tap made in the bot) while the customer is in the mini app.

@@ -4049,7 +4049,8 @@ export class PaymentService {
    *   setting must be ON (read in this transaction): OFF is today's behaviour exactly, a late
    *   completion. Money RETURNED for an attempt that can no longer pay its order (R12 F1: the
    *   payment was CANCELLED, or it is PENDING inside its deadline and its order was paid
-   *   another way) is credited whatever the switch says — nothing else would ever give it back;
+   *   another way) is credited whatever the switch says — nothing else would ever give it back
+   *   — on a recorded-payment route (Stars) as on an inquiry route (NEXA v096, OQ-V095-P4-02);
    * - the invoice's RECORDED answer must still be an approval by the route's own evidence
    *   table (the same one an operator's reconciliation needs), and the request amount the
    *   provider echoed must equal the amount Nexa sent. A mismatch credits nothing;
@@ -4154,14 +4155,12 @@ export class PaymentService {
          */
         /*
          * NEXA v095 PR-4 G: a RECORDED-payment route (Stars) credits a LATE charge always (the
-         * owner's decision; `recordedChargeApproves`), and only a late one — money returned
-         * for an attempt that can no longer pay its order stays an operator's late completion.
+         * owner's decision; `recordedChargeApproves`). NEXA v096 (owner, closes OQ-V095-P4-02):
+         * a recorded charge for an attempt that can no longer pay its order (a CANCELLED
+         * attempt, an order another payment settled) is RETURNED here too, like every route's.
          */
         const recorded =
           PAYMENT_GATEWAY_DESCRIPTORS[payment.gatewayProvider].approval === 'RECORDED_PAYMENT';
-        if (recorded && state.basis !== 'LATE_APPROVAL') {
-          return { outcome: 'NOT_ELIGIBLE', reason: 'ROUTE_HAS_NO_LATE_CREDIT', payment };
-        }
         if (state.basis === 'LATE_APPROVAL' && !recorded) {
           const settingName =
             PAYMENT_GATEWAY_DESCRIPTORS[payment.gatewayProvider].lateCreditSetting;
