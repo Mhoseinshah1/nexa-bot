@@ -394,3 +394,55 @@ h2 {
   background: var(--glass-2);
   color: var(--fg);
 }
+
+/*
+ * PR-5 (v0.9.5): compact shop cards, a tighter wallet, and the rules list at full width.
+ * `.inline-form` is a ROW flex container (a field beside its button). A list placed inside
+ * it became a third flex item and shrank to a word-wide column; a form that carries a list
+ * or a note stacks instead (`.stack-form`), so the list takes the whole card.
+ */
+.stack-form {
+  flex-direction: column;
+  align-items: stretch;
+}
+.stack-form > .features {
+  inline-size: 100%;
+}
+.btn-sm {
+  padding-inline: 12px;
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+.plan {
+  gap: 6px;
+  padding: 12px 14px;
+}
+.plan .card-head {
+  flex-wrap: nowrap;
+  align-items: baseline;
+}
+.plan-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.plan-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  min-inline-size: 0;
+}
+.balance {
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 12px 14px;
+}
+.wallet-tight {
+  gap: 8px;
+  padding: 12px 14px;
+}
+.inline-form .btn {
+  flex-shrink: 0;
+}

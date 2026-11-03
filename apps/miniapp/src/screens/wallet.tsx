@@ -107,7 +107,7 @@ function GiftCard({ onRedeemed }: { onRedeemed: () => void }) {
   };
 
   return (
-    <Card>
+    <Card className="wallet-tight">
       <h2>{t('miniapp.wallet_gift_title')}</h2>
       <form className="inline-form" onSubmit={submit}>
         <label className="field">
@@ -209,7 +209,7 @@ function TopUp({ wallet }: { wallet: MiniAppWalletResponse }) {
     });
 
   return (
-    <Card>
+    <Card className="wallet-tight">
       <h2>{t('miniapp.wallet_topup_title')}</h2>
       {wallet.presets.length > 0 && (
         <div className="presets" role="group" aria-label={t('miniapp.wallet_topup_title')}>
