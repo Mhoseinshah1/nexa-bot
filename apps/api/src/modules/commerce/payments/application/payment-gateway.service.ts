@@ -48,11 +48,11 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import {
   accountAgeInDays,
   evaluateGatewayEligibility,
-  PHONE_VERIFICATION_FLAG,
   phoneRuleRefuses,
   phoneStandingOf,
   type GatewayAudience,
   type GatewayEligibility,
+  type PHONE_VERIFICATION_FLAG,
 } from '../domain/gateway-eligibility.js';
 import {
   allowsPurpose,

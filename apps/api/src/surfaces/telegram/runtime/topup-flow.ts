@@ -4,10 +4,8 @@ import {
   type ActorContext,
   type BotInstanceId,
   money,
-  type Money,
   type PaymentGatewayProvider,
   type TenantContext,
-  type UserId,
 } from '@nexa/contracts';
 import type { CustomerButton } from '../../../modules/commerce/messaging/application/ports.js';
 import type { CustomerRecord } from '../../../modules/commerce/customers/application/ports.js';
