@@ -405,6 +405,7 @@ describe('Customer 360 — the customer page', () => {
                 trialOverride: false,
                 locationOverride: false,
                 channelExemption: false,
+                phoneExemption: false,
                 verifiedPhone: false,
               },
               blockers: ['DESTINATION_UNKNOWN', 'NOTHING_TO_MOVE'],
@@ -425,6 +426,103 @@ describe('Customer 360 — the customer page', () => {
     // No way to confirm at all: the typed confirmation is not even offered.
     expect(screen.queryByLabelText('برای تأیید، آی‌دی عددی مقصد را دوباره بنویسید')).toBeNull();
     expect(api.calls.some((call) => call.url.endsWith(`/users/${ID}/transfer`))).toBe(false);
+  });
+
+  it('names the channel and phone exemptions that stay with the source on the preview (OQ-V095-P4-03)', async () => {
+    const preview = (channelExemption: boolean, phoneExemption: boolean) => ({
+      preview: {
+        source: {
+          id: ID,
+          telegramUserId: '5551234567',
+          username: null,
+          firstName: null,
+          lastName: null,
+          status: 'ACTIVE',
+        },
+        destination: {
+          id: '019210ab-cdef-7012-8345-6789abcdef02',
+          telegramUserId: '777',
+          username: null,
+          firstName: 'مقصد',
+          lastName: null,
+          status: 'ACTIVE',
+        },
+        moves: { services: [], walletAmount: '5000', currency: 'IRT' },
+        stays: {
+          closedServices: 0,
+          trialServices: 0,
+          orders: 0,
+          payments: 0,
+          referredCustomers: 0,
+          referredBy: false,
+          openTickets: 0,
+          trialOverride: false,
+          locationOverride: false,
+          channelExemption,
+          phoneExemption,
+          verifiedPhone: false,
+        },
+        blockers: [],
+        warnings: channelExemption || phoneExemption ? ['SOURCE_OVERRIDES_STAY'] : [],
+        fingerprint: 'c'.repeat(64),
+      },
+    });
+    stubApi(routes([{ url: `/users/${ID}/transfer/preview`, body: preview(true, true) }]));
+    renderPage(<UserDetailPage id={ID} {...OFF} mayTransfer denied={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'انتقال حساب کاربری' }));
+    fireEvent.change(screen.getByLabelText('آی‌دی عددی تلگرام مقصد'), { target: { value: '777' } });
+    fireEvent.click(screen.getByRole('button', { name: 'پیش‌نمایش انتقال' }));
+    await screen.findByText('معافیت از تأیید شماره (می‌ماند)');
+    expect(screen.getByText('معافیت از عضویت اجباری کانال (می‌ماند)')).toBeTruthy();
+    expect(screen.getAllByText('دارد؛ به حساب مقصد منتقل نمی‌شود')).toHaveLength(2);
+  });
+
+  it('names no exemption on the preview when the source holds none', async () => {
+    stubApi(
+      routes([
+        {
+          url: `/users/${ID}/transfer/preview`,
+          body: {
+            preview: {
+              source: {
+                id: ID,
+                telegramUserId: '5551234567',
+                username: null,
+                firstName: null,
+                lastName: null,
+                status: 'ACTIVE',
+              },
+              destination: null,
+              moves: { services: [], walletAmount: '0', currency: 'IRT' },
+              stays: {
+                closedServices: 0,
+                trialServices: 0,
+                orders: 0,
+                payments: 0,
+                referredCustomers: 0,
+                referredBy: false,
+                openTickets: 0,
+                trialOverride: false,
+                locationOverride: false,
+                channelExemption: false,
+                phoneExemption: false,
+                verifiedPhone: false,
+              },
+              blockers: ['DESTINATION_UNKNOWN'],
+              warnings: [],
+              fingerprint: 'd'.repeat(64),
+            },
+          },
+        },
+      ]),
+    );
+    renderPage(<UserDetailPage id={ID} {...OFF} mayTransfer denied={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'انتقال حساب کاربری' }));
+    fireEvent.change(screen.getByLabelText('آی‌دی عددی تلگرام مقصد'), { target: { value: '999' } });
+    fireEvent.click(screen.getByRole('button', { name: 'پیش‌نمایش انتقال' }));
+    await screen.findByText('مشتری با این آی‌دی عددی در این ربات وجود ندارد.');
+    expect(screen.queryByText('معافیت از تأیید شماره (می‌ماند)')).toBeNull();
+    expect(screen.queryByText('معافیت از عضویت اجباری کانال (می‌ماند)')).toBeNull();
   });
 
   it('binds the transfer to the preview fingerprint and the retyped destination id', async () => {
@@ -469,6 +567,7 @@ describe('Customer 360 — the customer page', () => {
                 trialOverride: false,
                 locationOverride: false,
                 channelExemption: false,
+                phoneExemption: false,
                 verifiedPhone: false,
               },
               blockers: [],

@@ -164,6 +164,8 @@ export interface AccountTransferPlan {
     readonly trialOverride: boolean;
     readonly locationOverride: boolean;
     readonly channelExemption: boolean;
+    /** NEXA v096 (OQ-V095-P4-03): stays with the source, exactly as the channel exemption. */
+    readonly phoneExemption: boolean;
     readonly verifiedPhone: boolean;
   };
   readonly blockers: readonly CustomerTransferBlocker[];
@@ -513,6 +515,14 @@ export class CustomerAccountTransferService {
           servicesMoved: plan.moves.services.length,
           walletMovedMinor: amount.toString(),
           currency: plan.moves.currency,
+          /*
+           * NEXA v096 (OQ-V095-P4-03): the source's two exemptions STAY with it — neither is
+           * moved to, nor overwrites, the destination's — and the record says which it held.
+           */
+          sourceKeeps: {
+            channelExemption: plan.stays.channelExemption,
+            phoneExemption: plan.stays.phoneExemption,
+          },
         };
         await this.deps.audit.record(
           scope,
@@ -633,6 +643,8 @@ export class CustomerAccountTransferService {
       facts.trialOverride ||
       facts.locationOverride ||
       source.channelMembershipExemptAt !== null ||
+      // NEXA v096 (OQ-V095-P4-03): the phone exemption stays, exactly as the channel one does.
+      source.phoneVerificationExemptAt !== null ||
       source.phoneNumber !== null ||
       // The promotional opt-out is the source's own setting too (Codex review of #146).
       source.marketingOptOutAt !== null;
@@ -657,6 +669,7 @@ export class CustomerAccountTransferService {
         trialOverride: facts.trialOverride,
         locationOverride: facts.locationOverride,
         channelExemption: source.channelMembershipExemptAt !== null,
+        phoneExemption: source.phoneVerificationExemptAt !== null,
         verifiedPhone: source.phoneNumber !== null,
       },
       blockers,
