@@ -149,7 +149,7 @@ export const NO_WAY_ON_ALLOWED: Readonly<Partial<Record<TemplateKey, string>>> =
   'bot.phone.required':
     'sets the reply keyboard (phone-verify-flow.ts): the mandatory gate’s contact button, the one way on',
   'bot.phone.gateway_required':
-    'sets the reply keyboard (phone-verify-flow.ts): the contact button over «↩️ انتخاب درگاه دیگر»',
+    'sets the reply keyboard (phone-verify-flow.ts): the contact button over the other-route label',
   'bot.phone.iran_only':
     'sets the reply keyboard (phone-verify-flow.ts): the main menu keyboard back',
 };
