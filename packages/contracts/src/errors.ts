@@ -1687,8 +1687,6 @@ export const COMMERCE_ERROR_CODES = {
    * contact, or a contact forwarded from somewhere else. Nothing was stored.
    */
   PHONE_CONTACT_NOT_OWN: 'commerce.phone_contact_not_own',
-  /** R11 B7: `phone_verification` is off, so a shared contact verifies nothing. */
-  PHONE_VERIFICATION_DISABLED: 'commerce.phone_verification_disabled',
   /**
    * NEXA v095 PR-4 B: `phone_verification.allowed_numbers` is IRAN_ONLY and the customer's
    * own number is not a +98 one. Nothing was stored.
