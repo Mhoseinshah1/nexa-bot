@@ -30,6 +30,11 @@ export interface TelegramWebApp {
    * clients.
    */
   requestContact?(callback?: (shared: boolean) => void): void;
+  /**
+   * Whether the client implements Bot API `version` or later. An older client's SDK still
+   * exposes `requestContact`, and calling it there throws `WebAppMethodUnsupported`.
+   */
+  isVersionAtLeast?(version: string): boolean;
   onEvent(event: 'themeChanged', handler: () => void): void;
 }
 
@@ -89,23 +94,38 @@ export function openStarsInvoice(url: string): Promise<InvoiceStatus | 'unsuppor
 /**
  * NEXA v095 PR-4 A/C: asks for the customer's own contact (`Telegram.WebApp.requestContact`).
  * `shared` is what the CLIENT saw and proves nothing: the contact arrives in the bot's chat and
- * the server decides — the caller polls `/me` for it. `unsupported` where there is no method.
+ * the server decides — the caller polls `/me` for it. `unsupported` where there is no method,
+ * the client is older than Bot API 6.9, or the call throws: the caller then opens the bot.
  */
 export function requestOwnContact(): Promise<'shared' | 'cancelled' | 'unsupported'> {
   const app = webApp();
-  if (app === null || typeof app.requestContact !== 'function') {
+  if (app === null || !canRequestContact(app) || typeof app.requestContact !== 'function') {
     return Promise.resolve('unsupported');
   }
   const request = app.requestContact.bind(app);
   return new Promise((resolve) => {
-    request((shared) => resolve(shared ? 'shared' : 'cancelled'));
+    try {
+      request((shared) => resolve(shared ? 'shared' : 'cancelled'));
+    } catch {
+      // `WebAppMethodUnsupported` (or any other refusal by the client): the bot's own prompt.
+      resolve('unsupported');
+    }
   });
 }
 
-/** Whether this client can ask for the contact in place (`requestContact`, Bot API 6.9). */
+/**
+ * Whether this client can ask for the contact in place: `requestContact` exists AND the client
+ * reports Bot API 6.9 or later. The SDK defines the method on every client and throws on an
+ * older one, so its presence alone proves nothing; a client without `isVersionAtLeast` is
+ * treated as too old.
+ */
 export function contactRequestAvailable(): boolean {
   const app = webApp();
-  return app !== null && typeof app.requestContact === 'function';
+  return app !== null && canRequestContact(app);
+}
+
+function canRequestContact(app: TelegramWebApp): boolean {
+  return typeof app.requestContact === 'function' && app.isVersionAtLeast?.('6.9') === true;
 }
 
 /** The bot's chat, opened on its contact prompt (`/start verify_phone`), for a client without it. */

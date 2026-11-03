@@ -121,6 +121,11 @@ export function Gate({ gate }: { gate: NonNullable<MiniAppMeResponse['gate']> })
     const share = () =>
       act(async () => {
         const asked = await requestOwnContact();
+        // The client refused the call after all (an old client's `WebAppMethodUnsupported`).
+        if (asked === 'unsupported' && me.botLink !== null) {
+          openTelegram(botPhonePromptLink(me.botLink));
+          return;
+        }
         if (asked !== 'shared') return;
         for (let attempt = 0; attempt < PHONE_POLL_ATTEMPTS; attempt += 1) {
           const fresh = await api.get(MINIAPP_ROUTES.me, {}, miniAppMeResponseSchema);

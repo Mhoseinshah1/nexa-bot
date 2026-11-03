@@ -3,7 +3,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { COMMERCE_ERROR_CODES } from '@nexa/contracts';
 import { MINIAPP_FA } from '../../apps/miniapp/src/i18n/miniapp.fa';
 import { ApiError, MiniAppApi } from '../../apps/miniapp/src/api';
-import { withPhoneVerification, type PhoneGateDeps } from '../../apps/miniapp/src/phone';
+import {
+  phoneGateDeps,
+  withPhoneVerification,
+  type PhoneGateDeps,
+} from '../../apps/miniapp/src/phone';
 import { Gate } from '../../apps/miniapp/src/screens/gate';
 
 /**
@@ -31,7 +35,14 @@ const meBody = (gate: { kind: 'PHONE' } | null) => ({
   notifications: null,
 });
 
-function mount(options: { readonly requestContact: boolean; readonly gateLiftsAfter: number }) {
+function mount(options: {
+  readonly requestContact: boolean;
+  readonly gateLiftsAfter: number;
+  /** The Bot API version the client reports (`isVersionAtLeast`); absent → no such method. */
+  readonly version?: string | null;
+  /** The client's `requestContact` throws, as an old one's `WebAppMethodUnsupported` does. */
+  readonly contactThrows?: boolean;
+}) {
   let meCalls = 0;
   vi.stubGlobal(
     'fetch',
@@ -47,8 +58,17 @@ function mount(options: { readonly requestContact: boolean; readonly gateLiftsAf
       return new Response('{}', { status: 404 });
     }),
   );
-  const requestContact = vi.fn((callback?: (shared: boolean) => void) => callback?.(true));
+  const requestContact = vi.fn((callback?: (shared: boolean) => void) => {
+    if (options.contactThrows === true) throw new Error('WebAppMethodUnsupported');
+    callback?.(true);
+  });
   const openTelegramLink = vi.fn();
+  const version = options.version === undefined ? '7.0' : options.version;
+  const atLeast = (wanted: string) => {
+    const [a = 0, b = 0] = (version ?? '0').split('.').map(Number);
+    const [c = 0, d = 0] = wanted.split('.').map(Number);
+    return a > c || (a === c && b >= d);
+  };
   (window as unknown as { Telegram: unknown }).Telegram = {
     WebApp: {
       initData: 'query_id=x&hash=y',
@@ -56,6 +76,7 @@ function mount(options: { readonly requestContact: boolean; readonly gateLiftsAf
       openLink: vi.fn(),
       openTelegramLink,
       ...(options.requestContact ? { requestContact } : {}),
+      ...(version === null ? {} : { isVersionAtLeast: atLeast }),
     },
   };
   const refreshMe = vi.fn(async () => undefined);
@@ -96,6 +117,36 @@ describe('A — the PHONE gate', () => {
     expect(screen.queryByRole('button', { name: fa('miniapp.gate_phone_share') })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: fa('miniapp.gate_phone_open_bot') }));
     expect(stub.openTelegramLink).toHaveBeenCalledWith('https://t.me/nexa_bot?start=verify_phone');
+  });
+
+  it('on a client older than Bot API 6.9, opens the bot even though its SDK has requestContact()', () => {
+    const stub = mount({ requestContact: true, gateLiftsAfter: 1, version: '6.8' });
+    render(<Gate gate={{ kind: 'PHONE' }} />);
+    expect(screen.queryByRole('button', { name: fa('miniapp.gate_phone_share') })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: fa('miniapp.gate_phone_open_bot') }));
+    expect(stub.openTelegramLink).toHaveBeenCalledWith('https://t.me/nexa_bot?start=verify_phone');
+    expect(stub.requestContact).not.toHaveBeenCalled();
+  });
+
+  it('on a client that cannot say its version, opens the bot', () => {
+    const stub = mount({ requestContact: true, gateLiftsAfter: 1, version: null });
+    render(<Gate gate={{ kind: 'PHONE' }} />);
+    expect(screen.queryByRole('button', { name: fa('miniapp.gate_phone_share') })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: fa('miniapp.gate_phone_open_bot') }));
+    expect(stub.openTelegramLink).toHaveBeenCalledWith('https://t.me/nexa_bot?start=verify_phone');
+  });
+
+  it('when requestContact() throws, opens the bot on its contact prompt', async () => {
+    const stub = mount({ requestContact: true, gateLiftsAfter: 99, contactThrows: true });
+    render(<Gate gate={{ kind: 'PHONE' }} />);
+    fireEvent.click(screen.getByRole('button', { name: fa('miniapp.gate_phone_share') }));
+    await waitFor(() =>
+      expect(stub.openTelegramLink).toHaveBeenCalledWith(
+        'https://t.me/nexa_bot?start=verify_phone',
+      ),
+    );
+    expect(stub.requestContact).toHaveBeenCalledTimes(1);
+    expect(stub.meCalls()).toBe(0);
   });
 });
 
@@ -166,5 +217,18 @@ describe('C — a payment a route’s verified-phone rule refused', () => {
       }, gate),
     ).rejects.toMatchObject({ code: COMMERCE_ERROR_CODES.TOPUP_NOT_OFFERED });
     expect(gate.requestContact).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a client older than Bot API 6.9 whose SDK still has requestContact()', { version: '6.8' }],
+    ['a client whose requestContact() throws', { contactThrows: true }],
+  ] as const)('on %s, ends UNSUPPORTED (the bot link), asking nothing again', async (_, client) => {
+    mount({ requestContact: true, gateLiftsAfter: 1, ...client });
+    const work = vi.fn(async () => {
+      throw refusal();
+    });
+    const outcome = await withPhoneVerification(work, phoneGateDeps(new MiniAppApi(BOT)));
+    expect(outcome.kind).toBe('UNSUPPORTED');
+    expect(work).toHaveBeenCalledTimes(1);
   });
 });
