@@ -980,16 +980,19 @@ export const WEB_FA = {
   'web.theme_system': 'مطابق سیستم',
   'web.theme_dark': 'تیره',
   'web.theme_light': 'روشن',
+  'web.more_more': 'بیشتر',
+  'web.more_less': 'کمتر',
   'web.not_found_title': 'این صفحه وجود ندارد.',
   'web.not_found_hint': 'نشانی را بررسی کنید یا به نمای کلی برگردید.',
 
   // Round W (foundation): the shell, the command search and the shared kit.
   'web.navgroup_dashboard': 'داشبورد',
-  'web.navgroup_customers': 'مشتریان و پشتیبانی',
-  'web.navgroup_support_ai': 'هوش مصنوعی پشتیبانی',
-  'web.navgroup_finance': 'مالی و پرداخت',
+  'web.navgroup_marketing': 'بازاریابی',
+  'web.navgroup_customers': 'مشتریان',
+  'web.navgroup_support_ai': 'پشتیبانی',
+  'web.navgroup_finance': 'پرداخت‌ها',
   'web.navgroup_resellers': 'نمایندگان',
-  'web.navgroup_bot': 'ربات و ارتباط با مشتری',
+  'web.navgroup_bot': 'ربات',
   'web.open_menu': 'باز کردن منو',
   // The phone's bottom navigation: short labels for the capsule's four destinations and its menu.
   'web.bottom_nav_label': 'دسترسی سریع',
@@ -1045,10 +1048,9 @@ export const WEB_FA = {
   'web.percent_sign': '٪',
 
   // --- Navigation groups ---------------------------------------------------
-  'web.navgroup_sales': 'فروش و محصولات',
-  'web.navgroup_infra': 'زیرساخت و پنل‌ها',
-  'web.navgroup_config': 'تنظیمات',
-  'web.navgroup_system': 'مدیریت سیستم',
+  'web.navgroup_sales': 'محصولات',
+  'web.navgroup_infra': 'پنل‌ها',
+  'web.navgroup_system': 'سیستم و تنظیمات',
 
   // --- Navigation ----------------------------------------------------------
   'web.nav_users': 'کاربران',
