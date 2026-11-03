@@ -348,6 +348,7 @@ export function resolve(
           mayViewReseller={may('resellers.view')}
           mayEditReseller={may('resellers.edit')}
           mayExemptChannel={may('users.channel_membership.exempt')}
+          mayExemptPhone={may('users.phone_verification.exempt')}
           mayVerifyPhone={may('users.phone.verify')}
           mayEditLocation={may('users.location.edit')}
           mayEditNotifications={may('users.notifications.edit')}

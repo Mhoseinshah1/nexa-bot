@@ -195,13 +195,18 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     disableEffect: null,
     confirmEnable: null,
   },
-  // R11 B7. ON only offers a button and lets operators' route rules apply; OFF withdraws the
-  // button and ignores every route's phone rule — nothing stored is lost. One click either way.
+  // NEXA v095 PR-4 A. ON is MANDATORY: every customer with no verified number and no
+  // exemption is held at once, so it asks first. OFF asks nobody and releases everyone, so one
+  // click. A route's own phone rule is independent of this switch either way.
   phone_verification: {
     title: 'web.feature_phone_verification_title',
     summary: 'web.feature_phone_verification_summary',
     disableEffect: null,
-    confirmEnable: null,
+    confirmEnable: {
+      question: 'web.feature_phone_verification_confirm_question',
+      detail: 'web.feature_phone_verification_confirm_detail',
+      confirmLabel: 'web.feature_phone_verification_confirm',
+    },
   },
   // Off: new drafts go to their product's own panel again; nothing already placed moves.
   panel_auto_balancing: {

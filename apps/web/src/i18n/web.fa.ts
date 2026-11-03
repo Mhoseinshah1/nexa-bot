@@ -318,6 +318,12 @@ export const WEB_FA = {
   'web.setting_stars_pricing_mode': 'حالت قیمت‌گذاری استارز (بازنشسته)',
   'web.setting_stars_pricing_mode_desc':
     'دیگر استفاده نمی‌شود: قیمت هر ستاره همیشه از نرخ مرکزی تتر و «تعداد استارز به ازای هر تتر» به‌دست می‌آید و نرخ دستی برای استارز وجود ندارد.',
+  // NEXA v095 PR-4 B.
+  'web.setting_phone_allowed_numbers': 'شماره‌های مجاز برای تأیید شماره',
+  'web.setting_phone_allowed_numbers_desc':
+    'کدام شماره‌ها در تأیید شماره پذیرفته شوند: در تأیید اجباری کل ربات، در شرط تأیید شمارهٔ درگاه‌ها و در مینی‌اپ. شماره پیش از بررسی یکسان‌سازی می‌شود (+98، 98 و 0098 هر سه ایران است). مشتری‌ای که پیش‌تر با شماره‌ای دیگر تأیید شده، تأییدش را نگه می‌دارد.',
+  'web.phone_allowed_numbers_all': 'همهٔ شماره‌ها',
+  'web.phone_allowed_numbers_iran_only': 'فقط شمارهٔ ایران (+98)',
   'web.setting_stars_per_usdt': 'تعداد استارز به ازای هر تتر',
   'web.setting_stars_per_usdt_desc':
     'قیمت هر ستاره به تومان همیشه خودکار از نرخ مرکزی تتر تقسیم بر این عدد محاسبه می‌شود. تلگرام نرخ رسمی تبدیل ستاره به تتر منتشر نمی‌کند؛ این عدد را شما تعیین می‌کنید (مثلاً 100 یا 77٫5؛ حداکثر چهار رقم اعشار). خالی یعنی تنظیم نشده: روش پرداخت استارز روشن نمی‌شود و تا روشن است نمی‌توان آن را خالی کرد.',
@@ -463,8 +469,13 @@ export const WEB_FA = {
     'از هر کاربر تازه پیش از استفاده از ربات یک سؤال ساده (جمع دو عدد با چهار گزینه) پرسیده می‌شود. کاربران فعلی و مدیران هرگز پرسیده نمی‌شوند و پاسخ نادرست هرگز به مسدودی نمی‌انجامد. خاموش کردن آن همهٔ منتظران را آزاد می‌کند.',
   // R11 B7.
   'web.feature_phone_verification_title': 'تأیید شماره تلفن کاربران',
+  // NEXA v095 PR-4 A: off or MANDATORY; the gateway rule works on its own either way.
   'web.feature_phone_verification_summary':
-    'کاربر می‌تواند در ربات با ارسال مخاطب خود («تأیید شماره تلفن») شمارهٔ خودش را تأیید کند؛ فقط شمارهٔ خود حساب تلگرام پذیرفته می‌شود. هر درگاه می‌تواند فقط برای شماره‌های تأییدشده نمایش داده شود. خاموش باشد، دکمه‌ای نشان داده نمی‌شود و شرط شمارهٔ تأییدشده در درگاه‌ها نادیده گرفته می‌شود؛ شماره‌های ثبت‌شده حفظ می‌شوند.',
+    'روشن یعنی اجباری: مشتری‌ای که شمارهٔ تأییدشده یا معافیت ندارد، پیش از هر کاری در ربات و مینی‌اپ (استارت، هر دکمه، هر پیام یا فرمان) باید با «📞 Share Contact» شمارهٔ خود حساب تلگرامش را تأیید کند؛ بعد از کپچا و قوانین. مشتری‌هایی که قبلاً تأیید شده‌اند چیزی نمی‌بینند و مدیران هرگز متوقف نمی‌شوند. شرط «برای پرداخت با این درگاه، تأیید شماره لازم است» روی هر درگاه جداگانه و حتی با خاموش بودن این گزینه کار می‌کند.',
+  'web.feature_phone_verification_confirm_question': 'تأیید شماره برای همه اجباری شود؟',
+  'web.feature_phone_verification_confirm_detail':
+    'از همین حالا هر مشتری‌ای که شمارهٔ تأییدشده یا معافیت ندارد، در پیام بعدی‌اش به صفحهٔ تأیید شماره می‌رود و تا تأیید نکند کار دیگری در ربات و مینی‌اپ نمی‌تواند انجام دهد. پرداخت‌ها، تحویل سرویس و یادآوری‌ها در پس‌زمینه ادامه می‌یابند. خاموش کردن از هیچ‌کس شماره نمی‌خواهد.',
+  'web.feature_phone_verification_confirm': 'اجباری کن',
   // A flag from a newer server that this panel build has no entry for.
   'web.feature_unknown_off_effect':
     'این قابلیت برای این نسخه از پنل ناشناخته است و خاموش کردن آن ممکن است بخشی از کار ربات را متوقف کند.',
@@ -2187,11 +2198,18 @@ export const WEB_FA = {
   'web.c360_controls_hint': 'هر تغییر با دلیل ثبت می‌شود و در تاریخچه مدیریتی می‌ماند.',
   'web.c360_controls_permission_hint':
     'دکمه‌ای که اجازه‌اش را ندارید نمایش داده نمی‌شود؛ سرور هم دوباره بررسی می‌کند.',
-  'web.c360_channel_exemption': 'عضویت اجباری کانال',
-  'web.c360_channel_required': 'الزامی (طبق تنظیمات کلی)',
-  'web.c360_channel_exempt': 'معاف از عضویت',
+  // NEXA v095 PR-4 D: the label says what the control does (the owner could not find it).
+  'web.c360_channel_exemption': 'معاف از عضویت اجباری کانال',
+  'web.c360_channel_required': 'خیر — عضویت در کانال‌های اجباری لازم است',
+  'web.c360_channel_exempt': 'معاف است',
   'web.c360_channel_exempt_action': 'معاف کردن',
   'web.c360_channel_unexempt_action': 'لغو معافیت',
+  // NEXA v095 PR-4 D: never asked for a phone — by the bot-wide gate nor by any route rule.
+  'web.c360_phone_exemption': 'معاف از تأیید شماره',
+  'web.c360_phone_exemption_none': 'خیر — طبق تنظیمات ربات و درگاه‌ها',
+  'web.c360_phone_exempt': 'معاف است (نه ربات، نه درگاه‌ها شماره نمی‌خواهند)',
+  'web.c360_phone_exempt_action': 'معاف کردن',
+  'web.c360_phone_unexempt_action': 'لغو معافیت',
   'web.c360_phone_verify_action': 'ثبت و تأیید دستی',
   'web.c360_phone_revoke_action': 'لغو تأیید',
   'web.c360_phone_label': 'شماره تلفن با کد کشور',
@@ -2266,6 +2284,8 @@ export const WEB_FA = {
   'web.c360_action_phone_revoke': 'لغو تأیید شماره تلفن',
   'web.c360_action_exempt': 'معافیت از عضویت کانال',
   'web.c360_action_unexempt': 'لغو معافیت عضویت کانال',
+  'web.c360_action_phone_exempt': 'معافیت از تأیید شماره',
+  'web.c360_action_phone_unexempt': 'لغو معافیت تأیید شماره',
   'web.c360_action_marketing_out': 'قطع پیام‌های تبلیغاتی',
   'web.c360_action_marketing_in': 'فعال شدن پیام‌های تبلیغاتی',
   'web.c360_action_reminders_out': 'قطع یادآوری انقضا و حجم',
@@ -3209,9 +3229,11 @@ export const WEB_FA = {
   'web.payment_gateway_until_payments': 'غیرفعال پس از این تعداد پرداخت موفق',
   'web.payment_gateway_after_days': 'فعال پس از این تعداد روز عضویت',
   // R11 B7.
-  'web.payment_gateway_verified_phone_only': 'فقط برای شمارهٔ تأییدشده',
+  // NEXA v095 PR-4 C: the owner's wording; enforced whatever «تأیید شماره تلفن کاربران» says.
+  'web.payment_gateway_verified_phone_only': 'برای پرداخت با این درگاه، تأیید شماره لازم است',
   'web.payment_gateway_verified_phone_only_hint':
-    'این درگاه فقط به کاربرانی نشان داده می‌شود که شماره تلفن خود را تأیید کرده‌اند. فقط وقتی «تأیید شماره تلفن کاربران» در صفحهٔ امکانات روشن است اعمال می‌شود؛ خاموش باشد، نادیده گرفته می‌شود.',
+    'این درگاه به همهٔ مشتری‌ها نمایش داده می‌شود. وقتی مشتری‌ای که شماره‌اش تأیید نشده آن را انتخاب کند، پیش از ساخته شدن هر پرداختی شماره‌اش را می‌گیرد و پس از تأیید، مستقیم به پرداخت با همین درگاه برای همان سفارش یا افزایش موجودی می‌رود. حتی وقتی «تأیید شماره تلفن کاربران» خاموش است اعمال می‌شود؛ مشتری «معاف از تأیید شماره» هرگز پرسیده نمی‌شود.',
+  'web.payment_gateway_verified_phone_list': '📱 نیاز به تأیید شماره',
   'web.payment_gateway_updated': 'آخرین تغییر',
   'web.payment_gateway_actions': 'عملیات',
   'web.payment_gateway_edit': 'ویرایش',
@@ -8328,6 +8350,8 @@ export const WEB_FA = {
   'web.perm_users_block': 'مسدود یا آزاد کردن مشتری',
   'web.perm_users_trial_edit': 'تنظیم سقف آزمایشی اختصاصی مشتری',
   'web.perm_users_channel_membership_exempt': 'معاف کردن مشتری از عضویت اجباری کانال',
+  'web.perm_users_phone_verification_exempt':
+    'معاف کردن مشتری از تأیید شماره (تأیید اجباری ربات و شرط درگاه‌ها)',
   'web.perm_users_phone_verify': 'ثبت یا لغو تأیید دستی شمارهٔ مشتری',
   'web.perm_users_location_edit': 'تنظیم سقف اختصاصی تغییر لوکیشن مشتری',
   'web.perm_users_notifications_edit': 'تغییر ترجیح اعلان‌های تبلیغاتی مشتری',
@@ -10696,7 +10720,8 @@ export const WEB_FA = {
     'فقط شمارهٔ خود حساب تلگرام کاربر پذیرفته می‌شود؛ مخاطب دیگران یا بازارسال‌شده پذیرفته نیست.',
   'web.err_commerce_phone_verification_disabled': 'تأیید شماره تلفن در حال حاضر خاموش است.',
   'web.err_commerce_phone_verification_required':
-    'این روش پرداخت فقط برای کاربرانی است که شماره تلفن خود را تأیید کرده‌اند.',
+    'برای پرداخت با این درگاه، تأیید شماره لازم است و شمارهٔ این کاربر تأیید نشده است.',
+  'web.err_commerce_phone_not_iranian': 'فقط شماره‌های ایران (+98) پذیرفته می‌شود.',
   'web.err_commerce_product_currency_unsupported': 'واحد پول این محصول پشتیبانی نمی‌شود.',
   'web.err_commerce_product_not_categorised': 'این محصول دسته‌بندی ندارد.',
   'web.err_commerce_product_not_for_audience': 'این محصول برای این مشتری عرضه نمی‌شود.',
@@ -11558,6 +11583,7 @@ export const WEB_FA = {
   'web.outbox_event_customer_reminder_opt_out_changed': 'تغییر دریافت یادآوری انقضا و حجم',
   'web.outbox_event_customer_channel_membership_exemption_changed': 'تغییر معافیت عضویت کانال',
   'web.outbox_event_customer_phone_verification_changed': 'تغییر تأیید شماره تلفن',
+  'web.outbox_event_customer_phone_verification_exemption_changed': 'تغییر معافیت تأیید شماره',
   'web.outbox_event_customer_location_change_override_changed': 'تغییر محدودیت تغییر لوکیشن',
   'web.outbox_event_customer_personal_discount_changed': 'تغییر تخفیف شخصی مشتری',
   'web.outbox_event_customer_imported': 'ورود مشتری از دادهٔ قدیمی',

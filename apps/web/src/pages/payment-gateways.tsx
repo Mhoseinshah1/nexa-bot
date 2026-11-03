@@ -854,8 +854,8 @@ export function PaymentGatewaysPage({
           row.eligibility.activateAfterAccountDays > 0
             ? `${t('web.payment_gateway_after_days')}: ${row.eligibility.activateAfterAccountDays}`
             : null,
-          // R11 B7.
-          row.requiresVerifiedPhone ? t('web.payment_gateway_verified_phone_only') : null,
+          // R11 B7 / NEXA v095 PR-4 C.
+          row.requiresVerifiedPhone ? t('web.payment_gateway_verified_phone_list') : null,
         ].filter((part): part is string => part !== null);
         // One threshold a line, as the demo stacks them.
         return parts.length === 0 ? (
@@ -1472,7 +1472,7 @@ export function PaymentGatewaysPage({
                     />
                   </Field>
                 </div>
-                {/* R11 B7: applied only while the phone_verification feature is on (the hint says so). */}
+                {/* NEXA v095 PR-4 C: enforced whatever phone_verification says (the hint says so). */}
                 <ToggleRow
                   title={t('web.payment_gateway_verified_phone_only')}
                   description={t('web.payment_gateway_verified_phone_only_hint')}

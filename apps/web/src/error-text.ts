@@ -273,6 +273,7 @@ export const ERROR_TEXT = {
   'commerce.phone_contact_not_own': 'web.err_commerce_phone_contact_not_own',
   'commerce.phone_verification_disabled': 'web.err_commerce_phone_verification_disabled',
   'commerce.phone_verification_required': 'web.err_commerce_phone_verification_required',
+  'commerce.phone_not_iranian': 'web.err_commerce_phone_not_iranian',
   'commerce.product_currency_unsupported': 'web.err_commerce_product_currency_unsupported',
   'commerce.product_not_categorised': 'web.err_commerce_product_not_categorised',
   'commerce.product_not_for_audience': 'web.err_commerce_product_not_for_audience',

@@ -183,6 +183,7 @@ export function UserDetailPage({
   mayViewReseller,
   mayEditReseller,
   mayExemptChannel = false,
+  mayExemptPhone = false,
   mayVerifyPhone = false,
   mayEditLocation = false,
   mayEditNotifications = false,
@@ -238,6 +239,8 @@ export function UserDetailPage({
    */
   /** `users.channel_membership.exempt` */
   mayExemptChannel?: boolean;
+  /** `users.phone_verification.exempt` (NEXA v095 PR-4 D) */
+  mayExemptPhone?: boolean;
   /** `users.phone.verify` */
   mayVerifyPhone?: boolean;
   /** `users.location.edit` */
@@ -771,6 +774,7 @@ export function UserDetailPage({
                     customerId={id}
                     overview={controls}
                     mayExemptChannel={mayExemptChannel}
+                    mayExemptPhone={mayExemptPhone}
                     mayVerifyPhone={mayVerifyPhone}
                     mayEditLocation={mayEditLocation}
                     mayEditNotifications={mayEditNotifications}

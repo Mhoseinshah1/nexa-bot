@@ -13,6 +13,7 @@ import {
   type FxSource,
   type OperationalSeverity,
   type PanelBalancingStrategy,
+  type PhoneAllowedNumbers,
   type ReferralCommissionScope,
   type ReferralGiftUnlockMode,
   type SettingKey,
@@ -181,6 +182,12 @@ const SEVERITY_LABELS: Readonly<Record<OperationalSeverity, WebKey>> = {
   WARN: 'web.setting_severity_warn',
   ERROR: 'web.setting_severity_error',
   CRITICAL: 'web.setting_severity_critical',
+};
+
+/** NEXA v095 PR-4 B: which numbers a phone verification accepts. */
+const PHONE_ALLOWED_NUMBER_OPTIONS: Readonly<Record<PhoneAllowedNumbers, WebKey>> = {
+  ALL: 'web.phone_allowed_numbers_all',
+  IRAN_ONLY: 'web.phone_allowed_numbers_iran_only',
 };
 
 const COMMISSION_SCOPE_OPTIONS: Readonly<Record<ReferralCommissionScope, WebKey>> = {
@@ -833,6 +840,13 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     description: 'web.setting_referral_commission_percent_desc',
     group: 'referral',
     control: { kind: 'integer', unit: 'web.unit_percent', optional: true },
+  },
+  // NEXA v095 PR-4 B.
+  'phone_verification.allowed_numbers': {
+    title: 'web.setting_phone_allowed_numbers',
+    description: 'web.setting_phone_allowed_numbers_desc',
+    group: 'sales',
+    control: { kind: 'select', options: options(PHONE_ALLOWED_NUMBER_OPTIONS) },
   },
   'referral.commission_scope': {
     title: 'web.setting_referral_commission_scope',
