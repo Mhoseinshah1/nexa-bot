@@ -182,6 +182,17 @@ export const customerPhoneExemptionRequestSchema = z.object({
 });
 export type CustomerPhoneExemptionRequest = z.infer<typeof customerPhoneExemptionRequestSchema>;
 
+/**
+ * NEXA v095 PR-4 D: the audit actions of the phone-verification exemption — granted or
+ * revoked, each with the operator's reason and the before/after state, on the channel
+ * exemption's model (`customer.channel_exemption.grant` / `.revoke`). The customer's history
+ * (Customer 360 timeline) reads them.
+ */
+export const CUSTOMER_PHONE_EXEMPTION_AUDIT_ACTIONS = {
+  grant: 'customer.phone_exemption.grant',
+  revoke: 'customer.phone_exemption.revoke',
+} as const;
+
 /** `phoneNumber: null` revokes the verification and forgets the number. */
 export const customerPhoneVerificationRequestSchema = z.object({
   idempotencyKey: idempotencyKeySchema,
