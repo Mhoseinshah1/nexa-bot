@@ -129,7 +129,9 @@ Contact»). Two independent rules can ask for it (owner, NEXA v095 PR-4):
   neither a verified number nor an exemption can do nothing in the bot or the mini app — `/start`,
   any button, message, command, deep link — until they verify. It is the last link of the one
   central guard (captcha → channels → terms → phone); exempt are the verification's own steps and
-  the promotional opt-out/in; a bound administrator is never stopped. Only turns pass it: payment
+  exactly what the channel and terms gates let through — «پشتیبانی», `/help` (and `/paysupport`)
+  and the promotional opt-out/in (owner, NEXA v096, closes `OQ-V095-P4-01`); a bound
+  administrator is never stopped. Only turns pass it: payment
   webhooks and inquiries, provisioning, reminders and the outbox never do. The held action is
   remembered (`customers.phone_resume`) and resumed through the whole guard after verification
   (at least `/start` → the main menu). A verified customer is never asked again; off asks nobody.
@@ -146,7 +148,9 @@ Contact»). Two independent rules can ask for it (owner, NEXA v095 PR-4):
 - **Exemption (D):** Customer 360 «معاف از تأیید شماره» (`users.phone_verification.exempt`, reason
   required, `customer.phone_exemption.grant/revoke`) — an exempt customer is asked by neither A
   nor C. Beside it, «معاف از عضویت اجباری کانال» (the channel exemption) skips the join check in the
-  bot and the mini app.
+  bot and the mini app. On an account transfer the phone exemption does exactly what the channel
+  exemption does (owner, NEXA v096, closes `OQ-V095-P4-03`): it stays with the source, the
+  preview reports it and both transfer audit rows record it (`sourceKeeps`).
 - **Own number only (E).** The contact's `user_id` must be the Telegram id of the customer the
   signed update resolved to; a contact naming nobody or somebody else, and ANY forwarded contact,
   is refused (`commerce.phone_contact_not_own`) and nothing is stored. Stored as E.164 in
@@ -157,15 +161,19 @@ Contact»). Two independent rules can ask for it (owner, NEXA v095 PR-4):
   360 page (for an administrator without `users.phone.verify`) carry `maskPhoneNumber` (`…1234`).
 - **The bot's account page (F)** carries neither «📱 تأیید شماره تلفن» nor «📜 تراکنش‌ها»; the wallet
   history itself stays (its `wh:` pages), with no entry from the bot's screens.
-  Open: `OQ-R11-B7-03`, `OQ-V095-P4-01..05`.
+  Open: `OQ-R11-B7-03`. `OQ-V095-P4-01..03` closed by the owner in NEXA v096; `P4-04` and
+  `P4-05` closed, owner: keep (built as described above).
 
 **A late Telegram Stars charge is credited, once (owner, NEXA v095 PR-4 G, closes
 `OQ-R11-B5-04`).** A charge recorded after its attempt's deadline goes to the same late-credit
 path TonPays uses (`creditLateGatewayApproval`: `GATEWAY_LATE_CREDIT` under
 `<paymentId>:late-credit`, the late-credit notice and ops log) — no switch, no refund, no second
 credit however often Telegram delivers it (one charge id per attempt, the ledger's unique
-reference). Only a LATE approval: money for an attempt that can no longer pay its order stays an
-operator's late completion on the Stars route (`OQ-V095-P4-02`).
+reference). **Money for an attempt that can no longer pay its order is returned too (owner, NEXA
+v096, closes `OQ-V095-P4-02`):** a charge recorded for a CANCELLED attempt, or for an order
+another payment already settled, goes to the wallet once through the same credit on the R12 F1
+`RETURNED` basis — the same notice and `ops.financial.late_credit_returned` as every other
+route's returned money; a second charge for one attempt stays the operator's identity mismatch.
 
 ## Providers and panels (Phase 3)
 
