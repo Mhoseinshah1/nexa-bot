@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PermissionKey } from '@nexa/contracts';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { NAV, navPermitted } from '../../apps/web/src/app';
 import {
   conversionRateOf,
@@ -918,8 +918,24 @@ describe('the custom gateway page', () => {
     stubApi([{ url: '/payment-gateways', body: { gateways: [custom()] } }]);
     const view = renderPage(<PaymentGatewaysPage provider="CUSTOM" denied={false} mayEdit />);
     expect(await screen.findAllByText('نشانی پل ثبت نشده')).not.toHaveLength(0);
-    expect(view.container.textContent).toContain('درگاه سفارشی (پل پرداخت)');
+    expect(view.container.textContent).toContain('درگاه کاستوم (پل پرداخت)');
     expect(screen.queryByRole('button', { name: 'تست اتصال' })).toBeNull();
+  });
+
+  it('the credential form carries the framed protocol-document box with a safe external link', async () => {
+    stubApi([{ url: '/payment-gateways', body: { gateways: [custom()] } }]);
+    renderPage(<PaymentGatewaysPage provider="CUSTOM" denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: 'تنظیم پل (رمز و نشانی)' }));
+    const box = await screen.findByTestId('protocol-doc-gateway');
+    expect(box.textContent).toContain('مستند پروتکل درگاه کاستوم');
+    const link = within(box).getByRole('link', { name: 'باز کردن مستند' });
+    expect(link).toHaveAttribute(
+      'href',
+      'https://github.com/Mhoseinshah1/nexa-bot/blob/main/docs/protocols/custom-gateway.md',
+    );
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link.getAttribute('rel')).toContain('noopener');
+    expect(box.getAttribute('style')).toBeNull();
   });
 
   it('saves the bridge address and the allow-list through their own route, normalised', async () => {

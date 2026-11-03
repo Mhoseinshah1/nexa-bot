@@ -81,3 +81,27 @@ Do not add unapproved design files here.
   and date the admin draws uses Latin digits (`1,250,000`, `1405/07/14 19:30`); `font-feature-settings:
 'ss01'` is gone and every formatter is `fa-IR-u-nu-latn`. The Jalali CALENDAR stays. A web test
   (`tests/web/latin-digits.test.tsx`) fails if U+06F0-U+06F9 appear in rendered DOM.
+
+## v0.9.5 approved demo: four screens, layout and behaviour only — APPROVED (2026-11-02)
+
+| Field              | Value                                                                                      |
+| ------------------ | ------------------------------------------------------------------------------------------ |
+| State              | **APPROVED** — the owner's NEXA-FIX-V095 round prompt (the demo approved 2026-11-02)       |
+| Approved reference | `docs/web-redesign/v095/approved-demo.html`, byte-identical to the file the owner approved |
+| Allowed now        | the four screens below, in the v0.9.5 fix-round PRs, and nothing else                      |
+
+It is the reference for the **layout and behaviour** of exactly these four screens:
+
+1. the Features page — **model 1 only** («دسته‌ها کنار», categories as bordered items);
+2. the custom-panel form;
+3. the phone-verification settings and the gateway rule;
+4. the reseller edit page with its allowed-products tab.
+
+- **It is NOT a CSS source.** It uses a `prefers-color-scheme` block, `style=` widths and physical
+  properties, all of which the repo forbids. Build with the kit, the tokens, `data-theme`, logical
+  properties and `Meter`/`Progress` (CSP: no `style=`).
+- **Its texts are drafts.** Real texts must describe what the code actually does.
+- **Anything the API has no field for is not drawn**, even where the demo draws it; a field is added
+  only where the round prompt's item says so.
+- The file must stay byte-identical (`.prettierignore` lists it). Do not edit it; a new approval
+  is a new file.

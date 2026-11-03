@@ -1,9 +1,9 @@
 # Nexa Custom Panel Bridge Protocol — v1
 
-Status: **v1, implemented** in Nexa (R10 C2) as the `custom` provider type, behind the
-`custom_panel_provider` feature flag, which is **off by default**. **Not yet accepted against
-a real bridge** — §12 is the acceptance run the first real bridge must pass before the flag
-is turned on in production (`OQ-C2-02`).
+Status: **v1, implemented** in Nexa (R10 C2) as the `custom` provider type (shown to the
+operator as «پنل کاستوم»), always offered in Web Admin → Panels → new panel. **Not yet
+accepted against a real bridge** — §12 is the acceptance run the first real bridge must pass
+before a production tenant relies on it (`OQ-C2-02`).
 
 Nexa's side: `apps/api/src/modules/platform/providers/infrastructure/custom-panel.adapter.ts`
 and `custom-panel-protocol.ts`. This document is the specification, and
@@ -19,13 +19,11 @@ On the Nexa side there is exactly one code-backed provider type, `custom`, and i
 this protocol. An operator configures a bridge's base URL, its shared secret and a timeout;
 they cannot describe a new protocol, add an endpoint or change a field.
 
-**Configuring one in Nexa** (Web Admin → Panels → new panel, provider «Custom (Nexa bridge
-v1)»): the base URL (`https://` only — anything else is refused), the shared secret (at least
+**Configuring one in Nexa** (Web Admin → Panels → new panel, provider «پنل کاستوم»): the base URL (`https://` only — anything else is refused), the shared secret (at least
 32 characters; stored encrypted, never shown again) and, optionally, a request timeout in
 seconds (§8) — on the new-panel form or later on the panel's activation card. Then «test connection» (§5.1) — a panel
-is enabled only after a test that vouches for its current address and secret. Creating a
-custom panel is refused while the tenant's `custom_panel_provider` flag is off; turning the
-flag off later does **not** stop custom panels that already exist.
+is enabled only after a test that vouches for its current address and secret. The form
+links back to this document.
 
 The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 
@@ -590,7 +588,7 @@ ACCOUNT_NOT_BOUND`, account untouched.
 
 ---
 
-## 12. Acceptance against the first real bridge (recommended before the flag is turned on)
+## 12. Acceptance against the first real bridge (recommended before a production tenant relies on one)
 
 Nexa's tests prove that its adapter and **this document** agree: a mock bridge written from
 this document (`tests/support/fake-custom-bridge.ts`, tests only) verifies every request,
@@ -600,7 +598,7 @@ connection, unsigned and wrongly signed answers, an unsigned 404, every malforme
 §7.3 names, an unknown code, a missing account, an account bound elsewhere, a reused
 operation id, a rate limit and a skewed clock. They cannot prove that any real bridge does.
 
-So before `custom_panel_provider` is turned on for a production tenant, run an **acceptance
+So before a production tenant relies on a custom panel, run an **acceptance
 test against the first real bridge**, with a disposable account namespace on its panel:
 
 - Driven by Nexa's own shipped adapter over its real HTTP client — not by a script that

@@ -106,7 +106,6 @@ describe('the tenant-wide probe budget', () => {
     repository: PanelRepository = new DrizzlePanelRepository(context.container.database.db),
   ) =>
     new PanelService({
-      features: ctx.container.featureFlagResolver,
       capacity: ctx.container.panelCapacity,
       usernameNamespace: ctx.container.usernameNamespace,
       repository,

@@ -1,4 +1,5 @@
 import { useRef, useState, type FormEvent } from 'react';
+import { providerDisplayName, providerNameOf } from '../provider-labels';
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CLIENT_APP_DELIVERY_KINDS,
@@ -261,11 +262,7 @@ function compatibilityOf(row: ClientAppResponse): string {
   }
   if (row.protocols.length > 0) parts.push(row.protocols.join(', '));
   if (row.providerTypes.length > 0) {
-    parts.push(
-      row.providerTypes
-        .map((type) => PROVIDER_DESCRIPTORS.find((d) => d.key === type)?.canonicalName ?? type)
-        .join(', '),
-    );
+    parts.push(row.providerTypes.map((type) => providerNameOf(type)).join(', '));
   }
   return parts.length === 0 ? t('web.client_apps_compat_any') : parts.join(' · ');
 }
@@ -1062,7 +1059,7 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
                             })
                           }
                         />{' '}
-                        {descriptor.canonicalName}
+                        {providerDisplayName(descriptor.key, descriptor.canonicalName)}
                       </label>
                     ))}
                   </fieldset>

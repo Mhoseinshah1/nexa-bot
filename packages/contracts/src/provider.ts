@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import type { ProviderLastSeen } from './customer-ux.js';
-import type { FeatureFlagKey } from './features.js';
 import type { ServiceId } from './ids.js';
 
 /**
@@ -470,19 +469,11 @@ export interface ProviderDescriptor {
    */
   readonly requiredActivationFields: readonly string[];
   /*
-   * The three gates below are DATA on the descriptor and are enforced generically by the
+   * The gates below are DATA on the descriptor and are enforced generically by the
    * panel service (R10 C2) — never by an `if (type === …)` outside the adapter registry.
-   * Each is optional, and absent means "no gate": the three providers that predate them
+   * Each is optional, and absent means "no gate": the providers that predate them
    * declare none and behave exactly as before.
    */
-  /**
-   * A feature flag that must be ON for the tenant before a NEW panel of this type may be
-   * created, and before the type is offered in the panel form.
-   *
-   * Creation only. A flag switched off after panels of the type exist does not stop them
-   * operating — their services were paid for (`docs/project-status.md`, R10 C2).
-   */
-  readonly requiresFeature?: FeatureFlagKey;
   /**
    * `HTTPS_ONLY` refuses a base URL that is not `https:` at create and at every address
    * change, and the adapter refuses to dial one. For a provider whose answers carry
@@ -2015,10 +2006,11 @@ const SANAEI: ProviderDescriptor = {
  * What backs them is Nexa's own specification and a contract test of every operation
  * and every failure mode against a mock bridge that enforces the specification
  * (`tests/support/fake-custom-bridge.ts`) — which proves the adapter and the document
- * agree, not that any particular bridge does. That is why the type is behind
- * `custom_panel_provider`, off by default, and why the protocol document asks for an
- * acceptance run against the first real bridge before the flag is turned on in
- * production.
+ * agree, not that any particular bridge does. That is why the protocol
+ * document asks for an acceptance run against the first real bridge before a production
+ * tenant relies on the type. There is no feature flag in front of it: the type is always
+ * offered in the panel form, and a panel is sellable only after a successful connection
+ * test.
  *
  *   - `LIMIT_DEVICES`: the create carries the order's device limit and the protocol
  *     REQUIRES the bridge to enforce it or refuse the create (`422 RULE_REFUSED`).
@@ -2056,7 +2048,6 @@ const CUSTOM: ProviderDescriptor = {
   // One signed `GET v1/health`; there is no session to open.
   maxRequestsPerProbe: 1,
   requiredActivationFields: [],
-  requiresFeature: 'custom_panel_provider',
   transport: 'HTTPS_ONLY',
   minimumApiTokenLength: 32,
 };

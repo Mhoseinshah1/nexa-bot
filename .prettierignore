@@ -11,3 +11,5 @@ docs/web-redesign/demo-parity/DIFFS.md
 docs/design/mini-app/project
 # renumber-migration fixtures mimic drizzle output byte for byte
 scripts/claude/fixtures/renumber-migration
+# The owner-approved v0.9.5 demo, kept byte for byte (2026-11-02)
+docs/web-redesign/v095/approved-demo.html

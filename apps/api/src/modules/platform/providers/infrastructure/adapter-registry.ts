@@ -49,9 +49,7 @@ const ADAPTERS: Partial<Record<ProviderType, () => ProviderConnectionAdapter>> =
   /*
    * R10 C2: Nexa's own bridge protocol (`docs/protocols/custom-panel.md`). Registered like
    * the other three — provisioning, the live check, the monitor and the capacity and
-   * health views all reach it through this map and nothing else. Whether a tenant may
-   * CREATE one is the descriptor's `requiresFeature`, enforced by the panel service; an
-   * existing custom panel is operated whatever that flag says.
+   * health views all reach it through this map and nothing else.
    */
   custom: () => new CustomPanelAdapter(),
 };
