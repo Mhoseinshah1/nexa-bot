@@ -3476,8 +3476,16 @@ textarea.input,
 
 /* Touch screens have no hover: a tapped row or button must not stay lit (UI/UX Pro Max). */
 @media (hover: none) {
-  .tbl tbody tr:hover {
-    background: inherit;
+  /* Only the hover tint goes; a selected, expanded or detail row keeps its own background. */
+  .tbl tbody tr:not(.selected, .expanded, .tbl-detail):hover {
+    background: transparent;
+  }
+  .tbl tbody tr.selected:hover {
+    background: var(--accent-soft);
+  }
+  .tbl tbody tr.expanded:hover,
+  .tbl tbody tr.tbl-detail:hover {
+    background: var(--panel-row);
   }
 }
 /* Hover feedback eases, press feedback is instant-feeling (Emil Kowalski). */
