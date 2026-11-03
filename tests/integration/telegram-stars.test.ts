@@ -748,13 +748,14 @@ describe('Telegram Stars (Package A)', () => {
      * deadline is ACCEPTED and credited to the wallet exactly once, through the late-credit path
      * TonPays uses — however often Telegram delivers it. No refund, no second credit.
      *
-     * Mutation-checked (each broken alone, this file run, restored; recorded in the PR):
-     *  - `RECORDED_CHARGE_LATE_CREDIT` not passed by `settleRecorded` -> this test goes red
-     *    (a late completion, nothing credited);
-     *  - the `existing` early return in `creditLateGatewayApproval` dropped AND its `inserted`
-     *    guard forced true -> "delivered twice" goes red (a second PaymentLateCredited);
-     *    each alone stays green, because the other guard (and the ledger's unique late-credit
-     *    reference under both) still holds.
+     * Mutation-checked (this file's "v095 G" tests run, restored; recorded in the PR):
+     *  - `RECORDED_CHARGE_LATE_CREDIT` not passed by the recorded-payment paths -> all four
+     *    "v095 G" tests go red (a late completion, nothing credited);
+     *  - once-only: three independent guards, each removed ALONE leaves them green — the
+     *    decided-outcome return in `settleRecorded`, the `existing` return in
+     *    `creditLateGatewayApproval`, its `inserted` guard — and the three removed together
+     *    turn "credits a late charge ONCE however often Telegram delivers it" red. Under all
+     *    of them the ledger's unique `<paymentId>:late-credit` reference still holds one entry.
      */
     it('CREDITS a payment that lands after the deadline to the wallet, once (v095 G)', async () => {
       await enableStars();

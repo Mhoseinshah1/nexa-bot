@@ -38,13 +38,19 @@ import {
  * end through the real runtime, services and PostgreSQL, with a socket standing in for
  * Telegram.
  *
- * Mutation-checked (each broken alone, this file run, restored; recorded in the PR):
- *  - `phoneGatedAct`'s hold dropped -> "the gate's decision table" goes red;
- *  - `refuseUnverifiedPhone` called only when the route is not offered (its R11 shape) ->
- *    "no payment exists before verification" goes red (a payment row is written);
- *  - the exemption ignored in `PaymentGatewayService.phoneStanding` -> "an exempt customer
- *    is asked by neither A nor C" goes red;
- *  - the IRAN_ONLY check dropped in `verifyOwnContact` -> "B refuses a foreign number" red.
+ * Mutation-checked (each broken alone, the named file run, restored; recorded in the PR):
+ *  - `phoneGatedAct`'s hold made unreachable -> five A/C tests here go red, the decision
+ *    table first;
+ *  - the exemption ignored in `PaymentGatewayService.phoneStanding` -> "an exempt customer is
+ *    asked by neither A nor C" goes red;
+ *  - the IRAN_ONLY check dropped in `verifyOwnContact` -> "with Iran only, refuses a foreign
+ *    number" goes red;
+ *  - `refuseUnverifiedPhone` moved back behind "route not offered" (its R11 shape) in
+ *    `PaymentService` -> three tests of `r11-b7-phone-verification.test.ts` go red (the direct
+ *    top-up writes a payment); this file's bot paths stay green because
+ *    `WalletTopupFlowService.choose` and `CheckoutService.payByCard` refuse first — the
+ *    defence in depth the PR describes;
+ *  - `phoneRuleRefuses` always false -> `tests/unit/gateway-eligibility.test.ts` goes red.
  */
 describe('NEXA v095 PR-4 — the phone gate, the route rule and the exemption', () => {
   let f: ReceiptFixture;
