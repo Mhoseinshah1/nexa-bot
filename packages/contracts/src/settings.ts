@@ -448,6 +448,25 @@ function isOutboundTargetEntry(entry: string): boolean {
   return false;
 }
 
+/**
+ * NEXA v096 PR-1 — the import's demotion cap (`docs/legacy-migration/nxpkg-importer.md`
+ * §Demotions at apply). Between an approved dry run and its apply a live panel can expire or
+ * delete accounts on its own; an approved adoptable service that the apply's fresh read finds
+ * gone (`PROVIDER_MISSING`) or unresolved (`INVENTORY_INCOMPLETE`) is DEMOTED and the import
+ * continues. Above this many demotions the panel or the read is probably broken, not just
+ * moving, and the apply refuses `DRY_RUN_MISMATCH` before any write. The cap is the larger of
+ * `MIN_SERVICES` and `BASIS_POINTS` / 10 000 of the approved adoptable services, rounded down.
+ */
+export const LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS = {
+  minServices: 'legacy_import.apply_demotion_cap_min_services',
+  basisPoints: 'legacy_import.apply_demotion_cap_basis_points',
+} as const;
+export const LEGACY_IMPORT_DEMOTION_CAP_MIN_SERVICES_DEFAULT = 50;
+export const LEGACY_IMPORT_DEMOTION_CAP_MIN_SERVICES_MAX = 1_000_000;
+/** 50 basis points = 0.5 %. */
+export const LEGACY_IMPORT_DEMOTION_CAP_BASIS_POINTS_DEFAULT = 50;
+export const LEGACY_IMPORT_DEMOTION_CAP_BASIS_POINTS_MAX = 10_000;
+
 /** The setting key of the owner's outbound private-target allow-list (R12 F2). */
 export const OUTBOUND_PRIVATE_TARGETS_SETTING_KEY = 'security.outbound_private_targets';
 
@@ -456,7 +475,12 @@ export const OUTBOUND_PRIVATE_TARGETS_SETTING_KEY = 'security.outbound_private_t
  * `settings.destructive` (CRITICAL), which the owner role holds and an operator with only
  * `settings.edit` does not. A key here is one that widens what the installation will reach.
  */
-export const OWNER_ONLY_SETTING_KEYS: readonly string[] = [OUTBOUND_PRIVATE_TARGETS_SETTING_KEY];
+export const OWNER_ONLY_SETTING_KEYS: readonly string[] = [
+  OUTBOUND_PRIVATE_TARGETS_SETTING_KEY,
+  // NEXA v096 PR-1: how far an import may depart from the plan the owner approved.
+  LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS.minServices,
+  LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS.basisPoints,
+];
 
 /**
  * Phase 4 PR-4 (review of PR #371): settings whose TURNING ON widens what the support AI may send
@@ -2654,6 +2678,42 @@ export const SETTINGS = [
     defaultValue: 'ALL',
     configures: 'phone_verification',
     zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * NEXA v096 PR-1: the import's demotion cap. Read by the importer at an apply whose fresh
+   * panel read demoted approved adoptable services; owner-only (`OWNER_ONLY_SETTING_KEYS`).
+   */
+  {
+    key: LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS.minServices,
+    description:
+      'Legacy import: the fewest approved adoptable services an apply may demote (an account ' +
+      'the live panel deleted or expired since the approved dry run, imported as an ended ' +
+      'service or held for review) and still continue. The cap is the larger of this and ' +
+      'legacy_import.apply_demotion_cap_basis_points of the approved adoptable services; ' +
+      'above it the apply refuses DRY_RUN_MISMATCH before any write. 0 leaves only the ' +
+      `share. Between 0 and ${String(LEGACY_IMPORT_DEMOTION_CAP_MIN_SERVICES_MAX)}.`,
+    schema: z.number().int().min(0).max(LEGACY_IMPORT_DEMOTION_CAP_MIN_SERVICES_MAX),
+    defaultValue: LEGACY_IMPORT_DEMOTION_CAP_MIN_SERVICES_DEFAULT,
+    configures: null,
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: LEGACY_IMPORT_DEMOTION_CAP_SETTING_KEYS.basisPoints,
+    description:
+      'Legacy import: the share of the approved adoptable services an apply may demote, in ' +
+      'basis points (50 = 0.5 %), rounded down. The cap is the larger of this share and ' +
+      'legacy_import.apply_demotion_cap_min_services. 0 leaves only the minimum. Between 0 ' +
+      `and ${String(LEGACY_IMPORT_DEMOTION_CAP_BASIS_POINTS_MAX)}.`,
+    schema: z.number().int().min(0).max(LEGACY_IMPORT_DEMOTION_CAP_BASIS_POINTS_MAX),
+    defaultValue: LEGACY_IMPORT_DEMOTION_CAP_BASIS_POINTS_DEFAULT,
+    configures: null,
+    zeroMeaning: 'LITERAL',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     consumer: 'ACTIVE',
