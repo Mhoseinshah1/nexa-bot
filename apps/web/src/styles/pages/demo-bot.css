@@ -175,13 +175,6 @@
 .feature-pane-body {
   min-width: 0;
 }
-.feature-group-title {
-  margin: 0;
-  padding: 12px 18px 4px;
-  font-size: var(--fs-ui);
-  font-weight: 700;
-  color: var(--fg-2);
-}
 .feature-meta {
   display: flex;
   flex-wrap: wrap;

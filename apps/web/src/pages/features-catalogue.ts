@@ -228,7 +228,7 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   customer_link_rotation: {
     title: 'web.feature_customer_link_rotation_title',
     summary: 'web.feature_customer_link_rotation_summary',
-    category: 'panel',
+    category: 'customer',
     where: ['bot'],
     offEffect: 'web.feature_customer_link_rotation_off',
     related: null,
@@ -328,7 +328,7 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   phone_verification: {
     title: 'web.feature_phone_verification_title',
     summary: 'web.feature_phone_verification_summary',
-    category: 'sales',
+    category: 'customer',
     where: ['bot'],
     offEffect: 'web.feature_phone_verification_off',
     related: { path: '/payment-gateways', label: 'web.nav_payment_gateways' },
@@ -443,7 +443,7 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   wallet_admin_credit_notice: {
     title: 'web.feature_wallet_admin_credit_notice_title',
     summary: 'web.feature_wallet_admin_credit_notice_summary',
-    category: 'reminders',
+    category: 'sales',
     where: ['bot'],
     offEffect: 'web.feature_wallet_admin_notice_off_effect',
     related: { path: '/users', label: 'web.nav_users' },
@@ -453,7 +453,7 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   wallet_admin_debit_notice: {
     title: 'web.feature_wallet_admin_debit_notice_title',
     summary: 'web.feature_wallet_admin_debit_notice_summary',
-    category: 'reminders',
+    category: 'sales',
     where: ['bot'],
     offEffect: 'web.feature_wallet_admin_notice_off_effect',
     related: { path: '/users', label: 'web.nav_users' },
@@ -545,7 +545,7 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   referral_friends_list: {
     title: 'web.feature_referral_friends_list_title',
     summary: 'web.feature_referral_friends_list_summary',
-    category: 'miniapp',
+    category: 'referral',
     where: ['miniapp'],
     offEffect: 'web.feature_referral_friends_list_off',
     related: null,
@@ -591,7 +591,7 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
   location_remaining_display: {
     title: 'web.feature_location_remaining_display_title',
     summary: 'web.feature_location_remaining_display_summary',
-    category: 'panel',
+    category: 'miniapp',
     where: ['bot', 'miniapp'],
     offEffect: 'web.feature_location_remaining_display_off',
     related: null,
