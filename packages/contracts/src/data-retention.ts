@@ -27,7 +27,8 @@ export const OUTBOX_PUBLISHED_RETENTION_DAYS_DEFAULT = 7;
 export const OUTBOX_PUBLISHED_RETENTION_DAYS_MIN = 1;
 export const OUTBOX_PUBLISHED_RETENTION_DAYS_MAX = 3650;
 
-export const IDEMPOTENCY_INTERACTIVE_RETENTION_DAYS_DEFAULT = 30;
+/** v0.9.7: 7 (until then 30) — the minimum, a week beyond any retry of one submission. */
+export const IDEMPOTENCY_INTERACTIVE_RETENTION_DAYS_DEFAULT = 7;
 /** A week: far beyond any retry a browser or Telegram makes of one submission. */
 export const IDEMPOTENCY_INTERACTIVE_RETENTION_DAYS_MIN = 7;
 export const IDEMPOTENCY_INTERACTIVE_RETENTION_DAYS_MAX = 3650;
