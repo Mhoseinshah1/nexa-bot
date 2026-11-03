@@ -114,6 +114,11 @@ export const EVENT_TYPES = [
   'CustomerReminderOptOutChanged',
   // Customer 360 (§11.4–11.5). Ids and booleans only: never a phone number.
   'CustomerChannelMembershipExemptionChanged',
+  /**
+   * NEXA v095 PR-4 D: an operator exempted a customer from phone verification (the bot gate
+   * and every route rule), or lifted it. A boolean only, like the channel exemption.
+   */
+  'CustomerPhoneVerificationExemptionChanged',
   'CustomerPhoneVerificationChanged',
   'CustomerLocationChangeOverrideChanged',
   /**
@@ -390,6 +395,7 @@ export const EVENT_PAYLOAD_SCHEMAS = {
   CustomerMarketingOptOutChanged: z.object({ optedOut: z.boolean() }),
   CustomerReminderOptOutChanged: z.object({ optedOut: z.boolean() }),
   CustomerChannelMembershipExemptionChanged: z.object({ exempt: z.boolean() }),
+  CustomerPhoneVerificationExemptionChanged: z.object({ exempt: z.boolean() }),
   /** Whether a verified number is now recorded. The number itself is never in an event. */
   CustomerPhoneVerificationChanged: z.object({ verified: z.boolean() }),
   CustomerLocationChangeOverrideChanged: z.object({ overridden: z.boolean() }),

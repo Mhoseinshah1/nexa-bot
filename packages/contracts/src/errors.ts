@@ -1666,8 +1666,9 @@ export const COMMERCE_ERROR_CODES = {
   CUSTOMER_PHONE_INVALID: 'commerce.customer_phone_invalid',
   /**
    * R11 B7: the payment route the customer chose requires a phone number they verified, and
-   * theirs is not verified. Raised only while `phone_verification` is on; the bot answers it
-   * with the «تأیید شماره تلفن» button.
+   * theirs is not verified (and they are not exempt). NEXA v095 PR-4 C: raised whenever the
+   * route has the rule, whatever `phone_verification` says, before any payment exists; the bot
+   * answers it with the contact keyboard and continues to the route after verification.
    */
   PHONE_VERIFICATION_REQUIRED: 'commerce.phone_verification_required',
   /**
@@ -1675,8 +1676,11 @@ export const COMMERCE_ERROR_CODES = {
    * contact, or a contact forwarded from somewhere else. Nothing was stored.
    */
   PHONE_CONTACT_NOT_OWN: 'commerce.phone_contact_not_own',
-  /** R11 B7: `phone_verification` is off, so a shared contact verifies nothing. */
-  PHONE_VERIFICATION_DISABLED: 'commerce.phone_verification_disabled',
+  /**
+   * NEXA v095 PR-4 B: `phone_verification.allowed_numbers` is IRAN_ONLY and the customer's
+   * own number is not a +98 one. Nothing was stored.
+   */
+  PHONE_NOT_IRANIAN: 'commerce.phone_not_iranian',
 
   // --- Customer notes and tags (program §8, docs/customer-notes-tags.md) ---------------
   /** No such tag in this tenant. */

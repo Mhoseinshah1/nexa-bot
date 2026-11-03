@@ -13761,9 +13761,10 @@ export const TEMPLATES = [
   {
     key: 'bot.phone.verify_button',
     description:
-      'R11 B7: the button «تأیید شماره تلفن» — on the account screen, on a payment screen where a ' +
-      'route needs a verified number, and under the refusal that says so. Drawn only while the ' +
-      'phone_verification feature is on.',
+      'R11 B7: the inline button «تأیید شماره تلفن», which opens the contact prompt. NEXA v095 ' +
+      'PR-4 F took it off the account screen and C off the payment screens (a route that needs ' +
+      'a verified number asks for it when chosen); it stays only so a button already in a chat ' +
+      'still opens the prompt.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -13779,9 +13780,9 @@ export const TEMPLATES = [
   {
     key: 'bot.phone.share_button',
     description:
-      'R11 B7: the reply-keyboard button that shares the customer\u2019s own contact. Drawn from ' +
-      'the shared catalogue (like the management panel\u2019s button), so an override does not ' +
-      'change it.',
+      'R11 B7: the reply-keyboard button that shares the customer\u2019s own contact; reads ' +
+      'exactly «📞 Share Contact» (NEXA v095 PR-4 F, owner wording). Drawn from the shared ' +
+      'catalogue (like the management panel\u2019s button), so an override does not change it.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -13846,7 +13847,50 @@ export const TEMPLATES = [
     key: 'bot.payment.phone_required',
     description:
       'R11 B7: the payment method the customer chose is only for customers with a verified ' +
-      'phone number. Nothing was charged; carries the «تأیید شماره تلفن» button.',
+      'phone number. Nothing was charged. Retired by NEXA v095 PR-4 C: the bot and the mini ' +
+      'app answer that refusal with bot.phone.gateway_required (and the mini app with its own ' +
+      'phone step); kept so a stored override still parses.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  // --- NEXA v095 PR-4: the bot-wide phone gate, the gateway rule, the allowed numbers -----
+  {
+    key: 'bot.phone.required',
+    description:
+      'NEXA v095 PR-4 A: the phone_verification feature is on and this customer has neither a ' +
+      'verified number nor an exemption, so the bot does nothing else until they verify. Asks ' +
+      'them to share their OWN number with «📞 Share Contact» under the chat; only their own ' +
+      'Telegram account\u2019s number is accepted. Sets the contact keyboard.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.phone.gateway_required',
+    description:
+      'NEXA v095 PR-4 C: the payment route the customer chose requires a verified phone number ' +
+      'and theirs is not verified. Nothing was charged and no payment was started. Sets the ' +
+      'contact keyboard: «📞 Share Contact» continues straight to this route\u2019s payment for ' +
+      'the same order or top-up once the number is verified; «↩️ انتخاب درگاه دیگر» goes back ' +
+      'to the payment methods.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.phone.other_gateway_button',
+    description:
+      'NEXA v095 PR-4 C: the reply-keyboard button under «📞 Share Contact» on ' +
+      'bot.phone.gateway_required that goes back to the payment methods of the same order or ' +
+      'top-up. Drawn from the shared catalogue and matched by its text, so an override does ' +
+      'not change it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.phone.iran_only',
+    description:
+      'NEXA v095 PR-4 B: the setting phone_verification.allowed_numbers is IRAN_ONLY and the ' +
+      'customer\u2019s own number is not an Iranian (+98) one. Says only Iranian numbers are ' +
+      'accepted. Nothing was stored.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

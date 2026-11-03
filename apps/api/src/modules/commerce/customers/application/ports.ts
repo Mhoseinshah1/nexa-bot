@@ -53,6 +53,12 @@ export interface CustomerRecord {
    * resolved for the update, so the exemption is enforced where membership is.
    */
   readonly channelMembershipExemptAt: Date | null;
+  /**
+   * NEXA v095 PR-4 D: when an operator exempted this customer from phone verification; null
+   * while it applies. Exempt is never asked for a phone — by the bot-wide gate (read from the
+   * row the update resolved) nor by a payment route's rule (read in the payment's transaction).
+   */
+  readonly phoneVerificationExemptAt: Date | null;
   /** A number an operator verified out of band, and when; both or neither. */
   readonly phoneNumber: string | null;
   readonly phoneVerifiedAt: Date | null;
@@ -252,6 +258,41 @@ export interface CustomerRepository {
     now: Date,
     tx?: unknown,
   ): Promise<boolean>;
+
+  /**
+   * NEXA v095 PR-4 D: the phone-verification exemption, as a conditional UPDATE naming the
+   * state it expects, like the channel exemption's. `false`: already so.
+   */
+  setPhoneVerificationExemption(
+    scope: TenantContext,
+    id: UserId,
+    exempt: boolean,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean>;
+
+  /**
+   * NEXA v095 PR-4 A/C: remember what the bot resumes once this customer has verified their
+   * phone (`c:<callback data>` or `t:<text>`), replacing any earlier one. Bot UI state.
+   */
+  setPhoneResume(
+    scope: TenantContext,
+    id: UserId,
+    resume: string,
+    now: Date,
+    tx?: unknown,
+  ): Promise<void>;
+
+  /**
+   * NEXA v095 PR-4 A/C: read and clear the remembered action in ONE conditional UPDATE, so two
+   * verifications racing resume it once. Null when none is remembered.
+   */
+  takePhoneResume(
+    scope: TenantContext,
+    id: UserId,
+    now: Date,
+    tx?: unknown,
+  ): Promise<{ readonly resume: string; readonly at: Date } | null>;
 
   /**
    * Customer 360: record a verified number (`phoneNumber` set) or forget it (null). `false`

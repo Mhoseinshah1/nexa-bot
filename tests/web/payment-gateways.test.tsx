@@ -271,10 +271,14 @@ describe('the gateway form’s purpose switches', () => {
 
   it('R11 B7: a previous-release route reads as no phone rule, and the switch saves as shown', async () => {
     const { api } = await open();
-    const phone = screen.getByRole('switch', { name: 'فقط برای شمارهٔ تأییدشده' });
+    // NEXA v095 PR-4 C: the owner's wording.
+    const phone = screen.getByRole('switch', {
+      name: 'برای پرداخت با این درگاه، تأیید شماره لازم است',
+    });
     expect(phone).toHaveAttribute('aria-checked', 'false');
-    // The hint says the rule applies only while the feature is on.
-    expect(screen.getByText(/فقط وقتی «تأیید شماره تلفن کاربران»/u)).toBeTruthy();
+    // The hint says what the code does: shown to all, asked when chosen, independent of A.
+    expect(screen.getByText(/به همهٔ مشتری‌ها نمایش داده می‌شود/u)).toBeTruthy();
+    expect(screen.getByText(/حتی وقتی «تأیید شماره تلفن کاربران» خاموش است/u)).toBeTruthy();
     fireEvent.click(phone);
     fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
     await waitFor(() => {
@@ -288,7 +292,7 @@ describe('the gateway form’s purpose switches', () => {
     const ruled = { ...GATEWAY, requiresVerifiedPhone: true };
     stubApi([{ url: '/payment-gateways', body: { gateways: [ruled] } }]);
     renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
-    expect(await screen.findByText('فقط برای شمارهٔ تأییدشده')).toBeTruthy();
+    expect(await screen.findByText('📱 نیاز به تأیید شماره')).toBeTruthy();
   });
 
   it('says in amber when a route is on for nothing', async () => {

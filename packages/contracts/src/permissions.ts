@@ -124,6 +124,17 @@ export const PERMISSIONS = [
     'Exempt a customer from mandatory channel membership',
     'HIGH',
   ),
+  /*
+   * NEXA v095 PR-4 D: exempt one customer from phone verification — the bot-wide
+   * phone_verification gate AND every payment route's verified-phone rule (owner decision).
+   * HIGH like the channel exemption it is modelled on: it lets one customer past a gate the
+   * tenant made mandatory for everybody, and past a payment route's own condition.
+   */
+  p(
+    'users.phone_verification.exempt',
+    'Exempt a customer from phone verification (the bot gate and every route rule)',
+    'HIGH',
+  ),
   p('users.phone.verify', "Record or revoke a customer's manually verified phone number"),
   p('users.location.edit', "Set or remove a customer's location-change limit override", 'HIGH'),
   p('users.notifications.edit', "Change a customer's promotional notification preference"),
@@ -778,6 +789,8 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
        * questions with. The account TRANSFER stays with the owner.
        */
       'users.channel_membership.exempt',
+      // NEXA v095 PR-4 D: beside the channel exemption it is modelled on.
+      'users.phone_verification.exempt',
       'users.phone.verify',
       'users.location.edit',
       'users.notifications.edit',
@@ -1080,6 +1093,7 @@ export const PERMISSION_REQUIRES: Readonly<Partial<Record<PermissionKey, Permiss
    * customer's controls, which `users.view` reads.
    */
   'users.channel_membership.exempt': 'users.view',
+  'users.phone_verification.exempt': 'users.view',
   'users.phone.verify': 'users.view',
   'users.location.edit': 'users.view',
   'users.notifications.edit': 'users.view',

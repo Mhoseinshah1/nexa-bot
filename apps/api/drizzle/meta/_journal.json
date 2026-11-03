@@ -2157,6 +2157,20 @@
       "when": 1793691029544,
       "tag": "0307_panel_health_announced_capabilities",
       "breakpoints": true
+    },
+    {
+      "idx": 308,
+      "version": "7",
+      "when": 1793700855712,
+      "tag": "0308_customer_phone_exemption_and_resume",
+      "breakpoints": true
+    },
+    {
+      "idx": 309,
+      "version": "7",
+      "when": 1793700855804,
+      "tag": "0309_phone_exemption_grant",
+      "breakpoints": true
     }
   ]
 }

@@ -430,6 +430,17 @@ export const PHONE_VERIFY_CALLBACK_DATA = 'pv:';
  */
 export const PHONE_VERIFY_CANCEL_COMMAND = 'phone_cancel';
 /**
+ * NEXA v095 PR-4 C: the command «↩️ انتخاب درگاه دیگر» stands for — routed by the shared label
+ * map like the cancel label above; not registered with `setMyCommands`.
+ */
+export const PHONE_OTHER_GATEWAY_COMMAND = 'phone_other_gateway';
+/**
+ * NEXA v095 PR-4 A/C: the `/start` payload of the mini app's fallback link to the bot, where
+ * `WebApp.requestContact()` is missing: it opens the contact prompt. Never a referral code
+ * (those are `ref…`), and it carries no id.
+ */
+export const PHONE_VERIFY_START_PAYLOAD = 'verify_phone';
+/**
  * Program §6: `ac:<terms version uuid>` — accept THAT version of the terms and rules. Two
  * letters: `a:` is taken, and `ac:` differs from it at the second character. 39 bytes.
  */

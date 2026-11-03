@@ -3767,6 +3767,27 @@ export const customers = pgTable(
      */
     channelMembershipExemptAt: timestamptz('channel_membership_exempt_at'),
     /**
+     * NEXA v095 PR-4 D: when an operator exempted this customer from phone verification;
+     * NULL while it applies to them. Exempt means never asked for a phone — neither by the
+     * bot-wide `phone_verification` gate (read from the row the update resolved, like the
+     * channel exemption) nor by any payment route's verified-phone rule (read by the route
+     * evaluation in the payment's own transaction). Set and cleared only by
+     * `CustomerControlService`, conditionally.
+     */
+    phoneVerificationExemptAt: timestamptz('phone_verification_exempt_at'),
+    /**
+     * NEXA v095 PR-4 A/C: what the bot resumes once this customer has verified their phone —
+     * the button they tapped (`c:` + its callback data) or the command they sent (`t:` +
+     * its text) when a phone gate held it, and when that was. Bot UI state, not a fact about
+     * the customer: written when the gate holds a tap, taken (read and cleared in one
+     * conditional UPDATE, in the verification's own transaction) by the contact that
+     * verifies, and ignored once stale. It names an action, never money: the resumed action
+     * goes through every gate and its service decides it again. Both or neither
+     * (`customers_phone_resume_check`).
+     */
+    phoneResume: text('phone_resume'),
+    phoneResumeAt: timestamptz('phone_resume_at'),
+    /**
      * Customer 360 (§11.4): a verified phone number, and when it was verified — by an
      * OPERATOR out of band, or (R11 B7, while `phone_verification` is on) by the customer
      * sharing their OWN Telegram contact in the bot. The audit row says which
@@ -3840,6 +3861,10 @@ export const customers = pgTable(
     /** A blocked customer has a time; an active one does not. Neither state can lie. */
     check('customers_blocked_at_check', sql`(status = 'BLOCKED') = (blocked_at IS NOT NULL)`),
     check('customers_phone_check', sql`(phone_number IS NULL) = (phone_verified_at IS NULL)`),
+    check(
+      'customers_phone_resume_check',
+      sql`(phone_resume IS NULL) = (phone_resume_at IS NULL) AND (phone_resume IS NULL OR char_length(phone_resume) <= 300)`,
+    ),
     check(
       'customers_phone_format_check',
       sql`phone_number IS NULL OR phone_number ~ '^[+][1-9][0-9]{7,14}$'`,

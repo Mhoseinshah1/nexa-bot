@@ -18,8 +18,7 @@ import { DrizzleOpsLogFacts } from '../../apps/api/src/modules/commerce/ops-log/
 import type { TransactionScope } from '../../apps/api/src/infrastructure/persistence/unit-of-work';
 import {
   PHONE_VERIFY_CALLBACK_DATA,
-  TOPUP_MENU_CALLBACK_PREFIX,
-  TOPUP_ROUTE_CALLBACK_PREFIX,
+  WALLET_HISTORY_CALLBACK_PREFIX,
 } from '../../apps/api/src/surfaces/telegram/runtime/callbacks';
 import { SEED_IDS, tenantA } from './harness';
 import {
@@ -39,33 +38,26 @@ import {
 } from './receipt-review-fixture';
 
 /**
- * R11 B7 — phone verification by the customer's OWN Telegram contact, and a payment route
- * that requires a verified number.
+ * R11 B7, as NEXA v095 PR-4 changed it — phone verification by the customer's OWN Telegram
+ * contact, and a payment route that requires a verified number.
  *
  * End to end through the real runtime, services and PostgreSQL, with a socket standing in
- * for Telegram: the prompt and its contact keyboard; an own contact accepted, stored as
- * E.164 with the clock's time, idempotent, replaced by a new own number; another person's,
- * a nameless and a forwarded contact refused with nothing stored; the flag off verifying
- * nothing. Then the route rule: hidden from an unverified customer (one evaluation for the
- * menu and the checkout), refused with `PHONE_VERIFICATION_REQUIRED` when reached anyway —
- * top-up and order transfer alike — offered once verified, and IGNORED while the flag is off.
- * Finally the number's privacy: masked in the audit row, the operations-log facts and the
- * Customer 360 overview for an administrator without `users.phone.verify`; and the raw
- * number absent from every log call, outbox payload, audit, idempotency and Telegram message.
+ * for Telegram: the prompt and its contact keyboard («📞 Share Contact»); an own contact
+ * accepted, stored as E.164 with the clock's time, idempotent, replaced by a new own number;
+ * another person's, a nameless and a forwarded contact refused with nothing stored; a contact
+ * verifying with `phone_verification` OFF too (C: a route's rule asks with it off). Then the
+ * route rule (C): SHOWN to every customer, refused with `PHONE_VERIFICATION_REQUIRED` BEFORE
+ * any payment exists — top-up and order transfer alike — with the switch on AND off, and
+ * accepted once verified. Finally the number's privacy: masked in the audit row, the
+ * operations-log facts and the Customer 360 overview for an administrator without
+ * `users.phone.verify`; and the raw number absent from every log call, outbox payload, audit,
+ * idempotency and Telegram message. The bot-wide gate (A), the allowed numbers (B), the
+ * resume (C) and the exemption (D) are `v095-phone-gate.test.ts`.
  *
- * Mutation-checked (each broken alone, this file run, restored):
- *  - the `user_id` equality in `PhoneVerificationService.verifyOwnContact` dropped -> "refuses
- *    ANOTHER person's contact", "keeps two customers apart" and the privacy scan go red;
- *  - its forwarded check dropped -> "refuses a FORWARDED contact";
- *  - the order card-to-card check in `PaymentService.requestManualTransfer` dropped ->
- *    "refuses an ORDER's card to card";
- *  - `refuseUnverifiedPhone` neutralised -> "refuses a direct top-up", "the bot answers the
- *    refusal", "keeps two customers apart";
- *  - `phoneRuleRefuses` always false -> six of the route-rule tests;
- *  - the flag ignored in `PaymentGatewayService.phoneStanding` -> "IGNORES the rule while the
- *    feature is off"; in `verifyOwnContact` -> "verifies nothing while the feature is off"; in
- *    `phoneVerifyPrompt` -> "sends the contact keyboard while the feature is on, and nothing to
- *    verify while off".
+ * Mutation-checked in R11 (each broken alone, this file run, restored): the `user_id` equality
+ * and the forwarded check in `verifyOwnContact`; the order card-to-card check in
+ * `requestManualTransfer`; `refuseUnverifiedPhone`; `phoneRuleRefuses`. The v095 checks are
+ * listed in `v095-phone-gate.test.ts` and the PR.
  */
 describe('R11 B7 — phone verification and the verified-phone route rule', () => {
   let f: ReceiptFixture;
@@ -235,27 +227,22 @@ describe('R11 B7 — phone verification and the verified-phone route rule', () =
   // -------------------------------------------------------------------------------------
 
   describe('the bot flow', () => {
-    it('«تأیید شماره تلفن» sends the contact keyboard while the feature is on, and nothing to verify while off', async () => {
-      await tap(f, PHONE_VERIFY_CALLBACK_DATA, TG.customer);
-      expect(lastText(f)).toContain('تأیید شماره تلفن در حال حاضر');
-      expect((lastReply(f)['reply_markup'] as { keyboard?: unknown } | undefined)?.keyboard).toBe(
-        undefined,
-      );
-
-      await setFlag(true);
-      await tap(f, PHONE_VERIFY_CALLBACK_DATA, TG.customer);
-      const markup = lastReply(f)['reply_markup'] as {
-        keyboard: { text: string; request_contact?: boolean }[][];
-      };
-      expect(markup.keyboard[0]?.[0]).toEqual({
-        text: CATALOGUE_FA['bot.phone.share_button'],
-        request_contact: true,
-      });
-      expect(markup.keyboard[1]?.[0]?.text).toBe(CATALOGUE_FA['bot.phone.cancel_button']);
+    it('«تأیید شماره تلفن» (a button still in a chat) sends the contact keyboard, switch on or off', async () => {
+      for (const enabled of [false, true]) {
+        await setFlag(enabled);
+        await tap(f, PHONE_VERIFY_CALLBACK_DATA, TG.customer);
+        const markup = lastReply(f)['reply_markup'] as {
+          keyboard: { text: string; request_contact?: boolean }[][];
+        };
+        expect(markup.keyboard[0]?.[0]).toEqual({
+          text: '📞 Share Contact',
+          request_contact: true,
+        });
+        expect(markup.keyboard[1]?.[0]?.text).toBe(CATALOGUE_FA['bot.phone.cancel_button']);
+      }
     });
 
     it('accepts the customer’s OWN contact: E.164 with the clock’s time, masked everywhere it is said', async () => {
-      await setFlag(true);
       const result = await shareContact({ phone_number: '989121234567', user_id: OWN });
       expect(result.replyKey).toBe('bot.phone.verified');
       const stored = await storedPhone();
@@ -274,7 +261,6 @@ describe('R11 B7 — phone verification and the verified-phone route rule', () =
     });
 
     it('is idempotent for the same number and REPLACES it with a new own number', async () => {
-      await setFlag(true);
       await shareContact({ phone_number: '+98 912 123 4567', user_id: OWN });
       const first = await storedPhone();
       await shareContact({ phone_number: '989121234567', user_id: OWN });
@@ -290,7 +276,6 @@ describe('R11 B7 — phone verification and the verified-phone route rule', () =
     });
 
     it('refuses ANOTHER person’s contact, and stores nothing', async () => {
-      await setFlag(true);
       const result = await shareContact({ phone_number: '989121234567', user_id: OWN + 1 });
       expect(result.replyKey).toBe('bot.phone.not_own');
       expect(lastText(f)).toContain('فقط شمارهٔ خود حساب تلگرامتان');
@@ -304,14 +289,12 @@ describe('R11 B7 — phone verification and the verified-phone route rule', () =
     });
 
     it('refuses a contact that names no account (an address-book number)', async () => {
-      await setFlag(true);
       const result = await shareContact({ phone_number: '989121234567' });
       expect(result.replyKey).toBe('bot.phone.not_own');
       expect((await storedPhone())?.phone_number).toBeNull();
     });
 
     it('refuses a FORWARDED contact, even one that names the sender', async () => {
-      await setFlag(true);
       const viaOrigin = await shareContact(
         { phone_number: '989121234567', user_id: OWN },
         { forward_origin: { type: 'user', date: 0, sender_user: { id: OWN } } },
@@ -325,31 +308,38 @@ describe('R11 B7 — phone verification and the verified-phone route rule', () =
       expect((await storedPhone())?.phone_number).toBeNull();
     });
 
-    it('verifies nothing while the feature is off', async () => {
+    it('verifies with the feature OFF too: a payment route’s rule asks for a number with it off (v095 C)', async () => {
       const result = await shareContact({ phone_number: '989121234567', user_id: OWN });
-      expect(result.replyKey).toBe('bot.phone.unavailable');
-      expect((await storedPhone())?.phone_number).toBeNull();
-      expect(await phoneAudits()).toHaveLength(0);
+      expect(result.replyKey).toBe('bot.phone.verified');
+      expect((await storedPhone())?.phone_number).toBe('+989121234567');
+      expect((await phoneAudits()).map((row) => row.action)).toEqual([
+        'customer.phone.self_verify',
+      ]);
     });
 
     it('the cancel label brings the main menu back and stores nothing', async () => {
-      await setFlag(true);
       const result = await say(f, CATALOGUE_FA['bot.phone.cancel_button'], TG.customer);
       expect(result.replyKey).toBe('bot.phone.cancelled');
       expect((lastReply(f)['reply_markup'] as { keyboard?: unknown[] }).keyboard).toBeDefined();
     });
 
-    it('the wallet screen offers the button only while on and only to an unverified customer', async () => {
-      const verifyShown = () =>
-        lastKeyboard(f).some((button) => button.callback_data === PHONE_VERIFY_CALLBACK_DATA);
-      await say(f, '/wallet', TG.customer);
-      expect(verifyShown()).toBe(false);
-      await setFlag(true);
-      await say(f, '/wallet', TG.customer);
-      expect(verifyShown()).toBe(true);
-      await shareContact({ phone_number: '989121234567', user_id: OWN });
-      await say(f, '/wallet', TG.customer);
-      expect(verifyShown()).toBe(false);
+    it('the wallet screen carries neither «📱 تأیید شماره تلفن» nor «📜 تراکنش‌ها», on or off (v095 F)', async () => {
+      const labels = () => lastKeyboard(f).map((button) => button.text);
+      const data = () => lastKeyboard(f).map((button) => String(button.callback_data ?? ''));
+      for (const enabled of [false, true]) {
+        await setFlag(enabled);
+        // A verified customer, so the bot-wide gate (on in the second pass) does not hold them.
+        if (enabled) await shareContact({ phone_number: '989121234567', user_id: OWN });
+        await say(f, '/wallet', TG.customer);
+        expect(lastText(f)).not.toBe('');
+        expect(data()).not.toContain(PHONE_VERIFY_CALLBACK_DATA);
+        expect(data().some((one) => one.startsWith(WALLET_HISTORY_CALLBACK_PREFIX))).toBe(false);
+        expect(labels()).not.toContain(CATALOGUE_FA['bot.phone.verify_button']);
+        expect(labels()).not.toContain(CATALOGUE_FA['bot.wallet.history_button']);
+      }
+      // The wallet history itself stays: its own callback still draws it.
+      const history = await tap(f, WALLET_HISTORY_CALLBACK_PREFIX, TG.customer);
+      expect(String(history.replyKey)).toMatch(/^bot\.wallet\.history/u);
     });
   });
 
@@ -358,43 +348,28 @@ describe('R11 B7 — phone verification and the verified-phone route rule', () =
   // -------------------------------------------------------------------------------------
 
   describe('the verified-phone route rule', () => {
-    it('hides the route from an unverified customer, for both purposes (one evaluation)', async () => {
-      await setFlag(true);
+    it('SHOWS the route to an unverified customer, for both purposes (v095 C)', async () => {
       await requirePhoneOnTransfer(true);
-      expect(await providers('WALLET_TOPUP')).toEqual([]);
-      expect(await providers('SERVICE_PURCHASE')).toEqual([]);
-      // The checkout's own list (the bot's and the mini app's) draws no card to card either.
-      const order = await confirmedOrder('hide');
+      expect(await providers('WALLET_TOPUP')).toEqual(['MANUAL_TRANSFER']);
+      expect(await providers('SERVICE_PURCHASE')).toEqual(['MANUAL_TRANSFER']);
+      // The checkout's own list (the bot's and the mini app's) draws card to card too.
+      const order = await confirmedOrder('shown');
       const offered = await f.ctx.container.miniApp.checkout.orderRoutes(
         tenantA,
         f.customer,
         order.totals.total,
       );
-      expect(offered.map((route) => route.kind)).not.toContain('CARD_TO_CARD');
-      expect(
-        await f.ctx.container.miniApp.checkout.phoneVerificationOffered(
-          tenantA,
-          f.customer,
-          'SERVICE_PURCHASE',
-          order.totals.total,
-        ),
-      ).toBe(true);
-      expect(
-        await f.ctx.container.miniApp.checkout.phoneVerificationOffered(
-          tenantA,
-          f.customer,
-          'WALLET_TOPUP',
-          null,
-        ),
-      ).toBe(true);
+      expect(offered.map((route) => route.kind)).toContain('CARD_TO_CARD');
     });
 
-    it('refuses a direct top-up through it with PHONE_VERIFICATION_REQUIRED, and writes nothing', async () => {
-      await setFlag(true);
+    it('refuses a direct top-up through it with PHONE_VERIFICATION_REQUIRED, switch on AND off, writing nothing', async () => {
       await requirePhoneOnTransfer(true);
-      expect(await refusalOf(typedTopup('typed-unverified'))).toBe(
-        COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED,
-      );
+      for (const enabled of [false, true]) {
+        await setFlag(enabled);
+        expect(await refusalOf(typedTopup(`typed-unverified-${String(enabled)}`))).toBe(
+          COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED,
+        );
+      }
       const payments = await rows<{ n: number }>(
         f,
         sql`SELECT count(*)::int AS n FROM payments WHERE tenant_id = ${tenantA.tenantId}`,
@@ -403,7 +378,6 @@ describe('R11 B7 — phone verification and the verified-phone route rule', () =
     });
 
     it('refuses an ORDER’s card to card with PHONE_VERIFICATION_REQUIRED, unlike the thresholds (OQ-5C-01)', async () => {
-      await setFlag(true);
       await requirePhoneOnTransfer(true);
       const order = await confirmedOrder('order-unverified');
       expect(
@@ -418,21 +392,17 @@ describe('R11 B7 — phone verification and the verified-phone route rule', () =
       ).toBe(COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED);
     });
 
-    it('the bot answers the refusal in Persian with the verify button', async () => {
-      await setFlag(true);
+    it('the bot answers the refusal with the gateway sentence and the contact keyboard (v095 C)', async () => {
       await requirePhoneOnTransfer(true);
       const { refusal } = await import('../../apps/api/src/surfaces/telegram/runtime/refusals');
       const error = await typedTopup('typed-bot').catch((thrown: unknown) => thrown);
       const reply = refusal(error);
-      expect(reply.key).toBe('bot.payment.phone_required');
-      expect(reply.buttons.map((button) => ('data' in button ? button.data : null))).toEqual([
-        PHONE_VERIFY_CALLBACK_DATA,
-      ]);
-      expect(CATALOGUE_FA['bot.payment.phone_required']).toMatch(/شماره تلفن/u);
+      expect(reply.key).toBe('bot.phone.gateway_required');
+      expect(reply.keyboard).toBe('PHONE_REQUEST_GATEWAY');
+      expect(CATALOGUE_FA['bot.phone.gateway_required']).toMatch(/شمارهٔ تلفن/u);
     });
 
-    it('offers the route once the customer verified their own number', async () => {
-      await setFlag(true);
+    it('accepts a payment through the route once the customer verified their own number', async () => {
       await requirePhoneOnTransfer(true);
       await shareContact({ phone_number: '989121234567', user_id: OWN });
       expect(await providers('WALLET_TOPUP')).toEqual(['MANUAL_TRANSFER']);
@@ -451,43 +421,7 @@ describe('R11 B7 — phone verification and the verified-phone route rule', () =
       ).toBeNull();
     });
 
-    it('IGNORES the rule while the feature is off: the unverified customer is offered the route', async () => {
-      await requirePhoneOnTransfer(true);
-      expect(await providers('WALLET_TOPUP')).toEqual(['MANUAL_TRANSFER']);
-      expect(await providers('SERVICE_PURCHASE')).toEqual(['MANUAL_TRANSFER']);
-      expect(await refusalOf(typedTopup('typed-flag-off'))).toBeNull();
-      expect(
-        await f.ctx.container.miniApp.checkout.phoneVerificationOffered(
-          tenantA,
-          f.customer,
-          'WALLET_TOPUP',
-          null,
-        ),
-      ).toBe(false);
-    });
-
-    it('the bot top-up draws no route held back by the rule, says why, and draws it once verified', async () => {
-      const routeButtons = () =>
-        lastKeyboard(f).filter((button) =>
-          String(button.callback_data ?? '').startsWith(TOPUP_ROUTE_CALLBACK_PREFIX),
-        );
-      await setFlag(true);
-      await requirePhoneOnTransfer(true);
-      const refused = await tap(f, TOPUP_MENU_CALLBACK_PREFIX, TG.customer);
-      expect(refused.replyKey).toBe('bot.payment.phone_required');
-      expect(lastKeyboard(f).map((button) => button.callback_data)).toContain(
-        PHONE_VERIFY_CALLBACK_DATA,
-      );
-      expect(routeButtons()).toEqual([]);
-
-      await shareContact({ phone_number: '989121234567', user_id: OWN });
-      const offered = await tap(f, TOPUP_MENU_CALLBACK_PREFIX, TG.customer);
-      expect(offered.replyKey).not.toBe('bot.payment.phone_required');
-      expect(offered.replyKey).not.toBe('bot.wallet.topup_unavailable');
-    });
-
     it('keeps two customers apart: one verified number opens the route for its owner only', async () => {
-      await setFlag(true);
       await requirePhoneOnTransfer(true);
       const otherTelegramId = '750902';
       const other = await customerNamed(f, otherTelegramId, 'other_b7_iso');
@@ -505,8 +439,9 @@ describe('R11 B7 — phone verification and the verified-phone route rule', () =
       );
       expect(phones.find((row) => row.id === f.customer)?.phone_number).toBe('+989121234567');
       expect(phones.find((row) => row.id === other)?.phone_number).toBeNull();
+      // Shown to both (v095 C); only the verified one may pay through it.
       expect(await providers('WALLET_TOPUP')).toEqual(['MANUAL_TRANSFER']);
-      expect(await providers('WALLET_TOPUP', other)).toEqual([]);
+      expect(await providers('WALLET_TOPUP', other)).toEqual(['MANUAL_TRANSFER']);
       expect(await refusalOf(typedTopup('typed-other', other))).toBe(
         COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED,
       );
@@ -550,7 +485,6 @@ describe('R11 B7 — phone verification and the verified-phone route rule', () =
         vi.spyOn(logger, 'error').mockImplementation(capture),
       ];
       try {
-        await setFlag(true);
         await requirePhoneOnTransfer(true);
         const result = await shareContact({ phone_number: `98${RAW}`, user_id: OWN });
         expect(result.replyKey).toBe('bot.phone.verified');
@@ -593,7 +527,6 @@ describe('R11 B7 — phone verification and the verified-phone route rule', () =
     });
 
     it('the operations-log facts carry the number masked', async () => {
-      await setFlag(true);
       await shareContact({ phone_number: '989121234567', user_id: OWN });
       const facts = new DrizzleOpsLogFacts(f.ctx.container.database.db);
       const fact = await facts.customer(tenantA, f.customer, {} as TransactionScope);
@@ -601,7 +534,6 @@ describe('R11 B7 — phone verification and the verified-phone route rule', () =
     });
 
     it('Customer 360 shows the full number only to a holder of users.phone.verify', async () => {
-      await setFlag(true);
       await shareContact({ phone_number: '989121234567', user_id: OWN });
       const owner = await f.ctx.container.customerControls.overview(tenantA, f.owner, f.customer);
       expect(owner.phoneNumberVisible).toBe(true);

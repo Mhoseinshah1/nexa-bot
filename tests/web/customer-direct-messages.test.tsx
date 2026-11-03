@@ -65,6 +65,7 @@ const overview = {
   overview: {
     customerId: ID,
     channelMembershipExemptAt: null,
+    phoneVerificationExemptAt: null,
     phone: null,
     locationOverride: null,
     marketingOptOutAt: null,

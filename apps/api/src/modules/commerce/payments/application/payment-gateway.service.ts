@@ -48,11 +48,11 @@ import type { TransactionScope } from '../../../../infrastructure/persistence/un
 import {
   accountAgeInDays,
   evaluateGatewayEligibility,
-  PHONE_VERIFICATION_FLAG,
   phoneRuleRefuses,
   phoneStandingOf,
   type GatewayAudience,
   type GatewayEligibility,
+  type PHONE_VERIFICATION_FLAG,
 } from '../domain/gateway-eligibility.js';
 import {
   allowsPurpose,
@@ -1281,10 +1281,20 @@ export class PaymentGatewayService {
     if (gateways.length === 0) return [];
 
     const audience = await this.audienceFor(scope, customerId);
-    return gateways.map((gateway) => ({
-      gateway,
-      eligibility: evaluateGatewayEligibility(gateway.status, gateway, audience),
-    }));
+    return gateways.map((gateway) => {
+      const verdict = evaluateGatewayEligibility(gateway.status, gateway, audience);
+      /*
+       * NEXA v095 PR-4 C: the verified-phone rule no longer hides a route, but it is still
+       * why this customer cannot PAY through it yet, which is what this view answers.
+       */
+      return {
+        gateway,
+        eligibility:
+          verdict.eligible && phoneRuleRefuses(gateway, audience.phone)
+            ? { eligible: false as const, reason: 'PHONE_NOT_VERIFIED' as const }
+            : verdict,
+      };
+    });
   }
 
   /**
@@ -1320,42 +1330,14 @@ export class PaymentGatewayService {
   }
 
   /**
-   * R11 B7: whether verifying their phone number would offer this customer a route for this
-   * purpose (and amount, when given) that they are not offered now. False while
-   * `phone_verification` is off or the customer is verified. The question the bot asks to
-   * decide whether a payment screen carries «تأیید شماره تلفن»; the SAME evaluation as
-   * `routesFor`, once as the customer stands and once as if verified.
-   */
-  async phoneVerificationUnlocks(
-    scope: TenantContext,
-    customerId: UserId,
-    purpose: PaymentPurpose,
-    amount: Money | null,
-    tx?: unknown,
-  ): Promise<boolean> {
-    const { audience, routes } = await this.evaluateRoutes(scope, customerId, purpose, amount, tx);
-    if (audience.phone !== 'UNVERIFIED') return false;
-    const offered = new Set(routes.map((route) => route.provider));
-    const { routes: ifVerified } = await this.evaluateRoutes(
-      scope,
-      customerId,
-      purpose,
-      amount,
-      tx,
-      (actual) => ({ ...actual, phone: 'VERIFIED' }),
-    );
-    return ifVerified.some((route) => !offered.has(route.provider));
-  }
-
-  /**
-   * R11 B7: whether THIS route's verified-phone rule refuses this customer now — the route
-   * requires a verified number, `phone_verification` is on, and theirs is not verified.
+   * THE money gate of a route's verified-phone rule (NEXA v095 PR-4 C): whether THIS route
+   * refuses this customer a payment now — the route requires a verified number, theirs is not
+   * verified, and they are not exempt. Independent of `phone_verification`.
    *
-   * Asked by a path that has already chosen the route and been refused it, to tell the
-   * customer the one thing they can do about it (`PHONE_VERIFICATION_REQUIRED`) rather than
-   * "not offered"; and by the ORDER card-to-card path, which applies no customer threshold
-   * (`OQ-5C-01`) but does apply this rule. The predicate is the evaluator's own
-   * (`phoneRuleRefuses`), so the two cannot disagree.
+   * The route is SHOWN to everybody; this is asked where a payment would be opened, inside
+   * that payment's transaction and before any payment row is written (every gateway attempt,
+   * every transfer, order and top-up alike), and by the checkout before a draft is confirmed,
+   * so a refused tap holds no reservation. One predicate (`phoneRuleRefuses`) for all of them.
    */
   async phoneVerificationRequired(
     scope: TenantContext,
@@ -1429,25 +1411,6 @@ export class PaymentGatewayService {
     const eligible = routes.find((route) => route.descriptor.settlesVia === 'MANUAL_TRANSFER');
     if (eligible === undefined) {
       /*
-       * R11 B7: a transfer route held back ONLY by its verified-phone rule (every threshold
-       * before it passed) is answered with the one step the customer can take.
-       */
-      const phoneHeld = gateways.some(
-        (gateway) =>
-          PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].settlesVia === 'MANUAL_TRANSFER' &&
-          allowsPurpose(gateway, 'WALLET_TOPUP') &&
-          (() => {
-            const verdict = evaluateGatewayEligibility(gateway.status, gateway, audience);
-            return !verdict.eligible && verdict.reason === 'PHONE_NOT_VERIFIED';
-          })(),
-      );
-      if (phoneHeld) {
-        throw errors.conflict(
-          COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED,
-          'This payment route is offered only to customers with a verified phone number.',
-        );
-      }
-      /*
        * The reasons go to the DETAIL, not to the message. An operator reading the
        * operational log needs to know it was `TOO_FEW_PAYMENTS` on every route; the
        * customer needs to know they cannot pay this way right now, and nothing more.
@@ -1466,6 +1429,16 @@ export class PaymentGatewayService {
       );
     }
 
+    /*
+     * NEXA v095 PR-4 C: the route's verified-phone rule, before the caller opens anything —
+     * the transfer route is shown to everybody, and refused here to an unverified customer.
+     */
+    if (phoneRuleRefuses(eligible.gateway, audience.phone)) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED,
+        'This payment route requires a verified phone number.',
+      );
+    }
     /*
      * The row's own denomination. A NULL is a row the previous release wrote during
      * the rolling update that shipped the column, and that release relabelled its
@@ -1757,17 +1730,16 @@ export class PaymentGatewayService {
   }
 
   /**
-   * R11 B7: the customer's standing under the verified-phone rule. `NOT_ENFORCED` while
-   * `phone_verification` is off — the decision recorded in the PR: off, every route's
-   * phone rule is treated as not configured, so switching the feature off can never hide
-   * a route from anybody. With no feature resolver wired it is off too.
+   * NEXA v095 PR-4 C/D: the customer's standing under a route's verified-phone rule — EXEMPT
+   * (an operator's «معاف از تأیید شماره»), VERIFIED or UNVERIFIED. No longer bound to
+   * `phone_verification`: the rule is enforced whenever a route has it.
    */
   private async phoneStanding(scope: TenantContext, customerId: UserId, tx?: unknown) {
-    const enforced =
-      this.deps.features !== undefined &&
-      (await this.deps.features.isEnabled(scope, PHONE_VERIFICATION_FLAG, tx));
-    if (!enforced) return phoneStandingOf(false, false);
-    return phoneStandingOf(true, await this.deps.audience.phoneVerified(scope, customerId, tx));
+    const [verified, exempt] = await Promise.all([
+      this.deps.audience.phoneVerified(scope, customerId, tx),
+      this.deps.audience.phoneExempt?.(scope, customerId, tx) ?? Promise.resolve(false),
+    ]);
+    return phoneStandingOf(verified, exempt);
   }
 
   private async require(

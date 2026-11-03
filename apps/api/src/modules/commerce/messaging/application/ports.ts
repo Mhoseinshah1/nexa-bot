@@ -245,7 +245,20 @@ export type MainMenuVariant = 'MAIN_MENU' | 'MAIN_MENU_ADMIN';
  * the cancel label that brings the main menu back. Both labels come from the SHARED
  * catalogue, like the management panel's row: the cancel label is routed by its text.
  */
-export type CustomerReplyKeyboard = MainMenuVariant | 'PHONE_REQUEST';
+/*
+ * NEXA v095 PR-4: `PHONE_REQUIRED` — the bot-wide mandatory gate's keyboard, the contact button
+ * alone (there is nothing to go back to); `PHONE_REQUEST_GATEWAY` — under a payment route that
+ * needs a verified number, the contact button over «↩️ انتخاب درگاه دیگر».
+ */
+export type CustomerReplyKeyboard =
+  MainMenuVariant | 'PHONE_REQUEST' | 'PHONE_REQUIRED' | 'PHONE_REQUEST_GATEWAY';
+
+/** The reply keyboards whose first button is Telegram's contact button. */
+export const PHONE_KEYBOARDS: ReadonlySet<CustomerReplyKeyboard> = new Set<CustomerReplyKeyboard>([
+  'PHONE_REQUEST',
+  'PHONE_REQUIRED',
+  'PHONE_REQUEST_GATEWAY',
+]);
 
 /**
  * A file this installation already holds, sent on to somebody who may see it.

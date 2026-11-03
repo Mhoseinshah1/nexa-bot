@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   COMMERCE_ERROR_CODES,
   CUSTOMER_CONTROL_REASON_MAX_LENGTH,
+  CUSTOMER_PHONE_EXEMPTION_AUDIT_ACTIONS,
   PERSONAL_DISCOUNT_PERCENT_MAX,
   PERSONAL_DISCOUNT_PERCENT_MIN,
   WALLET_REPORT_GROUP_OF,
@@ -25,6 +26,7 @@ import {
   placeManualOrder,
   previewCustomerTransfer,
   setCustomerChannelExemption,
+  setCustomerPhoneExemption,
   setCustomerLocationOverride,
   setCustomerNotifications,
   setCustomerPersonalDiscount,
@@ -213,6 +215,8 @@ function TermsStanding({ overview }: { overview: CustomerOverviewResponse | unde
 type ControlKind =
   | 'EXEMPT'
   | 'UNEXEMPT'
+  | 'PHONE_EXEMPT'
+  | 'PHONE_UNEXEMPT'
   | 'PHONE'
   | 'UNPHONE'
   | 'LOCATION'
@@ -242,6 +246,7 @@ export function CustomerControlsCard({
   customerId,
   overview,
   mayExemptChannel,
+  mayExemptPhone = false,
   mayVerifyPhone,
   mayEditLocation,
   mayEditNotifications,
@@ -250,6 +255,8 @@ export function CustomerControlsCard({
   customerId: string;
   overview: CustomerOverviewResponse | undefined;
   mayExemptChannel: boolean;
+  /** `users.phone_verification.exempt` (NEXA v095 PR-4 D). */
+  mayExemptPhone?: boolean;
   mayVerifyPhone: boolean;
   mayEditLocation: boolean;
   mayEditNotifications: boolean;
@@ -289,6 +296,14 @@ export function CustomerControlsCard({
         case 'UNEXEMPT': {
           const body = { exempt: kind === 'EXEMPT', reason: note };
           return setCustomerChannelExemption(customerId, {
+            ...body,
+            idempotencyKey: submission.current({ kind, ...body }),
+          });
+        }
+        case 'PHONE_EXEMPT':
+        case 'PHONE_UNEXEMPT': {
+          const body = { exempt: kind === 'PHONE_EXEMPT', reason: note };
+          return setCustomerPhoneExemption(customerId, {
             ...body,
             idempotencyKey: submission.current({ kind, ...body }),
           });
@@ -390,6 +405,7 @@ export function CustomerControlsCard({
 
   const location = overview?.locationOverride ?? null;
   const exempt = overview?.channelMembershipExemptAt ?? null;
+  const phoneExempt = overview?.phoneVerificationExemptAt ?? null;
   const verified = overview?.phone ?? null;
   const optedOut = overview?.marketingOptOutAt ?? null;
   const reminders = overview?.reminders ?? null;
@@ -428,6 +444,19 @@ export function CustomerControlsCard({
                 ? { label: t('web.c360_channel_exempt_action'), kind: 'EXEMPT' }
                 : { label: t('web.c360_channel_unexempt_action'), kind: 'UNEXEMPT' },
               mayExemptChannel,
+            ),
+            // NEXA v095 PR-4 D: never asked for a phone — by the bot gate nor by any route rule.
+            row(
+              t('web.c360_phone_exemption'),
+              phoneExempt === null ? (
+                t('web.c360_phone_exemption_none')
+              ) : (
+                <Badge tone="violet">{t('web.c360_phone_exempt')}</Badge>
+              ),
+              phoneExempt === null
+                ? { label: t('web.c360_phone_exempt_action'), kind: 'PHONE_EXEMPT' }
+                : { label: t('web.c360_phone_unexempt_action'), kind: 'PHONE_UNEXEMPT' },
+              mayExemptPhone,
             ),
             row(
               t('web.c360_phone'),
@@ -777,6 +806,9 @@ const ACTION_LABELS: Readonly<Record<string, WebKey>> = {
   'customer.phone.revoke': 'web.c360_action_phone_revoke',
   'customer.channel_exemption.grant': 'web.c360_action_exempt',
   'customer.channel_exemption.revoke': 'web.c360_action_unexempt',
+  // NEXA v095 PR-4 D.
+  [CUSTOMER_PHONE_EXEMPTION_AUDIT_ACTIONS.grant]: 'web.c360_action_phone_exempt',
+  [CUSTOMER_PHONE_EXEMPTION_AUDIT_ACTIONS.revoke]: 'web.c360_action_phone_unexempt',
   'customer.marketing_opt_out': 'web.c360_action_marketing_out',
   'customer.marketing_opt_in': 'web.c360_action_marketing_in',
   'customer.reminders_opt_out': 'web.c360_action_reminders_out',

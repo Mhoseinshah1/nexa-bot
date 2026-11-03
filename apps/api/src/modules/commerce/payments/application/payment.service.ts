@@ -108,6 +108,7 @@ import {
   lateCreditAmountMatches,
   lateCreditReference,
   lateCreditStateDecision,
+  recordedChargeApproves,
 } from '../domain/late-credit.js';
 import {
   GATEWAY_REVIEW_RECONCILED_CODE,
@@ -2367,6 +2368,8 @@ export class PaymentService {
     provider: PaymentGatewayProvider,
     tx: TransactionScope,
   ): Promise<PaymentGatewayRecord> {
+    // NEXA v095 PR-4 C: the verified-phone gate, before any payment row (see `gatewayRouteFor`).
+    await this.refuseUnverifiedPhone(scope, customerId, provider, tx);
     const routes = await this.deps.gateways.routesFor(
       scope,
       customerId,
@@ -2376,7 +2379,6 @@ export class PaymentService {
     );
     const chosen = routes.find((route) => route.provider === provider);
     if (chosen === undefined) {
-      await this.refuseUnverifiedPhone(scope, customerId, provider, tx);
       throw errors.conflict(
         COMMERCE_ERROR_CODES.TOPUP_NOT_OFFERED,
         'That payment route is not offered for this top-up.',
@@ -4150,7 +4152,17 @@ export class PaymentService {
          * another way) is credited whatever the switch says and on every inquiry route — off,
          * nothing would ever give it back.
          */
-        if (state.basis === 'LATE_APPROVAL') {
+        /*
+         * NEXA v095 PR-4 G: a RECORDED-payment route (Stars) credits a LATE charge always (the
+         * owner's decision; `recordedChargeApproves`), and only a late one — money returned
+         * for an attempt that can no longer pay its order stays an operator's late completion.
+         */
+        const recorded =
+          PAYMENT_GATEWAY_DESCRIPTORS[payment.gatewayProvider].approval === 'RECORDED_PAYMENT';
+        if (recorded && state.basis !== 'LATE_APPROVAL') {
+          return { outcome: 'NOT_ELIGIBLE', reason: 'ROUTE_HAS_NO_LATE_CREDIT', payment };
+        }
+        if (state.basis === 'LATE_APPROVAL' && !recorded) {
           const settingName =
             PAYMENT_GATEWAY_DESCRIPTORS[payment.gatewayProvider].lateCreditSetting;
           if (settingName === null) {
@@ -4174,10 +4186,13 @@ export class PaymentService {
         if (
           invoice === null ||
           invoice.providerPaid !== true ||
-          !reconciliationEvidenceAllows(payment.gatewayProvider, 'CONFIRMED', {
-            status: invoice.providerStatus,
-            paid: invoice.providerPaid,
-          })
+          (recorded
+            ? // G: the recorded charge is the approval (and a reported refund cleared it).
+              !recordedChargeApproves(invoice)
+            : !reconciliationEvidenceAllows(payment.gatewayProvider, 'CONFIRMED', {
+                status: invoice.providerStatus,
+                paid: invoice.providerPaid,
+              }))
         ) {
           return { outcome: 'NOT_ELIGIBLE', reason: 'APPROVAL_NOT_VERIFIED', payment };
         }
@@ -5005,9 +5020,9 @@ export class PaymentService {
   }
 
   /**
-   * R11 B7: a route the customer chose and was NOT offered, refused for the one reason they
-   * can act on when that is the reason: its verified-phone rule (flag on, number not
-   * verified). Otherwise returns, and the caller refuses it as "not offered" as before.
+   * NEXA v095 PR-4 C: the route the customer chose refuses them a payment until their phone is
+   * verified — the route has the verified-phone rule, and they are neither verified nor exempt
+   * (`phoneRuleRefuses`), whatever `phone_verification` says. Otherwise returns.
    */
   private async refuseUnverifiedPhone(
     scope: TenantContext,
@@ -5041,9 +5056,14 @@ export class PaymentService {
     readonly gateway: PaymentGatewayRecord;
     readonly resolveConversion: () => Promise<ResolvedConversion>;
   }> {
+    /*
+     * NEXA v095 PR-4 C, THE gate: a route with the verified-phone rule is shown to everybody
+     * and refused here, inside the attempt's transaction and before any payment row is
+     * written, to a customer who is neither verified nor exempt.
+     */
+    await this.refuseUnverifiedPhone(scope, customerId, provider, tx);
     const routes = await this.deps.gateways.routesFor(scope, customerId, purpose, amount, tx);
     const chosen = routes.find((route) => route.provider === provider);
-    if (chosen === undefined) await this.refuseUnverifiedPhone(scope, customerId, provider, tx);
     if (chosen === undefined || chosen.descriptor.settlesVia !== 'GATEWAY') {
       throw errors.conflict(
         purpose === 'WALLET_TOPUP'

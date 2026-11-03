@@ -252,6 +252,11 @@ export const BOT_INTENTS = [
   'PHONE_CONTACT',
   'PHONE_VERIFY_CANCEL',
   /*
+   * NEXA v095 PR-4 C: «↩️ انتخاب درگاه دیگر», the reply keyboard's second label under a route
+   * that needs a verified number — back to the payment methods of the same order or top-up.
+   */
+  'PHONE_OTHER_GATEWAY',
+  /*
    * Round 11, B6: the customer's own switch for the service expiry and volume reminders, the
    * two buttons on the support screen. Ordinary gated intents (unlike /stop they are not a
    * way out of the membership guard), and never a way to change anything but the tapper's own

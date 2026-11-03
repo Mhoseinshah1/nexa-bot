@@ -46,8 +46,10 @@ export const COMMERCE_ERROR_BOT_KEY: Readonly<Record<string, TemplateKey>> = {
   [COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND]: 'bot.order.unavailable',
   [COMMERCE_ERROR_CODES.TOPUP_UNAVAILABLE]: 'bot.wallet.topup_unavailable',
   [COMMERCE_ERROR_CODES.TOPUP_NOT_OFFERED]: 'bot.wallet.topup_refused',
-  // R11 B7: the bot's sentence; the mini app's own (`ui.tsx`, pointing to the bot) wins over it.
-  [COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED]: 'bot.payment.phone_required',
+  // R11 B7 / v095 C: the bot's sentence; the mini app's own (`ui.tsx`, its own phone step) wins.
+  [COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED]: 'bot.phone.gateway_required',
+  // NEXA v095 PR-4 B: only +98 numbers are accepted (shared in the bot's chat, refused there).
+  [COMMERCE_ERROR_CODES.PHONE_NOT_IRANIAN]: 'bot.phone.iran_only',
   [COMMERCE_ERROR_CODES.TOPUP_BELOW_MINIMUM]: 'bot.wallet.topup_refused',
   [COMMERCE_ERROR_CODES.TOPUP_ABOVE_MAXIMUM]: 'bot.wallet.topup_refused',
   [COMMERCE_ERROR_CODES.PAYMENT_DESTINATION_UNCONFIGURED]: 'bot.payment.unconfigured',
@@ -147,7 +149,6 @@ export const COMMERCE_ERROR_GENERIC: readonly string[] = [
   COMMERCE_ERROR_CODES.CUSTOMER_PHONE_INVALID,
   // R11 B7: a shared contact reaches only the bot's chat; the mini app never verifies one.
   COMMERCE_ERROR_CODES.PHONE_CONTACT_NOT_OWN,
-  COMMERCE_ERROR_CODES.PHONE_VERIFICATION_DISABLED,
   COMMERCE_ERROR_CODES.CUSTOMER_TAG_NOT_FOUND,
   COMMERCE_ERROR_CODES.CUSTOMER_TAG_NAME_TAKEN,
   COMMERCE_ERROR_CODES.CUSTOMER_TAG_ARCHIVED,

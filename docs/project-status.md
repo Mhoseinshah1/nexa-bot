@@ -8,7 +8,7 @@ This file was moved verbatim out of `CLAUDE.md` on 2026-10-24. It holds project 
 - [Owner-defined main-menu buttons (R10 D2)](#owner-defined-main-menu-buttons-r10-d2)
 - [Authentication and authorization](#authentication-and-authorization)
 - [Payments and gateways (TonPays)](#payments-and-gateways-tonpays)
-- [Phone verification (R11 B7)](#phone-verification-r11-b7)
+- [Phone verification (R11 B7, NEXA v095 PR-4)](#phone-verification-r11-b7-nexa-v095-pr-4)
 - [Providers and panels (Phase 3)](#providers-and-panels-phase-3)
 - [Pricing, referral and resellers](#pricing-referral-and-resellers)
 - [Money rules](#money-rules)
@@ -120,29 +120,52 @@ attempt's invoice id, reference and exact amount, approves); one per-route secre
 direction with its own prefix; the base URL is https-only through the installation's URL policy,
 frozen on each attempt, and changed only while the route is DISABLED. The route ships DISABLED.
 
-## Phone verification (R11 B7)
+## Phone verification (R11 B7, NEXA v095 PR-4)
 
-A customer may verify their OWN phone number in the bot by sharing their Telegram contact
-(«تأیید شماره تلفن»), and a payment route may require a verified number. Off by default
-(`phone_verification`, switched from the Web Admin's features page).
+A customer verifies their OWN phone number by sharing their Telegram contact («📞 Share
+Contact»). Two independent rules can ask for it (owner, NEXA v095 PR-4):
 
-- **Own number only.** The contact's `user_id` must be the Telegram id of the customer the
-  signed update resolved to; a contact naming nobody or somebody else, and ANY forwarded
-  contact, is refused (`commerce.phone_contact_not_own`) and nothing is stored. Stored as
-  E.164 in `customers.phone_number` with `phone_verified_at` from the Clock; the same number
-  again changes nothing, a new one replaces it. The audit row says how
+- **The bot-wide switch `phone_verification` is off or MANDATORY (A).** On, a customer with
+  neither a verified number nor an exemption can do nothing in the bot or the mini app — `/start`,
+  any button, message, command, deep link — until they verify. It is the last link of the one
+  central guard (captcha → channels → terms → phone); exempt are the verification's own steps and
+  the promotional opt-out/in; a bound administrator is never stopped. Only turns pass it: payment
+  webhooks and inquiries, provisioning, reminders and the outbox never do. The held action is
+  remembered (`customers.phone_resume`) and resumed through the whole guard after verification
+  (at least `/start` → the main menu). A verified customer is never asked again; off asks nobody.
+- **A route's «برای پرداخت با این درگاه، تأیید شماره لازم است» (C)** works whatever the switch says.
+  The route is SHOWN to everybody; an unverified, non-exempt customer who picks it is asked for the
+  contact (`bot.phone.gateway_required`, «↩️ انتخاب درگاه دیگر») and, once verified, goes straight to
+  that route's payment for the same order or top-up. **No payment row exists before the phone is
+  verified:** `phoneRuleRefuses` is asked inside the payment's transaction (every gateway attempt,
+  every transfer, order and top-up) and by the checkout before a draft is confirmed; price hold and
+  expiry are unchanged. Card-to-card obeys it too.
+- **Allowed numbers (B):** `phone_verification.allowed_numbers`, ALL (default) or IRAN_ONLY (+98,
+  after normalising `98…` / `0098…`), applied to every verification; a number verified earlier
+  keeps its verification, whatever its country.
+- **Exemption (D):** Customer 360 «معاف از تأیید شماره» (`users.phone_verification.exempt`, reason
+  required, `customer.phone_exemption.grant/revoke`) — an exempt customer is asked by neither A
+  nor C. Beside it, «معاف از عضویت اجباری کانال» (the channel exemption) skips the join check in the
+  bot and the mini app.
+- **Own number only (E).** The contact's `user_id` must be the Telegram id of the customer the
+  signed update resolved to; a contact naming nobody or somebody else, and ANY forwarded contact,
+  is refused (`commerce.phone_contact_not_own`) and nothing is stored. Stored as E.164 in
+  `customers.phone_number` with `phone_verified_at` from the Clock; the main menu keyboard
+  replaces the contact keyboard after success. The audit row says how
   (`customer.phone.self_verify` vs an operator's `customer.phone.verify`).
-- **One evaluator.** The route rule (`payment_gateways.requires_verified_phone`) is part of
-  `evaluateGatewayEligibility`, which the bot's menus, the checkout and the Mini App all reach
-  through `routesFor`; a route reached anyway is refused in its transaction with
-  `commerce.phone_verification_required`, which the bot answers with the verify button. Unlike
-  the payment-count and age thresholds (`OQ-5C-01`), the phone rule ALSO applies to an order's
-  card-to-card transfer.
-- **Flag off = rule not configured.** With `phone_verification` off every route's phone rule
-  is ignored, so switching the feature off never hides a route; stored numbers are kept.
 - **The number is never logged in full.** Audit rows, the operations log facts and the Customer
   360 page (for an administrator without `users.phone.verify`) carry `maskPhoneNumber` (`…1234`).
-  Open: `OQ-R11-B7-01..03`.
+- **The bot's account page (F)** carries neither «📱 تأیید شماره تلفن» nor «📜 تراکنش‌ها»; the wallet
+  history itself stays (its `wh:` pages), with no entry from the bot's screens.
+  Open: `OQ-R11-B7-03`, `OQ-V095-P4-01..05`.
+
+**A late Telegram Stars charge is credited, once (owner, NEXA v095 PR-4 G, closes
+`OQ-R11-B5-04`).** A charge recorded after its attempt's deadline goes to the same late-credit
+path TonPays uses (`creditLateGatewayApproval`: `GATEWAY_LATE_CREDIT` under
+`<paymentId>:late-credit`, the late-credit notice and ops log) — no switch, no refund, no second
+credit however often Telegram delivers it (one charge id per attempt, the ledger's unique
+reference). Only a LATE approval: money for an attempt that can no longer pay its order stays an
+operator's late completion on the Stars route (`OQ-V095-P4-02`).
 
 ## Providers and panels (Phase 3)
 

@@ -606,7 +606,13 @@ describe('Telegram Stars inside the mini app (R11 B5)', () => {
       expect(await orderState(order.id)).toBe('PAID');
     });
 
-    it('retry after timeout: a charge that arrives after the attempt expired is recorded once as a late completion and settles nothing', async () => {
+    /*
+     * NEXA v095 PR-4 G (owner decision, closes OQ-R11-B5-04): a Stars charge that lands after
+     * the attempt's deadline is ACCEPTED and credited to the wallet exactly once, through the
+     * late-credit path TonPays uses, however often Telegram delivers it. The order is not
+     * settled; nothing is refunded; no operator late completion.
+     */
+    it('retry after timeout: a charge that arrives after the attempt expired is credited to the wallet once and settles nothing (v095 G)', async () => {
       await enableStars();
       await setFlag('miniapp_stars_invoice', true);
       const token = await session();
@@ -622,35 +628,72 @@ describe('Telegram Stars inside the mini app (R11 B5)', () => {
                                 checkout_held_until = now() - interval '1 second'
             WHERE id = ${attempt.paymentId}`,
       );
-      await successfulPayment(invoice.provider_order_id, 200, 'charge-late');
-      // ... and Telegram, not told in time, delivers it again.
-      await successfulPayment(invoice.provider_order_id, 200, 'charge-late');
+      const first = await successfulPayment(invoice.provider_order_id, 200, 'charge-late');
+      expect(first.statusCode).toBeLessThan(300);
+      // ... and Telegram, not told in time, delivers it again; the worker passes over it too.
+      const again = await successfulPayment(invoice.provider_order_id, 200, 'charge-late');
+      expect(again.statusCode).toBeLessThan(300);
+      await api.container.gatewayPayments.runOnce(tenantA);
 
-      const late = await rows<{
-        provider_charge_id: string | null;
-        outcome: string | null;
-        late_completion_observed_at: Date | null;
-      }>(
-        sql`SELECT provider_charge_id, outcome, late_completion_observed_at
+      const late = await rows<{ provider_charge_id: string | null; outcome: string | null }>(
+        sql`SELECT provider_charge_id, outcome
             FROM gateway_invoices WHERE payment_id = ${attempt.paymentId}`,
       );
-      expect(late).toHaveLength(1);
-      expect(late[0]).toMatchObject({
-        provider_charge_id: 'charge-late',
-        outcome: 'LATE_COMPLETION',
-      });
-      expect(late[0]?.late_completion_observed_at).not.toBeNull();
-      // The Stars route has no late credit (`lateCreditSetting: null`): nothing is credited
-      // or settled, once or twice; one operator alert, raised once.
+      expect(late).toEqual([{ provider_charge_id: 'charge-late', outcome: 'LATE_CREDITED' }]);
+
+      // Credited to the wallet ONCE: the payment's own frozen amount, under the one
+      // late-credit reason, naming the payment.
+      const [payment] = await rows<{ amount: string; currency: string }>(
+        sql`SELECT amount::text AS amount, currency FROM payments WHERE id = ${attempt.paymentId}`,
+      );
+      expect(payment?.amount).toBe('260000');
+      const credits = await rows<{
+        reason: string;
+        amount: string;
+        currency: string;
+        payment_id: string | null;
+      }>(
+        sql`SELECT reason, amount::text AS amount, currency, payment_id FROM wallet_entries
+            WHERE tenant_id = ${tenantA.tenantId}`,
+      );
+      expect(credits).toEqual([
+        {
+          reason: 'GATEWAY_LATE_CREDIT',
+          amount: '260000',
+          currency: payment?.currency,
+          payment_id: attempt.paymentId,
+        },
+      ]);
+      // The attempt and the order settle nothing.
       expect(await settledCounts(order.id)).toEqual({
         confirmed: 0,
         confirmedEvents: 0,
-        ledgerRows: 0,
+        ledgerRows: 1,
       });
-      const alerts = await opsEvents('payments.gateway_late_completion');
-      expect(alerts).toHaveLength(1);
-      expect(alerts[0]?.occurrence_count).toBe(1);
       expect(await orderState(order.id)).not.toBe('PAID');
+      // The same trail as every other late credit, once: its event, its audit, the
+      // customer's message — and no operator late completion.
+      expect(
+        await count(
+          sql`SELECT count(*)::text AS n FROM outbox_messages
+              WHERE tenant_id = ${tenantA.tenantId} AND event_type = 'PaymentLateCredited'
+                AND aggregate_id = ${attempt.paymentId}`,
+        ),
+      ).toBe(1);
+      expect(
+        await count(
+          sql`SELECT count(*)::text AS n FROM audit_logs
+              WHERE action = 'payment.gateway_late_credit' AND entity_id = ${attempt.paymentId}`,
+        ),
+      ).toBe(1);
+      expect(
+        await count(
+          sql`SELECT count(*)::text AS n FROM customer_notifications
+              WHERE tenant_id = ${tenantA.tenantId} AND subject_id = ${attempt.paymentId}
+                AND kind = 'GATEWAY_LATE_PAYMENT_CREDITED'`,
+        ),
+      ).toBe(1);
+      expect(await opsEvents('payments.gateway_late_completion')).toEqual([]);
     });
 
     it('successful_payment delivered twice with the same charge id settles once', async () => {

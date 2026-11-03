@@ -136,64 +136,47 @@ describe('gateway eligibility', () => {
 });
 
 /**
- * R11 B7: the verified-phone rule. One predicate (`phoneRuleRefuses`) shared by the evaluator
- * and the order card-to-card path; `NOT_ENFORCED` (the `phone_verification` flag off) makes
- * the rule as if it were not configured.
+ * R11 B7 / NEXA v095 PR-4 C/D: the verified-phone rule. ONE predicate (`phoneRuleRefuses`), the
+ * money gate asked where a payment would be opened; the evaluator no longer applies it (a route
+ * with the rule is SHOWN to everybody). Independent of `phone_verification`; an exemption wins.
  */
-describe('the verified-phone rule (R11 B7)', () => {
+describe('the verified-phone rule (NEXA v095 PR-4 C/D)', () => {
   const PHONE: PaymentGatewayEligibility = { ...OFF, requiresVerifiedPhone: true };
+  const audience = (phone?: 'EXEMPT' | 'VERIFIED' | 'UNVERIFIED') => ({
+    confirmedPayments: 0,
+    accountAgeDays: 0,
+    ...(phone === undefined ? {} : { phone }),
+  });
 
-  it('refuses an UNVERIFIED customer a route that requires a verified number', () => {
-    expect(
-      evaluateGatewayEligibility('ACTIVE', PHONE, {
-        confirmedPayments: 0,
-        accountAgeDays: 0,
-        phone: 'UNVERIFIED',
-      }),
-    ).toEqual({ eligible: false, reason: 'PHONE_NOT_VERIFIED' });
+  it('gates an UNVERIFIED customer on a route with the rule — and only them', () => {
     expect(phoneRuleRefuses(PHONE, 'UNVERIFIED')).toBe(true);
-  });
-
-  it('offers it to a VERIFIED customer', () => {
-    expect(
-      evaluateGatewayEligibility('ACTIVE', PHONE, {
-        confirmedPayments: 0,
-        accountAgeDays: 0,
-        phone: 'VERIFIED',
-      }),
-    ).toEqual({ eligible: true });
     expect(phoneRuleRefuses(PHONE, 'VERIFIED')).toBe(false);
+    expect(phoneRuleRefuses(PHONE, 'EXEMPT')).toBe(false);
+    expect(phoneRuleRefuses(PHONE, undefined)).toBe(false);
   });
 
-  it('ignores the rule while the feature is off (NOT_ENFORCED), and when no standing is given', () => {
-    for (const phone of ['NOT_ENFORCED', undefined] as const) {
-      expect(
-        evaluateGatewayEligibility('ACTIVE', PHONE, {
-          confirmedPayments: 0,
-          accountAgeDays: 0,
-          ...(phone === undefined ? {} : { phone }),
-        }),
-      ).toEqual({ eligible: true });
-      expect(phoneRuleRefuses(PHONE, phone)).toBe(false);
+  it('gates nobody on a route without the rule', () => {
+    for (const phone of ['UNVERIFIED', 'VERIFIED', 'EXEMPT', undefined] as const) {
+      expect(phoneRuleRefuses(OFF, phone)).toBe(false);
     }
-    expect(phoneStandingOf(false, false)).toBe('NOT_ENFORCED');
-    expect(phoneStandingOf(false, true)).toBe('NOT_ENFORCED');
-    expect(phoneStandingOf(true, false)).toBe('UNVERIFIED');
-    expect(phoneStandingOf(true, true)).toBe('VERIFIED');
   });
 
-  it('refuses nobody on a route without the rule', () => {
-    expect(phoneRuleRefuses(OFF, 'UNVERIFIED')).toBe(false);
-    expect(
-      evaluateGatewayEligibility('ACTIVE', OFF, {
-        confirmedPayments: 0,
-        accountAgeDays: 0,
-        phone: 'UNVERIFIED',
-      }),
-    ).toEqual({ eligible: true });
+  it('SHOWS the route to everybody: the evaluator does not apply the phone rule', () => {
+    for (const phone of ['UNVERIFIED', 'VERIFIED', 'EXEMPT', undefined] as const) {
+      expect(evaluateGatewayEligibility('ACTIVE', PHONE, audience(phone))).toEqual({
+        eligible: true,
+      });
+    }
   });
 
-  it('names the operator’s own thresholds before the phone rule', () => {
+  it('reads the customer row alone — an exemption wins, the bot-wide flag plays no part', () => {
+    expect(phoneStandingOf(false, false)).toBe('UNVERIFIED');
+    expect(phoneStandingOf(true, false)).toBe('VERIFIED');
+    expect(phoneStandingOf(false, true)).toBe('EXEMPT');
+    expect(phoneStandingOf(true, true)).toBe('EXEMPT');
+  });
+
+  it('keeps the operator’s own thresholds as eligibility reasons', () => {
     expect(
       evaluateGatewayEligibility(
         'ACTIVE',

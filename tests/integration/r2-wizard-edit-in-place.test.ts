@@ -598,6 +598,8 @@ describe('the wizard is one message, edited in place', () => {
 
   /*
    * R12 F3 item 7: «📜 تراکنش‌ها» — the wallet's last movements, ten a page, edited in place.
+   * NEXA v095 PR-4 F (owner): the wallet page no longer draws the button; the history itself
+   * stays and pages exactly as before from a `wh:` tap.
    */
   it('R12 F3: the wallet’s «📜 تراکنش‌ها» pages ten movements at a time, on the same message', async () => {
     for (let n = 1; n <= 12; n += 1) await fund(BigInt(n) * 1_000n, `hist-${String(n)}`);
@@ -606,7 +608,7 @@ describe('the wizard is one message, edited in place', () => {
     const opened = calls.find(
       (call) => call.method === 'sendMessage' || call.method === 'editMessageText',
     );
-    expect(buttonsOf(opened)).toContain('wh:');
+    expect(buttonsOf(opened)).not.toContain('wh:');
 
     const first = await tapOn(wallet, 'wh:');
     expect(first.replyKey).toBe('bot.wallet.history');

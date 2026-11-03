@@ -9,6 +9,7 @@ import {
   customerNotificationsRequestSchema,
   customerRemindersRequestSchema,
   customerPersonalDiscountRequestSchema,
+  customerPhoneExemptionRequestSchema,
   customerPhoneVerificationRequestSchema,
   customerServicesToggleRequestSchema,
   customerTransferPreviewRequestSchema,
@@ -69,6 +70,24 @@ export class Customer360Controller {
     const { scope, actor } = await authenticateAdmin(this.container, request);
     const command = customerChannelExemptionRequestSchema.parse(body);
     const result = await this.container.customerControls.setChannelExemption(scope, actor, {
+      idempotencyKey: command.idempotencyKey,
+      customerId: id,
+      exempt: command.exempt,
+      reason: command.reason,
+    });
+    return { overview: toOverview(result.overview), changed: result.changed };
+  }
+
+  /** NEXA v095 PR-4 D: the phone-verification exemption (`users.phone_verification.exempt`). */
+  @Post('users/:id/phone-exemption')
+  async phoneExemption(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<{ overview: CustomerOverviewResponse; changed: boolean }> {
+    const { scope, actor } = await authenticateAdmin(this.container, request);
+    const command = customerPhoneExemptionRequestSchema.parse(body);
+    const result = await this.container.customerControls.setPhoneExemption(scope, actor, {
       idempotencyKey: command.idempotencyKey,
       customerId: id,
       exempt: command.exempt,
@@ -381,6 +400,7 @@ function toOverview(overview: CustomerOverview): CustomerOverviewResponse {
   return {
     customerId: customer.id,
     channelMembershipExemptAt: customer.channelMembershipExemptAt?.toISOString() ?? null,
+    phoneVerificationExemptAt: customer.phoneVerificationExemptAt?.toISOString() ?? null,
     phone:
       customer.phoneNumber === null || customer.phoneVerifiedAt === null
         ? null

@@ -184,7 +184,13 @@ export type MiniAppSessionResponse = z.infer<typeof miniAppSessionResponseSchema
  * `start_captcha` was on and has not answered it yet. It is answered in the chat, never in
  * the mini app: the mini app only says so and links to the bot.
  */
-export const MINIAPP_GATES = ['BLOCKED', 'CAPTCHA', 'CHANNELS', 'TERMS'] as const;
+/**
+ * NEXA v095 PR-4 A: `PHONE` is the bot-wide phone_verification gate — the feature is on and the
+ * customer has neither a verified number nor an exemption. It comes after the terms, as in the
+ * bot. The mini app asks for the contact with `WebApp.requestContact()` where the client has it
+ * (the contact arrives in the bot's chat and is verified there), and otherwise links to the bot.
+ */
+export const MINIAPP_GATES = ['BLOCKED', 'CAPTCHA', 'CHANNELS', 'TERMS', 'PHONE'] as const;
 export type MiniAppGate = (typeof MINIAPP_GATES)[number];
 
 const channelSchema = z.object({
@@ -213,8 +219,15 @@ export const miniAppMeResponseSchema = z.object({
       z.object({ kind: z.literal('CAPTCHA') }),
       z.object({ kind: z.literal('CHANNELS'), channels: z.array(channelSchema) }),
       z.object({ kind: z.literal('TERMS'), terms: termsSchema }),
+      z.object({ kind: z.literal('PHONE') }),
     ])
     .nullable(),
+  /**
+   * NEXA v095 PR-4 C: whether this customer has a verified phone number on record — what the
+   * mini app polls after `requestContact()` before it retries a payment a route's
+   * verified-phone rule refused. Defaulted so a client built before it still parses.
+   */
+  phoneVerified: z.boolean().default(false),
   /** Null while gated: nothing behind a gate is read for a customer held at one. */
   wallet: z.object({ balance: moneySchema }).nullable(),
   /** An ACTIVE reseller's standing; null for everybody else (SUSPENDED is an ordinary customer). */

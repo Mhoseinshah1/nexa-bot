@@ -18,7 +18,8 @@ import { ApiError } from '../api.js';
 import { useApp } from '../app.js';
 import { t } from '../i18n/t.js';
 import { dateTime, money, parseAmountInput, signedMoney } from '../format.js';
-import { openExternal } from '../telegram.js';
+import { botPhonePromptLink, openExternal, openTelegram } from '../telegram.js';
+import { phoneGateDeps, withPhoneVerification } from '../phone.js';
 import { Button, Card, Loading, errorText, useLoad } from '../ui.js';
 import { LEDGER_REASON_KEY, PAYMENT_METHOD_KEY, PAYMENT_STATE_KEY } from './wallet-labels.js';
 
@@ -140,7 +141,7 @@ function GiftCard({ onRedeemed }: { onRedeemed: () => void }) {
 type TopupRoute = Extract<MiniAppTopupQuoteResponse, { outcome: 'ROUTES' }>['routes'][number];
 
 function TopUp({ wallet }: { wallet: MiniAppWalletResponse }) {
-  const { api, navigate } = useApp();
+  const { api, me, navigate } = useApp();
   const currency = wallet.balance.currency;
   const [text, setText] = useState('');
   const [preset, setPreset] = useState<MoneyWire | null>(null);
@@ -196,10 +197,33 @@ function TopUp({ wallet }: { wallet: MiniAppWalletResponse }) {
   const request = (route: TopupRoute) =>
     run(async () => {
       if (quoted === null) return;
-      const result = await api.post(MINIAPP_ROUTES.walletTopup, {}, miniAppTopupResponseSchema, {
-        amount: quoted.amount,
-        provider: route.provider,
-      });
+      /*
+       * NEXA v095 PR-4 C: a route with the verified-phone rule refuses an unverified customer
+       * before any payment exists; the contact is asked for in place and the same top-up is
+       * requested again once the server reports the number verified.
+       */
+      const outcome = await withPhoneVerification(
+        () =>
+          api.post(MINIAPP_ROUTES.walletTopup, {}, miniAppTopupResponseSchema, {
+            amount: quoted.amount,
+            provider: route.provider,
+          }),
+        phoneGateDeps(api),
+      );
+      if (outcome.kind !== 'DONE') {
+        if (outcome.kind === 'UNSUPPORTED' && me.botLink !== null) {
+          openTelegram(botPhonePromptLink(me.botLink));
+          setNotice(t('miniapp.phone_verification_open_bot'));
+          return;
+        }
+        setNotice(
+          outcome.kind === 'PENDING'
+            ? t('miniapp.phone_verification_pending')
+            : t('miniapp.phone_verification_required'),
+        );
+        return;
+      }
+      const result = outcome.value;
       if (result.kind === 'CARD_TO_CARD') {
         navigate({ name: 'card', instruction: result.instruction });
         return;

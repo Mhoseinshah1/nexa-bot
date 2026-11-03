@@ -14,7 +14,8 @@ import { useApp } from '../app.js';
 import { t } from '../i18n/t.js';
 import { dateTime, money, trafficLimit } from '../format.js';
 import { Sheet } from '../sheet.js';
-import { openExternal } from '../telegram.js';
+import { botPhonePromptLink, openExternal, openTelegram } from '../telegram.js';
+import { phoneGateDeps, withPhoneVerification } from '../phone.js';
 import { Button, Card, Loading, Ltr, Row, errorText, useLoad } from '../ui.js';
 
 /**
@@ -71,7 +72,7 @@ function Invoice({
   routes: MiniAppPaymentRoutesResponse | null;
   reload: () => void;
 }) {
-  const { api, replace } = useApp();
+  const { api, me, replace } = useApp();
   const [method, setMethod] = useState<Method | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -123,35 +124,55 @@ function Invoice({
   const pay = () =>
     run(async () => {
       if (method === null) return;
-      if (method.kind === 'WALLET') {
-        const paid = await api.post(
-          MINIAPP_ROUTES.orderPayWallet,
-          { orderId: order.id },
-          miniAppWalletPayResponseSchema,
-        );
-        replace({ name: 'pay', paymentId: paid.paymentId });
+      /*
+       * NEXA v095 PR-4 C: a route with the verified-phone rule refuses an unverified customer
+       * before any payment exists; the contact is asked for in place and the same request is
+       * made again once the server reports the number verified.
+       */
+      const outcome = await withPhoneVerification(() => payWith(method), phoneGateDeps(api));
+      if (outcome.kind === 'DONE') return;
+      if (outcome.kind === 'UNSUPPORTED' && me.botLink !== null) {
+        openTelegram(botPhonePromptLink(me.botLink));
+        setError(t('miniapp.phone_verification_open_bot'));
         return;
       }
-      if (method.route.kind === 'CARD_TO_CARD') {
-        const instruction = await api.post(
-          MINIAPP_ROUTES.orderPayCard,
-          { orderId: order.id },
-          miniAppCardInstructionSchema,
-        );
-        replace({ name: 'card', instruction });
-        return;
-      }
-      const attempt = await api.post(
-        MINIAPP_ROUTES.orderPayGateway,
-        { orderId: order.id },
-        miniAppGatewayAttemptSchema,
-        { provider: method.route.provider },
+      setError(
+        outcome.kind === 'PENDING'
+          ? t('miniapp.phone_verification_pending')
+          : t('miniapp.phone_verification_required'),
       );
-      if (attempt.payUrl !== null) openExternal(attempt.payUrl);
-      // R11 B5: a Stars attempt payable here opens its invoice on the status screen, which
-      // then waits for the server — never for the invoice's own callback — to call it paid.
-      replace({ name: 'pay', paymentId: attempt.paymentId, openInvoice: attempt.inAppInvoice });
     });
+
+  const payWith = async (method: Method): Promise<void> => {
+    if (method.kind === 'WALLET') {
+      const paid = await api.post(
+        MINIAPP_ROUTES.orderPayWallet,
+        { orderId: order.id },
+        miniAppWalletPayResponseSchema,
+      );
+      replace({ name: 'pay', paymentId: paid.paymentId });
+      return;
+    }
+    if (method.route.kind === 'CARD_TO_CARD') {
+      const instruction = await api.post(
+        MINIAPP_ROUTES.orderPayCard,
+        { orderId: order.id },
+        miniAppCardInstructionSchema,
+      );
+      replace({ name: 'card', instruction });
+      return;
+    }
+    const attempt = await api.post(
+      MINIAPP_ROUTES.orderPayGateway,
+      { orderId: order.id },
+      miniAppGatewayAttemptSchema,
+      { provider: method.route.provider },
+    );
+    if (attempt.payUrl !== null) openExternal(attempt.payUrl);
+    // R11 B5: a Stars attempt payable here opens its invoice on the status screen, which
+    // then waits for the server — never for the invoice's own callback — to call it paid.
+    replace({ name: 'pay', paymentId: attempt.paymentId, openInvoice: attempt.inAppInvoice });
+  };
 
   const discounted = order.discount.amountMinor !== '0';
   const payable = routes !== null;

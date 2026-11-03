@@ -690,6 +690,7 @@ import {
   customerTransferPreviewResponseSchema,
   customerTransferResponseSchema,
   type CustomerChannelExemptionRequest,
+  type CustomerPhoneExemptionRequest,
   type CustomerControlResponse,
   type CustomerFinancialSummaryResponse,
   type CustomerLocationOverrideRequest,
@@ -5221,6 +5222,14 @@ export function setCustomerChannelExemption(
   body: CustomerChannelExemptionRequest,
 ): Promise<Customer360ControlResponse> {
   return post(CUSTOMER_360_ROUTES.channelExemption(id), body, customer360ControlResponseSchema);
+}
+
+/** NEXA v095 PR-4 D: the phone-verification exemption (`users.phone_verification.exempt`). */
+export function setCustomerPhoneExemption(
+  id: string,
+  body: CustomerPhoneExemptionRequest,
+): Promise<Customer360ControlResponse> {
+  return post(CUSTOMER_360_ROUTES.phoneExemption(id), body, customer360ControlResponseSchema);
 }
 
 export function setCustomerPhone(

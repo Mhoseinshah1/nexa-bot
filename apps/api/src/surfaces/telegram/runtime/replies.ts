@@ -163,10 +163,27 @@ export interface PendingReply {
    * refresh that could not read the panel, a switch that is not available.
    */
   readonly toast?: { readonly key: TemplateKey; readonly values: TemplateValues };
+  /**
+   * NEXA v095 PR-4 A/C: this reply asks for the customer's phone in place of what they asked
+   * for (the bot-wide gate, or a payment route that needs a verified number). The turn
+   * remembers the held action (`phoneResumeOf`) so the verification resumes it.
+   */
+  readonly phoneHold?: true;
 }
 
 export type LeadMessage =
-  | { readonly kind: 'TEXT'; readonly key: TemplateKey; readonly values: TemplateValues }
+  | {
+      readonly kind: 'TEXT';
+      readonly key: TemplateKey;
+      readonly values: TemplateValues;
+      /**
+       * NEXA v095 PR-4: the reply keyboard this lead sets. Only the phone verification's
+       * «verified» lead uses it — it takes the contact keyboard away (the main menu keyboard
+       * replaces it) before the action the verification resumes answers with inline buttons,
+       * which cannot share a message with a reply keyboard.
+       */
+      readonly keyboard?: CustomerReplyKeyboard;
+    }
   | {
       readonly kind: 'PHOTO_BYTES';
       readonly bytes: Uint8Array;

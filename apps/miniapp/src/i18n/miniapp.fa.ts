@@ -86,9 +86,13 @@ export const MINIAPP_FA = {
   'miniapp.auto_renew_confirm': 'تأیید: تمدید خودکار با مبلغ {price}',
   'miniapp.auto_renew_disable': 'لغو تمدید خودکار',
   'miniapp.auto_renew_unavailable': 'در حال حاضر تمدید خودکار برای این سرویس در دسترس نیست.',
-  // R11 B7: a route for verified numbers only; verification happens in the bot's chat.
+  // R11 B7 / NEXA v095 PR-4 C: a route that needs a verified number.
   'miniapp.phone_verification_required':
-    'این روش پرداخت فقط برای کاربرانی است که شماره تلفن خود را تأیید کرده‌اند. شماره را در ربات با دکمهٔ «📱 تأیید شماره تلفن» تأیید کنید.',
+    'برای پرداخت با این درگاه باید شمارهٔ تلفن خود را تأیید کنید. دوباره «پرداخت» را بزنید و شمارهٔ خود را به اشتراک بگذارید؛ پس از تأیید، پرداخت با همین درگاه ادامه پیدا می‌کند.',
+  'miniapp.phone_verification_pending':
+    'شمارهٔ شما فرستاده شد و هنوز تأیید نشده است. چند لحظهٔ دیگر دوباره «پرداخت» را بزنید.',
+  'miniapp.phone_verification_open_bot':
+    'این نسخهٔ تلگرام اشتراک شماره را در مینی‌اپ پشتیبانی نمی‌کند. ربات باز شد؛ شمارهٔ خود را آن‌جا با «📞 Share Contact» تأیید کنید و سپس دوباره پرداخت کنید.',
   'miniapp.services_title': 'سرویس‌های من',
 
   'miniapp.store_title': 'فروشگاه',
@@ -282,6 +286,13 @@ export const MINIAPP_FA = {
   'miniapp.gate_join': 'عضویت',
   'miniapp.gate_check': 'عضو شدم، بررسی کن',
   'miniapp.gate_terms_accept': 'قوانین را خواندم و می‌پذیرم',
+  // NEXA v095 PR-4 A: the bot-wide mandatory phone verification.
+  'miniapp.gate_phone':
+    'برای استفاده از ربات، ابتدا شمارهٔ تلفن خود را تأیید کنید. فقط شمارهٔ خود حساب تلگرام شما پذیرفته می‌شود.',
+  'miniapp.gate_phone_share': '📞 Share Contact',
+  'miniapp.gate_phone_open_bot': 'تأیید شماره در ربات',
+  'miniapp.gate_phone_pending':
+    'شمارهٔ شما فرستاده شد و هنوز تأیید نشده است. چند لحظهٔ دیگر دوباره امتحان کنید.',
 
   'miniapp.tab_wallet': 'کیف پول',
   'miniapp.tab_profile': 'پروفایل',

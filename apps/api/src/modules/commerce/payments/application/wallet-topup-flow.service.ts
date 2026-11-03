@@ -282,25 +282,23 @@ export class WalletTopupFlowService {
       amount,
     );
     const chosen = routes.find((route) => route.provider === input.provider);
-    if (chosen === undefined) {
-      /*
-       * R11 B7: a route held back by its verified-phone rule is refused with the one step the
-       * customer can take, rather than redrawn without it (the request below would refuse
-       * it the same way inside its transaction).
-       */
-      if (
-        (await this.deps.routes.phoneVerificationRequired?.(
-          scope,
-          input.customerId,
-          input.provider,
-        )) === true
-      ) {
-        throw errors.conflict(
-          COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED,
-          'This payment route is offered only to customers with a verified phone number.',
-        );
-      }
-      return { outcome: 'NOT_OFFERED', amount, routes };
+    if (chosen === undefined) return { outcome: 'NOT_OFFERED', amount, routes };
+    /*
+     * NEXA v095 PR-4 C: the route is shown to everybody; an unverified, non-exempt customer is
+     * refused with the one step they can take, and the capture stays OPEN, so the same choice
+     * resumes after verification. The request below refuses it again inside its transaction.
+     */
+    if (
+      (await this.deps.routes.phoneVerificationRequired?.(
+        scope,
+        input.customerId,
+        input.provider,
+      )) === true
+    ) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED,
+        'This payment route requires a verified phone number.',
+      );
     }
     // The request first, keyed by the capture: a double tap replays the same payment.
     // The capture closes afterwards; a close that raced is harmless because the key,

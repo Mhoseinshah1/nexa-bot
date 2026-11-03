@@ -1069,9 +1069,15 @@ describe('profile metadata, normalised before it is ever stored', () => {
        * digits of a number, and none promises a payment.
        */
       'bot.phone.cancelled',
+      // NEXA v095 PR-4 C: a route that needs a verified number; nothing was charged.
+      'bot.phone.gateway_required',
       'bot.phone.invalid',
+      // NEXA v095 PR-4 B: only +98 numbers; nothing was stored.
+      'bot.phone.iran_only',
       'bot.phone.not_own',
       'bot.phone.prompt',
+      // NEXA v095 PR-4 A: the bot-wide mandatory gate.
+      'bot.phone.required',
       'bot.phone.unavailable',
       'bot.phone.verified',
       'bot.phone.verify_button',
@@ -1343,8 +1349,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.wallet.gift_card_redeemed',
       'bot.wallet.gift_card_rejected',
       'bot.wallet.gift_card_unavailable',
-      // R12 F3: «تراکنش‌ها» (`wh:`) opens the read-only list of the wallet’s last movements.
-      'bot.wallet.history_button',
+      // `bot.wallet.history_button` left in NEXA v095 PR-4 F: the wallet page draws no «تراکنش‌ها».
       'bot.wallet.insufficient',
       'bot.wallet.negative_balance',
       // Owner spec §2.2: a button label under a wallet credit, opening the wallet screen.

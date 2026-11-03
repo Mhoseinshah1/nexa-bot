@@ -593,16 +593,20 @@ export const FEATURE_FLAGS = [
   {
     key: 'phone_verification',
     description:
-      'R11 B7: a customer may verify their own phone number in the bot by sharing their ' +
-      'Telegram contact («تأیید شماره تلفن»); only their OWN number is accepted, never a ' +
-      'forwarded or another person’s contact. A payment route may then require a verified ' +
-      'number (the route’s «فقط برای شماره تأییدشده» switch). Off by default: no verification ' +
-      'button is drawn, a shared contact verifies nothing, and every route’s phone ' +
-      'requirement is ignored as if it were not set. Turning it off keeps every stored number.',
+      'NEXA v095 PR-4 A: the bot-wide phone verification, off or MANDATORY. On, a customer ' +
+      'with neither a verified number nor an operator\u2019s exemption can do nothing in the ' +
+      'bot or the mini app (/start, any button, message, command or deep link) until they ' +
+      'share their OWN Telegram contact — never a forwarded or another person\u2019s; after the ' +
+      'captcha and the terms, and the held action resumes once verified. A bound administrator ' +
+      'is never stopped, and background work (payment webhooks and inquiries, provisioning, ' +
+      'reminders, the outbox) never passes this gate. Off asks nobody; stored numbers are kept. ' +
+      'A payment route\u2019s own «برای پرداخت با این درگاه، تأیید شماره لازم است» is ' +
+      'independent of this switch. Which numbers are accepted: ' +
+      'phone_verification.allowed_numbers.',
     defaultEnabled: false,
-    // TENANT_WIDE: on, it can hide a payment route from every unverified customer.
+    // TENANT_WIDE: on, it holds every unverified, non-exempt customer at once.
     blastRadius: 'TENANT_WIDE',
-    configuredBy: [],
+    configuredBy: ['phone_verification.allowed_numbers'],
   },
   {
     key: 'custom_menu_buttons',

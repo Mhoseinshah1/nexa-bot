@@ -126,16 +126,18 @@ describe('R11 B7 — the contact keyboard and the refusal', () => {
     });
   });
 
-  it('answers PHONE_VERIFICATION_REQUIRED with its Persian sentence and the verify button', () => {
+  it('answers PHONE_VERIFICATION_REQUIRED with the gateway sentence and the contact keyboard (v095 C)', () => {
     const reply = refusal(
       errors.conflict(COMMERCE_ERROR_CODES.PHONE_VERIFICATION_REQUIRED, 'phone required'),
     );
-    expect(reply.key).toBe('bot.payment.phone_required');
-    expect(reply.buttons).toHaveLength(1);
-    expect(reply.buttons[0]).toMatchObject({ data: PHONE_VERIFY_CALLBACK_DATA });
-    // Every other refusal still carries no button.
-    expect(
-      refusal(errors.conflict(COMMERCE_ERROR_CODES.TOPUP_NOT_OFFERED, 'not offered')).buttons,
-    ).toEqual([]);
+    expect(reply.key).toBe('bot.phone.gateway_required');
+    // «📞 Share Contact» over «↩️ انتخاب درگاه دیگر», and the tap remembered for the resume.
+    expect(reply.keyboard).toBe('PHONE_REQUEST_GATEWAY');
+    expect(reply.phoneHold).toBe(true);
+    expect(reply.buttons).toEqual([]);
+    // Every other refusal still carries no button and holds nothing.
+    const other = refusal(errors.conflict(COMMERCE_ERROR_CODES.TOPUP_NOT_OFFERED, 'not offered'));
+    expect(other.buttons).toEqual([]);
+    expect(other.phoneHold).toBeUndefined();
   });
 });
